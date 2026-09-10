@@ -1,6 +1,6 @@
 import { useEffect, useState, useRef } from 'react';
 import { Link, Navigate, NavLink, useParams } from 'react-router';
-import { Activity, AlertTriangle, CheckCircle, XCircle, HardDrive, Cpu, Database, ListOrdered, RefreshCw, ServerCog, X, Zap } from 'lucide-react';
+import { Activity, AlertTriangle, HardDrive, Cpu, Database, ListOrdered, RefreshCw, ServerCog, X, Zap } from 'lucide-react';
 import * as api from '../services/api';
 import toast from '../components/ui/Toast';
 import PageSkeleton from '../components/ui/PageSkeleton';
@@ -14,12 +14,7 @@ import MediaCapacityPanel from '../components/system-resources/MediaCapacityPane
 import BuildStampPanel from '../components/system-resources/BuildStampPanel.jsx';
 import { getPageNavTabs } from '../../../server/lib/navManifest.js';
 import { buildPageNavTabs } from '../lib/pageNavTabs.js';
-
-const HEALTH_STYLE = {
-  healthy: { color: 'text-port-success', bg: 'bg-port-success/10', icon: CheckCircle, label: 'Healthy' },
-  warning: { color: 'text-port-warning', bg: 'bg-port-warning/10', icon: AlertTriangle, label: 'Warning' },
-  critical: { color: 'text-port-error', bg: 'bg-port-error/10', icon: XCircle, label: 'Critical' }
-};
+import { HEALTH_STYLE, pctTone, barTone, resolveHealthThresholds } from '../lib/healthStyle.js';
 
 // Every alert names its own next step. The server tags each warning with a
 // `type` (server/routes/systemHealth.js), so the banner can carry the link that
@@ -42,17 +37,6 @@ const REMEDIATION = {
 // destination can't drift between the banner and the nav.
 const DRILL_INS = ['disk', 'process', 'apps'].map(type => REMEDIATION[type]);
 
-function pctTone(pct, warn, critical) {
-  if (pct >= critical) return 'text-port-error';
-  if (pct >= warn) return 'text-port-warning';
-  return 'text-port-success';
-}
-
-function barTone(pct, warn, critical) {
-  if (pct >= critical) return 'bg-port-error';
-  if (pct >= warn) return 'bg-port-warning';
-  return 'bg-port-success';
-}
 
 // Icon per tab id. The manifest (`tabGroup: 'system-resources'`) owns
 // id/label/order — this page owns only how each tab looks; the short page-local
@@ -190,7 +174,7 @@ function SystemHealthOverview() {
 
   const style = HEALTH_STYLE[health.overallHealth] || HEALTH_STYLE.healthy;
   const StatusIcon = style.icon;
-  const t = health.thresholds;
+  const t = resolveHealthThresholds(health.thresholds);
   const draftValid =
     draft &&
     draft.memoryWarn < draft.memoryCritical &&

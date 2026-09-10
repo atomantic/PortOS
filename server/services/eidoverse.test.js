@@ -1,5 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { join } from 'path';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { execFileSync } from 'node:child_process';
 
 const mock = vi.hoisted(() => ({
   existing: new Set(),
@@ -115,10 +118,16 @@ describe('Eidoverse managed-app installer', () => {
     });
   });
 
+  it('passes the selected branch only to the Worlds clone', async () => {
+    await installEidoverse({ worldsRepoUrl: SELECTED_WORLDS_REPO, worldsBranch: ' feature/worlds ' });
+    expect(mock.cloneRepo).toHaveBeenCalledWith(SELECTED_WORLDS_REPO, { branch: 'feature/worlds' });
+    expect(mock.cloneRepo).toHaveBeenCalledWith(EIDOVERSE_VIDEO_REPO);
+  });
+
   it('clones separate licensed repos, installs Bun dependencies, and registers Worlds', async () => {
     const status = await installEidoverse({ worldsRepoUrl: SELECTED_WORLDS_REPO });
 
-    expect(mock.cloneRepo).toHaveBeenCalledWith(SELECTED_WORLDS_REPO);
+    expect(mock.cloneRepo).toHaveBeenCalledWith(SELECTED_WORLDS_REPO, { branch: '' });
     expect(mock.cloneRepo).toHaveBeenCalledWith(EIDOVERSE_VIDEO_REPO);
     expect(mock.execGit).toHaveBeenCalledWith(
       ['remote', 'set-url', 'origin', SELECTED_WORLDS_REPO],
@@ -158,7 +167,7 @@ describe('Eidoverse managed-app installer', () => {
 
     const status = await installEidoverse({ worldsRepoUrl: SELECTED_WORLDS_REPO });
 
-    expect(mock.cloneRepo).not.toHaveBeenCalledWith(SELECTED_WORLDS_REPO);
+    expect(mock.cloneRepo).not.toHaveBeenCalledWith(SELECTED_WORLDS_REPO, { branch: '' });
     expect(mock.spawn).toHaveBeenCalledWith('bun', ['install', '--frozen-lockfile'], expect.objectContaining({ cwd: existingPaths.worlds }));
     expect(mock.atomicWrite).toHaveBeenCalledWith(
       existingPaths.envFile,
@@ -170,7 +179,7 @@ describe('Eidoverse managed-app installer', () => {
   it('configures a fresh checkout with the selected SSH origin', async () => {
     const status = await installEidoverse({ worldsRepoUrl: SELECTED_WORLDS_REPO_SSH });
 
-    expect(mock.cloneRepo).toHaveBeenCalledWith(SELECTED_WORLDS_REPO_SSH);
+    expect(mock.cloneRepo).toHaveBeenCalledWith(SELECTED_WORLDS_REPO_SSH, { branch: '' });
     expect(mock.execGit).toHaveBeenCalledWith(
       ['remote', 'set-url', 'origin', SELECTED_WORLDS_REPO_SSH],
       selectedPaths.worlds,
@@ -180,8 +189,8 @@ describe('Eidoverse managed-app installer', () => {
   });
 
   it('uses the canonical upstream by default and preserves the selected Git transport', () => {
-    expect(getEidoversePaths().worlds).toBe(join('/example/data/repos', 'anima-research', 'eidoverse-worlds'));
-    expect(DEFAULT_EIDOVERSE_WORLDS_REPO).toBe('https://github.com/anima-research/eidoverse-worlds');
+    expect(getEidoversePaths().worlds).toBe(join('/example/data/repos', 'atomantic', 'eidoverse-worlds'));
+    expect(DEFAULT_EIDOVERSE_WORLDS_REPO).toBe('https://github.com/atomantic/eidoverse-worlds');
     expect(normalizeEidoverseWorldsRepo('https://github.com/example-owner/eidoverse-worlds.git'))
       .toBe(SELECTED_WORLDS_REPO);
     expect(normalizeEidoverseWorldsRepo('git@github.com:example-owner/eidoverse-worlds.git'))
@@ -273,6 +282,43 @@ describe('Eidoverse managed-app installer', () => {
       appRegistered: null,
       registryError: 'Managed-app registry unavailable',
     });
+  });
+
+  it('applies a new tracking branch to a real single-branch clone', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'eidoverse-source-'));
+    const remote = join(root, 'remote');
+    const checkout = join(root, 'checkout');
+    const git = (args, cwd = root) => execFileSync('git', args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+    try {
+      git(['init', '-b', 'main', remote]);
+      git(['-c', 'user.name=Test', '-c', 'user.email=test@example.com', 'commit', '--allow-empty', '-m', 'Initial'], remote);
+      git(['branch', 'portos'], remote);
+      git(['clone', '--single-branch', '--branch', 'main', remote, checkout]);
+      mock.apps = [{ id: 'worlds', repoPath: checkout, pm2ProcessNames: ['eidoverse-worlds'] }];
+      mock.existing.add(join(checkout, '.git'));
+      const { execGit } = await vi.importActual('../lib/execGit.js');
+      mock.execGit.mockImplementation((args, cwd, options) => execGit(args.map(arg => arg === SELECTED_WORLDS_REPO ? remote : arg), cwd, options));
+      await setEidoverseWorldsOrigin(SELECTED_WORLDS_REPO, 'portos');
+      expect(git(['branch', '--show-current'], checkout).trim()).toBe('portos');
+      expect(git(['rev-parse', '--abbrev-ref', '@{upstream}'], checkout).trim()).toBe('origin/portos');
+      expect(git(['config', '--get', 'portos.runtimeBranch'], checkout).trim()).toBe('portos');
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('switches and tracks the selected runtime branch without resetting local work', async () => {
+    mock.apps = [{ id: 'worlds', repoPath: selectedPaths.worlds, pm2ProcessNames: ['eidoverse-worlds'] }];
+    mock.existing.add(join(selectedPaths.worlds, '.git'));
+    await setEidoverseWorldsOrigin(SELECTED_WORLDS_REPO, 'portos');
+    expect(mock.execGit).toHaveBeenCalledWith(['switch', '--', 'portos'], selectedPaths.worlds);
+    expect(mock.execGit).toHaveBeenCalledWith(['config', 'branch.portos.merge', 'refs/heads/portos'], selectedPaths.worlds);
+    expect(mock.execGit).toHaveBeenCalledWith(['config', 'portos.runtimeBranch', 'portos'], selectedPaths.worlds);
+
+    mock.execGit.mockClear();
+    mock.execGit.mockImplementation(async (args) => ({ stdout: args[0] === 'status' ? ' M local.txt' : '', exitCode: 0 }));
+    await expect(setEidoverseWorldsOrigin(SELECTED_WORLDS_REPO, 'main')).rejects.toMatchObject({ code: 'EIDOVERSE_CHECKOUT_DIRTY' });
+    expect(mock.execGit.mock.calls.some(([args]) => ['switch', 'remote', 'fetch'].includes(args[0]))).toBe(false);
   });
 
   it('changes the origin of an existing checkout without moving or cloning it', async () => {

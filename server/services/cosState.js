@@ -85,7 +85,6 @@ export const DEFAULT_CONFIG = {
   appReviewCooldownMs: 1800000,
   idleReviewEnabled: true,
   idleReviewPriority: 'MEDIUM',
-  proactiveMode: true,
   autonomousJobsEnabled: true,
   // Investigation tasks normally hold only failure loops for a human. This
   // opt-in also admits those loop/storm investigations unattended.
@@ -208,6 +207,7 @@ function mergeStoredConfig(storedConfig) {
   delete persistedConfig.autonomyLevel;
   delete persistedConfig.comprehensiveAppImprovement;
   delete persistedConfig.immediateExecution;
+  delete persistedConfig.proactiveMode;
 
   return {
     ...DEFAULT_CONFIG,

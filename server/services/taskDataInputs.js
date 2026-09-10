@@ -12,7 +12,7 @@ import { safeJSONParse, tryReadFile } from '../lib/fileUtils.js';
 import { DISPATCH_HINT_READING_GUIDANCE } from '../lib/dispatchLabels.js';
 import { TASK_DATA_INPUT_DEFINITIONS } from '../lib/taskDataInputCatalog.js';
 import { githubApiHost, resolveAppWorkTracker } from '../lib/workTracker.js';
-import { resolveForgeTokenEnv } from './git.js';
+import { resolveForgeTokenEnv } from './forgeAuth.js';
 import { execGh } from './github.js';
 import { execGlabJson } from './gitlab.js';
 
@@ -230,7 +230,13 @@ const INPUT_LOADERS = {
         }, forge.env)
       : await deps.listIssues({ cli: forge.cli, cwd: app.repoPath, env: forge.env });
     return result.ok
-      ? renderForgeItems(result.issues, { emptyMessage: configured ? 'No open issues match this task’s configured filters.' : 'No open issues.' })
+      ? renderForgeItems(
+          // Human-gated work is never a scheduled agent input. Keep the raw
+          // listing intact for callers that need it for duplicate detection.
+          result.issues.filter((issue) => !normalizeLabels(issue.labels)
+            .some((label) => label.trim().toLowerCase() === 'help wanted')),
+          { emptyMessage: 'No open issues match this task’s configured filters (help wanted is excluded).' }
+        )
         + (result.truncated ? TRUNCATION_NOTICE : '')
       : unavailableMessage('Open issues');
   },

@@ -11,6 +11,7 @@ import { EventEmitter } from 'events';
 import { atomicWrite, PATHS, ensureDir, readJSONFile } from '../lib/fileUtils.js';
 import { deepMerge } from '../lib/objects.js';
 import { LLM_DRILL_TYPES, MEMORY_DRILL_TYPES, POST_SUPPORTED_MEMORY_TYPES } from '../lib/postValidation.js';
+import { nBackBalancedAccuracy } from '../lib/postScoring.js';
 import { normalizeHistoricalPostLlmEvaluation, normalizePostLlmEvaluation } from '../lib/postLlmContracts.js';
 import { resolveTopicForDrillType, isTopicEnabled, isMemoryItemEnabled } from '../lib/postTopics.js';
 import {
@@ -866,28 +867,10 @@ export async function getPostReviewReps(now = new Date(), limit = 2) {
  * `null` — never NaN. Used by stats aggregation and the adaptive signal so old
  * and new session shapes both read cleanly.
  */
-/**
- * Balanced (signal-detection) accuracy for n-back questions, derived from only
- * `answered` + `correct` — fields both legacy stored sessions and pre-save
- * client results carry. Works because `correct` was always computed as
- * "(pressed ? match : no-match) === expected", so `isTarget = pressed === correct`
- * is an identity across old and new scorers. A missing signal class counts as
- * chance (0.5), matching scoreNBack. Exported for the client-fallback mirror
- * tests; the client copy lives in components/meatspace/post/constants.js.
- */
-export function nBackBalancedAccuracy(questions) {
-  let hits = 0, misses = 0, falseAlarms = 0, correctRejections = 0;
-  for (const q of Array.isArray(questions) ? questions : []) {
-    const pressed = q?.answered === 'match';
-    const isTarget = pressed === !!q?.correct;
-    if (isTarget) { if (pressed) hits += 1; else misses += 1; }
-    else if (pressed) falseAlarms += 1;
-    else correctRejections += 1;
-  }
-  const hitRate = hits + misses ? hits / (hits + misses) : null;
-  const crRate = correctRejections + falseAlarms ? correctRejections / (correctRejections + falseAlarms) : null;
-  return hitRate == null && crRate == null ? null : ((hitRate ?? 0.5) + (crRate ?? 0.5)) / 2;
-}
+// nBackBalancedAccuracy now lives in ../lib/postScoring.js (imported above) —
+// re-exported here for existing importers of this module, and the client copy
+// in components/meatspace/post/constants.js re-exports the same leaf.
+export { nBackBalancedAccuracy };
 
 export function deriveTaskAccuracy(task) {
   if (typeof task?.accuracy === 'number' && !Number.isNaN(task.accuracy)) return task.accuracy;

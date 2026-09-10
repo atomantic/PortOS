@@ -36,6 +36,7 @@ import { COMPLETION_MODES, resolveCompletionMode } from '../lib/agentCompletionM
 import {
   DISCARD_WORKTREE_NOTE,
   buildActionOutputCompletionSection,
+  buildAuditOutputCompletionSection,
   buildClaimFlowCompletionSection,
   buildCliCompletionSection,
   buildCompletionGuidelineBullet,
@@ -74,6 +75,7 @@ export {
   buildReadOnlyCompletionSection,
   buildResumeSection,
   inlinePrLifecycleSection,
+  promptOpensOwnPr,
 } from './promptSections/completion.js';
 export { buildReviewLoopFollowUpSection } from './promptSections/reviewLifecycle.js';
 export { createJiraTicketForTask, generateJiraTitle, getAppDataForTask, getAppWorkspace } from './promptSections/appContext.js';
@@ -219,6 +221,60 @@ PortOS launched you autonomously. Nobody is watching this session and nothing ca
 - **Ambiguous task?** Pick the most reasonable reading, do the work, and note the alternatives you rejected in your completion summary.
 - **Genuinely blocked** (missing credential, contradictory requirements)? Write why to the completion sentinel and stop. Do NOT wait for a reply.`;
 
+/** Load and safely stage the review recipe shared by full and light prompts. */
+async function prepareReviewLoopRecipe(task, {
+  providerType, providerId, providerCommand, leanMode, worktreeInfo, isTruthyMetaFn,
+  codeReviewDefaults, defaultReviewers,
+}) {
+  // Preload slashdo's local-agent review-loop recipe once for review-loop
+  // follow-up tasks; both the light/TUI path (via lightOptions) and the full
+  // path (the verbose builder below) reuse this single value to inline the exact
+  // CLI-reviewer invocation. Cheap + cached; only read for follow-ups — and not
+  // for a merge-only follow-up, which has no reviewer to invoke and renders a
+  // section that ignores this body entirely.
+  const isFollowUpNeedingRecipes = isTruthyMetaFn(task.metadata?.reviewLoopFollowUp)
+    && !isMergeOnlyFollowUp(task.metadata || {});
+  // …and a slashdo-free harness driving its OWN review loop inline needs the
+  // identical recipe (`buildInlineReviewLoopSection`). Same predicate the render
+  // side uses, so a run whose section never materializes — read-only,
+  // leave-open, JIRA, or a merge gate with no reviewer to invoke — doesn't pay
+  // for the read and the staging write. The reviewer-list term matters too: the
+  // section only inlines the recipe when a SPAWNABLE CLI reviewer resolves, so a
+  // copilot-only or username-only list (including an unconfigured install)
+  // would otherwise
+  // read + `atomicWrite` 56KB and then render nothing from it.
+  const isInlineNeedingRecipes = inlinePrLifecycleSection(task, {
+    providerType, providerId, providerCommand, leanMode, worktreeInfo, isTruthyMetaFn,
+  }) === 'review-loop'
+    && resolveReviewerConfig(task.metadata, codeReviewDefaults, defaultReviewers).reviewers.some(isCliReviewer);
+  const localAgentLoopBody = (isFollowUpNeedingRecipes || isInlineNeedingRecipes)
+    ? await loadSlashdoLib('local-agent-review-loop').catch(() => null)
+    : null;
+  const inlineOnly = isInlineNeedingRecipes && !isFollowUpNeedingRecipes;
+  const localAgentLoopBodyForInline = inlineOnly
+    ? prepareLocalReviewLoopBody(prepareSandboxedReviewLoopBody(localAgentLoopBody))
+    : localAgentLoopBody;
+  // The recipe is ~40KB. A follow-up agent inlines it — driving the loop is that
+  // agent's entire job, so it will read all of it anyway. An INLINE loop is a
+  // later phase of a run whose context is already carrying the actual task, so an
+  // over-budget recipe is sanitized, then staged on disk and pointed at instead
+  // (#3110's split, applied to the same body). Every host that reaches here has
+  // file tools. Sanitizing before the write is load-bearing: otherwise the file
+  // pointer would bypass the public-content sandbox applied during rendering.
+  const localAgentLoopBodyPath = (inlineOnly
+    && localAgentLoopBodyForInline && localAgentLoopBodyForInline.length > SLASHDO_INLINE_BUDGET_CHARS)
+    ? await writeResolvedSlashdoBody('local-agent-review-loop', localAgentLoopBodyForInline).catch((err) => {
+        console.warn(`⚠️ Could not stage the CLI-reviewer recipe, inlining instead: ${err.message}`);
+        return null;
+      })
+    : null;
+
+  return {
+    isFollowUpNeedingRecipes, localAgentLoopBody,
+    localAgentLoopBodyForInline, localAgentLoopBodyPath,
+  };
+}
+
 /**
  * Build the agent prompt.
  *
@@ -320,47 +376,13 @@ export async function buildAgentPrompt(task, config, workspaceDir, worktreeInfo 
     defaultReviewers, codeReviewDefaults,
   });
 
-  // Preload slashdo's local-agent review-loop recipe once for review-loop
-  // follow-up tasks; both the light/TUI path (via lightOptions) and the full
-  // path (the verbose builder below) reuse this single value to inline the exact
-  // CLI-reviewer invocation. Cheap + cached; only read for follow-ups — and not
-  // for a merge-only follow-up, which has no reviewer to invoke and renders a
-  // section that ignores this body entirely.
-  const isFollowUpNeedingRecipes = isTruthyMetaFn(task.metadata?.reviewLoopFollowUp)
-    && !isMergeOnlyFollowUp(task.metadata || {});
-  // …and a slashdo-free harness driving its OWN review loop inline needs the
-  // identical recipe (`buildInlineReviewLoopSection`). Same predicate the render
-  // side uses, so a run whose section never materializes — read-only,
-  // leave-open, JIRA, or a merge gate with no reviewer to invoke — doesn't pay
-  // for the read and the staging write. The reviewer-list term matters too: the
-  // section only inlines the recipe when a SPAWNABLE CLI reviewer resolves, so a
-  // copilot-only or username-only list (including an unconfigured install)
-  // would otherwise
-  // read + `atomicWrite` 56KB and then render nothing from it.
-  const isInlineNeedingRecipes = inlinePrLifecycleSection(task, {
+  const {
+    isFollowUpNeedingRecipes, localAgentLoopBody,
+    localAgentLoopBodyForInline, localAgentLoopBodyPath,
+  } = await prepareReviewLoopRecipe(task, {
     providerType, providerId, providerCommand, leanMode, worktreeInfo, isTruthyMetaFn,
-  }) === 'review-loop'
-    && resolveReviewerConfig(task.metadata, codeReviewDefaults, defaultReviewers).reviewers.some(isCliReviewer);
-  const localAgentLoopBody = (isFollowUpNeedingRecipes || isInlineNeedingRecipes)
-    ? await loadSlashdoLib('local-agent-review-loop').catch(() => null)
-    : null;
-  const localAgentLoopBodyForInline = (isInlineNeedingRecipes && !isFollowUpNeedingRecipes)
-    ? prepareLocalReviewLoopBody(prepareSandboxedReviewLoopBody(localAgentLoopBody))
-    : localAgentLoopBody;
-  // The recipe is ~40KB. A follow-up agent inlines it — driving the loop is that
-  // agent's entire job, so it will read all of it anyway. An INLINE loop is a
-  // later phase of a run whose context is already carrying the actual task, so an
-  // over-budget recipe is sanitized, then staged on disk and pointed at instead
-  // (#3110's split, applied to the same body). Every host that reaches here has
-  // file tools. Sanitizing before the write is load-bearing: otherwise the file
-  // pointer would bypass the public-content sandbox applied during rendering.
-  const localAgentLoopBodyPath = (isInlineNeedingRecipes && !isFollowUpNeedingRecipes
-    && localAgentLoopBodyForInline && localAgentLoopBodyForInline.length > SLASHDO_INLINE_BUDGET_CHARS)
-    ? await writeResolvedSlashdoBody('local-agent-review-loop', localAgentLoopBodyForInline).catch((err) => {
-        console.warn(`⚠️ Could not stage the CLI-reviewer recipe, inlining instead: ${err.message}`);
-        return null;
-      })
-    : null;
+    codeReviewDefaults, defaultReviewers,
+  });
 
   if (LIGHT_CONTEXT_PROVIDER_TYPES.has(providerType)) {
     const forgeCli = await resolveManualForgeCli(workspaceDir, worktreeInfo, task);
@@ -394,21 +416,9 @@ export async function buildAgentPrompt(task, config, workspaceDir, worktreeInfo 
   // Architect doctrine for an orchestrated run (#5992). '' for every direct-mode
   // task, which is the default, so this is inert unless a profile is configured.
   const orchestrationSection = buildOrchestrationDoctrineSection(task);
-  // Fetch independent context sections in parallel
-  const [memorySection, agentInstructionsSection, digitalTwinSection] = await Promise.all([
-    skipDevContext
-      ? Promise.resolve(null)
-      : getMemorySection(task, { maxTokens: config.memory?.maxContextTokens || 2000 })
-          .catch(err => { console.log(`⚠️ Memory retrieval failed: ${err.message}`); return null; }),
-    skipDevContext
-      ? Promise.resolve(null)
-      : getAgentInstructionsContext(workspaceDir)
-          .catch(err => { console.log(`⚠️ Agent instructions retrieval failed: ${err.message}`); return null; }),
-    skipDevContext
-      ? Promise.resolve(null)
-      : getDigitalTwinForPrompt({ maxTokens: config.digitalTwin?.maxContextTokens || config.soul?.maxContextTokens || 2000, personaId: 'active' })
-          .catch(err => { console.log(`⚠️ Digital twin context retrieval failed: ${err.message}`); return null; })
-  ]);
+  const { memorySection, agentInstructionsSection, digitalTwinSection } = await loadDeveloperContext(
+    task, config, workspaceDir, skipDevContext,
+  );
 
   // Build context compaction section if task is retrying after a context-limit failure
   const compactionSection = task.metadata?.compaction?.needed ? buildCompactionSection(task) : '';
@@ -448,8 +458,8 @@ export async function buildAgentPrompt(task, config, workspaceDir, worktreeInfo 
   const worktreeCommitNote = worktreeInfo
     ? worktreeCommitGuidance({
         isTui,
-        hasSlashdo: false,
-        ownsPrWorkflow: false,
+        canTypeSlashCommands: false,
+        rendersInlinePrLifecycle: false,
         isWorktreeOnExistingBranch,
         willOpenPR,
         discardWorktree,
@@ -551,7 +561,7 @@ ${buildResumeSection(task, worktreeInfo)}` : '';
   // fallback template stays pure interpolation.
   const guidelineBullet = buildCompletionGuidelineBullet({
     mode: completionMode, whenDone,
-    tuiCompletionCommand, slashdoFree: isTui && !canRunSlashCommands,
+    tuiCompletionCommand,
     worktreeInfo, willOpenPR, prCompletion, noChangeSuccess,
     leavePrOpen: leavesPrForHuman(task),
   });
@@ -561,11 +571,11 @@ ${buildResumeSection(task, worktreeInfo)}` : '';
   // light path's `buildTuiCompletionSection` call is the live one). Kept
   // provider-aware anyway so this can't become the ONE call site that silently
   // promises `/do:pr` to a host that can't type it if the routing ever changes
-  // — this arm previously passed no slashdoFree at all, which is how gates like
-  // it drift (#3114).
+  // — this arm previously passed no slashdo-capability signal at all, which is
+  // how gates like it drift (#3114).
   const buildFullPathTuiCompletion = () => buildTuiCompletionSection({
     willOpenPR, prCompletion, simplifyEnabled, noChangeSuccess, portosMergesBranch,
-    slashdoFree: !canRunSlashCommands,
+    mode: completionMode,
     branchName: worktreeInfo?.branchName || null,
     baseBranch: worktreeInfo?.baseBranch || null,
     sentinelPath,
@@ -584,7 +594,7 @@ ${buildResumeSection(task, worktreeInfo)}` : '';
   // nothing HERE because the full path carries its contract elsewhere: the
   // review-loop follow-up has its own procedure section below, read-only and
   // the commit/push modes are covered by the Guidelines bullet and Git Hygiene.
-  const tuiCompletionSection = ({
+  const completionSection = ({
     [COMPLETION_MODES.TOOL_FREE]: () => buildToolFreeReasoningCompletionSection(),
     [COMPLETION_MODES.SENTINEL_PAYLOAD]: () => buildProgrammaticOutputCompletionSection(sentinelPath),
     [COMPLETION_MODES.ACTION_OUTPUT]: () => buildActionOutputCompletionSection({ isTui, sentinelPath }),
@@ -595,6 +605,8 @@ ${buildResumeSection(task, worktreeInfo)}` : '';
     [COMPLETION_MODES.TUI_SLASHDO_FREE]: buildFullPathTuiCompletion,
     [COMPLETION_MODES.TUI]: buildFullPathTuiCompletion,
   }[completionMode] || (() => ''))();
+  const tuiCompletionSection = [completionSection, buildAuditOutputCompletionSection(task, sentinelPath)]
+    .filter(Boolean).join('\n\n');
 
   const {
     reviewLoopSection, reviewLoopFollowUpSection, jiraSection, skillSection,
@@ -665,6 +677,22 @@ ${buildResumeSection(task, worktreeInfo)}` : '';
     toolsSection, planningContextSection, uiAuditRuntimeSection,
     completionBullet, completionInstructions, noChangeSuccess,
   });
+}
+
+/** Load independent developer context concurrently, unless this is a content-only task. */
+async function loadDeveloperContext(task, config, workspaceDir, skipDevContext) {
+  if (skipDevContext) {
+    return { memorySection: null, agentInstructionsSection: null, digitalTwinSection: null };
+  }
+  const [memorySection, agentInstructionsSection, digitalTwinSection] = await Promise.all([
+    getMemorySection(task, { maxTokens: config.memory?.maxContextTokens || 2000 })
+      .catch(err => { console.log(`⚠️ Memory retrieval failed: ${err.message}`); return null; }),
+    getAgentInstructionsContext(workspaceDir)
+      .catch(err => { console.log(`⚠️ Agent instructions retrieval failed: ${err.message}`); return null; }),
+    getDigitalTwinForPrompt({ maxTokens: config.digitalTwin?.maxContextTokens || config.soul?.maxContextTokens || 2000, personaId: 'active' })
+      .catch(err => { console.log(`⚠️ Digital twin context retrieval failed: ${err.message}`); return null; })
+  ]);
+  return { memorySection, agentInstructionsSection, digitalTwinSection };
 }
 
 /**
@@ -969,18 +997,18 @@ function buildLightContextSections(task, workspaceDir, worktreeInfo, isTruthyMet
   // path-configured `claude` binary under a custom provider id used to be denied
   // the slashdo workflow).
   const canTypeSlash = canTypeSlashCommands({ providerId, providerCommand, leanMode });
-  // CLI (non-TUI): a Claude Code session drives `/simplify` + `/do:pr` itself
-  // (the slashdo submodule mounts those as project-level slash commands). Other
-  // CLI providers (codex, antigravity, grok, opencode) get the legacy commit-only
-  // block where PortOS handles push+PR on exit.
-  const hasSlashdo = !isTui && canTypeSlash;
-  // TUI: a session that does NOT load Claude Code slash commands can't run
-  // `/do:pr` / `/do:push`, so its completion workflow uses plain git and hands
-  // the post-exit push / PR lifecycle back to PortOS
-  // — an OpenCode TUI, a codex/antigravity/grok TUI, or a lean-mode Claude
-  // session (`--bare` skips project command discovery, and the small local models
-  // lean mode targets fumble multi-step slashdo flows anyway).
-  const tuiSlashdoFree = isTui && !canTypeSlash;
+  // THE completion decision, made once. Every section below renders this key
+  // (`mode`) plus the `canTypeSlash` capability flag; no section re-derives a
+  // per-shape boolean of its own. See lib/agentCompletionMode.js for the rule
+  // order — this is the branch that matters in production, since every
+  // `tui`/`cli` provider returns from the light path and never reaches the
+  // full one, so a fix applied only there is no fix at all for anything a
+  // subscription-quota job can run.
+  const completionMode = resolveCompletionMode({
+    toolFreeReasoning, sentinelPayloadOutput, noCodeOutput, discardWorktree, claimFlow,
+    isReadOnly, isReviewLoopFollowUp, isTui, canRunSlashCommands: canTypeSlash,
+    portosMergesBranch, worktreeInfo, willOpenPR,
+  });
   // Does this session drive commit → push → PR → review → merge itself?
   //
   // ONE value answers both "emit the manual PR steps" and "emit the Review Loop
@@ -993,7 +1021,7 @@ function buildLightContextSections(task, workspaceDir, worktreeInfo, isTruthyMet
     providerType: isTui ? PROVIDER_TYPES.TUI : PROVIDER_TYPES.CLI,
     providerId, providerCommand, leanMode, worktreeInfo, isTruthyMetaFn,
   });
-  const ownsPrWorkflow = inlineSection !== null;
+  const rendersInlinePrLifecycle = inlineSection !== null;
   // Slashdo already partitions reviewers. Plain-git completion prompts need the
   // same split spelled out: local CLIs/local LLMs inspect the committed branch
   // before it is public; Copilot and @login reviewers can only run after a PR.
@@ -1075,34 +1103,25 @@ function buildLightContextSections(task, workspaceDir, worktreeInfo, isTruthyMet
 
   // --- Worktree / pipeline / JIRA context --------------------------------
   contractSections.push(...buildLightTaskContextSections({
-    task, worktreeInfo, isWorktreeOnExistingBranch, isTui, hasSlashdo, ownsPrWorkflow,
+    task, worktreeInfo, isWorktreeOnExistingBranch, isTui, mode: completionMode, canTypeSlashCommands: canTypeSlash, rendersInlinePrLifecycle,
     willOpenPR, discardWorktree, claimFlow, noChangeSuccess,
   }));
 
   // --- Completion / review-loop ------------------------------------------
-  // THIS is the branch that matters in production — every `tui`/`cli` provider
-  // returns from the light path and never reaches the full one, so a fix
-  // applied only there is no fix at all for anything a subscription-quota job
-  // can run. The precedence itself lives in `resolveCompletionMode`.
-  const completionMode = resolveCompletionMode({
-    toolFreeReasoning, sentinelPayloadOutput, noCodeOutput, discardWorktree, claimFlow,
-    isReadOnly, isReviewLoopFollowUp, isTui, canRunSlashCommands: canTypeSlash,
-    portosMergesBranch, worktreeInfo, willOpenPR,
-  });
   const lightSentinelPath = () => resolveSentinelPath(worktreeInfo, workspaceDir, agentId);
   // Both TUI modes render the same section — `buildTuiCompletionSection` takes
-  // `slashdoFree` and adapts the workflow itself. Likewise the three commit/push
+  // `mode` and adapts the workflow itself. Likewise the three commit/push
   // modes: `buildCliCompletionSection` already reads `worktreeInfo`/`willOpenPR`.
   const pushTuiCompletion = () => contractSections.push(buildTuiCompletionSection({
-    willOpenPR, prCompletion, simplifyEnabled, noChangeSuccess, slashdoFree: tuiSlashdoFree, ownsPrWorkflow, portosMergesBranch,
+    willOpenPR, prCompletion, simplifyEnabled, noChangeSuccess, mode: completionMode, rendersInlinePrLifecycle, portosMergesBranch,
     sentinelPath: lightSentinelPath(),
     branchName: worktreeInfo?.branchName || null,
     baseBranch: worktreeInfo?.baseBranch || null,
     leavePrOpen: leavesPrForHuman(task),
     reviewers: lightReviewers, usernames: lightReviewerUsernames, optionalReviewers: lightOptionalReviewers, reviewerMaxRounds: lightReviewerMaxRounds, reviewerModels: lightReviewerModels, reviewerEfforts: lightReviewerEfforts, reviewStopMode: lightReviewStopMode, reviewerApplies: lightReviewerApplies,
-    forgeCli: resolvedForgeCli, localReviewSection, localReviewRequired, postPrReview: ownsPrWorkflow ? runsPrSideReviewLoop : null
+    forgeCli: resolvedForgeCli, localReviewSection, localReviewRequired, postPrReview: rendersInlinePrLifecycle ? runsPrSideReviewLoop : null
   }));
-  const pushCliCompletion = () => contractSections.push(buildCliCompletionSection({ worktreeInfo, willOpenPR, prCompletion, hasSlashdo, ownsPrWorkflow, simplifyEnabled, noChangeSuccess, leavePrOpen: leavesPrForHuman(task), reviewers: lightReviewers, usernames: lightReviewerUsernames, optionalReviewers: lightOptionalReviewers, reviewerMaxRounds: lightReviewerMaxRounds, reviewerModels: lightReviewerModels, reviewerEfforts: lightReviewerEfforts, reviewStopMode: lightReviewStopMode, reviewerApplies: lightReviewerApplies, forgeCli: resolvedForgeCli, localReviewSection, localReviewRequired, postPrReview: ownsPrWorkflow ? runsPrSideReviewLoop : null }));
+  const pushCliCompletion = () => contractSections.push(buildCliCompletionSection({ worktreeInfo, willOpenPR, prCompletion, mode: completionMode, canTypeSlashCommands: canTypeSlash, rendersInlinePrLifecycle, simplifyEnabled, noChangeSuccess, leavePrOpen: leavesPrForHuman(task), reviewers: lightReviewers, usernames: lightReviewerUsernames, optionalReviewers: lightOptionalReviewers, reviewerMaxRounds: lightReviewerMaxRounds, reviewerModels: lightReviewerModels, reviewerEfforts: lightReviewerEfforts, reviewStopMode: lightReviewStopMode, reviewerApplies: lightReviewerApplies, forgeCli: resolvedForgeCli, localReviewSection, localReviewRequired, postPrReview: rendersInlinePrLifecycle ? runsPrSideReviewLoop : null }));
 
   ({
     [COMPLETION_MODES.TOOL_FREE]: () => contractSections.push(buildToolFreeReasoningCompletionSection()),
@@ -1137,7 +1156,7 @@ function buildLightContextSections(task, workspaceDir, worktreeInfo, isTruthyMet
   // section it is a step of. Gated on the SAME value that made that step emit,
   // so a dangling "step 4" cross-reference and an orphaned Review Loop section
   // are both unrepresentable.
-  if (ownsPrWorkflow) {
+  if (rendersInlinePrLifecycle) {
     contractSections.push(buildInlineReviewLoopSection({
       taskId: task.id,
       branchName: worktreeInfo?.branchName || null,
@@ -1165,6 +1184,9 @@ function buildLightContextSections(task, workspaceDir, worktreeInfo, isTruthyMet
     }));
   }
 
+  const auditCompletion = buildAuditOutputCompletionSection(task, lightSentinelPath());
+  if (auditCompletion) contractSections.push(auditCompletion);
+
   return { taskSections, contractSections };
 }
 
@@ -1175,7 +1197,7 @@ function buildLightContextSections(task, workspaceDir, worktreeInfo, isTruthyMet
  * `buildLightContextSections`.
  */
 function buildLightTaskContextSections({
-  task, worktreeInfo, isWorktreeOnExistingBranch, isTui, hasSlashdo, ownsPrWorkflow,
+  task, worktreeInfo, isWorktreeOnExistingBranch, isTui, mode, canTypeSlashCommands, rendersInlinePrLifecycle,
   willOpenPR, discardWorktree, claimFlow, noChangeSuccess,
 }) {
   const sections = [];
@@ -1187,7 +1209,7 @@ function buildLightTaskContextSections({
       `- **Path**: \`${worktreeInfo.worktreePath}\``,
       worktreeInfo.baseBranch ? `- **Based on**: \`${worktreeInfo.baseBranch}\`` : null,
       '',
-      worktreeCommitGuidance({ isTui, hasSlashdo, ownsPrWorkflow, isWorktreeOnExistingBranch, willOpenPR, discardWorktree, claimFlow, noChangeSuccess }),
+      worktreeCommitGuidance({ isTui, mode, canTypeSlashCommands, rendersInlinePrLifecycle, isWorktreeOnExistingBranch, willOpenPR, discardWorktree, claimFlow, noChangeSuccess }),
       'Do NOT manually switch branches or modify the worktree configuration.',
       // Resuming a previous failed agent's branch: establish what's already done
       // before writing code (see buildResumeSection). '' when not a resume.

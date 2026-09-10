@@ -85,3 +85,10 @@ export function execGit(args, cwd, options = {}) {
     });
   });
 }
+
+// Like execGit but catches rejections (e.g. timeout) into a failed-result shape.
+// Exported because every caller that wants `ignoreExitCode` semantics also has to
+// survive the two rejections `ignoreExitCode` does NOT suppress — a timeout and a
+// maxBuffer overflow — and each one hand-rolling that catch drops `stdout`.
+export const execGitSafe = (args, cwd, options) =>
+  execGit(args, cwd, options).catch(err => ({ exitCode: 1, stdout: '', stderr: err.message }));

@@ -189,7 +189,7 @@ vi.mock('./git.js', () => ({
   getWorktreeBranches: vi.fn().mockResolvedValue(new Set()),
   // Default: NOT already merged, so an ahead branch is resumable. The
   // rebase/squash-merged case overrides this.
-  isBranchMergedInto: vi.fn().mockResolvedValue(false),
+  hasBranchMergeEvidence: vi.fn().mockResolvedValue(false),
   requestCopilotReview: vi.fn().mockResolvedValue({ success: true }),
   resolveForgeForRepo: vi.fn().mockResolvedValue({ cli: 'gh', env: process.env, host: 'github.com', owner: null, account: null }),
   parsePullRequestUrl: vi.fn((url) => {
@@ -1174,7 +1174,7 @@ describe('resolveResumePointer', () => {
     vi.clearAllMocks();
     git.getDefaultBranch.mockResolvedValue('main');
     git.getWorktreeBranches.mockResolvedValue(new Set());
-    git.isBranchMergedInto.mockResolvedValue(false);
+    git.hasBranchMergeEvidence.mockResolvedValue(false);
     existsSyncMock.mockReturnValue(false);
   });
 
@@ -1182,14 +1182,14 @@ describe('resolveResumePointer', () => {
   // branch has NEW SHAs and still reads as "ahead" of the default branch. Pointing
   // a retry at it would have it build on already-merged work.
   it('returns null for a rebase/squash-merged branch even though it reads as ahead', async () => {
-    git.isBranchMergedInto.mockResolvedValue(true);
+    git.hasBranchMergeEvidence.mockResolvedValue(true);
     git.getBranchComparison.mockResolvedValue({ ahead: 6, commits: [], stats: {} });
 
     await expect(resolveResumePointer('/repo', DEAD_BRANCH)).resolves.toBeNull();
   });
 
   it('fails OPEN (no resume) when the merged check errors', async () => {
-    git.isBranchMergedInto.mockRejectedValue(new Error('git exploded'));
+    git.hasBranchMergeEvidence.mockRejectedValue(new Error('git exploded'));
 
     await expect(resolveResumePointer('/repo', DEAD_BRANCH)).resolves.toBeNull();
   });
@@ -1264,7 +1264,7 @@ describe('resolveResumePointer', () => {
   // worktree survived on this branch".
   function scriptSurvivingTree({ merged = false, ahead = 0, branch = DEAD_BRANCH, porcelain = ' M a.js\n' } = {}) {
     existsSyncMock.mockReturnValue(true);
-    git.isBranchMergedInto.mockResolvedValue(merged);
+    git.hasBranchMergeEvidence.mockResolvedValue(merged);
     git.getBranchComparison.mockResolvedValue({ ahead, commits: [], stats: {} });
     git.getBranch.mockResolvedValue(branch);
     git.getStatusPorcelain.mockResolvedValue(porcelain);
@@ -1324,7 +1324,7 @@ describe('resolveResumePointer', () => {
   // The ordinary shape — run finished, branch landed, tree already reaped — must
   // not pay for the branch comparison (two git subprocesses, one a whole-branch diff).
   it('bails before the branch comparison when nothing survived and the branch is merged', async () => {
-    git.isBranchMergedInto.mockResolvedValue(true);
+    git.hasBranchMergeEvidence.mockResolvedValue(true);
 
     await expect(resolveResumePointer('/repo', DEAD_BRANCH, DEAD_TREE)).resolves.toBeNull();
     expect(git.getBranchComparison).not.toHaveBeenCalled();
@@ -1341,7 +1341,7 @@ describe('resolveTaskResumePatch / recordTaskResumePointer', () => {
     vi.clearAllMocks();
     git.getDefaultBranch.mockResolvedValue('main');
     git.getWorktreeBranches.mockResolvedValue(new Set());
-    git.isBranchMergedInto.mockResolvedValue(false);
+    git.hasBranchMergeEvidence.mockResolvedValue(false);
     git.getBranchComparison.mockResolvedValue({ ahead: 2, commits: [], stats: {} });
     existsSyncMock.mockReturnValue(false);
   });
@@ -1456,7 +1456,7 @@ describe('releaseRetryHold', () => {
     vi.clearAllMocks();
     git.getDefaultBranch.mockResolvedValue('main');
     git.getWorktreeBranches.mockResolvedValue(new Set());
-    git.isBranchMergedInto.mockResolvedValue(false);
+    git.hasBranchMergeEvidence.mockResolvedValue(false);
     git.getBranchComparison.mockResolvedValue({ ahead: 2, commits: [], stats: {} });
     existsSyncMock.mockReturnValue(false);
     getTaskById.mockResolvedValue({ id: 'task-1', status: 'pending' });
@@ -2132,7 +2132,7 @@ describe('cleanupAgentWorktree - remote copy of a locally merged branch', () => 
     // `clearAllMocks` drains calls, not once-queues — reset both mocks so a test
     // that stops early can never hand its leftover answers to the next one.
     execGitMock.mockReset().mockResolvedValue({ exitCode: 128, stdout: '', stderr: '' });
-    git.isBranchMergedInto.mockReset().mockResolvedValue(false);
+    git.hasBranchMergeEvidence.mockReset().mockResolvedValue(false);
     getAgent.mockResolvedValue(mockWorktreeAgent());
   });
   afterEach(() => removeWorktree.mockResolvedValue(undefined));
@@ -2142,10 +2142,10 @@ describe('cleanupAgentWorktree - remote copy of a locally merged branch', () => 
     execGitMock
       .mockResolvedValueOnce(tracking(SHA))
       .mockResolvedValueOnce({ exitCode: 0, stdout: '', stderr: '' });
-    git.isBranchMergedInto.mockResolvedValueOnce(true);
+    git.hasBranchMergeEvidence.mockResolvedValueOnce(true);
     const warnings = await cleanupAgentWorktree('agent-1', true, {});
     expect(execGitMock).toHaveBeenNthCalledWith(1, ['rev-parse', '--verify', '--quiet', `refs/remotes/origin/${BRANCH}`], '/mock/workspace', { ignoreExitCode: true });
-    expect(git.isBranchMergedInto).toHaveBeenCalledWith('/mock/workspace', SHA, 'HEAD');
+    expect(git.hasBranchMergeEvidence).toHaveBeenCalledWith('/mock/workspace', SHA, 'HEAD');
     expect(execGitMock).toHaveBeenNthCalledWith(2, ['push', `--force-with-lease=${REF}:${SHA}`, 'origin', `:${REF}`], '/mock/workspace', { ignoreExitCode: true });
     // A clean finish, not a cleanup issue — no warning, so no recovery task.
     expect(warnings).toEqual([]);
@@ -2156,13 +2156,13 @@ describe('cleanupAgentWorktree - remote copy of a locally merged branch', () => 
     execGitMock.mockResolvedValueOnce(tracking(null));
     await cleanupAgentWorktree('agent-1', true, {});
     expect(execGitMock).toHaveBeenCalledTimes(1);
-    expect(git.isBranchMergedInto).not.toHaveBeenCalled();
+    expect(git.hasBranchMergeEvidence).not.toHaveBeenCalled();
   });
 
   it('leaves the copy alone when the pushed tip is not merged into the checkout', async () => {
     mergedLocally();
     execGitMock.mockResolvedValueOnce(tracking(SHA));
-    git.isBranchMergedInto.mockResolvedValueOnce(false);
+    git.hasBranchMergeEvidence.mockResolvedValueOnce(false);
     const warnings = await cleanupAgentWorktree('agent-1', true, {});
     expect(execGitMock).toHaveBeenCalledTimes(1);
     expect(warnings).toEqual([]);
@@ -2179,7 +2179,7 @@ describe('cleanupAgentWorktree - remote copy of a locally merged branch', () => 
     execGitMock
       .mockResolvedValueOnce(tracking(SHA))
       .mockResolvedValueOnce({ exitCode: 1, stdout: '', stderr: ` ! [rejected] ${BRANCH} (stale info)` });
-    git.isBranchMergedInto.mockResolvedValueOnce(true);
+    git.hasBranchMergeEvidence.mockResolvedValueOnce(true);
     const warnings = await cleanupAgentWorktree('agent-1', true, {});
     // The delete was attempted and refused — the silence is deliberate, not a skip.
     expect(execGitMock).toHaveBeenCalledTimes(2);
@@ -2194,7 +2194,7 @@ describe('cleanupAgentWorktree - remote copy of a locally merged branch', () => 
     execGitMock
       .mockResolvedValueOnce(tracking(SHA))
       .mockRejectedValueOnce(new Error('spawn git ENOENT'));
-    git.isBranchMergedInto.mockResolvedValueOnce(true);
+    git.hasBranchMergeEvidence.mockResolvedValueOnce(true);
     await expect(cleanupAgentWorktree('agent-1', true, {})).resolves.toEqual([]);
   });
 });

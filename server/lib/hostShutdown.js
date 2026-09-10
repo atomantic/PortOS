@@ -31,6 +31,7 @@
 import { join } from 'path';
 import { rm } from 'fs/promises';
 import { PATHS, atomicWrite, readJSONFile } from './fileUtils.js';
+import { isNonBlankStr } from './textUtils.js';
 
 /** Completion reason recorded for a run the host restart tore down. */
 export const HOST_SHUTDOWN_REASON = 'host-shutdown';
@@ -44,8 +45,6 @@ export const HOST_SHUTDOWN_REASON = 'host-shutdown';
  * takes the whole suite down with it — for a path most callers never touch.
  */
 export const hostShutdownMarkerPath = () => join(PATHS.cos, 'host-shutdown.json');
-
-const isNonEmptyString = (value) => typeof value === 'string' && !!value;
 
 // Process-local. Never persisted — a fresh process is by definition not the one
 // that was shutting down, so this always starts false.
@@ -104,7 +103,7 @@ export async function writeHostShutdownMarker({ agentIds = [], signal = null } =
   // orphans — the exact penalty this marker exists to prevent. Consuming the
   // marker is the sweep's job, so anything still here has not been recovered yet.
   const prior = await readHostShutdownMarker();
-  const ids = [...new Set([...(prior?.agentIds || []), ...agentIds.filter(isNonEmptyString)])];
+  const ids = [...new Set([...(prior?.agentIds || []), ...agentIds.filter(isNonBlankStr)])];
   // Nothing was running — don't leave a marker the next boot has to reason
   // about (and don't overwrite a prior one; a marker with no agents is noise).
   if (ids.length === 0) return false;
@@ -129,7 +128,7 @@ export async function writeHostShutdownMarker({ agentIds = [], signal = null } =
 export async function readHostShutdownMarker() {
   const raw = await readJSONFile(hostShutdownMarkerPath(), null, { logError: false, allowArray: false });
   if (!raw || typeof raw !== 'object') return null;
-  return { ...raw, agentIds: Array.isArray(raw.agentIds) ? raw.agentIds.filter(isNonEmptyString) : [] };
+  return { ...raw, agentIds: Array.isArray(raw.agentIds) ? raw.agentIds.filter(isNonBlankStr) : [] };
 }
 
 /**

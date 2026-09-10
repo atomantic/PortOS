@@ -27,6 +27,7 @@
  */
 
 import { isPlainObject, POLLUTING_KEYS } from './objects.js';
+import { trimTo } from './textUtils.js';
 
 /**
  * The `origin` a quota-burn on-demand request carries. Declared here rather
@@ -152,8 +153,7 @@ export function burnPlanOwnsTask(taskMetadata) {
 }
 export const burnPlanOwnsAgent = (agent) => Boolean(agent?.metadata?.taskQuotaBurnFamily) && !agent.metadata.taskQuotaBurnMaintenanceRunId;
 
-const trimmed = (value, max = MAX_FIELD) => (typeof value === 'string' ? value.trim().slice(0, max) : '');
-const nullable = (value, max = MAX_FIELD) => trimmed(value, max) || null;
+const nullable = (value, max = MAX_FIELD) => trimTo(value, max) || null;
 
 const scalarParams = (raw) => {
   if (!isPlainObject(raw)) return {};
@@ -181,7 +181,7 @@ const scalarParams = (raw) => {
  * The params are here for a reason the other three are not: they have to reach
  * the PROMPT, so they cannot ride the post-generation
  * `onDemandRequestMetadata` stamp below. Both on-demand engines pull them off
- * the request and hand them to `generateManagedAppImprovementTaskForType` as
+ * the request and hand them to `prepareManagedAppImprovementTask` as
  * `runOverrides`, which layers them over the task's saved `taskMetadata` BEFORE
  * the mode banner is chosen and the prompt is rendered. That is what lets a step
  * migrated from an issues-only burn preset pin `fileIssues: true` explicitly and
@@ -197,8 +197,8 @@ const scalarParams = (raw) => {
  */
 export function normalizeQuotaBurnProvenance(raw) {
   if (!isPlainObject(raw)) return null;
-  const family = trimmed(raw.family);
-  const stepId = trimmed(raw.stepId);
+  const family = trimTo(raw.family, MAX_FIELD);
+  const stepId = trimTo(raw.stepId, MAX_FIELD);
   if (!family || !stepId) return null;
   const limitingResetAt = Number(raw.limitingResetAt);
   const overrides = isPlainObject(raw.overrides) ? raw.overrides : {};
@@ -245,7 +245,7 @@ export function onDemandRequestMetadata(request) {
   const burn = request?.origin === QUOTA_BURN_REQUEST_ORIGIN
     ? normalizeQuotaBurnProvenance(request.burn)
     : null;
-  const requestId = trimmed(request?.id, 128);
+  const requestId = trimTo(request?.id, 128);
   return {
     onDemand: true,
     onDemandOrigin: nullable(request?.origin),

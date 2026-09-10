@@ -17,6 +17,12 @@ import {
 
 const router = Router();
 
+// GET /api/usage/hourly - Fixed-size local counters, without building cost reports.
+router.get('/hourly', (req, res) => {
+  const { hourlyActivity } = usage.getUsage();
+  res.json({ hourlyActivity: Array.from({ length: 24 }, (_, hour) => hourlyActivity?.[hour] || 0) });
+});
+
 // GET /api/usage - Usage summary + cost report. Accepts ?period=7d|30d|90d|all
 // or an explicit ?from/?to (YYYY-MM-DD, inclusive) for the report window.
 router.get('/', asyncHandler(async (req, res) => {

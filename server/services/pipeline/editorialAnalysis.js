@@ -23,6 +23,7 @@ import { manuscriptContentBudgetChars, estimateTokens } from '../../lib/contextB
 import { getIssue, listIssues } from './issues.js';
 import { getSeries } from './series.js';
 import { getSeriesCanon } from './seriesCanon.js';
+import { trimTo } from '../../lib/textUtils.js';
 
 const STAGE = 'pipeline-editorial-analysis';
 const ARC_DIRECTIONS = Object.freeze(['rising', 'falling', 'flat', 'complex']);
@@ -85,37 +86,35 @@ const clampNum = (v, min, max, fallback = 0) => {
   return Math.max(min, Math.min(max, Math.round(n)));
 };
 
-const str = (v, max) => (typeof v === 'string' ? v.trim().slice(0, max) : '');
-
 function sanitizeSection(raw) {
   if (!raw || typeof raw !== 'object') return null;
   return {
-    label: str(raw.label, LABEL_MAX) || 'Section',
-    excerpt: str(raw.excerpt, EXCERPT_MAX),
-    primaryEmotion: str(raw.primaryEmotion, EMOTION_MAX),
+    label: trimTo(raw.label, LABEL_MAX) || 'Section',
+    excerpt: trimTo(raw.excerpt, EXCERPT_MAX),
+    primaryEmotion: trimTo(raw.primaryEmotion, EMOTION_MAX),
     emotions: Array.isArray(raw.emotions)
-      ? raw.emotions.map((e) => str(e, EMOTION_MAX)).filter(Boolean).slice(0, 5)
+      ? raw.emotions.map((e) => trimTo(e, EMOTION_MAX)).filter(Boolean).slice(0, 5)
       : [],
     tension: clampNum(raw.tension, 0, 100),
     valence: clampNum(raw.valence, -100, 100),
-    note: str(raw.note, NOTE_MAX),
+    note: trimTo(raw.note, NOTE_MAX),
   };
 }
 
 function sanitizeCharacter(raw) {
   if (!raw || typeof raw !== 'object') return null;
-  const name = str(raw.name, LABEL_MAX);
+  const name = trimTo(raw.name, LABEL_MAX);
   if (!name) return null;
   return {
     name,
-    role: str(raw.role, EMOTION_MAX),
+    role: trimTo(raw.role, EMOTION_MAX),
     isProtagonist: raw.isProtagonist === true ? true : raw.isProtagonist === false ? false : null,
     arcDirection: ARC_DIRECTIONS.includes(raw.arcDirection) ? raw.arcDirection : 'flat',
-    arcSummary: str(raw.arcSummary, NOTE_MAX),
+    arcSummary: trimTo(raw.arcSummary, NOTE_MAX),
     beats: Array.isArray(raw.beats)
       ? raw.beats
           .map((b) => (b && typeof b === 'object'
-            ? { sectionIndex: clampNum(b.sectionIndex, 0, MAX_SECTIONS), state: str(b.state, LABEL_MAX) }
+            ? { sectionIndex: clampNum(b.sectionIndex, 0, MAX_SECTIONS), state: trimTo(b.state, LABEL_MAX) }
             : null))
           .filter((b) => b && b.state)
           .slice(0, MAX_BEATS)
@@ -138,10 +137,10 @@ function sanitizeAnalysis(parsed) {
       characterProgress: clampNum(rollupRaw.characterProgress, 0, 100),
       readerValence: clampNum(rollupRaw.readerValence, -100, 100),
       readerIntensity: clampNum(rollupRaw.readerIntensity, 0, 100),
-      primaryEmotion: str(rollupRaw.primaryEmotion, EMOTION_MAX),
+      primaryEmotion: trimTo(rollupRaw.primaryEmotion, EMOTION_MAX),
       peakTension: clampNum(rollupRaw.peakTension, 0, 100),
       cliffhanger: rollupRaw.cliffhanger === true,
-      oneLine: str(rollupRaw.oneLine, NOTE_MAX),
+      oneLine: trimTo(rollupRaw.oneLine, NOTE_MAX),
     },
   };
 }

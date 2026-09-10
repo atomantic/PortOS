@@ -7,6 +7,7 @@ import { createRequire } from 'module';
 import { homedir } from 'os';
 import { atomicWrite, extractJSONArray, safeJSONParse, tryReadFile } from '../lib/fileUtils.js';
 import { parseCommandArgs } from '../lib/commandSecurity.js';
+import { bufferedSpawnOrThrow } from '../lib/bufferedSpawn.js';
 
 const IS_WIN = process.platform === 'win32';
 
@@ -266,19 +267,15 @@ export async function stopApp(name, pm2Home = null) {
  * @param {string} pm2Home Optional custom PM2_HOME path
  */
 export async function restartApp(name, pm2Home = null) {
-  // Use CLI for custom PM2_HOME
-  if (pm2Home) {
-    return spawnPm2Cli('restart', name, pm2Home);
-  }
-
-  return connectAndRun((pm2) => {
-    return new Promise((resolve, reject) => {
-      pm2.restart(name, (err) => {
-        if (err) return reject(err);
-        resolve({ success: true });
-      });
-    });
+  // Each restart owns its CLI connection. Parallel managed-app restarts must
+  // not disconnect the shared PM2 client while another RPC is still pending.
+  await bufferedSpawnOrThrow(process.execPath, [PM2_BIN, 'restart', name], {
+    env: withoutInheritedPm2Config(buildEnv(pm2Home)),
+    timeoutMs: 60_000,
+    timeoutLabel: `pm2 restart ${name}`,
   });
+  clearJlistCache(pm2Home);
+  return { success: true };
 }
 
 /**

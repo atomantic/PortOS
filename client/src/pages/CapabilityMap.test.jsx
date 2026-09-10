@@ -46,7 +46,7 @@ import * as api from '../services/api';
 import CapabilityMap from './CapabilityMap';
 
 describe('CapabilityMap setup walkthrough', () => {
-  it('keeps essential network/provider setup above optional capabilities', () => {
+  it('keeps the essential provider setup above optional networking and capabilities', () => {
     render(<MemoryRouter><CapabilityMap /></MemoryRouter>);
 
     expect(screen.getByRole('heading', { name: 'Setup & Capabilities' })).toBeInTheDocument();
@@ -57,6 +57,9 @@ describe('CapabilityMap setup walkthrough', () => {
       'https://login.tailscale.com/admin/dns',
     );
     expect(screen.getByRole('heading', { name: 'AI provider' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'AI provider' }).compareDocumentPosition(
+      screen.getByRole('heading', { name: 'Optional networking' }),
+    ) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(screen.getByText('Subscription CLI')).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'Optional capabilities' })).toBeInTheDocument();
     expect(screen.getByText('Calendar')).toBeInTheDocument();

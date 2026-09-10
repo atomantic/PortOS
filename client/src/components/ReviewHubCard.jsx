@@ -14,11 +14,13 @@ export default function ReviewHubCard() {
     socket.on('review:item:created', refresh);
     socket.on('review:item:updated', refresh);
     socket.on('review:item:deleted', refresh);
+    socket.on('review:items:bulk-updated', refresh);
 
     return () => {
       socket.off('review:item:created', refresh);
       socket.off('review:item:updated', refresh);
       socket.off('review:item:deleted', refresh);
+      socket.off('review:items:bulk-updated', refresh);
     };
   }, []);
 

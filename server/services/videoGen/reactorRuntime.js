@@ -4,6 +4,8 @@ import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { execFile } from '../../lib/childProcess.js';
 import { PATHS } from '../../lib/fileUtils.js';
+import { readPortosEnvValue } from '../../lib/portosEnv.js';
+import { REACTOR_SETUP_ERRORS } from '../../../scripts/lib/reactorSetupErrors.js';
 
 const execute = promisify(execFile);
 let preparation;
@@ -13,7 +15,7 @@ export async function ensureReactorRuntime() {
   const requirements = await readFile(join(PATHS.root, 'scripts', 'requirements-reactor.txt'), 'utf8');
   const expected = requirements.match(/^reactor-sdk==([0-9.]+)\r?$/m)?.[1];
   if (!expected) throw new Error('Reactor SDK version pin is missing');
-  const override = process.env.REACTOR_PYTHON_PATH;
+  const override = process.env.REACTOR_PYTHON_PATH || readPortosEnvValue('REACTOR_PYTHON_PATH');
   const python = override || join(PATHS.data, 'venvs', 'reactor', process.platform === 'win32' ? 'Scripts/python.exe' : 'bin/python');
   if (override) {
     // Preserve custom environments; never install into an operator-owned path.
@@ -30,7 +32,12 @@ async function prepareRuntime(python, expected) {
   if (await probe(python, expected)) return python;
   await execute(process.execPath, [join(PATHS.root, 'scripts', 'setup-reactor.js')], {
     env: { ...process.env, PORTOS_REACTOR_DATA: PATHS.data }, timeout: 1_200_000, maxBuffer: 8192,
-  }).catch(() => { throw new Error('Automatic Reactor runtime preparation failed; check network access and disk space, then retry the render'); });
+  }).catch((error) => {
+    const message = Number.isInteger(error.code) && Object.hasOwn(REACTOR_SETUP_ERRORS, error.code)
+      ? REACTOR_SETUP_ERRORS[error.code]
+      : 'Automatic Reactor runtime preparation failed; check network access and disk space, then retry the render';
+    throw new Error(message);
+  });
   if (!await probe(python, expected)) throw new Error('Reactor runtime verification failed; retry the render to repair the installation');
   return python;
 }

@@ -13,8 +13,8 @@
  * blocks on.
  */
 
+import { isNonBlankStr } from './textUtils.js';
 const asArray = (v) => (Array.isArray(v) ? v : []);
-const isStr = (v) => typeof v === 'string' && v.length > 0;
 
 export const GRAPH_ISSUE_CODES = Object.freeze({
   MISSING_START: 'MISSING_START',
@@ -85,7 +85,7 @@ export function analyzeEpisodeGraph(episode, {
   if (!nodes.length) {
     push(GRAPH_ISSUE_CODES.NO_NODES, 'error', 'The episode has no scenes yet.');
   }
-  if (!isStr(episode?.startNodeId)) {
+  if (!isNonBlankStr(episode?.startNodeId)) {
     if (nodes.length) push(GRAPH_ISSUE_CODES.MISSING_START, 'error', 'No opening scene is set.');
   } else if (nodes.length && !byId.has(episode.startNodeId)) {
     push(GRAPH_ISSUE_CODES.START_NOT_FOUND, 'error', 'The opening scene points at a scene that no longer exists.');
@@ -205,7 +205,7 @@ export function describeGraphForPrompt(episode, {
   for (const node of nodes) {
     const flags = [
       node.id === episode?.startNodeId ? 'START' : null,
-      node?.isEnding ? `ENDING${isStr(node?.endingLabel) ? `: ${node.endingLabel}` : ''}` : null,
+      node?.isEnding ? `ENDING${isNonBlankStr(node?.endingLabel) ? `: ${node.endingLabel}` : ''}` : null,
       node?.isEnding ? null : (node?.playbackMode === 'cut' ? 'AUTO CUT' : 'DECISION LOOP'),
       participationMode === 'helper'
         ? (node?.audienceConnection === 'connected' ? 'AUDIENCE CONNECTED' : 'AUDIENCE DISCONNECTED')
@@ -216,12 +216,12 @@ export function describeGraphForPrompt(episode, {
     lines.push(`[${node.id}] ${node.title || 'Untitled scene'}${flags.length ? ` (${flags.join(') (')})` : ''}`);
     const prose = typeof node.prose === 'string' ? node.prose.trim() : '';
     if (prose) lines.push(prose.length > proseLimit ? `${prose.slice(0, proseLimit)}…` : prose);
-    if (isStr(node.videoPrompt)) {
+    if (isNonBlankStr(node.videoPrompt)) {
       lines.push(`Video: ${node.videoPrompt.length > proseLimit ? `${node.videoPrompt.slice(0, proseLimit)}…` : node.videoPrompt}`);
     }
-    if (isStr(node.cameraMovement)) lines.push(`Camera movement: ${node.cameraMovement}`);
+    if (isNonBlankStr(node.cameraMovement)) lines.push(`Camera movement: ${node.cameraMovement}`);
     for (const tr of asArray(node.transitions)) {
-      const triggers = asArray(tr?.triggers).filter(isStr);
+      const triggers = asArray(tr?.triggers).filter(isNonBlankStr);
       lines.push(`-> [${tr?.targetNodeId}] intent "${tr?.intent || ''}"${triggers.length ? ` (triggers: ${triggers.join('; ')})` : ''}`);
     }
     lines.push('');

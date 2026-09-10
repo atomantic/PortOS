@@ -1,5 +1,6 @@
 import { hasCanonDescriptorContent } from './canonPrompt.js';
 import { getCategoryKeys } from './universeBuilderShared.js';
+import { isNonBlankStr } from './textUtils';
 
 // Pure prompt-count helpers for the Universe Builder (#2374). They mirror the
 // server's compile/skip rules so inline "Render N images" buttons can advertise
@@ -14,19 +15,17 @@ export function totalVariationCount(world) {
   );
 }
 
-const hasNonBlankString = (v) => typeof v === 'string' && v.trim().length > 0;
-
 // Mirror the server's synthesizeCanonPrompt skip rule: entries with no
 // identity-anchor (name / slugline / prompt) AND no descriptive content for the
 // kind compile to an empty seed and get skipped at render time.
 export const canonEntryHasContent = (e, kind) => {
   if (!e) return false;
-  if (hasNonBlankString(e.prompt)) return true;
+  if (isNonBlankStr(e.prompt)) return true;
   // Identifier anchors per kind — places allow slugline-only entries (bible
   // sanitizer); characters/objects ignore stray slugline. Mirrors server
   // synthesizeCanonPrompt's identifier-seed rule.
-  if (hasNonBlankString(e.name)) return true;
-  if (kind === 'places' && hasNonBlankString(e.slugline)) return true;
+  if (isNonBlankStr(e.name)) return true;
+  if (kind === 'places' && isNonBlankStr(e.slugline)) return true;
   return hasCanonDescriptorContent(kind, e);
 };
 

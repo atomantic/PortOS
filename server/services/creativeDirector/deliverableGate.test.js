@@ -47,6 +47,14 @@ describe('deliverableMark (pure)', () => {
 });
 
 describe('deliverableLanded (pure)', () => {
+  it('recognizes a Video script revision even when the logline and shot count stay the same', () => {
+    const project = { workspace: 'video', treatment: { logline: 'An arrival', scenes: [{}], artifact: { revision: 1 } } };
+    const before = deliverableMark(project, 'treatment');
+    expect(deliverableLanded(project, 'treatment', before)).toBe(false);
+    expect(deliverableLanded(project, 'treatment', 'treatment:1:An arrival')).toBe(false);
+    project.treatment.artifact.revision = 2;
+    expect(deliverableLanded(project, 'treatment', before)).toBe(true);
+  });
   it('is false when the deliverable is still absent', () => {
     expect(deliverableLanded({ plan: null }, 'plan', null)).toBe(false);
   });

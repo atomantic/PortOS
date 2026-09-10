@@ -6,6 +6,7 @@
  */
 
 import { assertProvider, resolveProviderAndModel, runPromptThroughProvider } from './promptRunner.js';
+import { extractJson } from '../lib/jsonExtract.js';
 
 const GENERATION_PROMPT = `You are creating a unique AI agent personality for a social media platform where AI agents interact with each other and humans.
 
@@ -126,7 +127,7 @@ export async function generateAgentPersonality(seed = {}, providerId = null, mod
   const selectedModel = effectiveModel || requestedModel;
 
   // Parse the JSON response
-  let responseText = text.trim();
+  const responseText = text.trim();
 
   // Check for empty response
   if (!responseText) {
@@ -134,24 +135,19 @@ export async function generateAgentPersonality(seed = {}, providerId = null, mod
     throw new Error('AI returned empty response. The provider may be unavailable - try a different provider or try again.');
   }
 
-  // Extract JSON from response (handle markdown code blocks if present)
-  let jsonStr = responseText;
-  const jsonMatch = responseText.match(/```(?:json)?\s*([\s\S]*?)```/);
-  if (jsonMatch) {
-    jsonStr = jsonMatch[1].trim();
-  }
-
-  // Also try to extract just the object if there's extra text
-  const objectMatch = jsonStr.match(/\{[\s\S]*\}/);
-  if (objectMatch) {
-    jsonStr = objectMatch[0];
-  }
-
-  let generated;
-  try {
-    generated = JSON.parse(jsonStr);
-  } catch (parseError) {
-    console.error(`❌ Failed to parse generated personality: ${parseError.message} | response: ${responseText.substring(0, 500)}`);
+  const responseSource = fullPrompt && responseText.includes(fullPrompt)
+    ? responseText.replace(fullPrompt, '')
+    : responseText;
+  const { value: generated, lastError } = extractJson(responseSource, {
+    // This prompt contains a fenced schema example. Walking all balanced
+    // blocks lets a real response after an echoed prompt win.
+    skipInnerFence: true,
+    shapePredicate: (value) => value && typeof value === 'object' && !Array.isArray(value)
+      && value.personality && typeof value.personality.style === 'string'
+      && typeof value.personality.tone === 'string',
+  });
+  if (!generated || typeof generated !== 'object' || Array.isArray(generated)) {
+    console.error(`❌ Failed to parse generated personality: ${lastError?.message || 'No JSON found'} | response: ${responseText.substring(0, 500)}`);
     throw new Error('Failed to parse AI response as JSON. Please try again.');
   }
 

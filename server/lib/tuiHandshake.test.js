@@ -43,6 +43,9 @@ import {
   isPasteConfirmed,
   isCollapsedPasteChip,
   createInputReadyTracker,
+  createStartupDialogAnswers,
+  answerStartupDialogs,
+  SUBMIT_KEY,
   AGY_INPUT_READY_PATTERN,
   createRetryStallGate,
   RETRY_STALL_MS,
@@ -1854,5 +1857,127 @@ describe('createOomNudgeGate', () => {
     const gate = createOomNudgeGate();
     expect(gate.arm(null, 0)).toBeNull();
     expect(gate.takeNudge(OOM_NUDGE_SETTLE_MS + 1, 0)).toBe(0);
+  });
+});
+
+// The four modals a TUI can paint before its prompt can be delivered used to
+// be four booleans in spawnTuiAgent's closure plus four inline arms in its
+// 300ms poll. They are one table here now, so these pin the contract the
+// spawner depends on: table order, one answer per call, the stage split that
+// keeps the "trust choices unrecognized" failure between the two groups, and
+// the per-session record that stops a second answer.
+describe('answerStartupDialogs', () => {
+  const PASTE_OFF = '\x1b[?2004l';
+  const PASTE_ON = '\x1b[?2004h';
+
+  const EXTERNAL_IMPORTS_OFFER = "This project's CLAUDE" + '.md imports files outside the current working directory.\n'
+    + '1. Yes, allow external imports\n2. No, disable external imports\n';
+  const HOOK_REVIEW_OFFER = 'Hooks need review\n1. Review hooks\n'
+    + "3. Continue without trusting (hooks won't run)\n";
+  const TRUST_GATE = 'Is this a project you trust?\n❯ 1. Yes, I trust this folder\n2. No, exit\n';
+  const AUTO_MODE_OFFER = 'Make auto mode your default permission mode?\n'
+    + '   ❯ 1. Yes, set auto mode as my default permission mode\n'
+    + "     2. No, keep don't ask\n";
+
+  // A live tracker, so each row's `asks`/`keys`/`ack` is checked against the
+  // real createInputReadyTracker API rather than a stub that could drift.
+  const composerLive = (...chunks) => {
+    const tracker = createInputReadyTracker();
+    tracker.observe(`${PASTE_OFF}${PASTE_ON}`, '');
+    for (const chunk of chunks) tracker.observe('', chunk);
+    return tracker;
+  };
+
+  const answerOnce = (inputReady, answers, stage = 'before-composer') => {
+    const written = [];
+    const result = answerStartupDialogs({
+      inputReady, answers, stage, command: 'claude', write: (keys) => written.push(keys),
+    });
+    return { result, written };
+  };
+
+  it('starts with every dialog unanswered and answers nothing when none is showing', () => {
+    const answers = createStartupDialogAnswers();
+    expect(Object.values(answers).every((v) => v === false)).toBe(true);
+
+    const tracker = composerLive('Try "fix lint errors"');
+    expect(answerOnce(tracker, answers).result).toBeNull();
+    expect(answerOnce(tracker, answers, 'after-composer').result).toBeNull();
+  });
+
+  it('answers one before-composer dialog per call, in table order, and acks the tracker each time', () => {
+    // All three up at once: order is what stops a later arm from answering a
+    // modal that is not the one currently owning the terminal's input.
+    const tracker = composerLive(EXTERNAL_IMPORTS_OFFER, HOOK_REVIEW_OFFER, TRUST_GATE);
+    const answers = createStartupDialogAnswers();
+
+    const first = answerOnce(tracker, answers);
+    expect(first.result).toEqual({ id: 'external-imports', message: 'Declined claude external instruction imports' });
+    expect(first.written).toEqual(['\x1b[B\r']); // arrow-down to option 2, never a bare Enter
+    expect(tracker.needsExternalImportsChoice).toBe(false);
+
+    const second = answerOnce(tracker, answers);
+    expect(second.result).toEqual({ id: 'hook-review', message: 'Continued claude without trusting startup hooks' });
+    expect(second.written).toEqual(['\x1b[B\x1b[B\r']); // option 3
+    expect(tracker.needsHookReview).toBe(false);
+
+    const third = answerOnce(tracker, answers);
+    expect(third.result).toEqual({ id: 'folder-trust', message: 'Auto-confirmed claude folder-trust prompt' });
+    expect(third.written).toEqual([`${tracker.trustSelectionKey}${SUBMIT_KEY}`]);
+    expect(tracker.needsTrust).toBe(false);
+
+    // Every dialog cleared, so the composer is finally reachable.
+    expect(answerOnce(tracker, answers).result).toBeNull();
+    expect(tracker.ready).toBe(true);
+  });
+
+  it('leaves the folder-trust gate alone until its choices have painted', () => {
+    // The heading matched but no recognizable option did, so trustSelectionKey
+    // has nothing to derive from. Answering here would submit whatever the TUI
+    // highlighted — which can be "No, exit". The spawner's own deadline check
+    // owns this state, and it only runs because nothing was answered.
+    const tracker = composerLive('Is this a project you trust?\n');
+    expect(tracker.needsTrust).toBe(true);
+    expect(tracker.trustChoiceReady).toBe(false);
+
+    const answers = createStartupDialogAnswers();
+    expect(answerOnce(tracker, answers).result).toBeNull();
+    expect(answers.trustAccepted).toBe(false);
+
+    tracker.observe('', '❯ 1. Yes, I trust this folder\n2. No, exit\n');
+    expect(answerOnce(tracker, answers).result?.id).toBe('folder-trust');
+  });
+
+  it('keeps the two stages disjoint so neither can answer the other\'s dialog', () => {
+    // The stage split is load-bearing: the spawner runs before-composer for
+    // every provider, then its trust-choice-unrecognized failure check, and
+    // only then after-composer — for the positive input-ready providers.
+    const trustUp = composerLive(TRUST_GATE);
+    expect(answerOnce(trustUp, createStartupDialogAnswers(), 'after-composer').result).toBeNull();
+    expect(trustUp.needsTrust).toBe(true);
+
+    const autoModeUp = composerLive(AUTO_MODE_OFFER);
+    expect(answerOnce(autoModeUp, createStartupDialogAnswers()).result).toBeNull();
+    expect(autoModeUp.needsAutoModeChoice).toBe(true);
+
+    const answered = answerOnce(autoModeUp, createStartupDialogAnswers(), 'after-composer');
+    expect(answered.result).toEqual({ id: 'auto-mode', message: 'Declined claude auto-mode default offer' });
+    expect(answered.written).toEqual(['\x1b[B\r']);
+    expect(autoModeUp.ready).toBe(true);
+  });
+
+  it('answers each dialog at most once per session, even if the question comes back', () => {
+    // The record is the guard the tracker cannot be: a TUI that re-asks (or a
+    // tracker that re-arms from its rolling tail) must not start a keystroke
+    // loop that outlives the paste deadline.
+    const reAsking = { needsHookReview: true, ackHookReview: () => {} };
+    const answers = createStartupDialogAnswers();
+
+    expect(answerOnce(reAsking, answers).result?.id).toBe('hook-review');
+    expect(answers.hookReviewDeclined).toBe(true);
+
+    const second = answerOnce(reAsking, answers);
+    expect(second.result).toBeNull();
+    expect(second.written).toEqual([]);
   });
 });

@@ -84,6 +84,20 @@ describe('AppTaskCard', () => {
     expect(screen.getByText('Manual trigger only')).toBeTruthy();
   });
 
+  it('labels on-demand perpetual tasks as automatic drains', () => {
+    renderCard({ type: 'on-demand', perpetual: true });
+    expect(screen.getByText('Automatic drain')).toHaveAttribute('title', expect.stringContaining('Turn automatic starts off'));
+    expect(screen.queryByText('On Demand')).toBeNull();
+    expect(screen.queryByText('Manual trigger only')).toBeNull();
+  });
+
+  it('labels manual perpetual tasks as on demand with no automatic next run', () => {
+    renderCard({ type: 'on-demand', perpetual: true, autoStart: false });
+    expect(screen.queryByText('Automatic drain')).toBeNull();
+    expect(screen.getByText('On Demand')).toBeTruthy();
+    expect(screen.getByText('Manual trigger only')).toBeTruthy();
+  });
+
   it('renders BOTH badges for a scheduled task that also drains perpetually', () => {
     renderCard({ type: 'cron', cronExpression: '0 6 * * 1-5', perpetual: true });
     expect(screen.getByText('Scheduled')).toBeTruthy();

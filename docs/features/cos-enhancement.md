@@ -19,7 +19,7 @@ Comprehensive upgrade from reactive task executor to proactive autonomous agent 
 | `server/services/agentRunCache.js` | Agent output caching with TTL (not built) |
 | `server/services/eventScheduler.js` | Cron-based event scheduling |
 | `server/services/executionLanes.js` | Concurrent execution lane management |
-| `server/services/missions.js` | Long-term goal and mission management |
+| `server/services/missions.js` | Long-term goal and mission management (removed, #6826 — nothing in production ever created a mission; superseded by the Goals system) |
 | `server/services/lmStudioManager.js` | LM Studio model discovery and health |
 | `server/services/localThinking.js` | Local model completions |
 | `server/services/thinkingLevels.js` | Dynamic model selection |
@@ -38,8 +38,8 @@ Comprehensive upgrade from reactive task executor to proactive autonomous agent 
 
 - Event scheduler with cron expressions and timeout-safe timers (clamps to 2^31-1)
 - Execution lanes: critical (1), standard (2), background (3) concurrent slots
-- Mission system for long-term goals with sub-tasks
-- Mission-driven task generation in evaluation loop
+- Mission system for long-term goals with sub-tasks (removed, #6826)
+- Mission-driven task generation in evaluation loop (removed, #6826)
 
 ### Phase 3: Local Model Integration
 
@@ -192,7 +192,7 @@ opening line. Off by default.
 | `server/services/executionLanes.test.js` | Execution Lanes |
 | `server/services/errorRecovery.test.js` | Error Recovery (not built) |
 | `server/services/agentRunCache.test.js` | Agent Run Cache (not built) |
-| `server/services/missions.test.js` | Missions Service |
+| `server/services/missions.test.js` | Missions Service (removed, #6826) |
 
 ## Related Features
 

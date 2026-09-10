@@ -59,6 +59,28 @@ describe('universe store facade — file backend', () => {
     expect(all.every((r) => !('_sanitized' in r))).toBe(true); // raw, not sanitized
   });
 
+  it('listLiveIds returns only non-deleted ids', async () => {
+    const s = getUniverseStore(passthroughSanitize);
+    await s.writeRecord('u-1', { id: 'u-1', name: 'Live' });
+    await s.writeRecord('u-2', { id: 'u-2', name: 'Dead', deleted: true, deletedAt: '2026-01-01T00:00:00.000Z' });
+    await s.writeRecord('u-3', { id: 'u-3', name: 'Ghost', ephemeral: true });
+    // Ephemeral (but not deleted) counts as live — matches db.listLiveIds'
+    // `WHERE deleted = FALSE` (it doesn't filter on ephemeral either).
+    expect((await s.listLiveIds()).sort()).toEqual(['u-1', 'u-3']);
+  });
+
+  it('listTombstoneIdsBefore returns only tombstones older than the cutoff, keeping unparseable deletedAt', async () => {
+    const s = getUniverseStore(passthroughSanitize);
+    await s.writeRecord('u-live', { id: 'u-live', name: 'Live' });
+    await s.writeRecord('u-old', { id: 'u-old', name: 'Old', deleted: true, deletedAt: '2026-01-01T00:00:00.000Z' });
+    await s.writeRecord('u-new', { id: 'u-new', name: 'New', deleted: true, deletedAt: '2026-06-01T00:00:00.000Z' });
+    // Non-parseable deletedAt is conservatively KEPT — never a candidate,
+    // regardless of cutoff (mirrors the JS filter this projection replaces).
+    await s.writeRecord('u-bad', { id: 'u-bad', name: 'Bad', deleted: true, deletedAt: 'not-a-date' });
+    const cutoff = Date.parse('2026-03-01T00:00:00.000Z');
+    expect(await s.listTombstoneIdsBefore(cutoff)).toEqual(['u-old']);
+  });
+
   it('listStyles projects to the style fields and drops tombstones', async () => {
     const s = getUniverseStore(passthroughSanitize);
     await s.writeRecord('u-1', {

@@ -243,3 +243,16 @@ it('keeps Video drafts inert through both direct starts and background scene adv
   expect(mockRunSceneRender).not.toHaveBeenCalled();
   expect(mockUpdateProject).not.toHaveBeenCalled();
 });
+
+it('resumes an authorized stale Video treatment by rewriting it before rendering', async () => {
+  const review = await import('./videoReview.js');
+  const gate = vi.spyOn(review, 'videoReviewAllowsDispatch').mockResolvedValue(true);
+  const project = { id: 'cd-video', workspace: 'video', status: 'rendering', runs: [],
+    directive: { goal: 'Example' }, treatment: { artifact: { stale: true }, scenes: [{ sceneId: 'one', status: 'pending' }] } };
+  mockGetProject.mockResolvedValue(project);
+  await startCreativeDirectorProject(project.id);
+  expect(mockEnqueueTreatmentTask).toHaveBeenCalledWith(project);
+  expect(mockRunSceneRender).not.toHaveBeenCalled();
+  expect(mockAdvancePlan).not.toHaveBeenCalled();
+  gate.mockRestore();
+});

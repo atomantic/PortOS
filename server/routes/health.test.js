@@ -4,7 +4,7 @@ import express from 'express';
 import { request } from '../lib/testHelper.js';
 import systemHealthRoutes from './systemHealth.js';
 import { listProcesses } from '../services/pm2.js';
-import { getSelf } from '../services/instances.js';
+import { getSelf } from '../services/instanceIdentity.js';
 import { isAuthEnabled } from '../services/auth.js';
 import { checkGhHealth } from '../services/github.js';
 import { getBuildIdentity } from '../lib/buildIdentity.js';
@@ -31,7 +31,7 @@ vi.mock('../lib/memoryStats.js', () => ({
 // companion-app identity fields on GET /health are deterministic. Mocking auth.js
 // directly also sidesteps its module-load `settingsEvents.on(...)` side effect,
 // which the partial settings.js mock below does not provide.
-vi.mock('../services/instances.js', () => ({
+vi.mock('../services/instanceIdentity.js', () => ({
   getSelf: vi.fn().mockResolvedValue({ instanceId: 'test-instance-id', name: 'Example Instance' })
 }));
 

@@ -9,7 +9,6 @@
  *
  * Split out of the former 4,004-line peerSync.js (#1830).
  */
-import { isStr } from '../../lib/storyBible.js';
 import { isPlainObject } from '../../lib/objects.js';
 import {
   PORTOS_SCHEMA_VERSIONS,
@@ -19,30 +18,9 @@ import {
   formatVersionGap,
   getPortosVersion,
 } from '../../lib/schemaVersions.js';
-import { UNKNOWN_INSTANCE_ID } from '../instances.js';
-import { getUniverse, mergeUniversesFromSync } from '../universeBuilder.js';
-import { getSeries, mergeSeriesFromSync } from '../pipeline/series.js';
+import { UNKNOWN_INSTANCE_ID } from '../instanceIdentity.js';
 import { mergeIssuesFromSync } from '../pipeline/issues.js';
-import { getCollection, mergeMediaCollectionsFromSync } from '../mediaCollections.js';
-import { getAuthor, mergeAuthorsFromSync } from '../authors/index.js';
-import { getArtist, mergeArtistsFromSync } from '../artists/index.js';
-import { getAlbum, mergeAlbumsFromSync } from '../albums/index.js';
-import { getTrack, mergeTracksFromSync } from '../tracks/index.js';
-import { getProject, mergeProjectsFromSync } from '../creativeDirector/local.js';
-import { getProject as getMusicVideoProject, mergeProjectsFromSync as mergeMusicVideoProjectsFromSync } from '../musicVideo/projects.js';
-import { getBoard, mergeBoardsFromSync } from '../moodBoard/index.js';
-import { mergeLoomsFromSync } from '../fableLoom/index.js';
-import {
-  getWorkForSync,
-  mergeWorksFromSync,
-  diffWorkBodyManifest,
-  getFolderForSync,
-  mergeFoldersFromSync,
-  getExerciseForSync,
-  mergeExercisesFromSync,
-} from '../writersRoom/sync.js';
-import { getCommissionFeedbackForSync, mergeCommissionFeedbackFromSync } from '../creativeCommissions/feedbackStore.js';
-import { getCommissionForSync, mergeCommissionsFromSync } from '../creativeCommissions/store.js';
+import { diffWorkBodyManifest } from '../writersRoom/sync.js';
 import {
   ackDeletesUpTo,
 } from './peerTombstoneCursors.js';
@@ -51,16 +29,18 @@ import {
   pullMissingAssetsFromPeer,
   pullMissingWorkBodies,
 } from './peerSyncAssets.js';
+import { RECORD_KINDS } from './recordKinds.js';
 import { findPeerSubscription, subscribePeer } from './peerSubscriptions.js';
 import {
   makeErr,
-  isNonEmptyStr,
   findPeerById,
   peerSyncEvents,
   ERR_VALIDATION,
   ERR_SCHEMA_VERSION_AHEAD,
   PEER_SUBSCRIBABLE_KINDS,
+  ENVELOPE_PENDING_KEYS,
 } from './peerSyncShared.js';
+import { isStr, isNonBlankStr } from '../../lib/textUtils.js';
 
 
 /**
@@ -99,51 +79,28 @@ function catalogBundleHasLiveRow(catalogBundle) {
   );
 }
 
-// --- Receiver-side push handler -----------------------------------------
-
 /**
- * Apply an incoming push to local state. Wraps the existing `merge*FromSync`
- * dispatch + computes the asset-diff response + (best-effort) creates a
- * reverse subscription back to the sender so subsequent edits flow both
- * ways without manual re-configuration.
+ * SCHEMA-VERSION GATE — runs BEFORE any merge so a sender on a newer storage
+ * layout can't corrupt local state. Legacy senders without `portosMeta` pass
+ * through (comparator treats absent as zero/no-contract; their record went
+ * through the same v0 → vN sanitizer chain we already run). When the sender
+ * is AHEAD on any category, throws a structured error the route layer maps
+ * to HTTP 409 + body so the sender can persist the gap on the subscription
+ * and surface it in the UI. Returns `{ senderSchemaVersions }` on success —
+ * the caller threads it into every merge call.
  *
- * The HTTP route in Stage 3 will be a thin wrapper around this — validate
- * the body shape, call this function, return the response.
+ * We do NOT reject on "sender behind" here — the sanitizer's existing
+ * backfill chain handles older inputs in-place. A future forward-only
+ * contract (e.g. a required field that the sanitizer can't synthesize) can
+ * opt into a behind-gate; the comparator already surfaces both directions
+ * for that purpose.
+ *
+ * Extracted out of `applyIncomingPush`'s own body (#6843) — a self-contained
+ * validate-or-throw step with one clear output, and one of the two chunks
+ * (with the merge-dispatch ladder) needed to bring that function's
+ * complexity down after collapsing the per-kind ladders to table lookups.
  */
-export async function applyIncomingPush(payload) {
-  if (!isPlainObject(payload)) {
-    throw makeErr('payload must be an object', ERR_VALIDATION);
-  }
-  const { kind, record, issues, linkedCollection, linkedTrack, catalogBundle, manuscriptReview, reverseOutline, assetManifest, draftBodyManifest, sourceInstanceId, portosMeta } = payload;
-  if (!PEER_SUBSCRIBABLE_KINDS.includes(kind)) {
-    throw makeErr(`unknown kind: ${kind}`, ERR_VALIDATION);
-  }
-  // Identity + record-shape checks happen BEFORE the schema-version gate.
-  // The gate's 409 body includes `receiverSchemaVersions: PORTOS_SCHEMA_VERSIONS`
-  // — a (mild) version-fingerprint disclosure — and we don't want to surface
-  // it to callers that haven't even identified themselves correctly. Move
-  // the cheap shape validation first so unidentified or malformed requests
-  // get a clean 400 with no version information.
-  if (!isNonEmptyStr(sourceInstanceId) || sourceInstanceId === UNKNOWN_INSTANCE_ID) {
-    throw makeErr('sourceInstanceId required (and not "unknown")', ERR_VALIDATION);
-  }
-  if (!isPlainObject(record) || !isNonEmptyStr(record.id)) {
-    throw makeErr('record must be an object with a string id', ERR_VALIDATION);
-  }
-
-  // SCHEMA-VERSION GATE — runs BEFORE any merge so a sender on a newer
-  // storage layout can't corrupt local state. Legacy senders without
-  // `portosMeta` pass through (comparator treats absent as zero/no-contract;
-  // their record went through the same v0 → vN sanitizer chain we already
-  // run). When the sender is AHEAD on any category, we reject with a
-  // structured error the route layer maps to HTTP 409 + body so the sender
-  // can persist the gap on the subscription and surface it in the UI.
-  //
-  // We do NOT reject on "sender behind" here — the sanitizer's existing
-  // backfill chain handles older inputs in-place. A future forward-only
-  // contract (e.g. a required field that the sanitizer can't synthesize)
-  // can opt into a behind-gate; the comparator already surfaces both
-  // directions for that purpose.
+async function assertSchemaVersionGate({ kind, record, issues, linkedCollection, catalogBundle, linkedTrack, portosMeta, sourceInstanceId }) {
   const senderSchemaVersions = isPlainObject(portosMeta?.schemaVersions) ? portosMeta.schemaVersions : {};
   const senderPortosVersion = typeof portosMeta?.portosVersion === 'string' ? portosMeta.portosVersion : null;
   // Per-category gate, scoped to the categories THIS push actually writes a
@@ -229,6 +186,44 @@ export async function applyIncomingPush(payload) {
       },
     );
   }
+  return { senderSchemaVersions };
+}
+
+// --- Receiver-side push handler -----------------------------------------
+
+/**
+ * Apply an incoming push to local state. Wraps the existing `merge*FromSync`
+ * dispatch + computes the asset-diff response + (best-effort) creates a
+ * reverse subscription back to the sender so subsequent edits flow both
+ * ways without manual re-configuration.
+ *
+ * The HTTP route in Stage 3 will be a thin wrapper around this — validate
+ * the body shape, call this function, return the response.
+ */
+export async function applyIncomingPush(payload) {
+  if (!isPlainObject(payload)) {
+    throw makeErr('payload must be an object', ERR_VALIDATION);
+  }
+  const { kind, record, issues, linkedCollection, linkedTrack, catalogBundle, manuscriptReview, reverseOutline, assetManifest, draftBodyManifest, sourceInstanceId, portosMeta } = payload;
+  if (!PEER_SUBSCRIBABLE_KINDS.includes(kind)) {
+    throw makeErr(`unknown kind: ${kind}`, ERR_VALIDATION);
+  }
+  // Identity + record-shape checks happen BEFORE the schema-version gate.
+  // The gate's 409 body includes `receiverSchemaVersions: PORTOS_SCHEMA_VERSIONS`
+  // — a (mild) version-fingerprint disclosure — and we don't want to surface
+  // it to callers that haven't even identified themselves correctly. Move
+  // the cheap shape validation first so unidentified or malformed requests
+  // get a clean 400 with no version information.
+  if (!isNonBlankStr(sourceInstanceId) || sourceInstanceId === UNKNOWN_INSTANCE_ID) {
+    throw makeErr('sourceInstanceId required (and not "unknown")', ERR_VALIDATION);
+  }
+  if (!isPlainObject(record) || !isNonBlankStr(record.id)) {
+    throw makeErr('record must be an object with a string id', ERR_VALIDATION);
+  }
+
+  const { senderSchemaVersions } = await assertSchemaVersionGate({
+    kind, record, issues, linkedCollection, catalogBundle, linkedTrack, portosMeta, sourceInstanceId,
+  });
 
   // Look up the LOCAL record state BEFORE merging so we can detect the
   // "local user marked this record ephemeral" case. The merge functions
@@ -237,40 +232,30 @@ export async function applyIncomingPush(payload) {
   // unconditionally — meaning a stale peer subscription could still
   // mutate a local collection, download bytes the user opted out of, and
   // auto-create a reverse sub the user explicitly torn down. Computing
-  // `localEphemeral` here is one extra read but closes the gap.
-  let localEphemeral = false;
-  if (kind === 'universe') {
-    const local = await getUniverse(record.id, { includeDeleted: true }).catch(() => null);
-    localEphemeral = local?.ephemeral === true;
-  } else if (kind === 'series') {
-    const local = await getSeries(record.id, { includeDeleted: true }).catch(() => null);
-    localEphemeral = local?.ephemeral === true;
-  } else if (kind === 'musicVideoProject') {
-    // #1858: the music-video push now carries a secondary `linkedTrack` bundle,
-    // so it needs the same opt-out gate — a stale peer push must not plant a
-    // track record for a project the user marked ephemeral.
-    const local = await getMusicVideoProject(record.id, { includeDeleted: true }).catch(() => null);
-    localEphemeral = local?.ephemeral === true;
-  }
+  // `localEphemeral` here is one extra read but closes the gap. Only kinds
+  // with an ephemeral concept (`desc.hasEphemeral` — today universe/series)
+  // pay for the read at all; #1858 used to also probe musicVideoProject
+  // here, but the store has no ephemeral flag on that kind (see recordKinds.js),
+  // so that probe's result was always false — dropped as documented drift.
+  const desc = RECORD_KINDS[kind];
+  const localEphemeral = desc.hasEphemeral
+    ? (await desc.load(record.id).catch(() => null))?.ephemeral === true
+    : false;
 
-  // Merge into local state via the existing LWW path. The merge functions
-  // honor `deleted: true` + bump `updatedAt`, so this is the single
-  // tombstone-aware reconciliation point. Attribute any conflict journaled by
-  // the merge to THIS push's origin peer so the Conflicts tab can show which
-  // peer collided (without `source`, the merge fns fall back to
-  // `{ via:'sync', peerId:null }` and the attribution is lost).
+  // Attribute any conflict journaled by the merge below to THIS push's origin
+  // peer so the Conflicts tab can show which peer collided (without `source`,
+  // the merge fns fall back to `{ via:'sync', peerId:null }` and the
+  // attribution is lost).
   const source = { via: 'peer-push', peerId: sourceInstanceId };
-  // Set true when a bundled manuscript-review merge throws — returned to the
-  // sender so it withholds lastPushedHash and retries (the review has no other
-  // reconciliation path; see the merge block below).
-  let reviewSyncPending = false;
-  // Same contract as reviewSyncPending, for the bundled reverse-outline doc.
-  let outlineSyncPending = false;
-  // Same contract again, for the #1858 bundled linked-track record: a
-  // musicVideoProjects-only subscriber has NO independent `tracks` sync cycle,
-  // so a swallowed merge failure would strand the record the receiver needs to
-  // render. Signal so the sender withholds lastPushedHash and re-sends.
-  let trackSyncPending = false;
+  // ENVELOPE_EXTENSIONS pending flags to echo to the sender: a bundled sidecar
+  // doc whose merge threw AFTER the record itself merged is still owed, and
+  // the sender withholds lastPushedHash on the flag until it lands. The record
+  // push itself never fails on these.
+  const pending = new Set();
+  const markPending = (key) => (err) => {
+    console.log(`⚠️ peerSync: ${key} merge failed: ${err.message}`);
+    pending.add(ENVELOPE_PENDING_KEYS[key]);
+  };
   // #1922: true only once the bundled linkedTrack merge actually RAN and
   // succeeded — gates whether `linkedTrack` may contribute to
   // `ackedDeletesUpTo` below. Stays false on every skip path (mismatched id,
@@ -281,12 +266,18 @@ export async function applyIncomingPush(payload) {
   // Set true when a writersRoomWork merge accepted the remote (insert/remote-won)
   // — gates whether a present-but-different local draft body may be overwritten.
   let workMergeApplied = false;
-  if (kind === 'universe') {
-    // senderSchemaVersions gates the merge's moodBoardId omitted-vs-cleared
-    // disambiguation (#4188) — see mergeUniversesFromSync.
-    await mergeUniversesFromSync([record], { source, senderSchemaVersions });
-  } else if (kind === 'series') {
-    await mergeSeriesFromSync([record], { source });
+  // Merge into local state via the existing LWW path, dispatched through the
+  // same per-kind table isSubscriptionRecordTombstone/buildPushPayload use —
+  // every PEER_SUBSCRIBABLE_KINDS entry has a descriptor (the registry guard
+  // in recordKinds.test.js enforces it), so `desc` is never null here.
+  // `senderSchemaVersions` rides every merge call uniformly: only
+  // mergeUniversesFromSync (gates the moodBoardId omitted-vs-cleared
+  // disambiguation, #4188) and mergeLoomsFromSync read it — every other
+  // merger ignores the extra key. The 12 kinds with no extra per-kind
+  // behavior need nothing further; the three genuinely special kinds below
+  // add their bundled-doc handling on top of this single call.
+  const mergeResult = await desc.merge([record], { source, senderSchemaVersions });
+  if (kind === 'series') {
     // Bundled issues: skip the entire batch if the LOCAL series is
     // ephemeral. mergeSeriesFromSync already refused the parent record on
     // its own, but child issue merges are a separate code path —
@@ -303,15 +294,12 @@ export async function applyIncomingPush(payload) {
     // NOT fail the push (the series/issues already merged) — but unlike the
     // linkedCollection bundle, the review has NO independent reconciliation
     // cycle, so a swallowed failure could never resend once the sender saves
-    // lastPushedHash. Signal `reviewSyncPending` so the sender withholds the
+    // lastPushedHash. Raise the row's pending flag so the sender withholds the
     // hash (mirrors the missing-assets guard) and retries next cycle.
     // Dynamic import keeps the arcPlanner graph off peerSync's load path.
     if (!localEphemeral && record.deleted !== true && isPlainObject(manuscriptReview)) {
       const { mergeReviewFromSync } = await import('../pipeline/manuscriptReview.js');
-      await mergeReviewFromSync(record.id, manuscriptReview).catch((err) => {
-        console.log(`⚠️ peerSync: manuscriptReview merge failed: ${err.message}`);
-        reviewSyncPending = true;
-      });
+      await mergeReviewFromSync(record.id, manuscriptReview).catch(markPending('manuscriptReview'));
     }
     // Merge the bundled reverse-outline sibling doc, whole-doc LWW on
     // generatedAt. Same ephemeral/tombstone guards + pending-signal contract as
@@ -320,43 +308,14 @@ export async function applyIncomingPush(payload) {
     // cycle. Dynamic import keeps the arcPlanner graph off peerSync's load path.
     if (!localEphemeral && record.deleted !== true && isPlainObject(reverseOutline)) {
       const { mergeOutlineFromSync } = await import('../pipeline/reverseOutline.js');
-      await mergeOutlineFromSync(record.id, reverseOutline).catch((err) => {
-        console.log(`⚠️ peerSync: reverseOutline merge failed: ${err.message}`);
-        outlineSyncPending = true;
-      });
+      await mergeOutlineFromSync(record.id, reverseOutline).catch(markPending('reverseOutline'));
     }
-  } else if (kind === 'mediaCollection') {
-    await mergeMediaCollectionsFromSync([record], { source });
-  } else if (kind === 'author') {
-    await mergeAuthorsFromSync([record], { source });
-  } else if (kind === 'artist') {
-    await mergeArtistsFromSync([record], { source });
-  } else if (kind === 'album') {
-    await mergeAlbumsFromSync([record], { source });
-  } else if (kind === 'track') {
-    await mergeTracksFromSync([record], { source });
-  } else if (kind === 'creativeDirectorProject') {
-    await mergeProjectsFromSync([record], { source });
-  } else if (kind === 'moodBoard') {
-    await mergeBoardsFromSync([record], { source });
-  } else if (kind === 'fableLoom') {
-    await mergeLoomsFromSync([record], { source, senderSchemaVersions });
   } else if (kind === 'writersRoomWork') {
-    const mergeResult = await mergeWorksFromSync([record], { source });
     // Did the receiver accept the remote work (insert / remote-won LWW)? This
     // gates whether a PRESENT-but-different local draft body may be overwritten —
     // a stale push that lost the LWW must NOT clobber newer local prose.
     workMergeApplied = mergeResult?.applied === true;
-  } else if (kind === 'commissionFeedback') {
-    await mergeCommissionFeedbackFromSync([record], { source });
-  } else if (kind === 'creativeCommission') {
-    await mergeCommissionsFromSync([record], { source });
-  } else if (kind === 'writersRoomFolder') {
-    await mergeFoldersFromSync([record], { source });
-  } else if (kind === 'writersRoomExercise') {
-    await mergeExercisesFromSync([record], { source });
   } else if (kind === 'musicVideoProject') {
-    await mergeMusicVideoProjectsFromSync([record], { source });
     // #1858: merge the bundled linked track record so a receiver WITHOUT the
     // Tracks category can still resolve `project.trackId` (getTrack) at render
     // time. The audio bytes already pulled via assetManifest. Non-fatal: the
@@ -365,14 +324,14 @@ export async function applyIncomingPush(payload) {
     // Require the bundle's id to MATCH the project's `trackId` so a malformed/
     // malicious sender can't smuggle an unrelated track record through the
     // music-video push (the project only needs the track it actually links).
+    // Routed through RECORD_KINDS.track.merge — the same function `track`
+    // subscriptions merge through — rather than importing mergeTracksFromSync
+    // directly, so there is exactly one place that knows how to merge a track.
     if (!localEphemeral && record.deleted !== true && isPlainObject(linkedTrack)
         && linkedTrack.id === record.trackId) {
-      await mergeTracksFromSync([linkedTrack], { source }).then(() => {
+      await RECORD_KINDS.track.merge([linkedTrack], { source }).then(() => {
         linkedTrackApplied = true;
-      }).catch((err) => {
-        console.log(`⚠️ peerSync: linkedTrack merge failed: ${err.message}`);
-        trackSyncPending = true;
-      });
+      }).catch(markPending('linkedTrack'));
     }
   }
 
@@ -396,7 +355,10 @@ export async function applyIncomingPush(payload) {
   //     explicitly opted out of sync for this record, so peer-pushed
   //     collection mutations must not land.
   if (!localEphemeral && record.deleted !== true && isPlainObject(linkedCollection)) {
-    await mergeMediaCollectionsFromSync([linkedCollection], { source }).catch((err) => {
+    // Routed through RECORD_KINDS.mediaCollection.merge — the same function
+    // `mediaCollection` subscriptions merge through — rather than importing
+    // mergeMediaCollectionsFromSync directly.
+    await RECORD_KINDS.mediaCollection.merge([linkedCollection], { source }).catch((err) => {
       console.log(`⚠️ peerSync: linkedCollection merge failed: ${err.message}`);
     });
   }
@@ -512,9 +474,9 @@ export async function applyIncomingPush(payload) {
     ...(missingDraftBodies.length > 0 ? { missingDraftBodies } : {}),
     reverseSubscriptionCreated,
     ackedDeletesUpTo,
-    ...(reviewSyncPending ? { reviewSyncPending: true } : {}),
-    ...(outlineSyncPending ? { outlineSyncPending: true } : {}),
-    ...(trackSyncPending ? { trackSyncPending: true } : {}),
+    // One `<pendingKey>: true` per sidecar doc whose merge threw, keyed off the
+    // same ENVELOPE_EXTENSIONS table the sender reads them back from.
+    ...Object.fromEntries([...pending].map((k) => [k, true])),
   };
 }
 
@@ -540,8 +502,8 @@ async function maybeCreateReverseSubscription({ peerId, recordKind, recordId }) 
   // peer marked inbound-only is one we accept pushes FROM but never push
   // back TO — auto-creating a reverse subscription would break that
   // explicit configuration. Doing this BEFORE the ephemeral-record disk
-  // read means inbound-only / unknown peers don't trigger an extra
-  // getUniverse / getSeries on every incoming push.
+  // read (classifyLocalRecord's `desc.load` below) means inbound-only /
+  // unknown peers don't trigger an extra record read on every incoming push.
   const peer = await findPeerById(peerId);
   if (!peer) return false;
   const directions = Array.isArray(peer.directions) ? peer.directions : [];
@@ -609,99 +571,17 @@ async function maybeCreateReverseSubscription({ peerId, recordKind, recordId }) 
  *
  * Includes deleted records on the lookup so a tombstone-as-state record
  * still gets classified as 'syncable' (we WANT peer pushes to converge
- * a deleted record's tombstone if they're targeting it).
+ * a deleted record's tombstone if they're targeting it). Every kind but
+ * universe/series has no ephemeral concept at all (`desc.hasEphemeral ===
+ * false`), so a found record there is always 'syncable' — that's what lets
+ * an inbound push of those kinds bootstrap bidirectional sync with no
+ * ping-pong risk (the lastPushedHash short-circuit + LWW same-`updatedAt`
+ * no-op merge prevent it).
  */
 async function classifyLocalRecord(recordKind, recordId) {
-  if (recordKind === 'universe') {
-    const u = await getUniverse(recordId, { includeDeleted: true }).catch(() => undefined);
-    if (!u) return 'missing';
-    return u.ephemeral === true ? 'ephemeral' : 'syncable';
-  }
-  if (recordKind === 'series') {
-    const s = await getSeries(recordId, { includeDeleted: true }).catch(() => undefined);
-    if (!s) return 'missing';
-    return s.ephemeral === true ? 'ephemeral' : 'syncable';
-  }
-  if (recordKind === 'mediaCollection') {
-    // Collections have no `ephemeral` concept, so a found record is always
-    // 'syncable'. Without this branch, maybeCreateReverseSubscription's
-    // `localState !== 'syncable'` guard would never bootstrap bidirectional
-    // collection sync from an inbound push. No ping-pong risk — the
-    // lastPushedHash short-circuit + LWW same-`updatedAt` no-op merge prevent
-    // it, same as universe/series.
-    const c = await getCollection(recordId, { includeDeleted: true }).catch(() => null);
-    return c ? 'syncable' : 'missing';
-  }
-  if (recordKind === 'author') {
-    // Authors have no `ephemeral` concept (like mediaCollection) — a found
-    // record (live or tombstoned) is always 'syncable'. Lets an inbound author
-    // push bootstrap bidirectional sync. No ping-pong risk: lastPushedHash +
-    // LWW same-`updatedAt` no-op merge prevent it, same as the others.
-    const a = await getAuthor(recordId, { includeDeleted: true }).catch(() => null);
-    return a ? 'syncable' : 'missing';
-  }
-  if (recordKind === 'artist') {
-    const a = await getArtist(recordId, { includeDeleted: true }).catch(() => null);
-    return a ? 'syncable' : 'missing';
-  }
-  if (recordKind === 'album') {
-    const a = await getAlbum(recordId, { includeDeleted: true }).catch(() => null);
-    return a ? 'syncable' : 'missing';
-  }
-  if (recordKind === 'track') {
-    const t = await getTrack(recordId, { includeDeleted: true }).catch(() => null);
-    return t ? 'syncable' : 'missing';
-  }
-  if (recordKind === 'creativeDirectorProject') {
-    // CD projects have no `ephemeral` concept (like the persona/music kinds) — a
-    // found record (live or tombstoned) is always 'syncable'. No ping-pong risk:
-    // lastPushedHash + LWW same-`updatedAt` no-op merge prevent it.
-    const p = await getProject(recordId, { includeDeleted: true }).catch(() => null);
-    return p ? 'syncable' : 'missing';
-  }
-  if (recordKind === 'moodBoard') {
-    // Mood boards have no `ephemeral` concept (like the persona/music/CD kinds) —
-    // a found record (live or tombstoned) is always 'syncable'. No ping-pong risk:
-    // lastPushedHash + LWW same-`updatedAt` no-op merge prevent it.
-    const b = await getBoard(recordId, { includeDeleted: true }).catch(() => null);
-    return b ? 'syncable' : 'missing';
-  }
-  if (recordKind === 'writersRoomWork') {
-    // Works have no `ephemeral` concept (like the persona/music/CD/board kinds) —
-    // a found work (live or tombstoned) is always 'syncable', so an inbound work
-    // push bootstraps bidirectional sync. No ping-pong risk: lastPushedHash + LWW
-    // same-`updatedAt` no-op merge prevent it.
-    const w = await getWorkForSync(recordId).catch(() => null);
-    return w ? 'syncable' : 'missing';
-  }
-  if (recordKind === 'writersRoomFolder') {
-    // Body-less, no `ephemeral` concept (#1645) — a found folder (live or
-    // tombstoned) is always 'syncable'. Same no-ping-pong guards as works.
-    const f = await getFolderForSync(recordId).catch(() => null);
-    return f ? 'syncable' : 'missing';
-  }
-  if (recordKind === 'writersRoomExercise') {
-    const e = await getExerciseForSync(recordId).catch(() => null);
-    return e ? 'syncable' : 'missing';
-  }
-  if (recordKind === 'musicVideoProject') {
-    // Music Video projects have no `ephemeral` concept (like the persona/music/CD/
-    // board kinds) — a found project (live or tombstoned) is always 'syncable'.
-    // No ping-pong risk: lastPushedHash + LWW same-`updatedAt` no-op merge prevent it.
-    const p = await getMusicVideoProject(recordId, { includeDeleted: true }).catch(() => null);
-    return p ? 'syncable' : 'missing';
-  }
-  if (recordKind === 'commissionFeedback') {
-    // Body-less, no `ephemeral` concept (#2686) — a found reaction (live or
-    // tombstoned) is always 'syncable'. Same no-ping-pong guards as folders.
-    const fb = await getCommissionFeedbackForSync(recordId).catch(() => null);
-    return fb ? 'syncable' : 'missing';
-  }
-  if (recordKind === 'creativeCommission') {
-    // The commission brief (#2686) — no `ephemeral` concept; a found commission
-    // (live or tombstoned) is always 'syncable'.
-    const c = await getCommissionForSync(recordId).catch(() => null);
-    return c ? 'syncable' : 'missing';
-  }
-  return 'missing';
+  const desc = RECORD_KINDS[recordKind];
+  if (!desc) return 'missing';
+  const record = await desc.load(recordId).catch(() => null);
+  if (!record) return 'missing';
+  return desc.hasEphemeral && record.ephemeral === true ? 'ephemeral' : 'syncable';
 }

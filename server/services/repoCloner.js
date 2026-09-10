@@ -104,6 +104,7 @@ export async function cloneRepo(url, options = {}) {
     'clone',
     '--depth', '1',
     '--single-branch',
+    ...(options.branch ? ['--branch', options.branch] : []),
     httpsUrl,
     stagingPath
   ];

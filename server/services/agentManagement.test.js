@@ -1286,6 +1286,23 @@ describe('relaunchAgent — moves a running agent\'s task onto another provider'
     expect(stillLiveAtRequeue).toBe(false);
   });
 
+  it('preserves the pause and worktree hold when process exit has not arrived', async () => {
+    vi.useFakeTimers();
+    try {
+      activeAgents.set('agent-live-1', { process: fakeChildProcess(), taskId: 'task-abc' });
+      const result = expect(relaunchAgent('agent-live-1', { provider: 'codex' }))
+        .rejects.toMatchObject({ status: 409, code: 'AGENT_EXIT_PENDING' });
+      await vi.advanceTimersByTimeAsync(15000);
+      await result;
+      expect(pausedAgents.has('agent-live-1')).toBe(true);
+      expect(activeAgents.has('agent-live-1')).toBe(true);
+      expect(reviveBlockedTask).not.toHaveBeenCalled();
+      expect(forceSpawnTask).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('drops the model pinned to the provider it is moving off', async () => {
     // The whole point of a relaunch is leaving a provider that stopped answering.
     // `selectModelForTask` hands `metadata.model` to the CLI verbatim, so carrying

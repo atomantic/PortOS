@@ -116,6 +116,7 @@ export const cosConfigSchema = z.object({
   delete supportedConfig.autonomyLevel;
   delete supportedConfig.comprehensiveAppImprovement;
   delete supportedConfig.immediateExecution;
+  delete supportedConfig.proactiveMode;
   return supportedConfig;
 });
 

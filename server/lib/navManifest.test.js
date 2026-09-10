@@ -248,6 +248,17 @@ describe('nav contract — instance-feature gating', () => {
 });
 
 describe('resolveNavCommand — fuzzy matching', () => {
+  it('resolves every declared alias to its owning command', () => {
+    for (const command of NAV_COMMANDS) {
+      for (const alias of command.aliases || []) {
+        const hit = resolveNavCommand(alias);
+        expect(hit?.path, alias).toBe(command.path);
+        expect(hit?.command?.id, alias).toBe(command.id);
+        expect(command.aliases, alias).toContain(hit?.matched);
+      }
+    }
+  });
+
   it('resolves exact alias', () => {
     expect(resolveNavCommand('dashboard')?.path).toBe('/');
     expect(resolveNavCommand('tasks')?.path).toBe('/cos/tasks');

@@ -15,9 +15,9 @@ tryReadFile: vi.fn().mockResolvedValue(null),
   readJSONFile: vi.fn(async (path, fallback) => (fileStore.has(toPosix(path)) ? fileStore.get(toPosix(path)) : fallback)),
 }));
 
-// Stable identity for tests — bypass the disk-backed instances service.
+// Stable identity for tests — bypass the disk-backed instance identity leaf.
 const LOCAL_INSTANCE = 'local-instance-id';
-vi.mock('./instances.js', () => ({
+vi.mock('./instanceIdentity.js', () => ({
   getInstanceId: vi.fn(async () => LOCAL_INSTANCE),
   UNKNOWN_INSTANCE_ID: 'unknown',
 }));

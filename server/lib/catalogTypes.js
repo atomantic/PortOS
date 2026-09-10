@@ -18,7 +18,7 @@
  * constraint itself is the gated [catalog-type-table-vs-check] PLAN item.
  * Today the CHECK still lists the six types literally in init-db.sql + db.js —
  * `INGREDIENT_TYPE_IDS` is what those literals must equal (asserted by
- * `db.catalogDdlParity.test.js`).
+ * `db.ddlParity.test.js`).
  *
  * Per-type `payloadSchemaVersion` + `payloadUpgraders`: the JSONB `payload`
  * carries `payload.schemaVersion` stamped at create time (see

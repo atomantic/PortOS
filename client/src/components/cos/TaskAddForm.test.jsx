@@ -795,3 +795,81 @@ describe('TaskAddForm Codex model catalog', () => {
     expect(screen.getByText(/exposes no models/i)).toBeInTheDocument();
   });
 });
+
+describe('TaskAddForm sole model auto-select', () => {
+  const grok = {
+    id: 'grok-cli',
+    name: 'Grok',
+    enabled: true,
+    type: 'cli',
+    command: 'grok',
+    models: ['grok-configured-default', 'grok-4.6'],
+    defaultModel: 'grok-4.6',
+  };
+  const multi = {
+    id: 'claude',
+    name: 'Claude Code',
+    enabled: true,
+    type: 'cli',
+    command: 'claude',
+    models: ['claude-opus-4-6', 'claude-sonnet-4-6'],
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    api.getCosPopularTemplates.mockResolvedValue({ templates: [] });
+    api.getCodeReviewDefaults.mockResolvedValue(null);
+    api.getLocalLlmStatus.mockResolvedValue({ ollama: { models: [] }, lmstudio: { models: [] } });
+    api.getProviders.mockResolvedValue({ providers: [] });
+    api.getAppWorkTracker.mockResolvedValue({ resolved: 'github' });
+    api.getAppRepositorySources.mockResolvedValue({
+      issueTargets: { default: 'origin', canChoose: false, origin: { fullName: 'example-org/example-app' }, upstream: { fullName: 'example-org/example-app' } },
+    });
+    api.getOrchestrationProfiles.mockResolvedValue({ profiles: [] });
+    apiSystem.getAssignableInstances.mockResolvedValue({ instances: [] });
+    api.addCosTask.mockResolvedValue({ success: true });
+  });
+
+  it('selects grok-4.6 when it is the only real model option', async () => {
+    const user = userEvent.setup();
+    render(<TaskAddForm providers={[grok]} apps={[]} onTaskAdded={vi.fn()} />);
+
+    await user.selectOptions(screen.getByLabelText('AI provider'), 'grok-cli');
+    const model = screen.getByLabelText('AI model');
+    expect(model).toHaveValue('grok-4.6');
+    expect(Array.from(model.querySelectorAll('option')).map((option) => option.value)).toEqual(['grok-4.6']);
+
+    await user.type(screen.getByPlaceholderText('Task description *'), 'Ship the change');
+    await user.click(screen.getByRole('button', { name: /^Add$/ }));
+    await waitFor(() => expect(api.addCosTask).toHaveBeenCalled());
+    expect(api.addCosTask.mock.calls.at(-1)[0]).toMatchObject({
+      provider: 'grok-cli',
+      model: 'grok-4.6',
+    });
+  });
+
+  it('leaves the model unset when the provider lists more than one option', async () => {
+    const user = userEvent.setup();
+    render(<TaskAddForm providers={[multi]} apps={[]} onTaskAdded={vi.fn()} />);
+
+    await user.selectOptions(screen.getByLabelText('AI provider'), 'claude');
+    const model = screen.getByLabelText('AI model');
+    expect(model).toHaveValue('');
+    expect(Array.from(model.querySelectorAll('option')).map((option) => option.value)).toEqual([
+      '',
+      'claude-opus-4-6',
+      'claude-sonnet-4-6',
+    ]);
+  });
+
+  it('clears an auto-selected model when switching to a multi-model provider', async () => {
+    const user = userEvent.setup();
+    render(<TaskAddForm providers={[grok, multi]} apps={[]} onTaskAdded={vi.fn()} />);
+
+    await user.selectOptions(screen.getByLabelText('AI provider'), 'grok-cli');
+    expect(screen.getByLabelText('AI model')).toHaveValue('grok-4.6');
+
+    await user.selectOptions(screen.getByLabelText('AI provider'), 'claude');
+    expect(screen.getByLabelText('AI model')).toHaveValue('');
+  });
+});

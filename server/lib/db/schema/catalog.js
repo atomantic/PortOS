@@ -1,7 +1,7 @@
 // Catalog DDL — scraps, ingredients, sources/refs/relations, tags, revisions,
 // ingredient media, and the user-defined ingredient types. Extracted verbatim
 // from ensureSchemaImpl() in server/lib/db.js (#2832) with zero behavior change.
-// Parity-locked against server/scripts/init-db.sql by db.catalogDdlParity.test.js.
+// Parity-locked against server/scripts/init-db.sql by db.ddlParity.test.js.
 //
 // catalog_user_types is a separate export because in the original array it sits
 // AFTER the media block, not adjacent to the other catalog tables — the composer
@@ -203,7 +203,7 @@ export const catalogDdl = [
     // ingredient at the app layer. No sync_sequence — revisions stay local; the
     // synced ingredient row already LWW-merges the latest state across peers.
     // Mirrors the catalog_ingredient_revisions block in init-db.sql (parity is
-    // asserted by db.catalogDdlParity.test.js).
+    // asserted by db.ddlParity.test.js).
     `CREATE TABLE IF NOT EXISTS catalog_ingredient_revisions (
       id TEXT PRIMARY KEY,
       ingredient_id TEXT NOT NULL REFERENCES catalog_ingredients(id) ON DELETE CASCADE,
@@ -225,7 +225,7 @@ export const catalogDdl = [
     // app-layer enum (MEDIA_KINDS in catalogTypes.js), not a DB CHECK. Soft-
     // delete from day one so detaches tombstone + propagate. Mirrors the
     // catalog_ingredient_media block in init-db.sql (parity is asserted by
-    // db.catalogDdlParity.test.js).
+    // db.ddlParity.test.js).
     `CREATE TABLE IF NOT EXISTS catalog_ingredient_media (
       ingredient_id TEXT NOT NULL REFERENCES catalog_ingredients(id) ON DELETE CASCADE,
       media_key TEXT NOT NULL,

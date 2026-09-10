@@ -1,3 +1,6 @@
+import { appQualityQuerySchema, appQualityHistoryQuerySchema } from '../../lib/auditQuality.js';
+import { exportPortosQuality } from '../../services/appQualityFederation.js';
+import { enrichAppsWithQuality, getAppQualityHistory } from '../../services/appQuality.js';
 /**
  * App CRUD + status enrichment + archive lifecycle.
  *
@@ -28,16 +31,33 @@ import { loadApp, pathExists, deriveAppPorts, computeOverallStatus } from './sha
 
 const router = Router();
 
+// Numeric local evidence only. This endpoint never invokes aggregate reads or forwards peer data.
+router.get('/quality-federation', asyncHandler(async (req, res) => {
+  const { days } = validateRequest(appQualityHistoryQuerySchema, req.query);
+  const payload = await exportPortosQuality(req.get('X-PortOS-Instance-Id'), days);
+  if (!payload) throw new ServerError('Quality sharing requires a registered enabled full-sync peer and a known repository', { status: 403 });
+  res.json(payload);
+}));
+
 // GET /api/apps - List all apps. The route fetches the raw records; the
 // appListEnrichment service owns the PM2 status/port/process enrichment.
 router.get('/', asyncHandler(async (req, res) => {
-  const apps = await appsService.getAllApps();
-  res.json(await enrichAppsWithPm2Status(apps));
+  const { includeQuality } = validateRequest(appQualityQuerySchema, req.query);
+  const apps = await enrichAppsWithPm2Status(await appsService.getAllApps());
+  // The bare list is the frozen peer-probe contract. Local UI opts into
+  // assessment prose explicitly so it never rides automatic federation probes.
+  res.json(includeQuality === 'true' ? await enrichAppsWithQuality(apps) : apps);
+}));
+
+router.get('/:id/quality-history', loadApp, asyncHandler(async (req, res) => {
+  const { days } = validateRequest(appQualityHistoryQuerySchema, req.query);
+  res.json(await getAppQualityHistory(req.loadedApp.id, days));
 }));
 
 // GET /api/apps/:id - Get single app
 router.get('/:id', loadApp, asyncHandler(async (req, res) => {
   const app = req.loadedApp;
+  const { includeQuality } = validateRequest(appQualityQuerySchema, req.query);
 
   // Non-PM2 apps skip PM2 status
   let statuses = {};
@@ -88,7 +108,8 @@ router.get('/:id', loadApp, asyncHandler(async (req, res) => {
     hasSubmodules = gitmodules;
   }
 
-  res.json({ ...app, uiPort, devUiPort, apiPort, overallStatus, degraded, pm2Status: statuses, appVersion, hasSubmodules, hasDeployScript: hasDeployScript(app), xcodeScripts: checkScripts(app) });
+  const [enrichedApp] = includeQuality === 'true' ? await enrichAppsWithQuality([app]) : [app];
+  res.json({ ...enrichedApp, uiPort, devUiPort, apiPort, overallStatus, degraded, pm2Status: statuses, appVersion, hasSubmodules, hasDeployScript: hasDeployScript(app), xcodeScripts: checkScripts(app) });
 }));
 
 // POST /api/apps - Create new app

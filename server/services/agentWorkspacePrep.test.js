@@ -99,7 +99,7 @@ describe('prepareAgentWorkspace — Creative Director scratch cwd (#4650)', () =
     const r = await prepareAgentWorkspace({ agentId: 'agent-cd-wt', task });
     expect(r.outcome).toBe('ready');
     expect(r.workspacePath).toBe('/mock/worktrees/agent-cd-wt');
-    expect(ensureLatest).toHaveBeenCalled();
+    expect(ensureLatest).not.toHaveBeenCalled();
     expect(createWorktree).toHaveBeenCalled();
   });
 });
@@ -128,6 +128,7 @@ describe('prepareAgentWorkspace', () => {
     });
     expect(r.outcome).toBe('ready');
     expect(r.explicitWorktree).toBe(true);
+    expect(ensureLatest).not.toHaveBeenCalled();
     expect(createWorktree).toHaveBeenCalled();
   });
 

@@ -8,6 +8,32 @@
 // here, so keep this module pure: no Node built-in, nothing outside `server/lib`.
 
 /**
+ * The one string-type predicate under `server/` (and, via the client mirror, the
+ * browser bundle). Every sanitizer used to carry its own copy — 16 of them under
+ * this exact body, the rest under `isString` / `hasText` / `isNonEmptyStr`
+ * with drifting semantics — because the only exported one lived in
+ * `storyBible.js` behind `crypto` / `fileUtils`. The "no private string
+ * predicate or bounder" guard in `textUtils.test.js` fails the suite when a
+ * copy reappears (#6837).
+ *
+ * @param {unknown} v
+ * @returns {v is string}
+ */
+export const isStr = (v) => typeof v === 'string';
+
+/**
+ * `isStr` plus "has visible content": a string whose `trim()` is non-empty.
+ * This is the predicate for ids, keys, hosts, model names, and prose fields
+ * where a whitespace-only value is already invalid, so it also replaces the
+ * looser `v.length > 0` / `!!v` copies (which accepted `'   '`). It does not
+ * trim the value it accepts; callers that store the string still `trim()`.
+ *
+ * @param {unknown} v
+ * @returns {v is string}
+ */
+export const isNonBlankStr = (v) => typeof v === 'string' && v.trim().length > 0;
+
+/**
  * Count whitespace-separated words in a string.
  *
  * Non-strings, `null`/`undefined`, and empty/whitespace-only input all return 0.

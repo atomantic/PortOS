@@ -1,7 +1,11 @@
+vi.mock('../../services/appQualityFederation.js', () => ({ exportPortosQuality: vi.fn() }));
+import { exportPortosQuality } from '../../services/appQualityFederation.js';
+vi.mock('../../services/appQuality.js', () => ({ getAppQualityHistory: vi.fn(async () => ({ points: [], days: 90 })), enrichAppsWithQuality: vi.fn(async apps => apps.map(app => ({ ...app, quality: { score: 75 } }))) }));
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import express from 'express';
 import { request } from '../../lib/testHelper.js';
 import crudRoutes from './crud.js';
+import { enrichAppsWithQuality, getAppQualityHistory } from '../../services/appQuality.js';
 
 // Mock the services this router (and its port-config service) touch.
 vi.mock('../../services/apps.js', () => ({
@@ -54,6 +58,17 @@ describe('Apps CRUD Routes', () => {
     vi.clearAllMocks();
   });
 
+  it('serves numeric federation before app lookup, validates days and refuses unapproved peers', async () => {
+    exportPortosQuality.mockResolvedValue({ schemaVersion: 1, measurements: [] });
+    const result = await request(app).get('/api/apps/quality-federation?days=30').set('X-PortOS-Instance-Id', 'peer');
+    expect(result.status).toBe(200);
+    expect(exportPortosQuality).toHaveBeenCalledWith('peer', 30);
+    expect(appsService.getAppById).not.toHaveBeenCalled();
+    expect((await request(app).get('/api/apps/quality-federation?days=999')).status).toBe(400);
+    exportPortosQuality.mockResolvedValue(null);
+    expect((await request(app).get('/api/apps/quality-federation')).status).toBe(403);
+  });
+
   describe('GET /api/apps', () => {
     it('should return list of apps with PM2 status', async () => {
       const mockApps = [
@@ -72,6 +87,24 @@ describe('Apps CRUD Routes', () => {
       expect(response.status).toBe(200);
       expect(response.body).toHaveLength(1);
       expect(response.body[0].overallStatus).toBe('online');
+    });
+
+    it('keeps quality reports off peer probes and returns them only for explicit local UI reads', async () => {
+      appsService.getAllApps.mockResolvedValue([{ id: 'portos-default', name: 'PortOS', type: 'ios-native', repoPath: '/tmp/test' }]);
+      const peer = await request(app).get('/api/apps');
+      expect(peer.body[0].quality).toBeUndefined();
+      expect(enrichAppsWithQuality).not.toHaveBeenCalled();
+      const local = await request(app).get('/api/apps?includeQuality=true');
+      expect(local.body[0].quality).toEqual({ score: 75 });
+      const invalid = await request(app).get('/api/apps?includeQuality=anything');
+      expect(invalid.status).toBe(400);
+      appsService.getAppById.mockResolvedValue({ id: 'portos-default', name: 'PortOS', type: 'ios-native' });
+      const detail = await request(app).get('/api/apps/portos-default?includeQuality=true');
+      expect(detail.body.quality).toEqual({ score: 75 });
+      const history = await request(app).get('/api/apps/portos-default/quality-history?days=90');
+      expect(history.status).toBe(200);
+      expect(getAppQualityHistory).toHaveBeenCalledWith('portos-default', 90);
+      expect((await request(app).get('/api/apps/portos-default/quality-history?days=9999')).status).toBe(400);
     });
 
     it('should handle apps with no PM2 processes', async () => {

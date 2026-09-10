@@ -36,10 +36,18 @@
  * failed). See `TRACK_COHORT_KINDS` / `confirmedFloorForSub` below.
  */
 
-import { pruneTombstonedUniverses, listUniverses } from '../universeBuilder.js';
-import { pruneTombstonedSeries, listSeries } from '../pipeline/series.js';
+import {
+  pruneTombstonedUniverses,
+  listLiveIds as listLiveUniverseIds,
+  listIds as listUniverseIds,
+} from '../universeBuilder.js';
+import {
+  pruneTombstonedSeries,
+  listLiveIds as listLiveSeriesIds,
+  listIds as listSeriesIds,
+} from '../pipeline/series.js';
 import { pruneTombstonedIssues, listIssueIds } from '../pipeline/issues.js';
-import { pruneTombstonedCollections, listCollections } from '../mediaCollections.js';
+import { pruneTombstonedCollections, listCollections, listCollectionIds } from '../mediaCollections.js';
 import { pruneTombstonedAuthors, listAuthorIds } from '../authors/index.js';
 import { pruneTombstonedArtists, listArtistIds } from '../artists/index.js';
 import { pruneTombstonedAlbums, listAlbumIds } from '../albums/index.js';
@@ -50,7 +58,11 @@ import {
   listProjectIds as listMusicVideoProjectIds,
 } from '../musicVideo/projects.js';
 import { pruneTombstonedBoards, listBoardIds } from '../moodBoard/index.js';
-import { pruneTombstonedLooms, listLooms } from '../fableLoom/index.js';
+import {
+  pruneTombstonedLooms,
+  listLiveIds as listLiveLoomIds,
+  listIds as listLoomIds,
+} from '../fableLoom/index.js';
 import {
   pruneTombstonedWorks, listWorkIdsForSync,
   pruneTombstonedFolders, listFolderIdsForSync,
@@ -66,6 +78,11 @@ import { pruneOrphanedBaseHashes } from '../../lib/conflictJournal.js';
 import { listPeerSubscriptions, pruneOrphanedPeerSubscriptions } from './peerSync.js';
 import { getMinAckAcrossPeers } from './peerTombstoneCursors.js';
 import { getPeers } from '../instances.js';
+// PEER_SUBSCRIBABLE_KINDS costs nothing new here: this file already reaches
+// peerSyncShared.js transitively through peerSync.js (imported above), which
+// re-exports it — see peerSyncShared.js's own docstring on why it is the
+// leaf of the peer-sync module graph.
+import { PEER_SUBSCRIBABLE_KINDS } from './peerSyncShared.js';
 
 // Each kind's UNCAPPED live-id source (default args exclude tombstoned/deleted).
 // Used to build the orphan-sweep resolver's per-kind id-sets. A kind absent
@@ -73,9 +90,16 @@ import { getPeers } from '../instances.js';
 // `listIssueIds` (not `listIssues`) because the latter caps at 1000 — a capped
 // source would report a live record beyond the cap as missing and the sweep
 // would strip its base hash, silently disabling conflict detection for it.
+//
+// universe/series/fableLoom read id-only projections (`listLiveIds` — a SQL
+// `WHERE deleted = FALSE`, or the file-backend hydrate+filter twin) instead of
+// the full-record listers: this sweep runs every tick and almost never finds
+// anything to strip, so it must not pay for every universe/series/loom body
+// (#6851). mediaCollection is file-backed with `deleted` living inside the
+// record, so there's no cheaper live projection — it still hydrates.
 const LIVE_ID_LISTERS = Object.freeze({
-  universe: async () => (await listUniverses()).map((r) => r.id),
-  series: async () => (await listSeries()).map((r) => r.id),
+  universe: () => listLiveUniverseIds(),
+  series: () => listLiveSeriesIds(),
   issue: () => listIssueIds(),
   mediaCollection: async () => (await listCollections()).map((r) => r.id),
   author: () => listAuthorIds(),
@@ -85,7 +109,7 @@ const LIVE_ID_LISTERS = Object.freeze({
   creativeDirectorProject: () => listProjectIds(),
   musicVideoProject: () => listMusicVideoProjectIds(),
   moodBoard: () => listBoardIds(),
-  fableLoom: async () => (await listLooms()).map((r) => r.id),
+  fableLoom: () => listLiveLoomIds(),
   writersRoomWork: () => listWorkIdsForSync(),
   writersRoomFolder: () => listFolderIdsForSync(),
   writersRoomExercise: () => listExerciseIdsForSync(),
@@ -100,10 +124,18 @@ const LIVE_ID_LISTERS = Object.freeze({
 // directory is actually gone (hard-deleted by the tombstone prune above).
 // Issues are absent — they're never directly subscribed (issue tombstones
 // ride their parent series's push, so PEER_SUBSCRIBABLE_KINDS has no 'issue').
+//
+// universe/series/fableLoom/mediaCollection read id-only projections here too
+// (`listIds`/`listCollectionIds` — every row, no JSONB body) instead of the
+// full-record `{ includeDeleted: true }` listers, same hydration-avoidance
+// reasoning as LIVE_ID_LISTERS above. mediaCollection's projection is a
+// directory listing (collectionStore.listIds()), not a SQL query — the file
+// layout has no `deleted` column to filter live vs. tombstoned rows on, but a
+// plain id listing needs no hydration either way.
 const ALL_ID_LISTERS = Object.freeze({
-  universe: async () => (await listUniverses({ includeDeleted: true })).map((r) => r.id),
-  series: async () => (await listSeries({ includeDeleted: true })).map((r) => r.id),
-  mediaCollection: async () => (await listCollections({ includeDeleted: true })).map((r) => r.id),
+  universe: () => listUniverseIds(),
+  series: () => listSeriesIds(),
+  mediaCollection: () => listCollectionIds(),
   author: () => listAuthorIds({ includeDeleted: true }),
   artist: () => listArtistIds({ includeDeleted: true }),
   album: () => listAlbumIds({ includeDeleted: true }),
@@ -111,7 +143,7 @@ const ALL_ID_LISTERS = Object.freeze({
   creativeDirectorProject: () => listProjectIds({ includeDeleted: true }),
   musicVideoProject: () => listMusicVideoProjectIds({ includeDeleted: true }),
   moodBoard: () => listBoardIds({ includeDeleted: true }),
-  fableLoom: async () => (await listLooms({ includeDeleted: true })).map((r) => r.id),
+  fableLoom: () => listLoomIds(),
   writersRoomWork: () => listWorkIdsForSync({ includeDeleted: true }),
   writersRoomFolder: () => listFolderIdsForSync({ includeDeleted: true }),
   writersRoomExercise: () => listExerciseIdsForSync({ includeDeleted: true }),
@@ -344,49 +376,17 @@ async function loadState() {
   return { peers, subs };
 }
 
+// Authors have no snapshot category (snapshotCategoryForKind → null), so their
+// cutoff never refuses on snapshot-coverage grounds — but the per-record
+// confirmed-push clamp can still hold it, and it's surfaced here for symmetry
+// with every other kind.
 function refusedFromCutoffs(cutoffs) {
   const refused = [];
-  const {
-    universeCutoff,
-    seriesCutoff,
-    collectionCutoff,
-    authorCutoff,
-    artistCutoff,
-    albumCutoff,
-    trackCutoff,
-    projectCutoff,
-    musicVideoProjectCutoff,
-    boardCutoff,
-    fableLoomCutoff,
-    workCutoff,
-    folderCutoff,
-    exerciseCutoff,
-    commissionFeedbackCutoff,
-    creativeCommissionCutoff,
-  } = cutoffs;
-  if (universeCutoff === null) refused.push('universe');
-  // Issue tombstones ride series pushes — refused exactly when series is.
-  if (seriesCutoff === null) {
-    refused.push('series');
-    refused.push('issue');
+  for (const kind of PEER_SUBSCRIBABLE_KINDS) {
+    if (cutoffs[`${kind}Cutoff`] === null) refused.push(kind);
   }
-  if (collectionCutoff === null) refused.push('mediaCollection');
-  // Authors have no snapshot category (snapshotCategoryForKind → null), so the
-  // cutoff never refuses on snapshot-coverage grounds — but the per-record
-  // confirmed-push clamp can still hold it; surface it for symmetry.
-  if (authorCutoff === null) refused.push('author');
-  if (artistCutoff === null) refused.push('artist');
-  if (albumCutoff === null) refused.push('album');
-  if (trackCutoff === null) refused.push('track');
-  if (projectCutoff === null) refused.push('creativeDirectorProject');
-  if (musicVideoProjectCutoff === null) refused.push('musicVideoProject');
-  if (boardCutoff === null) refused.push('moodBoard');
-  if (fableLoomCutoff === null) refused.push('fableLoom');
-  if (workCutoff === null) refused.push('writersRoomWork');
-  if (folderCutoff === null) refused.push('writersRoomFolder');
-  if (exerciseCutoff === null) refused.push('writersRoomExercise');
-  if (commissionFeedbackCutoff === null) refused.push('commissionFeedback');
-  if (creativeCommissionCutoff === null) refused.push('creativeCommission');
+  // Issue tombstones ride series pushes — refused exactly when series is.
+  if (cutoffs.seriesCutoff === null) refused.push('issue');
   return refused;
 }
 
@@ -406,18 +406,18 @@ export async function sweepTombstones({ now = Date.now(), graceMs = GRACE_MS } =
   const [
     universeCutoff,
     seriesCutoff,
-    collectionCutoff,
+    mediaCollectionCutoff,
     authorCutoff,
     artistCutoff,
     albumCutoff,
     trackCutoff,
-    projectCutoff,
+    creativeDirectorProjectCutoff,
     musicVideoProjectCutoff,
-    boardCutoff,
+    moodBoardCutoff,
     fableLoomCutoff,
-    workCutoff,
-    folderCutoff,
-    exerciseCutoff,
+    writersRoomWorkCutoff,
+    writersRoomFolderCutoff,
+    writersRoomExerciseCutoff,
     commissionFeedbackCutoff,
     creativeCommissionCutoff,
   ] = await Promise.all([
@@ -443,18 +443,18 @@ export async function sweepTombstones({ now = Date.now(), graceMs = GRACE_MS } =
     universeCutoff === null ? Promise.resolve({ pruned: 0 }) : pruneTombstonedUniverses(universeCutoff),
     seriesCutoff === null ? Promise.resolve({ pruned: 0 }) : pruneTombstonedSeries(seriesCutoff),
     issueCutoff === null ? Promise.resolve({ pruned: 0 }) : pruneTombstonedIssues(issueCutoff),
-    collectionCutoff === null ? Promise.resolve({ pruned: 0 }) : pruneTombstonedCollections(collectionCutoff),
+    mediaCollectionCutoff === null ? Promise.resolve({ pruned: 0 }) : pruneTombstonedCollections(mediaCollectionCutoff),
     authorCutoff === null ? Promise.resolve({ pruned: 0 }) : pruneTombstonedAuthors(authorCutoff),
     artistCutoff === null ? Promise.resolve({ pruned: 0 }) : pruneTombstonedArtists(artistCutoff),
     albumCutoff === null ? Promise.resolve({ pruned: 0 }) : pruneTombstonedAlbums(albumCutoff),
     trackCutoff === null ? Promise.resolve({ pruned: 0 }) : pruneTombstonedTracks(trackCutoff),
-    projectCutoff === null ? Promise.resolve({ pruned: 0 }) : pruneTombstonedProjects(projectCutoff),
+    creativeDirectorProjectCutoff === null ? Promise.resolve({ pruned: 0 }) : pruneTombstonedProjects(creativeDirectorProjectCutoff),
     musicVideoProjectCutoff === null ? Promise.resolve({ pruned: 0 }) : pruneTombstonedMusicVideoProjects(musicVideoProjectCutoff),
-    boardCutoff === null ? Promise.resolve({ pruned: 0 }) : pruneTombstonedBoards(boardCutoff),
+    moodBoardCutoff === null ? Promise.resolve({ pruned: 0 }) : pruneTombstonedBoards(moodBoardCutoff),
     fableLoomCutoff === null ? Promise.resolve({ pruned: 0 }) : pruneTombstonedLooms(fableLoomCutoff),
-    workCutoff === null ? Promise.resolve({ pruned: 0 }) : pruneTombstonedWorks(workCutoff),
-    folderCutoff === null ? Promise.resolve({ pruned: 0 }) : pruneTombstonedFolders(folderCutoff),
-    exerciseCutoff === null ? Promise.resolve({ pruned: 0 }) : pruneTombstonedExercises(exerciseCutoff),
+    writersRoomWorkCutoff === null ? Promise.resolve({ pruned: 0 }) : pruneTombstonedWorks(writersRoomWorkCutoff),
+    writersRoomFolderCutoff === null ? Promise.resolve({ pruned: 0 }) : pruneTombstonedFolders(writersRoomFolderCutoff),
+    writersRoomExerciseCutoff === null ? Promise.resolve({ pruned: 0 }) : pruneTombstonedExercises(writersRoomExerciseCutoff),
     commissionFeedbackCutoff === null ? Promise.resolve({ pruned: 0 }) : pruneTombstonedCommissionFeedback(commissionFeedbackCutoff),
     creativeCommissionCutoff === null ? Promise.resolve({ pruned: 0 }) : pruneTombstonedCommissions(creativeCommissionCutoff),
   ]);
@@ -492,7 +492,7 @@ export async function sweepTombstones({ now = Date.now(), graceMs = GRACE_MS } =
     creativeCommissions: cc.pruned,
     orphanBaseHashes: orphan.pruned,
     orphanSubscriptions: orphanSubs.pruned,
-    refused: refusedFromCutoffs({ universeCutoff, seriesCutoff, collectionCutoff, authorCutoff, artistCutoff, albumCutoff, trackCutoff, projectCutoff, musicVideoProjectCutoff, boardCutoff, fableLoomCutoff, workCutoff, folderCutoff, exerciseCutoff, commissionFeedbackCutoff, creativeCommissionCutoff }),
+    refused: refusedFromCutoffs({ universeCutoff, seriesCutoff, mediaCollectionCutoff, authorCutoff, artistCutoff, albumCutoff, trackCutoff, creativeDirectorProjectCutoff, musicVideoProjectCutoff, moodBoardCutoff, fableLoomCutoff, writersRoomWorkCutoff, writersRoomFolderCutoff, writersRoomExerciseCutoff, commissionFeedbackCutoff, creativeCommissionCutoff }),
   };
 }
 
@@ -501,7 +501,7 @@ export async function sweepTombstones({ now = Date.now(), graceMs = GRACE_MS } =
 // coverage matters), so this hardcodes graceMs:0 internally.
 export async function getSweepStatus({ now = Date.now() } = {}) {
   const { peers, subs } = await loadState();
-  const [universeCutoff, seriesCutoff, collectionCutoff, authorCutoff, artistCutoff, albumCutoff, trackCutoff, projectCutoff, musicVideoProjectCutoff, boardCutoff, fableLoomCutoff, workCutoff, folderCutoff, exerciseCutoff, commissionFeedbackCutoff, creativeCommissionCutoff] = await Promise.all([
+  const [universeCutoff, seriesCutoff, mediaCollectionCutoff, authorCutoff, artistCutoff, albumCutoff, trackCutoff, creativeDirectorProjectCutoff, musicVideoProjectCutoff, moodBoardCutoff, fableLoomCutoff, writersRoomWorkCutoff, writersRoomFolderCutoff, writersRoomExerciseCutoff, commissionFeedbackCutoff, creativeCommissionCutoff] = await Promise.all([
     cutoffForKind('universe', { peers, subs, now, graceMs: 0 }),
     cutoffForKind('series', { peers, subs, now, graceMs: 0 }),
     cutoffForKind('mediaCollection', { peers, subs, now, graceMs: 0 }),
@@ -519,7 +519,7 @@ export async function getSweepStatus({ now = Date.now() } = {}) {
     cutoffForKind('commissionFeedback', { peers, subs, now, graceMs: 0 }),
     cutoffForKind('creativeCommission', { peers, subs, now, graceMs: 0 }),
   ]);
-  return { refused: refusedFromCutoffs({ universeCutoff, seriesCutoff, collectionCutoff, authorCutoff, artistCutoff, albumCutoff, trackCutoff, projectCutoff, musicVideoProjectCutoff, boardCutoff, fableLoomCutoff, workCutoff, folderCutoff, exerciseCutoff, commissionFeedbackCutoff, creativeCommissionCutoff }) };
+  return { refused: refusedFromCutoffs({ universeCutoff, seriesCutoff, mediaCollectionCutoff, authorCutoff, artistCutoff, albumCutoff, trackCutoff, creativeDirectorProjectCutoff, musicVideoProjectCutoff, moodBoardCutoff, fableLoomCutoff, writersRoomWorkCutoff, writersRoomFolderCutoff, writersRoomExerciseCutoff, commissionFeedbackCutoff, creativeCommissionCutoff }) };
 }
 
 export const TOMBSTONE_GRACE_MS = GRACE_MS;

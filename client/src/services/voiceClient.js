@@ -9,6 +9,8 @@ import socket from './socket';
 import { subscribeVisibility } from '../hooks/useVisibilityEvent.js';
 import { sleep } from '../utils/sleep.js';
 import { resumeAudioContext, acquireAudioSession } from '../lib/audioContext.js';
+import { blobToWav16k, float32ToWav16k } from '../lib/audioRecorder.js';
+import { ECHO_WINDOW_MS, MIN_TOKENS_FOR_ECHO_CHECK, MIN_SHARED_TRIGRAMS, tokenize, trigramsOf } from '../../../server/lib/voiceEcho.js';
 
 // iOS audio-session claims held while a mic stream is open — one per capture
 // mode, because push-to-talk and hands-free listening can overlap. `getUserMedia`
@@ -77,71 +79,6 @@ const stopPlayback = () => {
   synthGen += 1;
 };
 
-// whisper.cpp only accepts 16-bit PCM WAV — it has no built-in audio decoder.
-// Decode whatever MediaRecorder produced, downmix to mono, resample to 16 kHz,
-// and hand-encode a minimal WAV header.
-const TARGET_SAMPLE_RATE = 16000;
-
-const encodePcmToWav = (float32, sampleRate) => {
-  const n = float32.length;
-  const buffer = new ArrayBuffer(44 + n * 2);
-  const view = new DataView(buffer);
-  const writeStr = (off, s) => { for (let i = 0; i < s.length; i++) view.setUint8(off + i, s.charCodeAt(i)); };
-
-  writeStr(0, 'RIFF');
-  view.setUint32(4, 36 + n * 2, true);
-  writeStr(8, 'WAVE');
-  writeStr(12, 'fmt ');
-  view.setUint32(16, 16, true);
-  view.setUint16(20, 1, true);
-  view.setUint16(22, 1, true);
-  view.setUint32(24, sampleRate, true);
-  view.setUint32(28, sampleRate * 2, true);
-  view.setUint16(32, 2, true);
-  view.setUint16(34, 16, true);
-  writeStr(36, 'data');
-  view.setUint32(40, n * 2, true);
-
-  let off = 44;
-  for (let i = 0; i < n; i++) {
-    const s = Math.max(-1, Math.min(1, float32[i]));
-    view.setInt16(off, s < 0 ? s * 0x8000 : s * 0x7fff, true);
-    off += 2;
-  }
-  return buffer;
-};
-
-const blobToWav16k = async (blob) => {
-  const bytes = await blob.arrayBuffer();
-  const decodeCtx = new (window.AudioContext || window.webkitAudioContext)();
-  // Chain .finally() so a decode failure (unsupported codec, corrupt blob)
-  // still releases the AudioContext — otherwise repeated failures leak a
-  // context per retry.
-  const decoded = await decodeCtx.decodeAudioData(bytes).finally(() => {
-    decodeCtx.close().catch(() => {});
-  });
-
-  // OfflineAudioContext handles resampling natively when we render at the target rate.
-  const frames = Math.ceil(decoded.duration * TARGET_SAMPLE_RATE);
-  const offline = new OfflineAudioContext(1, frames, TARGET_SAMPLE_RATE);
-  const src = offline.createBufferSource();
-  src.buffer = decoded;
-  src.connect(offline.destination);
-  src.start();
-  const rendered = await offline.startRendering();
-  const pcm = rendered.getChannelData(0);
-
-  // Peak amplitude surfaces dead-mic / too-quiet situations that whisper would
-  // otherwise silently transcribe as [BLANK_AUDIO].
-  let peak = 0;
-  for (let i = 0; i < pcm.length; i++) {
-    const a = Math.abs(pcm[i]);
-    if (a > peak) peak = a;
-  }
-
-  return { wav: encodePcmToWav(pcm, TARGET_SAMPLE_RATE), peak };
-};
-
 const enqueuePlay = async (bytes) => {
   const generation = playbackGeneration;
   const ctx = ensureCtx();
@@ -190,39 +127,20 @@ const isInTtsEchoWindow = () => isTtsActive() || performance.now() < ttsCooldown
 // This client gate runs only on the Web Speech path where transcripts are
 // produced in-browser and sent as voice:text. Whisper-based continuous mode
 // sends audio to the server, so its echo gate lives in
-// server/services/voice/echo.js — KEEP THE TWO IN SYNC. Both implement the
-// same algorithm so tuning one (threshold, window, tokenizer) requires the
-// other to match.
-const TTS_ECHO_MEMORY_MS = 8000;
-const MIN_TOKENS_FOR_ECHO_CHECK = 4;
-const MIN_SHARED_TRIGRAMS = 2;
+// server/services/voice/echo.js. Pure helpers are shared via
+// server/lib/voiceEcho.js.
 const recentTtsSentences = [];
 
-const tokenizeForEcho = (s) => (s || '')
-  .toLowerCase()
-  .replace(/[^\p{L}\p{N}\s]/gu, ' ')
-  .split(/\s+/)
-  .filter(Boolean);
-
-const buildTrigrams = (tokens) => {
-  if (tokens.length < 3) return [];
-  const out = [];
-  for (let i = 0; i + 3 <= tokens.length; i++) {
-    out.push(`${tokens[i]} ${tokens[i + 1]} ${tokens[i + 2]}`);
-  }
-  return out;
-};
-
 const rememberTtsSentence = (sentence) => {
-  const tokens = tokenizeForEcho(sentence);
+  const tokens = tokenize(sentence);
   if (!tokens.length) return;
   const now = performance.now();
-  while (recentTtsSentences.length && now - recentTtsSentences[0].t > TTS_ECHO_MEMORY_MS) {
+  while (recentTtsSentences.length && now - recentTtsSentences[0].t > ECHO_WINDOW_MS) {
     recentTtsSentences.shift();
   }
   recentTtsSentences.push({
     text: tokens.join(' '),
-    trigrams: new Set(buildTrigrams(tokens)),
+    trigrams: new Set(trigramsOf(tokens)),
     t: now,
   });
 };
@@ -233,14 +151,14 @@ const looksLikeTtsEcho = (text) => {
   // content gate entirely so we never misclassify the user's actual speech.
   if (audioRoute.likelyHeadset) return false;
 
-  const tokens = tokenizeForEcho(text);
+  const tokens = tokenize(text);
   if (tokens.length < MIN_TOKENS_FOR_ECHO_CHECK) return false;
   const heardText = tokens.join(' ');
-  const heardTrigrams = buildTrigrams(tokens);
+  const heardTrigrams = trigramsOf(tokens);
   if (!heardTrigrams.length) return false;
   const now = performance.now();
   for (const entry of recentTtsSentences) {
-    if (now - entry.t > TTS_ECHO_MEMORY_MS) continue;
+    if (now - entry.t > ECHO_WINDOW_MS) continue;
     if (entry.text.includes(heardText)) return true;
     let shared = 0;
     for (const tg of heardTrigrams) {
@@ -818,27 +736,6 @@ class VADProcessor extends AudioWorkletProcessor {
 }
 registerProcessor('vad-processor', VADProcessor);
 `;
-
-const float32ToWav16k = async (samples, sourceRate) => {
-  if (!samples.length) return { wav: null, peak: 0 };
-  const frames = Math.ceil(samples.length * TARGET_SAMPLE_RATE / sourceRate);
-  const offline = new OfflineAudioContext(1, frames, TARGET_SAMPLE_RATE);
-  const buf = offline.createBuffer(1, samples.length, sourceRate);
-  buf.getChannelData(0).set(samples);
-  const src = offline.createBufferSource();
-  src.buffer = buf;
-  src.connect(offline.destination);
-  src.start();
-  const rendered = await offline.startRendering();
-  const pcm = rendered.getChannelData(0);
-
-  let peak = 0;
-  for (let i = 0; i < pcm.length; i++) {
-    const a = Math.abs(pcm[i]);
-    if (a > peak) peak = a;
-  }
-  return { wav: encodePcmToWav(pcm, TARGET_SAMPLE_RATE), peak };
-};
 
 const submitUtterance = async () => {
   if (!speechChunks.length) return;

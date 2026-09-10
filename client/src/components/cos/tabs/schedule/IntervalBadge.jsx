@@ -1,16 +1,17 @@
 import { describeCron } from '../../../../utils/cronHelpers';
-import { badge, INTERVAL_LABELS, INTERVAL_BADGE_VARIANT, PERPETUAL_BADGE_VARIANT, PERPETUAL_LABEL, PERPETUAL_DESCRIPTION } from './scheduleConstants';
+import { badge, INTERVAL_LABELS, INTERVAL_BADGE_VARIANT, PERPETUAL_BADGE_VARIANT, PERPETUAL_LABEL, PERPETUAL_DESCRIPTION, ON_DEMAND_PERPETUAL_LABEL, ON_DEMAND_PERPETUAL_DESCRIPTION } from './scheduleConstants';
 
 /**
  * The cadence chip, plus a separate Perpetual chip when the task carries the
  * drain flag — the two are orthogonal, so a Scheduled + Perpetual task shows both.
  */
-export default function IntervalBadge({ type, cronExpression, perpetual }) {
-  const label = INTERVAL_LABELS[type] || type;
+export default function IntervalBadge({ type, cronExpression, perpetual, autoStart }) {
+  const automaticDrain = type === 'on-demand' && perpetual && autoStart !== false;
+  const label = automaticDrain ? ON_DEMAND_PERPETUAL_LABEL : INTERVAL_LABELS[type] || type;
   const cronDesc = type === 'cron' && cronExpression ? describeCron(cronExpression) : null;
   const title = type === 'cron' && cronExpression
     ? (cronDesc ? `${cronDesc} (${cronExpression})` : cronExpression)
-    : undefined;
+    : automaticDrain ? ON_DEMAND_PERPETUAL_DESCRIPTION : undefined;
 
   return (
     <>

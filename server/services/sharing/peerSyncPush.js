@@ -9,7 +9,6 @@
  *
  * Split out of the former 4,004-line peerSync.js (#1830).
  */
-import { isStr } from '../../lib/storyBible.js';
 import { isPlainObject } from '../../lib/objects.js';
 import { peerBaseUrl } from '../../lib/peerUrl.js';
 import { peerFetch } from '../../lib/peerHttpClient.js';
@@ -20,47 +19,21 @@ import {
   buildPortosMeta,
   formatVersionGap,
 } from '../../lib/schemaVersions.js';
-import { getInstanceId, UNKNOWN_INSTANCE_ID } from '../instances.js';
-import { getUniverse } from '../universeBuilder.js';
-import { getSeries } from '../pipeline/series.js';
-import { listIssues } from '../pipeline/issues.js';
+import { getInstanceId, UNKNOWN_INSTANCE_ID } from '../instanceIdentity.js';
+import { listIssuesForSeries } from '../pipeline/issues.js';
 import {
-  getCollection,
   findCollectionByUniverseId,
   findCollectionBySeriesId,
 } from '../mediaCollections.js';
-import { getAuthor } from '../authors/index.js';
-import { getArtist } from '../artists/index.js';
-import { getAlbum } from '../albums/index.js';
 import { getTrack } from '../tracks/index.js';
-import { getProject } from '../creativeDirector/local.js';
-import { getProject as getMusicVideoProject } from '../musicVideo/projects.js';
-import { getBoard } from '../moodBoard/index.js';
-import { getLoom } from '../fableLoom/index.js';
-import {
-  getWorkForSync,
-  buildWorkBodyManifest,
-  getFolderForSync,
-  getExerciseForSync,
-} from '../writersRoom/sync.js';
-import { getCommissionFeedbackForSync } from '../creativeCommissions/feedbackStore.js';
-import { getCommissionForSync } from '../creativeCommissions/store.js';
+import { buildWorkBodyManifest } from '../writersRoom/sync.js';
 import { ackDeletesUpTo } from './peerTombstoneCursors.js';
 import {
   buildAssetManifestWithCollection,
   buildAssetManifestForSeries,
-  buildCollectionAssetManifest,
-  buildAuthorAssetManifest,
-  buildArtistAssetManifest,
-  buildAlbumAssetManifest,
-  buildTrackAssetManifest,
-  buildProjectAssetManifest,
-  buildBoardAssetManifest,
-  buildFableLoomAssetManifest,
-  buildMusicVideoAssetManifest,
 } from './peerSyncAssets.js';
+import { RECORD_KINDS } from './recordKinds.js';
 import {
-  isNonEmptyStr,
   peerAllowsOutbound,
   peerHasCategory,
   findPeerById,
@@ -71,7 +44,10 @@ import {
   PUSH_TIMEOUT_MS,
   ERR_SCHEMA_VERSION_AHEAD,
   PEER_SUBSCRIBABLE_KINDS,
+  ENVELOPE_EXTENSIONS,
+  ENVELOPE_PENDING_KEYS,
 } from './peerSyncShared.js';
+import { isStr, isNonBlankStr } from '../../lib/textUtils.js';
 
 
 // --- Push pipeline (sender side) ----------------------------------------
@@ -99,79 +75,18 @@ import {
 const SCHEMA_BLOCK_RETRY_COOLDOWN_MS = 5 * 60_000;
 
 async function isSubscriptionRecordTombstone(sub) {
-  if (sub.recordKind === 'universe') {
-    const record = await getUniverse(sub.recordId, { includeDeleted: true }).catch(() => null);
-    return record?.deleted === true;
-  }
-  if (sub.recordKind === 'series') {
-    const record = await getSeries(sub.recordId, { includeDeleted: true }).catch(() => null);
-    return record?.deleted === true;
-  }
-  if (sub.recordKind === 'mediaCollection') {
-    const record = await getCollection(sub.recordId, { includeDeleted: true }).catch(() => null);
-    return record?.deleted === true;
-  }
-  if (sub.recordKind === 'author') {
-    const record = await getAuthor(sub.recordId, { includeDeleted: true }).catch(() => null);
-    return record?.deleted === true;
-  }
-  if (sub.recordKind === 'artist') {
-    const record = await getArtist(sub.recordId, { includeDeleted: true }).catch(() => null);
-    return record?.deleted === true;
-  }
-  if (sub.recordKind === 'album') {
-    const record = await getAlbum(sub.recordId, { includeDeleted: true }).catch(() => null);
-    return record?.deleted === true;
-  }
-  if (sub.recordKind === 'track') {
-    const record = await getTrack(sub.recordId, { includeDeleted: true }).catch(() => null);
-    return record?.deleted === true;
-  }
-  if (sub.recordKind === 'creativeDirectorProject') {
-    const record = await getProject(sub.recordId, { includeDeleted: true }).catch(() => null);
-    return record?.deleted === true;
-  }
-  if (sub.recordKind === 'moodBoard') {
-    const record = await getBoard(sub.recordId, { includeDeleted: true }).catch(() => null);
-    return record?.deleted === true;
-  }
-  if (sub.recordKind === 'fableLoom') {
-    const record = await getLoom(sub.recordId, { includeDeleted: true }).catch(() => null);
-    return record?.deleted === true;
-  }
-  if (sub.recordKind === 'writersRoomWork') {
-    const record = await getWorkForSync(sub.recordId).catch(() => null);
-    return record?.deleted === true;
-  }
-  if (sub.recordKind === 'writersRoomFolder') {
-    const record = await getFolderForSync(sub.recordId).catch(() => null);
-    return record?.deleted === true;
-  }
-  if (sub.recordKind === 'writersRoomExercise') {
-    const record = await getExerciseForSync(sub.recordId).catch(() => null);
-    return record?.deleted === true;
-  }
-  if (sub.recordKind === 'musicVideoProject') {
-    const record = await getMusicVideoProject(sub.recordId, { includeDeleted: true }).catch(() => null);
-    return record?.deleted === true;
-  }
-  if (sub.recordKind === 'commissionFeedback') {
-    const record = await getCommissionFeedbackForSync(sub.recordId).catch(() => null);
-    return record?.deleted === true;
-  }
-  if (sub.recordKind === 'creativeCommission') {
-    const record = await getCommissionForSync(sub.recordId).catch(() => null);
-    return record?.deleted === true;
-  }
-  return false;
+  const desc = RECORD_KINDS[sub.recordKind];
+  if (!desc) return false;
+  const record = await desc.load(sub.recordId).catch(() => null);
+  return record?.deleted === true;
 }
 
 export async function pushRecordToPeer(sub, options = {}) {
   if (
     !isPlainObject(sub)
-    || !isNonEmptyStr(sub.peerId)
-    || !isNonEmptyStr(sub.recordKind)
-    || !isNonEmptyStr(sub.recordId)
+    || !isNonBlankStr(sub.peerId)
+    || !isNonBlankStr(sub.recordKind)
+    || !isNonBlankStr(sub.recordId)
   ) {
     return { pushed: false, reason: 'invalid-subscription' };
   }
@@ -203,38 +118,21 @@ export async function pushRecordToPeer(sub, options = {}) {
   if (!peerHasCategory(peer, sub.recordKind)) return { pushed: false, reason: 'category-disabled' };
 
   const ourInstanceId = await getInstanceId().catch(() => null);
-  if (!isNonEmptyStr(ourInstanceId) || ourInstanceId === UNKNOWN_INSTANCE_ID) {
+  if (!isNonBlankStr(ourInstanceId) || ourInstanceId === UNKNOWN_INSTANCE_ID) {
     return { pushed: false, reason: 'unknown-local-instance' };
   }
 
   const payload = await buildPushPayload(sub, ourInstanceId);
   if (!payload) return { pushed: false, reason: 'record-not-found' };
 
-  // No-op short-circuit: don't re-push bytes we already pushed. Hash the
-  // FULL logical payload (record + bundled issues + linked collection +
-  // asset manifest) — not just the record — so an issue-only edit, an
-  // asset-only re-render, a collection-only item add, or a new image
-  // landing under the same series still propagates instead of collapsing
-  // to "unchanged" because the parent series didn't move.
-  // sourceInstanceId is intentionally excluded: it's an envelope field, not
-  // a content field, and hashing it would force a re-push every time we
-  // bumped instance metadata.
-  const hash = simplePayloadHash({
-    record: payload.record,
-    issues: payload.issues ?? null,
-    linkedCollection: payload.linkedCollection ?? null,
-    linkedTrack: payload.linkedTrack ?? null,
-    manuscriptReview: payload.manuscriptReview ?? null,
-    reverseOutline: payload.reverseOutline ?? null,
-    assetManifest: payload.assetManifest ?? [],
-    draftBodyManifest: payload.draftBodyManifest ?? [],
-  });
+  // No-op short-circuit: don't re-push bytes we already pushed.
+  const hash = pushPayloadHash(payload);
   if (sub.lastPushedHash && sub.lastPushedHash === hash) {
     return { pushed: false, reason: 'unchanged', hash };
   }
   // LEGACY-STRIPPED SHORT-CIRCUIT (#3928): the last push to this peer landed
   // only after we stripped a top-level key its older `.strict()` schema
-  // rejects (`manuscriptReview` / `reverseOutline` / `linkedTrack`), so
+  // rejects (a sidecar row of ENVELOPE_EXTENSIONS), so
   // `lastPushedHash` was deliberately withheld. Without a second water-mark
   // that withheld hash makes EVERY subsequent cycle re-run the same 400 +
   // stripped-retry pair forever — two HTTP round-trips per 60s sync for a
@@ -265,94 +163,33 @@ export async function pushRecordToPeer(sub, options = {}) {
     });
   };
   let res = await postPayload(payload);
-  // Set when the older-peer retry below strips `manuscriptReview`: the retry
-  // succeeds with the review removed, so saving the full-payload hash would
-  // make the next push short-circuit as `unchanged` and never deliver the
-  // review once that peer upgrades. Withhold the hash (like reviewSyncPending)
-  // so the next cycle re-sends.
-  let reviewStrippedForLegacyPeer = false;
-  // Same as reviewStrippedForLegacyPeer, for the bundled reverse-outline doc —
-  // a pre-#1348 peer's strict series schema rejects the `reverseOutline` key, so
-  // the retry strips it and we withhold the hash to re-send once it upgrades.
-  let outlineStrippedForLegacyPeer = false;
-  // Same as the two flags above, for the #1858 bundled linked-track record — a
-  // pre-feature peer's strict musicVideoProject push schema rejects the
-  // `linkedTrack` key, so the retry strips it and we withhold the hash to
-  // re-send once it upgrades (the track has no independent cycle for a
-  // musicVideoProjects-only subscriber).
-  let trackStrippedForLegacyPeer = false;
-  // MIXED-VERSION COMPAT: an older receiver's push schema is still `.strict()`
-  // without a `portosMeta` field, so it 400-rejects our envelope at Zod
-  // validation BEFORE its schema-version gate code (which doesn't exist on
-  // that version anyway) can run. Detect that specific rejection — Zod emits
-  // "Unrecognized key(s) in object: 'portosMeta'" — and retry once without
-  // the envelope so the push lands on the older peer. The older peer can't
-  // see schemaVersions, but until the user upgrades it that's the
-  // best-effort behavior we want (vs. permanently stranded pushes). Once
-  // they upgrade, the next push round naturally re-includes `portosMeta`.
-  // `catalogBundle` (catalog-federation push enrichment) is a second new
-  // top-level key an even-newer-than-version-gate-but-pre-catalog peer's strict
-  // schema also rejects. `manuscriptReview` (the bundled "Finish the draft"
-  // review doc) is a third — a pre-feature peer's series push schema is still
-  // `.strict()` without it, so it 400-rejects a review-bearing series push and
-  // would strand the series + issues. This retry is exactly what makes the
-  // review's "degrades gracefully on older peers" contract hold (see
-  // schemaVersions.js): strip the unknown key the older peer can't parse so the
-  // record/issues still land; the review reaches it once it upgrades. Strip
-  // whichever key(s) the receiver actually named — surgically, so a peer that
-  // supports `portosMeta` but not `catalogBundle`/`manuscriptReview` keeps its
-  // version-gate handshake. Zod `.strict()` lists all unrecognized keys in one
-  // issue, so a single retry covers all of them.
-  // A 400 from the receiver is Zod rejecting our envelope BEFORE its schema-version
-  // gate (the 409 path below) runs. Parse the body ONCE and route on which part it
-  // couldn't accept — two distinct mixed-version cases share this block:
-  if (res && res.status === 400) {
-    const errBody = await res.clone().json().catch(() => null);
-    const isValidationError = errBody?.code === 'VALIDATION_ERROR';
-    const details = Array.isArray(errBody?.context?.details) ? errBody.context.details : [];
-    const mentions = (key) => details.some((d) => new RegExp(key).test(`${d?.path || ''} ${d?.message || ''}`));
-    if (
-      isValidationError
-      && (payload.portosMeta || payload.catalogBundle || payload.manuscriptReview || payload.reverseOutline || payload.linkedTrack)
-      && (mentions('portosMeta') || mentions('catalogBundle') || mentions('manuscriptReview') || mentions('reverseOutline') || mentions('linkedTrack'))
-    ) {
-      // (1) UNKNOWN ENVELOPE KEY — the peer recognizes the record `kind` but its
-      // `.strict()` schema predates a newer top-level key we sent. Strip whichever
-      // key(s) it named and retry so the record/issues still land; the stripped
-      // feature reaches it once it upgrades (the re-push re-includes the key).
-      const legacyPayload = { ...payload };
-      const stripped = [];
-      if (mentions('portosMeta') && 'portosMeta' in legacyPayload) { delete legacyPayload.portosMeta; stripped.push('portosMeta'); }
-      if (mentions('catalogBundle') && 'catalogBundle' in legacyPayload) { delete legacyPayload.catalogBundle; stripped.push('catalogBundle'); }
-      if (mentions('manuscriptReview') && 'manuscriptReview' in legacyPayload) { delete legacyPayload.manuscriptReview; stripped.push('manuscriptReview'); reviewStrippedForLegacyPeer = true; }
-      if (mentions('reverseOutline') && 'reverseOutline' in legacyPayload) { delete legacyPayload.reverseOutline; stripped.push('reverseOutline'); outlineStrippedForLegacyPeer = true; }
-      if (mentions('linkedTrack') && 'linkedTrack' in legacyPayload) { delete legacyPayload.linkedTrack; stripped.push('linkedTrack'); trackStrippedForLegacyPeer = true; }
-      console.log(
-        `ℹ️ peerSync: ${peer.name || peer.instanceId} rejected newer envelope key(s) ${stripped.join(', ')} — retrying push without them`,
-      );
-      res = await postPayload(legacyPayload);
-    } else if (isValidationError && details.some((d) => d?.path === 'kind' && /discriminator|enum/i.test(d?.message || ''))) {
-      // (2) UNKNOWN RECORD KIND → schema-version block (NOT a bare http-400 retry).
-      // When we introduce a NEW federated record kind (authors did this;
-      // mediaCollection had the same gap when it landed), a peer on an older PortOS
-      // whose `peerSyncPushSchema` discriminated union has no arm for that `kind`
-      // rejects the push at the discriminator — so unlike case (1) there's no
-      // smuggled key to drop: the record KIND itself is what the peer can't parse,
-      // and retrying changes nothing. Treat it like the 409: persist an empty-gap
-      // `peer-pre-feature` block so the SchemaGapBadge surfaces "peer needs to update
-      // PortOS to sync <kind>" and the edit-push cooldown engages, instead of letting
-      // the sub churn as a bare `http-400` the UI never explains. The block clears on
-      // the next successful push once the peer upgrades (same recovery as the 409
-      // path). The signal is a `kind`-path discriminator/enum error — a value WE
-      // always send as a valid literal, so the only reason a receiver faults on
-      // `kind` is that its schema doesn't know this record kind yet.
-      await persistSchemaVersionBlock(sub.id, { reason: 'peer-pre-feature' });
-      console.warn(
-        `⚠️ peerSync: ${peer.name || peer.instanceId} rejected push — its PortOS doesn't recognize the ` +
-        `'${sub.recordKind}' record kind yet. Re-tries pause until they upgrade.`,
-      );
-      return { pushed: false, reason: 'peer-schema-behind', blockedBySchema: true };
-    }
+  // A 400 is Zod rejecting the envelope before the receiver's version gate
+  // (the 409 path below) runs — `classifyEnvelopeRejection` separates the two
+  // mixed-version cases it can mean.
+  const { stripped, unknownKind } = await classifyEnvelopeRejection(res, payload);
+  if (stripped.length > 0) {
+    // (1) UNKNOWN ENVELOPE KEY — retry once without exactly the keys the
+    // receiver named, so the record/issues still land; the stripped feature
+    // reaches it once it upgrades, because the next push re-includes the key.
+    const legacyPayload = { ...payload };
+    for (const { key } of stripped) delete legacyPayload[key];
+    console.log(
+      `ℹ️ peerSync: ${peer.name || peer.instanceId} rejected newer envelope key(s) ${stripped.map((e) => e.key).join(', ')} — retrying push without them`,
+    );
+    res = await postPayload(legacyPayload);
+  } else if (unknownKind) {
+    // (2) UNKNOWN RECORD KIND → schema-version block, NOT a bare http-400:
+    // persist an empty-gap `peer-pre-feature` block so the SchemaGapBadge
+    // surfaces "peer needs to update PortOS to sync <kind>" and the edit-push
+    // cooldown engages, instead of the sub churning as an `http-400` the UI
+    // never explains. It clears on the next successful push once the peer
+    // upgrades (same recovery as the 409 path).
+    await persistSchemaVersionBlock(sub.id, { reason: 'peer-pre-feature' });
+    console.warn(
+      `⚠️ peerSync: ${peer.name || peer.instanceId} rejected push — its PortOS doesn't recognize the ` +
+      `'${sub.recordKind}' record kind yet. Re-tries pause until they upgrade.`,
+    );
+    return { pushed: false, reason: 'peer-schema-behind', blockedBySchema: true };
   }
   // 409 with `code: SCHEMA_VERSION_AHEAD` means the receiver is on an OLDER
   // PortOS and can't parse our newer storage layout. Persist the gap on the
@@ -424,23 +261,10 @@ export async function pushRecordToPeer(sub, options = {}) {
   // next `unchanged` short-circuit and the prose body stranded).
   const missingCount = (Array.isArray(body?.missingAssets) ? body.missingAssets.length : 0)
     + (Array.isArray(body?.missingDraftBodies) ? body.missingDraftBodies.length : 0);
-  // REVIEW-STRANDED GUARD: the receiver merged the record/issues (returned 2xx)
-  // but its bundled manuscript-review merge threw. Withhold lastPushedHash like
-  // the missing-assets case so the next push cycle re-sends the review instead
-  // of short-circuiting on `unchanged` — the review has no independent
-  // reconciliation path, so a saved hash here would strand the update.
-  const reviewSyncPending = body?.reviewSyncPending === true || reviewStrippedForLegacyPeer;
-  // OUTLINE-STRANDED GUARD: same as the review above — the receiver merged the
-  // record/issues but its bundled reverse-outline merge threw (or we stripped
-  // the key for a pre-#1348 peer). The outline has no independent reconciliation
-  // path, so withhold lastPushedHash to re-send next cycle.
-  const outlineSyncPending = body?.outlineSyncPending === true || outlineStrippedForLegacyPeer;
-  // TRACK-STRANDED GUARD: same as the review/outline guards — the receiver merged
-  // the project (returned 2xx) but its bundled linked-track merge threw, OR we
-  // stripped the key for a pre-#1858 peer. The track has no independent
-  // reconciliation path for a musicVideoProjects-only subscriber, so withhold
-  // lastPushedHash to re-send next cycle.
-  const trackSyncPending = body?.trackSyncPending === true || trackStrippedForLegacyPeer;
+  // SIDECAR-STRANDED GUARD: a bundled doc the receiver doesn't hold yet —
+  // reported pending by it, or stripped above for a legacy peer — withholds
+  // lastPushedHash exactly like the missing-assets case.
+  const { pushedHash, legacyStrippedHash, pending } = resolvePushWatermarks({ hash, missingCount, stripped, body });
   // This push landed (receiver returned 2xx). Stamp the per-record confirmed-
   // delivery water-mark so tombstoneGc won't prune THIS record's tombstone
   // until its delete-push has been confirmed — even if a later push for a
@@ -471,24 +295,11 @@ export async function pushRecordToPeer(sub, options = {}) {
   // track is owed at all (`trackId` absent), OR a `linkedTrack` was actually
   // included in this push.
   const trackOwed = isStr(payload.record?.trackId);
+  const trackSyncPending = pending.has(ENVELOPE_PENDING_KEYS.linkedTrack);
   const trackBundleConfirmed = sub.recordKind === 'musicVideoProject'
     && !trackSyncPending
     && (!trackOwed || Boolean(payload.linkedTrack));
-  // #3928: separate the two reasons a bundled doc is still pending. A
-  // RECEIVER-reported pending (its bundled merge threw) is transient — the
-  // next cycle must genuinely re-push, so it gets no water-mark. A
-  // SENDER-side strip for a legacy peer is stable — the peer will reject the
-  // key again until it upgrades, so record the full-payload hash in
-  // `lastPushedLegacyHash` and let an unchanged record short-circuit above
-  // instead of looping a 400 + retry pair every cycle. Missing assets/bodies
-  // also stay un-water-marked: the receiver is still pulling and needs a
-  // fresh manifest each cycle.
-  const receiverReportedPending = body?.reviewSyncPending === true
-    || body?.outlineSyncPending === true
-    || body?.trackSyncPending === true;
-  const strippedForLegacyPeer = reviewStrippedForLegacyPeer || outlineStrippedForLegacyPeer || trackStrippedForLegacyPeer;
-  const legacyStrippedHash = (strippedForLegacyPeer && missingCount === 0 && !receiverReportedPending) ? hash : null;
-  await persistPushSuccess(sub.id, (missingCount > 0 || reviewSyncPending || outlineSyncPending || trackSyncPending) ? null : hash, {
+  await persistPushSuccess(sub.id, pushedHash, {
     confirmedAtMs: Date.now(),
     trackBundleConfirmed,
     legacyStrippedHash,
@@ -542,6 +353,80 @@ export async function pushRecordToPeer(sub, options = {}) {
   };
 }
 
+const NO_REJECTION = Object.freeze({ stripped: Object.freeze([]), unknownKind: false });
+
+/**
+ * Classify the receiver's response to the envelope we sent. Only a 400 is
+ * interesting: it is Zod rejecting the envelope BEFORE the receiver's
+ * schema-version gate can run (that gate answers 409), and two mixed-version
+ * cases share it:
+ *
+ *   `stripped`    — the ENVELOPE_EXTENSIONS rows the receiver named as
+ *                   unrecognized keys AND this payload carries. Its `.strict()`
+ *                   schema predates them. Zod's message is
+ *                   `Unrecognized key(s) in object: '<key>'` — every
+ *                   unrecognized key in ONE issue, so a single retry covers
+ *                   them all — and `mentions` regex-matches each key against
+ *                   path + message. Stripping only the keys it NAMED keeps a
+ *                   peer that supports `portosMeta` but not `catalogBundle` on
+ *                   its version-gate handshake.
+ *   `unknownKind` — the receiver faulted on the `kind` discriminator itself:
+ *                   its push schema has no arm for this record kind, so there
+ *                   is no key to drop and a retry changes nothing. `kind` is a
+ *                   value WE always send as a valid literal, so the only reason
+ *                   a receiver faults on it is that its schema doesn't know
+ *                   this kind yet.
+ *
+ * Anything else — no response, a non-400, a 400 that is not a
+ * VALIDATION_ERROR, or one naming fields we can't strip — is NO_REJECTION and
+ * the caller reports the status as it stands.
+ */
+async function classifyEnvelopeRejection(res, payload) {
+  if (res?.status !== 400) return NO_REJECTION;
+  const errBody = await res.clone().json().catch(() => null);
+  if (errBody?.code !== 'VALIDATION_ERROR') return NO_REJECTION;
+  const details = Array.isArray(errBody.context?.details) ? errBody.context.details : [];
+  const mentions = (key) => details.some((d) => new RegExp(key).test(`${d?.path || ''} ${d?.message || ''}`));
+  const stripped = ENVELOPE_EXTENSIONS.filter((e) => e.key in payload && mentions(e.key));
+  const unknownKind = stripped.length === 0
+    && details.some((d) => d?.path === 'kind' && /discriminator|enum/i.test(d?.message || ''));
+  return { stripped, unknownKind };
+}
+
+/**
+ * The two hash water-marks for a push that landed (receiver returned 2xx),
+ * decided once for every ENVELOPE_EXTENSIONS row.
+ *
+ * `pushedHash` becomes `lastPushedHash`, the `unchanged` short-circuit's
+ * water-mark, so it is saved only once the receiver holds everything this
+ * push carried: no asset or draft body still to pull (`missingCount`) and no
+ * sidecar doc still owed — reported pending by the receiver, or stripped here
+ * for a legacy peer. Saving it earlier would make the next cycle short-circuit
+ * and strand the piece that never arrived.
+ *
+ * #3928 separates the two reasons a sidecar is owed. A RECEIVER-reported
+ * failure is transient — the next cycle must genuinely re-push, so nothing is
+ * water-marked. A SENDER-side strip is stable — the peer rejects the key again
+ * until it upgrades — so `legacyStrippedHash` records the full-payload hash
+ * delivered in stripped form and an unchanged record short-circuits as
+ * `unchanged-legacy-stripped` instead of looping a 400 + retry pair every
+ * cycle. Missing assets/bodies stay un-water-marked either way: the receiver
+ * is still pulling and needs a fresh manifest each cycle.
+ *
+ * `pending` is the set of receiver flags still owed, for the one consumer that
+ * asks about a specific row (#1922's bundled-track GC floor).
+ */
+function resolvePushWatermarks({ hash, missingCount, stripped, body }) {
+  const strippedPending = stripped.map((e) => e.pendingKey).filter(Boolean);
+  const receiverPending = Object.values(ENVELOPE_PENDING_KEYS).filter((k) => body?.[k] === true);
+  const settled = missingCount === 0 && receiverPending.length === 0;
+  return {
+    pushedHash: settled && strippedPending.length === 0 ? hash : null,
+    legacyStrippedHash: settled && strippedPending.length > 0 ? hash : null,
+    pending: new Set([...strippedPending, ...receiverPending]),
+  };
+}
+
 async function persistPushSuccess(subId, hash, { confirmedAtMs = Date.now(), trackBundleConfirmed = false, legacyStrippedHash = null } = {}) {
   await withStateLock(async () => {
     const state = await readState();
@@ -554,7 +439,7 @@ async function persistPushSuccess(subId, hash, { confirmedAtMs = Date.now(), tra
     // with a newer top-level key stripped for an older peer; cleared on every
     // other successful push so a peer that has since upgraded (or a record
     // whose content moved) can never be held back by a stale entry.
-    sub.lastPushedLegacyHash = isNonEmptyStr(legacyStrippedHash) ? legacyStrippedHash : null;
+    sub.lastPushedLegacyHash = isNonBlankStr(legacyStrippedHash) ? legacyStrippedHash : null;
     sub.updatedAt = now;
     // Advance the per-record confirmed-delivery water-mark monotonically — an
     // out-of-order retry must not retract it (mirrors ackDeletesUpTo's
@@ -630,241 +515,180 @@ async function clearSchemaVersionBlock(subId) {
   peerSyncEvents.emit('subscription-unblocked', { subId, peerId: clearedPeerId });
 }
 
+/**
+ * Universe push hook — bundle-aware, so it can't route through the generic
+ * `buildPushPayload` path (its manifest builder needs a second `linkedCollection`
+ * argument the generic one-record builders don't take). Extracted out of
+ * `buildPushPayload`'s own body (#6843) alongside the series hook below, so
+ * the two genuinely-special kinds don't inflate the dispatcher's complexity.
+ */
+async function buildUniversePushPayload(sub, sourceInstanceId, portosMeta) {
+  const record = await RECORD_KINDS.universe.load(sub.recordId).catch(() => null);
+  if (!record) return null;
+  const sanitized = sanitizeRecordForWire('universe', record);
+  if (!sanitized) return null;
+  // Look up the linked media collection (auto-managed "Universe: X" bucket)
+  // and bundle it in the payload. Without this, collection-only edits (a
+  // new image added to the universe's gallery) wouldn't move the universe
+  // record itself, so the lastPushedHash short-circuit would treat the
+  // push as "unchanged" and the receiver's collection would diverge
+  // permanently. Tombstone pushes skip the collection bundle — a deleted
+  // universe's collection gets unlinked + orphaned locally, and shipping
+  // it would re-create an empty bucket on the receiver.
+  const linkedCollection = record.deleted === true
+    ? null
+    : await findCollectionByUniverseId(sub.recordId).catch(() => null);
+  // Tombstone push: deleted records carry no on-disk assets the receiver
+  // should pull. Sending an empty manifest avoids triggering
+  // pullMissingAssetsFromPeer for a record we're telling the peer to
+  // delete — both wasteful (network + disk for bytes the receiver will
+  // immediately orphan) and privacy-sensitive (e.g. a record deleted
+  // BECAUSE the user wanted the assets off-peer would otherwise still
+  // ship them with the tombstone push).
+  const assetManifest = record.deleted === true
+    ? []
+    : await buildAssetManifestWithCollection(record, linkedCollection);
+  // Bundle the catalog rows referenced by this universe (ingredients + the
+  // universe→ingredient ref links). The embedded canon already replicates
+  // via the universe record, but the catalog row's enrichments (tags,
+  // embedding, payload.summary) live ONLY in Postgres — without this bundle
+  // the receiver re-derives a strictly-lossy view on its first backfill.
+  // Skip for tombstone pushes (the universe is being deleted; its ref rows
+  // tombstone locally and ride a later catalog-sync cycle if needed).
+  const catalogBundle = record.deleted === true
+    ? null
+    : await buildCatalogBundleForRef('universe', sub.recordId);
+  // The bundled collection goes through the SAME wire projection as a
+  // standalone `mediaCollection` push (below) — the raw service record would
+  // otherwise smuggle peer-local fields (the `source` provenance stamp,
+  // #3311) past the receiver's insert path and leave the bundled and
+  // standalone forms of the same record disagreeing byte-for-byte.
+  const bundledCollection = sanitizeRecordForWire('mediaCollection', linkedCollection);
+  return {
+    kind: 'universe',
+    record: sanitized,
+    assetManifest,
+    sourceInstanceId,
+    portosMeta,
+    ...(bundledCollection ? { linkedCollection: bundledCollection } : {}),
+    ...(catalogBundle ? { catalogBundle } : {}),
+  };
+}
+
+/**
+ * Series push hook — bundle-aware like the universe hook above (its manifest
+ * builder needs the child-issues + linkedCollection args), plus the two
+ * sibling docs (manuscript review, reverse outline) that ride a series push
+ * but nothing else. Extracted out of `buildPushPayload`'s own body (#6843).
+ */
+async function buildSeriesPushPayload(sub, sourceInstanceId, portosMeta) {
+  const record = await RECORD_KINDS.series.load(sub.recordId).catch(() => null);
+  if (!record) return null;
+  const sanitized = sanitizeRecordForWire('series', record);
+  if (!sanitized) return null;
+  // Bundle child issues — the series + its issues form one unit of edit
+  // for downstream consumers (panels, comic pages), so the receiver
+  // applies them atomically per merge cycle.
+  const childIssues = await listIssuesForSeries(sub.recordId, { includeDeleted: true }).catch(() => []);
+  const sanitizedIssues = childIssues
+    .map((i) => sanitizeRecordForWire('issue', i))
+    .filter(Boolean);
+  // Drop ephemeral child issues BEFORE feeding into the asset-manifest
+  // builder. sanitizedIssues above already filters them via
+  // sanitizeRecordForWire's ephemeral check, but the asset-manifest builder
+  // takes the raw `childIssues` array — without the parallel filter here,
+  // ephemeral issues' image / video / image-ref filenames would still
+  // appear in the manifest the receiver pulls. The user-visible effect:
+  // private/scratch image bytes for an issue the user said "don't sync"
+  // would land on every peer's disk via pullMissingAssetsFromPeer.
+  // ALSO drop deleted child issues from the manifest input — their
+  // tombstones still ride along in `sanitizedIssues` (so the receiver
+  // can finish its delete cascade), but shipping the deleted issues'
+  // asset filenames would trigger needless / privacy-sensitive pulls
+  // for bytes that are about to be orphaned on the receiver.
+  // Tombstoned ephemeral issues (deleted=true + ephemeral=true) ALSO
+  // stay out of the manifest input by this filter.
+  const manifestIssues = childIssues.filter(
+    (i) => i?.deleted !== true && i?.ephemeral !== true,
+  );
+  // Same collection-bundle reasoning as the universe branch: a "Series: X"
+  // collection's item changes don't move the series record, so without
+  // bundling the collection here the per-record push would short-circuit
+  // and the receiver's collection would diverge.
+  const linkedCollection = record.deleted === true
+    ? null
+    : await findCollectionBySeriesId(sub.recordId).catch(() => null);
+  // Tombstone push at the series level: same reasoning as universe above.
+  // When the series itself is deleted, send an empty asset manifest so
+  // the receiver doesn't pull bytes for a record it's about to tombstone.
+  const assetManifest = record.deleted === true
+    ? []
+    : await buildAssetManifestForSeries(record, manifestIssues, linkedCollection);
+  // Bundle the manuscript-review sibling doc (the "Finish the draft" comment
+  // set) so review-only edits — which don't move the series record — still
+  // propagate. Same reasoning as the linkedCollection bundle above: the
+  // review rides the payload AND the push hash, defeating the lastPushedHash
+  // short-circuit. Skip for tombstones (a deleted series ships no review).
+  // Dynamic import keeps manuscriptReview's arcPlanner graph off peerSync's
+  // boot load path (matches the catalogBundle pattern).
+  const manuscriptReview = record.deleted === true
+    ? null
+    : await import('../pipeline/manuscriptReview.js')
+      .then(({ getReview }) => getReview(sub.recordId))
+      .catch(() => null);
+  // Bundle the reverse-outline sibling doc (the scene-by-scene segmentation)
+  // on the same terms as the review above: a regenerate-only change doesn't
+  // move the series record, so without bundling it the per-record push would
+  // short-circuit and the receiver's outline would diverge. Only a `complete`
+  // outline is worth shipping. Skip for tombstones. Dynamic import keeps
+  // reverseOutline's arcPlanner graph off peerSync's boot load path.
+  const reverseOutline = record.deleted === true
+    ? null
+    : await import('../pipeline/reverseOutline.js')
+      .then(({ getStoredOutline }) => getStoredOutline(sub.recordId))
+      .catch(() => null);
+  // Same wire projection as the universe branch — see the note there.
+  const bundledCollection = sanitizeRecordForWire('mediaCollection', linkedCollection);
+  return {
+    kind: 'series',
+    record: sanitized,
+    issues: sanitizedIssues,
+    assetManifest,
+    sourceInstanceId,
+    portosMeta,
+    ...(bundledCollection ? { linkedCollection: bundledCollection } : {}),
+    ...(manuscriptReview && manuscriptReview.comments?.length ? { manuscriptReview } : {}),
+    ...(reverseOutline && reverseOutline.status === 'complete' ? { reverseOutline } : {}),
+  };
+}
+
+/**
+ * Load the live record, sanitize for wire, build the asset manifest, and
+ * assemble the push envelope `buildPortosMeta`/`pushRecordToPeer` sends.
+ * Universe and series are bundle-aware (their manifest builders need extra
+ * args the generic one-record builders don't take) and dispatch to their own
+ * hooks above; the other 14 kinds share one generic load -> sanitize -> asset
+ * manifest -> envelope path, with two post-hooks (musicVideoProject,
+ * writersRoomWork) that bundle one extra field onto the generic envelope.
+ */
 export async function buildPushPayload(sub, sourceInstanceId) {
   const portosMeta = await buildPortosMeta();
-  if (sub.recordKind === 'universe') {
-    const record = await getUniverse(sub.recordId, { includeDeleted: true }).catch(() => null);
-    if (!record) return null;
-    const sanitized = sanitizeRecordForWire('universe', record);
-    if (!sanitized) return null;
-    // Look up the linked media collection (auto-managed "Universe: X" bucket)
-    // and bundle it in the payload. Without this, collection-only edits (a
-    // new image added to the universe's gallery) wouldn't move the universe
-    // record itself, so the lastPushedHash short-circuit would treat the
-    // push as "unchanged" and the receiver's collection would diverge
-    // permanently. Tombstone pushes skip the collection bundle — a deleted
-    // universe's collection gets unlinked + orphaned locally, and shipping
-    // it would re-create an empty bucket on the receiver.
-    const linkedCollection = record.deleted === true
-      ? null
-      : await findCollectionByUniverseId(sub.recordId).catch(() => null);
-    // Tombstone push: deleted records carry no on-disk assets the receiver
-    // should pull. Sending an empty manifest avoids triggering
-    // pullMissingAssetsFromPeer for a record we're telling the peer to
-    // delete — both wasteful (network + disk for bytes the receiver will
-    // immediately orphan) and privacy-sensitive (e.g. a record deleted
-    // BECAUSE the user wanted the assets off-peer would otherwise still
-    // ship them with the tombstone push).
-    const assetManifest = record.deleted === true
-      ? []
-      : await buildAssetManifestWithCollection(record, linkedCollection);
-    // Bundle the catalog rows referenced by this universe (ingredients + the
-    // universe→ingredient ref links). The embedded canon already replicates
-    // via the universe record, but the catalog row's enrichments (tags,
-    // embedding, payload.summary) live ONLY in Postgres — without this bundle
-    // the receiver re-derives a strictly-lossy view on its first backfill.
-    // Skip for tombstone pushes (the universe is being deleted; its ref rows
-    // tombstone locally and ride a later catalog-sync cycle if needed).
-    const catalogBundle = record.deleted === true
-      ? null
-      : await buildCatalogBundleForRef('universe', sub.recordId);
-    // The bundled collection goes through the SAME wire projection as a
-    // standalone `mediaCollection` push (below) — the raw service record would
-    // otherwise smuggle peer-local fields (the `source` provenance stamp,
-    // #3311) past the receiver's insert path and leave the bundled and
-    // standalone forms of the same record disagreeing byte-for-byte.
-    const bundledCollection = sanitizeRecordForWire('mediaCollection', linkedCollection);
-    return {
-      kind: 'universe',
-      record: sanitized,
-      assetManifest,
-      sourceInstanceId,
-      portosMeta,
-      ...(bundledCollection ? { linkedCollection: bundledCollection } : {}),
-      ...(catalogBundle ? { catalogBundle } : {}),
-    };
-  }
-  if (sub.recordKind === 'series') {
-    const record = await getSeries(sub.recordId, { includeDeleted: true }).catch(() => null);
-    if (!record) return null;
-    const sanitized = sanitizeRecordForWire('series', record);
-    if (!sanitized) return null;
-    // Bundle child issues — the series + its issues form one unit of edit
-    // for downstream consumers (panels, comic pages), so the receiver
-    // applies them atomically per merge cycle.
-    const childIssues = await listIssues({ seriesId: sub.recordId, includeDeleted: true }).catch(() => []);
-    const sanitizedIssues = childIssues
-      .map((i) => sanitizeRecordForWire('issue', i))
-      .filter(Boolean);
-    // Drop ephemeral child issues BEFORE feeding into the asset-manifest
-    // builder. sanitizedIssues above already filters them via
-    // sanitizeRecordForWire's ephemeral check, but the asset-manifest builder
-    // takes the raw `childIssues` array — without the parallel filter here,
-    // ephemeral issues' image / video / image-ref filenames would still
-    // appear in the manifest the receiver pulls. The user-visible effect:
-    // private/scratch image bytes for an issue the user said "don't sync"
-    // would land on every peer's disk via pullMissingAssetsFromPeer.
-    // ALSO drop deleted child issues from the manifest input — their
-    // tombstones still ride along in `sanitizedIssues` (so the receiver
-    // can finish its delete cascade), but shipping the deleted issues'
-    // asset filenames would trigger needless / privacy-sensitive pulls
-    // for bytes that are about to be orphaned on the receiver.
-    // Tombstoned ephemeral issues (deleted=true + ephemeral=true) ALSO
-    // stay out of the manifest input by this filter.
-    const manifestIssues = childIssues.filter(
-      (i) => i?.deleted !== true && i?.ephemeral !== true,
-    );
-    // Same collection-bundle reasoning as the universe branch: a "Series: X"
-    // collection's item changes don't move the series record, so without
-    // bundling the collection here the per-record push would short-circuit
-    // and the receiver's collection would diverge.
-    const linkedCollection = record.deleted === true
-      ? null
-      : await findCollectionBySeriesId(sub.recordId).catch(() => null);
-    // Tombstone push at the series level: same reasoning as universe above.
-    // When the series itself is deleted, send an empty asset manifest so
-    // the receiver doesn't pull bytes for a record it's about to tombstone.
-    const assetManifest = record.deleted === true
-      ? []
-      : await buildAssetManifestForSeries(record, manifestIssues, linkedCollection);
-    // Bundle the manuscript-review sibling doc (the "Finish the draft" comment
-    // set) so review-only edits — which don't move the series record — still
-    // propagate. Same reasoning as the linkedCollection bundle above: the
-    // review rides the payload AND the push hash, defeating the lastPushedHash
-    // short-circuit. Skip for tombstones (a deleted series ships no review).
-    // Dynamic import keeps manuscriptReview's arcPlanner graph off peerSync's
-    // boot load path (matches the catalogBundle pattern).
-    const manuscriptReview = record.deleted === true
-      ? null
-      : await import('../pipeline/manuscriptReview.js')
-        .then(({ getReview }) => getReview(sub.recordId))
-        .catch(() => null);
-    // Bundle the reverse-outline sibling doc (the scene-by-scene segmentation)
-    // on the same terms as the review above: a regenerate-only change doesn't
-    // move the series record, so without bundling it the per-record push would
-    // short-circuit and the receiver's outline would diverge. Only a `complete`
-    // outline is worth shipping. Skip for tombstones. Dynamic import keeps
-    // reverseOutline's arcPlanner graph off peerSync's boot load path.
-    const reverseOutline = record.deleted === true
-      ? null
-      : await import('../pipeline/reverseOutline.js')
-        .then(({ getStoredOutline }) => getStoredOutline(sub.recordId))
-        .catch(() => null);
-    // Same wire projection as the universe branch — see the note there.
-    const bundledCollection = sanitizeRecordForWire('mediaCollection', linkedCollection);
-    return {
-      kind: 'series',
-      record: sanitized,
-      issues: sanitizedIssues,
-      assetManifest,
-      sourceInstanceId,
-      portosMeta,
-      ...(bundledCollection ? { linkedCollection: bundledCollection } : {}),
-      ...(manuscriptReview && manuscriptReview.comments?.length ? { manuscriptReview } : {}),
-      ...(reverseOutline && reverseOutline.status === 'complete' ? { reverseOutline } : {}),
-    };
-  }
-  if (sub.recordKind === 'mediaCollection') {
-    const record = await getCollection(sub.recordId, { includeDeleted: true }).catch(() => null);
-    if (!record) return null;
-    const sanitized = sanitizeRecordForWire('mediaCollection', record);
-    if (!sanitized) return null;
-    const assetManifest = record.deleted === true ? [] : await buildCollectionAssetManifest(record);
-    return { kind: 'mediaCollection', record: sanitized, assetManifest, sourceInstanceId, portosMeta };
-  }
-  if (sub.recordKind === 'author') {
-    const record = await getAuthor(sub.recordId, { includeDeleted: true }).catch(() => null);
-    if (!record) return null;
-    const sanitized = sanitizeRecordForWire('author', record);
-    if (!sanitized) return null;
-    // Tombstone push ships no assets — the receiver is about to delete the
-    // record, so pulling its headshot would be wasteful + privacy-sensitive
-    // (same reasoning as the universe/series branches above).
-    const assetManifest = record.deleted === true ? [] : await buildAuthorAssetManifest(record);
-    return { kind: 'author', record: sanitized, assetManifest, sourceInstanceId, portosMeta };
-  }
-  if (sub.recordKind === 'artist') {
-    const record = await getArtist(sub.recordId, { includeDeleted: true }).catch(() => null);
-    if (!record) return null;
-    const sanitized = sanitizeRecordForWire('artist', record);
-    if (!sanitized) return null;
-    const assetManifest = record.deleted === true ? [] : await buildArtistAssetManifest(record);
-    return { kind: 'artist', record: sanitized, assetManifest, sourceInstanceId, portosMeta };
-  }
-  if (sub.recordKind === 'album') {
-    const record = await getAlbum(sub.recordId, { includeDeleted: true }).catch(() => null);
-    if (!record) return null;
-    const sanitized = sanitizeRecordForWire('album', record);
-    if (!sanitized) return null;
-    const assetManifest = record.deleted === true ? [] : await buildAlbumAssetManifest(record);
-    return { kind: 'album', record: sanitized, assetManifest, sourceInstanceId, portosMeta };
-  }
-  if (sub.recordKind === 'track') {
-    const record = await getTrack(sub.recordId, { includeDeleted: true }).catch(() => null);
-    if (!record) return null;
-    const sanitized = sanitizeRecordForWire('track', record);
-    if (!sanitized) return null;
-    const assetManifest = record.deleted === true ? [] : await buildTrackAssetManifest(record);
-    return { kind: 'track', record: sanitized, assetManifest, sourceInstanceId, portosMeta };
-  }
-  if (sub.recordKind === 'creativeDirectorProject') {
-    const record = await getProject(sub.recordId, { includeDeleted: true }).catch(() => null);
-    if (!record) return null;
-    const sanitized = sanitizeRecordForWire('creativeDirectorProject', record);
-    if (!sanitized) return null;
-    const assetManifest = record.deleted === true ? [] : await buildProjectAssetManifest(record);
-    return { kind: 'creativeDirectorProject', record: sanitized, assetManifest, sourceInstanceId, portosMeta };
-  }
-  if (sub.recordKind === 'moodBoard') {
-    const record = await getBoard(sub.recordId, { includeDeleted: true }).catch(() => null);
-    if (!record) return null;
-    const sanitized = sanitizeRecordForWire('moodBoard', record);
-    if (!sanitized) return null;
-    const assetManifest = record.deleted === true ? [] : await buildBoardAssetManifest(record);
-    return { kind: 'moodBoard', record: sanitized, assetManifest, sourceInstanceId, portosMeta };
-  }
-  if (sub.recordKind === 'fableLoom') {
-    const record = await getLoom(sub.recordId, { includeDeleted: true }).catch(() => null);
-    if (!record) return null;
-    const sanitized = sanitizeRecordForWire('fableLoom', record);
-    if (!sanitized) return null;
-    const assetManifest = record.deleted === true ? [] : await buildFableLoomAssetManifest(record);
-    return { kind: 'fableLoom', record: sanitized, assetManifest, sourceInstanceId, portosMeta };
-  }
-  if (sub.recordKind === 'writersRoomWork') {
-    const record = await getWorkForSync(sub.recordId).catch(() => null);
-    if (!record) return null;
-    const sanitized = sanitizeRecordForWire('writersRoomWork', record);
-    if (!sanitized) return null;
-    // The work manifest carries draft-version METADATA; the file-primary `.md`
-    // prose bodies ride a separate `draftBodyManifest` (SHA256 per draft) the
-    // receiver diffs + pulls. A tombstone ships neither asset manifest.
-    const draftBodyManifest = record.deleted === true ? [] : await buildWorkBodyManifest(record);
-    return { kind: 'writersRoomWork', record: sanitized, assetManifest: [], draftBodyManifest, sourceInstanceId, portosMeta };
-  }
-  if (sub.recordKind === 'writersRoomFolder') {
-    // Body-less (#1645) — no asset/body manifest, just the LWW record envelope.
-    const record = await getFolderForSync(sub.recordId).catch(() => null);
-    if (!record) return null;
-    const sanitized = sanitizeRecordForWire('writersRoomFolder', record);
-    if (!sanitized) return null;
-    return { kind: 'writersRoomFolder', record: sanitized, assetManifest: [], sourceInstanceId, portosMeta };
-  }
-  if (sub.recordKind === 'writersRoomExercise') {
-    const record = await getExerciseForSync(sub.recordId).catch(() => null);
-    if (!record) return null;
-    const sanitized = sanitizeRecordForWire('writersRoomExercise', record);
-    if (!sanitized) return null;
-    return { kind: 'writersRoomExercise', record: sanitized, assetManifest: [], sourceInstanceId, portosMeta };
-  }
+  const desc = RECORD_KINDS[sub.recordKind];
+  if (!desc) return null;
+  if (sub.recordKind === 'universe') return buildUniversePushPayload(sub, sourceInstanceId, portosMeta);
+  if (sub.recordKind === 'series') return buildSeriesPushPayload(sub, sourceInstanceId, portosMeta);
+  const record = await desc.load(sub.recordId).catch(() => null);
+  if (!record) return null;
+  const sanitized = sanitizeRecordForWire(sub.recordKind, record);
+  if (!sanitized) return null;
+  // Tombstone push ships no assets — the receiver is about to delete the
+  // record, so pulling its bytes would be wasteful + privacy-sensitive (same
+  // reasoning as the universe/series hooks above).
+  const assetManifest = record.deleted === true
+    ? []
+    : (desc.buildAssetManifest ? await desc.buildAssetManifest(record) : []);
+  const envelope = { kind: sub.recordKind, record: sanitized, assetManifest, sourceInstanceId, portosMeta };
   if (sub.recordKind === 'musicVideoProject') {
-    // #1770 ships the record (metadata + beat-aligned scenes) as the LWW
-    // envelope; #1772 bundles its referenced media. A tombstone ships no bytes.
-    const record = await getMusicVideoProject(sub.recordId, { includeDeleted: true }).catch(() => null);
-    if (!record) return null;
-    const sanitized = sanitizeRecordForWire('musicVideoProject', record);
-    if (!sanitized) return null;
-    const assetManifest = record.deleted === true ? [] : await buildMusicVideoAssetManifest(record);
     // #1858: bundle the LINKED TRACK RECORD (create-UI projects store `trackId`,
     // not `uploadedAudioFilename`). The audio BYTES ride `assetManifest` above,
     // but the receiver's `resolveMasterAudioPath()` looks the track up by id
@@ -883,30 +707,16 @@ export async function buildPushPayload(sub, sourceInstanceId) {
       // it without includeDeleted), so only the tombstone record rides.
       if (track) linkedTrack = sanitizeRecordForWire('track', track);
     }
-    return {
-      kind: 'musicVideoProject', record: sanitized, assetManifest, sourceInstanceId, portosMeta,
-      ...(linkedTrack ? { linkedTrack } : {}),
-    };
+    return { ...envelope, ...(linkedTrack ? { linkedTrack } : {}) };
   }
-  if (sub.recordKind === 'commissionFeedback') {
-    // Body-less (#2686) — no asset manifest, just the LWW record envelope
-    // (one taste reaction). A tombstone ships the same shape (deleted:true).
-    const record = await getCommissionFeedbackForSync(sub.recordId).catch(() => null);
-    if (!record) return null;
-    const sanitized = sanitizeRecordForWire('commissionFeedback', record);
-    if (!sanitized) return null;
-    return { kind: 'commissionFeedback', record: sanitized, assetManifest: [], sourceInstanceId, portosMeta };
+  if (sub.recordKind === 'writersRoomWork') {
+    // The work manifest carries draft-version METADATA; the file-primary `.md`
+    // prose bodies ride a separate `draftBodyManifest` (SHA256 per draft) the
+    // receiver diffs + pulls. A tombstone ships neither asset manifest.
+    const draftBodyManifest = record.deleted === true ? [] : await buildWorkBodyManifest(record);
+    return { ...envelope, draftBodyManifest };
   }
-  if (sub.recordKind === 'creativeCommission') {
-    // The commission BRIEF (#2686). sanitizeRecordForWire strips the machine-local
-    // schedule/runs/assignment, so only the federatable brief travels. No assets.
-    const record = await getCommissionForSync(sub.recordId).catch(() => null);
-    if (!record) return null;
-    const sanitized = sanitizeRecordForWire('creativeCommission', record);
-    if (!sanitized) return null;
-    return { kind: 'creativeCommission', record: sanitized, assetManifest: [], sourceInstanceId, portosMeta };
-  }
-  return null;
+  return envelope;
 }
 
 /**
@@ -935,6 +745,34 @@ async function buildCatalogBundleForRef(refKind, refId) {
   const refs = Array.isArray(bundle.refs) ? bundle.refs : [];
   if (ingredients.length === 0 && refs.length === 0) return null;
   return { ingredients, refs };
+}
+
+/**
+ * Hash the FULL logical payload — record + bundled issues + linked collection
+ * + every sidecar doc + asset/body manifests — not just the record, so an
+ * issue-only edit, an asset-only re-render, a collection-only item add, or a
+ * new image landing under the same series still propagates instead of
+ * collapsing to `unchanged` because the parent record didn't move.
+ *
+ * The sidecar keys come from ENVELOPE_EXTENSIONS: a doc with no reconciliation
+ * cycle of its own (`pendingKey` set) is delivered ONLY by this hash moving,
+ * so a row added there rides the hash without a second listing. The
+ * self-reconciling rows stay out — `portosMeta` is envelope metadata, and
+ * hashing it would force a re-push every time instance metadata moved;
+ * catalog sync reconciles `catalogBundle` — as does `sourceInstanceId`. The
+ * keys are sorted so the object's key order, which `JSON.stringify` feeds the
+ * hash, never depends on table order.
+ */
+function pushPayloadHash(payload) {
+  const sidecarKeys = Object.keys(ENVELOPE_PENDING_KEYS).sort();
+  return simplePayloadHash({
+    record: payload.record,
+    issues: payload.issues ?? null,
+    linkedCollection: payload.linkedCollection ?? null,
+    ...Object.fromEntries(sidecarKeys.map((k) => [k, payload[k] ?? null])),
+    assetManifest: payload.assetManifest ?? [],
+    draftBodyManifest: payload.draftBodyManifest ?? [],
+  });
 }
 
 // Tiny stable-string hash for the push short-circuit. NOT a cryptographic

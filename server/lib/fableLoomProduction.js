@@ -11,6 +11,7 @@ import { computeGraphLayers } from './fableLoomGraph.js';
 import { EFFORT_LEVELS } from './providerModels.js';
 import { validateAudioOccupancy } from './fableLoomPlayback.js';
 import { QUEUEABLE_IMAGE_MODES, VIDEO_GEN_MODES } from './generationModes.js';
+import { isNonBlankStr } from './textUtils.js';
 
 export const FABLELOOM_PRODUCTION_MODES = Object.freeze(['current_canon', 'exact_inputs']);
 export const FABLELOOM_PRODUCTION_MODE_DEFAULT = 'current_canon';
@@ -103,7 +104,6 @@ export const FABLELOOM_ASSET_TYPES = Object.freeze([
   'dialogue',
 ]);
 
-const isStr = (v) => typeof v === 'string' && v.trim().length > 0;
 const isLockedCanon = (node) => Boolean(node?.visualCanon && node.visualCanon.mode !== 'draft');
 
 const EXACT_RENDER_KEYS = Object.freeze({
@@ -121,9 +121,9 @@ const EXACT_RENDER_KEYS = Object.freeze({
 });
 
 const validRenderParameter = (key, value) => {
-  if (['aspectRatio', 'mode', 'videoMode', 'tiling'].includes(key)) return isStr(value);
+  if (['aspectRatio', 'mode', 'videoMode', 'tiling'].includes(key)) return isNonBlankStr(value);
   if (key === 'disableAudio') return typeof value === 'boolean';
-  if (key === 'quantize') return isStr(value) || Number.isFinite(value);
+  if (key === 'quantize') return isNonBlankStr(value) || Number.isFinite(value);
   if (!Number.isFinite(value)) return false;
   if (['seed', 'guidance', 'guidanceScale'].includes(key)) return value >= 0;
   return value > 0;
@@ -263,7 +263,7 @@ export function inspectEpisodeProductionOrder(loom, episode) {
       continue;
     }
     for (const node of orderedNodes) {
-      if (isStr(node.image)) continue;
+      if (isNonBlankStr(node.image)) continue;
       const missing = {
         episodeId: priorEpisode.id,
         episodeNumber: priorEpisode.number || index + 1,
@@ -347,7 +347,7 @@ export function verifyExactInputProvenance(recordedProvenance, {
     if (recordedProvenance.version !== 1) {
       errors.push(`Recorded visual conditioning manifest version "${recordedProvenance.version ?? 'unknown'}" is unsupported.`);
     }
-    if (!isStr(recordedProvenance.compilerVersion)) {
+    if (!isNonBlankStr(recordedProvenance.compilerVersion)) {
       errors.push('Recorded visual conditioning has no compiler revision.');
     }
     if (recordedProvenance.status !== 'locked') {
@@ -358,9 +358,9 @@ export function verifyExactInputProvenance(recordedProvenance, {
     if (!capability || typeof capability !== 'object') {
       errors.push('Recorded visual conditioning has no provider capability manifest.');
     } else {
-      if (!isStr(capability.backend)) errors.push('Recorded visual conditioning has no backend.');
-      if (!isStr(capability.modelId)) errors.push('Recorded visual conditioning has no model revision or model id.');
-      if (capability.backend === 'local' && !isStr(capability.modelRevision)) {
+      if (!isNonBlankStr(capability.backend)) errors.push('Recorded visual conditioning has no backend.');
+      if (!isNonBlankStr(capability.modelId)) errors.push('Recorded visual conditioning has no model revision or model id.');
+      if (capability.backend === 'local' && !isNonBlankStr(capability.modelRevision)) {
         errors.push(`Recorded local ${capability.kind || 'media'} model "${capability.modelId || 'unknown'}" has no immutable model revision to verify exact inputs.`);
       }
       // Local model registries can only verify local manifests. Cloud model ids
@@ -370,12 +370,12 @@ export function verifyExactInputProvenance(recordedProvenance, {
       const availableModels = capability.backend === 'local'
         ? (capability.kind === 'video' ? availableVideoModels : availableImageModels)
         : null;
-      if (Array.isArray(availableModels) && isStr(capability.modelId)) {
+      if (Array.isArray(availableModels) && isNonBlankStr(capability.modelId)) {
         const matchingModel = availableModels.find((model) => model?.id === capability.modelId);
         if (!matchingModel) {
           errors.push(`Recorded ${capability.kind || 'media'} model "${capability.modelId}" is not available locally.`);
-        } else if (isStr(capability.modelRevision)
-          && (!isStr(matchingModel.revision) || matchingModel.revision !== capability.modelRevision)) {
+        } else if (isNonBlankStr(capability.modelRevision)
+          && (!isNonBlankStr(matchingModel.revision) || matchingModel.revision !== capability.modelRevision)) {
           errors.push(`Recorded ${capability.kind || 'media'} model "${capability.modelId}" revision mismatch (recorded ${capability.modelRevision}, current local ${matchingModel.revision || 'unknown'}).`);
         }
       }
@@ -395,14 +395,14 @@ export function verifyExactInputProvenance(recordedProvenance, {
           const canonChar = universe.characters.find((character) => character.id === charId);
           if (!canonChar) {
             errors.push(`Character "${charId || 'unknown'}" in recorded visual bindings no longer exists in Universe.`);
-          } else if (isStr(appearance.wardrobeId)
+          } else if (isNonBlankStr(appearance.wardrobeId)
             && (!Array.isArray(canonChar.wardrobes)
               || !canonChar.wardrobes.some((wardrobe) => wardrobe.id === appearance.wardrobeId))) {
             errors.push(`Wardrobe "${appearance.wardrobeId}" in recorded visual bindings is not present on character "${charId}".`);
           }
         }
       }
-      if (universe && isStr(bindings.placeId)
+      if (universe && isNonBlankStr(bindings.placeId)
         && Array.isArray(universe.places)
         && !universe.places.some((place) => place.id === bindings.placeId)) {
         errors.push(`Place "${bindings.placeId}" in recorded visual bindings no longer exists in Universe.`);
@@ -420,7 +420,7 @@ export function verifyExactInputProvenance(recordedProvenance, {
       errors.push('Recorded visual conditioning has no asset manifest.');
     } else {
       for (const asset of recordedProvenance.assets) {
-        if (!isStr(asset?.filename)) {
+        if (!isNonBlankStr(asset?.filename)) {
           errors.push(`Recorded visual conditioning asset "${asset?.role || 'unknown'}" has no filename.`);
         } else if (typeof resolveAsset === 'function' && !resolveAsset(asset.filename)) {
           errors.push(`Recorded visual conditioning asset "${asset.filename}" is unavailable locally.`);
@@ -432,18 +432,18 @@ export function verifyExactInputProvenance(recordedProvenance, {
       errors.push('Recorded visual conditioning has no adapter manifest.');
     } else {
       for (const adapter of recordedProvenance.adapters) {
-        if (!isStr(adapter?.filename)) {
+        if (!isNonBlankStr(adapter?.filename)) {
           errors.push('Recorded visual conditioning contains an adapter with no filename.');
           continue;
         }
-        if (!isStr(adapter.sha256)) {
+        if (!isNonBlankStr(adapter.sha256)) {
           errors.push(`Recorded character adapter "${adapter.filename}" has no checksum to verify exact inputs.`);
           continue;
         }
         const matchedLora = installedLoras.find((lora) => lora?.filename === adapter.filename);
         if (!matchedLora) {
           errors.push(`Recorded character adapter "${adapter.filename}" is not installed locally.`);
-        } else if (!isStr(matchedLora.sha256)) {
+        } else if (!isNonBlankStr(matchedLora.sha256)) {
           errors.push(`Installed character adapter "${adapter.filename}" has no checksum to verify exact inputs.`);
         } else if (matchedLora.sha256 !== adapter.sha256) {
           errors.push(`Recorded character adapter "${adapter.filename}" checksum mismatch (expected ${adapter.sha256}, found ${matchedLora.sha256}).`);
@@ -477,16 +477,16 @@ export function verifyExactInputProvenance(recordedProvenance, {
     // Check LoRA matching
     if (char.lora) {
       const recordedFilename = char.lora.filename;
-      if (!isStr(recordedFilename)) {
+      if (!isNonBlankStr(recordedFilename)) {
         errors.push(`Recorded character LoRA binding for "${charId}" has no filename.`);
       } else {
         const recordedSha = char.lora.sha256;
         const matchedLora = installedLoras.find((l) => l.filename === recordedFilename);
         if (!matchedLora) {
           errors.push(`Recorded character LoRA "${recordedFilename}" is not installed locally.`);
-        } else if (!isStr(recordedSha)) {
+        } else if (!isNonBlankStr(recordedSha)) {
           errors.push(`Recorded character LoRA "${recordedFilename}" has no checksum to verify.`);
-        } else if (!isStr(matchedLora.sha256)) {
+        } else if (!isNonBlankStr(matchedLora.sha256)) {
           errors.push(`Installed character LoRA "${recordedFilename}" has no checksum to verify exact inputs.`);
         } else if (matchedLora.sha256 !== recordedSha) {
           errors.push(`Recorded character LoRA "${recordedFilename}" checksum mismatch (expected ${recordedSha}, found ${matchedLora.sha256}).`);
@@ -500,7 +500,7 @@ export function verifyExactInputProvenance(recordedProvenance, {
       const recordedVersion = char.voice.profileVersion;
       const recordedEngine = char.voice.engine;
       const recordedModelRev = char.voice.modelRevision;
-      if (!isStr(recordedProfileId)) {
+      if (!isNonBlankStr(recordedProfileId)) {
         errors.push(`Recorded voice binding for character "${charId}" has no profile id.`);
         continue;
       }
@@ -521,10 +521,10 @@ export function verifyExactInputProvenance(recordedProvenance, {
       if (!Number.isFinite(recordedVersion) || matchedProfile.version !== recordedVersion) {
         errors.push(`Recorded voice profile "${recordedProfileId}" version mismatch (recorded v${recordedVersion ?? 'unknown'}, current local v${matchedProfile.version ?? 'unknown'}).`);
       }
-      if (!isStr(recordedEngine) || !isStr(matchedProfile.engine) || matchedProfile.engine !== recordedEngine) {
+      if (!isNonBlankStr(recordedEngine) || !isNonBlankStr(matchedProfile.engine) || matchedProfile.engine !== recordedEngine) {
         errors.push(`Recorded voice profile "${recordedProfileId}" engine mismatch (recorded ${recordedEngine || 'unknown'}, current local ${matchedProfile.engine || 'unknown'}).`);
       }
-      if (!isStr(recordedModelRev) || !isStr(matchedProfile.modelRevision) || matchedProfile.modelRevision !== recordedModelRev) {
+      if (!isNonBlankStr(recordedModelRev) || !isNonBlankStr(matchedProfile.modelRevision) || matchedProfile.modelRevision !== recordedModelRev) {
         errors.push(`Recorded voice profile "${recordedProfileId}" model revision mismatch (recorded ${recordedModelRev || 'unknown'}, current local ${matchedProfile.modelRevision || 'unknown'}).`);
       }
     }
@@ -584,7 +584,7 @@ export function buildEpisodeProductionPlan({
     const lockedCanon = isLockedCanon(node);
     const universeCharacters = Array.isArray(universe?.characters) ? universe.characters : [];
     const characterById = new Map(universeCharacters.map((character) => [character.id, character]));
-    const canonicalProtagonistId = isStr(loom?.protagonistCharacterId)
+    const canonicalProtagonistId = isNonBlankStr(loom?.protagonistCharacterId)
       ? loom.protagonistCharacterId
       : null;
     const canonicalProtagonist = canonicalProtagonistId
@@ -625,7 +625,7 @@ export function buildEpisodeProductionPlan({
     }
 
     let temporalSourceNodeId = null;
-    const explicitTemporalSource = isStr(visualCanon?.continuitySourceNodeId)
+    const explicitTemporalSource = isNonBlankStr(visualCanon?.continuitySourceNodeId)
       ? visualCanon.continuitySourceNodeId
       : null;
 
@@ -662,8 +662,8 @@ export function buildEpisodeProductionPlan({
     }
 
     const assets = node.playbackAssets || null;
-    const existingStill = isStr(node.image) ? node.image : null;
-    const existingEntryVideo = isStr(assets?.entryVideoHistoryId) ? assets.entryVideoHistoryId : (isStr(node.videoHistoryId) ? node.videoHistoryId : null);
+    const existingStill = isNonBlankStr(node.image) ? node.image : null;
+    const existingEntryVideo = isNonBlankStr(assets?.entryVideoHistoryId) ? assets.entryVideoHistoryId : (isNonBlankStr(node.videoHistoryId) ? node.videoHistoryId : null);
 
     // Exact input provenance verification if requested
     if (effectiveMode === 'exact_inputs') {

@@ -283,7 +283,7 @@ export async function advanceAfterSceneSettled(projectId, opts = {}) {
   if (project.status === 'paused' || project.status === 'failed') return;
 
   // No treatment yet → enqueue treatment task.
-  if (!project.treatment) {
+  if (!project.treatment || (project.workspace === 'video' && project.treatment.artifact?.stale)) {
     // Skip if our in-memory dedup set has this project — covers the
     // updateProject→enqueueTreatmentTask window between two concurrent
     // advance calls. The `planning` status check is intentionally omitted:
@@ -628,7 +628,7 @@ export async function startCreativeDirectorProject(projectId) {
     const { videoReviewAllowsDispatch } = await import('./videoReview.js');
     if (!await videoReviewAllowsDispatch(projectId, [])) return;
   }
-  if (project?.directive && (project.workspace !== 'video' || project.treatment)) return advanceAfterPlanStepSettled(projectId);
+  if (project?.directive && (project.workspace !== 'video' || (project.treatment && !project.treatment.artifact?.stale))) return advanceAfterPlanStepSettled(projectId);
   return advanceAfterSceneSettled(projectId);
 }
 

@@ -16,6 +16,7 @@
  */
 
 import { Router } from 'express';
+import { TTS_ENGINE_CONFIG_KEYS } from '../lib/voiceEngines.js';
 import { voiceSynthesizeBodySchema } from '../lib/apiContractSchemas.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { synthesize, listVoices, VALID_ENGINES } from '../services/voice/tts.js';
@@ -70,10 +71,9 @@ router.get('/engines', asyncHandler(async (_req, res) => {
   res.json({
     engines: [...VALID_ENGINES],
     active: cfg.tts?.engine,
-    defaults: {
-      kokoro: cfg.tts?.kokoro?.voice,
-      piper: cfg.tts?.piper?.voice,
-    },
+    defaults: Object.fromEntries([...VALID_ENGINES].map((engine) => [
+      engine, cfg.tts?.[TTS_ENGINE_CONFIG_KEYS[engine]]?.voice ?? null,
+    ])),
   });
 }));
 

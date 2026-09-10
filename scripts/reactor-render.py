@@ -21,6 +21,9 @@ from reactor_sdk import Reactor
 # frame into a landscape session and returned a clip with audio and no picture.
 CANVASES = {"16:9": (1344, 768), "4:3": (1024, 768), "1:1": (768, 768), "9:16": (768, 1344)}
 DEFAULT_ASPECT = "16:9"
+# connect() includes remote session creation and WebRTC establishment. Allow
+# slow setup beyond one minute, while retaining a bound inside the JS watchdog.
+CONNECT_TIMEOUT_SECONDS = 180
 
 
 def emit(kind, **fields):
@@ -74,7 +77,7 @@ async def render(params):
     phase = "connecting"
     try:
         emit("status", message="Connecting to Reactor")
-        await asyncio.wait_for(reactor.connect(), 60)
+        await asyncio.wait_for(reactor.connect(), CONNECT_TIMEOUT_SECONDS)
         scratch_path = Path(str(output) + ".capture")
         scratch_path.mkdir(parents=True, exist_ok=True)
         raw_video = scratch_path / "video.bgra"
@@ -203,7 +206,11 @@ async def render(params):
         shutil.rmtree(scratch_path)
         emit("complete", clipId=clip["clip_id"], seconds=expected / 24, frames=state["frames"])
     except Exception as error:
+        # Only the numeric HTTP status crosses stdio. SDK messages, codes and
+        # operation details may contain response bodies or credentials.
+        status = getattr(error, "status", None)
         emit("error", phase=phase, errorType=type(error).__name__,
+             **({"httpStatus": status} if type(status) is int and 400 <= status <= 599 else {}),
              **({"code": "INVALID_FRAME_BUFFER"} if state["error"] == "Invalid Reactor video frame buffer" else {}))
         raise
     finally:

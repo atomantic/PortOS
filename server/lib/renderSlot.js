@@ -16,8 +16,7 @@
  * storyArc.js (season cover, backCover slots) without circular imports.
  */
 
-import { isStr, trimTo } from './storyBible.js';
-
+import { isStr, trimTo } from './textUtils.js';
 export const COVER_SCRIPT_MAX = 8000;
 export const COVER_PROMPT_MAX = 16_000;
 export const RENDER_FILENAME_MAX = 500;

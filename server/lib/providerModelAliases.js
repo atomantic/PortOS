@@ -1,4 +1,5 @@
 import { routeSettingsRevision } from './providerRouteSettings.js';
+import { isNonBlankStr } from './textUtils.js';
 
 /**
  * Hand-authored model aliases for one provider route (#6369).
@@ -34,8 +35,6 @@ import { routeSettingsRevision } from './providerRouteSettings.js';
 /** Bounds shared by the row sanitizer and the request schema. */
 export const MODEL_ALIAS_LIMITS = Object.freeze({ maxEntries: 200, maxLength: 512 });
 
-const isUsable = (value) => typeof value === 'string' && value.trim() !== '';
-
 /**
  * A stored alias map with unusable entries dropped.
  *
@@ -46,7 +45,7 @@ const isUsable = (value) => typeof value === 'string' && value.trim() !== '';
  */
 export const sanitizeModelAliases = (aliases) => Object.fromEntries(
   Object.entries(aliases && typeof aliases === 'object' ? aliases : {})
-    .filter(([canonical, executable]) => isUsable(canonical) && isUsable(executable))
+    .filter(([canonical, executable]) => isNonBlankStr(canonical) && isNonBlankStr(executable))
     .map(([canonical, executable]) => [canonical.trim(), executable.trim()]),
 );
 
@@ -107,7 +106,7 @@ export function applyModelAliasPatch(current, patch) {
  * @returns {string[]} canonical names, in the order the overrides were stored
  */
 export function staleModelAliases(overrides, storedModels) {
-  const stored = Array.isArray(storedModels) ? storedModels.filter(isUsable) : [];
+  const stored = Array.isArray(storedModels) ? storedModels.filter(isNonBlankStr) : [];
   if (stored.length === 0) return [];
   return Object.entries(sanitizeModelAliases(overrides))
     .filter(([, executable]) => !stored.includes(executable))

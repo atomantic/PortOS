@@ -3,8 +3,10 @@
  */
 
 import { DEFAULT_REVIEWER, DEFAULT_REVIEWERS, DEFAULT_REVIEW_STOP_MODE, normalizeReviewUsernames, resolveClaimReviewerConfig, buildReviewerPinNote, buildReviewerEffortNote, buildReviewWithArgs } from '../../lib/reviewerConfig.js';
+import { isAuditTaskType } from '../../lib/auditCatalog.js';
+import { resolveTaskHookType } from '../taskTypeHooks.js';
 import { PROGRAMMATIC_OUTPUT_COMPLETION_HEADING } from '../../lib/agentSentinel.js';
-import { canTypeSlashCommands, agentOwnsPrWorkflow } from '../../lib/slashdoInvocation.js';
+import { canTypeSlashCommands, agentOwnsPrWorkflow, PR_OPENED_BY } from '../../lib/slashdoInvocation.js';
 import { shellQuote } from '../../lib/shellQuote.js';
 import { COMPLETION_MODES } from '../../lib/agentCompletionMode.js';
 import { PR_COMPLETIONS, leavesPrForHuman, resolvePrCompletion } from '../../lib/prDisposition.js';
@@ -36,12 +38,12 @@ const DISCARD_WORKTREE_HYGIENE = '- **Do NOT commit, push, or open a PR.** This 
  * or `null` when the mode produces no text (the legacy empty-string tail).
  *
  * @param {Object} opts
- * @param {string} opts.mode - a `COMPLETION_MODES` key
+ * @param {string} opts.mode - a `COMPLETION_MODES` key. `COMPLETION_MODES.TUI_SLASHDO_FREE`
+ *   is what points the bullet at the manual commit + system-handoff workflow
+ *   instead of a `/do:*` command.
  * @param {string|null} opts.tuiCompletionCommand - `/do:pr` or `/do:push`; `null`
  *   when PortOS merges the branch back itself and the workflow is commit-only
  *   (see `portosMergesBranchOnExit`)
- * @param {boolean} [opts.slashdoFree] - TUI without slashdo: the bullet points
- *   at the manual commit + system-handoff workflow instead of a `/do:*` command.
  * @param {Object|null} opts.worktreeInfo
  * @param {boolean} opts.willOpenPR
  * @param {'review-then-merge'|'merge-on-green'|'leave-open'} opts.prCompletion
@@ -50,7 +52,7 @@ const DISCARD_WORKTREE_HYGIENE = '- **Do NOT commit, push, or open a PR.** This 
  * @returns {string|null}
  */
 export function buildCompletionGuidelineBullet({
-  mode, tuiCompletionCommand, slashdoFree = false,
+  mode, tuiCompletionCommand,
   worktreeInfo, willOpenPR, prCompletion = PR_COMPLETIONS.MERGE_ON_GREEN,
   leavePrOpen = false, noChangeSuccess = false, whenDone = null,
 }) {
@@ -60,7 +62,7 @@ export function buildCompletionGuidelineBullet({
   // buildTuiCompletionSection — not this bullet). They're kept host-aware and
   // directly unit-tested so the guideline stays correct if that routing changes.
   const tuiBullet = () => {
-    const howTo = slashdoFree
+    const howTo = mode === COMPLETION_MODES.TUI_SLASHDO_FREE
       ? 'the Completion Workflow above (plain `git` commit + PortOS handoff — this provider has no slashdo commands)'
       : tuiCompletionCommand
         ? `the Completion Workflow above (\`${tuiCompletionCommand}\`)`
@@ -369,8 +371,19 @@ export function buildActionOutputCompletionSection({ isTui = false, sentinelPath
   return [
     notice,
     '',
-    `Your task is complete once that request succeeds. Then write a one-line summary to \`${sentinelPath}\` and stop — PortOS watches this sentinel and finalizes the run shortly after it appears. Do NOT run \`/quit\` and do NOT wait for anything after writing the sentinel.`
+    `Your task is complete once that request succeeds. Then write a short summary, including any structured report required by your task, to \`${sentinelPath}\` and stop — PortOS watches this sentinel and finalizes the run shortly after it appears. Do NOT run \`/quit\` and do NOT wait for anything after writing the sentinel.`
   ].join('\n');
+}
+
+/** Audit reports are a deliverable even when the run only files issues. */
+export function buildAuditOutputCompletionSection(task, sentinelPath) {
+  const category = resolveTaskHookType(task);
+  if (!isAuditTaskType(category)) return '';
+  return `## Required audit assessment handoff
+Before writing the completion sentinel, prepare the validated QUALITY_AUDIT_JSON report described in the audit instructions for category "${category}".
+Write your human summary AND exactly one single-line QUALITY_AUDIT_JSON: {...} report together to \`${sentinelPath}\`, then stop. This applies to every provider, including agents that normally finish by exiting.
+The report is required even when no issues are filed or no code changes are needed. A successful issue or PR does not supply a quality assessment. A final response alone is not enough: PortOS reads the sentinel file to save the dashboard score.
+Preserve the report when following the summary template above; the template's length guidance does not replace this required output. If assessment is unavailable, use score:null and explain the missing evidence rather than inventing a score.`;
 }
 
 /**
@@ -450,23 +463,29 @@ export function buildAutoMergeCommitStep(baseBranch = null) {
  * single-sentence instruction based on whether the agent will run its own
  * push workflow (TUI or Claude Code CLI with slashdo), reuse an existing PR
  * branch (review fixes), or hand off to PortOS's post-exit push.
+ *
+ * `mode` is the resolver's decision (see `lib/agentCompletionMode.js`); by the
+ * time the TUI and existing-branch arms above have already returned, `mode`
+ * being `WORKTREE_NO_PUSH` / `PORTOS_MERGES` implies a non-TUI host, so
+ * `canTypeSlashCommands` alone (no separate `isTui` re-check) tells the two
+ * apart from their non-slashdo equivalents.
  */
-export function worktreeCommitGuidance({ isTui, hasSlashdo, ownsPrWorkflow = false, isWorktreeOnExistingBranch, willOpenPR, discardWorktree, claimFlow = false, noChangeSuccess = false }) {
+export function worktreeCommitGuidance({ isTui, mode = null, canTypeSlashCommands = false, rendersInlinePrLifecycle = false, isWorktreeOnExistingBranch, willOpenPR, discardWorktree, claimFlow = false, noChangeSuccess = false }) {
   if (discardWorktree) return DISCARD_WORKTREE_NOTE;
   if (claimFlow) return 'The claim workflow in the Completion section owns the push, PR/MR, review, merge or human-handoff, and cleanup steps.';
   if (isTui) return withNoChangeAuditGuidance('Commit your changes to this branch — see **Completion Workflow** below.', noChangeSuccess);
   if (isWorktreeOnExistingBranch) {
     return withNoChangeAuditGuidance('Commit and **push** any review-fix commits to this branch (the PR points at it). Use `git pull --rebase` before pushing if needed.', noChangeSuccess);
   }
-  if (hasSlashdo && willOpenPR) {
+  if (canTypeSlashCommands && mode === COMPLETION_MODES.WORKTREE_NO_PUSH) {
     return withNoChangeAuditGuidance('Commit your changes here — the **Completion** section below drives the push and PR.', noChangeSuccess);
   }
-  if (hasSlashdo) {
+  if (canTypeSlashCommands && mode === COMPLETION_MODES.PORTOS_MERGES) {
     // Reached in a worktree with no PR: the auto-merge posture
     // (portosMergesBranchOnExit) — nothing drives a push, so say so.
     return withNoChangeAuditGuidance('Commit your changes here — do NOT push. PortOS merges this branch back after you exit; the **Completion** section below has the exact step.', noChangeSuccess);
   }
-  if (ownsPrWorkflow && willOpenPR) {
+  if (rendersInlinePrLifecycle && willOpenPR) {
     return withNoChangeAuditGuidance('Commit your changes here — the **Completion** section below drives the push, the PR, the review loop, and the merge.', noChangeSuccess);
   }
   if (willOpenPR) {
@@ -589,22 +608,23 @@ function localReviewCompletionInstruction(localReviewRequired = true) {
  * TUI completion-workflow block. The TUI owns its own commit → push → PR
  * pipeline via slashdo commands and signals "done" with a sentinel file.
  *
- * When `slashdoFree` is set — any TUI that does NOT load Claude Code slash
- * commands: OpenCode, codex/antigravity/grok/kimi, or a lean `--bare` Claude
- * session — the agent can't run `/do:pr` / `/do:push`, so it delegates to the
- * plain-git/`gh` variant below (same sentinel handshake, no slashdo). The caller
- * resolves that flag once via `canTypeSlashCommands` (#3114); past the early
- * return this IS a Claude session, so `/simplify` and `/do:pr` are both safe to
- * emit without a second provider check.
+ * When `mode` is `COMPLETION_MODES.TUI_SLASHDO_FREE` — any TUI that does NOT
+ * load Claude Code slash commands: OpenCode, codex/antigravity/grok/kimi, or a
+ * lean `--bare` Claude session — the agent can't run `/do:pr` / `/do:push`, so
+ * it delegates to the plain-git/`gh` variant below (same sentinel handshake,
+ * no slashdo). The caller resolves that mode once via `resolveCompletionMode`,
+ * itself derived from `canTypeSlashCommands` (#3114); past the early return
+ * this IS a Claude session, so `/simplify` and `/do:pr` are both safe to emit
+ * without a second provider check.
  */
-export function buildTuiCompletionSection({ willOpenPR, prCompletion = PR_COMPLETIONS.MERGE_ON_GREEN, simplifyEnabled, sentinelPath, slashdoFree = false, ownsPrWorkflow = false, portosMergesBranch = false, branchName = null, baseBranch = null, leavePrOpen = false, reviewers = DEFAULT_REVIEWERS, usernames = [], optionalReviewers = [], reviewerMaxRounds = {}, reviewerModels = {}, reviewerEfforts = {}, reviewStopMode = DEFAULT_REVIEW_STOP_MODE, reviewerApplies = false, forgeCli = 'gh', noChangeSuccess = false, localReviewSection = '', localReviewRequired = true, postPrReview = null }) {
+export function buildTuiCompletionSection({ willOpenPR, prCompletion = PR_COMPLETIONS.MERGE_ON_GREEN, simplifyEnabled, sentinelPath, mode = COMPLETION_MODES.TUI, rendersInlinePrLifecycle = false, portosMergesBranch = false, branchName = null, baseBranch = null, leavePrOpen = false, reviewers = DEFAULT_REVIEWERS, usernames = [], optionalReviewers = [], reviewerMaxRounds = {}, reviewerModels = {}, reviewerEfforts = {}, reviewStopMode = DEFAULT_REVIEW_STOP_MODE, reviewerApplies = false, forgeCli = 'gh', noChangeSuccess = false, localReviewSection = '', localReviewRequired = true, postPrReview = null }) {
   const policyLeavesOpen = prCompletion === PR_COMPLETIONS.LEAVE_OPEN;
   const runsReviewLoop = prCompletion === PR_COMPLETIONS.REVIEW_THEN_MERGE;
-  if (slashdoFree) {
+  if (mode === COMPLETION_MODES.TUI_SLASHDO_FREE) {
     // Plain `git`/`gh` instead of `/do:pr` — but still the whole lifecycle when
-    // the session is a real coding harness (`ownsPrWorkflow`); the reviewer
+    // the session is a real coding harness (`rendersInlinePrLifecycle`); the reviewer
     // procedure it needs is inlined in the Review Loop section that follows.
-    return buildManualTuiCompletionSection({ willOpenPR, prCompletion, simplifyEnabled, sentinelPath, branchName, baseBranch, leavePrOpen, ownsPrWorkflow, forgeCli, noChangeSuccess, localReviewSection, localReviewRequired, postPrReview });
+    return buildManualTuiCompletionSection({ willOpenPR, prCompletion, simplifyEnabled, sentinelPath, branchName, baseBranch, leavePrOpen, rendersInlinePrLifecycle, forgeCli, noChangeSuccess, localReviewSection, localReviewRequired, postPrReview });
   }
   const cmd = willOpenPR ? '/do:pr' : '/do:push';
   // `/do:pr` may inherit a saved `review-with` default. Explicitly opt out
@@ -631,8 +651,8 @@ export function buildTuiCompletionSection({ willOpenPR, prCompletion = PR_COMPLE
         ? ` — \`/do:pr\` runs the Copilot review loop after the PR opens.${requiredLocalReviewBlockedNote}`
         : ` — \`/do:pr\` runs the review loop for ${reviewerListLabel} in order: local reviewers before it opens the PR, then the PR-side reviewers (Copilot / \`@login\`) once it is open.${requiredLocalReviewBlockedNote}`)
     : (willOpenPR ? ' — external review is disabled for this task.' : '');
-  // Reached only for a Claude TUI (a non-Claude one took the slashdoFree branch
-  // above), so `/simplify` — a Claude Code built-in — is invokable here.
+  // Reached only for a Claude TUI (a non-Claude one took the TUI_SLASHDO_FREE
+  // branch above), so `/simplify` — a Claude Code built-in — is invokable here.
   const simplifyStep = simplifyEnabled ? '1. `/simplify`' : '1. (simplify disabled — skip)';
   const sentinelTail = willOpenPR
     ? (noChangeSuccess
@@ -791,27 +811,28 @@ function buildManualPrCreateStep(step, { branchName, baseBranch, forgeCli = 'gh'
  * Manual (slashdo-free) completion-workflow block — every provider that can't
  * type `/do:pr` (codex, grok/agy, OpenCode, a lean `--bare` Claude session).
  *
- * When `ownsPrWorkflow` is set the agent drives the WHOLE lifecycle in one
- * session: commit → push → open the PR → run the inline review loop → merge.
- * That is the point of the flag — see `agentOwnsPrWorkflow`. Not typing a slash
- * command never meant "can't run `gh`", but this block used to conclude exactly
- * that, so every agy/grok/codex task ended in a commit and PortOS bought a
- * second cold agent (`sys-rl-*`) just to review and land the PR.
+ * When `rendersInlinePrLifecycle` is set the agent drives the WHOLE lifecycle in
+ * one session: commit → push → open the PR → run the inline review loop →
+ * merge. That is the point of the flag — see `promptOpensOwnPr`, whose
+ * `agent-inline` answer this is. Not typing a slash command never meant "can't
+ * run `gh`", but this block used to conclude exactly that, so every
+ * agy/grok/codex task ended in a commit and PortOS bought a second cold agent
+ * (`sys-rl-*`) just to review and land the PR.
  *
- * `ownsPrWorkflow: false` (lean mode) keeps the original handoff: commit and
- * stop, PortOS owns the post-exit push / PR / review / merge lifecycle.
+ * `rendersInlinePrLifecycle: false` (lean mode) keeps the original handoff:
+ * commit and stop, PortOS owns the post-exit push / PR / review / merge
+ * lifecycle.
  */
-function buildManualTuiCompletionSection({ willOpenPR, prCompletion = PR_COMPLETIONS.REVIEW_THEN_MERGE, simplifyEnabled, sentinelPath, branchName = null, baseBranch = null, leavePrOpen = false, ownsPrWorkflow = false, forgeCli = 'gh', noChangeSuccess = false, localReviewSection = '', localReviewRequired = true, postPrReview = null }) {
+function buildManualTuiCompletionSection({ willOpenPR, prCompletion = PR_COMPLETIONS.REVIEW_THEN_MERGE, simplifyEnabled, sentinelPath, branchName = null, baseBranch = null, leavePrOpen = false, rendersInlinePrLifecycle = false, forgeCli = 'gh', noChangeSuccess = false, localReviewSection = '', localReviewRequired = true, postPrReview = null }) {
   const policyLeavesOpen = prCompletion === PR_COMPLETIONS.LEAVE_OPEN;
   const runsReviewLoop = postPrReview ?? (prCompletion === PR_COMPLETIONS.REVIEW_THEN_MERGE);
-  // `ownsPrWorkflow` already folds in `willOpenPR`, the worktree, and the
-  // leave-open exclusions — it is `inlinePrLifecycleSection() !== null` (see the
-  // caller). Re-testing any of them here is how the two drifted apart before.
-  const drivesOwnPr = ownsPrWorkflow;
+  // `rendersInlinePrLifecycle` already folds in `willOpenPR`, the worktree, and
+  // the leave-open exclusions — it is `inlinePrLifecycleSection() !== null` (see
+  // the caller). Re-testing any of them here is how the two drifted apart before.
   const simplifyStep = simplifyEnabled
     ? `1. Before committing, ${SIMPLIFY_INLINE_REVIEW} and fix any findings.`
     : '1. (simplify disabled — skip)';
-  const sentinelTail = drivesOwnPr
+  const sentinelTail = rendersInlinePrLifecycle
     ? (noChangeSuccess
         ? '   ## PR\n   <PR URL, or "No change needed; no PR opened." if the audit made no change>'
         : '   ## PR\n   <PR URL>')
@@ -820,7 +841,7 @@ function buildManualTuiCompletionSection({ willOpenPR, prCompletion = PR_COMPLET
   const lines = [
     '## Completion Workflow',
     ...(noChangeSuccess ? ['', NO_CHANGE_AUDIT_GUIDANCE, ''] : []),
-    drivesOwnPr
+    rendersInlinePrLifecycle
       ? `This provider does NOT have slashdo (\`/do:*\`) commands, so drive the handoff with plain \`git\` and \`${forgeCli}\`. **You own this ${forgeCli === 'glab' ? 'MR' : 'PR'} end to end — nothing else will open, review, or merge it.** Run these in order:`
       : 'This provider does NOT have slashdo (`/do:*`) commands, so finish the handoff with plain `git`. Run these in order:',
     '',
@@ -834,7 +855,7 @@ function buildManualTuiCompletionSection({ willOpenPR, prCompletion = PR_COMPLET
   ];
 
   let step = 3;
-  if (drivesOwnPr) {
+  if (rendersInlinePrLifecycle) {
     if (localReviewSection) {
       lines.push(`${step++}. ${localReviewCompletionInstruction(localReviewRequired)}`);
       lines.push('', localReviewSection, '');
@@ -860,6 +881,68 @@ function buildManualTuiCompletionSection({ willOpenPR, prCompletion = PR_COMPLET
 }
 
 /**
+ * WHO opens this run's pull request, per the prompt the sections above render
+ * for it — a `PR_OPENED_BY` value, never null, so no caller has to invent a
+ * meaning for "absent".
+ *
+ * This is the one gate; `inlinePrLifecycleSection` below is a projection of it.
+ * They used to be the same predicate under a name that answered a narrower
+ * question — `metadata.ownsPrWorkflow` meant "did the prompt render the INLINE
+ * `git`/`gh` PR section", which is FALSE for a slashdo-capable Claude host,
+ * because that host drives the whole lifecycle through `/do:pr` instead. Every
+ * consumer read the name as "the agent opens its own PR" and got the opposite
+ * answer for the host that most often does, so cleanup re-pushed the branch and
+ * called `git.createPR` for a PR the agent had already opened (#6869).
+ *
+ * The three answers, in the order the prompt decides them:
+ * - `PORTOS` — the run is not a local harness, is a lean `--bare` session, or
+ *   its task shape hands the change request back to PortOS. Every exclusion
+ *   below is one of those completion contracts.
+ * - `AGENT_SLASHDO` — the session can type `/do:pr`, and the completion section
+ *   emits it: `buildTuiCompletionSection`'s `cmd` for a TUI, the
+ *   `WORKTREE_NO_PUSH` arm of `buildCliCompletionSection` for a CLI. Both are
+ *   exactly "worktree + `openPR` + none of the exclusions below", which is what
+ *   this gate has already established by the time we ask.
+ * - `AGENT_INLINE` — everything else that clears the gate: a real harness that
+ *   cannot type a slash command (codex / grok / agy / OpenCode), handed the
+ *   plain `git`/`gh` steps plus the inline Review Loop / Merge Gate section.
+ *
+ * Not re-checked here: the claim-flow contract, whose completion mode also
+ * emits no `/do:pr`. Every claim task type pins `useWorktree: false,
+ * openPR: false` (see `taskScheduleRegistry.js`, which also protects both keys
+ * from override), so the worktree and `openPR` gates below already exclude it —
+ * and a claim prompt that somehow reached here would be answered correctly
+ * anyway, since it opens and merges its own PR from its own procedure.
+ *
+ * @returns {string} a `PR_OPENED_BY` value
+ */
+export function promptOpensOwnPr(task, { providerType, providerId, providerCommand, leanMode, worktreeInfo, isTruthyMetaFn = isTruthyMetaDefault }) {
+  if (!LIGHT_CONTEXT_PROVIDER_TYPES.has(providerType)) return PR_OPENED_BY.PORTOS;
+  if (!agentOwnsPrWorkflow({ providerType, leanMode })) return PR_OPENED_BY.PORTOS;
+  // No worktree ⇒ no branch to name in `git push -u origin <branch>`, and the
+  // one production shape here is a JIRA-ticket run (agentWorkspacePrep skips
+  // worktree creation when a jiraBranch is set). Its PR is PortOS's to open and
+  // a human's to land; telling the agent to open one too yields a PR opened
+  // against a branch it had to guess at, and then a second `gh pr create` from
+  // cleanup that fails "a pull request already exists".
+  if (!worktreeInfo) return PR_OPENED_BY.PORTOS;
+
+  const metadata = task?.metadata || {};
+  if (!isTruthyMetaFn(metadata.openPR)) return PR_OPENED_BY.PORTOS;
+  // The completion branches that hand back a contract which never opens a PR.
+  if (isTruthyMetaFn(metadata.noCodeOutput) || metadata.creativeDirector) return PR_OPENED_BY.PORTOS;
+  if (isTruthyMetaFn(metadata.discardWorktree)) return PR_OPENED_BY.PORTOS;
+  if (isTruthyMetaFn(metadata.readOnly)) return PR_OPENED_BY.PORTOS;
+  if (isTruthyMetaFn(metadata.reviewLoopFollowUp)) return PR_OPENED_BY.PORTOS;
+  // A PR a human lands gets neither a review loop nor a merge gate.
+  if (resolvePrCompletion(metadata) === PR_COMPLETIONS.LEAVE_OPEN || leavesPrForHuman(task)) return PR_OPENED_BY.PORTOS;
+
+  return canTypeSlashCommands({ providerId, providerCommand, leanMode })
+    ? PR_OPENED_BY.AGENT_SLASHDO
+    : PR_OPENED_BY.AGENT_INLINE;
+}
+
+/**
  * Which inline PR-lifecycle section — if any — a run gets after its manual
  * completion workflow: `'review-loop'`, `'merge-gate'` (no reviewer configured,
  * so CI is the whole gate), or `null`.
@@ -872,33 +955,17 @@ function buildManualTuiCompletionSection({ willOpenPR, prCompletion = PR_COMPLET
  * the strict one restated four branches of the completion if/else chain by hand,
  * 130 lines away from the chain it mirrored.
  *
+ * The section exists only on the inline path: a `/do:pr` run reviews and merges
+ * inside that one command, so `promptOpensOwnPr` answering `AGENT_SLASHDO` is a
+ * `null` here — which is exactly why the two questions need separate names.
+ *
  * @returns {'review-loop'|'merge-gate'|null}
  */
-export function inlinePrLifecycleSection(task, { providerType, providerId, providerCommand, leanMode, worktreeInfo, isTruthyMetaFn = isTruthyMetaDefault }) {
-  if (!LIGHT_CONTEXT_PROVIDER_TYPES.has(providerType)) return null;
-  if (!agentOwnsPrWorkflow({ providerType, leanMode })) return null;
-  // A slashdo-capable session drives all of this through `/do:pr` instead.
-  if (canTypeSlashCommands({ providerId, providerCommand, leanMode })) return null;
-  // No worktree ⇒ no branch to name in `git push -u origin <branch>`, and the
-  // one production shape here is a JIRA-ticket run (agentWorkspacePrep skips
-  // worktree creation when a jiraBranch is set). Its PR is PortOS's to open and
-  // a human's to land; telling the agent to open one too yields a PR opened
-  // against a branch it had to guess at, and then a second `gh pr create` from
-  // cleanup that fails "a pull request already exists".
-  if (!worktreeInfo) return null;
-
-  const metadata = task?.metadata || {};
-  if (!isTruthyMetaFn(metadata.openPR)) return null;
-  // The completion branches that hand back a contract which never opens a PR.
-  if (isTruthyMetaFn(metadata.noCodeOutput) || metadata.creativeDirector) return null;
-  if (isTruthyMetaFn(metadata.discardWorktree)) return null;
-  if (isTruthyMetaFn(metadata.readOnly)) return null;
-  if (isTruthyMetaFn(metadata.reviewLoopFollowUp)) return null;
-  // A PR a human lands gets neither a review loop nor a merge gate.
-  const prCompletion = resolvePrCompletion(metadata);
-  if (prCompletion === PR_COMPLETIONS.LEAVE_OPEN || leavesPrForHuman(task)) return null;
-
-  return prCompletion === PR_COMPLETIONS.REVIEW_THEN_MERGE ? 'review-loop' : 'merge-gate';
+export function inlinePrLifecycleSection(task, opts) {
+  if (promptOpensOwnPr(task, opts) !== PR_OPENED_BY.AGENT_INLINE) return null;
+  return resolvePrCompletion(task?.metadata || {}) === PR_COMPLETIONS.REVIEW_THEN_MERGE
+    ? 'review-loop'
+    : 'merge-gate';
 }
 
 /**
@@ -946,16 +1013,20 @@ export function buildInlineReviewLoopSection({
  * CLI (non-TUI) completion block.
  *
  * Claude Code CLI agents have slashdo commands available (the submodule
- * mounts them as project-level slash commands), so when `hasSlashdo` is
- * true and a PR is expected, the agent owns the full `/simplify` → `/do:pr`
- * sequence and PortOS skips its post-exit push+PR. Codex/Antigravity and other
- * CLI providers fall through to the legacy commit-only block where PortOS
- * handles push+PR on exit.
+ * mounts them as project-level slash commands), so when `mode` is
+ * `COMPLETION_MODES.WORKTREE_NO_PUSH` and `canTypeSlashCommands` is true, the
+ * agent owns the full `/simplify` → `/do:pr` sequence and PortOS skips its
+ * post-exit push+PR. Codex/Antigravity and other CLI providers fall through
+ * to the legacy commit-only block where PortOS handles push+PR on exit.
+ *
+ * Branches on `mode` first, mirroring the resolver's own rule order
+ * (`lib/agentCompletionMode.js`) rather than re-testing `worktreeInfo` /
+ * `willOpenPR` — the caller already resolved those into `mode`.
  */
-export function buildCliCompletionSection({ worktreeInfo, willOpenPR, prCompletion = PR_COMPLETIONS.MERGE_ON_GREEN, hasSlashdo = false, ownsPrWorkflow = false, simplifyEnabled = false, leavePrOpen = false, reviewers = DEFAULT_REVIEWERS, usernames = [], optionalReviewers = [], reviewerMaxRounds = {}, reviewerModels = {}, reviewerEfforts = {}, reviewStopMode = DEFAULT_REVIEW_STOP_MODE, reviewerApplies = false, forgeCli = 'gh', noChangeSuccess = false, localReviewSection = '', localReviewRequired = true, postPrReview = null }) {
+export function buildCliCompletionSection({ worktreeInfo, willOpenPR, prCompletion = PR_COMPLETIONS.MERGE_ON_GREEN, mode = null, canTypeSlashCommands = false, rendersInlinePrLifecycle = false, simplifyEnabled = false, leavePrOpen = false, reviewers = DEFAULT_REVIEWERS, usernames = [], optionalReviewers = [], reviewerMaxRounds = {}, reviewerModels = {}, reviewerEfforts = {}, reviewStopMode = DEFAULT_REVIEW_STOP_MODE, reviewerApplies = false, forgeCli = 'gh', noChangeSuccess = false, localReviewSection = '', localReviewRequired = true, postPrReview = null }) {
   const policyLeavesOpen = prCompletion === PR_COMPLETIONS.LEAVE_OPEN;
   const runsReviewLoop = postPrReview ?? (prCompletion === PR_COMPLETIONS.REVIEW_THEN_MERGE);
-  if (hasSlashdo && worktreeInfo && willOpenPR) {
+  if (canTypeSlashCommands && mode === COMPLETION_MODES.WORKTREE_NO_PUSH) {
     const lines = ['## Completion', ...(noChangeSuccess ? ['', NO_CHANGE_AUDIT_GUIDANCE, ''] : []), 'When finished, run these in order:'];
     let step = 1;
     if (simplifyEnabled) {
@@ -988,7 +1059,7 @@ export function buildCliCompletionSection({ worktreeInfo, willOpenPR, prCompleti
     }
     return lines.join('\n');
   }
-  if (hasSlashdo && worktreeInfo) {
+  if (canTypeSlashCommands && mode === COMPLETION_MODES.PORTOS_MERGES) {
     const lines = ['## Completion', ...(noChangeSuccess ? ['', NO_CHANGE_AUDIT_GUIDANCE, ''] : []), 'When finished, run these in order:'];
     let step = 1;
     if (simplifyEnabled) {
@@ -1004,9 +1075,9 @@ export function buildCliCompletionSection({ worktreeInfo, willOpenPR, prCompleti
   // it can't type `/do:pr`, but it can run `git push` / `gh pr create` and drive
   // the reviewer CLIs — so it owns the same end-to-end lifecycle the TUI manual
   // path does, with the reviewer procedure inlined in the section that follows.
-  // `ownsPrWorkflow` already folds in `willOpenPR`, the worktree, and the
+  // `rendersInlinePrLifecycle` already folds in `willOpenPR`, the worktree, and the
   // leave-open exclusions (it is `inlinePrLifecycleSection() !== null`).
-  if (ownsPrWorkflow) {
+  if (rendersInlinePrLifecycle) {
     const lines = ['## Completion', ...(noChangeSuccess ? ['', NO_CHANGE_AUDIT_GUIDANCE, ''] : []), '**You own this PR end to end — nothing else will open, review, or merge it.** When finished, run these in order:'];
     let step = 1;
     lines.push(simplifyEnabled

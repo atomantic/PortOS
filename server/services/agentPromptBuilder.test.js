@@ -1353,8 +1353,8 @@ describe('buildLightContextPrompt', () => {
     // allowlists got wrong are now asserted.
     it('a codex TUI gets the plain git/gh completion workflow, never /do:pr', () => {
       // codex installs slashdo as Agent Skills, not slash commands, so telling it
-      // to run `/do:pr` handed it an uninvokable line. The old `tuiSlashdoFree`
-      // gate only recognized OpenCode + lean mode, so codex fell through to the
+      // to run `/do:pr` handed it an uninvokable line. The old is-TUI-slashdo-free
+      // check only recognized OpenCode + lean mode, so codex fell through to the
       // slashdo path.
       const prompt = buildLightContextPrompt(
         makeTask({ metadata: { openPR: true, reviewLoop: true, reviewers: ['copilot'] } }),
@@ -1526,7 +1526,7 @@ describe('buildLightContextPrompt', () => {
     });
 
     it('a path-configured claude binary under a custom provider id gets the slashdo workflow', () => {
-      // The old `hasSlashdo` gate was an id allowlist (`claude-code` /
+      // The old slashdo-capability gate was an id allowlist (`claude-code` /
       // `claude-code-bedrock`), so a renamed or path-configured claude provider
       // was denied `/simplify` + `/do:pr` even though it launches claude.
       const prompt = buildLightContextPrompt(
@@ -2362,7 +2362,7 @@ describe('buildLightContextPrompt', () => {
       expect(prompt).not.toMatch(/## Resuming Unfinished Work/);
     });
 
-    it('worktreeCommitGuidance: hasSlashdo + !willOpenPR says commit only — PortOS merges the branch back', () => {
+    it('worktreeCommitGuidance: canTypeSlashCommands + !willOpenPR says commit only — PortOS merges the branch back', () => {
       // Claude Code CLI with a worktree but no PR is the auto-merge posture: the
       // worktree guidance must not point the agent at a push nothing consumes.
       const prompt = buildLightContextPrompt(
@@ -2710,7 +2710,7 @@ describe('buildCompletionGuidelineBullet', () => {
   it('read-only short-circuits regardless of other flags', () => {
     const bullet = buildCompletionGuidelineBullet({
       mode: resolveCompletionMode({ isReadOnly: true, isTui: true, worktreeInfo: null, willOpenPR: true }),
-      slashdoFree: true, tuiCompletionCommand: '/do:pr', worktreeInfo: null, willOpenPR: true,
+      tuiCompletionCommand: '/do:pr', worktreeInfo: null, willOpenPR: true,
     });
     expect(bullet).toMatch(/read-only task/i);
   });
@@ -2718,7 +2718,7 @@ describe('buildCompletionGuidelineBullet', () => {
   it('slashdo TUI bullet references the slashdo command', () => {
     const bullet = buildCompletionGuidelineBullet({
       mode: resolveCompletionMode({ isTui: true, worktreeInfo: { worktreePath: '/wt' }, willOpenPR: true }),
-      slashdoFree: false, tuiCompletionCommand: '/do:pr', worktreeInfo: { worktreePath: '/wt' }, willOpenPR: true,
+      tuiCompletionCommand: '/do:pr', worktreeInfo: { worktreePath: '/wt' }, willOpenPR: true,
     });
     expect(bullet).toMatch(/`\/do:pr`/);
     expect(bullet).not.toMatch(/plain `git`\/`gh`/);
@@ -2728,7 +2728,7 @@ describe('buildCompletionGuidelineBullet', () => {
   it('slashdo-free TUI bullet points at the commit + PortOS handoff, not a /do:* command', () => {
     const bullet = buildCompletionGuidelineBullet({
       mode: resolveCompletionMode({ isTui: true, canRunSlashCommands: false, worktreeInfo: { worktreePath: '/wt' }, willOpenPR: true }),
-      slashdoFree: true, tuiCompletionCommand: '/do:pr', worktreeInfo: { worktreePath: '/wt' }, willOpenPR: true,
+      tuiCompletionCommand: '/do:pr', worktreeInfo: { worktreePath: '/wt' }, willOpenPR: true,
     });
     expect(bullet).toMatch(/plain `git` commit \+ PortOS handoff/);
     expect(bullet).toMatch(/no slashdo commands/);
@@ -3027,6 +3027,31 @@ describe('discardWorktree (reasoning-only) completion contract', () => {
       vi.mocked(getMemorySection).mockResolvedValue(null);
       vi.mocked(getDigitalTwinForPrompt).mockResolvedValue(null);
       vi.mocked(getToolsSummaryForPrompt).mockResolvedValue('');
+    });
+
+    it('keeps API briefing instructions when optional context retrieval fails, preserving budget fallbacks', async () => {
+      vi.mocked(getMemorySection).mockRejectedValueOnce(new Error('memory unavailable'));
+      vi.mocked(getDigitalTwinForPrompt).mockRejectedValueOnce(new Error('twin unavailable'));
+      const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+      try {
+        await buildAgentPrompt(makeTask(), {
+          memory: { maxContextTokens: 0 },
+          digitalTwin: { maxContextTokens: 0 },
+          soul: { maxContextTokens: 1200 },
+        }, '/r', null, isTruthyMeta, { providerType: 'api' });
+        const [, context] = vi.mocked(buildPrompt).mock.calls.at(-1);
+        expect(context.memorySection).toBeNull();
+        expect(context.digitalTwinSection).toBeNull();
+        expect(context.agentInstructionsSection).toContain('Example Global Instructions');
+        expect(context.claudeMdSection).toBe(context.agentInstructionsSection);
+        expect(context.soulSection).toBeNull();
+        expect(getMemorySection).toHaveBeenLastCalledWith(expect.anything(), { maxTokens: 2000 });
+        expect(getDigitalTwinForPrompt).toHaveBeenLastCalledWith({ maxTokens: 1200, personaId: 'active' });
+        expect(log).toHaveBeenCalledWith('⚠️ Memory retrieval failed: memory unavailable');
+        expect(log).toHaveBeenCalledWith('⚠️ Digital twin context retrieval failed: twin unavailable');
+      } finally {
+        log.mockRestore();
+      }
     });
 
     it('a non-CD api task still loads memory, digital-twin, and onboard-tools sections', async () => {
@@ -3592,6 +3617,33 @@ describe('buildAgentPrompt — slashdo prompt-size controls', () => {
     expect(prompt).toContain('/install/data/cos/slashdo-resolved/local-agent-review-loop.md');
     expect(stagedBody).toContain('Keep verified changes local');
     expect(stagedBody).not.toMatch(/^\s*(?:git pull --rebase --autostash && )?git push\b/m);
+  });
+
+  it('keeps the sanitized reviewer recipe inline when staging fails', async () => {
+    vi.mocked(loadSlashdoLib).mockResolvedValue([
+      'RECIPE FALLBACK HEADER',
+      '5. **Push verified changes**:',
+      '   git push origin {BRANCH_NAME}',
+      '6. **Re-loop or stop**:',
+      '   continue',
+      'x'.repeat(SLASHDO_INLINE_BUDGET_CHARS + 500),
+    ].join('\n'));
+    vi.mocked(writeResolvedSlashdoBody).mockRejectedValue(new Error('EACCES'));
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    const prompt = await buildAgentPrompt(
+      makeTask({ metadata: { openPR: true, reviewLoop: true, reviewers: ['codex'] } }),
+      {}, '/r',
+      { branchName: 'claim/issue-1', worktreePath: '/tmp/wt', baseBranch: 'main' },
+      isTruthyMeta,
+      { providerType: 'tui', providerId: 'opencode-tui', providerCommand: 'opencode' });
+
+    expect(prompt).toContain('RECIPE FALLBACK HEADER');
+    expect(prompt).toContain('Keep verified changes local');
+    expect(prompt).not.toContain('git push origin {BRANCH_NAME}');
+    expect(prompt).not.toContain('/install/data/cos/slashdo-resolved/');
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('inlining instead: EACCES'));
+    warn.mockRestore();
   });
 
   // A pinned reviewer list carries the effort as slashdo's own `~effort=<level>`

@@ -8,12 +8,12 @@ import * as cos from './cos.js';
 const LIVE_STATUSES = new Set(['queued', 'running']);
 
 export async function getActiveProcessing() {
-  const [capability, jobs, models, loadedModels, taskData, agents] = await Promise.all([
+  const [capability, jobs, models, loadedModels, pendingTaskIds, agents] = await Promise.all([
     getCudaCapability(),
     Promise.resolve(listJobs()).then((items) => items.filter((job) => LIVE_STATUSES.has(job.status))),
     listGeneratingModelSummaries().catch(() => []),
     getLoadedModels().catch(() => []),
-    cos.getAllTasks().catch(() => ({ user: {}, cos: {} })),
+    cos.getPendingTaskIds().catch(() => []),
     // `null` = the read FAILED, distinct from `[]` = read fine, no agents. The
     // counts below degrade differently for the two, so they must stay separable.
     cos.getAgents().catch(() => null),
@@ -33,8 +33,7 @@ export async function getActiveProcessing() {
   // their tasks as queued, which would understate BOTH numbers at once.
   const runningAgents = agents === null ? null : agents.filter((agent) => agent.status === 'running');
   const claimedTaskIds = new Set((runningAgents || []).map((agent) => agent.taskId).filter(Boolean));
-  const pendingTasks = [...(taskData.user?.tasks || []), ...(taskData.cos?.tasks || [])]
-    .filter((task) => task.status === 'pending' && !claimedTaskIds.has(task.id)).length;
+  const pendingTasks = pendingTaskIds.filter((id) => !claimedTaskIds.has(id)).length;
   const gpuBusy = Boolean(getRunningJob());
   return {
     updatedAt: new Date().toISOString(),

@@ -23,7 +23,7 @@ import { mergeUniversesFromSync, listUniverses } from './universeBuilder.js';
 import { getUniverseMutationEpoch } from './universeBuilder/store.js';
 import { getPipelineMutationEpoch } from './pipeline/syncEpoch.js';
 import { mergeSeriesFromSync, listSeries } from './pipeline/series.js';
-import { mergeIssuesFromSync, listIssues } from './pipeline/issues.js';
+import { mergeIssuesFromSync, listAllIssues } from './pipeline/issues.js';
 import { mergeMediaCollectionsFromSync, listCollections, itemKey } from './mediaCollections.js';
 import { listSyncableSessionsForWire, mergeStorySessionsFromSync } from './storyBuilder.js';
 import { getStoryBuilderMutationEpoch } from './storyBuilderStore/store.js';
@@ -403,7 +403,7 @@ async function applyUniverseRemote(remoteData, source, meta = {}) {
 async function getPipelineSnapshot({ exclude } = {}) {
   const [series, issues] = await Promise.all([
     listSeries({ includeDeleted: true }),
-    listIssues({ includeDeleted: true }),
+    listAllIssues({ includeDeleted: true }),
   ]);
   // The pipeline category bundles series + their child issues — a `series`
   // subscription covers the whole sub-tree via the per-record push (which

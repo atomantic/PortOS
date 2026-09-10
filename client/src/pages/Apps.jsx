@@ -1,3 +1,4 @@
+import AppQuality from '../components/apps/AppQuality';
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { Link } from 'react-router';
 import { ExternalLink, Gamepad2, Play, Square, RotateCcw, FolderOpen, Terminal, Code, RefreshCw, Wrench, Archive, ArchiveRestore, Ticket, Download, Hammer, Smartphone, Trash2, AlertTriangle } from 'lucide-react';
@@ -48,7 +49,7 @@ export default function Apps() {
   const ticketRequestsRef = useRef({});
 
   const fetchApps = useCallback(async () => {
-    const data = await api.getApps().catch(() => []);
+    const data = await api.getApps({ includeQuality: true }).catch(() => []);
     setApps(data);
     setLoading(false);
   }, []);
@@ -348,6 +349,7 @@ export default function Apps() {
                           <StatusBadge status={app.overallStatus} size="sm" />
                         )}
                       </div>
+                      <AppQuality app={app} />
                       <div className="text-xs text-gray-500 flex flex-wrap gap-x-2 mt-1">
                         {isNonPm2 ? (
                           <span className="text-gray-500">{app.repoPath}</span>

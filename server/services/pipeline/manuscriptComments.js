@@ -30,6 +30,7 @@ import { createKeyedFileWriteQueue } from '../../lib/fileWriteQueue.js';
 import { seriesStore, listSeries } from './series.js';
 import { REPLACEMENT_STRATEGIES, replacementStrategyForCategory } from './arcPlanner.js';
 import { emitRecordUpdated } from '../sharing/recordEvents.js';
+import { trimTo } from '../../lib/textUtils.js';
 
 // Storage-layout version for the review document. Bump + migrate if the
 // comment shape changes in a way older peers can't read.
@@ -57,8 +58,6 @@ export const queueReviewWrite = createKeyedFileWriteQueue();
 
 const emptyReview = () => ({ schemaVersion: SCHEMA_VERSION, comments: [] });
 
-const clampStr = (v, max) => (typeof v === 'string' ? v.trim().slice(0, max) : '');
-
 function sanitizeFix(raw) {
   if (!raw || typeof raw !== 'object') return null;
   const find = typeof raw.find === 'string' ? raw.find : '';
@@ -74,10 +73,10 @@ function sanitizeFix(raw) {
           issueNumber: Number.isInteger(e.issueNumber) ? e.issueNumber : null,
           issueId: typeof e.issueId === 'string' ? e.issueId : null,
           stageId: typeof e.stageId === 'string' ? e.stageId : null,
-          title: clampStr(e.title, 200),
+          title: trimTo(e.title, 200),
           find: editFind,
           replace: editReplace,
-          note: clampStr(e.note, 1000),
+          note: trimTo(e.note, 1000),
         };
         if (e.fuzzy === true) out.fuzzy = true;
         return out;
@@ -125,9 +124,9 @@ function sanitizeAcceptedSnapshot(raw) {
 // or older-peer file round-trips without dropping fields.
 export function sanitizeComment(raw) {
   if (!raw || typeof raw !== 'object') return null;
-  const problem = clampStr(raw.problem, 2000);
+  const problem = trimTo(raw.problem, 2000);
   if (!problem) return null;
-  const category = clampStr(raw.category, 40) || 'other';
+  const category = trimTo(raw.category, 40) || 'other';
   const severity = ['high', 'medium', 'low'].includes(raw.severity) ? raw.severity : 'medium';
   const status = STATUS_SET.has(raw.status) ? raw.status : 'open';
   return {
@@ -152,10 +151,10 @@ export function sanitizeComment(raw) {
     // value never reaches here; the clamp is a belt-and-suspenders bound for
     // hand-edited / older-peer files. Optional + additive → the synced review doc
     // stays backward-compatible (no schema bump needed).
-    subtype: clampStr(raw.subtype, 40) || null,
-    location: clampStr(raw.location, 200),
+    subtype: trimTo(raw.subtype, 40) || null,
+    location: trimTo(raw.location, 200),
     problem,
-    suggestion: clampStr(raw.suggestion, 8000),
+    suggestion: trimTo(raw.suggestion, 8000),
     // How `suggestion` should be read: 'full-page' = it's a complete replacement
     // document (comic-structure panel rewrite); 'delta' = it's advice. Trust a
     // valid stored value, else derive from category so legacy comments (written
@@ -163,7 +162,7 @@ export function sanitizeComment(raw) {
     replacementStrategy: REPLACEMENT_STRATEGIES.has(raw.replacementStrategy)
       ? raw.replacementStrategy
       : replacementStrategyForCategory(category),
-    anchorQuote: clampStr(raw.anchorQuote, 400),
+    anchorQuote: trimTo(raw.anchorQuote, 400),
     // Which editorial check produced this finding (#1284). `null` for findings
     // from the manuscript-completeness pass (and older peers / legacy records)
     // — those predate the registry, so they group as a single un-checked set.

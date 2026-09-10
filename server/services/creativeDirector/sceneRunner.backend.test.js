@@ -14,12 +14,14 @@
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 
+const reviewState = vi.hoisted(() => ({ allowsDispatch: false }));
+
 vi.mock('../mediaJobQueue/index.js', () => ({
   enqueueJob: vi.fn(() => ({ jobId: 'job-1' })),
   getJob: vi.fn(() => null),
   mediaJobEvents: { on: vi.fn(), off: vi.fn() },
 }));
-vi.mock('../instances.js', () => ({ getInstanceId: vi.fn(async () => 'example-owner') }));
+vi.mock('../instanceIdentity.js', () => ({ getInstanceId: vi.fn(async () => 'example-owner') }));
 vi.mock('./videoSources.js', () => ({ assertVideoSourcesAvailable: vi.fn() }));
 vi.mock('../settings.js', () => ({
   getSettings: vi.fn(),
@@ -38,6 +40,7 @@ vi.mock('./local.js', () => ({
   getProject: vi.fn(async () => null),
 }));
 vi.mock('./sceneEvaluator.js', () => ({ dispatchSceneEvaluation: vi.fn(async () => {}) }));
+vi.mock('./videoReview.js', () => ({ videoReviewAllowsDispatch: vi.fn(async () => reviewState.allowsDispatch) }));
 vi.mock('../videoGen/local.js', () => ({
   extractLastFrame: vi.fn(async () => null),
   sampleEvaluationFrames: vi.fn(async () => []),
@@ -77,6 +80,7 @@ const enqueuedParams = () => enqueueJob.mock.calls[0][0].params;
 
 beforeEach(() => {
   vi.clearAllMocks();
+  reviewState.allowsDispatch = false;
   getProject.mockResolvedValue(null);
   resolveGalleryImage.mockReturnValue(null);
 });
@@ -241,10 +245,49 @@ describe('runSceneRender — Reactor and fal pins', () => {
     }));
     expect(updateScene.mock.calls.filter(([, , patch]) => patch.status === 'rendering')).toHaveLength(1);
   });
+
+  it('uses the Video audio contract instead of the legacy disableAudio flag', async () => {
+    reviewState.allowsDispatch = true;
+    const shot = scene({ status: 'pending', workRevision: 0 });
+    const video = project({ workspace: 'video', status: 'rendering', videoOwnerInstanceId: 'example-owner', disableAudio: true,
+      videoDraft: { sources: [], audio: { mode: 'native' } },
+      videoExecution: { id: 'example-execution', authorized: true,
+        limits: { maxClips: 3, maxRetries: 1, maxAgentCalls: 10, maxReplans: 1, spendCapUsd: null },
+        choices: { video: { mode: 'reactor' }, audio: { mode: 'native' }, evaluation: { type: 'agent' } },
+        attempts: [] },
+      treatment: { artifact: { revision: 1 }, script: 'Example script', scenes: [shot] } });
+    video.videoExecution.inputRevision = videoConfigurationRevision(video);
+    getProject.mockResolvedValue(video);
+    getSettings.mockResolvedValue({ videoGen: { reactor: { apiKey: 'example-test-key' } } });
+
+    expect(await runSceneRender(video, shot)).toBe('job-1');
+    expect(enqueuedParams()).not.toHaveProperty('disableAudio');
+  });
 });
 
 
 describe('Video production review boundary', () => {
+  it.each(['Automatic Reactor runtime preparation failed', 'Reactor connecting failed (BadRequestError)', 'Reactor session connection failed (BadRequestError; HTTP 400)'])('preserves native audio and pauses without retrying shared failure: %s', async error => {
+    reviewState.allowsDispatch = true;
+    const shot = scene({ workRevision: 0, status: 'pending' });
+    const video = project({ workspace: 'video', status: 'rendering', videoOwnerInstanceId: 'example-owner', disableAudio: true,
+      renderBackend: { video: { mode: 'reactor' } },
+      videoExecution: { id: 'example-execution', authorized: true, limits: { maxClips: 3, maxRetries: 1, maxAgentCalls: 10, maxReplans: 1, spendCapUsd: null }, choices: { video: { mode: 'reactor' }, audio: { mode: 'native' }, evaluation: { type: 'agent' } } },
+      videoDraft: { sources: [], audio: { mode: 'native' } },
+      treatment: { artifact: { revision: 1 }, script: 'Example script', scenes: [shot] } });
+    video.videoExecution.inputRevision = videoConfigurationRevision(video);
+    const checkpoint = videoReviewStages(video)[0];
+    video.videoReview = { decisions: { [checkpoint.stage]: { action: 'approve', revision: checkpoint.revision } } };
+    getProject.mockResolvedValue(video);
+    getSettings.mockResolvedValue({ videoGen: { reactor: { apiKey: 'example-test-key' } } });
+    expect(await runSceneRender(video, shot)).toBe('job-1');
+    expect(enqueuedParams()).toMatchObject({ mode: 'reactor', seconds: 8 });
+    expect(enqueuedParams().disableAudio).not.toBe(true);
+    mediaJobEvents.on.mock.calls.find(([event]) => event === 'failed')[1]({ id: 'job-1', error });
+    await vi.waitFor(async () => expect((await getProject()).status).toBe('paused'));
+    expect(enqueueJob).toHaveBeenCalledTimes(1);
+  });
+
   it('does not enqueue before approval and ignores a superseded render completion', async () => {
     const shot = scene({ workRevision: 0, status: 'pending' });
     const video = project({ workspace: 'video', status: 'rendering', videoOwnerInstanceId: 'example-owner',
@@ -257,6 +300,7 @@ describe('Video production review boundary', () => {
     expect(enqueueJob).not.toHaveBeenCalled();
     const checkpoint = videoReviewStages(video)[0];
     video.videoReview = { decisions: { [checkpoint.stage]: { action: 'approve', revision: checkpoint.revision } } };
+    reviewState.allowsDispatch = true;
     getProject.mockResolvedValue(video);
     expect(await runSceneRender(video, shot)).toBe('job-1');
     const completed = mediaJobEvents.on.mock.calls.find(([event]) => event === 'completed')[1];

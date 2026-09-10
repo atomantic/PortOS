@@ -1129,11 +1129,13 @@ export default function ChiefOfStaff() {
         </div>
       )}
 
-      {/* Content Panel */}
-      <div className="flex-1 min-h-0 min-w-0 overflow-y-auto overflow-x-hidden p-3 lg:p-4">
+      {/* Content Panel. Flex column so the Mind tab can fill leftover height
+          on desktop (its chat pane owns the internal scroll); other tabs still
+          grow this region and scroll here as before. */}
+      <div className="flex flex-1 min-h-0 min-w-0 flex-col overflow-y-auto overflow-x-hidden p-3 lg:p-4">
         {/* Stats Bar - hidden for SVG/canvas modes (now integrated into CoS sidebar);
             ascii/terminal mode keeps it because TerminalCoSPanel doesn't host the cards. */}
-        <div className={`grid grid-cols-3 gap-1.5 sm:grid-cols-5 sm:gap-2 lg:gap-3 mb-3 sm:mb-4 lg:mb-6 ${avatarStyle !== 'ascii' ? 'hidden' : ''}`}>
+        <div className={`grid shrink-0 grid-cols-3 gap-1.5 sm:grid-cols-5 sm:gap-2 lg:gap-3 mb-3 sm:mb-4 lg:mb-6 ${avatarStyle !== 'ascii' ? 'hidden' : ''}`}>
           <StatCard
             label="Active"
             value={activeAgentCount}
@@ -1168,7 +1170,7 @@ export default function ChiefOfStaff() {
         </div>
 
         {/* Tabs - scrollable with arrow navigation */}
-        <div className="relative mb-4 lg:mb-6">
+        <div className="relative mb-4 shrink-0 lg:mb-6">
           {/* Left scroll button */}
           {canScrollLeft && (
             <button
@@ -1213,7 +1215,7 @@ export default function ChiefOfStaff() {
         {activeTab === 'tasks' && (
           <div role="tabpanel" id="tabpanel-tasks" aria-labelledby="tab-tasks">
             <ActionableInsightsBanner insights={insights} onTaskUnblocked={handleTaskUnblocked} onRefresh={fetchData} />
-            <TasksTab tasks={tasks} agents={agents} onRefresh={fetchData} onTaskAdded={handleUserTaskAdded} onTaskUnblocked={handleTaskUnblocked} providers={providers} providersLoaded={providersLoaded} apps={apps} />
+            <TasksTab tasks={tasks} agents={agents} liveOutputs={liveOutputs} onRefresh={fetchData} onTaskAdded={handleUserTaskAdded} onTaskUnblocked={handleTaskUnblocked} providers={providers} providersLoaded={providersLoaded} apps={apps} />
           </div>
         )}
         {activeTab === 'agents' && (
@@ -1243,7 +1245,7 @@ export default function ChiefOfStaff() {
           </div>
         )}
         {activeTab === 'mind' && (
-          <div role="tabpanel" id="tabpanel-mind" aria-labelledby="tab-mind">
+          <div role="tabpanel" id="tabpanel-mind" aria-labelledby="tab-mind" className="flex min-h-0 flex-col xl:flex-1">
             <Suspense fallback={<TabLoadFallback label="mind" />}>
               <MindTab />
             </Suspense>

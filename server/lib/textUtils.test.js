@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { clampToCharLimit, countWords, escapeRegExp, trimTo, trimToClause } from './textUtils.js';
+import { clampToCharLimit, countWords, escapeRegExp, isNonBlankStr, isStr, trimTo, trimToClause } from './textUtils.js';
 import { collectClientSources, collectServerSources, readClientSource, readServerSource } from './testHelper.js';
 
 describe('countWords', () => {
@@ -34,6 +34,26 @@ describe('trimTo', () => {
     expect(trimTo(' short ', 20)).toBe('short');
     expect(trimTo(null, 20)).toBe('');
     expect(trimTo(42, 20)).toBe('');
+  });
+});
+
+describe('isStr / isNonBlankStr', () => {
+  it('isStr is the bare type check — an empty string is a string', () => {
+    expect(isStr('')).toBe(true);
+    expect(isStr('   ')).toBe(true);
+    expect(isStr(new String('boxed'))).toBe(false);
+    expect(isStr(null)).toBe(false);
+    expect(isStr(42)).toBe(false);
+  });
+
+  it('isNonBlankStr rejects blank and non-string values without trimming what it accepts', () => {
+    expect(isNonBlankStr('x')).toBe(true);
+    expect(isNonBlankStr('  padded  ')).toBe(true);
+    expect(isNonBlankStr('')).toBe(false);
+    expect(isNonBlankStr('   ')).toBe(false);
+    expect(isNonBlankStr('\n\t')).toBe(false);
+    expect(isNonBlankStr(null)).toBe(false);
+    expect(isNonBlankStr(0)).toBe(false);
   });
 });
 
@@ -237,6 +257,95 @@ describe('no private countWords', () => {
     expect(wordCountIdiomCount('for (const m of text.matchAll(/\\S+/g)) {}')).toBe(0);
     expect(wordCountIdiomCount('const isCron = value.trim().split(/\\s+/).length === 5;')).toBe(0);
     expect(wordCountIdiomCount('const wordCount = useMemo(() => countWords(body), [body]);')).toBe(0);
+  });
+});
+
+// String predicates and `trimTo`-shaped bounders had the same history as the
+// RegExp escape above. The only exported predicate lived in `storyBible.js`
+// behind `crypto` / `fileUtils`, so 73 sanitizers grew a private copy: 17
+// spelling the bare type check, 28 a non-empty / non-blank variant — under
+// `isStr`, `hasText`, `isText`, `isUsable`, `isNonEmptyStr`, …, with half of
+// FableLoom's `isStr` accepting `''` and the other half rejecting it — and 26
+// re-rolling `trimTo` as `clampStr` / `trimString` / `str` / `text` / `trim`.
+// #6837 moved every one onto `isStr` / `isNonBlankStr` / `trimTo` here; this
+// guard is what keeps them here.
+//
+// It keys on the declared BODY, never the identifier, and every idiom is
+// anchored on the statement's terminating `;` (or a function's closing brace).
+// That anchoring is what leaves a DOMAIN predicate alone: one whose first line
+// merely ends in `typeof x === 'string'` and continues with `&& RE.test(x)`,
+// or one that adds any clause at all, never matches — only the pure generic
+// bodies do. A one-line alias (`const hasText = isNonBlankStr;`) has no
+// `typeof` and passes; a normalizer without `.slice(` is not a bounder.
+const GENERIC_STRING_TAIL = String.raw`(?:\s*&&\s*(?:!!\2|\2(?:\.trim\(\))?\.length\s*>\s*0|\2\.trim\(\)\s*!==\s*''))?`;
+const STRING_HELPER_IDIOMS = [
+  // const isX = (v) => typeof v === 'string'[ && <generic non-empty / non-blank tail>];
+  new RegExp(String.raw`^[ \t]*(?:export\s+)?(?:const|let|var)\s+(\w+)\s*=\s*\(?\s*(\w+)\s*\)?\s*=>\s*typeof\s+\2\s*===\s*'string'${GENERIC_STRING_TAIL}\s*;[ \t]*$`, 'gm'),
+  // function isX(v) { return typeof v === 'string'[ && <tail>]; }
+  new RegExp(String.raw`^[ \t]*(?:export\s+)?function\s+(\w+)\s*\(\s*(\w+)\s*\)\s*\{\s*return\s+typeof\s+\2\s*===\s*'string'${GENERIC_STRING_TAIL}\s*;?\s*\}`, 'gm'),
+  // const trimX = (v, max[ = DEFAULT]) => [(]typeof v === 'string' ? v.trim().slice(0, max) : ''[)];   (isStr(v) ? … as well)
+  new RegExp(String.raw`^[ \t]*(?:export\s+)?(?:const|let|var)\s+(\w+)\s*=\s*\(\s*(\w+)\s*,\s*(\w+)(?:\s*=\s*[^,)]+)?\s*\)\s*=>\s*\(?\s*(?:typeof\s+\2\s*===\s*'string'|isStr\(\s*\2\s*\))\s*\?\s*\2\.trim\(\)\.slice\(\s*0\s*,\s*\3\s*\)\s*:\s*''\s*\)?\s*;[ \t]*$`, 'gm'),
+];
+
+// Total declarations across all three idioms (a file carrying a predicate AND a
+// bounder counts both) — unlike `idiomCount` above, which takes the max of
+// alternative spellings of ONE idiom and drops the `m` flag these rely on.
+const stringHelperDeclarationCount = (source) => STRING_HELPER_IDIOMS
+  .reduce((sum, idiom) => sum + (source.match(new RegExp(idiom.source, idiom.flags))?.length ?? 0), 0);
+
+describe('no private string predicate or bounder', () => {
+  it('leaves lib/textUtils.js as the only string predicate or bounder under server/', () => {
+    const offenders = collectServerSources()
+      .filter((rel) => rel !== 'lib/textUtils.js')
+      .filter((rel) => stringHelperDeclarationCount(readServerSource(rel)) > 0);
+    expect(
+      offenders,
+      `these re-declare a string predicate or a trimTo-shaped bounder — import isStr / isNonBlankStr / trimTo from lib/textUtils.js instead: ${offenders.join(', ')}`
+    ).toEqual([]);
+  });
+
+  // The client mirror re-exports the predicates, so nothing over there needs one.
+  it('leaves no string predicate or bounder anywhere under client/src/', () => {
+    const offenders = collectClientSources()
+      .filter((rel) => stringHelperDeclarationCount(readClientSource(rel)) > 0);
+    expect(
+      offenders,
+      `these re-declare a string predicate or a trimTo-shaped bounder — import isStr / isNonBlankStr / trimTo from lib/textUtils instead: ${offenders.join(', ')}`
+    ).toEqual([]);
+  });
+
+  it('detects a re-rolled copy under any of its spellings, and not a domain predicate', () => {
+    // Positive control on the owner: isStr, isNonBlankStr, and the two-line trimTo.
+    expect(stringHelperDeclarationCount(readServerSource('lib/textUtils.js'))).toBe(3);
+    expect(collectClientSources().length).toBeGreaterThan(100);
+
+    const fires = [
+      "const isStr = (v) => typeof v === 'string';",
+      "export const isString = value => typeof value === 'string';",
+      "const isNonEmptyString = (value) => typeof value === 'string' && !!value;",
+      "const isNonEmptyStr = (v) => typeof v === 'string' && v.length > 0;",
+      "  const hasText = (value) => typeof value === 'string' && value.trim().length > 0;",
+      "const filled = (v) => typeof v === 'string' && v.trim() !== '';",
+      "export function isNonEmptyString(value) {\n  return typeof value === 'string' && value.trim().length > 0;\n}",
+      "const clampStr = (v, max) => (typeof v === 'string' ? v.trim().slice(0, max) : '');",
+      "const trimString = (value, max = MAX_PROMPT_LEN) =>\n  typeof value === 'string' ? value.trim().slice(0, max) : '';",
+      "const asBoundedString = (value, max) => (\n  typeof value === 'string' ? value.trim().slice(0, max) : ''\n);",
+      "const trimTo = (v, max) => (isStr(v) ? v.trim().slice(0, max) : '');",
+    ];
+    for (const copy of fires) expect(stringHelperDeclarationCount(copy), copy).toBe(1);
+
+    const passes = [
+      "const isHexHash = (v) => typeof v === 'string' && HEX_64.test(v);",
+      "const isInstanceId = (id) => typeof id === 'string' && id.length > 0 && id.length <= MAX_ID_LEN;",
+      "const validLibraryPath = (path) => typeof path === 'string'\n  && path.startsWith('/') && !path.includes('..');",
+      "const hasPrompt = (prompt) => typeof prompt === 'string' && prompt.trim() !== '' && prompt !== '(no prompt)';",
+      "const normalizeText = (text) => typeof text === 'string' ? text.trim() : '';",
+      "const normalizeTitle = (title) => typeof title === 'string' ? title.trim().slice(0, MAX_TITLE_LENGTH) : '';",
+      "const text = (value, max = 6000) => typeof value === 'string'\n  ? value.length > max ? `${value.slice(0, max)}\\n[truncated]` : value : '';",
+      'const hasText = isNonBlankStr;',
+      "const label = typeof name === 'string' ? name.trim().slice(0, 80) : '';",
+    ];
+    for (const source of passes) expect(stringHelperDeclarationCount(source), source).toBe(0);
   });
 });
 

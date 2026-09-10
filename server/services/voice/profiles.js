@@ -14,6 +14,7 @@ import { query } from '../../lib/db.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { PATHS } from '../../lib/paths.js';
 import { writeFileGuarded } from '../../lib/fileUtils.js';
+import { trimTo } from '../../lib/textUtils.js';
 
 export const VOICE_PROFILE_ENGINES = new Set(['kokoro', 'piper', 'qwen3-tts']);
 export const VOICE_PROFILE_KINDS = new Set(['preset', 'designed', 'cloned', 'fine-tuned']);
@@ -29,13 +30,12 @@ const DEFAULT_DELIVERY = Object.freeze({ rate: 1, pitchSemitones: null, formantS
 const DEFAULT_MASTERING = Object.freeze({ chain: ['preset-output:unprocessed'] });
 const SAFE_ASSET_BASENAME = /^[a-z0-9][a-z0-9._-]{0,159}$/i;
 
-const trim = (value, max) => typeof value === 'string' ? value.trim().slice(0, max) : '';
 const timestamp = () => new Date().toISOString();
 const positiveInteger = (value, fallback = 1) =>
   Number.isInteger(value) && value > 0 ? value : fallback;
 
 export function parsePresetVoiceId(voiceId) {
-  const value = trim(voiceId, MAX_ID);
+  const value = trimTo(voiceId, MAX_ID);
   const match = /^([a-z][a-z0-9-]*):([^:\s]+)$/i.exec(value);
   if (!match) return null;
   const engine = match[1].toLowerCase();
@@ -64,31 +64,31 @@ const sanitizeDelivery = (raw) => ({
 
 const sanitizeMastering = (raw) => ({
   chain: Array.isArray(raw?.chain)
-    ? raw.chain.map((step) => trim(step, 80)).filter(Boolean).slice(0, 12)
+    ? raw.chain.map((step) => trimTo(step, 80)).filter(Boolean).slice(0, 12)
     : [...DEFAULT_MASTERING.chain],
 });
 
 const sanitizeInference = (raw) => ({
   seed: Number.isInteger(raw?.seed) ? raw.seed : 42,
-  instructions: trim(raw?.instructions, 2000) || null,
+  instructions: trimTo(raw?.instructions, 2000) || null,
   rate: boundedNumber(raw?.rate, 0.25, 4, 1.0),
-  checkpointPath: trim(raw?.checkpointPath, 500) || null,
-  modelId: trim(raw?.modelId, 160) || null,
+  checkpointPath: trimTo(raw?.checkpointPath, 500) || null,
+  modelId: trimTo(raw?.modelId, 160) || null,
 });
 
 const sanitizeBenchmark = (raw) => {
   if (!raw || typeof raw !== 'object') return null;
-  const renderedAt = trim(raw.renderedAt, 64);
+  const renderedAt = trimTo(raw.renderedAt, 64);
   const lines = Array.isArray(raw.lines) ? raw.lines.map((line) => {
-    const filename = trim(line?.filename, 200);
+    const filename = trimTo(line?.filename, 200);
     if (!filename) return null;
     return {
-      key: trim(line.key, 64),
-      text: trim(line.text, 1000),
+      key: trimTo(line.key, 64),
+      text: trimTo(line.text, 1000),
       filename,
       latencyMs: Number.isFinite(line.latencyMs) ? Math.max(0, Math.round(line.latencyMs)) : null,
       engine: VOICE_PROFILE_ENGINES.has(line.engine) ? line.engine : null,
-      modelRevision: trim(line.modelRevision, MAX_REVISION) || null,
+      modelRevision: trimTo(line.modelRevision, MAX_REVISION) || null,
       effectiveControls: {
         rate: Number.isFinite(line?.effectiveControls?.rate) ? line.effectiveControls.rate : null,
       },
@@ -107,15 +107,15 @@ const sanitizeBenchmark = (raw) => {
 
 const sanitizeSourceAssets = (raw) => Array.isArray(raw)
   ? raw.map((asset) => {
-    const filename = trim(asset?.filename, 160);
+    const filename = trimTo(asset?.filename, 160);
     if (!SAFE_ASSET_BASENAME.test(filename)) return null;
     return {
       filename,
-      sha256: /^[a-f0-9]{64}$/i.test(trim(asset?.sha256, 64)) ? trim(asset.sha256, 64).toLowerCase() : null,
-      transcript: trim(asset?.transcript, 4000) || null,
-      rightsConfirmedAt: trim(asset?.rightsConfirmedAt, 64) || null,
+      sha256: /^[a-f0-9]{64}$/i.test(trimTo(asset?.sha256, 64)) ? trimTo(asset.sha256, 64).toLowerCase() : null,
+      transcript: trimTo(asset?.transcript, 4000) || null,
+      rightsConfirmedAt: trimTo(asset?.rightsConfirmedAt, 64) || null,
       performerConsentConfirmed: asset?.performerConsentConfirmed === true,
-      licensePosture: trim(asset?.licensePosture, 160) || null,
+      licensePosture: trimTo(asset?.licensePosture, 160) || null,
     };
   }).filter(Boolean).slice(0, 24)
   : [];
@@ -123,9 +123,9 @@ const sanitizeSourceAssets = (raw) => Array.isArray(raw)
 /** Turn a raw DB JSON payload into the durable public profile shape. */
 export function sanitizeVoiceProfile(raw) {
   if (!raw || typeof raw !== 'object') return null;
-  const id = trim(raw.id, 80);
-  const universeId = trim(raw?.binding?.universeId, MAX_ID);
-  const characterId = trim(raw?.binding?.characterId, MAX_ID);
+  const id = trimTo(raw.id, 80);
+  const universeId = trimTo(raw?.binding?.universeId, MAX_ID);
+  const characterId = trimTo(raw?.binding?.characterId, MAX_ID);
   const kind = VOICE_PROFILE_KINDS.has(raw.kind) ? raw.kind : 'preset';
   const engine = VOICE_PROFILE_ENGINES.has(raw.engine)
     ? raw.engine
@@ -136,19 +136,19 @@ export function sanitizeVoiceProfile(raw) {
   const approvalStatus = raw?.approval?.status === 'approved'
     ? 'approved'
     : raw?.approval?.status === 'retired' ? 'retired' : 'draft';
-  const createdAt = trim(raw.createdAt, 64) || timestamp();
-  const updatedAt = trim(raw.updatedAt, 64) || createdAt;
-  const voiceId = trim(raw.voiceId, MAX_ID) || `${engine}:${kind}`;
+  const createdAt = trimTo(raw.createdAt, 64) || timestamp();
+  const updatedAt = trimTo(raw.updatedAt, 64) || createdAt;
+  const voiceId = trimTo(raw.voiceId, MAX_ID) || `${engine}:${kind}`;
 
   return {
     id,
     version: positiveInteger(raw.version),
     binding: { universeId, characterId },
-    label: trim(raw.label, MAX_LABEL) || null,
+    label: trimTo(raw.label, MAX_LABEL) || null,
     kind,
     engine,
     voiceId,
-    modelRevision: trim(raw.modelRevision, MAX_REVISION) || (engine === 'qwen3-tts' ? 'Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign' : 'configured-preset'),
+    modelRevision: trimTo(raw.modelRevision, MAX_REVISION) || (engine === 'qwen3-tts' ? 'Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign' : 'configured-preset'),
     sourceAssets: sanitizeSourceAssets(raw.sourceAssets),
     inference: sanitizeInference(raw.inference),
     routes: sanitizeRoutes(raw.routes),
@@ -156,7 +156,7 @@ export function sanitizeVoiceProfile(raw) {
     mastering: sanitizeMastering(raw.mastering),
     approval: {
       status: approvalStatus,
-      approvedAt: approvalStatus === 'approved' ? trim(raw?.approval?.approvedAt, 64) || updatedAt : null,
+      approvedAt: approvalStatus === 'approved' ? trimTo(raw?.approval?.approvedAt, 64) || updatedAt : null,
       benchmarkRevision: positiveInteger(raw?.approval?.benchmarkRevision),
     },
     benchmark: sanitizeBenchmark(raw.benchmark),
@@ -198,7 +198,7 @@ const persist = async (profile) => {
 };
 
 export async function getVoiceProfile(id) {
-  const profileId = trim(id, 80);
+  const profileId = trimTo(id, 80);
   if (!PROFILE_ID_RE.test(profileId)) return null;
   const { rows } = await query('SELECT data FROM voice_profiles WHERE id = $1', [profileId]);
   return sanitizeVoiceProfile(rows[0]?.data);
@@ -215,8 +215,8 @@ export async function getVoiceProfileRequired(id) {
 export async function listVoiceProfiles({ universeId, characterId } = {}) {
   const clauses = [];
   const params = [];
-  const universe = trim(universeId, MAX_ID);
-  const character = trim(characterId, MAX_ID);
+  const universe = trimTo(universeId, MAX_ID);
+  const character = trimTo(characterId, MAX_ID);
   if (universe) { params.push(universe); clauses.push(`universe_id = $${params.length}`); }
   if (character) { params.push(character); clauses.push(`character_id = $${params.length}`); }
   const { rows } = await query(
@@ -272,8 +272,8 @@ export async function createVoiceDesignCandidate({
   delivery = DEFAULT_DELIVERY,
   rate = 1.0,
 } = {}) {
-  const universe = trim(universeId, MAX_ID);
-  const character = trim(characterId, MAX_ID);
+  const universe = trimTo(universeId, MAX_ID);
+  const character = trimTo(characterId, MAX_ID);
   if (!universe || !character) {
     throw new ServerError('universeId and characterId are required', { status: 400 });
   }
@@ -284,15 +284,15 @@ export async function createVoiceDesignCandidate({
     id: profileId,
     version: 1,
     binding: { universeId: universe, characterId: character },
-    label: trim(characterName, MAX_LABEL) || null,
+    label: trimTo(characterName, MAX_LABEL) || null,
     kind: 'designed',
     engine: 'qwen3-tts',
     voiceId: `qwen3:design-${profileId.slice(0, 8)}`,
-    modelRevision: trim(modelId, MAX_REVISION) || 'Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign',
+    modelRevision: trimTo(modelId, MAX_REVISION) || 'Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign',
     sourceAssets: [],
     inference: {
       seed: Number.isInteger(seed) ? seed : 42,
-      instructions: trim(instructions, 2000),
+      instructions: trimTo(instructions, 2000),
       rate: boundedNumber(rate, 0.25, 4, 1.0),
       modelId,
     },
@@ -328,9 +328,9 @@ export async function createClonedVoiceCandidate({
   modelId = 'Qwen/Qwen3-TTS-12Hz-1.7B-Base',
   rate = 1.0,
 } = {}) {
-  const universe = trim(universeId, MAX_ID);
-  const character = trim(characterId, MAX_ID);
-  const cleanFilename = trim(filename, 160);
+  const universe = trimTo(universeId, MAX_ID);
+  const character = trimTo(characterId, MAX_ID);
+  const cleanFilename = trimTo(filename, 160);
 
   if (!universe || !character) {
     throw new ServerError('universeId and characterId are required', { status: 400 });
@@ -362,21 +362,21 @@ export async function createClonedVoiceCandidate({
   const sourceAssets = [{
     filename: cleanFilename,
     sha256,
-    transcript: trim(transcript, 4000) || null,
+    transcript: trimTo(transcript, 4000) || null,
     rightsConfirmedAt: now,
     performerConsentConfirmed: true,
-    licensePosture: trim(licensePosture, 160) || 'consented-performance',
+    licensePosture: trimTo(licensePosture, 160) || 'consented-performance',
   }];
 
   const next = sanitizeVoiceProfile({
     id: profileId,
     version: 1,
     binding: { universeId: universe, characterId: character },
-    label: trim(characterName, MAX_LABEL) || null,
+    label: trimTo(characterName, MAX_LABEL) || null,
     kind: 'cloned',
     engine: 'qwen3-tts',
     voiceId: `qwen3:clone-${profileId.slice(0, 8)}`,
-    modelRevision: trim(modelId, MAX_REVISION) || 'Qwen/Qwen3-TTS-12Hz-1.7B-Base',
+    modelRevision: trimTo(modelId, MAX_REVISION) || 'Qwen/Qwen3-TTS-12Hz-1.7B-Base',
     sourceAssets,
     inference: {
       seed: 42,
@@ -424,7 +424,7 @@ export async function promoteFineTunedProfile({
     kind: 'fine-tuned',
     engine: 'qwen3-tts',
     voiceId: `qwen3:fine-tuned-step-${step}`,
-    modelRevision: trim(modelRevision, MAX_REVISION) || `qwen3-tts:checkpoint-${step}`,
+    modelRevision: trimTo(modelRevision, MAX_REVISION) || `qwen3-tts:checkpoint-${step}`,
     inference: {
       ...current?.inference,
       checkpointPath,
@@ -489,8 +489,8 @@ export async function promotePresetProfile({
   modelRevision = 'configured-preset',
   delivery = DEFAULT_DELIVERY,
 } = {}) {
-  const universe = trim(universeId, MAX_ID);
-  const character = trim(characterId, MAX_ID);
+  const universe = trimTo(universeId, MAX_ID);
+  const character = trimTo(characterId, MAX_ID);
   const preset = parsePresetVoiceId(voiceId);
   if (!universe || !character || !preset) {
     throw new ServerError('A universe, character, and valid preset are required', {
@@ -507,11 +507,11 @@ export async function promotePresetProfile({
     id: profileId,
     version: current ? (samePreset ? current.version : current.version + 1) : 1,
     binding: { universeId: universe, characterId: character },
-    label: trim(characterName, MAX_LABEL) || current?.label || null,
+    label: trimTo(characterName, MAX_LABEL) || current?.label || null,
     kind: 'preset',
     engine: preset.engine,
     voiceId: preset.voiceId,
-    modelRevision: trim(modelRevision, MAX_REVISION) || 'configured-preset',
+    modelRevision: trimTo(modelRevision, MAX_REVISION) || 'configured-preset',
     routes: current?.routes || { studio: { enabled: true }, interactive: { enabled: true, maxFirstAudioMs: 900 } },
     delivery: current?.delivery || delivery,
     mastering: current?.mastering || DEFAULT_MASTERING,
@@ -550,10 +550,10 @@ export async function recordVoiceProfileRender({
   durationMs,
   provenance,
 } = {}) {
-  const issue = trim(issueId, MAX_RENDER_ID);
-  const line = trim(lineId, MAX_RENDER_ID);
-  const filename = trim(audioFilename, 500);
-  const profileId = trim(provenance?.profileId, 80);
+  const issue = trimTo(issueId, MAX_RENDER_ID);
+  const line = trimTo(lineId, MAX_RENDER_ID);
+  const filename = trimTo(audioFilename, 500);
+  const profileId = trimTo(provenance?.profileId, 80);
   const profileRevision = positiveInteger(provenance?.profileRevision, 0);
   const engine = VOICE_PROFILE_ENGINES.has(provenance?.engine) ? provenance.engine : null;
   if (!issue || !line || !filename || !PROFILE_ID_RE.test(profileId) || !profileRevision || !engine) {
@@ -567,7 +567,7 @@ export async function recordVoiceProfileRender({
     profileId,
     profileRevision,
     engine,
-    modelRevision: trim(provenance?.modelRevision, MAX_REVISION) || null,
+    modelRevision: trimTo(provenance?.modelRevision, MAX_REVISION) || null,
     effectiveControls: {
       rate: Number.isFinite(provenance?.effectiveControls?.rate) ? provenance.effectiveControls.rate : null,
     },
@@ -592,8 +592,8 @@ export async function recordVoiceProfileRender({
 }
 
 export async function clearVoiceProfileRender({ issueId, lineId } = {}) {
-  const issue = trim(issueId, MAX_RENDER_ID);
-  const line = trim(lineId, MAX_RENDER_ID);
+  const issue = trimTo(issueId, MAX_RENDER_ID);
+  const line = trimTo(lineId, MAX_RENDER_ID);
   if (!issue || !line) return;
   await query('DELETE FROM voice_profile_renders WHERE issue_id = $1 AND line_id = $2', [issue, line]);
 }
@@ -626,8 +626,8 @@ export async function resolveCharacterVoice({
   route = 'studio',
 } = {}) {
   assertRoute(route);
-  const universe = trim(universeId, MAX_ID);
-  const character = trim(characterId, MAX_ID);
+  const universe = trimTo(universeId, MAX_ID);
+  const character = trimTo(characterId, MAX_ID);
   let unavailableProfile = null;
   if (universe && character) {
     const profiles = await listVoiceProfiles({ universeId: universe, characterId: character });
@@ -647,7 +647,7 @@ export async function resolveCharacterVoice({
     unavailableProfile = profiles.find((item) => item.approval.status === 'approved') || null;
   }
   const preset = parsePresetVoiceId(characterVoiceId);
-  const legacyVoice = trim(characterVoiceId, MAX_ID);
+  const legacyVoice = trimTo(characterVoiceId, MAX_ID);
   if (preset || legacyVoice) {
     return {
       source: 'character-preset',

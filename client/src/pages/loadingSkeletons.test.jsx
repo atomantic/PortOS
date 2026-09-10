@@ -141,6 +141,13 @@ const RENDERED = [
   ['WorkspaceContexts', () => import('./WorkspaceContexts'), '/workspace-contexts', '/workspace-contexts', 'Loading workspace projects'],
 ];
 
+// Module loading is setup, not part of the first-paint interaction. Resolve it
+// before tests so a timed-out import cannot mount into the next case.
+const LOADED_PAGES = await Promise.all(RENDERED.map(async ([name, load, ...rest]) => {
+  const mod = await load();
+  return [name, mod.default || mod, ...rest];
+}));
+
 describe('converted pages announce a labelled busy region on first paint', () => {
   beforeEach(() => {
     // jsdom ships no `matchMedia`, and a page that reads one on mount throws
@@ -155,9 +162,7 @@ describe('converted pages announce a labelled busy region on first paint', () =>
 
   // A DATA router, not `<MemoryRouter>`: pages that guard unsaved edits call
   // `useBlocker`, which throws outside one.
-  it.each(RENDERED)('%s', async (_name, load, routePath, entry, label) => {
-    const mod = await load();
-    const Page = mod.default || mod;
+  it.each(LOADED_PAGES)('%s', async (_name, Page, routePath, entry, label) => {
     const router = createMemoryRouter(
       [{ path: routePath, element: <Page /> }],
       { initialEntries: [entry] },

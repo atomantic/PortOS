@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { MemoryRouter, useLocation, useNavigate } from 'react-router';
+import { MemoryRouter, Routes, Route, useLocation, useNavigate } from 'react-router';
 import { typeSettled } from '../test/settledInput';
 
 // ── Mock API calls ───────────────────────────────────────────────────────────
@@ -75,7 +75,10 @@ function RouteProbe() {
 function renderPage(entry = '/media/collections') {
   return render(
     <MemoryRouter initialEntries={[entry]}>
-      <MediaCollections />
+      <Routes>
+        <Route path="/media/collections" element={<MediaCollections />} />
+        <Route path="/media/collections/:id" element={<div>Collection detail</div>} />
+      </Routes>
       <RouteProbe />
     </MemoryRouter>,
   );

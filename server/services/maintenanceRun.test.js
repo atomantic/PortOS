@@ -2,7 +2,7 @@ import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { rm } from 'fs/promises';
 import { join } from 'path';
 import { mockPathsDataRoot } from '../lib/mockPathsDataRoot.js';
-import { MAINTENANCE_SEQUENCE_TYPES } from '../lib/maintenanceSequence.js';
+import { MAINTENANCE_SEQUENCE_TYPES, MAINTENANCE_TASK_ORDER } from '../lib/maintenanceSequence.js';
 
 const { tempRoot, makeProxy, cleanup } = mockPathsDataRoot({ prefix: 'portos-maintenance-run-' });
 vi.mock('../lib/fileUtils.js', async () => makeProxy(await vi.importActual('../lib/fileUtils.js')));
@@ -31,7 +31,7 @@ vi.mock('./quotaBurnStore.js', () => ({ getQuotaBurnConfig: vi.fn(async () => { 
 const { getQuotaBurnConfig } = await import('./quotaBurnStore.js');
 const { invokeQuotaBurnStep } = await import('./quotaBurnInvoke.js');
 const {
-  startMaintenanceRun, stopMaintenanceRun, resumeMaintenanceRun, evaluateMaintenanceRun, getMaintenanceRun, listMaintenanceRuns,
+  updateMaintenanceStep, startMaintenanceRun, stopMaintenanceRun, resumeMaintenanceRun, evaluateMaintenanceRun, getMaintenanceRun, listMaintenanceRuns,
   __onMaintenanceAgentSpawned, __onMaintenanceAgentCompleted, __retryMaintenanceRuns, __resetMaintenanceRunScheduler,
 } = await import('./maintenanceRun.js');
 
@@ -52,6 +52,45 @@ beforeEach(async () => {
 afterAll(cleanup);
 
 describe('manual maintenance run', () => {
+  it.each(['file-issues', 'fix'])('runs only selected quality checks in %s mode with pinned overrides', async (mode) => {
+    const { run } = await startMaintenanceRun({ appId: 'app-1', providerId: 'codex', model: 'gpt-5', effort: 'high', mode, taskTypes: ['security', 'documentation'] });
+    expect(run.steps.map(step => step.taskRef.taskType)).toEqual(['security', 'documentation']);
+    for (const step of run.steps) {
+      expect(step.drain).toBe(false);
+      expect(step.overrides).toMatchObject({ providerId: 'codex', model: 'gpt-5', effort: 'high', params: { fileIssues: mode === 'file-issues' } });
+    }
+    await __onMaintenanceAgentCompleted(agentFor(run, 0));
+    await __onMaintenanceAgentCompleted(agentFor(run, 1));
+    expect(dispatchedTypes()).toEqual(['security', 'documentation']);
+    expect((await getMaintenanceRun(run.id)).status).toBe('completed');
+  });
+
+  it('dispatches an edited stage through its own provider family', async () => {
+    const { run } = await start();
+    const { getProviderById } = await import('./providers.js');
+    const { resolveBurnProvider } = await import('./scheduledHandlers/providerPick.js');
+    getProviderById.mockResolvedValueOnce({ id: 'claude', command: 'claude', type: 'cli', enabled: true });
+    resolveBurnProvider.mockResolvedValueOnce({ id: 'claude' });
+    await updateMaintenanceStep(run.id, run.steps[1].id, { providerId: 'claude', model: 'example-model', effort: 'low' });
+    await __onMaintenanceAgentCompleted(agentFor(run, 0));
+    expect(state.invoked.at(-1)).toMatchObject({ family: { id: 'claude' }, step: { overrides: { providerId: 'claude', effort: 'low' } } });
+  });
+
+  it('persists pending stage settings and dispatches them without changing other stages', async () => {
+    const { run } = await start();
+    const settings = { providerId: 'codex', model: 'example-model', effort: null };
+    const updated = await updateMaintenanceStep(run.id, run.steps[1].id, settings);
+    expect(updated.steps[0]).toEqual(run.steps[0]);
+    expect((await getMaintenanceRun(run.id)).steps[1].overrides).toEqual({ ...run.steps[1].overrides, ...settings });
+    await __onMaintenanceAgentCompleted(agentFor(run, 0));
+    expect(state.invoked.at(-1).step.overrides).toMatchObject(settings);
+    await expect(updateMaintenanceStep(run.id, run.steps[0].id, settings)).rejects.toMatchObject({ status: 409 });
+    await expect(updateMaintenanceStep(run.id, run.steps[1].id, settings)).rejects.toMatchObject({ status: 409 });
+    await expect(updateMaintenanceStep(run.id, run.steps[2].id, { ...settings, providerId: 'missing' })).rejects.toMatchObject({ status: 400 });
+    await stopMaintenanceRun(run.id);
+    await expect(updateMaintenanceStep(run.id, run.steps[2].id, settings)).rejects.toMatchObject({ status: 409 });
+  });
+
   it('walks the whole ladder to completion on agent completions and drain probes, never touching the burn plan', async () => {
     const { run, result } = await start();
     expect(result).toMatchObject({ dispatched: true, taskType: 'better-structural-drift' });
@@ -183,4 +222,57 @@ it('publishes queued, running, and completed progress with the active agent link
   expect(updates.at(-1).completed).toHaveProperty(run.steps[0].id);
   expect(updates.at(-1).active).not.toHaveProperty('agentId');
   cosEvents.off('maintenance:updated', listener);
+});
+
+it('runs fixes consecutively and drains remaining issues only after documentation', async () => {
+  const { run } = await startMaintenanceRun({ appId: 'app-1', providerId: 'codex', model: 'gpt-5', mode: 'fix' });
+  expect(run.steps.map(step => step.taskRef.taskType)).toEqual([...MAINTENANCE_TASK_ORDER, 'claim-issue']);
+  for (let index = 0; index < MAINTENANCE_TASK_ORDER.length; index++) {
+    expect(state.invoked.at(-1).step.overrides.params).toEqual({ fileIssues: false, useWorktree: true, openPR: true });
+    await __onMaintenanceAgentCompleted(agentFor(run, index));
+  }
+  expect(dispatchedTypes()).toEqual([...MAINTENANCE_TASK_ORDER, 'claim-issue']);
+  await __onMaintenanceAgentCompleted(agentFor(run, MAINTENANCE_TASK_ORDER.length));
+  expect(dispatchedTypes().slice(-2)).toEqual(['claim-issue', 'claim-issue']);
+  state.probe = { drained: true };
+  await __onMaintenanceAgentCompleted(agentFor(run, MAINTENANCE_TASK_ORDER.length));
+  expect(await getMaintenanceRun(run.id)).toMatchObject({ status: 'completed' });
+});
+
+it('files findings consecutively and finishes without claiming when claims are disabled', async () => {
+  const { run } = await startMaintenanceRun({ appId: 'app-1', providerId: 'codex', model: 'gpt-5', mode: 'file-issues', claimBetweenAudits: false, claimHandler: { providerId: 'unavailable', model: 'example' } });
+  expect(run.steps.map(step => step.taskRef.taskType)).toEqual(MAINTENANCE_TASK_ORDER);
+  for (let index = 0; index < run.steps.length; index++) {
+    expect(state.invoked.at(-1).step.overrides.params.fileIssues).toBe(index < run.steps.length - 1);
+    await __onMaintenanceAgentCompleted(agentFor(run, index));
+  }
+  expect(dispatchedTypes()).toEqual(MAINTENANCE_TASK_ORDER);
+  expect(await getMaintenanceRun(run.id)).toMatchObject({ status: 'completed' });
+  expect((await listMaintenanceRuns())[0].steps).toHaveLength(7);
+});
+
+// A different subscription family must survive storage and dispatch, including
+// repeated claim passes, without changing the audit pins.
+it('dispatches claims with their own provider family, model and effort', async () => {
+  const { getProviderById } = await import('./providers.js');
+  const { resolveBurnProvider } = await import('./scheduledHandlers/providerPick.js');
+  getProviderById.mockImplementationOnce(async id => ({ id, type: 'cli', command: id, enabled: true }));
+  getProviderById.mockImplementationOnce(async id => ({ id, type: 'cli', command: id, enabled: true }));
+  resolveBurnProvider.mockResolvedValueOnce({ id: 'codex' });
+  resolveBurnProvider.mockImplementationOnce(async ({ job, family }) => job.providerId === family.id ? { id: job.providerId } : null);
+  const claimHandler = { providerId: 'claude', model: 'sonnet', effort: 'low' };
+  const { run } = await startMaintenanceRun({ appId: 'app-1', providerId: 'codex', model: 'gpt-5', effort: 'high', claimHandler });
+  expect((await getMaintenanceRun(run.id)).steps[1].overrides).toEqual({ ...claimHandler, params: {} });
+  await evaluateMaintenanceRun(run.id, { completeStepId: run.steps[0].id });
+  await evaluateMaintenanceRun(run.id);
+  expect(state.invoked.slice(1)).toHaveLength(2);
+  for (const call of state.invoked.slice(1)) expect(call).toMatchObject({ family: { id: 'claude' }, step: { overrides: claimHandler } });
+  state.probe = { drained: true };
+  await evaluateMaintenanceRun(run.id);
+  expect(state.invoked.at(-1)).toMatchObject({ family: { id: 'codex' }, step: { overrides: { providerId: 'codex', model: 'gpt-5', effort: 'high' } } });
+});
+
+it('rejects an unavailable claim provider before starting any work', async () => {
+  await expect(startMaintenanceRun({ appId: 'app-1', providerId: 'codex', claimHandler: { providerId: 'unavailable', model: 'example' } })).rejects.toMatchObject({ code: 'MAINTENANCE_RUN_PROVIDER_UNAVAILABLE' });
+  expect(state.invoked).toEqual([]);
 });

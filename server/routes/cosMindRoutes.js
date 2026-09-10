@@ -52,6 +52,8 @@ import { readPersistentMindVisibility } from '../services/persistentMindVisibili
 import {
   createPersistentMindAttachment,
   deletePersistentMindAttachment,
+} from '../services/persistentMindAttachments.js';
+import {
   enqueuePersistentMindMessage,
   getPersistentMindState,
   pausePersistentMind,

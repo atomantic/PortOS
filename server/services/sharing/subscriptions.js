@@ -23,7 +23,7 @@ import { join } from 'path';
 import { unlink } from 'fs/promises';
 import { existsSync } from 'fs';
 import { PATHS, atomicWrite, readJSONFile, ensureDir } from '../../lib/fileUtils.js';
-import { isStr } from '../../lib/storyBible.js';
+import { createFileWriteQueue } from '../../lib/fileWriteQueue.js';
 import { getBucket } from './buckets.js';
 import { exportSeries, exportUniverse } from './exporter.js';
 import {
@@ -37,7 +37,8 @@ import {
 // stable; the canonical implementation now lives in recordEvents.js.
 export { withReexportSuppressed };
 import { subscriptionFilename, legacySubscriptionFilename } from './manifest.js';
-import { getInstanceId } from '../instances.js';
+import { getInstanceId } from '../instanceIdentity.js';
+import { isStr } from '../../lib/textUtils.js';
 
 // Re-export from the canonical source so other modules can import the
 // filename helper from either side without forcing a manifest.js import.
@@ -49,6 +50,8 @@ export const ERR_NOT_FOUND = 'SHARING_SUBSCRIPTION_NOT_FOUND';
 export const ERR_VALIDATION = 'SHARING_SUBSCRIPTION_VALIDATION';
 export const ERR_DUPLICATE = 'SHARING_SUBSCRIPTION_DUPLICATE';
 const makeErr = (message, code) => Object.assign(new Error(message), { code });
+
+const queueStateWrite = createFileWriteQueue();
 
 const STATE_PATH = () => join(PATHS.data, 'sharing', 'subscriptions.json');
 
@@ -97,29 +100,31 @@ export async function adoptImportedSubscription({ bucketId, recordKind, recordId
   if (!isStr(bucketId) || !isStr(recordId)) return null;
   await getBucket(bucketId);
 
-  const state = await readState();
-  const id = subId({ bucketId, recordKind, recordId });
-  const now = new Date().toISOString();
-  let sub = state.subscriptions.find((s) => s.id === id);
-  if (!sub) {
-    sub = {
-      id,
-      bucketId,
-      recordKind,
-      recordId,
-      createdAt: now,
-      updatedAt: now,
-      lastManifestId,
-      lastExportedAt: null,
-      adoptedFromImport: true,
-    };
-    state.subscriptions.push(sub);
-  } else {
-    sub.updatedAt = now;
-    sub.lastManifestId = lastManifestId || sub.lastManifestId || null;
-  }
-  await writeState(state);
-  return sub;
+  return queueStateWrite(async () => {
+    const state = await readState();
+    const id = subId({ bucketId, recordKind, recordId });
+    const now = new Date().toISOString();
+    let sub = state.subscriptions.find((s) => s.id === id);
+    if (!sub) {
+      sub = {
+        id,
+        bucketId,
+        recordKind,
+        recordId,
+        createdAt: now,
+        updatedAt: now,
+        lastManifestId,
+        lastExportedAt: null,
+        adoptedFromImport: true,
+      };
+      state.subscriptions.push(sub);
+    } else {
+      sub.updatedAt = now;
+      sub.lastManifestId = lastManifestId || sub.lastManifestId || null;
+    }
+    await writeState(state);
+    return sub;
+  });
 }
 
 /**
@@ -138,23 +143,22 @@ export async function subscribe({ bucketId, recordKind, recordId }) {
   // Validate the bucket exists (throws ERR_NOT_FOUND otherwise).
   await getBucket(bucketId);
 
-  const state = await readState();
   const id = subId({ bucketId, recordKind, recordId });
-  let sub = state.subscriptions.find((s) => s.id === id);
-  const now = new Date().toISOString();
-  if (!sub) {
-    sub = { id, bucketId, recordKind, recordId, createdAt: now, updatedAt: now, lastManifestId: null, lastExportedAt: null };
-    state.subscriptions.push(sub);
-    await writeState(state);
-  }
+  const sub = await queueStateWrite(async () => {
+    const state = await readState();
+    let live = state.subscriptions.find((s) => s.id === id);
+    if (!live) {
+      const now = new Date().toISOString();
+      live = { id, bucketId, recordKind, recordId, createdAt: now, updatedAt: now, lastManifestId: null, lastExportedAt: null };
+      state.subscriptions.push(live);
+      await writeState(state);
+    }
+    return live;
+  });
 
+  // Export outside the state queue, then stamp only a still-live row.
   const exp = await runExport({ bucketId, recordKind, recordId });
-  if (exp) {
-    sub.lastManifestId = exp.manifestId;
-    sub.lastExportedAt = now;
-    sub.updatedAt = now;
-    await writeState(state);
-  }
+  if (exp) return stampExport(sub, exp);
   return sub;
 }
 
@@ -168,10 +172,14 @@ async function runExport({ bucketId, recordKind, recordId }) {
 
 export async function unsubscribe(id) {
   if (!isStr(id)) throw makeErr('subscription id required', ERR_VALIDATION);
-  const state = await readState();
-  const idx = state.subscriptions.findIndex((s) => s.id === id);
-  if (idx < 0) throw makeErr(`Subscription not found: ${id}`, ERR_NOT_FOUND);
-  const sub = state.subscriptions[idx];
+  const sub = await queueStateWrite(async () => {
+    const state = await readState();
+    const idx = state.subscriptions.findIndex((s) => s.id === id);
+    if (idx < 0) throw makeErr(`Subscription not found: ${id}`, ERR_NOT_FOUND);
+    const [removed] = state.subscriptions.splice(idx, 1);
+    await writeState(state);
+    return removed;
+  });
 
   // Cancel any pending debounced re-export — otherwise the timer fires ~3s
   // later, the sub is gone, and reexportNow no-ops, but the timer + the
@@ -218,8 +226,6 @@ export async function unsubscribe(id) {
     }
   }
 
-  state.subscriptions.splice(idx, 1);
-  await writeState(state);
   return { id, removed: true };
 }
 
@@ -255,13 +261,20 @@ async function reexportNow(sub) {
     return null;
   });
   if (!exp) return;
-  const state = await readState();
-  const live = state.subscriptions.find((s) => s.id === sub.id);
-  if (!live) return; // unsubscribed between the trigger and the write
-  live.lastManifestId = exp.manifestId;
-  live.lastExportedAt = new Date().toISOString();
-  live.updatedAt = live.lastExportedAt;
-  await writeState(state);
+  await stampExport(sub, exp);
+}
+
+function stampExport(sub, exp) {
+  return queueStateWrite(async () => {
+    const state = await readState();
+    const live = state.subscriptions.find((s) => s.id === sub.id);
+    if (!live) return null; // unsubscribed while the export was running
+    live.lastManifestId = exp.manifestId;
+    live.lastExportedAt = new Date().toISOString();
+    live.updatedAt = live.lastExportedAt;
+    await writeState(state);
+    return live;
+  });
 }
 
 export async function reexportSubscribedRecord(recordKind, recordId) {

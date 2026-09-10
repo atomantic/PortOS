@@ -11,6 +11,7 @@
 import os from 'os';
 import { scanModelDuplicates } from './modelDeduplication.js';
 import { statfs } from 'fs/promises';
+import { parseFilesystemStats } from '../lib/fileCore.js';
 import { join } from 'path';
 import { z } from 'zod';
 import { query } from '../lib/db.js';
@@ -21,7 +22,7 @@ import { getDataOverview } from './dataManager.js';
 import { listHfModelStorage, listLoraStorage } from './mediaModelStorage.js';
 import * as ollamaManager from './ollamaManager.js';
 import * as lmStudioManager from './lmStudioManager.js';
-import { listJobs } from './mediaJobQueue/index.js';
+import { getQueueCapacity } from './mediaJobQueue/index.js';
 import * as cos from './cos.js';
 import { getSettings } from './settings.js';
 
@@ -70,20 +71,6 @@ const sumKnownBytes = (values) => {
   const known = values.filter(Number.isFinite);
   return known.length > 0 ? sumBytes(known) : null;
 };
-
-function filesystemFrom(stats) {
-  if (!stats) return null;
-  const totalBytes = finiteOrNull(stats.blocks * stats.bsize);
-  const freeBytes = finiteOrNull(stats.bavail * stats.bsize);
-  if (!totalBytes || freeBytes == null) return null;
-  const usedBytes = Math.max(0, totalBytes - freeBytes);
-  return {
-    totalBytes,
-    usedBytes,
-    freeBytes,
-    usagePercent: Math.round((usedBytes / totalBytes) * 100),
-  };
-}
 
 const backendState = (value) => (value == null ? 'unavailable' : 'ready');
 
@@ -314,22 +301,6 @@ function loadedModelInventory({ ollamaLoaded, lmStudioLoaded }) {
   ];
 }
 
-function mediaQueueSummary(jobs) {
-  const live = jobs.filter((job) => job.status === 'queued' || job.status === 'running');
-  const byKind = Object.fromEntries(['image', 'video', 'training', 'audio'].map((kind) => {
-    const matching = live.filter((job) => job.kind === kind);
-    return [kind, {
-      queued: matching.filter((job) => job.status === 'queued').length,
-      running: matching.filter((job) => job.status === 'running').length,
-    }];
-  }));
-  return {
-    queued: live.filter((job) => job.status === 'queued').length,
-    running: live.filter((job) => job.status === 'running').length,
-    byKind,
-  };
-}
-
 function agentQueueSummary(tasks, status) {
   if (!tasks) return null;
   return {
@@ -401,7 +372,13 @@ export async function buildSystemResourceReport() {
     scanModelDuplicates().catch(() => ({ pinokioDetected: null, items: [], totalReclaimableBytes: 0, error: 'Duplicate model scan unavailable' })),
   ]);
 
-  const filesystem = filesystemFrom(diskStats);
+  const parsedFilesystem = parseFilesystemStats(diskStats);
+  const filesystem = parsedFilesystem && {
+    totalBytes: parsedFilesystem.totalBytes,
+    usedBytes: parsedFilesystem.usedBytes,
+    freeBytes: parsedFilesystem.freeBytes,
+    usagePercent: parsedFilesystem.usagePercent,
+  };
   const databaseBytes = finiteOrNull(databaseRow?.bytes);
   const dependenciesBytes = sumKnownBytes(dependencySizes);
   const ollamaResidencyError = ollamaLoaded == null
@@ -436,7 +413,12 @@ export async function buildSystemResourceReport() {
     downloadedModels,
     npmCacheBytes,
   });
-  const mediaQueue = mediaQueueSummary(listJobs());
+  const capacity = getQueueCapacity();
+  const mediaQueue = {
+    queued: capacity.totals.queued,
+    running: capacity.totals.running,
+    byKind: capacity.byKind,
+  };
   const agentQueue = agentQueueSummary(cosTasks, cosStatus);
   const modelBytes = sumKnownBytes([hf?.totalBytes, loraStorage?.totalBytes, ollamaBytes, lmStudioBytes]);
   const storageAreas = [

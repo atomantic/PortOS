@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Folder, FolderPlus, FilePlus, FileText, ChevronDown, ChevronRight, Trash2, GripVertical, PanelLeftClose } from 'lucide-react';
 import { DndContext, DragOverlay, PointerSensor, useDraggable, useDroppable, useSensor, useSensors } from '@dnd-kit/core';
 import toast from '../ui/Toast';
@@ -15,13 +15,21 @@ import { KIND_LABELS } from './labels';
 
 const UNFILED_DROP_ID = 'wr-unfiled';
 
-export default function LibraryPane({ folders, works, activeWorkId, onSelectWork, onRefresh, onCollapse }) {
+export default function LibraryPane({
+  folders, works, activeWorkId, onSelectWork, onRefresh, onCollapse,
+  creatingWork, onCreatingWorkChange,
+}) {
   const [openFolders, setOpenFolders] = useState({});
   const [creatingFolder, setCreatingFolder] = useState(false);
   const [folderName, setFolderName] = useState('');
-  const [creatingWork, setCreatingWork] = useState(null); // folderId or 'unfiled'
   const [workTitle, setWorkTitle] = useState('');
   const [workKind, setWorkKind] = useState('short-story');
+
+  // The page-level empty state can start work creation too. Keep the two
+  // inline creation forms mutually exclusive regardless of which CTA fired.
+  useEffect(() => {
+    if (creatingWork) setCreatingFolder(false);
+  }, [creatingWork]);
   // Inline delete confirm (no two-click-arm, no toast re-arm) — one row armed at
   // a time, keyed by `work:<id>` / `folder:<id>`.
   const { isConfirming, requestDelete, cancelDelete, confirmDelete } = useConfirmDelete();
@@ -67,7 +75,7 @@ export default function LibraryPane({ folders, works, activeWorkId, onSelectWork
     if (!work) return;
     setWorkTitle('');
     setWorkKind('short-story');
-    setCreatingWork(null);
+    onCreatingWorkChange(null);
     onRefresh?.();
     onSelectWork?.(work.id);
   };
@@ -135,7 +143,7 @@ export default function LibraryPane({ folders, works, activeWorkId, onSelectWork
             it grows to 44px rather than clawing it back with a negative margin. */}
         <div className="flex items-center gap-1">
           <button
-            onClick={() => { setCreatingFolder(true); setCreatingWork(null); }}
+            onClick={() => { setCreatingFolder(true); onCreatingWorkChange(null); }}
             className="flex items-center justify-center min-w-[44px] min-h-[44px] text-gray-400 hover:text-port-accent"
             title="New folder"
             aria-label="New folder"
@@ -143,7 +151,7 @@ export default function LibraryPane({ folders, works, activeWorkId, onSelectWork
             <FolderPlus size={14} />
           </button>
           <button
-            onClick={() => { setCreatingWork('unfiled'); setCreatingFolder(false); }}
+            onClick={() => { onCreatingWorkChange('unfiled'); setCreatingFolder(false); }}
             className="flex items-center justify-center min-w-[44px] min-h-[44px] text-gray-400 hover:text-port-accent"
             title="New work"
             aria-label="New work"
@@ -201,7 +209,7 @@ export default function LibraryPane({ folders, works, activeWorkId, onSelectWork
           </select>
           <div className="flex items-center gap-1">
             <button type="submit" className="text-xs px-2 py-1 bg-port-accent text-white rounded flex-1 min-h-[44px]">Create</button>
-            <button type="button" onClick={() => setCreatingWork(null)} className="text-xs px-2 py-1 text-gray-400 min-w-[44px] min-h-[44px]">Cancel</button>
+            <button type="button" onClick={() => onCreatingWorkChange(null)} className="text-xs px-2 py-1 text-gray-400 min-w-[44px] min-h-[44px]">Cancel</button>
           </div>
         </form>
       )}
@@ -209,8 +217,16 @@ export default function LibraryPane({ folders, works, activeWorkId, onSelectWork
       <DndContext sensors={sensors} onDragStart={handleDragStart} onDragEnd={handleDragEnd}>
         <ul className="space-y-1">
           {folders.length === 0 && grouped.get(null).length === 0 && !creatingFolder && !creatingWork && (
-            <li className="text-xs text-gray-500 px-2 py-3 text-center">
-              No works yet. Click <FilePlus size={12} className="inline" /> to start.
+            <li className="px-2 py-3 text-center">
+              <p className="text-xs text-gray-500 mb-2">No works yet.</p>
+              <button
+                type="button"
+                onClick={() => { onCreatingWorkChange('unfiled'); setCreatingFolder(false); }}
+                className="inline-flex min-h-[44px] items-center gap-1.5 rounded px-3 py-2 text-xs font-medium text-port-accent hover:bg-port-accent/10"
+              >
+                <FilePlus size={14} aria-hidden="true" />
+                New work
+              </button>
             </li>
           )}
 
@@ -230,7 +246,7 @@ export default function LibraryPane({ folders, works, activeWorkId, onSelectWork
               isDragging={!!draggingWork}
               confirming={isConfirming(`folder:${folder.id}`)}
               onToggle={() => toggleFolder(folder.id)}
-              onCreateWork={() => { setCreatingWork(folder.id); setCreatingFolder(false); }}
+              onCreateWork={() => { onCreatingWorkChange(folder.id); setCreatingFolder(false); }}
               onRequestDelete={() => requestDelete(`folder:${folder.id}`)}
               onConfirmDelete={() => handleDeleteFolder(folder.id)}
               onCancelDelete={cancelDelete}

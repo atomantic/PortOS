@@ -20,7 +20,7 @@ import { createKeyCachedQueue } from '../lib/createKeyCachedQueue.js';
 import { enforceSafeBranchUpstream } from '../lib/branchUpstreamGuard.js';
 import { forkRemoteName, normalizeForkHead } from '../lib/forkHead.js';
 import { isHumanClaimWorktree, worktreeAgentId, worktreeOwnershipReason } from '../lib/worktreeOwnership.js';
-import { ensureInstanceId } from './instances.js';
+import { ensureInstanceId } from './instanceIdentity.js';
 
 export { isHumanClaimWorktree } from '../lib/worktreeOwnership.js';
 
@@ -876,20 +876,20 @@ export async function removeWorktree(agentId, sourceWorkspace, branchName, optio
   // (which deletes the LOCAL branch after pushing — the remote branch is what the
   // PR points at) keeps cleaning up after itself.
   if (!hasUnmergedCommits && options.preserveBranchWithCommits && !merged) {
-    const { getDefaultBranch, isBranchMergedInto } = await import('./git.js');
+    const { getDefaultBranch, hasBranchMergeEvidence } = await import('./git.js');
     const target = await getDefaultBranch(sourceWorkspace).catch(() => null) || 'main';
-    // `isBranchMergedInto` — NOT a bare `rev-list --count target..branch`. A branch
+    // `hasBranchMergeEvidence` — NOT a bare `rev-list --count target..branch`. A branch
     // whose PR was REBASE- or SQUASH-merged has new SHAs, so rev-list still reports
     // it ahead and we would preserve an already-landed branch and point a retry at
     // it. PortOS merges with `--rebase` by default, so that is the COMMON shape of
     // the very incident this preservation exists for ("PR merged, then reaped").
-    // isBranchMergedInto covers patch-equivalence (`git cherry`) and fails closed,
+    // hasBranchMergeEvidence covers patch-equivalence (`git cherry`) and fails closed,
     // which is the polarity we want here too: unknown ⇒ keep the work.
-    const alreadyMerged = await isBranchMergedInto(sourceWorkspace, branchName, target).catch(() => false);
-    if (!alreadyMerged) {
+    const hasMergeEvidence = await hasBranchMergeEvidence(sourceWorkspace, branchName, target).catch(() => false);
+    if (!hasMergeEvidence) {
       hasUnmergedCommits = true;
-      console.log(`🌳 Preserving branch ${branchName} — not yet merged into ${target}, kept so a retry can resume from it`);
-      warnings.push(`Branch ${branchName} preserved — it holds unmerged commits a retry can resume from`);
+      console.log(`🌳 Preserving branch ${branchName} — merge evidence into ${target} was not established, kept so a retry can resume from it`);
+      warnings.push(`Branch ${branchName} preserved — merge evidence was not established; kept for a retry`);
     } else {
       console.log(`🌳 Branch ${branchName} is already merged into ${target} — safe to delete`);
     }
@@ -1161,7 +1161,7 @@ export async function cleanupOrphanedWorktrees(sourceWorkspace, activeAgentIds) 
  * changes, and honors worktree locks. A worktree is reaped only when BOTH hold:
  *   1. the working tree is completely clean, and
  *   2. every commit on the branch is already in the default branch — detected via
- *      `isBranchMergedInto`, which covers normal AND squash/rebase merges.
+ *      `hasBranchMergeEvidence`, which covers normal AND squash/rebase merges.
  *
  * Because of gate (2) this works regardless of merge strategy, but a true merge
  * commit (see the `--merge`-preferring agent prompts) makes detection bulletproof.
@@ -1215,7 +1215,7 @@ export async function reapMergedWorktrees(sourceWorkspace, {
   defaultBranch: knownDefaultBranch = null,
   dryRun = false
 } = {}) {
-  const { getDefaultBranch, isBranchMergedInto } = await import('./git.js');
+  const { getDefaultBranch, hasBranchMergeEvidence } = await import('./git.js');
 
   // Refresh remote refs so "merged into origin/main" reflects the canonical state
   // after a `gh pr merge`. Best-effort — fall back to local refs on failure.
@@ -1287,8 +1287,8 @@ export async function reapMergedWorktrees(sourceWorkspace, {
     if (!classifyWorktreeDirt(status).clean) { hold('uncommitted'); continue; }
 
     // Gate 2: branch fully merged into the default branch (regular, squash, or rebase).
-    const merged = await isBranchMergedInto(sourceWorkspace, branchName, target).catch(() => false);
-    if (!merged) { hold('unmerged'); continue; }
+    const hasMergeEvidence = await hasBranchMergeEvidence(sourceWorkspace, branchName, target).catch(() => false);
+    if (!hasMergeEvidence) { hold('unmerged'); continue; }
 
     if (dryRun) { reaped.push({ path: wt.path, branch: branchName, locked: !!wt.locked, branchDeleted: false }); continue; }
 

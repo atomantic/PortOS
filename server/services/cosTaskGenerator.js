@@ -1,10 +1,11 @@
+import { auditQualityInstructions } from '../lib/auditQuality.js';
 import { isPrivateSecurityTask, PRIVATE_SECURITY_DELIVERY } from '../lib/privateSecurityPolicy.js';
 /**
  * CoS Task Generator Module
  *
  * The task-generation + evaluation engine extracted from cos.js. Owns:
  *  - `evaluateTasks` — the periodic/startup evaluation loop that decides what
- *    to spawn (priority 0 on-demand → 1 user → 2 auto-system → 3 mission/feature
+ *    to spawn (priority 0 on-demand → 1 user → 2 auto-system → 3.6 feature agent
  *    → 4 idle review) and emits `task:ready` for each pick.
  *  - the self-improvement / managed-app / idle-review generators that build the
  *    actual task objects (prompt template + metadata + confidence approval).
@@ -31,6 +32,7 @@ import { sanitizeTaskMetadata, PIPELINE_STAGE_BEHAVIOR_FLAGS, MAX_TOTAL_SPAWNS, 
 import { PATHS } from '../lib/fileUtils.js';
 import { isPlainObject } from '../lib/objects.js';
 import { hasQuotaBurnProvenance } from '../lib/quotaBurnOrigin.js';
+import { isAutoApprovableInvestigation } from '../lib/investigationTasks.js';
 import { parsePlanItems, extractAllIds, findInProgressIds, pickFirstAvailable, diagnoseUnpickablePlan } from '../lib/planIds.js';
 import { loadState, saveState, withStateLock, isImprovementEnabled, isDaemonRunning } from './cosState.js';
 import { getDomainMode } from '../lib/domainAutonomy.js';
@@ -38,7 +40,7 @@ import { remainingActionBudget } from '../lib/domainBudgets.js';
 import { getDomainBudgetStatus } from './domainUsage.js';
 import { pendingCosActionReservations } from './cosAdmissionReservations.js';
 import { cosEvents, emitLog } from './cosEvents.js';
-import { addTask, updateTask, getAllTasks, getCosTasks, firstLine } from './cosTaskStore.js';
+import { addTask, updateTask, getAllTasks, getCosTasks } from './cosTaskStore.js';
 import { PRIORITY_VALUES } from '../lib/taskParser.js';
 import { recordDecision, DECISION_TYPES } from './decisionLog.js';
 import { isAppOnCooldown, markAppReviewCooldown, bindAppReviewAgent, markIdleReviewStarted, getNextAppForReview, loadAppActivity, isAppActivityOnCooldown } from './appActivity.js';
@@ -46,14 +48,14 @@ import { getActiveApps, getAppTaskTypeOverrides } from './apps.js';
 // The single Priority-0 on-demand loop body, shared with the dequeueNextTask
 // engine in cos.js so the two can no longer drift (#6618).
 import { drainOnDemandRequests } from './onDemandDrain.js';
+import { isIdleTierEligible } from './cosDequeue.js';
 import { resolveAgentProviderPin } from './appTaskProviderPin.js';
 import { getTaskTypeConfidence } from './taskLearning.js';
 import { classifySafetyKind, requiresSafetyApproval } from './taskLearning/safetyKind.js';
-import { generateProactiveTasks as generateMissionTasks } from './missions.js';
 import { isRecoveryTask } from './recoveryTasks.js';
 import { getCodeReviewDefaults } from './codeReview.js';
 import { getSkipReason } from './cosTaskClaim.js';
-import { ensureInstanceId } from './instances.js';
+import { ensureInstanceId } from './instanceIdentity.js';
 import { PR_COMPLETION_VALUES } from '../lib/prDisposition.js';
 import { resolveTrackerFilingBlock } from '../lib/workTracker.js';
 import {
@@ -207,16 +209,22 @@ export function shouldParkUnchangedPerpetualWork(detection, lastSignature, dispa
     && dispatchCount > 1;
 }
 
-// The generator can be called before either spawn engine admits its result.
-// Keep the drain signature off persisted task metadata until that admission is
-// known to have succeeded; a WeakMap carries it only across the in-memory handoff.
-const deferredPerpetualSignatures = new WeakMap();
-
-export async function recordDeferredPerpetualDispatch(task, taskSchedule) {
-  const deferred = deferredPerpetualSignatures.get(task);
-  if (!deferred) return false;
-  deferredPerpetualSignatures.delete(task);
-  await taskSchedule.recordPerpetualDispatch(deferred.taskType, deferred.appId, deferred.signature);
+// The generator can be called before either spawn engine admits its result, so
+// the drain signature travels as a plain data record returned alongside the
+// task (`pendingPerpetualDispatch`, see `prepareManagedAppImprovementTask`)
+// instead of being parked in a WeakMap keyed on the task object. The object-
+// identity version required every admission site to keep re-finding the EXACT
+// object the generator returned; `cosTaskStore.addTask` hands back a DIFFERENT
+// object whenever the description is multi-line, which is the normal case, so
+// a caller that naturally kept using the store's returned object instead of
+// the generator's recorded nothing, silently (#6871).
+export async function recordDeferredPerpetualDispatch(pendingPerpetualDispatch, taskSchedule) {
+  // Sentinel on the field the record can't exist without, not mere truthiness
+  // of the object — a malformed record must never reach recordPerpetualDispatch
+  // as `undefined`, which would write a bogus schedule entry instead of no-oping.
+  if (!pendingPerpetualDispatch?.taskType) return false;
+  const { taskType, appId, signature } = pendingPerpetualDispatch;
+  await taskSchedule.recordPerpetualDispatch(taskType, appId, signature);
   return true;
 }
 
@@ -718,13 +726,13 @@ export async function unblockExpiredCooldowns(userTaskData, cosTaskData) {
  * many autonomous admissions the autonomous tiers may add this cycle.
  *
  * Off/dry-run withhold all AUTOMATIC internal spawns (auto-approved system
- * tasks, mission, feature-agent, idle-review); user and on-demand tasks are
+ * tasks, feature-agent, idle-review); user and on-demand tasks are
  * unaffected. Usage is tallied in completeAgent for autonomous runs only, so a
  * pure dry-run never accrues; user/on-demand spawns are already past this gate.
  *
  * @returns {Promise<{ cosAutonomyMode: string, autonomousActionsRemaining: number }>}
  */
-async function resolveAutonomyBudget(state, runningAgentEntries) {
+export async function resolveAutonomyBudget(state, runningAgentEntries) {
   let cosAutonomyMode = getDomainMode(state.config, 'cos');
 
   // Daily CoS budget (#711). Two dimensions, handled differently so a single
@@ -760,6 +768,114 @@ async function resolveAutonomyBudget(state, runningAgentEntries) {
   return { cosAutonomyMode, autonomousActionsRemaining };
 }
 
+const analysisTypeForTask = (task) => task.metadata?.analysisType || task.metadata?.selfImprovementType;
+
+function isDisabledAnalysisType(task, taskSchedule) {
+  const analysisType = analysisTypeForTask(task);
+  // The shared drain contract always supplies a schedule. If that contract is
+  // ever violated, fail closed for scheduled analysis work without aborting the
+  // rest of the evaluation cycle.
+  return Boolean(analysisType) && taskSchedule?.tasks?.[analysisType]?.enabled !== true;
+}
+
+/**
+ * Run the one Priority-2 admission pass shared by the periodic evaluator and
+ * event-driven dequeue engine. The pass owns candidate expansion and every
+ * dry-run/execute gate; adapters only decide how an admitted task is emitted
+ * and how their per-cycle capacity bookkeeping is updated.
+ */
+export async function admitAutoApprovedSystemTasks(ctx, adapter) {
+  const {
+    state,
+    cosTaskData,
+    taskSchedule,
+    cosAutonomyMode,
+    autonomousSlotCeiling,
+    alreadySpawned,
+    perProjectLimit,
+    spawnProjectCounts,
+    instanceId,
+  } = ctx;
+  const { canSpawn, trackSpawn, emitSpawn, onDefer = async () => {} } = adapter;
+
+  if (!cosTaskData.exists) return [];
+
+  const autoApproved = [
+    ...(cosTaskData.autoApproved || []),
+    ...(state.config.autoApproveInvestigations
+      ? (cosTaskData.grouped?.pending || []).filter((task) => isAutoApprovableInvestigation(task, state.config))
+      : [])
+  ];
+  const disabledAnalysisType = (task) => isDisabledAnalysisType(task, taskSchedule);
+
+  if (cosAutonomyMode !== 'execute') {
+    if (cosAutonomyMode !== 'dry-run') return [];
+    const wouldSpawn = await selectDryRunAutoApproved(autoApproved, {
+      availableSlots: autonomousSlotCeiling,
+      alreadySpawned,
+      perProjectLimit,
+      spawnProjectCounts,
+      isOnCooldown: (appId) => isAppOnCooldown(appId, state.config.appReviewCooldownMs),
+      cooldownExempt: isCooldownExemptTask,
+      extraSkip: disabledAnalysisType,
+      notRunnableHere: (task) => getSkipReason(task.metadata, instanceId) !== null
+    });
+    for (const task of wouldSpawn) {
+      emitLog('info', `[dry-run] CoS auto-run would spawn system task: ${task.id}`, { taskId: task.id, domainAutonomy: 'cos' });
+    }
+    return wouldSpawn;
+  }
+
+  const admitted = [];
+  let spawned = alreadySpawned;
+  for (const task of autoApproved) {
+    if (spawned >= autonomousSlotCeiling) break;
+    const skipReason = getSkipReason(task.metadata, instanceId);
+    if (skipReason) {
+      emitLog('debug', `Skipping system task ${task.id} — ${skipReason}`, { taskId: task.id });
+      continue;
+    }
+    if (await blockIfExceedsMaxSpawns(task, 'internal')) continue;
+    if (disabledAnalysisType(task)) {
+      emitLog('info', `System task skipped — task type '${analysisTypeForTask(task)}' is disabled`, { taskId: task.id });
+      continue;
+    }
+    const appId = task.metadata?.app;
+    if (appId && !isCooldownExemptTask(task) && (await isAppOnCooldown(appId, state.config.appReviewCooldownMs))) {
+      await onDefer({ type: 'cooldown', task, appId });
+      continue;
+    }
+    const sysTask = { ...task, taskType: 'internal' };
+    if (!canSpawn(sysTask, autonomousSlotCeiling)) {
+      await onDefer({ type: 'capacity', task, project: appId || '_self' });
+      continue;
+    }
+    emitSpawn(sysTask);
+    trackSpawn(sysTask);
+    admitted.push(sysTask);
+    spawned++;
+  }
+  return admitted;
+}
+
+async function recordAutoApprovedDeferral({ type, task, appId, project }, state, perProjectLimit) {
+  if (type === 'cooldown') {
+    emitLog('debug', `Skipping system task ${task.id} - app ${appId} on cooldown`);
+    await recordDecision(
+      DECISION_TYPES.COOLDOWN_ACTIVE,
+      `System task ${task.id} skipped — app ${appId} on cooldown (${Math.round(state.config.appReviewCooldownMs / 60000)}min window)`,
+      { taskId: task.id, appId, cooldownMs: state.config.appReviewCooldownMs }
+    );
+    return;
+  }
+  emitLog('debug', `⏳ Queued system task ${task.id} - per-project limit reached for ${project}`);
+  await recordDecision(
+    DECISION_TYPES.CAPACITY_FULL,
+    `System task ${task.id} deferred — per-project limit (${perProjectLimit}) reached for ${project}`,
+    { taskId: task.id, project, limit: perProjectLimit }
+  );
+}
+
 /**
  * Priority 0: On-demand task requests (highest priority — user explicitly
  * requested these). Reads the live schedule's `onDemandRequests`, clears each
@@ -770,7 +886,7 @@ async function resolveAutonomyBudget(state, runningAgentEntries) {
 async function spawnPriority0OnDemand(ctx) {
   const { state, availableSlots, tasksToSpawn, canSpawnTask, trackSpawn } = ctx;
 
-  await drainOnDemandRequests({ state }, {
+  const { schedule } = await drainOnDemandRequests({ state }, {
     capacityExhausted: () => tasksToSpawn.length >= availableSlots,
     canSpawn: (task) => canSpawnTask(task),
     emitSpawn: (task) => {
@@ -778,6 +894,7 @@ async function spawnPriority0OnDemand(ctx) {
       trackSpawn(task);
     },
   });
+  ctx.taskSchedule = schedule;
 }
 
 /**
@@ -824,73 +941,22 @@ async function spawnPriority1UserTasks(ctx) {
  */
 async function spawnPriority2AutoApproved(ctx) {
   const { state, cosTaskData, cosAutonomyMode, autonomousSlotCeiling, perProjectLimit, spawnProjectCounts, tasksToSpawn, canSpawnTask, trackSpawn, instanceId } = ctx;
-
-  if (tasksToSpawn.length < autonomousSlotCeiling && cosTaskData.exists && cosAutonomyMode !== 'execute') {
-    if (cosAutonomyMode === 'dry-run') {
-      // Log only the tasks execute mode would ACTUALLY spawn — applying the same
-      // instance-pin / peer-lease / max-spawns / cooldown / per-project gates
-      // against virtual capacity — rather than every auto-approved task
-      // regardless of eligibility.
-      const wouldSpawn = await selectDryRunAutoApproved(cosTaskData.autoApproved || [], {
-        availableSlots: autonomousSlotCeiling,
-        alreadySpawned: tasksToSpawn.length,
-        perProjectLimit,
-        spawnProjectCounts,
-        isOnCooldown: (appId) => isAppOnCooldown(appId, state.config.appReviewCooldownMs),
-        cooldownExempt: isCooldownExemptTask,
-        notRunnableHere: (task) => getSkipReason(task.metadata, instanceId) !== null
-      });
-      for (const task of wouldSpawn) {
-        emitLog('info', `[dry-run] CoS auto-run would spawn system task: ${task.id}`, { taskId: task.id, domainAutonomy: 'cos' });
-      }
-    }
-  } else if (tasksToSpawn.length < autonomousSlotCeiling && cosTaskData.exists) {
-    const autoApproved = cosTaskData.autoApproved || [];
-    for (const task of autoApproved) {
-      if (tasksToSpawn.length >= autonomousSlotCeiling) break;
-
-      // Pinned to another instance (#4520), or a federated peer holds a live
-      // lease on it (#1650) — skip it during candidate selection so it doesn't
-      // consume an autonomous slot the spawn guard would just reject.
-      const skipReason = getSkipReason(task.metadata, instanceId);
-      if (skipReason) {
-        emitLog('debug', `Skipping system task ${task.id} — ${skipReason}`, { taskId: task.id });
-        continue;
-      }
-
-      if (await blockIfExceedsMaxSpawns(task, 'internal')) continue;
-
-      // Check if task's app is on cooldown (pipeline continuations AND perpetual
-      // drains bypass cooldown — see isCooldownExemptTask).
-      const appId = task.metadata?.app;
-      if (appId && !isCooldownExemptTask(task)) {
-        const onCooldown = await isAppOnCooldown(appId, state.config.appReviewCooldownMs);
-        if (onCooldown) {
-          emitLog('debug', `Skipping system task ${task.id} - app ${appId} on cooldown`);
-          await recordDecision(
-            DECISION_TYPES.COOLDOWN_ACTIVE,
-            `System task ${task.id} skipped — app ${appId} on cooldown (${Math.round(state.config.appReviewCooldownMs / 60000)}min window)`,
-            { taskId: task.id, appId, cooldownMs: state.config.appReviewCooldownMs }
-          );
-          continue;
-        }
-      }
-
-      const sysTask = { ...task, taskType: 'internal' };
-      if (!canSpawnTask(sysTask, autonomousSlotCeiling)) {
-        const sysProject = appId || '_self';
-        emitLog('debug', `⏳ Queued system task ${task.id} - per-project limit reached for ${sysProject}`);
-        await recordDecision(
-          DECISION_TYPES.CAPACITY_FULL,
-          `System task ${task.id} deferred — per-project limit (${perProjectLimit}) reached for ${sysProject}`,
-          { taskId: task.id, project: sysProject, limit: perProjectLimit }
-        );
-        continue;
-      }
-      tasksToSpawn.push(sysTask);
-      trackSpawn(sysTask);
-    }
-  }
+  return admitAutoApprovedSystemTasks({
+    state,
+    cosTaskData,
+    taskSchedule: ctx.taskSchedule,
+    cosAutonomyMode,
+    autonomousSlotCeiling,
+    alreadySpawned: tasksToSpawn.length,
+    perProjectLimit,
+    spawnProjectCounts,
+    instanceId,
+  }, {
+    canSpawn: canSpawnTask,
+    trackSpawn,
+    emitSpawn: (task) => tasksToSpawn.push(task),
+    onDefer: (decision) => recordAutoApprovedDeferral(decision, state, perProjectLimit),
+  });
 }
 
 /**
@@ -903,43 +969,6 @@ async function maybeQueueImprovementTasks(ctx) {
   const { state, cosTaskData, hasPendingUserTasks, initialStartup, cosAutonomyMode } = ctx;
   if (state.config.idleReviewEnabled && !hasPendingUserTasks && !initialStartup && cosAutonomyMode === 'execute') {
     await queueEligibleImprovementTasks(state, cosTaskData);
-  }
-}
-
-/**
- * Priority 3: Mission-driven proactive tasks (if no user tasks). Autonomous —
- * gated by the CoS auto-run domain (off/dry-run skip generation entirely) and
- * capped by `autonomousSlotCeiling`.
- */
-async function spawnPriority3Missions(ctx) {
-  const { state, hasPendingUserTasks, cosAutonomyMode, autonomousSlotCeiling, tasksToSpawn, canSpawnTask, trackSpawn } = ctx;
-
-  if (tasksToSpawn.length < autonomousSlotCeiling && !hasPendingUserTasks && state.config.proactiveMode && cosAutonomyMode === 'execute') {
-    const missionTasks = await generateMissionTasks({ maxTasks: autonomousSlotCeiling - tasksToSpawn.length }).catch(err => {
-      emitLog('debug', `Mission task generation failed: ${err.message}`);
-      return [];
-    });
-
-    for (const missionTask of missionTasks) {
-      if (tasksToSpawn.length >= autonomousSlotCeiling) break;
-      // Convert mission task to COS task format
-      const cosTask = {
-        id: missionTask.id,
-        description: missionTask.description,
-        priority: missionTask.priority?.toUpperCase() || 'MEDIUM',
-        status: 'pending',
-        metadata: missionTask.metadata,
-        taskType: 'internal',
-        approvalRequired: !missionTask.autoApprove
-      };
-      if (!canSpawnTask(cosTask, autonomousSlotCeiling)) continue;
-      tasksToSpawn.push(cosTask);
-      trackSpawn(cosTask);
-      emitLog('info', `Generated mission task: ${missionTask.id} (${missionTask.metadata?.missionName})`, {
-        missionId: missionTask.metadata?.missionId,
-        appId: missionTask.metadata?.appId
-      });
-    }
   }
 }
 
@@ -986,13 +1015,18 @@ async function spawnPriority36FeatureAgents(ctx) {
 async function spawnPriority4IdleReview(ctx) {
   const { state, hasPendingUserTasks, cosAutonomyMode, autonomousSlotCeiling, tasksToSpawn, canSpawnTask, trackSpawn } = ctx;
 
-  if (tasksToSpawn.length === 0 && state.config.idleReviewEnabled && !hasPendingUserTasks && cosAutonomyMode === 'execute') {
+  if (isIdleTierEligible({
+    spawned: tasksToSpawn.length,
+    hasPendingUserTasks,
+    idleReviewEnabled: state.config.idleReviewEnabled,
+    autonomyMode: cosAutonomyMode
+  })) {
     const freshCosTasks = await getCosTasks();
     const pendingSystemTasks = freshCosTasks.autoApproved?.length || 0;
     if (pendingSystemTasks === 0) {
-      const idleTask = await generateIdleReviewTask(state);
+      const { task: idleTask, pendingPerpetualDispatch } = await generateIdleReviewTask(state);
       if (idleTask && canSpawnTask(idleTask, autonomousSlotCeiling)) {
-        await recordDeferredPerpetualDispatch(idleTask, await import('./taskSchedule.js'));
+        await recordDeferredPerpetualDispatch(pendingPerpetualDispatch, await import('./taskSchedule.js'));
         tasksToSpawn.push(idleTask);
         trackSpawn(idleTask);
       }
@@ -1008,14 +1042,13 @@ async function spawnPriority4IdleReview(ctx) {
  *   - Priority 0 — on-demand requests       (`spawnPriority0OnDemand`)
  *   - Priority 1 — pending user tasks        (`spawnPriority1UserTasks`)
  *   - Priority 2 — auto-approved system tasks (`spawnPriority2AutoApproved`)
- *   - Priority 3 — mission-driven tasks      (`spawnPriority3Missions`)
  *   - Priority 3.6 — due feature agents      (`spawnPriority36FeatureAgents`)
  *   - Priority 4 — idle review               (`spawnPriority4IdleReview`)
  *
  * Cross-cutting gates live here so they cover every tier uniformly: the
  * paused/daemon guard, the global slot cap, orphan-cooldown unblocking, and the
  * CoS auto-run + daily-budget gate (`resolveAutonomyBudget`). Priorities 0–1
- * spend against the global `availableSlots`; the autonomous tiers (2, 3, 3.6, 4)
+ * spend against the global `availableSlots`; the autonomous tiers (2, 3.6, 4)
  * spend against the lower `autonomousSlotCeiling` so the CoS action budget caps
  * them. `evaluateTasks` emits `task:ready` per pick; the spawn-side scheduler
  * (`dequeueNextTask`/`tryImmediateSpawn`) stays in cos.js.
@@ -1142,6 +1175,7 @@ export async function evaluateTasks(options) {
     hasPendingUserTasks,
     canSpawnTask,
     trackSpawn,
+    taskSchedule: null,
     autonomousSlotCeiling: availableSlots
   };
 
@@ -1163,10 +1197,9 @@ export async function evaluateTasks(options) {
     // unchanged. The autonomous tiers use this in place of `availableSlots`.
     ctx.autonomousSlotCeiling = Math.min(availableSlots, tasksToSpawn.length + autonomousActionsRemaining);
 
-    // Priorities 2, 3, 3.6, 4 spend against the lower autonomous ceiling.
+    // Priorities 2, 3.6, 4 spend against the lower autonomous ceiling.
     await spawnPriority2AutoApproved(ctx);
     await maybeQueueImprovementTasks(ctx);
-    await spawnPriority3Missions(ctx);
     await spawnPriority36FeatureAgents(ctx);
     await spawnPriority4IdleReview(ctx);
   }
@@ -1237,7 +1270,7 @@ export async function evaluateTasks(options) {
 export async function generateIdleReviewTask(state, { ignoreTaskId = null } = {}) {
   if (!isImprovementEnabled(state)) {
     emitLog('debug', 'Improvement tasks are disabled');
-    return null;
+    return { task: null, pendingPerpetualDispatch: null };
   }
 
   // Get all active (non-archived) managed apps (including PortOS)
@@ -1265,17 +1298,17 @@ export async function generateIdleReviewTask(state, { ignoreTaskId = null } = {}
       });
 
       emitLog('info', `Generating improvement task for ${nextApp.name}`, { appId: nextApp.id });
-      const idleTask = await generateManagedAppImprovementTask(nextApp, state, { ignoreTaskId });
+      const { task: idleTask, pendingPerpetualDispatch } = await generateManagedAppImprovementTask(nextApp, state, { ignoreTaskId });
       // Only bind the active marker once a real task exists.
       if (idleTask) {
         await bindAppReviewAgent(nextApp.id, `idle-review-${Date.now()}`);
       }
-      return idleTask;
+      return { task: idleTask, pendingPerpetualDispatch };
     }
   }
 
   emitLog('debug', 'No idle tasks available');
-  return null;
+  return { task: null, pendingPerpetualDispatch: null };
 }
 
 /**
@@ -1346,17 +1379,6 @@ export function buildImprovementDedupSets(existingTasks, { ignoreTaskId = null }
   return { existingTaskTypes, appsWithPendingImprovement, blockedTaskTypes, appsWithBlockedImprovement };
 }
 
-function prepareQueuedImprovementTask(task) {
-  // Queued tasks round-trip through COS-TASKS.md, whose task description field
-  // is single-line. Preserve the full prompt in metadata so the agent receives
-  // it after the task is re-read from disk.
-  if (typeof task.description === 'string' && task.description.includes('\n')) {
-    task.metadata = task.metadata || {};
-    task.metadata.prompt = task.description;
-    task.description = firstLine(task.description);
-  }
-  return task;
-}
 
 export async function queueDueInstallWideImprovementTasks({
   dueTasks,
@@ -1394,7 +1416,6 @@ export async function queueDueInstallWideImprovementTasks({
     task.priority = 'LOW';
     task.priorityValue = PRIORITY_VALUES.LOW;
     task.id = `sys-install-${taskType}-${Date.now().toString(36)}`;
-    prepareQueuedImprovementTask(task);
 
     const newTask = await persistTask(task, 'internal', { raw: true, ignoreTaskId, suppressDequeue: true });
     if (newTask?.duplicate) continue;
@@ -1521,11 +1542,9 @@ export async function queueEligibleImprovementTasks(state, cosTaskData, { ignore
     // agents claim the same slug (2026-05-21 incident). The generator
     // returns null on plan-gate / precondition skip; we silently continue.
     // Regression-pinned in cos.test.js.
-    const task = await generateManagedAppImprovementTaskForType(nextType, app, state, {
-      ignoreTaskId,
-      deferPerpetualDispatch: true
-    });
-    if (!task) continue;
+    const prepared = await prepareManagedAppImprovementTask(nextType, app, state, { ignoreTaskId });
+    if (!prepared?.task) continue;
+    const { task, pendingPerpetualDispatch } = prepared;
 
     // Queue-path invariants override the generator's direct-spawn defaults
     // (which use MEDIUM priority + `app-improve-*` id).
@@ -1533,41 +1552,17 @@ export async function queueEligibleImprovementTasks(state, cosTaskData, { ignore
     task.priorityValue = PRIORITY_VALUES.LOW;
     task.id = `sys-${app.id.slice(0, 8)}-${nextType}-${Date.now().toString(36)}`;
 
-    // Move the generator's multi-line prompt into `metadata.prompt` so it
-    // survives the COS-TASKS.md round-trip. The on-demand path dispatches the
-    // in-memory task immediately (cosEvents.emit('task:ready', task) with the
-    // unparsed object), so it never round-trips through the markdown — but
-    // the queue path persists first and re-reads from disk on the next
-    // `dequeueNextTask` tick. `generateTasksMarkdown` interpolates the full
-    // `task.description` onto a single line (taskParser.js:268) and
-    // `parseTasksMarkdown` only matches the first line of a `- [ ]` block —
-    // so any newline in `description` corrupts the file (stray `## Phase`
-    // lines become section headers, `- ` lines become new tasks) AND silently
-    // strips the Phase 1–7 instructions on the re-read. Task metadata is
-    // newline-escaped via `escapeNewlines`/`unescapeNewlines` (JSON-sentinel
-    // encoding) so it round-trips losslessly. The agent prompt builder
-    // (`cos-agent-briefing.md` + the built-in fallback in
-    // `agentPromptBuilder.js`) renders both `task.description` AND the task's
-    // context block into the agent's prompt, so the agent still sees the full
-    // Phase 1–7 body.
-    //
-    // The payload lands in `metadata.prompt`, NOT `metadata.context` (#4153):
-    // `context` is the one-line human note, and overloading it made a
-    // multi-thousand-character agent prompt indistinguishable from one. Readers
-    // go through `getTaskPrompt` (server/lib/cosTaskPrompt.js), which falls back
-    // to `metadata.context` for tasks written before the split.
-    // Keep the queue-path normalization visible here as well as in the
-    // install-wide helper: COS-TASKS.md is a single-line format, and the
-    // queue contract is source-checked by the scheduler tests.
-    if (typeof task.description === 'string' && task.description.includes('\n')) {
-      task.metadata = task.metadata || {};
-      task.metadata.prompt = task.description;
-      task.description = firstLine(task.description);
-    }
-
+    // Queue path: addTask's raw branch persists the task through COS-TASKS.md,
+    // which folds multi-line descriptions to first line + full body in
+    // metadata.prompt (#4153). On-demand path: emits unpersisted task on
+    // task:ready, renders full description via getTaskPrompt.
     const newTask = await addTask(task, 'internal', { raw: true, ignoreTaskId, suppressDequeue: true });
     if (newTask?.duplicate) continue;
-    await recordDeferredPerpetualDispatch(task, taskSchedule);
+    // Recorded from `pendingPerpetualDispatch` — the RECORD prepare returned —
+    // never from `task` or `newTask`: addTask hands back a different object
+    // whenever the description is multi-line, so recording must not depend on
+    // which one the caller is holding (#6871).
+    await recordDeferredPerpetualDispatch(pendingPerpetualDispatch, taskSchedule);
     if (wakeAfterRecord) cosEvents.emit('cos:dequeue-requested');
 
     await recordExecution(`task:${nextType}`, app.id);
@@ -1968,7 +1963,7 @@ async function generateManagedAppImprovementTask(app, state, { ignoreTaskId = nu
 
     if (!nextTypeResult) {
       emitLog('info', `No app improvement tasks are eligible for ${app.name} based on schedule`);
-      return null;
+      return { task: null, pendingPerpetualDispatch: null };
     }
 
     nextType = nextTypeResult.taskType;
@@ -1993,15 +1988,16 @@ async function generateManagedAppImprovementTask(app, state, { ignoreTaskId = nu
   // with the literal {prData}/{referenceData} markers and never poll. The
   // recordExecution + activity bump above already accounted for the idle
   // spawn; the per-type generator does not record execution itself.
-  const task = await generateManagedAppImprovementTaskForType(nextType, app, state, {
+  const prepared = await prepareManagedAppImprovementTask(nextType, app, state, {
     ignoreTaskId,
-    deferPerpetualDispatch: true,
     targetPullRequest
   });
+  const task = prepared?.task ?? null;
+  const pendingPerpetualDispatch = prepared?.pendingPerpetualDispatch ?? null;
   // Idle-review can steal a queued on-demand request for this app. That
   // request is still a user Run — apply the same consent as Priority 0.
   if (selectionReason === 'on-demand') applyOnDemandConsent(task);
-  return task;
+  return { task, pendingPerpetualDispatch };
 }
 
 /**
@@ -2538,10 +2534,22 @@ function applyProviderModelPins(metadata, interval, appPin, hookOverride, reques
   }
 }
 
-export async function generateManagedAppImprovementTaskForType(taskType, app, state, {
+/**
+ * Decide whether a managed-app improvement task should be generated for
+ * `taskType`, and build it if so. Never records a perpetual-drain dispatch —
+ * that is returned as `pendingPerpetualDispatch` (`null`, or
+ * `{ taskType, appId, signature }`) alongside the task, so the caller can
+ * record it (via `recordDeferredPerpetualDispatch`) at whatever point the
+ * task's admission is certain. `generateManagedAppImprovementTaskForType`
+ * below is the thin direct-caller wrapper that records immediately; the
+ * queue, on-demand, and idle-review paths call this function directly and
+ * defer the record until their own spawn-engine admission succeeds (#6871).
+ *
+ * @returns {Promise<{ task: Object|null, pendingPerpetualDispatch: Object|null }>}
+ */
+export async function prepareManagedAppImprovementTask(taskType, app, state, {
   skipPreconditions = false,
   ignoreTaskId = null,
-  deferPerpetualDispatch = false,
   targetPullRequest = null,
   // Per-request provider/model/effort pin — see applyProviderModelPins.
   providerOverride = null,
@@ -2722,7 +2730,9 @@ export async function generateManagedAppImprovementTaskForType(taskType, app, st
   }
   const planConstraintBlock = buildPlanConstraintBlock(metadata.planId);
 
-  const modeInstructions = isAuditTaskType(taskType) ? modeContractFor(fileIssues) : '';
+  const modeInstructions = isAuditTaskType(taskType)
+    ? `${modeContractFor(fileIssues)}\n\n${auditQualityInstructions(taskType)}`
+    : '';
   const baseDescription = await buildImprovementTaskDescription({
     promptTemplate: applyAuditModeWrapper(promptTemplate, modeInstructions),
     app, promptTaskType, metadata,
@@ -2813,22 +2823,42 @@ export async function generateManagedAppImprovementTaskForType(taskType, app, st
     ...approval
   };
 
-  // Most callers return the task to a spawn engine, so keep this side effect
-  // deferred until that engine admits the task. Direct callers retain the old
-  // immediate behavior; queue/on-demand/idle paths opt into the handoff below.
-  if (perpetualGate.spendDispatch) {
-    if (deferPerpetualDispatch) {
-      deferredPerpetualSignatures.set(task, {
-        taskType,
-        appId: app.id,
-        signature: perpetualGate.signature ?? null
-      });
-    } else {
-      await taskSchedule.recordPerpetualDispatch(taskType, app.id, perpetualGate.signature ?? null);
-    }
-  }
+  // The drain signature returns alongside the task instead of being recorded
+  // here — every caller sits between task construction and spawn-engine
+  // admission, and recordDeferredPerpetualDispatch is the one choke point
+  // that may spend the budget, once admission is certain (#6871).
+  const pendingPerpetualDispatch = perpetualGate.spendDispatch
+    ? { taskType, appId: app.id, signature: perpetualGate.signature ?? null }
+    : null;
 
-  return task;
+  return { task, pendingPerpetualDispatch };
+}
+
+/**
+ * Generate a managed app improvement task for a specific type.
+ * Used by on-demand task processing and can be called directly.
+ *
+ * Thin wrapper over `prepareManagedAppImprovementTask` (above) that records
+ * any deferred perpetual-dispatch signature immediately — the shape every
+ * direct caller got before the queue, on-demand, and idle-review paths needed
+ * to defer that record until their own admission gate passes. Those three
+ * callers use `prepareManagedAppImprovementTask` directly instead (see
+ * `queueEligibleImprovementTasks`, `onDemandDrain.js`, `generateIdleReviewTask`).
+ *
+ * @param {string} taskType - The type of improvement task (e.g., 'security-audit', 'code-quality')
+ * @param {Object} app - The managed app object
+ * @param {Object} state - Current CoS state
+ * @returns {Promise<Object|null>} Generated task, or null when nothing is eligible.
+ */
+export async function generateManagedAppImprovementTaskForType(taskType, app, state, opts = {}) {
+  const taskSchedule = await import('./taskSchedule.js');
+  const prepared = await prepareManagedAppImprovementTask(taskType, app, state, opts);
+  // Guard on `prepared?.task`, matching every other caller of prepare — task
+  // and pendingPerpetualDispatch are always constructed together, but this
+  // keeps the guard from silently drifting if that ever changes.
+  if (!prepared?.task) return null;
+  await recordDeferredPerpetualDispatch(prepared.pendingPerpetualDispatch, taskSchedule);
+  return prepared.task;
 }
 // `normalizeClaimReviewers` moved to server/lib/reviewerConfig.js (#4770, #5702): the
 // prompt builder needs the same copilot guard when it re-resolves reviewers off

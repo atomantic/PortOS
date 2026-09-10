@@ -183,6 +183,25 @@ describe('MindTab', () => {
     expect(within(screen.getByTestId('mind-chat')).getByLabelText('Message')).toBeInTheDocument();
   });
 
+  it('fills remaining desktop height and auto-grows the composer', async () => {
+    renderTab();
+    await screen.findByText('Review the next bounded slice.');
+
+    const chat = screen.getByTestId('mind-chat');
+    // Desktop fills the leftover column height; narrower viewports keep the
+    // dvh-relative box, and neither is capped by the old 54rem ceiling.
+    expect(chat.className).toContain('xl:h-full');
+    expect(chat.className).toContain('xl:min-h-0');
+    expect(chat.className).toContain('h-[68dvh]');
+    expect(chat.className).not.toMatch(/max-h-\[54rem\]/);
+
+    // AutoSizeTextarea sets the height from content, so the composer must not
+    // be a hand-resized fixed box any more.
+    const message = within(chat).getByLabelText('Message');
+    expect(message).toHaveClass('resize-none');
+    expect(message.className).not.toMatch(/resize-y/);
+  });
+
   it('keeps annotations in message details instead of the primary composer', async () => {
     const user = userEvent.setup();
     renderTab('/cos/mind?event=mind-message%3Amessage-1');
@@ -432,7 +451,7 @@ describe('MindTab', () => {
     expect(api.sendPersistentMindMessage.mock.calls[1][0].id).toBe(firstId);
   });
 
-  it('sends on Enter while preserving a newline for Option+Enter', async () => {
+  it('sends on Enter while preserving a newline for Option+Enter and Shift+Enter', async () => {
     const user = userEvent.setup();
     renderTab();
     await screen.findByText('Review the next bounded slice.');
@@ -442,6 +461,11 @@ describe('MindTab', () => {
     const optionEnter = createEvent.keyDown(message, { key: 'Enter', altKey: true });
     fireEvent(message, optionEnter);
     expect(optionEnter.defaultPrevented).toBe(false);
+    expect(api.sendPersistentMindMessage).not.toHaveBeenCalled();
+
+    const shiftEnter = createEvent.keyDown(message, { key: 'Enter', shiftKey: true });
+    fireEvent(message, shiftEnter);
+    expect(shiftEnter.defaultPrevented).toBe(false);
     expect(api.sendPersistentMindMessage).not.toHaveBeenCalled();
 
     await user.clear(message);

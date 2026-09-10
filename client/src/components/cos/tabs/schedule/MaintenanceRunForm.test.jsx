@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { act, render, screen, waitFor } from '@testing-library/react';
+import { act, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router';
 import { MAINTENANCE_TASK_ORDER } from '../../../../lib/quotaBurnTasks';
@@ -10,7 +10,7 @@ import MaintenanceRunForm from './MaintenanceRunForm';
 const socket = vi.hoisted(() => ({ on: vi.fn(), off: vi.fn(), emit: vi.fn() }));
 vi.mock('../../../../services/socket', () => ({ default: socket }));
 const api = vi.hoisted(() => ({
-  getMaintenanceRuns: vi.fn(), startMaintenanceRun: vi.fn(), stopMaintenanceRun: vi.fn(), resumeMaintenanceRun: vi.fn(),
+  getMaintenanceRuns: vi.fn(), startMaintenanceRun: vi.fn(), stopMaintenanceRun: vi.fn(),
   updateCosTaskInterval: vi.fn(), updateAppTaskTypeOverride: vi.fn(),
 }));
 vi.mock('../../../../services/api', () => api);
@@ -51,14 +51,26 @@ describe('maintenance launch', () => {
     await select(user);
     await user.click(screen.getByRole('button', { name: 'Run now' }));
     expect(screen.getByRole('button', { name: 'Starting…' })).toBeDisabled();
-    expect(api.startMaintenanceRun).toHaveBeenCalledWith({ appId: 'example', providerId: 'claude', model: 'sonnet', effort: 'high' }, { silent: true });
+    expect(api.startMaintenanceRun).toHaveBeenCalledWith({ appId: 'example', providerId: 'claude', model: 'sonnet', effort: 'high', mode: 'file-issues', claimBetweenAudits: true }, { silent: true });
     finishStart({ run: runRecord(), result: { dispatched: true, taskType: 'better-structural-drift' } });
     expect(await screen.findByText(/Maintenance started with better-structural-drift/)).toBeInTheDocument();
     const row = screen.getByRole('list', { name: 'Maintenance runs' });
     expect(row).toHaveTextContent('Example App');
-    expect(row).toHaveTextContent('running · 1/13 steps · claim-issue');
+    expect(row).toHaveTextContent('running · 2/13 steps · claim-issue');
     expect(screen.getByRole('button', { name: 'Run now' })).toBeDisabled();
     expect(screen.getByRole('link', { name: /Quota Burn/ })).toHaveAttribute('href', '/devtools/quota-burn');
+  });
+  it('names the live 1-based step while a recommended-workflow audit is running', async () => {
+    const auditSteps = MAINTENANCE_TASK_ORDER.map((taskType, index) => ({ id: `maint-1-${index}`, taskRef: { taskType } }));
+    api.getMaintenanceRuns.mockResolvedValue({ runs: [runRecord({
+      steps: auditSteps,
+      completed: { 'maint-1-0': 'done', 'maint-1-1': 'done' },
+      active: { stepId: 'maint-1-2', taskType: 'module-hygiene' },
+    })] });
+    show();
+    const row = await screen.findByRole('list', { name: 'Maintenance runs' });
+    expect(row).toHaveTextContent('running · 3/7 steps · module-hygiene');
+    expect(screen.getByRole('progressbar')).toHaveAttribute('value', '2');
   });
   it('reports a saved-but-holding run and a failed start honestly', async () => {
     const user = userEvent.setup();
@@ -72,18 +84,22 @@ describe('maintenance launch', () => {
     await user.click(screen.getByRole('button', { name: 'Run now' }));
     expect(await screen.findByText(/Could not start maintenance: a maintenance run is already in progress/)).toBeInTheDocument();
   });
-  it('stops and resumes an existing run from the list', async () => {
+  it('shows only active runs and removes a run when stopped', async () => {
     const user = userEvent.setup();
-    api.getMaintenanceRuns.mockResolvedValue({ runs: [runRecord()] });
+    api.getMaintenanceRuns.mockResolvedValue({ runs: [
+      runRecord({ id: 'old-completed', status: 'completed', providerId: 'historical-completed' }),
+      runRecord(),
+      runRecord({ id: 'old-stopped', status: 'stopped', providerId: 'historical-stopped' }),
+    ] });
     api.stopMaintenanceRun.mockResolvedValue({ run: runRecord({ status: 'stopped', reason: 'stopped by the user' }) });
-    api.resumeMaintenanceRun.mockResolvedValue({ run: runRecord(), result: { dispatched: true, taskType: 'claim-issue' } });
     show();
-    await user.click(await screen.findByRole('button', { name: 'Stop' }));
-    expect(await screen.findByText(/stopped · 1\/13 steps/)).toBeInTheDocument();
+    await screen.findByRole('button', { name: 'Stop' });
+    expect(screen.queryByText(/historical-/)).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Resume' })).not.toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Stop' }));
     expect(api.stopMaintenanceRun).toHaveBeenCalledWith('maint-1', { silent: true });
-    await user.click(screen.getByRole('button', { name: 'Resume' }));
-    expect(await screen.findByText(/running · 1\/13 steps/)).toBeInTheDocument();
-    expect(screen.getByText(/Maintenance started with claim-issue/)).toBeInTheDocument();
+    expect(screen.queryByRole('list', { name: 'Maintenance runs' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Refresh runs' })).not.toBeInTheDocument();
   });
   it('blocks missing task eligibility and a stopped daemon', async () => {
     const user = userEvent.setup();
@@ -158,6 +174,8 @@ it('streams agent activity and completed steps, and removes listeners on unmount
   expect(screen.getByRole('link', { name: 'Open agent in new tab' })).toHaveAttribute('target', '_blank');
   act(() => update(runRecord()));
   expect(screen.getByRole('progressbar')).toHaveAttribute('value', '1');
+  act(() => update(runRecord({ status: 'completed', active: null })));
+  expect(screen.queryByRole('list', { name: 'Maintenance runs' })).not.toBeInTheDocument();
   view.unmount();
   expect(socket.off).toHaveBeenCalledWith('cos:maintenance:updated', update);
 });
@@ -172,5 +190,54 @@ it('keeps a newer live update when an older initial fetch resolves late, and ref
   expect(screen.getByRole('progressbar')).toHaveAttribute('value', '1');
   api.getMaintenanceRuns.mockResolvedValue({ runs: [runRecord({ status: 'completed', active: null })] });
   await act(async () => socket.on.mock.calls.find(([name]) => name === 'connect')[1]());
-  expect(screen.getByText(/completed · 1\/13 steps/)).toBeInTheDocument();
+  expect(screen.queryByRole('list', { name: 'Maintenance runs' })).not.toBeInTheDocument();
+});
+
+it('launches fix mode only after renewed consent', async () => {
+  const user = userEvent.setup();
+  show();
+  await select(user);
+  await user.selectOptions(screen.getByLabelText('Audit mode'), 'fix');
+  expect(screen.getByRole('button', { name: 'Run now' })).toBeDisabled();
+  expect(screen.getByText(/one final claim pass/)).toBeInTheDocument();
+  expect(screen.getByText('Planned steps · 8')).toBeInTheDocument();
+  expect(screen.queryByLabelText('Issue handling')).not.toBeInTheDocument();
+  await user.click(screen.getByRole('checkbox'));
+  await user.click(screen.getByRole('button', { name: 'Run now' }));
+  expect(api.startMaintenanceRun).toHaveBeenCalledWith(expect.objectContaining({ mode: 'fix' }), { silent: true });
+});
+
+it('previews and starts issue filing without requiring claim jobs', async () => {
+  const user = userEvent.setup();
+  show({ schedule: { tasks: { ...tasks, 'claim-issue': { enabled: false } } } });
+  await select(user);
+  await user.selectOptions(screen.getByLabelText('Issue handling'), 'false');
+  expect(screen.getByRole('button', { name: 'Run now' })).toBeDisabled();
+  expect(screen.getByText('Planned steps · 7')).toBeInTheDocument();
+  expect(screen.getByRole('list', { name: 'Planned maintenance steps' })).not.toHaveTextContent('claim-issue');
+  expect(screen.queryByText(/Run now needs these saved task settings/)).not.toBeInTheDocument();
+  await user.click(screen.getByRole('checkbox'));
+  await user.click(screen.getByRole('button', { name: 'Run now' }));
+  expect(api.startMaintenanceRun).toHaveBeenCalledWith(expect.objectContaining({ mode: 'file-issues', claimBetweenAudits: false }), { silent: true });
+});
+
+it('selects an independent claim handler and omits it in file-only mode', async () => {
+  const user = userEvent.setup();
+  show();
+  await select(user);
+  const claim = within(screen.getByRole('group', { name: 'Claim-issue handler' }));
+  await user.selectOptions(claim.getByRole('combobox', { name: 'Claim provider' }), 'claude');
+  expect(screen.getByRole('button', { name: 'Run now' })).toBeDisabled();
+  await user.selectOptions(claim.getByRole('combobox', { name: 'Model' }), 'sonnet');
+  await user.selectOptions(claim.getByRole('combobox', { name: /effort/i }), 'low');
+  await user.click(screen.getByRole('checkbox'));
+  await user.click(screen.getByRole('button', { name: 'Run now' }));
+  expect(api.startMaintenanceRun).toHaveBeenLastCalledWith(expect.objectContaining({ effort: 'high', claimHandler: { providerId: 'claude', model: 'sonnet', effort: 'low' } }), { silent: true });
+  await user.selectOptions(screen.getByLabelText('Issue handling'), 'false');
+  expect(screen.queryByRole('group', { name: 'Claim-issue handler' })).not.toBeInTheDocument();
+  await user.click(screen.getByRole('checkbox'));
+  await user.click(screen.getByRole('button', { name: 'Run now' }));
+  expect(api.startMaintenanceRun.mock.calls.at(-1)[0]).not.toHaveProperty('claimHandler');
+  await user.selectOptions(screen.getByLabelText('Audit mode'), 'fix');
+  expect(screen.getByRole('group', { name: 'Claim-issue handler' })).toBeInTheDocument();
 });

@@ -15,6 +15,7 @@ process.env.NODE_ENV = 'test';
  * listed explicitly below (the drift guard fails the build if you forget).
  */
 export const DB_TEST_INCLUDE = [
+  'services/appQuality.db.test.js',
   '**/db.test.js',
   'services/catalogDB.test.js',
   'services/catalogDB.facets.db.test.js',

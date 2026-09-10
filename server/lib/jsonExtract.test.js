@@ -1,5 +1,7 @@
+import { extractNonPlaceholderJson } from "./jsonExtract.js";
 import { describe, it, expect } from 'vitest';
 import { findAllBalancedBlocks, findBalancedBlocks, tryParseWithRepair, extractJson } from './jsonExtract.js';
+import { BRAIN_DIGEST_ECHO_FIXTURE } from '../test/fixtures/brainDigestEcho.js';
 
 describe('jsonExtract.findBalancedBlocks', () => {
   it('returns the single top-level brace-balanced block', () => {
@@ -233,6 +235,15 @@ describe('jsonExtract.extractJson', () => {
     expect(value.stylePrompt).toBe('painterly');
   });
 
+  it('skips a fenced echoed schema before the real caller response', () => {
+    const { value } = extractJson(BRAIN_DIGEST_ECHO_FIXTURE.raw, {
+      skipInnerFence: true,
+      shapePredicate: (candidate) => candidate && typeof candidate === 'object'
+        && Array.isArray(candidate.topActions),
+    });
+    expect(value).toEqual(BRAIN_DIGEST_ECHO_FIXTURE.actual);
+  });
+
   it('falls back to the first parseable block when shapePredicate matches nothing', () => {
     // If the predicate is too strict to match anything, the first valid
     // block is still returned so callers can decide whether to accept
@@ -337,5 +348,68 @@ describe('findAllBalancedBlocks', () => {
   it('returns [] for non-string or empty input', () => {
     expect(findAllBalancedBlocks(null)).toEqual([]);
     expect(findAllBalancedBlocks('')).toEqual([]);
+  });
+});
+
+describe("extractNonPlaceholderJson", () => {
+  const extractRefinementJson = (raw) => extractNonPlaceholderJson(raw, { field: "starterPrompt" });
+  it("parses a raw refinement object", () => {
+    const obj = {
+      starterPrompt: "a darker scavenger universe",
+      stylePrompt: "gritty palette, deep shadows",
+      negativePrompt: "cute, neon",
+      rationale: "pushed mood toward grim",
+    };
+    expect(extractRefinementJson(JSON.stringify(obj))).toEqual(obj);
+  });
+
+  it("strips ```json fences", () => {
+    const fenced =
+      '```json\n{"starterPrompt":"x","stylePrompt":"y","negativePrompt":""}\n```';
+    expect(extractRefinementJson(fenced)).toMatchObject({
+      starterPrompt: "x",
+      stylePrompt: "y",
+    });
+  });
+
+  it("skips preamble before the JSON", () => {
+    const raw =
+      'Here is the refinement:\n{"starterPrompt":"x","stylePrompt":"y"}\nend';
+    expect(extractRefinementJson(raw)).toMatchObject({ starterPrompt: "x" });
+  });
+
+  it("skips a schema-example block that has a <…> placeholder starterPrompt and parses the real block (Codex CLI prompt echo)", () => {
+    const raw = [
+      "codex banner",
+      // The prompt template body — its first balanced { ... } block contains
+      // <…> placeholders that walked past extractRefinementJson by mistake
+      // would surface as "AI returned schema placeholder" instead of finding
+      // the real response below it.
+      '{"starterPrompt":"<full rewritten…>","stylePrompt":"<…>","negativePrompt":"<…>"}',
+      "codex response:",
+      '{"starterPrompt":"a darker universe","stylePrompt":"gritty","negativePrompt":""}',
+    ].join("\n");
+    const out = extractRefinementJson(raw);
+    expect(out.starterPrompt).toBe("a darker universe");
+    expect(out.stylePrompt).toBe("gritty");
+  });
+
+  it("throws when ONLY schema-placeholder blocks are present", () => {
+    const raw = '{"starterPrompt":"<placeholder>","stylePrompt":"<x>"}';
+    expect(() => extractRefinementJson(raw)).toThrow(/schema placeholder/);
+  });
+
+  it("throws on empty / non-string input", () => {
+    expect(() => extractRefinementJson("")).toThrow(/Empty AI response/);
+    expect(() => extractRefinementJson(null)).toThrow(/Empty AI response/);
+  });
+
+  it("throws when no balanced JSON object with starterPrompt is present", () => {
+    expect(() => extractRefinementJson("just prose, no json")).toThrow(
+      /Invalid JSON/,
+    );
+    expect(() => extractRefinementJson('{"prompt":"unrelated shape"}')).toThrow(
+      /Invalid JSON/,
+    );
   });
 });

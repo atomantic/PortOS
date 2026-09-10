@@ -11,14 +11,19 @@ const testPython = resolveTestPython();
 describe('tts-qwen3', () => {
   it('enumerates default Qwen3 voices', async () => {
     const voices = await listQwen3Voices();
-    expect(Array.isArray(voices)).toBe(true);
-    expect(voices.length).toBeGreaterThan(0);
-    expect(voices[0]).toHaveProperty('id');
+    expect(voices).toContainEqual(expect.objectContaining({
+      id: 'qwen3-tts:warm-narrator',
+      voice: 'warm-narrator',
+      name: 'Warm Narrator (1.7B Design)',
+      label: 'Warm Narrator (1.7B Design)',
+    }));
+    expect(voices.every((preset) => preset.id === `qwen3-tts:${preset.voice}`)).toBe(true);
   });
 
   it.skipIf(!testPython)('synthesizes speech with voice design and rate controls', async () => {
     const result = await synthesizeQwen3('This is a test of voice design synthesis.', {
       mode: 'design',
+      voice: 'warm-narrator',
       instructions: 'warm low alto',
       seed: 42,
       rate: 1.1,

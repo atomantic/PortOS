@@ -24,39 +24,39 @@ describe('resolvePrCompletion', () => {
 
 describe('resolvePrCreation (#3733)', () => {
   it('never creates one for a task that asked for no PR', () => {
-    expect(resolvePrCreation({ taskOpenPR: false, agentOwnsPr: false, prClaimVerified: false })).toBe(PR_CREATION.NEVER);
+    expect(resolvePrCreation({ taskOpenPR: false, agentOpensOwnPr: false, prClaimVerified: false })).toBe(PR_CREATION.NEVER);
     // …even if the agent would otherwise have owned it.
-    expect(resolvePrCreation({ taskOpenPR: false, agentOwnsPr: true, prClaimVerified: false })).toBe(PR_CREATION.NEVER);
+    expect(resolvePrCreation({ taskOpenPR: false, agentOpensOwnPr: true, prClaimVerified: false })).toBe(PR_CREATION.NEVER);
   });
 
   it('creates one outright when PortOS owns the lifecycle (a lean --bare session)', () => {
-    expect(resolvePrCreation({ taskOpenPR: true, agentOwnsPr: false, prClaimVerified: false })).toBe(PR_CREATION.ALWAYS);
+    expect(resolvePrCreation({ taskOpenPR: true, agentOpensOwnPr: false, prClaimVerified: false })).toBe(PR_CREATION.ALWAYS);
   });
 
   it('never creates an empty PR after finalize proves an opted-in audit is a no-op', () => {
     expect(resolvePrCreation({
       taskOpenPR: true,
-      agentOwnsPr: false,
+      agentOpensOwnPr: false,
       prClaimVerified: false,
       noChangesToShip: true,
     })).toBe(PR_CREATION.NEVER);
   });
 
   it('backstops an owner finalize did NOT verify — the slashdo-free harnesses', () => {
-    expect(resolvePrCreation({ taskOpenPR: true, agentOwnsPr: true, prClaimVerified: false })).toBe(PR_CREATION.IF_MISSING);
+    expect(resolvePrCreation({ taskOpenPR: true, agentOpensOwnPr: true, prClaimVerified: false })).toBe(PR_CREATION.IF_MISSING);
   });
 
   it('backstops an owner whose claim was never actually verified', () => {
     // `prClaimVerified` is the ACTUAL verdict, not "was one expected" — finalize
     // substitutes a bare `{ok:true}` when its check throws or the run was
     // user-terminated, and a throw from finalize skips the assignment entirely.
-    expect(resolvePrCreation({ taskOpenPR: true, agentOwnsPr: true, prClaimVerified: false })).toBe(PR_CREATION.IF_MISSING);
+    expect(resolvePrCreation({ taskOpenPR: true, agentOpensOwnPr: true, prClaimVerified: false })).toBe(PR_CREATION.IF_MISSING);
   });
 
   it('stands down for an owner finalize already verified, rather than re-asking the forge', () => {
     // A slashdo-capable run that reaches cleanup as a success already passed
     // verifyPrClaim; a second `gh pr list` would be pure duplication.
-    expect(resolvePrCreation({ taskOpenPR: true, agentOwnsPr: true, prClaimVerified: true })).toBe(PR_CREATION.NEVER);
+    expect(resolvePrCreation({ taskOpenPR: true, agentOpensOwnPr: true, prClaimVerified: true })).toBe(PR_CREATION.NEVER);
   });
 });
 

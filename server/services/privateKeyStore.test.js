@@ -54,7 +54,7 @@ it('moves legacy keys out of settings, preserves unrelated data, and resolves af
 
 it('persists a successful Artificial Analysis key and reuses it without a request key', async () => {
   vi.doMock('./modelComparison.js', () => ({ importModelComparison: vi.fn(async () => ({ observations: [] })) }));
-  const fetchMock = vi.fn(async () => ({ ok: true, json: async () => ({ data: [{ id: 'example', name: 'Example Model', slug: 'example-model', model_creator: { name: 'Example' }, evaluations: { artificial_analysis_intelligence_index: 40 } }], pagination: { has_more: false } }) }));
+  const fetchMock = vi.fn(async () => ({ ok: true, json: async () => ({ intelligence_index_version: '4.3', data: [{ id: 'example', name: 'Example Model', slug: 'example-model', model_creator: { name: 'Example' }, evaluations: { artificial_analysis_intelligence_index: 40 } }], pagination: { has_more: false } }) }));
   vi.stubGlobal('fetch', fetchMock);
   vi.stubEnv('ARTIFICIAL_ANALYSIS_API_KEY', 'example-env');
   const { syncArtificialAnalysisCatalog } = await import('./artificialAnalysis.js');

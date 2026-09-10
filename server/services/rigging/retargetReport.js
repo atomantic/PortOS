@@ -26,6 +26,7 @@
  * is NOT declared here: a retarget report rides the Phase 2 `AUTO_SKIN_REPORT_VERSION`
  * that `publishRigArtifacts` stamps, because there is one rigging report format.
  */
+import { isNonBlankStr } from '../../lib/textUtils.js';
 export const RETARGET_REPORT_KIND = 'retarget';
 
 /**
@@ -95,7 +96,6 @@ export const RETARGET_FAILURE_REASONS = Object.freeze({
 
 const isCount = (value) => Number.isInteger(value) && value >= 0;
 const isNonNegative = (value) => Number.isFinite(value) && value >= 0;
-const isNamed = (value) => typeof value === 'string' && value.trim().length > 0;
 const formatPercent = (fraction) => `${(Number(fraction) * 100).toFixed(1)}%`;
 
 /**
@@ -109,8 +109,8 @@ function readMeasurements(report) {
   const motion = report?.motion;
   const roundTrip = report?.round_trip;
   if (!isCount(report?.vertices?.total)) return null;
-  if (!isNamed(skeleton?.hint) || !Array.isArray(skeleton?.unmapped_bones) || !isCount(skeleton?.mapped_bones)) return null;
-  if (!isNamed(cleanup?.mode) || !isCount(cleanup?.proposed_vertices) || !isCount(cleanup?.changed_vertices)) return null;
+  if (!isNonBlankStr(skeleton?.hint) || !Array.isArray(skeleton?.unmapped_bones) || !isCount(skeleton?.mapped_bones)) return null;
+  if (!isNonBlankStr(cleanup?.mode) || !isCount(cleanup?.proposed_vertices) || !isCount(cleanup?.changed_vertices)) return null;
   if (!isCount(motion?.sampled_frames) || !isNonNegative(motion?.max_joint_translation)) return null;
   if (!roundTrip || typeof roundTrip !== 'object') return null;
   return { skeleton, cleanup, motion, roundTrip, totalVertices: report.vertices.total };
@@ -170,7 +170,7 @@ export function reduceRetargetGate(report, { thresholds = RETARGET_DEFAULTS, mod
     changedCleanupVertices: measured.cleanup.changed_vertices,
     cleanupCapVertices: capVertices,
     cleanupOverCap: measured.cleanup.proposed_vertices > capVertices,
-    exportedClipName: isNamed(measured.roundTrip.clip_name) ? measured.roundTrip.clip_name : null,
+    exportedClipName: isNonBlankStr(measured.roundTrip.clip_name) ? measured.roundTrip.clip_name : null,
     exportedClipDuration: Number.isFinite(measured.roundTrip.clip_duration) ? measured.roundTrip.clip_duration : 0,
     sampledFrames: measured.motion.sampled_frames,
     maxJointTranslation: measured.motion.max_joint_translation,

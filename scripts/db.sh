@@ -511,7 +511,9 @@ cmd_setup_native() {
   log "Native PostgreSQL is ready!"
   info "Using system PostgreSQL on port $PGPORT"
   info "Database: $PGDATABASE (user: $PGUSER)"
-  info "To migrate data from Docker: scripts/db.sh migrate"
+  info "Setup selected native mode; Docker data has not been migrated."
+  warn "Running 'scripts/db.sh migrate' now would copy native data OVER Docker data."
+  info "Before moving Docker data to native, see docs/STORAGE.md#moving-between-docker-and-native."
 }
 
 # Run psql command, using Docker exec in Docker mode if host psql is unavailable

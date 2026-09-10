@@ -65,6 +65,7 @@ export function InstanceFeaturesTab() {
   const { features, groups, error, reload } = useInstanceFeatures();
   const [savingId, setSavingId] = useState(null);
   const [eidoverseRepoUrl, setEidoverseRepoUrl] = useState(null);
+  const [eidoverseBranch, setEidoverseBranch] = useState(null);
   const [updatingEidoverseSource, setUpdatingEidoverseSource] = useState(false);
   const [recheckingEidoverse, setRecheckingEidoverse] = useState(false);
 
@@ -126,7 +127,7 @@ export function InstanceFeaturesTab() {
     const worldsRepoUrl = eidoverseRepoUrl ?? feature?.setup?.worldsRepoUrl;
     if (!worldsRepoUrl) return;
     setSavingId(feature.id);
-    const result = await installEidoverseFeature(worldsRepoUrl, { silent: true }).catch((err) => {
+    const result = await installEidoverseFeature(worldsRepoUrl, { silent: true }, eidoverseBranch ?? feature?.setup?.worldsBranch ?? '').catch((err) => {
       toast.error(err.message || 'Could not install Eidoverse Worlds');
       return null;
     });
@@ -144,15 +145,16 @@ export function InstanceFeaturesTab() {
     if (!worldsRepoUrl || !isGitHubRepoUrl(worldsRepoUrl)) return;
     setUpdatingEidoverseSource(true);
     setSavingId(feature.id);
-    const result = await updateEidoverseWorldsSource(worldsRepoUrl, { silent: true }).catch((err) => {
+    const result = await updateEidoverseWorldsSource(worldsRepoUrl, { silent: true }, eidoverseBranch ?? feature?.setup?.worldsBranch ?? '').catch((err) => {
       toast.error(err.message || 'Could not update the Eidoverse Worlds source');
       return null;
     });
 
     if (result) {
       setEidoverseRepoUrl(null);
+      setEidoverseBranch(null);
       publishInstanceFeatures(result.features, { featureId: feature.id, enabled: feature.enabled });
-      toast.success('Eidoverse Worlds GitHub origin updated');
+      toast.success('Eidoverse Worlds source saved. Update or restart the managed app to reload the runtime.');
     }
     setUpdatingEidoverseSource(false);
     setSavingId(null);
@@ -223,7 +225,7 @@ export function InstanceFeaturesTab() {
     const repoIsValid = isGitHubRepoUrl(selectedRepoUrl);
     const canInstall = repoIsValid && setup?.registryAvailable !== false;
     const canUpdateSource = repoIsValid
-      && normalizeGitHubRepo(selectedRepoUrl) !== setup?.worldsRepoUrl
+      && (normalizeGitHubRepo(selectedRepoUrl) !== setup?.worldsRepoUrl || (eidoverseBranch !== null && eidoverseBranch.trim() !== (setup?.worldsBranch ?? '')))
       && setup?.registryAvailable !== false;
     const launchUrl = setup?.appId && setup?.uiPort
       ? getPrimaryLaunchUrl({ id: setup.appId, uiPort: setup.uiPort })
@@ -258,6 +260,7 @@ export function InstanceFeaturesTab() {
                   Worlds GitHub repository
                 </label>
                 <span className="flex flex-wrap gap-2 mb-2">
+                  <SourceChoiceButton active={selectedRepo?.owner === 'atomantic' && (eidoverseBranch ?? setup?.worldsBranch) === 'portos'} disabled={savingId !== null} onClick={() => { setEidoverseRepoUrl(buildEidoverseRepoUrl('atomantic', selectedTransport)); setEidoverseBranch('portos'); }}>Recommended (portos)</SourceChoiceButton>
                   <span role="group" aria-label="Worlds repository owner" className="inline-flex gap-1 rounded-lg border border-port-border p-1">
                     <SourceChoiceButton
                       active={Boolean(selfOwner) && selectedRepo?.owner?.toLowerCase() === selfOwner.toLowerCase()}
@@ -304,6 +307,23 @@ export function InstanceFeaturesTab() {
                   placeholder="https://github.com/example-owner/eidoverse-worlds"
                 />
               </div>
+              {(
+                <div className="pt-2">
+                  <label className="block text-gray-300 mb-1" htmlFor="eidoverse-worlds-branch">Worlds runtime / tracking branch</label>
+                  <input
+                    id="eidoverse-worlds-branch"
+                    type="text"
+                    value={eidoverseBranch ?? setup?.worldsBranch ?? ''}
+                    onChange={(event) => setEidoverseBranch(event.target.value)}
+                    disabled={savingId !== null}
+                    maxLength={255}
+                    placeholder="Repository default branch"
+                    aria-describedby="eidoverse-worlds-branch-help"
+                    className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white focus:border-port-accent focus:outline-hidden disabled:opacity-50"
+                  />
+                  <p id="eidoverse-worlds-branch-help" className="mt-1">Select the branch used by app updates. Update source switches a clean checkout to that branch; restart the app to load it. Leave blank to follow the repository default on the next app update.</p>
+                </div>
+              )}
               {!repoIsValid && (
                 <p id="eidoverse-worlds-repo-error" role="alert" className="text-port-error">
                   {selectedRepoUrl === ''
@@ -314,7 +334,7 @@ export function InstanceFeaturesTab() {
               <p>
                 {needsInstall
                   ? 'Use your own fork if you want PortOS agents to prepare changes and PRs against it.'
-                  : 'Changing this updates the installed checkout’s Git origin in place. Local work, the managed-app path, and world data stay untouched.'}
+                  : 'Changing this updates the installed checkout’s Git origin in place. Branch changes require a clean checkout and preserve local commits and world data.'}
               </p>
               {!needsInstall && (
                 <button

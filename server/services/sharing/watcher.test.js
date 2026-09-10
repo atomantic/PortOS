@@ -12,7 +12,7 @@ vi.mock('./buckets.js', () => ({
   ensureBucketLayout: vi.fn().mockResolvedValue(undefined),
 }));
 vi.mock('./manifest.js', () => ({ isManifestPruning: vi.fn(), pruneBucketManifests: vi.fn() }));
-vi.mock('../instances.js', () => ({ getInstanceId: vi.fn() }));
+vi.mock('../instanceIdentity.js', () => ({ getInstanceId: vi.fn() }));
 
 import { watch } from 'chokidar';
 import { processBacklog, processManifest, handleUnshare } from './importer.js';

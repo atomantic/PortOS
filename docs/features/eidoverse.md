@@ -10,8 +10,9 @@ platform installer under the PortOS service account on Windows, macOS, or Linux.
 ## What PortOS installs
 
 The installer keeps the two AGPL-3.0 projects as independent git checkouts. The
-Worlds repository is selected per PortOS instance; the canonical upstream is
-the default, while an instance owner can enter their own fork before installing:
+Worlds repository is selected per PortOS instance. The recommended default is
+`https://github.com/atomantic/eidoverse-worlds` on branch `portos`; an instance
+owner can enter another GitHub origin and branch before installing:
 
 - `data/repos/{owner}/{repo}` — the selected Worlds repository and the checkout
   PortOS registers under **Apps**. Ordinary GitHub forks retain the
@@ -26,10 +27,15 @@ at its durable world store. PortOS does not copy either project's source into
 the PortOS repository, combine the codebases, or relicense them; each checkout
 retains its own upstream license and git history.
 
-After installation, the **Worlds GitHub repository** field remains available on
-**Settings → Features**. Updating it changes the installed checkout's `origin`
-in place, so the managed-app path, local working tree, and world data stay
-untouched. The companion video checkout remains on its upstream repository.
+After installation, **Worlds GitHub repository** and **Worlds runtime / tracking
+branch** remain available on **Settings → Features**. **Recommended (portos)**
+selects the recommended origin and branch; **Update source** applies the choice
+in place. Branch changes require a clean checkout and refuse to overwrite local
+commits absent from the target. Restart or update the managed app to load the
+changed code. App updates honor the selected branch using the checkout-local
+`portos.runtimeBranch` Git setting; clearing the field restores the origin default
+branch on the next update. Existing saved choices are preserved. The managed-app
+path, world data, and companion video origin remain unchanged.
 
 The managed app's **Git** tab makes that two-repository topology explicit. It
 shows the checked-out branch and revision for Worlds and Video, compares each

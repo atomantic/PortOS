@@ -11,7 +11,6 @@
 
 import { randomUUID } from 'crypto';
 import { pickRenderedFilename } from '../../lib/renderSlot.js';
-import { isStr, trimTo } from '../../lib/storyBible.js';
 import { UNSCOPED_ANCHOR } from '../../lib/pipelineIssueOrder.js';
 import { emitRecordUpdated } from '../sharing/recordEvents.js';
 import * as seriesSvc from './series.js';
@@ -22,6 +21,7 @@ import {
   ERR_NOT_FOUND, ERR_VALIDATION, ERR_DUPLICATE, ERR_SEASON_LOCKED,
   TITLE_MAX, SERIES_ID_MAX, ISSUES_PER_RESPONSE_MAX,
 } from './issuesShared.js';
+import { isStr, trimTo } from '../../lib/textUtils.js';
 
 export async function listIssues({
   seriesId = null,

@@ -214,6 +214,20 @@ describe('evaluateSceneWithVision', () => {
       resolvePath('/data/video-thumbnails/job-1-f2.jpg'),
     ]);
     expect(call.source).toBe('cd-scene-evaluate');
+    expect(call.timeout).toBe(180000);
+  });
+
+  it.each([600000, 60000])('honors a configured provider timeout of %ims', async (timeout) => {
+    const provider = { ...OLLAMA, timeout };
+    mocks.getProviderById.mockResolvedValue(provider);
+    mocks.runPromptThroughProvider.mockResolvedValue({
+      text: '{"accepted": true}', model: 'qwen2.5-vl', provider,
+    });
+
+    const result = await evaluateSceneWithVision(project, scene);
+
+    expect(result.verdict.accepted).toBe(true);
+    expect(mocks.runPromptThroughProvider.mock.calls[0][0].timeout).toBe(timeout);
   });
 
   it('falls back to the agent when no vision provider is configured', async () => {

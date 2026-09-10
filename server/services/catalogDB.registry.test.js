@@ -52,7 +52,7 @@ vi.mock('../lib/db.js', () => ({
   arrayToPgvector: vi.fn((a) => a),
 }));
 
-vi.mock('./instances.js', () => ({
+vi.mock('./instanceIdentity.js', () => ({
   getInstanceId: vi.fn(async () => 'inst-test'),
 }));
 

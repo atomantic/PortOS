@@ -62,6 +62,10 @@ vi.mock('../services/persistentMindMaintenance.js', () => ({
 vi.mock('../services/persistentMindTaskCapability.js', () => ({
   readPersistentMindTaskCatalog: mocks.readPersistentMindTaskCatalog,
 }));
+vi.mock('../services/persistentMindAttachments.js', () => ({
+  createPersistentMindAttachment: mocks.createPersistentMindAttachment,
+  deletePersistentMindAttachment: mocks.deletePersistentMindAttachment,
+}));
 vi.mock('../services/persistentMindSupervisor.js', () => ({
   createPersistentMindAttachment: mocks.createPersistentMindAttachment,
   deletePersistentMindAttachment: mocks.deletePersistentMindAttachment,

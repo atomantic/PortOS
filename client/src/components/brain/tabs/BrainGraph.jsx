@@ -1,7 +1,5 @@
-import { useState, useEffect, useMemo, useRef, useCallback, memo } from 'react';
-import { Canvas, useThree } from '@react-three/fiber';
-import { OrbitControls } from '@react-three/drei';
-import * as THREE from 'three';
+import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
+import { Canvas } from '@react-three/fiber';
 import {AlertTriangle, Zap, RefreshCw, X, ChevronRight, ArrowLeft, Compass, Info} from 'lucide-react';
 import toast from '../../ui/Toast';
 import * as api from '../../../services/api';
@@ -9,13 +7,13 @@ import { BRAIN_TYPE_HEX, DESTINATIONS } from '../constants';
 import { chipColors } from '../../../lib/chipContrast';
 import { useThemeContext } from '../../ThemeContext';
 import { buildGraph } from '../../../lib/graphSimulation';
-import { pickNearestNodeByScreenDistance, isTapGesture } from '../../../lib/graphPicking';
 import { pushFocus, popFocus, currentFocusId } from '../../../lib/brainGraphFocus';
+import GraphScene, { graphMotionSettings } from '../../graph3d/GraphScene';
+import useGraphCanvasInteraction from '../../graph3d/useGraphCanvasInteraction';
+import TouchDragHint from '../../graph3d/TouchDragHint';
 import EntityCombobox from '../../EntityCombobox';
 import InlineConfirmRow from '../../ui/InlineConfirmRow';
 import BrailleSpinner from '../../BrailleSpinner';
-import useHoverTooltip from '../../../hooks/useHoverTooltip';
-import useFirstTouchHint from '../../../hooks/useFirstTouchHint';
 import usePrefersReducedMotion from '../../../hooks/usePrefersReducedMotion';
 import { formatDateNumeric } from '../../../utils/formatters';
 
@@ -26,6 +24,16 @@ const EDGE_COLORS = {
 };
 
 const BRAIN_TYPES = ['people', 'projects', 'ideas', 'admin', 'memories', 'songs', 'goals', 'journals'];
+
+// Scene-appearance callbacks handed to the shared graph3d/GraphScene.
+// brainEdgeColor/brainEdgeIntensity are exported so the extraction's
+// behavior split from MemoryGraph's own flat blue/gray palette is pinned
+// directly (see BrainGraph.test.jsx); brainNodeColor is a plain lookup with
+// no distinct per-page behavior worth pinning, so it stays module-private.
+const brainNodeColor = (node) => BRAIN_TYPE_HEX[node.brainType] || '#6b7280';
+export const brainEdgeColor = (edge) => EDGE_COLORS[edge.type] || '#6b7280';
+export const brainEdgeIntensity = (edge, dimmed) =>
+  dimmed ? 0.06 : (edge.type === 'linked' ? 0.6 : 0.3 * (edge.weight || 0.5));
 
 /**
  * Inline chip style for a brain-type badge. `BRAIN_TYPE_HEX` is a fixed
@@ -41,27 +49,6 @@ const BRAIN_TYPES = ['people', 'projects', 'ideas', 'admin', 'memories', 'songs'
  * `border-port-border`) — those beat the inline declaration.
  */
 const brainTypeChipStyle = (brainType, mode) => chipColors(BRAIN_TYPE_HEX[brainType], mode) || undefined;
-
-// Only a gesture on the WebGL canvas itself picks a node. The overlay chrome —
-// "Clear selection", the legend toggle, the loading veil — sits INSIDE the same
-// wrapper the touch handlers are bound to, so its taps bubble there too; without
-// this, tapping the legend toggle would also select whichever node happens to
-// project nearest that corner. (r3f binds its own listeners to the canvas, so
-// the mouse path never had this problem.)
-const isCanvasGesture = (e) => e.target?.tagName === 'CANVAS';
-
-// Widest the hover tooltip renders. Single source for both its max-width and
-// the clamp that keeps it inside the viewport — as a CSS class plus a mirrored
-// constant the two silently drift apart.
-const TOOLTIP_WIDTH = 320;
-
-// The force layout is settled before the scene renders, so reduced-motion
-// users can see it immediately at rest. Keep the canvas on demand and turn
-// off OrbitControls' inertia too, preventing movement after an interaction.
-export const graphMotionSettings = (reducedMotion) => ({
-  frameloop: reducedMotion ? 'demand' : 'always',
-  enableDamping: !reducedMotion
-});
 
 // Per-type API getters for detail panel
 const TYPE_GETTERS = {
@@ -90,145 +77,12 @@ export const recordBody = (record) => {
   return '';
 };
 
-function GraphEdges({ simEdges, selectedId }) {
-  const geoRef = useRef();
-
-  useEffect(() => {
-    const geo = geoRef.current;
-    if (!geo || !simEdges.length) return;
-
-    const count = simEdges.length;
-    const positions = new Float32Array(count * 6);
-    const colors = new Float32Array(count * 6);
-    const tmpColor = new THREE.Color();
-
-    simEdges.forEach((e, i) => {
-      const a = e.sourceNode, b = e.targetNode;
-      const off = i * 6;
-      positions[off] = a.x; positions[off + 1] = a.y; positions[off + 2] = a.z;
-      positions[off + 3] = b.x; positions[off + 4] = b.y; positions[off + 5] = b.z;
-
-      const dimmed = selectedId && e.source !== selectedId && e.target !== selectedId;
-      tmpColor.set(EDGE_COLORS[e.type] || '#6b7280');
-      const intensity = dimmed ? 0.06 : (e.type === 'linked' ? 0.6 : 0.3 * (e.weight || 0.5));
-      const r = tmpColor.r * intensity, g = tmpColor.g * intensity, bl = tmpColor.b * intensity;
-      colors[off] = r; colors[off + 1] = g; colors[off + 2] = bl;
-      colors[off + 3] = r; colors[off + 4] = g; colors[off + 5] = bl;
-    });
-
-    geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-    geo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
-    geo.computeBoundingSphere();
-  }, [simEdges, selectedId]);
-
-  return (
-    <lineSegments>
-      <bufferGeometry ref={geoRef} />
-      <lineBasicMaterial vertexColors />
-    </lineSegments>
-  );
-}
-
-// Memoized: the container's onPointerMove re-renders BrainGraph on every mouse
-// move over the canvas WHILE A NODE IS HOVERED (it tracks the tooltip position),
-// and every prop here is already identity-stable across that render — so without
-// memo each move reconciles a <mesh> per node for nothing.
-const GraphScene = memo(function GraphScene({ graph, selectedId, adjacentIds, onSelect, onFocus, onHover, pickRef, touchGestureRef, reducedMotion }) {
-  const sphereGeo = useMemo(() => new THREE.SphereGeometry(1, 16, 12), []);
-  const { camera, size } = useThree();
-
-  const selNode = selectedId ? graph.idMap.get(selectedId) : null;
-  const selRadius = selNode ? 0.4 + (selNode.importance ?? 0.5) * 0.8 : 0;
-
-  // Publish a live screen-space pick to the DOM wrapper, which owns the touch
-  // gesture (see the tap handler in BrainGraph). The camera object is stable
-  // across orbiting, so the matrices are read at tap time, not captured here.
-  useEffect(() => {
-    if (!pickRef) return;
-    pickRef.current = (point) => {
-      camera.updateMatrixWorld();
-      const viewProjection = new THREE.Matrix4()
-        .multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse)
-        .elements;
-      return pickNearestNodeByScreenDistance({
-        nodes: graph.simNodes,
-        viewProjection,
-        width: size.width,
-        height: size.height,
-        point
-      });
-    };
-    return () => { pickRef.current = null; };
-  }, [camera, graph, size.width, size.height, pickRef]);
-
-  return (
-    <>
-      <ambientLight intensity={0.4} />
-      <pointLight position={[50, 50, 50]} intensity={0.8} />
-      <pointLight position={[-30, -30, -30]} intensity={0.3} />
-
-      <GraphEdges simEdges={graph.simEdges} selectedId={selectedId} />
-
-      {graph.simNodes.map(node => {
-        const radius = 0.4 + (node.importance ?? 0.5) * 0.8;
-        const color = BRAIN_TYPE_HEX[node.brainType] || '#6b7280';
-        const isSelected = node.id === selectedId;
-        const isConnected = adjacentIds?.has(node.id);
-        const dimmed = selectedId && !isSelected && !isConnected;
-
-        return (
-          <mesh
-            key={node.id}
-            geometry={sphereGeo}
-            scale={radius}
-            position={[node.x, node.y, node.z]}
-            // Touch selection is owned by the wrapper's threshold pick, which
-            // fires on `pointerup` — ahead of the compatibility `click` r3f
-            // raycasts here — so a tap that lands on a mesh must not toggle the
-            // same node a second time. `click` is a MouseEvent with no
-            // `pointerType` after a touch, hence the recorded gesture ref.
-            onClick={(e) => {
-              e.stopPropagation();
-              if (touchGestureRef?.current) return;
-              onSelect(node);
-            }}
-            onDoubleClick={(e) => { e.stopPropagation(); onFocus(node); }}
-            // Pass the enter event's coordinates up: the wrapper's onPointerMove
-            // only tracks the cursor WHILE a node is hovered, so the tooltip's
-            // first frame has to be placed from this event.
-            onPointerOver={(e) => { e.stopPropagation(); onHover(node, { x: e.clientX, y: e.clientY }); }}
-            onPointerOut={() => onHover(null)}
-          >
-            <meshStandardMaterial
-              color={dimmed ? '#1a1a1a' : color}
-              emissive={color}
-              emissiveIntensity={isSelected ? 0.6 : (dimmed ? 0.03 : 0.2)}
-            />
-          </mesh>
-        );
-      })}
-
-      {selNode && (
-        <mesh geometry={sphereGeo} position={[selNode.x, selNode.y, selNode.z]} scale={selRadius + 0.2}>
-          <meshBasicMaterial color="#ffffff" transparent opacity={0.15} wireframe />
-        </mesh>
-      )}
-
-      <OrbitControls enableDamping={!reducedMotion} dampingFactor={0.05} minDistance={10} maxDistance={200} />
-    </>
-  );
-});
-
 export default function BrainGraph() {
   const [graphData, setGraphData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [subLoading, setSubLoading] = useState(false);
   const [selectedNode, setSelectedNode] = useState(null);
   const [fullRecord, setFullRecord] = useState(null);
-  // Hover tooltip state + the ref-gated pointer tracking that keeps a plain
-  // mouse move from re-rendering this component when nothing can paint.
-  const { hoveredNode, tooltipPos, handleHover, handlePointerMove } = useHoverTooltip();
-  const { visible: touchHintVisible, showOnFirstTouch } = useFirstTouchHint();
   const { theme } = useThemeContext();
   const [layoutKey, setLayoutKey] = useState(0);
   const [syncing, setSyncing] = useState(false);
@@ -246,12 +100,6 @@ export default function BrainGraph() {
   const motionSettings = graphMotionSettings(reducedMotion);
 
   const graphRef = useRef(null);
-  const dragStartRef = useRef(null);
-  // Set by GraphScene: (point in canvas-local px) => node | null.
-  const pickRef = useRef(null);
-  // True while the in-flight gesture came from a finger, so the mesh raycast
-  // and onPointerMissed can stand down for the threshold pick below.
-  const touchGestureRef = useRef(false);
 
   const focusId = currentFocusId(focusTrail);
 
@@ -371,6 +219,21 @@ export default function BrainGraph() {
     setSelectedNode(prev => (node && prev?.id !== node.id ? node : null));
   }, []);
 
+  // Pointer/tap/tooltip wiring shared with MemoryGraph — see
+  // graph3d/useGraphCanvasInteraction.js.
+  const {
+    pickRef,
+    touchGestureRef,
+    hoveredNode,
+    tooltipStyle,
+    handleHover,
+    handlePointerMove,
+    touchHintVisible,
+    handlePointerDown,
+    handlePointerUp,
+    handlePointerMissed
+  } = useGraphCanvasInteraction({ onSelect: handleSelect });
+
   // Escape always clears selection. Clicking "empty space" is unreliable for
   // un-isolating: unselected nodes are only dimmed (not removed), so they still
   // capture clicks, and onPointerMissed ignores any orbit drag — leaving the
@@ -381,44 +244,6 @@ export default function BrainGraph() {
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [selectedNode]);
-
-  // Mouse only: a touch tap is resolved by handlePointerUp below (which also
-  // owns clearing on an empty-space tap), and would otherwise be undone here by
-  // the compatibility `click` r3f fires afterwards.
-  const handlePointerMissed = useCallback((e) => {
-    if (touchGestureRef.current) return;
-    if (isTapGesture(dragStartRef.current, { x: e.clientX, y: e.clientY })) {
-      setSelectedNode(null);
-    }
-  }, []);
-
-  const handlePointerDown = useCallback((e) => {
-    if (!isCanvasGesture(e)) return;
-    showOnFirstTouch(e);
-    // A second finger is a pinch-zoom or two-finger pan, never a tap — drop the
-    // recorded start so neither the threshold pick nor the miss-clear can fire
-    // for it (both gate on `isTapGesture`, which is false without a start).
-    const secondFinger = touchGestureRef.current && !e.isPrimary;
-    dragStartRef.current = secondFinger ? null : { x: e.clientX, y: e.clientY };
-    touchGestureRef.current = e.pointerType === 'touch';
-  }, [showOnFirstTouch]);
-
-  // Touch selection. The raw mesh raycast needs the ray to hit a ~10px sphere;
-  // instead project every node and take the nearest within a finger-sized
-  // radius (see lib/graphPicking.js). Runs on `pointerup` on the wrapper, which
-  // bubbles after the canvas' own pointerup and before the `click` r3f picks
-  // with — so this result is what sticks. Mouse input is untouched.
-  const handlePointerUp = useCallback((e) => {
-    if (!touchGestureRef.current || !isCanvasGesture(e)) return;
-    const end = { x: e.clientX, y: e.clientY };
-    if (!isTapGesture(dragStartRef.current, end)) return; // an orbit drag
-    // The CANVAS rect, not the wrapper's: the wrapper carries a 1px border, and
-    // `size` from useThree measures the canvas, so mixing the two shifts every
-    // projected position against the tap.
-    const rect = e.target.getBoundingClientRect();
-    const picked = pickRef.current?.({ x: end.x - rect.left, y: end.y - rect.top }) ?? null;
-    handleSelect(picked);
-  }, [handleSelect]);
 
   // refresh:true re-embeds already-mapped records — the recovery path for
   // memory entries that diverged before synced-in records were re-vectorized
@@ -654,6 +479,9 @@ export default function BrainGraph() {
               graph={graph}
               selectedId={selectedNode?.id}
               adjacentIds={adjacentIds}
+              nodeColor={brainNodeColor}
+              edgeColor={brainEdgeColor}
+              edgeIntensity={brainEdgeIntensity}
               onSelect={handleSelect}
               onFocus={focusNode}
               onHover={handleHover}
@@ -664,15 +492,7 @@ export default function BrainGraph() {
           </Canvas>
         )}
 
-        {touchHintVisible && (
-          <div
-            role="status"
-            aria-live="polite"
-            className="absolute top-3 inset-x-3 z-20 flex justify-center pointer-events-none"
-          >
-            <span className="port-media-overlay rounded-lg px-3 py-2 text-xs">Drag to rotate</span>
-          </div>
-        )}
+        <TouchDragHint visible={touchHintVisible} />
 
         {!graph && (
           <div className="flex items-center justify-center h-full text-gray-500 text-sm">
@@ -755,16 +575,13 @@ export default function BrainGraph() {
             preview with — a tap selects the node and the detail panel below
             already shows the same record — and it would otherwise flash under
             the user's own finger advertising a double-click touch can't do.
-            Position is clamped so it can't run off the right edge of a narrow
-            window, where `x + 12` alone would clip the label. */}
+            Position is clamped (useGraphCanvasInteraction's `tooltipStyle`) so
+            it can't run off the right edge of a narrow window, where `x + 12`
+            alone would clip the label. */}
         {hoveredNode && (
           <div
             className="fixed z-50 pointer-events-none pointer-coarse:hidden bg-port-bg border border-port-border rounded-lg px-3 py-2 shadow-lg"
-            style={{
-              maxWidth: TOOLTIP_WIDTH,
-              left: Math.max(8, Math.min(tooltipPos.x + 12, window.innerWidth - TOOLTIP_WIDTH - 8)),
-              top: Math.max(8, tooltipPos.y - 12)
-            }}
+            style={tooltipStyle}
           >
             <div className="flex items-center gap-2 mb-1">
               <span

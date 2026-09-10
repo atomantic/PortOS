@@ -45,6 +45,7 @@ import {
   mergeCommissionFeedbackRecord,
   toInlineFeedback,
 } from './feedbackLogic.js';
+import { isStr } from '../../lib/textUtils.js';
 
 export const TYPE = 'commission-feedback';
 export const FEEDBACK_SCHEMA_VERSION = 1;
@@ -56,7 +57,6 @@ export const FEEDBACK_SCHEMA_VERSION = 1;
 // `feedbackWindow` reactions anyway, so aging out the oldest is invisible).
 export const MAX_LIVE_FEEDBACK_PER_COMMISSION = 100;
 
-const isStr = (v) => typeof v === 'string';
 const notDeleted = (r) => r && r.deleted !== true;
 
 // --- File backend (dev/test escape hatch): wraps collectionStore ---

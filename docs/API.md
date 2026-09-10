@@ -266,7 +266,7 @@ Context tools remain read-only. Semantic reads and writes are independent, defau
 | GET | `/cos/schedule/due` | List all tasks due to run |
 | GET | `/cos/schedule/due/:appId` | List tasks due for specific app |
 | GET | `/cos/schedule/task/:taskType` | Get interval and schedule settings for a task type |
-| PUT | `/cos/schedule/task/:taskType` | Update schedule settings for a task type (`type`: `on-demand` \| `cron`; `cronExpression`: 5-field or null; `perpetual`: boolean drain flag, orthogonal to `type`) |
+| PUT | `/cos/schedule/task/:taskType` | Update schedule settings for a task type (`type`: `on-demand` \| `cron`; `cronExpression`: 5-field or null; `perpetual`: boolean drain flag, orthogonal to `type`; `autoStart`: set false for manual-only on-demand drains, omitted preserves legacy automatic starts/rechecks) |
 | POST | `/cos/schedule/trigger` | Trigger an on-demand task run |
 | GET | `/cos/schedule/maintenance-runs` | List manual maintenance runs (the Schedule tab's "Run maintenance now"; running first, then recent history) |
 | POST | `/cos/schedule/maintenance-runs` | Start a manual maintenance run for one app (`appId`, `providerId`, `model`, optional `effort`); returns the run and its first dispatch or hold reason. Independent of Quota Burn |
@@ -328,7 +328,6 @@ Context tools remain read-only. Semantic reads and writes are independent, defau
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | GET | `/usage` | Get usage statistics |
-| GET | `/usage/daily` | Get daily activity |
 | GET | `/usage/hourly` | Get hourly activity |
 
 ### Eidoverse Worlds
@@ -349,15 +348,10 @@ federate world records.
 
 ### Legacy OpenWorld / CyberCity
 
-The old UI routes redirect to Eidoverse; these APIs remain available as
-backward-compatible historical snapshot/introspection endpoints.
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET | `/city/snapshots` | Recorded city-state series, oldest-first (`since`, `limit` query params) |
-| POST | `/city/snapshots/capture` | Capture a city snapshot frame on demand |
-| GET | `/city/snapshots/config` | Effective snapshot capture config + next run time |
-| GET | `/city/introspection` | DB tables (rows/size/pgvector) + `data/` domain sizes for the Data Harbor district. Cached server-side; `db: null` means the database is unreachable (distinct from reachable-but-empty) |
+Retired with the OpenWorld surface (#5890): there is no `/api/openworld` or
+`/api/city` HTTP API any more, so a client still calling the old snapshot or
+introspection endpoints gets a 404. Only the UI routes survive, as redirects to
+Eidoverse — see [OpenWorld](./features/openworld.md).
 
 ### Brain (Second Brain)
 
@@ -446,19 +440,21 @@ backward-compatible historical snapshot/introspection endpoints.
 | POST | `/digital-twin/documents` | Create document |
 | PUT | `/digital-twin/documents/:id` | Update document |
 | DELETE | `/digital-twin/documents/:id` | Delete document |
-| GET | `/digital-twin/categories` | List document categories |
-| GET | `/digital-twin/export` | Export twin in various formats |
-| POST | `/digital-twin/tests/run` | Run behavioral tests |
-| GET | `/digital-twin/tests/results` | Get test results |
-| GET | `/digital-twin/enrichment/categories` | List enrichment categories |
-| POST | `/digital-twin/enrichment/generate` | Generate content from answers |
+| GET | `/digital-twin/export/formats` | List available export formats |
+| POST | `/digital-twin/export` | Export the twin in the requested format |
+| GET | `/digital-twin/tests` | Get the behavioral test suite |
+| POST | `/digital-twin/tests/run` | Run behavioral tests against one provider/model |
+| GET | `/digital-twin/tests/history` | Get test run history |
+| GET | `/digital-twin/enrich/categories` | List enrichment categories |
+| POST | `/digital-twin/enrich/question` | Get the next enrichment question for a category |
+| POST | `/digital-twin/enrich/answer` | Submit an answer and update the twin documents |
 | GET | `/digital-twin/traits` | Get extracted personality traits |
 | POST | `/digital-twin/traits/analyze` | Analyze traits from documents |
 | GET | `/digital-twin/confidence` | Get confidence scores |
 | POST | `/digital-twin/confidence/calculate` | Calculate confidence |
 | GET | `/digital-twin/gaps` | Get enrichment recommendations |
-| GET | `/digital-twin/completeness` | Get completeness validation |
-| POST | `/digital-twin/contradictions` | Detect contradictions |
+| GET | `/digital-twin/validate/completeness` | Get completeness validation |
+| POST | `/digital-twin/validate/contradictions` | Detect contradictions |
 | POST | `/digital-twin/import/spotify/browser/open` | Open Spotify privacy page in the managed browser |
 | POST | `/digital-twin/import/spotify/browser/import` | Request/read the Spotify browser export and analyze it |
 | POST | `/digital-twin/import/analyze` | Analyze external data import |
@@ -585,14 +581,17 @@ return an `{ items, total }` envelope.
 | POST | `/meatspace/genome/upload` | Upload 23andMe genome file |
 | POST | `/meatspace/genome/scan` | Scan curated SNP markers |
 | POST | `/meatspace/genome/search` | Search SNP by rsid |
-| GET | `/meatspace/genome/markers` | Get scanned markers |
-| GET | `/meatspace/genome/markers/:rsid` | Get single marker details |
-| PUT | `/meatspace/genome/markers/:rsid/notes` | Update marker notes |
-| POST | `/meatspace/genome/markers/:rsid/save` | Save marker to genome.json |
-| DELETE | `/meatspace/genome/markers/:rsid` | Remove saved marker |
-| GET | `/meatspace/genome/categories` | Get marker categories |
-| GET | `/meatspace/genome/clinvar/:rsid` | Lookup ClinVar data for rsid |
+| POST | `/meatspace/genome/markers` | Save a marker (saved markers come back in the summary) |
+| PUT | `/meatspace/genome/markers/:id/notes` | Update marker notes |
+| DELETE | `/meatspace/genome/markers/:id` | Remove saved marker |
+| DELETE | `/meatspace/genome` | Delete all genome data |
+| GET | `/meatspace/genome/clinvar/status` | ClinVar sync status |
+| POST | `/meatspace/genome/clinvar/sync` | Download and index the ClinVar database |
+| POST | `/meatspace/genome/clinvar/scan` | Scan the genome against ClinVar |
+| DELETE | `/meatspace/genome/clinvar` | Delete ClinVar data |
 | GET | `/meatspace/genome/epigenetic` | Get epigenetic interventions |
+| GET | `/meatspace/genome/epigenetic/recommendations` | Get curated intervention recommendations |
+| GET | `/meatspace/genome/epigenetic/compliance` | Get compliance summary |
 | POST | `/meatspace/genome/epigenetic` | Add epigenetic intervention |
 | PUT | `/meatspace/genome/epigenetic/:id` | Update intervention |
 | DELETE | `/meatspace/genome/epigenetic/:id` | Delete intervention |
@@ -643,7 +642,7 @@ Every mounted API prefix (see `server/index.js` for the authoritative list). Dom
 | `/api/database` | Postgres introspection |
 | `/api/image-clean` | Image metadata cleaning |
 | `/api/eidoverse/world` | Private Eidoverse identity, projection, presence, augmentation, and chat adapter |
-| `/api/openworld`, `/api/city` | Legacy OpenWorld/CyberCity snapshots and introspection |
+| `/api/eidoverse/travel` | Eidoverse travel: destinations, departing to a peer world, and the federation visit/chat/leave hops (`/guest` is the one public endpoint) |
 | `/api/cos/gsd` | CoS GSD workflow |
 | `/api/feature-agents` | Feature agent runs |
 | `/api/feeds` | RSS/content feeds |
@@ -675,6 +674,7 @@ Every mounted API prefix (see `server/index.js` for the authoritative list). Dom
 | `/api/image-gen`, `/api/video-gen`, `/api/image-video/models` | Image/video generation |
 | `/api/devtools/video-download` | Video download |
 | `/api/video-timeline` | Video timeline editor |
+| `/api/continuous-video` | Continuous-video episodes (script + bible → chained multi-clip generation) |
 | `/api/media-jobs` | Async media job queue |
 | `/api/creative-director` | Creative Director projects |
 | `/api/fableloom` | FableLoom interactive story generation |
@@ -698,6 +698,7 @@ Every mounted API prefix (see `server/index.js` for the authoritative list). Dom
 | `/api/sprites` | Sprite catalog / export |
 | `/api/threejs-models` | Procedural Three.js models |
 | `/api/image-to-3d` | Image-to-3D conversion |
+| `/api/rigging` | Auto-skin rigging and animation retargeting for image-to-3D models |
 | `/api/privacy` | PII vault / trusted-org / broker opt-out |
 | `/api/shell` | Browser PTY shells |
 | `/api/ports` | Port scan / allocation |
@@ -720,6 +721,7 @@ Every mounted API prefix (see `server/index.js` for the authoritative list). Dom
 | `/api/standardize` | App PM2 standardizer |
 | `/api/stacker-news`, `/api/x` | Social integrations |
 | `/api/model-personality` | LLM personality tests |
+| `/api/providers/comparison` | Provider/model comparison catalog — discover, import, and Artificial Analysis sync (see [MODEL-COMPARISON.md](./MODEL-COMPARISON.md)) |
 | `/api/browser` | Managed Chromium |
 | `/api/creative-commission` | Creative commissions |
 | `/api/midi-runtime` | MIDI runtime |

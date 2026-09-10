@@ -10,7 +10,7 @@ import { cloneRepo } from './repoCloner.js';
 import { createApp, getAllApps, notifyAppsChanged, updateApp } from './apps.js';
 import { getAppStatusStrict } from './pm2.js';
 
-export const DEFAULT_EIDOVERSE_WORLDS_REPO = 'https://github.com/anima-research/eidoverse-worlds';
+export const DEFAULT_EIDOVERSE_WORLDS_REPO = 'https://github.com/atomantic/eidoverse-worlds';
 export const EIDOVERSE_VIDEO_REPO = 'https://github.com/anima-research/eidoverse-video';
 export const EIDOVERSE_PORT = 8940;
 export const EIDOVERSE_PROCESS_NAME = 'eidoverse-worlds';
@@ -193,16 +193,16 @@ async function installDependencies(directory, bun) {
 
 let installInFlight = null;
 
-async function performInstall(worldsRepoUrl) {
+async function performInstall(worldsRepoUrl, worldsBranch) {
   const bun = await ensureBunRuntime();
 
   const configuredPaths = getEidoversePaths(worldsRepoUrl);
   const paths = await resolveEidoverseInstallPaths(worldsRepoUrl);
   await Promise.all([
-    paths.worlds === configuredPaths.worlds ? cloneRepo(worldsRepoUrl) : Promise.resolve(),
+    paths.worlds === configuredPaths.worlds ? cloneRepo(worldsRepoUrl, { branch: worldsBranch }) : Promise.resolve(),
     cloneRepo(EIDOVERSE_VIDEO_REPO),
   ]);
-  await updateOriginAtPath(paths.worlds, worldsRepoUrl);
+  await applyWorldsSource(paths.worlds, worldsRepoUrl, worldsBranch || undefined);
 
   await Promise.all([
     installDependencies(paths.worlds, bun),
@@ -223,10 +223,10 @@ async function performInstall(worldsRepoUrl) {
  * a managed-app record. A process-local promise collapses double-clicks into
  * one clone/install operation.
  */
-export async function installEidoverse({ worldsRepoUrl = DEFAULT_EIDOVERSE_WORLDS_REPO } = {}) {
+export async function installEidoverse({ worldsRepoUrl = DEFAULT_EIDOVERSE_WORLDS_REPO, worldsBranch = worldsRepoUrl === DEFAULT_EIDOVERSE_WORLDS_REPO ? 'portos' : '' } = {}) {
   const normalizedRepoUrl = normalizeEidoverseWorldsRepo(worldsRepoUrl);
   if (installInFlight) return installInFlight;
-  installInFlight = performInstall(normalizedRepoUrl).finally(() => {
+  installInFlight = performInstall(normalizedRepoUrl, worldsBranch.trim()).finally(() => {
     installInFlight = null;
   });
   return installInFlight;
@@ -317,14 +317,47 @@ async function updateOriginAtPath(repoPath, worldsRepoUrl) {
   }
 }
 
+async function applyWorldsSource(repoPath, normalizedRepoUrl, worldsBranch) {
+  if (worldsBranch !== undefined) {
+    const branch = worldsBranch.trim();
+    if (branch) {
+      const valid = await execGit(['check-ref-format', '--branch', branch], repoPath, { ignoreExitCode: true });
+      if (branch.startsWith('-') || branch.startsWith('@') || valid.exitCode !== 0) {
+        throw new ServerError('Choose a valid branch name.', { status: 400, code: 'EIDOVERSE_BRANCH_INVALID' });
+      }
+      const dirty = await execGit(['status', '--porcelain'], repoPath);
+      if (dirty.stdout.trim()) throw new ServerError('Commit or stash local changes before switching the runtime branch.', { status: 409, code: 'EIDOVERSE_CHECKOUT_DIRTY' });
+      // Fetch from the proposed URL first so a missing branch cannot change origin.
+      await execGit(['fetch', '--', normalizedRepoUrl, `refs/heads/${branch}`], repoPath);
+      const local = await execGit(['show-ref', '--verify', '--quiet', `refs/heads/${branch}`], repoPath, { ignoreExitCode: true });
+      if (local.exitCode === 0) {
+        const ancestor = await execGit(['merge-base', '--is-ancestor', `refs/heads/${branch}`, 'FETCH_HEAD'], repoPath, { ignoreExitCode: true });
+        if (ancestor.exitCode !== 0) throw new ServerError('The target local branch has commits absent from the selected origin. Reconcile it before switching.', { status: 409, code: 'EIDOVERSE_BRANCH_DIVERGED' });
+        await execGit(['switch', '--', branch], repoPath);
+        await execGit(['merge', '--ff-only', 'FETCH_HEAD'], repoPath);
+      } else {
+        await execGit(['switch', '-c', branch, '--no-track', 'FETCH_HEAD'], repoPath);
+      }
+      await updateOriginAtPath(repoPath, normalizedRepoUrl);
+      await execGit(['config', '--replace-all', 'remote.origin.fetch', '+refs/heads/*:refs/remotes/origin/*'], repoPath);
+      await execGit(['fetch', 'origin'], repoPath);
+      await execGit(['config', `branch.${branch}.remote`, 'origin'], repoPath);
+      await execGit(['config', `branch.${branch}.merge`, `refs/heads/${branch}`], repoPath);
+    } else {
+      await updateOriginAtPath(repoPath, normalizedRepoUrl);
+    }
+    await execGit(['config', 'portos.runtimeBranch', branch], repoPath);
+  } else {
+    await updateOriginAtPath(repoPath, normalizedRepoUrl);
+  }
+}
+
 /**
- * Change the Worlds checkout's fetch origin without moving the checkout or
- * touching its working tree. This is intentionally separate from installation:
+ * Change the Worlds checkout's origin and optional runtime branch in place. This is intentionally separate from installation:
  * changing a remote must not silently clone a second copy or delete local work.
  */
-export async function setEidoverseWorldsOrigin(worldsRepoUrl) {
+export async function setEidoverseWorldsOrigin(worldsRepoUrl, worldsBranch) {
   const normalizedRepoUrl = normalizeEidoverseWorldsRepo(worldsRepoUrl);
-  const configuredPaths = getEidoversePaths(normalizedRepoUrl);
   const apps = await getAllApps();
   const app = findManagedApp(apps);
 
@@ -343,7 +376,7 @@ export async function setEidoverseWorldsOrigin(worldsRepoUrl) {
     });
   }
 
-  await updateOriginAtPath(repoPath, normalizedRepoUrl);
+  await applyWorldsSource(repoPath, normalizedRepoUrl, worldsBranch);
 
   notifyAppsChanged('update', app.id);
   return { appId: app.id, worldsRepoUrl: normalizedRepoUrl };

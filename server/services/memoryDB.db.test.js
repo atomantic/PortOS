@@ -28,7 +28,7 @@
 import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 import { checkHealth, ensureSchema, close, query } from '../lib/db.js';
 import { requireDbOrSkip } from '../lib/dbTestGate.js';
-import { mockNoPeers, mockPathsDataRoot } from '../lib/mockPathsDataRoot.js';
+import { mockNoPeers, mockTestIdentity, mockPathsDataRoot } from '../lib/mockPathsDataRoot.js';
 import { DEFAULT_MEMORY_CONFIG } from './memoryConfig.js';
 
 // Keep every filesystem side effect this module graph can reach (notifications
@@ -44,10 +44,9 @@ vi.mock('../lib/fileUtils.js', async () => {
 // booted (a fresh worktree has no instance file and would get the 'unknown'
 // sentinel).
 const TEST_INSTANCE_ID = '00000000-0000-4000-8000-0000000c0ffe';
-vi.mock('./instances.js', async (importOriginal) => {
-  const actual = await importOriginal();
-  return mockNoPeers(actual, { getInstanceId: () => Promise.resolve(TEST_INSTANCE_ID) });
-});
+vi.mock('./instances.js', async (importOriginal) => mockNoPeers(await importOriginal()));
+vi.mock('./instanceIdentity.js', () =>
+  mockTestIdentity({ getInstanceId: () => Promise.resolve(TEST_INSTANCE_ID) }));
 
 const memoryDB = await import('./memoryDB.js');
 

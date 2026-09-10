@@ -15,8 +15,66 @@ import { EventEmitter } from 'events';
 import { PATHS, atomicWrite, readJSONFile, ensureDir } from '../../lib/fileUtils.js';
 import { getPeers, resolveEffectiveCategories } from '../instances.js';
 
-
 export const PEER_SUBSCRIBABLE_KINDS = Object.freeze(['universe', 'series', 'mediaCollection', 'author', 'artist', 'album', 'track', 'creativeDirectorProject', 'moodBoard', 'fableLoom', 'writersRoomWork', 'writersRoomFolder', 'writersRoomExercise', 'musicVideoProject', 'commissionFeedback', 'creativeCommission']);
+
+/**
+ * The optional top-level keys a NEWER sender may attach to a push envelope
+ * beyond the `{ kind, record, assetManifest, sourceInstanceId }` core. These
+ * are the mechanism the schema-version design relies on for "degrades
+ * gracefully on older peers" (`server/lib/schemaVersions.js`), and every row
+ * shares ONE lifecycle that both sides of the wire drive off this table
+ * (#6844) instead of a hand-written flag pair per key:
+ *
+ *   1. STRIP — an older receiver's `.strict()` push schema predates the key,
+ *      so it 400-rejects the whole envelope at Zod, naming the key. The
+ *      sender drops whichever listed keys the receiver named and retries
+ *      once so the record still lands; the stripped feature reaches that
+ *      peer once it upgrades, because the next push re-includes the key.
+ *   2. PENDING — `pendingKey` is the response flag the RECEIVER raises when
+ *      that bundle's merge threw after the record itself merged (2xx). The
+ *      sender reads the same flag back, and counts its own strip as pending.
+ *   3. WITHHOLD — while a row is pending the sender withholds `lastPushedHash`
+ *      so the next cycle re-sends instead of short-circuiting as `unchanged`
+ *      (`resolvePushWatermarks` in peerSyncPush.js, including #3928's
+ *      `lastPushedLegacyHash` for the stable strip case). The same sidecar
+ *      rows form the sender's change-hash input (`pushPayloadHash`): a doc
+ *      with no cycle of its own is delivered only by that hash moving.
+ *
+ * `pendingKey: null` marks a key with its OWN reconciliation cycle — the
+ * version-gate handshake re-includes `portosMeta` on every push, and catalog
+ * sync reconciles `catalogBundle`'s rows — so a strip there is not pending
+ * and the hash saves normally. The three sidecar docs have no independent
+ * cycle; they are the ones a saved hash would strand.
+ *
+ * The wire names are frozen: older senders and receivers read exactly these
+ * `pendingKey`s, and `server/lib/peerSyncValidation.js` validates the
+ * envelope keys. Adding a bundled doc is one row here plus its build/merge
+ * hooks — never a new flag pair. `peerSync.test.js` ("envelope extensions")
+ * fails until every row has a carrier on both sides.
+ */
+export const ENVELOPE_EXTENSIONS = Object.freeze([
+  // The schema-version handshake (`buildPortosMeta`); a pre-version-gate
+  // receiver's strict schema has no field for it.
+  Object.freeze({ key: 'portosMeta', pendingKey: null }),
+  // Catalog-federation enrichment riding a universe push; a peer newer than
+  // the version gate but older than catalog federation rejects it.
+  Object.freeze({ key: 'catalogBundle', pendingKey: null }),
+  // The "Finish the draft" manuscript-review doc riding a series push.
+  Object.freeze({ key: 'manuscriptReview', pendingKey: 'reviewSyncPending' }),
+  // The scene-by-scene reverse outline riding a series push (#1348).
+  Object.freeze({ key: 'reverseOutline', pendingKey: 'outlineSyncPending' }),
+  // The linked track record riding a musicVideoProject push (#1858) — a
+  // musicVideoProjects-only subscriber has no `tracks` cycle to fall back on.
+  Object.freeze({ key: 'linkedTrack', pendingKey: 'trackSyncPending' }),
+]);
+
+/**
+ * Envelope key → the receiver's pending flag, for the sidecar rows only
+ * (derived from ENVELOPE_EXTENSIONS; the self-reconciling keys are absent).
+ */
+export const ENVELOPE_PENDING_KEYS = Object.freeze(Object.fromEntries(
+  ENVELOPE_EXTENSIONS.filter((e) => e.pendingKey).map((e) => [e.key, e.pendingKey]),
+));
 
 /**
  * Cross-cutting event bus for the peer-sync receiver. The asset-pull worker
@@ -50,8 +108,6 @@ export const makeErr = (message, code, details = null) => {
 const STATE_PATH = () => join(PATHS.data, 'sharing', 'peer_subscriptions.json');
 export const DEBOUNCE_MS = 3000;
 export const PUSH_TIMEOUT_MS = 30000;
-
-export const isNonEmptyStr = (v) => typeof v === 'string' && v.length > 0;
 
 export function subscriptionId({ peerId, recordKind, recordId }) {
   return `peer-${recordKind}-${recordId}-${peerId}`;

@@ -61,7 +61,6 @@ const getDefaultFormData = (config, avatarStyle) => ({
   maxTotalProcesses: config?.maxTotalProcesses ?? 50,
   startOnBoot: Boolean(config?.alwaysOn || config?.autoStart),
   improvementEnabled: config?.improvementEnabled ?? config?.selfImprovementEnabled ?? true,
-  proactiveMode: config?.proactiveMode ?? true,
   idleReviewEnabled: config?.idleReviewEnabled ?? true,
   idleReviewPriority: config?.idleReviewPriority ?? 'MEDIUM',
   autonomousJobsEnabled: config?.autonomousJobsEnabled ?? true,
@@ -82,7 +81,6 @@ const configPayload = (formData) => ({
   // server's `alwaysOn || autoStart` compatibility read.
   autoStart: false,
   improvementEnabled: formData.improvementEnabled,
-  proactiveMode: formData.proactiveMode,
   idleReviewEnabled: formData.idleReviewEnabled,
   idleReviewPriority: formData.idleReviewPriority,
   autonomousJobsEnabled: formData.autonomousJobsEnabled,
@@ -452,7 +450,6 @@ export default function ConfigTab({ config, onUpdate, onEvaluate, avatarStyle, r
         </div>
         <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
           <ConfigRow label="Improvement tasks" description="Allow improvement work for PortOS and managed apps." value={formData.improvementEnabled ? 'Enabled' : 'Disabled'} editing={editing} type="checkbox" inputValue={formData.improvementEnabled} onChange={(value) => setFormData((current) => ({ ...current, improvementEnabled: value }))} />
-          <ConfigRow label="Proactive discovery" description="Create tasks from mission goals when capacity is available." value={formData.proactiveMode ? 'Enabled' : 'Disabled'} editing={editing} type="checkbox" inputValue={formData.proactiveMode} onChange={(value) => setFormData((current) => ({ ...current, proactiveMode: value }))} />
           <ConfigRow label="Idle app review" description="Look for app improvements when user work is idle." value={formData.idleReviewEnabled ? 'Enabled' : 'Disabled'} editing={editing} type="checkbox" inputValue={formData.idleReviewEnabled} onChange={(value) => setFormData((current) => ({ ...current, idleReviewEnabled: value }))} />
           <ConfigRow label="Idle review priority" description="Priority assigned to newly generated idle-review tasks." value={PRIORITY_OPTIONS.find((option) => option.value === formData.idleReviewPriority)?.label} editing={editing} type="select" inputValue={formData.idleReviewPriority} options={PRIORITY_OPTIONS} onChange={(value) => setFormData((current) => ({ ...current, idleReviewPriority: value }))} />
           <ConfigRow label="Scheduled agent jobs" description="Enable the global scheduler in addition to each job's own switch." value={formData.autonomousJobsEnabled ? 'Enabled' : 'Disabled'} editing={editing} type="checkbox" inputValue={formData.autonomousJobsEnabled} onChange={(value) => setFormData((current) => ({ ...current, autonomousJobsEnabled: value }))} />

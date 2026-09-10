@@ -12,10 +12,10 @@
  */
 
 import { ARC_LIMITS, buildSeason, sanitizeSeason } from '../../lib/storyArc.js';
-import { isStr } from '../../lib/storyBible.js';
 import * as seriesSvc from './series.js';
 import * as issuesSvc from './issues.js';
 import { emitRecordUpdated, withReexportSuppressed } from '../sharing/recordEvents.js';
+import { isStr } from '../../lib/textUtils.js';
 
 export const ERR_NOT_FOUND = 'PIPELINE_SEASON_NOT_FOUND';
 export const ERR_VALIDATION = 'PIPELINE_SEASON_VALIDATION';

@@ -21,10 +21,11 @@ import { PATHS, watchForFile } from '../lib/fileUtils.js';
 import { resolveAgentCliCwd } from '../lib/spawnCwd.js';
 import { doneSentinelName, doneSentinelPath as resolveDoneSentinelPath, parseSentinelPayload } from '../lib/agentSentinel.js';
 import { HOST_SHUTDOWN_REASON } from '../lib/hostShutdown.js';
+import { PTY_UNAVAILABLE_PREFIX } from '../lib/ptySpawnDiagnostics.js';
 import { finalizeAgentRunCommon, shouldAbandonAgentRun } from './agentRunFinalize.js';
 import { SENTINEL_COMPLETION_MARKER } from '../lib/agentOutputMarkers.js';
 import { prClaimWasVerified, leavesPrForHuman } from '../lib/prDisposition.js';
-import { resolvePrOwnership } from '../lib/slashdoInvocation.js';
+import { resolvePrOwnership, PR_OPENED_BY } from '../lib/slashdoInvocation.js';
 import { mergeGateOwed, resolveMergeGateVerdict, buildMergeGateReprompt } from '../lib/mergeGateContract.js';
 import { probePrForBranch } from './prProbe.js';
 import * as git from './git.js';
@@ -54,6 +55,8 @@ import {
   MCP_BOOT_PASTE_DEADLINE_MS,
   MCP_BOOT_PASTE_RETRY_DELAY_MS,
   createInputReadyTracker,
+  createStartupDialogAnswers,
+  answerStartupDialogs,
   AGY_INPUT_READY_PATTERN,
   PASTE_TO_ENTER_MIN_DELAY_MS,
   PASTE_TO_ENTER_FALLBACK_MS,
@@ -347,8 +350,8 @@ export function buildTuiSpawnConfig(provider, model, {
 // paste-marker/verify timers, and the submit-Enter backstop timer.
 //
 // `isFinalized`/`markPromptSent`/`markPromptSubmitted` are accessors into
-// spawnTuiAgent's own `finalized`/`promptSentAt`/`promptSubmittedAt` — those
-// are read by handleData and the provider-signal timer well outside this
+// spawnTuiAgent's own `sessionPhase`/`promptSentAt`/`promptSubmittedAt` —
+// those are read by handleData and the provider-signal timer well outside this
 // cluster, so they stay owned by spawnTuiAgent and are threaded through rather
 // than duplicated here. `finishStartupFailure`/`appendLine` are likewise
 // spawnTuiAgent's own closures, passed in rather than re-implemented.
@@ -666,7 +669,7 @@ export async function spawnTuiAgent({
   executionId,
   laneName,
   isTruthyMetaFn,
-  ownsPrWorkflow,
+  prOpenedBy,
   leanMode = false,
   useDurableRunner = false,
   // The public-content execution profile this run enforces (null for an
@@ -704,38 +707,65 @@ export async function spawnTuiAgent({
   const doneSentinelPath = resolveDoneSentinelPath(cwd, agentId);
   // Every TUI that is a real coding harness drives its own push → PR → review
   // → merge, whether or not it can type `/do:pr` (#3733) — a Claude TUI runs
-  // the slashdo command, codex/antigravity/grok/OpenCode run the plain
-  // `git`/`gh` equivalent from the same prompt. Only a lean `--bare` session
-  // still hands the lifecycle back to PortOS. Resolved once up front (rather
-  // than inside finish()) so the merge-gate contract check below and the
-  // completion dispatch finish() hands off to read the same answer.
+  // the slashdo command (`prOpenedBy: 'agent-slashdo'`),
+  // codex/antigravity/grok/OpenCode run the plain `git`/`gh` equivalent from
+  // the same prompt (`'agent-inline'`). A lean `--bare` session, and any task
+  // shape whose prompt says "do NOT open a PR", hands the lifecycle back to
+  // PortOS (`'portos'`). Resolved once up front (rather than inside finish())
+  // so the merge-gate contract check below and the completion dispatch
+  // finish() hands off to read the same answer.
   const prOwnership = resolvePrOwnership({
     task,
     isTruthyMeta: isTruthyMetaFn,
-    persisted: ownsPrWorkflow,
+    persistedPrOpenedBy: prOpenedBy,
     providerId: provider?.id,
     providerCommand: provider?.command,
     leanMode,
   });
-  // Does this run's own task shape say it owed a merge (#5876)? A run PortOS
-  // still backstops (no PR at all, or a lean session) or one whose prompt
-  // hands the PR to a human (JIRA, claim flow) never owed one, so the
-  // contract check below is inert for those — see mergeGateContract.js.
+  // Does this run's own task shape say it owed a merge (#5876)? Only the inline
+  // prompt carries a **Merge Gate** section to hold it to — a `/do:pr` run
+  // merges inside that one command, and a run PortOS backstops or that hands
+  // the PR to a human (JIRA, claim flow) never owed one. So the contract check
+  // below is inert for all three — see mergeGateContract.js.
   const mergeGateIsOwed = mergeGateOwed({
     taskOpenPR: prOwnership.taskOpenPR,
-    ownsPrWorkflow: prOwnership.agentOwnsPR,
+    rendersInlinePrLifecycle: prOwnership.prOpenedBy === PR_OPENED_BY.AGENT_INLINE,
     leaveOpen: leavesPrForHuman(task),
   });
   const promptPreview = prompt.replace(/\s+/g, ' ').slice(0, 100);
   const commandName = tuiConfig.command.split('/').pop();
-  let finalized = false;
-  // Synchronous re-entrancy guard for finish() — see its own comment for why
-  // `finalized` alone isn't enough once the merge-gate check adds awaits
-  // before it (#5876).
-  let finishing = false;
-  // A finish() call's args, dropped by the `finishing` guard while an earlier
-  // call was still deciding whether to finalize — replayed if that call ends
-  // up NOT finalizing (see finish()'s own comments on both).
+  /**
+   * Where this session is in its lifecycle — the one value every path that
+   * ends a run reads and writes.
+   *
+   *   'running'   — live; finish() accepts a trigger.
+   *   'finishing' — a finish() call is mid-decision. The merge-gate contract
+   *                 check (#5876) adds awaits before that call can say whether
+   *                 it finalizes at all, so this is set SYNCHRONOUSLY to park a
+   *                 second trigger arriving in that window. Goes back to
+   *                 'running' if the call decides not to finalize after all.
+   *   'finalized' — an outcome was recorded.
+   *   'abandoned' — PortOS went down mid-run (#3202): no outcome recorded, the
+   *                 worktree preserved for the resume.
+   *
+   * Named `sessionPhase`, not `phase`, because `abandonForHostShutdown` also
+   * writes a `phase: 'interrupted'` breadcrumb into the agent RECORD's
+   * metadata a few lines from where it sets this — two different phases with
+   * two different vocabularies, and collapsing their names is the mistake this
+   * value exists to undo.
+   */
+  let sessionPhase = 'running';
+  /**
+   * Both end states are terminal: the run is over, and the sentinel watcher,
+   * the PTY data handler, the prompt and provider-signal timers and the paste
+   * controller must all become no-ops for the rest of this process's life. An
+   * abandoned run is no less over than a finalized one — it just has no
+   * outcome — so both stop everything.
+   */
+  const isTerminal = () => sessionPhase === 'finalized' || sessionPhase === 'abandoned';
+  // A finish() call's args, parked because the session was already 'finishing'
+  // when it arrived — replayed if the call that was deciding ends up NOT
+  // finalizing (see finish()'s own comments on both).
   let pendingFinish = null;
   // Caps the merge-gate re-prompt (#5876) at once per run — a local closure
   // counter is enough: the check only ever runs from this same live process,
@@ -762,7 +792,7 @@ export async function spawnTuiAgent({
   // once the session goes quiet. See createToolPermissionGate.
   const toolPermissionGate = createToolPermissionGate();
   // Guards ingestDoneSentinel to a single read. finish() is its only caller and
-  // is itself guarded by `finalized`, so this is defensive — it pins the
+  // is itself guarded by `sessionPhase`, so this is defensive — it pins the
   // read-at-most-once invariant at the helper.
   let sentinelIngested = false;
   let hasStartedWorking = false;
@@ -829,10 +859,11 @@ export async function spawnTuiAgent({
     ...(isAntigravityCommand(tuiConfig.command) ? { readyTextPattern: AGY_INPUT_READY_PATTERN } : {}),
     directLaunch,
   });
-  let trustAccepted = false;
-  let autoModeDeclined = false;
-  let externalImportsDeclined = false;
-  let hookReviewDeclined = false;
+  // Which of the TUI's startup dialogs this session has already answered. One
+  // record instead of four sibling booleans declared ~1,000 lines above the
+  // arms that set them; the arms themselves live in answerStartupDialogs, so a
+  // provider's next dialog is a row there rather than a fifth flag here.
+  const dialogAnswers = createStartupDialogAnswers();
   // True once shell.js actually injects the `claude` command (after its
   // round-trip readiness probe). The probe runs its OWN shell command first,
   // which toggles bracketed-paste mode and would otherwise advance the
@@ -922,7 +953,7 @@ export async function spawnTuiAgent({
   // await a SECOND completion needs a brand-new watcher, not a re-trigger of
   // this one. Factored out so both call sites build the exact same watcher.
   const armSentinelWatcher = () => (doneSentinelPath ? watchForFile(doneSentinelPath, async () => {
-    if (finalized) return;
+    if (isTerminal()) return;
     await finish({ success: true, exitCode: 0, reason: 'agent-signaled-done' });
   }) : null);
 
@@ -1028,27 +1059,27 @@ export async function spawnTuiAgent({
   };
 
   const finish = async ({ success, exitCode = 0, error = null, reason = 'completed' }) => {
-    // `finalized` alone used to be the whole re-entrancy guard, safe because it
-    // was set SYNCHRONOUSLY as this function's first act. The merge-gate check
-    // below needs `ingestDoneSentinel`'s summary before it can decide whether
-    // to finalize at all, which pushes `finalized = true` past several awaits —
-    // wide enough for a second trigger (the shell exiting right after the
-    // sentinel appears) to also pass the `if (finalized)` gate before the first
-    // call sets it, double-firing `finalizeAgent`. `finishing` closes that
-    // window synchronously; `finalized` still means "truly done" and is what
-    // `pasteController.resubmit()` reads, so it must stay false while a
-    // re-prompt is still possible.
+    // A terminal check alone used to be the whole re-entrancy guard, safe
+    // because it was set SYNCHRONOUSLY as this function's first act. The
+    // merge-gate check below needs `ingestDoneSentinel`'s summary before it can
+    // decide whether to finalize at all, which pushes the terminal transition
+    // past several awaits — wide enough for a second trigger (the shell exiting
+    // right after the sentinel appears) to also pass the gate before the first
+    // call sets it, double-firing `finalizeAgent`. 'finishing' closes that
+    // window synchronously while staying NON-terminal, which is what
+    // `pasteController.resubmit()` depends on: a re-prompt must still be
+    // possible while this call is deciding.
     //
-    // A trigger dropped here while the first call is mid-decision is not
+    // A trigger parked here while the first call is mid-decision is not
     // discarded: it's the one call that could carry news the first call
     // doesn't have (the shell exiting right in this window), so it's replayed
     // once that call settles on "not finalizing after all" — see below.
-    if (finalized) return;
-    if (finishing) {
+    if (isTerminal()) return;
+    if (sessionPhase === 'finishing') {
       pendingFinish = { success, exitCode, error, reason };
       return;
     }
-    finishing = true;
+    sessionPhase = 'finishing';
     // PortOS is going down. Whatever path got here — the PTY exiting under
     // TreeKill, a provider-signal failure, a paste that failed because the shell died —
     // the cause is the host restart, not the agent, so there is no outcome to
@@ -1088,11 +1119,11 @@ export async function spawnTuiAgent({
     if (success && sentinelSummary !== null && await checkMergeGateCompliance(sentinelSummary)) {
       // Not finalizing — reopen the re-entrancy gate for the next completion
       // signal the re-prompt is expected to produce. A trigger that arrived
-      // WHILE this call was deciding (dropped by the `finishing` guard above)
+      // WHILE this call was deciding (parked by the 'finishing' guard above)
       // is the only thing that could tell us the session actually died during
       // that window, so replay it now rather than losing it — otherwise the
       // run would sit waiting for a nudge with nothing left alive to receive it.
-      finishing = false;
+      sessionPhase = 'running';
       if (pendingFinish) {
         const replay = pendingFinish;
         pendingFinish = null;
@@ -1101,7 +1132,7 @@ export async function spawnTuiAgent({
       return;
     }
 
-    finalized = true;
+    sessionPhase = 'finalized';
 
     const agentData = stopRunMachinery();
 
@@ -1170,7 +1201,7 @@ export async function spawnTuiAgent({
     // `prOwnership` was resolved once, up front, near `doneSentinelPath`, so the
     // merge-gate contract check above and the completion dispatch below read the
     // same answer (#3733); see `resolvePrOwnership` for why finalize's
-    // `prClaimExpected` and cleanup's `agentOwnsPR` are two predicates (#3358).
+    // `prClaimExpected` and cleanup's `agentOpensOwnPr` are two predicates (#3358).
     //
     // Whether finalize's check ACTUALLY produced a forge answer, filled in from
     // its return below. Deliberately not `prClaimExpected`: finalize substitutes
@@ -1192,7 +1223,7 @@ export async function spawnTuiAgent({
     // best-effort posture).
     let cleanupSuccess = finalSuccess;
     try {
-      const finalized = await finalizeAgent({
+      const finalizeVerdict = await finalizeAgent({
         agentId,
         task,
         runId,
@@ -1211,9 +1242,9 @@ export async function spawnTuiAgent({
         // The run window the commit criterion is evaluated against (#3637).
         startedAt: agentData?.startedAt ?? null,
       });
-      if (finalized && typeof finalized.success === 'boolean') cleanupSuccess = finalized.success;
-      prClaimVerified = prClaimWasVerified(finalized?.prVerdict);
-      noChangesToShip = finalized?.prVerdict?.noChangesToShip === true;
+      if (finalizeVerdict && typeof finalizeVerdict.success === 'boolean') cleanupSuccess = finalizeVerdict.success;
+      prClaimVerified = prClaimWasVerified(finalizeVerdict?.prVerdict);
+      noChangesToShip = finalizeVerdict?.prVerdict?.noChangesToShip === true;
     } finally {
       await releaseRunResources({ agentData, cleanupSuccess, prOwnership, prClaimVerified, noChangesToShip });
     }
@@ -1231,13 +1262,15 @@ export async function spawnTuiAgent({
    * agent named in it, and requeues the task as *interrupted* — resumable, and
    * without charging it orphan-retry budget.
    *
-   * Sets `finalized` so every other path (provider-signal timer, sentinel watcher, paste
-   * retry) becomes a no-op for the rest of this process's life.
+   * Moves the session to the terminal 'abandoned' phase so every other path
+   * (provider-signal timer, sentinel watcher, paste retry) becomes a no-op for
+   * the rest of this process's life — a full stop, under the name that says no
+   * outcome was recorded.
    */
   const abandonForHostShutdown = async () => {
-    // No `finalized` guard: finish() — the only caller — already returned if it
-    // was set, and this sets it below.
-    finalized = true;
+    // No terminal guard: finish() — the only caller — already returned if the
+    // session had reached one, and this sets it below.
+    sessionPhase = 'abandoned';
     stopRunMachinery();
 
     appendLine('🛑 PortOS restarted while this agent was running — the run was interrupted, not completed. Its worktree is preserved and the task will resume.');
@@ -1298,7 +1331,7 @@ export async function spawnTuiAgent({
   const resubmitAfterSignal = () => {
     // A banner that paints during startup (before the prompt was ever submitted)
     // has nothing to re-send — the ordinary paste path still owns first delivery.
-    if (finalized || !promptSubmittedAt) return;
+    if (isTerminal() || !promptSubmittedAt) return;
     const attempt = selfClearingGate.takeResubmit(Date.now());
     if (!attempt) return;
     // Only claim the re-submission that actually went out — a false return means
@@ -1317,10 +1350,11 @@ export async function spawnTuiAgent({
     // See skill: nodejs-async-event-listener-unhandled-rejection.
     try {
       // node-pty can deliver chunks between finalize starting and the shell
-      // session being killed in finalize's finally block. Once finalized, drop
-      // them — appending to the spool, growing the post-paste accumulator, or
-      // mutating timing state is all pointless after finish has settled.
-      if (finalized) return;
+      // session being killed in finalize's finally block. Once the run has
+      // reached a terminal phase, drop them — appending to the spool, growing
+      // the post-paste accumulator, or mutating timing state is all pointless
+      // after finish has settled.
+      if (isTerminal()) return;
       // node-pty surfaces output as already-decoded UTF-8 strings via
       // shellService's onData hook (StringDecoder handles multi-byte
       // boundaries internally), so `data` is a string here in normal use.
@@ -1476,7 +1510,7 @@ export async function spawnTuiAgent({
   };
 
   const handleExit = async ({ exitCode, killed, signal = null, outputTail = '' }) => {
-    if (finalized) return;
+    if (isTerminal()) return;
     // A durable runner can retain a startup error even when its matching
     // `tui:output` socket event lost the race with process exit. Preserve its
     // bounded tail before finish() drains raw.txt for error analysis. Cap again
@@ -1579,9 +1613,24 @@ export async function spawnTuiAgent({
     // A LOCAL direct PTY raises the SAME failure with the same prefix — see the
     // pre-spawn resolve in createAgentTuiSession's restricted branch (#6159) —
     // so the test is no longer gated on the runner.
+    //
+    // An unusable PTY LAYER joins that actionable set for the same reason: it
+    // reproduces on every attempt, so retrying it as a transient rejection burns
+    // MAX_TASK_RETRIES on every task in the fleet and buries the one line naming
+    // the repair (see lib/ptySpawnDiagnostics.js).
+    //
+    // The runner's OTHER named fault — a workspace that vanished — deliberately
+    // does NOT join it. Each retry provisions a fresh worktree at a fresh path, so
+    // a reaped one is exactly the transient case `spawn-rejected` exists for;
+    // blocking on it would park work a retry fixes. A cwd that is missing because
+    // it is misconfigured (a managed app whose directory is gone) still surfaces —
+    // it fails identically every attempt and blocks on MAX_TASK_RETRIES carrying
+    // the runner's message, which is that reason's documented behavior.
     const reason = /^Command executable unavailable:/i.test(message)
       ? 'command-not-found'
-      : useDurableRunner ? 'spawn-rejected' : 'spawn-error';
+      : message.startsWith(PTY_UNAVAILABLE_PREFIX)
+        ? 'runner-pty-unavailable'
+        : useDurableRunner ? 'spawn-rejected' : 'spawn-error';
     if (useDurableRunner) {
       // A handoff that did not land (#4540), recorded like the CLI path's. A
       // LOCAL PTY that won't open is a host problem, not a handoff, so it is
@@ -1649,7 +1698,7 @@ export async function spawnTuiAgent({
   // is still awaiting that response. Do not revive the finalized agent by
   // registering its returned session, timers, or active-agent record; release
   // the external shell session that was registered during the late response.
-  if (finalized) {
+  if (isTerminal()) {
     if (sessionId && shellService.getSession(sessionId)) shellService.killSession(sessionId);
     return null;
   }
@@ -1688,7 +1737,7 @@ export async function spawnTuiAgent({
   // shell. Shared by the liveness guard (command exited) and the readiness cap
   // (claude never showed its input prompt).
   const finishStartupFailure = async (reason, summary) => {
-    if (finalized) return;
+    if (isTerminal()) return;
     // Flush any debounced raw-PTY chunks first so the captured tail includes
     // the CLI's most recent output (e.g. claude's final error before exiting),
     // not just whatever happened to be on disk before the last 250ms window.
@@ -1710,9 +1759,10 @@ export async function spawnTuiAgent({
   // timers — see
   // createPasteRetryController's own comment for why that cluster lives
   // outside this closure. `isFinalized`/`markPromptSent`/`markPromptSubmitted`
-  // are accessors into THIS closure's `finalized`/`promptSentAt`/
+  // are accessors into THIS closure's `sessionPhase`/`promptSentAt`/
   // `promptSubmittedAt`, which handleData and the provider-signal timer below
-  // still read directly.
+  // still read directly. `isFinalized` is the controller's own name for "the
+  // run is over", which is what BOTH terminal phases mean.
   pasteController = createPasteRetryController({
     agentId,
     sessionId,
@@ -1722,7 +1772,7 @@ export async function spawnTuiAgent({
     tuiConfig,
     mcpBoot,
     appendLine,
-    isFinalized: () => finalized,
+    isFinalized: isTerminal,
     markPromptSent: () => { promptSentAt = Date.now(); },
     markPromptSubmitted: () => { if (promptSubmittedAt === null) promptSubmittedAt = Date.now(); },
     finishStartupFailure,
@@ -1761,76 +1811,41 @@ export async function spawnTuiAgent({
     emitLog('error', `TUI agent ${agentId} sendPrompt(${reason}) failed: ${err?.message || err}`, { agentId }));
   const safeFinishStartupFailure = (reason, summary) => finishStartupFailure(reason, summary).catch((err) =>
     emitLog('error', `TUI agent ${agentId} finishStartupFailure(${reason}) failed: ${err?.message || err}`, { agentId }));
+  // The one PTY writer the startup-dialog answers go through, bound once
+  // rather than rebuilt on every 300ms poll tick.
+  const writeToTuiSession = (keys) => shellService.writeToSession(sessionId, keys);
   const promptTimer = setInterval(() => {
-    if (finalized || promptSentAt) {
+    if (isTerminal() || promptSentAt) {
       clearInterval(promptTimer);
       return;
     }
     const now = Date.now();
     const elapsed = now - startedAt;
 
-    // Every dismissal below rewinds the idle clock (`lastOutputAt`) AND clears
-    // `firstOutputAt`, which re-arms the idle path's "has it printed anything?"
-    // gate. The idle heuristic that governs codex reads silence as readiness,
-    // and a dialog is at its quietest right after it paints — so the dismissal
-    // keystroke and an idle paste can otherwise go out inside the same window,
-    // landing the prompt in a menu that has not repainted. Demanding fresh
-    // output-then-silence AFTER the keystroke makes the paste wait for whatever
-    // the dismissal reveals; if the TUI ignores the keystroke entirely,
-    // PASTE_DEADLINE_MS still backstops delivery.
-
-    // Claude can discover PortOS's parent AGENTS.md (via CLAUDE.md) from a managed-app worktree
-    // nested under data/cos/worktrees, then ask whether to allow that file's
-    // external AGENTS.md import. Decline it: the parent repository's instructions
-    // must not leak into the target app, and option 2 leaves the target's own
-    // instruction files intact. Like the auto-mode offer, arrow-down + Enter
-    // avoids accepting the highlighted option 1.
-    if (inputReady.needsExternalImportsChoice && !externalImportsDeclined) {
-      externalImportsDeclined = true;
-      shellService.writeToSession(sessionId, '\x1b[B\r');
-      inputReady.ackExternalImportsChoice();
-      lastOutputAt = now;
-      firstOutputAt = null;
-      appendLine(`📟 Declined ${tuiConfig.command} external instruction imports for session ${sessionId.slice(0, 8)}`);
-      return;
-    }
-
-    // Codex can present a hook-review selector before its composer exists.
-    // Do not trust hooks from an unattended run: option 3 keeps them disabled
-    // for this session and lets the agent continue without executing code
-    // outside its sandbox. This must run for every TUI, not only the positive
-    // input-ready providers below — Codex currently uses the idle/deadline path.
-    if (inputReady.needsHookReview && !hookReviewDeclined) {
-      hookReviewDeclined = true;
-      shellService.writeToSession(sessionId, '\x1b[B\x1b[B\r');
-      inputReady.ackHookReview();
-      lastOutputAt = now;
-      firstOutputAt = null;
-      appendLine(`📟 Continued ${tuiConfig.command} without trusting startup hooks for session ${sessionId.slice(0, 8)}`);
-      return;
-    }
-
-    // Auto-confirm the first-run "trust this folder?" gate so agents can run in
-    // fresh worktrees. Wait for the choices themselves to paint: Claude Code
-    // releases disagree about their ordering, and newer builds can highlight
-    // "No, exit" by default. Move to the affirmative option when necessary,
-    // then submit it once.
+    // Answer whatever startup dialog the TUI is showing — one per tick, in the
+    // order answerStartupDialogs declares (external imports, hook review,
+    // folder trust). These run for EVERY provider, not only the positive
+    // input-ready ones below, because codex takes the idle/deadline paste path
+    // and a dialog is at its quietest right after it paints.
     //
-    // Like the hook-review selector this runs for EVERY TUI, not only the
-    // positive input-ready providers below: codex takes the idle/deadline path,
-    // and its trust dialog goes quiet the instant it paints, so the idle
-    // heuristic reads that silence as "ready" and pastes the task straight into
-    // the menu — which swallows it and all three paste retries
-    // (agent-671af38f, 2026-08-21, `paste-not-rendered`). Answering the dialog
-    // first is what lets the composer appear at all.
-    if (inputReady.needsTrust && inputReady.trustChoiceReady && !trustAccepted) {
-      trustAccepted = true;
-      const trustInput = `${inputReady.trustSelectionKey}${SUBMIT_KEY}`;
-      shellService.writeToSession(sessionId, trustInput);
-      inputReady.ackTrustChoice();
+    // Answering rewinds the idle clock (`lastOutputAt`) AND clears
+    // `firstOutputAt`, which re-arms the idle path's "has it printed anything?"
+    // gate. Without that, the dismissal keystroke and an idle paste can go out
+    // inside the same window, landing the prompt in a menu that has not
+    // repainted. Demanding fresh output-then-silence AFTER the keystroke makes
+    // the paste wait for whatever the dismissal reveals; if the TUI ignores the
+    // keystroke entirely, PASTE_DEADLINE_MS still backstops delivery.
+    const answeredBeforeComposer = answerStartupDialogs({
+      inputReady,
+      answers: dialogAnswers,
+      stage: 'before-composer',
+      command: tuiConfig.command,
+      write: writeToTuiSession,
+    });
+    if (answeredBeforeComposer) {
       lastOutputAt = now;
       firstOutputAt = null;
-      appendLine(`📟 Auto-confirmed ${tuiConfig.command} folder-trust prompt for session ${sessionId.slice(0, 8)}`);
+      appendLine(`📟 ${answeredBeforeComposer.message} for session ${sessionId.slice(0, 8)}`);
       return;
     }
 
@@ -1852,19 +1867,20 @@ export async function spawnTuiAgent({
     }
 
     if (requireInputReady) {
-      // Decline claude's "make auto mode your default permission mode?" offer
-      // (v2.1.233+). Unlike the trust gate this one paints AFTER the composer is
-      // live, so it swallows the paste and every retry unless it is cleared
-      // first — see TUI_AUTO_MODE_PROMPT_PATTERN. Arrow-down + Enter rather than
-      // the digit `2`: it lands on "No, keep don't ask" under both of Ink's
-      // selection models (digit-immediate-select and navigate-then-confirm),
-      // whereas a bare `\r` would accept the highlighted option 1 and rewrite the
-      // user's global permission default.
-      if (inputReady.needsAutoModeChoice && !autoModeDeclined) {
-        autoModeDeclined = true;
-        shellService.writeToSession(sessionId, '\x1b[B\r');
-        inputReady.ackAutoModeChoice();
-        appendLine(`📟 Declined ${tuiConfig.command} auto-mode default offer for session ${sessionId.slice(0, 8)}`);
+      // Claude's auto-mode offer paints AFTER the composer is live, so it only
+      // reaches the positive input-ready providers — and unlike a dialog that
+      // paints before the composer, no idle rewind is needed here: this path
+      // gates on `inputReady.ready`, which the offer itself suppresses until
+      // it is acked.
+      const answeredAtComposer = answerStartupDialogs({
+        inputReady,
+        answers: dialogAnswers,
+        stage: 'after-composer',
+        command: tuiConfig.command,
+        write: writeToTuiSession,
+      });
+      if (answeredAtComposer) {
+        appendLine(`📟 ${answeredAtComposer.message} for session ${sessionId.slice(0, 8)}`);
         return;
       }
       if (inputReady.ready && elapsed >= tuiConfig.promptDelayMs) {
@@ -1899,7 +1915,7 @@ export async function spawnTuiAgent({
   // Provider-handshake retry timer. It is deliberately not an idle watchdog:
   // a CoS TUI may remain silent for as long as the provider needs.
   const providerSignalTimer = setInterval(() => {
-    if (finalized) return;
+    if (isTerminal()) return;
     const expired = selfClearingGate.takeExpired(Date.now());
     if (expired) {
       // setInterval can't await, and an unhandled rejection here would crash the

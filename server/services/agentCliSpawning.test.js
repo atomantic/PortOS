@@ -48,10 +48,10 @@ const { appendRunEvent } = vi.hoisted(() => ({ appendRunEvent: vi.fn(async () =>
 vi.mock('./agentRunEventLog.js', () => ({ appendRunEvent }));
 
 vi.mock('./agentRunTracking.js', () => ({ completeAgentRun: vi.fn().mockResolvedValue(undefined) }));
-// Mock git.js directly so spawnDirectly's GH_TOKEN pinning is exercised without
+// Mock forgeAuth.js directly so spawnDirectly's GH_TOKEN pinning is exercised without
 // pulling in the real worktreeManager → instances module graph. Default: no
 // owner-matched account → empty overlay (ambient gh auth untouched).
-vi.mock('./git.js', () => ({ resolveForgeTokenEnv: vi.fn().mockResolvedValue({}) }));
+vi.mock('./forgeAuth.js', () => ({ resolveForgeTokenEnv: vi.fn().mockResolvedValue({}) }));
 vi.mock('./agentFinalization.js', () => ({
   finalizeAgent: vi.fn().mockResolvedValue(undefined),
   releaseAgentLane: vi.fn(),
@@ -123,7 +123,8 @@ vi.mock('../lib/privateSecuritySandbox.js', () => ({
   preparePrivateSecuritySpawn: vi.fn(),
 }));
 
-import { buildCliSpawnConfig, createStreamJsonParser, spawnDirectly } from './agentCliSpawning.js';
+import { buildCliSpawnConfig, spawnDirectly } from './agentCliSpawning.js';
+import { promptOpensOwnPr } from './promptSections/completion.js';
 import { runSpawnerCompletionCleanup } from './agentCompletionCleanup.js';
 import { ensureOllamaAgentContext } from './ollamaAgentContext.js';
 import { isOllamaBackedProvider } from './providers.js';
@@ -133,91 +134,6 @@ import { markHostShuttingDown, resetHostShutdownFlagForTests } from '../lib/host
 import { existsSync } from 'fs';
 import { spawn } from '../lib/childProcess.js';
 import { prepareCliSpawn, killProcessTree } from '../lib/bufferedSpawn.js';
-
-// Helper: feed the parser a sequence of stream-json lines
-function runStream(parser, events) {
-  for (const ev of events) {
-    parser.processChunk(JSON.stringify(ev) + '\n');
-  }
-  parser.flush();
-}
-
-const textDelta = (text) => ({
-  type: 'stream_event',
-  event: { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text } }
-});
-
-const toolStart = (index, name) => ({
-  type: 'stream_event',
-  event: { type: 'content_block_start', index, content_block: { type: 'tool_use', name } }
-});
-
-const toolStop = (index) => ({
-  type: 'stream_event',
-  event: { type: 'content_block_stop', index }
-});
-
-const resultEvent = (result) => ({ type: 'result', result });
-
-describe('createStreamJsonParser.getFinalResult', () => {
-  it('returns only the final wrap-up — interim narrations between tool calls are discarded', () => {
-    const parser = createStreamJsonParser();
-    runStream(parser, [
-      textDelta('Now I have all the info I need. Let me make the changes:\n'),
-      toolStart(1, 'Read'),
-      toolStop(1),
-      textDelta('Now let me run the relevant tests to verify nothing broke:\n'),
-      toolStart(2, 'Bash'),
-      toolStop(2),
-      textDelta('Changes look clean. Now let me update the changelog and commit:\n'),
-      toolStart(3, 'Edit'),
-      toolStop(3),
-      textDelta('## Summary\n\nAdded a `/do:replan` button to the Agent Operations section.'),
-      resultEvent('## Summary\n\nAdded a `/do:replan` button to the Agent Operations section.')
-    ]);
-
-    const finalResult = parser.getFinalResult();
-    expect(finalResult).toContain('## Summary');
-    expect(finalResult).toContain('Added a `/do:replan` button');
-    expect(finalResult).not.toContain('Now I have all the info');
-    expect(finalResult).not.toContain('Now let me run the relevant tests');
-    expect(finalResult).not.toContain('Changes look clean');
-  });
-
-  it('preserves both summaries across multiple result events (e.g., task + /simplify)', () => {
-    const parser = createStreamJsonParser();
-    runStream(parser, [
-      textDelta('Investigating the bug.\n'),
-      toolStart(1, 'Read'),
-      toolStop(1),
-      textDelta('Task summary: fixed the bug.'),
-      resultEvent('Task summary: fixed the bug.'),
-      textDelta('Now running /simplify.\n'),
-      toolStart(2, 'Read'),
-      toolStop(2),
-      textDelta('Simplify summary: code is clean.'),
-      resultEvent('Simplify summary: code is clean.')
-    ]);
-
-    const finalResult = parser.getFinalResult();
-    expect(finalResult).toContain('Task summary: fixed the bug.');
-    expect(finalResult).toContain('Simplify summary: code is clean.');
-    expect(finalResult).not.toContain('Investigating the bug');
-    expect(finalResult).not.toContain('Now running /simplify');
-  });
-
-  it('returns the CLI result field for a single-turn task with no interim narration', () => {
-    const parser = createStreamJsonParser();
-    runStream(parser, [
-      toolStart(1, 'Read'),
-      toolStop(1),
-      textDelta('Done. All tests pass.'),
-      resultEvent('Done. All tests pass.')
-    ]);
-
-    expect(parser.getFinalResult()).toBe('Done. All tests pass.');
-  });
-});
 
 describe('buildCliSpawnConfig', () => {
   it('omits --model for Codex configured-default sentinel but bypasses sandbox/approvals', () => {
@@ -552,6 +468,19 @@ describe('stream error containment', () => {
     if (failWith) setImmediate(() => proc.emit('error', failWith));
     return proc;
   }
+
+  // The stamp `agentLifecycle` writes for a run, derived through the REAL
+  // predicate instead of hand-written — a literal here is what let the suite
+  // pin an ownership value the spawn path never produces for a Claude host
+  // (#6869). `minimalArgs.provider` is the slashdo-capable `claude-code` CLI.
+  const stampPrOpenedBy = (task, provider = minimalArgs.provider) => promptOpensOwnPr(task, {
+    providerType: provider.type,
+    providerId: provider.id,
+    providerCommand: provider.command,
+    leanMode: false,
+    worktreeInfo: { branchName: 'agent/t', worktreePath: '/tmp/wt', baseBranch: 'main' },
+    isTruthyMetaFn: (v) => v === true || v === 'true',
+  });
 
   const minimalArgs = {
     agentId: 'agent-test',
@@ -1105,7 +1034,7 @@ describe('stream error containment', () => {
   });
 
   it('injects the repo-owner-pinned GH_TOKEN into the spawn env so the agent\'s own `gh` uses the right account', async () => {
-    const { resolveForgeTokenEnv } = await import('./git.js');
+    const { resolveForgeTokenEnv } = await import('./forgeAuth.js');
     vi.mocked(resolveForgeTokenEnv).mockResolvedValueOnce({ GH_TOKEN: 'ghp_pinned_owner_token' });
 
     const spawnPromise = spawnDirectly(minimalArgs);
@@ -1147,7 +1076,7 @@ describe('stream error containment', () => {
   });
 
   it('leaves the spawn env\'s ambient GH_TOKEN untouched when there is no owner match', async () => {
-    const { resolveForgeTokenEnv } = await import('./git.js');
+    const { resolveForgeTokenEnv } = await import('./forgeAuth.js');
     vi.mocked(resolveForgeTokenEnv).mockResolvedValueOnce({});
     const prev = process.env.GH_TOKEN;
     process.env.GH_TOKEN = 'ghp_ambient';
@@ -1167,7 +1096,7 @@ describe('stream error containment', () => {
   });
 
   it('skips the owner-token probe when the provider supplies its own GITHUB_TOKEN', async () => {
-    const { resolveForgeTokenEnv } = await import('./git.js');
+    const { resolveForgeTokenEnv } = await import('./forgeAuth.js');
     vi.mocked(resolveForgeTokenEnv).mockClear();
     vi.mocked(spawn).mockClear();
 
@@ -1261,7 +1190,7 @@ describe('stream error containment', () => {
       metadata: { openPR: true, reviewers: ['codex', 'antigravity'], reviewStopMode: 'on-clean' },
     };
 
-    spawnDirectly({ ...minimalArgs, task, isTruthyMetaFn: (v) => v === true });
+    spawnDirectly({ ...minimalArgs, task, prOpenedBy: stampPrOpenedBy(task), isTruthyMetaFn: (v) => v === true });
     await new Promise((r) => setTimeout(r, 10));
     fakeProcess.stdout.emit('data', Buffer.from('{"type":"result","result":"ok"}\n'));
     await new Promise((r) => setTimeout(r, 50));
@@ -1277,7 +1206,7 @@ describe('stream error containment', () => {
       agentId: minimalArgs.agentId,
       task,
       success: true,
-      prOwnership: { taskOpenPR: true, agentOwnsPR: true, prClaimExpected: true },
+      prOwnership: { taskOpenPR: true, prOpenedBy: 'agent-slashdo', agentOpensOwnPr: true, prClaimExpected: true },
       prClaimVerified: false,
     }));
     // The claim predicate, not the ownership one, is what finalize verifies (#3358).
@@ -1286,13 +1215,13 @@ describe('stream error containment', () => {
 
   it('hands a read-only CLI run to PortOS using the prompt ownership stamp', async () => {
     const task = { id: 'task-read-only', description: 'analyze the code', metadata: { openPR: true, readOnly: true } };
-    const spawnPromise = spawnDirectly({ ...minimalArgs, task, ownsPrWorkflow: false, isTruthyMetaFn: (v) => v === true });
+    const spawnPromise = spawnDirectly({ ...minimalArgs, task, prOpenedBy: stampPrOpenedBy(task), isTruthyMetaFn: (v) => v === true });
     await vi.waitFor(() => expect(fakeProcess.listenerCount('close')).toBeGreaterThan(0));
     fakeProcess.emit('close', 0);
     await spawnPromise;
     await vi.waitFor(() => expect(runSpawnerCompletionCleanup).toHaveBeenCalledTimes(1));
     expect(runSpawnerCompletionCleanup).toHaveBeenCalledWith(expect.objectContaining({
-      prOwnership: { taskOpenPR: true, agentOwnsPR: false, prClaimExpected: true },
+      prOwnership: { taskOpenPR: true, prOpenedBy: 'portos', agentOpensOwnPr: false, prClaimExpected: true },
     }));
   });
 

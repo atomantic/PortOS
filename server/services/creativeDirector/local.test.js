@@ -1,4 +1,4 @@
-vi.mock('../instances.js', () => ({ ensureInstanceId: vi.fn(async () => 'example-owner'), getInstanceId: vi.fn(async () => 'example-owner') }));
+vi.mock('../instanceIdentity.js', () => ({ ensureInstanceId: vi.fn(async () => 'example-owner'), getInstanceId: vi.fn(async () => 'example-owner') }));
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 // Mocks declared before importing the module under test.

@@ -156,7 +156,7 @@ export const creativeDirectorVideoDraftSchema = z.object({
     prompt: z.string().trim().max(1000).optional(),
     providerId: z.string().max(120).optional(),
     model: z.string().max(200).optional(),
-  }).strict().default({}),
+  }).strict().default({ mode: 'native' }),
   reviewPolicy: z.enum(['review', 'autonomous']).default('review'),
   checkpoints: z.array(z.enum(VIDEO_REVIEW_CHECKPOINTS))
     .max(VIDEO_REVIEW_CHECKPOINTS.length).default([...VIDEO_REVIEW_CHECKPOINTS]),
@@ -181,9 +181,10 @@ export const creativeDirectorProjectCreateSchema = z.object({
   // Server-derived from catalogIngredientIds; also accepted directly for off-UI
   // callers and sync. Schema-parity with buildProjectRecord's `cast` field.
   cast: z.array(creativeDirectorCastMemberSchema).max(50).optional(),
-  // Audio defaults OFF for CD projects — current model audio output is
+  // Legacy CD projects default audio OFF — current model audio output is
   // inconsistent across renders and the user can re-enable per-project.
-  // (videoGen one-offs still default to enabled.)
+  // Video workspace projects use videoDraft.audio instead; buildProjectRecord
+  // normalizes this legacy field off for those records.
   disableAudio: z.boolean().optional().default(true),
   autoAcceptScenes: z.boolean().optional().default(false),
   // Optional back-pointer to the pipeline issue that spawned this project,
@@ -295,6 +296,7 @@ export const creativeDirectorProjectQuerySchema = z.object({
 
 // One scene in the treatment, written by the agent on the treatment task.
 export const creativeDirectorSceneSchema = z.object({
+  muteAudio: z.boolean().optional(),
   sceneId: z.string().min(1).max(64),
   order: z.number().int().min(0),
   intent: z.string().min(1).max(1000),
@@ -340,7 +342,10 @@ export const creativeDirectorTreatmentSchema = z.object({
 
 // Used by the agent when finishing a scene render.
 export const creativeDirectorSceneUpdateSchema = z.object({
+  muteAudio: z.boolean().optional(),
   expectedWorkRevision: z.number().int().min(0).optional(),
+  sourceImageFile: safeBasename.nullable().optional(),
+  useContinuationFromPrior: z.boolean().optional(),
   // Full SCENE_STATUSES — the evaluator agent flips a scene back to 'pending'
   // (with an updated prompt + bumped retryCount) to request a re-render; see
   // creativeDirectorPrompts.js and completionHook.js's advanceAfterSceneSettled.

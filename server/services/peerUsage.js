@@ -36,6 +36,7 @@ import { roundCents } from '../lib/subscriptionSavings.js';
 import { sanitizeQuotaCards } from '../lib/fleetQuotas.js';
 import { buildUsageDigest, buildUsageReport, getUsage, USAGE_FILE } from './usage.js';
 import { readLocalQuotaCards, PROVIDER_QUOTAS_FILE } from './providerQuotaShare.js';
+import { isNonBlankStr } from '../lib/textUtils.js';
 
 const PEER_USAGE_FILE = join(PATHS.data, 'peer-usage.json');
 
@@ -60,9 +61,8 @@ const MAX_MODELS_PER_PROVIDER = 400;
 const DAY_KEY_RE = /^\d{4}-\d{2}-\d{2}$/;
 const MONTH_KEY_RE = /^\d{4}-\d{2}$/;
 
-const isNonEmptyStr = (v) => typeof v === 'string' && v.length > 0;
 const num = (v) => (typeof v === 'number' && Number.isFinite(v) ? v : 0);
-const str = (v, max) => (isNonEmptyStr(v) ? v.slice(0, max) : null);
+const str = (v, max) => (isNonBlankStr(v) ? v.slice(0, max) : null);
 
 const COUNT_FIELDS = ['sessions', 'messages', 'tokens', 'tokensIn', 'tokensOut', 'cacheReadTokens', 'cacheWriteTokens'];
 
@@ -89,7 +89,7 @@ function sanitizeProviderBucket(raw) {
   if (isPlainObject(raw?.byModel)) {
     out.byModel = {};
     for (const [model, mRaw] of Object.entries(raw.byModel).slice(0, MAX_MODELS_PER_PROVIDER)) {
-      if (!isNonEmptyStr(model)) continue;
+      if (!isNonBlankStr(model)) continue;
       out.byModel[model.slice(0, 200)] = sanitizeModelBucket(mRaw);
     }
   }
@@ -101,7 +101,7 @@ function sanitizeActivityBucket(raw) {
   if (isPlainObject(raw?.byProvider)) {
     out.byProvider = {};
     for (const [pid, pRaw] of Object.entries(raw.byProvider).slice(0, MAX_PROVIDERS_PER_BUCKET)) {
-      if (!isNonEmptyStr(pid)) continue;
+      if (!isNonBlankStr(pid)) continue;
       out.byProvider[pid.slice(0, 200)] = sanitizeProviderBucket(pRaw);
     }
   }
@@ -141,18 +141,20 @@ function sanitizeDigest(raw) {
 const withLock = createMutex();
 
 /**
- * This machine's federation identity. Dynamically imported so `dataSync` →
- * `peerUsage` doesn't drag `services/instances.js` (peer socket relay,
- * federated-media consumer, tailscale) into dataSync's module-load path — the
- * same reason dataSync defers `sharing/peerSync.js`.
+ * This machine's federation identity, read from the identity leaf
+ * (services/instanceIdentity.js, #6836) rather than services/instances.js —
+ * that module still drags the peer socket relay / federated-media consumer /
+ * tailscale into dataSync's module-load path, the same reason dataSync defers
+ * `sharing/peerSync.js`. Kept as a dynamic import to match that call shape,
+ * though the leaf itself would no longer need the deferral.
  */
 async function readSelfIdentity() {
-  const { getSelf, UNKNOWN_INSTANCE_ID } = await import('./instances.js');
+  const { getSelf, UNKNOWN_INSTANCE_ID } = await import('./instanceIdentity.js');
   const self = await getSelf().catch(() => null);
-  const instanceId = isNonEmptyStr(self?.instanceId) && self.instanceId !== UNKNOWN_INSTANCE_ID
+  const instanceId = isNonBlankStr(self?.instanceId) && self.instanceId !== UNKNOWN_INSTANCE_ID
     ? self.instanceId
     : null;
-  return { instanceId, name: isNonEmptyStr(self?.name) ? self.name : null };
+  return { instanceId, name: isNonBlankStr(self?.name) ? self.name : null };
 }
 
 async function readStore() {
@@ -175,11 +177,11 @@ function sanitizeEntry(entry, expectedId) {
   // A digest may omit its own id (the key is authoritative), but it may never
   // claim a DIFFERENT one — that would let a peer smuggle a digest in under our
   // id, or overwrite a third instance's slot.
-  if (isNonEmptyStr(entry.instanceId) && entry.instanceId !== expectedId) return null;
+  if (isNonBlankStr(entry.instanceId) && entry.instanceId !== expectedId) return null;
   if (parseTsMs(entry.capturedAt) === null) return null;
   return {
     instanceId: expectedId,
-    name: isNonEmptyStr(entry.name) ? entry.name.slice(0, 120) : expectedId,
+    name: isNonBlankStr(entry.name) ? entry.name.slice(0, 120) : expectedId,
     capturedAt: entry.capturedAt,
     usage: sanitizeDigest(entry.usage),
     // Optional: a peer running an older build publishes no quota readings, and
@@ -226,7 +228,7 @@ async function buildSelfEntry() {
 async function entriesWithSelf() {
   const [store, self] = await Promise.all([readStore(), buildSelfEntry()]);
   const peers = Object.values(store.instances).filter((e) => isPlainObject(e) && isPlainObject(e.usage));
-  const publishable = self && isNonEmptyStr(self.capturedAt) ? self : null;
+  const publishable = self && isNonBlankStr(self.capturedAt) ? self : null;
   return {
     self: publishable,
     peers: peers.filter((e) => e.instanceId !== self?.instanceId),
@@ -317,7 +319,7 @@ export async function applyUsageRemote(remoteData) {
     let changed = 0;
 
     for (const [key, rawEntry] of Object.entries(incoming)) {
-      if (!isNonEmptyStr(key) || key === selfId) continue;
+      if (!isNonBlankStr(key) || key === selfId) continue;
       const entry = sanitizeEntry(rawEntry, key);
       if (!entry) continue;
       // A digest CAPTURED after the deletion is a machine that came back, and
@@ -484,7 +486,7 @@ export async function getFleetQuotaEntries({ excludeInstanceIds = [] } = {}) {
  * captured AFTER the tombstone still wins, so re-adding the machine later works.
  */
 export async function forgetInstanceUsage(instanceId) {
-  if (!isNonEmptyStr(instanceId)) return { removed: false };
+  if (!isNonBlankStr(instanceId)) return { removed: false };
   return withLock(async () => {
     const store = await readStore();
     store.tombstones = recordTombstone(store.tombstones, instanceId, { keyField: 'instanceId' });

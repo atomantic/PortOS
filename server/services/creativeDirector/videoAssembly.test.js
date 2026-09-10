@@ -17,7 +17,7 @@ vi.mock('./local.js', () => ({
   mutateVideoProject: async (_id, mutate) => { const outcome = mutate(structuredClone(state.project)); if (!outcome.skipPersist) state.project = outcome.project; return outcome; },
 }));
 vi.mock('../videoGen/local.js', () => ({ loadHistory: async () => state.history, mutateVideoHistory: async mutate => { state.history = mutate(state.history); return state.history; } }));
-vi.mock('../instances.js', () => ({ getInstanceId: async () => 'example-owner' }));
+vi.mock('../instanceIdentity.js', () => ({ getInstanceId: async () => 'example-owner' }));
 vi.mock('./videoSources.js', () => ({ assertVideoSourcesAvailable: async () => {} }));
 vi.mock('../mediaCollections.js', () => ({ addItem: async (_id, item) => { state.collection.push(item); } }));
 vi.mock('../tracks/index.js', () => ({ getTrack: async id => state.tracks.find(track => track.id === id) }));
@@ -123,3 +123,27 @@ it('rejects missing, corrupt, out-of-range and missing-audio finals even when hi
   state.project.videoExecution.choices.audio.mode = 'native';
   await expect(validateVideoCut(state.project, entry)).rejects.toThrow(/missing its requested audio/);
 });
+
+
+it('mutes a selected shot in the real cut while retaining the next shot audio', async context => {
+  requireFfmpeg(context);
+  await exec(ffmpeg, ['-y', '-f', 'lavfi', '-i', 'color=c=green:s=64x64:r=24:d=3', '-f', 'lavfi', '-i', 'sine=frequency=440:duration=3', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-shortest', join(state.root, 'videos', 'native.mp4')]);
+  state.history.forEach(row => { row.filename = 'native.mp4'; });
+  state.project.videoDraft.audio = { mode: 'native' };
+  state.project.videoDraft.transition = 'cut';
+  state.project.videoExecution.choices.audio = { mode: 'native' };
+  state.project.treatment.scenes[0].muteAudio = true;
+  state.project.videoExecution.inputRevision = videoConfigurationRevision(state.project);
+  await runVideoAssembly('example-video');
+  expect(state.project.failureReason).toBeNull();
+  expect(state.project.status).toBe('complete');
+  const output = join(state.root, 'videos', state.project.videoFinalCut.filename);
+  const rms = async start => {
+    const { stdout } = await exec(ffmpeg, ['-v', 'error', '-ss', String(start), '-i', output, '-t', '0.5', '-vn', '-ac', '1', '-ar', '8000', '-f', 'f32le', 'pipe:1'], { encoding: 'buffer' });
+    let square = 0;
+    for (let i = 0; i < stdout.length; i += 4) square += stdout.readFloatLE(i) ** 2;
+    return Math.sqrt(square / (stdout.length / 4));
+  };
+  expect(await rms(1)).toBeLessThan(0.0001);
+  expect(await rms(4)).toBeGreaterThan(0.01);
+}, 30000);

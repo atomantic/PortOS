@@ -9,7 +9,16 @@ import {
   countSparklineGeometry,
   diffCountMaps,
   snapshotDiff,
+  READINESS_GATE_LABELS,
+  READINESS_GATE_ORDER,
 } from './editorialHealth.js';
+
+describe('readiness gate labels', () => {
+  it('keeps the label table aligned with the complete gate order', () => {
+    expect(Object.keys(READINESS_GATE_LABELS)).toEqual([...READINESS_GATE_ORDER]);
+    expect(READINESS_GATE_ORDER).toEqual(['noOpenHigh', 'noOpenHighOrMedium', 'none']);
+  });
+});
 
 describe('scoreBand', () => {
   it('bands scores into label + tone', () => {

@@ -23,15 +23,17 @@ import { prepareCliPrompt } from '../lib/cliProviderArgs.js';
 import { commandExists } from '../lib/commandExists.js';
 import { adoptNpmGlobalBinDir } from '../lib/npmGlobalBin.js';
 import { findCommandOnPath } from '../lib/processEnv.js';
+import { diagnosePtySpawnFailure, probePtyRuntime, PTY_WORKSPACE_MISSING_PREFIX } from '../lib/ptySpawnDiagnostics.js';
 import { createCodexStderrFormatter } from '../lib/codexCliOutput.js';
 import { isKnownCliStderrNoise } from '../lib/cliStderrNoise.js';
 import { createStreamingAnsiStripper } from '../lib/ansiStrip.js';
-import { createStreamJsonParser } from './streamJsonParser.js';
+import { createStreamJsonParser } from '../lib/streamJsonParser.js';
 import { loadState, saveState, withState } from './runnerState.js';
 import { getProcessStats, checkProcessRunning } from './processStats.js';
 import { usableAgentPid, runnerAgentLivenessFields } from '../lib/runnerAgentLiveness.js';
 import { ALLOWED_COMMANDS, isAllowedCommand } from './allowedCommands.js';
 import { armForceKill as armForceKillShared } from './forceKill.js';
+import { createTuiExitHandler } from './tuiExit.js';
 import { PORTS } from '../lib/ports.js';
 import { setupProcessErrorHandlers } from '../lib/errorHandler.js';
 import { parseSentinelPayload } from '../lib/agentSentinel.js';
@@ -74,12 +76,6 @@ const HOST = process.env.HOST || '127.0.0.1';
 // Active agent processes (in memory)
 const activeAgents = new Map();
 
-// `tui:output` is live telemetry, so an immediate process exit can beat its
-// socket delivery. Keep a small terminal tail with the exit event: the PortOS
-// spawner owns failure analysis and can persist it when no ordinary TUI chunk
-// arrived. This is deliberately much smaller than the runner's 512 KiB live
-// buffer and is enough to carry a CLI's startup diagnostic.
-const TUI_EXIT_OUTPUT_TAIL_CHARS = 16 * 1024;
 const TUI_SIGNALS = new Set(['SIGTERM', 'SIGKILL', 'SIGINT']);
 
 // Bind the shared escalation to this process's map, grace window, and durable
@@ -206,6 +202,15 @@ app.post('/spawn-tui', async (req, res) => {
   }
 
   const cwd = workspacePath && typeof workspacePath === 'string' ? workspacePath : ROOT_DIR;
+  // Ahead of the executable checks below, because both of them run the child IN
+  // this directory: a worktree reaped before the spawn makes the `--version`
+  // probe fail too, and the runner would then blame the provider CLI and tell a
+  // human to reinstall a binary that is sitting right there on PATH.
+  if (!existsSync(cwd)) {
+    return res.status(422).json({
+      error: `${PTY_WORKSPACE_MISSING_PREFIX} the workspace for this spawn does not exist. Its worktree was probably removed before the agent launched.`
+    });
+  }
   const childEnv = buildCliChildEnv({ before: envVars, provider: providerAuth, cwd });
   // node-pty reports a missing executable as an immediate exit with no data.
   // Check the exact child PATH first so the caller gets a usable configuration
@@ -235,13 +240,32 @@ app.post('/spawn-tui', async (req, res) => {
   // Use the same safe wrapper for the actual PTY launch. In particular, this
   // preserves the shared escaping contract for paths/args passed to cmd.exe.
   const { command: ptyCommand, args: ptyArgs } = prepareCliSpawn(executable, args, childEnv);
-  const tuiProcess = pty.spawn(ptyCommand, ptyArgs, {
-    name: 'xterm-256color',
-    cols,
-    rows,
-    cwd,
-    env: childEnv,
-  });
+  // Both checks above cleared the executable, so a throw here is about the PTY
+  // layer or the workspace — not the command. node-pty collapses those into one
+  // opaque `posix_spawn failed: No such file or directory`, which read as a
+  // transient runner refusal and sent the whole fleet into a retry storm. Name
+  // the actual fault instead, and let the caller block on the unrecoverable ones.
+  let tuiProcess;
+  try {
+    tuiProcess = pty.spawn(ptyCommand, ptyArgs, {
+      name: 'xterm-256color',
+      cols,
+      rows,
+      cwd,
+      env: childEnv,
+    });
+  } catch (err) {
+    const { diagnosed, message } = diagnosePtySpawnFailure(err, {
+      cwd,
+      probeCwd: ROOT_DIR,
+      runtimeProbe: (probeCwd) => probePtyRuntime(pty, probeCwd),
+    });
+    // Neither known fault: let the original bubble to the error middleware exactly
+    // as it did before, rather than dressing an unknown cause in a confident 422.
+    if (!diagnosed) throw err;
+    console.error(`❌ PTY spawn failed for ${agentId}: ${message}`);
+    return res.status(422).json({ error: message });
+  }
   const startedAt = Date.now();
   const agent = {
     kind: 'tui',
@@ -272,63 +296,9 @@ app.post('/spawn-tui', async (req, res) => {
     io.emit('tui:output', { sessionId, agentId, data });
   });
 
-  tuiProcess.onExit(async ({ exitCode, signal }) => {
-    try {
-      const current = activeAgents.get(agentId);
-      if (!current) return;
-      current.exited = true;
-      // Drop the handle before the awaited state write so GET /agents cannot
-      // publish processActive:false for a TUI whose completion event is still
-      // in flight (completeAgent keeps the first terminal verdict).
-      activeAgents.delete(agentId);
-      current.doneWatcher?.();
-      // Cancel any pending SIGKILL timer — process already exited.
-      if (current.killTimer) {
-        clearTimeout(current.killTimer);
-        current.killTimer = null;
-      }
-      // A paused agent's process was stopped deliberately and its record is what
-      // a later resume reads, so report nothing: emitting `agent:completed` here
-      // would finalize it as FAILED and retire the task the pause meant to keep.
-      // Mirrors the CLI close handler's own pause guard below. This became
-      // reachable when the node-pty kill started landing on Windows — before
-      // that, pausing a runner-owned TUI threw and the PTY simply never exited.
-      if (current.paused === true) {
-        console.log(`⏸️ TUI agent ${agentId} exited after pause`);
-        activeAgents.delete(agentId);
-        return;
-      }
-      const duration = Date.now() - current.startedAt;
-      const success = current.completedBySentinel;
-      const effectiveExitCode = success ? 0 : exitCode;
-      const effectiveSignal = success ? 0 : signal;
-      const outputTail = current.outputBuffer.slice(-TUI_EXIT_OUTPUT_TAIL_CHARS);
-      io.emit('tui:exit', {
-        sessionId,
-        agentId,
-        exitCode: effectiveExitCode,
-        signal: effectiveSignal,
-        ...(outputTail ? { outputTail } : {}),
-      });
-      emitToServer('agent:completed', {
-        agentId,
-        taskId,
-        exitCode: effectiveExitCode,
-        success,
-        duration,
-        outputLength: current.outputBuffer.length,
-        completionReason: current.completedBySentinel ? 'agent-signaled-done' : 'tui-exit',
-      });
-      await withState((state) => {
-        state.stats.completed++;
-        if (!success) state.stats.failed++;
-        delete state.agents[agentId];
-      });
-    } catch (err) {
-      console.error(`❌ TUI agent ${agentId} exit handler error: ${err.message}`);
-      activeAgents.delete(agentId);
-    }
-  });
+  tuiProcess.onExit(createTuiExitHandler({
+    agentId, taskId, sessionId, agent, activeAgents, io, emitToServer, withState,
+  }));
 
   if (doneSentinelPath) {
     agent.doneWatcher = watchForFile(doneSentinelPath, async () => {

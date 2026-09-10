@@ -99,6 +99,7 @@ vi.mock('./persistentMindImageCapability.js', () => ({
 }));
 
 const supervisor = await import('./persistentMindSupervisor.js');
+const attachmentsService = await import('./persistentMindAttachments.js');
 
 const PNG = Buffer.from('example-png-bytes');
 const uploadRecord = (overrides = {}) => ({
@@ -349,5 +350,11 @@ describe('persistent mind image attachment lifecycle', () => {
     expect(invalid).toMatchObject({ success: false, code: 'ATTACHMENT_NOT_FOUND', status: 400 });
     expect(mocks.root.persistentMind.queuedMessages).toEqual([]);
     expect(mocks.root.persistentMind.pendingAttachments).toEqual([]);
+  });
+
+  it('shares canonical implementations between persistentMindAttachments and supervisor compatibility exports', () => {
+    expect(supervisor.createPersistentMindAttachment).toBe(attachmentsService.createPersistentMindAttachment);
+    expect(supervisor.deletePersistentMindAttachment).toBe(attachmentsService.deletePersistentMindAttachment);
+    expect(supervisor.cleanupPersistentMindAttachments).toBe(attachmentsService.cleanupPersistentMindAttachments);
   });
 });

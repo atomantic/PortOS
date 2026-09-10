@@ -32,6 +32,8 @@ import { join } from 'path';
 import { PATHS, tryReadFile, safeJSONParse } from './fileUtils.js';
 
 export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
+  // Numeric-only PortOS audit evidence; read-through, never imported into local records.
+  appQuality: 1,
   // Type-level (storage layout) version for `data/universes/{id}/index.json`.
   // v5 = post-split. Migration 034 introduced it. The independent per-record
   // shape is currently v5 (stamped inside each record by `sanitizeTemplate`).
@@ -741,11 +743,14 @@ export const RECORD_KIND_SCHEMA_CATEGORIES = Object.freeze({
  *   claim-aware per-task merge (see syncCosTasksFromPeer) — no push to gate, so
  *   no RECORD_KIND_SCHEMA_CATEGORIES entry.
  *
+ * `appQuality`: numeric-only local evidence at GET /api/apps/quality-federation,
+ * validated against its exact wire version by collectPortosQuality; never written or pushed.
+ *
  * Do NOT add a real record-push category here to silence the guard — that would
  * leave its push transfers ungated (silent cross-install corruption). Only
  * genuinely non-push categories belong.
  */
-export const NON_RECORD_SCHEMA_CATEGORIES = Object.freeze(new Set(['mediaLibrary', 'cosHistory', 'cosTasks']));
+export const NON_RECORD_SCHEMA_CATEGORIES = Object.freeze(new Set(['mediaLibrary', 'cosHistory', 'cosTasks', 'appQuality']));
 
 /**
  * Lazy-read the current PortOS version from the ROOT package.json so a

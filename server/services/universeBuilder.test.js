@@ -1421,6 +1421,53 @@ describe("universeBuilder service", () => {
         expect(await svc.pruneTombstonedUniverses(Infinity)).toEqual({ pruned: 0 });
         expect(await svc.pruneTombstonedUniverses('not-a-number')).toEqual({ pruned: 0 });
       });
+
+      it("rescues a record un-deleted between the id-only candidate scan and the queued delete (race safety, #6851)", async () => {
+        // The candidate scan now comes from listTombstoneIdsBefore (a store
+        // projection) instead of an out-of-queue listRaw()+filter, but the
+        // race it must still lose to is the same one pruneTombstonedUniverses
+        // has always guarded against: a concurrent sync un-deleting the record
+        // between that scan and the per-id queued re-check.
+        const w = await seedWorld();
+        await svc.deleteUniverse(w.id);
+        const oldDeletedAt = new Date(Date.now() - 100_000).toISOString();
+        await svc.mergeUniversesFromSync([{
+          ...(await svc.getUniverse(w.id, { includeDeleted: true })),
+          deletedAt: oldDeletedAt,
+          updatedAt: new Date(Date.now() + 10_000).toISOString(),
+        }]);
+        const cutoff = Date.now() - 50_000;
+
+        // Hold the record's per-id write queue open BEFORE calling prune, so
+        // prune's own queueRecordWrite(w.id, recheck) — issued only after its
+        // async candidate scan resolves — is forced to queue BEHIND this held
+        // task. Writes directly through the facade (not mergeUniversesFromSync,
+        // which would itself re-enter queueRecordWrite for the same id and
+        // deadlock against the very task it's called from).
+        const s = svc.store();
+        let releaseHold;
+        const holdGate = new Promise((resolve) => { releaseHold = resolve; });
+        const held = s.queueRecordWrite(w.id, async () => {
+          await holdGate;
+          const current = await s.loadOne(w.id);
+          await s.writeRecord(w.id, {
+            ...current,
+            deleted: false,
+            deletedAt: null,
+            updatedAt: new Date(Date.now() + 20_000).toISOString(),
+          });
+        });
+
+        const prunePromise = svc.pruneTombstonedUniverses(cutoff);
+        releaseHold();
+        await held;
+        const result = await prunePromise;
+
+        expect(result.pruned).toBe(0);
+        const remaining = await svc.listUniverses({ includeDeleted: true });
+        const rescued = remaining.find((u) => u.id === w.id);
+        expect(rescued?.deleted).toBe(false);
+      });
     });
   });
 

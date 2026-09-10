@@ -49,7 +49,7 @@ export function buildAgentRegistration({
   providerEndpoint,
   localPromptBudget,
   leanMode,
-  ownsPrWorkflow,
+  prOpenedBy,
   claimFlowTask,
   selectedModel,
   modelSelection,
@@ -79,11 +79,11 @@ export function buildAgentRegistration({
     taskType: task.taskType,
     priority: task.priority,
     providerId: provider.id,
-    // Persisted alongside the id because the cleanup path's `agentOwnsPR` gate
-    // must derive from the SAME `canTypeSlashCommands` predicate the prompt used
-    // to decide whether the agent opens its own PR (#3114). An id alone can't
-    // answer that — a path-configured `claude` under a custom id is slashdo-
-    // capable, and a lean `--bare` session is not.
+    // Persisted alongside the id because the cleanup path's `agentOpensOwnPr`
+    // gate must derive from the SAME `canTypeSlashCommands` predicate the prompt
+    // used to decide whether the agent opens its own PR (#3114). An id alone
+    // can't answer that — a path-configured `claude` under a custom id is
+    // slashdo-capable, and a lean `--bare` session is not.
     providerCommand: provider.command || null,
     // The endpoint this agent's inference actually lands on, stamped for the
     // same reason as the command above: the per-local-endpoint spawn cap
@@ -104,21 +104,36 @@ export function buildAgentRegistration({
     // "no estimate", never as a small one, so it stays absent rather than 0.
     localPromptBudget,
     leanMode,
-    // Whether THIS run's prompt told the agent to push, open, review, and merge
-    // its own PR. Persisted rather than re-derived at cleanup time: the two
-    // must agree exactly or PortOS double-fires `gh pr create`. A pre-upgrade
-    // record has no value here, so cleanup falls back to the old
-    // `canTypeSlashCommands` derivation — what those runs were prompted with.
+    // WHO opens this run's PR (`agent-slashdo` / `agent-inline` / `portos`),
+    // per the prompt this run was actually given. Persisted rather than
+    // re-derived at cleanup time: the two must agree exactly or PortOS
+    // double-fires `gh pr create`. A pre-upgrade record has no value here, so
+    // `resolvePrOpenedBy` maps whatever it does carry.
     //
-    // Stamped from `inlinePrLifecycleSection`, the SAME predicate that decided
-    // whether the prompt above emitted the PR steps — NOT from `provider.type`
-    // alone. Ownership depends on task shape too (read-only, no-code-output,
-    // discard-worktree, JIRA/leave-open, and no-worktree runs are all told
-    // PortOS owns the PR), and a provider-only stamp claimed ownership for
-    // every one of them — routing a Creative Director reasoning run into the
-    // did-you-open-it net, which then opened a PR for it and filed a HIGH
-    // notification blaming the agent for skipping a step it was never given.
-    ownsPrWorkflow,
+    // Stamped from `promptOpensOwnPr`, the SAME predicate that decided what the
+    // completion section above says — NOT from `provider.type` alone. It
+    // depends on the task shape (read-only, no-code-output, discard-worktree,
+    // JIRA/leave-open and no-worktree runs are all told PortOS owns the PR),
+    // and a provider-only stamp claimed ownership for every one of them —
+    // routing a Creative Director reasoning run into the did-you-open-it net,
+    // which then opened a PR for it and filed a HIGH notification blaming the
+    // agent for skipping a step it was never given.
+    //
+    // It ALSO depends on whether the host can type a slash command, and that is
+    // the half the predecessor got backwards (#6869). The stamp used to be
+    // `inlinePrLifecycleSection(…) !== null`, which is FALSE for a slashdo-
+    // capable Claude TUI/CLI — the host that most often opens its own PR, via
+    // `/do:pr`. Those runs read as PortOS-owned, so cleanup pushed the branch
+    // again and re-created a PR that already existed. `agent-slashdo` is that
+    // case; `agent-inline` is the codex/grok/agy harness handed the plain
+    // `git`/`gh` steps, and it is the only value that owes the #5876 merge-gate
+    // check, because it is the only prompt carrying a Merge Gate section.
+    //
+    // Three values rather than the boolean because that is what separates them:
+    // the retired `false` conflated "a `/do:pr` run" with "a run PortOS owns",
+    // which is why `resolvePrOpenedBy` can only pass a legacy record's boolean
+    // straight through instead of correcting it.
+    prOpenedBy,
     model: selectedModel,
     // The reasoning-effort override this run was dispatched with (null when the
     // task pinned none). Persisted next to the model because the Resume Agent
@@ -188,8 +203,6 @@ export function buildAgentRegistration({
     taskAppName: resolvedAppName,
     selfImprovementType: task.metadata?.selfImprovementType || null,
     jobId: task.metadata?.jobId || null,
-    missionName: task.metadata?.missionName || null,
-    missionId: task.metadata?.missionId || null,
     jiraTicketId: task.metadata?.jiraTicketId || null,
     jiraTicketUrl: task.metadata?.jiraTicketUrl || null,
     jiraBranch: task.metadata?.jiraBranch || null,

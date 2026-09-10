@@ -33,6 +33,7 @@ import { manuscriptContentBudgetChars, estimateTokens } from '../../lib/contextB
 import { seriesStore, getSeries } from './series.js';
 import { getSeriesCanon } from './seriesCanon.js';
 import { collectManuscriptSections, sectionsCorpus } from './arcPlanner.js';
+import { trimTo } from '../../lib/textUtils.js';
 
 const STAGE = 'pipeline-continuity-bible';
 
@@ -72,7 +73,6 @@ const ANCHOR_MAX = 240;
 const LEDGER_OUTPUT_RESERVE_TOKENS = 6_000;
 
 const nowIso = () => new Date().toISOString();
-const clampStr = (v, max) => (typeof v === 'string' ? v.trim().slice(0, max) : '');
 
 // Content hash — pins an input so a later edit flips the ledger to `stale`.
 const contentHash = (text) => createHash('sha256').update(text || '').digest('hex');
@@ -105,8 +105,8 @@ const factKey = (f) => `${f.category}::${(f.subject || '').toLowerCase().trim()}
 export function seedFactsFromCanon(canon) {
   const out = [];
   const push = (kind, entry, description) => {
-    const subject = clampStr(entry?.name, SUBJECT_MAX);
-    const statement = clampStr(description, STATEMENT_MAX);
+    const subject = trimTo(entry?.name, SUBJECT_MAX);
+    const statement = trimTo(description, STATEMENT_MAX);
     if (!subject || !statement) return;
     out.push({
       category: CANON_KIND_CATEGORY[kind],
@@ -136,8 +136,8 @@ export function seedFactsFromCanon(canon) {
 function sanitizeProseFact(raw) {
   if (!raw || typeof raw !== 'object') return null;
   const category = typeof raw.category === 'string' && CATEGORY_IDS.has(raw.category) ? raw.category : null;
-  const subject = clampStr(raw.subject, SUBJECT_MAX);
-  const statement = clampStr(raw.statement, STATEMENT_MAX);
+  const subject = trimTo(raw.subject, SUBJECT_MAX);
+  const statement = trimTo(raw.statement, STATEMENT_MAX);
   if (!category || !subject || !statement) return null;
   return {
     category,
@@ -148,7 +148,7 @@ function sanitizeProseFact(raw) {
     canonKind: null,
     canonEntryId: null,
     issueNumber: Number.isInteger(raw.issueNumber) ? raw.issueNumber : null,
-    anchorQuote: clampStr(raw.anchorQuote, ANCHOR_MAX) || null,
+    anchorQuote: trimTo(raw.anchorQuote, ANCHOR_MAX) || null,
   };
 }
 

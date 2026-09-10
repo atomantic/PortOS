@@ -1,6 +1,6 @@
 import { v4 as uuidv4 } from '../lib/uuid.js';
 import { existsSync } from 'fs';
-import { ensureDir, PATHS, safeJSONParse } from '../lib/fileUtils.js';
+import { ensureDir, PATHS } from '../lib/fileUtils.js';
 import { runPromptThroughProvider } from './promptRunner.js';
 import { clearTombstone, tombstoneTimestamp, supersedingTimestamp } from '../lib/tombstones.js';
 
@@ -12,24 +12,6 @@ export function generateId() {
 
 export function now() {
   return new Date().toISOString();
-}
-
-/**
- * Extract and parse the first JSON block from an AI response string.
- * Tries ```json fences first, then bare-object/array fallback.
- * Returns the parsed value or null.
- */
-export function extractJSON(response, context = 'response') {
-  const fenceMatch = response.match(/```json\s*([\s\S]*?)\s*```/);
-  if (fenceMatch) {
-    const parsed = safeJSONParse(fenceMatch[1], null, { logError: true, context });
-    if (parsed) return parsed;
-  }
-  const trimmed = response.trim();
-  if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
-    return safeJSONParse(trimmed, null, { logError: true, context: `${context} fallback` });
-  }
-  return null;
 }
 
 /**

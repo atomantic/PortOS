@@ -15,8 +15,8 @@
  * null) so downstream template renderers don't need null-guards.
  * Unexpected text between panels is ignored.
  */
-import { trimTo } from './storyBible.js';
 import { normalizeSlugline } from './scenePrompt.js';
+import { trimTo } from './textUtils.js';
 
 const PAGE_RE = /^##\s+Page\s+([\dIVX]+)\b/i;
 // Capture everything after the page number on a `## Page N …` header so the

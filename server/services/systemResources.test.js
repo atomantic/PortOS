@@ -71,10 +71,14 @@ vi.mock('./lmStudioManager.js', () => ({
   getModelsDir: vi.fn(async () => '/example/lmstudio'),
 }));
 vi.mock('./mediaJobQueue/index.js', () => ({
-  listJobs: vi.fn(() => [
-    { id: 'image-1', kind: 'image', status: 'queued' },
-    { id: 'video-1', kind: 'video', status: 'running' },
-  ]),
+  getQueueCapacity: vi.fn(() => ({
+    totals: { queued: 3, running: 1 },
+    byKind: {
+      image: { queued: 1, running: 0 },
+      video: { queued: 0, running: 1 },
+      'video-upscale': { queued: 2, running: 0 },
+    },
+  })),
 }));
 vi.mock('./cos.js', () => ({
   getAllTasks: vi.fn(async () => ({
@@ -140,7 +144,12 @@ describe('system resource reporting', () => {
       freeBytes: 25000,
       usagePercent: 75,
     });
-    expect(report.summary).toMatchObject({ loadedModels: 1, queuedJobs: 3, runningJobs: 1 });
+    expect(report.summary).toMatchObject({ loadedModels: 1, queuedJobs: 5, runningJobs: 1 });
+    expect(report.queues.media).toMatchObject({
+      queued: 3,
+      running: 1,
+      byKind: expect.objectContaining({ 'video-upscale': { queued: 2, running: 0 } }),
+    });
     expect(report.queues.agents).toMatchObject({ pendingSystem: 1, awaitingApproval: 1 });
     expect(report.models.downloaded.map((model) => model.backend)).toEqual(
       expect.arrayContaining(['huggingface', 'lora', 'ollama', 'lmstudio']),

@@ -102,48 +102,52 @@ let lastInstalledModelsError = null
 let lastCheckAt = null
 let managedProcess = null
 let managedProcessPid = null
-// The OLLAMA_CONTEXT_LENGTH PortOS handed the daemon that is up right now —
-// whether by spawning it or by restarting its launch-at-login service. Cleared
-// when the daemon goes away, so it always describes the live process.
+// What PortOS knows about the Ollama daemon that is up RIGHT NOW. Every field
+// describes ONE live process, so the whole record is written by `recordDaemon`
+// and dropped by `forgetDaemon` — "which env" and "which process" can never
+// describe two different daemons.
 //
-// It is what stops `ensureContextWindow` from restarting in a loop: Ollama is
-// free to load a model at less than the requested window (it fits the KV cache
-// to VRAM), and re-reading a smaller `/api/ps` value as "not applied yet" would
-// bounce the daemon before every single agent spawn. Once a window has been
-// handed over, that request is done.
-let appliedContextLength = null
-// PID set for the daemon that received the context-window handoff. An empty
-// /api/ps response is normal after model eviction and immediately after a
-// restart, so model absence cannot invalidate the latch. When the host can
-// identify the Ollama process, a changed PID set is reliable evidence that the
-// daemon was replaced behind PortOS's back. A missing identity is deliberately
-// treated as "no evidence" so an unavailable process probe cannot create a
-// restart loop.
-let appliedDaemonIdentity = null
-// Signature of the FULL launch env the live daemon was started with, so a second
-// request for the same tuning is a no-op instead of another restart. A sweep
-// measures every model under one tuning; without this it would stop, start, and
-// cold-load the daemon once per model, and every first sample would be timing a
-// fresh page-in rather than the model.
-let appliedLaunchEnv = null
-// The variable NAMES behind `appliedLaunchEnv`, kept alongside the signature
-// rather than re-derived from a string. Longer-lived than `appliedLaunchEnv` on
-// purpose: that latch answers "does the daemon that is up right now hold this
-// env?", so losing sight of the daemon clears it. This answers "what has PortOS
-// put in front of Ollama that has not been cleared yet?", which a clear needs
-// even when the daemon it was applied to is gone.
-let appliedLaunchEnvKeys = []
-// The subset of those that went into the launchd DOMAIN via `launchctl setenv`
-// (the homebrew launch-at-login path). Tracked separately because a domain
-// variable outlives every daemon: every job started afterwards inherits it, so
-// clearing means unsetting it BY NAME. Omitting it from the next start does
-// nothing. Emptied only by a successful unset.
-let launchdExportedKeys = []
-// The env object behind `appliedLaunchEnv`, kept so a tuning can capture the
-// configuration it displaces rather than only its signature.
-let appliedLaunchEnvValues = null
-// The launch env the daemon carried BEFORE an assessment tuning went on it.
-// `null` means no tuning is outstanding.
+// `known` is the record's only sentinel, and the one thing a reader tests before
+// trusting the rest: "do we know the launch env this daemon holds?".
+// `recordDaemon` is the sole writer, so it cannot drift from `envSignature`.
+//
+// - `envSignature` — the FULL launch env the live daemon was started with, so a
+//   second request for the same tuning is a no-op instead of another restart. A
+//   sweep measures every model under one tuning; without this it would stop,
+//   start, and cold-load the daemon once per model, and every first sample would
+//   time a fresh page-in rather than the model. `''` is a real value ("this
+//   daemon holds nothing"), which is why the sentinel is `known` rather than a
+//   null signature.
+// - `contextLength` — the OLLAMA_CONTEXT_LENGTH PortOS handed this daemon. It is
+//   what stops `ensureContextWindow` from restarting in a loop: Ollama is free to
+//   load a model at less than the requested window (it fits the KV cache to
+//   VRAM), and re-reading a smaller `/api/ps` value as "not applied yet" would
+//   bounce the daemon before every single agent spawn. Once a window has been
+//   handed over, that request is done.
+// - `identity` — PID set for the daemon that received that handoff. See
+//   `daemonStillLatched` for why a missing identity is "no evidence".
+let daemon = { known: false, envSignature: null, contextLength: null, identity: null }
+
+// The launch env PortOS has put in front of Ollama and has NOT taken back yet.
+// Deliberately OUTSIDE `daemon` because it outlives it: `daemon` answers "does
+// the daemon that is up right now hold this env?", so losing sight of the daemon
+// drops it, while this answers "what has PortOS put in front of Ollama that has
+// not been cleared yet?" — which a clear needs even when the daemon it was
+// applied to is gone. Only a NAMED env replaces it; nothing clears it.
+// `null` = PortOS has recorded no env. The clear list is this object's KEYS,
+// read off it rather than tracked separately where the two could disagree.
+let appliedEnv = null
+
+// The subset of those names that went into the launchd DOMAIN via
+// `launchctl setenv` (the homebrew launch-at-login path). Tracked separately
+// because a domain variable outlives every daemon: every job started afterwards
+// inherits it, so clearing means unsetting it BY NAME. Omitting it from the next
+// start does nothing. Emptied only by a successful unset.
+let exportedLaunchdKeys = []
+
+// The outstanding assessment tuning: `{ baselineEnv }` while one is active,
+// where `baselineEnv` is the launch env the daemon carried BEFORE it went on;
+// `null` when none is outstanding. Read through `activeBaselineEnv`.
 //
 // The baseline an untuned assessment restores is what THIS INSTALL runs by
 // default, not an empty environment — `ensureContextWindow` puts the user's
@@ -151,7 +155,11 @@ let appliedLaunchEnvValues = null
 // uses, and stripping it in the name of measuring "backend defaults" would
 // silently undo a setting the user chose on the LLMs page. Same rule as
 // `llamaServerManager`'s `preTuningConfig`, for the same reason.
-let preTuningEnv = null
+//
+// Named `activeTuning`, not `tuning`, so `restartWithEnv`'s `{ tuning }` option
+// cannot shadow it — a shadowed assignment there would silently write the
+// parameter instead of the module's record.
+let activeTuning = null
 
 const envSignature = (env) => Object.entries(env || {})
   .sort(([a], [b]) => a.localeCompare(b))
@@ -159,31 +167,73 @@ const envSignature = (env) => Object.entries(env || {})
   .join(',')
 
 /**
- * Record the launch env the daemon that is up right now was started with.
+ * Record what PortOS knows about the daemon that is up right now.
  *
  * `identity` is the process identity to latch against — a spawned child's PID,
- * or the probed identity of a service PortOS restarted. Both latches are set
- * together and cleared together, so "which env" and "which process" can never
- * describe two different daemons.
+ * or the probed identity of a service PortOS restarted.
+ *
+ * A `null` env means "a daemon is up, but PortOS cannot name its launch env":
+ * the record stops being `known`, and `appliedEnv` is deliberately left alone.
+ * Not knowing which daemon is up says nothing about whether the variables PortOS
+ * exported are still in front of Ollama, and forgetting them would strand a
+ * tuning nothing can clear.
  */
-function rememberAppliedEnv(env, identity) {
-  // `null` (nothing recorded), never `''` — the latch below tests
-  // `appliedLaunchEnv !== null` to mean "we know what this daemon holds", and an
-  // empty-string stand-in for "unknown" would claim knowledge we do not have.
-  appliedLaunchEnv = env ? envSignature(env) : null
-  // Only a NAMED env updates the key record. `null` means "we no longer know
-  // which daemon is up", which says nothing about whether the variables PortOS
-  // exported are still in the launchd domain — and forgetting them there would
-  // strand a tuning nothing can clear.
-  if (env) {
-    appliedLaunchEnvKeys = Object.keys(env)
-    appliedLaunchEnvValues = { ...env }
+function recordDaemon(env, identity) {
+  daemon = {
+    known: Boolean(env),
+    envSignature: env ? envSignature(env) : null,
+    // A restart that named no window leaves Ollama on its VRAM-based auto-pick,
+    // which is not a window PortOS can claim — so the context latch is dropped
+    // rather than crediting the new process with the old one's window.
+    contextLength: resolveOllamaContextLength(null, env || {}),
+    identity: identity || null
   }
-  // A restart that named no window leaves Ollama on its VRAM-based auto-pick,
-  // which is not a window PortOS can claim — so the context latch is cleared
-  // rather than crediting the new process with the old one's window.
-  appliedContextLength = resolveOllamaContextLength(null, env || {})
-  appliedDaemonIdentity = identity || null
+  if (env) appliedEnv = { ...env }
+}
+
+/** The daemon we knew about is gone; whatever comes up next has to be re-checked. */
+const forgetDaemon = () => recordDaemon(null, null)
+
+/** A copy of what PortOS has in front of Ollama, or `{}` when it has recorded none. */
+const appliedEnvCopy = () => (appliedEnv ? { ...appliedEnv } : {})
+
+/**
+ * The launch env an outstanding tuning displaced, or `fallback` when no tuning
+ * is outstanding.
+ *
+ * The fallback belongs to the CALLER rather than to this function, because the
+ * two sites ask different questions of the same record and one expression
+ * cannot answer both: `restartWithEnv` asks "what is this tuning about to
+ * displace?" (an unknown daemon displaces `{}` — PortOS knows of no env to put
+ * back), while `clearLaunchEnv` asks "is there anything to undo at all?"
+ * (`null` = nothing, and it returns without bouncing the daemon). What they must
+ * NOT disagree on is that an active tuning's baseline wins, and that lives here.
+ */
+const activeBaselineEnv = (fallback) => (activeTuning ? activeTuning.baselineEnv : fallback)
+
+/** `null` clears the tuning; any env records it as the baseline to restore. */
+const setTuning = (baselineEnv) => { activeTuning = baselineEnv ? { baselineEnv } : null }
+
+/**
+ * Whether the daemon PortOS latched against is still the one answering.
+ *
+ * Availability alone cannot identify an Ollama process — an external restart can
+ * become reachable before PortOS observes a failed probe — so only a CHANGED
+ * process identity invalidates a latch. An unreadable identity is not evidence
+ * of replacement, and an empty /api/ps response is normal after model eviction
+ * and immediately after a restart, so model absence cannot invalidate it either.
+ * Treating either as "no evidence" is what keeps an unavailable process probe
+ * from creating a restart loop.
+ *
+ * A mismatch IS positive evidence the daemon was replaced behind PortOS's back,
+ * so the record describing the old one is dropped here rather than at each of
+ * the two call sites.
+ */
+async function daemonStillLatched() {
+  const currentIdentity = await getOllamaProcessIdentity()
+  if (!daemon.identity || !currentIdentity || currentIdentity === daemon.identity) return true
+  forgetDaemon()
+  return false
 }
 
 const status = { lastError: null, lastSuccessAt: null, consecutiveErrors: 0 }
@@ -294,9 +344,7 @@ async function checkOllamaAvailable(forceRefresh = false) {
     isAvailable = false
     // The daemon we handed a window to is gone; whatever comes up next has to
     // be re-checked rather than credited with that window or that launch env.
-    appliedContextLength = null
-    appliedDaemonIdentity = null
-    appliedLaunchEnv = null
+    forgetDaemon()
     status.lastError = err.message
     status.consecutiveErrors++
     lastCheckAt = now
@@ -398,8 +446,8 @@ async function startServer({ env = null } = {}) {
     // there is no earlier tuning left to undo. `restartWithEnv` re-asserts its
     // own baseline after this returns — see the note there. Mirrors
     // `llamaServerManager`'s `startLlamaServer`.
-    preTuningEnv = null
-    rememberAppliedEnv(env, String(child.pid))
+    setTuning(null)
+    recordDaemon(env, String(child.pid))
     const window = contextLength ? ` (context ${contextLength})` : ''
     console.log(`▶️ Started Ollama server (pid ${child.pid})${window}`)
     return { success: true, running: true, pid: child.pid }
@@ -628,7 +676,7 @@ async function getRuntimeContextLength(selectedModel = null) {
  * that window when it is running at a smaller one.
  *
  * Reloading a daemon is disruptive, so it happens at most once per daemon per
- * window (the `appliedContextLength` latch) and never when a resident model is
+ * window (the `daemon.contextLength` latch) and never when a resident model is
  * already at or above the target. It DOES happen when nothing is resident: an
  * idle daemon has not committed to a window yet, and the one it will pick is
  * the VRAM-based default `numCtx` exists to override.
@@ -644,38 +692,27 @@ async function ensureContextWindow(contextLength, selectedModel = null) {
   // Compose the context-window env ON TOP OF the currently applied launch env
   // instead of replacing it, so a reload preserves knobs (e.g.
   // OLLAMA_FLASH_ATTENTION, OLLAMA_KV_CACHE_TYPE) that are not about the window.
-  // `appliedLaunchEnvValues` outlives `appliedLaunchEnv` specifically to answer
-  // "what has PortOS put in front of Ollama that has not been cleared yet", so
-  // an active tuning is preserved even if the daemon was temporarily down.
+  // `appliedEnv` outlives the `daemon` record specifically to answer "what has
+  // PortOS put in front of Ollama that has not been cleared yet", so an active
+  // tuning is preserved even if the daemon was temporarily down.
   // When a tuning is active mid-sweep, preserving its knobs keeps the sweep's
   // measurements comparable rather than demoting the daemon to untuned
   // mid-sweep, while allowing the context window to expand for the harness.
-  const baseEnv = appliedLaunchEnvValues ? { ...appliedLaunchEnvValues } : {}
-  const env = withOllamaContextEnv(baseEnv, target)
+  const env = withOllamaContextEnv(appliedEnvCopy(), target)
 
   if (!(await checkOllamaAvailable(true))) {
     return { ...(await restartWithEnv(env, { tuning: false })), contextLength: target }
   }
 
-  if (Number(appliedContextLength) >= target) {
-    // Availability alone cannot identify an Ollama process: an external
-    // restart can become reachable before PortOS observes a failed probe. A
-    // changed process identity is the positive live evidence needed to
-    // invalidate the old process's latch. An empty /api/ps response is not
-    // evidence — normal model eviction and a just-completed restart both make
-    // it empty.
-    const currentIdentity = await getOllamaProcessIdentity()
-    if (!appliedDaemonIdentity || !currentIdentity || currentIdentity === appliedDaemonIdentity) {
-      return { applied: false, reason: 'already-applied', contextLength: target, runtimeContextLength: appliedContextLength }
-    }
-    rememberAppliedEnv(null, null)
+  if (Number(daemon.contextLength) >= target && await daemonStillLatched()) {
+    return { applied: false, reason: 'already-applied', contextLength: target, runtimeContextLength: daemon.contextLength }
   }
 
   // `runtime == null` means nothing is resident, which is the NORMAL idle state
   // between runs — not a reason to skip. The window Ollama will pick when the
   // harness loads its model is its VRAM-based default, i.e. exactly the one the
   // user set `numCtx` to override, so leaving it alone here would make the
-  // setting a no-op in the common case. Apply it; the `appliedContextLength`
+  // setting a no-op in the common case. Apply it; the `daemon.contextLength`
   // latch keeps this to one reload per daemon.
   const runtime = await getRuntimeContextLength(selectedModel)
   if (runtime != null && runtime >= target) {
@@ -730,12 +767,12 @@ async function restartServiceWithEnv(service, env) {
     if (!setenv.success) return { applied: false, reason: 'setenv-failed', error: setenv.error }
     // Recorded as we go, not after the restart: it is already in the domain, and
     // a bounce that fails later must not leave it untracked and unclearable.
-    if (!launchdExportedKeys.includes(key)) launchdExportedKeys.push(key)
+    if (!exportedLaunchdKeys.includes(key)) exportedLaunchdKeys.push(key)
   }
 
   const bounced = await bounceService()
   if (!bounced.ok) return bounced.failure
-  rememberAppliedEnv(env, await getOllamaProcessIdentity())
+  recordDaemon(env, await getOllamaProcessIdentity())
   console.log(`▶️ Restarted the Ollama ${service.manager} service with ${entries.map(([k, v]) => `${k}=${v}`).join(', ')}`)
   return { applied: true, reason: 'service-restarted' }
 }
@@ -816,12 +853,10 @@ async function restartWithEnv(env, { tuning = true } = {}) {
 
   // A TUNING is temporary and has to be undoable, so the first one records the
   // env it displaces; a second must not overwrite that with the first one's.
-  // `appliedLaunchEnv === null` is the module's "we do not know what this daemon
-  // holds" sentinel — an unknown baseline is `{}` (PortOS knows of no env to put
-  // back), never a stale record of some earlier daemon's.
-  const before = preTuningEnv
-  const captured = preTuningEnv
-    ?? (appliedLaunchEnv !== null && appliedLaunchEnvValues ? { ...appliedLaunchEnvValues } : {})
+  // An unknown daemon (`!daemon.known`) displaces `{}` — PortOS knows of no env
+  // to put back — never a stale record of some earlier daemon's.
+  const before = activeBaselineEnv(null)
+  const captured = activeBaselineEnv(daemon.known ? appliedEnvCopy() : {})
 
   const result = await applyLaunchEnv(env, entries)
   // Asserted AFTER the restart, never before: `startServer`/`stopServer` drop
@@ -836,15 +871,15 @@ async function restartWithEnv(env, { tuning = true } = {}) {
   // baseline rather than clearing it, but update its context window so that a
   // later `clearLaunchEnv()` restores the untuned daemon with the new context
   // length rather than reverting it. If no tuning was active (`before === null`),
-  // `preTuningEnv` remains `null`.
+  // no tuning is outstanding afterwards either.
   if (result.applied === false) {
-    preTuningEnv = before
+    setTuning(before)
   } else if (tuning) {
-    preTuningEnv = captured
+    setTuning(captured)
   } else if (before) {
-    preTuningEnv = withOllamaContextEnv(before, env[OLLAMA_CONTEXT_ENV_VAR])
+    setTuning(withOllamaContextEnv(before, env[OLLAMA_CONTEXT_ENV_VAR]))
   } else {
-    preTuningEnv = null
+    setTuning(null)
   }
   return result
 }
@@ -855,14 +890,10 @@ async function applyLaunchEnv(env, entries) {
   // The daemon that is up may already BE this tuning — a sweep measures every
   // model under one knob set, and restarting per model would cold-load each one
   // and time the page-in as if it were the model's throughput. Same evidence
-  // rule as the context latch: only a CHANGED process identity invalidates it,
-  // because an unreadable identity is not evidence of replacement.
-  if (appliedLaunchEnv !== null && appliedLaunchEnv === envSignature(env) && await checkOllamaAvailable(true)) {
-    const currentIdentity = await getOllamaProcessIdentity()
-    if (!appliedDaemonIdentity || !currentIdentity || currentIdentity === appliedDaemonIdentity) {
-      return { applied: true, reason: 'already-applied' }
-    }
-    rememberAppliedEnv(null, null)
+  // rule as the context latch, and for the same reason — see
+  // `daemonStillLatched`.
+  if (daemon.known && daemon.envSignature === envSignature(env) && await checkOllamaAvailable(true) && await daemonStillLatched()) {
+    return { applied: true, reason: 'already-applied' }
   }
 
   // A key the PREVIOUS env exported into the launchd domain and this one does
@@ -871,11 +902,11 @@ async function applyLaunchEnv(env, entries) {
   // variable is not clearing it. Done here rather than in the service path
   // alone, because a spawned daemon started while a service is registered
   // inherits the same domain.
-  const stale = launchdExportedKeys.filter((key) => !(key in env))
+  const stale = exportedLaunchdKeys.filter((key) => !(key in env))
   if (stale.length) {
     const cleared = await unsetLaunchdKeys(stale)
     if (!cleared.success) return { applied: false, reason: 'unsetenv-failed', error: cleared.error }
-    launchdExportedKeys = launchdExportedKeys.filter((key) => key in env)
+    exportedLaunchdKeys = exportedLaunchdKeys.filter((key) => key in env)
   }
 
   console.log(`🔧 Restarting Ollama with ${entries.map(([k, v]) => `${k}=${v}`).join(', ')}`)
@@ -910,9 +941,9 @@ async function applyLaunchEnv(env, entries) {
  * `OLLAMA_FLASH_ATTENTION=1`, that label describes a configuration that never
  * ran, and `compareTunings` then ranks every real tuning against it.
  *
- * "Before PortOS tuned it" is `preTuningEnv`, NOT an empty environment — see the
- * note there. Only when that baseline is itself empty does this tear the launch
- * env down to nothing.
+ * "Before PortOS tuned it" is the active tuning's baseline, NOT an empty
+ * environment — see the note on `activeTuning`. Only when that baseline is
+ * itself empty does this tear the launch env down to nothing.
  */
 async function clearLaunchEnv() {
   // Variables PortOS exported are outstanding even when no tuning reached the
@@ -921,14 +952,14 @@ async function clearLaunchEnv() {
   // however this record reads. Taking them out is not enough: that daemon holds
   // them in its own process environment and has to be restarted too, which is
   // exactly what an empty baseline already means here.
-  const baseline = preTuningEnv ?? (launchdExportedKeys.length ? {} : null)
+  const baseline = activeBaselineEnv(exportedLaunchdKeys.length ? {} : null)
   // Nothing outstanding at all. `null` — not `false` — because no request was
   // refused: the daemon already serves the configuration being asked for.
   if (baseline === null) return { applied: null, reason: 'already-untuned' }
 
-  const keys = [...new Set([...appliedLaunchEnvKeys, ...launchdExportedKeys])]
+  const keys = [...new Set([...Object.keys(appliedEnv ?? {}), ...exportedLaunchdKeys])]
   console.log(`🔧 Clearing the Ollama tuning PortOS applied (${keys.join(', ')})`)
-  preTuningEnv = null
+  setTuning(null)
 
   // A non-empty baseline is just "restart under this env", which the normal
   // path already does — including taking the tuning's leftover launchd
@@ -937,23 +968,23 @@ async function clearLaunchEnv() {
   if (Object.keys(baseline).length > 0) {
     const restored = await restartWithEnv(baseline, { tuning: false })
     if (restored.applied === false) {
-      preTuningEnv = baseline
+      setTuning(baseline)
       return restored
     }
     return { ...restored, applied: null }
   }
 
-  const exported = launchdExportedKeys
+  const exported = exportedLaunchdKeys
   // Domain variables come out FIRST, and regardless of whether a daemon is up:
   // they outlive the process that read them, so a login-launched Ollama would
   // otherwise come back tuned long after this run recorded "backend defaults".
   if (exported.length) {
     const unset = await unsetLaunchdKeys(exported)
     if (!unset.success) {
-      preTuningEnv = baseline
+      setTuning(baseline)
       return { applied: false, reason: 'unsetenv-failed', error: unset.error }
     }
-    launchdExportedKeys = []
+    exportedLaunchdKeys = []
   }
 
   const running = await checkOllamaAvailable(true)
@@ -963,14 +994,14 @@ async function clearLaunchEnv() {
   // inherits the PortOS process environment, so whatever comes up next is
   // untuned either way.
   if (!running) {
-    rememberAppliedEnv({}, null)
+    recordDaemon({}, null)
     return { applied: null, reason: 'not-running' }
   }
 
   // Every failure below leaves the daemon still tuned, so the baseline goes back
   // on the books for a later run to retry.
   const failed = (result) => {
-    preTuningEnv = baseline
+    setTuning(baseline)
     return result
   }
 
@@ -987,7 +1018,7 @@ async function clearLaunchEnv() {
     }
     const bounced = await bounceService()
     if (!bounced.ok) return failed(bounced.failure)
-    rememberAppliedEnv({}, await getOllamaProcessIdentity())
+    recordDaemon({}, await getOllamaProcessIdentity())
     console.log(`▶️ Ollama no longer carries ${keys.join(', ')}`)
     return { applied: null, reason: 'service-restarted-untuned' }
   }
@@ -1025,9 +1056,9 @@ async function stopServer() {
   // Whatever spawn-time env the daemon carried left with it, whichever of the
   // three ways it went down — so there is no longer a tuning to undo. (Anything
   // PortOS put in the launchd DOMAIN outlives the process and is tracked
-  // separately, by `launchdExportedKeys`.) Done in one place rather than at each
+  // separately, by `exportedLaunchdKeys`.) Done in one place rather than at each
   // success return, where a fourth stop path would silently miss it.
-  if (stopped.success) preTuningEnv = null
+  if (stopped.success) setTuning(null)
   return stopped
 }
 
@@ -1954,7 +1985,7 @@ async function getStatus(forceRefresh = false) {
     // harness overflowed at 32K on a 256K-capable model.
     contextLength: {
       runtime: available ? await getRuntimeContextLength().catch(() => null) : null,
-      applied: available ? appliedContextLength : null,
+      applied: available ? daemon.contextLength : null,
       agentMinimum: OLLAMA_AGENT_MIN_CONTEXT
     },
     lastError: status.lastError,

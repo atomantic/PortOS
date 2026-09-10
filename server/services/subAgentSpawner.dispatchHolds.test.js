@@ -27,9 +27,8 @@
  * The holds live in that listener, not inside `runAgentSpawn`, because a hold
  * below the spawn body's entry returns past `releaseAppReviewMarker` and strands
  * the synthetic "in review" marker for the whole outage (issue #989). The side
- * effects the dequeue tiers already committed — that marker, the scheduler's
- * `spawningJobIds` reservation, and a mission sub-task's `in_progress` flip —
- * are released here instead.
+ * effects the dequeue tiers already committed — that marker and the scheduler's
+ * `spawningJobIds` reservation — are released here instead.
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
@@ -60,7 +59,6 @@ vi.mock('./agentManagement.js', () => ({ cleanupOrphanedAgents: vi.fn().mockReso
 vi.mock('./agentRunTracking.js', () => ({ completeAgentRun: vi.fn() }));
 vi.mock('./appActivity.js', () => ({ releaseAppReviewMarker: vi.fn().mockResolvedValue(undefined) }));
 vi.mock('./updateChecker.js', () => ({ isUpdateInProgress: vi.fn().mockReturnValue(false) }));
-vi.mock('./missions.js', () => ({ releaseMissionSubTask: vi.fn().mockResolvedValue(null) }));
 vi.mock('./cosState.js', () => ({ loadState: vi.fn().mockResolvedValue({ agents: {} }) }));
 // The real slot module is covered end-to-end in cos.test.js (resolvers, running
 // tally, reservations). Mocked here so this suite stays about the LISTENER's
@@ -91,7 +89,6 @@ import { isRunnerReachable } from './cosRunnerClient.js';
 import { spawnAgentForTask } from './agentOrchestrator.js';
 import { releaseAppReviewMarker } from './appActivity.js';
 import { isUpdateInProgress } from './updateChecker.js';
-import { releaseMissionSubTask } from './missions.js';
 import { setUseRunner } from './agentState.js';
 import { acquireLocalEndpointSpawnSlot } from './cosLocalEndpointSlots.js';
 import { forgeSpawnHoldReason } from './cosForgeSpawnGate.js';
@@ -230,99 +227,6 @@ describe('subAgentSpawner — self-update hold (#4124)', () => {
     await dispatch({ id: 'cos-u5', metadata: {} });
 
     expect(spawnAgentForTask).not.toHaveBeenCalled();
-  });
-});
-
-/**
- * A mission task is the one dispatch shape with NO persisted record, so "leave
- * the task queued" cannot mean "do nothing" for it (issue #4858).
- *
- * `generateMissionTask` flips the selected sub-task to `in_progress` and saves
- * the mission before returning — the flip is what stops the next generation
- * cycle re-picking it. The task object it returns is the only copy; nothing
- * writes it to `COS-TASKS.md`. So a hold that skipped the revert would burn one
- * sub-task per occurrence: no queued record to re-dispatch, and generation only
- * ever selects `pending` sub-tasks, so the mission just stops advancing.
- *
- * The revert lives in `holdTask` rather than in any single hold branch, for the
- * same reason `job:spawn-failed` does — that is the one chokepoint every hold
- * funnels through, so a fourth hold inherits it for free.
- */
-describe('subAgentSpawner — mission sub-task release (#4858)', () => {
-  const missionTask = (id) => ({
-    id,
-    metadata: { missionId: 'mission-1', subTaskId: 'sub-3', isMissionTask: true },
-  });
-
-  beforeEach(async () => {
-    await initSpawner();
-    vi.clearAllMocks();
-    vi.useRealTimers();
-    setUseRunner(true);
-    isRunnerReachable.mockResolvedValue(true);
-    isUpdateInProgress.mockReturnValue(false);
-    releaseMissionSubTask.mockResolvedValue(null);
-  });
-
-  it('returns the sub-task to pending when the runner is down', async () => {
-    isRunnerReachable.mockResolvedValue(false);
-
-    await dispatch(missionTask('cos-m1'));
-
-    expect(spawnAgentForTask).not.toHaveBeenCalled();
-    expect(releaseMissionSubTask).toHaveBeenCalledWith('mission-1', 'sub-3');
-  });
-
-  // The whole point of releasing in holdTask: every hold gets it, not just the
-  // one whose branch happened to be written first.
-  it('returns the sub-task to pending during a self-update too', async () => {
-    isUpdateInProgress.mockReturnValue(true);
-
-    await dispatch(missionTask('cos-m2'));
-
-    expect(releaseMissionSubTask).toHaveBeenCalledWith('mission-1', 'sub-3');
-  });
-
-  it('leaves the flip alone on a successful dispatch — the agent owns it now', async () => {
-    await dispatch(missionTask('cos-m3'));
-
-    expect(spawnAgentForTask).toHaveBeenCalledTimes(1);
-    expect(releaseMissionSubTask).not.toHaveBeenCalled();
-  });
-
-  it('does not touch missions for a held task that is not a mission task', async () => {
-    isRunnerReachable.mockResolvedValue(false);
-
-    await dispatch({ id: 'cos-m4', metadata: { jobId: 'job-2' } });
-
-    expect(releaseMissionSubTask).not.toHaveBeenCalled();
-  });
-
-  // Both halves identify the record; a missionId alone can't address a sub-task,
-  // and passing undefined through would make the helper scan for `undefined`.
-  it('skips the release when the sub-task id is missing', async () => {
-    isRunnerReachable.mockResolvedValue(false);
-
-    await dispatch({ id: 'cos-m5', metadata: { missionId: 'mission-1' } });
-
-    expect(releaseMissionSubTask).not.toHaveBeenCalled();
-  });
-
-  // holdTask runs outside the request lifecycle (a cosEvents listener), so a
-  // rejected release must not escape as an unhandled rejection or swallow the
-  // releases queued before it.
-  it('logs and continues when the release fails', async () => {
-    isRunnerReachable.mockResolvedValue(false);
-    releaseMissionSubTask.mockRejectedValue(new Error('disk full'));
-
-    await expect(dispatch({
-      id: 'cos-m6',
-      metadata: { missionId: 'mission-1', subTaskId: 'sub-3', app: 'some-app' },
-    })).resolves.not.toThrow();
-
-    expect(releaseAppReviewMarker).toHaveBeenCalledWith('some-app');
-    const warnings = emitLog.mock.calls.filter(([level]) => level === 'warn');
-    expect(warnings.some(([, message]) => /release mission sub-task sub-3/.test(message))).toBe(true);
   });
 });
 

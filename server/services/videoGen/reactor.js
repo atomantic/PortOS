@@ -6,7 +6,7 @@ import { join } from 'path';
 import { ensureDir, PATHS } from '../../lib/fileUtils.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { fetchWithTimeout } from '../../lib/fetchWithTimeout.js';
-import { broadcastSse, attachSseClient as attachSse, closeJobAfterDelay } from '../../lib/sseUtils.js';
+import { attachSseClient as attachSse, closeJobAfterDelay, createJobFailureFinalizer } from '../../lib/sseUtils.js';
 import { videoGenEvents } from './events.js';
 import { finalizeGeneratedVideo, emitCloudRenderStatus, CLOUD_RENDER_PHASE } from './generateVideoHelpers.js';
 import { mutateVideoHistory } from './history.js';
@@ -172,6 +172,17 @@ function captureClip(entry, input, pythonPath, job, jobId) {
           const message = JSON.parse(line);
           if (message.type === 'complete' && typeof message.clipId === 'string' && Number.isFinite(message.seconds)) complete = message;
           if (message.type === 'error' && message.code === 'INVALID_FRAME_BUFFER') failure = new Error('Reactor supplied an invalid video frame buffer; expected width × height × 4 bytes');
+          if (message.type === 'error' && message.phase === 'connecting' && message.errorType === 'TimeoutError') {
+            failure = new Error('Reactor connection timed out before any clip was submitted; check provider availability and network access, then retry');
+          }
+          if (message.type === 'error' && message.httpStatus === 402) {
+            failure = new Error('Reactor requires payment or additional credits (HTTP 402). Check the Reactor account balance before resuming.');
+          }
+          if (!failure && message.type === 'error' && message.phase === 'connecting' && /^[A-Za-z]+$/.test(message.errorType)) {
+            const status = Number.isInteger(message.httpStatus) && message.httpStatus >= 400 && message.httpStatus <= 599
+              ? `; HTTP ${message.httpStatus}` : '';
+            failure = new Error(`Reactor session connection failed (${message.errorType}${status}) before any clip was submitted; check the provider account and model availability before retrying`);
+          }
           if (!failure && message.type === 'error' && /^[a-z]+$/.test(message.phase) && /^[A-Za-z]+$/.test(message.errorType)) failure = new Error(`Reactor ${message.phase} failed (${message.errorType})`);
           if (message.type === 'status') {
             if (typeof message.message === 'string' && /^Captured [0-9.]+ of [0-9.]+ frames; audio=(True|False)$/.test(message.message)) console.log(`🎬 ${message.message}`);
@@ -308,7 +319,7 @@ async function runReactorVideo(job, jobId, {
     const continuationHint = continueFromClipId
       ? ' — reactor may no longer hold that clip; clear "Continue from clip" and render fresh, or start from an image'
       : '';
-    finalizeError(job, jobId, entry.aborted ? 'Canceled' : `Reactor video generation failed: ${err?.message || 'unknown error'}${continuationHint}`, { force: true });
+    finalizeJobFailure(job, jobId, null, entry.aborted ? 'Canceled' : `Reactor video generation failed: ${err?.message || 'unknown error'}${continuationHint}`, { force: true });
   } finally {
     await rm(`${outputPath}.capture`, { recursive: true, force: true }).catch(() => {});
     if (frame.fittedPath) await rm(frame.fittedPath, { force: true }).catch(() => {});
@@ -318,18 +329,14 @@ async function runReactorVideo(job, jobId, {
   }
 }
 
-const finalizeCanceled = (job, jobId) => finalizeError(job, jobId, 'Canceled', { force: true });
-
-const finalizeError = (job, jobId, reason, { force = false } = {}) => {
-  if (!force && (job.status === 'error' || job.status === 'complete')) return;
-  activeRequests.delete(jobId);
-  activeJobs.delete(jobId);
-  job.status = 'error';
-  console.log(`❌ reactor video generation failed [${jobId.slice(0, 8)}]: ${reason.split('\n')[0]}`);
-  broadcastSse(job, { type: 'error', error: reason });
-  videoGenEvents.emit('failed', { generationId: jobId, error: reason });
-  closeJobAfterDelay(jobs, jobId);
-};
+const finalizeJobFailure = createJobFailureFinalizer({
+  jobs,
+  activeJobs,
+  activeSlots: activeRequests,
+  label: 'reactor video generation',
+  events: videoGenEvents,
+});
+const finalizeCanceled = finalizeJobFailure.canceled;
 
 // Test-only handles.
 export const _internals = { validateRequest: validateReactorRequest };

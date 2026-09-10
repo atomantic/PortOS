@@ -35,7 +35,7 @@ export default function VideoDraftDrawer({ open, onClose, project, onSaved, cata
       videoMode: project?.renderBackend?.video?.mode || 'local', backendModelId: project?.renderBackend?.video?.modelId || '',
       aspectRatio: project?.aspectRatio || '16:9', quality: project?.quality || 'standard', modelId: (project?.renderBackend?.video?.mode === 'local' ? project.renderBackend.video.modelId : '') || project?.modelId || '',
       min: draft?.durationRange?.min || 30, max: draft?.durationRange?.max || 60,
-      reviewPolicy: draft?.reviewPolicy || 'review', transition: draft?.transition || 'cut', audioMode: draft?.audio?.mode || (project ? 'native' : 'silent'), trackId: draft?.audio?.trackId || '', audioPrompt: draft?.audio?.prompt || '', audioProvider: draft?.audio?.providerId || '', audioModel: draft?.audio?.model || '',
+      reviewPolicy: draft?.reviewPolicy || 'review', transition: draft?.transition || 'cut', audioMode: draft?.audio?.mode || 'native', trackId: draft?.audio?.trackId || '', audioPrompt: draft?.audio?.prompt || '', audioProvider: draft?.audio?.providerId || '', audioModel: draft?.audio?.model || '',
       sources: draft?.sources || catalogIngredientIds.map(id => ({ kind: 'catalog', id })) });
     listTracks({ silent: true }).then(data => setTracks(Array.isArray(data) ? data : data?.tracks || [])).catch(() => {});
     listMusicEngines({ silent: true }).then(data => setEngines(data?.engines || [])).catch(() => {});
@@ -61,9 +61,9 @@ export default function VideoDraftDrawer({ open, onClose, project, onSaved, cata
     const saved = await (project ? updateCreativeDirectorProject(project.id, payload, { silent: true }) : createCreativeDirectorProject(payload, { silent: true }))
       .catch(err => { toast.error(err.message || 'Unable to save video draft'); return null; });
     setSaving(false);
-    if (saved) { onClose(); onSaved(saved); toast.success('Video draft saved'); }
+    if (saved) { onClose(); onSaved(saved); toast.success(project?.status && project.status !== 'draft' ? 'Production settings saved' : 'Video draft saved'); }
   };
-  return <Drawer open={open} onClose={onClose} title={project ? 'Edit video draft' : 'New video draft'} subtitle="Saving a draft makes no provider calls" size="lg" tabs={TABS} activeTab={tab} onTabChange={setTab} closeOnEsc={false} closeOnBackdrop={false}>
+  return <Drawer open={open} onClose={onClose} title={project ? !project.status || project.status === 'draft' ? 'Edit video draft' : 'Edit production settings' : 'New video draft'} subtitle="Saving makes no provider calls. Start or resume production when ready." size="lg" tabs={TABS} activeTab={tab} onTabChange={setTab} closeOnEsc={false} closeOnBackdrop={false}>
     <fieldset disabled={saving} className="space-y-4">
       {tab === 'brief' && <>
         {input('name', 'Name', { maxLength: 200 })}
@@ -100,7 +100,7 @@ export default function VideoDraftDrawer({ open, onClose, project, onSaved, cata
         <ul className="space-y-2">{(form.sources || []).map(source => <li key={`${source.kind}:${source.id}`} className="flex items-center justify-between gap-2 border border-port-border rounded p-2"><span>{source.kind}: {sourceOptions[source.kind]?.find(s => s.id === source.id)?.name || sourceOptions[source.kind]?.find(s => s.id === source.id)?.title || source.id}</span><button aria-label={`Remove ${source.kind} source ${source.id}`} onClick={() => change('sources', form.sources.filter(s => s !== source))}>Remove</button></li>)}</ul>
         <p className="text-sm text-port-text-muted">Attach up to 50 sources from existing creative records. Imported music and voice references remain attached until you remove them.</p>
       </>}
-      <div className="flex justify-end gap-2 border-t border-port-border pt-4"><button disabled={saving} onClick={onClose} className="px-3 py-2 rounded border border-port-border">Cancel</button><button disabled={saving} onClick={save} className="px-3 py-2 rounded bg-port-accent text-white disabled:opacity-50">{saving ? 'Saving…' : 'Save draft'}</button></div>
+      <div className="flex justify-end gap-2 border-t border-port-border pt-4"><button disabled={saving} onClick={onClose} className="px-3 py-2 rounded border border-port-border">Cancel</button><button disabled={saving} onClick={save} className="px-3 py-2 rounded bg-port-accent text-white disabled:opacity-50">{saving ? 'Saving…' : project?.status && project.status !== 'draft' ? 'Save production settings' : 'Save draft'}</button></div>
     </fieldset>
   </Drawer>;
 }

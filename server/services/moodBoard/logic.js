@@ -17,8 +17,7 @@ import { compareNewerWins } from '../../lib/lwwTimestamp.js';
 import { sanitizeSoftDeleteFields } from '../../lib/syncWire.js';
 import { localImageFilename, assetBasename } from '../../lib/localImageFilename.js';
 import { isVideoItemMediaKey } from '../../lib/moodBoardValidation.js';
-
-const isStr = (v) => typeof v === 'string';
+import { isStr } from '../../lib/textUtils.js';
 
 // Bound the inline items[] so a single board row's JSONB can't grow without
 // limit (a board is loaded/serialized whole on every read/write). Far above any

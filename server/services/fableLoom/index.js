@@ -71,6 +71,8 @@ export {
 export {
   _resetFableLoomBackend,
   isValidLoomId,
+  listIds,
+  listLiveIds,
   verifySchemaVersion,
 } from './store.js';
 export {

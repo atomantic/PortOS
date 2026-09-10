@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 
 // A CoS action body is arbitrary agent-authored markdown — thousands of words,
 // its own heading outline, and raw technical payloads. This is the shape that
@@ -66,6 +66,7 @@ vi.mock('react-router', () => ({
 }));
 
 import Review from './Review';
+import socket from '../services/socket';
 
 // jsdom reports 0 for scrollHeight/clientHeight, so nothing measures as
 // overflowing unless we force it.
@@ -173,5 +174,37 @@ describe('Review Hub queue-card triage (#3282)', () => {
     // The same actionable item renders twice: Action Queue + its Alerts section.
     expect(document.getElementById(`review-item-body-section-alert-${ITEM.id}`)).toBeTruthy();
     expect(document.querySelectorAll(`[id="review-item-body-action-queue-${ITEM.id}"]`)).toHaveLength(1);
+  });
+});
+
+describe('Review Hub bulk status updates (#6853)', () => {
+  it('applies a review:items:bulk-updated event to every affected item in one update', async () => {
+    render(<Review />);
+    await waitFor(() => expect(actionQueueBody()).toBeTruthy());
+    await waitFor(() => expect(document.getElementById(`review-item-body-action-queue-${SHORT_ITEM.id}`)).toBeTruthy());
+
+    const handler = socket.on.mock.calls.find(([name]) => name === 'review:items:bulk-updated')?.[1];
+    expect(handler).toBeTypeOf('function');
+
+    act(() => {
+      handler({ ids: [ITEM.id, SHORT_ITEM.id], status: 'dismissed', updatedAt: new Date().toISOString() });
+    });
+
+    // Both items are no longer pending, so — in the same render — both drop
+    // out of the Action Queue, which is built from pendingItems.
+    await waitFor(() => {
+      expect(actionQueueBody()).toBeFalsy();
+      expect(document.getElementById(`review-item-body-action-queue-${SHORT_ITEM.id}`)).toBeFalsy();
+    });
+  });
+
+  it('subscribes to and unsubscribes from review:items:bulk-updated', async () => {
+    const { unmount } = render(<Review />);
+    await waitFor(() => expect(actionQueueBody()).toBeTruthy());
+
+    expect(socket.on.mock.calls.some(([name]) => name === 'review:items:bulk-updated')).toBe(true);
+
+    unmount();
+    expect(socket.off.mock.calls.some(([name]) => name === 'review:items:bulk-updated')).toBe(true);
   });
 });

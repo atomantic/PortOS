@@ -6,34 +6,30 @@
  */
 
 import * as agentActivity from './agentActivity.js';
-import { safeJSONParse } from '../lib/fileUtils.js';
 import { assertProvider, resolveProviderAndModel, runPromptThroughProvider } from './promptRunner.js';
+import { extractJson } from '../lib/jsonExtract.js';
 
 /**
  * Parse JSON from AI response text (handles markdown blocks, extra text)
  */
-export function parseAIJsonResponse(text) {
-  let jsonStr = text.trim();
-
-  if (!jsonStr) {
+export function parseAIJsonResponse(text, shapePredicate, promptToStrip = '') {
+  if (typeof text !== 'string' || !text.trim()) {
     throw new Error('AI returned empty response');
   }
-
-  // Extract from markdown code blocks
-  const jsonMatch = jsonStr.match(/```(?:json)?\s*([\s\S]*?)```/);
-  if (jsonMatch) {
-    jsonStr = jsonMatch[1].trim();
+  // CLI/TUI providers may echo the complete prompt before their answer. It
+  // contains the same valid-looking output example, so remove that exact
+  // prefix before candidate walking when the caller has it available.
+  const source = promptToStrip && text.includes(promptToStrip)
+    ? text.replace(promptToStrip, '')
+    : text;
+  const { value, lastError } = extractJson(source, {
+    skipInnerFence: true,
+    shapePredicate,
+  });
+  if (!value) {
+    throw new Error(`AI returned invalid JSON${lastError ? `: ${lastError.message}` : ''}`);
   }
-
-  // Extract just the JSON object
-  const objectMatch = jsonStr.match(/\{[\s\S]*\}/);
-  if (objectMatch) {
-    jsonStr = objectMatch[0];
-  }
-
-  const parsed = safeJSONParse(jsonStr, null, { logError: true, context: 'AI JSON response' });
-  if (!parsed) throw new Error('AI returned invalid JSON');
-  return parsed;
+  return value;
 }
 
 /**
@@ -127,7 +123,10 @@ Respond with ONLY a valid JSON object (no markdown, no explanation):
     prompt, providerId, model, 'agent-content-post'
   );
 
-  const generated = parseAIJsonResponse(responseText);
+  const generated = parseAIJsonResponse(responseText, (value) => (
+    value && typeof value === 'object' && !Array.isArray(value)
+    && typeof value.title === 'string' && typeof value.content === 'string'
+  ), prompt);
 
   if (!generated.title || !generated.content) {
     throw new Error('Generated post missing title or content');
@@ -197,7 +196,10 @@ Respond with ONLY a valid JSON object (no markdown, no explanation):
     prompt, providerId, model, 'agent-content-comment'
   );
 
-  const generated = parseAIJsonResponse(responseText);
+  const generated = parseAIJsonResponse(responseText, (value) => (
+    value && typeof value === 'object' && !Array.isArray(value)
+    && typeof value.content === 'string'
+  ), prompt);
 
   if (!generated.content) {
     throw new Error('Generated comment missing content');
@@ -261,7 +263,10 @@ Respond with ONLY a valid JSON object (no markdown, no explanation):
     prompt, providerId, model, 'agent-content-reply'
   );
 
-  const generated = parseAIJsonResponse(responseText);
+  const generated = parseAIJsonResponse(responseText, (value) => (
+    value && typeof value === 'object' && !Array.isArray(value)
+    && typeof value.content === 'string'
+  ), prompt);
 
   if (!generated.content) {
     throw new Error('Generated reply missing content');

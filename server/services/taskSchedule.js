@@ -6,15 +6,17 @@
  *
  * Cadence model (two variants + one orthogonal flag):
  * - type 'on-demand': never auto-queued; only a manual trigger runs it.
- * - type 'cron': clock-scheduled from `cronExpression` (5-field), with catch-up.
+ * - type 'cron': clock-scheduled from `cronExpression` (5-field), without replaying missed slots.
  * - `perpetual: true` (independent of type): drain actionable work back-to-back
  *   (re-queue on completion) until a programmatic work-detector reports nothing
  *   actionable, then PARK on a recheck cadence. An on-demand+perpetual task
  *   rechecks on `recheckCron` / `recheckIntervalMs` (default daily); a
  *   cron+perpetual task's cron slot INITIATES the drain and the same expression
- *   gates the next attempt once it parks.
+ *   gates the next attempt once it parks. With `autoStart: false`, on-demand
+ *   drains start only on explicit dispatch and never wake on a recheck timer.
+ *   Omitted autoStart preserves legacy automatic on-demand drains.
  *   See server/services/perpetualWork.js for the detector registry and the
- *   perpetual gate in cosTaskGenerator.generateManagedAppImprovementTaskForType.
+ *   perpetual gate in cosTaskGenerator.prepareManagedAppImprovementTask.
  */
 
 import { cosEvents, emitLog } from './cosEvents.js';
@@ -25,9 +27,9 @@ import { isTaskTypeEnabledForApp, getAppTaskTypeInterval, getAppTaskTypeInterval
 import { loadState, isImprovementEnabled } from './cosState.js';
 import { getLocalParts } from '../lib/timezone.js';
 import { getUserTimezone } from './userTimezone.js';
-import { parseCronToNextRun, parseCronToPrevRun } from './eventScheduler.js';
+import { parseCronToNextRun } from './eventScheduler.js';
 import { isAuditTaskType, defaultFileIssuesFor, auditDoWorkRequiresWorktree, getAuditScheduleMetadata, AUDIT_RUN_GUIDANCE, AUDIT_SUGGESTED_AFTER } from '../lib/auditCatalog.js';
-import { DEFAULT_TASK_PROMPTS } from './taskPromptDefaults.js';
+import { DEFAULT_TASK_PROMPTS, stampPromptWrite } from './taskPromptDefaults.js';
 import {
   DEFAULT_PERPETUAL_RECHECK_MS,
   INTERVAL_TYPES,
@@ -191,10 +193,6 @@ export async function updateTaskInterval(taskType, settings) {
       schedule.tasks[taskType] = { type: INTERVAL_TYPES.ON_DEMAND, perpetual: false, enabled: false, providerId: null, model: null, createdAt: new Date().toISOString() };
     }
 
-    // Normalize empty/whitespace prompts to null (treated as "use default")
-    if ('prompt' in settings && typeof settings.prompt === 'string' && !settings.prompt.trim()) {
-      settings.prompt = null;
-    }
     // The description is display-only schedule metadata. Keep it separate from
     // the prompt so custom card copy never becomes agent instructions.
     if ('description' in settings) {
@@ -202,24 +200,8 @@ export async function updateTaskInterval(taskType, settings) {
         ? settings.description.trim().slice(0, 240) || null
         : null;
     }
-    // If user is setting a custom prompt, mark it so auto-upgrade won't overwrite it.
-    // If user clears the prompt (null), remove the customized flag to resume defaults.
-    //
-    // `promptSource: 'user'` records that this write was an EXPLICIT user action,
-    // which is what the store's self-heal reads to leave the pin alone (#5432).
-    // Without it, pasting an older SHIPPED body into Settings → Scheduled Tasks was
-    // un-pinnable: the self-heal saw a body matching a retired default, cleared the
-    // flag on the next load, and the next PROMPT_VERSIONS bump overwrote the text.
-    //
-    // A body identical to the CURRENT default is not a pin. The editor prefills its
-    // textarea from the stored prompt, so re-saving an untouched default would
-    // otherwise stamp a permanent pin and freeze that type off every future prompt
-    // upgrade — which is exactly the mis-flag the self-heal existed to undo, now
-    // beyond its reach. Retired shipped bodies still pin: that is the #5432 case.
     if ('prompt' in settings) {
-      settings.promptCustomized = settings.prompt != null
-        && settings.prompt !== DEFAULT_TASK_PROMPTS[taskType];
-      settings.promptSource = settings.promptCustomized ? 'user' : null;
+      Object.assign(settings, stampPromptWrite(settings.prompt, taskType));
     }
 
     schedule.tasks[taskType] = {
@@ -806,12 +788,7 @@ async function checkRunAfterDeps(schedule, taskType, appId = null, featureEnable
   return { satisfied: pending.length === 0, pending };
 }
 
-/**
- * Check if a task type should run for a specific app (or globally).
- * Successful completion may continue its perpetual drain past the initiating
- * cron slot; all eligibility and park gates still apply.
- */
-export async function shouldRunTask(taskType, appId = null, { featureEnabled = createFeatureGate(), continuePerpetual = false } = {}) {
+async function evaluateTaskReadiness(taskType, appId, { featureEnabled, continuingPerpetualDrain }) {
   if (appId && requiresInstallWideTarget(taskType)) {
     return { shouldRun: false, reason: 'requires-install-wide-target' };
   }
@@ -872,9 +849,9 @@ export async function shouldRunTask(taskType, appId = null, { featureEnabled = c
     : execution;
 
   // Type-level failure auto-park (#2616): a type whose instances failed
-  // FAILURE_PARK_THRESHOLD times in a row is parked for ALL cadence types
-  // (including ROTATION) until a manual retry or config change clears the
-  // ledger. Checked before the cadence switch so it short-circuits every type.
+  // FAILURE_PARK_THRESHOLD times in a row is parked for every cadence type
+  // until a manual retry or config change clears the ledger. Checked before
+  // the cadence switch so it short-circuits every type.
   if (appExecution.failureParkedAt) {
     return {
       shouldRun: false,
@@ -892,8 +869,8 @@ export async function shouldRunTask(taskType, appId = null, { featureEnabled = c
 
   // A perpetual task's park record is the drain's brake: the work-detector at
   // DISPATCH time writes `parkedUntil` when nothing is actionable, and this only
-  // READS it (so shouldRunTask never does network I/O). Shared by both cadence
-  // variants — an on-demand+perpetual task is due whenever it isn't parked, a
+  // READS it (so readiness checks never do network I/O). Shared by both cadence
+  // variants — an automatic on-demand drain is due whenever it is not parked; a
   // cron+perpetual task additionally needs a cron slot to initiate a drain.
   const perpetualParkResult = () => {
     const parkUntil = parkedUntilMs(appExecution);
@@ -913,7 +890,9 @@ export async function shouldRunTask(taskType, appId = null, { featureEnabled = c
     case INTERVAL_TYPES.ON_DEMAND:
       // Drain-until-done when perpetual; otherwise a manual trigger is the only
       // way this ever runs.
-      result = isPerpetual
+      // Missing autoStart preserves existing automatic drains across upgrades.
+      // Manual drains only refill after their own successful completion.
+      result = isPerpetual && (interval.autoStart !== false || continuingPerpetualDrain)
         ? (perpetualParkResult() || { shouldRun: true, reason: 'perpetual-drain' })
         : { shouldRun: false, reason: 'on-demand-only' };
       break;
@@ -925,7 +904,7 @@ export async function shouldRunTask(taskType, appId = null, { featureEnabled = c
       if (isPerpetual) {
         const parked = perpetualParkResult();
         if (parked) { result = parked; break; }
-        if (continuePerpetual) {
+        if (continuingPerpetualDrain) {
           result = { shouldRun: true, reason: 'perpetual-drain' };
           break;
         }
@@ -940,44 +919,12 @@ export async function shouldRunTask(taskType, appId = null, { featureEnabled = c
         break;
       }
 
-      // Catch-up: if a cron slot has already elapsed since the last successful run
-      // (or, for never-run tasks, within the last cron period), fire it now instead
-      // of waiting another full period. This recovers from daemon downtime, restarts,
-      // and the hourly-check window missing the 60-second cron match.
-      const prevRun = parseCronToPrevRun(cronExpr, new Date(now), timezone);
-      if (prevRun) {
-        const prevRunMs = prevRun.getTime();
-        let lookbackBound;
-        if (lastRun) {
-          lookbackBound = lastRun;
-        } else {
-          // Never-run: only catch up to a slot that elapsed AFTER the task was
-          // configured. Without this bound a never-run task always fires its most
-          // recent past slot, so a weekly "Sunday 09:00" task enabled on a Friday
-          // immediately reads as "due now (catch-up)" for last Sunday — a slot that
-          // predates the task and was never actually missed. `createdAt` is stamped
-          // when the task is first seen (loadSchedule backfills it for existing
-          // installs), so catch-up only recovers slots the task was around for. An
-          // un-backfilled task (createdAt absent) yields bound 0 → the legacy
-          // always-catch-up behavior.
-          lookbackBound = safeDate(interval.createdAt);
-        }
-        if (prevRunMs > lookbackBound && prevRunMs <= now) {
-          // Compute nextRun for telemetry/reporting
-          const nextRunAfterCatch = parseCronToNextRun(cronExpr, new Date(now), timezone);
-          result = {
-            shouldRun: true,
-            reason: 'cron-catch-up',
-            cronExpression: cronExpr,
-            missedSlot: prevRun.toISOString(),
-            nextRunAt: nextRunAfterCatch ? nextRunAfterCatch.toISOString() : null
-          };
-          break;
-        }
-      }
-
-      // For never-run tasks, use 1 minute ago so the first scheduled occurrence can match
-      const fromDate = lastRun ? new Date(lastRun) : new Date(now - 60_000);
+      // Only the current scheduled minute is eligible. Replaying from lastRun
+      // makes a schedule edit retroactively create missed work and lets hourly
+      // improvement checks launch tasks before their next configured occurrence.
+      // Keep lastRun as a lower bound to prevent a second run in the same minute.
+      const minuteStart = Math.floor(now / 60_000) * 60_000;
+      const fromDate = new Date(Math.max(lastRun || 0, minuteStart - 1));
       const nextRun = parseCronToNextRun(cronExpr, fromDate, timezone);
       if (!nextRun) {
         result = { shouldRun: false, reason: 'invalid-cron', cronExpression: cronExpr };
@@ -999,8 +946,7 @@ export async function shouldRunTask(taskType, appId = null, { featureEnabled = c
 
   // Escalating failure backoff (#2616): a type with recent consecutive failures
   // (still below the park threshold) slows down — 2^n × base, capped — instead
-  // of re-queuing every tick. Applies to ALL cadence types, including ROTATION
-  // (which is otherwise `shouldRun: true` unconditionally). Gated on
+  // of re-queuing every tick. Applies to every cadence type. Gated on
   // `lastFailureAt` so a never-failed type is unaffected; a success resets the
   // ledger via recordTaskTypeSuccess so the backoff lifts immediately.
   if (result.shouldRun) {
@@ -1036,6 +982,21 @@ export async function shouldRunTask(taskType, appId = null, { featureEnabled = c
 }
 
 /**
+ * Check whether a task should initiate a scheduled run for an app or globally.
+ */
+export async function shouldRunTask(taskType, appId = null, { featureEnabled = createFeatureGate() } = {}) {
+  return evaluateTaskReadiness(taskType, appId, { featureEnabled, continuingPerpetualDrain: false });
+}
+
+/**
+ * Check whether an already-started perpetual drain should take another hop.
+ * If asked to continue a non-perpetual type, its normal cadence remains in force.
+ */
+export async function shouldContinuePerpetualDrain(taskType, appId = null, { featureEnabled = createFeatureGate() } = {}) {
+  return evaluateTaskReadiness(taskType, appId, { featureEnabled, continuingPerpetualDrain: true });
+}
+
+/**
  * Get all enabled task types that are due to run (optionally for a specific app)
  */
 export async function getDueTasks(appId = null, { continuingTaskType = null } = {}) {
@@ -1046,7 +1007,10 @@ export async function getDueTasks(appId = null, { continuingTaskType = null } = 
   for (const [taskType, interval] of Object.entries(schedule.tasks)) {
     if (!interval.enabled) continue;
 
-    const check = await shouldRunTask(taskType, appId, { featureEnabled, continuePerpetual: taskType === continuingTaskType });
+    const checkTask = taskType === continuingTaskType
+      ? shouldContinuePerpetualDrain
+      : shouldRunTask;
+    const check = await checkTask(taskType, appId, { featureEnabled });
     if (check.shouldRun) {
       due.push({ taskType, reason: check.reason, interval });
     }
@@ -1056,19 +1020,13 @@ export async function getDueTasks(appId = null, { continuingTaskType = null } = 
 }
 
 /**
- * Get the next task type to run (optionally for a specific app)
+ * Get the next task type to run (optionally for a specific app).
+ * When `perpetualOnly` is true, return a due perpetual drain or null; never a
+ * cron type that would mask it.
  */
 export async function getNextTaskType(appId = null, { perpetualOnly = false, continuingTaskType = null } = {}) {
   const dueTasks = await getDueTasks(appId, { continuingTaskType });
 
-  // `perpetualOnly` constrains the pick to a due perpetual (drain-until-done)
-  // task, skipping every other schedule type. Callers set this when the app is
-  // on its review cooldown: only perpetual drains bypass that cooldown (their
-  // work-detector park is the throttle), so a higher-priority cron type that's
-  // also due must NOT be returned — it would mask the perpetual drain and the
-  // caller, seeing a non-exempt pick, would skip the whole app for the cooldown
-  // window (the mixed-schedule stall). Returns null when nothing perpetual is
-  // due, so the caller leaves the cooled-down app alone.
   const perpetualDue = dueTasks.filter(t => t.interval.perpetual === true);
   if (perpetualOnly) {
     return perpetualDue.length > 0
@@ -1126,7 +1084,7 @@ export async function triggerOnDemandTask(taskType, appId = null, {
   }
   // Optional per-request provider/model/effort pin (the PR/MR row's "Run with"
   // picker) — layered onto the task's metadata by
-  // generateManagedAppImprovementTaskForType as the MOST specific pin, above
+  // prepareManagedAppImprovementTask as the MOST specific pin, above
   // the schedule interval and the app's own per-app override.
   const providerOverride = (provider || model || effort) ? { provider, model, effort } : null;
   const request = await updateSchedule(async (schedule) => {
@@ -1214,6 +1172,19 @@ export async function triggerOnDemandTask(taskType, appId = null, {
   if (emit) cosEvents.emit('task:on-demand-requested', request);
 
   return request;
+}
+
+/**
+ * Queue the next item in a perpetual drain without treating it as a human
+ * pressing Run. The two options are an inseparable policy pair: the refill's
+ * completion handler owns dequeue, and the automated origin must preserve the
+ * drain's park, convergence signature, and dispatch counter.
+ */
+export async function queuePerpetualRefill(taskType, appId) {
+  return triggerOnDemandTask(taskType, appId, {
+    emit: false,
+    origin: ON_DEMAND_ORIGINS.REFILL,
+  });
 }
 
 export async function getOnDemandRequests() {
@@ -1478,20 +1449,57 @@ export async function getUpcomingTasks(limit = 10) {
   const now = Date.now();
   const upcoming = [];
   const featureEnabled = createFeatureGate();
+  // The improvement daemon queues per-app work, so its wake-up preview must
+  // include app-scoped cadence overrides. In particular, an app can opt into a
+  // cron expression while the global task remains on-demand; omitting that
+  // boundary leaves the hourly fallback as the only chance to notice the slot.
+  const activeApps = await getActiveApps().catch(() => []);
+  const activeAppOverrides = activeApps.length > 0
+    ? await mapWithConcurrency(activeApps, 8, (app) =>
+      getAppTaskTypeOverrides(app.id).catch(() => ({})))
+    : [];
 
   for (const [taskType, interval] of Object.entries(schedule.tasks)) {
     if (!interval.enabled) continue;
     if (!(await featureEnabled(interval))) continue;
     if (getTaskTypeInvocation(taskType).visibility === 'hidden') continue;
-    // On-demand tasks have no wall-clock position — unless they are perpetual,
-    // whose park/recheck boundary IS the schedule the daemon must wake on.
-    if (interval.type === INTERVAL_TYPES.ON_DEMAND && !interval.perpetual) continue;
 
     const check = await shouldRunTask(taskType, null, { featureEnabled });
     const execution = schedule.executions[`task:${taskType}`] || { lastRun: null, count: 0 };
 
-    let eligibleAt = now;
-    let taskStatus = 'ready';
+    // `shouldRunTask(taskType, appId)` resolves the same effective cadence used
+    // by the queue path, including an app's raw cron override and its own last
+    // run. A due app makes the task ready; otherwise the soonest app boundary
+    // is the wake-up deadline. This also handles a globally on-demand task that
+    // has no global candidate but is cron-scheduled for one managed app.
+    const scheduledApps = activeApps.filter((app, index) => {
+      const override = activeAppOverrides[index]?.[taskType];
+      if (override?.enabled !== true) return false;
+      const decoded = decodeIntervalType(override.interval, { intervalMs: override.intervalMs });
+      return decoded.type === INTERVAL_TYPES.CRON && isCronExpression(decoded.cronExpression);
+    });
+    const appChecks = scheduledApps.length > 0
+      ? await mapWithConcurrency(scheduledApps, 8, (app) =>
+        shouldRunTask(taskType, app.id, { featureEnabled }).catch(() => null))
+      : [];
+    const appReady = appChecks.some(appCheck => appCheck?.shouldRun);
+    const futureAppTimes = appChecks.map(appCheck => Date.parse(appCheck?.nextRunAt))
+      .filter(time => Number.isFinite(time) && time > now);
+    const nextAppAt = futureAppTimes.length ? Math.min(...futureAppTimes) : null;
+    const appUpcoming = appReady
+      ? { status: 'ready', eligibleAt: now }
+      : nextAppAt !== null ? { status: 'scheduled', eligibleAt: nextAppAt } : null;
+    const futureTimes = [Date.parse(check.nextRunAt), nextAppAt]
+      .filter(time => Number.isFinite(time) && time > now);
+    const nextScheduledAt = futureTimes.length ? Math.min(...futureTimes) : null;
+
+    // On-demand tasks have no wall-clock position — unless they are perpetual,
+    // whose park/recheck boundary IS the schedule the daemon must wake on, or
+    // an enabled managed app supplies a scheduled override.
+    if (interval.type === INTERVAL_TYPES.ON_DEMAND && (!interval.perpetual || interval.autoStart === false) && !appUpcoming) continue;
+
+    let eligibleAt = null;
+    let taskStatus = null;
 
     if (check.shouldRun) {
       eligibleAt = now;
@@ -1500,6 +1508,21 @@ export async function getUpcomingTasks(limit = 10) {
       eligibleAt = new Date(check.nextRunAt).getTime();
       taskStatus = 'scheduled';
     }
+
+    if (appUpcoming) {
+      if (appUpcoming.status === 'ready') {
+        taskStatus = 'ready';
+        eligibleAt = now;
+      } else if (taskStatus !== 'ready' && (eligibleAt === null || appUpcoming.eligibleAt < eligibleAt)) {
+        taskStatus = 'scheduled';
+        eligibleAt = appUpcoming.eligibleAt;
+      }
+    }
+
+    // No global or per-app wall-clock candidate (for example a plain
+    // on-demand task, or a task blocked by a weekday/dependency gate) has no
+    // place in an upcoming schedule preview.
+    if (!taskStatus) continue;
 
     // Perpetual tasks park per-app, so the global `check` above can't see the
     // recheck boundary — re-derive status/eligibility from the park records so
@@ -1516,6 +1539,7 @@ export async function getUpcomingTasks(limit = 10) {
     upcoming.push({
       taskType,
       intervalType: interval.type,
+      nextScheduledAt,
       status: taskStatus,
       eligibleAt,
       eligibleIn: eligibleAt - now,

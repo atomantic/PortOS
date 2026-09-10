@@ -29,7 +29,8 @@ vi.mock('../services/voice/tts.js', () => ({
   listVoiceEngines: vi.fn(),
   VALID_ENGINES: new Set(['kokoro', 'piper', 'qwen3-tts']),
 }));
-vi.mock('../services/voice/profiles.js', () => ({
+vi.mock('../services/voice/profiles.js', async (importActual) => ({
+  ...(await importActual()),
   listVoiceProfiles: vi.fn(),
   promotePresetProfile: vi.fn(),
   createVoiceDesignCandidate: vi.fn(),
@@ -43,6 +44,7 @@ vi.mock('../services/voice/profileBenchmarks.js', () => ({
 vi.mock('../services/voice/qwen3TtsRuntime.js', () => ({
   getQwen3RuntimeStatus: vi.fn(),
   downloadQwen3Model: vi.fn(),
+  DEFAULT_DESIGN_MODEL: 'Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign',
 }));
 vi.mock('../services/voice/fineTuning.js', () => ({
   startFineTuningJob: vi.fn(),
@@ -145,6 +147,21 @@ describe('Voice Routes', () => {
         modelRevision: 'kokoro-test:q8', delivery: { rate: 1 },
       }));
       expect(res.body).toEqual({ profile: { id: 'voice-profile-1' } });
+    });
+
+    it.each([
+      ['piper:en_GB-jenny_dioco-medium', 'piper:en_GB-jenny_dioco-medium'],
+      ['qwen3:warm-narrator', 'Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign'],
+      ['qwen3-tts:warm-narrator', 'Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign'],
+    ])('preserves the model revision for %s preset promotion', async (voiceId, modelRevision) => {
+      voiceProfiles.promotePresetProfile.mockResolvedValue({ id: 'voice-profile-1' });
+      const res = await request(buildApp()).post('/api/voice/profiles/preset').send({
+        universeId: 'uni-1', characterId: 'char-1', voiceId,
+      });
+      expect(res.status).toBe(201);
+      expect(voiceProfiles.promotePresetProfile).toHaveBeenCalledWith(expect.objectContaining({
+        modelRevision,
+      }));
     });
 
     it('creates a candidate voice design profile without altering approved binding', async () => {
@@ -302,6 +319,22 @@ describe('Voice Routes', () => {
       bootstrap.reconcile.mockResolvedValue({ skipped: true });
       const patch = { llm: { fastPath: { enabled: true, triggers: true, browserLlm: true, browser: { temperature: 0.5, topK: 4 } } } };
       const res = await request(buildApp()).put('/api/voice/config').send(patch);
+      expect(res.status).toBe(200);
+      expect(config.updateVoiceConfig).toHaveBeenCalledWith(patch);
+    });
+
+    it('accepts Qwen3-TTS engine and voice configuration', async () => {
+      config.updateVoiceConfig.mockResolvedValue({ ...DEFAULT_CFG });
+      bootstrap.reconcile.mockResolvedValue({ skipped: true });
+      const patch = {
+        tts: {
+          engine: 'qwen3-tts',
+          qwen3: { modelId: 'Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign', voice: 'warm-narrator' },
+        },
+      };
+
+      const res = await request(buildApp()).put('/api/voice/config').send(patch);
+
       expect(res.status).toBe(200);
       expect(config.updateVoiceConfig).toHaveBeenCalledWith(patch);
     });

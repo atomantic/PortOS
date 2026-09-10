@@ -83,7 +83,6 @@ The `selectModelForTask` function routes tasks to appropriate model tiers:
 | maxTotalProcesses | 50 | Process-count alert threshold |
 | alwaysOn | false | Start on server boot (`autoStart` is a legacy compatibility alias). Off by default so a never-configured install does not begin autonomous LLM-backed work on its own |
 | improvementEnabled | true | Allow improvement work for PortOS and managed apps |
-| proactiveMode | true | Always find work when idle |
 | idleReviewEnabled | true | Review managed apps while user work is idle |
 | autonomousJobsEnabled | true | Enable the global scheduled-agent-job runner |
 | domainAutonomy | execute per domain | Off, dry-run, or execute policy for each automatic-work domain |

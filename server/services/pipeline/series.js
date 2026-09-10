@@ -13,11 +13,11 @@
 
 import { randomUUID } from 'crypto';
 import { getSeriesStore } from './seriesStore/store.js';
-import { isStr, trimTo } from '../../lib/storyBible.js';
 import { sanitizeArc, sanitizeSeasonList } from '../../lib/storyArc.js';
 import { sanitizeCharacterArcList } from '../../lib/seriesCharacterArc.js';
 import { sanitizeStyleGuide } from '../../lib/styleGuide.js';
 import { sanitizeProseExportSettings } from '../../lib/proseExportSettings.js';
+import { LOGLINE_MAX, PREMISE_MAX, STYLE_NOTES_MAX } from '../../lib/universeBibleLimits.js';
 import { sanitizeSeverityWeights, sanitizeBlockingSeverities } from '../../lib/editorial/severityConfig.js';
 import { CHECK_SEVERITIES } from '../../lib/editorial/checkInfra/taxonomy.js';
 import { sanitizeOrigin } from '../../lib/sharingOrigin.js';
@@ -34,6 +34,7 @@ import {
   autoSubscribeRecordToAllPeers, unsubscribeAllForRecord,
 } from '../sharing/recordEvents.js';
 import { renameCollectionForSeries, unlinkCollectionsForSeries } from '../mediaCollections.js';
+import { isStr, trimTo } from '../../lib/textUtils.js';
 
 // Storage backend dispatcher (#1015). Series records moved from per-record
 // `data/pipeline-series/{id}/index.json` (collectionStore) to one-row-per-series
@@ -53,11 +54,7 @@ const makeErr = (message, code) => Object.assign(new Error(message), { code });
 const SERIES_ID_RE = /^ser-[A-Za-z0-9-]+$/;
 
 export const NAME_MAX = 200;
-export const LOGLINE_MAX = 500;
-// Large enough for a multi-site production bible with concrete route and
-// resource rules; still bounded so the field cannot become an unbounded prompt.
-export const PREMISE_MAX = 20000;
-export const STYLE_NOTES_MAX = 4000;
+export { LOGLINE_MAX, PREMISE_MAX, STYLE_NOTES_MAX };
 // Author-supplied real-world fact reference (#1588) — the ground-truth facts the
 // opt-in `research.fact-accuracy` editorial check reconciles the prose against
 // (e.g. "Paris is the capital of France"; physiological limits). Generous cap so
@@ -1292,6 +1289,24 @@ export async function mergeSeriesFromSync(remoteSeries, { source = { via: 'sync'
 }
 
 /**
+ * Series id listers for the tombstone-sweep's orphan resolvers
+ * (server/services/sharing/tombstoneGc.js). Both are id-only projections — no
+ * record hydration, no sanitize — so a sweep that only checks set membership
+ * never pays for a series' JSONB body, let alone every one of them.
+ *
+ * `listLiveIds` excludes tombstones (LIVE_ID_LISTERS — a record stops
+ * protecting its base hash once tombstoned); `listIds` includes them
+ * (ALL_ID_LISTERS — a tombstone still owns its peer subscription until the
+ * record is hard-deleted).
+ */
+export async function listLiveIds() {
+  return store().listLiveIds();
+}
+export async function listIds() {
+  return store().listIds();
+}
+
+/**
  * Garbage-collect series tombstones older than `beforeMs`. See
  * `pruneTombstonedUniverses` in universeBuilder.js for the contract — the
  * caller owns the ack-cursor + grace-period math and just tells us the
@@ -1300,14 +1315,10 @@ export async function mergeSeriesFromSync(remoteSeries, { source = { via: 'sync'
 export async function pruneTombstonedSeries(beforeMs) {
   if (!Number.isFinite(beforeMs)) return { pruned: 0 };
   const s = store();
-  const series = await s.loadAll();
-  const candidates = [];
-  for (const rec of series) {
-    if (!rec?.deleted) continue;
-    const t = Date.parse(rec.deletedAt || '');
-    if (!Number.isFinite(t)) continue;
-    if (t < beforeMs) candidates.push(rec.id);
-  }
+  // Id-only candidate scan — SQL projection on Postgres, hydrate+filter on the
+  // file escape hatch. The sweep almost never finds a tombstone, so this must
+  // not pay for every series' JSONB body just to find zero candidates.
+  const candidates = await s.listTombstoneIdsBefore(beforeMs);
   // Re-check the tombstone status INSIDE each per-id queue. A concurrent
   // mergeSeriesFromSync could have un-deleted the record (newer remote
   // `updatedAt`, `deleted: false`) between our out-of-queue snapshot and the

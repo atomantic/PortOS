@@ -18,6 +18,7 @@ import {
   validateAudioOccupancy,
 } from './fableLoomPlayback.js';
 import { characterIdentityPackReadiness } from './storyBible.js';
+import { isNonBlankStr } from './textUtils.js';
 
 export const CONTINUITY_CATEGORIES = Object.freeze(['visual', 'voice', 'playback', 'graph']);
 
@@ -49,8 +50,6 @@ export const CONTINUITY_CODES = Object.freeze({
   VOICE_PROFILE_BINDING_MISMATCH: 'VOICE_PROFILE_BINDING_MISMATCH',
   PRONUNCIATION_REVISION_DRIFT: 'PRONUNCIATION_REVISION_DRIFT',
 });
-
-const isStr = (v) => typeof v === 'string' && v.trim().length > 0;
 
 /**
  * Run comprehensive episodic continuity review.
@@ -122,10 +121,10 @@ export function analyzeEpisodeContinuity({
     }
   }
 
-  const canonicalProtagonistId = isStr(loom?.protagonistCharacterId)
+  const canonicalProtagonistId = isNonBlankStr(loom?.protagonistCharacterId)
     ? loom.protagonistCharacterId
     : null;
-  const canonicalWardrobeId = isStr(loom?.protagonistWardrobeId)
+  const canonicalWardrobeId = isNonBlankStr(loom?.protagonistWardrobeId)
     ? loom.protagonistWardrobeId
     : null;
   const canonicalProtagonist = canonicalProtagonistId && Array.isArray(universe?.characters)
@@ -214,7 +213,7 @@ export function analyzeEpisodeContinuity({
     const visualCanon = node.visualCanon || {};
     const interaction = node.interactionWindow || {};
     const assets = node.playbackAssets || {};
-    const interactionProtagonistId = isStr(interaction.protagonistCharacterId)
+    const interactionProtagonistId = isNonBlankStr(interaction.protagonistCharacterId)
       ? interaction.protagonistCharacterId
       : null;
     const sceneProtagonistIds = new Set(

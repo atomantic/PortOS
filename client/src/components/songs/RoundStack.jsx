@@ -21,8 +21,7 @@ import { scoreHasMusic } from '../../lib/scoreNotation';
 import { createLayeredPlayer } from '../../lib/songPlayback';
 import { getUploadUrl } from '../../services/api';
 import { rhythmShapeLabel } from '../../lib/songCraft';
-
-const hasText = (v) => typeof v === 'string' && v.trim().length > 0;
+import { isNonBlankStr } from '../../lib/textUtils';
 
 export default function RoundStack({ songs = [] }) {
   const [playing, setPlaying] = useState(false);
@@ -133,7 +132,7 @@ export default function RoundStack({ songs = [] }) {
                   )}
                 </h3>
                 <span className="text-xs text-gray-500">
-                  {[hasText(s.key) && s.key, feel].filter(Boolean).join(' · ')}
+                  {[isNonBlankStr(s.key) && s.key, feel].filter(Boolean).join(' · ')}
                 </span>
               </div>
 
@@ -148,7 +147,7 @@ export default function RoundStack({ songs = [] }) {
                   {sections.map((sec) => (
                     <div key={sec.id}>
                       <h4 className="text-xs font-semibold uppercase tracking-wide text-port-accent mb-1">{sec.label || 'Section'}</h4>
-                      {hasText(sec.lyrics)
+                      {isNonBlankStr(sec.lyrics)
                         ? <p className="text-sm text-gray-100 whitespace-pre-wrap leading-relaxed">{sec.lyrics}</p>
                         : <p className="text-xs text-gray-600 italic">No lyrics</p>}
                     </div>

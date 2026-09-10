@@ -31,6 +31,26 @@ function renderSelector(props = {}) {
 }
 
 describe('ProviderModelSelector', () => {
+  it('shows inherited provider, model and effort without writing overrides on mount', () => {
+    const onProviderChange = vi.fn();
+    const onModelChange = vi.fn();
+    const onEffortChange = vi.fn();
+    renderSelector({
+      providers: [{ id: 'codex', name: 'Codex', type: 'cli', command: 'codex', defaultModel: 'gpt-5', effort: 'high' }],
+      selectedProviderId: '', effectiveProviderId: 'codex', selectedModel: '',
+      availableModels: ['gpt-5'], emptyProviderOption: 'Auto', emptyModelOption: 'Default model',
+      effort: '', onProviderChange, onModelChange, onEffortChange,
+    });
+    expect(screen.getByRole('option', { name: 'Auto — Codex' }).selected).toBe(true);
+    expect(screen.getByRole('option', { name: 'Default model — gpt-5' }).selected).toBe(true);
+    expect(screen.getByRole('option', { name: 'Default effort — high' }).selected).toBe(true);
+    expect(onProviderChange).not.toHaveBeenCalled();
+    expect(onModelChange).not.toHaveBeenCalled();
+    expect(onEffortChange).not.toHaveBeenCalled();
+    fireEvent.change(screen.getByRole('combobox', { name: 'Thinking effort' }), { target: { value: 'low' } });
+    expect(onEffortChange).toHaveBeenCalledWith('low');
+  });
+
   it('renders only the provider options by default (no empty sentinel)', () => {
     renderSelector();
     const options = screen.getAllByRole('option').map((o) => o.textContent);

@@ -14,6 +14,7 @@ import { videoSceneInputs, retainVideoCuts } from '../../lib/creativeDirectorVid
 import { compileVideoArtifact, validateVideoShot } from '../../lib/creativeDirectorVideoCompiler.js';
 
 import { randomUUID } from 'crypto';
+import { isDeepStrictEqual } from 'node:util';
 import { EFFORT_LEVELS } from '../../lib/providerModels.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { creativeDirectorVideoDraftSchema } from '../../lib/creativeDirectorValidation.js';
@@ -23,13 +24,12 @@ import { compareNewerWins } from '../../lib/lwwTimestamp.js';
 import { pickLlmRoutePinLayer } from '../../lib/llmRoutePin.js';
 import { localImageFilename } from '../../lib/localImageFilename.js';
 import { sanitizeProjectForSync } from '../../lib/projectStoreKit.js';
+import { isStr } from '../../lib/textUtils.js';
 
 // Preserve the existing validation export for callers on the project-store surface.
 export { validateVideoShot } from '../../lib/creativeDirectorVideoCompiler.js';
 
 export { sanitizeProjectForSync } from '../../lib/projectStoreKit.js';
-
-const isStr = (v) => typeof v === 'string';
 
 // Per-project AI model override (per-project CD provider/model pins). Stored on
 // the project record as `modelOverrides.{treatment,plan,evaluation}` — each an
@@ -219,7 +219,11 @@ export function buildProjectRecord(input, { id, now, collectionId }) {
     // ingredients are also linked durably in catalog_ingredient_refs. Empty for
     // a bare project. Each member: { ingredientId, name, type, role, summary? }.
     cast: Array.isArray(cast) ? cast : [],
-    disableAudio,
+    // Video drafts use videoDraft.audio; keep the legacy top-level flag off on
+    // new Video records so old consumers cannot mistake a native draft for a
+    // request to strip clip audio. Legacy CD records retain their historical
+    // default and UI contract.
+    disableAudio: input.workspace === 'video' ? false : disableAudio,
     autoAcceptScenes,
     // Server-managed intent flag (#1867) — set on the project by the
     // auto-cast route when a user opts into both `compose` and
@@ -366,8 +370,11 @@ export function applyProjectPatch(project, patch) {
   // Normalize the whole override object on write so stored records never carry
   // empty/model-only stage stubs; the client sends the full object each save.
   if ('modelOverrides' in patch) next.modelOverrides = normalizeModelOverrides(patch.modelOverrides);
+  // Changing the reviewer does not change the approved story or rendered clips.
+  const creativeValue = (record, key) => key === 'modelOverrides'
+    ? { ...record[key], evaluation: undefined } : record[key];
   if (project.workspace === 'video' && project.treatment?.artifact
-      && ['videoDraft', 'targetDurationSeconds', 'aspectRatio', 'userStory', 'styleSpec', 'cast', 'startingImageFile', 'modelId', 'renderBackend', 'quality', 'modelOverrides', 'disableAudio'].some((key) => key in patch && JSON.stringify(next[key]) !== JSON.stringify(project[key]))) {
+      && ['videoDraft', 'targetDurationSeconds', 'aspectRatio', 'userStory', 'styleSpec', 'cast', 'startingImageFile', 'modelId', 'renderBackend', 'quality', 'modelOverrides', 'disableAudio'].some((key) => key in patch && !isDeepStrictEqual(creativeValue(next, key), creativeValue(project, key)))) {
     next.treatment = { ...project.treatment, artifact: { ...project.treatment.artifact, stale: true },
       scenes: project.treatment.scenes.map(scene => ({ ...scene, workRevision: (scene.workRevision || 0) + 1 })) };
     next.videoWorkRevision = (project.videoWorkRevision || 0) + 1;
@@ -379,6 +386,9 @@ export function applyProjectPatch(project, patch) {
   return next;
 }
 
+function retireVideoPlan(plan) {
+  return { history: [...(plan.history || []), { steps: structuredClone(plan.steps), updatedAt: plan.updatedAt }] };
+}
 
 function priorVideoTreatments(project) {
   if (!project.treatment?.artifact) return [];
@@ -423,7 +433,7 @@ export function applyTreatment(project, treatmentInput, sourceRevisions) {
     let priorChanged = false;
     scenes = scenes.sort((a, b) => a.order - b.order).map(scene => {
       const old = previous.get(scene.sceneId);
-      const unchanged = old && !project.treatment?.artifact?.stale && JSON.stringify(videoSceneInputs(old)) === JSON.stringify(videoSceneInputs(scene))
+      const unchanged = old && !project.treatment?.artifact?.stale && isDeepStrictEqual(videoSceneInputs(old), videoSceneInputs(scene))
         && !(scene.useContinuationFromPrior && priorChanged);
       priorChanged = !unchanged;
       return unchanged ? { ...scene, status: old.status, retryCount: old.retryCount, renderedJobId: old.renderedJobId,
@@ -442,6 +452,9 @@ export function applyTreatment(project, treatmentInput, sourceRevisions) {
   return {
     ...project,
     treatment,
+    ...(project.workspace === 'video' && project.plan?.steps ? {
+      plan: retireVideoPlan(project.plan),
+    } : {}),
     ...(project.workspace === 'video' ? { videoCutHistory: retainVideoCuts(project), videoRoughCut: null, videoFinalCut: null, finalVideoId: null } : {}),
     status: nextStatus,
     updatedAt: new Date().toISOString(),
@@ -488,7 +501,7 @@ export function applyPlan(project, planInput) {
   if (project.workspace === 'video') {
     for (const step of parsed.data.steps) {
       const prior = prevById.get(step.stepId);
-      if (!prior || project.treatment?.artifact?.stale || JSON.stringify([prior.toolName, prior.args, prior.dependsOn || []]) !== JSON.stringify([step.toolName, step.args, step.dependsOn || []])) invalidated.add(step.stepId);
+      if (!prior || project.treatment?.artifact?.stale || !isDeepStrictEqual([prior.toolName, prior.args, prior.dependsOn || []], [step.toolName, step.args, step.dependsOn || []])) invalidated.add(step.stepId);
     }
     let changed = true;
     while (changed) {
@@ -529,7 +542,7 @@ export function applyPlan(project, planInput) {
   return {
     ...project,
     ...(project.workspace === 'video' ? { videoCutHistory: retainVideoCuts(project), videoWorkRevision: (project.videoWorkRevision || 0) + 1, videoRoughCut: null, videoFinalCut: null, finalVideoId: null } : {}),
-    plan: { steps, replanRounds, ...(project.workspace === 'video' ? { submittedProductionRevision: project.videoWorkRevision || 0 } : {}), ...(project.workspace === 'video' && project.plan ? { history: [...(project.plan.history || []), { steps: structuredClone(prevSteps), updatedAt: project.plan.updatedAt }] } : {}), ...(parsed.data.sourceContextRevision ? { sourceContextRevision: parsed.data.sourceContextRevision } : {}), updatedAt: new Date().toISOString() },
+    plan: { steps, replanRounds, ...(project.workspace === 'video' ? { submittedProductionRevision: project.videoWorkRevision || 0 } : {}), ...(project.workspace === 'video' && project.plan ? { history: [...(project.plan.history || []), ...(project.plan.steps ? [{ steps: structuredClone(prevSteps), updatedAt: project.plan.updatedAt }] : [])] } : {}), ...(parsed.data.sourceContextRevision ? { sourceContextRevision: parsed.data.sourceContextRevision } : {}), updatedAt: new Date().toISOString() },
     status: nextStatus,
     updatedAt: new Date().toISOString(),
   };
@@ -575,20 +588,36 @@ export function applySceneUpdate(project, sceneId, patch) {
   const { expectedWorkRevision, ...changes } = patch;
   const previousScene = project.treatment.scenes[sceneIdx];
   if (project.workspace === 'video' && expectedWorkRevision !== undefined && expectedWorkRevision !== (previousScene.workRevision || 0)) {
-    throw new ServerError('This shot callback belongs to a superseded revision', { status: 409, code: 'VIDEO_WORK_STALE' });
+    throw new ServerError('This shot belongs to a superseded revision. Refresh the project before applying your changes.', { status: 409, code: 'VIDEO_WORK_STALE' });
   }
   const updated = { ...previousScene, ...changes };
   const scenes = project.treatment.scenes.slice();
   scenes[sceneIdx] = updated;
   const treatment = { ...project.treatment, scenes };
   const creativeEdit = project.workspace === 'video' && treatment.artifact
-    && ['prompt', 'imageStrength'].some((key) => key in patch && patch[key] !== previousScene[key]);
+    && ['prompt', 'imageStrength', 'sourceImageFile', 'useContinuationFromPrior'].some((key) => key in patch && patch[key] !== previousScene[key]);
+  const audioEdit = project.workspace === 'video' && 'muteAudio' in patch && Boolean(patch.muteAudio) !== Boolean(previousScene.muteAudio);
+  if (audioEdit && ['planning', 'rendering', 'stitching'].includes(project.status)) {
+    throw new ServerError('Pause production before changing shot audio.', { status: 409, code: 'VIDEO_ACTIVE' });
+  }
+  if (audioEdit && !creativeEdit) updated.workRevision = (previousScene.workRevision || 0) + 1;
   if (creativeEdit) {
     validateVideoShot(project, updated, sceneId === [...scenes].sort((a, b) => a.order - b.order)[0].sceneId);
     updated.workRevision = (previousScene.workRevision || 0) + 1;
     updated.status = 'pending';
     updated.renderedJobId = null;
     updated.evaluation = null;
+    updated.retryCount = 0;
+    // A changed last frame also changes every directly continuing shot, up to
+    // the next independent starting frame.
+    const ordered = [...scenes].sort((a, b) => a.order - b.order);
+    for (let index = ordered.findIndex(scene => scene.sceneId === sceneId) + 1; index < ordered.length && ordered[index].useContinuationFromPrior; index += 1) {
+      const descendant = ordered[index];
+      scenes[scenes.findIndex(scene => scene.sceneId === descendant.sceneId)] = {
+        ...descendant, workRevision: (descendant.workRevision || 0) + 1,
+        status: 'pending', renderedJobId: null, evaluation: null, retryCount: 0,
+      };
+    }
     // A shot edit changes the reviewed content, but cannot refresh stale source context.
     treatment.artifact = { ...treatment.artifact, revision: treatment.artifact.revision + 1 };
     treatment.history = priorVideoTreatments(project);
@@ -596,7 +625,8 @@ export function applySceneUpdate(project, sceneId, patch) {
   const next = {
     ...project,
     treatment,
-    ...(creativeEdit ? { status: 'paused', videoWorkRevision: (project.videoWorkRevision || 0) + 1, videoCutHistory: retainVideoCuts(project), videoRoughCut: null, videoFinalCut: null, finalVideoId: null } : {}),
+    ...(creativeEdit && project.plan?.steps ? { plan: retireVideoPlan(project.plan) } : {}),
+    ...((creativeEdit || audioEdit) ? { status: 'paused', videoWorkRevision: (project.videoWorkRevision || 0) + 1, videoCutHistory: retainVideoCuts(project), videoRoughCut: null, videoFinalCut: null, finalVideoId: null } : {}),
     updatedAt: new Date().toISOString(),
   };
   return { project: next, updated };

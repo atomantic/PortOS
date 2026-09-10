@@ -12,7 +12,7 @@
  */
 
 import { ServerError } from "../lib/errorHandler.js";
-import { findBalancedBlocks, tryParseWithRepair } from "../lib/jsonExtract.js";
+import { extractNonPlaceholderJson } from "../lib/jsonExtract.js";
 import { assertProvider, resolveProviderAndModel, resolveEffectiveModel, runPromptThroughProvider, assertVisionRunUsedImages } from "./promptRunner.js";
 import { resolveAPIProvider } from './aiProvider.js';
 import {
@@ -41,7 +41,7 @@ import {
   sanitizeInfluences,
   sanitizeLocked,
 } from "./universeBuilder.js";
-import { trimTo } from "../lib/storyBible.js";
+import { trimTo } from "../lib/textUtils.js";
 
 const MAX_FEEDBACK = 3000;
 const MAX_RATIONALE = 1200;
@@ -54,58 +54,6 @@ const cleanChanges = (changes) =>
         .filter(Boolean)
         .slice(0, MAX_CHANGES)
     : [];
-
-// Same extractor shape as mediaPromptRefiner: Codex CLI echoes the prompt to
-// stdout before the model response, and the prompt itself contains a JSON
-// schema example whose braces balance but whose contents are placeholder
-// text. Walk every brace-balanced block in order (lib/jsonExtract.js) and
-// return the first that looks like a refinement payload (object with a
-// `starterPrompt` string).
-const isPlaceholder = (s) => typeof s === "string" && /^\s*<.+>\s*$/.test(s);
-
-function extractRefinementJson(raw) {
-  if (typeof raw !== "string" || !raw.trim())
-    throw new Error("Empty AI response");
-  let s = raw.trim();
-  const fence = s.match(/```(?:json)?\s*([\s\S]*?)```/);
-  if (fence) s = fence[1].trim();
-
-  const candidates = findBalancedBlocks(s);
-  if (!candidates.length) candidates.push(s);
-
-  // Walk every balanced block ourselves rather than calling the shared
-  // extractJson — we need a tri-state outcome (real refinement, placeholder
-  // echo, or parse error) to surface the "schema placeholder" error message
-  // that helps users pick a stronger model. extractJson's shape predicate
-  // collapses placeholder-vs-real into a single fallback path.
-  let placeholderSeen = false;
-  let lastErr;
-  for (const block of candidates) {
-    const result = tryParseWithRepair(block);
-    if (result.error) {
-      lastErr = result.error;
-      continue;
-    }
-    const { value } = result;
-    if (
-      value &&
-      typeof value === "object" &&
-      typeof value.starterPrompt === "string"
-    ) {
-      if (isPlaceholder(value.starterPrompt)) {
-        placeholderSeen = true;
-      } else return value;
-    }
-  }
-  if (placeholderSeen) {
-    throw new Error(
-      "AI returned the schema placeholder instead of a real refinement — try a stronger model or rerun",
-    );
-  }
-  throw new Error(
-    `Invalid JSON in AI response${lastErr ? `: ${lastErr.message}` : ""}`,
-  );
-}
 
 const lockedList = (locked) =>
   LOCKABLE_FIELDS.filter((k) => locked && locked[k] === true).map(
@@ -471,7 +419,7 @@ export async function refineWorldPrompts({
 
   let parsed;
   try {
-    parsed = extractRefinementJson(text || "");
+    parsed = extractNonPlaceholderJson(text || "", { field: "starterPrompt" });
   } catch (e) {
     console.warn(
       `⚠️ universe-refine [${provider.id}/${selectedModel || "default"} runId=${runId}] parse failed: ${e.message} (response size: ${(text || "").length} chars)`,
@@ -561,7 +509,6 @@ export async function refineWorldPrompts({
 }
 
 export const __testing = {
-  extractRefinementJson,
   buildWorldRefinePrompt,
   collapseStyleDirectionDupes,
   mergeCategoriesWithLocks,

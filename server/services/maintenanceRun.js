@@ -20,7 +20,7 @@
  * What it shares with a burn is the INVOCATION: every step is dispatched through
  * `quotaBurnInvoke.invokeQuotaBurnStep`, so the schedule's own gate ladder (task
  * enabled, per-app switch, master Improve, target scope, duplicate requests)
- * still applies, the provider is pinned to the family the user named, and the
+ * still applies, each handler is pinned to the family the user named, and the
  * task carries the family provenance that makes it cooldown-exempt and lets an
  * observed refusal be credited to the right window. The `maintenanceRunId`
  * provenance field is what tells the quota-burn loop to leave these agents
@@ -138,7 +138,7 @@ async function assertNoRunningRun(appId) {
  * The first evaluation runs before this returns, so the caller learns whether
  * step one actually went out (or why it is holding) in the same response.
  */
-export async function startMaintenanceRun({ appId, providerId, model = null, effort = null }) {
+export async function startMaintenanceRun({ appId, providerId, model = null, effort = null, mode = 'file-issues', claimBetweenAudits = true, claimHandler = null, taskTypes = null }) {
   const [{ getAppById }, { getProviderById }, { resolveBurnProvider }] = await Promise.all([
     import('./apps.js'), import('./providers.js'), import('./scheduledHandlers/providerPick.js'),
   ]);
@@ -147,15 +147,23 @@ export async function startMaintenanceRun({ appId, providerId, model = null, eff
   const familyId = familyForProvider(provider);
   const pinned = familyId ? await resolveBurnProvider({ job: { providerId }, family: { id: familyId } }) : null;
   if (!pinned) throw new ServerError(`provider "${providerId}" is not an enabled subscription CLI/TUI provider`, { status: 400, code: 'MAINTENANCE_RUN_PROVIDER_UNAVAILABLE' });
+  // File-only runs never validate or retain a hidden claim selection.
+  const effectiveClaimHandler = !taskTypes && (mode === 'fix' || claimBetweenAudits) ? claimHandler : null;
+  let claimFamilyId = familyId;
+  if (effectiveClaimHandler) {
+    claimFamilyId = familyForProvider(await getProviderById(effectiveClaimHandler.providerId));
+    const claimProvider = claimFamilyId ? await resolveBurnProvider({ job: effectiveClaimHandler, family: { id: claimFamilyId } }) : null;
+    if (!claimProvider) throw new ServerError(`provider "${effectiveClaimHandler.providerId}" is not an enabled subscription CLI/TUI provider`, { status: 400, code: 'MAINTENANCE_RUN_PROVIDER_UNAVAILABLE' });
+  }
   await assertNoRunningRun(appId);
 
   const id = `maint-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
   const now = new Date().toISOString();
   const pins = { providerId, model: model || null, effort: effort || null };
   const run = await insertRun({
-    id, appId, familyId, ...pins,
+    id, appId, familyId, claimFamilyId, ...pins,
     status: MAINTENANCE_RUN_STATUS.RUNNING,
-    steps: buildMaintenanceSteps({ appId, idPrefix: id, ...pins }),
+    steps: buildMaintenanceSteps({ appId, idPrefix: id, ...pins, mode, claimBetweenAudits, claimHandler: effectiveClaimHandler, taskTypes }),
     completed: {},
     active: null,
     reason: null,
@@ -190,6 +198,27 @@ export function stopMaintenanceRun(id) {
     if (run.status !== MAINTENANCE_RUN_STATUS.RUNNING) return run;
     console.log(`🧹 Maintenance run ${id} stopped by the user`);
     return patchRun(id, { status: MAINTENANCE_RUN_STATUS.STOPPED, finishedAt: new Date().toISOString(), reason: 'stopped by the user' });
+  });
+}
+
+/** Editing shares the dispatch queue: a stale browser cannot change a started step. */
+export function updateMaintenanceStep(id, stepId, { providerId, model, effort = null }) {
+  return perRun(id, async () => {
+    const run = await getMaintenanceRun(id);
+    const step = run?.steps.find(entry => entry.id === stepId);
+    if (!step) return null;
+    if (run.status !== MAINTENANCE_RUN_STATUS.RUNNING || run.completed?.[stepId] || step.startedAt || run.active?.stepId === stepId) {
+      throw new ServerError('Only pending stages in a running maintenance run can be edited', { status: 409, code: 'MAINTENANCE_STEP_STARTED' });
+    }
+    const [{ getProviderById }, { resolveBurnProvider }] = await Promise.all([
+      import('./providers.js'), import('./scheduledHandlers/providerPick.js'),
+    ]);
+    const familyId = familyForProvider(await getProviderById(providerId));
+    const provider = familyId ? await resolveBurnProvider({ job: { providerId }, family: { id: familyId } }) : null;
+    if (!provider) throw new ServerError(`provider "${providerId}" is not an enabled subscription CLI/TUI provider`, { status: 400, code: 'MAINTENANCE_RUN_PROVIDER_UNAVAILABLE' });
+    return patchRun(id, { steps: run.steps.map(entry => entry.id === stepId
+      ? { ...entry, familyId, overrides: { ...entry.overrides, providerId, model, effort } }
+      : entry) });
   });
 }
 
@@ -258,11 +287,12 @@ async function evaluate(id, { ignoreTaskId }) {
       }
       if (!probe.job) return hold(probe.reason);
     }
-    const result = await invokeQuotaBurnStep({ step, family: { id: run.familyId }, catalog, maintenanceRunId: id });
+    const result = await invokeQuotaBurnStep({ step, family: { id: step.familyId || (step.drain ? (run.claimFamilyId || run.familyId) : run.familyId) }, catalog, maintenanceRunId: id });
     if (!result.dispatched) return hold(result.reason, { completed });
     const taskType = step.taskRef.taskType;
     await patchRun(id, {
       completed,
+      steps: run.steps.map(entry => entry.id === step.id ? { ...entry, startedAt: entry.startedAt || new Date().toISOString() } : entry),
       reason: null,
       active: { stepId: step.id, taskType, status: 'queued', requestId: result.awaiting?.requestId ?? null, at: new Date().toISOString() },
     });

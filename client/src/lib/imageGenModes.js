@@ -38,6 +38,12 @@ import {
   normalizeRenderPinValue,
 } from '../../../server/lib/renderTargets.js';
 import {
+  imageModeCandidates,
+  isModeUsable,
+  pickUsableMode,
+  renderTargetDefaults,
+} from '../../../server/lib/renderModeLadder.js';
+import {
   AGY_IMAGEGEN_DEFAULT_MODEL,
   AGY_IMAGEGEN_IMAGE_MODEL,
   CODEX_IMAGEGEN_DEFAULT_EFFORT,
@@ -88,6 +94,15 @@ export {
   maxInputImages,
   normalizeRenderPinValue,
   supportsCloudModelOverride,
+  // The image-gen mode resolution ladder (#6815) — the SAME resolver every
+  // server surface dispatches through, so a client display of "what will Auto
+  // resolve to" can't hand-copy the ladder and drift from it. See
+  // `server/lib/renderModeLadder.js` for the fall-through semantics (a pin is
+  // a preference, not a guarantee) and the candidate-order contract.
+  imageModeCandidates,
+  isModeUsable,
+  pickUsableMode,
+  renderTargetDefaults,
 };
 
 // The Settings → Image Gen → Defaults rows for the server's render-target
@@ -137,11 +152,14 @@ export const isCloudCliMode = (mode) => CLOUD_IMAGE_GEN_MODES.includes(mode);
 
 /**
  * The client-side counterpart of the server's `renderTargetDefaults`
- * (imageGen/cloudProviderConfig.js) — one surface's saved `settings.renderDefaults`
- * pin, re-keyed to the flat `imageMode`/`imageModelId` shape `renderPinLadder`
- * consumes so a target pin and a record pin are the same kind of thing. Its
- * input is the settings payload the client already holds, so this reads that
- * object rather than importing a resolver from a service module.
+ * (`lib/renderModeLadder.js`, re-exported above) — one surface's saved
+ * `settings.renderDefaults` pin, re-keyed to the flat `imageMode`/`imageModelId`
+ * shape `renderPinLadder` consumes so a target pin and a record pin are the
+ * same kind of thing. Its input is the settings payload the client already
+ * holds, so this reads that object directly rather than calling
+ * `renderTargetDefaults` itself, which returns the fuller
+ * `{imageMode, imageModel, videoMode, videoModel}` shape `pickUsableMode` /
+ * `imageModeCandidates` consume — not `renderPinLadder`'s pin-source shape.
  */
 export const renderTargetPin = (settings, target) => ({
   imageMode: settings?.renderDefaults?.[target]?.imageMode ?? null,

@@ -30,6 +30,7 @@ import {
   normalizeQuotaBurnTaskRef,
 } from './quotaBurnTaskRef.js';
 import { BIBLE_DESCRIBE_DEPTHS, BIBLE_DESCRIBE_SCOPES } from './universeBibleCompleteness.js';
+import { trimTo } from './textUtils.js';
 
 /** Provider quota families a burn plan may target. Mirrors `providerUsage.js`'s card ids. */
 export const QUOTA_BURN_FAMILIES = Object.freeze(['claude', 'codex', 'agy', 'grok']);
@@ -230,11 +231,8 @@ const clampDispatchCap = (value) => {
   return num < 0 ? QUOTA_BURN_UNLIMITED_DISPATCHES : clampInt(BOUNDS.maxDispatchesPerWindow, num);
 };
 
-const trimString = (value, max) =>
-  (typeof value === 'string' ? value.trim().slice(0, max) : '');
-
 const nullableString = (value, max) => {
-  const trimmed = trimString(value, max);
+  const trimmed = trimTo(value, max);
   return trimmed || null;
 };
 
@@ -303,9 +301,9 @@ export function normalizeQuotaBurnJob(raw, index = 0) {
   };
 
   return {
-    id: trimString(raw.id, BOUNDS.idLength.max) || `job-${index + 1}`,
+    id: trimTo(raw.id, BOUNDS.idLength.max) || `job-${index + 1}`,
     enabled: raw.enabled !== false,
-    label: trimString(raw.label, BOUNDS.labelLength.max),
+    label: trimTo(raw.label, BOUNDS.labelLength.max),
     taskRef,
     // Only a legacy step keeps a `jobType`; a reference step reports null so no
     // reader can mistake a stale field for the step's identity.

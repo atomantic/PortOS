@@ -1,11 +1,12 @@
 import { useState } from 'react';
 import { Loader2, X, BookText } from 'lucide-react';
 import { WORLD_PREMISE_MAX } from '../../../services/apiUniverseBuilder.js';
+import { ARC_LIMITS } from '../../../../../server/lib/storyArcLimits.js';
 
-// Field-count guard for derived synopsis textareas — mirrors the server caps so
-// the user isn't surprised by a 400 on commit.
+// UI ceiling for derived issue synopsis textareas; the server accepts a larger
+// stage input, but this review panel keeps pasted suggestions bounded.
 const DERIVE_SYNOPSIS_MAX = 8000;
-const DERIVE_TITLE_MAX = 300;
+const ISSUE_TITLE_MAX = 300;
 
 // Review/edit panel for the derive-from-manuscript proposal. The arc + bible
 // fields and the single-volume title/synopsis are editable; each existing issue
@@ -48,10 +49,10 @@ export default function DeriveFromManuscriptPreview({ preview, committing, onCan
     onConfirm({
       arc,
       bible,
-      volume,
+      volume: { ...volume, title: volume.title.slice(0, ARC_LIMITS.SEASON_TITLE_MAX) },
       issues: issues.map((it) => ({
         id: it.id,
-        title: it.title.slice(0, DERIVE_TITLE_MAX),
+        title: it.title.slice(0, ISSUE_TITLE_MAX),
         synopsis: it.ideaLocked ? '' : it.synopsis.slice(0, DERIVE_SYNOPSIS_MAX),
       })),
     });
@@ -78,7 +79,7 @@ export default function DeriveFromManuscriptPreview({ preview, committing, onCan
       <div className="grid gap-3 @md:grid-cols-2">
         <label className="block space-y-1">
           <span className="text-[11px] uppercase tracking-wider text-gray-500">Series logline</span>
-          <input className={inputCls} value={bible.logline} maxLength={500}
+          <input className={inputCls} value={bible.logline} maxLength={ARC_LIMITS.LOGLINE_MAX}
             onChange={(e) => { setBible((b) => ({ ...b, logline: e.target.value })); setArc((a) => ({ ...a, logline: e.target.value })); }} />
         </label>
         <label className="block space-y-1">
@@ -94,13 +95,13 @@ export default function DeriveFromManuscriptPreview({ preview, committing, onCan
       </label>
       <label className="block space-y-1">
         <span className="text-[11px] uppercase tracking-wider text-gray-500">Protagonist arc</span>
-        <textarea className={`${inputCls} resize-y`} rows={2} value={arc.protagonistArc} maxLength={8000}
+        <textarea className={`${inputCls} resize-y`} rows={2} value={arc.protagonistArc} maxLength={ARC_LIMITS.PROTAGONIST_ARC_MAX}
           onChange={(e) => setArc((a) => ({ ...a, protagonistArc: e.target.value }))} />
       </label>
 
       <label className="block border-t border-port-border pt-2 space-y-2">
         <span className="text-[11px] uppercase tracking-wider text-gray-500">Volume</span>
-        <input className={inputCls} value={volume.title} maxLength={DERIVE_TITLE_MAX} placeholder="Volume title"
+        <input className={inputCls} value={volume.title} maxLength={ARC_LIMITS.SEASON_TITLE_MAX} placeholder="Volume title"
           onChange={(e) => setVolume((v) => ({ ...v, title: e.target.value }))} />
       </label>
 
@@ -110,7 +111,7 @@ export default function DeriveFromManuscriptPreview({ preview, committing, onCan
           <div key={it.id} className="bg-port-card border border-port-border rounded p-2 space-y-1">
             <div className="flex items-center gap-2">
               <span className="text-[11px] text-gray-500 shrink-0">#{it.number}</span>
-              <input className={inputCls} value={it.title} maxLength={DERIVE_TITLE_MAX} placeholder="Issue title"
+              <input className={inputCls} value={it.title} maxLength={ISSUE_TITLE_MAX} placeholder="Issue title"
                 aria-label={`Title for issue ${it.number}`}
                 onChange={(e) => setIssueField(it.id, 'title', e.target.value)} />
             </div>

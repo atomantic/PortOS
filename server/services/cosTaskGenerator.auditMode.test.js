@@ -105,6 +105,8 @@ import {
 } from '../lib/auditCatalog.js';
 import { isProgrammaticScheduledTaskType, PROGRAMMATIC_SCHEDULED_TASK_TYPES } from '../lib/taskTargetScope.js';
 
+import { buildMaintenanceSteps } from '../lib/maintenanceSequence.js';
+
 const AUDIT_TYPES = [...AUDIT_TASK_TYPES];
 const WORKSPACE = '/tmp/example-repo';
 
@@ -178,7 +180,13 @@ describe('issues-only audit dispatch never acquires code-shipping instructions (
     // Positive control: the file-issues contract IS what rendered, so the
     // negatives above are not passing on an empty or truncated prompt.
     expect(prompt).toContain('Mode: file issues, change nothing');
+    expect(prompt).toContain('Repository-wide discovery, worst offender first');
+    expect(prompt).toContain(`"category":"${taskType}"`);
     expect(prompt).toContain('## Completion (No Code Output)');
+    const handoff = prompt.slice(prompt.indexOf('## Required audit assessment handoff'));
+    expect(handoff).toContain(`category "${taskType}"`);
+    expect(handoff).toContain('summary AND exactly one single-line QUALITY_AUDIT_JSON:');
+    expect(prompt).not.toContain('write a one-line summary');
     expect(prompt).not.toContain('{modeInstructions}');
     expect(prompt).not.toContain('{trackerInstructions}');
   });
@@ -207,8 +215,19 @@ describe('issues-only audit dispatch never acquires code-shipping instructions (
 
     const prompt = renderPrompt(task);
     expect(prompt).toContain('Mode: implement the highest-value fix');
+    expect(prompt).toContain('Repository-wide discovery, worst offender first');
+    expect(prompt).toContain(`"category":"${taskType}"`);
     expect(prompt).toMatch(/^## Completion Workflow$/m);
+    expect(prompt).toContain('## Required audit assessment handoff');
     expect(prompt).toMatch(/^\s*\d+\.\s+`\/do:push/m);
+  });
+
+  it('requires a persisted report for CLI audits that normally finish by exiting', async () => {
+    const task = await generate('better-complexity');
+    const prompt = buildLightContextPrompt(task, WORKSPACE, null, isTruthyMeta, { isTui: false });
+    expect(prompt).toContain('## Required audit assessment handoff');
+    expect(prompt).toContain('including agents that normally finish by exiting');
+    expect(prompt).toContain('.agent-done');
   });
 
   it('substitutes the banner into a template that still carries {modeInstructions}', async () => {
@@ -278,8 +297,8 @@ describe('mode is honored identically from schedule, manual run, and quota burn'
 
   it.each([
     ['ordinary schedule', {}],
-    ['manual run / on-demand', { skipPreconditions: true, deferPerpetualDispatch: true, targetPullRequest: null, runOverrides: null }],
-    ['quota burn (no param override)', { skipPreconditions: true, deferPerpetualDispatch: true, targetPullRequest: null, runOverrides: {} }],
+    ['manual run / on-demand', { skipPreconditions: true, targetPullRequest: null, runOverrides: null }],
+    ['quota burn (no param override)', { skipPreconditions: true, targetPullRequest: null, runOverrides: {} }],
   ])('%s renders the same file-issues prompt and settings', async (_lane, options) => {
     const { getTaskInterval } = await import('./taskSchedule.js');
     getTaskInterval.mockResolvedValue({ type: 'weekly', taskMetadata: { fileIssues: true } });
@@ -313,6 +332,25 @@ describe('mode is honored identically from schedule, manual run, and quota burn'
     expect(task.metadata.fileIssues).toBe(false);
     expect(task.metadata.noCodeOutput).toBeUndefined();
     expect(task.description).toContain('Mode: implement the highest-value fix');
+  });
+
+  it('maintenance fixes override issue-only PR defaults through the final Codex prompt', async () => {
+    const { getTaskInterval } = await import('./taskSchedule.js');
+    getTaskInterval.mockResolvedValue({ type: 'weekly', taskMetadata: {
+      fileIssues: true, useWorktree: false, openPR: false,
+    } });
+    const [step] = buildMaintenanceSteps({ appId: 'app-1', idPrefix: 'maintenance', mode: 'fix' });
+    const task = await generate(step.taskRef.taskType, {
+      skipPreconditions: true, runOverrides: step.overrides.params,
+    });
+    expect(task.metadata).toMatchObject({ fileIssues: false, useWorktree: true, openPR: true });
+    const prompt = buildLightContextPrompt(task, WORKSPACE, {
+      branch: 'cos/example', worktreePath: WORKSPACE,
+    }, isTruthyMeta, { isTui: true, providerId: 'codex-tui', providerCommand: 'codex' });
+    expect(prompt).toContain('gh pr create');
+    expect(prompt).toContain('## Merge Gate');
+    expect(prompt).toContain('--merge --delete-branch');
+    expect(prompt).not.toContain('PortOS will merge it back after completion');
   });
 
   it('run overrides pass the same allowlist a stored override does', async () => {

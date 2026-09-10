@@ -24,7 +24,8 @@
  * scan, so the two are deliberately one list rather than two that agree today.
  */
 
-import { BIBLE_KEYS, isBlank, PSYCHOLOGY_DRIVE_AXES } from './storyBible.js';
+import { BIBLE_KEYS, PSYCHOLOGY_DRIVE_AXES } from './storyBible.js';
+import { isEmptyScalar } from './objects.js';
 
 /** Depth vocabulary. `core` = renderable at all; `full` = the whole sheet. */
 export const BIBLE_DESCRIBE_DEPTHS = Object.freeze(['core', 'full']);
@@ -122,7 +123,7 @@ const requiredFields = (kind, depth) => {
  * Whether ONE field on an entry is still unfilled — the single blank predicate
  * the completeness scan AND the expand merges both call, so the code that
  * decides an entry needs work can't disagree with the code that does it.
- * `isBlank` (storyBible) carries the base string/array rule; the two exceptions
+ * `isEmptyScalar` (objects.js) carries the base string/array rule; the two exceptions
  * below are what this wrapper adds.
  */
 export function bibleFieldIsBlank(entry, field) {
@@ -130,7 +131,7 @@ export function bibleFieldIsBlank(entry, field) {
   // 019 rewrites the legacy `description` alias forward but the read-side fallback
   // stays, so a pre-migration entry must not read as blank here — it would be
   // re-described on top of text it already has.
-  if (field === 'physicalDescription') return isBlank(entry?.physicalDescription) && isBlank(entry?.description);
+  if (field === 'physicalDescription') return isEmptyScalar(entry?.physicalDescription) && isEmptyScalar(entry?.description);
   // `sliders` is an always-present object whose axes are individually null until
   // rated, so plain presence would report it filled the moment the sanitizer
   // materialized it.
@@ -138,7 +139,7 @@ export function bibleFieldIsBlank(entry, field) {
   // `psychology` is absent entirely until authored, and materializes all three
   // drive slots the moment any leaf is filled — so it needs its own rule too.
   if (field === 'psychology') return characterPsychologyIsBlank(entry?.psychology);
-  return isBlank(entry?.[field]);
+  return isEmptyScalar(entry?.[field]);
 }
 
 /**
@@ -154,11 +155,11 @@ export function bibleFieldIsBlank(entry, field) {
 export function characterPsychologyIsBlank(psychology) {
   if (!psychology || typeof psychology !== 'object' || Array.isArray(psychology)) return true;
   if (psychology.assessment === 'unknown' || psychology.assessment === 'not-applicable') {
-    return isBlank(psychology.assessmentNote);
+    return isEmptyScalar(psychology.assessmentNote);
   }
-  if (isBlank(psychology.theoryOfControl)) return true;
-  return PSYCHOLOGY_DRIVE_AXES.some((axis) => isBlank(psychology.drives?.[axis]?.desire)
-    || isBlank(psychology.drives?.[axis]?.fear));
+  if (isEmptyScalar(psychology.theoryOfControl)) return true;
+  return PSYCHOLOGY_DRIVE_AXES.some((axis) => isEmptyScalar(psychology.drives?.[axis]?.desire)
+    || isEmptyScalar(psychology.drives?.[axis]?.fear));
 }
 
 /** Normalize an untrusted depth param to a known depth, defaulting to `full`. */

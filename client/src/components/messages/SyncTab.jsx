@@ -1,10 +1,22 @@
 import { useState, useEffect, useCallback } from 'react';
-import { RefreshCw, AlertCircle, Settings, Globe, Mail, MailOpen } from 'lucide-react';
+import { RefreshCw, AlertCircle, CheckCircle2, Settings, Globe, Mail, MailOpen } from 'lucide-react';
 import toast from '../ui/Toast';
 import { FormField } from '../ui/FormField';
+import QueueInvestigationButton from '../ui/QueueInvestigationButton';
 import { formatDateTime } from '../../utils/formatters';
+import { buildSelectorTestFailureTask } from '../../lib/selectorTestFailureTask';
 import * as api from '../../services/api';
 import socket from '../../services/socket';
+
+// Human-facing summary per `testSelectors()` status — kept out of JSX so the
+// failure-task builder and the toast can share the same wording.
+const TEST_STATUS_TEXT = {
+  ok: 'All selectors matched on the live page',
+  'no-browser': 'No browser tab available — is portos-browser running?',
+  'auth-required': 'Login required — open the browser and sign in first',
+  'no-selectors': 'No selectors configured for this provider',
+  partial: 'Some selectors matched zero elements on the live page',
+};
 
 // Default selectors for supported providers — ensures editor cards always render,
 // even on fresh installs before selectors.json exists.
@@ -18,6 +30,7 @@ export default function SyncTab({ accounts, onRefresh }) {
   const [rawSelectors, setRawSelectors] = useState({});
   const [editingSelector, setEditingSelector] = useState(null);
   const [selectorForm, setSelectorForm] = useState({});
+  const [testResults, setTestResults] = useState({});
 
   // Merge fetched selectors with defaults so every supported provider always appears
   const selectors = Object.fromEntries(
@@ -87,8 +100,15 @@ export default function SyncTab({ accounts, onRefresh }) {
   };
 
   const handleTestSelectors = async (provider) => {
-    const result = await api.testMessageSelectors(provider).catch(() => null);
-    if (result) toast.success(`Selector test: ${result.status}`);
+    setTestResults(prev => ({ ...prev, [provider]: { status: 'testing' } }));
+    const result = await api.testMessageSelectors(provider).catch((err) => ({
+      status: 'error',
+      error: err?.message || 'Test request failed',
+    }));
+    setTestResults(prev => ({ ...prev, [provider]: result }));
+    const summary = TEST_STATUS_TEXT[result.status] || result.error || 'Selector test failed';
+    if (result.status === 'ok') toast.success(summary);
+    else toast.error(summary);
   };
 
   return (
@@ -170,9 +190,10 @@ export default function SyncTab({ accounts, onRefresh }) {
               <div className="flex items-center gap-2">
                 <button
                   onClick={() => handleTestSelectors(provider)}
-                  className="text-xs text-gray-400 hover:text-white transition-colors"
+                  disabled={testResults[provider]?.status === 'testing'}
+                  className="text-xs text-gray-400 hover:text-white transition-colors disabled:opacity-50"
                 >
-                  Test
+                  {testResults[provider]?.status === 'testing' ? 'Testing…' : 'Test'}
                 </button>
                 <button
                   onClick={() => {
@@ -221,6 +242,34 @@ export default function SyncTab({ accounts, onRefresh }) {
                     <span className="text-gray-400 font-mono truncate">{val}</span>
                   </div>
                 ))}
+              </div>
+            )}
+            {testResults[provider] && testResults[provider].status !== 'testing' && (
+              <div className={`mt-3 p-2 rounded border text-xs ${
+                testResults[provider].status === 'ok'
+                  ? 'border-port-success/30 bg-port-success/10 text-port-success'
+                  : 'border-port-error/30 bg-port-error/10 text-port-error'
+              }`}>
+                <div className="flex items-start justify-between gap-2">
+                  <span className="flex items-center gap-1">
+                    {testResults[provider].status === 'ok' ? <CheckCircle2 size={14} /> : <AlertCircle size={14} />}
+                    {TEST_STATUS_TEXT[testResults[provider].status] || testResults[provider].error || 'Selector test failed'}
+                  </span>
+                  {testResults[provider].status !== 'ok' && (
+                    <QueueInvestigationButton
+                      task={buildSelectorTestFailureTask({ provider, ...testResults[provider] })}
+                    />
+                  )}
+                </div>
+                {testResults[provider].results && Object.keys(testResults[provider].results).length > 0 && (
+                  <ul className="mt-1 space-y-0.5 font-mono text-gray-400">
+                    {Object.entries(testResults[provider].results).map(([key, r]) => (
+                      <li key={key} className={r.matches > 0 ? '' : 'text-port-error'}>
+                        {key}: {r.matches} match{r.matches === 1 ? '' : 'es'}
+                      </li>
+                    ))}
+                  </ul>
+                )}
               </div>
             )}
           </div>

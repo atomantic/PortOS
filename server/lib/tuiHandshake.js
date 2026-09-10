@@ -35,7 +35,8 @@ export const PASTE_DEADLINE_MS = 10000;
 export const TUI_INPUT_READY_DEADLINE_MS = 45000;
 
 // Claude Code emits `[Pasted text #N +M lines]`, Codex emits
-// `[Pasted Content N chars]`, and OpenCode emits `[Pasted ~N lines]` after
+// `[Pasted Content N chars]`, OpenCode emits `[Pasted ~N lines]`, and
+// Grok Build emits `[Pasted: 31 KB]` after
 // committing a paste. Watch for any of these markers (or fall back after
 // PASTE_TO_ENTER_FALLBACK_MS) before sending `\r` so Enter doesn't get
 // swallowed mid-paste-commit.
@@ -64,7 +65,7 @@ export const PASTE_RETRY_MAX_ATTEMPTS = 3;
 export const PASTE_RETRY_BASE_DELAY_MS = 800;
 // Minimum prefix length for verification (shorter prompts verify whole-text)
 const MIN_VERIFIABLE_PREFIX_LEN = 15;
-export const PASTE_MARKER_PATTERN = /\[Pasted\s*(?:text\s*#\d+[^\]]*|content\s*\d+\s*chars|~\s*\d+\s*lines?)\]/i;
+export const PASTE_MARKER_PATTERN = /\[Pasted\s*(?:text\s*#\d+[^\]]*|content\s*\d+\s*chars|~\s*\d+\s*lines?|:\s*\d+(?:\.\d+)?\s*(?:B|KB|MB))\]/i;
 export const PASTE_TO_ENTER_MIN_DELAY_MS = 200;
 export const PASTE_TO_ENTER_FALLBACK_MS = 3500;
 
@@ -126,7 +127,7 @@ export function verifyPasteRendered(strippedBuffer, prefix) {
 }
 
 /**
- * Count paste-commit markers from Claude Code, Codex, or OpenCode in
+ * Count paste-commit markers from Claude Code, Codex, OpenCode, or Grok in
  * `strippedText`.
  * Callers MUST pass ANSI-STRIPPED output (see PASTE_MARKER_PATTERN above for why
  * the raw stream never matches). Shared by both TUI consumers so the
@@ -491,6 +492,135 @@ export function createInputReadyTracker({ readyTextPattern = null, directLaunch 
       }
     },
   };
+}
+
+
+// ─── Startup-dialog answers ───────────────────────────────────────────────
+
+// One row per modal a TUI can paint before (or just after) its composer
+// exists, in the exact order the spawner's poll must try them. Adding a
+// provider's next dialog is a row here plus the `needs…`/`ack…` pair on
+// createInputReadyTracker — not another boolean in the spawner's closure and
+// another arm hundreds of lines away from it.
+//
+// `stage` says WHEN the dialog paints, which is also which providers see it:
+//   'before-composer' — runs for every TUI. Codex takes the idle/deadline
+//     paste path and these dialogs go quiet the instant they paint, so the
+//     idle heuristic reads that silence as "ready" and pastes the task into
+//     the menu, which swallows it and all three paste retries (2026-08-21,
+//     `paste-not-rendered`). Answering first is what lets the composer appear.
+//   'after-composer' — claude's auto-mode offer paints once the composer is
+//     already live, so it only concerns the positive-input-ready providers.
+//
+// `keys` is the answer written to the PTY. `\x1b[B` is arrow-down, so
+// `'\x1b[B\r'` picks option 2 and `'\x1b[B\x1b[B\r'` option 3; a bare Enter is
+// deliberately never sent, because it would accept whatever the TUI happened
+// to highlight (which can be "No, exit", or rewriting the user's global
+// permission default).
+const STARTUP_DIALOGS = [
+  // Claude can discover PortOS's parent AGENTS.md (via CLAUDE.md) from a
+  // managed-app worktree nested under data/cos/worktrees, then ask whether to
+  // allow that file's external AGENTS.md import. Decline it: the parent
+  // repository's instructions must not leak into the target app, and option 2
+  // leaves the target's own instruction files intact.
+  {
+    id: 'external-imports',
+    stage: 'before-composer',
+    answered: 'externalImportsDeclined',
+    asks: (inputReady) => inputReady.needsExternalImportsChoice,
+    keys: () => '\x1b[B\r',
+    ack: (inputReady) => inputReady.ackExternalImportsChoice(),
+    describe: (command) => `Declined ${command} external instruction imports`,
+  },
+  // Codex can present a hook-review selector before its composer exists. Do
+  // not trust hooks from an unattended run: option 3 keeps them disabled for
+  // this session and lets the agent continue without executing code outside
+  // its sandbox.
+  {
+    id: 'hook-review',
+    stage: 'before-composer',
+    answered: 'hookReviewDeclined',
+    asks: (inputReady) => inputReady.needsHookReview,
+    keys: () => '\x1b[B\x1b[B\r',
+    ack: (inputReady) => inputReady.ackHookReview(),
+    describe: (command) => `Continued ${command} without trusting startup hooks`,
+  },
+  // Auto-confirm the first-run "trust this folder?" gate so agents can run in
+  // fresh worktrees. Waits for the choices themselves to paint: Claude Code
+  // releases disagree about their ordering and newer builds can highlight
+  // "No, exit" by default, so `trustSelectionKey` — derived from the painted
+  // options — is what moves to the affirmative one before submitting.
+  {
+    id: 'folder-trust',
+    stage: 'before-composer',
+    answered: 'trustAccepted',
+    asks: (inputReady) => inputReady.needsTrust && inputReady.trustChoiceReady,
+    keys: (inputReady) => `${inputReady.trustSelectionKey}${SUBMIT_KEY}`,
+    ack: (inputReady) => inputReady.ackTrustChoice(),
+    describe: (command) => `Auto-confirmed ${command} folder-trust prompt`,
+  },
+  // Decline claude's "make auto mode your default permission mode?" offer
+  // (v2.1.233+). Unlike the trust gate this one paints AFTER the composer is
+  // live, so it swallows the paste and every retry unless it is cleared first
+  // — see TUI_AUTO_MODE_PROMPT_PATTERN. Arrow-down + Enter rather than the
+  // digit `2`: it lands on "No, keep don't ask" under both of Ink's selection
+  // models (digit-immediate-select and navigate-then-confirm).
+  {
+    id: 'auto-mode',
+    stage: 'after-composer',
+    answered: 'autoModeDeclined',
+    asks: (inputReady) => inputReady.needsAutoModeChoice,
+    keys: () => '\x1b[B\r',
+    ack: (inputReady) => inputReady.ackAutoModeChoice(),
+    describe: (command) => `Declined ${command} auto-mode default offer`,
+  },
+];
+
+/**
+ * A fresh "which startup dialogs has this session already answered?" record —
+ * one value per STARTUP_DIALOGS row, so a new row needs no caller edit.
+ *
+ * The tracker's own `needs…` getters go false on ack, so they already stop a
+ * second answer on their own. These latches are the second guard the spawner
+ * carried as four sibling booleans, kept rather than reasoned away in a change
+ * whose contract is that nothing behaves differently.
+ */
+export const createStartupDialogAnswers = () =>
+  Object.fromEntries(STARTUP_DIALOGS.map((dialog) => [dialog.answered, false]));
+
+/**
+ * Answer at most ONE unanswered startup dialog for `stage`, in table order.
+ *
+ * One per call on purpose: answering changes what the TUI is showing, so the
+ * caller returns to its poll and re-reads the tracker before trying the next.
+ * The stage split is also what preserves the caller's original ordering — the
+ * "trust heading painted but its choices are unrecognized" failure check sits
+ * between the two stages and must keep winning over the after-composer arm.
+ *
+ * Mutates `answers` in place: the record is the session's, not this call's.
+ *
+ * @param {object} args
+ * @param {object} args.inputReady - createInputReadyTracker instance.
+ * @param {object} args.answers - createStartupDialogAnswers() record.
+ * @param {'before-composer'|'after-composer'} args.stage
+ * @param {string} args.command - TUI command name, for the transcript line.
+ * @param {(keys: string) => void} args.write - writes the answer to the PTY.
+ * @returns {{ id: string, message: string } | null} the dialog answered and
+ *   the transcript phrase for it, or null when there was nothing to answer.
+ *   The caller owns the log line and the idle-clock rewind, which differ by
+ *   stage.
+ */
+export function answerStartupDialogs({ inputReady, answers, stage, command, write }) {
+  for (const dialog of STARTUP_DIALOGS) {
+    if (dialog.stage !== stage) continue;
+    if (answers[dialog.answered]) continue;
+    if (!dialog.asks(inputReady)) continue;
+    answers[dialog.answered] = true;
+    write(dialog.keys(inputReady));
+    dialog.ack(inputReady);
+    return { id: dialog.id, message: dialog.describe(command) };
+  }
+  return null;
 }
 
 

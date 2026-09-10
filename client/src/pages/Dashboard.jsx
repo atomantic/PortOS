@@ -106,12 +106,12 @@ export default function Dashboard() {
     // Apps and the remaining widgets are independent hydration streams. Health
     // and daily-actions in particular can involve slow subsystem/database work
     // that should not hold every widget behind one Promise.all barrier.
-    const appsRead = api.getApps()
+    const appsRead = api.getApps({ includeQuality: true })
       .catch((err) => { setDataError(err.message); return null; })
       .finally(() => setAppsReadSettled(true));
     const secondaryRead = Promise.all([
       refreshHealth(),
-      api.getUsage().catch(() => null).then(setUsage),
+      api.getHourlyUsage({ silent: true }).catch(() => null).then(setUsage),
       api.getTribeCareSummary({ silent: true }).catch(() => null).then(setTribeCare),
       api.getFeedStats({ silent: true }).catch(() => null).then(setFeeds),
       api.getMeatspaceLoggingStats({ silent: true }).catch(() => null).then(setMeatspaceLogging),

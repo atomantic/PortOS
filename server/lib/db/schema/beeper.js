@@ -62,7 +62,7 @@ export const beeperDdl = [
   // repoint every child row — `source_chat_id` is the Beeper-side identity.
   // Pin/archive/mute/low-priority/unread state is Beeper's own state, mirrored
   // read-only; PortOS never invents a second source of truth for it. `type`
-  // is intentionally unconstrained: db.catalogDdlParity.test.js forbids a
+  // is intentionally unconstrained: db.ddlParity.test.js forbids a
   // hardcoded enum constraint on any `type` column in this schema (the same
   // rule that keeps catalog_ingredients.type app-layer-gated), so a new
   // Beeper chat type never needs a two-file migration to accept.
@@ -321,7 +321,7 @@ export const beeperDdl = [
   // the next purge + resweep would still lose it. This promotes each of those
   // to a durable claim. It is not in `server/scripts/init-db.sql`: that file
   // provisions a FRESH database, where there is no participant row to
-  // promote, and the parity test (`server/lib/db.catalogDdlParity.test.js`)
+  // promote, and the parity test (`server/lib/db.ddlParity.test.js`)
   // compares table/index/trigger shape, which this statement does not touch.
   //
   //   - The `NOT EXISTS` guard makes it ONE-SHOT. `ensureSchema()` does not

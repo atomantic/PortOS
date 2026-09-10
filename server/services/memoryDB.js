@@ -13,7 +13,7 @@ import { query, withTransaction, pgvectorToArray, arrayToPgvector } from '../lib
 import { cosEvents } from './cosEvents.js';
 import * as notifications from './notifications.js';
 import { DEFAULT_MEMORY_CONFIG, generateSummary, decrementAgentPendingApproval } from './memoryConfig.js';
-import { getInstanceId } from './instances.js';
+import { getInstanceId } from './instanceIdentity.js';
 
 const protectedMindMemoryTags = Object.values(PERSISTENT_MIND_MEMORY_PROTECTION_TAGS);
 

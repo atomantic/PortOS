@@ -37,8 +37,9 @@ import {
   bibleFieldIsBlank,
   characterPsychologyIsBlank,
 } from './universeBibleCompleteness.js';
-import { PSYCHOLOGY_DRIVE_AXES, isBlank } from './storyBible.js';
+import { PSYCHOLOGY_DRIVE_AXES } from './storyBible.js';
 import { INTEGRITY_DIMENSION_IDS, INTEGRITY_FINDING_KINDS } from './characterIntegrityVocabulary.js';
+import { isEmptyScalar } from './objects.js';
 
 const FINDING_KIND_SET = new Set(INTEGRITY_FINDING_KINDS);
 const DIMENSION_ID_SET = new Set(INTEGRITY_DIMENSION_IDS);
@@ -87,7 +88,7 @@ export function characterIntegrityDepth(entry) {
   if (!entry || typeof entry !== 'object') return 'light';
   const assessment = entry.psychology?.assessment;
   if ((assessment === 'unknown' || assessment === 'not-applicable')
-    && !isBlank(entry.psychology?.assessmentNote)) {
+    && !isEmptyScalar(entry.psychology?.assessmentNote)) {
     return 'explained';
   }
   if (roleIsMinor(entry.role) || entry.arcType === 'flat') return 'light';
@@ -155,7 +156,7 @@ export function characterCompletenessFindings(entry) {
       }));
       continue;
     }
-    if (isBlank(entry.psychology.theoryOfControl)) {
+    if (isEmptyScalar(entry.psychology.theoryOfControl)) {
       findings.push(makeFinding({
         ...base,
         field: 'psychology.theoryOfControl',
@@ -164,7 +165,7 @@ export function characterCompletenessFindings(entry) {
     }
     for (const axis of PSYCHOLOGY_DRIVE_AXES) {
       for (const leaf of ['desire', 'fear']) {
-        if (!isBlank(entry.psychology.drives?.[axis]?.[leaf])) continue;
+        if (!isEmptyScalar(entry.psychology.drives?.[axis]?.[leaf])) continue;
         findings.push(makeFinding({
           ...base,
           field: `psychology.drives.${axis}.${leaf}`,

@@ -156,16 +156,14 @@ export default function ProviderModelSelector({
   const visibleProviders = selectableProviders(providerList, { selectedId: selectedProviderId, allowed: providerAllowed });
   const compatibleModels = filterHardwareCompatibleProviderModels(availableModels, selectedProvider)
     .filter((model) => !modelAllowed || modelAllowed(model, selectedProvider));
-  const selectedModelIsUnavailable = Boolean(
-    selectedModel
-    && !isProviderModelHardwareCompatible(selectedProvider, selectedModel)
+  // Keep a configured default visible even when it is a CLI-default sentinel
+  // omitted from the browsable catalog, alongside unavailable saved pins.
+  const preserveSelectedModel = selectedModel && (
+    selectedModel === selectedProvider?.defaultModel
+    || !isProviderModelHardwareCompatible(selectedProvider, selectedModel)
+    || (modelAllowed && !modelAllowed(selectedModel, selectedProvider))
   );
-  const selectedModelIsDisallowed = Boolean(
-    selectedModel
-    && modelAllowed
-    && !modelAllowed(selectedModel, selectedProvider)
-  );
-  const modelOptions = (selectedModelIsUnavailable || selectedModelIsDisallowed)
+  const modelOptions = preserveSelectedModel
     && !compatibleModels.some((model) => modelOption(model)?.value === selectedModel)
     ? [selectedModel, ...compatibleModels]
     : compatibleModels;
@@ -197,9 +195,11 @@ export default function ProviderModelSelector({
       : surviving;
     if (filteredSurviving !== effort) onEffortChange(filteredSurviving);
   };
-  // `row` was sized for two selects; the effort control makes it three, which is
-  // unreadable at phone width — stack until `sm` when it's showing.
-  const rowClass = showEffort ? 'flex flex-col sm:flex-row sm:items-center gap-2' : 'flex items-center gap-2';
+  // Use available container space, including narrow drawers on desktop. Bound
+  // labeled fields so a lone provider does not stretch across the whole page.
+  const rowClass = compact
+    ? (showEffort ? 'flex flex-col sm:flex-row sm:items-center gap-2' : 'flex items-center gap-2')
+    : 'grid grid-cols-[repeat(auto-fit,minmax(min(100%,16rem),24rem))] items-start gap-2';
   const wrapperClass = layout === 'stacked' ? 'flex flex-col gap-1' : rowClass;
   return (
     <div className={wrapperClass}>
@@ -219,7 +219,7 @@ export default function ProviderModelSelector({
               same broken control. */}
           {loading
             ? <option value="">Loading providers…</option>
-            : emptyProviderOption != null && <option value="">{emptyProviderOption}</option>}
+            : emptyProviderOption != null && <option value="">{effectiveProviderId && selectedProvider?.name && typeof emptyProviderOption === 'string' && !emptyProviderOption.includes(selectedProvider.name) ? `${emptyProviderOption} — ${selectedProvider.name}` : emptyProviderOption}</option>}
           {visibleProviders.map((p) => {
             const hardwareUnavailable = !isProviderHardwareCompatible(p);
             const policyDisallowed = Boolean(providerAllowed && !providerAllowed(p));
@@ -246,7 +246,7 @@ export default function ProviderModelSelector({
             aria-label={compact ? 'Model' : undefined}
             className={SELECT_CLASS}
           >
-            {emptyModelOption != null && <option value="">{emptyModelOption}</option>}
+            {emptyModelOption != null && <option value="">{selectedProvider?.defaultModel ? `${emptyModelOption} — ${selectedProvider.defaultModel}` : emptyModelOption}</option>}
             {modelOptions.map(m => {
               const opt = modelOption(m);
               if (!opt) return null;

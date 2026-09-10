@@ -432,35 +432,40 @@ export default function InboxTab({ accounts }) {
     );
   }
 
+  const toolbarBtn = 'flex items-center justify-center gap-1 px-2.5 sm:px-3 py-2 rounded-lg text-sm whitespace-nowrap transition-colors disabled:opacity-50 shrink-0';
+
   return (
-    <div className="space-y-4">
-      <div className="flex items-center gap-3">
-        <div className="relative flex-1">
-          <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500" />
-          <input
-            type="text"
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            placeholder="Search messages..."
-            aria-label="Search messages"
-            className="w-full pl-9 pr-3 py-2 bg-port-bg border border-port-border rounded-lg text-sm text-white placeholder-gray-500 focus:outline-none focus:border-port-accent"
-          />
+    <div className="space-y-4 min-w-0">
+      <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center sm:gap-3">
+        <div className="flex items-center gap-2 min-w-0 w-full sm:flex-1">
+          <div className="relative min-w-0 flex-1">
+            <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500" />
+            <input
+              type="text"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Search messages..."
+              aria-label="Search messages"
+              className="w-full pl-9 pr-3 py-2 bg-port-bg border border-port-border rounded-lg text-sm text-white placeholder-gray-500 focus:outline-none focus:border-port-accent"
+            />
+          </div>
+          <select
+            aria-label="Account"
+            value={selectedAccount}
+            onChange={(e) => setSelectedAccount(e.target.value)}
+            className="max-w-[40%] sm:max-w-[12rem] min-w-0 px-2 sm:px-3 py-2 bg-port-bg border border-port-border rounded-lg text-sm text-white focus:outline-none focus:border-port-accent"
+          >
+            <option value="">All accounts</option>
+            {accountList.map(a => (
+              <option key={a.id} value={a.id}>{a.name}</option>
+            ))}
+          </select>
         </div>
-        <select
-          aria-label="Account"
-          value={selectedAccount}
-          onChange={(e) => setSelectedAccount(e.target.value)}
-          className="px-3 py-2 bg-port-bg border border-port-border rounded-lg text-sm text-white focus:outline-none focus:border-port-accent"
-        >
-          <option value="">All accounts</option>
-          {accountList.map(a => (
-            <option key={a.id} value={a.id}>{a.name}</option>
-          ))}
-        </select>
+        <div className="flex flex-wrap items-center gap-2">
         <button
           onClick={handleEvaluate}
           disabled={evaluating || syncing}
-          className="flex items-center gap-1 px-3 py-2 bg-port-accent-2/10 text-port-accent-2 rounded-lg text-sm hover:bg-port-accent-2/20 transition-colors disabled:opacity-50"
+          className={`${toolbarBtn} bg-port-accent-2/10 text-port-accent-2 hover:bg-port-accent-2/20`}
           title="AI triage — evaluate messages for recommended actions"
         >
           <Sparkles size={14} className={evaluating ? 'animate-pulse' : ''} />
@@ -469,7 +474,7 @@ export default function InboxTab({ accounts }) {
         <button
           onClick={() => handleSync('unread')}
           disabled={syncing}
-          className="flex items-center gap-1 px-3 py-2 bg-port-accent/10 text-port-accent rounded-lg text-sm hover:bg-port-accent/20 transition-colors disabled:opacity-50"
+          className={`${toolbarBtn} bg-port-accent/10 text-port-accent hover:bg-port-accent/20`}
           title="Sync unread messages from all enabled accounts"
         >
           <RefreshCw size={14} className={syncing ? 'animate-spin' : ''} />
@@ -478,7 +483,7 @@ export default function InboxTab({ accounts }) {
         <button
           onClick={() => handleSync('full')}
           disabled={syncing}
-          className="flex items-center gap-1 px-3 py-2 bg-port-border text-gray-300 rounded-lg text-sm hover:bg-port-border/80 transition-colors disabled:opacity-50"
+          className={`${toolbarBtn} bg-port-border text-gray-300 hover:bg-port-border/80`}
           title="Full sync — fetch all messages (slower)"
         >
           Full Sync
@@ -494,7 +499,7 @@ export default function InboxTab({ accounts }) {
               fetchMessages();
             }}
             disabled={fetchingFull}
-            className="flex items-center gap-1 px-3 py-2 bg-port-warning/10 text-port-warning rounded-lg text-sm hover:bg-port-warning/20 transition-colors disabled:opacity-50"
+            className={`${toolbarBtn} bg-port-warning/10 text-port-warning hover:bg-port-warning/20`}
             title="Fetch full body content for messages with preview-only text"
           >
             <RefreshCw size={14} className={fetchingFull ? 'animate-spin' : ''} />
@@ -512,17 +517,22 @@ export default function InboxTab({ accounts }) {
               fetchMessages();
             }}
             disabled={fetchingFull}
-            className="flex items-center gap-1 px-3 py-2 bg-port-error/10 text-port-error rounded-lg text-sm hover:bg-port-error/20 transition-colors disabled:opacity-50"
+            className={`${toolbarBtn} bg-port-error/10 text-port-error hover:bg-port-error/20`}
             title="Re-fetch body content for ALL messages (use if content was imported incorrectly)"
           >
             <RefreshCw size={14} className={fetchingFull ? 'animate-spin' : ''} />
             {fetchingFull ? 'Fetching...' : 'Re-fetch All Content'}
           </button>
         )}
+        </div>
       </div>
 
-      {/* Triage filter tabs */}
-      <div className="flex items-center gap-1 border-b border-port-border pb-1">
+      {/* Triage filter tabs — scroll on a phone rather than clipping "All" / "Untriaged". */}
+      <div
+        className="-mx-1 px-1 flex items-center gap-1 border-b border-port-border pb-1 overflow-x-auto scrollbar-hide touch-pan-x"
+        role="tablist"
+        aria-label="Triage filters"
+      >
         {TRIAGE_TABS.map(tab => {
           const count = messages.filter(tab.filter).length;
           const TabIcon = tab.icon;
@@ -530,8 +540,10 @@ export default function InboxTab({ accounts }) {
           return (
             <button
               key={tab.key}
+              role="tab"
+              aria-selected={isActive}
               onClick={() => setActiveTab(tab.key)}
-              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-t text-xs transition-colors ${
+              className={`flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 rounded-t text-xs whitespace-nowrap shrink-0 transition-colors ${
                 isActive
                   ? 'bg-port-card text-white border border-port-border border-b-transparent -mb-[1px]'
                   : 'text-gray-500 hover:text-gray-300'
@@ -562,12 +574,13 @@ export default function InboxTab({ accounts }) {
           return (
             <div
               key={msg.id}
-              className={`flex items-center gap-3 p-3 rounded-lg transition-colors hover:bg-port-card group ${
+              className={`flex flex-col gap-2 p-3 rounded-lg transition-colors hover:bg-port-card group min-w-0 sm:flex-row sm:items-center sm:gap-3 ${
                 msg.isRead && !msg.isUnread ? 'opacity-70' : ''
               }`}
             >
+              <div className="flex items-start gap-2 min-w-0 sm:items-center sm:gap-3 sm:flex-1">
               {/* Priority dot + flags */}
-              <div className="flex flex-col items-center gap-1 w-4 shrink-0">
+              <div className="flex flex-col items-center gap-1 w-4 shrink-0 pt-1 sm:pt-0">
                 {ev && <span className={`w-2 h-2 rounded-full ${PRIORITY_DOT[ev.priority] || PRIORITY_DOT.medium}`} title={`${ev.priority} priority`} />}
                 {msg.isPinned && <Pin size={10} className="text-gray-500" />}
                 {msg.isFlagged && <Flag size={10} className="text-port-warning" />}
@@ -578,8 +591,8 @@ export default function InboxTab({ accounts }) {
                 onClick={() => openMessage(msg)}
                 className="flex-1 min-w-0 text-left"
               >
-                <div className="flex items-center gap-2">
-                  <span className={`text-sm truncate ${msg.isUnread || !msg.isRead ? 'text-white font-medium' : 'text-gray-400'}`}>
+                <div className="flex items-center gap-2 min-w-0">
+                  <span className={`text-sm truncate min-w-0 ${msg.isUnread || !msg.isRead ? 'text-white font-medium' : 'text-gray-400'}`}>
                     {msg.from?.name || msg.from?.email || 'Unknown'}
                   </span>
                   <span className="text-xs text-gray-600 shrink-0">
@@ -593,9 +606,10 @@ export default function InboxTab({ accounts }) {
                   {msg.bodyText?.substring(0, 100) || ''}
                 </div>
               </button>
+              </div>
 
-              {/* Action buttons — always show all, highlight AI recommendation */}
-              <div className="flex items-center gap-1 shrink-0">
+              {/* Action buttons — wrap under the preview on a phone so the sender isn't clipped. */}
+              <div className="flex items-center gap-1 shrink-0 pl-6 sm:pl-0">
                 {ACTION_ORDER.map(actionKey => {
                   const cfg = ACTION_CONFIG[actionKey];
                   const Icon = cfg.icon;

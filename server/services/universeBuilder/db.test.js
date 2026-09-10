@@ -97,6 +97,26 @@ describe.skipIf(!runDb)('universeBuilder DB adapter round-trip', () => {
     expect(ids).toEqual(['dead', 'ghost', 'live']);
   });
 
+  it('listLiveIds returns only non-deleted ids', async () => {
+    await db.writeRaw('live', U('live'));
+    await db.writeRaw('dead', U('dead', { deleted: true, deletedAt: '2026-02-02T00:00:00.000Z' }));
+    await db.writeRaw('ghost', U('ghost', { ephemeral: true }));
+    expect((await db.listLiveIds()).sort()).toEqual(['ghost', 'live']);
+  });
+
+  it('listTombstoneIdsBefore returns only tombstones older than the cutoff, keeping a NULL deleted_at', async () => {
+    await db.writeRaw('live', U('live'));
+    await db.writeRaw('old', U('old', { deleted: true, deletedAt: '2026-01-01T00:00:00.000Z' }));
+    await db.writeRaw('new', U('new', { deleted: true, deletedAt: '2026-06-01T00:00:00.000Z' }));
+    // writeRaw's mirrorTimestamp(record.deletedAt, null) falls back to NULL
+    // (not NOW()) for an unparseable deletedAt — `deleted_at < $1` is never
+    // true against NULL, so this row is conservatively excluded from every
+    // cutoff, matching the JS filter's "unparseable → kept" rule.
+    await db.writeRaw('bad', U('bad', { deleted: true, deletedAt: 'not-a-date' }));
+    const cutoff = Date.parse('2026-03-01T00:00:00.000Z');
+    expect(await db.listTombstoneIdsBefore(cutoff)).toEqual(['old']);
+  });
+
   it('listRaw returns every record body verbatim in one query', async () => {
     await db.writeRaw('u-1', U('u-1', { logline: 'x' }));
     await db.writeRaw('u-2', U('u-2'));

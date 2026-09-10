@@ -39,6 +39,11 @@ let voiceListCache = null;
 let voiceListCacheAt = 0;
 let voiceListPromise = null;
 
+const normalizeCatalogVoiceId = (voiceId) =>
+  typeof voiceId === 'string' && voiceId.startsWith('qwen3:')
+    ? `qwen3-tts:${voiceId.slice('qwen3:'.length)}`
+    : voiceId;
+
 const cacheIsFresh = () =>
   voiceListCache !== null && (Date.now() - voiceListCacheAt) < VOICE_LIST_CACHE_TTL_MS;
 
@@ -125,6 +130,7 @@ export default function VoicePicker({
     return acc;
   }, {}), [voices]);
   const engineKeys = useMemo(() => Object.keys(byEngine).sort(), [byEngine]);
+  const catalogValue = normalizeCatalogVoiceId(value);
 
   const handleAudition = async () => {
     if (!value || previewingRef.current) return;
@@ -145,7 +151,7 @@ export default function VoicePicker({
     <div className="flex items-center gap-1.5 min-w-0">
       <select
         id={id}
-        value={value || ''}
+        value={catalogValue || ''}
         onChange={(e) => onChange?.(e.target.value || null)}
         disabled={disabled || loading}
         className="flex-1 min-w-0 px-1.5 py-0.5 text-xs bg-port-bg border border-port-border rounded text-white disabled:opacity-50"
@@ -155,8 +161,8 @@ export default function VoicePicker({
             catalog (engine uninstalled, voice renamed) so the user can see
             what they had bound before — losing it silently to a dropdown
             reset would mask the underlying drift. */}
-        {value && !voices.some((v) => v.id === value) ? (
-          <option value={value}>{value} (unavailable)</option>
+        {value && !voices.some((v) => v.id === catalogValue) ? (
+          <option value={catalogValue}>{value} (unavailable)</option>
         ) : null}
         {engineKeys.map((engine) => (
           <optgroup key={engine} label={engine.charAt(0).toUpperCase() + engine.slice(1)}>

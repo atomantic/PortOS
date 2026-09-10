@@ -2,7 +2,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const execGitMock = vi.hoisted(() => vi.fn());
 
-vi.mock('../lib/execGit.js', () => ({ execGit: execGitMock }));
+vi.mock('../lib/execGit.js', () => ({ execGit: execGitMock,
+  execGitSafe: (...args) => execGitMock(...args).catch(err => ({ exitCode: 1, stdout: '', stderr: err.message })) }));
 
 import { updateDefaultBranch } from './git.js';
 
@@ -32,6 +33,13 @@ beforeEach(() => {
 });
 
 describe('updateDefaultBranch', () => {
+  it('keeps managed runtime updates on the configured branch', async () => {
+    withGit({ 'config --get portos.runtimeBranch': ok('portos') });
+    expect(await updateDefaultBranch('/repo')).toMatchObject({ success: true, branch: 'portos' });
+    expect(commands()).toContain('pull --ff-only origin portos');
+    expect(commands()).not.toContain('checkout main');
+  });
+
   it('checks out origin default branch and fast-forwards it without a rebase', async () => {
     const result = await updateDefaultBranch('/repo');
 

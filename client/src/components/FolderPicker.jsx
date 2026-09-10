@@ -1,14 +1,15 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { Folder, FolderOpen, ChevronUp, HardDrive, Home, X, Check, AlertCircle } from 'lucide-react';
+import { File, Folder, FolderOpen, ChevronUp, HardDrive, Home, X, Check, AlertCircle } from 'lucide-react';
 import * as api from '../services/api';
 import BrailleSpinner from './BrailleSpinner';
 import Modal from './ui/Modal.jsx';
 
-export default function FolderPicker({ value, onChange, defaultPath }) {
+export default function FolderPicker({ value, onChange, defaultPath, mode = 'directory', ariaLabel = 'Browse folders' }) {
   const [isOpen, setIsOpen] = useState(false);
   const [currentPath, setCurrentPath] = useState('');
   const [parentPath, setParentPath] = useState(null);
   const [directories, setDirectories] = useState([]);
+  const [files, setFiles] = useState([]);
   const [drives, setDrives] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
@@ -37,17 +38,18 @@ export default function FolderPicker({ value, onChange, defaultPath }) {
       setCurrentPath(result.currentPath);
       setParentPath(result.parentPath);
       setDirectories(result.directories || []);
+      setFiles(result.files || []);
       setDrives(result.drives ?? null);
     };
     let lastError = null;
-    let result = await api.getDirectories(path).catch((err) => {
+    let result = await api.getDirectories(path, { includeFiles: mode === 'file' }).catch((err) => {
       lastError = err;
       return null;
     });
     if (!result && fallbackToDefault && path != null && isPathAbsentError(lastError)) {
       defaultPathUnavailableRef.current = true;
       lastError = null;
-      result = await api.getDirectories(null).catch((err) => {
+      result = await api.getDirectories(null, { includeFiles: mode === 'file' }).catch((err) => {
         lastError = err;
         return null;
       });
@@ -58,16 +60,17 @@ export default function FolderPicker({ value, onChange, defaultPath }) {
       setError(lastError.message || 'Failed to load directory');
     }
     setLoading(false);
-  }, []);
+  }, [mode]);
 
   // Load initial directory when opened
   useEffect(() => {
     if (isOpen) {
       const useDefault = !value && !!defaultPath && !defaultPathUnavailableRef.current;
-      const initialPath = value || (useDefault ? defaultPath : null);
+      const selectedDirectory = mode === 'file' && value ? value.replace(/[/\\][^/\\]+$/, '') : value;
+      const initialPath = selectedDirectory || (useDefault ? defaultPath : null);
       loadDirectory(initialPath, { fallbackToDefault: useDefault });
     }
-  }, [isOpen, loadDirectory, value, defaultPath]);
+  }, [isOpen, loadDirectory, value, defaultPath, mode]);
 
   // Reset the "default unavailable" cache when the caller changes which
   // defaultPath to try — a different path is worth probing again.
@@ -90,8 +93,8 @@ export default function FolderPicker({ value, onChange, defaultPath }) {
         type="button"
         onClick={() => setIsOpen(true)}
         className="px-3 py-3 bg-port-border hover:bg-port-border/80 text-white rounded-lg transition-colors"
-        title="Browse folders"
-        aria-label="Browse folders"
+        title={ariaLabel}
+        aria-label={ariaLabel}
       >
         <Folder size={20} />
       </button>
@@ -114,7 +117,7 @@ export default function FolderPicker({ value, onChange, defaultPath }) {
         >
           {/* Header */}
           <div className="flex items-center justify-between p-4 border-b border-port-border">
-            <h3 id="folder-picker-title" className="text-lg font-semibold text-white">Select Folder</h3>
+            <h3 id="folder-picker-title" className="text-lg font-semibold text-white">{mode === 'file' ? 'Select File' : 'Select Folder'}</h3>
             <button
               type="button"
               onClick={() => setIsOpen(false)}
@@ -208,6 +211,15 @@ export default function FolderPicker({ value, onChange, defaultPath }) {
                   </button>
                 ))}
 
+                {files.map(file => (
+                  <button key={file.path} type="button"
+                    onClick={() => { onChange(file.path); setIsOpen(false); }}
+                    className="w-full flex items-center gap-3 px-3 py-2 text-left rounded-lg hover:bg-port-border/50 text-white">
+                    <File size={18} className="shrink-0" />
+                    <span className="truncate">{file.name}</span>
+                  </button>
+                ))}
+
                 {directories.length === 0 && !parentPath && (
                   <div className="text-center text-gray-500 py-8">
                     No subdirectories
@@ -229,11 +241,11 @@ export default function FolderPicker({ value, onChange, defaultPath }) {
             <button
               type="button"
               onClick={handleSelect}
-              disabled={!currentPath || loading || !!error}
+              disabled={mode === 'file' || !currentPath || loading || !!error}
               className="flex items-center gap-2 px-4 py-2 bg-port-accent hover:bg-port-accent/80 text-white rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
             >
               <Check size={18} />
-              Select This Folder
+              {mode === 'file' ? 'Choose a file above' : 'Select This Folder'}
             </button>
           </div>
         </Modal>

@@ -1,6 +1,8 @@
 // @vitest-environment node
 
 import { describe, it, expect } from 'vitest';
+import { fitFades as sharedFitFades } from '../../../server/lib/videoTimelineFades.js';
+import { fitFades as previewFitFades } from './videoTimelineModel.js';
 import {
   assetUrl,
   segmentDuration,
@@ -334,5 +336,11 @@ describe('overlay fade parity when the timeline clamps the window', () => {
     expect(overlayOpacityAt(overlay, 5.5, 30)).toBe(1);
     expect(overlayOpacityAt(overlay, 6.5, 30)).toBeCloseTo(0.5);
     expect(overlayOpacityAt(overlay, 7.5, 30)).toBe(0);
+  });
+});
+
+describe('shared timeline fade contract', () => {
+  it('uses the export fade implementation for preview and trim edits', () => {
+    expect(previewFitFades).toBe(sharedFitFades);
   });
 });

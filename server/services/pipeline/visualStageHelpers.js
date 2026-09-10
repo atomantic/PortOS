@@ -23,7 +23,8 @@ import { loraCompatKey } from '../../lib/runners.js';
 import { resolveCharacterLoras } from '../characterLoraResolver.js';
 import { pickCanon } from './seriesCanon.js';
 import { IMAGE_GEN_MODE } from '../imageGen/modes.js';
-import { pickUsableMode, renderTargetDefaults, resolveRenderTargetConfig } from '../imageGen/cloudProviderConfig.js';
+import { resolveRenderTargetConfig } from '../imageGen/cloudProviderConfig.js';
+import { imageModeCandidates, pickUsableMode } from '../../lib/renderModeLadder.js';
 import { RENDER_TARGET, recordRenderPin } from '../../lib/renderTargets.js';
 import { resolveImageCleaners } from '../imageGen/index.js';
 
@@ -53,31 +54,31 @@ const applyWorldStyle = (prompt, world, series = null) => {
 //   1. Per-request override (`options.mode`) — set by the stage's persisted
 //      `genConfig` or an explicit UI selection. A cloud mode is only honored
 //      when its `imageGen.<mode>.enabled` toggle is on; a stale 'codex'
-//      override from before the toggle was turned off falls through.
-//   2. Saved dispatcher default (`settings.imageGen.mode`) — same usability
-//      gate, and non-queueable modes (external SD-API, which this surface
-//      doesn't proxy) never qualify.
-//   3. Auto-default — prefer an enabled cloud backend, since cloud image gen
+//      override from before the toggle was turned off falls through. This is
+//      the caller's own explicit request, not a preference, so it is
+//      prepended here rather than folded into the shared candidate order.
+//   2. The series' persisted per-record pin (#3231 Phase 3) — "this series
+//      renders on codex" beats the surface default, loses to #1.
+//   3. The pipeline-visual `renderDefaults` pin (#3231 Phase 2) — "this
+//      surface renders on codex" beats the install-wide default.
+//   4. Saved dispatcher default (`settings.imageGen.mode`).
+//   5. Auto-default — prefer an enabled cloud backend, since cloud image gen
 //      produces print-quality comic pages out of the box. Otherwise fall back
 //      to local diffusion (flux-1) the way the original default behaved.
-// `pickUsableMode` appends the cloud-then-local tail, so this only lists the
-// two explicit candidates. (Sprite renders use the equivalent
-// `resolveQueueImageMode` ladder in imageGen/modes.js — #2896 hoisted that
-// one first; this is the wider param-assembly consolidation from #2881.)
-// The pipeline-visual renderDefaults pin (#3231) slots between the explicit
-// per-request override and the install default — usability-gated like both.
-// The series' persisted per-record pin (#3231 Phase 3) sits between the
-// per-request override and the install-wide target pin: "this series renders
-// on codex" beats the surface default, loses to an explicit UI selection.
+// Candidates 2-4 are `imageModeCandidates` (lib/renderModeLadder.js, #6815) —
+// the SAME candidate order the "Auto → …" label in VisualGenSettings.jsx
+// resolves through, so that panel can't drift from what this actually
+// dispatches. `pickUsableMode` appends the cloud-then-local tail for #5.
+// (Sprite renders use the equivalent `resolveQueueImageMode` ladder in
+// imageGen/modes.js — #2896 hoisted that one first; this is the wider
+// param-assembly consolidation from #2881.)
 // An i2i render ("use proof as base", a reference page, a refine pass) walks
 // this same ladder — every queueable backend accepts an input image, so there
 // is nothing for it to skip. #3243 added an `edit` flag here to route redraws
 // away from Agy; Agy's tool does take input images, so the flag is gone.
 const resolveMode = (options, settings, series = null) => pickUsableMode(settings, [
   options.mode,
-  recordRenderPin(series).mode,
-  renderTargetDefaults(settings, RENDER_TARGET.PIPELINE_VISUAL).imageMode,
-  settings?.imageGen?.mode,
+  ...imageModeCandidates(settings, RENDER_TARGET.PIPELINE_VISUAL, series),
 ]);
 
 /**

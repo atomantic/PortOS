@@ -32,12 +32,6 @@ function describeSchedule(node) {
   if (schedule.cronSchedule) return describeRecurrence(schedule.cronSchedule);
   if (schedule.cronExpression) return describeCron(schedule.cronExpression) || schedule.cronExpression;
   if (node.kind === 'job' && schedule.scheduledTime) return `${schedule.type} at ${schedule.scheduledTime}`;
-  if (schedule.type === 'custom' && schedule.intervalMs) {
-    const intervalHours = schedule.intervalMs / 3_600_000;
-    if (intervalHours >= 24) return `every ${Math.round(intervalHours / 24)}d`;
-    if (intervalHours >= 1) return `every ${Math.round(intervalHours)}h`;
-    return `every ${Math.round(schedule.intervalMs / 60_000)}m`;
-  }
   return schedule.type?.replaceAll('-', ' ') || 'flexible';
 }
 
@@ -323,7 +317,7 @@ export default function WorkflowTab({ apps, providers, providersLoaded }) {
       if (!windowsByNode.has(window.nodeId)) windowsByNode.set(window.nodeId, []);
       windowsByNode.get(window.nodeId).push(window);
     }
-    const isFlexible = node => node.kind === 'task' && ['rotation', 'on-demand'].includes(node.schedule?.type);
+    const isFlexible = node => node.kind === 'task' && node.schedule?.type === 'on-demand' && !node.schedule?.perpetual;
     const scheduled = graph.nodes
       .filter(node => node.enabled && !isFlexible(node))
       .sort((a, b) => {
@@ -431,7 +425,7 @@ export default function WorkflowTab({ apps, providers, providersLoaded }) {
               {model.flexible.length > 0 && (
                 <section className="rounded-lg border border-dashed border-port-border/60 bg-port-card/20 p-3">
                   <div className="flex items-center gap-2 text-xs font-medium text-gray-400"><RotateCcw className="h-3.5 w-3.5" /> Unpinned runner queue</div>
-                  <p className="mt-1 text-[11px] text-gray-600">These are active, but rotation and on-demand schedules do not promise a clock time.</p>
+                  <p className="mt-1 text-[11px] text-gray-600">These active on-demand tasks do not promise a clock time.</p>
                   <div className="mt-2 flex flex-wrap gap-2">
                     {model.flexible.map(node => {
                       const canExpand = node.kind === 'task' && (node.totalAppCount || 0) > 0;

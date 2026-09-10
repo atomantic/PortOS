@@ -19,9 +19,8 @@ import { isPlainObject } from './objects.js';
 
 export const CODEX_CONFIGURED_DEFAULT = 'codex-configured-default';
 export const ANTIGRAVITY_CONFIGURED_DEFAULT = 'antigravity-configured-default';
-// Grok Build CLI/TUI: PortOS does not select a model — the local `grok` binary
-// uses its own latest default. Stored as a sentinel so pickers hide the model
-// dropdown (same UX as Codex / Antigravity).
+// Legacy opt-in sentinel: shipped Grok Build providers now pin a concrete model
+// so displayed model, execution, and planner attribution agree.
 export const GROK_CONFIGURED_DEFAULT = 'grok-configured-default';
 // Kimi Code CLI/TUI: same posture as Grok/Antigravity — PortOS does not select a
 // model; the local `kimi` binary uses its own configured default. Stored as a

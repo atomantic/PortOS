@@ -1,3 +1,4 @@
+import { AUDIT_DEFINITIONS } from '../lib/auditCatalog.js';
 /**
  * CoS Task Schedule Routes
  */
@@ -13,7 +14,7 @@ import { EFFORT_LEVELS } from '../lib/providerModels.js';
 import { INTERVAL_TYPES, decodeIntervalType, isCronExpression, isKnownIntervalType } from '../services/taskScheduleConstants.js';
 import { normalizeSuggestedAfter, SUGGESTED_AFTER_MAX } from '../lib/scheduleRunOrder.js';
 import { findCronExpressionError } from '../lib/cronValidation.js';
-import { listMaintenanceRuns, resumeMaintenanceRun, startMaintenanceRun, stopMaintenanceRun } from '../services/maintenanceRun.js';
+import { updateMaintenanceStep, listMaintenanceRuns, resumeMaintenanceRun, startMaintenanceRun, stopMaintenanceRun } from '../services/maintenanceRun.js';
 
 const templateTaskSchema = z.object({
   name: z.string().min(1),
@@ -35,6 +36,14 @@ const suggestedAfterSchema = z.array(z.string()).max(SUGGESTED_AFTER_MAX);
 // model up front (AGENTS.md AI-policy: the click IS the consent). Blank effort
 // inherits each scheduled task's saved effort.
 const maintenanceRunStartSchema = z.object({
+  taskTypes: z.array(z.enum(Object.keys(AUDIT_DEFINITIONS))).min(1).max(Object.keys(AUDIT_DEFINITIONS).length).optional(),
+  mode: z.enum(['file-issues', 'fix']).optional(),
+  claimBetweenAudits: z.boolean().optional(),
+  claimHandler: z.object({
+    providerId: z.string().trim().min(1),
+    model: z.string().trim().min(1),
+    effort: z.enum(EFFORT_LEVELS).nullable().optional(),
+  }).nullable().optional(),
   appId: z.string().trim().min(1),
   providerId: z.string().trim().min(1),
   model: z.string().trim().min(1),
@@ -43,7 +52,7 @@ const maintenanceRunStartSchema = z.object({
 
 const router = Router();
 
-const SCHEDULE_FIELDS = ['type', 'perpetual', 'enabled', 'intervalMs', 'cronExpression', 'providerId', 'model', 'effort', 'prompt', 'description', 'labels', 'dataInputs', 'taskMetadata', 'runAfter',
+const SCHEDULE_FIELDS = ['type', 'autoStart', 'perpetual', 'enabled', 'intervalMs', 'cronExpression', 'providerId', 'model', 'effort', 'prompt', 'description', 'labels', 'dataInputs', 'taskMetadata', 'runAfter',
   // Advisory run order — which OTHER scheduled tasks a user should generally run
   // first. Editable and unenforced; `runAfter` above is the enforced gate.
   'suggestedAfter',
@@ -68,6 +77,9 @@ function pickScheduleSettings(body, taskType) {
   }
   if (settings.enabled !== undefined && typeof settings.enabled !== 'boolean') {
     throw new ServerError('enabled must be a boolean', { status: 400, code: 'VALIDATION_ERROR' });
+  }
+  if (settings.autoStart !== undefined && typeof settings.autoStart !== 'boolean') {
+    throw new ServerError('autoStart must be a boolean', { status: 400, code: 'VALIDATION_ERROR' });
   }
   if (settings.perpetual !== undefined && typeof settings.perpetual !== 'boolean') {
     throw new ServerError('perpetual must be a boolean', { status: 400, code: 'VALIDATION_ERROR' });
@@ -268,6 +280,13 @@ router.post('/schedule/maintenance-runs', asyncHandler(async (req, res) => {
   res.status(201).json(await startMaintenanceRun(body));
 }));
 
+router.patch('/schedule/maintenance-runs/:id/steps/:stepId', asyncHandler(async (req, res) => {
+  const body = validateRequest(maintenanceRunStartSchema.pick({ providerId: true, model: true, effort: true }), req.body || {});
+  const run = await updateMaintenanceStep(req.params.id, req.params.stepId, body);
+  if (!run) throw new ServerError('Maintenance run or stage not found', { status: 404 });
+  res.json({ run });
+}));
+
 router.post('/schedule/maintenance-runs/:id/stop', asyncHandler(async (req, res) => {
   const run = await stopMaintenanceRun(req.params.id);
   if (!run) throw new ServerError('Maintenance run not found', { status: 404, code: 'NOT_FOUND' });
@@ -351,7 +370,7 @@ router.get('/schedule/interval-types', (req, res) => {
       cron: 'Scheduled on a cron expression (minute hour dayOfMonth month dayOfWeek)'
     },
     // `perpetual` is an orthogonal flag, not a type — it applies to either.
-    perpetual: 'Drains actionable work back-to-back until none remains, then rechecks on a cadence (its own cron expression when scheduled, else recheckCron / recheckIntervalMs, default daily)'
+    perpetual: 'Drains actionable work back-to-back until none remains. On-demand tasks with autoStart false wait for another explicit trigger; otherwise rechecks on a cadence (its own cron expression when scheduled, else recheckCron / recheckIntervalMs, default daily)'
   });
 });
 

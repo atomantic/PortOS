@@ -15,7 +15,8 @@
  *      survive the restart untouched, and must never be named as interrupted.
  */
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
+import { runInNewContext } from 'node:vm';
 import { readFileSync } from 'fs';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
@@ -68,5 +69,57 @@ describe('shutdown handler — host-restart bookkeeping (#3202)', () => {
     expect(startAt).toBeLessThan(code.indexOf('closeAllConnections'));
     expect(awaitAt).toBeGreaterThan(startAt);
     expect(awaitAt).toBeLessThan(exitAt);
+  });
+});
+
+// Execute only the close boundary; importing bootstrap loads the live service
+// graph. Fake time pins the shutdown deadline without production sleeps.
+describe('bounded server shutdown', () => {
+  afterEach(() => vi.useRealTimers());
+
+  const loadCloseServer = () => {
+    vi.useFakeTimers();
+    const log = vi.fn();
+    const error = vi.fn();
+    const closeServer = runInNewContext(`
+      ${extractDeclaration(SRC, 'withGrace')}
+      ${extractDeclaration(SRC, 'closeServer')}
+      closeServer;
+    `, { console: { log, error }, setTimeout });
+    return { closeServer, log, error };
+  };
+
+  it('resolves successful, already-closed and failed closes with their respective logs', async () => {
+    const { closeServer, log, error } = loadCloseServer();
+    for (const outcome of [undefined, { code: 'ERR_SERVER_NOT_RUNNING' }, new Error('close failed')]) {
+      const order = [];
+      await expect(closeServer({
+        close: (done) => { order.push('stop accepting'); done(outcome); },
+        closeAllConnections: () => order.push('drop connections'),
+      }, 'HTTP server')).resolves.toBeUndefined();
+      expect(order).toEqual(['stop accepting', 'drop connections']);
+    }
+    await expect(closeServer(null, 'Local HTTP mirror')).resolves.toBeUndefined();
+    expect(log.mock.calls).toEqual([['✅ HTTP server closed'], ['✅ HTTP server closed']]);
+    expect(error.mock.calls).toEqual([['⚠️ Error closing HTTP server: close failed']]);
+    await vi.runAllTimersAsync();
+    expect(error).toHaveBeenCalledTimes(1);
+  });
+
+  it('continues at the grace deadline and ignores late close callbacks', async () => {
+    const { closeServer, log, error } = loadCloseServer();
+    let onClose;
+    const settled = vi.fn();
+    const closing = closeServer({ close: (done) => { onClose = done; } }, 'HTTP server').then(settled);
+    await vi.advanceTimersByTimeAsync(249);
+    expect(settled).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    await closing;
+    expect(settled).toHaveBeenCalledTimes(1);
+    expect(error.mock.calls).toEqual([['⚠️ HTTP server close exceeded 250ms — proceeding']]);
+    onClose();
+    onClose(new Error('late failure'));
+    expect(log).not.toHaveBeenCalled();
+    expect(error).toHaveBeenCalledTimes(1);
   });
 });

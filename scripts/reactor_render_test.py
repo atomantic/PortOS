@@ -118,6 +118,63 @@ class CaptureLifecycleTest(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(Path(str(self.output) + ".capture").exists())
         spawn.assert_awaited_once()
 
+    async def test_slow_session_setup_can_finish_before_enqueuing_once(self):
+        reactor = FakeReactor()
+        wait_for = asyncio.wait_for
+
+        async def simulated_wait(awaitable, timeout):
+            # Model a connection taking 90 seconds without production sleeps.
+            if not reactor.commands and not reactor.callbacks:
+                if timeout <= 90:
+                    awaitable.close()
+                    raise asyncio.TimeoutError()
+                self.assertLessEqual(timeout, 180)
+            return await wait_for(awaitable, timeout)
+
+        async def encode(*command, **kwargs):
+            self.output.write_bytes(b"example-mp4")
+            return SimpleNamespace(returncode=0, wait=AsyncMock(return_value=0))
+
+        with patch.object(self.runner.asyncio, "wait_for", simulated_wait):
+            await self.run_capture(reactor, AsyncMock(side_effect=encode))
+        self.assertEqual([name for name, _ in reactor.commands], ["set_canvas", "enqueue", "play"])
+        self.assertTrue(reactor.disconnected)
+
+    async def test_connection_timeout_or_cancellation_disconnects_without_submitting(self):
+        for failure in (asyncio.TimeoutError, asyncio.CancelledError):
+            with self.subTest(failure=failure.__name__):
+                reactor = FakeReactor()
+                reactor.connect = (AsyncMock(side_effect=asyncio.Event().wait)
+                                   if failure is asyncio.TimeoutError else AsyncMock(side_effect=failure))
+                spawn = AsyncMock()
+                with patch.object(self.runner, "CONNECT_TIMEOUT_SECONDS", 0.001), self.assertRaises(failure):
+                    await self.run_capture(reactor, spawn)
+                self.assertTrue(reactor.disconnected)
+                self.assertEqual(reactor.commands, [])
+                self.assertFalse(Path(str(self.output) + ".capture").exists())
+                spawn.assert_not_awaited()
+
+    async def test_connection_rejection_reports_only_safe_http_status_without_submitting(self):
+        for status in (400, 402, 503, None, "private-status", True, 200, 600):
+            with self.subTest(status=status):
+                reactor = FakeReactor()
+                error = type("BadRequestError", (Exception,), {})("private response body")
+                error.status = status
+                reactor.connect = AsyncMock(side_effect=error)
+                log = io.StringIO()
+                with patch.object(self.runner, "Reactor", return_value=reactor), redirect_stdout(log):
+                    with self.assertRaises(type(error)):
+                        await self.runner.render(self.params)
+                events = [json.loads(line) for line in log.getvalue().splitlines()]
+                expected = {"type": "error", "phase": "connecting", "errorType": "BadRequestError"}
+                if type(status) is int and 400 <= status <= 599:
+                    expected["httpStatus"] = status
+                self.assertEqual(events[-1], expected)
+                self.assertNotIn("private", log.getvalue())
+                self.assertEqual(reactor.commands, [])
+                self.assertTrue(reactor.disconnected)
+                self.assertFalse(Path(str(self.output) + ".capture").exists())
+
     async def test_canvas_opens_on_the_requested_aspect_and_rejects_one_fast_h3_cannot_render(self):
         reactor = FakeReactor()
 

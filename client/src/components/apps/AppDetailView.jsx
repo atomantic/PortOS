@@ -23,6 +23,7 @@ import IssuesTab from './tabs/IssuesTab';
 import PullRequestsTab from './tabs/PullRequestsTab';
 import JiraTab from './tabs/JiraTab';
 import ProcessesTab from './tabs/ProcessesTab';
+import QualityTab from './tabs/QualityTab';
 import ReferencesTab from './tabs/ReferencesTab';
 import SubmodulesTab from './tabs/SubmodulesTab';
 import DatadogTab from './tabs/DatadogTab';
@@ -52,7 +53,7 @@ export default function AppDetailView() {
   const { features: instanceFeatures, error: instanceFeaturesError } = useInstanceFeatures();
 
   const fetchApp = useCallback(async () => {
-    const data = await api.getApp(appId).catch(() => null);
+    const data = await api.getApp(appId, { includeQuality: true }).catch(() => null);
     if (!data) {
       setNotFound(true);
       setLoading(false);
@@ -277,6 +278,8 @@ export default function AppDetailView() {
         return <JiraTab app={app} onRefresh={fetchApp} />;
       case 'processes':
         return <ProcessesTab appId={app.id} pm2ProcessNames={app.pm2ProcessNames} />;
+      case 'quality':
+        return <QualityTab app={app} />;
       case 'references':
         return <ReferencesTab appId={appId} appName={app.name} />;
       case 'submodules':

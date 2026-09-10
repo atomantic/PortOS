@@ -18,7 +18,7 @@ import { extname, join } from 'path';
 import { randomUUID } from 'crypto';
 
 import { ServerError } from '../lib/errorHandler.js';
-import { clampToCharLimit } from '../lib/textUtils.js';
+import { clampToCharLimit, trimTo } from '../lib/textUtils.js';
 import { extractJson } from '../lib/jsonExtract.js';
 import { PATHS, resolveGalleryImage } from '../lib/fileUtils.js';
 import { extractEvaluationFrames, safeUnder } from '../lib/ffmpeg.js';
@@ -42,9 +42,6 @@ const VISION_TIMEOUT_MS = 180000;
 const VIDEO_ID_RE = /^(?:[a-f0-9-]{36}|upload-[a-f0-9]{8})$/i;
 const IMAGE_EXT_RE = /\.(png|jpe?g|gif|webp)$/i;
 const VIDEO_EXT_RE = /\.(mp4|webm|mov|m4v|mkv)$/i;
-
-const trimString = (value, max = MAX_PROMPT_LEN) =>
-  typeof value === 'string' ? value.trim().slice(0, max) : '';
 
 const isPlaceholderPrompt = (s) => typeof s === 'string' && /^\s*<.+>\s*$/.test(s);
 
@@ -127,15 +124,15 @@ export function parsePromptFromMediaJson(raw, targets) {
       if (!v || typeof v !== 'object') return false;
       if (wantImage && (typeof v.imagePrompt !== 'string' || isPlaceholderPrompt(v.imagePrompt))) return false;
       if (wantVideo && (typeof v.videoPrompt !== 'string' || isPlaceholderPrompt(v.videoPrompt))) return false;
-      return (wantImage ? trimString(v.imagePrompt) : true) && (wantVideo ? trimString(v.videoPrompt) : true);
+      return (wantImage ? trimTo(v.imagePrompt, MAX_PROMPT_LEN) : true) && (wantVideo ? trimTo(v.videoPrompt, MAX_PROMPT_LEN) : true);
     },
   });
   if (!value) {
     throw new Error(lastError?.message || 'Invalid JSON in AI response');
   }
 
-  const imagePrompt = wantImage ? trimString(value.imagePrompt) : '';
-  const videoPrompt = wantVideo ? trimString(value.videoPrompt) : '';
+  const imagePrompt = wantImage ? trimTo(value.imagePrompt, MAX_PROMPT_LEN) : '';
+  const videoPrompt = wantVideo ? trimTo(value.videoPrompt, MAX_PROMPT_LEN) : '';
   if (wantImage && (isPlaceholderPrompt(value.imagePrompt) || !imagePrompt)) {
     throw new Error('LLM returned an empty image prompt');
   }
@@ -146,13 +143,13 @@ export function parsePromptFromMediaJson(raw, targets) {
   return {
     ...(wantImage ? {
       imagePrompt,
-      imageNegativePrompt: trimString(value.imageNegativePrompt),
+      imageNegativePrompt: trimTo(value.imageNegativePrompt, MAX_PROMPT_LEN),
     } : {}),
     ...(wantVideo ? {
       videoPrompt,
-      videoNegativePrompt: trimString(value.videoNegativePrompt),
+      videoNegativePrompt: trimTo(value.videoNegativePrompt, MAX_PROMPT_LEN),
     } : {}),
-    rationale: trimString(value.rationale, MAX_REASON_LEN),
+    rationale: trimTo(value.rationale, MAX_REASON_LEN),
   };
 }
 

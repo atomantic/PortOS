@@ -21,6 +21,7 @@
  * workflows have the prompt + params.
  */
 
+import { createKeyCachedQueue } from '../../lib/createKeyCachedQueue.js';
 import { join, basename } from 'path';
 import { readdir } from 'fs/promises';
 import { existsSync } from 'fs';
@@ -39,11 +40,12 @@ import { insertUniverseWithId, updateUniverse, getUniverse } from '../universeBu
 import { applyLegacySeriesCanonToUniverse } from '../pipeline/migrateSeriesCanon.js';
 import { findOrCreateUniverseCollection, findOrCreateSeriesCollection, addItem as addCollectionItem, ERR_DUPLICATE as COLLECTION_ERR_DUPLICATE } from '../mediaCollections.js';
 import { adoptImportedSubscription, withReexportSuppressed } from './subscriptions.js';
-import { getInstanceId, UNKNOWN_INSTANCE_ID } from '../instances.js';
+import { getInstanceId, UNKNOWN_INSTANCE_ID } from '../instanceIdentity.js';
 import { mergePeerAnnotations } from '../mediaAnnotations.js';
-import { isStr, preserveLegacyCharacterFields } from '../../lib/storyBible.js';
+import { preserveLegacyCharacterFields } from '../../lib/storyBible.js';
 import { isPlainObject } from '../../lib/objects.js';
 import { maybeJournalBeforeOverwrite, flushBaseHashes, setSyncBaseHash, contentHashForRecord } from '../../lib/conflictJournal.js';
+import { isStr } from '../../lib/textUtils.js';
 
 // Record kinds that participate in the non-blocking conflict journal. Universe,
 // series, AND issue all seed a base hash on first import and archive a losing
@@ -59,6 +61,8 @@ function isSelfAuthored(senderInstanceId, localInstanceId) {
 }
 
 export const sharingEvents = new EventEmitter();
+
+const queueInboxWrite = createKeyCachedQueue();
 
 const inboxPath = (bucketId) => join(PATHS.data, 'sharing', 'inbox', `${bucketId}.json`);
 
@@ -829,83 +833,85 @@ const ROTATION_CULL_MS = 30 * 24 * 60 * 60 * 1000;
  * with a fresh instance id (factory reset, new device onboarding).
  */
 async function applyInbox(bucket, manifest, manifestFilename, records) {
-  const inbox = await readInbox(bucket.id);
-  inbox.items = Array.isArray(inbox.items) ? inbox.items : [];
-  const sub = manifest.subscription;
-  // Tracks whether the rotation-orphan cull (or any other pre-write mutation)
-  // changed `inbox.items` so early-return paths below can still persist the
-  // pruned list. Without this, a cull followed by an `inbox-has-newer` /
-  // `already-in-inbox` short-circuit would silently drop the cull removals
-  // and the orphan rows would survive until the next non-stale arrival.
-  let inboxMutatedPreWrite = false;
-  if (sub?.recordKind && sub?.recordId) {
-    const senderId = manifest.senderInstanceId || null;
-    const incomingSource = manifest.source || null;
-    // Cull cross-sender rotation orphans first so the same-sender match
-    // below operates on the cleaned-up list. Skip when source is missing
-    // — a row with no display name can't be attributed to a peer identity.
-    if (incomingSource) {
-      const cullThresholdMs = Date.now() - ROTATION_CULL_MS;
-      const beforeLen = inbox.items.length;
-      inbox.items = inbox.items.filter((it) => {
-        if (!it.subscription) return true;
-        if (it.subscription.recordKind !== sub.recordKind) return true;
-        if (it.subscription.recordId !== sub.recordId) return true;
-        if (it.source !== incomingSource) return true;
-        if ((it.senderInstanceId || null) === senderId) return true;
-        const createdMs = it.createdAt ? Date.parse(it.createdAt) : NaN;
-        if (!Number.isFinite(createdMs)) return true;
-        if (createdMs >= cullThresholdMs) return true;
-        console.log(`🧹 sharing: bucket=${bucket.name} culled rotation-orphan inbox row source="${incomingSource}" recordKind=${sub.recordKind} recordId=${sub.recordId} oldSender=${it.senderInstanceId || 'null'} newSender=${senderId || 'null'}`);
-        return false;
-      });
-      if (inbox.items.length !== beforeLen) inboxMutatedPreWrite = true;
-    }
-    const existing = inbox.items.find((it) => it.subscription
-      && it.subscription.recordKind === sub.recordKind
-      && it.subscription.recordId === sub.recordId
-      && (it.senderInstanceId || null) === senderId);
-    // Freshness gate: during upgrade a bucket may hold both the new
-    // `sub-<kind>-<id>-<sender>.json` and the pre-v2 legacy
-    // `sub-<kind>-<id>.json` for the same sender, and lexicographic
-    // backlog order visits the new file before the legacy one
-    // (`-` (0x2D) < `.` (0x2E)). Without a createdAt compare, the
-    // older legacy manifest would replace the newer inbox row. Skip
-    // when the incoming manifest is older than what we already have.
-    if (existing && existing.createdAt && manifest.createdAt
-      && existing.createdAt > manifest.createdAt) {
+  return queueInboxWrite(bucket.id, async () => {
+    const inbox = await readInbox(bucket.id);
+    inbox.items = Array.isArray(inbox.items) ? inbox.items : [];
+    const sub = manifest.subscription;
+    // Tracks whether the rotation-orphan cull (or any other pre-write mutation)
+    // changed `inbox.items` so early-return paths below can still persist the
+    // pruned list. Without this, a cull followed by an `inbox-has-newer` /
+    // `already-in-inbox` short-circuit would silently drop the cull removals
+    // and the orphan rows would survive until the next non-stale arrival.
+    let inboxMutatedPreWrite = false;
+    if (sub?.recordKind && sub?.recordId) {
+      const senderId = manifest.senderInstanceId || null;
+      const incomingSource = manifest.source || null;
+      // Cull cross-sender rotation orphans first so the same-sender match
+      // below operates on the cleaned-up list. Skip when source is missing
+      // — a row with no display name can't be attributed to a peer identity.
+      if (incomingSource) {
+        const cullThresholdMs = Date.now() - ROTATION_CULL_MS;
+        const beforeLen = inbox.items.length;
+        inbox.items = inbox.items.filter((it) => {
+          if (!it.subscription) return true;
+          if (it.subscription.recordKind !== sub.recordKind) return true;
+          if (it.subscription.recordId !== sub.recordId) return true;
+          if (it.source !== incomingSource) return true;
+          if ((it.senderInstanceId || null) === senderId) return true;
+          const createdMs = it.createdAt ? Date.parse(it.createdAt) : NaN;
+          if (!Number.isFinite(createdMs)) return true;
+          if (createdMs >= cullThresholdMs) return true;
+          console.log(`🧹 sharing: bucket=${bucket.name} culled rotation-orphan inbox row source="${incomingSource}" recordKind=${sub.recordKind} recordId=${sub.recordId} oldSender=${it.senderInstanceId || 'null'} newSender=${senderId || 'null'}`);
+          return false;
+        });
+        if (inbox.items.length !== beforeLen) inboxMutatedPreWrite = true;
+      }
+      const existing = inbox.items.find((it) => it.subscription
+        && it.subscription.recordKind === sub.recordKind
+        && it.subscription.recordId === sub.recordId
+        && (it.senderInstanceId || null) === senderId);
+      // Freshness gate: during upgrade a bucket may hold both the new
+      // `sub-<kind>-<id>-<sender>.json` and the pre-v2 legacy
+      // `sub-<kind>-<id>.json` for the same sender, and lexicographic
+      // backlog order visits the new file before the legacy one
+      // (`-` (0x2D) < `.` (0x2E)). Without a createdAt compare, the
+      // older legacy manifest would replace the newer inbox row. Skip
+      // when the incoming manifest is older than what we already have.
+      if (existing && existing.createdAt && manifest.createdAt
+        && existing.createdAt > manifest.createdAt) {
+        if (inboxMutatedPreWrite) await writeInbox(bucket.id, inbox);
+        return { queued: false, reason: 'inbox-has-newer' };
+      }
+      if (existing) {
+        inbox.items = inbox.items.filter((it) => it !== existing);
+      }
+    } else if (inbox.items.some((it) => it.manifestId === manifest.id)) {
       if (inboxMutatedPreWrite) await writeInbox(bucket.id, inbox);
-      return { queued: false, reason: 'inbox-has-newer' };
+      return { queued: false, reason: 'already-in-inbox' };
     }
-    if (existing) {
-      inbox.items = inbox.items.filter((it) => it !== existing);
-    }
-  } else if (inbox.items.some((it) => it.manifestId === manifest.id)) {
-    if (inboxMutatedPreWrite) await writeInbox(bucket.id, inbox);
-    return { queued: false, reason: 'already-in-inbox' };
-  }
-  inbox.items.push({
-    manifestId: manifest.id,
-    manifestFilename,
-    kind: manifest.kind,
-    subscription: sub || null,
-    source: manifest.source,
-    sourceBio: manifest.sourceBio,
-    senderInstanceId: manifest.senderInstanceId || null,
-    producedByVersion: manifest.producedByVersion || null,
-    sharingSchemaVersion: manifest.sharingSchemaVersion ?? manifest.schemaVersion ?? null,
-    createdAt: manifest.createdAt,
-    receivedAt: new Date().toISOString(),
-    recordIds: manifest.recordIds,
-    assetCount: (manifest.assetRefs || []).length,
-    collectionItemCount: manifest.collection?.items?.length || 0,
-    collectionName: manifest.collection?.name || null,
-    note: manifest.note,
-    summary: summarizeRecords(records),
+    inbox.items.push({
+      manifestId: manifest.id,
+      manifestFilename,
+      kind: manifest.kind,
+      subscription: sub || null,
+      source: manifest.source,
+      sourceBio: manifest.sourceBio,
+      senderInstanceId: manifest.senderInstanceId || null,
+      producedByVersion: manifest.producedByVersion || null,
+      sharingSchemaVersion: manifest.sharingSchemaVersion ?? manifest.schemaVersion ?? null,
+      createdAt: manifest.createdAt,
+      receivedAt: new Date().toISOString(),
+      recordIds: manifest.recordIds,
+      assetCount: (manifest.assetRefs || []).length,
+      collectionItemCount: manifest.collection?.items?.length || 0,
+      collectionName: manifest.collection?.name || null,
+      note: manifest.note,
+      summary: summarizeRecords(records),
+    });
+    if (inbox.items.length > INBOX_MAX) inbox.items = inbox.items.slice(-INBOX_MAX);
+    await writeInbox(bucket.id, inbox);
+    return { queued: true };
   });
-  if (inbox.items.length > INBOX_MAX) inbox.items = inbox.items.slice(-INBOX_MAX);
-  await writeInbox(bucket.id, inbox);
-  return { queued: true };
 }
 
 function summarizeRecords(records) {
@@ -1061,14 +1067,7 @@ export async function processManifest(bucketId, manifestFilename) {
   // when the owner record failed to import (corrupt JSON, schema-version
   // mismatch) or the manifest references an owner id not listed in
   // `recordIds`.
-  const collectionPendingUniverse = outcome?.collectionPendingUniverse || null;
-  const collectionPendingSeries = outcome?.collectionPendingSeries || null;
   const collectionTombstonedUniverse = outcome?.collectionTombstonedUniverse || null;
-  const legacyCanonPendingUniverses = outcome?.legacyCanonPendingUniverses || null;
-  const legacyCanonPendingFailures = outcome?.legacyCanonPendingFailures || null;
-  const recordImportFailures = outcome?.recordImportFailures || null;
-  const reviewMergeFailures = outcome?.reviewMergeFailures || null;
-  const outlineMergeFailures = outcome?.outlineMergeFailures || null;
   // Tombstoned universe: the collection owner IS on disk but locally deleted.
   // Unlike the truly-missing case this will never self-resolve via sync, so we
   // advance the cursor (no infinite pending loop) and emit a clear signal. The
@@ -1079,20 +1078,33 @@ export async function processManifest(bucketId, manifestFilename) {
     console.log(`⚠️ sharing: bucket=${bucket.name} manifest=${manifest.id} kind=${manifest.kind} collectionUniverse=${collectionTombstonedUniverse} is deleted locally — ${outcome.collectionItemsDeferred ?? 0} item(s) skipped; restore universe to import`);
     return { processed: true, manifest, outcome };
   }
-  if (assetCopy.missing.length > 0 || missingRecords.length > 0 || missingReviews.length > 0 || missingOutlines.length > 0 || collectionPendingUniverse || collectionPendingSeries || legacyCanonPendingUniverses || legacyCanonPendingFailures || recordImportFailures || reviewMergeFailures || outlineMergeFailures) {
-    if (assetCopy.missing.length > 0) outcome.pendingAssets = assetCopy.missing;
-    if (missingRecords.length > 0) outcome.pendingRecords = missingRecords;
-    if (missingReviews.length > 0) outcome.pendingReviews = missingReviews;
-    if (missingOutlines.length > 0) outcome.pendingOutlines = missingOutlines;
-    if (collectionPendingUniverse) outcome.pendingCollectionUniverse = collectionPendingUniverse;
-    if (collectionPendingSeries) outcome.pendingCollectionSeries = collectionPendingSeries;
-    if (legacyCanonPendingUniverses) outcome.pendingLegacyCanonUniverses = legacyCanonPendingUniverses;
-    if (legacyCanonPendingFailures) outcome.pendingLegacyCanonFailures = legacyCanonPendingFailures;
-    if (recordImportFailures) outcome.pendingRecordImportFailures = recordImportFailures;
-    if (reviewMergeFailures) outcome.pendingReviewMergeFailures = reviewMergeFailures;
-    if (outlineMergeFailures) outcome.pendingOutlineMergeFailures = outlineMergeFailures;
+  // Each row is checked once for "is this still pending?", assigned onto
+  // `outcome.<key>` once, and formatted into the `⏳ sharing:` log line once —
+  // rather than the same eleven conditions repeated across a trigger check,
+  // an assignment block, and a log-suffix template (#6845).
+  const PENDING_SIGNALS = [
+    { key: 'pendingAssets', value: assetCopy.missing, label: 'waitingForAssets', format: 'count', alwaysLog: true },
+    { key: 'pendingRecords', value: missingRecords, label: 'waitingForRecords', format: 'count', alwaysLog: true },
+    { key: 'pendingReviews', value: missingReviews, label: 'waitingForReviews', format: 'count' },
+    { key: 'pendingOutlines', value: missingOutlines, label: 'waitingForOutlines', format: 'count' },
+    { key: 'pendingCollectionUniverse', value: outcome?.collectionPendingUniverse || null, label: 'waitingForUniverse', format: 'value' },
+    { key: 'pendingCollectionSeries', value: outcome?.collectionPendingSeries || null, label: 'waitingForSeries', format: 'value' },
+    { key: 'pendingLegacyCanonUniverses', value: outcome?.legacyCanonPendingUniverses || null, label: 'waitingForLegacyCanonUniverses', format: 'list' },
+    { key: 'pendingLegacyCanonFailures', value: outcome?.legacyCanonPendingFailures || null, label: 'legacyCanonFailures', format: 'list' },
+    { key: 'pendingRecordImportFailures', value: outcome?.recordImportFailures || null, label: 'recordImportFailures', format: 'list' },
+    { key: 'pendingReviewMergeFailures', value: outcome?.reviewMergeFailures || null, label: 'reviewMergeFailures', format: 'list' },
+    { key: 'pendingOutlineMergeFailures', value: outcome?.outlineMergeFailures || null, label: 'outlineMergeFailures', format: 'list' },
+  ];
+  const isPendingSignalSet = (value) => (Array.isArray(value) ? value.length > 0 : Boolean(value));
+  const activePendingSignals = PENDING_SIGNALS.filter((signal) => isPendingSignalSet(signal.value));
+  if (activePendingSignals.length > 0) {
+    for (const { key, value } of activePendingSignals) outcome[key] = value;
+    const suffix = PENDING_SIGNALS
+      .filter((signal) => signal.alwaysLog || isPendingSignalSet(signal.value))
+      .map(({ value, label, format }) => ` ${label}=${format === 'count' ? value.length : format === 'list' ? value.join(',') : value}`)
+      .join('');
     sharingEvents.emit('manifest-processed', { bucketId, manifestId: manifest.id, manifestFilename, outcome });
-    console.log(`⏳ sharing: bucket=${bucket.name} manifest=${manifest.id} kind=${manifest.kind} mode=${bucket.mode} waitingForAssets=${assetCopy.missing.length} waitingForRecords=${missingRecords.length}${missingReviews.length > 0 ? ` waitingForReviews=${missingReviews.length}` : ''}${missingOutlines.length > 0 ? ` waitingForOutlines=${missingOutlines.length}` : ''}${collectionPendingUniverse ? ` waitingForUniverse=${collectionPendingUniverse}` : ''}${collectionPendingSeries ? ` waitingForSeries=${collectionPendingSeries}` : ''}${legacyCanonPendingUniverses ? ` waitingForLegacyCanonUniverses=${legacyCanonPendingUniverses.join(',')}` : ''}${legacyCanonPendingFailures ? ` legacyCanonFailures=${legacyCanonPendingFailures.join(',')}` : ''}${recordImportFailures ? ` recordImportFailures=${recordImportFailures.join(',')}` : ''}${reviewMergeFailures ? ` reviewMergeFailures=${reviewMergeFailures.join(',')}` : ''}${outlineMergeFailures ? ` outlineMergeFailures=${outlineMergeFailures.join(',')}` : ''}`);
+    console.log(`⏳ sharing: bucket=${bucket.name} manifest=${manifest.id} kind=${manifest.kind} mode=${bucket.mode}${suffix}`);
     return { processed: true, pending: true, manifest, outcome };
   }
   await markProcessed(bucketId, manifestFilename, manifest.id);
@@ -1113,46 +1125,48 @@ export async function processManifest(bucketId, manifestFilename) {
  *     stranding zombie rows the user must hand-dismiss.
  */
 async function pruneSelfAuthoredInbox(bucket, localInstanceId) {
-  const inbox = await readInbox(bucket.id);
-  const items = Array.isArray(inbox.items) ? inbox.items : [];
-  if (items.length === 0) return { pruned: 0, orphaned: 0 };
+  return queueInboxWrite(bucket.id, async () => {
+    const inbox = await readInbox(bucket.id);
+    const items = Array.isArray(inbox.items) ? inbox.items : [];
+    if (items.length === 0) return { pruned: 0, orphaned: 0 };
 
-  let changed = false;
-  let orphaned = 0;
-  const kept = [];
-  for (const it of items) {
-    const manifestPath = join(bucket.path, 'manifests', it.manifestFilename);
-    if (!existsSync(manifestPath)) {
-      orphaned += 1;
-      changed = true;
-      continue;
-    }
-    let sender = it.senderInstanceId || null;
-    let backfilled = it;
-    if (!sender) {
-      const m = await readManifest(bucket.path, it.manifestFilename).catch(() => null);
-      sender = m?.senderInstanceId || null;
-      if (sender) {
-        backfilled = { ...it, senderInstanceId: sender };
+    let changed = false;
+    let orphaned = 0;
+    const kept = [];
+    for (const it of items) {
+      const manifestPath = join(bucket.path, 'manifests', it.manifestFilename);
+      if (!existsSync(manifestPath)) {
+        orphaned += 1;
         changed = true;
+        continue;
+      }
+      let sender = it.senderInstanceId || null;
+      let backfilled = it;
+      if (!sender) {
+        const m = await readManifest(bucket.path, it.manifestFilename).catch(() => null);
+        sender = m?.senderInstanceId || null;
+        if (sender) {
+          backfilled = { ...it, senderInstanceId: sender };
+          changed = true;
+        }
+      }
+      if (isSelfAuthored(sender, localInstanceId)) {
+        changed = true;
+        continue;
+      }
+      kept.push(backfilled);
+    }
+    const pruned = items.length - kept.length - orphaned;
+    if (changed) {
+      inbox.items = kept;
+      await writeInbox(bucket.id, inbox);
+      if (pruned > 0 || orphaned > 0) {
+        sharingEvents.emit('inbox-updated', { bucketId: bucket.id });
+        console.log(`🧹 sharing: bucket=${bucket.name} pruned ${pruned} self-authored + ${orphaned} orphan inbox item(s)`);
       }
     }
-    if (isSelfAuthored(sender, localInstanceId)) {
-      changed = true;
-      continue;
-    }
-    kept.push(backfilled);
-  }
-  const pruned = items.length - kept.length - orphaned;
-  if (changed) {
-    inbox.items = kept;
-    await writeInbox(bucket.id, inbox);
-    if (pruned > 0 || orphaned > 0) {
-      sharingEvents.emit('inbox-updated', { bucketId: bucket.id });
-      console.log(`🧹 sharing: bucket=${bucket.name} pruned ${pruned} self-authored + ${orphaned} orphan inbox item(s)`);
-    }
-  }
-  return { pruned, orphaned };
+    return { pruned, orphaned };
+  });
 }
 
 /** On startup or registration, scan the manifests dir for unprocessed entries. */
@@ -1280,8 +1294,13 @@ export async function promoteInboxItem(bucketId, manifestId) {
     });
   }
   // Drop from inbox.
-  inbox.items.splice(idx, 1);
-  await writeInbox(bucketId, inbox);
+  await queueInboxWrite(bucketId, async () => {
+    const live = await readInbox(bucketId);
+    const liveIdx = (live.items || []).findIndex((it) => it.manifestId === manifestId);
+    if (liveIdx < 0) return;
+    live.items.splice(liveIdx, 1);
+    await writeInbox(bucketId, live);
+  });
   sharingEvents.emit('inbox-updated', { bucketId });
   return { promoted: true, outcome };
 }
@@ -1297,31 +1316,33 @@ export async function handleUnshare(bucketId, manifestFilename) {
   const cursor = await readCursor(bucketId);
   const wasTracked = manifestFilename in (cursor.processedById || {})
     || (Array.isArray(cursor.processed) && cursor.processed.includes(manifestFilename));
-  const inbox = await readInbox(bucketId);
-  const inboxHit = (inbox.items || []).some((it) => it.manifestFilename === manifestFilename);
-  // chokidar fires `unlink` for any file under the watched dir. If we never
-  // saw the filename as a manifest, treat the unlink as noise — no cursor
-  // write, no inbox write, no socket emit.
+  const inboxHit = await queueInboxWrite(bucketId, async () => {
+    const inbox = await readInbox(bucketId);
+    const hit = (inbox.items || []).some((it) => it.manifestFilename === manifestFilename);
+    if (hit) {
+      inbox.items = inbox.items.filter((it) => it.manifestFilename !== manifestFilename);
+      await writeInbox(bucketId, inbox);
+    }
+    return hit;
+  });
+  // Ignore unlink noise for files we have never imported or queued.
   if (!wasTracked && !inboxHit) return { handled: true, wasTracked: false };
-
   await forgetProcessed(bucketId, manifestFilename);
-  if (inboxHit) {
-    inbox.items = inbox.items.filter((it) => it.manifestFilename !== manifestFilename);
-    await writeInbox(bucketId, inbox);
-  }
   sharingEvents.emit('unshared', { bucketId, manifestFilename });
   console.log(`📤 sharing: bucket=${bucketId} manifest=${manifestFilename} unshared by peer`);
   return { handled: true, wasTracked };
 }
 
 export async function dismissInboxItem(bucketId, manifestId) {
-  const inbox = await readInbox(bucketId);
-  const before = (inbox.items || []).length;
-  inbox.items = (inbox.items || []).filter((it) => it.manifestId !== manifestId);
-  if (inbox.items.length === before) throw Object.assign(new Error(`Inbox item not found: ${manifestId}`), { code: 'SHARING_INBOX_NOT_FOUND' });
-  await writeInbox(bucketId, inbox);
-  sharingEvents.emit('inbox-updated', { bucketId });
-  return { dismissed: true };
+  return queueInboxWrite(bucketId, async () => {
+    const inbox = await readInbox(bucketId);
+    const before = (inbox.items || []).length;
+    inbox.items = (inbox.items || []).filter((it) => it.manifestId !== manifestId);
+    if (inbox.items.length === before) throw Object.assign(new Error(`Inbox item not found: ${manifestId}`), { code: 'SHARING_INBOX_NOT_FOUND' });
+    await writeInbox(bucketId, inbox);
+    sharingEvents.emit('inbox-updated', { bucketId });
+    return { dismissed: true };
+  });
 }
 
 export async function listInbox(bucketId) {

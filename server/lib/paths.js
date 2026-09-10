@@ -61,7 +61,6 @@ export const PATHS = {
   // Files here are shipped via data.reference/templates/ on first install.
   visualTemplates: join(INSTALL_ROOT, 'data/templates'),
   settings: join(INSTALL_ROOT, 'data/settings'),
-  missions: join(INSTALL_ROOT, 'data/cos/missions'),
   tools: join(INSTALL_ROOT, 'data/tools'),
   images: join(INSTALL_ROOT, 'data/images'),
   // Uploaded multi-reference inputs for FLUX.2 multi-ref edits. Sibling of

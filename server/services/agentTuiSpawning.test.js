@@ -248,6 +248,7 @@ import * as agentErrorAnalysis from './agentErrorAnalysis.js';
 import * as cosAgentLifecycle from './cosAgentLifecycle.js';
 import * as gitService from './git.js';
 import { probePrForBranch } from './prProbe.js';
+import { promptOpensOwnPr } from './promptSections/completion.js';
 import { activeAgents, userTerminatedAgents, pausedAgents, consumePausedAgentExit } from './agentState.js';
 import {
   SELF_CLEARING_RESUBMIT_INTERVAL_MS,
@@ -633,6 +634,23 @@ describe('spawnTuiAgent runtime', () => {
     promptDelayMs: 100,
   };
 
+  // The stamp `agentLifecycle` would write for this run, derived through the
+  // REAL predicate rather than hand-written. The old `!leanMode` default pinned
+  // `true` for every non-lean host, a value the spawn path never produced for a
+  // slashdo-capable one (#6869), so the suite agreed with itself and not with
+  // production. A worktree is assumed unless a case says otherwise: a PR-opening
+  // TUI run always has one.
+  function stampPrOpenedBy(overrides, task, provider) {
+    return promptOpensOwnPr(task, {
+      providerType: provider?.type ?? 'tui',
+      providerId: provider?.id ?? null,
+      providerCommand: provider?.command ?? null,
+      leanMode: overrides.leanMode ?? false,
+      worktreeInfo: overrides.worktreeInfo ?? { branchName: 'agent/t', worktreePath: '/tmp/ws', baseBranch: 'main' },
+      isTruthyMetaFn: (v) => v === true || v === 'true',
+    });
+  }
+
   function runSpawn(overrides = {}) {
     const agentId = overrides.agentId ?? 'agent-1';
     const task = overrides.task ?? { id: 'task-1', description: 'do the thing', metadata: {} };
@@ -658,7 +676,7 @@ describe('spawnTuiAgent runtime', () => {
       agentDir,
       executionId,
       laneName,
-      ownsPrWorkflow: overrides.ownsPrWorkflow ?? !overrides.leanMode,
+      prOpenedBy: overrides.prOpenedBy ?? stampPrOpenedBy(overrides, task, provider),
       leanMode: overrides.leanMode ?? false,
       useDurableRunner: overrides.useDurableRunner ?? false,
       safetyProfile: overrides.safetyProfile ?? null,
@@ -967,7 +985,7 @@ describe('spawnTuiAgent runtime', () => {
       agentId: 'agent-1',
       task,
       success: true,
-      prOwnership: { taskOpenPR: true, agentOwnsPR: true, prClaimExpected: false },
+      prOwnership: { taskOpenPR: true, prOpenedBy: 'agent-inline', agentOpensOwnPr: true, prClaimExpected: false },
       prClaimVerified: false,
     }));
     // …and finalize was told not to verify a claim this session cannot make —
@@ -994,7 +1012,7 @@ describe('spawnTuiAgent runtime', () => {
     // Neither predicate holds for a `--bare` session, so the dispatch opens the
     // PR itself (`always`) and may auto-merge the branch.
     expect(runSpawnerCompletionCleanup).toHaveBeenCalledWith(expect.objectContaining({
-      prOwnership: { taskOpenPR: true, agentOwnsPR: false, prClaimExpected: false },
+      prOwnership: { taskOpenPR: true, prOpenedBy: 'portos', agentOpensOwnPr: false, prClaimExpected: false },
     }));
   });
 
@@ -1038,7 +1056,7 @@ describe('spawnTuiAgent runtime', () => {
     // finalize ran `verifyPrClaim` for a slashdo-capable session and the verdict
     // reaches the dispatch as verified, so it never queries the forge again.
     expect(runSpawnerCompletionCleanup).toHaveBeenCalledWith(expect.objectContaining({
-      prOwnership: { taskOpenPR: true, agentOwnsPR: true, prClaimExpected: true },
+      prOwnership: { taskOpenPR: true, prOpenedBy: 'agent-slashdo', agentOpensOwnPr: true, prClaimExpected: true },
       prClaimVerified: true,
     }));
     expect(agentLifecycle.finalizeAgent).toHaveBeenCalledWith(expect.objectContaining({ prExpected: true }));
@@ -1920,6 +1938,32 @@ describe('spawnTuiAgent runtime', () => {
     expect(pasteWrites()).toHaveLength(1);
   });
 
+  it('Grok collapsed paste: submits its size chip once without retrying the hidden prompt', async () => {
+    // agent-5ffe35b5 rendered this chip, but its truncated preview could not
+    // satisfy prefix verification. Retrying expanded/duplicated the input.
+    runSpawn({
+      provider: { id: 'grok-tui', name: 'Grok TUI', type: 'tui', envVars: {} },
+      tuiConfig: { ...defaultTuiConfig, command: 'grok', commandLine: 'grok' },
+      prompt: 'A long UX audit prompt whose full prefix is hidden by the collapsed preview.',
+    });
+    await flushMicrotasks();
+    await capturedOnData(Buffer.from('Grok Build 1.0.25 [stable]'));
+    await vi.advanceTimersByTimeAsync(2000);
+    const writes = () => vi.mocked(shellService.writeToSession).mock.calls
+      .filter(([id]) => id === SESSION_ID);
+    expect(pasteCount()).toBe(1);
+    expect(writes().filter(([, data]) => data === '\r')).toHaveLength(0);
+
+    // ANSI styling and PTY chunk boundaries match the real size chip.
+    await capturedOnData(Buffer.from('\x1b[38;2;65;65;65m[\x1b[38;2;200;200;200mPasted: 31'));
+    await capturedOnData(Buffer.from(' KB\x1b[38;2;65;65;65m] Enter:send'));
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(writes().some(([, data]) => data === '\r')).toBe(true);
+    await vi.advanceTimersByTimeAsync(20000);
+    expect(pasteCount()).toBe(1);
+    expect(agentLifecycle.finalizeAgent).not.toHaveBeenCalled();
+  });
+
   // ── 1c2. The readiness probe's own echo must not seed the startup-idle clock ──
   // shell.js's waitForPromptReady round-trips a shell-level probe (posix printf /
   // PowerShell Write-Output) BEFORE injecting the real CLI command, and fires
@@ -2528,6 +2572,30 @@ describe('spawnTuiAgent runtime', () => {
       )).toBe(true);
     });
 
+    // An abandoned run is as over as a finalized one — it just has no outcome
+    // — so nothing may record one afterwards. The shutdown flag is cleared
+    // before the second trigger so the abandoned session itself, not the flag,
+    // is the only thing between that trigger and finalizeAgent.
+    it('stays abandoned: a trigger arriving after the abandon records no outcome and runs no cleanup', async () => {
+      const spawnPromise = runSpawn();
+      await flushMicrotasks();
+
+      markHostShuttingDown();
+      await capturedOnExit({ exitCode: 0, killed: false });
+      await flushMicrotasks();
+      await spawnPromise;
+      expect(agentLifecycle.finalizeAgent).not.toHaveBeenCalled();
+
+      resetHostShutdownFlagForTests();
+      await capturedOnExit({ exitCode: 1, killed: true });
+      await flushMicrotasks();
+
+      // Still no outcome — and still no completion cleanup, so the worktree
+      // the resume needs is untouched.
+      expect(agentLifecycle.finalizeAgent).not.toHaveBeenCalled();
+      expect(runSpawnerCompletionCleanup).not.toHaveBeenCalled();
+    });
+
     it('still finalizes as success when the agent had already written its sentinel', async () => {
       vi.mocked(existsSync).mockReturnValue(true);
       vi.mocked(readFile).mockImplementation(async (p) =>
@@ -2627,6 +2695,47 @@ describe('spawnTuiAgent runtime', () => {
           success: false,
           completionReason: 'command-not-found',
           error: expect.stringContaining('did not pass the CoS Runner capability check'),
+        })
+      );
+    });
+
+    // The runner's two PTY diagnoses split on RETRY POLICY, and the split is the
+    // whole point of naming them separately. A PTY layer that cannot fork is
+    // broken for every task until a human reinstalls, so it must block once
+    // instead of retry-storming the fleet; a reaped worktree is cleared by the
+    // very next attempt, which provisions a fresh one, so it must NOT block.
+    // Collapsing them (an earlier revision matched both prefixes) parks work a
+    // retry would have fixed.
+    it('blocks on an unusable PTY layer as runner-pty-unavailable', async () => {
+      vi.mocked(spawnTuiSessionViaRunner).mockRejectedValueOnce(
+        new Error('CoS Runner PTY unavailable: node-pty cannot fork any process, so this is not specific to the requested command. Repair it with `npm install --prefix server`.'),
+      );
+
+      await expect(runSpawn({ useDurableRunner: true })).resolves.toBeNull();
+
+      expect(agentLifecycle.finalizeAgent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          agentId: 'agent-1',
+          success: false,
+          completionReason: 'runner-pty-unavailable',
+          error: expect.stringContaining('npm install --prefix server'),
+        })
+      );
+    });
+
+    it('leaves a reaped workspace retryable as spawn-rejected', async () => {
+      vi.mocked(spawnTuiSessionViaRunner).mockRejectedValueOnce(
+        new Error('CoS Runner workspace missing: the workspace for this spawn does not exist. Its worktree was probably removed before the agent launched.'),
+      );
+
+      await expect(runSpawn({ useDurableRunner: true })).resolves.toBeNull();
+
+      expect(agentLifecycle.finalizeAgent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          agentId: 'agent-1',
+          success: false,
+          completionReason: 'spawn-rejected',
+          error: expect.stringContaining('worktree was probably removed'),
         })
       );
     });
@@ -2762,7 +2871,6 @@ describe('spawnTuiAgent runtime', () => {
       withSentinel('## Summary\nFinished the analysis.');
       const spawnPromise = runSpawn({
         task: { ...openPrTask, metadata: { openPR: true, readOnly: true } },
-        ownsPrWorkflow: false,
       });
       await flushMicrotasks();
       sentinelExists = true;
@@ -2772,7 +2880,7 @@ describe('spawnTuiAgent runtime', () => {
       expect(probePrForBranch).not.toHaveBeenCalled();
       expect(shellService.pasteToSession).not.toHaveBeenCalled();
       expect(runSpawnerCompletionCleanup).toHaveBeenCalledWith(expect.objectContaining({
-        prOwnership: expect.objectContaining({ taskOpenPR: true, agentOwnsPR: false }),
+        prOwnership: expect.objectContaining({ taskOpenPR: true, prOpenedBy: 'portos', agentOpensOwnPr: false }),
       }));
     });
 
@@ -2885,6 +2993,45 @@ describe('spawnTuiAgent runtime', () => {
       expect(agentLifecycle.finalizeAgent).toHaveBeenCalledWith(
         expect.objectContaining({ success: false })
       );
+    });
+
+    // The nudge's reset to 'running' has to reopen the finish gate for EVERY
+    // trigger — not only the parked replay above, and not only the re-armed
+    // sentinel watcher. After a nudge the session is live again, and the next
+    // thing to happen may be the PTY simply dying with no new sentinel at all.
+    // Swallow that and the run holds its lane to the max-runtime ceiling with
+    // no outcome recorded.
+    it('finalizes a plain PTY exit arriving after the merge-gate nudge, and ignores anything after that', async () => {
+      vi.mocked(shellService.pasteToSession).mockReturnValue(999);
+      vi.mocked(probePrForBranch).mockResolvedValue({
+        prState: 'OPEN', prUrl: 'https://example.com/pr/1', prNumber: 1, cli: 'gh', readable: true,
+      });
+      withSentinel('## Summary\nShipped the fix and opened the PR.');
+
+      const spawnPromise = runSpawn({ task: openPrTask, workspacePath: '/tmp/ws' });
+      await flushMicrotasks(); // initial watcher arms while quiet — must not self-fire
+
+      sentinelExists = true; // the agent writes .agent-done
+      await capturedOnExit({ exitCode: 0, killed: false });
+      await settle();
+      expect(shellService.pasteToSession).toHaveBeenCalledTimes(1);
+      expect(agentLifecycle.finalizeAgent).not.toHaveBeenCalled();
+
+      // The nudge deleted the sentinel, so this exit carries no completion
+      // signal of its own: nothing but the session phase decides whether it
+      // is heard.
+      await capturedOnExit({ exitCode: 1, killed: true });
+      await settle();
+      await spawnPromise;
+
+      expect(shellService.pasteToSession).toHaveBeenCalledTimes(1); // one nudge per run
+      expect(agentLifecycle.finalizeAgent).toHaveBeenCalledTimes(1);
+      expect(agentLifecycle.finalizeAgent).toHaveBeenCalledWith(expect.objectContaining({ success: false }));
+
+      // ...and now the run really is over — a late trigger finalizes nothing.
+      await capturedOnExit({ exitCode: 0, killed: false });
+      await settle();
+      expect(agentLifecycle.finalizeAgent).toHaveBeenCalledTimes(1);
     });
 
     it('finalizes on the first sentinel with no re-prompt when the PR is already merged', async () => {

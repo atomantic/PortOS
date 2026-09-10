@@ -14,8 +14,8 @@ import { randomUUID } from 'crypto';
 import { join, basename } from 'path';
 import { access, constants, stat } from 'fs/promises';
 import { PATHS, atomicWrite, readJSONFile, ensureDir } from '../../lib/fileUtils.js';
-import { isStr, trimTo } from '../../lib/storyBible.js';
 import { SHARING_SCHEMA_VERSION } from './version.js';
+import { isStr, trimTo } from '../../lib/textUtils.js';
 
 const REGISTRY_PATH = () => join(PATHS.data, 'sharing', 'buckets.json');
 

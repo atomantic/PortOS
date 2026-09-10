@@ -3,6 +3,9 @@ import { mkdir, readFile, rm, utimes, writeFile } from 'fs/promises';
 import { createServer } from 'http';
 import { join } from 'path';
 import { WebSocketServer } from 'ws';
+import express from 'express';
+import { request } from '../lib/testHelper.js';
+import { errorMiddleware } from '../lib/errorHandler.js';
 import { createTempDataRoot, makePathsProxy } from '../lib/mockPathsDataRoot.js';
 
 // Shape captured from Chrome 150 when a second top-level navigation supersedes
@@ -48,6 +51,39 @@ describe('browserService config persistence', () => {
     expect(saved.macAppBundle).toBe('/Applications/Google Chrome Canary.app');
     const onDisk = JSON.parse(await readFile(join(tempRoot, 'browser-config.json'), 'utf-8'));
     expect(onDisk.macAppBundle).toBe('/Applications/Google Chrome Canary.app');
+  });
+
+  it('clears custom browser paths through the config API and preserves omitted paths', async () => {
+    const service = await importService();
+    const router = (await import('../routes/browser.js')).default;
+    const app = express();
+    app.use(express.json());
+    app.use('/api/browser', router);
+    app.use(errorMiddleware);
+    const customPaths = {
+      chromePath: '/Applications/Google Chrome Canary.app/Contents/MacOS/Google Chrome Canary',
+      macAppBundle: '/Applications/Google Chrome Canary.app',
+    };
+    await service.saveConfig(customPaths);
+
+    const unchanged = await request(app).put('/api/browser/config').send({ headless: true });
+    expect(unchanged.status).toBe(200);
+    expect(unchanged.body).toMatchObject(customPaths);
+
+    // Clearing the binary input also clears its derived bundle to null.
+    const cleared = await request(app).put('/api/browser/config').send({
+      chromePath: '', macAppBundle: null,
+    });
+    expect(cleared.status).toBe(200);
+    expect(cleared.body).not.toHaveProperty('chromePath');
+    expect(cleared.body).not.toHaveProperty('macAppBundle');
+    const onDisk = JSON.parse(await readFile(join(tempRoot, 'browser-config.json'), 'utf-8'));
+    expect(onDisk).not.toHaveProperty('chromePath');
+    expect(onDisk).not.toHaveProperty('macAppBundle');
+    expect(onDisk.headless).toBe(true);
+
+    const invalid = await request(app).put('/api/browser/config').send({ macAppBundle: 42 });
+    expect(invalid.status).toBe(400);
   });
 
   it('reloads config after the setup script writes browser-config.json directly', async () => {

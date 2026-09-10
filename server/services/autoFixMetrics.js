@@ -16,7 +16,7 @@
  * recovery".
  */
 
-import { getAllTasks } from './cosTaskStore.js';
+import { getTaskDiagnostics } from './cosTaskStore.js';
 import { fixTierMeta } from './autoFixer.js';
 
 // A diagnostics-bearing task is "resolved" once its task reaches the terminal
@@ -168,11 +168,10 @@ export function aggregateAutoFixDiagnostics(tasks, { now = Date.now() } = {}) {
 }
 
 /**
- * Load all persisted tasks (user + internal) and aggregate their auto-fix
- * diagnostics. Thin I/O shim over the pure reducer above.
+ * Aggregate persisted auto-fix diagnostics from user and internal tasks.
+ * Thin I/O shim over the pure reducer above.
  */
 export async function getAutoFixMetrics({ now = Date.now() } = {}) {
-  const { user, cos } = await getAllTasks();
-  const tasks = [...(user?.tasks || []), ...(cos?.tasks || [])];
+  const tasks = await getTaskDiagnostics();
   return aggregateAutoFixDiagnostics(tasks, { now });
 }

@@ -12,6 +12,7 @@ import {
   getBrowserLogs, navigateBrowser,
   browserDownloadUrl, deleteBrowserDownload
 } from '../services/api';
+import FolderPicker from '../components/FolderPicker';
 import BrailleSpinner from '../components/BrailleSpinner';
 import toast from '../components/ui/Toast';
 import { FormField } from '../components/ui/FormField';
@@ -43,13 +44,18 @@ export default function BrowserPage() {
   const [configDraft, setConfigDraft] = useState(null);
   const [navUrl, setNavUrl] = useState('');
   const [showDownloads, setShowDownloads] = useState(true);
+  const [statusError, setStatusError] = useState(null);
 
   const fetchStatus = useCallback(async () => {
-    const data = await getBrowserStatus().catch(() => null);
+    const data = await getBrowserStatus({ silent: true }).catch(err => {
+      setStatusError(err.message);
+      return null;
+    });
     if (data) {
       setStatus(data);
-      setLoading(false);
+      setStatusError(null);
     }
+    setLoading(false);
   }, []);
 
   const fetchLogs = useCallback(async () => {
@@ -84,12 +90,24 @@ export default function BrowserPage() {
       return null;
     });
     if (result) {
-      toast.success(`Browser ${action} successful`);
+      if ((action === 'launch' || action === 'restart') && !result.connected) {
+        toast.error('Browser process started, but Chrome is not connected yet. Check the recovery steps below if it stays disconnected.');
+      } else {
+        toast.success(`Browser ${action} successful`);
+      }
       // Refresh full status after action
       await fetchStatus();
     }
     setActionLoading(null);
   }, [fetchStatus]);
+
+  const handleChromePathChange = (chromePath) => setConfigDraft(d => {
+    const currentAppBundle = deriveMacAppBundle(d.chromePath);
+    const macAppBundle = !d.macAppBundle || d.macAppBundle === currentAppBundle
+      ? deriveMacAppBundle(chromePath)
+      : d.macAppBundle;
+    return { ...d, chromePath, macAppBundle };
+  });
 
   const handleSaveConfig = useCallback(async () => {
     if (!configDraft) return;
@@ -148,7 +166,7 @@ export default function BrowserPage() {
           </h2>
           <p className="text-gray-500">Manage the authenticated CDP/Playwright browser</p>
         </div>
-        <div className="flex items-center gap-2 flex-wrap">
+        <div className="flex items-center gap-2 flex-wrap shrink-0">
           <button
             onClick={() => setShowConfig(s => !s)}
             className={`flex items-center gap-2 px-3 py-1.5 text-sm rounded-lg transition-colors ${
@@ -158,7 +176,7 @@ export default function BrowserPage() {
             }`}
           >
             <Settings size={16} />
-            <span className="hidden sm:inline">Config</span>
+            <span>Config</span>
           </button>
           <button
             onClick={() => { setShowLogs(s => !s); }}
@@ -169,7 +187,7 @@ export default function BrowserPage() {
             }`}
           >
             <FileText size={16} />
-            <span className="hidden sm:inline">Logs</span>
+            <span>Logs</span>
           </button>
           <button
             onClick={fetchStatus}
@@ -177,10 +195,16 @@ export default function BrowserPage() {
             className="flex items-center gap-2 px-3 py-1.5 text-sm rounded-lg bg-port-card border border-port-border text-gray-400 hover:text-white hover:border-port-accent/50 transition-colors disabled:opacity-50"
           >
             <RefreshCw size={16} className={loading ? 'animate-spin' : ''} />
-            <span className="hidden sm:inline">Refresh</span>
+            <span>Refresh</span>
           </button>
         </div>
       </div>
+
+      {statusError && (
+        <p role="alert" className="mb-4 text-sm text-port-error">
+          Could not refresh browser status: {statusError}. Use Refresh to try again.
+        </p>
+      )}
 
       {/* Config panel */}
       {showConfig && configDraft && (
@@ -236,24 +260,19 @@ export default function BrowserPage() {
                 Chrome binary path
                 <span className="ml-2 text-xs text-gray-600">(leave empty to use system default)</span>
               </label>
-              <input
-                id="chromePath"
-                type="text"
-                value={configDraft.chromePath || ''}
-                onChange={e => setConfigDraft(d => {
-                  const chromePath = e.target.value;
-                  const nextAppBundle = deriveMacAppBundle(chromePath);
-                  const currentAppBundle = deriveMacAppBundle(d.chromePath);
-                  const macAppBundle = !d.macAppBundle || d.macAppBundle === currentAppBundle
-                    ? nextAppBundle
-                    : d.macAppBundle;
-                  return { ...d, chromePath, macAppBundle };
-                })}
-                placeholder="/Applications/Google Chrome Canary.app/Contents/MacOS/Google Chrome Canary"
-                className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm font-mono focus:outline-hidden focus:border-port-accent placeholder-gray-600"
-              />
+              <div className="flex items-center gap-2">
+                <input
+                  id="chromePath"
+                  type="text"
+                  value={configDraft.chromePath || ''}
+                  onChange={e => handleChromePathChange(e.target.value)}
+                  placeholder="/Applications/Google Chrome Canary.app/Contents/MacOS/Google Chrome Canary"
+                  className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm font-mono focus:outline-hidden focus:border-port-accent placeholder-gray-600"
+                />
+                <FolderPicker value={configDraft.chromePath || ''} mode="file" ariaLabel="Browse Chrome binary" onChange={handleChromePathChange} />
+              </div>
               <p className="text-xs text-gray-500 mt-1">
-                Point at Chrome Canary, Chromium, Brave, or any Chromium-based browser to differentiate the PortOS-managed browser from your daily-driver Chrome.
+                Browse files on the PortOS host. Point at Chrome Canary, Chromium, Brave, or any Chromium-based browser to differentiate the PortOS-managed browser from your daily-driver Chrome.
               </p>
             </div>
             <div className="sm:col-span-2 lg:col-span-3">
@@ -261,14 +280,17 @@ export default function BrowserPage() {
                 macOS app bundle
                 <span className="ml-2 text-xs text-gray-600">(headed mode only; leave empty for system default)</span>
               </label>
-              <input
-                id="macAppBundle"
-                type="text"
-                value={configDraft.macAppBundle || ''}
-                onChange={e => setConfigDraft(d => ({ ...d, macAppBundle: e.target.value }))}
-                placeholder="/Applications/Google Chrome Canary.app"
-                className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm font-mono focus:outline-hidden focus:border-port-accent placeholder-gray-600"
-              />
+              <div className="flex items-center gap-2">
+                <input
+                  id="macAppBundle"
+                  type="text"
+                  value={configDraft.macAppBundle || ''}
+                  onChange={e => setConfigDraft(d => ({ ...d, macAppBundle: e.target.value }))}
+                  placeholder="/Applications/Google Chrome Canary.app"
+                  className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm font-mono focus:outline-hidden focus:border-port-accent placeholder-gray-600"
+                />
+                <FolderPicker value={configDraft.macAppBundle || ''} ariaLabel="Browse macOS app bundle" onChange={macAppBundle => setConfigDraft(d => ({ ...d, macAppBundle }))} />
+              </div>
             </div>
           </div>
           <div className="mt-4 flex justify-end">
@@ -304,10 +326,73 @@ export default function BrowserPage() {
       {/* Main grid */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         {/* Status + Controls */}
-        <div className="lg:col-span-2 space-y-6">
+        <div className="lg:col-span-2 min-w-0 space-y-6">
+          {/* Controls */}
+          <div className="bg-port-card border border-port-border rounded-xl p-5">
+            <h3 className="text-lg font-semibold text-white mb-4">Controls</h3>
+            {isRunning && !isConnected && (
+              <div role="status" className="mb-4 rounded-lg border border-port-warning/30 bg-port-warning/10 p-3 text-sm">
+                <p className="font-medium text-port-warning">Chrome is not reachable</p>
+                <p className="mt-1 text-gray-400">
+                  The launcher is running, but Chrome’s control connection is unavailable. Startup can take a few seconds.
+                  If this persists, restart the browser below. Restart may interrupt browser tasks.
+                </p>
+                {status.error && <p className="mt-2 text-port-warning break-words">{status.error}</p>}
+                <p className="mt-2 text-gray-400">
+                  If restarting does not help, open Logs for the launch error and Config to check the Chrome binary path
+                  and ports. On a machine without a desktop session, enable Headless mode, save, then restart.
+                </p>
+                <div className="mt-3 flex flex-wrap gap-3">
+                  <button onClick={() => setShowLogs(true)} className="text-port-accent underline">Show logs</button>
+                  <button onClick={() => setShowConfig(true)} className="text-port-accent underline">Edit configuration</button>
+                </div>
+              </div>
+            )}
+            <div className="flex flex-wrap gap-2">
+              {!isRunning ? (
+                <button
+                  onClick={() => handleAction('launch', launchBrowser)}
+                  disabled={loading || !status || actionLoading !== null}
+                  className="flex items-center gap-1.5 px-3 py-1.5 text-sm bg-port-success text-white rounded-lg hover:bg-port-success/80 transition-colors disabled:opacity-50"
+                >
+                  {actionLoading === 'launch'
+                    ? <RefreshCw size={14} className="animate-spin" />
+                    : <Play size={14} />
+                  }
+                  Launch
+                </button>
+              ) : (
+                <>
+                  <button
+                    onClick={() => handleAction('stop', stopBrowser)}
+                    disabled={loading || !status || actionLoading !== null}
+                    className="flex items-center gap-1.5 px-3 py-1.5 text-sm bg-port-error text-white rounded-lg hover:bg-port-error/80 transition-colors disabled:opacity-50"
+                  >
+                    {actionLoading === 'stop'
+                      ? <RefreshCw size={14} className="animate-spin" />
+                      : <Square size={14} />
+                    }
+                    Stop
+                  </button>
+                  <button
+                    onClick={() => handleAction('restart', restartBrowser)}
+                    disabled={loading || !status || actionLoading !== null}
+                    className="flex items-center gap-1.5 px-3 py-1.5 text-sm bg-port-warning text-white rounded-lg hover:bg-port-warning/80 transition-colors disabled:opacity-50"
+                  >
+                    {actionLoading === 'restart'
+                      ? <RefreshCw size={14} className="animate-spin" />
+                      : <RefreshCw size={14} />
+                    }
+                    {isConnected ? 'Restart' : 'Restart browser to reconnect'}
+                  </button>
+                </>
+              )}
+            </div>
+          </div>
+
           {/* Status card */}
           <div className="bg-port-card border border-port-border rounded-xl p-5">
-            <div className="flex items-center justify-between mb-4">
+            <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
               <h3 className="text-lg font-semibold text-white flex items-center gap-2">
                 <Activity size={20} className="text-port-accent" />
                 Browser Status
@@ -320,7 +405,7 @@ export default function BrowserPage() {
                     : 'bg-port-error/10 text-port-error'
               }`}>
                 {isConnected ? <Wifi size={14} /> : <WifiOff size={14} />}
-                {isConnected ? 'Connected' : isRunning ? 'Running (not connected)' : 'Stopped'}
+                {isConnected ? 'Connected' : isRunning ? 'Running (not connected)' : loading ? 'Checking…' : !status ? 'Unknown' : 'Stopped'}
               </div>
             </div>
 
@@ -387,51 +472,6 @@ export default function BrowserPage() {
             )}
           </div>
 
-          {/* Controls */}
-          <div className="bg-port-card border border-port-border rounded-xl p-5">
-            <h3 className="text-lg font-semibold text-white mb-4">Controls</h3>
-            <div className="flex flex-wrap gap-2">
-              {!isRunning ? (
-                <button
-                  onClick={() => handleAction('launch', launchBrowser)}
-                  disabled={actionLoading !== null}
-                  className="flex items-center gap-1.5 px-3 py-1.5 text-sm bg-port-success text-white rounded-lg hover:bg-port-success/80 transition-colors disabled:opacity-50"
-                >
-                  {actionLoading === 'launch'
-                    ? <RefreshCw size={14} className="animate-spin" />
-                    : <Play size={14} />
-                  }
-                  Launch
-                </button>
-              ) : (
-                <>
-                  <button
-                    onClick={() => handleAction('stop', stopBrowser)}
-                    disabled={actionLoading !== null}
-                    className="flex items-center gap-1.5 px-3 py-1.5 text-sm bg-port-error text-white rounded-lg hover:bg-port-error/80 transition-colors disabled:opacity-50"
-                  >
-                    {actionLoading === 'stop'
-                      ? <RefreshCw size={14} className="animate-spin" />
-                      : <Square size={14} />
-                    }
-                    Stop
-                  </button>
-                  <button
-                    onClick={() => handleAction('restart', restartBrowser)}
-                    disabled={actionLoading !== null}
-                    className="flex items-center gap-1.5 px-3 py-1.5 text-sm bg-port-warning text-white rounded-lg hover:bg-port-warning/80 transition-colors disabled:opacity-50"
-                  >
-                    {actionLoading === 'restart'
-                      ? <RefreshCw size={14} className="animate-spin" />
-                      : <RefreshCw size={14} />
-                    }
-                    Restart
-                  </button>
-                </>
-              )}
-            </div>
-          </div>
-
           {/* Navigate to URL */}
           {isConnected && (
             <div className="bg-port-card border border-port-border rounded-xl p-5">
@@ -449,7 +489,7 @@ export default function BrowserPage() {
                   value={navUrl}
                   onChange={e => setNavUrl(e.target.value)}
                   placeholder="https://example.com"
-                  className="flex-1 px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm focus:outline-hidden focus:border-port-accent placeholder-gray-600"
+                  className="min-w-0 flex-1 px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm focus:outline-hidden focus:border-port-accent placeholder-gray-600"
                 />
                 <button
                   type="submit"
@@ -480,7 +520,7 @@ export default function BrowserPage() {
                       }).catch(err => toast.error(`Failed to navigate: ${err.message}`))
                         .finally(() => setActionLoading(null));
                     }}
-                    disabled={actionLoading !== null}
+                    disabled={loading || !status || actionLoading !== null}
                     className="flex items-center gap-1.5 px-3 py-1.5 text-sm bg-port-bg border border-port-border text-gray-400 rounded-lg hover:text-white hover:border-port-accent/50 transition-colors disabled:opacity-50 cursor-pointer"
                   >
                     <Icon size={14} />

@@ -77,6 +77,7 @@ import {
   repairableSeriesFoundationCharacters,
   seriesFoundationCharacters,
 } from './foundationJudgeContext.js';
+import { trimTo, isNonBlankStr } from '../../lib/textUtils.js';
 
 // Compatibility surface: callers keep importing these projection helpers from
 // foundationJudge.js while their implementation lives with the context builder.
@@ -253,14 +254,12 @@ export function foundationFixTarget(dimensions, threshold = DEFAULT_FOUNDATION_T
 
 // ---------- sanitize LLM output ----------
 
-const str = (v, max) => (typeof v === 'string' ? v.trim().slice(0, max) : '');
-
 function sanitizeDimension(raw) {
   const d = raw && typeof raw === 'object' ? raw : {};
   return {
     score: clampScore(d.score),
-    gap: str(d.gap, GAP_MAX),
-    fix: str(d.fix, FIX_MAX),
+    gap: trimTo(d.gap, GAP_MAX),
+    fix: trimTo(d.fix, FIX_MAX),
   };
 }
 
@@ -301,7 +300,7 @@ export function sanitizeFoundationJudge(parsed) {
   return {
     dimensions,
     weightedScore: computeWeightedScore(dimensions),
-    oneLineVerdict: str(p.oneLineVerdict, SUMMARY_MAX),
+    oneLineVerdict: trimTo(p.oneLineVerdict, SUMMARY_MAX),
   };
 }
 
@@ -1206,10 +1205,9 @@ async function refineWorld(universeId, { providerId, model, effort, onRunCreated
     // clear. Writing it would erase the existing unlocked value (sanitize turns a
     // non-string into ''). Skip locked fields AND absent/blank ones; preserve the
     // current value in both cases (the AGENTS.md absent-vs-empty rule).
-    const filled = (v) => typeof v === 'string' && v.trim() !== '';
-    if (locked.logline !== true && filled(expanded.logline)) patch.logline = expanded.logline;
-    if (locked.premise !== true && filled(expanded.premise)) patch.premise = expanded.premise;
-    if (locked.styleNotes !== true && filled(expanded.styleNotes)) patch.styleNotes = expanded.styleNotes;
+    if (locked.logline !== true && isNonBlankStr(expanded.logline)) patch.logline = expanded.logline;
+    if (locked.premise !== true && isNonBlankStr(expanded.premise)) patch.premise = expanded.premise;
+    if (locked.styleNotes !== true && isNonBlankStr(expanded.styleNotes)) patch.styleNotes = expanded.styleNotes;
     // `influences` is an { embrace, avoid } object and updateUniverse replaces it
     // WHOLESALE — but the lockable keys are the two SUBLISTS
     // (`influencesEmbrace`/`influencesAvoid`, see universeBuilder LOCKABLE_FIELDS),

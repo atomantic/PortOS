@@ -1,42 +1,27 @@
 import { request } from './apiCore.js';
 import { buildFormData } from './apiImageVideo.js';
+import {
+  PIPELINE_STAGE_IDS,
+  PIPELINE_STAGE_LABELS,
+  PIPELINE_TAB_STAGE_IDS,
+  TEXT_STAGE_IDS,
+} from '../../../server/lib/pipelineStages.js';
 
-// Stage IDs mirror server/services/pipeline/issues.js — keep these in sync.
+// Stage IDs come from the browser-safe server/lib/pipelineStages.js leaf.
 // `nouns` is a UI-only pseudo-stage: it has no server stage record + no LLM
 // template, and its actions wrap existing endpoints (extract scenes + the
 // generic image gen API). It appears in PIPELINE_TAB_STAGES so it gets a tab
 // between Prose and Comic Pages, but it's NOT in server TEXT_STAGE_IDS — so
 // auto-run text chain skips it and POST /stages/nouns/generate would 400.
-export const PIPELINE_TEXT_STAGES = Object.freeze(['idea', 'prose', 'comicScript', 'teleplay']);
-const PIPELINE_VISUAL_STAGES = Object.freeze(['comicPages', 'storyboards', 'episodeVideo']);
-const PIPELINE_AUDIO_STAGES = Object.freeze(['audio']);
+export const PIPELINE_TEXT_STAGES = TEXT_STAGE_IDS;
 const PIPELINE_UI_STAGES = Object.freeze(['nouns']);
 export const PIPELINE_STAGES = Object.freeze([
-  ...PIPELINE_TEXT_STAGES, ...PIPELINE_VISUAL_STAGES, ...PIPELINE_AUDIO_STAGES, ...PIPELINE_UI_STAGES,
+  ...PIPELINE_STAGE_IDS, ...PIPELINE_UI_STAGES,
 ]);
 
-// Stages that appear as their own tab, in display order. `comicPages` is
-// folded into the Comic Script tab (one merged page-by-page editor) — the
-// data still flows through the comicPages routes, the tab is just hidden.
-// `nouns` is inserted between Prose and Comic Pages so the workflow reads
-// Idea → Prose → Nouns → Comic → Teleplay → Storyboards → Episode Video.
-export const PIPELINE_TAB_STAGES = Object.freeze([
-  'idea', 'prose', 'nouns', 'comicScript', 'teleplay', 'storyboards', 'episodeVideo', 'audio',
-]);
-
-export const PIPELINE_STAGE_LABELS = Object.freeze({
-  idea: 'Idea',
-  prose: 'Prose',
-  nouns: 'Nouns',
-  // `comicScript` stage now owns the merged Comic Pages editor — the
-  // standalone Comic Pages tab is hidden via PIPELINE_TAB_STAGES below.
-  comicScript: 'Comic',
-  teleplay: 'Teleplay',
-  comicPages: 'Comic',
-  storyboards: 'Storyboards',
-  episodeVideo: 'Video',
-  audio: 'Audio',
-});
+// Compatibility aliases for the service's established client-facing names.
+export const PIPELINE_TAB_STAGES = PIPELINE_TAB_STAGE_IDS;
+export { PIPELINE_STAGE_LABELS };
 
 // The stage that conventionally feeds each text-stage target — mirrors the
 // server's DEFAULT_FORWARD_SOURCE (server/services/pipeline/textStages.js).

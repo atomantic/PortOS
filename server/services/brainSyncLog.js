@@ -33,6 +33,14 @@ let fileSize = 0;
 // must terminate that fragment first, or it would swallow the new entry.
 let pendingNewline = false;
 let indexLoaded = false;
+// True until a compactLog() pass actually reads the file. Set whenever the log
+// could have changed underneath the last recorded pass (an append landing, or
+// the index being rebuilt) so the next compaction call can't wrongly skip.
+let appendedSinceCompaction = true;
+// The floor compactLog() resolved on the last pass that completed (read the
+// file, whether or not it dropped lines). A repeat call with an unchanged
+// floor and nothing appended since can only reproduce the same result.
+let lastCompactionFloor = null;
 
 async function ensureBrainDir() {
   await ensureDir(DATA_DIR);
@@ -74,6 +82,10 @@ async function loadIndex() {
   currentSeq = 0;
   pendingNewline = false;
   indexLoaded = true;
+  // A rebuild (boot, or recovery from a stale index) means the last recorded
+  // compaction pass no longer describes the current file — always run the
+  // next one regardless of what it recorded.
+  appendedSinceCompaction = true;
   if (!existsSync(SYNC_LOG_FILE)) return;
 
   let terminatedBytes = 0;
@@ -105,6 +117,9 @@ async function ensureIndex() {
  * advanced: `fileSize` can no longer be trusted, so the next call rescans.
  */
 async function writeIndexedLines(lines) {
+  // Set before the write: a partially failed append can still land bytes on
+  // disk, so the next compaction pass must not be skipped either way.
+  appendedSinceCompaction = true;
   const payload = (pendingNewline ? '\n' : '') + lines.map(({ text }) => text).join('\n') + '\n';
   await appendFileGuarded(SYNC_LOG_FILE, payload).catch((err) => {
     indexLoaded = false;
@@ -267,8 +282,13 @@ function replayTerminal(entries) {
  * under the log mutex, preventing index skew after a failed append, and is
  * preserved so initSyncLog recovers the monotonic sequence counter across
  * restarts.
+ *
+ * Skips the read entirely when nothing has been appended since the last
+ * completed pass and `minSeq` resolves to the same floor as that pass — a
+ * compaction can only drop lines when the log grew or the floor moved. Pass
+ * `{ force: true }` for an unconditional pass (manual/CLI callers, tests).
  */
-export async function compactLog(minSeq = 0) {
+export async function compactLog(minSeq = 0, { force = false } = {}) {
   return withLock(async () => {
     await ensureBrainDir();
     // Load first: the rebuild below marks the index loaded, so skipping this
@@ -276,133 +296,149 @@ export async function compactLog(minSeq = 0) {
     await ensureIndex();
     if (!existsSync(SYNC_LOG_FILE)) return 0;
 
-    const content = await readFile(SYNC_LOG_FILE, 'utf-8');
-    const rawLines = content.trim().split('\n').filter(l => l.trim());
-    if (rawLines.length === 0) return 0;
+    // currentSeq mirrors the durable on-disk max seq (loadIndex, every append,
+    // and every completed compaction pass all keep it in sync), so it stands
+    // in for a freshly parsed maxDurableSeq here without paying for a read.
+    const floor = Number.isFinite(minSeq) ? Math.max(0, Math.min(minSeq, currentSeq)) : 0;
+    if (!force && !appendedSinceCompaction && floor === lastCompactionFloor) return 0;
 
-    const parsedLines = [];
-    let maxDurableSeq = 0;
-    let maxSeqEntry = null;
+    async function runPass() {
+      const content = await readFile(SYNC_LOG_FILE, 'utf-8');
+      const rawLines = content.trim().split('\n').filter(l => l.trim());
+      if (rawLines.length === 0) return 0;
 
-    for (const rawLine of rawLines) {
-      const entry = safeJSONParse(rawLine, null);
-      if (entry && typeof entry.seq === 'number') {
-        if (entry.seq > maxDurableSeq) {
-          maxDurableSeq = entry.seq;
-          maxSeqEntry = entry;
-        }
-        parsedLines.push({ rawLine, entry, seq: entry.seq });
-      } else {
-        // Line without numeric seq (e.g. malformed or unindexed note)
-        parsedLines.push({ rawLine, entry: null, seq: null });
-      }
-    }
+      const parsedLines = [];
+      let maxDurableSeq = 0;
+      let maxSeqEntry = null;
 
-    const floor = typeof minSeq === 'number' && Number.isFinite(minSeq)
-      ? Math.max(0, Math.min(minSeq, maxDurableSeq))
-      : 0;
-
-    const preservedTail = [];
-    const tailEntriesByKey = new Map();
-    const olderEntriesByKey = new Map();
-    const unindexedOrUntypedOlder = [];
-
-    for (const item of parsedLines) {
-      const { entry, seq } = item;
-      if (seq !== null && floor > 0 && seq >= floor) {
-        preservedTail.push(item);
-        if (entry?.type && entry?.id) {
-          const key = `${entry.type}/${entry.id}`;
-          if (!tailEntriesByKey.has(key)) tailEntriesByKey.set(key, []);
-          tailEntriesByKey.get(key).push(item);
-        }
-      } else if (entry?.type && entry?.id) {
-        const key = `${entry.type}/${entry.id}`;
-        if (!olderEntriesByKey.has(key)) olderEntriesByKey.set(key, []);
-        olderEntriesByKey.get(key).push(item);
-      } else {
-        if (floor === 0 || seq === null) {
-          unindexedOrUntypedOlder.push(item);
-        }
-      }
-    }
-
-    // Replay terminal winning state for older keys
-    const keptOlder = [];
-    const olderWinnersByKey = new Map();
-    for (const [key, items] of olderEntriesByKey) {
-      const entries = items.map(i => i.entry);
-      const olderWinner = replayTerminal(entries);
-      if (!olderWinner) continue;
-
-      // If this key also appears in the preserved tail, check whether any tail
-      // operation strictly supersedes the pre-floor LWW winner (updatedAt > olderWinner.updatedAt).
-      // If the tail carries ONLY stale/losing operations (e.g. olderWinner is a Jan-02 delete
-      // and tail has an echoed Jan-01 create), we MUST retain olderWinner before the verbatim
-      // tail so fresh / delta-only peers do not accept the stale create and resurrect the record.
-      const tailItems = tailEntriesByKey.get(key);
-      if (tailItems) {
-        const supersededByTail = tailItems.some(i => {
-          const tailTs = i.entry?.record?.updatedAt;
-          return tailTs != null && olderWinner.record?.updatedAt != null && tailTs > olderWinner.record.updatedAt;
-        });
-        if (supersededByTail) {
-          continue;
-        }
-      }
-
-      const matchingItem = items.find(i => i.entry === olderWinner)
-        || { rawLine: JSON.stringify(olderWinner), entry: olderWinner, seq: olderWinner.seq };
-      keptOlder.push(matchingItem);
-      olderWinnersByKey.set(key, matchingItem);
-    }
-
-    const kept = [...unindexedOrUntypedOlder, ...keptOlder, ...preservedTail];
-
-    // Ensure the durable max sequence is preserved so restart recovery and cursors hold
-    if (maxSeqEntry && !kept.some(i => i.seq === maxSeqEntry.seq)) {
-      if (!maxSeqEntry.type || !maxSeqEntry.id) {
-        kept.push({ rawLine: JSON.stringify(maxSeqEntry), entry: maxSeqEntry, seq: maxSeqEntry.seq });
-      } else {
-        const key = `${maxSeqEntry.type}/${maxSeqEntry.id}`;
-        const winner = olderWinnersByKey.get(key);
-        if (winner && winner.entry) {
-          winner.entry.seq = maxSeqEntry.seq;
-          winner.seq = maxSeqEntry.seq;
-          winner.rawLine = JSON.stringify(winner.entry);
+      for (const rawLine of rawLines) {
+        const entry = safeJSONParse(rawLine, null);
+        if (entry && typeof entry.seq === 'number') {
+          if (entry.seq > maxDurableSeq) {
+            maxDurableSeq = entry.seq;
+            maxSeqEntry = entry;
+          }
+          parsedLines.push({ rawLine, entry, seq: entry.seq });
         } else {
-          kept.push({ rawLine: JSON.stringify(maxSeqEntry), entry: maxSeqEntry, seq: maxSeqEntry.seq });
+          // Line without numeric seq (e.g. malformed or unindexed note)
+          parsedLines.push({ rawLine, entry: null, seq: null });
         }
       }
-    }
 
-    // Sort kept entries: items with numeric seq sorted by seq
-    kept.sort((a, b) => {
-      if (a.seq !== null && b.seq !== null) return a.seq - b.seq;
-      return 0;
-    });
+      const passFloor = typeof minSeq === 'number' && Number.isFinite(minSeq)
+        ? Math.max(0, Math.min(minSeq, maxDurableSeq))
+        : 0;
 
-    const dropped = rawLines.length - kept.length;
-    if (dropped <= 0) return 0;
+      const preservedTail = [];
+      const tailEntriesByKey = new Map();
+      const olderEntriesByKey = new Map();
+      const unindexedOrUntypedOlder = [];
 
-    const newContent = kept.map(i => i.rawLine).join('\n') + '\n';
-    await atomicWrite(SYNC_LOG_FILE, newContent);
-
-    // Rebuild index offsets from what was written
-    offsets = [];
-    let offset = 0;
-    for (const { rawLine, seq } of kept) {
-      if (typeof seq === 'number') {
-        offsets.push({ seq, offset });
+      for (const item of parsedLines) {
+        const { entry, seq } = item;
+        if (seq !== null && passFloor > 0 && seq >= passFloor) {
+          preservedTail.push(item);
+          if (entry?.type && entry?.id) {
+            const key = `${entry.type}/${entry.id}`;
+            if (!tailEntriesByKey.has(key)) tailEntriesByKey.set(key, []);
+            tailEntriesByKey.get(key).push(item);
+          }
+        } else if (entry?.type && entry?.id) {
+          const key = `${entry.type}/${entry.id}`;
+          if (!olderEntriesByKey.has(key)) olderEntriesByKey.set(key, []);
+          olderEntriesByKey.get(key).push(item);
+        } else {
+          if (passFloor === 0 || seq === null) {
+            unindexedOrUntypedOlder.push(item);
+          }
+        }
       }
-      offset += Buffer.byteLength(rawLine, 'utf8') + 1;
-    }
-    fileSize = offset;
-    currentSeq = maxDurableSeq;
-    pendingNewline = false;
-    indexLoaded = true;
 
-    console.log(`🔄 Compacted sync log: dropped ${dropped}, kept ${kept.length}`);
+      // Replay terminal winning state for older keys
+      const keptOlder = [];
+      const olderWinnersByKey = new Map();
+      for (const [key, items] of olderEntriesByKey) {
+        const entries = items.map(i => i.entry);
+        const olderWinner = replayTerminal(entries);
+        if (!olderWinner) continue;
+
+        // If this key also appears in the preserved tail, check whether any tail
+        // operation strictly supersedes the pre-floor LWW winner (updatedAt > olderWinner.updatedAt).
+        // If the tail carries ONLY stale/losing operations (e.g. olderWinner is a Jan-02 delete
+        // and tail has an echoed Jan-01 create), we MUST retain olderWinner before the verbatim
+        // tail so fresh / delta-only peers do not accept the stale create and resurrect the record.
+        const tailItems = tailEntriesByKey.get(key);
+        if (tailItems) {
+          const supersededByTail = tailItems.some(i => {
+            const tailTs = i.entry?.record?.updatedAt;
+            return tailTs != null && olderWinner.record?.updatedAt != null && tailTs > olderWinner.record.updatedAt;
+          });
+          if (supersededByTail) {
+            continue;
+          }
+        }
+
+        const matchingItem = items.find(i => i.entry === olderWinner)
+          || { rawLine: JSON.stringify(olderWinner), entry: olderWinner, seq: olderWinner.seq };
+        keptOlder.push(matchingItem);
+        olderWinnersByKey.set(key, matchingItem);
+      }
+
+      const kept = [...unindexedOrUntypedOlder, ...keptOlder, ...preservedTail];
+
+      // Ensure the durable max sequence is preserved so restart recovery and cursors hold
+      if (maxSeqEntry && !kept.some(i => i.seq === maxSeqEntry.seq)) {
+        if (!maxSeqEntry.type || !maxSeqEntry.id) {
+          kept.push({ rawLine: JSON.stringify(maxSeqEntry), entry: maxSeqEntry, seq: maxSeqEntry.seq });
+        } else {
+          const key = `${maxSeqEntry.type}/${maxSeqEntry.id}`;
+          const winner = olderWinnersByKey.get(key);
+          if (winner && winner.entry) {
+            winner.entry.seq = maxSeqEntry.seq;
+            winner.seq = maxSeqEntry.seq;
+            winner.rawLine = JSON.stringify(winner.entry);
+          } else {
+            kept.push({ rawLine: JSON.stringify(maxSeqEntry), entry: maxSeqEntry, seq: maxSeqEntry.seq });
+          }
+        }
+      }
+
+      // Sort kept entries: items with numeric seq sorted by seq
+      kept.sort((a, b) => {
+        if (a.seq !== null && b.seq !== null) return a.seq - b.seq;
+        return 0;
+      });
+
+      const dropped = rawLines.length - kept.length;
+      if (dropped <= 0) return 0;
+
+      const newContent = kept.map(i => i.rawLine).join('\n') + '\n';
+      await atomicWrite(SYNC_LOG_FILE, newContent);
+
+      // Rebuild index offsets from what was written
+      offsets = [];
+      let offset = 0;
+      for (const { rawLine, seq } of kept) {
+        if (typeof seq === 'number') {
+          offsets.push({ seq, offset });
+        }
+        offset += Buffer.byteLength(rawLine, 'utf8') + 1;
+      }
+      fileSize = offset;
+      currentSeq = maxDurableSeq;
+      pendingNewline = false;
+      indexLoaded = true;
+
+      console.log(`🔄 Compacted sync log: dropped ${dropped}, kept ${kept.length}`);
+      return dropped;
+    }
+
+    const dropped = await runPass();
+    // Record only once the pass has actually completed (whether or not it
+    // dropped lines) — a pass that throws (e.g. an atomicWrite failure) skips
+    // these and leaves the flag set, so the next tick retries.
+    appendedSinceCompaction = false;
+    lastCompactionFloor = floor;
     return dropped;
   });
 }

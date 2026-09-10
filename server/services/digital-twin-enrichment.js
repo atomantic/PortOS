@@ -3,7 +3,7 @@ import { existsSync } from 'fs';
 import { join } from 'path';
 import { getActiveProvider, getProviderById } from './providers.js';
 import { buildPrompt } from './promptService.js';
-import { safeJSONParse } from '../lib/fileUtils.js';
+import { extractJson } from '../lib/jsonExtract.js';
 import { ENRICHMENT_CATEGORIES, SCALE_QUESTIONS, SCALE_WEIGHT, CONFIDENCE_BOOST } from './digital-twin-constants.js';
 import { DIGITAL_TWIN_DIR, generateId, now, ensureSoulDir, callProviderAI, ensureDocumentInMeta } from './digital-twin-helpers.js';
 import { loadMeta, saveMeta, digitalTwinEvents } from './digital-twin-meta.js';
@@ -458,9 +458,18 @@ Respond in JSON format:
 
   const responseText = result.text || '';
 
-  // Parse the JSON response
-  const parsed = safeJSONParse(responseText.match(/```json\s*([\s\S]*?)\s*```/)?.[1] || '', null, { logError: true, context: 'enrichment analysis' });
-  if (parsed) {
+  // Parse the JSON response. The prompt contains a fenced schema example;
+  // walk all balanced blocks so a provider echo cannot win over the answer.
+  const responseSource = prompt && responseText.includes(prompt)
+    ? responseText.replace(prompt, '')
+    : responseText;
+  const { value: parsed } = extractJson(responseSource, {
+    skipInnerFence: true,
+    shapePredicate: (value) => value && typeof value === 'object' && !Array.isArray(value)
+      && ['itemAnalysis', 'patterns', 'personalityInsights', 'suggestedDocument']
+        .some((key) => key in value),
+  });
+  if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
     return {
       category,
       items,

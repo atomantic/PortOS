@@ -18,7 +18,8 @@ import {
   REPO_STUDY_LABEL_CONTRACT,
   formatOptionalIssueLabelFlags,
 } from './dispatchLabels.js';
-import { formatTrackerInstructions, TRACKER_FILING_PRESETS } from './workTracker.js';
+import { formatTrackerInstructions, TRACKER_FILING_PRESETS, formatForgeCategoryLabelFlags } from './workTracker.js';
+import { getAuditFilingPreset } from './auditCatalog.js';
 
 const REF_WATCH = { slugPrefix: 'ref-watch-', label: 'reference-watch', issueLabel: 'reference-watch' };
 
@@ -108,6 +109,31 @@ describe('formatTrackerInstructions — forge dispatch hints (#4351)', () => {
     expect(jira).toContain('Issue-quality gate');
     expect(jira).toContain('fall back to recording proposals in PLAN.md');
     expect(formatTrackerInstructions('jira')).toBe(jira);
+  });
+});
+
+describe('formatTrackerInstructions — metric labels beside the slug', () => {
+  it('formats category + metric + plan as repeated --label flags', () => {
+    expect(formatForgeCategoryLabelFlags('code-quality', ['cognitive-load']))
+      .toBe('--label code-quality --label cognitive-load --label plan');
+    expect(formatForgeCategoryLabelFlags('ux', [])).toBe('--label ux --label plan');
+    expect(formatForgeCategoryLabelFlags('ux', ['ux'])).toBe('--label ux --label plan');
+  });
+
+  it('applies the slug-stem metric as a second forge label when it differs from the category', () => {
+    const preset = getAuditFilingPreset('better-cognitive-load');
+    const github = formatTrackerInstructions('github', preset);
+    expect(github).toContain('--label code-quality --label cognitive-load --label plan');
+    expect(github).toContain('gh label create cognitive-load --description "Proposed from a cognitive-load/readability audit" --force');
+    expect(formatTrackerInstructions('gitlab', preset)).toContain('--label code-quality --label cognitive-load --label plan');
+    expect(formatTrackerInstructions('jira', preset)).toContain('and the metric label `cognitive-load`');
+  });
+
+  it('does not duplicate the category when the slug stem is already the issue label', () => {
+    const github = formatTrackerInstructions('github', getAuditFilingPreset('ux'));
+    expect(github).toContain('--label ux --label plan');
+    expect(github).not.toContain('--label ux --label ux');
+    expect(github).not.toContain('then the metric label');
   });
 });
 

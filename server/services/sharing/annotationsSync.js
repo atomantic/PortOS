@@ -14,7 +14,7 @@ import { listBuckets } from './buckets.js';
 import { buildManifest, writeManifest, annotationManifestFilename, readManifest, listManifestFilenames } from './manifest.js';
 import { getProducedByVersion } from './version.js';
 import { PORTOS_SCHEMA_VERSIONS } from '../../lib/schemaVersions.js';
-import { getInstanceId, UNKNOWN_INSTANCE_ID } from '../instances.js';
+import { getInstanceId, UNKNOWN_INSTANCE_ID } from '../instanceIdentity.js';
 import { resolveBucketSourceName } from './annotationIdentity.js';
 import { onLocalAnnotationChange, listLocalAuthorAnnotations } from '../mediaAnnotations.js';
 

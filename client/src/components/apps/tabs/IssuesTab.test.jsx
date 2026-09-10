@@ -29,6 +29,7 @@ vi.mock('../../../services/api', () => ({
   getAppIssues: vi.fn(),
   createSlashdoTask: vi.fn(),
   getProviders: vi.fn(),
+  getLocalLlmStatus: vi.fn().mockResolvedValue(null),
   // The tab reads the reviewers a claim will actually run so it can name them
   // (and say whether a claim-work override supplied them).
   getAppClaimReviewers: vi.fn(),
@@ -310,6 +311,24 @@ describe('IssuesTab', () => {
     expect(screen.queryByText('Reviewed by')).not.toBeInTheDocument();
   });
 
+  it('shows and submits the configured default without touching the override controls', async () => {
+    api.getProviders.mockResolvedValue({
+      activeProvider: 'codex',
+      providers: [{ id: 'codex', name: 'Codex', type: 'cli', command: 'codex', enabled: true,
+        models: ['gpt-5'], defaultModel: 'gpt-5', effort: 'high' }],
+    });
+    await renderTab();
+    await screen.findByText('Crash on save');
+    await waitFor(() => expect(screen.getByLabelText('Provider')).toHaveValue('codex'));
+    expect(screen.getByLabelText('Model')).toHaveValue('gpt-5');
+    expect(screen.getByRole('option', { name: 'Default effort — high' }).selected).toBe(true);
+    fireEvent.click(screen.getByRole('button', { name: /Claim/ }));
+    await waitFor(() => expect(api.createSlashdoTask).toHaveBeenCalledWith(
+      'next', 'app-1', expect.objectContaining({ provider: 'codex', model: 'gpt-5', effort: undefined }),
+      { silent: true }
+    ));
+  });
+
   it('sends the page-level provider/model/effort pin along with a claim', async () => {
     api.getProviders.mockResolvedValue({
       providers: [{
@@ -341,6 +360,46 @@ describe('IssuesTab', () => {
       },
       { silent: true }
     ));
+  });
+
+  it('sends a reviewer effort override without pinning untouched defaults', async () => {
+    await renderTab();
+    fireEvent.click(await screen.findByRole('button', { name: 'Code-review override' }));
+    fireEvent.change(await screen.findByLabelText('Reasoning effort for Antigravity'), { target: { value: 'high' } });
+    fireEvent.click(screen.getByRole('button', { name: /Claim/ }));
+    await waitFor(() => expect(api.createSlashdoTask).toHaveBeenCalled());
+    const payload = api.createSlashdoTask.mock.calls[0][2];
+    expect(payload.reviewerEfforts).toEqual({ antigravity: 'high' });
+    expect(payload).not.toHaveProperty('reviewers');
+    expect(payload).not.toHaveProperty('reviewerModels');
+    expect(payload).not.toHaveProperty('stopMode');
+  });
+
+  it('blocks an empty claim review chain, leaves replans alone, and restores inheritance', async () => {
+    await renderTab();
+    fireEvent.click(await screen.findByRole('button', { name: 'Code-review override' }));
+    fireEvent.click(await screen.findByRole('button', { name: /Remove Antigravity/i }));
+    expect(screen.getByRole('button', { name: /Claim/ })).toBeDisabled();
+    expect(screen.getByRole('alert')).toHaveTextContent('Claims require at least one non-Copilot reviewer');
+    fireEvent.click(screen.getByRole('button', { name: /Replan/ }));
+    await waitFor(() => expect(api.createSlashdoTask).toHaveBeenCalled());
+    expect(api.createSlashdoTask.mock.calls[0][2]).not.toHaveProperty('reviewers');
+    fireEvent.click(screen.getByRole('button', { name: 'Use configured reviewers' }));
+    expect(screen.getByText('Reviewed by')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Remove Antigravity/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Claim/ })).toBeEnabled();
+  });
+
+  it('clears review overrides when switching apps', async () => {
+    const view = await renderTab();
+    fireEvent.click(await screen.findByRole('button', { name: 'Code-review override' }));
+    fireEvent.change(await screen.findByLabelText('Reasoning effort for Antigravity'), { target: { value: 'high' } });
+    view.rerender(<MemoryRouter><IssuesTab appId="app-2" appName="Other" /></MemoryRouter>);
+    await screen.findByRole('button', { name: 'Code-review override' });
+    fireEvent.click(screen.getByRole('button', { name: /Claim/ }));
+    await waitFor(() => expect(api.createSlashdoTask).toHaveBeenCalled());
+    expect(api.createSlashdoTask.mock.calls[0][1]).toBe('app-2');
+    expect(api.createSlashdoTask.mock.calls[0][2]).not.toHaveProperty('reviewerEfforts');
   });
 
   it('sends optional override context with the selected claim', async () => {

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { renderHook, cleanup } from '@testing-library/react';
+import { render, renderHook, cleanup, screen } from '@testing-library/react';
 
 // Capture the socket handler the hook registers so tests can drive the
 // `cos:schedule:on-demand-empty` event, and record toast calls.
@@ -240,4 +240,23 @@ it('updates one maintenance notification with an agent link and expires terminal
   expect(toastSpy.mock.calls[1][1]).toMatchObject({ duration: 8000, label: 'Maintenance · 1/1 · completed' });
   unmount();
   expect(handlers.has('cos:maintenance:updated')).toBe(false);
+});
+
+it('keeps a stopped run on completed-count even when the stale active step is retained', () => {
+  toastSpy.mockClear();
+  const { unmount } = renderHook(() => useOnDemandTaskToast());
+  const update = handlers.get('cos:maintenance:updated');
+  const steps = ['better-structural-drift', 'simplify', 'module-hygiene', 'better-complexity', 'performance', 'better-cognitive-load', 'documentation']
+    .map((taskType, index) => ({ id: `maint-1-${index}`, taskRef: { taskType } }));
+  update({
+    id: 'maint-stopped', status: 'stopped', steps,
+    completed: { 'maint-1-0': 'done', 'maint-1-1': 'done' },
+    active: { stepId: 'maint-1-2', taskType: 'module-hygiene' },
+    updatedAt: 'stopped',
+  });
+  expect(toastSpy.mock.calls[0][1]).toMatchObject({ label: 'Maintenance · 2/7 · stopped' });
+  render(toastSpy.mock.calls[0][0]());
+  expect(screen.getByRole('status')).toHaveTextContent('stopped · 2/7 steps');
+  expect(screen.getByRole('progressbar')).toHaveAttribute('value', '2');
+  unmount();
 });

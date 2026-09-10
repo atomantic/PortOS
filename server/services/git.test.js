@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { createPR, extractAgentSummary, parseGitHubOwnerFromRemote, pickGhAccountForOwner, parseGitRemote, detectForgeCli, parsePullRequestUrl, requestCopilotReview, resolveForgeTokenEnv } from './git.js';
+import { createPR, extractAgentSummary, parseGitHubOwnerFromRemote, pickGhAccountForOwner, parseGitRemote, detectForgeCli, parsePullRequestUrl, requestCopilotReview } from './git.js';
 
 describe('parseGitRemote', () => {
   it('parses GitHub SSH urls', () => {
@@ -211,15 +211,11 @@ describe('requestCopilotReview', () => {
   // contract so the request never reaches a real network call.
 });
 
-describe('resolveForgeTokenEnv', () => {
-  it('returns {} for a non-existent dir so ambient gh auth is untouched (and never throws)', async () => {
-    // A cwd that doesn't exist makes the git spawn fail → resolveForgeForRepo
-    // sees no origin remote → account: null → no overlay. Deterministic and
-    // network-free regardless of the host machine's gh logins. (A null/omitted
-    // dir would fall back to the process cwd — a real repo — so we use an
-    // explicitly bogus path to keep the assertion environment-independent.)
-    await expect(resolveForgeTokenEnv('/nonexistent-path-for-test')).resolves.toEqual({});
-  });
+it('preserves forge credential exports for existing Git service callers', async () => {
+  const auth = await import('./forgeAuth.js');
+  const git = await import('./git.js');
+  expect(git.resolveForgeTokenEnv).toBe(auth.resolveForgeTokenEnv);
+  expect(git.resolveForgeForRepo).toBe(auth.resolveForgeForRepo);
 });
 
 describe('extractAgentSummary', () => {
@@ -286,9 +282,10 @@ describe('extractAgentSummary', () => {
 describe('git.js exports the helpers the agent resume path calls', () => {
   it('exposes every function agentWorktreeCleanup.resolveResumePointer uses', async () => {
     const git = await vi.importActual('./git.js');
+    expect(git.isBranchMergedInto).toBe(git.hasBranchMergeEvidence);
     for (const name of [
       'getBranch', 'getStatusPorcelain', 'getBranchComparison',
-      'isBranchMergedInto', 'getWorktreeBranches', 'getDefaultBranch'
+      'hasBranchMergeEvidence', 'getWorktreeBranches', 'getDefaultBranch'
     ]) {
       expect(typeof git[name], `git.${name} must be exported`).toBe('function');
     }

@@ -549,10 +549,11 @@ export async function relaunchAgent(agentId, overrides = {}) {
   const paused = await pauseAgent(agentId, pauseReason);
 
   if (!await whenPausedAgentExits(agentId, RELAUNCH_EXIT_TIMEOUT_MS)) {
-    // Proceed anyway: the task is already parked as paused, so refusing here
-    // would leave the user with a stopped agent and no relaunch. Say so in the
-    // log, since this is the window where a late exit can clean the worktree.
-    emitLog('warn', `⚠️ Relaunch of ${agentId} proceeded before its process exited — its worktree may not survive`, { agentId });
+    // Keep the pause flag until the actual exit: retiring it early makes a late
+    // exit finalize the old run and clean up the worktree the retry needs.
+    throw new ServerError('The previous agent has not exited yet. Its task and worktree remain paused; resume after it stops.', {
+      status: 409, code: 'AGENT_EXIT_PENDING'
+    });
   }
 
   // `resumeAgent` already force-spawned the requeued task where it could

@@ -8,7 +8,7 @@
  *
  * Postgres is mocked with a SQL-dispatching fake — we capture the INSERTs and
  * assert on them, so the suite runs without a live database. The DDL/integration
- * round-trip is covered by db.catalogDdlParity.test.js + the live-DB suite.
+ * round-trip is covered by db.ddlParity.test.js + the live-DB suite.
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
@@ -83,7 +83,7 @@ vi.mock('../lib/db.js', () => ({
   arrayToPgvector: vi.fn((a) => a),
 }));
 
-vi.mock('./instances.js', () => ({
+vi.mock('./instanceIdentity.js', () => ({
   getInstanceId: vi.fn(async () => 'inst-test'),
 }));
 

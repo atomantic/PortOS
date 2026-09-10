@@ -11,7 +11,8 @@ import { join } from 'path';
 import { readJSONFile, ensureDir, PATHS, dataPath, atomicWrite, writeFileGuarded } from '../lib/fileUtils.js';
 import { createMutex } from '../lib/asyncMutex.js';
 import { instanceEvents } from './instanceEvents.js';
-import { getPeers, resolveEffectiveCategories, updatePeer, getInstanceId, UNKNOWN_INSTANCE_ID } from './instances.js';
+import { getPeers, resolveEffectiveCategories, updatePeer } from './instances.js';
+import { getInstanceId, UNKNOWN_INSTANCE_ID } from './instanceIdentity.js';
 import { peerBaseUrl } from '../lib/peerUrl.js';
 import { peerFetch } from '../lib/peerHttpClient.js';
 import * as brainSync from './brainSync.js';
@@ -24,16 +25,29 @@ import * as dataSync from './dataSync.js';
 import { getBackendName } from './memoryBackend.js';
 import { withAbortTimeout } from '../lib/abortTimeout.js';
 import { isManifestEnvelope, diffManifestSlots, MAX_MANIFEST_SLOTS } from '../lib/syncManifest.js';
+import { isNonBlankStr } from '../lib/textUtils.js';
 
 const CURSORS_FILE = dataPath('instances_sync_cursors.json');
 const SYNC_INTERVAL_MS = 60000;
 const FETCH_TIMEOUT_MS = 15000;
+// The tombstone sweep rides the 60s tick but doesn't need the tick's cadence —
+// GRACE_MS (tombstoneGc.js) is 24h, so an hour of extra GC latency is invisible
+// to users, and every sweep that finds nothing to prune still id-lists every
+// federated kind (#6851). runTombstoneSweep() below gates on this instead of
+// firing every tick; the manual `POST /tombstones/sweep` route stays unthrottled
+// (it calls sweepTombstones() directly, never through this gate).
+const TOMBSTONE_SWEEP_INTERVAL_MS = 60 * 60 * 1000;
 
 const withLock = createMutex();
-const isNonEmptyStr = (v) => typeof v === 'string' && v.length > 0;
 let syncTimer = null;
 let peerOnlineHandler = null;
 const syncingPeers = new Set();
+// 0 = "never swept this process" — runTombstoneSweep() always runs the FIRST
+// tick after boot (or after a restart) regardless of this value, then waits
+// out the full interval before the next one. Reset alongside the timer in
+// initSyncOrchestrator/stopSyncOrchestrator so a restart (and each test) starts
+// from "first tick runs".
+let lastTombstoneSweepAt = 0;
 
 // --- Realtime sync progress ---
 //
@@ -143,7 +157,7 @@ export async function getSyncStatus({ includeChecksums = false, forPeer = null }
   // (universe/pipeline/mediaCollections) — making them read "behind" forever,
   // even when both sides are empty. An absent `forPeer` (self-view, older peer)
   // keeps the unscoped global checksum (forPeerId: undefined).
-  const forPeerId = isNonEmptyStr(forPeer) ? forPeer : undefined;
+  const forPeerId = isNonBlankStr(forPeer) ? forPeer : undefined;
   const [brainSeq, memorySeq, catalogSeqs, cursors, ...checksumResults] = await Promise.all([
     Promise.resolve(brainSyncLog.getCurrentSeq()),
     isPostgres ? memorySync.getMaxSequence() : Promise.resolve(null),
@@ -164,7 +178,7 @@ export async function getSyncStatus({ includeChecksums = false, forPeer = null }
   // far we've consumed from it. That cursor IS the peer's push-frontier toward
   // us, so the requesting peer can render an outbound "N to push" count without
   // us tracking its local max. Null when we've never synced that peer.
-  if (isNonEmptyStr(forPeer)) {
+  if (isNonBlankStr(forPeer)) {
     result.cursorForYou = cursors[forPeer] ?? null;
   }
   return result;
@@ -222,7 +236,7 @@ async function syncBrainFromPeer(peer, cursor) {
     cursor.brainChecksumTypes === typesSignature ? (cursor.brainChecksum ?? null) : null;
   let brainChecksum = cachedChecksum;
   const remote = await fetchPeer(peer, '/api/brain/reconcile/checksum');
-  const remoteChecksum = isNonEmptyStr(remote?.checksum) ? remote.checksum : null;
+  const remoteChecksum = isNonBlankStr(remote?.checksum) ? remote.checksum : null;
   if (remoteChecksum && remoteChecksum !== cachedChecksum) {
     const localChecksum = await brainReconcile.getBrainChecksum().catch(() => null);
     if (remoteChecksum === localChecksum) {
@@ -237,7 +251,7 @@ async function syncBrainFromPeer(peer, cursor) {
         // at step 2 next cycle. (Our post-merge local checksum may differ from
         // the peer's if WE hold records THEY lack — that asymmetry is fine; the
         // peer reconciles those from us on its own cycle.)
-        brainChecksum = isNonEmptyStr(snapshot.checksum) ? snapshot.checksum : remoteChecksum;
+        brainChecksum = isNonBlankStr(snapshot.checksum) ? snapshot.checksum : remoteChecksum;
       }
     }
   }
@@ -475,7 +489,7 @@ async function syncDataCategoryFromPeer(peer, peerId, category, cachedChecksums,
   // applied idempotently. The query string is only appended for the three
   // peer-record-subscribable categories; for goals/character/etc. it's inert
   // server-side, but we still pass it uniformly to keep the URL builder simple.
-  const forPeerQs = isNonEmptyStr(ourInstanceId) ? `?forPeer=${encodeURIComponent(ourInstanceId)}` : '';
+  const forPeerQs = isNonBlankStr(ourInstanceId) ? `?forPeer=${encodeURIComponent(ourInstanceId)}` : '';
   // Lightweight checksum check first
   const checksumRes = await fetchPeer(peer, `/api/sync/${category}/checksum${forPeerQs}`);
   if (!checksumRes?.checksum) return { totalApplied: 0, checksum: null };
@@ -675,12 +689,12 @@ export async function categoriesCoveredByPeerSync(peerId, peer = null, ourInstan
   // instanceId yields the records it pushes to us. Best-effort — a null
   // response (older peer / offline) leaves inbound empty → full snapshot.
   const inbound = emptyCoverage();
-  if (peer && isNonEmptyStr(ourInstanceId)) {
+  if (peer && isNonBlankStr(ourInstanceId)) {
     const res = await fetchPeer(peer, `/api/peer-sync/subscriptions?peerId=${encodeURIComponent(ourInstanceId)}`);
     const subs = Array.isArray(res?.subscriptions) ? res.subscriptions : [];
     for (const sub of subs) {
       const cat = RECORD_KIND_TO_CATEGORY[sub?.recordKind];
-      if (cat && isNonEmptyStr(sub?.recordId)) inbound[cat].add(sub.recordId);
+      if (cat && isNonBlankStr(sub?.recordId)) inbound[cat].add(sub.recordId);
     }
   }
   return { outbound, inbound };
@@ -727,7 +741,7 @@ export async function syncWithPeer(peer) {
     // per-record). Resolved once per sync, best-effort; null/UNKNOWN → no
     // scoping (full snapshots, legacy behavior).
     const ourInstanceId = await getInstanceId().catch(() => null);
-    const scopedInstanceId = isNonEmptyStr(ourInstanceId) && ourInstanceId !== UNKNOWN_INSTANCE_ID
+    const scopedInstanceId = isNonBlankStr(ourInstanceId) && ourInstanceId !== UNKNOWN_INSTANCE_ID
       ? ourInstanceId
       : null;
 
@@ -817,7 +831,7 @@ export async function syncWithPeer(peer) {
         // short-circuits the snapshot fetch next cycle (#1077). Only overwrite
         // when we actually resolved one — a failed/legacy probe (null) leaves
         // the prior value so we don't lose the skip-optimization on a blip.
-        if (isNonEmptyStr(brainResult.brainChecksum)) {
+        if (isNonBlankStr(brainResult.brainChecksum)) {
           cursors[peerId].brainChecksum = brainResult.brainChecksum;
           // Stamp the entity-type signature the cache is valid for — an
           // enrollment change (new brain type) invalidates the cached checksum
@@ -945,6 +959,9 @@ export async function syncAllPeers() {
  * Initialize the sync orchestrator
  */
 export function initSyncOrchestrator() {
+  // Fresh start (boot, or a test's init after a prior stop) always runs the
+  // tombstone sweep on the first tick — see TOMBSTONE_SWEEP_INTERVAL_MS above.
+  lastTombstoneSweepAt = 0;
   // Sync immediately when a peer comes online
   peerOnlineHandler = (peer) => {
     if (!hasAnySyncEnabled(peer)) return;
@@ -980,18 +997,34 @@ export function initSyncOrchestrator() {
 }
 
 /**
- * Run a single tombstone GC sweep, fire-and-forget. Dynamic import keeps
- * the GC module's universe / pipeline / sharing dependency graph off the
- * orchestrator's module-load path (same reason as `categoriesCoveredByPeerSync`
- * above). Logs a single-line summary only when something was actually
- * pruned — quiet on no-op cycles.
+ * Run a single tombstone GC sweep, fire-and-forget — but only once per
+ * TOMBSTONE_SWEEP_INTERVAL_MS, not on every 60s tick. Runs on the first tick
+ * after boot (`lastTombstoneSweepAt === 0`) so a fresh process doesn't wait a
+ * full hour for its first GC pass. Dynamic import keeps the GC module's
+ * universe / pipeline / sharing dependency graph off the orchestrator's
+ * module-load path (same reason as `categoriesCoveredByPeerSync` above). Logs
+ * a single-line summary only when something was actually pruned — quiet on
+ * no-op cycles.
+ *
+ * Stamps `lastTombstoneSweepAt` BEFORE awaiting the sweep (not after) so a
+ * slow sweep still under way can't have its claimed slot re-entered by a
+ * later tick once the hour rolls over — the same reasoning as the module-
+ * level doc comment. Either the dynamic import OR the sweep itself FAILING
+ * resets the stamp back to 0, though, so a transient error (the DB blips, or
+ * the GC module briefly fails to load) retries on the very next tick instead
+ * of going quiet for a full hour.
  */
 async function runTombstoneSweep() {
-  const { sweepTombstones } = await import('./sharing/tombstoneGc.js');
-  const result = await sweepTombstones().catch((err) => {
-    console.error(`❌ Tombstone sweep failed: ${err.message}`);
-    return null;
-  });
+  const now = Date.now();
+  if (lastTombstoneSweepAt !== 0 && now - lastTombstoneSweepAt < TOMBSTONE_SWEEP_INTERVAL_MS) return;
+  lastTombstoneSweepAt = now;
+  const result = await import('./sharing/tombstoneGc.js')
+    .then(({ sweepTombstones }) => sweepTombstones())
+    .catch((err) => {
+      console.error(`❌ Tombstone sweep failed: ${err.message}`);
+      lastTombstoneSweepAt = 0;
+      return null;
+    });
   if (result && (result.universes > 0 || result.series > 0 || result.issues > 0 || result.collections > 0)) {
     // "series" is already its own plural so no s-suffix toggle needed there.
     const universes = `${result.universes} universe${result.universes === 1 ? '' : 's'}`;
@@ -1028,6 +1061,7 @@ async function runBrainTombstoneSweep() {
  * Stop the sync orchestrator
  */
 export function stopSyncOrchestrator() {
+  lastTombstoneSweepAt = 0;
   if (peerOnlineHandler) {
     instanceEvents.removeListener('peer:online', peerOnlineHandler);
     peerOnlineHandler = null;

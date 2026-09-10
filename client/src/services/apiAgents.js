@@ -308,13 +308,12 @@ export const updateCosTaskInterval = (taskType, settings, options = {}) => reque
 // Manual maintenance runs — the Schedule tab's "Run maintenance now" (server:
 // services/maintenanceRun.js).
 export const getMaintenanceRuns = (options) => request('/cos/schedule/maintenance-runs', options);
-export const startMaintenanceRun = ({ appId, providerId, model, effort = null }, options = {}) => request('/cos/schedule/maintenance-runs', {
+export const startMaintenanceRun = ({ appId, providerId, model, effort = null, mode = 'file-issues', claimBetweenAudits = true, claimHandler, taskTypes }, options = {}) => request('/cos/schedule/maintenance-runs', {
   method: 'POST',
-  body: JSON.stringify({ appId, providerId, model, effort }),
+  body: JSON.stringify({ appId, providerId, model, effort, mode, claimBetweenAudits, claimHandler, taskTypes }),
   ...options
 });
 export const stopMaintenanceRun = (id, options = {}) => request(`/cos/schedule/maintenance-runs/${id}/stop`, { method: 'POST', ...options });
-export const resumeMaintenanceRun = (id, options = {}) => request(`/cos/schedule/maintenance-runs/${id}/resume`, { method: 'POST', ...options });
 
 export const triggerCosOnDemandTask = (taskType, appId = null, options = {}) => request('/cos/schedule/trigger', {
   method: 'POST',
@@ -363,3 +362,7 @@ export const triggerFeatureAgent = (id, options = {}) => request(`/feature-agent
 export const stopFeatureAgent = (id, options = {}) => request(`/feature-agents/${id}/stop`, { method: 'POST', ...options });
 export const getFeatureAgentRuns = (id, limit) => request(`/feature-agents/${id}/runs${limit ? `?limit=${limit}` : ''}`);
 export const getFeatureAgentOutput = (id) => request(`/feature-agents/${id}/output`);
+
+export const updateMaintenanceStep = (id, stepId, settings, options = {}) => request(`/cos/schedule/maintenance-runs/${encodeURIComponent(id)}/steps/${encodeURIComponent(stepId)}`, {
+  method: 'PATCH', body: JSON.stringify(settings), ...options,
+});

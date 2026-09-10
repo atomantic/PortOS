@@ -302,8 +302,8 @@ export async function checkHealth() {
 // idempotent DDL list concurrently can intermittently error or deadlock on
 // Postgres system catalogs (concurrent CREATE TABLE/INDEX IF NOT EXISTS contend
 // on pg_type / pg_class). Sharing one in-flight promise serializes them; it's
-// cleared on settle so a deliberate later call (the gate runs it twice) still
-// re-applies (cheap — ~30 no-op parses on an up-to-date DB).
+// retained as successful readiness after it settles so sequential store warms
+// do not repeat the full DDL block.
 //
 // That dedup only covers callers IN THIS PROCESS. There is one Postgres per
 // install shared by every process that opens it — the server, `portos-cos`,
@@ -318,12 +318,13 @@ export async function checkHealth() {
 // kill mid-boot can never strand a later boot waiting forever.
 export const SCHEMA_DDL_ADVISORY_LOCK_KEY = 5977001;
 let ensureSchemaInFlight = null;
+let schemaEnsured = false;
 // Every DB-backed store self-runs ensureSchema() when it warms its backend at
 // boot (memory, creative-director, media index, catalog, universe/story/writers
 // stores, pipeline series/issues, plus the boot DB gate). Those warm
-// sequentially, so the in-flight dedup above can't collapse them — each re-runs
-// the idempotent DDL (cheap no-ops) and would otherwise re-log the same line.
-// Log it once per process so the boot output isn't a wall of identical lines.
+// sequentially, so in-flight dedup alone cannot collapse them. Successful
+// readiness lasts for this process; a restart still applies that version's
+// complete upgrade list. Failed attempts remain retryable.
 let schemaUpgradeLogged = false;
 
 /**
@@ -331,11 +332,15 @@ let schemaUpgradeLogged = false;
  * Each statement uses IF NOT EXISTS so it's safe to run on every startup.
  * Add new ALTER TABLE statements here when the schema evolves.
  *
- * Concurrent calls share a single in-flight execution (see ensureSchemaInFlight).
+ * Concurrent calls share an execution; later calls reuse successful readiness.
+ * `force` explicitly reapplies the current process's DDL for repair tooling.
  */
-export async function ensureSchema() {
+export async function ensureSchema({ force = false } = {}) {
   if (ensureSchemaInFlight) return ensureSchemaInFlight;
-  ensureSchemaInFlight = ensureSchemaImpl().finally(() => { ensureSchemaInFlight = null; });
+  if (schemaEnsured && !force) return;
+  schemaEnsured = false;
+  ensureSchemaInFlight = ensureSchemaImpl().then(() => { schemaEnsured = true; })
+    .finally(() => { ensureSchemaInFlight = null; });
   return ensureSchemaInFlight;
 }
 
@@ -400,7 +405,7 @@ async function ensureSchemaImpl() {
 
     // Catalog block: every statement below is idempotent (CREATE IF NOT EXISTS
     // / CREATE OR REPLACE FUNCTION / DROP TRIGGER IF EXISTS + CREATE TRIGGER),
-    // so we run the whole list on every boot rather than gating on table
+    // so we run the whole list once per process rather than gating on table
     // presence. A previous probe that early-returned on "all four tables exist"
     // would skip the indexes / functions / triggers if the prior boot crashed
     // between the table CREATEs and the artifact CREATEs — leaving the schema

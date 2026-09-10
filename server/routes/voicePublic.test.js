@@ -2,10 +2,10 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import express from 'express';
 import { request } from '../lib/testHelper.js';
 
-vi.mock('../services/voice/tts.js', () => ({
+vi.mock('../services/voice/tts.js', async () => ({
   synthesize: vi.fn(),
   listVoices: vi.fn(),
-  VALID_ENGINES: new Set(['kokoro', 'piper']),
+  VALID_ENGINES: (await import('../lib/voiceEngines.js')).VALID_ENGINES,
 }));
 vi.mock('../services/voice/config.js', () => ({
   getVoiceConfig: vi.fn(),
@@ -44,11 +44,12 @@ describe('Public Voice API (/api/voice/public)', () => {
       expect(tts.synthesize).toHaveBeenCalledWith('hello', expect.objectContaining({ engine: undefined }));
     });
 
-    it('passes engine/voice/rate overrides through', async () => {
+    it.each([...tts.VALID_ENGINES])('passes %s engine/voice/rate overrides through', async (engine) => {
       tts.synthesize.mockResolvedValue({ wav: Buffer.from('x'), latencyMs: 1, engine: 'piper' });
-      await request(buildApp()).post('/api/voice/public/synthesize')
-        .send({ text: 'hi', engine: 'piper', voice: 'en_US-amy-medium', rate: 1.5 });
-      expect(tts.synthesize).toHaveBeenCalledWith('hi', { engine: 'piper', voice: 'en_US-amy-medium', rate: 1.5 });
+      const res = await request(buildApp()).post('/api/voice/public/synthesize')
+        .send({ text: 'hi', engine, voice: 'en_US-amy-medium', rate: 1.5 });
+      expect(res.status).toBe(200);
+      expect(tts.synthesize).toHaveBeenCalledWith('hi', { engine, voice: 'en_US-amy-medium', rate: 1.5 });
     });
 
     it('400s on empty text', async () => {
@@ -96,10 +97,17 @@ describe('Public Voice API (/api/voice/public)', () => {
   });
 
   describe('GET /engines', () => {
+    it('reads Qwen3 defaults from its persisted configuration key', async () => {
+      config.getVoiceConfig.mockResolvedValue({ tts: { engine: 'qwen3-tts', qwen3: { voice: 'warm-narrator' } } });
+      const res = await request(buildApp()).get('/api/voice/public/engines');
+      expect(res.body.defaults['qwen3-tts']).toBe('warm-narrator');
+    });
     it('returns engines + active + per-engine default voice', async () => {
       const res = await request(buildApp()).get('/api/voice/public/engines');
       expect(res.status).toBe(200);
-      expect(res.body.engines).toEqual(expect.arrayContaining(['kokoro', 'piper']));
+      expect(res.body.engines).toEqual([...tts.VALID_ENGINES]);
+      expect(Object.keys(res.body.defaults)).toEqual([...tts.VALID_ENGINES]);
+      expect(res.body.defaults['qwen3-tts']).toBeNull();
       expect(res.body.active).toBe('kokoro');
       expect(res.body.defaults.kokoro).toBe('af_heart');
       expect(res.body.defaults.piper).toBe('en_GB-jenny_dioco-medium');

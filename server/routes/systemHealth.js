@@ -4,12 +4,13 @@ import { statfs } from 'fs/promises';
 import { listProcesses } from '../services/pm2.js';
 import * as apps from '../services/apps.js';
 import * as cos from '../services/cos.js';
-import { getSelf } from '../services/instances.js';
+import { getSelf } from '../services/instanceIdentity.js';
 import { checkHealth } from '../lib/db.js';
 import { getCurrentVersion } from '../services/updateChecker.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { getMemoryStats } from '../lib/memoryStats.js';
-import { formatBytes } from '../lib/fileUtils.js';
+import { formatBytes, formatDuration } from '../lib/fileUtils.js';
+import { parseFilesystemStats } from '../lib/fileCore.js';
 import { validateRequest, systemHealthWarningParamsSchema, systemHealthWarningDismissSchema } from '../lib/validation.js';
 import { getSettings, updateSettingsWith } from '../services/settings.js';
 import { checkGhHealth } from '../services/github.js';
@@ -157,21 +158,13 @@ router.get('/health/details', asyncHandler(async (req, res) => {
   // bavail = blocks available to unprivileged users (what the user can actually fill).
   // Derive used/usagePercent from the same figure so `used + free === total` and
   // the UI's percent corresponds to the displayed `free`.
-  let disk = null;
-  if (diskStats) {
-    const totalDisk = diskStats.blocks * diskStats.bsize;
-    if (totalDisk > 0) {
-      const freeDisk = diskStats.bavail * diskStats.bsize;
-      const usedDisk = totalDisk - freeDisk;
-      const diskUsagePercent = Math.round((usedDisk / totalDisk) * 100);
-      disk = {
-        total: totalDisk,
-        used: usedDisk,
-        free: freeDisk,
-        usagePercent: diskUsagePercent
-      };
-    }
-  }
+  const parsedDisk = parseFilesystemStats(diskStats);
+  const disk = parsedDisk && {
+    total: parsedDisk.total,
+    used: parsedDisk.used,
+    free: parsedDisk.free,
+    usagePercent: parsedDisk.usagePercent,
+  };
 
   // Process status summary from PM2. Processes whose exit is expected (a desktop
   // app the user closed) are excluded from the FAILURE-bearing counts: a quit game
@@ -303,19 +296,8 @@ router.get('/health/details', asyncHandler(async (req, res) => {
     queuedTasks: cosStatus.queueLength || 0
   } : null;
 
-  // Format uptime for display
   const uptime = process.uptime();
-  const days = Math.floor(uptime / 86400);
-  const hours = Math.floor((uptime % 86400) / 3600);
-  const minutes = Math.floor((uptime % 3600) / 60);
-  let uptimeFormatted;
-  if (days > 0) {
-    uptimeFormatted = `${days}d ${hours}h`;
-  } else if (hours > 0) {
-    uptimeFormatted = `${hours}h ${minutes}m`;
-  } else {
-    uptimeFormatted = `${minutes}m`;
-  }
+  const uptimeFormatted = formatDuration(uptime * 1000);
 
   const responseTime = Date.now() - startTime;
 

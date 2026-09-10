@@ -81,7 +81,7 @@ vi.mock('./cos.js', () => ({
   getTaskById: vi.fn().mockResolvedValue(null),
   getAgentRecord: vi.fn().mockResolvedValue(null),
 }));
-vi.mock('./git.js', () => ({ resolveForgeTokenEnv: vi.fn().mockResolvedValue({}) }));
+vi.mock('./forgeAuth.js', () => ({ resolveForgeTokenEnv: vi.fn().mockResolvedValue({}) }));
 vi.mock('./agentCliSpawning.js', () => ({
   buildCliSpawnConfig: vi.fn(),
   isClaudeCliProvider: vi.fn().mockReturnValue(false),
@@ -111,7 +111,7 @@ vi.mock('./agentRunEventLog.js', () => ({ appendRunEvent: vi.fn(async () => ({ a
 vi.mock('./agentPromptBuilder.js', () => ({
   buildAgentPrompt: vi.fn(),
   getAppWorkspace: vi.fn(),
-  inlinePrLifecycleSection: vi.fn(() => null),
+  promptOpensOwnPr: vi.fn(() => 'portos'),
   isClaimFlowTask: vi.fn(() => false),
 }));
 vi.mock('./workspaceContext.js', () => ({ snapshotOnRepoSwitch: vi.fn().mockResolvedValue(null) }));
@@ -119,7 +119,7 @@ vi.mock('./agentErrorAnalysis.js', () => ({
   analyzeAgentFailure: vi.fn().mockReturnValue({ category: 'startup-failure', actionable: false }),
 }));
 vi.mock('./appActivity.js', () => ({ releaseAppReviewMarker: vi.fn().mockResolvedValue(undefined) }));
-vi.mock('./instances.js', () => ({ ensureInstanceId: vi.fn().mockResolvedValue('instance-1') }));
+vi.mock('./instanceIdentity.js', () => ({ ensureInstanceId: vi.fn().mockResolvedValue('instance-1') }));
 vi.mock('./toolStateMachine.js', () => ({
   createToolExecution: vi.fn(() => ({ id: 'exec-1' })),
   startExecution: vi.fn(),

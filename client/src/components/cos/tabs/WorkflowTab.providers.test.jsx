@@ -66,6 +66,26 @@ const renderTab = async (providers) => {
 };
 
 describe('WorkflowTab per-app override rows', () => {
+  it('keeps perpetual on-demand tasks on the clocked track', async () => {
+    api.getCosWorkflow.mockResolvedValue({
+      ...GRAPH,
+      timeline: { ...GRAPH.timeline, occurrences: [] },
+      nodes: [
+        { ...GRAPH.nodes[0], id: 'task:flexible', label: 'Flexible', schedule: { type: 'on-demand', perpetual: false }, totalAppCount: 0 },
+        { ...GRAPH.nodes[0], id: 'task:drain', label: 'Drain', schedule: { type: 'on-demand', perpetual: true, recheckCron: '0 9 * * *' }, totalAppCount: 0 },
+      ],
+    });
+
+    await act(async () => {
+      render(<MemoryRouter><WorkflowTab apps={[]} providers={[]} /></MemoryRouter>);
+    });
+
+    expect((await screen.findByText('Active schedules')).parentElement).toHaveTextContent('1');
+    expect(screen.getByText('Drain')).toBeInTheDocument();
+    expect(screen.getByText('Flexible')).toBeInTheDocument();
+    expect(screen.getByText('These active on-demand tasks do not promise a clock time.')).toBeInTheDocument();
+  });
+
   it('renders the app pin with the provider display name, not the raw id', async () => {
     await renderTab(PROVIDERS);
     const pin = screen.getByLabelText('Provider for Acme');

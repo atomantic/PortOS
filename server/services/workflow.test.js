@@ -327,6 +327,15 @@ describe('projectWorkflowTimeline', () => {
     ]);
   });
 
+  it('does not project automatic launches or rechecks for manual drains', () => {
+    const timeline = projectWorkflowTimeline([{
+      id: 'task:drain', kind: 'task', enabled: true,
+      schedule: { type: 'on-demand', perpetual: true, autoStart: false, recheckCron: '0 9 * * *' }
+    }], range);
+    expect(timeline.windows).toEqual([]);
+    expect(timeline.occurrences).toEqual([]);
+  });
+
   it('renders an active perpetual task as an open-ended drain window and its reset', () => {
     const timeline = projectWorkflowTimeline([{
       id: 'task:drain', kind: 'task', enabled: true, shouldRun: true,

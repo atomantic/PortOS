@@ -196,7 +196,7 @@ const RAW_NAV_COMMANDS = [
   { id: 'nav.devtools.image-clean', path: '/devtools/image-clean', label: 'Image Cleaner', section: 'Dev Tools', aliases: ['image-clean', 'image-cleaner'], keywords: ['metadata', 'c2pa', 'content-credentials', 'sharp', 'denoise'] },
   { id: 'nav.devtools.jira', path: '/devtools/jira', label: 'JIRA', section: 'Dev Tools', feature: 'jira', previousPaths: ['/jira'], aliases: ['jira', 'devtools-jira'] },
   { id: 'nav.devtools.jira-reports', path: '/devtools/jira/reports', label: 'JIRA Reports', section: 'Dev Tools', feature: 'jira', aliases: ['jira-reports'] },
-  { id: 'nav.devtools.quota-burn', path: '/devtools/quota-burn', label: 'Quota Burn', section: 'Dev Tools', aliases: ['quota-burn', 'burn-quota', 'quota'], keywords: ['subscription', 'usage', 'reset window', 'spend quota', 'claude', 'codex', 'grok', 'agy', 'burn'] },
+  { id: 'nav.devtools.quota-burn', path: '/devtools/quota-burn', label: 'Quota Burn', section: 'Models', aliases: ['quota-burn', 'burn-quota', 'quota'], keywords: ['subscription', 'usage', 'reset window', 'spend quota', 'claude', 'codex', 'grok', 'agy', 'burn'] },
   { id: 'nav.shell', path: '/shell', label: 'Shell', section: 'Dev Tools', aliases: ['shell', 'terminal'] },
   { id: 'nav.devtools.usage', path: '/devtools/usage', label: 'Usage', section: 'Models', tabId: 'usage', aliases: ['devtools-usage'] },
   { id: 'nav.devtools.video-download', path: '/devtools/video-download', label: 'Video Downloader', section: 'Dev Tools', aliases: ['video-download', 'video-downloader', 'download-video'], keywords: ['youtube', 'x.com', 'twitter', 'yt-dlp', 'download', 'clip'] },
@@ -483,7 +483,6 @@ for (const cmd of NAV_COMMANDS) {
     if (!aliasToPath[alias]) aliasToPath[alias] = cmd.path;
   }
 }
-const ALIAS_KEYS = Object.keys(aliasToPath);
 
 export const getNavAliasMap = () => ({ ...aliasToPath });
 
@@ -493,9 +492,19 @@ export const normalizeLabel = (s) => (s || '')
   .trim()
   .replace(/[.!?:;,"']+$/, '');
 
+// Derive lookup keys using the same normalization as spoken input. Keep the
+// original alias for getNavAliasMap(), matched, and command ownership lookup.
+const normalizeNavAlias = (alias) => normalizeLabel(alias).replace(/\s+/g, '-');
+const normalizedAliases = new Map();
+for (const alias of Object.keys(aliasToPath)) {
+  const key = normalizeNavAlias(alias);
+  if (!normalizedAliases.has(key)) normalizedAliases.set(key, alias);
+}
+const ALIAS_KEYS = [...normalizedAliases.keys()];
+
 export const resolveNavCommand = (input) => {
   if (!input || typeof input !== 'string') return null;
-  const norm = normalizeLabel(input).replace(/\s+/g, '-');
+  const norm = normalizeNavAlias(input);
   if (!norm) return null;
 
   const tail = norm.split('-').filter(Boolean).pop();
@@ -529,6 +538,7 @@ export const resolveNavCommand = (input) => {
   }
   if (!matched) return null;
 
+  matched = normalizedAliases.get(matched);
   const path = aliasToPath[matched];
   const command = NAV_COMMANDS.find((c) => c.path === path && (c.aliases || []).includes(matched))
     || NAV_COMMANDS.find((c) => c.path === path);

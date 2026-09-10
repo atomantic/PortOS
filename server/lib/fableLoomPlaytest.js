@@ -8,9 +8,9 @@
  */
 
 import { analyzeEpisodeGraph } from './fableLoomGraph.js';
+import { isNonBlankStr } from './textUtils.js';
 
 const asArray = (value) => (Array.isArray(value) ? value : []);
-const hasText = (value) => typeof value === 'string' && value.trim().length > 0;
 
 export const FABLELOOM_PLAYTEST_LIMITS = Object.freeze({
   DEFAULT_MAX_PATHS: 96,
@@ -41,7 +41,7 @@ const boundedInteger = (value, fallback, max) => (
 );
 
 const transitionKey = (nodeId, transition, index) => (
-  hasText(transition?.id) ? transition.id : `${nodeId}:transition-${index + 1}`
+  isNonBlankStr(transition?.id) ? transition.id : `${nodeId}:transition-${index + 1}`
 );
 
 const transitionCoverageKey = (nodeId, transitionId, index) => (
@@ -206,7 +206,7 @@ export function enumerateEpisodePlaythroughs(episode, options = {}) {
     }
   };
 
-  if (hasText(episode?.startNodeId) && byId.has(episode.startNodeId)) {
+  if (isNonBlankStr(episode?.startNodeId) && byId.has(episode.startNodeId)) {
     walk({
       nodeId: episode.startNodeId,
       nodeIds: [],
@@ -233,7 +233,7 @@ export function enumerateEpisodePlaythroughs(episode, options = {}) {
   const issues = [];
   const push = (code, severity, message, extra = {}) => issues.push({ code, severity, message, ...extra });
 
-  if (!hasText(episode?.startNodeId) || !byId.has(episode.startNodeId)) {
+  if (!isNonBlankStr(episode?.startNodeId) || !byId.has(episode.startNodeId)) {
     push(PLAYTEST_ISSUE_CODES.NO_START, 'error', 'Playthrough testing cannot start because the opening scene is missing.');
   }
   for (const path of paths) {

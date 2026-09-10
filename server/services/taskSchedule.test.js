@@ -87,8 +87,7 @@ vi.mock('./userTimezone.js', () => ({
 }))
 
 vi.mock('./eventScheduler.js', () => ({
-  parseCronToNextRun: vi.fn(),
-  parseCronToPrevRun: vi.fn()
+  parseCronToNextRun: vi.fn()
 }))
 
 // Failure-park auto-notification (#2616): recordTaskTypeFailure lazy-imports
@@ -122,6 +121,7 @@ import {
   recordExecution,
   getExecutionHistory,
   shouldRunTask,
+  shouldContinuePerpetualDrain,
   getDueTasks,
   getNextTaskType,
   getUpcomingTasks,
@@ -140,6 +140,7 @@ import {
   getPerpetualDrainState,
   recordPerpetualDispatch,
   applyOnDemandRunResets,
+  queuePerpetualRefill,
   isRefillRequest,
   ON_DEMAND_ORIGINS,
   recordTaskTypeFailure,
@@ -188,10 +189,10 @@ import { loadState } from './cosState.js'
 
 import { readJSONFile } from '../lib/fileUtils.js'
 import { writeFile } from 'fs/promises'
-import { isTaskTypeEnabledForApp, getAppTaskTypeInterval, clearAllPrWatcherState, clearAllIssueWatcherState } from './apps.js'
+import { isTaskTypeEnabledForApp, getAppTaskTypeInterval, getAppTaskTypeOverrides, getActiveApps, clearAllPrWatcherState, clearAllIssueWatcherState } from './apps.js'
 import { getLocalParts } from '../lib/timezone.js'
 import { getAdaptiveCooldownMultiplier } from './taskLearning.js'
-import { parseCronToNextRun, parseCronToPrevRun } from './eventScheduler.js'
+import { parseCronToNextRun } from './eventScheduler.js'
 import { addNotification, exists as notificationExists, removeByMetadata } from './notifications.js'
 import { isInstanceFeatureEnabled } from './instanceFeatures.js'
 
@@ -210,23 +211,18 @@ const PAUSED_SHIPPED_DRAINS = {
 
 // The cron parser is mocked module-wide, so a case that wants a cron task
 // simply due (or simply on cooldown) states it here rather than hand-picking
-// wall-clock instants: no catch-up slot, and a next slot already past / still
-// ahead. Callers needing catch-up semantics still stub prevRun themselves.
+// wall-clock instants: a slot in the current minute, or one still ahead.
 const cronDueNow = () => {
-  parseCronToPrevRun.mockReturnValue(null)
-  parseCronToNextRun.mockReturnValue(new Date(Date.now() - 60_000))
+  parseCronToNextRun.mockReturnValue(new Date(Math.floor(Date.now() / 60_000) * 60_000))
 }
 const cronNotDueYet = () => {
-  parseCronToPrevRun.mockReturnValue(null)
   parseCronToNextRun.mockReturnValue(new Date(Date.now() + 60 * 60 * 1000))
 }
 
 // Resolve "the most recent 9 AM in the past, local time." Bare
 // `setHours(9, 0, 0, 0)` flakes in CI when the runner's wall-clock is
 // before 9 AM local (UTC CI fires at ~04:00 UTC daily) — today's 9 AM
-// would be in the future and shouldRunTask's `prevRunMs <= now` guard
-// correctly rejects a slot that hasn't happened yet, breaking these
-// tests' premise. Subtract a day when needed.
+// would be in the future. Subtract a day when needed.
 const recentNineAm = () => {
   const d = new Date()
   d.setHours(9, 0, 0, 0)
@@ -1333,96 +1329,58 @@ describe('taskSchedule', () => {
       expect(result.reason).toBe('cron-due')
     })
 
-    describe('cron catch-up', () => {
-      it('catches up a never-run cron when the missed slot elapsed after the task was created', async () => {
-        // Cron: 0 9 * * * (daily 9 AM). The task was configured yesterday and the
-        // daemon missed today's 9 AM slot — so the elapsed slot is genuinely missed
-        // and should fire now. The catch-up bound is the task's createdAt.
-        const todayNineAm = recentNineAm()
-        const twoDaysAgo = new Date(todayNineAm.getTime() - 2 * 24 * 60 * 60 * 1000)
-
-        parseCronToPrevRun.mockReturnValueOnce(todayNineAm) // most-recent past occurrence
-        parseCronToNextRun.mockReturnValueOnce(new Date(todayNineAm.getTime() + 24 * 60 * 60 * 1000))
-
-        mockSchedule({
-          tasks: {
-            'plan-task': { type: 'cron', enabled: true, cronExpression: '0 9 * * *', providerId: null, model: null, prompt: null, createdAt: twoDaysAgo.toISOString() }
-          }
-        })
-
-        const result = await shouldRunTask('plan-task')
-        expect(result.shouldRun).toBe(true)
-        expect(result.reason).toBe('cron-catch-up')
-        expect(result.missedSlot).toBe(todayNineAm.toISOString())
+    describe('cron slots without catch-up', () => {
+      let savedImplementations
+      beforeEach(async () => {
+        const mocks = [parseCronToNextRun, getLocalParts, getAppTaskTypeInterval, isTaskTypeEnabledForApp]
+        savedImplementations = mocks.map(mock => [mock, mock.getMockImplementation()])
+        const actual = await vi.importActual('../lib/timezone.js')
+        getLocalParts.mockImplementation(actual.getLocalParts)
+        isTaskTypeEnabledForApp.mockResolvedValue(true)
+      })
+      afterEach(() => {
+        for (const [mock, implementation] of savedImplementations) mock.mockImplementation(implementation)
       })
 
-      it('does NOT catch up a never-run cron whose most-recent slot predates the task', async () => {
-        // The reported bug: a weekly "Sunday 09:00" task enabled mid-week must NOT
-        // immediately fire for last Sunday's slot — that slot elapsed before the
-        // task existed, so there was nothing to miss. It waits for the next Sunday.
-        const now = Date.now()
-        const lastSunday = new Date(now - 3 * 24 * 60 * 60 * 1000)      // slot before creation
-        const nextSunday = new Date(now + 4 * 24 * 60 * 60 * 1000)
-        const createdYesterday = new Date(now - 1 * 24 * 60 * 60 * 1000) // task created after last Sunday
+      it('waits after an inherited schedule edit, fires in the new slot, and does not repeat it', async () => {
+        vi.useFakeTimers()
+        vi.setSystemTime(new Date('2026-09-09T05:57:22Z'))
+        const actual = await vi.importActual('./eventScheduler.js')
+        parseCronToNextRun.mockImplementation(actual.parseCronToNextRun)
+        getAppTaskTypeInterval.mockResolvedValue(null)
+        const lastRun = '2026-09-08T05:01:00Z'
+        const schedule = {
+          tasks: { 'release-check': { type: 'cron', enabled: true, cronExpression: '30 4 * * *', runAfter: [] } },
+          executions: { 'task:release-check': { perApp: { 'app-1': { lastRun, count: 1 } } } }
+        }
+        mockSchedule(schedule)
 
-        parseCronToPrevRun.mockReturnValueOnce(lastSunday)
-        parseCronToNextRun.mockReturnValue(nextSunday)
-
-        mockSchedule({
-          tasks: {
-            'branch-cleanup': { type: 'cron', enabled: true, cronExpression: '0 9 * * 0', providerId: null, model: null, prompt: null, createdAt: createdYesterday.toISOString() }
-          }
+        expect(await shouldRunTask('release-check', 'app-1')).toMatchObject({
+          shouldRun: false, reason: 'cron-cooldown', nextRunAt: '2026-09-09T11:30:00.000Z'
         })
+        vi.setSystemTime(new Date('2026-09-09T11:30:20Z'))
+        expect(await shouldRunTask('release-check', 'app-1')).toMatchObject({ shouldRun: true, reason: 'cron-due' })
 
-        const result = await shouldRunTask('branch-cleanup')
-        expect(result.shouldRun).toBe(false)
-        expect(result.reason).toBe('cron-cooldown')
+        schedule.executions['task:release-check'].perApp['app-1'].lastRun = '2026-09-09T11:30:20Z'
+        mockSchedule(schedule)
+        expect(await shouldRunTask('release-check', 'app-1')).toMatchObject({
+          shouldRun: false, nextRunAt: '2026-09-10T11:30:00.000Z'
+        })
       })
 
-      it('catches up after the recorded lastRun even if the daemon missed the slot', async () => {
-        // Cron fired yesterday, then daemon was down across today's 9 AM.
-        // Catch-up bound is the recorded lastRun (yesterday), so today's 9 AM counts as missed.
-        const todayNineAm = recentNineAm()
-        const yesterdayNineAm = new Date(todayNineAm.getTime() - 24 * 60 * 60 * 1000)
-
-        parseCronToPrevRun.mockReturnValueOnce(todayNineAm)
-        parseCronToNextRun.mockReturnValueOnce(new Date(todayNineAm.getTime() + 24 * 60 * 60 * 1000))
-
+      it('waits for the next per-app slot after downtime, including never-run tasks', async () => {
+        vi.useFakeTimers()
+        vi.setSystemTime(new Date('2026-09-09T12:00:00Z'))
+        const actual = await vi.importActual('./eventScheduler.js')
+        parseCronToNextRun.mockImplementation(actual.parseCronToNextRun)
+        getAppTaskTypeInterval.mockResolvedValue('30 4 * * *')
         mockSchedule({
-          tasks: {
-            'plan-task': { type: 'cron', enabled: true, cronExpression: '0 9 * * *', providerId: null, model: null, prompt: null }
-          },
-          executions: {
-            'task:plan-task': { lastRun: yesterdayNineAm.toISOString(), count: 1, perApp: {} }
-          }
+          tasks: { 'release-check': { type: 'cron', enabled: true, cronExpression: '0 8 * * *', createdAt: '2026-09-01T00:00:00Z', runAfter: [] } }
         })
-
-        const result = await shouldRunTask('plan-task')
-        expect(result.shouldRun).toBe(true)
-        expect(result.reason).toBe('cron-catch-up')
-      })
-
-      it('does NOT catch up when lastRun already covers the most-recent slot', async () => {
-        // Cron fired this morning at 9 AM; lastRun is at the same 9 AM.
-        // prevRun == lastRun → not strictly greater → no catch-up.
-        const todayNineAm = recentNineAm()
-        const tomorrowNineAm = new Date(todayNineAm.getTime() + 24 * 60 * 60 * 1000)
-
-        parseCronToPrevRun.mockReturnValueOnce(todayNineAm)
-        parseCronToNextRun.mockReturnValueOnce(tomorrowNineAm)
-
-        mockSchedule({
-          tasks: {
-            'plan-task': { type: 'cron', enabled: true, cronExpression: '0 9 * * *', providerId: null, model: null, prompt: null }
-          },
-          executions: {
-            'task:plan-task': { lastRun: todayNineAm.toISOString(), count: 1, perApp: {} }
-          }
+        expect(await shouldRunTask('release-check', 'app-1')).toMatchObject({
+          shouldRun: false, nextRunAt: '2026-09-10T11:30:00.000Z'
         })
-
-        const result = await shouldRunTask('plan-task')
-        expect(result.shouldRun).toBe(false)
-        expect(result.reason).toBe('cron-cooldown')
+        getAppTaskTypeInterval.mockResolvedValue(null)
       })
     })
   })
@@ -1437,7 +1395,6 @@ describe('taskSchedule', () => {
     })
 
     it('returns a due cron task and skips a disabled one', async () => {
-      parseCronToPrevRun.mockReturnValue(null)
       parseCronToNextRun.mockReturnValue(new Date(Date.now() - 60_000))
       mockSchedule({
         tasks: {
@@ -1476,7 +1433,6 @@ describe('taskSchedule', () => {
 
     it('does not select a feature-disabled task', async () => {
       isInstanceFeatureEnabled.mockResolvedValue(false)
-      parseCronToPrevRun.mockReturnValue(null)
       parseCronToNextRun.mockReturnValue(new Date(Date.now() - 60_000))
       mockSchedule({ tasks: {
         ...PAUSED_SHIPPED_DRAINS,
@@ -1490,13 +1446,9 @@ describe('taskSchedule', () => {
       // A user-pinned wall-clock schedule must fire at its slot even while a
       // perpetual task is perpetually 'ready' (draining a backlog).
       const todayNineAm = recentNineAm()
-      const tomorrowNineAm = new Date(todayNineAm.getTime() + 24 * 60 * 60 * 1000)
       const yesterdayNineAm = new Date(todayNineAm.getTime() - 24 * 60 * 60 * 1000)
 
-      // shouldRunTask iterates both tasks. plan-task was created before its missed
-      // slot (createdAt bound), so its elapsed 9 AM counts as a genuine catch-up.
-      parseCronToPrevRun.mockReturnValueOnce(todayNineAm) // plan-task prevRun
-      parseCronToNextRun.mockReturnValue(tomorrowNineAm)
+      cronDueNow()
 
       mockSchedule({
         tasks: {
@@ -1518,10 +1470,8 @@ describe('taskSchedule', () => {
       // perpetual drain is eligible, so the caller passes perpetualOnly to get
       // the drain instead of being stranded behind the cooled-down cron pick.
       const todayNineAm = recentNineAm()
-      const tomorrowNineAm = new Date(todayNineAm.getTime() + 24 * 60 * 60 * 1000)
       const yesterdayNineAm = new Date(todayNineAm.getTime() - 24 * 60 * 60 * 1000)
-      parseCronToPrevRun.mockReturnValueOnce(todayNineAm)
-      parseCronToNextRun.mockReturnValue(tomorrowNineAm)
+      cronDueNow()
 
       mockSchedule({
         tasks: {
@@ -1543,7 +1493,6 @@ describe('taskSchedule', () => {
     })
 
     it('perpetualOnly returns null when no perpetual task is due (app stays throttled)', async () => {
-      parseCronToPrevRun.mockReturnValue(null)
       parseCronToNextRun.mockReturnValue(new Date(Date.now() - 60_000))
       mockSchedule({
         tasks: {
@@ -2179,6 +2128,20 @@ describe('taskSchedule', () => {
       expect(refill.origin).toBe(ON_DEMAND_ORIGINS.REFILL)
     })
 
+    it('queues a perpetual refill with its non-emitting automated origin', async () => {
+      mockSchedule({ tasks: { 'branch-reconcile': { type: 'on-demand', perpetual: true, enabled: true } } })
+
+      const refill = await queuePerpetualRefill('branch-reconcile', 'app-1')
+
+      expect(refill).toMatchObject({
+        taskType: 'branch-reconcile',
+        appId: 'app-1',
+        origin: ON_DEMAND_ORIGINS.REFILL,
+      })
+      expect(cosEvents.emit).not.toHaveBeenCalled()
+      expect(recordUserAction).not.toHaveBeenCalled()
+    })
+
     // Operator-action ledger (#5594). Only a human pressing Run Now is an
     // operator action; the perpetual drain re-issues itself through this same
     // lane, and logging that would fill the ledger with events nobody performed.
@@ -2471,6 +2434,72 @@ describe('taskSchedule', () => {
       })
     })
 
+    describe('shouldContinuePerpetualDrain', () => {
+      it('only continues an explicitly started manual drain and never schedules its recheck', async () => {
+        mockSchedule({ tasks: {
+          ...PAUSED_SHIPPED_DRAINS,
+          'claim-issue': { type: 'on-demand', perpetual: true, autoStart: false, enabled: true }
+        } })
+        expect(await shouldRunTask('claim-issue')).toMatchObject({ shouldRun: false, reason: 'on-demand-only' })
+        expect(await shouldContinuePerpetualDrain('claim-issue')).toMatchObject({ shouldRun: true, reason: 'perpetual-drain' })
+        expect(await getDueTasks()).not.toEqual(expect.arrayContaining([expect.objectContaining({ taskType: 'claim-issue' })]))
+        expect(await getDueTasks(null, { continuingTaskType: 'claim-issue' })).toEqual(expect.arrayContaining([expect.objectContaining({ taskType: 'claim-issue' })]))
+        await parkPerpetual('claim-issue', null, { reason: 'no-actionable-work', actionableCount: 0 })
+        expect(await shouldContinuePerpetualDrain('claim-issue')).toMatchObject({ shouldRun: false, reason: 'perpetual-parked' })
+        expect(await getUpcomingTasks()).not.toEqual(expect.arrayContaining([expect.objectContaining({ taskType: 'claim-issue' })]))
+        vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 2 * 86400000)
+        expect(await shouldRunTask('claim-issue')).toMatchObject({ shouldRun: false, reason: 'on-demand-only' })
+        vi.restoreAllMocks()
+      })
+
+      it('does not force a non-perpetual task past its normal cadence', async () => {
+        cronNotDueYet()
+        mockSchedule({
+          tasks: {
+            ...PAUSED_SHIPPED_DRAINS,
+            security: { type: 'cron', cronExpression: '0 7 * * *', enabled: true }
+          }
+        })
+
+        expect(await shouldContinuePerpetualDrain('security'))
+          .toMatchObject({ shouldRun: false, reason: 'cron-cooldown' })
+      })
+
+      it('keeps continuation behind feature and runAfter gates', async () => {
+        cronNotDueYet()
+        const featureEnabled = vi.fn().mockResolvedValue(false)
+        mockSchedule({
+          tasks: {
+            // Feature ownership comes from the task registry, not stored overrides.
+            'jira-sprint-manager': {
+              type: 'cron', cronExpression: '0 7 * * *', perpetual: true,
+              enabled: true
+            }
+          }
+        })
+
+        expect(await shouldContinuePerpetualDrain('jira-sprint-manager', null, { featureEnabled }))
+          .toEqual({ shouldRun: false, reason: 'feature-disabled', feature: 'jira' })
+
+        featureEnabled.mockResolvedValue(true)
+        mockSchedule({
+          tasks: {
+            'claim-issue': {
+              type: 'cron', cronExpression: '0 7 * * *', perpetual: true,
+              enabled: true, runAfter: ['security']
+            },
+            security: { type: 'cron', cronExpression: '0 6 * * *', enabled: true }
+          },
+          executions: {
+            'task:claim-issue': { lastRun: new Date().toISOString(), count: 1, perApp: {} },
+            'task:security': { lastRun: null, count: 0, perApp: {} }
+          }
+        })
+        expect(await shouldContinuePerpetualDrain('claim-issue', null, { featureEnabled }))
+          .toEqual({ shouldRun: false, reason: 'waiting-on-dependencies', pendingDeps: ['security'] })
+      })
+    })
+
     describe('getNextTaskType', () => {
       it('picks a draining perpetual task when no cron task is due', async () => {
         cronNotDueYet()
@@ -2526,6 +2555,9 @@ describe('taskSchedule', () => {
           },
           executions: { 'task:claim-issue': { lastRun: new Date().toISOString(), count: 1, perApp: {} } }
         })
+        expect(await shouldRunTask('claim-issue')).toMatchObject({ shouldRun: false, reason: 'cron-cooldown' })
+        expect(await shouldContinuePerpetualDrain('claim-issue'))
+          .toEqual({ shouldRun: true, reason: 'perpetual-drain' })
         expect(await getNextTaskType()).toBeNull()
         expect(await getNextTaskType(null, { continuingTaskType: 'security' })).toBeNull()
         expect(await getNextTaskType(null, { continuingTaskType: 'claim-issue', perpetualOnly: true }))
@@ -2628,6 +2660,56 @@ describe('taskSchedule', () => {
         const upcoming = await getUpcomingTasks(50)
         const claim = upcoming.find(t => t.taskType === 'claim-issue')
         expect(claim.status).toBe('ready')
+      })
+    })
+
+    describe('getUpcomingTasks — per-app cron overrides', () => {
+      it.each([false, true])('preserves a future deadline alongside a ready app (reverse=%s)', async (reverse) => {
+        vi.useFakeTimers()
+        vi.setSystemTime(new Date('2026-01-01T16:00:00Z'))
+        const actual = await vi.importActual('./eventScheduler.js')
+        const actualTimezone = await vi.importActual('../lib/timezone.js')
+        parseCronToNextRun.mockImplementation(actual.parseCronToNextRun)
+        getLocalParts.mockImplementation(actualTimezone.getLocalParts)
+        const apps = [{ id: 'ready' }, { id: 'future' }]
+        getActiveApps.mockResolvedValueOnce(reverse ? apps.reverse() : apps)
+        const cron = id => id === 'ready' ? '0 8 * * *' : '5 8 * * *'
+        for (const app of apps) {
+          getAppTaskTypeInterval.mockResolvedValueOnce(cron(app.id))
+          getAppTaskTypeOverrides.mockResolvedValueOnce({
+            'release-check': { enabled: true, interval: cron(app.id) }
+          })
+        }
+        mockSchedule({ tasks: { 'release-check': { type: 'on-demand', enabled: true, runAfter: [] } } })
+        const upcoming = await getUpcomingTasks(50)
+        expect(upcoming.find(t => t.taskType === 'release-check')).toMatchObject({
+          status: 'ready', nextScheduledAt: new Date('2026-01-01T16:05:00Z').getTime()
+        })
+      })
+
+      it('surfaces an enabled app cron boundary even when the global task is on-demand', async () => {
+        vi.useFakeTimers()
+        vi.setSystemTime(new Date('2026-01-01T16:00:00Z')) // 08:00 in the mocked America/Los_Angeles zone
+        const actual = await vi.importActual('./eventScheduler.js')
+        const actualTimezone = await vi.importActual('../lib/timezone.js')
+        parseCronToNextRun.mockImplementation(actual.parseCronToNextRun)
+        getLocalParts.mockImplementation(actualTimezone.getLocalParts)
+        getActiveApps.mockResolvedValueOnce([{ id: 'app-1', name: 'Acme' }])
+        isTaskTypeEnabledForApp.mockResolvedValueOnce(true)
+        getAppTaskTypeInterval.mockResolvedValueOnce('15 9 * * *')
+        getAppTaskTypeOverrides.mockResolvedValueOnce({
+          'release-check': { enabled: true, interval: '15 9 * * *' }
+        })
+        mockSchedule({
+          tasks: { 'release-check': { type: 'on-demand', enabled: true, runAfter: [] } }
+        })
+        const upcoming = await getUpcomingTasks(50)
+        const release = upcoming.find(t => t.taskType === 'release-check')
+
+        expect(release).toMatchObject({
+          status: 'scheduled',
+          eligibleAt: new Date('2026-01-01T17:15:00Z').getTime()
+        })
       })
     })
 

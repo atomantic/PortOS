@@ -101,12 +101,15 @@ vi.mock('./jobGates.js', () => ({
 }));
 
 import {
+  scheduleNextImprovementCheck,
   executeScheduledJob,
   getScheduledActionReservations,
   clearSpawningJob,
   registerSingleJobSchedule,
 } from './cosJobScheduler.js';
 import { schedule as scheduleEvent, cancel as cancelEvent } from './eventScheduler.js';
+vi.mock('./taskSchedule.js', () => ({ getUpcomingTasks: vi.fn() }));
+import { getUpcomingTasks } from './taskSchedule.js';
 import { getJob } from './autonomousJobs.js';
 import { getDomainBudgetStatus } from './domainUsage.js';
 
@@ -293,4 +296,19 @@ describe('registerSingleJobSchedule', () => {
     );
     expect(scheduleEvent.mock.calls[0][0].delayMs).toBeGreaterThan(0);
   });
+});
+
+it('wakes at a future app deadline even while the task is ready for another app', async () => {
+  vi.useFakeTimers();
+  vi.setSystemTime(new Date('2026-01-01T16:00:00Z'));
+  try {
+    getUpcomingTasks.mockResolvedValue([{ taskType: 'release-check', status: 'ready', eligibleIn: 0,
+      nextScheduledAt: Date.now() + 300000 }]);
+    await scheduleNextImprovementCheck();
+    expect(scheduleEvent).toHaveBeenLastCalledWith(expect.objectContaining({
+      id: 'cos-improvement-check', delayMs: 300000
+    }));
+  } finally {
+    vi.useRealTimers();
+  }
 });

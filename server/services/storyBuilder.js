@@ -37,7 +37,7 @@
  */
 
 import { randomUUID } from 'crypto';
-import { isStr, trimTo, pickPromptFields, BIBLE_KIND } from '../lib/storyBible.js';
+import { pickPromptFields, BIBLE_KIND } from '../lib/storyBible.js';
 import { sanitizeOrigin } from '../lib/sharingOrigin.js';
 import { sanitizeSoftDeleteFields } from '../lib/syncWire.js';
 import { runStagedLLM } from './stageRunner.js';
@@ -60,6 +60,7 @@ import {
   collectIssueSourceText, generateSeasonEpisodes, commitEpisodesToIssues,
   ERR_VALIDATION as ARC_ERR_VALIDATION,
 } from './pipeline/arcPlanner.js';
+import { isStr, trimTo } from '../lib/textUtils.js';
 
 // Storage backend dispatcher (#1016): the facade is a drop-in for the
 // collectionStore surface this service used to call directly, so every method

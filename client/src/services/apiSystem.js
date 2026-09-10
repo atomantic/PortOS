@@ -81,14 +81,14 @@ export const updateInstanceFeatureGroup = (groupId, enabled, options = {}) => re
   body: JSON.stringify({ enabled }),
   ...options,
 });
-export const installEidoverseFeature = (worldsRepoUrl, options = {}) => request('/settings/features/eidoverse/install', {
+export const installEidoverseFeature = (worldsRepoUrl, options = {}, worldsBranch = '') => request('/settings/features/eidoverse/install', {
   method: 'POST',
-  body: JSON.stringify({ worldsRepoUrl }),
+  body: JSON.stringify({ worldsRepoUrl, worldsBranch }),
   ...options,
 });
-export const updateEidoverseWorldsSource = (worldsRepoUrl, options = {}) => request('/settings/features/eidoverse/source', {
+export const updateEidoverseWorldsSource = (worldsRepoUrl, options = {}, worldsBranch) => request('/settings/features/eidoverse/source', {
   method: 'PUT',
-  body: JSON.stringify({ worldsRepoUrl }),
+  body: JSON.stringify({ worldsRepoUrl, worldsBranch }),
   ...options,
 });
 export const startEidoverseHost = (options = {}) => request('/settings/features/eidoverse/host', {
@@ -172,6 +172,7 @@ export const getUsage = (params = {}) => {
   ).toString();
   return request(`/usage${qs ? `?${qs}` : ''}`);
 };
+export const getHourlyUsage = (options = {}) => request('/usage/hourly', options);
 export const getUsageBackfillStatus = (options = {}) => request('/usage/backfill', options);
 // Monthly plan prices per provider family, used to compare subscription spend
 // against the report's estimated API cost. `costs` is a partial patch: an
@@ -317,7 +318,7 @@ export const updateTelegramMethod = (method, options) => request('/telegram/meth
 });
 
 // Browser - CDP browser management
-export const getBrowserStatus = () => request('/browser');
+export const getBrowserStatus = (options) => request('/browser', options);
 export const getBrowserConfig = () => request('/browser/config');
 export const updateBrowserConfig = (config, options = {}) => request('/browser/config', {
   method: 'PUT',

@@ -82,7 +82,7 @@ vi.mock('./cos.js', () => ({
   getTaskById: vi.fn().mockResolvedValue(null),
   getAgentRecord: vi.fn().mockResolvedValue(null),
 }));
-vi.mock('./git.js', () => ({ resolveForgeTokenEnv: vi.fn().mockResolvedValue({}) }));
+vi.mock('./forgeAuth.js', () => ({ resolveForgeTokenEnv: vi.fn().mockResolvedValue({}) }));
 vi.mock('./agentCliSpawning.js', () => ({
   buildCliSpawnConfig: vi.fn(),
   isClaudeCliProvider: vi.fn().mockReturnValue(false),
@@ -115,7 +115,7 @@ vi.mock('./agentPromptBuilder.js', () => ({
   getAppWorkspace: vi.fn(),
   // Read by the `registerAgent` projection on the way to the dispatch; the real
   // predicates are pinned in agentPromptBuilder's own suite.
-  inlinePrLifecycleSection: vi.fn(() => null),
+  promptOpensOwnPr: vi.fn(() => 'portos'),
   isClaimFlowTask: vi.fn(() => false),
 }));
 // Dynamically imported mid-spawn purely to snapshot workspace context. Stubbed
@@ -125,7 +125,7 @@ vi.mock('./agentErrorAnalysis.js', () => ({
   analyzeAgentFailure: vi.fn().mockReturnValue({ category: 'startup-failure', actionable: false }),
 }));
 vi.mock('./appActivity.js', () => ({ releaseAppReviewMarker: vi.fn().mockResolvedValue(undefined) }));
-vi.mock('./instances.js', () => ({ ensureInstanceId: vi.fn().mockResolvedValue('instance-1') }));
+vi.mock('./instanceIdentity.js', () => ({ ensureInstanceId: vi.fn().mockResolvedValue('instance-1') }));
 vi.mock('./toolStateMachine.js', () => ({
   createToolExecution: vi.fn(() => ({ id: 'exec-1' })),
   startExecution: vi.fn(),

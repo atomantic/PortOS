@@ -5,6 +5,7 @@
 // to every consumer without per-component edits.
 
 const LANGUAGE_LABELS = Object.freeze({
+  en: 'English',
   'en-US': 'American',
   'en-GB': 'British',
 });
@@ -25,6 +26,12 @@ const ENGINE_FORMATTERS = Object.freeze({
     const note = v.note ? ` · ${v.note}` : '';
     const dl = v.downloaded === false ? ' ⬇' : '';
     return meta ? `${id} — ${meta}${note}${dl}` : `${id}${note}${dl}`;
+  },
+  'qwen3-tts': (v) => {
+    const display = v.label || v.name || v.voice || v.id || '';
+    const language = LANGUAGE_LABELS[v.language] || v.language;
+    const meta = [language, v.gender].filter(Boolean).join(' — ');
+    return meta ? `${display} — ${meta}` : display;
   },
 });
 

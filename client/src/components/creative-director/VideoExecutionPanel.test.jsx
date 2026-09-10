@@ -16,6 +16,7 @@ it('shows reviewed choices and submits explicit limits with the displayed config
   const user = userEvent.setup();
   show('draft');
   expect(await screen.findByText('reactor · fast-h3')).toBeInTheDocument();
+  expect(screen.getByRole('link', { name: 'Media settings' })).toHaveAttribute('href', '/video/generate?settings=1');
   expect(startCreativeDirectorVideoExecution).not.toHaveBeenCalled();
   await user.clear(screen.getByLabelText('Maximum clip submissions'));
   expect(screen.getByRole('button', { name: 'Start production' })).toBeDisabled();

@@ -73,6 +73,8 @@ vi.mock('./cosState.js', () => ({
   ROOT_DIR: '/root'
 }));
 
+vi.mock('./cos.js', () => ({ isRunning: vi.fn(() => false) }));
+
 vi.mock('./cosEvents.js', () => ({
   cosEvents: { emit: (name, payload) => mock.events.push({ name, payload }) }
 }));
@@ -96,6 +98,8 @@ import {
   getUserTasks,
   getCosTasks,
   getAllTasks,
+  getPendingTaskIds,
+  getTaskDiagnostics,
   getTasks,
   getTaskById,
   addTask,
@@ -115,7 +119,8 @@ import {
   DEFAULT_FAILURE_TASK_MAX_AGE_MS,
   __resetTaskCache
 } from './cosTaskStore.js';
-import { PRIORITY_VALUES } from '../lib/taskParser.js';
+import { aggregateAutoFixDiagnostics, getAutoFixMetrics } from './autoFixMetrics.js';
+import { PRIORITY_VALUES, generateTasksMarkdown } from '../lib/taskParser.js';
 import { AGENT_PAUSED_CATEGORY, PAUSE_METADATA_KEYS, registerPauseReleaseAdapter, __resetPauseReleaseAdapter } from '../lib/taskPauseHold.js';
 import { MAX_TOTAL_SPAWNS } from '../lib/cosValidation.js';
 
@@ -188,6 +193,67 @@ describe('cosTaskStore.getUserTasks / getCosTasks', () => {
 // that every invalidation signal fires, and that a cached read can never leak a
 // caller's in-place mutations into the next reader.
 describe('cosTaskStore parsed-task cache (#3497)', () => {
+  it('reads telemetry without cloning prompts and keeps metrics fresh after task writes and external edits', async () => {
+    const now = Date.parse('2026-07-09T12:00:00Z');
+    expect(await getTaskDiagnostics()).toEqual([]);
+    const tasks = Array.from({ length: 300 }, (_, index) => ({
+      id: `task-${index}`, description: `Example task ${index}`, status: 'pending', priority: 'MEDIUM',
+      metadata: {
+        prompt: 'Example prompt. '.repeat(512),
+        updatedAt: '2026-07-09T11:00:00Z',
+        ...(index % 30 === 0 ? { diagnostics: { tier: 1, category: 'config', observedAt: '2026-07-09T10:00:00Z' } } : {})
+      }
+    }));
+    mock.files.set(USER_FILE, generateTasksMarkdown(tasks.slice(0, 150)));
+    mock.files.set(COS_FILE, generateTasksMarkdown(tasks.slice(150)));
+    const { user, cos } = await getAllTasks();
+    const expected = aggregateAutoFixDiagnostics([...user.tasks, ...cos.tasks], { now });
+    const clone = vi.spyOn(globalThis, 'structuredClone');
+    expect(await getAutoFixMetrics({ now })).toEqual(expected);
+    const projectedBytes = JSON.stringify(clone.mock.calls[0][0]).length;
+    expect(projectedBytes).toBeLessThan(JSON.stringify([...user.tasks, ...cos.tasks]).length / 100);
+    expect(clone.mock.calls[0][0]).toHaveLength(10);
+    const parses = mock.parseCalls;
+    const projection = await getTaskDiagnostics();
+    projection[0].metadata.diagnostics.tier = 99;
+    expect(await getAutoFixMetrics({ now })).toEqual(expected);
+    expect(mock.parseCalls).toBe(parses);
+    clone.mockRestore();
+
+    await updateTask('task-0', { status: 'completed' }, 'user');
+    expect((await getAutoFixMetrics({ now })).overall.resolved).toBe(1);
+    mock.files.set(COS_FILE, mock.files.get(COS_FILE).replace('- [ ]', '- [x]'));
+    mock.mtimes.set(COS_FILE, 5000);
+    expect((await getAutoFixMetrics({ now })).overall.resolved).toBe(2);
+    mock.files.delete(USER_FILE);
+    expect((await getAutoFixMetrics({ now })).total).toBe(5);
+    mock.files.set(COS_FILE, '');
+    expect((await getAutoFixMetrics({ now })).total).toBe(0);
+  });
+
+  it('projects pending IDs without cloning task payloads and refreshes after writes and external edits', async () => {
+    expect(await getPendingTaskIds()).toEqual([]);
+    const user = await addTask({ description: 'Example user task' }, 'user');
+    const internal = await addTask({ description: 'Example internal task' }, 'internal');
+    const clone = vi.spyOn(globalThis, 'structuredClone');
+    const ids = await getPendingTaskIds();
+    expect(ids).toEqual([user.id, internal.id]);
+    ids.push('caller-only');
+    const parses = mock.parseCalls;
+    expect(await getPendingTaskIds()).toEqual([user.id, internal.id]);
+    expect(mock.parseCalls).toBe(parses);
+    expect(clone).not.toHaveBeenCalled();
+    clone.mockRestore();
+
+    await updateTask(user.id, { status: 'completed' }, 'user');
+    expect(await getPendingTaskIds()).toEqual([internal.id]);
+    mock.files.set(COS_FILE, mock.files.get(COS_FILE).replace('- [ ]', '- [x]'));
+    mock.mtimes.set(COS_FILE, mock.mtimes.get(COS_FILE) + 5000);
+    expect(await getPendingTaskIds()).toEqual([]);
+    mock.files.delete(USER_FILE);
+    expect(await getPendingTaskIds()).toEqual([]);
+  });
+
   it('serves a cached parse while the file is unchanged', async () => {
     await addTask({ description: 'cached thing' }, 'user');
     mock.parseCalls = 0;
@@ -496,6 +562,29 @@ describe('cosTaskStore.addTask', () => {
       expect(created.metadata).toHaveProperty('prompt', '');
     });
 
+    it('preserves a producer-written prompt over the description when both are present', async () => {
+      // When a task carries both a multi-line description AND an explicit
+      // metadata.prompt, the producer's prompt wins — the description is still
+      // collapsed to first line for COS-TASKS.md serialization, but the prompt
+      // field is not overwritten.
+      const producerPrompt = 'Custom agent instructions for Example App';
+      const fullDescription = 'Audit task\n\nThis is the task body\nthat should be ignored.';
+      const created = await addTask({
+        id: 'task-producer-prompt-wins',
+        status: 'pending',
+        priority: 'MEDIUM',
+        priorityValue: 2,
+        description: fullDescription,
+        metadata: { prompt: producerPrompt },
+        section: 'pending',
+      }, 'internal', { raw: true });
+      expect(created.description).toBe('Audit task');
+      expect(created.metadata.prompt).toBe(producerPrompt);
+      const reloaded = await getTaskById('task-producer-prompt-wins');
+      expect(reloaded.description).toBe('Audit task');
+      expect(reloaded.metadata.prompt).toBe(producerPrompt);
+    });
+
     it('leaves a one-line human note on metadata.context', async () => {
       const created = await addTask({ description: 'job', id: 'task-note', context: 'Manually triggered job: nightly' }, 'user');
       expect(created.metadata.context).toBe('Manually triggered job: nightly');
@@ -798,7 +887,7 @@ describe('cosTaskStore.addTask', () => {
   });
 
   it('rejects a raw duplicate whose app lives in metadata.app (queue-path improvement tasks)', async () => {
-    // Queue-path improvement tasks (generateManagedAppImprovementTaskForType) arrive
+    // Queue-path improvement tasks (prepareManagedAppImprovementTask) arrive
     // pre-built with `raw: true` and carry the app in `metadata.app`, NOT top-level
     // `taskData.app`. Two concurrent queueEligibleImprovementTasks snapshots each add
     // an identical `[Improvement: PortOS] …` task; the second must be rejected as a

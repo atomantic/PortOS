@@ -40,7 +40,7 @@ vi.mock('./pipeline/issues.js', async (importOriginal) => {
   const actual = await importOriginal();
   return {
     ...actual,
-    listIssues: vi.fn(async () => issuesContent),
+    listAllIssues: vi.fn(async () => issuesContent),
     mergeIssuesFromSync: vi.fn(async () => ({ applied: false, count: 0 })),
   };
 });

@@ -9,7 +9,7 @@ import { join } from 'path';
 import { PATHS, atomicWrite, readJSONFile, ensureDir } from '../lib/fileUtils.js';
 import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
 import { isValidKey } from '../lib/mediaItemKey.js';
-import { getInstanceId, UNKNOWN_INSTANCE_ID } from './instances.js';
+import { getInstanceId, UNKNOWN_INSTANCE_ID } from './instanceIdentity.js';
 import { resolveLocalAuthorName } from './sharing/annotationIdentity.js';
 
 const STATE_PATH = join(PATHS.data, 'media-annotations.json');

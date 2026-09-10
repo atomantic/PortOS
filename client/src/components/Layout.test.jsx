@@ -518,6 +518,10 @@ describe('Layout — isFullWidthRoute classification', () => {
     // Music owns the same full-bleed title/tab/body shell as Media Gen, but
     // its similarly named Music Video route is classified independently.
     ['/music', true], ['/music/generate', true], ['/music-video', false],
+    // Video workspace index owns its own scroll; Generate Video uses the
+    // Media Gen tab shell and must stay full-width with it. `/video-gen` is
+    // a legacy redirect, not a page with an internal scroller.
+    ['/video', true], ['/video/generate', true], ['/video-gen', false],
     // Game: only a single-segment detail workspace.
     ['/game', false], ['/game/', false], ['/game/g1', true], ['/game/g1/x', false],
     // Apps: detail editor is full-width, but the Add App form is explicitly excluded

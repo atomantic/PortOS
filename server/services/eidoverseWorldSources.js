@@ -8,6 +8,7 @@
 
 import { createHash } from 'node:crypto';
 import { statfs } from 'node:fs/promises';
+import { parseFilesystemStats } from '../lib/fileCore.js';
 import { getAllApps, getAppStatuses } from './apps.js';
 import { getStatus as getCosStatus, getAgents, getCosTasks, getTodayActivity } from './cos.js';
 import { getPendingCounts } from './review.js';
@@ -94,10 +95,7 @@ const percentageOrNull = (value) => {
 
 async function getDiskUsagePercent() {
   const stats = await statfs('/').catch(() => null);
-  if (!stats) return null;
-  const total = stats.blocks * stats.bsize;
-  if (!(total > 0)) return null;
-  return Math.round(((total - stats.bavail * stats.bsize) / total) * 100);
+  return parseFilesystemStats(stats)?.usagePercent ?? null;
 }
 
 function appSummary(apps) {

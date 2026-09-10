@@ -14,6 +14,7 @@ import {
   COMMISSION_MUSIC_TASTE_PERCENT_MAX,
   CREATIVE_COMMISSION_MUSIC_TASTE_WINDOWS,
 } from '../../lib/creativeCommissionValidation.js';
+import { isStr, trimTo } from '../../lib/textUtils.js';
 
 export const MUSIC_TASTE_RECIPE_VERSION = 1;
 export const MUSIC_TASTE_RECIPE_MAX_CONTEXT = 500;
@@ -27,16 +28,14 @@ export const MUSIC_TASTE_FEEDBACK_TAGS = Object.freeze([
 ]);
 
 const isObject = (value) => value && typeof value === 'object' && !Array.isArray(value);
-const isString = (value) => typeof value === 'string';
 const clampInt = (value, min, max, fallback) => Number.isInteger(value)
   ? Math.min(max, Math.max(min, value)) : fallback;
-const clampText = (value, max) => isString(value) ? value.trim().slice(0, max) : '';
 
 export function normalizeMusicTasteConfig(raw) {
   if (!isObject(raw) || raw.source !== 'digital-twin') return null;
   const window = CREATIVE_COMMISSION_MUSIC_TASTE_WINDOWS.includes(raw.window) ? raw.window : 'month';
   const pickId = (value) => {
-    if (!isString(value) || !value.trim()) return null;
+    if (!isStr(value) || !value.trim()) return null;
     return value.trim().slice(0, 64);
   };
   return {
@@ -59,7 +58,7 @@ function hashNumber(value) {
 }
 
 function anchorKey(anchor) {
-  const artist = isString(anchor?.artist) && anchor.artist ? `:${anchor.artist}` : '';
+  const artist = isStr(anchor?.artist) && anchor.artist ? `:${anchor.artist}` : '';
   return `${anchor?.kind || ''}:${anchor?.name || ''}${artist}`.toLowerCase();
 }
 
@@ -75,9 +74,9 @@ function normalizeCandidates(observedWindow) {
   const candidates = [];
   const seen = new Set();
   const add = (kind, raw) => {
-    if (!isObject(raw) || !isString(raw.name) || !raw.name.trim()) return;
+    if (!isObject(raw) || !isStr(raw.name) || !raw.name.trim()) return;
     const name = raw.name.trim().slice(0, 120);
-    const artist = kind === 'track' && isString(raw.artist) && raw.artist.trim()
+    const artist = kind === 'track' && isStr(raw.artist) && raw.artist.trim()
       ? raw.artist.trim().slice(0, 120) : null;
     const key = `${kind}:${name.toLowerCase()}:${artist?.toLowerCase() || ''}`;
     if (seen.has(key)) return;
@@ -203,10 +202,10 @@ export function sanitizeMusicTasteRecipe(raw) {
   if (!isObject(raw) || raw.version !== MUSIC_TASTE_RECIPE_VERSION || raw.source !== 'digital-twin') return null;
   const anchors = Array.isArray(raw.anchors)
     ? raw.anchors.slice(0, COMMISSION_MUSIC_TASTE_ANCHOR_MAX).map((anchor) => {
-      if (!isObject(anchor) || !['artist', 'track'].includes(anchor.kind) || !isString(anchor.name)) return null;
+      if (!isObject(anchor) || !['artist', 'track'].includes(anchor.kind) || !isStr(anchor.name)) return null;
       const name = anchor.name.trim().slice(0, 120);
       if (!name) return null;
-      const artist = anchor.kind === 'track' && isString(anchor.artist) && anchor.artist.trim()
+      const artist = anchor.kind === 'track' && isStr(anchor.artist) && anchor.artist.trim()
         ? anchor.artist.trim().slice(0, 120) : null;
       return {
         kind: anchor.kind,
@@ -228,9 +227,9 @@ export function sanitizeMusicTasteRecipe(raw) {
     explorationDirection: ['more-familiar', 'more-experimental', 'balanced'].includes(raw.explorationDirection)
       ? raw.explorationDirection : 'balanced',
     anchors,
-    statedContext: clampText(raw.statedContext, MUSIC_TASTE_RECIPE_MAX_CONTEXT) || null,
-    sourceVersion: clampText(raw.sourceVersion, MUSIC_TASTE_RECIPE_MAX_SOURCE_VERSION) || 'unknown',
-    sourceHash: isString(raw.sourceHash) ? raw.sourceHash.trim().slice(0, 64) : 'unknown',
+    statedContext: trimTo(raw.statedContext, MUSIC_TASTE_RECIPE_MAX_CONTEXT) || null,
+    sourceVersion: trimTo(raw.sourceVersion, MUSIC_TASTE_RECIPE_MAX_SOURCE_VERSION) || 'unknown',
+    sourceHash: isStr(raw.sourceHash) ? raw.sourceHash.trim().slice(0, 64) : 'unknown',
   };
 }
 
@@ -243,7 +242,7 @@ export function buildMusicTasteRecipe({ commissionId, config: rawConfig, stated,
   const config = normalizeMusicTasteConfig(rawConfig);
   if (!config) return { status: 'unavailable', reason: 'taste-source-unavailable' };
   const observedWindow = observed?.windows?.[config.window] || null;
-  const statedContext = clampText(stated?.summary, MUSIC_TASTE_RECIPE_MAX_CONTEXT);
+  const statedContext = trimTo(stated?.summary, MUSIC_TASTE_RECIPE_MAX_CONTEXT);
   const candidates = normalizeCandidates(observedWindow);
   // A free-text stated summary is useful prompt context, but it is not a
   // deterministic artist/track anchor. Taste mode therefore requires at least

@@ -154,6 +154,36 @@ describe('LocalLlmLibraryView information architecture', () => {
   });
 });
 
+describe('LocalLlmLibraryView model-list diagnostics', () => {
+  it('shows an Ollama list failure and clears it after a successful empty refresh', async () => {
+    const emptyOllama = {
+      installed: true,
+      available: true,
+      modelCount: 0,
+      models: [],
+    };
+    getLocalLlmStatus.mockResolvedValueOnce({
+      backend: 'ollama',
+      ollama: { ...emptyOllama, modelsError: 'Ollama model list returned no data' },
+      lmstudio: { installed: false, available: false, modelCount: 0, models: [] },
+    });
+
+    await renderLibrary();
+
+    expect(screen.getByText(/Couldn't list Ollama models/)).toHaveTextContent('Ollama model list returned no data');
+
+    getLocalLlmStatus.mockResolvedValueOnce({
+      backend: 'ollama',
+      ollama: { ...emptyOllama, modelsError: null },
+      lmstudio: { installed: false, available: false, modelCount: 0, models: [] },
+    });
+    const progressHandler = socket.on.mock.calls.find(([event]) => event === 'localLlm:progress')[1];
+    act(() => progressHandler({ event: 'complete' }));
+
+    await waitFor(() => expect(screen.queryByText(/Couldn't list Ollama models/)).toBeNull());
+  });
+});
+
 // The Ollama auto-upgrade banner lives beside the install that triggers it. Its
 // only entry point is a model install, which is a Model Library action — before
 // the view split the banner rendered inside the Runtimes panel, where the flow

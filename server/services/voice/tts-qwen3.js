@@ -20,9 +20,9 @@ import {
 } from './qwen3TtsRuntime.js';
 
 export const QWEN3_DEFAULT_PRESETS = Object.freeze([
-  { id: 'qwen3:warm-narrator', name: 'Warm Narrator (1.7B Design)', gender: 'neutral', language: 'en' },
-  { id: 'qwen3:expressive-alto', name: 'Expressive Alto (1.7B Design)', gender: 'female', language: 'en' },
-  { id: 'qwen3:clear-baritone', name: 'Clear Baritone (1.7B Design)', gender: 'male', language: 'en' },
+  { id: 'qwen3-tts:warm-narrator', voice: 'warm-narrator', name: 'Warm Narrator (1.7B Design)', label: 'Warm Narrator (1.7B Design)', gender: 'neutral', language: 'en' },
+  { id: 'qwen3-tts:expressive-alto', voice: 'expressive-alto', name: 'Expressive Alto (1.7B Design)', label: 'Expressive Alto (1.7B Design)', gender: 'female', language: 'en' },
+  { id: 'qwen3-tts:clear-baritone', voice: 'clear-baritone', name: 'Clear Baritone (1.7B Design)', label: 'Clear Baritone (1.7B Design)', gender: 'male', language: 'en' },
 ]);
 
 /**

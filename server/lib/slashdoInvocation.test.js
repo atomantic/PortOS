@@ -7,7 +7,8 @@ import {
   agentOwnsPrWorkflow,
   buildSlashdoSection,
   canTypeSlashCommands,
-  resolveOwnsPrWorkflow,
+  PR_OPENED_BY,
+  resolvePrOpenedBy,
   resolvePrOwnership,
   isValidSlashdoCommand,
   parseExplicitReviewWith,
@@ -183,26 +184,56 @@ describe('agentOwnsPrWorkflow (#3733)', () => {
   });
 });
 
-describe('resolveOwnsPrWorkflow (#3733)', () => {
+describe('resolvePrOpenedBy', () => {
+  const resolveFor = (overrides = {}) => resolvePrOpenedBy({ providerId: 'codex', providerCommand: 'codex', ...overrides });
+
   it('trusts the stamp — cleanup must act on what the prompt actually said', () => {
     // Including when the stamp disagrees with a fresh derivation: a provider
     // reconfigured mid-run must not change the answer for an agent already
     // prompted under the old one.
-    expect(resolveOwnsPrWorkflow({ persisted: true, providerId: 'codex', providerCommand: 'codex' })).toBe(true);
-    expect(resolveOwnsPrWorkflow({ persisted: false, providerId: 'claude-code', providerCommand: 'claude' })).toBe(false);
+    expect(resolveFor({ persistedPrOpenedBy: PR_OPENED_BY.PORTOS, providerId: 'claude-code', providerCommand: 'claude' }))
+      .toBe(PR_OPENED_BY.PORTOS);
+    expect(resolveFor({ persistedPrOpenedBy: PR_OPENED_BY.AGENT_INLINE })).toBe(PR_OPENED_BY.AGENT_INLINE);
+    expect(resolveFor({ persistedPrOpenedBy: PR_OPENED_BY.AGENT_SLASHDO, leanMode: true })).toBe(PR_OPENED_BY.AGENT_SLASHDO);
   });
 
-  it('falls back to the slash-command gate for a pre-#3733 record', () => {
+  it('ignores an unrecognized stamp rather than trusting it', () => {
+    // A value from a NEWER install (other installs upgrade on their own
+    // schedule) must fall through to a derivation this version understands,
+    // not be handed to `!== PORTOS` as if it named an agent.
+    expect(resolveFor({ persistedPrOpenedBy: 'agent-something-new' })).toBe(PR_OPENED_BY.PORTOS);
+    expect(resolveFor({ persistedPrOpenedBy: null, persistedOwnsPrWorkflow: true })).toBe(PR_OPENED_BY.AGENT_INLINE);
+    expect(resolveFor({ persistedPrOpenedBy: 'agent-something-new', providerId: 'claude-code', providerCommand: 'claude' }))
+      .toBe(PR_OPENED_BY.AGENT_SLASHDO);
+  });
+
+  // Legacy shapes. Other installs run older versions, so records carrying the
+  // #3733 boolean — or nothing at all — keep arriving here, and every one of
+  // them must resolve to the answer it resolved to BEFORE #6869.
+  it('keeps the #3733 boolean answering exactly as it did, on every host', () => {
+    // Deliberately NOT corrected for a slashdo-capable host. `false` there is
+    // ambiguous between the #6869 defect and a correct task-shape exclusion
+    // (read-only / no-code-output / discard-worktree / leave-open), and only
+    // the task tells them apart — which this leaf does not see. Overriding it
+    // would fix the first and break the second.
+    expect(resolveFor({ persistedOwnsPrWorkflow: false, providerId: 'claude-code', providerCommand: 'claude' }))
+      .toBe(PR_OPENED_BY.PORTOS);
+    expect(resolveFor({ persistedOwnsPrWorkflow: false, providerId: 'custom', providerCommand: '/opt/bin/claude' }))
+      .toBe(PR_OPENED_BY.PORTOS);
+    expect(resolveFor({ persistedOwnsPrWorkflow: true })).toBe(PR_OPENED_BY.AGENT_INLINE);
+    expect(resolveFor({ persistedOwnsPrWorkflow: false })).toBe(PR_OPENED_BY.PORTOS);
+    expect(resolveFor({ persistedOwnsPrWorkflow: true, providerId: 'antigravity-cli', providerCommand: 'agy' }))
+      .toBe(PR_OPENED_BY.AGENT_INLINE);
+    // A lean `--bare` session is not slashdo-capable either way.
+    expect(resolveFor({ persistedOwnsPrWorkflow: false, providerId: 'claude-ollama', providerCommand: 'claude', leanMode: true }))
+      .toBe(PR_OPENED_BY.PORTOS);
+  });
+
+  it('falls back to the slash-command gate for a pre-#3733 record with no key at all', () => {
     // Those runs really were prompted by the old builder, whose gate this was.
-    expect(resolveOwnsPrWorkflow({ persisted: undefined, providerId: 'claude-code', providerCommand: 'claude' })).toBe(true);
-    expect(resolveOwnsPrWorkflow({ persisted: undefined, providerId: 'codex', providerCommand: 'codex' })).toBe(false);
-    expect(resolveOwnsPrWorkflow({ persisted: undefined, providerId: 'claude-ollama', providerCommand: 'claude', leanMode: true })).toBe(false);
-  });
-
-  it('treats a non-boolean stamp as absent, not as false', () => {
-    // `null` from a JSON round-trip must not silently claim PortOS owns the PR.
-    expect(resolveOwnsPrWorkflow({ persisted: null, providerId: 'claude-code' })).toBe(true);
-    expect(resolveOwnsPrWorkflow({ persisted: 'true', providerId: 'codex', providerCommand: 'codex' })).toBe(false);
+    expect(resolveFor({ providerId: 'claude-code', providerCommand: 'claude' })).toBe(PR_OPENED_BY.AGENT_SLASHDO);
+    expect(resolveFor({})).toBe(PR_OPENED_BY.PORTOS);
+    expect(resolveFor({ providerId: 'claude-ollama', providerCommand: 'claude', leanMode: true })).toBe(PR_OPENED_BY.PORTOS);
   });
 });
 
@@ -463,15 +494,30 @@ describe('resolvePrOwnership', () => {
   });
 
   it('uses the prompt stamp while keeping claim verification tied to slash commands', () => {
-    expect(resolve({ persisted: true })).toEqual({ taskOpenPR: true, agentOwnsPR: true, prClaimExpected: false });
-    expect(resolve({ persisted: false, providerId: 'claude-code', providerCommand: 'claude' }))
-      .toEqual({ taskOpenPR: true, agentOwnsPR: false, prClaimExpected: true });
-    expect(resolve({ persisted: true, task: { metadata: { openPR: false } } }))
-      .toEqual({ taskOpenPR: false, agentOwnsPR: false, prClaimExpected: false });
+    expect(resolve({ persistedPrOpenedBy: PR_OPENED_BY.AGENT_INLINE })).toEqual({
+      taskOpenPR: true, prOpenedBy: PR_OPENED_BY.AGENT_INLINE, agentOpensOwnPr: true, prClaimExpected: false,
+    });
+    // The #6869 case: a slashdo-capable host opens its OWN PR, and finalize
+    // verifies the claim — two true answers where the old stamp said one was
+    // false. `prClaimExpected` stays the raw capability, matching the runner
+    // path's own derivation.
+    expect(resolve({ persistedPrOpenedBy: PR_OPENED_BY.AGENT_SLASHDO, providerId: 'claude-code', providerCommand: 'claude' })).toEqual({
+      taskOpenPR: true, prOpenedBy: PR_OPENED_BY.AGENT_SLASHDO, agentOpensOwnPr: true, prClaimExpected: true,
+    });
+    // A prompt that told the agent NOT to open one, on a host that could have.
+    expect(resolve({ persistedPrOpenedBy: PR_OPENED_BY.PORTOS, providerId: 'claude-code', providerCommand: 'claude' })).toEqual({
+      taskOpenPR: true, prOpenedBy: PR_OPENED_BY.PORTOS, agentOpensOwnPr: false, prClaimExpected: true,
+    });
+    // No PR asked for at all: nothing to own and nothing to verify.
+    expect(resolve({ persistedPrOpenedBy: PR_OPENED_BY.AGENT_INLINE, task: { metadata: { openPR: false } } })).toEqual({
+      taskOpenPR: false, prOpenedBy: PR_OPENED_BY.AGENT_INLINE, agentOpensOwnPr: false, prClaimExpected: false,
+    });
   });
 
-  it('falls back to the legacy slash-command gate without a stamp', () => {
-    expect(resolve().agentOwnsPR).toBe(false);
-    expect(resolve({ providerId: 'claude-code', providerCommand: 'claude' }).agentOwnsPR).toBe(true);
+  it('resolves a legacy record through the same fallback cleanup uses', () => {
+    expect(resolve().agentOpensOwnPr).toBe(false);
+    expect(resolve({ persistedOwnsPrWorkflow: true }).agentOpensOwnPr).toBe(true);
+    expect(resolve({ persistedOwnsPrWorkflow: false, providerId: 'claude-code', providerCommand: 'claude' }).agentOpensOwnPr).toBe(false);
+    expect(resolve({ providerId: 'claude-code', providerCommand: 'claude' }).agentOpensOwnPr).toBe(true);
   });
 });

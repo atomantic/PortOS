@@ -39,6 +39,7 @@ import { IMPORTER_CONTENT_TYPES, IMPORTER_PROSE_EXCERPT_MAX } from '../lib/valid
 // same value the mechanical comic split validates against.
 export { IMPORTER_PROSE_EXCERPT_MAX };
 import { mergeExtractedBible, BIBLE_KIND } from '../lib/storyBible.js';
+import { isStr } from '../lib/textUtils.js';
 
 // Surfaced to the route layer so the importer's policy errors become 400s
 // with stable codes.
@@ -182,7 +183,6 @@ export async function reformatSeededExcerpts(issues, { contentType = null } = {}
 }
 
 const normName = (s) => String(s || '').trim().toLowerCase();
-const isStr = (v) => typeof v === 'string';
 
 // Required + oversized-ceiling guard for the source corpus. Shared by
 // analyze / classify / retry-issues so the check and its (verbatim) error

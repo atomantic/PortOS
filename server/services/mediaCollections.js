@@ -239,6 +239,17 @@ export async function listCollections({ includeDeleted = false } = {}) {
   return all.filter((c) => c.deleted !== true);
 }
 
+/**
+ * Every collection id on disk (live AND tombstoned) — a directory listing, no
+ * record hydration. Backs tombstoneGc's ALL_ID_LISTERS.mediaCollection (the
+ * orphan peer-subscription sweep); LIVE_ID_LISTERS keeps `listCollections()`
+ * because `deleted` lives inside the record file, so there is no cheaper live
+ * projection for this file-backed store the way the DB-backed kinds have one.
+ */
+export async function listCollectionIds() {
+  return store().listIds();
+}
+
 export async function getCollection(id, { includeDeleted = false } = {}) {
   const c = await store().loadOne(id);
   if (!c) throw makeErr(`Collection not found: ${id}`, ERR_NOT_FOUND);

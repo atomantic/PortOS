@@ -57,6 +57,23 @@ describe('pipeline series store facade — file backend', () => {
     expect(all.every((r) => r._sanitized)).toBe(true);
   });
 
+  it('listLiveIds returns only non-deleted ids', async () => {
+    const s = getSeriesStore(passthroughSanitize);
+    await s.saveOneNow('ser-1', { id: 'ser-1', name: 'Live' });
+    await s.saveOneNow('ser-2', { id: 'ser-2', name: 'Dead', deleted: true, deletedAt: '2026-01-01T00:00:00.000Z' });
+    expect(await s.listLiveIds()).toEqual(['ser-1']);
+  });
+
+  it('listTombstoneIdsBefore returns only tombstones older than the cutoff, keeping unparseable deletedAt', async () => {
+    const s = getSeriesStore(passthroughSanitize);
+    await s.saveOneNow('ser-live', { id: 'ser-live', name: 'Live' });
+    await s.saveOneNow('ser-old', { id: 'ser-old', name: 'Old', deleted: true, deletedAt: '2026-01-01T00:00:00.000Z' });
+    await s.saveOneNow('ser-new', { id: 'ser-new', name: 'New', deleted: true, deletedAt: '2026-06-01T00:00:00.000Z' });
+    await s.saveOneNow('ser-bad', { id: 'ser-bad', name: 'Bad', deleted: true, deletedAt: 'not-a-date' });
+    const cutoff = Date.parse('2026-03-01T00:00:00.000Z');
+    expect(await s.listTombstoneIdsBefore(cutoff)).toEqual(['ser-old']);
+  });
+
   it('deleteOneNow removes the record', async () => {
     const s = getSeriesStore(passthroughSanitize);
     await s.saveOneNow('ser-1', { id: 'ser-1', name: 'X' });

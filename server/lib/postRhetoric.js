@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { EFFORT_LEVELS } from './providerModels.js';
+import { extractJson } from './jsonExtract.js';
 
 export const RHETORIC_MODE_IDS = Object.freeze([
   'meter',
@@ -174,14 +175,18 @@ export function buildRhetoricReferencePrompt(referenceSet = RHETORIC_REFERENCE_S
   ].join('\n\n');
 }
 
-export function parseRhetoricJson(content) {
+export function parseRhetoricJson(content, shapePredicate) {
   if (!content || typeof content !== 'string') throw new Error('Empty rhetoric evaluator response');
-  let json = content.trim();
-  const fenced = json.match(/```(?:json)?\s*([\s\S]*?)```/);
-  if (fenced) json = fenced[1].trim();
-  const object = json.match(/(\{[\s\S]*\})/);
-  if (object) json = object[1];
-  return JSON.parse(json);
+  const { value, lastError } = extractJson(content, {
+    // The evaluator prompt itself contains a fenced shape example. Walk all
+    // balanced candidates so a CLI prompt echo cannot become the score.
+    skipInnerFence: true,
+    shapePredicate,
+  });
+  if (value === undefined) {
+    throw new Error(`Failed to parse rhetoric evaluator response: ${lastError?.message || 'No JSON found'}`);
+  }
+  return value;
 }
 
 export function scoreRhetoricReference(value, referenceSet = RHETORIC_REFERENCE_SET) {

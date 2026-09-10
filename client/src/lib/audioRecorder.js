@@ -2,13 +2,16 @@
 // capture (catalog voice ingest). whisper.cpp accepts WAV only, so we decode
 // whatever MediaRecorder produced and resample to 16 kHz mono before encoding.
 //
-// This is deliberately NOT coupled to services/voiceClient.js — that module's
-// recorder is wired to the live voice-agent socket pipeline (echo gating, VAD,
-// streaming TTS). This is a standalone "record a clip, get a WAV" helper.
+// `startMemoRecording` and the analysis-mic helpers below are standalone
+// "record a clip, get a WAV" plumbing — NOT wired to the live voice-agent
+// socket pipeline (echo gating, VAD, streaming TTS) that owns
+// services/voiceClient.js. The WAV-encode/resample helpers (`encodePcmToWav`,
+// `blobToWav16k`, `float32ToWav16k`) ARE shared with that module — it imports
+// them rather than keeping its own copy.
 
 import { resumeAudioContext, acquireAudioSession } from './audioContext.js';
 
-const TARGET_SAMPLE_RATE = 16000;
+export const TARGET_SAMPLE_RATE = 16000;
 
 // Pick a MediaRecorder mime the browser supports; Safari lands on mp4, others
 // on webm/opus. We re-decode to WAV regardless, so the intermediate codec
@@ -62,6 +65,31 @@ export async function blobToWav16k(blob) {
   const offline = new OfflineAudioContext(1, frames, TARGET_SAMPLE_RATE);
   const src = offline.createBufferSource();
   src.buffer = decoded;
+  src.connect(offline.destination);
+  src.start();
+  const rendered = await offline.startRendering();
+  const pcm = rendered.getChannelData(0);
+  let peak = 0;
+  for (let i = 0; i < pcm.length; i++) {
+    const a = Math.abs(pcm[i]);
+    if (a > peak) peak = a;
+  }
+  return { wav: encodePcmToWav(pcm, TARGET_SAMPLE_RATE), peak };
+}
+
+// Encode a Float32 PCM buffer captured at `sourceRate` (e.g. an AudioWorklet's
+// continuous-mode capture) → 16 kHz mono WAV. Same resample path as
+// `blobToWav16k`, but the source is already raw PCM rather than an encoded
+// blob. Returns `{ wav: null, peak: 0 }` for an empty buffer — nothing to
+// render — so callers can skip a zero-length OfflineAudioContext.
+export async function float32ToWav16k(samples, sourceRate) {
+  if (!samples.length) return { wav: null, peak: 0 };
+  const frames = Math.ceil(samples.length * TARGET_SAMPLE_RATE / sourceRate);
+  const offline = new OfflineAudioContext(1, frames, TARGET_SAMPLE_RATE);
+  const buf = offline.createBuffer(1, samples.length, sourceRate);
+  buf.getChannelData(0).set(samples);
+  const src = offline.createBufferSource();
+  src.buffer = buf;
   src.connect(offline.destination);
   src.start();
   const rendered = await offline.startRendering();

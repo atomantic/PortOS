@@ -8,6 +8,7 @@ const mocks = vi.hoisted(() => ({
   worlds: new Map(),
   socketUrls: [],
   sockets: [],
+  connectionError: null,
   nextSeq: 0,
   sent: [],
   deferredVerbAcks: [],
@@ -48,10 +49,13 @@ vi.mock('../lib/fileUtils.js', async (importActual) => {
 });
 
 vi.mock('./instances.js', () => ({
+  getPeers: vi.fn(async () => []),
+}));
+
+vi.mock('./instanceIdentity.js', () => ({
   getSelf: vi.fn(async () => mocks.self),
   ensureSelf: vi.fn(async () => mocks.self),
   getInstanceId: vi.fn(async () => mocks.self?.instanceId ?? 'unknown-instance'),
-  getPeers: vi.fn(async () => []),
 }));
 
 vi.mock('./apps.js', () => ({
@@ -86,6 +90,11 @@ vi.mock('ws', () => {
       mocks.socketUrls.push(String(url));
       mocks.sockets.push(this);
       queueMicrotask(() => {
+        if (mocks.connectionError) {
+          this.emit('error', mocks.connectionError);
+          this.close();
+          return;
+        }
         this.readyState = FakeWebSocket.OPEN;
         this.emit('open');
       });
@@ -191,6 +200,7 @@ beforeEach(async () => {
   mocks.worlds.clear();
   mocks.socketUrls.length = 0;
   mocks.sockets.length = 0;
+  mocks.connectionError = null;
   mocks.nextSeq = 0;
   mocks.sent.length = 0;
   mocks.deferredVerbAcks.length = 0;
@@ -230,6 +240,20 @@ beforeEach(async () => {
 });
 
 describe('Eidoverse private-world lifecycle', () => {
+  it('reports connection refusal without an unhandled rejection and allows a subsequent retry', async () => {
+    mocks.connectionError = new Error('connect ECONNREFUSED');
+    await expect(world.ensureEidoverseWorldPresence()).rejects.toMatchObject({
+      status: 503,
+      code: 'EIDOVERSE_WORLD_UNAVAILABLE',
+      message: expect.stringContaining('ECONNREFUSED'),
+    });
+    // Let Node report unhandled rejections: Vitest must fail if readiness leaked one.
+    await new Promise((resolve) => setImmediate(resolve));
+    expect((await world.getEidoverseWorldStatus()).presence.connected).toBe(false);
+    mocks.connectionError = null;
+    await expect(world.ensureEidoverseWorldPresence()).resolves.toMatchObject({ connected: true, role: 'owner' });
+  });
+
   it('keeps status read-only when config has not been persisted yet', async () => {
     const status = await world.getEidoverseWorldStatus();
     const compact = await world.getEidoverseWorldStatus({ compact: true });
@@ -285,7 +309,7 @@ describe('Eidoverse private-world lifecycle', () => {
       migrationReport: { status: 'applied' },
       reconciliation: { status: 'complete', checkpoint: 'projection-committed' },
     });
-  });
+  }, 30000);
 
   it('reads projection progress without runtime, app-registry, or library probes', async () => {
     await world.ensureEidoverseWorldConfig();

@@ -35,6 +35,8 @@ const aiAssignmentUpdateSchema = z.object({
 
 const eidoverseRepoSchema = z.object({
   worldsRepoUrl: z.string().trim().max(500).refine(isGitHubRepoUrl, 'Must be a GitHub repository URL'),
+  // biome-ignore lint/suspicious/noControlCharactersInRegex: reject control characters in Git branch input
+  worldsBranch: z.string().trim().max(255).regex(/^[^\u0000-\u001f\u007f]*$/).optional(),
 }).strict();
 
 // Server-authoritative bounds the client UI can render directly so the form
@@ -235,19 +237,18 @@ router.put('/credentials/:id', asyncHandler(async (req, res) => {
 // Explicit consent boundary: no Eidoverse checkout or dependency install occurs
 // until the user presses Install in Settings > Features.
 router.post('/features/eidoverse/install', asyncHandler(async (req, res) => {
-  const { worldsRepoUrl } = validateRequest(eidoverseRepoSchema, req.body || {});
-  const normalizedRepoUrl = await updateEidoverseWorldsRepo(worldsRepoUrl);
-  await installEidoverse({ worldsRepoUrl: normalizedRepoUrl });
+  const { worldsRepoUrl, worldsBranch } = validateRequest(eidoverseRepoSchema, req.body || {});
+  const normalizedRepoUrl = await updateEidoverseWorldsRepo(worldsRepoUrl, worldsBranch);
+  await installEidoverse({ worldsRepoUrl: normalizedRepoUrl, ...(worldsBranch !== undefined ? { worldsBranch } : {}) });
   res.status(201).json(await updateInstanceFeature('eidoverse', true));
 }));
 
 // PUT /api/settings/features/eidoverse/source
-// Update the origin of the existing Worlds checkout in place. The working tree,
-// managed-app path, and world data remain untouched; future app updates pull
-// from the newly selected repository.
+// Update the origin and optional runtime branch in place. Branch switches
+// require a clean checkout; future app updates honor the selected branch.
 router.put('/features/eidoverse/source', asyncHandler(async (req, res) => {
-  const { worldsRepoUrl } = validateRequest(eidoverseRepoSchema, req.body || {});
-  await updateEidoverseWorldsSource(worldsRepoUrl);
+  const { worldsRepoUrl, worldsBranch } = validateRequest(eidoverseRepoSchema, req.body || {});
+  await updateEidoverseWorldsSource(worldsRepoUrl, worldsBranch);
   res.json(await getInstanceFeatures());
 }));
 
