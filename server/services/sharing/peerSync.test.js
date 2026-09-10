@@ -250,6 +250,7 @@ import {
 } from './peerSync.js';
 
 import { buildPushPayload } from './peerSyncPush.js';
+import { ENVELOPE_EXTENSIONS } from './peerSyncShared.js';
 import { getPeers } from '../instances.js';
 import { getInstanceId } from '../instanceIdentity.js';
 import { getUniverse, mergeUniversesFromSync, listUniverses } from '../universeBuilder.js';
@@ -4624,6 +4625,269 @@ describe('peerSync', () => {
   // -------------------------------------------------------------------------
   // mediaCollection push + receiver
   // -------------------------------------------------------------------------
+  // -------------------------------------------------------------------------
+  // #6844 — the optional envelope keys share ONE strip / pending / withhold
+  // lifecycle, declared once in ENVELOPE_EXTENSIONS. Every case below is driven
+  // off that table so a row added later is exercised on both sides of the wire
+  // without a hand-written twin of each flag.
+  describe('envelope extensions (#6844)', () => {
+    const SIDECARS = ENVELOPE_EXTENSIONS.filter((e) => e.pendingKey);
+    const SELF_RECONCILING = ENVELOPE_EXTENSIONS.filter((e) => !e.pendingKey);
+    const PENDING_KEYS = SIDECARS.map((e) => e.pendingKey);
+
+    const legacyRejects = (key) => {
+      const rejection = { ok: false, status: 400, json: async () => ({
+        code: 'VALIDATION_ERROR',
+        message: 'Validation failed',
+        context: { details: [{ path: '', message: `Unrecognized key(s) in object: '${key}'` }] },
+      }) };
+      rejection.clone = () => rejection;
+      return rejection;
+    };
+    const accepts = (body = {}) => ({ ok: true, status: 200, json: async () => body });
+    // A peer whose strict schema predates `key`: rejects every push carrying
+    // it, accepts the stripped retry.
+    const mockPeerRejecting = (key) => {
+      vi.mocked(peerFetch).mockImplementation(async (_url, init) => (
+        key in JSON.parse(init.body) ? legacyRejects(key) : accepts()
+      ));
+    };
+    const armSeries = () => {
+      vi.mocked(getSeries).mockResolvedValue({ id: 's1', name: 'Series' });
+      vi.mocked(listIssuesForSeries).mockResolvedValue([{ id: 'i1', seriesId: 's1', number: 1 }]);
+    };
+    // How the sender comes to carry each key on the wire. Every table row MUST
+    // have a carrier (guarded below) — that is what makes this suite grow with
+    // the table instead of silently skipping a new extension.
+    const CARRIERS = {
+      portosMeta: {
+        recordKind: 'universe', recordId: 'u1',
+        arm: async () => { vi.mocked(getUniverse).mockResolvedValue({ id: 'u1', name: 'Foo' }); },
+      },
+      catalogBundle: {
+        recordKind: 'universe', recordId: 'u1',
+        arm: async () => {
+          vi.mocked(getBackendName).mockReturnValue('postgres');
+          vi.mocked(getUniverse).mockResolvedValue({ id: 'u1', name: 'Foo' });
+          vi.mocked(getCatalogBundleForRef).mockResolvedValue({
+            ingredients: [{ id: 'cat-chr-1', type: 'character', name: 'Hero', updatedAt: '2026-01-02T00:00:00Z' }],
+            refs: [{ ingredientId: 'cat-chr-1', refKind: 'universe', refId: 'u1', role: 'canon-character', createdAt: '2026-01-02T00:00:00Z' }],
+          });
+        },
+      },
+      manuscriptReview: {
+        recordKind: 'series', recordId: 's1',
+        arm: async () => {
+          armSeries();
+          vi.mocked(getReview).mockResolvedValue({
+            schemaVersion: 1,
+            comments: [{ id: 'mrc-1', problem: 'pacing', status: 'open', updatedAt: '2026-06-02T00:00:00Z' }],
+          });
+        },
+      },
+      reverseOutline: {
+        recordKind: 'series', recordId: 's1',
+        arm: async () => {
+          armSeries();
+          vi.mocked(getStoredOutline).mockResolvedValue({
+            seriesId: 's1', schemaVersion: 1, status: 'complete', generatedAt: '2026-06-02T00:00:00Z',
+            plotlines: [{ id: 'a', label: 'A', kind: 'main', color: '#3b82f6' }],
+            scenes: [{ id: 'scene-001', sequence: 0, summary: 'opening', plotlineId: 'a' }],
+          });
+        },
+      },
+      linkedTrack: {
+        recordKind: 'musicVideoProject', recordId: 'mv-1',
+        arm: async () => {
+          vi.mocked(getPeers).mockResolvedValue([{
+            instanceId: 'peer-a', name: 'Peer A', host: null, address: '10.0.0.2', port: 5555,
+            enabled: true, syncEnabled: true, directions: ['outbound', 'inbound'],
+            syncCategories: { musicVideoProjects: true },
+          }]);
+          await writeFile(join(PATHS.music, 'linked.mp3'), Buffer.from('linked track audio'));
+          vi.mocked(getTrack).mockResolvedValue({
+            id: 'track-1', title: 'Anthem', audioFilename: 'linked.mp3',
+            updatedAt: '2026-06-28T00:00:00Z', deleted: false, deletedAt: null,
+          });
+          vi.mocked(getMusicVideoProject).mockResolvedValue({
+            id: 'mv-1', name: 'Linked', mode: 'director', trackId: 'track-1',
+            uploadedAudioFilename: null, scenes: [],
+            updatedAt: '2026-06-28T00:00:00Z', deleted: false, deletedAt: null,
+          });
+        },
+      },
+    };
+    const claim = ({ recordKind, recordId }) => subscribePeer(
+      { peerId: 'peer-a', recordKind, recordId },
+      { adoptedFromReverse: true },
+    );
+    const refresh = ({ recordKind, recordId }) => findPeerSubscription('peer-a', recordKind, recordId);
+    const payloadOf = (call) => JSON.parse(call[1].body);
+
+    it('pins the wire vocabulary older peers depend on', () => {
+      // Older senders and receivers read exactly these names off the wire — a
+      // rename here is a cross-version break, not a refactor.
+      expect(ENVELOPE_EXTENSIONS.map(({ key, pendingKey }) => [key, pendingKey])).toEqual([
+        ['portosMeta', null],
+        ['catalogBundle', null],
+        ['manuscriptReview', 'reviewSyncPending'],
+        ['reverseOutline', 'outlineSyncPending'],
+        ['linkedTrack', 'trackSyncPending'],
+      ]);
+      expect(Object.isFrozen(ENVELOPE_EXTENSIONS)).toBe(true);
+    });
+
+    it('has a sender-side carrier for every table row (a new extension must be exercised here)', () => {
+      expect(Object.keys(CARRIERS).sort()).toEqual(ENVELOPE_EXTENSIONS.map((e) => e.key).sort());
+    });
+
+    describe.each(ENVELOPE_EXTENSIONS)('$key — strip', ({ key }) => {
+      it('is dropped — and only it — on the one retry a legacy peer\'s strict-schema 400 earns', async () => {
+        const carrier = CARRIERS[key];
+        await carrier.arm();
+        mockPeerRejecting(key);
+        const result = await pushRecordToPeer(await claim(carrier));
+        expect(result.pushed).toBe(true);
+        const calls = vi.mocked(peerFetch).mock.calls;
+        expect(calls).toHaveLength(2);
+        const first = payloadOf(calls[0]);
+        const retry = payloadOf(calls[1]);
+        expect(first[key]).toBeDefined();
+        expect(retry[key]).toBeUndefined();
+        // Surgical: every other extension the first push carried survives, so
+        // a peer that supports portosMeta but not this key keeps its handshake.
+        for (const other of ENVELOPE_EXTENSIONS) {
+          if (other.key !== key && other.key in first) expect(retry[other.key]).toEqual(first[other.key]);
+        }
+        expect(retry.record.id).toBe(carrier.recordId);
+      });
+    });
+
+    describe.each(SIDECARS)('$key — no independent cycle ($pendingKey)', ({ key, pendingKey }) => {
+      it('withholds lastPushedHash and water-marks lastPushedLegacyHash after a stripped push (#3928)', async () => {
+        const carrier = CARRIERS[key];
+        await carrier.arm();
+        mockPeerRejecting(key);
+        const result = await pushRecordToPeer(await claim(carrier));
+        expect(result.pushed).toBe(true);
+        const refreshed = await refresh(carrier);
+        expect(refreshed.lastPushedHash).toBeFalsy();
+        expect(refreshed.lastPushedLegacyHash).toBe(result.hash);
+        // An unchanged record settles instead of re-running the 400 + retry pair.
+        const second = await pushRecordToPeer(refreshed);
+        expect(second.reason).toBe('unchanged-legacy-stripped');
+        expect(vi.mocked(peerFetch).mock.calls).toHaveLength(2);
+      });
+
+      it('withholds the hash WITHOUT a legacy water-mark when the receiver reports it pending (transient merge failure)', async () => {
+        const carrier = CARRIERS[key];
+        await carrier.arm();
+        vi.mocked(peerFetch).mockResolvedValue(accepts({ [pendingKey]: true }));
+        const result = await pushRecordToPeer(await claim(carrier));
+        expect(result.pushed).toBe(true);
+        expect(vi.mocked(peerFetch).mock.calls).toHaveLength(1);
+        const refreshed = await refresh(carrier);
+        expect(refreshed.lastPushedHash).toBeFalsy();
+        expect(refreshed.lastPushedLegacyHash).toBeFalsy();
+        // The next cycle must genuinely re-push, not short-circuit.
+        vi.mocked(peerFetch).mockClear();
+        vi.mocked(peerFetch).mockResolvedValue(accepts());
+        const second = await pushRecordToPeer(refreshed);
+        expect(second.pushed).toBe(true);
+        expect(vi.mocked(peerFetch).mock.calls).toHaveLength(1);
+      });
+    });
+
+    describe.each(SELF_RECONCILING)('$key — own reconciliation cycle', ({ key }) => {
+      it('saves lastPushedHash normally after a stripped push (nothing is owed through this hash)', async () => {
+        const carrier = CARRIERS[key];
+        await carrier.arm();
+        mockPeerRejecting(key);
+        const result = await pushRecordToPeer(await claim(carrier));
+        expect(result.pushed).toBe(true);
+        const refreshed = await refresh(carrier);
+        expect(refreshed.lastPushedHash).toBe(result.hash);
+        expect(refreshed.lastPushedLegacyHash).toBeFalsy();
+        const second = await pushRecordToPeer(refreshed);
+        expect(second.reason).toBe('unchanged');
+      });
+    });
+
+    it('leaves the bundled-track GC floor unstamped when linkedTrack was stripped for a legacy peer (#1922)', async () => {
+      // The project landed (its own confirmed floor advances) but the peer
+      // never got the track, so the bundle-specific floor tombstoneGc's
+      // `track` cutoff reads off musicVideoProject rows must stay unset.
+      const carrier = CARRIERS.linkedTrack;
+      await carrier.arm();
+      mockPeerRejecting('linkedTrack');
+      const sub = await claim(carrier);
+      expect(sub.lastConfirmedTrackBundleAtMs).toBeNull();
+      const result = await pushRecordToPeer(sub);
+      expect(result.pushed).toBe(true);
+      const refreshed = await refresh(carrier);
+      expect(refreshed.lastConfirmedPushedAt).toBeTruthy();
+      expect(refreshed.lastConfirmedTrackBundleAtMs).toBeNull();
+    });
+
+    describe('receiver — applyIncomingPush', () => {
+      // How each sidecar reaches the receiver, and the merge that can throw.
+      const RECEIVE_CARRIERS = {
+        manuscriptReview: {
+          merge: mergeReviewFromSync,
+          payload: () => ({
+            kind: 'series',
+            record: { id: 's1', name: 'S', deleted: false, deletedAt: null },
+            issues: [],
+            manuscriptReview: { schemaVersion: 1, comments: [{ id: 'mrc-1', problem: 'x', status: 'open', updatedAt: '2026-06-02T00:00:00Z' }] },
+            assetManifest: [],
+            sourceInstanceId: 'peer-a',
+          }),
+        },
+        reverseOutline: {
+          merge: mergeOutlineFromSync,
+          payload: () => ({
+            kind: 'series',
+            record: { id: 's1', name: 'S', deleted: false, deletedAt: null },
+            issues: [],
+            reverseOutline: {
+              schemaVersion: 1, status: 'complete', generatedAt: '2026-06-02T00:00:00Z',
+              plotlines: [{ id: 'a', label: 'A', kind: 'main' }],
+              scenes: [{ id: 'scene-001', sequence: 0, summary: 'opening', plotlineId: 'a' }],
+            },
+            assetManifest: [],
+            sourceInstanceId: 'peer-a',
+          }),
+        },
+        linkedTrack: {
+          merge: mergeTracksFromSync,
+          payload: () => ({
+            kind: 'musicVideoProject',
+            record: { id: 'mv-9', trackId: 'track-9', deleted: false, deletedAt: null },
+            linkedTrack: { id: 'track-9', audioFilename: 'linked.mp3' },
+            assetManifest: [],
+            sourceInstanceId: 'peer-a',
+          }),
+        },
+      };
+
+      it('has a receiver-side carrier for every sidecar row', () => {
+        expect(Object.keys(RECEIVE_CARRIERS).sort()).toEqual(SIDECARS.map((e) => e.key).sort());
+      });
+
+      it.each(SIDECARS)('raises exactly $pendingKey when the bundled $key merge throws, and no flag when it succeeds', async ({ key, pendingKey }) => {
+        const { merge, payload } = RECEIVE_CARRIERS[key];
+        const clean = await applyIncomingPush(payload());
+        for (const flag of PENDING_KEYS) expect(clean).not.toHaveProperty(flag);
+        vi.mocked(merge).mockRejectedValueOnce(new Error('disk full'));
+        const failed = await applyIncomingPush(payload());
+        expect(failed[pendingKey]).toBe(true);
+        for (const flag of PENDING_KEYS) {
+          if (flag !== pendingKey) expect(failed).not.toHaveProperty(flag);
+        }
+      });
+    });
+  });
+
   describe('collectCollectionAssetReferences', () => {
     it('maps items to image/video refs with an empty directImageRefFilenames', () => {
       const refs = collectCollectionAssetReferences({ items: [
