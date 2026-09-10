@@ -297,8 +297,8 @@ describe('mode is honored identically from schedule, manual run, and quota burn'
 
   it.each([
     ['ordinary schedule', {}],
-    ['manual run / on-demand', { skipPreconditions: true, deferPerpetualDispatch: true, targetPullRequest: null, runOverrides: null }],
-    ['quota burn (no param override)', { skipPreconditions: true, deferPerpetualDispatch: true, targetPullRequest: null, runOverrides: {} }],
+    ['manual run / on-demand', { skipPreconditions: true, targetPullRequest: null, runOverrides: null }],
+    ['quota burn (no param override)', { skipPreconditions: true, targetPullRequest: null, runOverrides: {} }],
   ])('%s renders the same file-issues prompt and settings', async (_lane, options) => {
     const { getTaskInterval } = await import('./taskSchedule.js');
     getTaskInterval.mockResolvedValue({ type: 'weekly', taskMetadata: { fileIssues: true } });

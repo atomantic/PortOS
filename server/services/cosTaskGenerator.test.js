@@ -81,6 +81,7 @@ import {
   buildImprovementDedupSets,
   queueDueInstallWideImprovementTasks,
   generateManagedAppImprovementTaskForType,
+  recordDeferredPerpetualDispatch,
   normalizeWorkItemRef,
   buildTargetWorkItemBlock,
   buildPrefetchedIssueContextBlock,
@@ -347,13 +348,13 @@ describe('isConfiguredApprovalRequired', () => {
 
   it('both generators stamp approvalReason onto metadata so the hint survives COS-TASKS.md', () => {
     const selfStart = GEN_SRC.indexOf('export async function generateSelfImprovementTaskForType');
-    const appStart = GEN_SRC.indexOf('export async function generateManagedAppImprovementTaskForType');
+    const appStart = GEN_SRC.indexOf('export async function prepareManagedAppImprovementTask');
     expect(GEN_SRC.slice(selfStart, appStart)).toContain('stampApprovalReason(metadata, approval)');
-    // Bounded by the function's own `return task;` rather than a character
-    // count: a magic window makes this guard fire on any commit that adds a
-    // comment above the stamp, which says nothing about whether the stamp is
-    // still there.
-    const appBody = GEN_SRC.slice(appStart, GEN_SRC.indexOf('\n  return task;', appStart));
+    // Bounded by the function's own `return { task, pendingPerpetualDispatch };`
+    // rather than a character count: a magic window makes this guard fire on
+    // any commit that adds a comment above the stamp, which says nothing about
+    // whether the stamp is still there.
+    const appBody = GEN_SRC.slice(appStart, GEN_SRC.indexOf('\n  return { task, pendingPerpetualDispatch };', appStart));
     expect(appBody).toContain('stampApprovalReason(metadata, approval)');
   });
 
@@ -393,7 +394,7 @@ describe('the on-demand consent flip reaches every drain path', () => {
     // Slice to the end of the function, not a fixed byte window: the consent line
     // sits at the bottom of a body that grows, so a magic number makes an
     // unrelated comment above it read as a missing consent call.
-    const body = GEN_SRC.slice(start, GEN_SRC.indexOf('\n  return task;', start));
+    const body = GEN_SRC.slice(start, GEN_SRC.indexOf('\n  return { task, pendingPerpetualDispatch };', start));
     expect(body).toMatch(/selectionReason === 'on-demand'\) applyOnDemandConsent\(task\)/);
   });
 });
@@ -1533,8 +1534,8 @@ describe('resolveTaskInputHook — hookMetadata threading (#3179)', () => {
     // win over a decision made a few lines earlier. `analysisType` is the sharp
     // edge: resolveTaskHookType reads it to dispatch the output hook, so a
     // collision would stop the very hook that asked for the bag from running.
-    const start = GEN_SRC.indexOf('export async function generateManagedAppImprovementTaskForType');
-    const body = GEN_SRC.slice(start, GEN_SRC.indexOf('return task;', start));
+    const start = GEN_SRC.indexOf('export async function prepareManagedAppImprovementTask');
+    const body = GEN_SRC.slice(start, GEN_SRC.indexOf('return { task, pendingPerpetualDispatch };', start));
     expect(body).toContain('for (const [key, value] of Object.entries(hookMetadata || {}))');
     expect(body).toContain('if (key in metadata)');
     // A plain merge would reintroduce the clobber.
@@ -1546,13 +1547,13 @@ describe('resolveTaskInputHook — hookMetadata threading (#3179)', () => {
     // test of the generator's happy path: moving the Object.assign above any
     // `return null` would silently restore the #3179 bug — a hook side effect
     // keyed on the stamped metadata would fire for a task that is never built.
-    const start = GEN_SRC.indexOf('export async function generateManagedAppImprovementTaskForType');
-    expect(start, 'generateManagedAppImprovementTaskForType must exist').toBeGreaterThan(-1);
+    const start = GEN_SRC.indexOf('export async function prepareManagedAppImprovementTask');
+    expect(start, 'prepareManagedAppImprovementTask must exist').toBeGreaterThan(-1);
     const body = GEN_SRC.slice(start);
     const stampAt = body.indexOf('Object.entries(hookMetadata || {})');
     expect(stampAt, 'the hookMetadata stamp must exist').toBeGreaterThan(-1);
-    // Bound the scan to this function: `return task;` ends it.
-    const lastGateAt = body.slice(0, body.indexOf('return task;')).lastIndexOf('return null;');
+    // Bound the scan to this function: `return { task, pendingPerpetualDispatch };` ends it.
+    const lastGateAt = body.slice(0, body.indexOf('return { task, pendingPerpetualDispatch };')).lastIndexOf('return null;');
     expect(lastGateAt, 'the gate chain must exist').toBeGreaterThan(-1);
     expect(stampAt).toBeGreaterThan(lastGateAt);
   });
@@ -1566,12 +1567,12 @@ describe('resolveTaskInputHook — hookMetadata threading (#3179)', () => {
  */
 describe('ignoreTaskId reaches the in-flight-counting gates (#3179)', () => {
   const body = () => {
-    const start = GEN_SRC.indexOf('export async function generateManagedAppImprovementTaskForType');
-    return GEN_SRC.slice(start, GEN_SRC.indexOf('return task;', start));
+    const start = GEN_SRC.indexOf('export async function prepareManagedAppImprovementTask');
+    return GEN_SRC.slice(start, GEN_SRC.indexOf('return { task, pendingPerpetualDispatch };', start));
   };
 
   it('accepts ignoreTaskId and forwards it to the input hook and the perpetual gate', () => {
-    expect(GEN_SRC).toMatch(/generateManagedAppImprovementTaskForType\(taskType, app, state, \{\s*skipPreconditions = false,\s*ignoreTaskId = null/);
+    expect(GEN_SRC).toMatch(/prepareManagedAppImprovementTask\(taskType, app, state, \{\s*skipPreconditions = false,\s*ignoreTaskId = null/);
     expect(body()).toContain('resolveTaskInputHook(app, taskType, taskSchedule, { ignoreTaskId })');
     expect(body()).toContain('applyPerpetualWorkGate(app, taskType, promptTaskType, metadata, interval, taskSchedule, { ignoreTaskId })');
   });
@@ -1579,7 +1580,7 @@ describe('ignoreTaskId reaches the in-flight-counting gates (#3179)', () => {
   it('queueEligibleImprovementTasks passes its ignoreTaskId down to the generator', () => {
     // It already forwards the same id to addTask and buildImprovementDedupSets;
     // the generator was the one path that dropped it.
-    expect(GEN_SRC).toMatch(/generateManagedAppImprovementTaskForType\(nextType, app, state, \{[\s\S]*ignoreTaskId[\s\S]*deferPerpetualDispatch: true[\s\S]*\}\)/);
+    expect(GEN_SRC).toMatch(/prepareManagedAppImprovementTask\(nextType, app, state, \{[\s\S]*ignoreTaskId[\s\S]*\}\)/);
   });
 
   it('the perpetual gate hands ignoreTaskId to the work detector', () => {
@@ -1614,7 +1615,7 @@ describe('ignoreTaskId reaches BOTH completion-continuation generators (#3179)',
     expect(GEN_SRC).toMatch(/export async function generateIdleReviewTask\(state, \{ ignoreTaskId = null \} = \{\}\)/);
     expect(GEN_SRC).toContain('generateManagedAppImprovementTask(nextApp, state, { ignoreTaskId })');
     expect(GEN_SRC).toMatch(/async function generateManagedAppImprovementTask\(app, state, \{ ignoreTaskId = null \} = \{\}\)/);
-    expect(GEN_SRC).toMatch(/generateManagedAppImprovementTaskForType\(nextType, app, state, \{[\s\S]*ignoreTaskId[\s\S]*deferPerpetualDispatch: true[\s\S]*\}\)/);
+    expect(GEN_SRC).toMatch(/prepareManagedAppImprovementTask\(nextType, app, state, \{[\s\S]*ignoreTaskId[\s\S]*\}\)/);
   });
 
   it('cos.js passes the completing task id into the dequeue that follows the refill', () => {
@@ -1629,9 +1630,9 @@ describe('ignoreTaskId reaches BOTH completion-continuation generators (#3179)',
  * through, and BEFORE the detectors/scans it would only discard the results of.
  */
 describe('the drain cap has exactly one implementation, at the choke point', () => {
-  it('generateManagedAppImprovementTaskForType applies it ahead of the work gate and the reconcile scans', () => {
-    const start = GEN_SRC.indexOf('export async function generateManagedAppImprovementTaskForType');
-    const body = GEN_SRC.slice(start, GEN_SRC.indexOf('return task;', start));
+  it('prepareManagedAppImprovementTask applies it ahead of the work gate and the reconcile scans', () => {
+    const start = GEN_SRC.indexOf('export async function prepareManagedAppImprovementTask');
+    const body = GEN_SRC.slice(start, GEN_SRC.indexOf('return { task, pendingPerpetualDispatch };', start));
     const capIdx = body.indexOf('applyPerpetualDrainCap(app, taskType, interval, taskSchedule)');
     expect(capIdx, 'the choke point must apply the per-type drain cap').toBeGreaterThan(-1);
     expect(capIdx).toBeLessThan(body.indexOf('applyPerpetualWorkGate('));
@@ -1666,12 +1667,54 @@ describe('the drain cap has exactly one implementation, at the choke point', () 
     expect(gate).toContain('spendDispatch: true');
     expect(gate, 'the gate must not charge the budget itself').not.toContain('recordPerpetualDispatch');
 
-    const genStart = GEN_SRC.indexOf('export async function generateManagedAppImprovementTaskForType');
-    const body = GEN_SRC.slice(genStart, GEN_SRC.indexOf('return task;', genStart));
-    const spendIdx = body.search(/if \(perpetualGate\.spendDispatch\) \{[\s\S]*recordPerpetualDispatch\(taskType, app\.id, perpetualGate\.signature \?\? null\)/);
-    expect(spendIdx, 'the choke point must spend the deferred dispatch').toBeGreaterThan(-1);
+    // prepareManagedAppImprovementTask computes the deferred-dispatch RECORD —
+    // it never spends the budget itself. recordDeferredPerpetualDispatch is the
+    // one choke point that does, shared by the immediate-record wrapper
+    // (generateManagedAppImprovementTaskForType) and the deferred queue/
+    // on-demand/idle callers alike (#6871).
+    const genStart = GEN_SRC.indexOf('export async function prepareManagedAppImprovementTask');
+    const body = GEN_SRC.slice(genStart, GEN_SRC.indexOf('return { task, pendingPerpetualDispatch };', genStart));
+    expect(body, 'prepare must not charge the budget itself').not.toContain('recordPerpetualDispatch(');
+    const pendingIdx = body.indexOf('perpetualGate.spendDispatch');
+    expect(pendingIdx, 'the choke point must compute the deferred-dispatch record from the gate result').toBeGreaterThan(-1);
+    expect(body).toContain('signature: perpetualGate.signature ?? null');
     // Every `return null` gate must precede it — planId is the last one.
-    expect(body.indexOf('planMeta.skipReason')).toBeLessThan(spendIdx);
+    expect(body.indexOf('planMeta.skipReason')).toBeLessThan(pendingIdx);
+
+    const recordStart = GEN_SRC.indexOf('export async function recordDeferredPerpetualDispatch');
+    expect(recordStart, 'recordDeferredPerpetualDispatch must exist').toBeGreaterThan(-1);
+    const recordBody = GEN_SRC.slice(recordStart, GEN_SRC.indexOf('\n}', recordStart));
+    expect(recordBody, 'recordDeferredPerpetualDispatch is the one choke point that spends the budget').toContain('recordPerpetualDispatch(taskType, appId, signature)');
+  });
+});
+
+/**
+ * recordDeferredPerpetualDispatch used to be keyed on the GENERATOR's task
+ * object via a WeakMap — a caller that recorded against any other object (the
+ * store's re-wrapped multi-line-description task, a clone, a stub) missed
+ * silently. The record is now a plain `{ taskType, appId, signature }` value
+ * threaded through the return, so recording no longer depends on which
+ * task-object variant the caller happens to be holding (#6871). The
+ * admission-site behavior (a re-wrapped addTask result still gets recorded; a
+ * duplicate result records nothing) is pinned at the boundary in
+ * onDemandDrain.test.js — this is the helper's own direct contract.
+ */
+describe('recordDeferredPerpetualDispatch (#6871)', () => {
+  it('spends the budget from the record, independent of any task object', async () => {
+    const recordPerpetualDispatch = vi.fn(async () => 1);
+    const pendingPerpetualDispatch = { taskType: 'code-quality', appId: 'app-1', signature: 'sig-abc' };
+
+    const recorded = await recordDeferredPerpetualDispatch(pendingPerpetualDispatch, { recordPerpetualDispatch });
+
+    expect(recorded).toBe(true);
+    expect(recordPerpetualDispatch).toHaveBeenCalledWith('code-quality', 'app-1', 'sig-abc');
+  });
+
+  it('is a no-op when there is nothing to record', async () => {
+    const recordPerpetualDispatch = vi.fn(async () => 1);
+
+    expect(await recordDeferredPerpetualDispatch(null, { recordPerpetualDispatch })).toBe(false);
+    expect(recordPerpetualDispatch).not.toHaveBeenCalled();
   });
 });
 
@@ -1690,8 +1733,8 @@ describe('pr-reviewer security preflight wiring', () => {
   // composes it: the call sits before the ordinary stage gate, its skip reason
   // is recorded, and a passed preflight selects the current stage's prompt.
   it('runs the direct preflight before stage gates and resolves the next-stage prompt', () => {
-    const start = GEN_SRC.indexOf('export async function generateManagedAppImprovementTaskForType');
-    const body = GEN_SRC.slice(start, GEN_SRC.indexOf('return task;', start));
+    const start = GEN_SRC.indexOf('export async function prepareManagedAppImprovementTask');
+    const body = GEN_SRC.slice(start, GEN_SRC.indexOf('return { task, pendingPerpetualDispatch };', start));
     const preflightAt = body.indexOf('runPrReviewerSecurityPreflight(taskType, app, metadata, targetPullRequest, taskSchedule)');
     const preconditionAt = body.indexOf('shouldSkipForPrecondition(metadata, app, taskType)');
     const promptAt = body.indexOf('getStagePrompt(taskType, currentStageIndex)');
@@ -1709,16 +1752,16 @@ describe('pr-reviewer security preflight wiring', () => {
 
   it('carries a stolen on-demand request\'s PR target through the idle-review path', () => {
     const start = GEN_SRC.indexOf('const appRequests = onDemandRequests.filter(');
-    const body = GEN_SRC.slice(start, GEN_SRC.indexOf('\n  return task;', start));
+    const body = GEN_SRC.slice(start, GEN_SRC.indexOf('\n  return { task, pendingPerpetualDispatch };', start));
     // The idle tier can consume a queued on-demand request instead of Priority 0.
     // Dropping the target there re-widens a one-row click into a full sweep.
     expect(body).toContain('targetPullRequest = request.targetPullRequest ?? null');
-    expect(body).toMatch(/generateManagedAppImprovementTaskForType\([\s\S]*?targetPullRequest\n/);
+    expect(body).toMatch(/prepareManagedAppImprovementTask\([\s\S]*?targetPullRequest\n/);
   });
 
   it('keeps a targeted run distinguishable from the sweep in the duplicate guard', () => {
-    const genStart = GEN_SRC.indexOf('export async function generateManagedAppImprovementTaskForType');
-    const body = GEN_SRC.slice(genStart, GEN_SRC.indexOf('return task;', genStart));
+    const genStart = GEN_SRC.indexOf('export async function prepareManagedAppImprovementTask');
+    const body = GEN_SRC.slice(genStart, GEN_SRC.indexOf('return { task, pendingPerpetualDispatch };', genStart));
     expect(body).toContain('scopeDescriptionToPullRequest(');
   });
 });

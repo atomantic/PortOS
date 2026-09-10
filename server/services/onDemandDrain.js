@@ -58,7 +58,7 @@ export async function drainOnDemandRequests(ctx, adapter) {
   // imports THIS module, and these six helpers are declared there. Deferring to
   // call time is the same idiom the engines already use for taskSchedule.js.
   const {
-    generateManagedAppImprovementTaskForType,
+    prepareManagedAppImprovementTask,
     generateSelfImprovementTaskForType,
     recordDeferredPerpetualDispatch,
     applyOnDemandConsent,
@@ -112,6 +112,11 @@ export async function drainOnDemandRequests(ctx, adapter) {
     }
 
     let task = null;
+    // The perpetual drain signature `prepareManagedAppImprovementTask` decided
+    // to record for this task, if any — returned as a plain record rather than
+    // discovered by re-finding the task object, so it survives regardless of
+    // which task-object variant `addTask` below hands back (#6871).
+    let pendingPerpetualDispatch = null;
     // Determine target app (if any)
     let targetApp = null;
 
@@ -143,9 +148,8 @@ export async function drainOnDemandRequests(ctx, adapter) {
         reviewStartedApps.add(targetApp.id);
       }
       await taskScheduleMod.recordExecution(`task:${request.taskType}`, targetApp.id);
-      task = await generateManagedAppImprovementTaskForType(request.taskType, targetApp, state, {
+      const prepared = await prepareManagedAppImprovementTask(request.taskType, targetApp, state, {
         skipPreconditions: true,
-        deferPerpetualDispatch: true,
         targetPullRequest: request.targetPullRequest ?? null,
         providerOverride: request.providerOverride ?? null,
         // A quota-burn step's per-invocation run parameters. They must reach
@@ -158,6 +162,8 @@ export async function drainOnDemandRequests(ctx, adapter) {
         // for every step until the migration starts pinning one.
         runOverrides: request.burn?.overrides?.params ?? null
       });
+      task = prepared?.task ?? null;
+      pendingPerpetualDispatch = prepared?.pendingPerpetualDispatch ?? null;
       if (task) {
         await bindAppReviewAgent(targetApp.id, `on-demand-${Date.now()}`);
       }
@@ -193,14 +199,14 @@ export async function drainOnDemandRequests(ctx, adapter) {
       // rejected as a duplicate of the run that just finished and the drain stalls.
       const persisted = await addTask(task, 'internal', { raw: true, ...addTaskOptions, suppressDequeue: true });
       if (!persisted?.duplicate) {
-        await recordDeferredPerpetualDispatch(task, taskScheduleMod);
+        await recordDeferredPerpetualDispatch(pendingPerpetualDispatch, taskScheduleMod);
         emitSpawn(task);
       } else if (persisted.status === 'blocked') {
         // Explicit user Run colliding with a failure-blocked twin (#2614):
         // revive the existing task instead of silently dropping the Run and
         // stranding the bound on-demand review marker.
         await reviveBlockedTask(persisted.id, { priority: task.priority, metadata: task.metadata }, 'internal', { suppressDequeue: true });
-        await recordDeferredPerpetualDispatch(task, taskScheduleMod);
+        await recordDeferredPerpetualDispatch(pendingPerpetualDispatch, taskScheduleMod);
         const revived = { ...task, id: persisted.id };
         emitSpawn(revived);
         emitLog('info', `🔁 On-demand ${request.taskType} revived blocked task ${persisted.id}`, { taskId: persisted.id });

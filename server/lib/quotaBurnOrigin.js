@@ -181,7 +181,7 @@ const scalarParams = (raw) => {
  * The params are here for a reason the other three are not: they have to reach
  * the PROMPT, so they cannot ride the post-generation
  * `onDemandRequestMetadata` stamp below. Both on-demand engines pull them off
- * the request and hand them to `generateManagedAppImprovementTaskForType` as
+ * the request and hand them to `prepareManagedAppImprovementTask` as
  * `runOverrides`, which layers them over the task's saved `taskMetadata` BEFORE
  * the mode banner is chosen and the prompt is rendered. That is what lets a step
  * migrated from an issues-only burn preset pin `fileIssues: true` explicitly and

@@ -209,16 +209,22 @@ export function shouldParkUnchangedPerpetualWork(detection, lastSignature, dispa
     && dispatchCount > 1;
 }
 
-// The generator can be called before either spawn engine admits its result.
-// Keep the drain signature off persisted task metadata until that admission is
-// known to have succeeded; a WeakMap carries it only across the in-memory handoff.
-const deferredPerpetualSignatures = new WeakMap();
-
-export async function recordDeferredPerpetualDispatch(task, taskSchedule) {
-  const deferred = deferredPerpetualSignatures.get(task);
-  if (!deferred) return false;
-  deferredPerpetualSignatures.delete(task);
-  await taskSchedule.recordPerpetualDispatch(deferred.taskType, deferred.appId, deferred.signature);
+// The generator can be called before either spawn engine admits its result, so
+// the drain signature travels as a plain data record returned alongside the
+// task (`pendingPerpetualDispatch`, see `prepareManagedAppImprovementTask`)
+// instead of being parked in a WeakMap keyed on the task object. The object-
+// identity version required every admission site to keep re-finding the EXACT
+// object the generator returned; `cosTaskStore.addTask` hands back a DIFFERENT
+// object whenever the description is multi-line, which is the normal case, so
+// a caller that naturally kept using the store's returned object instead of
+// the generator's recorded nothing, silently (#6871).
+export async function recordDeferredPerpetualDispatch(pendingPerpetualDispatch, taskSchedule) {
+  // Sentinel on the field the record can't exist without, not mere truthiness
+  // of the object — a malformed record must never reach recordPerpetualDispatch
+  // as `undefined`, which would write a bogus schedule entry instead of no-oping.
+  if (!pendingPerpetualDispatch?.taskType) return false;
+  const { taskType, appId, signature } = pendingPerpetualDispatch;
+  await taskSchedule.recordPerpetualDispatch(taskType, appId, signature);
   return true;
 }
 
@@ -1018,9 +1024,9 @@ async function spawnPriority4IdleReview(ctx) {
     const freshCosTasks = await getCosTasks();
     const pendingSystemTasks = freshCosTasks.autoApproved?.length || 0;
     if (pendingSystemTasks === 0) {
-      const idleTask = await generateIdleReviewTask(state);
+      const { task: idleTask, pendingPerpetualDispatch } = await generateIdleReviewTask(state);
       if (idleTask && canSpawnTask(idleTask, autonomousSlotCeiling)) {
-        await recordDeferredPerpetualDispatch(idleTask, await import('./taskSchedule.js'));
+        await recordDeferredPerpetualDispatch(pendingPerpetualDispatch, await import('./taskSchedule.js'));
         tasksToSpawn.push(idleTask);
         trackSpawn(idleTask);
       }
@@ -1264,7 +1270,7 @@ export async function evaluateTasks(options) {
 export async function generateIdleReviewTask(state, { ignoreTaskId = null } = {}) {
   if (!isImprovementEnabled(state)) {
     emitLog('debug', 'Improvement tasks are disabled');
-    return null;
+    return { task: null, pendingPerpetualDispatch: null };
   }
 
   // Get all active (non-archived) managed apps (including PortOS)
@@ -1292,17 +1298,17 @@ export async function generateIdleReviewTask(state, { ignoreTaskId = null } = {}
       });
 
       emitLog('info', `Generating improvement task for ${nextApp.name}`, { appId: nextApp.id });
-      const idleTask = await generateManagedAppImprovementTask(nextApp, state, { ignoreTaskId });
+      const { task: idleTask, pendingPerpetualDispatch } = await generateManagedAppImprovementTask(nextApp, state, { ignoreTaskId });
       // Only bind the active marker once a real task exists.
       if (idleTask) {
         await bindAppReviewAgent(nextApp.id, `idle-review-${Date.now()}`);
       }
-      return idleTask;
+      return { task: idleTask, pendingPerpetualDispatch };
     }
   }
 
   emitLog('debug', 'No idle tasks available');
-  return null;
+  return { task: null, pendingPerpetualDispatch: null };
 }
 
 /**
@@ -1536,11 +1542,9 @@ export async function queueEligibleImprovementTasks(state, cosTaskData, { ignore
     // agents claim the same slug (2026-05-21 incident). The generator
     // returns null on plan-gate / precondition skip; we silently continue.
     // Regression-pinned in cos.test.js.
-    const task = await generateManagedAppImprovementTaskForType(nextType, app, state, {
-      ignoreTaskId,
-      deferPerpetualDispatch: true
-    });
-    if (!task) continue;
+    const prepared = await prepareManagedAppImprovementTask(nextType, app, state, { ignoreTaskId });
+    if (!prepared?.task) continue;
+    const { task, pendingPerpetualDispatch } = prepared;
 
     // Queue-path invariants override the generator's direct-spawn defaults
     // (which use MEDIUM priority + `app-improve-*` id).
@@ -1554,7 +1558,11 @@ export async function queueEligibleImprovementTasks(state, cosTaskData, { ignore
     // task:ready, renders full description via getTaskPrompt.
     const newTask = await addTask(task, 'internal', { raw: true, ignoreTaskId, suppressDequeue: true });
     if (newTask?.duplicate) continue;
-    await recordDeferredPerpetualDispatch(task, taskSchedule);
+    // Recorded from `pendingPerpetualDispatch` — the RECORD prepare returned —
+    // never from `task` or `newTask`: addTask hands back a different object
+    // whenever the description is multi-line, so recording must not depend on
+    // which one the caller is holding (#6871).
+    await recordDeferredPerpetualDispatch(pendingPerpetualDispatch, taskSchedule);
     if (wakeAfterRecord) cosEvents.emit('cos:dequeue-requested');
 
     await recordExecution(`task:${nextType}`, app.id);
@@ -1955,7 +1963,7 @@ async function generateManagedAppImprovementTask(app, state, { ignoreTaskId = nu
 
     if (!nextTypeResult) {
       emitLog('info', `No app improvement tasks are eligible for ${app.name} based on schedule`);
-      return null;
+      return { task: null, pendingPerpetualDispatch: null };
     }
 
     nextType = nextTypeResult.taskType;
@@ -1980,15 +1988,16 @@ async function generateManagedAppImprovementTask(app, state, { ignoreTaskId = nu
   // with the literal {prData}/{referenceData} markers and never poll. The
   // recordExecution + activity bump above already accounted for the idle
   // spawn; the per-type generator does not record execution itself.
-  const task = await generateManagedAppImprovementTaskForType(nextType, app, state, {
+  const prepared = await prepareManagedAppImprovementTask(nextType, app, state, {
     ignoreTaskId,
-    deferPerpetualDispatch: true,
     targetPullRequest
   });
+  const task = prepared?.task ?? null;
+  const pendingPerpetualDispatch = prepared?.pendingPerpetualDispatch ?? null;
   // Idle-review can steal a queued on-demand request for this app. That
   // request is still a user Run — apply the same consent as Priority 0.
   if (selectionReason === 'on-demand') applyOnDemandConsent(task);
-  return task;
+  return { task, pendingPerpetualDispatch };
 }
 
 /**
@@ -2525,10 +2534,22 @@ function applyProviderModelPins(metadata, interval, appPin, hookOverride, reques
   }
 }
 
-export async function generateManagedAppImprovementTaskForType(taskType, app, state, {
+/**
+ * Decide whether a managed-app improvement task should be generated for
+ * `taskType`, and build it if so. Never records a perpetual-drain dispatch —
+ * that is returned as `pendingPerpetualDispatch` (`null`, or
+ * `{ taskType, appId, signature }`) alongside the task, so the caller can
+ * record it (via `recordDeferredPerpetualDispatch`) at whatever point the
+ * task's admission is certain. `generateManagedAppImprovementTaskForType`
+ * below is the thin direct-caller wrapper that records immediately; the
+ * queue, on-demand, and idle-review paths call this function directly and
+ * defer the record until their own spawn-engine admission succeeds (#6871).
+ *
+ * @returns {Promise<{ task: Object|null, pendingPerpetualDispatch: Object|null }>}
+ */
+export async function prepareManagedAppImprovementTask(taskType, app, state, {
   skipPreconditions = false,
   ignoreTaskId = null,
-  deferPerpetualDispatch = false,
   targetPullRequest = null,
   // Per-request provider/model/effort pin — see applyProviderModelPins.
   providerOverride = null,
@@ -2802,22 +2823,42 @@ export async function generateManagedAppImprovementTaskForType(taskType, app, st
     ...approval
   };
 
-  // Most callers return the task to a spawn engine, so keep this side effect
-  // deferred until that engine admits the task. Direct callers retain the old
-  // immediate behavior; queue/on-demand/idle paths opt into the handoff below.
-  if (perpetualGate.spendDispatch) {
-    if (deferPerpetualDispatch) {
-      deferredPerpetualSignatures.set(task, {
-        taskType,
-        appId: app.id,
-        signature: perpetualGate.signature ?? null
-      });
-    } else {
-      await taskSchedule.recordPerpetualDispatch(taskType, app.id, perpetualGate.signature ?? null);
-    }
-  }
+  // The drain signature returns alongside the task instead of being recorded
+  // here — every caller sits between task construction and spawn-engine
+  // admission, and recordDeferredPerpetualDispatch is the one choke point
+  // that may spend the budget, once admission is certain (#6871).
+  const pendingPerpetualDispatch = perpetualGate.spendDispatch
+    ? { taskType, appId: app.id, signature: perpetualGate.signature ?? null }
+    : null;
 
-  return task;
+  return { task, pendingPerpetualDispatch };
+}
+
+/**
+ * Generate a managed app improvement task for a specific type.
+ * Used by on-demand task processing and can be called directly.
+ *
+ * Thin wrapper over `prepareManagedAppImprovementTask` (above) that records
+ * any deferred perpetual-dispatch signature immediately — the shape every
+ * direct caller got before the queue, on-demand, and idle-review paths needed
+ * to defer that record until their own admission gate passes. Those three
+ * callers use `prepareManagedAppImprovementTask` directly instead (see
+ * `queueEligibleImprovementTasks`, `onDemandDrain.js`, `generateIdleReviewTask`).
+ *
+ * @param {string} taskType - The type of improvement task (e.g., 'security-audit', 'code-quality')
+ * @param {Object} app - The managed app object
+ * @param {Object} state - Current CoS state
+ * @returns {Promise<Object|null>} Generated task, or null when nothing is eligible.
+ */
+export async function generateManagedAppImprovementTaskForType(taskType, app, state, opts = {}) {
+  const taskSchedule = await import('./taskSchedule.js');
+  const prepared = await prepareManagedAppImprovementTask(taskType, app, state, opts);
+  // Guard on `prepared?.task`, matching every other caller of prepare — task
+  // and pendingPerpetualDispatch are always constructed together, but this
+  // keeps the guard from silently drifting if that ever changes.
+  if (!prepared?.task) return null;
+  await recordDeferredPerpetualDispatch(prepared.pendingPerpetualDispatch, taskSchedule);
+  return prepared.task;
 }
 // `normalizeClaimReviewers` moved to server/lib/reviewerConfig.js (#4770, #5702): the
 // prompt builder needs the same copilot guard when it re-resolves reviewers off

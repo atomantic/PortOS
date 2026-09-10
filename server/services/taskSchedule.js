@@ -16,7 +16,7 @@
  *   drains start only on explicit dispatch and never wake on a recheck timer.
  *   Omitted autoStart preserves legacy automatic on-demand drains.
  *   See server/services/perpetualWork.js for the detector registry and the
- *   perpetual gate in cosTaskGenerator.generateManagedAppImprovementTaskForType.
+ *   perpetual gate in cosTaskGenerator.prepareManagedAppImprovementTask.
  */
 
 import { cosEvents, emitLog } from './cosEvents.js';
@@ -1084,7 +1084,7 @@ export async function triggerOnDemandTask(taskType, appId = null, {
   }
   // Optional per-request provider/model/effort pin (the PR/MR row's "Run with"
   // picker) — layered onto the task's metadata by
-  // generateManagedAppImprovementTaskForType as the MOST specific pin, above
+  // prepareManagedAppImprovementTask as the MOST specific pin, above
   // the schedule interval and the app's own per-app override.
   const providerOverride = (provider || model || effort) ? { provider, model, effort } : null;
   const request = await updateSchedule(async (schedule) => {

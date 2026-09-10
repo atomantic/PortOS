@@ -1097,13 +1097,13 @@ async function spawnDequeuePriority3IdleReview(ctx) {
   const freshCosTasks = await getCosTasks();
   const pendingSystemTasks = freshCosTasks.autoApproved?.length || 0;
   if (pendingSystemTasks === 0) {
-    const idleTask = await generateIdleReviewTask(state, { ignoreTaskId });
+    const { task: idleTask, pendingPerpetualDispatch } = await generateIdleReviewTask(state, { ignoreTaskId });
     // Committed tier — `generateIdleReviewTask` has already bound the app-review
     // marker and advanced the 30-minute cooldown, and only `holdTask` releases
     // that marker, which requires the emit. A denial would leave the app reading
     // "in review" indefinitely (#978's mode). See canSpawnCommitted (#4834).
     if (idleTask && capacity.canSpawnCommitted(idleTask, ctx.autonomousSpawnCeiling)) {
-      await recordDeferredPerpetualDispatch(idleTask, await import('./taskSchedule.js'));
+      await recordDeferredPerpetualDispatch(pendingPerpetualDispatch, await import('./taskSchedule.js'));
       cosEvents.emit('task:ready', idleTask);
       capacity.trackSpawn(idleTask);
     }

@@ -34,7 +34,7 @@ const mocks = vi.hoisted(() => ({
   clearOnDemandRequest: vi.fn(async () => {}),
   applyOnDemandRunResets: vi.fn(async () => true),
   recordExecution: vi.fn(async () => {}),
-  generateManagedAppImprovementTaskForType: vi.fn(async () => ({ id: 'gen-1', priority: 'HIGH' })),
+  prepareManagedAppImprovementTask: vi.fn(async () => ({ task: { id: 'gen-1', priority: 'HIGH' }, pendingPerpetualDispatch: null })),
   generateSelfImprovementTaskForType: vi.fn(async () => ({ id: 'self-1', priority: 'HIGH' })),
   recordDeferredPerpetualDispatch: vi.fn(async () => {}),
   applyOnDemandConsent: vi.fn((t) => t),
@@ -65,7 +65,7 @@ vi.mock('./taskSchedule.js', () => ({
   recordExecution: (...a) => mocks.recordExecution(...a),
 }));
 vi.mock('./cosTaskGenerator.js', () => ({
-  generateManagedAppImprovementTaskForType: (...a) => mocks.generateManagedAppImprovementTaskForType(...a),
+  prepareManagedAppImprovementTask: (...a) => mocks.prepareManagedAppImprovementTask(...a),
   generateSelfImprovementTaskForType: (...a) => mocks.generateSelfImprovementTaskForType(...a),
   recordDeferredPerpetualDispatch: (...a) => mocks.recordDeferredPerpetualDispatch(...a),
   applyOnDemandConsent: (...a) => mocks.applyOnDemandConsent(...a),
@@ -125,7 +125,7 @@ beforeEach(() => {
   mocks.applyOnDemandRunResets.mockResolvedValue(true);
   mocks.getActiveApps.mockResolvedValue([APP]);
   mocks.addTask.mockResolvedValue({ id: 'persisted-1' });
-  mocks.generateManagedAppImprovementTaskForType.mockResolvedValue({ id: 'gen-1', priority: 'HIGH' });
+  mocks.prepareManagedAppImprovementTask.mockResolvedValue({ task: { id: 'gen-1', priority: 'HIGH' }, pendingPerpetualDispatch: null });
   mocks.generateSelfImprovementTaskForType.mockResolvedValue({ id: 'self-1', priority: 'HIGH' });
   mocks.drainProgrammaticOnDemandRequests.mockResolvedValue(new Set());
   mocks.applyOnDemandConsent.mockImplementation((t) => t);
@@ -150,7 +150,7 @@ describe.each(ENGINES)('%s — a failing app registry defers, never clears', (_n
     const { spawned, adapter } = makeAdapter();
     await drainOnDemandRequests({ state: STATE }, adapter);
     expect(spawned).toEqual([]);
-    expect(mocks.generateManagedAppImprovementTaskForType).not.toHaveBeenCalled();
+    expect(mocks.prepareManagedAppImprovementTask).not.toHaveBeenCalled();
     expect(mocks.addTask).not.toHaveBeenCalled();
   });
 
@@ -219,7 +219,7 @@ describe.each(ENGINES)('%s — on-demand metadata stamp', (_name, makeAdapter) =
 describe.each(ENGINES)('%s — empty-result feedback', (_name, makeAdapter) => {
   it('reports an empty result for a user-initiated Run', async () => {
     mocks.getOnDemandRequests.mockResolvedValue([appRequest()]);
-    mocks.generateManagedAppImprovementTaskForType.mockResolvedValue(null);
+    mocks.prepareManagedAppImprovementTask.mockResolvedValue(null);
     mocks.applyOnDemandRunResets.mockResolvedValue(true);
     const { adapter } = makeAdapter();
     await drainOnDemandRequests({ state: STATE }, adapter);
@@ -230,7 +230,7 @@ describe.each(ENGINES)('%s — empty-result feedback', (_name, makeAdapter) => {
   it('stays silent for an automated drain refill', async () => {
     // A converging overnight drain must not turn into a pile of toasts.
     mocks.getOnDemandRequests.mockResolvedValue([appRequest()]);
-    mocks.generateManagedAppImprovementTaskForType.mockResolvedValue(null);
+    mocks.prepareManagedAppImprovementTask.mockResolvedValue(null);
     mocks.applyOnDemandRunResets.mockResolvedValue(false);
     const { adapter } = makeAdapter();
     await drainOnDemandRequests({ state: STATE }, adapter);
@@ -272,6 +272,63 @@ describe.each(ENGINES)('%s — blocked-duplicate revive (#2614)', (_name, makeAd
   });
 });
 
+// ── The dispatch-signature hand-off (#6871) ─────────────────────────────────
+// prepareManagedAppImprovementTask returns the deferred perpetual-dispatch
+// record ALONGSIDE the task instead of parking it in a WeakMap keyed on the
+// task object — addTask's raw branch (cosTaskStore.js) re-wraps a multi-line
+// description into a brand-new object, so the old identity-keyed record would
+// silently miss unless the caller kept using the exact object the generator
+// returned. These pin that the record travels through the return value
+// regardless of which task-object variant addTask hands back.
+describe.each(ENGINES)('%s — deferred perpetual-dispatch recording', (_name, makeAdapter) => {
+  it('records the dispatch from the returned record even when addTask hands back a different task object', async () => {
+    mocks.getOnDemandRequests.mockResolvedValue([appRequest()]);
+    mocks.prepareManagedAppImprovementTask.mockResolvedValue({
+      task: { id: 'gen-1', priority: 'HIGH' },
+      pendingPerpetualDispatch: { taskType: 'code-quality', appId: 'acme', signature: 'sig-1' }
+    });
+    // Not === the task prepare returned — the normal shape of a multi-line
+    // description surviving addTask's raw branch.
+    mocks.addTask.mockResolvedValue({ id: 'gen-1', priority: 'HIGH', description: 'line one' });
+    const { adapter } = makeAdapter();
+    await drainOnDemandRequests({ state: STATE }, adapter);
+
+    expect(mocks.recordDeferredPerpetualDispatch).toHaveBeenCalledWith(
+      { taskType: 'code-quality', appId: 'acme', signature: 'sig-1' },
+      expect.anything()
+    );
+  });
+
+  it('also records on the blocked-duplicate revive branch', async () => {
+    mocks.getOnDemandRequests.mockResolvedValue([appRequest()]);
+    mocks.prepareManagedAppImprovementTask.mockResolvedValue({
+      task: { id: 'gen-1', priority: 'HIGH' },
+      pendingPerpetualDispatch: { taskType: 'code-quality', appId: 'acme', signature: 'sig-2' }
+    });
+    mocks.addTask.mockResolvedValue({ id: 'blocked-7', duplicate: true, status: 'blocked' });
+    const { adapter } = makeAdapter();
+    await drainOnDemandRequests({ state: STATE }, adapter);
+
+    expect(mocks.recordDeferredPerpetualDispatch).toHaveBeenCalledWith(
+      { taskType: 'code-quality', appId: 'acme', signature: 'sig-2' },
+      expect.anything()
+    );
+  });
+
+  it('records nothing for a non-blocked duplicate', async () => {
+    mocks.getOnDemandRequests.mockResolvedValue([appRequest()]);
+    mocks.prepareManagedAppImprovementTask.mockResolvedValue({
+      task: { id: 'gen-1', priority: 'HIGH' },
+      pendingPerpetualDispatch: { taskType: 'code-quality', appId: 'acme', signature: 'sig-3' }
+    });
+    mocks.addTask.mockResolvedValue({ id: 'dup-1', duplicate: true, status: 'pending' });
+    const { adapter } = makeAdapter();
+    await drainOnDemandRequests({ state: STATE }, adapter);
+
+    expect(mocks.recordDeferredPerpetualDispatch).not.toHaveBeenCalled();
+  });
+});
+
 describe.each(ENGINES)('%s — app-review marker discipline (#978)', (_name, makeAdapter) => {
   it('advances one app cooldown per cycle no matter how many requests name it', async () => {
     mocks.getOnDemandRequests.mockResolvedValue([
@@ -285,7 +342,7 @@ describe.each(ENGINES)('%s — app-review marker discipline (#978)', (_name, mak
 
   it('binds the active agent only once a task actually exists', async () => {
     mocks.getOnDemandRequests.mockResolvedValue([appRequest()]);
-    mocks.generateManagedAppImprovementTaskForType.mockResolvedValue(null);
+    mocks.prepareManagedAppImprovementTask.mockResolvedValue(null);
     const { adapter } = makeAdapter();
     await drainOnDemandRequests({ state: STATE }, adapter);
     // The cooldown still advanced — only the bind is deferred, so a null

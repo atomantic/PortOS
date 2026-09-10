@@ -1621,7 +1621,7 @@ describe('cos.js source — priority + capacity invariants', () => {
     expect(GEN_SRC).toMatch(/getTaskInputHook/);
   });
 
-  it('queueEligibleImprovementTasks routes through generateManagedAppImprovementTaskForType', () => {
+  it('queueEligibleImprovementTasks routes through prepareManagedAppImprovementTask', () => {
     // Regression guard: a 2026-05-21 incident saw two `plan-task` agents both
     // open PRs for the same PLAN.md slug because the queue path was writing
     // a one-line stub description with no `analysisType` / `planId`. The
@@ -1636,8 +1636,8 @@ describe('cos.js source — priority + capacity invariants', () => {
 
     expect(
       fnBody,
-      'queue path must call generateManagedAppImprovementTaskForType so applyPlanIdMetadata runs + the full prompt is used'
-    ).toMatch(/generateManagedAppImprovementTaskForType\s*\(/);
+      'queue path must call prepareManagedAppImprovementTask so applyPlanIdMetadata runs + the full prompt is used'
+    ).toMatch(/prepareManagedAppImprovementTask\s*\(/);
 
     // Match the call shape, not the specific variable name — `task` could
     // legitimately be renamed (e.g. `queuedTask`) in a behavior-preserving
@@ -1720,7 +1720,7 @@ describe('cos.js source — priority + capacity invariants', () => {
     ).toMatch(/getNextTaskType\([^)]*\{\s*perpetualOnly:\s*onCooldown\s*[,}]/);
   });
 
-  it('generateManagedAppImprovementTaskForType defers updateAppActivity until after gates', () => {
+  it('prepareManagedAppImprovementTask defers updateAppActivity until after gates', () => {
     // Regression guard: the rotation pointer + "Generating improvement task"
     // log must only advance when a real task is queued. The eager call at
     // the top of the function was tolerable when only the on-demand path
@@ -1736,8 +1736,8 @@ describe('cos.js source — priority + capacity invariants', () => {
     // contains a `for (...) { try { ... } catch }` block and the
     // brace-balanced scanner doesn't always match the right closer when
     // there are template-literal braces nested inside.
-    const fnStart = GEN_SRC.indexOf('async function generateManagedAppImprovementTaskForType');
-    expect(fnStart, 'generateManagedAppImprovementTaskForType must exist').toBeGreaterThan(-1);
+    const fnStart = GEN_SRC.indexOf('async function prepareManagedAppImprovementTask');
+    expect(fnStart, 'prepareManagedAppImprovementTask must exist').toBeGreaterThan(-1);
     const fnEnd = GEN_SRC.indexOf('\nasync function ', fnStart + 1);
     const fnBody = GEN_SRC.slice(fnStart, fnEnd === -1 ? undefined : fnEnd);
 
