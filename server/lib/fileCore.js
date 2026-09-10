@@ -43,6 +43,25 @@ const WIN_RENAME_LOCK_CODES = ['EPERM', 'EACCES', 'EEXIST'];
 const WIN_READ_LOCK_CODES = ['EPERM', 'EACCES', 'EBUSY'];
 const FILE_WATCH_FALLBACK_POLL_MS = 5000;
 
+/** Normalize Node statfs block counts into byte totals and compatibility aliases. */
+export function parseFilesystemStats(stats) {
+  if (!stats) return null;
+  const total = Number(stats.blocks) * Number(stats.bsize);
+  const available = Number(stats.bavail) * Number(stats.bsize);
+  if (!Number.isFinite(total) || total <= 0 || !Number.isFinite(available) || available < 0) return null;
+  const free = Math.min(total, available);
+  const used = total - free;
+  return {
+    total,
+    used,
+    free,
+    usagePercent: Math.round((used / total) * 100),
+    totalBytes: total,
+    usedBytes: used,
+    freeBytes: free,
+  };
+}
+
 /** Watch for a file to appear without repeatedly stat'ing its parent directory. */
 export function watchForFile(filePath, onDetected, { settleMs = 50, pollMs = FILE_WATCH_FALLBACK_POLL_MS } = {}) {
   const targetName = basename(filePath);

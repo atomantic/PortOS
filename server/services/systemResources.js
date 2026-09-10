@@ -11,6 +11,7 @@
 import os from 'os';
 import { scanModelDuplicates } from './modelDeduplication.js';
 import { statfs } from 'fs/promises';
+import { parseFilesystemStats } from '../lib/fileCore.js';
 import { join } from 'path';
 import { z } from 'zod';
 import { query } from '../lib/db.js';
@@ -70,20 +71,6 @@ const sumKnownBytes = (values) => {
   const known = values.filter(Number.isFinite);
   return known.length > 0 ? sumBytes(known) : null;
 };
-
-function filesystemFrom(stats) {
-  if (!stats) return null;
-  const totalBytes = finiteOrNull(stats.blocks * stats.bsize);
-  const freeBytes = finiteOrNull(stats.bavail * stats.bsize);
-  if (!totalBytes || freeBytes == null) return null;
-  const usedBytes = Math.max(0, totalBytes - freeBytes);
-  return {
-    totalBytes,
-    usedBytes,
-    freeBytes,
-    usagePercent: Math.round((usedBytes / totalBytes) * 100),
-  };
-}
 
 const backendState = (value) => (value == null ? 'unavailable' : 'ready');
 
@@ -385,7 +372,13 @@ export async function buildSystemResourceReport() {
     scanModelDuplicates().catch(() => ({ pinokioDetected: null, items: [], totalReclaimableBytes: 0, error: 'Duplicate model scan unavailable' })),
   ]);
 
-  const filesystem = filesystemFrom(diskStats);
+  const parsedFilesystem = parseFilesystemStats(diskStats);
+  const filesystem = parsedFilesystem && {
+    totalBytes: parsedFilesystem.totalBytes,
+    usedBytes: parsedFilesystem.usedBytes,
+    freeBytes: parsedFilesystem.freeBytes,
+    usagePercent: parsedFilesystem.usagePercent,
+  };
   const databaseBytes = finiteOrNull(databaseRow?.bytes);
   const dependenciesBytes = sumKnownBytes(dependencySizes);
   const ollamaResidencyError = ollamaLoaded == null
