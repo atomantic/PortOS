@@ -981,13 +981,13 @@ describe('runAgentSpawn source — taskType normalization + claim-miss guard (is
 
   it('only a null in_progress result is fatal — an { error } miss must NOT block the spawn', () => {
     // A truthy `{ error }` is EXPECTED for legitimately-unpersisted autonomous
-    // emits (Priority 3 mission / Priority 4 idle-review tasks carry
-    // taskType:'internal' but are never written to COS-TASKS.md). Blocking on it
-    // would silently kill every mission/idle spawn — the pre-#2633 behavior
-    // spawned them anyway, so the fatal guard must remain `!updateResult` only.
+    // emits (Priority 3 idle-review tasks carry taskType:'internal' but are
+    // never written to COS-TASKS.md). Blocking on it would silently kill every
+    // idle-review spawn — the pre-#2633 behavior spawned them anyway, so the
+    // fatal guard must remain `!updateResult` only.
     const fatalIdx = RUN_SPAWN_BODY.indexOf('if (!updateResult) {');
     expect(fatalIdx, 'the fatal guard must be `!updateResult` alone — the { error } shape must not be fatal').toBeGreaterThan(-1);
-    expect(RUN_SPAWN_BODY, 'the { error } shape must not be part of the fatal guard (it would block unpersisted mission/idle spawns)')
+    expect(RUN_SPAWN_BODY, 'the { error } shape must not be part of the fatal guard (it would block unpersisted idle-review spawns)')
       .not.toContain('if (!updateResult || updateResult.error)');
   });
 

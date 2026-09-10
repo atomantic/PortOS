@@ -721,14 +721,13 @@ async function runAgentSpawn(task) {
       });
     // Surface a silent `{ error }` miss (issue #2633) — the task id wasn't present
     // in the file for `task.taskType`, so the claim didn't land. This is EXPECTED
-    // for legitimately-unpersisted autonomous emits: Priority 3 mission tasks
-    // (cos.js `spawnDequeuePriority3Missions`) and Priority 4 idle-review tasks
-    // carry `taskType: 'internal'` but are never written to COS-TASKS.md, so their
-    // in_progress `updateTask` returns `{ error: 'Task not found' }`. Warn-log it
-    // for visibility, but do NOT block the spawn on it — the pre-#2633 behavior
-    // spawned these anyway, and treating the error as fatal would silently kill
-    // every mission / idle-review autonomous spawn. Only a `null` (updateTask
-    // threw) is fatal.
+    // for legitimately-unpersisted autonomous emits: Priority 3 idle-review tasks
+    // (cos.js `spawnDequeuePriority3IdleReview`) carry `taskType: 'internal'` but
+    // are never written to COS-TASKS.md, so their in_progress `updateTask` returns
+    // `{ error: 'Task not found' }`. Warn-log it for visibility, but do NOT block
+    // the spawn on it — the pre-#2633 behavior spawned these anyway, and treating
+    // the error as fatal would silently kill every idle-review autonomous spawn.
+    // Only a `null` (updateTask threw) is fatal.
     if (updateResult?.error) {
       emitLog('warn', `⚠️ in_progress claim for task ${task.id} returned an error (taskType=${task.taskType}): ${updateResult.error}`, { taskId: task.id, error: updateResult.error });
     }

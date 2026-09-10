@@ -2,9 +2,9 @@
  * CoS Dequeue — pure priority/capacity helpers (issue #2530)
  *
  * The spawn-side scheduler `dequeueNextTask` (in cos.js) fills open agent slots
- * by draining five priority tiers in order. This module holds the *pure*,
+ * by draining four priority tiers in order. This module holds the *pure*,
  * side-effect-free pieces of that decision — the per-cycle capacity tracker and
- * the mission/idle tier-eligibility predicates — so the scheduler and its unit
+ * the idle tier-eligibility predicate — so the scheduler and its unit
  * tests share ONE implementation instead of the tests re-deriving a local
  * replica of the guards.
  *
@@ -15,7 +15,7 @@
  *
  * Priority-tier order (pinned by the source-order regression test in
  * cos.test.js): 0 on-demand (bypasses pause) → 1 user → 2 auto-approved →
- * 3 mission → 4 idle review.
+ * 3 idle review.
  */
 
 /**
@@ -46,17 +46,14 @@
  * fires on a denial so the scheduler can log queued-no-slot without this module
  * importing the event bus.
  *
- * `canSpawnCommitted` opts a tier out of that third cap. Three tiers use it,
+ * `canSpawnCommitted` opts a tier out of that third cap. Two tiers use it,
  * because a denial there is DESTRUCTIVE rather than a defer — each has already
  * committed side effects by the time `canSpawn` runs, and none of them persists
  * the task, so `false` discards the only copy:
  *
  *   - Priority 0 has cleared the on-demand request and bound the app-review
  *     marker — a denial silently swallows the user's explicit "Run".
- *   - Priority 3 has flipped the mission sub-task to `in_progress` and saved the
- *     mission; `generateMissionTask` only ever re-picks `pending` sub-tasks, and
- *     the emitted object is the only copy (holdTask reverts the flip — #4858).
- *   - Priority 4 has bound the app-review marker and advanced the 30-minute
+ *   - Priority 3 has bound the app-review marker and advanced the 30-minute
  *     review cooldown (issue #978's failure mode).
  *
  * Emitting instead is strictly better — the authoritative cap at subAgentSpawner's
@@ -146,24 +143,11 @@ export function countRunningAgentsByLocalEndpoint(agents, endpointForAgent) {
 }
 
 /**
- * Priority 3 (mission) tier eligibility. Mission tasks are speculative
- * autonomous spawns: they only run when there's autonomous headroom left this
- * cycle, no pending user tasks are waiting, proactive mode is on, AND the CoS
- * auto-run domain is in `execute` (off/dry-run withhold autonomous spawns).
- */
-export function isMissionTierEligible({ spawned, ceiling, hasPendingUserTasks, proactiveMode, autonomyMode }) {
-  return spawned < ceiling
-    && !hasPendingUserTasks
-    && !!proactiveMode
-    && autonomyMode === 'execute';
-}
-
-/**
- * Priority 4 (idle-review) tier eligibility. The idle task only fires when the
+ * Priority 3 (idle-review) tier eligibility. The idle task only fires when the
  * daemon is COMPLETELY idle this cycle — nothing else spawned (`spawned === 0`),
  * no pending user tasks, idle review enabled, and CoS auto-run in `execute`.
- * The `spawned === 0` fence is stricter than mission's `< ceiling`: even a single
- * autonomous spawn suppresses idle on the same cycle.
+ * The `spawned === 0` fence is stricter than the auto-approved tier's `< ceiling`
+ * admission: even a single autonomous spawn suppresses idle on the same cycle.
  */
 export function isIdleTierEligible({ spawned, hasPendingUserTasks, idleReviewEnabled, autonomyMode }) {
   return spawned === 0

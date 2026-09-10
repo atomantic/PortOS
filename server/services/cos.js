@@ -28,7 +28,6 @@ import { drainOnDemandRequests } from './onDemandDrain.js';
 import { logCosScheduleUpdate } from './userActionScheduleLog.js';
 import { getPerformanceSummary, checkAndRehabilitateSkippedTasks, getLearningInsights } from './taskLearning.js';
 import { schedule as scheduleEvent, cancel as cancelEvent } from './eventScheduler.js';
-import { generateProactiveTasks as generateMissionTasks } from './missions.js';
 import { recordJobExecution } from './autonomousJobs.js';
 import { safeJSONParse, sleep, isTopLevelEntryName } from '../lib/fileUtils.js';
 import { ON_DEMAND_ORIGINS } from './taskScheduleConstants.js';
@@ -156,11 +155,11 @@ import {
 } from './cosJobScheduler.js';
 
 // Pure priority/capacity helpers for dequeueNextTask (extracted to cosDequeue.js,
-// issue #2530). The per-cycle capacity tracker + mission/idle tier-eligibility
-// predicates are shared with the scheduler unit tests so they exercise the real
+// issue #2530). The per-cycle capacity tracker + idle tier-eligibility
+// predicate are shared with the scheduler unit tests so they exercise the real
 // guards instead of a local replica. The async tiers stay here as
 // `spawnDequeuePriorityN(ctx)` helpers.
-import { createDequeueCapacity, countRunningAgentsByLocalEndpoint, isMissionTierEligible, isIdleTierEligible } from './cosDequeue.js';
+import { createDequeueCapacity, countRunningAgentsByLocalEndpoint, isIdleTierEligible } from './cosDequeue.js';
 import { buildLocalEndpointSlotContext, localEndpointCapacityError } from './cosLocalEndpointSlots.js';
 import {
   initializePersistentMindSupervisor,
@@ -1016,7 +1015,7 @@ async function spawnDequeuePriority0OnDemand(ctx) {
 
 /**
  * Priority 1 — pending user tasks. Records `pendingUserTasks` /
- * `hasPendingUserTasks` on `ctx` for the mission/idle tiers below.
+ * `hasPendingUserTasks` on `ctx` for the idle tier below.
  */
 async function spawnDequeuePriority1UserTasks(ctx) {
   const { state, instanceId, capacity } = ctx;
@@ -1048,7 +1047,7 @@ async function spawnDequeuePriority1UserTasks(ctx) {
 /**
  * Priority 2 — auto-approved system tasks, gated by the CoS auto-run domain.
  * Resolves `ctx.cosAutonomyMode` and `ctx.autonomousSpawnCeiling` (used by the
- * mission/idle tiers) from the daily CoS budget (#711). `off`/`dry-run` withhold
+ * idle tier) from the daily CoS budget (#711). `off`/`dry-run` withhold
  * the unattended spawn; `dry-run` logs what execute mode would have run.
  */
 async function spawnDequeuePriority2AutoApproved(ctx) {
@@ -1081,58 +1080,11 @@ async function spawnDequeuePriority2AutoApproved(ctx) {
 }
 
 /**
- * Priority 3 — mission-driven proactive tasks. Speculative autonomous spawns,
- * only generated when the shared `isMissionTierEligible` predicate passes (auto-
- * run in execute, no pending user tasks, proactive mode on, headroom left).
- */
-async function spawnDequeuePriority3Missions(ctx) {
-  const { state, capacity } = ctx;
-
-  if (!isMissionTierEligible({
-    spawned: capacity.spawned,
-    ceiling: ctx.autonomousSpawnCeiling,
-    hasPendingUserTasks: ctx.hasPendingUserTasks,
-    proactiveMode: state.config.proactiveMode,
-    autonomyMode: ctx.cosAutonomyMode
-  })) return;
-
-  const missionTasks = await generateMissionTasks({ maxTasks: ctx.autonomousSpawnCeiling - capacity.spawned }).catch(err => {
-    emitLog('debug', `Mission task generation failed: ${err.message}`);
-    return [];
-  });
-
-  for (const missionTask of missionTasks) {
-    if (capacity.spawned >= ctx.autonomousSpawnCeiling) break;
-    const cosTask = {
-      id: missionTask.id,
-      description: missionTask.description,
-      priority: missionTask.priority?.toUpperCase() || 'MEDIUM',
-      status: 'pending',
-      metadata: missionTask.metadata,
-      taskType: 'internal',
-      approvalRequired: !missionTask.autoApprove
-    };
-    // Committed tier — `generateMissionTasks` has already flipped the sub-task to
-    // `in_progress` and saved the mission, and mission tasks are never written to
-    // COS-TASKS.md, so a denial drops the only copy of a sub-task that
-    // `generateMissionTask` will never re-pick (it selects `pending` only).
-    // Emitting hands it to the chokepoint, whose `holdTask` reverts the flip
-    // (#4858) — so the sub-task really is recovered. See canSpawnCommitted (#4834).
-    if (!capacity.canSpawnCommitted(cosTask, ctx.autonomousSpawnCeiling)) continue;
-    cosEvents.emit('task:ready', cosTask);
-    capacity.trackSpawn(cosTask);
-    emitLog('info', `Generated mission task: ${missionTask.id}`, {
-      missionId: missionTask.metadata?.missionId
-    });
-  }
-}
-
-/**
- * Priority 4 — idle review task, only when the daemon is completely idle this
+ * Priority 3 — idle review task, only when the daemon is completely idle this
  * cycle (shared `isIdleTierEligible` predicate: nothing spawned, no pending user
  * tasks, idle review on, auto-run in execute).
  */
-async function spawnDequeuePriority4IdleReview(ctx) {
+async function spawnDequeuePriority3IdleReview(ctx) {
   const { state, capacity, ignoreTaskId } = ctx;
 
   if (!isIdleTierEligible({
@@ -1174,12 +1126,11 @@ const scheduleDequeue = (options = {}) => setImmediate(() => {
  *
  * Triggered by: agent:completed, tasks:user:added, tasks:cos:added, status:resumed
  * Thin orchestrator: computes per-cycle capacity, then threads a shared `ctx`
- * through the five priority tiers in order (same order as evaluateTasks):
+ * through the four priority tiers in order (same order as evaluateTasks):
  *   0. On-demand requests (bypasses pause)
  *   1. User tasks
  *   2. Auto-approved system tasks
- *   3. Mission-driven proactive tasks (if proactiveMode)
- *   4. Idle review task (if idleReviewEnabled)
+ *   3. Idle review task (if idleReviewEnabled)
  * Returns silently when idle — no log noise.
  */
 /**
@@ -1282,11 +1233,10 @@ export async function dequeueNextTask({ ignoreTaskId = null } = {}) {
   // Priority 1 spends against the global slot cap.
   await spawnDequeuePriority1UserTasks(ctx);
 
-  // Priorities 2, 3, 4 spend against the lower autonomous ceiling that
+  // Priorities 2 and 3 spend against the lower autonomous ceiling that
   // Priority 2 resolves onto `ctx.autonomousSpawnCeiling` from the daily budget.
   await spawnDequeuePriority2AutoApproved(ctx);
-  await spawnDequeuePriority3Missions(ctx);
-  await spawnDequeuePriority4IdleReview(ctx);
+  await spawnDequeuePriority3IdleReview(ctx);
 
   if (capacity.spawned > 0) {
     emitLog('info', `⚡ Dequeued ${capacity.spawned} task(s)`, { spawned: capacity.spawned, availableSlots });
@@ -1463,7 +1413,7 @@ async function refillPerpetualForCompletedAgent(agent) {
   // NOTE: the caller (the agent:completed handler) runs dequeueNextTask AFTER
   // this resolves, so the freshly-queued perpetual task is on the queue before
   // slots are filled. Do not dequeue here — that would re-introduce the ordering
-  // race where generic dequeue claims the freed slot with idle/mission work.
+  // race where generic dequeue claims the freed slot with idle-review work.
 }
 
 /**
@@ -1476,7 +1426,7 @@ export async function init() {
   // When an agent completes, refill perpetual work then dequeue the next task
   cosEvents.on('agent:completed', (agent) => {
     // Refill the perpetual backlog FIRST, THEN dequeue — in one async task so the
-    // generic dequeue can't fill the just-freed slot with idle/mission work ahead
+    // generic dequeue can't fill the just-freed slot with idle-review work ahead
     // of the perpetual re-queue. Perpetual schedules (e.g. claim-issue) drain
     // back-to-back: regenerate the next eligible task now instead of waiting for
     // the ~hourly improvement check (dequeueNextTask only spawns ALREADY-queued

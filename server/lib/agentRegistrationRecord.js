@@ -188,8 +188,6 @@ export function buildAgentRegistration({
     taskAppName: resolvedAppName,
     selfImprovementType: task.metadata?.selfImprovementType || null,
     jobId: task.metadata?.jobId || null,
-    missionName: task.metadata?.missionName || null,
-    missionId: task.metadata?.missionId || null,
     jiraTicketId: task.metadata?.jiraTicketId || null,
     jiraTicketUrl: task.metadata?.jiraTicketUrl || null,
     jiraBranch: task.metadata?.jiraBranch || null,

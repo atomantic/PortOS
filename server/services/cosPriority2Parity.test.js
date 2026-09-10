@@ -111,7 +111,6 @@ function resetFixtures(mode = 'execute') {
       maxConcurrentAgentsPerProject: 4,
       appReviewCooldownMs: 0,
       autoApproveInvestigations: true,
-      proactiveMode: false,
       idleReviewEnabled: false,
       domainAutonomy: { cos: mode },
     },

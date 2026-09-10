@@ -3,10 +3,10 @@
  * agent spawn but have no full-function test sibling:
  *
  * 1. `evaluateTasks` priority ordering — Priority 0 (on-demand) > Priority 1
- *    (user) > Priority 2 (auto-approved system) > Priority 3 (mission /
- *    feature agent) > Priority 4 (idle review). Within a priority bucket
- *    tasks are taken in the order they appear in TASKS.md (the parser sorts
- *    nothing for the pending slice — file order is the tie-breaker).
+ *    (user) > Priority 2 (auto-approved system) > Priority 3 (idle review).
+ *    Within a priority bucket tasks are taken in the order they appear in
+ *    TASKS.md (the parser sorts nothing for the pending slice — file order is
+ *    the tie-breaker).
  *
  * 2. `dequeueNextTask` capacity guards — global `maxConcurrentAgents` cap
  *    and per-project `maxConcurrentAgentsPerProject` cap. The function must
@@ -15,10 +15,10 @@
  *    permits one more spawn.
  *
  * `evaluateTasks` and `dequeueNextTask` are 250+ LOC each and pull in 40+
- * imported helpers (loadState, getAllTasks, addTask, getActiveApps, mission
- * generation, taskSchedule, etc.). Mocking the full graph would be a brittle
+ * imported helpers (loadState, getAllTasks, addTask, getActiveApps,
+ * taskSchedule, etc.). Mocking the full graph would be a brittle
  * test of mocks rather than logic, so we exercise the *real* capacity/gate
- * exports the scheduler uses — `createDequeueCapacity`, `isMissionTierEligible`,
+ * exports the scheduler uses — `createDequeueCapacity`,
  * `isIdleTierEligible` from cosDequeue.js (issue #2530) — through a thin drain
  * harness. Only the tier-ordering loop glue is local; every capacity and
  * eligibility decision routes through the same helpers `dequeueNextTask` calls,
@@ -36,7 +36,7 @@ import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import { firstLine, isPerpetualRefillCandidate, perpetualRefillPlan } from './cos.js';
 import { canQueueImprovementTasks, DEFAULT_STATE } from './cosState.js';
-import { createDequeueCapacity, countRunningAgentsByLocalEndpoint, isMissionTierEligible, isIdleTierEligible } from './cosDequeue.js';
+import { createDequeueCapacity, countRunningAgentsByLocalEndpoint, isIdleTierEligible } from './cosDequeue.js';
 import {
   createLocalEndpointSlotContext,
   cloudSwarmThreadCapacity,
@@ -61,7 +61,7 @@ const COS_SRC = readFileSync(join(__dirname, 'cos.js'), 'utf-8');
 const GEN_SRC = readFileSync(join(__dirname, 'cosTaskGenerator.js'), 'utf-8');
 const PRESTEP_SRC = readFileSync(join(__dirname, 'cosTaskPreStepBlocks.js'), 'utf-8');
 const SCHED_SRC = readFileSync(join(__dirname, 'cosJobScheduler.js'), 'utf-8');
-// The pure capacity tracker + mission/idle tier-eligibility predicates that
+// The pure capacity tracker + idle tier-eligibility predicate that
 // dequeueNextTask (and these tests) call live in cosDequeue.js (issue #2530).
 const DEQ_SRC = readFileSync(join(__dirname, 'cosDequeue.js'), 'utf-8');
 
@@ -81,40 +81,35 @@ function makeCapacityTracker(state, agentsByProject = {}) {
 
 /**
  * Thin drain harness modelling the priority-bucket loop in `dequeueNextTask`.
- * The five buckets are drained in this exact order:
+ * The four buckets are drained in this exact order:
  *
  *   0. onDemand    — explicit user requests (highest, bypasses pause)
  *   1. user        — user-authored pending tasks
  *   2. autoSystem  — auto-approved system / improvement tasks
- *   3. mission     — proactive mission tasks (only when eligible)
- *   4. idle        — generated idle-review task (only when eligible)
+ *   3. idle        — generated idle-review task (only when eligible)
  *
  * Only the ordering/glue is local: every capacity decision routes through the
- * real `capacity.canSpawn`/`trackSpawn`, and the mission/idle fences use the
- * real `isMissionTierEligible` / `isIdleTierEligible` predicates the scheduler
- * calls. Within a bucket, iteration order is the source array order (file order
- * for parsed TASKS.md; arrival order for the on-demand queue) — the loop does
- * NOT re-sort by priorityValue.
+ * real `capacity.canSpawn`/`trackSpawn`, and the idle fence uses the real
+ * `isIdleTierEligible` predicate the scheduler calls. Within a bucket,
+ * iteration order is the source array order (file order for parsed TASKS.md;
+ * arrival order for the on-demand queue) — the loop does NOT re-sort by
+ * priorityValue.
  *
- * Idle gating is stricter than mission's: `isIdleTierEligible` requires
- * `spawned === 0`, so ANY earlier spawn (autoSystem or mission) suppresses idle
- * on the same cycle. Tests run with auto-run in `execute` and proactive/idle
- * enabled so the tier predicates reduce to the pending-user + spawned gates.
+ * `isIdleTierEligible` requires `spawned === 0`, so ANY earlier spawn
+ * (autoSystem) suppresses idle on the same cycle. Tests run with auto-run in
+ * `execute` and idle review enabled so the tier predicate reduces to the
+ * pending-user + spawned gates.
  */
 function priorityDequeue(buckets, capacity, { paused = false } = {}) {
   const admitted = [];
   const hasPendingUserTasks = (buckets.user || []).length > 0;
-  // No daily budget in these fixtures, so the autonomous ceiling equals the
-  // global slot count.
-  const ceiling = capacity.availableSlots;
 
   const drain = (bucketName) => {
-    // Priorities 0, 3 and 4 opt OUT of the local-endpoint cap, exactly as
+    // Priorities 0 and 3 opt OUT of the local-endpoint cap, exactly as
     // production does: a denial there DISCARDS an already-committed task (a
-    // cleared on-demand request, an `in_progress` mission sub-task, a bound
-    // app-review marker) instead of deferring it, so they emit and let the
-    // spawner chokepoint hold.
-    const committed = ['onDemand', 'mission', 'idle'].includes(bucketName);
+    // cleared on-demand request, a bound app-review marker) instead of
+    // deferring it, so they emit and let the spawner chokepoint hold.
+    const committed = ['onDemand', 'idle'].includes(bucketName);
     for (const task of buckets[bucketName] || []) {
       if (capacity.spawned >= capacity.availableSlots) return;
       if (!(committed ? capacity.canSpawnCommitted(task) : capacity.canSpawn(task))) continue;
@@ -130,11 +125,6 @@ function priorityDequeue(buckets, capacity, { paused = false } = {}) {
 
   drain('user');
   drain('autoSystem');
-
-  if (isMissionTierEligible({
-    spawned: capacity.spawned, ceiling, hasPendingUserTasks,
-    proactiveMode: true, autonomyMode: 'execute'
-  })) drain('mission');
 
   if (isIdleTierEligible({
     spawned: capacity.spawned, hasPendingUserTasks,
@@ -167,7 +157,7 @@ const task = (id, priority = 'MEDIUM', { app } = {}) => ({
 // ─── evaluateTasks: priority ordering ──────────────────────────────────────
 
 describe('evaluateTasks — priority ordering', () => {
-  it('drains buckets in order: onDemand > user > autoSystem > mission > idle', () => {
+  it('drains buckets in order: onDemand > user > autoSystem > idle', () => {
     const state = makeState({ maxConcurrentAgents: 5 });
     const capacity = makeCapacityTracker(state);
 
@@ -175,15 +165,14 @@ describe('evaluateTasks — priority ordering', () => {
       onDemand: [task('task-onDemand-1')],
       user: [task('task-user-1')],
       autoSystem: [task('sys-auto-1')],
-      // Mission/idle should be SKIPPED here because user bucket is non-empty
+      // Idle should be SKIPPED here because user bucket is non-empty
       // (matches production line 795 `hasPendingUserTasks` gate).
-      mission: [task('sys-mission-1')],
       idle: [task('sys-idle-1')],
     };
 
     const spawned = priorityDequeue(buckets, capacity);
 
-    // Order is: onDemand, user, autoSystem (mission/idle blocked by user-pending gate)
+    // Order is: onDemand, user, autoSystem (idle blocked by user-pending gate)
     expect(spawned.map(t => t.id)).toEqual([
       'task-onDemand-1',
       'task-user-1',
@@ -203,7 +192,6 @@ describe('evaluateTasks — priority ordering', () => {
       onDemand: [task('task-onDemand-1')],
       user: [task('task-user-1')],
       autoSystem: [task('sys-auto-1')],
-      mission: [task('sys-mission-1')],
       idle: [task('sys-idle-1')],
     };
 
@@ -214,30 +202,8 @@ describe('evaluateTasks — priority ordering', () => {
     expect(spawned.map(t => t._bucket)).toEqual(['onDemand']);
   });
 
-  it('mission + idle fire only when there are NO pending user tasks', () => {
-    // Idle is fenced behind `spawned === 0` in production (cos.js:2480), so
-    // when autoSystem and mission are both non-empty, idle does NOT fire.
-    // This test pins the user-pending gate; the next test pins the idle
-    // `spawned === 0` gate.
-    const state = makeState({ maxConcurrentAgents: 5 });
-    const capacity = makeCapacityTracker(state);
-
-    const buckets = {
-      onDemand: [],
-      user: [], // ← critical: no pending user tasks
-      autoSystem: [task('sys-auto-1')],
-      mission: [task('sys-mission-1')],
-      idle: [task('sys-idle-1')],
-    };
-
-    const spawned = priorityDequeue(buckets, capacity);
-    // autoSystem + mission spawn; idle is SUPPRESSED because earlier buckets
-    // already produced spawns (mirrors cos.js:2480 `spawned === 0` guard).
-    expect(spawned.map(t => t._bucket)).toEqual(['autoSystem', 'mission']);
-  });
-
   it('idle fires only when nothing else has spawned (spawned === 0 gate, cos.js:2480)', () => {
-    // When autoSystem and mission are both empty AND no user-pending, idle
+    // When autoSystem is empty AND no user-pending, idle
     // gets to run. This is the only path through which the idle bucket
     // actually drains in production.
     const state = makeState({ maxConcurrentAgents: 5 });
@@ -247,7 +213,6 @@ describe('evaluateTasks — priority ordering', () => {
       onDemand: [],
       user: [],
       autoSystem: [],
-      mission: [],
       idle: [task('sys-idle-1')],
     };
 
@@ -255,7 +220,7 @@ describe('evaluateTasks — priority ordering', () => {
     expect(spawned.map(t => t._bucket)).toEqual(['idle']);
   });
 
-  it('idle suppressed when only autoSystem spawned (no user, no mission)', () => {
+  it('idle suppressed when only autoSystem spawned (no user tasks)', () => {
     // Pin the asymmetry: even a SINGLE autoSystem spawn is enough to suppress
     // idle on the same cycle. This is the production behavior at cos.js:862
     // (`tasksToSpawn.length === 0`) and cos.js:2480 (`spawned === 0`).
@@ -266,7 +231,6 @@ describe('evaluateTasks — priority ordering', () => {
       onDemand: [],
       user: [],
       autoSystem: [task('sys-auto-1')],
-      mission: [],
       idle: [task('sys-idle-1')],
     };
 
@@ -291,7 +255,6 @@ describe('evaluateTasks — priority ordering', () => {
         task('task-critical-third', 'CRITICAL'),
       ],
       autoSystem: [],
-      mission: [],
       idle: [],
     };
 
@@ -313,7 +276,6 @@ describe('evaluateTasks — priority ordering', () => {
       onDemand: [task('task-onDemand-1')],
       user: [task('task-user-1'), task('task-user-2')],
       autoSystem: [task('sys-auto-1')],
-      mission: [],
       idle: [],
     };
 
@@ -325,7 +287,7 @@ describe('evaluateTasks — priority ordering', () => {
   it('returns no spawns when buckets are empty (idle queue)', () => {
     const state = makeState({ maxConcurrentAgents: 5 });
     const capacity = makeCapacityTracker(state);
-    const buckets = { onDemand: [], user: [], autoSystem: [], mission: [], idle: [] };
+    const buckets = { onDemand: [], user: [], autoSystem: [], idle: [] };
     expect(priorityDequeue(buckets, capacity)).toEqual([]);
   });
 });
@@ -346,7 +308,6 @@ describe('dequeueNextTask — capacity guards', () => {
       onDemand: [task('task-onDemand-1')],
       user: [task('task-user-1')],
       autoSystem: [],
-      mission: [],
       idle: [],
     };
     const spawned = priorityDequeue(buckets, capacity);
@@ -365,7 +326,7 @@ describe('dequeueNextTask — capacity guards', () => {
     const capacity = makeCapacityTracker(state);
     expect(capacity.availableSlots).toBeLessThan(0);
 
-    const buckets = { onDemand: [], user: [task('task-user-1')], autoSystem: [], mission: [], idle: [] };
+    const buckets = { onDemand: [], user: [task('task-user-1')], autoSystem: [], idle: [] };
     expect(priorityDequeue(buckets, capacity)).toEqual([]);
   });
 
@@ -389,7 +350,6 @@ describe('dequeueNextTask — capacity guards', () => {
         task('task-beta-1', 'MEDIUM', { app: 'beta' }),
       ],
       autoSystem: [],
-      mission: [],
       idle: [],
     };
 
@@ -415,7 +375,6 @@ describe('dequeueNextTask — capacity guards', () => {
         task('task-alpha-3', 'HIGH', { app: 'alpha' }),
       ],
       autoSystem: [],
-      mission: [],
       idle: [],
     };
 
@@ -443,7 +402,6 @@ describe('dequeueNextTask — capacity guards', () => {
         task('task-alpha-3', 'HIGH', { app: 'alpha' }),
       ],
       autoSystem: [],
-      mission: [],
       idle: [],
     };
 
@@ -467,7 +425,6 @@ describe('dequeueNextTask — capacity guards', () => {
         task('task-self-2', 'HIGH'),
       ],
       autoSystem: [],
-      mission: [],
       idle: [],
     };
 
@@ -534,7 +491,7 @@ function makeLocalSlotCapacity(state, { activeProvider = CLOUD_PROVIDER, limit =
   return { capacity, holds, slots };
 }
 
-const userBuckets = (tasks) => ({ onDemand: [], user: tasks, autoSystem: [], mission: [], idle: [] });
+const userBuckets = (tasks) => ({ onDemand: [], user: tasks, autoSystem: [], idle: [] });
 
 describe('dequeueNextTask — per-local-endpoint agent cap (#4834)', () => {
   it('serializes two queued tasks that resolve to the SAME local endpoint', () => {
@@ -569,7 +526,6 @@ describe('dequeueNextTask — per-local-endpoint agent cap (#4834)', () => {
       onDemand: [taskOnProvider('task-run-now', 'lmstudio-tui')],
       user: [],
       autoSystem: [],
-      mission: [],
       idle: [],
     }, capacity);
 
@@ -577,12 +533,10 @@ describe('dequeueNextTask — per-local-endpoint agent cap (#4834)', () => {
     expect(holds).toEqual([]);
   });
 
-  it('does NOT suppress a mission or idle task at a saturated endpoint', () => {
-    // Both tiers commit before canSpawn and never persist: Priority 3 has
-    // already flipped the mission sub-task to `in_progress` (and only `pending`
-    // sub-tasks are ever re-picked), Priority 4 has already bound the app-review
-    // marker and advanced its 30-minute cooldown. A denial strands both; the
-    // chokepoint's hold at least releases the marker.
+  it('does NOT suppress an idle task at a saturated endpoint', () => {
+    // The idle tier commits before canSpawn and never persists: it has already
+    // bound the app-review marker and advanced its 30-minute cooldown. A denial
+    // would strand it; the chokepoint's hold at least releases the marker.
     const state = makeState({
       maxConcurrentAgents: 5,
       runningAgents: [makeRunningAgentOnProvider('lmstudio-tui')],
@@ -593,11 +547,10 @@ describe('dequeueNextTask — per-local-endpoint agent cap (#4834)', () => {
       onDemand: [],
       user: [],
       autoSystem: [],
-      mission: [taskOnProvider('mission-task', 'lmstudio-tui')],
-      idle: [],
+      idle: [taskOnProvider('idle-task', 'lmstudio-tui')],
     }, capacity);
 
-    expect(spawned.map(t => t.id)).toEqual(['mission-task']);
+    expect(spawned.map(t => t.id)).toEqual(['idle-task']);
   });
 
   it.each(['user', 'autoSystem'])('keeps gating the deferrable %s tier at the same endpoint', (bucket) => {
@@ -611,7 +564,7 @@ describe('dequeueNextTask — per-local-endpoint agent cap (#4834)', () => {
     const { capacity } = makeLocalSlotCapacity(state);
 
     const spawned = priorityDequeue({
-      onDemand: [], user: [], autoSystem: [], mission: [], idle: [],
+      onDemand: [], user: [], autoSystem: [], idle: [],
       [bucket]: [taskOnProvider('deferrable-task', 'lmstudio-tui')],
     }, capacity);
 
@@ -1344,21 +1297,18 @@ describe('cos.js source — priority + capacity invariants', () => {
     //   Priority 0 (onDemand)    — spawnDequeuePriority0OnDemand(ctx)
     //   Priority 1 (user)        — spawnDequeuePriority1UserTasks(ctx)
     //   Priority 2 (autoSystem)  — spawnDequeuePriority2AutoApproved(ctx)
-    //   Priority 3 (mission)     — spawnDequeuePriority3Missions(ctx)
-    //   Priority 4 (idle)        — spawnDequeuePriority4IdleReview(ctx)
+    //   Priority 3 (idle)        — spawnDequeuePriority3IdleReview(ctx)
     const fnBody = extractFnBody(COS_SRC, COS_SRC.indexOf('async function dequeueNextTask'));
 
     const onDemandIdx = fnBody.indexOf('spawnDequeuePriority0OnDemand(ctx)');
     const userIdx     = fnBody.indexOf('spawnDequeuePriority1UserTasks(ctx)');
     const autoSysIdx  = fnBody.indexOf('spawnDequeuePriority2AutoApproved(ctx)');
-    const missionIdx  = fnBody.indexOf('spawnDequeuePriority3Missions(ctx)');
-    const idleIdx     = fnBody.indexOf('spawnDequeuePriority4IdleReview(ctx)');
+    const idleIdx     = fnBody.indexOf('spawnDequeuePriority3IdleReview(ctx)');
 
     expect(onDemandIdx, 'spawnDequeuePriority0OnDemand must be invoked').toBeGreaterThan(-1);
     expect(userIdx, 'spawnDequeuePriority1UserTasks must run after on-demand').toBeGreaterThan(onDemandIdx);
     expect(autoSysIdx, 'spawnDequeuePriority2AutoApproved must run after user tasks').toBeGreaterThan(userIdx);
-    expect(missionIdx, 'spawnDequeuePriority3Missions must run after auto-approved').toBeGreaterThan(autoSysIdx);
-    expect(idleIdx, 'spawnDequeuePriority4IdleReview must run after missions').toBeGreaterThan(missionIdx);
+    expect(idleIdx, 'spawnDequeuePriority3IdleReview must run after auto-approved').toBeGreaterThan(autoSysIdx);
   });
 
   it('evaluateTasks orchestrates the spawnPriority* tiers in priority order', () => {
@@ -1373,7 +1323,6 @@ describe('cos.js source — priority + capacity invariants', () => {
     const userIdx     = fnBody.indexOf('spawnPriority1UserTasks(ctx)');
     const autoSysIdx  = fnBody.indexOf('spawnPriority2AutoApproved(ctx)');
     const queueIdx    = fnBody.indexOf('maybeQueueImprovementTasks(ctx)');
-    const missionIdx  = fnBody.indexOf('spawnPriority3Missions(ctx)');
     const featureIdx  = fnBody.indexOf('spawnPriority36FeatureAgents(ctx)');
     const idleIdx     = fnBody.indexOf('spawnPriority4IdleReview(ctx)');
 
@@ -1381,8 +1330,7 @@ describe('cos.js source — priority + capacity invariants', () => {
     expect(userIdx, 'spawnPriority1UserTasks must run after on-demand').toBeGreaterThan(onDemandIdx);
     expect(autoSysIdx, 'spawnPriority2AutoApproved must run after user tasks').toBeGreaterThan(userIdx);
     expect(queueIdx, 'maybeQueueImprovementTasks must run after auto-approved').toBeGreaterThan(autoSysIdx);
-    expect(missionIdx, 'spawnPriority3Missions must run after improvement queueing').toBeGreaterThan(queueIdx);
-    expect(featureIdx, 'spawnPriority36FeatureAgents must run after missions').toBeGreaterThan(missionIdx);
+    expect(featureIdx, 'spawnPriority36FeatureAgents must run after improvement queueing').toBeGreaterThan(queueIdx);
     expect(idleIdx, 'spawnPriority4IdleReview must run after feature agents').toBeGreaterThan(featureIdx);
   });
 
@@ -1547,14 +1495,13 @@ describe('cos.js source — priority + capacity invariants', () => {
   });
 
   it('the DESTRUCTIVE-denial tiers opt out of the local-endpoint cap (#4834)', () => {
-    // Priorities 0, 3 and 4 each commit side effects before `canSpawn` and never
+    // Priorities 0 and 3 each commit side effects before `canSpawn` and never
     // persist the task, so a denial DISCARDS it rather than deferring it: the
-    // on-demand request is already cleared, the mission sub-task is already
-    // flipped to `in_progress` (and only `pending` ones are ever re-picked), the
-    // app-review marker is already bound. They emit and let the chokepoint hold.
+    // on-demand request is already cleared, the app-review marker is already
+    // bound. They emit and let the chokepoint hold.
     // Priorities 1 and 2 read from persisted queues, so skipping there is a
     // genuine defer — they keep the cap.
-    for (const tier of ['spawnDequeuePriority0OnDemand', 'spawnDequeuePriority3Missions', 'spawnDequeuePriority4IdleReview']) {
+    for (const tier of ['spawnDequeuePriority0OnDemand', 'spawnDequeuePriority3IdleReview']) {
       const body = extractFnBody(COS_SRC, COS_SRC.indexOf(`async function ${tier}`));
       expect(body, `${tier} must admit via canSpawnCommitted`).toMatch(/canSpawnCommitted\(/);
     }
@@ -1566,11 +1513,11 @@ describe('cos.js source — priority + capacity invariants', () => {
 
   it('idle generator is fenced by spawned===0 / tasksToSpawn.length===0', () => {
     // Pin the strict-idle gate. If a refactor drops either fence, idle could
-    // spawn alongside autoSystem/mission and double-load the agent pool.
-    // dequeueNextTask's idle tier (spawnDequeuePriority4IdleReview) now routes
+    // spawn alongside autoSystem and double-load the agent pool.
+    // dequeueNextTask's idle tier (spawnDequeuePriority3IdleReview) now routes
     // through the shared `isIdleTierEligible` predicate in cosDequeue.js
     // (issue #2530), whose body carries the `spawned === 0` fence.
-    const idleTier = extractFnBody(COS_SRC, COS_SRC.indexOf('async function spawnDequeuePriority4IdleReview'));
+    const idleTier = extractFnBody(COS_SRC, COS_SRC.indexOf('async function spawnDequeuePriority3IdleReview'));
     const idlePred = extractFnBody(DEQ_SRC, DEQ_SRC.indexOf('export function isIdleTierEligible'));
     // The generator engine's tiers are decomposed into named spawnPriority*
     // helpers (issue #1082), so its gate lives in `spawnPriority4IdleReview`
@@ -1588,10 +1535,10 @@ describe('cos.js source — priority + capacity invariants', () => {
     // Per-domain autonomy: the `cos` guardrail must gate every AUTOMATIC internal
     // spawn path — not just the auto-approved loop. Both spawn engines
     // (dequeueNextTask in cos.js, evaluateTasks in cosTaskGenerator.js) must read
-    // the cos mode and fence their mission / idle / auto-approved blocks on it,
+    // the cos mode and fence their idle / auto-approved blocks on it,
     // or "off"/"dry-run" leaks autonomous agents through the un-gated engine.
     // dequeueNextTask resolves the cos mode in spawnDequeuePriority2AutoApproved
-    // and fences its mission/idle tiers through the shared eligibility predicates
+    // and fences its idle tier through the shared eligibility predicate
     // (issue #2530) — both still live in the cos.js module, so scope to it.
     const dequeueSrc = COS_SRC;
     const dequeueP2 = extractFnBody(COS_SRC, COS_SRC.indexOf('async function spawnDequeuePriority2AutoApproved'));
@@ -1607,9 +1554,8 @@ describe('cos.js source — priority + capacity invariants', () => {
       .toMatch(/getDomainMode\(state\.config, 'cos'\)/);
     // evaluateTasks fences autonomous spawns inline on `cosAutonomyMode === 'execute'`.
     expect(evalFn, `evaluateTasks must fence autonomous spawns on cosAutonomyMode === 'execute'`).toMatch(/cosAutonomyMode\s*===\s*['"]execute['"]/);
-    // Dequeue's mission/idle tiers gate through the shared predicates, and its
+    // Dequeue's idle tier gates through the shared predicate, and its
     // auto-approved tier delegates to the same pass as evaluateTasks.
-    expect(dequeueSrc, `dequeueNextTask must gate mission/idle via the eligibility predicates`).toMatch(/isMissionTierEligible\(/);
     expect(dequeueSrc, `dequeueNextTask must gate the idle tier via the eligibility predicate`).toMatch(/isIdleTierEligible\(/);
     expect(dequeueP2, 'dequeue auto-approved tier must call the shared pass').toMatch(/admitAutoApprovedSystemTasks\(/);
     expect(GEN_SRC, 'the shared pass must withhold spawns unless mode is execute').toMatch(/cosAutonomyMode\s*!==\s*['"]execute['"]/);
@@ -2407,7 +2353,7 @@ describe('cos.js source — agent:completed triggers perpetual refill', () => {
 
   it('refill is sequenced BEFORE dequeue in the handler (perpetual task queued before slots fill)', () => {
     // If generic dequeue ran first (or concurrently), it could claim the just-
-    // freed slot with idle/mission work before the perpetual task is queued,
+    // freed slot with idle-review work before the perpetual task is queued,
     // breaking the back-to-back drain. The handler must chain refill → dequeue.
     const onIdx = COS_SRC.indexOf("cosEvents.on('agent:completed'");
     const handlerSlice = COS_SRC.slice(onIdx, onIdx + 1400);

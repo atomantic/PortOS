@@ -7,7 +7,7 @@
  * defense: it text-scans every test file for a path spelling that names the
  * install's `data/` directory. Its own header explains the hole it leaves — a
  * suite that imports the real `PATHS` and reads a data-rooted member
- * (`PATHS.brain`, `PATHS.missions`, …) with no redirect is invisible to a text
+ * (`PATHS.brain`, `PATHS.digitalTwin`, …) with no redirect is invisible to a text
  * scan, and ~50 of ~1300 scoped test files legitimately use that spelling, so
  * closing it statically would need a 50-entry allowlist that rots.
  *
