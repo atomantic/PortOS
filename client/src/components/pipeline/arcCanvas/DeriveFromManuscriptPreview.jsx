@@ -3,8 +3,8 @@ import { Loader2, X, BookText } from 'lucide-react';
 import { WORLD_PREMISE_MAX } from '../../../services/apiUniverseBuilder.js';
 import { ARC_LIMITS } from '../../../../../server/lib/storyArc.js';
 
-// Field-count guard for derived synopsis textareas — mirrors the server caps so
-// the user isn't surprised by a 400 on commit.
+// UI ceiling for derived issue synopsis textareas; the server accepts a larger
+// stage input, but this review panel keeps pasted suggestions bounded.
 const DERIVE_SYNOPSIS_MAX = 8000;
 const ISSUE_TITLE_MAX = 300;
 
