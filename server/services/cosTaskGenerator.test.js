@@ -1391,10 +1391,12 @@ describe('buildImprovementDedupSets (#2614 — failure-blocked tasks occupy thei
     expect(queued).toBe(1);
     expect(generateTask).toHaveBeenCalledTimes(1);
     expect(persistTask).toHaveBeenCalledTimes(1);
+    // Generator passes the full multi-line description to the store; the store
+    // folds it into description: firstLine + metadata.prompt: full body (#6838).
     expect(persistTask.mock.calls[0][0]).toMatchObject({
       id: expect.stringMatching(/^sys-install-user-action-review-/),
-      description: 'Global task',
-      metadata: { prompt: 'Global task\nwith full prompt' }
+      description: 'Global task\nwith full prompt',
+      metadata: {}
     });
     expect(recordExecution).toHaveBeenCalledTimes(1);
     expect(recordExecution).toHaveBeenCalledWith('task:user-action-review');

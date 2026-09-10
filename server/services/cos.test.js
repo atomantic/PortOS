@@ -1658,24 +1658,6 @@ describe('cos.js source — priority + capacity invariants', () => {
       'queue path must NOT use getTaskDescription (one-line stub bypasses prompt enrichment)'
     ).not.toMatch(/getTaskDescription\s*\(/);
 
-    // The generator returns a multi-line `description` (the full Phase 1–7
-    // prompt template). COS-TASKS.md serialization interpolates the whole
-    // description onto a single `- [ ]` line and the parser only matches the
-    // first line, so persisting a multi-line description corrupts the file
-    // AND truncates the prompt on the next `dequeueNextTask` re-read. The
-    // queue path must move the body to `metadata.prompt` (which IS
-    // newline-escaped) so the agent prompt builder reconstitutes it on
-    // dispatch. `prompt`, not `context` — the two were split in #4153 so a
-    // multi-thousand-character agent payload is distinguishable from the
-    // one-line human note. Pin both halves of the split.
-    expect(
-      fnBody,
-      'queue path must move multi-line description body to metadata.prompt (survives markdown round-trip)'
-    ).toMatch(/metadata\.prompt\s*=\s*\w+\.description/);
-    expect(
-      fnBody,
-      'queue path must collapse description to a single line via firstLine()'
-    ).toMatch(/\.description\s*=\s*firstLine\(/);
 
     // appActivity helpers must come from the file-level static import (line ~23),
     // NOT a dynamic `await import('./appActivity.js')` *inside* the per-app

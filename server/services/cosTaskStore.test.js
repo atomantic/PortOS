@@ -562,6 +562,29 @@ describe('cosTaskStore.addTask', () => {
       expect(created.metadata).toHaveProperty('prompt', '');
     });
 
+    it('preserves a producer-written prompt over the description when both are present', async () => {
+      // When a task carries both a multi-line description AND an explicit
+      // metadata.prompt, the producer's prompt wins — the description is still
+      // collapsed to first line for COS-TASKS.md serialization, but the prompt
+      // field is not overwritten.
+      const producerPrompt = 'Custom agent instructions for Example App';
+      const fullDescription = 'Audit task\n\nThis is the task body\nthat should be ignored.';
+      const created = await addTask({
+        id: 'task-producer-prompt-wins',
+        status: 'pending',
+        priority: 'MEDIUM',
+        priorityValue: 2,
+        description: fullDescription,
+        metadata: { prompt: producerPrompt },
+        section: 'pending',
+      }, 'internal', { raw: true });
+      expect(created.description).toBe('Audit task');
+      expect(created.metadata.prompt).toBe(producerPrompt);
+      const reloaded = await getTaskById('task-producer-prompt-wins');
+      expect(reloaded.description).toBe('Audit task');
+      expect(reloaded.metadata.prompt).toBe(producerPrompt);
+    });
+
     it('leaves a one-line human note on metadata.context', async () => {
       const created = await addTask({ description: 'job', id: 'task-note', context: 'Manually triggered job: nightly' }, 'user');
       expect(created.metadata.context).toBe('Manually triggered job: nightly');
