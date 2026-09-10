@@ -13,6 +13,7 @@ import {
   isExplicitFileIssuesRequest,
   FILE_ISSUES_DELIVERY_SETTINGS,
   getAuditFilingPreset,
+  metricLabelFromSlugPrefix,
   modeContractFor,
   applyAuditModeWrapper,
   DO_BETTER_LENS_COVERAGE,
@@ -26,6 +27,10 @@ describe('AUDIT_DEFINITIONS', () => {
       expect(def.filing, taskType).toBeTruthy();
       expect(def.filing.slugPrefix, taskType).toMatch(/-$/);
       expect(def.filing.issueLabel, taskType).toBeTruthy();
+      expect(def.filing.metricLabel, taskType).toBe(metricLabelFromSlugPrefix(def.filing.slugPrefix));
+      expect(def.filing.extraLabels, taskType).toEqual(
+        def.filing.metricLabel === def.filing.issueLabel ? [] : [def.filing.metricLabel]
+      );
       expect(def.filing.planCommitMessage, taskType).toContain('propose');
     }
   });
@@ -203,6 +208,17 @@ describe('getAuditFilingPreset', () => {
     expect(getAuditFilingPreset('simplify').issueLabel).toBe('code-quality');
     expect(getAuditFilingPreset('module-hygiene').slugPrefix).toBe('module-hygiene-');
     expect(getAuditFilingPreset('claim-issue')).toBeNull();
+  });
+
+  it('uses the slug-stem metric as an extra forge label when it is not already the category', () => {
+    expect(getAuditFilingPreset('better-cognitive-load').extraLabels).toEqual(['cognitive-load']);
+    expect(getAuditFilingPreset('better-structural-drift').extraLabels).toEqual(['structural-drift']);
+    expect(getAuditFilingPreset('better-runtime-safety')).toMatchObject({
+      issueLabel: 'bug',
+      extraLabels: ['runtime-safety'],
+    });
+    expect(getAuditFilingPreset('ux').extraLabels).toEqual([]);
+    expect(getAuditFilingPreset('ux').metricLabel).toBe('ux');
   });
 
   it('AUDIT_TASK_TYPES is derived from the definitions table', () => {

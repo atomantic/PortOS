@@ -23,7 +23,7 @@ import {
   formatOptionalIssueLabelFlags,
 } from './dispatchLabels.js';
 import { getOriginInfo, readOriginRemoteUrl } from './gitRemote.js';
-import { getAuditFilingPreset, isAuditTaskType } from './auditCatalog.js';
+import { getAuditFilingPreset, isAuditTaskType, metricLabelFromSlugPrefix } from './auditCatalog.js';
 
 // Every selectable value (UI + Zod enum). `'auto'` is the default; the rest are
 // concrete sources.
@@ -247,6 +247,29 @@ export const TRACKER_FILING_PRESETS = {
 export const TRACKER_FILING_TASK_TYPES = new Set(Object.keys(TRACKER_FILING_PRESETS));
 
 /**
+ * Category labels that are not the primary `issueLabel`. Dedupes empties and
+ * a metric that already equals the category (`ux` + slug `ux-`).
+ */
+export function extraIssueLabels(issueLabel, extraLabels = []) {
+  if (!Array.isArray(extraLabels)) return [];
+  return extraLabels.filter((name) => typeof name === 'string' && name.trim() && name !== issueLabel);
+}
+
+/**
+ * Repeated `--label` flags for the category, any metric extras, and `plan`.
+ * Shared by the gh/glab copy-pasteable `issue create` examples.
+ */
+export function formatForgeCategoryLabelFlags(issueLabel, extraLabels = []) {
+  return [issueLabel, ...extraIssueLabels(issueLabel, extraLabels), 'plan']
+    .map((name) => `--label ${name}`)
+    .join(' ');
+}
+
+function metricLabelNoun(count) {
+  return `metric label${count > 1 ? 's' : ''}`;
+}
+
+/**
  * Pick the {trackerInstructions} block for a resolved work tracker, falling back
  * to the PLAN.md block for an unknown/missing tracker (matching `isFileTracker`,
  * so the block a caller renders and the `worktreeChangesExpected` flag it stamps
@@ -259,6 +282,7 @@ export function formatTrackerInstructions(tracker, options = {}) {
   const referenceWatchPreset = TRACKER_FILING_PRESETS['reference-watch'];
   const {
     slugPrefix, label, issueLabel, labelDescription,
+    extraLabels = [],
     planItemBody, bodyRequirements, planCommitMessage,
   } = { ...referenceWatchPreset, ...options };
   // The reference-watch preset is the backwards-compatible default, but its
@@ -284,7 +308,22 @@ export function formatTrackerInstructions(tracker, options = {}) {
   const forgeFileStep = issueLabelContract ? '4.' : '3.';
   // `ref-watch-` → `ref-watch`: the forge title search wants the stem, not the
   // trailing separator (`--search "ref-watch in:title"`).
-  const slugStem = slugPrefix.replace(/-+$/, '');
+  const slugStem = metricLabelFromSlugPrefix(slugPrefix);
+  const metricExtras = extraIssueLabels(issueLabel, extraLabels);
+  const forgeCategoryFlags = formatForgeCategoryLabelFlags(issueLabel, extraLabels);
+  const extraCreateClause = (render) => {
+    if (!metricExtras.length) return '';
+    return `, then the ${metricLabelNoun(metricExtras.length)} (${metricExtras.map(render).join(', then ')})`;
+  };
+  const extraCreateClauseGh = extraCreateClause(
+    (name) => `\`gh label create ${name} --description "${labelDescription}" --force\``
+  );
+  const extraCreateClauseGlab = extraCreateClause(
+    (name) => `\`glab label create --name ${name} --color "#0366D6" --description "${labelDescription}" 2>/dev/null || true\``
+  );
+  const extraJiraLabels = metricExtras.length
+    ? ` and the ${metricLabelNoun(metricExtras.length)} ${metricExtras.map((name) => `\`${name}\``).join(', ')}`
+    : '';
 
   const blocks = {
     plan: `This app records autonomous work in **PLAN.md** at the repo root ({repoPath}).
@@ -301,12 +340,12 @@ export function formatTrackerInstructions(tracker, options = {}) {
 
 - **Inventory:** From {repoPath}, resolve the repo (\`gh repo view --json nameWithOwner -q .nameWithOwner\`) and list existing ${label} issues so you don't duplicate: \`gh issue list --state all --search "${slugStem} in:title" --limit 100 --json number,title\`. Each carries a \`[${slugPrefix}…]\` slug in its title — collect them. If \`gh\` is not authenticated or the remote is not GitHub, exit cleanly.
 - **Record** each NEW proposal as a GitHub issue. Do not relabel or edit an existing issue you skipped as a duplicate. Keep the \`[<slug>]\` inventory tag in the title so later runs can de-duplicate; do NOT add \`[category]\` / \`[SEVERITY]\` / \`[model:…]\` / \`[effort:…]\` prefixes (those belong in labels).
-  1. Ensure each label you will apply exists. Create the category label first (\`gh label create ${issueLabel} --description "${labelDescription}" --force\`) and \`gh label create plan --description "Tracked by /do:replan" --force\`. ${dispatchLabelCreateWording}
+  1. Ensure each label you will apply exists. Create the category label first (\`gh label create ${issueLabel} --description "${labelDescription}" --force\`)${extraCreateClauseGh} and \`gh label create plan --description "Tracked by /do:replan" --force\`. ${dispatchLabelCreateWording}
   2. ${dispatchGuidance.split('\n').join('\n     ')}
 ${forgeLabelContract}
   ${forgeFileStep} File with repeated \`--label\` flags so the category/scope labels stay intact:
   \`\`\`bash
-  gh issue create --title "[<slug>] <Short title>" --label ${issueLabel} --label plan ${forgeLabelFlags} --body "<body>"
+  gh issue create --title "[<slug>] <Short title>" ${forgeCategoryFlags} ${forgeLabelFlags} --body "<body>"
   \`\`\`
   The body must contain ${bodyRequirements}. For **Maybe — needs human call** items, also add \`--label needs-decision\` (create it the same way if absent) and end the body with \`**Decision needed:** <one sentence>.\`.
 - **Finalize:** No source-code edits, no PLAN.md, no branches, no PRs — the issues ARE the deliverable. \`/claim --issues\` (the \`claim-issue\` flow) picks them up later.`,
@@ -315,12 +354,12 @@ ${forgeLabelContract}
 
 - **Inventory:** From {repoPath}, confirm the forge (\`glab repo view\`) and list existing ${label} issues so you don't duplicate: \`glab issue list --label ${issueLabel} --per-page 100 --output json\` (also scan titles for the \`[${slugPrefix}…]\` slug). Collect the existing slugs. If \`glab\` is not authenticated or the remote is not GitLab, exit cleanly.
 - **Record** each NEW proposal as a GitLab issue. Do not relabel or edit an existing issue you skipped as a duplicate. Keep the \`[<slug>]\` inventory tag in the title so later runs can de-duplicate; do NOT add \`[category]\` / \`[SEVERITY]\` / \`[model:…]\` / \`[effort:…]\` prefixes (those belong in labels).
-  1. Ensure each label you will apply exists. Create the category label first (\`glab label create --name ${issueLabel} --color "#0366D6" --description "${labelDescription}" 2>/dev/null || true\`) and the same for \`plan\`. ${dispatchLabelCreateWording} (glab needs \`--name\` and \`#<hex>\`).
+  1. Ensure each label you will apply exists. Create the category label first (\`glab label create --name ${issueLabel} --color "#0366D6" --description "${labelDescription}" 2>/dev/null || true\`)${extraCreateClauseGlab} and the same for \`plan\`. ${dispatchLabelCreateWording} (glab needs \`--name\` and \`#<hex>\`).
   2. ${dispatchGuidance.split('\n').join('\n     ')}
 ${forgeLabelContract}
   ${forgeFileStep} File with repeated \`--label\` flags so the category/scope labels stay intact:
   \`\`\`bash
-  glab issue create --title "[<slug>] <Short title>" --label ${issueLabel} --label plan ${forgeLabelFlags} --description "<body>"
+  glab issue create --title "[<slug>] <Short title>" ${forgeCategoryFlags} ${forgeLabelFlags} --description "<body>"
   \`\`\`
   (Run \`glab issue create --help\` if a flag is rejected — glab's flags evolve.) The body must contain ${bodyRequirements}. For **Maybe — needs human call** items, also add \`--label needs-decision\` and end the body with \`**Decision needed:** <one sentence>.\`.
 - **Finalize:** No source-code edits, no PLAN.md, no branches, no MRs — the issues ARE the deliverable. \`/claim --issues\` (the \`claim-issue-gitlab\` flow) picks them up later.`,
@@ -328,7 +367,7 @@ ${forgeLabelContract}
     jira: `This app tracks autonomous work in **JIRA**. Create one JIRA issue per proposal in the app's configured project using whatever JIRA CLI/REST this environment provides. **If no JIRA credentials are available, fall back to recording proposals in PLAN.md at {repoPath} (slug-tagged \`- [ ] [<slug>] …\` checklist items under \`## Next Up\`, committed) and say so in your final summary.**
 
 - **Inventory:** Search existing JIRA issues (and PLAN.md, if you fall back) for the \`[${slugPrefix}…]\` slug so you don't duplicate; collect the existing slugs.
-- **Record** each NEW proposal as a JIRA issue whose summary starts with the \`[<slug>]\` tag. Do not relabel a ticket you skipped as a duplicate. The description must contain ${bodyRequirements}. Apply the category label \`${issueLabel}\` ${jiraDispatchLabelWording}
+- **Record** each NEW proposal as a JIRA issue whose summary starts with the \`[<slug>]\` tag. Do not relabel a ticket you skipped as a duplicate. The description must contain ${bodyRequirements}. Apply the category label \`${issueLabel}\`${extraJiraLabels} ${jiraDispatchLabelWording}
   ${jiraDispatchGuidance.split('\n').join('\n  ')}
 ${jiraLabelContract}
   For **Maybe — needs human call** items, end the description with \`**Decision needed:** <one sentence>.\`.

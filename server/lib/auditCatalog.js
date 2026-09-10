@@ -8,15 +8,35 @@
  * (toggleable at dispatch via `taskMetadata.fileIssues`).
  */
 
-const filing = ({ slugPrefix, label, issueLabel, labelDescription, noun }) => Object.freeze({
-  slugPrefix,
-  label,
-  issueLabel,
-  labelDescription,
-  planItemBody: `From the \`${label}\` audit of <slice> (<today's date>). Problem: <what is wrong, 1–2 sentences>. Impact: <runtime, data, CI/release, or recurring maintenance consequence>. Fix: <files + functions in {appName}>. Scope: <small/medium/large>.`,
-  bodyRequirements: `the slice audited and the date, what is wrong with file:line references, the concrete impact (runtime, data, CI/release, or recurring maintenance), a proposed fix naming the files in {appName}, and a \`Scope:\` of small/medium/large`,
-  planCommitMessage: `docs(${issueLabel}): propose <N> ${noun}`,
-});
+/**
+ * Inventory stem of a slug prefix (`cognitive-load-` → `cognitive-load`).
+ * The same token is the extra forge label so a backlog can be filtered by
+ * metric without parsing titles.
+ */
+export function metricLabelFromSlugPrefix(slugPrefix) {
+  return String(slugPrefix || '').replace(/-+$/, '');
+}
+
+const filing = ({ slugPrefix, label, issueLabel, labelDescription, noun }) => {
+  const metricLabel = metricLabelFromSlugPrefix(slugPrefix);
+  // Apply the slug-stem as a second label whenever it is not already the
+  // category (`code-quality` + `cognitive-load`, `bug` + `runtime-safety`).
+  // When they coincide (`ux`, `security`) the category flag is enough.
+  const extraLabels = metricLabel && metricLabel !== issueLabel
+    ? Object.freeze([metricLabel])
+    : Object.freeze([]);
+  return Object.freeze({
+    slugPrefix,
+    label,
+    issueLabel,
+    metricLabel,
+    extraLabels,
+    labelDescription,
+    planItemBody: `From the \`${label}\` audit of <slice> (<today's date>). Problem: <what is wrong, 1–2 sentences>. Impact: <runtime, data, CI/release, or recurring maintenance consequence>. Fix: <files + functions in {appName}>. Scope: <small/medium/large>.`,
+    bodyRequirements: `the slice audited and the date, what is wrong with file:line references, the concrete impact (runtime, data, CI/release, or recurring maintenance), a proposed fix naming the files in {appName}, and a \`Scope:\` of small/medium/large`,
+    planCommitMessage: `docs(${issueLabel}): propose <N> ${noun}`,
+  });
+};
 
 /**
  * The half of every audit dispatch that is about HOW to run, not WHAT to
@@ -298,8 +318,9 @@ export const AUDIT_DEFINITIONS = Object.freeze({
     filing: filing({
       slugPrefix: 'observability-',
       label: 'observability-audit',
-      // Reuses the existing `code-quality` label the way `simplify` does — a
-      // missing log line is a maintainability defect, not its own category.
+      // Category stays `code-quality` (a missing log line is a
+      // maintainability defect); the metric label `observability` is
+      // derived from the slug so the backlog can still be filtered by lens.
       issueLabel: 'code-quality',
       labelDescription: 'Proposed from a logging/observability audit',
       noun: 'observability finding(s)',
@@ -313,8 +334,8 @@ export const AUDIT_DEFINITIONS = Object.freeze({
     filing: filing({
       slugPrefix: 'copy-',
       label: 'copy-audit',
-      // User-facing wording is a UX concern, so it files under the same label
-      // the UX audit uses rather than minting a near-duplicate category.
+      // User-facing wording is a UX concern, so the category stays `ux`;
+      // the metric label `copy` is derived from the slug.
       issueLabel: 'ux',
       labelDescription: 'Proposed from a copy/text-clarity audit',
       noun: 'copy finding(s)',
@@ -325,11 +346,13 @@ export const AUDIT_DEFINITIONS = Object.freeze({
   // are refactor- or defect-hunting lanes carved out of the broader
   // code-quality / module-hygiene / test-coverage bodies so each can be
   // scheduled, pinned to a provider, and toggled between filing and fixing on
-  // its own. Every one files under an existing label rather than minting a
-  // near-duplicate category, and the refactor lanes require a managed
-  // worktree in do-work mode: a mechanical restructuring of a hot function or
-  // a dependency swap is exactly the edit that must never land in the user's
-  // live checkout.
+  // its own. Each still files under an existing category (`code-quality`,
+  // `bug`, `tests`, `dependencies`) and ALSO under the metric slug
+  // (`cognitive-load`, `structural-drift`, `runtime-safety`, …) so the
+  // backlog can be filtered by lens without parsing titles. The refactor
+  // lanes require a managed worktree in do-work mode: a mechanical
+  // restructuring of a hot function or a dependency swap is exactly the edit
+  // that must never land in the user's live checkout.
   'better-complexity': {
     quotaBurnId: null,
     label: 'Cyclomatic complexity',
