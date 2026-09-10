@@ -6,14 +6,10 @@ import { MEMORY_TYPES, MEMORY_TYPE_COLORS } from '../constants';
 import { buildGraph } from '../../../lib/graphSimulation';
 import GraphScene, { graphMotionSettings } from '../../graph3d/GraphScene';
 import useGraphCanvasInteraction from '../../graph3d/useGraphCanvasInteraction';
+import TouchDragHint from '../../graph3d/TouchDragHint';
 import BrailleSpinner from '../../BrailleSpinner';
 import usePrefersReducedMotion from '../../../hooks/usePrefersReducedMotion';
 import { formatDateNumeric } from '../../../utils/formatters';
-
-// Widest the hover tooltip renders. Single source for both its max-width and
-// the clamp that keeps it inside the viewport — as a CSS class plus a mirrored
-// constant the two silently drift apart.
-const TOOLTIP_WIDTH = 320;
 
 const TYPE_HEX = {
   fact: '#3b82f6',
@@ -24,12 +20,15 @@ const TYPE_HEX = {
   context: '#6b7280'
 };
 
-// Scene-appearance callbacks handed to the shared graph3d/GraphScene —
-// exported so the extraction's behavior split from BrainGraph's own
-// per-edge-type palette and weight fallback is pinned directly (see
-// MemoryGraph.test.jsx). Unlike BrainGraph, every edge kind here scales by
-// weight (including "linked", which BrainGraph holds at a flat intensity).
-export const memoryNodeColor = (node) => TYPE_HEX[node.type] || '#6b7280';
+// Scene-appearance callbacks handed to the shared graph3d/GraphScene.
+// memoryEdgeColor/memoryEdgeIntensity are exported so the extraction's
+// behavior split from BrainGraph's own per-edge-type palette and weight
+// fallback is pinned directly (see MemoryGraph.test.jsx) — unlike BrainGraph,
+// every edge kind here scales by weight (including "linked", which
+// BrainGraph holds at a flat intensity). memoryNodeColor is a plain lookup
+// with no distinct per-page behavior worth pinning, so it stays
+// module-private.
+const memoryNodeColor = (node) => TYPE_HEX[node.type] || '#6b7280';
 export const memoryEdgeColor = (edge) => (edge.type === 'linked' ? '#3b82f6' : '#6b7280');
 export const memoryEdgeIntensity = (edge, dimmed) =>
   dimmed ? 0.06 : (edge.type === 'linked' ? 0.6 * edge.weight : 0.3 * edge.weight);
@@ -106,7 +105,7 @@ export default function MemoryGraph() {
     pickRef,
     touchGestureRef,
     hoveredNode,
-    tooltipPos,
+    tooltipStyle,
     handleHover,
     handlePointerMove,
     touchHintVisible,
@@ -182,15 +181,7 @@ export default function MemoryGraph() {
           </Canvas>
         )}
 
-        {touchHintVisible && (
-          <div
-            role="status"
-            aria-live="polite"
-            className="absolute top-3 inset-x-3 z-20 flex justify-center pointer-events-none"
-          >
-            <span className="port-media-overlay rounded-lg px-3 py-2 text-xs">Drag to rotate</span>
-          </div>
-        )}
+        <TouchDragHint visible={touchHintVisible} />
 
         {/* Legend. Its ~200px blankets a short canvas, so it auto-shows only on
             a `roomy-viewport` (wide AND tall — see index.css); otherwise it
@@ -244,16 +235,14 @@ export default function MemoryGraph() {
         {/* Hover tooltip. Suppressed on a coarse pointer: there is no hover to
             preview with — a tap selects the node and the detail panel below
             already shows the same record — and it would otherwise flash under
-            the user's own finger. Position is clamped so it can't run off the
-            right edge of a narrow window, where `x + 12` alone would clip it. */}
+            the user's own finger. Position is clamped
+            (useGraphCanvasInteraction's `tooltipStyle`) so it can't run off
+            the right edge of a narrow window, where `x + 12` alone would clip
+            it. */}
         {hoveredNode && (
           <div
             className="fixed z-50 pointer-events-none pointer-coarse:hidden bg-port-bg border border-port-border rounded-lg px-3 py-2 shadow-lg"
-            style={{
-              maxWidth: TOOLTIP_WIDTH,
-              left: Math.max(8, Math.min(tooltipPos.x + 12, window.innerWidth - TOOLTIP_WIDTH - 8)),
-              top: Math.max(8, tooltipPos.y - 12)
-            }}
+            style={tooltipStyle}
           >
             <div className="flex items-center gap-2 mb-1">
               <span className={`px-1.5 py-0.5 text-[10px] rounded-full border ${MEMORY_TYPE_COLORS[hoveredNode.type] || 'border-port-border text-gray-400'}`}>

@@ -10,6 +10,7 @@ import { buildGraph } from '../../../lib/graphSimulation';
 import { pushFocus, popFocus, currentFocusId } from '../../../lib/brainGraphFocus';
 import GraphScene, { graphMotionSettings } from '../../graph3d/GraphScene';
 import useGraphCanvasInteraction from '../../graph3d/useGraphCanvasInteraction';
+import TouchDragHint from '../../graph3d/TouchDragHint';
 import EntityCombobox from '../../EntityCombobox';
 import InlineConfirmRow from '../../ui/InlineConfirmRow';
 import BrailleSpinner from '../../BrailleSpinner';
@@ -24,10 +25,12 @@ const EDGE_COLORS = {
 
 const BRAIN_TYPES = ['people', 'projects', 'ideas', 'admin', 'memories', 'songs', 'goals', 'journals'];
 
-// Scene-appearance callbacks handed to the shared graph3d/GraphScene —
-// exported so the extraction's behavior split from MemoryGraph's own flat
-// blue/gray palette is pinned directly (see BrainGraph.test.jsx).
-export const brainNodeColor = (node) => BRAIN_TYPE_HEX[node.brainType] || '#6b7280';
+// Scene-appearance callbacks handed to the shared graph3d/GraphScene.
+// brainEdgeColor/brainEdgeIntensity are exported so the extraction's
+// behavior split from MemoryGraph's own flat blue/gray palette is pinned
+// directly (see BrainGraph.test.jsx); brainNodeColor is a plain lookup with
+// no distinct per-page behavior worth pinning, so it stays module-private.
+const brainNodeColor = (node) => BRAIN_TYPE_HEX[node.brainType] || '#6b7280';
 export const brainEdgeColor = (edge) => EDGE_COLORS[edge.type] || '#6b7280';
 export const brainEdgeIntensity = (edge, dimmed) =>
   dimmed ? 0.06 : (edge.type === 'linked' ? 0.6 : 0.3 * (edge.weight || 0.5));
@@ -46,11 +49,6 @@ export const brainEdgeIntensity = (edge, dimmed) =>
  * `border-port-border`) — those beat the inline declaration.
  */
 const brainTypeChipStyle = (brainType, mode) => chipColors(BRAIN_TYPE_HEX[brainType], mode) || undefined;
-
-// Widest the hover tooltip renders. Single source for both its max-width and
-// the clamp that keeps it inside the viewport — as a CSS class plus a mirrored
-// constant the two silently drift apart.
-const TOOLTIP_WIDTH = 320;
 
 // Per-type API getters for detail panel
 const TYPE_GETTERS = {
@@ -227,7 +225,7 @@ export default function BrainGraph() {
     pickRef,
     touchGestureRef,
     hoveredNode,
-    tooltipPos,
+    tooltipStyle,
     handleHover,
     handlePointerMove,
     touchHintVisible,
@@ -494,15 +492,7 @@ export default function BrainGraph() {
           </Canvas>
         )}
 
-        {touchHintVisible && (
-          <div
-            role="status"
-            aria-live="polite"
-            className="absolute top-3 inset-x-3 z-20 flex justify-center pointer-events-none"
-          >
-            <span className="port-media-overlay rounded-lg px-3 py-2 text-xs">Drag to rotate</span>
-          </div>
-        )}
+        <TouchDragHint visible={touchHintVisible} />
 
         {!graph && (
           <div className="flex items-center justify-center h-full text-gray-500 text-sm">
@@ -585,16 +575,13 @@ export default function BrainGraph() {
             preview with — a tap selects the node and the detail panel below
             already shows the same record — and it would otherwise flash under
             the user's own finger advertising a double-click touch can't do.
-            Position is clamped so it can't run off the right edge of a narrow
-            window, where `x + 12` alone would clip the label. */}
+            Position is clamped (useGraphCanvasInteraction's `tooltipStyle`) so
+            it can't run off the right edge of a narrow window, where `x + 12`
+            alone would clip the label. */}
         {hoveredNode && (
           <div
             className="fixed z-50 pointer-events-none pointer-coarse:hidden bg-port-bg border border-port-border rounded-lg px-3 py-2 shadow-lg"
-            style={{
-              maxWidth: TOOLTIP_WIDTH,
-              left: Math.max(8, Math.min(tooltipPos.x + 12, window.innerWidth - TOOLTIP_WIDTH - 8)),
-              top: Math.max(8, tooltipPos.y - 12)
-            }}
+            style={tooltipStyle}
           >
             <div className="flex items-center gap-2 mb-1">
               <span

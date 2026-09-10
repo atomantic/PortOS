@@ -12,12 +12,28 @@ import { isTapGesture } from '../../lib/graphPicking';
 // this problem.)
 const isCanvasGesture = (e) => e.target?.tagName === 'CANVAS';
 
+// Widest the hover tooltip renders. Single source for both its max-width and
+// the clamp that keeps it inside the viewport — as a CSS class plus a
+// mirrored constant the two would silently drift apart.
+const TOOLTIP_WIDTH = 320;
+
+// Clamp the hover tooltip to the viewport: an unclamped `x + 12`/`y - 12`
+// can push it past the right edge on a narrow window, or above the top on a
+// low hover. Both graph pages render page-specific content (badge, summary)
+// inside this same clamp, so the positioning is computed once here rather
+// than copied per page.
+const clampTooltipStyle = (pos) => ({
+  maxWidth: TOOLTIP_WIDTH,
+  left: Math.max(8, Math.min(pos.x + 12, window.innerWidth - TOOLTIP_WIDTH - 8)),
+  top: Math.max(8, pos.y - 12)
+});
+
 /**
  * Pointer/tap/tooltip wiring shared by the 3D graph scenes (BrainGraph,
  * MemoryGraph): tells a canvas tap from an orbit drag, resolves a touch tap
  * to the nearest node via the wrapper-owned screen-space pick (see
  * lib/graphPicking.js and GraphScene's `pickRef`), and tracks the hover
- * tooltip position.
+ * tooltip position and its viewport-clamped style.
  *
  * `onSelect` is called with the picked node to select it, or `null` to clear
  * the selection — the same null-safe contract each page's own `handleSelect`
@@ -79,7 +95,7 @@ export default function useGraphCanvasInteraction({ onSelect }) {
     pickRef,
     touchGestureRef,
     hoveredNode,
-    tooltipPos,
+    tooltipStyle: clampTooltipStyle(tooltipPos),
     handleHover,
     handlePointerMove,
     touchHintVisible,

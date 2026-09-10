@@ -6,15 +6,18 @@ import GraphEdges from './GraphEdges';
 import { pickNearestNodeByScreenDistance } from '../../lib/graphPicking';
 
 // The force layout is settled before the scene renders, so reduced-motion
-// users can see it immediately at rest. Keep the canvas on demand and turn
-// off OrbitControls' inertia too, preventing movement after an interaction.
-// Canonical home for both graph pages — call from the page that owns the
-// <Canvas> to size its `frameloop` prop; GraphScene reads `reducedMotion`
-// directly for its own OrbitControls damping.
+// users can see it immediately at rest: keep the canvas on demand instead of
+// running its render loop every frame. Canonical home for both graph pages —
+// call from the page that owns the <Canvas> to size its `frameloop` prop.
+// GraphScene reads `reducedMotion` directly for its own OrbitControls
+// damping below, rather than through this helper.
 export const graphMotionSettings = (reducedMotion) => ({
-  frameloop: reducedMotion ? 'demand' : 'always',
-  enableDamping: !reducedMotion
+  frameloop: reducedMotion ? 'demand' : 'always'
 });
+
+// Sphere radius for a node's importance — also used, +0.2, for the
+// wireframe halo around the selected node below.
+const nodeRadius = (node) => 0.4 + (node.importance ?? 0.5) * 0.8;
 
 // Memoized: the container's onPointerMove re-renders the owning page on every
 // mouse move over the canvas WHILE A NODE IS HOVERED (it tracks the tooltip
@@ -39,7 +42,7 @@ const GraphScene = memo(function GraphScene({
   const { camera, size } = useThree();
 
   const selNode = selectedId ? graph.idMap.get(selectedId) : null;
-  const selRadius = selNode ? 0.4 + (selNode.importance ?? 0.5) * 0.8 : 0;
+  const selRadius = selNode ? nodeRadius(selNode) : 0;
 
   // Publish a live screen-space pick to the DOM wrapper, which owns the touch
   // gesture (see useGraphCanvasInteraction). The camera object is stable
@@ -76,7 +79,7 @@ const GraphScene = memo(function GraphScene({
       />
 
       {graph.simNodes.map(node => {
-        const radius = 0.4 + (node.importance ?? 0.5) * 0.8;
+        const radius = nodeRadius(node);
         const color = nodeColor(node);
         const isSelected = node.id === selectedId;
         const isConnected = adjacentIds?.has(node.id);

@@ -66,11 +66,11 @@ describe('reduced motion', () => {
 });
 
 describe('graphMotionSettings', () => {
-  it('stops the canvas render loop and OrbitControls inertia when motion is reduced', () => {
-    expect(graphMotionSettings(true)).toEqual({ frameloop: 'demand', enableDamping: false });
+  it('runs the canvas render loop on demand when motion is reduced', () => {
+    expect(graphMotionSettings(true)).toEqual({ frameloop: 'demand' });
   });
 
-  it('keeps animated rendering and controls for users without the preference', () => {
-    expect(graphMotionSettings(false)).toEqual({ frameloop: 'always', enableDamping: true });
+  it('keeps the canvas animating for users without the preference', () => {
+    expect(graphMotionSettings(false)).toEqual({ frameloop: 'always' });
   });
 });
