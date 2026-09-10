@@ -51,7 +51,12 @@ const EXISTING_CATALOG_IDENTITIES = new Map([
 ]);
 
 export function transformAAModelsToObservations(models, options = {}) {
-  const { retrievedAt = new Date().toISOString() } = options;
+  const { retrievedAt = new Date().toISOString(), intelligenceIndexVersion } = options;
+  const version = String(intelligenceIndexVersion ?? '');
+  if (!/^\d+\.\d+(?:\.\d+)*$/.test(version)) {
+    throw new ServerError('Artificial Analysis benchmark version is missing or invalid', { status: 502 });
+  }
+  const benchmark = `Artificial Analysis Intelligence Index v${version}`;
   const observations = [];
   const seenIds = new Set();
 
@@ -61,9 +66,9 @@ export function transformAAModelsToObservations(models, options = {}) {
     const provider = m.model_creator?.name || 'Unknown';
     const providerSlug = slugify(provider);
 
-    let id = `aa-v4.2-${providerSlug}-${modelSlug}-${effort}`;
+    let id = `aa-v${version}-${providerSlug}-${modelSlug}-${effort}`;
     for (const [existId, exist] of EXISTING_CATALOG_IDENTITIES) {
-      if (exist.provider.toLowerCase() === provider.toLowerCase() &&
+      if (version === '4.2' && exist.provider.toLowerCase() === provider.toLowerCase() &&
           exist.model === modelSlug &&
           exist.effort === effort) {
         id = existId;
@@ -87,7 +92,7 @@ export function transformAAModelsToObservations(models, options = {}) {
       source: {
         url: sourceUrl,
         retrievedAt,
-        methodology: 'Artificial Analysis Intelligence Index v4.2 composite score.',
+        methodology: `${benchmark} composite score.`,
       },
     } : null;
 
@@ -103,7 +108,7 @@ export function transformAAModelsToObservations(models, options = {}) {
       source: {
         url: sourceUrl,
         retrievedAt,
-        methodology: 'Artificial Analysis Intelligence Index v4.2; cost per task evaluation.',
+        methodology: `${benchmark}; cost per task evaluation.`,
       },
     } : null;
 
@@ -165,7 +170,7 @@ export function transformAAModelsToObservations(models, options = {}) {
       effort,
       configuration: finalConfiguration.slice(0, 500),
       billing: 'api',
-      benchmark: 'Artificial Analysis Intelligence Index v4.2',
+      benchmark,
       quality,
       costPerTask,
       inputPerMillion,
@@ -185,6 +190,7 @@ export async function fetchAllArtificialAnalysisModels(apiKey) {
   if (!apiKey) throw new ServerError('Artificial Analysis API key is required', { status: 400 });
   let page = 1;
   const allModels = [];
+  let intelligenceIndexVersion;
   while (true) {
     const res = await fetch(`https://artificialanalysis.ai/api/v2/language/models/free?page=${page}`, {
       headers: { 'x-api-key': apiKey },
@@ -193,12 +199,19 @@ export async function fetchAllArtificialAnalysisModels(apiKey) {
       throw new ServerError(`Artificial Analysis API failed (${res.status}): ${res.statusText || 'request rejected'}`, { status: res.status === 401 || res.status === 403 ? 401 : 502 });
     }
     const json = await res.json();
-    if (!json.data || !Array.isArray(json.data)) break;
+    const version = String(json.intelligence_index_version ?? '');
+    if (!Array.isArray(json.data) || !json.data.length || !/^\d+\.\d+(?:\.\d+)*$/.test(version)) {
+      throw new ServerError('Artificial Analysis returned invalid model data or benchmark version', { status: 502 });
+    }
+    if (intelligenceIndexVersion && version !== intelligenceIndexVersion) {
+      throw new ServerError('Artificial Analysis benchmark version changed during pagination; retry sync', { status: 502 });
+    }
+    intelligenceIndexVersion = version;
     allModels.push(...json.data);
     if (!json.pagination?.has_more) break;
     page++;
   }
-  return allModels;
+  return { models: allModels, intelligenceIndexVersion };
 }
 
 // Presence only — never the value. The comparison page reads this to decide
@@ -217,14 +230,14 @@ export async function syncArtificialAnalysisCatalog({ apiKey } = {}) {
   if (!key) {
     throw new ServerError('No Artificial Analysis API key provided or configured in ARTIFICIAL_ANALYSIS_API_KEY', { status: 400 });
   }
-  const rawModels = await fetchAllArtificialAnalysisModels(key);
+  const { models: rawModels, intelligenceIndexVersion } = await fetchAllArtificialAnalysisModels(key);
   if (apiKey?.trim()) await updateSettingsWith(current => ({
     ...current, secrets: { ...current.secrets, artificialAnalysis: { apiKey: apiKey.trim() } },
   }));
-  const observations = transformAAModelsToObservations(rawModels);
+  const observations = transformAAModelsToObservations(rawModels, { intelligenceIndexVersion });
   const validated = modelComparisonImportSchema.parse({
     schemaVersion: 1,
-    observations: observations.slice(0, 2000),
+    observations,
   });
   const updated = await importModelComparison(validated);
   return {

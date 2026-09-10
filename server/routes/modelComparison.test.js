@@ -109,11 +109,13 @@ it('rejects sync-aa when no API key is provided and syncs successfully when mock
   expect(noKey.status).toBe(400);
 
   const originalFetch = globalThis.fetch;
+  let benchmarkVersion = '4.2';
   const spy = vi.spyOn(globalThis, 'fetch').mockImplementation((url, opts) => {
     if (typeof url === 'string' && url.includes('artificialanalysis.ai')) {
       return Promise.resolve({
         ok: true,
         json: async () => ({
+          intelligence_index_version: benchmarkVersion,
           data: [{
             id: 'test-uuid-1',
             name: 'TestModel (high)',
@@ -136,6 +138,13 @@ it('rejects sync-aa when no API key is provided and syncs successfully when mock
     expect(res.status).toBe(200);
     expect(res.body.success).toBe(true);
     expect(res.body.observations).toBeGreaterThan(0);
+    benchmarkVersion = '4.3';
+    expect((await request(app).post('/comparison/sync-aa').send({ apiKey: 'mock-key' })).status).toBe(200);
+    const stored = (await request(app).get('/comparison')).body.observations.filter(row => row.model === 'testmodel');
+    expect(stored.map(row => row.benchmark).sort()).toEqual([
+      'Artificial Analysis Intelligence Index v4.2', 'Artificial Analysis Intelligence Index v4.3',
+    ]);
+    expect(new Set(stored.map(row => row.id)).size).toBe(2);
   } finally {
     spy.mockRestore();
   }

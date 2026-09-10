@@ -22,8 +22,12 @@ describe('model comparison seed scope', () => {
 
   it('keeps a full reasoning-effort curve for the frontier anchor', async () => {
     const seed = await readSeed();
-    const efforts = seed.observations.filter(row => row.model === 'claude-fable-5.1').map(row => row.effort);
-    expect([...efforts].sort()).toEqual(['high', 'low', 'max', 'medium', 'xhigh']);
+    const rows = seed.observations.filter(row => row.model === 'claude-fable-5.1');
+    expect(rows.length).toBeGreaterThan(0);
+    for (const benchmark of new Set(rows.map(row => row.benchmark))) {
+      const efforts = rows.filter(row => row.benchmark === benchmark).map(row => row.effort);
+      expect(efforts.sort()).toEqual(['high', 'low', 'max', 'medium', 'xhigh']);
+    }
   });
 
   it('carries no retired generation the chart would never plot', async () => {
