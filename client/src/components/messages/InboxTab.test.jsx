@@ -228,4 +228,18 @@ describe('InboxTab message selection URL', () => {
       `/messages/inbox?triage=review&message=${message.id}&account=${message.accountId}`,
     );
   });
+
+  it('keeps sender text in the row and wraps the toolbar instead of a single overflowing flex', async () => {
+    api.getMessageInbox.mockResolvedValue({ messages: [message], total: 1 });
+    const { container } = renderInbox([neverSyncedAccount]);
+
+    expect(await screen.findByText('Example Sender')).toBeInTheDocument();
+    expect(screen.getByRole('tablist', { name: 'Triage filters' })).toHaveClass('overflow-x-auto');
+    const row = screen.getByText('Example Sender').closest('.group');
+    expect(row.className).toMatch(/flex-col/);
+    expect(row.className).toMatch(/sm:flex-row/);
+    const toolbar = container.querySelector('input[aria-label="Search messages"]').closest('.flex.flex-col');
+    expect(toolbar).toBeTruthy();
+    expect(toolbar.className).toMatch(/sm:flex-row/);
+  });
 });
