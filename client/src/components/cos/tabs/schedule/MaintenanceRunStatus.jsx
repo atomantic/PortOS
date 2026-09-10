@@ -14,9 +14,10 @@ export function maintenanceRunProgress(run = {}) {
   const activeIndex = steps.findIndex((entry) => (activeId
     ? entry.id === activeId
     : Boolean(activeType) && entry.taskRef?.taskType === activeType && !Object.hasOwn(completed, entry.id)));
-  const current = activeIndex >= 0
+  const running = run.status === 'running';
+  const current = running && activeIndex >= 0
     ? activeIndex + 1
-    : (run.status === 'running' && total > 0 && done < total ? done + 1 : done);
+    : (running && total > 0 && done < total ? done + 1 : done);
   const step = activeType || steps.find((entry) => !Object.hasOwn(completed, entry.id))?.taskRef?.taskType;
   return { current, done, total, step };
 }
