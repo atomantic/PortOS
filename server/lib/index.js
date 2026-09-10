@@ -113,6 +113,7 @@ export * from './seriesCharacterArc.js';
 export * from './llmRoutePin.js';
 export * from './seriesLlmOverride.js';
 export * from './storyArc.js';
+export * from './storyArcLimits.js';
 export * from './styleGuide.js';
 export * from './storyBuilderIntegrity.js';
 export * from './storyBuilderSteps.js';

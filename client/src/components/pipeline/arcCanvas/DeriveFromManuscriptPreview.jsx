@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { Loader2, X, BookText } from 'lucide-react';
 import { WORLD_PREMISE_MAX } from '../../../services/apiUniverseBuilder.js';
-import { ARC_LIMITS } from '../../../../../server/lib/storyArc.js';
+import { ARC_LIMITS } from '../../../../../server/lib/storyArcLimits.js';
 
 // UI ceiling for derived issue synopsis textareas; the server accepts a larger
 // stage input, but this review panel keeps pasted suggestions bounded.
