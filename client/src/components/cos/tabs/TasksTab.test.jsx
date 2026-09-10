@@ -13,6 +13,7 @@ const toast = vi.hoisted(() => ({ success: vi.fn(), error: vi.fn() }));
 vi.mock('../../../services/api', () => api);
 vi.mock('../../ui/Toast', () => ({ default: toast }));
 // TaskAddForm pulls in provider/model plumbing not under test — stub it out.
+vi.mock('./AgentCard', () => ({ default: ({ agent, liveOutput }) => <div>Active agent {agent.id}{liveOutput?.map((entry, i) => <p key={i}>{entry.line}</p>)}</div> }));
 vi.mock('../TaskAddForm', () => ({ default: () => null }));
 
 const TasksTab = (await import('./TasksTab')).default;
@@ -74,11 +75,14 @@ describe('TasksTab spawning window', () => {
     renderTab({
       tasks: { user: { tasks: [pendingTask('task-spawning'), pendingTask('task-waiting')] }, cos: { tasks: [] } },
       agents: [{ id: 'agent-1', status: 'running', taskId: 'task-spawning' }],
+      liveOutputs: { 'agent-1': [{ line: 'Implementing the change' }] },
     });
 
     await waitFor(() => expect(screen.getByText(/^Pending \(/)).toBeInTheDocument());
     expect(screen.getByText('Pending (1)')).toBeInTheDocument();
     expect(screen.getByText('Active (1)')).toBeInTheDocument();
+    expect(screen.getByText(/Active agent agent-1/)).toBeInTheDocument();
+    expect(screen.getByText('Implementing the change')).toBeInTheDocument();
   });
 
   it('leaves a pending system task pending when its agent has already completed', async () => {
@@ -98,6 +102,7 @@ describe('TasksTab spawning window', () => {
     });
 
     await waitFor(() => expect(screen.getByText('Active (1)')).toBeInTheDocument());
+    fireEvent.click(screen.getByText('Task details and actions'));
     // An agent stuck at `running` (the zombie state cleanupZombieAgents clears)
     // would otherwise leave the row with no way to re-dispatch it. Duplicate
     // dispatch is refused server-side by forceSpawnTask, not by hiding this.

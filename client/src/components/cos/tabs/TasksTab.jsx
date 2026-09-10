@@ -38,7 +38,7 @@ function SectionGlyph({ status }) {
   return <MicroGlyph variant={spec.variant} state={spec.state} animated={spec.animated} size={13} />;
 }
 
-export default function TasksTab({ tasks, agents = [], onRefresh, onTaskAdded, onTaskUnblocked, providers, providersLoaded, apps }) {
+export default function TasksTab({ tasks, agents = [], liveOutputs = {}, onRefresh, onTaskAdded, onTaskUnblocked, providers, providersLoaded, apps }) {
   const [searchParams] = useSearchParams();
   const [userTasksLocal, setUserTasksLocal] = useState([]);
   const [durations, setDurations] = useState(null);
@@ -282,7 +282,7 @@ export default function TasksTab({ tasks, agents = [], onRefresh, onTaskAdded, o
                 </div>
                 <div className="p-2 space-y-1.5">
                   {activeUserTasksLocal.map(task => (
-                    <TaskItem key={task.id} task={task} agent={runningAgentByTaskId.get(task.id)} spawning={isSpawning(task)} selected={isTaskSelected(task, 'user')} onRefresh={onRefresh} onTaskUnblocked={onTaskUnblocked} providers={providers} providersLoaded={providersLoaded} durations={durations} apps={apps} instances={assignableInstances} />
+                    <TaskItem key={task.id} task={task} agent={runningAgentByTaskId.get(task.id)} liveOutput={liveOutputs[runningAgentByTaskId.get(task.id)?.id]} spawning={isSpawning(task)} selected={isTaskSelected(task, 'user')} onRefresh={onRefresh} onTaskUnblocked={onTaskUnblocked} providers={providers} providersLoaded={providersLoaded} durations={durations} apps={apps} instances={assignableInstances} />
                   ))}
                 </div>
               </div>
@@ -372,7 +372,7 @@ export default function TasksTab({ tasks, agents = [], onRefresh, onTaskAdded, o
                 </div>
                 <div className="p-2 space-y-1.5">
                   {activeSystemTasks.map(task => (
-                    <TaskItem key={task.id} task={task} isSystem agent={runningAgentByTaskId.get(task.id)} spawning={isSpawning(task)} selected={isTaskSelected(task, 'internal')} onRefresh={onRefresh} onTaskUnblocked={onTaskUnblocked} providers={providers} providersLoaded={providersLoaded} durations={durations} apps={apps} instances={assignableInstances} />
+                    <TaskItem key={task.id} task={task} isSystem agent={runningAgentByTaskId.get(task.id)} liveOutput={liveOutputs[runningAgentByTaskId.get(task.id)?.id]} spawning={isSpawning(task)} selected={isTaskSelected(task, 'internal')} onRefresh={onRefresh} onTaskUnblocked={onTaskUnblocked} providers={providers} providersLoaded={providersLoaded} durations={durations} apps={apps} instances={assignableInstances} />
                   ))}
                 </div>
               </div>
