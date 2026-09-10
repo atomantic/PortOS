@@ -30,6 +30,7 @@ const getSettingsMock = vi.fn();
 vi.mock('../settings.js', () => ({ getSettings: getSettingsMock }));
 
 const fal = await import('./fal.js');
+const ffmpeg = await import('../../lib/ffmpeg.js');
 const { videoGenEvents } = await import('./events.js');
 const { loadHistory } = await import('./history.js');
 
@@ -229,4 +230,44 @@ describe('videoGen/fal — generateVideo', () => {
     expect(failed).toHaveBeenCalledWith(expect.objectContaining({ generationId: job.jobId, error: expect.stringContaining('model overloaded') }));
     vi.unstubAllGlobals();
   });
+
+  // Regression (#6831): finalizeGeneratedVideo stamps job.status = 'complete'
+  // BEFORE its own faststart/thumbnail/history tail, and runFalVideo has
+  // already released the request slot by then, so a throw from that tail
+  // lands in the catch-all with the job already reading 'complete'. Without
+  // `force: true` the shared finalizer's idempotency guard made that a silent
+  // no-op — no 'failed' event for the media queue, no SSE error frame for the
+  // client — the window videoGen/grok.js's post-exit catch (fa3796650) and
+  // reactor.js's catch-all already force past.
+  it('still emits failed when finalizeGeneratedVideo throws after job.status is already complete', async () => {
+    const requestId = 'req-tail';
+    const statusUrl = `https://queue.fal.run/fal-ai/x/requests/${requestId}/status`;
+    const responseUrl = `https://queue.fal.run/fal-ai/x/requests/${requestId}`;
+    vi.stubGlobal('fetch', vi.fn(async (url) => {
+      if (url === 'https://queue.fal.run/fal-ai/x') return jsonResponse({ request_id: requestId, status_url: statusUrl, response_url: responseUrl });
+      if (url === statusUrl) return jsonResponse({ status: 'COMPLETED' });
+      if (url === responseUrl) return jsonResponse({ video: { url: 'https://cdn.fal.ai/out.mp4' } });
+      if (url === 'https://cdn.fal.ai/out.mp4') {
+        return { ok: true, status: 200, arrayBuffer: async () => Uint8Array.from(Buffer.from('bytes')).buffer };
+      }
+      throw new Error(`unexpected fetch: ${url}`);
+    }));
+    // The first step after the 'complete' stamp rejects — the download has
+    // already landed on disk, so this is purely the post-processing window.
+    ffmpeg.optimizeForStreaming.mockRejectedValueOnce(new Error('faststart remux failed'));
+
+    const failed = vi.fn();
+    videoGenEvents.on('failed', failed);
+    const job = await fal.generateVideo({ apiKey: 'test-key', modelId: 'fal-ai/x', prompt: 'x' });
+    // A client attached for the whole run: the terminal frame it receives is
+    // what the UI keys off, and exactly what the guard used to swallow.
+    const client = { writeHead: vi.fn(), write: vi.fn(), end: vi.fn(), req: { on: vi.fn() } };
+    expect(fal.attachSseClient(job.jobId, client)).toBe(true);
+
+    await vi.waitFor(() => expect(failed).toHaveBeenCalledTimes(1), { timeout: 5000, interval: 20 });
+    expect(failed).toHaveBeenCalledWith({ generationId: job.jobId, error: expect.stringContaining('faststart remux failed') });
+    const frames = client.write.mock.calls.map(([msg]) => JSON.parse(msg.replace(/^data: /, '')));
+    expect(frames.at(-1)).toEqual({ type: 'error', error: expect.stringContaining('faststart remux failed') });
+    vi.unstubAllGlobals();
+  }, 10000);
 });
