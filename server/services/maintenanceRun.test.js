@@ -31,7 +31,7 @@ vi.mock('./quotaBurnStore.js', () => ({ getQuotaBurnConfig: vi.fn(async () => { 
 const { getQuotaBurnConfig } = await import('./quotaBurnStore.js');
 const { invokeQuotaBurnStep } = await import('./quotaBurnInvoke.js');
 const {
-  startMaintenanceRun, stopMaintenanceRun, resumeMaintenanceRun, evaluateMaintenanceRun, getMaintenanceRun, listMaintenanceRuns,
+  updateMaintenanceStep, startMaintenanceRun, stopMaintenanceRun, resumeMaintenanceRun, evaluateMaintenanceRun, getMaintenanceRun, listMaintenanceRuns,
   __onMaintenanceAgentSpawned, __onMaintenanceAgentCompleted, __retryMaintenanceRuns, __resetMaintenanceRunScheduler,
 } = await import('./maintenanceRun.js');
 
@@ -52,6 +52,32 @@ beforeEach(async () => {
 afterAll(cleanup);
 
 describe('manual maintenance run', () => {
+  it('dispatches an edited stage through its own provider family', async () => {
+    const { run } = await start();
+    const { getProviderById } = await import('./providers.js');
+    const { resolveBurnProvider } = await import('./scheduledHandlers/providerPick.js');
+    getProviderById.mockResolvedValueOnce({ id: 'claude', command: 'claude', type: 'cli', enabled: true });
+    resolveBurnProvider.mockResolvedValueOnce({ id: 'claude' });
+    await updateMaintenanceStep(run.id, run.steps[1].id, { providerId: 'claude', model: 'example-model', effort: 'low' });
+    await __onMaintenanceAgentCompleted(agentFor(run, 0));
+    expect(state.invoked.at(-1)).toMatchObject({ family: { id: 'claude' }, step: { overrides: { providerId: 'claude', effort: 'low' } } });
+  });
+
+  it('persists pending stage settings and dispatches them without changing other stages', async () => {
+    const { run } = await start();
+    const settings = { providerId: 'codex', model: 'example-model', effort: null };
+    const updated = await updateMaintenanceStep(run.id, run.steps[1].id, settings);
+    expect(updated.steps[0]).toEqual(run.steps[0]);
+    expect((await getMaintenanceRun(run.id)).steps[1].overrides).toEqual({ ...run.steps[1].overrides, ...settings });
+    await __onMaintenanceAgentCompleted(agentFor(run, 0));
+    expect(state.invoked.at(-1).step.overrides).toMatchObject(settings);
+    await expect(updateMaintenanceStep(run.id, run.steps[0].id, settings)).rejects.toMatchObject({ status: 409 });
+    await expect(updateMaintenanceStep(run.id, run.steps[1].id, settings)).rejects.toMatchObject({ status: 409 });
+    await expect(updateMaintenanceStep(run.id, run.steps[2].id, { ...settings, providerId: 'missing' })).rejects.toMatchObject({ status: 400 });
+    await stopMaintenanceRun(run.id);
+    await expect(updateMaintenanceStep(run.id, run.steps[2].id, settings)).rejects.toMatchObject({ status: 409 });
+  });
+
   it('walks the whole ladder to completion on agent completions and drain probes, never touching the burn plan', async () => {
     const { run, result } = await start();
     expect(result).toMatchObject({ dispatched: true, taskType: 'better-structural-drift' });

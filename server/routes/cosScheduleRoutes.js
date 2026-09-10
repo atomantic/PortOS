@@ -13,7 +13,7 @@ import { EFFORT_LEVELS } from '../lib/providerModels.js';
 import { INTERVAL_TYPES, decodeIntervalType, isCronExpression, isKnownIntervalType } from '../services/taskScheduleConstants.js';
 import { normalizeSuggestedAfter, SUGGESTED_AFTER_MAX } from '../lib/scheduleRunOrder.js';
 import { findCronExpressionError } from '../lib/cronValidation.js';
-import { listMaintenanceRuns, resumeMaintenanceRun, startMaintenanceRun, stopMaintenanceRun } from '../services/maintenanceRun.js';
+import { updateMaintenanceStep, listMaintenanceRuns, resumeMaintenanceRun, startMaintenanceRun, stopMaintenanceRun } from '../services/maintenanceRun.js';
 
 const templateTaskSchema = z.object({
   name: z.string().min(1),
@@ -273,6 +273,13 @@ router.get('/schedule/maintenance-runs', asyncHandler(async (_req, res) => {
 router.post('/schedule/maintenance-runs', asyncHandler(async (req, res) => {
   const body = validateRequest(maintenanceRunStartSchema, req.body || {});
   res.status(201).json(await startMaintenanceRun(body));
+}));
+
+router.patch('/schedule/maintenance-runs/:id/steps/:stepId', asyncHandler(async (req, res) => {
+  const body = validateRequest(maintenanceRunStartSchema.pick({ providerId: true, model: true, effort: true }), req.body || {});
+  const run = await updateMaintenanceStep(req.params.id, req.params.stepId, body);
+  if (!run) throw new ServerError('Maintenance run or stage not found', { status: 404 });
+  res.json({ run });
 }));
 
 router.post('/schedule/maintenance-runs/:id/stop', asyncHandler(async (req, res) => {

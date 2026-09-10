@@ -201,6 +201,27 @@ export function stopMaintenanceRun(id) {
   });
 }
 
+/** Editing shares the dispatch queue: a stale browser cannot change a started step. */
+export function updateMaintenanceStep(id, stepId, { providerId, model, effort = null }) {
+  return perRun(id, async () => {
+    const run = await getMaintenanceRun(id);
+    const step = run?.steps.find(entry => entry.id === stepId);
+    if (!step) return null;
+    if (run.status !== MAINTENANCE_RUN_STATUS.RUNNING || run.completed?.[stepId] || step.startedAt || run.active?.stepId === stepId) {
+      throw new ServerError('Only pending stages in a running maintenance run can be edited', { status: 409, code: 'MAINTENANCE_STEP_STARTED' });
+    }
+    const [{ getProviderById }, { resolveBurnProvider }] = await Promise.all([
+      import('./providers.js'), import('./scheduledHandlers/providerPick.js'),
+    ]);
+    const familyId = familyForProvider(await getProviderById(providerId));
+    const provider = familyId ? await resolveBurnProvider({ job: { providerId }, family: { id: familyId } }) : null;
+    if (!provider) throw new ServerError(`provider "${providerId}" is not an enabled subscription CLI/TUI provider`, { status: 400, code: 'MAINTENANCE_RUN_PROVIDER_UNAVAILABLE' });
+    return patchRun(id, { steps: run.steps.map(entry => entry.id === stepId
+      ? { ...entry, familyId, overrides: { ...entry.overrides, providerId, model, effort } }
+      : entry) });
+  });
+}
+
 export async function resumeMaintenanceRun(id) {
   const resumed = await perRun(id, async () => {
     const run = await getMaintenanceRun(id);
@@ -266,11 +287,12 @@ async function evaluate(id, { ignoreTaskId }) {
       }
       if (!probe.job) return hold(probe.reason);
     }
-    const result = await invokeQuotaBurnStep({ step, family: { id: step.drain ? (run.claimFamilyId || run.familyId) : run.familyId }, catalog, maintenanceRunId: id });
+    const result = await invokeQuotaBurnStep({ step, family: { id: step.familyId || (step.drain ? (run.claimFamilyId || run.familyId) : run.familyId) }, catalog, maintenanceRunId: id });
     if (!result.dispatched) return hold(result.reason, { completed });
     const taskType = step.taskRef.taskType;
     await patchRun(id, {
       completed,
+      steps: run.steps.map(entry => entry.id === step.id ? { ...entry, startedAt: entry.startedAt || new Date().toISOString() } : entry),
       reason: null,
       active: { stepId: step.id, taskType, status: 'queued', requestId: result.awaiting?.requestId ?? null, at: new Date().toISOString() },
     });
