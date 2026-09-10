@@ -139,6 +139,7 @@ export * from './castIntegrityPrompt.js';
 // back-compat — namespace it so the canonical scenePrompt export wins flat.
 export * as storyBible from './storyBible.js';
 export * from './universeBibleCompleteness.js';
+export * from './universeBibleLimits.js';
 export * from './universeMarkdown.js';
 export * from './universePromptRenderers.js';
 export * from './universeVisualStyle.js';
@@ -472,6 +473,7 @@ export * from './postMultiplicationLadder.js';
 export * from './postPowersLadder.js';
 export * from './postProgression.js';
 export * from './postRotation.js';
+export * from './postScoring.js';
 export * from './postStreak.js';
 export * from './activeDays.js';
 export * from './postTopics.js';
@@ -614,6 +616,8 @@ export * from './creativeDirectorVideoCompiler.js';
 export * from './providerTypes.js';
 export * from './notificationTypes.js';
 export * from './videoTimelineFades.js';
+// `tokenize` collides with `bm25.js`'s own tokenizer — namespaced like `runners`.
+export * as voiceEcho from './voiceEcho.js';
 export * from './voiceEngines.js';
 
 export * from './auditQuality.js';
