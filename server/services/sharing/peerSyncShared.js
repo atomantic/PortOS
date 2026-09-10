@@ -36,7 +36,9 @@ export const PEER_SUBSCRIBABLE_KINDS = Object.freeze(['universe', 'series', 'med
  *   3. WITHHOLD — while a row is pending the sender withholds `lastPushedHash`
  *      so the next cycle re-sends instead of short-circuiting as `unchanged`
  *      (`resolvePushWatermarks` in peerSyncPush.js, including #3928's
- *      `lastPushedLegacyHash` for the stable strip case).
+ *      `lastPushedLegacyHash` for the stable strip case). The same sidecar
+ *      rows form the sender's change-hash input (`pushPayloadHash`): a doc
+ *      with no cycle of its own is delivered only by that hash moving.
  *
  * `pendingKey: null` marks a key with its OWN reconciliation cycle — the
  * version-gate handshake re-includes `portosMeta` on every push, and catalog

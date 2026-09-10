@@ -247,13 +247,10 @@ export async function applyIncomingPush(payload) {
   // the merge fns fall back to `{ via:'sync', peerId:null }` and the
   // attribution is lost).
   const source = { via: 'peer-push', peerId: sourceInstanceId };
-  // ENVELOPE_EXTENSIONS pending flags to echo to the sender: each is a bundled
-  // sidecar doc whose merge threw AFTER the record itself merged. None of the
-  // sidecars — the review, the outline, or the #1858 linked track a
-  // musicVideoProjects-only subscriber has no `tracks` cycle for — has an
-  // independent reconciliation path, so the sender withholds lastPushedHash
-  // on the flag and re-sends next cycle; a swallowed failure behind a saved
-  // hash would strand the doc. The record push itself never fails on these.
+  // ENVELOPE_EXTENSIONS pending flags to echo to the sender: a bundled sidecar
+  // doc whose merge threw AFTER the record itself merged is still owed, and
+  // the sender withholds lastPushedHash on the flag until it lands. The record
+  // push itself never fails on these.
   const pending = new Set();
   const markPending = (key) => (err) => {
     console.log(`⚠️ peerSync: ${key} merge failed: ${err.message}`);
@@ -297,7 +294,7 @@ export async function applyIncomingPush(payload) {
     // NOT fail the push (the series/issues already merged) — but unlike the
     // linkedCollection bundle, the review has NO independent reconciliation
     // cycle, so a swallowed failure could never resend once the sender saves
-    // lastPushedHash. Signal `reviewSyncPending` so the sender withholds the
+    // lastPushedHash. Raise the row's pending flag so the sender withholds the
     // hash (mirrors the missing-assets guard) and retries next cycle.
     // Dynamic import keeps the arcPlanner graph off peerSync's load path.
     if (!localEphemeral && record.deleted !== true && isPlainObject(manuscriptReview)) {

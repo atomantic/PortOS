@@ -132,7 +132,7 @@ export async function pushRecordToPeer(sub, options = {}) {
   }
   // LEGACY-STRIPPED SHORT-CIRCUIT (#3928): the last push to this peer landed
   // only after we stripped a top-level key its older `.strict()` schema
-  // rejects (`manuscriptReview` / `reverseOutline` / `linkedTrack`), so
+  // rejects (a sidecar row of ENVELOPE_EXTENSIONS), so
   // `lastPushedHash` was deliberately withheld. Without a second water-mark
   // that withheld hash makes EVERY subsequent cycle re-run the same 400 +
   // stripped-retry pair forever — two HTTP round-trips per 60s sync for a
@@ -163,46 +163,33 @@ export async function pushRecordToPeer(sub, options = {}) {
     });
   };
   let res = await postPayload(payload);
-  // ENVELOPE_EXTENSIONS rows the receiver's `.strict()` schema rejected and
-  // this push retried without. Empty when the first POST was accepted; the
-  // sidecar rows among them are what `resolvePushWatermarks` counts as still
-  // owed to this peer.
-  let stripped = [];
-  // A 400 from the receiver is Zod rejecting our envelope BEFORE its schema-
-  // version gate (the 409 path below) runs. Parse the body ONCE and route on
-  // which part it couldn't accept — two distinct mixed-version cases share it:
-  if (res && res.status === 400) {
-    const rejection = await classifyEnvelopeRejection(res, payload);
-    if (rejection.stripped.length > 0) {
-      // (1) UNKNOWN ENVELOPE KEY — the peer recognizes the record `kind` but its
-      // `.strict()` schema predates a newer top-level key we sent. Strip whichever
-      // key(s) it named and retry so the record/issues still land; the stripped
-      // feature reaches it once it upgrades (the re-push re-includes the key).
-      stripped = rejection.stripped;
-      const legacyPayload = { ...payload };
-      for (const { key } of stripped) delete legacyPayload[key];
-      console.log(
-        `ℹ️ peerSync: ${peer.name || peer.instanceId} rejected newer envelope key(s) ${stripped.map((e) => e.key).join(', ')} — retrying push without them`,
-      );
-      res = await postPayload(legacyPayload);
-    } else if (rejection.unknownKind) {
-      // (2) UNKNOWN RECORD KIND → schema-version block (NOT a bare http-400 retry).
-      // The receiver's `peerSyncPushSchema` discriminated union has no arm for
-      // this `kind` (authors did this; mediaCollection had the same gap when it
-      // landed), so unlike case (1) there is no smuggled key to drop and
-      // retrying changes nothing. Treat it like the 409: persist an empty-gap
-      // `peer-pre-feature` block so the SchemaGapBadge surfaces "peer needs to
-      // update PortOS to sync <kind>" and the edit-push cooldown engages,
-      // instead of letting the sub churn as a bare `http-400` the UI never
-      // explains. The block clears on the next successful push once the peer
-      // upgrades (same recovery as the 409 path).
-      await persistSchemaVersionBlock(sub.id, { reason: 'peer-pre-feature' });
-      console.warn(
-        `⚠️ peerSync: ${peer.name || peer.instanceId} rejected push — its PortOS doesn't recognize the ` +
-        `'${sub.recordKind}' record kind yet. Re-tries pause until they upgrade.`,
-      );
-      return { pushed: false, reason: 'peer-schema-behind', blockedBySchema: true };
-    }
+  // A 400 is Zod rejecting the envelope before the receiver's version gate
+  // (the 409 path below) runs — `classifyEnvelopeRejection` separates the two
+  // mixed-version cases it can mean.
+  const { stripped, unknownKind } = await classifyEnvelopeRejection(res, payload);
+  if (stripped.length > 0) {
+    // (1) UNKNOWN ENVELOPE KEY — retry once without exactly the keys the
+    // receiver named, so the record/issues still land; the stripped feature
+    // reaches it once it upgrades, because the next push re-includes the key.
+    const legacyPayload = { ...payload };
+    for (const { key } of stripped) delete legacyPayload[key];
+    console.log(
+      `ℹ️ peerSync: ${peer.name || peer.instanceId} rejected newer envelope key(s) ${stripped.map((e) => e.key).join(', ')} — retrying push without them`,
+    );
+    res = await postPayload(legacyPayload);
+  } else if (unknownKind) {
+    // (2) UNKNOWN RECORD KIND → schema-version block, NOT a bare http-400:
+    // persist an empty-gap `peer-pre-feature` block so the SchemaGapBadge
+    // surfaces "peer needs to update PortOS to sync <kind>" and the edit-push
+    // cooldown engages, instead of the sub churning as an `http-400` the UI
+    // never explains. It clears on the next successful push once the peer
+    // upgrades (same recovery as the 409 path).
+    await persistSchemaVersionBlock(sub.id, { reason: 'peer-pre-feature' });
+    console.warn(
+      `⚠️ peerSync: ${peer.name || peer.instanceId} rejected push — its PortOS doesn't recognize the ` +
+      `'${sub.recordKind}' record kind yet. Re-tries pause until they upgrade.`,
+    );
+    return { pushed: false, reason: 'peer-schema-behind', blockedBySchema: true };
   }
   // 409 with `code: SCHEMA_VERSION_AHEAD` means the receiver is on an OLDER
   // PortOS and can't parse our newer storage layout. Persist the gap on the
@@ -274,11 +261,10 @@ export async function pushRecordToPeer(sub, options = {}) {
   // next `unchanged` short-circuit and the prose body stranded).
   const missingCount = (Array.isArray(body?.missingAssets) ? body.missingAssets.length : 0)
     + (Array.isArray(body?.missingDraftBodies) ? body.missingDraftBodies.length : 0);
-  // SIDECAR-STRANDED GUARD: `resolvePushWatermarks` folds the receiver's
-  // ENVELOPE_EXTENSIONS pending flags and this push's own legacy strips into
-  // the same decision — a bundled doc the receiver doesn't hold yet withholds
-  // lastPushedHash exactly like the missing-assets case above.
-  const { pushedHash, legacyStrippedHash, trackSyncPending } = resolvePushWatermarks({ hash, missingCount, stripped, body });
+  // SIDECAR-STRANDED GUARD: a bundled doc the receiver doesn't hold yet —
+  // reported pending by it, or stripped above for a legacy peer — withholds
+  // lastPushedHash exactly like the missing-assets case.
+  const { pushedHash, legacyStrippedHash, pending } = resolvePushWatermarks({ hash, missingCount, stripped, body });
   // This push landed (receiver returned 2xx). Stamp the per-record confirmed-
   // delivery water-mark so tombstoneGc won't prune THIS record's tombstone
   // until its delete-push has been confirmed — even if a later push for a
@@ -309,6 +295,7 @@ export async function pushRecordToPeer(sub, options = {}) {
   // track is owed at all (`trackId` absent), OR a `linkedTrack` was actually
   // included in this push.
   const trackOwed = isStr(payload.record?.trackId);
+  const trackSyncPending = pending.has(ENVELOPE_PENDING_KEYS.linkedTrack);
   const trackBundleConfirmed = sub.recordKind === 'musicVideoProject'
     && !trackSyncPending
     && (!trackOwed || Boolean(payload.linkedTrack));
@@ -366,38 +353,38 @@ export async function pushRecordToPeer(sub, options = {}) {
   };
 }
 
+const NO_REJECTION = Object.freeze({ stripped: Object.freeze([]), unknownKind: false });
+
 /**
- * Classify a receiver's 400 against the envelope we sent. A 400 is Zod
- * rejecting the envelope BEFORE the receiver's schema-version gate can run
- * (that gate answers 409), and two mixed-version cases share it:
+ * Classify the receiver's response to the envelope we sent. Only a 400 is
+ * interesting: it is Zod rejecting the envelope BEFORE the receiver's
+ * schema-version gate can run (that gate answers 409), and two mixed-version
+ * cases share it:
  *
  *   `stripped`    — the ENVELOPE_EXTENSIONS rows the receiver named as
  *                   unrecognized keys AND this payload carries. Its `.strict()`
- *                   schema predates them (a pre-version-gate peer has no
- *                   `portosMeta` field, a pre-catalog peer no `catalogBundle`,
- *                   a pre-feature peer none of the sidecar docs), so the
- *                   caller retries once without exactly those keys. Zod lists
- *                   every unrecognized key in one issue, so a single retry
- *                   covers them all — and stripping only the keys it NAMED
- *                   keeps a peer that supports `portosMeta` but not
- *                   `catalogBundle` on its version-gate handshake. Until the
- *                   user upgrades that peer this best-effort landing beats a
- *                   permanently stranded push; the next push round after the
- *                   upgrade naturally re-includes the key.
+ *                   schema predates them. Zod's message is
+ *                   `Unrecognized key(s) in object: '<key>'` — every
+ *                   unrecognized key in ONE issue, so a single retry covers
+ *                   them all — and `mentions` regex-matches each key against
+ *                   path + message. Stripping only the keys it NAMED keeps a
+ *                   peer that supports `portosMeta` but not `catalogBundle` on
+ *                   its version-gate handshake.
  *   `unknownKind` — the receiver faulted on the `kind` discriminator itself:
  *                   its push schema has no arm for this record kind, so there
- *                   is no key to drop and a retry changes nothing; the caller
- *                   persists a `peer-pre-feature` block instead. `kind` is a
+ *                   is no key to drop and a retry changes nothing. `kind` is a
  *                   value WE always send as a valid literal, so the only reason
  *                   a receiver faults on it is that its schema doesn't know
  *                   this kind yet.
  *
- * Anything else — not a VALIDATION_ERROR, or one naming fields we can't
- * strip — is a plain http-400 for the caller to report.
+ * Anything else — no response, a non-400, a 400 that is not a
+ * VALIDATION_ERROR, or one naming fields we can't strip — is NO_REJECTION and
+ * the caller reports the status as it stands.
  */
 async function classifyEnvelopeRejection(res, payload) {
+  if (res?.status !== 400) return NO_REJECTION;
   const errBody = await res.clone().json().catch(() => null);
-  if (errBody?.code !== 'VALIDATION_ERROR') return { stripped: [], unknownKind: false };
+  if (errBody?.code !== 'VALIDATION_ERROR') return NO_REJECTION;
   const details = Array.isArray(errBody.context?.details) ? errBody.context.details : [];
   const mentions = (key) => details.some((d) => new RegExp(key).test(`${d?.path || ''} ${d?.message || ''}`));
   const stripped = ENVELOPE_EXTENSIONS.filter((e) => e.key in payload && mentions(e.key));
@@ -407,40 +394,36 @@ async function classifyEnvelopeRejection(res, payload) {
 }
 
 /**
- * The hash-withholding contract for a push that landed (receiver returned
- * 2xx), stated once for every ENVELOPE_EXTENSIONS row (#6844).
+ * The two hash water-marks for a push that landed (receiver returned 2xx),
+ * decided once for every ENVELOPE_EXTENSIONS row.
  *
  * `pushedHash` becomes `lastPushedHash`, the `unchanged` short-circuit's
- * water-mark, so it is saved ONLY when the receiver now holds everything this
- * push carried: no asset or draft body still to pull (`missingCount`), no
- * sidecar doc the receiver reported as failed (`body[pendingKey]`), and no
- * sidecar doc this push stripped for a legacy peer. Saving it in any of those
- * states would make the next cycle short-circuit and strand the piece that
- * never arrived — the sidecar docs have no independent reconciliation path.
+ * water-mark, so it is saved only once the receiver holds everything this
+ * push carried: no asset or draft body still to pull (`missingCount`) and no
+ * sidecar doc still owed — reported pending by the receiver, or stripped here
+ * for a legacy peer. Saving it earlier would make the next cycle short-circuit
+ * and strand the piece that never arrived.
  *
- * #3928 separates the two reasons a sidecar is pending. A RECEIVER-reported
- * failure is transient — the next cycle must genuinely re-push, so it gets no
- * water-mark at all. A SENDER-side strip is stable — the peer rejects the key
- * again until it upgrades — so `legacyStrippedHash` records the full-payload
- * hash delivered in stripped form and an unchanged record short-circuits as
+ * #3928 separates the two reasons a sidecar is owed. A RECEIVER-reported
+ * failure is transient — the next cycle must genuinely re-push, so nothing is
+ * water-marked. A SENDER-side strip is stable — the peer rejects the key again
+ * until it upgrades — so `legacyStrippedHash` records the full-payload hash
+ * delivered in stripped form and an unchanged record short-circuits as
  * `unchanged-legacy-stripped` instead of looping a 400 + retry pair every
  * cycle. Missing assets/bodies stay un-water-marked either way: the receiver
  * is still pulling and needs a fresh manifest each cycle.
  *
- * A stripped row with `pendingKey: null` (`portosMeta`, `catalogBundle`) is
- * reconciled by its own cycle, so it never counts as pending here.
+ * `pending` is the set of receiver flags still owed, for the one consumer that
+ * asks about a specific row (#1922's bundled-track GC floor).
  */
 function resolvePushWatermarks({ hash, missingCount, stripped, body }) {
-  const strippedPending = new Set(stripped.map((e) => e.pendingKey).filter(Boolean));
-  const receiverReportedPending = ENVELOPE_EXTENSIONS.some((e) => e.pendingKey && body?.[e.pendingKey] === true);
-  const anyPending = strippedPending.size > 0 || receiverReportedPending;
-  const trackPendingKey = ENVELOPE_PENDING_KEYS.linkedTrack;
+  const strippedPending = stripped.map((e) => e.pendingKey).filter(Boolean);
+  const receiverPending = Object.values(ENVELOPE_PENDING_KEYS).filter((k) => body?.[k] === true);
+  const settled = missingCount === 0 && receiverPending.length === 0;
   return {
-    pushedHash: (missingCount > 0 || anyPending) ? null : hash,
-    legacyStrippedHash: (strippedPending.size > 0 && missingCount === 0 && !receiverReportedPending) ? hash : null,
-    // #1922's bundled-track GC floor still needs the linked track's OWN state
-    // (see `trackBundleConfirmed` at the call site).
-    trackSyncPending: strippedPending.has(trackPendingKey) || body?.[trackPendingKey] === true,
+    pushedHash: settled && strippedPending.length === 0 ? hash : null,
+    legacyStrippedHash: settled && strippedPending.length > 0 ? hash : null,
+    pending: new Set([...strippedPending, ...receiverPending]),
   };
 }
 
@@ -766,21 +749,27 @@ async function buildCatalogBundleForRef(refKind, refId) {
 
 /**
  * Hash the FULL logical payload — record + bundled issues + linked collection
- * + sidecar docs + asset/body manifests — not just the record, so an
+ * + every sidecar doc + asset/body manifests — not just the record, so an
  * issue-only edit, an asset-only re-render, a collection-only item add, or a
  * new image landing under the same series still propagates instead of
  * collapsing to `unchanged` because the parent record didn't move.
- * `sourceInstanceId` and `portosMeta` are envelope fields, not content, and
- * hashing them would force a re-push every time we bumped instance metadata.
+ *
+ * The sidecar keys come from ENVELOPE_EXTENSIONS: a doc with no reconciliation
+ * cycle of its own (`pendingKey` set) is delivered ONLY by this hash moving,
+ * so a row added there rides the hash without a second listing. The
+ * self-reconciling rows stay out — `portosMeta` is envelope metadata, and
+ * hashing it would force a re-push every time instance metadata moved;
+ * catalog sync reconciles `catalogBundle` — as does `sourceInstanceId`. The
+ * keys are sorted so the object's key order, which `JSON.stringify` feeds the
+ * hash, never depends on table order.
  */
 function pushPayloadHash(payload) {
+  const sidecarKeys = Object.keys(ENVELOPE_PENDING_KEYS).sort();
   return simplePayloadHash({
     record: payload.record,
     issues: payload.issues ?? null,
     linkedCollection: payload.linkedCollection ?? null,
-    linkedTrack: payload.linkedTrack ?? null,
-    manuscriptReview: payload.manuscriptReview ?? null,
-    reverseOutline: payload.reverseOutline ?? null,
+    ...Object.fromEntries(sidecarKeys.map((k) => [k, payload[k] ?? null])),
     assetManifest: payload.assetManifest ?? [],
     draftBodyManifest: payload.draftBodyManifest ?? [],
   });
