@@ -93,3 +93,30 @@ export function summarizeAppQuality(records = [], now = Date.now()) {
     categories,
   };
 }
+
+export const appQualityHistoryQuerySchema = z.object({ days: z.enum(['30', '90', '365']).default('90').transform(Number) });
+
+/** Daily UTC snapshots of evidence available then; never backfill past scores. */
+export function buildAppQualityHistory(records, days, now = Date.now()) {
+  const dayMs = 86400000;
+  const today = Math.floor(now / dayMs) * dayMs;
+  const sorted = records.filter(r => Number.isFinite(Date.parse(r.assessedAt)))
+    .sort((a, b) => Date.parse(a.assessedAt) - Date.parse(b.assessedAt));
+  const latest = new Map();
+  let cursor = 0;
+  const points = [];
+  for (let day = today - (days - 1) * dayMs; day <= today; day += dayMs) {
+    const asOf = Math.min(day + dayMs - 1, now);
+    while (cursor < sorted.length && Date.parse(sorted[cursor].assessedAt) <= asOf) {
+      const record = sorted[cursor++];
+      latest.set(record.category, record);
+    }
+    const summary = summarizeAppQuality([...latest.values()], asOf);
+    points.push({ date: new Date(day).toISOString().slice(0, 10), score: summary.score,
+      ratedCategories: summary.ratedCategories,
+      categories: Object.fromEntries(summary.categories.map(c => [c.id, {
+        score: c.stale ? null : c.score, coverage: c.coverage, confidence: c.confidence ?? null,
+      }])) });
+  }
+  return { days, totalCategories: Object.keys(AUDIT_DEFINITIONS).length, points };
+}

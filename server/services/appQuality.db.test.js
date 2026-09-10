@@ -2,14 +2,14 @@
 import { afterAll, describe, expect, it } from 'vitest';
 import { checkHealth, ensureSchema, query, close } from '../lib/db.js';
 import { requireDbOrSkip } from '../lib/dbTestGate.js';
-import { recordAuditQuality, enrichAppsWithQuality } from './appQuality.js';
+import { recordAuditQuality, enrichAppsWithQuality, getAppQualityHistory } from './appQuality.js';
 
 const health = await checkHealth().catch(error => ({ connected: false, error: error.message }));
 const runDb = requireDbOrSkip('appQuality', health.connected, health.error);
 const appId = `test-quality-${process.pid}-${Date.now()}`;
 
 afterAll(async () => {
-  if (runDb) await query('DELETE FROM app_quality_assessments WHERE app_id = $1', [appId]);
+  if (runDb) await query('DELETE FROM app_quality_measurements WHERE app_id = $1', [appId]);
   await close();
 });
 
@@ -32,6 +32,10 @@ describe.skipIf(!runDb)('app quality persistence', () => {
     await write(0, 99, false); // failed run cannot overwrite measured evidence
     const [app, other] = await enrichAppsWithQuality([{ id: appId }, { id: `${appId}-other` }]);
     expect(app.quality).toMatchObject({ score: 65, ratedCategories: 1 });
+    const history = await getAppQualityHistory(appId, 30);
+    expect(history.points.at(-1)).toMatchObject({ score: 65, ratedCategories: 1 });
+    const retained = await query('SELECT report FROM app_quality_measurements WHERE app_id = $1 ORDER BY assessed_at', [appId]);
+    expect(retained.rows.map(row => row.report.score)).toEqual([30, 65]);
     expect(other.quality.score).toBeNull();
     expect(app.quality.categories.find(category => category.id === 'better-complexity')).toMatchObject({ agentId: 'agent--1000', score: 65 });
   });

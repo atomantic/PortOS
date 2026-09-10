@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { recordAuditQuality, enrichAppsWithQuality } from './appQuality.js';
 import { AUDIT_DEFINITIONS } from '../lib/auditCatalog.js';
-import { AUDIT_DISCOVERY, auditQualityInstructions, parseAuditQualityReport, summarizeAppQuality, AUDIT_FRESHNESS_MS } from '../lib/auditQuality.js';
+import { AUDIT_DISCOVERY, auditQualityInstructions, parseAuditQualityReport, summarizeAppQuality, AUDIT_FRESHNESS_MS, buildAppQualityHistory } from '../lib/auditQuality.js';
 
 const report = (overrides = {}) => ({ version: 1, category: 'better-complexity', score: 35, worstSeverity: 8,
   coverage: 'broad', confidence: 'high', summary: 'The checkout has a major branching hotspot in the job dispatcher.', scannedFiles: 100, totalFiles: 100, ...overrides });
@@ -64,4 +64,19 @@ describe('scheduled audit measurement workflow', () => {
     expect(app.quality).toMatchObject({ unavailable: true, score: null });
     log.mockRestore();
   });
+});
+
+it('retains historical scores without hindsight, expires old evidence and exposes changed coverage', () => {
+  const now = Date.parse('2026-09-10T12:00:00Z');
+  const rows = [
+    { category: 'better-complexity', assessedAt: '2026-08-01T12:00:00Z', report: report({ score: 20 }) },
+    { category: 'better-complexity', assessedAt: '2026-09-09T12:00:00Z', report: report({ score: 70 }) },
+    { category: 'security', assessedAt: '2026-09-10T10:00:00Z', report: report({ category: 'security', score: 90 }) },
+  ];
+  const { points } = buildAppQualityHistory(rows, 90, now);
+  expect(points.find(p => p.date === '2026-07-31').score).toBeNull();
+  expect(points.find(p => p.date === '2026-08-01')).toMatchObject({ score: 20, ratedCategories: 1 });
+  expect(points.find(p => p.date === '2026-09-01').score).toBeNull();
+  expect(points.find(p => p.date === '2026-09-09')).toMatchObject({ score: 70, ratedCategories: 1 });
+  expect(points.at(-1)).toMatchObject({ score: 80, ratedCategories: 2 });
 });

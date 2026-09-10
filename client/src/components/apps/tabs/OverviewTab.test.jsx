@@ -3,6 +3,8 @@ import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router';
 
+vi.mock('../../../services/apiApps', () => ({ getAppQualityHistory: vi.fn().mockResolvedValue({ points: [] }) }));
+
 vi.mock('../../../services/api', () => ({
   PORTOS_APP_ID: 'portos-default',
   getAppSpriteBindings: vi.fn(() => Promise.resolve({ bindings: [] })),

@@ -1,9 +1,9 @@
-vi.mock('../../services/appQuality.js', () => ({ enrichAppsWithQuality: vi.fn(async apps => apps.map(app => ({ ...app, quality: { score: 75 } }))) }));
+vi.mock('../../services/appQuality.js', () => ({ getAppQualityHistory: vi.fn(async () => ({ points: [], days: 90 })), enrichAppsWithQuality: vi.fn(async apps => apps.map(app => ({ ...app, quality: { score: 75 } }))) }));
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import express from 'express';
 import { request } from '../../lib/testHelper.js';
 import crudRoutes from './crud.js';
-import { enrichAppsWithQuality } from '../../services/appQuality.js';
+import { enrichAppsWithQuality, getAppQualityHistory } from '../../services/appQuality.js';
 
 // Mock the services this router (and its port-config service) touch.
 vi.mock('../../services/apps.js', () => ({
@@ -88,6 +88,10 @@ describe('Apps CRUD Routes', () => {
       appsService.getAppById.mockResolvedValue({ id: 'portos-default', name: 'PortOS', type: 'ios-native' });
       const detail = await request(app).get('/api/apps/portos-default?includeQuality=true');
       expect(detail.body.quality).toEqual({ score: 75 });
+      const history = await request(app).get('/api/apps/portos-default/quality-history?days=90');
+      expect(history.status).toBe(200);
+      expect(getAppQualityHistory).toHaveBeenCalledWith('portos-default', 90);
+      expect((await request(app).get('/api/apps/portos-default/quality-history?days=9999')).status).toBe(400);
     });
 
     it('should handle apps with no PM2 processes', async () => {

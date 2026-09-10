@@ -52,7 +52,7 @@ markers and malformed JSON. Missing/invalid output never invents a score or
 replaces a previous valid measurement; the prior measurement keeps its original
 date and expires normally. Assessment collection does not relax commit/PR gates.
 The run's recorded start time orders measurements so delayed recovery cannot
-replace newer evidence. PostgreSQL stores the latest report per app/category,
+replace newer evidence. PostgreSQL retains each run measurement and projects the latest per app/category,
 locally and within the ordinary database backup; no old runs are guessed into
 scores and no extra audit batch is enabled automatically.
 
@@ -73,3 +73,21 @@ reliably from a source audit and are not fabricated into this codebase score.
 A future distinct category must register both its scheduled prompt and a
 repository discovery strategy; the catalog parity test prevents an auditor
 without a search strategy.
+
+## Quality history
+
+Each app Overview includes a daily UTC chart with 30-day, 90-day and one-year
+ranges and an overall/category selector. Both selections are shareable URL
+parameters. The expandable history table provides dates, values and coverage
+without relying on color or hover. Refresh history reloads measurements.
+
+Daily snapshots use the latest assessment available on that date, carrying it
+forward for at most 30 days. Missing or expired evidence creates a gap. The
+current day ends at the request time. Category charts include provisional
+partial/low-confidence scores; the overall chart applies the same eligibility
+rules as today's score. Coverage is shown with each value because adding or
+losing a category can change the mean without same-category improvement.
+History begins with newly reported assessments; no scores are invented for old
+runs. The local detail endpoint `/api/apps/:id/quality-history?days=90` reads only
+that app's measurements and bounds results to the last measurement per UTC day
+and category, including a 30-day lookback to seed the selected range.

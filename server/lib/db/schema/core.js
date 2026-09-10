@@ -3,14 +3,15 @@
 // zero behavior change; every statement is idempotent and runs on every boot.
 // Parity-locked against server/scripts/init-db.sql by db.catalogDdlParity.test.js.
 export const coreDdl = [
-    `CREATE TABLE IF NOT EXISTS app_quality_assessments (
+    `CREATE TABLE IF NOT EXISTS app_quality_measurements (
       app_id TEXT NOT NULL,
       category TEXT NOT NULL,
       agent_id TEXT NOT NULL,
       assessed_at TIMESTAMPTZ NOT NULL,
       report JSONB NOT NULL,
-      PRIMARY KEY (app_id, category)
+      PRIMARY KEY (app_id, category, agent_id)
     )`,
+    `CREATE INDEX IF NOT EXISTS idx_app_quality_history ON app_quality_measurements (app_id, assessed_at DESC)`,
     `ALTER TABLE memories ADD COLUMN IF NOT EXISTS sync_sequence BIGSERIAL`,
     `ALTER TABLE memories ADD COLUMN IF NOT EXISTS origin_instance_id VARCHAR(36)`,
     `CREATE INDEX IF NOT EXISTS idx_memories_origin_instance ON memories (origin_instance_id)`,

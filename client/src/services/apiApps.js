@@ -4,6 +4,7 @@ import { request, API_BASE } from './apiCore.js';
 // Apps
 export const getApps = (options) => request('/apps?includeQuality=true', options);
 export const getApp = (id, options) => request(`/apps/${id}?includeQuality=true`, options);
+export const getAppQualityHistory = (id, days, options) => request(`/apps/${id}/quality-history?days=${days}`, { silent: true, ...options });
 // Managed checkout topology: returns sanitized local/fork/upstream revision
 // state without exposing machine-local repo paths.
 export const getAppRepositorySources = (id, options = {}) =>

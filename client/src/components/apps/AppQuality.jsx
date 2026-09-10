@@ -1,3 +1,4 @@
+import AppQualityHistory from './AppQualityHistory';
 import { Link } from 'react-router';
 import { formatDateShort } from '../../utils/formatters';
 
@@ -19,6 +20,7 @@ export default function AppQuality({ app, detail = false }) {
         {' '}{quality?.ratedCategories ?? 0}/{quality?.totalCategories ?? 0} categories contribute. Missing, partial, low-confidence and stale assessments are excluded, not counted as perfect.
       </p>
       <Link to={`/apps/${app.id}/tasks`} className="inline-block text-sm text-port-accent hover:underline">Configure or run scheduled audits</Link>
+      <AppQualityHistory appId={app.id} categories={quality?.categories} />
       {!!quality?.categories?.length && (
         <details>
           <summary className="cursor-pointer text-sm text-port-accent">Category breakdown</summary>

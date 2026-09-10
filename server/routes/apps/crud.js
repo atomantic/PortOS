@@ -1,5 +1,5 @@
-import { appQualityQuerySchema } from '../../lib/auditQuality.js';
-import { enrichAppsWithQuality } from '../../services/appQuality.js';
+import { appQualityQuerySchema, appQualityHistoryQuerySchema } from '../../lib/auditQuality.js';
+import { enrichAppsWithQuality, getAppQualityHistory } from '../../services/appQuality.js';
 /**
  * App CRUD + status enrichment + archive lifecycle.
  *
@@ -38,6 +38,11 @@ router.get('/', asyncHandler(async (req, res) => {
   // The bare list is the frozen peer-probe contract. Local UI opts into
   // assessment prose explicitly so it never rides automatic federation probes.
   res.json(includeQuality === 'true' ? await enrichAppsWithQuality(apps) : apps);
+}));
+
+router.get('/:id/quality-history', loadApp, asyncHandler(async (req, res) => {
+  const { days } = validateRequest(appQualityHistoryQuerySchema, req.query);
+  res.json(await getAppQualityHistory(req.loadedApp.id, days));
 }));
 
 // GET /api/apps/:id - Get single app

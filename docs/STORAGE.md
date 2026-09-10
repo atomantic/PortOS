@@ -382,8 +382,8 @@ select a contract. No new store, seed or data-rewriting migration is required.
 
 ### Managed app quality assessments
 
-`app_quality_assessments` is `db-primary`: one latest assessment per managed
-app/category, queried together for the dashboard and management pages. The app
+`app_quality_measurements` is `db-primary`: immutable assessments per managed
+app/category/run, with the latest per category queried together for the dashboard and management pages. The app
 registry is still file-backed, so app ids are opaque scoped keys; reads select
 only currently registered apps. PostgreSQL stores the bounded JSON report and
 agent provenance; no asset bytes or new JSON store. Additive `CREATE TABLE IF
