@@ -1091,10 +1091,11 @@ changes, and by how many callers depend on it:
 git log --since='90 days ago' --name-only --format='' | sort | uniq -c | sort -rn | head -40
 \`\`\`
 
-A high-complexity function in a file nothing has touched in a year is stable by
-revealed preference — record that you found it and move on. A high-complexity
-function inside the top churn files is where defects are actively being
-introduced.
+Low churn is a ranking factor, never an automatic exclusion. A severe complexity
+hotspot can still dominate risk in stable code. Compare the highest measured
+counts across the repository before selecting a fix; explain with evidence if
+you pass over the raw worst offender. Recent churn and caller reach increase
+priority when the measured complexity and impact are otherwise similar.
 
 ## Reject these — high branching is correct here
 

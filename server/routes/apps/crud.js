@@ -1,3 +1,5 @@
+import { appQualityQuerySchema } from '../../lib/auditQuality.js';
+import { enrichAppsWithQuality } from '../../services/appQuality.js';
 /**
  * App CRUD + status enrichment + archive lifecycle.
  *
@@ -31,13 +33,17 @@ const router = Router();
 // GET /api/apps - List all apps. The route fetches the raw records; the
 // appListEnrichment service owns the PM2 status/port/process enrichment.
 router.get('/', asyncHandler(async (req, res) => {
-  const apps = await appsService.getAllApps();
-  res.json(await enrichAppsWithPm2Status(apps));
+  const { includeQuality } = validateRequest(appQualityQuerySchema, req.query);
+  const apps = await enrichAppsWithPm2Status(await appsService.getAllApps());
+  // The bare list is the frozen peer-probe contract. Local UI opts into
+  // assessment prose explicitly so it never rides automatic federation probes.
+  res.json(includeQuality === 'true' ? await enrichAppsWithQuality(apps) : apps);
 }));
 
 // GET /api/apps/:id - Get single app
 router.get('/:id', loadApp, asyncHandler(async (req, res) => {
   const app = req.loadedApp;
+  const { includeQuality } = validateRequest(appQualityQuerySchema, req.query);
 
   // Non-PM2 apps skip PM2 status
   let statuses = {};
@@ -88,7 +94,8 @@ router.get('/:id', loadApp, asyncHandler(async (req, res) => {
     hasSubmodules = gitmodules;
   }
 
-  res.json({ ...app, uiPort, devUiPort, apiPort, overallStatus, degraded, pm2Status: statuses, appVersion, hasSubmodules, hasDeployScript: hasDeployScript(app), xcodeScripts: checkScripts(app) });
+  const [enrichedApp] = includeQuality === 'true' ? await enrichAppsWithQuality([app]) : [app];
+  res.json({ ...enrichedApp, uiPort, devUiPort, apiPort, overallStatus, degraded, pm2Status: statuses, appVersion, hasSubmodules, hasDeployScript: hasDeployScript(app), xcodeScripts: checkScripts(app) });
 }));
 
 // POST /api/apps - Create new app

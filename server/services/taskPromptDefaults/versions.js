@@ -62,7 +62,7 @@ export const PROMPT_VERSIONS = {
   // (DO_BETTER_LENS_COVERAGE in lib/auditCatalog.js), so an improvement here is
   // a candidate to push upstream rather than to diverge silently. Net-new types
   // (no retired-hash history needed). Mode injected at dispatch.
-  'better-complexity': 1, // v1: counted branching per function, ranked by churn/fan-in, with a named transformation and a behavior-preservation contract.
+  'better-complexity': 2, // v2: compare repository-wide worst offenders; low churn is not an exclusion. v1: counted branching per function, ranked by churn/fan-in, with a named transformation and a behavior-preservation contract.
   'better-cognitive-load': 1, // v1: reader cost (mixed abstraction, flag arguments, lying names, action at a distance) — explicitly NOT the size/nesting thresholds its siblings own.
   'better-structural-drift': 1, // v1: derived artifacts as a second source of truth, position-keyed records, hand-synced registries, incidental-layout coupling — carved out of code-quality v3.
   'better-runtime-safety': 1, // v1: latent defects (floating promises, unowned rejections, unguarded access, sentinel confusion, races, leaks) requiring a concrete failure scenario.

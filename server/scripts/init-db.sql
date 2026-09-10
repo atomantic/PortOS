@@ -1944,3 +1944,13 @@ DROP TRIGGER IF EXISTS trg_tribe_touchpoints_audit ON tribe_touchpoints;
 CREATE TRIGGER trg_tribe_touchpoints_audit AFTER UPDATE OR DELETE ON tribe_touchpoints FOR EACH ROW EXECUTE FUNCTION record_audit_log();
 DROP TRIGGER IF EXISTS trg_tribe_identities_audit ON tribe_identities;
 CREATE TRIGGER trg_tribe_identities_audit AFTER UPDATE OR DELETE ON tribe_identities FOR EACH ROW EXECUTE FUNCTION record_audit_log();
+
+-- Latest machine-local scheduled audit assessment per managed app/category.
+CREATE TABLE IF NOT EXISTS app_quality_assessments (
+      app_id TEXT NOT NULL,
+      category TEXT NOT NULL,
+      agent_id TEXT NOT NULL,
+      assessed_at TIMESTAMPTZ NOT NULL,
+      report JSONB NOT NULL,
+      PRIMARY KEY (app_id, category)
+    );

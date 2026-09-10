@@ -1,3 +1,4 @@
+import { isAuditTaskType } from '../lib/auditCatalog.js';
 import { isPrivateSecurityTask } from '../lib/privateSecurityPolicy.js';
 /**
  * Agent Finalization
@@ -700,6 +701,7 @@ export function dispatchTaskOutputHookOnce({
     }
 
     const hookDispatch = dispatchTaskOutputHook({
+      assessedAt: agent?.startedAt,
       agentId,
       task,
       success,
@@ -1373,11 +1375,19 @@ async function recoverBareSentinelPayload(contents, taskType) {
  * task types (no hook). The hook receives `{ appId, success, payload, ... }` and
  * loads its own app/config — finalizeAgent stays domain-agnostic.
  */
-async function dispatchTaskOutputHook({ agentId, task, success, workspacePath, readPayload = true, recovery = false }) {
+async function dispatchTaskOutputHook({ agentId, task, success, workspacePath, assessedAt, readPayload = true, recovery = false }) {
   // Shared resolver with evaluateSuccessCriteria's gate — "runs a hook" and "gets
   // the programmatic-I/O criterion" must stay the same question (#2727).
   const taskType = resolveTaskHookType(task);
   if (!taskType) return { ran: false };
+  if (isAuditTaskType(taskType)) {
+    const { recordAuditQuality } = await import('./appQuality.js');
+    await recordAuditQuality({ task, taskType, agentId, success, assessedAt,
+      workspacePath: readPayload ? (workspacePath || task?.metadata?.repoPath) : null })
+      .catch(err => emitLog('warn', `⚠️ Audit quality was not saved for ${agentId}: ${err.message}`, { agentId }));
+    // Assessment telemetry never waives commit/PR success criteria for fix mode.
+    return { ran: false };
+  }
   const { getTaskOutputHook } = await import('./taskTypeHooks.js');
   const hook = await getTaskOutputHook(taskType);
   if (!hook) return { ran: false };

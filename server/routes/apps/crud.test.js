@@ -1,7 +1,9 @@
+vi.mock('../../services/appQuality.js', () => ({ enrichAppsWithQuality: vi.fn(async apps => apps.map(app => ({ ...app, quality: { score: 75 } }))) }));
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import express from 'express';
 import { request } from '../../lib/testHelper.js';
 import crudRoutes from './crud.js';
+import { enrichAppsWithQuality } from '../../services/appQuality.js';
 
 // Mock the services this router (and its port-config service) touch.
 vi.mock('../../services/apps.js', () => ({
@@ -72,6 +74,20 @@ describe('Apps CRUD Routes', () => {
       expect(response.status).toBe(200);
       expect(response.body).toHaveLength(1);
       expect(response.body[0].overallStatus).toBe('online');
+    });
+
+    it('keeps quality reports off peer probes and returns them only for explicit local UI reads', async () => {
+      appsService.getAllApps.mockResolvedValue([{ id: 'portos-default', name: 'PortOS', type: 'ios-native', repoPath: '/tmp/test' }]);
+      const peer = await request(app).get('/api/apps');
+      expect(peer.body[0].quality).toBeUndefined();
+      expect(enrichAppsWithQuality).not.toHaveBeenCalled();
+      const local = await request(app).get('/api/apps?includeQuality=true');
+      expect(local.body[0].quality).toEqual({ score: 75 });
+      const invalid = await request(app).get('/api/apps?includeQuality=anything');
+      expect(invalid.status).toBe(400);
+      appsService.getAppById.mockResolvedValue({ id: 'portos-default', name: 'PortOS', type: 'ios-native' });
+      const detail = await request(app).get('/api/apps/portos-default?includeQuality=true');
+      expect(detail.body.quality).toEqual({ score: 75 });
     });
 
     it('should handle apps with no PM2 processes', async () => {

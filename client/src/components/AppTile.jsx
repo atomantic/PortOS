@@ -1,3 +1,4 @@
+import AppQuality from './apps/AppQuality';
 import { useState, memo } from 'react';
 import { Link } from 'react-router';
 import StatusBadge from './StatusBadge';
@@ -69,6 +70,7 @@ const AppTile = memo(function AppTile({ app, onUpdate }) {
         <StatusBadge status={app.overallStatus} size="sm" />
       </div>
 
+      <div className="mb-2"><AppQuality app={app} /></div>
       {/* Ports */}
       <div className="mb-2 flex flex-wrap gap-1">
         {app.uiPort && (
