@@ -5,6 +5,7 @@ import LibraryPane from '../components/writers-room/LibraryPane';
 import WorkEditor from '../components/writers-room/WorkEditor';
 import ExercisePanel from '../components/writers-room/ExercisePanel';
 import CatalogCastPanel from '../components/CatalogCastPanel';
+import EmptyState from '../components/EmptyState';
 import {
   listWritersRoomFolders,
   listWritersRoomWorks,
@@ -21,6 +22,7 @@ export default function WritersRoom() {
   const [folders, setFolders] = useState([]);
   const [works, setWorks] = useState([]);
   const [activeWork, setActiveWork] = useState(null);
+  const [creatingWork, setCreatingWork] = useState(null);
   const [loadingWork, setLoadingWork] = useState(false);
   const [showExercise, setShowExercise] = useState(false);
   const [editorDirty, setEditorDirty] = useState(false);
@@ -179,6 +181,8 @@ export default function WritersRoom() {
               onSelectWork={selectWork}
               onRefresh={refreshLibrary}
               onCollapse={toggleLibrary}
+              creatingWork={creatingWork}
+              onCreatingWorkChange={setCreatingWork}
             />
           </aside>
         )}
@@ -186,12 +190,14 @@ export default function WritersRoom() {
         <main className="min-h-0 flex flex-col flex-1">
           {loadingWork && <div className="p-6 text-sm text-gray-500">Loading work…</div>}
           {!loadingWork && !activeWork && (
-            <div className="flex-1 flex items-center justify-center text-center p-8">
-              <div className="max-w-md space-y-2 text-gray-400">
-                <NotebookPen className="w-10 h-10 mx-auto text-gray-600" />
-                <h2 className="text-lg text-white">No work selected</h2>
-                <p className="text-sm">Pick a work from the library to start editing, or create a new one. Use the Write for 10 panel for timed sprints.</p>
-              </div>
+            <div className="flex-1 flex items-center justify-center p-8">
+              <EmptyState
+                icon={NotebookPen}
+                title="No work selected"
+                message="Create a work or pick one from the library to start writing."
+                actionLabel="New work"
+                onAction={() => setCreatingWork('unfiled')}
+              />
             </div>
           )}
           {!loadingWork && activeWork && (
