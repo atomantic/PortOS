@@ -194,6 +194,9 @@ function recordDaemon(env, identity) {
 /** The daemon we knew about is gone; whatever comes up next has to be re-checked. */
 const forgetDaemon = () => recordDaemon(null, null)
 
+/** A copy of what PortOS has in front of Ollama, or `{}` when it has recorded none. */
+const appliedEnvCopy = () => (appliedEnv ? { ...appliedEnv } : {})
+
 /**
  * The launch env an outstanding tuning displaced, or `fallback` when no tuning
  * is outstanding.
@@ -695,8 +698,7 @@ async function ensureContextWindow(contextLength, selectedModel = null) {
   // When a tuning is active mid-sweep, preserving its knobs keeps the sweep's
   // measurements comparable rather than demoting the daemon to untuned
   // mid-sweep, while allowing the context window to expand for the harness.
-  const baseEnv = appliedEnv ? { ...appliedEnv } : {}
-  const env = withOllamaContextEnv(baseEnv, target)
+  const env = withOllamaContextEnv(appliedEnvCopy(), target)
 
   if (!(await checkOllamaAvailable(true))) {
     return { ...(await restartWithEnv(env, { tuning: false })), contextLength: target }
@@ -854,7 +856,7 @@ async function restartWithEnv(env, { tuning = true } = {}) {
   // An unknown daemon (`!daemon.known`) displaces `{}` — PortOS knows of no env
   // to put back — never a stale record of some earlier daemon's.
   const before = activeBaselineEnv(null)
-  const captured = activeBaselineEnv(daemon.known && appliedEnv ? { ...appliedEnv } : {})
+  const captured = activeBaselineEnv(daemon.known ? appliedEnvCopy() : {})
 
   const result = await applyLaunchEnv(env, entries)
   // Asserted AFTER the restart, never before: `startServer`/`stopServer` drop
