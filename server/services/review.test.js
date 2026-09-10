@@ -1,14 +1,13 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { readFile, readdir } from 'fs/promises';
-import { atomicWrite } from '../lib/fileUtils.js';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { readFile, readdir, stat } from 'fs/promises';
+import { atomicWrite, readJSONFile } from '../lib/fileUtils.js';
 
 vi.mock('fs/promises', () => ({
   readFile: vi.fn(),
-  readdir: vi.fn()
+  readdir: vi.fn(),
+  stat: vi.fn()
 }));
 
-const emit = vi.fn();
-const reviewEvents = { emit };
 const registeredHandlers = {};
 const cosEvents = {
   on: vi.fn((event, handler) => { registeredHandlers[event] = handler; })
@@ -26,9 +25,9 @@ tryReadFile: vi.fn().mockResolvedValue(null),
     reports: '/test/data/cos/reports',
     root: '/test'
   },
-  readJSONFile: vi.fn(async (_path, fallback) => {
+  readJSONFile: vi.fn(async (path, fallback) => {
     try {
-      return JSON.parse(await readFile());
+      return JSON.parse(await readFile(path));
     } catch {
       return fallback;
     }
@@ -43,12 +42,26 @@ const {
   dismissItem,
   updateItem,
   deleteItem,
-  getBriefing
+  getBriefing,
+  bulkUpdateStatus,
+  reviewEvents
 } = await import('./review.js');
+
+// `stat()` backs review.js's module-level items.json cache, which persists
+// across every test in this file (it is process/module state, not a vitest
+// mock). The default implementation below returns a fresh, never-repeating
+// value on every call, so — absent a test explicitly overriding it — every
+// `loadItems()` call in this file is a guaranteed cache MISS and re-reads via
+// `readFile`, exactly matching this suite's pre-caching expectations. Tests
+// that exercise the cache itself override `stat` locally to hold a value
+// steady (a hit) or change it (a miss/invalidation).
+let statCounter = 0;
+const freshStat = () => Promise.resolve({ mtimeMs: ++statCounter, size: statCounter });
 
 describe('review service', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    stat.mockImplementation(freshStat);
   });
 
   describe('createItem', () => {
@@ -302,6 +315,398 @@ describe('review service', () => {
       await new Promise(r => setImmediate(r));
 
       expect(atomicWrite).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('items.json read cache', () => {
+    it('parses the file once across two consecutive getPendingCounts calls with no write between', async () => {
+      stat.mockResolvedValue({ mtimeMs: 811001, size: 1 });
+      readFile.mockResolvedValueOnce(JSON.stringify([{ id: 'a', type: 'todo', status: 'pending' }]));
+
+      const first = await getPendingCounts();
+      const second = await getPendingCounts();
+
+      expect(first.total).toBe(1);
+      expect(second.total).toBe(1);
+      expect(readFile).toHaveBeenCalledTimes(1);
+    });
+
+    it('detects an external rewrite (changed mtime/size) and re-parses', async () => {
+      stat.mockResolvedValueOnce({ mtimeMs: 812001, size: 100 });
+      readFile.mockResolvedValueOnce(JSON.stringify([{ id: 'a', type: 'todo', status: 'pending' }]));
+      const first = await getPendingCounts();
+      expect(first.total).toBe(1);
+
+      // A different process rewrote items.json — stat now reports a new identity.
+      stat.mockResolvedValueOnce({ mtimeMs: 812002, size: 140 });
+      readFile.mockResolvedValueOnce(JSON.stringify([
+        { id: 'a', type: 'todo', status: 'pending' },
+        { id: 'b', type: 'alert', status: 'pending' }
+      ]));
+      const second = await getPendingCounts();
+
+      expect(second.total).toBe(2);
+      expect(readFile).toHaveBeenCalledTimes(2);
+    });
+
+    it('treats a missing items.json as an empty, cache-cleared list', async () => {
+      const enoent = Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
+      stat.mockRejectedValueOnce(enoent);
+      readFile.mockRejectedValueOnce(enoent);
+
+      const whileMissing = await getPendingCounts();
+      expect(whileMissing.total).toBe(0);
+      // The read still goes through the swap-aware reader (which returns [] for
+      // a genuinely absent file) rather than short-circuiting on the stat alone.
+      expect(readJSONFile).toHaveBeenCalledTimes(1);
+
+      // The file reappears — the cleared cache must not keep reporting the
+      // pre-deletion (or pre-existence) state.
+      stat.mockResolvedValueOnce({ mtimeMs: 813001, size: 1 });
+      readFile.mockResolvedValueOnce(JSON.stringify([{ id: 'a', type: 'todo', status: 'pending' }]));
+      const afterRecreate = await getPendingCounts();
+      expect(afterRecreate.total).toBe(1);
+    });
+
+    it('does not collapse a stat ENOENT to an empty list while the file is still readable (win32 atomicWrite swap window)', async () => {
+      const enoent = Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
+      stat.mockRejectedValueOnce(enoent);
+      readFile.mockResolvedValueOnce(JSON.stringify([{ id: 'a', type: 'todo', status: 'pending' }]));
+
+      const midSwap = await getPendingCounts();
+      expect(midSwap.total).toBe(1);
+
+      // Nothing was cached under an unknown file identity — the next read re-parses.
+      stat.mockResolvedValueOnce({ mtimeMs: 813101, size: 1 });
+      readFile.mockResolvedValueOnce(JSON.stringify([
+        { id: 'a', type: 'todo', status: 'pending' },
+        { id: 'b', type: 'todo', status: 'pending' }
+      ]));
+      const afterSwap = await getPendingCounts();
+      expect(afterSwap.total).toBe(2);
+      expect(readFile).toHaveBeenCalledTimes(2);
+    });
+
+    it('invalidates the cache on a write, so the very next read re-parses the file', async () => {
+      stat.mockResolvedValueOnce({ mtimeMs: 814001, size: 1 }); // loadItems() inside createItem
+      readFile.mockResolvedValueOnce('[]');
+      stat.mockResolvedValueOnce({ mtimeMs: 814002, size: 2 }); // getPendingCounts' loadItems after the write
+      readFile.mockResolvedValueOnce(JSON.stringify([{ id: 'a', type: 'todo', status: 'pending' }]));
+
+      await createItem({ type: 'todo', title: 'First item' });
+      const counts = await getPendingCounts();
+
+      expect(counts.total).toBe(1);
+      // createItem's own cache-miss read plus the re-parse the write forces —
+      // never the pre-write cached list.
+      expect(readFile).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  describe('getItems merges archive.json', () => {
+    it('includes archive for completed/dismissed and unfiltered queries, but not a pending-only query', async () => {
+      stat.mockResolvedValue({ mtimeMs: 816001, size: 1 });
+      const liveItems = [
+        { id: 'live-pending', type: 'todo', status: 'pending', createdAt: '2026-01-01T00:00:00Z' },
+        { id: 'live-completed', type: 'todo', status: 'completed', createdAt: '2026-01-02T00:00:00Z' }
+      ];
+      const archivedItems = [
+        { id: 'archived-completed', type: 'todo', status: 'completed', createdAt: '2025-01-01T00:00:00Z' }
+      ];
+      readFile.mockImplementation((path) =>
+        Promise.resolve(String(path).endsWith('archive.json') ? JSON.stringify(archivedItems) : JSON.stringify(liveItems)));
+
+      const completedView = await getItems({ status: 'completed' });
+      expect(completedView.map(i => i.id).sort()).toEqual(['archived-completed', 'live-completed']);
+
+      const allView = await getItems({});
+      expect(allView.map(i => i.id).sort()).toEqual(['archived-completed', 'live-completed', 'live-pending']);
+
+      const pendingView = await getItems({ status: 'pending' });
+      expect(pendingView.map(i => i.id)).toEqual(['live-pending']);
+    });
+
+    it('dedupes by id when the same item is (transiently) in both files, preferring the live copy', async () => {
+      stat.mockResolvedValue({ mtimeMs: 825001, size: 1 });
+      // Models the crash-recovery window applyRetention's doc comment
+      // describes: the same id present in both items.json and archive.json.
+      const liveCopy = { id: 'dup-1', type: 'todo', status: 'completed', title: 'live version', createdAt: '2026-01-01T00:00:00Z' };
+      const archiveCopy = { id: 'dup-1', type: 'todo', status: 'completed', title: 'archived version', createdAt: '2026-01-01T00:00:00Z' };
+      readFile.mockImplementation((path) =>
+        Promise.resolve(String(path).endsWith('archive.json') ? JSON.stringify([archiveCopy]) : JSON.stringify([liveCopy])));
+
+      const result = await getItems({});
+      expect(result).toHaveLength(1);
+      expect(result[0].title).toBe('live version');
+    });
+
+    it('degrades to no archived items when archive.json is unreadable, instead of failing the whole read', async () => {
+      stat.mockResolvedValue({ mtimeMs: 826001, size: 1 });
+      readJSONFile.mockImplementation((path) =>
+        String(path).endsWith('archive.json')
+          ? Promise.reject(new Error('Unreadable JSON file: archive.json'))
+          : Promise.resolve([{ id: 'live-1', type: 'todo', status: 'completed', createdAt: '2026-01-01T00:00:00Z' }]));
+
+      try {
+        const result = await getItems({ status: 'completed' });
+        expect(result.map(i => i.id)).toEqual(['live-1']);
+      } finally {
+        readJSONFile.mockImplementation(async (path, fallback) => {
+          try {
+            return JSON.parse(await readFile(path));
+          } catch {
+            return fallback;
+          }
+        });
+      }
+    });
+  });
+
+  describe('createItem duplicate check reaches the archive', () => {
+    it('finds a duplicate alert in archive.json when the live scan misses', async () => {
+      stat.mockResolvedValue({ mtimeMs: 817001, size: 1 });
+      // Synthetic fixture: a real archived item is always >=30 days old and
+      // could never actually land inside this 24h dedup window. This exists
+      // to prove createItem's duplicate check reaches archive.json at all
+      // when the live scan misses — not to model a realistic timestamp.
+      const archivedAlert = {
+        id: 'archived-1',
+        type: 'alert',
+        status: 'dismissed',
+        metadata: { referenceId: 'ref-archived' },
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString()
+      };
+      readFile.mockImplementation((path) =>
+        Promise.resolve(String(path).endsWith('archive.json') ? JSON.stringify([archivedAlert]) : '[]'));
+
+      const item = await createItem({
+        type: 'alert',
+        title: 'New alert for same ref',
+        metadata: { referenceId: 'ref-archived' }
+      });
+
+      expect(item.id).toBe('archived-1');
+      expect(atomicWrite).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('retention', () => {
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it('moves completed/dismissed items older than 30 days into archive.json and keeps pending/recent items in items.json', async () => {
+      vi.useFakeTimers();
+      // Push the clock far enough ahead that the 24h retention-interval gate
+      // is guaranteed open, however recently an earlier test in this file
+      // triggered a save — `lastRetentionAt` is module state shared across
+      // the whole file, not reset between tests.
+      vi.setSystemTime(Date.now() + 1000 * 60 * 60 * 24 * 400);
+
+      const now = Date.now();
+      const old = new Date(now - 31 * 24 * 60 * 60 * 1000).toISOString();
+      const recent = new Date(now - 1 * 24 * 60 * 60 * 1000).toISOString();
+      const fixture = [
+        { id: 'p1', type: 'todo', status: 'pending', metadata: {}, createdAt: old, updatedAt: old },
+        { id: 'c-old', type: 'todo', status: 'completed', metadata: {}, createdAt: old, updatedAt: old },
+        { id: 'd-old', type: 'alert', status: 'dismissed', metadata: {}, createdAt: old, updatedAt: old },
+        { id: 'c-recent', type: 'todo', status: 'completed', metadata: {}, createdAt: recent, updatedAt: recent }
+      ];
+
+      stat.mockResolvedValue({ mtimeMs: 815001, size: 1 });
+      readFile.mockImplementation((path) =>
+        Promise.resolve(String(path).endsWith('archive.json') ? '[]' : JSON.stringify(fixture)));
+
+      await createItem({ type: 'todo', title: 'trigger a save' });
+
+      expect(atomicWrite).toHaveBeenCalledTimes(2);
+      const [archivePath, archiveData] = atomicWrite.mock.calls[0];
+      const [itemsPath, itemsData] = atomicWrite.mock.calls[1];
+
+      expect(archivePath).toMatch(/archive\.json$/);
+      expect(archiveData.map(i => i.id).sort()).toEqual(['c-old', 'd-old']);
+
+      expect(itemsPath).toMatch(/items\.json$/);
+      const survivingIds = itemsData.map(i => i.id);
+      expect(survivingIds).toEqual(expect.arrayContaining(['p1', 'c-recent']));
+      expect(survivingIds).not.toEqual(expect.arrayContaining(['c-old']));
+      expect(survivingIds).not.toEqual(expect.arrayContaining(['d-old']));
+
+      // The write invalidated the cache: the next read re-parses items.json —
+      // now holding exactly what retention left behind — so the counts reflect
+      // the trimmed list, not the pre-retention fixture.
+      readFile.mockImplementation((path) =>
+        Promise.resolve(String(path).endsWith('archive.json') ? JSON.stringify(archiveData) : JSON.stringify(itemsData)));
+      const counts = await getPendingCounts();
+      expect(counts.total).toBe(2); // p1 + the new item createItem just added
+      expect(readFile).toHaveBeenCalledTimes(3); // items.json + archive.json during the save, items.json again after it
+    });
+
+    it('does not block a live write when archive.json is unreadable — retention is skipped, items.json still saves', async () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(Date.now() + 1000 * 60 * 60 * 24 * 500);
+
+      const now = Date.now();
+      const old = new Date(now - 31 * 24 * 60 * 60 * 1000).toISOString();
+      const fixture = [
+        { id: 'c-old', type: 'todo', status: 'completed', metadata: {}, createdAt: old, updatedAt: old }
+      ];
+
+      // Drive readJSONFile directly, keyed on path rather than call count/
+      // order (items.json always resolves, archive.json always rejects) —
+      // simulates a corrupt archive.json, since the real
+      // readJSONFile(..., { strict: true }) throws on unparseable content
+      // rather than degrading to the [] fallback.
+      readJSONFile.mockImplementation((path) =>
+        String(path).endsWith('archive.json')
+          ? Promise.reject(new Error('Unreadable JSON file: archive.json'))
+          : Promise.resolve(fixture));
+
+      try {
+        const created = await createItem({ type: 'todo', title: 'trigger a save while archive is corrupt' });
+        expect(created.title).toBe('trigger a save while archive is corrupt');
+
+        // The live write was NOT blocked by the corrupt archive...
+        expect(atomicWrite).toHaveBeenCalledTimes(1);
+        expect(atomicWrite.mock.calls[0][0]).toMatch(/items\.json$/);
+        // ...and c-old was left in items.json rather than silently dropped,
+        // since retention could not safely move it anywhere.
+        const written = atomicWrite.mock.calls[0][1];
+        expect(written.some(i => i.id === 'c-old')).toBe(true);
+      } finally {
+        // This test overrides readJSONFile itself (not just readFile), so
+        // restore the shared default — later tests in this file rely on it
+        // delegating to the mocked readFile the normal way.
+        readJSONFile.mockImplementation(async (path, fallback) => {
+          try {
+            return JSON.parse(await readFile(path));
+          } catch {
+            return fallback;
+          }
+        });
+      }
+    });
+
+    it('upserts by id when the same item is archived twice — one archive entry, the live copy winning', async () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(Date.now() + 1000 * 60 * 60 * 24 * 600);
+
+      const now = Date.now();
+      const old = new Date(now - 31 * 24 * 60 * 60 * 1000).toISOString();
+      const fixture = [
+        { id: 'c-old', type: 'todo', title: 'edited live copy', status: 'completed', metadata: {}, createdAt: old, updatedAt: old }
+      ];
+      // Models the crash-recovery case: a prior retention pass wrote the
+      // archive but items.json was never rewritten, so the same eligible
+      // item resurfaces in items.json on this pass — edited since, so the
+      // archived snapshot is the stale one.
+      const existingArchive = [{ id: 'c-old', type: 'todo', title: 'stale snapshot', status: 'completed', metadata: {}, createdAt: old, updatedAt: old }];
+
+      stat.mockResolvedValue({ mtimeMs: 821001, size: 1 });
+      readFile.mockImplementation((path) =>
+        Promise.resolve(String(path).endsWith('archive.json') ? JSON.stringify(existingArchive) : JSON.stringify(fixture)));
+
+      await createItem({ type: 'todo', title: 'trigger a save' });
+
+      // One archive entry for c-old, and it is the live (newer) copy — not a
+      // second entry, and not the stale archived snapshot.
+      const archiveWrites = atomicWrite.mock.calls.filter(([path]) => String(path).endsWith('archive.json'));
+      expect(archiveWrites).toHaveLength(1);
+      const archivedCopies = archiveWrites[0][1].filter(i => i.id === 'c-old');
+      expect(archivedCopies).toHaveLength(1);
+      expect(archivedCopies[0].title).toBe('edited live copy');
+      // It is still dropped from items.json — it is archived either way, so
+      // there is no reason to keep the stale live-side copy around.
+      const itemsWrite = atomicWrite.mock.calls.find(([path]) => String(path).endsWith('items.json'));
+      expect(itemsWrite[1].some(i => i.id === 'c-old')).toBe(false);
+    });
+
+    it('does not block a live write when the archive WRITE fails — retention is skipped, items.json still saves', async () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(Date.now() + 1000 * 60 * 60 * 24 * 700);
+
+      const now = Date.now();
+      const old = new Date(now - 31 * 24 * 60 * 60 * 1000).toISOString();
+      const fixture = [
+        { id: 'c-old', type: 'todo', status: 'completed', metadata: {}, createdAt: old, updatedAt: old }
+      ];
+
+      stat.mockResolvedValue({ mtimeMs: 827001, size: 1 });
+      readFile.mockImplementation((path) =>
+        Promise.resolve(String(path).endsWith('archive.json') ? '[]' : JSON.stringify(fixture)));
+      // The archive write itself fails (disk full, permission error, ...).
+      atomicWrite.mockImplementationOnce(() => Promise.reject(new Error('ENOSPC: no space left on device')));
+
+      const created = await createItem({ type: 'todo', title: 'trigger a save while archive write fails' });
+      expect(created.title).toBe('trigger a save while archive write fails');
+
+      // The archive write was attempted and failed (consuming the rejection
+      // above), then the live write still landed as a second, successful
+      // atomicWrite — with c-old left in items.json since retention could
+      // not confirm the archive write actually succeeded.
+      expect(atomicWrite).toHaveBeenCalledTimes(2);
+      expect(atomicWrite.mock.calls[0][0]).toMatch(/archive\.json$/);
+      expect(atomicWrite.mock.calls[1][0]).toMatch(/items\.json$/);
+      expect(atomicWrite.mock.calls[1][1].some(i => i.id === 'c-old')).toBe(true);
+    });
+  });
+
+  describe('read results do not leak a mutable cache reference', () => {
+    it('does not let a caller mutating a getItems() result pollute a later unrelated save', async () => {
+      stat.mockResolvedValue({ mtimeMs: 828001, size: 1 });
+      // Persisting (not "once"): item 'a' is served identically whether a
+      // later loadItems() call is a cache hit or a fresh parse, so this test
+      // pins the actual property under test (no leaked mutation) rather than
+      // an incidental call count.
+      readFile.mockResolvedValue(JSON.stringify([
+        { id: 'a', type: 'todo', status: 'pending', metadata: {} }
+      ]));
+
+      const items = await getItems({});
+      // Simulates a caller decorating/editing a returned item in place —
+      // must not reach the module's internal cache.
+      items[0].injected = 'leaked';
+      items[0].metadata.injected = 'leaked-meta';
+
+      await createItem({ type: 'todo', title: 'unrelated new item' });
+
+      const written = atomicWrite.mock.calls[0][1];
+      const original = written.find(i => i.id === 'a');
+      expect(original).toBeTruthy();
+      expect(original.injected).toBeUndefined();
+      expect(original.metadata.injected).toBeUndefined();
+    });
+  });
+
+  describe('bulkUpdateStatus events', () => {
+    it('emits exactly one items:bulk-updated event and zero per-item item:updated events', async () => {
+      const emitSpy = vi.spyOn(reviewEvents, 'emit');
+      try {
+        stat.mockResolvedValue({ mtimeMs: 818001, size: 1 });
+        const items = [
+          { id: 'a', status: 'pending', metadata: {} },
+          { id: 'b', status: 'pending', metadata: {} },
+          { id: 'c', status: 'completed', metadata: {} }
+        ];
+        readFile.mockResolvedValue(JSON.stringify(items));
+
+        const updated = await bulkUpdateStatus({ status: 'dismissed' });
+
+        expect(updated).toHaveLength(2);
+        const bulkCalls = emitSpy.mock.calls.filter(([event]) => event === 'items:bulk-updated');
+        const perItemCalls = emitSpy.mock.calls.filter(([event]) => event === 'item:updated');
+        expect(bulkCalls).toHaveLength(1);
+        expect(perItemCalls).toHaveLength(0);
+        expect(bulkCalls[0][1]).toEqual({
+          ids: expect.arrayContaining(['a', 'b']),
+          status: 'dismissed',
+          updatedAt: expect.any(String)
+        });
+        expect(bulkCalls[0][1].ids).toHaveLength(2);
+      } finally {
+        emitSpy.mockRestore();
+      }
     });
   });
 });

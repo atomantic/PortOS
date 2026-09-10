@@ -144,15 +144,23 @@ export default function Review() {
     const handleDeleted = (item) => {
       setItems(prev => prev.filter(i => i.id !== item.id));
     };
+    // Bulk status change ("Mark all read" / "Complete all") — one state
+    // update for every affected id instead of N per-item events.
+    const handleBulkUpdated = ({ ids, status, updatedAt }) => {
+      const idSet = new Set(ids);
+      setItems(prev => prev.map(i => idSet.has(i.id) ? { ...i, status, updatedAt } : i));
+    };
 
     socket.on('review:item:created', handleCreated);
     socket.on('review:item:updated', handleUpdated);
     socket.on('review:item:deleted', handleDeleted);
+    socket.on('review:items:bulk-updated', handleBulkUpdated);
 
     return () => {
       socket.off('review:item:created', handleCreated);
       socket.off('review:item:updated', handleUpdated);
       socket.off('review:item:deleted', handleDeleted);
+      socket.off('review:items:bulk-updated', handleBulkUpdated);
     };
   }, [fetchItems]);
 

@@ -529,6 +529,11 @@ function setupReviewEventForwarding() {
   reviewEvents.on('item:deleted', (data) => {
     if (ioInstance) ioInstance.emit('review:item:deleted', data?.metadata?.privateSecurity ? { id: data.id, metadata: { privateSecurity: true } } : data);
   });
+  // Bulk status changes ("Mark all read" / "Complete all") carry only ids, a
+  // status and a timestamp — nothing to redact.
+  reviewEvents.on('items:bulk-updated', (data) => {
+    if (ioInstance) ioInstance.emit('review:items:bulk-updated', data);
+  });
 }
 
 // Set up update event forwarding (idempotent — safe if called more than once)
