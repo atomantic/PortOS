@@ -24,13 +24,12 @@ import { compareNewerWins } from '../../lib/lwwTimestamp.js';
 import { pickLlmRoutePinLayer } from '../../lib/llmRoutePin.js';
 import { localImageFilename } from '../../lib/localImageFilename.js';
 import { sanitizeProjectForSync } from '../../lib/projectStoreKit.js';
+import { isStr } from '../../lib/textUtils.js';
 
 // Preserve the existing validation export for callers on the project-store surface.
 export { validateVideoShot } from '../../lib/creativeDirectorVideoCompiler.js';
 
 export { sanitizeProjectForSync } from '../../lib/projectStoreKit.js';
-
-const isStr = (v) => typeof v === 'string';
 
 // Per-project AI model override (per-project CD provider/model pins). Stored on
 // the project record as `modelOverrides.{treatment,plan,evaluation}` — each an
@@ -386,7 +385,6 @@ export function applyProjectPatch(project, patch) {
   }
   return next;
 }
-
 
 function retireVideoPlan(plan) {
   return { history: [...(plan.history || []), { steps: structuredClone(plan.steps), updatedAt: plan.updatedAt }] };

@@ -29,7 +29,7 @@ import {
   normalizeLabelKey,
   VARIATIONS_PER_CATEGORY_MAX, COMPOSITE_SHEETS_MAX, INFLUENCES_PER_LIST_MAX, IMAGE_REFS_PER_ENTRY_MAX,
 } from './universeBuilder.js';
-import { mergeExtractedBible, BIBLE_KIND, isStr } from '../lib/storyBible.js';
+import { mergeExtractedBible, BIBLE_KIND } from '../lib/storyBible.js';
 import { canonicalStringify, isEmptyScalar } from '../lib/objects.js';
 import { getSeries, updateSeries, deleteSeries, listSeries } from './pipeline/series.js';
 import { reassignIssuesToSeries, recomputeIssueNumbersForSeries, listIssues } from './pipeline/issues.js';
@@ -38,6 +38,7 @@ import {
   findCollectionBySeriesId, findOrCreateSeriesCollection,
   bulkUpdateCollectionItems, deleteCollection,
 } from './mediaCollections.js';
+import { isStr } from '../lib/textUtils.js';
 
 // Own error code (both the universe-builder and pipeline routers map it to
 // 400). get*() NOT_FOUND errors propagate with their own per-record codes,

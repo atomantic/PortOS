@@ -25,6 +25,7 @@
 
 import { compareNewerWins } from '../../lib/lwwTimestamp.js';
 import { localImageFilename } from '../../lib/localImageFilename.js';
+import { isStr, trimTo } from '../../lib/textUtils.js';
 
 export const ALBUM_ID_RE = /^album-[A-Za-z0-9-]{1,64}$/;
 
@@ -40,9 +41,6 @@ export const TRACK_ID_MAX = 80;
 // enough to reject a fat-fingered/garbage value.
 export const RELEASE_YEAR_MIN = 1850;
 export const RELEASE_YEAR_MAX = 2200;
-
-const isStr = (v) => typeof v === 'string';
-const trimTo = (v, max) => (isStr(v) ? v.trim().slice(0, max) : '');
 
 // Clamp an integer release year into the supported band; null when unparseable
 // so an album without a year stays distinct from one pinned to a bound.

@@ -1,6 +1,6 @@
 import { ServerError } from '../lib/errorHandler.js';
 import { extractNonPlaceholderJson } from '../lib/jsonExtract.js';
-import { clampToCharLimit } from '../lib/textUtils.js';
+import { clampToCharLimit, trimTo } from '../lib/textUtils.js';
 import { resolveEffectiveModel, runPromptThroughProvider } from './promptRunner.js';
 import { getProviderById } from './providers.js';
 
@@ -8,12 +8,9 @@ const MAX_PROMPT_LEN = 8000;
 const MAX_REASON_LEN = 1200;
 const MAX_CHANGES = 8;
 
-const trimString = (value, max = MAX_PROMPT_LEN) =>
-  typeof value === 'string' ? value.trim().slice(0, max) : '';
-
 const cleanChanges = (changes) => (
   Array.isArray(changes)
-    ? changes.map((c) => trimString(c, 240)).filter(Boolean).slice(0, MAX_CHANGES)
+    ? changes.map((c) => trimTo(c, 240)).filter(Boolean).slice(0, MAX_CHANGES)
     : []
 );
 
@@ -152,9 +149,9 @@ export async function refineMediaPrompt({
 
   const llmPrompt = buildMediaPromptRefinePrompt({
     kind,
-    prompt: trimString(prompt),
-    negativePrompt: trimString(negativePrompt),
-    feedback: trimString(feedback, 3000),
+    prompt: trimTo(prompt, MAX_PROMPT_LEN),
+    negativePrompt: trimTo(negativePrompt, MAX_PROMPT_LEN),
+    feedback: trimTo(feedback, 3000),
     renderConfig,
     maxPromptLength,
   });
@@ -177,7 +174,7 @@ export async function refineMediaPrompt({
     throw new ServerError(e.message, { status: 502, code: 'PROMPT_REFINE_BAD_JSON' });
   }
 
-  const refinedPrompt = trimString(parsed.prompt);
+  const refinedPrompt = trimTo(parsed.prompt, MAX_PROMPT_LEN);
   if (!refinedPrompt) {
     throw new ServerError('LLM returned an empty prompt', { status: 502, code: 'PROMPT_REFINE_EMPTY_PROMPT' });
   }
@@ -194,8 +191,8 @@ export async function refineMediaPrompt({
 
   return {
     prompt: boundedPrompt,
-    negativePrompt: trimString(parsed.negativePrompt),
-    rationale: trimString(parsed.rationale, MAX_REASON_LEN),
+    negativePrompt: trimTo(parsed.negativePrompt, MAX_PROMPT_LEN),
+    rationale: trimTo(parsed.rationale, MAX_REASON_LEN),
     changes: cleanChanges(parsed.changes),
     providerId: provider.id,
     model: selectedModel,

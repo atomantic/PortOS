@@ -13,7 +13,6 @@ import { join } from 'path';
 import { existsSync } from 'fs';
 import { createHash } from 'crypto';
 import { PATHS, atomicWrite, readJSONFile, ensureDir, sha256File } from '../../lib/fileUtils.js';
-import { isStr } from '../../lib/storyBible.js';
 import { isPlainObject } from '../../lib/objects.js';
 import { peerBaseUrl } from '../../lib/peerUrl.js';
 import { peerFetch } from '../../lib/peerHttpClient.js';
@@ -38,7 +37,8 @@ import { WRITERS_ROOM_DRAFT_ASSET_KIND } from '../writersRoom/syncLogic.js';
 import { WORK_ID_RE, DRAFT_ID_RE, wrWorkDir, wrDraftPath } from '../writersRoom/_shared.js';
 import { getWorkForSync } from '../writersRoom/sync.js';
 import { createKeyCachedQueue } from '../../lib/createKeyCachedQueue.js';
-import { peerSyncEvents, findPeerById, isNonEmptyStr } from './peerSyncShared.js';
+import { peerSyncEvents, findPeerById } from './peerSyncShared.js';
+import { isStr, isNonBlankStr } from '../../lib/textUtils.js';
 
 
 // --- Asset manifest -----------------------------------------------------
@@ -129,7 +129,7 @@ function summarizeAssetManifest(manifest) {
   const entries = Array.isArray(manifest) ? manifest : [];
   return {
     assetHashes: entries.map((e) => e.sha256).filter(Boolean).sort(),
-    metadataMissing: entries.some((e) => e?.kind === 'image' && !isNonEmptyStr(e.sidecarSha256)),
+    metadataMissing: entries.some((e) => e?.kind === 'image' && !isNonBlankStr(e.sidecarSha256)),
   };
 }
 

@@ -8,6 +8,7 @@
  */
 
 import { LOOM_LIMITS } from './fableLoomLimits.js';
+import { isNonBlankStr, trimTo } from './textUtils.js';
 
 export const FABLELOOM_PLAYBACK_MODES = Object.freeze(['cut', 'decision']);
 export const FABLELOOM_PLAYBACK_MODE_DEFAULT = 'decision';
@@ -54,8 +55,6 @@ export const asFableLoomPlaybackMode = (value) => (
 export const isSafeVideoHistoryId = (value) =>
   typeof value === 'string' && /^[A-Za-z0-9][A-Za-z0-9._-]{0,199}$/.test(value);
 
-const isStr = (v) => typeof v === 'string' && v.trim().length > 0;
-const trimTo = (v, max) => (typeof v === 'string' ? v.trim().slice(0, max) : '');
 const clamp = (v, min, max) => Math.max(min, Math.min(max, v));
 const SAFE_PRODUCTION_PARAMETER_KEYS = new Set([
   'width', 'height', 'numFrames', 'fps', 'steps', 'guidance', 'guidanceScale',
@@ -73,10 +72,10 @@ export function sanitizeAudioInterval(raw) {
   return {
     startMs,
     endMs,
-    ...(isStr(raw.characterId) ? { characterId: trimTo(raw.characterId, 80) } : {}),
-    ...(isStr(raw.speaker) ? { speaker: trimTo(raw.speaker, 100) } : {}),
+    ...(isNonBlankStr(raw.characterId) ? { characterId: trimTo(raw.characterId, 80) } : {}),
+    ...(isNonBlankStr(raw.speaker) ? { speaker: trimTo(raw.speaker, 100) } : {}),
     ...(raw.blocking === true ? { blocking: true } : {}),
-    ...(isStr(raw.name) ? { name: trimTo(raw.name, 100) } : {}),
+    ...(isNonBlankStr(raw.name) ? { name: trimTo(raw.name, 100) } : {}),
   };
 }
 
@@ -153,7 +152,7 @@ export const sanitizeAudioOccupancy = validateAudioOccupancy;
 export function sanitizeVisualConditioning(raw) {
   if (!raw || typeof raw !== 'object' || raw.version !== 1) return null;
   const list = (value, max) => (Array.isArray(value) ? value.slice(0, max) : []);
-  const nullableRef = (value) => (isStr(value) ? trimTo(value, LOOM_LIMITS.REF_ID_MAX) : null);
+  const nullableRef = (value) => (isNonBlankStr(value) ? trimTo(value, LOOM_LIMITS.REF_ID_MAX) : null);
   const capability = raw.capability && typeof raw.capability === 'object' ? raw.capability : {};
   const bindings = raw.bindings && typeof raw.bindings === 'object' ? raw.bindings : {};
   const protagonistBinding = bindings.protagonist && typeof bindings.protagonist === 'object'
@@ -171,7 +170,7 @@ export function sanitizeVisualConditioning(raw) {
       if (!SAFE_PRODUCTION_PARAMETER_KEYS.has(key)) return [];
       if (typeof value === 'number' && Number.isFinite(value)) return [[key.slice(0, 40), value]];
       if (typeof value === 'boolean') return [[key.slice(0, 40), value]];
-      if (isStr(value)) return [[key.slice(0, 40), trimTo(value, 200)]];
+      if (isNonBlankStr(value)) return [[key.slice(0, 40), trimTo(value, 200)]];
       return [];
     }))
     : {};
@@ -246,7 +245,7 @@ export function sanitizeVisualConditioning(raw) {
       .filter((value) => Number.isFinite(value))
       .map((value) => Math.max(0, Math.min(1, value)))
       .slice(0, LOOM_LIMITS.VISUAL_PROVENANCE_ASSETS_MAX),
-    ...(isStr(raw.assetId) ? { assetId: nullableRef(raw.assetId) } : {}),
+    ...(isNonBlankStr(raw.assetId) ? { assetId: nullableRef(raw.assetId) } : {}),
     ...(raw.render && typeof raw.render === 'object' ? {
       render: {
         provider: trimTo(raw.render.provider, 40),
@@ -255,7 +254,7 @@ export function sanitizeVisualConditioning(raw) {
         parameters: productionParameters,
       },
     } : {}),
-    compiledAt: isStr(raw.compiledAt) ? raw.compiledAt : null,
+    compiledAt: isNonBlankStr(raw.compiledAt) ? raw.compiledAt : null,
   };
 }
 
@@ -343,17 +342,17 @@ export function sanitizeProvenance(raw) {
   if (!raw || typeof raw !== 'object') return null;
   return {
     version: Number.isFinite(raw.version) ? Math.max(1, Math.round(raw.version)) : 1,
-    loomId: isStr(raw.loomId) ? trimTo(raw.loomId, 80) : null,
-    episodeId: isStr(raw.episodeId) ? trimTo(raw.episodeId, 80) : null,
-    nodeId: isStr(raw.nodeId) ? trimTo(raw.nodeId, 80) : null,
-    universeId: isStr(raw.universeId) ? trimTo(raw.universeId, 80) : null,
+    loomId: isNonBlankStr(raw.loomId) ? trimTo(raw.loomId, 80) : null,
+    episodeId: isNonBlankStr(raw.episodeId) ? trimTo(raw.episodeId, 80) : null,
+    nodeId: isNonBlankStr(raw.nodeId) ? trimTo(raw.nodeId, 80) : null,
+    universeId: isNonBlankStr(raw.universeId) ? trimTo(raw.universeId, 80) : null,
     characters: (Array.isArray(raw.characters) ? raw.characters : [])
-      .filter((c) => c && typeof c === 'object' && isStr(c.characterId))
+      .filter((c) => c && typeof c === 'object' && isNonBlankStr(c.characterId))
       .slice(0, LOOM_LIMITS.PROVENANCE_CHARACTERS_MAX || 12)
       .map((c) => ({
         characterId: trimTo(c.characterId, 80),
-        wardrobeId: isStr(c.wardrobeId) ? trimTo(c.wardrobeId, 80) : null,
-        identityAssets: Array.isArray(c.identityAssets) ? c.identityAssets.filter(isStr).slice(0, 5) : [],
+        wardrobeId: isNonBlankStr(c.wardrobeId) ? trimTo(c.wardrobeId, 80) : null,
+        identityAssets: Array.isArray(c.identityAssets) ? c.identityAssets.filter(isNonBlankStr).slice(0, 5) : [],
         lora: c.lora && typeof c.lora === 'object' ? {
           filename: trimTo(c.lora.filename, 200),
           sha256: trimTo(c.lora.sha256, 128),
@@ -372,8 +371,8 @@ export function sanitizeProvenance(raw) {
     visualConditioningVersion: Number.isFinite(raw.visualConditioningVersion) ? raw.visualConditioningVersion : 1,
     promptCompilerVersion: Number.isFinite(raw.promptCompilerVersion) ? raw.promptCompilerVersion : 1,
     audioMixVersion: Number.isFinite(raw.audioMixVersion) ? raw.audioMixVersion : 1,
-    omitted: Array.isArray(raw.omitted) ? raw.omitted.filter(isStr).slice(0, 20) : [],
-    warnings: Array.isArray(raw.warnings) ? raw.warnings.filter(isStr).slice(0, 20) : [],
+    omitted: Array.isArray(raw.omitted) ? raw.omitted.filter(isNonBlankStr).slice(0, 20) : [],
+    warnings: Array.isArray(raw.warnings) ? raw.warnings.filter(isNonBlankStr).slice(0, 20) : [],
   };
 }
 
@@ -394,7 +393,7 @@ export function sanitizePlaybackAssets(raw) {
   const exitByTransition = {};
   if (raw.exitByTransition && typeof raw.exitByTransition === 'object') {
     for (const [trId, vid] of Object.entries(raw.exitByTransition)) {
-      if (isStr(trId) && isSafeVideoHistoryId(vid)) {
+      if (isNonBlankStr(trId) && isSafeVideoHistoryId(vid)) {
         exitByTransition[trId.slice(0, 80)] = vid;
       }
     }
@@ -403,7 +402,7 @@ export function sanitizePlaybackAssets(raw) {
   const audioOccupancy = {};
   if (raw.audioOccupancy && typeof raw.audioOccupancy === 'object') {
     for (const [assetId, occ] of Object.entries(raw.audioOccupancy)) {
-      if (isStr(assetId) && occ && typeof occ === 'object') {
+      if (isNonBlankStr(assetId) && occ && typeof occ === 'object') {
         audioOccupancy[assetId.slice(0, 200)] = validateAudioOccupancy(occ);
       }
     }
@@ -446,7 +445,7 @@ export function sanitizeInteractionWindow(raw) {
   if (!raw || typeof raw !== 'object') return null;
 
   const enabled = raw.enabled === true;
-  const protagonistCharacterId = isStr(raw.protagonistCharacterId)
+  const protagonistCharacterId = isNonBlankStr(raw.protagonistCharacterId)
     ? trimTo(raw.protagonistCharacterId, LOOM_LIMITS.REF_ID_MAX || 64)
     : null;
 

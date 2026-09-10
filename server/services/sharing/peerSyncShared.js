@@ -15,7 +15,6 @@ import { EventEmitter } from 'events';
 import { PATHS, atomicWrite, readJSONFile, ensureDir } from '../../lib/fileUtils.js';
 import { getPeers, resolveEffectiveCategories } from '../instances.js';
 
-
 export const PEER_SUBSCRIBABLE_KINDS = Object.freeze(['universe', 'series', 'mediaCollection', 'author', 'artist', 'album', 'track', 'creativeDirectorProject', 'moodBoard', 'fableLoom', 'writersRoomWork', 'writersRoomFolder', 'writersRoomExercise', 'musicVideoProject', 'commissionFeedback', 'creativeCommission']);
 
 /**
@@ -50,8 +49,6 @@ export const makeErr = (message, code, details = null) => {
 const STATE_PATH = () => join(PATHS.data, 'sharing', 'peer_subscriptions.json');
 export const DEBOUNCE_MS = 3000;
 export const PUSH_TIMEOUT_MS = 30000;
-
-export const isNonEmptyStr = (v) => typeof v === 'string' && v.length > 0;
 
 export function subscriptionId({ peerId, recordKind, recordId }) {
   return `peer-${recordKind}-${recordId}-${peerId}`;

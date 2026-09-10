@@ -24,7 +24,6 @@ import { unlink } from 'fs/promises';
 import { existsSync } from 'fs';
 import { PATHS, atomicWrite, readJSONFile, ensureDir } from '../../lib/fileUtils.js';
 import { createFileWriteQueue } from '../../lib/fileWriteQueue.js';
-import { isStr } from '../../lib/storyBible.js';
 import { getBucket } from './buckets.js';
 import { exportSeries, exportUniverse } from './exporter.js';
 import {
@@ -39,6 +38,7 @@ import {
 export { withReexportSuppressed };
 import { subscriptionFilename, legacySubscriptionFilename } from './manifest.js';
 import { getInstanceId } from '../instanceIdentity.js';
+import { isStr } from '../../lib/textUtils.js';
 
 // Re-export from the canonical source so other modules can import the
 // filename helper from either side without forcing a manifest.js import.

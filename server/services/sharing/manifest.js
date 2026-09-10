@@ -21,9 +21,9 @@ import { PATHS, atomicWrite, readJSONFile, ensureDir } from '../../lib/fileUtils
 import { createKeyCachedQueue } from '../../lib/createKeyCachedQueue.js';
 import { isPlainObject } from '../../lib/objects.js';
 import { SHARING_SCHEMA_VERSION, getProducedByVersion } from './version.js';
-import { isStr } from '../../lib/storyBible.js';
 import { universeCollectionNameFor, seriesCollectionNameFor } from '../mediaCollections.js';
 import { UNKNOWN_INSTANCE_ID } from '../instanceIdentity.js';
+import { isStr } from '../../lib/textUtils.js';
 
 export const MANIFEST_KIND = Object.freeze(['series', 'universe', 'media', 'media-annotations']);
 

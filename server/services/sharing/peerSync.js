@@ -46,7 +46,6 @@ import { listCommissionsForSync } from '../creativeCommissions/store.js';
 import { initCursor } from './peerTombstoneCursors.js';
 import {
   PEER_SUBSCRIBABLE_KINDS,
-  isNonEmptyStr,
   readState,
   drainWriteTail,
   DEBOUNCE_MS,
@@ -67,6 +66,7 @@ import {
   subscribePeer,
   unsubscribePeer,
 } from './peerSubscriptions.js';
+import { isNonBlankStr } from '../../lib/textUtils.js';
 
 // Re-export the decomposed modules' public surface so existing deep importers
 // keep working without a re-import. (#1830)
@@ -117,9 +117,9 @@ export {
  * per-peer failures so a single offline peer can't block the creation path.
  */
 export async function autoSubscribeRecordToAllPeers(recordKind, recordId) {
-  if (!PEER_SUBSCRIBABLE_KINDS.includes(recordKind) || !isNonEmptyStr(recordId)) return [];
+  if (!PEER_SUBSCRIBABLE_KINDS.includes(recordKind) || !isNonBlankStr(recordId)) return [];
   const peers = await getPeers().catch(() => []);
-  const targets = peers.filter(p => isNonEmptyStr(p.instanceId) && peerAllowsOutbound(p) && peerHasCategory(p, recordKind));
+  const targets = peers.filter(p => isNonBlankStr(p.instanceId) && peerAllowsOutbound(p) && peerHasCategory(p, recordKind));
   if (targets.length === 0) return [];
   // Only track + log subscriptions that were *newly created* on this call.
   // `subscribePeer` is idempotent, so a re-run against already-subscribed
@@ -218,11 +218,11 @@ const RECORD_KIND_LISTERS = {
  */
 async function listRecordsForKind(recordKind) {
   const records = await (RECORD_KIND_LISTERS[recordKind]?.() ?? []);
-  return records.filter(r => r?.ephemeral !== true && isNonEmptyStr(r?.id));
+  return records.filter(r => r?.ephemeral !== true && isNonBlankStr(r?.id));
 }
 
 export async function autoSubscribePeerToAllRecords(peerId, recordKind) {
-  if (!isNonEmptyStr(peerId) || !PEER_SUBSCRIBABLE_KINDS.includes(recordKind)) return [];
+  if (!isNonBlankStr(peerId) || !PEER_SUBSCRIBABLE_KINDS.includes(recordKind)) return [];
   // Re-check the peer is enabled + outbound-capable + still has the category
   // turned on. The caller (instances.updatePeer) already saw the false→true
   // flip inside withData, but this helper is also reachable from other
@@ -243,7 +243,7 @@ export async function autoSubscribePeerToAllRecords(peerId, recordKind) {
   // running only for records that genuinely need a new sub.
   const existingSubs = await listPeerSubscriptions({ peerId, recordKind });
   const existingIds = new Set(existingSubs.map(s => s.recordId));
-  const missing = records.filter(r => isNonEmptyStr(r.id) && !existingIds.has(r.id));
+  const missing = records.filter(r => isNonBlankStr(r.id) && !existingIds.has(r.id));
   if (missing.length === 0) return [];
   // Initialize the tombstone cursor for this peer ONCE up front. Each
   // subsequent subscribePeer call passes `skipCursorInit: true` ONLY when
@@ -290,7 +290,7 @@ export async function autoSubscribePeerToAllRecords(peerId, recordKind) {
  */
 export async function getFullSyncCoverageForPeer(peerId) {
   const empty = { total: 0, confirmed: 0, pending: 0, fullyMirrored: true, byKind: {} };
-  if (!isNonEmptyStr(peerId)) return empty;
+  if (!isNonBlankStr(peerId)) return empty;
   // Each kind's record list + subscription list are independent I/O — fetch all
   // kinds (and the two lists within a kind) concurrently.
   const perKind = await Promise.all(PEER_SUBSCRIBABLE_KINDS.map(async (kind) => {
@@ -360,7 +360,7 @@ export async function unsubscribeAllForPeer(peerId) {
  * future caller that DOES want to verify completion can.
  */
 export async function unsubscribeAllForRecord(recordKind, recordId) {
-  if (!PEER_SUBSCRIBABLE_KINDS.includes(recordKind) || !isNonEmptyStr(recordId)) {
+  if (!PEER_SUBSCRIBABLE_KINDS.includes(recordKind) || !isNonBlankStr(recordId)) {
     return { removed: [], failed: [] };
   }
   const matching = await listPeerSubscriptions({ recordKind, recordId });
@@ -409,7 +409,7 @@ export async function pruneOrphanedPeerSubscriptions(resolver) {
   const subs = await listPeerSubscriptions();
   const removed = [];
   for (const sub of subs) {
-    if (!isNonEmptyStr(sub?.recordKind) || !isNonEmptyStr(sub?.recordId)) continue;
+    if (!isNonBlankStr(sub?.recordKind) || !isNonBlankStr(sub?.recordId)) continue;
     const exists = await resolver(sub.recordKind, sub.recordId).catch(() => true);
     if (exists) continue;
     const ok = await unsubscribePeer(sub.id).then(() => true).catch((err) => {
@@ -512,9 +512,9 @@ export async function collectSubscriptionsForUpdate(recordKind, recordId) {
 // list is small (per-install), so a full scan on the debounce path is fine —
 // same posture as getIssueSeriesId's issue scan below.
 async function collectMusicVideoSubsForTrack(trackId) {
-  if (!isNonEmptyStr(trackId)) return [];
+  if (!isNonBlankStr(trackId)) return [];
   const projects = await listMusicVideoProjects({ includeDeleted: false }).catch(() => []);
-  const linked = projects.filter((p) => p?.trackId === trackId && isNonEmptyStr(p?.id));
+  const linked = projects.filter((p) => p?.trackId === trackId && isNonBlankStr(p?.id));
   if (linked.length === 0) return [];
   const subLists = await Promise.all(
     linked.map((p) => listPeerSubscriptions({ recordKind: 'musicVideoProject', recordId: p.id })),
@@ -550,7 +550,7 @@ async function getIssueSeriesId(issueId) {
  * edit) gets another attempt.
  */
 export async function retryPendingPushesForPeer(peerId) {
-  if (!isNonEmptyStr(peerId)) return { walked: 0, pushed: 0 };
+  if (!isNonBlankStr(peerId)) return { walked: 0, pushed: 0 };
   const subs = await listPeerSubscriptions({ peerId });
   if (subs.length === 0) return { walked: 0, pushed: 0 };
   // Separate counter for the log line — only count subs that were never
@@ -615,7 +615,7 @@ export async function getRecordPayloadForPeer(recordKind, recordId) {
   // sourceInstanceId would 500 here or poison the puller (applyIncomingPush
   // rejects sourceInstanceId='unknown'). Return null → the route 404s.
   const instanceId = await getInstanceId().catch(() => null);
-  if (!isNonEmptyStr(instanceId) || instanceId === UNKNOWN_INSTANCE_ID) return null;
+  if (!isNonBlankStr(instanceId) || instanceId === UNKNOWN_INSTANCE_ID) return null;
   return buildPushPayload({ recordKind, recordId }, instanceId);
 }
 

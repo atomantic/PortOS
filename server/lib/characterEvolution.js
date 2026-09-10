@@ -39,7 +39,7 @@
  */
 
 import { BIBLE_LIMITS } from './bibleLimits.js';
-import { trimTo, trimToClause } from './textUtils.js';
+import { trimTo, trimToClause, isStr } from './textUtils.js';
 
 // Storr's sequence as #6418 restates it, in order: the control strategy is
 // visibly failing; an event forces exploration of another way; the character
@@ -126,8 +126,6 @@ const EPISODE_ID_RE = /^ep-[a-zA-Z0-9-]+$/;
 // stands, and the whole index is recomputed on every draft save. That is why
 // the Writers Room host pairs it with `anchorQuote` below.
 const SEGMENT_ID_RE = /^seg-\d+$/;
-
-const isStr = (v) => typeof v === 'string';
 
 /** True for a canon cast pointer (`chr-<uuid>`). */
 export const isCanonCharacterId = (raw) => isStr(raw) && CHARACTER_ID_RE.test(raw);

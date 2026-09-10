@@ -10,7 +10,6 @@ import { randomUUID } from 'crypto';
 import { parseLLMJSON, resolveAPIProvider } from './aiProvider.js';
 import { ServerError } from '../lib/errorHandler.js';
 import { assertProvider, assertVisionRunUsedImages, runPromptThroughProvider } from './promptRunner.js';
-import { trimTo } from '../lib/storyBible.js';
 import {
   sanitizeInfluences,
   sanitizeLocked,
@@ -18,6 +17,7 @@ import {
   STYLE_REFERENCE_PROMPT_MAX,
   STYLE_REFERENCE_TITLE_MAX,
 } from './universeBuilder.js';
+import { trimTo } from '../lib/textUtils.js';
 
 const listDiff = (before, after) => {
   const beforeKeys = new Set(before.map((value) => value.toLowerCase()));

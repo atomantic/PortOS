@@ -25,26 +25,26 @@ import { join } from 'path';
 import { readJSONFile, atomicWrite, ensureDir } from '../lib/fileUtils.js';
 import { PATHS } from '../lib/fileUtils.js';
 import { getEngine, ENGINES } from './pipeline/musicGen.js';
+import { isNonBlankStr } from '../lib/textUtils.js';
 
 const REGISTRY_FILE = join(PATHS.data, 'audio-models.json');
 
-const isStr = (v) => typeof v === 'string' && v.trim().length > 0;
 // HF repo ids look like `org/name` (optionally with extra path segments). Keep
 // the guard permissive but reject path-traversal / whitespace / control chars.
 const REPO_RE = /^[A-Za-z0-9._-]+\/[A-Za-z0-9._\/-]+$/;
 
 export function isValidRepoId(repo) {
-  return isStr(repo) && REPO_RE.test(repo.trim()) && !repo.includes('..');
+  return isNonBlankStr(repo) && REPO_RE.test(repo.trim()) && !repo.includes('..');
 }
 
 // One sanitized user-model entry, or null to drop. `id` defaults to the repo id
 // (what the sidecar's --model wants); `name` defaults to the repo's basename.
 function sanitizeUserModel(raw) {
   if (!raw || typeof raw !== 'object') return null;
-  const repo = isStr(raw.repo) ? raw.repo.trim() : '';
+  const repo = isNonBlankStr(raw.repo) ? raw.repo.trim() : '';
   if (!isValidRepoId(repo)) return null;
-  const id = isStr(raw.id) ? raw.id.trim() : repo;
-  const name = isStr(raw.name) ? raw.name.trim().slice(0, 200) : repo.split('/').pop();
+  const id = isNonBlankStr(raw.id) ? raw.id.trim() : repo;
+  const name = isNonBlankStr(raw.name) ? raw.name.trim().slice(0, 200) : repo.split('/').pop();
   return { id, repo, name };
 }
 

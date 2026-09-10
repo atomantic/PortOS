@@ -43,7 +43,6 @@
 import * as cosTaskStore from '../../cosTaskStore.js';
 import { getDomainBudgetStatus, recordDomainUsage } from '../../domainUsage.js';
 import { runStagedLLM } from '../../stageRunner.js';
-import { trimToClause } from '../../../lib/storyBible.js';
 import { getSettings } from '../../settings.js';
 import { buildEditorialCheckPlan } from '../editorial/checkRunner.js';
 import { getSeries } from '../series.js';
@@ -54,6 +53,7 @@ import {
   diagnosisEnabled, isActionableDiagnosis, isAutomationSignal, shapeDiagnosis,
   terminalWarrantsDiagnosis,
 } from './diagnosisCore.js';
+import { trimToClause } from '../../../lib/textUtils.js';
 
 const OBSERVER_STAGE = 'pipeline-observer';
 

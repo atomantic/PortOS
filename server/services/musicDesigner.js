@@ -24,6 +24,7 @@
 
 import { ServerError } from '../lib/errorHandler.js';
 import { assertProvider, resolveProviderAndModel, runPromptThroughProvider } from './promptRunner.js';
+import { trimTo } from '../lib/textUtils.js';
 
 // Caps mirror the Generate form's own field limits so a designer round-trip
 // can't produce text the generate route would then reject.
@@ -65,12 +66,10 @@ const DESCRIBE_OUTPUT_CONTRACT = [
   'No preamble, bullet list, song title, quoted lyrics, reasoning trace, or markdown fence.',
 ].join('\n');
 
-const clean = (value, max) => (typeof value === 'string' ? value.trim().slice(0, max) : '');
-
 // A blank/whitespace override means "use the shipped default" — the UI clears
 // the field to reset, and an empty instruction block would otherwise leave the
 // provider with nothing but the raw concept text.
-const pickTemplate = (template, fallback) => clean(template, MAX_TEMPLATE) || fallback;
+const pickTemplate = (template, fallback) => trimTo(template, MAX_TEMPLATE) || fallback;
 
 // The output instruction lives OUTSIDE the overridable template on purpose: a
 // user editing the meta-prompt is tuning the creative brief, not the wire
@@ -80,8 +79,8 @@ const section = (label, body) => (body ? `\n\n${label}:\n${body}` : '');
 export function buildDescribePrompt({ concept, guidance, template } = {}) {
   return [
     pickTemplate(template, DEFAULT_DESCRIBE_TEMPLATE),
-    section('MUSICAL REFERENCE / VIBE', clean(concept, MAX_CONCEPT) || '(none given)'),
-    section('ADDITIONAL GUIDANCE FROM THE USER', clean(guidance, MAX_GUIDANCE)),
+    section('MUSICAL REFERENCE / VIBE', trimTo(concept, MAX_CONCEPT) || '(none given)'),
+    section('ADDITIONAL GUIDANCE FROM THE USER', trimTo(guidance, MAX_GUIDANCE)),
     `\n\n${DESCRIBE_OUTPUT_CONTRACT}`,
   ].join('');
 }
@@ -89,8 +88,8 @@ export function buildDescribePrompt({ concept, guidance, template } = {}) {
 export function buildLyricsPrompt({ description, guidance, template } = {}) {
   return [
     pickTemplate(template, DEFAULT_LYRICS_TEMPLATE),
-    section('MUSICAL DESCRIPTION', clean(description, MAX_DESCRIPTION) || '(none given)'),
-    section('ADDITIONAL GUIDANCE FROM THE USER', clean(guidance, MAX_GUIDANCE)),
+    section('MUSICAL DESCRIPTION', trimTo(description, MAX_DESCRIPTION) || '(none given)'),
+    section('ADDITIONAL GUIDANCE FROM THE USER', trimTo(guidance, MAX_GUIDANCE)),
     '\n\nReturn ONLY the lyrics with their section tags. No preamble, no commentary, no markdown fence.',
   ].join('');
 }
@@ -124,7 +123,7 @@ export async function describeMusic({ concept, guidance, template, providerId, m
     provider, model: selectedModel, effort, prompt, source: 'music-describe',
   });
 
-  const description = clean(unfence(text), MAX_DESCRIPTION);
+  const description = trimTo(unfence(text), MAX_DESCRIPTION);
   if (!description) {
     throw new ServerError('The AI returned an empty description. Try rerunning or picking a stronger model.', { status: 502, code: 'LLM_EMPTY' });
   }
@@ -153,7 +152,7 @@ export async function writeLyrics({ description, guidance, template, providerId,
     provider, model: selectedModel, effort, prompt, source: 'music-lyrics',
   });
 
-  const lyrics = clean(unfence(text), MAX_LYRICS);
+  const lyrics = trimTo(unfence(text), MAX_LYRICS);
   if (!lyrics) {
     throw new ServerError('The AI returned empty lyrics. Try rerunning or picking a stronger model.', { status: 502, code: 'LLM_EMPTY' });
   }

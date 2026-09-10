@@ -15,6 +15,7 @@
 
 import { z } from 'zod';
 import { EFFORT_LEVELS } from './providerModels.js';
+import { trimTo } from './textUtils.js';
 
 export const PERSISTENT_MIND_THINKING_PRESETS_SCHEMA_VERSION = 1;
 
@@ -71,8 +72,6 @@ export function createDefaultPersistentMindThinkingPresets() {
   };
 }
 
-const text = (value, max) => (typeof value === 'string' ? value.trim().slice(0, max) : '');
-
 /**
  * Coerce a preset reference to the exact stored id, or null.
  *
@@ -80,7 +79,7 @@ const text = (value, max) => (typeof value === 'string' ? value.trim().slice(0, 
  * same rule the preset list itself enforces, rather than re-deriving it.
  */
 export function asPersistentMindThinkingPresetId(value) {
-  const id = text(value, PERSISTENT_MIND_THINKING_PRESET_LIMITS.ID_MAX);
+  const id = trimTo(value, PERSISTENT_MIND_THINKING_PRESET_LIMITS.ID_MAX);
   return ID_PATTERN.test(id) ? id : null;
 }
 
@@ -92,13 +91,13 @@ const sanitizePreset = (value) => {
   const parsed = storedThinkingPresetSchema.safeParse({
     ...value,
     id: asPersistentMindThinkingPresetId(value?.id),
-    label: text(value?.label, PERSISTENT_MIND_THINKING_PRESET_LIMITS.LABEL_MAX),
+    label: trimTo(value?.label, PERSISTENT_MIND_THINKING_PRESET_LIMITS.LABEL_MAX),
   });
   if (!parsed.success) return null;
   const { id, providerId, model, effort = '', label } = parsed.data;
   return {
     id,
-    label: label || text(`${providerId} / ${model}`, PERSISTENT_MIND_THINKING_PRESET_LIMITS.LABEL_MAX),
+    label: label || trimTo(`${providerId} / ${model}`, PERSISTENT_MIND_THINKING_PRESET_LIMITS.LABEL_MAX),
     providerId,
     model,
     effort,
@@ -135,7 +134,6 @@ export function findPersistentMindThinkingPreset(raw, presetId) {
   if (!id) return null;
   return normalizePersistentMindThinkingPresets(raw).presets.find((preset) => preset.id === id) || null;
 }
-
 
 export const persistentMindThinkingRequestSchema = z.object({
   presetId: persistentMindThinkingPresetSchema.shape.id,

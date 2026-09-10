@@ -29,12 +29,12 @@
 
 import { runStagedLLM } from '../stageRunner.js';
 import { ServerError } from '../../lib/errorHandler.js';
-import { trimTo } from '../../lib/storyBible.js';
 import {
   AUDIO_CUES_MAX,
   AUDIO_CUE_LABEL_MAX,
   AUDIO_CUE_PROMPT_MAX,
 } from './issues.js';
+import { trimTo } from '../../lib/textUtils.js';
 
 export const ERR_NO_SOURCE = 'PIPELINE_AUDIO_CUES_NO_SOURCE';
 export const ERR_EMPTY_RESULT = 'PIPELINE_AUDIO_CUES_EMPTY';

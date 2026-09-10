@@ -7,7 +7,6 @@
  * (`store().queueTypeIndexWrite`) for one consistent merge/prune snapshot.
  */
 
-import { isStr } from '../../lib/storyBible.js';
 import { emitRecordUpdated } from '../sharing/recordEvents.js';
 import * as seriesSvc from './series.js';
 import {
@@ -15,6 +14,7 @@ import {
   flushBaseHashes, deleteSyncBaseHash, withBaseHashFlushBatch,
 } from '../../lib/conflictJournal.js';
 import { store, readState, saveIssuesNow, renumberInline, sanitizeIssue } from './issuesShared.js';
+import { isStr } from '../../lib/textUtils.js';
 
 /**
  * Sync-orchestrator entry point. Merges a remote peer's issues array into

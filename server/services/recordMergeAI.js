@@ -12,14 +12,13 @@ import { ServerError } from '../lib/errorHandler.js';
 import { extractJson as extractJsonShared } from '../lib/jsonExtract.js';
 import { assertProvider, resolveProviderAndModel, runPromptThroughProvider } from './promptRunner.js';
 import { stripPromptControlChars, buildUniverseStyleContext } from './universeBuilder.js';
+import { isNonBlankStr } from '../lib/textUtils.js';
 
 export const ERR_NO_PROVIDER = 'MERGE_AI_NO_PROVIDER';
 export const ERR_NO_MERGEABLE_FIELDS = 'MERGE_AI_NO_MERGEABLE_FIELDS';
 export const ERR_INVALID_JSON = 'LLM_INVALID_JSON';
 
 const MAX_FIELD_CHARS = 4000;
-
-const isMergeableString = (v) => typeof v === 'string' && v.trim().length > 0;
 
 const buildPrompt = ({ kind, survivor, loser, fields }) => {
   const fieldBlocks = fields.map(({ field, survivorValue, loserValue }) => {
@@ -88,7 +87,7 @@ export async function mergeFieldsWithAI({ kind, survivor, loser, fields, provide
     if (typeof field !== 'string' || !field) continue;
     const sv = survivor[field];
     const lv = loser[field];
-    if (isMergeableString(sv) && isMergeableString(lv)) {
+    if (isNonBlankStr(sv) && isNonBlankStr(lv)) {
       mergeable.push({ field, survivorValue: sv, loserValue: lv });
     } else {
       skipped.push(field);

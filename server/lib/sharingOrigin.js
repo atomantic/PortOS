@@ -11,8 +11,7 @@
  * full history.
  */
 
-import { isStr, trimTo } from './storyBible.js';
-
+import { isStr, trimTo } from './textUtils.js';
 export const ORIGIN_BUCKET_ID_MAX = 64;
 export const ORIGIN_BUCKET_NAME_MAX = 120;
 export const ORIGIN_SOURCE_MAX = 120;

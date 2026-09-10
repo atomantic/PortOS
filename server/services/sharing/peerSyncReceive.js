@@ -9,7 +9,6 @@
  *
  * Split out of the former 4,004-line peerSync.js (#1830).
  */
-import { isStr } from '../../lib/storyBible.js';
 import { isPlainObject } from '../../lib/objects.js';
 import {
   PORTOS_SCHEMA_VERSIONS,
@@ -54,13 +53,13 @@ import {
 import { findPeerSubscription, subscribePeer } from './peerSubscriptions.js';
 import {
   makeErr,
-  isNonEmptyStr,
   findPeerById,
   peerSyncEvents,
   ERR_VALIDATION,
   ERR_SCHEMA_VERSION_AHEAD,
   PEER_SUBSCRIBABLE_KINDS,
 } from './peerSyncShared.js';
+import { isStr, isNonBlankStr } from '../../lib/textUtils.js';
 
 
 /**
@@ -124,10 +123,10 @@ export async function applyIncomingPush(payload) {
   // it to callers that haven't even identified themselves correctly. Move
   // the cheap shape validation first so unidentified or malformed requests
   // get a clean 400 with no version information.
-  if (!isNonEmptyStr(sourceInstanceId) || sourceInstanceId === UNKNOWN_INSTANCE_ID) {
+  if (!isNonBlankStr(sourceInstanceId) || sourceInstanceId === UNKNOWN_INSTANCE_ID) {
     throw makeErr('sourceInstanceId required (and not "unknown")', ERR_VALIDATION);
   }
-  if (!isPlainObject(record) || !isNonEmptyStr(record.id)) {
+  if (!isPlainObject(record) || !isNonBlankStr(record.id)) {
     throw makeErr('record must be an object with a string id', ERR_VALIDATION);
   }
 

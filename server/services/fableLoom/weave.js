@@ -16,7 +16,6 @@ import { randomUUID } from 'crypto';
 import { ServerError } from '../../lib/errorHandler.js';
 import { startAIOp } from '../aiStatusEvents.js';
 import { runStagedLLM } from '../stageRunner.js';
-import { isStr, trimTo } from '../../lib/storyBible.js';
 import { resolveLlmRoutePin } from '../../lib/llmRoutePin.js';
 import { renderStoryCanonDigest } from '../../lib/universePromptRenderers.js';
 import { renderCharacterEvolutionListForPrompt } from '../../lib/characterEvolution.js';
@@ -48,6 +47,7 @@ import {
 import { getUniverse } from '../universeBuilder.js';
 import { LOOM_LIMITS, fableLoomEvolutionEvidenceRefs, findEpisode, findNode, getLoom, mutateLoom } from './records.js';
 import { asLoomFormat, loomFormatLabel, narrationFormatContract, sceneFormatContract } from './formats.js';
+import { isStr, trimTo } from '../../lib/textUtils.js';
 
 const TRANSCRIPT_TURNS_MAX = 12;
 const AUDIENCE_GRAPH_ERROR_CODES = new Set([

@@ -16,6 +16,7 @@
  */
 
 import { randomUUID } from 'crypto';
+import { trimTo } from './textUtils.js';
 
 // --- Shape bounds (shared with routes/rounds.js#roundInputSchema) -------------
 export const TITLE_MAX_LENGTH = 200;
@@ -59,10 +60,6 @@ export const PROGRESS_SCOPES_MAX = 80;    // distinct training scopes tracked
 // poison the persisted array).
 export const RECORDING_GRADES = ['in-tune', 'close', 'off', 'missed', 'pending'];
 
-// Trim a string field, returning '' for non-strings. Mirrors the
-// absent-vs-empty rule in AGENTS.md: callers decide whether '' clears.
-const trimField = (v, max) => (typeof v === 'string' ? v.trim().slice(0, max) : '');
-
 // Clamp an integer tempo into the supported band; null when unparseable so a
 // song without a tempo stays distinct from one pinned to a bound.
 const sanitizeTempo = (v) => {
@@ -74,11 +71,11 @@ const sanitizeTempo = (v) => {
 // id when blank so a section card is never headerless. Drops shapeless entries.
 const sanitizeSection = (s) => {
   if (!s || typeof s !== 'object') return null;
-  const label = trimField(s.label, LABEL_MAX_LENGTH);
-  const lyrics = trimField(s.lyrics, FIELD_MAX_LENGTH);
+  const label = trimTo(s.label, LABEL_MAX_LENGTH);
+  const lyrics = trimTo(s.lyrics, FIELD_MAX_LENGTH);
   if (!label && !lyrics) return null;
   return {
-    id: trimField(s.id, ID_MAX_LENGTH) || `sec-${randomUUID().slice(0, 8)}`,
+    id: trimTo(s.id, ID_MAX_LENGTH) || `sec-${randomUUID().slice(0, 8)}`,
     label: label || 'Section',
     lyrics,
   };
@@ -88,12 +85,12 @@ const sanitizeSection = (s) => {
 // references a songCraft VOICE_LAYERS entry when known but is free-text-safe.
 const sanitizeLayer = (l) => {
   if (!l || typeof l !== 'object') return null;
-  const label = trimField(l.label, LABEL_MAX_LENGTH);
-  const part = trimField(l.part, PART_MAX_LENGTH);
-  const notes = trimField(l.notes, FIELD_MAX_LENGTH);
+  const label = trimTo(l.label, LABEL_MAX_LENGTH);
+  const part = trimTo(l.part, PART_MAX_LENGTH);
+  const notes = trimTo(l.notes, FIELD_MAX_LENGTH);
   if (!label && !part && !notes) return null;
   return {
-    id: trimField(l.id, ID_MAX_LENGTH) || `layer-${randomUUID().slice(0, 8)}`,
+    id: trimTo(l.id, ID_MAX_LENGTH) || `layer-${randomUUID().slice(0, 8)}`,
     label: label || 'Layer',
     part,
     notes,
@@ -132,7 +129,7 @@ const sanitizeAccuracy = (a) => {
   if (!a || typeof a !== 'object') return null;
   const counts = a.counts && typeof a.counts === 'object' ? a.counts : {};
   const perNote = (Array.isArray(a.perNote) ? a.perNote : [])
-    .map((g) => trimField(g, LABEL_MAX_LENGTH))
+    .map((g) => trimTo(g, LABEL_MAX_LENGTH))
     .filter((g) => RECORDING_GRADES.includes(g))
     .slice(0, PER_NOTE_GRADES_MAX);
   const clampPercent = finiteOrNull(a.percentInTune);
@@ -180,7 +177,7 @@ const sanitizeProgress = (p) => {
   let scopeCount = 0;
   for (const [scope, attempts] of Object.entries(rawHistory)) {
     if (scopeCount >= PROGRESS_SCOPES_MAX) break;
-    const key = trimField(scope, ID_MAX_LENGTH);
+    const key = trimTo(scope, ID_MAX_LENGTH);
     // Skip empty keys and the prototype-pollution-prone keys — a section id is
     // always `sec-N` (or the `__whole__` sentinel), never one of these, so a
     // hand-edited `__proto__`/`constructor` scope is a malformed file, not data.
@@ -207,16 +204,16 @@ const sanitizeProgress = (p) => {
 // when there's analysis to keep, so a pre-feature record reads back unchanged.
 const sanitizeRecording = (r) => {
   if (!r || typeof r !== 'object') return null;
-  const filename = trimField(r.filename, URL_MAX_LENGTH);
+  const filename = trimTo(r.filename, URL_MAX_LENGTH);
   if (!filename) return null;
   const durationMs = typeof r.durationMs === 'number' && Number.isFinite(r.durationMs)
     ? Math.max(0, Math.round(r.durationMs)) : 0;
   const peak = typeof r.peak === 'number' && Number.isFinite(r.peak)
     ? Math.max(0, Math.min(1, r.peak)) : 0;
   const rec = {
-    id: trimField(r.id, ID_MAX_LENGTH) || `rec-${randomUUID().slice(0, 8)}`,
-    layerId: trimField(r.layerId, ID_MAX_LENGTH),
-    label: trimField(r.label, LABEL_MAX_LENGTH),
+    id: trimTo(r.id, ID_MAX_LENGTH) || `rec-${randomUUID().slice(0, 8)}`,
+    layerId: trimTo(r.layerId, ID_MAX_LENGTH),
+    label: trimTo(r.label, LABEL_MAX_LENGTH),
     filename,
     durationMs,
     peak,
@@ -257,7 +254,7 @@ const sanitizeRefSegment = (s) => {
   const endMs = Math.max(0, Math.round(endRaw));
   if (endMs <= startMs) return null;
   const seg = {
-    layerId: trimField(s.layerId, ID_MAX_LENGTH),
+    layerId: trimTo(s.layerId, ID_MAX_LENGTH),
     startMs,
     endMs,
   };
@@ -287,18 +284,18 @@ const sanitizeRefSegment = (s) => {
 // no migration).
 const sanitizeReference = (r) => {
   if (!r || typeof r !== 'object') return null;
-  const url = trimField(r.url, URL_MAX_LENGTH);
+  const url = trimTo(r.url, URL_MAX_LENGTH);
   // Require an http(s) scheme — defense-in-depth so a hand-edited file or a
   // non-PortOS writer can't persist a javascript:/data: URL that a renderer
   // might trust (mirrors the client's isHttpUrl guard).
   if (!/^https?:\/\//i.test(url)) return null;
   const ref = {
-    id: trimField(r.id, ID_MAX_LENGTH) || `ref-${randomUUID().slice(0, 8)}`,
+    id: trimTo(r.id, ID_MAX_LENGTH) || `ref-${randomUUID().slice(0, 8)}`,
     url,
-    label: trimField(r.label, LABEL_MAX_LENGTH),
-    note: trimField(r.note, FIELD_MAX_LENGTH),
+    label: trimTo(r.label, LABEL_MAX_LENGTH),
+    note: trimTo(r.note, FIELD_MAX_LENGTH),
   };
-  const audioFilename = trimField(r.audioFilename, URL_MAX_LENGTH);
+  const audioFilename = trimTo(r.audioFilename, URL_MAX_LENGTH);
   if (audioFilename) {
     ref.audioFilename = audioFilename;
     // Segments are time ranges INTO the attached audio — meaningless without
@@ -311,7 +308,7 @@ const sanitizeReference = (r) => {
     // pointer) — same structural invariant as segments: derived from this
     // audio, so removing the audio drops it and a stale transcription can't
     // resurrect against a later, different recording.
-    const midiFilename = trimField(r.midiFilename, URL_MAX_LENGTH);
+    const midiFilename = trimTo(r.midiFilename, URL_MAX_LENGTH);
     if (midiFilename) ref.midiFilename = midiFilename;
   }
   return ref;
@@ -326,12 +323,12 @@ const sanitizeReference = (r) => {
 // never headerless.
 const sanitizeScorePart = (p) => {
   if (!p || typeof p !== 'object') return null;
-  const score = trimField(p.score, SCORE_MAX_LENGTH);
+  const score = trimTo(p.score, SCORE_MAX_LENGTH);
   if (!score) return null;
-  const label = trimField(p.label, LABEL_MAX_LENGTH);
-  const role = trimField(p.role, ID_MAX_LENGTH);
+  const label = trimTo(p.label, LABEL_MAX_LENGTH);
+  const role = trimTo(p.role, ID_MAX_LENGTH);
   return {
-    id: trimField(p.id, ID_MAX_LENGTH) || `part-${randomUUID().slice(0, 8)}`,
+    id: trimTo(p.id, ID_MAX_LENGTH) || `part-${randomUUID().slice(0, 8)}`,
     label: label || 'Part',
     role,
     score,
@@ -352,7 +349,7 @@ const sanitizeList = (arr, fn, max) =>
 const sanitizePartnerIds = (arr, selfId) => {
   const seen = new Set();
   return (Array.isArray(arr) ? arr : [])
-    .map((v) => trimField(v, ID_MAX_LENGTH))
+    .map((v) => trimTo(v, ID_MAX_LENGTH))
     .filter((id) => id && id !== selfId && !seen.has(id) && seen.add(id))
     .slice(0, PARTNERS_MAX);
 };
@@ -368,26 +365,26 @@ const NO_BUILTIN_IDS = new Set();
 // so the flag can't be lost on edit or spoofed on a hand-edited custom song.
 export const sanitizeRound = (raw, builtinIds = NO_BUILTIN_IDS) => {
   if (!raw || typeof raw !== 'object') return null;
-  const id = trimField(raw.id, ID_MAX_LENGTH);
+  const id = trimTo(raw.id, ID_MAX_LENGTH);
   if (!id) return null;
   const song = {
     id,
-    title: trimField(raw.title, TITLE_MAX_LENGTH) || 'Untitled round',
-    artist: trimField(raw.artist, ARTIST_MAX_LENGTH),
-    key: trimField(raw.key, KEY_MAX_LENGTH),
+    title: trimTo(raw.title, TITLE_MAX_LENGTH) || 'Untitled round',
+    artist: trimTo(raw.artist, ARTIST_MAX_LENGTH),
+    key: trimTo(raw.key, KEY_MAX_LENGTH),
     tempo: sanitizeTempo(raw.tempo),
-    rhythmShapeId: trimField(raw.rhythmShapeId, ID_MAX_LENGTH),
-    notation: trimField(raw.notation, FIELD_MAX_LENGTH),
+    rhythmShapeId: trimTo(raw.rhythmShapeId, ID_MAX_LENGTH),
+    notation: trimTo(raw.notation, FIELD_MAX_LENGTH),
     // Sheet-music notation in the PortOS lead-sheet DSL (client/src/lib/
     // scoreNotation.js). A bounded free-text string — the client parses + renders
     // it; the server only length-caps it, so a newer/older DSL revision can't 400.
-    score: trimField(raw.score, SCORE_MAX_LENGTH),
+    score: trimTo(raw.score, SCORE_MAX_LENGTH),
     // Harmony variations of the base `score` (bass, mid/high harmonies …), each
     // its own lead-sheet DSL. Absent ⇒ [] — purely additive, so an older peer or
     // a pre-feature record reads back as a song with no parts (no migration of
     // the on-disk shape needed; the field simply appears when the user adds one).
     scoreParts: sanitizeList(raw.scoreParts, sanitizeScorePart, SCORE_PARTS_MAX),
-    notes: trimField(raw.notes, FIELD_MAX_LENGTH),
+    notes: trimTo(raw.notes, FIELD_MAX_LENGTH),
     learned: raw.learned === true,
     sections: sanitizeList(raw.sections, sanitizeSection, SECTIONS_MAX),
     layers: sanitizeList(raw.layers, sanitizeLayer, LAYERS_MAX),

@@ -35,8 +35,9 @@ import { getInstanceId } from '../instanceIdentity.js';
 import { getSettings } from '../settings.js';
 import { getProducedByVersion } from './version.js';
 import { PORTOS_SCHEMA_VERSIONS } from '../../lib/schemaVersions.js';
-import { isStr, listSheetPointers } from '../../lib/storyBible.js';
+import { listSheetPointers } from '../../lib/storyBible.js';
 import { resolveBucketSourceName as resolveSourceName } from './annotationIdentity.js';
+import { isStr } from '../../lib/textUtils.js';
 
 /**
  * Best-effort cap on the bucket's manifest directory after each export.

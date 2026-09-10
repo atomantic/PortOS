@@ -9,7 +9,6 @@
  */
 
 import { isPlainObject } from '../../lib/objects.js';
-import { isStr } from '../../lib/storyBible.js';
 import { pickRenderedFilename } from '../../lib/renderSlot.js';
 import { emitRecordUpdated } from '../sharing/recordEvents.js';
 import { getIssue } from './issueCrud.js';
@@ -20,6 +19,7 @@ import {
   ERR_NOT_FOUND, ERR_VALIDATION,
   STAGE_IDS, TEXT_STAGE_IDS, VISUAL_STAGE_IDS, AUDIO_STAGE_IDS,
 } from './issuesShared.js';
+import { isStr } from '../../lib/textUtils.js';
 
 /**
  * Partial update to a single stage on an issue. Use this from generators so

@@ -12,9 +12,9 @@
 import { randomUUID } from 'crypto';
 import { normalizeSlugline } from './scenePrompt.js';
 import { PATHS, resolveImageRef } from './fileUtils.js';
-import { isPlainObject } from './objects.js';
+import { isPlainObject, isEmptyScalar } from './objects.js';
 import { shortCanonPrimaryField } from './canonPrompt.js';
-import { trimTo, trimToClause } from './textUtils.js';
+import { isStr, trimTo, trimToClause } from './textUtils.js';
 import { BIBLE_LIMITS } from './bibleLimits.js';
 import {
   CHARACTER_ARC_TYPES,
@@ -28,12 +28,6 @@ import { sanitizeCharacterEvolution } from './characterEvolution.js';
 // Re-export so callers (writers-room domain files) can import a single
 // canonical normalizer when they need to match places by slugline.
 export { normalizeSlugline };
-// `trimTo` and the boundary-aware `trimToClause` both live in the
-// dependency-free `textUtils.js` so the pure story-model leaves the browser
-// bundle shares (`characterFramework.js`, `characterEvolution.js`) can cap
-// prose without importing this module's `crypto` / `fileUtils`. Re-exported
-// here because every existing sanitizer reaches for them through storyBible.
-export { trimTo, trimToClause };
 
 // The canon field caps live in a pure leaf (`bibleLimits.js`) so the browser
 // bundle and `catalogTypes.js` can read them without this module's `crypto` /
@@ -202,11 +196,6 @@ const DEFAULT_ID_PREFIX = Object.freeze({
   object: 'obj-',
 });
 
-// Shared string predicate retained here for the story-bible domain. `trimTo`
-// and `trimToClause` now live in dependency-free textUtils and are re-exported
-// above so existing story-bible consumers keep the same public contract.
-export const isStr = (v) => typeof v === 'string';
-
 // Walk a raw array through a per-item sanitizer, dropping rejected entries
 // (falsy return from `sanitizer`) and capping the output at `cap`. Three
 // near-identical loops elsewhere in this file (cleanStringArray, the wardrobe
@@ -226,13 +215,6 @@ const sanitizeListWith = (raw, sanitizer, cap) => {
 
 const cleanStringArray = (raw, itemMax, listMax) =>
   sanitizeListWith(raw, (v) => trimTo(v, itemMax), listMax);
-
-export const isBlank = (v) => {
-  if (v == null) return true;
-  if (Array.isArray(v)) return v.length === 0;
-  if (isStr(v)) return v.trim() === '';
-  return false;
-};
 
 export const normalizeBibleName = (name) => String(name || '').trim().toLowerCase();
 
@@ -1528,7 +1510,7 @@ export function mergeExtractedBible(existing, incoming, kind, {
         continue;
       }
       for (const field of cfg.userEditable) {
-        if (isBlank(found[field]) && !isBlank(sane[field])) {
+        if (isEmptyScalar(found[field]) && !isEmptyScalar(sane[field])) {
           found[field] = sane[field];
         }
       }
@@ -1537,7 +1519,7 @@ export function mergeExtractedBible(existing, incoming, kind, {
       // resolves to this canonical record instead of inserting a duplicate.
       let reindex = false;
       for (const { field } of cfg.keyFields) {
-        if (isBlank(found[field]) && !isBlank(sane[field])) {
+        if (isEmptyScalar(found[field]) && !isEmptyScalar(sane[field])) {
           found[field] = sane[field];
           reindex = true;
         }

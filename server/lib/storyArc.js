@@ -17,9 +17,9 @@
  */
 
 import { randomUUID } from 'crypto';
-import { isStr, trimTo, trimToClause } from './storyBible.js';
 import { sanitizeCoverLike } from './renderSlot.js';
 import { ARC_LIMITS } from './storyArcLimits.js';
+import { isStr, trimTo, trimToClause } from './textUtils.js';
 export { ARC_LIMITS } from './storyArcLimits.js';
 
 export const ARC_STATUSES = Object.freeze(['draft', 'verified']);

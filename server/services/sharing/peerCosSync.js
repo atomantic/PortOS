@@ -14,7 +14,6 @@ import { existsSync } from 'fs';
 import { readdir } from 'fs/promises';
 import { createHash } from 'crypto';
 import { PATHS, atomicWrite, ensureDir, sha256File, tryReadFile, safeJSONParse } from '../../lib/fileUtils.js';
-import { isStr } from '../../lib/storyBible.js';
 import { isPlainObject } from '../../lib/objects.js';
 import { peerBaseUrl } from '../../lib/peerUrl.js';
 import { peerFetch } from '../../lib/peerHttpClient.js';
@@ -35,6 +34,7 @@ import {
   ASSET_PULL_TIMEOUT_MS,
 } from './peerSyncAssets.js';
 import { findPeerById, FORCE_REVALIDATE_EVERY, peerSyncEvents } from './peerSyncShared.js';
+import { isStr } from '../../lib/textUtils.js';
 
 
 // --- Completed-agent CoS history federation (#1650) ---------------------

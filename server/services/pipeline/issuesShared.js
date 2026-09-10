@@ -29,7 +29,6 @@ import { sanitizeOrigin } from '../../lib/sharingOrigin.js';
 import { sanitizeSoftDeleteFields } from '../../lib/syncWire.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { ARC_ROLES } from '../../lib/storyArc.js';
-import { isStr, trimTo } from '../../lib/storyBible.js';
 import { sanitizeCoverLike } from '../../lib/renderSlot.js';
 import { ensureStoryboardIds } from '../../lib/storyboardScenes.js';
 import { applyVolumeOrderedNumbers } from '../../lib/pipelineIssueOrder.js';
@@ -46,6 +45,7 @@ import {
   TEXT_STAGE_IDS,
   VISUAL_STAGE_IDS,
 } from '../../lib/pipelineStages.js';
+import { isStr, trimTo } from '../../lib/textUtils.js';
 
 // Backward-compatible data-stage export. Voice navigation now uses the visible
 // tab order from pipelineStages.js, but existing service consumers may still

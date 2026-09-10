@@ -17,6 +17,7 @@ import {
   normalizePersistentMindThinkingRequests,
   normalizePersistentMindThinkingSelection,
 } from './persistentMindThinkingPresets.js';
+import { trimTo } from './textUtils.js';
 
 export const PERSISTENT_MIND_SCHEMA_VERSION = 8;
 
@@ -70,12 +71,8 @@ const asIso = (value) => {
   return new Date(value).toISOString();
 };
 
-const asBoundedString = (value, max) => (
-  typeof value === 'string' ? value.trim().slice(0, max) : ''
-);
-
-const asId = (value) => asBoundedString(value, 200);
-const asMindId = (value) => asBoundedString(value, 128);
+const asId = (value) => trimTo(value, 200);
+const asMindId = (value) => trimTo(value, 128);
 
 const asCount = (value) => (
   Number.isSafeInteger(value) && value >= 0 ? value : 0
@@ -198,7 +195,7 @@ export function persistentMindMessageFingerprint(value) {
   const selection = normalizePersistentMindThinkingSelection(value?.thinkingPreset);
   return createHash('sha256')
     .update(JSON.stringify({
-      text: asBoundedString(value?.text, PERSISTENT_MIND_LIMITS.MAX_MESSAGE_CHARS),
+      text: trimTo(value?.text, PERSISTENT_MIND_LIMITS.MAX_MESSAGE_CHARS),
       images,
       ...(thinkingPresetId ? { thinkingPresetId } : {}),
       ...(thinkingPresetId && selection ? {
@@ -236,7 +233,7 @@ export function publicPersistentMindAttachment(value) {
 
 const sanitizeMessage = (value) => {
   const id = asId(value?.id);
-  const text = asBoundedString(value?.text, PERSISTENT_MIND_LIMITS.MAX_MESSAGE_CHARS);
+  const text = trimTo(value?.text, PERSISTENT_MIND_LIMITS.MAX_MESSAGE_CHARS);
   const images = [];
   const seenImageIds = new Set();
   for (const candidate of Array.isArray(value?.images) ? value.images : []) {
@@ -273,14 +270,14 @@ const sanitizeCallRecord = (value) => {
   if (!at) return null;
   return {
     at,
-    reason: asBoundedString(value?.reason, PERSISTENT_MIND_LIMITS.MAX_CALL_REASON_CHARS),
-    source: asBoundedString(value?.source, PERSISTENT_MIND_LIMITS.MAX_CALL_SOURCE_CHARS) || 'mind',
+    reason: trimTo(value?.reason, PERSISTENT_MIND_LIMITS.MAX_CALL_REASON_CHARS),
+    source: trimTo(value?.source, PERSISTENT_MIND_LIMITS.MAX_CALL_SOURCE_CHARS) || 'mind',
   };
 };
 
 const sanitizeSelfWake = (value) => {
   const id = asId(value?.id);
-  const reason = asBoundedString(value?.reason, PERSISTENT_MIND_LIMITS.MAX_REASON_CHARS);
+  const reason = trimTo(value?.reason, PERSISTENT_MIND_LIMITS.MAX_REASON_CHARS);
   const sourceTurnId = asId(value?.sourceTurnId);
   if (!id || !reason || !sourceTurnId) return null;
   return {
@@ -315,8 +312,8 @@ const sanitizeActiveTurn = (value) => {
     startedAt: asIso(value?.startedAt) || new Date(0).toISOString(),
     heartbeatAt: asIso(value?.heartbeatAt) || asIso(value?.startedAt) || new Date(0).toISOString(),
     providerId: asId(value?.providerId) || null,
-    model: asBoundedString(value?.model, 500) || null,
-    effort: asBoundedString(value?.effort, 100) || null,
+    model: trimTo(value?.model, 500) || null,
+    effort: trimTo(value?.effort, 100) || null,
   };
 };
 
@@ -436,7 +433,7 @@ export function normalizePersistentMindState(raw) {
     enabled,
     started,
     status,
-    pauseReason: asBoundedString(source.pauseReason, PERSISTENT_MIND_LIMITS.MAX_REASON_CHARS) || null,
+    pauseReason: trimTo(source.pauseReason, PERSISTENT_MIND_LIMITS.MAX_REASON_CHARS) || null,
     queuedMessages,
     pendingAttachments,
     selfWake,
@@ -449,7 +446,7 @@ export function normalizePersistentMindState(raw) {
     lastCompletedAt: asIso(source.lastCompletedAt),
     nextEligibleWakeAt: asIso(source.nextEligibleWakeAt),
     failureCount: asCount(source.failureCount),
-    lastError: asBoundedString(source.lastError, PERSISTENT_MIND_LIMITS.MAX_REASON_CHARS) || null,
+    lastError: trimTo(source.lastError, PERSISTENT_MIND_LIMITS.MAX_REASON_CHARS) || null,
   };
 }
 

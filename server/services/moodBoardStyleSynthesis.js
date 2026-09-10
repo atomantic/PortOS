@@ -13,13 +13,13 @@
 import { parseLLMJSON, resolveAPIProvider } from './aiProvider.js';
 import { ServerError } from '../lib/errorHandler.js';
 import { assertProvider, runPromptThroughProvider } from './promptRunner.js';
-import { trimTo } from '../lib/storyBible.js';
 import {
   sanitizeInfluences,
   sanitizeLocked,
   STYLE_NOTES_MAX,
 } from './universeBuilder.js';
 import { buildStyleReferenceDiff } from './universeStyleReference.js';
+import { trimTo } from '../lib/textUtils.js';
 
 // Context bounds: a board caps at 500 items, but the synthesis context must
 // stay well inside a chat-completion window. Items are taken in board order

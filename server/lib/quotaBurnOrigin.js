@@ -27,6 +27,7 @@
  */
 
 import { isPlainObject, POLLUTING_KEYS } from './objects.js';
+import { trimTo } from './textUtils.js';
 
 /**
  * The `origin` a quota-burn on-demand request carries. Declared here rather
@@ -152,8 +153,7 @@ export function burnPlanOwnsTask(taskMetadata) {
 }
 export const burnPlanOwnsAgent = (agent) => Boolean(agent?.metadata?.taskQuotaBurnFamily) && !agent.metadata.taskQuotaBurnMaintenanceRunId;
 
-const trimmed = (value, max = MAX_FIELD) => (typeof value === 'string' ? value.trim().slice(0, max) : '');
-const nullable = (value, max = MAX_FIELD) => trimmed(value, max) || null;
+const nullable = (value, max = MAX_FIELD) => trimTo(value, max) || null;
 
 const scalarParams = (raw) => {
   if (!isPlainObject(raw)) return {};
@@ -197,8 +197,8 @@ const scalarParams = (raw) => {
  */
 export function normalizeQuotaBurnProvenance(raw) {
   if (!isPlainObject(raw)) return null;
-  const family = trimmed(raw.family);
-  const stepId = trimmed(raw.stepId);
+  const family = trimTo(raw.family, MAX_FIELD);
+  const stepId = trimTo(raw.stepId, MAX_FIELD);
   if (!family || !stepId) return null;
   const limitingResetAt = Number(raw.limitingResetAt);
   const overrides = isPlainObject(raw.overrides) ? raw.overrides : {};
@@ -245,7 +245,7 @@ export function onDemandRequestMetadata(request) {
   const burn = request?.origin === QUOTA_BURN_REQUEST_ORIGIN
     ? normalizeQuotaBurnProvenance(request.burn)
     : null;
-  const requestId = trimmed(request?.id, 128);
+  const requestId = trimTo(request?.id, 128);
   return {
     onDemand: true,
     onDemandOrigin: nullable(request?.origin),

@@ -88,6 +88,16 @@ const NARROWED = [
     'needs getInstanceId, which instanceIdentity.js declares'],
   ['routes/systemHealth.js', 'services/instances.js',
     'needs getInstanceId, which instanceIdentity.js declares'],
+  // #6837: the string predicates / bounders live in textUtils.js; these pure
+  // leaves used to reach the whole story bible (crypto + fileUtils) for isStr.
+  ['lib/storyArc.js', 'lib/storyBible.js',
+    'needs isStr / trimTo / trimToClause, which textUtils.js declares'],
+  ['lib/styleGuide.js', 'lib/storyBible.js',
+    'needs isStr / trimTo, which textUtils.js declares'],
+  ['lib/sharingOrigin.js', 'lib/storyBible.js',
+    'needs isStr / trimTo, which textUtils.js declares'],
+  ['lib/renderSlot.js', 'lib/storyBible.js',
+    'needs isStr / trimTo, which textUtils.js declares'],
 ];
 
 describe('narrowed imports stay narrow (#6009)', () => {
@@ -112,6 +122,7 @@ describe('narrowed imports stay narrow (#6009)', () => {
     expect(reaches('lib/slashdoInvocation.js', 'lib/providerVendors.js')).toBe(true);
     expect(reaches('services/voice/tools/pipeline.js', 'lib/pipelineStages.js')).toBe(true);
     expect(reaches('services/instances.js', 'services/instanceIdentity.js')).toBe(true);
+    expect(reaches('lib/storyBible.js', 'lib/textUtils.js')).toBe(true);
   });
 
   // And a control on the other side: the barrels themselves still reach what
