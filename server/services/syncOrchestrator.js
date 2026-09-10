@@ -1005,6 +1005,13 @@ export function initSyncOrchestrator() {
  * module-load path (same reason as `categoriesCoveredByPeerSync` above). Logs
  * a single-line summary only when something was actually pruned — quiet on
  * no-op cycles.
+ *
+ * Stamps `lastTombstoneSweepAt` BEFORE awaiting the sweep (not after) so a
+ * slow sweep still under way can't have its claimed slot re-entered by a
+ * later tick once the hour rolls over — the same reasoning as the module-
+ * level doc comment. A sweep that FAILS resets the stamp back to 0, though,
+ * so a transient error (e.g. the DB blips) retries on the very next tick
+ * instead of going quiet for a full hour.
  */
 async function runTombstoneSweep() {
   const now = Date.now();
@@ -1013,6 +1020,7 @@ async function runTombstoneSweep() {
   const { sweepTombstones } = await import('./sharing/tombstoneGc.js');
   const result = await sweepTombstones().catch((err) => {
     console.error(`❌ Tombstone sweep failed: ${err.message}`);
+    lastTombstoneSweepAt = 0;
     return null;
   });
   if (result && (result.universes > 0 || result.series > 0 || result.issues > 0 || result.collections > 0)) {

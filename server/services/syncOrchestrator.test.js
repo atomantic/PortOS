@@ -1153,6 +1153,15 @@ describe('syncOrchestrator', () => {
       expect(sweepTombstones).toHaveBeenCalledTimes(2);
     });
 
+    it('resets the tombstone-sweep gate on failure so the very next tick retries', async () => {
+      initSyncOrchestrator();
+      getPeers.mockResolvedValue([]);
+      sweepTombstones.mockRejectedValueOnce(new Error('db blip'));
+      await vi.advanceTimersByTimeAsync(60000); // first tick — sweeps, rejects
+      await vi.advanceTimersByTimeAsync(60000); // second tick, only 60s later — retries because the failure cleared the gate
+      expect(sweepTombstones).toHaveBeenCalledTimes(2);
+    });
+
     it('runs syncAllPeers and the brain tombstone sweep on every tick regardless of the tombstone-sweep gate', async () => {
       initSyncOrchestrator();
       getPeers.mockResolvedValue([]);
