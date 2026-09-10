@@ -379,8 +379,9 @@ export function slashdoSkillName(command) {
 
 /**
  * Which invocation shape a provider gets — the single home for the
- * provider→slashdo-shape decision (`hasSlashdo` / `tuiSlashdoFree` in
- * `agentPromptBuilder.js` derive from this rather than re-deriving it).
+ * provider→slashdo-shape decision (`agentPromptBuilder.js`'s
+ * `canTypeSlashCommands` capability flag, and the completion `mode` it feeds,
+ * derive from this rather than re-deriving it).
  *
  * Detection reuses the shared provider predicates, so a path-configured or
  * renamed binary is recognised. An unidentified provider falls through to
@@ -447,11 +448,12 @@ export function resolveSlashdoStyle({
  * gets `SKILL` because it skips command discovery entirely.
  *
  * This is the single home for the completion-workflow gates in
- * `agentPromptBuilder.js` (formerly three inline provider-id allowlists:
- * `hasSlashdo`, `tuiSlashdoFree`, and the guideline-bullet `slashdoFree`). It
- * uses the `assumeClaudeWhenUnknown` posture because those gates describe a
- * session the spawners are about to launch, and every spawner resolves a blank
- * command to `claude`.
+ * `agentPromptBuilder.js` (formerly three inline provider-id allowlists, and
+ * later a trio of per-shape capability flags the completion sections
+ * re-derived; both collapsed to this predicate plus the resolved completion
+ * `mode` — see #6873). It uses the `assumeClaudeWhenUnknown` posture because
+ * those gates describe a session the spawners are about to launch, and every
+ * spawner resolves a blank command to `claude`.
  *
  * `assumeClaudeWhenUnknown` defaults to `true` here (unlike `resolveSlashdoStyle`)
  * because the callers are describing a CLI/TUI session about to be spawned. An

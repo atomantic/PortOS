@@ -457,7 +457,7 @@ export async function buildAgentPrompt(task, config, workspaceDir, worktreeInfo 
   const worktreeCommitNote = worktreeInfo
     ? worktreeCommitGuidance({
         isTui,
-        hasSlashdo: false,
+        canTypeSlashCommands: false,
         ownsPrWorkflow: false,
         isWorktreeOnExistingBranch,
         willOpenPR,
@@ -560,7 +560,7 @@ ${buildResumeSection(task, worktreeInfo)}` : '';
   // fallback template stays pure interpolation.
   const guidelineBullet = buildCompletionGuidelineBullet({
     mode: completionMode, whenDone,
-    tuiCompletionCommand, slashdoFree: isTui && !canRunSlashCommands,
+    tuiCompletionCommand,
     worktreeInfo, willOpenPR, prCompletion, noChangeSuccess,
     leavePrOpen: leavesPrForHuman(task),
   });
@@ -570,11 +570,11 @@ ${buildResumeSection(task, worktreeInfo)}` : '';
   // light path's `buildTuiCompletionSection` call is the live one). Kept
   // provider-aware anyway so this can't become the ONE call site that silently
   // promises `/do:pr` to a host that can't type it if the routing ever changes
-  // — this arm previously passed no slashdoFree at all, which is how gates like
-  // it drift (#3114).
+  // — this arm previously passed no slashdo-capability signal at all, which is
+  // how gates like it drift (#3114).
   const buildFullPathTuiCompletion = () => buildTuiCompletionSection({
     willOpenPR, prCompletion, simplifyEnabled, noChangeSuccess, portosMergesBranch,
-    slashdoFree: !canRunSlashCommands,
+    mode: completionMode,
     branchName: worktreeInfo?.branchName || null,
     baseBranch: worktreeInfo?.baseBranch || null,
     sentinelPath,
@@ -996,18 +996,18 @@ function buildLightContextSections(task, workspaceDir, worktreeInfo, isTruthyMet
   // path-configured `claude` binary under a custom provider id used to be denied
   // the slashdo workflow).
   const canTypeSlash = canTypeSlashCommands({ providerId, providerCommand, leanMode });
-  // CLI (non-TUI): a Claude Code session drives `/simplify` + `/do:pr` itself
-  // (the slashdo submodule mounts those as project-level slash commands). Other
-  // CLI providers (codex, antigravity, grok, opencode) get the legacy commit-only
-  // block where PortOS handles push+PR on exit.
-  const hasSlashdo = !isTui && canTypeSlash;
-  // TUI: a session that does NOT load Claude Code slash commands can't run
-  // `/do:pr` / `/do:push`, so its completion workflow uses plain git and hands
-  // the post-exit push / PR lifecycle back to PortOS
-  // — an OpenCode TUI, a codex/antigravity/grok TUI, or a lean-mode Claude
-  // session (`--bare` skips project command discovery, and the small local models
-  // lean mode targets fumble multi-step slashdo flows anyway).
-  const tuiSlashdoFree = isTui && !canTypeSlash;
+  // THE completion decision, made once. Every section below renders this key
+  // (`mode`) plus the `canTypeSlash` capability flag; no section re-derives a
+  // per-shape boolean of its own. See lib/agentCompletionMode.js for the rule
+  // order — this is the branch that matters in production, since every
+  // `tui`/`cli` provider returns from the light path and never reaches the
+  // full one, so a fix applied only there is no fix at all for anything a
+  // subscription-quota job can run.
+  const completionMode = resolveCompletionMode({
+    toolFreeReasoning, sentinelPayloadOutput, noCodeOutput, discardWorktree, claimFlow,
+    isReadOnly, isReviewLoopFollowUp, isTui, canRunSlashCommands: canTypeSlash,
+    portosMergesBranch, worktreeInfo, willOpenPR,
+  });
   // Does this session drive commit → push → PR → review → merge itself?
   //
   // ONE value answers both "emit the manual PR steps" and "emit the Review Loop
@@ -1102,26 +1102,17 @@ function buildLightContextSections(task, workspaceDir, worktreeInfo, isTruthyMet
 
   // --- Worktree / pipeline / JIRA context --------------------------------
   contractSections.push(...buildLightTaskContextSections({
-    task, worktreeInfo, isWorktreeOnExistingBranch, isTui, hasSlashdo, ownsPrWorkflow,
+    task, worktreeInfo, isWorktreeOnExistingBranch, isTui, mode: completionMode, canTypeSlashCommands: canTypeSlash, ownsPrWorkflow,
     willOpenPR, discardWorktree, claimFlow, noChangeSuccess,
   }));
 
   // --- Completion / review-loop ------------------------------------------
-  // THIS is the branch that matters in production — every `tui`/`cli` provider
-  // returns from the light path and never reaches the full one, so a fix
-  // applied only there is no fix at all for anything a subscription-quota job
-  // can run. The precedence itself lives in `resolveCompletionMode`.
-  const completionMode = resolveCompletionMode({
-    toolFreeReasoning, sentinelPayloadOutput, noCodeOutput, discardWorktree, claimFlow,
-    isReadOnly, isReviewLoopFollowUp, isTui, canRunSlashCommands: canTypeSlash,
-    portosMergesBranch, worktreeInfo, willOpenPR,
-  });
   const lightSentinelPath = () => resolveSentinelPath(worktreeInfo, workspaceDir, agentId);
   // Both TUI modes render the same section — `buildTuiCompletionSection` takes
-  // `slashdoFree` and adapts the workflow itself. Likewise the three commit/push
+  // `mode` and adapts the workflow itself. Likewise the three commit/push
   // modes: `buildCliCompletionSection` already reads `worktreeInfo`/`willOpenPR`.
   const pushTuiCompletion = () => contractSections.push(buildTuiCompletionSection({
-    willOpenPR, prCompletion, simplifyEnabled, noChangeSuccess, slashdoFree: tuiSlashdoFree, ownsPrWorkflow, portosMergesBranch,
+    willOpenPR, prCompletion, simplifyEnabled, noChangeSuccess, mode: completionMode, ownsPrWorkflow, portosMergesBranch,
     sentinelPath: lightSentinelPath(),
     branchName: worktreeInfo?.branchName || null,
     baseBranch: worktreeInfo?.baseBranch || null,
@@ -1129,7 +1120,7 @@ function buildLightContextSections(task, workspaceDir, worktreeInfo, isTruthyMet
     reviewers: lightReviewers, usernames: lightReviewerUsernames, optionalReviewers: lightOptionalReviewers, reviewerMaxRounds: lightReviewerMaxRounds, reviewerModels: lightReviewerModels, reviewerEfforts: lightReviewerEfforts, reviewStopMode: lightReviewStopMode, reviewerApplies: lightReviewerApplies,
     forgeCli: resolvedForgeCli, localReviewSection, localReviewRequired, postPrReview: ownsPrWorkflow ? runsPrSideReviewLoop : null
   }));
-  const pushCliCompletion = () => contractSections.push(buildCliCompletionSection({ worktreeInfo, willOpenPR, prCompletion, hasSlashdo, ownsPrWorkflow, simplifyEnabled, noChangeSuccess, leavePrOpen: leavesPrForHuman(task), reviewers: lightReviewers, usernames: lightReviewerUsernames, optionalReviewers: lightOptionalReviewers, reviewerMaxRounds: lightReviewerMaxRounds, reviewerModels: lightReviewerModels, reviewerEfforts: lightReviewerEfforts, reviewStopMode: lightReviewStopMode, reviewerApplies: lightReviewerApplies, forgeCli: resolvedForgeCli, localReviewSection, localReviewRequired, postPrReview: ownsPrWorkflow ? runsPrSideReviewLoop : null }));
+  const pushCliCompletion = () => contractSections.push(buildCliCompletionSection({ worktreeInfo, willOpenPR, prCompletion, mode: completionMode, canTypeSlashCommands: canTypeSlash, ownsPrWorkflow, simplifyEnabled, noChangeSuccess, leavePrOpen: leavesPrForHuman(task), reviewers: lightReviewers, usernames: lightReviewerUsernames, optionalReviewers: lightOptionalReviewers, reviewerMaxRounds: lightReviewerMaxRounds, reviewerModels: lightReviewerModels, reviewerEfforts: lightReviewerEfforts, reviewStopMode: lightReviewStopMode, reviewerApplies: lightReviewerApplies, forgeCli: resolvedForgeCli, localReviewSection, localReviewRequired, postPrReview: ownsPrWorkflow ? runsPrSideReviewLoop : null }));
 
   ({
     [COMPLETION_MODES.TOOL_FREE]: () => contractSections.push(buildToolFreeReasoningCompletionSection()),
@@ -1205,7 +1196,7 @@ function buildLightContextSections(task, workspaceDir, worktreeInfo, isTruthyMet
  * `buildLightContextSections`.
  */
 function buildLightTaskContextSections({
-  task, worktreeInfo, isWorktreeOnExistingBranch, isTui, hasSlashdo, ownsPrWorkflow,
+  task, worktreeInfo, isWorktreeOnExistingBranch, isTui, mode, canTypeSlashCommands, ownsPrWorkflow,
   willOpenPR, discardWorktree, claimFlow, noChangeSuccess,
 }) {
   const sections = [];
@@ -1217,7 +1208,7 @@ function buildLightTaskContextSections({
       `- **Path**: \`${worktreeInfo.worktreePath}\``,
       worktreeInfo.baseBranch ? `- **Based on**: \`${worktreeInfo.baseBranch}\`` : null,
       '',
-      worktreeCommitGuidance({ isTui, hasSlashdo, ownsPrWorkflow, isWorktreeOnExistingBranch, willOpenPR, discardWorktree, claimFlow, noChangeSuccess }),
+      worktreeCommitGuidance({ isTui, mode, canTypeSlashCommands, ownsPrWorkflow, isWorktreeOnExistingBranch, willOpenPR, discardWorktree, claimFlow, noChangeSuccess }),
       'Do NOT manually switch branches or modify the worktree configuration.',
       // Resuming a previous failed agent's branch: establish what's already done
       // before writing code (see buildResumeSection). '' when not a resume.
