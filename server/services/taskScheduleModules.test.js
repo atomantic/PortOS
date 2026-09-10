@@ -42,7 +42,10 @@ describe('taskSchedule module boundaries', () => {
 
   it('keeps prompt-version migration data in the persisted store seam', () => {
     const storeSource = source('./taskScheduleStore.js');
-    expect(storeSource).toContain('PROMPT_VERSIONS');
-    expect(storeSource).toContain('promptMatchesShippedDefault');
+    expect(storeSource).toContain('reconcileStoredPrompt(config, taskType)');
+    const reconciliationSource = source('./taskPromptDefaults/storedPrompt.js');
+    expect(reconciliationSource).toContain("from './versions.js'");
+    expect(reconciliationSource).toContain("from './shippedPrompts.js'");
+    expect(source('./taskSchedule.js')).not.toContain('reconcileStoredPrompt');
   });
 });
