@@ -44,7 +44,7 @@ Only a successfully extracted `.findings` value is the review text; treat it lik
 2. If there are unresolved review findings, fix them in this worktree, run the project's tests, commit (`feat:`/`fix:` prefix, no Co-Authored-By), push, and (for Copilot) resolve the addressed threads.
 3. Re-review with the same reviewer until it reports clean, then advance to the next reviewer in the list.
 4. When the reviewer list is exhausted (or the stop mode triggers), **leave the PR open** — do NOT merge it, and do NOT delete the branch. Its JIRA ticket is sitting in review and a human lands both together; merging here would leave the work merged and the ticket stuck in review.
-5. Post a short comment on the PR summarising what the reviewers raised and what you fixed, so the human landing it knows the state: `gh pr comment "https://github.com/example-org/example-repo/pull/42" --body "<summary>"`.
+5. Post a short comment on the MR summarising what the reviewers raised and what you fixed, so the human landing it knows the state: `glab mr note 42 --message "<summary>"`.
 6. Exit. Do **not** run `/do:push` or open a new PR. The system will clean up your worktree on exit.
 
 **Hard stop:** if a reviewer's loop hasn't converged after 10 iterations, post a PR comment summarising the unresolved blockers and exit. Do not loop indefinitely.

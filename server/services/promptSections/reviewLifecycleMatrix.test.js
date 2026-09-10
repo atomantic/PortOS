@@ -272,44 +272,88 @@ describe('buildReviewLoopFollowUpSection — load-bearing lines stay with their 
   });
 
   /**
-   * The ONE behavior change #6846 authorizes. `reviewForgeCli` resolves the
-   * caller's override first and only then the PR host, but the `leaveOpen`
-   * follow-up re-derived its comment command from `detectForgeCli(host)` — which
-   * returns `gh` for any host that is neither `github.com` nor `*gitlab.*`, i.e.
-   * exactly the self-managed GitLab the override exists for. So a run that
-   * diffs with `glab mr diff` is told to comment with `gh pr comment`.
+   * The ONE behavior change #6846 authorizes, and the regression guard for it.
+   * `reviewForgeCli` resolves the caller's override first and only then the PR
+   * host, but the `leaveOpen` closing steps re-derived their comment command
+   * from `detectForgeCli(host)` — which returns `gh` for any host that is
+   * neither `github.com` nor `*gitlab.*`, i.e. exactly the self-managed GitLab
+   * the override exists for. A run that diffed with `glab mr diff` was told to
+   * comment with `gh pr comment`, which fails outright on an MR URL.
    *
-   * After the refactor this expectation inverts to the `glab mr note` form and
-   * the `MR` noun, and that is the ONLY line of the whole matrix that moves.
+   * Both PR-side phases share those closing steps, so the fix moves the same
+   * line in four matrix cells (inline/follow-up x verbose/compact) and nothing
+   * else in the whole matrix.
    */
-  it('pins the forge-ladder disagreement on the leaveOpen comment command', () => {
-    const section = render(CELL('followUp', 'glab', true, false));
+  it('routes the leaveOpen comment command through the caller override too', () => {
+    for (const phase of ['inline', 'followUp']) {
+      const section = render(CELL(phase, 'glab', true, false));
 
-    expect(section).toContain('HTTP_STATUS=$(glab mr diff 42 | jq');
-    expect(section).toContain('5. Post a short comment on the PR summarising');
-    expect(section).toContain('`gh pr comment "https://github.com/example-org/example-repo/pull/42" --body "<summary>"`');
-    expect(section).not.toContain('glab mr note');
+      expect(section).toContain('HTTP_STATUS=$(glab mr diff 42 | jq');
+      expect(section).toContain('5. Post a short comment on the MR summarising');
+      expect(section).toContain('`glab mr note 42 --message "<summary>"`');
+      expect(section).not.toContain('gh pr comment');
+    }
   });
 
   /**
-   * The same disagreement in `buildMergeFollowUpSection`: its INLINE arm reads
-   * the caller's override, its non-inline arm re-derives from the PR host. The
-   * inline expectation below already holds; the follow-up one inverts with the
-   * refactor.
+   * The same disagreement in `buildMergeFollowUpSection`: its INLINE arm read
+   * the caller's override while its non-inline arm re-derived from the PR host,
+   * so a merge-only follow-up on a self-managed GitLab was handed `gh pr merge`.
+   * Both arms now read the one resolved forge.
    */
-  it('pins the merge-only gate reading the override inline and the host otherwise', () => {
-    const inline = buildReviewLoopFollowUpSection(
-      fixture({ reviewLoopPRHost: FORGES.glab.host, reviewLoopMergeOnly: true }),
-      { verbose: false, forgeCli: 'glab', inlineExitStep: INLINE_EXIT_STEP },
-    );
-    expect(inline).toContain('glab mr merge 42 --yes --remove-source-branch');
-    expect(inline).not.toContain('gh pr merge');
+  it('reads the caller override for the merge-only gate in both phases', () => {
+    for (const opts of [{ inlineExitStep: INLINE_EXIT_STEP }, {}]) {
+      const section = buildReviewLoopFollowUpSection(
+        fixture({ reviewLoopPRHost: FORGES.glab.host, reviewLoopMergeOnly: true }),
+        { verbose: false, forgeCli: 'glab', ...opts },
+      );
+      expect(section).toContain('glab mr merge 42 --yes --remove-source-branch');
+      expect(section).toContain('`glab mr view 42` must show it merged');
+      expect(section).not.toContain('gh pr merge');
+      expect(section).not.toContain('gh pr checks');
+    }
+  });
 
-    const followUp = buildReviewLoopFollowUpSection(
-      fixture({ reviewLoopPRHost: FORGES.glab.host, reviewLoopMergeOnly: true }),
-      { verbose: false, forgeCli: 'glab' },
+  /**
+   * The mirror-image disagreement, and the reason ONE resolution has to read
+   * both signals. `manualForgeCli` bottoms out at `gh`, so the light path hands
+   * a follow-up driving somebody else's GitLab MR `forgeCli: 'gh'` — an override
+   * that overrode nothing. Resolving the override first therefore used to hand
+   * `gh pr diff` / `gh pr merge` to a run whose PR host says `gitlab.com`, while
+   * the comment command and merge gate re-derived from that host and said glab.
+   */
+  it('follows a GitLab PR host that a defaulted gh override cannot contradict', () => {
+    const hostGlab = (over, opts) => buildReviewLoopFollowUpSection(
+      fixture({ reviewLoopPRHost: 'gitlab.com', ...over }),
+      { verbose: false, forgeCli: 'gh', localAgentLoopBody: CLI_REVIEW_RECIPE, baseBranch: 'main', ...opts },
     );
-    expect(followUp).toContain('gh pr merge "https://github.com/example-org/example-repo/pull/42" --merge --delete-branch');
-    expect(followUp).not.toContain('glab mr merge');
+
+    const merging = hostGlab({}, {});
+    expect(merging).toContain('HTTP_STATUS=$(glab mr diff 42 | jq');
+    expect(merging).toContain('glab mr merge "42" --yes --remove-source-branch');
+    expect(merging).toContain('`glab mr view "42"` must show it merged');
+    expect(merging).toContain('request `@example-user` as MR reviewer using the GitLab project UI or API');
+    expect(merging).not.toContain('gh pr merge');
+    expect(merging).not.toContain('gh pr view');
+
+    const leaveOpen = hostGlab({ reviewLoopLeaveOpen: true }, {});
+    expect(leaveOpen).toContain('5. Post a short comment on the MR summarising');
+    expect(leaveOpen).toContain('`glab mr note 42 --message "<summary>"`');
+    expect(leaveOpen).not.toContain('gh pr comment');
+
+    const mergeOnly = hostGlab({ reviewLoopMergeOnly: true }, {});
+    expect(mergeOnly).toContain('glab mr merge 42 --yes --remove-source-branch');
+    expect(mergeOnly).not.toContain('gh pr checks');
+  });
+
+  // A GitHub host with no override must still get every `gh` command — the fix
+  // above follows the RESOLVED forge, not "prefer glab".
+  it('keeps the merge-only gate on gh when nothing overrides a GitHub host', () => {
+    const section = buildReviewLoopFollowUpSection(
+      fixture({ reviewLoopMergeOnly: true }),
+      { verbose: false },
+    );
+    expect(section).toContain('gh pr merge "https://github.com/example-org/example-repo/pull/42" --merge --delete-branch');
+    expect(section).not.toContain('glab mr merge');
   });
 });
