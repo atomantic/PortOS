@@ -109,17 +109,9 @@ describe('cos-runner termination', () => {
     expect(RUNNER_SRC).toContain('armForceKill(agentId, agent, { dropState: agent.paused !== true })');
   });
 
-  // A paused agent was stopped deliberately and its record is what a later
-  // resume reads. The CLI close handler always had this guard; the TUI one did
-  // not, and the node-pty kill fix is what made that path reachable on Windows
-  // (before it, the kill threw and the PTY never exited at all).
-  it('reports nothing when a paused TUI exits, instead of finalizing it failed', () => {
-    const exitIdx = RUNNER_SRC.indexOf('tuiProcess.onExit(');
-    expect(exitIdx, 'the TUI exit handler must exist').toBeGreaterThan(-1);
-    const completedIdx = RUNNER_SRC.indexOf("emitToServer('agent:completed'", exitIdx);
-    const handler = RUNNER_SRC.slice(exitIdx, completedIdx);
-    expect(handler).toContain('current.paused === true');
-    expect(handler).toContain('activeAgents.delete(agentId)');
+  it('binds TUI exit handling to the original process record', () => {
+    expect(RUNNER_SRC).toContain('tuiProcess.onExit(createTuiExitHandler({');
+    expect(RUNNER_SRC).toContain('agentId, taskId, sessionId, agent, activeAgents, io, emitToServer, withState,');
   });
 });
 
@@ -158,13 +150,6 @@ describe('cos-runner durable TUI ownership (#3202)', () => {
       /import\s*\{[^}]*\brunnerAgentLivenessFields\b[^}]*\}\s*from\s*'\.\.\/lib\/runnerAgentLiveness\.js';/
     );
     expect(RUNNER_SRC).toMatch(/exited:\s*false/);
-    expect(RUNNER_SRC).toMatch(/current\.exited\s*=\s*true/);
-    const onExitIdx = RUNNER_SRC.indexOf('tuiProcess.onExit');
-    const exitedIdx = RUNNER_SRC.indexOf('current.exited = true');
-    expect(exitedIdx, 'onExit must stamp exited before deleting the handle').toBeGreaterThan(onExitIdx);
-    const deleteIdx = RUNNER_SRC.indexOf('activeAgents.delete(agentId);', exitedIdx);
-    expect(deleteIdx, 'onExit must drop the handle before awaiting completion I/O').toBeGreaterThan(exitedIdx);
-    expect(deleteIdx).toBeLessThan(RUNNER_SRC.indexOf('await withState((state) => {', exitedIdx));
     expect(RUNNER_SRC).toMatch(/if\s*\(\s*agent\.exited\s*===\s*true\s*\)\s*continue;/);
     expect(RUNNER_SRC).toMatch(/runnerAgentLivenessFields\(agent,\s*stats\)/);
     expect(RUNNER_SRC).toMatch(/inspectAgentProcess\(agent\)/);
@@ -177,15 +162,6 @@ describe('cos-runner durable TUI ownership (#3202)', () => {
     expect(RUNNER_SRC).toMatch(/io\.emit\('tui:output'/);
     expect(RUNNER_SRC).toMatch(/parseSentinelPayload\(contents\)/);
     expect(RUNNER_SRC).toMatch(/emitToServer\('agent:completed'/);
-  });
-
-  it('includes a bounded terminal output tail with TUI exit telemetry', () => {
-    // The live tui:output event can lose a race to an immediate process exit.
-    // Its terminal companion must retain a diagnostic tail for the spawner's
-    // raw-transcript failure analysis path.
-    expect(RUNNER_SRC).toContain('const TUI_EXIT_OUTPUT_TAIL_CHARS = 16 * 1024;');
-    expect(RUNNER_SRC).toMatch(/const outputTail = current\.outputBuffer\.slice\(-TUI_EXIT_OUTPUT_TAIL_CHARS\);/);
-    expect(RUNNER_SRC).toMatch(/io\.emit\('tui:exit',[\s\S]{0,350}?\.\.\.\(outputTail \? \{ outputTail \} : \{\}\)/);
   });
 });
 

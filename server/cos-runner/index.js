@@ -33,6 +33,7 @@ import { getProcessStats, checkProcessRunning } from './processStats.js';
 import { usableAgentPid, runnerAgentLivenessFields } from '../lib/runnerAgentLiveness.js';
 import { ALLOWED_COMMANDS, isAllowedCommand } from './allowedCommands.js';
 import { armForceKill as armForceKillShared } from './forceKill.js';
+import { createTuiExitHandler } from './tuiExit.js';
 import { PORTS } from '../lib/ports.js';
 import { setupProcessErrorHandlers } from '../lib/errorHandler.js';
 import { parseSentinelPayload } from '../lib/agentSentinel.js';
@@ -75,12 +76,6 @@ const HOST = process.env.HOST || '127.0.0.1';
 // Active agent processes (in memory)
 const activeAgents = new Map();
 
-// `tui:output` is live telemetry, so an immediate process exit can beat its
-// socket delivery. Keep a small terminal tail with the exit event: the PortOS
-// spawner owns failure analysis and can persist it when no ordinary TUI chunk
-// arrived. This is deliberately much smaller than the runner's 512 KiB live
-// buffer and is enough to carry a CLI's startup diagnostic.
-const TUI_EXIT_OUTPUT_TAIL_CHARS = 16 * 1024;
 const TUI_SIGNALS = new Set(['SIGTERM', 'SIGKILL', 'SIGINT']);
 
 // Bind the shared escalation to this process's map, grace window, and durable
@@ -301,63 +296,9 @@ app.post('/spawn-tui', async (req, res) => {
     io.emit('tui:output', { sessionId, agentId, data });
   });
 
-  tuiProcess.onExit(async ({ exitCode, signal }) => {
-    try {
-      const current = activeAgents.get(agentId);
-      if (!current) return;
-      current.exited = true;
-      // Drop the handle before the awaited state write so GET /agents cannot
-      // publish processActive:false for a TUI whose completion event is still
-      // in flight (completeAgent keeps the first terminal verdict).
-      activeAgents.delete(agentId);
-      current.doneWatcher?.();
-      // Cancel any pending SIGKILL timer — process already exited.
-      if (current.killTimer) {
-        clearTimeout(current.killTimer);
-        current.killTimer = null;
-      }
-      // A paused agent's process was stopped deliberately and its record is what
-      // a later resume reads, so report nothing: emitting `agent:completed` here
-      // would finalize it as FAILED and retire the task the pause meant to keep.
-      // Mirrors the CLI close handler's own pause guard below. This became
-      // reachable when the node-pty kill started landing on Windows — before
-      // that, pausing a runner-owned TUI threw and the PTY simply never exited.
-      if (current.paused === true) {
-        console.log(`⏸️ TUI agent ${agentId} exited after pause`);
-        activeAgents.delete(agentId);
-        return;
-      }
-      const duration = Date.now() - current.startedAt;
-      const success = current.completedBySentinel;
-      const effectiveExitCode = success ? 0 : exitCode;
-      const effectiveSignal = success ? 0 : signal;
-      const outputTail = current.outputBuffer.slice(-TUI_EXIT_OUTPUT_TAIL_CHARS);
-      io.emit('tui:exit', {
-        sessionId,
-        agentId,
-        exitCode: effectiveExitCode,
-        signal: effectiveSignal,
-        ...(outputTail ? { outputTail } : {}),
-      });
-      emitToServer('agent:completed', {
-        agentId,
-        taskId,
-        exitCode: effectiveExitCode,
-        success,
-        duration,
-        outputLength: current.outputBuffer.length,
-        completionReason: current.completedBySentinel ? 'agent-signaled-done' : 'tui-exit',
-      });
-      await withState((state) => {
-        state.stats.completed++;
-        if (!success) state.stats.failed++;
-        delete state.agents[agentId];
-      });
-    } catch (err) {
-      console.error(`❌ TUI agent ${agentId} exit handler error: ${err.message}`);
-      activeAgents.delete(agentId);
-    }
-  });
+  tuiProcess.onExit(createTuiExitHandler({
+    agentId, taskId, sessionId, agent, activeAgents, io, emitToServer, withState,
+  }));
 
   if (doneSentinelPath) {
     agent.doneWatcher = watchForFile(doneSentinelPath, async () => {
