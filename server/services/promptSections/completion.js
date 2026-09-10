@@ -3,6 +3,8 @@
  */
 
 import { DEFAULT_REVIEWER, DEFAULT_REVIEWERS, DEFAULT_REVIEW_STOP_MODE, normalizeReviewUsernames, resolveClaimReviewerConfig, buildReviewerPinNote, buildReviewerEffortNote, buildReviewWithArgs } from '../../lib/reviewerConfig.js';
+import { isAuditTaskType } from '../../lib/auditCatalog.js';
+import { resolveTaskHookType } from '../taskTypeHooks.js';
 import { PROGRAMMATIC_OUTPUT_COMPLETION_HEADING } from '../../lib/agentSentinel.js';
 import { canTypeSlashCommands, agentOwnsPrWorkflow } from '../../lib/slashdoInvocation.js';
 import { shellQuote } from '../../lib/shellQuote.js';
@@ -369,8 +371,19 @@ export function buildActionOutputCompletionSection({ isTui = false, sentinelPath
   return [
     notice,
     '',
-    `Your task is complete once that request succeeds. Then write a one-line summary to \`${sentinelPath}\` and stop — PortOS watches this sentinel and finalizes the run shortly after it appears. Do NOT run \`/quit\` and do NOT wait for anything after writing the sentinel.`
+    `Your task is complete once that request succeeds. Then write a short summary, including any structured report required by your task, to \`${sentinelPath}\` and stop — PortOS watches this sentinel and finalizes the run shortly after it appears. Do NOT run \`/quit\` and do NOT wait for anything after writing the sentinel.`
   ].join('\n');
+}
+
+/** Audit reports are a deliverable even when the run only files issues. */
+export function buildAuditOutputCompletionSection(task, sentinelPath) {
+  const category = resolveTaskHookType(task);
+  if (!isAuditTaskType(category)) return '';
+  return `## Required audit assessment handoff
+Before writing the completion sentinel, prepare the validated QUALITY_AUDIT_JSON report described in the audit instructions for category "${category}".
+Write your human summary AND exactly one single-line QUALITY_AUDIT_JSON: {...} report together to \`${sentinelPath}\`, then stop. This applies to every provider, including agents that normally finish by exiting.
+The report is required even when no issues are filed or no code changes are needed. A successful issue or PR does not supply a quality assessment. A final response alone is not enough: PortOS reads the sentinel file to save the dashboard score.
+Preserve the report when following the summary template above; the template's length guidance does not replace this required output. If assessment is unavailable, use score:null and explain the missing evidence rather than inventing a score.`;
 }
 
 /**
