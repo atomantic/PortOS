@@ -806,12 +806,7 @@ async function checkRunAfterDeps(schedule, taskType, appId = null, featureEnable
   return { satisfied: pending.length === 0, pending };
 }
 
-/**
- * Check if a task type should run for a specific app (or globally).
- * Successful completion may continue its perpetual drain past the initiating
- * cron slot; all eligibility and park gates still apply.
- */
-export async function shouldRunTask(taskType, appId = null, { featureEnabled = createFeatureGate(), continuePerpetual = false } = {}) {
+async function evaluateTaskReadiness(taskType, appId, { featureEnabled, continuingPerpetualDrain }) {
   if (appId && requiresInstallWideTarget(taskType)) {
     return { shouldRun: false, reason: 'requires-install-wide-target' };
   }
@@ -872,9 +867,9 @@ export async function shouldRunTask(taskType, appId = null, { featureEnabled = c
     : execution;
 
   // Type-level failure auto-park (#2616): a type whose instances failed
-  // FAILURE_PARK_THRESHOLD times in a row is parked for ALL cadence types
-  // (including ROTATION) until a manual retry or config change clears the
-  // ledger. Checked before the cadence switch so it short-circuits every type.
+  // FAILURE_PARK_THRESHOLD times in a row is parked for every cadence type
+  // until a manual retry or config change clears the ledger. Checked before
+  // the cadence switch so it short-circuits every type.
   if (appExecution.failureParkedAt) {
     return {
       shouldRun: false,
@@ -892,7 +887,7 @@ export async function shouldRunTask(taskType, appId = null, { featureEnabled = c
 
   // A perpetual task's park record is the drain's brake: the work-detector at
   // DISPATCH time writes `parkedUntil` when nothing is actionable, and this only
-  // READS it (so shouldRunTask never does network I/O). Shared by both cadence
+  // READS it (so readiness checks never do network I/O). Shared by both cadence
   // variants — an on-demand+perpetual task is due whenever it isn't parked, a
   // cron+perpetual task additionally needs a cron slot to initiate a drain.
   const perpetualParkResult = () => {
@@ -925,7 +920,7 @@ export async function shouldRunTask(taskType, appId = null, { featureEnabled = c
       if (isPerpetual) {
         const parked = perpetualParkResult();
         if (parked) { result = parked; break; }
-        if (continuePerpetual) {
+        if (continuingPerpetualDrain) {
           result = { shouldRun: true, reason: 'perpetual-drain' };
           break;
         }
@@ -967,8 +962,7 @@ export async function shouldRunTask(taskType, appId = null, { featureEnabled = c
 
   // Escalating failure backoff (#2616): a type with recent consecutive failures
   // (still below the park threshold) slows down — 2^n × base, capped — instead
-  // of re-queuing every tick. Applies to ALL cadence types, including ROTATION
-  // (which is otherwise `shouldRun: true` unconditionally). Gated on
+  // of re-queuing every tick. Applies to every cadence type. Gated on
   // `lastFailureAt` so a never-failed type is unaffected; a success resets the
   // ledger via recordTaskTypeSuccess so the backoff lifts immediately.
   if (result.shouldRun) {
@@ -1004,6 +998,21 @@ export async function shouldRunTask(taskType, appId = null, { featureEnabled = c
 }
 
 /**
+ * Check whether a task should initiate a scheduled run for an app or globally.
+ */
+export async function shouldRunTask(taskType, appId = null, { featureEnabled = createFeatureGate() } = {}) {
+  return evaluateTaskReadiness(taskType, appId, { featureEnabled, continuingPerpetualDrain: false });
+}
+
+/**
+ * Check whether an already-started perpetual drain should take another hop.
+ * If asked to continue a non-perpetual type, its normal cadence remains in force.
+ */
+export async function shouldContinuePerpetualDrain(taskType, appId = null, { featureEnabled = createFeatureGate() } = {}) {
+  return evaluateTaskReadiness(taskType, appId, { featureEnabled, continuingPerpetualDrain: true });
+}
+
+/**
  * Get all enabled task types that are due to run (optionally for a specific app)
  */
 export async function getDueTasks(appId = null, { continuingTaskType = null } = {}) {
@@ -1014,7 +1023,10 @@ export async function getDueTasks(appId = null, { continuingTaskType = null } = 
   for (const [taskType, interval] of Object.entries(schedule.tasks)) {
     if (!interval.enabled) continue;
 
-    const check = await shouldRunTask(taskType, appId, { featureEnabled, continuePerpetual: taskType === continuingTaskType });
+    const checkTask = taskType === continuingTaskType
+      ? shouldContinuePerpetualDrain
+      : shouldRunTask;
+    const check = await checkTask(taskType, appId, { featureEnabled });
     if (check.shouldRun) {
       due.push({ taskType, reason: check.reason, interval });
     }
@@ -1024,19 +1036,13 @@ export async function getDueTasks(appId = null, { continuingTaskType = null } = 
 }
 
 /**
- * Get the next task type to run (optionally for a specific app)
+ * Get the next task type to run (optionally for a specific app).
+ * When `perpetualOnly` is true, return a due perpetual drain or null; never a
+ * cron type that would mask it.
  */
 export async function getNextTaskType(appId = null, { perpetualOnly = false, continuingTaskType = null } = {}) {
   const dueTasks = await getDueTasks(appId, { continuingTaskType });
 
-  // `perpetualOnly` constrains the pick to a due perpetual (drain-until-done)
-  // task, skipping every other schedule type. Callers set this when the app is
-  // on its review cooldown: only perpetual drains bypass that cooldown (their
-  // work-detector park is the throttle), so a higher-priority cron type that's
-  // also due must NOT be returned — it would mask the perpetual drain and the
-  // caller, seeing a non-exempt pick, would skip the whole app for the cooldown
-  // window (the mixed-schedule stall). Returns null when nothing perpetual is
-  // due, so the caller leaves the cooled-down app alone.
   const perpetualDue = dueTasks.filter(t => t.interval.perpetual === true);
   if (perpetualOnly) {
     return perpetualDue.length > 0
