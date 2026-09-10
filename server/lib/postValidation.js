@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { CACHEABLE_TYPES, COGNITIVE_DRILL_TYPES, POST_SUPPORTED_MEMORY_TYPES } from './postDrillTypes.js';
+import { CACHEABLE_TYPES, COGNITIVE_DRILL_TYPES, LLM_DRILL_TYPES, POST_SUPPORTED_MEMORY_TYPES } from './postDrillTypes.js';
 import { TOPIC_IDS } from './postTopics.js';
 import { HHMM_STRICT_RE } from './timezone.js';
 import { POST_LLM_MAX_SEMANTIC_CANDIDATES, postLlmEvaluationSchema } from './postLlmContracts.js';
@@ -97,10 +97,10 @@ const llmResponseSchema = z.object({
 
 // Drill type configuration
 const MATH_DRILL_TYPES = ['doubling-chain', 'serial-subtraction', 'multiplication', 'powers', 'estimation', 'applied-numeracy'];
-const LLM_DRILL_TYPES = ['word-association', 'story-recall', 'verbal-fluency', 'wit-comeback', 'pun-wordplay', 'compound-chain', 'bridge-word', 'double-meaning', 'idiom-twist', 'what-if', 'alternative-uses', 'story-prompt', 'invention-pitch', 'reframe'];
 const MEMORY_DRILL_TYPES = ['memory-fill-blank', 'memory-sequence', 'memory-element-flash'];
-// POST_SUPPORTED_MEMORY_TYPES lives in ./postDrillTypes.js (a zod-free leaf,
-// re-exported by the client's meatspace/post/constants.js) — imported above.
+// LLM_DRILL_TYPES, COGNITIVE_DRILL_TYPES and POST_SUPPORTED_MEMORY_TYPES live in
+// ./postDrillTypes.js (a zod-free leaf, re-exported by the client's
+// meatspace/post/constants.js) — imported above, so each list has one owner.
 // Canonical set of coarse "module" tags a scored POST task/session can carry
 // (mental-math / llm-drills / cognitive drills / memory drills). Shared by the
 // session-submit schema (below) and sessionModules config so a typo'd module
@@ -108,8 +108,7 @@ const MEMORY_DRILL_TYPES = ['memory-fill-blank', 'memory-sequence', 'memory-elem
 // `byModule` stats bucket (issue #2099). Morse is deliberately excluded — it
 // only ever posts through the separate, unrestricted `trainingEntrySchema`.
 const POST_MODULES = ['mental-math', 'llm-drills', 'cognitive', 'memory'];
-// Cognitive drills (deterministic, no LLM) — n-back / digit-span / stroop.
-// Sourced from meatspacePostCognitive.js so the type list has one owner.
+// Every scored drill type across the four modules — backs taskResultSchema.type.
 const DRILL_TYPES = [...MATH_DRILL_TYPES, ...LLM_DRILL_TYPES, ...MEMORY_DRILL_TYPES, ...COGNITIVE_DRILL_TYPES];
 // Morse trainer drill types (client-side scoring — exact-match copy/send comparison).
 // Deliberately NOT spliced into DRILL_TYPES: that array also backs
