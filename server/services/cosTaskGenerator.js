@@ -5,7 +5,7 @@ import { isPrivateSecurityTask, PRIVATE_SECURITY_DELIVERY } from '../lib/private
  *
  * The task-generation + evaluation engine extracted from cos.js. Owns:
  *  - `evaluateTasks` — the periodic/startup evaluation loop that decides what
- *    to spawn (priority 0 on-demand → 1 user → 2 auto-system → 3 mission/feature
+ *    to spawn (priority 0 on-demand → 1 user → 2 auto-system → 3.6 feature agent
  *    → 4 idle review) and emits `task:ready` for each pick.
  *  - the self-improvement / managed-app / idle-review generators that build the
  *    actual task objects (prompt template + metadata + confidence approval).
@@ -48,11 +48,10 @@ import { getActiveApps, getAppTaskTypeOverrides } from './apps.js';
 // The single Priority-0 on-demand loop body, shared with the dequeueNextTask
 // engine in cos.js so the two can no longer drift (#6618).
 import { drainOnDemandRequests } from './onDemandDrain.js';
-import { isMissionTierEligible, isIdleTierEligible } from './cosDequeue.js';
+import { isIdleTierEligible } from './cosDequeue.js';
 import { resolveAgentProviderPin } from './appTaskProviderPin.js';
 import { getTaskTypeConfidence } from './taskLearning.js';
 import { classifySafetyKind, requiresSafetyApproval } from './taskLearning/safetyKind.js';
-import { generateProactiveTasks as generateMissionTasks } from './missions.js';
 import { isRecoveryTask } from './recoveryTasks.js';
 import { getCodeReviewDefaults } from './codeReview.js';
 import { getSkipReason } from './cosTaskClaim.js';
@@ -721,7 +720,7 @@ export async function unblockExpiredCooldowns(userTaskData, cosTaskData) {
  * many autonomous admissions the autonomous tiers may add this cycle.
  *
  * Off/dry-run withhold all AUTOMATIC internal spawns (auto-approved system
- * tasks, mission, feature-agent, idle-review); user and on-demand tasks are
+ * tasks, feature-agent, idle-review); user and on-demand tasks are
  * unaffected. Usage is tallied in completeAgent for autonomous runs only, so a
  * pure dry-run never accrues; user/on-demand spawns are already past this gate.
  *
@@ -968,49 +967,6 @@ async function maybeQueueImprovementTasks(ctx) {
 }
 
 /**
- * Priority 3: Mission-driven proactive tasks (if no user tasks). Autonomous —
- * gated by the CoS auto-run domain (off/dry-run skip generation entirely) and
- * capped by `autonomousSlotCeiling`.
- */
-async function spawnPriority3Missions(ctx) {
-  const { state, hasPendingUserTasks, cosAutonomyMode, autonomousSlotCeiling, tasksToSpawn, canSpawnTask, trackSpawn } = ctx;
-
-  if (isMissionTierEligible({
-    spawned: tasksToSpawn.length,
-    ceiling: autonomousSlotCeiling,
-    hasPendingUserTasks,
-    proactiveMode: state.config.proactiveMode,
-    autonomyMode: cosAutonomyMode
-  })) {
-    const missionTasks = await generateMissionTasks({ maxTasks: autonomousSlotCeiling - tasksToSpawn.length }).catch(err => {
-      emitLog('debug', `Mission task generation failed: ${err.message}`);
-      return [];
-    });
-
-    for (const missionTask of missionTasks) {
-      if (tasksToSpawn.length >= autonomousSlotCeiling) break;
-      // Convert mission task to COS task format
-      const cosTask = {
-        id: missionTask.id,
-        description: missionTask.description,
-        priority: missionTask.priority?.toUpperCase() || 'MEDIUM',
-        status: 'pending',
-        metadata: missionTask.metadata,
-        taskType: 'internal',
-        approvalRequired: !missionTask.autoApprove
-      };
-      if (!canSpawnTask(cosTask, autonomousSlotCeiling)) continue;
-      tasksToSpawn.push(cosTask);
-      trackSpawn(cosTask);
-      emitLog('info', `Generated mission task: ${missionTask.id} (${missionTask.metadata?.missionName})`, {
-        missionId: missionTask.metadata?.missionId,
-        appId: missionTask.metadata?.appId
-      });
-    }
-  }
-}
-
-/**
  * Priority 3.6: Feature Agents (after autonomous jobs, yield to user tasks).
  * Autonomous — gated by the CoS auto-run domain and capped by
  * `autonomousSlotCeiling`.
@@ -1080,14 +1036,13 @@ async function spawnPriority4IdleReview(ctx) {
  *   - Priority 0 — on-demand requests       (`spawnPriority0OnDemand`)
  *   - Priority 1 — pending user tasks        (`spawnPriority1UserTasks`)
  *   - Priority 2 — auto-approved system tasks (`spawnPriority2AutoApproved`)
- *   - Priority 3 — mission-driven tasks      (`spawnPriority3Missions`)
  *   - Priority 3.6 — due feature agents      (`spawnPriority36FeatureAgents`)
  *   - Priority 4 — idle review               (`spawnPriority4IdleReview`)
  *
  * Cross-cutting gates live here so they cover every tier uniformly: the
  * paused/daemon guard, the global slot cap, orphan-cooldown unblocking, and the
  * CoS auto-run + daily-budget gate (`resolveAutonomyBudget`). Priorities 0–1
- * spend against the global `availableSlots`; the autonomous tiers (2, 3, 3.6, 4)
+ * spend against the global `availableSlots`; the autonomous tiers (2, 3.6, 4)
  * spend against the lower `autonomousSlotCeiling` so the CoS action budget caps
  * them. `evaluateTasks` emits `task:ready` per pick; the spawn-side scheduler
  * (`dequeueNextTask`/`tryImmediateSpawn`) stays in cos.js.
@@ -1236,10 +1191,9 @@ export async function evaluateTasks(options) {
     // unchanged. The autonomous tiers use this in place of `availableSlots`.
     ctx.autonomousSlotCeiling = Math.min(availableSlots, tasksToSpawn.length + autonomousActionsRemaining);
 
-    // Priorities 2, 3, 3.6, 4 spend against the lower autonomous ceiling.
+    // Priorities 2, 3.6, 4 spend against the lower autonomous ceiling.
     await spawnPriority2AutoApproved(ctx);
     await maybeQueueImprovementTasks(ctx);
-    await spawnPriority3Missions(ctx);
     await spawnPriority36FeatureAgents(ctx);
     await spawnPriority4IdleReview(ctx);
   }

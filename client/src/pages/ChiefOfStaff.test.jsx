@@ -85,7 +85,6 @@ const config = {
   maxProcessMemoryMb: 2048,
   autoStart: false,
   improvementEnabled: true,
-  proactiveMode: true,
   idleReviewEnabled: true,
 };
 

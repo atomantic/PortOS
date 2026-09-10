@@ -46,7 +46,6 @@ import { appendRunEvent } from './agentRunEventLog.js';
 import { runnerAgents, setUseRunner, useRunner } from './agentState.js';
 import { releaseAppReviewMarker } from './appActivity.js';
 import { isUpdateInProgress } from './updateChecker.js';
-import { releaseMissionSubTask } from './missions.js';
 import { loadState } from './cosState.js';
 import { acquireLocalEndpointSpawnSlot } from './cosLocalEndpointSlots.js';
 import { forgeSpawnHoldReason } from './cosForgeSpawnGate.js';
@@ -81,11 +80,6 @@ let runnerRecovery = Promise.resolve();
  *     which also re-registers the cron schedule. Without it an autonomous job
  *     sits wedged until the scheduler's 5-minute spawn timeout — per job, per
  *     outage.
- *   - a mission sub-task's `in_progress` flip (issue #4858). `generateMissionTask`
- *     writes that flip before returning, and a mission task is never persisted to
- *     `COS-TASKS.md` — the emitted object is the only copy. Held without the
- *     revert, the sub-task is stranded for good: there is no record left queued,
- *     and generation only ever re-picks `pending` sub-tasks.
  *
  * Shared by every hold condition (self-update in progress, runner down, local
  * inference endpoint at capacity, and any that follow) so a new one can't ship
@@ -98,11 +92,6 @@ async function holdTask(task, reason) {
   );
   if (task.metadata?.jobId) {
     cosEvents.emit('job:spawn-failed', { jobId: task.metadata.jobId });
-  }
-  if (task.metadata?.missionId && task.metadata?.subTaskId) {
-    await releaseMissionSubTask(task.metadata.missionId, task.metadata.subTaskId).catch(err =>
-      emitLog('warn', `Failed to release mission sub-task ${task.metadata.subTaskId}: ${err.message}`, { taskId: task.id })
-    );
   }
 }
 

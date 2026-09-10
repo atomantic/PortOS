@@ -47,7 +47,6 @@ const config = {
   alwaysOn: false,
   autoStart: false,
   improvementEnabled: true,
-  proactiveMode: true,
   idleReviewEnabled: true,
 };
 
