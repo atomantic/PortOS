@@ -57,7 +57,7 @@ it('does not restore a subscription removed during its own export', async () => 
   const [sub] = await subscriptions.listSubscriptions();
   await subscriptions.unsubscribe(sub.id);
   exported.resolve({ manifestId: 'a-export' });
-  await subscribing;
+  expect(await subscribing).toBeNull();
   expect(await subscriptions.listSubscriptions()).toEqual([]);
 });
 

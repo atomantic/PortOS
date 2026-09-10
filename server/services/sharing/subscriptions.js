@@ -158,7 +158,7 @@ export async function subscribe({ bucketId, recordKind, recordId }) {
 
   // Export outside the state queue, then stamp only a still-live row.
   const exp = await runExport({ bucketId, recordKind, recordId });
-  if (exp) return (await stampExport(sub, exp)) || sub;
+  if (exp) return stampExport(sub, exp);
   return sub;
 }
 
