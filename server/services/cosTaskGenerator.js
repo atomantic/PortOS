@@ -219,7 +219,10 @@ export function shouldParkUnchangedPerpetualWork(detection, lastSignature, dispa
 // a caller that naturally kept using the store's returned object instead of
 // the generator's recorded nothing, silently (#6871).
 export async function recordDeferredPerpetualDispatch(pendingPerpetualDispatch, taskSchedule) {
-  if (!pendingPerpetualDispatch) return false;
+  // Sentinel on the field the record can't exist without, not mere truthiness
+  // of the object — a malformed record must never reach recordPerpetualDispatch
+  // as `undefined`, which would write a bogus schedule entry instead of no-oping.
+  if (!pendingPerpetualDispatch?.taskType) return false;
   const { taskType, appId, signature } = pendingPerpetualDispatch;
   await taskSchedule.recordPerpetualDispatch(taskType, appId, signature);
   return true;
@@ -2850,7 +2853,10 @@ export async function prepareManagedAppImprovementTask(taskType, app, state, {
 export async function generateManagedAppImprovementTaskForType(taskType, app, state, opts = {}) {
   const taskSchedule = await import('./taskSchedule.js');
   const prepared = await prepareManagedAppImprovementTask(taskType, app, state, opts);
-  if (!prepared) return null;
+  // Guard on `prepared?.task`, matching every other caller of prepare — task
+  // and pendingPerpetualDispatch are always constructed together, but this
+  // keeps the guard from silently drifting if that ever changes.
+  if (!prepared?.task) return null;
   await recordDeferredPerpetualDispatch(prepared.pendingPerpetualDispatch, taskSchedule);
   return prepared.task;
 }
