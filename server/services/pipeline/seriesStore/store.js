@@ -72,6 +72,26 @@ function makeFileBackend(dir, sanitizeRecord) {
       const records = await Promise.all(ids.map((id) => cs.loadOneRaw(id)));
       return records.filter((r) => r != null);
     },
+    // The file layout can't project — `deleted` lives inside each record, so
+    // a live-only or tombstone-cutoff id list means reading them all. Mirrors
+    // the JS filter series.js used to run over loadAll() directly — same
+    // conservative "unparseable deletedAt is kept" rule.
+    listLiveIds: async () => {
+      const ids = await cs.listIds();
+      const records = await Promise.all(ids.map((id) => cs.loadOneRaw(id)));
+      return records.filter((r) => r && r.deleted !== true).map((r) => r.id);
+    },
+    listTombstoneIdsBefore: async (beforeMs) => {
+      const ids = await cs.listIds();
+      const records = await Promise.all(ids.map((id) => cs.loadOneRaw(id)));
+      const out = [];
+      for (const r of records) {
+        if (!r?.deleted || typeof r.id !== 'string' || !r.id) continue;
+        const t = Date.parse(r.deletedAt || '');
+        if (Number.isFinite(t) && t < beforeMs) out.push(r.id);
+      }
+      return out;
+    },
     writeRaw: (id, record) => cs.saveOneNow(id, record),
     deleteRaw: (id) => cs.deleteOneNow(id),
     verify: () => cs.verifySchemaVersion(),
@@ -88,6 +108,8 @@ function makePgBackend(db, sanitizeRecord) {
       return raw ? sanitizeRecord(raw) : null;
     },
     listIds: db.listIds,
+    listLiveIds: db.listLiveIds,
+    listTombstoneIdsBefore: db.listTombstoneIdsBefore,
     listRaw: db.listRaw,
     writeRaw: db.writeRaw,
     deleteRaw: db.deleteRaw,
@@ -146,6 +168,8 @@ function createFacade({ dir, sanitizeRecord }) {
 
     // Reads (sanitized, matching collectionStore.loadOne/loadAll)
     listIds: async () => (await getBackend()).listIds(),
+    listLiveIds: async () => (await getBackend()).listLiveIds(),
+    listTombstoneIdsBefore: async (beforeMs) => (await getBackend()).listTombstoneIdsBefore(beforeMs),
     loadOne,
     loadOneRaw: async (id) => {
       if (typeof id !== 'string' || !ID_PATTERN.test(id)) return null;

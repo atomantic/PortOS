@@ -104,8 +104,24 @@ vi.mock('fs/promises', () => ({
   writeFile: vi.fn().mockResolvedValue(),
   rename: vi.fn().mockResolvedValue()
 }));
+// runTombstoneSweep/runBrainTombstoneSweep each `await import(...)` this
+// module lazily (keeps the GC dependency graphs off the orchestrator's own
+// module-load path) — vitest's mock registry covers a dynamic import the same
+// as a static one, so this intercepts it. Zero-valued results so the
+// no-op-cycle logging branches in both functions stay quiet.
+vi.mock('./sharing/tombstoneGc.js', () => ({
+  sweepTombstones: vi.fn().mockResolvedValue({
+    universes: 0, series: 0, issues: 0, collections: 0,
+    orphanBaseHashes: 0, orphanSubscriptions: 0, refused: [],
+  }),
+}));
+vi.mock('./brainTombstoneGc.js', () => ({
+  sweepBrainTombstones: vi.fn().mockResolvedValue({ pruned: 0 }),
+}));
 
 import { readJSONFile } from '../lib/fileUtils.js';
+import { sweepTombstones } from './sharing/tombstoneGc.js';
+import { sweepBrainTombstones } from './brainTombstoneGc.js';
 import { getPeers } from './instances.js';
 import { applyRemoteChanges as applyBrainChanges } from './brainSync.js';
 import { BRAIN_ENTITY_TYPES } from './brainStorage.js';
@@ -1109,6 +1125,42 @@ describe('syncOrchestrator', () => {
 
       // syncAllPeers should have been triggered
       expect(getPeers).toHaveBeenCalled();
+    });
+
+    // #6851 — the tombstone sweep no longer rides every 60s tick; it's gated
+    // to once per TOMBSTONE_SWEEP_INTERVAL_MS (1h), except the very first tick
+    // after boot always runs it so a fresh process doesn't wait an hour.
+    it('runs the tombstone sweep on the first tick after boot', async () => {
+      initSyncOrchestrator();
+      getPeers.mockResolvedValue([]);
+      await vi.advanceTimersByTimeAsync(60000);
+      expect(sweepTombstones).toHaveBeenCalledTimes(1);
+    });
+
+    it('does not run the tombstone sweep again on the very next tick (60s later)', async () => {
+      initSyncOrchestrator();
+      getPeers.mockResolvedValue([]);
+      await vi.advanceTimersByTimeAsync(60000); // first tick — sweeps
+      await vi.advanceTimersByTimeAsync(60000); // second tick, 60s later — gated
+      expect(sweepTombstones).toHaveBeenCalledTimes(1);
+    });
+
+    it('runs the tombstone sweep again once a full hour has elapsed', async () => {
+      initSyncOrchestrator();
+      getPeers.mockResolvedValue([]);
+      await vi.advanceTimersByTimeAsync(60000); // first tick (t=60s) — sweeps
+      await vi.advanceTimersByTimeAsync(60 * 60 * 1000); // t=1h60s — due again
+      expect(sweepTombstones).toHaveBeenCalledTimes(2);
+    });
+
+    it('runs syncAllPeers and the brain tombstone sweep on every tick regardless of the tombstone-sweep gate', async () => {
+      initSyncOrchestrator();
+      getPeers.mockResolvedValue([]);
+      await vi.advanceTimersByTimeAsync(60000); // t=60s — tombstone sweep runs (first tick)
+      await vi.advanceTimersByTimeAsync(60000); // t=120s — tombstone sweep gated
+      expect(getPeers).toHaveBeenCalledTimes(2); // syncAllPeers fires every tick
+      expect(sweepBrainTombstones).toHaveBeenCalledTimes(2); // brain sweep is untouched by this gate
+      expect(sweepTombstones).toHaveBeenCalledTimes(1); // gated on the second tick
     });
   });
 

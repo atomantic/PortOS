@@ -38,6 +38,27 @@ function makeFileBackend() {
     name: 'file',
     readRaw: (id) => collection.loadOneRaw(id),
     listRaw: () => collection.loadAll(),
+    listIds: () => collection.listIds(),
+    // The file layout can't project — `deleted` lives inside each record, so
+    // a live-only or tombstone-cutoff id list means reading them all (no
+    // sanitizeRecord is configured on this collection, so loadAll() is
+    // already raw — same as listRaw above). Mirrors the JS filter
+    // pruneTombstonedLooms used to run over listLooms({includeDeleted:true})
+    // directly — same conservative "unparseable deletedAt is kept" rule.
+    listLiveIds: async () => {
+      const records = await collection.loadAll();
+      return records.filter((r) => r?.deleted !== true).map((r) => r.id);
+    },
+    listTombstoneIdsBefore: async (beforeMs) => {
+      const records = await collection.loadAll();
+      const out = [];
+      for (const r of records) {
+        if (!r?.deleted || typeof r.id !== 'string' || !r.id) continue;
+        const t = Date.parse(r.deletedAt || '');
+        if (Number.isFinite(t) && t < beforeMs) out.push(r.id);
+      }
+      return out;
+    },
     writeRaw: (id, record) => collection.saveOneNow(id, record),
     deleteRaw: (id) => collection.deleteOneNow(id),
     verify: () => collection.verifySchemaVersion(),
@@ -49,6 +70,9 @@ function makePgBackend(db) {
     name: 'postgres',
     readRaw: db.readRaw,
     listRaw: db.listRaw,
+    listIds: db.listIds,
+    listLiveIds: db.listLiveIds,
+    listTombstoneIdsBefore: db.listTombstoneIdsBefore,
     writeRaw: db.writeRaw,
     deleteRaw: db.deleteRaw,
     verify: async () => ({
@@ -78,6 +102,15 @@ export const readRaw = async (id) => {
 };
 
 export const listRaw = async () => (await facade.getBackend()).listRaw();
+
+/** Every loom id (live AND tombstones) — used by tombstoneGc's ALL_ID_LISTERS. */
+export const listIds = async () => (await facade.getBackend()).listIds();
+
+/** Live loom ids only — used by tombstoneGc's LIVE_ID_LISTERS. */
+export const listLiveIds = async () => (await facade.getBackend()).listLiveIds();
+
+/** Tombstoned loom ids older than `beforeMs` — the GC candidate scan. */
+export const listTombstoneIdsBefore = async (beforeMs) => (await facade.getBackend()).listTombstoneIdsBefore(beforeMs);
 
 export const writeRaw = async (id, record) => {
   assertId(id);

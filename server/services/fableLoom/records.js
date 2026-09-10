@@ -37,6 +37,7 @@ import {
   deleteRaw,
   isValidLoomId,
   listRaw,
+  listTombstoneIdsBefore,
   queueLoomWrite,
   readRaw,
   writeRaw,
@@ -892,18 +893,21 @@ export async function mergeLoomsFromSync(
 /** Hard-prune tombstones only after the shared federation GC computes a safe cutoff. */
 export async function pruneTombstonedLooms(olderThanMs) {
   if (!Number.isFinite(olderThanMs)) return { pruned: 0 };
-  const candidates = (await listLooms({ includeDeleted: true }))
-    .filter((loom) => loom.deleted && Number.isFinite(Date.parse(loom.deletedAt))
-      && Date.parse(loom.deletedAt) < olderThanMs);
+  // Id-only candidate scan — SQL projection on Postgres, hydrate+filter on the
+  // file escape hatch. The sweep almost never finds a tombstone, so this must
+  // not pay for every loom's JSONB body (episode graphs included) just to
+  // find zero candidates. The authoritative re-check inside each per-id queue
+  // below still re-reads and re-sanitizes the record.
+  const candidateIds = await listTombstoneIdsBefore(olderThanMs);
   let pruned = 0;
   await withBaseHashFlushBatch(async () => {
-    for (const candidate of candidates) {
-      const removed = await queueLoomWrite(candidate.id, async () => {
-        const current = sanitizeLoom(await readRaw(candidate.id));
+    for (const id of candidateIds) {
+      const removed = await queueLoomWrite(id, async () => {
+        const current = sanitizeLoom(await readRaw(id));
         const deletedAtMs = Date.parse(current?.deletedAt || '');
         if (!current?.deleted || !Number.isFinite(deletedAtMs) || deletedAtMs >= olderThanMs) return false;
-        await deleteRaw(candidate.id);
-        await deleteSyncBaseHash('fableLoom', candidate.id);
+        await deleteRaw(id);
+        await deleteSyncBaseHash('fableLoom', id);
         return true;
       });
       if (removed) pruned += 1;

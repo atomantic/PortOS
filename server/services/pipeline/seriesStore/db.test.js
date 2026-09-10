@@ -86,6 +86,25 @@ describe.skipIf(!runDb)('pipeline series DB adapter round-trip', () => {
     expect((await db.listIds()).sort()).toEqual(['ser-dead', 'ser-ghost', 'ser-live']);
   });
 
+  it('listLiveIds returns only non-deleted ids', async () => {
+    await db.writeRaw('ser-live', S('ser-live'));
+    await db.writeRaw('ser-dead', S('ser-dead', { deleted: true, deletedAt: '2026-02-02T00:00:00.000Z' }));
+    await db.writeRaw('ser-ghost', S('ser-ghost', { ephemeral: true }));
+    expect((await db.listLiveIds()).sort()).toEqual(['ser-ghost', 'ser-live']);
+  });
+
+  it('listTombstoneIdsBefore returns only tombstones older than the cutoff, keeping a NULL deleted_at', async () => {
+    await db.writeRaw('ser-live', S('ser-live'));
+    await db.writeRaw('ser-old', S('ser-old', { deleted: true, deletedAt: '2026-01-01T00:00:00.000Z' }));
+    await db.writeRaw('ser-new', S('ser-new', { deleted: true, deletedAt: '2026-06-01T00:00:00.000Z' }));
+    // mirrorTimestamp(deletedAt, null) leaves deleted_at NULL for an
+    // unparseable value — `deleted_at < $1` is never true against NULL, so
+    // the row is conservatively excluded from every cutoff.
+    await db.writeRaw('ser-bad', S('ser-bad', { deleted: true, deletedAt: 'not-a-date' }));
+    const cutoff = Date.parse('2026-03-01T00:00:00.000Z');
+    expect(await db.listTombstoneIdsBefore(cutoff)).toEqual(['ser-old']);
+  });
+
   it('tolerates a malformed timestamp without throwing (falls back)', async () => {
     await db.writeRaw('ser-bad', S('ser-bad', { updatedAt: 'not-a-date', createdAt: 'nope' }));
     const col = (await query(`SELECT created_at, updated_at FROM pipeline_series WHERE id = 'ser-bad'`)).rows[0];

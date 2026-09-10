@@ -34,6 +34,32 @@ export async function listIds() {
   return rows.map((r) => r.id);
 }
 
+/**
+ * Live (non-deleted) series ids only — id-only projection. Backs
+ * tombstoneGc's LIVE_ID_LISTERS (the base-hash orphan sweep), so a record
+ * stops protecting its base hash the moment it's tombstoned without the
+ * sweep ever reading a series' JSONB body.
+ */
+export async function listLiveIds() {
+  const { rows } = await query(`SELECT id FROM pipeline_series WHERE deleted = FALSE`);
+  return rows.map((r) => r.id);
+}
+
+/**
+ * Tombstoned series ids whose deletedAt is older than `beforeMs` (epoch ms) —
+ * the GC candidate scan for `pruneTombstonedSeries`. An id-only projection:
+ * the sweep almost never finds a tombstone, so the common case must not pay
+ * for a single series' JSONB body, let alone every one of them.
+ */
+export async function listTombstoneIdsBefore(beforeMs) {
+  const cutoffIso = new Date(beforeMs).toISOString();
+  const { rows } = await query(
+    `SELECT id FROM pipeline_series WHERE deleted = TRUE AND deleted_at IS NOT NULL AND deleted_at < $1`,
+    [cutoffIso],
+  );
+  return rows.map((r) => r.id);
+}
+
 /** Every record's raw `data` JSONB in one query (live/ephemeral/tombstones). */
 export async function listRaw() {
   const { rows } = await query(`SELECT data FROM pipeline_series`);

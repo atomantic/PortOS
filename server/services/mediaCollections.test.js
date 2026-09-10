@@ -103,6 +103,15 @@ describe('mediaCollections service', () => {
     expect(all).toHaveLength(1);
   });
 
+  it('listCollectionIds returns every collection id, including tombstoned ones', async () => {
+    const a = await svc.createCollection({ name: 'A' });
+    const b = await svc.createCollection({ name: 'B' });
+    await svc.deleteCollection(b.id);
+    // A directory listing, not a hydrate+filter — tombstoneGc's
+    // ALL_ID_LISTERS.mediaCollection needs every id, live or not.
+    expect((await svc.listCollectionIds()).sort()).toEqual([a.id, b.id].sort());
+  });
+
   it('addItem rejects duplicate (same kind+ref)', async () => {
     const c = await svc.createCollection({ name: 'A' });
     await svc.addItem(c.id, { kind: 'image', ref: 'foo.png' });

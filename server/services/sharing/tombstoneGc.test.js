@@ -7,10 +7,14 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 vi.mock('../universeBuilder.js', () => ({
   pruneTombstonedUniverses: vi.fn().mockResolvedValue({ pruned: 0 }),
   listUniverses: vi.fn().mockResolvedValue([]),
+  listLiveIds: vi.fn().mockResolvedValue([]),
+  listIds: vi.fn().mockResolvedValue([]),
 }));
 vi.mock('../pipeline/series.js', () => ({
   pruneTombstonedSeries: vi.fn().mockResolvedValue({ pruned: 0 }),
   listSeries: vi.fn().mockResolvedValue([]),
+  listLiveIds: vi.fn().mockResolvedValue([]),
+  listIds: vi.fn().mockResolvedValue([]),
 }));
 vi.mock('../pipeline/issues.js', () => ({
   pruneTombstonedIssues: vi.fn().mockResolvedValue({ pruned: 0 }),
@@ -19,6 +23,7 @@ vi.mock('../pipeline/issues.js', () => ({
 vi.mock('../mediaCollections.js', () => ({
   pruneTombstonedCollections: vi.fn().mockResolvedValue({ pruned: 0 }),
   listCollections: vi.fn().mockResolvedValue([]),
+  listCollectionIds: vi.fn().mockResolvedValue([]),
 }));
 vi.mock('../authors/index.js', () => ({
   pruneTombstonedAuthors: vi.fn().mockResolvedValue({ pruned: 0 }),
@@ -51,6 +56,8 @@ vi.mock('../moodBoard/index.js', () => ({
 vi.mock('../fableLoom/index.js', () => ({
   pruneTombstonedLooms: vi.fn().mockResolvedValue({ pruned: 0 }),
   listLooms: vi.fn().mockResolvedValue([]),
+  listLiveIds: vi.fn().mockResolvedValue([]),
+  listIds: vi.fn().mockResolvedValue([]),
 }));
 vi.mock('../writersRoom/sync.js', () => ({
   pruneTombstonedWorks: vi.fn().mockResolvedValue({ pruned: 0 }),
@@ -87,10 +94,16 @@ import {
   getSweepStatus,
   TOMBSTONE_GRACE_MS,
 } from './tombstoneGc.js';
-import { pruneTombstonedUniverses, listUniverses } from '../universeBuilder.js';
-import { pruneTombstonedSeries, listSeries } from '../pipeline/series.js';
+import {
+  pruneTombstonedUniverses, listUniverses,
+  listLiveIds as listLiveUniverseIds, listIds as listUniverseIds,
+} from '../universeBuilder.js';
+import {
+  pruneTombstonedSeries, listSeries,
+  listLiveIds as listLiveSeriesIds, listIds as listSeriesIds,
+} from '../pipeline/series.js';
 import { pruneTombstonedIssues, listIssueIds } from '../pipeline/issues.js';
-import { pruneTombstonedCollections, listCollections } from '../mediaCollections.js';
+import { pruneTombstonedCollections, listCollections, listCollectionIds } from '../mediaCollections.js';
 import { pruneTombstonedAuthors, listAuthorIds } from '../authors/index.js';
 import { pruneTombstonedArtists, listArtistIds } from '../artists/index.js';
 import { pruneTombstonedAlbums, listAlbumIds } from '../albums/index.js';
@@ -98,7 +111,10 @@ import { pruneTombstonedTracks, listTrackIds } from '../tracks/index.js';
 import { pruneTombstonedProjects } from '../creativeDirector/local.js';
 import { pruneTombstonedProjects as pruneTombstonedMusicVideoProjects } from '../musicVideo/projects.js';
 import { pruneTombstonedBoards } from '../moodBoard/index.js';
-import { pruneTombstonedLooms } from '../fableLoom/index.js';
+import {
+  pruneTombstonedLooms, listLooms,
+  listLiveIds as listLiveLoomIds, listIds as listLoomIds,
+} from '../fableLoom/index.js';
 import { pruneTombstonedWorks, pruneTombstonedFolders, pruneTombstonedExercises } from '../writersRoom/sync.js';
 import { pruneTombstonedCommissionFeedback } from '../creativeCommissions/feedbackStore.js';
 import { pruneTombstonedCommissions } from '../creativeCommissions/store.js';
@@ -235,8 +251,13 @@ describe('sweepTombstones — orphaned base-hash sweep', () => {
   });
 
   it('passes a resolver that keeps live records, drops dead ones, keeps unknown kinds, and lists each kind once', async () => {
-    listUniverses.mockResolvedValue([{ id: 'u-live' }]);
-    listSeries.mockResolvedValue([{ id: 's-live' }]);
+    // universe/series/fableLoom resolve through id-only projections
+    // (listLiveIds), NOT the full-record listers — #6851, this sweep runs
+    // every tick and must not hydrate a universe/series/loom body just to
+    // find nothing to prune.
+    listLiveUniverseIds.mockResolvedValue(['u-live']);
+    listLiveSeriesIds.mockResolvedValue(['s-live']);
+    listLiveLoomIds.mockResolvedValue(['fl-live']);
     listIssueIds.mockResolvedValue(['i-live']); // already ids, uncapped
     listCollections.mockResolvedValue([{ id: 'c-live' }]);
     listAuthorIds.mockResolvedValue(['auth-live']);
@@ -265,18 +286,26 @@ describe('sweepTombstones — orphaned base-hash sweep', () => {
     expect(await resolver('album', 'album-gone')).toBe(false);
     expect(await resolver('track', 'track-live')).toBe(true);
     expect(await resolver('track', 'track-gone')).toBe(false);
+    expect(await resolver('fableLoom', 'fl-live')).toBe(true);
+    expect(await resolver('fableLoom', 'fl-gone')).toBe(false);
     // Unknown kind is always kept and never triggers a listing.
     expect(await resolver('brain', 'whatever')).toBe(true);
     // A second probe of an already-listed kind reuses the cached id-set —
-    // listUniverses is called exactly once across both universe probes.
-    expect(listUniverses).toHaveBeenCalledTimes(1);
-    expect(listSeries).toHaveBeenCalledTimes(1);
+    // listLiveUniverseIds is called exactly once across both universe probes.
+    expect(listLiveUniverseIds).toHaveBeenCalledTimes(1);
+    expect(listLiveSeriesIds).toHaveBeenCalledTimes(1);
+    expect(listLiveLoomIds).toHaveBeenCalledTimes(1);
     expect(listIssueIds).toHaveBeenCalledTimes(1);
     expect(listCollections).toHaveBeenCalledTimes(1);
     expect(listAuthorIds).toHaveBeenCalledTimes(1);
     expect(listArtistIds).toHaveBeenCalledTimes(1);
     expect(listAlbumIds).toHaveBeenCalledTimes(1);
     expect(listTrackIds).toHaveBeenCalledTimes(1);
+    // The hydration this issue removes: a scheduled sweep must never call the
+    // full-record listers for these three kinds.
+    expect(listUniverses).not.toHaveBeenCalled();
+    expect(listSeries).not.toHaveBeenCalled();
+    expect(listLooms).not.toHaveBeenCalled();
   });
 });
 
@@ -314,12 +343,15 @@ describe('sweepTombstones — orphaned peer-subscription sweep', () => {
   });
 
   it('passes a tombstone-inclusive resolver: keeps live + tombstoned records, drops dir-gone ones, keeps unknown kinds, lists once', async () => {
-    // includeDeleted:true listers — a tombstoned record (u-tomb) is STILL in the
-    // list, so its sub must survive (it pushes the delete to peers). Only a
-    // record whose dir is truly gone (u-gone) resolves false.
-    listUniverses.mockResolvedValue([{ id: 'u-live' }, { id: 'u-tomb', deleted: true }]);
-    listSeries.mockResolvedValue([{ id: 's-live' }]);
-    listCollections.mockResolvedValue([{ id: 'c-live' }]);
+    // universe/series/fableLoom/mediaCollection resolve through id-only
+    // projections that already include tombstones (listIds /
+    // listCollectionIds) — #6851, no full-record hydration. A tombstoned id
+    // (u-tomb) is STILL in the list, so its sub must survive (it pushes the
+    // delete to peers). Only an id truly absent (u-gone) resolves false.
+    listUniverseIds.mockResolvedValue(['u-live', 'u-tomb']);
+    listSeriesIds.mockResolvedValue(['s-live']);
+    listLoomIds.mockResolvedValue(['fl-live']);
+    listCollectionIds.mockResolvedValue(['c-live']);
     listAuthorIds.mockResolvedValue(['auth-live']);
     listArtistIds.mockResolvedValue(['artist-live']);
     listAlbumIds.mockResolvedValue(['album-live']);
@@ -343,14 +375,23 @@ describe('sweepTombstones — orphaned peer-subscription sweep', () => {
     expect(await resolver('album', 'album-gone')).toBe(false);
     expect(await resolver('track', 'track-live')).toBe(true);
     expect(await resolver('track', 'track-gone')).toBe(false);
+    expect(await resolver('fableLoom', 'fl-live')).toBe(true);
+    expect(await resolver('fableLoom', 'fl-gone')).toBe(false);
     // Unknown kind (issues are never directly subscribed) is always kept and
     // never triggers a listing.
     expect(await resolver('issue', 'i-whatever')).toBe(true);
     expect(await resolver('brain', 'whatever')).toBe(true);
-    // The resolver lists with includeDeleted so tombstones are visible.
-    expect(listUniverses).toHaveBeenCalledWith({ includeDeleted: true });
     // Cached id-set — a second universe probe reuses the listing.
-    expect(listUniverses).toHaveBeenCalledTimes(1);
+    expect(listUniverseIds).toHaveBeenCalledTimes(1);
+    expect(listSeriesIds).toHaveBeenCalledTimes(1);
+    expect(listLoomIds).toHaveBeenCalledTimes(1);
+    expect(listCollectionIds).toHaveBeenCalledTimes(1);
+    // The hydration this issue removes: the orphan-subscription sweep must
+    // never call the full-record `{ includeDeleted: true }` listers either.
+    expect(listUniverses).not.toHaveBeenCalled();
+    expect(listSeries).not.toHaveBeenCalled();
+    expect(listLooms).not.toHaveBeenCalled();
+    expect(listCollections).not.toHaveBeenCalled();
   });
 });
 
