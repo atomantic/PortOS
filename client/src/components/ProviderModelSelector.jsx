@@ -219,7 +219,7 @@ export default function ProviderModelSelector({
               same broken control. */}
           {loading
             ? <option value="">Loading providers…</option>
-            : emptyProviderOption != null && <option value="">{effectiveProviderId && selectedProvider ? `${emptyProviderOption} — ${selectedProvider.name}` : emptyProviderOption}</option>}
+            : emptyProviderOption != null && <option value="">{effectiveProviderId && selectedProvider?.name && typeof emptyProviderOption === 'string' && !emptyProviderOption.includes(selectedProvider.name) ? `${emptyProviderOption} — ${selectedProvider.name}` : emptyProviderOption}</option>}
           {visibleProviders.map((p) => {
             const hardwareUnavailable = !isProviderHardwareCompatible(p);
             const policyDisallowed = Boolean(providerAllowed && !providerAllowed(p));
