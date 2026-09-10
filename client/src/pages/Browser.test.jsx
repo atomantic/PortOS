@@ -9,7 +9,7 @@ vi.mock('../services/api', () => ({
   getBrowserStatus: vi.fn(), getBrowserConfig: vi.fn(), updateBrowserConfig: vi.fn(),
   launchBrowser: vi.fn(), stopBrowser: vi.fn(), restartBrowser: vi.fn(),
   getBrowserLogs: vi.fn(), navigateBrowser: vi.fn(),
-  browserDownloadUrl: vi.fn(), deleteBrowserDownload: vi.fn()
+  getDirectories: vi.fn(), browserDownloadUrl: vi.fn(), deleteBrowserDownload: vi.fn()
 }));
 vi.mock('../components/ui/Toast', () => ({ default: { success: vi.fn(), error: vi.fn() } }));
 
@@ -41,6 +41,29 @@ describe('Browser recovery', () => {
     expect(await screen.findByRole('textbox', { name: 'URL to open' })).toBeInTheDocument();
     expect(screen.queryByText('Chrome is not reachable')).not.toBeInTheDocument();
     expect(api.restartBrowser).toHaveBeenCalledWith({ silent: true });
+  });
+
+  it('picks a browser executable, derives its bundle, and saves cleared defaults', async () => {
+    const user = userEvent.setup();
+    const chromePath = '/Applications/Chromium.app/Contents/MacOS/Chromium';
+    api.getDirectories.mockResolvedValue({
+      currentPath: '/Applications/Chromium.app/Contents/MacOS',
+      parentPath: '/Applications/Chromium.app/Contents',
+      directories: [], files: [{ name: 'Chromium', path: chromePath }],
+    });
+    api.updateBrowserConfig.mockImplementation(async config => config);
+    render(<BrowserPage />);
+    await user.click(await screen.findByRole('button', { name: 'Edit configuration' }));
+    await user.click(await screen.findByRole('button', { name: 'Browse Chrome binary' }));
+    await user.click(await screen.findByRole('button', { name: 'Chromium' }));
+    expect(screen.getByLabelText(/Chrome binary path/)).toHaveValue(chromePath);
+    expect(screen.getByRole('textbox', { name: /macOS app bundle/ })).toHaveValue('/Applications/Chromium.app');
+    expect(api.getDirectories).toHaveBeenCalledWith(null, { includeFiles: true });
+    await user.click(screen.getByRole('button', { name: 'Save Config' }));
+    expect(api.updateBrowserConfig).toHaveBeenLastCalledWith(expect.objectContaining({ chromePath, macAppBundle: '/Applications/Chromium.app' }), { silent: true });
+    await user.clear(screen.getByLabelText(/Chrome binary path/));
+    await user.click(screen.getByRole('button', { name: 'Save Config' }));
+    expect(api.updateBrowserConfig).toHaveBeenLastCalledWith(expect.objectContaining({ chromePath: '', macAppBundle: null }), { silent: true });
   });
 
   it('keeps recovery available and avoids a success toast when restarting does not connect', async () => {

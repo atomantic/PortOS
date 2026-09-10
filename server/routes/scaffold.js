@@ -86,6 +86,10 @@ router.get('/directories', asyncHandler(async (req, res) => {
     currentPath: targetPath,
     parentPath: canGoUp ? parentPath : null,
     directories,
+    ...(req.query.includeFiles === 'true' && { files: entries
+      .filter(entry => (entry.isFile() || entry.isSymbolicLink()) && !entry.name.startsWith('.'))
+      .map(entry => ({ name: entry.name, path: join(targetPath, entry.name) }))
+      .sort((a, b) => a.name.localeCompare(b.name)) }),
     ...(drives && { drives })
   });
 }));

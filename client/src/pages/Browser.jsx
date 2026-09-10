@@ -12,6 +12,7 @@ import {
   getBrowserLogs, navigateBrowser,
   browserDownloadUrl, deleteBrowserDownload
 } from '../services/api';
+import FolderPicker from '../components/FolderPicker';
 import BrailleSpinner from '../components/BrailleSpinner';
 import toast from '../components/ui/Toast';
 import { FormField } from '../components/ui/FormField';
@@ -99,6 +100,14 @@ export default function BrowserPage() {
     }
     setActionLoading(null);
   }, [fetchStatus]);
+
+  const handleChromePathChange = (chromePath) => setConfigDraft(d => {
+    const currentAppBundle = deriveMacAppBundle(d.chromePath);
+    const macAppBundle = !d.macAppBundle || d.macAppBundle === currentAppBundle
+      ? deriveMacAppBundle(chromePath)
+      : d.macAppBundle;
+    return { ...d, chromePath, macAppBundle };
+  });
 
   const handleSaveConfig = useCallback(async () => {
     if (!configDraft) return;
@@ -251,24 +260,19 @@ export default function BrowserPage() {
                 Chrome binary path
                 <span className="ml-2 text-xs text-gray-600">(leave empty to use system default)</span>
               </label>
-              <input
-                id="chromePath"
-                type="text"
-                value={configDraft.chromePath || ''}
-                onChange={e => setConfigDraft(d => {
-                  const chromePath = e.target.value;
-                  const nextAppBundle = deriveMacAppBundle(chromePath);
-                  const currentAppBundle = deriveMacAppBundle(d.chromePath);
-                  const macAppBundle = !d.macAppBundle || d.macAppBundle === currentAppBundle
-                    ? nextAppBundle
-                    : d.macAppBundle;
-                  return { ...d, chromePath, macAppBundle };
-                })}
-                placeholder="/Applications/Google Chrome Canary.app/Contents/MacOS/Google Chrome Canary"
-                className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm font-mono focus:outline-hidden focus:border-port-accent placeholder-gray-600"
-              />
+              <div className="flex items-center gap-2">
+                <input
+                  id="chromePath"
+                  type="text"
+                  value={configDraft.chromePath || ''}
+                  onChange={e => handleChromePathChange(e.target.value)}
+                  placeholder="/Applications/Google Chrome Canary.app/Contents/MacOS/Google Chrome Canary"
+                  className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm font-mono focus:outline-hidden focus:border-port-accent placeholder-gray-600"
+                />
+                <FolderPicker value={configDraft.chromePath || ''} mode="file" ariaLabel="Browse Chrome binary" onChange={handleChromePathChange} />
+              </div>
               <p className="text-xs text-gray-500 mt-1">
-                Point at Chrome Canary, Chromium, Brave, or any Chromium-based browser to differentiate the PortOS-managed browser from your daily-driver Chrome.
+                Browse files on the PortOS host. Point at Chrome Canary, Chromium, Brave, or any Chromium-based browser to differentiate the PortOS-managed browser from your daily-driver Chrome.
               </p>
             </div>
             <div className="sm:col-span-2 lg:col-span-3">
@@ -276,14 +280,17 @@ export default function BrowserPage() {
                 macOS app bundle
                 <span className="ml-2 text-xs text-gray-600">(headed mode only; leave empty for system default)</span>
               </label>
-              <input
-                id="macAppBundle"
-                type="text"
-                value={configDraft.macAppBundle || ''}
-                onChange={e => setConfigDraft(d => ({ ...d, macAppBundle: e.target.value }))}
-                placeholder="/Applications/Google Chrome Canary.app"
-                className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm font-mono focus:outline-hidden focus:border-port-accent placeholder-gray-600"
-              />
+              <div className="flex items-center gap-2">
+                <input
+                  id="macAppBundle"
+                  type="text"
+                  value={configDraft.macAppBundle || ''}
+                  onChange={e => setConfigDraft(d => ({ ...d, macAppBundle: e.target.value }))}
+                  placeholder="/Applications/Google Chrome Canary.app"
+                  className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm font-mono focus:outline-hidden focus:border-port-accent placeholder-gray-600"
+                />
+                <FolderPicker value={configDraft.macAppBundle || ''} ariaLabel="Browse macOS app bundle" onChange={macAppBundle => setConfigDraft(d => ({ ...d, macAppBundle }))} />
+              </div>
             </div>
           </div>
           <div className="mt-4 flex justify-end">
