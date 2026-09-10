@@ -142,27 +142,29 @@ export default function MaintenanceRunForm({ schedule, apps = [], providers = []
 
   return (
     <div className="mt-3 space-y-3 text-sm">
-      <label htmlFor="maintenance-run-app" className="block">
-        App
-        <select id="maintenance-run-app" value={appId} disabled={busy} onChange={event => setAppId(event.target.value)} className="mt-1 w-full bg-port-bg border border-port-border rounded p-2 text-white">
-          <option value="">Select an app</option>
-          {apps.filter(app => app.archived !== true).map(app => <option key={app.id} value={app.id}>{app.name}</option>)}
-        </select>
-      </label>
-      <label htmlFor="maintenance-run-mode" className="block">
-        Audit mode
-        <select id="maintenance-run-mode" value={mode} disabled={busy} onChange={event => { setMode(event.target.value); setConsent(false); }} className="mt-1 w-full bg-port-bg border border-port-border rounded p-2 text-white">
-          <option value="file-issues">File issues</option>
-          <option value="fix">Audit and fix</option>
-        </select>
-      </label>
-      {mode === 'file-issues' && <label htmlFor="maintenance-run-claims" className="block">
-        Issue handling
-        <select id="maintenance-run-claims" value={String(claimBetweenAudits)} disabled={busy} onChange={event => { setClaimBetweenAudits(event.target.value === 'true'); setConsent(false); }} className="mt-1 w-full bg-port-bg border border-port-border rounded p-2 text-white">
-          <option value="true">Resolve issues between audits</option>
-          <option value="false">Leave issues open for review</option>
-        </select>
-      </label>}
+      <div className="grid grid-cols-[repeat(auto-fit,minmax(min(100%,18rem),24rem))] gap-3">
+        <label htmlFor="maintenance-run-app" className="block min-w-0">
+          App
+          <select id="maintenance-run-app" value={appId} disabled={busy} onChange={event => setAppId(event.target.value)} className="mt-1 w-full bg-port-bg border border-port-border rounded p-2 text-white">
+            <option value="">Select an app</option>
+            {apps.filter(app => app.archived !== true).map(app => <option key={app.id} value={app.id}>{app.name}</option>)}
+          </select>
+        </label>
+        <label htmlFor="maintenance-run-mode" className="block min-w-0">
+          Audit mode
+          <select id="maintenance-run-mode" value={mode} disabled={busy} onChange={event => { setMode(event.target.value); setConsent(false); }} className="mt-1 w-full bg-port-bg border border-port-border rounded p-2 text-white">
+            <option value="file-issues">File issues</option>
+            <option value="fix">Audit and fix</option>
+          </select>
+        </label>
+        {mode === 'file-issues' && <label htmlFor="maintenance-run-claims" className="block min-w-0">
+          Issue handling
+          <select id="maintenance-run-claims" value={String(claimBetweenAudits)} disabled={busy} onChange={event => { setClaimBetweenAudits(event.target.value === 'true'); setConsent(false); }} className="mt-1 w-full bg-port-bg border border-port-border rounded p-2 text-white">
+            <option value="true">Resolve issues between audits</option>
+            <option value="false">Leave issues open for review</option>
+          </select>
+        </label>}
+      </div>
       <p className="text-xs">{mode === 'fix'
         ? 'Fix findings in each audit; finish with documentation and one final claim pass.'
         : claimBetweenAudits ? 'Claim passes resolve the backlog before the next audit.' : 'File findings for review; run documentation last. No claim jobs.'}</p>

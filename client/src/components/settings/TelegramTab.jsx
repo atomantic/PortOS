@@ -172,37 +172,39 @@ export function TelegramTab() {
             </div>
           )}
 
-          <div className="space-y-1">
-            <label htmlFor={botTokenId} className="block text-sm text-gray-400">Bot Token</label>
-            <div className="flex gap-2">
-              <input
-                id={botTokenId}
-                type={tgShowToken ? 'text' : 'password'}
-                value={tgToken}
-                onChange={e => setTgToken(e.target.value)}
-                className="flex-1 min-w-0 bg-port-bg border border-port-border rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-port-accent"
-                placeholder={tgStatus?.hasToken ? '••••••••••• (configured)' : 'Paste bot token from @BotFather'}
-              />
-              <button
-                onClick={() => setTgShowToken(!tgShowToken)}
-                aria-label={tgShowToken ? 'Hide bot token' : 'Show bot token'}
-                className="inline-flex items-center justify-center min-w-[40px] min-h-[40px] px-3 py-2 bg-port-border hover:bg-port-border/70 text-white rounded-lg transition-colors shrink-0"
-              >
-                {tgShowToken ? <EyeOff size={16} /> : <Eye size={16} />}
-              </button>
+          <div className="grid grid-cols-[repeat(auto-fit,minmax(min(100%,18rem),28rem))] gap-4">
+            <div className="space-y-1">
+              <label htmlFor={botTokenId} className="block text-sm text-gray-400">Bot Token</label>
+              <div className="flex gap-2">
+                <input
+                  id={botTokenId}
+                  type={tgShowToken ? 'text' : 'password'}
+                  value={tgToken}
+                  onChange={e => setTgToken(e.target.value)}
+                  className="flex-1 min-w-0 bg-port-bg border border-port-border rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-port-accent"
+                  placeholder={tgStatus?.hasToken ? '••••••••••• (configured)' : 'Paste bot token from @BotFather'}
+                />
+                <button
+                  onClick={() => setTgShowToken(!tgShowToken)}
+                  aria-label={tgShowToken ? 'Hide bot token' : 'Show bot token'}
+                  className="inline-flex items-center justify-center min-w-[40px] min-h-[40px] px-3 py-2 bg-port-border hover:bg-port-border/70 text-white rounded-lg transition-colors shrink-0"
+                >
+                  {tgShowToken ? <EyeOff size={16} /> : <Eye size={16} />}
+                </button>
+              </div>
             </div>
-          </div>
 
-          <div className="space-y-1">
-            <label htmlFor={chatIdId} className="block text-sm text-gray-400">Chat ID</label>
-            <input
-              id={chatIdId}
-              type="text"
-              value={tgChatId}
-              onChange={e => setTgChatId(e.target.value)}
-              className="w-full bg-port-bg border border-port-border rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-port-accent"
-              placeholder="Message your bot /start to get your chat ID"
-            />
+            <div className="space-y-1">
+              <label htmlFor={chatIdId} className="block text-sm text-gray-400">Chat ID</label>
+              <input
+                id={chatIdId}
+                type="text"
+                value={tgChatId}
+                onChange={e => setTgChatId(e.target.value)}
+                className="w-full bg-port-bg border border-port-border rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-port-accent"
+                placeholder="Message your bot /start to get your chat ID"
+              />
+            </div>
           </div>
 
           <p className="text-xs text-gray-500">
