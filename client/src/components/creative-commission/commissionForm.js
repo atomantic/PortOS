@@ -26,7 +26,7 @@ import {
 // module is imported from a server-workspace parity test
 // (creativeCommissionSpec.parity.test.js), which fails with ERR_MODULE_NOT_FOUND
 // if anything here pulls in a browser-only package.
-import { RENDER_TARGET_BACKEND_AUTO as RENDER_BACKEND_AUTO, MODE_LABELS } from '../../lib/imageGenModes.js';
+import { RENDER_TARGET_BACKEND_AUTO as RENDER_BACKEND_AUTO, modeLabel } from '../../lib/imageGenModes.js';
 
 // Pause and Delete are real STOPS, not just "skip the next tick": the server also
 // tears down the Creative Director projects the commission already spawned
@@ -93,10 +93,10 @@ const BACKEND_FIELD_META = {
 };
 
 // A render-backend mode's display label. Every real backend reads from the
-// shared MODE_LABELS (client/src/lib/imageGenModes.js) so a backend added
+// shared `modeLabel` (client/src/lib/imageGenModes.js) so a backend added
 // there (fal, reactor, agy, …) is labeled here automatically — the drift that
 // left the video/image backend pickers behind generationModes.js for months.
-const backendOptionLabel = (mode) => (mode === RENDER_BACKEND_AUTO ? 'Auto (install default)' : (MODE_LABELS[mode] || mode));
+const backendOptionLabel = (mode) => (mode === RENDER_BACKEND_AUTO ? 'Auto (install default)' : modeLabel(mode));
 
 // Build one field descriptor from a generation key's spec descriptor
 // (type/bounds/values) plus its presentation metadata above. `type: 'id'` keys
@@ -279,8 +279,8 @@ export function toForm(c) {
     // length, matching abilityAdapters.js, while a brand-new commission seeds
     // 'auto' (the #4494 product choice).
     generation: c.generation == null
-      ? { ...GENERATION_DEFAULTS_BY_ABILITY[abilityOr(c.targetAbility || 'video')] }
-      : generationToForm(c.targetAbility || 'video', c.generation),
+      ? { ...GENERATION_DEFAULTS_BY_ABILITY[abilityOr(c.targetAbility)] }
+      : generationToForm(c.targetAbility, c.generation),
     // Which AI provider/model processes the commission's CD stages. Empty
     // providerId → the install's default AI Assignment.
     assignment: {

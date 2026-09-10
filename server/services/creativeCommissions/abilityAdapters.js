@@ -47,16 +47,6 @@ function pickModel(raw) {
   return isStr(raw?.model) && raw.model.trim() ? raw.model.trim() : null;
 }
 
-// A commission's effective duration mode, made explicit: an ABSENT durationMode
-// on a real record reads as `legacyAbsent` ('manual' — the pre-#4494 behavior
-// every record without the key was already rendering), never the fresh-commission
-// `default` ('auto'). Mirrors the client form's own record projection
-// (commissionForm.js `generationToForm`) — see creativeCommissionSpec.js's
-// GENERATION_KEY_DEFS.durationMode for the compatibility split.
-function isAutoDuration(generation) {
-  return (generation?.durationMode ?? GENERATION_KEY_DEFS.durationMode.legacyAbsent) === 'auto';
-}
-
 // Coerce one generation value against its GENERATION_KEY_DEFS descriptor, falling
 // back to the RESOLVED default when absent/invalid (absent-vs-empty: a wrong-type
 // or out-of-range value falls back rather than corrupting the record).
@@ -73,6 +63,19 @@ function coerceGenerationValue(key, raw) {
   // a validation failure — so it normalizes rather than erroring.
   if (def.type === 'id') return isStr(v) && v.trim() ? v.trim().slice(0, def.max) : resolvedDefault(def);
   return Number.isInteger(v) && v >= def.min && v <= def.max ? v : resolvedDefault(def);
+}
+
+// A commission's effective duration mode, made explicit: an ABSENT OR INVALID
+// durationMode on a real record reads as `legacyAbsent` ('manual' — the
+// pre-#4494 behavior every record without the key was already rendering),
+// never the fresh-commission `default` ('auto'). Delegates to the same
+// coerceGenerationValue() every other key's absent-value resolution goes
+// through (rather than a bespoke `??` on the raw value), so a second key that
+// ever needs this split gets it for free. Mirrors the client form's own
+// record projection (commissionForm.js `generationToForm`) — see
+// creativeCommissionSpec.js's GENERATION_KEY_DEFS.durationMode.
+function isAutoDuration(generation) {
+  return coerceGenerationValue('durationMode', generation) === 'auto';
 }
 
 // Fill an ability's generation defaults and keep ONLY that ability's keys (+ the

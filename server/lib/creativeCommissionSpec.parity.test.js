@@ -77,6 +77,21 @@ describe('creativeCommissionSpec parity — client mirror of the generation spec
     expect(CREATIVE_COMMISSION_VIDEO_MODES).toContain('reactor');
   });
 
+  it('quality and durationMode options carry a real display label, not their raw value', async () => {
+    // The backend-mode check above only covers `type: 'backend'` fields;
+    // OPTION_LABELS-driven plain selects share the identical
+    // `OPTION_LABELS[key]?.[v] || v` fallback shape and deserve the same net —
+    // aspectRatio is deliberately excluded (its values, e.g. '16:9', already
+    // ARE their own best display string).
+    const client = await import('../../client/src/components/creative-commission/commissionForm.js');
+    for (const key of ['quality', 'durationMode']) {
+      const field = client.GENERATION_FIELDS_BY_ABILITY.video.find((f) => f.key === key);
+      for (const [value, label] of field.options) {
+        expect(label, `${key}='${value}' has no distinct display label`).not.toBe(value);
+      }
+    }
+  });
+
   it('resolves an absent durationMode identically on the server adapter and the client form', async () => {
     const client = await import('../../client/src/components/creative-commission/commissionForm.js');
     const { legacyAbsent, default: freshDefault } = GENERATION_KEY_DEFS.durationMode;
@@ -85,19 +100,19 @@ describe('creativeCommissionSpec parity — client mirror of the generation spec
 
     // Server: an ability's sanitizer resolves a generation object with no
     // durationMode key to the LEGACY reading (a pre-#4494 record's implicit
-    // meaning), never the fresh-commission default.
+    // meaning), never the fresh-commission default. The resolution is keyed
+    // off the descriptor, not the ability (an ability only decides WHICH keys
+    // get resolved this way — coverage for that lives in the per-ability loop
+    // above), so one ability is enough to pin the mechanism.
     expect(getAbilityAdapter('video').sanitizeGeneration({}).durationMode).toBe(legacyAbsent);
-    expect(getAbilityAdapter('music-video').sanitizeGeneration({}).durationMode).toBe(legacyAbsent);
 
     // Client: projecting a REAL (if sparse) record resolves identically.
     expect(client.generationToForm('video', {}).durationMode).toBe(legacyAbsent);
-    expect(client.generationToForm('music-video', {}).durationMode).toBe(legacyAbsent);
     expect(client.toForm({ targetAbility: 'video', generation: {} }).generation.durationMode).toBe(legacyAbsent);
 
     // A brand-new/blank commission (no record at all) seeds the fresh default
     // instead — the one case the two readings are meant to disagree.
     expect(client.toForm({}).generation.durationMode).toBe(freshDefault);
-    expect(client.blankForm().generation.durationMode).toBe(freshDefault);
     expect(client.GENERATION_DEFAULTS_BY_ABILITY.video.durationMode).toBe(freshDefault);
   });
 });

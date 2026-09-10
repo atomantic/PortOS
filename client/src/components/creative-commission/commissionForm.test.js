@@ -5,6 +5,7 @@ import {
   ABILITY_OPTIONS, GENERATION_FIELDS_BY_ABILITY, GENERATION_DEFAULTS_BY_ABILITY,
   generationToForm, mergeGenerationForAbility, generationToPayload,
   backendFieldsForAbility, RENDER_BACKEND_AUTO,
+  IMAGE_BACKEND_OPTIONS, VIDEO_BACKEND_OPTIONS,
 } from './commissionForm.js';
 
 describe('commissionForm helpers', () => {
@@ -278,6 +279,25 @@ describe('commissionForm helpers', () => {
       });
       expect(f.generation.imageMode).toBe('local');
       expect(f.generation.imageModelId).toBe('example-model');
+    });
+
+    it('round-trips a record pinned to a backend the form used to have no option for (#6816)', () => {
+      // agy (image) and fal/reactor (video) all post-date the hand-copied
+      // IMAGE_BACKEND_OPTIONS/VIDEO_BACKEND_OPTIONS arrays this form used to
+      // carry; a record already pinned to one rendered a <select> with no
+      // matching option. Deriving the options from the server enum fixes this
+      // for every mode at once, not just these three by name.
+      const image = toForm({ targetAbility: 'image', brief: { intent: 'x' }, generation: { imageMode: 'agy' } });
+      expect(image.generation.imageMode).toBe('agy');
+      expect(IMAGE_BACKEND_OPTIONS.some(([v]) => v === 'agy')).toBe(true);
+      expect(toPayload(image).generation.imageMode).toBe('agy');
+
+      for (const videoMode of ['fal', 'reactor']) {
+        const video = toForm({ targetAbility: 'video', brief: { intent: 'x' }, generation: { videoMode } });
+        expect(video.generation.videoMode).toBe(videoMode);
+        expect(VIDEO_BACKEND_OPTIONS.some(([v]) => v === videoMode)).toBe(true);
+        expect(toPayload(video).generation.videoMode).toBe(videoMode);
+      }
     });
 
     it('sends the model id for a model-bearing backend', () => {
