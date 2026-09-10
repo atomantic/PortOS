@@ -2554,6 +2554,30 @@ describe('spawnTuiAgent runtime', () => {
       )).toBe(true);
     });
 
+    // An abandoned run is as over as a finalized one — it just has no outcome
+    // — so nothing may record one afterwards. The shutdown flag is cleared
+    // before the second trigger so the abandoned session itself, not the flag,
+    // is the only thing between that trigger and finalizeAgent.
+    it('stays abandoned: a trigger arriving after the abandon records no outcome and runs no cleanup', async () => {
+      const spawnPromise = runSpawn();
+      await flushMicrotasks();
+
+      markHostShuttingDown();
+      await capturedOnExit({ exitCode: 0, killed: false });
+      await flushMicrotasks();
+      await spawnPromise;
+      expect(agentLifecycle.finalizeAgent).not.toHaveBeenCalled();
+
+      resetHostShutdownFlagForTests();
+      await capturedOnExit({ exitCode: 1, killed: true });
+      await flushMicrotasks();
+
+      // Still no outcome — and still no completion cleanup, so the worktree
+      // the resume needs is untouched.
+      expect(agentLifecycle.finalizeAgent).not.toHaveBeenCalled();
+      expect(runSpawnerCompletionCleanup).not.toHaveBeenCalled();
+    });
+
     it('still finalizes as success when the agent had already written its sentinel', async () => {
       vi.mocked(existsSync).mockReturnValue(true);
       vi.mocked(readFile).mockImplementation(async (p) =>
@@ -2952,6 +2976,45 @@ describe('spawnTuiAgent runtime', () => {
       expect(agentLifecycle.finalizeAgent).toHaveBeenCalledWith(
         expect.objectContaining({ success: false })
       );
+    });
+
+    // The nudge's reset to 'running' has to reopen the finish gate for EVERY
+    // trigger — not only the parked replay above, and not only the re-armed
+    // sentinel watcher. After a nudge the session is live again, and the next
+    // thing to happen may be the PTY simply dying with no new sentinel at all.
+    // Swallow that and the run holds its lane to the max-runtime ceiling with
+    // no outcome recorded.
+    it('finalizes a plain PTY exit arriving after the merge-gate nudge, and ignores anything after that', async () => {
+      vi.mocked(shellService.pasteToSession).mockReturnValue(999);
+      vi.mocked(probePrForBranch).mockResolvedValue({
+        prState: 'OPEN', prUrl: 'https://example.com/pr/1', prNumber: 1, cli: 'gh', readable: true,
+      });
+      withSentinel('## Summary\nShipped the fix and opened the PR.');
+
+      const spawnPromise = runSpawn({ task: openPrTask, workspacePath: '/tmp/ws' });
+      await flushMicrotasks(); // initial watcher arms while quiet — must not self-fire
+
+      sentinelExists = true; // the agent writes .agent-done
+      await capturedOnExit({ exitCode: 0, killed: false });
+      await settle();
+      expect(shellService.pasteToSession).toHaveBeenCalledTimes(1);
+      expect(agentLifecycle.finalizeAgent).not.toHaveBeenCalled();
+
+      // The nudge deleted the sentinel, so this exit carries no completion
+      // signal of its own: nothing but the session phase decides whether it
+      // is heard.
+      await capturedOnExit({ exitCode: 1, killed: true });
+      await settle();
+      await spawnPromise;
+
+      expect(shellService.pasteToSession).toHaveBeenCalledTimes(1); // one nudge per run
+      expect(agentLifecycle.finalizeAgent).toHaveBeenCalledTimes(1);
+      expect(agentLifecycle.finalizeAgent).toHaveBeenCalledWith(expect.objectContaining({ success: false }));
+
+      // ...and now the run really is over — a late trigger finalizes nothing.
+      await capturedOnExit({ exitCode: 0, killed: false });
+      await settle();
+      expect(agentLifecycle.finalizeAgent).toHaveBeenCalledTimes(1);
     });
 
     it('finalizes on the first sentinel with no re-prompt when the PR is already merged', async () => {
