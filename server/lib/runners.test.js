@@ -1,12 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { readFileSync } from 'fs';
-import { dirname, join } from 'path';
-import { fileURLToPath } from 'url';
-
 import { RUNNER_FAMILIES, VIDEO_LORA_FAMILIES, MINIMAX_H3_RUNTIMES, LTX2_FAMILY_RUNTIMES, AUDIO_TO_VIDEO_RUNTIMES, videoLoraFamily, isMiniMaxH3Runtime, isLtx2FamilyRuntime, isAudioToVideoRuntime, isMlxVideoLtxLoraCapable, loraFamilyOf, isMflux, isFlux2, isZImage, isErnie, isHiDream, isQwen, flux2VariantFromModel, loraCompatKey, composeCompatKey } from './runners.js';
-
-const __dirname_self = dirname(fileURLToPath(import.meta.url));
-const CLIENT_MIRROR_PATH = join(__dirname_self, '..', '..', 'client', 'src', 'lib', 'runnerFamilies.js');
 
 describe('RUNNER_FAMILIES', () => {
   it('exports the canonical runner ids', () => {
@@ -20,20 +13,6 @@ describe('RUNNER_FAMILIES', () => {
 
   it('is frozen so callers can\'t mutate the canonical strings at runtime', () => {
     expect(Object.isFrozen(RUNNER_FAMILIES)).toBe(true);
-  });
-
-  it('client mirror at client/src/lib/runnerFamilies.js carries the same ids', () => {
-    // The mirror is plain JS (not importable from a Vitest server suite —
-    // Vite's fs.allow doesn't cross), so we string-grep the file. Any
-    // change to a canonical id has to be reflected in both places, or this
-    // test fails.
-    const text = readFileSync(CLIENT_MIRROR_PATH, 'utf-8');
-    expect(text).toMatch(/MFLUX:\s*'mflux'/);
-    expect(text).toMatch(/FLUX2:\s*'flux2'/);
-    expect(text).toMatch(/Z_IMAGE:\s*'z-image'/);
-    expect(text).toMatch(/ERNIE:\s*'ernie'/);
-    expect(text).toMatch(/HIDREAM:\s*'hidream'/);
-    expect(text).toMatch(/QWEN:\s*'qwen'/);
   });
 
   it('predicate helpers match on the canonical runner ids', () => {
@@ -119,20 +98,6 @@ describe('VIDEO_LORA_FAMILIES / videoLoraFamily', () => {
     expect(composeCompatKey('ltx-video', null)).toBe('ltx-video');
     expect(composeCompatKey('ltx-video', '9b')).toBe('ltx-video');
   });
-
-  it('client mirror carries the video family + helpers', () => {
-    const text = readFileSync(CLIENT_MIRROR_PATH, 'utf-8');
-    expect(text).toMatch(/LTX_VIDEO:\s*'ltx-video'/);
-    expect(text).toMatch(/MINIMAX_H3:\s*'minimax-h3'/);
-    expect(text).toMatch(/runtimeLoraCapable === true/);
-    expect(text).toMatch(/export const videoLoraFamily/);
-    expect(text).toMatch(/export const isMlxVideoLtxLoraCapable/);
-    expect(text).toMatch(/export const loraFamilyOf/);
-    expect(text).toMatch(/export const isMiniMaxH3Runtime/);
-    expect(text).toMatch(/MINIMAX_H3_REF2VA_RUNTIME = 'minimax_h3_ref2va'/);
-    expect(text).toMatch(/export const isLtx2FamilyRuntime/);
-    expect(text).toMatch(/'ltx2', 'ltx25'/);
-  });
 });
 
 describe('flux2VariantFromModel', () => {
@@ -177,13 +142,6 @@ describe('loraCompatKey', () => {
 
   it('defaults a runner-less model to mflux (matches the picker default)', () => {
     expect(loraCompatKey({ id: 'dev' })).toBe('mflux');
-  });
-
-  it('client mirror carries the same helpers', () => {
-    const text = readFileSync(CLIENT_MIRROR_PATH, 'utf-8');
-    expect(text).toMatch(/export const flux2VariantFromModel/);
-    expect(text).toMatch(/export const loraCompatKey/);
-    expect(text).toMatch(/export const composeCompatKey/);
   });
 });
 

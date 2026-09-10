@@ -11,9 +11,8 @@
  * `runner === 'z-image'` (right). Importing from this module locks the
  * canonical strings in place.
  *
- * The client mirrors this list at `client/src/lib/runnerFamilies.js` —
- * Vite's fs.allow doesn't cross the server/ boundary, so we keep the two
- * files manually in sync (same convention as `scenePrompt.js`).
+ * `client/src/lib/runnerFamilies.js` re-exports this module directly (same
+ * convention as `scenePrompt.js`) — there is no separate client copy to drift.
  */
 
 export const RUNNER_FAMILIES = Object.freeze({
