@@ -141,9 +141,14 @@ CREATE TABLE IF NOT EXISTS tribe_people (
 -- Known emails/handles for a person — the deterministic key that maps a calendar
 -- attendee / message counterpart back to this tracked person (#2033).
 ALTER TABLE tribe_people ADD COLUMN IF NOT EXISTS emails TEXT[] DEFAULT '{}';
+-- Known phone handles for a person — the deterministic key that maps an
+-- iMessage/Signal handle (E.164, e.g. +15551234567) back to this tracked
+-- person so touchpoints can be auto-logged (#2151). Mirrors emails[].
+ALTER TABLE tribe_people ADD COLUMN IF NOT EXISTS phones TEXT[] DEFAULT '{}';
 CREATE INDEX IF NOT EXISTS idx_tribe_people_live ON tribe_people (deleted, ring, updated_at DESC);
 CREATE INDEX IF NOT EXISTS idx_tribe_people_tags ON tribe_people USING gin (tags);
 CREATE INDEX IF NOT EXISTS idx_tribe_people_emails ON tribe_people USING gin (emails);
+CREATE INDEX IF NOT EXISTS idx_tribe_people_phones ON tribe_people USING gin (phones);
 
 CREATE TABLE IF NOT EXISTS tribe_touchpoints (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -1944,6 +1949,95 @@ DROP TRIGGER IF EXISTS trg_tribe_touchpoints_audit ON tribe_touchpoints;
 CREATE TRIGGER trg_tribe_touchpoints_audit AFTER UPDATE OR DELETE ON tribe_touchpoints FOR EACH ROW EXECUTE FUNCTION record_audit_log();
 DROP TRIGGER IF EXISTS trg_tribe_identities_audit ON tribe_identities;
 CREATE TRIGGER trg_tribe_identities_audit AFTER UPDATE OR DELETE ON tribe_identities FOR EACH ROW EXECUTE FUNCTION record_audit_log();
+
+-- AI provider connection graph DDL — `ai_connections`, `ai_harness_bindings`
+-- and `ai_route_bindings` (#6367, design record
+-- docs/plans/2026-09-06-provider-connections-and-harnesses.md). Machine-local
+-- by construction and never federated — rows carry endpoints, credential
+-- material and this host's execution environment.
+CREATE TABLE IF NOT EXISTS ai_connections (
+  id UUID PRIMARY KEY,
+  revision INTEGER NOT NULL DEFAULT 1,
+  kind TEXT NOT NULL,
+  label TEXT NOT NULL DEFAULT '',
+  transports JSONB NOT NULL DEFAULT '{}'::jsonb,
+  credentials JSONB NOT NULL DEFAULT '{}'::jsonb,
+  catalog JSONB NOT NULL DEFAULT '{"state":"unknown","models":[]}'::jsonb,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS ai_harness_bindings (
+  id UUID PRIMARY KEY,
+  revision INTEGER NOT NULL DEFAULT 1,
+  connection_id UUID NOT NULL REFERENCES ai_connections (id),
+  harness_id TEXT,
+  variant_key TEXT NOT NULL DEFAULT 'default',
+  label TEXT NOT NULL DEFAULT '',
+  enabled BOOLEAN NOT NULL DEFAULT false,
+  selected_models JSONB NOT NULL DEFAULT '[]'::jsonb,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_ai_harness_bindings_variant
+  ON ai_harness_bindings (connection_id, harness_id, variant_key)
+  WHERE harness_id IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_ai_harness_bindings_api_variant
+  ON ai_harness_bindings (connection_id, variant_key)
+  WHERE harness_id IS NULL;
+CREATE INDEX IF NOT EXISTS idx_ai_harness_bindings_connection
+  ON ai_harness_bindings (connection_id);
+
+CREATE TABLE IF NOT EXISTS ai_route_bindings (
+  provider_id TEXT PRIMARY KEY,
+  binding_id UUID NOT NULL REFERENCES ai_harness_bindings (id),
+  mode TEXT NOT NULL CHECK (mode IN ('cli', 'tui', 'api')),
+  model_map JSONB NOT NULL DEFAULT '{}'::jsonb,
+  projected JSONB NOT NULL DEFAULT '{}'::jsonb,
+  pending JSONB,
+  pending_revision INTEGER,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+ALTER TABLE ai_route_bindings ADD COLUMN IF NOT EXISTS model_alias_overrides JSONB NOT NULL DEFAULT '{}'::jsonb;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_ai_route_bindings_binding_mode
+  ON ai_route_bindings (binding_id, mode);
+CREATE INDEX IF NOT EXISTS idx_ai_route_bindings_binding
+  ON ai_route_bindings (binding_id);
+
+-- Creative Commissions (#2657) — standing, recurring creative brief that fires
+-- on a schedule and drives the Creative Director directive pipeline unattended.
+-- Machine-local: never federated (a synced schedule would double-run on every peer).
+-- The commission BRIEF federates as of #2686; the schedule/runs stay machine-local.
+CREATE TABLE IF NOT EXISTS creative_commissions (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL DEFAULT '',
+  enabled BOOLEAN NOT NULL DEFAULT TRUE,
+  data JSONB NOT NULL,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW(),
+  deleted BOOLEAN DEFAULT FALSE,
+  deleted_at TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS idx_creative_commissions_enabled ON creative_commissions (enabled);
+
+-- Creative Commission FEEDBACK — the split-record federation half (#2686).
+-- Taste reactions federate so a 👍/👎 rated on one machine conditions the same
+-- commission's next run on another. One row per reaction; the full sanitized
+-- record in `data` JSONB, with commission_id / run_id / created_at / updated_at
+-- mirrored for the per-commission hydration query, plus the soft-delete tombstone
+-- columns the LWW merge needs (a hard delete never propagates).
+CREATE TABLE IF NOT EXISTS commission_feedback (
+  id TEXT PRIMARY KEY,
+  commission_id TEXT,
+  run_id TEXT,
+  data JSONB NOT NULL,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW(),
+  deleted BOOLEAN DEFAULT FALSE,
+  deleted_at TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS idx_commission_feedback_commission ON commission_feedback (commission_id, created_at);
 
 -- Immutable machine-local scheduled audit measurements per app/category/run.
 CREATE TABLE IF NOT EXISTS app_quality_measurements (
