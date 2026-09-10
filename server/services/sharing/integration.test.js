@@ -15,6 +15,8 @@ import { join } from 'path';
 import { createHash } from 'crypto';
 import { makePathsProxy, mockNoPeerSync, mockNoPeers } from '../../lib/mockPathsDataRoot.js';
 
+const fileUtilsMock = vi.hoisted(() => ({ atomicWrite: vi.fn(), realAtomicWrite: null }));
+
 function sha256Hex(buf) {
   return createHash('sha256').update(buf).digest('hex');
 }
@@ -32,7 +34,14 @@ let tempBucket;
 // The shared helper re-roots EVERY member that lives under `data/`, so a member
 // added tomorrow is covered without touching this file.
 vi.mock('../../lib/fileUtils.js', async () =>
-  makePathsProxy(await vi.importActual('../../lib/fileUtils.js'), { dataRoot: tempData }));
+  makePathsProxy(await vi.importActual('../../lib/fileUtils.js'), {
+    dataRoot: tempData,
+    overrides: { atomicWrite: fileUtilsMock.atomicWrite },
+  }));
+
+const fileUtilsActual = await vi.importActual('../../lib/fileUtils.js');
+fileUtilsMock.realAtomicWrite = fileUtilsActual.atomicWrite;
+fileUtilsMock.atomicWrite.mockImplementation((...args) => fileUtilsMock.realAtomicWrite(...args));
 
 // Stub instances.getInstanceId so the exporter doesn't try to read the
 // real identity.json. Returns a fixed id for assertions.
@@ -85,6 +94,8 @@ function simulateRemoteSender(bucketPath, filename, peerId = 'remote-peer-id') {
 
 describe('sharing round-trip', () => {
   beforeEach(() => {
+    fileUtilsMock.atomicWrite.mockClear();
+    fileUtilsMock.atomicWrite.mockImplementation((...args) => fileUtilsMock.realAtomicWrite(...args));
     // Wipe and re-seed the temp data dir + a fake asset for each test.
     rmSync(tempData, { recursive: true, force: true });
     mkdirSync(tempData, { recursive: true });
@@ -2311,6 +2322,34 @@ describe('sharing round-trip', () => {
     const keyB = `${join(tempData, 'images', 'parallelB.png')}:${statB.mtimeMs}:${statB.size}`;
     expect(idx[keyA]).toBe(sha256Hex('PARALLEL_A'));
     expect(idx[keyB]).toBe(sha256Hex('PARALLEL_B'));
+  });
+
+  it('retries a blob-index write after a transient failure instead of poisoning later exports', async () => {
+    const bucket = await buckets.createBucket({ name: 'RetryBucket', path: tempBucket, mode: 'auto-merge' });
+    const sourceA = join(tempData, 'images', 'retryA.png');
+    const sourceB = join(tempData, 'images', 'retryB.png');
+    writeFileSync(sourceA, 'RETRY_A');
+    writeFileSync(sourceB, 'RETRY_B');
+    const indexPath = join(tempBucket, 'assets', 'blobs', '.index.json');
+    let rejectFirstIndexWrite = true;
+    fileUtilsMock.atomicWrite.mockImplementation(async (...args) => {
+      if (String(args[0]) === indexPath && rejectFirstIndexWrite) {
+        rejectFirstIndexWrite = false;
+        throw new Error('transient blob-index failure');
+      }
+      return fileUtilsMock.realAtomicWrite(...args);
+    });
+
+    await expect(exporter.exportMedia([{ kind: 'image', ref: 'retryA.png' }], bucket.id))
+      .rejects.toThrow('transient blob-index failure');
+    await expect(exporter.exportMedia([{ kind: 'image', ref: 'retryB.png' }], bucket.id))
+      .resolves.toMatchObject({ assetCount: 1 });
+
+    const index = JSON.parse(readFileSync(indexPath, 'utf-8'));
+    const statB = statSync(sourceB);
+    const keyB = `${sourceB}:${statB.mtimeMs}:${statB.size}`;
+    expect(index[keyB]).toBe(sha256Hex('RETRY_B'));
+    expect(fileUtilsMock.atomicWrite.mock.calls.filter(([path]) => String(path) === indexPath)).toHaveLength(2);
   });
 
   // ---------------------------------------------------------------------------
