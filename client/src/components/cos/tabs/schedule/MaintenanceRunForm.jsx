@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router';
 import socket from '../../../../services/socket';
+import MaintenanceStepSettings from './MaintenanceStepSettings';
 import MaintenanceRunStatus from './MaintenanceRunStatus';
 import MaintenanceStepChecklist from './MaintenanceStepChecklist';
 import { buildMaintenanceSteps } from '../../../../../../server/lib/maintenanceSequence';
@@ -128,7 +129,7 @@ export default function MaintenanceRunForm({ schedule, apps = [], providers = []
   const applyRun = updated => {
     if (!updated) return;
     revision.current += 1;
-    setRuns(current => (current || []).map(entry => (entry.id === updated.id ? updated : entry)));
+    setRuns(current => (current || []).map(entry => (entry.id === updated.id && !(entry.updatedAt > updated.updatedAt) ? updated : entry)));
   };
   const stop = async id => {
     const response = await api.stopMaintenanceRun(id, { silent: true }).catch(error => {
@@ -236,7 +237,10 @@ export default function MaintenanceRunForm({ schedule, apps = [], providers = []
           return <li key={entry.id} className="border border-port-border rounded p-2 flex flex-wrap items-center gap-x-3 gap-y-1">
             <span className="font-medium">{getAppName(entry.appId, apps, entry.appId)}</span>
             <span className="text-xs">{entry.providerId}{entry.model ? ` · ${entry.model}` : ''}</span>
-            <MaintenanceRunStatus run={entry} showSteps />
+            <MaintenanceRunStatus run={entry} showSteps renderStepSettings={step => (
+              <MaintenanceStepSettings key={`${step.id}:${JSON.stringify(step.overrides)}`} run={entry} step={step}
+                providers={availableProviders} loading={!providersLoaded} onSaved={applyRun} />
+            )} />
             <button type="button" onClick={() => stop(entry.id)} className="px-2 py-1 text-xs bg-port-border rounded">Stop</button>
           </li>;
         })}

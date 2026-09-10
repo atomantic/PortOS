@@ -23,7 +23,7 @@ export function maintenanceRunProgress(run = {}) {
 }
 
 /** Shared live progress content for the schedule card and corner notification. */
-export default function MaintenanceRunStatus({ run, showSteps = false }) {
+export default function MaintenanceRunStatus({ run, showSteps = false, renderStepSettings }) {
   const { current, done, total, step } = maintenanceRunProgress(run);
   return <div className={`space-y-1 text-xs min-w-0 ${showSteps ? 'w-full' : ''}`} role="status">
     <p>{run.status} · {current}/{total} steps{run.status === 'running' && step ? ` · ${step}` : ''}</p>
@@ -34,6 +34,6 @@ export default function MaintenanceRunStatus({ run, showSteps = false }) {
       {run.active.agentId && <a className="underline" href={`/cos/agents/${encodeURIComponent(run.active.agentId)}`} target="_blank" rel="noopener noreferrer">Open agent in new tab</a>}
     </p>}
     {run.reason && <details><summary className="cursor-pointer">Run details</summary><p className="break-all">{run.reason}</p></details>}
-    {showSteps && <MaintenanceStepChecklist steps={run.steps} completed={run.completed} activeStepId={run.active?.stepId} />}
+    {showSteps && <MaintenanceStepChecklist steps={run.steps} completed={run.completed} activeStepId={run.active?.stepId} renderStepSettings={renderStepSettings} />}
   </div>;
 }

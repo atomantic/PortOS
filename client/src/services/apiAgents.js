@@ -362,3 +362,7 @@ export const triggerFeatureAgent = (id, options = {}) => request(`/feature-agent
 export const stopFeatureAgent = (id, options = {}) => request(`/feature-agents/${id}/stop`, { method: 'POST', ...options });
 export const getFeatureAgentRuns = (id, limit) => request(`/feature-agents/${id}/runs${limit ? `?limit=${limit}` : ''}`);
 export const getFeatureAgentOutput = (id) => request(`/feature-agents/${id}/output`);
+
+export const updateMaintenanceStep = (id, stepId, settings, options = {}) => request(`/cos/schedule/maintenance-runs/${encodeURIComponent(id)}/steps/${encodeURIComponent(stepId)}`, {
+  method: 'PATCH', body: JSON.stringify(settings), ...options,
+});

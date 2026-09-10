@@ -5,7 +5,7 @@ import scheduleRoutes from './cosScheduleRoutes.js';
 
 const recordUserAction = vi.hoisted(() => vi.fn(async () => ({ id: 'evt' })));
 vi.mock('../services/userActions.js', () => ({ recordUserAction }));
-const maintenance = vi.hoisted(() => ({ listMaintenanceRuns: vi.fn(), startMaintenanceRun: vi.fn(), stopMaintenanceRun: vi.fn(), resumeMaintenanceRun: vi.fn() }));
+const maintenance = vi.hoisted(() => ({ updateMaintenanceStep: vi.fn(), listMaintenanceRuns: vi.fn(), startMaintenanceRun: vi.fn(), stopMaintenanceRun: vi.fn(), resumeMaintenanceRun: vi.fn() }));
 vi.mock('../services/maintenanceRun.js', () => maintenance);
 
 vi.mock('../services/taskSchedule.js', () => ({
@@ -75,6 +75,17 @@ describe('CoS Schedule Routes', () => {
   });
 
   describe('manual maintenance runs', () => {
+    it('validates stage settings and returns the saved run or not-found', async () => {
+      const url = '/api/cos/schedule/maintenance-runs/maint-1/steps/step-2';
+      const settings = { providerId: 'codex', model: 'example-model', effort: null };
+      maintenance.updateMaintenanceStep.mockResolvedValue({ id: 'maint-1' });
+      expect((await request(app).patch(url).send(settings)).body.run.id).toBe('maint-1');
+      expect(maintenance.updateMaintenanceStep).toHaveBeenCalledWith('maint-1', 'step-2', settings);
+      expect((await request(app).patch(url).send({ ...settings, effort: 'invalid' })).status).toBe(400);
+      expect((await request(app).patch(url).send({ ...settings, completed: {} })).status).toBe(400);
+      maintenance.updateMaintenanceStep.mockResolvedValue(null);
+      expect((await request(app).patch(url).send(settings)).status).toBe(404);
+    });
     it('accepts fix mode and rejects unknown modes', async () => {
       maintenance.startMaintenanceRun.mockResolvedValue({ run: { id: 'maint-1' } });
       const body = { appId: 'app-1', providerId: 'codex', model: 'gpt-5', mode: 'fix', claimBetweenAudits: false, claimHandler: { providerId: 'claude', model: 'sonnet', effort: 'low' } };
