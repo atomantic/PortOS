@@ -10,6 +10,7 @@ import { getCurrentVersion } from '../services/updateChecker.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { getMemoryStats } from '../lib/memoryStats.js';
 import { formatBytes, formatDuration } from '../lib/fileUtils.js';
+import { parseFilesystemStats } from '../lib/fileCore.js';
 import { validateRequest, systemHealthWarningParamsSchema, systemHealthWarningDismissSchema } from '../lib/validation.js';
 import { getSettings, updateSettingsWith } from '../services/settings.js';
 import { checkGhHealth } from '../services/github.js';
@@ -157,21 +158,13 @@ router.get('/health/details', asyncHandler(async (req, res) => {
   // bavail = blocks available to unprivileged users (what the user can actually fill).
   // Derive used/usagePercent from the same figure so `used + free === total` and
   // the UI's percent corresponds to the displayed `free`.
-  let disk = null;
-  if (diskStats) {
-    const totalDisk = diskStats.blocks * diskStats.bsize;
-    if (totalDisk > 0) {
-      const freeDisk = diskStats.bavail * diskStats.bsize;
-      const usedDisk = totalDisk - freeDisk;
-      const diskUsagePercent = Math.round((usedDisk / totalDisk) * 100);
-      disk = {
-        total: totalDisk,
-        used: usedDisk,
-        free: freeDisk,
-        usagePercent: diskUsagePercent
-      };
-    }
-  }
+  const parsedDisk = parseFilesystemStats(diskStats);
+  const disk = parsedDisk && {
+    total: parsedDisk.total,
+    used: parsedDisk.used,
+    free: parsedDisk.free,
+    usagePercent: parsedDisk.usagePercent,
+  };
 
   // Process status summary from PM2. Processes whose exit is expected (a desktop
   // app the user closed) are excluded from the FAILURE-bearing counts: a quit game
