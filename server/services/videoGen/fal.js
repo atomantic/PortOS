@@ -269,11 +269,13 @@ async function runFalVideo(job, jobId, { apiKey, modelId, prompt, negativePrompt
     await finalizeGeneratedVideo({ job, jobId, outputPath, filename, meta, actualSeed: null, mutateHistory: mutateVideoHistory });
     closeJobAfterDelay(jobs, jobId);
   } catch (err) {
-    // NOTE: not forced, unlike videoGen/grok.js's post-exit catch — see #6831.
-    // finalizeGeneratedVideo stamps job.status = 'complete' before its own
-    // async tail (same as here), so a throw from that tail after the request
-    // slot is already cleared above lands here as a silent no-op today.
-    finalizeJobFailure(job, jobId, null, `fal.ai video generation failed: ${err?.message || err}`);
+    // finalizeGeneratedVideo marks job.status='complete' BEFORE its async
+    // post-processing (faststart/thumbnail/history), and the request slot is
+    // already released above — a throw there must still surface as a terminal
+    // failure or the queue's job stays 'running' until the watchdog and the
+    // client never gets a terminal frame. Force past the idempotence guard,
+    // same as videoGen/grok.js's post-exit catch and reactor.js's catch-all (#6831).
+    finalizeJobFailure(job, jobId, null, `fal.ai video generation failed: ${err?.message || err}`, { force: true });
   }
 }
 
