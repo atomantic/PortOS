@@ -223,7 +223,7 @@ export function isNonCommittingCoordinatorTask(task) {
  * `worktreeChangesExpected` is a user-settable per-app taskMetadata override
  * accepted for EVERY task type (`cosValidation.js` ALLOWED keys → `POST
  * /api/apps/:id/task-types` → merged into `metadata` in
- * cosTaskGenerator.js#generateManagedAppImprovementTaskForType). It exists to
+ * cosTaskGenerator.js#prepareManagedAppImprovementTask). It exists to
  * mark a run's deliverable as outside the worktree; someone setting it there is
  * not asking to disable success validation. Ungated, a `security` task
  * carrying it would exit 0 having committed nothing and be recorded as a pass

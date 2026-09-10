@@ -887,7 +887,7 @@ describe('cosTaskStore.addTask', () => {
   });
 
   it('rejects a raw duplicate whose app lives in metadata.app (queue-path improvement tasks)', async () => {
-    // Queue-path improvement tasks (generateManagedAppImprovementTaskForType) arrive
+    // Queue-path improvement tasks (prepareManagedAppImprovementTask) arrive
     // pre-built with `raw: true` and carry the app in `metadata.app`, NOT top-level
     // `taskData.app`. Two concurrent queueEligibleImprovementTasks snapshots each add
     // an identical `[Improvement: PortOS] …` task; the second must be rejected as a
