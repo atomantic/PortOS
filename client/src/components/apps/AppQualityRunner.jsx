@@ -11,7 +11,7 @@ import { getMaintenanceRuns, startMaintenanceRun, stopMaintenanceRun } from '../
 const eligibleProvider = provider => provider.enabled && isProcessProvider(provider) && familyForProvider(provider);
 const needsCheck = category => category.score == null || category.stale || category.coverage !== 'broad' || category.confidence === 'low';
 
-export default function AppQualityRunner({ app }) {
+export default function AppQualityRunner({ app, children }) {
   const categories = app.quality?.categories || [];
   const [params, setParams] = useSearchParams();
   const requested = params.get('qualityCheck');
@@ -55,7 +55,7 @@ export default function AppQualityRunner({ app }) {
     if (response) setRun(response.run);
     setBusy(false);
   };
-  return <section aria-label="Run quality checks" className="border-t border-port-border pt-3 space-y-3">
+  const controls = <section id="quality-runner" aria-label="Run quality checks" className="border-t border-port-border pt-3 space-y-3">
     <h4 className="font-medium">Run quality checks</h4>
     <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm">
       <label htmlFor="quality-checks">Checks
@@ -77,7 +77,7 @@ export default function AppQualityRunner({ app }) {
     <p className="text-xs text-gray-400">{taskTypes.length} scheduled agents, run sequentially with these overrides. {mode === 'fix' ? 'Each selected audit can change code and open a PR.' : 'Findings become issues; no fixes or backlog claim jobs.'} Existing task enablement and Improve settings apply.</p>
     <details className="text-xs"><summary className="cursor-pointer text-port-accent">Selected checks ({taskTypes.length})</summary><p className="mt-1">{categories.filter(category => taskTypes.includes(category.id)).map(category => category.label).join(', ') || 'All categories have qualifying evidence.'}</p></details>
     <button type="button" onClick={start} disabled={busy || !loaded || picker.loading || !picker.selectedProviderId || !picker.selectedModel || !taskTypes.length || run?.status === 'running' || app.quality?.unavailable}
-      className="px-3 py-2 rounded bg-port-accent text-port-bg text-sm font-medium disabled:opacity-50">Run {taskTypes.length} checks now</button>
+      className="px-3 py-2 rounded bg-port-accent text-port-bg text-sm font-medium disabled:opacity-50">{taskTypes.length === 1 ? 'Run now' : `Run ${taskTypes.length} checks now`}</button>
     {!loaded && <p className="text-xs" role="status">Loading runner status… <button type="button" className="text-port-accent" onClick={loadRuns}>Retry</button></p>}
     {error && <p role="alert" className="text-sm text-port-error">{error}</p>}
     {run && <div className="space-y-2">
@@ -86,4 +86,5 @@ export default function AppQualityRunner({ app }) {
       {run.status === 'running' && <button type="button" className="text-xs text-port-accent" disabled={busy} onClick={stop}>Stop remaining checks</button>}
     </div>}
   </section>;
+  return children ? children(controls) : controls;
 }
