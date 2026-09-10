@@ -286,6 +286,32 @@ describe('createJobFailureFinalizer', () => {
 
     expect(events.emit).toHaveBeenCalledWith('failed', { mode: 'grok', generationId: 'j1', error: 'boom' });
   });
+
+  it('.canceled forces a "Canceled" failure past the idempotency guard (fal.js/reactor.js cancel path)', () => {
+    const { activeSlots, events, finalize } = setup();
+    const job = { clients: [], status: 'running' };
+    activeSlots.set('j1', { some: 'request-entry' });
+
+    finalize.canceled(job, 'j1');
+
+    expect(job.status).toBe('error');
+    expect(activeSlots.has('j1')).toBe(false);
+    expect(events.emit).toHaveBeenCalledWith('failed', { generationId: 'j1', error: 'Canceled' });
+  });
+
+  it('.canceled accepts an optional slotOwner for a backend that does track one', () => {
+    const { activeSlots, finalize } = setup();
+    const owner = { pid: 1 };
+    const otherOwner = { pid: 2 };
+    const job = { clients: [], status: 'running' };
+    activeSlots.set('j1', otherOwner);
+
+    finalize.canceled(job, 'j1', owner);
+
+    // A cancel from a stale owner must not evict a newer run's slot, same
+    // guard as the base finalizer.
+    expect(activeSlots.get('j1')).toBe(otherOwner);
+  });
 });
 
 describe('createSseRunner', () => {

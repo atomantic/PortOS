@@ -111,22 +111,31 @@ export const closeJobAfterDelay = (jobs, jobId, delay = SSE_CLEANUP_DELAY_MS, ex
 // It defaults to the video shape (`{ generationId, error }`); the image
 // backends override it to add the `mode` field their event bus carries
 // (read by `imageGenQuota.js`'s per-provider outcome recorder).
+//
+// The returned function also carries a `.canceled(job, jobId, slotOwner?)`
+// convenience — `fal.js` and `reactor.js` each defined an identical
+// `finalizeCanceled = (job, jobId) => finalize(job, jobId, null, 'Canceled',
+// { force: true })` wrapper; this puts that one place instead of two.
 export const createJobFailureFinalizer = ({
   jobs, activeJobs, activeSlots, label, events,
   failedPayload = (jobId, reason) => ({ generationId: jobId, error: reason }),
-}) => (job, jobId, slotOwner, reason, { force = false } = {}) => {
-  // Idempotent except under `force` — spawn failures fire 'error' AND a
-  // follow-up 'close', so both paths reach this finalizer, and a caller
-  // whose success path can throw AFTER stamping 'complete' passes `force`
-  // to still deliver a terminal 'failed' for that window.
-  if (!force && (job.status === 'error' || job.status === 'complete')) return;
-  if (slotOwner == null || activeSlots.get(jobId) === slotOwner) activeSlots.delete(jobId);
-  job.status = 'error';
-  activeJobs.delete(jobId);
-  console.log(`❌ ${label} failed [${jobId.slice(0, 8)}]: ${reason.split('\n')[0]}`);
-  broadcastSse(job, { type: 'error', error: reason });
-  events.emit('failed', failedPayload(jobId, reason));
-  closeJobAfterDelay(jobs, jobId);
+}) => {
+  const finalize = (job, jobId, slotOwner, reason, { force = false } = {}) => {
+    // Idempotent except under `force` — spawn failures fire 'error' AND a
+    // follow-up 'close', so both paths reach this finalizer, and a caller
+    // whose success path can throw AFTER stamping 'complete' passes `force`
+    // to still deliver a terminal 'failed' for that window.
+    if (!force && (job.status === 'error' || job.status === 'complete')) return;
+    if (slotOwner == null || activeSlots.get(jobId) === slotOwner) activeSlots.delete(jobId);
+    job.status = 'error';
+    activeJobs.delete(jobId);
+    console.log(`❌ ${label} failed [${jobId.slice(0, 8)}]: ${reason.split('\n')[0]}`);
+    broadcastSse(job, { type: 'error', error: reason });
+    events.emit('failed', failedPayload(jobId, reason));
+    closeJobAfterDelay(jobs, jobId);
+  };
+  finalize.canceled = (job, jobId, slotOwner = null) => finalize(job, jobId, slotOwner, 'Canceled', { force: true });
+  return finalize;
 };
 
 // ---------------------------------------------------------------------------

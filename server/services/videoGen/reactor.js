@@ -6,7 +6,7 @@ import { join } from 'path';
 import { ensureDir, PATHS } from '../../lib/fileUtils.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { fetchWithTimeout } from '../../lib/fetchWithTimeout.js';
-import { broadcastSse, attachSseClient as attachSse, closeJobAfterDelay, createJobFailureFinalizer } from '../../lib/sseUtils.js';
+import { attachSseClient as attachSse, closeJobAfterDelay, createJobFailureFinalizer } from '../../lib/sseUtils.js';
 import { videoGenEvents } from './events.js';
 import { finalizeGeneratedVideo, emitCloudRenderStatus, CLOUD_RENDER_PHASE } from './generateVideoHelpers.js';
 import { mutateVideoHistory } from './history.js';
@@ -329,8 +329,6 @@ async function runReactorVideo(job, jobId, {
   }
 }
 
-const finalizeCanceled = (job, jobId) => finalizeJobFailure(job, jobId, null, 'Canceled', { force: true });
-
 const finalizeJobFailure = createJobFailureFinalizer({
   jobs,
   activeJobs,
@@ -338,6 +336,7 @@ const finalizeJobFailure = createJobFailureFinalizer({
   label: 'reactor video generation',
   events: videoGenEvents,
 });
+const finalizeCanceled = finalizeJobFailure.canceled;
 
 // Test-only handles.
 export const _internals = { validateRequest: validateReactorRequest };

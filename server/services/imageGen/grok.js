@@ -431,11 +431,8 @@ async function runGrok(job, jobId, bin, args, {
       closeJobAfterDelay(jobs, jobId);
     } catch (err) {
       removeScratch();
-      // finalizeJobFailure is a no-op once job.status === 'complete' — but the
-      // success path above stamps 'complete' BEFORE its own broadcastSse/
-      // event-emit tail, so a throw from there still needs a terminal
-      // 'failed' delivered. Force past the idempotency guard (matches
-      // videoGen/grok.js's post-exit catch, fa3796650).
+      // force: true — 'complete' is already stamped above; see
+      // createJobFailureFinalizer's doc comment in sseUtils.js.
       finalizeJobFailure(job, jobId, proc, `Grok post-exit handler failed: ${err?.message || err}`, { force: true });
     }
   });
