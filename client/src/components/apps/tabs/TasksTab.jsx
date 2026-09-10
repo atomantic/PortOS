@@ -48,7 +48,7 @@ export default function TasksTab({ appId }) {
     : 0;
 
   return (
-    <div className="max-w-5xl space-y-4">
+    <div className="w-full min-w-0 space-y-4">
       {/* Add Task Form */}
       <TaskAddForm
         providers={providers}
@@ -95,62 +95,60 @@ export default function TasksTab({ appId }) {
           <p className="text-gray-400">No agent tasks found for this app in the last 14 days</p>
         </div>
       ) : (
-        <div className="bg-port-card border border-port-border rounded-lg overflow-hidden">
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="border-b border-port-border">
-                  <th className="text-left px-4 py-3 text-xs text-gray-500 uppercase tracking-wide font-medium">Description</th>
-                  <th className="text-left px-4 py-3 text-xs text-gray-500 uppercase tracking-wide font-medium">Type</th>
-                  <th className="text-center px-4 py-3 text-xs text-gray-500 uppercase tracking-wide font-medium">Status</th>
-                  <th className="text-right px-4 py-3 text-xs text-gray-500 uppercase tracking-wide font-medium">Duration</th>
-                  <th className="text-right px-4 py-3 text-xs text-gray-500 uppercase tracking-wide font-medium">When</th>
-                </tr>
-              </thead>
-              <tbody>
-                {agents.map(agent => {
-                  const statusCfg = STATUS_CONFIG[agent.status] || { color: 'bg-gray-600', text: agent.status };
-                  const duration = agent.completedAt && agent.startedAt
-                    ? new Date(agent.completedAt) - new Date(agent.startedAt)
-                    : null;
-                  const taskType = agent.metadata?.taskType || agent.metadata?.type || '-';
-                  const description = agent.metadata?.taskDescription || agent.metadata?.description || agent.id;
+        <div className="bg-port-card border border-port-border rounded-lg overflow-x-auto">
+          <table className="w-full min-w-[40rem] table-fixed text-sm">
+            <thead>
+              <tr className="border-b border-port-border">
+                <th className="text-left px-4 py-3 text-xs text-gray-500 uppercase tracking-wide font-medium">Description</th>
+                <th className="w-28 text-left px-4 py-3 text-xs text-gray-500 uppercase tracking-wide font-medium whitespace-nowrap">Type</th>
+                <th className="w-32 text-center px-4 py-3 text-xs text-gray-500 uppercase tracking-wide font-medium whitespace-nowrap">Status</th>
+                <th className="w-28 text-right px-4 py-3 text-xs text-gray-500 uppercase tracking-wide font-medium whitespace-nowrap">Duration</th>
+                <th className="w-28 text-right px-4 py-3 text-xs text-gray-500 uppercase tracking-wide font-medium whitespace-nowrap">When</th>
+              </tr>
+            </thead>
+            <tbody>
+              {agents.map(agent => {
+                const statusCfg = STATUS_CONFIG[agent.status] || { color: 'bg-gray-600', text: agent.status };
+                const duration = agent.completedAt && agent.startedAt
+                  ? new Date(agent.completedAt) - new Date(agent.startedAt)
+                  : null;
+                const taskType = agent.metadata?.taskType || agent.metadata?.type || '-';
+                const description = agent.metadata?.taskDescription || agent.metadata?.description || agent.id;
 
-                  return (
-                    <tr key={agent.id} className="border-b border-port-border/50 hover:bg-white/5">
-                      <td className="px-4 py-3">
-                        <Link
-                          to={`/cos/agents`}
-                          className="text-gray-300 hover:text-port-accent text-xs line-clamp-2"
-                        >
-                          {description}
-                        </Link>
-                      </td>
-                      <td className="px-4 py-3">
-                        <span className="text-xs text-gray-400 font-mono">{taskType}</span>
-                      </td>
-                      <td className="px-4 py-3 text-center">
-                        <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs text-white ${statusCfg.color}`}>
-                          {statusCfg.text}
-                        </span>
-                      </td>
-                      <td className="px-4 py-3 text-right">
-                        <span className="text-xs text-gray-400 flex items-center justify-end gap-1">
-                          <Clock size={12} />
-                          {formatDurationMs(duration)}
-                        </span>
-                      </td>
-                      <td className="px-4 py-3 text-right">
-                        <span className="text-xs text-gray-500">
-                          {formatTime(agent.completedAt || agent.startedAt)}
-                        </span>
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
+                return (
+                  <tr key={agent.id} className="border-b border-port-border/50 hover:bg-white/5">
+                    <td className="px-4 py-3 min-w-0">
+                      <Link
+                        to={`/cos/agents`}
+                        className="text-gray-300 hover:text-port-accent text-xs line-clamp-2 break-words"
+                      >
+                        {description}
+                      </Link>
+                    </td>
+                    <td className="px-4 py-3">
+                      <span className="text-xs text-gray-400 font-mono truncate block">{taskType}</span>
+                    </td>
+                    <td className="px-4 py-3 text-center">
+                      <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs text-white ${statusCfg.color}`}>
+                        {statusCfg.text}
+                      </span>
+                    </td>
+                    <td className="px-4 py-3 text-right whitespace-nowrap">
+                      <span className="text-xs text-gray-400 inline-flex items-center justify-end gap-1">
+                        <Clock size={12} />
+                        {formatDurationMs(duration)}
+                      </span>
+                    </td>
+                    <td className="px-4 py-3 text-right whitespace-nowrap">
+                      <span className="text-xs text-gray-500">
+                        {formatTime(agent.completedAt || agent.startedAt)}
+                      </span>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
         </div>
       )}
     </div>
