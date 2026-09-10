@@ -34,6 +34,7 @@ import { extractCosTaskType } from '../../../lib/cosTaskType';
 import InstancePicker from '../InstancePicker';
 import EffortSelect from '../EffortSelect';
 import RelaunchAgentModal from './RelaunchAgentModal';
+import AgentCard from './AgentCard';
 
 const statusIcons = {
   pending: <Clock size={16} aria-hidden="true" className="text-yellow-500" />,
@@ -141,7 +142,7 @@ function getSuccessRateStyle(rate) {
   return { bg: 'bg-port-error/15', text: 'text-port-error', label: 'low' };
 }
 
-export default function TaskItem({ task, agent = null, isSystem, spawning = false, selected = false, onRefresh, onTaskUnblocked, providers, providersLoaded, durations, dragHandleProps, apps, instances = null, onEditingChange }) {
+export default function TaskItem({ task, agent = null, liveOutput, isSystem, spawning = false, selected = false, onRefresh, onTaskUnblocked, providers, providersLoaded, durations, dragHandleProps, apps, instances = null, onEditingChange }) {
   // System tasks are persisted in COS-TASKS.md. Every task
   // mutation must name that source; otherwise the API's user-queue default
   // searches TASKS.md and reports the system task as missing.
@@ -391,6 +392,9 @@ export default function TaskItem({ task, agent = null, isSystem, spawning = fals
     onRefresh();
   };
 
+  const showAgent = agent?.status === 'running' && (task.status === 'in_progress' || spawning);
+  const TaskDetails = showAgent ? 'details' : 'div';
+
   return (
     <div
       id={taskRowId(task.id, taskSource)}
@@ -402,6 +406,10 @@ export default function TaskItem({ task, agent = null, isSystem, spawning = fals
           : requiresApproval ? 'border-yellow-500/50' : 'border-port-border'
       }`}
     >
+      {showAgent && <AgentCard agent={agent} liveOutput={liveOutput} durations={durations}
+        onRelaunch={() => setRelaunching(true)} />}
+      <TaskDetails className={showAgent ? 'mt-3' : undefined}>
+        {showAgent && <summary className="cursor-pointer text-sm text-gray-400">Task details and actions</summary>}
       {/* The icon rail and the task body cannot share a row on a phone: up to
           five 44px targets leave the body ~120px wide, so the task id breaks a
           few characters per line and every badge lands on its own row. The
@@ -836,6 +844,8 @@ export default function TaskItem({ task, agent = null, isSystem, spawning = fals
           )}
         </div>
       </div>
+
+      </TaskDetails>
 
       {relaunching && agent && (
         <RelaunchAgentModal
