@@ -3,17 +3,18 @@ import { request } from './apiCore.js';
 export const WORLD_CATEGORIES = ['landscapes', 'environments', 'structures', 'vehicles'];
 export const WORLD_CATEGORY_KEY_MAX = 64;
 export const COMPOSITE_PROMPT_MAX = 4000;
-// Mirror of the bible-field caps in server/services/universeBuilder.js — used by
-// the Universe Builder + Pipeline forms for maxLength enforcement on inputs.
-export const WORLD_LOGLINE_MAX = 500;
-export const WORLD_PREMISE_MAX = 20000;
-export const WORLD_STYLE_NOTES_MAX = 4000;
-// Mirror of INFLUENCE_ENTRY_MAX + INFLUENCES_PER_LIST_MAX in
-// server/services/universeBuilder.js — used by the chip editor for maxLength
-// enforcement and to bound paste-floods of refs.
-export const WORLD_INFLUENCE_ENTRY_MAX = 120;
-export const WORLD_INFLUENCES_PER_LIST_MAX = 30;
-export const WORLD_STYLE_REFERENCES_MAX = 20;
+// Universe bible field caps — used by the Universe Builder + Pipeline forms
+// for maxLength enforcement on inputs, and the chip editor to bound
+// paste-floods of influence refs. Re-exported from the shared leaf so this,
+// the sanitizer, and the pipeline series stage can't drift apart (#6818).
+export {
+  LOGLINE_MAX as WORLD_LOGLINE_MAX,
+  PREMISE_MAX as WORLD_PREMISE_MAX,
+  STYLE_NOTES_MAX as WORLD_STYLE_NOTES_MAX,
+  INFLUENCE_ENTRY_MAX as WORLD_INFLUENCE_ENTRY_MAX,
+  INFLUENCES_PER_LIST_MAX as WORLD_INFLUENCES_PER_LIST_MAX,
+  STYLE_REFERENCES_MAX as WORLD_STYLE_REFERENCES_MAX,
+} from '../../../server/lib/universeBibleLimits.js';
 
 // Every request whose response completes a persisted universe write outside the
 // general draft snapshot is tracked here, including LLM-backed mutations.
@@ -253,16 +254,9 @@ export const refineWorldPrompts = ({
   }),
 });
 
-// Mirror of LOCKABLE_FIELDS in server/services/universeBuilder.js — the lock UI
-// iterates this so a new lockable field only needs adding in two places.
-export const WORLD_LOCKABLE_FIELDS = [
-  'starterPrompt',
-  'logline',
-  'premise',
-  'styleNotes',
-  'influencesEmbrace',
-  'influencesAvoid',
-];
+// The lock UI iterates this so a new lockable field only needs adding in two
+// places. Re-exported from the shared leaf (#6818).
+export { LOCKABLE_FIELDS as WORLD_LOCKABLE_FIELDS } from '../../../server/lib/universeBibleLimits.js';
 
 // Coerce whatever shape the server / draft / patch hands us into a strict
 // `{ embrace: [], avoid: [] }` so consumers never have to guard undefined.
