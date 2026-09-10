@@ -52,7 +52,7 @@ import { createStreamJsonParser, summarizeToolInput } from '../lib/streamJsonPar
 
 const AGENTS_DIR = PATHS.cosAgents;
 
-// Re-exported for existing callers/tests (server/lib/cursor.js, agentCliSpawning.test.js).
+// Re-exported for API stability — this module used to own these definitions.
 export { createStreamJsonParser, summarizeToolInput };
 export const safeParse = (str) => safeJSONParse(str, null);
 
