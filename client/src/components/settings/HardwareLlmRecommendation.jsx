@@ -104,40 +104,9 @@ export function hardwareLlmRecommendation(capabilities) {
   return APPLE_PROFILES.find((profile) => memory >= profile.minMemoryGb && (profile.maxMemoryGb == null || memory <= profile.maxMemoryGb)) || null;
 }
 
-export default function HardwareLlmRecommendation() {
-  const [capabilities, setCapabilities] = useState(null);
-  const [loaded, setLoaded] = useState(false);
-
-  useEffect(() => {
-    let cancelled = false;
-    getSystemCapabilities({ silent: true })
-      .then((result) => {
-        if (!cancelled) setCapabilities(result);
-      })
-      .catch(() => {})
-      .finally(() => { if (!cancelled) setLoaded(true); });
-    return () => { cancelled = true; };
-  }, []);
-
-  const profile = hardwareLlmRecommendation(capabilities);
-  if (!loaded) {
-    return <div className="bg-port-card border border-port-border rounded-xl p-4 text-xs text-gray-500">Checking this machine for a curated coding-agent setup…</div>;
-  }
-  if (!profile) return null;
-
+function RecommendationBody({ profile }) {
   return (
-    <section className="bg-port-accent/5 border border-port-accent/40 rounded-xl p-4 sm:p-5 space-y-3" aria-labelledby="hardware-llm-recommendation-title">
-      <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-3">
-        <div className="min-w-0">
-          <div className="flex items-center gap-2 text-port-accent">
-            <Sparkles size={16} />
-            <h2 id="hardware-llm-recommendation-title" className="text-sm font-semibold">Recommended coding-agent setup</h2>
-          </div>
-          <p className="text-xs text-gray-400 mt-1">Curated for this machine: {profile.machine}</p>
-        </div>
-        <span className="text-[11px] px-2 py-1 rounded border border-port-accent/30 text-port-accent shrink-0">Qwen3.8-27B</span>
-      </div>
-
+    <>
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 text-xs">
         <div className="bg-port-bg/70 rounded-lg p-2.5 min-w-0"><span className="text-gray-500">Runtime</span><p className="text-gray-200 mt-0.5 font-medium">{profile.runtime}</p></div>
         <div className="bg-port-bg/70 rounded-lg p-2.5 min-w-0"><span className="text-gray-500">Harness</span><p className="text-gray-200 mt-0.5 font-medium">{profile.harness}</p></div>
@@ -154,6 +123,64 @@ export default function HardwareLlmRecommendation() {
         <Link to="/ai" className="text-port-accent hover:underline">Configure the harness in AI Providers</Link>
         <Link to="/models/performance" className="inline-flex items-center gap-1 text-port-accent hover:underline"><Gauge size={12} /> Validate with a local task check</Link>
       </div>
-    </section>
+    </>
+  );
+}
+
+export default function HardwareLlmRecommendation() {
+  const [capabilities, setCapabilities] = useState(null);
+  const [loaded, setLoaded] = useState(false);
+  const [wideViewport, setWideViewport] = useState(() => window.matchMedia?.('(min-width: 640px)').matches ?? false);
+  const [mobileExpanded, setMobileExpanded] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    getSystemCapabilities({ silent: true })
+      .then((result) => {
+        if (!cancelled) setCapabilities(result);
+      })
+      .catch(() => {})
+      .finally(() => { if (!cancelled) setLoaded(true); });
+    return () => { cancelled = true; };
+  }, []);
+
+  useEffect(() => {
+    const media = window.matchMedia?.('(min-width: 640px)');
+    if (!media) return undefined;
+    const syncViewport = () => setWideViewport(media.matches);
+    syncViewport();
+    media.addEventListener('change', syncViewport);
+    return () => media.removeEventListener('change', syncViewport);
+  }, []);
+
+  const profile = hardwareLlmRecommendation(capabilities);
+  if (!loaded) {
+    return <div className="bg-port-card border border-port-border rounded-xl p-4 text-xs text-gray-500">Checking this machine for a curated coding-agent setup…</div>;
+  }
+  if (!profile) return null;
+
+  return (
+    <details
+      className="group bg-port-accent/5 border border-port-accent/40 rounded-xl p-4 sm:p-5"
+      open={wideViewport || mobileExpanded}
+      onToggle={(event) => { if (!wideViewport) setMobileExpanded(event.currentTarget.open); }}
+    >
+      <summary
+        className="flex cursor-pointer list-none flex-col sm:flex-row sm:cursor-default sm:items-start justify-between gap-3"
+        onClick={(event) => { if (wideViewport) event.preventDefault(); }}
+      >
+        <div className="min-w-0">
+          <div className="flex items-center gap-2 text-port-accent">
+            <Sparkles size={16} />
+            <h2 id="hardware-llm-recommendation-title" className="text-sm font-semibold">Recommended coding-agent setup</h2>
+          </div>
+          <p className="text-xs text-gray-400 mt-1">Curated for this machine: {profile.machine}</p>
+        </div>
+        <span className="text-[11px] px-2 py-1 rounded border border-port-accent/30 text-port-accent shrink-0">Qwen3.8-27B</span>
+      </summary>
+      <div className="mt-3 space-y-3 group-open:block sm:block">
+        <RecommendationBody profile={profile} />
+      </div>
+    </details>
   );
 }

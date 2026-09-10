@@ -95,6 +95,11 @@ const renderRuntimes = async () => {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  window.matchMedia = vi.fn(() => ({
+    matches: false,
+    addEventListener: vi.fn(),
+    removeEventListener: vi.fn(),
+  }));
   getLocalLlmStatus.mockResolvedValue({
     backend: 'ollama',
     ollama: {
@@ -132,8 +137,25 @@ describe('LocalLlmRuntimesView information architecture', () => {
     expect(screen.getByRole('heading', { name: 'Local Runtime Servers' })).toBeInTheDocument();
     expect(screen.queryByRole('heading', { name: 'Models' })).not.toBeInTheDocument();
     expect(getLocalLlmCatalog).not.toHaveBeenCalled();
-    expect(await screen.findByRole('heading', { name: 'Recommended coding-agent setup' })).toBeInTheDocument();
-    expect(screen.getByText('OpenCode MTPLX TUI')).toBeInTheDocument();
+    const recommendationHeading = await screen.findByRole('heading', { name: 'Recommended coding-agent setup' });
+    const runtimeHeading = screen.getByRole('heading', { name: 'Local Runtime Servers' });
+    expect(runtimeHeading.compareDocumentPosition(recommendationHeading) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    const recommendation = recommendationHeading.closest('details');
+    expect(recommendation).not.toHaveAttribute('open');
+    expect(within(recommendation).getByText('OpenCode MTPLX TUI')).toBeInTheDocument();
+    fireEvent.click(recommendationHeading.closest('summary'));
+    expect(recommendation).toHaveAttribute('open');
+  });
+
+  it('keeps the recommendation expanded on desktop', async () => {
+    window.matchMedia = vi.fn(() => ({
+      matches: true,
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+    }));
+    await renderRuntimes();
+
+    expect((await screen.findByRole('heading', { name: 'Recommended coding-agent setup' })).closest('details')).toHaveAttribute('open');
   });
 
   // The two views never mount together, so whichever one is on screen must be the

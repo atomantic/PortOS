@@ -647,8 +647,6 @@ export default function LocalLlmRuntimesView() {
 
   return (
     <section id="llm-management-panel-runtimes" role="tabpanel" aria-labelledby="tab-runtimes" className="space-y-4">
-      <HardwareLlmRecommendation />
-      <LocalPersistentMindSetupCard />
       {/* One start/stop/install surface for every local server PortOS can run */}
       <RuntimeServersCard
         status={status}
@@ -678,6 +676,8 @@ export default function LocalLlmRuntimesView() {
         onSaveIdleWindow={saveIdleWindow}
         onToggleKeepLoaded={toggleKeepLoaded}
       />
+      <LocalPersistentMindSetupCard />
+      <HardwareLlmRecommendation />
 
       {/* Backends — model catalog, default marker, cross-backend import */}
       <div className="bg-port-card border border-port-border rounded-xl p-4 sm:p-6 space-y-4">
