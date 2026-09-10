@@ -51,10 +51,18 @@ export const PEER_SUBSCRIBABLE_KINDS = Object.freeze(['universe', 'series', 'med
  * fails until every row has a carrier on both sides.
  */
 export const ENVELOPE_EXTENSIONS = Object.freeze([
+  // The schema-version handshake (`buildPortosMeta`); a pre-version-gate
+  // receiver's strict schema has no field for it.
   Object.freeze({ key: 'portosMeta', pendingKey: null }),
+  // Catalog-federation enrichment riding a universe push; a peer newer than
+  // the version gate but older than catalog federation rejects it.
   Object.freeze({ key: 'catalogBundle', pendingKey: null }),
+  // The "Finish the draft" manuscript-review doc riding a series push.
   Object.freeze({ key: 'manuscriptReview', pendingKey: 'reviewSyncPending' }),
+  // The scene-by-scene reverse outline riding a series push (#1348).
   Object.freeze({ key: 'reverseOutline', pendingKey: 'outlineSyncPending' }),
+  // The linked track record riding a musicVideoProject push (#1858) — a
+  // musicVideoProjects-only subscriber has no `tracks` cycle to fall back on.
   Object.freeze({ key: 'linkedTrack', pendingKey: 'trackSyncPending' }),
 ]);
 

@@ -38,6 +38,7 @@ import {
   ERR_VALIDATION,
   ERR_SCHEMA_VERSION_AHEAD,
   PEER_SUBSCRIBABLE_KINDS,
+  ENVELOPE_PENDING_KEYS,
 } from './peerSyncShared.js';
 import { isStr, isNonBlankStr } from '../../lib/textUtils.js';
 
@@ -246,17 +247,18 @@ export async function applyIncomingPush(payload) {
   // the merge fns fall back to `{ via:'sync', peerId:null }` and the
   // attribution is lost).
   const source = { via: 'peer-push', peerId: sourceInstanceId };
-  // Set true when a bundled manuscript-review merge throws — returned to the
-  // sender so it withholds lastPushedHash and retries (the review has no other
-  // reconciliation path; see the merge block below).
-  let reviewSyncPending = false;
-  // Same contract as reviewSyncPending, for the bundled reverse-outline doc.
-  let outlineSyncPending = false;
-  // Same contract again, for the #1858 bundled linked-track record: a
-  // musicVideoProjects-only subscriber has NO independent `tracks` sync cycle,
-  // so a swallowed merge failure would strand the record the receiver needs to
-  // render. Signal so the sender withholds lastPushedHash and re-sends.
-  let trackSyncPending = false;
+  // ENVELOPE_EXTENSIONS pending flags to echo to the sender: each is a bundled
+  // sidecar doc whose merge threw AFTER the record itself merged. None of the
+  // sidecars — the review, the outline, or the #1858 linked track a
+  // musicVideoProjects-only subscriber has no `tracks` cycle for — has an
+  // independent reconciliation path, so the sender withholds lastPushedHash
+  // on the flag and re-sends next cycle; a swallowed failure behind a saved
+  // hash would strand the doc. The record push itself never fails on these.
+  const pending = new Set();
+  const markPending = (key) => (err) => {
+    console.log(`⚠️ peerSync: ${key} merge failed: ${err.message}`);
+    pending.add(ENVELOPE_PENDING_KEYS[key]);
+  };
   // #1922: true only once the bundled linkedTrack merge actually RAN and
   // succeeded — gates whether `linkedTrack` may contribute to
   // `ackedDeletesUpTo` below. Stays false on every skip path (mismatched id,
@@ -300,10 +302,7 @@ export async function applyIncomingPush(payload) {
     // Dynamic import keeps the arcPlanner graph off peerSync's load path.
     if (!localEphemeral && record.deleted !== true && isPlainObject(manuscriptReview)) {
       const { mergeReviewFromSync } = await import('../pipeline/manuscriptReview.js');
-      await mergeReviewFromSync(record.id, manuscriptReview).catch((err) => {
-        console.log(`⚠️ peerSync: manuscriptReview merge failed: ${err.message}`);
-        reviewSyncPending = true;
-      });
+      await mergeReviewFromSync(record.id, manuscriptReview).catch(markPending('manuscriptReview'));
     }
     // Merge the bundled reverse-outline sibling doc, whole-doc LWW on
     // generatedAt. Same ephemeral/tombstone guards + pending-signal contract as
@@ -312,10 +311,7 @@ export async function applyIncomingPush(payload) {
     // cycle. Dynamic import keeps the arcPlanner graph off peerSync's load path.
     if (!localEphemeral && record.deleted !== true && isPlainObject(reverseOutline)) {
       const { mergeOutlineFromSync } = await import('../pipeline/reverseOutline.js');
-      await mergeOutlineFromSync(record.id, reverseOutline).catch((err) => {
-        console.log(`⚠️ peerSync: reverseOutline merge failed: ${err.message}`);
-        outlineSyncPending = true;
-      });
+      await mergeOutlineFromSync(record.id, reverseOutline).catch(markPending('reverseOutline'));
     }
   } else if (kind === 'writersRoomWork') {
     // Did the receiver accept the remote work (insert / remote-won LWW)? This
@@ -338,10 +334,7 @@ export async function applyIncomingPush(payload) {
         && linkedTrack.id === record.trackId) {
       await RECORD_KINDS.track.merge([linkedTrack], { source }).then(() => {
         linkedTrackApplied = true;
-      }).catch((err) => {
-        console.log(`⚠️ peerSync: linkedTrack merge failed: ${err.message}`);
-        trackSyncPending = true;
-      });
+      }).catch(markPending('linkedTrack'));
     }
   }
 
@@ -484,9 +477,9 @@ export async function applyIncomingPush(payload) {
     ...(missingDraftBodies.length > 0 ? { missingDraftBodies } : {}),
     reverseSubscriptionCreated,
     ackedDeletesUpTo,
-    ...(reviewSyncPending ? { reviewSyncPending: true } : {}),
-    ...(outlineSyncPending ? { outlineSyncPending: true } : {}),
-    ...(trackSyncPending ? { trackSyncPending: true } : {}),
+    // One `<pendingKey>: true` per sidecar doc whose merge threw, keyed off the
+    // same ENVELOPE_EXTENSIONS table the sender reads them back from.
+    ...Object.fromEntries([...pending].map((k) => [k, true])),
   };
 }
 
