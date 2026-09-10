@@ -145,7 +145,7 @@ describe('handlePipelineProgression', () => {
 
 // #3114 — `agentOwnsPR` decides whether PortOS skips its own push+PR because the
 // agent was told to run `/do:pr` itself. It MUST derive from the same
-// `canTypeSlashCommands` predicate the prompt's `hasSlashdo` gate used: when the
+// `canTypeSlashCommands` predicate the prompt's completion-mode gate used: when the
 // two disagree, PortOS fires `gh pr create` on a branch that already has a PR
 // ("a pull request already exists" preserves the worktree as a false-positive
 // failure), or conversely never opens the PR the agent was told not to open.

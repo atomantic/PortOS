@@ -71,7 +71,7 @@ export const COMPLETION_MODES = Object.freeze({
   TUI: 'tui',
   /** Worktree with no PR: commit only, PortOS merges the branch back. */
   PORTOS_MERGES: 'portos-merges',
-  /** Worktree with a PR: commit only, the system pushes and opens it. */
+  /** Worktree with a PR: commit only; `/do:pr` when the host can type it, otherwise the system pushes and opens it. */
   WORKTREE_NO_PUSH: 'worktree-no-push',
   /** Plain checkout: commit and push. */
   COMMIT_AND_PUSH: 'commit-and-push',

@@ -1353,8 +1353,8 @@ describe('buildLightContextPrompt', () => {
     // allowlists got wrong are now asserted.
     it('a codex TUI gets the plain git/gh completion workflow, never /do:pr', () => {
       // codex installs slashdo as Agent Skills, not slash commands, so telling it
-      // to run `/do:pr` handed it an uninvokable line. The old `tuiSlashdoFree`
-      // gate only recognized OpenCode + lean mode, so codex fell through to the
+      // to run `/do:pr` handed it an uninvokable line. The old is-TUI-slashdo-free
+      // check only recognized OpenCode + lean mode, so codex fell through to the
       // slashdo path.
       const prompt = buildLightContextPrompt(
         makeTask({ metadata: { openPR: true, reviewLoop: true, reviewers: ['copilot'] } }),
@@ -1526,7 +1526,7 @@ describe('buildLightContextPrompt', () => {
     });
 
     it('a path-configured claude binary under a custom provider id gets the slashdo workflow', () => {
-      // The old `hasSlashdo` gate was an id allowlist (`claude-code` /
+      // The old slashdo-capability gate was an id allowlist (`claude-code` /
       // `claude-code-bedrock`), so a renamed or path-configured claude provider
       // was denied `/simplify` + `/do:pr` even though it launches claude.
       const prompt = buildLightContextPrompt(
@@ -2362,7 +2362,7 @@ describe('buildLightContextPrompt', () => {
       expect(prompt).not.toMatch(/## Resuming Unfinished Work/);
     });
 
-    it('worktreeCommitGuidance: hasSlashdo + !willOpenPR says commit only — PortOS merges the branch back', () => {
+    it('worktreeCommitGuidance: canTypeSlashCommands + !willOpenPR says commit only — PortOS merges the branch back', () => {
       // Claude Code CLI with a worktree but no PR is the auto-merge posture: the
       // worktree guidance must not point the agent at a push nothing consumes.
       const prompt = buildLightContextPrompt(
@@ -2710,7 +2710,7 @@ describe('buildCompletionGuidelineBullet', () => {
   it('read-only short-circuits regardless of other flags', () => {
     const bullet = buildCompletionGuidelineBullet({
       mode: resolveCompletionMode({ isReadOnly: true, isTui: true, worktreeInfo: null, willOpenPR: true }),
-      slashdoFree: true, tuiCompletionCommand: '/do:pr', worktreeInfo: null, willOpenPR: true,
+      tuiCompletionCommand: '/do:pr', worktreeInfo: null, willOpenPR: true,
     });
     expect(bullet).toMatch(/read-only task/i);
   });
@@ -2718,7 +2718,7 @@ describe('buildCompletionGuidelineBullet', () => {
   it('slashdo TUI bullet references the slashdo command', () => {
     const bullet = buildCompletionGuidelineBullet({
       mode: resolveCompletionMode({ isTui: true, worktreeInfo: { worktreePath: '/wt' }, willOpenPR: true }),
-      slashdoFree: false, tuiCompletionCommand: '/do:pr', worktreeInfo: { worktreePath: '/wt' }, willOpenPR: true,
+      tuiCompletionCommand: '/do:pr', worktreeInfo: { worktreePath: '/wt' }, willOpenPR: true,
     });
     expect(bullet).toMatch(/`\/do:pr`/);
     expect(bullet).not.toMatch(/plain `git`\/`gh`/);
@@ -2728,7 +2728,7 @@ describe('buildCompletionGuidelineBullet', () => {
   it('slashdo-free TUI bullet points at the commit + PortOS handoff, not a /do:* command', () => {
     const bullet = buildCompletionGuidelineBullet({
       mode: resolveCompletionMode({ isTui: true, canRunSlashCommands: false, worktreeInfo: { worktreePath: '/wt' }, willOpenPR: true }),
-      slashdoFree: true, tuiCompletionCommand: '/do:pr', worktreeInfo: { worktreePath: '/wt' }, willOpenPR: true,
+      tuiCompletionCommand: '/do:pr', worktreeInfo: { worktreePath: '/wt' }, willOpenPR: true,
     });
     expect(bullet).toMatch(/plain `git` commit \+ PortOS handoff/);
     expect(bullet).toMatch(/no slashdo commands/);
