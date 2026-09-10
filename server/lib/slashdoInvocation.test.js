@@ -203,29 +203,28 @@ describe('resolvePrOpenedBy', () => {
     // not be handed to `!== PORTOS` as if it named an agent.
     expect(resolveFor({ persistedPrOpenedBy: 'agent-something-new' })).toBe(PR_OPENED_BY.PORTOS);
     expect(resolveFor({ persistedPrOpenedBy: null, persistedOwnsPrWorkflow: true })).toBe(PR_OPENED_BY.AGENT_INLINE);
-  });
-
-  // Legacy shapes. Other installs run older versions, so records carrying the
-  // #3733 boolean — or nothing at all — keep arriving here.
-  it('reads a slashdo-capable legacy record as a /do:pr run whatever boolean it carries', () => {
-    // The #6869 defect on legacy data: `ownsPrWorkflow` answered "did the
-    // prompt render the INLINE PR section", which is false for exactly the
-    // hosts that run `/do:pr`. Trusting it re-created their PR at cleanup.
-    for (const persistedOwnsPrWorkflow of [true, false, undefined]) {
-      expect(resolveFor({ persistedOwnsPrWorkflow, providerId: 'claude-code', providerCommand: 'claude' }))
-        .toBe(PR_OPENED_BY.AGENT_SLASHDO);
-    }
-    // Including the case a provider-id allowlist missed.
-    expect(resolveFor({ persistedOwnsPrWorkflow: false, providerId: 'custom', providerCommand: '/opt/bin/claude' }))
+    expect(resolveFor({ persistedPrOpenedBy: 'agent-something-new', providerId: 'claude-code', providerCommand: 'claude' }))
       .toBe(PR_OPENED_BY.AGENT_SLASHDO);
   });
 
-  it('keeps a slashdo-free legacy boolean answering exactly as it did', () => {
+  // Legacy shapes. Other installs run older versions, so records carrying the
+  // #3733 boolean — or nothing at all — keep arriving here, and every one of
+  // them must resolve to the answer it resolved to BEFORE #6869.
+  it('keeps the #3733 boolean answering exactly as it did, on every host', () => {
+    // Deliberately NOT corrected for a slashdo-capable host. `false` there is
+    // ambiguous between the #6869 defect and a correct task-shape exclusion
+    // (read-only / no-code-output / discard-worktree / leave-open), and only
+    // the task tells them apart — which this leaf does not see. Overriding it
+    // would fix the first and break the second.
+    expect(resolveFor({ persistedOwnsPrWorkflow: false, providerId: 'claude-code', providerCommand: 'claude' }))
+      .toBe(PR_OPENED_BY.PORTOS);
+    expect(resolveFor({ persistedOwnsPrWorkflow: false, providerId: 'custom', providerCommand: '/opt/bin/claude' }))
+      .toBe(PR_OPENED_BY.PORTOS);
     expect(resolveFor({ persistedOwnsPrWorkflow: true })).toBe(PR_OPENED_BY.AGENT_INLINE);
     expect(resolveFor({ persistedOwnsPrWorkflow: false })).toBe(PR_OPENED_BY.PORTOS);
     expect(resolveFor({ persistedOwnsPrWorkflow: true, providerId: 'antigravity-cli', providerCommand: 'agy' }))
       .toBe(PR_OPENED_BY.AGENT_INLINE);
-    // A lean `--bare` session is not slashdo-capable, so its `false` stands.
+    // A lean `--bare` session is not slashdo-capable either way.
     expect(resolveFor({ persistedOwnsPrWorkflow: false, providerId: 'claude-ollama', providerCommand: 'claude', leanMode: true }))
       .toBe(PR_OPENED_BY.PORTOS);
   });
@@ -518,6 +517,7 @@ describe('resolvePrOwnership', () => {
   it('resolves a legacy record through the same fallback cleanup uses', () => {
     expect(resolve().agentOpensOwnPr).toBe(false);
     expect(resolve({ persistedOwnsPrWorkflow: true }).agentOpensOwnPr).toBe(true);
+    expect(resolve({ persistedOwnsPrWorkflow: false, providerId: 'claude-code', providerCommand: 'claude' }).agentOpensOwnPr).toBe(false);
     expect(resolve({ providerId: 'claude-code', providerCommand: 'claude' }).agentOpensOwnPr).toBe(true);
   });
 });

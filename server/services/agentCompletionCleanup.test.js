@@ -381,15 +381,16 @@ describe('runAgentCompletionCleanup — legacy records with no prOpenedBy stamp'
     expect(opts.skipMerge).toBe(false);
   });
 
-  // The one legacy shape whose ANSWER changes, because it is the defect: a
-  // slashdo-capable record stamped `false` really did run `/do:pr`, and cleanup
-  // re-created its PR. Reading it as `agent-slashdo` applies the #6869 fix to
-  // records written by an older version too.
-  it('a slashdo-capable record stamped `ownsPrWorkflow: false` is read as a /do:pr run', async () => {
+  // The shape #6869 is ABOUT, and the one legacy answer deliberately left
+  // alone: `false` on a slashdo-capable host is ambiguous between the defect
+  // and a correct task-shape exclusion (read-only, no-code-output, …), and
+  // the record alone cannot tell them apart. New records carry `prOpenedBy`
+  // and get the corrected answer; a legacy one keeps exactly today's.
+  it('a slashdo-capable record stamped `ownsPrWorkflow: false` still hands the PR back', async () => {
     expect(await cleanupCallFor(
       { providerId: 'claude-code', providerCommand: 'claude', leanMode: false, ownsPrWorkflow: false },
       { prClaimVerified: true },
-    )).toMatchObject({ prCreation: 'never', skipMerge: true });
+    )).toMatchObject({ prCreation: 'always', skipMerge: false });
   });
 
   it.each([

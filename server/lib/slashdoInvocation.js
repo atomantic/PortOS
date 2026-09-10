@@ -551,18 +551,26 @@ const PR_OPENED_BY_VALUES = new Set(Object.values(PR_OPENED_BY));
  *
  * 1. `metadata.prOpenedBy` (this version) is authoritative: cleanup must act on
  *    what the prompt actually said, not on a fresh derivation that could
- *    disagree with it.
- * 2. A slashdo-capable host resolves to `agent-slashdo` whatever else the record
- *    carries. This is where #6869 lands on legacy data: the #3733 boolean
- *    `metadata.ownsPrWorkflow` answered "did the prompt render the INLINE PR
- *    section", which is `false` for exactly the hosts that run `/do:pr` — so
- *    reading that boolean at face value for a Claude record is what had cleanup
- *    re-push and re-create a PR the agent had already opened.
- * 3. Otherwise the #3733 boolean, when the record has one: a slashdo-free
- *    harness stamped `true` really was told to run `gh pr create` itself.
- * 4. Otherwise `portos` — which for a record written before #3733 (no key at
- *    all) is the same answer the old `canTypeSlashCommands` fallback gave, since
- *    rule 2 already claimed every slashdo-capable one.
+ *    disagree with it. An unrecognized value — a record from a NEWER install —
+ *    is not trusted as an agent; it falls through to the legacy rules below.
+ * 2. The #3733 boolean `metadata.ownsPrWorkflow`, when the record has one,
+ *    still answers exactly as it did: `true` → `agent-inline` (a slashdo-free
+ *    harness told to run `gh pr create` itself), `false` → `portos`.
+ * 3. Otherwise `portos`, or `agent-slashdo` for a slashdo-capable host — the
+ *    pre-#3733 fallback, unchanged, since those runs were prompted by the old
+ *    builder whose gate was exactly `canTypeSlashCommands`.
+ *
+ * **The #6869 fix is deliberately NOT retro-applied to rule 2**, even though
+ * that boolean is the one this issue retires. It answered "did the prompt
+ * render the INLINE PR section", so `false` is ambiguous on a slashdo-capable
+ * host between the defect (a `/do:pr` run PortOS then re-created a PR for) and
+ * a correct exclusion (a read-only / no-code-output / discard-worktree /
+ * leave-open run PortOS really does own). Overriding it to `agent-slashdo`
+ * would fix the first and break the second — and only the task, which this
+ * leaf deliberately does not see, tells them apart. Every legacy record
+ * therefore resolves exactly as it did before this change; only records
+ * stamped by `promptOpensOwnPr` (rule 1) carry the corrected answer, and an
+ * in-flight legacy run is over within one upgrade window.
  *
  * @param {Object} opts
  * @param {string|undefined} opts.persistedPrOpenedBy - `metadata.prOpenedBy`
@@ -581,9 +589,12 @@ export function resolvePrOpenedBy({
   leanMode = false,
 }) {
   if (PR_OPENED_BY_VALUES.has(persistedPrOpenedBy)) return persistedPrOpenedBy;
-  if (canTypeSlashCommands({ providerId, providerCommand, leanMode })) return PR_OPENED_BY.AGENT_SLASHDO;
-  if (persistedOwnsPrWorkflow === true) return PR_OPENED_BY.AGENT_INLINE;
-  return PR_OPENED_BY.PORTOS;
+  if (typeof persistedOwnsPrWorkflow === 'boolean') {
+    return persistedOwnsPrWorkflow ? PR_OPENED_BY.AGENT_INLINE : PR_OPENED_BY.PORTOS;
+  }
+  return canTypeSlashCommands({ providerId, providerCommand, leanMode })
+    ? PR_OPENED_BY.AGENT_SLASHDO
+    : PR_OPENED_BY.PORTOS;
 }
 
 /**

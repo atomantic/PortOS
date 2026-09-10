@@ -128,6 +128,11 @@ export function buildAgentRegistration({
     // case; `agent-inline` is the codex/grok/agy harness handed the plain
     // `git`/`gh` steps, and it is the only value that owes the #5876 merge-gate
     // check, because it is the only prompt carrying a Merge Gate section.
+    //
+    // Three values rather than the boolean because that is what separates them:
+    // the retired `false` conflated "a `/do:pr` run" with "a run PortOS owns",
+    // which is why `resolvePrOpenedBy` can only pass a legacy record's boolean
+    // straight through instead of correcting it.
     prOpenedBy,
     model: selectedModel,
     // The reasoning-effort override this run was dispatched with (null when the
