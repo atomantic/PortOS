@@ -4,9 +4,10 @@
 // reports what the browser actually did. The rest of audioRecorder.js is Web
 // Audio / MediaRecorder plumbing exercised through its component callers.
 
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
 import {
   ANALYSIS_AUDIO_CONSTRAINTS,
+  float32ToWav16k,
   hasUnwantedProcessing,
   openAnalysisMic,
   readAppliedProcessing,
@@ -73,5 +74,42 @@ describe('hasUnwantedProcessing', () => {
     expect(hasUnwantedProcessing({ echoCancellation: null, noiseSuppression: null, autoGainControl: null })).toBe(false);
     expect(hasUnwantedProcessing(null)).toBe(false);
     expect(hasUnwantedProcessing({ echoCancellation: null, noiseSuppression: true, autoGainControl: null })).toBe(true);
+  });
+});
+
+describe('float32ToWav16k', () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it('encodes a resampled PCM buffer into a WAV with a correct header and peak', async () => {
+    const rendered = new Float32Array([0, 0.5, -1, 0.25]);
+    class FakeOfflineAudioContext {
+      createBuffer(channels, length) {
+        return { getChannelData: () => new Float32Array(length) };
+      }
+      createBufferSource() {
+        return { buffer: null, connect: () => {}, start: () => {} };
+      }
+      async startRendering() {
+        return { getChannelData: () => rendered };
+      }
+    }
+    vi.stubGlobal('OfflineAudioContext', FakeOfflineAudioContext);
+
+    const { wav, peak } = await float32ToWav16k(new Float32Array([0, 1, -1, 0.5]), 48000);
+
+    expect(peak).toBe(1);
+    const view = new DataView(wav);
+    const readStr = (off, len) => String.fromCharCode(...Array.from({ length: len }, (_, i) => view.getUint8(off + i)));
+    expect(readStr(0, 4)).toBe('RIFF');
+    expect(readStr(8, 4)).toBe('WAVE');
+    expect(view.getUint32(24, true)).toBe(16000); // sample rate in the fmt chunk
+    expect(view.getUint32(40, true)).toBe(rendered.length * 2); // data chunk byte size
+    expect(wav.byteLength).toBe(44 + rendered.length * 2);
+  });
+
+  it('skips rendering and returns a null wav for an empty buffer', async () => {
+    const { wav, peak } = await float32ToWav16k(new Float32Array(0), 48000);
+    expect(wav).toBeNull();
+    expect(peak).toBe(0);
   });
 });

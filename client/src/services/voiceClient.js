@@ -9,6 +9,7 @@ import socket from './socket';
 import { subscribeVisibility } from '../hooks/useVisibilityEvent.js';
 import { sleep } from '../utils/sleep.js';
 import { resumeAudioContext, acquireAudioSession } from '../lib/audioContext.js';
+import { blobToWav16k, float32ToWav16k } from '../lib/audioRecorder.js';
 import { ECHO_WINDOW_MS, MIN_TOKENS_FOR_ECHO_CHECK, MIN_SHARED_TRIGRAMS, tokenize, trigramsOf } from '../../../server/lib/voiceEcho.js';
 
 // iOS audio-session claims held while a mic stream is open — one per capture
@@ -76,71 +77,6 @@ const stopPlayback = () => {
   rejectingTts = true;
   // Supersede any fast-path synthesized reply whose fetch is still in flight.
   synthGen += 1;
-};
-
-// whisper.cpp only accepts 16-bit PCM WAV — it has no built-in audio decoder.
-// Decode whatever MediaRecorder produced, downmix to mono, resample to 16 kHz,
-// and hand-encode a minimal WAV header.
-const TARGET_SAMPLE_RATE = 16000;
-
-const encodePcmToWav = (float32, sampleRate) => {
-  const n = float32.length;
-  const buffer = new ArrayBuffer(44 + n * 2);
-  const view = new DataView(buffer);
-  const writeStr = (off, s) => { for (let i = 0; i < s.length; i++) view.setUint8(off + i, s.charCodeAt(i)); };
-
-  writeStr(0, 'RIFF');
-  view.setUint32(4, 36 + n * 2, true);
-  writeStr(8, 'WAVE');
-  writeStr(12, 'fmt ');
-  view.setUint32(16, 16, true);
-  view.setUint16(20, 1, true);
-  view.setUint16(22, 1, true);
-  view.setUint32(24, sampleRate, true);
-  view.setUint32(28, sampleRate * 2, true);
-  view.setUint16(32, 2, true);
-  view.setUint16(34, 16, true);
-  writeStr(36, 'data');
-  view.setUint32(40, n * 2, true);
-
-  let off = 44;
-  for (let i = 0; i < n; i++) {
-    const s = Math.max(-1, Math.min(1, float32[i]));
-    view.setInt16(off, s < 0 ? s * 0x8000 : s * 0x7fff, true);
-    off += 2;
-  }
-  return buffer;
-};
-
-const blobToWav16k = async (blob) => {
-  const bytes = await blob.arrayBuffer();
-  const decodeCtx = new (window.AudioContext || window.webkitAudioContext)();
-  // Chain .finally() so a decode failure (unsupported codec, corrupt blob)
-  // still releases the AudioContext — otherwise repeated failures leak a
-  // context per retry.
-  const decoded = await decodeCtx.decodeAudioData(bytes).finally(() => {
-    decodeCtx.close().catch(() => {});
-  });
-
-  // OfflineAudioContext handles resampling natively when we render at the target rate.
-  const frames = Math.ceil(decoded.duration * TARGET_SAMPLE_RATE);
-  const offline = new OfflineAudioContext(1, frames, TARGET_SAMPLE_RATE);
-  const src = offline.createBufferSource();
-  src.buffer = decoded;
-  src.connect(offline.destination);
-  src.start();
-  const rendered = await offline.startRendering();
-  const pcm = rendered.getChannelData(0);
-
-  // Peak amplitude surfaces dead-mic / too-quiet situations that whisper would
-  // otherwise silently transcribe as [BLANK_AUDIO].
-  let peak = 0;
-  for (let i = 0; i < pcm.length; i++) {
-    const a = Math.abs(pcm[i]);
-    if (a > peak) peak = a;
-  }
-
-  return { wav: encodePcmToWav(pcm, TARGET_SAMPLE_RATE), peak };
 };
 
 const enqueuePlay = async (bytes) => {
@@ -800,27 +736,6 @@ class VADProcessor extends AudioWorkletProcessor {
 }
 registerProcessor('vad-processor', VADProcessor);
 `;
-
-const float32ToWav16k = async (samples, sourceRate) => {
-  if (!samples.length) return { wav: null, peak: 0 };
-  const frames = Math.ceil(samples.length * TARGET_SAMPLE_RATE / sourceRate);
-  const offline = new OfflineAudioContext(1, frames, TARGET_SAMPLE_RATE);
-  const buf = offline.createBuffer(1, samples.length, sourceRate);
-  buf.getChannelData(0).set(samples);
-  const src = offline.createBufferSource();
-  src.buffer = buf;
-  src.connect(offline.destination);
-  src.start();
-  const rendered = await offline.startRendering();
-  const pcm = rendered.getChannelData(0);
-
-  let peak = 0;
-  for (let i = 0; i < pcm.length; i++) {
-    const a = Math.abs(pcm[i]);
-    if (a > peak) peak = a;
-  }
-  return { wav: encodePcmToWav(pcm, TARGET_SAMPLE_RATE), peak };
-};
 
 const submitUtterance = async () => {
   if (!speechChunks.length) return;
