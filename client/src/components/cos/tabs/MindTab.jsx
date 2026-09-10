@@ -761,7 +761,7 @@ export default function MindTab() {
       {lifecycleError && <Banner className="shrink-0" tone="error" title="Action failed">{lifecycleError}</Banner>}
 
       <div className="grid min-h-0 flex-1 items-stretch gap-4 xl:grid-cols-[minmax(0,1fr)_19rem]">
-        <section data-testid="mind-chat" aria-label="Persistent mind chat" className="flex min-h-[30rem] flex-col overflow-hidden rounded-[1.5rem] border border-port-border bg-port-card shadow-lg shadow-black/10 sm:min-h-[34rem] xl:h-full xl:min-h-0">
+        <section data-testid="mind-chat" aria-label="Persistent mind chat" className="flex h-[68dvh] min-h-[30rem] flex-col overflow-hidden rounded-[1.5rem] border border-port-border bg-port-card shadow-lg shadow-black/10 sm:min-h-[34rem] xl:h-full xl:min-h-0">
           <header className="flex shrink-0 items-center justify-between gap-3 border-b border-port-border bg-port-card/95 px-3 py-2.5 sm:px-4">
             <h3 className="flex items-center gap-2 text-sm font-medium text-port-text">Conversation {state?.status === 'thinking' && <MindTypingIndicator />}</h3>
             <label htmlFor="mind-show-activity" className="flex shrink-0 items-center gap-2 rounded-full border border-port-border px-2.5 py-1.5 text-[11px] text-port-text-muted">

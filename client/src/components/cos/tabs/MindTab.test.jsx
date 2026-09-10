@@ -188,9 +188,11 @@ describe('MindTab', () => {
     await screen.findByText('Review the next bounded slice.');
 
     const chat = screen.getByTestId('mind-chat');
+    // Desktop fills the leftover column height; narrower viewports keep the
+    // dvh-relative box, and neither is capped by the old 54rem ceiling.
     expect(chat.className).toContain('xl:h-full');
     expect(chat.className).toContain('xl:min-h-0');
-    expect(chat.className).not.toMatch(/h-\[68dvh\]/);
+    expect(chat.className).toContain('h-[68dvh]');
     expect(chat.className).not.toMatch(/max-h-\[54rem\]/);
 
     const message = within(chat).getByLabelText('Message');
