@@ -55,6 +55,8 @@ import {
   MCP_BOOT_PASTE_DEADLINE_MS,
   MCP_BOOT_PASTE_RETRY_DELAY_MS,
   createInputReadyTracker,
+  createStartupDialogAnswers,
+  answerStartupDialogs,
   AGY_INPUT_READY_PATTERN,
   PASTE_TO_ENTER_MIN_DELAY_MS,
   PASTE_TO_ENTER_FALLBACK_MS,
@@ -830,10 +832,11 @@ export async function spawnTuiAgent({
     ...(isAntigravityCommand(tuiConfig.command) ? { readyTextPattern: AGY_INPUT_READY_PATTERN } : {}),
     directLaunch,
   });
-  let trustAccepted = false;
-  let autoModeDeclined = false;
-  let externalImportsDeclined = false;
-  let hookReviewDeclined = false;
+  // Which of the TUI's startup dialogs this session has already answered. One
+  // record instead of four sibling booleans declared ~1,000 lines above the
+  // arms that set them; the arms themselves live in answerStartupDialogs, so a
+  // provider's next dialog is a row there rather than a fifth flag here.
+  const dialogAnswers = createStartupDialogAnswers();
   // True once shell.js actually injects the `claude` command (after its
   // round-trip readiness probe). The probe runs its OWN shell command first,
   // which toggles bracketed-paste mode and would otherwise advance the
@@ -1777,6 +1780,9 @@ export async function spawnTuiAgent({
     emitLog('error', `TUI agent ${agentId} sendPrompt(${reason}) failed: ${err?.message || err}`, { agentId }));
   const safeFinishStartupFailure = (reason, summary) => finishStartupFailure(reason, summary).catch((err) =>
     emitLog('error', `TUI agent ${agentId} finishStartupFailure(${reason}) failed: ${err?.message || err}`, { agentId }));
+  // The one PTY writer the startup-dialog answers go through, bound once
+  // rather than rebuilt on every 300ms poll tick.
+  const writeToTuiSession = (keys) => shellService.writeToSession(sessionId, keys);
   const promptTimer = setInterval(() => {
     if (finalized || promptSentAt) {
       clearInterval(promptTimer);
@@ -1785,68 +1791,30 @@ export async function spawnTuiAgent({
     const now = Date.now();
     const elapsed = now - startedAt;
 
-    // Every dismissal below rewinds the idle clock (`lastOutputAt`) AND clears
-    // `firstOutputAt`, which re-arms the idle path's "has it printed anything?"
-    // gate. The idle heuristic that governs codex reads silence as readiness,
-    // and a dialog is at its quietest right after it paints — so the dismissal
-    // keystroke and an idle paste can otherwise go out inside the same window,
-    // landing the prompt in a menu that has not repainted. Demanding fresh
-    // output-then-silence AFTER the keystroke makes the paste wait for whatever
-    // the dismissal reveals; if the TUI ignores the keystroke entirely,
-    // PASTE_DEADLINE_MS still backstops delivery.
-
-    // Claude can discover PortOS's parent AGENTS.md (via CLAUDE.md) from a managed-app worktree
-    // nested under data/cos/worktrees, then ask whether to allow that file's
-    // external AGENTS.md import. Decline it: the parent repository's instructions
-    // must not leak into the target app, and option 2 leaves the target's own
-    // instruction files intact. Like the auto-mode offer, arrow-down + Enter
-    // avoids accepting the highlighted option 1.
-    if (inputReady.needsExternalImportsChoice && !externalImportsDeclined) {
-      externalImportsDeclined = true;
-      shellService.writeToSession(sessionId, '\x1b[B\r');
-      inputReady.ackExternalImportsChoice();
-      lastOutputAt = now;
-      firstOutputAt = null;
-      appendLine(`📟 Declined ${tuiConfig.command} external instruction imports for session ${sessionId.slice(0, 8)}`);
-      return;
-    }
-
-    // Codex can present a hook-review selector before its composer exists.
-    // Do not trust hooks from an unattended run: option 3 keeps them disabled
-    // for this session and lets the agent continue without executing code
-    // outside its sandbox. This must run for every TUI, not only the positive
-    // input-ready providers below — Codex currently uses the idle/deadline path.
-    if (inputReady.needsHookReview && !hookReviewDeclined) {
-      hookReviewDeclined = true;
-      shellService.writeToSession(sessionId, '\x1b[B\x1b[B\r');
-      inputReady.ackHookReview();
-      lastOutputAt = now;
-      firstOutputAt = null;
-      appendLine(`📟 Continued ${tuiConfig.command} without trusting startup hooks for session ${sessionId.slice(0, 8)}`);
-      return;
-    }
-
-    // Auto-confirm the first-run "trust this folder?" gate so agents can run in
-    // fresh worktrees. Wait for the choices themselves to paint: Claude Code
-    // releases disagree about their ordering, and newer builds can highlight
-    // "No, exit" by default. Move to the affirmative option when necessary,
-    // then submit it once.
+    // Answer whatever startup dialog the TUI is showing — one per tick, in the
+    // order answerStartupDialogs declares (external imports, hook review,
+    // folder trust). These run for EVERY provider, not only the positive
+    // input-ready ones below, because codex takes the idle/deadline paste path
+    // and a dialog is at its quietest right after it paints.
     //
-    // Like the hook-review selector this runs for EVERY TUI, not only the
-    // positive input-ready providers below: codex takes the idle/deadline path,
-    // and its trust dialog goes quiet the instant it paints, so the idle
-    // heuristic reads that silence as "ready" and pastes the task straight into
-    // the menu — which swallows it and all three paste retries
-    // (agent-671af38f, 2026-08-21, `paste-not-rendered`). Answering the dialog
-    // first is what lets the composer appear at all.
-    if (inputReady.needsTrust && inputReady.trustChoiceReady && !trustAccepted) {
-      trustAccepted = true;
-      const trustInput = `${inputReady.trustSelectionKey}${SUBMIT_KEY}`;
-      shellService.writeToSession(sessionId, trustInput);
-      inputReady.ackTrustChoice();
+    // Answering rewinds the idle clock (`lastOutputAt`) AND clears
+    // `firstOutputAt`, which re-arms the idle path's "has it printed anything?"
+    // gate. Without that, the dismissal keystroke and an idle paste can go out
+    // inside the same window, landing the prompt in a menu that has not
+    // repainted. Demanding fresh output-then-silence AFTER the keystroke makes
+    // the paste wait for whatever the dismissal reveals; if the TUI ignores the
+    // keystroke entirely, PASTE_DEADLINE_MS still backstops delivery.
+    const answeredBeforeComposer = answerStartupDialogs({
+      inputReady,
+      answers: dialogAnswers,
+      stage: 'before-composer',
+      command: tuiConfig.command,
+      write: writeToTuiSession,
+    });
+    if (answeredBeforeComposer) {
       lastOutputAt = now;
       firstOutputAt = null;
-      appendLine(`📟 Auto-confirmed ${tuiConfig.command} folder-trust prompt for session ${sessionId.slice(0, 8)}`);
+      appendLine(`📟 ${answeredBeforeComposer.message} for session ${sessionId.slice(0, 8)}`);
       return;
     }
 
@@ -1868,19 +1836,20 @@ export async function spawnTuiAgent({
     }
 
     if (requireInputReady) {
-      // Decline claude's "make auto mode your default permission mode?" offer
-      // (v2.1.233+). Unlike the trust gate this one paints AFTER the composer is
-      // live, so it swallows the paste and every retry unless it is cleared
-      // first — see TUI_AUTO_MODE_PROMPT_PATTERN. Arrow-down + Enter rather than
-      // the digit `2`: it lands on "No, keep don't ask" under both of Ink's
-      // selection models (digit-immediate-select and navigate-then-confirm),
-      // whereas a bare `\r` would accept the highlighted option 1 and rewrite the
-      // user's global permission default.
-      if (inputReady.needsAutoModeChoice && !autoModeDeclined) {
-        autoModeDeclined = true;
-        shellService.writeToSession(sessionId, '\x1b[B\r');
-        inputReady.ackAutoModeChoice();
-        appendLine(`📟 Declined ${tuiConfig.command} auto-mode default offer for session ${sessionId.slice(0, 8)}`);
+      // Claude's auto-mode offer paints AFTER the composer is live, so it only
+      // reaches the positive input-ready providers — and unlike a dialog that
+      // paints before the composer, no idle rewind is needed here: this path
+      // gates on `inputReady.ready`, which the offer itself suppresses until
+      // it is acked.
+      const answeredAtComposer = answerStartupDialogs({
+        inputReady,
+        answers: dialogAnswers,
+        stage: 'after-composer',
+        command: tuiConfig.command,
+        write: writeToTuiSession,
+      });
+      if (answeredAtComposer) {
+        appendLine(`📟 ${answeredAtComposer.message} for session ${sessionId.slice(0, 8)}`);
         return;
       }
       if (inputReady.ready && elapsed >= tuiConfig.promptDelayMs) {
