@@ -117,7 +117,7 @@ describe('artificialAnalysis service', () => {
         },
       ];
 
-      const obs = transformAAModelsToObservations(sampleModels, { retrievedAt: '2026-09-05T00:00:00Z' });
+      const obs = transformAAModelsToObservations(sampleModels, { retrievedAt: '2026-09-05T00:00:00Z', intelligenceIndexVersion: '4.2' });
       expect(obs).toHaveLength(3);
 
       const solMax = obs.find(o => o.effort === 'max' && o.model === 'gpt-5.6-sol');
@@ -146,7 +146,7 @@ describe('artificialAnalysis service', () => {
         pricing: null,
         performance: null,
       }];
-      expect(transformAAModelsToObservations(emptyModel)).toHaveLength(0);
+      expect(transformAAModelsToObservations(emptyModel, { intelligenceIndexVersion: '4.3' })).toHaveLength(0);
     });
   });
 
@@ -165,6 +165,7 @@ describe('artificialAnalysis service', () => {
             return Promise.resolve({
               ok: true,
               json: async () => ({
+                intelligence_index_version: 4.3,
                 data: [{ id: '1', name: 'Page 1 Model', slug: 'p1', model_creator: { name: 'OpenAI' } }],
                 pagination: { has_more: true },
               }),
@@ -173,14 +174,16 @@ describe('artificialAnalysis service', () => {
           return Promise.resolve({
             ok: true,
             json: async () => ({
+                intelligence_index_version: 4.3,
               data: [{ id: '2', name: 'Page 2 Model', slug: 'p2', model_creator: { name: 'OpenAI' } }],
               pagination: { has_more: false },
             }),
           });
         });
 
-        const models = await fetchAllArtificialAnalysisModels('test-key');
+        const { models, intelligenceIndexVersion } = await fetchAllArtificialAnalysisModels('test-key');
         expect(models).toHaveLength(2);
+        expect(intelligenceIndexVersion).toBe('4.3');
         expect(callCount).toBe(2);
       } finally {
         globalThis.fetch = originalFetch;
@@ -194,6 +197,37 @@ describe('artificialAnalysis service', () => {
       await expect(syncArtificialAnalysisCatalog({})).rejects.toThrow(/No Artificial Analysis API key provided/i);
     });
 
+    it.each([
+      ['missing version', { data: [{ name: 'Example' }] }],
+      ['malformed data', { intelligence_index_version: '4.3', data: null }],
+      ['empty data', { intelligence_index_version: '4.3', data: [] }],
+    ])('refuses %s without importing', async (_label, payload) => {
+      const importSpy = vi.spyOn(modelComparison, 'importModelComparison');
+      vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, json: async () => payload })));
+      try {
+        await expect(syncArtificialAnalysisCatalog({ apiKey: 'test' })).rejects.toThrow(/invalid/);
+        expect(importSpy).not.toHaveBeenCalled();
+      } finally {
+        vi.unstubAllGlobals();
+        importSpy.mockRestore();
+      }
+    });
+
+    it('rejects a benchmark rollover between pages without importing a mixed snapshot', async () => {
+      const importSpy = vi.spyOn(modelComparison, 'importModelComparison');
+      const page = version => ({ ok: true, json: async () => ({
+        intelligence_index_version: version, data: [{ name: 'Example' }], pagination: { has_more: true },
+      }) });
+      vi.stubGlobal('fetch', vi.fn().mockResolvedValueOnce(page('4.2')).mockResolvedValueOnce(page('4.3')));
+      try {
+        await expect(syncArtificialAnalysisCatalog({ apiKey: 'test' })).rejects.toThrow(/changed during pagination/);
+        expect(importSpy).not.toHaveBeenCalled();
+      } finally {
+        vi.unstubAllGlobals();
+        importSpy.mockRestore();
+      }
+    });
+
     it('successfully syncs and imports observations', async () => {
       const originalFetch = globalThis.fetch;
       const importSpy = vi.spyOn(modelComparison, 'importModelComparison').mockResolvedValue({
@@ -205,6 +239,7 @@ describe('artificialAnalysis service', () => {
         globalThis.fetch = vi.fn().mockResolvedValue({
           ok: true,
           json: async () => ({
+                intelligence_index_version: 4.3,
             data: [{
               id: 'm1',
               name: 'Synced Model (high)',
@@ -223,7 +258,11 @@ describe('artificialAnalysis service', () => {
         expect(result.success).toBe(true);
         expect(result.fetched).toBe(1);
         expect(result.observations).toBe(1);
-        expect(importSpy).toHaveBeenCalled();
+        expect(importSpy.mock.calls[0][0].observations[0]).toMatchObject({
+          id: 'aa-v4.3-test-synced-model-high',
+          benchmark: 'Artificial Analysis Intelligence Index v4.3',
+          quality: { value: 40, source: { methodology: 'Artificial Analysis Intelligence Index v4.3 composite score.' } },
+        });
       } finally {
         globalThis.fetch = originalFetch;
         importSpy.mockRestore();
