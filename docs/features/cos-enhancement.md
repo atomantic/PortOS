@@ -38,8 +38,8 @@ Comprehensive upgrade from reactive task executor to proactive autonomous agent 
 
 - Event scheduler with cron expressions and timeout-safe timers (clamps to 2^31-1)
 - Execution lanes: critical (1), standard (2), background (3) concurrent slots
-- Mission system for long-term goals with sub-tasks
-- Mission-driven task generation in evaluation loop
+- Mission system for long-term goals with sub-tasks (removed, #6826)
+- Mission-driven task generation in evaluation loop (removed, #6826)
 
 ### Phase 3: Local Model Integration
 

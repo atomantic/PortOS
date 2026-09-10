@@ -23,7 +23,7 @@
  * the rule needs no allowlist beyond the one deliberate case documented below.
  *
  * It does NOT cover the third spelling — importing the real `PATHS` and reading
- * a data-rooted member (`PATHS.missions`, `PATHS.brain`, …) with no redirect.
+ * a data-rooted member (`PATHS.digitalTwin`, `PATHS.brain`, …) with no redirect.
  * 50 of the ~1300 scoped test files do that, nearly all of them safely, because
  * they replace the service graph wholesale and never reach a real `readdir`; a
  * static rule there would be a 50-entry allowlist.
