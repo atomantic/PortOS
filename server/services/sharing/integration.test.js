@@ -2513,6 +2513,8 @@ describe('sharing round-trip', () => {
       const r = await importer.processManifest(bucket.id, exp.filename);
       expect(r.pending).toBe(true);
       expect(r.outcome.pendingCollectionUniverse).toBe(missingUniverseId);
+      expect(r.outcome.pendingRecords).toBeUndefined();
+      expect(r.outcome.pendingAssets).toBeUndefined();
       const cursor = await readCursor(bucket.id);
       expect(hasBeenProcessed(cursor, exp.filename, exp.manifestId)).toBe(false);
     });
