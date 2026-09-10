@@ -57,7 +57,7 @@ vi.mock('../services/xcodeScripts.js', () => ({ toTargetName: vi.fn(() => 'TestA
 
 import scaffoldRoutes from './scaffold.js';
 import { ensureDir } from '../lib/fileUtils.js';
-import { writeFile } from 'fs/promises';
+import { writeFile, readdir } from 'fs/promises';
 import { spawn, exec } from '../lib/childProcess.js';
 import { createApp } from '../services/apps.js';
 import { scaffoldVite } from './scaffoldVite.js';
@@ -220,5 +220,24 @@ describe('POST /api/scaffold — request validation before filesystem mutation (
       expect.any(Function),
       { platforms: ['ios'] }
     );
+  });
+});
+
+
+describe('GET /api/scaffold/directories', () => {
+  it('includes selectable files only when requested, preserving directory-only responses', async () => {
+    readdir.mockResolvedValue([
+      { name: 'Chromium.app', isDirectory: () => true, isFile: () => false, isSymbolicLink: () => false },
+      { name: 'chrome', isDirectory: () => false, isFile: () => true, isSymbolicLink: () => false },
+      { name: '.hidden', isDirectory: () => false, isFile: () => true, isSymbolicLink: () => false },
+    ]);
+    const app = makeApp();
+    const folders = await request(app).get('/api/scaffold/directories?path=/tmp/workspace');
+    expect(folders.status).toBe(200);
+    expect(folders.body).not.toHaveProperty('files');
+    const files = await request(app).get('/api/scaffold/directories?path=/tmp/workspace&includeFiles=true');
+    expect(files.status).toBe(200);
+    expect(files.body.files).toEqual([{ name: 'chrome', path: join('/tmp/workspace', 'chrome') }]);
+    expect(files.body.directories).toEqual(folders.body.directories);
   });
 });

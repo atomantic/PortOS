@@ -33,10 +33,10 @@ const navigateSchema = z.object({
     .refine(isSafeIngestUrl, 'only http(s) URLs to non-loopback/non-link-local hosts are allowed')
 });
 
-// Empty string from a "clear" UI action → unset (undefined), so the launcher
+// Empty string or null from a "clear" UI action → unset (undefined), so the launcher
 // falls back to the platform default Chrome instead of trying to spawn "".
 const optionalPath = z.preprocess(
-  v => (v === '' ? undefined : v),
+  v => (v === '' || v === null ? undefined : v),
   z.string().max(1024).refine(
     v => !v || !v.includes('..'),
     { message: 'path must not contain path traversal' }
@@ -89,7 +89,7 @@ router.get('/config', asyncHandler(async (req, res) => {
 
 // PUT /api/browser/config - Update browser config
 router.put('/config', asyncHandler(async (req, res) => {
-  const updates = updateConfigSchema.parse(req.body);
+  const updates = validateRequest(updateConfigSchema, req.body);
   const config = await browserService.updateConfig(updates);
   res.json(config);
 }));
