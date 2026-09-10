@@ -273,7 +273,7 @@ describe('AutopilotPanel', () => {
     fireEvent.click(screen.getByRole('button', { name: /options/i }));
     // The saved default is surfaced in the "use saved default" option label.
     await waitFor(() => expect(screen.getByLabelText('Readiness gate')).toHaveValue(''));
-    expect(screen.getByText(/Use saved default \(No open High or Medium/)).toBeInTheDocument();
+    expect(screen.getByText(/Use saved default \(No open high or medium findings/)).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: /run autopilot/i }));
     // Nothing chosen → no readinessGate sent; server resolves from the setting.
     await waitFor(() => expect(startPipelineAutopilot).toHaveBeenCalledWith(
