@@ -29,6 +29,7 @@ vi.mock('../../../services/api', () => ({
   getAppIssues: vi.fn(),
   createSlashdoTask: vi.fn(),
   getProviders: vi.fn(),
+  getLocalLlmStatus: vi.fn().mockResolvedValue(null),
   // The tab reads the reviewers a claim will actually run so it can name them
   // (and say whether a claim-work override supplied them).
   getAppClaimReviewers: vi.fn(),
@@ -341,6 +342,36 @@ describe('IssuesTab', () => {
       },
       { silent: true }
     ));
+  });
+
+  it('sends a reviewer effort override without pinning untouched defaults', async () => {
+    await renderTab();
+    fireEvent.click(await screen.findByRole('button', { name: 'Code-review override' }));
+    fireEvent.change(await screen.findByLabelText('Reasoning effort for Antigravity'), { target: { value: 'high' } });
+    fireEvent.click(screen.getByRole('button', { name: /Claim/ }));
+    await waitFor(() => expect(api.createSlashdoTask).toHaveBeenCalled());
+    const payload = api.createSlashdoTask.mock.calls[0][2];
+    expect(payload.reviewerEfforts).toEqual({ antigravity: 'high' });
+    expect(payload).not.toHaveProperty('reviewers');
+    expect(payload).not.toHaveProperty('reviewerModels');
+    expect(payload).not.toHaveProperty('stopMode');
+  });
+
+  it('overrides claim reviewers, leaves replans alone, and restores inheritance', async () => {
+    await renderTab();
+    fireEvent.click(await screen.findByRole('button', { name: 'Code-review override' }));
+    fireEvent.click(await screen.findByRole('button', { name: /Remove Antigravity/i }));
+    fireEvent.click(screen.getByRole('button', { name: /Claim/ }));
+    await waitFor(() => expect(api.createSlashdoTask).toHaveBeenCalledWith(
+      'next', 'app-1', expect.objectContaining({ reviewers: [] }), { silent: true }
+    ));
+    api.createSlashdoTask.mockClear();
+    fireEvent.click(screen.getByRole('button', { name: /Replan/ }));
+    await waitFor(() => expect(api.createSlashdoTask).toHaveBeenCalled());
+    expect(api.createSlashdoTask.mock.calls[0][2]).not.toHaveProperty('reviewers');
+    fireEvent.click(screen.getByRole('button', { name: 'Use configured reviewers' }));
+    expect(screen.getByText('Reviewed by')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Remove Antigravity/i })).toBeInTheDocument();
   });
 
   it('sends optional override context with the selected claim', async () => {
