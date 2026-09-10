@@ -195,10 +195,10 @@ describe('MindTab', () => {
     expect(chat.className).toContain('h-[68dvh]');
     expect(chat.className).not.toMatch(/max-h-\[54rem\]/);
 
+    // AutoSizeTextarea sets the height from content, so the composer must not
+    // be a hand-resized fixed box any more.
     const message = within(chat).getByLabelText('Message');
-    expect(message.tagName).toBe('TEXTAREA');
     expect(message).toHaveClass('resize-none');
-    expect(message).toHaveClass('overflow-hidden');
     expect(message.className).not.toMatch(/resize-y/);
   });
 
