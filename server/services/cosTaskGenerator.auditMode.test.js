@@ -183,6 +183,10 @@ describe('issues-only audit dispatch never acquires code-shipping instructions (
     expect(prompt).toContain('Repository-wide discovery, worst offender first');
     expect(prompt).toContain(`"category":"${taskType}"`);
     expect(prompt).toContain('## Completion (No Code Output)');
+    const handoff = prompt.slice(prompt.indexOf('## Required audit assessment handoff'));
+    expect(handoff).toContain(`category "${taskType}"`);
+    expect(handoff).toContain('summary AND exactly one single-line QUALITY_AUDIT_JSON:');
+    expect(prompt).not.toContain('write a one-line summary');
     expect(prompt).not.toContain('{modeInstructions}');
     expect(prompt).not.toContain('{trackerInstructions}');
   });
@@ -214,7 +218,16 @@ describe('issues-only audit dispatch never acquires code-shipping instructions (
     expect(prompt).toContain('Repository-wide discovery, worst offender first');
     expect(prompt).toContain(`"category":"${taskType}"`);
     expect(prompt).toMatch(/^## Completion Workflow$/m);
+    expect(prompt).toContain('## Required audit assessment handoff');
     expect(prompt).toMatch(/^\s*\d+\.\s+`\/do:push/m);
+  });
+
+  it('requires a persisted report for CLI audits that normally finish by exiting', async () => {
+    const task = await generate('better-complexity');
+    const prompt = buildLightContextPrompt(task, WORKSPACE, null, isTruthyMeta, { isTui: false });
+    expect(prompt).toContain('## Required audit assessment handoff');
+    expect(prompt).toContain('including agents that normally finish by exiting');
+    expect(prompt).toContain('.agent-done');
   });
 
   it('substitutes the banner into a template that still carries {modeInstructions}', async () => {

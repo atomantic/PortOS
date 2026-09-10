@@ -36,6 +36,7 @@ import { COMPLETION_MODES, resolveCompletionMode } from '../lib/agentCompletionM
 import {
   DISCARD_WORKTREE_NOTE,
   buildActionOutputCompletionSection,
+  buildAuditOutputCompletionSection,
   buildClaimFlowCompletionSection,
   buildCliCompletionSection,
   buildCompletionGuidelineBullet,
@@ -592,7 +593,7 @@ ${buildResumeSection(task, worktreeInfo)}` : '';
   // nothing HERE because the full path carries its contract elsewhere: the
   // review-loop follow-up has its own procedure section below, read-only and
   // the commit/push modes are covered by the Guidelines bullet and Git Hygiene.
-  const tuiCompletionSection = ({
+  const completionSection = ({
     [COMPLETION_MODES.TOOL_FREE]: () => buildToolFreeReasoningCompletionSection(),
     [COMPLETION_MODES.SENTINEL_PAYLOAD]: () => buildProgrammaticOutputCompletionSection(sentinelPath),
     [COMPLETION_MODES.ACTION_OUTPUT]: () => buildActionOutputCompletionSection({ isTui, sentinelPath }),
@@ -603,6 +604,8 @@ ${buildResumeSection(task, worktreeInfo)}` : '';
     [COMPLETION_MODES.TUI_SLASHDO_FREE]: buildFullPathTuiCompletion,
     [COMPLETION_MODES.TUI]: buildFullPathTuiCompletion,
   }[completionMode] || (() => ''))();
+  const tuiCompletionSection = [completionSection, buildAuditOutputCompletionSection(task, sentinelPath)]
+    .filter(Boolean).join('\n\n');
 
   const {
     reviewLoopSection, reviewLoopFollowUpSection, jiraSection, skillSection,
@@ -1188,6 +1191,9 @@ function buildLightContextSections(task, workspaceDir, worktreeInfo, isTruthyMet
       workflowStep: localReviewSection ? 5 : 4,
     }));
   }
+
+  const auditCompletion = buildAuditOutputCompletionSection(task, lightSentinelPath());
+  if (auditCompletion) contractSections.push(auditCompletion);
 
   return { taskSections, contractSections };
 }
