@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { readFile, readdir, stat } from 'fs/promises';
-import { atomicWrite } from '../lib/fileUtils.js';
+import { atomicWrite, readJSONFile } from '../lib/fileUtils.js';
 
 vi.mock('fs/promises', () => ({
   readFile: vi.fn(),
@@ -481,6 +481,79 @@ describe('review service', () => {
       const counts = await getPendingCounts();
       expect(counts.total).toBe(2); // p1 + the new item createItem just added
       expect(readFile).toHaveBeenCalledTimes(2); // items.json once + archive.json once — no third parse
+    });
+
+    it('does not block a live write when archive.json is unreadable — retention is skipped, items.json still saves', async () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(Date.now() + 1000 * 60 * 60 * 24 * 500);
+
+      const now = Date.now();
+      const old = new Date(now - 31 * 24 * 60 * 60 * 1000).toISOString();
+      const fixture = [
+        { id: 'c-old', type: 'todo', status: 'completed', metadata: {}, createdAt: old, updatedAt: old }
+      ];
+
+      // Drive readJSONFile directly, keyed on path rather than call count/
+      // order (items.json always resolves, archive.json always rejects) —
+      // simulates a corrupt archive.json, since the real
+      // readJSONFile(..., { strict: true }) throws on unparseable content
+      // rather than degrading to the [] fallback.
+      readJSONFile.mockImplementation((path) =>
+        String(path).endsWith('archive.json')
+          ? Promise.reject(new Error('Unreadable JSON file: archive.json'))
+          : Promise.resolve(fixture));
+
+      try {
+        const created = await createItem({ type: 'todo', title: 'trigger a save while archive is corrupt' });
+        expect(created.title).toBe('trigger a save while archive is corrupt');
+
+        // The live write was NOT blocked by the corrupt archive...
+        expect(atomicWrite).toHaveBeenCalledTimes(1);
+        expect(atomicWrite.mock.calls[0][0]).toMatch(/items\.json$/);
+        // ...and c-old was left in items.json rather than silently dropped,
+        // since retention could not safely move it anywhere.
+        const written = atomicWrite.mock.calls[0][1];
+        expect(written.some(i => i.id === 'c-old')).toBe(true);
+      } finally {
+        // This test overrides readJSONFile itself (not just readFile), so
+        // restore the shared default — later tests in this file rely on it
+        // delegating to the mocked readFile the normal way.
+        readJSONFile.mockImplementation(async (path, fallback) => {
+          try {
+            return JSON.parse(await readFile(path));
+          } catch {
+            return fallback;
+          }
+        });
+      }
+    });
+
+    it('does not write a duplicate archive entry when the same id is archived twice', async () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(Date.now() + 1000 * 60 * 60 * 24 * 600);
+
+      const now = Date.now();
+      const old = new Date(now - 31 * 24 * 60 * 60 * 1000).toISOString();
+      const fixture = [
+        { id: 'c-old', type: 'todo', status: 'completed', metadata: {}, createdAt: old, updatedAt: old }
+      ];
+      // Models the crash-recovery case: a prior retention pass wrote the
+      // archive but items.json was never rewritten, so the same eligible
+      // item resurfaces in items.json on this pass.
+      const existingArchive = [{ id: 'c-old', type: 'todo', status: 'completed', metadata: {}, createdAt: old, updatedAt: old }];
+
+      stat.mockResolvedValue({ mtimeMs: 821001, size: 1 });
+      readFile.mockImplementation((path) =>
+        Promise.resolve(String(path).endsWith('archive.json') ? JSON.stringify(existingArchive) : JSON.stringify(fixture)));
+
+      await createItem({ type: 'todo', title: 'trigger a save' });
+
+      // c-old is already archived — no second archive write for the same id.
+      const archiveWrites = atomicWrite.mock.calls.filter(([path]) => String(path).endsWith('archive.json'));
+      expect(archiveWrites).toHaveLength(0);
+      // It still leaves items.json — it is stale/archived either way.
+      const itemsWrite = atomicWrite.mock.calls.find(([path]) => String(path).endsWith('items.json'));
+      expect(itemsWrite[1].some(i => i.id === 'c-old')).toBe(false);
     });
   });
 

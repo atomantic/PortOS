@@ -95,13 +95,20 @@ async function loadArchive() {
  * items.json and into archive.json, at most once per `RETENTION_INTERVAL_MS`.
  * Writes the archive FIRST and only then returns the trimmed list for
  * `saveItems` to persist — so a crash between the two writes can duplicate an
- * item across both files (harmless, self-heals on the next read) but can
- * never lose one.
+ * item across both files, never lose one. The dedupe-by-id below then makes
+ * that duplication self-heal on the very next retention pass instead of
+ * accumulating a second archive.json copy forever.
+ *
+ * An unreadable archive.json is isolated to THIS function rather than left to
+ * throw: `saveItems` calls this on every create/status-flip/bulk/delete, so a
+ * corrupt archive.json must not block every live review write. On that
+ * failure this returns `items` untouched (items.json is not rewritten either)
+ * and leaves `lastRetentionAt` alone so the very next write retries retention
+ * instead of waiting out the full interval against a file nobody fixed yet.
  */
 async function applyRetention(items) {
   const now = Date.now();
   if (now - lastRetentionAt < RETENTION_INTERVAL_MS) return items;
-  lastRetentionAt = now;
 
   const cutoff = now - RETENTION_AGE_MS;
   const remaining = [];
@@ -111,11 +118,24 @@ async function applyRetention(items) {
     (eligible ? toArchive : remaining).push(item);
   }
 
-  if (toArchive.length === 0) return items;
+  if (toArchive.length === 0) {
+    lastRetentionAt = now;
+    return items;
+  }
 
-  const archive = await loadArchive();
-  await atomicWrite(ARCHIVE_FILE, [...archive, ...toArchive]);
-  console.log(`📦 Review items archived: ${toArchive.length}`);
+  const archive = await loadArchive().catch((err) => {
+    console.error(`⚠️ Review archive unreadable, skipping retention this cycle: ${err.message}`);
+    return null;
+  });
+  if (!archive) return items;
+
+  const archivedIds = new Set(archive.map(i => i.id));
+  const fresh = toArchive.filter(i => !archivedIds.has(i.id));
+  if (fresh.length > 0) {
+    await atomicWrite(ARCHIVE_FILE, [...archive, ...fresh]);
+    console.log(`📦 Review items archived: ${fresh.length}`);
+  }
+  lastRetentionAt = now;
   return remaining;
 }
 
