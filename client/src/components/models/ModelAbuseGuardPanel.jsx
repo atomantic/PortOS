@@ -108,13 +108,13 @@ export default function ModelAbuseGuardPanel() {
       role="tabpanel"
       aria-labelledby="tab-abuse"
       data-testid="model-abuse-guard-card"
-      className="bg-port-card border border-port-border rounded-xl p-4 sm:p-6 space-y-4"
+      className="max-w-6xl bg-port-card border border-port-border rounded-xl p-4 sm:p-6 space-y-5"
     >
       <div className="flex items-start justify-between gap-3 flex-wrap">
         <div className="flex items-start gap-2">
           <ShieldCheck size={18} className="text-port-accent mt-0.5" aria-hidden="true" />
           <div>
-            <h2 id="model-abuse-guard-heading" className="text-sm font-medium text-white">Model-abuse guard</h2>
+            <h2 id="model-abuse-guard-heading" className="text-lg font-semibold text-white">Model-abuse guard</h2>
             <p className="text-xs text-port-accent mt-0.5">Required by default · local classifier</p>
           </div>
         </div>
@@ -128,105 +128,121 @@ export default function ModelAbuseGuardPanel() {
           <span className="text-xs text-gray-500">Checking status…</span>
         )}
       </div>
-      <p className="text-xs text-gray-300 max-w-3xl">
-        External issues, pull requests, and connected message analysis use layered screening: deterministic checks and a local classifier, isolated analysis without tools, then server-validated actions. Missing, failed, or inconclusive required screening blocks analysis. A passing scan never grants trust, proves an attachment safe, or authorizes access to private records.
+      <p className="text-sm text-gray-300 max-w-2xl leading-relaxed">
+        Screens external issues, pull requests, and messages before analysis. Runs locally on CPU; no GPU required.
+        Required screening blocks analysis when it fails or cannot finish.
       </p>
-      <p className="text-xs text-gray-400 max-w-3xl">
-        Llama Prompt Guard 2 86M is recommended for its multilingual detection. Meta also offers a smaller 22M model with lower multilingual accuracy; this installer supports the pinned 86M model. It scans overlapping 512-token windows locally on CPU. No chat model, GPU, or cloud account is required for screening. Classifiers can miss adaptive attacks and can flag legitimate security examples.
-      </p>
-      <p className="text-xs text-gray-400 max-w-3xl">
-        Setup downloads Python packages and model weights only when you select Install. Status refreshes make no model calls. Accept the model terms, add a read token, and install Python on this machine if needed. Private message analysis also requires a local API provider; configure it below after installing a text model in <a className="text-port-accent hover:underline" href="/models/llms">LLMs</a>.
-      </p>
-      <PromptGuardHfAccessNotice
-        tokenPresent={tokenPresent}
-        tokenSource={tokenSource}
-        model={guardStatus}
-        onSaved={() => { refreshToken(); loadGuardStatus(); }}
-      />
-      <ol className="space-y-2 list-none p-0" aria-label="Abuse guard setup stages">
-        {stages.map((stage) => {
-          const current = installing && currentStageId === stage.id;
-          const waiting = installing && !stage.ready && currentStageId && currentStageId !== stage.id;
-          return (
-            <li
-              key={stage.id}
-              data-testid={`abuse-guard-stage-${stage.id}`}
-              data-ready={stage.ready ? 'true' : 'false'}
-              className="flex items-start gap-2 rounded-lg border border-port-border/70 bg-port-bg/40 px-3 py-2"
-            >
-              <span className="mt-0.5 shrink-0" aria-hidden="true">
-                {stage.ready ? (
-                  <CheckCircle2 size={14} className="text-port-success" />
-                ) : current ? (
-                  <BrailleSpinner />
-                ) : (
-                  <Circle size={14} className={waiting ? 'text-gray-600' : 'text-port-warning'} />
-                )}
-              </span>
-              <div className="min-w-0">
-                <div className="flex items-center gap-2 flex-wrap">
-                  <p className="text-xs font-medium text-white">{stage.label}</p>
-                  <span className={`text-[11px] ${stage.ready ? 'text-port-success' : current ? 'text-gray-300' : 'text-gray-500'}`}>
-                    {stage.ready ? 'Ready' : current ? 'Installing…' : waiting ? 'Waiting' : 'Not ready'}
-                  </span>
+      <details className="text-sm rounded-lg border border-port-border p-3">
+        <summary className="cursor-pointer text-port-accent">How screening works and its limits</summary>
+        <div className="mt-3 space-y-2 text-xs leading-relaxed text-gray-400 max-w-2xl">
+          <p>Deterministic checks and a local classifier screen content before isolated, tool-free analysis and server-validated actions. A passing scan does not grant trust, prove attachments safe, or authorize private-record access. Classifiers can miss attacks and flag legitimate security examples.</p>
+          <p>This installer uses the pinned Llama Prompt Guard 2 86M model for multilingual detection, scanning overlapping 512-token windows. Screening needs no chat model or cloud account. Status refreshes make no model calls.</p>
+          <p>Private message analysis also needs a local API provider. Install a text model in <a className="text-port-accent hover:underline" href="/models/llms">LLMs</a>, then choose its provider below.</p>
+        </div>
+      </details>
+      <div className="space-y-3">
+        <div className="flex flex-wrap items-baseline justify-between gap-2">
+          <h3 className="text-sm font-semibold text-white">Installation</h3>
+          <span className="text-xs text-gray-400">{stages.filter(stage => stage.ready).length} of {stages.length} checks ready</span>
+        </div>
+        <details open={!overallReady || tokenPresent !== true} className="text-sm">
+          <summary className="cursor-pointer text-port-accent mb-2">Hugging Face access &amp; token</summary>
+          <PromptGuardHfAccessNotice
+            tokenPresent={tokenPresent}
+            tokenSource={tokenSource}
+            model={guardStatus}
+            onSaved={() => { refreshToken(); loadGuardStatus(); }}
+          />
+        </details>
+        <ol className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2 list-none p-0" aria-label="Abuse guard setup stages">
+          {stages.map((stage) => {
+            const current = installing && currentStageId === stage.id;
+            const waiting = installing && !stage.ready && currentStageId && currentStageId !== stage.id;
+            return (
+              <li
+                key={stage.id}
+                data-testid={`abuse-guard-stage-${stage.id}`}
+                data-ready={stage.ready ? 'true' : 'false'}
+                className="flex items-start gap-2 rounded-lg border border-port-border/70 bg-port-bg/40 px-3 py-2"
+              >
+                <span className="mt-0.5 shrink-0" aria-hidden="true">
+                  {stage.ready ? (
+                    <CheckCircle2 size={14} className="text-port-success" />
+                  ) : current ? (
+                    <BrailleSpinner />
+                  ) : (
+                    <Circle size={14} className={waiting ? 'text-gray-600' : 'text-port-warning'} />
+                  )}
+                </span>
+                <div className="min-w-0">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <p className="text-xs font-medium text-white">{stage.label}</p>
+                    <span className={`text-[11px] ${stage.ready ? 'text-port-success' : current ? 'text-gray-300' : 'text-gray-500'}`}>
+                      {stage.ready ? 'Ready' : current ? 'Installing…' : waiting ? 'Waiting' : 'Not ready'}
+                    </span>
+                  </div>
+                  <details className="mt-1 text-xs text-gray-400">
+                    <summary className="cursor-pointer hover:text-port-accent">Details</summary>
+                    <p className="mt-1 leading-relaxed">{stage.description}</p>
+                  </details>
+                  {stage.id === 'python' && !stage.ready && (
+                    <a href="https://www.python.org/downloads/" target="_blank" rel="noopener noreferrer" className="text-xs text-port-accent hover:underline">Install Python, then refresh status</a>
+                  )}
+                  {current && progressMsg && (
+                    <p className="text-[11px] text-gray-400 mt-1">{progressMsg}</p>
+                  )}
                 </div>
-                <p className="text-[11px] text-gray-500 mt-0.5">{stage.description}</p>
-                {stage.id === 'python' && !stage.ready && (
-                  <a href="https://www.python.org/downloads/" target="_blank" rel="noopener noreferrer" className="text-xs text-port-accent hover:underline">Install Python, then refresh status</a>
-                )}
-                {current && progressMsg && (
-                  <p className="text-[11px] text-gray-400 mt-1">{progressMsg}</p>
-                )}
-              </div>
-            </li>
-          );
-        })}
-      </ol>
-      <div className="flex items-center gap-2 flex-wrap text-[11px] text-gray-500">
-        <span>{guardStatus?.name || 'Llama Prompt Guard 2 86M'}</span>
-        <span>·</span>
-        <span>86M · offline · no tools</span>
-        <a
-          href={guardStatus?.sourceUrl || 'https://huggingface.co/meta-llama/Llama-Prompt-Guard-2-86M'}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="text-port-accent hover:underline inline-flex items-center gap-1"
-        >
-          Model card <ExternalLink size={11} />
-        </a>
-      </div>
-      <div className="flex items-center gap-2 flex-wrap">
-        <button type="button" onClick={loadGuardStatus} disabled={installing} className="px-2.5 py-1 text-xs border border-port-border text-gray-300 rounded flex items-center gap-1 disabled:opacity-50">
-          <RefreshCw size={12} /> Refresh status
-        </button>
-        {overallReady ? (
-          <span className="text-xs text-port-success">Installed from the pinned model revision.</span>
-        ) : installing ? (
-          <>
-            <span className="flex items-center gap-1.5 text-xs text-gray-300"><BrailleSpinner /> Installing the dedicated guard…</span>
+              </li>
+            );
+          })}
+        </ol>
+        <div className="flex items-center gap-2 flex-wrap text-[11px] text-gray-500">
+          <span>{guardStatus?.name || 'Llama Prompt Guard 2 86M'}</span>
+          <span>·</span>
+          <span>86M · offline · no tools</span>
+          <a
+            href={guardStatus?.sourceUrl || 'https://huggingface.co/meta-llama/Llama-Prompt-Guard-2-86M'}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-port-accent hover:underline inline-flex items-center gap-1"
+          >
+            Model card <ExternalLink size={11} />
+          </a>
+        </div>
+        <div className="flex items-center gap-2 flex-wrap">
+          <button type="button" onClick={loadGuardStatus} disabled={installing} className="px-2.5 py-1 text-xs border border-port-border text-gray-300 rounded flex items-center gap-1 disabled:opacity-50">
+            <RefreshCw size={12} /> Refresh status
+          </button>
+          {overallReady ? (
+            <span className="text-xs text-port-success">Installed from the pinned model revision.</span>
+          ) : installing ? (
+            <>
+              <span className="flex items-center gap-1.5 text-xs text-gray-300"><BrailleSpinner /> Installing the dedicated guard…</span>
+              <button
+                type="button"
+                onClick={cancelGuard}
+                className="px-2.5 py-1 text-xs bg-port-border hover:bg-port-border/70 text-gray-300 rounded"
+              >
+                Cancel
+              </button>
+            </>
+          ) : (
             <button
               type="button"
-              onClick={cancelGuard}
-              className="px-2.5 py-1 text-xs bg-port-border hover:bg-port-border/70 text-gray-300 rounded"
+              onClick={installGuard}
+              disabled={!guardStatus || tokenPresent !== true || guardStatus.pythonAvailable !== true}
+              className="px-2.5 py-1 text-xs bg-port-accent/20 hover:bg-port-accent/30 text-port-accent rounded disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1"
             >
-              Cancel
+              <Download size={12} /> {incomplete ? 'Repair model-abuse guard' : 'Install model-abuse guard'}
             </button>
-          </>
-        ) : (
-          <button
-            type="button"
-            onClick={installGuard}
-            disabled={!guardStatus || tokenPresent !== true || guardStatus.pythonAvailable !== true}
-            className="px-2.5 py-1 text-xs bg-port-accent/20 hover:bg-port-accent/30 text-port-accent rounded disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1"
-          >
-            <Download size={12} /> {incomplete ? 'Repair model-abuse guard' : 'Install model-abuse guard'}
-          </button>
-        )}
-        {installing && progressMsg && !installingStage && (
-          <span className="text-[11px] text-gray-500">{progressMsg}</span>
-        )}
+          )}
+          {installing && progressMsg && !installingStage && (
+            <span className="text-[11px] text-gray-500">{progressMsg}</span>
+          )}
+        </div>
+        {incomplete && <p role="status" className="text-xs text-port-warning">A partial or failed installation blocks screening, including sources with an optional classifier. Repair the setup before retrying those tasks.</p>}
+        <p className="text-xs text-gray-400">Install downloads Python packages and model weights. Accept the model terms and add a read token first.</p>
       </div>
-      {incomplete && <p role="status" className="text-xs text-port-warning">A partial or failed installation blocks screening, including sources with an optional classifier. Repair the setup before retrying those tasks.</p>}
       <UntrustedContentPolicyPanel />
     </section>
   );

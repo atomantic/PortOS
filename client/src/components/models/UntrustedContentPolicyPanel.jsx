@@ -61,11 +61,15 @@ export default function UntrustedContentPolicyPanel() {
   return (
     <div className="border-t border-port-border pt-4 space-y-3 min-w-0">
       <h3 className="text-sm font-medium text-white">Content safety policies</h3>
-      <p className="text-xs text-gray-400">Shared defaults apply to every source. Messages adds defaults for email, iMessage, and Signal; each channel can override them. Private message analysis stays on this machine. Screening never turns external text into instructions or gives the analysis model tools. GitHub review stages retain their separate schedule settings.</p>
+      <p className="text-sm text-gray-300 max-w-2xl">Choose how each source is screened and which provider analyzes it.</p>
+      <details className="text-xs text-gray-400 max-w-2xl">
+        <summary className="cursor-pointer text-port-accent">How sources inherit settings</summary>
+        <p className="mt-2 leading-relaxed">Shared defaults apply to every source. Messages adds defaults for email, iMessage, and Signal; each channel can override them. Private analysis stays on this machine. Screening never gives external text authority or the analysis model tools. GitHub review schedules are configured separately.</p>
+      </details>
       {error && <p role="alert" className="text-xs text-port-warning">{error} <button type="button" onClick={load} className="underline">Retry</button></p>}
       {!config ? !error && <p className="text-xs text-gray-500">Loading policies…</p> : (
         <form onSubmit={event => { event.preventDefault(); save(); }} className="space-y-3">
-          <fieldset disabled={saving} className="space-y-3 min-w-0">
+          <fieldset disabled={saving} className="space-y-4 min-w-0 max-w-3xl">
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div>
                 <label htmlFor="abuse-policy-source" className="block text-xs text-gray-400 mb-1">Source</label>
@@ -90,34 +94,40 @@ export default function UntrustedContentPolicyPanel() {
               </div>
             </div>
             {(policy.classifierMode || defaults.classifierMode) === 'optional' && <p className="text-xs text-port-warning">Optional allows deterministic screening alone on machines without the classifier. Those checks miss attacks the classifier could catch. Failed or partial installations still block.</p>}
-            <ProviderModelSelector
-              providers={providers}
-              selectedProviderId={effectiveValue('providerId') || ''}
-              selectedModel={effectiveValue('model') || ''}
-              availableModels={selectedProvider?.models?.length ? selectedProvider.models : selectedProvider?.defaultModel ? [selectedProvider.defaultModel] : []}
-              onProviderChange={providerId => patch({ providerId: providerId || null, model: null })}
-              onModelChange={model => patch({ model: model || null })}
-              label="Analysis API provider"
-              loading={loading}
-              selectionPolicy={{ provider: isPrivate ? localApiProvider : apiProvider }}
-              emptyProviderOption="Automatic eligible API provider"
-              emptyModelOption="Provider default model"
-              alwaysShowModel
-            />
-            <p className="text-xs text-gray-500">{isPrivate ? 'Only local API endpoints are eligible for private messages. Cloud APIs, CLI agents, and provider fallback are blocked.' : 'Choose an API provider for text analysis. Automatic selection uses an eligible API provider; a failed provider never falls back. Cloud APIs may receive public GitHub content.'} <a href="/ai" className="text-port-accent hover:underline">Configure providers</a></p>
-            <p className="text-xs text-gray-500">For long discussions, configure an adequate context window on the selected provider, such as 32K tokens. The character limits below never override the model&apos;s context capacity; evidence that cannot fit completely is blocked.</p>
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-              {[
-                ['minBenignScore', 'Minimum benign score', 0.9, 1, 0.01, 0.9],
-                ['maxInputChars', 'Input limit (characters)', 1000, 2000000, 1, 2000000],
-                ['maxOutputChars', 'Output limit (characters)', 100, 100000, 1, 32000],
-              ].map(([name, label, min, max, step, fallback]) => (
-                <div key={name}>
-                  <label htmlFor={`abuse-policy-${name}`} className="block text-xs text-gray-400 mb-1">{label}</label>
-                  <input id={`abuse-policy-${name}`} className={INPUT_CLASS} type="number" min={min} max={max} step={step} required value={policy[name] ?? defaults[name] ?? fallback} onChange={event => changeNumber(name, event.target.value)} />
-                </div>
-              ))}
+            <div className="border-t border-port-border pt-4 space-y-3">
+              <h4 className="text-sm font-medium text-white">Analysis provider</h4>
+              <ProviderModelSelector
+                providers={providers}
+                selectedProviderId={effectiveValue('providerId') || ''}
+                selectedModel={effectiveValue('model') || ''}
+                availableModels={selectedProvider?.models?.length ? selectedProvider.models : selectedProvider?.defaultModel ? [selectedProvider.defaultModel] : []}
+                onProviderChange={providerId => patch({ providerId: providerId || null, model: null })}
+                onModelChange={model => patch({ model: model || null })}
+                label="Analysis API provider"
+                loading={loading}
+                selectionPolicy={{ provider: isPrivate ? localApiProvider : apiProvider }}
+                emptyProviderOption="Automatic eligible API provider"
+                emptyModelOption="Provider default model"
+                alwaysShowModel
+              />
+              <p className="text-xs text-gray-500">{isPrivate ? 'Only local API endpoints are eligible for private messages. Cloud APIs, CLI agents, and provider fallback are blocked.' : 'Choose an API provider for text analysis. Automatic selection uses an eligible API provider; a failed provider never falls back. Cloud APIs may receive public GitHub content.'} <a href="/ai" className="text-port-accent hover:underline">Configure providers</a></p>
             </div>
+            <details className="rounded-lg border border-port-border p-3">
+              <summary className="cursor-pointer text-sm text-port-accent">Advanced screening limits</summary>
+              <p className="my-3 text-xs text-gray-400 max-w-2xl">Limits apply to this source. Input must also fit the provider’s context window; evidence that cannot fit completely is blocked.</p>
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                {[
+                  ['minBenignScore', 'Minimum benign score', 0.9, 1, 0.01, 0.9],
+                  ['maxInputChars', 'Input limit (characters)', 1000, 2000000, 1, 2000000],
+                  ['maxOutputChars', 'Output limit (characters)', 100, 100000, 1, 32000],
+                ].map(([name, label, min, max, step, fallback]) => (
+                  <div key={name}>
+                    <label htmlFor={`abuse-policy-${name}`} className="block text-xs text-gray-400 mb-1">{label}</label>
+                    <input id={`abuse-policy-${name}`} className={INPUT_CLASS} type="number" onInvalid={event => { event.currentTarget.closest('details').open = true; }} min={min} max={max} step={step} required value={policy[name] ?? defaults[name] ?? fallback} onChange={event => changeNumber(name, event.target.value)} />
+                  </div>
+                ))}
+              </div>
+            </details>
           </fieldset>
           <div className="flex flex-wrap gap-2">
             <button type="submit" disabled={saving || JSON.stringify(config) === saved} className="px-3 py-2 text-xs rounded bg-port-accent text-white disabled:opacity-50">{saving ? 'Saving…' : 'Save content policies'}</button>
