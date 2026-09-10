@@ -154,7 +154,7 @@ describe('instance features', () => {
     const selected = 'https://github.com/example-owner/eidoverse-worlds';
 
     await expect(updateEidoverseWorldsSource(selected)).resolves.toBe(selected);
-    expect(mock.setEidoverseWorldsOrigin).toHaveBeenCalledWith(selected);
+    expect(mock.setEidoverseWorldsOrigin).toHaveBeenCalledWith(selected, undefined);
     expect(mock.settings.instanceFeatures.eidoverse.worldsRepoUrl).toBe(selected);
   });
 

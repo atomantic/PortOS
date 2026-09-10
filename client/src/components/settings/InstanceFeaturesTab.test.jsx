@@ -171,7 +171,7 @@ describe('InstanceFeaturesTab', () => {
 
     const repoInput = await screen.findByRole('textbox', { name: 'Worlds GitHub repository' });
     fireEvent.change(repoInput, { target: { value: 'https://github.com/example-owner/eidoverse-worlds' } });
-    fireEvent.change(screen.getByRole('textbox', { name: 'Worlds clone branch' }), { target: { value: 'feature/worlds' } });
+    fireEvent.change(screen.getByRole('textbox', { name: 'Worlds runtime / tracking branch' }), { target: { value: 'feature/worlds' } });
     fireEvent.click(screen.getByRole('button', { name: 'Install & enable' }));
 
     await waitFor(() => expect(mock.installEidoverseFeature).toHaveBeenCalledWith(
@@ -233,11 +233,13 @@ describe('InstanceFeaturesTab', () => {
 
     const repoInput = await screen.findByRole('textbox', { name: 'Worlds GitHub repository' });
     fireEvent.change(repoInput, { target: { value: 'https://github.com/example-owner/eidoverse-worlds' } });
+    fireEvent.change(screen.getByRole('textbox', { name: 'Worlds runtime / tracking branch' }), { target: { value: 'portos' } });
     fireEvent.click(screen.getByRole('button', { name: 'Update source' }));
 
     await waitFor(() => expect(mock.updateEidoverseWorldsSource).toHaveBeenCalledWith(
       'https://github.com/example-owner/eidoverse-worlds',
       { silent: true },
+      'portos',
     ));
     expect(await screen.findByDisplayValue('https://github.com/example-owner/eidoverse-worlds')).toBeInTheDocument();
   });

@@ -318,7 +318,7 @@ describe('Settings routes — instance feature participation', () => {
       .send({ worldsRepoUrl });
 
     expect(res.status).toBe(200);
-    expect(setEidoverseWorldsOrigin).toHaveBeenCalledWith(worldsRepoUrl);
+    expect(setEidoverseWorldsOrigin).toHaveBeenCalledWith(worldsRepoUrl, undefined);
     expect(store.instanceFeatures.eidoverse).toMatchObject({ enabled: true, worldsRepoUrl });
   });
 

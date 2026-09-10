@@ -33,6 +33,13 @@ beforeEach(() => {
 });
 
 describe('updateDefaultBranch', () => {
+  it('keeps managed runtime updates on the configured branch', async () => {
+    withGit({ 'config --get portos.runtimeBranch': ok('portos') });
+    expect(await updateDefaultBranch('/repo')).toMatchObject({ success: true, branch: 'portos' });
+    expect(commands()).toContain('pull --ff-only origin portos');
+    expect(commands()).not.toContain('checkout main');
+  });
+
   it('checks out origin default branch and fast-forwards it without a rebase', async () => {
     const result = await updateDefaultBranch('/repo');
 

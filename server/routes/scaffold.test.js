@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { join } from 'path';
+import { join, resolve } from 'path';
+import { existsSync } from 'fs';
 import express from 'express';
 import { EventEmitter } from 'events';
 import { request } from '../lib/testHelper.js';
@@ -226,6 +227,7 @@ describe('POST /api/scaffold — request validation before filesystem mutation (
 
 describe('GET /api/scaffold/directories', () => {
   it('includes selectable files only when requested, preserving directory-only responses', async () => {
+    existsSync.mockImplementation((p) => p === resolve('/tmp/workspace'));
     readdir.mockResolvedValue([
       { name: 'Chromium.app', isDirectory: () => true, isFile: () => false, isSymbolicLink: () => false },
       { name: 'chrome', isDirectory: () => false, isFile: () => true, isSymbolicLink: () => false },
@@ -237,7 +239,7 @@ describe('GET /api/scaffold/directories', () => {
     expect(folders.body).not.toHaveProperty('files');
     const files = await request(app).get('/api/scaffold/directories?path=/tmp/workspace&includeFiles=true');
     expect(files.status).toBe(200);
-    expect(files.body.files).toEqual([{ name: 'chrome', path: join('/tmp/workspace', 'chrome') }]);
+    expect(files.body.files).toEqual([{ name: 'chrome', path: join(resolve('/tmp/workspace'), 'chrome') }]);
     expect(files.body.directories).toEqual(folders.body.directories);
   });
 });
