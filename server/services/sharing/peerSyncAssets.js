@@ -26,7 +26,7 @@ import { collectAssetReferences } from './exporter.js';
 import { imageSidecarName, sanitizeAssetFilename } from './buckets.js';
 import { pullSidecarForImage } from './sidecarSync.js';
 import { parseKey } from '../../lib/mediaItemKey.js';
-import { listIssues } from '../pipeline/issues.js';
+import { listIssuesForSeries } from '../pipeline/issues.js';
 import { findCollectionBySeriesId } from '../mediaCollections.js';
 import { headshotImageFilename } from '../authors/index.js';
 import { portraitImageFilename } from '../artists/index.js';
@@ -144,7 +144,7 @@ async function buildIntegrityAssetManifest(kind, record) {
   if (kind === 'moodBoard') return buildBoardAssetManifest(record);
   if (kind === 'fableLoom') return buildFableLoomAssetManifest(record);
   if (kind === 'series') {
-    const childIssues = await listIssues({ seriesId: record?.id, includeDeleted: true }).catch(() => []);
+    const childIssues = await listIssuesForSeries(record?.id, { includeDeleted: true }).catch(() => []);
     const manifestIssues = childIssues.filter(
       (i) => i?.deleted !== true && i?.ephemeral !== true,
     );

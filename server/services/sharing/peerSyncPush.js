@@ -23,7 +23,7 @@ import {
 import { getInstanceId, UNKNOWN_INSTANCE_ID } from '../instances.js';
 import { getUniverse } from '../universeBuilder.js';
 import { getSeries } from '../pipeline/series.js';
-import { listIssues } from '../pipeline/issues.js';
+import { listIssuesForSeries } from '../pipeline/issues.js';
 import {
   getCollection,
   findCollectionByUniverseId,
@@ -692,7 +692,7 @@ export async function buildPushPayload(sub, sourceInstanceId) {
     // Bundle child issues — the series + its issues form one unit of edit
     // for downstream consumers (panels, comic pages), so the receiver
     // applies them atomically per merge cycle.
-    const childIssues = await listIssues({ seriesId: sub.recordId, includeDeleted: true }).catch(() => []);
+    const childIssues = await listIssuesForSeries(sub.recordId, { includeDeleted: true }).catch(() => []);
     const sanitizedIssues = childIssues
       .map((i) => sanitizeRecordForWire('issue', i))
       .filter(Boolean);

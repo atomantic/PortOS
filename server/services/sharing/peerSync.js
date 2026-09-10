@@ -29,7 +29,7 @@ import { recordEvents, registerSubscriptionAdapter } from './recordEvents.js';
 import { getInstanceId, getPeers, enqueueReciprocalSync, UNKNOWN_INSTANCE_ID } from '../instances.js';
 import { peerSyncPushSchema } from '../../lib/validation.js';
 import { instanceEvents } from '../instanceEvents.js';
-import { listIssues } from '../pipeline/issues.js';
+import { getIssue } from '../pipeline/issues.js';
 import { listCollections } from '../mediaCollections.js';
 import { listAuthors } from '../authors/index.js';
 import { listArtists } from '../artists/index.js';
@@ -522,11 +522,9 @@ async function collectMusicVideoSubsForTrack(trackId) {
 }
 
 async function getIssueSeriesId(issueId) {
-  // Avoid pulling in `getIssue` directly (cyclic risk during init): list
-  // the cohort of issues and pick the matching id. The issues file is
-  // small (low hundreds at most), so this is fine for the debounce path.
-  const issues = await listIssues({ includeDeleted: true }).catch(() => []);
-  const found = issues.find((i) => i.id === issueId);
+  // This module already imports the issue service; a direct read avoids the capped
+  // all-issue scan formerly used on this debounce path.
+  const found = await getIssue(issueId, { includeDeleted: true }).catch(() => null);
   return found?.seriesId || null;
 }
 
