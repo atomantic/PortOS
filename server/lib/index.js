@@ -392,6 +392,7 @@ export * from './vectorMath.js';
 export * from './clientApiPaths.js';
 export * from './htmlToText.js';
 export * from './jsonExtract.js';
+export * from './streamJsonParser.js';
 export * from './taskParser.js';
 export * from './taskGenerationOverrides.js';
 export * from './cosTaskPrompt.js';
