@@ -352,10 +352,13 @@ describe('review service', () => {
     it('treats a missing items.json as an empty, cache-cleared list', async () => {
       const enoent = Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
       stat.mockRejectedValueOnce(enoent);
+      readFile.mockRejectedValueOnce(enoent);
 
       const whileMissing = await getPendingCounts();
       expect(whileMissing.total).toBe(0);
-      expect(readFile).not.toHaveBeenCalled();
+      // The read still goes through the swap-aware reader (which returns [] for
+      // a genuinely absent file) rather than short-circuiting on the stat alone.
+      expect(readJSONFile).toHaveBeenCalledTimes(1);
 
       // The file reappears — the cleared cache must not keep reporting the
       // pre-deletion (or pre-existence) state.
@@ -363,6 +366,25 @@ describe('review service', () => {
       readFile.mockResolvedValueOnce(JSON.stringify([{ id: 'a', type: 'todo', status: 'pending' }]));
       const afterRecreate = await getPendingCounts();
       expect(afterRecreate.total).toBe(1);
+    });
+
+    it('does not collapse a stat ENOENT to an empty list while the file is still readable (win32 atomicWrite swap window)', async () => {
+      const enoent = Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
+      stat.mockRejectedValueOnce(enoent);
+      readFile.mockResolvedValueOnce(JSON.stringify([{ id: 'a', type: 'todo', status: 'pending' }]));
+
+      const midSwap = await getPendingCounts();
+      expect(midSwap.total).toBe(1);
+
+      // Nothing was cached under an unknown file identity — the next read re-parses.
+      stat.mockResolvedValueOnce({ mtimeMs: 813101, size: 1 });
+      readFile.mockResolvedValueOnce(JSON.stringify([
+        { id: 'a', type: 'todo', status: 'pending' },
+        { id: 'b', type: 'todo', status: 'pending' }
+      ]));
+      const afterSwap = await getPendingCounts();
+      expect(afterSwap.total).toBe(2);
+      expect(readFile).toHaveBeenCalledTimes(2);
     });
 
     it('reflects a write in the very next read without a second parse', async () => {
@@ -646,6 +668,18 @@ describe('review service', () => {
       expect(original).toBeTruthy();
       expect(original.injected).toBeUndefined();
       expect(original.metadata.injected).toBeUndefined();
+    });
+
+    it('does not let a caller mutating a createItem() result pollute the cache seeded by that save', async () => {
+      stat.mockResolvedValue({ mtimeMs: 829001, size: 1 });
+      readFile.mockResolvedValue('[]');
+
+      const created = await createItem({ type: 'todo', title: 'Original title' });
+      created.title = 'mutated after return';
+
+      // Same file identity → cache hit: the cached copy must not carry the mutation.
+      const [cached] = await getItems({ status: 'pending' });
+      expect(cached.title).toBe('Original title');
     });
   });
 

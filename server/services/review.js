@@ -48,8 +48,9 @@ const ARCHIVE_ELIGIBLE_STATUSES = new Set(['completed', 'dismissed']);
 // `saveItems` call. The internal mutation paths below (createItem/
 // updateItemStatus/bulkUpdateStatus/updateItem/deleteItem/
 // updateStatusByReferenceId) mutate the clone `loadItems()` gave them and
-// then immediately call `saveItems` with it — `saveItems` adopts whatever
-// array it is given as the new cache, so this costs nothing extra there.
+// then immediately call `saveItems` with it — `saveItems` seeds the cache
+// from a clone of what it wrote, so the objects those paths return to their
+// callers are theirs to mutate too.
 let itemsCache = null; // { mtimeMs, size, items }
 let lastRetentionAt = 0; // 0 so the first save after boot always evaluates retention
 
@@ -71,17 +72,19 @@ async function loadItems() {
     throw err;
   });
 
-  if (!stats) {
-    itemsCache = null;
-    return [];
-  }
-
-  if (itemsCache && itemsCache.mtimeMs === stats.mtimeMs && itemsCache.size === stats.size) {
+  if (stats && itemsCache && itemsCache.mtimeMs === stats.mtimeMs && itemsCache.size === stats.size) {
     return cloneItems(itemsCache.items);
   }
 
+  // A stat ENOENT is NOT collapsed to `[]` here: on win32 an `atomicWrite`
+  // swap in flight (temp file renamed over the target) reports ENOENT for a
+  // moment too, and only readJSONFile's swap-aware retry can tell that apart
+  // from a genuinely absent file (which it returns `[]` for). Short-circuiting
+  // would hand a concurrent read-modify-write (a cosEvents `task:ready` burst)
+  // an empty list to save over every stored item. Nothing is cached under an
+  // unknown identity — the next read re-stats and re-parses.
   const items = await readJSONFile(ITEMS_FILE, [], { strict: true });
-  itemsCache = { mtimeMs: stats.mtimeMs, size: stats.size, items };
+  itemsCache = stats ? { mtimeMs: stats.mtimeMs, size: stats.size, items } : null;
   return cloneItems(items);
 }
 
@@ -180,7 +183,10 @@ async function saveItems(items) {
   const retained = await applyRetention(items);
   await atomicWrite(ITEMS_FILE, retained);
   const stats = await stat(ITEMS_FILE).catch(() => null);
-  itemsCache = stats ? { mtimeMs: stats.mtimeMs, size: stats.size, items: retained } : null;
+  // Seed from a clone, not the caller's array: the mutation paths return the
+  // objects they just saved to their callers, and the cache must never share
+  // a reference with anything outside this module (see the cache comment).
+  itemsCache = stats ? { mtimeMs: stats.mtimeMs, size: stats.size, items: cloneItems(retained) } : null;
 }
 
 /**
