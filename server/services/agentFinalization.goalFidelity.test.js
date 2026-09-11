@@ -83,9 +83,11 @@ vi.mock('./codeReview.js', async (importOriginal) => ({
 }));
 
 import { execGit } from '../lib/execGit.js';
-import { execGh } from './github.js';
+import { execGh, findPullRequestForBranch } from './github.js';
 import { execGlab } from './gitlab.js';
 import { resolveForgeForRepo } from './git.js';
+import { getAgentRecord } from './cosAgentLifecycle.js';
+import { detectPrimaryCheckoutDrift, PRIMARY_CHECKOUT_MUTATED_REASON } from '../lib/primaryCheckoutGuard.js';
 import { finalizeAgent } from './agentFinalization.js';
 import { cosEvents } from './cosEvents.js';
 import { completeAgentRun } from './agentRunTracking.js';
@@ -293,6 +295,47 @@ describe('finalizeAgent — goal-fidelity gate', () => {
       taskId: 'task-1',
       review: expect.objectContaining({ verdict: 'rethink' }),
     }));
+  });
+
+  it('preserves a drift diagnosis over a missing PR and skips fidelity', async () => {
+    getAgentRecord.mockResolvedValueOnce({ metadata: { primaryCheckoutBaseline: {} } });
+    detectPrimaryCheckoutDrift.mockResolvedValueOnce({
+      drifted: true, category: 'primary-checkout-mutated', message: 'Primary checkout changed',
+    });
+    findPullRequestForBranch.mockResolvedValueOnce({ status: 'none' });
+    const finished = await finalize({ prExpected: true, runId: 'drift-and-pr' });
+    expect(finished).toMatchObject({ success: false, prVerdict: { ok: false } });
+    expect(completion()).toMatchObject({
+      error: 'Primary checkout changed', completionReason: PRIMARY_CHECKOUT_MUTATED_REASON,
+    });
+    expect(runLocalGoalFidelityReviewMock).not.toHaveBeenCalled();
+    expect(completeAgentRun.mock.calls[0][5]).toBe(false);
+  });
+
+  it('preserves a missing PR diagnosis without running fidelity', async () => {
+    findPullRequestForBranch.mockResolvedValueOnce({ status: 'none' });
+    await finalize({ prExpected: true });
+    expect(completion()).toMatchObject({ success: false, completionReason: 'pr-missing' });
+    expect(runLocalGoalFidelityReviewMock).not.toHaveBeenCalled();
+  });
+
+  it.each([false, true])('keeps a reported failure authoritative in run history (terminated: %s)', async terminatedByUser => {
+    const analysis = { category: 'unknown', message: 'Run did not complete' };
+    const finished = await finalize({
+      success: false, terminatedByUser, runId: 'failed-run', errorAnalysis: analysis,
+      completionReason: terminatedByUser ? 'user-terminated' : 'failed',
+    });
+    expect(finished).toMatchObject({ success: false, prVerdict: { ok: true } });
+    expect(completeAgentRun).toHaveBeenCalledWith('failed-run', 'done', 0, 1000, analysis, false);
+    expect(completion()).toMatchObject({
+      success: false, completionReason: terminatedByUser ? 'user-terminated' : 'failed',
+    });
+    if (terminatedByUser) {
+      expect(updateTaskMock).toHaveBeenCalledWith('task-1', expect.objectContaining({
+        status: 'blocked', metadata: expect.objectContaining({ blockedCategory: 'user-terminated' }),
+      }), 'internal');
+    }
+    expect(runLocalGoalFidelityReviewMock).not.toHaveBeenCalled();
   });
 
   it('fails OPEN: a gate that is off, a diff git could not read, or a reviewer that errored leaves the run alone', async () => {

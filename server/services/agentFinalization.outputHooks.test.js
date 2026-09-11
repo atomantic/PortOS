@@ -62,7 +62,7 @@ vi.mock('./taskSchedule.js', () => ({
 }));
 import { updateTask, addTask } from './cos.js';
 import { completeAgentRun } from './agentRunTracking.js';
-import { resolveFailedTaskUpdate } from './agentErrorAnalysis.js';
+import { MAX_TASK_RETRIES, resolveFailedTaskUpdate } from './agentErrorAnalysis.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const MANAGEMENT_SOURCE = readFileSync(join(__dirname, 'agentManagement.js'), 'utf8');
@@ -310,7 +310,7 @@ describe('permanent output-hook rejection (#6124)', () => {
   });
 
   it('does not re-resolve an already-blocked task or duplicate its investigation', async () => {
-    await finish({ category: 'unknown' }, { failureCount: 3 });
+    await finish({ category: 'unknown' }, { failureCount: MAX_TASK_RETRIES - 1 });
     expect(updateTask).toHaveBeenCalledWith(TASK.id, expect.objectContaining({ status: 'blocked' }), 'internal');
     expect(resolveFailedTaskUpdate).toHaveBeenCalledTimes(1);
     expect(addTask).toHaveBeenCalledTimes(1);

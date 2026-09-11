@@ -967,6 +967,7 @@ export async function finalizeAgent({
   // missing PR is a concrete delivery failure, ahead of fidelity's judgement
   // about what was built. Keep each diagnosis's card text and reason together.
   const verdict = {
+    source: 'reported',
     success: reportedSuccess && prVerdict.ok && !driftDowngrade,
     errorAnalysis: reportedErrorAnalysis,
     error,
@@ -974,12 +975,14 @@ export async function finalizeAgent({
   };
   if (driftDowngrade) {
     Object.assign(verdict, {
+      source: 'drift',
       errorAnalysis: primaryCheckoutDriftAnalysis(drift),
       error: drift.message,
       completionReason: PRIMARY_CHECKOUT_MUTATED_REASON,
     });
   } else if (!prVerdict.ok) {
     Object.assign(verdict, {
+      source: 'pr',
       errorAnalysis: prVerificationAnalysis(prVerdict),
       error: prVerdict.message,
       completionReason: prVerdict.category,
@@ -1024,6 +1027,7 @@ export async function finalizeAgent({
   if (fidelityDowngrade) {
     const analysis = goalFidelityAnalysis(fidelity.review);
     Object.assign(verdict, {
+      source: 'fidelity',
       success: false,
       errorAnalysis: analysis,
       error: analysis.message,
@@ -1132,13 +1136,14 @@ export async function finalizeAgent({
       origin: 'task-output-hook',
     };
     Object.assign(verdict, {
+      source: 'hook',
       success: false,
       errorAnalysis: analysis,
       error: analysis.message || error,
       completionReason: analysis.category || completionReason,
     });
     taskUpdate = await resolveFailedTaskUpdate(task, verdict.errorAnalysis, agentId);
-  } else if (hookRejected && verdict.errorAnalysis === reportedErrorAnalysis) {
+  } else if (hookRejected && verdict.source === 'reported') {
     // A rejection on an already-failed run keeps its original diagnosis.
     // Surface that analysis on the card too, without replacing a prior downgrade.
     verdict.error = verdict.errorAnalysis?.message || error;
