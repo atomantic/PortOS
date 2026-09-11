@@ -343,6 +343,16 @@ describe('generateWeeklyDigest — week-over-week comparison', () => {
     expect(digest.weekOverWeek).toEqual({ tasksChange: 100, successRateChange: -50, workTimeChange: 100 });
   });
 
+  it('treats a prior-week file with no summary as missing, not a throw', async () => {
+    writeDigest(LAST_WEEK, { weekStart: at(9), weekEnd: at(15), generatedAt: at(15) });
+    onDates([agent('a1', { day: 16 })]);
+
+    const digest = await digestService.generateWeeklyDigest();
+
+    expect(digest.weekOverWeek).toEqual({ tasksChange: null, successRateChange: null, workTimeChange: null });
+    expect(digest.previousWeekId).toBeNull();
+  });
+
   it('treats a zero-task prior week as a 100% gain, or 0% when still idle', async () => {
     writeDigest(LAST_WEEK, storedDigest(LAST_WEEK, { totalTasks: 0, successRate: 0, totalWorkTimeMs: 0 }));
     onDates([agent('a1', { day: 16, duration: 1000 })]);

@@ -168,12 +168,15 @@ export async function generateWeeklyDigest(weekId = null) {
   prevWeekDate.setDate(prevWeekDate.getDate() - 7);
   const prevWeekId = getWeekId(prevWeekDate);
   const prevDigest = await loadDigest(prevWeekId);
+  // A stored file can exist without `summary` (legacy/corrupt JSON). Treat that
+  // as "no previous digest" rather than throwing while assembling this week.
+  const prevSummary = prevDigest?.summary;
 
   // Calculate week-over-week changes
   const weekOverWeek = {
-    tasksChange: prevDigest ? percentChange(totalTasks, prevDigest.summary.totalTasks) : null,
-    successRateChange: prevDigest ? successRate - prevDigest.summary.successRate : null,
-    workTimeChange: prevDigest ? percentChange(totalWorkTimeMs, prevDigest.summary.totalWorkTimeMs) : null
+    tasksChange: prevSummary ? percentChange(totalTasks, prevSummary.totalTasks) : null,
+    successRateChange: prevSummary ? successRate - prevSummary.successRate : null,
+    workTimeChange: prevSummary ? percentChange(totalWorkTimeMs, prevSummary.totalWorkTimeMs) : null
   };
 
   // Generate insights
@@ -195,7 +198,7 @@ export async function generateWeeklyDigest(weekId = null) {
     },
 
     weekOverWeek,
-    previousWeekId: prevDigest ? prevWeekId : null,
+    previousWeekId: prevSummary ? prevWeekId : null,
 
     byTaskType: taskTypeRanking,
 
