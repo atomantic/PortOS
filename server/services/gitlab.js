@@ -1,6 +1,7 @@
 import { spawn } from '../lib/childProcess.js';
 import { safeJSONParse } from '../lib/fileUtils.js';
 import { withGlabJson } from '../lib/glabArgs.js';
+import { withSpawnCwdEnv } from '../lib/spawnCwd.js';
 
 // Mirrors execGh's DEFAULT_EXEC_GH_TIMEOUT_MS. `glab` hits the network, so a
 // stalled call (hung keychain prompt, dead VPN) would otherwise leave the
@@ -16,7 +17,8 @@ const DEFAULT_EXEC_GLAB_TIMEOUT_MS = 60000;
  * it MUST run inside the repo checkout. Resolves to trimmed stdout on success and
  * `null` on ANY failure (non-zero exit, spawn error, glab not installed, timeout)
  * — callers treat null as "unavailable / transient", mirroring the
- * `.catch(() => null)` pattern used around `execGh`.
+ * `.catch(() => null)` pattern used around `execGh`. Mutation callers that need
+ * the original stderr contract can opt into rejection with `rejectOnError`.
  *
  * Most PortOS callers want JSON and go through `execGlabJson`, which owns the
  * output flag (see lib/glabArgs.js). This is exported for the genuine non-JSON
@@ -26,29 +28,39 @@ const DEFAULT_EXEC_GLAB_TIMEOUT_MS = 60000;
  * @param {string[]} args - glab arguments (e.g. ['issue', 'list', '--output', 'json'])
  * @param {string} cwd - repo root the glab command runs in
  * @param {number} [timeoutMs] - kills the child and resolves null past this
+ * @param {object} [options]
+ * @param {NodeJS.ProcessEnv} [options.env] - Explicit forge credentials/environment
+ * @param {boolean} [options.rejectOnError=false] - Reject with stderr/timeout detail instead of resolving null
  * @returns {Promise<string|null>}
  */
-export function execGlab(args, cwd, timeoutMs = DEFAULT_EXEC_GLAB_TIMEOUT_MS) {
-  return new Promise((resolve) => {
-    const child = spawn('glab', args, { cwd, shell: false });
+export function execGlab(args, cwd, timeoutMs = DEFAULT_EXEC_GLAB_TIMEOUT_MS, { env = null, rejectOnError = false } = {}) {
+  return new Promise((resolve, reject) => {
+    const child = spawn('glab', args, { cwd, shell: false, env: withSpawnCwdEnv(env || process.env, cwd) });
     let stdout = '';
+    let stderr = '';
     let settled = false;
     // One settle path so the timeout can't resolve a promise `close` already
     // settled, and so the timer is always cleared.
-    const done = (value) => { if (!settled) { settled = true; clearTimeout(timer); resolve(value); } };
+    const done = (value, error = null) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      if (error && rejectOnError) reject(error);
+      else resolve(value);
+    };
     const timer = setTimeout(() => {
       // setTimeout callback boundary — a kill() throw here would be uncaught.
       try { child.kill('SIGKILL'); } catch (err) { console.error(`❌ execGlab: failed to kill timed-out 'glab ${args.join(' ')}': ${err.message}`); }
       console.error(`❌ execGlab: 'glab ${args.join(' ')}' timed out after ${timeoutMs}ms`);
-      done(null);
+      done(null, new Error(`glab command timed out after ${timeoutMs}ms`));
     }, timeoutMs);
     child.stdout.on('data', (d) => { stdout += d.toString(); });
-    // We never surface glab's stderr to the caller (a failed call resolves to null
-    // via the exit code), but stderr MUST still be drained — an unread pipe can
-    // fill its buffer and block the child on a chatty warning.
-    child.stderr.on('data', () => {});
-    child.on('close', (code) => done(code === 0 ? stdout.trim() : null));
-    child.on('error', () => done(null));
+    child.stderr.on('data', (d) => { stderr += d.toString(); });
+    child.on('close', (code) => {
+      if (code === 0) done(stdout.trim());
+      else done(null, new Error(stderr.trim() || `glab exited with code ${code}`));
+    });
+    child.on('error', (err) => done(null, new Error(`glab not available: ${err.message}`)));
   });
 }
 
