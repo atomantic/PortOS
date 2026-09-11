@@ -58,10 +58,36 @@ describe('GET /api/meatspace/export/mortalloom', () => {
     expect(response.body.epigeneticTests[0]).toMatchObject({ chronologicalAge: 46, biologicalAge: 44, paceOfAging: null });
     expect(response.body.eyeExams[0]).toMatchObject({ leftSphere: -1.25, rightSphere: null });
     expect(response.body.bodyEntries).toEqual([{ id: expect.any(String), date: '2026-01-05', weightLbs: 150, bodyFatPct: 20 }]);
+    expect(response.body.alcoholPresets[0]).toMatchObject({ name: 'Beer', oz: 12, abv: 5 });
+    expect(response.body.nicotinePresets[0]).toMatchObject({ name: 'Patch', mgPerUnit: 7 });
     expect(response.body.goals[0]).toMatchObject({ title: 'Run', status: 'active', priority: 'high', checkInIntervalDays: 7 });
-    expect(getConfig).toHaveBeenCalledOnce();
-    expect(getBloodTests).toHaveBeenCalledOnce();
-    expect(getEpigeneticTests).toHaveBeenCalledOnce();
-    expect(getEyeExams).toHaveBeenCalledOnce();
+    expect(response.body.goals[0].checkIns).toEqual([{ id: expect.any(String), date: '2026-01-05', progressPct: 25, note: '' }]);
+    expect(response.body.goals[0].milestones).toEqual([{ id: expect.any(String), title: 'Start', completed: false, completedDate: null }]);
+    const ids = [response.body.alcoholDrinks[0].id, response.body.nicotineEntries[0].id, response.body.bloodTests[0].id];
+    expect(new Set(ids).size).toBe(ids.length);
+  });
+
+  it('handles sparse sources and falls back to progress history when check-ins are empty', async () => {
+    getConfig.mockResolvedValue({});
+    getBloodTests.mockResolvedValue({});
+    getEpigeneticTests.mockResolvedValue({ tests: [] });
+    getEyeExams.mockResolvedValue({ exams: [] });
+    readLocalDailyLog.mockResolvedValue({ entries: [{ date: '2026-02-01' }] });
+    getCustomDrinks.mockResolvedValue([]);
+    getCustomProducts.mockResolvedValue([]);
+    getGoals.mockResolvedValue({ goals: [{ title: 'Archive', status: 'archived', urgency: 0.2, checkIns: [], progressHistory: [{ timestamp: '2026-02-01T10:00:00Z', value: 80 }], milestones: [{ title: 'Done', completedAt: '2026-02-02T00:00:00Z' }] }] });
+
+    const response = await request(makeApp()).get('/api/meatspace/export/mortalloom');
+
+    expect(response.status).toBe(200);
+    expect(response.body.profile).toEqual({ birthDate: null, biologicalSex: null, lifestyle: {
+      smokingStatus: 'never', exerciseMinutesPerWeek: 150, sleepHoursPerNight: 7.5,
+      dietQuality: 'good', stressLevel: 'moderate', bmi: null,
+    } });
+    expect(response.body.bloodTests).toEqual([]);
+    expect(response.body.bodyEntries).toEqual([]);
+    expect(response.body.goals[0]).toMatchObject({ status: 'completed', priority: 'low', completedDate: null });
+    expect(response.body.goals[0].checkIns[0]).toMatchObject({ date: '2026-02-01', progressPct: 80, note: '' });
+    expect(response.body.goals[0].milestones[0]).toEqual({ id: expect.any(String), title: 'Done', completed: true, completedDate: '2026-02-02' });
   });
 });
