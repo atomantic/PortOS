@@ -1234,7 +1234,8 @@ export default function Layout() {
         inert={!desktopNav && !mobileNavActive}
         aria-hidden={!desktopNav && !mobileNavActive ? true : undefined}
         onKeyDown={(event) => {
-          if (mobileNavActive && event.key === 'Escape' && !event.defaultPrevented) {
+          // Portaled child popovers own their Escape dismissal.
+          if (mobileNavActive && event.key === 'Escape' && !event.defaultPrevented && event.currentTarget.contains(event.target)) {
             event.stopPropagation();
             setMobileOpen(false);
           }

@@ -36,7 +36,13 @@ vi.mock('../hooks/useNotifications', () => ({
 
 // --- Theme context: Layout reads `theme.mode` for the day/night toggle. ---
 vi.mock('./ThemeContext', () => ({
-  useThemeContext: () => ({ theme: { mode: 'night', label: 'Test', pair: null }, toggleMode: vi.fn() }),
+  useThemeContext: () => ({
+    theme: { mode: 'night', label: 'Test', pair: null },
+    themeId: 'test',
+    themeList: [{ id: 'test', label: 'Test', family: 'classic', shortLabel: 'Test', density: 'comfortable' }],
+    setTheme: vi.fn(),
+    toggleMode: vi.fn(),
+  }),
 }));
 
 // --- Heavy child widgets: render nothing so they don't open sockets / fetch. ---
@@ -623,6 +629,25 @@ describe('Layout — keyboard navigation shell', () => {
     expect(opener).toHaveFocus();
     fireEvent.click(opener);
     fireEvent.click(screen.getAllByRole('button', { name: 'Close sidebar' }).find(el => !sidebar.contains(el)));
+    expect(opener).toHaveFocus();
+    expect(sidebar).toHaveAttribute('inert');
+  });
+
+  it('dismisses a portaled theme picker before closing its mobile sidebar', async () => {
+    desktopMedia.matches = false;
+    const { container } = await renderLayout();
+    const sidebar = container.querySelector('#app-sidebar');
+    const opener = screen.getByRole('button', { name: 'Open navigation menu' });
+    fireEvent.click(opener);
+    const themeButton = within(sidebar).getByRole('button', { name: 'Switch theme. Current theme: Test' });
+    fireEvent.click(themeButton);
+    const option = screen.getByRole('menuitemradio', { name: /Test/ });
+    expect(option).toHaveFocus();
+    fireEvent.keyDown(option, { key: 'Escape' });
+    expect(screen.queryByRole('menu')).not.toBeInTheDocument();
+    expect(themeButton).toHaveFocus();
+    expect(opener).toHaveAttribute('aria-expanded', 'true');
+    fireEvent.keyDown(themeButton, { key: 'Escape' });
     expect(opener).toHaveFocus();
     expect(sidebar).toHaveAttribute('inert');
   });
