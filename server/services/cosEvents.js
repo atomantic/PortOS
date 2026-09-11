@@ -29,7 +29,8 @@ export function emitLog(level, message, data = {}, prefix = '') {
   if (level !== 'debug' || process.env.COS_LOG_LEVEL === 'debug') {
     const emoji = level === 'error' ? '❌' : level === 'warn' ? '⚠️' : level === 'success' ? '✅' : level === 'debug' ? '🔍' : 'ℹ️';
     const prefixStr = prefix ? ` ${prefix}` : '';
-    console.log(`${emoji}${prefixStr} ${message}`);
+    const logFn = level === 'error' ? console.error : level === 'warn' ? console.warn : console.log;
+    logFn(`${emoji}${prefixStr} ${message}`);
   }
   cosEvents.emit('log', logEntry);
 }
