@@ -5,7 +5,7 @@
  * generated asset into one upsert with the right key/shape.
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 const upsertAsset = vi.fn(async () => {});
 const removeAsset = vi.fn(async () => {});
@@ -25,21 +25,24 @@ import { videoGenEvents } from '../videoGen/events.js';
 
 beforeEach(() => {
   vi.clearAllMocks();
+  vi.stubEnv('VITEST', undefined);
   checkHealth.mockResolvedValue({ connected: true });
 });
+
+afterEach(() => vi.unstubAllEnvs());
 
 // A tiny tick helper so the fire-and-forget event handlers settle.
 const flush = () => new Promise((r) => setTimeout(r, 0));
 
 describe('initMediaAssetIndex', () => {
-  it('no-ops under the escape hatch (no DB, no reconcile)', async () => {
-    vi.stubEnv('NODE_ENV', 'test');
+  it.each([['test', undefined], [undefined, '1'], ['development', '1']])('no-ops with NODE_ENV=%s and VITEST=%s', async (nodeEnv, vitest) => {
+    vi.stubEnv('NODE_ENV', nodeEnv);
+    vi.stubEnv('VITEST', vitest);
     const { initMediaAssetIndex } = await import('./index.js');
     const res = await initMediaAssetIndex();
     expect(res.reason).toBe('escape-hatch');
     expect(reconcileMediaAssets).not.toHaveBeenCalled();
     expect(checkHealth).not.toHaveBeenCalled();
-    vi.unstubAllEnvs();
   });
 
   it('bails when Postgres is unreachable', async () => {
@@ -49,7 +52,6 @@ describe('initMediaAssetIndex', () => {
     const res = await initMediaAssetIndex();
     expect(res.reason).toBe('db-unreachable');
     expect(reconcileMediaAssets).not.toHaveBeenCalled();
-    vi.unstubAllEnvs();
   });
 
   it('ensures schema + reconciles, and indexes a completed image/video via the hooks', async () => {
@@ -74,7 +76,6 @@ describe('initMediaAssetIndex', () => {
     expect(upsertAsset).toHaveBeenCalledWith(expect.objectContaining({
       mediaKey: 'video:job-1', kind: 'video', ref: 'job-1',
     }));
-    vi.unstubAllEnvs();
   });
 });
 
@@ -97,7 +98,6 @@ describe('unindexImage / unindexVideo (delete hooks, #2738)', () => {
     expect(removeAsset.mock.calls.map(([key]) => key)).toEqual(indexedKeys);
     // A video is keyed by job id, NOT its filename — the easy derivation to get wrong.
     expect(removeAsset).toHaveBeenCalledWith('video:job-1');
-    vi.unstubAllEnvs();
   });
 
   it('is non-fatal: a failing removal does not reject the caller (the delete already happened)', async () => {
@@ -109,7 +109,6 @@ describe('unindexImage / unindexVideo (delete hooks, #2738)', () => {
     await expect(unindexImage('img-1.png')).resolves.toBeUndefined();
     expect(errSpy).toHaveBeenCalledWith(expect.stringContaining('db down'));
     errSpy.mockRestore();
-    vi.unstubAllEnvs();
   });
 
   it('no-ops under the escape hatch and on an unusable ref', async () => {
@@ -117,7 +116,6 @@ describe('unindexImage / unindexVideo (delete hooks, #2738)', () => {
     const { unindexImage } = await import('./index.js');
     await unindexImage('img-1.png');
     expect(removeAsset).not.toHaveBeenCalled();
-    vi.unstubAllEnvs();
 
     // A ref-less asset never produced a row, so there's nothing to delete.
     vi.stubEnv('NODE_ENV', 'production');
@@ -125,6 +123,5 @@ describe('unindexImage / unindexVideo (delete hooks, #2738)', () => {
     await liveUnindex(undefined);
     await liveUnindexVideo('');
     expect(removeAsset).not.toHaveBeenCalled();
-    vi.unstubAllEnvs();
   });
 });

@@ -22,6 +22,7 @@
  * queue an AI provider call. Boot only loads on-disk state and ARMS schedulers;
  * every scheduler here is off by default or user-configured.
  */
+import { isTestRunner } from '../lib/runtimeEnv.js';
 import { readPortosEnvValue } from '../lib/portosEnv.js';
 import { join } from 'path';
 import { resolveInstallRoot } from '../lib/dataRoot.js';
@@ -645,7 +646,7 @@ const initMediaJobDependentHooks = () => {
  * the real migration scripts, and the real stores.
  *
  * Escape hatches for the health gate (dev/tests only, UNSUPPORTED for
- * production): `MEMORY_BACKEND=file` (explicit file backend) and `NODE_ENV=test`
+ * production): `MEMORY_BACKEND=file` (explicit file backend) and test runners
  * (test suites boot without a database). Both downgrade "PostgreSQL is required"
  * from a fail-fast to a warning.
  *
@@ -659,7 +660,7 @@ const runDatabaseBootPhase = () => runDatabasePhase({
     const { dbReady } = await gateOnDatabase({
       checkHealth,
       ensureSchema,
-      escapeHatch: process.env.MEMORY_BACKEND === 'file' || process.env.NODE_ENV === 'test'
+      escapeHatch: process.env.MEMORY_BACKEND === 'file' || isTestRunner()
     });
     // ensureSchema is threaded through to the migrations below so the phase
     // resolves the db.js module exactly once.
