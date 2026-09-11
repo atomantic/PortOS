@@ -64,9 +64,9 @@ describe('GET /api/meatspace/export/mortalloom', () => {
     expect(response.body.goals[0]).toMatchObject({ title: 'Run', status: 'active', priority: 'high', checkInIntervalDays: 7 });
     expect(response.body.goals[0].checkIns).toEqual([{ id: expect.any(String), date: '2026-01-05', progressPct: 25, note: '' }]);
     expect(response.body.goals[0].milestones).toEqual([{ id: expect.any(String), title: 'Start', completed: false, completedDate: null }]);
-    const ids = [response.body.alcoholDrinks[0].id, response.body.nicotineEntries[0].id, response.body.bloodTests[0].id, response.body.epigeneticTests[0].id, response.body.eyeExams[0].id, response.body.bodyEntries[0].id, response.body.goals[0].id, response.body.goals[0].checkIns[0].id, response.body.goals[0].milestones[0].id];
+    const ids = [response.body.alcoholDrinks[0].id, response.body.alcoholPresets[0].id, response.body.nicotineEntries[0].id, response.body.nicotinePresets[0].id, response.body.bloodTests[0].id, response.body.epigeneticTests[0].id, response.body.eyeExams[0].id, response.body.bodyEntries[0].id, response.body.goals[0].id, response.body.goals[0].checkIns[0].id, response.body.goals[0].milestones[0].id];
     expect(new Set(ids).size).toBe(ids.length);
-    expect(ids).toEqual(expect.arrayContaining(ids.map(() => expect.stringMatching(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i))));
+    for (const id of ids) expect(id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i);
   });
 
   it('handles sparse sources and falls back to progress history when check-ins are empty', async () => {
