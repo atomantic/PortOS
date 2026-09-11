@@ -210,7 +210,8 @@ async function flushAll() {
   const [buckets, senderInstanceId, localAnnotations] = await Promise.all([
     listBuckets().catch(() => []),
     getInstanceId().catch(() => null),
-    listLocalAuthorAnnotations().catch(() => ({})),
+    // A failed source read is not a deletion: abort before tombstone synthesis.
+    listLocalAuthorAnnotations(),
   ]);
   if (!senderInstanceId || senderInstanceId === UNKNOWN_INSTANCE_ID) return;
   const autoMerge = buckets.filter((b) => b.mode === 'auto-merge');
