@@ -53,7 +53,6 @@ import {
   persistentMindCapabilityGrantFingerprint,
 } from './persistentMindCallGuard.js';
 import { appendMindEvent } from './agentRunEventLog.js';
-import { preparePersistentMindContext } from './persistentMindContext.js';
 import { resolvePersistentMindSelfThinkingRequest } from './persistentMindThinkingRequests.js';
 import { resolvePersistentMindProfile, resolvePersistentMindThinkingSession } from './persistentMindProfile.js';
 import { isUpdateInProgress } from './updateChecker.js';
@@ -847,6 +846,8 @@ async function runClaimedPersistentMindTurn(turn, mind) {
       capabilityFingerprint: persistentMindCapabilityGrantFingerprint(admissionRoot.config?.persistentMindCapabilities),
       signal: controller.signal,
     });
+    // Context/memory orchestration is only needed once admission succeeds.
+    const { preparePersistentMindContext } = await import('./persistentMindContext.js');
     const context = await preparePersistentMindContext({
       mindId: mind.mindId,
       identity: prepared.identity ?? turnAdapter.identity ?? 'One supervised persistent Chief of Staff mind.',
