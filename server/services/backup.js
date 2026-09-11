@@ -307,7 +307,10 @@ export function resolveRsyncBinary(env = process.env) {
 
 function runRsync(srcDir, destDir, flags = []) {
   return new Promise((resolve, reject) => {
-    const args = ['--archive', '--itemize-changes', ...flags, srcDir + '/', destDir];
+    // `--itemize-changes` emits only after each file finishes. `--progress` is
+    // also supported by macOS's bundled rsync 2.6.9 and emits within a large
+    // file, giving the idle watchdog evidence that a slow transfer is healthy.
+    const args = ['--archive', '--itemize-changes', '--progress', ...flags, srcDir + '/', destDir];
     const proc = spawn(resolveRsyncBinary(), args, { shell: false });
 
     const changed = [];
@@ -822,12 +825,12 @@ export async function restoreSnapshot(destPath, snapshotId, { dryRun = true, sub
   try {
     changedFiles = await runRsync(srcDir, PATHS.data, flags);
   } catch (err) {
-    if (!dryRun && err?.code === 'BACKUP_PROCESS_TIMEOUT') {
+    if (!dryRun) {
       const partialRestoreError = new Error(
         `${err.message}. Some files may already have been overwritten because file restore is not transactional.`,
         { cause: err },
       );
-      partialRestoreError.code = err.code;
+      if (err?.code) partialRestoreError.code = err.code;
       throw partialRestoreError;
     }
     throw err;
@@ -917,14 +920,16 @@ export async function restorePostgres(destPath, snapshotId, { dryRun = true } = 
     const proc = spawn('psql', [
       '-v', 'ON_ERROR_STOP=1',
       '--single-transaction',
+      '--echo-all',
       '-h', pgHost, '-p', pgPort, '-U', pgUser, '-d', pgDb, '-f', sqlPath
     ], { shell: false, stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, PGPASSWORD: process.env.PGPASSWORD || 'portos' } });
 
     let stderr = '';
     const watchdog = watchBackupProcess(proc, { label: 'PostgreSQL restore' });
-    // psql's output is never retained, but it must be drained: unread piped
-    // output can backpressure and deadlock a verbose restore. Each chunk is also
-    // the supported progress signal that keeps an active long restore alive.
+    // `--echo-all` echoes input as psql consumes it, including rows within a
+    // long COPY. The output is never retained, but it must be drained: unread
+    // piped output can backpressure and deadlock a verbose restore. Each chunk
+    // is also the progress signal that keeps an active long restore alive.
     proc.stdout.on('data', watchdog.markActivity);
     proc.stderr.on('data', (chunk) => {
       watchdog.markActivity();

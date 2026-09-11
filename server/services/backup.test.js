@@ -803,7 +803,7 @@ describe('restorePostgres', () => {
       expect(result).toEqual({ status: 'ok', dryRun: false, sizeBytes: 4096, tableCount: 1 });
       const [bin, args, opts] = spawn.mock.calls[0];
       expect(bin).toBe('psql');
-      expect(args).toEqual(expect.arrayContaining(['-v', 'ON_ERROR_STOP=1', '--single-transaction', '-f']));
+      expect(args).toEqual(expect.arrayContaining(['-v', 'ON_ERROR_STOP=1', '--single-transaction', '--echo-all', '-f']));
       expect(opts.shell).toBe(false);
       expect(opts.stdio).toEqual(['ignore', 'pipe', 'pipe']);
       expect(child.stdin).toBeNull();
@@ -1174,7 +1174,7 @@ describe('restoreSnapshot subdirFilter guard', () => {
       });
       expect(spawn).toHaveBeenCalledWith(
         '/custom/bin/rsync',
-        expect.arrayContaining(['--archive', '--itemize-changes', '--dry-run']),
+        expect.arrayContaining(['--archive', '--itemize-changes', '--progress', '--dry-run']),
         { shell: false },
       );
     } finally {
@@ -1462,6 +1462,7 @@ describe('restoreSnapshot snapshotId, filter flags, and settings re-sync', () =>
       expect(spawn.mock.calls[0][1]).toEqual([
         '--archive',
         '--itemize-changes',
+        '--progress',
         '--itemize-changes',
         '--dry-run',
         '--include=brain/***',
@@ -1529,7 +1530,7 @@ describe('restoreSnapshot snapshotId, filter flags, and settings re-sync', () =>
       proc.stderr.emit('data', Buffer.from('boom'));
       proc.emit('close', 1);
 
-      await expect(pending).rejects.toThrow(/rsync exited with code 1/);
+      await expect(pending).rejects.toThrow(/rsync exited with code 1.*files may already have been overwritten/i);
       expect(reloadSettings).not.toHaveBeenCalled();
     });
   });
@@ -1650,7 +1651,7 @@ describe('runBackup lifecycle', () => {
     const [bin, args, opts] = spawn.mock.calls[0];
     expect(bin).toBe('rsync');
     expect(opts).toEqual({ shell: false });
-    expect(args.slice(0, 2)).toEqual(['--archive', '--itemize-changes']);
+    expect(args.slice(0, 3)).toEqual(['--archive', '--itemize-changes', '--progress']);
     // Source is PATHS.data with a trailing slash (copy contents, not the dir);
     // destination is the snapshot's data/ subdir.
     expect(args.at(-2)).toBe(`${dataRoot}/`);
