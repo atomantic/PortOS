@@ -19,7 +19,6 @@ import {
   compileFableLoomVisualRequest,
   fableLoomVideoCapabilities,
 } from '../fableLoom/visualConditioning.js';
-import { IMAGE_GEN_MODE } from '../imageGen/modes.js';
 import { VIDEO_GEN_MODE } from './modes.js';
 import { enqueueJob } from '../mediaJobQueue/index.js';
 import {
@@ -116,7 +115,7 @@ const submitValidatedVideoGenJob = async (body, uploads) => {
   const { backend, cleanupStaged } = prepared;
 
   if (body.fableLoom) {
-    const conditioningModel = backend === IMAGE_GEN_MODE.GROK
+    const conditioningModel = backend === VIDEO_GEN_MODE.GROK
       ? { id: 'grok-video', supportedModes: ['image'] }
       : backend === VIDEO_GEN_MODE.FAL
         ? { id: 'fal-video', supportedModes: ['text', 'image'] }
@@ -165,12 +164,12 @@ const submitValidatedVideoGenJob = async (body, uploads) => {
     () => enqueueJob({ kind: 'video', params }),
   );
 
-  if (backend === IMAGE_GEN_MODE.GROK) {
+  if (backend === VIDEO_GEN_MODE.GROK) {
     const { grok: g, sourceImagePath, uploadedTempPath } = prepared;
     const { jobId, position, status } = await enqueue({
       // This literal is the queue discriminator. Local jobs use mode for their
       // t2v/i2v semantic, while the Grok lane stores that as videoMode.
-      mode: IMAGE_GEN_MODE.GROK,
+      mode: VIDEO_GEN_MODE.GROK,
       videoMode: sourceImagePath ? 'image' : 'text',
       grokPath: g.grokPath,
       aspectRatio: body.visualConditioning?.render?.parameters?.aspectRatio || g.aspectRatio,
