@@ -397,10 +397,8 @@ router.get('/issues/recent', asyncHandler(async (req, res) => {
   // via the route but clamps to 1 in the service). Pass through and let
   // listRecentIssues coerce.
   const [issues, series] = await Promise.all([
-    // The route's projection below drops `stages` entirely, but pass
-    // withHistory: false anyway so the service stays light on a sidebar
-    // refresh and the contract matches `GET /series/:id/issues`.
-    issuesSvc.listRecentIssues({ limit: req.query.limit, withHistory: false }),
+    // Fetch only the fields this endpoint returns, with the limit in SQL.
+    issuesSvc.listRecentIssues({ limit: req.query.limit, withHistory: false, summary: true }),
     seriesSvc.listSeries(),
   ]);
   const seriesById = new Map(series.map((s) => [s.id, s.name]));
