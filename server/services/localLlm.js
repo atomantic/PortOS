@@ -514,20 +514,34 @@ export async function upgradeBackend(backend, onProgress = () => {}) {
   if (!(await commandExists('brew', ['--version']))) {
     return { success: false, error: `Homebrew not found — install it from https://brew.sh first, or ${downloadHint.toLowerCase()}` }
   }
+  const before = backend === 'ollama' ? await readOllamaVersion() : null
+  const target = backend === 'ollama' ? await getLatestOllamaVersion() : null
+  emit('Refreshing Homebrew package metadata…')
+  const refresh = await runStreaming('brew', ['update'], emit, BACKEND_INSTALL_TIMEOUT_MS)
+  if (!refresh.success) return { success: false, error: `Homebrew refresh failed: ${refresh.error}` }
   emit(`Upgrading ${label} via Homebrew (${source.packageName}) — this can take a few minutes…`)
   const r = await runStreaming('brew', source.upgradeArgs, emit, BACKEND_INSTALL_TIMEOUT_MS)
   if (!r.success) {
     console.error(`⚠️ ${label} upgrade via brew ${source.upgradeArgs.join(' ')} failed: ${r.error}`)
     return { success: false, error: `Homebrew upgrade failed: ${r.error}` }
   }
-  console.log(`🍺 Upgraded ${label} via Homebrew (${source.source})`)
+  console.log(`🍺 Homebrew upgrade command completed for ${label} (${source.source})`)
   if (backend === 'ollama') {
     const stop = await ollamaManager.stopPersistentService().catch((err) => ({ success: false, error: err.message }))
     const restart = await ollamaManager.startPersistentService().catch((err) => ({ success: false, error: err.message }))
-    const note = restart.success
-      ? 'Restarted Ollama service so the new binary is now serving requests.'
-      : `Upgraded, but PortOS could not restart the Ollama service (${restart.error || stop.error}). Restart it from the Local LLMs tab.`
-    return { success: true, backend, note }
+    if (!restart.success) {
+      return { success: false, backend, error: `Could not verify the Ollama upgrade because its service could not restart (${restart.error || stop.error}). Restart it from the Local LLMs tab.` }
+    }
+    const after = await waitForOllamaVersion()
+    if (!after) return { success: false, backend, error: 'Could not verify the Ollama upgrade: the service did not come back online within 30s.' }
+    if ((target && compareSemver(target, after) > 0) || (!target && (!before || compareSemver(after, before) <= 0))) {
+      return {
+        success: false,
+        backend,
+        error: `Ollama is still running ${after}${target ? `; the available release is ${target}` : '; no newer running version was verified'}. Homebrew may not have packaged the latest release yet, or another Ollama installation may be serving requests. Retry when Homebrew catches up, or install the official app from ${DOWNLOAD_URL.ollama}.`
+      }
+    }
+    return { success: true, backend, note: `Ollama ${before ? `${before} → ` : ''}${after}. The verified binary is now serving requests.` }
   }
   return { success: true, backend, note: 'Restart LM Studio so the new binary is loaded.' }
 }

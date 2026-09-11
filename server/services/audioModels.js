@@ -49,7 +49,9 @@ function sanitizeUserModel(raw) {
 }
 
 async function loadRegistry() {
-  const raw = await readJSONFile(REGISTRY_FILE, {});
+  // Strict: add/remove both persist the loaded registry. A swallowed failure
+  // would replace every other engine's user-installed model rows.
+  const raw = await readJSONFile(REGISTRY_FILE, {}, { strict: true });
   const out = {};
   if (raw && typeof raw === 'object') {
     for (const engineId of Object.keys(ENGINES)) {
