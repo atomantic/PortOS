@@ -89,8 +89,8 @@ describe('image-to-3d generic target dispatch (#3080)', () => {
     expect(res.body.targets[0]).toMatchObject({ installed: true, fakeDiag: 'ok' });
   });
 
-  it('GET /targets/:targetId/install dispatches to the registered adapter', async () => {
-    const res = await request(makeApp()).get('/api/image-to-3d/targets/fakegen/install');
+  it('POST /targets/:targetId/install dispatches to the registered adapter', async () => {
+    const res = await request(makeApp()).post('/api/image-to-3d/targets/fakegen/install');
     const frames = sseFrames(res.text);
     expect(frames).toContainEqual({ type: 'stage', stage: 'fake-step', message: 'installing FakeGen…' });
     expect(frames.at(-1)).toMatchObject({ type: 'complete' });
@@ -101,14 +101,18 @@ describe('image-to-3d generic target dispatch (#3080)', () => {
   // dispatch-layer assumption that every target wants a Hugging Face token —
   // a target that declares no `resolveEnv` must never trigger one.
   it('never resolves the Hugging Face token env for a target with no resolveEnv hook', async () => {
-    await request(makeApp()).get('/api/image-to-3d/targets/fakegen/install');
+    await request(makeApp()).post('/api/image-to-3d/targets/fakegen/install');
     expect(hfChildEnv).not.toHaveBeenCalled();
     expect(fakeInstall).toHaveBeenCalledWith(expect.objectContaining({ env: undefined }));
   });
 
   it('errors on install for a target id with no registered adapter', async () => {
-    const res = await request(makeApp()).get('/api/image-to-3d/targets/nope/install');
-    const frames = sseFrames(res.text);
-    expect(frames.at(-1)).toMatchObject({ type: 'error', message: expect.stringMatching(/Unknown/) });
+    const res = await request(makeApp()).post('/api/image-to-3d/targets/nope/install');
+    expect(res.status).toBe(400);
+    expect(res.body).toMatchObject({
+      error: expect.stringMatching(/Unknown/),
+      code: 'IMAGE_TO_3D_TARGET_NOT_INSTALLABLE',
+      timestamp: expect.any(Number),
+    });
   });
 });
