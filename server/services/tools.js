@@ -57,6 +57,8 @@ export async function getTools() {
   return loadAllPromise;
 }
 
+// Non-strict by design: updateTool returns without writing when this read fails;
+// registerTool is an explicit complete replacement and does not merge this fallback.
 export async function getTool(id) {
   return readJSONFile(toolPath(id), null);
 }

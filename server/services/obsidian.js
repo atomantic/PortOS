@@ -29,7 +29,7 @@ const SKIP_DIRS = new Set(['.obsidian', '.trash', 'node_modules', '.git']);
 
 export async function getVaults() {
   await ensureDir(PATHS.brain);
-  const data = await readJSONFile(VAULTS_FILE, { vaults: [] });
+  const data = await readJSONFile(VAULTS_FILE, { vaults: [] }, { strict: true });
   return data.vaults || [];
 }
 
