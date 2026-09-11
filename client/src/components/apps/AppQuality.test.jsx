@@ -54,6 +54,16 @@ it('identifies federated evidence and incomplete scores without linking to a loc
   expect(screen.queryByRole('link', { name: 'Audit run' })).not.toBeInTheDocument();
 });
 
+it('makes the category actions look like distinct clickable controls', async () => {
+  const app = { id: 'example', quality: { categories: [
+    { id: 'security', label: 'Security', score: 80, coverage: 'broad', confidence: 'high', agentId: 'run-1' },
+  ] } };
+  render(<MemoryRouter><AppQuality app={app} detail /></MemoryRouter>);
+  await screen.findByText(/No scored assessments/);
+  expect(screen.getByRole('link', { name: 'Configure and run Security' })).toHaveClass('inline-flex', 'bg-port-accent/15', 'border', 'rounded');
+  expect(screen.getByRole('link', { name: 'View audit run for Security' })).toHaveClass('inline-flex', 'border', 'bg-port-bg/40', 'rounded');
+});
+
 it('opens the shared runner beside unavailable category evidence while preserving URL filters', async () => {
   const app = { id: 'example', quality: { categories: [
     { id: 'security', label: 'Security', score: null, coverage: 'unavailable' },
