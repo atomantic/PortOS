@@ -1,0 +1,272 @@
+{
+  "schemaVersion": 1,
+  "repository": "2d5f6a24e05573259a136bc8e83f04c18bb1438c4f1d96cbe0ac73f6ffc4e0a0",
+  "measurements": [
+    {
+      "measurementId": "25118a56c4a70f291ee6874211cf97dda1284c57643d6702daae80bbface0013",
+      "assessedAt": "2026-09-11T02:09:13.557Z",
+      "report": {
+        "version": 1,
+        "category": "accessibility",
+        "score": 68,
+        "worstSeverity": 8,
+        "coverage": "broad",
+        "confidence": "high",
+        "scannedFiles": 1713,
+        "totalFiles": 1713
+      }
+    },
+    {
+      "measurementId": "d980eee1b0165473e654a6ebe0b21bd03d11ba3315c93ae187a6af0271732982",
+      "assessedAt": "2026-09-11T05:26:14.358Z",
+      "report": {
+        "version": 1,
+        "category": "api-contract",
+        "score": 72,
+        "worstSeverity": 7,
+        "coverage": "broad",
+        "confidence": "medium",
+        "scannedFiles": 371,
+        "totalFiles": 371
+      }
+    },
+    {
+      "measurementId": "b36acd4091a03da1b874f2be54fc585b79a5dc66ee7d797c4de5db592ce3e7f5",
+      "assessedAt": "2026-09-10T17:06:43.676Z",
+      "report": {
+        "version": 1,
+        "category": "better-cognitive-load",
+        "score": 64,
+        "worstSeverity": 7,
+        "coverage": "broad",
+        "confidence": "medium",
+        "scannedFiles": 4185,
+        "totalFiles": 4185
+      }
+    },
+    {
+      "measurementId": "1eebdf14e81a8c4f46f3804d9711e68676a0f0cec96c2e87a1fa399c57ba4372",
+      "assessedAt": "2026-09-10T12:38:20.981Z",
+      "report": {
+        "version": 1,
+        "category": "better-complexity",
+        "score": 58,
+        "worstSeverity": 6,
+        "coverage": "broad",
+        "confidence": "medium",
+        "scannedFiles": 4185,
+        "totalFiles": 4185
+      }
+    },
+    {
+      "measurementId": "d36486ed4648dea977bd49f02948b071bd36c28e9c14a37f8072c2a634a35cd2",
+      "assessedAt": "2026-09-10T06:14:17.032Z",
+      "report": {
+        "version": 1,
+        "category": "better-structural-drift",
+        "score": 68,
+        "worstSeverity": 5,
+        "coverage": "broad",
+        "confidence": "medium",
+        "scannedFiles": 4175,
+        "totalFiles": 4175
+      }
+    },
+    {
+      "measurementId": "6298c049fb4772b9ff13c3a5a13905015dfe15b99c51609db929c13bc7bea959",
+      "assessedAt": "2026-09-11T00:11:45.376Z",
+      "report": {
+        "version": 1,
+        "category": "code-quality",
+        "score": 82,
+        "worstSeverity": 6,
+        "coverage": "broad",
+        "confidence": "high",
+        "scannedFiles": 7367,
+        "totalFiles": 7367
+      }
+    },
+    {
+      "measurementId": "2ce67bce3c70db90fa8379b41b9314c05e9f5916323ca7f93d01c1d628adfad4",
+      "assessedAt": "2026-09-11T06:13:55.436Z",
+      "report": {
+        "version": 1,
+        "category": "data-safety",
+        "score": 68,
+        "worstSeverity": 8,
+        "coverage": "broad",
+        "confidence": "medium",
+        "scannedFiles": 7364,
+        "totalFiles": 7364
+      }
+    },
+    {
+      "measurementId": "0102e6409ec8d5ad1b2fde2c78e6f945f2dc5455036f406c1ee86ae26445488b",
+      "assessedAt": "2026-09-10T19:06:38.953Z",
+      "report": {
+        "version": 1,
+        "category": "documentation",
+        "score": 76,
+        "worstSeverity": 5,
+        "coverage": "broad",
+        "confidence": "medium",
+        "scannedFiles": 239,
+        "totalFiles": 239
+      }
+    },
+    {
+      "measurementId": "107b9748fdbfac4d640ab9627ab16e0a4b84965dbc81d77ce41448452d417efd",
+      "assessedAt": "2026-09-11T05:25:58.268Z",
+      "report": {
+        "version": 1,
+        "category": "error-handling",
+        "score": 71,
+        "worstSeverity": 8,
+        "coverage": "broad",
+        "confidence": "high",
+        "scannedFiles": 4188,
+        "totalFiles": 4188
+      }
+    },
+    {
+      "measurementId": "64fce5882bb11a4f2671b66dd08046de1bd908788f9c88850355ada9cd20795e",
+      "assessedAt": "2026-09-11T04:48:25.502Z",
+      "report": {
+        "version": 1,
+        "category": "mobile-responsive",
+        "score": 86,
+        "worstSeverity": 4,
+        "coverage": "broad",
+        "confidence": "medium",
+        "scannedFiles": 7334,
+        "totalFiles": 7334
+      }
+    },
+    {
+      "measurementId": "7a6e4d04609546cea27e075014bdb4cf5d8b027586e194526539b55cb663bf93",
+      "assessedAt": "2026-09-10T10:25:44.286Z",
+      "report": {
+        "version": 1,
+        "category": "module-hygiene",
+        "score": 72,
+        "worstSeverity": 5,
+        "coverage": "broad",
+        "confidence": "high",
+        "scannedFiles": 3763,
+        "totalFiles": 3763
+      }
+    },
+    {
+      "measurementId": "79e6da253105d7801fe4848611a988089553c2c0ffc9dbef51163d09f896cd42",
+      "assessedAt": "2026-09-11T05:26:52.844Z",
+      "report": {
+        "version": 1,
+        "category": "observability",
+        "score": 62,
+        "worstSeverity": 6,
+        "coverage": "broad",
+        "confidence": "high",
+        "scannedFiles": 4191,
+        "totalFiles": 4191
+      }
+    },
+    {
+      "measurementId": "602a4a5ff34bc32378a90e9a236befa87b739e6601ce623820a2b59bb77f77a8",
+      "assessedAt": "2026-09-10T14:41:26.439Z",
+      "report": {
+        "version": 1,
+        "category": "performance",
+        "score": 68,
+        "worstSeverity": 5,
+        "coverage": "broad",
+        "confidence": "medium",
+        "scannedFiles": 4186,
+        "totalFiles": 4186
+      }
+    },
+    {
+      "measurementId": "6f77d6fc832e35e026784e818f6d2f0c964f531e01fb9a167e2a7cb2d97b266d",
+      "assessedAt": "2026-09-10T23:59:42.485Z",
+      "report": {
+        "version": 1,
+        "category": "security",
+        "score": 94,
+        "worstSeverity": 0,
+        "coverage": "broad",
+        "confidence": "high",
+        "scannedFiles": 7462,
+        "totalFiles": 7462
+      }
+    },
+    {
+      "measurementId": "bc16212799340eb771074e1a0132ce007f1716ed816b8e9cbf926dbcb85b89dc",
+      "assessedAt": "2026-09-10T08:32:49.922Z",
+      "report": {
+        "version": 1,
+        "category": "simplify",
+        "score": 70,
+        "worstSeverity": 5,
+        "coverage": "broad",
+        "confidence": "medium",
+        "scannedFiles": 7278,
+        "totalFiles": 7278
+      }
+    },
+    {
+      "measurementId": "8c4861377fe30e010fbc9c5e6bd14c48b85208536631420e0a6d79f7603e722e",
+      "assessedAt": "2026-09-11T00:19:27.463Z",
+      "report": {
+        "version": 1,
+        "category": "test-coverage",
+        "score": 82,
+        "worstSeverity": 8,
+        "coverage": "broad",
+        "confidence": "high",
+        "scannedFiles": 7291,
+        "totalFiles": 7291
+      }
+    },
+    {
+      "measurementId": "4196f433e31368a49b853d97c0c599425ee139438697c99b432873a0ca0ddbde",
+      "assessedAt": "2026-09-11T19:44:53.227Z",
+      "report": {
+        "version": 1,
+        "category": "typing",
+        "score": null,
+        "worstSeverity": 0,
+        "coverage": "not-applicable",
+        "confidence": "high",
+        "scannedFiles": 8140,
+        "totalFiles": 8140
+      }
+    },
+    {
+      "measurementId": "b158c04331799a56444f7b9ffb47caa2886c8edd19fb9ff10572461661c26564",
+      "assessedAt": "2026-09-11T02:45:28.794Z",
+      "report": {
+        "version": 1,
+        "category": "ui-bugs",
+        "score": 82,
+        "worstSeverity": 6,
+        "coverage": "broad",
+        "confidence": "high",
+        "scannedFiles": 2541,
+        "totalFiles": 2541
+      }
+    },
+    {
+      "measurementId": "2ad2c4ced2c2584972be16efd674a6b60ab5b8576eb645b5cb39d39528461c81",
+      "assessedAt": "2026-09-11T05:26:04.263Z",
+      "report": {
+        "version": 1,
+        "category": "ux",
+        "score": 58,
+        "worstSeverity": 8,
+        "coverage": "broad",
+        "confidence": "high",
+        "scannedFiles": 1598,
+        "totalFiles": 1598
+      }
+    }
+  ]
+}

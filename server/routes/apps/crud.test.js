@@ -62,8 +62,12 @@ describe('Apps CRUD Routes', () => {
     exportPortosQuality.mockResolvedValue({ schemaVersion: 1, measurements: [] });
     const result = await request(app).get('/api/apps/quality-federation?days=30').set('X-PortOS-Instance-Id', 'peer');
     expect(result.status).toBe(200);
-    expect(exportPortosQuality).toHaveBeenCalledWith('peer', 30);
+    expect(exportPortosQuality).toHaveBeenCalledWith('peer', 30, {}, undefined);
     expect(appsService.getAppById).not.toHaveBeenCalled();
+    const repository = 'a'.repeat(64);
+    expect((await request(app).get(`/api/apps/quality-federation?repository=${repository}`).set('X-PortOS-Instance-Id', 'peer')).status).toBe(200);
+    expect(exportPortosQuality).toHaveBeenLastCalledWith('peer', 90, {}, repository);
+    expect((await request(app).get('/api/apps/quality-federation?repository=invalid')).status).toBe(400);
     expect((await request(app).get('/api/apps/quality-federation?days=999')).status).toBe(400);
     exportPortosQuality.mockResolvedValue(null);
     expect((await request(app).get('/api/apps/quality-federation')).status).toBe(403);

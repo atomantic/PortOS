@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { join } from 'node:path';
 
 const mocks = vi.hoisted(() => ({
   existsSync: vi.fn(() => true),
@@ -42,6 +43,6 @@ describe('voice health Piper probe', () => {
       tts: { engine: 'piper', piper: { voicePath: '/voice/en.onnx' } },
     });
 
-    expect(mocks.existsSync).toHaveBeenCalledWith('/voice/piper/piper.exe');
+    expect(mocks.existsSync).toHaveBeenCalledWith(join('/voice', 'piper', 'piper.exe'));
   });
 });

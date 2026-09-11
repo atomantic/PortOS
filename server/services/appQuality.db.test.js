@@ -30,9 +30,11 @@ describe.skipIf(!runDb)('app quality persistence', () => {
     await write(-1000, 10); // repeated completion cannot rewrite its assessment
     await write(-2000, 5); // recovery of an older run cannot supersede it
     await write(0, 99, false); // failed run cannot overwrite measured evidence
-    const [app, other] = await enrichAppsWithQuality([{ id: appId }, { id: `${appId}-other` }]);
+    // This persistence fixture has no managed checkout or federation peers.
+    const deps = { getPeers: async () => [], getAppById: async id => ({ id }) };
+    const [app, other] = await enrichAppsWithQuality([{ id: appId }, { id: `${appId}-other` }], deps);
     expect(app.quality).toMatchObject({ score: 65, ratedCategories: 1 });
-    const history = await getAppQualityHistory(appId, 30);
+    const history = await getAppQualityHistory(appId, 30, deps);
     expect(history.points.at(-1)).toMatchObject({ score: 65, ratedCategories: 1 });
     const retained = await query('SELECT report FROM app_quality_measurements WHERE app_id = $1 ORDER BY assessed_at', [appId]);
     expect(retained.rows.map(row => row.report.score)).toEqual([30, 65]);

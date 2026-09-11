@@ -1,4 +1,4 @@
-import { appQualityQuerySchema, appQualityHistoryQuerySchema } from '../../lib/auditQuality.js';
+import { appQualityQuerySchema, appQualityHistoryQuerySchema, appQualityFederationQuerySchema } from '../../lib/auditQuality.js';
 import { exportPortosQuality } from '../../services/appQualityFederation.js';
 import { enrichAppsWithQuality, getAppQualityHistory } from '../../services/appQuality.js';
 /**
@@ -33,9 +33,9 @@ const router = Router();
 
 // Numeric local evidence only. This endpoint never invokes aggregate reads or forwards peer data.
 router.get('/quality-federation', asyncHandler(async (req, res) => {
-  const { days } = validateRequest(appQualityHistoryQuerySchema, req.query);
-  const payload = await exportPortosQuality(req.get('X-PortOS-Instance-Id'), days);
-  if (!payload) throw new ServerError('Quality sharing requires a registered enabled full-sync peer and a known repository', { status: 403 });
+  const { days, repository } = validateRequest(appQualityFederationQuerySchema, req.query);
+  const payload = await exportPortosQuality(req.get('X-PortOS-Instance-Id'), days, {}, repository);
+  if (!payload) throw new ServerError('Quality sharing requires a registered enabled sync peer and a known repository', { status: 403 });
   res.json(payload);
 }));
 
