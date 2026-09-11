@@ -352,7 +352,7 @@ export default function Apps() {
                       <AppQuality app={app} />
                       <div className="text-xs text-gray-500 flex flex-wrap gap-x-2 mt-1">
                         {isNonPm2 ? (
-                          <span className="text-gray-500">{app.repoPath}</span>
+                          <span className="break-all">{app.repoPath}</span>
                         ) : (
                           (app.pm2ProcessNames || []).map((procName, i) => {
                             const procInfo = app.processes?.find(p => p.name === procName);
