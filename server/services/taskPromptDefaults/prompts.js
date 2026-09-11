@@ -2038,7 +2038,6 @@ Run steps 1–6 in order.
    # Author filter (see the block above). Pass --author as a QUOTED single token —
    # do NOT pack flag+value into one variable: a bare \`$VAR\` holding "--author x"
    # is a single argv token in zsh (no word-splitting) and gh rejects it.
-   #   Owner-only mode (default): resolve the owner, then add  --author "$OWNER"
    #   --limit 500 (not 100): the blocking-label filter below runs on this
    #   fetched page, so a small cap risks missing eligible work further down
    #   a busy queue when the first page is full of excluded/in-flight issues.
@@ -2046,9 +2045,7 @@ Run steps 1–6 in order.
    # if this lookup fails, leave ME empty and skip all assigned issues.
    ${GITHUB_HOST_SETUP}
    ME="$(gh api --hostname "$GH_HOST" user -q .login 2>/dev/null || true)"
-   OWNER="$(gh repo view --json owner -q .owner.login)"
-   gh issue list --state open --author "$OWNER" --search "sort:created-asc" --json number,title,author,assignees,labels,createdAt --limit 500
-   #   Any-author mode: run the SAME command WITHOUT the --author "$OWNER" flag.
+   {issueCandidateList}
    \`\`\`
 3. Build the in-flight set. Collect every branch/PR ref:
    \`\`\`bash
@@ -2301,12 +2298,11 @@ Run steps 1–5 in order.
 2. List candidate open issues, honoring the author filter described above. Fetch a JSON page and order **oldest-first** (GitLab returns newest-first by default; sort client-side by \`created_at\` since the page is bounded):
    \`\`\`bash
    git fetch --prune 2>/dev/null
-   # Owner-only mode (default): add  --author <owner>  (resolve <owner> from the project namespace).
    # Keep an issue assigned to this authenticated account eligible for retry;
    # if this lookup fails, leave ME empty and skip all assigned issues.
-   ME="$(glab api user -q .username 2>/dev/null || true)"
-   glab issue list --per-page 100 --output json
-   # Any-author mode: run the SAME command WITHOUT --author.
+   command -v jq >/dev/null 2>&1 || { echo "jq is required for issue identity lookup" >&2; exit 1; }
+   ME="$(glab api user 2>/dev/null | jq -er .username 2>/dev/null)" || ME=""
+   {issueCandidateList}
    \`\`\`
 3. Build the in-flight set. Collect every branch/MR source ref:
    \`\`\`bash
