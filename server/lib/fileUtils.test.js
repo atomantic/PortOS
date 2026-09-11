@@ -616,6 +616,7 @@ describe('fileUtils', () => {
         message: expect.stringMatching(/Unreadable JSON file/),
         status: 500,
         code: 'UNREADABLE_STORE',
+        responseMessage: 'Durable data store is unreadable',
       });
     });
 

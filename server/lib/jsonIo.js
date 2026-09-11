@@ -362,6 +362,7 @@ export function unreadableStoreError(filePath) {
   return Object.assign(new Error(`Unreadable JSON file: ${filePath}`), {
     status: 500,
     code: 'UNREADABLE_STORE',
+    responseMessage: 'Durable data store is unreadable',
   });
 }
 
