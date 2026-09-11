@@ -51,6 +51,8 @@ const asRecord = (value) =>
 
 const readRecord = async (runId) => {
   const path = metadataPath(runId);
+  // Non-strict exception: unreadable metadata becomes null; repair planning
+  // skips it (including the final re-read), so no default is written back.
   return path ? asRecord(await readJSONFile(path, null)) : null;
 };
 
