@@ -178,6 +178,20 @@ describe('errorHandler.js', () => {
       expect(normalized.code).toBe('INTERNAL_ERROR');
     });
 
+    it('preserves a request-safe response message from a service error', () => {
+      const error = Object.assign(new Error('Unreadable JSON file: /private/data.json'), {
+        status: 500,
+        code: 'UNREADABLE_STORE',
+        responseMessage: 'Durable data store is unreadable',
+      });
+
+      const normalized = normalizeError(error);
+
+      expect(normalized.message).toContain('/private/data.json');
+      expect(normalized.responseMessage).toBe('Durable data store is unreadable');
+      expect(buildErrorEnvelope(normalized, {}).error).toBe('Durable data store is unreadable');
+    });
+
     it('should unwrap err.cause chain and capture system fields', () => {
       const root = Object.assign(new Error('getaddrinfo ENOTFOUND foo.example'), {
         code: 'ENOTFOUND',
