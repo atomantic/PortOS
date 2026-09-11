@@ -248,6 +248,29 @@ describe('nav contract — instance-feature gating', () => {
 });
 
 describe('resolveNavCommand — fuzzy matching', () => {
+  it('disambiguates security settings from the security camera monitor', () => {
+    const settings = NAV_COMMANDS.find((command) => command.id === 'nav.settings.security');
+    const camera = NAV_COMMANDS.find((command) => command.id === 'nav.security');
+
+    expect(settings).toMatchObject({
+      path: '/settings/security',
+      label: 'Security',
+    });
+    expect(camera).toMatchObject({
+      path: '/security',
+      label: 'Security Camera',
+      keywords: ['camera', 'webcam', 'microphone', 'audio level', 'feed'],
+    });
+    expect(resolveNavCommand('security')).toMatchObject({
+      path: '/settings/security',
+      command: { id: 'nav.settings.security' },
+    });
+    expect(resolveNavCommand('security camera')).toMatchObject({
+      path: '/security',
+      command: { id: 'nav.security' },
+    });
+  });
+
   it('resolves every declared alias to its owning command', () => {
     for (const command of NAV_COMMANDS) {
       for (const alias of command.aliases || []) {
