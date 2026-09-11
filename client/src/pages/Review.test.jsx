@@ -322,4 +322,34 @@ describe('Review Hub triage summary (#6926)', () => {
     expect(summaryValue('Alerts')).toBe('2');
     expect(api.getReviewCounts).toHaveBeenCalledTimes(2);
   });
+
+  it('keeps the newest count response when refreshes resolve out of order', async () => {
+    let resolveInitial;
+    let resolveRefresh;
+    api.getReviewCounts
+      .mockReset()
+      .mockImplementationOnce(() => new Promise(resolve => { resolveInitial = resolve; }))
+      .mockImplementationOnce(() => new Promise(resolve => { resolveRefresh = resolve; }));
+
+    render(<Review />);
+    await waitFor(() => expect(resolveInitial).toBeTypeOf('function'));
+
+    const handler = socket.on.mock.calls.find(([name]) => name === 'review:item:updated')?.[1];
+    expect(handler).toBeTypeOf('function');
+    act(() => handler({ ...ITEM, status: 'completed' }));
+    await waitFor(() => expect(resolveRefresh).toBeTypeOf('function'));
+
+    await act(async () => {
+      resolveRefresh({ total: 7, alert: 2, todo: 1, briefing: 0, cos: 4 });
+      await Promise.resolve();
+    });
+    expect(summaryValue('Pending')).toBe('7');
+
+    await act(async () => {
+      resolveInitial(SUMMARY_COUNTS);
+      await Promise.resolve();
+    });
+    expect(summaryValue('Pending')).toBe('7');
+    expect(summaryValue('Alerts')).toBe('2');
+  });
 });

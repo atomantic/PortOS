@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useNavigate } from 'react-router';
 import {
   ClipboardList,
@@ -95,6 +95,7 @@ export default function Review() {
   const [filter, setFilter] = useState('pending');
   const [briefingFullscreen, setBriefingFullscreen] = useState(false);
   const [counts, setCounts] = useState(null);
+  const countsRequestId = useRef(0);
 
   // Cross-domain live queue (M42 P5). These rows are derived live from each
   // producer, not stored, so "dismiss" is a per-session client-side hide rather
@@ -114,7 +115,10 @@ export default function Review() {
   }, [filter]);
 
   const fetchCounts = useCallback(() => {
-    api.getReviewCounts({ silent: true }).then(setCounts).catch(() => null);
+    const requestId = ++countsRequestId.current;
+    api.getReviewCounts({ silent: true }).then(data => {
+      if (requestId === countsRequestId.current) setCounts(data);
+    }).catch(() => null);
   }, []);
 
   const fetchBriefing = useCallback(async () => {
