@@ -4,7 +4,7 @@ import { listImageGalleryPage } from '../services/api';
 const HIDDEN_PAGE_SIZE = 60;
 
 /** Recent-five gallery, lazy hidden pages, and a bounded deep-link lookup. */
-export function useRecentImageGallery({ favoritesOnly, showHidden, previewParam, annotationRevision = '' }) {
+export function useRecentImageGallery({ favoritesOnly, showHidden, previewParam, annotationRevision = '', annotationPending = false }) {
   const [gallery, setGallery] = useState([]);
   const [total, setTotal] = useState(0);
   const [hiddenTotal, setHiddenTotal] = useState(0);
@@ -14,13 +14,18 @@ export function useRecentImageGallery({ favoritesOnly, showHidden, previewParam,
   const [error, setError] = useState(false);
   const [hiddenError, setHiddenError] = useState(false);
   const [revision, setRevision] = useState(0);
+  const [hiddenRevision, setHiddenRevision] = useState(0);
+  const waitingForAnnotations = favoritesOnly && annotationPending;
+  const refreshRecent = useCallback(() => setRevision(n => n + 1), []);
   const [previewImage, setPreviewImage] = useState(null);
   const refreshGallery = useCallback(() => {
     setHiddenOffset(0);
+    setHiddenRevision(n => n + 1);
     setRevision(n => n + 1);
   }, []);
 
   useEffect(() => {
+    if (waitingForAnnotations) return;
     let cancelled = false;
     setError(false);
     listImageGalleryPage({ limit: 5, hidden: false, starred: favoritesOnly, summary: true }, { silent: true })
@@ -32,7 +37,7 @@ export function useRecentImageGallery({ favoritesOnly, showHidden, previewParam,
       })
       .catch(() => { if (!cancelled) setError(true); });
     return () => { cancelled = true; };
-  }, [favoritesOnly, revision, annotationRevision]);
+  }, [favoritesOnly, revision, annotationRevision, waitingForAnnotations]);
 
   // Scope changes start hidden browsing at the beginning; keep the offset tied
   // to that scope rather than issuing a stale offset before an effect resets it.
@@ -51,6 +56,7 @@ export function useRecentImageGallery({ favoritesOnly, showHidden, previewParam,
       setHiddenLoading(false);
       return;
     }
+    if (waitingForAnnotations) return;
     if (hiddenOffset === 0) {
       setGallery(previous => previous.filter(item => !item.hidden));
       setNextHiddenOffset(null);
@@ -74,24 +80,25 @@ export function useRecentImageGallery({ favoritesOnly, showHidden, previewParam,
       .catch(() => { if (!cancelled) setHiddenError(true); })
       .finally(() => { if (!cancelled) setHiddenLoading(false); });
     return () => { cancelled = true; };
-  }, [showHidden, favoritesOnly, hiddenOffset, revision, annotationRevision]);
+  }, [showHidden, favoritesOnly, hiddenOffset, hiddenRevision, annotationRevision, waitingForAnnotations]);
 
+  const filename = previewParam?.startsWith('image:') ? previewParam.slice(6) : previewParam;
+  const cachedPreview = gallery.find(item => item.filename === filename);
   useEffect(() => {
     setPreviewImage(null);
-    if (!previewParam) return;
+    if (!filename || cachedPreview) return;
     let cancelled = false;
-    const filename = previewParam.startsWith('image:') ? previewParam.slice(6) : previewParam;
     listImageGalleryPage({ limit: 1, filename }, { silent: true })
       .then(page => { if (!cancelled) setPreviewImage(page.items[0] || null); })
       .catch(() => {});
     return () => { cancelled = true; };
-  }, [previewParam, revision]);
+  }, [filename, cachedPreview, revision]);
 
   const loadMoreHidden = () => {
     if (!hiddenLoading && nextHiddenOffset !== null) setHiddenOffset(nextHiddenOffset);
   };
   return {
-    gallery, setGallery, total, hiddenTotal, refreshGallery, previewImage,
+    gallery, setGallery, total, hiddenTotal, refreshGallery, refreshRecent, previewImage: cachedPreview || previewImage,
     hiddenLoading, hiddenError, error, loadMoreHidden, hasMoreHidden: nextHiddenOffset !== null,
   };
 }

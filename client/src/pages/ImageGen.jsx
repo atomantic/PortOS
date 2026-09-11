@@ -139,23 +139,29 @@ export default function ImageGen() {
   const [showHidden, setShowHidden] = useState(false);
   const [favoritesOnly, setFavoritesOnly] = useState(false);
   const { annotations, updateAnnotation: saveAnnotation, getCardProps } = useMediaAnnotations();
+  const [annotationSaves, setAnnotationSaves] = useState(0);
+  const annotationsRef = useRef(annotations);
+  annotationsRef.current = annotations;
   const annotationRevision = useMemo(() => favoritesOnly
     ? Object.keys(annotations).filter(key => annotations[key]?.starred).sort().join('\n') : '',
   [annotations, favoritesOnly]);
   const {
-    gallery, setGallery, total: galleryTotal, hiddenTotal, refreshGallery, previewImage,
+    gallery, setGallery, total: galleryTotal, hiddenTotal, refreshGallery, refreshRecent, previewImage,
     hiddenLoading, hiddenError, error: galleryError, loadMoreHidden, hasMoreHidden,
   } = useRecentImageGallery({
-    favoritesOnly, showHidden, previewParam: searchParams.get('preview'), annotationRevision,
+    favoritesOnly, showHidden, previewParam: searchParams.get('preview'), annotationRevision, annotationPending: annotationSaves > 0,
   });
   const updateAnnotation = useCallback(async (...args) => {
-    const result = await saveAnnotation(...args);
-    if (favoritesOnly) refreshGallery();
-    return result;
+    setAnnotationSaves(count => count + 1);
+    return saveAnnotation(...args).finally(() => {
+      setAnnotationSaves(count => count - 1);
+      if (favoritesOnly) refreshGallery();
+    });
   }, [saveAnnotation, refreshGallery, favoritesOnly]);
   const toggleGalleryStar = useCallback(item => {
-    updateAnnotation(item.key, { starred: !annotations[item.key]?.starred });
-  }, [annotations, updateAnnotation]);
+    if (!item?.key) return;
+    updateAnnotation(item.key, { starred: !annotationsRef.current[item.key]?.starred });
+  }, [updateAnnotation]);
   // FLUX.2 readiness — drives the gating banner. Lazy-fetched on the first
   // selection of a flux2 model so we don't make an extra request when the
   // user is only using mflux/external/codex.
@@ -348,7 +354,7 @@ export default function ImageGen() {
       });
   }, []);
 
-  useMediaCompletionRefresh({ onImageCompleted: refreshGallery });
+  useMediaCompletionRefresh({ onImageCompleted: refreshRecent });
 
   // SynthID-defeat regen (issue #912) is hardware-gated on a local FLUX
   // runner — only surface the lightbox action when the backend is installed.
@@ -876,12 +882,12 @@ export default function ImageGen() {
     // Only refresh gallery on a busy-count drop — that's the signal a
     // queued job just completed. Otherwise polling re-fetches the gallery
     // every 4s for nothing.
-    if (stillBusy < lastBusyRef.current) refreshGallery();
+    if (stillBusy < lastBusyRef.current) refreshRecent();
     lastBusyRef.current = stillBusy;
     // No-op guard: same value setState would still trigger a render, so
     // explicitly skip when nothing changed.
     setPendingQueued((prev) => (prev === next ? prev : next));
-  }, [generating, refreshGallery]);
+  }, [generating, refreshRecent]);
   useAutoRefetch(pollQueue, 4000, { enabled: queueActive, pollOnly: true });
 
   // The HF-gated-repo "token" issue only applies to actual FLUX.2 models —
@@ -1028,7 +1034,7 @@ export default function ImageGen() {
   // Queue N renders without taking over the active SSE/preview. Used when the
   // user submits while one is already rendering — they get to keep watching
   // the in-flight render, and the new payloads land in mediaJobQueue (server
-  // FIFO). When the active render finishes, refreshGallery() pulls all
+  // FIFO). When the active render finishes, refreshRecent() pulls the newest
   // completed images so the queued ones become visible as they land.
   // Async-mode only; external is synchronous so submitting N would block N×.
   const queueAdditional = async (count = 1) => {
@@ -1109,7 +1115,7 @@ export default function ImageGen() {
         setResult({ ...data, prompt: payload.prompt, negativePrompt: payload.negativePrompt, width: clampedW, height: clampedH, steps: payload.steps, cfgScale });
       }
       toast.success('Image generated');
-      refreshGallery();
+      refreshRecent();
     } catch (err) {
       setError(err.message || 'Image generation failed');
       // Typed kind from a USER_ERROR: line lets the UI render guidance
@@ -1761,7 +1767,7 @@ export default function ImageGen() {
             </div>
           </div>
           {visibleGallery.length === 0 ? (
-            <div className="text-xs text-gray-500 py-3">No favorited images yet.</div>
+            <div className="text-xs text-gray-500 py-3">{favoritesOnly ? 'No favorited images yet.' : 'No recent images.'}</div>
           ) : (
             <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3">
               {visibleGalleryItems.slice(0, 5).map((item) => (
