@@ -15,11 +15,12 @@
  * `videoGenEvents` 'completed' emitters that already fire on every render. The
  * handlers read the just-written sidecar / history entry and upsert one row.
  *
- * Escape hatch: under MEMORY_BACKEND=file or NODE_ENV=test there's no Postgres,
+ * Escape hatch: under MEMORY_BACKEND=file or a test runner there's no Postgres,
  * so the index is simply not maintained — the gallery/history still serve from
  * disk. init() no-ops in that case (mirrors how catalog features disable).
  */
 
+import { isTestRunner } from '../../lib/runtimeEnv.js';
 import { checkHealth, ensureSchema } from '../../lib/db.js';
 import { imageGenEvents } from '../imageGenEvents.js';
 import { videoGenEvents } from '../videoGen/events.js';
@@ -31,7 +32,7 @@ export { reconcileMediaAssets } from './db.js';
 let subscribed = false;
 
 function isEscapeHatch() {
-  return process.env.MEMORY_BACKEND === 'file' || process.env.NODE_ENV === 'test';
+  return process.env.MEMORY_BACKEND === 'file' || isTestRunner();
 }
 
 // Index a single just-generated image. The 'completed' event carries the

@@ -5,13 +5,14 @@
  * is mandatory; when MEMORY_BACKEND is unset we require a healthy DB and do NOT
  * silently fall back to file storage — an unavailable DB throws. The file
  * backend (memory.js) is reachable only via the explicit MEMORY_BACKEND=file
- * escape hatch or NODE_ENV=test (both unsupported for production).
+ * escape hatch or a test runner (both unsupported for production).
  *
  * Usage:
  *   import * as memory from './memoryBackend.js';
  *   // All functions are the same regardless of backend
  */
 
+import { isTestRunner } from '../lib/runtimeEnv.js';
 import { checkHealth, ensureSchema } from '../lib/db.js';
 import { DEFAULT_MEMORY_CONFIG } from './memoryConfig.js';
 
@@ -58,7 +59,7 @@ async function getBackend() {
   // earlier conditional-on-unavailable form silently wrote to a dev's real DB
   // whenever Postgres happened to be up. An explicit `MEMORY_BACKEND=postgres`
   // (handled above) still opts a suite into the PG path.
-  if (process.env.NODE_ENV === 'test') {
+  if (isTestRunner()) {
     backend = await import('./memory.js');
     backendName = 'file';
     console.log('🧠 Memory backend: file-based (test mode — Postgres deliberately bypassed)');
