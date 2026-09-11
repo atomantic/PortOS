@@ -476,6 +476,41 @@ describe('prepareVideoGenParams', () => {
   });
 });
 
+describe.each(['wan22', 'wan22_cuda'])('Wan frame admission — %s', (runtime) => {
+  beforeEach(() => {
+    listVideoModels.mockReturnValue([{
+      id: 'wan_test', name: 'Test Wan', runtime,
+      supportedModes: ['text'], frameStride: 4, defaultFrames: 120,
+    }]);
+  });
+
+  it('rejects explicit and default off-grid frames in prepare and retry', async () => {
+    const params = { modelId: 'wan_test', mode: 'text' };
+    const error = {
+      status: 400, code: 'WAN22_INVALID_FRAME_COUNT',
+      message: 'Test Wan requires a 4n+1 frame count; got 120.',
+    };
+    await expect(prepare(params)).rejects.toMatchObject(error);
+    await expect(validateVideoRetryParams(params)).rejects.toMatchObject(error);
+    await expect(prepare({ ...params, numFrames: 120 })).rejects.toMatchObject(error);
+    await expect(validateVideoRetryParams({ ...params, numFrames: 120 })).rejects.toMatchObject(error);
+  });
+
+  it('persists the resolved model default and falls back when absent', async () => {
+    const model = { id: 'wan_test', name: 'Test Wan', runtime, supportedModes: ['text'], frameStride: 4 };
+    listVideoModels.mockReturnValue([{ ...model, defaultFrames: 81 }]);
+    await expect(prepare({ modelId: model.id })).resolves.toMatchObject({ effectiveNumFrames: 81 });
+    listVideoModels.mockReturnValue([model]);
+    await expect(prepare({ modelId: model.id })).resolves.toMatchObject({ effectiveNumFrames: 121 });
+  });
+
+  it('accepts an explicit grid count instead of an invalid model default', async () => {
+    const params = { modelId: 'wan_test', mode: 'text', numFrames: 81 };
+    await expect(prepare(params)).resolves.toMatchObject({ effectiveNumFrames: 81 });
+    await expect(validateVideoRetryParams(params)).resolves.toBeUndefined();
+  });
+});
+
 describe('validateVideoRetryParams', () => {
   it('keeps an explicit null model sentinel unknown instead of selecting the default', async () => {
     await expect(validateVideoRetryParams({ modelId: null })).rejects.toMatchObject({
