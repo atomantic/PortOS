@@ -82,6 +82,7 @@ describe('bounded server shutdown', () => {
     const log = vi.fn();
     const error = vi.fn();
     const closeServer = runInNewContext(`
+      ${extractDeclaration(SRC, 'logBootstrapFailure')}
       ${extractDeclaration(SRC, 'withGrace')}
       ${extractDeclaration(SRC, 'closeServer')}
       closeServer;
@@ -101,7 +102,9 @@ describe('bounded server shutdown', () => {
     }
     await expect(closeServer(null, 'Local HTTP mirror')).resolves.toBeUndefined();
     expect(log.mock.calls).toEqual([['✅ HTTP server closed'], ['✅ HTTP server closed']]);
-    expect(error.mock.calls).toEqual([['⚠️ Error closing HTTP server: close failed']]);
+    expect(error).toHaveBeenCalledTimes(1);
+    expect(error.mock.calls[0][0]).toBe('⚠️ Error closing HTTP server: close failed');
+    expect(error.mock.calls[0][1]).toContain('Error: close failed');
     await vi.runAllTimersAsync();
     expect(error).toHaveBeenCalledTimes(1);
   });
