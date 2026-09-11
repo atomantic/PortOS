@@ -1334,7 +1334,7 @@ describe('getState and saveState', () => {
     expect(await backup.getState()).toEqual(DEFAULTS);
   });
 
-  it('returns the default state when state.json holds invalid JSON', async () => {
+  it('rejects unreadable state instead of returning a saveable default', async () => {
     const { mkdir, writeFile } = await import('fs/promises');
     const { join } = await import('path');
     await mkdir(join(tmpRoot, 'backup'), { recursive: true });
@@ -1342,7 +1342,7 @@ describe('getState and saveState', () => {
     await writeFile(join(tmpRoot, 'backup', 'state.json'), '{"status":"ok","filesChanged":');
     vi.spyOn(console, 'warn').mockImplementation(() => {});
 
-    expect(await backup.getState()).toEqual(DEFAULTS);
+    await expect(backup.getState()).rejects.toMatchObject({ code: 'UNREADABLE_STORE' });
   });
 
   it('merges a patch into existing state and persists it to disk', async () => {

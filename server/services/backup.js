@@ -684,6 +684,7 @@ export async function listSnapshots(destPath) {
       const manifestPath = join(snapshotDir, 'manifest.json');
       // logError:false — a snapshot taken before manifests existed legitimately
       // has none; the null is handled below, so it isn't worth a warning per list.
+      // Read-only listing metadata; generateManifest rebuilds from snapshot bytes.
       const manifest = await readJSONFile(manifestPath, null, { logError: false });
       // Report a still-being-written snapshot rather than hiding it: the row is
       // real and the user should see the run in flight, but download and restore
@@ -882,6 +883,8 @@ export async function restorePostgres(destPath, snapshotId, { dryRun = true } = 
   // proceed rather than hard-failing. Only a manifest that IS present AND
   // carries a mismatching hash refuses the restore.
   const manifestPath = join(snapshotDir, 'manifest.json');
+  // Read-only verification metadata; preserve the legacy no-manifest behavior
+  // below. This path never writes the manifest back.
   const manifest = await readJSONFile(manifestPath, null);
   const expectedHash = manifest?.files?.['../portos-db.sql'];
   if (expectedHash) {
@@ -963,7 +966,7 @@ export async function restorePostgres(destPath, snapshotId, { dryRun = true } = 
  * Get current backup state from disk.
  */
 export async function getState() {
-  return readJSONFile(STATE_PATH, DEFAULT_STATE);
+  return readJSONFile(STATE_PATH, DEFAULT_STATE, { strict: true });
 }
 
 /**

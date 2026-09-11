@@ -148,7 +148,7 @@ export async function exportAnnotationsToBucket(bucket, localAnnotations, sender
   // file, so a key dropped from bucket A doesn't tombstone the same key on
   // bucket B (it may still be valid there).
   const tombstoneTs = new Date().toISOString();
-  const prior = await readJSONFile(recordPath, null, { logError: false });
+  const prior = await readJSONFile(recordPath, null, { logError: false, strict: true });
   const priorKeys = prior && prior.annotations && typeof prior.annotations === 'object'
     ? Object.keys(prior.annotations)
     : [];

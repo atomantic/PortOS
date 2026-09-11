@@ -94,6 +94,8 @@ const ASSET_SOURCE_DIRS = Object.freeze({
  * same hash since the hash derives from bytes and the key embeds mtime+size.
  */
 async function loadAssetHashCache(bucketPath) {
+  // Rebuildable cache only: a miss hashes/copies the authoritative source bytes;
+  // the index owns no records, memberships, or deletion history.
   const raw = await readJSONFile(bucketBlobIndexPath(bucketPath), {}, { logError: false });
   return isPlainObject(raw) ? raw : {};
 }
@@ -174,6 +176,7 @@ async function jobFromSidecar(jobId) {
   if (typeof jobId !== 'string' || !jobId) return null;
   if (basename(jobId) !== jobId) return null;
   if (jobId.includes('/') || jobId.includes('\\') || jobId.includes('..')) return null;
+  // Input-only image metadata: copied into a new export, never written back here.
   const sc = await readJSONFile(join(PATHS.images, `${jobId}.metadata.json`));
   if (!sc) return null;
   // Sidecar schema differs between paths:
