@@ -47,12 +47,12 @@ const ASSET_STATIC_OPTS = { acceptRanges: true };
 const IMMUTABLE_MAX_AGE_MS = 365 * 24 * 60 * 60 * 1000;
 const CLIENT_ASSET_STATIC_OPTS = { immutable: true, maxAge: IMMUTABLE_MAX_AGE_MS, index: false };
 
-// Only `<workId>/drafts/<draftId>.md` is needed for federation body pulls.
-// Without this gate the static root would also serve adjacent work-metadata
-// JSON (manifest.json / manifest.imported.json on file-backend/migrated
-// installs) to any client that knows a work id.
-const writersRoomDraftBodiesOnly = (req, res, next) => {
-  if (!/^\/[^/]+\/drafts\/[^/]+\.md$/.test(req.path)) return res.status(404).end();
+// Federation may pull draft prose and the three authored bible siblings only.
+// Metadata/import backups and regenerable analysis snapshots stay inaccessible.
+const writersRoomAssetsOnly = (req, res, next) => {
+  const draft = /^\/[^/]+\/drafts\/[^/]+\.md$/.test(req.path);
+  const bible = /^\/wr-work-[0-9a-f-]+\/(characters|places|objects)\.json$/i.test(req.path);
+  if (!draft && !bible) return res.status(404).end();
   next();
 };
 
@@ -97,7 +97,7 @@ const ASSET_DIRS = {
   '/data/writers-room/works': wrWorksDir,
 };
 
-const ASSET_GATES = { '/data/writers-room/works': writersRoomDraftBodiesOnly };
+const ASSET_GATES = { '/data/writers-room/works': writersRoomAssetsOnly };
 
 /** The routes `ASSET_DIRS` knows a directory for — exported so a key that never
  *  reaches `ASSET_ROUTE_PREFIXES` (and is therefore never mounted) fails a test

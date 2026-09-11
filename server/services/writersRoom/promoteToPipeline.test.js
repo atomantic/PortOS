@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { mkdtempSync, rmSync, existsSync } from 'fs';
+import { mkdtempSync, rmSync, existsSync, readFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { makePathsProxy, mockNoPeerSync, mockNoPeers } from '../../lib/mockPathsDataRoot.js';
@@ -20,6 +20,7 @@ vi.mock('../sharing/peerSync.js', () => mockNoPeerSync());
 
 const wrLocal = await import('./local.js');
 const { promoteWorkToPipeline, ERR_NO_DRAFT_BODY } = await import('./promoteToPipeline.js');
+const { buildWorkBibleManifest, applyWorkBibleBytes, workBiblePath } = await import('./bibleSync.js');
 const { createCharacter } = await import('./characters.js');
 const { createPlace } = await import('./places.js');
 const { createObject } = await import('./objects.js');
@@ -128,6 +129,13 @@ describe('promoteWorkToPipeline', () => {
       sliders: { proactivity: 8, competence: 6 },
       relationshipLinks: [{ targetCharacterId: ines.id, type: 'rival', description: 'Same salvage claim.' }],
     });
+
+    // Simulate the receiver's missing bible landing before promotion.
+    const biblePath = workBiblePath(work.id, 'character');
+    const bytes = readFileSync(biblePath);
+    const [entry] = await buildWorkBibleManifest(work);
+    rmSync(biblePath);
+    expect(await applyWorkBibleBytes(entry, bytes, { via: 'peer-sync', peerId: 'peer-example' })).toBe(true);
 
     const { series } = await promoteWorkToPipeline(work.id);
     const universe = await universeSvc.getUniverse(series.universeId);

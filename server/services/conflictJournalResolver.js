@@ -145,6 +145,10 @@ async function applyToRecord(kind, recordId, patch, { replace = false } = {}) {
     // same path. It validates `status` and rejects a missing/tombstoned row with
     // the generic ServerError 'NOT_FOUND' (→ translateGone → ERR_TARGET_GONE).
     await updateMusicVideoProject(recordId, patch).catch(translateGone);
+  } else if (['writersRoomCharacters', 'writersRoomPlaces', 'writersRoomObjects'].includes(kind)) {
+    const { restoreWorkBible, BIBLE_CONFLICT_KINDS } = await import('./writersRoom/bibleSync.js');
+    const bibleKind = Object.keys(BIBLE_CONFLICT_KINDS).find((key) => BIBLE_CONFLICT_KINDS[key] === kind);
+    await restoreWorkBible(recordId, bibleKind, patch).catch(translateGone);
   } else if (kind === 'writersRoomWork') {
     // updateWork applies the snapshot's title/kind/status/folderId/imageStyle/
     // liveMode (the RESTORABLE_FIELDS set) through its allow-list + the liveMode

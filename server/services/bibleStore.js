@@ -9,6 +9,7 @@
  * directly from here, and the pure sanitizer names from lib/storyBible.js.
  */
 
+import { emitRecordUpdated } from './sharing/recordEvents.js';
 import { randomUUID } from 'crypto';
 import { join } from 'path';
 import { PATHS, atomicWrite, ensureDir, readJSONFile } from '../lib/fileUtils.js';
@@ -60,6 +61,7 @@ export function createBibleStore(opts) {
   async function save(workId, state) {
     await ensureDir(wrDir(workId));
     await atomicWrite(filePath(workId), { ...state, updatedAt: nowIso() });
+    emitRecordUpdated('writersRoomWork', workId);
   }
 
   async function list(workId) {

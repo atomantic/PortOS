@@ -9,6 +9,7 @@
  *
  * Split out of the former 4,004-line peerSync.js (#1830).
  */
+import { diffWorkBibleManifest } from '../writersRoom/bibleSync.js';
 import { isPlainObject } from '../../lib/objects.js';
 import {
   PORTOS_SCHEMA_VERSIONS,
@@ -28,6 +29,7 @@ import {
   diffAssetManifestAgainstLocal,
   pullMissingAssetsFromPeer,
   pullMissingWorkBodies,
+  pullMissingWorkBibles,
 } from './peerSyncAssets.js';
 import { RECORD_KINDS } from './recordKinds.js';
 import { findPeerSubscription, subscribePeer } from './peerSubscriptions.js';
@@ -204,7 +206,7 @@ export async function applyIncomingPush(payload) {
   if (!isPlainObject(payload)) {
     throw makeErr('payload must be an object', ERR_VALIDATION);
   }
-  const { kind, record, issues, linkedCollection, linkedTrack, catalogBundle, manuscriptReview, reverseOutline, assetManifest, draftBodyManifest, sourceInstanceId, portosMeta } = payload;
+  const { kind, record, issues, linkedCollection, linkedTrack, catalogBundle, manuscriptReview, reverseOutline, assetManifest, draftBodyManifest, bibleManifest, sourceInstanceId, portosMeta } = payload;
   if (!PEER_SUBSCRIBABLE_KINDS.includes(kind)) {
     throw makeErr(`unknown kind: ${kind}`, ERR_VALIDATION);
   }
@@ -460,6 +462,18 @@ export async function applyIncomingPush(payload) {
       ? draftBodyManifest.filter((e) => e && e.workId === record.id)
       : [];
     missingDraftBodies = await diffWorkBodyManifest(ownBodies, { includeMismatched: workMergeApplied });
+    const ownBibles = Array.isArray(bibleManifest) ? bibleManifest.filter((e) => e?.workId === record.id) : [];
+    const missingBibles = await diffWorkBibleManifest(ownBibles).catch((err) => {
+      pending.add('bibleSyncPending');
+      console.error(`❌ peerSync: bible diff failed: ${err.message}`);
+      return [];
+    });
+    if (missingBibles.length) {
+      pending.add('bibleSyncPending');
+      pullMissingWorkBibles(sourceInstanceId, missingBibles).catch((err) => {
+        console.error(`❌ peerSync: bible pull failed: ${err.message}`);
+      });
+    }
     if (missingDraftBodies.length > 0) {
       pullMissingWorkBodies(sourceInstanceId, missingDraftBodies).catch((err) => {
         console.log(`⚠️ peerSync: draft-body pull from ${sourceInstanceId} failed: ${err.message}`);
