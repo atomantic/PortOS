@@ -25,6 +25,7 @@ const AppOverrideRow = memo(function AppOverrideRow({ app, taskType, globalInter
   const hasCron = isCronExpression(currentInterval);
   // Same effective-value rule the AGENT_OPTIONS buttons use: this app's override
   // wins, else the global config. No PR, nothing to decide about one.
+  const claimFlow = !!globalTaskMetadata?.claimFlow || ISSUE_AUTHOR_FILTER_TASK_TYPES.has(taskType);
   const opensPR = (override?.taskMetadata?.openPR ?? globalTaskMetadata?.openPR) === true;
 
   // A per-app provider/model pin OUTRANKS the task's own provider pin at spawn,
@@ -228,7 +229,7 @@ const AppOverrideRow = memo(function AppOverrideRow({ app, taskType, globalInter
           />
         </div>
 
-        {opensPR && (
+        {(opensPR || claimFlow) && (
           <select
             value={pinnedPrCompletion(override?.taskMetadata)}
             onChange={(e) => handleOverrideChange('prCompletion', e.target.value)}
@@ -237,8 +238,8 @@ const AppOverrideRow = memo(function AppOverrideRow({ app, taskType, globalInter
             title="What happens to the PR this app's runs open"
             className="bg-port-card border border-port-border rounded px-2 py-1.5 text-xs text-white min-w-[120px] min-h-[40px]"
           >
-            <option value="">Inherit ({prCompletionOption(pinnedPrCompletion(globalTaskMetadata))?.label || 'app default'})</option>
-            {PR_COMPLETION_OPTIONS.map(opt => (
+            <option value="">Inherit ({prCompletionOption(pinnedPrCompletion(globalTaskMetadata))?.label || (claimFlow ? 'Automatic merge after reviews and CI' : 'app default')})</option>
+            {PR_COMPLETION_OPTIONS.filter(opt => !claimFlow || opt.value !== 'merge-on-green').map(opt => (
               <option key={opt.value} value={opt.value}>{opt.label}</option>
             ))}
           </select>

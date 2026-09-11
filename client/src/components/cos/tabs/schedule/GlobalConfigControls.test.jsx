@@ -348,3 +348,12 @@ describe('GlobalConfigControls — external issue isolation', () => {
     expect(onUpdate).toHaveBeenCalledWith('issue-watcher', { providerId: null, model: null, effort: null });
   });
 });
+
+it('persists leave-open for claim-issue while keeping configured reviews available', () => {
+   const taskMetadata = { useWorktree: false, openPR: false, claimFlow: true };
+   const onUpdate = renderControls({ taskType: 'claim-issue', taskMetadata });
+   expect(prSelect()).toHaveValue('');
+   fireEvent.change(prSelect(), { target: { value: 'leave-open' } });
+   expect(onUpdate).toHaveBeenCalledWith('claim-issue', { taskMetadata: { ...taskMetadata, prCompletion: 'leave-open' } });
+   expect(screen.getByTestId('reviewer-picker')).toBeInTheDocument();
+});

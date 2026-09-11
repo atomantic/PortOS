@@ -433,12 +433,18 @@ export function claimReviewersCsv(task, codeReviewDefaults, defaultReviewers) {
  *
  * @param {string} [reviewersCsv] - the emitted `--review-with` token list to pin;
  *   empty suppresses the block (`buildReviewerPinNote` returns '').
+ * @param {boolean} [leavePrOpen] - keep reviews and CI, but hand off before merge.
  */
-export function buildClaimFlowCompletionSection({ isTui = false, sentinelPath = null, reviewersCsv = '' } = {}) {
+export function buildClaimFlowCompletionSection({ isTui = false, sentinelPath = null, reviewersCsv = '', leavePrOpen = false } = {}) {
   const pin = buildReviewerPinNote(reviewersCsv);
   const lines = [
     ...(pin ? [pin, ''] : []),
     '## Claim Workflow Handoff',
+    ...(leavePrOpen ? [
+      'PR completion policy: LEAVE OPEN for further human review. This overrides any merge, auto-merge, issue-close, or merged-branch cleanup instruction in the claim prompt and delegated slashdo commands. Do not pass --merge, enable auto-merge, merge the PR/MR, or close the issue/ticket.',
+      'Complete implementation, configured reviews, publication, and CI checks as usual. Once those gates pass, leave the PR/MR open, report its URL and review/CI results, and preserve the claim markers, issue state, branch, and worktree for the human handoff. This is a successful completion; do not wait for a human or require MERGED status. Apply this policy to every child claim in a swarm.',
+      '',
+    ] : []),
     'This is a self-managed claim flow. The claim prompt above owns its claim worktree, branch, PR/MR, review, merge or human-handoff, and cleanup. Follow its phase-specific exit conditions — do NOT stop after a code commit or hand the lifecycle back to PortOS.',
     '',
     'Required-review publication rule: if a required local reviewer cannot return a verdict because of a missing CLI, quota/provider or transport failure, timeout, malformed/empty response, or no-verdict result, record the local phase as `review-blocked` rather than substituting a self-review. Still push and open the PR/MR, post a comment saying it is intentionally left open and will not be merged until the required review completes, preserve the claim markers and branch, and stop before merge. A substantive rejection, failed build/test, unpushed fix, or state/publication failure still blocks publication.',
