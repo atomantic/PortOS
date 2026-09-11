@@ -44,6 +44,7 @@ describe('VideoGen per-render display-sleep control', () => {
 
     const checkbox = await screen.findByLabelText(/Sleep display during this render/i);
     await waitFor(() => expect(checkbox).toBeChecked());
+    expect(screen.getByText(/default in Media Gen Settings \(gear icon or ⌘K "Media Gen Settings"\)/i)).toBeTruthy();
 
     expect(await submitAndGetDisplaySleep()).toBe('true');
   });

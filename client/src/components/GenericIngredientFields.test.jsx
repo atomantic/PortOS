@@ -58,6 +58,6 @@ describe('GenericIngredientFields', () => {
 
   it('shows an empty-state hint when the type has no fields', () => {
     render(<GenericIngredientFields fields={[]} payload={{}} onChange={() => {}} />);
-    expect(screen.getByText(/no fields yet/i)).toBeTruthy();
+    expect(screen.getByText('This type has no fields yet — add some in Create → Catalog (Catalog Types).')).toBeTruthy();
   });
 });
