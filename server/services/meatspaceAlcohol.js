@@ -162,6 +162,7 @@ export async function getAlcoholSummary() {
 
   const [log, config] = await Promise.all([
     loadDailyLog(),
+    // Read-only summary input; mutations of this config belong to meatspace.js.
     readJSONFile(CONFIG_FILE, { sex: 'male' })
   ]);
 
@@ -210,7 +211,7 @@ export async function logDrink({ name, oz, abv, count = 1, date }) {
     return { drink, standardDrinks, date: targetDate, dayTotal: entry?.alcohol?.standardDrinks || standardDrinks };
   }
 
-  const log = await loadDailyLog();
+  const log = await loadDailyLog({ strict: true });
   let entry = log.entries.find(e => e.date === targetDate);
   if (!entry) { entry = { date: targetDate }; log.entries.push(entry); }
   if (!entry.alcohol) entry.alcohol = { drinks: [], standardDrinks: 0 };
@@ -253,7 +254,7 @@ export async function updateDrink(date, index, updates) {
              date: effectiveDate };
   }
 
-  const log = await loadDailyLog();
+  const log = await loadDailyLog({ strict: true });
   const entry = log.entries.find(e => e.date === date);
   if (!entry?.alcohol?.drinks?.[index]) return null;
 
@@ -310,7 +311,7 @@ export async function removeDrink(date, index) {
     return removed;
   }
 
-  const log = await loadDailyLog();
+  const log = await loadDailyLog({ strict: true });
   const entry = log.entries.find(e => e.date === date);
   if (!entry?.alcohol?.drinks?.[index]) return null;
 
@@ -324,7 +325,7 @@ export async function removeDrink(date, index) {
 // === Custom Drink Buttons ===
 
 async function loadCustomDrinks() {
-  const data = await readJSONFile(CUSTOM_DRINKS_FILE, null, { allowArray: false });
+  const data = await readJSONFile(CUSTOM_DRINKS_FILE, null, { allowArray: false, strict: true });
   if (!data || typeof data !== 'object' || Array.isArray(data)) {
     // Return defaults in-memory without writing — persist only on explicit mutations
     return { drinks: DEFAULT_DRINK_BUTTONS.map(d => ({ ...d })) };

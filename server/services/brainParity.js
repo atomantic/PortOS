@@ -279,7 +279,7 @@ export async function checkPeerBrainParity(peer) {
 }
 
 async function loadReports() {
-  const stored = await readJSONFile(REPORTS_FILE, {});
+  const stored = await readJSONFile(REPORTS_FILE, {}, { strict: true });
   return stored && typeof stored === 'object' && !Array.isArray(stored) ? stored : {};
 }
 

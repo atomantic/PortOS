@@ -165,7 +165,7 @@ export async function logNicotine({ product, mgPerUnit, count = 1, date }) {
     return { item, totalMg, date: targetDate, dayTotal: entry?.nicotine?.totalMg || totalMg };
   }
 
-  const log = await loadDailyLog();
+  const log = await loadDailyLog({ strict: true });
   let entry = log.entries.find(e => e.date === targetDate);
   if (!entry) { entry = { date: targetDate }; log.entries.push(entry); }
   if (!entry.nicotine) entry.nicotine = { items: [], totalMg: 0 };
@@ -201,7 +201,7 @@ export async function updateNicotine(date, index, updates) {
              date: effectiveDate };
   }
 
-  const log = await loadDailyLog();
+  const log = await loadDailyLog({ strict: true });
   const entry = log.entries.find(e => e.date === date);
   if (!entry?.nicotine?.items?.[index]) return null;
 
@@ -257,7 +257,7 @@ export async function removeNicotine(date, index) {
     return removed;
   }
 
-  const log = await loadDailyLog();
+  const log = await loadDailyLog({ strict: true });
   const entry = log.entries.find(e => e.date === date);
   if (!entry?.nicotine?.items?.[index]) return null;
 
@@ -271,7 +271,7 @@ export async function removeNicotine(date, index) {
 // === Custom Product Buttons ===
 
 async function loadCustomProducts() {
-  const data = await readJSONFile(CUSTOM_PRODUCTS_FILE, null, { allowArray: false });
+  const data = await readJSONFile(CUSTOM_PRODUCTS_FILE, null, { allowArray: false, strict: true });
   if (!data || typeof data !== 'object' || Array.isArray(data)) {
     return { products: DEFAULT_PRODUCTS.map(p => ({ ...p })) };
   }

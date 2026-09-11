@@ -59,7 +59,7 @@ function intervalForStage(stage) {
 // =============================================================================
 
 async function loadReviewSchedule() {
-  const data = await readJSONFile(REVIEW_SCHEDULE_FILE, { skills: {} }, { allowArray: false });
+  const data = await readJSONFile(REVIEW_SCHEDULE_FILE, { skills: {} }, { allowArray: false, strict: true });
   const skills = data?.skills && typeof data.skills === 'object' ? data.skills : {};
   return { skills };
 }

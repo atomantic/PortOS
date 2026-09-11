@@ -66,7 +66,7 @@ async function ensureMeatspaceDir() {
 }
 
 async function loadConfig() {
-  return readJSONFile(CONFIG_FILE, structuredClone(DEFAULT_CONFIG));
+  return readJSONFile(CONFIG_FILE, structuredClone(DEFAULT_CONFIG), { strict: true });
 }
 
 async function saveConfig(config) {
@@ -282,6 +282,7 @@ async function migrateBirthDateFromGoals(config) {
   return queueConfigWrite(async () => {
     const freshConfig = await loadConfig();
     if (freshConfig.birthDate) return freshConfig;
+    // Read-only migration source: an unreadable legacy file skips migration without writing either file.
     const goals = await readJSONFile(GOALS_FILE, null);
     if (!goals?.birthDate) return freshConfig;
     freshConfig.birthDate = goals.birthDate;
@@ -315,6 +316,8 @@ export async function getBirthDateStrict() {
 }
 
 export async function updateBirthDate(birthDate, { syncGoals = true } = {}) {
+  // Verify the compatibility mirror before committing the canonical config.
+  const goals = syncGoals ? await readJSONFile(GOALS_FILE, null, { strict: true }) : null;
   await queueConfigWrite(async () => {
     const config = await loadConfig();
     config.birthDate = birthDate;
@@ -323,13 +326,10 @@ export async function updateBirthDate(birthDate, { syncGoals = true } = {}) {
   });
 
   // Keep goals.json in sync for backward compatibility
-  if (syncGoals) {
-    const goals = await readJSONFile(GOALS_FILE, null);
-    if (goals) {
-      goals.birthDate = birthDate;
-      goals.updatedAt = new Date().toISOString();
-      await atomicWrite(join(PATHS.digitalTwin, 'goals.json'), goals);
-    }
+  if (goals) {
+    goals.birthDate = birthDate;
+    goals.updatedAt = new Date().toISOString();
+    await atomicWrite(GOALS_FILE, goals);
   }
 
   await mlPatchProfileIfEnabled({ birthDate });
@@ -340,6 +340,7 @@ export async function updateBirthDate(birthDate, { syncGoals = true } = {}) {
 export async function getDeathClock() {
   const [config, longevity] = await Promise.all([
     loadConfig(),
+    // Read-only longevity input; this service never persists the projection.
     readJSONFile(LONGEVITY_FILE, null)
   ]);
 
@@ -357,6 +358,7 @@ export async function getDeathClock() {
 
 export async function getLEV() {
   const [longevity, config] = await Promise.all([
+    // Read-only longevity input; this service never persists the projection.
     readJSONFile(LONGEVITY_FILE, null),
     loadConfig()
   ]);
