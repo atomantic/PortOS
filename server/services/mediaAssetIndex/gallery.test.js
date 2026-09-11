@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { listGalleryPage } from './gallery.js';
+import { imageToRow } from './logic.js';
 import { query } from '../../lib/db.js';
 
 vi.mock('../../lib/db.js', () => ({ query: vi.fn() }));
@@ -10,9 +11,9 @@ describe('indexed gallery page', () => {
     vi.stubEnv('NODE_ENV', 'production');
     vi.stubEnv('VITEST', undefined);
     vi.stubEnv('MEMORY_BACKEND', 'db');
-    const item = { filename: 'fox.png', path: '/data/images/fox.png', prompt: '100% fox', seed: 8 };
+    const item = { filename: 'fox.png', path: '/data/images/fox.png', prompt: '100% fox', seed: 8, hidden: false, loraNames: ['portrait'] };
     query.mockImplementation(async sql => sql.includes('COUNT(*)')
-      ? { rows: [{ count: '27' }] } : { rows: [{ data: item }] });
+      ? { rows: [{ count: '27' }] } : { rows: [imageToRow(item)] });
     const disk = vi.fn();
     expect(await listGalleryPage({ limit: 5, offset: 10, q: '100% fox', hidden: false }, disk))
       .toEqual({ items: [item], total: 27, limit: 5, offset: 10 });

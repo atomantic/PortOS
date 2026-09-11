@@ -16,6 +16,9 @@ Production pages read the derived PostgreSQL `media_assets` index with SQL LIMIT
 and OFFSET. Ordering is newest first with a stable media-key tie break. Search
 matches all whitespace-separated tokens, case-insensitively, anywhere in the
 metadata JSON (including prompt and filename); percent and underscore are literal.
+This deliberately broadens the old curated-field search: metadata keys, timestamps,
+and other stored fields can match too. Search scans metadata inside PostgreSQL;
+paging bounds transfer and browser state, not the search scan itself.
 No request scans sidecars to recover from a database error.
 
 Sidecars remain authoritative. Boot reconcile scans disk and repairs index drift.

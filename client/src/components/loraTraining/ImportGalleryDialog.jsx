@@ -21,7 +21,7 @@ const MAX_IMPORT = 50;
 export default function ImportGalleryDialog({ dataset, onClose, onImported }) {
   const [items, setItems] = useState([]);
   const [loading, setLoading] = useState(false);
-  const [total, setTotal] = useState(0);
+  const [nextOffset, setNextOffset] = useState(null);
   const [offset, setOffset] = useState(0);
   const requestId = useRef(0);
   const [error, setError] = useState(false);
@@ -34,20 +34,26 @@ export default function ImportGalleryDialog({ dataset, onClose, onImported }) {
     const id = ++requestId.current;
     setLoading(true);
     setError(false);
-    listImageGalleryPage({ limit: 60, offset, q: query, hidden: false }, { silent: true })
-      .then(page => {
-        if (id !== requestId.current) return;
-        const next = page.items.map(normalizeImage);
-        setItems(prev => offset === 0 ? next : [...prev, ...next]);
-        setTotal(page.total);
-      })
-      .catch(err => {
-        if (id !== requestId.current) return;
-        setError(true);
-        toast.error(err.message || 'Failed to load gallery');
-      })
-      .finally(() => { if (id === requestId.current) setLoading(false); });
-    return () => { requestId.current += 1; };
+    const timer = setTimeout(() => {
+      listImageGalleryPage({ limit: 60, offset, q: query, hidden: false }, { silent: true })
+        .then(page => {
+          if (id !== requestId.current) return;
+          const next = page.items.map(normalizeImage).filter(item => item.filename);
+          setItems(prev => {
+            const combined = offset === 0 ? next : [...prev, ...next];
+            return [...new Map(combined.map(item => [item.filename, item])).values()];
+          });
+          const end = offset + page.items.length;
+          setNextOffset(page.items.length && end < page.total ? end : null);
+        })
+        .catch(err => {
+          if (id !== requestId.current) return;
+          setError(true);
+          toast.error(err.message || 'Failed to load gallery');
+        })
+        .finally(() => { if (id === requestId.current) setLoading(false); });
+    }, query ? 250 : 0);
+    return () => { clearTimeout(timer); requestId.current += 1; };
   }, [query, offset, retry]);
 
   const toggle = useCallback((filename) => {
@@ -92,7 +98,7 @@ export default function ImportGalleryDialog({ dataset, onClose, onImported }) {
           <input
             type="text"
             value={query}
-            onChange={(e) => { setQuery(e.target.value); setOffset(0); setItems([]); setTotal(0); }}
+            onChange={(e) => { requestId.current += 1; setQuery(e.target.value); setOffset(0); setItems([]); setNextOffset(null); }}
             placeholder="Search prompt, model, seed, LoRA…"
             aria-label="Search gallery images"
             className="w-full pl-7 pr-7 py-1.5 text-xs bg-port-bg border border-port-border rounded-lg text-white placeholder-gray-500 focus:outline-none focus:border-port-accent"
@@ -101,7 +107,7 @@ export default function ImportGalleryDialog({ dataset, onClose, onImported }) {
           {query && (
             <button
               type="button"
-              onClick={() => { setQuery(''); setOffset(0); setItems([]); setTotal(0); }}
+              onClick={() => { requestId.current += 1; setQuery(''); setOffset(0); setItems([]); setNextOffset(null); }}
               className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-500 hover:text-white"
               aria-label="Clear search"
             >
@@ -147,8 +153,8 @@ export default function ImportGalleryDialog({ dataset, onClose, onImported }) {
           </div>
         )}
         {error && <button type="button" onClick={() => setRetry(n => n + 1)} className="w-full min-h-[44px] text-port-accent">Retry loading images</button>}
-        {!error && items.length < total && (
-          <button type="button" disabled={loading} onClick={() => setOffset(items.length)}
+        {!error && nextOffset !== null && (
+          <button type="button" disabled={loading} onClick={() => setOffset(nextOffset)}
             className="w-full min-h-[44px] mt-3 text-sm text-port-accent disabled:opacity-50">
             {loading ? 'Loading…' : 'Show more'}
           </button>
