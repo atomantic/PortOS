@@ -93,6 +93,7 @@ import {
   buildPlanConstraintBlock,
   resolveBranchReconcileBlock,
   resolveIssueAuthorFilterBlock,
+  resolveIssueCandidateListBlock,
   resolveIssueExcludeLabelsBlock,
   resolveIssueReconcileBlock,
   resolvePrWatcherBlock,
@@ -492,6 +493,7 @@ export async function buildClaimWorkTask(app, {
     // interpreted as a backreference (see the scheduler's same-pattern note).
     .replace(/\{reviewers\}/g, () => reviewersCsv)
     .replace(/\{issueAuthorFilter\}/g, () => issueAuthorFilterBlock)
+    .replace(/\{issueCandidateList\}/g, () => resolveIssueCandidateListBlock(promptTaskType, resolvedAuthorFilter))
     .replace(/\{issueExcludeLabels\}/g, () => issueExcludeLabelsBlock)
     + appendTargetWorkItemBlock(promptTaskType, targetRef, issueExcludeLabelsBlock)
     + appendPrefetchedIssueContext(promptTaskType, targetRef, issueContext)
