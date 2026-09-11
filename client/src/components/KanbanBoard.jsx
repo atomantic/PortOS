@@ -1,9 +1,155 @@
 import { useState, useEffect, useCallback, useMemo, memo } from 'react';
-import { DndContext, DragOverlay, useDraggable, useDroppable, PointerSensor, useSensor, useSensors } from '@dnd-kit/core';
+import {
+  DndContext,
+  DragOverlay,
+  closestCenter,
+  KeyboardSensor,
+  PointerSensor,
+  useDraggable,
+  useDroppable,
+  useSensor,
+  useSensors,
+} from '@dnd-kit/core';
 import { GripVertical, Play } from 'lucide-react';
 import toast from './ui/Toast';
 import * as api from '../services/api';
 import { FALLBACK_COLUMNS, ticketInColumn, bucketTickets } from '../lib/kanbanColumns.js';
+
+const TICKET_DROP_PREFIX = 'ticket:';
+
+const ticketDropId = (ticketKey) => `${TICKET_DROP_PREFIX}${ticketKey}`;
+
+function dropTargetData(target) {
+  return target?.data?.current || {};
+}
+
+function columnIdForTarget(target, columns) {
+  const columnId = dropTargetData(target).columnId;
+  if (columnId) return columnId;
+  return columns.some(column => column.id === target?.id) ? target.id : null;
+}
+
+function dropTargetLabel(target) {
+  const data = dropTargetData(target);
+  if (!target) return null;
+  if (data.columnName) {
+    const position = Number.isInteger(data.position) ? `, position ${data.position + 1}` : '';
+    return `${data.columnName}${position}`;
+  }
+  return `workflow column ${target.id}`;
+}
+
+function activeTicketLabel(active) {
+  return active?.data?.current?.ticket?.key || active?.id || 'ticket';
+}
+
+/**
+ * Move keyboard drags between ticket slots and workflow columns.
+ *
+ * Columns are the fallback target for empty columns. When a destination has
+ * tickets, horizontal movement preserves the current slot where possible;
+ * vertical movement selects the adjacent slot in the current column.
+ */
+export function kanbanKeyboardCoordinates(event, { active, context }) {
+  const direction = {
+    ArrowDown: 1,
+    ArrowUp: -1,
+    ArrowRight: 1,
+    ArrowLeft: -1,
+  }[event.code];
+  if (!direction) return undefined;
+
+  const activeId = typeof active === 'object' ? active.id : active;
+  const activeData = context?.active?.data?.current || active?.data?.current || {};
+  const overData = context?.over?.data?.current || {};
+  const currentColumnId = overData.columnId || activeData.columnId;
+  if (!currentColumnId) return undefined;
+
+  const fallbackPosition = Number.isInteger(activeData.position) ? activeData.position : 0;
+  const currentPosition = overData.type === 'ticket' && Number.isInteger(overData.position)
+    ? overData.position
+    : overData.columnId && overData.columnId !== activeData.columnId
+      ? 0
+      : fallbackPosition;
+  const entries = context?.droppableContainers?.getEnabled?.()
+    ?.map(entry => ({
+      entry,
+      data: entry.data?.current || {},
+      rect: context.droppableRects.get(entry.id),
+    }))
+    .filter(({ entry, rect }) => !entry.disabled && rect) || [];
+
+  const ticketEntries = entries
+    .filter(({ data }) => data.type === 'ticket' && String(data.ticketKey) !== String(activeId))
+    .sort((left, right) => left.data.position - right.data.position);
+  const columnEntries = entries
+    .filter(({ data }) => data.type === 'column')
+    .sort((left, right) => left.data.columnIndex - right.data.columnIndex);
+
+  let target;
+  if (event.code === 'ArrowUp' || event.code === 'ArrowDown') {
+    const candidates = ticketEntries.filter(({ data }) => data.columnId === currentColumnId);
+    target = direction > 0
+      ? candidates.find(({ data }) => data.position > currentPosition)
+      : [...candidates].reverse().find(({ data }) => data.position < currentPosition);
+  } else {
+    const currentColumnIndex = columnEntries.findIndex(({ data }) => data.columnId === currentColumnId);
+    const destinationColumn = columnEntries[currentColumnIndex + direction];
+    if (!destinationColumn) return undefined;
+
+    const destinationTickets = ticketEntries
+      .filter(({ data }) => data.columnId === destinationColumn.data.columnId)
+      .sort((left, right) => left.data.position - right.data.position);
+    if (destinationTickets.length) {
+      const destinationPosition = Math.min(Math.max(currentPosition, 0), destinationTickets.length - 1);
+      target = destinationTickets[destinationPosition];
+    } else {
+      target = destinationColumn;
+    }
+  }
+
+  if (!target) return undefined;
+  return { x: target.rect.left, y: target.rect.top };
+}
+
+/** Keep the active ticket's own slot from winning collision detection. */
+export function kanbanCollisionDetection(args) {
+  const activeDropId = ticketDropId(args.active?.id);
+  return closestCenter({
+    ...args,
+    droppableContainers: args.droppableContainers.filter(entry => entry.id !== activeDropId),
+  });
+}
+
+const KANBAN_ACCESSIBILITY = {
+  announcements: {
+    onDragStart({ active }) {
+      const ticket = activeTicketLabel(active);
+      const source = active?.data?.current?.columnName || 'its current column';
+      return `Picked up ticket ${ticket} from ${source}. Use arrow keys to move it, Space to drop, or Escape to cancel.`;
+    },
+    onDragOver({ active, over }) {
+      const ticket = activeTicketLabel(active);
+      const destination = dropTargetLabel(over);
+      return destination
+        ? `Ticket ${ticket} moved over ${destination}.`
+        : `Ticket ${ticket} is no longer over a workflow column.`;
+    },
+    onDragEnd({ active, over }) {
+      const ticket = activeTicketLabel(active);
+      const destination = dropTargetLabel(over);
+      return destination
+        ? `Dropped ticket ${ticket} in ${destination}.`
+        : `Ticket ${ticket} was dropped outside a workflow column.`;
+    },
+    onDragCancel({ active }) {
+      return `Cancelled dragging ticket ${activeTicketLabel(active)}. It returned to its original column.`;
+    },
+  },
+  screenReaderInstructions: {
+    draggable: 'To pick up a ticket, press Space or Enter. While dragging, use the arrow keys to move it between columns and card positions. Press Space to drop the ticket, or Escape to cancel.',
+  },
+};
 
 // Memoized: rendered once per ticket inside a dnd-kit board that re-renders on
 // every pointer move during a drag. Props are a stable ticket object + a
@@ -35,10 +181,15 @@ const TicketCard = memo(function TicketCard({ ticket, isDragOverlay }) {
 
 // Memoized for the same reason as TicketCard: only the card actively being
 // dragged changes; the rest keep stable ticket/disabled/appId/canQueue props.
-const DraggableTicket = memo(function DraggableTicket({ ticket, disabled, appId, canQueue }) {
-  const { attributes, listeners, setNodeRef, transform, isDragging } = useDraggable({
+const DraggableTicket = memo(function DraggableTicket({ ticket, disabled, appId, canQueue, columnId, columnName, columnIndex, position }) {
+  const { setNodeRef: setDropNodeRef } = useDroppable({
+    id: ticketDropId(ticket.key),
+    data: { type: 'ticket', ticketKey: ticket.key, columnId, columnName, columnIndex, position },
+    disabled,
+  });
+  const { attributes, listeners, setNodeRef, setActivatorNodeRef, transform, isDragging } = useDraggable({
     id: ticket.key,
-    data: { ticket },
+    data: { ticket, columnId, columnName, columnIndex, position },
     disabled
   });
   const [queuing, setQueuing] = useState(false);
@@ -58,13 +209,14 @@ const DraggableTicket = memo(function DraggableTicket({ ticket, disabled, appId,
 
   return (
     <div
-      ref={setNodeRef}
+      ref={setDropNodeRef}
       style={style}
       className={`group relative ${isDragging ? 'opacity-30' : ''}`}
     >
-      <div className="flex items-stretch gap-0">
+      <div ref={setNodeRef} className="flex items-stretch gap-0">
         <button
           type="button"
+          ref={setActivatorNodeRef}
           {...listeners}
           {...attributes}
           className={`flex items-center px-1 text-gray-600 hover:text-gray-400 shrink-0 ${disabled ? 'cursor-not-allowed opacity-50' : 'cursor-grab active:cursor-grabbing'}`}
@@ -100,8 +252,12 @@ const DraggableTicket = memo(function DraggableTicket({ ticket, disabled, appId,
   );
 });
 
-function DroppableColumn({ column, isOver, disabled, appId }) {
-  const { setNodeRef } = useDroppable({ id: column.id, disabled });
+function DroppableColumn({ column, isOver, disabled, appId, columnIndex }) {
+  const { setNodeRef } = useDroppable({
+    id: column.id,
+    data: { type: 'column', columnId: column.id, columnName: column.name, columnIndex },
+    disabled,
+  });
   const config = column.config;
   const totalPoints = column.tickets.reduce((sum, t) => sum + (Number(t.storyPoints) || 0), 0);
   // The play button (queue a CoS agent for a ticket) only makes sense for
@@ -122,8 +278,18 @@ function DroppableColumn({ column, isOver, disabled, appId }) {
         )}
       </div>
       <div className="space-y-2">
-        {column.tickets.map(ticket => (
-          <DraggableTicket key={ticket.key} ticket={ticket} disabled={disabled} appId={appId} canQueue={canQueue} />
+        {column.tickets.map((ticket, position) => (
+          <DraggableTicket
+            key={ticket.key}
+            ticket={ticket}
+            disabled={disabled}
+            appId={appId}
+            canQueue={canQueue}
+            columnId={column.id}
+            columnName={column.name}
+            columnIndex={columnIndex}
+            position={position}
+          />
         ))}
         {column.tickets.length === 0 && (
           <div className={`text-xs text-center py-4 ${isOver ? 'text-gray-300' : 'text-gray-500'}`}>
@@ -161,7 +327,8 @@ export default function KanbanBoard({ tickets: initialTickets = [], instanceId, 
   }, [instanceId, projectKey, boardId]);
 
   const sensors = useSensors(
-    useSensor(PointerSensor, { activationConstraint: { distance: 8 } })
+    useSensor(PointerSensor, { activationConstraint: { distance: 8 } }),
+    useSensor(KeyboardSensor, { coordinateGetter: kanbanKeyboardCoordinates })
   );
 
   const columns = useMemo(() => bucketTickets(boardColumns || FALLBACK_COLUMNS, tickets), [boardColumns, tickets]);
@@ -173,7 +340,7 @@ export default function KanbanBoard({ tickets: initialTickets = [], instanceId, 
 
   const handleDragOver = useCallback((event) => {
     const { over } = event;
-    setOverColumn(over?.id && columns.some(c => c.id === over.id) ? over.id : null);
+    setOverColumn(columnIdForTarget(over, columns));
   }, [columns]);
 
   const handleDragEnd = useCallback(async (event) => {
@@ -183,7 +350,7 @@ export default function KanbanBoard({ tickets: initialTickets = [], instanceId, 
 
     if (!over) return;
 
-    const targetColumn = columns.find(c => c.id === over.id);
+    const targetColumn = columns.find(c => c.id === columnIdForTarget(over, columns));
     if (!targetColumn) return;
 
     const ticket = active.data.current?.ticket;
@@ -252,19 +419,22 @@ export default function KanbanBoard({ tickets: initialTickets = [], instanceId, 
   return (
     <DndContext
       sensors={sensors}
+      collisionDetection={kanbanCollisionDetection}
+      accessibility={KANBAN_ACCESSIBILITY}
       onDragStart={handleDragStart}
       onDragOver={handleDragOver}
       onDragEnd={handleDragEnd}
       onDragCancel={handleDragCancel}
     >
       <div className="flex gap-3 overflow-x-auto pb-2">
-        {columns.map(column => (
+        {columns.map((column, columnIndex) => (
           <DroppableColumn
             key={column.id}
             column={column}
             isOver={overColumn === column.id}
             disabled={!!transitioning}
             appId={appId}
+            columnIndex={columnIndex}
           />
         ))}
       </div>
