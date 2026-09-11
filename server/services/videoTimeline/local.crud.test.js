@@ -57,9 +57,12 @@ describe('loading a v1 project', () => {
     expect(onDisk()[0].segments).toBeUndefined();
   });
 
-  it('lists a corrupt file as empty rather than crashing', async () => {
-    writeFileSync(PROJECTS_FILE, JSON.stringify({ projects: [] }));
-    expect(await listProjects()).toEqual([]);
+  it('rejects a corrupt non-array root without changing its bytes', async () => {
+    const bytes = JSON.stringify({ projects: [] });
+    writeFileSync(PROJECTS_FILE, bytes);
+
+    await expect(listProjects()).rejects.toMatchObject({ code: 'UNREADABLE_STORE', status: 500 });
+    expect(readFileSync(PROJECTS_FILE, 'utf8')).toBe(bytes);
   });
 });
 
