@@ -612,7 +612,12 @@ describe('fileUtils', () => {
       const filePath = join(testDir, 'corrupt.json');
       await writeFile(filePath, 'not json at all');
 
-      await expect(readJSONFile(filePath, [], { strict: true })).rejects.toThrow(/Unreadable JSON file/);
+      await expect(readJSONFile(filePath, [], { strict: true })).rejects.toMatchObject({
+        message: expect.stringMatching(/Unreadable JSON file/),
+        status: 500,
+        code: 'UNREADABLE_STORE',
+        responseMessage: 'Durable data store is unreadable',
+      });
     });
 
     it('returns the parsed value when the read succeeds', async () => {

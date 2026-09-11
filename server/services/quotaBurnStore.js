@@ -42,7 +42,7 @@ const configWriteQueue = createFileWriteQueue();
 const runLogWriteQueue = createFileWriteQueue();
 
 export async function getQuotaBurnConfig() {
-  return normalizeQuotaBurnConfig(await readJSONFile(configFile(), null));
+  return normalizeQuotaBurnConfig(await readJSONFile(configFile(), null, { strict: true }));
 }
 
 /**
@@ -54,7 +54,7 @@ export async function getQuotaBurnConfig() {
  */
 export async function saveQuotaBurnConfig(patch) {
   return configWriteQueue(async () => {
-    const current = normalizeQuotaBurnConfig(await readJSONFile(configFile(), null));
+    const current = normalizeQuotaBurnConfig(await readJSONFile(configFile(), null, { strict: true }));
     // Written to match `client/src/lib/quotaBurnPatch.js#mergeQuotaBurnPatch`
     // line for line — the client applies the same merge optimistically while the
     // PUT is debounced, and the two only stay honest if the claim is checkable
@@ -84,7 +84,7 @@ const IN_FLIGHT_TTL_MS = 6 * 60 * 60 * 1000;
 
 /** Keys enqueued within the TTL, as a Set. Expired keys are simply not returned. */
 export async function getQuotaBurnInFlight({ now = Date.now() } = {}) {
-  const loaded = await readJSONFile(inFlightFile(), null);
+  const loaded = await readJSONFile(inFlightFile(), null, { strict: true });
   const entries = loaded && typeof loaded === 'object' && !Array.isArray(loaded) ? loaded : {};
   return new Set(Object.entries(entries)
     .filter(([, at]) => Number.isFinite(Number(at)) && now - Number(at) < IN_FLIGHT_TTL_MS)
@@ -95,7 +95,7 @@ export async function getQuotaBurnInFlight({ now = Date.now() } = {}) {
 export async function recordQuotaBurnInFlight(keys, { now = Date.now() } = {}) {
   if (!keys?.length) return;
   return inFlightWriteQueue(async () => {
-    const loaded = await readJSONFile(inFlightFile(), null);
+    const loaded = await readJSONFile(inFlightFile(), null, { strict: true });
     const entries = loaded && typeof loaded === 'object' && !Array.isArray(loaded) ? loaded : {};
     const next = Object.fromEntries(Object.entries(entries)
       .filter(([, at]) => Number.isFinite(Number(at)) && now - Number(at) < IN_FLIGHT_TTL_MS));
@@ -206,7 +206,7 @@ export async function releaseQuotaBurnStep(key, { now = Date.now() } = {}) {
 }
 
 export async function getQuotaBurnRuns() {
-  const loaded = await readJSONFile(runLogFile(), null);
+  const loaded = await readJSONFile(runLogFile(), null, { strict: true });
   return Array.isArray(loaded?.runs) ? loaded.runs : [];
 }
 
@@ -217,7 +217,7 @@ export async function getQuotaBurnRuns() {
  */
 export async function recordQuotaBurnRun(entry) {
   return runLogWriteQueue(async () => {
-    const loaded = await readJSONFile(runLogFile(), null);
+    const loaded = await readJSONFile(runLogFile(), null, { strict: true });
     const runs = Array.isArray(loaded?.runs) ? loaded.runs : [];
     const next = [{ at: new Date().toISOString(), ...entry }, ...runs].slice(0, RUN_LOG_LIMIT);
     await atomicWrite(runLogFile(), { runs: next });
@@ -239,7 +239,7 @@ export async function recordQuotaBurnRun(entry) {
 export async function settleQuotaBurnRun(requestId, patch) {
   if (!requestId) return null;
   return runLogWriteQueue(async () => {
-    const loaded = await readJSONFile(runLogFile(), null);
+    const loaded = await readJSONFile(runLogFile(), null, { strict: true });
     const runs = Array.isArray(loaded?.runs) ? loaded.runs : [];
     const at = runs.findIndex((entry) => entry?.requestId === requestId);
     if (at < 0) return runs;
