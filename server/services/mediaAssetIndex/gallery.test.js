@@ -3,8 +3,8 @@ import { listGalleryPage } from './gallery.js';
 import { imageToRow } from './logic.js';
 import { query } from '../../lib/db.js';
 
-vi.mock('../mediaAnnotations.js', () => ({ listAnnotations: vi.fn() }));
-import { listAnnotations } from '../mediaAnnotations.js';
+const { listAnnotations } = vi.hoisted(() => ({ listAnnotations: vi.fn() }));
+vi.mock('../mediaAnnotations.js', () => ({ listAnnotations }));
 
 vi.mock('../../lib/db.js', () => ({ query: vi.fn() }));
 afterEach(() => { vi.unstubAllEnvs(); vi.resetAllMocks(); });
