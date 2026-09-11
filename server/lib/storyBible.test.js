@@ -1530,6 +1530,34 @@ describe('storyBible — createBibleStore (single-primary-field kind)', () => {
     expect(merged).toHaveLength(2);
     expect(merged.every((e) => e.source === 'ai')).toBe(true);
   });
+
+  it('serializes overlapping edits and extraction on the same bible file', async () => {
+    const store = characterStore();
+    const existing = await store.create(WORK_ID, { name: 'Aria', role: 'protagonist' });
+
+    const updatePromise = store.update(WORK_ID, existing.id, { role: 'antagonist' });
+    const mergePromise = store.mergeExtracted(WORK_ID, [{ name: 'Voss', role: 'antagonist' }]);
+    await Promise.all([updatePromise, mergePromise]);
+
+    const entries = await store.list(WORK_ID);
+    expect(entries.find((entry) => entry.id === existing.id)?.role).toBe('antagonist');
+    expect(entries.some((entry) => entry.name === 'Voss')).toBe(true);
+  });
+
+  it('preserves concurrent updates to different entries in one bible file', async () => {
+    const store = characterStore();
+    const aria = await store.create(WORK_ID, { name: 'Aria', role: 'protagonist' });
+    const voss = await store.create(WORK_ID, { name: 'Voss', role: 'supporting' });
+
+    await Promise.all([
+      store.update(WORK_ID, aria.id, { role: 'antagonist' }),
+      store.update(WORK_ID, voss.id, { role: 'protagonist' }),
+    ]);
+
+    const entries = await store.list(WORK_ID);
+    expect(entries.find((entry) => entry.id === aria.id)?.role).toBe('antagonist');
+    expect(entries.find((entry) => entry.id === voss.id)?.role).toBe('protagonist');
+  });
 });
 
 describe('storyBible — createBibleStore (multi-primary-field kind / settings)', () => {
