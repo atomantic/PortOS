@@ -94,6 +94,7 @@ export default function Review() {
   const [editingId, setEditingId] = useState(null);
   const [filter, setFilter] = useState('pending');
   const [briefingFullscreen, setBriefingFullscreen] = useState(false);
+  const [counts, setCounts] = useState(null);
 
   // Cross-domain live queue (M42 P5). These rows are derived live from each
   // producer, not stored, so "dismiss" is a per-session client-side hide rather
@@ -112,6 +113,10 @@ export default function Review() {
     setLoading(false);
   }, [filter]);
 
+  const fetchCounts = useCallback(() => {
+    api.getReviewCounts({ silent: true }).then(setCounts).catch(() => null);
+  }, []);
+
   const fetchBriefing = useCallback(async () => {
     const data = await api.getReviewBriefing().catch(() => null);
     setBriefing(data);
@@ -125,12 +130,14 @@ export default function Review() {
 
   useEffect(() => {
     fetchItems();
+    fetchCounts();
     fetchBriefing();
     fetchQueue();
-  }, [fetchItems, fetchBriefing, fetchQueue]);
+  }, [fetchItems, fetchCounts, fetchBriefing, fetchQueue]);
 
   useEffect(() => {
     const handleCreated = (item) => {
+      fetchCounts();
       if (item.metadata?.privateSecurity) { fetchItems(); return; }
       setItems(prev => {
         if (prev.some(i => i.id === item.id)) return prev;
@@ -138,15 +145,18 @@ export default function Review() {
       });
     };
     const handleUpdated = (item) => {
+      fetchCounts();
       if (item.metadata?.privateSecurity) { fetchItems(); return; }
       setItems(prev => prev.map(i => i.id === item.id ? item : i));
     };
     const handleDeleted = (item) => {
+      fetchCounts();
       setItems(prev => prev.filter(i => i.id !== item.id));
     };
     // Bulk status change ("Mark all read" / "Complete all") — one state
     // update for every affected id instead of N per-item events.
     const handleBulkUpdated = ({ ids, status, updatedAt }) => {
+      fetchCounts();
       const idSet = new Set(ids);
       setItems(prev => prev.map(i => idSet.has(i.id) ? { ...i, status, updatedAt } : i));
     };
@@ -162,7 +172,7 @@ export default function Review() {
       socket.off('review:item:deleted', handleDeleted);
       socket.off('review:items:bulk-updated', handleBulkUpdated);
     };
-  }, [fetchItems]);
+  }, [fetchCounts, fetchItems]);
 
   // Live-invalidate the cross-domain queue. A burst of producer events (e.g.
   // a draft sent fires both messages:draft:sent and messages:changed) coalesces
@@ -294,13 +304,12 @@ export default function Review() {
   }
 
   // Cheap derivations off the memoized `pendingItems`/`actionableItems` — plain
-  // consts, not memos: each is O(n) filter or O(8) slice with no consumer that
+  // consts, not memos: the action list is an O(8) slice with no consumer that
   // needs referential stability, so a hook here would be pure ceremony.
-  const pendingAlerts = pendingItems.filter(i => i.type === 'alert');
-  const pendingCos = pendingItems.filter(i => i.type === 'cos');
-  const pendingTodos = pendingItems.filter(i => i.type === 'todo');
   const topActionItems = actionableItems.slice(0, 8);
 
+  // This count controls actions for the currently loaded filter; the global
+  // triage summary below comes from the unfiltered counts endpoint.
   const pendingCount = pendingItems.length;
   const remainingActionCount = Math.max(0, actionableItems.length - topActionItems.length);
 
@@ -348,10 +357,10 @@ export default function Review() {
 
         {/* Triage summary */}
         <section className="flex flex-wrap gap-2">
-          <SummaryPill icon={BellRing} label="Pending" value={pendingCount} tone="text-white" />
-          <SummaryPill icon={AlertTriangle} label="Alerts" value={pendingAlerts.length} tone="text-port-warning" urgent={pendingAlerts.length > 0} />
-          <SummaryPill icon={Crown} label="CoS" value={pendingCos.length} tone="text-port-accent" />
-          <SummaryPill icon={ClipboardList} label="Todos" value={pendingTodos.length} tone="text-port-success" />
+          <SummaryPill icon={BellRing} label="Pending" value={counts?.total ?? 0} tone="text-white" />
+          <SummaryPill icon={AlertTriangle} label="Alerts" value={counts?.alert ?? 0} tone="text-port-warning" urgent={(counts?.alert ?? 0) > 0} />
+          <SummaryPill icon={Crown} label="CoS" value={counts?.cos ?? 0} tone="text-port-accent" />
+          <SummaryPill icon={ClipboardList} label="Todos" value={counts?.todo ?? 0} tone="text-port-success" />
         </section>
 
         {/* Cross-domain "Needs Attention" queue (M42 P5) — live-pulled from
