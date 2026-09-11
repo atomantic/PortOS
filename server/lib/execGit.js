@@ -14,7 +14,7 @@ import { spawn } from './childProcess.js';
  * @param {number} [options.maxBuffer] - Max output buffer size in bytes (default 10 MB)
  * @param {number} [options.timeout] - Timeout in ms (default 30s)
  * @param {boolean} [options.ignoreExitCode] - Resolve instead of reject on non-zero exit
- * @returns {Promise<{stdout: string, stderr: string, exitCode: number}>}
+ * @returns {Promise<{stdout: string, stderr: string, exitCode: number|null, signal?: string, terminated?: boolean}>}
  */
 export function execGit(args, cwd, options = {}) {
   return new Promise((resolve, reject) => {
@@ -69,10 +69,18 @@ export function execGit(args, cwd, options = {}) {
       guardOverflow();
     });
 
-    child.on('close', (code) => {
+    child.on('close', (code, signal) => {
       clearTimeout(timer);
       if (killed) return;
-      if (code !== 0 && !options.ignoreExitCode) {
+      if (code === null && signal) {
+        if (options.ignoreExitCode) {
+          resolve({ stdout, stderr, exitCode: null, signal, terminated: true });
+        } else {
+          reject(Object.assign(new Error(`git command cancelled by ${signal}`), {
+            name: 'AbortError', signal, terminated: true
+          }));
+        }
+      } else if (code !== 0 && !options.ignoreExitCode) {
         reject(new Error(stderr || `git exited with code ${code}`));
       } else {
         resolve({ stdout, stderr, exitCode: code });

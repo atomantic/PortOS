@@ -408,7 +408,12 @@ describe('deferred imports stay deferred (#6156)', () => {
 // ~30 modules). Measured against current main: 103,462 -> 101,702 (-1,760);
 // suites whose closure reaches services/instances.js: 181 -> 33. Lower the
 // ceiling to the new measured total plus the standard ~1.5k allowance.
-const MAX_STATIC_INSTANTIATIONS = 103202;
+// #6992 adds the existing hostShutdown latch to GitHub command completion and
+// branch reconciliation. Its dependencies were already in these callers'
+// closures; the measured baseline 103,190 -> 103,228 is the shutdown module
+// itself in 38 additional suite closures, not a new heavy subtree. Preserve
+// the existing headroom by accounting for exactly that additive lifecycle edge.
+const MAX_STATIC_INSTANTIATIONS = 103240;
 
 
 const SKIP_DIRS = new Set(['node_modules', 'coverage', 'dist', 'data']);
