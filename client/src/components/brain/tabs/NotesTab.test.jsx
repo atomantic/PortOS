@@ -238,3 +238,120 @@ describe('NotesTab iCloud force save', () => {
     expect(screen.queryByRole('button', { name: 'Save anyway' })).toBeNull();
   });
 });
+
+describe('NotesTab request lifetimes', () => {
+  const note = (name, content = name) => ({
+    path: `${name}.md`, name, folder: '', size: 12, tags: [],
+    modifiedAt: '2026-09-11T00:00:00Z', content, body: content, backlinks: []
+  });
+  const deferred = () => {
+    let resolve;
+    let reject;
+    const promise = new Promise((yes, no) => { resolve = yes; reject = no; });
+    return { promise, resolve, reject };
+  };
+  const switchVault = value => fireEvent.change(screen.getByRole('combobox', { name: 'Vault' }), { target: { value } });
+
+  beforeEach(() => {
+    vi.resetAllMocks();
+    api.getNotesVaults.mockResolvedValue([
+      { id: 'a', name: 'Vault A' }, { id: 'b', name: 'Vault B' }
+    ]);
+    api.scanNotesVault.mockResolvedValue({ notes: [note('first'), note('second')], total: 2 });
+    api.getNotesVaultFolders.mockResolvedValue({ folders: [] });
+    api.getNotesVaultTags.mockResolvedValue({ tags: [] });
+    api.getNote.mockImplementation((_vault, path) => Promise.resolve(note(path.replace('.md', ''))));
+  });
+
+  it('keeps the newest selected note and saves its buffer after an older fetch resolves', async () => {
+    const first = deferred();
+    api.getNote.mockImplementation((_vault, path) => path === 'first.md' ? first.promise : Promise.resolve(note('second')));
+    await renderTab();
+    fireEvent.click(screen.getByText('first'));
+    await act(async () => { fireEvent.click(screen.getByText('second')); });
+    await act(async () => { first.resolve(note('first', 'stale body')); });
+    expect(screen.getByRole('heading', { name: 'second' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
+    expect(screen.getByRole('textbox', { name: 'Note content' })).toHaveValue('second');
+    api.updateNote.mockResolvedValue(note('second'));
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Save' })); });
+    expect(api.updateNote).toHaveBeenCalledWith('a', 'second.md', 'second', { force: false });
+  });
+
+  it('does not let an old failed selection stop the newest note loading', async () => {
+    const first = deferred();
+    const second = deferred();
+    api.getNote.mockImplementation((_vault, path) => path === 'first.md' ? first.promise : second.promise);
+    await renderTab();
+    fireEvent.click(screen.getByText('first'));
+    fireEvent.click(screen.getByText('second'));
+    await act(async () => { first.reject(new Error('old failure')); });
+    expect(screen.queryByRole('button', { name: 'Edit' })).toBeNull();
+    await act(async () => { second.resolve(note('second')); });
+    expect(screen.getByRole('heading', { name: 'second' })).toBeInTheDocument();
+  });
+
+  it('clears the old vault immediately and ignores old scans, note reads, and search results after switching back', async () => {
+    const oldScan = deferred();
+    const newScan = deferred();
+    const oldNote = deferred();
+    const oldSearch = deferred();
+    await renderTab();
+    api.scanNotesVault.mockReturnValueOnce(oldScan.promise).mockReturnValueOnce(newScan.promise);
+    api.getNote.mockReturnValueOnce(oldNote.promise);
+    api.searchNotes.mockReturnValueOnce(oldSearch.promise);
+    fireEvent.click(screen.getByText('first'));
+    fireEvent.change(screen.getByRole('textbox', { name: 'Search notes' }), { target: { value: 'old' } });
+    fireEvent.keyDown(screen.getByRole('textbox', { name: 'Search notes' }), { key: 'Enter' });
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
+    switchVault('b');
+    expect(screen.queryByText('first')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Edit' })).toBeNull();
+    await act(async () => { switchVault('a'); });
+    await act(async () => {
+      oldScan.resolve({ notes: [note('stale scan')], total: 1 });
+      newScan.resolve({ notes: [note('wrong vault')], total: 1 });
+      oldNote.resolve(note('stale editor'));
+      oldSearch.resolve({ results: [note('stale search')], total: 1 });
+    });
+    expect(screen.getByText('first')).toBeInTheDocument();
+    expect(screen.queryByText(/stale|wrong vault/)).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Edit' })).toBeNull();
+  });
+
+  it('keeps the newest refresh when same-vault scans finish out of order', async () => {
+    const older = deferred();
+    const newer = deferred();
+    await renderTab();
+    api.scanNotesVault.mockReturnValueOnce(older.promise).mockReturnValueOnce(newer.promise);
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
+    await act(async () => { newer.resolve({ notes: [note('current')], total: 1 }); });
+    await act(async () => { older.resolve({ notes: [note('stale')], total: 1 }); });
+    expect(screen.getByText('current')).toBeInTheDocument();
+    expect(screen.queryByText('stale')).toBeNull();
+  });
+
+  it('does not restore a saved note after the user selects another note', async () => {
+    const saved = deferred();
+    api.updateNote.mockReturnValueOnce(saved.promise);
+    await renderTab();
+    await act(async () => { fireEvent.click(screen.getByText('first')); });
+    fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await act(async () => { fireEvent.click(screen.getByText('second')); });
+    await act(async () => { saved.resolve(note('first')); });
+    expect(screen.getByRole('heading', { name: 'second' })).toBeInTheDocument();
+    expect(mockToast.success).not.toHaveBeenCalledWith('Note saved');
+  });
+
+  it('does not start follow-up work when the initial vault request finishes after unmount', async () => {
+    const vaults = deferred();
+    api.getNotesVaults.mockReturnValueOnce(vaults.promise);
+    const view = render(<NotesTab />);
+    view.unmount();
+    await act(async () => { vaults.resolve([]); });
+    expect(api.detectNotesVaults).not.toHaveBeenCalled();
+    expect(api.scanNotesVault).not.toHaveBeenCalled();
+  });
+});

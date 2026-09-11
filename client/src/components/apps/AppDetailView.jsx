@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { Link, useParams, useNavigate, useSearchParams } from 'react-router';
 import { ArrowLeft, Play, Square, RotateCcw, ExternalLink, Gamepad2, Hammer, RefreshCw, Pencil, AlertTriangle, Sparkles } from 'lucide-react';
 import DeployPanel from './DeployPanel';
@@ -30,6 +30,12 @@ import DatadogTab from './tabs/DatadogTab';
 import UpdateTab from './tabs/UpdateTab';
 
 export default function AppDetailView() {
+  const { appId } = useParams();
+  // Route identity owns all detail state, including child tabs and async actions.
+  return <AppDetail key={appId} />;
+}
+
+function AppDetail() {
   const { appId, tab } = useParams();
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
@@ -52,10 +58,13 @@ export default function AppDetailView() {
   const [viteFixing, setViteFixing] = useState(null); // 'allow-all' | 'ai' while a fix is in flight
   const { features: instanceFeatures, error: instanceFeaturesError } = useInstanceFeatures();
 
+  const fetchSeqRef = useRef(0);
   const fetchApp = useCallback(async () => {
-    const data = await api.getApp(appId, { includeQuality: true }).catch(() => null);
+    const seq = ++fetchSeqRef.current;
+    const data = await api.getApp(appId, { includeQuality: true, silent: true }).catch(() => null);
+    if (seq !== fetchSeqRef.current) return;
+    setNotFound(!data);
     if (!data) {
-      setNotFound(true);
       setLoading(false);
       return;
     }
@@ -65,21 +74,13 @@ export default function AppDetailView() {
 
   useEffect(() => {
     fetchApp();
+    return () => { ++fetchSeqRef.current; };
   }, [fetchApp]);
-
-  // Close the edit drawer when navigating to a different app so its stale
-  // form state (initialized from the previous app) can't be saved against the
-  // newly loaded app id. Keyed on appId only — a same-app socket refresh must
-  // not interrupt an in-progress edit.
-  useEffect(() => {
-    setEditing(false);
-  }, [appId]);
 
   // Deep-link into the Edit App drawer (e.g. the Layered Intelligence overview
   // links here with `?edit=1&appTab=intelligence` to open the Intelligence tab).
   // The `edit` trigger is consumed immediately so closing the drawer doesn't
   // re-open it; `appTab` is preserved for the drawer's own useDrawerTab to read.
-  // Declared AFTER the appId-close effect so it wins on the same-commit mount.
   useEffect(() => {
     if (searchParams.get('edit') == null) return;
     setEditing(true);
@@ -91,6 +92,8 @@ export default function AppDetailView() {
   // Real-time updates
   useEffect(() => {
     const handleAppsChanged = (change) => {
+      // Unscoped events invalidate the fleet; scoped events affect only one app.
+      if (change?.appId != null && change.appId !== appId) return;
       // The delete event reaches this mounted detail view before the DELETE
       // response can navigate it away. Avoid refetching the known-deleted app,
       // which would turn the expected 404 into an error toast beside success.
