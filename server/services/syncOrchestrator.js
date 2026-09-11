@@ -1058,7 +1058,6 @@ async function runBrainTombstoneSweep() {
     .then(({ sweepBrainTombstones }) => sweepBrainTombstones())
     .catch((err) => {
       console.error(`❌ Brain tombstone sweep failed: ${err.message}`);
-      lastBrainSweepAt = 0;
       return null;
     });
   if (result && result.pruned > 0) {
