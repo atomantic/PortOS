@@ -511,6 +511,13 @@ describe.each(['wan22', 'wan22_cuda'])('Wan frame admission — %s', (runtime) =
   });
 });
 
+it('leaves omitted frame counts unset for other runtimes', async () => {
+  listVideoModels.mockReturnValue([{
+    id: 'ltx_test', name: 'Test LTX', runtime: 'ltx2', defaultFrames: 81,
+  }]);
+  await expect(prepare({ modelId: 'ltx_test' })).resolves.toMatchObject({ effectiveNumFrames: undefined });
+});
+
 describe('validateVideoRetryParams', () => {
   it('keeps an explicit null model sentinel unknown instead of selecting the default', async () => {
     await expect(validateVideoRetryParams({ modelId: null })).rejects.toMatchObject({

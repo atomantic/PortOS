@@ -638,8 +638,12 @@ async function resolvePreparedParams({
       throw controlError;
     }
   }
-  // Persist the same resolved count the worker will render and validate.
-  let effectiveNumFrames = body.numFrames ?? effectiveModel?.defaultFrames ?? DEFAULT_NUM_FRAMES;
+  // Pin Wan's validated count for the worker while preserving other runtimes'
+  // existing behavior of leaving omitted controls unset in persisted params.
+  const isWan = effectiveModel?.runtime === 'wan22' || effectiveModel?.runtime === 'wan22_cuda';
+  let effectiveNumFrames = isWan
+    ? body.numFrames ?? effectiveModel.defaultFrames ?? DEFAULT_NUM_FRAMES
+    : body.numFrames;
   const frameCountError = wan22FrameCountError(effectiveModel, effectiveNumFrames);
   if (frameCountError) {
     await cleanupStaged();
