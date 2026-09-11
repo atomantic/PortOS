@@ -23,6 +23,7 @@ export default function EmptyState({
   actionTo,
   actionLabel,
   onAction,
+  actionDisabled = false,
 }) {
   const actionClass =
     'mt-4 px-4 py-2 rounded-lg text-sm font-medium bg-port-accent/10 text-port-accent hover:bg-port-accent/20 transition-colors';
@@ -33,7 +34,7 @@ export default function EmptyState({
       {title && <h3 className="text-white font-semibold mb-1">{title}</h3>}
       {message && <p className="text-gray-400 text-sm max-w-xs">{message}</p>}
       {actionLabel && (onAction ? (
-        <button type="button" onClick={onAction} className={actionClass}>
+        <button type="button" onClick={onAction} disabled={actionDisabled} className={actionClass}>
           {actionLabel}
         </button>
       ) : actionTo ? (

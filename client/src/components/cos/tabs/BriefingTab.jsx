@@ -19,6 +19,7 @@ import BrailleSpinner from '../../BrailleSpinner';
 import { formatWeekdayDate } from '../../../utils/formatters';
 import EmptyState from '../../EmptyState';
 import { useAsyncAction } from '../../../hooks/useAsyncAction';
+import { useAutoRefetch } from '../../../hooks/useAutoRefetch';
 
 const SECTION_ICONS = {
   'Task Queue': CheckCircle,
@@ -161,18 +162,25 @@ export default function BriefingTab() {
   const [selectedDate, setSelectedDate] = useState(null);
   const [loading, setLoading] = useState(true);
   const [expandedSections, setExpandedSections] = useState({});
+  const [generationPending, setGenerationPending] = useState(false);
 
   const [generateBriefing, generatingBriefing] = useAsyncAction(async () => {
-    await api.triggerCosJob('job-daily-briefing', { silent: true });
-    await loadData();
+    if (generationPending || generatingBriefing) return;
+    const result = await api.triggerCosJob('job-daily-briefing', { silent: true });
+    if (!result || result.success === false) {
+      throw new Error(result?.reason || 'The briefing could not be generated');
+    }
+    setGenerationPending(true);
+    const latest = await loadData({ showLoading: false });
+    if (latest) setGenerationPending(false);
   });
 
   useEffect(() => {
     loadData();
   }, []);
 
-  const loadData = async () => {
-    setLoading(true);
+  const loadData = async ({ showLoading = true } = {}) => {
+    if (showLoading) setLoading(true);
     const [listResult, latest] = await Promise.all([
       api.getCosBriefings().catch(() => ({ briefings: [] })),
       api.getCosLatestBriefing().catch(() => null)
@@ -187,8 +195,19 @@ export default function BriefingTab() {
       parsed.sections.forEach((_s, i) => { expanded[i] = true; });
       setExpandedSections(expanded);
     }
-    setLoading(false);
+    if (showLoading) setLoading(false);
+    return latest;
   };
+
+  useAutoRefetch(
+    async () => {
+      const latest = await loadData({ showLoading: false });
+      if (latest) setGenerationPending(false);
+      return latest;
+    },
+    2000,
+    { enabled: generationPending, immediate: false, pollOnly: true },
+  );
 
   const loadBriefing = async (date) => {
     setLoading(true);
@@ -264,7 +283,8 @@ export default function BriefingTab() {
             icon={Newspaper}
             title="No briefing yet"
             message="Generate today’s briefing now, or open the Daily Briefing job to change its schedule."
-            actionLabel={generatingBriefing ? 'Generating today’s briefing…' : 'Generate today’s briefing'}
+            actionLabel={generationPending || generatingBriefing ? 'Generating today’s briefing…' : 'Generate today’s briefing'}
+            actionDisabled={generationPending || generatingBriefing}
             onAction={generateBriefing}
           />
           <Link to="/cos/jobs" className="-mt-10 mb-8 text-sm text-port-accent hover:underline">
