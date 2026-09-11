@@ -146,7 +146,7 @@ export async function handleCreativeDirectorCompletion(task, agentId, success) {
     const reason = `${meta.kind} agent task failed (taskId=${task.id || '?'}, agent=${agentId || '?'})`;
     await updateProject(project.id, { status: 'failed', failureReason: reason })
       .catch((e) => console.log(`⚠️ CD updateProject(failed) for ${project.id} failed: ${e.message}`));
-    console.log(`❌ CD project ${project.id} marked failed (task ${meta.kind} failed)`);
+    console.error(`❌ CD project ${project.id} marked failed (task ${meta.kind} failed)`);
     return;
   }
 
@@ -345,7 +345,7 @@ export async function advanceAfterSceneSettled(projectId, opts = {}) {
     s.status === 'evaluating' && !isSafeJobId(s.renderedJobId) && noLiveEvaluateRun(s),
   );
   for (const w of wedged) {
-    console.log(`❌ CD scene ${w.sceneId} on ${project.id} is 'evaluating' with an unsafe renderedJobId (${JSON.stringify(w.renderedJobId)}) — marking failed to prevent project wedge.`);
+    console.error(`❌ CD scene ${w.sceneId} on ${project.id} is 'evaluating' with an unsafe renderedJobId (${JSON.stringify(w.renderedJobId)}) — marking failed to prevent project wedge.`);
     await updateScene(project.id, w.sceneId, {
       status: 'failed',
       evaluation: {
@@ -391,7 +391,7 @@ export async function advanceAfterSceneSettled(projectId, opts = {}) {
       // crash on a missing input file.
       const videoStillExists = existsSync(join(PATHS.videos, `${orphanedEvaluating.renderedJobId}.mp4`));
       if (!videoStillExists) {
-        console.log(`❌ CD resume: rendered video missing for scene ${orphanedEvaluating.sceneId} on ${project.id} — video deleted while paused, marking scene failed`);
+        console.error(`❌ CD resume: rendered video missing for scene ${orphanedEvaluating.sceneId} on ${project.id} — video deleted while paused, marking scene failed`);
         let sceneFailed = false;
         await updateScene(project.id, orphanedEvaluating.sceneId, {
           status: 'failed',
@@ -599,7 +599,7 @@ export async function advanceAfterSceneSettled(projectId, opts = {}) {
   if (!accepted.length) {
     await updateProject(project.id, { status: 'failed' })
       .catch((e) => console.log(`⚠️ CD updateProject(failed) for ${projectId} failed: ${e.message}`));
-    console.log(`❌ CD project ${projectId}: every scene failed — marking project failed`);
+    console.error(`❌ CD project ${projectId}: every scene failed — marking project failed`);
     return;
   }
   if (project.finalVideoId) {

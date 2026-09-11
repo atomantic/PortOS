@@ -283,7 +283,7 @@ export async function generateImage({
   // child runs out-of-band so the HTTP response can ship while the client
   // attaches to the per-job SSE stream (mirrors local.js).
   runCodex(job, jobId, bin, args, outputPath, filename, meta, { cleanC2PA, denoise }).catch((err) => {
-    console.log(`❌ codex run failed [${jobId.slice(0, 8)}]: ${err?.message}`);
+    console.error(`❌ codex run failed [${jobId.slice(0, 8)}]: ${err?.message}`);
   });
 
   return {

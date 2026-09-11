@@ -129,7 +129,7 @@ export const createJobFailureFinalizer = ({
     if (slotOwner == null || activeSlots.get(jobId) === slotOwner) activeSlots.delete(jobId);
     job.status = 'error';
     activeJobs.delete(jobId);
-    console.log(`❌ ${label} failed [${jobId.slice(0, 8)}]: ${reason.split('\n')[0]}`);
+    console.error(`❌ ${label} failed [${jobId.slice(0, 8)}]: ${reason.split('\n')[0]}`);
     broadcastSse(job, { type: 'error', error: reason });
     events.emit('failed', failedPayload(jobId, reason));
     closeJobAfterDelay(jobs, jobId);

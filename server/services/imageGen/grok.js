@@ -294,7 +294,7 @@ export async function generateImage({
     useStdin, fullPrompt, cleanupPromptFile, scratchDir, stagingPath, outputPath, filename, meta, cleanC2PA, denoise,
     toolName: grokImageTool(inputImages.paths.length > 0),
   }).catch((err) => {
-    console.log(`❌ grok run failed [${jobId.slice(0, 8)}]: ${err?.message}`);
+    console.error(`❌ grok run failed [${jobId.slice(0, 8)}]: ${err?.message}`);
   });
 
   return {

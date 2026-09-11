@@ -861,7 +861,7 @@ export async function generateVideo({ pythonPath, prompt, negativePrompt = '', m
   } catch (err) {
     job.status = 'error';
     const reason = err.message || 'Failed to build video gen args';
-    console.log(`❌ Video generation buildArgs error [${jobId.slice(0, 8)}]: ${reason}`);
+    console.error(`❌ Video generation buildArgs error [${jobId.slice(0, 8)}]: ${reason}`);
     broadcastSse(job, { type: 'error', error: reason });
     videoGenEvents.emit('failed', { generationId: jobId, error: reason, failure: normalizeVideoFailure(err, { prompts: [prompt, negativePrompt] }) });
     void cleanupTempFiles({ includeUploads: true, includeUntrackedAudio: true });
