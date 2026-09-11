@@ -396,3 +396,44 @@ describe('sharing/annotationsSync.listBucketAssetKeys cache', () => {
     expect(listManifestFilenames).toHaveBeenCalledTimes(1);
   });
 });
+
+
+describe('sharing/annotationsSync event flush', () => {
+  it('contains a failed annotation read without publishing tombstones, then retries on the next event', async () => {
+    const { onLocalAnnotationChange, listLocalAuthorAnnotations } = await import('../mediaAnnotations.js');
+    const { listBuckets } = await import('./buckets.js');
+    const { listManifestFilenames, readManifest } = await import('./manifest.js');
+    const { existsSync } = await import('fs');
+    const source = bucket();
+    const recordPath = '/mock/bucket/records/media-annotations/local-instance.json';
+    const prior = { annotations: { 'image:kept.png': { note: 'Keep this' } } };
+    fileStore.clear();
+    fileStore.set(recordPath, prior);
+    writeCalls.length = 0;
+    svc.__resetBucketAssetKeysCache();
+    listBuckets.mockResolvedValue([source]);
+    listManifestFilenames.mockResolvedValue(['asset.json']);
+    readManifest.mockResolvedValue({ assetRefs: [{ kind: 'image', ref: 'kept.png' }] });
+    existsSync.mockReturnValue(true);
+    listLocalAuthorAnnotations.mockRejectedValueOnce(Object.assign(new Error('Unreadable annotation store'), { code: 'UNREADABLE_STORE' }));
+    const errorLog = vi.spyOn(console, 'error').mockImplementation(() => {});
+    vi.useFakeTimers();
+    try {
+      svc.initAnnotationsSync();
+      const changed = onLocalAnnotationChange.mock.calls.at(-1)[0];
+      changed();
+      await vi.advanceTimersByTimeAsync(2000);
+      expect(fileStore.get(recordPath)).toEqual(prior);
+      expect(writeCalls).toHaveLength(0);
+      expect(errorLog).toHaveBeenCalledWith(expect.stringContaining('flushAll failed: Unreadable annotation store'));
+
+      listLocalAuthorAnnotations.mockResolvedValue({ 'image:kept.png': { note: 'Repaired' } });
+      changed();
+      await vi.advanceTimersByTimeAsync(2000);
+      expect(fileStore.get(recordPath).annotations['image:kept.png'].note).toBe('Repaired');
+    } finally {
+      vi.useRealTimers();
+      errorLog.mockRestore();
+    }
+  });
+});

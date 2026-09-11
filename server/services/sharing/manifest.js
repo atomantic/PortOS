@@ -59,7 +59,7 @@ const cursorPath = (bucketId) => join(PATHS.data, 'sharing', 'cursors', `${bucke
  */
 export async function readCursor(bucketId) {
   await ensureDir(join(PATHS.data, 'sharing', 'cursors'));
-  const raw = await readJSONFile(cursorPath(bucketId), { processedById: {}, processed: [] }, { logError: false });
+  const raw = await readJSONFile(cursorPath(bucketId), { processedById: {}, processed: [] }, { logError: false, strict: true });
   return {
     processedById: (raw.processedById && typeof raw.processedById === 'object') ? raw.processedById : {},
     processed: Array.isArray(raw.processed) ? raw.processed : [],
@@ -287,6 +287,8 @@ export async function writeManifest(bucketPath, manifest) {
 }
 
 export async function readManifest(bucketPath, filename) {
+  // Input-only transport document: unreadable manifests are skipped/deferred,
+  // never merged back here. Exports rebuild manifests from authoritative records.
   return readJSONFile(join(bucketPath, 'manifests', filename), null, { logError: false });
 }
 

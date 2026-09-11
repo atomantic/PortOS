@@ -68,7 +68,7 @@ const inboxPath = (bucketId) => join(PATHS.data, 'sharing', 'inbox', `${bucketId
 
 async function readInbox(bucketId) {
   await ensureDir(join(PATHS.data, 'sharing', 'inbox'));
-  return readJSONFile(inboxPath(bucketId), { items: [] }, { logError: false });
+  return readJSONFile(inboxPath(bucketId), { items: [] }, { logError: false, strict: true });
 }
 
 async function writeInbox(bucketId, inbox) {
@@ -318,6 +318,7 @@ async function processAnnotationManifest(bucket, manifest) {
   if (!recordId) return { applied: 0, missing: true, reason: 'no-record-id' };
   if (!isSafeRecordId(recordId)) return { applied: 0, missing: true, reason: 'bad-record-id' };
   const recordPath = bucketRecordPath(bucket.path, 'media-annotations', recordId);
+  // Input-only bucket record: unreadable data is skipped/deferred, never written back here.
   const record = await readJSONFile(recordPath, null, { logError: false });
   if (!record) return { applied: 0, missing: true, reason: 'record-not-synced' };
   // record.instanceId is the source-of-truth for the author; fall back to the
@@ -340,11 +341,12 @@ async function mergeMediaJobRecords(bucketPath, recordIds) {
   if (!existsSync(mediaDir)) return;
   const persistedPath = join(PATHS.data, 'media-jobs.json');
   const [persisted, incoming] = await Promise.all([
-    readJSONFile(persistedPath, { jobs: [] }, { logError: false }),
+    readJSONFile(persistedPath, { jobs: [] }, { logError: false, strict: true }),
     Promise.all((recordIds || []).map(async (id) => {
       if (!isSafeRecordId(id)) return null;
       const recordPath = bucketRecordPath(bucketPath, 'media', id);
       if (!existsSync(recordPath)) return null;
+      // Input-only bucket record: unreadable data is skipped/deferred, never written back here.
       return readJSONFile(recordPath, null, { logError: false });
     })),
   ]);
@@ -377,6 +379,7 @@ async function mergeMediaJobRecords(bucketPath, recordIds) {
 async function missingDeclaredReviews(bucketPath, manifest) {
   const refs = (Array.isArray(manifest.reviewRefs) ? manifest.reviewRefs : []).filter(isSafeRecordId);
   const checks = await Promise.all(refs.map(async (sid) => {
+    // Input-only bucket record: unreadable data is skipped/deferred, never written back here.
     const r = await readJSONFile(bucketRecordPath(bucketPath, 'reviews', sid), null, { logError: false });
     return r == null ? sid : null;
   }));
@@ -391,6 +394,7 @@ async function missingDeclaredReviews(bucketPath, manifest) {
 async function missingDeclaredOutlines(bucketPath, manifest) {
   const refs = (Array.isArray(manifest.outlineRefs) ? manifest.outlineRefs : []).filter(isSafeRecordId);
   const checks = await Promise.all(refs.map(async (sid) => {
+    // Input-only bucket record: unreadable data is skipped/deferred, never written back here.
     const r = await readJSONFile(bucketRecordPath(bucketPath, 'outlines', sid), null, { logError: false });
     return r == null ? sid : null;
   }));
@@ -403,10 +407,12 @@ async function readReferencedRecords(bucketPath, manifest) {
   const resolveOne = async (id) => {
     if (!isSafeRecordId(id)) return { kind: 'missing', id };
     if (id.startsWith('ser-')) {
+      // Input-only bucket record: unreadable data is skipped/deferred, never written back here.
       const r = await readJSONFile(bucketRecordPath(bucketPath, 'series', id), null, { logError: false });
       return r ? { kind: 'series', record: r } : { kind: 'missing', id };
     }
     if (id.startsWith('iss-')) {
+      // Input-only bucket record: unreadable data is skipped/deferred, never written back here.
       const r = await readJSONFile(bucketRecordPath(bucketPath, 'issues', id), null, { logError: false });
       return r ? { kind: 'issues', record: r } : { kind: 'missing', id };
     }
@@ -415,8 +421,10 @@ async function readReferencedRecords(bucketPath, manifest) {
       return { kind: 'skip' };
     }
     // UUID-only — could be a universe or a media job. Try both.
+    // Input-only bucket record: unreadable data is skipped/deferred, never written back here.
     const uni = await readJSONFile(bucketRecordPath(bucketPath, 'universes', id), null, { logError: false });
     if (uni) return { kind: 'universes', record: uni };
+    // Input-only bucket record: unreadable data is skipped/deferred, never written back here.
     const med = await readJSONFile(bucketRecordPath(bucketPath, 'media', id), null, { logError: false });
     if (med) return { kind: 'media', record: med };
     return { kind: 'missing', id };
@@ -707,6 +715,7 @@ async function applyAutoMerge(bucket, manifest, records, { availableAssetKeys = 
   const reviewMergeFailures = [];
   for (const s of records.series) {
     if (skipSeriesMerge.has(s.id) || !declaredReviews.has(s.id)) continue;
+    // Input-only bucket record: unreadable data is skipped/deferred, never written back here.
     const review = await readJSONFile(bucketRecordPath(bucket.path, 'reviews', s.id), null, { logError: false });
     if (review) {
       await mergeReviewFromSync(s.id, review).catch((err) => {
@@ -727,6 +736,7 @@ async function applyAutoMerge(bucket, manifest, records, { availableAssetKeys = 
   const outlineMergeFailures = [];
   for (const s of records.series) {
     if (skipSeriesMerge.has(s.id) || !declaredOutlines.has(s.id)) continue;
+    // Input-only bucket record: unreadable data is skipped/deferred, never written back here.
     const outline = await readJSONFile(bucketRecordPath(bucket.path, 'outlines', s.id), null, { logError: false });
     if (outline) {
       await mergeOutlineFromSync(s.id, outline).catch((err) => {

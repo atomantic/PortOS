@@ -176,12 +176,12 @@ function mergeObjectLWW(local, remote, timestampField = 'updatedAt') {
 // --- Category: Goals ---
 
 async function getGoalsSnapshot() {
-  const data = await readJSONFile(GOALS_FILE, { goals: [] });
+  const data = await readJSONFile(GOALS_FILE, { goals: [] }, { strict: true });
   return { data, checksum: computeChecksum(data) };
 }
 
 async function applyGoalsRemote(remoteData) {
-  const local = await readJSONFile(GOALS_FILE, { goals: [] });
+  const local = await readJSONFile(GOALS_FILE, { goals: [] }, { strict: true });
 
   // Merge goals array by ID with LWW on updatedAt
   const { merged: mergedGoals, changed: goalsChanged } = mergeArraysByKey(
@@ -226,7 +226,7 @@ async function getCharacterSnapshot() {
 async function applyCharacterRemote(remoteData) {
   if (!remoteData) return { applied: false, count: 0 };
 
-  const local = await readJSONFile(CHARACTER_FILE, null);
+  const local = await readJSONFile(CHARACTER_FILE, null, { strict: true });
   if (!local) {
     // No local character — accept remote entirely, but strip every derived field (an older
     // peer still sends `level`): they're derived on read now (#2673/#2674), so a stored value
@@ -294,6 +294,7 @@ async function getMeatspaceSnapshot() {
   // The files are independent — read them in parallel rather than one-at-a-time
   // (this snapshot runs on every ~60s sync poll).
   const contents = await Promise.all(
+    // Snapshot-only projection; the merge path reads its local inputs strictly.
     filenames.map((filename) => readJSONFile(join(MEATSPACE_DIR, filename), null)),
   );
   const result = {};
@@ -310,7 +311,7 @@ async function applyMeatspaceRemote(remoteData) {
     if (!remoteFile) continue;
 
     const filePath = join(MEATSPACE_DIR, filename);
-    const local = await readJSONFile(filePath, null);
+    const local = await readJSONFile(filePath, null, { strict: true });
 
     if (config.type === 'object-lww') {
       const { merged, changed } = mergeObjectLWW(local, remoteFile, 'updatedAt');

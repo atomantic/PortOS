@@ -158,9 +158,9 @@ async function readSelfIdentity() {
 }
 
 async function readStore() {
-  // Non-strict: this file is entirely derived, replicated state. A corrupt read
-  // self-heals on the next sync cycle, which beats throwing on every poll.
-  const raw = await readJSONFile(PEER_USAGE_FILE, null);
+  // Retirements are durable tombstones: peers cannot rebuild a deletion that
+  // has not propagated yet. Never replace an unreadable store with a new digest.
+  const raw = await readJSONFile(PEER_USAGE_FILE, null, { strict: true });
   return {
     instances: isPlainObject(raw?.instances) ? raw.instances : {},
     tombstones: normalizeTombstones(raw?.tombstones, 'instanceId'),

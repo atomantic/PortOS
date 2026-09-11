@@ -67,7 +67,7 @@ function emitSyncProgress(payload) {
 // --- Cursor persistence ---
 
 async function loadCursors() {
-  return await readJSONFile(CURSORS_FILE, {});
+  return await readJSONFile(CURSORS_FILE, {}, { strict: true });
 }
 
 async function saveCursors(cursors) {

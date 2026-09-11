@@ -26,6 +26,7 @@ const withLock = createMutex();
 
 /** The cards this instance last read, newest-known per family. Never throws. */
 export async function readLocalQuotaCards() {
+  // Read-only projection; this fallback is never used by the merge writer below.
   const raw = await readJSONFile(PROVIDER_QUOTAS_FILE, null);
   const quotas = sanitizeQuotaCards(isPlainObject(raw) ? raw.quotas : null);
   return { quotas, capturedAt: latestFetchedAt(quotas) };
@@ -57,7 +58,7 @@ export async function recordLocalQuotaCards(cards) {
   const incoming = sanitizeQuotaCards(cards);
   if (!incoming.length) return null;
   return withLock(async () => {
-    const raw = await readJSONFile(PROVIDER_QUOTAS_FILE, null);
+    const raw = await readJSONFile(PROVIDER_QUOTAS_FILE, null, { strict: true });
     const stored = sanitizeQuotaCards(isPlainObject(raw) ? raw.quotas : null);
     const byFamily = new Map(stored.map((card) => [card.family, card]));
     let changed = false;
