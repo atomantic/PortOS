@@ -543,7 +543,7 @@ export const TASK_TYPE_DESCRIPTIONS = {
   'simplify': 'Dead-code/duplication audit — file issues (default) or implement removals',
   'module-hygiene': 'Module hygiene — complexity, reuse, ownership, and discoverability; file issues (default) or implement one refactor',
   'api-contract': 'API/route-contract audit — file issues (default) or implement fixes',
-  'react-lifecycle': 'React lifecycle/state audit — file issues (default) or implement fixes',
+  'react-lifecycle': 'UI lifecycle/state audit — file issues (default) or implement fixes',
   'observability': 'Logging/observability audit — file issues (default) or implement fixes',
   'copy': 'Copy/text-clarity audit — file issues (default) or implement rewrites',
   'better-complexity': 'Cyclomatic complexity — measure branching per function, reduce the hottest offenders; file issues (default) or implement one refactor',

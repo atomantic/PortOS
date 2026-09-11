@@ -384,7 +384,7 @@ document why it is expected where the next person will see it.
 
 A missing log, a swallowed error, or log noise as a design problem belongs to
 the observability work. Component effect and lifecycle defects belong to the
-React lifecycle work. Fix what actually errors; name overlaps and leave them.
+UI lifecycle and state work. Fix what actually errors; name overlaps and leave them.
 
 For each finding: the message, the trigger, the root cause with \`file:LINE\`, and
 the fix. In implement mode, re-run the same exercise and confirm the message is
@@ -970,32 +970,43 @@ Trace client callers through to server routes and schemas, hunting for:
 For each finding, name the caller AND the route with \`file.js:LINE\`, the shape
 that gets through, and the concrete failure it produces.`,
 
-  'react-lifecycle': `[Improvement: {appName}] React lifecycle and state audit
+  'react-lifecycle': `[Improvement: {appName}] UI lifecycle and state audit
 
-Audit {appName}'s React components, hooks, and state lifecycles for leaks,
-stale closures, and render races.
+Audit {appName}'s UI resource lifetimes and state correctness.
 
 Repository: {repoPath}
 
 {modeInstructions}
 
-Hunt specifically for:
+First identify the application's UI runtime, rendering model, and state-management
+conventions from its dependencies and code. Apply checks only where those
+mechanisms exist, including client navigation and hydrated interactive regions.
+Use the project's own lifecycle and reactivity semantics; do not prescribe a
+framework, API, or state library. If there is no applicable interactive UI,
+report the check as not applicable rather than inventing findings.
 
-- **Missing effect teardowns** — \`window\`/\`document\` listeners, timers,
-  sockets, or observers created in \`useEffect\` with no cleanup on unmount.
-- **Stale closures** — a callback or timer capturing state/props with no ref or
-  dependency keeping it current, so it acts on data that has already moved on.
-- **Unmounted state updates** — an async resolution setting state after unmount,
-  or an earlier request's response overwriting a newer one's.
-- **Derived-state anti-patterns** — a prop mirrored into local state and synced
-  by an effect, which flashes the stale value before correcting itself.
-- **Render-time side effects** — mutating a ref or firing work during render
-  rather than in an effect or a handler.
-- **Broken dependencies** — a missing dependency causing a stale read, or an
-  inline object/array literal retriggering the effect every render.
+Inspect UI components, shared state, subscriptions, and asynchronous work for:
 
-Give the interaction sequence that triggers each defect, not just the code
-shape: which action, in what order, leaving what on screen.`,
+- **Resource lifetime leaks** — listeners, timers, sockets, observers, or
+  subscriptions surviving the view or owner that should release them.
+- **Stale reads** — callbacks, cached computations, or reactive dependencies
+  using outdated input and producing an incorrect visible result.
+- **Async ordering and disposal** — an earlier response overwriting newer user
+  intent, or work completing after its owner is disposed and causing observable
+  damage. Verify the runtime's actual behavior before treating a late update as
+  a defect.
+- **State ownership and synchronization** — duplicated or derived state drifting
+  from its source, lost edits, or shared state leaking between views or sessions.
+- **Repeated or misplaced work** — rendering or reactive updates triggering
+  duplicate side effects, feedback loops, or unnecessary persistent resources.
+- **Navigation and hydration continuity** — applicable view transitions or
+  server-to-client handoffs resetting user state, duplicating subscriptions, or
+  applying state to the wrong view.
+
+For each finding, trace the interaction sequence and state transitions, cite
+the affected code, and show the user-visible failure or resource leak. A code
+pattern alone is not a finding; verify it against the installed runtime's
+semantics and existing safeguards.`,
 
   'observability': `[Improvement: {appName}] Logging and observability audit
 
@@ -1317,8 +1328,8 @@ Repository: {repoPath}
 Performance shapes (N+1 queries, quadratic loops, missing indexes) belong to the
 performance work; retries, timeouts, fallbacks, and health checks to the
 error-handling work; swallowed errors and missing log context to the
-observability work; component effect teardown and stale closures to the React
-lifecycle work. Mentioning an overlap is fine; filing it twice is noise.
+observability work; UI resource lifetimes and state correctness to the UI
+lifecycle and state work. Mentioning an overlap is fine; filing it twice is noise.
 
 ## The bar: a failure scenario, not a code shape
 
