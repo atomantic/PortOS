@@ -68,6 +68,21 @@ describe.skipIf(!hasSubmodule)('slashdo rendering adapter', () => {
     expect(prompt).toContain('Reviewer applies (off)');
   });
 
+  it('delivers documented release topology and publication ownership through the staged bundle', async () => {
+    const root = fileURLToPath(new URL('../../lib/slashdo/', import.meta.url));
+    cpSync(join(root, 'lib'), join(fixtureRoot, 'lib'), { recursive: true });
+    write(join(fixtureRoot, 'commands/do/release.md'), readFileSync(join(root, 'commands/do/release.md'), 'utf8'));
+    const bundle = await loadSlashdoBundle('release', { stripFrontmatter: true });
+    const staged = await writeResolvedSlashdoBody('release', bundle.body, { files: bundle.files });
+    const body = readFileSync(staged, 'utf8');
+    expect(body.indexOf('## Select the Project Release Procedure')).toBeGreaterThanOrEqual(0);
+    expect(body.indexOf('## Select the Project Release Procedure')).toBeLessThan(body.indexOf('## Detect Release Workflow'));
+    expect(body).toContain('temporary `release/vX.Y.Z` branch into `main`');
+    expect(body).toContain('When automation creates the tag or release, wait for it; do not pre-create');
+    expect(body).toContain('Do not fall through into the generic promotion workflow');
+    expect(body).toContain('preserve their verdict and optionality');
+  });
+
   it('keeps inline reviewer recipes limited to explicit reads', async () => {
     write(join(fixtureRoot, 'lib/recipe.md'), 'Recipe\n!read lib/required.md\nSee `lib/unrelated.md`.');
     write(join(fixtureRoot, 'lib/required.md'), 'Required verification');
