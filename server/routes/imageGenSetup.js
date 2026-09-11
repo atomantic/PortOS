@@ -79,6 +79,18 @@ router.get('/flux2-install', asyncHandler(sendFlux2Status));
 
 router.post('/flux2-install', asyncHandler(async (req, res) => {
   const { send, safeEnd } = openSseStream(res);
+  let clientGone = false;
+  let installLog = null;
+  let killInstall = null;
+
+  // Register before the health probe: it can take long enough for a client to
+  // leave, and starting the multi-GB install after that would orphan the work.
+  onClientDisconnect(req, res, () => {
+    clientGone = true;
+    installLog?.cancel();
+    killInstall?.();
+    safeEnd();
+  });
 
   // Skip only when the venv binary AND the import work — a half-broken venv
   // (binary present, packages missing from a killed mid-install) needs to
@@ -88,6 +100,7 @@ router.post('/flux2-install', asyncHandler(async (req, res) => {
     send({ type: 'complete', message: 'Already installed — nothing to do.' });
     return safeEnd();
   }
+  if (clientGone) return safeEnd();
   if (flux2InstallInFlight) {
     send({ type: 'error', message: 'Another FLUX.2 install is already running. Wait for it to finish or restart PortOS.' });
     return safeEnd();
@@ -95,11 +108,12 @@ router.post('/flux2-install', asyncHandler(async (req, res) => {
 
   // Server-console visibility for the multi-GB torch install (start / stage
   // milestones / outcome) — installFlux2Venv streams progress only to `send`.
-  const installLog = createInstallLogger({ installer: 'FLUX.2 venv', target: FLUX2_VENV_DEFAULT });
+  installLog = createInstallLogger({ installer: 'FLUX.2 venv', target: FLUX2_VENV_DEFAULT });
   const emit = (ev) => { installLog.onEvent(ev); send(ev); };
   installLog.start();
 
   const { promise, kill } = installFlux2Venv(emit);
+  killInstall = kill;
   flux2InstallInFlight = promise;
   promise
     // installFlux2Venv resolves { ok:false } on some pip failures without
@@ -114,10 +128,6 @@ router.post('/flux2-install', asyncHandler(async (req, res) => {
       flux2InstallInFlight = null;
       safeEnd();
     });
-
-  // Cancel the install if the client navigates away mid-bootstrap. A torch
-  // install is a multi-GB download and would otherwise keep running invisibly.
-  onClientDisconnect(req, res, () => { installLog.cancel(); kill(); safeEnd(); });
 }));
 
 // Used by the FLUX.2 model picker: surface a banner when the gated repo's

@@ -136,11 +136,9 @@ const sse = vi.hoisted(() => ({
     };
   }),
 }));
-vi.mock('../lib/sseDownload.js', () => ({
+vi.mock('../lib/sseDownload.js', async () => ({
+  ...(await vi.importActual('../lib/sseDownload.js')),
   openSseStream: (res) => sse.open(res),
-  onClientDisconnect: (_req, res, handler) => {
-    res.on('close', () => { if (!res.writableEnded) handler(); });
-  },
 }));
 vi.mock('../services/hfDownloadStream.js', () => ({
   startHfDownloadStream: (args) => sse.run(args),
@@ -425,6 +423,16 @@ describe('music routes', () => {
     const r = await request(app).get('/api/music/setup/runtime-install?runtime=acestep');
     expect(r.status).toBe(200);
     expect(r.body).toMatchObject({ runtime: 'acestep', installed: true });
+    expect(setup.spawn).not.toHaveBeenCalled();
+  });
+
+  it('POST /setup/runtime-install completes without spawning when already installed', async () => {
+    gen.ready = true;
+    gen.healthy = true;
+    const r = await request(app).post('/api/music/setup/runtime-install?runtime=acestep');
+    expect(r.status).toBe(200);
+    expect(r.text).toContain('"type":"complete"');
+    expect(r.text).toContain('Already installed');
     expect(setup.spawn).not.toHaveBeenCalled();
   });
 

@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach, afterAll } from 'vitest';
 import express from 'express';
-import { pinPlatform, request } from '../lib/testHelper.js';
+import { request as httpRequest } from 'node:http';
+import { pinPlatform, request, startLoopbackServer, closeLoopbackServer } from '../lib/testHelper.js';
 import { errorMiddleware } from '../lib/errorHandler.js';
 import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../lib/mockPathsDataRoot.js';
 
@@ -19,6 +20,18 @@ vi.mock('../lib/fileUtils.js', async (importOriginal) =>
 vi.mock('../lib/paths.js', async (importOriginal) =>
   makePathsProxy(await importOriginal(), { dataRoot: () => lazyTempDataRoot('portos-imagegen-') }));
 afterAll(cleanupTempDataRoots);
+
+const disconnectLifecycle = vi.hoisted(() => ({ onDisconnect: vi.fn() }));
+vi.mock('../lib/sseDownload.js', async (importOriginal) => {
+  const actual = await importOriginal();
+  return {
+    ...actual,
+    onClientDisconnect: (req, res, handler) => actual.onClientDisconnect(req, res, () => {
+      disconnectLifecycle.onDisconnect();
+      handler();
+    }),
+  };
+});
 
 import imageGenRoutes from './imageGen.js';
 import * as fileUtils from '../lib/fileUtils.js';
@@ -1233,6 +1246,38 @@ describe('Image Gen Routes', () => {
       expect(response.status).toBe(200);
       expect(response.text).toContain('"type":"complete"');
       expect(response.text).toContain('Already installed');
+    });
+
+    it('does not start an install after the client disconnects during the health probe', async () => {
+      const { installFlux2Venv, isFlux2VenvHealthy } = await import('../lib/pythonSetup.js');
+      let finishProbe;
+      isFlux2VenvHealthy.mockReturnValueOnce(new Promise((resolve) => { finishProbe = resolve; }));
+      const server = await startLoopbackServer(app);
+      const { port } = server.address();
+      const clientRequest = httpRequest({
+        host: '127.0.0.1',
+        port,
+        path: '/api/image-gen/setup/flux2-install',
+        method: 'POST',
+      });
+      clientRequest.on('error', () => {});
+      clientRequest.end();
+
+      let serverClosed = false;
+      try {
+        await vi.waitFor(() => expect(isFlux2VenvHealthy).toHaveBeenCalled());
+        const closed = new Promise((resolve) => clientRequest.once('close', resolve));
+        clientRequest.destroy();
+        await closed;
+        await vi.waitFor(() => expect(disconnectLifecycle.onDisconnect).toHaveBeenCalled());
+        finishProbe(false);
+        await closeLoopbackServer(server);
+        serverClosed = true;
+        expect(installFlux2Venv).not.toHaveBeenCalled();
+      } finally {
+        finishProbe?.(false);
+        if (!serverClosed) await closeLoopbackServer(server);
+      }
     });
   });
 

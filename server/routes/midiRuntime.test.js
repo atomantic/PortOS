@@ -20,16 +20,14 @@ vi.mock('../lib/pythonSetup.js', () => ({
 }));
 
 // Real SSE frames so supertest can read them off the response body.
-vi.mock('../lib/sseDownload.js', () => ({
+vi.mock('../lib/sseDownload.js', async () => ({
+  ...(await vi.importActual('../lib/sseDownload.js')),
   openSseStream: (res) => {
     res.writeHead(200, { 'Content-Type': 'text/event-stream' });
     return {
       send: (event) => res.write(`data: ${JSON.stringify(event)}\n\n`),
       safeEnd: () => { if (!res.writableEnded) res.end(); },
     };
-  },
-  onClientDisconnect: (_req, res, handler) => {
-    res.on('close', () => { if (!res.writableEnded) handler(); });
   },
 }));
 
@@ -66,5 +64,6 @@ describe('midi-runtime routes', () => {
     expect(r.status).toBe(200);
     expect(r.text).toContain('"type":"complete"');
     expect(r.text).toContain('Already installed');
+    expect(r.text).toContain('venv-muscriptor');
   });
 });
