@@ -26,7 +26,6 @@ import {
   findCollectionBySeriesId,
 } from '../mediaCollections.js';
 import { getTrack } from '../tracks/index.js';
-import { buildWorkBibleManifest } from '../writersRoom/bibleSync.js';
 import { buildWorkBodyManifest } from '../writersRoom/sync.js';
 import { ackDeletesUpTo } from './peerTombstoneCursors.js';
 import {
@@ -711,6 +710,7 @@ export async function buildPushPayload(sub, sourceInstanceId) {
     return { ...envelope, ...(linkedTrack ? { linkedTrack } : {}) };
   }
   if (sub.recordKind === 'writersRoomWork') {
+    const { buildWorkBibleManifest } = await import('../writersRoom/bibleSync.js');
     // The work manifest carries draft-version METADATA; the file-primary `.md`
     // prose bodies ride a separate `draftBodyManifest` (SHA256 per draft) the
     // receiver diffs + pulls. A tombstone ships neither asset manifest.

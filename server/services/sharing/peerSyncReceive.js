@@ -9,7 +9,6 @@
  *
  * Split out of the former 4,004-line peerSync.js (#1830).
  */
-import { diffWorkBibleManifest } from '../writersRoom/bibleSync.js';
 import { isPlainObject } from '../../lib/objects.js';
 import {
   PORTOS_SCHEMA_VERSIONS,
@@ -453,6 +452,7 @@ export async function applyIncomingPush(payload) {
   // Same guards as the asset path: skip for local-ephemeral and tombstone pushes.
   let missingDraftBodies = [];
   if (kind === 'writersRoomWork' && !localEphemeral && record.deleted !== true) {
+    const { diffWorkBibleManifest } = await import('../writersRoom/bibleSync.js');
     // Scope the manifest to THIS work: a body entry's path is works/<workId>/...,
     // so an entry whose workId != the pushed record's id would write bytes into a
     // DIFFERENT local work's draft (clobbering unrelated prose when the merge
