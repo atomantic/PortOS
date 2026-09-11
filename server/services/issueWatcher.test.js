@@ -88,6 +88,7 @@ const DIFF = [
 
 function pullRequest(overrides = {}) {
   return {
+    id: 'PR_node_7',
     number: 7,
     title: 'Contributor update',
     body: 'A small change',
@@ -111,9 +112,10 @@ function pullRequest(overrides = {}) {
 }
 
 function installDefaultGhMock({
-  pr = pullRequest(), issueRows = [[]], commentRows = [[]], reviews = [[]], issueDetails = {}, heldRuns = [],
+  pr = pullRequest(), issueRows = [[]], commentRows = [[]], reviews = [[]], issueDetails = {}, heldRuns = [], autoMergeError = false,
 } = {}) {
   execGhMock.mockImplementation(async (args) => {
+    if (args.includes('graphql')) return JSON.stringify(autoMergeError ? { errors: [{ message: 'Not permitted' }] } : { data: { enablePullRequestAutoMerge: { pullRequest: { headRefOid: pr.headRefOid, autoMergeRequest: { enabledAt: '2026-09-11T18:00:00Z' } } } } });
     if (args[0] === 'api' && args.includes('user')) return JSON.stringify({ login: 'owner' });
     if (args[0] === 'api' && args.some((arg) => String(arg).includes('/actions/runs?'))) return JSON.stringify({ workflow_runs: heldRuns });
     if (args[0] === 'api' && args.some((arg) => String(arg).includes('/actions/runs/'))) return '';
@@ -885,6 +887,24 @@ describe('processTaskOutput', () => {
     expect(result).toEqual({ action: 'no-op', reason: 'unsafe-model-output' });
     expect(execGhMock.mock.calls.some(([args]) => args.includes('/reviews'))).toBe(false);
     expect(mergePrMock).not.toHaveBeenCalled();
+  });
+
+  it.each([false, true])('requests head-pinned auto-merge for pending CI and reports rejection (%s)', async autoMergeError => {
+    installDefaultGhMock({ pr: pullRequest({ statusCheckRollup: [{ status: 'IN_PROGRESS' }] }), autoMergeError });
+    const result = await processTaskOutput({ appId: APP.id, success: true, task: { metadata }, payload: {
+      issueComments: [], pullRequests: [{ number: 7, headSha: 'a'.repeat(40), verdict: 'approve', summary: 'Reviewed.', findings: [], rebaseRequired: false, ciPolicy: 'required' }],
+    } });
+    expect(result).toMatchObject({ reviewed: 1, merged: 0 });
+    expect(mergePrMock).not.toHaveBeenCalled();
+    const mutation = execGhMock.mock.calls.find(([args]) => args.includes('graphql'));
+    expect(mutation).toBeDefined();
+    expect(JSON.parse(mutation[2].input)).toMatchObject({ variables: { input: {
+      pullRequestId: 'PR_node_7', expectedHeadOid: 'a'.repeat(40), mergeMethod: 'MERGE',
+    } } });
+    expect(apps.get(APP.id).issueWatcherState.approvedPullRequests).toEqual([
+      expect.objectContaining({ number: 7, autoMergeEnabled: !autoMergeError }),
+    ]);
+    if (autoMergeError) expect(addNotificationMock).toHaveBeenCalledWith(expect.objectContaining({ description: expect.stringContaining('did not enable auto-merge') }));
   });
 
   it('waits one scheduled observation before treating absent CI as skippable', async () => {

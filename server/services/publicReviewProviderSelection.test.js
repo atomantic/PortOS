@@ -69,16 +69,29 @@ describe('resolvePublicReviewProvider', () => {
       .resolves.toMatchObject({ ok: true, pinHonored: true, provider: { id: 'grok-cli' } });
   });
 
-  it('drops an INELIGIBLE pin instead of running the stage on it', async () => {
+  it('blocks an ineligible pin instead of spending on another provider', async () => {
     seed([OPENCODE, GROK], { id: 'opencode' });
     const resolved = await resolvePublicReviewProvider({ posture: 'no-tool', pinnedProviderId: 'opencode' });
-    expect(resolved).toMatchObject({ ok: true, pinHonored: false, provider: { id: 'grok-cli' } });
+    expect(resolved).toMatchObject({ ok: false, code: 'public-review-provider-pin-unavailable' });
   });
 
-  it('rejects a worktree-only actions pin and selects an enforced provider', async () => {
+  it('blocks a worktree-only actions pin instead of choosing a subscription provider', async () => {
     seed([OPENCODE, CODEX], { id: 'codex-cli' });
     const resolved = await resolvePublicReviewProvider({ posture: 'sandboxed-actions', pinnedProviderId: 'opencode' });
-    expect(resolved).toMatchObject({ ok: true, pinHonored: false, provider: { id: 'codex-cli' } });
+    expect(resolved).toMatchObject({ ok: false, code: 'public-review-provider-pin-unavailable' });
+  });
+
+  it.each([{ ...LOCAL_CLAUDE, enabled: false }, { ...LOCAL_CLAUDE, id: 'renamed' }])('blocks a disabled or missing local pin', async local => {
+    seed([local, GROK], { id: 'grok-cli' });
+    expect(await resolvePublicReviewProvider({ posture: 'no-tool', pinnedProviderId: LOCAL_CLAUDE.id }))
+      .toMatchObject({ ok: false, code: 'public-review-provider-pin-unavailable' });
+  });
+
+  it('blocks an unavailable local pin even when a subscription provider is healthy', async () => {
+    seed([LOCAL_CLAUDE, GROK], { id: 'grok-cli' });
+    isProviderAvailable.mockImplementation(id => id === 'grok-cli');
+    expect(await resolvePublicReviewProvider({ posture: 'no-tool', pinnedProviderId: LOCAL_CLAUDE.id }))
+      .toMatchObject({ ok: false, code: 'public-review-provider-unavailable' });
   });
 
   it('prefers an available provider over an unavailable earlier one', async () => {

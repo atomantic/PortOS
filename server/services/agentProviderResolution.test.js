@@ -406,10 +406,10 @@ describe('resolveAgentProviderAndModel — public-review stages', () => {
       .toMatchObject({ ok: true, selectedModel: 'available-model' });
   });
 
-  it('ignores a stage pin that is not eligible for the posture', async () => {
+  it('blocks an unsupported stage pin without selecting another provider', async () => {
     getAllProviders.mockResolvedValue({ providers: [OPENCODE, CLAUDE], activeProvider: null });
     const r = await resolveAgentProviderAndModel(gateTask({ provider: 'opencode' }));
-    expect(r).toMatchObject({ ok: true, provider: { id: 'claude-code' } });
+    expect(r).toMatchObject({ ok: false, permanent: true, infrastructureCode: 'public-review-provider-pin-unavailable' });
   });
 
   // `selectModelForTask`'s real precedence: `task.metadata.model` wins outright
@@ -427,19 +427,16 @@ describe('resolveAgentProviderAndModel — public-review stages', () => {
     getAllProviders.mockResolvedValue({ providers: [CLAUDE, GROK], activeProvider: null });
     await expect(resolveAgentProviderAndModel(gateTask({ provider: 'grok-cli', model: 'grok-4' })))
       .resolves.toMatchObject({ provider: { id: 'grok-cli' }, selectedModel: 'grok-4' });
-    // Pinned for a DIFFERENT provider — falls back to that provider's own model.
-    // The posture swap above landed on claude-code, and grok's model id must not
-    // ride along with it; leaving the pin on the task let `selectModelForTask`
-    // hand it straight back, so the swap silently kept the foreign model.
+    // An unsupported provider pin must never route the model to another vendor.
     await expect(resolveAgentProviderAndModel(gateTask({ provider: 'opencode', model: 'grok-4' })))
-      .resolves.toMatchObject({ provider: { id: 'claude-code' }, selectedModel: 'm-default' });
+      .resolves.toMatchObject({ ok: false, permanent: true });
   });
 
   // A stage pin outlives edits to the provider's own model list: the live
   // pr-reviewer gate sat pinned to an id its provider no longer offered, so
   // every run spawned a CLI that could not serve the model, produced no
   // output, and was retried — matching the provider is not enough on its own.
-  it('drops a model pin the matching provider no longer offers', async () => {
+  it('blocks a model pin the matching provider no longer offers', async () => {
     const CURATED = { id: 'grok-cli', type: 'cli', command: 'grok', models: ['grok-4'], defaultModel: 'grok-4' };
     getAllProviders.mockResolvedValue({ providers: [CURATED], activeProvider: null });
 
@@ -447,9 +444,9 @@ describe('resolveAgentProviderAndModel — public-review stages', () => {
     await expect(resolveAgentProviderAndModel(gateTask({ provider: 'grok-cli', model: 'grok-4' })))
       .resolves.toMatchObject({ provider: { id: 'grok-cli' }, selectedModel: 'grok-4' });
 
-    // Retired from the list → the provider's own selection wins instead.
+    // Retired from the list → stop without choosing a different model.
     await expect(resolveAgentProviderAndModel(gateTask({ provider: 'grok-cli', model: 'grok-3-retired' })))
-      .resolves.toMatchObject({ provider: { id: 'grok-cli' }, selectedModel: 'm-default' });
+      .resolves.toMatchObject({ ok: false, permanent: true, infrastructureCode: 'public-review-model-pin-unavailable' });
   });
 
   // The drop above has to survive model selection, which is where it used to
@@ -464,7 +461,7 @@ describe('resolveAgentProviderAndModel — public-review stages', () => {
     getAllProviders.mockResolvedValue({ providers: [CURATED], activeProvider: null });
 
     const r = await resolveAgentProviderAndModel(gateTask({ provider: 'grok-cli', model: 'grok-3-retired' }));
-    expect(r.selectedModel).toBe('grok-4');
+    expect(r).toMatchObject({ ok: false, permanent: true, infrastructureCode: 'public-review-model-pin-unavailable' });
   });
 
   // A LOCAL runtime's `models` array is a cached snapshot of what the daemon

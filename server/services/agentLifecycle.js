@@ -267,7 +267,7 @@ async function runAgentSpawn(task) {
    * claim and start the task, then have its live `in_progress` record clobbered
    * to `blocked` — which outranks `in_progress` in the claim-aware merge.
    */
-  const blockAndBail = async ({ reason, category, emit = 'agent:error', emitPayload = {}, persist = true }) => {
+  const blockAndBail = async ({ reason, category, infrastructureCode, emit = 'agent:error', emitPayload = {}, persist = true }) => {
     if (persist) {
       await updateTask(task.id, {
         status: 'blocked',
@@ -280,6 +280,16 @@ async function runAgentSpawn(task) {
       }, task.taskType || 'user').catch(() => {});
     }
     await cleanupOnError(reason);
+    if (emit === 'agent:error' && publicReviewPostureForProfile(task.metadata?.executionProfile) === PUBLIC_REVIEW_NO_TOOL_POSTURE
+      && (infrastructureCode || category?.startsWith('public-review-model-') || category === 'public-review-provider-unsupported')) {
+      const { reportReviewInfrastructureFailure } = await import('./reviewInfrastructureFailure.js');
+      await reportReviewInfrastructureFailure({ code: infrastructureCode || category, task }).catch(() => {
+        emitLog('warn', 'Could not report PR review infrastructure failure', { taskId: task.id });
+      });
+      // The generic agent:error handler copies task context into an investigator.
+      // This boundary reports only trusted diagnostics through the safe producer.
+      emit = 'warn-log';
+    }
     if (emit === 'agent:error') {
       cosEvents.emit('agent:error', { taskId: task.id, error: reason, ...emitPayload });
     } else if (emit === 'warn-log') {
@@ -416,6 +426,7 @@ async function runAgentSpawn(task) {
       // Transient failures skip the block and stay pending to retry.
       return blockAndBail({
         reason: resolution.error,
+        infrastructureCode: resolution.infrastructureCode,
         category: PROVIDER_CONFIG_BLOCKED_CATEGORY,
         persist: resolution.permanent,
         emitPayload: {

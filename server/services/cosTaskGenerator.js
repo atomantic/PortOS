@@ -2546,11 +2546,19 @@ function applyProviderModelPins(metadata, interval, appPin, hookOverride, reques
   }
   applyOneProviderPin(metadata, appPin);
   applyOneProviderPin(metadata, hookOverride);
+  // A pipeline's current stage is more specific than the whole-task defaults.
+  // Stage 0 may already have advanced through a server-owned preflight.
+  const stage = metadata.pipeline?.stages?.[metadata.pipeline.currentStage ?? 0];
+  if (stage) {
+    applyOneProviderPin(metadata, stage);
+    if (stage.providerId) delete metadata.effort;
+    if (stage.effort) metadata.effort = stage.effort;
+  }
   // Most specific: an explicit per-request pin (e.g. one "PR review" click from
   // the Pull Requests tab), applied last so it wins over every configured pin
   // above. A public-review posture still gates the final provider to its own
-  // eligible set at spawn time (resolveAgentProviderAndModel) — an ineligible
-  // pin here is dropped with a warning there, same as any other stored pin.
+  // eligible set at spawn time (resolveAgentProviderAndModel). An unsupported
+  // pin blocks instead of granting permission to spend on another provider.
   applyOneProviderPin(metadata, { providerId: requestOverride?.provider || null, model: requestOverride?.model || null });
   if (requestOverride?.effort) {
     metadata.effort = requestOverride.effort;

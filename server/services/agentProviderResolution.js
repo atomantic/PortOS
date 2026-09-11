@@ -93,9 +93,8 @@ export async function resolveAgentProviderAndModel(task) {
 /**
  * Provider + model for a public-review stage. A stage's own provider/model/
  * effort pins (`metadata.provider` / `metadata.model`, set by the pipeline
- * hand-off from the stage config) are honored when the pin is still eligible;
- * otherwise the install's own eligible set decides, and an install with none
- * fails PERMANENTLY so the task surfaces instead of re-dispatching forever.
+ * hand-off from the stage config) are honored or fail permanently with a
+ * configuration diagnosis. Only unpinned stages use the install's eligible set.
  */
 async function resolvePublicReviewAgentProvider(task, posture) {
   const resolved = await resolvePublicReviewProvider({
@@ -103,22 +102,16 @@ async function resolvePublicReviewAgentProvider(task, posture) {
     pinnedProviderId: task.metadata?.provider || null,
   });
   if (!resolved.ok) {
-    return { ok: false, permanent: true, error: resolved.error, providerId: task.metadata?.provider || undefined };
+    return { ok: false, permanent: true, error: resolved.error, infrastructureCode: resolved.code, providerId: task.metadata?.provider || undefined };
   }
   const { provider } = resolved;
   const strictFallback = task.metadata?.pipeline?.securityScan?.usedLargeInputFallback === true;
   if (strictFallback && !resolved.pinHonored) {
-    return { ok: false, permanent: true, error: 'Configured large-input review fallback provider is unavailable' };
-  }
-  if (task.metadata?.provider && !resolved.pinHonored) {
-    emitLog('warn', `Public-review stage provider ${task.metadata.provider} is not eligible for the ${posture} posture — using ${provider.id}`, {
-      taskId: task.id,
-      providerId: provider.id,
-    });
+    return { ok: false, permanent: true, infrastructureCode: 'public-review-provider-pin-unavailable', error: 'Configured large-input review fallback provider is unavailable' };
   }
   // A model pin only survives when it was chosen FOR this provider AND that
-  // provider still offers it; otherwise fall back to the provider's own default
-  // rather than handing one vendor's model id to another (the failure mode
+  // provider still offers it; otherwise stop instead of silently
+  // selecting another model or handing one vendor's model id to another (the failure mode
   // documented in the ordinary path). Matching the provider alone is not
   // enough: a stage pin outlives edits to that provider's own `models` list,
   // and a retired id reaches the CLI as a model it cannot serve, so the stage
@@ -133,30 +126,15 @@ async function resolvePublicReviewAgentProvider(task, posture) {
   // pass-throughs (see its doc comment).
   const honorPin = pinnedForThisProvider && modelPinIsOffered(provider, pinnedModel);
   const pinRejected = pinnedForThisProvider && !honorPin;
-  if (strictFallback && !honorPin) {
-    return { ok: false, permanent: true, error: 'Configured large-input review fallback model is unavailable' };
+  if (pinRejected || (strictFallback && !honorPin)) {
+    return { ok: false, permanent: true, providerId: provider.id, infrastructureCode: 'public-review-model-pin-unavailable', error: 'The selected PR review model is unavailable. Review stopped without model or provider fallback; check the stage settings.' };
   }
-  // Strip a pin that will NOT be honored, BEFORE model selection.
-  // `selectModelForTask` returns `metadata.model` verbatim as its
-  // highest-priority answer, so leaving it on the task defeats both guards
-  // above: a REJECTED pin came straight back while the warning below promised a
-  // default the run never used, and a pin belonging to a DIFFERENT provider
-  // (`pinnedForThisProvider` false, after the posture swap above chose someone
-  // else) was handed to the new provider — the exact cross-vendor leak this
-  // function's header says it prevents. Both are the same "will not be honored"
-  // case, so both strip here.
+  // A model-only pin with no provider cannot be transferred to an inferred
+  // provider. Tier requests and unpinned stages keep ordinary model selection.
   const modelSelection = await selectModelForTask(
     pinnedModel && !isTierRequest && !honorPin ? { ...task, metadata: { ...task.metadata, model: null } } : task,
     provider,
   );
-  if (pinRejected) {
-    emitLog('warn', `Public-review stage model "${pinnedModel}" is not offered by provider "${provider.id}" — using its default instead`, {
-      taskId: task.id,
-      requestedModel: pinnedModel,
-      providerId: provider.id,
-      validModels: provider.models,
-    });
-  }
   const selectedModel = honorPin
     ? pinnedModel
     : (modelSelection.model || provider.defaultModel || null);

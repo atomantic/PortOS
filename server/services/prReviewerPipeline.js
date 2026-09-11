@@ -279,6 +279,10 @@ export async function runPrReviewerSecurityPreflight(taskType, app, metadata, ta
     target,
     largeInputFallback: securityStage.largeInputFallback,
   });
+  if (!scan.ok) {
+    const { reportReviewInfrastructureFailure } = await import('./reviewInfrastructureFailure.js');
+    await reportReviewInfrastructureFailure({ code: scan.code, task: { metadata: { app: app.id } } }).catch(() => {});
+  }
   const reports = securityScanReports(scan);
   if (!scan.ok && !reports.length) {
     const reason = scan.code || 'security-scan-not-passed';

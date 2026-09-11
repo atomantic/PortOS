@@ -136,7 +136,7 @@ describe('PullRequestsTab', () => {
     ));
   });
 
-  it('carries the same provider/model pin into a PR review run', async () => {
+  it('preserves scheduled review stages unless the user explicitly enables the override', async () => {
     api.getProviders.mockResolvedValue({
       providers: [{
         id: 'claude', name: 'Claude', type: 'cli', enabled: true,
@@ -152,10 +152,30 @@ describe('PullRequestsTab', () => {
     fireEvent.click(screen.getByRole('button', { name: /PR review/ }));
 
     await waitFor(() => expect(api.reviewAppPullRequest).toHaveBeenCalledWith(
-      'app-1', 17, { provider: 'claude', model: 'claude-opus-5', effort: undefined },
+      'app-1', 17, {},
     ));
   });
 
+  it('passes an explicitly enabled eligibility provider override', async () => {
+    api.getProviders.mockResolvedValue({
+      providers: [{
+        id: 'claude', name: 'Claude', type: 'cli', enabled: true,
+        models: ['claude-opus-5', 'claude-sonnet-5'], defaultModel: 'claude-sonnet-5',
+      }],
+    });
+    await renderTab();
+
+    await screen.findByText('Fix the save path');
+    fireEvent.change(await screen.findByLabelText('Provider'), { target: { value: 'claude' } });
+    fireEvent.change(screen.getByLabelText('Model'), { target: { value: 'claude-opus-5' } });
+
+    fireEvent.click(screen.getByLabelText('Use Run with for PR review eligibility'));
+    fireEvent.click(screen.getByRole('button', { name: /PR review/ }));
+
+    await waitFor(() => expect(api.reviewAppPullRequest).toHaveBeenCalledWith(
+      'app-1', 17, { provider: 'claude', model: 'claude-opus-5', effort: undefined },
+    ));
+  });
   it('queues a review-loop resolve action and shows its task state', async () => {
     await renderTab();
 
@@ -283,7 +303,7 @@ describe('PullRequestsTab', () => {
     fireEvent.click(await screen.findByRole('button', { name: /PR review/ }));
 
     await waitFor(() => expect(api.reviewAppPullRequest).toHaveBeenCalledWith(
-      'app-1', 17, { provider: undefined, model: undefined, effort: undefined },
+      'app-1', 17, {},
     ));
     expect(await screen.findByRole('link', { name: /PR review: Queued/ })).toBeInTheDocument();
     // The resolve action is a separate lane and must stay offered.
