@@ -36,6 +36,7 @@ vi.mock('../lib/migrationMarker.js', () => ({
 
 vi.mock('fs/promises', () => ({
   readFile: vi.fn(async (path) => {
+    if (toPosix(path) in jsonByPath) return JSON.stringify(jsonByPath[toPosix(path)]);
     if (!(toPosix(path) in files)) { const e = new Error('ENOENT'); e.code = 'ENOENT'; throw e; }
     return files[toPosix(path)];
   }),

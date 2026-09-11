@@ -34,13 +34,19 @@ vi.mock('../lib/migrationMarker.js', () => ({
 }));
 
 vi.mock('fs/promises', () => ({
+  readFile: vi.fn(async (path) => {
+    const key = toPosix(path);
+    if (key === '/fake/data/universes/index.json' && typeIndex !== null) return JSON.stringify(typeIndex);
+    if (!(key in recordsByDir)) { const error = new Error('ENOENT'); error.code = 'ENOENT'; throw error; }
+    return JSON.stringify(recordsByDir[key]);
+  }),
   rename: vi.fn(async (from, to) => {
     if (renameShouldFail) throw new Error('EACCES');
     renamed.push([toPosix(from), toPosix(to)]);
   }),
   readdir: vi.fn(async () => {
     if (dirEntries === null) return [];
-    return dirEntries;
+    return dirEntries.map(name => ({ name, isDirectory: () => name !== 'index.json' && !name.startsWith('.') }));
   }),
   stat: vi.fn(async (path) => {
     if (toPosix(path) === '/fake/data/universes') {

@@ -28,35 +28,23 @@
  *     retries (ON CONFLICT DO NOTHING makes the retry safe).
  */
 
-import { readFile, rename, readdir, stat } from 'fs/promises';
+import { readdir } from 'fs/promises';
 import { join } from 'path';
-import { PATHS, readJSONFile, safeJSONParse } from '../lib/fileUtils.js';
+import { PATHS } from '../lib/fileUtils.js';
 import { markerExists, writeMarker } from '../lib/migrationMarker.js';
 import { query } from '../lib/db.js';
+import { readLegacyJSON, legacyDirectory, parkLegacyFile, incompleteImport } from './legacyImport.js';
 import { mirrorTimestamp } from '../lib/pgTimestamp.js';
 
 const ROOT_DIRNAME = 'writers-room';
 const MARKER_FILENAME = 'writers-room.migrated.json';
 const WORK_ID_RE = /^wr-work-[0-9a-f-]+$/i;
 
-// Rename a file aside (path → path.replace('.json','.imported.json')) if it
-// exists; a missing file is a no-op. Never overwrites an existing recovery copy.
-async function parkFileAside(path) {
-  const exists = await stat(path).catch(() => null);
-  if (!exists) return;
-  const aside = path.replace(/\.json$/, '.imported.json');
-  const asideExists = await stat(aside).catch(() => null);
-  if (asideExists) return; // recovery copy already present — don't clobber
-  await rename(path, aside).catch((err) => {
-    console.warn(`⚠️ writers-room→DB import: could not park ${path} aside (${err.message})`);
-  });
-}
-
-async function importFolder(folder) {
-  if (!folder || typeof folder.id !== 'string' || !folder.id) return false;
+export async function importFolder(folder, execute = query) {
+  if (!folder || typeof folder.id !== 'string' || !folder.id) return null;
   const now = new Date().toISOString();
   const createdAt = mirrorTimestamp(folder.createdAt, now);
-  const result = await query(
+  const result = await execute(
     `INSERT INTO writers_room_folders (id, parent_id, name, sort_order, data, created_at, updated_at)
      VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7)
      ON CONFLICT (id) DO NOTHING`,
@@ -73,9 +61,9 @@ async function importFolder(folder) {
   return result.rowCount > 0;
 }
 
-async function importExercise(exercise) {
-  if (!exercise || typeof exercise.id !== 'string' || !exercise.id) return false;
-  const result = await query(
+export async function importExercise(exercise, execute = query) {
+  if (!exercise || typeof exercise.id !== 'string' || !exercise.id) return null;
+  const result = await execute(
     `INSERT INTO writers_room_exercises (id, work_id, status, data, started_at, finished_at)
      VALUES ($1, $2, $3, $4::jsonb, $5, $6)
      ON CONFLICT (id) DO NOTHING`,
@@ -93,13 +81,14 @@ async function importExercise(exercise) {
 
 // A work manifest → one work row (manifest minus drafts[]) + one draft-version
 // row per draft entry. All existing works import as deleted = FALSE.
-async function importWork(manifest) {
-  if (!manifest || typeof manifest.id !== 'string' || !manifest.id) return false;
+export async function importWork(manifest, execute = query) {
+  if (!manifest || typeof manifest.id !== 'string' || !manifest.id) return null;
+  if (manifest.drafts !== undefined && (!Array.isArray(manifest.drafts) || manifest.drafts.some(draft => !draft || typeof draft.id !== 'string' || !draft.id))) return null;
   const now = new Date().toISOString();
   const createdAt = mirrorTimestamp(manifest.createdAt, now);
   const { drafts: draftList, ...workData } = manifest;
   const drafts = Array.isArray(draftList) ? draftList : [];
-  const result = await query(
+  const result = await execute(
     `INSERT INTO writers_room_works
        (id, folder_id, title, kind, status, active_draft_version_id,
         pipeline_series_id, pipeline_issue_id, cd_project_id, media_collection_id,
@@ -123,8 +112,7 @@ async function importWork(manifest) {
     ],
   );
   for (const draft of drafts) {
-    if (!draft || typeof draft.id !== 'string') continue;
-    await query(
+    await execute(
       `INSERT INTO writers_room_draft_versions
          (id, work_id, label, content_file, content_hash, word_count,
           segment_index, created_from_version_id, data, created_at)
@@ -151,62 +139,47 @@ export async function migrateWritersRoomToDB() {
   if (await markerExists(MARKER_FILENAME)) return { ok: true, reason: 'already-applied' };
 
   const root = join(PATHS.data, ROOT_DIRNAME);
-  const rootStat = await stat(root).catch(() => null);
+  const rootStat = await legacyDirectory(root);
+  if (!rootStat) return { ok: true, reason: 'fresh-install', folders: 0, works: 0, exercises: 0 };
 
-  // Fresh install (no legacy dir): no-op WITHOUT stamping the marker (keeps the
-  // recovery escape hatch open — see migrateStoryBuilderToDB).
-  if (!rootStat || !rootStat.isDirectory()) {
-    return { ok: true, reason: 'fresh-install', folders: 0, works: 0, exercises: 0 };
+  const counts = { folders: 0, works: 0, exercises: 0 };
+  const incomplete = [];
+  for (const [name, importRow] of [['folders', importFolder], ['exercises', importExercise]]) {
+    const path = join(root, `${name}.json`);
+    const source = await readLegacyJSON(path);
+    if (source.status === 'missing') continue;
+    if (source.status !== 'valid' || !Array.isArray(source.value)) { incomplete.push(path); continue; }
+    let valid = true;
+    for (const row of source.value) {
+      const inserted = await importRow(row);
+      if (inserted === null) { incomplete.push(path); valid = false; }
+      else if (inserted) counts[name] += 1;
+    }
+    if (valid && !await parkLegacyFile(path, path.replace(/\.json$/, '.imported.json'))) incomplete.push(path);
   }
 
-  // Folders.
-  const foldersFile = join(root, 'folders.json');
-  const folders = await readJSONFile(foldersFile, []);
-  let folderCount = 0;
-  for (const f of Array.isArray(folders) ? folders : []) {
-    if (await importFolder(f)) folderCount += 1;
-  }
-
-  // Exercises.
-  const exercisesFile = join(root, 'exercises.json');
-  const exercises = await readJSONFile(exercisesFile, []);
-  let exerciseCount = 0;
-  for (const e of Array.isArray(exercises) ? exercises : []) {
-    if (await importExercise(e)) exerciseCount += 1;
-  }
-
-  // Works (manifest.json per work dir; .md bodies stay in place).
   const worksDir = join(root, 'works');
-  const worksStat = await stat(worksDir).catch(() => null);
-  const workEntries = worksStat?.isDirectory()
-    ? await readdir(worksDir, { withFileTypes: true }).catch(() => [])
-    : [];
-  let workCount = 0;
-  const importedManifestPaths = [];
+  const workEntries = await legacyDirectory(worksDir) ? await readdir(worksDir, { withFileTypes: true }) : [];
   for (const entry of workEntries) {
     if (!entry.isDirectory() || !WORK_ID_RE.test(entry.name)) continue;
-    const manifestPath = join(worksDir, entry.name, 'manifest.json');
-    const content = await readFile(manifestPath, 'utf-8').catch(() => null);
-    if (content === null) continue;
-    const manifest = safeJSONParse(content, null, { allowArray: false, logError: true, context: manifestPath });
-    // `allowArray: false` only rejects a root array — a bare JSON scalar
-    // still parses, so also guard for a genuine object before treating the
-    // manifest as valid.
-    if (!manifest || typeof manifest !== 'object') continue; // corrupted manifest — skip, leave on disk untouched
-    if (await importWork(manifest)) workCount += 1;
-    importedManifestPaths.push(manifestPath);
+    const path = join(worksDir, entry.name, 'manifest.json');
+    const aside = path.replace(/\.json$/, '.imported.json');
+    const source = await readLegacyJSON(path);
+    if (source.status === 'missing') {
+      // A DB-native work creates prose directories but no legacy manifest.
+      const existing = await query('SELECT id FROM writers_room_works WHERE id = $1', [entry.name]);
+      if (!existing.rows.length) incomplete.push(path);
+      continue;
+    }
+    if (source.status !== 'valid' || source.value?.id !== entry.name) { incomplete.push(path); continue; }
+    const inserted = await importWork(source.value);
+    if (inserted === null) { incomplete.push(path); continue; }
+    if (inserted) counts.works += 1;
+    if (!await parkLegacyFile(path, aside)) incomplete.push(path);
   }
 
-  // Park the JSON metadata files aside (the .md bodies stay put). Only after all
-  // rows have landed, so a crash before this leaves a clean retry.
-  await parkFileAside(foldersFile);
-  await parkFileAside(exercisesFile);
-  for (const p of importedManifestPaths) await parkFileAside(p);
-
-  await writeMarker(MARKER_FILENAME, {
-    migratedAt: new Date().toISOString(),
-    folders: folderCount, works: workCount, exercises: exerciseCount, reason: 'imported',
-  });
-  console.log(`✍️ writers-room→DB import: ${folderCount} folder(s), ${workCount} work(s), ${exerciseCount} exercise(s); .md bodies left in place`);
-  return { ok: true, reason: 'imported', folders: folderCount, works: workCount, exercises: exerciseCount };
+  if (incomplete.length) return incompleteImport('Writers Room', counts, incomplete);
+  await writeMarker(MARKER_FILENAME, { migratedAt: new Date().toISOString(), ...counts, reason: 'imported' });
+  console.log(`✍️ writers-room→DB import: ${counts.folders} folder(s), ${counts.works} work(s), ${counts.exercises} exercise(s); .md bodies left in place`);
+  return { ok: true, reason: 'imported', ...counts };
 }
