@@ -2618,3 +2618,29 @@ describe('getWalkState', () => {
     });
   });
 });
+
+describe('unreadable walk persistence', () => {
+  it('refuses to reseed a damaged selection and preserves sibling targets after repair', async () => {
+    const id = newId();
+    await records.createRecord({ kind: 'character', name: 'Walker' }, id);
+    const dir = join(TEST_ROOT, 'sprites', id, 'walk');
+    await mkdir(dir, { recursive: true });
+    const path = join(dir, `${id}-walk-selection-v1.json`);
+    await writeFile(path, '{');
+    await expect(setWalkTarget(id, { frameCount: 12, fps: 10 })).rejects.toThrow(/Unreadable/);
+    expect(await readFile(path, 'utf8')).toBe('{');
+    await writeFile(path, JSON.stringify({ directions: {}, animationTargets: { ambient: { frameCount: 6, fps: 8 } } }));
+    await setWalkTarget(id, { frameCount: 12, fps: 10 });
+    expect(JSON.parse(await readFile(path, 'utf8')).animationTargets.ambient).toEqual({ frameCount: 6, fps: 8 });
+  });
+  it('does not bypass a damaged finalized walk set', async () => {
+    const id = newId();
+    await records.createRecord({ kind: 'character', name: 'Walker' }, id);
+    const dir = join(TEST_ROOT, 'sprites', id, 'walk');
+    await mkdir(dir, { recursive: true });
+    const path = join(dir, `${id}-walk-set-v1.json`);
+    await writeFile(path, '{');
+    await expect(setWalkTarget(id, { frameCount: 12, fps: 10 })).rejects.toThrow(/Unreadable/);
+    expect(await readFile(path, 'utf8')).toBe('{');
+  });
+});

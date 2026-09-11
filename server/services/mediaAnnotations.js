@@ -75,7 +75,7 @@ function liftLegacyEntry(rawEntry, { localInstanceId, defaultAuthorName }) {
 
 async function readAll() {
   await ensureDir(PATHS.data);
-  const raw = await readJSONFile(STATE_PATH, DEFAULT_STATE, { logError: false });
+  const raw = await readJSONFile(STATE_PATH, DEFAULT_STATE, { logError: false, strict: true });
   const annotations = raw && typeof raw.annotations === 'object' && raw.annotations !== null
     ? raw.annotations
     : {};

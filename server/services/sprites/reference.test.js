@@ -1258,3 +1258,31 @@ describe('forkSprite', () => {
     expect((await records.listRecords()).length).toBe(before);
   });
 });
+
+describe('unreadable reference manifest', () => {
+  it('refuses generation on a damaged manifest and retries after repair', async () => {
+    const id = newId();
+    await createCharacter(id);
+    const dir = join(TEST_ROOT, 'sprites', id, 'reference');
+    await mkdir(dir, { recursive: true });
+    const path = join(dir, `${id}-reference-set-v1.json`);
+    await writeFile(path, '{');
+    await expect(startReferenceGeneration(id, { target: 'turnaround', designPrompt: 'a ranger' })).rejects.toThrow(/Unreadable/);
+    expect(await readFile(path, 'utf8')).toBe('{');
+    await writeFile(path, JSON.stringify({ schemaVersion: 2, characterId: id, anchors: [], turnaround: { locked: false }, mainReference: { locked: false } }));
+    await expect(startReferenceGeneration(id, { target: 'turnaround', designPrompt: 'a ranger' })).resolves.toMatchObject({ target: 'turnaround' });
+  });
+});
+
+
+it('keeps catalog projections available when one reference manifest is unreadable', async () => {
+  const damaged = newId();
+  await createCharacter(damaged);
+  const dir = join(TEST_ROOT, 'sprites', damaged, 'reference');
+  await mkdir(dir, { recursive: true });
+  const path = join(dir, `${damaged}-reference-set-v1.json`);
+  await writeFile(path, '{');
+  await expect(listReferenceSources()).resolves.toEqual([]);
+  await expect(listSpriteThumbnails()).resolves.toEqual([]);
+  expect(await readFile(path, 'utf8')).toBe('{');
+});

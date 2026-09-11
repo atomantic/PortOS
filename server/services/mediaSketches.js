@@ -116,6 +116,7 @@ export function sanitizeSketchInput(input) {
 /** Read the persisted sketch for a key, or null when none exists. */
 export async function getSketch(key) {
   if (!isValidKey(key)) throw makeErr(`Invalid key: ${key}`, ERR_VALIDATION);
+  // Read-only projection: saveSketch replaces the full canvas from explicit input, never this fallback.
   const data = await readJSONFile(jsonPathFor(key), null, { logError: false });
   if (!data || typeof data !== 'object' || !Array.isArray(data.strokes)) return null;
   return {
