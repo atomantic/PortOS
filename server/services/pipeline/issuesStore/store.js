@@ -30,6 +30,18 @@ import { createPgFileFacade, resolvePgBackend, isFileBackend } from '../../../li
 import { createFileWriteQueue } from '../../../lib/fileWriteQueue.js';
 import { bumpPipelineMutationEpoch } from '../syncEpoch.js';
 
+// Strip history before file-backend sanitization; PG already removes it in
+// SQL. Full records remain the default because exports and sync must retain
+// every version. Public sanitized list stages still expose runHistory: [].
+export const stripRunHistoryFromIssue = (issue) => {
+  if (!issue || typeof issue !== 'object' || !issue.stages) return issue;
+  const strippedStages = {};
+  for (const [stageId, stage] of Object.entries(issue.stages)) {
+    strippedStages[stageId] = stage?.runHistory?.length ? { ...stage, runHistory: [] } : stage;
+  }
+  return { ...issue, stages: strippedStages };
+};
+
 const TYPE_SCHEMA_VERSION = 1;
 const ID_PATTERN = /^iss-[A-Za-z0-9-]+$/;
 
@@ -99,6 +111,7 @@ function makePgBackend(db, sanitizeRecord) {
     listRaw: db.listRaw,
     listRawBySeries: db.listRawBySeries,
     listRawBySeriesIds: db.listRawBySeriesIds,
+    listRecentRaw: db.listRecentRaw,
     writeRaw: db.writeRaw,
     deleteRaw: db.deleteRaw,
     verify: async () => ({ ok: true, type: 'pipelineIssues', onDisk: null, expected: null,
@@ -143,6 +156,10 @@ function createFacade({ dir, sanitizeRecord }) {
     bumpPipelineMutationEpoch();
   };
 
+  const sanitizeList = (raw, { withHistory = true } = {}) => raw
+    .map((r) => sanitizer(withHistory ? r : stripRunHistoryFromIssue(r)))
+    .filter((r) => r != null);
+
   return {
     dir,
     type: 'pipelineIssues',
@@ -153,17 +170,34 @@ function createFacade({ dir, sanitizeRecord }) {
       if (typeof id !== 'string' || !ID_PATTERN.test(id)) return null;
       return (await getBackend()).readOne(id);
     },
-    loadAll: async () => {
-      const raw = await (await getBackend()).listRaw();
-      return raw.map((r) => sanitizer(r)).filter((r) => r != null);
+    loadAll: async (options) => {
+      const raw = await (await getBackend()).listRaw(options);
+      return sanitizeList(raw, options);
     },
-    loadAllForSeries: async (seriesId) => {
-      const raw = await (await getBackend()).listRawBySeries(seriesId);
-      return raw.map((r) => sanitizer(r)).filter((r) => r != null);
+    loadAllForSeries: async (seriesId, options) => {
+      const raw = await (await getBackend()).listRawBySeries(seriesId, options);
+      return sanitizeList(raw, options);
     },
-    loadAllForSeriesIds: async (seriesIds) => {
-      const raw = await (await getBackend()).listRawBySeriesIds(seriesIds);
-      return raw.map((r) => sanitizer(r)).filter((r) => r != null);
+    loadAllForSeriesIds: async (seriesIds, options) => {
+      const raw = await (await getBackend()).listRawBySeriesIds(seriesIds, options);
+      return sanitizeList(raw, options);
+    },
+
+    loadRecent: async (options) => {
+      const backend = await getBackend();
+      if (backend.listRecentRaw) {
+        const raw = await backend.listRecentRaw(options);
+        return options.summary ? raw : sanitizeList(raw, options);
+      }
+      // Dev/test file backend has no timestamp index. Sanitize before sorting
+      // to retain its legacy-record behavior, then match the HTTP projection.
+      const live = sanitizeList(await backend.listRaw(), options)
+        .filter((r) => options.includeDeleted || !r.deleted);
+      const recent = live.sort((a, b) => (b.updatedAt || '').localeCompare(a.updatedAt || ''))
+        .slice(0, options.limit);
+      return options.summary
+        ? recent.map(({ id, title, number, seriesId, updatedAt }) => ({ id, title, number, seriesId, updatedAt }))
+        : recent;
     },
 
     saveOneNow,

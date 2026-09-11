@@ -3,9 +3,22 @@
  * SKIPS cleanly when no DB is reachable. Snapshots + restores the table.
  */
 
-import { describe, it, expect, afterAll, beforeAll, beforeEach } from 'vitest';
+import { describe, it, expect, afterAll, beforeAll, beforeEach, vi } from 'vitest';
 import { checkHealth, ensureSchema, query, close } from '../../../lib/db.js';
+import * as dbConnection from '../../../lib/db.js';
+import { PIPELINE_STAGE_IDS } from '../../../lib/pipelineStages.js';
 import { requireDbOrSkip } from '../../../lib/dbTestGate.js';
+
+// Exercise the real PG facade/service without importing this install's legacy
+// files. The dedicated DB runner still enforces portos_test for all SQL.
+vi.mock('../../../lib/pgFileFacade.js', async (importOriginal) => {
+  const actual = await importOriginal();
+  return {
+    ...actual,
+    createPgFileFacade: (options) => actual.createPgFileFacade({ ...options, isFile: () => false }),
+    resolvePgBackend: async ({ loadDb, makePg }) => makePg(await loadDb()),
+  };
+});
 
 let dbReady = false;
 let skipReason = '';
@@ -57,6 +70,82 @@ describe.skipIf(!runDb)('pipeline issues DB adapter round-trip', () => {
     const rec = I('iss-1', { stages: { idea: { status: 'ready', output: 'beats', lastRunId: 'run-7' } } });
     await db.writeRaw('iss-1', rec);
     expect(await db.readRaw('iss-1')).toEqual(rec);
+  });
+
+  it('lean reads remove only known stage histories while full reads remain lossless', async () => {
+    const stages = Object.fromEntries(PIPELINE_STAGE_IDS.map((id) => [id, {
+      output: 'active', runHistory: [{ output: 'older', runId: 'run-1' }],
+      cover: { prompt: 'cover' }, custom: { nested: true },
+    }]));
+    const rec = I('iss-history', { stages, custom: { retained: true } });
+    await db.writeRaw(rec.id, rec);
+    await db.writeRaw('iss-other', I('iss-other', { seriesId: 'ser-other', stages: null }));
+    const lean = { ...rec, stages: Object.fromEntries(PIPELINE_STAGE_IDS.map((id) => {
+      const { runHistory, ...stage } = stages[id];
+      return [id, stage];
+    })) };
+    expect(await db.listRawBySeries('ser-1', { withHistory: false })).toEqual([lean]);
+    expect(await db.listRawBySeriesIds(['ser-1'], { withHistory: false })).toEqual([lean]);
+    expect((await db.listRaw({ withHistory: false })).find((r) => r.id === rec.id)).toEqual(lean);
+    expect(await db.readRaw(rec.id)).toEqual(rec);
+    expect(await db.listRawBySeries('ser-1')).toEqual([rec]);
+    expect((await db.listRaw({ withHistory: false })).find((r) => r.id === 'iss-other').stages).toBeNull();
+  });
+
+  it('recent reads limit in SQL and summaries never transfer stage data', async () => {
+    for (let n = 0; n < 60; n += 1) {
+      await db.writeRaw(`iss-${n}`, I(`iss-${n}`, {
+        updatedAt: new Date(Date.UTC(2026, 0, 1, 0, n)).toISOString(),
+        stages: { idea: { output: 'active', runHistory: [{ output: 'older' }] } },
+        deleted: n === 59,
+      }));
+    }
+    const querySpy = vi.spyOn(dbConnection, 'query');
+    const summaries = await db.listRecentRaw({ limit: 2, summary: true });
+    expect(summaries.map((r) => r.id)).toEqual(['iss-58', 'iss-57']);
+    expect(Object.keys(summaries[0]).sort()).toEqual(['id', 'number', 'seriesId', 'title', 'updatedAt']);
+    expect(querySpy).toHaveBeenCalledTimes(1);
+    const [sql, params] = querySpy.mock.calls[0];
+    expect(sql).toMatch(/WHERE deleted = FALSE\s+ORDER BY updated_at DESC LIMIT \$1/);
+    expect(sql).toContain('jsonb_build_object');
+    expect(params).toEqual([2]);
+    querySpy.mockRestore();
+    const full = await db.listRecentRaw({ limit: 1, includeDeleted: true });
+    expect(full[0].id).toBe('iss-59');
+    expect(full[0].stages.idea.runHistory).toHaveLength(1);
+    const lean = await db.listRecentRaw({ limit: 1, withHistory: false });
+    expect(lean[0].stages.idea).toEqual({ output: 'active' });
+  });
+
+  it('public PG lists project before transfer while detail keeps history', async () => {
+    const svc = await import('../issueCrud.js');
+    const record = I('iss-service', { stages: { idea: {
+      output: 'active', runHistory: [{ runId: 'run-old', output: 'older' }],
+    } } });
+    await db.writeRaw(record.id, record);
+    const querySpy = vi.spyOn(dbConnection, 'query');
+    const lists = [
+      await svc.listIssues({ seriesId: 'ser-1', withHistory: false }),
+      await svc.listIssues({ withHistory: false }),
+      await svc.listAllIssues({ withHistory: false }),
+      await svc.listAllIssues({ seriesIds: ['ser-1'], withHistory: false }),
+      await svc.listIssuesForSeries('ser-1', { withHistory: false }),
+      await svc.listRecentIssues({ withHistory: false }),
+    ];
+    for (const list of lists) {
+      expect(list[0].stages.idea).toMatchObject({ output: 'active', runHistory: [] });
+    }
+    // Assert on actual PostgreSQL results, before the facade can strip history.
+    for (const result of querySpy.mock.results) {
+      expect((await result.value).rows[0].data.stages.idea).not.toHaveProperty('runHistory');
+    }
+    querySpy.mockRestore();
+    expect((await svc.getIssue(record.id)).stages.idea.runHistory).toHaveLength(1);
+    expect((await svc.listAllIssues())[0].stages.idea.runHistory).toHaveLength(1);
+    expect(await svc.listRecentIssues({ limit: 1, summary: true })).toEqual([{
+      id: record.id, title: record.title, number: record.number,
+      seriesId: record.seriesId, updatedAt: record.updatedAt,
+    }]);
   });
 
   it('upsert updates the record and the mirror columns (series_id/number/status)', async () => {

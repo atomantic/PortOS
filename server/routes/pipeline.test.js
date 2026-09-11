@@ -878,7 +878,7 @@ describe('pipeline routes', () => {
       const r = await request(app).get('/api/pipeline/issues/recent?limit=5');
       expect(r.status).toBe(200);
       expect(spy).toHaveBeenCalledTimes(1);
-      expect(spy).toHaveBeenCalledWith(expect.objectContaining({ withHistory: false }));
+      expect(spy).toHaveBeenCalledWith(expect.objectContaining({ withHistory: false, summary: true }));
       expect(r.body[0]).not.toHaveProperty('stages');
       spy.mockRestore();
     });
