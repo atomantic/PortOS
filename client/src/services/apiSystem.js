@@ -118,8 +118,10 @@ export const getAiAssignments = (options) => request('/settings/ai-assignments',
 export const getMediaShareCandidates = (options) => request('/settings/media-share-candidates', options);
 
 // API Access — the OpenAPI 3.0.3 spec for the public API surface (built from the
-// exposed entries in apiAccess settings). Rendered by the API Access settings tab.
+// exposed entries in apiAccess settings). Rendered by the API Access settings tab
+// and the API Explorer REST Reference "Exposed" surface.
 export const getOpenApiSpec = (options) => request('/api-docs/openapi.json', options);
+export const getInternalOpenApiSpec = (options) => request('/api-docs/internal/openapi.json', options);
 export const getApiCatalog = (options) => request('/api-docs/catalog.json', options);
 export const getSocketEventCatalog = (options) => request('/api-docs/events.json', options);
 export const updateAiAssignment = (id, data, options) => request(`/settings/ai-assignments/${encodeURIComponent(id)}`, {

@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Link, Navigate, useNavigate, useParams } from 'react-router';
 import {
   Bot, Braces, CheckCircle2, Copy, ExternalLink, RadioTower, Search,
@@ -9,7 +9,25 @@ import BrailleSpinner from '../components/BrailleSpinner';
 import { copyToClipboard } from '../lib/clipboard';
 import * as api from '../services/api';
 
-const ScalarReference = lazy(() => import('../components/api-explorer/ScalarReference'));
+const HTTP_METHODS = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS', 'HEAD', 'TRACE'];
+const HTTP_METHOD_SET = new Set(HTTP_METHODS);
+
+function operationsFromOpenApi(spec) {
+  if (!spec?.paths || typeof spec.paths !== 'object') return [];
+  return Object.entries(spec.paths).flatMap(([path, item]) => {
+    if (!item || typeof item !== 'object') return [];
+    return Object.entries(item).flatMap(([method, operation]) => {
+      const verb = method.toUpperCase();
+      if (!HTTP_METHOD_SET.has(verb) || !operation || typeof operation !== 'object') return [];
+      return [{
+        method: verb,
+        path,
+        summary: typeof operation.summary === 'string' ? operation.summary : '',
+        tags: Array.isArray(operation.tags) ? operation.tags.filter((tag) => typeof tag === 'string') : [],
+      }];
+    });
+  });
+}
 
 const TABS = [
   { id: 'catalog', label: 'API Catalog', to: '/api-reference/catalog' },
@@ -162,14 +180,36 @@ function CatalogView() {
 
 function RestReferenceView() {
   const [surface, setSurface] = useState('internal');
-  const url = surface === 'internal' ? '/api/api-docs/internal/openapi.json' : '/api/api-docs/openapi.json';
+  const [spec, setSpec] = useState(null);
+  const [error, setError] = useState('');
+  const [query, setQuery] = useState('');
+  const [method, setMethod] = useState('all');
+  const [limit, setLimit] = useState(PAGE_SIZE);
+  const specPath = surface === 'internal' ? '/api/api-docs/internal/openapi.json' : '/api/api-docs/openapi.json';
+
+  useEffect(() => {
+    const load = surface === 'internal' ? api.getInternalOpenApiSpec : api.getOpenApiSpec;
+    setSpec(null);
+    setError('');
+    load({ silent: true }).then(setSpec).catch((err) => setError(err.message));
+  }, [surface]);
+
+  const operations = useMemo(() => operationsFromOpenApi(spec), [spec]);
+  const filtered = useMemo(() => {
+    const needle = query.trim().toLowerCase();
+    return operations.filter((operation) =>
+      (method === 'all' || operation.method === method)
+      && (!needle || `${operation.method} ${operation.path} ${operation.summary} ${operation.tags.join(' ')}`.toLowerCase().includes(needle)));
+  }, [method, operations, query]);
+
+  useEffect(() => { setLimit(PAGE_SIZE); }, [method, query, surface]);
 
   return (
     <div className="flex h-full min-h-0 flex-col">
       <div className="shrink-0 flex flex-wrap items-center justify-between gap-2 border-b border-port-border bg-port-card px-3 py-2">
         <div>
           <div className="text-sm font-medium text-white">{surface === 'internal' ? 'Complete internal surface' : 'Currently exposed public surface'}</div>
-          <div className="text-xs text-gray-500">Read-only reference; request execution and Scalar Agent are disabled.</div>
+          <div className="text-xs text-gray-500">Read-only OpenAPI inventory; request execution stays off this tab.</div>
         </div>
         <div role="group" aria-label="REST API surface" className="flex rounded-lg border border-port-border p-0.5">
           {['internal', 'public'].map((value) => (
@@ -179,10 +219,76 @@ function RestReferenceView() {
           ))}
         </div>
       </div>
-      <div className="portos-api-reference min-h-0 flex-1 overflow-auto bg-port-bg">
-        <Suspense fallback={<div className="p-6"><BrailleSpinner text="Loading REST reference" /></div>}>
-          <ScalarReference url={url} />
-        </Suspense>
+      <div className="min-h-0 flex-1 overflow-auto bg-port-bg">
+        {error && <div className="p-6 text-port-error">OpenAPI spec unavailable: {error}</div>}
+        {!error && !spec && <div className="p-6"><BrailleSpinner text="Loading REST reference" /></div>}
+        {!error && spec && (
+          <div className="p-3 sm:p-4 space-y-4 max-w-[1500px] mx-auto">
+            <div className="grid grid-cols-2 md:grid-cols-3 gap-2">
+              <Stat label="HTTP operations" value={operations.length} hint={`${Object.keys(spec.paths || {}).length} paths`} />
+              <Stat label="OpenAPI" value={spec.openapi || '—'} hint={spec.info?.title || 'PortOS'} />
+              <Stat label="Spec version" value={spec.info?.version || '—'} hint={surface === 'internal' ? 'Internal surface' : 'Exposed surface'} />
+            </div>
+            <div className="rounded-xl border border-port-border bg-port-card p-3 space-y-3">
+              <div className="flex flex-col lg:flex-row gap-2">
+                <label className="relative flex-1 min-w-0">
+                  <span className="sr-only">Search OpenAPI operations</span>
+                  <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500" />
+                  <input
+                    value={query}
+                    onChange={(event) => setQuery(event.target.value)}
+                    placeholder="Search method, path, summary, or tag"
+                    className="w-full rounded-lg border border-port-border bg-port-bg py-2 pl-9 pr-3 text-sm text-white"
+                  />
+                </label>
+                <label className="flex items-center gap-2 text-xs text-gray-400">
+                  Method
+                  <select value={method} onChange={(event) => setMethod(event.target.value)} className="rounded-lg border border-port-border bg-port-bg px-2 py-2 text-sm text-white">
+                    <option value="all">All</option>
+                    {HTTP_METHODS.map((value) => <option key={value}>{value}</option>)}
+                  </select>
+                </label>
+              </div>
+              <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-gray-500">
+                <span>{filtered.length.toLocaleString()} matching operations</span>
+                <a href={specPath} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-port-accent hover:underline">
+                  Open JSON <ExternalLink size={11} />
+                </a>
+              </div>
+            </div>
+            <div className="rounded-xl border border-port-border overflow-hidden">
+              <div className="divide-y divide-port-border">
+                {filtered.slice(0, limit).map((operation) => (
+                  <div key={`${operation.method}-${operation.path}`} className="bg-port-card px-3 py-2.5 hover:bg-port-border/20">
+                    <div className="flex items-start gap-2">
+                      <span className={`mt-0.5 w-16 shrink-0 rounded border px-1.5 py-0.5 text-center text-[11px] font-bold ${METHOD_STYLE[operation.method] || 'text-gray-300 border-port-border'}`}>
+                        {operation.method}
+                      </span>
+                      <div className="min-w-0 flex-1">
+                        <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                          <code className="text-sm text-white break-all">{operation.path}</code>
+                          {operation.tags.map((tag) => (
+                            <span key={tag} className="rounded bg-port-bg px-1.5 py-0.5 text-[10px] text-gray-400">{tag}</span>
+                          ))}
+                        </div>
+                        {operation.summary && <p className="mt-1 text-xs text-gray-500">{operation.summary}</p>}
+                      </div>
+                      <button type="button" onClick={() => copyToClipboard(`${operation.method} ${operation.path}`, 'Operation copied')} className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1.5 text-gray-500 hover:text-white" aria-label={`Copy ${operation.method} ${operation.path}`}>
+                        <Copy size={13} />
+                      </button>
+                    </div>
+                  </div>
+                ))}
+                {filtered.length === 0 && <div className="bg-port-card p-8 text-center text-sm text-gray-500">No operations match these filters.</div>}
+              </div>
+            </div>
+            {limit < filtered.length && (
+              <button type="button" onClick={() => setLimit((value) => value + PAGE_SIZE)} className="block mx-auto rounded-lg border border-port-border bg-port-card px-4 py-2 text-sm text-white hover:border-port-accent">
+                Show {Math.min(PAGE_SIZE, filtered.length - limit)} more
+              </button>
+            )}
+          </div>
+        )}
       </div>
     </div>
   );

@@ -380,10 +380,10 @@ jobs:
         if: needs.impact.outputs.build == 'true' && matrix.shard == 1
         run: npm run build --prefix client
 
-      # The Scalar bundle budget can only be measured against a real build, and it
-      # skips itself when client/dist is absent — so it runs here, not in the unit
-      # test job. See client/src/pages/ApiExplorer.bundle.test.js.
-      - name: Check API Explorer bundle budget
+      # The Scalar-removal pin can only see dist/ after a real build, and it
+      # skips the chunk assertion when client/dist is absent — so it runs here,
+      # not in the unit test job. See client/src/pages/ApiExplorer.bundle.test.js.
+      - name: Check API Explorer bundle has no Scalar chunks
         if: needs.impact.outputs.build == 'true' && matrix.shard == 1
         run: npm run test --prefix client -- ApiExplorer.bundle
 
