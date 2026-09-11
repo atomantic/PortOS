@@ -64,12 +64,29 @@ describe('VideoGen primary actions', () => {
     }
   });
 
+  it('opens Options and shows the blocking remedy for a mode with required inputs', async () => {
+    await renderVideoGenPage();
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Extend' }));
+
+    expect(screen.getByText('Options').closest('details')).toHaveAttribute('open');
+    expect(screen.getByRole('status')).toHaveTextContent('Open Options');
+  });
+
   it('opens Options by default at desktop width', async () => {
     window.matchMedia = vi.fn(() => ({
       matches: true,
       addEventListener: vi.fn(),
       removeEventListener: vi.fn(),
     }));
+
+    await renderVideoGenPage();
+
+    expect((await screen.findByText('Options')).closest('details')).toHaveAttribute('open');
+  });
+
+  it('keeps Options reachable when matchMedia is unavailable', async () => {
+    window.matchMedia = undefined;
 
     await renderVideoGenPage();
 

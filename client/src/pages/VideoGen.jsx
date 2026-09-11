@@ -162,7 +162,7 @@ export default function VideoGen() {
   // (~1-2s), so nothing the form needs to render may wait on it.
   const [status, setStatus] = useState(null);
   const [optionsOpen, setOptionsOpen] = useState(() => (
-    window.matchMedia?.('(min-width: 1024px)').matches ?? false
+    window.matchMedia?.('(min-width: 1024px)').matches ?? true
   ));
   // The model list plus the numbers its auto-select reads, off the probe-free
   // `/model-context`. Fetched alongside /status on mount, it lands first — so
@@ -265,6 +265,14 @@ export default function VideoGen() {
     remoteSubmissionFields: remoteTarget.isRemote ? remoteTarget.submissionFields : null,
     displaySleepEnabled,
   });
+
+  const selectMode = (nextMode) => {
+    handleModeChange(nextMode);
+    // Non-text modes expose required conditioning inputs inside Options. Open
+    // the panel when the mode changes so a touch user never has to infer why
+    // Generate became disabled from a hover-only title.
+    if (nextMode !== 'text') setOptionsOpen(true);
+  };
 
   // Conditioning the selected peer model cannot take. The server refuses a job
   // holding any of it (MEDIA_PROVIDER_INPUT_UNSUPPORTED) rather than silently
@@ -1041,6 +1049,30 @@ export default function VideoGen() {
   const effectiveBatchSize = rendersOnThisMachine
     && currentModel?.supportsWarmBatch && !chainingActive ? batchSize : 1;
 
+  const a2vBlockReason = a2vModeBlocked ? (a2vDurationError || (!isAudioToVideoRuntime(currentModel?.runtime)
+    ? 'a2v mode requires an audio-to-video model — pick one from the Model dropdown'
+    : !audioFile ? 'Pick an audio file before generating'
+      : 'Pick a reference image before generating with this model')) : null;
+  const generateBlockedReason = remoteBlocked
+    || (byovRuntimeMissing ? `${byovStatus?.label || byovRuntime} runtime is not installed — use the install banner above` : null)
+    || (byovGateBlocked ? `Checking ${byovRuntime} runtime status…` : null)
+    || (blockedAsset ? `Download the ${blockedAsset.label} before generating` : null)
+    || (extendModeBlocked ? 'Pick a prior render and wait for the last frame to extract before generating' : null)
+    || a2vBlockReason
+    || (icLoraModeBlocked ? 'Add the reference media required by this mode before generating' : null)
+    || (keyframesBlocked ? keyframesError : null);
+  const optionsBlockReason = blockedAsset
+    ? `Open Options to download the ${blockedAsset.label}`
+    : extendModeBlocked
+      ? 'Open Options to pick a prior render and wait for its last frame'
+      : a2vBlockReason
+        ? `Open Options: ${a2vBlockReason}`
+        : icLoraModeBlocked
+          ? 'Open Options to add the reference media required by this mode'
+          : keyframesBlocked
+            ? `Open Options: ${keyframesError}`
+            : null;
+
   const canEnqueue = prompt.trim() && !remixHandoffPending && !promptOverLimit && (remoteTarget.isRemote
     ? remoteBlocked === null
     : (rendersOffMachine || (!notConnected && !extendModeBlocked
@@ -1173,7 +1205,7 @@ export default function VideoGen() {
               key={id}
               type="button"
               aria-pressed={active}
-              onClick={() => handleModeChange(id)}
+              onClick={() => selectMode(id)}
               className={`flex-1 min-w-[120px] flex items-center justify-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium transition-colors disabled:opacity-50 ${
                 active
                   ? 'bg-port-accent text-white shadow'
@@ -1309,19 +1341,7 @@ export default function VideoGen() {
                 type="submit"
                 disabled={!canEnqueue}
                 className="flex min-h-[44px] items-center gap-2 rounded-lg bg-port-accent px-4 py-2 text-sm font-medium text-white hover:bg-port-accent/80 disabled:cursor-not-allowed disabled:opacity-50"
-                title={
-                  remoteBlocked ? remoteBlocked
-                    : byovRuntimeMissing ? `${byovStatus?.label || byovRuntime} runtime is not installed — use the install banner above`
-                    : byovGateBlocked ? `Checking ${byovRuntime} runtime status…`
-                    : blockedAsset ? `Download the ${blockedAsset.label} before generating`
-                    : extendModeBlocked ? 'Pick a prior render and wait for the last frame to extract before generating'
-                    : a2vModeBlocked ? (a2vDurationError || (!isAudioToVideoRuntime(currentModel?.runtime)
-                      ? 'a2v mode requires an audio-to-video model — pick one from the Model dropdown'
-                      : !audioFile ? 'Pick an audio file before generating'
-                        : 'Pick a reference image before generating with this model'))
-                    : keyframesBlocked ? keyframesError
-                    : undefined
-                }
+                title={generateBlockedReason || undefined}
               >
                 <Sparkles className="w-4 h-4" /> {effectiveBatchSize > 1 ? `Generate ${effectiveBatchSize} videos` : 'Generate'}
               </button>
@@ -1337,6 +1357,9 @@ export default function VideoGen() {
             >
               <ListPlus className="w-4 h-4" /> {effectiveBatchSize > 1 ? `Add ${effectiveBatchSize} videos to queue` : 'Add to queue'}
             </button>
+            {optionsBlockReason && (
+              <span className="basis-full text-xs text-port-warning" role="status">{optionsBlockReason}</span>
+            )}
             {progressPct != null && <span className="text-xs text-port-accent">{progressPct}%</span>}
             {(generating || error) && (
               <span className={`text-xs truncate ${error ? 'text-port-error' : 'text-gray-400'}`}>
