@@ -1849,14 +1849,23 @@ describe('claim prompt author-filter scripts', () => {
         expect(prompt).not.toContain('{issueCandidateList}');
         expect(prompt).not.toContain('{issueAuthorFilter}');
         if (cli === 'gh') {
+          if (mode === 'owner') expect(phase1).toContain('owner-is-org');
           expect(query).toContain('--search "sort:created-asc"');
           expect(query).toContain('--limit 500');
           expect(query).toContain('number,title,author,assignees,labels,createdAt');
         } else {
           expect(query).toContain('--per-page 100 --output json');
           expect(phase1).toContain('glab api user 2>/dev/null | jq -er .username');
-          if (mode === 'owner') expect(phase1).toContain('glab api projects/:id | jq -er');
+          if (mode === 'owner') expect(phase1).toContain('owner-is-group');
           if (expectedAuthor === '$ME') expect(phase1).toContain('[ -n "$ME" ] ||');
+        }
+        if (mode === 'collaborators') {
+          expect(prompt).toContain('TRUSTED_SELF="$(set -o pipefail;');
+          expect(prompt).toContain('TRUSTED_MEMBERS="$(set -o pipefail;');
+          if (cli === 'glab') {
+            expect(prompt).toContain('--output ndjson | jq -r ".username"');
+            expect(prompt).not.toContain('glab api user -q');
+          }
         }
       }
     }
