@@ -282,7 +282,8 @@ async function migrateBirthDateFromGoals(config) {
   return queueConfigWrite(async () => {
     const freshConfig = await loadConfig();
     if (freshConfig.birthDate) return freshConfig;
-    const goals = await readJSONFile(GOALS_FILE, null, { strict: true });
+    // Read-only migration source: an unreadable legacy file skips migration without writing either file.
+    const goals = await readJSONFile(GOALS_FILE, null);
     if (!goals?.birthDate) return freshConfig;
     freshConfig.birthDate = goals.birthDate;
     freshConfig.updatedAt = new Date().toISOString();
@@ -315,6 +316,8 @@ export async function getBirthDateStrict() {
 }
 
 export async function updateBirthDate(birthDate, { syncGoals = true } = {}) {
+  // Verify the compatibility mirror before committing the canonical config.
+  const goals = syncGoals ? await readJSONFile(GOALS_FILE, null, { strict: true }) : null;
   await queueConfigWrite(async () => {
     const config = await loadConfig();
     config.birthDate = birthDate;
@@ -323,13 +326,10 @@ export async function updateBirthDate(birthDate, { syncGoals = true } = {}) {
   });
 
   // Keep goals.json in sync for backward compatibility
-  if (syncGoals) {
-    const goals = await readJSONFile(GOALS_FILE, null, { strict: true });
-    if (goals) {
-      goals.birthDate = birthDate;
-      goals.updatedAt = new Date().toISOString();
-      await atomicWrite(join(PATHS.digitalTwin, 'goals.json'), goals);
-    }
+  if (goals) {
+    goals.birthDate = birthDate;
+    goals.updatedAt = new Date().toISOString();
+    await atomicWrite(GOALS_FILE, goals);
   }
 
   await mlPatchProfileIfEnabled({ birthDate });

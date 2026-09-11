@@ -732,8 +732,26 @@ export async function importToPortOS() {
   if (!store) return { ok: false, reason: 'mortalloom-file-not-found' };
 
   const report = { added: {}, skipped: {} };
-  const mergeById = async (mlArr, localPath, pathDir) => {
-    const local = await readJSONFile(localPath, [], { strict: true });
+  const collectionFiles = [
+    ['alcoholDrinks', 'alcohol-drinks.json'],
+    ['nicotineEntries', 'nicotine-entries.json'],
+    ['bloodTests', 'blood-tests.json'],
+    ['bodyEntries', 'body-entries.json'],
+    ['epigeneticTests', 'epigenetic-tests.json'],
+    ['eyeExams', 'eyes.json'],
+    ['saunaSessions', 'sauna-sessions.json'],
+    ['habits', 'habits.json'],
+    ['healthMetrics', 'health-metrics.json']
+  ];
+  // Preflight all destinations before the first write; one unreadable local file
+  // must not turn the import into an unreported partially applied batch.
+  const collections = await Promise.all(collectionFiles.map(async ([mlKey, fileName]) => {
+    const mlArr = store[mlKey] || [];
+    const localPath = dataPath('meatspace', fileName);
+    const local = mlArr.length ? await readJSONFile(localPath, [], { strict: true }) : [];
+    return { mlKey, mlArr, localPath, local };
+  }));
+  const mergeById = async (mlArr, localPath, pathDir, local) => {
     const localArr = Array.isArray(local) ? local : [];
     const seen = new Set(localArr.map(x => x.id).filter(Boolean));
     let added = 0, skipped = 0;
@@ -764,20 +782,9 @@ export async function importToPortOS() {
   }
   report.added.goals = gAdded; report.skipped.goals = gSkipped;
 
-  for (const [mlKey, fileName] of [
-    ['alcoholDrinks', 'alcohol-drinks.json'],
-    ['nicotineEntries', 'nicotine-entries.json'],
-    ['bloodTests', 'blood-tests.json'],
-    ['bodyEntries', 'body-entries.json'],
-    ['epigeneticTests', 'epigenetic-tests.json'],
-    ['eyeExams', 'eyes.json'],
-    ['saunaSessions', 'sauna-sessions.json'],
-    ['habits', 'habits.json'],
-    ['healthMetrics', 'health-metrics.json']
-  ]) {
-    const mlArr = store[mlKey] || [];
+  for (const { mlKey, mlArr, localPath, local } of collections) {
     if (mlArr.length === 0) { report.added[mlKey] = 0; report.skipped[mlKey] = 0; continue; }
-    const { added, skipped } = await mergeById(mlArr, dataPath('meatspace', fileName), dataPath('meatspace'));
+    const { added, skipped } = await mergeById(mlArr, localPath, dataPath('meatspace'), local);
     report.added[mlKey] = added; report.skipped[mlKey] = skipped;
   }
 

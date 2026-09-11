@@ -254,6 +254,7 @@ export async function updateCharacterFields(patch = {}) {
 // persisted, and new peers ignore the remote level (applyCharacterRemote no longer merges it),
 // so this projection is invisible to same-version installs.
 export async function getWireCharacter() {
+  // Export participates in a later merge: unreadable state must not masquerade as absence.
   const raw = await readJSONFile(CHARACTER_FILE, null, { strict: true });
   if (!raw) return null;
   // Strip every derived field a hand-edited or legacy character.json might be carrying before

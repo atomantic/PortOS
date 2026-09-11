@@ -211,7 +211,7 @@ export async function logDrink({ name, oz, abv, count = 1, date }) {
     return { drink, standardDrinks, date: targetDate, dayTotal: entry?.alcohol?.standardDrinks || standardDrinks };
   }
 
-  const log = await loadDailyLog();
+  const log = await loadDailyLog({ strict: true });
   let entry = log.entries.find(e => e.date === targetDate);
   if (!entry) { entry = { date: targetDate }; log.entries.push(entry); }
   if (!entry.alcohol) entry.alcohol = { drinks: [], standardDrinks: 0 };
@@ -254,7 +254,7 @@ export async function updateDrink(date, index, updates) {
              date: effectiveDate };
   }
 
-  const log = await loadDailyLog();
+  const log = await loadDailyLog({ strict: true });
   const entry = log.entries.find(e => e.date === date);
   if (!entry?.alcohol?.drinks?.[index]) return null;
 
@@ -311,7 +311,7 @@ export async function removeDrink(date, index) {
     return removed;
   }
 
-  const log = await loadDailyLog();
+  const log = await loadDailyLog({ strict: true });
   const entry = log.entries.find(e => e.date === date);
   if (!entry?.alcohol?.drinks?.[index]) return null;
 

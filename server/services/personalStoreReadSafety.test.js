@@ -1,4 +1,4 @@
-import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdir, readFile, rm, writeFile } from 'fs/promises';
 import { dirname, join } from 'path';
 import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../lib/mockPathsDataRoot.js';
@@ -12,9 +12,11 @@ vi.mock('fs/promises', async (original) => {
 });
 vi.mock('../lib/fileUtils.js', async (original) => makePathsProxy(await original(), {
   dataRoot: () => lazyTempDataRoot('portos-personal-read-safety-'),
+  overrides: { dataPath: (...parts) => join(lazyTempDataRoot('portos-personal-read-safety-'), ...parts) },
 }));
 vi.mock('../lib/paths.js', async (original) => makePathsProxy(await original(), {
   dataRoot: () => lazyTempDataRoot('portos-personal-read-safety-'),
+  overrides: { dataPath: (...parts) => join(lazyTempDataRoot('portos-personal-read-safety-'), ...parts) },
 }));
 vi.mock('./userTimezone.js', () => ({ getUserTimezone: async () => 'UTC', userLocalToday: async () => '2026-01-02' }));
 vi.mock('./characterSkills.js', () => ({ getCharacterSkills: async () => [] }));
@@ -37,33 +39,68 @@ vi.mock('./calendarSync.js', () => ({}));
 vi.mock('./calendarAccounts.js', () => ({}));
 vi.mock('./identity.js', () => ({ addProgressEntry: vi.fn(), getGoals: async () => ({ goals: [] }) }));
 
+vi.mock('./settings.js', async () => {
+  const { EventEmitter } = await import('events');
+  return { settingsEvents: new EventEmitter(), getSettings: async () => ({
+    mortalloom: { enabled: false, path: join(lazyTempDataRoot('portos-personal-read-safety-'), 'mortal-source.json') },
+  }) };
+});
 vi.mock('./cosAgentLifecycle.js', () => ({ getAgents: async () => [] }));
 vi.mock('./digital-twin-meta.js', () => ({ loadMeta: async () => ({}), saveMeta: vi.fn() }));
 vi.mock('./taste-questionnaire.js', () => ({ invalidateTasteProfileCache: vi.fn() }));
 
 import { PATHS } from '../lib/fileUtils.js';
-import { mergeIntoDay } from './appleHealthIngest.js';
-import { saveStory, updateConfig } from './autobiography.js';
-import { updateCharacterFields } from './character.js';
-import { markDriverHandled } from './dailyDriver.js';
-import { confirmEvent } from './dailyReview.js';
-import { updateBirthDate } from './meatspace.js';
-import { addCustomDrink } from './meatspaceAlcohol.js';
-import { addActivity, addLifeEvent } from './meatspaceCalendar.js';
-import { addCustomProduct } from './meatspaceNicotine.js';
-import { setKochLevel } from './meatspacePostMorse.js';
-import { saveStoredPostSession, saveStoredTrainingRun } from './postRunStore.js';
-import { aggregateTwinEvidence } from './twinEnrichment.js';
-import { listJournals, _clearObsidianLocationsCacheForTest } from './brainJournal.js';
+let { mergeIntoDay } = {};
+let { saveStory, updateConfig } = {};
+let { updateCharacterFields } = {};
+let { markDriverHandled } = {};
+let { confirmEvent } = {};
+let { updateBirthDate } = {};
+let { addCustomDrink, logDrink } = {};
+let { addActivity, addLifeEvent } = {};
+let { addCustomProduct, logNicotine } = {};
+let { setKochLevel } = {};
+let { saveStoredPostSession, saveStoredTrainingRun } = {};
+let { aggregateTwinEvidence } = {};
+let { listJournals, _clearObsidianLocationsCacheForTest } = {};
 
-import { updatePostConfig } from './meatspacePost.js';
-import { createMemoryItem } from './meatspacePostMemory.js';
-import { applySessionToReviewSchedule } from './meatspacePostReview.js';
-import { onTaskCompleted } from './productivity.js';
-import { recordUserAction } from './userActions.js';
-import { getDigitalTwinSnapshot, applyDigitalTwinRemote } from './digital-twin-sync.js';
+let { updatePostConfig } = {};
+let { createMemoryItem } = {};
+let { applySessionToReviewSchedule } = {};
+let { onTaskCompleted } = {};
+let { recordUserAction } = {};
+let { getDigitalTwinSnapshot, applyDigitalTwinRemote } = {};
+
+
+// Load service boundaries only after the isolated filesystem and dependency mocks are installed.
+beforeAll(async () => {
+  ({ mergeIntoDay } = await import('./appleHealthIngest.js'));
+  ({ saveStory, updateConfig } = await import('./autobiography.js'));
+  ({ updateCharacterFields } = await import('./character.js'));
+  ({ markDriverHandled } = await import('./dailyDriver.js'));
+  ({ confirmEvent } = await import('./dailyReview.js'));
+  ({ updateBirthDate } = await import('./meatspace.js'));
+  ({ addCustomDrink, logDrink } = await import('./meatspaceAlcohol.js'));
+  ({ addActivity, addLifeEvent } = await import('./meatspaceCalendar.js'));
+  ({ addCustomProduct, logNicotine } = await import('./meatspaceNicotine.js'));
+  ({ setKochLevel } = await import('./meatspacePostMorse.js'));
+  ({ saveStoredPostSession, saveStoredTrainingRun } = await import('./postRunStore.js'));
+  ({ aggregateTwinEvidence } = await import('./twinEnrichment.js'));
+  ({ listJournals, _clearObsidianLocationsCacheForTest } = await import('./brainJournal.js'));
+  ({ updatePostConfig } = await import('./meatspacePost.js'));
+  ({ createMemoryItem } = await import('./meatspacePostMemory.js'));
+  ({ applySessionToReviewSchedule } = await import('./meatspacePostReview.js'));
+  ({ onTaskCompleted } = await import('./productivity.js'));
+  ({ recordUserAction } = await import('./userActions.js'));
+  ({ getDigitalTwinSnapshot, applyDigitalTwinRemote } = await import('./digital-twin-sync.js'));
+});
+
+let importToPortOS;
+beforeAll(async () => { ({ importToPortOS } = await import('./mortalLoomStore.js')); });
 
 const cases = [
+  ['alcohol daily log', () => join(PATHS.meatspace, 'daily-log.json'), () => logDrink({ name: 'Example', oz: 12, abv: 5, date: '2026-01-02' })],
+  ['nicotine daily log', () => join(PATHS.meatspace, 'daily-log.json'), () => logNicotine({ product: 'Example', mgPerUnit: 1, date: '2026-01-02' })],
   ['POST config', () => join(PATHS.meatspace, 'post-config.json'), () => updatePostConfig({ enabled: true })],
   ['memory items', () => join(PATHS.meatspace, 'post-memory-items.json'), () => createMemoryItem({ title: 'Example', lines: ['Example line'] })],
   ['review schedule', () => join(PATHS.meatspace, 'post-review-schedule.json'), () => applySessionToReviewSchedule({ masteredSkills: [{ skillId: 'example' }] })],
@@ -73,7 +110,7 @@ const cases = [
   ['autobiography stories', () => join(PATHS.digitalTwin, 'autobiography/stories.json'), () => saveStory({ promptId: 'childhood-0', content: 'Example memory' })],
   ['autobiography config', () => join(PATHS.digitalTwin, 'autobiography/config.json'), () => updateConfig({ enabled: true })],
   ['character', () => join(PATHS.data, 'character.json'), () => updateCharacterFields({ name: 'Example character' })],
-  ['daily driver', () => join(PATHS.data, 'daily-driver.json'), markDriverHandled],
+  ['daily driver', () => join(PATHS.data, 'daily-driver.json'), () => markDriverHandled()],
   ['daily review', () => join(PATHS.calendar, 'daily-reviews/2026-01-02.json'), () => confirmEvent('2026-01-02', { eventId: 'example', happened: false })],
   ['meatspace config', () => join(PATHS.meatspace, 'config.json'), () => updateBirthDate('2000-01-01', { syncGoals: false })],
   ['custom drinks', () => join(PATHS.meatspace, 'custom-drinks.json'), () => addCustomDrink({ name: 'Example', oz: 12, abv: 5 })],
@@ -83,7 +120,7 @@ const cases = [
   ['Morse progress', () => join(PATHS.meatspace, 'post-morse-progress.json'), () => setKochLevel({ kochLevel: 3 })],
   ['POST sessions', () => join(PATHS.meatspace, 'post-sessions.json'), () => saveStoredPostSession({ id: 'example-run', date: '2026-01-02' })],
   ['POST training', () => join(PATHS.meatspace, 'post-training-log.json'), () => saveStoredTrainingRun({ id: 'example-run', localDay: '2026-01-02', attempts: [{ id: 'example-attempt', skill: 'memory' }] })],
-  ['taste evidence', () => join(PATHS.digitalTwin, 'taste-observed.json'), aggregateTwinEvidence],
+  ['taste evidence', () => join(PATHS.digitalTwin, 'taste-observed.json'), () => aggregateTwinEvidence()],
 ];
 
 beforeEach(async () => {
@@ -157,4 +194,32 @@ it('blocks Digital Twin merge and export on unreadable local records, then prese
   await seed(path, JSON.stringify({ stories: [{ id: 'retained', content: 'Earlier', createdAt: '2026-01-01' }] }));
   await applyDigitalTwinRemote(incoming);
   expect(JSON.parse(await readFile(path, 'utf8')).stories.map(story => story.id).sort()).toEqual(['incoming', 'retained']);
+});
+
+it('checks the legacy goals mirror before changing the canonical birth date', async () => {
+  const configPath = join(PATHS.meatspace, 'config.json');
+  const goalsPath = join(PATHS.digitalTwin, 'goals.json');
+  const config = JSON.stringify({ birthDate: '2000-01-01' });
+  await seed(configPath, config);
+  await seed(goalsPath, '{');
+  await expect(updateBirthDate('2001-01-01')).rejects.toThrow(/Unreadable JSON file/);
+  expect(await readFile(configPath, 'utf8')).toBe(config);
+  expect(await readFile(goalsPath, 'utf8')).toBe('{');
+});
+
+it('preflights MortalLoom import destinations and preserves repaired records on retry', async () => {
+  const source = join(PATHS.data, 'mortal-source.json');
+  const goalsPath = join(PATHS.digitalTwin, 'goals.json');
+  const alcoholPath = join(PATHS.meatspace, 'alcohol-drinks.json');
+  const goals = JSON.stringify({ goals: [{ id: 'retained-goal' }] });
+  await seed(source, JSON.stringify({ goals: [{ id: 'incoming-goal' }], alcoholDrinks: [{ id: 'incoming-drink' }] }));
+  await seed(goalsPath, goals);
+  await seed(alcoholPath, '{');
+  await expect(importToPortOS()).rejects.toThrow(/Unreadable JSON file/);
+  expect(await readFile(goalsPath, 'utf8')).toBe(goals);
+  expect(await readFile(alcoholPath, 'utf8')).toBe('{');
+  await seed(alcoholPath, JSON.stringify([{ id: 'retained-drink' }]));
+  await expect(importToPortOS()).resolves.toMatchObject({ ok: true });
+  expect(JSON.parse(await readFile(goalsPath, 'utf8')).goals.map(goal => goal.id)).toEqual(['retained-goal', 'incoming-goal']);
+  expect(JSON.parse(await readFile(alcoholPath, 'utf8')).map(drink => drink.id)).toEqual(['retained-drink', 'incoming-drink']);
 });

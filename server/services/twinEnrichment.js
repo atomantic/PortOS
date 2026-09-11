@@ -335,6 +335,7 @@ function daysAgoIso(days, now) {
 // ---------------------------------------------------------------------------
 
 export async function getTasteEvidence() {
+  // Durable despite the derived rollups: aggregate and interpret retain user-authored interpretation.
   return readJSONFile(TASTE_OBSERVED_FILE, null, { strict: true });
 }
 
