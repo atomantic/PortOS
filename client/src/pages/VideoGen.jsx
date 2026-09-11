@@ -65,7 +65,7 @@ import PromptFromMedia from '../components/media/PromptFromMedia';
 import { normalizeVideo } from '../components/media/normalize';
 import {
   Film, Sparkles, Settings as SettingsIcon, RefreshCw, AlertTriangle,
-  X, Type, Image as ImageIcon, GitBranch, ListPlus, Music, SlidersHorizontal, MonitorOff,
+  X, Type, Image as ImageIcon, GitBranch, ListPlus, Music, SlidersHorizontal, MonitorOff, ChevronDown,
 } from 'lucide-react';
 import toast from '../components/ui/Toast';
 import MediaJobsQueue from '../components/media/MediaJobsQueue';
@@ -161,6 +161,9 @@ export default function VideoGen() {
   // `/status` owns connectivity ONLY. It shells out to python on every call
   // (~1-2s), so nothing the form needs to render may wait on it.
   const [status, setStatus] = useState(null);
+  const [optionsOpen, setOptionsOpen] = useState(() => (
+    window.matchMedia?.('(min-width: 1024px)').matches ?? true
+  ));
   // The model list plus the numbers its auto-select reads, off the probe-free
   // `/model-context`. Fetched alongside /status on mount, it lands first — so
   // the Model picker paints on a cold load instead of holding a placeholder
@@ -189,6 +192,15 @@ export default function VideoGen() {
       .catch(() => {});
   }, []);
   useEffect(() => { refreshGrokEnabled(); }, [refreshGrokEnabled]);
+
+  useEffect(() => {
+    const desktopOptions = window.matchMedia?.('(min-width: 1024px)');
+    if (!desktopOptions) return undefined;
+    const syncOptionsToViewport = () => setOptionsOpen(desktopOptions.matches);
+    syncOptionsToViewport();
+    desktopOptions.addEventListener('change', syncOptionsToViewport);
+    return () => desktopOptions.removeEventListener('change', syncOptionsToViewport);
+  }, []);
 
   // Installed LoRA library — the picker filters this to the current model's
   // video family. Silent: a failure just hides the picker.
@@ -253,6 +265,14 @@ export default function VideoGen() {
     remoteSubmissionFields: remoteTarget.isRemote ? remoteTarget.submissionFields : null,
     displaySleepEnabled,
   });
+
+  const selectMode = (nextMode) => {
+    handleModeChange(nextMode);
+    // Non-text modes expose required conditioning inputs inside Options. Open
+    // the panel when the mode changes so a touch user never has to infer why
+    // Generate became disabled from a hover-only title.
+    if (nextMode !== 'text') setOptionsOpen(true);
+  };
 
   // Conditioning the selected peer model cannot take. The server refuses a job
   // holding any of it (MEDIA_PROVIDER_INPUT_UNSUPPORTED) rather than silently
@@ -1029,6 +1049,30 @@ export default function VideoGen() {
   const effectiveBatchSize = rendersOnThisMachine
     && currentModel?.supportsWarmBatch && !chainingActive ? batchSize : 1;
 
+  const a2vBlockReason = a2vModeBlocked ? (a2vDurationError || (!isAudioToVideoRuntime(currentModel?.runtime)
+    ? 'a2v mode requires an audio-to-video model — pick one from the Model dropdown'
+    : !audioFile ? 'Pick an audio file before generating'
+      : 'Pick a reference image before generating with this model')) : null;
+  const generateBlockedReason = remoteBlocked
+    || (byovRuntimeMissing ? `${byovStatus?.label || byovRuntime} runtime is not installed — use the install banner above` : null)
+    || (byovGateBlocked ? `Checking ${byovRuntime} runtime status…` : null)
+    || (blockedAsset ? `Download the ${blockedAsset.label} before generating` : null)
+    || (extendModeBlocked ? 'Pick a prior render and wait for the last frame to extract before generating' : null)
+    || a2vBlockReason
+    || (icLoraModeBlocked ? 'Add the reference media required by this mode before generating' : null)
+    || (keyframesBlocked ? keyframesError : null);
+  const optionsBlockReason = blockedAsset
+    ? `Open Options to download the ${blockedAsset.label}`
+    : extendModeBlocked
+      ? 'Open Options to pick a prior render and wait for its last frame'
+      : a2vBlockReason
+        ? `Open Options: ${a2vBlockReason}`
+        : icLoraModeBlocked
+          ? 'Open Options to add the reference media required by this mode'
+          : keyframesBlocked
+            ? `Open Options: ${keyframesError}`
+            : null;
+
   const canEnqueue = prompt.trim() && !remixHandoffPending && !promptOverLimit && (remoteTarget.isRemote
     ? remoteBlocked === null
     : (rendersOffMachine || (!notConnected && !extendModeBlocked
@@ -1161,7 +1205,7 @@ export default function VideoGen() {
               key={id}
               type="button"
               aria-pressed={active}
-              onClick={() => handleModeChange(id)}
+              onClick={() => selectMode(id)}
               className={`flex-1 min-w-[120px] flex items-center justify-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium transition-colors disabled:opacity-50 ${
                 active
                   ? 'bg-port-accent text-white shadow'
@@ -1250,56 +1294,109 @@ export default function VideoGen() {
               repairing={modelDownload.repairing}
             />
           ))}
-          <UniverseStylePicker
-            value={selectedUniverse?.id || ''}
-            onChange={setSelectedUniverse}
-          />
-          <StylePresetPicker
-            value={stylePreset?.id || ''}
-            onChange={setStylePreset}
-          />
-          <div className={`grid grid-cols-1 gap-3 ${negativePromptSupported ? 'md:grid-cols-2' : ''}`}>
-            <FormField label="Prompt" labelClassName="block text-xs font-medium text-gray-400 mb-1">
-              <AutoSizeTextarea
-                value={prompt}
-                onChange={(e) => setPrompt(e.target.value)}
-                rows={3}
-                className="w-full bg-port-bg border border-port-border rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-port-accent disabled:opacity-50 min-h-[80px]"
-                placeholder="Describe the video you want to generate..."
-              />
-              {/* The count is the SUBMITTED length, so a style preset that
-                  pushes a short-looking prompt past reactor's cap is visible
-                  here instead of surfacing as a 400 after Generate. */}
-              <p className={`mt-1 text-[11px] leading-snug ${promptOverLimit ? 'text-port-error' : 'text-gray-500'}`}>
-                {isReactor
-                  ? `${submittedPromptLength} / ${REACTOR_MAX_PROMPT_LENGTH} characters`
-                  : `${submittedPromptLength} characters`}
+          <FormField label="Prompt" labelClassName="block text-xs font-medium text-gray-400 mb-1">
+            <AutoSizeTextarea
+              value={prompt}
+              onChange={(e) => setPrompt(e.target.value)}
+              rows={3}
+              className="w-full bg-port-bg border border-port-border rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-port-accent disabled:opacity-50 min-h-[80px]"
+              placeholder="Describe the video you want to generate..."
+            />
+            {/* The count is the SUBMITTED length, so a style preset that
+                pushes a short-looking prompt past reactor's cap is visible
+                here instead of surfacing as a 400 after Generate. */}
+            <p className={`mt-1 text-[11px] leading-snug ${promptOverLimit ? 'text-port-error' : 'text-gray-500'}`}>
+              {isReactor
+                ? `${submittedPromptLength} / ${REACTOR_MAX_PROMPT_LENGTH} characters`
+                : `${submittedPromptLength} characters`}
+            </p>
+            {/* Only crossing the cap is worth announcing; the count itself
+                changes on every keystroke and would be pure noise. */}
+            {promptOverLimit && (
+              <p className="mt-1 text-[11px] text-port-error leading-snug" role="status">
+                Reactor will reject this — shorten the prompt. Style presets count toward the limit.
               </p>
-              {/* Only crossing the cap is worth announcing; the count itself
-                  changes on every keystroke and would be pure noise. */}
-              {promptOverLimit && (
-                <p className="mt-1 text-[11px] text-port-error leading-snug" role="status">
-                  Reactor will reject this — shorten the prompt. Style presets count toward the limit.
-                </p>
-              )}
-              {!negativePromptSupported && !isFal && !isReactor && (
-                <p className="mt-1 text-[11px] text-gray-500 leading-snug">
-                  This model does not use a negative prompt.
-                </p>
-              )}
-            </FormField>
-            {negativePromptSupported && (
-              <FormField label="Negative Prompt" labelClassName="block text-xs font-medium text-gray-400 mb-1">
-                <AutoSizeTextarea
-                  value={negativePrompt}
-                  onChange={(e) => setNegativePrompt(e.target.value)}
-                  rows={3}
-                  className="w-full bg-port-bg border border-port-border rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-port-accent disabled:opacity-50 min-h-[80px]"
-                  placeholder="What to avoid..."
-                />
-              </FormField>
+            )}
+            {!negativePromptSupported && !isFal && !isReactor && (
+              <p className="mt-1 text-[11px] text-gray-500 leading-snug">
+                This model does not use a negative prompt.
+              </p>
+            )}
+          </FormField>
+
+          <div
+            className="sticky top-0 z-10 -mx-4 flex flex-wrap items-center gap-2 border-y border-port-border bg-port-card/95 px-4 py-2 backdrop-blur lg:static lg:mx-0 lg:border-0 lg:bg-transparent lg:p-0 lg:backdrop-blur-none"
+            data-testid="video-primary-actions"
+          >
+            {generating ? (
+              <button
+                type="button"
+                onClick={handleCancel}
+                className="flex min-h-[44px] items-center gap-2 rounded-lg bg-port-error px-4 py-2 text-sm font-medium text-white hover:bg-port-error/80"
+              >
+                <X className="w-4 h-4" /> Cancel
+              </button>
+            ) : (
+              <button
+                type="submit"
+                disabled={!canEnqueue}
+                className="flex min-h-[44px] items-center gap-2 rounded-lg bg-port-accent px-4 py-2 text-sm font-medium text-white hover:bg-port-accent/80 disabled:cursor-not-allowed disabled:opacity-50"
+                title={generateBlockedReason || undefined}
+              >
+                <Sparkles className="w-4 h-4" /> {effectiveBatchSize > 1 ? `Generate ${effectiveBatchSize} videos` : 'Generate'}
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={handleEnqueue}
+              disabled={!canEnqueue}
+              className="flex min-h-[44px] items-center gap-2 rounded-lg border border-port-border px-4 py-2 text-sm font-medium text-gray-200 hover:bg-port-border/40 hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
+              title={canEnqueue ? 'Submit this configuration to its server queue; local, Grok, and remote lanes run independently'
+                : blockedAsset ? `Download the ${blockedAsset.label} before queueing`
+                  : 'Complete the required inputs before queueing'}
+            >
+              <ListPlus className="w-4 h-4" /> {effectiveBatchSize > 1 ? `Add ${effectiveBatchSize} videos to queue` : 'Add to queue'}
+            </button>
+            {optionsBlockReason && (
+              <span className="basis-full text-xs text-port-warning" role="status">{optionsBlockReason}</span>
+            )}
+            {progressPct != null && <span className="text-xs text-port-accent">{progressPct}%</span>}
+            {(generating || error) && (
+              <span className={`text-xs truncate ${error ? 'text-port-error' : 'text-gray-400'}`}>
+                {error || statusMsg || 'Working...'}
+              </span>
             )}
           </div>
+
+          <details
+            open={optionsOpen}
+            onToggle={(event) => setOptionsOpen(event.currentTarget.open)}
+            className="group min-w-0"
+          >
+            <summary className="flex min-h-[44px] cursor-pointer list-none items-center justify-between rounded-lg border border-port-border px-3 py-2 text-sm font-medium text-gray-300 hover:bg-port-border/30 lg:hidden">
+              Options
+              <ChevronDown className="h-4 w-4 transition-transform group-open:rotate-180" aria-hidden="true" />
+            </summary>
+            <div className="mt-3 min-w-0 space-y-3 lg:mt-0">
+              <UniverseStylePicker
+                value={selectedUniverse?.id || ''}
+                onChange={setSelectedUniverse}
+              />
+              <StylePresetPicker
+                value={stylePreset?.id || ''}
+                onChange={setStylePreset}
+              />
+              {negativePromptSupported && (
+                <FormField label="Negative Prompt" labelClassName="block text-xs font-medium text-gray-400 mb-1">
+                  <AutoSizeTextarea
+                    value={negativePrompt}
+                    onChange={(e) => setNegativePrompt(e.target.value)}
+                    rows={3}
+                    className="w-full bg-port-bg border border-port-border rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-port-accent disabled:opacity-50 min-h-[80px]"
+                    placeholder="What to avoid..."
+                  />
+                </FormField>
+              )}
 
           {/* Keep Enhance live while a render is in flight so the next clip
               can be composed and submitted to its server queue. Generate
@@ -1699,58 +1796,6 @@ export default function VideoGen() {
             />
           )}
 
-          <div className="flex flex-wrap items-center gap-2 pt-1">
-            {generating ? (
-              <button
-                type="button"
-                onClick={handleCancel}
-                className="flex items-center gap-2 px-4 py-2 bg-port-error hover:bg-port-error/80 text-white text-sm font-medium rounded-lg min-h-[40px]"
-              >
-                <X className="w-4 h-4" /> Cancel
-              </button>
-            ) : (
-              <button
-                type="submit"
-                disabled={!canEnqueue}
-                className="flex items-center gap-2 px-4 py-2 bg-port-accent hover:bg-port-accent/80 disabled:opacity-50 disabled:cursor-not-allowed text-white text-sm font-medium rounded-lg min-h-[40px]"
-                title={
-                  // A federated render is gated on the peer, so none of the
-                  // local runtime remedies below apply to it.
-                  remoteBlocked ? remoteBlocked
-                    : byovRuntimeMissing ? `${byovStatus?.label || byovRuntime} runtime is not installed — use the install banner above`
-                    : byovGateBlocked ? `Checking ${byovRuntime} runtime status…`
-                    : blockedAsset ? `Download the ${blockedAsset.label} before generating`
-                    : extendModeBlocked ? 'Pick a prior render and wait for the last frame to extract before generating'
-                    : a2vModeBlocked ? (a2vDurationError || (!isAudioToVideoRuntime(currentModel?.runtime)
-                      ? 'a2v mode requires an audio-to-video model — pick one from the Model dropdown'
-                      : !audioFile ? 'Pick an audio file before generating'
-                        : 'Pick a reference image before generating with this model'))
-                    : keyframesBlocked ? keyframesError
-                    : undefined
-                }
-              >
-                <Sparkles className="w-4 h-4" /> {effectiveBatchSize > 1 ? `Generate ${effectiveBatchSize} videos` : 'Generate'}
-              </button>
-            )}
-            <button
-              type="button"
-              onClick={handleEnqueue}
-              disabled={!canEnqueue}
-              className="flex items-center gap-2 px-4 py-2 border border-port-border text-gray-200 hover:text-white hover:bg-port-border/40 disabled:opacity-50 disabled:cursor-not-allowed text-sm font-medium rounded-lg min-h-[40px]"
-              title={canEnqueue ? 'Submit this configuration to its server queue; local, Grok, and remote lanes run independently'
-                : blockedAsset ? `Download the ${blockedAsset.label} before queueing`
-                  : 'Complete the required inputs before queueing'}
-            >
-              <ListPlus className="w-4 h-4" /> {effectiveBatchSize > 1 ? `Add ${effectiveBatchSize} videos to queue` : 'Add to queue'}
-            </button>
-            {progressPct != null && <span className="text-xs text-port-accent">{progressPct}%</span>}
-            {(generating || error) && (
-              <span className={`text-xs truncate ${error ? 'text-port-error' : 'text-gray-400'}`}>
-                {error || statusMsg || 'Working...'}
-              </span>
-            )}
-          </div>
-
           {/* Visible per-render control rather than a settings-only default (off by
               default — see ImageGenTab's videoGenDisplaySleep) — a GPU-watchdog
               crash on this model is rare enough that most renders shouldn't pay for
@@ -1790,6 +1835,8 @@ export default function VideoGen() {
               </span>
             </p>
           )}
+            </div>
+          </details>
         </div>
 
         <div className="bg-port-card border border-port-border rounded-xl p-4 space-y-3">
