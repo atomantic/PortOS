@@ -48,14 +48,19 @@ router.post('/execute', asyncHandler(async (req, res) => {
 
   const io = req.app.get('io');
 
-  const commandId = commands.executeCommand(
+  // executeCommand reports validation failures through onComplete before it
+  // returns null. Declare the id first so that synchronous callback cannot
+  // access it in its temporal dead zone; there is no command-scoped socket
+  // event to emit when no command was started.
+  let commandId;
+  commandId = commands.executeCommand(
     command,
     workspacePath,
     (data, stream) => {
-      io?.emit(`command:${commandId}:data`, { data, stream });
+      if (commandId) io?.emit(`command:${commandId}:data`, { data, stream });
     },
     (result) => {
-      io?.emit(`command:${commandId}:complete`, result);
+      if (commandId) io?.emit(`command:${commandId}:complete`, result);
     }
   );
 
