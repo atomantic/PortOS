@@ -240,6 +240,7 @@ export async function withTransaction(fn) {
   // GUARDED_CLIENT_HANDLER reads the SQL out of both.
   const guardedClient = new Proxy(client, GUARDED_CLIENT_HANDLER);
   let began = false;
+  let releaseErr;
   try {
     await client.query('BEGIN');
     began = true;
@@ -247,10 +248,16 @@ export async function withTransaction(fn) {
     await client.query('COMMIT');
     return result;
   } catch (err) {
-    if (began) await client.query('ROLLBACK');
+    // Swallow a secondary ROLLBACK failure (closed socket, statement_timeout
+    // abort, backend termination) so the caller sees the original fn/COMMIT
+    // error instead of a masking "query on closed connection" from ROLLBACK.
+    // Pass that original error to release() so pg destroys a damaged client
+    // rather than returning it to the idle pool for the next checkout to inherit.
+    releaseErr = err;
+    if (began) await client.query('ROLLBACK').catch(() => {});
     throw err;
   } finally {
-    client.release();
+    client.release(releaseErr);
   }
 }
 
