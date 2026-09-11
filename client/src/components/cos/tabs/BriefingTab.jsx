@@ -166,7 +166,7 @@ export default function BriefingTab() {
   const generationInFlightRef = useRef(false);
 
   const [generateBriefing, generatingBriefing] = useAsyncAction(async () => {
-    if (generationPending || generatingBriefing || generationInFlightRef.current) return;
+    if (generationPending || generationInFlightRef.current) return;
     generationInFlightRef.current = true;
     try {
       const result = await api.triggerCosJob('job-daily-briefing', { silent: true });
@@ -279,7 +279,7 @@ export default function BriefingTab() {
             />
           )}
           <button
-            onClick={() => loadData().then((latest) => {
+            onClick={() => loadData({ showLoading: false }).then((latest) => {
               if (latest) setGenerationPending(false);
             })}
             className="flex items-center gap-2 px-3 py-1.5 text-sm bg-port-card border border-port-border hover:border-port-accent/50 text-gray-300 rounded-lg transition-colors"
