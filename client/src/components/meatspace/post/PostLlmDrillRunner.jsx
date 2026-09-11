@@ -3,6 +3,7 @@ import { CheckCircle, XCircle } from 'lucide-react';
 import ProgressBar from '../../ui/ProgressBar';
 import { scorePostLlmDrill } from '../../../services/api';
 import { DRILL_LABELS, WORDPLAY_LLM_DRILL_TYPES } from './constants';
+import { pluralize } from '../../../lib/textUtils';
 import { AILoadingIndicator, MissedExamplesDisplay, CompoundChainUI, BridgeWordUI, DoubleMeaningUI, IdiomTwistUI, scoreWordplayResponse } from './WordplayDrillUI';
 
 export function combineTrainingScoreResults(scoreResults) {
@@ -800,7 +801,7 @@ function VerbalFluencyUI({ category, items, inputValue, setInputValue, onAddItem
         disabled={items.length === 0}
         className="w-full px-6 py-2.5 bg-port-success hover:bg-port-success/80 disabled:opacity-50 text-white font-medium rounded-lg transition-colors"
       >
-        Done — Submit {items.length} items
+        Done — Submit {pluralize(items.length, 'item')}
       </button>
       <PromptProgress index={questionIndex} total={totalPrompts} />
     </>
@@ -927,7 +928,7 @@ function AlternativeUsesUI({ object, items, inputValue, setInputValue, onAddItem
         disabled={items.length === 0}
         className="w-full px-6 py-2.5 bg-port-success hover:bg-port-success/80 disabled:opacity-50 text-white font-medium rounded-lg transition-colors"
       >
-        Done — Submit {items.length} uses
+        Done — Submit {pluralize(items.length, 'use')}
       </button>
       <PromptProgress index={questionIndex} total={totalPrompts} />
     </>

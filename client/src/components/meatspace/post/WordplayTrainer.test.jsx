@@ -134,7 +134,7 @@ describe('WordplayTrainer — training-log persistence (issue #2097)', () => {
     fireEvent.change(input, { target: { value: 'firehouse' } });
     fireEvent.click(screen.getByText('Add'));
 
-    fireEvent.click(screen.getByText(/Done — Submit 1 compounds/));
+    fireEvent.click(screen.getByText(/Done — Submit 1 compound\b/));
 
     // Scoring resolves (score: 85 >= 70 correct threshold) — "See Results" is
     // the last-question label for handleNext.
@@ -182,7 +182,7 @@ describe('WordplayTrainer — training-log persistence (issue #2097)', () => {
     await waitFor(() => expect(screen.getByText('fire')).toBeInTheDocument(), { timeout: GENERATED_DRILL_TIMEOUT });
     fireEvent.change(screen.getByPlaceholderText(/other half/i), { target: { value: 'firehouse' } });
     fireEvent.click(screen.getByText('Add'));
-    fireEvent.click(screen.getByText(/Done — Submit 1 compounds/));
+    fireEvent.click(screen.getByText(/Done — Submit 1 compound\b/));
     fireEvent.click(await screen.findByText('See Results'));
 
     await waitFor(() => expect(submitTrainingEntry).toHaveBeenCalledTimes(1));
