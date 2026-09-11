@@ -364,7 +364,7 @@ export default function Pipeline() {
                 {form.universeId
                   ? 'Logline / premise / style notes pulled from the universe — edit below.'
                   : universes.length === 0
-                    ? 'No universes yet. Build one in Media Gen → Universe Builder before creating a series.'
+                    ? 'No universes yet. Create one under Create → Universes before creating a series.'
                     : 'Series carry style + canon from their universe — pick one to continue.'}
               </p>
             </div>
