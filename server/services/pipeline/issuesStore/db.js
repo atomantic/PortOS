@@ -11,7 +11,7 @@
  * snapshot ephemeral-filter, and LWW staleness.
  *
  * PURE leaf I/O — the store facade owns serialization + sanitize; reads return
- * `data` verbatim (the columns are a queryable mirror, never read back).
+ * full `data` verbatim by default, or explicit lean/summary projections.
  */
 
 import { query } from '../../../lib/db.js';
@@ -20,8 +20,11 @@ import { PIPELINE_STAGE_IDS } from '../../../lib/pipelineStages.js';
 
 // Only trusted, closed stage IDs form SQL paths. PostgreSQL removes history
 // before serializing JSONB for Node; every other field remains lossless.
+// A malformed stage is left for the sanitizer, never traversed as a JSON array.
 const LEAN_DATA = PIPELINE_STAGE_IDS.reduce(
-  (sql, stageId) => `${sql} #- '{stages,${stageId},runHistory}'`, 'data',
+  (sql, stageId) => `${sql} #- CASE
+    WHEN jsonb_typeof(data->'stages'->'${stageId}') = 'object'
+    THEN '{stages,${stageId},runHistory}'::text[] ELSE '{}'::text[] END`, 'data',
 );
 
 /** Raw on-disk-equivalent record (the `data` JSONB), or null. No sanitize. */
@@ -83,12 +86,12 @@ export async function listRawBySeriesIds(seriesIds, { withHistory = true } = {})
  */
 export async function listRecentRaw({ limit, withHistory = true, includeDeleted = false, summary = false }) {
   const projection = summary
-    ? "jsonb_build_object('id', id, 'title', data->'title', 'number', number, 'seriesId', series_id, 'updatedAt', data->'updatedAt')"
+    ? "jsonb_build_object('id', id, 'title', data->'title', 'number', number, 'seriesId', series_id, 'updatedAt', data->'updatedAt', 'createdAt', data->'createdAt')"
     : withHistory ? 'data' : LEAN_DATA;
   const { rows } = await query(
     `SELECT ${projection} AS data FROM pipeline_issues
-     ${includeDeleted ? '' : 'WHERE deleted = FALSE'}
-     ORDER BY updated_at DESC LIMIT $1`,
+     ${includeDeleted ? '' : 'WHERE deleted IS NOT TRUE'}
+     ORDER BY updated_at DESC NULLS LAST, id DESC LIMIT $1`,
     [limit],
   );
   return rows.map((r) => r.data);

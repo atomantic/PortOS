@@ -183,18 +183,19 @@ function createFacade({ dir, sanitizeRecord }) {
       return sanitizeList(raw, options);
     },
 
-    loadRecent: async (options) => {
+    loadRecent: async ({ limit = 10, ...options } = {}) => {
       const backend = await getBackend();
+      let recent;
       if (backend.listRecentRaw) {
-        const raw = await backend.listRecentRaw(options);
-        return options.summary ? raw : sanitizeList(raw, options);
+        recent = sanitizeList(await backend.listRecentRaw({ ...options, limit }), options);
+      } else {
+        // Dev/test file backend has no timestamp index. Sanitize before sorting
+        // to retain its legacy-record behavior, then match the HTTP projection.
+        const live = sanitizeList(await backend.listRaw(), options)
+          .filter((r) => options.includeDeleted || !r.deleted);
+        recent = live.sort((a, b) => (b.updatedAt || '').localeCompare(a.updatedAt || ''))
+          .slice(0, limit);
       }
-      // Dev/test file backend has no timestamp index. Sanitize before sorting
-      // to retain its legacy-record behavior, then match the HTTP projection.
-      const live = sanitizeList(await backend.listRaw(), options)
-        .filter((r) => options.includeDeleted || !r.deleted);
-      const recent = live.sort((a, b) => (b.updatedAt || '').localeCompare(a.updatedAt || ''))
-        .slice(0, options.limit);
       return options.summary
         ? recent.map(({ id, title, number, seriesId, updatedAt }) => ({ id, title, number, seriesId, updatedAt }))
         : recent;
