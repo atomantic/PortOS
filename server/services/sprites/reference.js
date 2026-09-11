@@ -712,7 +712,11 @@ export async function listReferenceSources() {
     // kind that carries the walk track — so a row admitting another kind is
     // picked up here too instead of this list silently staying character-only.
     if (r.deleted || !kindSupportsTrack(r.kind, WALK_TRACK, getEffectiveAnimationTracks())) continue;
-    const manifest = await loadManifest(r.id);
+    // Catalog projections may omit unreadable evidence; this null never reaches a write.
+    const manifest = await loadManifest(r.id).catch((err) => {
+      if (err.code !== 'UNREADABLE_STORE') throw err;
+      return null;
+    });
     // Same picker resolveSourceReference uses, so the advertised image is
     // exactly the one a seed will attach.
     const seed = lockedSeedArtifact(manifest);
@@ -749,7 +753,11 @@ export async function listSpriteThumbnails() {
     // main reference is a property of carrying the walk track, not of the
     // literal kind name.
     if (tracksForKind(r.kind, getEffectiveAnimationTracks()).length) {
-      const manifest = await loadManifest(r.id);
+      // Keep one damaged manifest from hiding the entire catalog; no write consumes this fallback.
+      const manifest = await loadManifest(r.id).catch((err) => {
+        if (err.code !== 'UNREADABLE_STORE') throw err;
+        return null;
+      });
       const main = manifest?.mainReference;
       if (main?.locked && main.path) return { id: r.id, path: main.path };
     }
