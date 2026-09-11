@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { act, render, screen } from '@testing-library/react';
-import { MemoryRouter, Route, Routes, useLocation } from 'react-router';
+import { act, fireEvent, render, screen } from '@testing-library/react';
+import { MemoryRouter, Route, Routes, useLocation, useNavigate } from 'react-router';
 
 const socketHandlers = new Map();
 const instanceFeatureMock = vi.hoisted(() => ({
@@ -42,7 +42,7 @@ vi.mock('../StatusBadge', () => ({ default: () => null }));
 vi.mock('./DeployPanel', () => ({ default: () => null }));
 vi.mock('./EditAppDrawer', () => ({ default: () => null }));
 vi.mock('./DesktopLaunchProgress', () => ({ default: () => null }));
-vi.mock('./tabs/OverviewTab', () => ({ default: () => null }));
+vi.mock('./tabs/OverviewTab', () => ({ default: ({ app }) => <output data-testid="overview-app">{app.id}</output> }));
 vi.mock('./tabs/TasksTab', () => ({ default: () => null }));
 vi.mock('./tabs/AutomationTab', () => ({ default: () => null }));
 vi.mock('./tabs/DocumentsTab', () => ({ default: () => null }));
@@ -70,7 +70,11 @@ const APP = {
 
 function LocationProbe() {
   const { pathname } = useLocation();
-  return <output data-testid="location">{pathname}</output>;
+  const navigate = useNavigate();
+  return <>
+    <output data-testid="location">{pathname}</output>
+    <button onClick={() => navigate('/apps/app-2/overview')}>View second app</button>
+  </>;
 }
 
 function renderDetail(initialEntry = '/apps/app-1/overview') {
@@ -187,5 +191,72 @@ describe('AppDetailView managed-app feature tabs', () => {
     await screen.findByRole('heading', { name: 'Example App' });
     expect(screen.queryByRole('button', { name: 'DataDog' })).toBeNull();
     expect(screen.getByTestId('datadog-tab')).toBeInTheDocument();
+  });
+});
+
+describe('AppDetailView fetch lifecycle', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    socketHandlers.clear();
+    api.getApp.mockReset();
+  });
+
+  it('clears old child props immediately on navigation and ignores a late old-app refresh', async () => {
+    let resolveOld;
+    let resolveNew;
+    api.getApp.mockResolvedValueOnce(APP)
+      .mockImplementationOnce(() => new Promise(resolve => { resolveOld = resolve; }))
+      .mockImplementationOnce(() => new Promise(resolve => { resolveNew = resolve; }));
+    renderDetail();
+    await screen.findByRole('heading', { name: APP.name });
+    await act(async () => socketHandlers.get('apps:changed')({ appId: APP.id }));
+    fireEvent.click(screen.getByRole('button', { name: 'View second app' }));
+    expect(screen.queryByTestId('overview-app')).toBeNull();
+    await act(async () => resolveNew({ ...APP, id: 'app-2', name: 'Second App' }));
+    expect(screen.getByTestId('overview-app')).toHaveTextContent('app-2');
+    await act(async () => resolveOld(APP));
+    expect(screen.getByRole('heading', { name: 'Second App' })).toBeInTheDocument();
+    expect(screen.getByTestId('overview-app')).toHaveTextContent('app-2');
+  });
+
+  it('ignores a failed previous-route request and recovers from a current-app failed refresh', async () => {
+    let rejectOld;
+    api.getApp.mockImplementationOnce(() => new Promise((_, reject) => { rejectOld = reject; }))
+      .mockResolvedValueOnce({ ...APP, id: 'app-2', name: 'Second App' });
+    renderDetail();
+    fireEvent.click(screen.getByRole('button', { name: 'View second app' }));
+    await screen.findByRole('heading', { name: 'Second App' });
+    await act(async () => rejectOld(new Error('Old request failed')));
+    expect(screen.getByTestId('overview-app')).toHaveTextContent('app-2');
+
+    api.getApp.mockRejectedValueOnce(new Error('Refresh failed'));
+    await act(async () => socketHandlers.get('apps:changed')({ appId: 'app-2' }));
+    expect(screen.queryByTestId('overview-app')).toBeNull();
+    api.getApp.mockResolvedValueOnce({ ...APP, id: 'app-2', name: 'Recovered App' });
+    await act(async () => socketHandlers.get('apps:changed')({ appId: 'app-2' }));
+    expect(screen.getByRole('heading', { name: 'Recovered App' })).toBeInTheDocument();
+  });
+
+  it('filters other-app events, preserves fleet invalidation, and keeps the newest refresh', async () => {
+    let resolveOlder;
+    api.getApp.mockResolvedValueOnce(APP)
+      .mockImplementationOnce(() => new Promise(resolve => { resolveOlder = resolve; }))
+      .mockResolvedValueOnce({ ...APP, name: 'Updated App' });
+    renderDetail();
+    await screen.findByRole('heading', { name: APP.name });
+    const changed = socketHandlers.get('apps:changed');
+    await act(async () => {
+      changed({ action: 'update', appId: 'app-2' });
+      changed({ action: 'delete', appId: 'app-2' });
+    });
+    expect(api.getApp).toHaveBeenCalledTimes(1);
+    await act(async () => changed({ action: 'update', appId: APP.id }));
+    await act(async () => changed({ action: 'update-task-types' }));
+    expect(api.getApp).toHaveBeenCalledTimes(3);
+    await act(async () => resolveOlder(APP));
+    expect(screen.getByRole('heading', { name: 'Updated App' })).toBeInTheDocument();
+    api.getApp.mockResolvedValueOnce(APP);
+    await act(async () => changed());
+    expect(api.getApp).toHaveBeenCalledTimes(4);
   });
 });
