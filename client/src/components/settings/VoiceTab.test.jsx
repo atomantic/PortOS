@@ -83,6 +83,18 @@ describe('VoiceTab TTS engine registry', () => {
     }));
   });
 
+  it('explains the Kokoro upgrade and keeps Piper setup user-triggered', async () => {
+    voiceApi.getVoiceConfig.mockResolvedValue({
+      ...structuredClone(config), tts: { ...config.tts, engine: 'piper', retiredEngine: 'kokoro' },
+    });
+    render(<MemoryRouter><VoiceTab /></MemoryRouter>);
+    expect(await screen.findByText(/Kokoro has been retired/)).toHaveTextContent('Save & Reconcile');
+    expect(screen.getByRole('combobox', { name: 'TTS engine' })).toHaveValue('piper');
+    expect(voiceApi.updateVoiceConfig).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Save & Reconcile' }));
+    await waitFor(() => expect(voiceApi.updateVoiceConfig).toHaveBeenCalled());
+  });
+
   it('loads engine options and patches the registry configuration key for Qwen3 voices', async () => {
     render(<MemoryRouter><VoiceTab /></MemoryRouter>);
 

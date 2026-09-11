@@ -32,7 +32,6 @@ import {
   cancelFineTuningJob,
   promoteCheckpoint,
 } from '../services/voice/fineTuning.js';
-import { readyState as kokoroReadyState, unloadKokoro, loadedModelKey as kokoroLoadedKey } from '../services/voice/tts-kokoro.js';
 import { findPiperVoice } from '../services/voice/piper-voices.js';
 import { speakProactive, HHMM_RE, MAX_PROACTIVE_TEXT_LEN } from '../services/voice/proactiveSpeech.js';
 
@@ -68,7 +67,8 @@ const voiceConfigPatchSchema = z.object({
     vocabularyPrompt: z.string().max(4000).optional(),
   }).partial().optional(),
   tts: z.object({
-    engine: z.enum(TTS_ENGINE_IDS).optional(),
+    engine: z.enum([...TTS_ENGINE_IDS, 'kokoro']).optional(),
+    retiredEngine: z.literal('kokoro').optional(),
     rate: z.number().min(0.25).max(4).optional(),
     kokoro: z.object({
       modelId: z.string().max(128).optional(),
@@ -283,9 +283,12 @@ router.post('/profiles/preset', asyncHandler(async (req, res) => {
   const body = validateRequest(promotePresetProfileSchema, req.body || {});
   const cfg = await getVoiceConfig();
   const preset = parsePresetVoiceId(body.voiceId);
-  const modelRevision = preset?.engine === 'kokoro'
-    ? `${cfg.tts.kokoro?.modelId || 'configured'}:${cfg.tts.kokoro?.dtype || 'configured'}`
-    : (preset?.engine === 'qwen3-tts' ? DEFAULT_DESIGN_MODEL : `piper:${preset?.voice || ''}`);
+  if (preset?.engine === 'kokoro') {
+    throw new ServerError('Kokoro has been retired. Select a Piper preset to create a voice profile.', {
+      status: 409, code: 'VOICE_ENGINE_RETIRED',
+    });
+  }
+  const modelRevision = preset?.engine === 'qwen3-tts' ? DEFAULT_DESIGN_MODEL : `piper:${preset?.voice || ''}`;
   const profile = await promotePresetProfile({
     ...body,
     modelRevision,
@@ -438,15 +441,16 @@ router.post('/speak', asyncHandler(async (req, res) => {
 router.get('/tts/status', asyncHandler(async (_req, res) => {
   res.json({
     kokoro: {
-      state: kokoroReadyState(),
-      loadedKey: kokoroLoadedKey(),
+      state: 'lazy',
+      retired: true,
+      loadedKey: null,
     },
   });
 }));
 
 // POST /api/voice/tts/unload
 router.post('/tts/unload', asyncHandler(async (_req, res) => {
-  res.json(unloadKokoro());
+  res.json({ unloaded: false, retired: true });
 }));
 
 const whisperActionSchema = z.object({

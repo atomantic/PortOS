@@ -52,13 +52,6 @@ vi.mock('../services/voice/fineTuning.js', () => ({
   cancelFineTuningJob: vi.fn(),
   promoteCheckpoint: vi.fn(),
 }));
-// GET /api/voice/tts/status + POST /api/voice/tts/unload destructure these at
-// module load — mock them so the route resolves without spinning up Kokoro.
-vi.mock('../services/voice/tts-kokoro.js', () => ({
-  readyState: vi.fn(() => 'lazy'),
-  unloadKokoro: vi.fn(() => ({ unloaded: false })),
-  loadedModelKey: vi.fn(() => null),
-}));
 vi.mock('../services/voice/piper-voices.js', () => ({
   findPiperVoice: vi.fn(),
 }));
@@ -87,7 +80,6 @@ import * as fineTuning from '../services/voice/fineTuning.js';
 import { ServerError } from '../lib/errorHandler.js';
 import * as piperVoices from '../services/voice/piper-voices.js';
 import * as proactiveSpeech from '../services/voice/proactiveSpeech.js';
-import * as kokoro from '../services/voice/tts-kokoro.js';
 import * as facetimeBridge from '../services/voice/facetimeBridge.js';
 import voiceRoutes from './voice.js';
 import { errorEvents } from '../lib/errorHandler.js';
@@ -140,11 +132,11 @@ describe('Voice Routes', () => {
     it('promotes a preset with the current local model and delivery provenance', async () => {
       voiceProfiles.promotePresetProfile.mockResolvedValue({ id: 'voice-profile-1' });
       const res = await request(buildApp()).post('/api/voice/profiles/preset').send({
-        universeId: 'uni-1', characterId: 'char-1', voiceId: 'kokoro:af_heart',
+        universeId: 'uni-1', characterId: 'char-1', voiceId: 'piper:en_US-lessac-medium',
       });
       expect(res.status).toBe(201);
       expect(voiceProfiles.promotePresetProfile).toHaveBeenCalledWith(expect.objectContaining({
-        modelRevision: 'kokoro-test:q8', delivery: { rate: 1 },
+        modelRevision: 'piper:en_US-lessac-medium', delivery: { rate: 1 },
       }));
       expect(res.body).toEqual({ profile: { id: 'voice-profile-1' } });
     });
@@ -553,22 +545,18 @@ describe('Voice Routes', () => {
   });
 
   describe('GET /api/voice/tts/status', () => {
-    it('returns the Kokoro residency snapshot', async () => {
-      kokoro.readyState.mockReturnValue('loaded');
-      kokoro.loadedModelKey.mockReturnValue('kokoro-v1:af_heart');
+    it('returns an inert compatibility snapshot for retired Kokoro', async () => {
       const res = await request(buildApp()).get('/api/voice/tts/status');
       expect(res.status).toBe(200);
-      expect(res.body).toEqual({ kokoro: { state: 'loaded', loadedKey: 'kokoro-v1:af_heart' } });
+      expect(res.body).toEqual({ kokoro: { state: 'lazy', loadedKey: null, retired: true } });
     });
   });
 
   describe('POST /api/voice/tts/unload', () => {
-    it('drops the cached Kokoro instance and echoes its result', async () => {
-      kokoro.unloadKokoro.mockReturnValue({ unloaded: true });
+    it('keeps unload safe for cached clients', async () => {
       const res = await request(buildApp()).post('/api/voice/tts/unload');
       expect(res.status).toBe(200);
-      expect(res.body).toEqual({ unloaded: true });
-      expect(kokoro.unloadKokoro).toHaveBeenCalledTimes(1);
+      expect(res.body).toEqual({ unloaded: false, retired: true });
     });
   });
 

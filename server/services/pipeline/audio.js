@@ -39,7 +39,7 @@ export function parseVoiceId(voiceId) {
   const m = trimmed.match(VOICE_ID_RE);
   if (!m) return { engine: null, voice: trimmed };
   const engine = normalizeVoiceEngine(m[1].toLowerCase());
-  if (!VALID_ENGINES.has(engine)) return { engine: null, voice: trimmed };
+  if (engine !== 'kokoro' && !VALID_ENGINES.has(engine)) return { engine: null, voice: trimmed };
   return { engine, voice: m[2] };
 }
 

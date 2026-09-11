@@ -616,7 +616,7 @@ export default function AudioStage({ issue, onStageUpdate }) {
             <h2 className="text-lg font-semibold text-white">{PIPELINE_STAGE_LABELS.audio}</h2>
             <p className="text-xs text-gray-500 mt-0.5">
               Voice-over per dialogue line. Picks each character's bound voice; falls back to project default.
-              {' '}<span className="text-gray-600">Local OSS (Kokoro / Piper) always available.</span>
+              {' '}<span className="text-gray-600">Local Piper voices available after setup.</span>
             </p>
           </div>
           <span className={`text-[10px] uppercase tracking-wider ${STATUS_COLOR[stage.status] || 'text-gray-500'}`}>

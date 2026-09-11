@@ -52,7 +52,7 @@ describe('buildToolResource', () => {
   it('flattens an object request body into the argument schema and keeps property descriptions', () => {
     const input = byName('voice.synthesize').input_schema;
     expect(input.required).toEqual(['text']);
-    expect(input.properties.engine.enum).toEqual(['kokoro', 'piper', 'qwen3-tts']);
+    expect(input.properties.engine.enum).toEqual(['piper', 'qwen3-tts']);
     // The description is what lets a model pick a valid rate — minimization must not strip it.
     expect(input.properties.rate.description).toMatch(/Speech rate/);
     expect(input.additionalProperties).toBe(false);
@@ -60,7 +60,7 @@ describe('buildToolResource', () => {
 
   it('turns query parameters into input properties', () => {
     const input = byName('voice.list-voices').input_schema;
-    expect(input.properties.engine).toEqual({ type: 'string', enum: ['kokoro', 'piper', 'qwen3-tts'] });
+    expect(input.properties.engine).toEqual({ type: 'string', enum: ['piper', 'qwen3-tts'] });
     expect(input.required).toBeUndefined(); // the engine param is optional
   });
 

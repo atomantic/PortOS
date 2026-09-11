@@ -15,7 +15,7 @@ export const voiceSynthesizeBodySchema = z.object({
   engine: z.enum(TTS_ENGINE_IDS).optional(),
   voice: z.string().max(128).optional(),
   rate: z.number().min(0.25).max(4).optional()
-    .describe('Speech rate. Validated 0.25-4 (Piper). Kokoro clamps to 0.5-2.0.'),
+    .describe('Speech rate. Validated 0.25-4 (Piper).'),
 }).strict();
 
 export const sdapiTxt2imgBodySchema = z.object({

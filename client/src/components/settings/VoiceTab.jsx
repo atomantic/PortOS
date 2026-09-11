@@ -18,7 +18,6 @@ const SERVICE_LABELS = {
   whisper: 'Whisper (STT)',
   'web-speech': 'Web Speech API (STT)',
   piper: 'Piper (TTS)',
-  kokoro: 'Kokoro (TTS)',
   llm: 'LLM provider',
 };
 
@@ -27,12 +26,6 @@ const STT_ENGINES = [
   { value: 'web-speech', label: 'Web Speech API (browser-native, zero latency)' },
 ];
 
-const KOKORO_DTYPES = [
-  { value: 'q8', label: 'q8 (recommended — ~80MB, fast)' },
-  { value: 'q4', label: 'q4 (smallest)' },
-  { value: 'fp16', label: 'fp16 (higher quality)' },
-  { value: 'fp32', label: 'fp32 (best quality, slowest)' },
-];
 
 
 const WHISPER_MODELS = [
@@ -282,7 +275,7 @@ export function VoiceTab() {
   const facetime = cfg.facetime || {};
   const faceTimeDirty = !facetime.targetHandle?.trim() || !facetime.targetName?.trim();
 
-  const configuredEngine = cfg.tts.engine || 'kokoro';
+  const configuredEngine = cfg.tts.engine || 'piper';
   const sttEngine = cfg.stt.engine || 'whisper';
   const engineMeta = ttsEngines.find((item) => (
     item.id === configuredEngine || item.aliases?.includes(configuredEngine)
@@ -530,18 +523,10 @@ export function VoiceTab() {
           </div>
         </FormField>
 
-        {engine === 'kokoro' && (
-          <FormField label="Kokoro precision" hint="Lower precision = smaller download + faster, slight quality cost.">
-            <select
-              value={cfg.tts.kokoro?.dtype || 'q8'}
-              onChange={(e) => patch('tts.kokoro.dtype', e.target.value)}
-              className={inputCls}
-            >
-              {KOKORO_DTYPES.map((opt) => (
-                <option key={opt.value} value={opt.value}>{opt.label}</option>
-              ))}
-            </select>
-          </FormField>
+        {cfg.tts.retiredEngine === 'kokoro' && (
+          <p role="status" className="text-sm text-port-warning">
+            Kokoro has been retired. Your voice settings now use Piper. Choose a voice, then use Save &amp; Reconcile to install Piper and its voice model. Existing Kokoro character profiles must be replaced with a Piper preset.
+          </p>
         )}
 
         <FormField label="Speech rate" hint="0.5 = slow, 1.0 = normal, 2.0 = fast">

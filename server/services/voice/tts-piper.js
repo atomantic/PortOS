@@ -19,7 +19,7 @@ export const synthesizePiper = (text, cfg, signal) => {
   const voiceId = cfg.piper.voice;
   const voicePath = expandPath(cfg.piper.voicePath || voicePathFor(voiceId));
   if (!existsSync(voicePath)) {
-    return Promise.reject(new Error(`piper voice missing: ${voicePath}`));
+    return Promise.reject(new Error(`Piper voice missing. Open Settings → Voice and use Save & Reconcile to install Piper and the selected voice.`));
   }
 
   const rate = Math.max(0.25, Math.min(4, cfg.rate ?? 1.0));

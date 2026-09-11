@@ -1,10 +1,8 @@
 // Voice stack health checks — whisper.cpp + LLM provider + (when active) Piper.
-// Kokoro runs in-process; readiness is reported via the in-memory model flag.
 
 import { existsSync } from 'fs';
 import { join } from 'path';
 import { getVoiceConfig, expandPath, voiceHome, PIPER_BIN_NAME } from './config.js';
-import { readyState as kokoroReadyState } from './tts-kokoro.js';
 import { which } from './bootstrap.js';
 import { resolveLlmEndpoint, authHeaders } from './llm.js';
 import { fetchWithTimeout } from '../../lib/fetchWithTimeout.js';
@@ -38,12 +36,6 @@ export const checkAll = async (cfg) => {
   // Settings re-probes the new endpoint instead of serving the stale badge.
   const cacheKey = `${sttEngine}|${voice.tts.engine}|${voice.stt.endpoint}|${llmProvider}`;
   if (cache && cache.key === cacheKey && Date.now() - cache.ts < CACHE_TTL_MS) {
-    // Refresh kokoro readiness on every call — it's a cheap in-memory check
-    // and flips from lazy → loading → loaded mid-cache-window after first synthesis.
-    if (voice.tts.engine === 'kokoro') {
-      const state = kokoroReadyState();
-      cache.value.kokoro = { ok: state === 'loaded', state };
-    }
     return cache.value;
   }
 
@@ -73,10 +65,6 @@ export const checkAll = async (cfg) => {
 
   if (sttEngine === 'web-speech') {
     out['web-speech'] = { ok: true, state: 'browser-native' };
-  }
-  if (voice.tts.engine === 'kokoro') {
-    const state = kokoroReadyState();
-    out.kokoro = { ok: state === 'loaded', state };
   }
   out.facetime = await checkFaceTimeSetup(voice);
 
