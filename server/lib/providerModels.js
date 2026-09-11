@@ -152,7 +152,7 @@ const withoutMinimal = (levels) => Object.freeze(levels.filter((l) => l !== 'min
 const CODEX_EFFORT_LEVELS_NO_MINIMAL = withoutMinimal(CODEX_EFFORT_LEVELS);
 const CODEX_ULTRA_EFFORT_LEVELS_NO_MINIMAL = withoutMinimal(CODEX_ULTRA_EFFORT_LEVELS);
 
-const codexEffortLevelsForModel = (model) => {
+export const codexEffortLevelsForModel = (model) => {
   const id = String(model || '').trim().toLowerCase();
   const ultra = CODEX_ULTRA_MODELS.has(id);
   if (CODEX_NO_MINIMAL_MODEL_RE.test(id)) {
