@@ -506,6 +506,16 @@ describe('peerSync', () => {
       expect(cursors['peer-a'].subscribedSince).toBeGreaterThan(0);
     });
 
+    it('refuses to subscribe over an unreadable list and preserves its bytes', async () => {
+      const file = join(PATHS.data, 'sharing', 'peer_subscriptions.json');
+      await writeFile(file, '{"subscriptions":');
+      const before = await readFile(file);
+
+      await expect(subscribePeer({ peerId: 'peer-a', recordKind: 'universe', recordId: 'u1' }))
+        .rejects.toMatchObject({ code: 'UNREADABLE_STORE', status: 500 });
+      expect(await readFile(file)).toEqual(before);
+    });
+
     it('is idempotent — re-subscribing returns the existing record without duplicating', async () => {
       vi.mocked(getUniverse).mockResolvedValue({ id: 'u1', name: 'Foo', updatedAt: '2026-01-01T00:00:00Z' });
       vi.mocked(peerFetch).mockResolvedValue({ ok: true, json: async () => ({ missingAssets: [] }) });

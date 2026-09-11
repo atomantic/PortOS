@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdir, rm, writeFile } from 'fs/promises';
+import { mkdir, readFile, rm, writeFile } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
 
@@ -83,6 +83,16 @@ describe('peerTombstoneCursors', () => {
       expect(await initCursor('')).toBeNull();
       expect(await initCursor(null)).toBeNull();
       expect(await initCursor(42)).toBeNull();
+    });
+
+    it('refuses to initialize over unreadable cursors and preserves their bytes', async () => {
+      const file = join(PATHS.data, 'sharing', 'peer_tombstone_cursors.json');
+      await writeFile(file, '{"peer-a":');
+      const before = await readFile(file);
+
+      await expect(initCursor('peer-b', { now: 1000 }))
+        .rejects.toMatchObject({ code: 'UNREADABLE_STORE', status: 500 });
+      expect(await readFile(file)).toEqual(before);
     });
   });
 

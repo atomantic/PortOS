@@ -13,6 +13,7 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { readFileSync } from 'fs';
+import * as taskStore from './cosTaskStore.js';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 
@@ -1156,6 +1157,7 @@ describe('emitOnDemandEmpty', () => {
   });
 
   it("surfaces the pr-reviewer preflight's recorded skip reason on an idle outcome", async () => {
+    const persist = vi.spyOn(taskStore, 'addTask').mockResolvedValue({ id: 'diagnostic' });
     recordPerpetualTransient('pr-reviewer', 'app-1', { reason: 'security-guard-not-ready' });
     const events = [];
     const handler = (d) => events.push(d);
@@ -1171,6 +1173,11 @@ describe('emitOnDemandEmpty', () => {
       cosEvents.off('schedule:on-demand-empty', handler);
     }
     expect(events[0]).toMatchObject({ taskType: 'pr-reviewer', outcome: 'idle', reason: 'security-guard-not-ready' });
+    expect(persist).toHaveBeenCalledWith(expect.objectContaining({
+      status: 'completed',
+      metadata: expect.objectContaining({ preflightFailure: 'security-guard-not-ready', note: expect.stringContaining('before an agent started') }),
+    }), 'internal', { raw: true, suppressDequeue: true });
+    persist.mockRestore();
   });
 
   it('consumes the pr-reviewer skip reason on read, so a stale one cannot be reported twice', async () => {

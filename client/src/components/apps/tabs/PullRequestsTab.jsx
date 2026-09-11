@@ -17,7 +17,7 @@ import { timeAgo } from '../../../utils/formatters';
 
 const FORGE_LABEL = { github: 'GitHub', gitlab: 'GitLab' };
 
-const ACTION_STATUS_RANK = { queuing: 0, queued: 1, active: 2, completed: 3, blocked: 3 };
+const ACTION_STATUS_RANK = { queuing: 0, queued: 1, active: 2, completed: 3, blocked: 3, failed: 3 };
 const ACTION_STATUS_LABEL = {
   queued: 'Queued — view',
   active: 'Active — view',
@@ -30,6 +30,7 @@ const actionStatusForTask = status => ({
   in_progress: 'active',
   completed: 'completed',
   blocked: 'blocked',
+  failed: 'failed',
 }[status] || null);
 
 // The two per-row agent actions. They share every piece of state machinery —
@@ -171,7 +172,7 @@ export default function PullRequestsTab({ appId, appName }) {
 
   const applyTaskUpdate = useCallback(task => {
     if (!task?.id) return;
-    const nextStatus = actionStatusForTask(task.status);
+    const nextStatus = task.metadata?.preflightFailure ? 'failed' : actionStatusForTask(task.status);
     if (!nextStatus) return;
 
     replaceActions(current => {
@@ -183,7 +184,7 @@ export default function PullRequestsTab({ appId, appName }) {
           const matches = action.taskId === task.id
             || (!action.taskId && ACTION_KINDS[kind].matches(task, appId, Number(number)));
           if (!matches || actionRank(nextStatus) < actionRank(action.status)) continue;
-          updated[number] = { ...action, taskId: action.taskId || task.id, status: nextStatus };
+          updated[number] = { ...action, taskId: action.taskId || task.id, status: nextStatus, error: task.metadata?.note };
           changed = true;
         }
         next[kind] = updated;
@@ -224,6 +225,7 @@ export default function PullRequestsTab({ appId, appName }) {
               ...(current || {}),
               taskId: current?.taskId || record.taskId || null,
               status: serverAction,
+              error: record.error,
             };
           }
         }
@@ -487,7 +489,20 @@ export default function PullRequestsTab({ appId, appName }) {
                   <div className="shrink-0 lg:pt-0.5 flex flex-wrap items-start gap-2">
                     {rowActionsFor(pullRequest).map(({ kind, onQueue }) => {
                       const { label, Icon, title } = ACTION_KINDS[kind];
-                      const actionStatus = actions[kind][pullRequest.number]?.status;
+                      const action = actions[kind][pullRequest.number];
+                      const actionStatus = action?.status;
+                      if (actionStatus === 'failed') {
+                        return (
+                          <div key={kind} className="max-w-md text-xs text-port-error space-y-2" role="alert">
+                            <p>{action.error || 'PR review preflight failed before an agent started.'}</p>
+                            <div className="flex flex-wrap gap-3">
+                              <Link className="underline" to={`/cos/tasks?task=${encodeURIComponent(action.taskId)}&source=internal`}>View failure record</Link>
+                              <Link className="underline" to="/models/llms/abuse">Abuse Guard setup</Link>
+                              <button type="button" className="underline" onClick={() => onQueue(pullRequest)}>Retry PR review</button>
+                            </div>
+                          </div>
+                        );
+                      }
                       if (actionStatus && actionStatus !== 'queuing') {
                         return (
                           <Link

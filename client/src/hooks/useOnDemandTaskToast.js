@@ -34,6 +34,7 @@ const PR_REVIEWER_REASON_LABELS = {
   'no-external-open-prs': 'no open external pull requests to review',
   'target-pull-request-not-reviewable': "that pull request isn't eligible right now (not open against the default branch, or authored by a trusted collaborator)",
   'security-scan-report-pending': 'a security scan for this pull request is already in progress',
+  'security-guard-process-failed': 'Prompt Guard stopped before an agent started. Open Models → LLMs → Abuse Guard to check or repair setup, then retry PR review. The failure record is in CoS → Tasks',
   'security-guard-not-ready': "the local model-abuse classifier (Settings → Models → LLMs → Abuse Guard) isn't ready — finish or repair its setup, then try again",
 };
 

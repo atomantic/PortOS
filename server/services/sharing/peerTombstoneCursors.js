@@ -31,12 +31,13 @@ import { isPlainObject } from '../../lib/objects.js';
 const STATE_PATH = () => join(PATHS.data, 'sharing', 'peer_tombstone_cursors.json');
 
 /**
- * Load the full cursor map. Tolerates a missing or malformed file by
- * returning `{}` — peers that have never sync'd carry no cursor.
+ * Load the full cursor map. A missing file is a trustworthy empty map. A
+ * present-but-unreadable file rejects because every cursor mutation writes
+ * this value back and must never reset the other peers' acknowledgement state.
  */
 async function readState() {
   await ensureDir(join(PATHS.data, 'sharing'));
-  const raw = await readJSONFile(STATE_PATH(), {}, { logError: false });
+  const raw = await readJSONFile(STATE_PATH(), {}, { logError: false, strict: true });
   if (!isPlainObject(raw)) return {};
   // Defensive: a hand-edited file could contain non-object entries.
   const out = {};

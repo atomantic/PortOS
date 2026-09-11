@@ -2205,6 +2205,30 @@ export async function emitOnDemandEmpty({ taskScheduleMod, request, targetApp, t
     if (health && !health.ok && health.remedy) forge = { cli: 'gh', remedy: health.remedy };
   }
 
+  // A preflight has no agent lifecycle, but an explicit failed run still needs
+  // a durable record. Terminal status prevents either spawn engine from running
+  // this diagnostic as a task; retry must enter through the security scan again.
+  if (request.taskType === 'pr-reviewer' && appId && reason?.startsWith('security-') && reason !== 'security-scan-report-pending') {
+    const note = `PR review stopped before an agent started (${reason}). No PR actions were taken. `
+      + (reason.startsWith('security-guard-')
+        ? 'Open Models → LLMs → Abuse Guard, check its setup and repair it if needed, then retry PR review. The classifier did not return a usable safety verdict; this is not a finding against the PR.'
+        : 'Check the repository connection and security scan configuration, then retry PR review.');
+    await addTask({
+      id: `pr-review-preflight-${request.id}`,
+      status: 'completed',
+      priority: 'MEDIUM',
+      priorityValue: 2,
+      taskType: 'internal',
+      description: `PR review preflight failed for ${targetApp.name}${request.targetPullRequest ? ` #${request.targetPullRequest}` : ''}`,
+      metadata: {
+        app: appId, analysisType: 'pr-reviewer',
+        targetPullRequest: request.targetPullRequest ?? null,
+        preflightFailure: reason, note,
+        completedAt: new Date().toISOString(),
+      },
+    }, 'internal', { raw: true, suppressDequeue: true });
+  }
+
   cosEvents.emit('schedule:on-demand-empty', {
     requestId: request.id,
     taskType: request.taskType,

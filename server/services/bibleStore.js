@@ -62,11 +62,15 @@ export function createBibleStore(opts) {
     return { ...parsed, [listKey]: sanitizeBibleList(parsed[listKey], kind, { idPrefix }) };
   }
 
-  async function save(workId, state) {
+  // Call only from inside withBibleWrite. The queue wraps the complete
+  // read-modify-write cycle, so this helper must not enqueue again.
+  async function saveNow(workId, state) {
     await ensureDir(wrDir(workId));
-    await withBibleWrite(filePath(workId), () => atomicWrite(filePath(workId), { ...state, updatedAt: nowIso() }));
+    await atomicWrite(filePath(workId), { ...state, updatedAt: nowIso() });
     emitRecordUpdated('writersRoomWork', workId);
   }
+
+  const withWorkWrite = (workId, work) => withBibleWrite(filePath(workId), work);
 
   async function list(workId) {
     const state = await load(workId);
@@ -84,78 +88,86 @@ export function createBibleStore(opts) {
   async function create(workId, patch = {}) {
     const requireErr = requireOnCreate(patch);
     if (requireErr) throw badReq(requireErr);
-    const state = await load(workId);
-    const keyOfPatch = dedupKey(patch);
-    if (keyOfPatch && state[listKey].some((e) => dedupKey(e) === keyOfPatch)) {
-      throw badReq(conflictMessage(patch));
-    }
-    const draft = { id: `${idPrefix}${randomUUID()}`, source: 'user' };
-    for (const field of primaryFields) {
-      if (patch[field] !== undefined) draft[field] = String(patch[field] || '').trim();
-    }
-    for (const field of editableFields) {
-      if (patch[field] !== undefined) draft[field] = patch[field];
-    }
-    // Places: if both name and slugline are primary, missing name + present
-    // slugline → mirror slugline → name (preserves old createPlace behavior).
-    if (primaryFields.includes('name') && primaryFields.includes('slugline') && !draft.name && draft.slugline) {
-      draft.name = draft.slugline;
-    }
-    const profile = sanitizer(draft, { idPrefix, preserveTimestamps: false });
-    state[listKey].push(profile);
-    await save(workId, state);
-    return profile;
+    return withWorkWrite(workId, async () => {
+      const state = await load(workId);
+      const keyOfPatch = dedupKey(patch);
+      if (keyOfPatch && state[listKey].some((e) => dedupKey(e) === keyOfPatch)) {
+        throw badReq(conflictMessage(patch));
+      }
+      const draft = { id: `${idPrefix}${randomUUID()}`, source: 'user' };
+      for (const field of primaryFields) {
+        if (patch[field] !== undefined) draft[field] = String(patch[field] || '').trim();
+      }
+      for (const field of editableFields) {
+        if (patch[field] !== undefined) draft[field] = patch[field];
+      }
+      // Places: if both name and slugline are primary, missing name + present
+      // slugline → mirror slugline → name (preserves old createPlace behavior).
+      if (primaryFields.includes('name') && primaryFields.includes('slugline') && !draft.name && draft.slugline) {
+        draft.name = draft.slugline;
+      }
+      const profile = sanitizer(draft, { idPrefix, preserveTimestamps: false });
+      state[listKey].push(profile);
+      await saveNow(workId, state);
+      return profile;
+    });
   }
 
   async function update(workId, entryId, patch = {}) {
     assertId(entryId);
-    const state = await load(workId);
-    const idx = state[listKey].findIndex((e) => e.id === entryId);
-    if (idx < 0) throw notFoundErr(notFoundLabel);
-    const next = { ...state[listKey][idx] };
-    // Primary fields: single-primary kinds reject blank; multi-primary
-    // places allow blanks here and rely on validateAfterUpdate for the
-    // combined-blank invariant.
-    for (const field of primaryFields) {
-      if (patch[field] === undefined) continue;
-      const newVal = String(patch[field] || '').trim();
-      if (primaryFields.length === 1 && !newVal) {
-        throw badReq(`${notFoundLabel} ${field} cannot be blank`);
-      }
-      if (newVal) {
-        const newKey = dedupKey({ ...next, [field]: newVal });
-        if (newKey && state[listKey].some((e) => e.id !== entryId && dedupKey(e) === newKey)) {
-          throw badReq(conflictMessage({ [field]: newVal }));
+    return withWorkWrite(workId, async () => {
+      const state = await load(workId);
+      const idx = state[listKey].findIndex((e) => e.id === entryId);
+      if (idx < 0) throw notFoundErr(notFoundLabel);
+      const next = { ...state[listKey][idx] };
+      // Primary fields: single-primary kinds reject blank; multi-primary
+      // places allow blanks here and rely on validateAfterUpdate for the
+      // combined-blank invariant.
+      for (const field of primaryFields) {
+        if (patch[field] === undefined) continue;
+        const newVal = String(patch[field] || '').trim();
+        if (primaryFields.length === 1 && !newVal) {
+          throw badReq(`${notFoundLabel} ${field} cannot be blank`);
         }
+        if (newVal) {
+          const newKey = dedupKey({ ...next, [field]: newVal });
+          if (newKey && state[listKey].some((e) => e.id !== entryId && dedupKey(e) === newKey)) {
+            throw badReq(conflictMessage({ [field]: newVal }));
+          }
+        }
+        next[field] = newVal;
       }
-      next[field] = newVal;
-    }
-    for (const field of editableFields) {
-      if (patch[field] !== undefined) next[field] = patch[field];
-    }
-    if (validateAfterUpdate) validateAfterUpdate(next);
-    next.source = 'user';
-    state[listKey][idx] = sanitizer({ ...next, updatedAt: nowIso() }, { idPrefix, preserveTimestamps: true });
-    await save(workId, state);
-    return state[listKey][idx];
+      for (const field of editableFields) {
+        if (patch[field] !== undefined) next[field] = patch[field];
+      }
+      if (validateAfterUpdate) validateAfterUpdate(next);
+      next.source = 'user';
+      state[listKey][idx] = sanitizer({ ...next, updatedAt: nowIso() }, { idPrefix, preserveTimestamps: true });
+      await saveNow(workId, state);
+      return state[listKey][idx];
+    });
   }
 
   async function remove(workId, entryId) {
     assertId(entryId);
-    const state = await load(workId);
-    const before = state[listKey].length;
-    state[listKey] = state[listKey].filter((e) => e.id !== entryId);
-    if (state[listKey].length === before) throw notFoundErr(notFoundLabel);
-    await save(workId, state);
-    return { ok: true };
+    return withWorkWrite(workId, async () => {
+      const state = await load(workId);
+      const before = state[listKey].length;
+      state[listKey] = state[listKey].filter((e) => e.id !== entryId);
+      if (state[listKey].length === before) throw notFoundErr(notFoundLabel);
+      await saveNow(workId, state);
+      return { ok: true };
+    });
   }
 
   async function mergeExtracted(workId, extracted) {
     if (!Array.isArray(extracted)) return list(workId);
-    const state = await load(workId);
-    state[listKey] = mergeExtractedBible(state[listKey], extracted, kind, { idPrefix });
-    await save(workId, state);
-    return state[listKey];
+    return withWorkWrite(workId, async () => {
+      const state = await load(workId);
+      state[listKey] = mergeExtractedBible(state[listKey], extracted, kind, { idPrefix });
+      await saveNow(workId, state);
+      return state[listKey];
+    });
   }
 
   return { list, get, create, update, remove, mergeExtracted };
