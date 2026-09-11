@@ -20,7 +20,8 @@ import {
 const ALBUMS_FILE = join(PATHS.data, 'albums.json');
 
 async function loadAll() {
-  const raw = await readJSONFile(ALBUMS_FILE, []);
+  // Albums are durable user records; never save an empty fallback over unreadable bytes.
+  const raw = await readJSONFile(ALBUMS_FILE, [], { strict: true });
   return (Array.isArray(raw) ? raw : []).map(sanitizeAlbum).filter(Boolean);
 }
 

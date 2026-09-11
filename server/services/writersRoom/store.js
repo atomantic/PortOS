@@ -51,7 +51,8 @@ import {
 function makeFileBackend() {
   const loadFolders = async () => {
     await ensureDir(wrRoot());
-    const raw = await readJSONFile(wrFoldersFile(), []);
+    // Folder metadata is durable user state, even on the test/escape-hatch backend.
+    const raw = await readJSONFile(wrFoldersFile(), [], { strict: true });
     return Array.isArray(raw) ? raw : [];
   };
   const saveFolders = async (folders) => {
@@ -60,7 +61,8 @@ function makeFileBackend() {
   };
   const loadExercises = async () => {
     await ensureDir(wrRoot());
-    const raw = await readJSONFile(wrExercisesFile(), []);
+    // Exercise history must not be replaced by an empty fallback after a failed read.
+    const raw = await readJSONFile(wrExercisesFile(), [], { strict: true });
     return Array.isArray(raw) ? raw : [];
   };
   const saveExercises = async (exercises) => {

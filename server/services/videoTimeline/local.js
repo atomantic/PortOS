@@ -86,14 +86,15 @@ export function getRenderJobStatus(jobId) {
 // ids) use this and normalize just what they need — normalizing every project
 // on every request is pure waste on a library of any size.
 const loadRawProjects = async () => {
-  const raw = await readJSONFile(PROJECTS_FILE, []);
+  // Timeline projects are durable user edits; a mutator must never persist an
+  // empty fallback over a present-but-unreadable project file.
+  const raw = await readJSONFile(PROJECTS_FILE, [], { strict: true });
   return Array.isArray(raw) ? raw : [];
 };
 
 export const loadProjects = async () => {
-  // Defend against a hand-edited / corrupted JSON state file. Without this,
-  // a non-array root would crash every CRUD path with "x.findIndex is not a
-  // function" instead of degrading gracefully to an empty list.
+  // The strict raw read rejects a corrupt or non-array root before any CRUD
+  // path can mistake it for an empty project library and write that fallback.
   // Every read upgrades v1 (`clips`-only) projects to the v2 lane shape in
   // memory, so the rest of the service only ever sees `segments`/`overlays`/
   // `audio`. The on-disk upgrade is migration 296; this keeps a project the

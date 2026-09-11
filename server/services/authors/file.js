@@ -23,7 +23,8 @@ import {
 const AUTHORS_FILE = join(PATHS.data, 'authors.json');
 
 async function loadAll() {
-  const raw = await readJSONFile(AUTHORS_FILE, []);
+  // Authors are durable user records; never save an empty fallback over unreadable bytes.
+  const raw = await readJSONFile(AUTHORS_FILE, [], { strict: true });
   return (Array.isArray(raw) ? raw : []).map(sanitizeAuthor).filter(Boolean);
 }
 
