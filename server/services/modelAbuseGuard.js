@@ -359,13 +359,10 @@ async function isBasePythonSupported(pythonPath) {
     .then(({ stdout }) => stdout.trim() === 'supported').catch(() => false);
 }
 
-// A benign sentence the helper must classify end to end before the installer
-// reports success. Importing packages proves prerequisites, not classification:
-// a helper that loads the model and then dies on the first window (the
-// unbatched-tensor bug that failed every Stage 1 scan on transformers 4.57)
-// passed the import probe and only surfaced as a bare
-// `security-guard-process-failed` at scan time.
-const RUNTIME_CANARY_TEXT = 'The quick brown fox jumps over the lazy dog.';
+// Verify classification across several overlapping windows, not just imports
+// or a short sentence: both unbatched tensors and broken tokenizer overflow
+// have passed weaker probes while making real PR scans fail.
+const RUNTIME_CANARY_TEXT = 'The quick brown fox jumps over the lazy dog. '.repeat(100);
 
 async function isRuntimeReady(pythonPath) {
   if (!pythonPath) { runtimeIssue = null; return false; }
@@ -391,7 +388,7 @@ async function canaryPasses(pythonPath, modelDir) {
     .catch(() => ({ ok: false }));
   if (!result.ok) return false;
   const verdict = normalizeModelAbuseGuardResult(result.parsed, { minBenignScore: MODEL_ABUSE_GUARD_MIN_BENIGN_SCORE });
-  return verdict.ok === true && verdict.safe === true;
+  return verdict.ok === true && verdict.safe === true && verdict.chunkCount > 1;
 }
 
 /**
@@ -456,11 +453,10 @@ export function installModelAbuseGuard({ onEvent } = {}) {
     return failure(code, { diagnostic: lastInstallFailure });
   };
   installInFlight = (async () => {
-    // Do this before creating a venv or installing packages. The model is gated
-    // on Hugging Face, so a missing token is an operator prerequisite—not a
-    // reason to leave a half-useful runtime behind and discover the problem
-    // only after setup has changed the install.
-    if (!(await getHfToken())) return failInstall('security-guard-huggingface-token-required');
+    // A fresh model download needs access before changing the runtime.
+    // A cached snapshot needs no Hugging Face credentials for runtime repair.
+    const cachedFiles = await findCachedRepoFiles(MODEL_ABUSE_GUARD.repository, MODEL_ABUSE_GUARD_REQUIRED_FILES, { revision: MODEL_ABUSE_GUARD.revision });
+    if (!cachedFiles && !(await getHfToken())) return failInstall('security-guard-huggingface-token-required');
     activeStage = 'python';
     const basePython = detectVenvBasePythonSync();
     if (!await isBasePythonSupported(basePython)) return failInstall('security-guard-python-unavailable');
@@ -494,24 +490,26 @@ export function installModelAbuseGuard({ onEvent } = {}) {
     });
 
     activeStage = 'model';
-    emitInstall(onEvent, 'stage', 'Downloading the pinned Prompt Guard model snapshot…', 'model');
-    const download = downloadHfRepo({
-      repo: MODEL_ABUSE_GUARD.repository,
-      revision: MODEL_ABUSE_GUARD.revision,
-      only: [...MODEL_ABUSE_GUARD_REQUIRED_FILES],
-      pythonPath,
-      onEvent: (event) => {
-        if (event?.type === 'error') emitInstall(onEvent, 'error', 'Prompt Guard model download failed.', 'model');
-        else if (event?.type === 'progress') emitInstall(onEvent, 'progress', event.stage || 'Downloading Prompt Guard…', 'model');
-        else if (event?.type === 'complete') emitInstall(onEvent, 'stage', 'Pinned Prompt Guard model snapshot downloaded.', 'model');
-      },
-    });
-    installKill = download.kill;
-    const downloadResult = await download.promise;
-    installKill = null;
-    if (!downloadResult?.ok) return failInstall(downloadResult?.errorKind === 'gated_repo'
-      ? 'security-guard-huggingface-access-required'
-      : 'security-guard-model-download-failed', setupIssue(downloadResult?.errorMessage, 'model-download-failed'));
+    if (!cachedFiles) {
+      emitInstall(onEvent, 'stage', 'Downloading the pinned Prompt Guard model snapshot…', 'model');
+      const download = downloadHfRepo({
+        repo: MODEL_ABUSE_GUARD.repository,
+        revision: MODEL_ABUSE_GUARD.revision,
+        only: [...MODEL_ABUSE_GUARD_REQUIRED_FILES],
+        pythonPath,
+        onEvent: (event) => {
+          if (event?.type === 'error') emitInstall(onEvent, 'error', 'Prompt Guard model download failed.', 'model');
+          else if (event?.type === 'progress') emitInstall(onEvent, 'progress', event.stage || 'Downloading Prompt Guard…', 'model');
+          else if (event?.type === 'complete') emitInstall(onEvent, 'stage', 'Pinned Prompt Guard model snapshot downloaded.', 'model');
+        },
+      });
+      installKill = download.kill;
+      const downloadResult = await download.promise;
+      installKill = null;
+      if (!downloadResult?.ok) return failInstall(downloadResult?.errorKind === 'gated_repo'
+        ? 'security-guard-huggingface-access-required'
+        : 'security-guard-model-download-failed', setupIssue(downloadResult?.errorMessage, 'model-download-failed'));
+    }
 
     activeStage = 'verification';
     const status = await getModelAbuseGuardStatus();
@@ -660,11 +658,17 @@ export async function runModelAbuseScan({
     : MODEL_ABUSE_GUARD_TIMEOUT_MS;
   const processResult = await runClassifier({ pythonPath, modelDir, content, timeoutMs: boundedTimeout })
     .catch(() => ({ ok: false, code: 'security-guard-process-failed' }));
-  if (!processResult.ok) return failure(processResult.code || 'security-guard-process-failed', {
-    guardId: MODEL_ABUSE_GUARD_ID,
-    model: MODEL_ABUSE_GUARD.name,
-    revision: MODEL_ABUSE_GUARD.revision,
-  });
+  if (!processResult.ok) {
+    if (processResult.code === 'security-guard-process-failed') {
+      cachedRuntime = null;
+      selfTestFailed = true;
+    }
+    return failure(processResult.code || 'security-guard-process-failed', {
+      guardId: MODEL_ABUSE_GUARD_ID,
+      model: MODEL_ABUSE_GUARD.name,
+      revision: MODEL_ABUSE_GUARD.revision,
+    });
+  }
   const verdict = normalizeModelAbuseGuardResult(processResult.parsed, {
     minBenignScore,
   });

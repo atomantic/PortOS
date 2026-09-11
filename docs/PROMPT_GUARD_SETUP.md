@@ -18,9 +18,11 @@ node scripts/setup-prompt-guard.js --install
 
 Both commands print JSON to stdout and exit 0 only when ready (1 otherwise).
 Install progress goes to stderr. `--status` never installs or runs inference;
-`--install` explicitly downloads the pinned packages and model and runs the
-benign end-to-end verification. It uses the same locally configured Hugging
-Face token as the UI, without putting the token in command arguments. Run these commands from the primary installation after updating it. CoS
+`--install` repairs the pinned packages, downloads the model only when its
+pinned snapshot is missing, and verifies a complete multi-window benign input.
+Cached model repairs work without a Hugging Face token or model download.
+When downloading, it uses the same locally configured Hugging Face token as
+the UI, without putting the token in command arguments. Run these commands from the primary installation after updating it. CoS
 worktrees deliberately use isolated data and ignore `PORTOS_DATA_ROOT`.
 
 Failure codes include `package-missing`, `package-version-mismatch`,
@@ -35,3 +37,15 @@ a browser or curl succeeding does not prove Python can connect. Restore that
 connection and rerun `--install`. For `certificate-failed`, repair certificate
 trust rather than disabling TLS verification. Gated Hugging Face access still
 requires account approval; a stored token alone does not grant it.
+
+A helper process failure marks the classifier unhealthy until repair succeeds.
+Status remains observational and never starts inference or downloads. Run the
+existing `--install` command for automated recovery after updating PortOS; it
+returns failure if verification fails, so automation must not proceed to review
+on a nonzero exit. No repair can bypass a classifier finding.
+
+A previous runner passed the short install canary but failed long PRs with
+`security-guard-process-failed`: the installed tokenizer returned only a prefix
+of the requested overflow windows. The runner now explicitly disables
+truncation while encoding the complete input and slices overlapping windows
+from those tokens, preserving full coverage and the pinned special tokens.

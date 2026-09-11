@@ -56,25 +56,17 @@ def main() -> int:
     model.to("cpu")
     model.eval()
 
-    token_ids = tokenizer.encode(text, add_special_tokens=False)
+    token_ids = tokenizer.encode(text, add_special_tokens=False, truncation=False)
     if not token_ids:
         raise ValueError("text has no model tokens")
 
-    if tokenizer.num_special_tokens_to_add(pair=False) != 2:
+    # This pinned DeBERTa classifier uses [CLS] content [SEP]. Build windows
+    # from the complete token stream: the installed tokenizer can discard
+    # overflow beyond its embedded truncation before returning overflow windows.
+    cls_id, sep_id = tokenizer.cls_token_id, tokenizer.sep_token_id
+    if (tokenizer.num_special_tokens_to_add(pair=False) != 2
+            or not isinstance(cls_id, int) or not isinstance(sep_id, int)):
         raise ValueError("model tokenizer window format changed")
-    # The supported tokenizer API works with both older installed runtimes
-    # and the pinned Transformers 5 runtime (prepare_for_model was removed).
-    # Overflow windows cover the entire input; truncation here splits windows
-    # and never discards the tail. The expected window count is checked below.
-    windows = tokenizer(
-        text,
-        add_special_tokens=True,
-        truncation=True,
-        max_length=MAX_CHUNK_TOKENS + 2,
-        stride=CHUNK_OVERLAP,
-        return_overflowing_tokens=True,
-        return_attention_mask=True,
-    )
 
     id_to_label = getattr(model.config, "id2label", {}) or {}
     step = max(1, MAX_CHUNK_TOKENS - CHUNK_OVERLAP)
@@ -82,19 +74,17 @@ def main() -> int:
     start = 0
     index = 0
     expected_windows = 1 + max(0, (len(token_ids) - MAX_CHUNK_TOKENS + step - 1) // step)
-    if len(windows["input_ids"]) != expected_windows or expected_windows > MAX_CHUNKS:
+    if expected_windows > MAX_CHUNKS:
         raise ValueError("incomplete tokenizer windows")
     with torch.inference_mode():
         while start < len(token_ids):
             if index >= MAX_CHUNKS:
                 raise ValueError("text produced too many model windows")
             end = min(len(token_ids), start + MAX_CHUNK_TOKENS)
-            if len(windows["input_ids"][index]) != end - start + 2:
-                raise ValueError("invalid tokenizer window length")
+            window_ids = [cls_id, *token_ids[start:end], sep_id]
             model_inputs = {
-                key: torch.tensor([value[index]])
-                for key, value in windows.items()
-                if key in {"input_ids", "attention_mask", "token_type_ids"}
+                "input_ids": torch.tensor([window_ids]),
+                "attention_mask": torch.tensor([[1] * len(window_ids)]),
             }
             probabilities = torch.softmax(model(**model_inputs).logits[0], dim=-1)
             class_id = int(torch.argmax(probabilities).item())
