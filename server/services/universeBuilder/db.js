@@ -21,6 +21,7 @@
  */
 
 import { query, withTransaction } from '../../lib/db.js';
+import { LOGLINE_MAX } from '../../lib/universeBibleLimits.js';
 import { mirrorTimestamp } from '../../lib/pgTimestamp.js';
 
 // Keep the runs[] log bounded to the most-recent 200 — matches the file
@@ -102,7 +103,7 @@ export async function listSummaries() {
   const { rows } = await query(
     `SELECT id, name,
             data->>'logline' AS logline,
-            data->>'starterPrompt' AS "starterPrompt",
+            left(btrim(data->>'starterPrompt'), $1) AS "starterPrompt",
             data->'origin' AS origin,
             data->>'createdAt' AS "createdAt",
             data->>'updatedAt' AS "updatedAt",
@@ -118,8 +119,10 @@ export async function listSummaries() {
                         ) AS category(key)
                         WHERE key ~* '^[^a-z0-9]*characters?([^a-z0-9]|$)'
                       )
-                 THEN data ELSE NULL END AS "legacyRecord"
+                 THEN jsonb_set(data, '{starterPrompt}', to_jsonb(left(btrim(COALESCE(data->>'starterPrompt', '')), $1)))
+                 ELSE NULL END AS "legacyRecord"
        FROM universes WHERE deleted = FALSE`,
+    [LOGLINE_MAX],
   );
   return rows;
 }

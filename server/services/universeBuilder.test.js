@@ -171,7 +171,7 @@ describe("universeBuilder service", () => {
   it("lists compact names and index summaries without losing legacy canon counts", async () => {
     await seedState({ universes: [
       { id: 'u-live', name: 'Live', schemaVersion: 4, createdAt: '2026-01-02T00:00:00.000Z',
-        logline: 'A city', starterPrompt: 'A starting point', styleImageRefs: ['old.png', 'latest.png'],
+        logline: 'A city', starterPrompt: 'Treatment '.repeat(1000), styleImageRefs: ['old.png', 'latest.png'],
         characters: [{ id: 'c1', name: 'Ada' }], places: [{ id: 'p1', name: 'Port' }] },
       { id: 'u-legacy', name: 'Legacy', schemaVersion: 3, createdAt: '2026-01-01T00:00:00.000Z',
         categories: { characters: { variations: [{ id: 'v1', label: 'Scout', prompt: 'A scout' }] } } },
@@ -181,13 +181,15 @@ describe("universeBuilder service", () => {
     expect(await svc.listUniverseNames()).toEqual(full.map(({ id, name }) => ({ id, name })));
     const summaries = await svc.listUniverseSummaries();
     expect(summaries).toEqual(full.map((u) => ({
-      id: u.id, name: u.name, logline: u.logline, starterPrompt: u.starterPrompt,
+      id: u.id, name: u.name, logline: u.logline, starterPrompt: u.starterPrompt.slice(0, svc.LOGLINE_MAX).trim(),
       origin: u.origin, createdAt: u.createdAt, updatedAt: u.updatedAt,
       canonCount: u.characters.length + u.places.length + u.objects.length,
       styleImageRef: u.styleImageRefs.at(-1) || null,
     })));
     expect(summaries.find((u) => u.id === 'u-legacy').canonCount).toBe(1);
     expect(summaries[0].styleImageRef).toBe('latest.png');
+    expect(summaries[0].starterPrompt).toHaveLength(svc.LOGLINE_MAX - 1);
+    expect(full[0].starterPrompt.length).toBeGreaterThan(svc.LOGLINE_MAX);
   });
 
   describe("listUniverseStyles", () => {
