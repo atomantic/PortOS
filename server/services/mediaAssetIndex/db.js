@@ -26,7 +26,6 @@ import { readFile } from 'fs/promises';
 import { join } from 'path';
 import { query } from '../../lib/db.js';
 import { dedupeByKey } from '../../lib/arrayUtils.js';
-import { PATHS } from '../../lib/fileUtils.js';
 import { imageToRow, videoToRow } from './logic.js';
 
 function rowToAsset(row) {
@@ -136,7 +135,10 @@ export async function countAssets(filters = {}) {
 // wipe every video row whose file is still on disk. This reader distinguishes
 // the two: file absent → genuinely empty (ok); present-but-unparseable → failure
 // (not ok), so the caller skips pruning videos. Returns { ok, list }.
-export async function readVideoHistoryStrict(historyPath = join(PATHS.data, 'video-history.json')) {
+export async function readVideoHistoryStrict(historyPath) {
+  // Only reconcile needs filesystem paths; indexed list reads do not. Keep the
+  // facade specifier so existing test path overrides still intercept it.
+  historyPath ??= join((await import('../../lib/fileUtils.js')).PATHS.data, 'video-history.json');
   // Read with explicit error-code handling — NOT tryReadFile/readJSONFile, which
   // both collapse "missing" and "unreadable" to the same value. Only a genuine
   // ENOENT (file never written) counts as trusted-empty; an EACCES/EIO/transient
