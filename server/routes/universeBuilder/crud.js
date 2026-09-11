@@ -132,6 +132,14 @@ router.get('/styles', asyncHandler(async (_req, res) => {
   res.json(await svc.listUniverseStyles());
 }));
 
+router.get('/names', asyncHandler(async (_req, res) => {
+  res.json(await svc.listUniverseNames());
+}));
+
+router.get('/summaries', asyncHandler(async (_req, res) => {
+  res.json(await svc.listUniverseSummaries());
+}));
+
 router.get('/:id', asyncHandler(async (req, res) => {
   // Read-by-id 404s are benign and high-volume: callers like LoraDatasetDetail
   // speculatively fetch a dataset's `character.universeId` ({ silent: true }),

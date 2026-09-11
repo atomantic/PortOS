@@ -9,8 +9,8 @@ vi.mock('../services/api', () => ({
   deleteLoom: vi.fn(),
   generateLoomSeriesPlan: vi.fn(),
   getProviders: vi.fn(),
-  listUniverses: vi.fn(),
-  listPipelineSeries: vi.fn(),
+  listUniverseNames: vi.fn(),
+  listPipelineSeriesNames: vi.fn(),
 }));
 vi.mock('../components/sharing/SyncToPeerButton', () => ({
   default: ({ recordKind, recordId }) => <button type="button">sync {recordKind} {recordId}</button>,
@@ -46,8 +46,8 @@ const renderPage = () => render(<MemoryRouter><FableLoom /></MemoryRouter>);
 beforeEach(() => {
   vi.clearAllMocks();
   api.listLooms.mockResolvedValue(looms);
-  api.listUniverses.mockResolvedValue([{ id: 'uni-1', name: 'Aria Verse' }]);
-  api.listPipelineSeries.mockResolvedValue([]);
+  api.listUniverseNames.mockResolvedValue([{ id: 'uni-1', name: 'Aria Verse' }]);
+  api.listPipelineSeriesNames.mockResolvedValue([]);
   api.getProviders.mockResolvedValue({
     activeProvider: 'codex',
     providers: [{

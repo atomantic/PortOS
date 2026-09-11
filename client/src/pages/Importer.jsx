@@ -11,7 +11,7 @@ import ProviderModelSelector from '../components/ProviderModelSelector';
 import useProviderModels from '../hooks/useProviderModels';
 import { previewCanonFragments } from '../lib/canonPrompt';
 import { resolveImporterDeepLink } from '../lib/importerDeepLink';
-import { listUniverses, listPipelineSeries } from '../services/api';
+import { listUniverseSummaries, listPipelineSeriesSummaries } from '../services/api';
 import {
   analyzeImport,
   classifyImport,
@@ -124,8 +124,8 @@ export default function Importer() {
   useEffect(() => {
     let canceled = false;
     Promise.all([
-      listUniverses({ silent: true }).catch(() => []),
-      listPipelineSeries({ silent: true }).catch(() => []),
+      listUniverseSummaries({ silent: true }).catch(() => []),
+      listPipelineSeriesSummaries({ silent: true }).catch(() => []),
     ]).then(([u, s]) => {
       if (canceled) return;
       setUniverses(Array.isArray(u) ? u : []);

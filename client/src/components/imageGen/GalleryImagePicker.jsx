@@ -25,7 +25,7 @@ import FilePickerButton from '../ui/FilePickerButton';
 import MediaCard from '../media/MediaCard';
 import { normalizeImage } from '../media/normalize';
 import { listImageGallery, listMediaCollections } from '../../services/apiImageVideo';
-import { listUniverses } from '../../services/apiUniverseBuilder';
+import { listUniverseNames } from '../../services/apiUniverseBuilder';
 import { uploadGalleryImage } from '../../services/apiSystem';
 import {
   readFileAsBase64, validateImageFile, JSON_UPLOAD_MAX_FILE_SIZE, UPLOAD_IMAGE_ACCEPT,
@@ -112,7 +112,7 @@ export default function GalleryImagePicker({
     listMediaCollections({ silent: true })
       .then((list) => { if (!cancelled) setCollections(Array.isArray(list) ? list : []); })
       .catch(() => { if (!cancelled) setCollections([]); });
-    listUniverses({ silent: true })
+    listUniverseNames({ silent: true })
       .then((list) => { if (!cancelled) setUniverses(Array.isArray(list) ? list : []); })
       .catch(() => { if (!cancelled) setUniverses([]); });
     return () => { cancelled = true; };
@@ -124,7 +124,7 @@ export default function GalleryImagePicker({
   const tokens = useMemo(() => tokenizeQuery(query), [query]);
 
   // Universes are seeded from the images' own `universeId`/`universeName` stamps
-  // so the group still populates when listUniverses fails; the fetched record
+  // so the group still populates when listUniverseNames fails; the fetched record
   // only supplies a fresher display name for a universe that was renamed after
   // the sidecar was written. Universes with no image here are dropped — a scope
   // that can only ever yield an empty grid isn't worth an option row.

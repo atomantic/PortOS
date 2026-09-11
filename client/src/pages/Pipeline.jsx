@@ -21,12 +21,13 @@ import SyncBadge from '../components/sync/SyncBadge';
 import { useSyncIntegrity, syncBadgeStatus } from '../hooks/useSyncIntegrity';
 import {
   listLooms,
-  listPipelineSeries,
+  listPipelineSeriesSummaries,
   createPipelineSeries,
   deletePipelineSeries,
   generateSeriesTitleLogo,
   generateSeriesConcepts,
-  listUniverses,
+  listUniverseNames,
+  getUniverse,
   WORLD_LOGLINE_MAX,
   WORLD_PREMISE_MAX,
   WORLD_STYLE_NOTES_MAX,
@@ -71,6 +72,7 @@ export default function Pipeline() {
 
   const sync = useSyncIntegrity('series');
   const [creating, setCreating] = useState(false);
+  const [loadingUniverse, setLoadingUniverse] = useState(false);
   const [generating, setGenerating] = useState(false);
   const [showForm, setShowForm] = useState(false);
   const [form, setForm] = useState(emptyForm);
@@ -92,10 +94,10 @@ export default function Pipeline() {
 
   useEffect(() => {
     Promise.all([
-      listPipelineSeries().catch(() => []),
+      listPipelineSeriesSummaries({ silent: true }).catch(() => []),
       // Universes are optional — failing the fetch should still let the user
       // create a series without one. Surface the error as a quiet toast.
-      listUniverses({ silent: true }).catch((err) => {
+      listUniverseNames({ silent: true }).catch((err) => {
         toast.error(err.message || 'Failed to load universes');
         return [];
       }),
@@ -127,19 +129,24 @@ export default function Pipeline() {
     }, { replace: true });
   };
 
-  const handleWorldChange = (universeId) => {
+  const worldRequestRef = useRef(0);
+  const handleWorldChange = async (universeId) => {
     clearCandidates();
-    if (!universeId) {
-      setForm((f) => ({ ...f, universeId: '' }));
-      return;
-    }
-    const w = universes.find((x) => x.id === universeId);
-    if (!w) {
-      setForm((f) => ({ ...f, universeId }));
-      return;
-    }
+    const request = ++worldRequestRef.current;
+    setLoadingUniverse(!!universeId);
+    setForm((f) => ({ ...f, universeId }));
+    if (!universeId) return;
+    // Only the selected universe needs a bible; do not hydrate the catalog on mount.
+    const w = await getUniverse(universeId, { silent: true }).catch((err) => {
+      if (request === worldRequestRef.current) toast.error(err.message || 'Failed to load universe');
+      return null;
+    });
+    if (request !== worldRequestRef.current) return;
+    setLoadingUniverse(false);
+    if (!w) return;
     setForm((f) => {
-      const next = { ...f, universeId };
+      if (f.universeId !== universeId) return f;
+      const next = { ...f };
       for (const k of BIBLE_FIELDS) {
         if (!f[k].trim()) next[k] = w[k] || '';
       }
@@ -213,6 +220,7 @@ export default function Pipeline() {
 
   const handleCreate = async (e) => {
     e?.preventDefault();
+    if (loadingUniverse) return;
     const name = form.name.trim();
     if (!name) {
       toast.error('Series name is required');
@@ -510,9 +518,9 @@ export default function Pipeline() {
           <div className="flex gap-2">
             <button
               type="submit"
-              disabled={creating || !form.universeId || !form.name.trim()}
+              disabled={creating || loadingUniverse || !form.universeId || !form.name.trim()}
               className="inline-flex items-center gap-2 px-3 py-2 rounded-lg bg-port-accent text-white text-sm font-medium disabled:opacity-50"
-              title={!form.universeId ? 'Pick a universe to create the series' : undefined}
+              title={loadingUniverse ? 'Loading universe fields…' : !form.universeId ? 'Pick a universe to create the series' : undefined}
             >
               {creating ? <Loader2 size={14} className="animate-spin" /> : null}
               Create

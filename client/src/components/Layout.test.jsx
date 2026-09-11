@@ -77,8 +77,8 @@ const featureMock = vi.hoisted(() => ({ features: null }));
 
 vi.mock('../services/api', () => ({
   getApps: vi.fn(() => Promise.resolve([])),
-  listPipelineSeries: vi.fn(() => Promise.resolve([])),
-  listUniverses: vi.fn(() => Promise.resolve([])),
+  listPipelineSeriesNames: vi.fn(() => Promise.resolve([])),
+  listUniverseNames: vi.fn(() => Promise.resolve([])),
   getDailyActions: vi.fn(() => Promise.resolve({ actions: [] })),
   getInstanceFeatures: vi.fn(() => Promise.resolve({ features: featureMock.features })),
 }));
@@ -179,8 +179,8 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.unstubAllGlobals();
-  api.listPipelineSeries.mockResolvedValue([]);
-  api.listUniverses.mockResolvedValue([]);
+  api.listPipelineSeriesNames.mockResolvedValue([]);
+  api.listUniverseNames.mockResolvedValue([]);
 });
 
 describe('Layout — pinned single nav rows', () => {
@@ -475,8 +475,8 @@ describe('Layout — Data Manager scroll mode', () => {
 
 describe('Layout — dynamic third-level navigation', () => {
   it('collapses and expands the Series and Universes children', async () => {
-    api.listPipelineSeries.mockResolvedValue([{ id: 'series-1', name: 'Example Series' }]);
-    api.listUniverses.mockResolvedValue([{ id: 'universe-1', name: 'Example Universe' }]);
+    api.listPipelineSeriesNames.mockResolvedValue([{ id: 'series-1', name: 'Example Series' }]);
+    api.listUniverseNames.mockResolvedValue([{ id: 'universe-1', name: 'Example Universe' }]);
 
     await renderLayout('/media');
 
