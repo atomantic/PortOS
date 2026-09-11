@@ -1,4 +1,4 @@
-import { act, render } from '@testing-library/react';
+import { act, render, screen } from '@testing-library/react';
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 
 const dndState = vi.hoisted(() => ({ context: null }));
@@ -19,6 +19,7 @@ vi.mock('@dnd-kit/core', () => ({
   },
   DragOverlay: ({ children }) => <>{children}</>,
   closestCenter: vi.fn(() => []),
+  rectIntersection: vi.fn(() => []),
   KeyboardSensor: function KeyboardSensorStub() {},
   PointerSensor: function PointerSensorStub() {},
   useDraggable: () => ({
@@ -34,7 +35,7 @@ vi.mock('@dnd-kit/core', () => ({
   useSensors: (...sensors) => sensors,
 }));
 
-import { closestCenter, KeyboardSensor } from '@dnd-kit/core';
+import { closestCenter, KeyboardSensor, rectIntersection } from '@dnd-kit/core';
 import KanbanBoard, { kanbanCollisionDetection, kanbanKeyboardCoordinates } from './KanbanBoard';
 
 const TICKETS = [
@@ -117,21 +118,45 @@ describe('KanbanBoard keyboard drag and drop', () => {
       droppableContainers: { getEnabled: () => entries },
       over: { id: 'ticket:PORT-1', data: { current: ticketData(TICKETS[0], 'col-0', 0, 0) } },
     };
+    context.active.rect = { current: { initial: { width: 196, height: 60 } } };
 
     const downEvent = { code: 'ArrowDown', preventDefault: vi.fn() };
     expect(kanbanKeyboardCoordinates(downEvent, { active, context })).toEqual({ x: 12, y: 120 });
     expect(downEvent.preventDefault).not.toHaveBeenCalled();
 
     context.over = { id: 'ticket:PORT-2', data: { current: ticketData(TICKETS[1], 'col-0', 0, 1) } };
+    const upEvent = { code: 'ArrowUp', preventDefault: vi.fn() };
+    expect(kanbanKeyboardCoordinates(upEvent, { active, context })).toEqual({ x: 12, y: 48 });
+
     const rightEvent = { code: 'ArrowRight', preventDefault: vi.fn() };
     expect(kanbanKeyboardCoordinates(rightEvent, { active, context })).toEqual({ x: 252, y: 48 });
 
     context.over = { id: 'ticket:PORT-3', data: { current: ticketData(TICKETS[2], 'col-1', 1, 0) } };
     const rightToEmptyColumn = { code: 'ArrowRight', preventDefault: vi.fn() };
-    expect(kanbanKeyboardCoordinates(rightToEmptyColumn, { active, context })).toEqual({ x: 480, y: 0 });
+    expect(kanbanKeyboardCoordinates(rightToEmptyColumn, { active, context })).toEqual({ x: 492, y: 120 });
   });
 
-  it('excludes the active ticket slot from collision candidates', () => {
+  it('uses intersection collision for pointer drags without the active ticket slot', () => {
+    const activeDrop = { id: 'ticket:PORT-1' };
+    const otherDrop = { id: 'ticket:PORT-2' };
+    const columnDrop = { id: 'col-0' };
+    const args = {
+      active: { id: 'PORT-1' },
+      collisionRect: {},
+      droppableRects: new Map(),
+      droppableContainers: [activeDrop, otherDrop, columnDrop],
+      pointerCoordinates: { x: 10, y: 10 },
+    };
+
+    kanbanCollisionDetection(args);
+
+    expect(args.droppableContainers).toEqual([activeDrop, otherDrop, columnDrop]);
+    expect(rectIntersection).toHaveBeenCalledWith(expect.objectContaining({
+      droppableContainers: [otherDrop, columnDrop],
+    }));
+  });
+
+  it('keeps the active slot as the initial keyboard collision target', () => {
     const activeDrop = { id: 'ticket:PORT-1' };
     const otherDrop = { id: 'ticket:PORT-2' };
     const columnDrop = { id: 'col-0' };
@@ -145,10 +170,29 @@ describe('KanbanBoard keyboard drag and drop', () => {
 
     kanbanCollisionDetection(args);
 
-    expect(args.droppableContainers).toEqual([activeDrop, otherDrop, columnDrop]);
     expect(closestCenter).toHaveBeenCalledWith(expect.objectContaining({
+      droppableContainers: [activeDrop, otherDrop, columnDrop],
+    }));
+  });
+
+  it('keeps pointer drops outside the board from selecting the nearest column', () => {
+    const activeDrop = { id: 'ticket:PORT-1' };
+    const otherDrop = { id: 'ticket:PORT-2' };
+    const columnDrop = { id: 'col-0' };
+    const args = {
+      active: { id: 'PORT-1' },
+      collisionRect: {},
+      droppableRects: new Map(),
+      droppableContainers: [activeDrop, otherDrop, columnDrop],
+      pointerCoordinates: { x: -100, y: -100 },
+    };
+
+    kanbanCollisionDetection(args);
+
+    expect(rectIntersection).toHaveBeenCalledWith(expect.objectContaining({
       droppableContainers: [otherDrop, columnDrop],
     }));
+    expect(closestCenter).not.toHaveBeenCalled();
   });
 
   it('resolves a card-slot drop to its destination column and transitions the ticket', async () => {
@@ -172,5 +216,73 @@ describe('KanbanBoard keyboard drag and drop', () => {
       status: 'In Progress',
       statusCategory: 'In Progress',
     });
+  });
+
+  it('restores keyboard focus after an async transition when focus stayed with the ticket', async () => {
+    let resolveTransitions;
+    api.getJiraTicketTransitions.mockReturnValue(new Promise(resolve => {
+      resolveTransitions = resolve;
+    }));
+    api.transitionJiraTicket.mockResolvedValue({});
+    renderBoard();
+
+    const dragButton = screen.getByRole('button', { name: 'Drag PORT-1' });
+    dragButton.focus();
+    let dragEndPromise;
+    await act(async () => {
+      dndState.context.onDragStart({
+        activatorEvent: { type: 'keydown' },
+        active: { id: 'PORT-1', data: { current: { ticket: TICKETS[0] } } },
+      });
+      dragEndPromise = dndState.context.onDragEnd({
+        active: { id: 'PORT-1', data: { current: { ticket: TICKETS[0] } } },
+        over: { id: 'ticket:PORT-3', data: { current: ticketData(TICKETS[2], 'col-1', 1, 0) } },
+      });
+      await Promise.resolve();
+    });
+
+    const ticketLink = document.querySelector('a[href="https://jira.example/PORT-1"]');
+    ticketLink.focus();
+    expect(document.activeElement).toBe(ticketLink);
+
+    await act(async () => {
+      resolveTransitions([{ id: 'transition-1', to: 'In Progress', toCategory: 'In Progress' }]);
+      await dragEndPromise;
+      await new Promise(resolve => requestAnimationFrame(resolve));
+    });
+
+    expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Drag PORT-1' }));
+  });
+
+  it('restores keyboard focus when a failed transition rolls the ticket back', async () => {
+    let resolveTransitions;
+    api.getJiraTicketTransitions.mockReturnValue(new Promise(resolve => {
+      resolveTransitions = resolve;
+    }));
+    renderBoard();
+
+    const dragButton = screen.getByRole('button', { name: 'Drag PORT-1' });
+    dragButton.focus();
+    let dragEndPromise;
+    await act(async () => {
+      dndState.context.onDragStart({
+        activatorEvent: { type: 'keydown' },
+        active: { id: 'PORT-1', data: { current: { ticket: TICKETS[0] } } },
+      });
+      dragEndPromise = dndState.context.onDragEnd({
+        active: { id: 'PORT-1', data: { current: { ticket: TICKETS[0] } } },
+        over: { id: 'ticket:PORT-3', data: { current: ticketData(TICKETS[2], 'col-1', 1, 0) } },
+      });
+      await Promise.resolve();
+    });
+
+    document.querySelector('a[href="https://jira.example/PORT-1"]').focus();
+    await act(async () => {
+      resolveTransitions([]);
+      await dragEndPromise;
+      await new Promise(resolve => requestAnimationFrame(resolve));
+    });
+
+    expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Drag PORT-1' }));
   });
 });

@@ -1,10 +1,11 @@
-import { useState, useEffect, useCallback, useMemo, memo } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef, memo } from 'react';
 import {
   DndContext,
   DragOverlay,
   closestCenter,
   KeyboardSensor,
   PointerSensor,
+  rectIntersection,
   useDraggable,
   useDroppable,
   useSensor,
@@ -59,7 +60,6 @@ export function kanbanKeyboardCoordinates(event, { active, context }) {
   }[event.code];
   if (!direction) return undefined;
 
-  const activeId = typeof active === 'object' ? active.id : active;
   const activeData = context?.active?.data?.current || active?.data?.current || {};
   const overData = context?.over?.data?.current || {};
   const currentColumnId = overData.columnId || activeData.columnId;
@@ -80,7 +80,7 @@ export function kanbanKeyboardCoordinates(event, { active, context }) {
     .filter(({ entry, rect }) => !entry.disabled && rect) || [];
 
   const ticketEntries = entries
-    .filter(({ data }) => data.type === 'ticket' && String(data.ticketKey) !== String(activeId))
+    .filter(({ data }) => data.type === 'ticket')
     .sort((left, right) => left.data.position - right.data.position);
   const columnEntries = entries
     .filter(({ data }) => data.type === 'column')
@@ -109,15 +109,33 @@ export function kanbanKeyboardCoordinates(event, { active, context }) {
   }
 
   if (!target) return undefined;
-  return { x: target.rect.left, y: target.rect.top };
+
+  // KeyboardSensor interprets the result as the dragged node's top-left
+  // coordinate. Center it on the selected slot/column so closestCenter cannot
+  // prefer a nearby ticket when an empty destination is tall.
+  const activeRect = context?.active?.rect?.current?.translated
+    || context?.active?.rect?.current?.initial;
+  const activeWidth = activeRect?.width || 0;
+  const activeHeight = activeRect?.height || 0;
+  return {
+    x: target.rect.left + (target.rect.width - activeWidth) / 2,
+    y: target.rect.top + (target.rect.height - activeHeight) / 2,
+  };
 }
 
-/** Keep the active ticket's own slot from winning collision detection. */
+/**
+ * Keep pointer drags from selecting their own slot while preserving the
+ * keyboard drag's source slot as its initial collision target.
+ */
 export function kanbanCollisionDetection(args) {
   const activeDropId = ticketDropId(args.active?.id);
-  return closestCenter({
+  const isPointerDrag = Boolean(args.pointerCoordinates);
+  const collisionDetection = isPointerDrag ? rectIntersection : closestCenter;
+  return collisionDetection({
     ...args,
-    droppableContainers: args.droppableContainers.filter(entry => entry.id !== activeDropId),
+    droppableContainers: isPointerDrag
+      ? args.droppableContainers.filter(entry => entry.id !== activeDropId)
+      : args.droppableContainers,
   });
 }
 
@@ -181,7 +199,7 @@ const TicketCard = memo(function TicketCard({ ticket, isDragOverlay }) {
 
 // Memoized for the same reason as TicketCard: only the card actively being
 // dragged changes; the rest keep stable ticket/disabled/appId/canQueue props.
-const DraggableTicket = memo(function DraggableTicket({ ticket, disabled, appId, canQueue, columnId, columnName, columnIndex, position }) {
+const DraggableTicket = memo(function DraggableTicket({ ticket, disabled, appId, canQueue, columnId, columnName, columnIndex, position, onActivatorRef }) {
   const { setNodeRef: setDropNodeRef } = useDroppable({
     id: ticketDropId(ticket.key),
     data: { type: 'ticket', ticketKey: ticket.key, columnId, columnName, columnIndex, position },
@@ -193,6 +211,10 @@ const DraggableTicket = memo(function DraggableTicket({ ticket, disabled, appId,
     disabled
   });
   const [queuing, setQueuing] = useState(false);
+  const handleActivatorRef = useCallback((node) => {
+    setActivatorNodeRef(node);
+    onActivatorRef?.(ticket.key, node);
+  }, [onActivatorRef, setActivatorNodeRef, ticket.key]);
 
   const style = transform ? {
     transform: `translate3d(${transform.x}px, ${transform.y}px, 0)`,
@@ -216,7 +238,7 @@ const DraggableTicket = memo(function DraggableTicket({ ticket, disabled, appId,
       <div ref={setNodeRef} className="flex items-stretch gap-0">
         <button
           type="button"
-          ref={setActivatorNodeRef}
+          ref={handleActivatorRef}
           {...listeners}
           {...attributes}
           className={`flex items-center px-1 text-gray-600 hover:text-gray-400 shrink-0 ${disabled ? 'cursor-not-allowed opacity-50' : 'cursor-grab active:cursor-grabbing'}`}
@@ -252,7 +274,7 @@ const DraggableTicket = memo(function DraggableTicket({ ticket, disabled, appId,
   );
 });
 
-function DroppableColumn({ column, isOver, disabled, appId, columnIndex }) {
+function DroppableColumn({ column, isOver, disabled, appId, columnIndex, onActivatorRef }) {
   const { setNodeRef } = useDroppable({
     id: column.id,
     data: { type: 'column', columnId: column.id, columnName: column.name, columnIndex },
@@ -289,6 +311,7 @@ function DroppableColumn({ column, isOver, disabled, appId, columnIndex }) {
             columnName={column.name}
             columnIndex={columnIndex}
             position={position}
+            onActivatorRef={onActivatorRef}
           />
         ))}
         {column.tickets.length === 0 && (
@@ -307,6 +330,55 @@ export default function KanbanBoard({ tickets: initialTickets = [], instanceId, 
   const [transitioning, setTransitioning] = useState(null);
   const [overColumn, setOverColumn] = useState(null);
   const [boardColumns, setBoardColumns] = useState(null);
+  const activatorRefs = useRef(new Map());
+  const previousTransitioning = useRef(null);
+  const pendingKeyboardFocus = useRef(null);
+
+  const registerActivator = useCallback((ticketKey, node) => {
+    if (node) {
+      activatorRefs.current.set(ticketKey, node);
+    } else {
+      activatorRefs.current.delete(ticketKey);
+    }
+  }, []);
+
+  useEffect(() => {
+    const handleFocusIn = (event) => {
+      const focusRequest = pendingKeyboardFocus.current;
+      if (!focusRequest) return;
+      if (event.target === document.body || event.target === document.documentElement) return;
+
+      const activator = activatorRefs.current.get(focusRequest.ticketKey);
+      const isExpectedTicketFocus = event.target === activator
+        || (event.target?.tagName === 'A' && activator?.parentElement?.contains(event.target));
+      if (!isExpectedTicketFocus) focusRequest.userMovedFocus = true;
+    };
+
+    document.addEventListener('focusin', handleFocusIn);
+    return () => document.removeEventListener('focusin', handleFocusIn);
+  }, []);
+
+  // dnd-kit restores focus as soon as the drag ends, while this board disables
+  // all handles during the async Jira transition. Re-focus the moved handle
+  // after success or rollback, once the controls are enabled again.
+  useEffect(() => {
+    const completedTicket = previousTransitioning.current;
+    previousTransitioning.current = transitioning;
+    if (!completedTicket || transitioning) return;
+
+    const focusRequest = pendingKeyboardFocus.current;
+    if (!focusRequest || focusRequest.ticketKey !== completedTicket || focusRequest.userMovedFocus) {
+      pendingKeyboardFocus.current = null;
+      return;
+    }
+
+    requestAnimationFrame(() => {
+      if (pendingKeyboardFocus.current !== focusRequest || focusRequest.userMovedFocus) return;
+      pendingKeyboardFocus.current = null;
+      const activator = activatorRefs.current.get(completedTicket);
+      if (activator && !activator.disabled) activator.focus();
+    });
+  }, [transitioning]);
 
   // Sync if parent re-fetches
   useEffect(() => { setTickets(initialTickets); }, [initialTickets]);
@@ -336,6 +408,9 @@ export default function KanbanBoard({ tickets: initialTickets = [], instanceId, 
   const handleDragStart = useCallback((event) => {
     const ticket = event.active.data.current?.ticket;
     setActiveTicket(ticket || null);
+    pendingKeyboardFocus.current = event.activatorEvent?.type === 'keydown'
+      ? { ticketKey: ticket?.key || event.active.id, userMovedFocus: false }
+      : null;
   }, []);
 
   const handleDragOver = useCallback((event) => {
@@ -348,18 +423,31 @@ export default function KanbanBoard({ tickets: initialTickets = [], instanceId, 
     setActiveTicket(null);
     setOverColumn(null);
 
-    if (!over) return;
+    if (!over) {
+      pendingKeyboardFocus.current = null;
+      return;
+    }
 
     const targetColumn = columns.find(c => c.id === columnIdForTarget(over, columns));
-    if (!targetColumn) return;
+    if (!targetColumn) {
+      pendingKeyboardFocus.current = null;
+      return;
+    }
 
     const ticket = active.data.current?.ticket;
-    if (!ticket) return;
+    if (!ticket) {
+      pendingKeyboardFocus.current = null;
+      return;
+    }
 
     // Already in this column? Nothing to do.
-    if (ticketInColumn(ticket, targetColumn)) return;
+    if (ticketInColumn(ticket, targetColumn)) {
+      pendingKeyboardFocus.current = null;
+      return;
+    }
 
     if (!instanceId) {
+      pendingKeyboardFocus.current = null;
       toast.error('Cannot transition: no JIRA instance configured');
       return;
     }
@@ -414,6 +502,7 @@ export default function KanbanBoard({ tickets: initialTickets = [], instanceId, 
   const handleDragCancel = useCallback(() => {
     setActiveTicket(null);
     setOverColumn(null);
+    pendingKeyboardFocus.current = null;
   }, []);
 
   return (
@@ -435,6 +524,7 @@ export default function KanbanBoard({ tickets: initialTickets = [], instanceId, 
             disabled={!!transitioning}
             appId={appId}
             columnIndex={columnIndex}
+            onActivatorRef={registerActivator}
           />
         ))}
       </div>
