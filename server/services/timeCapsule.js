@@ -5,28 +5,66 @@
  * Supports creating, listing, viewing, comparing, and deleting snapshots.
  */
 
-import { readFile, unlink, readdir, stat } from 'fs/promises';
-import { existsSync } from 'fs';
+import { unlink, readdir } from 'fs/promises';
 import { join } from 'path';
 import { createHash } from 'crypto';
 import { v4 as uuidv4 } from '../lib/uuid.js';
-import { atomicWrite, ensureDir, PATHS } from '../lib/fileUtils.js';
+import { atomicWrite, ensureDir, PATHS, readJSONFile, readJSONFileStrict, tryReadFile } from '../lib/fileUtils.js';
+import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
 
 const DIGITAL_TWIN_DIR = PATHS.digitalTwin;
 const SNAPSHOTS_DIR = join(DIGITAL_TWIN_DIR, 'snapshots');
 const INDEX_FILE = join(SNAPSHOTS_DIR, 'index.json');
+const JSON_TWIN_FILES = [
+  'meta.json', 'identity.json', 'goals.json', 'taste-profile.json',
+  'feedback.json', 'genome.json', 'longevity.json', 'chronotype.json',
+];
+
+// One tail for every index.json read-modify-write so two snapshot creates or
+// deletes cannot load the same pre-image and clobber each other on save.
+const queueIndexWrite = createFileWriteQueue();
 
 async function ensureSnapshotsDir() {
   await ensureDir(SNAPSHOTS_DIR);
 }
 
+function indexEntryFromSnapshotFile(parsed) {
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed) || !parsed.id) return null;
+  const meta = { ...parsed };
+  delete meta.data;
+  return meta;
+}
+
+async function recoverIndexFromSnapshotFiles(reason) {
+  const entries = await readdir(SNAPSHOTS_DIR).catch(() => []);
+  const metas = await Promise.all(
+    entries
+      .filter(name => name.endsWith('.json') && name !== 'index.json')
+      .map(async name => indexEntryFromSnapshotFile(
+        await readJSONFile(join(SNAPSHOTS_DIR, name), null)
+      ))
+  );
+  const snapshots = metas
+    .filter(Boolean)
+    .sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || '')));
+  if (reason || snapshots.length > 0) {
+    console.warn(`⚠️ Time-capsule index ${reason || 'missing'} — rebuilt listing of ${snapshots.length} snapshot file(s)`);
+  }
+  return { snapshots };
+}
+
+function isUsableIndex(parsed) {
+  return parsed && typeof parsed === 'object' && !Array.isArray(parsed) && Array.isArray(parsed.snapshots);
+}
+
 async function loadIndex() {
   await ensureSnapshotsDir();
-  if (!existsSync(INDEX_FILE)) {
-    return { snapshots: [] };
-  }
-  const raw = await readFile(INDEX_FILE, 'utf-8');
-  return JSON.parse(raw);
+  const { ok, value } = await readJSONFileStrict(INDEX_FILE, null);
+  if (ok && isUsableIndex(value)) return { snapshots: value.snapshots };
+  // Missing, empty, corrupt, or wrong-shaped index must not throw (that used
+  // to disable every snapshot op). Rebuild from on-disk snapshot files so a
+  // later save does not orphan listings that the bytes still hold.
+  return recoverIndexFromSnapshotFiles(ok ? (value == null ? null : 'malformed') : 'unreadable');
 }
 
 async function saveIndex(index) {
@@ -39,32 +77,31 @@ async function saveIndex(index) {
  */
 async function collectTwinData() {
   const files = {};
-  const jsonFiles = ['meta.json', 'identity.json', 'goals.json', 'taste-profile.json',
-    'feedback.json', 'genome.json', 'longevity.json', 'chronotype.json'];
 
   // Read the fixed JSON set plus the autobiography stories concurrently — they
   // are independent files, so a sequential loop just serialized disk latency on
-  // snapshot creation.
+  // snapshot creation. Each file is optional: missing, unreadable, or malformed
+  // JSON is omitted so one bad twin file cannot abort the whole snapshot.
   const jsonTargets = [
-    ...jsonFiles.map(filename => ({ key: filename, path: join(DIGITAL_TWIN_DIR, filename) })),
+    ...JSON_TWIN_FILES.map(filename => ({ key: filename, path: join(DIGITAL_TWIN_DIR, filename) })),
     { key: 'autobiography/stories.json', path: join(DIGITAL_TWIN_DIR, 'autobiography', 'stories.json') }
   ];
   await Promise.all(jsonTargets.map(async ({ key, path }) => {
-    if (!existsSync(path)) return;
-    const content = await readFile(path, 'utf-8');
-    files[key] = JSON.parse(content);
+    const parsed = await readJSONFile(path, null);
+    if (parsed == null) return;
+    files[key] = parsed;
   }));
 
-  // Collect all markdown documents in parallel as well.
+  // Collect markdown documents in parallel. tryReadFile collapses the TOCTOU
+  // window of exists/stat-then-read (a vanished or non-file entry is skipped).
   const entries = await readdir(DIGITAL_TWIN_DIR).catch(() => []);
   const mdEntries = await Promise.all(
     entries
       .filter(entry => entry.endsWith('.md'))
       .map(async entry => {
-        const filePath = join(DIGITAL_TWIN_DIR, entry);
-        const info = await stat(filePath);
-        if (!info.isFile()) return null;
-        return { entry, content: await readFile(filePath, 'utf-8') };
+        const content = await tryReadFile(join(DIGITAL_TWIN_DIR, entry));
+        if (content == null) return null;
+        return { entry, content };
       })
   );
   const mdFiles = {};
@@ -122,17 +159,18 @@ export async function createSnapshot(label, description = '') {
     summary: buildSummary(data)
   };
 
-  // Save snapshot data
-  const snapshotFile = join(SNAPSHOTS_DIR, `${snapshot.id}.json`);
-  await atomicWrite(snapshotFile, { ...snapshot, data });
-
-  // Update index
-  const index = await loadIndex();
-  index.snapshots.unshift(snapshot);
-  await saveIndex(index);
-
-  console.log(`📸 Time capsule created: "${label}" (${snapshot.id.slice(0, 8)})`);
-  return snapshot;
+  return queueIndexWrite(async () => {
+    // Load (and maybe rebuild) the index BEFORE writing this snapshot file so
+    // a recovery scan cannot pick up the file we are about to add, then
+    // unshift a duplicate of it.
+    const index = await loadIndex();
+    const snapshotFile = join(SNAPSHOTS_DIR, `${snapshot.id}.json`);
+    await atomicWrite(snapshotFile, { ...snapshot, data });
+    index.snapshots.unshift(snapshot);
+    await saveIndex(index);
+    console.log(`📸 Time capsule created: "${label}" (${snapshot.id.slice(0, 8)})`);
+    return snapshot;
+  });
 }
 
 /**
@@ -148,29 +186,27 @@ export async function listSnapshots() {
  */
 export async function getSnapshot(id) {
   const snapshotFile = join(SNAPSHOTS_DIR, `${id}.json`);
-  if (!existsSync(snapshotFile)) return null;
-  const raw = await readFile(snapshotFile, 'utf-8');
-  return JSON.parse(raw);
+  return readJSONFile(snapshotFile, null);
 }
 
 /**
  * Delete a snapshot
  */
 export async function deleteSnapshot(id) {
-  const index = await loadIndex();
-  const exists = index.snapshots.find(s => s.id === id);
-  if (!exists) return false;
+  return queueIndexWrite(async () => {
+    const index = await loadIndex();
+    const exists = index.snapshots.find(s => s.id === id);
+    if (!exists) return false;
 
-  const snapshotFile = join(SNAPSHOTS_DIR, `${id}.json`);
-  if (existsSync(snapshotFile)) {
-    await unlink(snapshotFile);
-  }
+    const snapshotFile = join(SNAPSHOTS_DIR, `${id}.json`);
+    await unlink(snapshotFile).catch(() => {});
 
-  index.snapshots = index.snapshots.filter(s => s.id !== id);
-  await saveIndex(index);
+    index.snapshots = index.snapshots.filter(s => s.id !== id);
+    await saveIndex(index);
 
-  console.log(`🗑️ Time capsule deleted: "${exists.label}" (${id.slice(0, 8)})`);
-  return true;
+    console.log(`🗑️ Time capsule deleted: "${exists.label}" (${id.slice(0, 8)})`);
+    return true;
+  });
 }
 
 /**
