@@ -19,7 +19,7 @@ import { join } from 'path';
 import { PATHS } from '../lib/fileUtils.js';
 import { ServerError, sendErrorResponse } from '../lib/errorHandler.js';
 import { ASSET_ROUTE_PREFIXES, SERVER_OWNED_PREFIXES } from '../lib/assetRoutePrefixes.js';
-import { wrWorksDir } from './writersRoom/_shared.js';
+import { wrWorksDir, WORK_ID_RE } from './writersRoom/_shared.js';
 import { escapeRegExp } from '../lib/textUtils.js';
 
 // `acceptRanges: true` is the serve-static default already, but we set it
@@ -51,7 +51,8 @@ const CLIENT_ASSET_STATIC_OPTS = { immutable: true, maxAge: IMMUTABLE_MAX_AGE_MS
 // Metadata/import backups and regenerable analysis snapshots stay inaccessible.
 const writersRoomAssetsOnly = (req, res, next) => {
   const draft = /^\/[^/]+\/drafts\/[^/]+\.md$/.test(req.path);
-  const bible = /^\/wr-work-[0-9a-f-]+\/(characters|places|objects)\.json$/i.test(req.path);
+  const bibleMatch = /^\/([^/]+)\/(characters|places|objects)\.json$/.exec(req.path);
+  const bible = bibleMatch && WORK_ID_RE.test(bibleMatch[1]);
   if (!draft && !bible) return res.status(404).end();
   next();
 };

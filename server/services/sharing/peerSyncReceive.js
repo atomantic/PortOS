@@ -463,9 +463,12 @@ export async function applyIncomingPush(payload) {
       : [];
     missingDraftBodies = await diffWorkBodyManifest(ownBodies, { includeMismatched: workMergeApplied });
     const ownBibles = Array.isArray(bibleManifest) ? bibleManifest.filter((e) => e?.workId === record.id) : [];
-    const missingBibles = await diffWorkBibleManifest(ownBibles).catch((err) => {
+    const bibleDiffFailed = (err) => {
       pending.add('bibleSyncPending');
       console.error(`❌ peerSync: bible diff failed: ${err.message}`);
+    };
+    const missingBibles = await diffWorkBibleManifest(ownBibles, { onError: bibleDiffFailed }).catch((err) => {
+      bibleDiffFailed(err);
       return [];
     });
     if (missingBibles.length) {

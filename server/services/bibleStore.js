@@ -9,10 +9,11 @@
  * directly from here, and the pure sanitizer names from lib/storyBible.js.
  */
 
-import { emitRecordUpdated } from './sharing/recordEvents.js';
 import { randomUUID } from 'crypto';
 import { join } from 'path';
 import { PATHS, atomicWrite, ensureDir, readJSONFile } from '../lib/fileUtils.js';
+import { emitRecordUpdated } from './sharing/recordEvents.js';
+import { createKeyCachedQueue } from '../lib/createKeyCachedQueue.js';
 import { ServerError } from '../lib/errorHandler.js';
 import {
   SANITIZERS,
@@ -21,6 +22,9 @@ import {
   sanitizeBibleList,
   mergeExtractedBible,
 } from '../lib/storyBible.js';
+
+// Shared with peer bible commits: a local save and an incoming file cannot interleave.
+export const withBibleWrite = createKeyCachedQueue();
 
 const WORK_ID_RE = /^wr-work-[0-9a-f-]+$/i;
 const ID_SUFFIX_RE = /^[0-9a-f-]+$/i;
@@ -60,7 +64,7 @@ export function createBibleStore(opts) {
 
   async function save(workId, state) {
     await ensureDir(wrDir(workId));
-    await atomicWrite(filePath(workId), { ...state, updatedAt: nowIso() });
+    await withBibleWrite(filePath(workId), () => atomicWrite(filePath(workId), { ...state, updatedAt: nowIso() }));
     emitRecordUpdated('writersRoomWork', workId);
   }
 

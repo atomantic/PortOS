@@ -101,7 +101,13 @@ describe('bible asset delivery', () => {
     expect(await diffWorkBibleManifest([{ ...manifest[0], workId: '../other' }, { ...manifest[0], kind: 'analysis' }])).toEqual([]);
     writeFileSync(workBiblePath(WORK, 'character'), '{');
     await expect(diffWorkBibleManifest(manifest)).rejects.toThrow();
-    await expect(buildWorkBibleManifest({ id: WORK })).rejects.toThrow();
+    expect(await buildWorkBibleManifest({ id: WORK })).toEqual([]);
     expect(readFileSync(workBiblePath(WORK, 'character'), 'utf8')).toBe('{');
+    const errors = [];
+    const place = { workId: WORK, kind: 'place', sha256: 'c'.repeat(64), updatedAt: remote.updatedAt };
+    expect(await diffWorkBibleManifest([...manifest, place], { onError: (err) => errors.push(err) })).toEqual([place]);
+    expect(errors).toHaveLength(1);
+    write('character', doc('2026-02-01'));
+    expect(await buildWorkBibleManifest({ id: WORK })).toEqual([]);
   });
 });

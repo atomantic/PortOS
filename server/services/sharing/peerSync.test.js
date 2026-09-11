@@ -4445,6 +4445,13 @@ describe('peerSync', () => {
       await writeFile(file, JSON.stringify({ characters: [{ name: 'New cast member' }], updatedAt: '2026-06-03T00:00:00Z' }));
       expect((await pushRecordToPeer(await refresh(carrier))).pushed).toBe(true);
       expect(payloadOf(vi.mocked(peerFetch).mock.calls[0]).bibleManifest).toHaveLength(1);
+      // A corrupt optional sibling must not hold the work and its prose hostage.
+      vi.mocked(peerFetch).mockClear();
+      await writeFile(file, '{');
+      expect((await pushRecordToPeer(await refresh(carrier))).pushed).toBe(true);
+      const withoutBible = payloadOf(vi.mocked(peerFetch).mock.calls[0]);
+      expect(withoutBible.record.id).toBe(carrier.recordId);
+      expect(withoutBible).not.toHaveProperty('bibleManifest');
     });
 
     it('pins the wire vocabulary older peers depend on', () => {
@@ -4628,11 +4635,11 @@ describe('peerSync', () => {
         // No peer fetch in this test: diff returns a pending target with no registered peer.
         vi.mocked(diffWorkBibleManifest).mockResolvedValueOnce([own]);
         const result = await applyIncomingPush(payload);
-        expect(vi.mocked(diffWorkBibleManifest)).toHaveBeenLastCalledWith([own]);
+        expect(vi.mocked(diffWorkBibleManifest)).toHaveBeenLastCalledWith([own], expect.any(Object));
         expect(result.bibleSyncPending).toBe(true);
         payload.bibleManifest = undefined;
         await applyIncomingPush(payload);
-        expect(vi.mocked(diffWorkBibleManifest)).toHaveBeenLastCalledWith([]);
+        expect(vi.mocked(diffWorkBibleManifest)).toHaveBeenLastCalledWith([], expect.any(Object));
       });
 
       it('has a receiver-side carrier for every sidecar row', () => {
