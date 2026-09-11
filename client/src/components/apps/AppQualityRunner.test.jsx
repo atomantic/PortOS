@@ -4,7 +4,7 @@ import { beforeEach, expect, it, vi } from 'vitest';
 import AppQualityRunner from './AppQualityRunner';
 import AppQuality from './AppQuality';
 vi.mock('./AppQualityHistory', () => ({ default: () => null }));
-import { getMaintenanceRuns, startMaintenanceRun } from '../../services/apiAgents';
+import { getMaintenanceRuns, startMaintenanceRun, stopMaintenanceRun } from '../../services/apiAgents';
 vi.mock('../../services/apiAgents', () => ({ getMaintenanceRuns: vi.fn(), startMaintenanceRun: vi.fn(), stopMaintenanceRun: vi.fn() }));
 vi.mock('../../hooks/useProviderModels', () => ({ default: () => ({ providers: [], selectedProviderId: 'codex', selectedModel: 'gpt-5', availableModels: [], loading: false }) }));
 vi.mock('../ProviderModelSelector', () => ({ default: ({ onEffortChange }) => <button onClick={() => onEffortChange('high')}>Use high effort</button> }));
@@ -24,7 +24,7 @@ it('launches missing checks with visible mode and effort, then exposes held runn
   fireEvent.click(button);
   await screen.findByRole('link', { name: 'Open runner settings' });
   expect(startMaintenanceRun).toHaveBeenCalledWith({ appId: 'app-1', providerId: 'codex', model: 'gpt-5', effort: 'high', mode: 'fix', claimBetweenAudits: false, taskTypes: ['security', 'ux'] }, { silent: true });
-  expect(button).toBeDisabled();
+  expect(button).toBeEnabled();
 });
 it('allows one category and recovers from launch failure without reporting a run', async () => {
   startMaintenanceRun.mockRejectedValue(new Error('Provider unavailable'));
@@ -52,4 +52,20 @@ it('preserves run overrides when moving controls into a category row', async () 
     { appId: 'app-1', providerId: 'codex', model: 'gpt-5', effort: 'high', mode: 'fix', claimBetweenAudits: false, taskTypes: ['security'] },
     { silent: true }
   ));
+});
+
+it('launches alongside pending runners and stops each run independently', async () => {
+  getMaintenanceRuns.mockResolvedValue({ runs: [{ id: 'pending', appId: app.id, status: 'running', steps: [], reason: 'Waiting for capacity' }] });
+  startMaintenanceRun.mockResolvedValue({ run: { id: 'new', appId: app.id, status: 'running', steps: [] } });
+  stopMaintenanceRun.mockResolvedValue({ run: { id: 'pending', appId: app.id, status: 'stopped', steps: [] } });
+  render(<MemoryRouter><AppQualityRunner app={app} /></MemoryRouter>);
+  await screen.findByText(/Waiting for capacity/, { selector: 'p.break-words' });
+  const button = screen.getByRole('button', { name: 'Run 2 checks now' });
+  expect(button).toBeEnabled();
+  fireEvent.click(button);
+  await waitFor(() => expect(screen.getAllByRole('button', { name: 'Stop remaining checks' })).toHaveLength(2));
+  fireEvent.click(screen.getAllByRole('button', { name: 'Stop remaining checks' })[1]);
+  await waitFor(() => expect(stopMaintenanceRun).toHaveBeenCalledWith('pending', { silent: true }));
+  await waitFor(() => expect(screen.getAllByRole('button', { name: 'Stop remaining checks' })).toHaveLength(1));
+  expect(button).toBeEnabled();
 });
