@@ -24,6 +24,8 @@ const publicJob = () => ({ ...job });
 
 const markRunMetadata = async (corrections) => {
   for (const correction of corrections) {
+    // Non-strict exception: skip an unreadable run rather than replacing it
+    // with a default; later backfills can retry the repaired metadata.
     const metadata = await readJSONFile(correction.metadataPath, null);
     if (!metadata) continue;
     const now = new Date().toISOString();

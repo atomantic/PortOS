@@ -74,7 +74,7 @@ const perRun = createKeyCachedQueue();
 let retryTimer = null;
 
 export async function listMaintenanceRuns() {
-  const loaded = await readJSONFile(runsFile(), null);
+  const loaded = await readJSONFile(runsFile(), null, { strict: true });
   return Array.isArray(loaded?.runs) ? loaded.runs : [];
 }
 

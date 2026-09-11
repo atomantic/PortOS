@@ -47,9 +47,9 @@ const CONTEXTS_FILE = join(PATHS.data, 'workspace-contexts.json');
 // against the one shared file, so they must serialize.
 const queueWrite = createFileWriteQueue();
 
-/** Read the contexts map ({ [appId]: record }), tolerating a missing/blank file. */
+/** Read the contexts map ({ [appId]: record }), initializing only a missing file. */
 async function loadContexts() {
-  const data = await readJSONFile(CONTEXTS_FILE, { contexts: {} });
+  const data = await readJSONFile(CONTEXTS_FILE, { contexts: {} }, { strict: true });
   if (!data || typeof data.contexts !== 'object' || data.contexts === null) {
     return { contexts: {} };
   }

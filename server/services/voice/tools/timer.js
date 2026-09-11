@@ -36,7 +36,7 @@ export const TIMER_TOOLS = [
       // Delegate to the persistent scheduler — it survives a restart (re-armed
       // at boot, overdue ones fired once) and dedups an LLM re-issuing the same
       // timer inside one reasoning loop.
-      const scheduled = scheduleTimer({ totalMs, label: trimmedLabel });
+      const scheduled = await scheduleTimer({ totalMs, label: trimmedLabel });
       const totalSecs = Math.round(totalMs / 1000);
       const human = totalSecs >= 60
         ? `${Math.round(totalSecs / 60)} minute${Math.round(totalSecs / 60) === 1 ? '' : 's'}`

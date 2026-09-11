@@ -52,7 +52,7 @@ const DEFAULT_STATE = {
  * Load templates state
  */
 async function loadState() {
-  const data = await readJSONFile(TEMPLATES_FILE);
+  const data = await readJSONFile(TEMPLATES_FILE, null, { strict: true });
   if (!data) return { ...DEFAULT_STATE };
   return {
     ...DEFAULT_STATE,

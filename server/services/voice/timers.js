@@ -97,19 +97,23 @@ function findDuplicate(label, fireAt) {
  * Returns `null` for an out-of-range duration (callers validate first; this is
  * a defensive guard so a bad value never arms a runaway/zero timer).
  */
-export function scheduleTimer({ totalMs, label } = {}) {
+export async function scheduleTimer({ totalMs, label } = {}) {
   if (!Number.isFinite(totalMs) || totalMs < 1000 || totalMs > MAX_DURATION_MS) return null;
+  // A new snapshot must include restored timers; a failed restore must not
+  // arm new work or overwrite the unreadable store. Retry after repair.
+  await initVoiceTimers();
   const fireAt = Date.now() + totalMs;
   const dup = findDuplicate(label, fireAt);
   if (dup) return { id: dup.id, fireAt: dup.fireAt, deduped: true };
   const timer = { id: randomUUID(), label, fireAt, createdAt: Date.now() };
   arm(timer);
-  persist();
+  await persist();
   return { id: timer.id, fireAt, deduped: false };
 }
 
 // Idempotency guard so a double-call (re-init, tests) can't double-arm.
 let initialized = false;
+let initPromise = null;
 
 /**
  * Re-arm persisted timers at boot. Any that came due while the process was down
@@ -118,8 +122,19 @@ let initialized = false;
  */
 export async function initVoiceTimers() {
   if (initialized) return { skipped: true };
-  initialized = true;
-  const stored = await readJSONFile(STORE_PATH, { version: 1, timers: [] });
+  if (!initPromise) {
+    initPromise = restoreTimers().then((result) => {
+      initialized = true;
+      return result;
+    }).finally(() => {
+      initPromise = null;
+    });
+  }
+  return initPromise;
+}
+
+async function restoreTimers() {
+  const stored = await readJSONFile(STORE_PATH, { version: 1, timers: [] }, { strict: true });
   const list = Array.isArray(stored?.timers) ? stored.timers : [];
   const now = Date.now();
   let armed = 0;
@@ -141,9 +156,7 @@ export async function initVoiceTimers() {
       createdAt: typeof rec.createdAt === 'number' ? rec.createdAt : now,
     };
     // Skip a record already handled, so it can't double-notify:
-    //   - `active.has` — a timer_set scheduled post-boot (during init's async
-    //     read; routes are up before this fire-and-forget init settles) is live
-    //     in memory and authoritative.
+    //   - `active.has` — an already restored record is live in memory.
     //   - `seen.has` — a duplicate id earlier in a corrupt/hand-edited store.
     //     `active` alone misses this when the records are OVERDUE, since overdue
     //     timers fire-and-drop without being added to `active`.
@@ -169,4 +182,5 @@ export function __resetVoiceTimers() {
   for (const t of active.values()) clearTimeout(t.handle);
   active.clear();
   initialized = false;
+  initPromise = null;
 }
