@@ -618,7 +618,7 @@ describe('MindTab', () => {
     });
     renderTab();
 
-    const thoughtStatus = await screen.findByRole('status');
+    const thoughtStatus = (await screen.findByText('Thinking with demo-model')).closest('[role="status"]');
     expect(thoughtStatus).toHaveTextContent('Thinking with demo-model');
     expect(thoughtStatus).toHaveAttribute('aria-busy', 'true');
     expect(thoughtStatus.querySelector('.animate-pulse')).toBeInTheDocument();
