@@ -66,6 +66,25 @@ describe('listSnapshots', () => {
     writeFileSync(indexPath(), JSON.stringify({ snapshots: 'nope' }));
     await expect(listSnapshots()).resolves.toEqual([]);
   });
+
+  it('rebuilds the listing from on-disk snapshot files when the index is corrupt', async () => {
+    mkdirSync(snapshotsDir(), { recursive: true });
+    const kept = {
+      id: 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee',
+      label: 'kept',
+      createdAt: '2026-01-02T00:00:00.000Z',
+      data: { 'identity.json': { name: 'Example Twin' } },
+    };
+    writeFileSync(join(snapshotsDir(), `${kept.id}.json`), JSON.stringify(kept));
+    writeFileSync(indexPath(), '{truncated');
+
+    const listed = await listSnapshots();
+    expect(listed).toEqual([{
+      id: kept.id,
+      label: 'kept',
+      createdAt: kept.createdAt,
+    }]);
+  });
 });
 
 describe('createSnapshot', () => {
@@ -96,6 +115,22 @@ describe('createSnapshot', () => {
     const snapshot = await createSnapshot('recovered');
     expect(snapshot.id).toBeTruthy();
     expect(readIndex().snapshots.map(s => s.id)).toEqual([snapshot.id]);
+  });
+
+  it('keeps prior snapshot files in the index when creating after corruption', async () => {
+    mkdirSync(snapshotsDir(), { recursive: true });
+    const kept = {
+      id: 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee',
+      label: 'kept',
+      createdAt: '2026-01-01T00:00:00.000Z',
+      data: { 'identity.json': { name: 'Example Twin' } },
+    };
+    writeFileSync(join(snapshotsDir(), `${kept.id}.json`), JSON.stringify(kept));
+    writeFileSync(indexPath(), '{truncated');
+    writeTwinJson('identity.json', { name: 'Example Twin' });
+
+    const snapshot = await createSnapshot('after-corrupt');
+    expect(readIndex().snapshots.map(s => s.id).sort()).toEqual([kept.id, snapshot.id].sort());
   });
 
   it('skips a markdown directory that would fail a TOCTOU stat-then-read', async () => {

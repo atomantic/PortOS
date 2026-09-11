@@ -9,7 +9,7 @@ import { unlink, readdir } from 'fs/promises';
 import { join } from 'path';
 import { createHash } from 'crypto';
 import { v4 as uuidv4 } from '../lib/uuid.js';
-import { atomicWrite, ensureDir, PATHS, readJSONFile, tryReadFile } from '../lib/fileUtils.js';
+import { atomicWrite, ensureDir, PATHS, readJSONFile, readJSONFileStrict, tryReadFile } from '../lib/fileUtils.js';
 import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
 
 const DIGITAL_TWIN_DIR = PATHS.digitalTwin;
@@ -28,20 +28,43 @@ async function ensureSnapshotsDir() {
   await ensureDir(SNAPSHOTS_DIR);
 }
 
-function normalizeIndex(parsed) {
-  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-    return { snapshots: [] };
+function indexEntryFromSnapshotFile(parsed) {
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed) || !parsed.id) return null;
+  const meta = { ...parsed };
+  delete meta.data;
+  return meta;
+}
+
+async function recoverIndexFromSnapshotFiles(reason) {
+  const entries = await readdir(SNAPSHOTS_DIR).catch(() => []);
+  const metas = await Promise.all(
+    entries
+      .filter(name => name.endsWith('.json') && name !== 'index.json')
+      .map(async name => indexEntryFromSnapshotFile(
+        await readJSONFile(join(SNAPSHOTS_DIR, name), null)
+      ))
+  );
+  const snapshots = metas
+    .filter(Boolean)
+    .sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || '')));
+  if (reason || snapshots.length > 0) {
+    console.warn(`⚠️ Time-capsule index ${reason || 'missing'} — rebuilt listing of ${snapshots.length} snapshot file(s)`);
   }
-  return {
-    snapshots: Array.isArray(parsed.snapshots) ? parsed.snapshots : [],
-  };
+  return { snapshots };
+}
+
+function isUsableIndex(parsed) {
+  return parsed && typeof parsed === 'object' && !Array.isArray(parsed) && Array.isArray(parsed.snapshots);
 }
 
 async function loadIndex() {
   await ensureSnapshotsDir();
-  // Missing, empty, or corrupt index recovers as empty rather than throwing —
-  // a truncated index.json used to disable every snapshot operation.
-  return normalizeIndex(await readJSONFile(INDEX_FILE, null));
+  const { ok, value } = await readJSONFileStrict(INDEX_FILE, null);
+  if (ok && isUsableIndex(value)) return { snapshots: value.snapshots };
+  // Missing, empty, corrupt, or wrong-shaped index must not throw (that used
+  // to disable every snapshot op). Rebuild from on-disk snapshot files so a
+  // later save does not orphan listings that the bytes still hold.
+  return recoverIndexFromSnapshotFiles(ok ? (value == null ? null : 'malformed') : 'unreadable');
 }
 
 async function saveIndex(index) {
@@ -136,12 +159,13 @@ export async function createSnapshot(label, description = '') {
     summary: buildSummary(data)
   };
 
-  // Save snapshot data
-  const snapshotFile = join(SNAPSHOTS_DIR, `${snapshot.id}.json`);
-  await atomicWrite(snapshotFile, { ...snapshot, data });
-
   return queueIndexWrite(async () => {
+    // Load (and maybe rebuild) the index BEFORE writing this snapshot file so
+    // a recovery scan cannot pick up the file we are about to add, then
+    // unshift a duplicate of it.
     const index = await loadIndex();
+    const snapshotFile = join(SNAPSHOTS_DIR, `${snapshot.id}.json`);
+    await atomicWrite(snapshotFile, { ...snapshot, data });
     index.snapshots.unshift(snapshot);
     await saveIndex(index);
     console.log(`📸 Time capsule created: "${label}" (${snapshot.id.slice(0, 8)})`);
