@@ -771,14 +771,21 @@ function streamSpawn(bin, args, onLog, onProc) {
 // Returns `{ promise, kill }` so the route can SIGTERM the pip child if the
 // SSE client disconnects mid-install — a 10-minute torch upgrade would
 // otherwise keep running invisibly.
-export function installPackages(pythonPath, importNames, onLog) {
+export function installPackages(pythonPath, importNames, onLog, { preferUv = false } = {}) {
+  const uv = preferUv ? whichFirstSync('uv') : null;
   const pipSpecs = importNames.map(pipNameFor);
   const conflicts = [...new Set(pipSpecs.flatMap((s) => PIP_PRE_UNINSTALL[s] || []))];
 
   let currentProc = null;
   let killed = false;
   const trackProc = (p) => { currentProc = p; };
-  const runPip = (args) => streamSpawn(pythonPath, ['-m', 'pip', ...args], onLog, trackProc);
+  const runPip = (args) => {
+    if (!uv) return streamSpawn(pythonPath, ['-m', 'pip', ...args], onLog, trackProc);
+    // uv does not accept pip's progress-bar/yes options. Keep the same
+    // exact target interpreter and package specifications in both paths.
+    const uvArgs = args.filter((arg, index) => arg !== '--yes' && arg !== '--progress-bar' && args[index - 1] !== '--progress-bar');
+    return streamSpawn(uv, ['pip', uvArgs[0], '--python', pythonPath, ...uvArgs.slice(1)], onLog, trackProc);
+  };
 
   const promise = (async () => {
     if (conflicts.length) {
@@ -789,13 +796,13 @@ export function installPackages(pythonPath, importNames, onLog) {
       await runPip(['uninstall', '--yes', ...conflicts]);
       if (killed) return { ok: false, code: -1 };
     }
-    onLog({ type: 'log', message: `pip install ${pipSpecs.join(' ')}` });
+    onLog({ type: 'log', message: `${uv ? 'uv pip' : 'pip'} install ${pipSpecs.join(' ')}` });
     const code = await runPip(['install', '--upgrade', '--progress-bar', 'on', ...pipSpecs]);
     if (code === 0) {
       onLog({ type: 'complete', message: 'All packages installed successfully.' });
       return { ok: true, code: 0 };
     }
-    onLog({ type: 'error', message: `pip exited with code ${code}` });
+    onLog({ type: 'error', message: `${uv ? 'uv pip' : 'pip'} exited with code ${code}` });
     return { ok: false, code };
   })();
 

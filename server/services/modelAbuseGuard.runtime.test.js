@@ -53,7 +53,7 @@ describe('Prompt Guard runtime lifecycle', () => {
   it('installs the dedicated versioned packages and verifies the full runner only on request', async () => {
     const { installModelAbuseGuard } = await import('./modelAbuseGuard.js');
     await expect(installModelAbuseGuard()).resolves.toMatchObject({ ok: true, ready: true });
-    expect(mock.installPackages).toHaveBeenCalledWith('/example/venv/bin/python3', [...MODEL_ABUSE_GUARD_PYTHON_PACKAGES], expect.any(Function));
+    expect(mock.installPackages).toHaveBeenCalledWith('/example/venv/bin/python3', [...MODEL_ABUSE_GUARD_PYTHON_PACKAGES], expect.any(Function), { preferUv: true });
     expect(mock.downloadHfRepo).toHaveBeenCalledWith(expect.objectContaining({ revision: expect.stringMatching(/^[a-f0-9]{40}$/), only: expect.not.arrayContaining(['modeling.py']) }));
     expect(mock.spawn).toHaveBeenCalledOnce();
   });
@@ -75,5 +75,37 @@ describe('Prompt Guard runtime lifecycle', () => {
     await expect(getModelAbuseGuardStatus()).resolves.toMatchObject({ ready: false, selfTestFailed: true, setupState: 'incomplete' });
     await expect(runModelAbuseScan({ content: 'A routine issue.', classifierMode: 'optional' })).resolves.toMatchObject({ ok: false, code: 'security-guard-not-ready' });
     expect(mock.spawn).toHaveBeenCalledOnce();
+  });
+});
+
+describe('Prompt Guard setup diagnostics', () => {
+  it('reports an import failure on status without exposing subprocess secrets or starting a repair', async () => {
+    mock.execFile.mockImplementation((...args) => {
+      if (args[1][1].startsWith('import sys;')) return args.at(-1)(null, { stdout: 'supported' });
+      const error = Object.assign(new Error('private runtime path'), { stderr: "ModuleNotFoundError: No module named 'torch' hf_private_token" });
+      args.at(-1)(error);
+    });
+    const { getModelAbuseGuardStatus } = await import('./modelAbuseGuard.js');
+    const status = await getModelAbuseGuardStatus();
+    expect(status).toMatchObject({ ready: false, runtimeIssue: { code: 'package-missing', action: expect.stringContaining('Repair') }, expectedPackages: MODEL_ABUSE_GUARD_PYTHON_PACKAGES });
+    expect(JSON.stringify(status)).not.toMatch(/private runtime path|hf_private_token/);
+    expect(mock.installPackages).not.toHaveBeenCalled();
+  });
+
+  it('retains the first package failure cause and exit code across status refreshes, then clears it on repair', async () => {
+    mock.installPackages.mockImplementationOnce((_python, _packages, onLog) => {
+      onLog({ type: 'log', message: 'ReadTimeout https://user:password@private.example hf_private_token' });
+      onLog({ type: 'error', message: 'No matching distribution found' });
+      return { promise: Promise.resolve({ ok: false, code: 1 }), kill: vi.fn() };
+    });
+    const { installModelAbuseGuard, getModelAbuseGuardStatus } = await import('./modelAbuseGuard.js');
+    const onEvent = vi.fn();
+    const result = await installModelAbuseGuard({ onEvent });
+    expect(result).toMatchObject({ ok: false, diagnostic: { stage: 'packages', code: 'network-failed', exitCode: 1 } });
+    expect(JSON.stringify([result, onEvent.mock.calls])).not.toMatch(/password|private.example|hf_private_token/);
+    expect((await getModelAbuseGuardStatus()).lastInstallFailure).toEqual(result.diagnostic);
+    expect(mock.downloadHfRepo).not.toHaveBeenCalled();
+    await expect(installModelAbuseGuard()).resolves.toMatchObject({ ok: true });
+    expect((await getModelAbuseGuardStatus()).lastInstallFailure).toBeNull();
   });
 });
