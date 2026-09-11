@@ -33,6 +33,7 @@ export async function getInstances() {
 // instance-feature registry uses to decide whether the DataDog nav entries
 // should appear before the user has toggled the feature explicitly.
 //
+// Detection suppresses reader logging because its caller records the failure.
 // Like getInstances(), `strict` makes a PRESENT-but-corrupt config
 // throw instead of reading as the empty default, so the caller records
 // "detection failed" and falls back to the shipped default rather than a

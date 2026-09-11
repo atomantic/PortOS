@@ -5,7 +5,6 @@ import { withSpawnCwdEnv } from '../lib/spawnCwd.js';
 import { ServerError } from '../lib/errorHandler.js';
 import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
 import { createMutex } from '../lib/asyncMutex.js';
-import { getSettings, updateSettings } from './settings.js';
 import { dispatchHintFromLabels } from '../lib/dispatchLabels.js';
 
 const DATA_DIR = PATHS.data;
@@ -372,6 +371,8 @@ export async function setSecret(name, value) {
     const accountData = await load();
     await requireActiveCachedAccount(accountData);
 
+    // Secret operations alone need settings; repo reads and sync keep this subtree lazy.
+    const { getSettings, updateSettings } = await import('./settings.js');
     // Store value in settings.json (never returned to client)
     const settings = await getSettings();
     const secrets = settings.secrets || {};
@@ -406,6 +407,7 @@ export async function syncSecretToRepos(name) {
 async function syncSecretToReposNow(name) {
   const data = await load();
   const auth = await requireActiveCachedAccount(data);
+  const { getSettings } = await import('./settings.js');
   const settings = await getSettings();
   const value = settings.secrets?.[name];
   if (!value) throw new ServerError(`No value stored for secret: ${name}`, { status: 400, code: 'SECRET_NOT_CONFIGURED' });

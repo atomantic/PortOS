@@ -38,6 +38,8 @@ const reaches = (entry, target) => staticImportClosure(abs(entry)).files.has(abs
 
 // Each row: the entry that was narrowed, the module it must no longer
 const NARROWED = [
+  ['services/github.js', 'services/settings.js',
+    'loads settings only for secret operations, not repository reads or sync'],
   ['services/sharing/peerSyncPush.js', 'services/writersRoom/bibleSync.js',
     'loads bible asset handling only for Writers Room work pushes'],
   ['services/sharing/peerSyncReceive.js', 'services/writersRoom/bibleSync.js',
