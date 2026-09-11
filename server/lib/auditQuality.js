@@ -51,6 +51,14 @@ Allowed coverage: broad, partial, unavailable, not-applicable. Allowed confidenc
 
 export const appQualityQuerySchema = z.object({ includeQuality: z.enum(['true', 'false']).optional() });
 
+// The list endpoint has two intentionally narrow projections in addition to
+// its frozen default response: the sidebar/navigation shape and the PM2-backed
+// peer-probe shape. Keep the detail endpoint on appQualityQuerySchema so a
+// view flag cannot silently change its response contract.
+export const appListQuerySchema = appQualityQuerySchema.extend({
+  view: z.enum(['nav', 'probe']).optional(),
+});
+
 export const auditQualityReportSchema = z.object({
   version: z.literal(1),
   category: z.string().refine(value => Object.hasOwn(AUDIT_DEFINITIONS, value)),

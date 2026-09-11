@@ -120,6 +120,12 @@ const renderLayout = async (initialPath = '/brain/inbox') => {
 const pinnedSection = () => screen.queryByTestId('pinned-section');
 
 describe('Layout — manifest-derived sidebar structure', () => {
+  it('loads sidebar apps through the lean navigation projection', async () => {
+    await renderLayout();
+
+    expect(api.getApps).toHaveBeenCalledWith({ silent: true, view: 'nav' });
+  });
+
   it('keeps NAV_PRESENTATION presentation-only and keyed to live manifest paths', () => {
     const manifestPaths = new Set(NAV_COMMANDS.map((command) => command.path));
     expect(Object.keys(NAV_PRESENTATION).filter((path) => !manifestPaths.has(path))).toEqual([]);
