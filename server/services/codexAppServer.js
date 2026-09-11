@@ -331,14 +331,16 @@ const handleFrame = (target, line) => {
  * JSON lines into one unparseable stream.
  */
 const writeFrame = (target, frame) => {
-  target.writeTail = target.writeTail.then(() => new Promise((resolve, reject) => {
+  const write = target.writeTail.then(() => new Promise((resolve, reject) => {
     if (target.closed || target.child.stdin.destroyed) {
       reject(codexError(CODEX_ERROR_CODES.exited, 'The Codex app-server is no longer running.'));
       return;
     }
     target.child.stdin.write(`${JSON.stringify(frame)}\n`, (err) => (err ? reject(err) : resolve()));
   }));
-  return target.writeTail;
+  // Keep the queue usable after failure while preserving this caller's error.
+  target.writeTail = write.catch(() => {});
+  return write;
 };
 
 /** A JSON-RPC request with its own deadline. Settles exactly once. */
