@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
 import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
-import { MemoryRouter, Routes, Route } from 'react-router';
+import { MemoryRouter, Routes, Route, useNavigate } from 'react-router';
 import Media3DDetail from './Media3DDetail';
 
 const getImageTo3dModel = vi.fn();
@@ -30,7 +30,17 @@ vi.mock('../components/media/GlbViewer', () => ({
 // stubbing it keeps this suite about the page — but it echoes whether the scene
 // reached it, which is the page's half of the contract.
 vi.mock('../components/media/ArExportPanel', () => ({
-  default: ({ scene }) => <div data-testid="ar-export-panel" data-has-scene={String(Boolean(scene))} />,
+  default: ({ scene, onRecordChange }) => {
+    const initialOnRecordChange = useRef(onRecordChange);
+    return (
+      <>
+        <div data-testid="ar-export-panel" data-has-scene={String(Boolean(scene))} />
+        <button type="button" onClick={() => initialOnRecordChange.current?.({ id: 'image3d-1', name: 'Stale AR update' })}>
+          Simulate stale AR update
+        </button>
+      </>
+    );
+  },
 }));
 vi.mock('../components/MediaImage', () => ({ default: ({ alt, src }) => <img alt={alt} src={src} /> }));
 // The rig panel owns its own readiness fetch + feature gate (covered by
@@ -59,6 +69,37 @@ function renderAt(id = 'image3d-1') {
       </Routes>
     </MemoryRouter>,
   );
+}
+
+function RouteSwitcher() {
+  const navigate = useNavigate();
+  return (
+    <>
+      <button type="button" onClick={() => navigate('/3d/image3d-2')}>Switch model</button>
+      <Media3DDetail />
+    </>
+  );
+}
+
+function renderWithSwitcher(id = 'image3d-1') {
+  return render(
+    <MemoryRouter initialEntries={[`/3d/${id}`]}>
+      <Routes>
+        <Route path="/3d" element={<div>3D index</div>} />
+        <Route path="/3d/:id" element={<RouteSwitcher />} />
+      </Routes>
+    </MemoryRouter>,
+  );
+}
+
+function deferred() {
+  let resolve;
+  let reject;
+  const promise = new Promise((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
 }
 
 describe('Media3DDetail', () => {
@@ -93,6 +134,74 @@ describe('Media3DDetail', () => {
     getImageTo3dModel.mockRejectedValue(Object.assign(new Error('nope'), { status: 404 }));
     renderAt('gone');
     expect(await screen.findByText(/no longer exists/i)).toBeInTheDocument();
+  });
+
+  it('ignores a slower response from the previous routed model', async () => {
+    const first = deferred();
+    const second = deferred();
+    getImageTo3dModel.mockImplementation((id) => (id === 'image3d-1' ? first.promise : second.promise));
+    renderWithSwitcher();
+
+    await waitFor(() => expect(getImageTo3dModel).toHaveBeenCalledWith('image3d-1', { silent: true }));
+    fireEvent.click(screen.getByRole('button', { name: /switch model/i }));
+    await waitFor(() => expect(getImageTo3dModel).toHaveBeenCalledWith('image3d-2', { silent: true }));
+
+    second.resolve(record({ id: 'image3d-2', name: 'Second Beacon' }));
+    expect(await screen.findByText('Second Beacon')).toBeInTheDocument();
+    first.resolve(record({ id: 'image3d-1', name: 'First Beacon' }));
+
+    await waitFor(() => expect(screen.getByText('Second Beacon')).toBeInTheDocument());
+    expect(screen.queryByText('First Beacon')).toBeNull();
+  });
+
+  it('does not let a previous route 404 the newly selected model', async () => {
+    const first = deferred();
+    const second = deferred();
+    getImageTo3dModel.mockImplementation((id) => (id === 'image3d-1' ? first.promise : second.promise));
+    renderWithSwitcher();
+
+    await waitFor(() => expect(getImageTo3dModel).toHaveBeenCalledWith('image3d-1', { silent: true }));
+    fireEvent.click(screen.getByRole('button', { name: /switch model/i }));
+    await waitFor(() => expect(getImageTo3dModel).toHaveBeenCalledWith('image3d-2', { silent: true }));
+
+    second.resolve(record({ id: 'image3d-2', name: 'Second Beacon' }));
+    expect(await screen.findByText('Second Beacon')).toBeInTheDocument();
+    first.reject(Object.assign(new Error('gone'), { status: 404 }));
+
+    await waitFor(() => expect(screen.getByText('Second Beacon')).toBeInTheDocument());
+    expect(screen.queryByText(/no longer exists/i)).toBeNull();
+  });
+
+  it('ignores async panel updates started for the previous routed model', async () => {
+    getImageTo3dModel.mockImplementation((id) => Promise.resolve(record({
+      id,
+      name: id === 'image3d-1' ? 'First Beacon' : 'Second Beacon',
+    })));
+    renderWithSwitcher();
+
+    expect(await screen.findByText('First Beacon')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /switch model/i }));
+    expect(await screen.findByText('Second Beacon')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /simulate stale ar update/i }));
+
+    expect(screen.getByText('Second Beacon')).toBeInTheDocument();
+    expect(screen.queryByText('Stale AR update')).toBeNull();
+  });
+
+  it('clears and reseeds render options for the active routed model', async () => {
+    getImageTo3dModel.mockImplementation((id) => Promise.resolve(record({
+      id,
+      name: id === 'image3d-1' ? 'First Beacon' : 'Second Beacon',
+      runs: [{ steps: id === 'image3d-1' ? 48 : 24 }],
+    })));
+    renderWithSwitcher();
+
+    expect(await screen.findByText('First Beacon')).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByLabelText(/quality/i)).toHaveValue('48'));
+    fireEvent.click(screen.getByRole('button', { name: /switch model/i }));
+
+    expect(await screen.findByText('Second Beacon')).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByLabelText(/quality/i)).toHaveValue('24'));
   });
 
   it('deletes and navigates back to the index', async () => {
