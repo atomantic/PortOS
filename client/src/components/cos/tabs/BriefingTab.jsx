@@ -20,7 +20,6 @@ import { formatWeekdayDate } from '../../../utils/formatters';
 import EmptyState from '../../EmptyState';
 import { useAsyncAction } from '../../../hooks/useAsyncAction';
 import { useAutoRefetch } from '../../../hooks/useAutoRefetch';
-import toast from '../../ui/Toast';
 
 const SECTION_ICONS = {
   'Task Queue': CheckCircle,
@@ -182,6 +181,11 @@ export default function BriefingTab() {
     }
   });
 
+  const handleGenerateBriefing = () => {
+    if (generationPending || generatingBriefing || generationInFlightRef.current) return;
+    generateBriefing();
+  };
+
   useEffect(() => {
     loadData();
   }, []);
@@ -215,15 +219,6 @@ export default function BriefingTab() {
     5000,
     { enabled: generationPending, immediate: false, pollOnly: true },
   );
-
-  useEffect(() => {
-    if (!generationPending) return undefined;
-    const timeoutId = setTimeout(() => {
-      setGenerationPending(false);
-      toast.error('Briefing generation is taking longer than expected. Try again or check the Daily Briefing job.');
-    }, 60000);
-    return () => clearTimeout(timeoutId);
-  }, [generationPending]);
 
   const loadBriefing = async (date) => {
     setLoading(true);
@@ -284,7 +279,7 @@ export default function BriefingTab() {
             />
           )}
           <button
-            onClick={loadData}
+            onClick={() => loadData()}
             className="flex items-center gap-2 px-3 py-1.5 text-sm bg-port-card border border-port-border hover:border-port-accent/50 text-gray-300 rounded-lg transition-colors"
           >
             <RefreshCw size={14} />
@@ -301,7 +296,7 @@ export default function BriefingTab() {
             message="Generate today’s briefing now, or open the Daily Briefing job to change its schedule."
             actionLabel={generationPending || generatingBriefing ? 'Generating today’s briefing…' : 'Generate today’s briefing'}
             actionDisabled={generationPending || generatingBriefing}
-            onAction={generateBriefing}
+            onAction={handleGenerateBriefing}
           />
           <Link to="/cos/jobs" className="-mt-10 mb-8 text-sm text-port-accent hover:underline">
             Open Daily Briefing job

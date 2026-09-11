@@ -81,6 +81,7 @@ describe('BriefingTab empty state', () => {
     await act(async () => { fireEvent.click(generate); });
 
     expect(api.triggerCosJob).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole('button', { name: 'Generating today’s briefing…' })).toBeDisabled();
     resolveTrigger({ started: true });
     await act(async () => {});
   });
