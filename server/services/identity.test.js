@@ -1,4 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterAll } from 'vitest';
+import { basename, dirname } from 'path';
+import { pinPlatform } from '../lib/testHelper.js';
 import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../lib/mockPathsDataRoot.js';
 
 import {
@@ -42,6 +44,11 @@ function makeFsPromisesStore() {
       if (path in store) return store[path];
       throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
     }),
+    // Windows strict reads inspect sibling backup files before accepting ENOENT.
+    // Keep that directory lookup in the same fake filesystem as reads and renames.
+    readdir: vi.fn(async (path) => Object.keys(store)
+      .filter(file => dirname(file) === path)
+      .map(file => basename(file))),
     writeFile: vi.fn(async (path, data) => { store[path] = data; }),
     rename: vi.fn(async (from, to) => {
       if (!(from in store)) throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
@@ -963,11 +970,16 @@ describe('Integration: Goal CRUD', () => {
     expect(await deleteGoal('nonexistent')).toBe(false);
   });
 
-  it('should set birth date and re-derive longevity', async () => {
-    const goals = await setBirthDate('1985-03-20');
+  it.each(['linux', 'win32'])('should set birth date and re-derive longevity (%s)', async (platform) => {
+    const restorePlatform = pinPlatform(platform);
+    try {
+      const goals = await setBirthDate('1985-03-20');
 
-    expect(goals.birthDate).toBe('1985-03-20');
-    expect(goals.updatedAt).toBeDefined();
+      expect(goals.birthDate).toBe('1985-03-20');
+      expect(goals.updatedAt).toBeDefined();
+    } finally {
+      restorePlatform();
+    }
   });
 
   it('should add milestone to a goal', async () => {
