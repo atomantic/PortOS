@@ -1,10 +1,11 @@
-import { Clock, AlertTriangle, SlidersHorizontal, GitMerge } from 'lucide-react';
+import { Clock, AlertTriangle, SlidersHorizontal, GitMerge, PauseCircle } from 'lucide-react';
 import { timeAgo } from '../../../../utils/formatters';
 import useTaskModelPins from '../../../../hooks/useTaskModelPins';
 import { describeNextRun, coverageTone, pipelineStages, IMPROVEMENT_DISABLED_TITLE, SAVING_TITLE } from './scheduleConstants';
 import TaskHeader from './TaskHeader';
 import RunTaskButton from './RunTaskButton';
 import TaskModelQuickControls from './TaskModelQuickControls';
+import Banner from '../../../ui/Banner';
 
 // One scheduled task rendered as a status-rich card. Browsing plus the common
 // "retarget the model and run it" loop happen here; the rest of the
@@ -74,6 +75,18 @@ export default function AppTaskCard({ taskType, config, apps, onTrigger, onConfi
           )}
         </div>
       </button>
+
+      {config.enabled === false && (
+        <Banner
+          tone="warning"
+          icon={PauseCircle}
+          title="Global pause active"
+          role="status"
+          className="mx-4 mb-3"
+        >
+          Scheduled runs are paused for this task.
+        </Banner>
+      )}
 
       {/* Quick model pins — the drawer's Global defaults, inline */}
       {userInvokable && onUpdate && (stageCount > 0 ? (
