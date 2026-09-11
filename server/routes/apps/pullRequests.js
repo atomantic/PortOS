@@ -129,7 +129,12 @@ function reviewActionFor(pullRequest, tasks, requests, appId) {
   const task = tasks?.find(candidate => isReviewTaskFor(candidate, appId, pullRequest));
   if (task) return { taskId: task.id, status: task.status };
   const queued = requests?.find(request => isReviewRequestFor(request, appId, pullRequest));
-  return queued ? { taskId: null, status: 'pending' } : null;
+  if (queued) return { taskId: null, status: 'pending' };
+  const failure = tasks?.findLast(candidate => candidate.status === 'completed'
+    && candidate.metadata?.analysisType === PR_REVIEWER_TASK_TYPE
+    && candidate.metadata?.app === appId
+    && Number(candidate.metadata?.targetPullRequest) === pullRequest.number);
+  return failure?.metadata?.preflightFailure ? { taskId: failure.id, status: 'failed', error: failure.metadata.note } : null;
 }
 
 const taskResponse = task => task ? {
@@ -369,7 +374,7 @@ router.post('/:id/pull-requests/:number/review', loadApp, asyncHandler(async (re
     });
   }
   const existing = reviewActionFor({ number }, tasks, requests, app.id);
-  if (existing) {
+  if (existing && existing.status !== 'failed') {
     res.json({ appId: app.id, appName: app.name, number, reviewAction: existing, duplicate: true });
     return;
   }

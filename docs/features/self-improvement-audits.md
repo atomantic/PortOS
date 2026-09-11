@@ -43,7 +43,7 @@ the operator's live checkout.
 | `simplify` | Dead code, duplication, YAGNI | `code-quality`, `simplify` | file | |
 | `module-hygiene` | Responsibility boundaries, reuse, discoverability | `code-quality`, `module-hygiene` | file | yes |
 | `api-contract` | Route validation, client/server drift, envelopes | `api-contract` | file | |
-| `react-lifecycle` | Effect teardown, stale closures, render races | `react-lifecycle` | file | |
+| `react-lifecycle` | UI resource lifetimes, stale data, async ordering, state continuity | `react-lifecycle` | file | |
 | `observability` | Silent catches, log noise, missing error context | `code-quality`, `observability` | file | |
 | `copy` | User-facing wording | `ux`, `copy` | file | |
 | `better-complexity` | Counted branching per function | `code-quality`, `complexity` | file | yes |
@@ -71,7 +71,9 @@ problem:
 - **Defects are split four ways.** `better-runtime-safety` reads source for
   latent defects; `console-errors` collects what actually errors at runtime;
   `error-handling` owns the failure path once something goes wrong; and
-  `react-lifecycle` owns component effects.
+  `react-lifecycle` owns UI lifecycle and state correctness across UI runtimes.
+  Its legacy task ID and tracking labels remain stable; its display name is
+  **UI lifecycle & state** and its checks follow the target app’s own semantics.
 - **Tests are split two ways.** `test-coverage` owns the gaps;
   `better-test-quality` owns the tests that already exist.
 

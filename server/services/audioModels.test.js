@@ -4,7 +4,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterAll } from 'vitest';
-import { mkdtempSync, rmSync } from 'fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 
@@ -83,5 +83,15 @@ describe('audioModels — add / list / merge / remove', () => {
     expect(await svc.removeAudioModel({ engine: 'musicgen', id: 'facebook/musicgen-large' })).toBe(true);
     expect((await svc.listUserModels('musicgen'))).toHaveLength(0);
     expect(await svc.removeAudioModel({ engine: 'musicgen', id: 'not/there' })).toBe(false);
+  });
+
+  it('refuses to add over an unreadable registry and preserves its bytes', async () => {
+    const registry = join(TEST_DATA_ROOT, 'audio-models.json');
+    writeFileSync(registry, '{"musicgen":');
+    const before = readFileSync(registry);
+
+    await expect(svc.addAudioModel({ engine: 'musicgen', repo: 'org/new-model' }))
+      .rejects.toMatchObject({ code: 'UNREADABLE_STORE', status: 500 });
+    expect(readFileSync(registry)).toEqual(before);
   });
 });

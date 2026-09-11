@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { mkdtempSync, rmSync, writeFileSync, mkdirSync, existsSync, unlinkSync } from 'fs';
+import { mkdtempSync, rmSync, writeFileSync, readFileSync, mkdirSync, existsSync, unlinkSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 
@@ -173,6 +173,22 @@ describe('dashboardLayouts service', () => {
       // Verify by reading getState() and confirming no file got written.
       await svc.getState();
       expect(existsSync(STATE_FILE)).toBe(false);
+    });
+  });
+
+  describe('unreadable store', () => {
+    it('refuses every layout mutation without replacing the original bytes', async () => {
+      writeFileSync(STATE_FILE, '{"layouts":');
+      const before = readFileSync(STATE_FILE);
+      const attempts = [
+        svc.setActiveLayout('default'),
+        svc.saveLayout({ id: 'custom', name: 'Custom', widgets: ['cos'], grid: [] }),
+      ];
+
+      for (const attempt of attempts) {
+        await expect(attempt).rejects.toMatchObject({ code: 'UNREADABLE_STORE', status: 500 });
+        expect(readFileSync(STATE_FILE)).toEqual(before);
+      }
     });
   });
 

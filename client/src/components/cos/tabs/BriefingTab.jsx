@@ -1,4 +1,5 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
+import { Link } from 'react-router';
 import {
   Newspaper,
   RefreshCw,
@@ -16,6 +17,9 @@ import * as api from '../../../services/api';
 import { RapidReaderTrigger } from '../../RapidReader';
 import BrailleSpinner from '../../BrailleSpinner';
 import { formatWeekdayDate } from '../../../utils/formatters';
+import EmptyState from '../../EmptyState';
+import { useAsyncAction } from '../../../hooks/useAsyncAction';
+import { useAutoRefetch } from '../../../hooks/useAutoRefetch';
 
 const SECTION_ICONS = {
   'Task Queue': CheckCircle,
@@ -158,13 +162,36 @@ export default function BriefingTab() {
   const [selectedDate, setSelectedDate] = useState(null);
   const [loading, setLoading] = useState(true);
   const [expandedSections, setExpandedSections] = useState({});
+  const [generationPending, setGenerationPending] = useState(false);
+  const generationInFlightRef = useRef(false);
+
+  const [generateBriefing, generatingBriefing] = useAsyncAction(async () => {
+    if (generationPending || generationInFlightRef.current) return;
+    generationInFlightRef.current = true;
+    try {
+      const result = await api.triggerCosJob('job-daily-briefing', { silent: true });
+      if (!result || result.success === false || (result.status === 'skipped' && !result.duplicate)) {
+        throw new Error(result?.reason || 'The briefing could not be generated');
+      }
+      setGenerationPending(true);
+      const latest = await loadData({ showLoading: false });
+      if (latest) setGenerationPending(false);
+    } finally {
+      generationInFlightRef.current = false;
+    }
+  });
+
+  const handleGenerateBriefing = () => {
+    if (generationPending || generatingBriefing || generationInFlightRef.current) return;
+    generateBriefing();
+  };
 
   useEffect(() => {
     loadData();
   }, []);
 
-  const loadData = async () => {
-    setLoading(true);
+  const loadData = async ({ showLoading = true } = {}) => {
+    if (showLoading) setLoading(true);
     const [listResult, latest] = await Promise.all([
       api.getCosBriefings().catch(() => ({ briefings: [] })),
       api.getCosLatestBriefing().catch(() => null)
@@ -179,8 +206,19 @@ export default function BriefingTab() {
       parsed.sections.forEach((_s, i) => { expanded[i] = true; });
       setExpandedSections(expanded);
     }
-    setLoading(false);
+    if (showLoading) setLoading(false);
+    return latest;
   };
+
+  useAutoRefetch(
+    async () => {
+      const latest = await loadData({ showLoading: false });
+      if (latest) setGenerationPending(false);
+      return latest;
+    },
+    5000,
+    { enabled: generationPending, immediate: false, pollOnly: true },
+  );
 
   const loadBriefing = async (date) => {
     setLoading(true);
@@ -241,7 +279,9 @@ export default function BriefingTab() {
             />
           )}
           <button
-            onClick={loadData}
+            onClick={() => loadData({ showLoading: false }).then((latest) => {
+              if (latest) setGenerationPending(false);
+            })}
             className="flex items-center gap-2 px-3 py-1.5 text-sm bg-port-card border border-port-border hover:border-port-accent/50 text-gray-300 rounded-lg transition-colors"
           >
             <RefreshCw size={14} />
@@ -251,10 +291,25 @@ export default function BriefingTab() {
       </div>
 
       {!parsed ? (
-        <div className="bg-port-card border border-port-border rounded-lg p-8 text-center">
-          <Newspaper className="w-12 h-12 text-gray-600 mx-auto mb-3" />
-          <p className="text-gray-400">No briefings available yet.</p>
-          <p className="text-gray-500 text-sm mt-1">Briefings are generated automatically by the Daily Briefing job.</p>
+        <div className="flex flex-col items-center">
+          <EmptyState
+            icon={Newspaper}
+            title="No briefing yet"
+            message={generationPending
+              ? 'Your briefing is still being generated. You can open the Daily Briefing job to check its status.'
+              : 'Generate today’s briefing now, or open the Daily Briefing job to change its schedule.'}
+            actionLabel={generationPending || generatingBriefing ? 'Generating today’s briefing…' : 'Generate today’s briefing'}
+            actionDisabled={generationPending || generatingBriefing}
+            onAction={handleGenerateBriefing}
+          />
+          <div className="-mt-10 mb-8 flex flex-col items-center gap-3">
+            <p role="status" aria-live="polite" className="text-sm text-gray-400">
+              {generationPending ? 'Briefing generation is still in progress.' : ''}
+            </p>
+            <Link to="/cos/jobs" className="text-sm text-port-accent hover:underline">
+              Open Daily Briefing job
+            </Link>
+          </div>
         </div>
       ) : (
         <>

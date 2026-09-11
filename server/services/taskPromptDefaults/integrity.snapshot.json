@@ -5,7 +5,7 @@
     "better-cognitive-load": "a1fe22f6ef936131456c55a6b0623204",
     "better-complexity": "c99f67b43ff54a1c8cf0176c721d9c06",
     "better-dependency-freedom": "8a79c8be829f926bbc7720ee29818d53",
-    "better-runtime-safety": "4259ab85dd3eaf8efb16a250187bd857",
+    "better-runtime-safety": "1038ac5008cb52e418460f53f262ad22",
     "better-structural-drift": "941389a1f1c8983eef4f87af1241fbf9",
     "better-test-quality": "ab53a477cd194a5c4fbda09d901a3775",
     "branch-cleanup": "8fdeb4acc2749816a47ca318b6602721",
@@ -16,7 +16,7 @@
     "code-quality": "6762542233cdffb86d4e2244945bf52b",
     "code-reviewer-implement": "2e10cac7c1e1cd021d06bfddb5c1eaf2",
     "code-reviewer-review": "27ded42013f28e7d327d8f1cc624aac1",
-    "console-errors": "eec33a9293f9393019917a6632dd964e",
+    "console-errors": "5a7f6fd0b119db9d0e01c7f44a7a061c",
     "copy": "6a0959e898d37fb4d4d7445dfc8008c9",
     "data-safety": "86b07f51abdbcbe7016f840b5bb0cd9b",
     "dependency-updates": "1d59f04bea630a85a3085829db8599e7",
@@ -40,7 +40,7 @@
     "pr-reviewer-review": "a4b35a1dc44e03b3d0ecf1a4e1bae6df",
     "pr-reviewer-security": "d1e99626b12939ee39ab38eaa7d23f59",
     "pr-watcher": "5246968aa90bb2bbf7957dcd9ae13a51",
-    "react-lifecycle": "14b3816d1bcc10f0d7d6357e55cc5e69",
+    "react-lifecycle": "d2eaa653e57897d3fb8b6c52c2c18e38",
     "reference-watch": "e0e20754700fb08d5159b8437d9c260b",
     "refresh-local-llm-catalog": "9741ca6a8419fcdea2743e3b64781a8b",
     "release-check": "5a82eec9f86ad05185ed77a42dbfd9d4",
@@ -60,7 +60,7 @@
     "better-cognitive-load": 1,
     "better-complexity": 2,
     "better-dependency-freedom": 1,
-    "better-runtime-safety": 1,
+    "better-runtime-safety": 2,
     "better-structural-drift": 1,
     "better-test-quality": 1,
     "branch-reconcile": 5,
@@ -70,7 +70,7 @@
     "code-quality": 4,
     "code-reviewer-a": 1,
     "code-reviewer-b": 1,
-    "console-errors": 3,
+    "console-errors": 4,
     "copy": 1,
     "data-safety": 1,
     "dependency-updates": 4,
@@ -90,7 +90,7 @@
     "plan-task": 18,
     "pr-reviewer": 5,
     "pr-watcher": 2,
-    "react-lifecycle": 1,
+    "react-lifecycle": 2,
     "reference-watch": 3,
     "refresh-local-llm-catalog": 4,
     "release-check": 13,
@@ -113,6 +113,9 @@
     ],
     "better-complexity": [
       "c92b99080d0453d70bb26a412fb48ce9"
+    ],
+    "better-runtime-safety": [
+      "4259ab85dd3eaf8efb16a250187bd857"
     ],
     "branch-reconcile": [
       "7ef2b5f7d8f05937d4912b26ad45f42e",
@@ -196,7 +199,8 @@
     "console-errors": [
       "23b1a2e33cb414f27d4002b51d315e83",
       "3e3f690729ead5e312927ae4bce330c0",
-      "2b6ed595287f0742bed9ecba6788afe6"
+      "2b6ed595287f0742bed9ecba6788afe6",
+      "eec33a9293f9393019917a6632dd964e"
     ],
     "dependency-updates": [
       "020d66b93698341c556eca1eee851bee",
@@ -279,6 +283,9 @@
     ],
     "pr-watcher": [
       "53ead8e26d396849bfa78f28550bd691"
+    ],
+    "react-lifecycle": [
+      "14b3816d1bcc10f0d7d6357e55cc5e69"
     ],
     "reference-watch": [
       "f9322140bff7d3f603799c09ce468da9",

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router';
-import { Boxes, CheckCircle2, AlertTriangle, Loader2, ImagePlus, Sparkles, Settings2 } from 'lucide-react';
+import { Boxes, CheckCircle2, AlertTriangle, Loader2, ImagePlus, Sparkles, Settings2, ChevronDown } from 'lucide-react';
 import { createImageTo3dModel, getImageTo3dModel, listImageTo3dModels } from '../services/api';
 import { useAutoRefetch } from '../hooks/useAutoRefetch';
 import { useImageTo3dTargets } from '../hooks/useImageTo3dTargets';
@@ -45,6 +45,9 @@ export default function Media3D() {
   const [alphaMode, setAlphaMode] = useState('');
   const [normalMap, setNormalMap] = useState(false);
   const [subjectScale, setSubjectScale] = useState(SUBJECT_SCALE_DEFAULT);
+  const [optionsOpen, setOptionsOpen] = useState(() => (
+    window.matchMedia?.('(min-width: 1024px)').matches ?? false
+  ));
   // Existing image-to-3D records (newest-first) so the page doubles as a library:
   // each links to its `/3d/:id` detail view.
   const [records, setRecords] = useState([]);
@@ -69,6 +72,15 @@ export default function Media3D() {
   }, [mountedRef]);
 
   useEffect(() => { loadRecords(); }, [loadRecords]);
+
+  useEffect(() => {
+    const desktopOptions = window.matchMedia?.('(min-width: 1024px)');
+    if (!desktopOptions) return undefined;
+    const syncOptionsToViewport = () => setOptionsOpen(desktopOptions.matches);
+    syncOptionsToViewport();
+    desktopOptions.addEventListener('change', syncOptionsToViewport);
+    return () => desktopOptions.removeEventListener('change', syncOptionsToViewport);
+  }, []);
 
   const selectedImage = useMemo(
     () => (imageFromRoute
@@ -234,39 +246,7 @@ export default function Media3D() {
             )}
           </div>
 
-          {gatedHfModels?.length > 0 && (
-            <Image3dHfAccessNotice
-              models={gatedHfModels}
-              tokenPresent={hfTokenPresent}
-              tokenSource={hfTokenSource}
-              onSaved={refreshHfToken}
-            />
-          )}
-
-          <ImageTo3dRenderOptions
-            stepsSupported={selectedTarget?.supportsRenderOptions?.steps !== false}
-            detailSupported={selectedTarget?.supportsRenderOptions?.detail !== false}
-            alphaModeSupported={selectedTarget?.supportsRenderOptions?.alphaMode !== false}
-            detail={detail}
-            onDetailChange={setDetail}
-            alphaMode={alphaMode}
-            onAlphaModeChange={setAlphaMode}
-            normalMapSupported={selectedTarget?.supportsRenderOptions?.normalMap !== false}
-            normalMap={normalMap}
-            onNormalMapChange={setNormalMap}
-            steps={steps}
-            onStepsChange={setSteps}
-            seed={seed}
-            onSeedChange={setSeed}
-            keyBackground={keyBackground}
-            onKeyBackgroundChange={setKeyBackground}
-            subjectScale={subjectScale}
-            onSubjectScaleChange={setSubjectScale}
-            sourcePreviewUrl={selectedImage?.previewUrl || null}
-            disabled={generating}
-          />
-
-          <div className="mt-auto flex flex-col items-start gap-2">
+          <div className="flex flex-col items-start gap-2">
             <button
               type="button"
               onClick={handleGenerate}
@@ -288,6 +268,50 @@ export default function Media3D() {
               </p>
             )}
           </div>
+
+          {gatedHfModels?.length > 0 && (
+            <Image3dHfAccessNotice
+              models={gatedHfModels}
+              tokenPresent={hfTokenPresent}
+              tokenSource={hfTokenSource}
+              onSaved={refreshHfToken}
+            />
+          )}
+
+          <details
+            open={optionsOpen}
+            onToggle={(event) => setOptionsOpen(event.currentTarget.open)}
+            className="group min-w-0"
+          >
+            <summary className="flex min-h-[44px] cursor-pointer list-none items-center justify-between rounded-lg border border-port-border px-3 py-2 text-sm font-medium text-gray-300 hover:bg-port-border/30 lg:hidden">
+              Render options
+              <ChevronDown className="h-4 w-4 transition-transform group-open:rotate-180" aria-hidden="true" />
+            </summary>
+            <div className="mt-3 min-w-0 lg:mt-0">
+              <ImageTo3dRenderOptions
+                stepsSupported={selectedTarget?.supportsRenderOptions?.steps !== false}
+                detailSupported={selectedTarget?.supportsRenderOptions?.detail !== false}
+                alphaModeSupported={selectedTarget?.supportsRenderOptions?.alphaMode !== false}
+                detail={detail}
+                onDetailChange={setDetail}
+                alphaMode={alphaMode}
+                onAlphaModeChange={setAlphaMode}
+                normalMapSupported={selectedTarget?.supportsRenderOptions?.normalMap !== false}
+                normalMap={normalMap}
+                onNormalMapChange={setNormalMap}
+                steps={steps}
+                onStepsChange={setSteps}
+                seed={seed}
+                onSeedChange={setSeed}
+                keyBackground={keyBackground}
+                onKeyBackgroundChange={setKeyBackground}
+                subjectScale={subjectScale}
+                onSubjectScaleChange={setSubjectScale}
+                sourcePreviewUrl={selectedImage?.previewUrl || null}
+                disabled={generating}
+              />
+            </div>
+          </details>
         </div>
       </section>
 
