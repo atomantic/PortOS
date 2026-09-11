@@ -54,7 +54,6 @@ export default function AppQuality({ app, detail = false }) {
       {!!quality?.categories?.length && (
         <section aria-label="Category breakdown" className="min-w-0">
           <h4 className="text-sm font-medium mb-2">Category breakdown</h4>
-          <div className="overflow-auto xl:max-h-[calc(100vh-19rem)]">
           <table className="w-full text-sm text-left">
             <thead className="text-gray-400 sticky top-0 bg-port-card"><tr><th className="py-2 pr-3">Category</th><th className="pr-3">Score</th><th>Evidence</th></tr></thead>
             <tbody>{quality.categories.map(category => (
@@ -77,7 +76,6 @@ export default function AppQuality({ app, detail = false }) {
               </Fragment>
             ))}</tbody>
           </table>
-          </div>
         </section>
       )}
       </div>
