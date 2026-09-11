@@ -21,9 +21,9 @@ import { runBrainParitySweep } from './brainParitySweep.js'
 // Loaded lazily to keep the built-in handler registry free of an import cycle:
 // the projection reads CoS state, while this registry is loaded by the CoS job
 // store itself. The job remains deterministic and makes no provider call.
-async function eidoverseProjection() {
+async function eidoverseProjection(options = {}) {
   const { projectEidoverseWorld } = await import('../eidoverseWorld.js')
-  return projectEidoverseWorld({ compact: true })
+  return projectEidoverseWorld({ ...options, compact: true })
 }
 
 /**

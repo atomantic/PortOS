@@ -62,7 +62,7 @@ const DEFAULT_COS_ID = 'portos-cos';
 const DEFAULT_COS_AVATAR = 'eidoverse/assets/vrms/claude_suit.vrm';
 // Eidoverse admits 12 authored verbs per four seconds. Stay just below that
 // public protocol limit so large first-run reconciliations remain reliable.
-const PROJECTION_VERB_INTERVAL_MS = process.env.NODE_ENV === 'test' ? 5 : 350;
+const PROJECTION_VERB_INTERVAL_MS = 350;
 const RETIRED_OWNER_MAX_ATTEMPTS = 3;
 const WORLD_ROLES = new Set(['owner', 'builder', 'visitor']);
 
@@ -1021,6 +1021,7 @@ async function recordRetiredOwnerCleanupFailures(failures) {
 async function demoteRetiredOwners(connection, targets, {
   signal,
   pacing = createVerbPacing(),
+  verbIntervalMs = PROJECTION_VERB_INTERVAL_MS,
 } = {}) {
   const ordered = [...targets].sort((left, right) => (
     Number(left.id === connection.id) - Number(right.id === connection.id)
@@ -1028,7 +1029,11 @@ async function demoteRetiredOwners(connection, targets, {
   const failures = [];
   const succeeded = [];
   for (const target of ordered) {
-    await sendPacedVerb(connection, 'grant', { id: target.id, role: 'visitor' }, { signal, pacing }).then(
+    await sendPacedVerb(connection, 'grant', { id: target.id, role: 'visitor' }, {
+      signal,
+      pacing,
+      verbIntervalMs,
+    }).then(
       () => succeeded.push(target),
       (error) => {
         if (signal?.aborted) throw error;
@@ -1043,6 +1048,7 @@ async function demoteRetiredOwners(connection, targets, {
 async function revokeRetiredOwners(connection, config, {
   signal,
   pacing = createVerbPacing(),
+  verbIntervalMs = PROJECTION_VERB_INTERVAL_MS,
 } = {}) {
   const state = await loadState();
   const targets = state.ownership.retired.filter((entry) => (
@@ -1057,7 +1063,11 @@ async function revokeRetiredOwners(connection, config, {
 
   const currentWorldTargets = targets.filter((entry) => entry.world === config.world);
   if (currentWorldTargets.length) {
-    failures.push(...await demoteRetiredOwners(connection, currentWorldTargets, { signal, pacing }));
+    failures.push(...await demoteRetiredOwners(connection, currentWorldTargets, {
+      signal,
+      pacing,
+      verbIntervalMs,
+    }));
   }
 
   const priorWorldGroups = new Map();
@@ -1093,7 +1103,7 @@ async function revokeRetiredOwners(connection, config, {
         failures.push(...group.targets.map((target) => ({ target, error })));
         return;
       }
-      failures.push(...await demoteRetiredOwners(priorConnection, group.targets, { signal }));
+      failures.push(...await demoteRetiredOwners(priorConnection, group.targets, { signal, verbIntervalMs }));
     }, async (error) => {
       if (signal?.aborted) throw error;
       const connectionError = asConnectionError(error, 'PortOS could not inspect a previous Eidoverse world.');
@@ -1116,7 +1126,7 @@ async function revokeRetiredOwners(connection, config, {
  * The connection is intentionally short-lived; the browser performs the live
  * user session with the same durable id from the URL query parameters.
  */
-async function seedHumanRoleAndCosGrant(config, { signal } = {}) {
+async function seedHumanRoleAndCosGrant(config, { signal, verbIntervalMs } = {}) {
   throwIfAborted(signal);
   const pacing = createVerbPacing();
   let connection;
@@ -1132,7 +1142,11 @@ async function seedHumanRoleAndCosGrant(config, { signal } = {}) {
     if (config.human.id !== config.cos.id
       && humanRole === 'owner'
       && cosRole !== 'owner') {
-      await sendPacedVerb(connection, 'grant', { id: config.cos.id, role: 'owner' }, { signal, pacing });
+      await sendPacedVerb(connection, 'grant', { id: config.cos.id, role: 'owner' }, {
+        signal,
+        pacing,
+        verbIntervalMs,
+      });
       cosRole = 'owner';
     }
     return { humanRole, cosRole };
@@ -1142,7 +1156,7 @@ async function seedHumanRoleAndCosGrant(config, { signal } = {}) {
   }), (error) => connection.close().then(() => { throw error; }));
 }
 
-async function ensureCosPresenceInternal({ fresh = false, signal } = {}) {
+async function ensureCosPresenceInternal({ fresh = false, signal, verbIntervalMs } = {}) {
   throwIfAborted(signal);
   const config = await ensureEidoverseWorldConfig();
   throwIfAborted(signal);
@@ -1155,7 +1169,7 @@ async function ensureCosPresenceInternal({ fresh = false, signal } = {}) {
   if (fresh || (cosPresence && !cosPresence.connection.isOpen())) await closeCosPresenceInternal();
   if (cosPresence?.connection.isOpen()) return cosPresence;
 
-  await seedHumanRoleAndCosGrant(config, { signal });
+  await seedHumanRoleAndCosGrant(config, { signal, verbIntervalMs });
 
   let connection;
   const pacing = createVerbPacing();
@@ -1172,10 +1186,14 @@ async function ensureCosPresenceInternal({ fresh = false, signal } = {}) {
     const cosRole = snapshot?.yourRights?.role || roleFromSnapshot(snapshot, config.cos.id);
     let humanRole = roleFromSnapshot(snapshot, config.human.id);
     if (config.human.id !== config.cos.id && cosRole === 'owner' && humanRole !== 'owner') {
-      await sendPacedVerb(connection, 'grant', { id: config.human.id, role: 'owner' }, { signal, pacing });
+      await sendPacedVerb(connection, 'grant', { id: config.human.id, role: 'owner' }, {
+        signal,
+        pacing,
+        verbIntervalMs,
+      });
       humanRole = 'owner';
     }
-    if (cosRole === 'owner') await revokeRetiredOwners(connection, config, { signal, pacing });
+    if (cosRole === 'owner') await revokeRetiredOwners(connection, config, { signal, pacing, verbIntervalMs });
     return rememberObservedRoles({ humanRole, cosRole }).then(() => {
       cosPresence = {
         connection,
@@ -1188,10 +1206,10 @@ async function ensureCosPresenceInternal({ fresh = false, signal } = {}) {
   }).catch((error) => connection.close().then(() => { throw error; }));
 }
 
-export async function ensureEidoverseWorldPresence() {
+export async function ensureEidoverseWorldPresence({ verbIntervalMs } = {}) {
   return worldLock(async () => {
     await assertInstalled();
-    const presence = await ensureCosPresenceInternal();
+    const presence = await ensureCosPresenceInternal({ verbIntervalMs });
     return presenceSummary(presence);
   });
 }
@@ -1483,10 +1501,11 @@ function createVerbPacing() {
 async function sendPacedVerb(connection, verb, args, {
   signal,
   pacing = createVerbPacing(),
+  verbIntervalMs = PROJECTION_VERB_INTERVAL_MS,
 } = {}) {
   throwIfAborted(signal);
   if (pacing.lastVerbSentAt !== null) {
-    const wait = PROJECTION_VERB_INTERVAL_MS - (Date.now() - pacing.lastVerbSentAt);
+    const wait = verbIntervalMs - (Date.now() - pacing.lastVerbSentAt);
     if (wait > 0) await abortableDelay(wait, signal);
   }
   await connection.sendVerb(verb, args, { signal });
@@ -1497,9 +1516,10 @@ async function sendOperations(connection, operations, {
   signal,
   onApplied,
   pacing = createVerbPacing(),
+  verbIntervalMs = PROJECTION_VERB_INTERVAL_MS,
 } = {}) {
   for (const operation of operations) {
-    await sendPacedVerb(connection, operation.verb, operation.args, { signal, pacing });
+    await sendPacedVerb(connection, operation.verb, operation.args, { signal, pacing, verbIntervalMs });
     onApplied?.(operation);
   }
 }
@@ -1612,7 +1632,11 @@ function compensationOperations(applied, currentState) {
 const PROJECTION_UPDATE_STAGES = ['infrastructure', 'live', 'environment', 'ambient', 'reconciliation'];
 const PROJECTION_FRESH_STAGES = ['environment', 'infrastructure', 'live', 'ambient', 'reconciliation'];
 
-async function applyProjectionPlan(presence, plan, { signal, freshInstall = false } = {}) {
+async function applyProjectionPlan(presence, plan, {
+  signal,
+  freshInstall = false,
+  verbIntervalMs,
+} = {}) {
   const applied = [];
   const planFingerprint = shortHash(canonicalStringify({
     designVersion: EIDOVERSE_WORLD_DESIGN_VERSION,
@@ -1639,6 +1663,7 @@ async function applyProjectionPlan(presence, plan, { signal, freshInstall = fals
     await sendOperations(presence.connection, operations, {
       signal,
       pacing,
+      verbIntervalMs,
       onApplied: (operation) => applied.push(operation),
     });
     await recordReconciliationCheckpoint({
@@ -1655,9 +1680,10 @@ async function applyProjectionPlan(presence, plan, { signal, freshInstall = fals
       appliedOperations: applied.length,
       compensationStatus: 'running',
     });
-    const compensation = ensureCosPresenceInternal({ fresh: true })
+    const compensation = ensureCosPresenceInternal({ fresh: true, verbIntervalMs })
       .then((recoveryPresence) => sendOperations(recoveryPresence.connection, rollback, {
         pacing: recoveryPresence.pacing,
+        verbIntervalMs,
       }));
     return compensation.then(
       async () => {
@@ -1741,13 +1767,13 @@ async function recordProjection({ success, summary = null, error = null }) {
   });
 }
 
-export async function projectEidoverseWorld({ signal, compact = false } = {}) {
+export async function projectEidoverseWorld({ signal, compact = false, verbIntervalMs } = {}) {
   const run = async () => {
     throwIfAborted(signal);
     await assertInstalled();
     const config = await ensureEidoverseWorldConfig();
     const lockedConfig = await resolveAndLockAssets(config, { signal });
-    const presence = await ensureCosPresenceInternal({ fresh: true, signal });
+    const presence = await ensureCosPresenceInternal({ fresh: true, signal, verbIntervalMs });
     const source = await collectEidoverseWorldSources({ signal });
     const hostId = eidoverseHostId(await getInstanceId());
     throwIfAborted(signal);
@@ -1771,6 +1797,7 @@ export async function projectEidoverseWorld({ signal, compact = false } = {}) {
     await applyProjectionPlan(presence, plan, {
       signal,
       freshInstall: lockedConfig.design.lastAppliedVersion === null,
+      verbIntervalMs,
     });
     const summary = {
       world: lockedConfig.world,
@@ -1831,7 +1858,7 @@ async function recoverInterruptedProjection() {
   return { recovered: true, state: recoveredState };
 }
 
-export async function reconcilePendingEidoverseWorld() {
+export async function reconcilePendingEidoverseWorld({ verbIntervalMs } = {}) {
   const recovery = await recoverInterruptedProjection();
   if (recovery.recovered) return { reconciled: false, reason: 'interrupted' };
   const { features } = await getInstanceFeatures();
@@ -1846,7 +1873,7 @@ export async function reconcilePendingEidoverseWorld() {
   }
   if (!setup.installed) return { reconciled: false, reason: 'not-installed' };
   if (setup.runtimeStatus !== 'online') return { reconciled: false, reason: 'runtime-offline' };
-  const result = await projectEidoverseWorld({ compact: true });
+  const result = await projectEidoverseWorld({ compact: true, verbIntervalMs });
   return { reconciled: true, result };
 }
 
@@ -1952,13 +1979,17 @@ function normalizeAugmentOperation(operation) {
   }
 }
 
-export async function augmentEidoverseWorld(operations, { signal } = {}) {
+export async function augmentEidoverseWorld(operations, { signal, verbIntervalMs } = {}) {
   return worldLock(async () => {
     throwIfAborted(signal);
     await assertInstalled();
-    const presence = await ensureCosPresenceInternal({ signal });
+    const presence = await ensureCosPresenceInternal({ signal, verbIntervalMs });
     const normalized = operations.map(normalizeAugmentOperation);
-    await sendOperations(presence.connection, normalized, { signal, pacing: presence.pacing });
+    await sendOperations(presence.connection, normalized, {
+      signal,
+      pacing: presence.pacing,
+      verbIntervalMs,
+    });
     return {
       success: true,
       world: presence.connection.world,
@@ -1968,11 +1999,11 @@ export async function augmentEidoverseWorld(operations, { signal } = {}) {
   });
 }
 
-export async function sayInEidoverseWorld(text, { signal } = {}) {
+export async function sayInEidoverseWorld(text, { signal, verbIntervalMs } = {}) {
   return worldLock(async () => {
     throwIfAborted(signal);
     await assertInstalled();
-    const presence = await ensureCosPresenceInternal({ signal });
+    const presence = await ensureCosPresenceInternal({ signal, verbIntervalMs });
     const message = safeText(text, '', 2000);
     if (!message) {
       throw new ServerError('A non-empty Eidoverse message is required.', {
@@ -1983,6 +2014,7 @@ export async function sayInEidoverseWorld(text, { signal } = {}) {
     await sendPacedVerb(presence.connection, 'say', { text: message }, {
       signal,
       pacing: presence.pacing,
+      verbIntervalMs,
     });
     return { success: true, world: presence.connection.world, id: presence.connection.id };
   });
@@ -2071,15 +2103,18 @@ export const __resetEidoverseWorldForTests = closeEidoverseWorldConnections;
 
 
 /** Guest admission happens through the owner before any guest joins. */
-export async function admitEidoverseGuest({ agent = false } = {}) {
+export async function admitEidoverseGuest({ agent = false, verbIntervalMs } = {}) {
   return worldLock(async () => {
     await assertInstalled();
-    const presence = await ensureCosPresenceInternal();
+    const presence = await ensureCosPresenceInternal({ verbIntervalMs });
     if (presence.snapshot?.yourRights?.role !== 'owner') {
       throw new ServerError('The resident must own this world to admit visitors.', { status: 409, code: 'EIDOVERSE_GUEST_ADMISSION_UNAVAILABLE' });
     }
     const id = `guest-${randomUUID()}`;
-    await sendPacedVerb(presence.connection, 'grant', { id, role: 'visitor', gen: false }, { pacing: presence.pacing });
+    await sendPacedVerb(presence.connection, 'grant', { id, role: 'visitor', gen: false }, {
+      pacing: presence.pacing,
+      verbIntervalMs,
+    });
     const identity = { world: presence.connection.world, name: id, avatar: DEFAULT_HUMAN_AVATAR };
     if (!agent) return { identity };
     const connection = createWorldConnection({ world: identity.world, id, avatar: identity.avatar, agent: true, guest: true });
