@@ -85,10 +85,15 @@ describe('forge credential resolution', () => {
     const stalled = new EventEmitter();
     stalled.stdout = new EventEmitter();
     stalled.stderr = new EventEmitter();
+    stalled.kill = vi.fn();
     spawn.mockImplementationOnce(() => stalled);
     const pending = resolveForgeTokenEnv('/example/repo', { timeoutMs: 25 });
     await vi.advanceTimersByTimeAsync(25);
     await expect(pending).resolves.toEqual({});
+    expect(stalled.kill).toHaveBeenCalledWith('SIGKILL');
+
+    // A close emitted after the timeout must not change the settled result.
     stalled.emit('close', 1);
+    await expect(pending).resolves.toEqual({});
   });
 });

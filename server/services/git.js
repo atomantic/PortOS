@@ -359,6 +359,15 @@ export async function checkout(dir, branchName) {
   return { success: true, branch: branchName };
 }
 
+async function execForgeCli(cli, args, dir, env) {
+  if (cli === 'glab') {
+    const { execGlab } = await import('./gitlab.js');
+    return execGlab(args, dir, undefined, { env });
+  }
+  const { execGh } = await import('./github.js');
+  return execGh(args, undefined, { cwd: dir, env });
+}
+
 /**
  * Create a pull request (GitHub) or merge request (GitLab) using `gh` / `glab`.
  * Forge is auto-detected from the repo's `origin` URL; gh identity is auto-pinned
@@ -381,31 +390,19 @@ export async function createPR(dir, { title, body, base, head }) {
 
   const meta = { cli, account, owner, host };
 
-  return new Promise((resolve) => {
-    const child = spawn(cli, args, { cwd: dir, env, shell: false });
-
-    let stdout = '';
-    let stderr = '';
-
-    child.stdout.on('data', (data) => { stdout += data.toString(); });
-    child.stderr.on('data', (data) => { stderr += data.toString(); });
-
-    child.on('close', (code) => {
-      if (code === 0) {
-        // Both gh and glab print the resulting URL on stdout (gh: just the URL;
-        // glab: a couple lines ending in the URL — extract the last http(s)-looking line).
-        const urlMatch = stdout.trim().match(/(https?:\/\/\S+)\s*$/);
-        const url = urlMatch ? urlMatch[1] : stdout.trim();
-        resolve({ success: true, url, ...meta });
-      } else {
-        resolve({ success: false, error: stderr || `${cli} exited with code ${code}`, ...meta });
-      }
-    });
-
-    child.on('error', (err) => {
-      resolve({ success: false, error: `${cli} not available: ${err.message}`, ...meta });
-    });
-  });
+  try {
+    const stdout = await execForgeCli(cli, args, dir, env);
+    if (stdout === null) {
+      return { success: false, error: 'glab command failed or timed out', ...meta };
+    }
+    // Both gh and glab print the resulting URL on stdout (gh: just the URL;
+    // glab: a couple lines ending in the URL — extract the last http(s)-looking line).
+    const urlMatch = stdout.trim().match(/(https?:\/\/\S+)\s*$/);
+    const url = urlMatch ? urlMatch[1] : stdout.trim();
+    return { success: true, url, ...meta };
+  } catch (err) {
+    return { success: false, error: err.message || `${cli} command failed`, ...meta };
+  }
 }
 
 /**
@@ -424,20 +421,12 @@ export async function mergePR(dir, prNumber) {
     return { success: false, error: `Merge-only PR automation requires gh, not ${cli}`, ...meta };
   }
 
-  return new Promise((resolve) => {
-    const child = spawn('gh', ['pr', 'merge', String(prNumber), '--merge', '--delete-branch'], {
-      cwd: dir, env, shell: false
-    });
-    let stderr = '';
-    child.stderr.on('data', (data) => { stderr += data.toString(); });
-    child.on('close', (code) => {
-      if (code === 0) resolve({ success: true, ...meta });
-      else resolve({ success: false, error: stderr.trim() || `gh exited with code ${code}`, ...meta });
-    });
-    child.on('error', (err) => {
-      resolve({ success: false, error: `gh not available: ${err.message}`, ...meta });
-    });
-  });
+  try {
+    await execForgeCli('gh', ['pr', 'merge', String(prNumber), '--merge', '--delete-branch'], dir, env);
+    return { success: true, ...meta };
+  } catch (err) {
+    return { success: false, error: err.message || 'gh command failed', ...meta };
+  }
 }
 
 /**
@@ -484,18 +473,12 @@ export async function requestCopilotReview(dir, prUrl) {
     '-f', 'reviewers[]=copilot-pull-request-reviewer[bot]'
   );
 
-  return new Promise((resolve) => {
-    const child = spawn(cli, args, { cwd: dir, env, shell: false });
-    let stderr = '';
-    child.stderr.on('data', (data) => { stderr += data.toString(); });
-    child.on('close', (code) => {
-      if (code === 0) resolve({ success: true });
-      else resolve({ success: false, error: stderr.trim() || `gh exited with code ${code}` });
-    });
-    child.on('error', (err) => {
-      resolve({ success: false, error: `gh not available: ${err.message}` });
-    });
-  });
+  try {
+    await execForgeCli('gh', args, dir, env);
+    return { success: true };
+  } catch (err) {
+    return { success: false, error: err.message || 'gh command failed' };
+  }
 }
 
 /**

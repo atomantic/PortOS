@@ -269,7 +269,6 @@ describe('every cwd-passing spawn pins PWD', () => {
   // a tool that resolves paths from its real cwd, never from PWD" — git, gh,
   // glab, pm2, psql, npm, xcodegen, python.
   const EXEMPT = new Map([
-    ['services/git.js', 'git/gh resolve from real cwd (and -C), never PWD'],
     ['lib/execGit.js', 'git only'],
     ['lib/planIds.js', 'git only'],
     ['services/repoCloner.js', 'git clone/fetch only'],

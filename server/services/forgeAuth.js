@@ -7,19 +7,33 @@ import { spawn } from '../lib/childProcess.js';
 import { execGitSafe } from '../lib/execGit.js';
 import { parseGitRemote, detectForgeCli, pickGhAccountForOwner } from '../lib/gitForge.js';
 
-function spawnCli(cmd, args) {
+const DEFAULT_SPAWN_CLI_TIMEOUT_MS = 10000;
+
+function spawnCli(cmd, args, timeoutMs = DEFAULT_SPAWN_CLI_TIMEOUT_MS) {
   return new Promise((resolve) => {
     const child = spawn(cmd, args, { shell: false });
     let stdout = '', stderr = '';
+    let settled = false;
+    const done = (result) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve(result);
+    };
+    const timer = setTimeout(() => {
+      try { child.kill('SIGKILL'); } catch { /* best-effort process cleanup */ }
+      done({ code: -1, stdout: '', stderr: 'timed out' });
+    }, timeoutMs);
+    timer.unref?.();
     child.stdout.on('data', (d) => { stdout += d.toString(); });
     child.stderr.on('data', (d) => { stderr += d.toString(); });
-    child.on('close', (code) => resolve({ code, stdout, stderr }));
-    child.on('error', () => resolve({ code: -1, stdout: '', stderr: '' }));
+    child.on('close', (code) => done({ code, stdout, stderr }));
+    child.on('error', () => done({ code: -1, stdout: '', stderr: '' }));
   });
 }
 
-async function listGhAccounts() {
-  const { stdout, stderr } = await spawnCli('gh', ['auth', 'status', '-h', 'github.com']);
+async function listGhAccounts(timeoutMs) {
+  const { stdout, stderr } = await spawnCli('gh', ['auth', 'status', '-h', 'github.com'], timeoutMs);
   // gh writes status to stderr in older versions, stdout in newer — search both.
   const text = `${stdout}\n${stderr}`;
   const accounts = [];
@@ -29,8 +43,8 @@ async function listGhAccounts() {
   return accounts;
 }
 
-async function getGhTokenForAccount(login) {
-  const { code, stdout } = await spawnCli('gh', ['auth', 'token', '-u', login, '-h', 'github.com']);
+async function getGhTokenForAccount(login, timeoutMs) {
+  const { code, stdout } = await spawnCli('gh', ['auth', 'token', '-u', login, '-h', 'github.com'], timeoutMs);
   return code === 0 ? stdout.trim() : null;
 }
 
@@ -42,8 +56,11 @@ async function getGhTokenForAccount(login) {
  * - For GitLab repos: uses glab as-is. glab is single-user-per-host, so its keyring
  *   already disambiguates by host without the mutable-active-user pitfall.
  * Falls back to ambient env when no match is possible.
+ * @param {string} dir - Repository root
+ * @param {object} [opts]
+ * @param {number} [opts.timeoutMs=10000] - Per-process bound for gh auth probes
  */
-export async function resolveForgeForRepo(dir) {
+export async function resolveForgeForRepo(dir, { timeoutMs = DEFAULT_SPAWN_CLI_TIMEOUT_MS } = {}) {
   const remote = await execGitSafe(['remote', 'get-url', 'origin'], dir);
   const parsed = parseGitRemote(remote.stdout?.trim());
   if (!parsed) {
@@ -56,11 +73,11 @@ export async function resolveForgeForRepo(dir) {
     return { cli, env: process.env, host: parsed.host, owner: parsed.owner, account: null };
   }
 
-  const accounts = await listGhAccounts();
+  const accounts = await listGhAccounts(timeoutMs);
   const account = pickGhAccountForOwner(parsed.owner, accounts);
   if (!account) return { cli, env: process.env, host: parsed.host, owner: parsed.owner, account: null };
 
-  const token = await getGhTokenForAccount(account);
+  const token = await getGhTokenForAccount(account, timeoutMs);
   if (!token) return { cli, env: process.env, host: parsed.host, owner: parsed.owner, account };
 
   return { cli, env: { ...process.env, GH_TOKEN: token }, host: parsed.host, owner: parsed.owner, account };
@@ -87,15 +104,14 @@ export async function resolveForgeForRepo(dir) {
  * @returns {Promise<{ GH_TOKEN?: string }>}
  */
 export async function resolveForgeTokenEnv(dir, { timeoutMs = 10000 } = {}) {
-  // resolveForgeForRepo shells out to git + `gh auth status` + `gh auth token`
-  // with no internal timeout, and this runs on the critical agent-spawn path.
-  // Race it against a timer so a stalled gh (network/keychain hang) can't leave
-  // a task marked in-progress forever with no child process — a timeout falls
-  // through to `{}` (ambient auth) exactly like any other miss. The timer is
-  // unref'd so it never itself keeps the event loop alive.
+  // Keep the whole lookup inside the agent-spawn budget. Each gh subprocess has
+  // the same bound and kills itself on timeout, so losing this race cannot leak
+  // the auth child that was still pending. A timeout falls through to `{}`
+  // (ambient auth) exactly like any other miss. The timer is unref'd so it never
+  // itself keeps the event loop alive.
   let timer;
   const resolved = await Promise.race([
-    resolveForgeForRepo(dir).catch(() => null),
+    resolveForgeForRepo(dir, { timeoutMs }).catch(() => null),
     new Promise((r) => { timer = setTimeout(() => r(null), timeoutMs); timer.unref?.(); }),
   ]);
   clearTimeout(timer);

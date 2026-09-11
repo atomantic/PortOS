@@ -1,6 +1,7 @@
 import { spawn } from '../lib/childProcess.js';
 import { safeJSONParse } from '../lib/fileUtils.js';
 import { withGlabJson } from '../lib/glabArgs.js';
+import { withSpawnCwdEnv } from '../lib/spawnCwd.js';
 
 // Mirrors execGh's DEFAULT_EXEC_GH_TIMEOUT_MS. `glab` hits the network, so a
 // stalled call (hung keychain prompt, dead VPN) would otherwise leave the
@@ -26,11 +27,13 @@ const DEFAULT_EXEC_GLAB_TIMEOUT_MS = 60000;
  * @param {string[]} args - glab arguments (e.g. ['issue', 'list', '--output', 'json'])
  * @param {string} cwd - repo root the glab command runs in
  * @param {number} [timeoutMs] - kills the child and resolves null past this
+ * @param {object} [options]
+ * @param {NodeJS.ProcessEnv} [options.env] - Explicit forge credentials/environment
  * @returns {Promise<string|null>}
  */
-export function execGlab(args, cwd, timeoutMs = DEFAULT_EXEC_GLAB_TIMEOUT_MS) {
+export function execGlab(args, cwd, timeoutMs = DEFAULT_EXEC_GLAB_TIMEOUT_MS, { env = null } = {}) {
   return new Promise((resolve) => {
-    const child = spawn('glab', args, { cwd, shell: false });
+    const child = spawn('glab', args, { cwd, shell: false, env: withSpawnCwdEnv(env || process.env, cwd) });
     let stdout = '';
     let settled = false;
     // One settle path so the timeout can't resolve a promise `close` already
