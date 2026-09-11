@@ -25,7 +25,7 @@ import { resolveTaskTargetBranch, shouldStripTaskTargetBranch } from '../lib/tas
 import { RECOVERY_TASK_PREFIX } from './recoveryTasks.js';
 import { detectForgeCli } from '../lib/gitForge.js';
 import { normalizeForkHead } from '../lib/forkHead.js';
-import { PR_COMPLETIONS, PR_COMPLETION_VALUES, PR_CREATION, leavesPrForHuman, prClaimWasVerified } from '../lib/prDisposition.js';
+import { PR_COMPLETIONS, PR_COMPLETION_VALUES, PR_CREATION, PR_MISSING_CATEGORY, leavesPrForHuman, prClaimWasVerified } from '../lib/prDisposition.js';
 import { DEFAULT_REVIEWER, DEFAULT_REVIEWERS, DEFAULT_REVIEW_STOP_MODE, MODEL_SELECTABLE_REVIEWERS, EFFORT_SELECTABLE_REVIEWERS, normalizeReviewers, normalizeReviewUsernames, normalizeOptionalReviewers, normalizeReviewerMaxRounds, prioritizeToolFreeReviewers } from '../lib/reviewerConfig.js';
 
 // In-flight cleanup per agentId, so two completion paths racing to clean the
@@ -150,7 +150,7 @@ export function resolveWorktreeDisposition({ isWorktree, success, prCreation, di
   else if (discardWorktree) name = 'discard';
   else if (prCreation === PR_CREATION.IF_MISSING) {
     if (success) {
-      if (prClaimVerdict?.category === 'pr-missing') name = 'open-pr';
+      if (prClaimVerdict?.category === PR_MISSING_CATEGORY) name = 'open-pr';
       else name = prClaimWasVerified(prClaimVerdict) ? 'stand-down' : 'stand-down-uncertain';
     } else if (prClaimVerdict?.status === 'found' && prClaimVerdict.url) {
       name = 'stranded-pr-handoff';
@@ -169,12 +169,12 @@ async function worktreeCleanupContext(agentId, options) {
   const { getAgent } = await import('./cos.js');
   const agentState = await getAgent(agentId).catch(() => null);
   const metadata = agentState?.metadata;
-  if (!metadata?.isWorktree || metadata.isPersistentWorktree) return null;
+  if (!metadata?.isWorktree || metadata.isPersistentWorktree) return { isWorktree: false };
   const { sourceWorkspace, worktreeBranch } = metadata;
-  if (!sourceWorkspace || !worktreeBranch) return null;
+  if (!sourceWorkspace || !worktreeBranch) return { isWorktree: false };
   const normalized = cleanupOptions(options);
   return {
-    ...normalized, agentId, sourceWorkspace, worktreeBranch,
+    ...normalized, isWorktree: true, agentId, sourceWorkspace, worktreeBranch,
     discardWorktree: isTruthyMeta(normalized.originalTask?.metadata?.discardWorktree),
     worktreePath: metadata.workspacePath || join(PATHS.worktrees, agentId),
     warnings: [],
@@ -182,7 +182,7 @@ async function worktreeCleanupContext(agentId, options) {
 }
 
 async function probeWorktreePr(context, success) {
-  if (context.discardWorktree || context.prCreation !== PR_CREATION.IF_MISSING) return null;
+  if (!context.isWorktree || context.discardWorktree || context.prCreation !== PR_CREATION.IF_MISSING) return null;
   const { worktreePath, worktreeBranch } = context;
   if (success) {
     const { verifyPrClaim } = await import('./agentFinalization.js');
@@ -197,11 +197,12 @@ async function probeWorktreePr(context, success) {
 
 async function runCleanupAgentWorktree(agentId, success, options = {}) {
   const context = await worktreeCleanupContext(agentId, options);
-  if (!context) return [];
   const verdict = await probeWorktreePr(context, success);
   const disposition = resolveWorktreeDisposition({ ...context, success, prClaimVerdict: verdict });
   reportWorktreeDisposition(context, disposition, verdict);
   switch (disposition.disposition) {
+    case 'not-a-worktree':
+      return [];
     case 'discard':
       return discardAgentWorktree(context);
     case 'open-pr':

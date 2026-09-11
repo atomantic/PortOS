@@ -1,3 +1,4 @@
+import { PR_MISSING_CATEGORY } from '../lib/prDisposition.js';
 import { isAuditTaskType } from '../lib/auditCatalog.js';
 import { isPrivateSecurityTask } from '../lib/privateSecurityPolicy.js';
 /**
@@ -256,7 +257,7 @@ const HOOK_ABORTED_BEFORE_EVALUATION = new Set(['no-app', 'app-not-found']);
  * `taskLearning/store.js#ENVIRONMENTAL_ERROR_CATEGORIES` so a firewalled `gh`
  * can't drag a task type's measured success rate down (or auto-park it).
  */
-export const PR_MISSING_CATEGORY = 'pr-missing';
+export { PR_MISSING_CATEGORY };
 export const FORGE_UNREACHABLE_CATEGORY = 'forge-unreachable';
 export const ISSUE_TRAILER_MISSING_CATEGORY = 'issue-trailer-missing';
 
