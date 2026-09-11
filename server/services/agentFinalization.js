@@ -799,6 +799,23 @@ export async function stampLiExecutionVerdict(taskUpdate, task, { success, valid
   return taskUpdate;
 }
 
+// A no-change audit needs forge + empty-branch proof even when its spawner
+// leaves PR creation to cleanup. Reuse a completed primary check; a thrown
+// check is inconclusive, never proof that there was nothing to ship.
+async function resolveNoChangeProof({
+  noChangeAudit, prExpected, prCheckThrew, prVerdict,
+  task, workspacePath, success, agentId,
+}) {
+  if (!noChangeAudit) return null;
+  const inconclusive = { ok: false, category: FORGE_UNREACHABLE_CATEGORY, inconclusive: true };
+  if (prExpected) return prCheckThrew ? inconclusive : prVerdict;
+  return verifyPrClaim({ task, workspacePath, success, prExpected: true })
+    .catch(err => {
+      emitLog('warn', `⚠️ No-change verification failed for ${agentId}: ${err.message}`, { agentId });
+      return inconclusive;
+    });
+}
+
 /**
  * Shared end-of-run state writes for all three spawn paths
  * (`handleAgentCompletion` runner-mode, TUI `finish`, direct-CLI `close`).
@@ -861,17 +878,10 @@ export async function finalizeAgent({
   // a clean exit can satisfy its no-change success criterion. Keep this
   // auxiliary verdict separate: a non-empty branch must remain eligible for
   // cleanup to open the PR after finalize rather than being downgraded here.
-  const noChangeProof = noChangeAudit
-    ? prExpected
-      ? (prCheckThrew
-          ? { ok: false, category: FORGE_UNREACHABLE_CATEGORY, inconclusive: true }
-          : prVerdict)
-      : await verifyPrClaim({ task, workspacePath, success: reportedSuccess, prExpected: true })
-        .catch(err => {
-          emitLog('warn', `⚠️ No-change verification failed for ${agentId}: ${err.message}`, { agentId });
-          return { ok: false, category: FORGE_UNREACHABLE_CATEGORY, inconclusive: true };
-        })
-    : null;
+  const noChangeProof = await resolveNoChangeProof({
+    noChangeAudit, prExpected, prCheckThrew, prVerdict,
+    task, workspacePath, success: reportedSuccess, agentId,
+  });
   const effectivePrVerdict = typeof prVerdict.branch === 'string'
     ? prVerdict
     : (noChangeProof?.noChangesToShip === true ? noChangeProof : prVerdict);
@@ -950,10 +960,31 @@ export async function finalizeAgent({
   // side effect. Same reason `terminatedByUser` keeps its own verdict.
   const driftDowngrade = drift.drifted && reportedSuccess && !terminatedByUser;
 
-  let success = reportedSuccess && prVerdict.ok && !driftDowngrade;
-  let errorAnalysis = driftDowngrade
-    ? primaryCheckoutDriftAnalysis(drift)
-    : prVerdict.ok ? reportedErrorAnalysis : prVerificationAnalysis(prVerdict);
+  // One accumulator owns every completion write and the caller's cleanup
+  // decision. Apply diagnoses in priority order: drift > PR > fidelity > hook
+  // > original error. Fidelity and hooks can only replace an eligible verdict.
+  // Drift demands repair of the primary checkout even if a PR exists; a
+  // missing PR is a concrete delivery failure, ahead of fidelity's judgement
+  // about what was built. Keep each diagnosis's card text and reason together.
+  const verdict = {
+    success: reportedSuccess && prVerdict.ok && !driftDowngrade,
+    errorAnalysis: reportedErrorAnalysis,
+    error,
+    completionReason,
+  };
+  if (driftDowngrade) {
+    Object.assign(verdict, {
+      errorAnalysis: primaryCheckoutDriftAnalysis(drift),
+      error: drift.message,
+      completionReason: PRIMARY_CHECKOUT_MUTATED_REASON,
+    });
+  } else if (!prVerdict.ok) {
+    Object.assign(verdict, {
+      errorAnalysis: prVerificationAnalysis(prVerdict),
+      error: prVerdict.message,
+      completionReason: prVerdict.category,
+    });
+  }
   if (!prVerdict.ok) {
     emitLog('warn', `⚠️ ${prVerdict.message} — recording ${agentId} as needs-attention (${prVerdict.category}) rather than complete`, {
       agentId, taskId: task?.id, branch: prVerdict.branch, category: prVerdict.category
@@ -975,7 +1006,7 @@ export async function finalizeAgent({
   // the diff probe's git timeouts — it holds the agent's CoS concurrency slot for
   // its duration, which is why it is skipped entirely unless the user configured
   // a local backend for it.
-  const fidelity = success && !isPrivateSecurityTask(task)
+  const fidelity = verdict.success && !isPrivateSecurityTask(task)
     ? await evaluateGoalFidelity({ task, workspacePath, startedAt: runStartedAt })
       .catch(err => {
         emitLog('warn', `⚠️ Goal-fidelity review failed for ${agentId}: ${err.message}`, { agentId });
@@ -991,15 +1022,20 @@ export async function finalizeAgent({
     emitLog('warn', `⚠️ Goal-fidelity review returned no verdict for ${agentId}: ${fidelity.error}`, { agentId, taskId: task?.id });
   }
   if (fidelityDowngrade) {
-    success = false;
-    errorAnalysis = goalFidelityAnalysis(fidelity.review);
+    const analysis = goalFidelityAnalysis(fidelity.review);
+    Object.assign(verdict, {
+      success: false,
+      errorAnalysis: analysis,
+      error: analysis.message,
+      completionReason: GOAL_FIDELITY_CATEGORY,
+    });
     // The Review Hub bridges this into a review alert: a run held because it
     // built the wrong thing is exactly the case a human has to look at, and the
     // named missing/unrequested items are what make the hold actionable.
     cosEvents.emit(GOAL_FIDELITY_HOLD_EVENT, { agentId, taskId: task?.id, review: fidelity.review });
   }
 
-  if (success && isTruthyMetaFn) {
+  if (verdict.success && isTruthyMetaFn) {
     await persistSimplifySummaries(agentId, task, outputBuffer, isTruthyMetaFn);
   }
 
@@ -1014,9 +1050,9 @@ export async function finalizeAgent({
         blockedAt: new Date().toISOString(),
       },
     }
-    : success
+    : verdict.success
       ? { status: 'completed' }
-      : await resolveFailedTaskUpdate(task, errorAnalysis, agentId);
+      : await resolveFailedTaskUpdate(task, verdict.errorAnalysis, agentId);
 
   // Programmatic-I/O task types (e.g. layered-intelligence) run a deterministic
   // post-agent step on the agent's STRUCTURED output — the parsed `.agent-done`
@@ -1040,7 +1076,7 @@ export async function finalizeAgent({
   // of awaiting here is that the agent still counts against the CoS concurrency
   // gate for the hook's duration, so the dispatch is hard-bounded — see
   // withOutputHookTimeout.
-  let hookResult = await dispatchTaskOutputHookOnce({ agentId, task, success, workspacePath });
+  let hookResult = await dispatchTaskOutputHookOnce({ agentId, task, success: verdict.success, workspacePath });
   // A private assessment's deliverable is the validated, persisted report.
   // A skipped, thrown or timed-out hook cannot establish that deliverable,
   // even when the CLI exited zero. Keep other task types' existing semantics.
@@ -1081,23 +1117,33 @@ export async function finalizeAgent({
   // (rate-limit, auth-error, a killed provider) keeps its ordinary retries —
   // that output is missing because the environment misbehaved, not because the
   // stage can never produce one.
-  const causeNamed = !success && errorAnalysis?.category && errorAnalysis.category !== 'unknown';
+  const causeNamed = !verdict.success && verdict.errorAnalysis?.category && verdict.errorAnalysis.category !== 'unknown';
   const hookPermanent = hookRejected && hookOutcome?.permanent === true && !causeNamed;
   // When the run had already failed, `taskUpdate` holds its retry decision. Only
   // escalate a decision that is still retrying — a task this run already blocked
   // is terminal, and re-resolving it would file a second investigation task.
-  const escalatePermanent = hookPermanent && !success && taskUpdate?.status !== 'blocked';
-  if (hookRejected && (success || escalatePermanent)) {
-    success = false;
-    errorAnalysis = {
+  const escalatePermanent = hookPermanent && !verdict.success && taskUpdate?.status !== 'blocked';
+  if (hookRejected && (verdict.success || escalatePermanent)) {
+    const analysis = {
       category: hookOutcome.reason || 'output-hook-rejected',
       message: hookOutcome.message || 'The scheduled task output was rejected by its validation hook',
       actionable: false,
       ...(hookPermanent && { permanent: true }),
       origin: 'task-output-hook',
     };
-    taskUpdate = await resolveFailedTaskUpdate(task, errorAnalysis, agentId);
-  } else if (hookMetadata && success && !terminatedByUser) {
+    Object.assign(verdict, {
+      success: false,
+      errorAnalysis: analysis,
+      error: analysis.message || error,
+      completionReason: analysis.category || completionReason,
+    });
+    taskUpdate = await resolveFailedTaskUpdate(task, verdict.errorAnalysis, agentId);
+  } else if (hookRejected && verdict.errorAnalysis === reportedErrorAnalysis) {
+    // A rejection on an already-failed run keeps its original diagnosis.
+    // Surface that analysis on the card too, without replacing a prior downgrade.
+    verdict.error = verdict.errorAnalysis?.message || error;
+    verdict.completionReason = verdict.errorAnalysis?.category || completionReason;
+  } else if (hookMetadata && verdict.success && !terminatedByUser) {
     taskUpdate = { ...taskUpdate, metadata: task.metadata };
   }
 
@@ -1111,7 +1157,7 @@ export async function finalizeAgent({
     terminatedByUser,
     workspacePath,
     startedAt: runStartedAt,
-    success,
+    success: verdict.success,
     hookResult,
     noChangesToShip,
     noChangeProof,
@@ -1127,61 +1173,30 @@ export async function finalizeAgent({
   // completeAgentRun writes its own runs/<id>/metadata.json (separate lock),
   // so its place in the chain is purely about progress reporting on partial
   // failure.
-  // A PR-verification downgrade carries its own error text + reason: without
-  // them the agent card would render a bare "Failed" for a run that actually
-  // did everything but land its PR (or simply couldn't reach the forge).
-  // A branch-jack downgrade (#3680) carries its own text + reason for the same
-  // reason the PR downgrade does, and outranks it: the run may well have opened
-  // its PR fine and still mutated the primary, and THAT is the thing a human has
-  // to act on.
-  // A goal-fidelity hold (#5994) sits below both: a branch-jack and a missing PR
-  // are facts about what the run did to the repo, while this is a judgement about
-  // what it built — and when a run both missed its PR and drifted, the missing PR
-  // is the more concrete thing to act on first.
-  const finalError = driftDowngrade
-    ? drift.message
-    : !prVerdict.ok
-      ? prVerdict.message
-      : fidelityDowngrade
-        ? errorAnalysis?.message
-        : hookRejected
-          ? errorAnalysis?.message || error
-          : error;
-  const finalCompletionReason = driftDowngrade
-    ? PRIMARY_CHECKOUT_MUTATED_REASON
-    : !prVerdict.ok
-      ? prVerdict.category
-      : fidelityDowngrade
-        ? GOAL_FIDELITY_CATEGORY
-        : hookRejected
-          ? errorAnalysis?.category || completionReason
-          : completionReason;
-
   await completeAgent(agentId, {
-    success,
+    success: verdict.success,
     validationPassed,
     exitCode,
     duration,
     outputLength: outputBuffer?.length ?? 0,
-    errorAnalysis,
+    errorAnalysis: verdict.errorAnalysis,
     // Recorded whatever the verdict — a `ship` is the evidence that the gate ran
     // and cleared the run, which is what makes a run with no `goalFidelity` block
     // legible as "never judged" rather than "judged fine".
     ...(fidelity.review ? { goalFidelity: fidelity.review } : {}),
-    ...(finalError !== undefined ? { error: finalError } : {}),
-    ...(finalCompletionReason !== undefined ? { completionReason: finalCompletionReason } : {}),
+    ...(verdict.error !== undefined ? { error: verdict.error } : {}),
+    ...(verdict.completionReason !== undefined ? { completionReason: verdict.completionReason } : {}),
   });
 
   if (runId) {
-    // Pass the downgrade explicitly: this run exited 0, so the run record would
-    // otherwise keep saying "success" for the one run we just concluded did not
-    // land its PR (#3358).
+    // Every failed verdict overrides exit-code/commit rescue in run tracking,
+    // so the history cannot contradict the task or the cleanup decision (#3358).
     const runOutput = isPrivateSecurityTask(task)
-      ? success
+      ? verdict.success
         ? 'Private security assessment: see the local Review Hub report.'
         : 'Private security assessment report was not verified; inspect the local assessment archive.'
       : outputBuffer;
-    await completeAgentRun(runId, runOutput, exitCode, duration, errorAnalysis, prVerdict.ok && !driftDowngrade && !fidelityDowngrade && !hookRejected ? null : false);
+    await completeAgentRun(runId, runOutput, exitCode, duration, verdict.errorAnalysis, verdict.success ? null : false);
   }
 
   // LI hand-off execution verdict (#2779): stamp the per-proposal execution outcome into
@@ -1189,7 +1204,7 @@ export async function finalizeAgent({
   // (which filed the proposal and runs LI for that app) can derive `recordProposalExecution`
   // from the terminal synced task — cross-peer parity for the #2765 LOCAL write, which only
   // lands on the peer that ran the agent.
-  await stampLiExecutionVerdict(taskUpdate, task, { success, validationPassed, errorAnalysis });
+  await stampLiExecutionVerdict(taskUpdate, task, { success: verdict.success, validationPassed, errorAnalysis: verdict.errorAnalysis });
 
   // The bounded source inventory belongs only to this run and its private
   // report. Task metadata is replicated to peers and reused in later prompts.
@@ -1199,11 +1214,11 @@ export async function finalizeAgent({
   }
   const taskResult = await updateTask(task.id, taskUpdate, taskType);
   if (taskResult?.error) {
-    const label = terminatedByUser ? 'blocked' : success ? 'completed' : 'failed';
+    const label = terminatedByUser ? 'blocked' : verdict.success ? 'completed' : 'failed';
     emitLog('warn', `⚠️ Failed to update ${label} task ${task.id}: ${taskResult.error} (taskType=${taskType})`, { taskId: task.id, agentId, error: taskResult.error });
   }
 
-  if (!success && !terminatedByUser && errorAnalysis) {
+  if (!verdict.success && !terminatedByUser && verdict.errorAnalysis) {
     // Bench the provider when the PROVIDER is what failed — not the agent's
     // work. `origin: 'provider'` is agentErrorAnalysis's provenance flag (#2642),
     // set only for structured provider chrome, never for a loose keyword sweep of
@@ -1222,7 +1237,7 @@ export async function finalizeAgent({
     // `origin: 'provider'` via their `structuredMarker`, so nothing real is lost.
     // Every finalizeAgent caller analyzes through analyzeAgentFailure or
     // detectImmediateFallbackSignal, and both stamp an origin on every branch.
-    const bench = errorAnalysis.origin === 'provider' ? resolveProviderBench(errorAnalysis) : null;
+    const bench = verdict.errorAnalysis.origin === 'provider' ? resolveProviderBench(verdict.errorAnalysis) : null;
     // Lazy provider lookup — resolve the active provider only when a marker
     // fires AND the caller didn't already know the id, keeping the ordinary
     // failure path free of a settings-file read.
@@ -1231,7 +1246,7 @@ export async function finalizeAgent({
       // `markUsageLimit` parses its own window out of the provider's message
       // ("resets 5pm"), so a usage limit keeps its dedicated marker.
       const mark = bench.marker === 'usage-limit'
-        ? markProviderUsageLimit(markerProviderId, errorAnalysis)
+        ? markProviderUsageLimit(markerProviderId, verdict.errorAnalysis)
         : markProviderUnavailable(markerProviderId, {
           reason: bench.category,
           message: bench.message || 'Provider unavailable',
@@ -1256,10 +1271,10 @@ export async function finalizeAgent({
   const scheduledType = task?.metadata?.analysisType || null;
   if (scheduledType) {
     const signal = resolveTypeFailureSignal({
-      success,
+      success: verdict.success,
       terminatedByUser,
       hookResult,
-      errorCategory: errorAnalysis?.category
+      errorCategory: verdict.errorAnalysis?.category
     });
     if (signal.record !== 'skip') {
       const ledgerAppId = task?.metadata?.app || null;
@@ -1273,7 +1288,7 @@ export async function finalizeAgent({
     }
   }
 
-  await processAgentCompletion(agentId, task, success, outputBuffer);
+  await processAgentCompletion(agentId, task, verdict.success, outputBuffer);
 
   if (usesCreativeDirectorScratchCwd(task)) {
     await removeCreativeDirectorScratchCwd(agentId).catch((err) => {
@@ -1286,7 +1301,7 @@ export async function finalizeAgent({
   // downgraded to `pr-missing` would still be cleaned up as a success — worktree
   // removed, local branch deleted, and no resume pointer recorded — destroying
   // the state the retry needs to open the PR that is missing.
-  return { success, prVerdict: effectivePrVerdict };
+  return { success: verdict.success, prVerdict: effectivePrVerdict };
 }
 
 // Tail of the agent's transcript scanned by the rescue. The deliverable, when

@@ -30,17 +30,43 @@ vi.mock('./taskTypeHooks.js', () => ({
   resolveTaskHookType: vi.fn(task => task?.metadata?.analysisType || null),
 }));
 
-import { getAgent, updateAgent } from './cosAgentLifecycle.js';
+import { getAgent, updateAgent, completeAgent } from './cosAgentLifecycle.js';
 import { canRunTaskOutputHookWithoutPayload, getTaskOutputHook } from './taskTypeHooks.js';
 import {
+  finalizeAgent,
   dispatchRecoveredTaskOutputHook,
   dispatchTaskOutputHookOnce,
 } from './agentFinalization.js';
 
+
+vi.mock('./cos.js', () => ({
+  updateTask: vi.fn(async () => ({})),
+  addTask: vi.fn(async () => ({ id: 'investigation-test' })),
+}));
+vi.mock('./investigationTaskProducer.js', () => ({
+  investigationCircuitOpen: vi.fn(() => false),
+  noteInvestigationFiled: vi.fn(),
+  readAllTasksFlat: vi.fn(async () => []),
+  recentInvestigationCreations: vi.fn(() => []),
+}));
+vi.mock('./agentErrorAnalysis.js', async importOriginal => {
+  const actual = await importOriginal();
+  return { ...actual, resolveFailedTaskUpdate: vi.fn(actual.resolveFailedTaskUpdate) };
+});
+vi.mock('./agentRunTracking.js', () => ({ completeAgentRun: vi.fn(async () => null) }));
+vi.mock('./agentCompletion.js', () => ({ processAgentCompletion: vi.fn(async () => null) }));
+vi.mock('./cosEvents.js', () => ({ emitLog: vi.fn(), cosEvents: { emit: vi.fn(), on: vi.fn() } }));
+vi.mock('./taskSchedule.js', () => ({
+  recordTaskTypeFailure: vi.fn(async () => null),
+  recordTaskTypeSuccess: vi.fn(async () => null),
+}));
+import { updateTask, addTask } from './cos.js';
+import { completeAgentRun } from './agentRunTracking.js';
+import { resolveFailedTaskUpdate } from './agentErrorAnalysis.js';
+
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const MANAGEMENT_SOURCE = readFileSync(join(__dirname, 'agentManagement.js'), 'utf8');
 const LIFECYCLE_SOURCE = readFileSync(join(__dirname, 'agentLifecycle.js'), 'utf8');
-const FINALIZATION_SOURCE = readFileSync(join(__dirname, 'agentFinalization.js'), 'utf8');
 const TASK = {
   id: 'sys-example',
   taskType: 'internal',
@@ -241,25 +267,52 @@ describe('recovery path wiring (#3182)', () => {
 // error, so the run was already `success === false` and the permanent verdict
 // never applied — the task consumed its retries and the pipeline re-spawned.
 describe('permanent output-hook rejection (#6124)', () => {
-  const block = (() => {
-    const start = FINALIZATION_SOURCE.indexOf('const hookRejected = !terminatedByUser');
-    return FINALIZATION_SOURCE.slice(start, FINALIZATION_SOURCE.indexOf('const validationPassed = await evaluateSuccessCriteria', start));
-  })();
-
-  it('escalates a permanent rejection on a run that had ALREADY failed', () => {
-    expect(block).toContain("hookOutcome?.permanent === true");
-    expect(block).toContain('if (hookRejected && (success || escalatePermanent)) {');
-    expect(block).toContain('...(hookPermanent && { permanent: true })');
+  beforeEach(() => {
+    vi.clearAllMocks();
+    getAgent.mockResolvedValue({ id: 'agent-rejected', metadata: {} });
+    updateAgent.mockResolvedValue(null);
+    getTaskOutputHook.mockResolvedValue(async () => ({
+      accepted: false, permanent: true, reason: 'output-missing', message: 'No parseable output',
+    }));
   });
 
-  it('leaves a NAMED failure cause on its ordinary retry path', () => {
-    // A rate-limited or unauthenticated run also writes no output; blocking it
-    // permanently would strand work that a retry would have completed.
-    expect(block).toContain("errorAnalysis.category !== 'unknown'");
-    expect(block).toContain('&& !causeNamed');
+  const finish = (errorAnalysis, metadata = {}) => finalizeAgent({
+    agentId: 'agent-rejected',
+    task: { ...TASK, metadata: { ...TASK.metadata, ...metadata } },
+    runId: 'run-rejected', success: false, exitCode: 1, duration: 1000,
+    outputBuffer: '', errorAnalysis,
   });
 
-  it('never re-resolves a decision that already blocked (no duplicate investigation task)', () => {
-    expect(block).toContain("taskUpdate?.status !== 'blocked'");
+  it('blocks an already-failed unknown run and records failure for cleanup and run history', async () => {
+    expect(await finish({ category: 'unknown' })).toMatchObject({ success: false });
+    expect(updateTask).toHaveBeenCalledWith(TASK.id, expect.objectContaining({
+      status: 'blocked', metadata: expect.objectContaining({ blockedCategory: 'output-missing' }),
+    }), 'internal');
+    expect(completeAgent).toHaveBeenCalledWith('agent-rejected', expect.objectContaining({
+      success: false, completionReason: 'output-missing', error: 'No parseable output',
+      errorAnalysis: expect.objectContaining({ permanent: true, origin: 'task-output-hook' }),
+    }));
+    expect(completeAgentRun).toHaveBeenCalledWith('run-rejected', '', 1, 1000,
+      expect.objectContaining({ category: 'output-missing', permanent: true }), false);
+    expect(addTask).not.toHaveBeenCalled();
+  });
+
+  it('leaves a named failure on its ordinary retry path', async () => {
+    await finish({ category: 'rate-limit', message: 'Try later' });
+    expect(updateTask).toHaveBeenCalledWith(TASK.id, expect.objectContaining({
+      status: 'in_progress', metadata: expect.objectContaining({ lastErrorCategory: 'rate-limit' }),
+    }), 'internal');
+    expect(completeAgent).toHaveBeenCalledWith('agent-rejected', expect.objectContaining({
+      error: 'Try later', completionReason: 'rate-limit',
+      errorAnalysis: { category: 'rate-limit', message: 'Try later' },
+    }));
+    expect(resolveFailedTaskUpdate).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not re-resolve an already-blocked task or duplicate its investigation', async () => {
+    await finish({ category: 'unknown' }, { failureCount: 3 });
+    expect(updateTask).toHaveBeenCalledWith(TASK.id, expect.objectContaining({ status: 'blocked' }), 'internal');
+    expect(resolveFailedTaskUpdate).toHaveBeenCalledTimes(1);
+    expect(addTask).toHaveBeenCalledTimes(1);
   });
 });

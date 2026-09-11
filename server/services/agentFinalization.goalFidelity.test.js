@@ -19,7 +19,7 @@ vi.mock('../lib/execGit.js', () => ({
 }));
 vi.mock('./github.js', () => ({
   execGh: vi.fn(),
-  findPullRequestForBranch: vi.fn(async () => ({ status: 'found', number: 7, url: 'https://example.com/pr/7' })),
+  findPullRequestForBranch: vi.fn(async () => ({ status: 'found', number: 7, url: 'https://example.com/pr/7', body: 'Closes #42' })),
   ensureForgeReachable: vi.fn(async () => ({ ok: true, status: 'ok' })),
 }));
 vi.mock('./gitlab.js', () => ({ findMergeRequestForBranch: vi.fn(), execGlab: vi.fn() }));
@@ -61,6 +61,7 @@ vi.mock('../lib/gitCommitProbe.js', () => ({
   committedDuringRun: vi.fn(async () => true),
   runWindowDiff: (...args) => runWindowDiffMock(...args),
 }));
+vi.mock('./agentRunEventLog.js', () => ({ appendRunEvent: vi.fn(async () => null) }));
 vi.mock('./agentRunTracking.js', () => ({ createAgentRun: vi.fn(), completeAgentRun: vi.fn(async () => null) }));
 vi.mock('./taskTypeHooks.js', () => ({
   canRunTaskOutputHookWithoutPayload: vi.fn(() => false),
@@ -275,7 +276,10 @@ describe('finalizeAgent — goal-fidelity gate', () => {
       missing: ['the retry'],
       unrequested: ['an unrelated logging refactor'],
     }));
-    await finalize();
+    const finalized = await finalize({ runId: 'fidelity-held-run', prExpected: true });
+    expect(finalized).toMatchObject({ success: false, prVerdict: { ok: true } });
+    expect(completeAgentRun).toHaveBeenCalledWith('fidelity-held-run', 'done', 0, 1000,
+      expect.objectContaining({ category: GOAL_FIDELITY_CATEGORY }), false);
 
     const result = completion();
     expect(result.success).toBe(false);
