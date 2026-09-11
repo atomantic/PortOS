@@ -403,7 +403,9 @@ export const LIMITS = Object.freeze({
 
 export async function getState() {
   await ensureDir(PATHS.data);
-  const raw = await readJSONFile(STATE_PATH, DEFAULT_STATE, { logError: false });
+  // Strict: all layout mutations persist the state returned here. Falling back
+  // after a failed read would replace every custom layout with shipped defaults.
+  const raw = await readJSONFile(STATE_PATH, DEFAULT_STATE, { logError: false, strict: true });
   const sanitized = [];
   const seenIds = new Set();
   if (Array.isArray(raw.layouts)) {

@@ -47,6 +47,8 @@ vi.mock('../lib/fileUtils.js', async () => {
   const fsMod = await import('fs');
   return {
     PATHS: state,
+    pathExists: async () => false,
+    sleep: async () => {},
     atomicWrite: async (file, data) => fsMod.writeFileSync(file, data),
   };
 });
@@ -672,6 +674,45 @@ describe('localLlm', () => {
         expect(r.success).toBe(false);
         expect(r.error).toMatch(/lmstudio\.ai/); // surfaces the manual download link
       } finally {
+        restorePlatform();
+      }
+    });
+
+    it.each([
+      ['0.33.3', false],
+      ['0.34.0', true],
+    ])('verifies Homebrew upgrade against the running version %s', async (after, success) => {
+      const restorePlatform = pinPlatform('darwin');
+      vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, json: async () => ({ tag_name: 'v0.34.0' }) })));
+      cp.execFile = (_cmd, _args, _opts, cb) => cb(null, { stdout: 'ollama 0.33.3', stderr: '' });
+      cp.spawn = vi.fn(() => fakeChild({ lines: ['Warning: ollama 0.33.3 already installed'] }));
+      mocks.ollama.getStatus.mockResolvedValueOnce({ version: '0.33.3' }).mockResolvedValueOnce({ version: after });
+      try {
+        const result = await svc.upgradeBackend('ollama');
+        expect(result.success).toBe(success);
+        expect(cp.spawn.mock.calls.map(([cmd, args]) => [cmd, args])).toEqual([
+          ['brew', ['update']], ['brew', ['upgrade', 'ollama']]
+        ]);
+        if (!success) expect(result.error).toMatch(/still running 0.33.3.*available release is 0.34.0/);
+        else expect(result.note).toContain('0.33.3 → 0.34.0');
+      } finally {
+        vi.unstubAllGlobals();
+        restorePlatform();
+      }
+    });
+
+    it('stops an upgrade when Homebrew metadata cannot be refreshed', async () => {
+      const restorePlatform = pinPlatform('darwin');
+      vi.stubGlobal('fetch', vi.fn(async () => ({ ok: false })));
+      cp.execFile = (_cmd, _args, _opts, cb) => cb(null, { stdout: '', stderr: '' });
+      cp.spawn = vi.fn(() => fakeChild({ code: 1 }));
+      try {
+        const result = await svc.upgradeBackend('ollama');
+        expect(result).toMatchObject({ success: false, error: expect.stringContaining('Homebrew refresh failed') });
+        expect(cp.spawn).toHaveBeenCalledTimes(1);
+        expect(mocks.ollama.stopPersistentService).not.toHaveBeenCalled();
+      } finally {
+        vi.unstubAllGlobals();
         restorePlatform();
       }
     });

@@ -288,7 +288,7 @@ export function normalizeError(err) {
     const context = { originalError: err.constructor.name, ...describeCauseChain(err) };
     const normalized = new ServerError(
       FILESYSTEM_ERROR_CODES.has(err.code) ? FILESYSTEM_ERROR_MESSAGE : err.message,
-      { status, code, context },
+      { status, code, context, responseMessage: err.responseMessage },
     );
     if (normalized.message !== err.message) normalized.originalMessage = err.message;
     return normalized;
