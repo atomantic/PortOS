@@ -228,6 +228,18 @@ describe('execGh backoffKey', () => {
     expect(spawn).toHaveBeenCalledTimes(2);
   });
 
+  it('preserves a successful result completed during graceful shutdown', async () => {
+    const child = makeChild();
+    spawn.mockReturnValue(child);
+    const pending = execGh(['pr', 'list'], 5000, { backoffKey: 'finishing-repo' });
+    child.stdout.emit('data', '[]');
+    markHostShuttingDown();
+    child.emit('close', 0, null);
+    resetHostShutdownFlagForTests();
+    await expect(pending).resolves.toBe('[]');
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
   it('keeps unexpected signal failures visible and subject to backoff', async () => {
     const child = makeChild();
     spawn.mockReturnValue(child);

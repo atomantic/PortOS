@@ -162,7 +162,9 @@ export function execGh(args, timeoutMs = DEFAULT_EXEC_GH_TIMEOUT_MS, { cwd = nul
     child.on('close', (code, signal) => {
       if (timedOut || settled) return;
       clearTimeout(timer);
-      if (signal === 'SIGTERM' || isHostShuttingDown()) {
+      if (signal === 'SIGTERM' || (code !== 0 && isHostShuttingDown())) {
+        // PM2 may deliver SIGTERM to the child before the host latch is set.
+        // Other signals count as failures unless the host confirms shutdown.
         // Cancellation says nothing about forge health; preserve prior backoff.
         settle(null);
         reject(Object.assign(new Error(signal ? `gh command cancelled by ${signal}` : 'gh command cancelled during host shutdown'), {
