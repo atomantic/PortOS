@@ -206,6 +206,7 @@ describe('persistent mind supervisor', () => {
       nextEligibleWakeAt: new Date(Date.now() + backoffMs).toISOString(),
     });
     expect(mock.root.persistentMind.queuedMessages.map(({ id }) => id)).toEqual(['deferred-message']);
+    expect(mock.scheduled.get(supervisor.PERSISTENT_MIND_WAKE_EVENT_ID).delayMs).toBe(backoffMs);
     expect(prepare).not.toHaveBeenCalled();
     expect(run).not.toHaveBeenCalled();
     expect(mock.recordUsage).not.toHaveBeenCalled();
