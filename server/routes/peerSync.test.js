@@ -175,7 +175,7 @@ describe('peer-sync routes', () => {
       }));
     });
 
-    it('accepts a writersRoomWork push that bundles a draftBodyManifest', async () => {
+    it('accepts a writersRoomWork push that bundles draft and bible manifests', async () => {
       // Regression: writersRoomWorkPushSchema is `.strict()`, so without the
       // draftBodyManifest field (and without the kind in the discriminated
       // union) the production body-bearing work push 400s at the Zod boundary
@@ -190,12 +190,14 @@ describe('peer-sync routes', () => {
           draftBodyManifest: [
             { kind: 'writers-room-draft', workId: 'wr-work-1', draftId: 'wr-draft-1', sha256: 'a'.repeat(64) },
           ],
+          bibleManifest: [{ workId: 'wr-work-1', kind: 'character', sha256: 'b'.repeat(64), updatedAt: '2026-09-01T00:00:00Z' }],
           sourceInstanceId: 'peer-a',
         });
       expect(res.status).toBe(200);
       expect(svc.applyIncomingPush).toHaveBeenCalledWith(expect.objectContaining({
         kind: 'writersRoomWork',
         draftBodyManifest: expect.any(Array),
+        bibleManifest: expect.any(Array),
       }));
     });
 

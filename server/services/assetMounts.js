@@ -19,7 +19,7 @@ import { join } from 'path';
 import { PATHS } from '../lib/fileUtils.js';
 import { ServerError, sendErrorResponse } from '../lib/errorHandler.js';
 import { ASSET_ROUTE_PREFIXES, SERVER_OWNED_PREFIXES } from '../lib/assetRoutePrefixes.js';
-import { wrWorksDir } from './writersRoom/_shared.js';
+import { wrWorksDir, WORK_ID_RE } from './writersRoom/_shared.js';
 import { escapeRegExp } from '../lib/textUtils.js';
 
 // `acceptRanges: true` is the serve-static default already, but we set it
@@ -47,12 +47,13 @@ const ASSET_STATIC_OPTS = { acceptRanges: true };
 const IMMUTABLE_MAX_AGE_MS = 365 * 24 * 60 * 60 * 1000;
 const CLIENT_ASSET_STATIC_OPTS = { immutable: true, maxAge: IMMUTABLE_MAX_AGE_MS, index: false };
 
-// Only `<workId>/drafts/<draftId>.md` is needed for federation body pulls.
-// Without this gate the static root would also serve adjacent work-metadata
-// JSON (manifest.json / manifest.imported.json on file-backend/migrated
-// installs) to any client that knows a work id.
-const writersRoomDraftBodiesOnly = (req, res, next) => {
-  if (!/^\/[^/]+\/drafts\/[^/]+\.md$/.test(req.path)) return res.status(404).end();
+// Federation may pull draft prose and the three authored bible siblings only.
+// Metadata/import backups and regenerable analysis snapshots stay inaccessible.
+const writersRoomAssetsOnly = (req, res, next) => {
+  const draft = /^\/[^/]+\/drafts\/[^/]+\.md$/.test(req.path);
+  const bibleMatch = /^\/([^/]+)\/(characters|places|objects)\.json$/.exec(req.path);
+  const bible = bibleMatch && WORK_ID_RE.test(bibleMatch[1]);
+  if (!draft && !bible) return res.status(404).end();
   next();
 };
 
@@ -97,7 +98,7 @@ const ASSET_DIRS = {
   '/data/writers-room/works': wrWorksDir,
 };
 
-const ASSET_GATES = { '/data/writers-room/works': writersRoomDraftBodiesOnly };
+const ASSET_GATES = { '/data/writers-room/works': writersRoomAssetsOnly };
 
 /** The routes `ASSET_DIRS` knows a directory for — exported so a key that never
  *  reaches `ASSET_ROUTE_PREFIXES` (and is therefore never mounted) fails a test

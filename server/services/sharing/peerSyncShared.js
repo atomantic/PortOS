@@ -66,6 +66,7 @@ export const ENVELOPE_EXTENSIONS = Object.freeze([
   // The linked track record riding a musicVideoProject push (#1858) — a
   // musicVideoProjects-only subscriber has no `tracks` cycle to fall back on.
   Object.freeze({ key: 'linkedTrack', pendingKey: 'trackSyncPending' }),
+  Object.freeze({ key: 'bibleManifest', pendingKey: 'bibleSyncPending' }),
 ]);
 
 /**

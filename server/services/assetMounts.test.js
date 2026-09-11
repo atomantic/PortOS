@@ -55,6 +55,9 @@ beforeAll(() => {
   mkdirSync(join(drafts, 'drafts'), { recursive: true });
   writeFileSync(join(drafts, 'drafts', 'd1.md'), '# body');
   writeFileSync(join(drafts, 'manifest.json'), '{"private":true}');
+  for (const kind of ['characters', 'places', 'objects']) writeFileSync(join(drafts, `${kind}.json`), JSON.stringify({ [kind]: [] }));
+  mkdirSync(join(drafts, 'analysis'), { recursive: true });
+  writeFileSync(join(drafts, 'analysis', 'evaluate.json'), '{"private":true}');
 
   app = express();
   mountAssetRoutes(app);
@@ -151,6 +154,14 @@ describe('the writers-room draft-body gate', () => {
     const manifest = await request(app).get('/data/writers-room/works/wr-work-1/manifest.json');
     expect(manifest.status).toBe(404);
     expect(manifest.text).not.toContain('private');
+    for (const kind of ['characters', 'places', 'objects']) {
+      const bible = await request(app).get(`/data/writers-room/works/wr-work-1/${kind}.json`);
+      expect(bible.status).toBe(200);
+      expect(bible.body).toEqual({ [kind]: [] });
+    }
+    const analysis = await request(app).get('/data/writers-room/works/wr-work-1/analysis/evaluate.json');
+    expect(analysis.status).toBe(404);
+    expect(analysis.text).not.toContain('private');
   });
 });
 
