@@ -28,6 +28,14 @@ import { invalidateAllCaches as invalidateBrainCaches } from './brainStorage.js'
 // Module-level state
 let isRunning = false;
 
+// Backups and restores can legitimately run for hours on large or remote
+// volumes, so a short elapsed-time cap would turn healthy work into failure.
+// Treat ten minutes with no observable progress as a stall, while retaining a
+// generous hard ceiling for a process that stays noisy forever.
+const BACKUP_PROCESS_IDLE_TIMEOUT_MS = 10 * 60 * 1000;
+const BACKUP_PROCESS_WALL_TIMEOUT_MS = 4 * 60 * 60 * 1000;
+const BACKUP_PROCESS_PROGRESS_POLL_MS = 30 * 1000;
+
 const STATE_PATH = join(PATHS.data, 'backup', 'state.json');
 // A snapshot mid-assembly is a truncated tree that looks like a finished backup.
 // Two signals guard it, because neither alone is sufficient:
@@ -193,6 +201,98 @@ export function backupStatusForPg(pgResult) {
 // INTERNAL HELPERS
 // =============================================================================
 
+class BackupProcessTimeoutError extends Error {
+  constructor(label, timeoutKind) {
+    const duration = timeoutKind === 'idle' ? '10 minutes without progress' : '4 hours';
+    super(`${label} timed out after ${duration}`);
+    this.name = 'BackupProcessTimeoutError';
+    this.code = 'BACKUP_PROCESS_TIMEOUT';
+    this.timeoutKind = timeoutKind;
+  }
+}
+
+/**
+ * Watch a backup subprocess for both stalled progress and runaway wall time.
+ * The watchdog only starts termination; callers still settle from `close`, so
+ * the backup lock and snapshot markers cannot clear while the child may write.
+ *
+ * pg_dump writes directly to `progressPath` and is normally silent. Polling its
+ * growing output file lets a healthy large dump reset the idle timer without
+ * adding verbose flags or buffering its SQL in memory.
+ */
+function watchBackupProcess(proc, { label, progressPath = null } = {}) {
+  let finished = false;
+  let timeoutError = null;
+  let idleTimer = null;
+  let escalationTimer = null;
+  let progressPoll = null;
+  let progressPollInFlight = false;
+  let lastProgressSize = 0;
+
+  const startTermination = (timeoutKind) => {
+    if (finished || timeoutError || proc.exitCode !== null || proc.signalCode !== null) return;
+    timeoutError = new BackupProcessTimeoutError(label, timeoutKind);
+    console.warn(`⚠️ ${timeoutError.message} — terminating child process`);
+    try {
+      escalationTimer = killWithEscalation(proc, {
+        label,
+        stillRunning: () => !finished,
+      });
+    } catch (err) {
+      // Keep the caller pending if termination itself fails. Releasing a backup
+      // lock while its child may still mutate files or the database is unsafe.
+      console.error(`❌ ${label} timeout termination failed: ${err.message}`);
+    }
+  };
+
+  const armIdleTimer = () => {
+    if (idleTimer) clearTimeout(idleTimer);
+    idleTimer = setTimeout(() => startTermination('idle'), BACKUP_PROCESS_IDLE_TIMEOUT_MS);
+    idleTimer.unref?.();
+  };
+
+  const markActivity = () => {
+    if (!finished && !timeoutError) armIdleTimer();
+  };
+
+  armIdleTimer();
+  const wallTimer = setTimeout(() => startTermination('wall'), BACKUP_PROCESS_WALL_TIMEOUT_MS);
+  wallTimer.unref?.();
+
+  if (progressPath) {
+    progressPoll = setInterval(() => {
+      if (finished || timeoutError || progressPollInFlight) return;
+      progressPollInFlight = true;
+      stat(progressPath)
+        .then((info) => {
+          if (info.size > lastProgressSize) {
+            lastProgressSize = info.size;
+            markActivity();
+          }
+        })
+        // A missing or temporarily unreadable file is no progress. The idle
+        // deadline remains authoritative and will terminate the child.
+        .catch(() => {})
+        .finally(() => { progressPollInFlight = false; });
+    }, BACKUP_PROCESS_PROGRESS_POLL_MS);
+    progressPoll.unref?.();
+  }
+
+  return {
+    markActivity,
+    getTimeoutError: () => timeoutError,
+    finish: () => {
+      if (finished) return false;
+      finished = true;
+      clearTimeout(idleTimer);
+      clearTimeout(wallTimer);
+      if (progressPoll) clearInterval(progressPoll);
+      if (escalationTimer) clearTimeout(escalationTimer);
+      return true;
+    },
+  };
+}
+
 /**
  * Run rsync from srcDir to destDir with optional flags.
  * Resolves with array of changed file lines. Rejects on non-zero exit (except 24).
@@ -212,19 +312,30 @@ function runRsync(srcDir, destDir, flags = []) {
 
     const changed = [];
     let stderr = '';
+    const watchdog = watchBackupProcess(proc, { label: 'backup rsync' });
 
     const stdoutReader = createLineReader((line) => {
       if (line.startsWith('>') || line.startsWith('<')) {
         changed.push(line);
       }
     });
-    proc.stdout.on('data', stdoutReader.push);
+    proc.stdout.on('data', (chunk) => {
+      watchdog.markActivity();
+      stdoutReader.push(chunk);
+    });
 
     proc.stderr.on('data', (chunk) => {
+      watchdog.markActivity();
       stderr += chunk.toString();
     });
 
     proc.on('close', (code) => {
+      if (!watchdog.finish()) return;
+      const timeoutError = watchdog.getTimeoutError();
+      if (timeoutError) {
+        reject(timeoutError);
+        return;
+      }
       // Exit code 24 = some files vanished mid-transfer (normal for active system)
       if (code === 0 || code === 24) {
         stdoutReader.flush();
@@ -235,6 +346,9 @@ function runRsync(srcDir, destDir, flags = []) {
     });
 
     proc.on('error', (err) => {
+      // A timeout does not settle until `close`: the child may still be alive
+      // after an error from a failed termination attempt.
+      if (watchdog.getTimeoutError() || !watchdog.finish()) return;
       reject(new Error(`rsync spawn error: ${err.message}`));
     });
   });
@@ -378,7 +492,7 @@ export async function runBackup(destPath, io = null, { excludePaths = [], disabl
  * escape hatch from "PG required but dump failed" (data at risk):
  *   { status: 'ok', sizeBytes, tableCount }
  *   { status: 'skipped', reason: 'not_configured' }   (explicit file escape hatch only)
- *   { status: 'failed', reason: 'pg_unreachable'|'pg_dump_missing'|'version_mismatch'|'dump_error'|'empty_dump', error }
+ *   { status: 'failed', reason: 'pg_unreachable'|'pg_dump_missing'|'version_mismatch'|'dump_error'|'empty_dump'|'timeout', error }
  *     (pg_unreachable fires whenever Postgres is required — i.e. not the file
  *      escape hatch — but the DB is down at backup time; version_mismatch means
  *      no installed pg_dump is new enough for the running server)
@@ -449,9 +563,20 @@ export async function dumpPostgres(outputPath) {
     });
 
     let stderr = '';
-    proc.stderr.on('data', (chunk) => { stderr += chunk.toString(); });
+    const watchdog = watchBackupProcess(proc, { label: 'PostgreSQL dump', progressPath: outputPath });
+    proc.stderr.on('data', (chunk) => {
+      watchdog.markActivity();
+      stderr += chunk.toString();
+    });
 
     proc.on('close', async (code) => {
+      if (!watchdog.finish()) return;
+      const timeoutError = watchdog.getTimeoutError();
+      if (timeoutError) {
+        await unlink(outputPath).catch(() => {});
+        resolvePromise({ status: 'failed', reason: 'timeout', error: timeoutError.message });
+        return;
+      }
       if (code !== 0) {
         console.warn(`⚠️ pg_dump failed (code ${code}): ${stderr.trim()}`);
         // pg_dump can exit non-zero after writing a partial file (e.g. mid-dump
@@ -484,6 +609,7 @@ export async function dumpPostgres(outputPath) {
     });
 
     proc.on('error', (err) => {
+      if (watchdog.getTimeoutError() || !watchdog.finish()) return;
       // pg_dump not installed — a configured-but-unbacked-up DB is at risk,
       // so this is a failure, not a silent skip.
       console.warn(`⚠️ pg_dump not available: ${err.message}`);
@@ -692,7 +818,20 @@ export async function restoreSnapshot(destPath, snapshotId, { dryRun = true, sub
     flags.push('--exclude=*');
   }
 
-  const changedFiles = await runRsync(srcDir, PATHS.data, flags);
+  let changedFiles;
+  try {
+    changedFiles = await runRsync(srcDir, PATHS.data, flags);
+  } catch (err) {
+    if (!dryRun && err?.code === 'BACKUP_PROCESS_TIMEOUT') {
+      const partialRestoreError = new Error(
+        `${err.message}. Some files may already have been overwritten because file restore is not transactional.`,
+        { cause: err },
+      );
+      partialRestoreError.code = err.code;
+      throw partialRestoreError;
+    }
+    throw err;
+  }
   if (!dryRun) {
     // A live restore writes outside normal service mutation paths. Re-sync the
     // caches whose backing files may have changed instead of serving the
@@ -715,7 +854,7 @@ export async function restoreSnapshot(destPath, snapshotId, { dryRun = true, sub
  *   { status: 'ok', dryRun, sizeBytes, tableCount }   (dry-run or applied)
  *   { status: 'skipped', reason: 'no_dump' }           (no sql file in snapshot)
  *   { status: 'skipped', reason: 'not_configured' }    (real restore, PG unreachable)
- *   { status: 'failed', reason: 'restore_error', error }
+ *   { status: 'failed', reason: 'restore_error'|'timeout', error }
  * @param {string} destPath - Backup destination root
  * @param {string} snapshotId
  * @param {{dryRun?: boolean}} [options]
@@ -779,12 +918,26 @@ export async function restorePostgres(destPath, snapshotId, { dryRun = true } = 
       '-v', 'ON_ERROR_STOP=1',
       '--single-transaction',
       '-h', pgHost, '-p', pgPort, '-U', pgUser, '-d', pgDb, '-f', sqlPath
-    ], { shell: false, stdio: ['ignore', 'ignore', 'pipe'], env: { ...process.env, PGPASSWORD: process.env.PGPASSWORD || 'portos' } });
+    ], { shell: false, stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, PGPASSWORD: process.env.PGPASSWORD || 'portos' } });
 
     let stderr = '';
-    proc.stderr.on('data', (chunk) => { stderr += chunk.toString(); });
+    const watchdog = watchBackupProcess(proc, { label: 'PostgreSQL restore' });
+    // psql's output is never retained, but it must be drained: unread piped
+    // output can backpressure and deadlock a verbose restore. Each chunk is also
+    // the supported progress signal that keeps an active long restore alive.
+    proc.stdout.on('data', watchdog.markActivity);
+    proc.stderr.on('data', (chunk) => {
+      watchdog.markActivity();
+      stderr += chunk.toString();
+    });
 
     proc.on('close', (code) => {
+      if (!watchdog.finish()) return;
+      const timeoutError = watchdog.getTimeoutError();
+      if (timeoutError) {
+        resolveP({ status: 'failed', reason: 'timeout', error: timeoutError.message });
+        return;
+      }
       if (code === 0) {
         console.log(`💾 psql restore complete from snapshot ${snapshotId}: ${tableCount} tables`);
         resolveP({ status: 'ok', dryRun: false, sizeBytes: info.size, tableCount });
@@ -794,6 +947,7 @@ export async function restorePostgres(destPath, snapshotId, { dryRun = true } = 
       }
     });
     proc.on('error', (err) => {
+      if (watchdog.getTimeoutError() || !watchdog.finish()) return;
       console.warn(`⚠️ psql not available: ${err.message}`);
       resolveP({ status: 'failed', reason: 'restore_error', error: err.message });
     });
