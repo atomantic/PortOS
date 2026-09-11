@@ -1,4 +1,7 @@
-/** Read-through federation of numeric PortOS audit evidence; never exports prose or relays peers. */
+/** Read-through federation of numeric app audit evidence; never exports prose or relays peers. */
+import { readFile } from 'node:fs/promises';
+import { join } from 'node:path';
+import { PATHS } from '../lib/paths.js';
 import { createHash } from 'node:crypto';
 import { z } from 'zod';
 import { query } from '../lib/db.js';
@@ -29,15 +32,16 @@ const payloadSchema = z.object({
 
 // Match repositories without sharing remote URLs, names, credentials or local paths.
 // Independent versions of the same repository intentionally contribute to one score.
-async function repositoryKey(deps) {
-  const origin = await (deps.getOriginInfo || getOriginInfo)();
+async function repositoryKey(deps, app = { id: PORTOS_APP_ID }) {
+  if (app.id !== PORTOS_APP_ID && !app.repoPath) return null;
+  const origin = await (deps.getOriginInfo || getOriginInfo)(app.repoPath);
   return origin.host && origin.fullName ? hash(`${origin.host}/${origin.fullName}`.toLowerCase()) : null;
 }
 
 async function eligiblePeers(deps) {
   const { getPeers } = deps.getPeers ? deps : await import('./instances.js');
   const { peerAllowsOutbound } = await import('./sharing/peerSyncShared.js');
-  return (await getPeers()).filter(peer => peer.fullSync === true && peerAllowsOutbound(peer));
+  return (await getPeers()).filter(peer => peerAllowsOutbound(peer));
 }
 
 export function qualityRecord(row) {
@@ -61,12 +65,26 @@ export async function readQualityRecords(appId, days, now, deps = {}) {
 }
 
 /** New endpoint always enforces peer sharing consent, even without instance-password auth. */
-export async function exportPortosQuality(callerId, days, deps = {}) {
+export async function exportPortosQuality(callerId, days, deps = {}, requestedRepository) {
   const peers = await eligiblePeers(deps);
   if (!callerId || !peers.some(peer => peer.instanceId === callerId)) return null;
-  const repository = await repositoryKey(deps);
+  let app = { id: PORTOS_APP_ID };
+  if (requestedRepository) {
+    const { getAllApps } = deps.getAllApps ? deps : await import('./apps.js');
+    const candidates = await Promise.all((await getAllApps()).map(async candidate => ({
+      app: candidate, repository: await repositoryKey(deps, candidate),
+    })));
+    app = candidates.find(candidate => candidate.repository === requestedRepository)?.app;
+    if (!app) return null;
+  }
+  return buildQualitySnapshot(app, days, deps);
+}
+
+/** Sanitized local evidence, also used by the explicit release snapshot command. */
+export async function buildQualitySnapshot(app = { id: PORTOS_APP_ID }, days = 30, deps = {}) {
+  const repository = await repositoryKey(deps, app);
   if (!repository) return null;
-  const records = await readQualityRecords(PORTOS_APP_ID, days, deps.now ?? Date.now(), deps);
+  const records = await readQualityRecords(app.id, days, deps.now ?? Date.now(), deps);
   const measurements = records.flatMap(record => {
     const parsed = measurementSchema.safeParse({ measurementId: record.measurementId,
       assessedAt: record.assessedAt, report: record.report });
@@ -77,14 +95,18 @@ export async function exportPortosQuality(callerId, days, deps = {}) {
 
 /** No persistence or forwarding: disabled/offline peers cannot leave a hidden stale contribution. */
 export async function collectPortosQuality(days, deps = {}) {
+  return collectAppQuality({ id: PORTOS_APP_ID }, days, deps);
+}
+
+export async function collectAppQuality(app, days, deps = {}) {
   const peers = await eligiblePeers(deps);
   if (!peers.length) return { records: [], federation: { peers: 0, available: 0, unavailable: 0 } };
-  const repository = await repositoryKey(deps);
+  const repository = await repositoryKey(deps, app);
+  if (!repository) return { records: [], federation: { peers: 0, available: 0, unavailable: 0 } };
   const now = deps.now ?? Date.now();
   const results = await Promise.allSettled(peers.map(async peer => {
-    if (!repository) throw new Error('Repository identity unavailable');
     const response = await (deps.peerFetch || peerFetch)(
-      `${peerBaseUrl(peer)}/api/apps/quality-federation?days=${days}`,
+      `${peerBaseUrl(peer)}/api/apps/quality-federation?days=${days}${app.id === PORTOS_APP_ID ? '' : `&repository=${repository}`}`,
       { signal: AbortSignal.timeout(3000), redirect: 'error', maxBytes: MAX_PAYLOAD_BYTES }, peer);
     if (!response.ok) {
       await response.body?.cancel?.();
@@ -105,4 +127,16 @@ export async function collectPortosQuality(days, deps = {}) {
   return { records: results.flatMap(result => result.status === 'fulfilled' ? result.value : []),
     federation: { peers: peers.length, available: results.filter(r => r.status === 'fulfilled').length,
       unavailable: results.filter(r => r.status === 'rejected').length } };
+}
+
+/** Shipped evidence is read-only and never re-exported as a local audit. */
+export async function readReleaseQuality(deps = {}) {
+  const body = await (deps.readSnapshot || (() => readFile(join(PATHS.root, 'quality-snapshot.json'), 'utf8')))().catch(() => null);
+  if (!body || Buffer.byteLength(body) > MAX_PAYLOAD_BYTES) return [];
+  const payload = await Promise.resolve().then(() => payloadSchema.parse(JSON.parse(body))).catch(() => null);
+  if (!payload || payload.repository !== await repositoryKey(deps)) return [];
+  return payload.measurements.filter(row => Date.parse(row.assessedAt) <= (deps.now ?? Date.now())).map(row => ({
+    ...row, category: row.report.category, sourcePeerName: 'Release snapshot',
+    report: { ...row.report, summary: 'Published release assessment; original assessment date and freshness rules apply.' },
+  }));
 }

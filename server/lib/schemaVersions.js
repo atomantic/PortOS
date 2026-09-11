@@ -748,7 +748,7 @@ export const RECORD_KIND_SCHEMA_CATEGORIES = Object.freeze({
  *   no RECORD_KIND_SCHEMA_CATEGORIES entry.
  *
  * `appQuality`: numeric-only local evidence at GET /api/apps/quality-federation,
- * validated against its exact wire version by collectPortosQuality; never written or pushed.
+ * validated against its exact wire version by collectAppQuality; never written or pushed.
  *
  * Do NOT add a real record-push category here to silence the guard — that would
  * leave its push transfers ungated (silent cross-install corruption). Only

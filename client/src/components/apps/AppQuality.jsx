@@ -32,7 +32,7 @@ export default function AppQuality({ app, detail = false }) {
       </p>
       {quality?.federation && (
         <p className="text-xs text-gray-400">
-          Unified PortOS score: newest assessment per category across this install and {quality.federation.available ?? 0} available full-sync peers with the same repository. Versions may differ.
+          Unified app score: newest assessment per category across this install and {quality.federation.available ?? 0} available sync peers with the same repository. Versions may differ.
           {' '}Peer evidence is fetched when viewed; offline peers do not contribute.
           {quality.federation.failed && ' Peer quality could not be loaded; the score may be incomplete.'}
           {quality.federation.unavailable > 0 && ` ${quality.federation.unavailable} peers unavailable or incompatible; the score may be incomplete.`}
@@ -66,6 +66,7 @@ export default function AppQuality({ app, detail = false }) {
                   <Link to={runnerLink(category.id)} aria-label={`Configure and run ${category.label}`} className="block mt-1 text-port-accent hover:underline">Configure and run</Link>
                   {category.summary && <details className="mt-1"><summary className="cursor-pointer text-port-accent">Assessment details</summary><p className="break-words">{category.summary}</p></details>}
                   {category.totalFiles > 0 && <div>{category.scannedFiles}/{category.totalFiles} files scanned · Worst severity: {category.worstSeverity}/10</div>}
+                  {category.sourcePeerName && !category.sourcePeerId && <div>Source: {category.sourcePeerName}</div>}
                   {category.sourcePeerId && <div>Source: {category.sourcePeerName || 'federated peer'} · <Link className="text-port-accent hover:underline" to="/instances">View instances</Link></div>}
                   {!category.sourcePeerId && category.agentId && <Link className="text-port-accent hover:underline" to={`/cos/agents/${category.agentId}`}>Audit run</Link>}
                 </td>

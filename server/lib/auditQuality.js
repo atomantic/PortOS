@@ -132,3 +132,7 @@ export function compareQualityRecords(a, b) {
   return Date.parse(a.assessedAt) - Date.parse(b.assessedAt)
     || (a.measurementId || a.agentId || '').localeCompare(b.measurementId || b.agentId || '');
 }
+
+export const appQualityFederationQuerySchema = appQualityHistoryQuerySchema.extend({
+  repository: z.string().regex(/^[a-f0-9]{64}$/).optional(),
+});
