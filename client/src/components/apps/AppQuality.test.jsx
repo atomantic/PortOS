@@ -16,6 +16,7 @@ it('shows zero as a real score and explains excluded categories in the breakdown
   expect(screen.getByText('Stale · partial')).toBeInTheDocument();
   expect(screen.getByText(/1\/25 categories contribute/)).toBeInTheDocument();
   expect(screen.getByRole('link', { name: /Scheduled audit runners/ })).toHaveAttribute('href', '/cos/schedule');
+  expect(screen.getByRole('table').parentElement).not.toHaveClass('overflow-auto', 'xl:max-h-[calc(100vh-19rem)]');
 });
 
 it('links an unassessed tile to its app quality tab without inventing a score', () => {
