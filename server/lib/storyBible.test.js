@@ -1558,6 +1558,23 @@ describe('storyBible — createBibleStore (single-primary-field kind)', () => {
     expect(entries.find((entry) => entry.id === aria.id)?.role).toBe('antagonist');
     expect(entries.find((entry) => entry.id === voss.id)?.role).toBe('protagonist');
   });
+
+  it('allows writes for different works to proceed independently', async () => {
+    const store = characterStore();
+    const otherWorkId = 'wr-work-bbbbbbbb-cccc-dddd-eeee-ffffffffffff';
+    const [aria, voss] = await Promise.all([
+      store.create(WORK_ID, { name: 'Aria' }),
+      store.create(otherWorkId, { name: 'Voss' }),
+    ]);
+
+    await Promise.all([
+      store.update(WORK_ID, aria.id, { role: 'protagonist' }),
+      store.update(otherWorkId, voss.id, { role: 'antagonist' }),
+    ]);
+
+    expect((await store.list(WORK_ID))[0].role).toBe('protagonist');
+    expect((await store.list(otherWorkId))[0].role).toBe('antagonist');
+  });
 });
 
 describe('storyBible — createBibleStore (multi-primary-field kind / settings)', () => {
