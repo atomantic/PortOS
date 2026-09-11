@@ -15,6 +15,7 @@ import { Info } from 'lucide-react';
  *   actionTo    — internal route for the call-to-action Link
  *   actionLabel — text for the call-to-action
  *   onAction    — render a <button> instead of a Link (in-page action)
+ *   actionDisabled — disable the in-page action while it is processing
  */
 export default function EmptyState({
   icon: Icon = Info,
@@ -34,7 +35,13 @@ export default function EmptyState({
       {title && <h3 className="text-white font-semibold mb-1">{title}</h3>}
       {message && <p className="text-gray-400 text-sm max-w-xs">{message}</p>}
       {actionLabel && (onAction ? (
-        <button type="button" onClick={onAction} disabled={actionDisabled} className={actionClass}>
+        <button
+          type="button"
+          onClick={onAction}
+          disabled={actionDisabled}
+          aria-busy={actionDisabled || undefined}
+          className={`${actionClass} disabled:cursor-not-allowed disabled:opacity-50`}
+        >
           {actionLabel}
         </button>
       ) : actionTo ? (

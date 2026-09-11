@@ -66,7 +66,7 @@ describe('BriefingTab empty state', () => {
     await act(async () => {});
     expect(screen.getByRole('button', { name: 'Generating today’s briefing…' })).toBeDisabled();
 
-    await act(async () => { await vi.advanceTimersByTimeAsync(2000); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(5000); });
     expect(screen.getByText('Today')).toBeInTheDocument();
   });
 

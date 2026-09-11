@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { Link } from 'react-router';
 import {
   Newspaper,
@@ -20,6 +20,7 @@ import { formatWeekdayDate } from '../../../utils/formatters';
 import EmptyState from '../../EmptyState';
 import { useAsyncAction } from '../../../hooks/useAsyncAction';
 import { useAutoRefetch } from '../../../hooks/useAutoRefetch';
+import toast from '../../ui/Toast';
 
 const SECTION_ICONS = {
   'Task Queue': CheckCircle,
@@ -163,16 +164,22 @@ export default function BriefingTab() {
   const [loading, setLoading] = useState(true);
   const [expandedSections, setExpandedSections] = useState({});
   const [generationPending, setGenerationPending] = useState(false);
+  const generationInFlightRef = useRef(false);
 
   const [generateBriefing, generatingBriefing] = useAsyncAction(async () => {
-    if (generationPending || generatingBriefing) return;
-    const result = await api.triggerCosJob('job-daily-briefing', { silent: true });
-    if (!result || result.success === false) {
-      throw new Error(result?.reason || 'The briefing could not be generated');
+    if (generationPending || generatingBriefing || generationInFlightRef.current) return;
+    generationInFlightRef.current = true;
+    try {
+      const result = await api.triggerCosJob('job-daily-briefing', { silent: true });
+      if (!result || result.success === false) {
+        throw new Error(result?.reason || 'The briefing could not be generated');
+      }
+      setGenerationPending(true);
+      const latest = await loadData({ showLoading: false });
+      if (latest) setGenerationPending(false);
+    } finally {
+      generationInFlightRef.current = false;
     }
-    setGenerationPending(true);
-    const latest = await loadData({ showLoading: false });
-    if (latest) setGenerationPending(false);
   });
 
   useEffect(() => {
@@ -205,9 +212,18 @@ export default function BriefingTab() {
       if (latest) setGenerationPending(false);
       return latest;
     },
-    2000,
+    5000,
     { enabled: generationPending, immediate: false, pollOnly: true },
   );
+
+  useEffect(() => {
+    if (!generationPending) return undefined;
+    const timeoutId = setTimeout(() => {
+      setGenerationPending(false);
+      toast.error('Briefing generation is taking longer than expected. Try again or check the Daily Briefing job.');
+    }, 60000);
+    return () => clearTimeout(timeoutId);
+  }, [generationPending]);
 
   const loadBriefing = async (date) => {
     setLoading(true);
