@@ -403,6 +403,9 @@ describe('client mirror of the reviewer vocabulary', () => {
     for (const reviewer of REVIEWER_VALUES) {
       expect(client.reviewerEffortLevels(reviewer) ?? null).toEqual(reviewerEffortLevels(reviewer) ?? null);
     }
+    for (const model of ['gpt-5.6', 'gpt-5.6-sol', 'gpt-6-astra', 'gpt-6', 'gpt-5.5', 'o3']) {
+      expect(client.reviewerEffortLevels('codex', model)).toEqual(reviewerEffortLevels('codex', model));
+    }
     // Alias parity too — the picker keys rows off stored slugs.
     expect(client.reviewerEffortLevels('gemini')).toEqual(reviewerEffortLevels('gemini'));
   });
