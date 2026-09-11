@@ -57,8 +57,9 @@ export async function eligiblePublicReviewProviders(posture, { providers = null 
  * Resolve the provider a public-review stage should run on.
  *
  * Preference order — a pin the user set on the stage wins whenever it is still
- * eligible, then the install's active provider, then the first eligible
- * provider that is currently available, then the first eligible provider at
+ * eligible. An explicit unavailable/ineligible pin blocks; it never authorizes
+ * another provider. Unpinned stages use the install's active provider, then the
+ * first eligible provider that is currently available, then the first eligible provider at
  * all (so a stage stays configured through a transient rate limit rather than
  * silently swapping vendors).
  *
@@ -70,6 +71,16 @@ export async function resolvePublicReviewProvider({ posture, pinnedProviderId = 
   if (!posture) return { ok: false, code: 'public-review-posture-missing', error: 'No public-review posture requested' };
   const { providers = [], activeProvider } = await getAllProviders();
   const eligible = await eligiblePublicReviewProviders(posture, { providers });
+  const pinned = pinnedProviderId ? eligible.find((provider) => provider.id === pinnedProviderId) : null;
+  if (pinnedProviderId && !pinned) {
+    return { ok: false, code: 'public-review-provider-pin-unavailable',
+      error: `The selected PR review provider cannot enforce the ${posture} stage or is disabled/missing. Review stopped; no provider fallback was used. Check the stage provider in CoS > Schedule.` };
+  }
+  if (pinned && !isProviderAvailable(pinned.id)) {
+    return { ok: false, code: 'public-review-provider-unavailable',
+      error: 'The selected PR review provider is unavailable. Review stopped without provider fallback; investigate its runtime and configuration before retrying.' };
+  }
+  if (pinned) return { ok: true, provider: pinned, pinHonored: true };
   if (eligible.length === 0) {
     return {
       ok: false,
@@ -79,9 +90,6 @@ export async function resolvePublicReviewProvider({ posture, pinnedProviderId = 
         : `No enabled AI provider on this install has a maintained '${posture}' public-review posture. Add or enable one of these CLI providers in Settings > Providers: ${publicReviewCapableVendorIds(posture).join(', ')}.`,
     };
   }
-  const pinned = pinnedProviderId ? eligible.find((provider) => provider.id === pinnedProviderId) : null;
-  if (pinned) return { ok: true, provider: pinned, pinHonored: true };
-
   const activeId = activeProviderId || activeProvider?.id || activeProvider || null;
   const active = activeId ? eligible.find((provider) => provider.id === activeId) : null;
   const chosen = active

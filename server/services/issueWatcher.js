@@ -573,7 +573,7 @@ async function readPullRequest(ctx, number) {
     // a fork's head branch actually lives, which is what lets the remediation
     // agent's worktree attach to it at all (#6064). `assignees` keeps that
     // assignment idempotent across scheduled sweeps.
-    '--json', 'number,title,body,url,state,isDraft,author,assignees,labels,files,additions,deletions,baseRefName,baseRefOid,headRefName,headRefOid,isCrossRepository,maintainerCanModify,headRepository,headRepositoryOwner,mergeable,mergeStateStatus,statusCheckRollup',
+    '--json', 'id,number,title,body,url,state,isDraft,author,assignees,labels,files,additions,deletions,baseRefName,baseRefOid,headRefName,headRefOid,isCrossRepository,maintainerCanModify,headRepository,headRepositoryOwner,mergeable,mergeStateStatus,statusCheckRollup',
   ], ctx);
 }
 
@@ -603,6 +603,27 @@ async function approveHeldWorkflowRuns(ctx, pr) {
   }
   if (approved > 0) console.log(`✅ issue-watcher: approved ${approved} held workflow run(s) for PR #${pr.number}`);
   return approved;
+}
+
+// Use the enable-only API, not `gh pr merge --auto`: the latter can merge
+// immediately when the repository has no required checks, even while our own
+// observed CI is pending. Pin the mutation to the exact reviewed commit.
+async function enableReviewedPullRequestAutoMerge(ctx, pr) {
+  if (!pr.id || !/^[a-f0-9]{40}$/i.test(pr.headRefOid)) return false;
+  const query = `mutation($input: EnablePullRequestAutoMergeInput!) {
+    enablePullRequestAutoMerge(input: $input) {
+      pullRequest { headRefOid autoMergeRequest { enabledAt } }
+    }
+  }`;
+  const raw = await runGh([
+    ...apiArgs(ctx, 'graphql', { method: 'POST' }), '--input', '-',
+  ], ctx, JSON.stringify({ query, variables: { input: {
+    pullRequestId: pr.id, expectedHeadOid: pr.headRefOid, mergeMethod: 'MERGE',
+  } } })).catch(() => null);
+  const response = raw === null ? null : safeJSONParse(raw, null, { logError: false });
+  const enabled = response?.data?.enablePullRequestAutoMerge?.pullRequest;
+  return !response?.errors?.length && enabled?.headRefOid === pr.headRefOid
+    && Boolean(enabled?.autoMergeRequest?.enabledAt);
 }
 
 function sameNumberList(left, right) {
@@ -1441,6 +1462,11 @@ export async function processTaskOutput({ appId, success, payload, task, require
       }) !== PR_HANDBACK.NONE) handedBack += 1;
       continue;
     }
+    if (!await eligibilityStillCurrent()) continue;
+    const autoMergeEnabled = await enableReviewedPullRequestAutoMerge(ctx, pr);
+    if (!autoMergeEnabled) {
+      await notifyPendingApproval(app, pr, 'The review approved this commit, but GitHub did not enable auto-merge. Check repository auto-merge settings and branch requirements. The approval remains in the pending merge queue.');
+    }
     approvals = mergeApproval(approvals, {
       number: pr.number,
       headSha: pr.headRefOid,
@@ -1449,6 +1475,7 @@ export async function processTaskOutput({ appId, success, payload, task, require
       eligibilityFacts: target.eligibilityFacts,
       url: pr.url,
       ciPolicy: decision.ciPolicy,
+      autoMergeEnabled,
       rebaseRequired: false,
       noChecksObserved: checkRollup.length === 0,
       reviewedAt: new Date().toISOString(),

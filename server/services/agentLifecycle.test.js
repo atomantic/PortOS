@@ -679,7 +679,7 @@ describe('runAgentSpawn source — one block-and-bail epilogue', () => {
     const blockWrites = RUN_SPAWN_BODY.match(/status: 'blocked'/g) || [];
     expect(blockWrites.length, 'only blockAndBail may persist a blocked status').toBe(1);
     expect(RUN_SPAWN_BODY).toMatch(
-      /const blockAndBail = async \(\{ reason, category, emit = 'agent:error', emitPayload = \{\}, persist = true \}\) => \{/
+      /const blockAndBail = async \(\{ reason, category, infrastructureCode, emit = 'agent:error', emitPayload = \{\}, persist = true \}\) => \{/
     );
   });
 
@@ -691,7 +691,7 @@ describe('runAgentSpawn source — one block-and-bail epilogue', () => {
   it('persists the block BEFORE releasing the lease', () => {
     const start = RUN_SPAWN_BODY.indexOf('const blockAndBail =');
     expect(start, 'blockAndBail must exist').toBeGreaterThan(-1);
-    const body = RUN_SPAWN_BODY.slice(start, start + 1200);
+    const body = RUN_SPAWN_BODY.slice(start, RUN_SPAWN_BODY.indexOf('\n  };', start));
     const persistIdx = body.indexOf("status: 'blocked'");
     const cleanupIdx = body.indexOf('await cleanupOnError(reason)');
     expect(persistIdx).toBeGreaterThan(-1);
@@ -705,7 +705,7 @@ describe('runAgentSpawn source — one block-and-bail epilogue', () => {
   // respawn is a standing decision and raises neither. Both are one word now.
   it('supports the three announcement modes the gates actually differ on', () => {
     const start = RUN_SPAWN_BODY.indexOf('const blockAndBail =');
-    const body = RUN_SPAWN_BODY.slice(start, start + 1200);
+    const body = RUN_SPAWN_BODY.slice(start, RUN_SPAWN_BODY.indexOf('\n  };', start));
     expect(body).toMatch(/if \(emit === 'agent:error'\) \{/);
     expect(body).toMatch(/\} else if \(emit === 'warn-log'\) \{/);
     expect(body).toMatch(/emitLog\('warn', `Public review withheld for task \$\{task\.id\}: \$\{category\}`/);

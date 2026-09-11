@@ -1,3 +1,6 @@
+const reportInfrastructureFailure = vi.hoisted(() => vi.fn(async () => null));
+vi.mock('./reviewInfrastructureFailure.js', () => ({ reportReviewInfrastructureFailure: reportInfrastructureFailure }));
+
 /**
  * Every spawn-eligibility gate in `runAgentSpawn`, driven through the real
  * `spawnAgentForTask` boundary.
@@ -453,7 +456,7 @@ describe('runAgentSpawn gates — public-review actions eligibility', () => {
 describe('runAgentSpawn gates — public-review provider posture', () => {
   // Unlike the two gates above, an unsupported provider IS an operator-visible
   // misconfiguration, so this one does raise an investigator.
-  it('blocks an unsupported provider AND emits agent:error', async () => {
+  it('blocks an unsupported provider and queues only a trusted infrastructure diagnosis', async () => {
     vi.mocked(resolveAgentProviderAndModel).mockResolvedValue({
       ok: true, provider: OPENCODE_TUI, selectedModel: 'qwen', modelSelection: {},
     });
@@ -472,7 +475,8 @@ describe('runAgentSpawn gates — public-review provider posture', () => {
     expect(update.status).toBe('blocked');
     expect(metadata.blockedCategory).toBe('public-review-provider-unsupported');
     expect(metadata.blockedReason).toContain("Provider 'opencode-tui'");
-    expect(agentErrors()).toEqual([{ taskId: task.id, error: metadata.blockedReason }]);
+    expect(agentErrors()).toEqual([]);
+    expect(reportInfrastructureFailure).toHaveBeenCalledWith({ code: metadata.blockedCategory, task });
     expect(markerReleasedFor(APP)).toBe(true);
   });
 });
@@ -497,7 +501,8 @@ describe('runAgentSpawn gates — public-review model policy', () => {
     expect(update.status).toBe('blocked');
     expect(metadata.blockedCategory).toBe('public-review-model-not-installed');
     expect(metadata.blockedReason).toContain('public-review-model-not-installed');
-    expect(agentErrors()).toEqual([{ taskId: task.id, error: metadata.blockedReason }]);
+    expect(agentErrors()).toEqual([]);
+    expect(reportInfrastructureFailure).toHaveBeenCalledWith({ code: metadata.blockedCategory, task });
     expect(markerReleasedFor(APP)).toBe(true);
   });
 

@@ -136,3 +136,19 @@ describe('per-app provider/model pin on a task type with no buildTaskInput hook'
     expect(task.metadata.model).toBe('sonnet');
   });
 });
+
+
+describe('pipeline stage provider precedence', () => {
+  it('preserves the stage local route over broader schedule and app pins', async () => {
+    getTaskIntervalMock.mockResolvedValue({ type: 'weekly', providerId: 'opencode-tui', model: 'broad', effort: 'high', taskMetadata: {
+      pipeline: { stages: [{ name: 'Local stage', promptKey: 'ux', providerId: 'claude-cli', model: 'local-model', effort: 'low' }] },
+    } });
+    getAppTaskTypeOverridesMock.mockResolvedValue({ ux: { providerId: 'opencode-tui', model: 'app-model' } });
+    const task = await generate();
+    expect(task.metadata).toMatchObject({ provider: 'claude-cli', providerId: 'claude-cli', model: 'local-model', effort: 'low' });
+    const overridden = await generateManagedAppImprovementTaskForType('ux', APP, STATE, {
+      skipPreconditions: true, providerOverride: { provider: 'opencode-tui', model: 'explicit-model', effort: 'high' },
+    });
+    expect(overridden.metadata).toMatchObject({ provider: 'opencode-tui', model: 'explicit-model', effort: 'high' });
+  });
+});

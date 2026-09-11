@@ -138,8 +138,8 @@ export default function PullRequestsTab({ appId, appName }) {
   const actionsRef = useRef(emptyActions());
   const requestRef = useRef(0);
 
-  // Page-level provider/model/effort pin for every Resolve & merge / PR review
-  // click on this tab — initially the active provider and configured model.
+  // Resolve & merge defaults to the active provider. PR review follows its
+  // saved stages unless the user explicitly enables the eligibility override.
   // Auto remains available for server-side routing. Mirrors the Issues
   // tab's "Run with" picker: a session convenience, never persisted.
   const {
@@ -147,6 +147,7 @@ export default function PullRequestsTab({ appId, appName }) {
     setSelectedProviderId, setSelectedModel
   } = useProviderModels({ filter: enabledProcessProviderFilter, allowDefault: true, preselectDefaults: true, silent: true, withEffort: true });
   const [effort, setEffort] = useState('');
+  const [overrideReviewProvider, setOverrideReviewProvider] = useState(false);
 
   // One writer for the whole `{ kind: { number: action } }` bag so the ref the
   // socket handler reads and the state React renders can never disagree.
@@ -318,7 +319,7 @@ export default function PullRequestsTab({ appId, appName }) {
   });
 
   const handleReview = pullRequest => queueAction('review', pullRequest, {
-    call: () => api.reviewAppPullRequest(appId, pullRequest.number, providerSettings),
+    call: () => api.reviewAppPullRequest(appId, pullRequest.number, overrideReviewProvider ? providerSettings : {}),
     queued: `Queued the pr-reviewer task for ${forgeLabel} #${pullRequest.number}`,
     already: `pr-reviewer is already queued for ${forgeLabel} #${pullRequest.number}`,
   });
@@ -374,7 +375,7 @@ export default function PullRequestsTab({ appId, appName }) {
         </p>
         {(data?.pullRequests || []).some(pullRequest => pullRequest.reviewEligible) && (
           <p>
-            PR review points the <span className="font-mono">pr-reviewer</span> scheduled task at this one request instead of letting it sweep every open contributor PR. It appears only on requests it can review — opened by someone else against the default branch — and its security scan still holds the review behind approval.
+            PR review points the <span className="font-mono">pr-reviewer</span> scheduled task at this one request instead of letting it sweep every open contributor PR. It appears only on requests it can review — opened by someone else against the default branch — and uses the providers saved on its review stages. The security scan must pass before either review stage runs.
           </p>
         )}
       </div>
@@ -399,6 +400,13 @@ export default function PullRequestsTab({ appId, appName }) {
             highlightToolUse
           />
         </div>
+      </div>
+
+      <div className="text-xs text-gray-400">
+        <input id="override-pr-review-provider" type="checkbox" checked={overrideReviewProvider}
+          onChange={event => setOverrideReviewProvider(event.target.checked)} className="mr-2" />
+        <label htmlFor="override-pr-review-provider">Use Run with for PR review eligibility</label>
+        <p className="mt-1">Off by default to preserve your scheduled providers. The final code review keeps its own stage settings.</p>
       </div>
 
       {error && (
