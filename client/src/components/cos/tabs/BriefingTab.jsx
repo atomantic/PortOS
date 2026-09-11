@@ -170,7 +170,7 @@ export default function BriefingTab() {
     generationInFlightRef.current = true;
     try {
       const result = await api.triggerCosJob('job-daily-briefing', { silent: true });
-      if (!result || result.success === false) {
+      if (!result || result.success === false || result.status === 'skipped') {
         throw new Error(result?.reason || 'The briefing could not be generated');
       }
       setGenerationPending(true);
@@ -293,11 +293,18 @@ export default function BriefingTab() {
           <EmptyState
             icon={Newspaper}
             title="No briefing yet"
-            message="Generate today’s briefing now, or open the Daily Briefing job to change its schedule."
+            message={generationPending
+              ? 'Your briefing is still being generated. You can open the Daily Briefing job to check its status.'
+              : 'Generate today’s briefing now, or open the Daily Briefing job to change its schedule.'}
             actionLabel={generationPending || generatingBriefing ? 'Generating today’s briefing…' : 'Generate today’s briefing'}
             actionDisabled={generationPending || generatingBriefing}
             onAction={handleGenerateBriefing}
           />
+          {generationPending && (
+            <p role="status" aria-live="polite" className="-mt-10 mb-8 text-sm text-gray-400">
+              Briefing generation is still in progress.
+            </p>
+          )}
           <Link to="/cos/jobs" className="-mt-10 mb-8 text-sm text-port-accent hover:underline">
             Open Daily Briefing job
           </Link>
