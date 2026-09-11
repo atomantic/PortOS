@@ -811,7 +811,7 @@ const announceListening = ({ io, httpServer, localHttpServer, httpsEnabled, port
     io.attach(localHttpServer);
     localHttpServer.listen(localHttpPort, '127.0.0.1');
     localHttpServer.on('error', (err) => {
-      console.warn(`⚠️  Loopback HTTP mirror on :${localHttpPort} failed: ${err.message} — http://localhost:${localHttpPort} won't work; use https://...:${port}`);
+      console.warn(`⚠️  Loopback HTTP mirror on :${localHttpPort} failed: ${err.message} — http://localhost:${localHttpPort} won't work; use https://...:${port}`, err.stack || '');
     });
   }
 };
@@ -903,18 +903,22 @@ export const runBootSequence = ({ io, httpServer, localHttpServer, httpsEnabled,
 // settles (e.g. a WebSocket-upgraded socket the server no longer tracks, or a
 // leaked DB client) can't hang shutdown; process.exit() reclaims the resources at
 // the OS level. Both callbacks passed to run resolve the same settle-once
-// promise: finish logs success, finishWithError logs an error and continues.
+// promise: finish logs success, finishWithError logs an error (and its stack)
+// and continues.
 // The backstop is .unref()'d so it never keeps the event loop alive on its own.
 const withGrace = (label, ms, run) => new Promise((resolve) => {
   let settled = false;
-  const complete = (msg, log) => {
+  const complete = (msg, log, error) => {
     if (settled) return;
     settled = true;
-    if (msg) log(msg);
+    if (msg) {
+      if (error) logBootstrapFailure(msg, error, log);
+      else log(msg);
+    }
     resolve();
   };
   const finish = (msg) => complete(msg, console.log);
-  const finishWithError = (msg) => complete(msg, console.error);
+  const finishWithError = (msg, error) => complete(msg, console.error, error);
   run({ finish, finishWithError });
   setTimeout(() => finishWithError(`⚠️ ${label} close exceeded ${ms}ms — proceeding`), ms).unref?.();
 });
@@ -929,7 +933,7 @@ const withGrace = (label, ms, run) => new Promise((resolve) => {
 const closeServer = (server, label, graceMs = 250) => withGrace(label, graceMs, ({ finish, finishWithError }) => {
   if (!server) return finish();
   server.close((err) => {
-    if (err && err.code !== 'ERR_SERVER_NOT_RUNNING') finishWithError(`⚠️ Error closing ${label}: ${err.message}`);
+    if (err && err.code !== 'ERR_SERVER_NOT_RUNNING') finishWithError(`⚠️ Error closing ${label}`, err);
     else finish(`✅ ${label} closed`);
   });
   // Order matters: close() above stops accepting NEW connections; NOW force-drop
@@ -1013,7 +1017,7 @@ export const registerShutdownHandlers = ({ io, httpServer, localHttpServer }) =>
     // marker we fail to write only degrades recovery to the pre-existing orphan path.
     const markerWritten = withGrace('Host-shutdown marker', 1500, ({ finish, finishWithError }) =>
       writeHostShutdownMarker({ agentIds: [...activeAgents.keys()], signal })
-        .then(() => finish(), (err) => finishWithError(`⚠️ Host-shutdown marker failed: ${err.message}`)));
+        .then(() => finish(), (err) => finishWithError('⚠️ Host-shutdown marker failed', err)));
 
     // Terminate the Codex app-server child before the socket teardown below.
     // pm2's TreeKill would reap it anyway, but a direct SIGTERM keeps a manual
@@ -1022,13 +1026,13 @@ export const registerShutdownHandlers = ({ io, httpServer, localHttpServer }) =>
     await withGrace('Codex app-server', 2000, ({ finish, finishWithError }) =>
       stopCodexAppServer().then(
         () => finish(),
-        (err) => finishWithError(`⚠️ Codex app-server stop failed: ${err.message}`),
+        (err) => finishWithError('⚠️ Codex app-server stop failed', err),
       ));
 
     // Drop existing long-lived sockets (SSE + keep-alive) up front so the closes
     // below don't wait on connections that never end on their own.
-    try { httpServer.closeAllConnections?.(); } catch (e) { console.error(`⚠️ closeAllConnections(http): ${e.message}`); }
-    try { localHttpServer?.closeAllConnections?.(); } catch (e) { console.error(`⚠️ closeAllConnections(mirror): ${e.message}`); }
+    try { httpServer.closeAllConnections?.(); } catch (e) { logBootstrapFailure('⚠️ closeAllConnections(http)', e); }
+    try { localHttpServer?.closeAllConnections?.(); } catch (e) { logBootstrapFailure('⚠️ closeAllConnections(mirror)', e); }
 
     // socket.io's io.close() closes engine.io AND its current this.httpServer — and
     // every io.attach() reassigns this.httpServer (socket.io index.js:303), so with
@@ -1039,7 +1043,7 @@ export const registerShutdownHandlers = ({ io, httpServer, localHttpServer }) =>
     // hangs forever — the real cause of the reconcile "stopping apps" hang.
     await withGrace('Socket.IO', 3000, ({ finish, finishWithError }) =>
       io.close((err) => {
-        if (err) finishWithError(`⚠️ Error closing Socket.IO: ${err.message}`);
+        if (err) finishWithError('⚠️ Error closing Socket.IO', err);
         else finish('✅ Socket.IO closed');
       }));
     await import('./tailcatIngress.js').then(({ stopTailcatIngress }) => stopTailcatIngress())
@@ -1059,7 +1063,7 @@ export const registerShutdownHandlers = ({ io, httpServer, localHttpServer }) =>
       // be released, so one hung/leaked connection (e.g. a LISTEN channel) would
       // otherwise stall shutdown until the force-exit timer.
       await withGrace('DB pool', 3000, ({ finish, finishWithError }) =>
-        close().then(() => finish('✅ DB pool closed'), (err) => finishWithError(`⚠️ DB pool close failed: ${err.message}`)));
+        close().then(() => finish('✅ DB pool closed'), (err) => finishWithError('⚠️ DB pool close failed', err)));
     } else {
       console.warn('ℹ️ DB pool close not available; skipping DB shutdown');
     }
