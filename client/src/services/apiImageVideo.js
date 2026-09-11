@@ -27,6 +27,12 @@ export const repairImageModel = (modelId, { deep = false } = {}) => request(`/im
   silent: true,
 });
 export const listImageGallery = (options = {}) => request('/image-gen/gallery', options);
+// Opt-in page envelope; keep listImageGallery's legacy array/options signature.
+export const listImageGalleryPage = ({ limit = 60, offset = 0, q = '', hidden } = {}, options = {}) => {
+  const params = new URLSearchParams({ limit, offset, q });
+  if (hidden !== undefined) params.set('hidden', hidden);
+  return request(`/image-gen/gallery?${params}`, options);
+};
 export const getActiveImageJob = () => request('/image-gen/active');
 // cancelImageGen({ all: true }) cancels every queued/running image job.
 // cancelImageGen({ jobId }) cancels a specific job. Plain cancelImageGen()

@@ -214,6 +214,29 @@ describe('Image Gen Routes', () => {
     vi.clearAllMocks();
   });
 
+  describe('GET /api/image-gen/gallery', () => {
+    it('preserves legacy arrays and pages/searches the test disk fallback', async () => {
+      const items = [
+        { filename: 'a.png', prompt: 'red fox', path: '/data/images/a.png', seed: 42 },
+        { filename: 'b.png', prompt: 'red fox', path: '/data/images/b.png' },
+        { filename: 'c.png', prompt: 'blue fox', hidden: true },
+      ];
+      imageGen.local.listGallery.mockResolvedValue(items);
+      expect((await request(app).get('/api/image-gen/gallery')).body).toEqual(items);
+      const page = await request(app).get('/api/image-gen/gallery?limit=1&offset=1&q=red&hidden=false');
+      expect(page.status).toBe(200);
+      expect(page.body).toEqual({ items: [items[1]], total: 2, limit: 1, offset: 1 });
+      const empty = await request(app).get('/api/image-gen/gallery?q=missing');
+      expect(empty.body).toEqual({ items: [], total: 0, limit: 60, offset: 0 });
+    });
+
+    it.each(['limit=0', 'limit=201', 'offset=-1', 'limit=1.5', 'q=a&q=b'])('rejects invalid paging: %s', async query => {
+      const response = await request(app).get('/api/image-gen/gallery?' + query);
+      expect(response.status).toBe(400);
+      expect(imageGen.local.listGallery).not.toHaveBeenCalled();
+    });
+  });
+
   describe('GET /api/image-gen/status', () => {
     it('should return connection status', async () => {
       imageGen.checkConnection.mockResolvedValue({ connected: true, model: 'flux-v1' });

@@ -13,9 +13,8 @@
  *                                cheap to re-run; called at boot. Still the
  *                                backstop for OUT-OF-BAND removals (a file
  *                                deleted off-disk never runs a delete hook).
- *   - listAssets(...)          — query helper (no consumer reads it for
- *                                correctness yet; here for the follow-up slices
- *                                that make collections/catalog resolve through it)
+ *   - listAssets(...)          — bounded gallery reads; legacy callers may
+ *                                still request an unbounded array
  *
  * The image + video disk readers are dynamically imported inside reconcile so
  * importing this module (e.g. for upsertAsset from a generation hook) never
@@ -27,7 +26,6 @@ import { readFile } from 'fs/promises';
 import { join } from 'path';
 import { query } from '../../lib/db.js';
 import { dedupeByKey } from '../../lib/arrayUtils.js';
-import { PATHS } from '../../lib/fileUtils.js';
 import { imageToRow, videoToRow } from './logic.js';
 
 function rowToAsset(row) {
@@ -93,26 +91,40 @@ export async function removeAsset(mediaKey) {
   await query(`DELETE FROM media_assets WHERE media_key = $1`, [mediaKey]);
 }
 
-/** List index rows, newest first. Optional `kind` filter ('image' | 'video'). */
-export async function listAssets({ kind } = {}) {
-  const result = kind
-    ? await query(`SELECT data FROM media_assets WHERE kind = $1 ORDER BY created_at DESC`, [kind])
-    : await query(`SELECT data FROM media_assets ORDER BY created_at DESC`);
+// Parameters stay bound, including literal substring search (percent and underscore
+// in a prompt are not SQL wildcards). Count and page share exactly one predicate.
+function assetFilter({ kind, q = '', hidden } = {}) {
+  const params = [];
+  const clauses = [];
+  if (kind) { params.push(kind); clauses.push(`kind = $${params.length}`); }
+  if (hidden !== undefined) {
+    clauses.push(hidden ? `data->>'hidden' = 'true'` : `COALESCE(data->>'hidden', 'false') <> 'true'`);
+  }
+  for (const token of q.trim().toLowerCase().split(/\s+/).filter(Boolean)) {
+    params.push(token);
+    clauses.push(`strpos(lower(data::text), $${params.length}) > 0`);
+  }
+  return { params, where: clauses.length ? ` WHERE ${clauses.join(' AND ')}` : '' };
+}
+
+/** List index rows. Omitting limit retains the legacy array contract. */
+export async function listAssets({ limit, offset = 0, ...filters } = {}) {
+  const { params, where } = assetFilter(filters);
+  let paging = '';
+  if (limit !== undefined) {
+    params.push(limit, offset);
+    paging = ` LIMIT $${params.length - 1} OFFSET $${params.length}`;
+  }
+  const result = await query(
+    `SELECT data FROM media_assets${where} ORDER BY created_at DESC, media_key ASC${paging}`, params,
+  );
   return result.rows.map(rowToAsset);
 }
 
-/**
- * Count index rows. Optional `kind` filter ('image' | 'video').
- *
- * Use this over `listAssets().length` when only the tally is wanted: listAssets selects and
- * JSON-parses the full payload of every rendered image and video, which is a lot of work to
- * throw away for one number (the character skill registry reads this on every
- * `GET /api/character`).
- */
-export async function countAssets({ kind } = {}) {
-  const result = kind
-    ? await query(`SELECT COUNT(*) AS count FROM media_assets WHERE kind = $1`, [kind])
-    : await query(`SELECT COUNT(*) AS count FROM media_assets`);
+/** Count matching rows without materializing their JSONB payloads. */
+export async function countAssets(filters = {}) {
+  const { params, where } = assetFilter(filters);
+  const result = await query(`SELECT COUNT(*) AS count FROM media_assets${where}`, params);
   return parseInt(result.rows[0].count, 10);
 }
 
@@ -123,7 +135,10 @@ export async function countAssets({ kind } = {}) {
 // wipe every video row whose file is still on disk. This reader distinguishes
 // the two: file absent → genuinely empty (ok); present-but-unparseable → failure
 // (not ok), so the caller skips pruning videos. Returns { ok, list }.
-export async function readVideoHistoryStrict(historyPath = join(PATHS.data, 'video-history.json')) {
+export async function readVideoHistoryStrict(historyPath) {
+  // Only reconcile needs filesystem paths; indexed list reads do not. Keep the
+  // facade specifier so existing test path overrides still intercept it.
+  historyPath ??= join((await import('../../lib/fileUtils.js')).PATHS.data, 'video-history.json');
   // Read with explicit error-code handling — NOT tryReadFile/readJSONFile, which
   // both collapse "missing" and "unreadable" to the same value. Only a genuine
   // ENOENT (file never written) counts as trusted-empty; an EACCES/EIO/transient
