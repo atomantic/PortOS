@@ -18,9 +18,8 @@
  * holds, and a second run is just a second record.
  *
  * What it shares with a burn is the INVOCATION: every step is dispatched through
- * `quotaBurnInvoke.invokeQuotaBurnStep`, so the schedule's own gate ladder (task
- * enabled, per-app switch, master Improve, target scope, duplicate requests)
- * still applies, each handler is pinned to the family the user named, and the
+ * `quotaBurnInvoke.invokeQuotaBurnStep`. Manual runs bypass schedule switches;
+ * master Improve, target scope and duplicate-request guards still apply, each handler is pinned to the family the user named, and the
  * task carries the family provenance that makes it cooldown-exempt and lets an
  * observed refusal be credited to the right window. The `maintenanceRunId`
  * provenance field is what tells the quota-burn loop to leave these agents
@@ -275,7 +274,7 @@ async function evaluate(id, { ignoreTaskId }) {
   const queued = (await getOnDemandRequests()).find((request) => request?.burn?.maintenanceRunId === id);
   if (queued) return hold(`waiting for the CoS daemon to accept request ${queued.id} (${queued.taskType})`);
 
-  const catalog = await getQuotaBurnTaskCatalog();
+  const catalog = await getQuotaBurnTaskCatalog({ manual: true });
   const completed = { ...run.completed };
   for (const step of run.steps) {
     if (completed[step.id]) continue;

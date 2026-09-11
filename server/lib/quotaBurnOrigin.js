@@ -37,6 +37,12 @@ import { trimTo } from './textUtils.js';
  */
 export const QUOTA_BURN_REQUEST_ORIGIN = 'quota-burn';
 
+/** Explicit runs bypass cadence switches; automated burns and refills do not. */
+export function isManualOnDemandRequest(request) {
+  return (request.origin ?? 'user') === 'user'
+    || (request.origin === QUOTA_BURN_REQUEST_ORIGIN && Boolean(normalizeQuotaBurnProvenance(request.burn)?.maintenanceRunId));
+}
+
 const MAX_FIELD = 64;
 
 /**
