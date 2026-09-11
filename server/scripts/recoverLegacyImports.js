@@ -2,8 +2,8 @@
  * Reuses the importers' INSERT mappings; never changes markers or source files.
  */
 import { readdir } from 'fs/promises';
-import { join, relative, resolve } from 'path';
-import { pathToFileURL } from 'url';
+import { join, relative } from 'path';
+import { isDirectlyInvoked } from '../../scripts/lib/directInvocation.js';
 import { PATHS } from '../lib/fileUtils.js';
 import { query, close } from '../lib/db.js';
 import { legacyDirectory, readLegacyJSON } from './legacyImport.js';
@@ -122,7 +122,7 @@ export async function recoverLegacyImports({ apply = false, selections = [] } = 
   return { mode: apply ? 'apply' : 'dry-run', results };
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
+if (isDirectlyInvoked(import.meta.url)) {
   Promise.resolve().then(() => recoverLegacyImports(parseRecoveryArgs(process.argv.slice(2))))
     .then(result => console.log(JSON.stringify(result, null, 2)))
     .catch(error => { console.error(`❌ Legacy recovery failed: ${error.message}`); process.exitCode = 1; })
