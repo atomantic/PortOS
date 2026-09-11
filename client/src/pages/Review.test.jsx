@@ -42,8 +42,23 @@ const SHORT_ITEM = {
   metadata: {}
 };
 
+const COMPLETED_ITEM = {
+  ...ITEM,
+  id: 'item-3',
+  status: 'completed',
+  title: 'Completed review item',
+  description: 'Already completed.'
+};
+
+const CREATED_PENDING_ITEM = {
+  ...ITEM,
+  id: 'item-4',
+  title: 'New pending review item',
+  description: 'Created after the completed view loaded.'
+};
+
 vi.mock('../services/api', () => ({
-  getReviewItems: vi.fn(() => Promise.resolve([ITEM, SHORT_ITEM])),
+  getReviewItems: vi.fn(() => Promise.resolve([ITEM, SHORT_ITEM, COMPLETED_ITEM])),
   getReviewBriefing: vi.fn(() => Promise.resolve(null)),
   getReviewQueue: vi.fn(() => Promise.resolve({ items: [], sources: {} })),
   createReviewTodo: vi.fn(() => Promise.resolve({})),
@@ -195,6 +210,8 @@ describe('Review Hub bulk status updates (#6853)', () => {
     await waitFor(() => {
       expect(actionQueueBody()).toBeFalsy();
       expect(document.getElementById(`review-item-body-action-queue-${SHORT_ITEM.id}`)).toBeFalsy();
+      expect(screen.queryByText(ITEM.title)).not.toBeInTheDocument();
+      expect(screen.queryByText(SHORT_ITEM.title)).not.toBeInTheDocument();
     });
   });
 
@@ -206,5 +223,48 @@ describe('Review Hub bulk status updates (#6853)', () => {
 
     unmount();
     expect(socket.off.mock.calls.some(([name]) => name === 'review:items:bulk-updated')).toBe(true);
+  });
+});
+
+describe('Review Hub status-filtered socket items (#6925)', () => {
+  it('removes individually updated items from the active status list', async () => {
+    render(<Review />);
+    await waitFor(() => expect(screen.getAllByText(ITEM.title).length).toBeGreaterThan(0));
+
+    const handler = [...socket.on.mock.calls]
+      .reverse()
+      .find(([name]) => name === 'review:item:updated')?.[1];
+    expect(handler).toBeTypeOf('function');
+
+    act(() => {
+      handler({ ...ITEM, status: 'completed' });
+    });
+
+    await waitFor(() => {
+      expect(screen.queryByText(ITEM.title)).not.toBeInTheDocument();
+      expect(screen.queryByText(COMPLETED_ITEM.title)).not.toBeInTheDocument();
+    });
+  });
+
+  it('keeps socket-created pending items out of the completed view', async () => {
+    render(<Review />);
+    const filterSelect = await screen.findByLabelText('Filter review items by status');
+    fireEvent.change(filterSelect, { target: { value: 'completed' } });
+
+    await waitFor(() => expect(screen.getByText(COMPLETED_ITEM.title)).toBeInTheDocument());
+
+    const handler = [...socket.on.mock.calls]
+      .reverse()
+      .find(([name]) => name === 'review:item:created')?.[1];
+    expect(handler).toBeTypeOf('function');
+
+    act(() => {
+      handler(CREATED_PENDING_ITEM);
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText(COMPLETED_ITEM.title)).toBeInTheDocument();
+      expect(document.getElementById(`review-item-title-section-alert-${CREATED_PENDING_ITEM.id}`)).not.toBeInTheDocument();
+    });
   });
 });

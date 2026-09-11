@@ -251,11 +251,18 @@ export default function Review() {
   // without memoization every one of these filter/sort passes over `items` reruns
   // on unrelated re-renders (typing, hover state). Hooks must run before the
   // loading early-return, so they live here above it.
-  const grouped = useMemo(() => items.reduce((acc, item) => {
+  // Keep the detailed list aligned with the active status tab while socket
+  // events update the cached items from every status.
+  const visibleItems = useMemo(() => {
+    if (filter === 'all') return items;
+    return items.filter(item => item.status === filter);
+  }, [items, filter]);
+
+  const grouped = useMemo(() => visibleItems.reduce((acc, item) => {
     if (!acc[item.type]) acc[item.type] = [];
     acc[item.type].push(item);
     return acc;
-  }, {}), [items]);
+  }, {}), [visibleItems]);
 
   const queueItems = useMemo(
     () => (queue?.items || []).filter(i => !dismissedQueueIds.has(i.id)),
@@ -511,10 +518,10 @@ export default function Review() {
         })}
         </div>
 
-        {items.length === 0 && (
+        {visibleItems.length === 0 && (
           <div className="text-center py-12 text-gray-500">
             <ClipboardList size={48} className="mx-auto mb-3 opacity-30" />
-            <p className="text-lg">No review items yet</p>
+            <p className="text-lg">No review items in this view</p>
             <p className="text-sm mt-1">This hub will fill up as agents surface alerts, actions, and briefing context.</p>
           </div>
         )}
