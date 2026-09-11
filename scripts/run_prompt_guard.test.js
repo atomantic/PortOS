@@ -8,23 +8,31 @@ const python = resolveTestPython();
 const script = fileURLToPath(new URL('./run_prompt_guard.py', import.meta.url));
 
 describe.skipIf(!python)('Prompt Guard Python wire contract', () => {
-  it('covers every overflow window using batched tensors and emits a complete Node-verifiable result', () => {
+  it('classifies every token in overlapping batched windows without the broken overflow API', () => {
     // Synthetic tokenizer/model doubles exercise the shipped Python runner
     // without downloading weights or invoking a provider in the test suite.
     const program = `
 import contextlib, io, json, runpy, sys, tempfile
 from types import SimpleNamespace
 helper = runpy.run_path(sys.argv[1])
-def tokenizer(text, **kwargs):
-    assert kwargs["return_overflowing_tokens"] is True
-    assert kwargs["max_length"] == 512 and kwargs["stride"] == 64
-    return {"input_ids": [[1] * 512, [1] * 256], "attention_mask": [[1] * 512, [1] * 256], "overflow_to_sample_mapping": [0, 0]}
-tokenizer.encode = lambda *_args, **_kwargs: [1] * 700
+def tokenizer(*_args, **_kwargs):
+    raise AssertionError("must not re-tokenize through the truncating overflow API")
+def encode(_text, **kwargs):
+    assert kwargs == {"add_special_tokens": False, "truncation": False}
+    return list(range(10, 710))
+tokenizer.encode = encode
 tokenizer.num_special_tokens_to_add = lambda **_kwargs: 2
+tokenizer.cls_token_id = 1
+tokenizer.sep_token_id = 2
+calls = []
 def model(**inputs):
     assert len(inputs["input_ids"]) == 1
     assert len(inputs["input_ids"][0]) in (512, 256)
-    assert "overflow_to_sample_mapping" not in inputs
+    start = 0 if not calls else 446
+    end = 510 if not calls else 700
+    assert inputs["input_ids"][0] == [1, *range(10 + start, 10 + end), 2]
+    assert inputs["attention_mask"][0] == [1] * (end - start + 2)
+    calls.append(start)
     return SimpleNamespace(logits=[[]])
 model.config = SimpleNamespace(id2label={0: "BENIGN"})
 model.to = lambda *_args: None

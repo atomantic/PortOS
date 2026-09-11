@@ -4,7 +4,7 @@ import { MODEL_ABUSE_GUARD_PYTHON_PACKAGES } from '../lib/modelAbuseGuard.js';
 
 const mock = vi.hoisted(() => ({
   spawn: vi.fn(), execFile: vi.fn(), createVenv: vi.fn(), installPackages: vi.fn(),
-  downloadHfRepo: vi.fn(), verdict: null,
+  downloadHfRepo: vi.fn(), verdict: null, cached: true, token: 'example-read-token',
 }));
 vi.mock('../lib/childProcess.js', () => ({ spawn: mock.spawn, execFile: mock.execFile }));
 vi.mock('node:fs', async (original) => ({ ...await original(), existsSync: () => true }));
@@ -13,9 +13,9 @@ vi.mock('../lib/pythonSetup.js', () => ({
   detectVenvBasePythonSync: () => '/example/python3', createVenv: mock.createVenv, installPackages: mock.installPackages,
 }));
 vi.mock('../lib/hfCache.js', () => ({
-  findCachedRepoFiles: async () => ['/example/model/config.json'], getHfCacheRoot: () => '/example/cache',
+  findCachedRepoFiles: async () => mock.cached ? ['/example/model/config.json'] : null, getHfCacheRoot: () => '/example/cache',
 }));
-vi.mock('./hfToken.js', () => ({ getHfToken: async () => 'example-read-token' }));
+vi.mock('./hfToken.js', () => ({ getHfToken: async () => mock.token }));
 vi.mock('./hfDownload.js', () => ({ downloadHfRepo: mock.downloadHfRepo }));
 vi.mock('./localLlm.js', () => ({ listModels: vi.fn() }));
 vi.mock('./ollamaManager.js', () => ({ getModelCapabilities: vi.fn() }));
@@ -23,7 +23,9 @@ vi.mock('./ollamaManager.js', () => ({ getModelCapabilities: vi.fn() }));
 beforeEach(() => {
   vi.resetModules();
   vi.clearAllMocks();
-  mock.verdict = { schemaVersion: 1, complete: true, tokenCount: 4, chunks: [{ index: 0, label: 'BENIGN', score: 0.99, tokenStart: 0, tokenEnd: 4 }] };
+  mock.cached = true;
+  mock.token = 'example-read-token';
+  mock.verdict = { schemaVersion: 1, complete: true, tokenCount: 700, chunks: [{ index: 0, label: 'BENIGN', score: 0.99, tokenStart: 0, tokenEnd: 510 }, { index: 1, label: 'BENIGN', score: 0.99, tokenStart: 446, tokenEnd: 700 }] };
   mock.execFile.mockImplementation((...args) => args.at(-1)(null, { stdout: args[1][1].startsWith('import sys;') ? 'supported' : '{"ready":true}', stderr: '' }));
   mock.createVenv.mockResolvedValue('/example/venv/bin/python3');
   mock.installPackages.mockReturnValue({ promise: Promise.resolve({ ok: true }), kill: vi.fn() });
@@ -51,6 +53,11 @@ describe('Prompt Guard runtime lifecycle', () => {
   });
 
   it('installs the dedicated versioned packages and verifies the full runner only on request', async () => {
+    mock.cached = false;
+    mock.downloadHfRepo.mockImplementation(() => {
+      mock.cached = true;
+      return { promise: Promise.resolve({ ok: true }), kill: vi.fn() };
+    });
     const { installModelAbuseGuard } = await import('./modelAbuseGuard.js');
     await expect(installModelAbuseGuard()).resolves.toMatchObject({ ok: true, ready: true });
     expect(mock.installPackages).toHaveBeenCalledWith('/example/venv/bin/python3', [...MODEL_ABUSE_GUARD_PYTHON_PACKAGES], expect.any(Function), { preferUv: true });
@@ -58,8 +65,44 @@ describe('Prompt Guard runtime lifecycle', () => {
     expect(mock.spawn).toHaveBeenCalledOnce();
   });
 
+  it('repairs cached installations without Hugging Face credentials or model downloads', async () => {
+    mock.token = null;
+    const { installModelAbuseGuard } = await import('./modelAbuseGuard.js');
+    await expect(installModelAbuseGuard()).resolves.toMatchObject({ ok: true, ready: true });
+    expect(mock.downloadHfRepo).not.toHaveBeenCalled();
+    expect(mock.installPackages).toHaveBeenCalledOnce();
+  });
+
+  it('refuses a fresh install without model access before changing the runtime', async () => {
+    mock.cached = false;
+    mock.token = null;
+    const { installModelAbuseGuard } = await import('./modelAbuseGuard.js');
+    await expect(installModelAbuseGuard()).resolves.toMatchObject({ ok: false, code: 'security-guard-huggingface-token-required' });
+    expect(mock.createVenv).not.toHaveBeenCalled();
+  });
+
+  it('exposes a scan process failure as unhealthy and recovers after a verified repair', async () => {
+    const healthySpawn = mock.spawn.getMockImplementation();
+    mock.spawn.mockImplementationOnce(() => {
+      const child = healthySpawn();
+      child.stdin.end = () => queueMicrotask(() => child.emit('close', 1));
+      return child;
+    });
+    const { runModelAbuseScan, getModelAbuseGuardStatus, installModelAbuseGuard } = await import('./modelAbuseGuard.js');
+    await expect(runModelAbuseScan({ content: 'Update the dialog.' })).resolves.toMatchObject({ ok: false, code: 'security-guard-process-failed' });
+    await expect(getModelAbuseGuardStatus()).resolves.toMatchObject({ ready: false, selfTestFailed: true });
+    await expect(installModelAbuseGuard()).resolves.toMatchObject({ ok: true, ready: true });
+    await expect(runModelAbuseScan({ content: 'Update the dialog.' })).resolves.toMatchObject({ ok: true, safe: true });
+  });
+
+  it('rejects a canary that only verifies one window', async () => {
+    mock.verdict = { schemaVersion: 1, complete: true, tokenCount: 4, chunks: [{ index: 0, label: 'BENIGN', score: 0.99, tokenStart: 0, tokenEnd: 4 }] };
+    const { installModelAbuseGuard } = await import('./modelAbuseGuard.js');
+    await expect(installModelAbuseGuard()).resolves.toMatchObject({ ok: false, code: 'security-guard-self-test-failed' });
+  });
+
   it('rejects a successful subprocess that omitted part of the classified input', async () => {
-    mock.verdict.tokenCount = 700;
+    mock.verdict.chunks.pop();
     mock.verdict.chunks[0].tokenEnd = 510;
     const { runModelAbuseScan, buildModelAbuseGuardEnv } = await import('./modelAbuseGuard.js');
     await expect(runModelAbuseScan({ content: 'Fix the empty import dialog.' })).resolves.toMatchObject({ ok: false, passed: false, code: 'security-guard-verdict-invalid' });
