@@ -240,8 +240,10 @@ router.post('/security-guard/install', asyncHandler(async (req, res) => {
             : code === 'security-guard-runtime-install-failed'
               ? 'Classifier package installation failed. Check internet access and Python compatibility, then retry from Models > LLMs > Abuse Guard.'
         : code
-    emit('error', message, { scope: 'security-guard' })
-    throw new ServerError(message, { status: 502, code })
+    const detail = result?.diagnostic
+    const actionableMessage = detail ? `${message} ${detail.message} ${detail.action}` : message
+    emit('error', actionableMessage, { scope: 'security-guard', stage: detail?.stage })
+    throw new ServerError(actionableMessage, { status: 502, code })
   }
   res.json(result)
 }))
