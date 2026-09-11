@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createDefaultPersistentMindState, normalizePersistentMindState, PERSISTENT_MIND_LIMITS } from '../lib/persistentMind.js';
 import { PROVIDER_USAGE_LIMIT_PAUSE_REASON } from '../lib/persistentMindUsageLimit.js';
 import {
@@ -12,6 +12,7 @@ const mock = vi.hoisted(() => ({
   scheduled: new Map(),
   emitted: [],
   budget: { withinBudget: true, exceeded: null },
+  budgetError: null,
   recordUsage: vi.fn(async () => {}),
   acquireSlot: vi.fn(async () => ({ ok: true, release: vi.fn() })),
   appendMindEvent: vi.fn(async (event) => ({ appended: true, event })),
@@ -53,7 +54,10 @@ vi.mock('./eventScheduler.js', () => ({
 }));
 
 vi.mock('./domainUsage.js', () => ({
-  getDomainBudgetStatus: vi.fn(async () => mock.budget),
+  getDomainBudgetStatus: vi.fn(async () => {
+    if (mock.budgetError) throw mock.budgetError;
+    return mock.budget;
+  }),
   recordDomainUsage: (...args) => mock.recordUsage(...args),
 }));
 
@@ -120,6 +124,7 @@ describe('persistent mind supervisor', () => {
     mock.scheduled.clear();
     mock.emitted.length = 0;
     mock.budget = { withinBudget: true, exceeded: null };
+    mock.budgetError = null;
     mock.daemonRunning = true;
     mock.updateInProgress = false;
     mock.useActualThinkingSession = false;
@@ -165,15 +170,46 @@ describe('persistent mind supervisor', () => {
     expect(run).not.toHaveBeenCalled();
   });
 
-  it('parks an explicitly started mind instead of spinning when no provider adapter is registered', async () => {
-    await supervisor.setPersistentMindEnabled(true);
+  afterEach(() => vi.useRealTimers());
+
+  it.each([
+    ['no adapter', 'degraded', PERSISTENT_MIND_LIMITS.BACKOFF_MAX_MS, 2, 'Persistent mind provider is not configured'],
+    ['global capacity', 'waiting', PERSISTENT_MIND_LIMITS.BACKOFF_BASE_MS, 2, 'CoS agent capacity exhausted (1/1)'],
+    ['budget error', 'degraded', PERSISTENT_MIND_LIMITS.BACKOFF_BASE_MS * 4, 3, 'Persistent mind budget check failed: unavailable'],
+    ['budget exhausted', 'waiting', PERSISTENT_MIND_LIMITS.BACKOFF_MAX_MS, 2, 'CoS actions budget exhausted'],
+    ['action reserved', 'waiting', PERSISTENT_MIND_LIMITS.BACKOFF_MAX_MS, 2, 'CoS actions budget exhausted'],
+  ])('defers an unclaimed wake for %s with its original retry policy', async (gate, status, backoffMs, failureCount, reason) => {
+    vi.useFakeTimers();
+    const prepare = vi.fn();
+    const run = vi.fn();
+    if (gate !== 'no adapter') await supervisor.registerPersistentMindTurnAdapter({ prepare, run });
     await supervisor.startPersistentMind();
+    await supervisor.enqueuePersistentMindMessage({ id: 'deferred-message', text: 'Wait until admitted.' });
+    mock.root.persistentMind.failureCount = 2;
+    mock.root.persistentMind.lastError = 'previous error';
+    if (gate === 'global capacity') {
+      mock.root.config.maxConcurrentAgents = 1;
+      mock.root.agents = { running: { status: 'running' } };
+    }
+    if (gate === 'budget error') mock.budgetError = new Error('unavailable');
+    if (gate === 'budget exhausted') mock.budget = { withinBudget: false, exceeded: 'actions' };
+    if (gate === 'action reserved') {
+      mock.budget = { withinBudget: true, budget: { maxActionsPerDay: 1 }, usage: { actions: 0, ms: 0 } };
+      acquireCosActionReservation({ ...mock.budget, reservationId: 'ordinary-agent' });
+    }
+
     await supervisor.drainPersistentMind();
 
-    expect(mock.root.persistentMind.status).toBe('degraded');
-    expect(mock.root.persistentMind.pauseReason).toBe('Persistent mind provider is not configured');
-    expect(Date.parse(mock.root.persistentMind.nextEligibleWakeAt)).toBeGreaterThan(Date.now());
-    expect(mock.scheduled.get(supervisor.PERSISTENT_MIND_WAKE_EVENT_ID).delayMs).toBeGreaterThan(1_000);
+    expect(mock.root.persistentMind).toMatchObject({
+      status, pauseReason: reason, failureCount, activeTurn: null,
+      lastError: status === 'degraded' ? reason : 'previous error',
+      nextEligibleWakeAt: new Date(Date.now() + backoffMs).toISOString(),
+    });
+    expect(mock.root.persistentMind.queuedMessages.map(({ id }) => id)).toEqual(['deferred-message']);
+    expect(prepare).not.toHaveBeenCalled();
+    expect(run).not.toHaveBeenCalled();
+    expect(mock.recordUsage).not.toHaveBeenCalled();
+    expect(mock.appendMindEvent.mock.calls.some(([event]) => event.kind === 'mind.wake')).toBe(false);
   });
 
   it('accepts a message durably, deduplicates retries, and runs only one turn', async () => {
@@ -992,15 +1028,20 @@ describe('persistent mind supervisor', () => {
     expect(mock.root.persistentMind.recentMessageIds).toContain('legacy');
   });
 
-  it('refuses revocation during preparation before summary or turn inference can begin', async () => {
+  it.each(['preparation', 'slot wait'])('refuses revocation during %s before summary or turn inference can begin', async (stage) => {
     withDeepPreset();
     mock.root.config.persistentMindThinkingPresets.presets[0].effort = '';
     mock.useActualThinkingSession = true;
     mock.providerOverride = { id: 'example-alt', type: 'api', models: ['alt-model'] };
     const preparing = deferred();
     const prepare = vi.fn(async ({ profile }) => {
-      await preparing.promise;
+      if (stage === 'preparation') await preparing.promise;
       return { ok: true, provider: profile.provider };
+    });
+    const release = vi.fn();
+    if (stage === 'slot wait') mock.acquireSlot.mockImplementation(async () => {
+      await preparing.promise;
+      return { ok: true, release };
     });
     const run = vi.fn();
     const summarize = vi.fn();
@@ -1009,7 +1050,7 @@ describe('persistent mind supervisor', () => {
     await supervisor.startPersistentMind();
     await supervisor.enqueuePersistentMindMessage({ id: 'revoke-during-prepare', text: 'Use the alternate.', thinkingPresetId: 'deep' });
     const drain = supervisor.drainPersistentMind();
-    await vi.waitFor(() => expect(prepare).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(stage === 'slot wait' ? mock.acquireSlot : prepare).toHaveBeenCalledTimes(1));
     mock.root.config.persistentMindThinkingPresets.presets = [];
     preparing.resolve();
     await drain;
@@ -1019,6 +1060,8 @@ describe('persistent mind supervisor', () => {
     expect(mock.recordUsage).not.toHaveBeenCalled();
     expect(mock.root.persistentMind.queuedMessages).toEqual([]);
     expect(mock.root.persistentMind.recentMessageIds).toContain('revoke-during-prepare');
+    expect(mock.root.persistentMind).toMatchObject({ status: 'degraded', activeTurn: null });
+    if (stage === 'slot wait') expect(release).toHaveBeenCalledTimes(1);
   });
 
   it.each(['before preparation', 'during preparation'])('keeps unspent temporary messages when a provider goes offline %s', async (stage) => {
