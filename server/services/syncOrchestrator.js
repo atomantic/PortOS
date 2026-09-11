@@ -37,6 +37,7 @@ const FETCH_TIMEOUT_MS = 15000;
 // firing every tick; the manual `POST /tombstones/sweep` route stays unthrottled
 // (it calls sweepTombstones() directly, never through this gate).
 const TOMBSTONE_SWEEP_INTERVAL_MS = 60 * 60 * 1000;
+export const BRAIN_TOMBSTONE_SWEEP_INTERVAL_MS = 6 * 60 * 60 * 1000;
 
 const withLock = createMutex();
 let syncTimer = null;
@@ -48,6 +49,7 @@ const syncingPeers = new Set();
 // initSyncOrchestrator/stopSyncOrchestrator so a restart (and each test) starts
 // from "first tick runs".
 let lastTombstoneSweepAt = 0;
+let lastBrainSweepAt = 0;
 
 // --- Realtime sync progress ---
 //
@@ -959,9 +961,10 @@ export async function syncAllPeers() {
  * Initialize the sync orchestrator
  */
 export function initSyncOrchestrator() {
-  // Fresh start (boot, or a test's init after a prior stop) always runs the
-  // tombstone sweep on the first tick — see TOMBSTONE_SWEEP_INTERVAL_MS above.
+  // Fresh start (boot, or a test's init after a prior stop) always runs both
+  // tombstone sweeps on the first tick — see their interval constants above.
   lastTombstoneSweepAt = 0;
+  lastBrainSweepAt = 0;
   // Sync immediately when a peer comes online
   peerOnlineHandler = (peer) => {
     if (!hasAnySyncEnabled(peer)) return;
@@ -986,8 +989,9 @@ export function initSyncOrchestrator() {
     runTombstoneSweep().catch(err => {
       console.error(`❌ Tombstone sweep tick failed: ${err.message}`);
     });
-    // Brain entity tombstones ride the same tick — same once-a-minute cadence,
-    // same rejection (a rejected dynamic import would otherwise crash the tick).
+    // Brain entity tombstones ride the same tick but are gated to their much
+    // slower grace-period cadence. The outer catch owns unexpected failures
+    // (such as a rejected dynamic import) so the interval never leaks one.
     runBrainTombstoneSweep().catch(err => {
       console.error(`❌ Brain tombstone sweep tick failed: ${err.message}`);
     });
@@ -1047,11 +1051,15 @@ async function runTombstoneSweep() {
  * was actually pruned — quiet on no-op cycles.
  */
 async function runBrainTombstoneSweep() {
-  const { sweepBrainTombstones } = await import('./brainTombstoneGc.js');
-  const result = await sweepBrainTombstones().catch((err) => {
-    console.error(`❌ Brain tombstone sweep failed: ${err.message}`);
-    return null;
-  });
+  const now = Date.now();
+  if (lastBrainSweepAt !== 0 && now - lastBrainSweepAt < BRAIN_TOMBSTONE_SWEEP_INTERVAL_MS) return;
+  lastBrainSweepAt = now;
+  const result = await import('./brainTombstoneGc.js')
+    .then(({ sweepBrainTombstones }) => sweepBrainTombstones())
+    .catch((err) => {
+      console.error(`❌ Brain tombstone sweep failed: ${err.message}`);
+      return null;
+    });
   if (result && result.pruned > 0) {
     console.log(`🪦 Brain tombstone GC: pruned ${result.pruned} tombstone${result.pruned === 1 ? '' : 's'}`);
   }
@@ -1062,6 +1070,7 @@ async function runBrainTombstoneSweep() {
  */
 export function stopSyncOrchestrator() {
   lastTombstoneSweepAt = 0;
+  lastBrainSweepAt = 0;
   if (peerOnlineHandler) {
     instanceEvents.removeListener('peer:online', peerOnlineHandler);
     peerOnlineHandler = null;

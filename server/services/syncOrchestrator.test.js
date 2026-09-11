@@ -132,7 +132,14 @@ import { getCurrentSeq, compactLog } from './brainSyncLog.js';
 import { getBrainChecksum, applyBrainSnapshot } from './brainReconcile.js';
 import { getMaxSequence } from './memorySync.js';
 import { peerFetch } from '../lib/peerHttpClient.js';
-import { syncWithPeer, syncAllPeers, getSyncStatus, initSyncOrchestrator, stopSyncOrchestrator } from './syncOrchestrator.js';
+import {
+  syncWithPeer,
+  syncAllPeers,
+  getSyncStatus,
+  initSyncOrchestrator,
+  stopSyncOrchestrator,
+  BRAIN_TOMBSTONE_SWEEP_INTERVAL_MS,
+} from './syncOrchestrator.js';
 
 const mockFetch = vi.fn();
 
@@ -1162,14 +1169,38 @@ describe('syncOrchestrator', () => {
       expect(sweepTombstones).toHaveBeenCalledTimes(2);
     });
 
-    it('runs syncAllPeers and the brain tombstone sweep on every tick regardless of the tombstone-sweep gate', async () => {
+    it('runs syncAllPeers every tick but gates brain tombstone sweeps to six hours', async () => {
+      const tickMs = 60 * 1000;
+      const sixHoursMs = 6 * 60 * 60 * 1000;
+      expect(BRAIN_TOMBSTONE_SWEEP_INTERVAL_MS).toBe(sixHoursMs);
+
       initSyncOrchestrator();
       getPeers.mockResolvedValue([]);
-      await vi.advanceTimersByTimeAsync(60000); // t=60s — tombstone sweep runs (first tick)
-      await vi.advanceTimersByTimeAsync(60000); // t=120s — tombstone sweep gated
-      expect(getPeers).toHaveBeenCalledTimes(2); // syncAllPeers fires every tick
-      expect(sweepBrainTombstones).toHaveBeenCalledTimes(2); // brain sweep is untouched by this gate
+      await vi.advanceTimersByTimeAsync(tickMs);
+      expect(sweepBrainTombstones).toHaveBeenCalledTimes(1); // first tick after boot
+      for (let tick = 1; tick < 60; tick += 1) {
+        await vi.advanceTimersByTimeAsync(tickMs);
+      }
+      expect(getPeers).toHaveBeenCalledTimes(60); // syncAllPeers fires every tick
+      expect(compactLog).toHaveBeenCalledTimes(60); // brain-sync-log compaction stays on every tick
+      expect(sweepBrainTombstones).toHaveBeenCalledTimes(1); // no repeat across 60 one-minute ticks
       expect(sweepTombstones).toHaveBeenCalledTimes(1); // gated on the second tick
+
+      await vi.advanceTimersByTimeAsync(sixHoursMs - (60 * tickMs));
+      expect(sweepBrainTombstones).toHaveBeenCalledTimes(1); // still before six hours since the first sweep
+      await vi.advanceTimersByTimeAsync(tickMs);
+      expect(sweepBrainTombstones).toHaveBeenCalledTimes(2);
+    });
+
+    it('does not retry a failed brain sweep before six hours', async () => {
+      initSyncOrchestrator();
+      getPeers.mockResolvedValue([]);
+      sweepBrainTombstones.mockRejectedValueOnce(new Error('db blip'));
+
+      await vi.advanceTimersByTimeAsync(60 * 1000);
+      await vi.advanceTimersByTimeAsync(60 * 1000);
+
+      expect(sweepBrainTombstones).toHaveBeenCalledTimes(1);
     });
   });
 
