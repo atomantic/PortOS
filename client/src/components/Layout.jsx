@@ -1,4 +1,5 @@
 import { useState, useEffect, useLayoutEffect, useMemo, useRef, useCallback } from 'react';
+import useFocusTrap from '../hooks/useFocusTrap.js';
 import { Outlet, NavLink, useLocation, useNavigate } from 'react-router';
 import {
   Home,
@@ -681,6 +682,22 @@ export default function Layout() {
   const navigate = useNavigate();
   const [collapsed, setCollapsed] = useState(() => safeReadStorage(SIDEBAR_KEY) === 'true');
   const [mobileOpen, setMobileOpen] = useState(false);
+  const [desktopNav, setDesktopNav] = useState(() => window.matchMedia('(min-width: 1024px)').matches);
+  const sidebarRef = useRef(null);
+  const menuButtonRef = useRef(null);
+  const mainRef = useRef(null);
+  const mobileNavActive = mobileOpen && !desktopNav;
+  useFocusTrap(mobileNavActive, sidebarRef);
+  useEffect(() => {
+    const media = window.matchMedia('(min-width: 1024px)');
+    const syncViewport = () => {
+      setDesktopNav(media.matches);
+      if (media.matches) setMobileOpen(false);
+    };
+    syncViewport();
+    media.addEventListener('change', syncViewport);
+    return () => media.removeEventListener('change', syncViewport);
+  }, []);
   const [expandedSections, setExpandedSections] = useState({});
   const [expandedSubSections, setExpandedSubSections] = useState({});
   // Collapsed-sidebar flyout: hovering or focusing a section icon opens a
@@ -1193,15 +1210,16 @@ export default function Layout() {
       {/* Skip to main content link for keyboard users */}
       <a
         href="#main-content"
+        onClick={() => mainRef.current?.focus()}
         className="sr-only focus:not-sr-only focus:absolute focus:top-4 focus:left-4 focus:z-[100] focus:px-4 focus:py-2 focus:bg-port-accent focus:text-white focus:rounded-lg focus:outline-hidden"
       >
         Skip to main content
       </a>
       {/* Mobile overlay */}
-      {mobileOpen && (
+      {mobileNavActive && (
         <div
           role="button"
-          tabIndex={0}
+          tabIndex={-1}
           aria-label="Close sidebar"
           className="fixed inset-0 bg-black/50 z-40 lg:hidden"
           onClick={() => setMobileOpen(false)}
@@ -1211,6 +1229,16 @@ export default function Layout() {
 
       {/* Sidebar */}
       <aside
+        ref={sidebarRef}
+        id="app-sidebar"
+        inert={!desktopNav && !mobileNavActive}
+        aria-hidden={!desktopNav && !mobileNavActive ? true : undefined}
+        onKeyDown={(event) => {
+          if (mobileNavActive && event.key === 'Escape' && !event.defaultPrevented) {
+            event.stopPropagation();
+            setMobileOpen(false);
+          }
+        }}
         className={`
           port-app-sidebar
           fixed inset-y-0 left-0 z-50 h-dvh-screen print:hidden
@@ -1417,10 +1445,15 @@ export default function Layout() {
         {/* Mobile header */}
         <header className="port-app-topbar lg:hidden flex items-center justify-between px-2 py-1.5 border-b border-port-border bg-port-card print:hidden">
           <button
-            onClick={() => setMobileOpen(true)}
+            ref={menuButtonRef}
+            onClick={() => {
+              menuButtonRef.current?.focus();
+              setMobileOpen(true);
+            }}
             className="inline-flex items-center justify-center min-w-[44px] min-h-[44px] -ml-1 rounded-lg text-gray-400 hover:text-white"
             aria-label="Open navigation menu"
-            aria-expanded={mobileOpen}
+            aria-expanded={mobileNavActive}
+            aria-controls="app-sidebar"
           >
             <Menu size={20} aria-hidden="true" />
           </button>
@@ -1455,7 +1488,7 @@ export default function Layout() {
         {(() => {
           const isFullWidth = isFullWidthRoute(location.pathname);
           return (
-            <main id="main-content" className={`flex-1 min-h-0 print:overflow-visible print:min-h-0 ${isFullWidth ? 'relative overflow-hidden' : 'overflow-auto p-4 md:p-6'}`}>
+            <main ref={mainRef} id="main-content" tabIndex={-1} className={`focus:outline-none flex-1 min-h-0 print:overflow-visible print:min-h-0 ${isFullWidth ? 'relative overflow-hidden' : 'overflow-auto p-4 md:p-6'}`}>
               <Outlet />
             </main>
           );
