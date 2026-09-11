@@ -282,6 +282,26 @@ describe('generateWeeklyDigest — summary assembly', () => {
     expect(readDigest('2026-W01').summary.totalTasks).toBe(2);
   });
 
+  it('stamps weekStart/weekEnd/previousWeekId from a historical weekId, not now (#7009)', async () => {
+    // Frozen now is 2026-W12. Generating W15 must not inherit W12's Monday or
+    // chain week-over-week to W11 (the current week's neighbor).
+    writeDigest('2026-W14', storedDigest('2026-W14', { totalTasks: 3, successRate: 100, totalWorkTimeMs: 1000 }));
+    writeDigest(LAST_WEEK, storedDigest(LAST_WEEK, { totalTasks: 9, successRate: 50, totalWorkTimeMs: 1000 }));
+    onDates([
+      agent('w15', { month: 4, day: 7 }),
+      agent('w12', { day: 18 }),
+    ]);
+
+    const digest = await digestService.generateWeeklyDigest('2026-W15');
+
+    expect(digest.weekId).toBe('2026-W15');
+    expect(digest.weekStart).toBe(new Date(2026, 3, 6, 0, 0, 0).toISOString());
+    expect(digest.weekEnd).toBe(new Date(2026, 3, 12, 0, 0, 0).toISOString());
+    expect(digest.previousWeekId).toBe('2026-W14');
+    expect(digest.summary.totalTasks).toBe(1);
+    expect(digest.accomplishments.map(a => a.id)).toEqual(['w15']);
+  });
+
   it('persists the digest and announces it on the CoS event bus', async () => {
     const emitted = [];
     const listener = (d) => emitted.push(d.weekId);
@@ -321,6 +341,16 @@ describe('generateWeeklyDigest — week-over-week comparison', () => {
 
     expect(digest.previousWeekId).toBe(LAST_WEEK);
     expect(digest.weekOverWeek).toEqual({ tasksChange: 100, successRateChange: -50, workTimeChange: 100 });
+  });
+
+  it('treats a prior-week file with no summary as missing, not a throw', async () => {
+    writeDigest(LAST_WEEK, { weekStart: at(9), weekEnd: at(15), generatedAt: at(15) });
+    onDates([agent('a1', { day: 16 })]);
+
+    const digest = await digestService.generateWeeklyDigest();
+
+    expect(digest.weekOverWeek).toEqual({ tasksChange: null, successRateChange: null, workTimeChange: null });
+    expect(digest.previousWeekId).toBeNull();
   });
 
   it('treats a zero-task prior week as a 100% gain, or 0% when still idle', async () => {
@@ -487,6 +517,21 @@ describe('listWeeklyDigests', () => {
 
   it('returns an empty list when nothing has been generated', async () => {
     expect(await digestService.listWeeklyDigests()).toEqual([]);
+  });
+
+  it('lists a stored digest that has no summary without throwing (#7009)', async () => {
+    writeDigest('2026-W09', { weekStart: at(23, 0, 2), weekEnd: at(1, 0, 3), generatedAt: at(1, 0, 3) });
+
+    const list = await digestService.listWeeklyDigests();
+
+    expect(list).toEqual([{
+      weekId: '2026-W09',
+      weekStart: at(23, 0, 2),
+      weekEnd: at(1, 0, 3),
+      totalTasks: undefined,
+      successRate: undefined,
+      generatedAt: at(1, 0, 3),
+    }]);
   });
 });
 
