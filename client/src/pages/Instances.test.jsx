@@ -2,10 +2,10 @@ import { TailcatServeProvider } from '../components/instances/TailcatServeProvid
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render as renderUI, screen, fireEvent, waitFor, act } from '@testing-library/react';
 import TailcatServePanel from '../components/instances/TailcatServePanel';
-import { AddPeerForm } from './Instances.jsx';
+import { AddPeerForm, PeerCard } from './Instances.jsx';
 import { DEFAULT_TAILCAT_REMOTE_PORT } from '../lib/ports.js';
 import { DEFAULT_PEER_PORT, DEFAULT_TAILCAT_LOCAL_PORT } from '../lib/ports.js';
-import { addPeer, addTailcatPeer, startTailcatServe, getTailcatServe, stopTailcatServe } from '../services/api';
+import { addPeer, addTailcatPeer, startTailcatServe, getTailcatServe, stopTailcatServe, removePeer, listPeerSubscriptions } from '../services/api';
 
 vi.mock('../services/api', () => ({
   getInstances: vi.fn(),
@@ -166,4 +166,40 @@ it('shares start and stop receipts between both serve controls', async () => {
   fireEvent.click(await screen.findByRole('button', { name: 'Stop' }));
   await waitFor(() => expect(screen.getAllByRole('button', { name: 'Start serve' })).toHaveLength(2));
   expect(screen.queryByRole('button', { name: 'Serve running' })).not.toBeInTheDocument();
+});
+
+describe('PeerCard removal confirmation', () => {
+  it('uses explicit, peer-specific confirmation actions', async () => {
+    const onRefresh = vi.fn();
+    removePeer.mockResolvedValue({ ok: true });
+    listPeerSubscriptions.mockResolvedValue({ subscriptions: [] });
+
+    render(
+      <PeerCard
+        peer={{
+          id: 'peer-1',
+          name: 'Living Room',
+          address: '192.0.2.10',
+          port: 5555,
+          status: 'offline',
+          enabled: true,
+          directions: [],
+          lastSeen: new Date().toISOString(),
+          consecutiveFailures: 0,
+        }}
+        onRefresh={onRefresh}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Remove peer' }));
+
+    expect(screen.queryByRole('button', { name: 'Yes' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'No' })).not.toBeInTheDocument();
+    expect(screen.getByText('Remove peer "Living Room"?')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Confirm removing peer Living Room' })).toHaveClass('text-port-error');
+    expect(screen.getByRole('button', { name: 'Cancel removing peer Living Room' })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm removing peer Living Room' }));
+    await waitFor(() => expect(removePeer).toHaveBeenCalledWith('peer-1'));
+  });
 });

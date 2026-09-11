@@ -11,6 +11,7 @@ import {
 } from 'lucide-react';
 import toast from '../components/ui/Toast';
 import Pill from '../components/ui/Pill';
+import ConfirmButtonPair from '../components/ui/ConfirmButtonPair';
 import EmptyState from '../components/EmptyState';
 import socket from '../services/socket';
 import {
@@ -1157,7 +1158,7 @@ function ProbeDiagnostics({ peer, probing, onProbe }) {
   );
 }
 
-function PeerCard({ peer, onRefresh, syncStatus, tailnetInfo, parityReport }) {
+export function PeerCard({ peer, onRefresh, syncStatus, tailnetInfo, parityReport }) {
   const [editingName, setEditingName] = useState(false);
   const [name, setName] = useState('');
   const [probing, setProbing] = useState(false);
@@ -1260,6 +1261,7 @@ function PeerCard({ peer, onRefresh, syncStatus, tailnetInfo, parityReport }) {
 
   const StatusIcon = STATUS_ICONS[peer.status] || CircleDot;
   const isInboundOnly = peer.directions?.includes('inbound') && !peer.directions?.includes('outbound');
+  const peerLabel = peer.name || peer.address;
 
   const handleConnect = async () => {
     setConnecting(true);
@@ -1403,10 +1405,18 @@ function PeerCard({ peer, onRefresh, syncStatus, tailnetInfo, parityReport }) {
             {peer.enabled ? 'ON' : 'OFF'}
           </button>
           {confirmRemove ? (
-            <div className="flex items-center gap-1">
-              <button onClick={handleRemove} className="text-port-error hover:text-port-error/80 text-xs">Yes</button>
-              <button onClick={() => setConfirmRemove(false)} className="text-gray-500 hover:text-white text-xs">No</button>
-            </div>
+            <ConfirmButtonPair
+              prompt={`Remove peer "${peerLabel}"?`}
+              confirmText="Remove"
+              confirmIcon={Trash2}
+              cancelText="Cancel"
+              ariaLabel={`Confirm removing peer ${peerLabel}`}
+              confirmAriaLabel={`Confirm removing peer ${peerLabel}`}
+              cancelAriaLabel={`Cancel removing peer ${peerLabel}`}
+              largeTouchTargets
+              onConfirm={handleRemove}
+              onCancel={() => setConfirmRemove(false)}
+            />
           ) : (
             <button
               onClick={() => setConfirmRemove(true)}

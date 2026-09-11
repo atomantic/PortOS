@@ -2,6 +2,7 @@ import {
   ComposedChart, Bar, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer
 } from 'recharts';
 import useChartColors from '../../hooks/useChartColors.js';
+import { pluralize } from '../../lib/textUtils';
 
 // Blood markers to chart — prefer common ones if available in the test results
 const PREFERRED_MARKERS = ['cholesterol', 'glucose', 'ldl', 'hdl', 'triglycerides'];
@@ -54,7 +55,7 @@ export default function ActivityBloodCorrelation({ data, range }) {
       <div className="bg-port-card border border-port-border rounded-xl p-6">
         <h3 className="text-sm font-medium text-gray-400 uppercase tracking-wider mb-3">Activity vs Blood Work</h3>
         <p className="text-gray-400 text-sm">
-          Need 14+ days of data for correlations — {dailyData.length} days so far.
+          Need 14+ days of data for correlations — {pluralize(dailyData.length, 'day')} so far.
         </p>
       </div>
     );

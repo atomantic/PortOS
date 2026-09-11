@@ -1,4 +1,5 @@
 import { spawn } from '../lib/childProcess.js';
+import { isHostShuttingDown } from '../lib/hostShutdown.js';
 import { join } from 'path';
 import { atomicWrite, readJSONFile, PATHS, ensureDir, safeJSONParse } from '../lib/fileUtils.js';
 import { withSpawnCwdEnv } from '../lib/spawnCwd.js';
@@ -146,7 +147,7 @@ export function execGh(args, timeoutMs = DEFAULT_EXEC_GH_TIMEOUT_MS, { cwd = nul
     const settle = (ok) => {
       if (settled) return;
       settled = true;
-      if (backoffKey !== null) recordGhCallOutcome(backoffKey, ok, backoffMaxMs);
+      if (backoffKey !== null && ok !== null) recordGhCallOutcome(backoffKey, ok, backoffMaxMs);
     };
     const timer = setTimeout(() => {
       timedOut = true;
@@ -158,12 +159,20 @@ export function execGh(args, timeoutMs = DEFAULT_EXEC_GH_TIMEOUT_MS, { cwd = nul
     }, timeoutMs);
     child.stdout.on('data', (d) => { stdout += d.toString(); });
     child.stderr.on('data', (d) => { stderr += d.toString(); });
-    child.on('close', (code) => {
-      if (timedOut) return;
+    child.on('close', (code, signal) => {
+      if (timedOut || settled) return;
       clearTimeout(timer);
-      if (code !== 0) {
+      if (signal === 'SIGTERM' || (code !== 0 && isHostShuttingDown())) {
+        // PM2 may deliver SIGTERM to the child before the host latch is set.
+        // Other signals count as failures unless the host confirms shutdown.
+        // Cancellation says nothing about forge health; preserve prior backoff.
+        settle(null);
+        reject(Object.assign(new Error(signal ? `gh command cancelled by ${signal}` : 'gh command cancelled during host shutdown'), {
+          name: 'AbortError', signal, terminated: Boolean(signal)
+        }));
+      } else if (code !== 0) {
         settle(false);
-        const error = new Error(stderr.trim() || `gh exited with code ${code}`);
+        const error = new Error(stderr.trim() || `gh exited with ${signal ? `signal ${signal}` : `code ${code}`}`);
         error.ghExitCode = code;
         error.ghStderr = stderr.trim();
         reject(error);

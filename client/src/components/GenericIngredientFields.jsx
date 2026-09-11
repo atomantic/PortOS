@@ -125,7 +125,7 @@ function GenericField({ field, payload, onChange }) {
  */
 export default function GenericIngredientFields({ fields = [], payload = {}, onChange }) {
   if (!Array.isArray(fields) || fields.length === 0) {
-    return <p className="text-sm text-gray-500">This type has no fields yet — add some in Settings → Catalog.</p>;
+    return <p className="text-sm text-gray-500">This type has no fields yet — add some in Create → Catalog (Catalog Types).</p>;
   }
   return (
     <div className="space-y-3">

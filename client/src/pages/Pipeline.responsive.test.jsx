@@ -1,11 +1,12 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 import Pipeline from './Pipeline';
 
 const listPipelineSeries = vi.fn();
 const listUniverses = vi.fn();
 const listLooms = vi.fn();
+const listAuthors = vi.fn();
 
 vi.mock('../services/api', () => ({
   listPipelineSeries: (...a) => listPipelineSeries(...a),
@@ -15,6 +16,7 @@ vi.mock('../services/api', () => ({
   generateSeriesConcepts: vi.fn(),
   listUniverses: (...a) => listUniverses(...a),
   listLooms: (...a) => listLooms(...a),
+  listAuthors: (...a) => listAuthors(...a),
   WORLD_LOGLINE_MAX: 400,
   WORLD_PREMISE_MAX: 2000,
   WORLD_STYLE_NOTES_MAX: 2000,
@@ -53,6 +55,7 @@ describe('Pipeline series list — mobile layout', () => {
     listPipelineSeries.mockResolvedValue([SERIES]);
     listUniverses.mockResolvedValue([]);
     listLooms.mockResolvedValue([]);
+    listAuthors.mockResolvedValue([]);
   });
 
   it('stacks the row below sm so the logline gets the full card width', async () => {
@@ -73,5 +76,13 @@ describe('Pipeline series list — mobile layout', () => {
     expect(actions).toHaveClass('shrink-0');
     expect(actions).toHaveClass('flex-wrap');
     expect(actions.parentElement).toBe(row);
+  });
+
+  it('directs an empty series form to the Create universes page', async () => {
+    listPipelineSeries.mockResolvedValue([]);
+    renderPage();
+
+    fireEvent.click(await screen.findByRole('button', { name: 'New Series' }));
+    expect(await screen.findByText('No universes yet. Create one under Create → Universes before creating a series.')).toBeTruthy();
   });
 });

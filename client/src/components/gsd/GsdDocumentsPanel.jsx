@@ -22,13 +22,29 @@ export default function GsdDocumentsPanel({ appId, selectedDoc, onSelectDoc }) {
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
-    if (!selectedDoc) return;
+    let cancelled = false;
+
     setEditing(false);
+    setContent(null);
+
+    if (!selectedDoc) {
+      setLoading(false);
+      return () => { cancelled = true; };
+    }
+
     setLoading(true);
     api.getGsdDocument(appId, selectedDoc)
-      .then(data => setContent(data?.content || null))
-      .catch(() => setContent(null))
-      .finally(() => setLoading(false));
+      .then(data => {
+        if (!cancelled) setContent(data?.content || null);
+      })
+      .catch(() => {
+        if (!cancelled) setContent(null);
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+
+    return () => { cancelled = true; };
   }, [appId, selectedDoc]);
 
   const enterEditMode = () => {

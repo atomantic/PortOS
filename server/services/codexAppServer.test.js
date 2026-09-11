@@ -372,6 +372,25 @@ describe('the ChatGPT sign-in flow', () => {
 });
 
 describe('failure paths settle exactly once', () => {
+  it('reports a failed write but allows the next request on the same connection', async () => {
+    const initial = getCodexAccountReadiness();
+    await scripted(child, initial, [['initialize', {}], ['account/read', { account: null }]]);
+
+    vi.spyOn(child.stdin, 'write').mockImplementationOnce((_line, callback) => {
+      callback(new Error('Injected write failure'));
+      return false;
+    });
+    const failed = await getCodexAccountReadiness({ fresh: true });
+    expect(failed.status).toBe(CODEX_ACCOUNT_STATUS.unknown);
+    expect(failed.error.message).toContain('Injected write failure');
+
+    const recovered = getCodexAccountReadiness({ fresh: true });
+    await scripted(child, recovered, [['account/read', READY_ACCOUNT], ['account/rateLimits/read', { rateLimits: {} }]]);
+    expect((await recovered).status).toBe(CODEX_ACCOUNT_STATUS.ready);
+    expect(spawn).toHaveBeenCalledTimes(1);
+    expect(child.kill).not.toHaveBeenCalled();
+  });
+
   it('fails every pending request when the child exits mid-flight', async () => {
     const promise = getCodexAccountReadiness();
     await vi.waitFor(() => expect(child.lastRequest('initialize')).toBeTruthy());
