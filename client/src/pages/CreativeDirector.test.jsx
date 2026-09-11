@@ -15,8 +15,8 @@ vi.mock('../services/apiCreativeDirector.js', () => ({
 }));
 vi.mock('../services/apiCatalog.js', () => ({ listCatalogIngredients: vi.fn(() => Promise.resolve([])), listCatalogIngredientsByIds: vi.fn(() => Promise.resolve([])) }));
 vi.mock('../services/apiImageVideo.js', () => ({ listVideoModels: vi.fn(() => Promise.resolve([{ id: 'model-a', name: 'Model A' }])) }));
-vi.mock('../services/apiUniverseBuilder.js', () => ({ listUniverses: vi.fn(() => Promise.resolve([])) }));
-vi.mock('../services/apiPipeline.js', () => ({ listPipelineSeries: vi.fn(() => Promise.resolve([])) }));
+vi.mock('../services/apiUniverseBuilder.js', () => ({ listUniverseNames: vi.fn(() => Promise.resolve([])) }));
+vi.mock('../services/apiPipeline.js', () => ({ listPipelineSeriesNames: vi.fn(() => Promise.resolve([])) }));
 vi.mock('../components/creative-director/CreativeDirectorModelsDrawer.jsx', () => ({ default: () => null }));
 vi.mock('../components/ui/Toast', () => ({
   default: { success: vi.fn(), error: vi.fn(), info: vi.fn(), warning: vi.fn() },

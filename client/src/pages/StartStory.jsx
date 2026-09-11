@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router';
 import { Rocket, Lightbulb, FileInput, NotebookPen } from 'lucide-react';
-import { listUniverses } from '../services/api';
+import { listUniverseNames } from '../services/api';
 import toast from '../components/ui/Toast';
 
 // The "Start a Story" onramp (issue #1633, Phase 1). One clear front door that
@@ -55,7 +55,7 @@ export default function StartStory() {
     // silent: the custom catch below owns the toast (AGENTS.md). A failed load
     // just leaves the "use an existing universe" option empty — the onramp
     // still works in "start fresh" mode.
-    listUniverses({ silent: true })
+    listUniverseNames({ silent: true })
       .catch((err) => {
         toast.error(err?.message || 'Failed to load universes');
         return [];

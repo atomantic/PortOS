@@ -78,6 +78,25 @@ export async function listUniverses({ includeDeleted = false } = {}) {
   return [...filtered].sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''));
 }
 
+/** Small index rows; the full-list API remains available to editors/export. */
+export async function listUniverseSummaries() {
+  const rows = await store().listSummaries();
+  return rows.flatMap((row) => {
+    const u = sanitizeTemplate(row.legacyRecord || row);
+    if (!u || u.deleted) return [];
+    return [{
+      id: u.id, name: u.name, logline: u.logline, starterPrompt: u.starterPrompt,
+      origin: u.origin, createdAt: u.createdAt, updatedAt: u.updatedAt,
+      canonCount: row.legacyRecord
+        ? u.characters.length + u.places.length + u.objects.length
+        : row.canonCount,
+      styleImageRef: row.legacyRecord
+        ? u.styleImageRefs.at(-1) || null
+        : sanitizeImageRefFilename(row.styleImageRef) || null,
+    }];
+  }).sort((a, b) => b.createdAt.localeCompare(a.createdAt) || b.id.localeCompare(a.id));
+}
+
 /**
  * Every live universe as `{ id, name }` — a label and nothing else.
  *

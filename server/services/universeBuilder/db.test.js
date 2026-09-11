@@ -72,6 +72,28 @@ describe.skipIf(!runDb)('universeBuilder DB adapter round-trip', () => {
     await close();
   });
 
+
+  it('projects names and index counts, with a compatibility fallback only for legacy canon', async () => {
+    await db.writeRaw('u-live', U('u-live', {
+      logline: 'A city', characters: [{ id: 'c1', name: 'Ada' }], places: [], objects: [],
+      styleImageRefs: ['old.png', 'last.png'], premise: 'Not a summary field',
+    }));
+    await db.writeRaw('u-legacy', U('u-legacy', { schemaVersion: 3, categories: {} }));
+    await db.writeRaw('u-deleted', U('u-deleted', { deleted: true }));
+    const names = await db.listNames();
+    expect(names.map((u) => u.id).sort()).toEqual(['u-legacy', 'u-live']);
+    expect(names.find((u) => u.id === 'u-live')).toEqual({
+      id: 'u-live', name: 'u-live', createdAt: '2026-01-01T00:00:00.000Z',
+    });
+    const summaries = await db.listSummaries();
+    expect(summaries).toHaveLength(2);
+    const live = summaries.find((u) => u.id === 'u-live');
+    expect(live).toMatchObject({ canonCount: 1, styleImageRef: 'last.png', logline: 'A city', legacyRecord: null });
+    expect(live).not.toHaveProperty('characters');
+    expect(live).not.toHaveProperty('premise');
+    expect(summaries.find((u) => u.id === 'u-legacy').legacyRecord.schemaVersion).toBe(3);
+  });
+
   it('writes a record and reads it back verbatim', async () => {
     const rec = U('u-1', { logline: 'a city', characters: [{ id: 'c1', name: 'Ada' }] });
     await db.writeRaw('u-1', rec);

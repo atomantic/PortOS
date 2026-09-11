@@ -21,18 +21,10 @@ import SyncBadge from '../components/sync/SyncBadge';
 import DuplicateGroup from '../components/sharing/DuplicateGroup';
 import MergeModal from '../components/sharing/MergeModal';
 import { timeAgo } from '../utils/formatters';
-import { listUniverses, deleteUniverse, listPipelineSeries, listMediaCollections, listUniverseDuplicates } from '../services/api';
+import { listUniverseSummaries, deleteUniverse, listPipelineSeriesSummaries, listMediaCollections, listUniverseDuplicates } from '../services/api';
 import { useSyncIntegrity, syncBadgeStatus } from '../hooks/useSyncIntegrity';
 import { useRecordMerge } from '../hooks/useRecordMerge';
 import { useConfirmDelete } from '../hooks/useConfirmDelete';
-
-// Named canon entities across all trunks — the "Canon" column reflects the
-// characters/places/objects the user has registered, not the looser variation
-// buckets (which are render scratch space, not canon).
-const canonCount = (u) =>
-  (Array.isArray(u?.characters) ? u.characters.length : 0) +
-  (Array.isArray(u?.places) ? u.places.length : 0) +
-  (Array.isArray(u?.objects) ? u.objects.length : 0);
 
 // Build universeId → latest image filename from media collections. Mirrors
 // resolveCover() in MediaCollections.jsx but trimmed: we only care about image
@@ -54,17 +46,6 @@ const buildLatestImageByUniverse = (collections) => {
     if (bestRef) out.set(c.universeId, bestRef);
   }
   return out;
-};
-
-// The universe's base style image — the subject-less "style probe" the detail
-// page (StyleProbeImage → EntryThumbSlot) shows. Mirror that component's
-// selection (last entry in `styleImageRefs`, no primaryImageRef concept here)
-// so the row thumbnail matches what the Universe Builder displays rather than
-// drifting to whatever the latest media-collection render happened to be (a
-// contact sheet, a character ref, etc.).
-const baseStyleImageRef = (u) => {
-  const refs = Array.isArray(u?.styleImageRefs) ? u.styleImageRefs : [];
-  return refs.length ? refs[refs.length - 1] : null;
 };
 
 // 48px square thumbnail showing the universe's base style image, falling back
@@ -133,7 +114,7 @@ export default function Universes() {
     // Universes drive the page; resolve `loading` as soon as they land so a
     // slow/hung series fetch can't keep the list stuck on "Loading…".
     // silent: the custom catch below owns the error toast (AGENTS.md).
-    listUniverses({ silent: true })
+    listUniverseSummaries({ silent: true })
       .catch((err) => {
         toast.error(err.message || 'Failed to load universes');
         return [];
@@ -146,7 +127,7 @@ export default function Universes() {
     // Series counts are a nice-to-have join, fetched independently — a failed
     // or slow request should never block the universe list (counts just show
     // 0). silent: swallowed to [] with no toast, so suppress request()'s.
-    listPipelineSeries({ silent: true })
+    listPipelineSeriesSummaries({ silent: true })
       .catch(() => [])
       .then((s) => {
         if (cancelled) return;
@@ -173,10 +154,10 @@ export default function Universes() {
   // media folds into the survivor (thumbnails shift). Re-scan duplicates last so
   // a folded group disappears from the banner.
   const refresh = useCallback(() => {
-    listUniverses({ silent: true })
+    listUniverseSummaries({ silent: true })
       .then((u) => setUniverses(Array.isArray(u) ? u : []))
       .catch((err) => toast.error(err.message || 'Failed to reload universes'));
-    listPipelineSeries({ silent: true })
+    listPipelineSeriesSummaries({ silent: true })
       .then((s) => setSeries(Array.isArray(s) ? s : []))
       .catch(() => {});
     listMediaCollections({ silent: true })
@@ -289,7 +270,7 @@ export default function Universes() {
                     <td className="px-4 py-3 align-top">
                       <div className="flex items-start gap-2 min-w-0">
                         <Link to={`/universes/${encodeURIComponent(u.id)}`} className="flex items-start gap-3 min-w-0 group flex-1">
-                          <UniverseThumb imageRef={baseStyleImageRef(u) || latestImageByUniverse.get(u.id)} />
+                          <UniverseThumb imageRef={u.styleImageRef || latestImageByUniverse.get(u.id)} />
                           <div className="min-w-0 flex-1">
                             <div className="text-white font-medium flex items-center gap-2 flex-wrap group-hover:text-port-accent transition-colors">
                               <span>{u.name || '(untitled universe)'}</span>
@@ -306,7 +287,7 @@ export default function Universes() {
                         />
                       </div>
                     </td>
-                    <td className="px-4 py-3 text-right whitespace-nowrap text-sm text-gray-300 font-mono">{canonCount(u)}</td>
+                    <td className="px-4 py-3 text-right whitespace-nowrap text-sm text-gray-300 font-mono">{u.canonCount || 0}</td>
                     <td className="px-4 py-3 text-right whitespace-nowrap text-sm text-gray-300 font-mono">{seriesCountByUniverse[u.id] || 0}</td>
                     <td className="px-4 py-3 whitespace-nowrap text-xs text-gray-500">{timeAgo(u.updatedAt || u.createdAt)}</td>
                     <td className="px-4 py-3">
@@ -328,7 +309,7 @@ export default function Universes() {
               <li key={u.id} className="p-3 bg-port-card border border-port-border rounded-lg">
                 <div className="flex items-start justify-between gap-3">
                   <Link to={`/universes/${encodeURIComponent(u.id)}`} className="flex items-start gap-3 flex-1 min-w-0">
-                    <UniverseThumb imageRef={baseStyleImageRef(u) || latestImageByUniverse.get(u.id)} />
+                    <UniverseThumb imageRef={u.styleImageRef || latestImageByUniverse.get(u.id)} />
                     <div className="min-w-0 flex-1">
                       <div className="text-white font-medium flex items-center gap-2 flex-wrap">
                         <span>{u.name || '(untitled universe)'}</span>
@@ -338,7 +319,7 @@ export default function Universes() {
                         <div className="text-xs text-gray-500 mt-0.5 break-words">{u.logline}</div>
                       ) : null}
                       <div className="flex items-center gap-3 mt-2 text-xs text-gray-500">
-                        <span className="inline-flex items-center gap-1"><Users size={12} /> {canonCount(u)} canon</span>
+                        <span className="inline-flex items-center gap-1"><Users size={12} /> {u.canonCount || 0} canon</span>
                         <span className="inline-flex items-center gap-1"><WorkflowIcon size={12} /> {seriesCountByUniverse[u.id] || 0} series</span>
                         <span>{timeAgo(u.updatedAt || u.createdAt)}</span>
                       </div>

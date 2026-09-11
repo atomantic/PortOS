@@ -60,6 +60,8 @@ export const waitForUniverseWrites = async (universeId, { timeoutMs = 15000 } = 
 
 // `options` lets a caller that owns its own error toast pass `{ silent: true }`
 // so request() doesn't also toast — see AGENTS.md "Custom catch ⇒ silent: true".
+export const listUniverseNames = (options = {}) => request('/universe-builder/names', options);
+export const listUniverseSummaries = (options = {}) => request('/universe-builder/summaries', options);
 export const listUniverses = (options = {}) => request('/universe-builder', options);
 export const getUniverse = (id, options = {}) => request(`/universe-builder/${encodeURIComponent(id)}`, options);
 export const exportUniverseMarkdown = (id, options = {}) => request(

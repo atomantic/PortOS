@@ -8,9 +8,9 @@ vi.mock('react-router', async (io) => {
   return { ...actual, useNavigate: () => navigateMock };
 });
 
-const listUniverses = vi.hoisted(() => vi.fn());
+const listUniverseNames = vi.hoisted(() => vi.fn());
 vi.mock('../services/api', () => ({
-  listUniverses: (...a) => listUniverses(...a),
+  listUniverseNames: (...a) => listUniverseNames(...a),
 }));
 
 const toastError = vi.hoisted(() => vi.fn());
@@ -22,7 +22,7 @@ describe('StartStory onramp', () => {
   beforeEach(() => {
     navigateMock.mockReset();
     toastError.mockReset();
-    listUniverses.mockReset().mockResolvedValue([
+    listUniverseNames.mockReset().mockResolvedValue([
       { id: 'u1', name: 'Alpha' },
       { id: 'u2', name: 'Beta' },
     ]);
@@ -80,7 +80,7 @@ describe('StartStory onramp', () => {
   it('excludes untitled universes from the attach dropdown', async () => {
     // The Importer matches universes by name, so an untitled one can't be an
     // attach target — it must not appear as a selectable option.
-    listUniverses.mockResolvedValueOnce([
+    listUniverseNames.mockResolvedValueOnce([
       { id: 'u1', name: 'Alpha' },
       { id: 'u2', name: '' },
       { id: 'u3', name: '   ' },
@@ -96,7 +96,7 @@ describe('StartStory onramp', () => {
   });
 
   it('surfaces a toast when the universe list fails to load', async () => {
-    listUniverses.mockRejectedValueOnce(new Error('boom'));
+    listUniverseNames.mockRejectedValueOnce(new Error('boom'));
     render(<StartStory />);
     await waitFor(() => expect(toastError).toHaveBeenCalled());
   });

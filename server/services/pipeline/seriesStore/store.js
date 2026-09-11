@@ -64,6 +64,11 @@ function makeFileBackend(dir, sanitizeRecord) {
   });
   return {
     name: 'file',
+    listNames: async () => (await cs.loadAll()).filter((r) => !r.deleted)
+      .map(({ id, name, updatedAt }) => ({ id, name, updatedAt })),
+    listSummaries: async () => (await cs.loadAll()).filter((r) => !r.deleted)
+      .map(({ id, name, universeId, logline, coverImage, origin, issueCountTarget, arc, createdAt, updatedAt }) =>
+        ({ id, name, universeId, logline, coverImage, origin, issueCountTarget, arc: { shape: arc?.shape }, createdAt, updatedAt })),
     readRaw: (id) => cs.loadOneRaw(id),
     readOne: (id) => cs.loadOne(id),
     listIds: () => cs.listIds(),
@@ -111,6 +116,8 @@ function makePgBackend(db, sanitizeRecord) {
     listLiveIds: db.listLiveIds,
     listTombstoneIdsBefore: db.listTombstoneIdsBefore,
     listRaw: db.listRaw,
+    listNames: db.listNames,
+    listSummaries: db.listSummaries,
     writeRaw: db.writeRaw,
     deleteRaw: db.deleteRaw,
     verify: async () => ({ ok: true, type: 'pipelineSeries', onDisk: null, expected: null,
@@ -175,6 +182,8 @@ function createFacade({ dir, sanitizeRecord }) {
       if (typeof id !== 'string' || !ID_PATTERN.test(id)) return null;
       return (await getBackend()).readRaw(id);
     },
+    listNames: async () => (await getBackend()).listNames(),
+    listSummaries: async () => (await getBackend()).listSummaries(),
     loadAll: async () => {
       const raw = await (await getBackend()).listRaw();
       return raw.map((r) => sanitizer(r)).filter((r) => r != null);

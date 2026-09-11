@@ -30,8 +30,8 @@ import {
   getCatalogFacets,
   rerunCatalogMigration,
 } from '../services/apiCatalog';
-import { listUniverses } from '../services/apiUniverseBuilder';
-import { listPipelineSeries } from '../services/apiPipeline';
+import { listUniverseNames } from '../services/apiUniverseBuilder';
+import { listPipelineSeriesNames } from '../services/apiPipeline';
 import CatalogCard from '../components/catalog/CatalogCard';
 import CatalogAlbum from '../components/catalog/CatalogAlbum';
 import { CatalogTypesTab } from '../components/settings/CatalogTypesTab';
@@ -482,8 +482,8 @@ export default function Catalog() {
   const loadPlaceTargets = useCallback(() => {
     setPlaceTargetsLoading(true);
     Promise.all([
-      listUniverses({ silent: true }).catch(() => []),
-      listPipelineSeries({ silent: true }).catch(() => []),
+      listUniverseNames({ silent: true }).catch(() => []),
+      listPipelineSeriesNames({ silent: true }).catch(() => []),
     ]).then(([universes, series]) => {
       setPlaceTargets({
         universes: (Array.isArray(universes) ? universes : []).map((u) => ({ refKind: 'universe', refId: u.id, label: u.name || '(untitled universe)' })),

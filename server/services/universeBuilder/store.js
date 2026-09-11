@@ -134,6 +134,7 @@ function makeFileBackend(dir) {
     // reading them all (same constraint as countUniverses above). The `.map`
     // is shape parity with db.listStyles, not a saving: both backends must
     // hand the service the same row keys. Unordered — the service sorts.
+    listSummaries: async () => (await listRaw()).filter((r) => r && r.deleted !== true).map((legacyRecord) => ({ legacyRecord })),
     listStyles: async () => {
       const records = await listRaw();
       return records
@@ -188,6 +189,7 @@ function makePgBackend(db) {
     listRaw: db.listRaw,
     countUniverses: db.countUniverses,
     listNames: db.listNames,
+    listSummaries: db.listSummaries,
     listStyles: db.listStyles,
     writeRaw: db.writeRaw,
     deleteRaw: db.deleteRaw,
@@ -249,6 +251,7 @@ function createFacade({ dir, sanitizeRecord }) {
     listRaw: async () => (await getBackend()).listRaw(),
     countUniverses: async (opts) => (await getBackend()).countUniverses(opts),
     listNames: async () => (await getBackend()).listNames(),
+    listSummaries: async () => (await getBackend()).listSummaries(),
     listStyles: async () => (await getBackend()).listStyles(),
     loadOneRaw: async (id) => (await getBackend()).readRaw(id),
     loadOne: async (id) => {
