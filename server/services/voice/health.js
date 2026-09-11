@@ -3,7 +3,7 @@
 
 import { existsSync } from 'fs';
 import { join } from 'path';
-import { getVoiceConfig, expandPath, voiceHome } from './config.js';
+import { getVoiceConfig, expandPath, voiceHome, PIPER_BIN_NAME } from './config.js';
 import { readyState as kokoroReadyState } from './tts-kokoro.js';
 import { which } from './bootstrap.js';
 import { resolveLlmEndpoint, authHeaders } from './llm.js';
@@ -63,7 +63,7 @@ export const checkAll = async (cfg) => {
 
   if (voice.tts.engine === 'piper') {
     // CLI-mode piper has no server to probe — check binary + selected voice.
-    const localPiper = join(voiceHome(), 'piper', 'piper');
+    const localPiper = join(voiceHome(), 'piper', PIPER_BIN_NAME);
     const [hasBin, voicePath] = [existsSync(localPiper) || !!(await which('piper')), expandPath(voice.tts.piper?.voicePath || '')];
     const hasVoice = voicePath && existsSync(voicePath);
     out.piper = hasBin && hasVoice
