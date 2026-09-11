@@ -36,7 +36,13 @@ vi.mock('../hooks/useNotifications', () => ({
 
 // --- Theme context: Layout reads `theme.mode` for the day/night toggle. ---
 vi.mock('./ThemeContext', () => ({
-  useThemeContext: () => ({ theme: { mode: 'night', label: 'Test', pair: null }, toggleMode: vi.fn() }),
+  useThemeContext: () => ({
+    theme: { mode: 'night', label: 'Test', pair: null },
+    themeId: 'test',
+    themeList: [{ id: 'test', label: 'Test', family: 'classic', shortLabel: 'Test', density: 'comfortable' }],
+    setTheme: vi.fn(),
+    toggleMode: vi.fn(),
+  }),
 }));
 
 // --- Heavy child widgets: render nothing so they don't open sockets / fetch. ---
@@ -157,7 +163,11 @@ describe('Layout — manifest-derived sidebar structure', () => {
   });
 });
 
+let desktopMedia;
+
 beforeEach(() => {
+  desktopMedia = Object.assign(new EventTarget(), { matches: true });
+  vi.stubGlobal('matchMedia', vi.fn(() => desktopMedia));
   localStorage.clear();
   // The feature list is cached at module scope so every consumer shares one
   // fetch — drop it between tests so a case that flips a flag cannot leak.
@@ -576,5 +586,98 @@ describe('Layout — sidebar section grouping', () => {
         .filter((section) => section && !UNGROUPED_SECTIONS.has(section)),
     );
     expect(alphabetical([...presented])).toEqual(alphabetical(grouped));
+  });
+});
+
+describe('Layout — keyboard navigation shell', () => {
+  it('moves skip-link focus into main content', async () => {
+    await renderLayout();
+    const skipLink = screen.getByRole('link', { name: 'Skip to main content' });
+    skipLink.focus();
+    fireEvent.click(skipLink);
+    expect(screen.getByRole('main')).toHaveFocus();
+    expect(screen.getByRole('main')).toHaveAttribute('tabindex', '-1');
+  });
+
+  it('hides closed mobile links, traps open navigation, and restores the menu button on dismissal', async () => {
+    desktopMedia.matches = false;
+    const { container } = await renderLayout();
+    const sidebar = container.querySelector('#app-sidebar');
+    const opener = screen.getByRole('button', { name: 'Open navigation menu' });
+    expect(sidebar).toHaveAttribute('inert');
+    expect(sidebar).toHaveAttribute('aria-hidden', 'true');
+    expect(screen.queryByRole('navigation')).not.toBeInTheDocument();
+
+    fireEvent.click(opener);
+    expect(sidebar).not.toHaveAttribute('inert');
+    expect(sidebar).not.toHaveAttribute('aria-hidden');
+    expect(sidebar.contains(document.activeElement)).toBe(true);
+    const first = document.activeElement;
+    fireEvent.keyDown(first, { key: 'Tab', shiftKey: true });
+    const last = document.activeElement;
+    expect(last).not.toBe(first);
+    expect(sidebar.contains(last)).toBe(true);
+    fireEvent.keyDown(last, { key: 'Tab' });
+    expect(first).toHaveFocus();
+    fireEvent.keyDown(first, { key: 'Escape' });
+    expect(opener).toHaveFocus();
+    expect(opener).toHaveAttribute('aria-expanded', 'false');
+    expect(sidebar).toHaveAttribute('inert');
+
+    fireEvent.click(opener);
+    fireEvent.click(within(sidebar).getByRole('button', { name: 'Close sidebar' }));
+    expect(opener).toHaveFocus();
+    fireEvent.click(opener);
+    fireEvent.click(screen.getAllByRole('button', { name: 'Close sidebar' }).find(el => !sidebar.contains(el)));
+    expect(opener).toHaveFocus();
+    expect(sidebar).toHaveAttribute('inert');
+  });
+
+  it('dismisses a portaled theme picker before closing its mobile sidebar', async () => {
+    desktopMedia.matches = false;
+    const { container } = await renderLayout();
+    const sidebar = container.querySelector('#app-sidebar');
+    const opener = screen.getByRole('button', { name: 'Open navigation menu' });
+    fireEvent.click(opener);
+    const themeButton = within(sidebar).getByRole('button', { name: 'Switch theme. Current theme: Test' });
+    fireEvent.click(themeButton);
+    const option = screen.getByRole('menuitemradio', { name: /Test/ });
+    expect(option).toHaveFocus();
+    fireEvent.keyDown(option, { key: 'Escape' });
+    expect(screen.queryByRole('menu')).not.toBeInTheDocument();
+    expect(themeButton).toHaveFocus();
+    expect(opener).toHaveAttribute('aria-expanded', 'true');
+    fireEvent.keyDown(themeButton, { key: 'Escape' });
+    expect(opener).toHaveFocus();
+    expect(sidebar).toHaveAttribute('inert');
+  });
+
+  it('keeps desktop navigation accessible and releases the mobile trap on a breakpoint change', async () => {
+    const { container } = await renderLayout();
+    const sidebar = container.querySelector('#app-sidebar');
+    expect(sidebar).not.toHaveAttribute('inert');
+    expect(sidebar).not.toHaveAttribute('aria-hidden');
+    act(() => {
+      desktopMedia.matches = false;
+      desktopMedia.dispatchEvent(new Event('change'));
+    });
+    expect(sidebar).toHaveAttribute('inert');
+    const opener = screen.getByRole('button', { name: 'Open navigation menu' });
+    fireEvent.click(opener);
+    act(() => {
+      desktopMedia.matches = true;
+      desktopMedia.dispatchEvent(new Event('change'));
+    });
+    expect(opener).toHaveAttribute('aria-expanded', 'false');
+    expect(sidebar).not.toHaveAttribute('inert');
+    expect(sidebar).not.toHaveAttribute('aria-hidden');
+    const link = within(sidebar).getAllByRole('link')[0];
+    link.focus();
+    expect(fireEvent.keyDown(link, { key: 'Tab', shiftKey: true })).toBe(true);
+    act(() => {
+      desktopMedia.matches = false;
+      desktopMedia.dispatchEvent(new Event('change'));
+    });
+    expect(sidebar).toHaveAttribute('inert');
   });
 });
