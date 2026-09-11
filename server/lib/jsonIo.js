@@ -354,6 +354,18 @@ export async function readJSONFileStrict(filePath, defaultValue = null, { allowA
 }
 
 /**
+ * Stable request-facing error for a durable JSON store whose bytes could not
+ * be trusted. Callers may surface the code without exposing the local path;
+ * the message keeps the path for server logs and direct service diagnostics.
+ */
+export function unreadableStoreError(filePath) {
+  return Object.assign(new Error(`Unreadable JSON file: ${filePath}`), {
+    status: 500,
+    code: 'UNREADABLE_STORE',
+  });
+}
+
+/**
  * Read a JSON file safely with validation and default fallback.
  * Combines file reading with safe JSON parsing.
  *
@@ -387,7 +399,7 @@ export async function readJSONFileStrict(filePath, defaultValue = null, { allowA
 export async function readJSONFile(filePath, defaultValue = null, { allowArray = true, logError = true, strict = false } = {}) {
   const { ok, value } = await readJSONFileStrict(filePath, defaultValue, { allowArray, logError });
   if (!ok && strict) {
-    throw new Error(`Unreadable JSON file: ${filePath}`);
+    throw unreadableStoreError(filePath);
   }
   return value;
 }
