@@ -305,7 +305,13 @@ export async function locateComment(commentId) {
   if (typeof commentId !== 'string' || !commentId) return null;
   const series = await listSeries();
   for (const s of series) {
-    const comment = await getComment(s.id, commentId);
+    // Cross-series lookup is an aggregation with no write-back. Preserve and
+    // skip an unreadable sibling so it cannot hide a healthy series' finding.
+    const comment = await getComment(s.id, commentId).catch((err) => {
+      if (err?.code !== 'UNREADABLE_STORE') throw err;
+      console.warn(`⚠️ manuscript review lookup: unreadable sidecar skipped — series=${String(s.id).slice(0, 12)}`);
+      return null;
+    });
     if (comment) return { seriesId: s.id, comment };
   }
   return null;

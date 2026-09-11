@@ -5,6 +5,8 @@ import { makePathsProxy, createTempDataRoot } from '../lib/mockPathsDataRoot.js'
 
 const TEST_DATA_ROOT = createTempDataRoot('project-sidecar-writeback-');
 const readFault = vi.hoisted(() => ({ path: null }));
+const pipelineFixtures = vi.hoisted(() => ({ sections: [], seriesIds: [] }));
+const runStagedLLM = vi.hoisted(() => vi.fn());
 
 vi.mock('fs/promises', async (importOriginal) => {
   const actual = await importOriginal();
@@ -23,7 +25,7 @@ vi.mock('./sharing/recordEvents.js', () => ({ emitRecordUpdated: vi.fn() }));
 vi.mock('./pipeline/series.js', () => ({
   seriesStore: () => ({ recordDir: (id) => join(TEST_DATA_ROOT, 'pipeline-series', id) }),
   getSeries: vi.fn(async (id) => ({ id, name: 'Test series' })),
-  listSeries: vi.fn(async () => []),
+  listSeries: vi.fn(async () => pipelineFixtures.seriesIds.map((id) => ({ id }))),
 }));
 vi.mock('./pipeline/seriesCanon.js', () => ({
   getSeriesCanon: vi.fn(async () => ({
@@ -33,14 +35,14 @@ vi.mock('./pipeline/seriesCanon.js', () => ({
   })),
 }));
 vi.mock('./pipeline/arcPlanner.js', () => ({
-  collectManuscriptSections: vi.fn(async () => []),
-  sectionsCorpus: vi.fn(() => ''),
+  collectManuscriptSections: vi.fn(async () => pipelineFixtures.sections),
+  sectionsCorpus: vi.fn((sections) => sections.map((section) => section.content).join('\n')),
   REPLACEMENT_STRATEGIES: new Set(['delta', 'full-page']),
   replacementStrategyForCategory: (category) => category === 'comic-structure' ? 'full-page' : 'delta',
 }));
 vi.mock('./stageRunner.js', () => ({
-  runStagedLLM: vi.fn(),
-  resolveStageContext: vi.fn(),
+  runStagedLLM,
+  resolveStageContext: vi.fn(async () => ({ contextWindow: 100_000 })),
 }));
 vi.mock('../lib/contextBudget.js', () => ({
   manuscriptContentBudgetChars: vi.fn(() => 100_000),
@@ -220,6 +222,9 @@ const generatedSidecars = [
 
 beforeEach(() => {
   readFault.path = null;
+  pipelineFixtures.sections = [];
+  pipelineFixtures.seriesIds = [];
+  runStagedLLM.mockReset();
   rmSync(TEST_DATA_ROOT, { recursive: true, force: true });
   mkdirSync(TEST_DATA_ROOT, { recursive: true });
 });
@@ -277,4 +282,56 @@ describe.each(generatedSidecars)('$name generated sidecar', (store) => {
     await store.mutate();
     expect(store.initialized(JSON.parse(readFileSync(store.path, 'utf8')))).toBe(true);
   });
+});
+
+it('Ask listing skips an unreadable member without rewriting it or hiding healthy conversations', async () => {
+  const healthyId = 'ask_000000002_feedface';
+  const healthyPath = join(TEST_DATA_ROOT, 'ask-conversations', `${healthyId}.json`);
+  const unreadableBytes = '{"truncated":';
+  mkdirSync(dirname(paths.ask), { recursive: true });
+  writeFileSync(paths.ask, unreadableBytes);
+  writeFileSync(healthyPath, JSON.stringify({
+    id: healthyId,
+    title: 'Healthy conversation',
+    mode: 'ask',
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+    promoted: false,
+    turns: [],
+  }));
+
+  expect(await ask.listConversations()).toEqual([
+    expect.objectContaining({ id: healthyId, title: 'Healthy conversation' }),
+  ]);
+  expect(readFileSync(paths.ask, 'utf8')).toBe(unreadableBytes);
+});
+
+it('cross-series manuscript lookup skips an unreadable sidecar and finds a healthy one', async () => {
+  const unreadableSeries = 'ser-unreadable';
+  const healthySeries = 'ser-healthy';
+  const unreadablePath = join(TEST_DATA_ROOT, 'pipeline-series', unreadableSeries, 'manuscript-review.json');
+  const healthyPath = join(TEST_DATA_ROOT, 'pipeline-series', healthySeries, 'manuscript-review.json');
+  const unreadableBytes = '{"truncated":';
+  pipelineFixtures.seriesIds = [unreadableSeries, healthySeries];
+  mkdirSync(dirname(unreadablePath), { recursive: true });
+  mkdirSync(dirname(healthyPath), { recursive: true });
+  writeFileSync(unreadablePath, unreadableBytes);
+  writeFileSync(healthyPath, JSON.stringify({ schemaVersion: 1, comments: [seedComment('target-comment')] }));
+
+  expect(await manuscriptComments.locateComment('target-comment')).toEqual({
+    seriesId: healthySeries,
+    comment: expect.objectContaining({ id: 'target-comment' }),
+  });
+  expect(readFileSync(unreadablePath, 'utf8')).toBe(unreadableBytes);
+});
+
+it('reverse-outline generation refuses unreadable state before invoking the model', async () => {
+  const unreadableBytes = '{"truncated":';
+  pipelineFixtures.sections = [{ issueId: 'issue-1', number: 1, title: 'One', stageId: 'prose', content: 'Draft prose.' }];
+  mkdirSync(dirname(paths.reverseOutline), { recursive: true });
+  writeFileSync(paths.reverseOutline, unreadableBytes);
+
+  await expect(reverseOutline.generateReverseOutline(SERIES_ID)).rejects.toThrow('Unreadable JSON file');
+  expect(runStagedLLM).not.toHaveBeenCalled();
+  expect(readFileSync(paths.reverseOutline, 'utf8')).toBe(unreadableBytes);
 });
