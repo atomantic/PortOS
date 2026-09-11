@@ -37,7 +37,8 @@ function isEscapeHatch() {
 
 // Index a single just-generated image. The 'completed' event carries the
 // filename; the full metadata is in the sidecar the generator just wrote.
-async function onImageCompleted({ filename, temp } = {}) {
+export async function indexImage({ filename, temp } = {}) {
+  if (isEscapeHatch()) return;
   if (typeof filename !== 'string' || !filename) return;
   // A non-gallery temp render (issue #2264, Image Cleaner GPU pass) has no
   // gallery file or sidecar — skip indexing it. It lives in imageCleanTmp and
@@ -45,13 +46,15 @@ async function onImageCompleted({ filename, temp } = {}) {
   if (temp) return;
   const { readImageSidecar } = await import('../imageGen/local.js');
   const { metadata } = await readImageSidecar(filename);
-  // Mirror listGallery's entry shape (filename + path + spread sidecar). One
-  // intentional gap: listGallery synthesizes createdAt from the file birthtime
-  // when the sidecar lacks one (e.g. external/SD-mode images write no sidecar);
-  // the hook has no stat here, so a sidecar-less image's createdAt falls back to
-  // `now` in imageToRow and is corrected on the next boot reconcile (which is
-  // the source of truth for createdAt). Cosmetic: only the sort key jitters.
-  const row = imageToRow({ filename, path: `/data/images/${filename}`, ...metadata });
+  // Match disk gallery's timestamp fallback for uploads without a sidecar.
+  let createdAt = metadata.createdAt;
+  if (!createdAt) {
+    const [{ stat }, { join }, { PATHS }] = await Promise.all([
+      import('node:fs/promises'), import('node:path'), import('../../lib/fileUtils.js'),
+    ]);
+    createdAt = (await stat(join(PATHS.images, filename))).birthtime.toISOString();
+  }
+  const row = imageToRow({ filename, path: `/data/images/${filename}`, createdAt, ...metadata });
   await upsertAsset(row).catch((err) => console.error(`❌ Media index image upsert failed: ${err.message}`));
 }
 
@@ -113,7 +116,7 @@ export async function initMediaAssetIndex() {
     // The completed handlers run outside the request lifecycle (event emitter),
     // so an uncaught throw would crash Node — each handler is self-contained and
     // its upsert .catch()es. Wrap the dispatch too, defensively.
-    imageGenEvents.on('completed', (p) => { onImageCompleted(p).catch((err) => console.error(`❌ Media index image hook: ${err.message}`)); });
+    imageGenEvents.on('completed', (p) => { indexImage(p).catch((err) => console.error(`❌ Media index image hook: ${err.message}`)); });
     videoGenEvents.on('completed', (p) => { onVideoCompleted(p).catch((err) => console.error(`❌ Media index video hook: ${err.message}`)); });
     subscribed = true;
   }

@@ -3,51 +3,52 @@
  *
  * Multi-select picker over the local image gallery (GET /api/image-gen/gallery)
  * — the "choose images already in the system" path alongside upload/generate/
- * slice. Reuses the same normalize + search helpers as GalleryImagePicker, but
- * accumulates a selection and imports them all in one POST. The server copies
+ * slice. Loads bounded, server-searched pages and accumulates a selection
+ * across pages before importing them all in one POST. The server copies
  * each into the dataset (independent of the gallery original).
  */
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Search, X, RefreshCw, Loader2, Check } from 'lucide-react';
 import Modal from '../ui/Modal';
 import MediaCard from '../media/MediaCard';
 import toast from '../ui/Toast';
 import { normalizeImage } from '../media/normalize';
-import { listImageGallery, importLoraDatasetGalleryImages } from '../../services/api';
-import { buildMediaHaystack, tokenizeQuery, matchHaystack } from '../../lib/mediaSearch';
+import { listImageGalleryPage, importLoraDatasetGalleryImages } from '../../services/api';
 
 const MAX_IMPORT = 50;
 
 export default function ImportGalleryDialog({ dataset, onClose, onImported }) {
   const [items, setItems] = useState([]);
   const [loading, setLoading] = useState(false);
+  const [total, setTotal] = useState(0);
+  const [offset, setOffset] = useState(0);
+  const requestId = useRef(0);
+  const [error, setError] = useState(false);
+  const [retry, setRetry] = useState(0);
   const [query, setQuery] = useState('');
   const [selected, setSelected] = useState([]); // ordered list of filenames
   const [importing, setImporting] = useState(false);
 
   useEffect(() => {
-    let cancelled = false;
+    const id = ++requestId.current;
     setLoading(true);
-    listImageGallery()
-      .then((images) => {
-        if (cancelled) return;
-        const normalized = (Array.isArray(images) ? images : [])
-          .map(normalizeImage)
-          .filter((it) => !it.hidden && it.filename);
-        setItems(normalized);
+    setError(false);
+    listImageGalleryPage({ limit: 60, offset, q: query, hidden: false }, { silent: true })
+      .then(page => {
+        if (id !== requestId.current) return;
+        const next = page.items.map(normalizeImage);
+        setItems(prev => offset === 0 ? next : [...prev, ...next]);
+        setTotal(page.total);
       })
-      .catch(err => { console.warn('⚠️ Failed to load gallery images: ' + err.message); if (!cancelled) setItems([]); })
-      .finally(() => { if (!cancelled) setLoading(false); });
-    return () => { cancelled = true; };
-  }, []);
-
-  const haystacks = useMemo(() => items.map(buildMediaHaystack), [items]);
-  const tokens = useMemo(() => tokenizeQuery(query), [query]);
-  const filtered = useMemo(
-    () => (tokens.length === 0 ? items : items.filter((_, idx) => matchHaystack(haystacks[idx], tokens))),
-    [items, haystacks, tokens],
-  );
+      .catch(err => {
+        if (id !== requestId.current) return;
+        setError(true);
+        toast.error(err.message || 'Failed to load gallery');
+      })
+      .finally(() => { if (id === requestId.current) setLoading(false); });
+    return () => { requestId.current += 1; };
+  }, [query, offset, retry]);
 
   const toggle = useCallback((filename) => {
     setSelected((prev) => {
@@ -91,7 +92,7 @@ export default function ImportGalleryDialog({ dataset, onClose, onImported }) {
           <input
             type="text"
             value={query}
-            onChange={(e) => setQuery(e.target.value)}
+            onChange={(e) => { setQuery(e.target.value); setOffset(0); setItems([]); setTotal(0); }}
             placeholder="Search prompt, model, seed, LoRA…"
             aria-label="Search gallery images"
             className="w-full pl-7 pr-7 py-1.5 text-xs bg-port-bg border border-port-border rounded-lg text-white placeholder-gray-500 focus:outline-none focus:border-port-accent"
@@ -100,7 +101,7 @@ export default function ImportGalleryDialog({ dataset, onClose, onImported }) {
           {query && (
             <button
               type="button"
-              onClick={() => setQuery('')}
+              onClick={() => { setQuery(''); setOffset(0); setItems([]); setTotal(0); }}
               className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-500 hover:text-white"
               aria-label="Clear search"
             >
@@ -119,17 +120,17 @@ export default function ImportGalleryDialog({ dataset, onClose, onImported }) {
       </div>
 
       <div className="flex-1 overflow-y-auto p-3">
-        {loading ? (
+        {loading && offset === 0 ? (
           <div className="flex items-center justify-center gap-2 text-xs text-gray-400 py-10">
             <RefreshCw className="w-4 h-4 animate-spin" /> Loading gallery…
           </div>
-        ) : filtered.length === 0 ? (
+        ) : items.length === 0 ? (
           <div className="text-xs text-gray-500 py-10 text-center">
-            {items.length === 0 ? 'No images in your gallery yet.' : 'No images match your search.'}
+            {error ? 'Gallery could not be loaded.' : query.trim() ? 'No images match your search.' : 'No images in your gallery yet.'}
           </div>
         ) : (
           <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3">
-            {filtered.map((item) => {
+            {items.map((item) => {
               const idx = selected.indexOf(item.filename);
               return (
                 <MediaCard
@@ -144,6 +145,13 @@ export default function ImportGalleryDialog({ dataset, onClose, onImported }) {
               );
             })}
           </div>
+        )}
+        {error && <button type="button" onClick={() => setRetry(n => n + 1)} className="w-full min-h-[44px] text-port-accent">Retry loading images</button>}
+        {!error && items.length < total && (
+          <button type="button" disabled={loading} onClick={() => setOffset(items.length)}
+            className="w-full min-h-[44px] mt-3 text-sm text-port-accent disabled:opacity-50">
+            {loading ? 'Loading…' : 'Show more'}
+          </button>
         )}
       </div>
 
