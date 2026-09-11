@@ -109,6 +109,17 @@ describe('AppTaskCard', () => {
     expect(screen.getByText('Paused')).toBeTruthy();
   });
 
+  it('shows the global pause state on the card', () => {
+    renderCard({ enabled: false });
+    const indicator = screen.getByText('Global pause active').closest('[role="status"]');
+    expect(indicator).toHaveTextContent('Scheduled runs are paused for this task.');
+  });
+
+  it('does not show a global pause indicator for an enabled task', () => {
+    renderCard();
+    expect(screen.queryByText('Global pause active')).toBeNull();
+  });
+
   it('marks an automation-only task and removes direct actions', () => {
     const { onTrigger, onConfigure } = renderCard({
       invocation: {
