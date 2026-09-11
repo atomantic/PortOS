@@ -28,11 +28,12 @@
  * it's gated on its own marker and invoked from the backend selector.
  */
 
-import { rename, readdir, stat } from 'fs/promises';
+import { rename, readdir } from 'fs/promises';
 import { join } from 'path';
-import { PATHS, readJSONFile } from '../lib/fileUtils.js';
+import { PATHS } from '../lib/fileUtils.js';
 import { markerExists, writeMarker } from '../lib/migrationMarker.js';
 import { query } from '../lib/db.js';
+import { readLegacyJSON, legacyDirectory, incompleteImport } from './legacyImport.js';
 import { mirrorTimestamp } from '../lib/pgTimestamp.js';
 
 const LEGACY_DIRNAME = 'universes';
@@ -42,12 +43,12 @@ const MARKER_FILENAME = 'universes.migrated.json';
 // One legacy universe record → `universes` row. Verbatim into `data`; the typed
 // mirror columns are bind-sanitized so a hand-edited/legacy timestamp or missing
 // field can't make the INSERT throw and abort the whole import.
-async function importRecord(record) {
-  if (!record || typeof record !== 'object' || typeof record.id !== 'string' || !record.id) return false;
+export async function importRecord(record, execute = query) {
+  if (!record || typeof record !== 'object' || typeof record.id !== 'string' || !record.id) return null;
   const now = new Date().toISOString();
   const createdAt = mirrorTimestamp(record.createdAt, now);
   const schemaVersion = Number.isInteger(record.schemaVersion) ? record.schemaVersion : 4;
-  const result = await query(
+  const result = await execute(
     `INSERT INTO universes (id, name, data, schema_version, ephemeral, created_at, updated_at, deleted, deleted_at)
      VALUES ($1, $2, $3::jsonb, $4, $5, $6, $7, $8, $9)
      ON CONFLICT (id) DO NOTHING`,
@@ -66,9 +67,9 @@ async function importRecord(record) {
   return result.rowCount > 0;
 }
 
-async function importRun(run) {
-  if (!run || typeof run !== 'object' || typeof run.id !== 'string' || typeof run.universeId !== 'string') return false;
-  const result = await query(
+export async function importRun(run, execute = query) {
+  if (!run || typeof run !== 'object' || typeof run.id !== 'string' || typeof run.universeId !== 'string' || !run.id || !run.universeId) return null;
+  const result = await execute(
     `INSERT INTO universe_runs (id, universe_id, collection_id, data, created_at)
      VALUES ($1, $2, $3, $4::jsonb, $5)
      ON CONFLICT (id) DO NOTHING`,
@@ -87,40 +88,60 @@ export async function migrateUniversesToDB() {
   if (await markerExists(MARKER_FILENAME)) return { ok: true, reason: 'already-applied', imported: 0 };
 
   const legacyDir = join(PATHS.data, LEGACY_DIRNAME);
-  const dirStat = await stat(legacyDir).catch(() => null);
+  const dirStat = await legacyDirectory(legacyDir);
 
   // Fresh install (no legacy dir): no-op WITHOUT stamping the marker. The probe
   // is a single stat per boot — cheap — and NOT stamping keeps the recovery
   // escape hatch open: a user who later restores data/universes.imported back to
   // data/universes (to re-import after a rollback) gets a real import on the next
   // boot. Stamping here would silently suppress that forever.
-  if (!dirStat || !dirStat.isDirectory()) {
+  if (!dirStat) {
     return { ok: true, reason: 'fresh-install', imported: 0, runs: 0 };
   }
 
-  const entries = await readdir(legacyDir).catch(() => []);
+  const entries = await readdir(legacyDir);
   let imported = 0;
   let skipped = 0;
+  let incomplete = 0;
   for (const name of entries) {
     if (name === 'index.json' || name.startsWith('.')) continue;
-    const record = await readJSONFile(join(legacyDir, name, 'index.json'), null, { allowArray: false, logError: false });
-    if (!record) { skipped += 1; continue; }
-    if (await importRecord(record)) imported += 1;
+    const recordPath = join(legacyDir, name, 'index.json');
+    const source = await readLegacyJSON(recordPath);
+    if (source.status === 'missing') {
+      // Current DB-backed records may own file-primary siblings without legacy
+      // metadata. Confirm the row instead of treating those directories as loss.
+      const existing = await query('SELECT id FROM universes WHERE id = $1', [name]);
+      if (!existing.rows.length) incomplete += 1;
+      skipped += 1;
+      continue;
+    }
+    if (source.status !== 'valid' || source.value?.id !== name) { incomplete += 1; continue; }
+    const inserted = await importRecord(source.value);
+    if (inserted === null) { incomplete += 1; continue; }
+    if (inserted) imported += 1;
     else skipped += 1;
   }
 
   // Runs from the type-level index.json `config.runs[]`.
   let runs = 0;
-  const typeIndex = await readJSONFile(join(legacyDir, 'index.json'), null, { allowArray: false, logError: false });
-  const legacyRuns = Array.isArray(typeIndex?.config?.runs) ? typeIndex.config.runs : [];
-  for (const run of legacyRuns) {
-    if (await importRun(run)) runs += 1;
+  const typeIndex = await readLegacyJSON(join(legacyDir, 'index.json'));
+  if (typeIndex.status === 'invalid' || Array.isArray(typeIndex.value)) incomplete += 1;
+  if (typeIndex.status === 'valid') {
+    const legacyRuns = typeIndex.value?.config?.runs;
+    if (legacyRuns !== undefined && !Array.isArray(legacyRuns)) incomplete += 1;
+    for (const run of Array.isArray(legacyRuns) ? legacyRuns : []) {
+      const inserted = await importRun(run);
+      if (inserted === null) incomplete += 1;
+      else if (inserted) runs += 1;
+    }
   }
 
   // Rename the legacy dir aside AFTER all rows land, then stamp the marker only
   // if the rename succeeded (so a rollback / MEMORY_BACKEND=file boot can't read
   // a stale dir while the marker claims migration is done). If the rename fails,
   // leave the dir + no marker → next boot retries the idempotent import.
+  if (incomplete) return incompleteImport('Universes', { imported, skipped, runs }, incomplete);
+
   try {
     await rename(legacyDir, join(PATHS.data, IMPORTED_DIRNAME));
   } catch (err) {

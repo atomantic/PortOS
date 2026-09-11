@@ -30,11 +30,12 @@
  *     retry safe; an already-renamed record is simply skipped on re-read).
  */
 
-import { rename, readdir, stat } from 'fs/promises';
+import { readdir } from 'fs/promises';
 import { join } from 'path';
-import { PATHS, readJSONFile } from '../lib/fileUtils.js';
+import { PATHS } from '../lib/fileUtils.js';
 import { markerExists, writeMarker } from '../lib/migrationMarker.js';
 import { query } from '../lib/db.js';
+import { readLegacyJSON, legacyDirectory, parkLegacyFile, incompleteImport } from './legacyImport.js';
 import { mirrorTimestamp } from '../lib/pgTimestamp.js';
 
 const LEGACY_DIRNAME = 'pipeline-series';
@@ -44,11 +45,11 @@ const RECORD_RE = /^ser-[A-Za-z0-9-]+$/;
 // One legacy series record → `pipeline_series` row. Verbatim into `data`; the
 // typed mirror columns are bind-sanitized so a hand-edited/legacy value can't
 // make the INSERT throw and abort the whole import.
-async function importRecord(record) {
-  if (!record || typeof record !== 'object' || typeof record.id !== 'string' || !record.id) return false;
+export async function importRecord(record, execute = query) {
+  if (!record || typeof record !== 'object' || typeof record.id !== 'string' || !record.id) return null;
   const now = new Date().toISOString();
   const createdAt = mirrorTimestamp(record.createdAt, now);
-  const result = await query(
+  const result = await execute(
     `INSERT INTO pipeline_series (id, name, universe_id, writers_room_work_id, data, ephemeral, created_at, updated_at, deleted, deleted_at)
      VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7, $8, $9, $10)
      ON CONFLICT (id) DO NOTHING`,
@@ -72,31 +73,39 @@ export async function migrateSeriesToDB() {
   if (await markerExists(MARKER_FILENAME)) return { ok: true, reason: 'already-applied', imported: 0 };
 
   const legacyDir = join(PATHS.data, LEGACY_DIRNAME);
-  const dirStat = await stat(legacyDir).catch(() => null);
+  const dirStat = await legacyDirectory(legacyDir);
 
   // Fresh install (no legacy dir): no-op WITHOUT stamping the marker (keeps the
   // recovery escape hatch open — see migrateUniversesToDB).
-  if (!dirStat || !dirStat.isDirectory()) {
+  if (!dirStat) {
     return { ok: true, reason: 'fresh-install', imported: 0 };
   }
 
-  const entries = await readdir(legacyDir).catch(() => []);
+  const entries = await readdir(legacyDir);
   let imported = 0;
   let skipped = 0;
+  let incomplete = 0;
   for (const name of entries) {
     if (!RECORD_RE.test(name)) continue; // skip index.json, hidden, non-record dirs
     const recordPath = join(legacyDir, name, 'index.json');
-    const record = await readJSONFile(recordPath, null, { allowArray: false, logError: false });
-    // Already-renamed (index.json absent) on a retried run, or unreadable.
-    if (!record) { skipped += 1; continue; }
-    if (await importRecord(record)) imported += 1;
+    const source = await readLegacyJSON(recordPath);
+    if (source.status === 'missing') {
+      // Current DB-backed records may own file-primary siblings without legacy
+      // metadata. Confirm the row instead of treating those directories as loss.
+      const existing = await query('SELECT id FROM pipeline_series WHERE id = $1', [name]);
+      if (!existing.rows.length) incomplete += 1;
+      skipped += 1;
+      continue;
+    }
+    if (source.status !== 'valid' || source.value?.id !== name) { incomplete += 1; continue; }
+    const inserted = await importRecord(source.value);
+    if (inserted === null) { incomplete += 1; continue; }
+    if (inserted) imported += 1;
     else skipped += 1;
-    // Rename the record's index.json aside IN PLACE — leaves the dir + its
-    // manuscript-review.json sibling untouched, so the file-primary review doc
-    // stays readable at its canonical path. Best-effort: a rename failure leaves
-    // the index.json (next boot retries; ON CONFLICT DO NOTHING is safe).
-    await rename(recordPath, `${recordPath}.imported`).catch(() => {});
+    if (!await parkLegacyFile(recordPath, `${recordPath}.imported`)) incomplete += 1;
   }
+
+  if (incomplete) return incompleteImport('Series', { imported, skipped }, incomplete);
 
   await writeMarker(MARKER_FILENAME, { migratedAt: new Date().toISOString(), imported, skipped, reason: 'imported' });
   console.log(`🎬 pipeline-series→DB import: imported ${imported} series (${skipped} skipped); index.json renamed aside in place (review siblings kept)`);

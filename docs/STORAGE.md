@@ -394,3 +394,49 @@ also exposes a numeric-only projection through `GET /api/apps/quality-federation
 (`days=30|90|365`), gated on an identified, registered, enabled full-sync peer
 with outbound sharing allowed. The ordinary app list and capability/status
 payloads still carry no assessment data. See [quality federation](decisions/2026-09-10-portos-quality-federation.md).
+
+### Retrying incomplete legacy creative imports
+
+The Series, Pipeline Issues, Story Builder, Universe and Writers Room file-to-DB
+importers withhold their domain completion marker while a source is malformed,
+unreadable, invalid, or cannot be parked. Healthy rows remain available in
+PostgreSQL. Repair the affected canonical JSON from a backup, resolve filesystem
+errors, then restart: the next import retries without replacing existing DB rows.
+Whole-directory imports keep their canonical directory until verification
+completes. Writers Room prose and Series manuscript-review siblings stay in place.
+A pre-existing recovery copy is preserved; if it prevents parking a repaired
+canonical file, archive that older copy separately before retrying.
+
+An older release may already have stamped a premature marker. Do **not** clear
+all migration markers or move entire historical directories back into service:
+that can resurrect records intentionally deleted since migration. Instead, run
+this explicit recovery command from the install checkout with its normal database
+connection configuration (after database setup has completed):
+
+```bash
+# Read-only inventory of canonical and parked recovery sources and DB presence.
+node server/scripts/recoverLegacyImports.js
+
+# Preview only the IDs you intend to restore.
+node server/scripts/recoverLegacyImports.js --id series:ser-example --id issue:iss-example
+
+# Apply that exact selection after checking the preview.
+node server/scripts/recoverLegacyImports.js --id series:ser-example --id issue:iss-example --apply
+```
+
+No arguments means **dry-run**. The command reports `missing`, `exists`,
+`invalid-source`, `invalid-record`, or `not-found`; application reports `inserted`
+for newly restored rows. It inspects both canonical sources and `.imported`
+recovery copies, preferring a valid canonical record when the same ID appears in
+both. Fix invalid sources before applying a selection. It never changes source
+files or migration markers, and every insert retains `ON CONFLICT DO NOTHING` so
+existing rows, including soft-deleted rows and newer edits, remain authoritative.
+
+Selection kinds are `series`, `issue`, `story`, `universe`, `run`, `work`, `draft`,
+`folder`, and `exercise`, each followed by `:` and the original record ID.
+Selection is per database row: selecting a Writers Room work does **not** select
+its historical drafts; include each wanted `draft:<id>` explicitly. Likewise,
+select required parent records (for example a series for an issue) separately.
+Recovery is never run automatically at boot. Keep a backup while verifying the
+restored records in the UI; this command cannot recover artifacts already pruned
+from disk, so those must first be restored from a backup.
