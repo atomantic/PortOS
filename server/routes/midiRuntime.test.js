@@ -28,6 +28,9 @@ vi.mock('../lib/sseDownload.js', () => ({
       safeEnd: () => { if (!res.writableEnded) res.end(); },
     };
   },
+  onClientDisconnect: (_req, res, handler) => {
+    res.on('close', () => { if (!res.writableEnded) handler(); });
+  },
 }));
 
 import { errorMiddleware } from '../lib/errorHandler.js';
@@ -48,12 +51,20 @@ describe('midi-runtime routes', () => {
     py.installed = true;
   });
 
-  it('GET /install completes without spawning when the venv already exists', async () => {
+  it('GET /install reports runtime status as JSON', async () => {
     const r = await request(app).get('/api/midi-runtime/install');
+    expect(r.status).toBe(200);
+    expect(r.body).toMatchObject({
+      runtime: 'muscriptor',
+      installed: true,
+      pythonPath: '/home/x/.portos/venv-muscriptor/bin/python3',
+    });
+  });
+
+  it('POST /install streams completion when the venv already exists', async () => {
+    const r = await request(app).post('/api/midi-runtime/install');
     expect(r.status).toBe(200);
     expect(r.text).toContain('"type":"complete"');
     expect(r.text).toContain('Already installed');
-    // The success frame names the resolved interpreter so the modal can show it.
-    expect(r.text).toContain('venv-muscriptor');
   });
 });

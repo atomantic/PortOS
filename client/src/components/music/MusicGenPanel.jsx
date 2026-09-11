@@ -761,6 +761,7 @@ export default function MusicGenPanel({ track, title = '', artistId = '', artist
         runtime={runtimeInstallEngine?.id}
         label={runtimeInstallEngine?.name}
         installUrlBase="/api/music/setup/runtime-install"
+        streamMethod="POST"
         description="Installing the music runtime and python packages. Large downloads may take several minutes."
         onClose={handleRuntimeInstallClose}
       />

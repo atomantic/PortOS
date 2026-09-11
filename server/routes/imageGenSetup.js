@@ -24,7 +24,7 @@ import {
   resolveFlux2Python, FLUX2_VENV_DEFAULT, installFlux2Venv, isFlux2VenvHealthy,
 } from '../lib/pythonSetup.js';
 import { PATHS } from '../lib/fileUtils.js';
-import { openSseStream } from '../lib/sseDownload.js';
+import { onClientDisconnect, openSseStream } from '../lib/sseDownload.js';
 import { getSetupCheck, invalidateSetupCheck, REQUIRED_PIP_NAMES } from '../services/imageGen/setup.js';
 
 const router = Router();
@@ -36,7 +36,7 @@ router.get('/python', asyncHandler(async (_req, res) => {
 
 // SSE-driven FLUX.2 venv bootstrap. Replaces the "drop to a shell and run
 // INSTALL_FLUX2=1 bash scripts/setup-image-video.sh" friction with an in-app
-// install: the client opens an EventSource, gets staged progress events
+// install: the client opens a POST fetch stream, gets staged progress events
 // (detect → venv → upgrade-pip → install → verify), and either finishes or
 // surfaces a clear error. Runs the install logic in-process via
 // installFlux2Venv() so we get structured `stage` events the UI can animate
@@ -47,7 +47,37 @@ router.get('/python', asyncHandler(async (_req, res) => {
 // gate the second click — the first install hasn't created the python yet.
 let flux2InstallInFlight = null;
 
-router.get('/flux2-install', asyncHandler(async (req, res) => {
+async function flux2Status(req) {
+  const [token, healthy] = await Promise.all([getHfToken(), isFlux2VenvHealthy()]);
+  const venvPython = resolveFlux2Python();
+  // The 9B (bf16) and 4B variants ship as separately-gated repos with
+  // distinct HF license URLs. Use the active model's `licenseUrl` when the
+  // client supplies a `modelId`; fall back to the 4B URL for callers that
+  // pre-date the multi-variant registry.
+  const FLUX2_DEFAULT_LICENSE = 'https://huggingface.co/black-forest-labs/FLUX.2-klein-4B';
+  let licenseUrl = FLUX2_DEFAULT_LICENSE;
+  if (typeof req.query?.modelId === 'string' && req.query.modelId.length > 0) {
+    const model = getImageModels().find((candidate) => candidate.id === req.query.modelId);
+    if (isFlux2(model) && typeof model?.licenseUrl === 'string' && model.licenseUrl.length > 0) {
+      licenseUrl = model.licenseUrl;
+    }
+  }
+  return {
+    hfTokenPresent: !!token,
+    venvInstalled: healthy,
+    venvPath: venvPython,
+    expectedVenvPath: FLUX2_VENV_DEFAULT,
+    licenseUrl,
+  };
+}
+
+const sendFlux2Status = async (req, res) => res.json(await flux2Status(req));
+
+// Backward-compatible read surface. GET reports the same readiness payload as
+// /flux2-status and never starts the multi-GB installer.
+router.get('/flux2-install', asyncHandler(sendFlux2Status));
+
+router.post('/flux2-install', asyncHandler(async (req, res) => {
   const { send, safeEnd } = openSseStream(res);
 
   // Skip only when the venv binary AND the import work — a half-broken venv
@@ -87,36 +117,14 @@ router.get('/flux2-install', asyncHandler(async (req, res) => {
 
   // Cancel the install if the client navigates away mid-bootstrap. A torch
   // install is a multi-GB download and would otherwise keep running invisibly.
-  req.on('close', () => { installLog.cancel(); kill(); safeEnd(); });
+  onClientDisconnect(req, res, () => { installLog.cancel(); kill(); safeEnd(); });
 }));
 
 // Used by the FLUX.2 model picker: surface a banner when the gated repo's
 // license hasn't been accepted (HF_TOKEN missing) and the runner is set up.
 // `venvInstalled` reflects functional health (binary AND packages import) —
 // a half-broken venv would otherwise hide the install banner forever.
-router.get('/flux2-status', asyncHandler(async (req, res) => {
-  const [token, healthy] = await Promise.all([getHfToken(), isFlux2VenvHealthy()]);
-  const venvPython = resolveFlux2Python();
-  // The 9B (bf16) and 4B variants ship as separately-gated repos with
-  // distinct HF license URLs. Use the active model's `licenseUrl` when the
-  // client supplies a `modelId`; fall back to the 4B URL for callers that
-  // pre-date the multi-variant registry.
-  const FLUX2_DEFAULT_LICENSE = 'https://huggingface.co/black-forest-labs/FLUX.2-klein-4B';
-  let licenseUrl = FLUX2_DEFAULT_LICENSE;
-  if (typeof req.query?.modelId === 'string' && req.query.modelId.length > 0) {
-    const model = getImageModels().find((m) => m.id === req.query.modelId);
-    if (isFlux2(model) && typeof model?.licenseUrl === 'string' && model.licenseUrl.length > 0) {
-      licenseUrl = model.licenseUrl;
-    }
-  }
-  res.json({
-    hfTokenPresent: !!token,
-    venvInstalled: healthy,
-    venvPath: venvPython,
-    expectedVenvPath: FLUX2_VENV_DEFAULT,
-    licenseUrl,
-  });
-}));
+router.get('/flux2-status', asyncHandler(sendFlux2Status));
 
 // Generic HF-token presence check for legacy mflux runners that don't need
 // the FLUX.2 venv. Any model entry with `requiresHfToken: true` in
@@ -155,13 +163,18 @@ router.delete('/hf-token', asyncHandler(async (_req, res) => {
 
 const checkSchema = z.object({ pythonPath: z.string().min(1) });
 
-router.get('/check', asyncHandler(async (req, res) => {
+const sendSetupCheck = async (req, res) => {
   const { pythonPath } = validateRequest(checkSchema, req.query);
   if (!isAllowedPython(pythonPath)) {
-    throw new ServerError('pythonPath must be a python interpreter (basename python/python3/python3.NN)', { status: 400 });
+    throw new ServerError('pythonPath must be a python interpreter (basename python/python3/python3.NN)', {
+      status: 400,
+      code: 'INVALID_PYTHON_PATH',
+    });
   }
   res.json(await getSetupCheck(pythonPath));
-}));
+};
+
+router.get('/check', asyncHandler(sendSetupCheck));
 
 const venvSchema = z.object({
   basePython: z.string().min(1).optional(),
@@ -192,23 +205,28 @@ const installSchema = z.object({
   packages: z.array(z.string().min(1)).min(1).max(40),
 });
 
-// EventSource consumers re-run /setup/check on `complete` to refresh status.
-router.get('/install', (req, res) => {
+// Backward-compatible read surface for stale installer URLs. It returns the
+// same setup status as /check and never starts pip.
+router.get('/install', asyncHandler(sendSetupCheck));
+
+// Fetch-stream consumers re-run /setup/check on `complete` to refresh status.
+const packageInstallsInFlight = new Map();
+router.post('/install', asyncHandler(async (req, res) => {
   const pythonPath = req.query.pythonPath;
   const packages = String(req.query.packages || '').split(',').filter(Boolean);
-  const parsed = installSchema.safeParse({ pythonPath, packages });
-  if (!parsed.success) {
-    res.writeHead(400, { 'Content-Type': 'application/json' });
-    return res.end(JSON.stringify({ error: parsed.error.message }));
+  const input = validateRequest(installSchema, { pythonPath, packages });
+  if (!isAllowedPython(input.pythonPath)) {
+    throw new ServerError('pythonPath must be a python interpreter', {
+      status: 400,
+      code: 'INVALID_PYTHON_PATH',
+    });
   }
-  if (!isAllowedPython(parsed.data.pythonPath)) {
-    res.writeHead(400, { 'Content-Type': 'application/json' });
-    return res.end(JSON.stringify({ error: 'pythonPath must be a python interpreter' }));
-  }
-  const disallowed = parsed.data.packages.filter((p) => !REQUIRED_PIP_NAMES.has(p));
+  const disallowed = input.packages.filter((p) => !REQUIRED_PIP_NAMES.has(p));
   if (disallowed.length) {
-    res.writeHead(400, { 'Content-Type': 'application/json' });
-    return res.end(JSON.stringify({ error: `Packages not in allowlist: ${disallowed.join(', ')}` }));
+    throw new ServerError(`Packages not in allowlist: ${disallowed.join(', ')}`, {
+      status: 400,
+      code: 'INSTALL_PACKAGE_NOT_ALLOWED',
+    });
   }
 
   // `send` and `safeEnd` from openSseStream no-op once the response has ended
@@ -217,21 +235,29 @@ router.get('/install', (req, res) => {
   const { send, safeEnd } = openSseStream(res);
   // Server-console visibility for the (multi-GB) local pip install — the SSE
   // stream otherwise surfaces progress only in the browser.
-  const installLog = createInstallLogger({ installer: 'Image Gen packages', target: parsed.data.pythonPath });
+  const installLog = createInstallLogger({ installer: 'Image Gen packages', target: input.pythonPath });
   const emit = (ev) => { installLog.onEvent(ev); send(ev); };
+  if (packageInstallsInFlight.has(input.pythonPath)) {
+    send({ type: 'error', message: `Another package install is already running for ${input.pythonPath}. Wait for it to finish or restart PortOS.` });
+    return safeEnd();
+  }
   installLog.start();
-  const { promise, kill } = installPackages(parsed.data.pythonPath, parsed.data.packages, emit);
-  promise.then(() => {
-    // Drop the now-stale setup-check snapshot before the client re-runs the
-    // probe on `complete` — without this it would read the pre-install
-    // missing-packages list back from cache.
-    invalidateSetupCheck(parsed.data.pythonPath);
-    safeEnd();
-  });
+  const { promise, kill } = installPackages(input.pythonPath, input.packages, emit);
+  packageInstallsInFlight.set(input.pythonPath, promise);
+  promise
+    .catch((err) => emit({ type: 'error', message: err?.message || 'Unknown installer failure' }))
+    .finally(() => {
+      packageInstallsInFlight.delete(input.pythonPath);
+      // Drop the now-stale setup-check snapshot before the client re-runs the
+      // probe on `complete` — without this it would read the pre-install
+      // missing-packages list back from cache.
+      invalidateSetupCheck(input.pythonPath);
+      safeEnd();
+    });
 
   // Client navigation away should kill pip — a torch upgrade can run for
   // 10+ minutes and would otherwise keep going invisibly.
-  req.on('close', () => { installLog.cancel(); kill(); safeEnd(); });
-});
+  onClientDisconnect(req, res, () => { installLog.cancel(); kill(); safeEnd(); });
+}));
 
 export default router;

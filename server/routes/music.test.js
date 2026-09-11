@@ -138,6 +138,9 @@ const sse = vi.hoisted(() => ({
 }));
 vi.mock('../lib/sseDownload.js', () => ({
   openSseStream: (res) => sse.open(res),
+  onClientDisconnect: (_req, res, handler) => {
+    res.on('close', () => { if (!res.writableEnded) handler(); });
+  },
 }));
 vi.mock('../services/hfDownloadStream.js', () => ({
   startHfDownloadStream: (args) => sse.run(args),
@@ -349,7 +352,7 @@ describe('music routes', () => {
   });
 
   it('refuses MiniMax runtime installation while profile VRAM is unknown', async () => {
-    const r = await request(app).get('/api/music/setup/runtime-install?runtime=minimax-music3');
+    const r = await request(app).post('/api/music/setup/runtime-install?runtime=minimax-music3');
     expect(r.status).toBe(200);
     expect(r.text).toContain('VRAM requirement has not been measured');
     expect(setup.spawn).not.toHaveBeenCalled();
@@ -417,21 +420,29 @@ describe('music routes', () => {
     expect(ready.body.venvPath).toBe('/v/ace/bin/python3');
   });
 
-  it('GET /setup/runtime-install completes without spawning when already installed', async () => {
+  it('GET /setup/runtime-install reports status without spawning', async () => {
     gen.ready = true;
     const r = await request(app).get('/api/music/setup/runtime-install?runtime=acestep');
     expect(r.status).toBe(200);
-    expect(r.text).toContain('"type":"complete"');
-    expect(r.text).toContain('Already installed');
+    expect(r.body).toMatchObject({ runtime: 'acestep', installed: true });
+    expect(setup.spawn).not.toHaveBeenCalled();
   });
 
-  it('GET /setup/runtime-install proceeds when the interpreter exists but the venv is broken', async () => {
+  it('GET /setup/runtime-install rejects an unknown runtime before opening SSE', async () => {
+    const r = await request(app).get('/api/music/setup/runtime-install?runtime=unknown');
+    expect(r.status).toBe(400);
+    expect(r.body).toMatchObject({ code: 'UNKNOWN_MUSIC_RUNTIME' });
+    expect(r.body.timestamp).toEqual(expect.any(Number));
+    expect(setup.spawn).not.toHaveBeenCalled();
+  });
+
+  it('POST /setup/runtime-install proceeds when the interpreter exists but the venv is broken', async () => {
     // Regression: a failed install leaves the venv's interpreter behind, so the
     // old interpreter-exists check short-circuited with "already installed" and
     // the engine could never be repaired from the UI.
     gen.ready = true;          // resolvePython() finds the leftover interpreter
     gen.healthy = false;       // ...but the import probe fails
-    const r = await request(app).get('/api/music/setup/runtime-install?runtime=acestep');
+    const r = await request(app).post('/api/music/setup/runtime-install?runtime=acestep');
     expect(r.status).toBe(200);
     expect(r.text).not.toContain('Already installed');
     expect(r.text).toContain('Starting ACE-Step install.');
@@ -448,13 +459,13 @@ describe('music routes', () => {
     expect(acestep.ready).toBe(false);
   });
 
-  it('GET /setup/runtime-install refuses on a host that can never run the engine', async () => {
+  it('POST /setup/runtime-install refuses on a host that can never run the engine', async () => {
     // Previously the route spawned the setup script, whose own platform guard
     // printed "Skipping." and exited 0 — surfaced to the user as "installer
     // exited 0 but the engine is still not available".
     gen.unsupportedPlatform = 'musicgen';
     gen.healthy = false;
-    const r = await request(app).get('/api/music/setup/runtime-install?runtime=musicgen');
+    const r = await request(app).post('/api/music/setup/runtime-install?runtime=musicgen');
     expect(r.status).toBe(200);
     expect(r.text).toContain('cannot be installed on this host');
     expect(setup.spawn).not.toHaveBeenCalled();

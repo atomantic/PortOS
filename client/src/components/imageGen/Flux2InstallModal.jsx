@@ -1,13 +1,13 @@
 /**
  * FLUX.2 venv installer modal. Streams progress from
- * GET /api/image-gen/setup/flux2-install (SSE) and animates a 5-stage pipeline
+ * POST /api/image-gen/setup/flux2-install (SSE) and animates a 5-stage pipeline
  * so the user sees something is happening during the multi-GB torch download.
  *
  * Stages match the events emitted by installFlux2Venv() in pythonSetup.js:
  *   detect → venv → upgrade-pip → install → verify → complete
  *
- * Closing the modal mid-install (X button or backdrop click) terminates the
- * EventSource, which the server interprets as a cancel and SIGTERMs pip.
+ * Closing the modal mid-install (X button or backdrop click) aborts the fetch
+ * stream, which the server interprets as a cancel and SIGTERMs pip.
  */
 
 import { useEffect, useState } from 'react';
@@ -28,14 +28,14 @@ const STAGE_INDEX = Object.fromEntries(STAGES.map((s, i) => [s.id, i]));
 
 export default function Flux2InstallModal({ open, onClose, onComplete }) {
   const [confirmingCancel, setConfirmingCancel] = useState(false);
-  // The shared install-stream hook owns the EventSource lifecycle, log
+  // The shared install-stream hook owns the fetch-stream lifecycle, log
   // accumulation, stage tracking, connection-lost handling and auto-scroll.
   // onComplete is ref-stashed inside the hook so ImageGen's frequent state
   // churn (gallery, generating, localProgress) can't kill the install
   // mid-stream by re-running the effect.
   const { logs, currentStage, done, error, logsEndRef, close } = useInstallStream(
     '/api/image-gen/setup/flux2-install',
-    { enabled: open, onComplete },
+    { enabled: open, onComplete, method: 'POST' },
   );
 
   // Reset the cancel-confirm prompt whenever the modal closes, so a reopen

@@ -1215,6 +1215,27 @@ describe('Image Gen Routes', () => {
     });
   });
 
+  describe('FLUX.2 installer contract', () => {
+    it('GET /setup/flux2-install reports status without starting an install', async () => {
+      const { installFlux2Venv, isFlux2VenvHealthy } = await import('../lib/pythonSetup.js');
+      isFlux2VenvHealthy.mockResolvedValueOnce(false);
+      const response = await request(app).get('/api/image-gen/setup/flux2-install');
+      expect(response.status).toBe(200);
+      expect(response.body).toMatchObject({
+        venvInstalled: false,
+        expectedVenvPath: '/fake/flux2-venv',
+      });
+      expect(installFlux2Venv).not.toHaveBeenCalled();
+    });
+
+    it('POST /setup/flux2-install keeps the existing SSE completion contract', async () => {
+      const response = await request(app).post('/api/image-gen/setup/flux2-install');
+      expect(response.status).toBe(200);
+      expect(response.text).toContain('"type":"complete"');
+      expect(response.text).toContain('Already installed');
+    });
+  });
+
   describe('GET /setup/check (cache behavior)', () => {
     // Each test uses a unique pythonPath so the module-scope cache from one
     // test doesn't bleed into the next (vi.clearAllMocks() resets call counts
@@ -1282,14 +1303,23 @@ describe('Image Gen Routes', () => {
       expect(probePythonHealth).toHaveBeenCalledTimes(2);
     });
 
-    it('GET /setup/install completion invalidates the cache for that pythonPath', async () => {
+    it('GET /setup/install reports setup status without starting pip', async () => {
+      const { installPackages } = await import('../lib/pythonSetup.js');
+      const p = '/usr/bin/python3-install-status-test';
+      const status = await request(app).get(`/api/image-gen/setup/install?pythonPath=${encodeURIComponent(p)}&packages=mflux`);
+      expect(status.status).toBe(200);
+      expect(status.body).toMatchObject({ installed: ['mflux', 'mlx'], missing: [] });
+      expect(installPackages).not.toHaveBeenCalled();
+    });
+
+    it('POST /setup/install completion invalidates the cache for that pythonPath', async () => {
       const p = '/usr/bin/python3-install-bust-test';
       // Warm cache.
       await request(app).get(`/api/image-gen/setup/check?pythonPath=${encodeURIComponent(p)}`);
       expect(probePythonHealth).toHaveBeenCalledTimes(1);
 
       // Run install (mocked installPackages resolves immediately).
-      const installRes = await request(app).get(`/api/image-gen/setup/install?pythonPath=${encodeURIComponent(p)}&packages=mflux`);
+      const installRes = await request(app).post(`/api/image-gen/setup/install?pythonPath=${encodeURIComponent(p)}&packages=mflux`);
       expect(installRes.status).toBe(200);
 
       // The next /setup/check must re-probe — the install just changed the
@@ -1297,6 +1327,39 @@ describe('Image Gen Routes', () => {
       // `complete` expecting fresh data.
       await request(app).get(`/api/image-gen/setup/check?pythonPath=${encodeURIComponent(p)}`);
       expect(probePythonHealth).toHaveBeenCalledTimes(2);
+    });
+
+    it('POST /setup/install rejects invalid packages with the standard error envelope', async () => {
+      const p = '/usr/bin/python3-install-validation-test';
+      const response = await request(app).post(`/api/image-gen/setup/install?pythonPath=${encodeURIComponent(p)}&packages=not-allowed`);
+      expect(response.status).toBe(400);
+      expect(response.body).toMatchObject({
+        code: 'INSTALL_PACKAGE_NOT_ALLOWED',
+        error: expect.stringContaining('not-allowed'),
+      });
+      expect(response.body.timestamp).toEqual(expect.any(Number));
+    });
+
+    it('single-flights package installs per interpreter without treating a completed POST body as a disconnect', async () => {
+      const { installPackages } = await import('../lib/pythonSetup.js');
+      let finishInstall;
+      const pending = new Promise((resolve) => { finishInstall = resolve; });
+      const kill = vi.fn();
+      installPackages.mockReturnValueOnce({ promise: pending, kill });
+      const p = '/usr/bin/python3-install-single-flight-test';
+      const url = `/api/image-gen/setup/install?pythonPath=${encodeURIComponent(p)}&packages=mflux`;
+
+      const first = request(app).post(url).then((response) => response);
+      await vi.waitFor(() => expect(installPackages).toHaveBeenCalledTimes(1));
+      expect(kill).not.toHaveBeenCalled();
+
+      const second = await request(app).post(url);
+      expect(second.text).toContain('Another package install is already running');
+      expect(installPackages).toHaveBeenCalledTimes(1);
+
+      finishInstall({ ok: true, code: 0 });
+      expect((await first).status).toBe(200);
+      expect(kill).not.toHaveBeenCalled();
     });
 
     it('write path sweeps expired entries so long-running processes do not accumulate', async () => {

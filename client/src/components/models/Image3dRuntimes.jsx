@@ -204,6 +204,7 @@ export default function Image3dRuntimes() {
         runtime={installTarget?.id}
         label={installTarget?.label}
         installUrlBase={installTarget ? `/api/image-to-3d/targets/${installTarget.id}/install` : undefined}
+        streamMethod="POST"
         // Repairing an already-installed target must re-run its setup rather than
         // short-circuit on "already installed" — that re-run is what rebuilds whatever
         // was missing (TRELLIS.2's Metal backends, Pixal3D's NATTEN kernels) now that

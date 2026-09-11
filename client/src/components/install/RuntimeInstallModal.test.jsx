@@ -51,6 +51,10 @@ describe('RuntimeInstallModal failure footer', () => {
     useInstallStream.mockReturnValue(streamState());
     render(<RuntimeInstallModal open runtime="trellis2" label="TRELLIS.2" onClose={vi.fn()} />);
     expect(screen.queryByRole('button', { name: /queue agent to investigate/i })).toBeNull();
+    expect(useInstallStream).toHaveBeenCalledWith(
+      expect.stringContaining('/api/video-gen/setup/runtime-install'),
+      expect.objectContaining({ method: 'POST' }),
+    );
   });
 
   it('queues a CoS task carrying the failing stage, error and log tail, targeting PortOS itself', async () => {
