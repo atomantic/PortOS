@@ -414,7 +414,7 @@ async function runPlanStep(project, step) {
     await finishRun(projectId, run?.runId, 'failed', resolved.error);
     const bumped = (step.retryCount || 0) + 1;
     await updatePlanStep(projectId, step.stepId, { ...(step.expectedProductionRevision === undefined ? {} : { expectedProductionRevision: step.expectedProductionRevision }), status: 'failed', retryCount: bumped, result: { error: resolved.error } });
-    console.log(`❌ CD plan ${projectId}: step "${step.stepId}" ${resolved.error}`);
+    console.error(`❌ CD plan ${projectId}: step "${step.stepId}" ${resolved.error}`);
     return handlePlanStepFailure(projectId, { ...step, retryCount: bumped });
   }
   const resolvedStep = { ...step, args: resolved.args };

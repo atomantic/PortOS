@@ -100,7 +100,7 @@ export async function runStitch(projectId) {
       const jobStatus = getRenderJobStatus(jobId);
       if (jobStatus && (jobStatus.status === 'error' || jobStatus.status === 'canceled')) {
         const reason = jobStatus.error ?? `Render ${jobStatus.status}`;
-        console.log(`❌ CD stitch: timeline render ${jobStatus.status} for ${timeline.id}: ${reason}`);
+        console.error(`❌ CD stitch: timeline render ${jobStatus.status} for ${timeline.id}: ${reason}`);
         await updateProject(projectId, { status: 'failed', failureReason: reason });
         return;
       }
@@ -139,7 +139,7 @@ export async function runStitch(projectId) {
     console.log(`✅ CD stitch complete: ${projectId} → ${finalEntry.id.slice(0, 8)}`);
   } catch (err) {
     const reason = err?.message ?? String(err);
-    console.log(`❌ CD stitch error for ${projectId}: ${reason}`);
+    console.error(`❌ CD stitch error for ${projectId}: ${reason}`);
     await updateProject(projectId, { status: 'failed', failureReason: reason }).catch(() => {});
   }
 }

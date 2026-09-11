@@ -238,7 +238,7 @@ export async function spawnAndWatchVideo({
       clearCompletionWatchdog();
       job.status = 'error';
       const reason = `Failed to spawn ${bin}: ${err.message}`;
-      console.log(`❌ Video generation spawn error [${jobId.slice(0, 8)}]: ${reason}`);
+      console.error(`❌ Video generation spawn error [${jobId.slice(0, 8)}]: ${reason}`);
       broadcastSse(job, { type: 'error', error: reason });
       videoGenEvents.emit('failed', { generationId: jobId, error: reason, failure: normalizeVideoFailure(err, { prompts: [meta?.prompt, meta?.negativePrompt] }) });
       videoJobState.activeProcess = null;
@@ -467,7 +467,7 @@ export async function spawnAndWatchVideo({
             reason = `Exit code ${code}${diagnostic ? `: ${diagnostic}` : ''}`;
           }
           if (batch) reason += ` (${batchResults.length}/${batch.length} videos saved to history)`;
-          console.log(`❌ Video generation failed [${jobId.slice(0, 8)}]: ${reason}`);
+          console.error(`❌ Video generation failed [${jobId.slice(0, 8)}]: ${reason}`);
           broadcastSse(job, { type: 'error', error: `Generation failed: ${reason}` });
           videoGenEvents.emit('failed', { generationId: jobId, error: reason, failure: missingPyModule ? normalizeVideoFailure(reason) : failure, ...(batch ? { results: batchResults } : {}) });
         } else {
@@ -678,7 +678,7 @@ export async function spawnAndWatchVideo({
     await releaseHeavyClaim();
     job.status = 'error';
     const reason = err.message || 'Video generation failed before the render child was wired';
-    console.log(`❌ Video generation setup error [${jobId.slice(0, 8)}]: ${reason}`);
+    console.error(`❌ Video generation setup error [${jobId.slice(0, 8)}]: ${reason}`);
     broadcastSse(job, { type: 'error', error: reason });
     videoGenEvents.emit('failed', { generationId: jobId, error: reason, failure: normalizeVideoFailure(err, { prompts: [meta?.prompt, meta?.negativePrompt] }) });
     void cleanupTempFiles({ includeUploads: true, includeUntrackedAudio: true });
