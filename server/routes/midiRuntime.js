@@ -1,7 +1,8 @@
 /**
  * MuScriptor (audio → MIDI transcription) runtime installer.
  *
- *   GET /api/midi-runtime/install  → SSE stream of the venv install
+ *   GET  /api/midi-runtime/install → JSON runtime status
+ *   POST /api/midi-runtime/install → SSE stream of the venv install
  *
  * The MIDI transcription feature (Rounds reference audio + Music Video source
  * track) runs in an opt-in venv at ~/.portos/venv-muscriptor. Rather than dead-
@@ -19,7 +20,7 @@ import { existsSync } from 'fs';
 import { asyncHandler } from '../lib/errorHandler.js';
 import { createLineReader } from '../lib/streamLines.js';
 import { SETUP_IMAGE_VIDEO_SCRIPT, spawnSetupScript, stopSetupScript } from '../lib/setupScriptRunner.js';
-import { openSseStream } from '../lib/sseDownload.js';
+import { onClientDisconnect, openSseStream } from '../lib/sseDownload.js';
 import { createInstallLogger } from '../lib/installLogger.js';
 import {
   resolveMuscriptorPython,
@@ -38,7 +39,18 @@ const MUSCRIPTOR_INSTALL_ENV = 'INSTALL_MUSCRIPTOR';
 // venv dir. The existsSync gate can't help before the venv is created.
 let installInFlight = null;
 
-router.get('/install', asyncHandler(async (req, res) => {
+router.get('/install', asyncHandler(async (_req, res) => {
+  const installed = await isMuscriptorRuntimeReady();
+  res.json({
+    runtime: 'muscriptor',
+    label: MUSCRIPTOR_LABEL,
+    installed,
+    pythonPath: installed ? resolveMuscriptorPython() : null,
+    expectedVenvPath: MUSCRIPTOR_VENV_DEFAULT,
+  });
+}));
+
+router.post('/install', asyncHandler(async (req, res) => {
   const { send, safeEnd } = openSseStream(res);
   // Server-console visibility for the multi-GB install (start / heartbeat /
   // outcome) — the SSE stream otherwise surfaces progress only in the browser.
@@ -62,7 +74,7 @@ router.get('/install', asyncHandler(async (req, res) => {
   // then spawn a multi-GB installer nobody is listening to — uncancellable, and
   // holding the singleton until it finished on its own. `child` is a mutable
   // outer var so this handler kills the process group once it exists.
-  req.on('close', () => {
+  onClientDisconnect(req, res, () => {
     clientGone = true;
     installLog.cancel();
     if (finished) return;

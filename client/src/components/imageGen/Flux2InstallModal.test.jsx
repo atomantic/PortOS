@@ -50,5 +50,9 @@ describe('Flux2InstallModal failure footer', () => {
     render(<Flux2InstallModal open onClose={vi.fn()} onComplete={vi.fn()} />);
     expect(screen.queryByRole('button', { name: /queue agent to investigate/i })).toBeNull();
     expect(screen.getByRole('button', { name: /^done$/i })).toBeTruthy();
+    expect(useInstallStream).toHaveBeenCalledWith(
+      '/api/image-gen/setup/flux2-install',
+      expect.objectContaining({ method: 'POST' }),
+    );
   });
 });
