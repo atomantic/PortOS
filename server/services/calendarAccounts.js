@@ -11,7 +11,8 @@ const queueWrite = createFileWriteQueue();
 
 async function loadAccounts() {
   await ensureDir(PATHS.calendar);
-  const parsed = await readJSONFile(ACCOUNTS_FILE, {});
+  // Account mutations must never save an empty map over unreadable account bytes.
+  const parsed = await readJSONFile(ACCOUNTS_FILE, {}, { strict: true });
   return isPlainObject(parsed) ? parsed : {};
 }
 

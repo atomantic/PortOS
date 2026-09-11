@@ -26,14 +26,14 @@ function sanitizeQueryValue(value) {
  * Get DataDog instances configuration
  */
 export async function getInstances() {
-  return await readJSONFile(DATADOG_CONFIG_FILE, { instances: {} });
+  return await readJSONFile(DATADOG_CONFIG_FILE, { instances: {} }, { strict: true });
 }
 
 // Whether this install has any DataDog instance configured — the signal the
 // instance-feature registry uses to decide whether the DataDog nav entries
 // should appear before the user has toggled the feature explicitly.
 //
-// Deliberately NOT getInstances(): `strict` makes a PRESENT-but-corrupt config
+// Like getInstances(), `strict` makes a PRESENT-but-corrupt config
 // throw instead of reading as the empty default, so the caller records
 // "detection failed" and falls back to the shipped default rather than a
 // confident "no instances" that would silently hide the DataDog navigation. An

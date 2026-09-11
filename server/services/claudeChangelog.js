@@ -85,6 +85,8 @@ function stripHtml(html) {
  * Returns cached data if checked within the last hour.
  */
 export async function checkChangelog() {
+  // Replaceable feed cache: entries and the seen-version/check cursor come from
+  // this poll, not user edits. A failed read may safely rebuild them from the feed.
   const state = await readJSONFile(STATE_FILE, defaultState())
 
   // Return cached data if fresh enough

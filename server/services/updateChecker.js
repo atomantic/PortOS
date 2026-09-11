@@ -92,7 +92,8 @@ export async function getCurrentVersion() {
 
 async function loadState() {
   await ensureDir(PATHS.data);
-  const raw = await readJSONFile(UPDATE_FILE, defaultState(), { allowArray: false });
+  // Ignored versions and update outcomes are durable user state, not a rebuildable cache.
+  const raw = await readJSONFile(UPDATE_FILE, defaultState(), { allowArray: false, strict: true });
   const defaults = defaultState();
   const stateFromFile = isPlainObject(raw) ? raw : {};
   return {

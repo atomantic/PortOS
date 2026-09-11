@@ -34,7 +34,8 @@ async function load() {
   const now = Date.now();
   if (cache && (now - cacheTimestamp) < CACHE_TTL_MS) return cache;
   await ensureDir(DATA_DIR);
-  cache = await readJSONFile(REPOS_FILE, defaultData());
+  // This cache includes user flags and secret assignments, not just remote repo data.
+  cache = await readJSONFile(REPOS_FILE, defaultData(), { strict: true });
   cacheTimestamp = now;
   return cache;
 }
