@@ -32,7 +32,7 @@ import { emitLog } from './cosEvents.js';
 import { getActiveApps } from './apps.js';
 import { loadState, saveState, withStateLock, isImprovementEnabled } from './cosState.js';
 import { markAppReviewCooldown, bindAppReviewAgent } from './appActivity.js';
-import { onDemandRequestMetadata } from '../lib/quotaBurnOrigin.js';
+import { isManualOnDemandRequest, onDemandRequestMetadata } from '../lib/quotaBurnOrigin.js';
 import { addTask, reviveBlockedTask } from './cosTaskStore.js';
 
 /**
@@ -104,8 +104,8 @@ export async function drainOnDemandRequests(ctx, adapter) {
       continue;
     }
 
-    // Skip if the task type was disabled or removed after queuing.
-    if (!schedule.tasks[request.taskType]?.enabled) {
+    // Removed tasks never run; only automated requests honor schedule disablement.
+    if (!schedule.tasks[request.taskType] || (!isManualOnDemandRequest(request) && !schedule.tasks[request.taskType].enabled)) {
       emitLog('info', `On-demand request skipped — task type '${request.taskType}' is disabled`, { requestId: request.id });
       await taskScheduleMod.clearOnDemandRequest(request.id);
       continue;

@@ -1997,12 +1997,12 @@ describe('taskSchedule', () => {
       expect(schedule.onDemandRequests || []).toHaveLength(0)
     })
 
-    it('should reject when the task type is disabled (cheaper check runs first)', async () => {
+    it('rejects automated refills when the task type is disabled before reading state', async () => {
       mockSchedule({
         tasks: { 'feature-ideas': { type: 'weekly', enabled: false } }
       })
 
-      const result = await triggerOnDemandTask('feature-ideas', 'critical-mass')
+      const result = await triggerOnDemandTask('feature-ideas', 'app-1', { origin: ON_DEMAND_ORIGINS.REFILL })
 
       expect(result.error).toMatch(/'feature-ideas' is disabled/i)
       // loadState should not have been called — task-type check short-circuits before loadState.
@@ -2167,8 +2167,8 @@ describe('taskSchedule', () => {
     })
 
     it('records nothing when the trigger is refused', async () => {
-      mockSchedule({ tasks: { 'branch-reconcile': { type: 'on-demand', perpetual: true, enabled: false } } })
-      expect((await triggerOnDemandTask('branch-reconcile', 'app-1')).error).toMatch(/disabled/i)
+      mockSchedule({ tasks: {} })
+      expect((await triggerOnDemandTask('unknown-task', 'app-1')).error).toMatch(/unknown/i)
       expect(recordUserAction).not.toHaveBeenCalled()
     })
 

@@ -62,9 +62,9 @@ beforeEach(() => {
 });
 
 describe('drainProgrammaticOnDemandRequests', () => {
-  it('runs the handler with the task\'s saved settings and no probe context', async () => {
+  it('runs a disabled schedule manually with saved settings and no probe context', async () => {
     const handled = await drainProgrammaticOnDemandRequests({
-      taskScheduleMod, requests: [request()], schedule: schedule(), state: {},
+      taskScheduleMod, requests: [request()], schedule: schedule({ enabled: false }), state: {},
     });
 
     expect(handled.has('demand-1')).toBe(true);
@@ -105,9 +105,9 @@ describe('drainProgrammaticOnDemandRequests', () => {
     }));
   });
 
-  it('clears without running when the type was disabled after the request was queued', async () => {
+  it('clears an automated refill when the type was disabled after queuing', async () => {
     const handled = await drainProgrammaticOnDemandRequests({
-      taskScheduleMod, requests: [request()], schedule: schedule({ enabled: false }), state: {},
+      taskScheduleMod, requests: [{ ...request(), origin: 'refill' }], schedule: schedule({ enabled: false }), state: {},
     });
     // Still "handled" — the engines must skip it, not fall through and try to
     // generate an agent task for a type that has no prompt.

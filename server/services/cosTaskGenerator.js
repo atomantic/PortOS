@@ -31,7 +31,7 @@ import { join } from 'path';
 import { sanitizeTaskMetadata, PIPELINE_STAGE_BEHAVIOR_FLAGS, MAX_TOTAL_SPAWNS, resolveClaimReviewerConfig, reviewerConfigMetadata, hasReviewerOverride } from '../lib/validation.js';
 import { PATHS } from '../lib/fileUtils.js';
 import { isPlainObject } from '../lib/objects.js';
-import { hasQuotaBurnProvenance } from '../lib/quotaBurnOrigin.js';
+import { hasQuotaBurnProvenance, isManualOnDemandRequest } from '../lib/quotaBurnOrigin.js';
 import { isAutoApprovableInvestigation } from '../lib/investigationTasks.js';
 import { parsePlanItems, extractAllIds, findInProgressIds, pickFirstAvailable, diagnoseUnpickablePlan } from '../lib/planIds.js';
 import { loadState, saveState, withStateLock, isImprovementEnabled, isDaemonRunning } from './cosState.js';
@@ -2095,9 +2095,8 @@ export async function drainProgrammaticOnDemandRequests({ taskScheduleMod, reque
       await taskScheduleMod.clearOnDemandRequest(request.id);
       continue;
     }
-    // Parity with the agent engines: the type may have been disabled after the
-    // request was queued.
-    if (!taskConfig?.enabled) {
+    // Match the agent drain: manual runs bypass cadence, never task removal.
+    if (!taskConfig || (!isManualOnDemandRequest(request) && !taskConfig.enabled)) {
       emitLog('info', `On-demand request skipped — task type '${request.taskType}' is disabled`, { requestId: request.id });
       await taskScheduleMod.clearOnDemandRequest(request.id);
       continue;

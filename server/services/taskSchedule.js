@@ -56,7 +56,7 @@ import { isInstanceFeatureEnabled } from './instanceFeatures.js';
 import { recordUserAction } from './userActions.js';
 import { getTaskDataInputCatalog } from '../lib/taskDataInputCatalog.js';
 import { normalizeSuggestedAfter } from '../lib/scheduleRunOrder.js';
-import { normalizeQuotaBurnProvenance } from '../lib/quotaBurnOrigin.js';
+import { isManualOnDemandRequest, normalizeQuotaBurnProvenance } from '../lib/quotaBurnOrigin.js';
 import { enabledAppIdsByTaskType, evaluateOnDemandEligibility } from '../lib/quotaBurnTaskRef.js';
 import {
   clearFailureLedgerFields,
@@ -1087,11 +1087,12 @@ export async function triggerOnDemandTask(taskType, appId = null, {
   // prepareManagedAppImprovementTask as the MOST specific pin, above
   // the schedule interval and the app's own per-app override.
   const providerOverride = (provider || model || effort) ? { provider, model, effort } : null;
+  const manual = isManualOnDemandRequest({ origin, burn: burnProvenance });
   const request = await updateSchedule(async (schedule) => {
     const tasks = schedule.tasks || {};
     const config = Object.prototype.hasOwnProperty.call(tasks, taskType) ? tasks[taskType] : null;
     const entry = config ? {
-      enabled: config.enabled === true,
+      enabled: manual || config.enabled === true,
       featureEnabled: await createFeatureGate()(config),
       feature: config.feature || null,
       // A quota burn faces this gate alongside a human Run: a type owned by
@@ -1104,7 +1105,7 @@ export async function triggerOnDemandTask(taskType, appId = null, {
       // drain's applyOnDemandRunResets exists for exactly that — while a burn
       // picks its own step and must respect the switch the user set. Omitted,
       // the ladder skips the rung.
-      appIds: origin === ON_DEMAND_ORIGINS.QUOTA_BURN
+      appIds: origin === ON_DEMAND_ORIGINS.QUOTA_BURN && !manual
         ? enabledAppIdsByTaskType(await getActiveApps().catch(() => [])).get(taskType) || []
         : undefined,
     } : null;

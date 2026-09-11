@@ -362,8 +362,8 @@ describe.each(ENGINES)('%s — skip gates', (_name, makeAdapter) => {
     expect(spawned).toEqual([]);
   });
 
-  it('drops the request when its task type was disabled after queuing', async () => {
-    mocks.getOnDemandRequests.mockResolvedValue([appRequest()]);
+  it('drops an automated refill when its task type was disabled after queuing', async () => {
+    mocks.getOnDemandRequests.mockResolvedValue([appRequest({ origin: 'refill' })]);
     mocks.loadSchedule.mockResolvedValue({ tasks: { 'code-quality': { enabled: false } } });
     const { spawned, adapter } = makeAdapter();
     await drainOnDemandRequests({ state: STATE }, adapter);
@@ -449,5 +449,21 @@ describe('the per-engine adapter differences', () => {
     const { adapter } = dequeueAdapter();
     const result = await drainOnDemandRequests({ state: STATE }, adapter);
     expect(result.schedule).toEqual({ tasks: { 'code-quality': { enabled: true } } });
+  });
+});
+
+
+describe('schedule disablement at dispatch', () => {
+  it.each([
+    [{}, true],
+    [{ origin: 'quota-burn', burn: { family: 'grok', stepId: 'step-1', maintenanceRunId: 'manual-1' } }, true],
+    [{ origin: 'quota-burn', burn: { family: 'grok', stepId: 'step-1' } }, false],
+    [{ origin: 'refill' }, false],
+  ])('dispatches only explicit runs: %j', async (provenance, shouldSpawn) => {
+    mocks.loadSchedule.mockResolvedValue({ tasks: { 'code-quality': { enabled: false } } });
+    mocks.getOnDemandRequests.mockResolvedValue([appRequest(provenance)]);
+    const { adapter, spawned } = generatorAdapter();
+    await drainOnDemandRequests({ state: STATE }, adapter);
+    expect(spawned).toHaveLength(shouldSpawn ? 1 : 0);
   });
 });
