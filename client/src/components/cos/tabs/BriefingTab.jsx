@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { Link } from 'react-router';
 import {
   Newspaper,
   RefreshCw,
@@ -16,6 +17,8 @@ import * as api from '../../../services/api';
 import { RapidReaderTrigger } from '../../RapidReader';
 import BrailleSpinner from '../../BrailleSpinner';
 import { formatWeekdayDate } from '../../../utils/formatters';
+import EmptyState from '../../EmptyState';
+import { useAsyncAction } from '../../../hooks/useAsyncAction';
 
 const SECTION_ICONS = {
   'Task Queue': CheckCircle,
@@ -159,6 +162,11 @@ export default function BriefingTab() {
   const [loading, setLoading] = useState(true);
   const [expandedSections, setExpandedSections] = useState({});
 
+  const [generateBriefing, generatingBriefing] = useAsyncAction(async () => {
+    await api.triggerCosJob('job-daily-briefing', { silent: true });
+    await loadData();
+  });
+
   useEffect(() => {
     loadData();
   }, []);
@@ -251,10 +259,17 @@ export default function BriefingTab() {
       </div>
 
       {!parsed ? (
-        <div className="bg-port-card border border-port-border rounded-lg p-8 text-center">
-          <Newspaper className="w-12 h-12 text-gray-600 mx-auto mb-3" />
-          <p className="text-gray-400">No briefings available yet.</p>
-          <p className="text-gray-500 text-sm mt-1">Briefings are generated automatically by the Daily Briefing job.</p>
+        <div className="flex flex-col items-center">
+          <EmptyState
+            icon={Newspaper}
+            title="No briefing yet"
+            message="Generate today’s briefing now, or open the Daily Briefing job to change its schedule."
+            actionLabel={generatingBriefing ? 'Generating today’s briefing…' : 'Generate today’s briefing'}
+            onAction={generateBriefing}
+          />
+          <Link to="/cos/jobs" className="-mt-10 mb-8 text-sm text-port-accent hover:underline">
+            Open Daily Briefing job
+          </Link>
         </div>
       ) : (
         <>
