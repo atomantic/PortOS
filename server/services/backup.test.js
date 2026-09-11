@@ -639,6 +639,59 @@ describe('dumpPostgres status classification', () => {
     expect(unlinkSpy).toHaveBeenCalledWith('/tmp/x.sql');
   });
 
+  it('kills a stalled pg_dump and removes its partial SQL file', async () => {
+    vi.useFakeTimers();
+    try {
+      checkHealth.mockResolvedValue({ connected: true, hasSchema: true });
+      vi.spyOn(fs, 'stat').mockResolvedValue({ size: 0 });
+      const unlinkSpy = vi.spyOn(fs, 'unlink').mockResolvedValue();
+      const proc = fakeProc();
+      spawn.mockReturnValue(proc);
+
+      const pending = dumpPostgres('/tmp/x.sql');
+      await flush();
+      await vi.advanceTimersByTimeAsync(10 * 60 * 1000);
+
+      expect(proc.kill).toHaveBeenCalledWith('SIGTERM');
+      await vi.advanceTimersByTimeAsync(8 * 1000);
+      expect(proc.kill).toHaveBeenLastCalledWith('SIGKILL');
+      proc.emit('close', null, 'SIGTERM');
+      await expect(pending).resolves.toMatchObject({
+        status: 'failed',
+        reason: 'timeout',
+        error: expect.stringMatching(/10 minutes without progress/),
+      });
+      expect(unlinkSpy).toHaveBeenCalledWith('/tmp/x.sql');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('treats a growing pg_dump output file as progress beyond ten minutes', async () => {
+    vi.useFakeTimers();
+    try {
+      checkHealth.mockResolvedValue({ connected: true, hasSchema: true });
+      let dumpSize = 0;
+      vi.spyOn(fs, 'stat').mockImplementation(async () => ({ size: dumpSize }));
+      vi.spyOn(fs, 'readFile').mockResolvedValue('CREATE TABLE memories (...);\n');
+      const proc = fakeProc();
+      spawn.mockReturnValue(proc);
+
+      const pending = dumpPostgres('/tmp/x.sql');
+      await flush();
+      await vi.advanceTimersByTimeAsync(9 * 60 * 1000);
+      dumpSize = 2048;
+      await vi.advanceTimersByTimeAsync(30 * 1000);
+      await vi.advanceTimersByTimeAsync(9 * 60 * 1000);
+
+      expect(proc.kill).not.toHaveBeenCalled();
+      proc.emit('close', 0);
+      await expect(pending).resolves.toMatchObject({ status: 'ok', sizeBytes: 2048 });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('returns failed/empty_dump when exit 0 but file is 0 bytes', async () => {
     checkHealth.mockResolvedValue({ connected: true, hasSchema: true });
     vi.spyOn(fs, 'stat').mockResolvedValue({ size: 0 });
@@ -732,7 +785,7 @@ describe('restorePostgres', () => {
     expect(spawn).not.toHaveBeenCalled();
   });
 
-  it('completes a verbose file restore without stdin/stdout pipes', async () => {
+  it('drains verbose psql output so progress cannot stall on pipe backpressure', async () => {
     vi.spyOn(fs, 'stat').mockResolvedValue({ size: 4096, isFile: () => true });
     vi.spyOn(fs, 'readFile').mockResolvedValue('CREATE TABLE a (...);\n');
     checkHealth.mockResolvedValue({ connected: true, hasSchema: true });
@@ -750,11 +803,11 @@ describe('restorePostgres', () => {
       expect(result).toEqual({ status: 'ok', dryRun: false, sizeBytes: 4096, tableCount: 1 });
       const [bin, args, opts] = spawn.mock.calls[0];
       expect(bin).toBe('psql');
-      expect(args).toEqual(expect.arrayContaining(['-v', 'ON_ERROR_STOP=1', '--single-transaction', '-f']));
+      expect(args).toEqual(expect.arrayContaining(['-v', 'ON_ERROR_STOP=1', '--single-transaction', '--echo-all', '-f']));
       expect(opts.shell).toBe(false);
-      expect(opts.stdio).toEqual(['ignore', 'ignore', 'pipe']);
+      expect(opts.stdio).toEqual(['ignore', 'pipe', 'pipe']);
       expect(child.stdin).toBeNull();
-      expect(child.stdout).toBeNull();
+      expect(child.stdout).not.toBeNull();
     } finally {
       if (child && child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
     }
@@ -885,6 +938,54 @@ describe('restorePostgres', () => {
       reason: 'restore_error',
       error: 'spawn psql ENOENT'
     });
+  });
+
+  it('kills a silent psql restore after the idle deadline and reports timeout', async () => {
+    vi.useFakeTimers();
+    try {
+      vi.spyOn(fs, 'stat').mockResolvedValue({ size: 4096, isFile: () => true });
+      vi.spyOn(fs, 'readFile').mockResolvedValue('CREATE TABLE a (...);\n');
+      checkHealth.mockResolvedValue({ connected: true, hasSchema: true });
+      const proc = fakeProc();
+      spawn.mockReturnValue(proc);
+
+      const pending = restorePostgres('/dest', '2026-06-05T00-00-00', { dryRun: false });
+      await flush();
+      await vi.advanceTimersByTimeAsync(10 * 60 * 1000);
+
+      expect(proc.kill).toHaveBeenCalledWith('SIGTERM');
+      proc.emit('close', null, 'SIGTERM');
+      await expect(pending).resolves.toMatchObject({
+        status: 'failed',
+        reason: 'timeout',
+        error: expect.stringMatching(/10 minutes without progress/),
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('keeps a long psql restore alive while drained stdout reports progress', async () => {
+    vi.useFakeTimers();
+    try {
+      vi.spyOn(fs, 'stat').mockResolvedValue({ size: 4096, isFile: () => true });
+      vi.spyOn(fs, 'readFile').mockResolvedValue('CREATE TABLE a (...);\n');
+      checkHealth.mockResolvedValue({ connected: true, hasSchema: true });
+      const proc = fakeProc();
+      spawn.mockReturnValue(proc);
+
+      const pending = restorePostgres('/dest', '2026-06-05T00-00-00', { dryRun: false });
+      await flush();
+      await vi.advanceTimersByTimeAsync(9 * 60 * 1000);
+      proc.stdout.emit('data', Buffer.from('COPY 200000\n'));
+      await vi.advanceTimersByTimeAsync(9 * 60 * 1000);
+
+      expect(proc.kill).not.toHaveBeenCalled();
+      proc.emit('close', 0);
+      await expect(pending).resolves.toMatchObject({ status: 'ok' });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   // The atomicity contract: ON_ERROR_STOP=1 aborts on the first failed statement
@@ -1073,7 +1174,7 @@ describe('restoreSnapshot subdirFilter guard', () => {
       });
       expect(spawn).toHaveBeenCalledWith(
         '/custom/bin/rsync',
-        expect.arrayContaining(['--archive', '--itemize-changes', '--dry-run']),
+        expect.arrayContaining(['--archive', '--itemize-changes', '--progress', '--dry-run']),
         { shell: false },
       );
     } finally {
@@ -1099,6 +1200,50 @@ describe('restoreSnapshot subdirFilter guard', () => {
     } finally {
       if (previous === undefined) delete process.env.PORTOS_RSYNC;
       else process.env.PORTOS_RSYNC = previous;
+    }
+  });
+
+  it('warns that a timed-out live file restore may have overwritten files', async () => {
+    vi.useFakeTimers();
+    try {
+      const proc = fakeProc();
+      spawn.mockReturnValue(proc);
+      const pending = restoreSnapshot('/dest', 'snap-1', { dryRun: false });
+      await flush();
+
+      await vi.advanceTimersByTimeAsync(10 * 60 * 1000);
+      expect(proc.kill).toHaveBeenCalledWith('SIGTERM');
+      proc.emit('close', null, 'SIGTERM');
+
+      await expect(pending).rejects.toThrow(/files may already have been overwritten/i);
+      expect(reloadSettings).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('keeps active rsync work past ten minutes but enforces the four-hour ceiling', async () => {
+    vi.useFakeTimers();
+    try {
+      const proc = fakeProc();
+      spawn.mockReturnValue(proc);
+      const pending = restoreSnapshot('/dest', 'snap-1');
+      await flush();
+
+      // Progress every nine minutes continually resets the idle deadline. The
+      // final six-minute step crosses the independent four-hour backstop.
+      for (let elapsedMinutes = 0; elapsedMinutes < 234; elapsedMinutes += 9) {
+        await vi.advanceTimersByTimeAsync(9 * 60 * 1000);
+        proc.stdout.emit('data', Buffer.from('>f.st...... still-working.json\n'));
+        expect(proc.kill).not.toHaveBeenCalled();
+      }
+      await vi.advanceTimersByTimeAsync(6 * 60 * 1000);
+
+      expect(proc.kill).toHaveBeenCalledWith('SIGTERM');
+      proc.emit('close', null, 'SIGTERM');
+      await expect(pending).rejects.toThrow(/4 hours/);
+    } finally {
+      vi.useRealTimers();
     }
   });
 });
@@ -1317,6 +1462,7 @@ describe('restoreSnapshot snapshotId, filter flags, and settings re-sync', () =>
       expect(spawn.mock.calls[0][1]).toEqual([
         '--archive',
         '--itemize-changes',
+        '--progress',
         '--itemize-changes',
         '--dry-run',
         '--include=brain/***',
@@ -1384,7 +1530,7 @@ describe('restoreSnapshot snapshotId, filter flags, and settings re-sync', () =>
       proc.stderr.emit('data', Buffer.from('boom'));
       proc.emit('close', 1);
 
-      await expect(pending).rejects.toThrow(/rsync exited with code 1/);
+      await expect(pending).rejects.toThrow(/rsync exited with code 1.*files may already have been overwritten/i);
       expect(reloadSettings).not.toHaveBeenCalled();
     });
   });
@@ -1505,7 +1651,7 @@ describe('runBackup lifecycle', () => {
     const [bin, args, opts] = spawn.mock.calls[0];
     expect(bin).toBe('rsync');
     expect(opts).toEqual({ shell: false });
-    expect(args.slice(0, 2)).toEqual(['--archive', '--itemize-changes']);
+    expect(args.slice(0, 3)).toEqual(['--archive', '--itemize-changes', '--progress']);
     // Source is PATHS.data with a trailing slash (copy contents, not the dir);
     // destination is the snapshot's data/ subdir.
     expect(args.at(-2)).toBe(`${dataRoot}/`);
@@ -1646,6 +1792,51 @@ describe('runBackup lifecycle', () => {
 
     // isRunning must have been reset: the next run proceeds instead of
     // short-circuiting to { skipped: true }.
+    const retryProc = fakeProc();
+    spawn.mockReturnValue(retryProc);
+    const retry = runBackup(destRoot, io);
+    await waitFor(() => spawn.mock.calls.length === 2, 'retry rsync spawn');
+    retryProc.emit('close', 0);
+    await expect(retry).resolves.toMatchObject({ status: 'ok' });
+  });
+
+  it('kills stalled rsync, waits for child close, clears markers, and permits retry', async () => {
+    const realSetTimeout = globalThis.setTimeout;
+    let fireIdleTimeout;
+    const timerSpy = vi.spyOn(globalThis, 'setTimeout').mockImplementation((callback, delay, ...args) => {
+      if (delay === 10 * 60 * 1000 && !fireIdleTimeout) {
+        fireIdleTimeout = callback;
+        const timer = realSetTimeout(() => {}, delay, ...args);
+        timer.unref?.();
+        return timer;
+      }
+      return realSetTimeout(callback, delay, ...args);
+    });
+
+    const io = { emit: vi.fn() };
+    const proc = fakeProc();
+    spawn.mockReturnValue(proc);
+    const pending = runBackup(destRoot, io);
+    let settled = false;
+    pending.then(() => { settled = true; }, () => { settled = true; });
+
+    await waitFor(() => spawn.mock.calls.length === 1 && fireIdleTimeout, 'rsync watchdog');
+    const snapshotDir = await findSnapshotDir();
+    const snapshotId = basename(snapshotDir);
+    const fsp = await actualFs();
+    fireIdleTimeout();
+
+    expect(proc.kill).toHaveBeenCalledWith('SIGTERM');
+    await Promise.resolve();
+    expect(settled).toBe(false);
+    proc.emit('close', null, 'SIGTERM');
+    await expect(pending).rejects.toThrow(/10 minutes without progress/);
+    expect(settled).toBe(true);
+    await expect(fsp.access(joinPath(snapshotDir, '.in-progress'))).rejects.toThrow();
+    await expect(fsp.access(joinPath(destRoot, 'snapshots', machineHost, `.${snapshotId}.in-progress`)))
+      .rejects.toThrow();
+
+    timerSpy.mockRestore();
     const retryProc = fakeProc();
     spawn.mockReturnValue(retryProc);
     const retry = runBackup(destRoot, io);
