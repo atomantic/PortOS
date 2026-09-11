@@ -72,13 +72,20 @@ credentials, local paths, or build identity to these responses.
 | Method | Endpoint | Stable request and response contract |
 |--------|----------|--------------------------------------|
 | GET | `/system/health/details` | Returns an object containing `instanceId` and `version` (each may be `null`) for peer identity and compatibility display. The health summary remains an object so an older prober can retain it as its last-known health snapshot. |
-| GET | `/apps` | Returns either the legacy app array or `{ apps: [...] }`. Each app entry used by peers retains `id`, `name`, `icon`, `overallStatus`, `uiPort`, `apiPort`, and `type`; fields may be absent or `null` when unknown. |
+| GET | `/apps?view=probe` | The periodic probe requests `view=probe`; returns either the legacy app array or `{ apps: [...] }`. Each app entry used by peers retains `id`, `name`, `icon`, `overallStatus`, `uiPort`, `apiPort`, and `type`; fields may be absent or `null` when unknown. Older peers may ignore the query and return the legacy enriched list, which remains compatible with the same field mapping. |
 | GET | `/instances/sync-status?forPeer=<instance-id>` | `forPeer` is optional and remains lenient: an unknown or legacy identifier, blank value, or omitted value must degrade to the unscoped status response rather than fail the probe. A recognized peer receives its `cursorForYou` alongside the normal sync status. |
 
 The separate `/federation/media/v1` surface is already versioned and has its
 own wire contract in [FEDERATED_MEDIA_PROVIDERS.md](./FEDERATED_MEDIA_PROVIDERS.md).
 
 ### Apps
+
+The app list keeps the legacy PM2-enriched response when no `view` is given.
+Use `view=nav` for name/icon/archive/type pickers that do not need runtime
+status or repository details; it reads the registry without PM2 or repository
+enrichment. Use `view=probe` for the PM2-backed seven-field projection used by
+federated peer probes. `includeQuality=true` remains an explicit opt-in on the
+legacy list for local Apps/Dashboard views.
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
