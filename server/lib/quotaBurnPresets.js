@@ -554,33 +554,45 @@ invalid shape, and the concrete failure that occurs.`,
 
   auditPreset({
     id: 'react-lifecycle-audit',
-    label: 'React lifecycle & state',
-    summary: 'Stale closures, effect cleanups, state sync, and unmount safety in UI code.',
+    label: 'UI lifecycle & state',
+    summary: 'Resource cleanup, stale data, async ordering, and state continuity in interactive UI code.',
     labels: '`bug`, `area:ui`, `plan`',
-    dedupeSearch: 'react lifecycle effect cleanup state closure',
+    dedupeSearch: 'lifecycle state cleanup subscription stale race',
     mission: `
-# React lifecycle audit — file issues, change nothing
+# UI lifecycle and state audit — file issues, change nothing
 
-Audit React components, custom hooks, and state lifecycles for memory leaks,
-stale closures, and race conditions, and file them as GitHub issues. No code changes.
+Audit UI resource lifetimes and state correctness, and file confirmed defects
+as GitHub issues. No code changes.
 
-Inspect UI components and hooks:
+First identify the application's UI runtime, rendering model, and state-management
+conventions from its dependencies and code. Apply checks only where those
+mechanisms exist, including client navigation and hydrated interactive regions.
+Use the project's own lifecycle and reactivity semantics; do not prescribe a
+framework, API, or state library. If there is no applicable interactive UI,
+report the check as not applicable rather than inventing findings.
 
-- **Missing effect teardowns** — \`useEffect\` listeners (\`window\`/\`document\`),
-  timers, sockets, or observers without cleanup functions on unmount.
-- **Stale closures** — callbacks and timers capturing state/props without
-  up-to-date refs or dependencies, operating on stale data.
-- **Unmounted state updates** — async operations setting state after unmount
-  or when superseded by a newer request.
-- **Derived state anti-patterns** — mirroring props in local state synced via
-  \`useEffect\`, causing visual flashes and desync instead of \`useMemo\`.
-- **Render-time side-effects** — mutating refs or triggering side-effects during
-  render rather than in effects/handlers.
-- **Broken dependencies** — missing dependencies causing stale reads, or inline
-  object literals triggering runaway render loops.
+Inspect UI components, shared state, subscriptions, and asynchronous work for:
 
-Trace the sequence of user interactions and state transitions that triggers
-each defect.`,
+- **Resource lifetime leaks** — listeners, timers, sockets, observers, or
+  subscriptions surviving the view or owner that should release them.
+- **Stale reads** — callbacks, cached computations, or reactive dependencies
+  using outdated input and producing an incorrect visible result.
+- **Async ordering and disposal** — an earlier response overwriting newer user
+  intent, or work completing after its owner is disposed and causing observable
+  damage. Verify the runtime's actual behavior before treating a late update as
+  a defect.
+- **State ownership and synchronization** — duplicated or derived state drifting
+  from its source, lost edits, or shared state leaking between views or sessions.
+- **Repeated or misplaced work** — rendering or reactive updates triggering
+  duplicate side effects, feedback loops, or unnecessary persistent resources.
+- **Navigation and hydration continuity** — applicable view transitions or
+  server-to-client handoffs resetting user state, duplicating subscriptions, or
+  applying state to the wrong view.
+
+For each finding, trace the interaction sequence and state transitions, cite
+the affected code, and show the user-visible failure or resource leak. A code
+pattern alone is not a finding; verify it against the installed runtime's
+semantics and existing safeguards.`,
   }),
 
   auditPreset({

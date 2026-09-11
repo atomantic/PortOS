@@ -118,7 +118,7 @@ describe('taskPromptDefaults integrity snapshot', () => {
     ['better-test-quality', ['Vacuous', 'mutation probe', 'Deletion is a valid outcome', 'Missing coverage is separate work']],
   ])('%s states the discipline that makes it its own lane', (key, markers) => {
     const current = DEFAULT_TASK_PROMPTS[key];
-    expect(PROMPT_VERSIONS[key]).toBe(key === 'better-complexity' ? 2 : 1);
+    expect(PROMPT_VERSIONS[key]).toBe(['better-complexity', 'better-runtime-safety'].includes(key) ? 2 : 1);
     for (const marker of markers) expect(current, key).toContain(marker);
   });
 
