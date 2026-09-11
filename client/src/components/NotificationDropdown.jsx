@@ -4,6 +4,7 @@ import { useNavigate } from 'react-router';
 import { Bell, X, CheckCheck, Trash2, Brain, ListTodo, AlertTriangle, Code, HelpCircle, BellRing, Sparkles } from 'lucide-react';
 import { timeAgo } from '../utils/formatters';
 import { isHttpUrl } from '../utils/urlNormalize';
+import useFocusTrap from '../hooks/useFocusTrap.js';
 import useClickOutside from '../hooks/useClickOutside.js';
 import usePopoverPosition, { VIEWPORT_PADDING } from '../hooks/usePopoverPosition.js';
 
@@ -89,6 +90,9 @@ export default function NotificationDropdown({
     contentDeps: [showAll, notifications.length]
   });
 
+  // Wait until positioning makes the portal visible before moving focus into it.
+  useFocusTrap(isOpen && !!panelStyle, popoverRef);
+
   // Both refs: the panel lives outside the trigger's subtree once portaled, so a
   // trigger-only containment check would read clicks on the panel as outside.
   useClickOutside([containerRef, popoverRef], isOpen, () => setIsOpen(false));
@@ -129,7 +133,11 @@ export default function NotificationDropdown({
       {/* Bell button with badge */}
       <button
         ref={triggerRef}
-        onClick={() => setIsOpen(!isOpen)}
+        onClick={() => {
+          // Pointer activation does not focus buttons in every browser.
+          triggerRef.current?.focus();
+          setIsOpen(!isOpen);
+        }}
         className="relative inline-flex items-center justify-center min-w-[44px] min-h-[44px] sm:min-w-0 sm:min-h-0 sm:p-2 rounded-lg hover:bg-port-card transition-colors focus:outline-hidden focus:ring-2 focus:ring-port-accent focus:ring-offset-2 focus:ring-offset-port-bg"
         title="Notifications"
         aria-label={`Notifications${unreadCount > 0 ? ` (${unreadCount} unread)` : ''}`}
@@ -182,8 +190,7 @@ export default function NotificationDropdown({
                   <Trash2 className="w-4 h-4 text-gray-400" aria-hidden="true" />
                 </button>
               )}
-              {/* Touch has no Escape key, and a tall panel can be clamped over the
-                  bell, so mobile needs an explicit dismiss it can always reach. */}
+              {/* Keep a dismiss target available even when the notification list is empty. */}
               <button
                 type="button"
                 onClick={() => setIsOpen(false)}

@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { MemoryRouter, useLocation } from 'react-router';
 import NotificationDropdown from './NotificationDropdown';
 
@@ -121,6 +122,44 @@ describe('NotificationDropdown', () => {
     });
   });
 
+  it('enters the visible panel and cycles keyboard focus within its actions', async () => {
+    const user = userEvent.setup();
+    renderDropdown();
+    const bell = screen.getByRole('button', { name: /^Notifications/ });
+    bell.focus();
+    await user.keyboard('{Enter}');
+    const first = screen.getByRole('button', { name: 'Mark all notifications as read' });
+    const last = screen.getByRole('button', { name: 'Mark notification as read: Notification 2' });
+    expect(first).toHaveFocus();
+
+    await user.tab({ shift: true });
+    expect(last).toHaveFocus();
+    await user.tab();
+    expect(first).toHaveFocus();
+    await user.tab();
+    expect(screen.getByRole('button', { name: 'Clear all notifications' })).toHaveFocus();
+    await user.keyboard('{Escape}');
+    expect(queryPanel()).toBeNull();
+    expect(bell).toHaveFocus();
+  });
+
+  it('keeps an empty panel keyboard accessible on repeated opens', async () => {
+    const user = userEvent.setup();
+    renderDropdown({ notifications: [] });
+    for (let i = 0; i < 2; i += 1) {
+      openPanel();
+      const close = screen.getByRole('button', { name: 'Close notifications' });
+      expect(close).toHaveFocus();
+      await user.tab();
+      expect(close).toHaveFocus();
+      await user.tab({ shift: true });
+      expect(close).toHaveFocus();
+      await user.keyboard('{Enter}');
+      expect(queryPanel()).toBeNull();
+      expect(screen.getByRole('button', { name: /^Notifications/ })).toHaveFocus();
+    }
+  });
+
   describe('dismissal', () => {
     it('closes on Escape', () => {
       renderDropdown();
@@ -129,6 +168,7 @@ describe('NotificationDropdown', () => {
       fireEvent.keyDown(document, { key: 'Escape' });
 
       expect(queryPanel()).toBeNull();
+      expect(screen.getByRole('button', { name: /^Notifications/ })).toHaveFocus();
     });
 
     it('closes on an outside click but not on a click inside the portaled panel', () => {
@@ -144,15 +184,15 @@ describe('NotificationDropdown', () => {
       expect(queryPanel()).toBeNull();
     });
 
-    it('offers a close control below sm, where there is no Escape key', () => {
+    it('offers a close control and restores focus to the bell', () => {
       renderDropdown();
       openPanel();
 
       const close = screen.getByRole('button', { name: 'Close notifications' });
-      expect(close.className).toContain('sm:hidden');
 
       fireEvent.click(close);
       expect(queryPanel()).toBeNull();
+      expect(screen.getByRole('button', { name: /^Notifications/ })).toHaveFocus();
     });
   });
 
