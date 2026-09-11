@@ -80,7 +80,7 @@ describe.skipIf(!hasSubmodule)('slashdo rendering adapter', () => {
     expect(body).toContain('temporary `release/vX.Y.Z` branch into `main`');
     expect(body).toContain('When automation creates the tag or release, wait for it; do not pre-create');
     expect(body).toContain('Do not fall through into the generic promotion workflow');
-    expect(body).toContain('preserve their verdict and optionality');
+    expect(body).toContain('preserving their verdict and optionality rules from **Merge the');
   });
 
   it('keeps inline reviewer recipes limited to explicit reads', async () => {
