@@ -1217,8 +1217,8 @@ export default function Layout() {
       </a>
       {/* Mobile overlay */}
       {mobileNavActive && (
-        <div
-          role="button"
+        <button
+          type="button"
           tabIndex={-1}
           aria-label="Close sidebar"
           className="fixed inset-0 bg-black/50 z-40 lg:hidden"
