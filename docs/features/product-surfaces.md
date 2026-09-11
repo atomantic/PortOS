@@ -47,7 +47,7 @@ Manage local applications, terminal environments, system resources, and develope
 | **Video Downloader** | `/devtools/video-download` | Video and audio capture from YouTube, X.com, and web links via `yt-dlp`. | — |
 | **Quota Burn Automation** | `/devtools/quota-burn` | Autonomous batch worker designed to consume subscription-backed AI CLI quotas (Claude Code, Codex, Grok, Antigravity) before reset windows expire. | [QUOTA-BURN.md](../QUOTA-BURN.md) |
 | **Workspace Contexts** | `/workspace-contexts` | Fast workspace switcher restoring working Git branches, active shell sessions, task queues, and editor state. | — |
-| **API Explorer & Swagger** | `/api-reference/catalog` | Interactive OpenAPI documentation, route explorer, and Agent Tools MCP semantic tool catalog. | [API.md](../API.md), [API Tool Contract](../API_TOOL_CONTRACT.md) |
+| **API Explorer** | `/api-reference/catalog` | Native HTTP catalog, OpenAPI Internal/Exposed inventory, Socket.IO event catalog, and Agent Tools MCP semantic tool catalog. | [API.md](../API.md), [API Tool Contract](../API_TOOL_CONTRACT.md) |
 | **Autofixer & Self-Healing** | `/settings/autofixer` | Background watchdog detecting PM2 process crash loops and executing self-healing diagnostic repair loops. | [Autofixer](./autofixer.md), [Error Handling](./error-handling.md) |
 
 ---
