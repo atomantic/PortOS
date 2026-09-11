@@ -170,7 +170,7 @@ export default function BriefingTab() {
     generationInFlightRef.current = true;
     try {
       const result = await api.triggerCosJob('job-daily-briefing', { silent: true });
-      if (!result || result.success === false || result.status === 'skipped') {
+      if (!result || result.success === false || (result.status === 'skipped' && !result.duplicate)) {
         throw new Error(result?.reason || 'The briefing could not be generated');
       }
       setGenerationPending(true);
@@ -279,7 +279,9 @@ export default function BriefingTab() {
             />
           )}
           <button
-            onClick={() => loadData()}
+            onClick={() => loadData().then((latest) => {
+              if (latest) setGenerationPending(false);
+            })}
             className="flex items-center gap-2 px-3 py-1.5 text-sm bg-port-card border border-port-border hover:border-port-accent/50 text-gray-300 rounded-lg transition-colors"
           >
             <RefreshCw size={14} />
@@ -300,14 +302,14 @@ export default function BriefingTab() {
             actionDisabled={generationPending || generatingBriefing}
             onAction={handleGenerateBriefing}
           />
-          {generationPending && (
-            <p role="status" aria-live="polite" className="-mt-10 mb-8 text-sm text-gray-400">
-              Briefing generation is still in progress.
+          <div className="-mt-10 mb-8 flex flex-col items-center gap-3">
+            <p role="status" aria-live="polite" className="text-sm text-gray-400">
+              {generationPending ? 'Briefing generation is still in progress.' : ''}
             </p>
-          )}
-          <Link to="/cos/jobs" className="-mt-10 mb-8 text-sm text-port-accent hover:underline">
-            Open Daily Briefing job
-          </Link>
+            <Link to="/cos/jobs" className="text-sm text-port-accent hover:underline">
+              Open Daily Briefing job
+            </Link>
+          </div>
         </div>
       ) : (
         <>
