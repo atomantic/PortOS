@@ -226,11 +226,15 @@ describe('Image Gen Routes', () => {
       const page = await request(app).get('/api/image-gen/gallery?limit=1&offset=1&q=red&hidden=false');
       expect(page.status).toBe(200);
       expect(page.body).toEqual({ items: [items[1]], total: 2, limit: 1, offset: 1 });
+      const summary = await request(app).get('/api/image-gen/gallery?limit=5&hidden=false&summary=true');
+      expect(summary.body).toEqual({ items: items.slice(0, 2), total: 2, hiddenTotal: 1, limit: 5, offset: 0 });
+      const preview = await request(app).get('/api/image-gen/gallery?limit=1&filename=c.png');
+      expect(preview.body).toEqual({ items: [items[2]], total: 1, limit: 1, offset: 0 });
       const empty = await request(app).get('/api/image-gen/gallery?q=missing');
       expect(empty.body).toEqual({ items: [], total: 0, limit: 60, offset: 0 });
     });
 
-    it.each(['limit=0', 'limit=201', 'offset=-1', 'limit=1.5', 'q=a&q=b'])('rejects invalid paging: %s', async query => {
+    it.each(['limit=0', 'limit=201', 'offset=-1', 'limit=1.5', 'q=a&q=b', 'starred=1', 'summary=yes', 'filename='])('rejects invalid paging: %s', async query => {
       const response = await request(app).get('/api/image-gen/gallery?' + query);
       expect(response.status).toBe(400);
       expect(imageGen.local.listGallery).not.toHaveBeenCalled();

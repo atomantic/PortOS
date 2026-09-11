@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
+import { listImageGalleryPage } from '../services/api';
 
 const MODEL = { id: 'dev', name: 'FLUX.1 Dev', runner: 'mflux', steps: 20, guidance: 3.5 };
 
@@ -38,7 +39,7 @@ vi.mock('../services/api', () => ({
   generateImageMultipart: vi.fn(async () => ({})),
   listImageModels: vi.fn(async () => [MODEL]),
   listLorasFull: vi.fn(async () => []),
-  listImageGallery: vi.fn(async () => []),
+  listImageGalleryPage: vi.fn(async () => ({ items: [], total: 0, hiddenTotal: 0 })),
   cancelImageGen: vi.fn(async () => ({})),
   deleteImage: vi.fn(async () => ({})),
   setImageHidden: vi.fn(async () => ({})),
@@ -80,6 +81,9 @@ vi.mock('../components/media/PromptEnhancer', () => ({ default: () => <button ty
 vi.mock('../components/media/PromptFromMedia', () => ({ default: () => <button type="button">Prompt from media</button> }));
 vi.mock('../components/media/UniverseStylePicker', () => ({ default: () => null }));
 vi.mock('../components/media/StylePresetPicker', () => ({ default: () => null }));
+vi.mock('../components/media/MediaCard', () => ({
+  default: ({ item, onToggleHidden }) => <button type="button" onClick={() => onToggleHidden(item)}>{item.filename}</button>,
+}));
 vi.mock('../components/media/MediaPreview', () => ({ default: () => null }));
 vi.mock('../components/media/MediaJobsQueue', () => ({ default: () => null }));
 vi.mock('../components/media/ResolutionField', () => ({ default: () => null }));
@@ -105,6 +109,7 @@ const mount = async () => {
 
 describe('ImageGen backend-probe gating', () => {
   beforeEach(() => {
+    listImageGalleryPage.mockReset().mockResolvedValue({ items: [], total: 0, hiddenTotal: 0 });
     state.generateImage.mockReset().mockResolvedValue({ jobId: 'job-1' });
     state.statusPromise = new Promise((resolve) => { state.resolveStatus = resolve; });
     window.matchMedia = vi.fn(() => ({
@@ -112,6 +117,24 @@ describe('ImageGen backend-probe gating', () => {
       addEventListener: vi.fn(),
       removeEventListener: vi.fn(),
     }));
+  });
+
+  it('requests only five recent images, shows the global count, and queries favorites before limiting', async () => {
+    const items = Array.from({ length: 5 }, (_, n) => ({ filename: `recent-${n}.png` }));
+    listImageGalleryPage.mockResolvedValueOnce({ items, total: 2100, hiddenTotal: 70 })
+      .mockResolvedValueOnce({ items: [{ filename: 'old-favorite.png' }], total: 1, hiddenTotal: 0 });
+    await mount();
+    expect(await screen.findByText('Recent renders (5 of 2100)')).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'View all →' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Show hidden \(70\)/ })).toBeInTheDocument();
+    expect(listImageGalleryPage).toHaveBeenCalledTimes(1);
+    expect(listImageGalleryPage).toHaveBeenLastCalledWith(
+      { limit: 5, hidden: false, starred: false, summary: true }, { silent: true });
+    fireEvent.click(screen.getByRole('button', { name: 'Favorites' }));
+    expect(await screen.findByText('old-favorite.png')).toBeInTheDocument();
+    expect(screen.getByText('Recent renders (1 of 1)')).toBeInTheDocument();
+    expect(listImageGalleryPage).toHaveBeenLastCalledWith(
+      { limit: 5, hidden: false, starred: true, summary: true }, { silent: true });
   });
 
   // The probe decides which backend can RUN, not what the user may TYPE. While
