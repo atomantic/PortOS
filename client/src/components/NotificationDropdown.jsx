@@ -73,6 +73,7 @@ export default function NotificationDropdown({
   const [isOpen, setIsOpen] = useState(false);
   const [showAll, setShowAll] = useState(false);
   const containerRef = useRef(null);
+  const closeRef = useRef(null);
   const navigate = useNavigate();
 
   // The panel is portaled to <body> and placed in viewport coordinates. That is
@@ -92,6 +93,14 @@ export default function NotificationDropdown({
 
   // Wait until positioning makes the portal visible before moving focus into it.
   useFocusTrap(isOpen && !!panelStyle, popoverRef);
+
+  // Read/remove/clear and expansion can unmount the focused action. Keep the
+  // next Tab inside the panel by moving to its persistent dismiss control.
+  useEffect(() => {
+    if (isOpen && panelStyle && document.activeElement === document.body) {
+      closeRef.current?.focus();
+    }
+  }, [isOpen, panelStyle, notifications, unreadCount, showAll]);
 
   // Both refs: the panel lives outside the trigger's subtree once portaled, so a
   // trigger-only containment check would read clicks on the panel as outside.
@@ -193,6 +202,7 @@ export default function NotificationDropdown({
               {/* Keep a dismiss target available even when the notification list is empty. */}
               <button
                 type="button"
+                ref={closeRef}
                 onClick={() => setIsOpen(false)}
                 className="inline-flex items-center justify-center min-w-[44px] min-h-[44px] rounded hover:bg-port-border transition-colors focus:outline-hidden focus:ring-2 focus:ring-port-accent sm:hidden"
                 title="Close"

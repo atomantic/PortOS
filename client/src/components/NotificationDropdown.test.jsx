@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { describe, it, expect, vi } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
@@ -158,6 +159,36 @@ describe('NotificationDropdown', () => {
       expect(queryPanel()).toBeNull();
       expect(screen.getByRole('button', { name: /^Notifications/ })).toHaveFocus();
     }
+  });
+
+  it('retains panel focus when updates remove the focused action', async () => {
+    const user = userEvent.setup();
+    function LiveDropdown() {
+      const [notifications, setNotifications] = useState(makeNotifications(2));
+      return (
+        <NotificationDropdown
+          notifications={notifications}
+          unreadCount={notifications.filter(n => !n.read).length}
+          onMarkAllAsRead={() => setNotifications(items => items.map(n => ({ ...n, read: true })))}
+          onRemove={id => setNotifications(items => items.filter(n => n.id !== id))}
+          onClearAll={() => setNotifications([])}
+        />
+      );
+    }
+    render(<MemoryRouter><LiveDropdown /></MemoryRouter>);
+    openPanel();
+    await user.keyboard('{Enter}');
+    const close = screen.getByRole('button', { name: 'Close notifications' });
+    expect(close).toHaveFocus();
+
+    await user.click(screen.getByRole('button', { name: 'Remove notification: Notification 0' }));
+    expect(close).toHaveFocus();
+    await user.click(screen.getByRole('button', { name: 'Clear all notifications' }));
+    expect(close).toHaveFocus();
+    await user.tab();
+    expect(close).toHaveFocus();
+    await user.tab({ shift: true });
+    expect(close).toHaveFocus();
   });
 
   describe('dismissal', () => {
