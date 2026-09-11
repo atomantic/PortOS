@@ -13,7 +13,7 @@ import { cosEvents, emitLog } from './cosEvents.js';
 import { getAgents } from './cosAgentLifecycle.js';
 import { getAgentDates, getAgentsByDate } from './cosAgentIndex.js';
 import { atomicWrite, ensureDir, readJSONFile, formatDuration, PATHS } from '../lib/fileUtils.js';
-import { getWeekId } from '../lib/isoWeek.js';
+import { getWeekId, weekStartFromWeekId } from '../lib/isoWeek.js';
 
 const DIGESTS_DIR = PATHS.digests;
 
@@ -76,7 +76,9 @@ function percentChange(current, previous) {
  */
 export async function generateWeeklyDigest(weekId = null) {
   const targetWeekId = weekId || getWeekId();
-  const weekStart = getWeekStart(new Date());
+  // Derive the window from the target id — `new Date()` would stamp the current
+  // week onto a historical backfill and chain week-over-week to the wrong neighbor.
+  const weekStart = weekStartFromWeekId(targetWeekId) ?? getWeekStart(new Date());
   weekStart.setHours(0, 0, 0, 0);
 
   emitLog('info', `Generating weekly digest for ${targetWeekId}`, { weekId: targetWeekId }, '📊 WeeklyDigest');
@@ -376,8 +378,8 @@ export async function listWeeklyDigests() {
       weekId: digest.weekId,
       weekStart: digest.weekStart,
       weekEnd: digest.weekEnd,
-      totalTasks: digest.summary.totalTasks,
-      successRate: digest.summary.successRate,
+      totalTasks: digest.summary?.totalTasks,
+      successRate: digest.summary?.successRate,
       generatedAt: digest.generatedAt
     }));
 
