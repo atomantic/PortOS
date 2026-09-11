@@ -96,4 +96,54 @@ describe('forge credential resolution', () => {
     stalled.emit('close', 1);
     await expect(pending).resolves.toEqual({});
   });
+
+  it('aborts a token probe that starts near the end of the whole lookup budget', async () => {
+    vi.useFakeTimers();
+    respond({ stdout: 'git@github.com:example-owner/project.git\n' });
+
+    const status = new EventEmitter();
+    status.stdout = new EventEmitter();
+    status.stderr = new EventEmitter();
+    status.kill = vi.fn();
+    spawn.mockImplementationOnce(() => {
+      setTimeout(() => {
+        status.stderr.emit('data', 'Logged in to github.com account example-owner\n');
+        status.emit('close', 0);
+      }, 9);
+      return status;
+    });
+
+    const token = new EventEmitter();
+    token.stdout = new EventEmitter();
+    token.stderr = new EventEmitter();
+    token.kill = vi.fn();
+    spawn.mockImplementationOnce(() => token);
+
+    const pending = resolveForgeTokenEnv('/example/repo', { timeoutMs: 10 });
+    await vi.advanceTimersByTimeAsync(9);
+    expect(spawn).toHaveBeenCalledTimes(3);
+    await vi.advanceTimersByTimeAsync(1);
+
+    await expect(pending).resolves.toEqual({});
+    expect(token.kill).toHaveBeenCalledWith('SIGKILL');
+  });
+
+  it('does not start an auth probe when git finishes after the whole lookup budget', async () => {
+    vi.useFakeTimers();
+    const git = new EventEmitter();
+    git.stdout = new EventEmitter();
+    git.stderr = new EventEmitter();
+    git.kill = vi.fn();
+    spawn.mockImplementationOnce(() => git);
+
+    const pending = resolveForgeTokenEnv('/example/repo', { timeoutMs: 10 });
+    await vi.advanceTimersByTimeAsync(10);
+    await expect(pending).resolves.toEqual({});
+
+    git.stdout.emit('data', 'git@github.com:example-owner/project.git\n');
+    git.emit('close', 0);
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(spawn).toHaveBeenCalledTimes(1);
+  });
 });
