@@ -604,6 +604,7 @@ ${buildResumeSection(task, worktreeInfo)}` : '';
     [COMPLETION_MODES.DISCARD_WORKTREE]: () => buildProgrammaticOutputCompletionSection(sentinelPath),
     [COMPLETION_MODES.CLAIM_FLOW]: () => buildClaimFlowCompletionSection({
       isTui, sentinelPath, reviewersCsv: claimReviewersCsv(task, codeReviewDefaults, defaultReviewers),
+      leavePrOpen: resolvePrCompletion(task.metadata) === PR_COMPLETIONS.LEAVE_OPEN || leavesPrForHuman(task),
     }),
     [COMPLETION_MODES.RELEASE_FLOW]: () => buildReleaseFlowCompletionSection({ isTui, sentinelPath }),
     [COMPLETION_MODES.TUI_SLASHDO_FREE]: buildFullPathTuiCompletion,
@@ -1138,6 +1139,7 @@ function buildLightContextSections(task, workspaceDir, worktreeInfo, isTruthyMet
     [COMPLETION_MODES.DISCARD_WORKTREE]: () => contractSections.push(buildProgrammaticOutputCompletionSection(lightSentinelPath())),
     [COMPLETION_MODES.CLAIM_FLOW]: () => contractSections.push(buildClaimFlowCompletionSection({
       isTui, sentinelPath: lightSentinelPath(), reviewersCsv: claimReviewersCsv(task, codeReviewDefaults, defaultReviewers),
+      leavePrOpen: resolvePrCompletion(task.metadata) === PR_COMPLETIONS.LEAVE_OPEN || leavesPrForHuman(task),
     })),
     [COMPLETION_MODES.READ_ONLY]: () => contractSections.push(buildReadOnlyCompletionSection({ isTui, sentinelPath: lightSentinelPath() })),
     [COMPLETION_MODES.REVIEW_LOOP_FOLLOW_UP]: () => {
