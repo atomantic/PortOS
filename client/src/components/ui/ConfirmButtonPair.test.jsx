@@ -77,6 +77,17 @@ describe('ConfirmButtonPair', () => {
     expect(screen.getByRole('group', { name: 'Confirm deletion of My App' })).toBeTruthy();
   });
 
+  it('supports action-specific accessible labels', () => {
+    render(
+      <ConfirmButtonPair
+        confirmAriaLabel="Confirm removing Living Room"
+        cancelAriaLabel="Cancel removing Living Room"
+      />,
+    );
+    expect(screen.getByRole('button', { name: 'Confirm removing Living Room' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Cancel removing Living Room' })).toBeTruthy();
+  });
+
   it('merges passthrough className onto the container', () => {
     render(<ConfirmButtonPair ariaLabel="x" className="shrink-0" />);
     expect(screen.getByRole('group', { name: 'x' }).className).toContain('shrink-0');
