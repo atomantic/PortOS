@@ -133,7 +133,8 @@ async function assertNoRunningRun(appId) {
  * when the app is unknown or archived, the provider is not an enabled
  * subscription CLI/TUI provider in a known family — the SAME gate every dispatch
  * re-applies (`resolveBurnProvider`), so a run can never start on a provider
- * its steps would then refuse — or the app already has a running run.
+ * its steps would then refuse — or a full ladder targets an app with a running run.
+ * Explicit quality selections may run alongside other runs; they never claim backlog issues.
  *
  * The first evaluation runs before this returns, so the caller learns whether
  * step one actually went out (or why it is holding) in the same response.
@@ -155,13 +156,14 @@ export async function startMaintenanceRun({ appId, providerId, model = null, eff
     const claimProvider = claimFamilyId ? await resolveBurnProvider({ job: effectiveClaimHandler, family: { id: claimFamilyId } }) : null;
     if (!claimProvider) throw new ServerError(`provider "${effectiveClaimHandler.providerId}" is not an enabled subscription CLI/TUI provider`, { status: 400, code: 'MAINTENANCE_RUN_PROVIDER_UNAVAILABLE' });
   }
-  await assertNoRunningRun(appId);
+  if (!taskTypes) await assertNoRunningRun(appId);
 
   const id = `maint-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
   const now = new Date().toISOString();
   const pins = { providerId, model: model || null, effort: effort || null };
   const run = await insertRun({
     id, appId, familyId, claimFamilyId, ...pins,
+    taskTypes,
     status: MAINTENANCE_RUN_STATUS.RUNNING,
     steps: buildMaintenanceSteps({ appId, idPrefix: id, ...pins, mode, claimBetweenAudits, claimHandler: effectiveClaimHandler, taskTypes }),
     completed: {},
@@ -226,7 +228,7 @@ export async function resumeMaintenanceRun(id) {
   const resumed = await perRun(id, async () => {
     const run = await getMaintenanceRun(id);
     if (!run || run.status === MAINTENANCE_RUN_STATUS.RUNNING) return run;
-    await assertNoRunningRun(run.appId);
+    if (!run.taskTypes) await assertNoRunningRun(run.appId);
     console.log(`🧹 Maintenance run ${id} resumed`);
     return patchRun(id, { status: MAINTENANCE_RUN_STATUS.RUNNING, finishedAt: null, reason: null });
   });
