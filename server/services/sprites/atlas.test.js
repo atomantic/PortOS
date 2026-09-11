@@ -953,3 +953,15 @@ describe('compileAtlas', () => {
       .rejects.toMatchObject({ status: 400, code: 'INVALID_GEOMETRY' });
   });
 });
+
+it('preserves an unreadable atlas pointer until it is repaired', async () => {
+  const id = await finalizedCharacter();
+  await compileAtlas(id);
+  const path = join(TEST_ROOT, 'sprites', id, 'runtime', 'current.json');
+  const good = await readFile(path, 'utf8');
+  await writeFile(path, '{');
+  await expect(compileAtlas(id)).rejects.toThrow(/Unreadable/);
+  expect(await readFile(path, 'utf8')).toBe('{');
+  await writeFile(path, good);
+  await expect(compileAtlas(id)).resolves.toMatchObject({ created: false });
+});

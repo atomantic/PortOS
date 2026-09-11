@@ -125,7 +125,7 @@ function upgradeManifestShape(manifest) {
 }
 
 export async function loadManifest(recordId) {
-  const manifest = await readJSONFile(join(spriteDir(recordId), manifestRelPath(recordId)), null);
+  const manifest = await readJSONFile(join(spriteDir(recordId), manifestRelPath(recordId)), null, { strict: true });
   if (!manifest) return null;
   upgradeManifestShape(manifest);
   if (manifest.mainReference) {
@@ -339,6 +339,7 @@ export async function getReferenceSet(recordId) {
   const candidates = (await listDirectoryByExtension(candidatesDir, {
     extensions: ['.png'],
     mapEntry: async (name) => {
+      // Read-only candidate listing: generation writes a new unique candidate, never this fallback.
       const sidecar = await readJSONFile(join(candidatesDir, `${name.replace(/\.png$/, '')}.generation.json`), null);
       // Sidecarless (crash between copy and sidecar write): infer the target
       // from the filename so the client can't group it under the wrong slot.
@@ -842,7 +843,8 @@ export async function attachReferenceCandidate(ctx) {
 }
 
 async function loadCandidateSidecar(candAbs) {
-  return readJSONFile(`${candAbs.replace(/\.png$/, '')}.generation.json`, null);
+  // Approval consumes provenance; a corrupt present sidecar must not bypass its target guard.
+  return readJSONFile(`${candAbs.replace(/\.png$/, '')}.generation.json`, null, { strict: true });
 }
 
 /**

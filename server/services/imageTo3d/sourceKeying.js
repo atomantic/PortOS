@@ -230,6 +230,7 @@ const freshPreparedSource = async (sourcePath, targetPath, request) => {
   const targetStats = await stat(targetPath).catch(() => null);
   if (!targetStats?.isFile() || targetStats.mtimeMs <= sourceStats.mtimeMs) return null;
 
+  // Rebuildable cache: source bytes plus the explicit request fully regenerate this metadata.
   const metadata = await readJSONFile(preparedCacheMetadataPath(targetPath), null, { logError: false });
   if (metadata?.version !== KEYING_CACHE_VERSION || !metadata.sourceSha256) return null;
   // The per-run framing/keying request is part of the cache identity: the same
