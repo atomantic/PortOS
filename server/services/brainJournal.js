@@ -93,7 +93,7 @@ async function loadObsidianLocations() {
     return obsidianLocationsCache;
   }
   await ensureDir(PATHS.brain);
-  obsidianLocationsCache = await readJSONFile(OBSIDIAN_LOCATIONS_FILE, {});
+  obsidianLocationsCache = await readJSONFile(OBSIDIAN_LOCATIONS_FILE, {}, { strict: true });
   obsidianLocationsCacheTime = Date.now();
   return obsidianLocationsCache;
 }

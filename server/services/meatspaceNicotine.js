@@ -271,7 +271,7 @@ export async function removeNicotine(date, index) {
 // === Custom Product Buttons ===
 
 async function loadCustomProducts() {
-  const data = await readJSONFile(CUSTOM_PRODUCTS_FILE, null, { allowArray: false });
+  const data = await readJSONFile(CUSTOM_PRODUCTS_FILE, null, { allowArray: false, strict: true });
   if (!data || typeof data !== 'object' || Array.isArray(data)) {
     return { products: DEFAULT_PRODUCTS.map(p => ({ ...p })) };
   }

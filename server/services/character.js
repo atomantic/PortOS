@@ -181,7 +181,7 @@ export function createDefaultCharacter() {
 // Read the persisted record (no derived fields), creating the default on first access.
 // Mutating paths build on this so they never re-persist a derived age-level.
 async function loadRawCharacter() {
-  const data = await readJSONFile(CHARACTER_FILE, null);
+  const data = await readJSONFile(CHARACTER_FILE, null, { strict: true });
   if (data) return data;
   const character = createDefaultCharacter();
   await ensureDir(PATHS.data);
@@ -254,7 +254,7 @@ export async function updateCharacterFields(patch = {}) {
 // persisted, and new peers ignore the remote level (applyCharacterRemote no longer merges it),
 // so this projection is invisible to same-version installs.
 export async function getWireCharacter() {
-  const raw = await readJSONFile(CHARACTER_FILE, null);
+  const raw = await readJSONFile(CHARACTER_FILE, null, { strict: true });
   if (!raw) return null;
   // Strip every derived field a hand-edited or legacy character.json might be carrying before
   // it goes out on the wire: `level` is then re-added below as the legacy xp-derived value,

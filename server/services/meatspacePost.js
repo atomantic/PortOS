@@ -328,7 +328,7 @@ async function ensureMeatspaceDir() {
 
 export async function getPostConfig() {
   const baseDefaults = structuredClone(DEFAULT_CONFIG);
-  const config = await readJSONFile(CONFIG_FILE, baseDefaults);
+  const config = await readJSONFile(CONFIG_FILE, baseDefaults, { strict: true });
   return deepMerge(baseDefaults, config);
 }
 

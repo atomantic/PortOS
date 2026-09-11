@@ -185,7 +185,7 @@ export function computeActivityBudgets(deathDate, activities) {
 // === File I/O ===
 
 async function loadActivities() {
-  return readJSONFile(ACTIVITIES_FILE, { activities: [] });
+  return readJSONFile(ACTIVITIES_FILE, { activities: [] }, { strict: true });
 }
 
 async function saveActivities(data) {
@@ -218,7 +218,7 @@ const DEFAULT_EVENTS = [
 ];
 
 async function loadEvents() {
-  return readJSONFile(EVENTS_FILE, { events: [] });
+  return readJSONFile(EVENTS_FILE, { events: [] }, { strict: true });
 }
 
 async function saveEvents(data) {

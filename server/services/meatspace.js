@@ -66,7 +66,7 @@ async function ensureMeatspaceDir() {
 }
 
 async function loadConfig() {
-  return readJSONFile(CONFIG_FILE, structuredClone(DEFAULT_CONFIG));
+  return readJSONFile(CONFIG_FILE, structuredClone(DEFAULT_CONFIG), { strict: true });
 }
 
 async function saveConfig(config) {
@@ -282,7 +282,7 @@ async function migrateBirthDateFromGoals(config) {
   return queueConfigWrite(async () => {
     const freshConfig = await loadConfig();
     if (freshConfig.birthDate) return freshConfig;
-    const goals = await readJSONFile(GOALS_FILE, null);
+    const goals = await readJSONFile(GOALS_FILE, null, { strict: true });
     if (!goals?.birthDate) return freshConfig;
     freshConfig.birthDate = goals.birthDate;
     freshConfig.updatedAt = new Date().toISOString();
@@ -324,7 +324,7 @@ export async function updateBirthDate(birthDate, { syncGoals = true } = {}) {
 
   // Keep goals.json in sync for backward compatibility
   if (syncGoals) {
-    const goals = await readJSONFile(GOALS_FILE, null);
+    const goals = await readJSONFile(GOALS_FILE, null, { strict: true });
     if (goals) {
       goals.birthDate = birthDate;
       goals.updatedAt = new Date().toISOString();
@@ -340,6 +340,7 @@ export async function updateBirthDate(birthDate, { syncGoals = true } = {}) {
 export async function getDeathClock() {
   const [config, longevity] = await Promise.all([
     loadConfig(),
+    // Read-only longevity input; this service never persists the projection.
     readJSONFile(LONGEVITY_FILE, null)
   ]);
 
@@ -357,6 +358,7 @@ export async function getDeathClock() {
 
 export async function getLEV() {
   const [longevity, config] = await Promise.all([
+    // Read-only longevity input; this service never persists the projection.
     readJSONFile(LONGEVITY_FILE, null),
     loadConfig()
   ]);

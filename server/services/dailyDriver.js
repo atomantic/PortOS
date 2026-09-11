@@ -36,7 +36,7 @@ export function computeDriverState(record, today) {
 }
 
 async function load() {
-  return (await readJSONFile(FILE, null)) || {};
+  return (await readJSONFile(FILE, null, { strict: true })) || {};
 }
 
 async function save(record) {

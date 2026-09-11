@@ -8,7 +8,7 @@ const REVIEW_DIR = join(PATHS.calendar, 'daily-reviews');
 
 async function loadReview(date) {
   await ensureDir(REVIEW_DIR);
-  return readJSONFile(join(REVIEW_DIR, `${date}.json`), null);
+  return readJSONFile(join(REVIEW_DIR, `${date}.json`), null, { strict: true });
 }
 
 async function saveReview(date, data) {
@@ -145,6 +145,7 @@ export async function getDailyReviewHistory(startDate, endDate) {
 
   const loaded = await Promise.all(
     inRange.map(async reviewDate => {
+      // Read-only history projection; confirmations use the strict loadReview path.
       const data = await readJSONFile(join(REVIEW_DIR, `${reviewDate}.json`), null);
       if (!data) return null;
       const confirmations = Object.values(data.confirmations || {});

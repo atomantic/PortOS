@@ -733,7 +733,7 @@ export async function importToPortOS() {
 
   const report = { added: {}, skipped: {} };
   const mergeById = async (mlArr, localPath, pathDir) => {
-    const local = await readJSONFile(localPath, []);
+    const local = await readJSONFile(localPath, [], { strict: true });
     const localArr = Array.isArray(local) ? local : [];
     const seen = new Set(localArr.map(x => x.id).filter(Boolean));
     let added = 0, skipped = 0;
@@ -750,7 +750,7 @@ export async function importToPortOS() {
 
   // Goals live in a wrapper object, not a bare array
   const goalsPath = dataPath('digital-twin', 'goals.json');
-  const localGoals = await readJSONFile(goalsPath, { goals: [] });
+  const localGoals = await readJSONFile(goalsPath, { goals: [] }, { strict: true });
   const seenGoalIds = new Set((localGoals.goals || []).map(g => g.id));
   let gAdded = 0, gSkipped = 0;
   for (const g of (store.goals || [])) {

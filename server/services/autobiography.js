@@ -183,7 +183,7 @@ async function loadStories() {
   // on a missing file, so `data.stories.push(...)` / the deletedStories rewrite
   // below would otherwise mutate the module-level DEFAULT_DATA and leak the
   // previous caller's stories into the next fresh-install read.
-  return readJSONFile(STORIES_FILE, structuredClone(DEFAULT_DATA));
+  return readJSONFile(STORIES_FILE, structuredClone(DEFAULT_DATA), { strict: true });
 }
 
 async function saveStories(data) {
@@ -193,7 +193,7 @@ async function saveStories(data) {
 
 async function loadConfig() {
   await ensureDir(DATA_DIR);
-  return readJSONFile(CONFIG_FILE, DEFAULT_CONFIG);
+  return readJSONFile(CONFIG_FILE, DEFAULT_CONFIG, { strict: true });
 }
 
 async function saveConfig(config) {

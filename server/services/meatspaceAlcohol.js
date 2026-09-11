@@ -162,6 +162,7 @@ export async function getAlcoholSummary() {
 
   const [log, config] = await Promise.all([
     loadDailyLog(),
+    // Read-only summary input; mutations of this config belong to meatspace.js.
     readJSONFile(CONFIG_FILE, { sex: 'male' })
   ]);
 
@@ -324,7 +325,7 @@ export async function removeDrink(date, index) {
 // === Custom Drink Buttons ===
 
 async function loadCustomDrinks() {
-  const data = await readJSONFile(CUSTOM_DRINKS_FILE, null, { allowArray: false });
+  const data = await readJSONFile(CUSTOM_DRINKS_FILE, null, { allowArray: false, strict: true });
   if (!data || typeof data !== 'object' || Array.isArray(data)) {
     // Return defaults in-memory without writing — persist only on explicit mutations
     return { drinks: DEFAULT_DRINK_BUTTONS.map(d => ({ ...d })) };

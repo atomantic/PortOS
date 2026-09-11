@@ -48,6 +48,8 @@ function getDigestPath(weekId) {
  */
 async function loadDigest(weekId) {
   const path = getDigestPath(weekId);
+  // Derived snapshot: generation rebuilds the target week from agent records; this read
+  // only presents it or supplies a previous-week comparison, never a write-back base.
   return readJSONFile(path, null);
 }
 

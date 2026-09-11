@@ -46,7 +46,7 @@ export function dedupKey(metricName, dateString) {
  */
 export async function readDayFile(dateStr) {
   const filePath = join(PATHS.health, `${dateStr}.json`);
-  return readJSONFile(filePath, { date: dateStr, metrics: {} });
+  return readJSONFile(filePath, { date: dateStr, metrics: {} }, { strict: true });
 }
 
 /**

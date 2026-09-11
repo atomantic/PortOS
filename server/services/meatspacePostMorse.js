@@ -55,7 +55,7 @@ async function loadMorseProgress() {
   const raw = await readJSONFile(
     MORSE_FILE,
     { kochLevel: null, settings: null, rounds: [] },
-    { allowArray: false },
+    { allowArray: false, strict: true },
   );
   // `allowArray: false` only rejects a root array — a bare JSON scalar
   // (corrupted file) still parses, and the field assignments below would
