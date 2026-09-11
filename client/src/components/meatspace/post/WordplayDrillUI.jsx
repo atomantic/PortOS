@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { Loader } from 'lucide-react';
 import { scorePostLlmDrill } from '../../../services/api';
 import { getDifficultyColor } from './constants';
+import { pluralize } from '../../../lib/textUtils';
 
 // Shared scoring core for the four wordplay drill types (compound-chain,
 // bridge-word, double-meaning, idiom-twist) — used by BOTH the standalone
@@ -161,7 +162,7 @@ export function CompoundChainUI({ challenge, items, inputValue, setInputValue, o
         disabled={items.length === 0}
         className="w-full px-6 py-2.5 bg-port-success hover:bg-port-success/80 disabled:opacity-50 text-white font-medium rounded-lg transition-colors"
       >
-        Done — Submit {items.length} compounds
+        Done — Submit {pluralize(items.length, 'compound')}
       </button>
       <ProgressBar index={questionIndex} total={totalPrompts} />
     </>

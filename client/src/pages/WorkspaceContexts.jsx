@@ -8,6 +8,7 @@ import toast from '../components/ui/Toast';
 import { useAsyncAction } from '../hooks/useAsyncAction';
 import { timeAgo } from '../utils/formatters';
 import PageSkeleton from '../components/ui/PageSkeleton';
+import { pluralize } from '../lib/textUtils';
 import {
   listWorkspaceContexts, getWorkspaceContext, saveWorkspaceContext,
   restoreWorkspaceContext, deleteWorkspaceContext
@@ -17,11 +18,11 @@ import {
 // its working context — git branch, in-repo shell sessions, scoped tasks.
 // Deep-linkable: /workspace-contexts (list) and /workspace-contexts/:appId.
 
-function StatChip({ icon: Icon, label, value }) {
+function StatChip({ icon: Icon, singular, value }) {
   return (
     <div className="flex items-center gap-1.5 text-xs text-gray-400">
       <Icon size={13} />
-      <span>{value} {label}</span>
+      <span>{pluralize(value, singular)}</span>
     </div>
   );
 }
@@ -180,8 +181,8 @@ function ContextDetail({ appId }) {
               : <span className="text-port-warning flex items-center gap-1 text-xs"><AlertCircle size={12} /> branch changed</span>)}
           </div>
           <div className="flex items-center gap-4 text-xs text-gray-500">
-            <span>{ctx.saved.shellSessionIds?.length || 0} shell(s)</span>
-            <span>{ctx.saved.taskIds?.length || 0} task(s)</span>
+            <span>{pluralize(ctx.saved.shellSessionIds?.length || 0, 'shell')}</span>
+            <span>{pluralize(ctx.saved.taskIds?.length || 0, 'task')}</span>
           </div>
         </div>
       )}
@@ -236,8 +237,8 @@ function ContextList() {
             <FolderGit2 size={16} /> {row.appName}
           </div>
           <div className="flex flex-wrap gap-x-4 gap-y-1 mb-2">
-            <StatChip icon={SquareTerminal} label="shell(s)" value={row.shellSessionCount} />
-            <StatChip icon={ListChecks} label="task(s)" value={row.taskCount} />
+            <StatChip icon={SquareTerminal} singular="shell" value={row.shellSessionCount} />
+            <StatChip icon={ListChecks} singular="task" value={row.taskCount} />
           </div>
           <div className="text-xs text-gray-500">
             {row.savedAt

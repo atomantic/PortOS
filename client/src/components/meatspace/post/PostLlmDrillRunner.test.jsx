@@ -143,7 +143,7 @@ describe('PostLlmDrillRunner — training-mode scoring path', () => {
     const input = screen.getByPlaceholderText(/other half/i);
     fireEvent.change(input, { target: { value: 'firehouse' } });
     fireEvent.click(screen.getByText('Add'));
-    fireEvent.click(screen.getByText(/Done — Submit 1 compounds/));
+    fireEvent.click(screen.getByText(/Done — Submit 1 compound\b/));
 
     await waitFor(() => expect(screen.getByText('88')).toBeInTheDocument());
     expect(scorePostLlmDrill).toHaveBeenCalledWith(
@@ -191,7 +191,7 @@ describe('PostLlmDrillRunner — training-mode scoring path', () => {
 
     fireEvent.change(screen.getByPlaceholderText(/other half/i), { target: { value: 'firehouse' } });
     fireEvent.click(screen.getByText('Add'));
-    fireEvent.click(screen.getByText(/Done — Submit 1 compounds/));
+    fireEvent.click(screen.getByText(/Done — Submit 1 compound\b/));
     await screen.findByText('88');
     fireEvent.click(screen.getByText('Next'));
 
