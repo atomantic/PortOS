@@ -13,8 +13,7 @@
  *   - `runSpawnerCompletionCleanup` — the two in-process spawners, whose child
  *     process (or PTY relay) this server owns: the TUI `finish()` handler
  *     (agentTuiSpawning.js) and the direct-CLI `close` handler
- *     (agentCliSpawning.js). Pipeline progression, worktree cleanup with the PR
- *     disposition, and the retry-hold release.
+ *     (agentCliSpawning.js). Runs the same post-finalize steps as the runner.
  *
  * Both hand `cleanupAgentWorktree` the options `resolveWorktreeCleanupOptions`
  * builds, so the PR-disposition shape has one owner. `handlePipelineProgression`
@@ -294,7 +293,9 @@ export async function runAgentCompletionCleanup({ agentId, task, agent, effectiv
   const agentState = await getAgentState(agentId).catch(() => null);
 
   try {
-    await runCompletionCleanupSteps({ agentId, task, agent, agentState, effectiveSuccess, outputBuffer, prClaimVerified, noChangesToShip });
+    await runCompletionCleanupSteps({
+      agentId, task, agent, agentState, effectiveSuccess, outputBuffer, prClaimVerified, noChangesToShip,
+    });
   } finally {
     await releaseRetryHold({
       agentId,
@@ -306,10 +307,51 @@ export async function runAgentCompletionCleanup({ agentId, task, agent, effectiv
 }
 
 /**
- * The cleanup steps themselves. Split from the public entry point above only so
- * the retry-hold release can wrap them in a `finally` without re-indenting them.
+ * One ordered post-finalize sequence for every completion path. Public entry
+ * points own retry-hold release independently of these steps.
  */
-async function runCompletionCleanupSteps({ agentId, task, agent, agentState, effectiveSuccess, outputBuffer, prClaimVerified = false, noChangesToShip = false }) {
+async function runCompletionCleanupSteps(context) {
+  // The spawners have always logged failed steps and continued; the runner
+  // propagates them to its completion handler. Both execute the same sequence.
+  const runStep = (name, step) => step().catch(err => {
+    if (!context.continueOnError) throw err;
+    emitLog('warn', `${name} failed for ${context.agentId}: ${err.message}`, { agentId: context.agentId, taskId: context.task?.id });
+  });
+  await runStep('JIRA hand-off', () => completeJiraHandOff(context));
+  await runStep('Plan question notification', () => notifyPlanQuestionIfNeeded(context));
+  await runStep('Pipeline progression', () => handlePipelineProgression(context.task, context.agentId, context.effectiveSuccess));
+  await runStep('Creative Director completion', () => advanceCreativeDirectorIfNeeded(context));
+  const cleanupWarnings = await runStep('Worktree cleanup', () => completeWorktreeCleanup(context));
+  await runStep('Cleanup warning reporting', () => reportWorktreeCleanupWarnings({ ...context, cleanupWarnings }));
+}
+
+function resolveRunnerPrOwnership({ task, agent, agentState }) {
+  const taskOpenPR = isTruthyMeta(task?.metadata?.openPR);
+  // Who opens the PR, and whether finalize already checked that they did.
+  // These two must match what the prompt actually told the agent or PortOS
+  // double-fires `gh pr create` ("a pull request already exists" would then
+  // preserve the worktree as a false-positive failure).
+  //
+  // Read off the PERSISTED record (#3358): the in-memory `runnerAgents` entry
+  // carries only `providerId`, so a lean `--bare` or path-configured provider
+  // would be misjudged from it. `resolvePrOpenedBy` owns the stamped-vs-
+  // derived fallback, including the legacy `ownsPrWorkflow` boolean records
+  // written before #6869 and the pre-#3733 records that carry nothing.
+  const providerDescriptor = {
+    providerId: agentState?.metadata?.providerId ?? agent.providerId,
+    providerCommand: agentState?.metadata?.providerCommand ?? agent.providerCommand ?? null,
+    leanMode: (agentState?.metadata?.leanMode ?? agent.leanMode) === true,
+  };
+  const prOpenedBy = resolvePrOpenedBy({
+    persistedPrOpenedBy: agentState?.metadata?.prOpenedBy ?? agent.prOpenedBy,
+    persistedOwnsPrWorkflow: agentState?.metadata?.ownsPrWorkflow ?? agent.ownsPrWorkflow,
+    ...providerDescriptor,
+  });
+  const agentOpensOwnPr = taskOpenPR && prOpenedBy !== PR_OPENED_BY.PORTOS;
+  return { taskOpenPR, agentOpensOwnPr };
+}
+
+async function completeJiraHandOff({ agentId, task, agentState, effectiveSuccess, outputBuffer }) {
   // JIRA integration: push branch, create PR, comment on ticket
   const jiraTicketId = task?.metadata?.jiraTicketId;
   const jiraBranch = task?.metadata?.jiraBranch;
@@ -319,44 +361,15 @@ async function runCompletionCleanupSteps({ agentId, task, agent, agentState, eff
   if (jiraTicketId && jiraBranch && effectiveSuccess) {
     const workspace = agentState?.metadata?.workspacePath || ROOT_DIR;
 
-    let jiraTicketUrl = task?.metadata?.jiraTicketUrl || null;
-    if (!jiraTicketUrl && jiraInstanceId) {
-      const jiraConfig = await jiraService.getInstances().catch(() => null);
-      const baseUrl = jiraConfig?.instances?.[jiraInstanceId]?.baseUrl;
-      if (baseUrl) jiraTicketUrl = `${baseUrl}/browse/${jiraTicketId}`;
-    }
-    const jiraTicketRef = jiraTicketUrl ? `[${jiraTicketId}](${jiraTicketUrl})` : jiraTicketId;
+    const jiraTicketRef = await resolveJiraTicketRef(task.metadata);
 
     await git.push(workspace, jiraBranch).catch(err => {
       emitLog('warn', `Failed to push JIRA branch ${jiraBranch}: ${err.message}`, { agentId, ticketId: jiraTicketId });
     });
 
-    let prUrl = null;
-    if (jiraCreatePR !== false) {
-      const { baseBranch, devBranch } = await git.getRepoBranches(workspace).catch(() => ({ baseBranch: null, devBranch: null }));
-      const targetBranch = devBranch || baseBranch || 'main';
-
-      const jiraPrBody = await git.generatePRDescription(workspace, targetBranch, jiraBranch, outputBuffer);
-      const jiraPrBodyWithRef = `Resolves ${jiraTicketRef}\n\n${jiraPrBody}`;
-
-      const baseTitle = await git.suggestPRTitle(workspace, targetBranch, jiraBranch, task.description);
-      const jiraPrTitle = `${jiraTicketId}: ${baseTitle}`.substring(0, 100);
-
-      const prResult = await git.createPR(workspace, {
-        title: jiraPrTitle,
-        body: jiraPrBodyWithRef,
-        base: targetBranch,
-        head: jiraBranch
-      }).catch(err => {
-        emitLog('warn', `Failed to create PR for ${jiraTicketId}: ${err.message}`, { agentId });
-        return null;
-      });
-
-      if (prResult?.success) {
-        prUrl = prResult.url;
-        emitLog('success', `Created PR: ${prUrl}`, { agentId, ticketId: jiraTicketId });
-      }
-    }
+    const prUrl = jiraCreatePR === false ? null : await createJiraPullRequest({
+      agentId, task, workspace, jiraTicketId, jiraTicketRef, jiraBranch, outputBuffer,
+    });
 
     if (jiraInstanceId) {
       const commentLines = [`Agent completed task successfully.`];
@@ -376,7 +389,47 @@ async function runCompletionCleanupSteps({ agentId, task, agent, agentState, eff
       emitLog('warn', `Failed to checkout back to ${returnBranch}: ${err.message}`, { agentId });
     });
   }
+}
 
+async function resolveJiraTicketRef({ jiraTicketId, jiraTicketUrl, jiraInstanceId }) {
+  let ticketUrl = jiraTicketUrl || null;
+  if (!ticketUrl && jiraInstanceId) {
+    const config = await jiraService.getInstances().catch(() => null);
+    const baseUrl = config?.instances?.[jiraInstanceId]?.baseUrl;
+    if (baseUrl) ticketUrl = `${baseUrl}/browse/${jiraTicketId}`;
+  }
+  return ticketUrl ? `[${jiraTicketId}](${ticketUrl})` : jiraTicketId;
+}
+
+async function createJiraPullRequest({ agentId, task, workspace, jiraTicketId, jiraTicketRef, jiraBranch, outputBuffer }) {
+  const { baseBranch, devBranch } = await git.getRepoBranches(workspace).catch(() => ({ baseBranch: null, devBranch: null }));
+  const targetBranch = devBranch || baseBranch || 'main';
+
+  const jiraPrBody = await git.generatePRDescription(workspace, targetBranch, jiraBranch, outputBuffer);
+  const jiraPrBodyWithRef = `Resolves ${jiraTicketRef}\n\n${jiraPrBody}`;
+
+  const baseTitle = await git.suggestPRTitle(workspace, targetBranch, jiraBranch, task.description);
+  const jiraPrTitle = `${jiraTicketId}: ${baseTitle}`.substring(0, 100);
+
+  const prResult = await git.createPR(workspace, {
+    title: jiraPrTitle,
+    body: jiraPrBodyWithRef,
+    base: targetBranch,
+    head: jiraBranch
+  }).catch(err => {
+    emitLog('warn', `Failed to create PR for ${jiraTicketId}: ${err.message}`, { agentId });
+    return null;
+  });
+
+  if (prResult?.success) {
+    const prUrl = prResult.url;
+    emitLog('success', `Created PR: ${prUrl}`, { agentId, ticketId: jiraTicketId });
+    return prUrl;
+  }
+  return null;
+}
+
+async function notifyPlanQuestionIfNeeded({ agentId, task, agentState }) {
   // Check for plan questions marker file (feature-ideas / plan-task needing user input)
   const planAnalysisType = task?.metadata?.analysisType;
   if (planAnalysisType === 'feature-ideas' || planAnalysisType === 'plan-task') {
@@ -405,12 +458,9 @@ async function runCompletionCleanupSteps({ agentId, task, agent, agentState, eff
       emitLog('info', `📋 Plan question notification created: ${title}`, { agentId, appId });
     }
   }
+}
 
-  // Advance pipeline to next stage if applicable
-  if (task?.metadata?.pipeline) {
-    await handlePipelineProgression(task, agentId, effectiveSuccess);
-  }
-
+async function advanceCreativeDirectorIfNeeded({ agentId, task, effectiveSuccess }) {
   // Advance Creative Director task chain if applicable. After a Creative
   // Director agent task (treatment or evaluate) finishes, the orchestrator
   // decides what comes next and enqueues it. Scene rendering and final
@@ -422,68 +472,41 @@ async function runCompletionCleanupSteps({ agentId, task, agent, agentState, eff
     handleCreativeDirectorCompletion(task, agentId, effectiveSuccess)
       .catch((err) => console.log(`⚠️ creativeDirector completion hook failed: ${err.message}`));
   }
+}
 
-  // Clean up worktree if agent was using one (skip merge when JIRA branch — PR handles merge)
-  if (!jiraBranch) {
-    const taskOpenPR = isTruthyMeta(task?.metadata?.openPR);
-    // Who opens the PR, and whether finalize already checked that they did.
-    // These two must match what the prompt actually told the agent or PortOS
-    // double-fires `gh pr create` ("a pull request already exists" would then
-    // preserve the worktree as a false-positive failure).
-    //
-    // Read off the PERSISTED record (#3358): the in-memory `runnerAgents` entry
-    // carries only `providerId`, so a lean `--bare` or path-configured provider
-    // would be misjudged from it. `resolvePrOpenedBy` owns the stamped-vs-
-    // derived fallback, including the legacy `ownsPrWorkflow` boolean records
-    // written before #6869 and the pre-#3733 records that carry nothing.
-    const providerDescriptor = {
-      providerId: agentState?.metadata?.providerId ?? agent.providerId,
-      providerCommand: agentState?.metadata?.providerCommand ?? agent.providerCommand ?? null,
-      leanMode: (agentState?.metadata?.leanMode ?? agent.leanMode) === true,
-    };
-    const prOpenedBy = resolvePrOpenedBy({
-      persistedPrOpenedBy: agentState?.metadata?.prOpenedBy ?? agent.prOpenedBy,
-      persistedOwnsPrWorkflow: agentState?.metadata?.ownsPrWorkflow ?? agent.ownsPrWorkflow,
-      ...providerDescriptor,
+async function completeWorktreeCleanup({ agentId, task, agent, agentState, effectiveSuccess, prOwnership, outputBuffer, prClaimVerified, noChangesToShip }) {
+  if (task?.metadata?.jiraBranch) return;
+  const ownership = prOwnership ?? resolveRunnerPrOwnership({ task, agent, agentState });
+  return cleanupAgentWorktree(agentId, effectiveSuccess, await resolveWorktreeCleanupOptions({
+    agentId, task, outputBuffer,
+    taskOpenPR: ownership.taskOpenPR,
+    agentOpensOwnPr: ownership.agentOpensOwnPr,
+    prClaimVerified, noChangesToShip,
+  }));
+}
+
+async function reportWorktreeCleanupWarnings({ agentId, task, cleanupWarnings }) {
+  if (cleanupWarnings?.length > 0) {
+    const { getAgent: getAgentForResult } = await import('./cos.js');
+    const currentAgent = await getAgentForResult(agentId).catch(() => null);
+    await updateAgent(agentId, { result: { ...currentAgent?.result, warnings: cleanupWarnings } });
+
+    const { addNotification, NOTIFICATION_TYPES, PRIORITY_LEVELS } = await import('./notifications.js');
+    const appName = task?.metadata?.appName || task?.metadata?.app || 'PortOS';
+    await addNotification({
+      type: NOTIFICATION_TYPES.AGENT_WARNING,
+      title: `Agent cleanup issue: ${appName}`,
+      description: cleanupWarnings.join('\n'),
+      priority: PRIORITY_LEVELS.HIGH,
+      link: '/cos/agents',
+      metadata: { agentId, taskId: task?.id, warnings: cleanupWarnings }
+    }).catch(err => {
+      emitLog('warn', `Failed to create cleanup warning notification: ${err.message}`, { agentId });
     });
-    const agentOpensOwnPr = taskOpenPR && prOpenedBy !== PR_OPENED_BY.PORTOS;
-    // `prClaimVerified` is the caller's — it carries whether finalize's check
-    // ACTUALLY produced a forge answer for this run. Re-deriving it here from
-    // `canTypeSlashCommands` would answer a different question ("was one
-    // expected?") off a different expression than the one finalize used, and the
-    // two silently disagree the moment a run's check throws or its finalize does.
-    const cleanupWarnings = await cleanupAgentWorktree(agentId, effectiveSuccess, await resolveWorktreeCleanupOptions({
-      agentId,
-      task,
-      outputBuffer,
-      taskOpenPR,
-      agentOpensOwnPr,
-      prClaimVerified,
-      noChangesToShip,
-    }));
 
-    if (cleanupWarnings?.length > 0) {
-      const { getAgent: getAgentForResult } = await import('./cos.js');
-      const currentAgent = await getAgentForResult(agentId).catch(() => null);
-      await updateAgent(agentId, { result: { ...currentAgent?.result, warnings: cleanupWarnings } });
-
-      const { addNotification, NOTIFICATION_TYPES, PRIORITY_LEVELS } = await import('./notifications.js');
-      const appName = task?.metadata?.appName || task?.metadata?.app || 'PortOS';
-      await addNotification({
-        type: NOTIFICATION_TYPES.AGENT_WARNING,
-        title: `Agent cleanup issue: ${appName}`,
-        description: cleanupWarnings.join('\n'),
-        priority: PRIORITY_LEVELS.HIGH,
-        link: '/cos/agents',
-        metadata: { agentId, taskId: task?.id, warnings: cleanupWarnings }
-      }).catch(err => {
-        emitLog('warn', `Failed to create cleanup warning notification: ${err.message}`, { agentId });
-      });
-
-      void spawnMergeRecoveryTask(cleanupWarnings, agentId, task, appName, currentAgent?.metadata?.sourceWorkspace).catch(err => {
-        emitLog('warn', `Failed to spawn merge recovery task: ${err.message}`, { agentId, taskId: task?.id });
-      });
-    }
+    void spawnMergeRecoveryTask(cleanupWarnings, agentId, task, appName, currentAgent?.metadata?.sourceWorkspace).catch(err => {
+      emitLog('warn', `Failed to spawn merge recovery task: ${err.message}`, { agentId, taskId: task?.id });
+    });
   }
 }
 
@@ -493,25 +516,10 @@ async function runCompletionCleanupSteps({ agentId, task, agent, agentState, eff
  * `close` handler (agentCliSpawning.js) — and the counterpart of
  * `runAgentCompletionCleanup` above, which serves the runner-event path.
  *
- * Runs from the spawner's `finally`, after `finalizeAgent` has settled or
- * thrown. In order:
- *   1. advance a staged pipeline (`handlePipelineProgression`) BEFORE the
- *      worktree goes, since a stage precondition may read it;
- *   2. worktree cleanup with the PR disposition (`resolveWorktreeCleanupOptions`);
- *   3. release the retry hold — in a `finally`, as `runAgentCompletionCleanup`
- *      does, so no throw above can skip it. A failed task is left held by
- *      `finalizeAgent` so nothing can dequeue its retry before the resume
- *      pointer is written; the release flips it back to `pending` pointing at
- *      whatever cleanup preserved — the branch (or whole worktree) kept because
- *      the run failed with commits on it (#3368, #3373).
- * A failed step is logged and does not block the next one.
- *
- * Both spawners used to inline this sequence and mirror each other by hand, and
- * the mirror drifted in both directions: pipeline progression reached the CLI
- * copy (cd1d21211) but never the TUI one — so an attachable pipeline stage run
- * as a TUI (#6062) completed without advancing, or closing, its pipeline —
- * while the reviewer-resolve hardening reached the TUI copy (708c5e473) but not
- * the CLI one.
+ * Runs the shared step list from the spawner's `finally`, after finalize
+ * settles or throws. Failed steps are logged without blocking later steps.
+ * Retry-hold release remains in a `finally`: even a skipped JIRA worktree or
+ * a failed hand-off must release the task with the resume pointer cleanup left.
  *
  * `prOwnership` is `resolvePrOwnership`'s answer for this run;
  * `prClaimVerified` / `noChangesToShip` are read off finalize's return.
@@ -521,19 +529,12 @@ async function runCompletionCleanupSteps({ agentId, task, agent, agentState, eff
  */
 export async function runSpawnerCompletionCleanup({ agentId, task, success, prOwnership, prClaimVerified = false, noChangesToShip = false, outputBuffer }) {
   try {
-    await handlePipelineProgression(task, agentId, success)
-      .catch(err => emitLog('warn', `Pipeline progression failed for ${agentId}: ${err.message}`, { agentId, taskId: task?.id }));
-    const cleanupOptions = await resolveWorktreeCleanupOptions({
-      agentId,
-      task,
-      outputBuffer,
-      taskOpenPR: prOwnership.taskOpenPR,
-      agentOpensOwnPr: prOwnership.agentOpensOwnPr,
-      prClaimVerified,
-      noChangesToShip,
+    const { getAgent } = await import('./cos.js');
+    const agentState = await getAgent(agentId).catch(() => null);
+    await runCompletionCleanupSteps({
+      agentId, task, agentState, effectiveSuccess: success, prOwnership,
+      prClaimVerified, noChangesToShip, outputBuffer, continueOnError: true,
     });
-    await cleanupAgentWorktree(agentId, success, cleanupOptions)
-      .catch(err => emitLog('warn', `Worktree cleanup failed for ${agentId}: ${err.message}`, { agentId, taskId: task?.id }));
   } finally {
     await releaseRetryHold({ agentId, task, success })
       .catch(err => emitLog('warn', `Retry-hold release failed for ${agentId}: ${err.message}`, { agentId, taskId: task?.id }));
