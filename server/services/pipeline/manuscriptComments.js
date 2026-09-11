@@ -204,7 +204,7 @@ function sanitizeReview(raw) {
 
 export async function readReview(seriesId) {
   // `null` = file absent (distinct from a present-but-empty review).
-  const raw = await readJSONFile(reviewPath(seriesId), null);
+  const raw = await readJSONFile(reviewPath(seriesId), null, { strict: true });
   return raw == null ? emptyReview() : sanitizeReview(raw);
 }
 

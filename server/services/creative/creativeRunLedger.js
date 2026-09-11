@@ -79,7 +79,7 @@ export async function appendCreativeLedgerEntry(projectId, entry, { dir } = {}) 
   const record = { at: new Date().toISOString(), ...entry };
   await ledgerQueue(file, async () => {
     await ensureDir(dir || DEFAULT_LEDGER_DIR);
-    const existing = await readJSONFile(file, [], { logError: false });
+    const existing = await readJSONFile(file, [], { logError: false, strict: true });
     const list = Array.isArray(existing) ? existing : [];
     list.push(record);
     const trimmed = list.length > MAX_LEDGER_ENTRIES ? list.slice(-MAX_LEDGER_ENTRIES) : list;
@@ -96,6 +96,6 @@ export async function appendCreativeLedgerEntry(projectId, entry, { dir } = {}) 
  * @returns {Promise<Array<object>>}
  */
 export async function readCreativeLedger(projectId, { dir } = {}) {
-  const existing = await readJSONFile(fileFor(projectId, dir), [], { logError: false });
+  const existing = await readJSONFile(fileFor(projectId, dir), [], { logError: false, strict: true });
   return Array.isArray(existing) ? existing : [];
 }

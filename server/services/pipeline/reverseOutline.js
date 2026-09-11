@@ -192,7 +192,7 @@ const emptyOutline = () => ({ schemaVersion: SCHEMA_VERSION, status: 'none', plo
 
 async function readOutline(seriesId) {
   // `null` = file absent (distinct from a present-but-empty outline).
-  const raw = await readJSONFile(outlinePath(seriesId), null);
+  const raw = await readJSONFile(outlinePath(seriesId), null, { strict: true });
   if (raw == null || typeof raw !== 'object') return null;
   return raw;
 }

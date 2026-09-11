@@ -57,7 +57,7 @@ export function createBibleStore(opts) {
 
   async function load(workId) {
     const fallback = { [listKey]: [], updatedAt: null };
-    const parsed = await readJSONFile(filePath(workId), fallback);
+    const parsed = await readJSONFile(filePath(workId), fallback, { strict: true });
     if (!parsed || !Array.isArray(parsed[listKey])) return fallback;
     return { ...parsed, [listKey]: sanitizeBibleList(parsed[listKey], kind, { idPrefix }) };
   }

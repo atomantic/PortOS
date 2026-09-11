@@ -70,7 +70,7 @@ function truncateTitle(text) {
 }
 
 async function readConversation(id) {
-  const data = await readJSONFile(pathFor(id), null, { logError: false });
+  const data = await readJSONFile(pathFor(id), null, { logError: false, strict: true });
   if (!data || typeof data !== 'object' || data.id !== id) return null;
   return data;
 }
