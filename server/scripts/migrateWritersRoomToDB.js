@@ -143,19 +143,19 @@ export async function migrateWritersRoomToDB() {
   if (!rootStat) return { ok: true, reason: 'fresh-install', folders: 0, works: 0, exercises: 0 };
 
   const counts = { folders: 0, works: 0, exercises: 0 };
-  let incomplete = 0;
+  const incomplete = [];
   for (const [name, importRow] of [['folders', importFolder], ['exercises', importExercise]]) {
     const path = join(root, `${name}.json`);
     const source = await readLegacyJSON(path);
     if (source.status === 'missing') continue;
-    if (source.status !== 'valid' || !Array.isArray(source.value)) { incomplete += 1; continue; }
+    if (source.status !== 'valid' || !Array.isArray(source.value)) { incomplete.push(path); continue; }
     let valid = true;
     for (const row of source.value) {
       const inserted = await importRow(row);
-      if (inserted === null) { incomplete += 1; valid = false; }
+      if (inserted === null) { incomplete.push(path); valid = false; }
       else if (inserted) counts[name] += 1;
     }
-    if (valid && !await parkLegacyFile(path, path.replace(/\.json$/, '.imported.json'))) incomplete += 1;
+    if (valid && !await parkLegacyFile(path, path.replace(/\.json$/, '.imported.json'))) incomplete.push(path);
   }
 
   const worksDir = join(root, 'works');
@@ -168,17 +168,17 @@ export async function migrateWritersRoomToDB() {
     if (source.status === 'missing') {
       // A DB-native work creates prose directories but no legacy manifest.
       const existing = await query('SELECT id FROM writers_room_works WHERE id = $1', [entry.name]);
-      if (!existing.rows.length) incomplete += 1;
+      if (!existing.rows.length) incomplete.push(path);
       continue;
     }
-    if (source.status !== 'valid' || source.value?.id !== entry.name) { incomplete += 1; continue; }
+    if (source.status !== 'valid' || source.value?.id !== entry.name) { incomplete.push(path); continue; }
     const inserted = await importWork(source.value);
-    if (inserted === null) { incomplete += 1; continue; }
+    if (inserted === null) { incomplete.push(path); continue; }
     if (inserted) counts.works += 1;
-    if (!await parkLegacyFile(path, aside)) incomplete += 1;
+    if (!await parkLegacyFile(path, aside)) incomplete.push(path);
   }
 
-  if (incomplete) return incompleteImport('Writers Room', counts, incomplete);
+  if (incomplete.length) return incompleteImport('Writers Room', counts, incomplete);
   await writeMarker(MARKER_FILENAME, { migratedAt: new Date().toISOString(), ...counts, reason: 'imported' });
   console.log(`✍️ writers-room→DB import: ${counts.folders} folder(s), ${counts.works} work(s), ${counts.exercises} exercise(s); .md bodies left in place`);
   return { ok: true, reason: 'imported', ...counts };

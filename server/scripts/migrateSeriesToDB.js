@@ -84,7 +84,7 @@ export async function migrateSeriesToDB() {
   const entries = await readdir(legacyDir);
   let imported = 0;
   let skipped = 0;
-  let incomplete = 0;
+  const incomplete = [];
   for (const name of entries) {
     if (!RECORD_RE.test(name)) continue; // skip index.json, hidden, non-record dirs
     const recordPath = join(legacyDir, name, 'index.json');
@@ -93,19 +93,19 @@ export async function migrateSeriesToDB() {
       // Current DB-backed records may own file-primary siblings without legacy
       // metadata. Confirm the row instead of treating those directories as loss.
       const existing = await query('SELECT id FROM pipeline_series WHERE id = $1', [name]);
-      if (!existing.rows.length) incomplete += 1;
+      if (!existing.rows.length) incomplete.push(recordPath);
       skipped += 1;
       continue;
     }
-    if (source.status !== 'valid' || source.value?.id !== name) { incomplete += 1; continue; }
+    if (source.status !== 'valid' || source.value?.id !== name) { incomplete.push(recordPath); continue; }
     const inserted = await importRecord(source.value);
-    if (inserted === null) { incomplete += 1; continue; }
+    if (inserted === null) { incomplete.push(recordPath); continue; }
     if (inserted) imported += 1;
     else skipped += 1;
-    if (!await parkLegacyFile(recordPath, `${recordPath}.imported`)) incomplete += 1;
+    if (!await parkLegacyFile(recordPath, `${recordPath}.imported`)) incomplete.push(recordPath);
   }
 
-  if (incomplete) return incompleteImport('Series', { imported, skipped }, incomplete);
+  if (incomplete.length) return incompleteImport('Series', { imported, skipped }, incomplete);
 
   await writeMarker(MARKER_FILENAME, { migratedAt: new Date().toISOString(), imported, skipped, reason: 'imported' });
   console.log(`🎬 pipeline-series→DB import: imported ${imported} series (${skipped} skipped); index.json renamed aside in place (review siblings kept)`);

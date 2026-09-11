@@ -99,25 +99,26 @@ export async function migrateUniversesToDB() {
     return { ok: true, reason: 'fresh-install', imported: 0, runs: 0 };
   }
 
-  const entries = await readdir(legacyDir);
+  const entries = await readdir(legacyDir, { withFileTypes: true });
   let imported = 0;
   let skipped = 0;
-  let incomplete = 0;
-  for (const name of entries) {
-    if (name === 'index.json' || name.startsWith('.')) continue;
+  const incomplete = [];
+  for (const entry of entries) {
+    const name = entry.name;
+    if (!entry.isDirectory() || !/^[A-Za-z0-9_-]{1,128}$/.test(name)) continue;
     const recordPath = join(legacyDir, name, 'index.json');
     const source = await readLegacyJSON(recordPath);
     if (source.status === 'missing') {
       // Current DB-backed records may own file-primary siblings without legacy
       // metadata. Confirm the row instead of treating those directories as loss.
       const existing = await query('SELECT id FROM universes WHERE id = $1', [name]);
-      if (!existing.rows.length) incomplete += 1;
+      if (!existing.rows.length) incomplete.push(recordPath);
       skipped += 1;
       continue;
     }
-    if (source.status !== 'valid' || source.value?.id !== name) { incomplete += 1; continue; }
+    if (source.status !== 'valid' || source.value?.id !== name) { incomplete.push(recordPath); continue; }
     const inserted = await importRecord(source.value);
-    if (inserted === null) { incomplete += 1; continue; }
+    if (inserted === null) { incomplete.push(recordPath); continue; }
     if (inserted) imported += 1;
     else skipped += 1;
   }
@@ -125,13 +126,13 @@ export async function migrateUniversesToDB() {
   // Runs from the type-level index.json `config.runs[]`.
   let runs = 0;
   const typeIndex = await readLegacyJSON(join(legacyDir, 'index.json'));
-  if (typeIndex.status === 'invalid' || Array.isArray(typeIndex.value)) incomplete += 1;
+  if (typeIndex.status === 'invalid' || Array.isArray(typeIndex.value)) incomplete.push(join(legacyDir, 'index.json'));
   if (typeIndex.status === 'valid') {
     const legacyRuns = typeIndex.value?.config?.runs;
-    if (legacyRuns !== undefined && !Array.isArray(legacyRuns)) incomplete += 1;
+    if (legacyRuns !== undefined && !Array.isArray(legacyRuns)) incomplete.push(join(legacyDir, 'index.json'));
     for (const run of Array.isArray(legacyRuns) ? legacyRuns : []) {
       const inserted = await importRun(run);
-      if (inserted === null) incomplete += 1;
+      if (inserted === null) incomplete.push(join(legacyDir, 'index.json'));
       else if (inserted) runs += 1;
     }
   }
@@ -140,7 +141,7 @@ export async function migrateUniversesToDB() {
   // if the rename succeeded (so a rollback / MEMORY_BACKEND=file boot can't read
   // a stale dir while the marker claims migration is done). If the rename fails,
   // leave the dir + no marker → next boot retries the idempotent import.
-  if (incomplete) return incompleteImport('Universes', { imported, skipped, runs }, incomplete);
+  if (incomplete.length) return incompleteImport('Universes', { imported, skipped, runs }, incomplete);
 
   try {
     await rename(legacyDir, join(PATHS.data, IMPORTED_DIRNAME));

@@ -46,7 +46,7 @@ vi.mock('fs/promises', () => ({
   }),
   readdir: vi.fn(async () => {
     if (dirEntries === null) return [];
-    return dirEntries;
+    return dirEntries.map(name => ({ name, isDirectory: () => name !== 'index.json' && !name.startsWith('.') }));
   }),
   stat: vi.fn(async (path) => {
     if (toPosix(path) === '/fake/data/universes') {

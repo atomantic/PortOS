@@ -84,7 +84,7 @@ it('retains canonical metadata when a recovery copy prevents parking', async () 
   await put('pipeline-series/ser-a/index.json', { id: 'ser-a' });
   await put('pipeline-series/ser-a/index.json.imported', { id: 'ser-a', name: 'old recovery' });
   await put('pipeline-series/ser-a/manuscript-review.json', { review: 'file primary' });
-  expect(await migrateSeriesToDB()).toMatchObject({ reason: 'incomplete' });
+  expect(await migrateSeriesToDB()).toMatchObject({ reason: 'incomplete', sources: [join('pipeline-series', 'ser-a', 'index.json')] });
   expect(await exists('pipeline-series.migrated.json')).toBe(false);
   expect(await exists('pipeline-series/ser-a/index.json')).toBe(true);
   expect(JSON.parse(await readFile(join(dataDir, 'pipeline-series/ser-a/index.json.imported'), 'utf8')).name).toBe('old recovery');
@@ -144,4 +144,12 @@ it('accepts DB-native prose/review directories with no legacy metadata or marker
   expect(db.mock.calls.every(([sql]) => sql.startsWith('SELECT'))).toBe(true);
   expect(await exists('writers-room/works/wr-work-aaa/drafts/wr-draft-aaa.md')).toBe(true);
   expect(await exists('pipeline-series/ser-a/manuscript-review.json')).toBe(true);
+});
+
+it('ignores orphaned atomic-write files and invalid record directory names in the universe walk', async () => {
+  await put('universes/uni-a/index.json', { id: 'uni-a' });
+  await put('universes/index.json.123.example.tmp', '{');
+  await put('universes/not.a.record/readme.txt', 'unrelated');
+  expect(await migrateUniversesToDB()).toMatchObject({ reason: 'imported', imported: 1 });
+  expect(await exists('universes.imported/index.json.123.example.tmp')).toBe(true);
 });

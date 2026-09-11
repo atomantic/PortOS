@@ -1,6 +1,8 @@
 // Shared filesystem boundaries for the legacy creative importers. Only ENOENT
 // means absence; a present source that cannot be verified keeps import pending.
 import { readFile, stat, rename } from 'fs/promises';
+import { relative } from 'path';
+import { PATHS } from '../lib/fileUtils.js';
 
 const absent = error => {
   if (error.code === 'ENOENT') return null;
@@ -29,6 +31,7 @@ export async function parkLegacyFile(path, aside) {
 }
 
 export function incompleteImport(domain, counts, incomplete) {
-  console.warn(`⚠️ ${domain}→DB import incomplete: ${incomplete} source(s) could not be verified or parked; retained for retry`);
-  return { ok: true, reason: 'incomplete', ...counts, incomplete };
+  const sources = [...new Set(incomplete.map(path => relative(PATHS.data, path)))];
+  console.warn(`⚠️ ${domain}→DB import incomplete: ${sources.length} source(s) could not be verified or parked; retained for retry: ${sources.slice(0, 5).join(', ')}${sources.length > 5 ? ' (more sources omitted)' : ''}`);
+  return { ok: true, reason: 'incomplete', ...counts, incomplete: sources.length, sources };
 }

@@ -71,7 +71,7 @@ export async function migrateIssuesToDB() {
   const entries = await readdir(legacyDir);
   let imported = 0;
   let skipped = 0;
-  let incomplete = 0;
+  const incomplete = [];
   for (const name of entries) {
     if (!RECORD_RE.test(name)) continue;
     const recordPath = join(legacyDir, name, 'index.json');
@@ -80,18 +80,18 @@ export async function migrateIssuesToDB() {
       // Current DB-backed records may own file-primary siblings without legacy
       // metadata. Confirm the row instead of treating those directories as loss.
       const existing = await query('SELECT id FROM pipeline_issues WHERE id = $1', [name]);
-      if (!existing.rows.length) incomplete += 1;
+      if (!existing.rows.length) incomplete.push(recordPath);
       skipped += 1;
       continue;
     }
-    if (source.status !== 'valid' || source.value?.id !== name) { incomplete += 1; continue; }
+    if (source.status !== 'valid' || source.value?.id !== name) { incomplete.push(recordPath); continue; }
     const inserted = await importRecord(source.value);
-    if (inserted === null) { incomplete += 1; continue; }
+    if (inserted === null) { incomplete.push(recordPath); continue; }
     if (inserted) imported += 1;
     else skipped += 1;
   }
 
-  if (incomplete) return incompleteImport('Issues', { imported, skipped }, incomplete);
+  if (incomplete.length) return incompleteImport('Issues', { imported, skipped }, incomplete);
 
   try {
     await rename(legacyDir, join(PATHS.data, IMPORTED_DIRNAME));
