@@ -1,4 +1,3 @@
-import { spawn } from '../lib/childProcess.js';
 import { existsSync } from 'fs';
 import { join, resolve } from 'path';
 import { safeJSONParse, PATHS, sleep } from '../lib/fileUtils.js';
@@ -362,7 +361,7 @@ export async function checkout(dir, branchName) {
 async function execForgeCli(cli, args, dir, env) {
   if (cli === 'glab') {
     const { execGlab } = await import('./gitlab.js');
-    return execGlab(args, dir, undefined, { env });
+    return execGlab(args, dir, undefined, { env, rejectOnError: true });
   }
   const { execGh } = await import('./github.js');
   return execGh(args, undefined, { cwd: dir, env });
@@ -393,7 +392,7 @@ export async function createPR(dir, { title, body, base, head }) {
   try {
     const stdout = await execForgeCli(cli, args, dir, env);
     if (stdout === null) {
-      return { success: false, error: 'glab command failed or timed out', ...meta };
+      return { success: false, error: `${cli} command failed or timed out`, ...meta };
     }
     // Both gh and glab print the resulting URL on stdout (gh: just the URL;
     // glab: a couple lines ending in the URL — extract the last http(s)-looking line).
@@ -422,7 +421,8 @@ export async function mergePR(dir, prNumber) {
   }
 
   try {
-    await execForgeCli('gh', ['pr', 'merge', String(prNumber), '--merge', '--delete-branch'], dir, env);
+    const output = await execForgeCli('gh', ['pr', 'merge', String(prNumber), '--merge', '--delete-branch'], dir, env);
+    if (output === null) return { success: false, error: 'gh command failed or timed out', ...meta };
     return { success: true, ...meta };
   } catch (err) {
     return { success: false, error: err.message || 'gh command failed', ...meta };
@@ -474,7 +474,8 @@ export async function requestCopilotReview(dir, prUrl) {
   );
 
   try {
-    await execForgeCli('gh', args, dir, env);
+    const output = await execForgeCli('gh', args, dir, env);
+    if (output === null) return { success: false, error: 'gh command failed or timed out' };
     return { success: true };
   } catch (err) {
     return { success: false, error: err.message || 'gh command failed' };
