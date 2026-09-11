@@ -32,6 +32,7 @@ vi.mock('./settings.js', () => {
 });
 
 import { spawn } from '../lib/childProcess.js';
+import { markHostShuttingDown, resetHostShutdownFlagForTests } from '../lib/hostShutdown.js';
 import {
   __resetGitHubDataCache,
   __resetGhCallBackoff,
@@ -203,6 +204,37 @@ describe('execGh backoffKey', () => {
     await expect(execGh(['pr', 'list'], 5000, { backoffKey: 'github.com/o/r' }))
       .rejects.toThrow(/backing off/);
     expect(spawn).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    [null, 'SIGTERM', false],
+    [null, 'SIGKILL', true],
+    [1, null, true]
+  ])('does not back off cancellation (code %s, signal %s, shutdown %s)', async (code, signal, shutdown) => {
+    const child = makeChild();
+    spawn.mockReturnValue(child);
+    const pending = execGh(['pr', 'list'], 5000, { backoffKey: 'cancelled-repo' });
+    if (shutdown) markHostShuttingDown();
+    child.emit('close', code, signal);
+    resetHostShutdownFlagForTests();
+    await expect(pending).rejects.toMatchObject({ name: 'AbortError' });
+    expect(vi.getTimerCount()).toBe(0);
+
+    const retryChild = makeChild();
+    spawn.mockReturnValue(retryChild);
+    const retry = execGh(['pr', 'list'], 5000, { backoffKey: 'cancelled-repo' });
+    retryChild.emit('close', 0);
+    await expect(retry).resolves.toBe('');
+    expect(spawn).toHaveBeenCalledTimes(2);
+  });
+
+  it('keeps unexpected signal failures visible and subject to backoff', async () => {
+    const child = makeChild();
+    spawn.mockReturnValue(child);
+    const pending = execGh(['pr', 'list'], 5000, { backoffKey: 'crashed-repo' });
+    child.emit('close', null, 'SIGSEGV');
+    await expect(pending).rejects.toThrow('signal SIGSEGV');
+    await expect(execGh(['pr', 'list'], 5000, { backoffKey: 'crashed-repo' })).rejects.toThrow('backing off');
   });
 
   it('spawns again once the backoff window elapses', async () => {
