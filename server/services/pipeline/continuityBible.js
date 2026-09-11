@@ -185,7 +185,7 @@ const emptyLedger = () => ({ schemaVersion: SCHEMA_VERSION, status: 'none', fact
 
 async function readLedger(seriesId) {
   // `null` = file absent (distinct from a present-but-empty ledger).
-  const raw = await readJSONFile(ledgerPath(seriesId), null);
+  const raw = await readJSONFile(ledgerPath(seriesId), null, { strict: true });
   if (raw == null || typeof raw !== 'object') return null;
   return raw;
 }

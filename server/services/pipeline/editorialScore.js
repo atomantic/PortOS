@@ -332,7 +332,7 @@ function sanitizeLedger(raw, seriesId) {
 }
 
 async function readLedger(seriesId) {
-  const raw = await readJSONFile(ledgerPath(seriesId), null);
+  const raw = await readJSONFile(ledgerPath(seriesId), null, { strict: true });
   return raw == null ? emptyLedger(seriesId) : sanitizeLedger(raw, seriesId);
 }
 

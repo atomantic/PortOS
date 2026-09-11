@@ -69,8 +69,8 @@ function truncateTitle(text) {
   return trimmed.slice(0, TITLE_MAX_LENGTH - 1) + '…';
 }
 
-async function readConversation(id) {
-  const data = await readJSONFile(pathFor(id), null, { logError: false });
+async function readConversation(id, { strict = true } = {}) {
+  const data = await readJSONFile(pathFor(id), null, { logError: false, strict });
   if (!data || typeof data !== 'object' || data.id !== id) return null;
   return data;
 }
@@ -113,7 +113,9 @@ export async function listConversations({ limit = 50 } = {}) {
     let conv = null;
     let mtime = null;
     if (headSlot) {
-      conv = await readConversation(id);
+      // Listing aggregates independent files and never rewrites a skipped
+      // record, so one unreadable conversation must not hide every healthy one.
+      conv = await readConversation(id, { strict: false });
       if (!conv) continue;
     } else {
       // Cheap check first — only open the JSON if mtime indicates the file
@@ -121,7 +123,9 @@ export async function listConversations({ limit = 50 } = {}) {
       mtime = await stat(pathFor(id)).then((s) => s.mtimeMs, () => null);
       if (mtime === null) continue;
       if ((now - mtime) <= expiryMs) continue;
-      conv = await readConversation(id);
+      // A failed read returns null and therefore cannot enter the prune path;
+      // preserve that file while the sweep continues over independent records.
+      conv = await readConversation(id, { strict: false });
       if (!conv) continue;
     }
 
