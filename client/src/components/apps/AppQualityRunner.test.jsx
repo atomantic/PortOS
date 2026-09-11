@@ -69,3 +69,30 @@ it('launches alongside pending runners and stops each run independently', async 
   await waitFor(() => expect(screen.getAllByRole('button', { name: 'Stop remaining checks' })).toHaveLength(1));
   expect(button).toBeEnabled();
 });
+
+it('excludes known unavailable and N/A assessments from suggestions while allowing explicit reruns', async () => {
+  const categories = [
+    { id: 'typing', label: 'Typing', score: null, coverage: 'not-applicable', stale: true },
+    { id: 'console-errors', label: 'Console errors', score: null, coverage: 'unavailable', assessedAt: '2026-09-01T00:00:00Z' },
+  ];
+  startMaintenanceRun.mockResolvedValue({ run: { id: 'run-3', status: 'running', steps: [] } });
+  const { rerender } = render(<MemoryRouter><AppQualityRunner app={{ ...app, quality: { categories } }} /></MemoryRouter>);
+  await waitFor(() => expect(screen.queryByText('Loading runner status…')).not.toBeInTheDocument());
+  expect(screen.getByRole('button', { name: 'Run 0 checks now' })).toBeDisabled();
+  expect(screen.getByText(/No checks need evidence/)).toBeInTheDocument();
+
+  // The same unavailable coverage without an assessment means it has never run.
+  rerender(<MemoryRouter><AppQualityRunner app={{ ...app, quality: { categories: [...categories,
+    { id: 'security', label: 'Security', score: null, coverage: 'unavailable', assessedAt: null },
+  ] } }} /></MemoryRouter>);
+  fireEvent.click(screen.getByRole('button', { name: 'Run now' }));
+  await waitFor(() => expect(startMaintenanceRun).toHaveBeenLastCalledWith(expect.objectContaining({ taskTypes: ['security'] }), { silent: true }));
+  await waitFor(() => expect(screen.getByLabelText('Checks')).toBeEnabled());
+  fireEvent.change(screen.getByLabelText('Checks'), { target: { value: 'typing' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Run now' }));
+  await waitFor(() => expect(startMaintenanceRun).toHaveBeenLastCalledWith(expect.objectContaining({ taskTypes: ['typing'] }), { silent: true }));
+  await waitFor(() => expect(screen.getByLabelText('Checks')).toBeEnabled());
+  fireEvent.change(screen.getByLabelText('Checks'), { target: { value: 'all' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Run 3 checks now' }));
+  await waitFor(() => expect(startMaintenanceRun).toHaveBeenLastCalledWith(expect.objectContaining({ taskTypes: ['typing', 'console-errors', 'security'] }), { silent: true }));
+});
