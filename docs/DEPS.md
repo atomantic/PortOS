@@ -158,7 +158,7 @@ This is intentionally NOT done in default mode — current dependency footprint 
 Defined in `package.json` (root + server + client + autofixer) — kept current to dodge known upstream advisories:
 
 - `ws@8.21.3` (all three)
-- `lodash@4.18.1`, `follow-redirects@1.16.0`, `js-yaml@4.3.1`, `ip-address@10.5.0` (root + server)
+- `lodash@4.18.1`, `follow-redirects@1.16.0`, `js-yaml@4.3.2`, `ip-address@10.5.0` (root + server)
 - `nanoid@3.3.18`, `socket.io-parser@4.2.7` (server + client)
 - `path-to-regexp@8.4.2`, `body-parser@2.3.0`, `qs@6.15.3` (server + autofixer — the express-reachable subset; `autofixer/` mirrors only these three because a pin for a package absent from the tree reads as protection that does not exist)
 - `tar@7.5.22` (server only)

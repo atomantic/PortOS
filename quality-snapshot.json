@@ -59,6 +59,48 @@
       }
     },
     {
+      "measurementId": "e9ef09d048e0ec67ae26cb2d4027b45ecd1709e596b00ea329debe86e5672189",
+      "assessedAt": "2026-09-11T23:24:29.322Z",
+      "report": {
+        "version": 1,
+        "category": "better-complexity",
+        "score": 61,
+        "worstSeverity": 7,
+        "coverage": "broad",
+        "confidence": "high",
+        "scannedFiles": 6526,
+        "totalFiles": 6526
+      }
+    },
+    {
+      "measurementId": "951101aa2659cf132281633d25b0102cfb8ed8a66cb13675b4052c25f54966f6",
+      "assessedAt": "2026-09-11T20:13:57.414Z",
+      "report": {
+        "version": 1,
+        "category": "better-dependency-freedom",
+        "score": 78,
+        "worstSeverity": 7,
+        "coverage": "broad",
+        "confidence": "high",
+        "scannedFiles": 8140,
+        "totalFiles": 8140
+      }
+    },
+    {
+      "measurementId": "4667a1b37ebd3e9cfcb8d5b8f41586f83f022455c7110017ad0cd57d4592c49b",
+      "assessedAt": "2026-09-11T20:05:26.381Z",
+      "report": {
+        "version": 1,
+        "category": "better-runtime-safety",
+        "score": 78,
+        "worstSeverity": 7,
+        "coverage": "broad",
+        "confidence": "high",
+        "scannedFiles": 7182,
+        "totalFiles": 7182
+      }
+    },
+    {
       "measurementId": "d36486ed4648dea977bd49f02948b071bd36c28e9c14a37f8072c2a634a35cd2",
       "assessedAt": "2026-09-10T06:14:17.032Z",
       "report": {
@@ -73,6 +115,20 @@
       }
     },
     {
+      "measurementId": "cb07b1faced51c531abbf96162efd8639d12bfec71a8705250111f3c4a3ae7c2",
+      "assessedAt": "2026-09-11T20:19:43.474Z",
+      "report": {
+        "version": 1,
+        "category": "better-test-quality",
+        "score": 82,
+        "worstSeverity": 5,
+        "coverage": "broad",
+        "confidence": "high",
+        "scannedFiles": 3139,
+        "totalFiles": 3139
+      }
+    },
+    {
       "measurementId": "6298c049fb4772b9ff13c3a5a13905015dfe15b99c51609db929c13bc7bea959",
       "assessedAt": "2026-09-11T00:11:45.376Z",
       "report": {
@@ -84,6 +140,34 @@
         "confidence": "high",
         "scannedFiles": 7367,
         "totalFiles": 7367
+      }
+    },
+    {
+      "measurementId": "59f320a115526302dc7cc6bae7bd22303a4548af557b29ed5e219b3ce2f4da71",
+      "assessedAt": "2026-09-12T01:00:16.622Z",
+      "report": {
+        "version": 1,
+        "category": "console-errors",
+        "score": 72,
+        "worstSeverity": 7,
+        "coverage": "broad",
+        "confidence": "high",
+        "scannedFiles": 3691,
+        "totalFiles": 3691
+      }
+    },
+    {
+      "measurementId": "8b6601545bc700e8d052dcce50c8ce786622e05e162ef613e2d3ba74b3d168b4",
+      "assessedAt": "2026-09-11T20:00:38.410Z",
+      "report": {
+        "version": 1,
+        "category": "copy",
+        "score": 76,
+        "worstSeverity": 5,
+        "coverage": "broad",
+        "confidence": "high",
+        "scannedFiles": 1595,
+        "totalFiles": 1595
       }
     },
     {
@@ -182,6 +266,34 @@
         "confidence": "medium",
         "scannedFiles": 4186,
         "totalFiles": 4186
+      }
+    },
+    {
+      "measurementId": "6172a2aa31538bcb35e56379aa4c2183bbe83afe2c830cc711ffb3bc5d9af17b",
+      "assessedAt": "2026-09-11T22:12:39.345Z",
+      "report": {
+        "version": 1,
+        "category": "performance",
+        "score": 72,
+        "worstSeverity": 6,
+        "coverage": "broad",
+        "confidence": "medium",
+        "scannedFiles": 7341,
+        "totalFiles": 7341
+      }
+    },
+    {
+      "measurementId": "68a7930dabd9b67936d871563df04a96bed9f7f15505436d4d5d872e80e4086d",
+      "assessedAt": "2026-09-11T19:55:10.104Z",
+      "report": {
+        "version": 1,
+        "category": "react-lifecycle",
+        "score": 74,
+        "worstSeverity": 8,
+        "coverage": "broad",
+        "confidence": "high",
+        "scannedFiles": 2520,
+        "totalFiles": 2520
       }
     },
     {
