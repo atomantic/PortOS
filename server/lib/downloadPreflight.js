@@ -325,6 +325,8 @@ export async function streamResumableDownload({
   expectedSha256 = null,
   finalize = true,
   onHttpError = null,
+  restartBudget = 1,
+  removeFile = rm,
 } = {}) {
   const tmpPath = partialPathFor(destPath);
   const etagPath = etagPathFor(destPath);
@@ -379,8 +381,15 @@ export async function streamResumableDownload({
   // the bytes THIS discarded partial was short by, not the full payload a
   // clean restart now needs.
   const evictPartialForRestart = async (expectedBytes) => {
-    await rm(tmpPath, { force: true }).catch(() => {});
-    await rm(etagPath, { force: true }).catch(() => {});
+    for (const path of [tmpPath, etagPath]) {
+      await removeFile(path, { force: true }).catch((err) => {
+        if (err?.code === 'ENOENT') return;
+        throw new ServerError(
+          `Cannot restart download because the stale partial could not be removed (${path}); repair destination permissions and retry`,
+          { status: 500, code: 'DOWNLOAD_RECOVERY_CLEANUP_FAILED', context: { path, cause: err?.code } },
+        );
+      });
+    }
     resumeFrom = 0;
     delete reqHeaders.Range;
     delete reqHeaders['If-Range'];
@@ -393,10 +402,17 @@ export async function streamResumableDownload({
   // from the wrong offset) — drop its body and recurse into a fresh request.
   const discardAndRefetch = async (res) => {
     await res.body?.cancel?.().catch(() => {});
+    if (restartBudget <= 0) {
+      throw new ServerError(
+        `Download recovery exceeded the clean-restart limit for ${destPath}; retry after checking the remote file and destination`,
+        { status: 502, code: 'DOWNLOAD_RECOVERY_LIMIT', context: { destPath } },
+      );
+    }
     await evictPartialForRestart(parseContentRangeTotal(res.headers?.get?.('content-range')));
     return streamResumableDownload({
       url, destPath, headers, fetchImpl, onBytes, signal, onIdleStall,
       idleStallTimeoutMs, isCancelled, expectedSha256, finalize, onHttpError,
+      restartBudget: restartBudget - 1, removeFile,
     });
   };
 
@@ -426,7 +442,7 @@ export async function streamResumableDownload({
     // normalizes/ignores the exact offset) would otherwise get appended onto
     // our existing prefix at the wrong point, corrupting the file — this
     // response's body starts at the wrong offset, so it can't be reused.
-    if (resumeFrom > 0 && res.status === 206) {
+    if (res.status === 206) {
       const rangeStart = parseContentRangeStart(res.headers?.get?.('content-range'));
       if (rangeStart != null && rangeStart !== resumeFrom) return discardAndRefetch(res);
     }
