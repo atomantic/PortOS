@@ -26,6 +26,7 @@
  * stay honest about what the runner actually executed.
  */
 
+import { isVisionCapableCodexTuiProvider } from '../lib/codex.js';
 import { createRun, executeApiRun, executeCliRun, extractBakedModel, hasModelFlag, stopRun, patchRunMetadata, finalizeRunRecord } from './runner.js';
 import { getActiveProvider, getProviderById, getAllProviders } from './providers.js';
 // `./tuiPromptRunner.js` (which drags node-pty in through `./shell.js`) and
@@ -462,7 +463,8 @@ export function assertProvider(provider, { message, code, status = 503 } = {}) {
  * Guard a vision run against a transport that did not receive images.
  *
  * API providers base64-inline images, while the shared CLI lifecycle stages
- * file attachments for Codex and Claude Code. TUI and other CLI providers must
+ * file attachments for Codex and Claude Code. Codex TUI forwards native image
+ * arguments. Other TUI and CLI providers must
  * not be accepted because they would answer from the text prompt alone.
  * `runPromptThroughProvider` can swap the provider two ways — a proactive swap
  * inside createRun (`result.provider`) or a retry fallback after failure
@@ -479,7 +481,7 @@ export function assertProvider(provider, { message, code, status = 503 } = {}) {
  */
 export function assertVisionRunUsedImages(result, requestedProvider) {
   const ran = result?.provider || result?.fallbackProvider || requestedProvider;
-  const usedImages = ran?.type === 'api' || isVisionCapableCliProvider(ran);
+  const usedImages = ran?.type === 'api' || isVisionCapableCliProvider(ran) || isVisionCapableCodexTuiProvider(ran);
   if (ran?.type && !usedImages) {
     // Name both providers so the cause is actionable. The usual trigger is a
     // proactive/retry swap because the requested API provider is in a temporary
@@ -1187,7 +1189,8 @@ async function executeProviderRunOnce({
   }
   if (screenshots.length > 0
       && provider.type !== PROVIDER_TYPES.API
-      && !isVisionCapableCliProvider(provider)) {
+      && !isVisionCapableCliProvider(provider)
+      && !isVisionCapableCodexTuiProvider(provider)) {
     throw new ServerError(
       'The selected provider cannot receive image attachments. Choose Codex, Claude Code, or a vision API provider.',
       { status: 422, code: 'VISION_PROVIDER_UNSUPPORTED' },
@@ -1434,7 +1437,7 @@ async function executeProviderRunOnce({
       // `source` (e.g. 'pipeline-manuscript-completeness') labels the live,
       // interactive view this TUI run surfaces in the Shell page.
       import('./tuiPromptRunner.js')
-        .then(({ executeTuiRun }) => executeTuiRun({ runId, provider: providerForRun, prompt, workspacePath: effectiveCwd, onData, onComplete, onReady: onRunReady, timeout: effectiveTimeout, label: source }))
+        .then(({ executeTuiRun }) => executeTuiRun({ runId, provider: providerForRun, prompt, screenshots, workspacePath: effectiveCwd, onData, onComplete, onReady: onRunReady, timeout: effectiveTimeout, label: source }))
         .catch(safeReject);
     } else {
       safeReject(new Error(`Unsupported provider type: ${effectiveProvider.type}`));
