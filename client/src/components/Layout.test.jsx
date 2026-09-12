@@ -86,13 +86,14 @@ vi.mock('../services/api', () => ({
 import { __resetInstanceFeatureCache } from '../hooks/useInstanceFeatures.js';
 
 import { NAV_COMMANDS } from '../../../server/lib/navManifest.js';
-import Layout, {
-  isFullWidthRoute,
+import Layout from './Layout';
+import { isFullWidthRoute } from '../lib/layoutRoutes.js';
+import {
   NAV_PRESENTATION,
   SECTIONS_BEFORE_GOALS,
   SECTIONS_AFTER_GOALS,
   SECTIONS_BELOW_MORE,
-} from './Layout';
+} from '../lib/navPresentation.js';
 
 const LocationProbe = () => {
   const location = useLocation();
