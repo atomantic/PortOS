@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { mkdir, rm, readFile, writeFile } from 'fs/promises';
+import { mkdir, rm, readFile } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
 
@@ -34,7 +34,18 @@ const ffmpeg = await import('../../lib/ffmpeg.js');
 const { videoGenEvents } = await import('./events.js');
 const { loadHistory } = await import('./history.js');
 
-const flush = () => new Promise((r) => setTimeout(r, 10));
+// A returned job (or its early 'complete' status stamp) is not a settled run.
+// Track from 'started', before generateVideo returns, through the terminal
+// event after the real finalization/history tail. Keep mocks and files alive
+// until every started job has reached that boundary, even if a test throws.
+const terminalEvents = new Map();
+const waitForTerminal = async (jobId) => {
+  await vi.waitFor(() => expect(terminalEvents.get(jobId)).toBeTruthy(), { timeout: 5000 });
+  return terminalEvents.get(jobId);
+};
+const drainJobs = () => vi.waitFor(() => {
+  expect([...terminalEvents.entries()].filter(([, event]) => !event)).toEqual([]);
+}, { timeout: 5000 });
 
 const jsonResponse = (body, ok = true, status = 200) => ({
   ok, status,
@@ -43,6 +54,11 @@ const jsonResponse = (body, ok = true, status = 200) => ({
 
 beforeEach(async () => {
   videoGenEvents.removeAllListeners();
+  terminalEvents.clear();
+  videoGenEvents.on('started', ({ generationId }) => terminalEvents.set(generationId, null));
+  for (const type of ['completed', 'failed']) {
+    videoGenEvents.on(type, (event) => terminalEvents.set(event.generationId, { type, ...event }));
+  }
   await rm(TEST_ROOT, { recursive: true, force: true }).catch(() => {});
   await mkdir(FAKE_DATA_DIR, { recursive: true });
   getSettingsMock.mockReset().mockResolvedValue({});
@@ -50,6 +66,9 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  await drainJobs();
+  vi.unstubAllGlobals();
+  videoGenEvents.removeAllListeners();
   await rm(TEST_ROOT, { recursive: true, force: true }).catch(() => {});
 });
 
@@ -136,21 +155,15 @@ describe('videoGen/fal — generateVideo', () => {
     expect(job.status).toBe('running');
     expect(job.filename).toMatch(/^[0-9a-f-]{36}\.mp4$/);
 
-    // Let the async run loop (submit → poll → download → finalize, including
-    // the serialized history-write tail) settle.
+    expect(await waitForTerminal(job.jobId)).toMatchObject({ type: 'completed' });
     const outputPath = join(FAKE_VIDEOS_DIR, job.filename);
-    let history = [];
-    for (let i = 0; i < 50 && history.length === 0; i += 1) {
-      await flush();
-      history = await loadHistory();
-    }
+    const history = await loadHistory();
 
     const written = await readFile(outputPath);
     expect(written.toString()).toBe('fake-mp4-bytes');
 
     expect(history[0].id).toBe(job.jobId);
     expect(history[0].modelId).toBe('fal:fal-ai/x');
-    vi.unstubAllGlobals();
   });
 
   it('derives aspect_ratio from width/height when none is supplied explicitly', async () => {
@@ -168,12 +181,11 @@ describe('videoGen/fal — generateVideo', () => {
     });
     vi.stubGlobal('fetch', fetchMock);
 
-    await fal.generateVideo({
+    const job = await fal.generateVideo({
       apiKey: 'test-key', modelId: 'fal-ai/x', prompt: 'portrait clip', width: 1080, height: 1920,
     });
-    for (let i = 0; i < 50 && fetchMock.mock.calls.length < 1; i += 1) await flush();
+    expect(await waitForTerminal(job.jobId)).toMatchObject({ type: 'completed' });
     expect(fetchMock).toHaveBeenCalled();
-    vi.unstubAllGlobals();
   });
 
   it('resolves the API key from live settings when the caller supplies neither apiKey nor settings (the mediaJobQueue dispatch shape)', async () => {
@@ -196,11 +208,9 @@ describe('videoGen/fal — generateVideo', () => {
     // job.params into (job params never carry the secret; see the comment in
     // generateVideo).
     const job = await fal.generateVideo({ modelId: 'fal-ai/x', prompt: 'x' });
-    for (let i = 0; i < 50 && fetchMock.mock.calls.length < 1; i += 1) await flush();
-    await flush();
+    expect(await waitForTerminal(job.jobId)).toMatchObject({ type: 'completed' });
     expect(getSettingsMock).toHaveBeenCalled();
     expect(job.status).toBe('running');
-    vi.unstubAllGlobals();
   });
 
   it('rejects when no API key is configured', async () => {
@@ -225,10 +235,58 @@ describe('videoGen/fal — generateVideo', () => {
     const failed = vi.fn();
     videoGenEvents.on('failed', failed);
     const job = await fal.generateVideo({ apiKey: 'test-key', modelId: 'fal-ai/x', prompt: 'x' });
-    for (let i = 0; i < 20 && failed.mock.calls.length < 1; i += 1) await flush();
+    expect(await waitForTerminal(job.jobId)).toMatchObject({ type: 'failed' });
+    expect(failed).toHaveBeenCalledTimes(1);
 
     expect(failed).toHaveBeenCalledWith(expect.objectContaining({ generationId: job.jobId, error: expect.stringContaining('model overloaded') }));
-    vi.unstubAllGlobals();
+  });
+
+  it('drains a delayed prior finalization before teardown, identifying both failure event sources', async () => {
+    // Reproduce #7089 without timing luck: the earlier job is held after its
+    // complete stamp while the next job installs a one-shot ffmpeg rejection.
+    const delayed = Promise.withResolvers();
+    const entered = vi.fn();
+    ffmpeg.optimizeForStreaming.mockImplementationOnce(async () => {
+      entered();
+      await delayed.promise;
+      throw new Error('delayed prior finalization failed');
+    });
+    vi.stubGlobal('fetch', vi.fn(async () => ({
+      ...jsonResponse({
+        request_id: 'controlled-request', status: 'COMPLETED',
+        video: { url: 'https://cdn.fal.ai/out.mp4' },
+      }),
+      arrayBuffer: async () => Uint8Array.from(Buffer.from('bytes')).buffer,
+    })));
+
+    const prior = await fal.generateVideo({ apiKey: 'test-key', prompt: 'prior clip' });
+    const teardownReady = vi.fn();
+    let draining;
+    try {
+      await vi.waitFor(() => expect(entered).toHaveBeenCalledTimes(1));
+      draining = drainJobs().then(teardownReady);
+      const failed = vi.fn();
+      videoGenEvents.on('failed', failed);
+      ffmpeg.optimizeForStreaming.mockRejectedValueOnce(new Error('current finalization failed'));
+      const current = await fal.generateVideo({ apiKey: 'test-key', prompt: 'current clip' });
+      await waitForTerminal(current.jobId);
+      expect(failed).toHaveBeenCalledTimes(1);
+      expect(failed).toHaveBeenLastCalledWith({
+        generationId: current.jobId, error: expect.stringContaining('current finalization failed'),
+      });
+      expect(teardownReady).not.toHaveBeenCalled();
+
+      delayed.resolve();
+      await draining;
+      // The second event is a different generation, not a duplicate emission
+      // by the current job. The original #6831 test below still requires one.
+      expect(failed).toHaveBeenCalledTimes(2);
+      expect(failed.mock.calls.map(([event]) => event.generationId)).toEqual([current.jobId, prior.jobId]);
+      expect(teardownReady).toHaveBeenCalledTimes(1);
+    } finally {
+      delayed.resolve();
+      await draining;
+    }
   });
 
   // Regression (#6831): finalizeGeneratedVideo stamps job.status = 'complete'
@@ -264,10 +322,10 @@ describe('videoGen/fal — generateVideo', () => {
     const client = { writeHead: vi.fn(), write: vi.fn(), end: vi.fn(), req: { on: vi.fn() } };
     expect(fal.attachSseClient(job.jobId, client)).toBe(true);
 
-    await vi.waitFor(() => expect(failed).toHaveBeenCalledTimes(1), { timeout: 5000, interval: 20 });
+    await waitForTerminal(job.jobId);
+    expect(failed).toHaveBeenCalledTimes(1);
     expect(failed).toHaveBeenCalledWith({ generationId: job.jobId, error: expect.stringContaining('faststart remux failed') });
     const frames = client.write.mock.calls.map(([msg]) => JSON.parse(msg.replace(/^data: /, '')));
     expect(frames.at(-1)).toEqual({ type: 'error', error: expect.stringContaining('faststart remux failed') });
-    vi.unstubAllGlobals();
   }, 10000);
 });
