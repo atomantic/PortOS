@@ -15,7 +15,7 @@ import toast from '../ui/Toast';
 import { getTailcatForwards, retryTailcatForward, forgetTailcatForward } from '../../services/api';
 import TailcatForwardStatus from './TailcatForwardStatus';
 
-export default function TailcatForwardsPanel({ onChange, peerIds }) {
+export default function TailcatForwardsPanel({ onChange, peerIds, renderPanel = (panel) => panel }) {
   // `null` = not loaded yet, `[]` = loaded and genuinely empty. Distinct so a
   // pending fetch never renders as "no forwards".
   const [forwards, setForwards] = useState(null);
@@ -67,9 +67,9 @@ export default function TailcatForwardsPanel({ onChange, peerIds }) {
     toast.success('Tailcat forward and its saved address removed');
   };
 
-  if (!orphans || orphans.length === 0) return null;
+  if (!orphans || orphans.length === 0) return renderPanel(null, 0);
 
-  return (
+  return renderPanel(
     <div className="bg-port-card border border-port-border rounded-xl p-5">
       <h2 className="text-sm font-medium text-gray-400 uppercase tracking-wider mb-1">
         Tailcat forwards — needs attention ({orphans.length})
@@ -94,6 +94,7 @@ export default function TailcatForwardsPanel({ onChange, peerIds }) {
           </li>
         ))}
       </ul>
-    </div>
+    </div>,
+    orphans.length,
   );
 }
