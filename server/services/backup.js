@@ -456,7 +456,9 @@ export async function runBackup(destPath, io = null, { excludePaths = [], disabl
     const pgDumpPath = join(snapshotDir, 'portos-db.sql');
     const pgResult = await dumpPostgres(pgDumpPath);
 
-    manifest = await generateManifest(dataDestDir, join(snapshotDir, 'manifest.json'), pgDumpPath);
+    manifest = await generateManifest(dataDestDir, join(snapshotDir, 'manifest.json'), pgDumpPath, {
+      allowMissingDump: pgResult.status === 'skipped' || pgResult.status === 'failed'
+    });
 
     const status = backupStatusForPg(pgResult);
     const lastRun = new Date().toISOString();
@@ -621,6 +623,12 @@ export async function dumpPostgres(outputPath) {
   });
 }
 
+// Filesystem messages contain private paths; only expose the operation and errno.
+function manifestReadFailure(operation, err) {
+  const code = /^E[A-Z0-9]+$/.test(err?.code) ? err.code : 'UNKNOWN';
+  return new Error(`Backup manifest ${operation} failed (${code})`);
+}
+
 /**
  * Generate a SHA-256 manifest for all files in snapshotDataDir, plus the
  * sibling pg dump (which lives outside the data/ tree). Hashing the dump means
@@ -628,25 +636,37 @@ export async function dumpPostgres(outputPath) {
  * @param {string} snapshotDataDir - Directory to hash
  * @param {string} manifestPath - Path to write manifest.json
  * @param {string|null} [pgDumpPath=null] - Sibling SQL dump to also hash
+ * @param {object} [options] - Dump inventory expectations
+ * @param {boolean} [options.allowMissingDump=false] - Only for skipped/failed dumps
  */
-export async function generateManifest(snapshotDataDir, manifestPath, pgDumpPath = null) {
-  const entries = await readdir(snapshotDataDir, { recursive: true }).catch(() => []);
+export async function generateManifest(snapshotDataDir, manifestPath, pgDumpPath = null, { allowMissingDump = false } = {}) {
+  const entries = await readdir(snapshotDataDir, { recursive: true })
+    .catch(err => { throw manifestReadFailure('data readdir', err); });
   const files = {};
 
   for (const entry of entries) {
     const filePath = join(snapshotDataDir, entry);
-    const info = await stat(filePath).catch(() => null);
-    if (!info || !info.isFile()) continue;
-    files[entry] = await sha256File(filePath);
+    const info = await stat(filePath)
+      .catch(err => { throw manifestReadFailure('data stat', err); });
+    if (!info.isFile()) continue;
+    files[entry] = await sha256File(filePath)
+      .catch(err => { throw manifestReadFailure('data hash', err); });
   }
 
   if (pgDumpPath) {
-    const dumpInfo = await stat(pgDumpPath).catch(() => null);
+    const dumpInfo = await stat(pgDumpPath).catch(err => {
+      if (allowMissingDump && err.code === 'ENOENT') return null;
+      throw manifestReadFailure('dump stat', err);
+    });
+    if (dumpInfo && !dumpInfo.isFile()) {
+      throw new Error('Backup manifest dump stat failed (not a regular file)');
+    }
     if (dumpInfo?.isFile()) {
       // Parent-relative key: the dump lives one level ABOVE snapshotDataDir
       // (alongside it, not inside it). A future manifest-verify must not assume
       // every key resolves under snapshotDataDir.
-      files['../portos-db.sql'] = await sha256File(pgDumpPath);
+      files['../portos-db.sql'] = await sha256File(pgDumpPath)
+        .catch(err => { throw manifestReadFailure('dump hash', err); });
     }
   }
 
