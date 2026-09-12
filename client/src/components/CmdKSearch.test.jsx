@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { MemoryRouter, useLocation } from 'react-router';
 import { RECENT_KEY } from '../utils/navWorkingSet.js';
 
@@ -292,7 +293,6 @@ describe('CmdKSearch dialog accessibility', () => {
   });
 
   it('clears hidden search selections during loading and owns expanded results without owning buttons', async () => {
-    vi.useFakeTimers();
     const source = (title) => ({
       id: 'brain', label: 'Brain', icon: 'Brain',
       results: Array.from({ length: 4 }, (_, i) => ({ id: String(i), title: title + i, url: '/brain/' + title })),
@@ -303,12 +303,14 @@ describe('CmdKSearch dialog accessibility', () => {
     await act(async () => { fireEvent.keyDown(document, { key: 'k', metaKey: true }); });
     const input = screen.getByRole('combobox');
     fireEvent.change(input, { target: { value: 'zz' } });
-    await act(async () => { await vi.advanceTimersByTimeAsync(300); });
-    const first = screen.getByRole('option', { name: 'First0' });
+    const first = await screen.findByRole('option', { name: 'First0' });
     expect(input).toHaveAttribute('aria-activedescendant', first.id);
     const listbox = screen.getByRole('listbox');
     expect(within(listbox).queryByRole('button')).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: 'Show 1 more from Brain' }));
+    const user = userEvent.setup();
+    screen.getByRole('button', { name: 'Show 1 more from Brain' }).focus();
+    await user.keyboard('[Enter]');
+    expect(input).toHaveFocus();
     const expanded = within(listbox).getAllByRole('option');
     expect(expanded).toHaveLength(4);
     expect(new Set(expanded.map((option) => option.id)).size).toBe(4);
@@ -316,12 +318,10 @@ describe('CmdKSearch dialog accessibility', () => {
     fireEvent.change(input, { target: { value: 'yy' } });
     expect(input).not.toHaveAttribute('aria-activedescendant');
     expect(screen.queryByRole('option')).not.toBeInTheDocument();
-    await act(async () => { await vi.advanceTimersByTimeAsync(300); });
-    const next = screen.getByRole('option', { name: 'Next0' });
+    const next = await screen.findByRole('option', { name: 'Next0' });
     expect(input).toHaveAttribute('aria-activedescendant', next.id);
     expect(document.getElementById(first.id)).toBeNull();
     expect(input).toHaveFocus();
-    vi.useRealTimers();
   });
 
   it('traps focus inside the modal and restores it to the opener on close', async () => {

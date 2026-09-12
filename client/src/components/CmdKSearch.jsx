@@ -612,7 +612,10 @@ export default function CmdKSearch() {
           {!loading && searchResults.filter((source) => source.results.length > 3 && !expandedSources.has(source.id)).map((source) => (
             <button
               key={source.id}
-              onClick={() => setExpandedSources((prev) => new Set(prev).add(source.id))}
+              onClick={() => {
+                inputRef.current?.focus();
+                setExpandedSources((prev) => new Set(prev).add(source.id));
+              }}
               className="text-xs text-port-accent px-3 py-1 hover:underline"
             >
               Show {source.results.length - 3} more from {source.label}
