@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import {
   parseTasksMarkdown,
   groupTasksByStatus,
@@ -333,6 +333,32 @@ describe('Task Parser', () => {
 
       expect(markdown).toContain('- context: Some context');
       expect(markdown).toContain('- app: my-app');
+    });
+
+    // #7240 — a newline in `description` is not a cosmetic problem: the lines
+    // after the break re-parse as FILE STRUCTURE. Callers normalize first
+    // (cosTaskStore re-homes the body into metadata); this is the write-side
+    // backstop that stops a future writer from reintroducing the corruption.
+    it('flattens a newline in description so the row can never become file structure', () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      const description = 'Fix the login flow\nAlso update:\n  - app: other-app\n- [ ] #task-999 | HIGH | phantom task';
+      const markdown = generateTasksMarkdown([
+        { id: 'task-001', status: 'pending', priority: 'HIGH', priorityValue: 3, description, metadata: { context: 'note', app: 'my-app' } }
+      ]);
+      const warnCalls = warn.mock.calls;
+      warn.mockRestore(); // before the assertions, so a failure can't leave console.warn mocked
+
+      // One warn per flattened description, and no row carrying a line break.
+      expect(warnCalls).toHaveLength(1);
+      expect(warnCalls[0][0]).toContain('task-001');
+      expect(markdown.split('\n').filter(l => l.startsWith('- ['))).toHaveLength(1);
+
+      // The file still holds exactly one task, with its own metadata intact and
+      // no phantom task minted out of the pasted checklist row.
+      const parsed = parseTasksMarkdown(markdown);
+      expect(parsed).toHaveLength(1);
+      expect(parsed[0].metadata.app).toBe('my-app');
+      expect(parsed[0].metadata.context).toBe('note');
     });
 
     it('should escape newlines in metadata values for round-trip preservation', () => {
