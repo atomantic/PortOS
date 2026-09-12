@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router';
-import { RefreshCw, Play, PauseCircle, Settings, ChevronDown, ChevronRight, Sparkles, AlertTriangle } from 'lucide-react';
+import { RefreshCw, Play, PauseCircle, Sparkles, AlertTriangle } from 'lucide-react';
 import toast from '../../ui/Toast';
 import BrailleSpinner from '../../BrailleSpinner';
 import CronInput from '../../CronInput';
@@ -10,6 +10,7 @@ import * as api from '../../../services/api';
 import { AGENT_OPTIONS, hasProviderPin, providerPinDivergesFromSchedule, toggleAppMetadataOverride, agentOptionButtonClass } from '../../cos/constants';
 import { isCronExpression, describeCron } from '../../../utils/cronHelpers';
 import { PROVIDER_TYPES, providerDisplayName } from '../../../utils/providers';
+import AppTaskCard from '../../cos/tabs/schedule/AppTaskCard';
 import CustomTasksSection from './CustomTasksSection';
 
 const RUNNABLE_PROVIDER_TYPES = Object.values(PROVIDER_TYPES);
@@ -30,7 +31,7 @@ export default function AutomationTab({ appId, appName }) {
   const [paused, setPaused] = useState(false);
   const [resuming, setResuming] = useState(false);
   const [loading, setLoading] = useState(true);
-  const [triggering, setTriggering] = useState(null);
+  const [saving, setSaving] = useState(false);
   const [cronEditing, setCronEditing] = useState({});
   // Only one Configure panel open at a time — a per-task disclosure holding the
   // per-app provider/model override (and, for layered-intelligence, a link to
@@ -74,16 +75,21 @@ export default function AutomationTab({ appId, appName }) {
     }
   };
 
-  const handleToggle = async (taskType, isEnabled) => {
-    const newEnabled = !isEnabled;
-    await api.updateAppTaskTypeOverride(appId, taskType, { enabled: newEnabled }, { silent: true }).catch(err => {
+  const saveOverride = async (taskType, patch) => {
+    setSaving(true);
+    const result = await api.updateAppTaskTypeOverride(appId, taskType, patch, { silent: true }).catch(err => {
       toast.error(err.message);
       return null;
     });
-    setOverrides(prev => ({
-      ...prev,
-      [taskType]: { ...prev[taskType], enabled: newEnabled }
-    }));
+    setSaving(false);
+    if (!result) return false;
+    setOverrides(prev => ({ ...prev, [taskType]: { ...prev[taskType], ...patch } }));
+    return true;
+  };
+
+  const handleToggle = async (taskType, isEnabled) => {
+    const newEnabled = !isEnabled;
+    await saveOverride(taskType, { enabled: newEnabled });
   };
 
   const handleIntervalChange = async (taskType, interval) => {
@@ -95,26 +101,12 @@ export default function AutomationTab({ appId, appName }) {
     }
     setCronEditing(prev => { const n = { ...prev }; delete n[taskType]; return n; });
     const value = interval === 'null' ? null : interval;
-    await api.updateAppTaskTypeOverride(appId, taskType, { interval: value }, { silent: true }).catch(err => {
-      toast.error(err.message);
-      return null;
-    });
-    setOverrides(prev => ({
-      ...prev,
-      [taskType]: { ...prev[taskType], interval: value }
-    }));
+    await saveOverride(taskType, { interval: value });
   };
 
   const handleCronSave = async (taskType, expr) => {
-    await api.updateAppTaskTypeOverride(appId, taskType, { interval: expr }, { silent: true }).catch(err => {
-      toast.error(err.message);
-      return null;
-    });
-    setOverrides(prev => ({
-      ...prev,
-      [taskType]: { ...prev[taskType], interval: expr }
-    }));
-    setCronEditing(prev => { const n = { ...prev }; delete n[taskType]; return n; });
+    const saved = await saveOverride(taskType, { interval: expr });
+    if (saved) setCronEditing(prev => { const n = { ...prev }; delete n[taskType]; return n; });
   };
 
   const handleMetaToggle = async (taskType, field, globalTaskMetadata) => {
@@ -126,40 +118,25 @@ export default function AutomationTab({ appId, appName }) {
     if (field === 'fileIssues' && nextFileIssues === true && taskMetadata) {
       taskMetadata = { ...taskMetadata, useWorktree: false, openPR: false, simplify: false };
     }
-    await api.updateAppTaskTypeOverride(appId, taskType, { taskMetadata }, { silent: true }).catch(err => {
-      toast.error(err.message);
-      return null;
-    });
-    setOverrides(prev => ({
-      ...prev,
-      [taskType]: { ...prev[taskType], taskMetadata }
-    }));
+    await saveOverride(taskType, { taskMetadata });
   };
 
   // One mutation for the whole pin — AppProviderPin hands back an already
   // normalized { providerId, model }, so the clear rule lives in the control
   // rather than being re-derived here (#4783).
   const handlePinChange = async (taskType, patch) => {
-    await api.updateAppTaskTypeOverride(appId, taskType, patch, { silent: true }).catch(err => {
-      toast.error(err.message);
-      return null;
-    });
-    setOverrides(prev => ({
-      ...prev,
-      [taskType]: { ...prev[taskType], ...patch }
-    }));
+    await saveOverride(taskType, patch);
   };
 
   const handleTrigger = async (taskType) => {
-    setTriggering(taskType);
     const result = await api.triggerCosOnDemandTask(taskType, appId, { silent: true }).catch(err => {
       toast.error(err.message);
       return null;
     });
-    setTriggering(null);
     if (result?.success) {
       toast.success(`Triggered ${taskType} for ${appName}`);
     }
+    return result?.success ? result : null;
   };
 
   if (loading) {
@@ -170,11 +147,13 @@ export default function AutomationTab({ appId, appName }) {
   const allEnabled = taskTypes.length > 0 && taskTypes.every(t => (overrides[t] || {}).enabled === true);
 
   const handleToggleAll = async () => {
+    setSaving(true);
     const newEnabled = !allEnabled;
     const result = await api.toggleAllAppTaskTypes(appId, newEnabled, { silent: true }).catch(err => {
       toast.error(err.message);
       return null;
     });
+    setSaving(false);
     if (!result) return;
     setOverrides(prev => {
       const updated = { ...prev };
@@ -187,6 +166,14 @@ export default function AutomationTab({ appId, appName }) {
 
   return (
     <div className="max-w-5xl space-y-4">
+      <div className="border-b border-port-border pb-4">
+        <CustomTasksSection
+          appId={appId}
+          appName={appName}
+          providerCatalog={providerCatalog}
+          activeProviderId={activeProviderId}
+        />
+      </div>
       {paused && (
         <div className="bg-port-warning/10 border border-port-warning/40 rounded-lg p-3 flex items-start gap-3">
           <PauseCircle size={18} className="text-port-warning shrink-0 mt-0.5" />
@@ -215,10 +202,11 @@ export default function AutomationTab({ appId, appName }) {
               leave one on <em>Inherit</em> and it follows the global schedule defaults.
             </p>
           </div>
-          <ToggleSwitch enabled={allEnabled} onChange={handleToggleAll} size="sm" activeColor="bg-port-success" ariaLabel={allEnabled ? 'Disable every scheduled task for this app' : 'Enable every scheduled task for this app'} />
+          <ToggleSwitch enabled={allEnabled} onChange={handleToggleAll} size="sm" activeColor="bg-port-success" disabled={saving} ariaLabel={allEnabled ? 'Disable every scheduled task for this app' : 'Enable every scheduled task for this app'} />
         </div>
         <button
           onClick={fetchData}
+          disabled={saving}
           className="px-3 py-1.5 bg-port-border hover:bg-port-border/80 text-white rounded-lg text-xs flex items-center gap-1"
         >
           <RefreshCw size={14} /> Refresh
@@ -230,7 +218,7 @@ export default function AutomationTab({ appId, appName }) {
           No task types configured in the schedule
         </div>
       ) : (
-        <div className="space-y-2">
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
           {taskTypes.map(taskType => {
             const override = overrides[taskType] || {};
             const globalConfig = schedule.tasks[taskType] || {};
@@ -259,59 +247,30 @@ export default function AutomationTab({ appId, appName }) {
             const providerDivergesFromSchedule = providerPinDivergesFromSchedule(override, globalConfig);
 
             return (
-              <div key={taskType} className="bg-port-card border border-port-border rounded-lg p-3 space-y-2">
-                {/* Row 1: name + toggle + configure + run now */}
-                <div className="flex items-center gap-3">
-                  {/* Labelled "Enabled", not "Run" — the row already has a Run
-                      (trigger now) button, and this switch is the on/off state
-                      that gates both the schedule and that button. */}
-                  <span
-                    className="flex items-center gap-1.5 shrink-0"
-                    title={isEnabled
-                      ? `${taskType} runs for this app on the schedule below. Turn off to stop scheduling it.`
-                      : `${taskType} does not run for this app. Turn on to schedule it.`}
-                  >
-                    <span className="text-[10px] uppercase tracking-wide text-gray-500">Enabled</span>
-                    <ToggleSwitch
-                      enabled={isEnabled}
-                      onChange={() => handleToggle(taskType, isEnabled)}
-                      size="sm"
-                      activeColor="bg-port-success"
-                      ariaLabel={`${taskType} enabled for this app: ${isEnabled ? 'on' : 'off'}`}
-                    />
+              <AppTaskCard
+                key={`${appId}:${taskType}`}
+                taskType={taskType}
+                config={globalConfig}
+                providers={providers}
+                activeProviderId={activeProviderId}
+                onConfigure={() => setExpandedTaskType(prev => prev === taskType ? null : taskType)}
+                onTrigger={handleTrigger}
+                appContext={{
+                  enabled: isEnabled,
+                  onToggle: () => handleToggle(taskType, isEnabled),
+                  saving,
+                  expanded: isExpanded,
+                  interval: overrideInterval,
+                  cadence: `${effectiveLabel}${intervalSuffix}`,
+                  taskMetadata: override.taskMetadata,
+                }}
+              >
+                {providerDivergesFromSchedule && (
+                  <span className="inline-flex items-center gap-1 text-port-warning" title={`Runs on ${effectiveProviderName} — the schedule default is ${taskProviderName}`}>
+                    <AlertTriangle size={11} />
+                    <span className="text-[10px] uppercase tracking-wide">Provider override</span>
                   </span>
-                  <div className="flex-1 min-w-0">
-                    <span className="text-white font-mono text-xs">{taskType}</span>
-                    {providerDivergesFromSchedule && (
-                      <span
-                        className="inline-flex items-center gap-1 ml-2 text-port-warning"
-                        title={`Runs on ${effectiveProviderName} — the schedule's default is ${taskProviderName}, but this app's provider override wins`}
-                      >
-                        <AlertTriangle size={11} />
-                        <span className="text-[10px] uppercase tracking-wide">Provider override</span>
-                      </span>
-                    )}
-                    <div className="text-xs text-gray-500">{effectiveLabel}{intervalSuffix}</div>
-                  </div>
-                  <button
-                    onClick={() => setExpandedTaskType(prev => prev === taskType ? null : taskType)}
-                    aria-expanded={isExpanded}
-                    aria-label={`${isExpanded ? 'Hide' : 'Show'} provider and model options for ${taskType}`}
-                    className="px-2 py-1 bg-port-border/60 text-gray-300 hover:bg-port-border rounded text-xs inline-flex items-center gap-1 shrink-0"
-                  >
-                    {isExpanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
-                    <Settings size={12} />
-                    Configure
-                  </button>
-                  <button
-                    onClick={() => handleTrigger(taskType)}
-                    disabled={triggering === taskType || !isEnabled}
-                    className="px-2 py-1 bg-port-accent/20 text-port-accent hover:bg-port-accent/30 rounded text-xs disabled:opacity-50 inline-flex items-center gap-1 shrink-0"
-                  >
-                    <Play size={12} />
-                    {triggering === taskType ? '...' : 'Run'}
-                  </button>
-                </div>
+                )}
                 {/* Row 2: interval + cron + agent options */}
                 <div className="flex flex-wrap items-center gap-2">
                   <select
@@ -339,7 +298,7 @@ export default function AutomationTab({ appId, appName }) {
                       {overrideInterval}
                     </button>
                   ) : null}
-                  <div className="flex items-center gap-1 ml-auto">
+                  <div className="flex flex-wrap items-center gap-1">
                     {globalConfig.fileIssuesCapable && (() => {
                       const effective = override.taskMetadata?.fileIssues ?? globalConfig.taskMetadata?.fileIssues ?? globalConfig.defaultFileIssues === true;
                       const hasOverride = override.taskMetadata?.fileIssues !== undefined;
@@ -415,20 +374,13 @@ export default function AutomationTab({ appId, appName }) {
                     )}
                   </div>
                 )}
-              </div>
+              </AppTaskCard>
             );
           })}
         </div>
       )}
 
-      <div className="border-t border-port-border pt-4">
-        <CustomTasksSection
-          appId={appId}
-          appName={appName}
-          providerCatalog={providerCatalog}
-          activeProviderId={activeProviderId}
-        />
-      </div>
+
     </div>
   );
 }
