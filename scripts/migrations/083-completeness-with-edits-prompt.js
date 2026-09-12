@@ -34,7 +34,7 @@ export const ACCEPTED_OLD_MD5 = {
 // earlier migration that tracks the same file (056/057/066) so their drift-catch
 // tests stay green.
 export const NEW_SHIPPED_MD5 = {
-  'pipeline-manuscript-completeness.md': 'fd26f928c33803c12878a1bfb8561ece',
+  'pipeline-manuscript-completeness.md': 'a08a7aaea9b57dcf12311505150672cd',
 };
 
 const { applyMigration, up } = makePromptReplaceMigration({
