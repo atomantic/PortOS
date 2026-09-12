@@ -28,6 +28,7 @@ const mocks = vi.hoisted(() => ({
   inspectPersistentMindRuntime: vi.fn(),
   readPersistentMindVisibility: vi.fn(),
   readPersistentMindTaskCatalog: vi.fn(),
+  listMindToolRecipes: vi.fn(),
   resolveImageCapability: vi.fn(),
   cleanupPersistentMind: vi.fn(),
 }));
@@ -64,6 +65,9 @@ vi.mock('../services/persistentMindMaintenance.js', () => ({
 }));
 vi.mock('../services/persistentMindTaskCapability.js', () => ({
   readPersistentMindTaskCatalog: mocks.readPersistentMindTaskCatalog,
+}));
+vi.mock('../services/mindToolRecipes.js', () => ({
+  listRecipes: mocks.listMindToolRecipes,
 }));
 vi.mock('../services/persistentMindAttachments.js', () => ({
   createPersistentMindAttachment: mocks.createPersistentMindAttachment,
@@ -189,6 +193,7 @@ describe('persistent mind routes', () => {
       apps: [{ id: 'demo-app', name: 'Demo App', planOnly: true }],
       providers: [{ id: 'codex', name: 'Codex', type: 'cli', models: [{ id: 'gpt-5', efforts: ['low', 'high'] }] }],
     });
+    mocks.listMindToolRecipes.mockResolvedValue({ recipes: [] });
   });
 
   it('requests an immediate manual wake', async () => {
