@@ -200,9 +200,9 @@ export function computeWeightedScore(dimensions) {
 }
 
 /**
- * The dimension the improve loop should target next: the LARGEST weighted
- * deficit `weight × (10 − score)` — i.e. the single fix that moves the weighted
- * composite the most. Ties break toward the lower raw score, then rubric order.
+ * Largest weighted distance from a perfect rubric score, retained for snapshot
+ * diagnostics: `weight × (10 − score)`. Gate repair selection instead uses
+ * foundationFixTarget with the requested threshold. Ties break toward the lower raw score, then rubric order.
  * (Fixing a high-weight low-score dimension first is what converges the gate;
  * "weakest" by bare score would waste rounds polishing a 10%-weight craft nit
  * while a thin 40%-weight world drags the composite down.) Pure + unit-tested.
@@ -242,7 +242,22 @@ export function foundationGateStatus(dimensions, weightedScore, threshold = DEFA
 
 export function foundationFixTarget(dimensions, threshold = DEFAULT_FOUNDATION_THRESHOLD) {
   const { dimensionFloor, failingDimensions } = foundationGateStatus(dimensions, 0, threshold);
-  if (failingDimensions.length === 0) return weakestDimension(dimensions);
+  if (failingDimensions.length === 0) {
+    const target = Number.isFinite(threshold) ? threshold : DEFAULT_FOUNDATION_THRESHOLD;
+    // Repair the shortfall that keeps this run below its requested bar. Using
+    // distance from 10 sent a 7.8/8 foundation back to worldbuilding (already 8)
+    // while its only deficient dimension, structure (7), remained untouched.
+    const belowTarget = FOUNDATION_DIMENSIONS
+      .filter((dimension) => dimensions?.[dimension] && clampScore(dimensions[dimension].score) < target)
+      .map((dimension) => ({
+        dimension,
+        score: clampScore(dimensions[dimension].score),
+        deficit: Math.round(FOUNDATION_WEIGHTS[dimension] * (target - clampScore(dimensions[dimension].score)) * 100) / 100,
+      }))
+      .sort((a, b) => b.deficit - a.deficit || a.score - b.score
+        || FOUNDATION_DIMENSIONS.indexOf(a.dimension) - FOUNDATION_DIMENSIONS.indexOf(b.dimension));
+    return belowTarget[0] || weakestDimension(dimensions);
+  }
   return failingDimensions
     .map((dimension) => ({
       dimension,
