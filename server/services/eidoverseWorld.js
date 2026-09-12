@@ -8,6 +8,7 @@
  * external checkout or calls an AI provider.
  */
 
+import { scrubSecretTokens } from '../lib/secretText.js';
 import { buildEidoverseCitySurface } from '../lib/eidoverseCitySurface.js';
 import { eidoverseModelBounds } from '../lib/eidoverseCityLayout.js';
 import { createHash, randomUUID } from 'node:crypto';
@@ -670,6 +671,7 @@ function createWorldConnection({ world, id, avatar, agent = true, guest = false,
   let openSettled = false;
   let snapshotSettled = false;
   let snapshotValue = null;
+  const occupiedIdentities = new Set();
   let closeTimer = null;
   let openTimer = null;
   let snapshotTimer = null;
@@ -758,6 +760,7 @@ function createWorldConnection({ world, id, avatar, agent = true, guest = false,
     }
 
     if (message?.type === 'snapshot') {
+      for (const key of [...Object.keys(message.state?.roles || {}), ...Object.keys(message.state?.entities || {})]) occupiedIdentities.add(key);
       settleSnapshot(message);
       return;
     }
@@ -767,6 +770,11 @@ function createWorldConnection({ world, id, avatar, agent = true, guest = false,
         code: 'EIDOVERSE_WORLD_VERB_REJECTED',
       }));
       return;
+    }
+    if (message?.type === 'log' && message.entry) {
+      // Grants and arrivals after the initial snapshot also reserve their names.
+      if (typeof message.entry.actor === 'string') occupiedIdentities.add(message.entry.actor);
+      if (typeof message.entry.args?.id === 'string') occupiedIdentities.add(message.entry.args.id);
     }
     if (message?.type === 'log' && message.entry?.verb === 'say') {
       const entry = message.entry;
@@ -911,6 +919,7 @@ function createWorldConnection({ world, id, avatar, agent = true, guest = false,
     close,
     isOpen: () => !closed && socket.readyState === WebSocket.OPEN,
     getSnapshot: () => snapshotValue,
+    hasIdentity: (name) => occupiedIdentities.has(name),
     readChat: (after = -1) => {
       const unread = chat.filter((entry) => entry.seq > after);
       const messages = [];
@@ -2133,14 +2142,22 @@ export const __resetEidoverseWorldForTests = closeEidoverseWorldConnections;
 
 
 /** Guest admission happens through the owner before any guest joins. */
-export async function admitEidoverseGuest({ agent = false, verbIntervalMs } = {}) {
+export async function admitEidoverseGuest({ agent = false, name, verbIntervalMs } = {}) {
   return worldLock(async () => {
     await assertInstalled();
     const presence = await ensureCosPresenceInternal({ verbIntervalMs });
     if (presence.snapshot?.yourRights?.role !== 'owner') {
       throw new ServerError('The resident must own this world to admit visitors.', { status: 409, code: 'EIDOVERSE_GUEST_ADMISSION_UNAVAILABLE' });
     }
-    const id = `guest-${randomUUID()}`;
+    const desiredName = validIdentity(name, '');
+    const usableName = desiredName && scrubSecretTokens(desiredName) === desiredName
+      && presence.snapshot?.state?.roles;
+    const baseName = usableName ? desiredName : `guest-${randomUUID()}`;
+    let id = baseName;
+    for (let suffix = 2; presence.connection.hasIdentity(id); suffix += 1) {
+      const tail = ` (${suffix})`;
+      id = `${baseName.slice(0, 64 - tail.length)}${tail}`;
+    }
     await sendPacedVerb(presence.connection, 'grant', { id, role: 'visitor', gen: false }, {
       pacing: presence.pacing,
       verbIntervalMs,
