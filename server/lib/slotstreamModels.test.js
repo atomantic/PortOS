@@ -50,10 +50,26 @@ describe('listSlotstreamCachedModels', () => {
     dir = join(tmpdir(), `portos-slotstream-cache-${Date.now()}`);
     await mkdir(join(dir, 'qwen-moe'), { recursive: true });
     await writeFile(join(dir, 'qwen-moe', 'model.safetensors'), 'weights');
+    await writeFile(join(dir, 'qwen-moe', 'config.json'), '{}');
     await writeFile(join(dir, 'notes.txt'), 'not a checkpoint');
     const cache = await listSlotstreamCachedModels({ cacheDir: dir });
     expect(cache.error).toBeNull();
     expect(cache.models).toEqual([expect.objectContaining({ id: 'qwen-moe' })]);
+  });
+
+  it('requires all indexed shards while preserving manual checkpoints', async () => {
+    dir = join(tmpdir(), `slotstream-index-${Date.now()}`);
+    const model = join(dir, 'manual');
+    await mkdir(model, { recursive: true });
+    await writeFile(join(model, 'config.json'), '{}');
+    expect((await listSlotstreamCachedModels({ cacheDir: dir })).models).toEqual([]);
+    await writeFile(join(model, 'one.safetensors'), 'weights');
+    await writeFile(join(model, 'model.safetensors.index.json'), JSON.stringify({ weight_map: { a: 'one.safetensors', b: 'two.safetensors' } }));
+    expect((await listSlotstreamCachedModels({ cacheDir: dir })).models).toEqual([]);
+    await writeFile(join(model, 'two.safetensors'), 'weights');
+    expect((await listSlotstreamCachedModels({ cacheDir: dir })).models).toHaveLength(1);
+    await writeFile(join(model, 'model.safetensors.index.json'), '{broken');
+    expect((await listSlotstreamCachedModels({ cacheDir: dir })).models).toEqual([]);
   });
 
   it('hides a directory a download has not finished filling', async () => {
@@ -68,6 +84,7 @@ describe('listSlotstreamCachedModels', () => {
     await mkdir(join(dir, 'empty'), { recursive: true });
     await mkdir(join(dir, 'complete'), { recursive: true });
     await writeFile(join(dir, 'complete', 'model.safetensors'), 'weights');
+    await writeFile(join(dir, 'complete', 'config.json'), '{}');
 
     const cache = await listSlotstreamCachedModels({ cacheDir: dir });
     expect(cache.error).toBeNull();

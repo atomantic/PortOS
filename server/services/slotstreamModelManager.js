@@ -19,7 +19,7 @@
  * so a completed download is servable with no restart.
  */
 
-import { rm, stat } from 'fs/promises';
+import { mkdir, rm, stat, writeFile } from 'fs/promises';
 import { join, resolve, sep } from 'path';
 import { ServerError } from '../lib/errorHandler.js';
 import { withAbortTimeout } from '../lib/abortTimeout.js';
@@ -40,7 +40,7 @@ import {
   slotstreamCatalogEntry,
   slotstreamModelDirName,
 } from '../lib/slotstreamCatalog.js';
-import { slotstreamCacheDir } from '../lib/slotstreamModels.js';
+import { isServableCheckpoint, SLOTSTREAM_INCOMPLETE_MARKER, slotstreamCacheDir } from '../lib/slotstreamModels.js';
 import { getHfToken } from './hfToken.js';
 
 export { SLOTSTREAM_CATALOG };
@@ -215,7 +215,8 @@ export async function previewSlotstreamDownload({ model = null, cacheDir } = {})
     files: plan.files.length,
     // Finished files only — see planRepoDownload. This flag DISABLES Confirm,
     // so counting a `.partial` here would strand a resumable download.
-    alreadyDownloaded: plan.totalBytes > 0 && plan.finishedBytes === plan.totalBytes,
+    alreadyDownloaded: plan.totalBytes > 0 && plan.finishedBytes === plan.totalBytes &&
+      await isServableCheckpoint(plan.modelDir),
   };
 }
 
@@ -254,6 +255,11 @@ export async function downloadSlotstreamModel({ model = null, cacheDir, onProgre
       expectedBytes: Math.max(0, plan.totalBytes - carried),
     }));
 
+    slot.throwIfAborted();
+    await mkdir(plan.modelDir, { recursive: true });
+    const marker = join(plan.modelDir, SLOTSTREAM_INCOMPLETE_MARKER);
+    await writeFile(marker, 'Download incomplete; retry to finish.\n');
+
     // Primitives, not a built frame: `onBytes` runs once per stream chunk, so
     // constructing the object and its message before the throttle would
     // allocate millions of frames per checkpoint to discard all but ~4 a second.
@@ -278,6 +284,7 @@ export async function downloadSlotstreamModel({ model = null, cacheDir, onProgre
     // checkpoint rather than restarting at each file.
     let completedBytes = carried;
     for (const entry of plan.files) {
+      slot.throwIfAborted();
       if (await isFinishedOnDisk(entry.destPath, entry.bytes)) continue;
       // Anything else at the destination is a dead mid-file write (or a file
       // whose size the Hub never reported, so completeness is unknowable) —
@@ -302,8 +309,18 @@ export async function downloadSlotstreamModel({ model = null, cacheDir, onProgre
           emitProgress(done, entry.file);
         },
       });
+      if (entry.bytes > 0 && bytes !== entry.bytes) {
+        throw new Error(`Incomplete Slotstream file: ${entry.file} (${bytes}/${entry.bytes} bytes)`);
+      }
       completedBytes += Math.max(0, bytes - resumedFrom);
     }
+
+    slot.throwIfAborted();
+    if (!(await isServableCheckpoint(plan.modelDir, { ignoreIncomplete: true }))) {
+      throw new Error('Slotstream checkpoint is missing configuration or complete weights. Retry the download.');
+    }
+    slot.throwIfAborted();
+    await rm(marker);
 
     console.log(`✅ Slotstream checkpoint ready: ${repo} → ${plan.modelDir}`);
     onProgress({
