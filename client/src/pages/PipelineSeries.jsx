@@ -312,7 +312,7 @@ export default function PipelineSeries() {
             )}
             {['running', 'paused'].includes(series.autopilot?.status) && (
               <button type="button" className="text-amber-400 hover:underline" onClick={() => setEditorTab('autopilot')}>
-                Autopilot {series.autopilot.status} — view progress
+                View autopilot progress
               </button>
             )}
           </div>
