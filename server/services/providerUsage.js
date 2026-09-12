@@ -43,7 +43,7 @@ import { enabledCloudImageModes } from './imageGen/modes.js';
  * AI Provider Usage Policy: these fetches run only on user request from the
  * usage page — never at server boot — and none of them consume tokens (the
  * Claude `/usage` print-mode call is 0-token; the Codex adapter only reads
- * local session logs; the Antigravity/Grok adapters drive an interactive
+ * local session logs or reads account quota via app-server; the Antigravity/Grok adapters drive an interactive
  * `/usage` slash command that renders synchronously, with no LLM turn).
  *
  * Caching: the claude adapter carries its own 60s cache + single-flight inside
@@ -258,6 +258,33 @@ async function listCodexRolloutFiles(codexHome) {
     }
   }
   return files;
+}
+
+// Passive reads stay local. A fresh request queries quota without starting a turn.
+async function fetchCurrentCodexQuota({ wait }) {
+  if (wait !== WAIT.FRESH) return fetchCodexQuota();
+  const { getCodexAccountReadiness } = await import('./codexAppServer.js');
+  const readiness = await getCodexAccountReadiness({ fresh: true }).catch(() => null);
+  if (readiness?.rateLimits != null) {
+    const window = (value) => value && ({
+      used_percent: value.usedPercent,
+      window_minutes: value.windowDurationMins,
+      resets_at: value.resetsAt ? Date.parse(value.resetsAt) / 1000 : null,
+    });
+    const quota = mapCodexQuota({
+      primary: window(readiness.rateLimits.primary),
+      secondary: window(readiness.rateLimits.secondary),
+      plan_type: readiness.account?.planType,
+    }, null);
+    return {
+      ...quota,
+      approximate: false,
+      fetchedAt: new Date(readiness.checkedAt).toISOString(),
+      note: ['Live Codex account quota.', readCodexRoutingOverride()?.overridden === true ? CODEX_ROUTING_CAVEAT : null].filter(Boolean).join(' '),
+    };
+  }
+  const quota = await fetchCodexQuota();
+  return { ...quota, note: `Live Codex quota refresh unavailable; showing local telemetry. ${quota.note || ''}`.trim() };
 }
 
 /** Exported for tests (which point `codexHome` at a fixture tree). */
@@ -625,7 +652,7 @@ async function fetchClaudeQuota({ wait = WAIT.CACHED } = {}) {
  */
 const FAMILY_FETCHERS = {
   claude: fetchClaudeQuota,
-  codex: () => fetchCodexQuota(),
+  codex: fetchCurrentCodexQuota,
   agy: makeTuiUsageFetcher({ id: 'agy', binary: 'agy', slashCommand: '/usage', label: 'Antigravity', parse: parseAgyUsage, name: 'Antigravity CLI', readyMarker: /Weekly Limit(?:\s+Remaining)?|Five Hour Limit(?:\s+Remaining)?|Models & Quota/i }),
   grok: makeTuiUsageFetcher({ id: 'grok', binary: 'grok', slashCommand: '/usage show', label: 'Grok', parse: parseGrokUsage, name: 'Grok Build CLI', readyMarker: /(Weekly|Monthly) limit/i })
 };
