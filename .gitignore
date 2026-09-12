@@ -6,6 +6,7 @@ node_modules/
 # Build output
 dist/
 build/
+/client/.dist-stage-*/
 
 # Runtime data (app registry, history, runs, migration state). Override the
 # directory-level `data/` rule from the global ~/.gitignore so git descends
