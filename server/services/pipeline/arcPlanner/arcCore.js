@@ -1273,13 +1273,7 @@ export async function restoreArcState(seriesId, snapshot, { episodeEdits = null 
     if (cur.stages?.idea?.locked === true) continue;
     const idea = ideaSnapshotOf(cur.stages?.idea);
     const owned = ownedEdits?.get(snap.id);
-    if (!sameIdea(idea, snap.idea) && (!ownedEdits || (owned?.idea && sameIdea(idea, owned.idea)))) {
-      stageUpdates.push({
-        issueId: snap.id,
-        stageId: 'idea',
-        computeFn: () => ({ ...snap.idea, errorMessage: '' }),
-      });
-    }
+    let metadataPatch = {};
     // Legacy snapshots do not own metadata. For current snapshots, restore only
     // fields this round changed and only while its result still stands. Length
     // is one choice: a later page-count edit must not have its profile reset.
@@ -1289,13 +1283,24 @@ export async function restoreArcState(seriesId, snapshot, { episodeEdits = null 
         const guard = owned.metadataGuard || owned.metadata;
         return !Object.hasOwn(guard, field) || (cur[field] ?? null) === guard[field];
       }));
-      const patch = Object.fromEntries(EPISODE_METADATA_FIELDS.filter((field) => (
+      metadataPatch = Object.fromEntries(EPISODE_METADATA_FIELDS.filter((field) => (
         Object.hasOwn(snap.metadata, field) && (cur[field] ?? null) !== snap.metadata[field]
         && (!ownedEdits || (Object.hasOwn(owned?.metadata || {}, field)
           && (cur[field] ?? null) === owned.metadata[field]
           && (field === 'arcRole' || lengthStillOwned)))
       )).map((field) => [field, snap.metadata[field]]));
-      if (Object.keys(patch).length) metadataUpdates.push({ issueId: snap.id, patch });
+      if (Object.keys(metadataPatch).length) metadataUpdates.push({ issueId: snap.id, patch: metadataPatch });
+    }
+    if (!sameIdea(idea, snap.idea) && (!ownedEdits || (owned?.idea && sameIdea(idea, owned.idea)))) {
+      const restoredMetadata = { ...episodeMetadataOf(cur), ...metadataPatch };
+      const metadataStillChanged = snap.metadata && EPISODE_METADATA_FIELDS
+        .some((field) => restoredMetadata[field] !== snap.metadata[field]);
+      // A later author choice can keep a new length or role. Restore our old
+      // synopsis, but never resurrect beats sized for the superseded plan.
+      const restoredIdea = metadataStillChanged && snap.idea.output
+        ? { ...snap.idea, output: '', status: 'empty' }
+        : snap.idea;
+      stageUpdates.push({ issueId: snap.id, stageId: 'idea', computeFn: () => ({ ...restoredIdea, errorMessage: '' }) });
     }
   }
   // Same write ordering as `commitSeasonsWithRemap`: seasons first, so a crash

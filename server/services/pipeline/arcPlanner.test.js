@@ -1664,6 +1664,7 @@ describe('arcPlanner — resolveVerifyIssues', () => {
     await seriesSvc.updateSeries(s.id, { arc: { logline: 'A crew must make a costly choice.' } });
     const season = await seasonsSvc.createSeason(s.id, { title: 'Volume', episodeCountTarget: 1 });
     const issue = await issuesSvc.createIssue({ seriesId: s.id, seasonId: season.id, title: 'Turn', arcRole: 'b-plot' });
+    await issuesSvc.updateStage(issue.id, 'idea', { input: 'Original synopsis.', output: 'Beats for the original length.', status: 'ready' });
     const snapshot = await planner.snapshotArcState(s.id);
     stageRunnerSpy = vi.fn(async () => ({ content: { episodes: [{
       resolves: ['f1'], seasonNumber: season.number, episodeNumber: issue.number,
@@ -1672,7 +1673,9 @@ describe('arcPlanner — resolveVerifyIssues', () => {
     const repaired = await planner.resolveVerifyIssues(s.id, { findings: [{ severity: 'medium', problem: 'Correct the turn metadata.' }] });
     await issuesSvc.updateIssue(issue.id, { pageTarget: 48 });
     await planner.restoreArcState(s.id, snapshot, { episodeEdits: planner.resolvedEpisodeEdits(repaired) });
-    expect(await issuesSvc.getIssue(issue.id)).toMatchObject({ arcRole: 'b-plot', lengthProfile: 'custom', pageTarget: 48, minutesTarget: 42 });
+    const restored = await issuesSvc.getIssue(issue.id);
+    expect(restored).toMatchObject({ arcRole: 'b-plot', lengthProfile: 'custom', pageTarget: 48, minutesTarget: 42 });
+    expect(restored.stages.idea).toMatchObject({ input: 'Original synopsis.', output: '', status: 'empty' });
   });
 
   it.each(['manuscript', 'page layout', 'back-cover image'])('refuses metadata and accompanying synopsis changes beneath an existing %s', async (production) => {
