@@ -428,6 +428,31 @@ describe('beeperClient', () => {
       }
     });
 
+    it('a total deadline cancels retry backoff before another read attempt starts', async () => {
+      vi.useFakeTimers();
+      try {
+        const fetchMock = vi.fn().mockRejectedValue(
+          Object.assign(new TypeError('fetch failed'), { cause: { code: 'ECONNRESET' } }),
+        );
+        vi.stubGlobal('fetch', fetchMock);
+
+        const request = listChatsPage({
+          baseUrl: DEFAULT_BASE_URL, token: 't', timeoutMs: 25,
+        });
+        const rejection = expect(request).rejects.toMatchObject({
+          code: 'NETWORK_ERROR',
+          context: { details: { timedOut: true } },
+        });
+        await vi.advanceTimersByTimeAsync(25);
+
+        await rejection;
+        expect(fetchMock).toHaveBeenCalledTimes(1);
+        expect(vi.getTimerCount()).toBe(0);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
     it.each([200, 500])('bounds a stalled JSON body after immediate HTTP %s headers', async (status) => {
       vi.useFakeTimers();
       try {
