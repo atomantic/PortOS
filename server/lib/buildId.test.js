@@ -1,43 +1,50 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { writeFileSync, mkdirSync, rmSync, existsSync, utimesSync } from 'fs';
+import { mkdtempSync } from 'fs';
+import { writeFileSync, rmSync, utimesSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
+import { tmpdir } from 'os';
+
+let fixtureIndexPath = null;
+let fixtureDistDir = null;
+
+vi.mock('fs', async () => {
+  const actual = await vi.importActual('fs');
+  const redirect = (path) => {
+    if (String(path) === INDEX_PATH) return fixtureIndexPath;
+    if (String(path) === DIST_DIR) return fixtureDistDir;
+    return path;
+  };
+
+  return {
+    ...actual,
+    existsSync: (path) => actual.existsSync(redirect(path)),
+    mkdirSync: (path, ...args) => actual.mkdirSync(redirect(path), ...args),
+    readFileSync: (path, ...args) => actual.readFileSync(redirect(path), ...args),
+    rmSync: (path, ...args) => actual.rmSync(redirect(path), ...args),
+    statSync: (path, ...args) => actual.statSync(redirect(path), ...args),
+    utimesSync: (path, ...args) => actual.utimesSync(redirect(path), ...args),
+    writeFileSync: (path, ...args) => actual.writeFileSync(redirect(path), ...args),
+  };
+});
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const DIST_DIR = join(__dirname, '..', '..', 'client', 'dist');
 const INDEX_PATH = join(DIST_DIR, 'index.html');
 
-// These tests touch the real client/dist/index.html that `buildId.js` reads,
-// so they save the existing file, mutate it, and restore on teardown. They
-// MUST run serially (vitest default in a single file) so they don't trample
-// each other.
-let preservedIndex = null;
-let distCreated = false;
-
 beforeEach(async () => {
   // Force a fresh module load each test — the module-level cache is the
   // whole subject of these tests.
   vi.resetModules();
-  if (existsSync(INDEX_PATH)) {
-    const { readFileSync } = await import('fs');
-    preservedIndex = readFileSync(INDEX_PATH, 'utf8');
-  } else if (!existsSync(DIST_DIR)) {
-    mkdirSync(DIST_DIR, { recursive: true });
-    distCreated = true;
-  }
+  fixtureDistDir = mkdtempSync(join(tmpdir(), 'portos-build-id-'));
+  fixtureIndexPath = join(fixtureDistDir, 'index.html');
 });
 
 afterEach(() => {
   vi.useRealTimers();
-  if (preservedIndex !== null) {
-    writeFileSync(INDEX_PATH, preservedIndex);
-    preservedIndex = null;
-  } else if (distCreated) {
-    rmSync(DIST_DIR, { recursive: true, force: true });
-    distCreated = false;
-  } else if (existsSync(INDEX_PATH)) {
-    rmSync(INDEX_PATH);
-  }
+  if (fixtureDistDir) rmSync(fixtureDistDir, { recursive: true, force: true });
+  fixtureDistDir = null;
+  fixtureIndexPath = null;
 });
 
 describe('buildId — cache invalidation', () => {
