@@ -1,4 +1,4 @@
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'fs';
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -17,8 +17,8 @@ describe('314-fastvideo-mlx-models migration', () => {
   });
 
   it('skips gracefully when media-models.json does not exist', async () => {
-    await migration.up({ rootDir });
-    expect(true).toBe(true);
+    await expect(migration.up({ rootDir })).resolves.toBeUndefined();
+    expect(existsSync(join(rootDir, 'data', 'media-models.json'))).toBe(false);
   });
 
   it('adds FastMetal models to an existing MLX registry', async () => {
