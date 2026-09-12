@@ -1,10 +1,10 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { RefreshCw, Search, MapPin, Users, Clock } from 'lucide-react';
 import toast from '../ui/Toast';
 import * as api from '../../services/api';
 import socket from '../../services/socket';
 import EventDetail from './EventDetail';
-import { formatTimeOfDay as formatTime, formatWeekdayDate } from '../../utils/formatters';
+import { formatTimeOfDay as formatTime, formatWeekdayDate, localDateKey } from '../../utils/formatters';
 import BrailleSpinner from '../BrailleSpinner';
 import EmptyState from '../EmptyState';
 import useUrlParams from '../../hooks/useUrlParams';
@@ -50,25 +50,65 @@ export default function AgendaTab({ accounts }) {
   const [searchParams, updateParams] = useUrlParams();
   const [syncing, setSyncing] = useState(false);
 
-  const fetchEvents = useCallback(async () => {
-    const params = {};
+  const today = localDateKey();
+  const requestedDate = searchParams.get('from');
+  const parsedDate = new Date(`${requestedDate}T00:00:00`);
+  const fromDate = /^\d{4}-\d{2}-\d{2}$/.test(requestedDate)
+    && Number.isFinite(parsedDate.getTime()) && localDateKey(parsedDate) === requestedDate
+    ? requestedDate : today;
+  const [total, setTotal] = useState(0);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [failed, setFailed] = useState(false);
+  const requestGeneration = useRef(0);
+  const nextOffset = useRef(0);
+  const pending = useRef(false);
+
+  const fetchEvents = useCallback(async (append = false) => {
+    if (append && pending.current) return;
+    const generation = ++requestGeneration.current;
+    pending.current = true;
+    setFailed(false);
+    setLoadingMore(append);
+    if (!append) {
+      nextOffset.current = 0;
+      setEvents([]);
+      setTotal(0);
+      setLoading(true);
+    }
+    const offset = nextOffset.current;
+    const params = {
+      startDate: new Date(`${fromDate}T00:00:00`).toISOString(),
+      limit: 50,
+      offset,
+    };
     if (accountFilter) params.accountId = accountFilter;
     if (search) params.search = search;
-    const data = await api.getCalendarEvents(params).catch(() => ({ events: [] }));
-    setEvents(data?.events || []);
+    // The API owns the error toast; retain loaded pages and offer a retry.
+    const data = await api.getCalendarEvents(params).catch(() => null);
+    if (generation !== requestGeneration.current) return;
+    if (data) {
+      const page = data.events || [];
+      nextOffset.current = offset + page.length;
+      setEvents(previous => {
+        const combined = append ? [...previous, ...page] : page;
+        return [...new Map(combined.map(event => [`${event.accountId}:${event.id}`, event])).values()];
+      });
+      setTotal(data.total ?? page.length);
+    } else {
+      setFailed(true);
+    }
+    pending.current = false;
     setLoading(false);
-  }, [accountFilter, search]);
+    setLoadingMore(false);
+  }, [accountFilter, search, fromDate]);
 
   useEffect(() => {
     fetchEvents();
-  }, [fetchEvents]);
-
-  useEffect(() => {
-    const onSyncCompleted = () => {
-      fetchEvents();
-    };
+    const onSyncCompleted = () => fetchEvents();
     socket.on('calendar:sync:completed', onSyncCompleted);
     return () => {
+      ++requestGeneration.current;
+      pending.current = false;
       socket.off('calendar:sync:completed', onSyncCompleted);
     };
   }, [fetchEvents]);
@@ -91,6 +131,22 @@ export default function AgendaTab({ accounts }) {
     <div className="space-y-4">
       {/* Controls */}
       <div className="flex flex-wrap items-center gap-3">
+        <div className="flex flex-wrap items-center gap-2">
+          <label htmlFor="agenda-from" className="text-sm text-gray-400">From date</label>
+          <input
+            id="agenda-from"
+            type="date"
+            value={fromDate}
+            onChange={e => updateParams({ from: e.target.value || null })}
+            className="min-w-0 px-3 py-2 bg-port-card border border-port-border rounded-lg text-sm text-white"
+          />
+          <button
+            onClick={() => updateParams({ from: null })}
+            className="px-3 py-2 text-port-accent rounded-lg text-sm hover:bg-port-accent/10"
+          >
+            Today
+          </button>
+        </div>
         <div className="relative flex-1 min-w-[200px]">
           <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500" />
           <input
@@ -125,12 +181,19 @@ export default function AgendaTab({ accounts }) {
         </button>
       </div>
 
+      {failed && (
+        <div role="alert" className="flex flex-wrap items-center gap-3 text-sm text-port-error">
+          Could not load events.
+          <button onClick={() => fetchEvents(nextOffset.current > 0)} className="underline">Retry</button>
+        </div>
+      )}
+
       {/* Event list */}
       {loading ? (
         <div className="flex items-center justify-center py-12">
           <BrailleSpinner text="Loading" />
         </div>
-      ) : grouped.length === 0 ? (
+      ) : failed && grouped.length === 0 ? null : grouped.length === 0 ? (
         hasActiveFilter ? (
           <EmptyState
             icon={Clock}
@@ -214,6 +277,21 @@ export default function AgendaTab({ accounts }) {
               </div>
             </div>
           ))}
+        </div>
+      )}
+
+      {!loading && events.length > 0 && (
+        <div className="flex flex-wrap items-center justify-center gap-3">
+          <p role="status" className="text-sm text-gray-400">{events.length} of {total} events loaded</p>
+          {nextOffset.current < total && (
+            <button
+              onClick={() => fetchEvents(true)}
+              disabled={loadingMore}
+              className="px-3 py-2 bg-port-accent/10 text-port-accent rounded-lg text-sm hover:bg-port-accent/20 disabled:opacity-50"
+            >
+              {loadingMore ? 'Loading more…' : 'Load more'}
+            </button>
+          )}
         </div>
       )}
 
