@@ -732,14 +732,17 @@ describe('mediaJobQueue', () => {
   });
 
   it.each([true, undefined])('preserves accepted or legacy cancellation results (%s)', async (accepted) => {
-    const job = mediaJobQueue.enqueueJob({ kind: 'video', params: { prompt: 'cancel render' } });
-    await waitFor(() => stubs.generateVideo.mock.calls.length === 1);
+    const job = mediaJobQueue.enqueueJob({ kind: 'video', params: { mode: 'grok', prompt: 'cancel render', videoProduction: { projectId: 'example-project', attemptId: 'example-attempt' } } });
+    await waitFor(() => stubs.generateVideoGrok.mock.calls.length === 1);
     stubs.cancelVideo.mockImplementationOnce(() => {
       videoGenEvents.emit('failed', { generationId: job.jobId, error: 'Stopped' });
       return accepted;
     });
     await expect(mediaJobQueue.cancelJob(job.jobId)).resolves.toMatchObject({ ok: true, status: 'canceling' });
     await waitFor(() => mediaJobQueue.getJob(job.jobId).status === 'canceled');
+    const { settleVideoAttempt } = await import('../creativeDirector/videoExecution.js');
+    await waitFor(() => settleVideoAttempt.mock.calls.length === 1);
+    expect(settleVideoAttempt).toHaveBeenCalledWith('example-project', 'example-attempt', { jobId: job.jobId, status: 'uncertain' });
   });
 
   it('cancel during the terminal drain window is refused, not "canceling"', async () => {
