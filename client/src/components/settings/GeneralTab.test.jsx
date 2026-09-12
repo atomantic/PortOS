@@ -65,6 +65,7 @@ describe('GeneralTab unsaved changes', () => {
     await renderTab();
 
     const headings = screen.getAllByRole('heading').map(heading => heading.textContent);
+    expect(headings).toEqual(expect.arrayContaining(['Timezone', 'Interface Theme']));
     expect(headings.indexOf('Timezone')).toBeLessThan(headings.indexOf('Interface Theme'));
   });
 
