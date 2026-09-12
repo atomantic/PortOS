@@ -188,7 +188,7 @@ export async function subscribePeer({ peerId, recordKind, recordId }, opts = {})
         // #1922: same contract as `lastConfirmedPushedAt`, scoped to confirmed
         // delivery of a BUNDLED `linkedTrack` tombstone/record (#1858) on a
         // musicVideoProject subscription — see peerSyncPush.js
-        // `persistPushSuccess` and tombstoneGc.js's `track` cutoff. Stays
+        // `persistPushDeliveryEvidence` and tombstoneGc.js's `track` cutoff. Stays
         // `null` for every other recordKind.
         lastConfirmedTrackBundleAtMs: null,
         adoptedFromReverse: opts.adoptedFromReverse === true,

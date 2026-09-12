@@ -278,7 +278,7 @@ export async function pushRecordToPeer(sub, options = {}) {
   // #1922: a musicVideoProject subscription is also a delivery vehicle for
   // its bundled `linkedTrack` (#1858) — the receiver has no independent
   // `track` subscription to ack through. Stamp a SEPARATE floor
-  // (`trackBundleConfirmed`) tombstoneGc's `track` cutoff reads off
+  // (`lastConfirmedTrackBundleAtMs`) tombstoneGc's `track` cutoff reads off
   // musicVideoProject rows, distinct from `lastConfirmedPushedAt` because the
   // latter advances even when the bundled track merge failed or was stripped
   // for a legacy peer (`trackSyncPending`) — using it here would let GC treat
@@ -296,14 +296,19 @@ export async function pushRecordToPeer(sub, options = {}) {
   // included in this push.
   const trackOwed = isStr(payload.record?.trackId);
   const trackSyncPending = pending.has(ENVELOPE_PENDING_KEYS.linkedTrack);
-  const trackBundleConfirmed = sub.recordKind === 'musicVideoProject'
+  const linkedTrackObligationSatisfied = sub.recordKind === 'musicVideoProject'
     && !trackSyncPending
     && (!trackOwed || Boolean(payload.linkedTrack));
-  await persistPushSuccess(sub.id, pushedHash, {
-    confirmedAtMs: Date.now(),
-    trackBundleConfirmed,
-    legacyStrippedHash,
-  });
+  const recordPushAcceptedAtMs = Date.now();
+  const deliveryEvidence = {
+    recordPushAcceptedAtMs,
+    linkedTrackObligationSatisfiedAtMs: linkedTrackObligationSatisfied ? recordPushAcceptedAtMs : null,
+    retrySuppression: {
+      fullPayloadHash: pushedHash,
+      legacyStrippedPayloadHash: legacyStrippedHash,
+    },
+  };
+  await persistPushDeliveryEvidence(sub.id, deliveryEvidence);
   if (Number.isFinite(body?.ackedDeletesUpTo) && body.ackedDeletesUpTo > 0) {
     await ackDeletesUpTo(sub.peerId, body.ackedDeletesUpTo).catch(() => {});
   }
@@ -427,33 +432,38 @@ function resolvePushWatermarks({ hash, missingCount, stripped, body }) {
   };
 }
 
-async function persistPushSuccess(subId, hash, { confirmedAtMs = Date.now(), trackBundleConfirmed = false, legacyStrippedHash = null } = {}) {
+// Adapt delivery evidence to the existing subscription storage contract.
+async function persistPushDeliveryEvidence(subId, {
+  recordPushAcceptedAtMs,
+  linkedTrackObligationSatisfiedAtMs,
+  retrySuppression: { fullPayloadHash, legacyStrippedPayloadHash },
+}) {
   await withStateLock(async () => {
     const state = await readState();
     const sub = state.subscriptions.find((s) => s.id === subId);
     if (!sub) return;
     const now = new Date().toISOString();
     sub.lastPushedAt = now;
-    sub.lastPushedHash = hash;
+    sub.lastPushedHash = fullPayloadHash;
     // #3928: the legacy-stripped water-mark. Set when this push only landed
     // with a newer top-level key stripped for an older peer; cleared on every
     // other successful push so a peer that has since upgraded (or a record
     // whose content moved) can never be held back by a stale entry.
-    sub.lastPushedLegacyHash = isNonBlankStr(legacyStrippedHash) ? legacyStrippedHash : null;
+    sub.lastPushedLegacyHash = isNonBlankStr(legacyStrippedPayloadHash) ? legacyStrippedPayloadHash : null;
     sub.updatedAt = now;
     // Advance the per-record confirmed-delivery water-mark monotonically — an
     // out-of-order retry must not retract it (mirrors ackDeletesUpTo's
     // never-move-backward guarantee). tombstoneGc reads MIN-of-this across a
     // kind's rows, so a regression here would let a stale tombstone prune.
-    if (Number.isFinite(confirmedAtMs) && confirmedAtMs > (sub.lastConfirmedPushedAt ?? 0)) {
-      sub.lastConfirmedPushedAt = confirmedAtMs;
+    if (Number.isFinite(recordPushAcceptedAtMs) && recordPushAcceptedAtMs > (sub.lastConfirmedPushedAt ?? 0)) {
+      sub.lastConfirmedPushedAt = recordPushAcceptedAtMs;
     }
-    // #1922: same monotonic-floor treatment, but scoped to confirmed delivery
-    // of a BUNDLED linkedTrack (musicVideoProject subscriptions only — see the
-    // call site). tombstoneGc's `track` cutoff reads this instead of
+    // #1922: same monotonic-floor treatment for a satisfied linked-track
+    // obligation (including no track owed, musicVideoProject rows only).
+    // tombstoneGc's `track` cutoff reads this instead of
     // `lastConfirmedPushedAt` for musicVideoProject rows.
-    if (trackBundleConfirmed && Number.isFinite(confirmedAtMs) && confirmedAtMs > (sub.lastConfirmedTrackBundleAtMs ?? 0)) {
-      sub.lastConfirmedTrackBundleAtMs = confirmedAtMs;
+    if (Number.isFinite(linkedTrackObligationSatisfiedAtMs) && linkedTrackObligationSatisfiedAtMs > (sub.lastConfirmedTrackBundleAtMs ?? 0)) {
+      sub.lastConfirmedTrackBundleAtMs = linkedTrackObligationSatisfiedAtMs;
     }
     // A successful push (or even a no-asset-stranded push) clears any prior
     // schema-version block — the peer can receive again.

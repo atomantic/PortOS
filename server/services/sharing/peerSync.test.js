@@ -1379,7 +1379,7 @@ describe('peerSync', () => {
       await subscribePeer({ peerId: 'peer-a', recordKind: 'universe', recordId: 'u1' });
       // Poll for the fire-and-forget initial push to persist its hash. A fixed
       // sleep OR a single writeTail drain (__drainForTests) is racy in slower CI
-      // because the push's peerFetch + persistPushSuccess chain may not have even
+      // because the push's peerFetch + persistPushDeliveryEvidence chain may not have even
       // started when we read — vi.waitFor retries the real condition deterministically.
       let sub;
       await vi.waitFor(async () => {

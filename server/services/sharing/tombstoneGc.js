@@ -248,26 +248,9 @@ function peerIdsSubscribedToKind(subs, peers, recordKind) {
 // unchanged. Every other recordKind/targetKind pairing also keeps using
 // `lastConfirmedPushedAt` as before.
 //
-// Upgrade compat: an existing musicVideoProject subscription row created
-// BEFORE this field existed has no `lastConfirmedTrackBundleAtMs` at all —
-// and if its project content hasn't changed since, `pushRecordToPeer`'s
-// `unchanged`-hash short-circuit means it may NEVER take another real push
-// that would stamp the field, pinning the `track` floor at that row's old
-// `createdAt` indefinitely. A non-null `lastPushedHash` on the row is a safe
-// historical proxy: `persistPushSuccess` has ALWAYS withheld the hash when
-// `trackSyncPending` was true (#1858, predating this field), so a saved hash
-// means that row's most recent successful push already had its bundled track
-// merge confirmed — `lastConfirmedPushedAt` is a sound backfilled stand-in.
-// A row with neither field set (no hash yet, or hash withheld) still floors
-// conservatively to `createdAt`.
 function confirmedFloorForSub(sub, targetKind) {
   if (targetKind === 'track' && sub.recordKind === 'musicVideoProject') {
-    if (Number.isFinite(sub.lastConfirmedTrackBundleAtMs)) return sub.lastConfirmedTrackBundleAtMs;
-    if (typeof sub.lastPushedHash === 'string' && Number.isFinite(sub.lastConfirmedPushedAt)) {
-      return sub.lastConfirmedPushedAt;
-    }
-    const createdMs = Date.parse(sub.createdAt || '');
-    return Number.isFinite(createdMs) ? createdMs : 0;
+    return bundledTrackConfirmationFloorForSub(sub);
   }
   let confirmed = sub.lastConfirmedPushedAt;
   if (!Number.isFinite(confirmed)) {
@@ -276,6 +259,27 @@ function confirmedFloorForSub(sub, targetKind) {
     confirmed = Number.isFinite(createdMs) ? createdMs : 0;
   }
   return confirmed;
+}
+
+// Upgrade compat: an existing musicVideoProject subscription row created
+// BEFORE this field existed has no `lastConfirmedTrackBundleAtMs` at all —
+// and if its project content hasn't changed since, `pushRecordToPeer`'s
+// `unchanged`-hash short-circuit means it may NEVER take another real push
+// that would stamp the field, pinning the `track` floor at that row's old
+// `createdAt` indefinitely. A non-null `lastPushedHash` on the row is a safe
+// historical proxy: the push delivery writer has ALWAYS withheld the hash when
+// `trackSyncPending` was true (#1858, predating this field), so a saved hash
+// means that row's most recent successful push already had its bundled track
+// merge confirmed — `lastConfirmedPushedAt` is a sound backfilled stand-in.
+// A row with neither field set (no hash yet, or hash withheld) still floors
+// conservatively to `createdAt`.
+function bundledTrackConfirmationFloorForSub(sub) {
+  if (Number.isFinite(sub.lastConfirmedTrackBundleAtMs)) return sub.lastConfirmedTrackBundleAtMs;
+  if (typeof sub.lastPushedHash === 'string' && Number.isFinite(sub.lastConfirmedPushedAt)) {
+    return sub.lastConfirmedPushedAt;
+  }
+  const createdMs = Date.parse(sub.createdAt || '');
+  return Number.isFinite(createdMs) ? createdMs : 0;
 }
 
 // Returns Infinity when there are no eligible rows for the kind (no per-record
