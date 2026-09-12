@@ -1,14 +1,15 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { EventEmitter, once } from 'events';
-import { mkdir, rm, stat, writeFile } from 'fs/promises';
+import { mkdir, readFile, rm, stat, writeFile } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
 
 const root = join(tmpdir(), `reactor-test-${process.pid}`);
-const mocks = vi.hoisted(() => ({ spawn: vi.fn(), finalize: vi.fn(), settings: vi.fn(), samples: vi.fn(), runtime: vi.fn() }));
+const mocks = vi.hoisted(() => ({ spawn: vi.fn(), finalize: vi.fn(), settings: vi.fn(), samples: vi.fn(), runtime: vi.fn(), optimize: vi.fn(), thumbnail: vi.fn(), history: vi.fn() }));
 vi.mock('../../lib/childProcess.js', async (importOriginal) => ({ ...await importOriginal(), spawn: mocks.spawn }));
 vi.mock('./reactorRuntime.js', () => ({ ensureReactorRuntime: mocks.runtime }));
-vi.mock('../../lib/ffmpeg.js', () => ({ extractEvaluationFrames: mocks.samples }));
+vi.mock('../../lib/ffmpeg.js', () => ({ extractEvaluationFrames: mocks.samples, optimizeForStreaming: mocks.optimize, generateThumbnail: mocks.thumbnail }));
+vi.mock('./history.js', () => ({ mutateVideoHistory: mocks.history }));
 // Partial: only the finalize is stubbed. emitCloudRenderStatus is real, so the
 // status/phase frames the Video Gen page reads stay covered by these tests.
 vi.mock('./generateVideoHelpers.js', async (importOriginal) => ({
@@ -70,6 +71,55 @@ describe('Reactor SDK adapter', () => {
     expect(mocks.finalize).not.toHaveBeenCalled();
     child.emit('close', 0);
     await vi.waitFor(() => expect(mocks.finalize).toHaveBeenCalledWith(expect.objectContaining({ jobId: job.jobId, meta: expect.objectContaining({ clipId: 'clip-example', seconds: 6 }) })));
+  });
+
+  it.each(['optimize', 'thumbnail', 'history'])('refuses late cancellation during %s and retains the published video', async (stage) => {
+    const { finalizeGeneratedVideo } = await vi.importActual('./generateVideoHelpers.js');
+    mocks.finalize.mockImplementationOnce(finalizeGeneratedVideo);
+    const records = [];
+    mocks.optimize.mockResolvedValue(undefined);
+    mocks.thumbnail.mockResolvedValue('example-thumb.jpg');
+    mocks.history.mockImplementation(async (mutate) => mutate(records));
+    let release;
+    const deferred = new Promise((resolve) => { release = resolve; });
+    const original = mocks[stage].getMockImplementation();
+    mocks[stage].mockImplementationOnce(async (...args) => { await deferred; return original(...args); });
+    const completed = vi.fn();
+    const failed = vi.fn();
+    videoGenEvents.on('completed', completed);
+    videoGenEvents.on('failed', failed);
+    const job = await started();
+    await writeFile(input.outputPath, 'example-video');
+    child.stdout.emit('data', Buffer.from('{"type":"complete","clipId":"clip-example","seconds":6}\n'));
+    child.emit('close', 0);
+    await vi.waitFor(() => expect(mocks[stage]).toHaveBeenCalledOnce());
+    expect(reactor.cancel(job.jobId)).toBe(false);
+    expect(reactor.getActiveJob()?.generationId).toBe(job.jobId);
+    release();
+    await vi.waitFor(() => expect(reactor.getActiveJob()).toBeNull());
+    expect(completed).toHaveBeenCalledOnce();
+    expect(failed).not.toHaveBeenCalled();
+    expect(records).toHaveLength(1);
+    expect(records[0].id).toBe(job.jobId);
+    expect(await readFile(input.outputPath, 'utf8')).toBe('example-video');
+    expect(reactor.cancel(job.jobId)).toBe(false);
+  });
+
+  it('releases finalization ownership and reports one failure when publication fails', async () => {
+    mocks.finalize.mockRejectedValueOnce(new Error('History write failed'));
+    const failed = vi.fn();
+    const completed = vi.fn();
+    videoGenEvents.on('failed', failed);
+    videoGenEvents.on('completed', completed);
+    const job = await started();
+    await writeFile(input.outputPath, 'example-video');
+    child.stdout.emit('data', Buffer.from('{"type":"complete","clipId":"clip-example","seconds":6}\n'));
+    child.emit('close', 0);
+    await vi.waitFor(() => expect(reactor.getActiveJob()).toBeNull());
+    expect(failed).toHaveBeenCalledOnce();
+    expect(completed).not.toHaveBeenCalled();
+    expect(reactor.cancel(job.jobId)).toBe(false);
+    await expect(stat(input.outputPath)).rejects.toBeTruthy();
   });
 
   it('identifies connection timeouts before submission without exposing SDK diagnostics', async () => {
