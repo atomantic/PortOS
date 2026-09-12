@@ -1,6 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { act, render } from '@testing-library/react';
-import { fireEvent } from '@testing-library/dom';
+import { act, fireEvent, render } from '@testing-library/react';
 import { createMemoryRouter, RouterProvider } from 'react-router';
 
 // Regression guard for #3387: typing in the WorkEditor body must NOT re-render
