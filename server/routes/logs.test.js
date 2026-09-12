@@ -107,4 +107,33 @@ describe('log routes PM2_HOME resolution', () => {
       { env: {} }
     );
   });
+
+  it('keeps fragmented stdout and stderr separate and flushes their final lines before closing', async () => {
+    pm2Service.spawnPm2.mockImplementation(() => {
+      const child = makeLogProcess();
+      queueMicrotask(() => {
+        const text = Buffer.from('caf\u00e9 ready\nstdout tail');
+        child.stdout.emit('data', text.subarray(0, 4));
+        child.stderr.emit('data', Buffer.from('warning\nstderr tail'));
+        child.stdout.emit('data', text.subarray(4));
+        child.emit('close', 1);
+      });
+      return child;
+    });
+
+    const response = await request(createApp()).get('/api/logs/example-api?follow=true');
+    const frames = response.text.trim().split('\n\n').map(frame => {
+      const [event, data] = frame.split('\n');
+      return { event: event.slice('event: '.length), data: JSON.parse(data.slice('data: '.length)) };
+    });
+
+    expect(frames.map(({ event, data }) => [event, data.line ?? data.code])).toEqual([
+      ['connected', undefined],
+      ['stderr', 'warning'],
+      ['stdout', 'caf\u00e9 ready'],
+      ['stdout', 'stdout tail'],
+      ['stderr', 'stderr tail'],
+      ['close', 1],
+    ]);
+  });
 });

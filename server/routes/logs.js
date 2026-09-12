@@ -4,6 +4,7 @@ import * as pm2Service from '../services/pm2.js';
 import { spawnPm2 } from '../services/pm2.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { openSseStream } from '../lib/sseDownload.js';
+import { createLineReader } from '../lib/streamLines.js';
 
 const router = Router();
 
@@ -64,8 +65,6 @@ router.get('/:processName', asyncHandler(async (req, res) => {
     { env: pm2Service.buildEnv(pm2Home) }
   );
 
-  let buffer = '';
-
   const sendLine = (line, type = 'log') => {
     if (res.writableEnded || res.destroyed) return;
     if (line.trim()) {
@@ -77,25 +76,18 @@ router.get('/:processName', asyncHandler(async (req, res) => {
     }
   };
 
-  logProcess.stdout.on('data', (data) => {
-    buffer += data.toString();
-    const lines = buffer.split('\n');
-    buffer = lines.pop() || '';
-    lines.forEach(line => sendLine(line, 'stdout'));
-  });
-
-  logProcess.stderr.on('data', (data) => {
-    buffer += data.toString();
-    const lines = buffer.split('\n');
-    buffer = lines.pop() || '';
-    lines.forEach(line => sendLine(line, 'stderr'));
-  });
+  const stdoutReader = createLineReader(line => sendLine(line, 'stdout'));
+  const stderrReader = createLineReader(line => sendLine(line, 'stderr'));
+  logProcess.stdout.on('data', stdoutReader.push);
+  logProcess.stderr.on('data', stderrReader.push);
 
   logProcess.on('error', (err) => {
     res.write(`event: error\ndata: ${JSON.stringify({ error: err.message })}\n\n`);
   });
 
   logProcess.on('close', (code) => {
+    stdoutReader.flush();
+    stderrReader.flush();
     if (!res.writableEnded && !res.destroyed) {
       res.write(`event: close\ndata: ${JSON.stringify({ code })}\n\n`);
       safeEnd();
