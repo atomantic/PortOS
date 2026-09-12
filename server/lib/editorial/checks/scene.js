@@ -22,6 +22,11 @@ import {
   z,
 } from '../checkInfra.js';
 
+// The scene-progression calibration makes this stage materially larger than the
+// shared editorial-template reserve. Keep the chunk planner honest so manuscript
+// text never crowds the prompt itself out of a small provider window.
+const PLOT_STRUCTURE_PROMPT_OVERHEAD_TOKENS = 2_750;
+
 export const sceneChecks = [
   {
     id: 'scene.component-balance',
@@ -265,7 +270,7 @@ export const sceneChecks = [
     sources: ['manuscript', 'reverseOutline', 'reverseOutline.plotlines', 'series.arc.readerMap'],
     label: 'Plot structure & momentum',
     description:
-      'LLM scan for the macro pathologies editors flag at the manuscript/arc level: a passive protagonist (events happen TO them), deus ex machina / convenient coincidence, idiot plot (conflict that only persists because characters avoid the obvious), flat or unclear stakes that never escalate, a sagging middle with no try-fail rhythm, and dropped subplots. Reads the stitched manuscript plus the reverse-outline scene map + plotline coverage (reconciling fizzled threads against tagged plotlines) and the authored reader-map hooks/payoffs; degrades to a whole-manuscript scan when no outline exists.',
+      'LLM scan for structural pathologies at the manuscript, arc, and scene level: a passive protagonist, deus ex machina / convenient coincidence, idiot plot, flat or unclear stakes, a sagging middle with no try-fail rhythm, dropped subplots, and scenes that stall because characters repeat a tactic without an action, response, discovery, consequence, or change in the situation. Distinguishes repeated strategy from repeated wording and preserves purposeful quiet, connective, contemplative, and static passages. Reads the stitched manuscript plus the reverse-outline scene map + plotline coverage and authored reader-map hooks/payoffs; degrades to a whole-manuscript scan when no outline exists and omits whole-scene judgments when chunk context is incomplete.',
     scope: 'series',
     kind: 'llm',
     category: 'plot',
@@ -304,6 +309,7 @@ export const sceneChecks = [
       return runManuscriptLlmCheck(ctx, {
         stage: PLOT_STRUCTURE_STAGE,
         category: 'plot',
+        promptOverheadTokens: PLOT_STRUCTURE_PROMPT_OVERHEAD_TOKENS,
         // sceneMap grows unbounded with scene count; plotlineMap and authoredSetups
         // are bounded — so largest-first trimming absorbs the cut into sceneMap.
         context: { sceneMap, plotlineMap, authoredSetups },
