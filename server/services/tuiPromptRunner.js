@@ -707,9 +707,12 @@ ${prompt}`;
       // for a bogus quota marker, bench the provider, or launch a fallback.
       const stopRequested = consumeRunStopRequested(runId);
       const hostInterrupted = killed && isHostShuttingDown();
-      const canceled = killed && (stopRequested || hostInterrupted);
+      // A CLI can handle SIGTERM and exit through its shell with code 143
+      // (or cleanly), leaving node-pty's signal at 0. The explicit stop marker
+      // is authoritative regardless of how that process reports its exit.
+      const canceled = stopRequested || hostInterrupted;
       const finalExitCode = typeof exitCode === 'number' ? exitCode : (killed ? 130 : 0);
-      const success = !killed && finalExitCode === 0;
+      const success = !canceled && !killed && finalExitCode === 0;
       // The terminal-timeout detector holds a candidate banner until a real line
       // terminator proves the line is finished (#3715). Process exit IS that
       // proof — no further byte can turn `⎿ Request timed out` into a
@@ -734,7 +737,7 @@ ${prompt}`;
       if (hostInterrupted) {
         error = `TUI interrupted by PortOS shutdown (signal ${signal})`;
       } else if (stopRequested) {
-        error = `TUI canceled (signal ${signal})`;
+        error = killed ? `TUI canceled (signal ${signal})` : `TUI canceled (exit code ${finalExitCode})`;
       } else if (killed) {
         error = `TUI killed (signal ${signal})`;
       } else if (!success) {
