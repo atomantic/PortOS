@@ -323,6 +323,20 @@ describe('taskPromptDefaults integrity snapshot', () => {
     expect(PROMPT_VERSIONS['dependency-updates']).toBeGreaterThanOrEqual(3);
   });
 
+  it('dependency-updates inventories unpatched security alerts beyond npm and bot PRs', () => {
+    const current = DEFAULT_TASK_PROMPTS['dependency-updates'];
+    expect(current).toContain('--paginate');
+    expect(current).toContain('dependabot/alerts?state=open&per_page=100');
+    expect(current.indexOf('## Phase 0')).toBeLessThan(current.indexOf('## Phase 1'));
+    expect(current).toContain('critical, high, medium, low');
+    expect(current).toContain('Python requirements/locks');
+    expect(current).toContain('first patched version (which may be null)');
+    expect(current).toContain('AND the affected code');
+    expect(current).toContain('mitigated (upstream alert still open)');
+    expect(current).toContain('it is NOT zero alerts');
+    expect(PROMPT_VERSIONS['dependency-updates']).toBeGreaterThanOrEqual(5);
+  });
+
   // NOTE: PROMPT_VERSIONS keys are SCHEDULE keys, not always prompt keys —
   // code-reviewer-a/b version a pipeline whose stages use the
   // code-reviewer-review / code-reviewer-implement prompt bodies — so there is
