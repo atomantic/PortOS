@@ -96,7 +96,7 @@ describe('AutopilotPanel', () => {
     sseFrames = [sseLatest];
     view.rerender(<MemoryRouter><AutopilotPanel series={{ id: 's1', targetFormat: 'comic' }} /></MemoryRouter>);
     await waitFor(() => expect(toast.warning).toHaveBeenCalledTimes(1));
-    await act(async () => resolveStatus({ active: true, autopilot: { runId: 'r1' }, start: { mode: 'execute', provider: 'codex', model: 'selected-model' } }));
+    await act(async () => resolveStatus({ active: true, autopilot: null, start: { runId: 'r1', mode: 'execute', provider: 'codex', model: 'selected-model' } }));
     expect(screen.getByRole('button', { name: /run autopilot/i })).toBeInTheDocument();
     expect(toast.warning).toHaveBeenCalledTimes(1);
     expect(screen.queryByRole('button', { name: /pause safely/i })).not.toBeInTheDocument();

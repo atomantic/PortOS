@@ -783,6 +783,7 @@ export default function AutopilotPanel({ series, onSeriesUpdate, onIssuesUpdate 
   // the new run down. Terminal frames whose runId doesn't match are ignored.
   const activeRunIdRef = useRef(null);
   const settledRunIdRef = useRef(null);
+  const terminalVersionRef = useRef(0);
 
   // Read a run's `start` frame — mode (the dry-run badge), the resolved run
   // provider/model, and a dry-run's plan. Shared by the SSE frame and the
@@ -803,11 +804,15 @@ export default function AutopilotPanel({ series, onSeriesUpdate, onIssuesUpdate 
   useEffect(() => {
     if (!seriesId) return undefined;
     let canceled = false;
+    const terminalVersion = terminalVersionRef.current;
     getPipelineAutopilotStatus(seriesId, { silent: true })
       .then((s) => {
-        if (canceled || !s?.active) return;
-        if (settledRunIdRef.current && s.autopilot?.runId === settledRunIdRef.current) return;
-        activeRunIdRef.current = s.autopilot?.runId || null;
+        if (canceled || terminalVersion !== terminalVersionRef.current || !s?.active) return;
+        // The live start frame owns identity; the persisted marker can still
+        // describe a previous run, and dry-runs never persist one.
+        const runId = s.start?.runId || s.autopilot?.runId || null;
+        if (settledRunIdRef.current && runId === settledRunIdRef.current) return;
+        activeRunIdRef.current = runId;
         // SSE replays only the last frame, so the run's `start` frame comes back
         // on the status payload instead — same shape, same reader.
         if (s.start) applyStartFrame(s.start);
@@ -844,6 +849,7 @@ export default function AutopilotPanel({ series, onSeriesUpdate, onIssuesUpdate 
     // Ignore a terminal frame left over from a previous run (stale `latest`).
     if (activeRunIdRef.current && latest.runId && latest.runId !== activeRunIdRef.current) return;
     settledRunIdRef.current = latest.runId || activeRunIdRef.current;
+    terminalVersionRef.current += 1;
     setActive(false);
     setPausePending(false);
     // Freeze the map on how this run ended: a paused/errored run keeps its
