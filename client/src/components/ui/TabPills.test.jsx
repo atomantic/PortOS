@@ -228,3 +228,22 @@ describe('TabPills — filter variant', () => {
     expect(onChange).toHaveBeenCalledWith('objects');
   });
 });
+
+it('reveals selections without scrolling again for refreshed tab data', () => {
+  const scroll = vi.spyOn(HTMLElement.prototype, 'scrollIntoView').mockImplementation(() => {});
+  try {
+    const view = (activeTab, tabs) => <><TabPills tabs={tabs} activeTab={activeTab} onChange={vi.fn()} /><input aria-label="Draft" /></>;
+    const { rerender } = render(view('cast', []));
+    expect(scroll).not.toHaveBeenCalled();
+    rerender(view('cast', sampleTabs));
+    expect(scroll).toHaveBeenCalledTimes(1);
+    screen.getByRole('textbox', { name: 'Draft' }).focus();
+    rerender(view('cast', sampleTabs.map(tab => ({ ...tab, count: 10 }))));
+    expect(scroll).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole('textbox', { name: 'Draft' })).toHaveFocus();
+    rerender(view('places', sampleTabs));
+    expect(scroll).toHaveBeenCalledTimes(2);
+  } finally {
+    scroll.mockRestore();
+  }
+});
