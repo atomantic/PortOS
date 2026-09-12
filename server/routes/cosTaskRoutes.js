@@ -9,6 +9,7 @@ import * as taskWatcher from '../services/taskWatcher.js';
 import { enhanceTaskPrompt } from '../services/taskEnhancer.js';
 import { buildClaimWorkTask, buildIssueReplanTask, buildJiraTicketTask } from '../services/cosTaskGenerator.js';
 import { getAppById, getAppWorkTracker, PORTOS_APP_ID } from '../services/apps.js';
+import { prepareAppIssueClaim } from '../services/appIssues.js';
 import { getAssignableInstances } from '../services/instances.js';
 import { resolveManagedAppIssueTarget } from '../services/managedAppRepositories.js';
 import { workTrackerLabel } from '../lib/workTracker.js';
@@ -308,6 +309,9 @@ router.post('/tasks/slashdo', asyncHandler(async (req, res) => {
       reviewerModels,
       reviewerEfforts
     });
+    if (claim.target && ['github', 'gitlab'].includes(claim.tracker)) {
+      await prepareAppIssueClaim(appObj, claim.target, claim.tracker);
+    }
     const scope = claim.target
       ? `claim ${workTrackerLabel(claim.tracker)} item ${claim.target}`
       : `claim next ${workTrackerLabel(claim.tracker)} item`;

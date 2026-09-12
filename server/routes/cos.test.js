@@ -1,3 +1,5 @@
+vi.mock('../services/appIssues.js', () => ({ prepareAppIssueClaim: vi.fn() }));
+import { prepareAppIssueClaim } from '../services/appIssues.js';
 import { describe, it, expect, vi, beforeEach, afterAll } from 'vitest';
 import express from 'express';
 import { rmSync } from 'node:fs';
@@ -1220,6 +1222,16 @@ describe('CoS Routes', () => {
       expect(cos.addTask).not.toHaveBeenCalled();
     });
 
+    it('does not queue a manual claim when contributor-label cleanup fails', async () => {
+      getAppById.mockResolvedValue({ id: 'my-app', name: 'MyApp', repoPath: '/repo' });
+      buildClaimWorkTask.mockResolvedValue({ tracker: 'github', target: '42' });
+      prepareAppIssueClaim.mockRejectedValueOnce(new ServerError('Labels remain', { status: 502, code: 'CLAIM_LABELS_REMAIN' }));
+      const response = await request(app).post('/api/cos/tasks/slashdo')
+        .send({ command: 'next', app: 'my-app', target: '42' });
+      expect(response.status).toBe(502);
+      expect(cos.addTask).not.toHaveBeenCalled();
+    });
+
     it('routes /do:next through the app Work Tracker instead of the raw command', async () => {
       getAppById.mockResolvedValue({ id: 'my-app', name: 'MyApp', repoPath: '/repo' });
       buildClaimWorkTask.mockResolvedValue({
@@ -1251,6 +1263,7 @@ describe('CoS Routes', () => {
       expect(taskData.slashdoCommand).toBeUndefined();
       expect(taskData.description).not.toContain('/do:');
       expect(taskData.claimFlow).toBe(true);
+      expect(prepareAppIssueClaim).not.toHaveBeenCalled();
     });
 
     // The claim prompt names its reviewers as prose and emits no flag, so the
@@ -1372,6 +1385,8 @@ describe('CoS Routes', () => {
         });
 
       expect(response.status).toBe(200);
+      expect(prepareAppIssueClaim).toHaveBeenCalledWith(expect.objectContaining({ id: 'my-app' }), '412', 'github');
+      expect(prepareAppIssueClaim.mock.invocationCallOrder[0]).toBeLessThan(cos.addTask.mock.invocationCallOrder[0]);
       expect(buildClaimWorkTask).toHaveBeenCalledWith(
         expect.objectContaining({ id: 'my-app' }),
         {
