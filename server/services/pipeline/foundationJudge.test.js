@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { sanitizeCharacter } from '../../lib/storyBible.js';
 
 // I/O is the only thing mocked in fileUtils — PATHS/safeJSONParse stay real so
 // the snapshot round-trip logic runs against the actual parser.
@@ -11,6 +12,7 @@ vi.mock('../../lib/fileUtils.js', async (importActual) => ({
 
 vi.mock('../stageRunner.js', () => ({
   runStagedLLM: vi.fn(),
+  runStageScopedInlineLLM: vi.fn(),
   resolveStageContext: vi.fn(async () => ({ contextWindow: 200_000 })),
   resolveJudgeForStage: vi.fn(async () => ({ provider: { id: 'judge-x' }, model: 'jm-heavy' })),
 }));
@@ -1242,13 +1244,142 @@ describe('applyFoundationFix — dimension → owning-service routing table', ()
     }
   });
 
-  it('refuses an oversized single-character repair before calling a provider or writing canon', async () => {
-    const universe = { id: 'uni-1', characters: [{ id: 'lead', name: 'Lead', background: 'x'.repeat(20_000) }] };
-    universeBuilder.getUniverse.mockResolvedValue(universe);
-    await expect(applyFoundationFix('ser-1', 'character', { finding: { gap: 'Lead needs a clearer fear.' } }))
-      .rejects.toThrow('cannot safely fit the complete repair context for Lead');
-    expect(stageRunner.runStagedLLM).not.toHaveBeenCalled();
-    expect(universeBuilder.updateUniverse).not.toHaveBeenCalled();
+  describe('oversized character repairs', () => {
+    const original = {
+      id: 'lead', name: 'Lead', wound: 'Old wound',
+      background: 'Established history. '.repeat(1_000) + 'FINAL DEPENDENCY',
+      props: [{ name: 'Token', notes: 'Never traded. '.repeat(400) }],
+      customContext: { relationship: 'Must protect the navigator' },
+    };
+    const decode = (prompt) => JSON.parse(prompt.split('\nCharacter context:\n')[1]);
+    let universe;
+    let saved;
+    let passes;
+    beforeEach(() => {
+      universe = { id: 'uni-1', characters: [structuredClone(original)] };
+      saved = undefined;
+      passes = [];
+      universeBuilder.getUniverse.mockResolvedValue(universe);
+      universeBuilder.updateUniverse.mockImplementation(async (_id, mutator) => {
+        const result = mutator(universe);
+        saved = result ? { ...universe, ...result } : universe;
+        return saved;
+      });
+      stageRunner.runStageScopedInlineLLM.mockImplementation(async (_stage, prompt) => {
+        const data = decode(prompt);
+        passes.push(data);
+        expect(prompt.length).toBeLessThanOrEqual(40_000);
+        expect(prompt.split('\nCharacter context:\n')[1].length).toBeLessThanOrEqual(12_000);
+        expect(saved).toBeUndefined();
+        if (data.operation === 'extract') return { content: { chunkId: data.chunkId, complete: true, constraints: [`Constraint ${data.chunkId}`] } };
+        if (data.operation === 'repair') return { content: { patch: { wound: 'A specific fear of abandoning her crew.' } } };
+        return { content: { chunkId: data.chunkId, valid: true, violations: [] } };
+      });
+    });
+
+    it('extracts and validates every original field before applying only the canonical patch', async () => {
+      const onRunCreated = vi.fn();
+      const onRunSettled = vi.fn();
+      const result = await applyFoundationFix('ser-1', 'character', {
+        finding: { gap: 'Lead needs a clearer fear.' }, providerOverride: 'writer', modelOverride: 'writer-model',
+        effortOverride: 'high', onRunCreated, onRunSettled,
+      });
+      expect(result.applied).toBe(true);
+      expect(stageRunner.runStagedLLM).not.toHaveBeenCalled();
+      const extracts = passes.filter((p) => p.operation === 'extract');
+      const validations = passes.filter((p) => p.operation === 'validate');
+      expect(extracts.length).toBeGreaterThan(1);
+      expect(validations.map((p) => p.chunk)).toEqual(extracts.map((p) => p.chunk));
+      const entries = extracts.flatMap((p) => p.chunk);
+      for (const [field, value] of Object.entries(original)) {
+        const matching = entries.filter((entry) => entry.path[0] === field);
+        if (field === 'background') expect(matching.map((entry) => entry.value).join('')).toBe(value);
+        else if (field === 'props') {
+          expect(matching.find((entry) => entry.path.at(-1) === 'name').value).toBe('Token');
+          expect(matching.filter((entry) => entry.path.at(-1) === 'notes').map((entry) => entry.value).join('')).toBe(value[0].notes);
+        } else expect(matching).toEqual([{ path: [field], value }]);
+      }
+      const constraints = extracts.map((p) => ({ chunkId: p.chunkId, constraints: [`Constraint ${p.chunkId}`] }));
+      expect(passes.find((p) => p.operation === 'repair').constraints).toEqual(constraints);
+      expect(validations.every((p) => JSON.stringify(p.constraints) === JSON.stringify(constraints))).toBe(true);
+      expect(saved.characters[0]).toEqual({ ...original, wound: 'A specific fear of abandoning her crew.' });
+      expect(universe.characters[0]).toEqual(original);
+      expect(seriesSvc.updateSeries).not.toHaveBeenCalled();
+      expect(stageRunner.runStageScopedInlineLLM).toHaveBeenCalledWith('pipeline-character-foundation', expect.any(String), expect.objectContaining({
+        providerDefault: 'writer', modelDefault: 'writer-model', effortDefault: 'high', onRunCreated, onRunSettled,
+        timeoutOverride: __testing.CHARACTER_FOUNDATION_TIMEOUT_MS,
+      }));
+    });
+
+    it('preserves a large valid character through the storage sanitizer', async () => {
+      const valid = sanitizeCharacter({
+        ...original,
+        props: [{ name: 'Token', notes: 'Never traded.' }],
+        ...Object.fromEntries(['background', 'personality', 'relationships', 'skills', 'physicalDescription', 'visualNotes', 'likes', 'dislikes', 'mannerisms'].map((field) => [field, `${field} established detail. `.repeat(100).slice(0, 1_400).trim()])),
+      });
+      expect(JSON.stringify(valid).length).toBeGreaterThan(12_000);
+      universe.characters = [valid];
+      universeBuilder.updateUniverse.mockImplementation(async (_id, mutator) => {
+        const patch = mutator(universe);
+        saved = { ...universe, characters: patch.characters.map((c) => sanitizeCharacter(c)) };
+        return saved;
+      });
+      await applyFoundationFix('ser-1', 'character', { finding: { gap: 'Lead fear' } });
+      expect(saved.characters[0]).toEqual({ ...valid, wound: 'A specific fear of abandoning her crew.' });
+    });
+
+    it('discards an earlier normal batch when a later overflow repair fails', async () => {
+      universe.characters.unshift({ id: 'other', name: 'Other', wound: 'Original wound' });
+      stageRunner.runStagedLLM.mockResolvedValue({ content: { characters: [{ id: 'other', wound: 'Proposed wound' }] } });
+      stageRunner.runStageScopedInlineLLM.mockRejectedValue(new Error('overflow provider failed'));
+      await expect(applyFoundationFix('ser-1', 'character', { finding: { gap: 'The ensemble needs distinct fears.' } })).rejects.toThrow('overflow provider failed');
+      expect(stageRunner.runStagedLLM).toHaveBeenCalledTimes(1);
+      expect(universeBuilder.updateUniverse).not.toHaveBeenCalled();
+      expect(seriesSvc.updateSeries).not.toHaveBeenCalled();
+      expect(universe.characters[0].wound).toBe('Original wound');
+    });
+
+    it.each(['extract', 'validate'])('applies nothing when a later %s pass fails', async (operation) => {
+      const succeed = stageRunner.runStageScopedInlineLLM.getMockImplementation();
+      stageRunner.runStageScopedInlineLLM.mockImplementation(async (stage, prompt) => {
+        const data = decode(prompt);
+        if (data.operation === operation && data.chunkId === 2) throw new Error('provider failed');
+        return succeed(stage, prompt);
+      });
+      await expect(applyFoundationFix('ser-1', 'character', { finding: { gap: 'Lead fear' } })).rejects.toThrow('provider failed');
+      expect(universeBuilder.updateUniverse).not.toHaveBeenCalled();
+      expect(seriesSvc.updateSeries).not.toHaveBeenCalled();
+      expect(universe.characters[0]).toEqual(original);
+    });
+
+    it.each([
+      ['missing chunk acknowledgement', 'extract', {}],
+      ['unbounded constraints', 'extract', { complete: true, constraints: ['x'.repeat(3_001)] }],
+      ['immutable supporting edit', 'repair', { patch: { background: 'A summary' } }],
+      ['invalid storage value', 'repair', { patch: { wound: 42 } }],
+      ['extra character creation', 'repair', { patch: { wound: 'New fear' }, newCharacters: [{ name: 'Intruder' }] }],
+      ['rejected validation', 'validate', { valid: false, violations: ['Contradiction'] }],
+      ['incomplete validation', 'validate', { valid: true }],
+    ])('rejects %s without saving', async (_name, operation, content) => {
+      const succeed = stageRunner.runStageScopedInlineLLM.getMockImplementation();
+      stageRunner.runStageScopedInlineLLM.mockImplementation(async (stage, prompt) => {
+        const data = decode(prompt);
+        if (data.operation === operation) return { content: { chunkId: data.chunkId, ...content } };
+        return succeed(stage, prompt);
+      });
+      await expect(applyFoundationFix('ser-1', 'character', { finding: { gap: 'Lead fear' } })).rejects.toThrow('overflow repair failed');
+      expect(universeBuilder.updateUniverse).not.toHaveBeenCalled();
+      expect(seriesSvc.updateSeries).not.toHaveBeenCalled();
+    });
+
+    it('refuses to apply a patch if its validated source changed', async () => {
+      universeBuilder.updateUniverse.mockImplementation(async (_id, mutator) => mutator({
+        ...universe, characters: [{ ...original, background: 'A concurrent authored revision' }],
+      }));
+      await expect(applyFoundationFix('ser-1', 'character', { finding: { gap: 'Lead fear' } })).rejects.toThrow('source changed');
+      expect(saved).toBeUndefined();
+      expect(seriesSvc.updateSeries).not.toHaveBeenCalled();
+    });
   });
 
   it('routes structure → arc resolve (resolveVerifyIssues) with a synthesized finding', async () => {
