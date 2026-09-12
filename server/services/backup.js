@@ -878,6 +878,28 @@ export async function openSnapshotStream(destPath, snapshotId) {
   return archive;
 }
 
+async function reconcileLiveFileRestore(subdirFilter) {
+  const refreshes = [
+    ...(!subdirFilter || subdirFilter === 'brain' || subdirFilter.startsWith('brain/')
+      ? [{ label: 'Brain cache invalidation', run: invalidateBrainCaches }]
+      : []),
+    { label: 'settings reload', run: reloadSettings },
+  ];
+  const results = await Promise.allSettled(
+    refreshes.map(({ run }) => Promise.resolve().then(run)),
+  );
+  const failures = results.flatMap((result, index) => result.status === 'rejected'
+    ? [`${refreshes[index].label}: ${result.reason?.message ?? String(result.reason)}`]
+    : []);
+
+  if (failures.length > 0) {
+    throw new Error(
+      `Live restore cache reconciliation failed (${failures.join('; ')}). Restart PortOS before relying on restored settings or Brain data.`,
+      { cause: results.find(result => result.status === 'rejected').reason },
+    );
+  }
+}
+
 /**
  * Restore a snapshot back to PATHS.data using rsync.
  * @param {string} destPath - Path to external drive backup root
@@ -908,32 +930,28 @@ export async function restoreSnapshot(destPath, snapshotId, { dryRun = true, sub
     flags.push('--exclude=*');
   }
 
-  let changedFiles;
-  try {
-    changedFiles = await runRsync(srcDir, PATHS.data, flags);
-  } catch (err) {
-    if (!dryRun) {
-      const partialRestoreError = new Error(
-        `${err.message}. Some files may already have been overwritten because file restore is not transactional.`,
-        { cause: err },
-      );
-      if (err?.code) partialRestoreError.code = err.code;
-      throw partialRestoreError;
-    }
-    throw err;
+  // Rsync may overwrite live files before reporting failure. Settle the
+  // transfer so every live attempt reaches reconciliation before it rejects.
+  const [transfer] = await Promise.allSettled([runRsync(srcDir, PATHS.data, flags)]);
+  const reconciliationError = !dryRun
+    ? await reconcileLiveFileRestore(subdirFilter).then(
+      () => null,
+      error => error,
+    )
+    : null;
+
+  if (transfer.status === 'rejected') {
+    if (dryRun) throw transfer.reason;
+    const partialRestoreError = new Error(
+      `${transfer.reason.message}. Some files may already have been overwritten because file restore is not transactional.${reconciliationError ? ` ${reconciliationError.message}` : ''}`,
+      { cause: transfer.reason },
+    );
+    if (transfer.reason?.code) partialRestoreError.code = transfer.reason.code;
+    throw partialRestoreError;
   }
-  if (!dryRun) {
-    // A live restore writes outside normal service mutation paths. Re-sync the
-    // caches whose backing files may have changed instead of serving the
-    // pre-restore projection until each record is next mutated or the process
-    // restarts. Selective restores may target either `brain` itself or a nested
-    // path such as `brain/inbox`.
-    if (!subdirFilter || subdirFilter === 'brain' || subdirFilter.startsWith('brain/')) {
-      invalidateBrainCaches();
-    }
-    await reloadSettings();
-  }
-  return { dryRun, snapshotId, subdirFilter, changedFiles };
+  if (reconciliationError) throw reconciliationError;
+
+  return { dryRun, snapshotId, subdirFilter, changedFiles: transfer.value };
 }
 
 /**
