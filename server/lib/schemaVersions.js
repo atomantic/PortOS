@@ -194,7 +194,8 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // a wholly-absent `characterArcs`, not a present-but-sub-field-stripped
   // one). Bump makes the older peer reject the ahead-version series transfer
   // instead. Per-category gate → only series sync pauses with old peers.
-  pipelineSeries: 13,
+  // v14: author-owned arc.seriesDesign; older sanitizers must not erase it.
+  pipelineSeries: 14,
   // NOT bumped for the manuscript-review sibling doc now bundled on series
   // pushes/exports (`data/pipeline-series/{id}/manuscript-review.json`).
   // Unlike `readerMap` (v2), the review is NOT a field inside the series

@@ -509,6 +509,7 @@ function projectArc(series) {
     protagonistArc: arc.protagonistArc || '',
     themes: Array.isArray(arc.themes) ? arc.themes : [],
     shape: arc.shape || null,
+    ...(arc.seriesDesign ? { seriesDesign: arc.seriesDesign } : {}),
   };
 }
 // Project the SEMANTIC content of each canon character — the same prompt-field
@@ -1058,7 +1059,7 @@ export async function refineStep(id, stepId, { feedback, entryId, providerId, mo
     if (latest.locked?.arc === true) {
       throw makeErr('Arc is locked — unlock it on the Arc Canvas before refining', ARC_ERR_VALIDATION);
     }
-    const mergedArc = mergeArcWithLocks(latest.arc, arc, latest.locked?.arcFields);
+    const mergedArc = mergeArcWithLocks(latest.arc, { ...arc, seriesDesign: latest.arc?.seriesDesign ?? null }, latest.locked?.arcFields);
     const updated = await updateSeries(session.seriesId, { arc: mergedArc });
     return { result: updated, changes, rationale, runId, providerId: usedProviderId, model: usedModel };
   }

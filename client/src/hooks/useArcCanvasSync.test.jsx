@@ -73,7 +73,7 @@ describe('useArcCanvasSync', () => {
     expect(patch.name).toBe('B');
   });
 
-  it('calls onFlushError and returns false when the PATCH rejects', async () => {
+  it('calls onFlushError and returns null when the PATCH rejects', async () => {
     const server = { id: 's1', name: 'A' };
     updatePipelineSeries.mockRejectedValue(new Error('boom'));
     const onFlushError = vi.fn();
@@ -84,7 +84,7 @@ describe('useArcCanvasSync', () => {
     act(() => { result.current.setSeries((s) => ({ ...s, name: 'B' })); });
     let did;
     await act(async () => { did = await result.current.flushPending(); });
-    expect(did).toBe(false);
+    expect(did).toBe(null);
     expect(onFlushError).toHaveBeenCalledWith(expect.any(Error));
   });
 

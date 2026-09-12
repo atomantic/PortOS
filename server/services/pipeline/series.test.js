@@ -65,6 +65,14 @@ describe('pipeline series service', () => {
   });
 
 
+  it('sync preserves an omitted authored brief even in an otherwise empty old arc, but honors explicit clear', async () => {
+    const local = await svc.createSeries({ name: 'Repair crew', arc: { seriesDesign: { mode: 'renewable', continuingTensions: 'Rival approaches to repair.' } } });
+    await svc.mergeSeriesFromSync([{ ...local, arc: {}, updatedAt: '2099-01-01T00:00:00.000Z' }]);
+    expect((await svc.getSeries(local.id)).arc.seriesDesign).toEqual(local.arc.seriesDesign);
+    await svc.mergeSeriesFromSync([{ ...local, arc: { logline: 'Crew', seriesDesign: null }, updatedAt: '2099-01-02T00:00:00.000Z' }]);
+    expect((await svc.getSeries(local.id)).arc.seriesDesign).toBeUndefined();
+  });
+
   it('projects names and summaries while retaining full editor records and hiding tombstones', async () => {
     await svc.createSeries({
       name: 'Story', universeId: 'u-test', logline: 'A city goes silent.',

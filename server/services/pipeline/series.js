@@ -13,7 +13,7 @@
 
 import { randomUUID } from 'crypto';
 import { getSeriesStore } from './seriesStore/store.js';
-import { sanitizeArc, sanitizeSeasonList } from '../../lib/storyArc.js';
+import { sanitizeArc, sanitizeSeasonList, sanitizeSeriesDesign } from '../../lib/storyArc.js';
 import { sanitizeCharacterArcList } from '../../lib/seriesCharacterArc.js';
 import { sanitizeStyleGuide } from '../../lib/styleGuide.js';
 import { sanitizeProseExportSettings } from '../../lib/proseExportSettings.js';
@@ -903,6 +903,11 @@ export async function updateSeries(id, patch = {}) {
     const cur = await store().loadOne(id);
     if (!cur) throw makeErr(`Series not found: ${id}`, ERR_NOT_FOUND);
     if (cur.deleted) throw makeErr(`Series not found: ${id}`, ERR_NOT_FOUND);
+    if (cur.locked?.arc === true && Object.hasOwn(patch, 'arc')
+      && (patch.arc === null || Object.hasOwn(patch.arc || {}, 'seriesDesign'))
+      && JSON.stringify(sanitizeSeriesDesign(patch.arc?.seriesDesign)) !== JSON.stringify(cur.arc?.seriesDesign ?? null)) {
+      throw makeErr('Arc is locked — unlock it before changing the series design', ERR_VALIDATION);
+    }
     // Hierarchy invariant: a series lives in exactly one universe. Reject
     // clearing the link once it's set — moving to a *different* non-empty
     // universe is fine, and a legacy orphan (cur.universeId === null) is still
@@ -931,7 +936,8 @@ export async function updateSeries(id, patch = {}) {
       ...('premise' in patch ? { premise: patch.premise } : {}),
       ...('universeId' in patch ? { universeId: patch.universeId } : {}),
       ...('writersRoomWorkId' in patch ? { writersRoomWorkId: patch.writersRoomWorkId } : {}),
-      ...('arc' in patch ? { arc: patch.arc } : {}),
+      ...('arc' in patch ? { arc: patch.arc && !Object.hasOwn(patch.arc, 'seriesDesign') && cur.arc?.seriesDesign
+        ? { ...patch.arc, seriesDesign: cur.arc.seriesDesign } : patch.arc } : {}),
       ...('seasons' in patch ? { seasons: patch.seasons } : {}),
       // Wholesale replace — `characterArcs: []` clears all arcs; omission
       // preserves. sanitizeCharacterArcList drops empties + dedupes by identity.
@@ -1198,7 +1204,7 @@ const ADDITIVE_SERIES_FIELDS = ['arc', 'seasons', 'styleGuide', 'styleNotes', 'c
 // still sends an `arc` object — just without these keys — so the erasure for
 // them happens one level down. (The v10 gate rejects OLDER peers; this list
 // additionally guards a SAME-version peer whose arc simply omits the key.)
-const ADDITIVE_ARC_FIELDS = ['readerMap', 'tickingClock', 'foreshadowing'];
+const ADDITIVE_ARC_FIELDS = ['readerMap', 'tickingClock', 'foreshadowing', 'seriesDesign'];
 
 const keyAbsent = (obj, key) => !obj || typeof obj !== 'object' || !(key in obj) || obj[key] === undefined;
 
@@ -1214,6 +1220,12 @@ export const preserveAbsentAdditiveFields = (sanitized, rawRemote, local) => {
   if (!sanitized || sanitized.deleted || !local || typeof local !== 'object') return sanitized;
   for (const field of ADDITIVE_SERIES_FIELDS) {
     if (keyAbsent(rawRemote, field)) sanitized[field] = local[field];
+  }
+  // An older arc containing no remaining identifying fields sanitizes to null.
+  // Recover authored design before the nested merge so omission still preserves it.
+  if (!sanitized.arc && rawRemote.arc && typeof rawRemote.arc === 'object'
+    && keyAbsent(rawRemote.arc, 'seriesDesign') && local.arc?.seriesDesign) {
+    sanitized.arc = sanitizeArc({ ...rawRemote.arc, seriesDesign: local.arc.seriesDesign });
   }
   // Nested arc sub-fields: only when the remote DID send an `arc` object (so the
   // top-level preserve above didn't already restore the whole arc) and both the
