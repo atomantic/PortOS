@@ -1670,9 +1670,15 @@ describe('arcPlanner — resolveVerifyIssues', () => {
       resolves: ['f1'], seasonNumber: season.number, episodeNumber: issue.number,
       arcRole: 'complication', lengthProfile: 'custom', pageTarget: 36, minutesTarget: 42,
     }] } }));
-    const repaired = await planner.resolveVerifyIssues(s.id, { findings: [{ severity: 'medium', problem: 'Correct the turn metadata.' }] });
+    const length = await planner.resolveVerifyIssues(s.id, { findings: [{ severity: 'medium', problem: 'Correct the turn length.' }] });
     await issuesSvc.updateIssue(issue.id, { pageTarget: 48 });
-    await planner.restoreArcState(s.id, snapshot, { episodeEdits: planner.resolvedEpisodeEdits(repaired) });
+    stageRunnerSpy = vi.fn(async () => ({ content: { episodes: [{
+      resolves: ['f1'], seasonNumber: season.number, episodeNumber: issue.number, arcRole: 'finale',
+    }] } }));
+    const role = await planner.resolveVerifyIssues(s.id, { findings: [{ severity: 'medium', problem: 'Correct the turn role.' }] });
+    await planner.restoreArcState(s.id, snapshot, {
+      episodeEdits: [...planner.resolvedEpisodeEdits(length), ...planner.resolvedEpisodeEdits(role)],
+    });
     const restored = await issuesSvc.getIssue(issue.id);
     expect(restored).toMatchObject({ arcRole: 'b-plot', lengthProfile: 'custom', pageTarget: 48, minutesTarget: 42 });
     expect(restored.stages.idea).toMatchObject({ input: 'Original synopsis.', output: '', status: 'empty' });

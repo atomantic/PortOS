@@ -1256,9 +1256,18 @@ export async function restoreArcState(seriesId, snapshot, { episodeEdits = null 
   const ownedEdits = Array.isArray(episodeEdits) ? new Map() : null;
   for (const edit of Array.isArray(episodeEdits) ? episodeEdits : []) {
     const prior = ownedEdits.get(edit.issueId) || {};
+    const metadata = edit.metadata || {};
+    const lengthChanged = EPISODE_METADATA_FIELDS.slice(1).some((field) => Object.hasOwn(metadata, field));
     ownedEdits.set(edit.issueId, {
       ...prior, ...edit,
-      metadata: { ...prior.metadata, ...edit.metadata },
+      metadata: { ...prior.metadata, ...metadata },
+      // A role-only repair records a fresh full metadata guard, but it does not
+      // take ownership of the length choice. Keep the guard from the last edit
+      // that actually changed length fields so a later authored target remains
+      // outside this round's rollback scope.
+      metadataGuard: lengthChanged
+        ? (edit.metadataGuard || metadata)
+        : (prior.metadataGuard || prior.metadata),
     });
   }
   const stageUpdates = [];
