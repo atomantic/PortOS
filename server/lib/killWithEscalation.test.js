@@ -102,5 +102,6 @@ describe('killWithEscalation', () => {
     const timer = killWithEscalation(proc, { label: 'test job', stillRunning: () => true });
     // Node timers expose unref(); assert we returned a timer handle.
     expect(timer).toBeDefined();
+    expect(timer.hasRef?.()).toBe(false);
   });
 });

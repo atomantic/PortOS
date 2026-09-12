@@ -158,6 +158,10 @@ export default defineConfig(({ command, mode }) => {
         template: 'treemap',
       }),
     ].filter(Boolean),
+    resolve: {
+      // Share Three.js without bypassing its package exports with a directory alias.
+      dedupe: ['three'],
+    },
     // Recharts is imported by lazy-loaded pages. Its published ESM files use
     // bare es-toolkit/compat/* imports, so prebundle it before a lazy tab can
     // expose those specifiers directly to the browser.
