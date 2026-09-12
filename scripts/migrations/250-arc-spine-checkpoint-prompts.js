@@ -17,8 +17,8 @@ export const ACCEPTED_OLD_MD5 = {
 };
 
 export const NEW_SHIPPED_MD5 = {
-  'pipeline-arc-overview.md': '5ed760caaf3cf88916ec28b220e2f590',
-  'pipeline-arc-verify.md': 'f09e81655ec897c74a2fae68ad31b9c4', // post-276 distinct climax
+  'pipeline-arc-overview.md': '901557b9f146a2d279ce2e81bda24d73',
+  'pipeline-arc-verify.md': '090920d816beef8dfc12ee6152511456', // post-276 distinct climax
 };
 
 const { applyMigration, up } = makePromptReplaceMigration({

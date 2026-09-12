@@ -1148,7 +1148,7 @@ function StoryBuilderDetail({ storyId, stepParam }) {
     // last edits are silently lost (#3907). Unlocking re-opens the step and has
     // nothing to preserve, so it skips the flush.
     patchFn: async (next) => {
-      if (next) await flushPending();
+      if (next && await flushPending() === null) return null;
       return next ? lockStoryStep(storyId, activeStepId, { silent: true }) : unlockStoryStep(storyId, activeStepId, { silent: true });
     },
     onSuccess: (_updated, next) => {

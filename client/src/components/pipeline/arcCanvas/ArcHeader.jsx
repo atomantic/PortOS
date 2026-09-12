@@ -61,9 +61,12 @@ export default function ArcHeader({ series, onSeriesUpdate, onIssuesUpdate, onFl
   }, [series.id]);
 
   const { busy: lockBusy, toggle: toggleArcLock } = useLockToggle({
-    patchFn: (next) => updatePipelineSeries(series.id, {
-      locked: { ...(series.locked || {}), arc: next },
-    }, { silent: true }),
+    patchFn: async (next) => {
+      if (next && onFlushPending && await onFlushPending() === null) return null;
+      return updatePipelineSeries(series.id, {
+        locked: { ...(series.locked || {}), arc: next },
+      }, { silent: true });
+    },
     onSuccess: (updated, next) => {
       onSeriesUpdate(updated);
       if (next) setConfirmingRegen(false);
@@ -82,7 +85,7 @@ export default function ArcHeader({ series, onSeriesUpdate, onIssuesUpdate, onFl
   // so typing "32" into the issue count and clicking Regenerate runs against
   // the on-screen value, not the previously-saved one.
   const withFlush = async (fn) => {
-    if (onFlushPending) await onFlushPending();
+    if (onFlushPending && await onFlushPending() === null) return null;
     return fn();
   };
 
@@ -347,13 +350,12 @@ export default function ArcHeader({ series, onSeriesUpdate, onIssuesUpdate, onFl
         </div>
       ) : null}
 
-      {arc ? (
-        <ArcContent series={series} onSeriesUpdate={onSeriesUpdate} onRegisterDraftFlush={onRegisterDraftFlush} />
-      ) : (
+      <ArcContent key={series.id} series={series} onSeriesUpdate={onSeriesUpdate} onRegisterDraftFlush={onRegisterDraftFlush} />
+      {!arc ? (
         <p className="text-xs text-gray-500 italic">
-          No arc yet — describe the series in the bible, then click <em>Generate arc</em> to have an LLM propose a multi-volume spine + volume breakdown.
+          No arc yet — describe the series in the bible, optionally add a Series design brief, then click <em>Generate arc</em> to have an LLM propose a multi-volume spine + volume breakdown.
         </p>
-      )}
+      ) : null}
 
       {verifyIssues && verifyIssues.length > 0 ? (
         <VerifyResults

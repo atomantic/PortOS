@@ -65,6 +65,23 @@ describe('pipeline series service', () => {
   });
 
 
+  it.each([false, true])('sync preserves omitted intent and exports explicit clears (populated arc: %s)', async (populated) => {
+    const local = await svc.createSeries({ name: 'Repair crew', arc: { seriesDesign: { mode: 'renewable', continuingTensions: 'Rival approaches to repair.' } } });
+    await svc.mergeSeriesFromSync([{ ...local, arc: {}, updatedAt: '2099-01-01T00:00:00.000Z' }]);
+    expect((await svc.getSeries(local.id)).arc.seriesDesign).toEqual(local.arc.seriesDesign);
+    const cleared = await svc.updateSeries(local.id, { arc: { ...(populated ? { logline: 'Crew' } : {}), seriesDesign: null } });
+    // Export uses the persisted record, not the raw PATCH: the clear marker must
+    // survive JSON serialization before a receiving peer can honor it.
+    const outgoing = JSON.parse(JSON.stringify(cleared));
+    if (populated) expect(outgoing.arc.seriesDesign).toBeNull();
+    else expect(outgoing.arc).toBeNull();
+    await svc.updateSeries(local.id, { arc: local.arc }); // receiving peer still holds the old brief
+    await svc.mergeSeriesFromSync([{ ...outgoing, updatedAt: '2099-01-02T00:00:00.000Z' }]);
+    const received = await svc.getSeries(local.id);
+    if (populated) expect(received.arc.seriesDesign).toBeNull();
+    else expect(received.arc).toBeNull();
+  });
+
   it('projects names and summaries while retaining full editor records and hiding tombstones', async () => {
     await svc.createSeries({
       name: 'Story', universeId: 'u-test', logline: 'A city goes silent.',

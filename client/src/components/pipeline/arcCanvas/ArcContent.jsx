@@ -7,9 +7,12 @@ import FieldLockToggle from './FieldLockToggle.jsx';
 import TickingClockEditor from './TickingClockEditor.jsx';
 import TickingClockCard from './TickingClockCard.jsx';
 import ThemeChips from './ThemeChips.jsx';
+import SeriesDesignEditor from './SeriesDesignEditor.jsx';
 
 export default function ArcContent({ series, onSeriesUpdate, onRegisterDraftFlush }) {
-  const arc = series.arc;
+  const arc = series.arc || {};
+  const locked = series.locked?.arc === true;
+  const saveRef = useRef(null);
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(arc);
   const [saving, setSaving] = useState(false);
@@ -31,17 +34,21 @@ export default function ArcContent({ series, onSeriesUpdate, onRegisterDraftFlus
   stateRef.current = { editing, draft, arc };
 
   const persistDraft = useCallback(async (nextDraft) => {
+    if (saveRef.current) return saveRef.current;
+    if (series.locked?.arc === true) return null;
     setSaving(true);
-    const updated = await updatePipelineSeries(series.id, { arc: nextDraft }, { silent: true }).catch((err) => {
+    saveRef.current = updatePipelineSeries(series.id, { arc: nextDraft }, { silent: true }).catch((err) => {
       toast.error(err.message || 'Save failed');
       return null;
     });
+    const updated = await saveRef.current;
+    saveRef.current = null;
     setSaving(false);
     if (!updated) return null;
     onSeriesUpdate(updated);
     setEditing(false);
     return updated;
-  }, [series.id, onSeriesUpdate]);
+  }, [series.id, series.locked?.arc, onSeriesUpdate]);
 
   const save = async () => {
     if (await persistDraft(draft)) toast.success('Arc saved');
@@ -50,21 +57,22 @@ export default function ArcContent({ series, onSeriesUpdate, onRegisterDraftFlus
   // Hand the host a committer for the OPEN editor, so any "flush before you
   // act" path (Lock & continue, Generate arc, Save series) persists what is on
   // screen instead of silently discarding it (#3907). Returns `true` only when
-  // it actually wrote. Unregisters on unmount so a torn-down editor can never
+  // it actually wrote; null means a failed save and blocks dependent actions. Unregisters on unmount so a torn-down editor can never
   // be committed.
   useEffect(() => {
     if (!onRegisterDraftFlush) return undefined;
     onRegisterDraftFlush(async () => {
       const { editing: isEditing, draft: pending, arc: current } = stateRef.current;
       if (!isEditing || JSON.stringify(pending ?? null) === JSON.stringify(current ?? null)) return false;
-      return Boolean(await persistDraft(pending));
+      return (await persistDraft(pending)) ? true : null;
     });
     return () => onRegisterDraftFlush(null);
   }, [onRegisterDraftFlush, persistDraft]);
 
   if (editing) {
     return (
-      <div className="space-y-2">
+      <fieldset disabled={saving || locked} className="space-y-2">
+        <SeriesDesignEditor value={draft.seriesDesign} onChange={(seriesDesign) => setDraft({ ...draft, seriesDesign })} />
         <textarea
           aria-label="Logline"
           value={draft.logline || ''}
@@ -122,7 +130,7 @@ export default function ArcContent({ series, onSeriesUpdate, onRegisterDraftFlus
             Cancel
           </button>
         </div>
-      </div>
+      </fieldset>
     );
   }
 
@@ -131,6 +139,12 @@ export default function ArcContent({ series, onSeriesUpdate, onRegisterDraftFlus
   return (
     <div className="grid grid-cols-1 @2xl:grid-cols-[minmax(0,1fr)_260px] gap-4">
       <div className="space-y-2 min-w-0">
+        {arc.seriesDesign ? (
+          <details className="rounded border border-port-border p-2 text-xs text-gray-400">
+            <summary className="cursor-pointer text-port-accent">Series design · {arc.seriesDesign.mode}</summary>
+            <SeriesDesignEditor value={arc.seriesDesign} readOnly />
+          </details>
+        ) : null}
         {arc.logline ? (
           <div className="flex items-start gap-2">
             <p className="text-sm text-white flex-1 leading-relaxed">{arc.logline}</p>
@@ -181,9 +195,10 @@ export default function ArcContent({ series, onSeriesUpdate, onRegisterDraftFlus
         <button
           type="button"
           onClick={startEdit}
+          disabled={locked}
           className="text-xs text-port-accent hover:underline"
         >
-          Edit arc
+          {series.arc ? 'Edit arc' : 'Add series design'}
         </button>
       </div>
       <aside className="rounded border border-port-border bg-port-bg/60 p-3 space-y-2">

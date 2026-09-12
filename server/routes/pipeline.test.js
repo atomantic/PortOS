@@ -654,6 +654,28 @@ describe('pipeline routes', () => {
     expect(r.status).toBe(404);
   });
 
+  it('round-trips an authored series design, validates its shape, preserves omission and honors clear and lock', async () => {
+    const app = makeApp();
+    const brief = { mode: 'finite', endingCondition: 'Solve the central case.', episodeActivity: '' };
+    const created = await request(app).post('/api/pipeline/series').send({ name: 'The Case', universeId: 'u-test', arc: { seriesDesign: brief } });
+    expect(created.status).toBe(201);
+    const url = `/api/pipeline/series/${created.body.id}`;
+    expect((await request(app).get(url)).body.arc.seriesDesign).toMatchObject(brief);
+    const edited = await request(app).patch(url).send({ arc: { logline: 'A finite investigation.' } });
+    expect(edited.body.arc.seriesDesign).toMatchObject(brief);
+    expect((await request(app).patch(url).send({ arc: { seriesDesign: { mode: 'infinite' } } })).status).toBe(400);
+    expect((await request(app).patch(url).send({ arc: { seriesDesign: { ...brief, conflictSource: 'x'.repeat(1001) } } })).status).toBe(400);
+    await request(app).patch(url).send({ locked: { arc: true } });
+    expect((await request(app).patch(url).send({ arc: { seriesDesign: null } })).status).toBe(400);
+    await request(app).patch(url).send({ locked: { arc: false } });
+    const cleared = await request(app).patch(url).send({ arc: { logline: 'Kept', seriesDesign: null } });
+    expect(cleared.status).toBe(200);
+    expect(cleared.body.arc.seriesDesign).toBeNull();
+    const reedited = await request(app).patch(url).send({ arc: { logline: 'Still cleared' } });
+    expect(reedited.body.arc.seriesDesign).toBeNull();
+    expect(cleared.body.arc.logline).toBe('Kept');
+  });
+
   it('PATCH /series/:id preserves arc.readerMap through the route schema (no key-strip)', async () => {
     // Regression: arcSchema must list readerMap, or Zod strips it and the
     // wholesale arc replace in updateSeries silently wipes the user's map.

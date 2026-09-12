@@ -363,7 +363,7 @@ function BibleSidebar({ series, universes, patchSeries, onSeriesUpdate, onFlushP
   const [generatingLogo, setGeneratingLogo] = useState(false);
   const handleGenerateLogo = async () => {
     // Server reads from disk — flush dirty edits so the LLM sees fresh fields.
-    if (onFlushPending) await onFlushPending();
+    if (onFlushPending && await onFlushPending() === null) return;
     setGeneratingLogo(true);
     const result = await generateSeriesTitleLogo(series.id, undefined, { silent: true }).catch((err) => {
       toast.error(err.message || 'Failed to design logo');
@@ -652,7 +652,7 @@ function StyleGuideSection({ series, patchSeries, onFlushPending }) {
   const runDiscover = async () => {
     // The server reads the series from disk — flush dirty premise/style edits so
     // the trial passages reflect what the user is actually looking at.
-    if (onFlushPending) await onFlushPending();
+    if (onFlushPending && await onFlushPending() === null) return;
     setDiscovering(true);
     const result = await discoverSeriesVoice(series.id, {}, { silent: true }).catch((err) => {
       toast.error(err.message || 'Voice discovery failed — try again or pick a different provider.');
