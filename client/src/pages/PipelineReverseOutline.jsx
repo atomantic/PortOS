@@ -29,6 +29,11 @@ const RUN_ENDED = new Set(['complete', 'canceled', 'cancelled', 'error']);
 
 export default function PipelineReverseOutline() {
   const { seriesId } = useParams();
+  // Live series identity for the outline read below. Assigned during render so
+  // the comparison always sees the CURRENT series, not the one captured when
+  // the effect ran.
+  const seriesIdRef = useRef(seriesId);
+  seriesIdRef.current = seriesId;
   const navigate = useNavigate();
   const [series, setSeries] = useState(null);
   const [outline, setOutline] = useState(null);
@@ -82,7 +87,10 @@ export default function PipelineReverseOutline() {
     activeRunIdRef.current = null;
     if (latest.type === 'complete') {
       const req = ++outlineRequestRef.current;
-      getReverseOutline(seriesId).then((o) => { if (req === outlineRequestRef.current) setOutline(o); }).catch(() => {});
+      const forSeries = seriesId;
+      getReverseOutline(seriesId)
+        .then((o) => { if (req === outlineRequestRef.current && seriesIdRef.current === forSeries) setOutline(o); })
+        .catch(() => {});
       if (latest.status === 'no-content') toast.warning('Nothing drafted yet — write or import a manuscript first');
       else toast.success(`Reverse outline ready — ${latest.sceneCount || 0} scenes`);
     } else if (latest.type === 'canceled') {

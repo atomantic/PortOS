@@ -42,6 +42,11 @@ const FALLBACK_CATEGORIES = [
 
 export default function PipelineContinuityBible() {
   const { seriesId } = useParams();
+  // Live series identity for the ledger read below. Assigned during render so
+  // the comparison always sees the CURRENT series, not the one captured when
+  // the effect ran.
+  const seriesIdRef = useRef(seriesId);
+  seriesIdRef.current = seriesId;
   const navigate = useNavigate();
   const [series, setSeries] = useState(null);
   const [ledger, setLedger] = useState(null);
@@ -92,7 +97,10 @@ export default function PipelineContinuityBible() {
     activeRunIdRef.current = null;
     if (latest.type === 'complete') {
       const req = ++ledgerRequestRef.current;
-      getContinuityBible(seriesId).then((l) => { if (req === ledgerRequestRef.current) setLedger(l); }).catch(() => {});
+      const forSeries = seriesId;
+      getContinuityBible(seriesId)
+        .then((l) => { if (req === ledgerRequestRef.current && seriesIdRef.current === forSeries) setLedger(l); })
+        .catch(() => {});
       if (latest.status === 'no-content') toast.warning('Nothing to build a ledger from — add canon or draft a manuscript first');
       else toast.success(`Continuity bible ready — ${latest.factCount || 0} facts`);
     } else if (latest.type === 'canceled') {

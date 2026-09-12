@@ -115,6 +115,8 @@ export default function CreativeDirector({ basePath = '/creative-director', brow
   // Consume each remix handoff, then clear the history state so a
   // refresh doesn't re-seed (mirrors Story Builder's prefill-consume pattern).
   // Auto-open the create form so the seeded ingredient chips are visible.
+  // Supersession token for the remix-ingredient read below.
+  const remixRequestRef = useRef(0);
   useEffect(() => {
     if (browseOnly) {
       if (searchParams.get('new') || location.state?.remix) {
@@ -122,23 +124,27 @@ export default function CreativeDirector({ basePath = '/creative-director', brow
         if (!next.has('new')) next.set('new', 'video');
         navigate({ pathname: '/creative-director', search: next.toString(), hash: location.hash }, { replace: true, state: location.state });
       }
-      return undefined;
+      return;
     }
     const ids = location.state?.remix?.ingredientIds;
-    if (!Array.isArray(ids) || ids.length === 0) return undefined;
+    if (!Array.isArray(ids) || ids.length === 0) return;
     const cleanIds = ids.filter(Boolean).slice(0, 50);
-    if (cleanIds.length === 0) return undefined;
-    let active = true;
+    if (cleanIds.length === 0) return;
+    // A request-generation ref, not a `let active` flag: the navigate() below
+    // clears the handoff state, which changes `location.key` — one of this
+    // effect's own deps — so a lifetime-scoped flag would be flipped by its own
+    // cleanup and cancel the read it just started, with no replacement fetch
+    // (the re-run sees no remix ids). Only a genuinely newer read supersedes.
+    const req = ++remixRequestRef.current;
     setRemixIds(cleanIds);
     if (!videoDraftOpen) setShowForm(true);
     listCatalogIngredientsByIds(cleanIds, { silent: true })
-      .then((res) => { if (active) setRemixIngredients(Array.isArray(res) ? res : (Array.isArray(res?.items) ? res.items : [])); })
+      .then((res) => { if (req === remixRequestRef.current) setRemixIngredients(Array.isArray(res) ? res : (Array.isArray(res?.items) ? res.items : [])); })
       .catch(() => {});
     // Clear the handoff state so a refresh doesn't re-seed (ids already captured).
     const nextSearch = new URLSearchParams(location.search);
     if (videoDraftOpen) nextSearch.set('new', 'video');
     navigate({ pathname: location.pathname, search: nextSearch.toString(), hash: location.hash }, { replace: true, state: {} });
-    return () => { active = false; };
   }, [browseOnly, location.key]);
 
   // Drop any pending remix handoff so abandoned ingredient ids can't leak into

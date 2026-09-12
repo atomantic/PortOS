@@ -235,6 +235,9 @@ export default function InboxTab({ accounts }) {
   // The URL is the source of truth for the open message. Resolve it from the
   // current list when possible, then fetch it directly for a filtered-out or
   // not-yet-loaded message so a copied URL still opens on a fresh load.
+  // Supersession token for the message-detail read below.
+  const detailRequestRef = useRef(0);
+
   useEffect(() => {
     if (!messageId) {
       setLoadedMessage(null);
@@ -257,16 +260,20 @@ export default function InboxTab({ accounts }) {
       return undefined;
     }
 
-    let cancelled = false;
+    // A request-generation ref, not a `let cancelled` flag: `loadedMessage` is
+    // in this effect's own dependency array, so clearing it below re-runs the
+    // effect at once and a lifetime-scoped flag would be flipped by its own
+    // cleanup before the detail arrived. The re-run bumps the token, so the
+    // newest read is the one that lands however the two resolve.
+    const req = ++detailRequestRef.current;
     setLoadedMessage(null);
     api.getMessageDetail(messageAccountId, messageId)
       .then(message => {
-        if (!cancelled) setLoadedMessage(message);
+        if (req === detailRequestRef.current) setLoadedMessage(message);
       })
       .catch(() => {
-        if (!cancelled) closeMessage();
+        if (req === detailRequestRef.current) closeMessage();
       });
-    return () => { cancelled = true; };
   }, [messageId, messageAccountId, messages, loading, loadedMessage, closeMessage]);
 
   // Stream messages into the list as they arrive during sync

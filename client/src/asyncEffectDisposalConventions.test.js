@@ -50,8 +50,13 @@
  *     one that merely appears later in the source than the first `await` /
  *     `.then(`. A synchronous `setX()` written below an unrelated `.then()`
  *     reads as a violation; those sites are on the allowlist with that reason.
- *   - A flag declared in the effect and flipped anywhere later counts, even if
- *     the flip is not in the returned cleanup and the flag gates nothing.
+ *   - A flag must be declared, flipped, and read, but the read is not traced to
+ *     the setter: a flag that gates the WRONG `set*` call still counts, and so
+ *     does a flip written outside the returned cleanup.
+ *   - One guarded request exempts the whole effect, so a second unguarded fetch
+ *     added beside it is invisible. Pinning that needs per-statement dataflow,
+ *     which a lexical scan cannot do; the allowlist rows are deliberately
+ *     file-scoped for the same reason.
  *   - The fetch/apply pair moved into a helper the effect calls is invisible,
  *     and so is a guard living in that helper.
  *   - `depsAllStable` resolves a `useRef` / `useMounted` handle only by a
@@ -233,18 +238,35 @@ const ABORT_CALL = /\.abort\s*\(/;
 // is fixed for the life of the component.
 const STABLE_DECL = /\bconst\s+([A-Za-z_$][\w$]*)\s*=\s*(?:useRef|useMounted)\s*\(/g;
 
-/** A flag declared inside the effect and later assigned its opposite value. */
-function hasFlipFlag(body) {
+/**
+ * A flag declared inside the effect, later assigned its opposite value, AND
+ * read at least once somewhere else.
+ *
+ * The read requirement is what stops the guard from being cosmetic. Declaring
+ * and flipping a flag that gates nothing —
+ * `let active = true; load(id).then(setValue); return () => { active = false; };`
+ * — keeps the exact race this rule exists to reject, and a declaration+flip
+ * check alone would pass it.
+ */
+function flipFlagEnd(body) {
   for (const match of body.matchAll(FLAG_DECL)) {
     const opposite = match[2] === 'true' ? 'false' : 'true';
     // Names may legally contain `$`, a regex anchor — escaping it keeps the
     // pattern from silently becoming unmatchable and passing the offender.
     const name = match[1].replace(/\$/g, '\\$');
     const flip = new RegExp(`\\b${name}\\s*=\\s*${opposite}\\b`);
-    if (flip.test(body.slice(match.index + match[0].length))) return true;
+    const end = match.index + match[0].length;
+    const rest = body.slice(end);
+    if (!flip.test(rest)) continue;
+    // Occurrences outside the declaration: the flip is one, so a flag that is
+    // never consulted has exactly one. Any more means it is read somewhere.
+    const uses = rest.match(new RegExp(`\\b${name}\\b`, 'g')) || [];
+    if (uses.length > 1) return end;
   }
-  return false;
+  return -1;
 }
+
+const hasFlipFlag = (body) => flipFlagEnd(body) !== -1;
 
 /** Whether `body` disposes of a superseded response by any sanctioned shape. */
 export function hasDisposalGuard(body) {
@@ -296,8 +318,69 @@ export function unguardedEffects(src) {
   return found;
 }
 
+/**
+ * The mirror-image mistake: a lifetime-scoped flip flag in an effect that
+ * SYNCHRONOUSLY writes a state value appearing in its own dependency array.
+ *
+ *   useEffect(() => {
+ *     let active = true;
+ *     setLoadingOutput(true);              // ← re-runs this effect immediately
+ *     load(id).then((v) => { if (active) setValue(v); });
+ *     return () => { active = false; };    // ← …whose cleanup fires here
+ *   }, [id, loadingOutput]);
+ *
+ * The re-run's cleanup flips the flag before the response lands, so the update
+ * is silently dropped — the guard does not merely fail to help, it breaks the
+ * feature. That shipped four times while sweeping #7242 (it took AgentCard's
+ * transcript, the pipeline ledger/outline re-reads, and the post-download
+ * upscale re-probe offline) and only one of them had a test to catch it.
+ *
+ * The fix is a request-generation ref: the re-run early-returns without
+ * bumping, so the in-flight request stays current.
+ *
+ * Only a SYNCHRONOUS write counts. The same setter called inside `.then()` runs
+ * after the response has already been applied, so it cannot cancel itself.
+ */
+export function selfDisposingEffects(src) {
+  const blanked = blankLexical(src);
+  const found = [];
+  for (const match of blanked.matchAll(/\buseEffect\s*\(/g)) {
+    const args = balancedArgs(blanked, match.index + match[0].length - 1);
+    if (args === null) continue;
+    const split = splitDeps(args);
+    if (!split || !split.deps.trim()) continue;
+    const { body, deps } = split;
+    const async = ASYNC_BOUNDARY.exec(body);
+    if (!async) continue;
+    const flagEnd = flipFlagEnd(body);
+    if (flagEnd === -1) continue;
+    const depNames = new Set(deps.split(',').map((d) => d.trim()).filter(Boolean));
+    for (const setter of body.matchAll(SETTER_CALL)) {
+      if (TIMER_SETTERS.has(setter[2])) continue;
+      const at = setter.index + setter[1].length;
+      // Only between the flag and the request. A setter ABOVE the declaration
+      // sits in an early-return branch that bails before the flag exists, so it
+      // can never be on the same path as the request it would cancel.
+      if (at < flagEnd || at > async.index) continue;
+      // `setLoadingOutput` → `loadingOutput`, the state value it writes.
+      const stateName = setter[2][3].toLowerCase() + setter[2].slice(4);
+      if (!depNames.has(stateName)) continue;
+      found.push({
+        line: blanked.slice(0, match.index).split('\n').length,
+        setter: setter[2],
+        dep: stateName,
+      });
+      break;
+    }
+  }
+  return found;
+}
+
 const violationsIn = (file) => unguardedEffects(readFileSync(join(CLIENT_ROOT, file), 'utf8'))
   .map((v) => `${file}:${v.line}  deps=[${v.deps}] → ${v.setter}()`);
+
+const selfDisposingIn = (file) => selfDisposingEffects(readFileSync(join(CLIENT_ROOT, file), 'utf8'))
+  .map((v) => `${file}:${v.line}  ${v.setter}() re-runs the effect via dep \`${v.dep}\``);
 
 describe('identity-keyed async effects drop superseded responses', () => {
   it('has no unguarded identity-keyed async effect outside the allowlist', () => {
@@ -325,6 +408,26 @@ describe('identity-keyed async effects drop superseded responses', () => {
       + 'If the dependency genuinely cannot select a different record (a drawer `open` '
       + 'flag, a once-only latch), add the file to ALLOWED in this file with a one-line '
       + `reason.\nOffenders:\n  ${violations.join('\n  ')}`,
+    ).toEqual([]);
+  });
+
+  it('has no lifetime flag in an effect that re-triggers itself', () => {
+    const files = trackedSourceFiles(CLIENT_ROOT);
+    expect(files.length).toBeGreaterThan(100);
+
+    const violations = files.flatMap(selfDisposingIn);
+
+    expect(
+      violations,
+      'These effects hold a `let active`-style flag AND synchronously write a state '
+      + 'value that is in their own dependency array. The write re-runs the effect at '
+      + "once, and the re-run's cleanup flips the flag before the response lands — so "
+      + 'the update is silently dropped. The guard does not just fail to help here, it '
+      + 'breaks the feature.\n'
+      + 'Fix: use a request-generation ref instead — `const req = ++fooRef.current;` at '
+      + 'request time, `if (req === fooRef.current)` at apply time. The re-run '
+      + 'early-returns without bumping, so the in-flight request stays current.\n'
+      + `Offenders:\n  ${violations.join('\n  ')}`,
     ).toEqual([]);
   });
 
@@ -461,6 +564,18 @@ describe('identity-keyed async effects drop superseded responses', () => {
       expect(unguardedEffects(src.replace('[mountedRef]', '[workId, mountedRef]'))).toHaveLength(1);
     });
 
+    it('does not accept a flag that gates nothing', () => {
+      // Declared and flipped, but never consulted — the response is applied
+      // unconditionally, so the race is exactly the one being rejected.
+      expect(unguardedEffects(`
+        useEffect(() => {
+          let active = true;
+          load(id).then(setValue);
+          return () => { active = false; };
+        }, [id]);
+      `)).toHaveLength(1);
+    });
+
     it('does not accept a mounted guard as an identity guard', () => {
       // The component never unmounted — `mountedRef.current` is true the whole
       // time — so this is the exact shape the rule exists to reject.
@@ -503,6 +618,67 @@ describe('identity-keyed async effects drop superseded responses', () => {
           return () => { active = false; };
         }, [id]);
       `)).toEqual([]);
+    });
+
+    it('flags a lifetime flag beside a synchronous write to its own dep', () => {
+      const found = selfDisposingEffects(`
+        useEffect(() => {
+          let active = true;
+          setLoading(true);
+          load(id).then((v) => { if (active) setValue(v); });
+          return () => { active = false; };
+        }, [id, loading]);
+      `);
+      expect(found).toHaveLength(1);
+      expect(found[0].setter).toBe('setLoading');
+      expect(found[0].dep).toBe('loading');
+    });
+
+    it('does not flag a write that cannot re-trigger the effect first', () => {
+      const flagged = (src) => selfDisposingEffects(src).length;
+
+      // The setter's value is not a dependency, so the write re-runs nothing.
+      expect(flagged(`
+        useEffect(() => {
+          let active = true;
+          setLoading(true);
+          load(id).then((v) => { if (active) setValue(v); });
+          return () => { active = false; };
+        }, [id]);
+      `)).toBe(0);
+
+      // Written only inside `.then()` — the response has already been applied
+      // by the time the re-run's cleanup could fire, so it cannot self-cancel.
+      expect(flagged(`
+        useEffect(() => {
+          let active = true;
+          load(id).then((v) => { if (active) setConsents(v); });
+          return () => { active = false; };
+        }, [id, consents]);
+      `)).toBe(0);
+
+      // Written in an early-return branch ABOVE the flag: that path bails
+      // before the request exists, so it cannot cancel one.
+      expect(flagged(`
+        useEffect(() => {
+          if (!enabled) {
+            setOffset(0);
+            return;
+          }
+          let cancelled = false;
+          load(offset).then((v) => { if (!cancelled) setItems(v); });
+          return () => { cancelled = true; };
+        }, [enabled, offset]);
+      `)).toBe(0);
+
+      // A generation ref is the sanctioned fix, not a violation.
+      expect(flagged(`
+        useEffect(() => {
+          const req = ++genRef.current;
+          setLoading(true);
+          load(id).then((v) => { if (req === genRef.current) setValue(v); });
+        }, [id, loading]);
+      `)).toBe(0);
     });
 
     it('reports the line of the offending effect', () => {

@@ -169,7 +169,11 @@ export default function SeriesReviewPanel({ series, onSeriesUpdate, onIssuesUpda
     // bumping, so the in-flight request stays current and only a genuinely
     // newer one supersedes it.
     const req = ++fixResultRequestRef.current;
-    const current = () => req === fixResultRequestRef.current;
+    const forSeries = seriesId;
+    // The counter alone advances only when another fix run ends, so it cannot
+    // invalidate a read whose series the user has since switched away from —
+    // `activeSeriesRef` (already kept for the verdict read) covers that axis.
+    const current = () => req === fixResultRequestRef.current && activeSeriesRef.current === forSeries;
     setFixing(false);
     if (fixLatest.type === 'complete') {
       const fixed = fixLatest.fixed ?? 0;
