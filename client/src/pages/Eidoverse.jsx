@@ -300,6 +300,7 @@ export default function Eidoverse() {
       setHostInfo(result.host || null);
       setWorldState(result.world || null);
       setWorldName(result.world?.world || '');
+      setCosId(result.world?.cos?.id || 'portos-cos');
       setHumanName(result.world?.identity?.name || result.world?.human?.name || '');
       setRecipeDraft(result.world?.recipe || null);
       setAssetOverridesDraft(result.world?.design?.userOverrides?.assets || {});
@@ -407,16 +408,16 @@ export default function Eidoverse() {
   }, [markConfigDirty]);
 
   const saveWorldConfig = useCallback(async () => {
-    if (!recipeDraft) return;
     const submittedRevision = configDraftRevision.current;
     setConfigStatus('saving');
     const updated = await updateEidoverseWorldConfig({
       world: worldName.trim(),
       humanName: humanName.trim() || null,
-      cosId: cosId.trim() || 'portos-cos',
-      recipe: recipeDraft,
-      assetOverrides: assetOverridesDraft,
-      labelAliases: labelAliasesDraft,
+      ...(recipeDraft ? {
+        recipe: recipeDraft,
+        assetOverrides: assetOverridesDraft,
+        labelAliases: labelAliasesDraft,
+      } : {}),
     }, silent).catch((reason) => {
       setConfigStatus(reason?.message || 'Could not save the Eidoverse world configuration.');
       return null;
@@ -431,7 +432,7 @@ export default function Eidoverse() {
       : hostUrl;
     if (nextHostUrl !== hostUrl) setHostUrl(nextHostUrl);
     else void runProjection().catch(() => {});
-  }, [applyWorldResponse, assetOverridesDraft, cosId, labelAliasesDraft, hostInfo, hostUrl, humanName, recipeDraft, runProjection, setupState, worldName]);
+  }, [applyWorldResponse, assetOverridesDraft, labelAliasesDraft, hostInfo, hostUrl, humanName, recipeDraft, runProjection, setupState, worldName]);
 
   const runConfigAction = useCallback(async (payload) => {
     const submittedRevision = configDraftRevision.current;
@@ -640,8 +641,6 @@ export default function Eidoverse() {
       humanName={humanName}
       setHumanName={setHumanName}
       cosId={cosId}
-      setCosId={setCosId}
-      suggestedCosId={worldState?.suggestedCosId || null}
       recipeDraft={recipeDraft}
       assetOverridesDraft={assetOverridesDraft}
       labelAliasesDraft={labelAliasesDraft}

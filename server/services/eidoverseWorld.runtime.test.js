@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
   persistedState: null,
+  mindName: null,
   writes: 0,
   worlds: new Map(),
   socketUrls: [],
@@ -47,6 +48,8 @@ vi.mock('../lib/fileUtils.js', async (importActual) => {
     }),
   };
 });
+
+vi.mock('./persistentMindContext.js', () => ({ readPersistentMindName: vi.fn(async () => mocks.mindName) }));
 
 vi.mock('./instances.js', () => ({
   getPeers: vi.fn(async () => []),
@@ -216,6 +219,7 @@ beforeEach(async () => {
   vi.unstubAllEnvs();
   await world.__resetEidoverseWorldForTests();
   mocks.persistedState = null;
+  mocks.mindName = null;
   mocks.writes = 0;
   mocks.worlds.clear();
   mocks.socketUrls.length = 0;
@@ -442,6 +446,24 @@ describe('Eidoverse private-world lifecycle', () => {
       args: { id: DEFAULT_HUMAN_NAME, role: 'visitor' },
     }));
     expect(mocks.persistedState.ownership.retired).toEqual([]);
+  });
+
+  it('follows the chosen mind name, reconnects presence, and retires the previous owner', async () => {
+    await world.ensureEidoverseWorldPresence();
+    mocks.mindName = 'Helm';
+    expect(await world.getEidoverseWorldStatus()).toMatchObject({ cos: { id: 'Helm', connected: false } });
+    await world.ensureEidoverseWorldPresence();
+    expect(mocks.persistedState.cos.id).toBe('Helm');
+    expect(mocks.worlds.get('portos').roles['portos-cos']).toMatchObject({ role: 'visitor' });
+    expect(await world.getEidoverseWorldStatus()).toMatchObject({ cos: { id: 'Helm', connected: true } });
+    mocks.mindName = 'Example Star';
+    const updated = await world.updateEidoverseWorldConfig({ humanName: 'Example User', cosId: 'stale-client-name' });
+    expect(updated.cos.id).toBe('Example Star');
+    expect(updated.human.name).toBe('Example User');
+    await world.ensureEidoverseWorldPresence();
+    expect(mocks.worlds.get('portos').roles.Helm).toMatchObject({ role: 'visitor' });
+    mocks.mindName = null;
+    expect((await world.ensureEidoverseWorldConfig()).cos.id).toBe('Example Star');
   });
 
   it('clears observed roles when switching worlds or CoS identities', async () => {
