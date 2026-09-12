@@ -60,4 +60,16 @@ describe('AgendaTab empty states', () => {
     expect(screen.getByRole('button', { name: 'Sync' })).not.toBeDisabled();
     expect(screen.getByRole('button', { name: 'Sync now' })).not.toBeDisabled();
   });
+
+  it('offers to clear active filters instead of suggesting a sync', async () => {
+    await renderAgenda([{ id: 'enabled', name: 'Personal', enabled: true }]);
+
+    fireEvent.change(await screen.findByRole('textbox', { name: 'Search events' }), {
+      target: { value: 'missing' },
+    });
+
+    expect(await screen.findByText('No matching events')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Clear filters' })).not.toBeDisabled();
+    expect(screen.queryByRole('button', { name: 'Sync now' })).toBeNull();
+  });
 });

@@ -85,6 +85,7 @@ export default function AgendaTab({ accounts }) {
   const grouped = groupEventsByDay(events);
   const selectedEventKey = searchParams.get('event');
   const selectedEvent = events.find((event) => `${event.accountId}:${event.id}` === selectedEventKey) || null;
+  const hasActiveFilter = Boolean(search || accountFilter);
 
   return (
     <div className="space-y-4">
@@ -130,7 +131,18 @@ export default function AgendaTab({ accounts }) {
           <BrailleSpinner text="Loading" />
         </div>
       ) : grouped.length === 0 ? (
-        enabledAccounts.length === 0 ? (
+        hasActiveFilter ? (
+          <EmptyState
+            icon={Clock}
+            title="No matching events"
+            message="Try clearing your search or account filter."
+            actionLabel="Clear filters"
+            onAction={() => {
+              setSearch('');
+              setAccountFilter('');
+            }}
+          />
+        ) : enabledAccounts.length === 0 ? (
           <EmptyState
             icon={Clock}
             title="No calendar connected"
