@@ -13,12 +13,15 @@
  *      elements happen to be measured matters: dnd-kit measures the node being
  *      dragged first, so a measurement-order stub puts the dragged row above
  *      everything else and collision detection picks the wrong starting zone.
- *   2. **A deferred listener.** `KeyboardSensor.attach()` registers its
- *      document-level keydown handler inside a `setTimeout`, so the arrow key
- *      that immediately follows the pickup is dropped on the floor. A real user
- *      never presses two keys inside the same macrotask; `pressKey` yields one
- *      before dispatching, which is what makes a scripted drag behave like a
- *      human one.
+ *   2. **Deferred work on both sides of the key.** `KeyboardSensor.attach()`
+ *      registers its document-level keydown handler inside a `setTimeout`, so
+ *      an arrow key dispatched in the same macrotask as the pickup is dropped
+ *      on the floor; and dnd-kit re-measures and re-resolves collisions through
+ *      its own deferred work after the key, so an assertion made immediately
+ *      can read a live region one tick behind. A real user never presses two
+ *      keys inside one macrotask — `pressKey` yields before AND after each
+ *      dispatch, which is what makes a scripted drag behave like a human one
+ *      whatever else the machine is doing.
  *
  * Use with the REAL `@dnd-kit/core` (no module mock) — proving the sensor is
  * registered is exactly what these helpers exist to do.
@@ -57,6 +60,10 @@ export function stubSequentialLayout({ axis = 'vertical', height = ROW_HEIGHT, w
   return () => { Element.prototype.getBoundingClientRect = original; };
 }
 
+const flushMacrotask = () => act(async () => {
+  await new Promise((resolve) => setTimeout(resolve, 0));
+});
+
 /**
  * Dispatch one key on `element` (default: whatever holds focus) and let the
  * sensor's deferred listeners and state updates settle before returning.
@@ -66,12 +73,17 @@ export function stubSequentialLayout({ axis = 'vertical', height = ROW_HEIGHT, w
  */
 export async function pressKey(code, element) {
   const key = code === 'Space' ? ' ' : code.replace(/^Key/, '');
+  // Flush the macrotask KeyboardSensor.attach() defers its listener into, so
+  // the key after a pickup is not swallowed…
+  await flushMacrotask();
   await act(async () => {
-    // Flush the macrotask KeyboardSensor.attach() defers its listener into, so
-    // the key after a pickup is not swallowed.
-    await new Promise((resolve) => setTimeout(resolve, 0));
     fireEvent.keyDown(element || document.activeElement || document.body, { key, code });
   });
+  // …and again afterwards, because dnd-kit re-measures and resolves collisions
+  // through its own deferred work. Without this the assertion that follows can
+  // read a live region and a DOM that are one tick behind — which shows up as a
+  // suite that passes alone and fails under a loaded parallel run.
+  await flushMacrotask();
 }
 
 /**

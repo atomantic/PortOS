@@ -3366,29 +3366,72 @@ describe('a11y conventions', () => {
     // Comments are already masked, but a quoted `"useSensor(KeyboardSensor)"`
     // in a title or a className would otherwise forge the exemption — and the
     // forged text would be invisible in review, which is the same trap the
-    // clickable-element rule above is written around.
+    // clickable-element rule above is written around. Blanking preserves both
+    // length and newlines so every index into the result still names the line
+    // it names in the original.
     const withoutStringLiterals = (src) => src.replace(
       /"(?:[^"\\\n]|\\.)*"|'(?:[^'\\\n]|\\.)*'|`(?:[^`\\]|\\.)*`/g,
-      (literal) => `"${' '.repeat(Math.max(literal.length - 2, 0))}"`,
+      (literal) => literal[0] + literal.slice(1, -1).replace(/[^\n]/g, ' ') + literal.at(-1),
     );
 
-    // Read off the import clause and the call expression, never off raw text.
-    // The registration is looked for FILE-wide rather than inside the specific
-    // `<DndContext sensors={…}>` it belongs to, because every DndContext in this
-    // tree builds its sensors in the same module and no file mounts two with
-    // different sensor lists. A file that grows a second, pointer-only context
-    // beside a keyboard-enabled one would slip through — split it, or tighten
-    // this to resolve the `sensors` prop per mount.
+    // The argument list of the call whose `(` follows `from`, brace/paren
+    // balanced so a nested `useSensor(P, { activationConstraint: {…} })` does
+    // not end it early.
+    const balancedSliceAt = (src, from, open, close) => {
+      const start = src.indexOf(open, from);
+      if (start === -1) return null;
+      let depth = 0;
+      for (let i = start; i < src.length; i += 1) {
+        if (src[i] === open) depth += 1;
+        else if (src[i] === close) {
+          depth -= 1;
+          if (depth === 0) return src.slice(start + 1, i);
+        }
+      }
+      return null;
+    };
+
+    // The sensor list THIS mount was handed: either `sensors={useSensors(…)}`
+    // written inline, or the `useSensors(…)` call the named binding resolves to.
+    // Returns null when the expression is some other shape, and the caller then
+    // falls back to the file-wide question — which is the weaker check, but a
+    // spelling this cannot read is not evidence of a missing sensor.
+    const sensorListFor = (src, tagIndex, useSensorsLocal) => {
+      if (!useSensorsLocal) return null;
+      const tag = openingTagAt(src, tagIndex);
+      const expr = tag && balancedSliceAt(tag, tag.indexOf('sensors='), '{', '}')?.trim();
+      if (!expr) return null;
+      if (expr.startsWith(`${useSensorsLocal}(`)) return balancedSliceAt(expr, 0, '(', ')');
+      if (!/^[\w$]+$/.test(expr)) return null;
+      const decl = new RegExp(`(?:const|let|var)\\s+${expr}\\s*=\\s*${useSensorsLocal}\\s*\\(`).exec(src);
+      return decl ? balancedSliceAt(src, decl.index, '(', ')') : null;
+    };
+
+    // Read off the import clause and the call expression, never off raw text,
+    // and ask the question once per MOUNT rather than once per file — a file
+    // holding a keyboard-enabled context beside a pointer-only one must not
+    // have the first one exempt the second.
+    // NB: the import clause is read off the source with its strings INTACT —
+    // the module specifier is itself a string literal, so resolving the local
+    // names against a blanked copy finds no dnd-kit import at all and the whole
+    // rule silently passes. Blanking applies only to the text handed to
+    // `registers`, which is the one place a literal could forge a match.
     const offendersIn = (file, src) => {
       const core = namedImportsFrom(src, '@dnd-kit/core');
       const contextLocal = core.get('DndContext');
       if (!contextLocal) return [];
       const sensorLocal = core.get('KeyboardSensor');
       const useSensorLocal = core.get('useSensor');
-      if (sensorLocal && useSensorLocal
-        && new RegExp(`\\b${useSensorLocal}\\s*\\(\\s*${sensorLocal}\\b`).test(withoutStringLiterals(src))) return [];
-      const index = src.indexOf(`<${contextLocal}`);
-      return [`${file}:${lineOf(src, Math.max(index, 0))}`];
+      const useSensorsLocal = core.get('useSensors');
+      const registers = (text) => Boolean(sensorLocal && useSensorLocal && text)
+        && new RegExp(`\\b${useSensorLocal}\\s*\\(\\s*${sensorLocal}\\b`).test(withoutStringLiterals(text));
+
+      const offenders = [];
+      for (const { index } of forEachOpeningTag(src, contextLocal)) {
+        if (registers(sensorListFor(src, index, useSensorsLocal) ?? src)) continue;
+        offenders.push(`${file}:${lineOf(src, index)}`);
+      }
+      return offenders;
     };
 
     // Probe first — the tree is green, so nothing in it pins what the matcher
@@ -3408,10 +3451,27 @@ describe('a11y conventions', () => {
     // branch is never exercised at all.
     expect(probe(`${IMPORT_BOTH}\nconst s = useSensor(PointerSensor);\n<DndContext sensors={s} title="useSensor(KeyboardSensor)" />`)).toEqual(['probe.jsx:3']);
     expect(probe(`${IMPORT_BOTH}\nconst label = \`useSensor(KeyboardSensor)\`;\n<DndContext sensors={useSensor(PointerSensor)} />`)).toEqual(['probe.jsx:3']);
-    // …but blanking the literals must not shift the reported line number.
+    // …and blanking the literals must not shift the reported line, whether the
+    // literal carries an escape or a real newline.
     expect(probe(`${IMPORT_BOTH}\nconst note = "a\\nb";\n<DndContext sensors={useSensor(PointerSensor)} />`)).toEqual(['probe.jsx:3']);
+    expect(probe(`${IMPORT_BOTH}\nconst note = \`one\ntwo\`;\n<DndContext sensors={useSensor(PointerSensor)} />`)).toEqual(['probe.jsx:4']);
     // Nor does a same-named import from some other module count.
     expect(probe(`${IMPORT_POINTER}\nimport { KeyboardSensor, useSensor } from './fake';\nconst s = useSensor(KeyboardSensor);\n<DndContext sensors={s} />`)).toEqual(['probe.jsx:4']);
+
+    // The list is resolved per MOUNT, so one keyboard-enabled context cannot
+    // exempt a pointer-only sibling in the same file — the false negative a
+    // file-wide search leaves behind.
+    const TWO_CONTEXTS = `${IMPORT_BOTH}
+const withKeys = useSensors(useSensor(PointerSensor), useSensor(KeyboardSensor, { coordinateGetter }));
+const pointerOnly = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }));
+<><DndContext sensors={withKeys} /><DndContext sensors={pointerOnly} /></>`;
+    expect(probe(TWO_CONTEXTS)).toEqual(['probe.jsx:4']);
+    // An inline list resolves the same way, nested option braces and all.
+    expect(probe(`${IMPORT_BOTH}\n<DndContext sensors={useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }))} />`)).toEqual(['probe.jsx:2']);
+    expect(probe(`${IMPORT_BOTH}\n<DndContext sensors={useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }), useSensor(KeyboardSensor))} />`)).toEqual([]);
+    // A `sensors` expression this cannot resolve falls back to the file-wide
+    // question rather than reporting a context it never read.
+    expect(probe(`${IMPORT_BOTH}\nconst s = useSensors(useSensor(KeyboardSensor));\n<DndContext sensors={makeSensors()} />`)).toEqual([]);
     // A file that never mounts a DndContext is out of the rule's remit, even
     // when it uses dnd-kit for something else.
     expect(probe("import { useDraggable } from '@dnd-kit/core';\nconst d = useDraggable({ id });")).toEqual([]);
