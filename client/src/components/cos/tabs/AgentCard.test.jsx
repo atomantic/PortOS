@@ -9,6 +9,7 @@ vi.mock('../../../services/api', () => ({
   sendCosAgentBtw: vi.fn(),
   getCosAgent: vi.fn(),
   getCosAgentPrompt: vi.fn(),
+  getCosAgentStats: vi.fn(() => new Promise(() => {})),
   addCosTask: vi.fn(),
 }));
 
@@ -40,6 +41,130 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.useRealTimers();
+});
+
+describe('AgentCard runtime presentation', () => {
+  const now = new Date('2026-07-13T10:00:00.000Z');
+  const runningAt = (elapsedMs, metadata = {}) => ({
+    ...agent,
+    status: 'running',
+    startedAt: new Date(now.getTime() - elapsedMs).toISOString(),
+    completedAt: null,
+    metadata: { ...agent.metadata, ...metadata },
+    result: null,
+  });
+  const durationHistory = {
+    'user-task': { avgDurationMs: 45_000, p80DurationMs: 60_000, completed: 8 },
+    _overall: { avgDurationMs: 90_000, p80DurationMs: 120_000, completed: 20 },
+  };
+
+  it.each([
+    ['before the estimate', 30_000, '50% complete', '~30s left', 'ETA: ~30s'],
+    ['exactly at the estimate', 60_000, '99% complete', '+0s', '+0s over estimate'],
+    ['after the estimate', 75_000, '99% complete', '+15s', '+15s over estimate'],
+  ])('renders distinct inline and footer ETA text %s', (_label, elapsedMs, progress, inlineEta, footerEta) => {
+    vi.useFakeTimers();
+    vi.setSystemTime(now);
+
+    render(
+      <MemoryRouter>
+        <AgentCard agent={runningAt(elapsedMs)} durations={durationHistory} />
+      </MemoryRouter>
+    );
+
+    expect(screen.getByText(progress)).toBeInTheDocument();
+    expect(screen.getByText(inlineEta)).toHaveClass('font-mono');
+    expect(screen.getByText(footerEta)).toHaveClass('font-medium');
+  });
+
+  it('renders elapsed time without ETA or progress when duration history is absent', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(now);
+
+    render(<MemoryRouter><AgentCard agent={runningAt(30_000)} /></MemoryRouter>);
+
+    expect(screen.getByText('30s')).toBeInTheDocument();
+    expect(screen.queryByText(/complete$/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/left$/)).not.toBeInTheDocument();
+  });
+
+  it.each([
+    ['type P80', 30_000, durationHistory, '50% complete', /Based on 8 completed user-task tasks \(avg: 45s, est: 1m 0s\)/],
+    ['type average', 60_000, { 'user-task': { avgDurationMs: 60_000, completed: 3 } }, '99% complete', /Based on 3 completed user-task tasks \(avg: 1m 0s, est: 1m 0s\)/],
+    ['overall P80', 60_000, { _overall: durationHistory._overall }, '50% complete', /Based on 20 completed all tasks tasks \(avg: 1m 30s, est: 2m 0s\)/],
+  ])('uses the %s duration fallback', (_label, elapsedMs, durations, progress, title) => {
+    vi.useFakeTimers();
+    vi.setSystemTime(now);
+
+    render(
+      <MemoryRouter>
+        <AgentCard agent={runningAt(elapsedMs)} durations={durations} />
+      </MemoryRouter>
+    );
+
+    expect(screen.getByText(progress)).toBeInTheDocument();
+    expect(screen.getByTitle(title)).toBeInTheDocument();
+  });
+
+  it('preserves duration and completion visibility across running, paused, and completed states', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(now);
+    const runningAgent = runningAt(30_000);
+    const { rerender } = render(
+      <MemoryRouter><AgentCard agent={runningAgent} durations={durationHistory} /></MemoryRouter>
+    );
+    expect(screen.getByText('50% complete')).toBeInTheDocument();
+    expect(screen.getByText('Working')).toBeInTheDocument();
+
+    rerender(
+      <MemoryRouter><AgentCard agent={{ ...runningAgent, status: 'paused' }} paused durations={durationHistory} /></MemoryRouter>
+    );
+    expect(screen.getByText('Paused')).toBeInTheDocument();
+    expect(screen.queryByText(/complete$/)).not.toBeInTheDocument();
+    expect(screen.getByText('30s')).toBeInTheDocument();
+
+    rerender(
+      <MemoryRouter><AgentCard agent={agent} completed durations={durationHistory} /></MemoryRouter>
+    );
+    expect(screen.getByText('1h 0m')).toBeInTheDocument();
+    expect(screen.queryByText(/complete$/)).not.toBeInTheDocument();
+    expect(screen.getByTitle((value) => value.includes('2026'))).toBeInTheDocument();
+  });
+
+  it('suppresses prompt access for remote cards while preserving the live shell destination', () => {
+    render(
+      <MemoryRouter>
+        <AgentCard
+          agent={runningAt(30_000, { executionMode: 'tui', tuiSessionId: 'sess-abcdef123' })}
+          remote
+        />
+      </MemoryRouter>
+    );
+
+    expect(screen.queryByRole('button', { name: 'Prompt' })).not.toBeInTheDocument();
+    expect(screen.getByRole('link', { name: /Open Shell/ })).toHaveAttribute('href', '/shell?session=sess-abcdef123');
+  });
+
+  it('distinguishes a live process, a zombie, and missing process stats', async () => {
+    const runningAgent = { ...runningAt(30_000), pid: 4242 };
+    api.getCosAgentStats.mockResolvedValueOnce({ active: true, pid: 4242, state: 'running', cpu: 12.3, memoryMb: 64 });
+    const { unmount } = render(<MemoryRouter><AgentCard agent={runningAgent} /></MemoryRouter>);
+    expect(await screen.findByText('12.3%')).toBeInTheDocument();
+    expect(screen.getByText('64MB')).toBeInTheDocument();
+    expect(screen.queryByText('ZOMBIE')).not.toBeInTheDocument();
+    unmount();
+
+    api.getCosAgentStats.mockResolvedValueOnce({ active: false, pid: 4242 });
+    const zombie = render(<MemoryRouter><AgentCard agent={runningAgent} /></MemoryRouter>);
+    expect(await screen.findByText('ZOMBIE')).toBeInTheDocument();
+    zombie.unmount();
+
+    api.getCosAgentStats.mockResolvedValueOnce(null);
+    render(<MemoryRouter><AgentCard agent={runningAgent} /></MemoryRouter>);
+    await waitFor(() => expect(api.getCosAgentStats).toHaveBeenCalledTimes(3));
+    expect(screen.queryByText('ZOMBIE')).not.toBeInTheDocument();
+    expect(screen.queryByText(/PID 4242/)).not.toBeInTheDocument();
+  });
 });
 
 describe('AgentCard feedback', () => {

@@ -10,15 +10,11 @@ import {
   Loader2,
   Skull,
   Pause,
-  Activity,
-  Clock,
   Brain,
   ThumbsUp,
   ThumbsDown,
   MessageSquare,
   ExternalLink,
-  Terminal,
-  Hourglass,
   Send,
   GitBranch,
   GitPullRequest,
@@ -37,10 +33,11 @@ import toast from '../../ui/Toast';
 import { copyToClipboard } from '../../../lib/clipboard';
 import { extractCosTaskType } from '../../../lib/cosTaskType';
 import { DEFAULT_REVIEWER, normalizeReviewers } from '../constants';
-import { formatBytes, formatDurationMs, formatDateTime, formatMonthDay, formatTimeOfDay } from '../../../utils/formatters';
+import { formatBytes, formatDurationMs, formatDateTime, formatTimeOfDay } from '../../../utils/formatters';
 import { useAutoRefetch } from '../../../hooks/useAutoRefetch';
 import ConfirmButtonPair from '../../ui/ConfirmButtonPair';
 import { useConfirmDelete } from '../../../hooks/useConfirmDelete';
+import { AgentProgress, AgentRuntimeStatus } from './AgentRuntimeStatus';
 
 // Pre-compiled regexes for normalizeDescriptionToMarkdown
 // Avoid lookbehind to support older Safari/iOS runtimes
@@ -701,106 +698,22 @@ export default function AgentCard({ agent, onPause, onKill, onDelete, onResume, 
           </div>
         </div>
 
-        {/* Second row: Runtime, ETA, and process stats - compact inline display */}
-        <div className="flex items-center gap-2 flex-wrap text-xs mb-2">
-          {/* Duration with ETA for running agents */}
-          {!inactive && durationEstimate ? (
-            <span
-              className="flex items-center gap-1.5 text-gray-500 whitespace-nowrap"
-              title={`Based on ${durationEstimate.basedOn} completed ${durationEstimate.taskType} tasks (avg: ${formatDurationMs(durationEstimate.avgMs)}, est: ${formatDurationMs(durationEstimate.estimatedMs)})`}
-            >
-              <Clock size={12} aria-hidden="true" className="shrink-0" />
-              <span className="font-mono">{formatDurationMs(duration)}</span>
-              {remainingTime && !remainingTime.isOvertime && (
-                <>
-                  <span className="text-gray-600">→</span>
-                  <span className="font-mono text-port-accent">~{formatDurationMs(remainingTime.remaining)} left</span>
-                </>
-              )}
-              {remainingTime?.isOvertime && (
-                <>
-                  <span className="text-gray-600">→</span>
-                  <span className="font-mono text-yellow-500">+{formatDurationMs(remainingTime.overBy)}</span>
-                </>
-              )}
-            </span>
-          ) : (
-            <span className="flex items-center gap-1 text-gray-500 whitespace-nowrap">
-              <Clock size={12} aria-hidden="true" className="shrink-0" />
-              <span className="font-mono">{formatDurationMs(duration)}</span>
-            </span>
-          )}
-          {/* Completed timestamp */}
-          {completed && agent.completedAt && (
-            <>
-              <span className="text-gray-600">|</span>
-              <span className="text-gray-500 whitespace-nowrap" title={formatDateTime(agent.completedAt)}>
-                {formatMonthDay(agent.completedAt)}{' '}
-                {formatTimeOfDay(agent.completedAt)}
-              </span>
-            </>
-          )}
-          {/* Process stats for running agents - inline */}
-          {!inactive && processStats?.active && (
-            <span className="flex items-center gap-1 px-2 py-0.5 rounded bg-port-success/20 text-port-success whitespace-nowrap"
-                  title={`PID: ${processStats.pid} | State: ${processStats.state}`}>
-              <Activity size={10} aria-hidden="true" className="shrink-0" />
-              <span className="font-mono">PID {processStats.pid}</span>
-              <span className="text-port-success/70">|</span>
-              <span className="font-mono">{processStats.cpu?.toFixed(1)}%</span>
-              <span className="text-port-success/70">|</span>
-              <span className="font-mono">{processStats.memoryMb}MB</span>
-            </span>
-          )}
-          {!inactive && agent.metadata?.tuiSessionId && (
-            <Link
-              to={`/shell?session=${encodeURIComponent(agent.metadata.tuiSessionId)}`}
-              className="flex items-center gap-1.5 px-3 py-1 rounded font-semibold bg-emerald-500 text-black hover:bg-emerald-400 shadow-sm ring-1 ring-emerald-400/50 whitespace-nowrap transition-colors"
-              title="Open the live TUI shell to inspect and interact with this agent"
-            >
-              <Terminal size={14} aria-hidden="true" className="shrink-0" />
-              <span>Open Shell</span>
-              <span className="font-mono text-[10px] text-port-on-success">{agent.metadata.tuiSessionId.slice(0, 6)}</span>
-            </Link>
-          )}
-          {!inactive && noShellReason && (
-            <span
-              className="flex items-center gap-1 px-2 py-0.5 rounded bg-port-border/40 text-gray-400 whitespace-nowrap"
-              title={noShellReason}
-            >
-              <Terminal size={10} aria-hidden="true" className="shrink-0" />
-              <span>No shell</span>
-            </span>
-          )}
-          {!inactive && prefillReason && (
-            <span
-              className="flex items-center gap-1 px-2 py-0.5 rounded bg-port-warning/20 text-port-warning whitespace-nowrap"
-              title={prefillReason}
-            >
-              <Hourglass size={10} aria-hidden="true" className="shrink-0" />
-              <span>Long prefill ~{prefillLabel}</span>
-            </span>
-          )}
-          {!remote && (
-            <button
-              onClick={openPromptModal}
-              className="flex items-center gap-1 px-2 py-0.5 rounded bg-port-border/40 text-gray-400 hover:bg-port-border/60 hover:text-white whitespace-nowrap"
-              title="View the prompt this agent was given at spawn"
-            >
-              <MessageSquare size={10} aria-hidden="true" className="shrink-0" />
-              <span>Prompt</span>
-            </button>
-          )}
-          {/* Show zombie warning if PID exists but process is dead */}
-          {!inactive && agent.pid && processStats && !processStats.active && (
-            <span className="flex items-center gap-1 px-2 py-0.5 rounded bg-port-error/20 text-port-error whitespace-nowrap"
-                  title="Process is not running - zombie agent">
-              <Skull size={10} aria-hidden="true" className="shrink-0" />
-              <span className="font-mono">PID {agent.pid}</span>
-              <span>ZOMBIE</span>
-            </span>
-          )}
-        </div>
+        <AgentRuntimeStatus
+          inactive={inactive}
+          durationEstimate={durationEstimate}
+          duration={duration}
+          remainingTime={remainingTime}
+          completed={completed}
+          completedAt={agent.completedAt}
+          processStats={processStats}
+          tuiSessionId={agent.metadata?.tuiSessionId}
+          noShellReason={noShellReason}
+          prefillReason={prefillReason}
+          prefillLabel={prefillLabel}
+          remote={remote}
+          onOpenPrompt={openPromptModal}
+          pid={agent.pid}
+        />
         <TaskDescription id={agent.id} text={agent.metadata?.taskDescription || agent.taskId} />
 
         {/* JIRA ticket info */}
@@ -972,34 +885,12 @@ export default function AgentCard({ agent, onPause, onKill, onDelete, onResume, 
           </div>
         )}
 
-        {/* Progress bar and ETA for running agents with estimates */}
-        {!inactive && durationEstimate && progress !== null && (
-          <div className="mt-2">
-            <div className="h-1.5 bg-port-border rounded-full overflow-hidden">
-              <div
-                className={`h-full transition-all duration-1000 ease-linear ${
-                  remainingTime?.isOvertime ? 'bg-yellow-500' : 'bg-port-accent'
-                }`}
-                style={{ width: `${Math.min(progress, 99)}%` }}
-              />
-            </div>
-            <div className="flex justify-between mt-1.5 text-xs">
-              <span className="text-gray-500">
-                {progress}% complete
-              </span>
-              {remainingTime && !remainingTime.isOvertime && (
-                <span className="text-port-accent font-medium">
-                  ETA: ~{formatDurationMs(remainingTime.remaining)}
-                </span>
-              )}
-              {remainingTime?.isOvertime && (
-                <span className="text-yellow-500 font-medium animate-pulse">
-                  +{formatDurationMs(remainingTime.overBy)} over estimate
-                </span>
-              )}
-            </div>
-          </div>
-        )}
+        <AgentProgress
+          inactive={inactive}
+          durationEstimate={durationEstimate}
+          progress={progress}
+          remainingTime={remainingTime}
+        />
 
         {agent.result && (
           <div className="flex items-center gap-4 flex-wrap">
