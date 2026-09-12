@@ -8,19 +8,17 @@
  *
  * Cause: npm's lockfile writer copies a fixed list of manifest fields into each
  * entry — `pkgMetaKeys` in `@npmcli/arborist`'s `lib/shrinkwrap.js`. `libc` was
- * only added to that list in arborist 10, which ships in npm 12. Dependabot
- * runs a current npm, so every lockfile it opens a PR against carries `libc`;
- * any install on npm 11 or older then rewrites the file without those fields,
- * and the next Dependabot PR puts them back. Neither side is wrong — the two
- * npm versions disagree about the schema, so the file ping-pongs forever. The
- * same skew drops `peer: true` markers that npm 12 records.
+ * added in arborist 9.4.0, shipped by npm 11.11.0. Earlier npm 11 releases
+ * omit it, so their installs can churn lockfiles authored by newer npm.
+ * npm 11.11.0 also preserves `peer: true`; neither field requires npm 12.
+ * Source: https://github.com/npm/cli/blob/v11.11.0/workspaces/arborist/lib/shrinkwrap.js
+ * Compare v11.10.1, whose pkgMetaKeys still omits `libc`.
  *
  * PortOS-managed setup, update, and dependency-repair installs pass `--no-save`
  * so they honor the committed lockfile without rewriting it. A direct
  * dependency-authoring `npm install` on an older npm still churns the lockfile.
- * No Node release bundles npm 12 yet (Node 24.10 ships npm 11.6.1), so gating
- * installs on it would break working installs over a file-formatting difference.
- * `npm install -g npm@latest` ends the mismatch for authoring workflows.
+ * This is an authoring advisory, not a runtime gate. Recommend the verified
+ * floor explicitly: npm@latest may require a newer Node than PortOS does.
  *
  * This advisory is the explainer, not the whole floor. The four `engines.npm`
  * fields are the declarative half, and they are what covers the install paths
@@ -45,7 +43,7 @@ import { isDirectlyInvoked } from './lib/directInvocation.js';
  * changing exactly this string — scripts/checkNpmVersion.test.js pins the
  * arborist/npm reasoning above to it.
  */
-export const MIN_NPM = '12.0.0';
+export const MIN_NPM = '11.11.0';
 
 /**
  * Read the npm version out of the `npm_config_user_agent` npm exports to its
@@ -105,7 +103,7 @@ export function npmAdvisory({
 
   const lines = [
     `⚠️  npm ${npmVersion} is below ${MIN_NPM} — direct npm installs can rewrite package-lock.json`,
-    'ℹ️  Older npm drops the `libc` fields npm 12 records, so direct installs churn the lockfiles and ping-pong with Dependabot'
+    `ℹ️  npm before ${MIN_NPM} drops the libc metadata newer npm records, so direct installs can churn the lockfiles`
   ];
 
   // The confusing case: PATH is resolving an older global npm ahead of the one
@@ -116,7 +114,7 @@ export function npmAdvisory({
     );
   }
 
-  lines.push('🔧 Fix: npm install -g npm@latest');
+  lines.push(`🔧 Fix: npm install -g npm@${MIN_NPM}`);
   return lines;
 }
 

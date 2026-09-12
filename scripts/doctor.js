@@ -192,8 +192,8 @@ async function probeNode() {
 }
 
 /**
- * npm is ADVISORY, never required: no Node release bundles npm 12 yet, so an
- * older npm is a correct install that merely churns the lockfiles. Same
+ * npm is ADVISORY, never required: npm below the authoring floor can still
+ * install dependencies but may churn lockfile metadata. Same
  * reasoning as `checkNpmVersion.js`, which warns rather than exits.
  */
 async function probeNpm() {
@@ -206,7 +206,7 @@ async function probeNpm() {
   }
   return compareVersions(version, MIN_NPM) >= 0
     ? { available: true, detail: `${version}` }
-    : { available: false, detail: `${version} is below ${MIN_NPM} — installs rewrite package-lock.json (npm install -g npm@latest)` };
+    : { available: false, detail: `${version} is below ${MIN_NPM} — installs rewrite package-lock.json (npm install -g npm@${MIN_NPM})` };
 }
 
 async function probeSubmodule(root) {
