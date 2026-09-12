@@ -1,42 +1,29 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import toast from '../components/ui/Toast';
 import { useSseProgress, isTerminalSseFrame } from './useSseProgress.js';
+import useMounted from './useMounted.js';
+
+const defaultReadPercent = (frame) => frame.percent;
 
 /**
- * One generic single-slot SSE job — the shared machinery every "kick off a job,
- * stream progress over SSE, settle on the terminal frame" hook re-implements:
- *
- *  - `pending` covers the gap between clicking Start and the kickoff request
- *    resolving, when `job` is still null — without it a fast double-click could
- *    fire a second request whose response silently orphans the first job.
- *  - the terminal-frame effect (`complete` / `error` / `canceled|cancelled`),
- *  - the `sse.closed`-without-a-terminal-frame recovery (server restart mid-job,
- *    or the job was pruned before/after attach) so the spinner can't hang.
- *
- * Call it once per UI surface that can independently kick off a job so each owns
- * its own job + SSE subscription — a shared slot would let a second kickoff
- * orphan the first's in-flight job (its SSE subscription would never re-attach).
- *
- * The three feature hooks (`useReferenceAudioImport`, `useYoutubeTrackImport`,
- * `useVideoDownload`) and `useMidiTranscription` are thin wrappers over this;
- * the recovery + terminal-frame logic lives here in exactly one place (#2368).
+ * One single-slot SSE job: kickoff, captured target, progress and terminal
+ * recovery. Reserve the slot synchronously, including the preparation window
+ * before the server returns a jobId. Each independent surface owns one slot.
  *
  * Options:
  * - `startRequest(startArg)` → resolves `{ jobId }` — the feature's kickoff call.
  * - `eventsUrl(jobId)` / `cancelRequest(jobId, { silent })` — SSE URL + cancel call.
  * - `onComplete(frame, context)` — fires on the terminal `complete` frame.
  * - `context` (the second `start` arg, or the start arg itself when omitted) is
- *   captured at kickoff so a slow-finishing job still attaches to the right
- *   target even if the caller's own state changed while it was in flight.
- * - `trimStartArg` — when true, `start(url, context)` trims `url` and no-ops on
- *   empty (the URL-import hooks); when false, `start(context)` passes through.
+ *   captured and exposed immediately at kickoff, including while `pending`.
+ * - `trimStartArg` — trims URL input and ignores an empty start when true.
+ * - `readPercent(frame)` — optional projection to 0–100 (default: frame.percent).
+ *   Missing/non-finite values preserve the last reported progress.
  * - `successToast(frame)` — optional; toast.success its return when truthy.
  * - `errorFallback` / `canceledMessage` / `lostConnectionMessage` /
  *   `startErrorFallback` — the per-feature toast copy.
- * - `onErrorFrame(frame, context)` → return true to suppress the default error
- *   toast (the MIDI gated-repo prompt intercepts here).
- * - `onKickoffError(err, startArg)` → return true to suppress the default kickoff
- *   error toast (the MIDI first-use install gate intercepts here).
+ * - `onErrorFrame(frame, context)` → return true to suppress the error toast.
+ * - `onKickoffError(err, startArg)` → return true to suppress the kickoff toast.
  * - `onKickoffSuccess(jobId, startArg)` — fires when the kickoff resolves.
  */
 export default function useSseJobSlot({
@@ -45,6 +32,7 @@ export default function useSseJobSlot({
   cancelRequest,
   onComplete,
   trimStartArg = false,
+  readPercent = defaultReadPercent,
   successToast,
   errorFallback = 'Job failed',
   canceledMessage = 'Job cancelled',
@@ -54,52 +42,57 @@ export default function useSseJobSlot({
   onKickoffError,
   onKickoffSuccess,
 } = {}) {
-  const [job, setJob] = useState(null); // { jobId, context }
-  const [pending, setPending] = useState(false);
+  // jobId is null during preparation; context already owns the target then.
+  const [job, setJob] = useState(null);
   const [progress, setProgress] = useState({ percent: 0, stage: null });
-  const jobUrl = job ? eventsUrl(job.jobId) : null;
+  const slotRef = useRef(null);
+  const mounted = useMounted();
+  useEffect(() => () => { slotRef.current = null; }, []);
+  const jobUrl = job?.jobId ? eventsUrl(job.jobId) : null;
   const sse = useSseProgress(jobUrl);
   const latest = sse.latest;
+  const percent = latest ? readPercent(latest) : undefined;
 
-  // Metadata and warning frames intentionally omit progress fields. Preserve the
-  // last announced values across those sparse frames instead of flashing 0% /
-  // "starting" between real progress updates.
-  //
-  // `latestUrl` is only a STALE-FRAME guard: the real hook sets it alongside
-  // `latest`, so a mismatch means the frame belongs to a previous job. An absent
-  // `latestUrl` means "unknown", not "mismatched" — treating it as a mismatch
-  // would silently freeze progress for any consumer whose SSE seam is stubbed.
+  const clearJob = () => {
+    slotRef.current = null;
+    setJob(null);
+  };
+
+  // Sparse metadata/warning frames preserve progress. A known mismatched URL
+  // belongs to an older stream; absent URL identity remains tolerated for the
+  // existing SSE test seams.
   useEffect(() => {
-    if (!job || !latest) return;
+    if (!job?.jobId || !latest) return;
     if (sse.latestUrl && sse.latestUrl !== jobUrl) return;
     setProgress((prev) => ({
-      percent: Number.isFinite(latest.percent) ? Math.round(latest.percent) : prev.percent,
+      percent: Number.isFinite(percent) ? Math.round(percent) : prev.percent,
       stage: typeof latest.stage === 'string' && latest.stage ? latest.stage : prev.stage,
     }));
-  }, [latest, job, jobUrl, sse.latestUrl]);
+  }, [latest, job, jobUrl, sse.latestUrl, percent]);
 
   useEffect(() => {
-    if (!job || !latest) return;
+    if (!job?.jobId || !latest) return;
+    if (sse.latestUrl && sse.latestUrl !== jobUrl) return;
     if (latest.type === 'complete') {
+      clearJob();
       onComplete?.(latest, job.context);
       const msg = successToast?.(latest);
       if (msg) toast.success(msg);
-      setJob(null);
     } else if (latest.type === 'error') {
+      clearJob();
       if (!onErrorFrame?.(latest, job.context)) {
         toast.error(latest.error || errorFallback);
       }
-      setJob(null);
     } else if (latest.type === 'canceled' || latest.type === 'cancelled') {
+      clearJob();
       toast.info(canceledMessage);
-      setJob(null);
     }
-  }, [latest]);
+  }, [latest, sse.latestUrl]);
 
-  // Stream closed without a terminal frame — recover so the spinner can't hang.
   useEffect(() => {
-    if (job && sse.closed && !isTerminalSseFrame(latest)) {
-      setJob(null);
+    if (job?.jobId && sse.closed && !isTerminalSseFrame(latest)) {
+      if (sse.latestUrl && sse.latestUrl !== jobUrl) return;
+      clearJob();
       toast.info(lostConnectionMessage);
     }
   }, [sse.closed]);
@@ -107,28 +100,35 @@ export default function useSseJobSlot({
   const start = (startArg, context) => {
     const arg = trimStartArg ? (startArg ?? '').trim() : startArg;
     if (trimStartArg && !arg) return;
-    if (job || pending) return;
+    if (!mounted.current || slotRef.current) return;
+    const slot = { jobId: null, context: context === undefined ? arg : context };
+    slotRef.current = slot;
+    setJob(slot);
     setProgress({ percent: 0, stage: null });
-    setPending(true);
+    const isCurrent = () => mounted.current && slotRef.current === slot;
     startRequest(arg)
       .then(({ jobId }) => {
+        if (!isCurrent()) return;
         onKickoffSuccess?.(jobId, arg);
-        setJob({ jobId, context: context === undefined ? arg : context });
+        setJob({ jobId, context: slot.context });
       })
       .catch((err) => {
+        if (!isCurrent()) return;
+        clearJob();
         if (onKickoffError?.(err, arg)) return;
         toast.error(err?.message || startErrorFallback);
-      })
-      .finally(() => setPending(false));
+      });
   };
 
   const cancel = () => {
-    if (!job) return;
+    if (!mounted.current || !job?.jobId) return;
     cancelRequest(job.jobId, { silent: true }).catch(() => {});
   };
 
   return {
-    active: pending || !!job,
+    active: !!job,
+    pending: !!job && !job.jobId,
+    jobId: job?.jobId ?? null,
     percent: progress.percent,
     stage: progress.stage,
     context: job?.context ?? null,

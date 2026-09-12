@@ -123,20 +123,23 @@ export default function ProjectToolbar({
         >
           <Copy size={15} /> {busy.cloning ? 'Forking…' : `Fork v${nextVersion}`}
         </button>
-        {renderJob.job ? (
-          <button onClick={renderJob.cancel} title="Cancel render"
+        {renderJob.active && renderJob.context === project.id ? (
+          <button onClick={renderJob.cancel} disabled={renderJob.pending}
+            title={renderJob.pending ? 'Preparing render' : 'Cancel render'}
             className="flex items-center gap-1 bg-port-warning/20 text-port-warning border border-port-border rounded px-2 py-1.5 text-sm min-h-[44px] sm:min-h-0">
-            <Activity size={15} className="animate-spin" /> {renderJob.progress}% · Cancel
+            <Activity size={15} className="animate-spin" /> {renderJob.pending ? 'Preparing render…' : `${renderJob.progress}% · Cancel`}
           </button>
         ) : (
-          <button onClick={() => renderJob.start(project.id)} disabled={sceneCount === 0 || renderableSceneCount !== sceneCount}
-            title={sceneCount === 0
-              ? 'Add scenes first'
-              : renderableSceneCount !== sceneCount
-                ? `Generate videos for all ${sceneCount} scenes first`
-                : 'Render the complete music video over the track'}
+          <button onClick={() => renderJob.start(project.id)} disabled={renderJob.active || sceneCount === 0 || renderableSceneCount !== sceneCount}
+            title={renderJob.active
+              ? 'Wait for the other project render to finish, or return to it to cancel'
+              : sceneCount === 0
+                ? 'Add scenes first'
+                : renderableSceneCount !== sceneCount
+                  ? `Generate videos for all ${sceneCount} scenes first`
+                  : 'Render the complete music video over the track'}
             className="flex items-center gap-1 bg-port-accent text-white rounded px-2 py-1.5 text-sm min-h-[44px] sm:min-h-0 disabled:opacity-50">
-            <Film size={15} /> Render final
+            <Film size={15} /> {renderJob.active ? 'Rendering another project…' : 'Render final'}
           </button>
         )}
         <button onClick={onDelete} title="Delete project" aria-label="Delete project"
