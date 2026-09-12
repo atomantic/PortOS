@@ -936,7 +936,7 @@ export async function updateSeries(id, patch = {}) {
       ...('premise' in patch ? { premise: patch.premise } : {}),
       ...('universeId' in patch ? { universeId: patch.universeId } : {}),
       ...('writersRoomWorkId' in patch ? { writersRoomWorkId: patch.writersRoomWorkId } : {}),
-      ...('arc' in patch ? { arc: patch.arc && !Object.hasOwn(patch.arc, 'seriesDesign') && cur.arc?.seriesDesign
+      ...('arc' in patch ? { arc: patch.arc && !Object.hasOwn(patch.arc, 'seriesDesign') && Object.hasOwn(cur.arc || {}, 'seriesDesign')
         ? { ...patch.arc, seriesDesign: cur.arc.seriesDesign } : patch.arc } : {}),
       ...('seasons' in patch ? { seasons: patch.seasons } : {}),
       // Wholesale replace — `characterArcs: []` clears all arcs; omission

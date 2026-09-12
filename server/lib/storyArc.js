@@ -522,10 +522,12 @@ export function sanitizeArc(raw) {
   // The foreshadowing ledger is identifying content too — an arc whose only
   // authored content is a set of planted seeds must survive.
   const foreshadowing = sanitizeForeshadowing(raw.foreshadowing);
+  // Keep explicit null in populated arcs: outgoing sync must distinguish a clear
+  // from an old sender that never knew this field. Legacy omission stays absent.
   const seriesDesign = sanitizeSeriesDesign(raw.seriesDesign);
   if (!logline && !summary && !protagonistArc && themes.length === 0 && !shape && !readerMap && !tickingClock && foreshadowing.length === 0 && !seriesDesign) return null;
   const status = ARC_STATUSES.includes(raw.status) ? raw.status : 'draft';
-  return { logline, summary, protagonistArc, themes, shape, readerMap, tickingClock, foreshadowing, ...(seriesDesign ? { seriesDesign } : {}), status };
+  return { logline, summary, protagonistArc, themes, shape, readerMap, tickingClock, foreshadowing, ...(raw.seriesDesign !== undefined ? { seriesDesign } : {}), status };
 }
 
 /**

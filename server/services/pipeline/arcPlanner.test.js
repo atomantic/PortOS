@@ -66,12 +66,16 @@ describe('arcPlanner — generateArcOverview', () => {
   ])('carries saved design through planning, reviews, model rewrites and rollback: %j', async (seriesDesign) => {
     const series = await setupSeries({ arc: { logline: 'Spine', shape: 'man-in-hole', seriesDesign, readerMap: { hooks: [{ label: 'What will the crew discover?' }] } }, seasons: [{ number: 1, title: 'First jobs', synopsis: 'The crew handles its first cases.', episodeCountTarget: 2 }] });
     const saved = series.arc.seriesDesign;
-    stageRunnerSpy = vi.fn(async () => ({ content: { logline: 'New spine', summary: 'Progress', seriesDesign: { mode: 'finite', endingCondition: 'AI overwrite' }, episodes: [{ number: 1, title: 'Broken pump', synopsis: 'The crew fixes a pump.' }], issues: [], edits: {}, changes: [], rationale: '' }, runId: 'r', providerId: 'p', model: 'm' }));
+    const episode = seriesDesign?.mode === 'finite'
+      ? { number: 1, title: 'The missing ledger', synopsis: 'The investigator finds a ledger that identifies the central suspect.' }
+      : { number: 1, title: 'The broken pump', synopsis: 'The crew repairs a pump but remain divided about acceptable risk.' };
+    stageRunnerSpy = vi.fn(async () => ({ content: { logline: 'New spine', summary: 'Progress', seriesDesign: { mode: 'finite', endingCondition: 'AI overwrite' }, episodes: [episode], issues: [], edits: {}, changes: [], rationale: '' }, runId: 'r', providerId: 'p', model: 'm' }));
     const overview = await planner.generateArcOverview(series.id);
     expect(overview.arc.seriesDesign).toEqual(saved);
     const refine = await planner.refineArc(series.id, 'Tighten the spine.');
     expect(refine.arc.seriesDesign).toEqual(saved);
-    await planner.generateSeasonEpisodes(series.id, series.seasons[0].id);
+    const planned = await planner.generateSeasonEpisodes(series.id, series.seasons[0].id);
+    await planner.commitEpisodesToIssues(series.id, series.seasons[0].id, planned.episodes);
     await planner.verifyArc(series.id);
     await planner.verifyVolume(series.id, series.seasons[0].id);
     await planner.resolveVerifyIssues(series.id, { findings: [{ severity: 'medium', problem: 'Clarify the episode connection.', suggestion: 'Connect the existing episodes.' }] });
@@ -81,6 +85,8 @@ describe('arcPlanner — generateArcOverview', () => {
         expect(context.shapeGuidance).toContain(saved.episodeActivity);
       } else expect(context.shapeGuidance).not.toContain('Series design (author-owned');
     }
+    expect(stageRunnerSpy.mock.calls.find(([stage]) => stage === 'pipeline-arc-verify')[1].seasonsTreeJson).toContain(episode.title);
+    expect(stageRunnerSpy.mock.calls.find(([stage]) => stage === 'pipeline-volume-verify')[1].volumeIssuesJson).toContain(episode.title);
     const snapshot = await planner.snapshotArcState(series.id);
     await planner.commitSeasonsWithRemap(series, { arc: { ...overview.arc, seriesDesign: { mode: 'finite', endingCondition: 'AI overwrite' } }, seasons: series.seasons });
     await planner.restoreArcState(series.id, snapshot);

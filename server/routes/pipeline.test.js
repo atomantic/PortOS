@@ -670,7 +670,9 @@ describe('pipeline routes', () => {
     await request(app).patch(url).send({ locked: { arc: false } });
     const cleared = await request(app).patch(url).send({ arc: { logline: 'Kept', seriesDesign: null } });
     expect(cleared.status).toBe(200);
-    expect(cleared.body.arc.seriesDesign).toBeUndefined();
+    expect(cleared.body.arc.seriesDesign).toBeNull();
+    const reedited = await request(app).patch(url).send({ arc: { logline: 'Still cleared' } });
+    expect(reedited.body.arc.seriesDesign).toBeNull();
     expect(cleared.body.arc.logline).toBe('Kept');
   });
 
