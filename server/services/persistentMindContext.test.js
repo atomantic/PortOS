@@ -39,6 +39,7 @@ const {
   clearPersistentMindRollups,
   createPersistentMindMemoryFromCandidate,
   createPersistentMindMemory,
+  choosePersistentMindName,
   readPersistentMindMemories,
   updatePersistentMindMemory,
   protectPersistentMindMemory,
@@ -77,6 +78,37 @@ beforeEach(() => {
 });
 
 afterAll(() => rmSync(CONTEXT_DIR, { recursive: true, force: true }));
+
+describe('chosen identity continuity', () => {
+  it('selects and later renames one protected record across reload, cleanup and provider changes', async () => {
+    const records = new Map();
+    mock.memoryApi.getMemories.mockImplementation(async ({ offset = 0 }) => ({ memories: [...records.values()].filter((m) => m.status === 'active').slice(offset, offset + 100) }));
+    mock.memoryApi.peekMemory.mockImplementation(async (id) => records.get(id));
+    mock.memoryApi.createMemory.mockImplementationOnce(async (input) => {
+      const memory = { id: 'chosen-identity', ...input };
+      records.set(memory.id, memory);
+      return memory;
+    });
+    mock.memoryApi.updateMemory.mockImplementation(async (id, updates) => {
+      const memory = { ...records.get(id), ...updates };
+      records.set(id, memory);
+      return memory;
+    });
+    expect(await choosePersistentMindName({ name: 'Example Star' })).toMatchObject({ name: 'Example Star', previousName: null, mindId: 'cos-persistent-mind' });
+    records.set('legacy', { id: 'legacy', content: 'My chosen name is Earlier.', tags: ['mind:core-identity'], sourceAgentId: 'cos-persistent-mind', status: 'active' });
+    vi.resetModules();
+    const reloaded = await import('./persistentMindContext.js');
+    expect(await reloaded.choosePersistentMindName({ name: 'Étoile' })).toMatchObject({ name: 'Étoile', previousName: 'Example Star', memoryId: 'chosen-identity' });
+    expect(records.size).toBe(2);
+    expect(await reloaded.readPersistentMindName()).toBe('Étoile');
+    expect(await reloaded.archivePersistentMindMemories()).toEqual({ archived: 0, preserved: 2 });
+    await reloaded.clearPersistentMindRollups();
+    const context = await reloaded.preparePersistentMindContext({ memories: await reloaded.readPersistentMindMemories(), providerId: 'other-provider', model: 'other-model' });
+    expect(context.text).toContain('Current chosen display name: "Étoile"');
+    expect(context.text).toContain('mindId=cos-persistent-mind');
+    expect(mock.appendMindEvent).not.toHaveBeenCalled();
+  });
+});
 
 describe('persistent mind rollups', () => {
   it('records source and model provenance and assembles it within the budget', async () => {

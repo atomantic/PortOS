@@ -142,7 +142,7 @@ export const PERSISTENT_MIND_TOOL_CATALOG = Object.freeze([
     id: 'mind.cleanup',
     capability: 'manageMind',
     name: 'Maintain mindspace',
-    description: 'Protect important memories, archive unprotected mind-owned memories, clear conversation history, or rebuild derived context.',
+    description: 'Choose or change your own name, protect important memories, archive unprotected mind-owned memories, clear conversation history, or rebuild derived context.',
     kind: 'typed-action',
     defaultEnabled: false,
     guardrails: [

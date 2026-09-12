@@ -1,3 +1,4 @@
+import { resolvePersistentMindChosenName } from '../lib/persistentMindChosenName.js';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import express from 'express';
 import { request } from '../lib/testHelper.js';
@@ -41,6 +42,7 @@ vi.mock('../services/persistentMindContext.js', () => ({
   preparePersistentMindContext: mocks.preparePersistentMindContext,
   promotePersistentMindMemory: mocks.promotePersistentMindMemory,
   readPersistentMindMemories: mocks.readPersistentMindMemories,
+  readPersistentMindName: async () => resolvePersistentMindChosenName(await mocks.readPersistentMindMemories()),
   readPersistentMindRollups: mocks.readPersistentMindRollups,
   updatePersistentMindMemory: mocks.updatePersistentMindMemory,
 }));
@@ -98,6 +100,19 @@ const post = (path, body) => request(app()).post(`/api/cos${path}`).send(body);
 const put = (path, body) => request(app()).put(`/api/cos${path}`).send(body);
 
 describe('persistent mind routes', () => {
+  it('projects the current protected name without changing trajectory identity or exposing memory records', async () => {
+    mocks.readPersistentMindMemories.mockResolvedValue([
+      { content: 'My chosen name is Earlier.', protection: 'core-identity' },
+      { content: 'Example Star', tags: ['mind:chosen-name', 'mind:core-identity'] },
+    ]);
+    const res = await get('/mind');
+    expect(res.status).toBe(200);
+    expect(res.body.identity).toEqual({ mindId: 'cos-persistent-mind', name: 'Example Star' });
+    expect(res.body.memories).toBeUndefined();
+    mocks.readPersistentMindMemories.mockResolvedValue([]);
+    expect((await get('/mind')).body.identity.name).toBeNull();
+  });
+
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.readPersistentMindEvents.mockResolvedValue({ events: [], cursor: null, gap: false, hasMore: false, snapshot: {} });

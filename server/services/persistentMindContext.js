@@ -29,6 +29,7 @@ import {
   appendMindEvent,
   readPersistentMindHistory,
 } from './agentRunEventLog.js';
+import { PERSISTENT_MIND_CHOSEN_NAME_TAG, persistentMindChooseNameSchema, resolvePersistentMindChosenName } from '../lib/persistentMindChosenName.js';
 import * as memoryBackend from './memoryBackend.js';
 import {
   PERSISTENT_MIND_MEMORY_PROTECTION_TAGS,
@@ -84,12 +85,27 @@ export async function readPersistentMindMemories(mindId = PERSISTENT_MIND_ID) {
   // outside the first page of ordinary memories before we get to sort it.
   const pages = await Promise.all([
     memoryBackend.getMemories(options),
+    memoryBackend.getMemories({ ...options, tags: [PERSISTENT_MIND_CHOSEN_NAME_TAG] }),
     ...Object.values(PERSISTENT_MIND_MEMORY_PROTECTION_TAGS).map((tag) => memoryBackend.getMemories({ ...options, tags: [tag] })),
   ]);
   const candidates = [...new Map(pages.flatMap((page) => page.memories || []).map((memory) => [memory.id, memory])).values()];
   const details = await Promise.all(candidates.map((memory) => memoryBackend.peekMemory(memory.id)));
   return details.filter((memory) => memory?.status === 'active' && memory.sourceAgentId === mindId)
     .sort(comparePersistentMindMemories).slice(0, 100).map(projectPersistentMindMemory);
+}
+
+/** Named installs need only one record for frequent page/turn identity refreshes. */
+export async function readPersistentMindName(mindId = PERSISTENT_MIND_ID) {
+  const { memories = [] } = await memoryBackend.getMemories({
+    status: 'active', sourceAgentId: mindId, tags: [PERSISTENT_MIND_CHOSEN_NAME_TAG],
+    sortBy: 'updatedAt', sortOrder: 'desc', limit: 1,
+  });
+  const memory = memories[0] ? await memoryBackend.peekMemory(memories[0].id) : null;
+  if (memory?.sourceAgentId === mindId && memory.status === 'active') {
+    const name = resolvePersistentMindChosenName([memory]);
+    if (name) return name;
+  }
+  return resolvePersistentMindChosenName(await readPersistentMindMemories(mindId));
 }
 
 /** Bulk cleanup never archives protected memories, regardless of its caller. */
@@ -279,9 +295,12 @@ export async function preparePersistentMindContext({
     }
   }
 
+  const chosenName = resolvePersistentMindChosenName(memories);
   return assemblePersistentMindContext({
     mindId,
-    identity,
+    identity: [chosenName
+      ? `Current chosen display name: ${JSON.stringify(chosenName)}. This supersedes older name memories; mindId and trajectory remain unchanged.`
+      : 'No chosen display name yet.', identity].filter(Boolean).join('\n'),
     instructions,
     memories,
     events: history,
@@ -290,6 +309,27 @@ export async function preparePersistentMindContext({
     recentEventLimit,
     promptVersion,
     coverageGap,
+  });
+}
+
+/** One protected record is the current name; older identity prose remains history. */
+export function choosePersistentMindName(input, mindId = PERSISTENT_MIND_ID) {
+  const { name } = persistentMindChooseNameSchema.parse(input);
+  return queueMemoryWrite(async () => {
+    const memories = await readPersistentMindMemories(mindId);
+    const previousName = resolvePersistentMindChosenName(memories);
+    const existing = memories.find((memory) => memory.tags?.includes(PERSISTENT_MIND_CHOSEN_NAME_TAG));
+    const fields = {
+      content: name,
+      summary: `Current chosen display name: ${name}`,
+      tags: persistentMindMemoryTags([PERSISTENT_MIND_CHOSEN_NAME_TAG, 'name'], 'core-identity'),
+      importance: 1,
+    };
+    const memory = existing
+      ? await memoryBackend.updateMemory(existing.id, fields)
+      : await memoryBackend.createMemory({ ...fields, type: 'fact', category: 'preferences', sourceAgentId: mindId, status: 'active' });
+    if (!memory) throw new Error('Chosen name could not be saved');
+    return { ok: true, success: true, name, previousName, mindId, memoryId: memory.id };
   });
 }
 

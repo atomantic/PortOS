@@ -5,6 +5,7 @@ const mocks = vi.hoisted(() => ({
   executeTasks: vi.fn(),
   cleanupMind: vi.fn(),
   protectMemory: vi.fn(),
+  chooseName: vi.fn(),
   worldStatus: vi.fn(),
   worldProject: vi.fn(),
   worldAugment: vi.fn(),
@@ -47,7 +48,7 @@ vi.mock('./voice/tools.js', () => ({
 vi.mock('./persistentMindTaskCapability.js', () => ({
   executePersistentMindTaskRequests: (...args) => mocks.executeTasks(...args),
 }));
-vi.mock('./persistentMindContext.js', () => ({ protectPersistentMindMemory: (...args) => mocks.protectMemory(...args) }));
+vi.mock('./persistentMindContext.js', () => ({ choosePersistentMindName: (...args) => mocks.chooseName(...args), protectPersistentMindMemory: (...args) => mocks.protectMemory(...args) }));
 vi.mock('./persistentMindMaintenance.js', () => ({
   cleanupPersistentMind: (...args) => mocks.cleanupMind(...args),
 }));
@@ -83,6 +84,21 @@ beforeEach(() => {
 });
 
 describe('cosToolRegistry', () => {
+  it('allows only a bounded mind-owned naming action under manageMind and deduplicates retries', async () => {
+    const call = { requestId: 'name-1', name: 'mind.choose-name', arguments: { name: 'Example Star' } };
+    const authority = { scope: 'mind', capabilities: { manageMind: true } };
+    await expect(executeCosToolCall({ call, authority: { scope: 'mind', capabilities: { writePortos: true } } })).rejects.toMatchObject({ code: 'TOOL_CAPABILITY_DENIED' });
+    await expect(executeCosToolCall({ call, authority: { ...authority, scope: 'agent' } })).rejects.toMatchObject({ code: 'TOOL_SCOPE_DENIED' });
+    for (const args of [{ name: '' }, { name: 'x'.repeat(65) }, { name: 'Example', mindId: 'other' }, { name: 'Bad\nName' }]) {
+      await expect(executeCosToolCall({ call: { ...call, arguments: args }, authority })).rejects.toBeDefined();
+    }
+    mocks.chooseName.mockResolvedValue({ ok: true, success: true, name: 'Example Star', previousName: null });
+    const first = await executeCosToolCall({ call, authority });
+    expect(first).toMatchObject({ state: 'completed', result: { name: 'Example Star' } });
+    await executeCosToolCall({ call, authority });
+    expect(mocks.chooseName).toHaveBeenCalledTimes(1);
+  });
+
   it('keeps local thinking authority separate and refuses raw configuration arguments', async () => {
     const call = { requestId: 'thinking-1', name: 'mind.request-thinking-preset', arguments: { presetId: 'local', reason: 'Try a focused pass' } };
     await expect(executeCosToolCall({ call, authority: { scope: 'mind', capabilities: { writePortos: true, createTasks: true } } })).rejects.toMatchObject({ code: 'TOOL_CAPABILITY_DENIED' });
@@ -101,6 +117,7 @@ describe('cosToolRegistry', () => {
       'cos.create-task',
       'mind.cleanup',
       'mind.protect-memory',
+      'mind.choose-name',
       'user-actions.query',
       'eidoverse.chat',
       'eidoverse.destinations',

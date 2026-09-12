@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { PERSISTENT_MIND_CHOSEN_NAME_TAG } from './persistentMindChosenName.js';
 import { memoryIdSchema } from './memoryValidation.js';
 
 // Use the existing durable tags column in both memory backends. No new store,
@@ -31,7 +32,8 @@ export function persistentMindMemoryTags(tags, protection) {
 
 export function comparePersistentMindMemories(a, b) {
   const rank = { 'core-identity': 2, important: 1, standard: 0 };
-  return rank[persistentMindMemoryProtection(b)] - rank[persistentMindMemoryProtection(a)]
+  return Number(b.tags?.includes(PERSISTENT_MIND_CHOSEN_NAME_TAG) || false) - Number(a.tags?.includes(PERSISTENT_MIND_CHOSEN_NAME_TAG) || false)
+    || rank[persistentMindMemoryProtection(b)] - rank[persistentMindMemoryProtection(a)]
     || (b.importance ?? 0.5) - (a.importance ?? 0.5);
 }
 

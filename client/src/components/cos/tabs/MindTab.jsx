@@ -264,6 +264,7 @@ export default function MindTab() {
         sawGap ||= response.gap === true;
         cursor = response.gap === true ? response.cursor : response.cursor || cursor;
         setMind({
+          identity: response.identity,
           state: response.state,
           profile: response.profile,
           capabilities: response.capabilities,
@@ -702,13 +703,17 @@ export default function MindTab() {
   return (
     <section aria-labelledby="mind-heading" className="mx-auto flex h-full min-h-0 w-full max-w-[100rem] flex-col gap-4 pb-4 xl:pb-0">
       <header className="flex flex-col gap-3 rounded-2xl border border-port-border bg-port-card/70 p-3 sm:flex-row sm:items-center sm:justify-between sm:p-4">
-        <div className="flex min-w-0 items-center gap-3">
+        <div className="flex min-w-0 flex-1 items-center gap-3">
           <span className="relative flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-port-accent/15 text-port-accent ring-1 ring-port-accent/30">
             <Brain size={23} aria-hidden="true" />
             <span className={`absolute bottom-0 right-0 h-3 w-3 rounded-full border-2 border-port-card ${state?.started && !isPaused ? 'bg-port-success' : 'bg-port-text-muted'}`} aria-hidden="true" />
           </span>
           <div className="min-w-0">
-            <h2 id="mind-heading" className="truncate text-lg font-semibold text-port-text">Persistent Mind</h2>
+            <p className="text-xs font-medium uppercase tracking-widest text-port-text-muted">Persistent Mind</p>
+            <h2 id="mind-heading" aria-live="polite" className="break-words text-3xl font-semibold tracking-tight text-port-accent sm:text-4xl [overflow-wrap:anywhere]">
+              {mind ? mind.identity?.name || 'Name not yet chosen' : 'Loading identity…'}
+            </h2>
+            {mind && !mind.identity?.name && <p className="text-xs text-port-text-muted">A name to choose on the next enabled wake. Free to change later.</p>}
             <p className="truncate text-xs text-port-text-muted">
               {mind ? `${mind.profile?.model || 'No model'} · ${mind.profile?.providerId || 'No provider'} · machine-local` : 'Loading profile…'}
             </p>

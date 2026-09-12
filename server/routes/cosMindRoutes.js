@@ -39,6 +39,7 @@ import {
   preparePersistentMindContext,
   promotePersistentMindMemory,
   readPersistentMindMemories,
+  readPersistentMindName,
   readPersistentMindRollups,
   updatePersistentMindMemory,
 } from '../services/persistentMindContext.js';
@@ -200,6 +201,7 @@ router.get('/mind', asyncHandler(async (req, res) => {
   const { snapshot, ...publicHistory } = history;
   res.json({
     ...publicHistory,
+    identity: { mindId: PERSISTENT_MIND_ID, name: await readPersistentMindName(PERSISTENT_MIND_ID) },
     turnExecutions: publicPersistentMindTurnExecutions(snapshot),
     state: publicPersistentMindState(state),
     profile: {

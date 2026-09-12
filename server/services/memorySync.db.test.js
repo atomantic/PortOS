@@ -89,6 +89,20 @@ describe.skipIf(!runDb)('memorySync.applyRemoteChanges', () => {
     await close();
   });
 
+  it('keeps chosen identity local through outbound and incoming federation, including id collisions', async () => {
+    await memorySync.applyRemoteChanges([remoteMemory(ID_A, '2026-01-02T00:00:00.000Z')]);
+    await query(`UPDATE memories SET source_agent_id = $1, content = $2, tags = $3 WHERE id = $4`, ['cos-persistent-mind', 'Example Star', ['mind:chosen-name', 'mind:core-identity'], ID_A]);
+    expect((await memorySync.getChangesSince()).memories).toEqual([]);
+    const result = await memorySync.applyRemoteChanges([
+      remoteMemory(ID_A, '2026-01-03T00:00:00.000Z'),
+      remoteMemory(ID_B, '2026-01-03T00:00:00.000Z', { sourceAgentId: 'cos-persistent-mind' }),
+      remoteMemory('00000000-0000-4000-8000-00000000cccc', '2026-01-03T00:00:00.000Z', { tags: ['mind:chosen-name'] }),
+    ]);
+    expect(result).toEqual({ inserted: 0, updated: 0, skipped: 3 });
+    expect(await contentOf(ID_A)).toBe('Example Star');
+    expect(await contentOf(ID_B)).toBeNull();
+  });
+
   it('applies a duplicated id instead of aborting the whole transaction', async () => {
     // Regression: a peer payload repeating one id made the batched multi-row
     // upsert throw "ON CONFLICT DO UPDATE command cannot affect row a second

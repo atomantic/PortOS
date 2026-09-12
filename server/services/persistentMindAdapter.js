@@ -8,6 +8,7 @@
  * the configured model is the user's explicit inference choice.
  */
 
+import { persistentMindNamePrompt, persistentMindChosenNameSchema } from '../lib/persistentMindChosenName.js';
 import { persistentMindMemoryProtectionSchema } from '../lib/persistentMindMemory.js';
 import { z } from 'zod';
 import {
@@ -25,6 +26,7 @@ import { loadState } from './cosState.js';
 import {
   createPersistentMindMemoryFromCandidate,
   readPersistentMindMemories,
+  readPersistentMindName,
 } from './persistentMindContext.js';
 import { normalizePersistentMindPrompt } from '../lib/persistentMindPrompt.js';
 import { composePersistentMindInstructions, normalizePersistentMindPlaybook } from '../lib/persistentMindPlaybook.js';
@@ -126,7 +128,10 @@ const executeMindToolCalls = async ({ calls, turnId, wake, signal, capabilities,
       kind: 'result',
       id: `tool-result:${requestId}`,
       data: {
-        displayText: `${candidate.name} ${result.state}`,
+        displayText: ['mind.choose-name', 'mind_choose_name'].includes(candidate.name)
+          && result.state === 'completed' && persistentMindChosenNameSchema.safeParse(result.result?.name).success
+          ? `Chosen display name: ${result.result.name}`
+          : `${candidate.name} ${result.state}`,
         tool: candidate.name,
         success: result.state === 'completed',
       },
@@ -414,7 +419,7 @@ export function createPersistentMindTurnAdapter() {
         // model earned by asking for tools. Each is admitted on its own.
         result = await callBoundary(
           { purpose: round === 0 ? 'turn' : 'tool-round', round },
-          ({ reportRunId }) => runPinnedPrompt({
+          async ({ reportRunId }) => runPinnedPrompt({
             provider,
             model,
             effort,
@@ -422,7 +427,7 @@ export function createPersistentMindTurnAdapter() {
             heartbeat,
             screenshots,
             reportRunId,
-            prompt: providerPrompt,
+            prompt: `${providerPrompt}\n\n# Current naming identity\n${persistentMindNamePrompt(await readPersistentMindName(PERSISTENT_MIND_ID), { canChoose: taskAccess.manageMind })}`,
             responseSchema: persistentMindResponseSchema,
           }),
         );
