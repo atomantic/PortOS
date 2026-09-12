@@ -1005,7 +1005,9 @@ describe('Integration: Goal CRUD', () => {
     const milestone = await addMilestone(goal.id, { title: 'Complete me' });
     const completed = await completeMilestone(goal.id, milestone.id);
 
-    expect(completed.completedAt).toBeDefined();
+    expect(completed.completedAt).not.toBeNull();
+    expect(typeof completed.completedAt).toBe('string');
+    expect(Number.isNaN(Date.parse(completed.completedAt))).toBe(false);
   });
 
   it('should return null for completing non-existent milestone', async () => {
