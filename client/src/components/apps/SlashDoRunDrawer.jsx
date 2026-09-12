@@ -24,9 +24,10 @@ import * as api from '../../services/api';
  * server-side rather than pinning whatever this form happened to display.
  *
  * Mount only while open (the parent conditionally renders it): the provider fetch
- * runs on mount, and unmounting is what resets the form between runs.
+ * runs on mount unless the overview supplies its shared agent picker. Task
+ * settings reset on unmount; a supplied picker retains the overview overrides.
  */
-function SlashDoRunDrawerBody({ open, command, label, appId, appName, onClose, onQueued }) {
+function SlashDoRunDrawerBody({ open, command, label, appId, appName, onClose, onQueued, agentPicker }) {
   const codeReviewDefaults = useCodeReviewDefaults();
   // What a claim actually resolves for this app — the claim-work override layer
   // the defaults above cannot see. Only `/do:next` reads reviewers server-side,
@@ -36,14 +37,17 @@ function SlashDoRunDrawerBody({ open, command, label, appId, appName, onClose, o
   // Resolved model lists for the reviewer table's Model column (the picker never
   // fetches — see its `modelOptions` prop).
   const reviewerModelOptions = useReviewerModelOptions();
+  const localPicker = useProviderModels({ filter: enabledProcessProviderFilter, allowDefault: true, preselectDefaults: true, silent: true, withEffort: true, enabled: !agentPicker });
   const {
     providers, selectedProviderId, selectedModel, availableModels,
     setSelectedProviderId, setSelectedModel
     // This picker renders the effort control and sends the value, so Antigravity
     // lists base models with the effort picked separately.
-  } = useProviderModels({ filter: enabledProcessProviderFilter, allowDefault: true, preselectDefaults: true, silent: true, withEffort: true });
+  } = agentPicker ?? localPicker;
 
-  const [effort, setEffort] = useState('');
+  const [localEffort, setLocalEffort] = useState('');
+  const effort = agentPicker ? agentPicker.effort : localEffort;
+  const setEffort = agentPicker ? agentPicker.setEffort : setLocalEffort;
   const [simplify, setSimplify] = useState(true);
   // Seeded from what the RUN will resolve for display. `review` staying null is
   // what gates whether the fields are SENT — see the component doc.

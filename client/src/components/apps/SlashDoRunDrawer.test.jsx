@@ -3,6 +3,7 @@ import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router';
 import SlashDoRunDrawer from './SlashDoRunDrawer';
+import SlashDoPanel from './SlashDoPanel';
 
 const api = vi.hoisted(() => ({
   getCodeReviewDefaults: vi.fn(),
@@ -62,6 +63,31 @@ describe('SlashDoRunDrawer', () => {
       reviewerMaxRounds: {}, reviewerModels: {}, reviewerEfforts: {}, csv: 'copilot'
     });
     api.createSlashdoTask.mockResolvedValue({ id: 'task-1', status: 'pending' });
+  });
+
+  it('uses overview overrides for direct actions and keeps them when opening run settings', async () => {
+    api.getProviders.mockResolvedValue({ providers: [
+      { id: 'codex', name: 'Codex', type: 'cli', enabled: true, models: ['gpt-5'], defaultModel: 'gpt-5' }
+    ] });
+    render(<MemoryRouter><SlashDoPanel appId="acme" appName="Acme App" appType="node" /></MemoryRouter>);
+    await screen.findByRole('option', { name: 'Codex' });
+    await userEvent.selectOptions(screen.getByLabelText('Provider'), 'codex');
+    await userEvent.selectOptions(screen.getByLabelText('Model'), 'gpt-5');
+    await userEvent.selectOptions(screen.getByLabelText('Thinking effort'), 'high');
+    await userEvent.click(screen.getByRole('button', { name: '/do:plan-task' }));
+    await waitFor(() => expect(api.createSlashdoTask).toHaveBeenCalledWith(
+      'plan-task', 'acme', { provider: 'codex', model: 'gpt-5', effort: 'high' }, { silent: true }
+    ));
+    await userEvent.click(screen.getByRole('button', { name: '/do:next' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Queue /do:next' }));
+    await waitFor(() => expect(api.createSlashdoTask).toHaveBeenLastCalledWith(
+      'next', 'acme', expect.objectContaining({ provider: 'codex', model: 'gpt-5', effort: 'high' }), { silent: true }
+    ));
+    await userEvent.selectOptions(screen.getByLabelText('Provider'), '');
+    await userEvent.click(screen.getByRole('button', { name: '/do:plan-task' }));
+    await waitFor(() => expect(api.createSlashdoTask).toHaveBeenLastCalledWith(
+      'plan-task', 'acme', { provider: undefined, model: undefined, effort: undefined }, { silent: true }
+    ));
   });
 
   it('queues an agent-picks run without fetching the tracker', async () => {
