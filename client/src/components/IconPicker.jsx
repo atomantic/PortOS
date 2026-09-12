@@ -1,25 +1,38 @@
-import { useState, useEffect } from 'react';
+import { useState, useRef, useId } from 'react';
 import AppIcon, { iconNames } from './AppIcon';
 
 export default function IconPicker({ value, onChange }) {
   const [isOpen, setIsOpen] = useState(false);
 
-  useEffect(() => {
-    if (!isOpen) return;
-    const handleKeyDown = (e) => {
-      if (e.key === 'Escape') setIsOpen(false);
-    };
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [isOpen]);
+  const triggerRef = useRef(null);
+  const choicesRef = useRef(null);
+  const choicesId = useId();
+
+  const close = () => {
+    if (choicesRef.current?.contains(document.activeElement)) {
+      triggerRef.current?.focus();
+    }
+    setIsOpen(false);
+  };
+
+  const handleKeyDown = (event) => {
+    if (isOpen && event.key === 'Escape') {
+      event.preventDefault();
+      event.stopPropagation();
+      close();
+    }
+  };
 
   return (
-    <div className="relative">
+    <div className="relative" onKeyDown={handleKeyDown}>
       <span className="block text-sm text-gray-400 mb-1">Icon</span>
       <button
         type="button"
+        ref={triggerRef}
         aria-label="Icon picker"
-        onClick={() => setIsOpen(!isOpen)}
+        aria-expanded={isOpen}
+        aria-controls={isOpen ? choicesId : undefined}
+        onClick={() => isOpen ? close() : setIsOpen(true)}
         className="flex items-center gap-3 w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white hover:border-port-accent/50 focus:border-port-accent focus:outline-hidden transition-colors"
       >
         <div className="w-8 h-8 rounded bg-port-border flex items-center justify-center text-port-accent">
@@ -33,10 +46,10 @@ export default function IconPicker({ value, onChange }) {
         <>
           <div
             className="fixed inset-0 z-40"
-            onClick={() => setIsOpen(false)}
+            onClick={close}
             aria-hidden="true"
           />
-          <div className="absolute top-full left-0 mt-1 w-full bg-port-card border border-port-border rounded-lg shadow-xl z-50 p-2 max-h-64 overflow-auto">
+          <div ref={choicesRef} id={choicesId} className="absolute top-full left-0 mt-1 w-full bg-port-card border border-port-border rounded-lg shadow-xl z-50 p-2 max-h-64 overflow-auto">
             <div className="grid grid-cols-3 gap-1 sm:grid-cols-5">
               {iconNames.map(name => (
                 <button
@@ -44,7 +57,7 @@ export default function IconPicker({ value, onChange }) {
                   type="button"
                   onClick={() => {
                     onChange(name);
-                    setIsOpen(false);
+                    close();
                   }}
                   className={`p-2 rounded-lg flex flex-col items-center gap-1 transition-colors ${
                     value === name

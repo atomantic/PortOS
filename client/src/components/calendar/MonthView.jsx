@@ -1,12 +1,13 @@
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useMemo, useRef } from 'react';
 import {ChevronLeft, ChevronRight} from 'lucide-react';
 import * as api from '../../services/api';
 import socket from '../../services/socket';
 import EventDetail from './EventDetail';
+import Drawer from '../Drawer';
 import { buildSubcalendarColorMap, eventChipStyle } from './calendarUtils';
 import BrailleSpinner from '../BrailleSpinner';
 import { useThemeContext } from '../ThemeContext';
-import { formatMonthYear, formatTimeOfDay } from '../../utils/formatters';
+import { formatMonthYear, formatTimeOfDay, formatDateFull, localDateKey } from '../../utils/formatters';
 import useUrlParams from '../../hooks/useUrlParams';
 
 function getMonthGrid(year, month) {
@@ -37,46 +38,54 @@ const DAY_NAMES = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
 export default function MonthView({ accounts }) {
   const now = new Date();
-  const [year, setYear] = useState(now.getFullYear());
-  const [month, setMonth] = useState(now.getMonth());
+
   const [events, setEvents] = useState([]);
   const [loading, setLoading] = useState(true);
   const [searchParams, updateParams] = useUrlParams();
   const { theme } = useThemeContext();
+  const monthParam = searchParams.get('month');
+  const monthKey = /^[1-9]\d{3}-(0[1-9]|1[0-2])$/.test(monthParam || '')
+    ? monthParam : localDateKey(now).slice(0, 7);
+  const [year, monthNumber] = monthKey.split('-').map(Number);
+  const month = monthNumber - 1;
 
   const cells = getMonthGrid(year, month);
   const monthLabel = formatMonthYear(new Date(year, month));
 
-  const fetchEvents = useCallback(async () => {
-    const grid = getMonthGrid(year, month);
-    const startDate = grid[0].date.toISOString();
-    const endDate = new Date(grid[grid.length - 1].date.getTime() + 24 * 60 * 60 * 1000).toISOString();
-    const data = await api.getCalendarEvents({ startDate, endDate, limit: 500 }).catch(() => ({ events: [] }));
-    setEvents(data?.events || []);
-    setLoading(false);
+  useEffect(() => {
+    let active = true;
+    let request = 0;
+    const fetchEvents = async () => {
+      const currentRequest = ++request;
+      const grid = getMonthGrid(year, month);
+      const last = grid[grid.length - 1].date;
+      const startDate = grid[0].date.toISOString();
+      const endDate = new Date(last.getFullYear(), last.getMonth(), last.getDate() + 1).toISOString();
+      const data = await api.getCalendarEvents({ startDate, endDate, limit: 500 }).catch(() => ({ events: [] }));
+      if (!active || currentRequest !== request) return;
+      setEvents(data?.events || []);
+      setLoading(false);
+    };
+    setEvents([]);
+    setLoading(true);
+    fetchEvents();
+    socket.on('calendar:sync:completed', fetchEvents);
+    return () => {
+      active = false;
+      socket.off('calendar:sync:completed', fetchEvents);
+    };
   }, [year, month]);
 
-  useEffect(() => { fetchEvents(); }, [fetchEvents]);
-  useEffect(() => {
-    socket.on('calendar:sync:completed', fetchEvents);
-    return () => socket.off('calendar:sync:completed', fetchEvents);
-  }, [fetchEvents]);
-
   const navigate = (dir) => {
-    setLoading(true);
-    if (dir === -1) {
-      if (month === 0) { setMonth(11); setYear(y => y - 1); }
-      else setMonth(m => m - 1);
-    } else {
-      if (month === 11) { setMonth(0); setYear(y => y + 1); }
-      else setMonth(m => m + 1);
-    }
+    updateParams({
+      month: localDateKey(new Date(year, month + dir, 1)).slice(0, 7),
+      day: null,
+      event: null,
+    });
   };
 
   const goToday = () => {
-    setYear(now.getFullYear());
-    setMonth(now.getMonth());
-    setLoading(true);
+    updateParams({ month: localDateKey(now).slice(0, 7), day: null, event: null });
   };
 
   // Group events by day string
@@ -91,6 +100,21 @@ export default function MonthView({ accounts }) {
   const selectedEventKey = searchParams.get('event');
   const selectedEvent = events.find((event) => `${event.accountId}:${event.id}` === selectedEventKey) || null;
   const todayStr = now.toDateString();
+  const dayTriggerRef = useRef(null);
+  // Matching against the visible grid rejects impossible and stale day keys.
+  const selectedDay = cells.find(cell => localDateKey(cell.date) === searchParams.get('day'));
+  const selectedDayEvents = [...(eventsByDay[selectedDay?.date.toDateString()] || [])]
+    .sort((a, b) => Number(b.isAllDay) - Number(a.isAllDay) || new Date(a.startTime) - new Date(b.startTime));
+  // Event details temporarily replace the day drawer, so preserve the original
+  // month trigger across that intermediate drawer's focus-restoration cycle.
+  useEffect(() => {
+    if (!selectedDay && !selectedEvent && dayTriggerRef.current) {
+      dayTriggerRef.current.focus();
+      dayTriggerRef.current = null;
+    }
+  }, [selectedDay, selectedEvent]);
+
+  const openEvent = (event) => updateParams({ month: monthKey, event: `${event.accountId}:${event.id}` });
 
   return (
     <div className="space-y-4">
@@ -151,7 +175,7 @@ export default function MonthView({ accounts }) {
                       return (
                         <button
                           key={`${event.accountId}-${event.id}`}
-                          onClick={() => updateParams({ event: `${event.accountId}:${event.id}` })}
+                          onClick={() => openEvent(event)}
                           className="w-full text-left px-1 py-0.5 rounded text-[10px] truncate transition-colors hover:brightness-125"
                           style={eventChipStyle(evColor, theme?.mode)}
                         >
@@ -165,7 +189,17 @@ export default function MonthView({ accounts }) {
                       );
                     })}
                     {dayEvents.length > 3 && (
-                      <div className="text-[10px] text-gray-500 pl-1">+{dayEvents.length - 3} more</div>
+                      <button
+                        type="button"
+                        aria-label={`View all ${dayEvents.length} events for ${formatDateFull(cell.date)}`}
+                        onClick={(e) => {
+                          dayTriggerRef.current = e.currentTarget;
+                          updateParams({ month: monthKey, day: localDateKey(cell.date), event: null });
+                        }}
+                        className="w-full text-left text-[10px] text-port-accent pl-1 py-1 rounded hover:bg-port-border focus-visible:outline focus-visible:outline-port-accent"
+                      >
+                        +{dayEvents.length - 3} more
+                      </button>
                     )}
                   </div>
                 </div>
@@ -175,6 +209,31 @@ export default function MonthView({ accounts }) {
         </div>
       )}
 
+      <Drawer
+        open={!!selectedDay && !selectedEvent && !loading}
+        onClose={() => updateParams({ day: null, event: null })}
+        title={selectedDay ? formatDateFull(selectedDay.date) : ''}
+        subtitle={`${selectedDayEvents.length} events`}
+        closeLabel="Close day events"
+      >
+        {loading ? <BrailleSpinner text="Loading" /> : (
+          <div className="space-y-2">
+            {selectedDayEvents.length === 0 && <p className="text-sm text-gray-400">No events available for this date.</p>}
+            {selectedDayEvents.map(event => (
+              <button
+                key={`${event.accountId}:${event.id}`}
+                type="button"
+                onClick={() => openEvent(event)}
+                className="w-full min-h-[44px] text-left px-3 py-2 rounded transition-colors hover:brightness-125"
+                style={eventChipStyle(colorMap.get(event.subcalendarId) || null, theme?.mode)}
+              >
+                <span className="block text-xs">{event.isAllDay ? 'All day' : formatTimeOfDay(event.startTime)}</span>
+                <span className="block text-sm break-words">{event.title}</span>
+              </button>
+            ))}
+          </div>
+        )}
+      </Drawer>
       {selectedEvent && <EventDetail event={selectedEvent} onClose={() => updateParams({ event: null })} />}
     </div>
   );

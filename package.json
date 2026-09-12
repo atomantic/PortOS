@@ -1,6 +1,6 @@
 {
   "name": "portos",
-  "version": "2.63.0",
+  "version": "2.64.0",
   "private": true,
   "description": "Local dev machine App OS portal",
   "author": "Adam Eivy (@antic|@atomantic)",
@@ -8,7 +8,7 @@
   "type": "module",
   "engines": {
     "node": ">=22.12.0",
-    "npm": ">=12.0.0"
+    "npm": ">=11.11.0"
   },
   "scripts": {
     "dev": "node scripts/checkNodeVersion.js && node scripts/checkNpmVersion.js && node scripts/dev-start.js",

@@ -19,7 +19,7 @@
     "console-errors": "5a7f6fd0b119db9d0e01c7f44a7a061c",
     "copy": "6a0959e898d37fb4d4d7445dfc8008c9",
     "data-safety": "86b07f51abdbcbe7016f840b5bb0cd9b",
-    "dependency-updates": "1d59f04bea630a85a3085829db8599e7",
+    "dependency-updates": "f34cfa7e495d2bd6d3ac3c80b44447e8",
     "do-replan": "35660eb7b43e4259a6a9253ed288a1db",
     "documentation": "a30e3bfba8cd13369ccaf806a3534a79",
     "error-handling": "137b371f38398042c0a2c7e2279c92ce",
@@ -73,7 +73,7 @@
     "console-errors": 4,
     "copy": 1,
     "data-safety": 1,
-    "dependency-updates": 4,
+    "dependency-updates": 5,
     "do-replan": 2,
     "documentation": 7,
     "error-handling": 3,
@@ -208,7 +208,8 @@
       "020d66b93698341c556eca1eee851bee",
       "640a7c4214e6bdba2bbd5b9061d9d425",
       "3f461b1c111ba45b7fa5016883cfa54d",
-      "7ed05444e2602f4895bdd1e5e0edcaa8"
+      "7ed05444e2602f4895bdd1e5e0edcaa8",
+      "1d59f04bea630a85a3085829db8599e7"
     ],
     "do-replan": [
       "59a57f1bb445138c30ab4fa23630c6f8"

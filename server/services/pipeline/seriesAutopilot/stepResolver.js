@@ -1,3 +1,4 @@
+import { compareIssuesInSeries } from '../../../lib/pipelineIssueOrder.js';
 /**
  * Series Autopilot — deterministic step resolution (#2842 split of
  * seriesAutopilot.js). Pure: given the series, its issues and the run state,
@@ -6,7 +7,7 @@
 
 import { parseComicScript } from '../../../lib/comicScriptParser.js';
 import { isStageReady } from '../issues.js';
-import { compareIssuesByPosition, hasDuplicateSeasonNumbers } from '../arcPlanner.js';
+import { hasDuplicateSeasonNumbers } from '../arcPlanner.js';
 import { wantsTeaser, wantsVisual } from './config.js';
 import { VISUAL_DRAFT_ENABLED } from './convergence.js';
 
@@ -17,6 +18,14 @@ import { VISUAL_DRAFT_ENABLED } from './convergence.js';
 const setHas = (s, v) => (s instanceof Set ? s.has(v) : Array.isArray(s) ? s.includes(v) : false);
 
 export const byNumber = (a, b) => (a?.number ?? 9999) - (b?.number ?? 9999);
+
+// Production can stop at the opening issue while the foundation and continuity
+// passes still see the whole series plan. A pilot should prove the story works
+// before an author commits to drafting and drawing every planned issue.
+export function productionIssues(issues, options = {}) {
+  const ordered = orderedIssues(issues);
+  return options.productionScope === 'first-issue' ? ordered.slice(0, 1) : ordered;
+}
 
 // The script stages a series must have drafted to be "story-ready", derived
 // from its targetFormat. prose is the intermediate source the scripts adapt
@@ -72,7 +81,7 @@ export function wantsComic(series, options = {}) {
 
 
 export function orderedIssues(issues) {
-  return [...(Array.isArray(issues) ? issues : [])].sort(compareIssuesByPosition);
+  return [...(Array.isArray(issues) ? issues : [])].sort(compareIssuesInSeries);
 }
 
 export function textReady(issue, series, options = {}) {
@@ -143,6 +152,7 @@ export function visualReady(issue) {
 export function resolveNextStep(series, issues, runState = {}, options = {}) {
   const seasons = Array.isArray(series?.seasons) ? [...series.seasons].sort(byNumber) : [];
   const ordered = orderedIssues(issues);
+  const production = productionIssues(issues, options);
 
   // STEP 0 — unlock everything this series owns (opt-in, see unlockPass.js).
   // Must run BEFORE any generation step: a locked arc makes generateArc /
@@ -230,7 +240,7 @@ export function resolveNextStep(series, issues, runState = {}, options = {}) {
   // STEP 4a — per-volume beat sheets (skip volumes already attempted this run).
   for (const season of seasons) {
     if (setHas(runState.beatsAttempted, season.id)) continue;
-    const inSeason = ordered.filter((i) => i.seasonId === season.id);
+    const inSeason = production.filter((i) => i.seasonId === season.id);
     if (inSeason.some((i) => !isStageReady(i.stages?.idea))) {
       return { kind: 'beatSheet', seasonId: season.id, reason: `beats missing in volume ${season.number ?? '?'}` };
     }
@@ -248,8 +258,20 @@ export function resolveNextStep(series, issues, runState = {}, options = {}) {
     return { kind: 'beatContinuity', reason: 'whole-manuscript beat continuity not yet checked this run' };
   }
 
+  // Review the opening before multiplying its problems into later scripts.
+  // The same developmental editor used at the end runs against the manuscript
+  // drafted so far; later drafting invalidates that final editorial checkpoint.
+  const opening = production[0];
+  if (opening && !textReady(opening, series, options) && !setHas(runState.textAttempted, opening.id)) {
+    return { kind: 'pilotDraft', issueId: opening.id, reason: 'draft the opening for developmental review' };
+  }
+  if (opening && textReady(opening, series, options) && !runState.pilotReviewed
+    && options.maxEditorialRounds !== 0) {
+    return { kind: 'pilotReview', issueId: opening.id, reason: 'review the opening before drafting later issues' };
+  }
+
   // STEP 4b — per-issue text stages (prose + required scripts).
-  for (const issue of ordered) {
+  for (const issue of production) {
     if (setHas(runState.textAttempted, issue.id)) continue;
     if (!textReady(issue, series, options)) {
       return { kind: 'textStages', issueId: issue.id, reason: 'prose / scripts not ready' };
@@ -261,7 +283,7 @@ export function resolveNextStep(series, issues, runState = {}, options = {}) {
   // comic-script verification with no comicScript (which would pause on an
   // unparseable script).
   if (wantsComic(series, options)) {
-    for (const issue of ordered) {
+    for (const issue of production) {
       if (setHas(runState.scriptChecked, issue.id)) continue;
       return { kind: 'scriptVerify', issueId: issue.id, reason: 'comic script not yet structurally verified' };
     }
@@ -323,7 +345,7 @@ export function resolveNextStep(series, issues, runState = {}, options = {}) {
 
   // STEP 6 — draft visuals (cover + back + all interior pages).
   if (VISUAL_DRAFT_ENABLED && wantsVisual(options) && wantsComic(series, options)) {
-    for (const issue of ordered) {
+    for (const issue of production) {
       if (setHas(runState.visualDrafted, issue.id)) continue;
       if (visualReady(issue)) continue;
       return { kind: 'visualDraft', issueId: issue.id, reason: 'comic pages not yet drafted' };
@@ -336,7 +358,7 @@ export function resolveNextStep(series, issues, runState = {}, options = {}) {
   // itself requires visuals). Attempted-once per issue this run so a started (or
   // failed) teaser can't re-loop the resolver back here.
   if (VISUAL_DRAFT_ENABLED && wantsTeaser(options) && wantsComic(series, options)) {
-    for (const issue of ordered) {
+    for (const issue of production) {
       if (setHas(runState.teaserProduced, issue.id)) continue;
       return { kind: 'produceTeaser', issueId: issue.id, reason: 'teaser video not yet produced' };
     }

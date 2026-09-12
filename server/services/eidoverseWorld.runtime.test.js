@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
   persistedState: null,
+  mindName: null,
   writes: 0,
   worlds: new Map(),
   socketUrls: [],
@@ -47,6 +48,8 @@ vi.mock('../lib/fileUtils.js', async (importActual) => {
     }),
   };
 });
+
+vi.mock('./persistentMindContext.js', () => ({ readPersistentMindName: vi.fn(async () => mocks.mindName) }));
 
 vi.mock('./instances.js', () => ({
   getPeers: vi.fn(async () => []),
@@ -216,6 +219,7 @@ beforeEach(async () => {
   vi.unstubAllEnvs();
   await world.__resetEidoverseWorldForTests();
   mocks.persistedState = null;
+  mocks.mindName = null;
   mocks.writes = 0;
   mocks.worlds.clear();
   mocks.socketUrls.length = 0;
@@ -442,6 +446,24 @@ describe('Eidoverse private-world lifecycle', () => {
       args: { id: DEFAULT_HUMAN_NAME, role: 'visitor' },
     }));
     expect(mocks.persistedState.ownership.retired).toEqual([]);
+  });
+
+  it('follows the chosen mind name, reconnects presence, and retires the previous owner', async () => {
+    await world.ensureEidoverseWorldPresence();
+    mocks.mindName = 'Helm';
+    expect(await world.getEidoverseWorldStatus()).toMatchObject({ cos: { id: 'Helm', connected: false } });
+    await world.ensureEidoverseWorldPresence();
+    expect(mocks.persistedState.cos.id).toBe('Helm');
+    expect(mocks.worlds.get('portos').roles['portos-cos']).toMatchObject({ role: 'visitor' });
+    expect(await world.getEidoverseWorldStatus()).toMatchObject({ cos: { id: 'Helm', connected: true } });
+    mocks.mindName = 'Example Star';
+    const updated = await world.updateEidoverseWorldConfig({ humanName: 'Example User', cosId: 'stale-client-name' });
+    expect(updated.cos.id).toBe('Example Star');
+    expect(updated.human.name).toBe('Example User');
+    await world.ensureEidoverseWorldPresence();
+    expect(mocks.worlds.get('portos').roles.Helm).toMatchObject({ role: 'visitor' });
+    mocks.mindName = null;
+    expect((await world.ensureEidoverseWorldConfig()).cos.id).toBe('Example Star');
   });
 
   it('clears observed roles when switching worlds or CoS identities', async () => {
@@ -1145,7 +1167,8 @@ describe('Eidoverse private-world lifecycle', () => {
 it('admits a visitor before joining and exposes only new live chat to both guest and resident', async () => {
   await world.ensureEidoverseWorldPresence();
   expect((await world.readEidoverseWorldChat()).messages).toEqual([]);
-  const guest = await world.admitEidoverseGuest({ agent: true });
+  const guest = await world.admitEidoverseGuest({ agent: true, name: 'Example Explorer' });
+  expect(guest.identity.name).toBe('Example Explorer');
   const grantIndex = mocks.sent.findIndex((entry) => entry.verb === 'grant' && entry.args.id === guest.identity.name);
   const joinIndex = mocks.sent.findIndex((entry) => entry.type === 'join' && entry.actor === guest.identity.name);
   expect(grantIndex).toBeLessThan(joinIndex);
@@ -1163,4 +1186,35 @@ it('admits a visitor before joining and exposes only new live chat to both guest
   expect(page.hasMore).toBe(true);
   expect(guest.connection.readChat(page.cursor).cursor).toBeGreaterThan(page.cursor);
   await guest.connection.close();
+});
+
+
+it('keeps occupied identities intact and disambiguates repeated browser admissions', async () => {
+  await world.ensureEidoverseWorldPresence();
+  const roles = mocks.worlds.get('portos').roles;
+  const owner = structuredClone(roles['portos-cos']);
+  const first = await world.admitEidoverseGuest({ name: 'portos-cos' });
+  const second = await world.admitEidoverseGuest({ name: 'portos-cos' });
+  expect(first.identity.name).toBe('portos-cos (2)');
+  expect(second.identity.name).toBe('portos-cos (3)');
+  expect(roles['portos-cos']).toEqual(owner);
+  const legacy = await world.admitEidoverseGuest();
+  expect(legacy.identity.name).toMatch(/^guest-/);
+  const reserved = await world.admitEidoverseGuest({ name: 'world' });
+  expect(reserved.identity.name).toMatch(/^guest-/);
+});
+
+
+it('reserves names seen in live grants after the resident snapshot and bounds collision suffixes', async () => {
+  await world.ensureEidoverseWorldPresence();
+  const name = 'Example Explorer '.repeat(4).trim().slice(0, 64);
+  for (const socket of mocks.sockets) {
+    if (socket.identity === 'portos-cos' && socket.readyState === 1) {
+      socket.emit('message', JSON.stringify({ type: 'log', entry: {
+        seq: mocks.nextSeq++, actor: DEFAULT_HUMAN_NAME, verb: 'grant', args: { id: name, role: 'owner' },
+      } }));
+    }
+  }
+  const guest = await world.admitEidoverseGuest({ name });
+  expect(guest.identity.name).toBe(`${name.slice(0, 60)} (2)`);
 });

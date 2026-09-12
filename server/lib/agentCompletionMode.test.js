@@ -81,6 +81,7 @@ describe('resolveCompletionMode', () => {
       resolveCompletionMode({ isReadOnly: true }),
       resolveCompletionMode({ isReviewLoopFollowUp: true }),
       resolveCompletionMode({ slashdoCommand: 'release' }),
+      resolveCompletionMode({ slashdoCommand: 'better' }),
       resolveCompletionMode({ isTui: true, canRunSlashCommands: false }),
       resolveCompletionMode({ isTui: true }),
       resolveCompletionMode({ worktreeInfo: wt, willOpenPR: false }),

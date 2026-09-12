@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, cleanup, act } from '@testing-library/react';
-import { MemoryRouter } from 'react-router';
+import { render, screen, cleanup, act, fireEvent, within } from '@testing-library/react';
+import { MemoryRouter, useLocation, useNavigate } from 'react-router';
 
 // One suite for the three views because the thing under test is one contract
 // shared across them: a subcalendar color is external Google Calendar data, so
@@ -35,9 +35,10 @@ import ChronotypeOverlay from './ChronotypeOverlay';
 const SUBCALENDAR_COLOR = '#fbd75b';
 const ACCOUNTS = [{ subcalendars: [{ calendarId: 'cal-1', color: SUBCALENDAR_COLOR }] }];
 
-const at = (hour) => {
+const at = (hour, minute = 0, dayOffset = 0) => {
   const d = new Date();
-  d.setHours(hour, 0, 0, 0);
+  d.setDate(d.getDate() + dayOffset);
+  d.setHours(hour, minute, 0, 0);
   return d.toISOString();
 };
 
@@ -108,7 +109,10 @@ beforeEach(() => {
   api.getChronotypeEnergySchedule.mockResolvedValue(null);
 });
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  vi.useRealTimers();
+});
 
 describe.each([
   ['MonthView', (accounts) => <MonthView accounts={accounts} />, ['Quarter Close']],
@@ -141,6 +145,83 @@ describe.each([
   });
 });
 
+describe.each([
+  ['DayView', DayView],
+  ['WeekView', WeekView],
+])('%s full-day event placement', (name, View) => {
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date(2026, 8, 8, 12));
+  });
+
+  const event = (id, startTime, endTime) => ({ ...TIMED, id, title: id, startTime, endTime });
+  const positions = (title) => screen.queryAllByRole('button', { name: title }).map(chip => ({
+    top: Number.parseFloat(chip.style.top), height: Number.parseFloat(chip.style.height),
+  }));
+  const expectFullDayGrid = () => {
+    const firstRow = screen.getByText('12 AM').closest('[style]');
+    const hourRows = [...firstRow.parentElement.children].filter(row => row.style.height === '80px');
+    expect(hourRows).toHaveLength(24);
+    expect(screen.getByText('11 PM')).toBeInTheDocument();
+  };
+
+  it('keeps all 24 hours when the only event is during ordinary hours', async () => {
+    api.getCalendarEvents.mockResolvedValue({ events: [event('Ordinary meeting', at(10), at(11))] });
+    await renderView(<View accounts={ACCOUNTS} />);
+    expectFullDayGrid();
+    expect(positions('Ordinary meeting')).toEqual([{ top: 800, height: 80 }]);
+  });
+
+  it('positions early and late events inside the grid and opens their details', async () => {
+    api.getCalendarEvents.mockResolvedValue({ events: [
+      event('Early meeting', at(5), at(5, 30)),
+      event('Late meeting', at(23, 30), at(23, 45)),
+      event('Midnight finish', at(22), at(0, 0, 1)),
+    ] });
+    await renderView(<View accounts={ACCOUNTS} />);
+    expectFullDayGrid();
+    expect(positions('Early meeting')).toEqual([{ top: 400, height: 40 }]);
+    expect(positions('Late meeting')).toEqual([{ top: 1880, height: 20 }]);
+    expect(positions('Midnight finish')).toEqual([{ top: 1760, height: 160 }]);
+
+    for (const title of ['Early meeting', 'Late meeting', 'Midnight finish']) {
+      fireEvent.click(chipFor(title));
+      const detail = await screen.findByRole('dialog', { name: title });
+      fireEvent.click(within(detail).getByRole('button', { name: 'Close' }));
+    }
+  });
+
+  it('clips overnight portions to each intersecting day and treats midnight as exclusive', async () => {
+    api.getCalendarEvents.mockResolvedValue({ events: [
+      event('Overnight arrival', at(22, 0, -1), at(1)),
+      event('Overnight departure', at(23), at(2, 0, 1)),
+      event('Already ended', at(23, 0, -1), at(0)),
+    ] });
+    await renderView(<View accounts={ACCOUNTS} />);
+    if (name === 'DayView') {
+      expect(positions('Overnight arrival')).toEqual([{ top: 0, height: 80 }]);
+      expect(positions('Overnight departure')).toEqual([{ top: 1840, height: 80 }]);
+      expect(positions('Already ended')).toEqual([]);
+    } else {
+      expect(positions('Overnight arrival')).toEqual([{ top: 1760, height: 160 }, { top: 0, height: 80 }]);
+      expect(positions('Overnight departure')).toEqual([{ top: 1840, height: 80 }, { top: 0, height: 160 }]);
+      expect(positions('Already ended')).toEqual([{ top: 1840, height: 80 }]);
+    }
+  });
+});
+
+it('requests the next local midnight on a daylight-saving transition day', async () => {
+  vi.useFakeTimers({ toFake: ['Date'] });
+  vi.setSystemTime(new Date(2026, 2, 8, 12));
+  api.getCalendarEvents.mockResolvedValue({ events: [] });
+  await renderView(<DayView accounts={ACCOUNTS} />);
+  expect(api.getCalendarEvents).toHaveBeenCalledWith({
+    startDate: new Date(2026, 2, 8).toISOString(),
+    endDate: new Date(2026, 2, 9).toISOString(),
+    limit: 200,
+  });
+});
+
 describe('ChronotypeOverlay zone labels', () => {
   const ZONES = {
     zones: [
@@ -168,5 +249,106 @@ describe('ChronotypeOverlay zone labels', () => {
     // zone is recognized by, and it carries no ink of its own.
     const band = container.querySelector('div[style*="opacity"]');
     expect(parseColor(band.style.backgroundColor)).toEqual(parseColor('#f59e0b'));
+  });
+});
+
+function MonthHistory() {
+  const location = useLocation();
+  const navigate = useNavigate();
+  return <>
+    <button onClick={() => navigate(-1)}>Browser Back</button>
+    <output data-testid="month-url">{location.search}</output>
+    <MonthView accounts={ACCOUNTS} />
+  </>;
+}
+
+describe('MonthView overflow navigation', () => {
+  beforeEach(() => {
+    api.getCalendarEvents.mockResolvedValue({ events: [
+      { ...TIMED, id: 'late', title: 'Example late appointment', startTime: new Date(2027, 0, 12, 18).toISOString() },
+      { ...ALL_DAY, id: 'day', title: 'Example all-day entry', startTime: new Date(2027, 0, 12).toISOString() },
+      { ...TIMED, id: 'early', title: 'Example early appointment', startTime: new Date(2027, 0, 12, 8).toISOString() },
+      { ...TIMED, id: 'hidden', title: 'Example hidden appointment', startTime: new Date(2027, 0, 12, 12).toISOString() },
+    ] });
+  });
+
+  it('opens overflow, reloads details, returns to the day, and restores month/day history', async () => {
+    const mounted = render(<MemoryRouter initialEntries={['/calendar/month?month=2027-01']}><MonthHistory /></MemoryRouter>);
+    await act(async () => {});
+    expect(screen.getByRole('heading', { name: 'January 2027' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Example hidden appointment/ })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /View all 4 events/ }));
+    const day = screen.getByRole('dialog');
+    expect(within(day).getByText('4 events')).toBeInTheDocument();
+    expect(within(day).getAllByRole('button').slice(1).map(button => button.textContent)).toEqual([
+      expect.stringContaining('Example all-day entry'),
+      expect.stringContaining('Example early appointment'),
+      expect.stringContaining('Example hidden appointment'),
+      expect.stringContaining('Example late appointment'),
+    ]);
+    fireEvent.click(within(day).getByRole('button', { name: /Example hidden appointment/ }));
+    expect(screen.getAllByRole('dialog')).toHaveLength(1);
+    expect(screen.getByRole('dialog', { name: 'Example hidden appointment' })).toBeInTheDocument();
+    const reloadUrl = screen.getByTestId('month-url').textContent;
+    mounted.unmount();
+    render(<MemoryRouter initialEntries={['/calendar/month' + reloadUrl]}><MonthHistory /></MemoryRouter>);
+    await act(async () => {});
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Close' }));
+    for (const title of ['Example all-day entry', 'Example early appointment', 'Example late appointment']) {
+      fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: new RegExp(title) }));
+      expect(screen.getByRole('dialog', { name: title })).toBeInTheDocument();
+      fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Close' }));
+    }
+    fireEvent.click(screen.getByRole('button', { name: 'Close day events' }));
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'January 2027' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Browser Back' }));
+    expect(screen.getByRole('dialog')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Close day events' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Next month' }));
+    await act(async () => {});
+    expect(screen.getByRole('heading', { name: 'February 2027' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Browser Back' }));
+    await act(async () => {});
+    expect(screen.getByRole('heading', { name: 'January 2027' })).toBeInTheDocument();
+  });
+
+  it('restores keyboard focus to overflow after the nested detail journey', async () => {
+    render(<MemoryRouter initialEntries={['/calendar/month?month=2027-01']}><MonthView accounts={ACCOUNTS} /></MemoryRouter>);
+    await act(async () => {});
+    const trigger = screen.getByRole('button', { name: /View all 4 events/ });
+    trigger.focus();
+    fireEvent.click(trigger);
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: /Example hidden appointment/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'Close', exact: true }));
+    fireEvent.click(screen.getByRole('button', { name: 'Close day events' }));
+    expect(trigger).toHaveFocus();
+  });
+
+  it('waits for bookmarked event data before exposing a dismissible drawer', async () => {
+    let finish;
+    api.getCalendarEvents.mockReturnValue(new Promise(resolve => { finish = resolve; }));
+    render(<MemoryRouter initialEntries={['/calendar/month?month=2027-01&day=2027-01-12&event=acct-1:hidden']}><MonthView accounts={ACCOUNTS} /></MemoryRouter>);
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    await act(async () => finish({ events: [{ ...TIMED, id: 'hidden', title: 'Example hidden appointment', startTime: new Date(2027, 0, 12, 12).toISOString() }] }));
+    expect(screen.getByRole('dialog', { name: 'Example hidden appointment' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Close', exact: true }));
+    expect(screen.getByRole('button', { name: 'Close day events' })).toBeInTheDocument();
+  });
+
+  it.each(['2027-02-30', '2020-01-01', 'garbage'])('ignores malformed or off-grid day %s', async day => {
+    render(<MemoryRouter initialEntries={['/calendar/month?month=2027-01&day=' + day]}><MonthView accounts={ACCOUNTS} /></MemoryRouter>);
+    await act(async () => {});
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /View all 4 events/ })).toBeInTheDocument();
+  });
+
+  it('falls back from an invalid month and keeps a short day directly actionable', async () => {
+    api.getCalendarEvents.mockResolvedValue({ events: [ALL_DAY, TIMED] });
+    render(<MemoryRouter initialEntries={['/calendar/month?month=2027-99']}><MonthView accounts={ACCOUNTS} /></MemoryRouter>);
+    await act(async () => {});
+    expect(screen.queryByRole('button', { name: /View all/ })).not.toBeInTheDocument();
+    fireEvent.click(chipFor('Quarter Close'));
+    expect(screen.getByRole('dialog', { name: 'Quarter Close' })).toBeInTheDocument();
   });
 });

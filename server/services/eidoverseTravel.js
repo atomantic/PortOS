@@ -8,8 +8,8 @@ import { eidoverseChatResultSchema } from '../lib/eidoverseValidation.js';
 import { getPeers } from './instances.js';
 import { getInstanceFeatures } from './instanceFeatures.js';
 import { ensureEidoverseHost } from './eidoverseHost.js';
-import { admitEidoverseGuest, supportsEidoverseGuestEntry, getEidoverseWorldStatus } from './eidoverseWorld.js';
-import { eidoversePeerId } from './eidoverseWorldSources.js';
+import { admitEidoverseGuest, ensureEidoverseWorldConfig, supportsEidoverseGuestEntry, getEidoverseWorldStatus } from './eidoverseWorld.js';
+import { eidoversePeerId } from '../lib/eidoverseWorldSignals.js';
 
 const VERSION = 1;
 const TTL = 30 * 60 * 1000;
@@ -38,7 +38,7 @@ export async function getEidoverseTravelCapabilities() {
   const { features } = await getInstanceFeatures();
   if (!features.some((feature) => feature.id === 'eidoverse' && feature.enabled)) return { version: VERSION, available: false };
   const { setup, cos } = await getEidoverseWorldStatus({ compact: true });
-  return { version: VERSION, available: cos.enabled === true && setup.installed === true && setup.runtimeStatus === 'online' && setup.worldDataReady === true && await supportsEidoverseGuestEntry() };
+  return { version: VERSION, visitorNames: 1, available: cos.enabled === true && setup.installed === true && setup.runtimeStatus === 'online' && setup.worldDataReady === true && await supportsEidoverseGuestEntry() };
 }
 
 async function requireAvailable() {
@@ -73,11 +73,11 @@ export async function listEidoverseDestinations() {
 }
 
 /** Called only through the authenticated/private federation API. */
-export async function receiveEidoverseVisit(instanceId, { agent = false } = {}) {
+export async function receiveEidoverseVisit(instanceId, { agent = false, name } = {}) {
   await requireAvailable();
   const peer = await registeredPeer(instanceId, { inboundId: true });
   if (inbound.size >= 32) throw fail('This world has reached its guest admission limit.');
-  const admitted = await admitEidoverseGuest({ agent });
+  const admitted = await admitEidoverseGuest({ agent, name });
   const key = token();
   const session = remember(inbound, key, { ...admitted, peerId: peer.id, agent });
   return { version: VERSION, sessionId: key, expiresAt: session.expiresAt };
@@ -119,7 +119,11 @@ export async function visitEidoversePeer({ peerId, agent = true }) {
   const peer = await registeredPeer(peerId);
   const capabilities = await request(peer, '/capabilities');
   if (capabilities?.version !== VERSION || capabilities.available !== true) throw fail('The destination does not support guest travel.');
-  const result = await request(peer, '/visit', { agent });
+  const config = await ensureEidoverseWorldConfig();
+  const name = agent ? config.cos.id : config.human.name;
+  const result = await request(peer, '/visit', { agent,
+    ...(capabilities.visitorNames === 1 && name && scrubSecretTokens(name) === name ? { name } : {}),
+  });
   if (result?.version !== VERSION || !/^[a-f0-9]{48}$/.test(result.sessionId)
     || !Number.isSafeInteger(result.expiresAt) || result.expiresAt <= 0) throw fail('The destination returned an invalid guest admission.');
   if (!agent) return { url: `${peerBaseUrl(peer)}/eidoverse/guest#${result.sessionId}` };

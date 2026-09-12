@@ -268,36 +268,31 @@ describe('Eidoverse hosted page', () => {
       expect.objectContaining({
         labelAliases,
         humanName: 'example-portos-user-edited',
-        cosId: 'portos-cos',
       }), { silent: true },
     ));
   });
 
-  it('saves a CoS join name and offers the mind identity suggestion', async () => {
+  it('saves a username during projection without a recipe and displays the automatic mind name', async () => {
     const user = userEvent.setup();
-    api.getEidoverseWorldStatus.mockResolvedValueOnce({
-      ...worldResponse,
-      suggestedCosId: 'Helm',
-    });
-    api.updateEidoverseWorldConfig.mockResolvedValueOnce({
-      ...worldResponse,
-      cos: { id: 'Helm', enabled: true },
-      suggestedCosId: null,
-      human: worldResponse.identity,
-    });
+    api.getEidoverseWorldStatus.mockResolvedValueOnce({ ...worldResponse, recipe: null, cos: { id: 'Helm' } });
+    let finishProjection;
+    api.projectEidoverseWorld.mockReturnValueOnce(new Promise((resolve) => { finishProjection = resolve; }));
     renderPage();
     await screen.findByTitle('Eidoverse Worlds');
     await user.click(screen.getByRole('button', { name: 'World controls' }));
-    const cosInput = screen.getByLabelText('CoS / Persistent Mind name');
-    expect(cosInput).toHaveValue('portos-cos');
-    expect(screen.getByRole('button', { name: 'Use mind name (Helm)' })).toBeInTheDocument();
-    await user.click(screen.getByRole('button', { name: 'Use mind name (Helm)' }));
-    expect(cosInput).toHaveValue('Helm');
-    await user.click(screen.getByRole('button', { name: 'Save and project' }));
+    expect(screen.getByLabelText('CoS / Persistent Mind name')).toHaveValue('Helm');
+    expect(screen.getByLabelText('CoS / Persistent Mind name')).toHaveAttribute('readonly');
+    await user.clear(screen.getByLabelText('My Eidoverse name'));
+    await user.type(screen.getByLabelText('My Eidoverse name'), 'Example User');
+    const save = screen.getByRole('button', { name: 'Save and project' });
+    expect(save).toBeEnabled();
+    await user.click(save);
     await waitFor(() => expect(api.updateEidoverseWorldConfig).toHaveBeenCalledWith(
-      expect.objectContaining({ cosId: 'Helm', humanName: 'example-portos-user' }),
-      { silent: true },
+      expect.objectContaining({ humanName: 'Example User' }), { silent: true },
     ));
+    expect(api.updateEidoverseWorldConfig.mock.calls[0][0]).not.toHaveProperty('cosId');
+    expect(api.updateEidoverseWorldConfig.mock.calls[0][0]).not.toHaveProperty('recipe');
+    await act(async () => finishProjection({ success: true }));
   });
 
   it('shows a renderer update link while preserving the saved recipe on older clients', async () => {

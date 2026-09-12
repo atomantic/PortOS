@@ -232,6 +232,19 @@ describe('prepareVideoGenParams', () => {
       expect(prepared.loras).toBeUndefined();
     });
 
+    it.each(['fal', 'reactor'])('returns the complete %s prepared contract without credentials', async (backend) => {
+      getSettings.mockResolvedValueOnce({ videoGen: { [backend]: { apiKey: 'example-secret' } } });
+      const prepared = await prepare({ backend, sourceImageFile: 'still.png' });
+      expect(prepared).toStrictEqual({
+        backend,
+        effectiveModel: { id: backend, supportedModes: ['text', 'image'] },
+        sourceImagePath: '/mock/images/still.png',
+        uploadedTempPath: null,
+        discardSourceImage: expect.any(Function),
+        cleanupStaged: expect.any(Function),
+      });
+    });
+
     it('normalizes the parallel lora arrays and defaults a missing scale', async () => {
       const prepared = await prepare({ loraFilenames: ['a.safetensors', 'b.safetensors'], loraScales: [0.4] });
       expect(prepared.loras).toEqual([

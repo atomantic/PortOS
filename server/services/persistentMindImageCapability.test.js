@@ -5,10 +5,11 @@ import {
 } from './persistentMindImageCapability.js';
 
 describe('Persistent Mind image capability', () => {
-  it('supports Codex and Claude CLI providers but rejects other CLI and TUI transports', async () => {
+  it('supports vision CLI providers and Codex TUI while rejecting unsupported transports', async () => {
     await expect(resolvePersistentMindImageCapability({ provider: { type: 'cli', command: 'codex' }, model: 'gpt-5' })).resolves.toMatchObject({ status: 'supported' });
     await expect(resolvePersistentMindImageCapability({ provider: { type: 'cli', command: 'claude' }, model: 'claude-opus' })).resolves.toMatchObject({ status: 'supported' });
     await expect(resolvePersistentMindImageCapability({ provider: { type: 'cli', command: 'opencode' }, model: 'example' })).resolves.toMatchObject({ status: 'unsupported' });
+    await expect(resolvePersistentMindImageCapability({ provider: { type: 'tui', command: '/opt/bin/codex' }, model: 'gpt-6-astra' })).resolves.toMatchObject({ status: 'supported' });
     await expect(resolvePersistentMindImageCapability({ provider: { type: 'tui' }, model: 'example' })).resolves.toMatchObject({ status: 'unsupported' });
   });
 

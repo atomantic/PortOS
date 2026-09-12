@@ -804,6 +804,138 @@ describe('videoGen routes', () => {
     });
   });
 
+  describe('POST / — hosted submission contracts', () => {
+    const settings = {
+      imageGen: { grok: { enabled: true, grokPath: '/example/grok', aspectRatio: '16:9' } },
+      videoGen: { fal: { apiKey: 'example-fal-key' }, reactor: { apiKey: 'example-reactor-key' } },
+    };
+    const providers = [
+      { backend: 'grok', input: { grokDuration: 10 },
+        minimal: { grokPath: '/example/grok', aspectRatio: '16:9', width: undefined, height: undefined, duration: undefined },
+        tagged: { grokPath: '/example/grok', aspectRatio: '9:16', width: 576, height: 1024, duration: 10 } },
+      { backend: 'fal', input: { falModelId: 'example/model', falDuration: 6 },
+        minimal: { modelId: undefined, aspectRatio: undefined, width: undefined, height: undefined, duration: undefined },
+        tagged: { modelId: 'example/model', aspectRatio: '9:16', width: 576, height: 1024, duration: 6 } },
+      { backend: 'reactor', input: { reactorClipId: 'example-clip', reactorSeconds: 6, reactorSeed: 0, reactorAspect: '9:16' },
+        minimal: { continueFromClipId: undefined, seconds: undefined, seed: undefined, aspect: undefined },
+        tagged: { continueFromClipId: 'example-clip', seconds: 6, seed: 0, aspect: '9:16' } },
+    ];
+
+    it.each(providers)('preserves $backend text defaults and exact optional-key presence', async ({ backend, minimal }) => {
+      const { getSettings } = await import('../services/settings.js');
+      getSettings.mockResolvedValueOnce(settings);
+      const r = await request(app).post('/api/video-gen/').send({ backend, prompt: 'a fox' });
+      expect(r.status).toBe(200);
+      expect(r.body).toStrictEqual({
+        jobId: 'mock-video-job', generationId: 'mock-video-job', filename: 'mock-video-job.mp4',
+        model: backend, mode: backend, status: 'queued', position: 1,
+      });
+      expect(mediaJobQueue.enqueueJob.mock.calls[0][0]).toStrictEqual({
+        kind: 'video', params: {
+          mode: backend, videoMode: 'text', prompt: 'a fox', negativePrompt: '',
+          sourceImagePath: null, uploadedTempPath: null, ...minimal,
+        },
+      });
+    });
+
+    it.each(providers)('preserves $backend image payload and all provenance tags', async ({ backend, input, tagged }) => {
+      const { getSettings } = await import('../services/settings.js');
+      getSettings.mockResolvedValueOnce(settings);
+      getLoom.mockResolvedValueOnce({ renderSettings: { formatId: 'portrait-9-16' } });
+      const musicVideo = { projectId: 'mv-example', sceneId: 'scene-example' };
+      const fableLoom = { loomId: 'loom-example', episodeId: 'ep-example', nodeId: 'node-example' };
+      const r = await request(app).post('/api/video-gen/').send({
+        backend, prompt: 'a fox', negativePrompt: 'blur', sourceImageFile: 'frame.png',
+        musicVideo, fableLoom, ...input,
+      });
+      expect(r.status).toBe(200);
+      expect(mediaJobQueue.enqueueJob.mock.calls[0][0]).toStrictEqual({
+        kind: 'video', params: {
+          mode: backend, videoMode: 'image', prompt: 'a fox', negativePrompt: 'blur',
+          sourceImagePath: '/mock/images/frame.png', uploadedTempPath: null,
+          musicVideo, fableLoom,
+          visualConditioning: {
+            ...compiledVisual, render: {
+              provider: backend, modelId: backend + '-video', modelRevision: null,
+              parameters: { width: 576, height: 1024, aspectRatio: '9:16' },
+            },
+          },
+          ...tagged,
+        },
+      });
+      expect(unlink).not.toHaveBeenCalledWith('/mock/images/frame.png');
+    });
+
+    it.each([
+      ['grok', 'GROK_IMAGEGEN_DISABLED', 'Grok Imagegen is disabled — enable it in Settings → Image Gen first'],
+      ['fal', 'FAL_NOT_CONFIGURED', 'No fal.ai API key configured — set it in Settings → Video Gen (or the FAL_KEY env var) first'],
+      ['reactor', 'REACTOR_NOT_CONFIGURED', 'No reactor.inc API key configured — set it in Settings → Video Gen (or the REACTOR_API_KEY env var) first'],
+    ])('preserves %s availability errors after staging a source', async (backend, code, message) => {
+      const { getSettings } = await import('../services/settings.js');
+      vi.stubEnv('FAL_KEY', '');
+      vi.stubEnv('REACTOR_API_KEY', '');
+      getSettings.mockResolvedValueOnce({});
+      setPendingUpload({ fieldname: 'sourceImage', path: '/tmp/hosted-frame.png', originalname: 'frame.png' });
+      const r = await request(app).post('/api/video-gen/').send({ backend, prompt: 'a fox' });
+      vi.unstubAllEnvs();
+      expect(r.status).toBe(400);
+      expect(r.body).toMatchObject({ code, error: message });
+      expect(copyFile).toHaveBeenCalledTimes(1);
+      expect(unlink).toHaveBeenCalledWith(copyFile.mock.calls[0][1]);
+      expect(mediaJobQueue.enqueueJob).not.toHaveBeenCalled();
+    });
+
+    it.each(['enqueue', 'conditioning'])('rolls back a hosted durable source on %s failure', async (failureStage) => {
+      const { getSettings } = await import('../services/settings.js');
+      getSettings.mockResolvedValueOnce(settings);
+      const failure = new Error('example hosted rejection');
+      if (failureStage === 'enqueue') mediaJobQueue.enqueueJob.mockImplementationOnce(() => { throw failure; });
+      else compileFableLoomVisualRequest.mockRejectedValueOnce(failure);
+      setPendingUpload({ fieldname: 'sourceImage', path: '/tmp/hosted-frame.png', originalname: 'frame.png' });
+      const r = await request(app).post('/api/video-gen/').send({
+        backend: 'fal', prompt: 'a fox',
+        fableLoom: { loomId: 'loom-example', episodeId: 'ep-example', nodeId: 'node-example' },
+      });
+      expect(r.status).toBe(500);
+      expect(r.body.error).toBe(failure.message);
+      expect(copyFile).toHaveBeenCalledTimes(1);
+      const durable = copyFile.mock.calls[0][1];
+      expect(unlink.mock.calls.filter(([path]) => path === durable)).toHaveLength(1);
+      expect(unlink).toHaveBeenCalledWith('/tmp/hosted-frame.png');
+      if (failureStage === 'conditioning') expect(mediaJobQueue.enqueueJob).not.toHaveBeenCalled();
+    });
+
+    it('hands a successful hosted upload to the worker and discards it on conditioning downgrade', async () => {
+      const { getSettings } = await import('../services/settings.js');
+      getSettings.mockResolvedValueOnce(settings);
+      const source = { fieldname: 'sourceImage', path: '/tmp/hosted-frame.png', originalname: 'frame.png' };
+      setPendingUpload(source);
+      const r = await request(app).post('/api/video-gen/').send({ backend: 'reactor', prompt: 'a fox' });
+      expect(r.status).toBe(200);
+      const durable = copyFile.mock.calls[0][1];
+      expect(mediaJobQueue.enqueueJob.mock.calls[0][0].params).toMatchObject({
+        videoMode: 'image', sourceImagePath: durable, uploadedTempPath: durable,
+      });
+      expect(unlink).not.toHaveBeenCalledWith(durable);
+      expect(unlink).toHaveBeenCalledWith(source.path);
+
+      getSettings.mockResolvedValueOnce(settings);
+      compileFableLoomVisualRequest.mockResolvedValueOnce({
+        prompt: 'a fox', negativePrompt: '', sourceImagePath: null, visualConditioning: compiledVisual,
+      });
+      setPendingUpload(source);
+      const downgraded = await request(app).post('/api/video-gen/').send({
+        backend: 'reactor', prompt: 'a fox',
+        fableLoom: { loomId: 'loom-example', episodeId: 'ep-example', nodeId: 'node-example' },
+      });
+      expect(downgraded.status).toBe(200);
+      expect(mediaJobQueue.enqueueJob.mock.calls[1][0].params).toMatchObject({
+        videoMode: 'text', sourceImagePath: null, uploadedTempPath: null,
+      });
+      expect(unlink).toHaveBeenCalledWith(copyFile.mock.calls[1][1]);
+    });
+  });
+
   describe('POST / — grok backend (#2859 phase 2)', () => {
     it('enqueues a grok video job with the saved grok config and no local-python dependency', async () => {
       const { getSettings } = await import('../services/settings.js');

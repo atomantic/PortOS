@@ -188,6 +188,7 @@ export async function startSeriesAutopilot(sId, options = {}) {
       // routes here at most once per run.
       foundationGated: false,
       beatContinuityChecked: false,
+      pilotReviewed: false,
       editorialReviewed: false,
       reverseOutlineRefreshed: false,
       editorialChecksReviewed: false,

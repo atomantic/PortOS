@@ -440,3 +440,27 @@ select required parent records (for example a series for an issue) separately.
 Recovery is never run automatically at boot. Keep a backup while verifying the
 restored records in the UI; this command cannot recover artifacts already pruned
 from disk, so those must first be restored from a backup.
+
+### Persistent Mind chosen identity
+
+A chosen display name uses the existing `db-primary` Brain memory store, owned
+by the stable `cos-persistent-mind` source agent. One active `mind:chosen-name`
+record holds the validated name as its content and carries `mind:core-identity`
+protection. Renaming updates that record; earlier conversational identity memories
+remain history. Protected records survive context/history cleanup, bulk memory
+cleanup, decay and expiration. Provider/model switches never change ownership.
+The normal database backup covers identity. Mind-owned memories and chosen-name
+tags are excluded from memory federation in both directions; incoming id collisions
+cannot replace local identity. Explicit Eidoverse join-name suggestions remain
+opt-in and do not rename an active world presence.
+
+This adds a tag convention to existing records, not a store or on-disk format.
+No seed, data rewrite migration, or sync version is needed. Legacy conversational
+name memories resolve on read without overwriting a choice. Unnamed installs get
+naming instructions only inside normally authorized wakes, including existing
+installs; saving/reading identity never launches inference. The instruction is a
+runtime identity frame, so customized identity/operating prompts and versioned
+scheduled-task defaults remain unchanged. `mind.choose-name` uses `manageMind`,
+normal semantic validation, call budgets, idempotency and trajectory outcomes.
+Without that grant the existing automatic core-identity memory path can retain
+an initial conversational choice; it does not grant semantic write authority.

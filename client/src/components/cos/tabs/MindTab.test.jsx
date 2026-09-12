@@ -10,6 +10,7 @@ const api = vi.hoisted(() => ({
   uploadPersistentMindAttachment: vi.fn(),
   deletePersistentMindAttachment: vi.fn(),
   addPersistentMindAnnotation: vi.fn(),
+  wakePersistentMind: vi.fn(),
   startPersistentMind: vi.fn(),
   pausePersistentMind: vi.fn(),
   resumePersistentMind: vi.fn(),
@@ -80,6 +81,22 @@ const renderTab = (path = '/cos/mind') => render(
 );
 
 describe('MindTab', () => {
+  it('shows a prominent chosen identity and refreshes a rename from the trajectory notification', async () => {
+    api.getPersistentMind.mockResolvedValue(response({ identity: { mindId: 'cos-persistent-mind', name: 'Example Star' } }));
+    renderTab();
+    expect(await screen.findByRole('heading', { name: 'Example Star' })).toHaveAttribute('aria-live', 'polite');
+    api.getPersistentMind.mockResolvedValue(response({ identity: { mindId: 'cos-persistent-mind', name: 'Étoile' } }));
+    act(() => socket.emitServer('cos:mind:event', { kind: 'mind.capability.result' }));
+    expect(await screen.findByRole('heading', { name: 'Étoile' })).toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: 'Example Star' })).not.toBeInTheDocument();
+  });
+
+  it('shows the unnamed state without confusing the provider model with identity', async () => {
+    renderTab();
+    expect(await screen.findByRole('heading', { name: 'Name not yet chosen' })).toBeInTheDocument();
+    expect(screen.getByText(/Free to change later/)).toBeInTheDocument();
+  });
+
   beforeEach(() => {
     vi.clearAllMocks();
     socket.reset();
@@ -171,6 +188,16 @@ describe('MindTab', () => {
       runtimeResidueCleared: true,
       state: { enabled: true, started: false, status: 'idle', pauseReason: null },
     });
+  });
+
+  it('offers an immediate wake and displays failures', async () => {
+    api.wakePersistentMind.mockRejectedValue(new Error('Wake unavailable'));
+    renderTab();
+    const button = await screen.findByRole('button', { name: 'Wake now' });
+    await waitFor(() => expect(button).not.toBeDisabled());
+    fireEvent.click(button);
+    await screen.findByText('Wake unavailable');
+    expect(api.wakePersistentMind).toHaveBeenCalledWith({ silent: true });
   });
 
   it('restores event details from the URL and keeps the chat composer single-purpose', async () => {

@@ -9,6 +9,9 @@ import {
   Target, Sword, Fingerprint, HeartPulse, ChevronDown, ChevronRight,
   Lock, Globe, Sparkles, Film, Images, Library, BookOpen, FilePen, Music, Music2, Disc3, Clapperboard, Palette, BookText, FolderTree, Video, Waypoints, Gauge
 } from 'lucide-react';
+import { useSearchParams } from 'react-router';
+import Drawer from '../components/Drawer';
+import useDrawerTab from '../hooks/useDrawerTab';
 import toast from '../components/ui/Toast';
 import Pill from '../components/ui/Pill';
 import ConfirmButtonPair from '../components/ui/ConfirmButtonPair';
@@ -90,9 +93,7 @@ function HealthSummary({ health, version }) {
   );
 }
 
-function SelfCard({ self, onUpdate, syncStatus, tailnetInfo }) {
-  const [editing, setEditing] = useState(false);
-  const [name, setName] = useState('');
+function SelfCard({ self, onUpdate, syncStatus, tailnetInfo, editing, setEditing, name, setName }) {
 
   const startEdit = () => {
     setName(self?.name || '');
@@ -214,7 +215,7 @@ function SelfCard({ self, onUpdate, syncStatus, tailnetInfo }) {
 
 // Exported for focused tests (the port input's placeholder must advertise the
 // same default the form actually submits — see Instances.test.jsx).
-export function AddPeerForm({ onAdd, addressRef }) {
+export function AddPeerForm({ onAdd, addressRef, drawer }) {
   const [mode, setMode] = useState('classic'); // 'classic' | 'tailcat'
   // Dial polarity for Tailcat: we dial their serve, or they dial ours.
   const [dialDirection, setDialDirection] = useState('dial-them'); // 'dial-them' | 'they-dial-us'
@@ -229,6 +230,11 @@ export function AddPeerForm({ onAdd, addressRef }) {
   const [password, setPassword] = useState('');
   const [adding, setAdding] = useState(false);
   const { status: serveStatus, busy: serveBusy, run: runServe } = useTailcatServe();
+
+  // This component stays mounted above its Drawer, retaining drafts on close.
+  useEffect(() => {
+    if (drawer?.open) addressRef?.current?.focus();
+  }, [drawer?.open, addressRef]);
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -281,7 +287,7 @@ export function AddPeerForm({ onAdd, addressRef }) {
     ? (dialDirection === 'dial-them' && !!tcAddress.trim())
     : !!address.trim();
 
-  return (
+  const form = (
     <form onSubmit={handleSubmit} className="bg-port-card border border-port-border rounded-xl p-5">
       <h3 className="text-sm font-medium text-gray-400 uppercase tracking-wider mb-3 flex items-center gap-2">
         <Plus size={14} /> Add Peer
@@ -466,6 +472,9 @@ export function AddPeerForm({ onAdd, addressRef }) {
       </div>
     </form>
   );
+  return drawer
+    ? <Drawer {...drawer} title="Add peer" closeLabel="Close add peer">{form}</Drawer>
+    : form;
 }
 
 function DirectionBadge({ directions = [] }) {
@@ -598,8 +607,15 @@ function FullSyncCoverageBadge({ peerId, peerInstanceId, refreshKey }) {
   if (!peerInstanceId) {
     return <span className="text-[10px] text-gray-600">awaiting first connection…</span>;
   }
-  if (!loaded || !coverage) {
+  if (!loaded) {
     return <span className="text-[10px] text-gray-600">checking coverage…</span>;
+  }
+  if (!coverage || coverage.available === false || coverage.partial === true) {
+    return (
+      <span className="flex items-center gap-1 text-[10px] text-port-warning" title="Coverage could not be verified. Any available counts are partial; retry on the next refresh.">
+        <AlertCircle size={11} /> Coverage unavailable
+      </span>
+    );
   }
   if (coverage.fullyMirrored) {
     return (
@@ -773,20 +789,9 @@ function SyncCategoriesPanel({ peer, onRefresh }) {
   );
 }
 
-function SnapshotSyncBadge({ label, icon: Icon, cursorChecksum, remoteChecksum, livePushCovered, subsLoaded = true, syncing = false }) {
-  // `livePushCovered` is true when this peer has at least one per-record
-  // peer-sync subscription for a record kind that maps to this category
-  // (universe-subs → 'universe', series-subs → 'pipeline'). The orchestrator
-  // intentionally SKIPS the 60s snapshot loop for those categories — the push
-  // pipeline is authoritative — so cursor.checksums[cat] stays frozen at
-  // whatever it was when peer-subs took over and the cursor-vs-remote diff
-  // would always read "behind" even when the records are actually converged.
-  // Render a distinct "live-push" state instead so the badge stops lying.
+function SnapshotSyncBadge({ label, icon: Icon, cursorChecksum, remoteChecksum, syncing = false }) {
   const synced = cursorChecksum && remoteChecksum && cursorChecksum === remoteChecksum;
-  // Suppress "behind" until peer subs have loaded — `livePushCovered` is derived
-  // from them, so before they resolve a live-push category would briefly mislabel
-  // itself "behind". Until then it falls through to the neutral "pending" state.
-  const behind = subsLoaded && cursorChecksum && remoteChecksum && cursorChecksum !== remoteChecksum;
+  const behind = cursorChecksum && remoteChecksum && cursorChecksum !== remoteChecksum;
 
   return (
     <div className="flex items-center gap-1.5 text-xs">
@@ -796,13 +801,6 @@ function SnapshotSyncBadge({ label, icon: Icon, cursorChecksum, remoteChecksum, 
         <>
           <RefreshCw size={11} className="text-port-accent animate-spin" />
           <span className="text-port-accent">syncing…</span>
-        </>
-      ) : livePushCovered ? (
-        <>
-          <ArrowLeftRight size={11} className="text-port-accent" />
-          <span className="text-port-accent" title="Per-record push pipeline owns this category; snapshot cursor is intentionally stale">
-            live-push
-          </span>
         </>
       ) : synced ? (
         <>
@@ -824,7 +822,7 @@ function SnapshotSyncBadge({ label, icon: Icon, cursorChecksum, remoteChecksum, 
   );
 }
 
-function SyncStatusSection({ peer, syncStatus, peerSubs = [], peerSubsLoaded = true, syncing = false }) {
+function SyncStatusSection({ peer, syncStatus, syncing = false }) {
   if (!syncStatus || !peer.instanceId) return null;
 
   const cursor = syncStatus.cursors?.[peer.instanceId];
@@ -850,19 +848,6 @@ function SyncStatusSection({ peer, syncStatus, peerSubs = [], peerSubsLoaded = t
   // Show snapshot category sync status for all enabled snapshot categories
   const cursorChecksums = cursor?.checksums || {};
   const remoteChecksums = remoteSyncSeqs?.checksums || {};
-
-  // Derive the set of snapshot categories that are "covered" by the
-  // per-record peer-sync push pipeline. Mirrors the inverse mapping in
-  // `server/services/sharing/peerSync.js` KIND_TO_CATEGORY — universe-subs
-  // cover 'universe', series-subs cover 'pipeline' (which bundles series +
-  // issues). The orchestrator skips snapshot pulls for these, so the
-  // cursor checksum stays stale and the cursor-vs-remote diff is a lie.
-  // Render those categories as "live-push" instead.
-  const livePushCovered = new Set();
-  for (const s of peerSubs) {
-    if (s.recordKind === 'universe') livePushCovered.add('universe');
-    if (s.recordKind === 'series') livePushCovered.add('pipeline');
-  }
 
   const enabledSnapshots = SNAPSHOT_CATEGORIES
     .map(m => m.key)
@@ -912,8 +897,6 @@ function SyncStatusSection({ peer, syncStatus, peerSubs = [], peerSubsLoaded = t
               icon={meta.icon}
               cursorChecksum={cursorChecksums[cat]}
               remoteChecksum={remoteChecksums[cat]}
-              livePushCovered={livePushCovered.has(cat)}
-              subsLoaded={peerSubsLoaded}
               syncing={syncing}
             />
           );
@@ -1165,17 +1148,8 @@ export function PeerCard({ peer, onRefresh, syncStatus, tailnetInfo, parityRepor
   const [forwardBusy, setForwardBusy] = useState(false);
   const [connecting, setConnecting] = useState(false);
   const [confirmRemove, setConfirmRemove] = useState(false);
-  // Peer subs are loaded once at this level and shared with SchemaGapBadge and
-  // SyncStatusSection (which uses the sub set to decide which snapshot badges
-  // render as "live-push" instead of a misleading "behind"). Without sharing,
-  // every card would issue duplicate /sharing/peer-subs fetches. (The verbose
-  // per-record "Live-pushed records" list that used to render these was removed
-  // — it grew unbounded and the Sync Details drawer covers per-record status.)
+  // Outbound subscriptions inform per-record schema compatibility.
   const [peerSubs, setPeerSubs] = useState([]);
-  // Track whether the first subs fetch has settled — until it has, `peerSubs`
-  // is [] and SyncStatusSection can't tell a live-push category from a behind
-  // one, so it would flash "behind". Gates the snapshot badges' "behind" state.
-  const [peerSubsLoaded, setPeerSubsLoaded] = useState(false);
   // Live sync activity, driven by the `sync:progress` socket event. `syncing`
   // is true between this peer's `start` and `complete`; while it's true every
   // enabled category badge shows "syncing…". On `complete` it clears and the
@@ -1210,13 +1184,8 @@ export function PeerCard({ peer, onRefresh, syncStatus, tailnetInfo, parityRepor
   useEffect(() => {
     if (!peer.instanceId) {
       setPeerSubs([]);
-      setPeerSubsLoaded(true); // no instanceId → nothing to load; don't suppress forever
       return;
     }
-    // instanceId just became available or changed — re-suppress "behind" until
-    // this peer's first fetch settles, otherwise the stale [] would mislabel a
-    // live-push category. Cleared in the .finally() below.
-    setPeerSubsLoaded(false);
     let cancelled = false;
     const refetch = () => listPeerSubscriptions({ peerId: peer.instanceId }, { silent: true })
       .then((r) => {
@@ -1224,9 +1193,6 @@ export function PeerCard({ peer, onRefresh, syncStatus, tailnetInfo, parityRepor
       })
       .catch(() => {
         if (!cancelled) setPeerSubs([]);
-      })
-      .finally(() => {
-        if (!cancelled) setPeerSubsLoaded(true);
       });
     refetch();
     // When a per-record schema block is persisted server-side, the
@@ -1353,7 +1319,7 @@ export function PeerCard({ peer, onRefresh, syncStatus, tailnetInfo, parityRepor
 
   return (
     <div className={`bg-port-card border border-port-border rounded-xl p-5 transition-opacity ${!peer.enabled ? 'opacity-50' : ''}`}>
-      <div className="flex items-start justify-between mb-3">
+      <div className="flex flex-wrap items-start justify-between gap-2 mb-3">
         <div className="flex items-center gap-2">
           <StatusIcon size={16} className={STATUS_COLORS[peer.status]} />
           {editingName ? (
@@ -1491,7 +1457,7 @@ export function PeerCard({ peer, onRefresh, syncStatus, tailnetInfo, parityRepor
 
       <SyncCategoriesPanel peer={peer} onRefresh={onRefresh} />
 
-      <SyncStatusSection peer={peer} syncStatus={syncStatus} peerSubs={peerSubs} peerSubsLoaded={peerSubsLoaded} syncing={syncing} />
+      <SyncStatusSection peer={peer} syncStatus={syncStatus} syncing={syncing} />
 
       <BrainParityPanel peer={peer} report={parityReport} />
 
@@ -1508,9 +1474,22 @@ export default function Instances() {
 }
 
 function InstancesContent() {
-  // The Add Peer form is always on screen above the peer grid, so the empty
-  // state's call to action focuses its address field rather than opening one.
   const peerAddressRef = useRef(null);
+  const [searchParams, setSearchParams] = useSearchParams();
+  const drawer = searchParams.get('connection');
+  const [settingsTab, setSettingsTab] = useDrawerTab('connectionTab', 'instance', ['instance', 'network', 'relay', 'routing']);
+  const [editingSelf, setEditingSelf] = useState(false);
+  const [selfName, setSelfName] = useState('');
+  const { status: serveStatus } = useTailcatServe();
+  const openDrawer = (value, tab) => {
+    setSearchParams((prev) => {
+      const next = new URLSearchParams(prev);
+      if (value) next.set('connection', value);
+      else next.delete('connection');
+      if (tab) next.set('connectionTab', tab);
+      return next;
+    }, { replace: true });
+  };
   const [self, setSelf] = useState(null);
   const [peers, setPeers] = useState([]);
   const [syncStatus, setSyncStatus] = useState(null);
@@ -1577,68 +1556,109 @@ function InstancesContent() {
     );
   }
 
+  // Keep state owners above the remounting drawer tabs. The same snapshot
+  // drives attention summaries and recovery controls, including with no peers.
   return (
-    <div className="space-y-6">
-      <div className="flex items-center gap-3">
-        <Network size={24} className="text-port-accent" />
-        <h1 className="text-2xl font-bold text-white">Instances</h1>
-        <span className="text-sm text-gray-500">PortOS Federation</span>
-      </div>
+    <TailcatForwardsPanel onChange={fetchData} peerIds={peers.map((peer) => peer.id)}
+      renderPanel={(forwardsPanel, orphanCount) => (
+        <UnattendedRenderRouting peers={peers} renderPanel={(routingPanel, routeAttention) => (
+          <div className="space-y-4">
+            <div className="flex items-center gap-3">
+              <Network size={24} className="text-port-accent" />
+              <h1 className="text-2xl font-bold text-white">Instances</h1>
+              <span className="text-sm text-gray-500">PortOS Federation</span>
+            </div>
 
-      <TailnetHelpBanner tailnetInfo={tailnetInfo} networkExposure={networkExposure} />
+            <div className="flex flex-wrap gap-2">
+              <button type="button" onClick={() => openDrawer('add')}
+                className="min-h-[44px] inline-flex items-center gap-1 rounded-lg bg-port-accent px-3 text-sm text-white">
+                <Plus size={16} /> Add peer
+              </button>
+              <button type="button" onClick={() => openDrawer('settings')}
+                className="min-h-[44px] rounded-lg border border-port-border px-3 text-sm text-gray-300 hover:text-white">
+                Connection settings
+              </button>
+            </div>
+            <div className="flex flex-wrap gap-x-3 gap-y-1 text-xs text-gray-400">
+              <span className="break-words min-w-0">{self?.name || 'This instance'}</span>
+              <span>{networkExposure?.setup?.complete ? 'Tailscale HTTPS ready' : 'Network setup available'}</span>
+              <span>{peers.filter((peer) => peer.status === 'online').length} / {peers.length} peers online</span>
+            </div>
+            {(orphanCount > 0 || serveStatus?.status === 'failed') && (
+              <button type="button" onClick={() => openDrawer('settings', 'relay')}
+                className="block w-full rounded-lg border border-port-warning/40 p-3 text-left text-sm text-port-warning">
+                Tailcat needs attention — review forwards and serve
+              </button>
+            )}
+            {routeAttention && (
+              <button type="button" onClick={() => openDrawer('settings', 'routing')}
+                className="block w-full rounded-lg border border-port-warning/40 p-3 text-left text-sm text-port-warning">
+                Unattended render routing needs attention — review routes
+              </button>
+            )}
 
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        <SelfCard self={self} onUpdate={fetchData} syncStatus={syncStatus} tailnetInfo={tailnetInfo} />
-        <AddPeerForm onAdd={fetchData} addressRef={peerAddressRef} />
-      </div>
+            {peers.length > 0 && (
+              <div>
+                <h2 className="text-sm font-medium text-gray-400 uppercase tracking-wider mb-3">
+                  Peers ({peers.length})
+                </h2>
+                <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+                  {peers.map(peer => (
+                    // Reports key on instanceId (the stable federation identity), but
+                    // a peer audited before it was ever probed files under its local
+                    // registry id — mirror that fallback here or its report reads as
+                    // "not checked".
+                    <PeerCard
+                      key={peer.id}
+                      peer={peer}
+                      onRefresh={fetchData}
+                      syncStatus={syncStatus}
+                      tailnetInfo={tailnetInfo}
+                      parityReport={parityReports[peer.instanceId] ?? parityReports[peer.id] ?? null}
+                    />
+                  ))}
+                </div>
+              </div>
+            )}
 
-      {/* Outside the peer-count guard on purpose: removing the last peer must
-          not hide the only control that can clear a stale saved route, or every
-          unattended render keeps failing its preflight with no way back. The
-          component renders nothing when there is neither an option nor a saved
-          route. */}
-      <UnattendedRenderRouting peers={peers} />
-
-      {/* Also outside the peer-count guard: a tailcat forward whose start failed
-          never registered a peer, so this is the only surface that can retry it. */}
-      <TailcatServePanel onChange={fetchData} />
-
-      <TailcatForwardsPanel onChange={fetchData} peerIds={peers.map((p) => p.id)} />
-
-      {peers.length > 0 && (
-        <div>
-          <h2 className="text-sm font-medium text-gray-400 uppercase tracking-wider mb-3">
-            Peers ({peers.length})
-          </h2>
-          <BrainParitySchedule />
-          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
-            {peers.map(peer => (
-              // Reports key on instanceId (the stable federation identity), but
-              // a peer audited before it was ever probed files under its local
-              // registry id — mirror that fallback here or its report reads as
-              // "not checked".
-              <PeerCard
-                key={peer.id}
-                peer={peer}
-                onRefresh={fetchData}
-                syncStatus={syncStatus}
-                tailnetInfo={tailnetInfo}
-                parityReport={parityReports[peer.instanceId] ?? parityReports[peer.id] ?? null}
+            {peers.length === 0 && (
+              <EmptyState
+                icon={Network}
+                title="No peers registered yet"
+                message="Add another PortOS instance by its Tailscale IP address to federate records between your machines."
+                actionLabel="Add your first peer"
+                onAction={() => openDrawer('add')}
               />
-            ))}
+            )}
+            <AddPeerForm onAdd={fetchData} addressRef={peerAddressRef}
+              drawer={{ open: drawer === 'add', onClose: () => openDrawer(null) }} />
+            <Drawer open={drawer === 'settings'} onClose={() => openDrawer(null)}
+              title="Connection settings" size="md"
+              tabs={[
+                { id: 'instance', label: 'This instance' },
+                { id: 'network', label: 'Network' },
+                { id: 'relay', label: 'Tailcat' },
+                { id: 'routing', label: 'Render routes' },
+              ]}
+              activeTab={settingsTab} onTabChange={setSettingsTab}>
+              {settingsTab === 'instance' && (
+                <div className="space-y-4">
+                  <SelfCard self={self} onUpdate={fetchData} syncStatus={syncStatus} tailnetInfo={tailnetInfo}
+                    editing={editingSelf} setEditing={setEditingSelf} name={selfName} setName={setSelfName} />
+                  <BrainParitySchedule />
+                </div>
+              )}
+              {settingsTab === 'network' && <TailnetHelpBanner tailnetInfo={tailnetInfo} networkExposure={networkExposure} />}
+              {settingsTab === 'relay' && (
+                <div className="space-y-4">
+                  <TailcatServePanel onChange={fetchData} />
+                  {forwardsPanel}
+                </div>
+              )}
+              {settingsTab === 'routing' && (routingPanel || <p className="text-sm text-gray-400">No render routes configured. Enable a Tailscale peer as a media provider to add one.</p>)}
+            </Drawer>
           </div>
-        </div>
-      )}
-
-      {peers.length === 0 && (
-        <EmptyState
-          icon={Network}
-          title="No peers registered yet"
-          message="Add another PortOS instance by its Tailscale IP address to federate records between your machines."
-          actionLabel="Add your first peer"
-          onAction={() => peerAddressRef.current?.focus()}
-        />
-      )}
-    </div>
+        )} />
+      )} />
   );
 }

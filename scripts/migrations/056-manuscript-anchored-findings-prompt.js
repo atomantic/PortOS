@@ -31,7 +31,7 @@ export const ACCEPTED_OLD_MD5 = {
 // drift-catch tests require it to match the live data.reference body, not 056's
 // own output.
 export const NEW_SHIPPED_MD5 = {
-  'pipeline-manuscript-completeness.md': 'fd26f928c33803c12878a1bfb8561ece',
+  'pipeline-manuscript-completeness.md': 'a08a7aaea9b57dcf12311505150672cd',
 };
 
 const { applyMigration, up } = makePromptReplaceMigration({

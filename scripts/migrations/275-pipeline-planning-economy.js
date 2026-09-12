@@ -24,7 +24,7 @@ export const ACCEPTED_OLD_MD5 = {
 };
 
 export const NEW_SHIPPED_MD5 = {
-  'pipeline-arc-resolve.md': '638b988c84b3e5599f7a2ce09fa149ce',
+  'pipeline-arc-resolve.md': '122950b9f5ce84708ac1510ef13b1bce',
   'pipeline-arc-verify.md': '4b60a322e35b536405d0fbf543580562',
   'pipeline-volume-verify.md': '9c0839d7fe1760c0891464afd4a3b8fd',
 };

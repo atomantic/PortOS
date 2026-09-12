@@ -367,6 +367,8 @@ beforeEach(async () => {
   // return Promises; production code can assume this, but the test mock
   // has to match, including listIssuesForSeries so a buildPushPayload path
   // that bundles child issues doesn't choke on an un-overridden mock.
+  vi.mocked(listUniverses).mockReset().mockResolvedValue([]);
+  vi.mocked(listSeries).mockReset().mockResolvedValue([]);
   vi.mocked(getUniverse).mockReset().mockResolvedValue(undefined);
   vi.mocked(getSeries).mockReset().mockResolvedValue(undefined);
   vi.mocked(getIssue).mockReset().mockResolvedValue(undefined);
@@ -659,7 +661,37 @@ describe('peerSync', () => {
     it('reports fully-mirrored with zero total when there are no local records', async () => {
       // All listers default to [] in the suite-level beforeEach.
       const cov = await getFullSyncCoverageForPeer('peer-a');
-      expect(cov).toMatchObject({ total: 0, confirmed: 0, pending: 0, fullyMirrored: true });
+      expect(cov).toMatchObject({ total: 0, confirmed: 0, pending: 0, fullyMirrored: true, available: true, partial: false, failedReads: [] });
+    });
+
+    // An inventory failure must survive both lazy and direct lister boundaries.
+    it('marks failed inventories unavailable even when the remaining subset is confirmed', async () => {
+      const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+      vi.mocked(listUniverses).mockRejectedValue(new Error('private database details'));
+      vi.mocked(listAuthors).mockRejectedValue(new Error('private author contents'));
+      vi.mocked(listSeries).mockResolvedValue([{ id: 's1' }]);
+      await writeFile(join(tmp, 'sharing', 'peer_subscriptions.json'), JSON.stringify({
+        subscriptions: [{ id: 'sub-s1', peerId: 'peer-a', recordKind: 'series', recordId: 's1', lastConfirmedPushedAt: Date.now() }],
+      }));
+      const cov = await getFullSyncCoverageForPeer('peer-a');
+      expect(cov).toMatchObject({ available: false, partial: true, fullyMirrored: false, total: 1, confirmed: 1, pending: 0 });
+      expect(cov.failedReads).toEqual([
+        { kind: 'universe', operation: 'records' },
+        { kind: 'author', operation: 'records' },
+      ]);
+      expect(cov.byKind.universe).toMatchObject({ partial: true });
+      expect(JSON.stringify(cov)).not.toContain('private');
+      expect(log.mock.calls.flat().join(' ')).not.toContain('private');
+      expect(log.mock.calls.filter(([message]) => message.includes('coverage unavailable'))).toHaveLength(2);
+      log.mockRestore();
+    });
+
+    it('reports unavailable when subscription storage cannot be read, including empty inventories', async () => {
+      await writeFile(join(tmp, 'sharing', 'peer_subscriptions.json'), 'invalid private JSON');
+      const cov = await getFullSyncCoverageForPeer('peer-a');
+      expect(cov).toMatchObject({ available: false, partial: true, fullyMirrored: false, total: 0, pending: 0 });
+      expect(cov.failedReads).toEqual(PEER_SUBSCRIBABLE_KINDS.map(kind => ({ kind, operation: 'subscriptions' })));
+      expect(JSON.stringify(cov)).not.toContain('private');
     });
 
     it('counts a record with no subscription as pending (real ID diff, not cursors)', async () => {
@@ -1219,6 +1251,26 @@ describe('peerSync', () => {
       expect(vi.mocked(peerFetch)).not.toHaveBeenCalled();
     });
 
+    it('continues peer-online backfill after a kind inventory fails without logging private errors', async () => {
+      const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+      const { instanceEvents } = await import('../instanceEvents.js');
+      const { installPeerSyncListener } = await import('./peerSync.js');
+      installPeerSyncListener();
+      vi.mocked(listUniverses).mockRejectedValue(new Error('private inventory details'));
+      vi.mocked(listSeries).mockResolvedValue([{ id: 's1' }]);
+      vi.mocked(getSeries).mockResolvedValue({ id: 's1', name: 'Series' });
+      vi.mocked(peerFetch).mockResolvedValue({ ok: true, json: async () => ({ missingAssets: [] }) });
+      instanceEvents.emit('peer:online', {
+        instanceId: 'peer-a', enabled: true, syncEnabled: true,
+        directions: ['outbound'], syncCategories: { universe: true, pipeline: true },
+      });
+      await __drainForTests();
+      expect(await findPeerSubscription('peer-a', 'series', 's1')).not.toBeNull();
+      expect(log).toHaveBeenCalledWith('⚠️ peerSync: backfill inventory unavailable for universe/records');
+      expect(log.mock.calls.flat().join(' ')).not.toContain('private inventory details');
+      log.mockRestore();
+    });
+
     it('converges from peer:online when the toggle fired before instanceId was known', async () => {
       // Regression for the addPeer→toggle→probe ordering: addPeer creates
       // a peer with instanceId=null. The user can flip syncCategories on
@@ -1379,7 +1431,7 @@ describe('peerSync', () => {
       await subscribePeer({ peerId: 'peer-a', recordKind: 'universe', recordId: 'u1' });
       // Poll for the fire-and-forget initial push to persist its hash. A fixed
       // sleep OR a single writeTail drain (__drainForTests) is racy in slower CI
-      // because the push's peerFetch + persistPushSuccess chain may not have even
+      // because the push's peerFetch + persistPushDeliveryEvidence chain may not have even
       // started when we read — vi.waitFor retries the real condition deterministically.
       let sub;
       await vi.waitFor(async () => {

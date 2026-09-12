@@ -8,6 +8,7 @@
  * external checkout or calls an AI provider.
  */
 
+import { scrubSecretTokens } from '../lib/secretText.js';
 import { buildEidoverseCitySurface } from '../lib/eidoverseCitySurface.js';
 import { eidoverseModelBounds } from '../lib/eidoverseCityLayout.js';
 import { createHash, randomUUID } from 'node:crypto';
@@ -40,12 +41,10 @@ import {
   EIDOVERSE_PROJECTION_KINDS,
 } from './eidoverseWorldProjection.js';
 import {
-  collectEidoverseWorldSources,
   eidoverseHostId,
   projectedJiraTickets,
   projectedStorage,
-} from './eidoverseWorldSources.js';
-import { resolvePersistentMindChosenName } from '../lib/persistentMindChosenName.js';
+} from '../lib/eidoverseWorldSignals.js';
 
 export { buildProjectionPlan, DEFAULT_EIDOVERSE_PROJECTION_RECIPE, projectedJiraTickets, projectedStorage };
 
@@ -409,8 +408,15 @@ function configFromState(state, presence = cosPresence) {
   };
 }
 
-function applyConfigDefaults(state, fallback) {
+function applyConfigDefaults(state, fallback, chosenCosId) {
   let changed = false;
+  if (chosenCosId && chosenCosId !== state.cos.id) {
+    rememberRetiredOwner(state, state.world, state.cos.id, { id: state.cos.id, avatar: state.cos.avatar });
+    state.cos.id = chosenCosId;
+    state.cos.role = null;
+    state.ownership.retired = state.ownership.retired.filter((entry) => !(entry.world === state.world && entry.id === chosenCosId));
+    changed = true;
+  }
   if (!validIdentity(state.human.name, '')) {
     state.human.name = fallback.name;
     state.human.source = fallback.source;
@@ -436,15 +442,16 @@ function applyConfigDefaults(state, fallback) {
 
 async function readEidoverseWorldConfig(self) {
   const state = await loadState();
-  applyConfigDefaults(state, fallbackIdentity(self));
+  applyConfigDefaults(state, fallbackIdentity(self), await resolveSuggestedCosId());
   return configFromState(state);
 }
 
 export async function ensureEidoverseWorldConfig() {
   const self = await ensureSelf();
   const fallback = fallbackIdentity(self);
+  const chosenCosId = await resolveSuggestedCosId();
   return mutateState((state) => {
-    applyConfigDefaults(state, fallback);
+    applyConfigDefaults(state, fallback, chosenCosId);
     return configFromState(state);
   });
 }
@@ -480,6 +487,7 @@ export async function updateEidoverseWorldConfig(patch) {
   return worldLock(async () => {
     const self = await ensureSelf();
     const fallback = fallbackIdentity(self);
+    const chosenCosId = await resolveSuggestedCosId();
     const fullReset = patch.reset?.scope === 'all';
     const updated = await mutateState((state) => {
       const previousPresenceConfig = {
@@ -504,6 +512,7 @@ export async function updateEidoverseWorldConfig(patch) {
           ? validIdentity(patch.cosId, DEFAULT_COS_ID)
           : DEFAULT_COS_ID;
       }
+      if (chosenCosId) state.cos.id = chosenCosId;
       if (Object.hasOwn(patch, 'cosAvatar')) state.cos.avatar = patch.cosAvatar || DEFAULT_COS_AVATAR;
       if (patch.cosEnabled !== undefined) state.cos.enabled = patch.cosEnabled;
       if (fullReset) {
@@ -662,6 +671,7 @@ function createWorldConnection({ world, id, avatar, agent = true, guest = false,
   let openSettled = false;
   let snapshotSettled = false;
   let snapshotValue = null;
+  const occupiedIdentities = new Set();
   let closeTimer = null;
   let openTimer = null;
   let snapshotTimer = null;
@@ -750,6 +760,7 @@ function createWorldConnection({ world, id, avatar, agent = true, guest = false,
     }
 
     if (message?.type === 'snapshot') {
+      for (const key of [...Object.keys(message.state?.roles || {}), ...Object.keys(message.state?.entities || {})]) occupiedIdentities.add(key);
       settleSnapshot(message);
       return;
     }
@@ -759,6 +770,11 @@ function createWorldConnection({ world, id, avatar, agent = true, guest = false,
         code: 'EIDOVERSE_WORLD_VERB_REJECTED',
       }));
       return;
+    }
+    if (message?.type === 'log' && message.entry) {
+      // Grants and arrivals after the initial snapshot also reserve their names.
+      if (typeof message.entry.actor === 'string') occupiedIdentities.add(message.entry.actor);
+      if (typeof message.entry.args?.id === 'string') occupiedIdentities.add(message.entry.args.id);
     }
     if (message?.type === 'log' && message.entry?.verb === 'say') {
       const entry = message.entry;
@@ -903,6 +919,7 @@ function createWorldConnection({ world, id, avatar, agent = true, guest = false,
     close,
     isOpen: () => !closed && socket.readyState === WebSocket.OPEN,
     getSnapshot: () => snapshotValue,
+    hasIdentity: (name) => occupiedIdentities.has(name),
     readChat: (after = -1) => {
       const unread = chat.filter((entry) => entry.seq > after);
       const messages = [];
@@ -1151,6 +1168,26 @@ async function seedHumanRoleAndCosGrant(config, { signal, verbIntervalMs } = {})
     }
     return { humanRole, cosRole };
   }).then((roles) => connection.close().then(async () => {
+    // Both names may change together. Reuse a recorded prior owner to grant
+    // the new identities before the normal cleanup retires that owner.
+    if (roles.humanRole !== 'owner' && roles.cosRole !== 'owner') {
+      const state = await loadState();
+      const previous = state.ownership.retired.find((entry) => entry.world === config.world && entry.actorId);
+      if (previous) {
+        const priorConnection = createWorldConnection({
+          world: config.world, id: previous.actorId,
+          avatar: previous.actorAvatar || config.cos.avatar, agent: true,
+        });
+        await priorConnection.waitForSnapshot({ signal }).then(async (snapshot) => {
+          if ((snapshot?.yourRights?.role || roleFromSnapshot(snapshot, previous.actorId)) !== 'owner') return;
+          for (const id of new Set([config.human.id, config.cos.id])) {
+            await sendPacedVerb(priorConnection, 'grant', { id, role: 'owner' }, { signal, pacing, verbIntervalMs });
+          }
+          roles.humanRole = 'owner';
+          roles.cosRole = 'owner';
+        }).finally(() => priorConnection.close());
+      }
+    }
     await rememberObservedRoles(roles);
     return roles;
   }), (error) => connection.close().then(() => { throw error; }));
@@ -1166,7 +1203,8 @@ async function ensureCosPresenceInternal({ fresh = false, signal, verbIntervalMs
       code: 'EIDOVERSE_COS_DISABLED',
     });
   }
-  if (fresh || (cosPresence && !cosPresence.connection.isOpen())) await closeCosPresenceInternal();
+  if (fresh || (cosPresence && (!cosPresence.connection.isOpen()
+    || cosPresence.connection.id !== config.cos.id || cosPresence.connection.world !== config.world))) await closeCosPresenceInternal();
   if (cosPresence?.connection.isOpen()) return cosPresence;
 
   await seedHumanRoleAndCosGrant(config, { signal, verbIntervalMs });
@@ -1774,6 +1812,7 @@ export async function projectEidoverseWorld({ signal, compact = false, verbInter
     const config = await ensureEidoverseWorldConfig();
     const lockedConfig = await resolveAndLockAssets(config, { signal });
     const presence = await ensureCosPresenceInternal({ fresh: true, signal, verbIntervalMs });
+    const { collectEidoverseWorldSources } = await import('./eidoverseWorldSources.js');
     const source = await collectEidoverseWorldSources({ signal });
     const hostId = eidoverseHostId(await getInstanceId());
     throwIfAborted(signal);
@@ -2023,8 +2062,8 @@ export async function sayInEidoverseWorld(text, { signal, verbIntervalMs } = {})
 
 async function resolveSuggestedCosId(currentCosId) {
   try {
-    const { readPersistentMindMemories } = await import('./persistentMindContext.js');
-    const name = resolvePersistentMindChosenName(await readPersistentMindMemories());
+    const { readPersistentMindName } = await import('./persistentMindContext.js');
+    const name = await readPersistentMindName();
     if (!name) return null;
     const clean = validIdentity(name, '');
     if (!clean || clean === currentCosId) return null;
@@ -2103,14 +2142,22 @@ export const __resetEidoverseWorldForTests = closeEidoverseWorldConnections;
 
 
 /** Guest admission happens through the owner before any guest joins. */
-export async function admitEidoverseGuest({ agent = false, verbIntervalMs } = {}) {
+export async function admitEidoverseGuest({ agent = false, name, verbIntervalMs } = {}) {
   return worldLock(async () => {
     await assertInstalled();
     const presence = await ensureCosPresenceInternal({ verbIntervalMs });
     if (presence.snapshot?.yourRights?.role !== 'owner') {
       throw new ServerError('The resident must own this world to admit visitors.', { status: 409, code: 'EIDOVERSE_GUEST_ADMISSION_UNAVAILABLE' });
     }
-    const id = `guest-${randomUUID()}`;
+    const desiredName = validIdentity(name, '');
+    const usableName = desiredName && scrubSecretTokens(desiredName) === desiredName
+      && presence.snapshot?.state?.roles;
+    const baseName = usableName ? desiredName : `guest-${randomUUID()}`;
+    let id = baseName;
+    for (let suffix = 2; presence.connection.hasIdentity(id); suffix += 1) {
+      const tail = ` (${suffix})`;
+      id = `${baseName.slice(0, 64 - tail.length)}${tail}`;
+    }
     await sendPacedVerb(presence.connection, 'grant', { id, role: 'visitor', gen: false }, {
       pacing: presence.pacing,
       verbIntervalMs,

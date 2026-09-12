@@ -138,6 +138,8 @@ export const AUTOPILOT_LLM_STAGE_KINDS = Object.freeze([
   'beatSheet',
   'beatContinuity',
   'textStages',
+  'pilotDraft',
+  'pilotReview',
   'scriptVerify',
   'editorialReview',
   'reverseOutline',
@@ -184,6 +186,7 @@ const sanitizeAutopilotResumeOptions = (raw) => {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
   const out = {};
   if (typeof raw.includeVisual === 'boolean') out.includeVisual = raw.includeVisual;
+  if (['series', 'first-issue'].includes(raw.productionScope)) out.productionScope = raw.productionScope;
   if (typeof raw.fileGaps === 'boolean') out.fileGaps = raw.fileGaps;
   const baseLlm = sanitizeAutopilotLlmRoute(raw);
   if (baseLlm?.providerOverride) out.providerOverride = baseLlm.providerOverride;

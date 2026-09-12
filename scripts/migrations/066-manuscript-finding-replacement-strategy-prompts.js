@@ -45,7 +45,7 @@ export const ACCEPTED_OLD_MD5 = {
 // (migration 083 added the with-edits `replace` field); the fix hash reflects
 // the post-084 body (migration 084 made the JSON example schematic).
 export const NEW_SHIPPED_MD5 = {
-  'pipeline-manuscript-completeness.md': 'fd26f928c33803c12878a1bfb8561ece',
+  'pipeline-manuscript-completeness.md': 'a08a7aaea9b57dcf12311505150672cd',
   'pipeline-manuscript-fix.md': 'e2baaf0f2f53c8aa1e934a428c0ca583',
 };
 

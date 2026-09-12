@@ -14,6 +14,7 @@ const script = join(dirname(fileURLToPath(import.meta.url)), 'generate_minimax_h
 const pyBin = resolveTestPython();
 const runPython = (source) => execFileSync(pyBin, ['-c', source, script], {
   encoding: 'utf8',
+  timeout: 10_000,
 });
 
 // Python on Windows writes CRLF, so splitting the output on newlines alone
@@ -61,6 +62,109 @@ const validate = (overrides) => {
 };
 
 describe.skipIf(!pyBin)('generate_minimax_h3_cuda.py', () => {
+  it('rejects malicious checkpoint indexes before any profile can load weights', () => {
+    const output = runPython(`${importRunner}\n${[
+      'import json, tempfile',
+      'with tempfile.TemporaryDirectory() as temp:',
+      '    snapshot = Path(temp) / "snapshot"',
+      '    component = snapshot / "transformer"',
+      '    component.mkdir(parents=True)',
+      '    outside = Path(temp) / "outside.safetensors"',
+      '    outside.write_text("not a checkpoint")',
+      '    (component / "escape.safetensors").symlink_to(outside)',
+      '    index = component / "model.safetensors.index.json"',
+      '    bad_shards = ["../outside.safetensors", "nested/../../outside.safetensors",',
+      '        str(Path(temp).absolute() / "outside.safetensors"),',
+      '        "C:/outside.safetensors", "C:outside.safetensors",',
+      '        "\\\\\\\\host\\\\share\\\\weights", "..\\\\outside.safetensors", "", None, 7, "bad\\0name"]',
+      '    bad_shards.append("escape.safetensors")',
+      '    indexes = [{"weight_map": {"layer.weight": shard}} for shard in bad_shards]',
+      '    indexes += [{"layer.weight": "../outside.safetensors"}, [], {"weight_map": []}, {"weight_map": {}}]',
+      '    for profile in ("bf16", "int8-stream", "int8-lean"):',
+      '        for content in indexes:',
+      '            index.write_text(json.dumps(content))',
+      '            try:',
+      '                runner.load_pipeline(snapshot, profile)',
+      '            except ValueError:',
+      '                continue',
+      '            raise AssertionError(f"Unsafe index reached the loader: {profile}")',
+      '    print("rejected before loading")',
+    ].join('\n')}`);
+    expect(output.trim()).toBe('rejected before loading');
+  });
+
+  it('refuses non-regular shards and indexes without opening a FIFO', () => {
+    const output = runPython(`${importRunner}\n${[
+      'import json, os, tempfile',
+      'with tempfile.TemporaryDirectory() as temp:',
+      '    snapshot = Path(temp)',
+      '    index = snapshot / "model.safetensors.index.json"',
+      '    directory = snapshot / "directory"',
+      '    directory.mkdir()',
+      '    targets = [directory]',
+      '    if hasattr(os, "mkfifo"):',
+      '        fifo = snapshot / "weights.safetensors"',
+      '        os.mkfifo(fifo)',
+      '        targets.append(fifo)',
+      '    for target in targets:',
+      '        index.write_text(json.dumps({"weight_map": {"layer.weight": target.name}}))',
+      '        try:',
+      '            runner.load_pipeline(snapshot, "bf16")',
+      '        except ValueError as exc:',
+      '            assert "regular file" in str(exc)',
+      '        else:',
+      '            raise AssertionError("Non-regular shard reached loader")',
+      '    if hasattr(os, "mkfifo"):',
+      '        index.unlink()',
+      '        os.mkfifo(index)',
+      '        try:',
+      '            runner.load_pipeline(snapshot, "bf16")',
+      '        except ValueError as exc:',
+      '            assert "index must be a regular file" in str(exc)',
+      '        else:',
+      '            raise AssertionError("FIFO index reached loader")',
+      '    print("non-regular files rejected")',
+    ].join('\n')}`);
+    expect(output.trim()).toBe('non-regular files rejected');
+  });
+
+  it('loads valid nested and HF blob-symlink shards while tolerating an unused partial cache', () => {
+    const output = runPython(`${importRunner}\n${[
+      'import json, tempfile, types',
+      'with tempfile.TemporaryDirectory() as temp:',
+      '    root = Path(temp)',
+      '    snapshot = root / "snapshots" / "revision"',
+      '    component = snapshot / "transformer"',
+      '    shards = component / "shards"',
+      '    shards.mkdir(parents=True)',
+      '    blob = root / "blobs" / "abc"',
+      '    blob.parent.mkdir()',
+      '    blob.write_text("weights")',
+      '    (shards / "linked.safetensors").symlink_to(blob)',
+      '    (shards / "plain.safetensors").write_text("weights")',
+      '    (component / "model.safetensors.index.json").write_text(json.dumps({"weight_map": {',
+      '        "a": "shards/linked.safetensors", "b": "./shards/plain.safetensors"}}))',
+      '    unused = snapshot / "unused"',
+      '    unused.mkdir()',
+      '    (unused / "model.safetensors.index.json").write_text(json.dumps({"a": "missing.safetensors"}))',
+      '    events = []',
+      '    pipe = types.SimpleNamespace(load_components=lambda **kw: events.append(kw["workflow"]))',
+      '    manager = types.SimpleNamespace(enable_auto_cpu_offload=lambda **kw: events.append(kw["device"]))',
+      '    def from_pretrained(path, **kw):',
+      '        assert path == str(snapshot)',
+      '        assert kw["components_manager"] is manager',
+      '        return pipe',
+      '    sys.modules["torch"] = types.SimpleNamespace(bfloat16="bf16")',
+      '    sys.modules["diffusers"] = types.SimpleNamespace(',
+      '        ComponentsManager=lambda: manager,',
+      '        ModularPipeline=types.SimpleNamespace(from_pretrained=from_pretrained))',
+      '    assert runner.load_pipeline(snapshot, "bf16") is pipe',
+      '    assert events == ["fl2va", "cuda"]',
+      '    print("loaded valid checkpoint")',
+    ].join('\n')}`);
+    expect(output.trim()).toBe('loaded valid checkpoint');
+  });
+
   it('accepts a legal request at both ends of the diffusers window', () => {
     expect(validate({})).toBe('OK');
     expect(validate({ num_frames: 345 })).toBe('OK');

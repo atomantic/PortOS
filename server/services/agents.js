@@ -23,7 +23,7 @@ const AGENT_PATTERNS = [
  * Decide whether a matched process line is a real AI-agent CLI or an OS/UI
  * helper that only happens to share a substring with an agent name.
  *
- * The pattern grep is a coarse substring match, so `cursor` also matches macOS
+ * Brand detection is a coarse substring match, so `cursor` also matches macOS
  * native helpers like the TextInputUI framework's `CursorUIViewService.xpc`
  * (a text-caret UI service, NOT the Cursor AI editor). Those live under system
  * framework / XPC-service / app-bundle paths that no agent CLI is ever invoked
@@ -48,10 +48,12 @@ export function isAgentProcessCommand(command) {
  */
 export async function getRunningAgents() {
   const agents = [];
+  const snapshot = await readProcessSnapshot();
 
   for (const agent of AGENT_PATTERNS) {
-    const procs = await findProcesses(agent.pattern);
-    procs.forEach(proc => {
+    snapshot.forEach(entry => {
+      if (!entry.matchText.includes(agent.pattern)) return;
+      const { matchText: _matchText, ...proc } = entry;
       // Enrich with spawned command data if available
       const spawnedData = getSpawnedAgent(proc.pid);
 
@@ -81,52 +83,18 @@ export async function getRunningAgents() {
   return agents;
 }
 
-/**
- * Find processes matching a pattern
- */
-async function findProcesses(pattern) {
-  const platform = process.platform;
-
-  if (platform === 'darwin' || platform === 'linux') {
-    return findUnixProcesses(pattern);
-  } else if (platform === 'win32') {
-    return findWindowsProcesses(pattern);
+/** Acquire once per request; classification never launches another probe. */
+async function readProcessSnapshot() {
+  if (process.platform === 'darwin' || process.platform === 'linux') {
+    return readUnixSnapshot();
   }
-
+  if (process.platform === 'win32') return readWindowsSnapshot();
   return [];
 }
 
-/**
- * Validate pattern to prevent command injection
- * Only allows alphanumeric characters, hyphens, and underscores
- */
-function validatePattern(pattern) {
-  if (typeof pattern !== 'string' || !pattern) {
-    return null;
-  }
-  // Only allow safe characters for process name matching
-  // Reject any shell metacharacters
-  if (!/^[a-zA-Z0-9_-]+$/.test(pattern)) {
-    return null;
-  }
-  return pattern;
-}
-
-/**
- * Find processes on Unix-like systems (macOS, Linux)
- */
-async function findUnixProcesses(pattern) {
-  // Security: Validate pattern to prevent command injection
-  const safePattern = validatePattern(pattern);
-  if (!safePattern) {
-    console.warn(`⚠️ Invalid process pattern rejected: ${pattern}`);
-    return [];
-  }
-
-  // ps command to get process info
-  // -e: all processes, -o: output format, -ww: unlimited width (no truncation)
-  // Security: Pattern is validated above to only contain safe characters
-  const cmd = `ps -ww -eo pid,ppid,%cpu,%mem,etime,command | grep -i "${safePattern}" | grep -v grep`;
+async function readUnixSnapshot() {
+  // Keep a bounded output buffer. Failed/oversized snapshots yield no partial list.
+  const cmd = 'ps -ww -eo pid,ppid,%cpu,%mem,etime,command';
 
   const result = await execAsync(cmd, { maxBuffer: 10 * 1024 * 1024 }).catch(() => ({ stdout: '' }));
 
@@ -135,6 +103,7 @@ async function findUnixProcesses(pattern) {
 
   for (const line of lines) {
     const parts = line.trim().split(/\s+/);
+    if (parts[0] === 'PID') continue;
     if (parts.length >= 6) {
       const pid = parseInt(parts[0], 10);
       const ppid = parseInt(parts[1], 10);
@@ -142,6 +111,8 @@ async function findUnixProcesses(pattern) {
       const mem = parseFloat(parts[3]);
       const etime = parts[4];
       const command = parts.slice(5).join(' ');
+      if (!Number.isInteger(pid) || pid <= 0 || !Number.isFinite(ppid)
+        || !Number.isFinite(cpu) || !Number.isFinite(mem)) continue;
 
       // Skip grep, our own scanner, macOS app bundles, and the system
       // framework / XPC helpers that only match a name substring (e.g. the
@@ -150,8 +121,10 @@ async function findUnixProcesses(pattern) {
 
       // Parse elapsed time to get start time
       const runtime = parseElapsedTime(etime);
+      if (!Number.isFinite(runtime)) continue;
 
       processes.push({
+        matchText: command.toLowerCase(),
         pid,
         ppid,
         cpu,
@@ -170,13 +143,9 @@ async function findUnixProcesses(pattern) {
 /**
  * Find processes on Windows
  */
-async function findWindowsProcesses(pattern) {
-  // Security: Validate pattern to prevent command injection
-  const safePattern = validatePattern(pattern);
-  if (!safePattern) {
-    console.warn(`⚠️ Invalid process pattern rejected: ${pattern}`);
-    return [];
-  }
+async function readWindowsSnapshot() {
+  // Patterns are private fixed literals; match Name, never command-line arguments.
+  const filter = AGENT_PATTERNS.map(({ pattern }) => `Name LIKE '%${pattern}%'`).join(' OR ');
 
   // WMIC, not PowerShell CIM, was the original implementation here — but
   // Microsoft removed wmic.exe from Windows 11 (it is gone entirely on 24H2+
@@ -187,16 +156,12 @@ async function findWindowsProcesses(pattern) {
   // returns ISO-8601 CreationDate (rather than wmic's `YYYYMMDDHHmmss.ffffff`),
   // which Date.parse handles directly.
   //
-  // Security: safePattern is validated above to contain only safe characters,
-  // and the script is passed as a single argv element to powershell -Command
-  // rather than through a shell, so there is no interpolation boundary to
-  // escape past.
   // CreationDate is projected through .ToString('o') rather than emitted raw:
   // Windows PowerShell 5.1 serializes a DateTime as "\/Date(1786...)\/" while
   // PowerShell 7 emits ISO-8601, and `powershell` resolves to whichever is
   // installed. Formatting it in the script pins one shape for both hosts.
-  const script = `Get-CimInstance Win32_Process -Filter "Name LIKE '%${safePattern}%'" `
-    + "| Select-Object ProcessId,ParentProcessId,WorkingSetSize,CommandLine,"
+  const script = `Get-CimInstance Win32_Process -Filter "${filter}" `
+    + "| Select-Object Name,ProcessId,ParentProcessId,WorkingSetSize,CommandLine,"
     + "@{Name='CreationDate';Expression={$_.CreationDate.ToString('o')}} "
     + '| ConvertTo-Json -Compress';
 
@@ -208,7 +173,7 @@ async function findWindowsProcesses(pattern) {
     // Keep the empty-result behavior (the caller treats [] as "none running"),
     // but never again fail SILENTLY — a broken process probe is why this was
     // undiagnosable for so long.
-    console.error(`❌ Windows process probe failed for "${safePattern}": ${err.message}`);
+    console.error(`❌ Windows process probe failed: ${err.message}`);
     return { stdout: '' };
   });
 
@@ -221,7 +186,7 @@ async function findWindowsProcesses(pattern) {
   try {
     parsed = JSON.parse(raw);
   } catch (err) {
-    console.error(`❌ Windows process probe returned unparseable JSON for "${safePattern}": ${err.message}`);
+    console.error(`❌ Windows process probe returned unparseable JSON: ${err.message}`);
     return [];
   }
   const rows = Array.isArray(parsed) ? parsed : [parsed];
@@ -230,12 +195,13 @@ async function findWindowsProcesses(pattern) {
   for (const row of rows) {
     if (!row || typeof row !== 'object') continue;
     const pid = parseInt(row.ProcessId, 10);
-    if (!Number.isFinite(pid)) continue;
+    if (!Number.isFinite(pid) || typeof row.Name !== 'string') continue;
 
     const startTime = parseWindowsDate(row.CreationDate);
     const runtime = Date.now() - startTime;
 
     processes.push({
+      matchText: row.Name.toLowerCase(),
       pid,
       ppid: parseInt(row.ParentProcessId, 10) || 0,
       // Win32_Process carries no CPU% column (the old wmic query asked for a

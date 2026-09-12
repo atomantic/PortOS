@@ -213,6 +213,55 @@ describe('persistent mind supervisor', () => {
     expect(mock.appendMindEvent.mock.calls.some(([event]) => event.kind === 'mind.wake')).toBe(false);
   });
 
+  it('wakes immediately on demand and leaves an active turn intact', async () => {
+    const pending = deferred();
+    const run = vi.fn(() => pending.promise);
+    await supervisor.registerPersistentMindTurnAdapter({ prepare: vi.fn(async () => ({ ok: true, provider: { id: 'example-cloud' }, model: 'example-model', effort: 'high' })), run });
+    await supervisor.startPersistentMind();
+    mock.root.persistentMind.selfWake.notBefore = new Date(Date.now() + 60_000).toISOString();
+    mock.root.persistentMind.nextEligibleWakeAt = new Date(Date.now() + 120_000).toISOString();
+    await supervisor.pausePersistentMind();
+
+    await supervisor.wakePersistentMind();
+    expect(mock.scheduled.get(supervisor.PERSISTENT_MIND_WAKE_EVENT_ID).delayMs).toBe(1);
+    const running = supervisor.drainPersistentMind();
+    await vi.waitFor(() => expect(run).toHaveBeenCalledTimes(1));
+    const activeTurn = mock.root.persistentMind.activeTurn;
+    expect(await supervisor.wakePersistentMind()).toMatchObject({ alreadyRunning: true });
+    expect(mock.root.persistentMind.activeTurn).toEqual(activeTurn);
+    pending.resolve({});
+    await running;
+  });
+
+  it('starts and resumes for new messages without allowing retries to undo a later pause', async () => {
+    const run = vi.fn(async () => ({}));
+    await supervisor.registerPersistentMindTurnAdapter({ prepare: vi.fn(async () => ({ ok: true, provider: { id: 'example-cloud' }, model: 'example-model', effort: 'high' })), run });
+    await supervisor.enqueuePersistentMindMessage({ id: 'first', text: 'Wake up.' });
+    expect(mock.root.persistentMind).toMatchObject({ enabled: true, started: true, status: 'waiting' });
+    expect(mock.scheduled.get(supervisor.PERSISTENT_MIND_WAKE_EVENT_ID).delayMs).toBe(1);
+    await supervisor.drainPersistentMind();
+    await supervisor.pausePersistentMind();
+    await supervisor.enqueuePersistentMindMessage({ id: 'first', text: 'Wake up.' });
+    expect(mock.root.persistentMind.status).toBe('paused');
+    mock.root.persistentMind.nextEligibleWakeAt = new Date(Date.now() + 60_000).toISOString();
+    await supervisor.enqueuePersistentMindMessage({ id: 'second', text: 'Continue.' });
+    expect(mock.scheduled.get(supervisor.PERSISTENT_MIND_WAKE_EVENT_ID).delayMs).toBe(1);
+    await supervisor.drainPersistentMind();
+    expect(run.mock.calls.map(([turn]) => turn.wake.message.id)).toEqual(['first', 'second']);
+  });
+
+  it('keeps explicit wakes behind the global CoS pause', async () => {
+    const run = vi.fn(async () => ({}));
+    await supervisor.registerPersistentMindTurnAdapter({ prepare: vi.fn(async () => ({ ok: true, provider: { id: 'example-cloud' }, model: 'example-model', effort: 'high' })), run });
+    mock.root.paused = true;
+    await supervisor.wakePersistentMind();
+    await supervisor.enqueuePersistentMindMessage({ id: 'held', text: 'Wait for CoS.' });
+    await supervisor.drainPersistentMind();
+    expect(run).not.toHaveBeenCalled();
+    expect(mock.scheduled.has(supervisor.PERSISTENT_MIND_WAKE_EVENT_ID)).toBe(false);
+    expect(mock.root.persistentMind.queuedMessages).toHaveLength(1);
+  });
+
   it('accepts a message durably, deduplicates retries, and runs only one turn', async () => {
     const pending = deferred();
     const prepare = vi.fn(async () => ({ ok: true, provider: { id: 'example-cloud' }, model: 'example-model', effort: 'high' }));
@@ -964,6 +1013,9 @@ describe('persistent mind supervisor', () => {
     await supervisor.pausePersistentMind();
     const input = { id: 'accepted-route', text: 'Use this exact route.', thinkingPresetId: 'deep', thinkingPreset: selection };
     expect(await supervisor.enqueuePersistentMindMessage(input)).toMatchObject({ success: true, duplicate: false });
+    expect(mock.root.persistentMind.status).toBe('waiting');
+    await supervisor.pausePersistentMind();
+    expect(await supervisor.enqueuePersistentMindMessage(input)).toMatchObject({ success: true, duplicate: true });
     expect(mock.root.persistentMind.status).toBe('paused');
     expect(run).not.toHaveBeenCalled();
     mock.root = JSON.parse(JSON.stringify(mock.root));

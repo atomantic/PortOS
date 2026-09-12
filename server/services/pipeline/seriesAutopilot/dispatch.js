@@ -32,8 +32,17 @@ export async function dispatchStep(sId, step, record) {
       return runBeatContinuity(sId, record);
     case 'foundationGate':
       return runFoundationGate(sId, record);
+    case 'pilotDraft':
     case 'textStages':
+      // New pages must receive their own final review, even when the opening
+      // already passed the earlier developmental checkpoint.
+      record.runState.editorialReviewed = false;
       return runText(sId, step.issueId, record);
+    case 'pilotReview': {
+      const result = await runEditorial(sId, record);
+      if (!result?.pause && !result?.canceled) record.runState.pilotReviewed = true;
+      return result;
+    }
     case 'scriptVerify':
       return runScriptVerify(sId, step.issueId, record);
     case 'editorialReview':

@@ -34,6 +34,8 @@ export const AUTOPILOT_STEP_LABELS = Object.freeze({
   beatSheet: 'Generating beat sheets',
   beatContinuity: 'Beat continuity',
   textStages: 'Writing prose + scripts',
+  pilotDraft: 'Drafting the opening issue',
+  pilotReview: 'Reviewing the opening before expansion',
   scriptVerify: 'Verifying scripts',
   editorialReview: 'Editorial review',
   reverseOutline: 'Refreshing scene segmentation',

@@ -77,6 +77,11 @@ describe('normalizeCodexAccount', () => {
 });
 
 describe('normalizeCodexRateLimits', () => {
+  it('normalizes Unix-second reset times from app-server', () => {
+    const resetsAt = 1800000000;
+    expect(normalizeCodexRateLimits({ rateLimits: { primary: { usedPercent: 42, resetsAt } } }).primary.resetsAt)
+      .toBe(new Date(resetsAt * 1000).toISOString());
+  });
   it('reports a fetched-but-empty window as an object, not as a failed fetch', () => {
     // The sentinel that matters: `null` is reserved for "could not read".
     expect(normalizeCodexRateLimits({ rateLimits: {} })).toEqual({ primary: null, secondary: null, credits: null });

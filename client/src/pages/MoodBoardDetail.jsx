@@ -35,6 +35,12 @@ import useMounted from '../hooks/useMounted';
 
 export default function MoodBoardDetail() {
   const { id } = useParams();
+  // Route changes replace the editor so every draft, modal and pending-action
+  // flag belongs to one board, including when the next board fails to load.
+  return <MoodBoardEditor key={id} id={id} />;
+}
+
+function MoodBoardEditor({ id }) {
   const navigate = useNavigate();
   const [board, setBoard] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -67,12 +73,9 @@ export default function MoodBoardDetail() {
   const [syncing, setSyncing] = useState(false);
   const [confirmingUnlink, setConfirmingUnlink] = useState(false);
 
-  // Stale-response guards. `load` fires whenever the board `id` changes; because
-  // the fetch is async, an older request can resolve *after* a newer one (the
-  // user navigated to a different board) and clobber current state. We bump a
-  // sequence counter per call and only apply the result if it's still the latest
-  // — and only if the component is still mounted. The seq counter independently
-  // drops StrictMode's duplicate first fetch.
+  // The keyed editor isolates board state. Also guard async continuations and
+  // delayed child callbacks so the old editor cannot toast or start a mutation
+  // after navigation. The load sequence drops StrictMode's duplicate GET.
   const mountedRef = useMounted();
   const loadSeqRef = useRef(0);
 
@@ -89,6 +92,7 @@ export default function MoodBoardDetail() {
       setDescription(data.description || '');
       setPinUrl(data.pinterest?.boardUrl || '');
     } else {
+      setBoard(null);
       toast.error('Mood board not found');
     }
     setLoading(false);
@@ -110,9 +114,11 @@ export default function MoodBoardDetail() {
   const analyzeSource = useMemo(() => moodBoardItemAnalysisSource(analyzeItem), [analyzeItem]);
 
   const handleSaveMeta = async () => {
+    if (!mountedRef.current) return;
     if (!name.trim()) { toast.error('Board name is required'); return; }
     setSavingMeta(true);
     const updated = await updateMoodBoard(id, { name: name.trim(), description }, { silent: true }).catch(() => null);
+    if (!mountedRef.current) return;
     setSavingMeta(false);
     if (!updated) { toast.error('Failed to save board'); return; }
     setBoard(updated);
@@ -124,6 +130,7 @@ export default function MoodBoardDetail() {
   };
 
   const handleAddItem = async () => {
+    if (!mountedRef.current) return;
     const payload = { type: itemType, caption: caption || null, source: source || null };
     if (itemType === 'image') {
       if (!imageUrl.trim()) { toast.error('Enter an image URL'); return; }
@@ -134,6 +141,7 @@ export default function MoodBoardDetail() {
     }
     setAdding(true);
     const item = await addMoodBoardItem(id, payload, { silent: true }).catch(() => null);
+    if (!mountedRef.current) return;
     setAdding(false);
     if (!item) { toast.error('Failed to add item'); return; }
     setBoard((prev) => (prev ? { ...prev, items: [...(prev.items || []), item] } : prev));
@@ -146,7 +154,9 @@ export default function MoodBoardDetail() {
   // FILENAME (`video:<file>.mp4`) so playback and peer-sync asset transfer
   // both resolve without an id→filename lookup.
   const addPickedItem = async (payload) => {
+    if (!mountedRef.current) return;
     const item = await addMoodBoardItem(id, payload, { silent: true }).catch(() => null);
+    if (!mountedRef.current) return;
     if (!item) { toast.error('Failed to add item'); return; }
     setBoard((prev) => (prev ? { ...prev, items: [...(prev.items || []), item] } : prev));
   };
@@ -170,7 +180,9 @@ export default function MoodBoardDetail() {
   };
 
   const handleUpdateCaption = async (itemId, nextCaption) => {
+    if (!mountedRef.current) return;
     const item = await updateMoodBoardItem(id, itemId, { caption: nextCaption || null }, { silent: true }).catch(() => null);
+    if (!mountedRef.current) return;
     if (!item) { toast.error('Failed to update caption'); return; }
     setBoard((prev) => (prev
       ? { ...prev, items: (prev.items || []).map((it) => (it.id === itemId ? item : it)) }
@@ -181,6 +193,7 @@ export default function MoodBoardDetail() {
   // analyzer can return an image and/or a video prompt; store the one that
   // matches the item's own type, falling back to whichever was generated.
   const persistAnalysis = async (item, result) => {
+    if (!mountedRef.current) return;
     const preferVideo = item.type === 'video';
     const primary = preferVideo ? result.videoPrompt : result.imagePrompt;
     const fallback = preferVideo ? result.imagePrompt : result.videoPrompt;
@@ -198,6 +211,7 @@ export default function MoodBoardDetail() {
       model: result.model || null,
     };
     const updated = await updateMoodBoardItem(id, item.id, { analysis }, { silent: true }).catch(() => null);
+    if (!mountedRef.current) return;
     if (!updated) { toast.error('Analysis ran but could not be saved to the item'); return; }
     setBoard((prev) => (prev
       ? { ...prev, items: (prev.items || []).map((it) => (it.id === item.id ? updated : it)) }
@@ -206,7 +220,9 @@ export default function MoodBoardDetail() {
   };
 
   const handleClearAnalysis = async (itemId) => {
+    if (!mountedRef.current) return;
     const updated = await updateMoodBoardItem(id, itemId, { analysis: null }, { silent: true }).catch(() => null);
+    if (!mountedRef.current) return;
     if (!updated) { toast.error('Failed to remove analysis'); return; }
     setBoard((prev) => (prev
       ? { ...prev, items: (prev.items || []).map((it) => (it.id === itemId ? updated : it)) }
@@ -214,16 +230,20 @@ export default function MoodBoardDetail() {
   };
 
   const handleRemoveItem = async (itemId) => {
+    if (!mountedRef.current) return;
     setConfirmingItemId(null);
     const updated = await removeMoodBoardItem(id, itemId, { silent: true }).catch(() => null);
+    if (!mountedRef.current) return;
     if (!updated) { toast.error('Failed to remove item'); return; }
     setBoard((prev) => (prev ? { ...prev, items: (prev.items || []).filter((it) => it.id !== itemId) } : prev));
   };
 
   const handleLinkPinterest = async () => {
+    if (!mountedRef.current) return;
     if (!pinUrl.trim()) { toast.error('Enter a Pinterest board URL'); return; }
     setLinking(true);
     const updated = await linkMoodBoardPinterest(id, pinUrl.trim(), { silent: true }).catch(() => null);
+    if (!mountedRef.current) return;
     setLinking(false);
     if (!updated) { toast.error('Could not link that Pinterest URL — is it a public board?'); return; }
     setBoard(updated);
@@ -232,16 +252,20 @@ export default function MoodBoardDetail() {
   };
 
   const handleUnlinkPinterest = async () => {
+    if (!mountedRef.current) return;
     setConfirmingUnlink(false);
     const updated = await unlinkMoodBoardPinterest(id, { silent: true }).catch(() => null);
+    if (!mountedRef.current) return;
     if (!updated) { toast.error('Failed to unlink'); return; }
     setBoard(updated);
     setPinUrl('');
   };
 
   const handleSyncPinterest = async () => {
+    if (!mountedRef.current) return;
     setSyncing(true);
     const result = await syncMoodBoardPinterest(id, { silent: true }).catch(() => null);
+    if (!mountedRef.current) return;
     setSyncing(false);
     if (!result?.board) { toast.error('Pinterest sync failed — the feed may be private or rate-limited'); return; }
     setBoard(result.board);

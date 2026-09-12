@@ -3,7 +3,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 // Mock child_process before importing agents.js
 vi.mock('../lib/childProcess.js', () => ({
   exec: vi.fn(),
-  // agents.js probes Windows via execFile(powershell, …) — see findWindowsProcesses.
+  // agents.js probes Windows via execFile(powershell, …) — see readWindowsSnapshot.
   execFile: vi.fn()
 }));
 
@@ -42,15 +42,11 @@ import {
   isAgentProcessCommand
 } from './agents.js';
 
-// Helper to simulate exec callback.
-// By default, returns stdout unconditionally. Tests that care about which pattern
-// triggered the exec call should pass a conditional function:
-//   mockExecWith((cmd) => cmd.includes('claude') ? '<claude line>' : '')
-function mockExecWith(stdoutOrFn) {
+// Each discovery fixture is one complete process snapshot.
+function mockExecWith(stdout) {
   exec.mockImplementation((_cmd, _opts, cb) => {
     // handle both (cmd, cb) and (cmd, opts, cb) forms
     const callback = typeof _opts === 'function' ? _opts : cb;
-    const stdout = typeof stdoutOrFn === 'function' ? stdoutOrFn(_cmd) : stdoutOrFn;
     callback(null, { stdout });
   });
 }
@@ -187,11 +183,7 @@ describe('agents.js', () => {
   // ===========================================================================
   describe('getRunningAgents', () => {
     it('parses pid, cpu, memory, and command from ps output for claude pattern', async () => {
-      // Use a command-conditional mock: only return output when the exec command
-      // actually searches for the 'claude' pattern — verifying command construction.
-      mockExecWith((cmd) =>
-        cmd.includes('claude') ? '42000  1  2.5  0.8  05:30  /usr/local/bin/claude --model opus\n' : ''
-      );
+      mockExecWith('PID PPID %CPU %MEM ELAPSED COMMAND\n42000  1  2.5  0.8  05:30  /usr/local/bin/claude --model opus\n');
 
       const agents = await getRunningAgents();
       const a = agents.find(a => a.pid === 42000);
@@ -203,11 +195,42 @@ describe('agents.js', () => {
       expect(a.command).toBe('/usr/local/bin/claude --model opus');
     });
 
+    it('classifies one mixed snapshot and observes starts/exits on the next request', async () => {
+      mockExecWith('PID PPID %CPU %MEM ELAPSED COMMAND\n' +
+        '101 1 1.5 0.2 01:00 CLAUDE --use codex\n' +
+        '102 1 0 0 02:00 agy\n103 1 0 0 03:00 gemini\n' +
+        '104 1 0 0 04:00 aider\n105 1 0 0 05:00 cursor-agent\n' +
+        '106 1 0 0 06:00 copilot\n107 1 0 0 00:00 unrelated\n' +
+        'bad 1 0 0 00:01 claude\n108 1 bad 0 00:01 claude\n' +
+        '109 1 0 0 bad claude\nmalformed\n');
+      const agents = await getRunningAgents();
+      expect(exec).toHaveBeenCalledTimes(1);
+      expect(exec).toHaveBeenCalledWith('ps -ww -eo pid,ppid,%cpu,%mem,etime,command',
+        { maxBuffer: 10 * 1024 * 1024 }, expect.any(Function));
+      expect(agents.map(a => [a.pid, a.agentType])).toEqual([
+        [101, 'claude'], [101, 'codex'], [102, 'agy'], [103, 'gemini'],
+        [104, 'aider'], [105, 'cursor'], [106, 'copilot']
+      ]);
+      expect(agents.every(a => !('matchText' in a))).toBe(true);
+      mockExecWith('200 1 0 0 00:01 codex\n');
+      expect((await getRunningAgents()).map(a => a.pid)).toEqual([200]);
+      expect(exec).toHaveBeenCalledTimes(2);
+    });
+
+    it.each(['ENOENT', 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER'])(
+      'discards failed or oversized Unix snapshots (%s)', async (code) => {
+        exec.mockImplementation((_cmd, _opts, cb) => cb(Object.assign(new Error(code),
+          { code, stdout: '101 1 0 0 00:01 claude\n' })));
+        await expect(getRunningAgents()).resolves.toEqual([]);
+        expect(exec).toHaveBeenCalledTimes(1);
+      });
+
     it('returns empty array when ps returns no output', async () => {
       mockExecWith('');
 
       const agents = await getRunningAgents();
       expect(agents).toEqual([]);
+      expect(exec).toHaveBeenCalledTimes(1);
     });
 
     it('sorts agents newest-first by startTime', async () => {
@@ -230,11 +253,8 @@ describe('agents.js', () => {
       // UI service, not the Cursor AI editor. It must never appear in the agent list.
       const nativeCursorHelper =
         '/System/Library/PrivateFrameworks/TextInputUIMacHelper.framework/Versions/A/XPCServices/CursorUIViewService.xpc/Contents/MacOS/CursorUIViewService';
-      mockExecWith((cmd) =>
-        cmd.includes('cursor')
-          ? `6001  1  0.0  0.1  02:00  ${nativeCursorHelper}\n` +
+      mockExecWith(`6001  1  0.0  0.1  02:00  ${nativeCursorHelper}\n` +
             '6002  1  0.5  0.2  01:00  /usr/local/bin/cursor-agent --print\n'
-          : ''
       );
 
       const agents = await getRunningAgents();
@@ -383,6 +403,7 @@ describe('agents.js', () => {
   // ===========================================================================
   describe('getRunningAgents on Windows', () => {
     const cimRow = (over = {}) => ({
+      Name: 'claude.exe',
       ProcessId: 4242,
       ParentProcessId: 100,
       WorkingSetSize: 52428800, // 50 MB
@@ -402,12 +423,51 @@ describe('agents.js', () => {
     it('probes with PowerShell, not the removed wmic.exe', async () => {
       mockCim([cimRow()]);
       await getRunningAgents();
-      expect(execFile).toHaveBeenCalled();
+      expect(execFile).toHaveBeenCalledTimes(1);
       const [bin, args] = execFile.mock.calls[0];
       expect(bin).toBe('powershell');
       expect(args.join(' ')).toContain('Get-CimInstance Win32_Process');
       // wmic is gone on Windows 11 — never reintroduce it here.
       expect(args.join(' ')).not.toContain('wmic');
+    });
+
+    it('matches Name rather than arguments and refreshes the mixed snapshot', async () => {
+      mockCim([cimRow({ Name: 'CLAUDE-codex.exe' }),
+        cimRow({ ProcessId: 42, Name: 'aider.exe', CommandLine: 'aider --prompt claude',
+          CreationDate: '2026-08-14T00:00:00Z' }),
+        cimRow({ ProcessId: 43, Name: 'unrelated.exe' }), null, {}, 'bad']);
+      const agents = await getRunningAgents();
+      expect(agents.map(a => [a.pid, a.agentType])).toEqual([
+        [42, 'aider'], [4242, 'claude'], [4242, 'codex']
+      ]);
+      expect(agents.every(a => !('matchText' in a))).toBe(true);
+      expect(execFile).toHaveBeenCalledTimes(1);
+      const [, args, opts] = execFile.mock.calls[0];
+      expect(args.slice(0, 3)).toEqual(['-NoProfile', '-NonInteractive', '-Command']);
+      expect(args[3]).toContain("Name LIKE '%claude%' OR Name LIKE '%codex%' OR Name LIKE '%agy%' OR Name LIKE '%gemini%' OR Name LIKE '%aider%' OR Name LIKE '%cursor%' OR Name LIKE '%copilot%'");
+      expect(args[3]).toContain('Select-Object Name,ProcessId');
+      expect(args[3]).toContain("CreationDate.ToString('o')");
+      expect(opts.maxBuffer).toBe(8 * 1024 * 1024);
+      mockCim(cimRow({ ProcessId: 77 }));
+      expect((await getRunningAgents()).map(a => a.pid)).toEqual([77]);
+      expect(execFile).toHaveBeenCalledTimes(2);
+    });
+
+    it.each(['', '[]', 'null', '{}'])('handles empty CIM output %s with one probe', async (raw) => {
+      mockCim(raw);
+      await expect(getRunningAgents()).resolves.toEqual([]);
+      expect(execFile).toHaveBeenCalledTimes(1);
+    });
+
+    it('logs one oversized probe failure and discards partial output', async () => {
+      const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+      execFile.mockImplementation((_bin, _args, _opts, cb) => cb(Object.assign(
+        new Error('stdout maxBuffer length exceeded'),
+        { code: 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER', stdout: JSON.stringify(cimRow()) })));
+      await expect(getRunningAgents()).resolves.toEqual([]);
+      expect(execFile).toHaveBeenCalledTimes(1);
+      expect(log).toHaveBeenCalledTimes(1);
+      log.mockRestore();
     });
 
     it('maps a CIM row to the shared process shape', async () => {

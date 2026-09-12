@@ -29,6 +29,9 @@ cannot hold this model says so in seconds rather than being killed an hour in.
 from __future__ import annotations
 
 import argparse
+import json
+import ntpath
+import os
 import sys
 from pathlib import Path
 
@@ -161,6 +164,72 @@ def resolve_offload_profile(requested: str) -> tuple[str, float]:
     return affordable[0], total_gb
 
 
+def validate_checkpoint_indexes(snapshot: Path) -> None:
+    """Mitigate GHSA-4j2p-28q2-5m79 before any component loads weights.
+
+    Accelerate 1.14.0 (and 1.15.0) trusts shard names from checkpoint indexes.
+    Check lexical containment, preserving HF snapshot file symlinks into blobs,
+    and refuse non-regular files before a loader can block opening a FIFO.
+    Scan all component indexes, including ones already cached outside repoFiles.
+    """
+    def fail_walk(error):
+        raise error
+
+    snapshot_abs = os.path.abspath(snapshot)
+    allowed_roots = {os.path.realpath(snapshot_abs)}
+    # Hugging Face snapshots normally link files into the sibling `blobs/`
+    # directory. Keep that supported link shape, but do not let an arbitrary
+    # symlink turn a checkpoint shard into a read of another local file.
+    for ancestor in Path(snapshot_abs).parents:
+        if ancestor.name == "snapshots":
+            allowed_roots.add(os.path.realpath(ancestor.parent / "blobs"))
+
+    def is_under(path, root):
+        try:
+            return os.path.commonpath((path, root)) == root
+        except ValueError:
+            return False
+
+    for folder, directories, files in os.walk(snapshot, onerror=fail_walk):
+        # HF caches symlink FILES, not component directories. Do not silently
+        # skip an index hidden behind a directory symlink during this walk.
+        if any((Path(folder) / name).is_symlink() for name in directories):
+            raise ValueError("Checkpoint component directories must not be symlinks.")
+        for name in files:
+            if not name.endswith(".index.json"):
+                continue
+            index_path = Path(folder) / name
+            if not index_path.is_file():
+                raise ValueError("Checkpoint index must be a regular file.")
+            with index_path.open(encoding="utf-8") as handle:
+                index = json.load(handle)
+            if not isinstance(index, dict):
+                raise ValueError("Checkpoint index must contain a weight map.")
+            weight_map = index.get("weight_map", index)
+            if not isinstance(weight_map, dict) or not weight_map:
+                raise ValueError("Checkpoint weight map must be a non-empty object.")
+            root = os.path.abspath(folder)
+            for shard in weight_map.values():
+                # Reject Windows drive/UNC/rooted paths on every host, as well
+                # as backslashes: repository filenames use POSIX separators.
+                if (not isinstance(shard, str) or not shard or "\x00" in shard
+                        or "\\" in shard or ntpath.splitdrive(shard)[0]
+                        or ntpath.isabs(shard)):
+                    raise ValueError("Checkpoint shard must be a relative filename.")
+                target = os.path.abspath(os.path.join(root, shard))
+                if os.path.commonpath((root, target)) != root:
+                    raise ValueError("Checkpoint shard escapes its component directory.")
+                # An unused, partially cached component may lack shards. Leave
+                # missing-file reporting to the loader, but never open a FIFO,
+                # directory, device, or dangling symlink that DOES exist.
+                if os.path.lexists(target):
+                    resolved_target = os.path.realpath(target)
+                    if not any(is_under(resolved_target, root) for root in allowed_roots):
+                        raise ValueError("Checkpoint shard symlink escapes the model cache.")
+                    if not os.path.isfile(target):
+                        raise ValueError("Checkpoint shard must be a regular file.")
+
+
 def load_pipeline(snapshot: Path, profile: str):
     """Load the `fl2va` workflow under one of the documented memory recipes.
 
@@ -169,6 +238,8 @@ def load_pipeline(snapshot: Path, profile: str):
     `transformer_ref/` partition is never loaded — which is also why it is
     absent from the model entry's download list.
     """
+    validate_checkpoint_indexes(snapshot)
+
     import torch
     from diffusers import ComponentsManager, ModularPipeline
 

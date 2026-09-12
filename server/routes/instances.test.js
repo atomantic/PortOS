@@ -9,11 +9,14 @@ vi.mock('../services/syncOrchestrator.js', () => ({
   getSyncStatus: vi.fn(),
   syncWithPeer: vi.fn(),
 }));
-vi.mock('../services/instances.js', () => ({
+vi.mock('../services/instances.js', async (importOriginal) => ({
+  DEFAULT_SYNC_CATEGORIES: (await importOriginal()).DEFAULT_SYNC_CATEGORIES,
+  applyReciprocalSync: vi.fn(),
   updatePeer: vi.fn(),
   addPeer: vi.fn(),
   sanitizePeerForClient: vi.fn((peer) => peer),
   getAssignableInstances: vi.fn(),
+  getPeers: vi.fn(),
 }));
 // This suite's routes/instances.js import pulls getSelf/updateSelf from the
 // identity leaf (#6836) — double it too so an untested route (e.g. GET /
@@ -32,6 +35,7 @@ vi.mock('../lib/tailscale.js', () => ({
   getTailscaleStatus: vi.fn(),
 }));
 
+import { getFullSyncCoverageForPeer } from '../services/sharing/peerSync.js';
 import { getSyncStatus } from '../services/syncOrchestrator.js';
 import * as instances from '../services/instances.js';
 import { getTailscaleStatus } from '../lib/tailscale.js';
@@ -190,6 +194,62 @@ describe('GET /api/instances/sync-status — forPeer scoping', () => {
   });
 });
 
+describe('sync-category route validation', () => {
+  const instanceId = '191aaece-a492-41ee-a66d-d4661eadc132';
+  const categories = Object.fromEntries(
+    Object.keys(instances.DEFAULT_SYNC_CATEGORIES).map((key, index) => [key, index % 2 === 0])
+  );
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    instances.updatePeer.mockImplementation(async (id, updates) => ({ id, ...updates }));
+    instances.applyReciprocalSync.mockResolvedValue({ changed: false });
+  });
+
+  it('preserves every service category and strips unknown keys on peer updates', async () => {
+    const res = await request(buildApp()).put('/api/instances/peers/peer-1')
+      .send({ syncCategories: { ...categories, unknownCategory: true } });
+    expect(res.status).toBe(200);
+    expect(instances.updatePeer).toHaveBeenCalledWith('peer-1', { syncCategories: categories });
+  });
+
+  it('allows peer updates that omit syncCategories', async () => {
+    const res = await request(buildApp()).put('/api/instances/peers/peer-1')
+      .send({ name: 'Example peer' });
+    expect(res.status).toBe(200);
+    expect(instances.updatePeer).toHaveBeenCalledWith('peer-1', { name: 'Example peer' });
+  });
+
+  it('rejects nonboolean known values before updating a peer', async () => {
+    const key = Object.keys(categories)[0];
+    const res = await request(buildApp()).put('/api/instances/peers/peer-1')
+      .send({ syncCategories: { [key]: 'true' } });
+    expect(res.status).toBe(400);
+    expect(instances.updatePeer).not.toHaveBeenCalled();
+  });
+
+  it('preserves the category map through reciprocal validation', async () => {
+    const res = await request(buildApp()).post('/api/instances/peers/sync-categories')
+      .send({ instanceId, syncCategories: { ...categories, unknownCategory: true } });
+    expect(res.status).toBe(200);
+    expect(instances.applyReciprocalSync).toHaveBeenCalledWith(instanceId, categories, { fullSync: undefined });
+  });
+
+  it('requires the reciprocal category field but accepts an empty map', async () => {
+    const app = buildApp();
+    const missing = await request(app).post('/api/instances/peers/sync-categories')
+      .send({ instanceId });
+    expect(missing.status).toBe(400);
+    expect(instances.applyReciprocalSync).not.toHaveBeenCalled();
+
+    const empty = await request(app).post('/api/instances/peers/sync-categories')
+      .send({ instanceId, syncCategories: {} });
+    expect(empty.status).toBe(200);
+    expect(empty.body).toEqual({ applied: false });
+    expect(instances.applyReciprocalSync).toHaveBeenCalledWith(instanceId, {}, { fullSync: undefined });
+  });
+});
+
 describe('PUT /api/instances/peers/:id — media provider selection', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -338,4 +398,21 @@ it('rejects main API and HTTP mirror ports for managed serving', async () => {
     const response = await request(buildApp()).post('/api/instances/peers/tailcat/serve').send({ localPort });
     expect(response.status).toBe(400);
   }
+});
+
+describe('GET /api/instances/peers/:id/full-sync-coverage', () => {
+  it('preserves unavailable coverage and partial counts on the local endpoint', async () => {
+    instances.getPeers.mockResolvedValue([{ id: 'peer-1', instanceId: 'remote-1' }]);
+    const coverage = {
+      total: 2, confirmed: 2, pending: 0, fullyMirrored: false,
+      available: false, partial: true,
+      failedReads: [{ kind: 'universe', operation: 'records' }],
+      byKind: { universe: { total: 0, confirmed: 0, pending: 0, partial: true } },
+    };
+    getFullSyncCoverageForPeer.mockResolvedValue(coverage);
+    const res = await request(buildApp()).get('/api/instances/peers/peer-1/full-sync-coverage');
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual(coverage);
+    expect(getFullSyncCoverageForPeer).toHaveBeenCalledWith('remote-1');
+  });
 });

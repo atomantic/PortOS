@@ -142,6 +142,8 @@ export const STEP_SEQUENCE = [
   'verifyArc — cross-volume synopsis continuity verify → resolve loop',
   'beatSheet — per-volume beat sheets',
   'beatContinuity — whole-manuscript beat-level continuity loop',
+  'pilotDraft — draft the opening issue',
+  'pilotReview — developmental review before drafting later issues',
   'textStages — per-issue prose + scripts',
   'scriptVerify — structural page/panel parse gate + advisory craft gate',
   'editorialReview — series-level manuscript completeness review → fix loop',

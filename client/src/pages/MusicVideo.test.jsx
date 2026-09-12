@@ -110,7 +110,7 @@ vi.mock('../components/PageHeader', () => ({ default: ({ title }) => <div>{title
 import MusicVideo from './MusicVideo.jsx';
 import {
   listMusicVideoProjects, createMusicVideoProject, cloneMusicVideoProject, renderMusicVideoProject, planMusicVideoProject, updateMusicVideoProject,
-  deleteMusicVideoProject, transcribeMusicVideoMidi,
+  deleteMusicVideoProject, transcribeMusicVideoMidi, cancelMusicVideoRender,
 } from '../services/apiMusicVideo.js';
 import { importTrackFromYoutube, trackImportEventsUrl, listTracks } from '../services/apiTracks.js';
 import { generateVideo, getVideoGenStatus } from '../services/apiImageVideo.js';
@@ -217,6 +217,92 @@ describe('MusicVideo render control (#1760)', () => {
 
     fireEvent.click(renderBtn);
     await waitFor(() => expect(renderMusicVideoProject).toHaveBeenCalledWith('mv-1', { silent: true }));
+  });
+
+  it('reserves preparation across project navigation and applies completion to the captured project', async () => {
+    const other = { ...PROJECT_WITH_CLIP, id: 'mv-other', name: 'Other Project' };
+    listMusicVideoProjects.mockResolvedValue([PROJECT_WITH_CLIP, other]);
+    let resolveKickoff;
+    renderMusicVideoProject.mockImplementationOnce(() => new Promise((resolve) => { resolveKickoff = resolve; }));
+    renderMV();
+    await selectProject(PROJECT_WITH_CLIP.id);
+
+    fireEvent.click(screen.getByRole('button', { name: /^Render final$/ }));
+    expect(screen.getByRole('button', { name: 'Preparing render…' })).toBeDisabled();
+    expect(screen.getByLabelText('Change track')).toBeDisabled();
+    fireEvent.change(screen.getByLabelText('Change track'), { target: { value: 'other-track' } });
+    expect(updateMusicVideoProject).not.toHaveBeenCalled();
+
+    await selectProject(other.id);
+    const otherRender = screen.getByRole('button', { name: 'Rendering another project…' });
+    expect(otherRender).toBeDisabled();
+    fireEvent.click(otherRender);
+    expect(renderMusicVideoProject).toHaveBeenCalledTimes(1);
+    expect(screen.getByLabelText('Change track')).not.toBeDisabled();
+    expect(screen.queryByTitle('Cancel render')).not.toBeInTheDocument();
+
+    await act(async () => { resolveKickoff({ jobId: 'render-first' }); });
+    sseState.latest = { type: 'progress', progress: 0.375 };
+    await selectProject(PROJECT_WITH_CLIP.id);
+    expect(screen.getByTitle('Cancel render')).toHaveTextContent('38%');
+    expect(screen.getByLabelText('Change track')).toBeDisabled();
+
+    // A metadata frame omits progress; the final-render adapter keeps 38%.
+    sseState.latest = { type: 'status', message: 'Finishing output' };
+    fireEvent.click(screen.getByRole('button', { name: /New project/i }));
+    expect(screen.getByTitle('Cancel render')).toHaveTextContent('38%');
+    await selectProject(other.id);
+    sseState.latest = { type: 'complete', result: { id: 'rh-9' } };
+    fireEvent.change(screen.getByPlaceholderText('Project name'), { target: { value: 'Unrelated draft' } });
+    await waitFor(() => expect(toast.success).toHaveBeenCalledWith('Music video rendered'));
+    expect(screen.queryByText(/Open in Media History/i)).not.toBeInTheDocument();
+    await selectProject(PROJECT_WITH_CLIP.id);
+    expect(screen.getByText(/Open in Media History/i).closest('a')).toHaveAttribute('href', expect.stringContaining('preview=video%3Arh-9'));
+  });
+
+  it('recovers from a preparing 409 and attaches/cancels an existing render with a job id', async () => {
+    renderMusicVideoProject
+      .mockRejectedValueOnce(Object.assign(new Error('Render is still preparing'), { status: 409, context: { jobId: null } }))
+      .mockRejectedValueOnce(Object.assign(new Error('Render already exists'), { status: 409, context: { jobId: 'existing-render' } }));
+    await openProject(PROJECT_WITH_CLIP);
+    fireEvent.click(screen.getByRole('button', { name: /^Render final$/ }));
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith('Render is still preparing'));
+    expect(screen.getByRole('button', { name: /^Render final$/ })).toBeEnabled();
+    expect(screen.getByLabelText('Change track')).toBeEnabled();
+
+    fireEvent.click(screen.getByRole('button', { name: /^Render final$/ }));
+    fireEvent.click(await screen.findByTitle('Cancel render'));
+    expect(cancelMusicVideoRender).toHaveBeenCalledWith('existing-render', { silent: true });
+    expect(toast.error).toHaveBeenCalledTimes(1);
+    sseState.latest = { type: 'canceled' };
+    fireEvent.click(screen.getByRole('button', { name: /New project/i }));
+    expect(toast.info).toHaveBeenCalledWith('Render cancelled');
+    expect(screen.getByRole('button', { name: /^Render final$/ })).toBeEnabled();
+  });
+
+  it('attributes a render failure after navigation and releases the slot after a dropped stream', async () => {
+    const other = { ...PROJECT_WITH_CLIP, id: 'mv-other', name: 'Other Project' };
+    listMusicVideoProjects.mockResolvedValue([PROJECT_WITH_CLIP, other]);
+    renderMV();
+    await selectProject(PROJECT_WITH_CLIP.id);
+    fireEvent.click(screen.getByRole('button', { name: /^Render final$/ }));
+    await screen.findByTitle('Cancel render');
+    await selectProject(other.id);
+    sseState.latest = { type: 'error', error: 'Renderer stopped' };
+    fireEvent.click(screen.getByRole('button', { name: /New project/i }));
+    expect(toast.error).toHaveBeenCalledWith('Renderer stopped');
+    expect(screen.getByLabelText('Project').querySelector('option[value="mv-1"]')).toHaveTextContent('failed');
+    expect(screen.getByLabelText('Project').querySelector('option[value="mv-other"]')).toHaveTextContent('ready');
+
+    sseState.latest = null;
+    fireEvent.click(screen.getByRole('button', { name: /^Render final$/ }));
+    await screen.findByTitle('Cancel render');
+    sseState.latest = { type: 'progress', progress: 0.4 };
+    fireEvent.change(screen.getByPlaceholderText('Project name'), { target: { value: 'Draft' } });
+    sseState.closed = true;
+    fireEvent.change(screen.getByPlaceholderText('Project name'), { target: { value: 'Draft updated' } });
+    expect(toast.info).toHaveBeenCalledWith('Lost connection to the render — check Media History for the result');
+    expect(screen.getByRole('button', { name: /^Render final$/ })).toBeEnabled();
   });
 
   it('disables Render when no scene has a generated clip', async () => {

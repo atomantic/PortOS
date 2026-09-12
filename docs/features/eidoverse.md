@@ -7,6 +7,16 @@ installs, and enables the runtime; the ordinary feature toggle never installs it
 If Bun is not already available, the same action first runs Bun's official
 platform installer under the PortOS service account on Windows, macOS, or Linux.
 
+## Signal ownership
+
+`server/services/eidoverseWorldSources.js` owns local reads, cancellation, Jira
+fetching, and destination lookup. It passes snapshots to the pure
+`server/lib/eidoverseWorldSignals.js` owner for bounded aggregates and stable
+opaque IDs. `server/services/eidoverseWorldProjection.js` then plans world verbs
+from those signals. World orchestration loads the collector only during explicit
+projection; identity and travel consumers import the pure signal owner directly.
+The collector and world service retain their historical helper exports.
+
 ## What PortOS installs
 
 The installer keeps the two AGPL-3.0 projects as independent git checkouts. The

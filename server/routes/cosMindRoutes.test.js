@@ -1,3 +1,4 @@
+import { resolvePersistentMindChosenName } from '../lib/persistentMindChosenName.js';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import express from 'express';
 import { request } from '../lib/testHelper.js';
@@ -19,6 +20,7 @@ const mocks = vi.hoisted(() => ({
   getProviderById: vi.fn(),
   createPersistentMindAttachment: vi.fn(),
   deletePersistentMindAttachment: vi.fn(),
+  wakePersistentMind: vi.fn(),
   startPersistentMind: vi.fn(),
   pausePersistentMind: vi.fn(),
   resumePersistentMind: vi.fn(),
@@ -41,6 +43,7 @@ vi.mock('../services/persistentMindContext.js', () => ({
   preparePersistentMindContext: mocks.preparePersistentMindContext,
   promotePersistentMindMemory: mocks.promotePersistentMindMemory,
   readPersistentMindMemories: mocks.readPersistentMindMemories,
+  readPersistentMindName: async () => resolvePersistentMindChosenName(await mocks.readPersistentMindMemories()),
   readPersistentMindRollups: mocks.readPersistentMindRollups,
   updatePersistentMindMemory: mocks.updatePersistentMindMemory,
 }));
@@ -71,6 +74,7 @@ vi.mock('../services/persistentMindSupervisor.js', () => ({
   deletePersistentMindAttachment: mocks.deletePersistentMindAttachment,
   getPersistentMindState: mocks.getPersistentMindState,
   enqueuePersistentMindMessage: mocks.enqueuePersistentMindMessage,
+  wakePersistentMind: mocks.wakePersistentMind,
   startPersistentMind: mocks.startPersistentMind,
   pausePersistentMind: mocks.pausePersistentMind,
   resumePersistentMind: mocks.resumePersistentMind,
@@ -98,6 +102,19 @@ const post = (path, body) => request(app()).post(`/api/cos${path}`).send(body);
 const put = (path, body) => request(app()).put(`/api/cos${path}`).send(body);
 
 describe('persistent mind routes', () => {
+  it('projects the current protected name without changing trajectory identity or exposing memory records', async () => {
+    mocks.readPersistentMindMemories.mockResolvedValue([
+      { content: 'My chosen name is Earlier.', protection: 'core-identity' },
+      { content: 'Example Star', tags: ['mind:chosen-name', 'mind:core-identity'] },
+    ]);
+    const res = await get('/mind');
+    expect(res.status).toBe(200);
+    expect(res.body.identity).toEqual({ mindId: 'cos-persistent-mind', name: 'Example Star' });
+    expect(res.body.memories).toBeUndefined();
+    mocks.readPersistentMindMemories.mockResolvedValue([]);
+    expect((await get('/mind')).body.identity.name).toBeNull();
+  });
+
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.readPersistentMindEvents.mockResolvedValue({ events: [], cursor: null, gap: false, hasMore: false, snapshot: {} });
@@ -172,6 +189,14 @@ describe('persistent mind routes', () => {
       apps: [{ id: 'demo-app', name: 'Demo App', planOnly: true }],
       providers: [{ id: 'codex', name: 'Codex', type: 'cli', models: [{ id: 'gpt-5', efforts: ['low', 'high'] }] }],
     });
+  });
+
+  it('requests an immediate manual wake', async () => {
+    mocks.wakePersistentMind.mockResolvedValue({ success: true });
+    const res = await post('/mind/wake');
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(true);
+    expect(mocks.wakePersistentMind).toHaveBeenCalledOnce();
   });
 
   it('serves a bounded cursor snapshot with only the safe profile fields', async () => {

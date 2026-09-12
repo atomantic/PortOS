@@ -39,8 +39,6 @@ export default function EidoverseWorldDrawer({
   humanName,
   setHumanName,
   cosId,
-  setCosId,
-  suggestedCosId,
   recipeDraft,
   assetOverridesDraft,
   labelAliasesDraft,
@@ -176,7 +174,7 @@ export default function EidoverseWorldDrawer({
           id="eidoverse-cos-name"
           className={fieldClass}
           value={cosId}
-          onChange={(event) => { markDirty(); setCosId(event.target.value); }}
+          readOnly
           maxLength={64}
           placeholder="portos-cos"
           pattern="[A-Za-z0-9_-]+"
@@ -184,17 +182,8 @@ export default function EidoverseWorldDrawer({
         />
       </label>
       <p className="text-xs leading-5 text-gray-400">
-        This is the join id shown as the chat sender. Eidoverse does not support renaming mid-session, so Save and project reconnects presence under the new name.
+        Follows the Persistent Mind’s chosen name automatically. Presence reconnects under that name on its next world action. Until it chooses a name, the existing join id is kept.
       </p>
-      {suggestedCosId && suggestedCosId !== cosId && (
-        <button
-          type="button"
-          className={secondaryButton}
-          onClick={() => { markDirty(); setCosId(suggestedCosId); }}
-        >
-          Use mind name ({suggestedCosId})
-        </button>
-      )}
       <div className="grid gap-3 sm:grid-cols-3">
         <div className="rounded-lg border border-port-border bg-port-bg p-3">
           <p className="text-xs text-gray-500">World</p>
@@ -603,7 +592,7 @@ export default function EidoverseWorldDrawer({
               </p>
             )}
             <button type="button" className={secondaryButton} onClick={onClose}>Close</button>
-            <button type="submit" className={primaryButton} disabled={busy || !recipeDraft}>
+            <button type="submit" className={primaryButton} disabled={configStatus === 'saving'}>
               {configStatus === 'saving' ? 'Saving…' : 'Save and project'}
             </button>
           </div>

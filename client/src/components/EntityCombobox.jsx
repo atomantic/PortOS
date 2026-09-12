@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Search, ChevronDown, Check, Plus, Loader2 } from 'lucide-react';
 import useClickOutside from '../hooks/useClickOutside';
 
@@ -38,6 +38,8 @@ export default function EntityCombobox({
   className = 'flex-1 min-w-[200px]',
 }) {
   const wrapRef = useRef(null);
+  const listboxRef = useRef(null);
+  const activeOptionRef = useRef(null);
   const [open, setOpen] = useState(false);
   const [activeIdx, setActiveIdx] = useState(0);
   // Memoize the close callback so useClickOutside doesn't rebind its window
@@ -86,6 +88,23 @@ export default function EntityCombobox({
       ? optionId(filtered[activeIdx]?.id)
       : (showCreateOption ? createOptionId : undefined))
     : undefined;
+
+  useLayoutEffect(() => {
+    const listbox = listboxRef.current;
+    const option = activeOptionRef.current;
+    if (!open || !listbox || !option) return;
+
+    // Scroll only the listbox: scrollIntoView can also move the outer page.
+    const viewportTop = listbox.getBoundingClientRect().top + listbox.clientTop;
+    const viewportBottom = viewportTop + listbox.clientHeight;
+    const rect = option.getBoundingClientRect();
+    const delta = rect.top < viewportTop
+      ? rect.top - viewportTop
+      : Math.max(0, rect.bottom - viewportBottom);
+    if (delta) {
+      listbox.scrollTo({ top: listbox.scrollTop + delta, behavior: 'instant' });
+    }
+  }, [open, activeOptionId, filtered, trimmed]);
 
   const handleKeyDown = (e) => {
     if (!open && (e.key === 'ArrowDown' || e.key === 'ArrowUp')) {
@@ -151,6 +170,7 @@ export default function EntityCombobox({
       </div>
       {open && (
         <ul
+          ref={listboxRef}
           id={listId}
           role="listbox"
           className="absolute left-0 right-0 top-full mt-1 z-30 max-h-80 overflow-y-auto bg-port-card border border-port-border rounded shadow-lg"
@@ -166,6 +186,7 @@ export default function EntityCombobox({
             <li key={u.id}>
               <button
                 type="button"
+                ref={i === activeIdx ? activeOptionRef : null}
                 id={optionId(u.id)}
                 role="option"
                 aria-selected={u.id === selectedId}
@@ -187,6 +208,7 @@ export default function EntityCombobox({
             <li>
               <button
                 type="button"
+                ref={activeIdx === filtered.length ? activeOptionRef : null}
                 id={createOptionId}
                 role="option"
                 aria-selected={false}

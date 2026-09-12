@@ -12,7 +12,7 @@ export const ACCEPTED_OLD_MD5 = {
 };
 
 export const NEW_SHIPPED_MD5 = {
-  'pipeline-arc-resolve.md': '638b988c84b3e5599f7a2ce09fa149ce', // post-274 planning economy
+  'pipeline-arc-resolve.md': '122950b9f5ce84708ac1510ef13b1bce', // post-274 planning economy
 };
 
 const { applyMigration, up } = makePromptReplaceMigration({

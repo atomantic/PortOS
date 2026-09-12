@@ -13,8 +13,7 @@
  * `noir` don't both show as chips before save (matching the server's dedup).
  */
 
-import { useEffect, useRef, useState } from 'react';
-import useMounted from '../hooks/useMounted';
+import { useEffect, useId, useRef, useState } from 'react';
 import { X } from 'lucide-react';
 import { listCatalogTags } from '../services/apiCatalog';
 import { canonicalTagKey } from '../lib/catalogTypes';
@@ -30,24 +29,26 @@ export default function TagPicker({
   const [input, setInput] = useState('');
   const [suggestions, setSuggestions] = useState([]);
   const [open, setOpen] = useState(false);
-  const mountedRef = useMounted();
+  const [activeId, setActiveId] = useState(null);
+  const listId = useId();
+  const inputRef = useRef(null);
+  const activeOptionRef = useRef(null);
 
-  // Debounced autocomplete fetch. A stale generation counter prevents an
-  // earlier-but-slower response from clobbering a later one's results.
-  const genRef = useRef(0);
+  // Clear old options immediately and ignore responses after input changes.
   useEffect(() => {
+    let cancelled = false;
+    setSuggestions([]);
+    setActiveId(null);
     const term = input.trim();
-    if (!term) { setSuggestions([]); return undefined; }
-    const gen = ++genRef.current;
+    if (!term) return undefined;
     const timer = setTimeout(() => {
       listCatalogTags({ q: term, limit: 8, silent: true })
         .then((res) => {
-          if (!mountedRef.current || gen !== genRef.current) return;
-          setSuggestions(Array.isArray(res?.items) ? res.items : []);
+          if (!cancelled) setSuggestions(Array.isArray(res?.items) ? res.items : []);
         })
-        .catch(() => { if (mountedRef.current && gen === genRef.current) setSuggestions([]); });
+        .catch(() => { if (!cancelled) setSuggestions([]); });
     }, 200);
-    return () => clearTimeout(timer);
+    return () => { cancelled = true; clearTimeout(timer); };
   }, [input]);
 
   const selectedKeys = new Set(value.map(canonicalTagKey));
@@ -61,28 +62,62 @@ export default function TagPicker({
     onChange?.([...value, label]);
     setInput('');
     setSuggestions([]);
+    setActiveId(null);
+    setOpen(false);
   };
 
   const removeTag = (label) => {
+    // Keep a live focus target so leaving the picker still commits pending text.
+    inputRef.current?.focus();
     const key = canonicalTagKey(label);
     onChange?.(value.filter((t) => canonicalTagKey(t) !== key));
   };
 
+  // Track option identity, not position, as filtering can remove an option.
+  const visibleSuggestions = suggestions.filter((s) => !selectedKeys.has(canonicalTagKey(s.label)));
+  const expanded = open && value.length < maxTags && visibleSuggestions.length > 0;
+  const activeIndex = expanded ? visibleSuggestions.findIndex((s) => s.id === activeId) : -1;
+
+  useEffect(() => {
+    activeOptionRef.current?.scrollIntoView({ block: 'nearest' });
+  }, [activeId, activeIndex]);
+
+  const pickSuggestion = (label) => {
+    // Assistive clicks can focus an option. Move focus before removing it.
+    inputRef.current?.focus();
+    addTag(label);
+  };
+
   const handleKeyDown = (e) => {
-    if (e.key === 'Enter' || e.key === ',') {
+    if (e.nativeEvent.isComposing) return;
+    if ((e.key === 'ArrowDown' || e.key === 'ArrowUp') && visibleSuggestions.length > 0) {
       e.preventDefault();
-      if (input.trim()) addTag(input);
+      setOpen(true);
+      const next = e.key === 'ArrowDown'
+        ? (activeIndex + 1) % visibleSuggestions.length
+        : (activeIndex <= 0 ? visibleSuggestions.length : activeIndex) - 1;
+      setActiveId(visibleSuggestions[next].id);
+    } else if (e.key === 'Escape') {
+      if (expanded) { e.preventDefault(); e.stopPropagation(); }
+      setOpen(false);
+      setActiveId(null);
+    } else if (e.key === 'Enter' || e.key === ',') {
+      e.preventDefault();
+      if (e.key === 'Enter' && activeIndex >= 0) pickSuggestion(visibleSuggestions[activeIndex].label);
+      else if (input.trim()) addTag(input);
     } else if (e.key === 'Backspace' && !input && value.length > 0) {
-      // Backspace on an empty input pops the last chip (common chip-input UX).
       removeTag(value[value.length - 1]);
     }
   };
 
-  // Suggestions not already selected.
-  const visibleSuggestions = suggestions.filter((s) => !selectedKeys.has(canonicalTagKey(s.label)));
-
   return (
-    <div className="relative">
+    <div className="relative" onBlur={(e) => {
+      if (e.currentTarget.contains(e.relatedTarget)) return;
+      // Preserve pending text when leaving for Save/Send, but not on internal focus moves.
+      if (input.trim()) addTag(input);
+      setOpen(false);
+      setActiveId(null);
+    }}>
       <div className="flex flex-wrap items-center gap-1.5 px-2 py-1.5 bg-port-bg border border-port-border rounded focus-within:border-port-accent">
         {value.map((label) => (
           <span
@@ -101,37 +136,38 @@ export default function TagPicker({
           </span>
         ))}
         <input
+          ref={inputRef}
           id={id}
+          role="combobox"
+          aria-autocomplete="list"
+          aria-expanded={expanded}
+          aria-controls={expanded ? listId : undefined}
+          aria-activedescendant={activeIndex >= 0 ? `${listId}-${activeIndex}` : undefined}
           type="text"
           value={input}
           onChange={(e) => { setInput(e.target.value); setOpen(true); }}
           onKeyDown={handleKeyDown}
           onFocus={() => setOpen(true)}
-          onBlur={() => {
-            // Commit a typed-but-uncommitted tag on blur so clicking Save/Send
-            // (which blurs this input) doesn't silently drop it. addTag dedups
-            // and guards empty/max, so it's a no-op for a blank or duplicate
-            // input. Suggestion picks use onMouseDown+preventDefault and never
-            // blur, so they can't double-add here.
-            if (input.trim()) addTag(input);
-            setTimeout(() => { if (mountedRef.current) setOpen(false); }, 120);
-          }}
           placeholder={value.length >= maxTags ? `Max ${maxTags} tags` : placeholder}
           disabled={value.length >= maxTags}
           maxLength={maxTagChars}
           className="flex-1 min-w-[8ch] bg-transparent text-white text-sm focus:outline-none disabled:opacity-50"
         />
       </div>
-      {open && visibleSuggestions.length > 0 && (
-        <ul className="absolute z-20 mt-1 w-full max-h-48 overflow-y-auto bg-port-card border border-port-border rounded shadow-lg">
-          {visibleSuggestions.map((s) => (
-            <li key={s.id}>
-              {/* onMouseDown (not onClick) fires before the input's onBlur so the
-                  pick lands before the dropdown closes. */}
+      {expanded && (
+        <ul id={listId} role="listbox" aria-label="Tag suggestions" className="absolute z-20 mt-1 w-full max-h-48 overflow-y-auto bg-port-card border border-port-border rounded shadow-lg">
+          {visibleSuggestions.map((s, index) => (
+            <li key={s.id} role="presentation">
               <button
                 type="button"
-                onMouseDown={(e) => { e.preventDefault(); addTag(s.label); }}
-                className="w-full text-left px-3 py-1.5 text-sm text-gray-200 hover:bg-port-bg flex items-center gap-2"
+                role="option"
+                ref={activeIndex === index ? activeOptionRef : undefined}
+                id={`${listId}-${index}`}
+                aria-selected={activeIndex === index}
+                tabIndex={-1}
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={() => pickSuggestion(s.label)}
+                className={`w-full text-left px-3 py-1.5 text-sm text-gray-200 hover:bg-port-bg flex items-center gap-2 ${activeIndex === index ? 'bg-port-bg outline outline-port-accent' : ''}`}
               >
                 {s.color && (
                   <span

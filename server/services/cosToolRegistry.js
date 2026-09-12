@@ -23,6 +23,7 @@ import {
   eidoverseWorldSaySchema,
   eidoverseChatReadSchema, eidoverseTravelVisitSchema, eidoverseVisitChatSchema, eidoverseVisitLeaveSchema,
 } from '../lib/validation.js';
+import { persistentMindChooseNameSchema } from '../lib/persistentMindChosenName.js';
 import { persistentMindProtectMemorySchema } from '../lib/persistentMindMemory.js';
 import { persistentMindThinkingRequestSchema } from '../lib/persistentMindThinkingPresets.js';
 import { USER_ACTION_ACTORS, USER_ACTION_TYPES } from '../lib/userActionTypes.js';
@@ -157,6 +158,19 @@ const mindProtectMemoryTool = Object.freeze({
     idempotent: true, async: false, confirmation: 'capability-grant',
   },
   adapter: { kind: 'persistent-mind-memory-protection' },
+});
+
+const mindChooseNameTool = Object.freeze({
+  type: 'portos_tool', name: 'mind.choose-name', version: COS_TOOL_SCHEMA_VERSION,
+  providerName: 'mind_choose_name', aliases: ['mind_choose_name'],
+  description: 'Choose or change your own display name. Saves one protected machine-local identity memory; preserves your stable mindId and trajectory. The successful result is authoritative over older names.',
+  input_schema: zodToOpenApiSchema(persistentMindChooseNameSchema),
+  output_schema: objectOutputSchema,
+  policy: {
+    scopes: ['mind'], requiredCapabilities: ['manageMind'], sideEffect: 'write',
+    idempotent: true, async: false, confirmation: 'capability-grant',
+  },
+  adapter: { kind: 'persistent-mind-name' },
 });
 
 // One mind turn must not be able to dump the whole ledger into context — the
@@ -323,7 +337,7 @@ const localContextTools = (() => {
     },
   ];
 })();
-const toolCatalog = (intent) => [...thinkingTools, ...localContextTools, taskTool, mindCleanupTool, mindProtectMemoryTool, userActionsQueryTool, ...eidoverseTools, ...voiceTools(intent)];
+const toolCatalog = (intent) => [...thinkingTools, ...localContextTools, taskTool, mindCleanupTool, mindProtectMemoryTool, mindChooseNameTool, userActionsQueryTool, ...eidoverseTools, ...voiceTools(intent)];
 const toolCalls = new Map();
 const toolCallFingerprints = new Map();
 
@@ -438,7 +452,10 @@ const validateAuthority = (tool, authority) => {
 };
 
 const validateArguments = (tool, args) => {
-  const schema = z.fromJSONSchema(tool.input_schema);
+  // JSON Schema does not carry JavaScript regexp flags; keep the Unicode
+  // naming contract on its original Zod schema at the execution boundary.
+  const schema = tool.adapter.kind === 'persistent-mind-name'
+    ? persistentMindChooseNameSchema : z.fromJSONSchema(tool.input_schema);
   const parsed = schema.safeParse(args);
   if (!parsed.success) {
     throw new ServerError(`Invalid arguments for '${tool.name}': ${parsed.error.issues.map((issue) => `${issue.path.join('.')} ${issue.message}`).join('; ')}`, {
@@ -464,6 +481,10 @@ const executeAdapter = async (tool, args, context) => {
   }
   if (tool.adapter.kind === 'voice-tool') {
     return dispatchTool(tool.adapter.legacyName, args, { sideEffects: [], signal: context.signal });
+  }
+  if (tool.adapter.kind === 'persistent-mind-name') {
+    const { choosePersistentMindName } = await import('./persistentMindContext.js');
+    return choosePersistentMindName(args);
   }
   if (tool.adapter.kind === 'persistent-mind-memory-protection') {
     const { protectPersistentMindMemory } = await import('./persistentMindContext.js');

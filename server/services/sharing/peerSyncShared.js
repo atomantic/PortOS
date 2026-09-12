@@ -130,7 +130,7 @@ export async function writeState(state) {
 
 // Serialize every readState→modify→writeState pair through a single tail
 // promise. The push pipeline runs fire-and-forget after each subscribe; its
-// `persistPushSuccess` writes race the subscribe's own writes for the same
+// `persistPushDeliveryEvidence` writes race the subscribe's own writes for the same
 // file, and a naive concurrent run can clobber a just-persisted record
 // (subscribe-s1 reads [u1] from file, push-u1 finishes by writing [u1+meta],
 // subscribe-s1 writes [u1, s1] from its stale in-memory copy, AND VICE VERSA

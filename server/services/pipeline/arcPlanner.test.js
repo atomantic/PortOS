@@ -1516,8 +1516,7 @@ describe('arcPlanner — resolveVerifyIssues', () => {
   });
 
   it('preserves series.arc.tickingClock when the resolve LLM does not author one', async () => {
-    // Same drift class as readerMap above — the resolve prompt never authors a
-    // ticking clock, so omitting it must not wipe the user's existing countdown.
+    // Sparse countdown repairs must preserve a clock omitted by the model.
     const s = await setupSeries();
     await seriesSvc.updateSeries(s.id, {
       arc: {
@@ -1540,6 +1539,57 @@ describe('arcPlanner — resolveVerifyIssues', () => {
     expect(out.series.arc.logline).toBe('L2');
     expect(out.series.arc.tickingClock?.enabled).toBe(true);
     expect(out.series.arc.tickingClock?.label).toBe('The dam breaks');
+  });
+
+  it.each([false, true])('repairs one countdown reminder by ID and rejects multiple isolated edits (extra=%s)', async (extra) => {
+    const s = await setupSeries();
+    await seriesSvc.updateSeries(s.id, {
+      arc: { logline: 'L', tickingClock: {
+        enabled: true, label: 'The dam breaks', kind: 'deadline', stakes: 'town floods',
+        plantedAtArcPosition: 2, dueAtArcPosition: 10,
+        reminders: [{ id: 'rm-first', atIssue: 3, note: '72 hours' }, { id: 'rm-last', atIssue: 9, note: '1 hour' }],
+      } },
+    });
+    const before = (await seriesSvc.getSeries(s.id)).arc.tickingClock;
+    stageRunnerSpy = vi.fn(async () => ({
+      content: { patchMode: 'exact-text-v1', arc: { resolves: ['f1'], tickingClock: {
+        enabled: false, reminders: [
+          { id: before.reminders[0].id, atIssue: 6, note: '72 hours; matching stops' },
+          { id: 'rm-unmatched', atIssue: 7, note: 'Do not mint this row' },
+          ...(extra ? [{ id: before.reminders[1].id, atIssue: 8 }] : []),
+        ],
+      } } },
+      runId: 'r-clock', providerId: 'p', model: 'm',
+    }));
+    const out = await planner.resolveVerifyIssues(s.id, {
+      spineOnly: true, isolated: true,
+      findings: [{ severity: 'medium', problem: 'The first reminder precedes the countdown start' }],
+    });
+    const ctx = stageRunnerSpy.mock.calls[0][1];
+    expect(JSON.parse(ctx.tickingClockJson)).toEqual(before);
+    const after = (await seriesSvc.getSeries(s.id)).arc.tickingClock;
+    if (extra) {
+      expect(out).toMatchObject({ applied: false, noChangeReason: 'isolated-candidate-rejected' });
+      expect(after).toEqual(before);
+    } else {
+      expect(out.applied).toBe(true);
+      expect(out.mutations.arcFieldsEdited).toBe(1);
+      expect(after).toEqual({ ...before, reminders: [{ ...before.reminders[0], atIssue: 6, note: '72 hours; matching stops' }, before.reminders[1]] });
+    }
+  });
+
+  it('preserves a disabled countdown when a model patch would erase its last identifying field', async () => {
+    const s = await setupSeries();
+    await seriesSvc.updateSeries(s.id, { arc: { logline: 'L', tickingClock: { enabled: false, label: 'The dam breaks' } } });
+    stageRunnerSpy = vi.fn(async () => ({
+      content: { arc: { resolves: ['f1'], tickingClock: { label: '' } } },
+      runId: 'r-clock', providerId: 'p', model: 'm',
+    }));
+    const out = await planner.resolveVerifyIssues(s.id, {
+      findings: [{ severity: 'medium', problem: 'Clarify the deadline' }],
+    });
+    expect(out.applied).toBe(false);
+    expect((await seriesSvc.getSeries(s.id)).arc.tickingClock.label).toBe('The dam breaks');
   });
 
   it('applies episode-synopsis corrections the resolve LLM returns (heals episode-level findings)', async () => {
@@ -3590,27 +3640,22 @@ describe('arcPlanner — manuscript completeness + derive-from-manuscript', () =
     expect(out.issues[1]).toMatchObject({ issueNumber: null, anchorQuote: '' });
   });
 
-  it('collectManuscriptSections orders by arcPosition, drops empties, and collectIssueSourceText stays byte-identical', async () => {
+  it('collects manuscript sections and editor formats in global issue order across volumes', async () => {
     const s = await setupSeries();
-    // Insert out of arcPosition order to prove sorting (don't assert on the
-    // auto-assigned `number`, which follows creation order, not arcPosition).
-    await issuesSvc.createIssue({ seriesId: s.id, title: 'Two', arcPosition: 2, stages: { teleplay: { output: 'TELE two', status: 'ready' } } });
-    await issuesSvc.createIssue({ seriesId: s.id, title: 'One', arcPosition: 1, stages: { comicScript: { output: 'PAGE 1\none', status: 'ready' } } });
-    await issuesSvc.createIssue({ seriesId: s.id, title: 'Empty', arcPosition: 3 });
-
+    const v1 = await seasonsSvc.createSeason(s.id, { number: 1, title: 'V1' });
+    const v2 = await seasonsSvc.createSeason(s.id, { number: 2, title: 'V2' });
+    // Creation is shuffled; local position restarts at 1 in the second volume.
+    for (const [seasonId, arcPosition, title] of [[v2.id, 1, 'Three'], [v1.id, 2, 'Two'], [v1.id, 1, 'One'], [v2.id, 2, 'Empty']]) {
+      await issuesSvc.createIssue({ seriesId: s.id, seasonId, title, arcPosition,
+        stages: title === 'Empty' ? {} : { prose: { output: `Draft ${title}`, status: 'ready' } } });
+    }
     const sections = await planner.collectManuscriptSections(s.id);
-    // Empty issue dropped; remaining two ordered by arcPosition (One before Two).
-    expect(sections.map((x) => x.content)).toEqual(['PAGE 1\none', 'TELE two']);
-    expect(sections.map((x) => x.stageId)).toEqual(['comicScript', 'teleplay']);
-    expect(sections.map((x) => x.title)).toEqual(['One', 'Two']);
-    expect(planner.primaryStageIdOf(sections)).toBeDefined();
-
-    // The corpus join derives from the sections — verify the invariant.
+    expect(sections.map((section) => section.title)).toEqual(['One', 'Two', 'Three']);
+    expect(sections.map((section) => section.number)).toEqual([1, 2, 3]);
+    const formats = await planner.collectManuscriptByType(s.id);
+    expect(formats.sectionsByType.prose.map((section) => section.title)).toEqual(['One', 'Two', 'Three', 'Empty']);
     const corpus = await planner.collectIssueSourceText(s.id, { stageOrder: planner.MANUSCRIPT_STAGES });
-    const expected = sections
-      .map((x) => `# Issue ${x.number} — ${x.title} (${x.stageId})\n\n${x.content}`)
-      .join('\n\n---\n\n');
-    expect(corpus).toBe(expected);
+    expect(corpus).toBe(sections.map((section) => `# Issue ${section.number} — ${section.title} (${section.stageId})\n\n${section.content}`).join('\n\n---\n\n'));
   });
 
   it('deriveFromManuscript proposes a single volume + bible + zipped issue synopses', async () => {

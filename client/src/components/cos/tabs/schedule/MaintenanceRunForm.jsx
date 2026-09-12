@@ -183,7 +183,7 @@ export default function MaintenanceRunForm({ schedule, apps = [], providers = []
         effort={effort}
         onEffortChange={next => { setEffort(next); setConsent(false); }}
         emptyProviderOption="Select a subscription provider"
-        emptyModelOption="Select a model"
+        emptyModelOption="Select a model" includeDefaultModel
         alwaysShowModel
         loading={!providersLoaded}
         disabled={busy}
@@ -201,7 +201,7 @@ export default function MaintenanceRunForm({ schedule, apps = [], providers = []
           effort={claimHandler.effort}
           onEffortChange={next => { setClaimHandler(current => ({ ...current, effort: next })); setConsent(false); }}
           emptyProviderOption="Same as audit handler"
-          emptyModelOption="Select a model"
+          emptyModelOption="Select a model" includeDefaultModel
           alwaysShowModel={Boolean(claimHandler.providerId)}
           loading={!providersLoaded}
           disabled={busy}

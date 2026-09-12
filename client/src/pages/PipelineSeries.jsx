@@ -1,3 +1,4 @@
+import { compareIssuesInSeries } from '../../../server/lib/pipelineIssueOrder.js';
 /**
  * Pipeline — Series detail page.
  *
@@ -38,12 +39,20 @@ import AuthorPicker from '../components/pipeline/AuthorPicker';
 import VoiceExemplarEditor, { VOICE_EXEMPLARS_MAX } from '../components/VoiceExemplarEditor';
 import { buildImporterLink } from '../lib/importerDeepLink';
 import { recommendStructure, describeStructure } from '../lib/seasonStructure';
+import useDrawerTab from '../hooks/useDrawerTab';
 import { useLocalStorageBool } from '../hooks/useLocalStorageBool';
 import { useArcCanvasSync } from '../hooks/useArcCanvasSync';
 import RecordRenderPinRow from '../components/imageGen/RecordRenderPinRow';
 import CharacterEvolutionLens from '../components/character/CharacterEvolutionLens';
 import { EVOLUTION_STAGES, isDeclaredEvolution } from '../lib/characterEvolution.js';
 import { CHARACTER_ARC_LIMITS, TRANSITION_KINDS, TRANSITION_KIND_LABELS } from '../../../server/lib/seriesCharacterArc.js';
+
+const EDITOR_TABS = [
+  { id: 'issues', label: 'Issues & arc' },
+  { id: 'editorial', label: 'Editorial' },
+  { id: 'autopilot', label: 'Autopilot' },
+  { id: 'branching', label: 'Branching' },
+];
 
 const PIPELINE_SIDEBAR_KEY = 'portos-pipeline-series-sidebar-collapsed';
 
@@ -110,6 +119,7 @@ const STYLE_GUIDE_TRISTATE = [
 export default function PipelineSeries() {
   const { seriesId } = useParams();
   const navigate = useNavigate();
+  const [editorTab, setEditorTab] = useDrawerTab('view', 'issues', EDITOR_TABS.map((tab) => tab.id));
   const [series, setSeries] = useState(null);
   const [issues, setIssues] = useState([]);
   const [universes, setWorlds] = useState([]);
@@ -214,22 +224,8 @@ export default function PipelineSeries() {
             <PanelLeftOpen size={16} />
           </button>
         )}
-        {sidebarCollapsed ? (
-          <div className="hidden lg:block overflow-hidden min-w-0" />
-        ) : (
-          <aside className="border-b lg:border-b-0 lg:border-r border-port-border bg-port-card/40 lg:overflow-y-auto">
-            <BibleSidebar
-              series={series}
-              universes={universes}
-              patchSeries={patchSeries}
-              onSeriesUpdate={updateSeriesFromServer}
-              onFlushPending={flushPending}
-              onCollapse={toggleSidebar}
-            />
-          </aside>
-        )}
 
-        <section className="@container flex flex-col gap-4 p-4 min-h-0 lg:overflow-y-auto">
+        <section className="lg:col-start-2 lg:row-start-1 @container shrink-0 lg:shrink flex flex-col gap-4 p-4 min-h-0 lg:overflow-y-auto">
           <header className={`flex items-center gap-3 flex-wrap ${sidebarCollapsed ? 'lg:pl-8' : ''}`}>
             <Link to="/pipeline" className="inline-flex items-center gap-1 text-sm text-gray-400 hover:text-white">
               <ArrowLeft size={14} /> All Series
@@ -303,29 +299,61 @@ export default function PipelineSeries() {
             </button>
           </header>
 
-          <SeriesReviewPanel
-            series={series}
-            onSeriesUpdate={updateSeriesFromServer}
-            onIssuesUpdate={handleIssuesUpdate}
-          />
-
-          <AutopilotPanel
-            series={series}
-            onSeriesUpdate={updateSeriesFromServer}
-            onIssuesUpdate={handleIssuesUpdate}
-          />
-
-          <SeriesLoomsPanel series={series} />
-
-          <ArcCanvas
-            series={series}
-            issues={issues}
-            onSeriesUpdate={updateSeriesFromServer}
-            onIssuesUpdate={handleIssuesUpdate}
-            onFlushPending={flushPending}
-            onRegisterDraftFlush={registerDraftFlush}
-          />
+          <div className="flex flex-wrap items-center gap-3 text-sm">
+            {issues.length > 0 && (
+              <Link className="text-port-accent hover:underline" to={`/pipeline/issues/${[...issues].sort(compareIssuesInSeries)[0].id}`}>
+                <BookOpen size={14} className="inline mr-1" /> Open first issue
+              </Link>
+            )}
+            {series.universeId && (
+              <Link className="text-port-accent hover:underline" to={`/universes/${series.universeId}`}>
+                <Globe size={14} className="inline mr-1" /> Universe bible
+              </Link>
+            )}
+            {['running', 'paused'].includes(series.autopilot?.status) && (
+              <button type="button" className="text-amber-400 hover:underline" onClick={() => setEditorTab('autopilot')}>
+                View autopilot progress
+              </button>
+            )}
+          </div>
+          <TabPills tabs={EDITOR_TABS} activeTab={editorTab} onChange={setEditorTab}
+            ariaLabel="Series editor" controlsIdPrefix="series-editor" size="sm" />
+          {/* Keep drafts and the live autopilot subscription mounted across tabs. */}
+          <div role="tabpanel" id="series-editor-editorial" aria-labelledby="tab-editorial" hidden={editorTab !== 'editorial'}>
+            <SeriesReviewPanel series={series} onSeriesUpdate={updateSeriesFromServer} onIssuesUpdate={handleIssuesUpdate} />
+          </div>
+          <div role="tabpanel" id="series-editor-autopilot" aria-labelledby="tab-autopilot" hidden={editorTab !== 'autopilot'}>
+            <AutopilotPanel series={series} onSeriesUpdate={updateSeriesFromServer} onIssuesUpdate={handleIssuesUpdate} />
+          </div>
+          <div role="tabpanel" id="series-editor-branching" aria-labelledby="tab-branching" hidden={editorTab !== 'branching'}>
+            <SeriesLoomsPanel series={series} />
+          </div>
+          <div role="tabpanel" id="series-editor-issues" aria-labelledby="tab-issues" hidden={editorTab !== 'issues'}>
+            <ArcCanvas
+              series={series}
+              issues={issues}
+              onSeriesUpdate={updateSeriesFromServer}
+              onIssuesUpdate={handleIssuesUpdate}
+              onFlushPending={flushPending}
+              onRegisterDraftFlush={registerDraftFlush}
+            />
+          </div>
         </section>
+        {sidebarCollapsed ? (
+          <div className="hidden lg:block lg:col-start-1 lg:row-start-1 overflow-hidden min-w-0" />
+        ) : (
+          <aside className="lg:col-start-1 lg:row-start-1 border-b lg:border-b-0 lg:border-r border-port-border bg-port-card/40 lg:overflow-y-auto">
+            <BibleSidebar
+              series={series}
+              universes={universes}
+              patchSeries={patchSeries}
+              onSeriesUpdate={updateSeriesFromServer}
+              onFlushPending={flushPending}
+              onCollapse={toggleSidebar}
+            />
+          </aside>
+        )}
+
       </div>
     </div>
   );

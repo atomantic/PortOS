@@ -109,10 +109,10 @@ export default function MusicVideo() {
     applyScenePatch: patchScene,
   });
 
-  // The in-flight render already resolved the project's audio at kickoff;
+  // Preparation is already resolving the project's audio at kickoff;
   // relinking the track now would leave the project pointing at a NEW track
   // while the video that finishes rendering was produced from the OLD one.
-  const renderTargetsSelected = !!(renderJob.job && selected && renderJob.job.projectId === selected.id);
+  const renderTargetsSelected = !!(renderJob.active && selected && renderJob.context === selected.id);
   // `midiTargetsSelected` gates the track-change controls, since the .mid being
   // produced is of the CURRENT audio (mirrors renderTargetsSelected).
   const midiTargetsSelected = !!(midi.active && selected && midi.context === selected.id);
@@ -549,7 +549,7 @@ export default function MusicVideo() {
                 onChangeTrack={handleChangeTrack}
               />
               <RenderStatusPanel
-                rendering={!!renderJob.job}
+                rendering={renderTargetsSelected}
                 progress={renderJob.progress}
                 renderHistoryId={selected.renderHistoryId}
                 finalVideo={finalVideo}

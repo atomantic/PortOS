@@ -57,7 +57,7 @@ export default function AppQuality({ app, detail = false }) {
           <table className="w-full text-sm text-left">
             <thead className="text-gray-400 sticky top-0 bg-port-card"><tr><th className="py-2 pr-3">Category</th><th className="pr-3">Score</th><th>Evidence</th></tr></thead>
             <tbody>{quality.categories.map(category => (
-              <Fragment key={category.id}><tr className="border-t border-port-border align-top">
+              <Fragment key={category.id}><tr className={`border-t border-port-border align-top${score != null && category.score != null && category.coverage !== 'not-applicable' && category.score < score ? ' bg-port-warning/10' : ''}`}>
                 <th scope="row" className="py-2 pr-3 font-medium">{category.label}<Link className="block text-xs font-normal text-port-accent hover:underline" to={`/cos/schedule?task=${encodeURIComponent(category.id)}`} aria-label={`${category.label} runner`}>Runner settings</Link></th>
                 <td className="py-2 pr-3 whitespace-nowrap">{category.score == null ? '—' : `${category.score}/100`}</td>
                 <td className="py-2 text-xs text-gray-400">

@@ -98,7 +98,7 @@ function routeStatus(peers, route) {
  * routing the provider contract forbids — so the choice lives in this
  * instance's own settings and the server reads it at enqueue time.
  */
-export default function UnattendedRenderRouting({ peers }) {
+export default function UnattendedRenderRouting({ peers, renderPanel = (panel) => panel }) {
   // `null` = not loaded yet, and NOT the same as `{}` (loaded, nothing routed).
   // Conflating them is what would let a failed settings read save a routing map
   // rebuilt from an empty object, clearing a route this page never saw.
@@ -176,17 +176,25 @@ export default function UnattendedRenderRouting({ peers }) {
   // would leave a persisted route silently failing every enqueue with no
   // on-screen explanation and no way to clear it.
   if (loadFailed) {
-    return (
+    return renderPanel(
       <div className="mb-3 rounded-lg border border-port-border bg-port-bg/40 p-3">
         <p className="text-[11px] text-port-warning">
           Unattended render routing could not load this instance&rsquo;s settings, so it is read-only. Reload to try again.
         </p>
-      </div>
+      </div>,
+      true,
     );
   }
-  if (routing === null || (!anyOptions && !hasSavedRoute)) return null;
+  if (routing === null || (!anyOptions && !hasSavedRoute)) return renderPanel(null, false);
 
-  return (
+  const needsAttention = KINDS.some(({ kind }) => {
+    const current = savedRoute(kind);
+    if (!current) return false;
+    const option = optionsByKind[kind].find((candidate) => optionValue(candidate) === optionValue(current));
+    return !option || !option.ready || routeStatus(peers, current)?.tone !== 'success';
+  });
+
+  return renderPanel(
     <div className="mb-3 rounded-lg border border-port-border bg-port-bg/40 p-3">
       <div className="flex items-center gap-2 mb-1">
         <Bot size={14} className="text-port-accent" />
@@ -253,6 +261,7 @@ export default function UnattendedRenderRouting({ peers }) {
           );
         })}
       </div>
-    </div>
+    </div>,
+    needsAttention,
   );
 }

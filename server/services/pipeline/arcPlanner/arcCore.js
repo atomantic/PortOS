@@ -14,7 +14,7 @@ import { ARC_LOCKABLE_FIELDS, getSeries, updateSeries } from '../series.js';
 import { listIssues, listIssuesForSeries, recomputeIssueNumbersForSeries, updateIssue, updateStageWithLatest, updateStagesWithLatest } from '../issues.js';
 import { emitRecordUpdated, withReexportSuppressed } from '../../sharing/recordEvents.js';
 import { getSeason } from '../seasons.js';
-import { ARC_LIMITS, READER_MAP_BEAT_KINDS, buildSeason, cleanThemes, renderArcShapeGuidance, renderArcShapePositionSummary, sanitizeArc, sanitizeReaderMap, sanitizeSeason, sanitizeSeasonList } from '../../../lib/storyArc.js';
+import { ARC_LIMITS, READER_MAP_BEAT_KINDS, TICKING_CLOCK_LIMITS, buildSeason, cleanThemes, renderArcShapeGuidance, renderArcShapePositionSummary, sanitizeArc, sanitizeReaderMap, sanitizeSeason, sanitizeSeasonList, sanitizeTickingClock } from '../../../lib/storyArc.js';
 import { sanitizeCharacterArcList } from '../../../lib/seriesCharacterArc.js';
 import { runPromptRefineRaw, trimChanges } from '../refineHelpers.js';
 import { ERR_VALIDATION, SHAPE_GUIDANCE_NONE, appendTickingClock, buildArcBaseContext, buildArcOverviewContext, buildNeighborVolumes, buildReaderMapContext, buildResolveContext, buildVerifyContext, compareIssuesByPosition, findingIdSet, makeErr, matchIssueForEpisodeEdit, matchResolvedFindings, renderVolumeFields, renderVolumeIssue, resolveWorldContext, seasonIdByNumberOf, shapeEpisodeResolutions, shapeFindings, shapeSeasonOutlines, shapeVerifyIssues } from './context.js';
@@ -497,6 +497,37 @@ export function applyExactTextEdits(current, rawEdits, maxLength) {
 // count", and the appliers treat them identically.
 const sameStored = (a, b) => JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
 
+// Countdown repairs follow the same sparse, existing-ID contract as character
+// transitions. A finding cannot delete the clock or replace its reminder list.
+const CLOCK_PATCH_FIELDS = ['label', 'stakes', 'plantedAtArcPosition', 'dueAtArcPosition'];
+function mergeTickingClockPatch(current, patch) {
+  if (!current || !patch || typeof patch !== 'object' || Array.isArray(patch)) {
+    return { value: current, changes: 0 };
+  }
+  const next = { ...current };
+  for (const [field, max] of [['label', TICKING_CLOCK_LIMITS.LABEL_MAX], ['stakes', TICKING_CLOCK_LIMITS.STAKES_MAX]]) {
+    if (typeof patch[field] === 'string' && patch[field].length <= max) next[field] = patch[field];
+  }
+  for (const field of ['plantedAtArcPosition', 'dueAtArcPosition']) {
+    if (patch[field] === null || Number.isFinite(patch[field])) next[field] = patch[field];
+  }
+  const byId = new Map((Array.isArray(patch.reminders) ? patch.reminders : [])
+    .filter((r) => r && typeof r.id === 'string').map((r) => [r.id, r]));
+  next.reminders = (current.reminders || []).map((reminder) => {
+    const edit = byId.get(reminder.id);
+    if (!edit) return reminder;
+    const updated = { ...reminder };
+    if (edit.atIssue === null || Number.isFinite(edit.atIssue)) updated.atIssue = edit.atIssue;
+    if (typeof edit.note === 'string' && edit.note.length <= TICKING_CLOCK_LIMITS.REMINDER_NOTE_MAX) updated.note = edit.note;
+    // Clearing both fields would make the canonical sanitizer delete the row.
+    return updated.atIssue == null && !updated.note.trim() ? reminder : updated;
+  });
+  const value = sanitizeTickingClock(next) || current;
+  const changes = CLOCK_PATCH_FIELDS.filter((field) => !sameStored(value[field], current[field])).length
+    + value.reminders.filter((reminder, index) => !sameStored(reminder, current.reminders[index])).length;
+  return { value, changes };
+}
+
 // The fields a resolve response can change on the arc / on a volume — the same
 // surface the two appliers below spread (`sanitizeArc` at the arc, the season
 // patch inside `resolveVerifyIssues`), restated here because those do per-field
@@ -533,9 +564,9 @@ const SEASON_LONG_FIELDS = Object.freeze([
 // The arc surface a resolve pass can rewrite — derived from the two lists the
 // isolated-candidate bound already keeps in step with the appliers, so a newly
 // patchable field is counted the moment it is accepted rather than after
-// someone remembers a third list. `readerMap` / `tickingClock` / `status` are
-// absent by construction: the resolver never authors them.
-const RESOLVE_ARC_FIELDS = Object.freeze([...ARC_SHORT_FIELDS, ...ARC_LONG_FIELDS.map(([direct]) => direct)]);
+// someone remembers a third list. Countdown patches have their own sparse
+// applier; readerMap and status are not resolver-authored fields.
+const RESOLVE_ARC_FIELDS = Object.freeze([...ARC_SHORT_FIELDS, ...ARC_LONG_FIELDS.map(([direct]) => direct), 'tickingClock']);
 
 const changedFieldCount = (next, prev, fields) => fields
   .filter((field) => !sameStored(next?.[field], prev?.[field])).length;
@@ -656,7 +687,7 @@ export function isolatedCandidateRejection(edits, { exactTextMode = false, serie
   if (edits.arc) {
     const changes = countFieldChanges(edits.arc, series.arc || {}, {
       shortFields: ARC_SHORT_FIELDS, longFields: ARC_LONG_FIELDS, exactTextMode,
-    });
+    }) + mergeTickingClockPatch(series.arc?.tickingClock, edits.arc.tickingClock).changes;
     if (changes) touched.push({ label: 'the arc', changes });
   }
   if (edits.characterArcs.length) {
@@ -859,8 +890,8 @@ export async function resolveVerifyIssues(seriesId, options = {}) {
     // one so auto-resolve never silently wipes a reader map the user already
     // built on the next step. Mirrors `generateArcOverview` above.
     readerMap: series.arc?.readerMap ?? null,
-    // Same for the ticking clock — auto-resolve must not wipe the countdown.
-    tickingClock: series.arc?.tickingClock ?? null,
+    // A sparse repair can move existing countdown beats without replacing them.
+    tickingClock: mergeTickingClockPatch(series.arc?.tickingClock, edits.arc?.tickingClock).value ?? null,
     // The resolve prompt doesn't author the foreshadowing ledger — take it if
     // present, else preserve any existing one so auto-resolve never wipes it.
     foreshadowing: edits.arc?.foreshadowing ?? series.arc?.foreshadowing ?? null,

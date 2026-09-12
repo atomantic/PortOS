@@ -1,5 +1,5 @@
 /**
- * Submit a validated video-generation request to its federated, Grok, or local
+ * Submit a validated video-generation request to its federated, hosted, or local
  * dispatch lane. HTTP parsing and validation stay in the route; this service
  * owns every subsequent orchestration and rollback decision.
  */
@@ -20,6 +20,7 @@ import {
   fableLoomVideoCapabilities,
 } from '../fableLoom/visualConditioning.js';
 import { VIDEO_GEN_MODE } from './modes.js';
+import { HOSTED_VIDEO_SUBMISSIONS } from './hostedSubmission.js';
 import { enqueueJob } from '../mediaJobQueue/index.js';
 import {
   cleanupMultipartTemp,
@@ -164,89 +165,28 @@ const submitValidatedVideoGenJob = async (body, uploads) => {
     () => enqueueJob({ kind: 'video', params }),
   );
 
-  if (backend === VIDEO_GEN_MODE.GROK) {
-    const { grok: g, sourceImagePath, uploadedTempPath } = prepared;
-    const { jobId, position, status } = await enqueue({
-      // This literal is the queue discriminator. Local jobs use mode for their
-      // t2v/i2v semantic, while the Grok lane stores that as videoMode.
-      mode: VIDEO_GEN_MODE.GROK,
-      videoMode: sourceImagePath ? 'image' : 'text',
-      grokPath: g.grokPath,
-      aspectRatio: body.visualConditioning?.render?.parameters?.aspectRatio || g.aspectRatio,
-      prompt: body.prompt,
-      negativePrompt: body.negativePrompt || '',
-      width: body.width,
-      height: body.height,
-      duration: body.grokDuration,
-      sourceImagePath,
-      uploadedTempPath,
-      ...(body.musicVideo ? { musicVideo: body.musicVideo } : {}),
-      ...(body.fableLoom ? { fableLoom: body.fableLoom } : {}),
-      ...(body.visualConditioning ? { visualConditioning: body.visualConditioning } : {}),
-    });
-    return {
-      jobId,
-      generationId: jobId,
-      filename: `${jobId}.mp4`,
-      model: 'grok',
-      mode: 'grok',
-      status,
-      position,
-    };
-  }
-
-  if (backend === VIDEO_GEN_MODE.FAL) {
+  const hosted = HOSTED_VIDEO_SUBMISSIONS[backend];
+  if (hosted) {
     const { sourceImagePath, uploadedTempPath } = prepared;
     const { jobId, position, status } = await enqueue({
-      mode: VIDEO_GEN_MODE.FAL,
+      // Hosted jobs use mode for queue dispatch and videoMode for text/image.
+      mode: backend,
       videoMode: sourceImagePath ? 'image' : 'text',
-      modelId: body.falModelId,
-      aspectRatio: body.visualConditioning?.render?.parameters?.aspectRatio,
       prompt: body.prompt,
       negativePrompt: body.negativePrompt || '',
-      width: body.width,
-      height: body.height,
-      duration: body.falDuration,
       sourceImagePath,
       uploadedTempPath,
       ...(body.musicVideo ? { musicVideo: body.musicVideo } : {}),
       ...(body.fableLoom ? { fableLoom: body.fableLoom } : {}),
       ...(body.visualConditioning ? { visualConditioning: body.visualConditioning } : {}),
+      ...hosted.buildParams(body, prepared),
     });
     return {
       jobId,
       generationId: jobId,
       filename: `${jobId}.mp4`,
-      model: 'fal',
-      mode: 'fal',
-      status,
-      position,
-    };
-  }
-
-  if (backend === VIDEO_GEN_MODE.REACTOR) {
-    const { sourceImagePath, uploadedTempPath } = prepared;
-    const { jobId, position, status } = await enqueue({
-      mode: VIDEO_GEN_MODE.REACTOR,
-      videoMode: sourceImagePath ? 'image' : 'text',
-      prompt: body.prompt,
-      negativePrompt: body.negativePrompt || '',
-      continueFromClipId: body.reactorClipId,
-      seconds: body.reactorSeconds,
-      seed: body.reactorSeed,
-      aspect: body.reactorAspect,
-      sourceImagePath,
-      uploadedTempPath,
-      ...(body.musicVideo ? { musicVideo: body.musicVideo } : {}),
-      ...(body.fableLoom ? { fableLoom: body.fableLoom } : {}),
-      ...(body.visualConditioning ? { visualConditioning: body.visualConditioning } : {}),
-    });
-    return {
-      jobId,
-      generationId: jobId,
-      filename: `${jobId}.mp4`,
-      model: 'reactor',
-      mode: 'reactor',
+      model: backend,
+      mode: backend,
       status,
       position,
     };

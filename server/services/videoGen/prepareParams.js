@@ -11,7 +11,7 @@
  *   - validate modelId + local-python configuration
  *   - a2v / IC-LoRA mode↔upload pairing and reference-count bounds
  *   - stage multipart uploads into PATHS.uploads with rollback bookkeeping
- *   - grok short-circuit (grok reads only prompt/dims/source image/duration)
+ *   - hosted backend short-circuit after source-image staging
  *   - keyframe resolution + range checks
  *   - render-history resolution for native extend and IC references
  *   - LoRA-array normalization and chunk-count resolution
@@ -51,7 +51,8 @@ import {
 import { getSettings } from '../settings.js';
 import { getProject as getMusicVideoProject } from '../musicVideo/projects.js';
 import { getTrack } from '../tracks/index.js';
-import { VIDEO_GEN_MODE, resolveVideoMode, isVideoModeUsable } from './modes.js';
+import { VIDEO_GEN_MODE, resolveVideoMode } from './modes.js';
+import { HOSTED_VIDEO_SUBMISSIONS } from './hostedSubmission.js';
 import { isDefaultI2vReferenceMode } from '../../lib/videoReferenceModes.js';
 import {
   listVideoModels,
@@ -727,74 +728,20 @@ async function resolvePreparedParams({
     }
     if (uploads.sourceImage?.path) await unlinkGuarded(uploads.sourceImage.path).catch(() => {});
   };
-  // Grok backend short-circuit (#2859 phase 2): everything past this point —
-  // last-frame/keyframe staging, extend resolution, LoRA gating — is
-  // local-runtime machinery grok doesn't use. sourceImagePath (upload or
-  // gallery pick) is already resolved above, so an i2v render animates that
-  // frame and a plain prompt runs the image-first image_gen → image_to_video
-  // flow inside the provider. `backend` (not `body.backend`) so the #3231
-  // pin ladder routes an unpinned-request grok default through here too.
-  if (backend === 'grok') {
-    const grok = settings.imageGen?.grok || {};
-    if (!grok.enabled) {
+  // Hosted workers consume the already-staged source frame, but none of the
+  // local last-frame/audio/IC machinery below. Keep availability checking here
+  // so failures retain source validation precedence and staged-file ownership.
+  const hosted = HOSTED_VIDEO_SUBMISSIONS[backend];
+  if (hosted) {
+    const { usable, extras } = hosted.prepare(settings);
+    if (!usable) {
       await cleanupStaged();
-      throw new ServerError(
-        'Grok Imagegen is disabled — enable it in Settings → Image Gen first',
-        { status: 400, code: 'GROK_IMAGEGEN_DISABLED' },
-      );
+      throw new ServerError(hosted.errorMessage, { status: 400, code: hosted.errorCode });
     }
     return {
       backend,
-      grok,
-      effectiveModel: { id: 'grok', supportedModes: ['text', 'image'] },
-      sourceImagePath,
-      uploadedTempPath,
-      discardSourceImage,
-      cleanupStaged,
-    };
-  }
-
-  // fal.ai short-circuit (#6213): mirrors the grok branch above — the queue
-  // REST provider reads only prompt/dims/source-image/duration, so every
-  // local-runtime knob past this point is irrelevant to it.
-  if (backend === VIDEO_GEN_MODE.FAL) {
-    if (!isVideoModeUsable(settings, VIDEO_GEN_MODE.FAL)) {
-      await cleanupStaged();
-      throw new ServerError(
-        'No fal.ai API key configured — set it in Settings → Video Gen (or the FAL_KEY env var) first',
-        { status: 400, code: 'FAL_NOT_CONFIGURED' },
-      );
-    }
-    return {
-      backend,
-      // No CLI-config sibling to grok's `grok` field: fal.js re-resolves the
-      // API key from live settings itself (see its generateVideo comment) so
-      // the secret never rides through job.params/media-jobs.json.
-      effectiveModel: { id: 'fal', supportedModes: ['text', 'image'] },
-      sourceImagePath,
-      uploadedTempPath,
-      discardSourceImage,
-      cleanupStaged,
-    };
-  }
-
-  // reactor.inc short-circuit (#6214): mirrors the fal branch above — the
-  // fast-h3 API reads only prompt/source-image/continue_from_clip_id/seconds,
-  // so every local-runtime knob past this point is irrelevant to it.
-  if (backend === VIDEO_GEN_MODE.REACTOR) {
-    if (!isVideoModeUsable(settings, VIDEO_GEN_MODE.REACTOR)) {
-      await cleanupStaged();
-      throw new ServerError(
-        'No reactor.inc API key configured — set it in Settings → Video Gen (or the REACTOR_API_KEY env var) first',
-        { status: 400, code: 'REACTOR_NOT_CONFIGURED' },
-      );
-    }
-    return {
-      backend,
-      // No CLI-config sibling to grok's `grok` field: reactor.js re-resolves
-      // the API key from live settings itself (see its generateVideo
-      // comment) so the secret never rides through job.params/media-jobs.json.
-      effectiveModel: { id: 'reactor', supportedModes: ['text', 'image'] },
+      ...extras,
+      effectiveModel: { id: backend, supportedModes: ['text', 'image'] },
       sourceImagePath,
       uploadedTempPath,
       discardSourceImage,

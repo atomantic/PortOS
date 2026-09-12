@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { render, screen, fireEvent } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router';
 import PipelineSeries from './PipelineSeries';
 
@@ -51,6 +51,19 @@ describe('Pipeline series detail — mobile layout', () => {
     getPipelineSeries.mockResolvedValue({ id: 'series-1', name: 'Example Series' });
     listPipelineIssues.mockResolvedValue([]);
     listUniverses.mockResolvedValue([]);
+  });
+
+  it('opens on issues, exposes direct destinations, and keeps inactive panels mounted', async () => {
+    listPipelineIssues.mockResolvedValue([{ id: 'issue-1', number: 1 }]);
+    getPipelineSeries.mockResolvedValue({ id: 'series-1', name: 'Example Series', universeId: 'universe-1' });
+    renderPage();
+    expect(await screen.findByRole('link', { name: /open first issue/i })).toHaveAttribute('href', '/pipeline/issues/issue-1');
+    expect(screen.getByRole('link', { name: /universe bible/i })).toHaveAttribute('href', '/universes/universe-1');
+    expect(screen.getByRole('tabpanel')).toHaveAttribute('id', 'series-editor-issues');
+    fireEvent.click(screen.getByRole('tab', { name: 'Autopilot' }));
+    expect(screen.getByRole('tabpanel')).toHaveAttribute('id', 'series-editor-autopilot');
+    expect(screen.getByText('arc canvas')).toBeInTheDocument();
+    expect(screen.getByText('arc canvas').closest('[role="tabpanel"]')).toHaveAttribute('hidden');
   });
 
   it('owns a page scroll region below lg after the bible reflows above the canvas', async () => {

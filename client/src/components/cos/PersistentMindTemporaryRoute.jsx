@@ -90,7 +90,7 @@ export default function PersistentMindTemporaryRoute({
             <p className="mt-1 text-[11px] text-port-warning">Sending is what authorizes this route — nothing runs until you press send.</p>
           )}
           {paused && (
-            <p className="mt-1 text-[11px] text-port-text-muted">The mind is paused. This message queues on the selected route and only runs once you resume it.</p>
+            <p className="mt-1 text-[11px] text-port-text-muted">The mind is paused. Sending this message resumes it and requests an immediate wake on the selected route.</p>
           )}
           {imageCount > 0 && (
             <p className="mt-1 text-[11px] text-port-text-muted">
