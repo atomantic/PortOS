@@ -10,7 +10,6 @@ import { execFileSync, spawnSync } from 'node:child_process';
 import { checkHealth, ensureSchema, query, close, POOL_CONFIG } from '../lib/db.js';
 import { requireDbOrSkip } from '../lib/dbTestGate.js';
 import { runDbMigrations } from '../scripts/run-db-migrations.js';
-import { restorePostgres } from './backup.js';
 import { listFolders } from './writersRoom/db.js';
 
 const health = await checkHealth();
@@ -62,6 +61,7 @@ describe.skipIf(!ready)('restore older database schema', () => {
     await ensureSchema({ force: true });
     await runDbMigrations();
     await query('UPDATE writers_room_folders SET data = $2 WHERE id = $1', [folderId, { id: folderId, name: 'After backup' }]);
+    const { restorePostgres } = await import('./backup.js');
     const result = await restorePostgres(dest, 'old-schema', { source: 'fixture-source', dryRun: false });
     expect(result).toMatchObject({ status: 'ok', dryRun: false });
     expect(await listFolders()).toContainEqual(folder);
