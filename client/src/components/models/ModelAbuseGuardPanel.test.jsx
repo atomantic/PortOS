@@ -106,8 +106,9 @@ describe('ModelAbuseGuardPanel', () => {
 it('keeps a failed installation actionable after refresh and remount', async () => {
   getModelAbuseGuardStatus.mockResolvedValue({ ready: false, pythonAvailable: true, venvReady: true, setupState: 'incomplete', stages: STAGES, lastInstallFailure: { stage: 'packages', code: 'network-failed', exitCode: 1, message: 'Package server unreachable.', action: 'Check the Python package index connection.' } });
   await renderPanel();
-  expect(screen.getByRole('alert')).toHaveTextContent('packages: network-failed (exit 1)');
-  expect(screen.getByRole('alert')).toHaveTextContent('Check the Python package index connection.');
+  const failureAlert = await screen.findByRole('alert');
+  expect(failureAlert).toHaveTextContent('packages: network-failed (exit 1)');
+  expect(failureAlert).toHaveTextContent('Check the Python package index connection.');
   fireEvent.click(screen.getByRole('button', { name: 'Refresh status' }));
   await waitFor(() => expect(getModelAbuseGuardStatus).toHaveBeenCalledTimes(2));
   expect(screen.getByRole('alert')).toHaveTextContent('Package server unreachable.');
