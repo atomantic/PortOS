@@ -170,7 +170,17 @@ function isBodyless(response) {
  * a foreign `this`.
  */
 function withBodyDeadline(response, release) {
-  let wrappedBody;
+  // Our mirror of the body stream, plus the stream it was built over. `clone()`
+  // TEES the body and swaps a fresh stream in behind `.body`, which leaves a
+  // cached mirror pointing at a stream cloning has already locked — so the
+  // mirror is keyed by identity and rebuilt when the underlying stream changes.
+  let mirror = null;
+  let mirrorSource = null;
+  // `active` while that mirror owns the body. A consumer method rejecting in
+  // that window (`res.text()` on a body the stream already locked) must not
+  // retire a deadline the live read still depends on.
+  const mirrorState = { active: false };
+
   return new Proxy(response, {
     get(target, prop) {
       if (prop === 'body') {
@@ -178,8 +188,11 @@ function withBodyDeadline(response, release) {
         // Not a web stream (a test double, or a runtime without one) — there is
         // no close/cancel hook to hang the release on.
         if (!raw || typeof raw.getReader !== 'function') return raw;
-        wrappedBody ||= watchStream(raw, release);
-        return wrappedBody;
+        if (mirrorSource !== raw) {
+          mirrorSource = raw;
+          mirror = watchStream(raw, mirrorState, release);
+        }
+        return mirror;
       }
 
       const value = Reflect.get(target, prop, target);
@@ -194,16 +207,17 @@ function withBodyDeadline(response, release) {
           }
           return result.then(
             (resolved) => { release(); return resolved; },
-            (err) => { release(); throw err; },
+            (err) => { if (!mirrorState.active) release(); throw err; },
           );
         };
       }
 
-      // A clone shares one deadline: whichever copy is drained first satisfies it.
-      if (prop === 'clone') {
-        return (...args) => withBodyDeadline(Reflect.apply(value, target, args), release);
-      }
-
+      // `clone()` is deliberately NOT instrumented. It tees one transfer into
+      // two independent branches, and no single branch finishing proves the
+      // transfer is done — so letting a clone release would retire the deadline
+      // while the other branch is still streaming. Leaving it armed instead is
+      // the safe direction: an abort that lands after the body is drained is a
+      // no-op, and a clone that really does outrun the budget SHOULD be cut off.
       return value.bind(target);
     },
   });
@@ -216,26 +230,33 @@ function withBodyDeadline(response, release) {
  * constructed, breaking the common `if (!res.body) … await res.json()` shape
  * where `.body` is only touched as a truthiness check.
  */
-function watchStream(stream, release) {
+function watchStream(stream, state, release) {
   let reader = null;
+  const finish = () => {
+    state.active = false;
+    release();
+  };
   return new ReadableStream({
     async pull(controller) {
-      reader ||= stream.getReader();
+      if (!reader) {
+        reader = stream.getReader();
+        state.active = true;
+      }
       try {
         const { done, value } = await reader.read();
         if (done) {
-          release();
+          finish();
           controller.close();
           return;
         }
         controller.enqueue(value);
       } catch (err) {
-        release();
+        finish();
         controller.error(err);
       }
     },
     async cancel(reason) {
-      release();
+      finish();
       await Promise.resolve(reader ? reader.cancel(reason) : stream.cancel(reason)).catch(() => {});
     },
   }, { highWaterMark: 0 });

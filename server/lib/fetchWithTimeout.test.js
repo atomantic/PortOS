@@ -241,5 +241,34 @@ describe('fetchWithTimeout', () => {
     // The wrapper must not have drained/locked the real body just by being asked for.
     expect(await res.json()).toEqual({ a: 1 });
   });
+it('rebuilds the body mirror after clone() tees the underlying stream', async () => {
+    vi.stubGlobal('fetch', vi.fn(() => Promise.resolve(new Response('payload', { status: 500 }))));
+
+    const res = await fetchWithTimeout('http://example.com', {}, 5000);
+    expect(res.body).toBeTruthy();          // mirror built over the pre-clone stream
+    const errorText = await res.clone().text();  // clone() swaps a fresh stream in behind .body
+    expect(errorText).toBe('payload');
+
+    // A cached mirror would still point at the stream cloning locked, and this
+    // read would throw "ReadableStream is locked".
+    const { value } = await res.body.getReader().read();
+    expect(new TextDecoder().decode(value)).toBe('payload');
+  });
+
+  it('keeps the deadline armed when a consumer rejects while the stream is being read', async () => {
+    const clearSpy = vi.spyOn(global, 'clearTimeout');
+    vi.stubGlobal('fetch', vi.fn(() => Promise.resolve(new Response('payload', { status: 200 }))));
+
+    const res = await fetchWithTimeout('http://example.com', {}, 5000);
+    const reader = res.body.getReader();
+    await reader.read();
+    // The stream owns the body now, so this rejects — and must NOT retire the
+    // deadline the live read still depends on.
+    await expect(res.text()).rejects.toThrow();
+    expect(clearSpy).not.toHaveBeenCalled();
+
+    await reader.read();  // drain to done
+    expect(clearSpy).toHaveBeenCalledTimes(1);
+  });
 });
 
