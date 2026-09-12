@@ -63,8 +63,8 @@ function RecipeEditor({ id, onChanged, onSelect }) {
   };
 
   const apply = (saved) => {
-    if (!active.current) return;
     onChanged(saved);
+    if (!active.current) return;
     setDetail((current) => ({
       recipe: saved,
       versions: [{ revision: saved.activeRevision, definition: saved.definition, author: 'user', createdAt: saved.updatedAt }, ...(current?.versions || [])],
@@ -133,9 +133,10 @@ export default function PersistentMindRecipeLibrary() {
   const [recipes, setRecipes] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
-  const [reload, setReload] = useState(0);
+  const mounted = useRef(false);
   const version = useRef(0);
-  useEffect(() => {
+  const load = useCallback(() => {
+    if (!mounted.current) return;
     const request = ++version.current;
     setLoading(true);
     api.getMindRecipes({ silent: true }).then((result) => {
@@ -152,11 +153,21 @@ export default function PersistentMindRecipeLibrary() {
       setError(null);
     }).catch((failure) => { if (request === version.current) setError(failure.message); })
       .finally(() => { if (request === version.current) setLoading(false); });
-    return () => { version.current += 1; };
-  }, [reload]);
-  const onChanged = useCallback((recipe) => {
-    setRecipes((current) => current.some((entry) => entry.id === recipe.id) ? current.map((entry) => entry.id === recipe.id ? recipe : entry) : [recipe, ...current]);
   }, []);
+  useEffect(() => {
+    mounted.current = true;
+    load();
+    return () => { mounted.current = false; version.current += 1; };
+  }, [load]);
+  const onChanged = useCallback((recipe) => {
+    if (!mounted.current) return;
+    setRecipes((current) => current.some((entry) => entry.id === recipe.id)
+      ? current.map((entry) => entry.id === recipe.id && entry.activeRevision <= recipe.activeRevision ? recipe : entry)
+      : [recipe, ...current]);
+    // Publish the completed mutation even if its editor closed. Refresh to
+    // recover the complete library when the initial read was still pending.
+    load();
+  }, [load]);
   const onSelect = (id) => setSearchParams((current) => {
     const next = new URLSearchParams(current);
     if (id) next.set('recipe', id);
@@ -169,7 +180,7 @@ export default function PersistentMindRecipeLibrary() {
       <button type="button" className={buttonClass} onClick={() => onSelect('new')}>New recipe</button>
     </div>
     <p className="text-sm text-port-text-muted">Manage reusable read definitions and their history with Mind grants off. Saved recipes are not yet callable by the Mind. Nothing executes when you save or validate.</p>
-    {error && <Banner tone="error" title="Recipe library unavailable">{error} <button type="button" className={buttonClass} onClick={() => setReload((value) => value + 1)}>Retry library</button></Banner>}
+    {error && <Banner tone="error" title="Recipe library unavailable">{error} <button type="button" className={buttonClass} onClick={load}>Retry library</button></Banner>}
     {loading ? <p role="status" className="text-sm text-port-text-muted">Loading recipes…</p> : !recipes.length && !error ? <p className="text-sm text-port-text-muted">No saved recipes. Create one from the editable example.</p> : null}
     <ul className="space-y-2">
       {recipes.map((recipe) => <li key={recipe.id} className="flex flex-wrap items-center justify-between gap-2 rounded border border-port-border p-2">

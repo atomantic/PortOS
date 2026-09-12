@@ -42,7 +42,7 @@ describe('PersistentMindRecipeLibrary', () => {
     await user.click(screen.getByRole('button', { name: 'Save recipe' }));
     expect(await screen.findByRole('button', { name: definition.name })).toBeInTheDocument();
     expect(screen.getByTestId('location')).toHaveTextContent('?panel=tools&recipe=first');
-    expect(api.getMindRecipes).toHaveBeenCalledTimes(1);
+    expect(api.getMindRecipes).toHaveBeenCalledTimes(2);
     expect(api.createMindRecipe).toHaveBeenCalledWith(expect.objectContaining({ schemaVersion: 1, name: definition.name }), { silent: true });
   });
 
@@ -88,7 +88,7 @@ describe('PersistentMindRecipeLibrary', () => {
     expect(api.restoreMindRecipe).toHaveBeenCalledWith('first', { expectedRevision: 2, revision: 1 }, { silent: true });
     expect(screen.getByRole('button', { name: 'Save new revision' })).toBeEnabled();
     expect(within(screen.getByRole('list')).getByText('Revision 3 · Saved')).toBeInTheDocument();
-    expect(api.getMindRecipes).toHaveBeenCalledTimes(1);
+    expect(api.getMindRecipes).toHaveBeenCalledTimes(3);
   });
 
   it('ignores stale detail and save responses when the URL selection changes', async () => {
@@ -112,10 +112,40 @@ describe('PersistentMindRecipeLibrary', () => {
     expect(screen.queryByText(/Revision 2 · user/)).not.toBeInTheDocument();
   });
 
+  it('updates the list when creation completes after closing its editor without reopening it', async () => {
+    const user = userEvent.setup();
+    const pendingSave = deferred();
+    api.createMindRecipe.mockReturnValueOnce(pendingSave.promise);
+    renderPage('?panel=tools&recipe=new');
+    await screen.findByText(/No saved recipes/);
+    await user.click(screen.getByRole('button', { name: 'Save recipe' }));
+    await user.click(screen.getByRole('button', { name: 'Close editor' }));
+    await act(async () => pendingSave.resolve(recipe()));
+    expect(await screen.findByRole('button', { name: definition.name })).toBeInTheDocument();
+    expect(screen.queryByLabelText('Recipe definition (JSON)')).not.toBeInTheDocument();
+    expect(screen.getByTestId('location')).toHaveTextContent('?panel=tools');
+    expect(api.getMindRecipes).toHaveBeenCalledTimes(2);
+    expect(api.getMindRecipe).not.toHaveBeenCalled();
+  });
+
+  it('does not refresh the library when a pending save completes after the panel unmounts', async () => {
+    const user = userEvent.setup();
+    const pendingSave = deferred();
+    api.createMindRecipe.mockReturnValueOnce(pendingSave.promise);
+    const view = renderPage('?panel=tools&recipe=new');
+    await screen.findByText(/No saved recipes/);
+    await user.click(screen.getByRole('button', { name: 'Save recipe' }));
+    view.unmount();
+    await act(async () => pendingSave.resolve(recipe()));
+    expect(api.getMindRecipes).toHaveBeenCalledTimes(1);
+    expect(api.getMindRecipe).not.toHaveBeenCalled();
+  });
+
   it('keeps newer saved rows and unrelated recipes when an earlier library read finishes', async () => {
     const user = userEvent.setup();
     const lateList = deferred();
-    api.getMindRecipes.mockReturnValueOnce(lateList.promise);
+    api.getMindRecipes.mockReturnValueOnce(lateList.promise)
+      .mockResolvedValueOnce({ recipes: [recipe(), recipe({ id: 'second', name: 'recipe.second' })] });
     api.archiveMindRecipe.mockResolvedValue(recipe({ activeRevision: 2, archived: true }));
     renderPage('?panel=tools&recipe=first');
     await user.click(await screen.findByRole('button', { name: 'Archive recipe' }));

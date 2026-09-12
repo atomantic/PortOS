@@ -24,6 +24,7 @@ describe('closed, governed recipe definition boundary', () => {
     ['arbitrary code', (value) => { value.steps[0].code = 'process.exit()'; }],
     ['dynamic tools', (value) => { value.steps[0].tool = { input: 'query' }; }],
     ['expression binding', (value) => { value.steps[0].arguments.query = { expression: 'query + 1' }; }],
+    ['object with a primitive enum', (value) => { value.parameters.enum = [null]; }],
     ['enum with wrong primitive type', (value) => { value.parameters.properties.query.enum = [3]; }],
     ['open parameters', (value) => { value.parameters.additionalProperties = true; }],
     ['nested recipes', (value) => { value.steps[0].tool = 'recipe.other'; }],

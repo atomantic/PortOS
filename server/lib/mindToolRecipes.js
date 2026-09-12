@@ -8,7 +8,7 @@ const key = z.string().regex(/^[A-Za-z][A-Za-z0-9_-]{0,63}$/)
 const fields = (schema) => z.record(key, schema).refine((value) => Object.keys(value).length <= 30, 'at most 30 fields');
 const primitiveMatches = (value, type) => type === 'null' ? value === null
   : type === 'integer' ? Number.isInteger(value)
-    : typeof value === type;
+    : ['string', 'number', 'boolean'].includes(type) && typeof value === type;
 const parameter = z.lazy(() => z.object({
   type: z.enum(['string', 'number', 'integer', 'boolean', 'object', 'array', 'null']),
   description: z.string().max(500).optional(),
