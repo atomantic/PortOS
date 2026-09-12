@@ -5,12 +5,17 @@ import { describeNextRun, coverageTone, pipelineStages, IMPROVEMENT_DISABLED_TIT
 import TaskHeader from './TaskHeader';
 import RunTaskButton from './RunTaskButton';
 import TaskModelQuickControls from './TaskModelQuickControls';
+import ToggleSwitch from '../../../ToggleSwitch';
+import { isCronExpression } from '../../../../utils/cronHelpers';
 import Banner from '../../../ui/Banner';
 
 // One scheduled task rendered as a status-rich card. Browsing plus the common
 // "retarget the model and run it" loop happen here; the rest of the
 // configuration lives in the slide-over drawer (opened via Configure).
-export default function AppTaskCard({ taskType, config, apps, onTrigger, onConfigure, onUpdate, providers, providersLoaded = true, activeProviderId, improvementDisabled, orderStep }) {
+// appContext embeds the same card on a selected app's Automation tab: the
+// caller owns app-scoped saves/runs and supplies override controls as children.
+// Keep global coverage/history and global pin writes out of that context.
+export default function AppTaskCard({ taskType, config, apps, onTrigger, onConfigure, onUpdate, providers, providersLoaded = true, activeProviderId, improvementDisabled, orderStep, appContext, children }) {
   // Owned here, not in the controls, so Run can gate on the same `saving` flag —
   // it reads the server-side config, so a run fired mid-write uses the old pins.
   const pins = useTaskModelPins({ taskType, config, providers, activeProviderId, onUpdate });
@@ -19,7 +24,19 @@ export default function AppTaskCard({ taskType, config, apps, onTrigger, onConfi
   const hasApps = totalCount > 0;
   const coverage = coverageTone(enabledCount, totalCount);
   const coveragePct = hasApps ? Math.round((enabledCount / totalCount) * 100) : 0;
-  const nextRun = describeNextRun(config);
+  const displayConfig = appContext ? {
+    ...config,
+    enabled: appContext.enabled,
+    taskMetadata: { ...config.taskMetadata, ...appContext.taskMetadata },
+    ...(appContext.interval ? {
+      type: isCronExpression(appContext.interval) ? 'cron' : appContext.interval,
+      cronExpression: isCronExpression(appContext.interval) ? appContext.interval : undefined,
+      perpetual: false,
+    } : {}),
+  } : config;
+  const nextRun = appContext
+    ? { text: appContext.cadence, tone: 'text-gray-400' }
+    : describeNextRun(config);
   const userInvokable = config.invocation?.userInvokable !== false;
   const invocationDescription = config.invocation?.description || 'Runs as part of another automation and is not directly invokable.';
   // A pipeline task resolves provider/model per stage — a single card-level pin
@@ -36,7 +53,7 @@ export default function AppTaskCard({ taskType, config, apps, onTrigger, onConfi
         onClick={() => onConfigure(taskType)}
         className="flex-1 flex flex-col items-stretch gap-3 text-left p-4 rounded-t-lg hover:bg-port-card/60 transition-colors"
       >
-        <TaskHeader taskType={taskType} config={config} orderStep={orderStep} />
+        <TaskHeader taskType={taskType} config={displayConfig} orderStep={orderStep} />
 
         {/* Next run */}
         <div className="flex items-center gap-1.5 text-xs min-w-0">
@@ -48,7 +65,7 @@ export default function AppTaskCard({ taskType, config, apps, onTrigger, onConfi
         </div>
 
         {/* App coverage — kept prominent with a mini bar */}
-        {hasApps && (
+        {!appContext && hasApps && (
           <div className="space-y-1">
             <div className="flex items-center justify-between text-xs">
               <span className="text-gray-400">App coverage</span>
@@ -61,7 +78,7 @@ export default function AppTaskCard({ taskType, config, apps, onTrigger, onConfi
         )}
 
         {/* Last run + dependencies */}
-        <div className="text-xs text-gray-500 space-y-0.5">
+        {!appContext && <div className="text-xs text-gray-500 space-y-0.5">
           <div>
             {config.globalLastRun
               ? `Last run ${timeAgo(config.globalLastRun)} · ${config.globalRunCount || 0}×`
@@ -73,7 +90,7 @@ export default function AppTaskCard({ taskType, config, apps, onTrigger, onConfi
           {config.runAfter?.length > 0 && (
             <div className="truncate" title={`Blocked until these run: ${config.runAfter.join(', ')}`}>waits for: {config.runAfter.join(', ')}</div>
           )}
-        </div>
+        </div>}
       </button>
 
       {config.enabled === false && (
@@ -88,8 +105,22 @@ export default function AppTaskCard({ taskType, config, apps, onTrigger, onConfi
         </Banner>
       )}
 
+      {appContext && (
+        <div className="flex items-center gap-2 px-4 pb-3">
+          <span className="text-xs text-gray-400">Enabled</span>
+          <ToggleSwitch
+            enabled={appContext.enabled}
+            onChange={appContext.onToggle}
+            disabled={appContext.saving}
+            size="sm"
+            ariaLabel={`${taskType} enabled for this app: ${appContext.enabled ? 'on' : 'off'}`}
+          />
+        </div>
+      )}
+      {children && <fieldset disabled={appContext?.saving} className="min-w-0 px-4 pb-3 space-y-3">{children}</fieldset>}
+
       {/* Quick model pins — the drawer's Global defaults, inline */}
-      {userInvokable && onUpdate && (stageCount > 0 ? (
+      {!appContext && userInvokable && onUpdate && (stageCount > 0 ? (
         <button
           type="button"
           onClick={() => onConfigure(taskType)}
@@ -108,15 +139,17 @@ export default function AppTaskCard({ taskType, config, apps, onTrigger, onConfi
           <>
             <RunTaskButton
               taskType={taskType}
-              apps={apps}
+              apps={appContext ? undefined : apps}
               onTrigger={onTrigger}
-              installWide={config.installWide}
+              installWide={!appContext && config.installWide}
               programmatic={config.programmatic}
-              disabledReason={improvementDisabled ? IMPROVEMENT_DISABLED_TITLE : (pins.saving ? SAVING_TITLE : '')}
+              disabledReason={appContext?.saving ? SAVING_TITLE : appContext && !appContext.enabled ? 'Enable this task for this app first' : improvementDisabled ? IMPROVEMENT_DISABLED_TITLE : (pins.saving ? SAVING_TITLE : '')}
             />
             <button
               type="button"
               onClick={() => onConfigure(taskType)}
+              aria-expanded={appContext?.expanded}
+              aria-label={appContext ? `${appContext.expanded ? 'Hide' : 'Show'} provider and model options for ${taskType}` : undefined}
               className="ml-auto flex items-center gap-1.5 px-3 py-1.5 text-sm rounded text-gray-300 hover:text-white hover:bg-port-border/50 transition-colors"
             >
               <SlidersHorizontal size={13} />
