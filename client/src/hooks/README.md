@@ -241,3 +241,4 @@ grep -i "what you want to do" client/src/hooks/README.md
 | Hook | Purpose | Use when |
 |---|---|---|
 | `useEidoverseFrame` | Per-load Eidoverse handshake with origin/window/session validation and browser-only label preferences. | Embedding the managed Eidoverse renderer. |
+| `useGalleryPage` | Bounded image or mixed-media browsing with debounced server search, scopes, totals, stale-response cancellation and retryable next pages. | Gallery grids and pickers; `getGalleryImages` hydrates known references separately. |

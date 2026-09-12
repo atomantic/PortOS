@@ -1,3 +1,4 @@
+import { useGalleryPage } from '../hooks/useGalleryPage';
 import { useEffect, useRef, useState, useCallback, useMemo } from 'react';
 import { useParams, useNavigate } from 'react-router';
 import {
@@ -93,6 +94,8 @@ export default function VideoTimelineEditor() {
   const [project, setProject] = useState(null);
   const [history, setHistory] = useState([]);
   const [images, setImages] = useState([]);
+  const [checkedImageNames, setCheckedImageNames] = useState(new Set());
+  const [imageQuery, setImageQuery] = useState('');
   const [musicTracks, setMusicTracks] = useState([]);
   // Which catalogues have actually been fetched — see knownAbsent below.
   const [loaded, setLoaded] = useState({ clips: false, images: false, music: false });
@@ -116,6 +119,7 @@ export default function VideoTimelineEditor() {
   const [renderJobId, setRenderJobId] = useState(null);
   const [showLibrary, setShowLibrary] = useState(desktopTimelineLayout);
   const [libraryTab, setLibraryTab] = useState('clips');
+  const stills = useGalleryPage({ q: imageQuery }, { enabled: libraryTab === 'stills' });
   // Local input draft. Editing the canonical state on every keystroke makes the
   // rename onBlur-vs-canonical comparison always-equal.
   const [nameDraft, setNameDraft] = useState('');
@@ -147,12 +151,14 @@ export default function VideoTimelineEditor() {
     // the two would wipe a populated list on a transient error and then mark
     // every segment, overlay and bed drawing on it as "missing" — sources the
     // server can still render perfectly well.
-    const [proj, hist, gallery, library] = await Promise.all([
+    const [proj, hist, library] = await Promise.all([
       api.getTimelineProject(projectId).catch((err) => { setError(err.message); return null; }),
       api.listVideoHistory({ silent: true }).catch(() => null),
-      api.listImageGallery({ silent: true }).catch(() => null),
       api.listMusicLibrary({ silent: true }).catch(() => null),
     ]);
+    const imageRefs = [...(proj?.segments || []), ...(proj?.overlays || [])].filter(item => item.assetKind === 'images').map(item => item.assetFile);
+    const gallery = proj ? await api.getGalleryImages(imageRefs, { silent: true }).catch(() => null) : null;
+    if (gallery) setCheckedImageNames(new Set(imageRefs));
     if (proj) {
       const nextLanes = {
         segments: withKeys(proj.segments, 'seg'),
@@ -208,7 +214,7 @@ export default function VideoTimelineEditor() {
   const historyMap = useMemo(() => new Map(history.map((h) => [h.id, h])), [history]);
   const metaFor = useCallback((clipId) => historyMap.get(clipId), [historyMap]);
 
-  const imageNames = useMemo(() => new Set(images.map((i) => i.filename)), [images]);
+  const imageNames = useMemo(() => new Set([...images, ...stills.items].map((i) => i.filename)), [images, stills.items]);
   const musicNames = useMemo(() => new Set(musicTracks.map((m) => m.filename)), [musicTracks]);
 
   // A lane entry is "missing" when its source is gone from the catalogue it
@@ -219,10 +225,10 @@ export default function VideoTimelineEditor() {
   // "absent from the list" is NOT evidence of absence on disk, so say nothing
   // and let the render's MISSING_CLIPS report be the authority.
   const knownAbsent = useCallback((kind, file) => {
-    if (kind === 'images') return loaded.images && !imageNames.has(file);
+    if (kind === 'images') return loaded.images && checkedImageNames.has(file) && !imageNames.has(file);
     if (kind === 'music') return loaded.music && !musicNames.has(file);
     return false; // 'video-thumbnails' / 'audio' — no catalogue to check against
-  }, [loaded.images, loaded.music, imageNames, musicNames]);
+  }, [loaded.images, loaded.music, imageNames, musicNames, checkedImageNames]);
 
   const isSegmentMissing = useCallback((seg) => (seg.type === 'still'
     ? knownAbsent(seg.assetKind, seg.assetFile)
@@ -351,6 +357,7 @@ export default function VideoTimelineEditor() {
   }, [addToLane]);
 
   const addStill = useCallback((image) => {
+    setImages(previous => [...previous.filter(item => item.filename !== image.filename), image]);
     addToLane('segment', {
       _key: laneKey('still', 0),
       type: 'still',
@@ -370,6 +377,7 @@ export default function VideoTimelineEditor() {
   useEffect(() => { totalRef.current = total; }, [total]);
 
   const addOverlay = useCallback((image) => {
+    setImages(previous => [...previous.filter(item => item.filename !== image.filename), image]);
     addToLane('overlay', {
       _key: laneKey('ov', 0),
       type: 'image',
@@ -737,11 +745,17 @@ export default function VideoTimelineEditor() {
         </div>
       ))}
 
-      {libraryTab === 'stills' && (images.length === 0 ? (
+      {libraryTab === 'stills' && <div>
+        <label htmlFor="timeline-image-search" className="sr-only">Search images</label>
+        <input id="timeline-image-search" value={imageQuery} onChange={event => setImageQuery(event.target.value)} placeholder="Search images…" className="w-full p-2 mb-2 bg-port-bg border border-port-border rounded" />
+        {stills.error && <p role="alert">{stills.error} <button type="button" onClick={stills.retry}>Retry</button></p>}
+        {stills.hasMore && <button type="button" onClick={stills.loadMore} disabled={stills.loading} className="min-h-[44px] text-port-accent">Show more ({stills.total - stills.items.length} remaining)</button>}
+      </div>}
+      {libraryTab === 'stills' && (stills.items.length === 0 ? (
         <div className="text-xs text-gray-500 px-1 py-4">No images. Generate some on the Image page.</div>
       ) : (
         <div className="grid grid-cols-1 gap-2">
-          {images.map((image) => (
+          {stills.items.map((image) => (
             <StillTile key={image.filename} image={image} onAddStill={addStill} onAddOverlay={addOverlay} />
           ))}
         </div>

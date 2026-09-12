@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { lazy, Suspense, useEffect, useMemo, useState } from 'react';
 import {
   AlertTriangle,
   ArrowUpRight,
@@ -15,6 +15,7 @@ import {
 } from 'lucide-react';
 import { Link } from 'react-router';
 import Pill from '../ui/Pill.jsx';
+const GalleryImagePicker = lazy(() => import('../imageGen/GalleryImagePicker'));
 
 const selectClass = 'w-full min-h-[44px] rounded-lg border border-port-border bg-port-bg px-3 py-2 text-sm text-white';
 const actionClass = 'inline-flex min-h-[44px] items-center justify-center gap-2 rounded-lg bg-port-accent px-3 py-2 text-sm font-medium text-white disabled:opacity-50';
@@ -463,6 +464,8 @@ export default function GameBindings({
   const [spriteId, setSpriteId] = useState('');
   const [trackId, setTrackId] = useState('');
   const [artworkFilename, setArtworkFilename] = useState('');
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const [pickedArtwork, setPickedArtwork] = useState(null);
   const [artworkRole, setArtworkRole] = useState(ARTWORK_ROLES[0].id);
   const [artworkLabel, setArtworkLabel] = useState(ARTWORK_ROLES[0].label);
   const [artworkDestination, setArtworkDestination] = useState(ARTWORK_ROLES[0].destinationPath);
@@ -495,7 +498,7 @@ export default function GameBindings({
   const availableTracks = tracks
     .filter((track) => !boundTrackIds.has(track.id))
     .map((track) => ({ id: track.id, label: `${track.title}${track.audioFilename ? '' : ' · no audio yet'}` }));
-  const galleryMap = useMemo(() => new Map(gallery.map((image) => [image.filename, image])), [gallery]);
+  const galleryMap = useMemo(() => new Map([...gallery, ...(pickedArtwork ? [pickedArtwork] : [])].map((image) => [image.filename, image])), [gallery, pickedArtwork]);
   const selectedArtwork = galleryMap.get(artworkFilename);
 
   const addSprite = async () => {
@@ -626,15 +629,20 @@ export default function GameBindings({
                 value={artworkFilename}
                 onChange={(event) => setArtworkFilename(event.target.value)}
                 className={selectClass}
-                disabled={busy || gallery.length === 0}
+                disabled={busy || galleryMap.size === 0}
               >
-                <option value="">{gallery.length ? 'Select artwork…' : 'No gallery images available'}</option>
-                {gallery.map((image) => (
+                <option value="">{galleryMap.size ? 'Select artwork…' : 'Browse the gallery…'}</option>
+                {[...galleryMap.values()].map((image) => (
                   <option key={image.filename} value={image.filename}>
                     {image.prompt?.slice(0, 70) || image.filename}
                   </option>
                 ))}
               </select>
+              <button type="button" disabled={busy} onClick={() => setPickerOpen(true)} className="min-h-[44px] text-port-accent text-sm">Browse gallery</button>
+              {pickerOpen && <Suspense fallback={<p>Loading gallery…</p>}><GalleryImagePicker open={pickerOpen} onClose={() => setPickerOpen(false)} onSelect={item => {
+                setPickedArtwork(item.raw || { filename: item.filename, path: item.previewUrl, prompt: item.prompt });
+                setArtworkFilename(item.filename);
+              }} /></Suspense>}
             </div>
             <div>
               <label htmlFor="game-artwork-role" className="mb-1 block text-xs text-gray-400">Design role</label>

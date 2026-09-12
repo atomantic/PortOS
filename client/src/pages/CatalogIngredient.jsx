@@ -32,7 +32,7 @@ import {
   recordCatalogIngredientVoiceMemo,
 } from '../services/apiCatalog';
 import { startMemoRecording, arrayBufferToBase64 } from '../lib/audioRecorder';
-import { listImageGallery } from '../services/apiImageVideo';
+import { useGalleryPage } from '../hooks/useGalleryPage';
 import { generateImage } from '../services/apiSystem';
 import { composeCanonStyledPrompt } from '../lib/composeStyledPrompt';
 import { getUniverse } from '../services/apiUniverseBuilder';
@@ -1383,13 +1383,9 @@ function MediaTile({ m, missing, isPortrait = false, onSetPortrait, onDetach, ar
 // or set-portrait from already-generated assets — the "scoped to existing media
 // history" requirement. Never uploads; it only references library keys.
 function GalleryPickerModal({ onClose, onPick }) {
-  const [items, setItems] = useState(null); // null = loading, [] = loaded-empty
-
-  useEffect(() => {
-    listImageGallery()
-      .then((rows) => setItems(Array.isArray(rows) ? rows : []))
-      .catch(() => setItems([]));
-  }, []);
+  const [query, setQuery] = useState('');
+  const page = useGalleryPage({ q: query });
+  const items = page.loading && page.items.length === 0 ? null : page.items;
 
   return (
     <Modal open onClose={onClose} size="lg" ariaLabelledBy="gallery-picker-title"
@@ -1407,6 +1403,10 @@ function GalleryPickerModal({ onClose, onPick }) {
           </button>
         </div>
         <div className="p-3 overflow-y-auto flex-1 min-h-0">
+          <label htmlFor="catalog-gallery-search" className="sr-only">Search gallery</label>
+          <input id="catalog-gallery-search" value={query} onChange={event => setQuery(event.target.value)} placeholder="Search gallery…" className="w-full mb-3 p-2 bg-port-bg border border-port-border rounded" />
+          {page.error && <p role="alert">{page.error} <button type="button" onClick={page.retry}>Retry</button></p>}
+          {page.hasMore && <button type="button" disabled={page.loading} onClick={page.loadMore} className="min-h-[44px] text-port-accent">Show more ({page.total - page.items.length} remaining)</button>}
           {items === null && <p className="text-xs text-gray-500">Loading gallery…</p>}
           {items?.length === 0 && <p className="text-xs text-gray-500">No images in the gallery yet. Generate one in Image Gen first.</p>}
           {items && items.length > 0 && (

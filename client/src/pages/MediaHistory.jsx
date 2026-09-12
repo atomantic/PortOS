@@ -5,7 +5,7 @@
  * into Video Gen.
  */
 
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useCallback, useMemo } from 'react';
 import { Link, useNavigate } from 'react-router';
 import { Combine, Image as ImageIcon, Film, Search, X } from 'lucide-react';
 import PageSkeleton from '../components/ui/PageSkeleton';
@@ -19,10 +19,9 @@ import { useMediaCompletionRefresh } from '../hooks/useMediaCompletionRefresh';
 import { useMediaAnnotations } from '../hooks/useMediaAnnotations';
 import useMediaPreviewActions from '../hooks/useMediaPreviewActions';
 import usePreviewRoute from '../hooks/usePreviewRoute';
-import { buildMediaHaystack, tokenizeQuery, matchHaystack } from '../lib/mediaSearch';
+import { useGalleryPage } from '../hooks/useGalleryPage';
 import {
-  listVideoHistory, deleteVideoHistoryItem, stitchVideos,
-  listImageGallery, deleteImage,
+  listMediaGalleryPage, deleteVideoHistoryItem, stitchVideos, deleteImage,
 } from '../services/api';
 
 const FILTERS = [
@@ -31,89 +30,42 @@ const FILTERS = [
   { id: 'video', label: 'Videos' },
 ];
 
-// Progressive grid: a mature install can hold 1k–2k+ gallery items. Mounting
-// every MediaCard + <img> at once freezes the tab and spikes memory. Search/
-// filter still run over the full list; only the painted window is limited.
-const INITIAL_VISIBLE = 60;
-const LOAD_MORE = 60;
+const normalizeRow = row => row.kind === 'image' ? normalizeImage(row.data) : normalizeVideo(row.data);
+const resolvePreview = async key => {
+  const kind = key.startsWith('video:') ? 'video' : key.startsWith('image:') ? 'image' : 'all';
+  const filename = key.replace(/^(image|video):/, '');
+  const page = await listMediaGalleryPage({ limit: 1, kind, filename }, { silent: true });
+  return page.items[0] ? normalizeRow(page.items[0]) : null;
+};
 
 export default function MediaHistory() {
   const navigate = useNavigate();
-  const [items, setItems] = useState([]);
-  const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState('all');
   const [query, setQuery] = useState('');
   const [stitchMode, setStitchMode] = useState(false);
   const [selected, setSelected] = useState([]); // video ids
   const [stitching, setStitching] = useState(false);
   const [favoritesOnly, setFavoritesOnly] = useState(false);
-  const [visibleCount, setVisibleCount] = useState(INITIAL_VISIBLE);
-  const { annotations, toggleStar, updateAnnotation, getCardProps } = useMediaAnnotations();
-  // URL-driven preview (`?preview=<filename>`) so the lightbox is deep-linkable.
-  // Match against the full `items` list (not the filtered view) so a shared link
-  // still opens even when the recipient's filter doesn't include that image.
-  const [preview, setPreview] = usePreviewRoute(items);
-
-  const refresh = useCallback(async ({ silent = false } = {}) => {
-    if (!silent) setLoading(true);
-    const [images, videos] = await Promise.all([
-      listImageGallery().catch(() => []),
-      listVideoHistory().catch(() => []),
-    ]);
-    const merged = [
-      ...(Array.isArray(images) ? images.map(normalizeImage) : []),
-      ...(Array.isArray(videos) ? videos.map(normalizeVideo) : []),
-    ].sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0));
-    setItems(merged);
-    setLoading(false);
-  }, []);
-
-  useEffect(() => { refresh(); }, [refresh]);
-  useMediaCompletionRefresh({
-    onImageCompleted: () => refresh({ silent: true }),
-    onVideoCompleted: () => refresh({ silent: true }),
-  });
-
-  // Precompute the searchable haystack per item once per items list — keystrokes
-  // then only re-run token .includes() against a cached string instead of
-  // rebuilding the array + join + lowercase per item per keystroke. The haystack
-  // shape + AND-token semantics live in lib/mediaSearch so the Image Gen gallery
-  // picker searches identically.
-  const haystacks = useMemo(() => items.map(buildMediaHaystack), [items]);
-  const tokens = useMemo(() => tokenizeQuery(query), [query]);
-
-  const searched = useMemo(
-    () => tokens.length === 0 ? items : items.filter((_, idx) => matchHaystack(haystacks[idx], tokens)),
-    [items, haystacks, tokens]
-  );
-  const kindFiltered = useMemo(
-    () => filter === 'all' ? searched : searched.filter(i => i.kind === filter),
-    [searched, filter]
-  );
-  const filtered = useMemo(
-    () => favoritesOnly ? kindFiltered.filter((i) => annotations[i.key]?.starred) : kindFiltered,
-    [kindFiltered, favoritesOnly, annotations]
-  );
-
-  // Reset the painted window when the user changes what they're looking at so
-  // "Show more" progress from one filter doesn't hide a short result set.
-  useEffect(() => {
-    setVisibleCount(INITIAL_VISIBLE);
-  }, [filter, query, favoritesOnly]);
-
-  const visibleItems = useMemo(
-    () => filtered.slice(0, visibleCount),
-    [filtered, visibleCount]
-  );
-  const counts = useMemo(() => {
-    const c = { all: 0, image: 0, video: 0 };
-    for (const i of searched) {
-      c.all++;
-      if (i.kind === 'image') c.image++;
-      else if (i.kind === 'video') c.video++;
-    }
-    return c;
-  }, [searched]);
+  const { annotations, updateAnnotation: saveAnnotation, getCardProps } = useMediaAnnotations();
+  const [annotationSaves, setAnnotationSaves] = useState(0);
+  const updateAnnotation = useCallback(async (...args) => {
+    setAnnotationSaves(n => n + 1);
+    return saveAnnotation(...args).finally(() => setAnnotationSaves(n => n - 1));
+  }, [saveAnnotation]);
+  const toggleStar = useCallback(item => item?.key && updateAnnotation(item.key, { starred: !annotations[item.key]?.starred }), [annotations, updateAnnotation]);
+  const annotationRevision = favoritesOnly ? JSON.stringify(Object.entries(annotations).map(([key, value]) => [key, value.starred, value.updatedAt]).sort()) : '';
+  const page = useGalleryPage({ kind: filter, q: query, starred: favoritesOnly, summary: true }, { media: true, revision: annotationRevision, paused: favoritesOnly && annotationSaves > 0 });
+  const { loading, counts, refresh } = page;
+  const items = useMemo(() => page.items.map(normalizeRow), [page.items]);
+  const setItems = useCallback(updater => page.setItems(previous => {
+    const normalized = previous.map(normalizeRow);
+    const next = typeof updater === 'function' ? updater(normalized) : updater;
+    return next.map(item => ({ kind: item.kind, data: { ...item.raw, prompt: item.prompt } }));
+  }), [page.setItems]);
+  const filtered = items;
+  const visibleItems = items;
+  const [preview, setPreview] = usePreviewRoute(items, { resolveItem: resolvePreview });
+  useMediaCompletionRefresh({ onImageCompleted: refresh, onVideoCompleted: refresh });
 
   const toggleSelect = useCallback((videoId) => {
     setSelected((s) => s.includes(videoId) ? s.filter((x) => x !== videoId) : [...s, videoId]);
@@ -142,14 +94,17 @@ export default function MediaHistory() {
         ? deleteImage(item.filename, { silent: true })
         : deleteVideoHistoryItem(item.id, { silent: true }));
       setItems((all) => all.filter((x) => x.key !== item.key));
+      page.setTotal(total => Math.max(0, total - 1));
+      refresh();
     } catch (err) {
       toast.error(err.message || 'Delete failed');
     }
-  }, []);
+  }, [setItems, page.setTotal, refresh]);
 
   const handlePromptSaved = useCallback((item, prompt) => {
     setItems((all) => all.map((current) => current.key === item.key ? { ...current, prompt } : current));
-  }, []);
+    refresh();
+  }, [setItems, refresh]);
 
   // Remix / SendToVideo / Continue / Clean all share a single implementation
   // with MediaCollectionDetail, ImageGen, and the Universe Builder lightbox
@@ -160,7 +115,8 @@ export default function MediaHistory() {
   const handleCleanComplete = useCallback((cleaned) => {
     const normalized = normalizeImage(cleaned);
     setItems((prev) => [normalized, ...prev.filter((x) => x.key !== normalized.key)]);
-  }, []);
+    refresh();
+  }, [setItems, refresh]);
   const { handleRemix, handleSendToImage, handleSendToVideo, handleSendTo3d, handleContinue, handleClean, handleRemoveWatermark } = useMediaPreviewActions({
     onCleanComplete: handleCleanComplete,
   });
@@ -173,7 +129,8 @@ export default function MediaHistory() {
   }, []);
   const handleUpscaled = useCallback((video) => {
     setItems((all) => [normalizeVideo(video), ...all]);
-  }, []);
+    refresh();
+  }, [setItems, refresh]);
   const handleAnnotate = useCallback((item) => {
     navigate(`/media/annotate/${encodeURIComponent(item.key)}`);
   }, [navigate]);
@@ -253,7 +210,8 @@ export default function MediaHistory() {
         </div>
       </div>
 
-      {loading ? (
+      {page.error && <p role="alert" className="text-port-error">{page.error} <button type="button" onClick={page.retry}>Retry</button></p>}
+      {loading && items.length === 0 ? (
         <PageSkeleton header="none" label="Loading media history" layout="grid" cards={10} gridColsClass="grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5" />
       ) : filtered.length === 0 ? (
         <div className="bg-port-card border border-port-border rounded-xl p-8 text-center text-gray-500 text-sm">
@@ -295,13 +253,14 @@ export default function MediaHistory() {
               );
             })}
           </div>
-          {filtered.length > visibleCount && (
+          {page.hasMore && (
             <button
               type="button"
-              onClick={() => setVisibleCount((n) => n + LOAD_MORE)}
+              onClick={page.loadMore}
+              disabled={loading}
               className="w-full py-2.5 text-xs text-port-accent hover:text-white bg-port-border/30 hover:bg-port-border/50 rounded-lg transition-colors min-h-[44px]"
             >
-              Show more ({filtered.length - visibleCount} remaining)
+              {loading ? 'Loading…' : `Show more (${page.total - items.length} remaining)`}
             </button>
           )}
         </>

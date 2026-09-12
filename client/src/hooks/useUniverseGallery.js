@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo, useCallback } from 'react';
-import { listImageGallery } from '../services/apiImageVideo';
+import { getGalleryImages } from '../services/apiImageVideo';
 import { descriptorForCanonEntry } from '../lib/canonPrompt';
 import { listSheetPointers } from '../lib/sheetPointers';
 import usePreviewRoute from './usePreviewRoute';
@@ -30,7 +30,7 @@ export default function useUniverseGallery({ draft, runsLength }) {
   // ACTUAL prompt that was used to render the image — without this the
   // modal would only see the variation's label, and Refine Prompt / Remix
   // / Send to Video would all open with empty fields. Loaded once per
-  // mount via `listImageGallery()` (the same call the History page uses)
+  // mount via bounded lookup of only the draft's referenced filenames
   // and refreshed whenever a render completes (universe `runs` advances).
   const [galleryByFilename, setGalleryByFilename] = useState(() => new Map());
   // Bumped on every job completion so the gallery-metadata fetch below
@@ -41,9 +41,19 @@ export default function useUniverseGallery({ draft, runsLength }) {
   // page reload.
   const [galleryRefreshKey, setGalleryRefreshKey] = useState(0);
   const bumpGalleryRefresh = useCallback(() => setGalleryRefreshKey((k) => k + 1), []);
+  const galleryFilenames = useMemo(() => {
+    const refs = new Set(draft?.styleImageRefs || []);
+    for (const bucket of Object.values(draft?.categories || {})) {
+      for (const entry of bucket?.variations || []) for (const filename of entry.imageRefs || []) refs.add(filename);
+    }
+    for (const entry of [...(draft?.compositeSheets || []), ...(draft?.characters || []), ...(draft?.places || []), ...(draft?.objects || [])]) {
+      for (const filename of entry.imageRefs || []) refs.add(filename);
+    }
+    return JSON.stringify([...refs].sort());
+  }, [draft]);
   useEffect(() => {
     let cancelled = false;
-    listImageGallery().then((list) => {
+    getGalleryImages(JSON.parse(galleryFilenames), { silent: true }).then((list) => {
       if (cancelled) return;
       const map = new Map();
       for (const item of Array.isArray(list) ? list : []) {
@@ -54,7 +64,7 @@ export default function useUniverseGallery({ draft, runsLength }) {
     return () => { cancelled = true; };
     // `runsLength` covers initial-load and queue-time; `galleryRefreshKey`
     // covers per-job completion (see bumpGalleryRefresh callers).
-  }, [runsLength, galleryRefreshKey]);
+  }, [runsLength, galleryRefreshKey, galleryFilenames]);
   const { annotations, updateAnnotation } = useMediaAnnotations();
   const previewItems = useMemo(() => {
     const out = [];

@@ -26,6 +26,20 @@ vi.mock('../services/api', () => ({
   pullMissingMetadata: (...args) => mockPullMissingMetadata(...args),
 }));
 
+vi.mock('../services/apiImageVideo', () => ({
+  listMediaGalleryPage: async ({ collectionId, limit, offset }) => {
+    const [images, videos, collections, collection] = await Promise.all([
+      mockListImageGallery(), mockListVideoHistory(), mockListMediaCollections(), mockGetMediaCollection(),
+    ]);
+    const refs = collectionId === 'unsorted' ? collections.flatMap(c => c.items) : collection.items;
+    const items = [...images.map(data => ({ kind: 'image', data })), ...videos.map(data => ({ kind: 'video', data }))].filter(row => {
+      const found = refs.some(ref => ref.kind === row.kind && ref.ref === (row.kind === 'image' ? row.data.filename : row.data.id));
+      return collectionId === 'unsorted' ? !found : found;
+    });
+    return { items: items.slice(offset, offset + limit), total: items.length, offset, limit };
+  },
+}));
+
 vi.mock('../components/ui/Toast', () => ({
   default: Object.assign(vi.fn(), {
     success: vi.fn(),
@@ -59,7 +73,7 @@ vi.mock('../hooks/usePreviewRoute', () => ({
 }));
 
 vi.mock('../components/media/MediaCard', () => ({
-  default: ({ item }) => <div data-testid="media-card">{item.filename || item.key}</div>,
+  default: ({ item, onClick }) => <button type="button" data-testid="media-card" onClick={() => onClick?.(item)}>{item.filename || item.key}</button>,
 }));
 
 vi.mock('../components/media/MediaPreview', () => ({
@@ -381,6 +395,33 @@ describe('MediaCollectionDetail — bulkMoveOrCopy move/remove failures', () => 
     // selected so the user can retry.
     await waitFor(() => expect(screen.getByText('3')).toBeInTheDocument());
     expect(screen.getByText(/of 3 selected/)).toBeInTheDocument();
+  });
+
+  it('retries a failed move whose selected record is beyond the refreshed first page', async () => {
+    const images = Array.from({ length: 62 }, (_, index) => ({ ...IMAGE_A, filename: `paged-${index}.png` }));
+    let current = { ...REAL_COLLECTION, items: images.map(image => ({ kind: 'image', ref: image.filename })) };
+    mockListImageGallery.mockResolvedValue(images);
+    mockListVideoHistory.mockResolvedValue([]);
+    mockGetMediaCollection.mockImplementation(async () => current);
+    let failedOnce = false;
+    mockRemoveMediaCollectionItem.mockImplementation(async (_id, key) => {
+      if (key === 'image:paged-61.png' && !failedOnce) { failedOnce = true; throw new Error('retry'); }
+      current = { ...current, items: current.items.filter(item => `image:${item.ref}` !== key) };
+      return current;
+    });
+    const user = userEvent.setup();
+    renderReal();
+    await user.click(await screen.findByRole('button', { name: /show more/i }));
+    await screen.findByText('paged-61.png');
+    await user.click(screen.getByRole('button', { name: /^select$/i }));
+    await user.click(screen.getByText('paged-60.png'));
+    await user.click(screen.getByText('paged-61.png'));
+    await user.click(screen.getByRole('button', { name: /move…/i }));
+    await user.click(screen.getByRole('button', { name: /pick target/i }));
+    await waitFor(() => expect(screen.queryByText('paged-61.png')).toBeNull());
+    await user.click(screen.getByRole('button', { name: /^remove$/i }));
+    await waitFor(() => expect(mockRemoveMediaCollectionItem).toHaveBeenCalledTimes(3));
+    expect(mockRemoveMediaCollectionItem.mock.calls[2][1]).toBe('image:paged-61.png');
   });
 
   it('counts add and removal failures separately and narrows the selection to the failed items', async () => {

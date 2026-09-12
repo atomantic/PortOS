@@ -234,6 +234,16 @@ describe('Image Gen Routes', () => {
       expect(empty.body).toEqual({ items: [], total: 0, limit: 60, offset: 0 });
     });
 
+    it('hydrates only requested filenames and rejects an oversized reference batch', async () => {
+      const items = [{ filename: 'a.png', prompt: 'first' }, { filename: 'b.png', prompt: 'second' }];
+      imageGen.local.listGallery.mockResolvedValue(items);
+      const response = await request(app).post('/api/image-gen/gallery/lookup').send({ filenames: ['b.png'] });
+      expect(response.status).toBe(200);
+      expect(response.body).toEqual([items[1]]);
+      const oversized = await request(app).post('/api/image-gen/gallery/lookup').send({ filenames: Array.from({ length: 201 }, (_, n) => `${n}.png`) });
+      expect(oversized.status).toBe(400);
+    });
+
     it.each(['limit=0', 'limit=201', 'offset=-1', 'limit=1.5', 'q=a&q=b', 'starred=1', 'summary=yes', 'filename='])('rejects invalid paging: %s', async query => {
       const response = await request(app).get('/api/image-gen/gallery?' + query);
       expect(response.status).toBe(400);

@@ -7,7 +7,7 @@ import EmptyState from '../components/EmptyState';
 import toast from '../components/ui/Toast';
 import {
   listMediaCollections, createMediaCollection, deleteMediaCollection,
-  listVideoHistory, listImageGallery,
+  listGalleryCollectionSummaries,
 } from '../services/api';
 import { buildUnsortedCollection } from '../lib/unsorted';
 import {
@@ -26,44 +26,6 @@ import useUrlParams from '../hooks/useUrlParams';
 // end-clip (`line-clamp`) always eats.
 const TITLE_MAX_CHARS = 34;
 
-// Resolve a collection's cover-thumbnail URL. Default = newest item by
-// addedAt; user-pinned coverKey wins when set. We need full image/video
-// records to build the thumbnail src, so the page fetches both lists once
-// and shares them across cards via a Map lookup.
-const resolveCover = (collection, imagesByName, videosById) => {
-  const items = collection.items || [];
-  if (items.length === 0) return null;
-
-  const lookup = (it) => {
-    if (it.kind === 'image') {
-      const img = imagesByName.get(it.ref);
-      return img ? (img.path || `/data/images/${img.filename}`) : null;
-    }
-    const vid = videosById.get(it.ref);
-    return vid?.thumbnail ? `/data/video-thumbnails/${vid.thumbnail}` : null;
-  };
-
-  if (collection.coverKey) {
-    const pinned = items.find((it) => `${it.kind}:${it.ref}` === collection.coverKey);
-    if (pinned) {
-      const url = lookup(pinned);
-      if (url) return url;
-    }
-  }
-  // Fallback: single O(n) pass for the most-recently-added item that has a
-  // renderable thumbnail. Sorting all items is O(n log n) and gets expensive
-  // on collections approaching ITEMS_MAX (5000).
-  let bestUrl = null;
-  let bestTs = -Infinity;
-  for (const it of items) {
-    const url = lookup(it);
-    if (!url) continue;
-    const ts = new Date(it.addedAt || 0).getTime();
-    if (ts > bestTs) { bestTs = ts; bestUrl = url; }
-  }
-  return bestUrl;
-};
-
 export default function MediaCollections() {
   // Focus target for the empty state's call to action — the create form sits
   // above the list, so the button has to point back up at it.
@@ -80,8 +42,7 @@ export default function MediaCollections() {
   const [loading, setLoading] = useState(true);
   const [creating, setCreating] = useState(false);
   const [name, setName] = useState('');
-  const [imagesByName, setImagesByName] = useState(new Map());
-  const [videosById, setVideosById] = useState(new Map());
+  const [summaries, setSummaries] = useState([]);
 
   // Sync integrity — no peers prop (the page doesn't fetch peers itself),
   // so the hook fetches instances internally.
@@ -94,13 +55,12 @@ export default function MediaCollections() {
     // as data instead of being flattened into an indistinguishable `[]`.
     // `silent: true` because this page owns the failure UI below — the shared
     // `request()` toast would fade and leave the banner as the only signal.
-    const [cols, images, videos] = await Promise.all([
+    const [cols, mediaSummaries] = await Promise.all([
       listMediaCollections({ silent: true }).then(
         (list) => (Array.isArray(list) ? list : []),
         (err) => ({ error: err?.message || 'The collections list could not be loaded.' }),
       ),
-      listImageGallery().catch(() => []),
-      listVideoHistory().catch(() => []),
+      listGalleryCollectionSummaries({ silent: true }).catch(() => null),
     ]);
     if (Array.isArray(cols)) {
       setCollections(cols);
@@ -111,8 +71,8 @@ export default function MediaCollections() {
       // grid never claims the library is unfiled.
       setCollectionsError(cols.error);
     }
-    setImagesByName(new Map((images || []).map((i) => [i.filename, i])));
-    setVideosById(new Map((videos || []).map((v) => [v.id, v])));
+    if (mediaSummaries) setSummaries(mediaSummaries);
+    else setCollectionsError('Could not load collection covers and counts.');
     setLoading(false);
   };
   useEffect(() => { refresh(); }, []);
@@ -152,24 +112,17 @@ export default function MediaCollections() {
     });
   };
 
-  const images = useMemo(() => Array.from(imagesByName.values()), [imagesByName]);
-  const videos = useMemo(() => Array.from(videosById.values()), [videosById]);
-  // Without a known collection list there is nothing to diff media against, so
-  // every item would look unfiled. Skip the synthetic bucket entirely.
-  const unsorted = useMemo(
-    () => (collections ? buildUnsortedCollection(collections, images, videos) : null),
-    [collections, images, videos],
-  );
+  const unsorted = useMemo(() => ({ ...buildUnsortedCollection([], [], []),
+    ...(summaries.find(s => s.id === 'unsorted') || {}),
+  }), [summaries]);
 
   const enriched = useMemo(() => {
     if (!collections) return [];
     // Pinned synthetic "Unsorted" entry first, then real collections.
     const all = [unsorted, ...collections];
     return all.map((c) => {
-      const counts = (c.items || []).reduce((acc, it) => {
-        acc[it.kind] = (acc[it.kind] || 0) + 1;
-        return acc;
-      }, { image: 0, video: 0 });
+      const summary = summaries.find(s => s.id === c.id);
+      const counts = summary?.counts || (c.items || []).reduce((counts, item) => ({ ...counts, [item.kind]: counts[item.kind] + 1 }), { image: 0, video: 0 });
       // Lift the shared auto-creator prefix ("Creative Director: ") out of the
       // title into its own badge, then middle-truncate what's left — otherwise
       // every auto-generated card renders the same clipped prefix and the
@@ -177,13 +130,14 @@ export default function MediaCollections() {
       const { badge, title } = splitCollectionName(c.name);
       return {
         ...c,
-        cover: resolveCover(c, imagesByName, videosById),
+        cover: summary?.cover,
+        itemCount: summary?.total ?? (c.items || []).length,
         counts,
         badge,
         displayTitle: middleTruncate(title, TITLE_MAX_CHARS),
       };
     });
-  }, [collections, unsorted, imagesByName, videosById]);
+  }, [collections, unsorted, summaries]);
 
   // Filter/sort state lives in the URL so a filtered grid is shareable and
   // survives a back-navigation from a collection. `empty=1` OPTS IN to showing
