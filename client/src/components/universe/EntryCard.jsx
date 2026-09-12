@@ -5,11 +5,10 @@
  *
  * Slot contract:
  * - `title`, `body`, `actions`, `footer` — ReactNode. `thumbnail` is the only
- *   left-hand column; `title` + `actions` share one row to its right and `body`
- *   runs full-width underneath them. So `actions` should be a horizontal strip
- *   (a column-shaped one makes the title row tall), and `title` must stay
- *   shrinkable — wrap it, don't fix a width — since it's the slot that yields
- *   when the action strip is wide on a narrow screen.
+ *   left-hand column; `title` + `actions` stack on phones and share a wrapping
+ *   row on wider screens. `body` runs full-width underneath them. Actions
+ *   should wrap within their slot; the title retains a readable line width
+ *   instead of yielding all its space to a wide action strip.
  * - `thumbnail` — either a descriptor object `{ filename, alt?, onClick?,
  *   isPrimary?, fallbackRefs? }` OR a React element. The descriptor flows
  *   through `EntryCardThumbnail` (12x12 frame, primary-star badge, walk-back
@@ -80,11 +79,10 @@ export default function EntryCard({
             : <EntryCardThumbnail {...thumbnail} />
         ) : null}
         <div className="flex-1 min-w-0">
-          {/* Actions ride the title row, not a third outer column, so `body`
-              spans the full width beside the thumbnail. */}
-          <div className="flex items-start gap-2">
-            <div className="min-w-0 flex-1">{title}</div>
-            {actions ? <div className="relative z-10 shrink-0">{actions}</div> : null}
+          {/* Keep the name readable even when a card has many actions. */}
+          <div className="flex flex-col sm:flex-row sm:flex-wrap items-start gap-2">
+            <div className="min-w-0 w-full sm:w-auto sm:flex-1 sm:basis-48">{title}</div>
+            {actions ? <div className="relative z-10 min-w-0 max-w-full">{actions}</div> : null}
           </div>
           {body}
         </div>
