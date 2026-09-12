@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useRef } from 'react';
 import {ChevronLeft, ChevronRight} from 'lucide-react';
 import * as api from '../../services/api';
 import socket from '../../services/socket';
@@ -100,10 +100,20 @@ export default function MonthView({ accounts }) {
   const selectedEventKey = searchParams.get('event');
   const selectedEvent = events.find((event) => `${event.accountId}:${event.id}` === selectedEventKey) || null;
   const todayStr = now.toDateString();
+  const dayTriggerRef = useRef(null);
   // Matching against the visible grid rejects impossible and stale day keys.
   const selectedDay = cells.find(cell => localDateKey(cell.date) === searchParams.get('day'));
   const selectedDayEvents = [...(eventsByDay[selectedDay?.date.toDateString()] || [])]
     .sort((a, b) => Number(b.isAllDay) - Number(a.isAllDay) || new Date(a.startTime) - new Date(b.startTime));
+  // Event details temporarily replace the day drawer, so preserve the original
+  // month trigger across that intermediate drawer's focus-restoration cycle.
+  useEffect(() => {
+    if (!selectedDay && !selectedEvent && dayTriggerRef.current) {
+      dayTriggerRef.current.focus();
+      dayTriggerRef.current = null;
+    }
+  }, [selectedDay, selectedEvent]);
+
   const openEvent = (event) => updateParams({ month: monthKey, event: `${event.accountId}:${event.id}` });
 
   return (
@@ -182,7 +192,10 @@ export default function MonthView({ accounts }) {
                       <button
                         type="button"
                         aria-label={`View all ${dayEvents.length} events for ${formatDateFull(cell.date)}`}
-                        onClick={() => updateParams({ month: monthKey, day: localDateKey(cell.date), event: null })}
+                        onClick={(e) => {
+                          dayTriggerRef.current = e.currentTarget;
+                          updateParams({ month: monthKey, day: localDateKey(cell.date), event: null });
+                        }}
                         className="w-full text-left text-[10px] text-port-accent pl-1 py-1 rounded hover:bg-port-border focus-visible:outline focus-visible:outline-port-accent"
                       >
                         +{dayEvents.length - 3} more
@@ -197,7 +210,7 @@ export default function MonthView({ accounts }) {
       )}
 
       <Drawer
-        open={!!selectedDay && !selectedEvent}
+        open={!!selectedDay && !selectedEvent && !loading}
         onClose={() => updateParams({ day: null, event: null })}
         title={selectedDay ? formatDateFull(selectedDay.date) : ''}
         subtitle={`${selectedDayEvents.length} events`}

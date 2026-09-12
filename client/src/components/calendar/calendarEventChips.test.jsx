@@ -313,6 +313,29 @@ describe('MonthView overflow navigation', () => {
     expect(screen.getByRole('heading', { name: 'January 2027' })).toBeInTheDocument();
   });
 
+  it('restores keyboard focus to overflow after the nested detail journey', async () => {
+    render(<MemoryRouter initialEntries={['/calendar/month?month=2027-01']}><MonthView accounts={ACCOUNTS} /></MemoryRouter>);
+    await act(async () => {});
+    const trigger = screen.getByRole('button', { name: /View all 4 events/ });
+    trigger.focus();
+    fireEvent.click(trigger);
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: /Example hidden appointment/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'Close', exact: true }));
+    fireEvent.click(screen.getByRole('button', { name: 'Close day events' }));
+    expect(trigger).toHaveFocus();
+  });
+
+  it('waits for bookmarked event data before exposing a dismissible drawer', async () => {
+    let finish;
+    api.getCalendarEvents.mockReturnValue(new Promise(resolve => { finish = resolve; }));
+    render(<MemoryRouter initialEntries={['/calendar/month?month=2027-01&day=2027-01-12&event=acct-1:hidden']}><MonthView accounts={ACCOUNTS} /></MemoryRouter>);
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    await act(async () => finish({ events: [{ ...TIMED, id: 'hidden', title: 'Example hidden appointment', startTime: new Date(2027, 0, 12, 12).toISOString() }] }));
+    expect(screen.getByRole('dialog', { name: 'Example hidden appointment' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Close', exact: true }));
+    expect(screen.getByRole('button', { name: 'Close day events' })).toBeInTheDocument();
+  });
+
   it.each(['2027-02-30', '2020-01-01', 'garbage'])('ignores malformed or off-grid day %s', async day => {
     render(<MemoryRouter initialEntries={['/calendar/month?month=2027-01&day=' + day]}><MonthView accounts={ACCOUNTS} /></MemoryRouter>);
     await act(async () => {});
