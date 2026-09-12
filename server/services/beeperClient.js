@@ -282,49 +282,50 @@ async function beeperRequest(path, {
   const reqHeaders = { 'Content-Type': 'application/json', ...headers };
   if (resolved.token) reqHeaders.Authorization = `Bearer ${resolved.token}`;
 
-  // fetchWithTimeout owns the deadline only until response headers arrive. Keep
-  // a caller-owned signal alive through body consumption as well, so a local
-  // bridge cannot hold a request open indefinitely after answering headers.
-  const requestController = new AbortController();
-  const hasDeadline = Number.isFinite(timeoutMs) && timeoutMs > 0;
-  const deadlineId = hasDeadline ? setTimeout(() => requestController.abort(), timeoutMs) : null;
+  // `timeoutMs` covers headers AND body consumption inside `fetchWithTimeout`
+  // (#7236), so there is no second body deadline to keep here. What that helper
+  // deliberately does NOT bound is a whole retry SEQUENCE — each replay gets a
+  // fresh budget — so a read that may replay carries a caller-owned signal as
+  // the TOTAL deadline, which is exactly the hook `waitForRetry` honors. A
+  // Beeper that keeps dropping connections therefore cannot stretch one logical
+  // request across unbounded backoffs.
+  const totalDeadline = allowRetry && Number.isFinite(timeoutMs) && timeoutMs > 0 ? new AbortController() : null;
+  const totalDeadlineId = totalDeadline ? setTimeout(() => totalDeadline.abort(), timeoutMs) : null;
 
   let response;
   let data;
   try {
-    try {
-      response = await fetchWithTimeout(`${resolved.baseUrl}${path}`, {
-        method,
-        headers: reqHeaders,
-        redirect: 'error',
-        body: body === undefined ? undefined : JSON.stringify(body),
-        signal: requestController.signal,
-      }, timeoutMs, allowRetry ? READ_RETRY : {});
+    response = await fetchWithTimeout(`${resolved.baseUrl}${path}`, {
+      method,
+      headers: reqHeaders,
+      redirect: 'error',
+      body: body === undefined ? undefined : JSON.stringify(body),
+      ...(totalDeadline ? { signal: totalDeadline.signal } : {}),
+    }, timeoutMs, allowRetry ? READ_RETRY : {});
 
-      if (response.status === 204) {
-        noteSuccess();
-        return null;
-      }
-      data = await readResponseJson(response, { fallback: (text) => ({ message: text }) });
-    } catch (err) {
-      const description = describeFetchError(err);
-      // AbortController firing (during headers OR body consumption) is the one
-      // network failure that means "no answer arrived in time" rather than
-      // "nothing is listening" — the distinction `probeBeeperInfo` needs to
-      // tell `slow` from `unreachable` (fork issue #61, decision 7).
-      const timedOut = /\babort/i.test(description);
-      throw new BeeperApiError(`Beeper request failed: ${description}`, {
-        status: 0, code: 'NETWORK_ERROR', retryable: allowRetry && isReplayableConnectionError(err),
-        details: timedOut ? { timedOut: true } : undefined,
-      });
+    if (response.status === 204) {
+      noteSuccess();
+      return null;
     }
-
-    if (!response.ok) throw mapBeeperResponseError(response.status, data, { isAssetEndpoint, retryEligible: allowRetry });
-    noteSuccess();
-    return data;
+    data = await readResponseJson(response, { fallback: (text) => ({ message: text }) });
+  } catch (err) {
+    const description = describeFetchError(err);
+    // AbortController firing (during headers OR body consumption) is the one
+    // network failure that means "no answer arrived in time" rather than
+    // "nothing is listening" — the distinction `probeBeeperInfo` needs to
+    // tell `slow` from `unreachable` (fork issue #61, decision 7).
+    const timedOut = /\babort/i.test(description);
+    throw new BeeperApiError(`Beeper request failed: ${description}`, {
+      status: 0, code: 'NETWORK_ERROR', retryable: allowRetry && isReplayableConnectionError(err),
+      details: timedOut ? { timedOut: true } : undefined,
+    });
   } finally {
-    if (deadlineId !== null) clearTimeout(deadlineId);
+    if (totalDeadlineId !== null) clearTimeout(totalDeadlineId);
   }
+
+  if (!response.ok) throw mapBeeperResponseError(response.status, data, { isAssetEndpoint, retryEligible: allowRetry });
+  noteSuccess();
+  return data;
 }
 
 // ---------------------------------------------------------------------------
@@ -727,13 +728,14 @@ export async function downloadAsset(url, { baseUrl, token, timeoutMs } = {}) {
  * ordinarily-retryable `UPSTREAM_ERROR` a generic "5xx is transient" policy
  * would loop on forever.
  */
-// Time to the RESPONSE HEADERS, not to the last byte: `fetchWithTimeout` clears
-// its abort timer once `fetch` resolves, which is the moment the headers land.
+// Time to the RESPONSE HEADERS, not to the last byte — which is why this is the
+// one call site that opts out of `fetchWithTimeout`'s body deadline below.
 // Generous rather than the 15s a JSON call gets, because Beeper may have to
 // pull the media off the network before it can answer at all. The BODY is
 // bounded separately by the mirror's own idle-abort (`STREAM_IDLE_TIMEOUT_MS`
 // in `beeperAttachments.js`), which is what a caller passing `signal` here is
-// usually doing.
+// usually doing — a whole-transfer ceiling here would instead kill a large
+// attachment that is streaming along perfectly happily.
 const ASSET_REQUEST_TIMEOUT_MS = 60_000;
 
 function assetErrorFrom(response) {
@@ -762,7 +764,7 @@ async function assetRequest(mxcId, { method, baseUrl, token, timeoutMs = ASSET_R
     headers: { Authorization: `Bearer ${resolved.token}` },
     redirect: 'error',
     signal,
-  }, timeoutMs).catch((err) => {
+  }, timeoutMs, { bodyDeadline: false }).catch((err) => {
     throw new BeeperApiError(`Beeper asset request failed: ${describeFetchError(err)}`, {
       status: 0, code: 'NETWORK_ERROR', retryable: false,
     });
