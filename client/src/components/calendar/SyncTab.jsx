@@ -4,9 +4,9 @@ import toast from '../ui/Toast';
 import { formatDateTime } from '../../utils/formatters';
 import * as api from '../../services/api';
 import socket from '../../services/socket';
+import { useAccountSyncStatus } from '../../hooks/useAccountSyncStatus';
 
 export default function SyncTab({ accounts, onRefresh }) {
-  const [syncing, setSyncing] = useState({});
   const [tokenStatus, setTokenStatus] = useState(null);
   const [tokenLoading, setTokenLoading] = useState(true);
   const [mcpProgress, setMcpProgress] = useState({});
@@ -17,66 +17,39 @@ export default function SyncTab({ accounts, onRefresh }) {
     setTokenLoading(false);
   }, []);
 
+  const clearProgress = useCallback((accountId) => {
+    setMcpProgress(prev => { const next = { ...prev }; delete next[accountId]; return next; });
+  }, []);
+
+  const { syncing, sync } = useAccountSyncStatus({
+    eventPrefix: 'calendar',
+    label: 'Calendar sync',
+    successText: ({ newEvents }) => `Calendar sync complete: ${newEvents ?? 0} events`,
+    onRefresh,
+    // Direct Google pushes carry calendarId and have no started event.
+    isStandaloneCompletion: ({ calendarId }) => Boolean(calendarId),
+    onStart: clearProgress,
+    onTerminal: clearProgress,
+  });
+
+  useEffect(() => { fetchTokenStatus(); }, [fetchTokenStatus]);
+
   useEffect(() => {
-    fetchTokenStatus();
-
-    const onSyncStarted = ({ accountId }) => {
-      setSyncing(prev => ({ ...prev, [accountId]: 'syncing' }));
-    };
-    const onSyncCompleted = ({ accountId, newEvents }) => {
-      setSyncing(prev => ({ ...prev, [accountId]: null }));
-      setMcpProgress(prev => { const next = {...prev}; delete next[accountId]; return next; });
-      toast.success(`Calendar sync complete: ${newEvents ?? 0} events`);
-      onRefresh();
-    };
-    const onSyncFailed = ({ accountId, error }) => {
-      setSyncing(prev => ({ ...prev, [accountId]: null }));
-      toast.error(`Calendar sync failed: ${error ?? 'unknown error'}`);
-    };
-
     const onSyncProgress = ({ accountId, message }) => {
       setMcpProgress(prev => ({ ...prev, [accountId]: message }));
     };
-
-    socket.on('calendar:sync:started', onSyncStarted);
-    socket.on('calendar:sync:completed', onSyncCompleted);
-    socket.on('calendar:sync:failed', onSyncFailed);
     socket.on('calendar:sync:progress', onSyncProgress);
+    return () => socket.off('calendar:sync:progress', onSyncProgress);
+  }, []);
 
-    return () => {
-      socket.off('calendar:sync:started', onSyncStarted);
-      socket.off('calendar:sync:completed', onSyncCompleted);
-      socket.off('calendar:sync:failed', onSyncFailed);
-      socket.off('calendar:sync:progress', onSyncProgress);
-    };
-  }, [fetchTokenStatus, onRefresh]);
+  const handleSync = (accountId) => sync(accountId, () => api.syncCalendarAccount(accountId, { silent: true }));
 
-  const handleSync = async (accountId) => {
-    setSyncing(prev => ({ ...prev, [accountId]: 'syncing' }));
-    await api.syncCalendarAccount(accountId).catch(() => {
-      setSyncing(prev => ({ ...prev, [accountId]: null }));
-    });
-  };
-
-  const handleGoogleSync = async (account) => {
-    setSyncing(prev => ({ ...prev, [account.id]: 'syncing' }));
+  const handleGoogleSync = (account) => sync(account.id, () => {
     setMcpProgress(prev => ({ ...prev, [account.id]: 'Starting Google Calendar sync...' }));
-
-    const useApi = account.syncMethod === 'google-api';
-    const result = useApi
-      ? await api.apiSyncGoogleCalendar(account.id).catch(() => null)
-      : await api.mcpSyncGoogleCalendar(account.id).catch(() => null);
-
-    setMcpProgress(prev => { const next = {...prev}; delete next[account.id]; return next; });
-    if (!result || result.error) {
-      setSyncing(prev => ({ ...prev, [account.id]: null }));
-      if (result?.error?.includes('spawn Claude')) {
-        toast.error('Claude CLI not found. Ensure Claude Code is installed and in your PATH.');
-      } else if (result?.error?.includes('OAuth')) {
-        toast.error('Google OAuth not configured. Set up in Config tab.');
-      }
-    }
-  };
+    return account.syncMethod === 'google-api'
+      ? api.apiSyncGoogleCalendar(account.id, { silent: true })
+      : api.mcpSyncGoogleCalendar(account.id, { silent: true });
+  });
 
   const handleTestToken = async (provider) => {
     const result = await api.testCalendarToken(provider).catch(() => null);

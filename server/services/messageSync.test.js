@@ -47,6 +47,17 @@ vi.mock('./messagePlaywrightSync.js', () => ({
   refreshMessageDetail: vi.fn()
 }));
 
+// Keep provider fallback and secondary activity writes inside the fixture;
+// these sync tests must never reach browser credentials or a persistent store.
+vi.mock('./messageApiSync.js', () => ({
+  syncOutlookApi: vi.fn(async () => null),
+}));
+vi.mock('./humanActivity.js', async (importOriginal) => ({
+  ...await importOriginal(),
+  recordEvents: vi.fn(async () => ({ recorded: 0, skipped: 0 })),
+  stripParticipantsForAccount: vi.fn(async () => 0),
+}));
+
 // tribe.js is loaded dynamically by logMessageTouchpoints; mock it so the
 // producer test asserts the candidates without a live Postgres.
 vi.mock('./tribe.js', () => ({
@@ -435,7 +446,7 @@ describe('syncAccount', () => {
     syncPlaywright.mockResolvedValue([]);
     updateSyncStatus.mockResolvedValue();
 
-    const result = await syncAccount(VALID_UUID, mockIo);
+    await syncAccount(VALID_UUID, mockIo);
 
     expect(syncPlaywright).toHaveBeenCalled();
   });

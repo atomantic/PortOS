@@ -6,7 +6,7 @@ import QueueInvestigationButton from '../ui/QueueInvestigationButton';
 import { formatDateTime } from '../../utils/formatters';
 import { buildSelectorTestFailureTask } from '../../lib/selectorTestFailureTask';
 import * as api from '../../services/api';
-import socket from '../../services/socket';
+import { useAccountSyncStatus } from '../../hooks/useAccountSyncStatus';
 
 // Human-facing summary per `testSelectors()` status — kept out of JSX so the
 // failure-task builder and the toast can share the same wording.
@@ -26,7 +26,6 @@ const DEFAULT_SELECTORS = {
 };
 
 export default function SyncTab({ accounts, onRefresh }) {
-  const [syncing, setSyncing] = useState({});
   const [rawSelectors, setRawSelectors] = useState({});
   const [editingSelector, setEditingSelector] = useState(null);
   const [selectorForm, setSelectorForm] = useState({});
@@ -45,51 +44,22 @@ export default function SyncTab({ accounts, onRefresh }) {
     setRawSelectors(data || {});
   }, []);
 
-  useEffect(() => {
-    fetchSelectors();
+  const { syncing, sync } = useAccountSyncStatus({
+    eventPrefix: 'messages',
+    label: 'Sync',
+    successText: ({ newMessages }) => `Sync complete: ${newMessages ?? 0} new messages`,
+    onRefresh,
+  });
 
-    const onSyncStarted = ({ accountId }) => {
-      setSyncing(prev => ({ ...prev, [accountId]: 'syncing' }));
-    };
-    const onSyncCompleted = ({ accountId, newMessages, status }) => {
-      if (status && status !== 'success') return; // non-success handled by specific event (e.g. sync:auth-required)
-      setSyncing(prev => ({ ...prev, [accountId]: null }));
-      toast.success(`Sync complete: ${newMessages} new messages`);
-      onRefresh();
-    };
-    const onAuthRequired = ({ accountId }) => {
-      setSyncing(prev => ({ ...prev, [accountId]: 'auth-required' }));
-      toast('Login required -- open Browser page to authenticate', { icon: '\uD83D\uDD10' });
-    };
-    const onSyncFailed = ({ accountId, error }) => {
-      setSyncing(prev => ({ ...prev, [accountId]: null }));
-      toast.error(`Sync failed: ${error ?? 'unknown error'}`);
-    };
-
-    socket.on('messages:sync:started', onSyncStarted);
-    socket.on('messages:sync:completed', onSyncCompleted);
-    socket.on('messages:sync:auth-required', onAuthRequired);
-    socket.on('messages:sync:failed', onSyncFailed);
-
-    return () => {
-      socket.off('messages:sync:started', onSyncStarted);
-      socket.off('messages:sync:completed', onSyncCompleted);
-      socket.off('messages:sync:auth-required', onAuthRequired);
-      socket.off('messages:sync:failed', onSyncFailed);
-    };
-  }, [fetchSelectors, onRefresh]);
+  useEffect(() => { fetchSelectors(); }, [fetchSelectors]);
 
   const handleLaunch = async (accountId) => {
     const result = await api.launchMessageBrowser(accountId).catch(() => null);
     if (result?.success) toast.success('Browser tab opened — log in if needed, then sync');
   };
 
-  const handleSync = async (accountId, mode = 'unread') => {
-    setSyncing(prev => ({ ...prev, [accountId]: 'syncing' }));
-    await api.syncMessageAccount(accountId, mode).catch(() => {
-      setSyncing(prev => ({ ...prev, [accountId]: null }));
-    });
-  };
+  const handleSync = (accountId, mode = 'unread') =>
+    sync(accountId, () => api.syncMessageAccount(accountId, mode, { silent: true }));
 
   const handleSaveSelectors = async (provider) => {
     const result = await api.updateMessageSelectors(provider, selectorForm).catch(() => null);
