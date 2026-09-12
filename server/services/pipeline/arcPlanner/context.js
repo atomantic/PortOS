@@ -20,7 +20,7 @@ import {
 import { describeStructure, recommendStructure } from '../../../lib/seasonStructure.js';
 import { computeIssueTargets, CUSTOM_PAGE_MIN, CUSTOM_PAGE_MAX, CUSTOM_MINUTE_MIN, CUSTOM_MINUTE_MAX, DEFAULT_LENGTH_PROFILE, LENGTH_PROFILE_NAMES } from '../../../lib/issueLength.js';
 import { getUniverse } from '../../universeBuilder.js';
-import { getSeriesPlanningCanon, scopeCanonForSeries } from '../seriesCanon.js';
+import { getSeriesPlanningCanon } from '../seriesCanon.js';
 import { CHARACTER_NARRATIVE_ARC_MAX, renderCanonForPrompt, renderCategoriesForPrompt, renderCharacterNarrativeContext, renderCompositesForPrompt, renderEntitiesSummary } from '../../../lib/universePromptRenderers.js';
 import { trimToClause } from '../../../lib/textUtils.js';
 
@@ -103,7 +103,7 @@ export async function loadWorldContext(series) {
   if (!series?.universeId) return null;
   const world = await getUniverse(series.universeId).catch(() => null);
   if (!world) return null;
-  const planningCanon = scopeCanonForSeries(world, series);
+  const planningCanon = await getSeriesPlanningCanon(series, world);
   const scopedWorld = { ...world, ...planningCanon };
 
   const embrace = Array.isArray(world.influences?.embrace) ? world.influences.embrace : [];
