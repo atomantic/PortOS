@@ -10,7 +10,7 @@
 import { runStagedLLM } from '../../stageRunner.js';
 import { ServerError } from '../../../lib/errorHandler.js';
 import { stripAnsi } from '../../../lib/ansiStrip.js';
-import { ARC_LOCKABLE_FIELDS, getSeries, updateSeries } from '../series.js';
+import { ARC_LOCKABLE_FIELDS, MANUSCRIPT_TYPES, getSeries, updateSeries } from '../series.js';
 import { listIssues, listIssuesForSeries, recomputeIssueNumbersForSeries, updateIssue, updateStageWithLatest, updateStagesWithLatest } from '../issues.js';
 import { emitRecordUpdated, withReexportSuppressed } from '../../sharing/recordEvents.js';
 import { getSeason } from '../seasons.js';
@@ -682,7 +682,7 @@ function countCharacterArcChanges(patch, current) {
  * replacement, the ignored spelling of a long prose field) is not one either —
  * rejecting on those would fail candidates that were already going to be no-ops.
  */
-export function isolatedCandidateRejection(edits, { exactTextMode = false, series = {}, matchedSeasons } = {}) {
+export function isolatedCandidateRejection(edits, { exactTextMode = false, series = {}, matchedSeasons, issues = [] } = {}) {
   const touched = [];
   if (edits.arc) {
     const changes = countFieldChanges(edits.arc, series.arc || {}, {
@@ -717,7 +717,14 @@ export function isolatedCandidateRejection(edits, { exactTextMode = false, serie
   // would drop (no integer episode number, past its cap) is not counted as a
   // record this candidate touches.
   for (const episode of shapeEpisodeResolutions(edits.episodes)) {
-    touched.push({ label: `episode ${episode.episodeNumber}`, changes: 1 });
+    // A custom profile and its two targets are one indivisible length choice.
+    const existing = matchIssueForEpisodeEdit(issues, seasonIdByNumberOf(series), episode);
+    const changes = Number(Boolean(episode.synopsis) && (!existing || episode.synopsis !== existing.stages?.idea?.input))
+      + Number('arcRole' in episode && (!existing || episode.arcRole !== existing.arcRole))
+      + Number('lengthProfile' in episode && (!existing || EPISODE_METADATA_FIELDS.slice(1)
+        .some((field) => Object.hasOwn(episode, field) && episode[field] !== existing[field])));
+    if (!changes) continue;
+    touched.push({ label: `episode ${episode.episodeNumber}`, changes });
   }
   if (touched.length === 0) return 'it changed nothing this gate would persist';
   if (touched.length > 1) {
@@ -733,8 +740,8 @@ export function isolatedCandidateRejection(edits, { exactTextMode = false, serie
 
 // Character arcs are patched in place by existing IDs; episode (issue) records
 // are never CREATED or DELETED here, and their drafted scripts are never
-// clobbered — a full-arc round may rewrite an episode's planning synopsis (see
-// `applyEpisodeResolutions`), and nothing else. If a
+// clobbered — a full-arc round may rewrite an episode's planning synopsis or
+// an unproduced issue's role/length (see `applyEpisodeResolutions`). If a
 // finding's only actionable resolution would require deleting issues, the LLM
 // is told to flag that in the response's `notes` field rather than executing it.
 // `options.findings` empty / omitted = re-run verify first and resolve
@@ -855,7 +862,10 @@ export async function resolveVerifyIssues(seriesId, options = {}) {
   // the reason. The post-apply verifier and rollback still judge everything that
   // DOES get through.
   const isolationRejected = isolated
-    ? isolatedCandidateRejection(edits, { exactTextMode, series, matchedSeasons: matchedExisting })
+    ? isolatedCandidateRejection(edits, {
+      exactTextMode, series, matchedSeasons: matchedExisting,
+      issues: edits.episodes.length ? await listIssues({ seriesId }) : [],
+    })
     : null;
   if (isolationRejected) {
     console.log(`⚠️ arc-resolve: discarded an isolated repair candidate — ${isolationRejected}`);
@@ -1027,8 +1037,11 @@ export async function resolveVerifyIssues(seriesId, options = {}) {
   };
 }
 
+const EPISODE_METADATA_FIELDS = ['arcRole', 'lengthProfile', 'pageTarget', 'minutesTarget'];
+const episodeMetadataOf = (issue) => Object.fromEntries(EPISODE_METADATA_FIELDS.map((field) => [field, issue[field] ?? null]));
+
 /**
- * Apply the auto-resolve pass's episode-synopsis corrections to the canonical
+ * Apply the auto-resolve pass's episode planning corrections to the canonical
  * issue records. Each correction targets one issue by its series-global episode
  * number (with `seasonNumber` as a disambiguating cross-check). Writes the new
  * synopsis to the issue's `idea.input` seed. If that issue already has expanded
@@ -1037,8 +1050,11 @@ export async function resolveVerifyIssues(seriesId, options = {}) {
  * regenerates them from the corrected synopsis instead of leaving stale beats
  * that still encode the contradiction.
  *
+ * Role/length changes are limited to unproduced issues and clear expanded beats.
+ * Metadata and beat invalidation share one owning-service write.
  * A locked `idea` stage is left untouched (the user froze it) and reported as
- * skipped. Returns `[{ issueId, number, seasonNumber, clearedBeats, skipped, idea }]`
+ * skipped. Returns entries with the written `idea` and/or sparse `metadata`, plus
+ * identity, `clearedBeats`, and an optional `skipped` reason
  * for the conductor to surface; never throws — a bad match is dropped, not fatal.
  *
  * `idea` is the stage AS THIS CALL LEFT IT, and it is what makes the entry a
@@ -1053,7 +1069,7 @@ export async function applyEpisodeResolutions(seriesId, series, episodes) {
   const issues = await listIssues({ seriesId });
   const seasonIdByNumber = seasonIdByNumberOf(series);
   const applied = [];
-  for (const edit of episodes) {
+  for (const edit of shapeEpisodeResolutions(episodes)) {
     // Season match required when the named season resolves, else series-global
     // number; fail-safe to no-match on a numbering-scheme mismatch (see
     // matchIssueForEpisodeEdit). A bad match is logged below, never fatal.
@@ -1069,13 +1085,37 @@ export async function applyEpisodeResolutions(seriesId, series, episodes) {
       applied.push({ issueId: issue.id, number: issue.number, seasonNumber: edit.seasonNumber, skipped: 'locked' });
       continue;
     }
-    const hadBeats = !!(issue.stages?.idea?.output && issue.stages.idea.output.trim());
-    const written = await updateStageWithLatest(issue.id, 'idea', (current) => (
-      hadBeats
-        ? { input: edit.synopsis, output: '', status: 'empty', errorMessage: '' }
-        : { input: edit.synopsis }
-    )).catch((err) => {
-      console.log(`⚠️ arc-resolve: episode ${edit.episodeNumber} synopsis edit failed: ${err.message}`);
+    const metadata = Object.fromEntries(EPISODE_METADATA_FIELDS
+      .filter((field) => Object.hasOwn(edit, field) && edit[field] !== issue[field])
+      .map((field) => [field, edit[field]]));
+    const metadataChanged = Object.keys(metadata).length > 0;
+    const hasSynopsis = typeof edit.synopsis === 'string' && edit.synopsis.trim().length > 0;
+    if (!metadataChanged && !hasSynopsis) {
+      applied.push({ issueId: issue.id, number: issue.number, seasonNumber: edit.seasonNumber, skipped: 'unchanged' });
+      continue;
+    }
+    // This repair owns the plan, not regeneration of an existing manuscript or
+    // page layout. A length/role change after production needs explicit review.
+    const pages = issue.stages?.comicPages;
+    if (metadataChanged && (MANUSCRIPT_TYPES.some((stage) => {
+      const value = issue.stages?.[stage];
+      return value?.output?.trim() || value?.input?.trim();
+    }) || pages?.pages?.length || ['cover', 'backCover'].some((slot) => pages?.[slot]?.proofImage || pages?.[slot]?.finalImage))) {
+      applied.push({ issueId: issue.id, number: issue.number, seasonNumber: edit.seasonNumber, skipped: 'existing-production' });
+      continue;
+    }
+    const hadBeats = Boolean(issue.stages?.idea?.output?.trim());
+    const ideaPatch = {
+      ...(hasSynopsis ? { input: edit.synopsis } : {}),
+      ...(hadBeats ? { output: '', status: 'empty', errorMessage: '' } : {}),
+    };
+    const writesIdea = Object.keys(ideaPatch).length > 0;
+    // Metadata and any resulting beat invalidation belong to one stored write.
+    const write = metadataChanged
+      ? updateIssue(issue.id, { ...metadata, ...(writesIdea ? { stages: { idea: ideaPatch } } : {}) })
+      : updateStageWithLatest(issue.id, 'idea', () => ideaPatch).then((result) => result.issue);
+    const written = await write.catch((err) => {
+      console.log(`⚠️ arc-resolve: episode ${edit.episodeNumber} planning edit failed: ${err.message}`);
       return null;
     });
     applied.push({
@@ -1083,7 +1123,13 @@ export async function applyEpisodeResolutions(seriesId, series, episodes) {
       number: issue.number,
       seasonNumber: edit.seasonNumber,
       clearedBeats: hadBeats,
-      ...(written ? { idea: ideaSnapshotOf(written.stage) } : { skipped: 'write-failed' }),
+      ...(written ? {
+        ...(writesIdea ? { idea: ideaSnapshotOf(written.stages?.idea) } : {}),
+        ...(metadataChanged ? {
+          metadata: Object.fromEntries(Object.keys(metadata).map((field) => [field, written[field]])),
+          metadataGuard: episodeMetadataOf(written),
+        } : {}),
+      } : { skipped: 'write-failed' }),
     });
   }
   if (applied.length) {
@@ -1107,7 +1153,7 @@ const sameIdea = (a, b) => a.input === b.input && a.output === b.output && a.sta
 
 /**
  * The episode-synopsis writes ONE resolve pass actually landed, as
- * `[{ issueId, idea }]` — the exact-mutation manifest a rollback needs so it can
+ * `[{ issueId, idea?, metadata?, metadataGuard? }]` — the exact-mutation manifest a rollback needs so it can
  * tell its own round's edits from a write that arrived from somewhere else while
  * the verification was running. Derived from the applier's own report — an entry
  * carries `idea` only when the write went through, never when it was skipped or
@@ -1119,8 +1165,12 @@ const sameIdea = (a, b) => a.input === b.input && a.output === b.output && a.sta
  */
 export const resolvedEpisodeEdits = (resolved) => (Array.isArray(resolved?.episodesResolved)
   ? resolved.episodesResolved
-    .filter((entry) => entry?.issueId && entry.idea)
-    .map((entry) => ({ issueId: entry.issueId, idea: entry.idea }))
+    .filter((entry) => entry?.issueId && (entry.idea || entry.metadata))
+    .map((entry) => ({
+      issueId: entry.issueId,
+      ...(entry.idea ? { idea: entry.idea } : {}),
+      ...(entry.metadata ? { metadata: entry.metadata, metadataGuard: entry.metadataGuard } : {}),
+    }))
   : []);
 
 // Every issue in the series, without per-stage run history: `listIssues` caps at
@@ -1131,7 +1181,7 @@ const listEpisodesForSnapshot = (seriesId) => listIssuesForSeries(seriesId, { wi
 
 /**
  * Capture everything ONE auto-resolve round can rewrite — the series arc,
- * per-character arcs, volume records, and each episode's planning synopsis
+ * per-character arcs, volume records, and each episode's planning synopsis and role/length metadata
  * (plus which volume it sits under) — so a round that leaves verification WORSE
  * can be reverted instead of committed. Read-only; the caller holds the snapshot
  * for the duration of the round (see `runArcVerify`'s regression guard).
@@ -1150,6 +1200,7 @@ export async function snapshotArcState(seriesId) {
       id: iss.id,
       seasonId: iss.seasonId ?? null,
       idea: ideaSnapshotOf(iss.stages?.idea),
+      metadata: episodeMetadataOf(iss),
     })),
   };
 }
@@ -1170,8 +1221,8 @@ export async function snapshotArcState(seriesId) {
  * A locked `idea` stage IS skipped — the resolve pass never touched it.
  *
  * `options.episodeEdits` is the round's exact mutation manifest (see
- * `resolvedEpisodeEdits`): pass it and only those episodes' `idea` fields are
- * eligible, and only while the value the resolver wrote is still the one
+ * `resolvedEpisodeEdits`): pass it and only those episodes' recorded idea and
+ * metadata changes are eligible, and only while the value the resolver wrote is still the one
  * standing — "differs from the snapshot" was never proof the round owned the
  * difference. Two deliberate limits on that:
  *   - Volume reassignment is never manifest-gated. The volume list is being
@@ -1202,10 +1253,16 @@ export async function restoreArcState(seriesId, snapshot, { episodeEdits = null 
   const byId = new Map(issues.map((iss) => [iss.id, iss]));
   // What the round is on record as having written to each episode, or null when
   // the caller kept the pre-manifest "restore every difference" contract.
-  const ownedIdea = Array.isArray(episodeEdits)
-    ? new Map(episodeEdits.map((e) => [e.issueId, e.idea]))
-    : null;
+  const ownedEdits = Array.isArray(episodeEdits) ? new Map() : null;
+  for (const edit of Array.isArray(episodeEdits) ? episodeEdits : []) {
+    const prior = ownedEdits.get(edit.issueId) || {};
+    ownedEdits.set(edit.issueId, {
+      ...prior, ...edit,
+      metadata: { ...prior.metadata, ...edit.metadata },
+    });
+  }
   const stageUpdates = [];
+  const metadataUpdates = [];
   const reassign = [];
   for (const snap of snapshot.episodes) {
     const cur = byId.get(snap.id);
@@ -1215,19 +1272,36 @@ export async function restoreArcState(seriesId, snapshot, { episodeEdits = null 
     if ((cur.seasonId ?? null) !== snap.seasonId) reassign.push(snap);
     if (cur.stages?.idea?.locked === true) continue;
     const idea = ideaSnapshotOf(cur.stages?.idea);
-    if (sameIdea(idea, snap.idea)) continue;
-    if (ownedIdea) {
-      const written = ownedIdea.get(snap.id);
-      // Either the round never wrote this episode, or its write has since been
-      // overwritten — in both cases what stands is someone else's, not the
-      // regressive candidate this rollback is undoing.
-      if (!written || !sameIdea(idea, written)) continue;
+    const owned = ownedEdits?.get(snap.id);
+    let metadataPatch = {};
+    // Legacy snapshots do not own metadata. For current snapshots, restore only
+    // fields this round changed and only while its result still stands. Length
+    // is one choice: a later page-count edit must not have its profile reset.
+    if (snap.metadata) {
+      const lengthFields = EPISODE_METADATA_FIELDS.slice(1);
+      const lengthStillOwned = !ownedEdits || (owned?.metadata && lengthFields.every((field) => {
+        const guard = owned.metadataGuard || owned.metadata;
+        return !Object.hasOwn(guard, field) || (cur[field] ?? null) === guard[field];
+      }));
+      metadataPatch = Object.fromEntries(EPISODE_METADATA_FIELDS.filter((field) => (
+        Object.hasOwn(snap.metadata, field) && (cur[field] ?? null) !== snap.metadata[field]
+        && (!ownedEdits || (Object.hasOwn(owned?.metadata || {}, field)
+          && (cur[field] ?? null) === owned.metadata[field]
+          && (field === 'arcRole' || lengthStillOwned)))
+      )).map((field) => [field, snap.metadata[field]]));
+      if (Object.keys(metadataPatch).length) metadataUpdates.push({ issueId: snap.id, patch: metadataPatch });
     }
-    stageUpdates.push({
-      issueId: snap.id,
-      stageId: 'idea',
-      computeFn: () => ({ ...snap.idea, errorMessage: '' }),
-    });
+    if (!sameIdea(idea, snap.idea) && (!ownedEdits || (owned?.idea && sameIdea(idea, owned.idea)))) {
+      const restoredMetadata = { ...episodeMetadataOf(cur), ...metadataPatch };
+      const metadataStillChanged = snap.metadata && EPISODE_METADATA_FIELDS
+        .some((field) => restoredMetadata[field] !== snap.metadata[field]);
+      // A later author choice can keep a new length or role. Restore our old
+      // synopsis, but never resurrect beats sized for the superseded plan.
+      const restoredIdea = metadataStillChanged && snap.idea.output
+        ? { ...snap.idea, output: '', status: 'empty' }
+        : snap.idea;
+      stageUpdates.push({ issueId: snap.id, stageId: 'idea', computeFn: () => ({ ...restoredIdea, errorMessage: '' }) });
+    }
   }
   // Same write ordering as `commitSeasonsWithRemap`: seasons first, so a crash
   // between writes can't leave an issue pointing at a volume that isn't in
@@ -1242,11 +1316,13 @@ export async function restoreArcState(seriesId, snapshot, { episodeEdits = null 
       await updateIssue(snap.id, { seasonId: snap.seasonId }, { skipRenumber: true });
     }
     if (reassign.length) await recomputeIssueNumbersForSeries(seriesId);
+    for (const { issueId, patch } of metadataUpdates) await updateIssue(issueId, patch);
     await updateStagesWithLatest(seriesId, stageUpdates);
   });
   emitRecordUpdated('series', seriesId);
   console.log(`↩️ arc-resolve: reverted a regressive round for series ${seriesId.slice(0, 12)} — ${stageUpdates.length} episode synopsis(es), ${reassign.length} reassignment(s)`);
-  return { restored: true, episodesRestored: stageUpdates.length, reassignedIssueCount: reassign.length };
+  const episodesRestored = new Set([...stageUpdates, ...metadataUpdates].map((entry) => entry.issueId)).size;
+  return { restored: true, episodesRestored, reassignedIssueCount: reassign.length };
 }
 
 // Preserve per-field arc locks. When `currentSeries.locked.arcFields[k]` is

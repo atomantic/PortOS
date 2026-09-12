@@ -1625,6 +1625,99 @@ describe('arcPlanner — resolveVerifyIssues', () => {
     ]);
   });
 
+  it('repairs episode length and role without rewriting its synopsis, then rolls back both rounds', async () => {
+    const s = await setupSeries();
+    await seriesSvc.updateSeries(s.id, { arc: { logline: 'A crew must make a costly choice.' } });
+    const season = await seasonsSvc.createSeason(s.id, { title: 'Volume', episodeCountTarget: 1 });
+    const issue = await issuesSvc.createIssue({ seriesId: s.id, seasonId: season.id, title: 'Turn', arcRole: 'b-plot' });
+    await issuesSvc.updateStage(issue.id, 'idea', { input: 'The unchanged story.', output: 'Original beats.', status: 'ready' });
+    const before = await issuesSvc.getIssue(issue.id);
+    const snapshot = await planner.snapshotArcState(s.id);
+    const findings = [{ severity: 'medium', problem: 'The central turn needs an extended issue.' }];
+    stageRunnerSpy = vi.fn(async () => ({ content: { episodes: [{
+      resolves: ['f1'], seasonNumber: season.number, episodeNumber: before.number,
+      arcRole: before.arcRole, lengthProfile: 'custom', pageTarget: 36, minutesTarget: 42,
+    }] } }));
+
+    const length = await planner.resolveVerifyIssues(s.id, { findings, isolated: true });
+    const extended = await issuesSvc.getIssue(issue.id);
+    expect(length.applied).toBe(true);
+    expect(extended).toMatchObject({ lengthProfile: 'custom', pageTarget: 36, minutesTarget: 42 });
+    expect(extended.stages.idea).toMatchObject({ input: 'The unchanged story.', output: '', status: 'empty' });
+    stageRunnerSpy = vi.fn(async () => ({ content: { episodes: [{
+      resolves: ['f1'], seasonNumber: season.number, episodeNumber: before.number, arcRole: 'complication',
+    }] } }));
+    const role = await planner.resolveVerifyIssues(s.id, { findings, isolated: true });
+    expect((await issuesSvc.getIssue(issue.id)).arcRole).toBe('complication');
+
+    const restored = await planner.restoreArcState(s.id, snapshot, {
+      episodeEdits: [...planner.resolvedEpisodeEdits(length), ...planner.resolvedEpisodeEdits(role)],
+    });
+    expect(restored.episodesRestored).toBe(1);
+    const after = await issuesSvc.getIssue(issue.id);
+    expect(after).toMatchObject({ arcRole: before.arcRole, lengthProfile: before.lengthProfile, pageTarget: before.pageTarget, minutesTarget: before.minutesTarget });
+    expect(after.stages.idea).toMatchObject({ input: 'The unchanged story.', output: 'Original beats.', status: 'ready' });
+  });
+
+  it('keeps a later authored page-count choice when rolling back its own role correction', async () => {
+    const s = await setupSeries();
+    await seriesSvc.updateSeries(s.id, { arc: { logline: 'A crew must make a costly choice.' } });
+    const season = await seasonsSvc.createSeason(s.id, { title: 'Volume', episodeCountTarget: 1 });
+    const issue = await issuesSvc.createIssue({ seriesId: s.id, seasonId: season.id, title: 'Turn', arcRole: 'b-plot' });
+    await issuesSvc.updateStage(issue.id, 'idea', { input: 'Original synopsis.', output: 'Beats for the original length.', status: 'ready' });
+    const snapshot = await planner.snapshotArcState(s.id);
+    stageRunnerSpy = vi.fn(async () => ({ content: { episodes: [{
+      resolves: ['f1'], seasonNumber: season.number, episodeNumber: issue.number,
+      arcRole: 'complication', lengthProfile: 'custom', pageTarget: 36, minutesTarget: 42,
+    }] } }));
+    const repaired = await planner.resolveVerifyIssues(s.id, { findings: [{ severity: 'medium', problem: 'Correct the turn metadata.' }] });
+    await issuesSvc.updateIssue(issue.id, { pageTarget: 48 });
+    await planner.restoreArcState(s.id, snapshot, { episodeEdits: planner.resolvedEpisodeEdits(repaired) });
+    const restored = await issuesSvc.getIssue(issue.id);
+    expect(restored).toMatchObject({ arcRole: 'b-plot', lengthProfile: 'custom', pageTarget: 48, minutesTarget: 42 });
+    expect(restored.stages.idea).toMatchObject({ input: 'Original synopsis.', output: '', status: 'empty' });
+  });
+
+  it.each(['manuscript', 'page layout', 'back-cover image'])('refuses metadata and accompanying synopsis changes beneath an existing %s', async (production) => {
+    const s = await setupSeries();
+    await seriesSvc.updateSeries(s.id, { arc: { logline: 'A crew must make a costly choice.' } });
+    const season = await seasonsSvc.createSeason(s.id, { title: 'Volume', episodeCountTarget: 1 });
+    const issue = await issuesSvc.createIssue({ seriesId: s.id, seasonId: season.id, title: 'Turn' });
+    await issuesSvc.updateStage(issue.id, 'idea', { input: 'Established plan.' });
+    if (production === 'manuscript') await issuesSvc.updateStage(issue.id, 'prose', { output: 'Existing manuscript.', status: 'ready' });
+    else if (production === 'page layout') await issuesSvc.updateStage(issue.id, 'comicPages', { pages: [{ pageNumber: 1, panels: [] }], status: 'ready' });
+    else await issuesSvc.updateStage(issue.id, 'comicPages', { backCover: { proofImage: { filename: 'back-cover.png' } } });
+    const produced = await issuesSvc.getIssue(issue.id);
+    stageRunnerSpy = vi.fn(async () => ({ content: { episodes: [{
+      resolves: ['f1'], seasonNumber: season.number, episodeNumber: issue.number,
+      synopsis: 'Different plan.', lengthProfile: 'extended',
+    }] } }));
+    const result = await planner.resolveVerifyIssues(s.id, { findings: [{ severity: 'medium', problem: 'Needs more space.' }] });
+    expect(result.applied).toBe(false);
+    expect(result.episodesResolved[0].skipped).toBe('existing-production');
+    const after = await issuesSvc.getIssue(issue.id);
+    expect(after.lengthProfile).toBe(issue.lengthProfile);
+    expect(after.stages.idea.input).toBe('Established plan.');
+    expect(after.stages.prose).toEqual(produced.stages.prose);
+    expect(after.stages.comicPages).toEqual(produced.stages.comicPages);
+    expect(planner.resolvedEpisodeEdits(result)).toEqual([]);
+  });
+
+  it('does not persist an unkeyed role change or a malformed custom length', async () => {
+    const s = await setupSeries();
+    await seriesSvc.updateSeries(s.id, { arc: { logline: 'A crew must make a costly choice.' } });
+    const season = await seasonsSvc.createSeason(s.id, { title: 'Volume', episodeCountTarget: 1 });
+    const issue = await issuesSvc.createIssue({ seriesId: s.id, seasonId: season.id, title: 'Turn', arcRole: 'b-plot' });
+    stageRunnerSpy = vi.fn(async () => ({ content: { episodes: [
+      { seasonNumber: season.number, episodeNumber: issue.number, arcRole: 'complication' },
+      { resolves: ['f1'], seasonNumber: season.number, episodeNumber: issue.number, lengthProfile: 'custom', pageTarget: 5000, minutesTarget: 42 },
+    ] } }));
+    const result = await planner.resolveVerifyIssues(s.id, { findings: [{ severity: 'medium', problem: 'Needs more space.' }] });
+    expect(result.applied).toBe(false);
+    expect(await issuesSvc.getIssue(issue.id)).toMatchObject({ arcRole: 'b-plot', lengthProfile: issue.lengthProfile, pageTarget: issue.pageTarget });
+    expect(planner.resolvedEpisodeEdits(result)).toEqual([]);
+  });
+
   // The pre-episode arc-spine gate verifies an episode-EMPTY plan (#3789). A
   // resolver handed the full lineup answered spine findings with episode
   // rewrites the gate never read: they could not close what was flagged, and

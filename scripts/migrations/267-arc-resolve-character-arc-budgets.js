@@ -17,7 +17,7 @@ export const ACCEPTED_OLD_MD5 = {
 };
 
 export const NEW_SHIPPED_MD5 = {
-  'pipeline-arc-resolve.md': '122950b9f5ce84708ac1510ef13b1bce',
+  'pipeline-arc-resolve.md': '3f5ef41212890889811e4509a131c4e9',
 };
 
 const { applyMigration, up } = makePromptReplaceMigration({

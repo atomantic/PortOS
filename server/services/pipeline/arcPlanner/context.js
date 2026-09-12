@@ -18,7 +18,7 @@ import {
   renderCharacterEvolutionsForPrompt,
 } from '../../../lib/seriesCharacterArc.js';
 import { describeStructure, recommendStructure } from '../../../lib/seasonStructure.js';
-import { computeIssueTargets, DEFAULT_LENGTH_PROFILE, LENGTH_PROFILE_NAMES } from '../../../lib/issueLength.js';
+import { computeIssueTargets, CUSTOM_PAGE_MIN, CUSTOM_PAGE_MAX, CUSTOM_MINUTE_MIN, CUSTOM_MINUTE_MAX, DEFAULT_LENGTH_PROFILE, LENGTH_PROFILE_NAMES } from '../../../lib/issueLength.js';
 import { getUniverse } from '../../universeBuilder.js';
 import { getSeriesPlanningCanon, scopeCanonForSeries } from '../seriesCanon.js';
 import { CHARACTER_NARRATIVE_ARC_MAX, renderCanonForPrompt, renderCategoriesForPrompt, renderCharacterNarrativeContext, renderCompositesForPrompt, renderEntitiesSummary } from '../../../lib/universePromptRenderers.js';
@@ -593,9 +593,9 @@ export const RESOLVE_EPISODE_MAX = 50;
 
 /**
  * Shape the auto-resolve pass's optional `episodes[]` output — a SPARSE list of
- * episode-synopsis corrections the resolver applies when a finding originates at
+ * episode planning corrections the resolver applies when a finding originates at
  * the episode level (see pipeline-arc-resolve.md rule 8). Each entry must carry
- * an integer `episodeNumber` and a non-empty `synopsis`; `seasonNumber` is
+ * an integer `episodeNumber` and a synopsis or valid planning metadata; `seasonNumber` is
  * optional disambiguation. Malformed entries are dropped so a partial response
  * never throws.
  */
@@ -605,7 +605,18 @@ export function shapeEpisodeResolutions(rawEpisodes) {
   for (const raw of rawEpisodes) {
     const synopsis = typeof raw?.synopsis === 'string' ? raw.synopsis.trim() : '';
     const episodeNumber = Number(raw?.episodeNumber);
-    if (!synopsis || !Number.isInteger(episodeNumber)) continue;
+    if (!Number.isInteger(episodeNumber)) continue;
+    const metadata = {};
+    if (ARC_ROLES.has(raw?.arcRole)) metadata.arcRole = raw.arcRole;
+    if (SEASON_LENGTH_PRESETS.has(raw?.lengthProfile)) metadata.lengthProfile = raw.lengthProfile;
+    // A custom length is one complete choice. Reject partial/out-of-range
+    // values rather than silently falling back to standard production targets.
+    if (raw?.lengthProfile === 'custom'
+        && Number.isInteger(raw.pageTarget) && raw.pageTarget >= CUSTOM_PAGE_MIN && raw.pageTarget <= CUSTOM_PAGE_MAX
+        && Number.isInteger(raw.minutesTarget) && raw.minutesTarget >= CUSTOM_MINUTE_MIN && raw.minutesTarget <= CUSTOM_MINUTE_MAX) {
+      Object.assign(metadata, { lengthProfile: 'custom', pageTarget: raw.pageTarget, minutesTarget: raw.minutesTarget });
+    }
+    if (!synopsis && !Object.keys(metadata).length) continue;
     const seasonNumberRaw = Number(raw?.seasonNumber);
     out.push({
       seasonNumber: Number.isInteger(seasonNumberRaw) ? seasonNumberRaw : null,
@@ -615,7 +626,8 @@ export function shapeEpisodeResolutions(rawEpisodes) {
       // (200k) let a sequence of continuity repairs turn a compact plan into a
       // near-manuscript. Boundary-aware trimming avoids manufacturing the
       // half-sentence that the next verification round would immediately flag.
-      synopsis: trimToClause(synopsis, ARC_LIMITS.EPISODE_SYNOPSIS_MAX),
+      ...(synopsis ? { synopsis: trimToClause(synopsis, ARC_LIMITS.EPISODE_SYNOPSIS_MAX) } : {}),
+      ...metadata,
     });
     if (out.length >= RESOLVE_EPISODE_MAX) break;
   }
