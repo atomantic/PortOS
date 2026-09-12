@@ -32,10 +32,8 @@ import { killWithEscalation } from '../../lib/killWithEscalation.js';
 import { renderTimingFields } from '../../lib/renderTiming.js';
 import { createLineReader } from '../../lib/streamLines.js';
 import { claimHeavyLocalJob } from '../../lib/heavyJobClaim.js';
-import { prepareLocalMemory, gpuBlockersMessage } from '../localMemory.js';
 import { safeChildProcessOptions } from '../../lib/processEnv.js';
 import { IMAGE_GEN_MODE, LOCAL_IMAGEGEN_DEFAULT_MODEL } from './modes.js';
-import { computePixelDelta } from './regen.js';
 import { parseByteProgress, formatDownloadMessage } from '../videoGen/generateVideoHelpers.js';
 
 const IS_WIN = process.platform === 'win32';
@@ -676,6 +674,7 @@ export async function generateImage({ pythonPath, prompt = '', negativePrompt = 
   let proc;
   let claimHandedOff = false;
   try {
+    const { prepareLocalMemory, gpuBlockersMessage } = await import('../localMemory.js');
     const memoryReport = await prepareLocalMemory();
     // Something the unload above cannot evict already owns the GPU (today: the
     // vLLM Qwen container). Refuse here rather than let mflux die inside its
@@ -1022,7 +1021,9 @@ export async function generateImage({ pythonPath, prompt = '', negativePrompt = 
       // mflux strength-0.0 footgun, silent txt2img fallbacks, and over-mutation.
       // Best-effort — a decode failure just skips the stamp.
       if (regenOf && validInitImagePath) {
-        const delta = await computePixelDelta(validInitImagePath, outputPath).catch(() => null);
+        const delta = await import('./regen.js')
+          .then(({ computePixelDelta }) => computePixelDelta(validInitImagePath, outputPath))
+          .catch(() => null);
         if (delta) {
           meta.regenPixelDeltaPct = delta.pixelDeltaPct;
           meta.regenPsnr = delta.psnr;

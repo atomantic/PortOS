@@ -3,6 +3,9 @@ import { listGalleryPage } from './gallery.js';
 import { imageToRow } from './logic.js';
 import { query } from '../../lib/db.js';
 
+const { listAnnotations } = vi.hoisted(() => ({ listAnnotations: vi.fn() }));
+vi.mock('../mediaAnnotations.js', () => ({ listAnnotations }));
+
 vi.mock('../../lib/db.js', () => ({ query: vi.fn() }));
 afterEach(() => { vi.unstubAllEnvs(); vi.resetAllMocks(); });
 
@@ -33,5 +36,49 @@ describe('indexed gallery page', () => {
     const disk = vi.fn();
     await expect(listGalleryPage({}, disk)).rejects.toThrow('database unavailable');
     expect(disk).not.toHaveBeenCalled();
+  });
+});
+
+
+describe('recent image filters', () => {
+  it('filters by the local author before paging and counts hidden matches without loading rows', async () => {
+    vi.stubEnv('NODE_ENV', 'production');
+    vi.stubEnv('VITEST', undefined);
+    vi.stubEnv('MEMORY_BACKEND', 'db');
+    listAnnotations.mockResolvedValue({
+      'image:own.png': { own: { starred: true } },
+      'image:peer.png': { own: null, others: [{ starred: true }] },
+    });
+    query.mockImplementation(async sql => sql.includes('COUNT(*)')
+      ? { rows: [{ count: sql.includes("data->>'hidden' = 'true'") ? '2' : '12' }] }
+      : { rows: [{ data: { filename: 'own.png' } }] });
+    const disk = vi.fn();
+    const page = await listGalleryPage({ limit: 5, starred: true, hidden: false, summary: true }, disk);
+    expect(page).toEqual({ items: [{ filename: 'own.png' }], total: 12, hiddenTotal: 2, limit: 5, offset: 0 });
+    expect(query).toHaveBeenCalledTimes(3);
+    for (const [sql, params] of query.mock.calls) {
+      expect(sql).toContain('media_key = ANY($2::text[])');
+      expect(params[1]).toEqual(['image:own.png']);
+    }
+    expect(disk).not.toHaveBeenCalled();
+  });
+
+  it('uses exact filename lookup for older deep links and handles empty own favorites in the file escape hatch', async () => {
+    const disk = vi.fn(async () => [
+      { filename: 'new.png' }, { filename: 'older.png', hidden: true },
+    ]);
+    expect(await listGalleryPage({ limit: 1, filename: 'older.png' }, disk))
+      .toEqual({ items: [{ filename: 'older.png', hidden: true }], total: 1, limit: 1, offset: 0 });
+    listAnnotations.mockResolvedValue({ 'image:older.png': { others: [{ starred: true }] } });
+    expect(await listGalleryPage({ limit: 5, starred: true, summary: true }, disk))
+      .toEqual({ items: [], total: 0, hiddenTotal: 0, limit: 5, offset: 0 });
+
+    vi.stubEnv('NODE_ENV', 'production');
+    vi.stubEnv('VITEST', undefined);
+    vi.stubEnv('MEMORY_BACKEND', 'db');
+    query.mockImplementation(async sql => sql.includes('COUNT(*)') ? { rows: [{ count: '0' }] } : { rows: [] });
+    await listGalleryPage({ limit: 1, filename: 'older.png' }, disk);
+    expect(query.mock.calls[0][0]).toContain('ref = $2');
+    expect(query.mock.calls[0][1]).toEqual(['image', 'older.png', 1, 0]);
   });
 });
