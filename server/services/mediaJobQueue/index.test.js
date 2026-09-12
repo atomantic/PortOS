@@ -82,6 +82,11 @@ tryReadFile: vi.fn().mockResolvedValue(null), jobId: 'whatever' })),
   cancelVideoUpscale: vi.fn(),
 };
 
+vi.mock('../creativeDirector/videoExecution.js', () => ({
+  assertVideoAttemptDispatch: vi.fn().mockResolvedValue(undefined),
+  settleVideoAttempt: vi.fn().mockResolvedValue(undefined),
+}));
+
 vi.mock('../videoGen/local.js', () => ({
   generateVideo: (...args) => stubs.generateVideo(...args),
   generateChainedVideo: (...args) => stubs.generateChainedVideo(...args),
@@ -707,6 +712,40 @@ describe('mediaJobQueue', () => {
 
     videoGenEvents.emit('completed', { generationId: job.jobId, filename: `${job.jobId}.mp4` });
     await waitFor(() => mediaJobQueue.getJob(job.jobId).status === 'completed');
+  });
+
+  it('restores cancellation bookkeeping when a provider refuses during finalization', async () => {
+    const job = mediaJobQueue.enqueueJob({ kind: 'video', params: {
+      mode: 'grok', prompt: 'finishing render', videoProduction: { submissionUncertain: false },
+    } });
+    await waitFor(() => stubs.generateVideoGrok.mock.calls.length === 1);
+    stubs.cancelVideo.mockReturnValueOnce(false);
+    const result = await mediaJobQueue.cancelJob(job.jobId);
+    expect(result).toMatchObject({ ok: false, code: 'ALREADY_TERMINAL', error: 'Job is already finishing' });
+    expect(mediaJobQueue.getJob(job.jobId).cancelRequested).toBeFalsy();
+    expect(mediaJobQueue.getJob(job.jobId).params.videoProduction.submissionUncertain).toBe(false);
+    const snapshotFile = join(tempDataDir, 'media-jobs.json');
+    await waitFor(() => JSON.parse(readFileSync(snapshotFile, 'utf8')).jobs
+      .some((entry) => entry.id === job.jobId && entry.status === 'running'));
+    const persisted = JSON.parse(readFileSync(snapshotFile, 'utf8')).jobs.find((entry) => entry.id === job.jobId);
+    expect(persisted.params.videoProduction.submissionUncertain).toBe(false);
+    videoGenEvents.emit('failed', { generationId: job.jobId, error: 'History write failed' });
+    await waitFor(() => mediaJobQueue.getJob(job.jobId).status === 'failed');
+    expect(mediaJobQueue.getJob(job.jobId).error).toBe('History write failed');
+  });
+
+  it.each([true, undefined])('preserves accepted or legacy cancellation results (%s)', async (accepted) => {
+    const job = mediaJobQueue.enqueueJob({ kind: 'video', params: { mode: 'grok', prompt: 'cancel render', videoProduction: { projectId: 'example-project', attemptId: 'example-attempt' } } });
+    await waitFor(() => stubs.generateVideoGrok.mock.calls.length === 1);
+    stubs.cancelVideo.mockImplementationOnce(() => {
+      videoGenEvents.emit('failed', { generationId: job.jobId, error: 'Stopped' });
+      return accepted;
+    });
+    await expect(mediaJobQueue.cancelJob(job.jobId)).resolves.toMatchObject({ ok: true, status: 'canceling' });
+    await waitFor(() => mediaJobQueue.getJob(job.jobId).status === 'canceled');
+    const { settleVideoAttempt } = await import('../creativeDirector/videoExecution.js');
+    await waitFor(() => settleVideoAttempt.mock.calls.length === 1);
+    expect(settleVideoAttempt).toHaveBeenCalledWith('example-project', 'example-attempt', { jobId: job.jobId, status: 'uncertain' });
   });
 
   it('cancel during the terminal drain window is refused, not "canceling"', async () => {

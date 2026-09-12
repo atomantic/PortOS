@@ -1335,13 +1335,15 @@ export async function cancelJob(jobId) {
     if (runningJob.terminating) {
       return { ok: false, code: 'ALREADY_TERMINAL', status: runningJob.status, error: 'Job is already finishing' };
     }
+    const mod = await getGenModuleForJob(runningJob);
+    if (runningJob.terminating || runningJob.status !== 'running') {
+      return { ok: false, code: 'ALREADY_TERMINAL', status: runningJob.status, error: 'Job is already finishing' };
+    }
+    const previousCancelRequested = runningJob.cancelRequested;
+    const previousRemoteMedia = runningJob.params?.remoteMedia;
     // cancelRequested flips the dispatcher's `failed` handler into the
     // `canceled` branch instead of marking it failed.
     runningJob.cancelRequested = true;
-    if (runningJob.params?.videoProduction && ['reactor', 'fal', 'grok'].includes(runningJob.params.mode)) {
-      runningJob.params.videoProduction = { ...runningJob.params.videoProduction, submissionUncertain: true };
-      await persist();
-    }
     if (isRemoteMediaJob(runningJob)) {
       // Remote cancellation can outlive this process when the peer is down.
       // Persist the intent before signaling the adapter so boot reconciliation
@@ -1354,8 +1356,19 @@ export async function cancelJob(jobId) {
       };
       await persist().catch((e) => console.log(`⚠️ mediaJobQueue persist on remote cancel failed: ${e.message}`));
     }
-    const mod = await getGenModuleForJob(runningJob);
-    if (mod?.cancel) mod.cancel(jobId);
+    if (mod?.cancel && mod.cancel(jobId) === false) {
+      // A provider may have crossed its durable finalization boundary before
+      // its completed event reaches the queue. Refusal must not turn a later
+      // finalization failure into a cancellation or leave retry markers set.
+      runningJob.cancelRequested = previousCancelRequested;
+      if (isRemoteMediaJob(runningJob)) runningJob.params.remoteMedia = previousRemoteMedia;
+      if (isRemoteMediaJob(runningJob)) await persist();
+      return { ok: false, code: 'ALREADY_TERMINAL', status: runningJob.status, error: 'Job is already finishing' };
+    }
+    if (runningJob.params?.videoProduction && ['reactor', 'fal', 'grok'].includes(runningJob.params.mode)) {
+      runningJob.params.videoProduction = { ...runningJob.params.videoProduction, submissionUncertain: true };
+      await persist();
+    }
     console.log(`🛑 media-job [${jobId.slice(0, 8)}] cancel signal sent (was running)`);
     return { ok: true, status: 'canceling' };
   }

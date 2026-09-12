@@ -84,7 +84,7 @@ export const cancel = (jobId) => {
     throw new Error("videoGen/reactor.cancel requires a jobId — use cancelAll() to terminate every in-flight render");
   }
   const entry = activeRequests.get(jobId);
-  if (!entry) return false;
+  if (!entry || entry.finalizing) return false;
   entry.aborted = true;
   entry.stop?.('Canceled');
   return true;
@@ -271,7 +271,7 @@ export async function generateVideo({
 async function runReactorVideo(job, jobId, {
   apiKey, prompt, seconds, seed, aspect, continueFromClipId, sourceImagePath, outputPath, filename, meta,
 }) {
-  const entry = { aborted: false, stop: null };
+  const entry = { aborted: false, finalizing: false, stop: null };
   activeRequests.set(jobId, entry);
   // Declared outside the try so the finally can still delete a fitted frame
   // whose render failed after it was written.
@@ -309,6 +309,9 @@ async function runReactorVideo(job, jobId, {
       await Promise.all(samples.map((name) => rm(join(PATHS.videoThumbnails, name), { force: true }).catch(() => {})));
     }
     if (entry.aborted) return finalizeCanceled(job, jobId);
+    // Durable publication owns the output from this point until it settles.
+    // No await may separate the last cancellation check from this boundary.
+    entry.finalizing = true;
     await finalizeGeneratedVideo({ job, jobId, outputPath, filename, meta: { ...meta, aspect: frame.aspect, width: frame.canvas.width, height: frame.canvas.height, clipId: result.clipId, seconds: result.seconds }, actualSeed: seed ?? null, mutateHistory: mutateVideoHistory });
     closeJobAfterDelay(jobs, jobId);
   } catch (err) {
