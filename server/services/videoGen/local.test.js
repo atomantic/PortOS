@@ -4245,43 +4245,67 @@ describe('generateVideo — IC-LoRA remix arg threading (#3100)', () => {
       ]);
     });
 
-    it('cleans up EVERY temp clip when one still fails to encode', async () => {
-      // Promise.all rejects at the first failure while siblings are still in
-      // flight, so a push-on-success registry would miss the ones that landed
-      // afterwards. Every target path is registered before any encode starts.
+    it('waits for every encode before rejecting and cleaning derived files', async () => {
       const { execFile } = await import('../../lib/childProcess.js');
       const { unlink } = await import('fs/promises');
-      const execFileMock = vi.mocked(execFile);
-      const unlinkMock = vi.mocked(unlink);
-      execFileMock.mockClear();
-      unlinkMock.mockClear();
-
-      // Fail the SECOND still; the first and third still succeed.
-      let stillIndex = 0;
-      execFileMock.mockImplementation((_bin, args, _opts, cb) => {
-        if (args.includes('-loop')) {
-          const mine = stillIndex++;
-          if (mine === 1) return cb?.(new Error('ffmpeg exploded'));
+      const pending = [];
+      const originals = [...baseIngredients.icReferencePaths, '/mock/images/source.png'];
+      const files = new Set(originals);
+      vi.mocked(unlink).mockImplementation(async (path) => { files.delete(path); });
+      vi.mocked(execFile).mockImplementation((_bin, args, _opts, cb) => {
+        const target = args.at(-1);
+        if (args.includes('-loop')) pending.push((error) => {
+          files.add(target);
+          cb(error);
+        });
+        else {
+          files.add(target);
+          cb?.(null, '', '');
         }
-        return cb?.(null, '', '');
       });
+      let settled = false;
+      const result = generateVideo({
+        ...baseIngredients, jobId: 'ing-delayed', sourceImagePath: originals[2],
+      }).catch((error) => error).finally(() => { settled = true; });
+      await vi.waitFor(() => expect(pending).toHaveLength(2));
+      // Finish input 1 first, but report input 0's failure after both settle.
+      pending[1](new Error('second failed'));
+      await new Promise((resolve) => setImmediate(resolve));
+      expect(settled).toBe(false);
+      expect(files.size).toBe(5);
+      expect(vi.mocked(unlink).mock.calls.filter(([path]) => path.includes('ing-delayed'))).toEqual([]);
+      pending[0](new Error('first failed'));
+      expect(await result).toMatchObject({
+        code: 'IC_LORA_STILL_PREP_FAILED',
+        message: 'Failed to prepare Ingredients reference owl.png: first failed',
+      });
+      expect([...files]).toEqual(originals);
+      vi.mocked(unlink).mockImplementation(async () => {});
+      vi.mocked(execFile).mockImplementation((_bin, _args, _opts, cb) => cb?.(null, '', ''));
+    });
 
+    it('requires ffmpeg for Ingredients even when ordinary images can pass through', async () => {
+      const { findFfmpeg } = await import('../../lib/ffmpeg.js');
+      vi.mocked(findFfmpeg).mockResolvedValueOnce(null).mockResolvedValueOnce(null);
       await expect(generateVideo({
-        ...baseIngredients, jobId: 'ing-partial-fail',
-        icReferencePaths: ['/mock/images/a.png', '/mock/images/b.png', '/mock/images/c.png'],
-      })).rejects.toThrow(/Failed to prepare Ingredients reference b\.png/);
+        ...baseIngredients, jobId: 'ing-no-ffmpeg', sourceImagePath: '/mock/images/source.png',
+      })).rejects.toMatchObject({ code: 'IC_LORA_STILL_NEEDS_FFMPEG', status: 400 });
+    });
 
-      // All three temp paths unlinked, not just the ones that had resolved when
-      // the rejection fired.
-      const unlinked = unlinkMock.mock.calls.map(([p]) => String(p));
-      for (const i of [0, 1, 2]) {
-        expect(unlinked.some((p) => p.includes(`ic-still-${i}-ing-partial-fail.mp4`))).toBe(true);
-      }
-      // The ORIGINAL gallery stills are the user's files and must survive.
-      for (const f of ['/mock/images/a.png', '/mock/images/b.png', '/mock/images/c.png']) {
-        expect(unlinked).not.toContain(f);
-      }
-      execFileMock.mockImplementation((_bin, _args, _opts, cb) => cb?.(null, '', ''));
+    it.each(['missing ffmpeg', 'failed resize'])('passes the original image to the child after %s', async (failure) => {
+      const { findFfmpeg } = await import('../../lib/ffmpeg.js');
+      const { execFile } = await import('../../lib/childProcess.js');
+      const { spawnDetached } = await import('../../lib/detachedSpawn.js');
+      const { unlink } = await import('fs/promises');
+      if (failure === 'missing ffmpeg') vi.mocked(findFfmpeg).mockResolvedValueOnce(null);
+      else vi.mocked(execFile).mockImplementationOnce((_bin, _args, _opts, cb) => cb?.(new Error('resize failed')));
+      await generateVideo({
+        ...baseIcRender, mode: 'image', icReferencePaths: null,
+        jobId: 'image-fallback', sourceImagePath: '/mock/images/source.png',
+      });
+      const args = vi.mocked(spawnDetached).mock.calls.find(([, argv]) => argv.includes('--image'))[1];
+      expect(args[args.indexOf('--image') + 1]).toBe('/mock/images/source.png');
+      expect(vi.mocked(unlink).mock.calls.flat()).not.toContain('/mock/images/source.png');
     });
 
     it('also cleans up an earlier resized-source temp file when a still fails to encode', async () => {
