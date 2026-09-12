@@ -377,7 +377,7 @@ function TitleTribeChip({ conversation, onOpenParticipants, onOpenPerson }) {
  * and its 429 toasts, so it stays enabled.
  */
 function OutboxRow({
-  entry, sending, isConfirming, onRetry, onDismiss, breakerTripped, breakerReason,
+  entry, sending, isConfirming, onRetry, onDismiss, onReconcile, breakerTripped, breakerReason,
 }) {
   const failed = entry.state === 'failed';
   const interrupted = entry.errorCode === 'SEND_INTERRUPTED';
@@ -402,7 +402,7 @@ function OutboxRow({
   const unconfirmedReason = interrupted
     ? (entry.errorMessage || SEND_INTERRUPTED_COPY)
     : (responseLost
-      ? DELIVERY_UNCONFIRMED_COPY
+      ? (entry.errorCode === 'DELIVERY_UNCONFIRMED' && entry.errorMessage || DELIVERY_UNCONFIRMED_COPY)
       : `Sent, unconfirmed${entry.errorMessage ? ` — ${entry.errorMessage}` : ''}`);
   return (
     <div
@@ -446,6 +446,13 @@ function OutboxRow({
               {unconfirmedReason}
             </span>
           )}
+          {onReconcile && (unconfirmed || entry.state === 'sending' || entry.state === 'awaiting-confirmation') && (
+            <button type="button" onClick={() => onReconcile(entry)} disabled={sending}
+              title="Look up delivery without sending another message"
+              className="rounded px-1 py-0.5 text-port-accent hover:underline disabled:opacity-50">
+              Check delivery
+            </button>
+          )}
           {!blocked && !unconfirmed && (
             <span className="flex items-center gap-1 text-gray-400">
               <Loader2 size={10} className="animate-spin" />
@@ -476,6 +483,7 @@ export default function BeeperThread({
   cancelConfirmation,
   retryOutboxEntry,
   dismissOutboxEntry,
+  reconcileOutboxEntry,
   breaker = null,
   people,
   linkingId,
@@ -897,6 +905,7 @@ export default function BeeperThread({
             sending={sending}
             isConfirming={confirmation?.entry?.id === entry.id}
             onRetry={handleRetry}
+            onReconcile={reconcileOutboxEntry}
             onDismiss={handleDismiss}
             breakerTripped={breakerTripped}
             breakerReason={sendDisabledReason}

@@ -13,12 +13,14 @@ const listOutboxEntries = vi.fn();
 const createOutboxEntry = vi.fn();
 const sendOutboxEntry = vi.fn();
 const discardOutboxEntry = vi.fn();
+const reconcileOutboxEntry = vi.fn();
 
 vi.mock('../services/apiBeeper', () => ({
   listOutboxEntries: (...args) => listOutboxEntries(...args),
   createOutboxEntry: (...args) => createOutboxEntry(...args),
   sendOutboxEntry: (...args) => sendOutboxEntry(...args),
   discardOutboxEntry: (...args) => discardOutboxEntry(...args),
+  reconcileOutboxEntry: (...args) => reconcileOutboxEntry(...args),
 }));
 
 const invalidateHandlers = new Set();
@@ -53,9 +55,49 @@ describe('useBeeperOutbox', () => {
     sendOutboxEntry.mockReset().mockResolvedValue({ ...ENTRY, state: 'awaiting-confirmation' });
     discardOutboxEntry.mockReset().mockResolvedValue(undefined);
     toastError.mockReset();
+    reconcileOutboxEntry.mockReset();
     invalidateHandlers.clear();
   });
   afterEach(cleanup);
+
+  it('checks delivery in place without sending or clearing the composer, and ignores a late result from another chat', async () => {
+    const pending = { ...ENTRY, state: 'awaiting-confirmation', errorCode: 'DELIVERY_UNCONFIRMED' };
+    listOutboxEntries.mockResolvedValue({ entries: [pending] });
+    const onSent = vi.fn();
+    const { result, rerender } = renderHook(({ id }) => useBeeperOutbox(id, { onSent }), { initialProps: { id: CONVERSATION_ID } });
+    await waitFor(() => expect(result.current.entries).toHaveLength(1));
+    reconcileOutboxEntry.mockResolvedValueOnce({ ...pending, state: 'sent' });
+    await act(async () => result.current.reconcile(pending));
+    expect(result.current.entries[0].state).toBe('sent');
+    expect(sendOutboxEntry).not.toHaveBeenCalled();
+    expect(onSent).not.toHaveBeenCalled();
+    let finish;
+    reconcileOutboxEntry.mockReturnValueOnce(new Promise((resolve) => { finish = resolve; }));
+    let checking;
+    act(() => { checking = result.current.reconcile(pending); });
+    listOutboxEntries.mockResolvedValue({ entries: [] });
+    rerender({ id: 'other-chat' });
+    await act(async () => { finish({ ...pending, state: 'sent' }); await checking; });
+    expect(result.current.entries).toEqual([]);
+  });
+
+  it('does not overwrite a newer socket refresh with a delayed delivery-check response', async () => {
+    const pending = { ...ENTRY, state: 'awaiting-confirmation' };
+    listOutboxEntries.mockResolvedValue({ entries: [pending] });
+    const { result } = renderHook(() => useBeeperOutbox(CONVERSATION_ID));
+    await waitFor(() => expect(result.current.entries).toHaveLength(1));
+    let finish;
+    reconcileOutboxEntry.mockReturnValueOnce(new Promise((resolve) => { finish = resolve; }));
+    let checking;
+    act(() => { checking = result.current.reconcile(pending); });
+    listOutboxEntries.mockResolvedValue({ entries: [{ ...pending, state: 'sent' }] });
+    await act(async () => {
+      for (const handle of invalidateHandlers) handle?.({ kind: 'outbox.updated' });
+    });
+    await waitFor(() => expect(result.current.entries[0].state).toBe('sent'));
+    await act(async () => { finish(pending); await checking; });
+    expect(result.current.entries[0].state).toBe('sent');
+  });
 
   it('creates the durable row first, then sends it exactly once', async () => {
     const onSent = vi.fn();
