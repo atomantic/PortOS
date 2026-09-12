@@ -5,20 +5,22 @@ import MediaAnnotate from './MediaAnnotate';
 
 // Re-render (issue #2036 phase 2) is the focus: annotate an image, then feed the
 // flattened markup back through img2img. The canvas itself is exercised by
-// sketchCanvas.test.js — here it's stubbed to synchronously report dimensions
+// sketchCanvas.test.js — here it's stubbed to report dimensions
 // and expose a flattened-PNG export so the page's re-render wiring can run.
 vi.mock('../components/media/AnnotationCanvas', async () => {
   const React = await import('react');
   return {
-    default: React.forwardRef(function StubCanvas({ onImageLoad }, ref) {
+    default: React.forwardRef(function StubCanvas({ onImageLoad, imageSrc, blankWidth, blankHeight }, ref) {
       React.useImperativeHandle(ref, () => ({ exportPng: () => 'data:image/png;base64,QQ==' }), []);
       // Defer to a macrotask: the real <img> onLoad fires asynchronously, AFTER
       // the page's own mount effect resets dims to null. Reporting synchronously
       // here would be clobbered by that reset (child effects run before parent).
       React.useEffect(() => {
-        const t = setTimeout(() => onImageLoad?.({ w: 100, h: 80 }), 0);
+        const t = setTimeout(() => onImageLoad?.(imageSrc
+          ? { w: 100, h: 80 }
+          : { w: blankWidth, h: blankHeight }), 0);
         return () => clearTimeout(t);
-      }, [onImageLoad]);
+      }, [onImageLoad, imageSrc, blankWidth, blankHeight]);
       return <div data-testid="stub-canvas" />;
     }),
   };
@@ -135,7 +137,28 @@ describe('MediaAnnotate blank-canvas sketch (phase 3)', () => {
     await waitFor(() => expect(saveBtn).not.toBeDisabled());
     fireEvent.click(saveBtn);
     await waitFor(() => expect(saveMediaSketch).toHaveBeenCalledTimes(1));
-    expect(saveMediaSketch.mock.calls[0][0]).toBe('sketch:11111111-1111-1111-1111-111111111111');
+    expect(saveMediaSketch).toHaveBeenCalledWith(
+      'sketch:11111111-1111-1111-1111-111111111111',
+      expect.objectContaining({ width: 1024, height: 1024 }),
+      { silent: true },
+    );
+  });
+
+  it.each([
+    ['empty dimensions', '?w=&h=%20', 1024, 1024],
+    ['explicit dimensions and rounding', '?w=640.6&h=360', 641, 360],
+    ['numeric bounds', '?w=0&h=8192', 64, 4096],
+    ['invalid dimensions', '?w=invalid&h=Infinity', 1024, 1024],
+  ])('saves the canvas size for %s', async (_label, search, width, height) => {
+    renderBlank(search);
+    const saveBtn = await screen.findByTitle('Save sketch');
+    await waitFor(() => expect(saveBtn).not.toBeDisabled());
+    fireEvent.click(saveBtn);
+    await waitFor(() => expect(saveMediaSketch).toHaveBeenCalledWith(
+      'sketch:11111111-1111-1111-1111-111111111111',
+      expect.objectContaining({ width, height }),
+      { silent: true },
+    ));
   });
 
   it('routes the back link to ?returnTo when provided', async () => {

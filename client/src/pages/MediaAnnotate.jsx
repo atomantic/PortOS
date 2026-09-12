@@ -21,6 +21,7 @@ const DEFAULT_BLANK_DIM = 1024;
 const MIN_BLANK_DIM = 64;
 const MAX_BLANK_DIM = 4096;
 const clampDim = (v, fallback) => {
+  if (v == null || v.trim() === '') return fallback;
   const n = Math.round(Number(v));
   if (!Number.isFinite(n)) return fallback;
   return Math.min(MAX_BLANK_DIM, Math.max(MIN_BLANK_DIM, n));
