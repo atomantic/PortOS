@@ -282,37 +282,49 @@ async function beeperRequest(path, {
   const reqHeaders = { 'Content-Type': 'application/json', ...headers };
   if (resolved.token) reqHeaders.Authorization = `Bearer ${resolved.token}`;
 
-  let response;
-  try {
-    response = await fetchWithTimeout(`${resolved.baseUrl}${path}`, {
-      method,
-      headers: reqHeaders,
-      redirect: 'error',
-      body: body === undefined ? undefined : JSON.stringify(body),
-    }, timeoutMs, allowRetry ? READ_RETRY : {});
-  } catch (err) {
-    const description = describeFetchError(err);
-    // AbortController firing (the timeout above, or a caller-supplied
-    // `signal`) is the one network failure that means "no answer arrived in
-    // time" rather than "nothing is listening" — the distinction
-    // `probeBeeperInfo` needs to tell `slow` from `unreachable` (fork issue
-    // #61, decision 7). Node/undici's own AbortError always carries "abort" in
-    // its name or message; `describeFetchError` folds both into this string.
-    const timedOut = /\babort/i.test(description);
-    throw new BeeperApiError(`Beeper request failed: ${description}`, {
-      status: 0, code: 'NETWORK_ERROR', retryable: allowRetry && isReplayableConnectionError(err),
-      details: timedOut ? { timedOut: true } : undefined,
-    });
-  }
+  // fetchWithTimeout owns the deadline only until response headers arrive. Keep
+  // a caller-owned signal alive through body consumption as well, so a local
+  // bridge cannot hold a request open indefinitely after answering headers.
+  const requestController = new AbortController();
+  const hasDeadline = Number.isFinite(timeoutMs) && timeoutMs > 0;
+  const deadlineId = hasDeadline ? setTimeout(() => requestController.abort(), timeoutMs) : null;
 
-  if (response.status === 204) {
+  let response;
+  let data;
+  try {
+    try {
+      response = await fetchWithTimeout(`${resolved.baseUrl}${path}`, {
+        method,
+        headers: reqHeaders,
+        redirect: 'error',
+        body: body === undefined ? undefined : JSON.stringify(body),
+        signal: requestController.signal,
+      }, timeoutMs, allowRetry ? READ_RETRY : {});
+
+      if (response.status === 204) {
+        noteSuccess();
+        return null;
+      }
+      data = await readResponseJson(response, { fallback: (text) => ({ message: text }) });
+    } catch (err) {
+      const description = describeFetchError(err);
+      // AbortController firing (during headers OR body consumption) is the one
+      // network failure that means "no answer arrived in time" rather than
+      // "nothing is listening" — the distinction `probeBeeperInfo` needs to
+      // tell `slow` from `unreachable` (fork issue #61, decision 7).
+      const timedOut = /\babort/i.test(description);
+      throw new BeeperApiError(`Beeper request failed: ${description}`, {
+        status: 0, code: 'NETWORK_ERROR', retryable: allowRetry && isReplayableConnectionError(err),
+        details: timedOut ? { timedOut: true } : undefined,
+      });
+    }
+
+    if (!response.ok) throw mapBeeperResponseError(response.status, data, { isAssetEndpoint, retryEligible: allowRetry });
     noteSuccess();
-    return null;
+    return data;
+  } finally {
+    if (deadlineId !== null) clearTimeout(deadlineId);
   }
-  const data = await readResponseJson(response, { fallback: (text) => ({ message: text }) });
-  if (!response.ok) throw mapBeeperResponseError(response.status, data, { isAssetEndpoint, retryEligible: allowRetry });
-  noteSuccess();
-  return data;
 }
 
 // ---------------------------------------------------------------------------

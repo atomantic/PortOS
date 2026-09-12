@@ -366,6 +366,20 @@ describe('beeperClient', () => {
   // -------------------------------------------------------------------------
 
   describe('timeout behavior (fake timers)', () => {
+    function bodyThatRejectsOnAbort(status, signal, { trickle = false } = {}) {
+      return {
+        ok: status >= 200 && status < 300,
+        status,
+        text: () => new Promise((_resolve, reject) => {
+          const trickleId = trickle ? setInterval(() => {}, 5) : null;
+          signal.addEventListener('abort', () => {
+            if (trickleId !== null) clearInterval(trickleId);
+            reject(new DOMException('aborted while reading body', 'AbortError'));
+          }, { once: true });
+        }),
+      };
+    }
+
     // Fork issue #61, decision 7: 1s proved too tight for a briefly-busy Beeper
     // Desktop, so the cap moved to 3s.
     it('probeBeeperInfo caps at 3s and resolves reachable:false/timedOut:true without throwing, and without a real sleep', async () => {
@@ -409,6 +423,94 @@ describe('beeperClient', () => {
 
         expect(result).toEqual({ items: [], hasMore: false });
         expect(fetchMock).toHaveBeenCalledTimes(2);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it.each([200, 500])('bounds a stalled JSON body after immediate HTTP %s headers', async (status) => {
+      vi.useFakeTimers();
+      try {
+        let requestSignal;
+        const fetchMock = vi.fn().mockImplementation((_url, opts) => {
+          requestSignal = opts.signal;
+          return Promise.resolve(bodyThatRejectsOnAbort(status, requestSignal));
+        });
+        vi.stubGlobal('fetch', fetchMock);
+
+        const request = getInfo({ baseUrl: DEFAULT_BASE_URL, timeoutMs: 25 });
+        const rejection = expect(request).rejects.toMatchObject({
+          code: 'NETWORK_ERROR',
+          context: { details: { timedOut: true } },
+        });
+        await vi.advanceTimersByTimeAsync(25);
+
+        await rejection;
+        expect(requestSignal.aborted).toBe(true);
+        expect(fetchMock).toHaveBeenCalledTimes(1);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('keeps one total deadline when a JSON body keeps trickling data', async () => {
+      vi.useFakeTimers();
+      try {
+        let requestSignal;
+        vi.stubGlobal('fetch', vi.fn().mockImplementation((_url, opts) => {
+          requestSignal = opts.signal;
+          return Promise.resolve(bodyThatRejectsOnAbort(200, requestSignal, { trickle: true }));
+        }));
+
+        const request = getInfo({ baseUrl: DEFAULT_BASE_URL, timeoutMs: 30 });
+        const rejection = expect(request).rejects.toMatchObject({
+          code: 'NETWORK_ERROR',
+          context: { details: { timedOut: true } },
+        });
+        await vi.advanceTimersByTimeAsync(30);
+
+        await rejection;
+        expect(requestSignal.aborted).toBe(true);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('clears the total deadline after a successful JSON read', async () => {
+      vi.useFakeTimers();
+      try {
+        vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse(200, {
+          app: { name: 'Beeper' }, server: { status: 'running' },
+        })));
+
+        await expect(getInfo({ baseUrl: DEFAULT_BASE_URL, timeoutMs: 50 })).resolves.toMatchObject({
+          app: { name: 'Beeper' },
+        });
+        expect(vi.getTimerCount()).toBe(0);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('aborts a stalled send body after one POST without retrying it', async () => {
+      vi.useFakeTimers();
+      try {
+        let requestSignal;
+        const fetchMock = vi.fn().mockImplementation((_url, opts) => {
+          requestSignal = opts.signal;
+          return Promise.resolve(bodyThatRejectsOnAbort(200, requestSignal));
+        });
+        vi.stubGlobal('fetch', fetchMock);
+
+        const request = sendMessage('chat1', { text: 'hi' }, {
+          baseUrl: DEFAULT_BASE_URL, token: 't', timeoutMs: 25,
+        });
+        const rejection = expect(request).rejects.toMatchObject({ code: 'NETWORK_ERROR', retryable: false });
+        await vi.advanceTimersByTimeAsync(25);
+
+        await rejection;
+        expect(fetchMock).toHaveBeenCalledTimes(1);
+        expect(fetchMock.mock.calls[0][1].method).toBe('POST');
       } finally {
         vi.useRealTimers();
       }
