@@ -822,7 +822,7 @@ describe('localLlm', () => {
       // `pathExists(APP)` is the dispatch check that routed upgradeBackend here, so
       // it answers true independently of the in-memory model — which lets a test
       // exercise the bundle being gone by the time the rename runs.
-      pathExistsImpl.fn = async (p) => (p === APP ? true : p.endsWith('/Ollama.app') && extracted.present);
+      pathExistsImpl.fn = async (p) => (p === APP ? true : path.basename(p) === 'Ollama.app' && extracted.present);
       vi.stubGlobal('fetch', vi.fn(async (url) => {
         if (String(url).includes('api.github.com')) {
           return {
