@@ -163,11 +163,11 @@ const query = vi.fn(async (sql, params = []) => {
     row.errorMessage = null;
     return { rows: [entryView(row)], rowCount: 1 };
   }
-  if (/UPDATE beeper_outbox SET error_code = 'CONFIRMATION_UNRESOLVED'/.test(sql)) {
+  if (/UPDATE beeper_outbox SET error_code = \$2/.test(sql)) {
     const row = outbox.get(params[0]);
     if (!row || row.state !== 'awaiting-confirmation') return { rows: [], rowCount: 0 };
-    row.errorCode = 'CONFIRMATION_UNRESOLVED';
-    row.errorMessage = params[1];
+    row.errorCode = params[1];
+    row.errorMessage = params[2];
     return { rows: [], rowCount: 1 };
   }
   if (/DELETE FROM beeper_outbox WHERE id = \$1 AND state = 'approved'/.test(sql)) {
@@ -200,7 +200,7 @@ const { beeperSocketEvents } = await import('./beeperSocketEvents.js');
 function makeClock() {
   const timers = new Map();
   let nextTimerId = 1;
-  let current = 0;
+  let current = Date.parse('2026-09-01T00:00:00.000Z');
   return {
     now: () => current,
     advance: (ms) => { current += ms; },
@@ -524,9 +524,30 @@ describe('sendOutboxEntry — ambiguous and definitive outcomes', () => {
     await flush();
 
     expect(outbox.get(entry.id)).toMatchObject({
-      state: 'awaiting-confirmation', errorCode: 'CONFIRMATION_UNRESOLVED',
+      state: 'awaiting-confirmation', errorCode: DELIVERY_UNCONFIRMED_CODE,
     });
     expect(outbox.get(entry.id).errorMessage).toContain('may still have been delivered');
+    expect(sendMessage).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not let an earlier identical message confirm a response-less send', async () => {
+    markPriorSend();
+    const entry = await approvedEntry('same text');
+    sendMessage.mockRejectedValueOnce(new BeeperApiError('Beeper request failed: connection reset', {
+      status: 0, code: 'NETWORK_ERROR', retryable: false,
+    }));
+    listMessagesPage.mockResolvedValueOnce({ items: [
+      sentMessage({ id: 'msg-earlier', text: 'same text', timestamp: '2026-08-31T23:59:59.999Z' }),
+    ] });
+
+    await sendOutboxEntry(entry.id);
+    clock.advance(CONFIRMATION_TIMEOUT_MS);
+    clock.runTimersWithDelay(CONFIRMATION_TIMEOUT_MS);
+    await flush();
+
+    expect(outbox.get(entry.id)).toMatchObject({
+      state: 'awaiting-confirmation', messageId: null, errorCode: DELIVERY_UNCONFIRMED_CODE,
+    });
     expect(sendMessage).toHaveBeenCalledTimes(1);
   });
 
@@ -732,6 +753,28 @@ describe('reconcileOutboxOnBoot — the durable half of the confirmation state',
     // The body match is floored on the row's PERSISTED send moment, not on boot
     // time — dating it to now would reject the very message it is looking for.
     expect(outbox.get(stranded.id)).toMatchObject({ state: 'sent', messageId: 'msg-final-3' });
+    expect(sendMessage).not.toHaveBeenCalled();
+  });
+
+  it('keeps a persisted response-less send unconfirmed when only an earlier identical message exists', async () => {
+    const stranded = strandedRow('awaiting-confirmation', {
+      pendingMessageId: null,
+      errorCode: DELIVERY_UNCONFIRMED_CODE,
+      errorMessage: DELIVERY_UNCONFIRMED_MESSAGE,
+      updatedAt: '2026-09-01T00:00:01.000Z',
+    });
+    listMessagesPage.mockResolvedValue({ items: [
+      sentMessage({ id: 'msg-earlier', timestamp: '2026-09-01T00:00:00.999Z' }),
+    ] });
+
+    await reconcileOutboxOnBoot();
+    clock.advance(CONFIRMATION_TIMEOUT_MS);
+    clock.runTimersWithDelay(CONFIRMATION_TIMEOUT_MS);
+    await flush();
+
+    expect(outbox.get(stranded.id)).toMatchObject({
+      state: 'awaiting-confirmation', messageId: null, errorCode: DELIVERY_UNCONFIRMED_CODE,
+    });
     expect(sendMessage).not.toHaveBeenCalled();
   });
 

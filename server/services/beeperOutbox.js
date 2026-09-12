@@ -111,7 +111,8 @@ let sendTimestamps = [];
 let consecutiveFailures = 0;
 let breaker = { tripped: false, reason: null, trippedAt: null };
 
-// outboxId → { chatId, body, pendingMessageId, requestedAt, timer, resolving }
+// outboxId → { chatId, body, pendingMessageId, requestedAt,
+//   deliveryOutcomeUnknown, timer, resolving }
 const pendingConfirmations = new Map();
 let invalidateListenerAttached = false;
 
@@ -432,6 +433,7 @@ export async function sendOutboxEntry(id, { confirmFirstContact = false } = {}) 
         body: entry.body,
         pendingMessageId: null,
         requestedAt,
+        deliveryOutcomeUnknown: true,
       });
       return updated;
     }
@@ -490,14 +492,18 @@ function handleInvalidation(frame) {
  * dating a week-old re-armed row to boot time would reject the very message it
  * is looking for.
  */
-function armConfirmation({ id, chatId, conversationId, body, pendingMessageId, requestedAt = runtime.now() }) {
+function armConfirmation({
+  id, chatId, conversationId, body, pendingMessageId,
+  requestedAt = runtime.now(), deliveryOutcomeUnknown = false,
+}) {
   const timer = runtime.setTimeout(() => {
     resolveConfirmation(id, 'fallback-timeout').catch((err) => {
       console.error(`${LOG_PREFIX}: fallback confirmation failed: ${err.message}`);
     });
   }, CONFIRMATION_TIMEOUT_MS);
   pendingConfirmations.set(id, {
-    chatId, conversationId, body, pendingMessageId, requestedAt, timer, resolving: false,
+    chatId, conversationId, body, pendingMessageId, requestedAt,
+    deliveryOutcomeUnknown, timer, resolving: false,
   });
   if (!invalidateListenerAttached) {
     beeperSocketEvents.on('invalidate', handleInvalidation);
@@ -529,12 +535,23 @@ async function lookupSentMessage(pending) {
 
   const page = await listMessagesPage(pending.chatId);
   const items = Array.isArray(page?.items) ? page.items : [];
-  // A minute of slack below the send: `timestamp` is assigned by the network,
-  // not by PortOS, and the two clocks are not the same clock.
-  const floor = pending.requestedAt - 60_000;
-  return items.find((message) => message?.isSender === true
-    && message?.text === pending.body
-    && (!message?.timestamp || new Date(message.timestamp).getTime() >= floor)) ?? null;
+  // A normal send response proves the POST landed, so tolerate clock skew (and
+  // old payloads without a timestamp) while finding its final id. When the
+  // response itself was lost, body alone is not evidence: an earlier identical
+  // message could otherwise turn an unknowable outcome into a false `sent`.
+  // Be conservative there and require a valid network timestamp at or after
+  // this attempt. Clock skew may leave a real send unconfirmed, which is safer
+  // than attaching a prior message and inviting the wrong delivery verdict.
+  const floor = pending.deliveryOutcomeUnknown
+    ? pending.requestedAt
+    : pending.requestedAt - 60_000;
+  return items.find((message) => {
+    if (message?.isSender !== true || message?.text !== pending.body) return false;
+    const messageTime = Date.parse(message?.timestamp ?? '');
+    return pending.deliveryOutcomeUnknown
+      ? Number.isFinite(messageTime) && messageTime >= floor
+      : !message?.timestamp || (Number.isFinite(messageTime) && messageTime >= floor);
+  }) ?? null;
 }
 
 /**
@@ -611,7 +628,11 @@ async function resolveConfirmation(id, reason) {
     // armed. On the fallback path it is the end of the road.
     console.error(`${LOG_PREFIX}: confirmation lookup failed (${found.err?.code || 'unknown'})`);
     if (reason === 'fallback-timeout') {
-      await noteUnresolved(id, `Confirmation lookup failed: ${found.err?.code || 'unknown error'}`);
+      await noteUnresolved(
+        id,
+        `Confirmation lookup failed: ${found.err?.code || 'unknown error'}`,
+        pending.deliveryOutcomeUnknown,
+      );
     }
     return null;
   }
@@ -619,7 +640,11 @@ async function resolveConfirmation(id, reason) {
   const message = found.value;
   if (!message) {
     if (reason === 'fallback-timeout') {
-      await noteUnresolved(id, 'Beeper reported no matching message within 30s — it may still have been delivered, so it was not re-sent.');
+      await noteUnresolved(
+        id,
+        'Beeper reported no matching message within 30s — it may still have been delivered, so it was not re-sent.',
+        pending.deliveryOutcomeUnknown,
+      );
     }
     return null;
   }
@@ -656,12 +681,12 @@ async function resolveConfirmation(id, reason) {
 }
 
 /** Record why a send is unconfirmed without moving it out of flight. */
-async function noteUnresolved(id, message) {
+async function noteUnresolved(id, message, deliveryOutcomeUnknown = false) {
   releasePending(id);
   await query(
-    `UPDATE beeper_outbox SET error_code = 'CONFIRMATION_UNRESOLVED', error_message = $2, updated_at = NOW()
+    `UPDATE beeper_outbox SET error_code = $2, error_message = $3, updated_at = NOW()
      WHERE id = $1 AND state = 'awaiting-confirmation'`,
-    [id, message],
+    [id, deliveryOutcomeUnknown ? DELIVERY_UNCONFIRMED_CODE : 'CONFIRMATION_UNRESOLVED', message],
   );
   beeperSocketEvents.emit('invalidate', { kind: 'outbox.updated', chatID: null, ids: [id], seq: null, ts: new Date(runtime.now()).toISOString() });
   console.warn(`${LOG_PREFIX}: send unconfirmed after ${CONFIRMATION_TIMEOUT_MS / 1000}s — left in flight, never re-sent`);
@@ -733,7 +758,8 @@ export async function reconcileOutboxOnBoot() {
 
   const inFlight = await query(
     `SELECT id, conversation_id AS "conversationId", chat_id AS "chatId", body,
-       pending_message_id AS "pendingMessageId", created_at AS "createdAt", updated_at AS "updatedAt"
+       pending_message_id AS "pendingMessageId", error_code AS "errorCode",
+       created_at AS "createdAt", updated_at AS "updatedAt"
      FROM beeper_outbox WHERE state = 'awaiting-confirmation'`,
   );
 
@@ -747,6 +773,7 @@ export async function reconcileOutboxOnBoot() {
       body: row.body,
       pendingMessageId: row.pendingMessageId,
       requestedAt: persistedSendMoment(row),
+      deliveryOutcomeUnknown: row.errorCode === DELIVERY_UNCONFIRMED_CODE,
     });
     rearmed += 1;
   }
