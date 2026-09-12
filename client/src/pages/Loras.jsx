@@ -8,9 +8,11 @@
  */
 
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { Link } from 'react-router';
-import { Trash2, Download, ExternalLink, Sparkles, AlertTriangle, KeyRound, Check, X, RefreshCw, Wand2, Search, Activity, PlayCircle } from 'lucide-react';
+import { Link, useSearchParams } from 'react-router';
+import { Trash2, Download, ExternalLink, Sparkles, AlertTriangle, KeyRound, Check, X, RefreshCw, Wand2, Search, Activity, PlayCircle, Package, Compass } from 'lucide-react';
 import BrailleSpinner from '../components/BrailleSpinner';
+import EmptyState from '../components/EmptyState';
+import TabPills from '../components/ui/TabPills';
 import PageSkeleton from '../components/ui/PageSkeleton';
 import toast from '../components/ui/Toast';
 import Modal from '../components/ui/Modal';
@@ -60,6 +62,22 @@ const RUNNER_BADGE_CLASS = {
   [VIDEO_LORA_FAMILIES.MINIMAX_H3]: 'bg-teal-600/20 text-teal-300 border-teal-500/30',
 };
 
+// Top-level view split (#7231). Discovery — curated picks, six per-family
+// Civitai lists, the video catalog, and two live searches — used to render
+// ABOVE the installed grid, so managing an already-installed adapter meant
+// scrolling past thousands of pixels of recommendations that grow as results
+// arrive. Installed is now its own view and the default one; discovery is one
+// labeled click away. The chosen view lives in `?loraView` (not local state) so
+// it survives reload and Back/Forward, per the URL-is-the-source-of-truth
+// convention in `client/src/AGENTS.md`.
+const VIEW_PARAM = 'loraView';
+const VIEW_INSTALLED = 'installed';
+const VIEW_DISCOVER = 'discover';
+const DEFAULT_VIEW = VIEW_INSTALLED;
+const VIEW_IDS = [VIEW_INSTALLED, VIEW_DISCOVER];
+// `id="tab-<view>"` / `aria-controls="lorapanel-<view>"` pairing for TabPills.
+const VIEW_PANEL_PREFIX = 'lorapanel';
+
 // Image/Video filter applied to BOTH the suggestion panel and the installed
 // list (see the user request: filter suggestions + installed by media type).
 const MEDIA_FILTERS = [
@@ -98,6 +116,22 @@ const HF_FAMILY_OVERRIDES = [
 const pctOf = (progress) => (progress && typeof progress.progress === 'number' ? Math.round(progress.progress * 100) : null);
 
 export default function Loras() {
+  // Active view. An unknown/hand-edited `?loraView=` degrades to Installed
+  // rather than rendering a blank panel.
+  const [searchParams, setSearchParams] = useSearchParams();
+  const rawView = searchParams.get(VIEW_PARAM);
+  const view = VIEW_IDS.includes(rawView) ? rawView : DEFAULT_VIEW;
+  // A PUSH, not `replace` — switching views is a navigation the user expects
+  // Back to undo (the acceptance criterion), unlike the in-view media filter.
+  // Writing the default drops the param so a pristine URL stays clean.
+  const setView = useCallback((next) => {
+    setSearchParams((prev) => {
+      const params = new URLSearchParams(prev);
+      if (!next || next === DEFAULT_VIEW) params.delete(VIEW_PARAM);
+      else params.set(VIEW_PARAM, next);
+      return params;
+    });
+  }, [setSearchParams]);
   const [loras, setLoras] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -129,8 +163,15 @@ export default function Loras() {
   const [authPrompt, setAuthPrompt] = useState(null);
   // suggestions: { runners: { mflux: [...], flux2: [...], 'z-image': [...] }, video: [...], fetchedAt }
   const [suggestions, setSuggestions] = useState(null);
+  // Stays true until the first fetch settles — nothing is requested before the
+  // Discover view is opened, so this reads as "no catalog result yet" and the
+  // panel's first frame shows the loader instead of flashing empty sections.
   const [loadingSuggestions, setLoadingSuggestions] = useState(true);
   const [installingSuggestion, setInstallingSuggestion] = useState(null);
+  // Name of the most recent successful install, cleared once the user acts on
+  // it. Drives the Discover view's "View installed" hand-off so a finished
+  // download doesn't leave the user hunting the catalog for its result.
+  const [lastInstalled, setLastInstalled] = useState(null);
   const { confirm: downloadConfirm, request: requestDownloadConfirm, cancel: cancelDownloadConfirm, confirmRun: runDownloadConfirm } = useDownloadPreflightConfirm();
   // Repo+file key of the video suggestion currently installing. A single HF
   // repo can publish multiple versions that must remain independently selectable.
@@ -160,8 +201,22 @@ export default function Loras() {
   useEffect(() => {
     refresh();
     getCivitaiAuth().then(setAuth).catch(() => {});
+  }, [refresh]);
+
+  // Discovery is fetched the first time its view is opened, not on mount —
+  // the default Installed view never needs it, and a ref (not `suggestions`)
+  // gates the fetch so a legitimately empty catalog response isn't re-requested
+  // on every switch back.
+  const suggestionsRequested = useRef(false);
+  useEffect(() => {
+    // Reaching Installed retires the install hand-off — however the user got
+    // there (the tab, the banner's own button, or Back), the banner has done
+    // its job and must not reappear on the next visit to Discover.
+    if (view === VIEW_INSTALLED) setLastInstalled(null);
+    if (view !== VIEW_DISCOVER || suggestionsRequested.current) return;
+    suggestionsRequested.current = true;
     refreshSuggestions();
-  }, [refresh, refreshSuggestions]);
+  }, [view, refreshSuggestions]);
 
   // silent:true so the auth-error path goes through the modal instead of a
   // one-shot toast the user can't act on. Shared by the initial install
@@ -205,6 +260,7 @@ export default function Loras() {
     await installLoraFromCivitai({ url, silent: true })
       .then((sidecar) => {
         toast.success(`Installed ${sidecar.name}`);
+        setLastInstalled(sidecar.name);
         setInstallUrl('');
         refresh();
       })
@@ -252,6 +308,7 @@ export default function Loras() {
     await installLoraFromHuggingfaceStream({ url, family, onProgress: setHfProgress })
       .then((sidecar) => {
         toast.success(`Installed ${sidecar.name}`);
+        setLastInstalled(sidecar.name);
         setHfUrl('');
         setHfFamilyPrompt(null);
         refresh();
@@ -295,6 +352,7 @@ export default function Loras() {
     })
       .then((sidecar) => {
         toast.success(`Installed ${sidecar.name}`);
+        setLastInstalled(sidecar.name);
         refresh();
       })
       .catch((err) => toast.error(err?.message || 'HuggingFace install failed'))
@@ -358,115 +416,235 @@ export default function Loras() {
         </p>
       </div>
 
-      <form
-        onSubmit={handleInstall}
-        className="bg-port-card border border-port-border rounded-lg p-4 space-y-3"
-      >
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-2 text-sm font-medium text-gray-300">
-            <Download size={16} />
-            <span>Install from Civitai</span>
-          </div>
-          <CivitaiKeyBadge auth={auth} onManage={() => setAuthPrompt({ url: null, message: '' })} />
+      {/* View switch + primary action, directly under the heading so both are
+          above the fold on a phone. Discovery lives behind the second tab, so
+          no amount of catalog growth can push the installed list down. */}
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <TabPills
+          tabs={[
+            { id: VIEW_INSTALLED, label: 'Installed', icon: Package, count: loras.length },
+            { id: VIEW_DISCOVER, label: 'Discover / install', icon: Compass },
+          ]}
+          activeTab={view}
+          onChange={setView}
+          variant="pills"
+          size="sm"
+          ariaLabel="LoRA view"
+          controlsIdPrefix={VIEW_PANEL_PREFIX}
+        />
+        <div className="flex items-center gap-3">
+          <MediaFilter value={mediaFilter} onChange={setMediaFilter} />
+          {view === VIEW_INSTALLED && (
+            <button
+              type="button"
+              onClick={() => setView(VIEW_DISCOVER)}
+              className="bg-port-accent text-white px-3 py-1.5 rounded text-sm font-medium hover:bg-port-accent/90 flex items-center gap-2"
+            >
+              <Download size={14} aria-hidden="true" />
+              Install LoRA
+            </button>
+          )}
         </div>
-        <div className="flex gap-2">
-          <input
-            type="text"
-            value={installUrl}
-            onChange={(e) => setInstallUrl(e.target.value)}
-            aria-label="Civitai model URL"
-            placeholder="https://civitai.com/models/2600698/realstagram"
-            className="flex-1 bg-port-bg border border-port-border rounded px-3 py-2 text-sm text-gray-200 placeholder:text-gray-600"
-            disabled={installing}
-            autoFocus
-          />
-          <button
-            type="submit"
-            disabled={installing || !installUrl.trim()}
-            className="bg-port-accent text-white px-4 py-2 rounded text-sm font-medium hover:bg-port-accent/90 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
-          >
-            {installing ? 'Downloading…' : 'Install'}
-          </button>
-        </div>
-        <p className="text-xs text-gray-500">
-          Paste any <code className="bg-port-bg px-1 rounded">civitai.com</code> /{' '}
-          <code className="bg-port-bg px-1 rounded">civitai.red</code> model URL — or just the
-          numeric model id. Restricted LoRAs need an API key — PortOS will prompt you for one if a download is rejected.
-        </p>
-      </form>
+      </div>
 
-      <form
-        onSubmit={handleHfInstall}
-        className="bg-port-card border border-port-border rounded-lg p-4 space-y-3"
-      >
-        <div className="flex items-center gap-2 text-sm font-medium text-gray-300">
-          <Download size={16} />
-          <span>Install LoRA from HuggingFace</span>
-        </div>
-        <div className="flex gap-2">
-          <input
-            type="text"
-            value={hfUrl}
-            onChange={(e) => setHfUrl(e.target.value)}
-            aria-label="HuggingFace LoRA URL"
-            placeholder="https://huggingface.co/Alissonerdx/CharacterSheet"
-            className="flex-1 bg-port-bg border border-port-border rounded px-3 py-2 text-sm text-gray-200 placeholder:text-gray-600"
-            disabled={hfInstalling}
-          />
-          <button
-            type="submit"
-            disabled={hfInstalling || !!installingVideoKey || !hfUrl.trim()}
-            className="bg-port-accent text-white px-4 py-2 rounded text-sm font-medium hover:bg-port-accent/90 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
-          >
-            {hfInstalling ? (hfPct != null ? `Downloading ${hfPct}%` : 'Downloading…') : 'Install'}
-          </button>
-        </div>
-        {hfInstalling && <HfDownloadProgress progress={hfProgress} />}
-        <p className="text-xs text-gray-500">
-          Paste a <code className="bg-port-bg px-1 rounded">huggingface.co</code> repo URL — or an{' '}
-          <code className="bg-port-bg px-1 rounded">org/name</code> id — for an image or video LoRA
-          (e.g. <code className="bg-port-bg px-1 rounded">Alissonerdx/CharacterSheet</code> or{' '}
-          <code className="bg-port-bg px-1 rounded">fal/ltx2.3-audio-reactive-lora</code>).
-          Flux.2 Klein adapters apply in <Link to="/media/image" className="text-port-accent hover:underline">Image Gen</Link>;
-          LTX-Video LoRAs apply in <Link to="/media/video" className="text-port-accent hover:underline">Video Gen</Link>.
-          Gated repos use your HuggingFace token from Image Gen settings.
-        </p>
-        {hfFamilyPrompt && (
-          <div className="rounded border border-port-warning/40 bg-port-warning/10 px-3 py-2 space-y-2">
-            <span className="text-xs text-gray-300">
-              Couldn&apos;t detect the model family for <code className="bg-port-bg px-1 rounded">{hfFamilyPrompt}</code>. Choose the runner this LoRA targets:
-            </span>
-            <div className="flex flex-wrap items-center gap-2">
-              {HF_FAMILY_OVERRIDES.map(({ family, label }) => (
+      {view === VIEW_DISCOVER && (
+        <div id={`${VIEW_PANEL_PREFIX}-${VIEW_DISCOVER}`} role="tabpanel" aria-labelledby={`tab-${VIEW_DISCOVER}`} className="space-y-6">
+          {lastInstalled && (
+            <Banner
+              tone="success"
+              size="md"
+              icon={Check}
+              align="center"
+              actions={(
                 <button
-                  key={family}
                   type="button"
-                  onClick={() => requestLoraDownload(
-                    'Install HuggingFace LoRA',
-                    hfFamilyPrompt,
-                    'huggingface',
-                    () => runHfInstall(hfFamilyPrompt, family),
-                    { family },
-                  )}
-                  disabled={hfInstalling}
-                  className="bg-port-accent text-white px-3 py-1 rounded text-xs font-medium hover:bg-port-accent/90 disabled:opacity-50"
+                  onClick={() => setView(VIEW_INSTALLED)}
+                  className="text-xs font-medium px-3 py-1 rounded bg-port-success/20 hover:bg-port-success/30 whitespace-nowrap"
                 >
-                  {hfInstalling ? (hfPct != null ? `Installing ${hfPct}%` : 'Installing…') : `Install as ${label}`}
+                  View installed
                 </button>
-              ))}
+              )}
+            >
+              Installed {lastInstalled}.
+            </Banner>
+          )}
+
+          <form
+            onSubmit={handleInstall}
+            className="bg-port-card border border-port-border rounded-lg p-4 space-y-3"
+          >
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2 text-sm font-medium text-gray-300">
+                <Download size={16} />
+                <span>Install from Civitai</span>
+              </div>
+              <CivitaiKeyBadge auth={auth} onManage={() => setAuthPrompt({ url: null, message: '' })} />
+            </div>
+            <div className="flex gap-2">
+              <input
+                type="text"
+                value={installUrl}
+                onChange={(e) => setInstallUrl(e.target.value)}
+                aria-label="Civitai model URL"
+                placeholder="https://civitai.com/models/2600698/realstagram"
+                className="flex-1 bg-port-bg border border-port-border rounded px-3 py-2 text-sm text-gray-200 placeholder:text-gray-600"
+                disabled={installing}
+                autoFocus
+              />
               <button
-                type="button"
-                onClick={() => setHfFamilyPrompt(null)}
-                disabled={hfInstalling}
-                className="text-gray-400 hover:text-gray-200 px-2 py-1 rounded text-xs disabled:opacity-50"
+                type="submit"
+                disabled={installing || !installUrl.trim()}
+                className="bg-port-accent text-white px-4 py-2 rounded text-sm font-medium hover:bg-port-accent/90 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
               >
-                Cancel
+                {installing ? 'Downloading…' : 'Install'}
               </button>
             </div>
-          </div>
-        )}
-      </form>
+            <p className="text-xs text-gray-500">
+              Paste any <code className="bg-port-bg px-1 rounded">civitai.com</code> /{' '}
+              <code className="bg-port-bg px-1 rounded">civitai.red</code> model URL — or just the
+              numeric model id. Restricted LoRAs need an API key — PortOS will prompt you for one if a download is rejected.
+            </p>
+          </form>
 
+          <form
+            onSubmit={handleHfInstall}
+            className="bg-port-card border border-port-border rounded-lg p-4 space-y-3"
+          >
+            <div className="flex items-center gap-2 text-sm font-medium text-gray-300">
+              <Download size={16} />
+              <span>Install LoRA from HuggingFace</span>
+            </div>
+            <div className="flex gap-2">
+              <input
+                type="text"
+                value={hfUrl}
+                onChange={(e) => setHfUrl(e.target.value)}
+                aria-label="HuggingFace LoRA URL"
+                placeholder="https://huggingface.co/Alissonerdx/CharacterSheet"
+                className="flex-1 bg-port-bg border border-port-border rounded px-3 py-2 text-sm text-gray-200 placeholder:text-gray-600"
+                disabled={hfInstalling}
+              />
+              <button
+                type="submit"
+                disabled={hfInstalling || !!installingVideoKey || !hfUrl.trim()}
+                className="bg-port-accent text-white px-4 py-2 rounded text-sm font-medium hover:bg-port-accent/90 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+              >
+                {hfInstalling ? (hfPct != null ? `Downloading ${hfPct}%` : 'Downloading…') : 'Install'}
+              </button>
+            </div>
+            {hfInstalling && <HfDownloadProgress progress={hfProgress} />}
+            <p className="text-xs text-gray-500">
+              Paste a <code className="bg-port-bg px-1 rounded">huggingface.co</code> repo URL — or an{' '}
+              <code className="bg-port-bg px-1 rounded">org/name</code> id — for an image or video LoRA
+              (e.g. <code className="bg-port-bg px-1 rounded">Alissonerdx/CharacterSheet</code> or{' '}
+              <code className="bg-port-bg px-1 rounded">fal/ltx2.3-audio-reactive-lora</code>).
+              Flux.2 Klein adapters apply in <Link to="/media/image" className="text-port-accent hover:underline">Image Gen</Link>;
+              LTX-Video LoRAs apply in <Link to="/media/video" className="text-port-accent hover:underline">Video Gen</Link>.
+              Gated repos use your HuggingFace token from Image Gen settings.
+            </p>
+            {hfFamilyPrompt && (
+              <div className="rounded border border-port-warning/40 bg-port-warning/10 px-3 py-2 space-y-2">
+                <span className="text-xs text-gray-300">
+                  Couldn&apos;t detect the model family for <code className="bg-port-bg px-1 rounded">{hfFamilyPrompt}</code>. Choose the runner this LoRA targets:
+                </span>
+                <div className="flex flex-wrap items-center gap-2">
+                  {HF_FAMILY_OVERRIDES.map(({ family, label }) => (
+                    <button
+                      key={family}
+                      type="button"
+                      onClick={() => requestLoraDownload(
+                        'Install HuggingFace LoRA',
+                        hfFamilyPrompt,
+                        'huggingface',
+                        () => runHfInstall(hfFamilyPrompt, family),
+                        { family },
+                      )}
+                      disabled={hfInstalling}
+                      className="bg-port-accent text-white px-3 py-1 rounded text-xs font-medium hover:bg-port-accent/90 disabled:opacity-50"
+                    >
+                      {hfInstalling ? (hfPct != null ? `Installing ${hfPct}%` : 'Installing…') : `Install as ${label}`}
+                    </button>
+                  ))}
+                  <button
+                    type="button"
+                    onClick={() => setHfFamilyPrompt(null)}
+                    disabled={hfInstalling}
+                    className="text-gray-400 hover:text-gray-200 px-2 py-1 rounded text-xs disabled:opacity-50"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            )}
+          </form>
+
+          <SuggestionsPanel
+            suggestions={suggestions}
+            loading={loadingSuggestions}
+            mediaFilter={mediaFilter}
+            installedFilenames={new Set(loras.map((l) => l.filename))}
+            installedHfKeys={new Set(loras.filter((l) => l.huggingface?.repo).map(installedHfKey))}
+            installingSuggestionKey={installingSuggestion}
+            installingVideoKey={installingVideoKey}
+            installingVideoProgress={hfProgress}
+            videoInstallBusy={hfInstalling}
+            onRefresh={() => refreshSuggestions({ force: true })}
+            onInstallVideo={installVideoSuggestion}
+            onInstall={(card, url, versionId) => {
+              // Curated cards pass a family-specific (url, versionId); non-curated
+              // cards omit versionId and we fall back to the card's primary.
+              const vid = versionId ?? card.versionId;
+              const key = suggestionKey(card.modelId, vid);
+              setInstallingSuggestion(key);
+              // performInstall() resolves once the PREVIEW is ready (the confirm
+              // modal is now showing) — the actual install can run far later, so
+              // clearing this card's spinner belongs to that install's own
+              // lifecycle (startCivitaiInstall's finally) and the cancel/auth-
+              // redirect paths that can end this attempt before it ever starts,
+              // not to this promise settling.
+              performInstall(url || card.installUrl);
+            }}
+          />
+        </div>
+      )}
+
+      {view === VIEW_INSTALLED && (
+        <div id={`${VIEW_PANEL_PREFIX}-${VIEW_INSTALLED}`} role="tabpanel" aria-labelledby={`tab-${VIEW_INSTALLED}`}>
+          <h2 className="text-lg font-semibold text-white mb-3">Installed</h2>
+          {loading && <PageSkeleton header="none" label="Loading installed LoRAs" layout="grid" cards={6} />}
+          {error && (
+            <Banner tone="error" size="md" icon={AlertTriangle} align="center">{error}</Banner>
+          )}
+          {/* The empty state names the next action rather than pointing at
+              "the suggestions above" — discovery is now a view away, not a
+              scroll away. */}
+          {!loading && !error && visibleLoras.length === 0 && (
+            <EmptyState
+              icon={Package}
+              title={loras.length === 0 ? 'No LoRAs installed yet' : `No ${mediaFilter} LoRAs installed`}
+              message={loras.length === 0
+                ? 'Browse curated picks and Civitai / HuggingFace search, or paste a model URL, to install your first adapter.'
+                : `You have other LoRAs installed — switch the Show filter, or install a ${mediaFilter} LoRA.`}
+              actionLabel="Discover LoRAs to install"
+              onAction={() => setView(VIEW_DISCOVER)}
+            />
+          )}
+          {/* On "All", split installed LoRAs into Video/Image subsections (with the
+              same header style as the suggestion panel) so it's self-evident which
+              renders each applies to. A specific filter already scopes the list, so
+              render it flat. */}
+          {visibleLoras.length > 0 && (
+            mediaFilter === 'all'
+              ? <InstalledGroups loras={visibleLoras} deleting={deleting} onDelete={handleDelete} onMeasured={handleMeasured} deleteConfirm={deleteConfirm} />
+              : <LoraGrid loras={visibleLoras} deleting={deleting} onDelete={handleDelete} onMeasured={handleMeasured} deleteConfirm={deleteConfirm} />
+          )}
+        </div>
+      )}
+
+      {/* Both overlays stay OUTSIDE the view gate: an install started in
+          Discover can still hit a 401 (or finish its preflight) after the user
+          has switched to Installed, and unmounting the dialog would strand
+          that attempt with no way to recover the key. */}
       {authPrompt && (
         <CivitaiAuthModal
           pendingUrl={authPrompt.url}
@@ -484,64 +662,6 @@ export default function Loras() {
           }}
         />
       )}
-
-      <MediaFilter value={mediaFilter} onChange={setMediaFilter} />
-
-      <SuggestionsPanel
-        suggestions={suggestions}
-        loading={loadingSuggestions}
-        mediaFilter={mediaFilter}
-        installedFilenames={new Set(loras.map((l) => l.filename))}
-        installedHfKeys={new Set(loras.filter((l) => l.huggingface?.repo).map(installedHfKey))}
-        installingSuggestionKey={installingSuggestion}
-        installingVideoKey={installingVideoKey}
-        installingVideoProgress={hfProgress}
-        videoInstallBusy={hfInstalling}
-        onRefresh={() => refreshSuggestions({ force: true })}
-        onInstallVideo={installVideoSuggestion}
-        onInstall={(card, url, versionId) => {
-          // Curated cards pass a family-specific (url, versionId); non-curated
-          // cards omit versionId and we fall back to the card's primary.
-          const vid = versionId ?? card.versionId;
-          const key = suggestionKey(card.modelId, vid);
-          setInstallingSuggestion(key);
-          // performInstall() resolves once the PREVIEW is ready (the confirm
-          // modal is now showing) — the actual install can run far later, so
-          // clearing this card's spinner belongs to that install's own
-          // lifecycle (startCivitaiInstall's finally) and the cancel/auth-
-          // redirect paths that can end this attempt before it ever starts,
-          // not to this promise settling.
-          performInstall(url || card.installUrl);
-        }}
-      />
-
-      {/* Border-top divides "Installed" from the suggestion panel above — the
-          curated "Video LoRAs" suggestions used to butt straight up against a
-          flat Installed grid, making installed image LoRAs read as if they were
-          part of the video section. */}
-      <div className="border-t border-port-border pt-6">
-        <h2 className="text-lg font-semibold text-white mb-3">Installed</h2>
-        {loading && <PageSkeleton header="none" label="Loading installed LoRAs" layout="grid" cards={6} />}
-        {error && (
-          <Banner tone="error" size="md" icon={AlertTriangle} align="center">{error}</Banner>
-        )}
-        {!loading && !error && visibleLoras.length === 0 && (
-          <div className="text-sm text-gray-500 italic">
-            {loras.length === 0
-              ? 'No LoRAs installed yet — pick one from the suggestions above, or paste a Civitai URL.'
-              : `No ${mediaFilter} LoRAs installed.`}
-          </div>
-        )}
-        {/* On "All", split installed LoRAs into Video/Image subsections (with the
-            same header style as the suggestion panel) so it's self-evident which
-            renders each applies to. A specific filter already scopes the list, so
-            render it flat. */}
-        {visibleLoras.length > 0 && (
-          mediaFilter === 'all'
-            ? <InstalledGroups loras={visibleLoras} deleting={deleting} onDelete={handleDelete} onMeasured={handleMeasured} deleteConfirm={deleteConfirm} />
-            : <LoraGrid loras={visibleLoras} deleting={deleting} onDelete={handleDelete} onMeasured={handleMeasured} deleteConfirm={deleteConfirm} />
-        )}
-      </div>
       <DownloadPreflightConfirm
         open={Boolean(downloadConfirm)}
         title={downloadConfirm?.title}

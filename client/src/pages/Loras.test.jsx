@@ -1,11 +1,16 @@
 /**
- * Delete-confirmation tests for the installed-LoRA cards (#3519). A LoRA is a
- * multi-gigabyte file with no undo, so the trash icon must only arm an inline
- * confirm pair — one stray tap can never reach deleteLoraFull.
+ * Loras page contracts:
+ *  - the Installed / Discover view split and its `?loraView` URL contract (#7231)
+ *  - delete confirmation on the installed cards (#3519) — a LoRA is a
+ *    multi-gigabyte file with no undo, so the trash icon must only arm an
+ *    inline confirm pair; one stray tap can never reach deleteLoraFull.
+ *
+ * Discovery now lives behind its own view, so every install/search case below
+ * renders through `renderDiscover()` rather than the default Installed view.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor, fireEvent, within } from '@testing-library/react';
-import { MemoryRouter } from 'react-router';
+import { render, screen, waitFor, fireEvent, within, act } from '@testing-library/react';
+import { MemoryRouter, useLocation, useNavigate } from 'react-router';
 import { clickStartDownload } from '../test/downloadPreflightConfirm.js';
 import Loras from './Loras';
 import {
@@ -44,7 +49,120 @@ const LORA = {
 };
 const OTHER_LORA = { ...LORA, filename: 'second-lora.safetensors', name: 'Second LoRA' };
 
-const renderPage = () => render(<MemoryRouter><Loras /></MemoryRouter>);
+// Exposes the live location (for the `?loraView` contract) and a navigate()
+// handle so a test can exercise Back the way the browser button does.
+const router = { search: '', navigate: null };
+function RouterProbe() {
+  router.search = useLocation().search;
+  router.navigate = useNavigate();
+  return null;
+}
+
+const renderPage = (entry = '/models/loras') => render(
+  <MemoryRouter initialEntries={[entry]}>
+    <Loras />
+    <RouterProbe />
+  </MemoryRouter>,
+);
+
+// Installed is the default view; everything install/search related lives one
+// click away under "Discover / install".
+const renderDiscover = async () => {
+  const result = renderPage();
+  fireEvent.click(await screen.findByRole('tab', { name: /Discover \/ install/ }));
+  // Opening Discover is what kicks off the suggestions fetch — settle it here
+  // so its state update lands inside act() rather than after the test's first
+  // synchronous assertion.
+  await act(async () => {});
+  return result;
+};
+
+const goBack = () => act(() => { router.navigate(-1); });
+
+// #7231 — discovery (curated picks, six per-family Civitai lists, the video
+// catalog, two live searches) used to render ABOVE the installed grid, so
+// managing an installed adapter meant scrolling past every recommendation, at
+// a distance that grew as results arrived. Installed is now the default view
+// and discovery is a sibling, which makes that distance structurally zero.
+describe('Loras Installed / Discover views', () => {
+  const SUGGESTION_CARD = { modelId: 42, versionId: 7, name: 'Suggested LoRA', installUrl: 'https://civitai.com/models/42' };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    listLorasFull.mockResolvedValue([LORA]);
+    getCivitaiSuggestions.mockResolvedValue({ runners: { mflux: [SUGGESTION_CARD] }, video: [], fetchedAt: null });
+  });
+
+  it('opens on Installed with the cards rendered and no discovery above them', async () => {
+    renderPage();
+
+    expect(await screen.findByText('Example LoRA')).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: /Installed/ })).toHaveAttribute('aria-selected', 'true');
+    // Not merely below the fold — discovery is not mounted at all, so no
+    // number of results can push the installed controls anywhere.
+    expect(screen.queryByLabelText('Civitai model URL')).not.toBeInTheDocument();
+    expect(screen.queryByText('Suggested LoRA')).not.toBeInTheDocument();
+    // And nothing was fetched for a view the user never opened.
+    expect(getCivitaiSuggestions).not.toHaveBeenCalled();
+  });
+
+  it('switches to Discover, records it in the URL, and restores Installed on Back', async () => {
+    renderPage();
+    await screen.findByText('Example LoRA');
+
+    fireEvent.click(screen.getByRole('tab', { name: /Discover \/ install/ }));
+
+    expect(await screen.findByLabelText('Civitai model URL')).toBeInTheDocument();
+    expect(await screen.findByText('Suggested LoRA')).toBeInTheDocument();
+    expect(router.search).toBe('?loraView=discover');
+
+    goBack();
+
+    expect(await screen.findByText('Example LoRA')).toBeInTheDocument();
+    expect(screen.queryByLabelText('Civitai model URL')).not.toBeInTheDocument();
+    expect(router.search).toBe('');
+  });
+
+  it('restores Discover from the URL on load, and falls back to Installed for an unknown view', async () => {
+    const { unmount } = renderPage('/models/loras?loraView=discover');
+    expect(await screen.findByLabelText('Civitai model URL')).toBeInTheDocument();
+    unmount();
+
+    renderPage('/models/loras?loraView=bogus');
+    expect(await screen.findByText('Example LoRA')).toBeInTheDocument();
+    expect(screen.queryByLabelText('Civitai model URL')).not.toBeInTheDocument();
+  });
+
+  it('offers a discovery hand-off from the empty Installed state', async () => {
+    listLorasFull.mockResolvedValue([]);
+    renderPage();
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Discover LoRAs to install' }));
+
+    expect(await screen.findByLabelText('Civitai model URL')).toBeInTheDocument();
+  });
+
+  it('hands the user to Installed after a successful install instead of leaving them in the catalog', async () => {
+    listLorasFull.mockResolvedValueOnce([]).mockResolvedValue([LORA]);
+    installLoraFromCivitai.mockResolvedValue({ name: 'example-lora.safetensors' });
+    await renderDiscover();
+
+    const input = await screen.findByLabelText('Civitai model URL');
+    fireEvent.change(input, { target: { value: 'https://civitai.com/models/123/example' } });
+    fireEvent.submit(input.closest('form'));
+    await clickStartDownload();
+
+    fireEvent.click(await screen.findByRole('button', { name: 'View installed' }));
+
+    expect(await screen.findByText('Example LoRA')).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: /Installed/ })).toHaveAttribute('aria-selected', 'true');
+
+    // The hand-off is spent — returning to Discover must not re-offer it.
+    fireEvent.click(screen.getByRole('tab', { name: /Discover \/ install/ }));
+    expect(await screen.findByLabelText('Civitai model URL')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'View installed' })).not.toBeInTheDocument();
+  });
+});
 
 describe('Loras installed-card delete confirmation', () => {
   beforeEach(() => {
@@ -132,7 +250,7 @@ describe('Loras HuggingFace family picker', () => {
   });
 
   it('offers image and video families when autodetection fails, not just LTX-Video', async () => {
-    renderPage();
+    await renderDiscover();
     const input = await screen.findByLabelText('HuggingFace LoRA URL');
     fireEvent.change(input, { target: { value: 'https://huggingface.co/Alissonerdx/CharacterSheet' } });
     fireEvent.submit(input.closest('form'));
@@ -159,7 +277,7 @@ describe('Loras Civitai auth recovery through preflight', () => {
     previewLoraInstall.mockRejectedValueOnce(
       Object.assign(new Error('This LoRA needs an API key.'), { code: 'CIVITAI_AUTH' }),
     );
-    renderPage();
+    await renderDiscover();
     const input = await screen.findByLabelText('Civitai model URL');
     fireEvent.change(input, { target: { value: 'https://civitai.com/models/123/gated' } });
     fireEvent.submit(input.closest('form'));
@@ -186,7 +304,7 @@ describe('Loras suggestion card busy state', () => {
   it('keeps the card "Installing…" through the confirm step and clears only once the install settles', async () => {
     let resolveInstall;
     installLoraFromCivitai.mockReturnValue(new Promise((resolve) => { resolveInstall = resolve; }));
-    renderPage();
+    await renderDiscover();
 
     fireEvent.click(await screen.findByRole('button', { name: 'Quick install' }));
     // Preview resolved (the confirm modal opened) — the card must still read
@@ -201,7 +319,7 @@ describe('Loras suggestion card busy state', () => {
   });
 
   it('clears the spinner when the confirm is cancelled instead of leaving it stuck', async () => {
-    renderPage();
+    await renderDiscover();
     fireEvent.click(await screen.findByRole('button', { name: 'Quick install' }));
     await screen.findByRole('button', { name: 'Start download' });
 
@@ -237,7 +355,7 @@ describe('Loras video suggestion quick-install preflight', () => {
   });
 
   it('shows the disk-preflight confirm before starting the stream install', async () => {
-    renderPage();
+    await renderDiscover();
     fireEvent.click(await screen.findByRole('button', { name: 'Quick install' }));
 
     expect(await screen.findByRole('button', { name: 'Start download' })).toBeInTheDocument();
@@ -294,7 +412,7 @@ describe('Loras video LoRA search-to-install', () => {
   });
 
   it('searches HuggingFace, lets the user pick a non-default file, and installs that exact file', async () => {
-    renderPage();
+    await renderDiscover();
 
     const searchInput = await screen.findByLabelText('Search HuggingFace video LoRAs by name or repository');
     const searchForm = searchInput.closest('form');
@@ -324,7 +442,7 @@ describe('Loras video LoRA search-to-install', () => {
 
   it('shows a retryable error banner when the search request fails', async () => {
     searchVideoLoras.mockRejectedValueOnce(new Error('HuggingFace search failed: 503'));
-    renderPage();
+    await renderDiscover();
 
     const searchInput = await screen.findByLabelText('Search HuggingFace video LoRAs by name or repository');
     const searchForm = searchInput.closest('form');
