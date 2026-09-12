@@ -1240,6 +1240,19 @@ describe('unlockWalkSet', () => {
     expect(reapproved.selection.directions.east.status).toBe('approved');
   });
 
+  it('preserves the finalized set and status when the selection is unreadable', async () => {
+    const id = await finalizedCharacter();
+    const walkDir = join(TEST_ROOT, 'sprites', id, 'walk');
+    const setPath = join(walkDir, `${id}-walk-set-v1.json`);
+    const before = await readFile(setPath, 'utf8');
+    await writeFile(join(walkDir, `${id}-walk-selection-v1.json`), '{broken');
+
+    await expect(unlockWalkSet(id)).rejects.toMatchObject({ code: 'UNREADABLE_STORE' });
+
+    expect(await readFile(setPath, 'utf8')).toBe(before);
+    expect((await records.getRecord(id)).status).toBe('walk-complete');
+  });
+
   it('refuses to unlock a legacy source-pipeline import', async () => {
     const id = await characterWithLockedAnchors(newId(), ['east']);
     await mkdir(join(TEST_ROOT, 'sprites', id, 'walk'), { recursive: true });

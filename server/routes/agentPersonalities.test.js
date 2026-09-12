@@ -140,6 +140,25 @@ describe('Agent Personalities Routes', () => {
       expect(response.status).toBe(200);
       expect(generateAgentPersonality).toHaveBeenCalledWith({}, undefined, undefined);
     });
+
+    it('generates a name from the blank seed sent by the new-agent form', async () => {
+      generateAgentPersonality.mockResolvedValue({ name: 'New Guide' });
+      const seed = {
+        name: '', description: '',
+        personality: { style: 'casual', tone: '', topics: [], quirks: [], promptPrefix: '' },
+        avatar: { emoji: '🤖', color: '#3b82f6' },
+      };
+
+      const response = await request(makeApp())
+        .post('/api/agents/personalities/generate')
+        .send({ seed, providerId: null, model: null });
+
+      expect(response.status).toBe(200);
+      expect(response.body).toEqual({ name: 'New Guide' });
+      expect(generateAgentPersonality).toHaveBeenCalledWith(
+        { ...seed, enabled: true }, null, null,
+      );
+    });
   });
 
   describe('POST /:id/toggle', () => {

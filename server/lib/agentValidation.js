@@ -80,6 +80,9 @@ export const agentUpdateSchema = partialWithoutDefaults(agentSchema).extend({
 // provider prompt.
 export const agentGenerateSchema = z.object({
   seed: agentSchema.partial().extend({
+    // A blank form asks the generator to invent the name; only persisted
+    // personalities require a non-empty name.
+    name: z.string().max(100).optional(),
     personality: partialWithoutDefaults(agentPersonalitySchema).optional(),
   }).optional().default({}),
   providerId: z.string().min(1).max(128).nullable().optional(),

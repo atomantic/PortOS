@@ -188,10 +188,14 @@ function RestReferenceView() {
   const specPath = surface === 'internal' ? '/api/api-docs/internal/openapi.json' : '/api/api-docs/openapi.json';
 
   useEffect(() => {
+    let cancelled = false;
     const load = surface === 'internal' ? api.getInternalOpenApiSpec : api.getOpenApiSpec;
     setSpec(null);
     setError('');
-    load({ silent: true }).then(setSpec).catch((err) => setError(err.message));
+    load({ silent: true })
+      .then((value) => { if (!cancelled) setSpec(value); })
+      .catch((err) => { if (!cancelled) setError(err.message); });
+    return () => { cancelled = true; };
   }, [surface]);
 
   const operations = useMemo(() => operationsFromOpenApi(spec), [spec]);

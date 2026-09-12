@@ -1360,6 +1360,21 @@ export default function VideoGen() {
             {optionsBlockReason && (
               <span className="basis-full text-xs text-port-warning" role="status">{optionsBlockReason}</span>
             )}
+            {/* Said BEFORE the button is pressed, not after the screen is already
+                dark. A user who first learns about the sleep by watching their
+                display go black reads it as a crash and wakes it — which puts
+                WindowServer back in contention with Metal and risks the GPU
+                watchdog panic the sleep exists to avoid. */}
+            {rendersSleepDisplay && !generating && (
+              <p className="flex items-start gap-1.5 text-[11px] text-port-warning">
+                <MonitorOff className="w-3.5 h-3.5 mt-px shrink-0" />
+                <span>
+                  This render will put your display to sleep. The screen will go dark shortly
+                  after you start — that is expected, and waking it can crash the render. Uncheck
+                  “Sleep display during this render” in Options to keep the screen on.
+                </span>
+              </p>
+            )}
             {progressPct != null && <span className="text-xs text-port-accent">{progressPct}%</span>}
             {(generating || error) && (
               <span className={`text-xs truncate ${error ? 'text-port-error' : 'text-gray-400'}`}>
@@ -1820,21 +1835,6 @@ export default function VideoGen() {
             </label>
           )}
 
-          {/* Said BEFORE the button is pressed, not after the screen is already
-              dark. A user who first learns about the sleep by watching their
-              display go black reads it as a crash and wakes it — which puts
-              WindowServer back in contention with Metal and risks the GPU
-              watchdog panic the sleep exists to avoid. */}
-          {rendersSleepDisplay && !generating && (
-            <p className="flex items-start gap-1.5 text-[11px] text-port-warning">
-              <MonitorOff className="w-3.5 h-3.5 mt-px shrink-0" />
-              <span>
-                This render will put your display to sleep. The screen will go dark shortly
-                after you start — that is expected, and waking it can crash the render. Uncheck
-                the option above if you would rather keep the screen on.
-              </span>
-            </p>
-          )}
             </div>
           </details>
         </div>

@@ -106,10 +106,17 @@ export default function MediaCollections() {
 
   const handleDelete = async (collection) => {
     setCollections((prev) => (prev ? prev.filter((c) => c.id !== collection.id) : prev));
-    await deleteMediaCollection(collection.id, { silent: true }).catch((err) => {
+    const deleted = await deleteMediaCollection(collection.id, { silent: true }).then(() => true).catch((err) => {
       toast.error(err.message || 'Delete failed');
       refresh();
+      return false;
     });
+    if (!deleted) return;
+    // Removing the last membership makes its media Unsorted. Counts and covers
+    // are server-owned now, so update that projection after the delete commits.
+    const nextSummaries = await listGalleryCollectionSummaries({ silent: true }).catch(() => null);
+    if (nextSummaries) setSummaries(nextSummaries);
+    else setCollectionsError('Could not load collection covers and counts.');
   };
 
   const unsorted = useMemo(() => ({ ...buildUnsortedCollection([], [], []),

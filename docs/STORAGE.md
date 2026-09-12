@@ -391,7 +391,7 @@ NOT EXISTS` in boot schema and init-db.sql provisions both existing and new
 installs without transforming existing records. No seed or backfill fabricates
 scores. The mandatory Postgres backup includes the table. Assessment rows and their prose remain machine-local. The PortOS baseline app
 also exposes a numeric-only projection through `GET /api/apps/quality-federation`
-(`days=30|90|365`), gated on an identified, registered, enabled full-sync peer
+(`days=30|90|365`), gated on an identified, registered peer with sync enabled
 with outbound sharing allowed. The ordinary app list and capability/status
 payloads still carry no assessment data. See [quality federation](decisions/2026-09-10-portos-quality-federation.md).
 

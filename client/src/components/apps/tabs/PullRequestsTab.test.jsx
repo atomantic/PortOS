@@ -352,6 +352,24 @@ describe('PullRequestsTab', () => {
     expect(await screen.findByRole('link', { name: /PR review: Queued/ })).toBeInTheDocument();
   });
 
+  it('names a failed resolve retry as a merge action and retries that same action', async () => {
+    api.getAppPullRequests.mockResolvedValue(okPayload([{
+      ...PULL_REQUEST,
+      agentAction: { taskId: 'resolve-failed', status: 'failed' },
+    }]));
+    await renderTab();
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Resolve & merge failed');
+    expect(screen.queryByRole('link', { name: 'Abuse Guard setup' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Retry PR review' })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Retry resolve & merge' }));
+    await waitFor(() => expect(api.resolveAppPullRequest).toHaveBeenCalledWith(
+      'app-1', 17, { provider: undefined, model: undefined, effort: undefined },
+    ));
+    expect(api.reviewAppPullRequest).not.toHaveBeenCalled();
+    expect(await screen.findByRole('link', { name: /Resolve & merge: Queued/ })).toBeInTheDocument();
+  });
+
   it('hydrates an in-flight pr-reviewer run without offering the button again', async () => {
     api.getAppPullRequests.mockResolvedValue(okPayload([{
       ...PULL_REQUEST,

@@ -200,7 +200,9 @@ export async function deleteSnapshot(id) {
     if (!exists) return false;
 
     const snapshotFile = join(SNAPSHOTS_DIR, `${id}.json`);
-    await unlink(snapshotFile).catch(() => {});
+    await unlink(snapshotFile).catch((err) => {
+      if (err.code !== 'ENOENT') throw err;
+    });
 
     index.snapshots = index.snapshots.filter(s => s.id !== id);
     await saveIndex(index);

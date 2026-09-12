@@ -332,4 +332,29 @@ describe('MediaCollections', () => {
     expect([...select.options].map((o) => o.textContent))
       .toEqual(['Recently updated', 'Name', 'Item count']);
   });
+
+  it('reveals newly unfiled images after deleting their only collection', async () => {
+    const { listMediaCollections, listGalleryCollectionSummaries, deleteMediaCollection } = await import('../services/api');
+    mockUnsortedItems = [];
+    listMediaCollections.mockResolvedValueOnce([
+      { id: 'col-1', name: 'Alpha', items: [{ kind: 'image', ref: 'img1.png' }] },
+    ]);
+    listGalleryCollectionSummaries.mockResolvedValueOnce([
+      { id: 'unsorted', total: 0, counts: { image: 0, video: 0 }, cover: null },
+      { id: 'col-1', total: 1, counts: { image: 1, video: 0 }, cover: '/data/images/img1.png' },
+    ]).mockResolvedValueOnce([
+      { id: 'unsorted', total: 1, counts: { image: 1, video: 0 }, cover: '/data/images/img1.png' },
+    ]);
+    deleteMediaCollection.mockResolvedValueOnce({ id: 'col-1' });
+    const user = userEvent.setup();
+    renderPage();
+    await screen.findByText('Alpha');
+    expect(screen.queryByText('Unsorted')).not.toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Delete collection' }));
+    const unsorted = await screen.findByTitle('Unsorted');
+    expect(unsorted).toHaveAttribute('href', '/media/collections/unsorted');
+    expect(screen.queryByText('Alpha')).not.toBeInTheDocument();
+    expect(within(unsorted.closest('.bg-port-card')).getByText('1')).toBeInTheDocument();
+    expect(listMediaCollections).toHaveBeenCalledTimes(1);
+  });
 });

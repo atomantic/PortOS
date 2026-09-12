@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router';
 
 const api = vi.hoisted(() => ({
@@ -126,6 +126,29 @@ describe('ApiExplorer', () => {
     expect(screen.getByText('No arbitrary shell or file-system access')).toBeTruthy();
     expect(screen.getByText('Mind: disabled')).toBeTruthy();
     expect(screen.getByText('CoS Agent MCP')).toBeTruthy();
+  });
+
+  it('keeps the current REST surface when earlier reads succeed or fail late', async () => {
+    let finishInternal;
+    let failPublic;
+    api.getInternalOpenApiSpec.mockImplementationOnce(() => new Promise(resolve => { finishInternal = resolve; }));
+    renderPage('/api-reference/rest');
+    fireEvent.click(screen.getByRole('button', { name: 'Exposed' }));
+    await screen.findByText('/api/voice/public/synthesize');
+    await act(async () => { finishInternal(internalSpec); });
+    expect(screen.queryByText('/api/apps')).not.toBeInTheDocument();
+    expect(screen.getByText('/api/voice/public/synthesize')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Internal' }));
+    await screen.findByText('/api/apps');
+    api.getOpenApiSpec.mockImplementationOnce(() => new Promise((_resolve, reject) => { failPublic = reject; }));
+    fireEvent.click(screen.getByRole('button', { name: 'Exposed' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Internal' }));
+    await screen.findByText('/api/apps');
+    await act(async () => { failPublic(new Error('Old public request failed')); });
+    expect(screen.getByText('/api/apps')).toBeInTheDocument();
+    expect(screen.queryByText(/OpenAPI spec unavailable/)).not.toBeInTheDocument();
+    expect(screen.getByRole('link', { name: /Open JSON/i })).toHaveAttribute('href', '/api/api-docs/internal/openapi.json');
   });
 
   it('renders the generated Socket.IO catalog and AsyncAPI link', async () => {

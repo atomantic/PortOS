@@ -51,6 +51,19 @@ describe('VideoGen primary actions', () => {
     expect(generate.compareDocumentPosition(options) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
+  it('warns before submitting a display-sleep render with mobile Options closed', async () => {
+    const sleepModel = videoGenModel('sleep-model', { sleepsDisplayDuringRender: true });
+    state.getVideoGenStatus.mockResolvedValue(videoGenStatus([sleepModel], { displaySleepOnRender: true }));
+    state.getVideoGenModelContext.mockResolvedValue(videoGenModelContext([sleepModel]));
+    await renderVideoGenPage();
+
+    const warning = await screen.findByText(/This render will put your display to sleep/);
+    const options = screen.getByText('Options').closest('details');
+    expect(options).not.toHaveAttribute('open');
+    expect(options).not.toContainElement(warning);
+    expect(screen.getByTestId('video-primary-actions')).toContainElement(warning);
+  });
+
   it('uses the same primary action bar for every video mode', async () => {
     await renderVideoGenPage();
     await waitFor(() => expect(screen.getByLabelText('Model')).toHaveValue(MODEL.id));

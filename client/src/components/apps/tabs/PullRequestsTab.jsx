@@ -502,11 +502,11 @@ export default function PullRequestsTab({ appId, appName }) {
                       if (actionStatus === 'failed') {
                         return (
                           <div key={kind} className="max-w-md text-xs text-port-error space-y-2" role="alert">
-                            <p>{action.error || 'PR review preflight failed before an agent started.'}</p>
+                            <p>{action.error || (kind === 'review' ? 'PR review failed. View the failure record for details.' : 'Resolve & merge failed. View the failure record for details.')}</p>
                             <div className="flex flex-wrap gap-3">
                               <Link className="underline" to={`/cos/tasks?task=${encodeURIComponent(action.taskId)}&source=internal`}>View failure record</Link>
-                              <Link className="underline" to="/models/llms/abuse">Abuse Guard setup</Link>
-                              <button type="button" className="underline" onClick={() => onQueue(pullRequest)}>Retry PR review</button>
+                              {kind === 'review' && <Link className="underline" to="/models/llms/abuse">Abuse Guard setup</Link>}
+                              <button type="button" className="underline" onClick={() => onQueue(pullRequest)}>{kind === 'review' ? 'Retry PR review' : 'Retry resolve & merge'}</button>
                             </div>
                           </div>
                         );

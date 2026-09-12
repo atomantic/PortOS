@@ -3,8 +3,14 @@
  */
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdirSync, rmSync, writeFileSync, existsSync, readFileSync } from 'fs';
+import * as fsPromises from 'fs/promises';
 import { join } from 'path';
 import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../lib/mockPathsDataRoot.js';
+
+vi.mock('fs/promises', async (importOriginal) => {
+  const actual = await importOriginal();
+  return { ...actual, unlink: vi.fn(actual.unlink) };
+});
 
 vi.mock('../lib/fileUtils.js', async (importOriginal) =>
   makePathsProxy(await importOriginal(), { dataRoot: () => lazyTempDataRoot('portos-time-capsule-') }));
@@ -175,5 +181,20 @@ describe('getSnapshot / deleteSnapshot', () => {
     await expect(deleteSnapshot(snapshot.id)).resolves.toBe(true);
     await expect(listSnapshots()).resolves.toEqual([]);
     expect(existsSync(join(snapshotsDir(), `${snapshot.id}.json`))).toBe(false);
+  });
+
+  it('keeps a failed deletion visible and retryable, while tolerating an already missing file', async () => {
+    const snapshot = await createSnapshot('retry-delete');
+    const error = Object.assign(new Error('permission denied'), { code: 'EACCES' });
+    vi.mocked(fsPromises.unlink).mockRejectedValueOnce(error);
+
+    await expect(deleteSnapshot(snapshot.id)).rejects.toBe(error);
+    expect((await listSnapshots()).map(s => s.id)).toEqual([snapshot.id]);
+    expect(await getSnapshot(snapshot.id)).toMatchObject({ id: snapshot.id });
+
+    // A file removed outside PortOS can still have its stale listing deleted.
+    rmSync(join(snapshotsDir(), `${snapshot.id}.json`));
+    await expect(deleteSnapshot(snapshot.id)).resolves.toBe(true);
+    await expect(listSnapshots()).resolves.toEqual([]);
   });
 });

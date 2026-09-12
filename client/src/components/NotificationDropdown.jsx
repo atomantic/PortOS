@@ -204,7 +204,7 @@ export default function NotificationDropdown({
                 type="button"
                 ref={closeRef}
                 onClick={() => setIsOpen(false)}
-                className="inline-flex items-center justify-center min-w-[44px] min-h-[44px] rounded hover:bg-port-border transition-colors focus:outline-hidden focus:ring-2 focus:ring-port-accent sm:hidden"
+                className="inline-flex items-center justify-center min-w-[44px] min-h-[44px] rounded hover:bg-port-border transition-colors focus:outline-hidden focus:ring-2 focus:ring-port-accent sm:min-w-0 sm:min-h-0 sm:p-1.5"
                 title="Close"
                 aria-label="Close notifications"
               >

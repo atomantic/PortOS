@@ -161,7 +161,7 @@ describe('NotificationDropdown', () => {
     }
   });
 
-  it('retains panel focus when updates remove the focused action', async () => {
+  it('retains desktop panel focus when updates remove the focused action', async () => {
     const user = userEvent.setup();
     function LiveDropdown() {
       const [notifications, setNotifications] = useState(makeNotifications(2));
@@ -175,10 +175,15 @@ describe('NotificationDropdown', () => {
         />
       );
     }
-    render(<MemoryRouter><LiveDropdown /></MemoryRouter>);
+    render(<MemoryRouter>
+      {/* Apply the desktop hiding rule: happy-dom does not load Tailwind's CSS. */}
+      <style>{'.sm\\:hidden { display: none; }'}</style>
+      <LiveDropdown />
+    </MemoryRouter>);
     openPanel();
     await user.keyboard('{Enter}');
     const close = screen.getByRole('button', { name: 'Close notifications' });
+    expect(getComputedStyle(close).display).not.toBe('none');
     expect(close).toHaveFocus();
 
     await user.click(screen.getByRole('button', { name: 'Remove notification: Notification 0' }));

@@ -1856,6 +1856,8 @@ async function unlockWalkSetImpl(recordId, { acknowledgeNoClips = false } = {}) 
     throw new ServerError('No finalized walk set to unlock', { status: 409, code: 'WALK_SET_NOT_FINAL' });
   }
   await assertSetReDerivable(recordId, walkSet, { acknowledgeNoClips });
+  // Validate the selection before removing the intact finalized authority.
+  const previous = await loadSelection(recordId);
   await dropFinalizedWalkSet(recordId);
   // Seed a fresh (empty) selection so EVERY direction re-opens: with the walk
   // set gone each direction would still read `approved` from the old selection
@@ -1864,7 +1866,6 @@ async function unlockWalkSetImpl(recordId, { acknowledgeNoClips = false } = {}) 
   // The set's pinned cycle targets survive: unlocking revises the SAME set, and
   // dropping them would silently re-derive a target from whatever direction the
   // user happened to re-approve first.
-  const previous = await loadSelection(recordId);
   await atomicWrite(join(spriteDir(recordId), selectionRelPath(recordId)), {
     ...seedSelection(recordId),
     animationTargets: previous?.animationTargets || {},
