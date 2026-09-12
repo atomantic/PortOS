@@ -98,6 +98,50 @@ describe('BackupWidget snapshots', () => {
     expect(mockToast.success).toHaveBeenCalledWith('Snapshot downloaded');
   });
 
+  it('keeps duplicate snapshot ids distinct and binds restore approval to source', async () => {
+    mockGetBackupSnapshots.mockResolvedValue([
+      {
+        id: 'same-id',
+        source: 'current-machine',
+        sourceLabel: 'current-machine (current machine)',
+        selectionKey: 'current-machine/same-id',
+        fileCount: 2,
+      },
+      {
+        id: 'same-id',
+        source: 'previous-machine',
+        sourceLabel: 'previous-machine',
+        selectionKey: 'previous-machine/same-id',
+        fileCount: 2,
+      },
+    ]);
+    mockRestoreBackup
+      .mockResolvedValueOnce({ changedFiles: ['brain/example.json'] })
+      .mockResolvedValueOnce({ changedFiles: ['brain/example.json'] });
+    renderWidget();
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Snapshots' }));
+    expect(await screen.findByText('Source: previous-machine')).toBeInTheDocument();
+    fireEvent.click(screen.getAllByRole('button', { name: 'Restore' })[1]);
+    fireEvent.click(screen.getByRole('button', { name: 'Preview changes' }));
+
+    expect(await screen.findByText('brain/example.json')).toBeInTheDocument();
+    expect(mockRestoreBackup).toHaveBeenNthCalledWith(1, {
+      snapshotId: 'same-id',
+      source: 'previous-machine',
+      subdirFilter: null,
+      dryRun: true,
+    }, { silent: true });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Restore 1 file(s)' }));
+    await waitFor(() => expect(mockRestoreBackup).toHaveBeenNthCalledWith(2, {
+      snapshotId: 'same-id',
+      source: 'previous-machine',
+      subdirFilter: null,
+      dryRun: false,
+    }, { silent: true }));
+  });
+
   it('stays silent when the user dismisses the save dialog', async () => {
     mockDownloadBackupSnapshot.mockRejectedValue(
       Object.assign(new Error('The user aborted a request.'), { name: 'AbortError' }),

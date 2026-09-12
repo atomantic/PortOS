@@ -470,6 +470,16 @@ function AgentToolsView() {
             <span className="rounded bg-port-bg px-2 py-0.5 text-xs text-gray-500">{tool.providerName}</span>
           </div>
           <p className="text-sm text-gray-400">{tool.description}</p>
+          {tool.recipe && (
+            <div className="rounded border border-port-border bg-port-bg p-2 text-xs text-gray-400">
+              <p>Saved recipe · Persistent Mind library · revision {tool.recipe.revision}</p>
+              <p className="mt-1">Read actions: {tool.recipe.underlyingTools?.join(', ') || 'unavailable'}</p>
+              {!tool.granted && tool.recipe.disabledReason && <p className="mt-1 text-port-warning">Mind: {tool.recipe.disabledReason}</p>}
+              {agentToolsByName.get(tool.name)?.granted === false && agentToolsByName.get(tool.name)?.recipe?.disabledReason && (
+                <p className="mt-1 text-port-warning">CoS MCP: {agentToolsByName.get(tool.name).recipe.disabledReason}</p>
+              )}
+            </div>
+          )}
           <details className="text-xs text-gray-500">
             <summary className="cursor-pointer">Input contract</summary>
             <pre className="mt-2 overflow-x-auto rounded border border-port-border bg-port-bg p-3 text-[11px] text-gray-300">{JSON.stringify(tool.input_schema, null, 2)}</pre>

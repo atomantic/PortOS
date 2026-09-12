@@ -171,6 +171,7 @@ const createFixtureContract = (fixture, settings) => {
       rejectIfConfigured(scope);
       return isolated.sourceStatus?.[scope] ?? 'fresh';
     },
+    readRecipeCatalog: async () => [],
   });
 };
 

@@ -43,6 +43,19 @@ describe('downloadBackupSnapshot', () => {
     expect(HTMLAnchorElement.prototype.click).toHaveBeenCalledTimes(1);
   });
 
+  it('selects a source namespace and gives colliding snapshots distinct filenames', async () => {
+    const blob = new Blob(['snapshot']);
+    fetch.mockResolvedValue({ ok: true, headers: new Headers(), blob: vi.fn().mockResolvedValue(blob) });
+
+    await expect(downloadBackupSnapshot('same-id', 'previous-machine'))
+      .resolves.toEqual({ filename: 'portos-snapshot-previous-machine-same-id.tar.gz' });
+
+    expect(fetch).toHaveBeenCalledWith(
+      '/api/backup/snapshots/same-id/download?source=previous-machine',
+      { credentials: 'same-origin' },
+    );
+  });
+
   it('surfaces a failed download response', async () => {
     fetch.mockResolvedValue({
       ok: false,

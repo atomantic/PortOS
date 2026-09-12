@@ -17,6 +17,7 @@ import {
   formatCosToolCatalog,
   getCosToolCall,
   getCosToolCatalog,
+  readCosToolRecipeCatalog,
 } from '../services/cosToolRegistry.js';
 
 const router = Router();
@@ -26,12 +27,15 @@ const etagFor = (value) => `"${createHash('sha256').update(canonicalStringify(va
 router.get('/tools', asyncHandler(async (req, res) => {
   const query = validateRequest(cosToolCatalogQuerySchema, req.query);
   const [state, settings] = await Promise.all([loadState(), getSettings()]);
+  const capabilities = query.scope === 'agent'
+    ? settings.agentContext?.actions
+    : state.config?.persistentMindCapabilities;
+  const recipes = await readCosToolRecipeCatalog({ scope: query.scope });
   const catalog = getCosToolCatalog({
     scope: query.scope,
     intent: query.intent,
-    capabilities: query.scope === 'agent'
-      ? settings.agentContext?.actions
-      : state.config?.persistentMindCapabilities,
+    capabilities,
+    recipes,
   });
   const response = formatCosToolCatalog(catalog, query.format);
   const etag = etagFor(response);
