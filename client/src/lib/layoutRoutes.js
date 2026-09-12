@@ -135,4 +135,3 @@ export function isFullWidthRoute(pathname) {
     FULL_WIDTH_PATH_PREFIXES.some((prefix) => pathname.startsWith(prefix)) ||
     FULL_WIDTH_PATH_REGEXES.some((re) => re.test(pathname));
 }
-
