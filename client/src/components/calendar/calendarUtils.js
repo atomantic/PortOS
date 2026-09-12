@@ -1,6 +1,27 @@
 import { chipColors } from '../../lib/chipContrast';
 
 /**
+ * Local clock minutes for the portion of a timed event inside one calendar day.
+ * The next midnight is exclusive and maps to 1440, including on DST days whose
+ * elapsed duration is not 24 hours. A non-intersecting event returns null.
+ */
+export function getEventDayMinutes(event, day) {
+  const start = new Date(event.startTime);
+  const end = new Date(event.endTime);
+  const dayStart = new Date(day);
+  dayStart.setHours(0, 0, 0, 0);
+  const dayEnd = new Date(dayStart);
+  dayEnd.setDate(dayEnd.getDate() + 1);
+  if (![start, end, dayStart].every(date => Number.isFinite(date.getTime()))
+    || end < start || start >= dayEnd || end <= dayStart) return null;
+
+  return {
+    startMin: start <= dayStart ? 0 : start.getHours() * 60 + start.getMinutes(),
+    endMin: end >= dayEnd ? 1440 : end.getHours() * 60 + end.getMinutes(),
+  };
+}
+
+/**
  * Neutral chip for an event whose subcalendar has no color (or one we can't
  * parse). `--port-accent` is a space-separated RGB triple, so it only becomes a
  * color inside `rgb()` — the older `var(--port-accent, #3b82f6)` idiom resolved
