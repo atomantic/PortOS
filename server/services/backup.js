@@ -20,7 +20,7 @@ import { checkHealth, getServerMajorVersion } from '../lib/db.js';
 import { resolvePgDumpBinary } from '../lib/pgTools.js';
 import { getBackendName } from './memoryBackend.js';
 import { emitErrorEvent, ServerError } from '../lib/errorHandler.js';
-import { isSafeSubdirFilter } from '../lib/sharedSchemas.js';
+import { isSafeSnapshotSource, isSafeSubdirFilter } from '../lib/sharedSchemas.js';
 import { getIo } from './socket.js';
 import { reloadSettings } from './settings.js';
 import { invalidateAllCaches as invalidateBrainCaches } from './brainStorage.js';
@@ -69,7 +69,7 @@ const markerExists = (snapshotDir, snapshotId) =>
 const failedMarkerExists = (snapshotDir) =>
   markerExistsAt(failedMarkerPath(snapshotDir));
 
-async function snapshotState(snapshotDir, snapshotId) {
+async function snapshotState(snapshotDir, snapshotId, currentSource = true) {
   const [markedInProgress, failed] = await Promise.all([
     markerExists(snapshotDir, snapshotId),
     failedMarkerExists(snapshotDir),
@@ -78,13 +78,13 @@ async function snapshotState(snapshotDir, snapshotId) {
     failed,
     // Once `.failed` exists the run is finished even if marker cleanup was
     // interrupted. The durable failed state still blocks every restore.
-    incomplete: snapshotId === activeSnapshotId || (markedInProgress && !failed),
+    incomplete: (currentSource && snapshotId === activeSnapshotId) || (markedInProgress && !failed),
   };
 }
 
 /** Reject a snapshot that is still being written before any consumer reads it. */
-async function assertSnapshotComplete(snapshotDir, snapshotId) {
-  const { incomplete } = await snapshotState(snapshotDir, snapshotId);
+async function assertSnapshotComplete(snapshotDir, snapshotId, currentSource) {
+  const { incomplete } = await snapshotState(snapshotDir, snapshotId, currentSource);
   if (incomplete) {
     throw new ServerError(`Snapshot is still being written: ${snapshotId}`, {
       status: 409,
@@ -94,8 +94,8 @@ async function assertSnapshotComplete(snapshotDir, snapshotId) {
 }
 
 /** Reject snapshots whose backup run finished unsuccessfully before restoring. */
-async function assertSnapshotRestorable(snapshotDir, snapshotId) {
-  const { incomplete, failed } = await snapshotState(snapshotDir, snapshotId);
+async function assertSnapshotRestorable(snapshotDir, snapshotId, currentSource) {
+  const { incomplete, failed } = await snapshotState(snapshotDir, snapshotId, currentSource);
   if (incomplete) {
     throw new ServerError(`Snapshot is still being written: ${snapshotId}`, {
       status: 409,
@@ -213,6 +213,10 @@ export const DEFAULT_EXCLUDES = [
 // destination (e.g. iCloud) can host backups from multiple machines without
 // their snapshot IDs colliding.
 const MACHINE_HOST = hostname().toLowerCase().replace(/[^\w.\-]/g, '_') || 'unknown';
+const LEGACY_SNAPSHOT_SOURCE = '@legacy';
+const SNAPSHOT_ID_PATTERN = /^[\w\-.:T]+$/;
+const SHA256_PATTERN = /^[0-9a-f]{64}$/;
+const MANIFEST_ABSENT = Symbol('manifest-absent');
 
 const DEFAULT_STATE = {
   lastRun: null,
@@ -749,23 +753,40 @@ export async function generateManifest(snapshotDataDir, manifestPath, pgDumpPath
 /**
  * List all snapshots in the backup destination.
  * @param {string} destPath - Path to external drive backup root
- * @returns {Array<{ id, createdAt, fileCount, incomplete, failed }>} sorted newest-first
+ * @returns {Array<{ id, source, selectionKey, createdAt, fileCount, incomplete, failed }>} sorted newest-first
  */
 export async function listSnapshots(destPath) {
   if (!destPath) return [];
 
-  const snapshotsDir = join(destPath, 'snapshots', MACHINE_HOST);
+  const snapshotsRoot = join(destPath, 'snapshots');
   // withFileTypes so we can skip non-directory entries: the backup target is
   // commonly an iCloud/Finder folder, where macOS drops a `.DS_Store` FILE into
   // every directory. Treating it as a snapshot id and reading
   // `<.DS_Store>/manifest.json` throws ENOTDIR. Also skip dotfile-named dirs so
   // nothing hidden can masquerade as a snapshot (real ids are timestamps).
-  const entries = await readdir(snapshotsDir, { withFileTypes: true }).catch(() => []);
-  const ids = entries.filter(e => e.isDirectory() && !e.name.startsWith('.')).map(e => e.name);
+  const rootEntries = await readdir(snapshotsRoot, { withFileTypes: true }).catch(() => []);
+  const directories = rootEntries.filter(entry => entry.isDirectory() && !entry.name.startsWith('.'));
+  const descriptors = (await Promise.all(directories.map(async (entry) => {
+    const rootEntryPath = join(snapshotsRoot, entry.name);
+    const contents = await readdir(rootEntryPath, { withFileTypes: true }).catch(() => []);
+    const isLegacySnapshot = SNAPSHOT_ID_PATTERN.test(entry.name) && contents.some(child =>
+      (child.name === 'data' && child.isDirectory())
+      || child.name === 'manifest.json'
+      || child.name === 'portos-db.sql'
+      || child.name === SNAPSHOT_IN_PROGRESS_MARKER
+      || child.name === SNAPSHOT_FAILED_MARKER);
+
+    if (isLegacySnapshot) return [{ id: entry.name, source: LEGACY_SNAPSHOT_SOURCE }];
+    if (!isSafeSnapshotSource(entry.name) || entry.name === LEGACY_SNAPSHOT_SOURCE) return [];
+
+    return contents
+      .filter(child => child.isDirectory() && !child.name.startsWith('.') && SNAPSHOT_ID_PATTERN.test(child.name))
+      .map(child => ({ id: child.name, source: entry.name }));
+  }))).flat();
 
   const snapshots = await Promise.all(
-    ids.map(async (id) => {
-      const snapshotDir = join(snapshotsDir, id);
+    descriptors.map(async ({ id, source }) => {
+      const { snapshotDir, currentSource } = resolveSnapshotPath(destPath, id, source);
       const manifestPath = join(snapshotDir, 'manifest.json');
       // logError:false — a snapshot taken before manifests existed legitimately
       // has none; the null is handled below, so it isn't worth a warning per list.
@@ -774,9 +795,15 @@ export async function listSnapshots(destPath) {
       // Report a still-being-written snapshot rather than hiding it: the row is
       // real and the user should see the run in flight, but download and restore
       // must not be offered for it. Mirrors assertSnapshotComplete's two signals.
-      const { incomplete, failed } = await snapshotState(snapshotDir, id);
+      const { incomplete, failed } = await snapshotState(snapshotDir, id, currentSource);
       return {
         id,
+        source,
+        sourceLabel: source === LEGACY_SNAPSHOT_SOURCE
+          ? 'Legacy (pre-namespace)'
+          : source === MACHINE_HOST ? `${source} (current machine)` : source,
+        selectionKey: `${source}/${id}`,
+        currentMachine: source === MACHINE_HOST,
         createdAt: manifest?.generatedAt ?? null,
         fileCount: manifest?.fileCount ?? 0,
         incomplete,
@@ -786,17 +813,15 @@ export async function listSnapshots(destPath) {
   );
 
   return snapshots.sort((a, b) => {
-    if (!a.createdAt) return 1;
-    if (!b.createdAt) return -1;
-    return b.createdAt.localeCompare(a.createdAt);
+    if (a.createdAt && b.createdAt) return b.createdAt.localeCompare(a.createdAt)
+      || a.selectionKey.localeCompare(b.selectionKey);
+    if (a.createdAt) return -1;
+    if (b.createdAt) return 1;
+    return b.id.localeCompare(a.id) || a.source.localeCompare(b.source);
   });
 }
 
-const SNAPSHOT_ID_PATTERN = /^[\w\-.:T]+$/;
-const SHA256_PATTERN = /^[0-9a-f]{64}$/;
-const MANIFEST_ABSENT = Symbol('manifest-absent');
-
-function resolveSnapshotPath(destPath, snapshotId) {
+function resolveSnapshotPath(destPath, snapshotId, source) {
   if (!snapshotId || !SNAPSHOT_ID_PATTERN.test(snapshotId)) {
     throw new ServerError(`Invalid snapshotId: ${snapshotId}`, {
       status: 400,
@@ -804,9 +829,29 @@ function resolveSnapshotPath(destPath, snapshotId) {
     });
   }
 
-  const snapshotsRoot = resolve(join(destPath, 'snapshots', MACHINE_HOST));
-  const snapshotDir = resolve(join(snapshotsRoot, snapshotId));
-  const rel = relative(snapshotsRoot, snapshotDir);
+  const resolvedSource = source ?? MACHINE_HOST;
+  if (!isSafeSnapshotSource(resolvedSource)) {
+    throw new ServerError(`Invalid snapshot source: ${resolvedSource}`, {
+      status: 400,
+      code: 'VALIDATION_ERROR',
+    });
+  }
+
+  const snapshotsRoot = resolve(join(destPath, 'snapshots'));
+  const sourceRoot = resolvedSource === LEGACY_SNAPSHOT_SOURCE
+    ? snapshotsRoot
+    : resolve(join(snapshotsRoot, resolvedSource));
+  const sourceRel = relative(snapshotsRoot, sourceRoot);
+  if (resolvedSource !== LEGACY_SNAPSHOT_SOURCE
+      && (!sourceRel || sourceRel.startsWith('..') || isAbsolute(sourceRel))) {
+    throw new ServerError(`Path traversal detected for snapshot source: ${resolvedSource}`, {
+      status: 400,
+      code: 'VALIDATION_ERROR',
+    });
+  }
+
+  const snapshotDir = resolve(join(sourceRoot, snapshotId));
+  const rel = relative(sourceRoot, snapshotDir);
   if (!rel || rel.startsWith('..') || isAbsolute(rel)) {
     throw new ServerError(`Path traversal detected for snapshotId: ${snapshotId}`, {
       status: 400,
@@ -814,7 +859,36 @@ function resolveSnapshotPath(destPath, snapshotId) {
     });
   }
 
-  return { snapshotsRoot, snapshotDir };
+  return {
+    snapshotsRoot: sourceRoot,
+    snapshotsBase: snapshotsRoot,
+    snapshotDir,
+    currentSource: resolvedSource === MACHINE_HOST,
+    explicitSource: source !== undefined,
+  };
+}
+
+async function assertExplicitSnapshotSourceSafe({
+  snapshotsBase,
+  snapshotsRoot,
+  snapshotDir,
+  explicitSource,
+}, snapshotId) {
+  if (!explicitSource) return;
+
+  const [baseInfo, sourceInfo, snapshotInfo] = await Promise.all([
+    lstat(snapshotsBase).catch(() => null),
+    lstat(snapshotsRoot).catch(() => null),
+    lstat(snapshotDir).catch(() => null),
+  ]);
+  if (baseInfo?.isSymbolicLink?.()
+      || sourceInfo?.isSymbolicLink?.()
+      || snapshotInfo?.isSymbolicLink?.()) {
+    throw new ServerError(`Snapshot source escapes through a symbolic link: ${snapshotId}`, {
+      status: 400,
+      code: 'VALIDATION_ERROR',
+    });
+  }
 }
 
 /**
@@ -823,13 +897,15 @@ function resolveSnapshotPath(destPath, snapshotId) {
  * @param {string} snapshotId - Snapshot ID to archive
  * @returns {Promise<import('stream').Readable>}
  */
-export async function openSnapshotStream(destPath, snapshotId) {
-  const { snapshotsRoot, snapshotDir } = resolveSnapshotPath(destPath, snapshotId);
+export async function openSnapshotStream(destPath, snapshotId, { source } = {}) {
+  const resolved = resolveSnapshotPath(destPath, snapshotId, source);
+  const { snapshotsRoot, snapshotDir, currentSource } = resolved;
+  await assertExplicitSnapshotSourceSafe(resolved, snapshotId);
   const info = await stat(snapshotDir).catch(() => null);
   if (!info?.isDirectory?.()) {
     throw new ServerError(`Snapshot not found: ${snapshotId}`, { status: 404, code: 'NOT_FOUND' });
   }
-  await assertSnapshotComplete(snapshotDir, snapshotId);
+  await assertSnapshotComplete(snapshotDir, snapshotId, currentSource);
 
   // tar's stderr is a pipe (spawn's default) and MUST be drained: left unread
   // it fills its ~64KB buffer on a tree that warns a lot — files changing under
@@ -1043,9 +1119,11 @@ async function verifySnapshotFiles(snapshotDir, srcDir, snapshotId, subdirFilter
  * @param {boolean} [options.dryRun=true] - If true, do not write any files
  * @param {string|null} [options.subdirFilter=null] - Limit restore to a subdirectory
  */
-export async function restoreSnapshot(destPath, snapshotId, { dryRun = true, subdirFilter = null } = {}) {
-  const { snapshotsRoot, snapshotDir } = resolveSnapshotPath(destPath, snapshotId);
-  await assertSnapshotRestorable(snapshotDir, snapshotId);
+export async function restoreSnapshot(destPath, snapshotId, { dryRun = true, subdirFilter = null, source } = {}) {
+  const resolved = resolveSnapshotPath(destPath, snapshotId, source);
+  const { snapshotDir, currentSource } = resolved;
+  await assertExplicitSnapshotSourceSafe(resolved, snapshotId);
+  await assertSnapshotRestorable(snapshotDir, snapshotId, currentSource);
   const srcDir = join(snapshotDir, 'data');
 
   // Defense-in-depth for non-route callers (the route already validates via
@@ -1107,9 +1185,11 @@ export async function restoreSnapshot(destPath, snapshotId, { dryRun = true, sub
  * @param {string} snapshotId
  * @param {{dryRun?: boolean}} [options]
  */
-export async function restorePostgres(destPath, snapshotId, { dryRun = true } = {}) {
-  const { snapshotDir } = resolveSnapshotPath(destPath, snapshotId);
-  await assertSnapshotRestorable(snapshotDir, snapshotId);
+export async function restorePostgres(destPath, snapshotId, { dryRun = true, source } = {}) {
+  const resolved = resolveSnapshotPath(destPath, snapshotId, source);
+  const { snapshotDir, currentSource } = resolved;
+  await assertExplicitSnapshotSourceSafe(resolved, snapshotId);
+  await assertSnapshotRestorable(snapshotDir, snapshotId, currentSource);
   const sqlPath = join(snapshotDir, 'portos-db.sql');
 
   const info = await stat(sqlPath).catch(() => null);
