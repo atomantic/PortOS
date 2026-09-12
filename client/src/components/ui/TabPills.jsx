@@ -52,15 +52,20 @@ export default function TabPills({
 
   const activeIndex = visibleTabs.findIndex((t) => t.id === activeTab);
 
-  // Fresh tab arrays and live counts must not pull the page back to the bar.
+  // Reveal only inside the horizontal tab strip. scrollIntoView also scrolls
+  // ancestors, pulling a mobile page away from its task form/content.
   useEffect(() => {
-    if (activeIndex !== -1 && tabRefs.current[activeIndex]?.scrollIntoView) {
-      tabRefs.current[activeIndex].scrollIntoView({
-        behavior: 'smooth',
-        block: 'nearest',
-        inline: 'nearest',
-      });
-    }
+    const tab = tabRefs.current[activeIndex];
+    const strip = tab?.parentElement;
+    if (!strip || variant === 'filter') return;
+    const bounds = strip.getBoundingClientRect();
+    const tabBounds = tab.getBoundingClientRect();
+    const left = bounds.left + strip.clientLeft;
+    const right = left + strip.clientWidth;
+    const delta = tabBounds.left < left
+      ? tabBounds.left - left
+      : Math.max(0, tabBounds.right - right);
+    if (delta) strip.scrollBy({ left: delta, behavior: 'smooth' });
   }, [activeTab, activeIndex, variant]);
 
   const handleTabKeyDown = (event, index) => {
@@ -87,7 +92,7 @@ export default function TabPills({
     const targetTab = visibleTabs[targetIndex];
     event.preventDefault();
     onChange(targetTab.id);
-    tabRefs.current[targetIndex]?.focus();
+    tabRefs.current[targetIndex]?.focus({ preventScroll: true });
   };
 
   // Mobile `<select>` collapse, shared by both variants so `mobileDropdown` works

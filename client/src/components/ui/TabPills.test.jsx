@@ -229,21 +229,29 @@ describe('TabPills — filter variant', () => {
   });
 });
 
-it('reveals selections without scrolling again for refreshed tab data', () => {
-  const scroll = vi.spyOn(HTMLElement.prototype, 'scrollIntoView').mockImplementation(() => {});
-  try {
-    const view = (activeTab, tabs) => <><TabPills tabs={tabs} activeTab={activeTab} onChange={vi.fn()} /><input aria-label="Draft" /></>;
-    const { rerender } = render(view('cast', []));
-    expect(scroll).not.toHaveBeenCalled();
-    rerender(view('cast', sampleTabs));
-    expect(scroll).toHaveBeenCalledTimes(1);
-    screen.getByRole('textbox', { name: 'Draft' }).focus();
-    rerender(view('cast', sampleTabs.map(tab => ({ ...tab, count: 10 }))));
-    expect(scroll).toHaveBeenCalledTimes(1);
-    expect(screen.getByRole('textbox', { name: 'Draft' })).toHaveFocus();
-    rerender(view('places', sampleTabs));
-    expect(scroll).toHaveBeenCalledTimes(2);
-  } finally {
-    scroll.mockRestore();
-  }
+it('reveals tabs horizontally without moving ancestors or stealing draft focus', () => {
+  const ancestorScroll = vi.spyOn(HTMLElement.prototype, 'scrollIntoView');
+  const view = (activeTab, tabs) => <><TabPills tabs={tabs} activeTab={activeTab} onChange={vi.fn()} /><input aria-label="Draft" /></>;
+  const { rerender } = render(view('cast', []));
+  const strip = screen.getByRole('tablist');
+  const scroll = vi.spyOn(strip, 'scrollBy').mockImplementation(() => {});
+  vi.spyOn(strip, 'getBoundingClientRect').mockReturnValue({ left: 0 });
+  Object.defineProperty(strip, 'clientWidth', { configurable: true, value: 200 });
+  rerender(view('cast', sampleTabs));
+  const places = screen.getByRole('tab', { name: /Places/ });
+  vi.spyOn(places, 'getBoundingClientRect').mockReturnValue({ left: 180, right: 260 });
+  const draft = screen.getByRole('textbox', { name: 'Draft' });
+  draft.focus();
+  rerender(view('places', sampleTabs));
+  expect(scroll).toHaveBeenLastCalledWith({ left: 60, behavior: 'smooth' });
+  rerender(view('places', sampleTabs.map(tab => ({ ...tab, count: 10 }))));
+  expect(scroll).toHaveBeenCalledTimes(1);
+  expect(draft).toHaveFocus();
+  expect(ancestorScroll).not.toHaveBeenCalled();
+  // Selecting a tab clipped at the left edge reveals it in the other direction.
+  const cast = screen.getByRole('tab', { name: /Cast/ });
+  vi.spyOn(cast, 'getBoundingClientRect').mockReturnValue({ left: -80, right: 20 });
+  rerender(view('cast', sampleTabs));
+  expect(scroll).toHaveBeenLastCalledWith({ left: -80, behavior: 'smooth' });
+  ancestorScroll.mockRestore();
 });
