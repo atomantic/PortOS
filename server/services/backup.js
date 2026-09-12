@@ -914,6 +914,7 @@ function manifestDataEntries(manifest, srcDir, subdirFilter) {
   if (manifest.fileCount !== entries.length) return null;
 
   const selected = [];
+  const dataPaths = new Set();
   for (const [entry, expectedHash] of entries) {
     if (typeof expectedHash !== 'string' || !SHA256_PATTERN.test(expectedHash)) return null;
     if (entry === '../portos-db.sql') continue;
@@ -931,19 +932,58 @@ function manifestDataEntries(manifest, srcDir, subdirFilter) {
     const filePath = resolve(srcDir, ...segments);
     const rel = relative(resolve(srcDir), filePath);
     if (!rel || rel.startsWith('..') || isAbsolute(rel)) return null;
+    if (dataPaths.has(normalized)) return null;
+    dataPaths.add(normalized);
 
     if (!subdirFilter || normalized === subdirFilter || normalized.startsWith(`${subdirFilter}/`)) {
       selected.push({ filePath, expectedHash });
     }
   }
 
-  return selected;
+  return { selected, dataPaths };
 }
 
 const snapshotFileIntegrityError = (snapshotId) => new ServerError(
   `Snapshot file integrity check failed: ${snapshotId}`,
   { status: 409, code: 'BACKUP_FILE_INTEGRITY_FAILED' },
 );
+
+async function snapshotManifestFilePaths(srcDir, subdirFilter) {
+  const scopePath = subdirFilter
+    ? resolve(srcDir, ...subdirFilter.split('/'))
+    : srcDir;
+  const scopeInfo = await lstat(scopePath).catch(err => {
+    if (err?.code === 'ENOENT') return null;
+    throw err;
+  });
+  if (!scopeInfo) return [];
+
+  const candidates = scopeInfo.isDirectory()
+    ? (await readdir(scopePath, { recursive: true })).map(entry => join(scopePath, entry))
+    : [scopePath];
+  const paths = [];
+
+  for (const filePath of candidates) {
+    const info = await stat(filePath).catch(async err => {
+      // Match generateManifest(): dangling links are intentionally outside the
+      // manifest, while readable links to regular files are hashed and tracked.
+      if (err?.code === 'ENOENT') {
+        const entryInfo = await lstat(filePath);
+        if (entryInfo.isSymbolicLink()) return null;
+      }
+      throw err;
+    });
+    if (!info?.isFile()) continue;
+
+    const normalized = relative(srcDir, filePath).replaceAll('\\', '/');
+    if (!normalized || normalized.startsWith('../') || isAbsolute(normalized)) {
+      throw new Error('Snapshot entry escaped the data directory');
+    }
+    paths.push(normalized);
+  }
+
+  return paths;
+}
 
 async function verifySnapshotFiles(snapshotDir, srcDir, snapshotId, subdirFilter) {
   // A unique fallback distinguishes a genuinely absent legacy manifest from an
@@ -963,12 +1003,22 @@ async function verifySnapshotFiles(snapshotDir, srcDir, snapshotId, subdirFilter
     return { status: 'unverified', reason: 'manifest_absent', checkedFiles: 0 };
   }
 
-  const selected = manifestDataEntries(manifestRead.value, srcDir, subdirFilter);
-  if (!selected) {
+  const manifestEntries = manifestDataEntries(manifestRead.value, srcDir, subdirFilter);
+  if (!manifestEntries) {
     throw new ServerError(`Snapshot integrity manifest is invalid: ${snapshotId}`, {
       status: 409,
       code: 'BACKUP_MANIFEST_INVALID',
     });
+  }
+  const { selected, dataPaths } = manifestEntries;
+
+  // Hash agreement is insufficient if rsync can also copy files the manifest
+  // never recorded. Rebuild the same regular-file inventory in the selected
+  // scope and reject additions before rsync reads or overwrites anything.
+  const snapshotPaths = await snapshotManifestFilePaths(srcDir, subdirFilter)
+    .catch(() => null);
+  if (!snapshotPaths || snapshotPaths.some(entry => !dataPaths.has(entry))) {
+    throw snapshotFileIntegrityError(snapshotId);
   }
 
   for (const { filePath, expectedHash } of selected) {

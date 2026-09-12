@@ -1201,6 +1201,26 @@ describe('restoreSnapshot manifest verification', () => {
     expect(await realFs.readFile(livePath, 'utf8')).toBe('healthy live data');
   });
 
+  it('refuses a file added after preview when it is absent from the manifest', async () => {
+    const relativePath = 'restore-integrity/example.json';
+    const originalHash = await writeSnapshotFile(relativePath, 'trusted backup');
+    await writeManifest({ [relativePath]: originalHash });
+    const livePath = joinPath(PATHS.data, relativePath);
+    await realFs.mkdir(joinPath(livePath, '..'), { recursive: true });
+    await realFs.writeFile(livePath, 'healthy live data');
+
+    await expect(finishRestore({ dryRun: true })).resolves.toMatchObject({
+      verification: { status: 'verified', checkedFiles: 1 },
+    });
+
+    await writeSnapshotFile('restore-integrity/unrecorded.json', 'added after backup');
+    spawn.mockReset();
+    await expect(restoreSnapshot(tmpRoot, 'snap-1', { dryRun: false }))
+      .rejects.toMatchObject({ code: 'BACKUP_FILE_INTEGRITY_FAILED' });
+    expect(spawn).not.toHaveBeenCalled();
+    expect(await realFs.readFile(livePath, 'utf8')).toBe('healthy live data');
+  });
+
   it.each([
     ['missing', async (path) => realFs.unlink(path)],
     ['unreadable', async (path) => {
@@ -1229,6 +1249,16 @@ describe('restoreSnapshot manifest verification', () => {
       'media/example.json': '0'.repeat(64),
       '../portos-db.sql': '1'.repeat(64),
     });
+
+    await expect(finishRestore({ dryRun: true, subdirFilter: 'brain' })).resolves.toMatchObject({
+      verification: { status: 'verified', checkedFiles: 1 },
+    });
+  });
+
+  it('ignores an unrecorded file outside a literal selective scope', async () => {
+    const brainHash = await writeSnapshotFile('brain/example.json', 'brain');
+    await writeSnapshotFile('media/unrecorded.json', 'outside selection');
+    await writeManifest({ 'brain/example.json': brainHash });
 
     await expect(finishRestore({ dryRun: true, subdirFilter: 'brain' })).resolves.toMatchObject({
       verification: { status: 'verified', checkedFiles: 1 },
