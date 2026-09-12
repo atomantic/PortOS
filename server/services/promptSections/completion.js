@@ -21,6 +21,8 @@ function withNoChangeAuditGuidance(guidance, noChangeSuccess) {
     : guidance;
 }
 
+const AUDIT_FLOW_GUIDANCE = 'Follow the bundled Better audit workflow through remediation, verification, PR publication, and cleanup. You own delivery: open the category PRs and merge into the repository default branch when current-head CI and configured reviews pass. If no external reviewers are configured, complete the internal review and merge after CI passes. This launch authorizes that merge by default; honor explicit --scan-only, --no-merge, and read-only constraints. Use plain git and the forge CLI when slash commands are unavailable. Do not stop at local commits or hand publication back to PortOS. A clean audit needs no PR. If any required gate is unavailable or fails, retain the work and report INCOMPLETE with the PR or branch and first unverified checkpoint.';
+
 const RELEASE_FLOW_GUIDANCE = 'Follow the bundled release workflow through its final verification and report. It owns release delivery; do not stop at a prepared commit or hand publication back to PortOS. If it cannot complete, report INCOMPLETE and the first unverified checkpoint instead of claiming a successful release.';
 
 const REASONING_ONLY_BULLET = '**This is a reasoning-only task.** The worktree is discarded on exit — do NOT commit, push, merge, or open a PR. Write your result to the completion sentinel (see the Completion section) and stop.';
@@ -78,6 +80,7 @@ export function buildCompletionGuidelineBullet({
     [COMPLETION_MODES.ACTION_OUTPUT]: () => '**This task produces no code output.** Its result is the API request or command your instructions describe (a PortOS endpoint call, a filed tracker issue, …) — do NOT run `/do:push`, `/do:pr`, `/simplify`, `git commit`, `git push`, or open a PR. Write the completion sentinel (see the Completion section) and stop.',
     [COMPLETION_MODES.DISCARD_WORKTREE]: () => REASONING_ONLY_BULLET,
     [COMPLETION_MODES.CLAIM_FLOW]: () => '**This is a self-managed claim flow.** Follow the claim prompt above through its phase-specific worktree, PR/MR, review, merge or human-handoff, and cleanup steps. Do NOT stop after committing or hand the lifecycle back to PortOS.',
+    [COMPLETION_MODES.AUDIT_FLOW]: () => AUDIT_FLOW_GUIDANCE,
     [COMPLETION_MODES.RELEASE_FLOW]: () => RELEASE_FLOW_GUIDANCE,
     [COMPLETION_MODES.READ_ONLY]: () => '**This is a read-only task.** Do NOT commit, push, or modify any files in the repository. Only read data and generate reports.',
     // A PR follow-up already carries its own PRIMARY OBJECTIVE section with the
@@ -122,6 +125,7 @@ const NO_COMMIT_TARGET_MODES = new Set([
   COMPLETION_MODES.DISCARD_WORKTREE,
   COMPLETION_MODES.CLAIM_FLOW,
   COMPLETION_MODES.RELEASE_FLOW,
+  COMPLETION_MODES.AUDIT_FLOW,
   COMPLETION_MODES.READ_ONLY,
 ]);
 
@@ -182,6 +186,10 @@ export function buildFallbackCompletionInstructions({
     [COMPLETION_MODES.READ_ONLY]: () => ({
       step4: 'Do NOT commit, push, or modify any files — this is a read-only task; read what you need and report your findings',
       gitHygiene: '- **Do NOT commit, push, or modify any files.** This is a read-only task — read what you need and report your findings.',
+    }),
+    [COMPLETION_MODES.AUDIT_FLOW]: () => ({
+      step4: AUDIT_FLOW_GUIDANCE,
+      gitHygiene: `- ${AUDIT_FLOW_GUIDANCE}`,
     }),
     [COMPLETION_MODES.RELEASE_FLOW]: () => ({
       step4: RELEASE_FLOW_GUIDANCE,
@@ -393,6 +401,16 @@ export function buildReleaseFlowCompletionSection({ isTui = false, sentinelPath 
   return lines.join('\n');
 }
 
+/** Better owns publication; write the sentinel only after recording its final outcome. */
+export function buildAuditFlowCompletionSection({ isTui = false, sentinelPath = null } = {}) {
+  const lines = ['## Better Workflow Handoff', AUDIT_FLOW_GUIDANCE];
+  if (isTui && sentinelPath) {
+    lines.push('', 'After verification and delivery, write the outcome to the completion sentinel and stop:', '',
+      ...buildSentinelWriteSteps(1, sentinelPath, '   ## Audit outcome\n   <merged PR URLs, clean audit result, or INCOMPLETE with the retained branch and first unverified checkpoint>'));
+  }
+  return lines.join('\n');
+}
+
 /** Audit reports are a deliverable even when the run only files issues. */
 export function buildAuditOutputCompletionSection(task, sentinelPath) {
   const category = resolveTaskHookType(task);
@@ -495,6 +513,7 @@ export function buildAutoMergeCommitStep(baseBranch = null) {
  * apart from their non-slashdo equivalents.
  */
 export function worktreeCommitGuidance({ isTui, mode = null, canTypeSlashCommands = false, rendersInlinePrLifecycle = false, isWorktreeOnExistingBranch, willOpenPR, discardWorktree, claimFlow = false, noChangeSuccess = false }) {
+  if (mode === COMPLETION_MODES.AUDIT_FLOW) return AUDIT_FLOW_GUIDANCE;
   if (mode === COMPLETION_MODES.RELEASE_FLOW) return RELEASE_FLOW_GUIDANCE;
   if (discardWorktree) return DISCARD_WORKTREE_NOTE;
   if (claimFlow) return 'The claim workflow in the Completion section owns the push, PR/MR, review, merge or human-handoff, and cleanup steps.';
