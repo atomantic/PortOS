@@ -78,6 +78,7 @@ const EXPECTED_STAGE_OLD = {
   'pipeline-editorial-arc-transitions.md': ['72e27707f0dc82eab84eed74e9707587'],
   'pipeline-editorial-arc-regression.md': ['85b15c9e913fe8a436d407f1562a2b10'],
   'pipeline-editorial-climax-agency.md': ['1bca84f9a0b7cde84e20e43702a12ffa'],
+  'pipeline-editorial-plot-structure.md': ['400d829dd291753a299fa08d6afbe561'],
 };
 const EXPECTED_STAGE_NEW = {
   'cd-evaluate.md': 'a86de29e186581d3508662569c8acbf6',
@@ -134,6 +135,7 @@ const EXPECTED_STAGE_NEW = {
   'pipeline-editorial-arc-transitions.md': '46cb5444f41d05fb7bdbc219d62619b2',
   'pipeline-editorial-arc-regression.md': '8e34b3a84cd7f948592a2a94b28caee4',
   'pipeline-editorial-climax-agency.md': '255ad29214f48e6dd1c17adbb5887478',
+  'pipeline-editorial-plot-structure.md': '2a4fe67b7b5e128314c385bb458decf2',
 };
 const EXPECTED_PARTIAL_OLD = {
   'bible-deference.md': ['218f0e85643609ed85a12b1ccc7b5a8d'],
