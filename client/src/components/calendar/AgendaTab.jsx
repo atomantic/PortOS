@@ -6,6 +6,7 @@ import socket from '../../services/socket';
 import EventDetail from './EventDetail';
 import { formatTimeOfDay as formatTime, formatWeekdayDate } from '../../utils/formatters';
 import BrailleSpinner from '../BrailleSpinner';
+import EmptyState from '../EmptyState';
 import useUrlParams from '../../hooks/useUrlParams';
 
 const RSVP_STYLES = {
@@ -72,9 +73,10 @@ export default function AgendaTab({ accounts }) {
     };
   }, [fetchEvents]);
 
+  const enabledAccounts = accounts.filter(a => a.enabled);
+
   const handleSync = async () => {
     setSyncing(true);
-    const enabledAccounts = accounts.filter(a => a.enabled);
     await Promise.allSettled(enabledAccounts.map(a => api.syncCalendarAccount(a.id)));
     setSyncing(false);
     toast.success('Calendar sync started');
@@ -114,7 +116,7 @@ export default function AgendaTab({ accounts }) {
         )}
         <button
           onClick={handleSync}
-          disabled={syncing || accounts.filter(a => a.enabled).length === 0}
+          disabled={syncing || enabledAccounts.length === 0}
           className="flex items-center gap-2 px-3 py-2 bg-port-accent/10 text-port-accent rounded-lg text-sm hover:bg-port-accent/20 transition-colors disabled:opacity-50"
         >
           <RefreshCw size={14} className={syncing ? 'animate-spin' : ''} />
@@ -128,11 +130,24 @@ export default function AgendaTab({ accounts }) {
           <BrailleSpinner text="Loading" />
         </div>
       ) : grouped.length === 0 ? (
-        <div className="text-center py-12 text-gray-500">
-          <Clock size={48} className="mx-auto mb-4 opacity-50" />
-          <p>No upcoming events</p>
-          <p className="text-sm mt-1">Sync your calendar accounts to see events here</p>
-        </div>
+        enabledAccounts.length === 0 ? (
+          <EmptyState
+            icon={Clock}
+            title="No calendar connected"
+            message="Connect a calendar account to see upcoming events."
+            actionTo="/calendar/sync"
+            actionLabel="Connect a calendar"
+          />
+        ) : (
+          <EmptyState
+            icon={Clock}
+            title="No upcoming events"
+            message="Sync now to pull upcoming events"
+            onAction={handleSync}
+            actionLabel="Sync now"
+            actionDisabled={syncing}
+          />
+        )
       ) : (
         <div className="space-y-6">
           {grouped.map((group) => (
