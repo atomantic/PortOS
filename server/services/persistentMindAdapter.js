@@ -49,6 +49,7 @@ import {
 import { readPersistentMindUserActionsPrompt } from './persistentMindUserActions.js';
 import {
   buildPersistentMindToolPrompt,
+  readPersistentMindRecipeCatalog,
   executeCosToolCall,
   isCosTaskToolName,
 } from './cosToolRegistry.js';
@@ -104,7 +105,7 @@ const failedToolResult = (message) => ({
   error: String(message || 'Tool execution failed').slice(0, 500),
 });
 
-const executeMindToolCalls = async ({ calls, turnId, wake, signal, capabilities, recordCapabilityEvent, taskBudget }) => {
+const executeMindToolCalls = async ({ calls, turnId, wake, signal, capabilities, recordCapabilityEvent, taskBudget, toolBudget }) => {
   const results = [];
   for (const candidate of calls) {
     if (signal?.aborted) throw new Error(String(signal.reason || 'Persistent mind turn interrupted'));
@@ -117,12 +118,16 @@ const executeMindToolCalls = async ({ calls, turnId, wake, signal, capabilities,
     const isTaskCall = isCosTaskToolName(candidate.name);
     const taskLimitReached = isTaskCall && taskBudget.used >= PERSISTENT_MIND_TASK_LIMITS.maxPerTurn;
     if (isTaskCall && !taskLimitReached) taskBudget.used += 1;
-    const result = taskLimitReached
+    const toolLimitReached = toolBudget.used >= COS_TOOL_CALL_LIMITS.maxCallsPerTurn;
+    if (!toolLimitReached) toolBudget.used += 1;
+    const result = toolLimitReached
+      ? failedToolResult(`The PortOS tool-call limit of ${COS_TOOL_CALL_LIMITS.maxCallsPerTurn} was reached`)
+      : taskLimitReached
       ? failedToolResult(`Persistent Mind task request limit of ${PERSISTENT_MIND_TASK_LIMITS.maxPerTurn} was reached for this turn`)
       : await executeCosToolCall({
         call: { ...candidate, requestId },
         authority: { scope: 'mind', capabilities },
-        context: { turnId, wake, signal, recordCapabilityEvent },
+        context: { turnId, wake, signal, recordCapabilityEvent, toolBudget },
       }).catch((error) => failedToolResult(error?.message));
     await recordCapabilityEvent?.({
       kind: 'result',
@@ -387,14 +392,14 @@ export function createPersistentMindTurnAdapter() {
       // already redacted, no grant required. Deeper lookbacks use the
       // readPortos-gated user-actions.query tool.
       const userActionsPrompt = await readPersistentMindUserActionsPrompt();
-      const toolCapabilityPrompt = buildPersistentMindToolPrompt(taskAccess);
+      const toolCapabilityPrompt = buildPersistentMindToolPrompt(taskAccess, await readPersistentMindRecipeCatalog(taskAccess));
       const callCapabilityPrompt = buildPersistentMindCallCapabilityPrompt({ enabled: taskAccess.callUser });
       const screenshots = (Array.isArray(wake?.message?.images) ? wake.message.images : []).map((image) => {
         const path = resolveScreenshot(image?.filename);
         if (!path) throw new Error('A Persistent Mind image attachment no longer resolves under the screenshots directory');
         return path;
       });
-      const basePrompt = buildPersistentMindTurnPrompt({
+      let basePrompt = buildPersistentMindTurnPrompt({
         context,
         wake,
         taskCapabilityPrompt,
@@ -406,7 +411,7 @@ export function createPersistentMindTurnAdapter() {
       let providerPrompt = basePrompt;
       let result;
       let parsed;
-      let toolCallCount = 0;
+      const toolBudget = { used: 0 };
       const taskBudget = { used: 0 };
       const completedToolResults = [];
       const actionNotices = new Set();
@@ -507,7 +512,7 @@ export function createPersistentMindTurnAdapter() {
           break;
         }
 
-        const remaining = Math.max(0, COS_TOOL_CALL_LIMITS.maxCallsPerTurn - toolCallCount);
+        const remaining = Math.max(0, COS_TOOL_CALL_LIMITS.maxCallsPerTurn - toolBudget.used);
         const calls = parsed.toolCalls.slice(0, remaining);
         const rejectedCalls = parsed.toolCalls.slice(remaining);
         if (rejectedCalls.length > 0) {
@@ -535,10 +540,14 @@ export function createPersistentMindTurnAdapter() {
           capabilities: taskAccess,
           recordCapabilityEvent,
           taskBudget,
+          toolBudget,
         });
         completedToolResults.push(...toolResults);
-        toolCallCount += calls.length;
-        const budgetExhausted = toolCallCount >= COS_TOOL_CALL_LIMITS.maxCallsPerTurn || round === MAX_TOOL_PROVIDER_ROUNDS - 2;
+        const liveCapabilities = normalizePersistentMindCapabilities((await loadState()).config?.persistentMindCapabilities);
+        basePrompt = buildPersistentMindTurnPrompt({ context, wake, taskCapabilityPrompt, visibilityPrompt, userActionsPrompt, callCapabilityPrompt,
+          toolCapabilityPrompt: buildPersistentMindToolPrompt(liveCapabilities, await readPersistentMindRecipeCatalog(liveCapabilities)),
+        });
+        const budgetExhausted = toolBudget.used >= COS_TOOL_CALL_LIMITS.maxCallsPerTurn || round === MAX_TOOL_PROVIDER_ROUNDS - 2;
         providerPrompt = `${basePrompt}\n\n# Completed tool results\n${JSON.stringify(completedToolResults)}\n\n${parsed.taskRequests.length > 0 ? 'Task requests from this intermediate round were not queued. Include only the final desired taskRequests in a terminal response with toolCalls: [].\n' : ''}${budgetExhausted ? 'The tool-call budget is exhausted. Return a final response with toolCalls: [] and do not repeat completed actions.' : 'Use these results to continue. Do not repeat a completed requestId.'}`;
       }
       // After the tool rounds, so a call is placed on the turn's final answer
@@ -562,7 +571,7 @@ export function createPersistentMindTurnAdapter() {
         result = { ...result, text: JSON.stringify(parsed) };
       }
       const message = parsed.message || (wake?.kind === 'message' ? parsed.thinkingSummary : '');
-      if (!parsed.thinkingSummary && !message && memoryCandidates.length === 0 && parsed.taskRequests.length === 0 && toolCallCount === 0 && !callOutcome) {
+      if (!parsed.thinkingSummary && !message && memoryCandidates.length === 0 && parsed.taskRequests.length === 0 && toolBudget.used === 0 && !callOutcome) {
         throw new Error('Persistent mind returned no visible thought, reply, memory candidate, task request, or tool call');
       }
       const events = [];

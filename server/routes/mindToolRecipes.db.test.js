@@ -7,6 +7,7 @@ import { requireDbOrSkip } from '../lib/dbTestGate.js';
 import { request } from '../lib/testHelper.js';
 import { errorMiddleware } from '../lib/errorHandler.js';
 import recipeRoutes from './mindToolRecipeRoutes.js';
+import { createRecipe, updateRecipe, archiveRecipe, restoreRecipe, getRecipe, getRecipeByName, listRecipes } from '../services/mindToolRecipes.js';
 
 const health = await checkHealth().catch((error) => ({ connected: false, error: error.message }));
 const ready = requireDbOrSkip('routes/mindToolRecipes.db.test', health.connected, health.error);
@@ -59,6 +60,18 @@ describe.skipIf(!ready)('Mind recipe library over HTTP and PostgreSQL', () => {
     expect(history.map(({ revision }) => revision)).toEqual([4, 3, 2, 1]);
     expect(history[3].definition).toEqual(saved.definition);
     expect(history.every((entry) => Object.keys(entry).sort().join(',') === 'archived,author,createdAt,definition,revision')).toBe(true);
+  });
+
+  it('persists Mind authorship across definition changes and pages only definition history', async () => {
+    const saved = await createRecipe(definition(), { author: 'mind' }); ids.push(saved.id);
+    expect(await getRecipeByName(saved.name)).toMatchObject({ id: saved.id, activeRevision: 1 });
+    await updateRecipe(saved.id, { definition: { ...saved.definition, purpose: 'Revised check-in' }, expectedRevision: 1 }, { author: 'mind' });
+    await archiveRecipe(saved.id, { expectedRevision: 2 }, { author: 'mind' });
+    await restoreRecipe(saved.id, { expectedRevision: 3, revision: 1 }, { author: 'mind' });
+    const page = await getRecipe(saved.id, { limit: 2, offset: 1 });
+    expect(page.versions.map(({ revision, author }) => ({ revision, author }))).toEqual([{ revision: 3, author: 'mind' }, { revision: 2, author: 'mind' }]);
+    expect((await listRecipes({ limit: 1, offset: 0 })).recipes).toHaveLength(1);
+    expect(page.recipe.definition).toEqual(saved.definition);
   });
 
   it('validates without persisting and preserves future definitions without granting execution', async () => {
