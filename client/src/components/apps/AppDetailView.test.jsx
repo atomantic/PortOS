@@ -136,6 +136,14 @@ describe('AppDetailView header title', () => {
     const heading = await screen.findByRole('heading', { name: longName });
     expect(heading).toHaveAttribute('title', longName);
   });
+
+  it('keeps the edit control next to the app identity on desktop', async () => {
+    api.getApp.mockResolvedValue(APP);
+    renderDetail();
+
+    const heading = await screen.findByRole('heading', { name: APP.name });
+    expect(heading.parentElement).toHaveClass('flex-1', 'lg:flex-initial', 'min-w-0');
+  });
 });
 
 describe('AppDetailView managed-app feature tabs', () => {
