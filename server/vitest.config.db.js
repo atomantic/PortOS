@@ -18,6 +18,7 @@ export const DB_TEST_INCLUDE = [
   'services/appQuality.db.test.js',
   '**/db.test.js',
   'services/dbAdmin.db.test.js',
+  'services/backup.db.test.js',
   'services/catalogDB.test.js',
   'services/catalogDB.facets.db.test.js',
   'services/humanActivity.db.test.js',

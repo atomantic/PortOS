@@ -16,7 +16,7 @@ import { PATHS, ensureDir, readJSONFile, readJSONFileStrict, atomicWrite, sha256
 import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
 import { createLineReader } from '../lib/streamLines.js';
 import { getEvent } from './eventScheduler.js';
-import { checkHealth, getServerMajorVersion } from '../lib/db.js';
+import { checkHealth, ensureSchema, getServerMajorVersion } from '../lib/db.js';
 import { resolvePgDumpBinary } from '../lib/pgTools.js';
 import { getBackendName } from './memoryBackend.js';
 import { emitErrorEvent, ServerError } from '../lib/errorHandler.js';
@@ -1180,7 +1180,7 @@ export async function restoreSnapshot(destPath, snapshotId, { dryRun = true, sub
  *   { status: 'ok', dryRun, sizeBytes, tableCount }   (dry-run or applied)
  *   { status: 'skipped', reason: 'no_dump' }           (no sql file in snapshot)
  *   { status: 'skipped', reason: 'not_configured' }    (real restore, PG unreachable)
- *   { status: 'failed', reason: 'manifest_unreadable'|'manifest_mismatch'|'restore_error'|'timeout', error? }
+ *   { status: 'failed', reason: 'manifest_unreadable'|'manifest_mismatch'|'restore_error'|'timeout'|'restore_schema_reconciliation', error? }
  * @param {string} destPath - Backup destination root
  * @param {string} snapshotId
  * @param {{dryRun?: boolean}} [options]
@@ -1243,7 +1243,7 @@ export async function restorePostgres(destPath, snapshotId, { dryRun = true, sou
   const pgDb = process.env.PGDATABASE || 'portos';
   const pgUser = process.env.PGUSER || 'portos';
 
-  return new Promise((resolveP) => {
+  const replay = await new Promise((resolveP) => {
     // ON_ERROR_STOP=1 aborts on the first failed statement; --single-transaction
     // wraps the whole replay in one transaction so that abort ROLLs BACK every
     // prior statement. Together they make the restore atomic: it either fully
@@ -1290,6 +1290,24 @@ export async function restorePostgres(destPath, snapshotId, { dryRun = true, sou
       resolveP({ status: 'failed', reason: 'restore_error', error: err.message });
     });
   });
+  if (replay.status !== 'ok') return replay;
+
+  // Replay has committed. Reapply this version's upgrades even when readiness
+  // was cached before the restore, then honor the restored migration ledger.
+  const reconciliationError = await (async () => {
+    await ensureSchema({ force: true });
+    const { runDbMigrations } = await import('../scripts/run-db-migrations.js');
+    await runDbMigrations();
+  })().then(() => null, (err) => err);
+  if (reconciliationError) {
+    console.error(`❌ DB restore schema reconciliation failed: ${reconciliationError.message}`);
+    return {
+      status: 'failed',
+      reason: 'restore_schema_reconciliation',
+      error: 'The database dump was applied, but schema recovery is incomplete. The restore was not rolled back. Restart PortOS to retry schema recovery; if it still fails, inspect the server logs and repair the database before continuing.',
+    };
+  }
+  return replay;
 }
 
 /**

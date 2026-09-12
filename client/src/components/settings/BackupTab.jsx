@@ -236,6 +236,8 @@ export function BackupTab() {
       .catch(() => ({ status: 'failed', reason: 'request_error' }));
     if (result.status === 'ok') {
       toast.success(`Database restored from ${target.request.snapshotId}`, { icon: '💾' });
+    } else if (result.reason === 'restore_schema_reconciliation') {
+      toast.error('The database dump was applied, but schema recovery is incomplete. It was not rolled back. Restart PortOS to retry recovery; if it still fails, check the server logs and repair the database before continuing.', { duration: Infinity });
     } else {
       toast.error(`DB restore failed: ${result.reason || 'unknown'}`);
     }
