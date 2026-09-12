@@ -1,3 +1,4 @@
+import { compareIssuesInSeries } from '../../../lib/pipelineIssueOrder.js';
 /**
  * arcPlanner/context.js — shared context-building + collection helpers.
  *
@@ -200,7 +201,7 @@ export const SOURCE_STAGE_ORDER = [...MANUSCRIPT_STAGES, 'idea'];
 /**
  * Concatenate the richest authored artifact per issue into one corpus an
  * upstream pass can back-derive FROM — the "started from a finished manuscript"
- * case. Issues are ordered by arcPosition so the corpus reads in story order.
+ * case. Issues follow their series-global numbers so volumes do not interleave.
  * Returns '' when no issue has text in any of `stageOrder`.
  *
  * `stageOrder` selects which stages count (and their precedence). The default
@@ -214,7 +215,7 @@ export const SOURCE_STAGE_ORDER = [...MANUSCRIPT_STAGES, 'idea'];
  */
 export async function collectManuscriptSections(seriesId, { stageOrder = MANUSCRIPT_STAGES } = {}) {
   if (!seriesId) return [];
-  const issues = (await listIssues({ seriesId }).catch(() => [])).sort(compareIssuesByPosition);
+  const issues = (await listIssues({ seriesId }).catch(() => [])).sort(compareIssuesInSeries);
   const sections = [];
   for (const iss of issues) {
     const st = iss.stages || {};
@@ -294,7 +295,7 @@ export async function collectManuscriptByType(seriesId) {
   const sectionsByType = Object.fromEntries(MANUSCRIPT_STAGES.map((t) => [t, []]));
   const counts = Object.fromEntries(MANUSCRIPT_STAGES.map((t) => [t, 0]));
   if (!seriesId) return { sectionsByType, availableTypes: [], detectedPrimary: null };
-  const issues = (await listIssues({ seriesId }).catch(() => [])).sort(compareIssuesByPosition);
+  const issues = (await listIssues({ seriesId }).catch(() => [])).sort(compareIssuesInSeries);
   for (const iss of issues) {
     const st = iss.stages || {};
     for (const sid of MANUSCRIPT_STAGES) {

@@ -83,6 +83,8 @@ const AUTOPILOT_LLM_STAGES = [
   ['beatSheet', 'Beat sheets'],
   ['beatContinuity', 'Beat continuity'],
   ['textStages', 'Draft text stages'],
+  ['pilotDraft', 'Draft opening issue'],
+  ['pilotReview', 'Review opening before expansion'],
   ['scriptVerify', 'Verify scripts'],
   ['editorialReview', 'Editorial review'],
   ['reverseOutline', 'Reverse outline'],
@@ -489,6 +491,7 @@ function Findings({ items }) {
 export default function AutopilotPanel({ series, onSeriesUpdate, onIssuesUpdate }) {
   const seriesId = series?.id;
   const [active, setActive] = useState(false);
+  const [attachVersion, setAttachVersion] = useState(0);
   const [pausePending, setPausePending] = useState(false);
   const [starting, setStarting] = useState(false);
   const [mode, setMode] = useState(null);
@@ -580,6 +583,7 @@ export default function AutopilotPanel({ series, onSeriesUpdate, onIssuesUpdate 
   // live progress line names, so a run started elsewhere (or by the scheduler)
   // still says which provider (and how hard it thinks) it is spending on.
   const [runLlm, setRunLlm] = useState(null);
+  const [productionScope, setProductionScope] = useState('series');
 
   // A cooperative cancel persists every non-destructive run-local LLM choice.
   // Restore those choices on Resume so a model experiment does not silently
@@ -587,6 +591,7 @@ export default function AutopilotPanel({ series, onSeriesUpdate, onIssuesUpdate 
   useEffect(() => {
     const paused = series?.autopilot?.status === 'paused';
     const resume = paused ? series?.autopilot?.resumeOptions : null;
+    setProductionScope(resume?.productionScope || 'series');
     setProviderOverride(resume?.providerOverride || '');
     setModelOverride(resume?.modelOverride || '');
     setEffortOverride(resume?.effortOverride || '');
@@ -599,6 +604,7 @@ export default function AutopilotPanel({ series, onSeriesUpdate, onIssuesUpdate 
   }, [
     seriesId,
     series?.autopilot?.status,
+    series?.autopilot?.resumeOptions?.productionScope,
     series?.autopilot?.resumeOptions?.providerOverride,
     series?.autopilot?.resumeOptions?.modelOverride,
     series?.autopilot?.resumeOptions?.effortOverride,
@@ -776,6 +782,7 @@ export default function AutopilotPanel({ series, onSeriesUpdate, onIssuesUpdate 
   // fresh Run/Resume would see that stale terminal frame and immediately tear
   // the new run down. Terminal frames whose runId doesn't match are ignored.
   const activeRunIdRef = useRef(null);
+  const settledRunIdRef = useRef(null);
 
   // Read a run's `start` frame — mode (the dry-run badge), the resolved run
   // provider/model, and a dry-run's plan. Shared by the SSE frame and the
@@ -799,6 +806,7 @@ export default function AutopilotPanel({ series, onSeriesUpdate, onIssuesUpdate 
     getPipelineAutopilotStatus(seriesId, { silent: true })
       .then((s) => {
         if (canceled || !s?.active) return;
+        if (settledRunIdRef.current && s.autopilot?.runId === settledRunIdRef.current) return;
         activeRunIdRef.current = s.autopilot?.runId || null;
         // SSE replays only the last frame, so the run's `start` frame comes back
         // on the status payload instead — same shape, same reader.
@@ -812,7 +820,7 @@ export default function AutopilotPanel({ series, onSeriesUpdate, onIssuesUpdate 
       })
       .catch(() => null);
     return () => { canceled = true; };
-  }, [seriesId, applyStartFrame]);
+  }, [seriesId, attachVersion, applyStartFrame]);
 
   // Capture dry-run plan + mode. The plan rides the start frame, but a fast
   // dry-run can complete before the client attaches and only the terminal frame
@@ -835,6 +843,7 @@ export default function AutopilotPanel({ series, onSeriesUpdate, onIssuesUpdate 
     if (!active || !latest || !RUN_ENDED.has(latest.type)) return;
     // Ignore a terminal frame left over from a previous run (stale `latest`).
     if (activeRunIdRef.current && latest.runId && latest.runId !== activeRunIdRef.current) return;
+    settledRunIdRef.current = latest.runId || activeRunIdRef.current;
     setActive(false);
     setPausePending(false);
     // Freeze the map on how this run ended: a paused/errored run keeps its
@@ -847,7 +856,7 @@ export default function AutopilotPanel({ series, onSeriesUpdate, onIssuesUpdate 
       if (latest.dryRun) toast.success('Autopilot plan ready');
       else if (latest.craftGapIssues > 0) toast.warning(`Autopilot complete with ${craftGapCaution(latest.craftGapIssues)}`);
       else if (latest.editorialCheckErrors > 0) toast.warning(`Autopilot complete — ${editorialCheckCaution(latest.editorialCheckErrors)}`);
-      else toast.success('Autopilot complete — draft is production-ready');
+      else toast.success('Autopilot complete — selected production pass finished');
     }
     else if (latest.type === 'canceled') toast.success('Autopilot canceled');
     else if (latest.type === 'paused') toast.warning(`Autopilot paused — ${latest.reason || 'needs review'}`);
@@ -903,7 +912,8 @@ export default function AutopilotPanel({ series, onSeriesUpdate, onIssuesUpdate 
       } : {}),
       ...(Object.keys(stageLlm).length > 0 ? { stageLlm } : {}),
     };
-    const res = await startPipelineAutopilot(seriesId, { includeVisual, fileGaps, ...roundOverrides, ...gateOverride, ...unlockOverride, ...llmOverride }, { silent: true })
+    const scopeOverride = productionScope === 'first-issue' ? { productionScope } : {};
+    const res = await startPipelineAutopilot(seriesId, { includeVisual, fileGaps, ...scopeOverride, ...roundOverrides, ...gateOverride, ...unlockOverride, ...llmOverride }, { silent: true })
       .catch((err) => { toast.error(err.message || 'Could not start autopilot'); return null; });
     setStarting(false);
     if (!res) return;
@@ -918,10 +928,11 @@ export default function AutopilotPanel({ series, onSeriesUpdate, onIssuesUpdate 
     // Track this run's id BEFORE enabling the stream so the terminal-frame
     // effect can reject a stale terminal frame from the previous run.
     activeRunIdRef.current = res.runId || null;
+    setAttachVersion((version) => version + 1);
     setActive(true);
     // `options` is the single dep for every persisted option — the registry reads
     // live values through refs, so no option can be forgotten here.
-  }, [seriesId, includeVisual, fileGaps, unlockForRun, readinessGate, providerOverride, modelOverride, effortOverride, separateJudgeLlm, judgeProviderOverride, judgeModelOverride, judgeEffortOverride, stageLlm, options, persistRounds]);
+  }, [seriesId, includeVisual, fileGaps, productionScope, unlockForRun, readinessGate, providerOverride, modelOverride, effortOverride, separateJudgeLlm, judgeProviderOverride, judgeModelOverride, judgeEffortOverride, stageLlm, options, persistRounds]);
 
   const cancel = useCallback(async () => {
     setPausePending(false);
@@ -965,7 +976,7 @@ export default function AutopilotPanel({ series, onSeriesUpdate, onIssuesUpdate 
       <div className="flex items-center gap-2 flex-wrap p-3">
         <Rocket size={15} className="text-port-accent" />
         <span className="text-sm font-medium text-white">Autonomous mode</span>
-        <span className="text-xs text-gray-500">drives every missing step to a production-ready draft</span>
+        <span className="text-xs text-gray-500">reviews the story before producing the selected issues</span>
 
         <div className="ml-auto flex items-center gap-2">
           {!active ? (
@@ -1014,6 +1025,26 @@ export default function AutopilotPanel({ series, onSeriesUpdate, onIssuesUpdate 
       </div>
 
       {/* Options popover */}
+      {!active ? (
+        <div className="px-3 pb-3 flex flex-wrap items-center gap-2">
+          <label htmlFor="autopilot-production-scope" className="text-xs text-gray-400">Produce</label>
+          <select
+            id="autopilot-production-scope"
+            value={productionScope}
+            onChange={(event) => setProductionScope(event.target.value)}
+            disabled={starting}
+            className="max-w-full rounded border border-port-border bg-port-bg px-2 py-1.5 text-sm text-white"
+          >
+            <option value="series">All planned issues</option>
+            <option value="first-issue">First issue only</option>
+          </select>
+          <span className="text-xs text-gray-500">
+            {productionScope === 'first-issue'
+              ? 'Draft and draw the opening. Editorial repairs can still update the whole plan and any existing drafts.'
+              : 'The opening receives developmental review before later issues are drafted.'}
+          </span>
+        </div>
+      ) : null}
       {showOpts && !active ? (
         <div className="px-3 pb-3 flex flex-col gap-2 border-t border-port-border pt-3">
           {/* Which AI actually runs. The panel used to name none of this, so the
@@ -1444,7 +1475,7 @@ export default function AutopilotPanel({ series, onSeriesUpdate, onIssuesUpdate 
               {ap.status === 'paused' ? (ap.currentStep ? `Paused at ${stepLabel(ap.currentStep)}` : 'Paused')
                 : doneWithGaps ? `Completed with ${craftGapCaution(ap.craftGapIssues)}`
                   : doneWithCheckErrors ? `Completed — ${editorialCheckCaution(ap.editorialCheckErrors)}`
-                    : ap.status === 'done' ? 'Last run completed — draft is production-ready' : 'Last run errored'}
+                    : ap.status === 'done' ? 'Last run completed — selected production pass finished' : 'Last run errored'}
             </span>
             {ap.status === 'paused' && PAUSE_BADGES[ap.pauseKind] ? (
               <Pill tone="warning" size="xs" title={PAUSE_BADGES[ap.pauseKind].title}>

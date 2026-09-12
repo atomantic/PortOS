@@ -647,7 +647,7 @@ describe('resolveNextStep (pure)', () => {
     const kinds = (opts) => autopilot.__testing.buildDryRunPlan(series, issues, opts).map((p) => p.kind);
     // With editorial enabled (default), the reverse-outline refresh (#1349), both
     // registry checks + health gate appear.
-    expect(kinds({})).toEqual(expect.arrayContaining(['editorialReview', 'reverseOutline', 'editorialChecks', 'editorialHealthGate']));
+    expect(kinds({})).toEqual(expect.arrayContaining(['pilotReview', 'reverseOutline', 'editorialChecks', 'editorialHealthGate']));
     // The reverse-outline refresh is enumerated BEFORE the editorial checks it feeds.
     const defaultKinds = kinds({});
     expect(defaultKinds.indexOf('reverseOutline')).toBeLessThan(defaultKinds.indexOf('editorialChecks'));
@@ -689,7 +689,8 @@ describe('resolveNextStep (pure)', () => {
     // an arc verify + one volume verify = 3, so the 8-call budget buys 2 → +6.
     expect(byKind.verifyArc.estActions).toBe(14);
     // textStages: one child action per not-yet-text-ready issue (2 here).
-    expect(byKind.textStages.estActions).toBe(2);
+    expect(byKind.pilotDraft.estActions).toBe(1);
+    expect(byKind.textStages.estActions).toBe(1);
     // Pure-gate steps that bill nothing against the cap are zero-cost.
     expect(byKind.editorialHealthGate.estActions).toBe(0);
   });
@@ -711,7 +712,7 @@ describe('resolveNextStep (pure)', () => {
     expect(actionsFor({ maxArcVerifyRounds: 4, maxArcIsolationAttempts: 0 }, 'verifyArc')).toBe(11);
     expect(actionsFor({ maxArcVerifyRounds: 4, maxArcResolveRetries: 0 }, 'verifyArc')).toBe(11);
     // Editorial review follows the same convergence shape.
-    expect(actionsFor({ maxEditorialRounds: 2 }, 'editorialReview')).toBe(3);
+    expect(actionsFor({ maxEditorialRounds: 2 }, 'pilotReview')).toBe(3);
   });
 
   it('estimates editorialChecks LLM fan-out as issues × enabled LLM checks (#1576)', () => {
@@ -808,7 +809,7 @@ describe('resolveNextStep (pure)', () => {
   it('skips a season already attempted for beats (no infinite loop)', () => {
     const step = resolveNextStep(comic, [issue()], { arcVerified: true, foundationGated: true, beatsAttempted: new Set(['se1']) });
     // beats skipped → falls through to text stages
-    expect(step).toMatchObject({ kind: 'textStages', issueId: 'iss1' });
+    expect(step).toMatchObject({ kind: 'pilotDraft', issueId: 'iss1' });
   });
 
   it('runs whole-manuscript beat continuity once beats exist, before text (#1510)', () => {
@@ -829,14 +830,14 @@ describe('resolveNextStep (pure)', () => {
 
   it('asks for text stages once beats are continuity-checked but scripts do not exist', () => {
     const step = resolveNextStep(comic, [issue({ stages: { idea: ready() } })], { arcVerified: true, foundationGated: true, beatContinuityChecked: true });
-    expect(step).toMatchObject({ kind: 'textStages', issueId: 'iss1' });
+    expect(step).toMatchObject({ kind: 'pilotDraft', issueId: 'iss1' });
   });
 
   it('asks for structural script verify once comic script is ready', () => {
     const step = resolveNextStep(
       comic,
       [issue({ stages: { idea: ready(), comicScript: ready(VALID_SCRIPT) } })],
-      { arcVerified: true, foundationGated: true, beatContinuityChecked: true },
+      { arcVerified: true, foundationGated: true, beatContinuityChecked: true, pilotReviewed: true },
     );
     expect(step).toMatchObject({ kind: 'scriptVerify', issueId: 'iss1' });
   });
@@ -845,7 +846,7 @@ describe('resolveNextStep (pure)', () => {
     const step = resolveNextStep(
       comic,
       [issue({ stages: { idea: ready(), comicScript: ready(VALID_SCRIPT) } })],
-      { arcVerified: true, foundationGated: true, beatContinuityChecked: true, scriptChecked: new Set(['iss1']) },
+      { arcVerified: true, foundationGated: true, beatContinuityChecked: true, pilotReviewed: true, scriptChecked: new Set(['iss1']) },
     );
     expect(step.kind).toBe('editorialReview');
   });
@@ -854,7 +855,7 @@ describe('resolveNextStep (pure)', () => {
     const step = resolveNextStep(
       comic,
       [issue({ stages: { idea: ready(), comicScript: ready(VALID_SCRIPT) } })],
-      { arcVerified: true, foundationGated: true, beatContinuityChecked: true, scriptChecked: new Set(['iss1']), editorialReviewed: true },
+      { arcVerified: true, foundationGated: true, beatContinuityChecked: true, pilotReviewed: true, scriptChecked: new Set(['iss1']), editorialReviewed: true },
       { includeVisual: false },
     );
     expect(step.kind).toBe('reverseOutline');
@@ -864,7 +865,7 @@ describe('resolveNextStep (pure)', () => {
     const step = resolveNextStep(
       comic,
       [issue({ stages: { idea: ready(), comicScript: ready(VALID_SCRIPT) } })],
-      { arcVerified: true, foundationGated: true, beatContinuityChecked: true, scriptChecked: new Set(['iss1']), editorialReviewed: true, reverseOutlineRefreshed: true },
+      { arcVerified: true, foundationGated: true, beatContinuityChecked: true, pilotReviewed: true, scriptChecked: new Set(['iss1']), editorialReviewed: true, reverseOutlineRefreshed: true },
       { includeVisual: false },
     );
     expect(step.kind).toBe('editorialChecks');
@@ -874,7 +875,7 @@ describe('resolveNextStep (pure)', () => {
     const step = resolveNextStep(
       comic,
       [issue({ stages: { idea: ready(), comicScript: ready(VALID_SCRIPT) } })],
-      { arcVerified: true, foundationGated: true, beatContinuityChecked: true, scriptChecked: new Set(['iss1']), editorialReviewed: true, reverseOutlineRefreshed: true, editorialChecksReviewed: true },
+      { arcVerified: true, foundationGated: true, beatContinuityChecked: true, pilotReviewed: true, scriptChecked: new Set(['iss1']), editorialReviewed: true, reverseOutlineRefreshed: true, editorialChecksReviewed: true },
       { includeVisual: false },
     );
     expect(step.kind).toBe('editorialHealthGate');
@@ -884,7 +885,7 @@ describe('resolveNextStep (pure)', () => {
     const step = resolveNextStep(
       comic,
       [issue({ stages: { idea: ready(), comicScript: ready(VALID_SCRIPT) } })],
-      { arcVerified: true, foundationGated: true, beatContinuityChecked: true, scriptChecked: new Set(['iss1']), editorialReviewed: true, reverseOutlineRefreshed: true, editorialChecksReviewed: true, editorialHealthReady: true },
+      { arcVerified: true, foundationGated: true, beatContinuityChecked: true, pilotReviewed: true, scriptChecked: new Set(['iss1']), editorialReviewed: true, reverseOutlineRefreshed: true, editorialChecksReviewed: true, editorialHealthReady: true },
       { includeVisual: false },
     );
     expect(step.kind).toBe('done');
@@ -894,7 +895,7 @@ describe('resolveNextStep (pure)', () => {
     const step = resolveNextStep(
       comic,
       [issue({ stages: { idea: ready(), comicScript: ready(VALID_SCRIPT) } })],
-      { arcVerified: true, foundationGated: true, beatContinuityChecked: true, scriptChecked: new Set(['iss1']), editorialReviewed: true, reverseOutlineRefreshed: true, editorialChecksReviewed: true, editorialHealthReady: true },
+      { arcVerified: true, foundationGated: true, beatContinuityChecked: true, pilotReviewed: true, scriptChecked: new Set(['iss1']), editorialReviewed: true, reverseOutlineRefreshed: true, editorialChecksReviewed: true, editorialHealthReady: true },
       { includeVisual: true, target: 'text' },
     );
     expect(step.kind).toBe('done');
@@ -904,7 +905,7 @@ describe('resolveNextStep (pure)', () => {
     const step = resolveNextStep(
       comic,
       [issue({ stages: { idea: ready(), comicScript: ready(VALID_SCRIPT) } })],
-      { arcVerified: true, foundationGated: true, beatContinuityChecked: true, scriptChecked: new Set(['iss1']), editorialReviewed: true, reverseOutlineRefreshed: true, editorialChecksReviewed: true, editorialHealthReady: true },
+      { arcVerified: true, foundationGated: true, beatContinuityChecked: true, pilotReviewed: true, scriptChecked: new Set(['iss1']), editorialReviewed: true, reverseOutlineRefreshed: true, editorialChecksReviewed: true, editorialHealthReady: true },
       { includeVisual: true },
     );
     expect(step.kind).toBe('canonVerify');
@@ -914,7 +915,7 @@ describe('resolveNextStep (pure)', () => {
     const step = resolveNextStep(
       comic,
       [issue({ stages: { idea: ready(), comicScript: ready(VALID_SCRIPT) } })],
-      { arcVerified: true, foundationGated: true, beatContinuityChecked: true, scriptChecked: new Set(['iss1']), editorialReviewed: true, reverseOutlineRefreshed: true, editorialChecksReviewed: true, editorialHealthReady: true, canonVerified: true },
+      { arcVerified: true, foundationGated: true, beatContinuityChecked: true, pilotReviewed: true, scriptChecked: new Set(['iss1']), editorialReviewed: true, reverseOutlineRefreshed: true, editorialChecksReviewed: true, editorialHealthReady: true, canonVerified: true },
       { includeVisual: true },
     );
     expect(step).toMatchObject({ kind: 'visualDraft', issueId: 'iss1' });
@@ -933,7 +934,7 @@ describe('resolveNextStep (pure)', () => {
     const step = resolveNextStep(
       comic,
       [issue({ stages: renderedStages })],
-      { arcVerified: true, foundationGated: true, beatContinuityChecked: true, scriptChecked: new Set(['iss1']), editorialReviewed: true, reverseOutlineRefreshed: true, editorialChecksReviewed: true, editorialHealthReady: true, canonVerified: true },
+      { arcVerified: true, foundationGated: true, beatContinuityChecked: true, pilotReviewed: true, scriptChecked: new Set(['iss1']), editorialReviewed: true, reverseOutlineRefreshed: true, editorialChecksReviewed: true, editorialHealthReady: true, canonVerified: true },
       { includeVisual: true },
     );
     expect(step.kind).toBe('done');
@@ -946,7 +947,7 @@ describe('resolveNextStep (pure)', () => {
       [issue({ stages: { idea: ready(), teleplay: ready() } })],
       { arcVerified: true, foundationGated: true, beatContinuityChecked: true },
     );
-    expect(step.kind).toBe('editorialReview');
+    expect(step.kind).toBe('pilotReview');
   });
 
   // CDO Phase 3 (#2185) — the opt-in teaser deliverable is the LAST step, after
@@ -960,7 +961,7 @@ describe('resolveNextStep (pure)', () => {
       pages: [{ panels: [{ description: 'x' }], proofImage: { jobId: 'p0' } }],
     },
   };
-  const fullyReady = { arcVerified: true, foundationGated: true, beatContinuityChecked: true, scriptChecked: new Set(['iss1']), editorialReviewed: true, reverseOutlineRefreshed: true, editorialChecksReviewed: true, editorialHealthReady: true, canonVerified: true };
+  const fullyReady = { arcVerified: true, foundationGated: true, beatContinuityChecked: true, pilotReviewed: true, scriptChecked: new Set(['iss1']), editorialReviewed: true, reverseOutlineRefreshed: true, editorialChecksReviewed: true, editorialHealthReady: true, canonVerified: true };
 
   it('does NOT ask for a teaser by default (produceTeaser off) — stays done', () => {
     const step = resolveNextStep(comic, [issue({ stages: rendered })], fullyReady, { includeVisual: true });
@@ -1124,7 +1125,7 @@ describe('resolveNextStep — revision cycle ordering (#2171)', () => {
   const issue = (over = {}) => ({ id: 'iss1', seasonId: 'se1', number: 1, arcPosition: 1, stages: {}, ...over });
   // Health-clean base runState (everything up to and including the health gate).
   const healthClean = {
-    arcVerified: true, foundationGated: true, beatContinuityChecked: true, scriptChecked: new Set(['iss1']),
+    arcVerified: true, foundationGated: true, beatContinuityChecked: true, pilotReviewed: true, scriptChecked: new Set(['iss1']),
     editorialReviewed: true, reverseOutlineRefreshed: true, editorialChecksReviewed: true,
     editorialHealthReady: true,
   };
@@ -1294,7 +1295,7 @@ describe('milestone map telemetry', () => {
     expect(start.mode).toBe('execute');
     // Same projection the dry-run emits — the panel draws it as the milestone map.
     expect(start.plan.map((p) => p.kind)).toEqual(
-      expect.arrayContaining(['verifyArcSpine', 'verifyArc', 'editorialReview']),
+      expect.arrayContaining(['verifyArcSpine', 'verifyArc', 'pilotReview']),
     );
     expect(start.planTotals.estActions).toBeGreaterThan(0);
   });
@@ -1308,7 +1309,7 @@ describe('milestone map telemetry', () => {
     expect(progressFrames.length).toBeGreaterThan(0);
     const final = progressFrames.at(-1);
     expect(final.completed.verifyArcSpine).toBe(1);
-    expect(final.completed.editorialReview).toBe(1);
+    expect(final.completed.pilotReview).toBe(1);
     // …and what each gate actually validated, keyed by step kind.
     expect(final.verified.verifyArcSpine).toMatchObject({ blocking: 0 });
   });
@@ -1429,7 +1430,9 @@ describe('dry-run plan ↔ resolveNextStep drift guard (#1577)', () => {
       case 'beatContinuity':
         runState.beatContinuityChecked = true;
         break;
+      case 'pilotDraft':
       case 'textStages': {
+        runState.editorialReviewed = false;
         // Satisfy textReady for every script format (comic + tv) so the mutator
         // stays target-agnostic.
         const issue = issues.find((i) => i.id === step.issueId);
@@ -1439,6 +1442,10 @@ describe('dry-run plan ↔ resolveNextStep drift guard (#1577)', () => {
       }
       case 'scriptVerify':
         runState.scriptChecked.add(step.issueId);
+        break;
+      case 'pilotReview':
+        runState.pilotReviewed = true;
+        runState.editorialReviewed = true;
         break;
       case 'editorialReview':
         runState.editorialReviewed = true;
@@ -1647,6 +1654,29 @@ async function seedComplete({ script = VALID_SCRIPT } = {}) {
   await issuesSvc.updateStage(issue.id, 'comicScript', ready(script));
   return { seriesId: series.id, seasonId, issueId: issue.id };
 }
+
+it('blocks expansion on an unresolved pilot and confines first-issue production after it passes', async () => {
+  const { seriesId, seasonId, issueId } = await seedComplete();
+  const later = await issuesSvc.createIssue({ seriesId, seasonId, title: 'Later', number: 2 });
+  await issuesSvc.updateStage(later.id, 'idea', ready('later beats'));
+  editorialFindings = [{ severity: 'high', problem: 'The opening has no personal choice or aftermath' }];
+  await autopilot.startSeriesAutopilot(seriesId, { includeVisual: false, maxEditorialRounds: 1 });
+  await waitFor(runFinished(seriesId));
+  expect(autopilot.__testing.runs.get(seriesId).lastPayload).toMatchObject({ type: 'paused', scope: 'pilotReview' });
+  expect(autoRunnerSpies.startAutoRunTextStages).not.toHaveBeenCalled();
+  expect((await issuesSvc.getIssue(later.id)).stages.comicScript.output).toBe('');
+
+  editorialFindings = [];
+  await autopilot.startSeriesAutopilot(seriesId, { productionScope: 'first-issue', includeVisual: false });
+  await waitFor(runFinished(seriesId));
+  expect(autopilot.__testing.runs.get(seriesId).lastPayload.type).toBe('complete');
+  expect(autoRunnerSpies.startAutoRunTextStages).not.toHaveBeenCalled();
+  expect(verifyComicScript.mock.calls.map(([id]) => id)).toEqual([issueId]);
+  expect(autopilot.__testing.runs.get(seriesId).options.productionScope).toBe('first-issue');
+  const plan = autopilot.__testing.buildDryRunPlan(await seriesSvc.getSeries(seriesId), await issuesSvc.listIssues(seriesId), { productionScope: 'first-issue' });
+  expect(plan.some((step) => step.kind === 'textStages')).toBe(false);
+  expect(plan.find((step) => step.kind === 'editorialChecks').estLlmCalls).toBe(1);
+});
 
 it('normalizes duplicate volume records before the conductor can seed their empty copies', async () => {
   const { seriesId, seasonId } = await seedComplete();
@@ -2750,7 +2780,7 @@ describe('autopilot conductor', () => {
     await waitFor(runFinished(seriesId));
     const last = autopilot.__testing.runs.get(seriesId)?.lastPayload;
     expect(last?.type).toBe('paused');
-    expect(last?.scope).toBe('editorialReview');
+    expect(last?.scope).toBe('pilotReview');
   });
 
   it('posts an in-app notification when a run pauses, with a resume link (#1615)', async () => {
@@ -2797,7 +2827,7 @@ describe('autopilot conductor', () => {
     expect(series.autopilot.plan.every((r) => typeof r.kind === 'string' && r.count >= 1)).toBe(true);
     // …and the progress half: where it actually got to, including the step it
     // stopped on (which is what the map draws as blocked).
-    expect(series.autopilot?.progress?.currentStep).toBe('editorialReview');
+    expect(series.autopilot?.progress?.currentStep).toBe('pilotReview');
     expect(Object.keys(series.autopilot.progress.completed).length).toBeGreaterThan(0);
   });
 
@@ -3829,7 +3859,7 @@ describe('autopilot conductor', () => {
     await waitFor(runFinished(seriesId));
     const last = autopilot.__testing.runs.get(seriesId)?.lastPayload;
     expect(last?.type).toBe('paused');
-    expect(last?.scope).toBe('textStages');
+    expect(last?.scope).toBe('pilotDraft');
     expect(last?.pauseKind).toBe('childFailed');
     expect(last?.reason).toMatch(/did not produce required stage/);
     // one initial attempt + one retry before the escalation pause.
@@ -3974,7 +4004,7 @@ describe('autopilot conductor', () => {
     expect(arcSpies.analyzeBeatContinuity).not.toHaveBeenCalled();
     const series = await seriesSvc.getSeries(seriesId);
     expect(series.autopilot?.status).toBe('paused');
-    expect(series.autopilot?.currentStep).toBe('scriptVerify'); // not 'verifyArc'/'beatContinuity'
+    expect(series.autopilot?.currentStep).toBe('pilotReview'); // not 'verifyArc'/'beatContinuity'
     expect(series.autopilot?.lastError).toMatch(/budget/);
   });
 
@@ -4066,7 +4096,7 @@ describe('autopilot conductor', () => {
     reverseOutlineConsumed = false; // subset skips every outline-consuming check
     reverseOutlineState = { status: 'complete', stale: true }; // stale, but unused
     getDomainBudgetStatus.mockImplementation(async () => (
-      arcSpies.analyzeManuscriptCompleteness.mock.calls.length >= 1
+      arcSpies.analyzeManuscriptCompleteness.mock.calls.length >= 1 && verifyComicScript.mock.calls.length >= 1
         ? { withinBudget: false, exceeded: 'actions' }
         : { withinBudget: true, exceeded: null }
     ));
@@ -4339,7 +4369,7 @@ describe('autopilot conductor', () => {
     await waitFor(runFinished(series.id));
     const last = autopilot.__testing.runs.get(series.id)?.lastPayload;
     expect(last?.type).toBe('paused');
-    expect(last?.scope).toBe('textStages');
+    expect(last?.scope).toBe('pilotDraft');
     expect(last?.reason).toMatch(/comicScript/);
   });
 
@@ -4722,6 +4752,22 @@ describe('beat-continuity resolve (#1510)', () => {
     const fresh = await seriesSvc.getSeries(series.id);
     return { series: fresh, issueId: issue.id };
   }
+
+  it('rejects the whole candidate before clearing art when a pilot repair targets a later issue', async () => {
+    const { series, issueId } = await seedIssueWithBeats();
+    const later = await issuesSvc.createIssue({ seriesId: series.id, seasonId: series.seasons[0].id, title: 'Later', arcPosition: 2 });
+    await issuesSvc.updateStage(later.id, 'idea', ready('later beats'));
+    await issuesSvc.updateStage(later.id, 'comicScript', ready('later script'));
+    await issuesSvc.updateStage(later.id, 'comicPages', { pages: [{ panels: [{ description: 'keep' }], proofImage: { filename: 'keep.png' } }] });
+    const before = await issuesSvc.getIssue(later.id);
+    const result = await applyBeatResolutions(series.id, series, [
+      { seasonNumber: 1, episodeNumber: 1, beats: 'new pilot beats' },
+      { seasonNumber: 1, episodeNumber: 2, beats: 'new later beats' },
+    ], { allowedIssueIds: [issueId] });
+    expect(result).toEqual([{ issueId: later.id, number: 2, skipped: 'outside-production-scope' }]);
+    expect((await issuesSvc.getIssue(issueId)).stages.idea.output).toBe('old beats');
+    expect((await issuesSvc.getIssue(later.id)).stages).toEqual(before.stages);
+  });
 
   it('writes the corrected beats to BOTH idea.input and idea.output so prose adapts from the fix', async () => {
     const { series, issueId } = await seedIssueWithBeats();

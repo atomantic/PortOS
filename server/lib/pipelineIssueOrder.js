@@ -19,6 +19,13 @@
  * any `iss.number` actually changed (callers gate their disk writes on this).
  */
 
+// A stored issue's number is SERIES-global; arcPosition restarts in each
+// volume. Cross-volume manuscripts and production must use number first.
+// Keep local arcPosition ordering inside an already-selected volume.
+const seriesNumber = (issue) => Number.isFinite(issue?.number) && issue.number > 0 ? issue.number : Infinity;
+export const compareIssuesInSeries = (a, b) =>
+  (seriesNumber(a) - seriesNumber(b)) || (a?.arcPosition ?? 9999) - (b?.arcPosition ?? 9999);
+
 export const UNSCOPED_ANCHOR = Symbol('pipelineIssueOrder.unscopedAnchor');
 
 const byArcPosThenCreated = (a, b) => {

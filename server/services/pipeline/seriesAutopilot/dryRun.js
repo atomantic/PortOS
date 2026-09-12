@@ -13,7 +13,7 @@ import {
   arcIsolationActions,
 } from './config.js';
 import { roundsNote, convergenceLoopActions, VISUAL_DRAFT_ENABLED } from './convergence.js';
-import { orderedIssues, byNumber, issueHasBeats, textReady, wantsComic, visualReady } from './stepResolver.js';
+import { orderedIssues, productionIssues, byNumber, issueHasBeats, textReady, wantsComic, visualReady } from './stepResolver.js';
 import { editorialSubsetIds } from './editorialSteps.js';
 import { countSeriesLocks } from './unlockPass.js';
 
@@ -129,8 +129,11 @@ export function buildDryRunPlan(series, issues, options, costContext = {}) {
     note: `${roundsNote(arcRounds)}; whole arc + ${seasons.length} volume(s) per round`,
     estActions: verificationActions,
   });
+  const production = productionIssues(ordered, options);
+  const reviewedCount = ordered.filter((issue) => production.some((target) => target.id === issue.id)
+    || textReady(issue, series, options)).length;
   const beatsNeeded = seasons.filter((s) =>
-    ordered.some((i) => i.seasonId === s.id && !isStageReady(i.stages?.idea))).length;
+    production.some((i) => i.seasonId === s.id && !isStageReady(i.stages?.idea))).length;
   if (beatsNeeded) plan.push({ kind: 'beatSheet', count: beatsNeeded, estActions: beatsNeeded });
   // beatContinuity (#1510) runs once when the run will have a beat corpus to
   // check: beats already exist, OR beatSheet will generate them this run. Mirror
@@ -142,15 +145,24 @@ export function buildDryRunPlan(series, issues, options, costContext = {}) {
       : MAX_BEAT_CONTINUITY_ROUNDS;
     plan.push({ kind: 'beatContinuity', count: 1, note: roundsNote(bcRounds), estActions: convergenceLoopActions(bcRounds) });
   }
-  const textNeeded = ordered.filter((i) => !textReady(i, series, options)).length;
-  if (textNeeded) plan.push({ kind: 'textStages', count: textNeeded, estActions: textNeeded });
-  if (wantsComic(series, options)) plan.push({ kind: 'scriptVerify', count: ordered.length, estActions: ordered.length });
+  const opening = production[0];
+  if (opening && !textReady(opening, series, options)) {
+    plan.push({ kind: 'pilotDraft', count: 1, estActions: 1 });
+  }
   const edRounds = Number.isInteger(options?.maxEditorialRounds) ? options.maxEditorialRounds : MAX_EDITORIAL_ROUNDS;
+  if (opening && edRounds !== 0) {
+    plan.push({ kind: 'pilotReview', count: 1, note: `${roundsNote(edRounds)}; setup, character choices and aftermath before expanding the manuscript`, estActions: convergenceLoopActions(edRounds) });
+  }
+  const textNeeded = production.slice(1).filter((i) => !textReady(i, series, options)).length;
+  if (textNeeded) plan.push({ kind: 'textStages', count: textNeeded, estActions: textNeeded });
+  if (wantsComic(series, options)) plan.push({ kind: 'scriptVerify', count: production.length, estActions: production.length });
   // Editorial review is a verify→auto-fix convergence loop like the arc gate, so
   // the per-round estimate mirrors it (analyze + one resolve batch / round). The
   // per-comment auto-fixes within a round bill additionally and scale with the
   // number of blocking findings, which isn't knowable at plan time.
-  plan.push({ kind: 'editorialReview', count: 1, note: roundsNote(edRounds), estActions: convergenceLoopActions(edRounds) });
+  if (textNeeded || !opening || edRounds === 0) {
+    plan.push({ kind: 'editorialReview', count: 1, note: roundsNote(edRounds), estActions: convergenceLoopActions(edRounds) });
+  }
   // maxEditorialRounds === 0 skips the whole editorial gate in execute mode
   // (runEditorial marks editorialReviewed + editorialChecksReviewed +
   // editorialHealthReady), so the plan must not advertise the registry checks or
@@ -170,7 +182,9 @@ export function buildDryRunPlan(series, issues, options, costContext = {}) {
     const llmCheckCount = Number.isInteger(costContext?.editorialLlmCheckCount)
       ? costContext.editorialLlmCheckCount
       : 1;
-    const estLlmCalls = ordered.length * llmCheckCount;
+    // Only manuscripts already drafted or produced by THIS run reach these
+    // checks. Synopsis placeholders are context, not 31 extra manuscripts.
+    const estLlmCalls = reviewedCount * llmCheckCount;
     const checksNote = editorialSubset
       ? `per-run subset of ${editorialSubset.length} editorial check(s) (#1575)`
       : 'enabled editorial checks (#1284)';
@@ -201,7 +215,7 @@ export function buildDryRunPlan(series, issues, options, costContext = {}) {
       kind: 'revisionCycle',
       count: rev.revisionMaxCycles,
       note: `iterate-to-quality (up to ${rev.revisionMaxCycles} cycle(s), min ${rev.revisionMinCycles}, plateau Δ ${rev.revisionPlateauDelta})`,
-      estActions: rev.revisionMaxCycles * (ordered.length + 2),
+      estActions: rev.revisionMaxCycles * (reviewedCount + 2),
     });
   }
   if (VISUAL_DRAFT_ENABLED && wantsVisual(options) && wantsComic(series, options)) {
@@ -210,7 +224,7 @@ export function buildDryRunPlan(series, issues, options, costContext = {}) {
     // snapshot cannot know that future script reference set, so keep the base
     // estimate at zero and name the conditional spend explicitly.
     plan.push({ kind: 'canonVerify', count: 1, note: 'descriptive integrity of drawn nouns (may spend one LLM call per affected issue to backfill strictly from prose)', estActions: 0 });
-    const visualNeeded = ordered.filter((i) => !visualReady(i)).length;
+    const visualNeeded = production.filter((i) => !visualReady(i)).length;
     // Each draft render bills one cos action: cover + back per issue, plus one per
     // interior page. The interior-page count isn't known until the script parses,
     // so the estimate counts the two covers and notes the per-page additions.
@@ -218,7 +232,7 @@ export function buildDryRunPlan(series, issues, options, costContext = {}) {
     // Teaser deliverable (#2185, opt-in, default off): one CD video project per
     // issue. Each mint+start bills one cos action for the treatment LLM call; the
     // CD project's own render spend is gated on the creative/cos budget its side.
-    if (wantsTeaser(options)) plan.push({ kind: 'produceTeaser', count: ordered.length, note: 'mint + start a Creative Director teaser video per issue (opt-in)', estActions: ordered.length });
+    if (wantsTeaser(options)) plan.push({ kind: 'produceTeaser', count: production.length, note: 'mint + start a Creative Director teaser video per issue (opt-in)', estActions: production.length });
   }
   return plan;
 }
