@@ -3393,9 +3393,21 @@ describe('a11y conventions', () => {
 
     // The sensor list THIS mount was handed: either `sensors={useSensors(…)}`
     // written inline, or the `useSensors(…)` call the named binding resolves to.
-    // Returns null when the expression is some other shape, and the caller then
-    // falls back to the file-wide question — which is the weaker check, but a
-    // spelling this cannot read is not evidence of a missing sensor.
+    //
+    // Returns null when the expression is some other shape — a call, an array
+    // literal, a prop — and the caller then falls back to the file-wide
+    // question. That fallback is deliberately the conservative direction: a
+    // spelling this cannot read is not evidence of a missing sensor, and a
+    // tree-wide guard that FALSELY fails a correct change costs more than one
+    // that misses an exotic shape. Widen the resolver when a real call site
+    // needs it rather than guessing.
+    //
+    // A name declared more than once is likewise unresolvable, not "the first
+    // one wins" — two components in one file each declaring `const sensors =
+    // useSensors(…)` would otherwise be checked against whichever came first,
+    // which both hides a pointer-only sibling AND falsely flags a correct one
+    // when the order is reversed. Same rule, same reason, as the shim lookup
+    // the clickable-element scan above uses.
     const sensorListFor = (src, tagIndex, useSensorsLocal) => {
       if (!useSensorsLocal) return null;
       const tag = openingTagAt(src, tagIndex);
@@ -3403,8 +3415,12 @@ describe('a11y conventions', () => {
       if (!expr) return null;
       if (expr.startsWith(`${useSensorsLocal}(`)) return balancedSliceAt(expr, 0, '(', ')');
       if (!/^[\w$]+$/.test(expr)) return null;
-      const decl = new RegExp(`(?:const|let|var)\\s+${expr}\\s*=\\s*${useSensorsLocal}\\s*\\(`).exec(src);
-      return decl ? balancedSliceAt(src, decl.index, '(', ')') : null;
+      const decls = [...src.matchAll(new RegExp(`(?:const|let|var)\\s+${expr}\\s*=`, 'g'))];
+      if (decls.length !== 1) return null;
+      const assignsUseSensors = new RegExp(`(?:const|let|var)\\s+${expr}\\s*=\\s*${useSensorsLocal}\\s*\\(`);
+      return assignsUseSensors.test(src.slice(decls[0].index))
+        ? balancedSliceAt(src, decls[0].index, '(', ')')
+        : null;
     };
 
     // Read off the import clause and the call expression, never off raw text,
@@ -3470,8 +3486,21 @@ const pointerOnly = useSensors(useSensor(PointerSensor, { activationConstraint: 
     expect(probe(`${IMPORT_BOTH}\n<DndContext sensors={useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }))} />`)).toEqual(['probe.jsx:2']);
     expect(probe(`${IMPORT_BOTH}\n<DndContext sensors={useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }), useSensor(KeyboardSensor))} />`)).toEqual([]);
     // A `sensors` expression this cannot resolve falls back to the file-wide
-    // question rather than reporting a context it never read.
+    // question rather than reporting a context it never read — the conservative
+    // direction, since a guard that falsely fails a correct change is worse
+    // than one that misses an exotic spelling.
     expect(probe(`${IMPORT_BOTH}\nconst s = useSensors(useSensor(KeyboardSensor));\n<DndContext sensors={makeSensors()} />`)).toEqual([]);
+    // A name declared twice is unresolvable for the same reason: resolving to
+    // whichever declaration came first would hide the pointer-only component
+    // here, and FALSELY FLAG the keyboard-enabled one if the two were reversed.
+    const DUPLICATE_NAME = `${IMPORT_BOTH}
+function A() { const sensors = useSensors(useSensor(PointerSensor), useSensor(KeyboardSensor)); return <DndContext sensors={sensors} />; }
+function B() { const sensors = useSensors(useSensor(PointerSensor)); return <DndContext sensors={sensors} />; }`;
+    expect(probe(DUPLICATE_NAME)).toEqual([]);
+    // …and with no keyboard registration anywhere, the fallback still reports
+    // BOTH mounts, so the duplicate-name branch is a widening of scope, not an
+    // exemption.
+    expect(probe(DUPLICATE_NAME.replaceAll(', useSensor(KeyboardSensor)', ''))).toEqual(['probe.jsx:2', 'probe.jsx:3']);
     // A file that never mounts a DndContext is out of the rule's remit, even
     // when it uses dnd-kit for something else.
     expect(probe("import { useDraggable } from '@dnd-kit/core';\nconst d = useDraggable({ id });")).toEqual([]);
