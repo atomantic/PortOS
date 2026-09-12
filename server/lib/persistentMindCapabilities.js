@@ -58,7 +58,7 @@ export const PERSISTENT_MIND_TOOL_CATALOG = Object.freeze([
   Object.freeze({
     id: 'mind.manage-tool-recipes', capability: 'manageToolRecipes',
     name: 'Manage saved tool recipes', kind: 'definition-management', defaultEnabled: false,
-    description: 'Authorize Mind definition changes only. Saved recipes are not yet Mind-callable; model exposure is disabled in this phase.',
+    description: 'Authorize Mind recipe definition changes and reuse of saved reads, subject to every underlying read grant and the shared turn budget.',
     guardrails: ['User library management remains available with this grant off', 'Invoking underlying reads still requires readPortos and each tool grant', 'Versioned, machine-local definitions only; no execution results in history'],
   }),
   Object.freeze({

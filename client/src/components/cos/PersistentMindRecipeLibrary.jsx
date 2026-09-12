@@ -179,7 +179,7 @@ export default function PersistentMindRecipeLibrary() {
       <h2 className="text-base font-semibold text-port-text">Saved tool recipes</h2>
       <button type="button" className={buttonClass} onClick={() => onSelect('new')}>New recipe</button>
     </div>
-    <p className="text-sm text-port-text-muted">Manage reusable read definitions and their history with Mind grants off. Saved recipes are not yet callable by the Mind. Nothing executes when you save or validate.</p>
+    <p className="text-sm text-port-text-muted">Manage reusable read definitions and their history with Mind grants off. The Mind can reuse recipes when recipe management and every underlying read grant are enabled. Nothing executes when you save or validate.</p>
     {error && <Banner tone="error" title="Recipe library unavailable">{error} <button type="button" className={buttonClass} onClick={load}>Retry library</button></Banner>}
     {loading ? <p role="status" className="text-sm text-port-text-muted">Loading recipes…</p> : !recipes.length && !error ? <p className="text-sm text-port-text-muted">No saved recipes. Create one from the editable example.</p> : null}
     <ul className="space-y-2">
