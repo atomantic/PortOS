@@ -773,20 +773,9 @@ function SyncCategoriesPanel({ peer, onRefresh }) {
   );
 }
 
-function SnapshotSyncBadge({ label, icon: Icon, cursorChecksum, remoteChecksum, livePushCovered, subsLoaded = true, syncing = false }) {
-  // `livePushCovered` is true when this peer has at least one per-record
-  // peer-sync subscription for a record kind that maps to this category
-  // (universe-subs → 'universe', series-subs → 'pipeline'). The orchestrator
-  // intentionally SKIPS the 60s snapshot loop for those categories — the push
-  // pipeline is authoritative — so cursor.checksums[cat] stays frozen at
-  // whatever it was when peer-subs took over and the cursor-vs-remote diff
-  // would always read "behind" even when the records are actually converged.
-  // Render a distinct "live-push" state instead so the badge stops lying.
+function SnapshotSyncBadge({ label, icon: Icon, cursorChecksum, remoteChecksum, syncing = false }) {
   const synced = cursorChecksum && remoteChecksum && cursorChecksum === remoteChecksum;
-  // Suppress "behind" until peer subs have loaded — `livePushCovered` is derived
-  // from them, so before they resolve a live-push category would briefly mislabel
-  // itself "behind". Until then it falls through to the neutral "pending" state.
-  const behind = subsLoaded && cursorChecksum && remoteChecksum && cursorChecksum !== remoteChecksum;
+  const behind = cursorChecksum && remoteChecksum && cursorChecksum !== remoteChecksum;
 
   return (
     <div className="flex items-center gap-1.5 text-xs">
@@ -796,13 +785,6 @@ function SnapshotSyncBadge({ label, icon: Icon, cursorChecksum, remoteChecksum, 
         <>
           <RefreshCw size={11} className="text-port-accent animate-spin" />
           <span className="text-port-accent">syncing…</span>
-        </>
-      ) : livePushCovered ? (
-        <>
-          <ArrowLeftRight size={11} className="text-port-accent" />
-          <span className="text-port-accent" title="Per-record push pipeline owns this category; snapshot cursor is intentionally stale">
-            live-push
-          </span>
         </>
       ) : synced ? (
         <>
@@ -824,7 +806,7 @@ function SnapshotSyncBadge({ label, icon: Icon, cursorChecksum, remoteChecksum, 
   );
 }
 
-function SyncStatusSection({ peer, syncStatus, peerSubs = [], peerSubsLoaded = true, syncing = false }) {
+function SyncStatusSection({ peer, syncStatus, syncing = false }) {
   if (!syncStatus || !peer.instanceId) return null;
 
   const cursor = syncStatus.cursors?.[peer.instanceId];
@@ -850,19 +832,6 @@ function SyncStatusSection({ peer, syncStatus, peerSubs = [], peerSubsLoaded = t
   // Show snapshot category sync status for all enabled snapshot categories
   const cursorChecksums = cursor?.checksums || {};
   const remoteChecksums = remoteSyncSeqs?.checksums || {};
-
-  // Derive the set of snapshot categories that are "covered" by the
-  // per-record peer-sync push pipeline. Mirrors the inverse mapping in
-  // `server/services/sharing/peerSync.js` KIND_TO_CATEGORY — universe-subs
-  // cover 'universe', series-subs cover 'pipeline' (which bundles series +
-  // issues). The orchestrator skips snapshot pulls for these, so the
-  // cursor checksum stays stale and the cursor-vs-remote diff is a lie.
-  // Render those categories as "live-push" instead.
-  const livePushCovered = new Set();
-  for (const s of peerSubs) {
-    if (s.recordKind === 'universe') livePushCovered.add('universe');
-    if (s.recordKind === 'series') livePushCovered.add('pipeline');
-  }
 
   const enabledSnapshots = SNAPSHOT_CATEGORIES
     .map(m => m.key)
@@ -912,8 +881,6 @@ function SyncStatusSection({ peer, syncStatus, peerSubs = [], peerSubsLoaded = t
               icon={meta.icon}
               cursorChecksum={cursorChecksums[cat]}
               remoteChecksum={remoteChecksums[cat]}
-              livePushCovered={livePushCovered.has(cat)}
-              subsLoaded={peerSubsLoaded}
               syncing={syncing}
             />
           );
@@ -1165,17 +1132,8 @@ export function PeerCard({ peer, onRefresh, syncStatus, tailnetInfo, parityRepor
   const [forwardBusy, setForwardBusy] = useState(false);
   const [connecting, setConnecting] = useState(false);
   const [confirmRemove, setConfirmRemove] = useState(false);
-  // Peer subs are loaded once at this level and shared with SchemaGapBadge and
-  // SyncStatusSection (which uses the sub set to decide which snapshot badges
-  // render as "live-push" instead of a misleading "behind"). Without sharing,
-  // every card would issue duplicate /sharing/peer-subs fetches. (The verbose
-  // per-record "Live-pushed records" list that used to render these was removed
-  // — it grew unbounded and the Sync Details drawer covers per-record status.)
+  // Outbound subscriptions inform per-record schema compatibility.
   const [peerSubs, setPeerSubs] = useState([]);
-  // Track whether the first subs fetch has settled — until it has, `peerSubs`
-  // is [] and SyncStatusSection can't tell a live-push category from a behind
-  // one, so it would flash "behind". Gates the snapshot badges' "behind" state.
-  const [peerSubsLoaded, setPeerSubsLoaded] = useState(false);
   // Live sync activity, driven by the `sync:progress` socket event. `syncing`
   // is true between this peer's `start` and `complete`; while it's true every
   // enabled category badge shows "syncing…". On `complete` it clears and the
@@ -1210,13 +1168,8 @@ export function PeerCard({ peer, onRefresh, syncStatus, tailnetInfo, parityRepor
   useEffect(() => {
     if (!peer.instanceId) {
       setPeerSubs([]);
-      setPeerSubsLoaded(true); // no instanceId → nothing to load; don't suppress forever
       return;
     }
-    // instanceId just became available or changed — re-suppress "behind" until
-    // this peer's first fetch settles, otherwise the stale [] would mislabel a
-    // live-push category. Cleared in the .finally() below.
-    setPeerSubsLoaded(false);
     let cancelled = false;
     const refetch = () => listPeerSubscriptions({ peerId: peer.instanceId }, { silent: true })
       .then((r) => {
@@ -1224,9 +1177,6 @@ export function PeerCard({ peer, onRefresh, syncStatus, tailnetInfo, parityRepor
       })
       .catch(() => {
         if (!cancelled) setPeerSubs([]);
-      })
-      .finally(() => {
-        if (!cancelled) setPeerSubsLoaded(true);
       });
     refetch();
     // When a per-record schema block is persisted server-side, the
@@ -1491,7 +1441,7 @@ export function PeerCard({ peer, onRefresh, syncStatus, tailnetInfo, parityRepor
 
       <SyncCategoriesPanel peer={peer} onRefresh={onRefresh} />
 
-      <SyncStatusSection peer={peer} syncStatus={syncStatus} peerSubs={peerSubs} peerSubsLoaded={peerSubsLoaded} syncing={syncing} />
+      <SyncStatusSection peer={peer} syncStatus={syncStatus} syncing={syncing} />
 
       <BrainParityPanel peer={peer} report={parityReport} />
 
