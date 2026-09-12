@@ -16,6 +16,7 @@ vi.mock('../services/instances.js', async (importOriginal) => ({
   addPeer: vi.fn(),
   sanitizePeerForClient: vi.fn((peer) => peer),
   getAssignableInstances: vi.fn(),
+  getPeers: vi.fn(),
 }));
 // This suite's routes/instances.js import pulls getSelf/updateSelf from the
 // identity leaf (#6836) — double it too so an untested route (e.g. GET /
@@ -34,6 +35,7 @@ vi.mock('../lib/tailscale.js', () => ({
   getTailscaleStatus: vi.fn(),
 }));
 
+import { getFullSyncCoverageForPeer } from '../services/sharing/peerSync.js';
 import { getSyncStatus } from '../services/syncOrchestrator.js';
 import * as instances from '../services/instances.js';
 import { getTailscaleStatus } from '../lib/tailscale.js';
@@ -396,4 +398,21 @@ it('rejects main API and HTTP mirror ports for managed serving', async () => {
     const response = await request(buildApp()).post('/api/instances/peers/tailcat/serve').send({ localPort });
     expect(response.status).toBe(400);
   }
+});
+
+describe('GET /api/instances/peers/:id/full-sync-coverage', () => {
+  it('preserves unavailable coverage and partial counts on the local endpoint', async () => {
+    instances.getPeers.mockResolvedValue([{ id: 'peer-1', instanceId: 'remote-1' }]);
+    const coverage = {
+      total: 2, confirmed: 2, pending: 0, fullyMirrored: false,
+      available: false, partial: true,
+      failedReads: [{ kind: 'universe', operation: 'records' }],
+      byKind: { universe: { total: 0, confirmed: 0, pending: 0, partial: true } },
+    };
+    getFullSyncCoverageForPeer.mockResolvedValue(coverage);
+    const res = await request(buildApp()).get('/api/instances/peers/peer-1/full-sync-coverage');
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual(coverage);
+    expect(getFullSyncCoverageForPeer).toHaveBeenCalledWith('remote-1');
+  });
 });

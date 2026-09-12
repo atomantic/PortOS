@@ -256,6 +256,29 @@ describe('PeerCard snapshot progress', () => {
     expect(badge('Pipeline').getByText('pending')).toBeInTheDocument();
   });
 
+  it('shows unavailable for degraded coverage, request failure, and recovers on refresh', async () => {
+    getPeerFullSyncCoverage.mockResolvedValue({
+      available: false, partial: true, fullyMirrored: false, total: 2, confirmed: 2, pending: 0,
+    });
+    const props = { peer: { ...peer, fullSync: true, lastSeen: 'first' }, syncStatus, onRefresh: vi.fn() };
+    const view = renderUI(<PeerCard {...props} />);
+    fireEvent.click(screen.getByRole('button', { name: /sync categories/i }));
+    expect(await screen.findByText('Coverage unavailable')).toHaveClass('text-port-warning');
+    expect(screen.queryByText(/Fully mirrored/)).not.toBeInTheDocument();
+    expect(screen.getByText('Coverage unavailable')).toHaveAttribute('title', expect.stringContaining('partial'));
+
+    getPeerFullSyncCoverage.mockRejectedValue(new Error('Request failed'));
+    view.rerender(<PeerCard {...props} peer={{ ...props.peer, lastSeen: 'second' }} />);
+    await waitFor(() => expect(getPeerFullSyncCoverage).toHaveBeenCalledTimes(2));
+    expect(await screen.findByText('Coverage unavailable')).toBeInTheDocument();
+    expect(screen.queryByText('checking coverage…')).not.toBeInTheDocument();
+
+    getPeerFullSyncCoverage.mockResolvedValue({ fullyMirrored: false, total: 3, confirmed: 2, pending: 1 });
+    view.rerender(<PeerCard {...props} peer={{ ...props.peer, lastSeen: 'third' }} />);
+    expect(await screen.findByText('1 pending · 2/3 mirrored')).toBeInTheDocument();
+    expect(screen.queryByText('Coverage unavailable')).not.toBeInTheDocument();
+  });
+
   // A slow or failed subscription endpoint must not hide a known mismatch.
   it('shows known status while subscriptions are unresolved and after they fail', async () => {
     let rejectSubscriptions;
