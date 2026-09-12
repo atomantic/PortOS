@@ -47,7 +47,13 @@ export const FAL_DEFAULT_IMAGE_MODEL = 'fal-ai/minimax/hailuo-02/standard/image-
 const FAL_SUBMIT_TIMEOUT_MS = 30_000;
 const FAL_POLL_TIMEOUT_MS = 15_000;
 const FAL_POLL_INTERVAL_MS = 3000;
-const FAL_DOWNLOAD_TIMEOUT_MS = 5 * 60 * 1000;
+// Bounds the WHOLE download — headers and every byte of the video — now that
+// `fetchWithTimeout` holds its deadline through body consumption. It used to
+// bound only the headers, which left the multi-MB transfer itself with no
+// ceiling: a stalled body pinned the media job in `running` until the queue
+// watchdog reaped it 30 minutes later. Ten minutes is far more than a finished
+// render takes to transfer and still well inside that watchdog.
+const FAL_DOWNLOAD_TIMEOUT_MS = 10 * 60 * 1000;
 // A cloud queue render can sit behind other tenants' jobs before it starts —
 // generously bounded, same order of magnitude as grok's image-first cap.
 const FAL_RENDER_TIMEOUT_MS = (() => {

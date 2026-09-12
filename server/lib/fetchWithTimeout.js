@@ -2,6 +2,21 @@
  * Fetch wrapper with AbortController timeout, and an opt-in retry for
  * connection-level failures.
  *
+ * `timeoutMs` bounds the WHOLE exchange — headers AND body. A server that
+ * answers `200 OK` and then stalls mid-body is the failure this helper exists
+ * to catch, so the abort timer stays armed past `fetch()` resolving and is
+ * cleared only once the body is fully read, cancelled, or the request rejects.
+ * Before that was true the argument was a lie at every call site: `fal.js`
+ * passed a constant literally named `FAL_DOWNLOAD_TIMEOUT_MS` that bounded only
+ * the headers, leaving the multi-MB download itself with no ceiling at all.
+ *
+ * `timeoutMs <= 0` still means "no deadline" (multi-GB Ollama pulls and the
+ * Hugging Face import rely on that — the stream is their lifecycle). A caller
+ * that genuinely holds a body open longer than its header budget, and bounds
+ * that body some other way, opts out with `{ bodyDeadline: false }` — Beeper's
+ * asset proxy is the one such caller, since its mirror applies its own
+ * per-chunk idle abort.
+ *
  * The retry exists because undici reports a retired pooled connection (notably
  * an HTTP/2 GOAWAY) as a request-level rejection, so a perfectly good request
  * dies as a bare `TypeError: fetch failed`. The same request succeeds on a fresh
@@ -19,8 +34,11 @@
  *
  * @param {string} url
  * @param {RequestInit} [options]
- * @param {number} [timeoutMs=15000] - Timeout in milliseconds
- * @param {object} [retry] - Opt-in retry policy; omit for the historical no-retry behavior
+ * @param {number} [timeoutMs=15000] - Deadline in milliseconds covering headers AND body
+ * @param {object} [retry] - PortOS-owned options bag (never forwarded to `fetch`);
+ *   omit for the historical no-retry behavior
+ * @param {boolean} [retry.bodyDeadline=true] - Keep the deadline armed through body
+ *   consumption; set false for a caller that bounds its own stream
  * @param {number} [retry.retries=0] - Extra attempts after the first
  * @param {number} [retry.retryDelayMs=250] - Pause between attempts, so the replay
  *   opens a new connection rather than racing the pool's teardown of the old one
@@ -29,11 +47,11 @@
  * @returns {Promise<Response>}
  */
 export function fetchWithTimeout(url, options = {}, timeoutMs = 15000, retry = {}) {
-  const { retries = 0, retryDelayMs = 250, shouldRetry } = retry;
+  const { retries = 0, retryDelayMs = 250, shouldRetry, bodyDeadline = true } = retry;
   // Each attempt re-enters fetchOnce, so a replay builds a FRESH
   // AbortController and gets a full timeout budget rather than inheriting the
   // exhausted one.
-  return fetchOnce(url, options, timeoutMs).catch((err) => {
+  return fetchOnce(url, options, timeoutMs, bodyDeadline).catch((err) => {
     if (retries < 1 || typeof shouldRetry !== 'function' || !shouldRetry(err)) throw err;
     return waitForRetry(retryDelayMs, options.signal)
       .then(() => fetchWithTimeout(url, options, timeoutMs, { ...retry, retries: retries - 1 }));
@@ -66,7 +84,7 @@ function waitForRetry(delayMs, signal) {
  * One attempt: fetch with an AbortController timeout, honoring a caller signal.
  * @returns {Promise<Response>}
  */
-async function fetchOnce(url, options = {}, timeoutMs = 15000) {
+async function fetchOnce(url, options = {}, timeoutMs = 15000, bodyDeadline = true) {
   const controller = new AbortController();
   const hasTimeout = Number.isFinite(timeoutMs) && timeoutMs > 0;
   const timeoutId = hasTimeout ? setTimeout(() => controller.abort(), timeoutMs) : null;
@@ -86,13 +104,160 @@ async function fetchOnce(url, options = {}, timeoutMs = 15000) {
     }
   }
 
-  try {
-    const response = await fetch(url, { ...options, signal });
-    return response;
-  } finally {
+  // Idempotent, because the body wrapper can reach it from several directions
+  // (a reader method, the stream closing, a cancel) and the caller-signal
+  // listener must be removed exactly once.
+  let released = false;
+  const releaseDeadline = () => {
+    if (released) return;
+    released = true;
     if (timeoutId !== null) clearTimeout(timeoutId);
     if (options.signal && abortHandler) {
       options.signal.removeEventListener('abort', abortHandler);
     }
+  };
+
+  let response;
+  try {
+    response = await fetch(url, { ...options, signal });
+  } catch (err) {
+    releaseDeadline();
+    throw err;
   }
+
+  // Nothing left to bound: no timer armed, the caller opted out, or the
+  // response has no body to wait on.
+  if (timeoutId === null || !bodyDeadline || !response || typeof response !== 'object' || isBodyless(response)) {
+    releaseDeadline();
+    return response;
+  }
+
+  // A body nobody ever reads would otherwise hold the event loop open for the
+  // rest of the budget; unref lets the process exit while the abort still fires
+  // on time if it is still running.
+  if (typeof timeoutId.unref === 'function') timeoutId.unref();
+  return withBodyDeadline(response, releaseDeadline);
+}
+
+// Response methods that consume the whole body, so the deadline is satisfied
+// the moment their promise settles.
+const BODY_CONSUMERS = ['json', 'text', 'arrayBuffer', 'blob', 'formData', 'bytes'];
+
+/**
+ * Is there anything left for the deadline to cover?
+ *
+ * A real `Response` with a null body genuinely has nothing left to read —
+ * 204/304, a HEAD, and `safeUrlFetch`'s manual-redirect hop — so it is released
+ * on the spot rather than leaving a timer armed against a body that will never
+ * arrive. A hand-rolled double exposes no `body` either but still resolves
+ * `text()`/`json()` later, and that read is precisely what has to stay bounded,
+ * so those keep the deadline. A double with neither is inert and passes
+ * through untouched, identity intact.
+ */
+function isBodyless(response) {
+  if (response.body != null) return false;
+  if (typeof Response !== 'undefined' && response instanceof Response) return true;
+  return !BODY_CONSUMERS.some((name) => typeof response[name] === 'function');
+}
+
+/**
+ * Wrap a `Response` so the abort deadline is released once its body is drained.
+ *
+ * A Proxy rather than a rebuilt Response: callers pass these straight to
+ * `Readable.fromWeb`, `instanceof` checks and their own error mappers, so the
+ * object has to stay the real thing. Getters are read with `target` as the
+ * receiver because `ok`/`status`/`headers` are branded accessors that throw on
+ * a foreign `this`.
+ */
+function withBodyDeadline(response, release) {
+  // Our mirror of the body stream, plus the stream it was built over. `clone()`
+  // TEES the body and swaps a fresh stream in behind `.body`, which leaves a
+  // cached mirror pointing at a stream cloning has already locked — so the
+  // mirror is keyed by identity and rebuilt when the underlying stream changes.
+  let mirror = null;
+  let mirrorSource = null;
+  // `active` while that mirror owns the body. A consumer method rejecting in
+  // that window (`res.text()` on a body the stream already locked) must not
+  // retire a deadline the live read still depends on.
+  const mirrorState = { active: false };
+
+  return new Proxy(response, {
+    get(target, prop) {
+      if (prop === 'body') {
+        const raw = Reflect.get(target, prop, target);
+        // Not a web stream (a test double, or a runtime without one) — there is
+        // no close/cancel hook to hang the release on.
+        if (!raw || typeof raw.getReader !== 'function') return raw;
+        if (mirrorSource !== raw) {
+          mirrorSource = raw;
+          mirror = watchStream(raw, mirrorState, release);
+        }
+        return mirror;
+      }
+
+      const value = Reflect.get(target, prop, target);
+      if (typeof value !== 'function') return value;
+
+      if (BODY_CONSUMERS.includes(prop)) {
+        return (...args) => {
+          const result = Reflect.apply(value, target, args);
+          if (!result || typeof result.then !== 'function') {
+            release();
+            return result;
+          }
+          return result.then(
+            (resolved) => { release(); return resolved; },
+            (err) => { if (!mirrorState.active) release(); throw err; },
+          );
+        };
+      }
+
+      // `clone()` is deliberately NOT instrumented. It tees one transfer into
+      // two independent branches, and no single branch finishing proves the
+      // transfer is done — so letting a clone release would retire the deadline
+      // while the other branch is still streaming. Leaving it armed instead is
+      // the safe direction: an abort that lands after the body is drained is a
+      // no-op, and a clone that really does outrun the budget SHOULD be cut off.
+      return value.bind(target);
+    },
+  });
+}
+
+/**
+ * Mirror a body stream, releasing the deadline when it ends, errors, or is
+ * cancelled. `highWaterMark: 0` is load-bearing: the default strategy would
+ * pull — and therefore LOCK the underlying body — the instant the wrapper is
+ * constructed, breaking the common `if (!res.body) … await res.json()` shape
+ * where `.body` is only touched as a truthiness check.
+ */
+function watchStream(stream, state, release) {
+  let reader = null;
+  const finish = () => {
+    state.active = false;
+    release();
+  };
+  return new ReadableStream({
+    async pull(controller) {
+      if (!reader) {
+        reader = stream.getReader();
+        state.active = true;
+      }
+      try {
+        const { done, value } = await reader.read();
+        if (done) {
+          finish();
+          controller.close();
+          return;
+        }
+        controller.enqueue(value);
+      } catch (err) {
+        finish();
+        controller.error(err);
+      }
+    },
+    async cancel(reason) {
+      finish();
+      await Promise.resolve(reader ? reader.cancel(reason) : stream.cancel(reason)).catch(() => {});
+    },
+  }, { highWaterMark: 0 });
 }
