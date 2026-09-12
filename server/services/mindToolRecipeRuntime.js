@@ -38,13 +38,16 @@ export const recipeManagementTools = Object.entries(managementSchemas).map(([ope
 ));
 
 const recipeAccessCapability = (scope) => scope === 'agent' ? 'callToolRecipes' : 'manageToolRecipes';
+const underlyingRecipeTools = (definition) => Array.isArray(definition?.steps)
+  ? [...new Set(definition.steps.flatMap((step) => typeof step?.tool === 'string' ? [step.tool] : []))]
+  : [];
 const recipeMetadata = (recipe, definition, { scope, available = true, disabledReason } = {}) => ({
   id: recipe.id,
   source: 'persistent-mind-library',
   revision: recipe.activeRevision,
   scope,
   available,
-  underlyingTools: [...new Set((definition?.steps || []).map((step) => step.tool))],
+  underlyingTools: underlyingRecipeTools(definition),
   ...(disabledReason ? { disabledReason: String(disabledReason).slice(0, 500) } : {}),
 });
 
@@ -73,9 +76,11 @@ export async function readRecipeToolsForScope(scope, primitives) {
   if (!['agent', 'mind'].includes(scope)) return [];
   const { listRecipes } = await import('./mindToolRecipes.js');
   const { recipes } = await listRecipes({ limit: 20 });
-  const checked = await Promise.all(recipes.map((recipe) => resolveRecipeInvocation(recipe, primitives, { scope })));
+  const checked = await Promise.allSettled(recipes.map((recipe) => resolveRecipeInvocation(recipe, primitives, { scope })));
   let chars = 0;
-  return checked.flatMap((tool) => {
+  return checked.flatMap((entry) => {
+    if (entry.status !== 'fulfilled') return [];
+    const tool = entry.value;
     const size = JSON.stringify(tool.input_schema).length + tool.description.length;
     if (chars + size > 24000) return [];
     chars += size;

@@ -131,6 +131,20 @@ it('marks a recipe using a Mind-only primitive unavailable to agents', async () 
     recipe: { available: false, disabledReason: expect.stringMatching(/agent scope/) },
   });
 });
+it('keeps valid recipes discoverable beside an unsupported definition shape', async () => {
+  mock.recipes.push(
+    { id: 'future', name: 'recipe.future', activeRevision: 9, archived: false, definition: { schemaVersion: 99, steps: {} } },
+    { id: 'valid', name: 'recipe.project-check', activeRevision: 1, archived: false, definition: definition(1) },
+  );
+  const recipes = await readCosToolRecipeCatalog({ scope: 'agent' });
+  expect(recipes.map((tool) => tool.name)).toEqual(['recipe.future', 'recipe.project-check']);
+  expect(recipes[0]).toMatchObject({
+    recipe: { available: false, revision: 9, underlyingTools: [] },
+  });
+  expect(recipes[1]).toMatchObject({
+    recipe: { available: true, revision: 1, underlyingTools: ['brain.search'] },
+  });
+});
 it('re-reads agent authority before every child and stops a recipe after revocation', async () => {
   await save();
   mock.dispatch.mockImplementationOnce(async () => {
