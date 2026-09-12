@@ -66,12 +66,15 @@ const appFs = vi.hoisted(() => {
   const enoent = (op, p) => Object.assign(new Error(`ENOENT: ${op} '${p}'`), { code: 'ENOENT' });
   return {
     entries: new Map(), // absolute path -> 'dir' | 'file'
-    renameFailure: null, // { code, message } forced on the next /Applications rename
+    // Consumed in order, one per /Applications rename: a `{ code, message }`
+    // entry throws, `null` lets that rename through. Queued rather than a single
+    // flag so a test can fail the RESTORE rename and not just the aside one.
+    renameFailures: [],
     manages: (p) => String(p).startsWith('/Applications/'),
     enoent,
     reset() {
       this.entries.clear();
-      this.renameFailure = null;
+      this.renameFailures = [];
     },
   };
 });
@@ -80,11 +83,8 @@ vi.mock('fs/promises', async (importOriginal) => {
   const patched = {
     rename: async (from, to) => {
       if (!appFs.manages(from) && !appFs.manages(to)) return real.rename(from, to);
-      if (appFs.renameFailure) {
-        const forced = appFs.renameFailure;
-        appFs.renameFailure = null;
-        throw Object.assign(new Error(forced.message), { code: forced.code });
-      }
+      const forced = appFs.renameFailures.length ? appFs.renameFailures.shift() : null;
+      if (forced) throw Object.assign(new Error(forced.message), { code: forced.code });
       if (!appFs.entries.has(from)) throw appFs.enoent('rename', from);
       appFs.entries.set(to, appFs.entries.get(from));
       appFs.entries.delete(from);
@@ -858,7 +858,7 @@ describe('localLlm', () => {
 
     it('aborts with the install fully intact when the old bundle cannot be moved aside', async () => {
       appFs.entries.set(APP, 'dir');
-      appFs.renameFailure = { code: 'EPERM', message: 'Operation not permitted' };
+      appFs.renameFailures = [{ code: 'EPERM', message: 'Operation not permitted' }];
 
       const r = await runMacUpgrade();
 
@@ -882,6 +882,21 @@ describe('localLlm', () => {
       expect(aside()).toEqual([]);
       // …and the downloaded bundle survived, so the user can finish by hand.
       expect(r.error).toMatch(/downloaded bundle is still at .*Ollama\.app/);
+    });
+
+    it('names where the old bundle is stranded when the rollback itself fails', async () => {
+      // Worst case: the install failed AND the aside copy could not be moved back.
+      // Silence here would leave the user with no Ollama and no idea where it went,
+      // so the error has to carry the aside path as a breadcrumb.
+      appFs.entries.set(APP, 'dir');
+      appFs.renameFailures = [null, { code: 'EPERM', message: 'Operation not permitted' }];
+
+      const r = await runMacUpgrade({ mv: 'fails' });
+
+      expect(r.success).toBe(false);
+      expect(r.error).toMatch(/could NOT be restored/);
+      expect(r.error).toContain(aside()[0]); // the exact path it is stranded at
+      expect(appFs.entries.has(APP)).toBe(false); // honestly reported, not claimed restored
     });
 
     it('refuses to call a non-directory landing a successful upgrade', async () => {
