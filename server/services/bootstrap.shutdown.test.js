@@ -114,12 +114,12 @@ describe('bounded server shutdown', () => {
     let onClose;
     const settled = vi.fn();
     const closing = closeServer({ close: (done) => { onClose = done; } }, 'HTTP server').then(settled);
-    await vi.advanceTimersByTimeAsync(249);
+    await vi.advanceTimersByTimeAsync(999);
     expect(settled).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(1);
     await closing;
     expect(settled).toHaveBeenCalledTimes(1);
-    expect(error.mock.calls).toEqual([['⚠️ HTTP server close exceeded 250ms — proceeding']]);
+    expect(error.mock.calls).toEqual([['⚠️ HTTP server close exceeded 1000ms — proceeding']]);
     onClose();
     onClose(new Error('late failure'));
     expect(log).not.toHaveBeenCalled();
