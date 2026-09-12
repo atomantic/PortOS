@@ -166,11 +166,6 @@ export function GeneralTab() {
         onDiscard={discardAndExit}
       />
       <div className="bg-port-card border border-port-border rounded-lg p-4 sm:p-6">
-        <h3 className="text-lg font-semibold text-white mb-4">Interface Theme</h3>
-        <ThemePickerPanel />
-      </div>
-
-      <div className="bg-port-card border border-port-border rounded-lg p-4 sm:p-6">
         <h3 className="text-lg font-semibold text-white mb-4">Timezone</h3>
         <p className="text-sm text-gray-400 mb-4">
           Used for job scheduling (cron expressions & scheduled times) and briefing dates.
@@ -287,6 +282,11 @@ export function GeneralTab() {
             </span>
           )}
         </div>
+      </div>
+
+      <div className="bg-port-card border border-port-border rounded-lg p-4 sm:p-6">
+        <h3 className="text-lg font-semibold text-white mb-4">Interface Theme</h3>
+        <ThemePickerPanel />
       </div>
     </div>
   );
