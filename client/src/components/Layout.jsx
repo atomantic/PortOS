@@ -2,116 +2,31 @@ import { useState, useEffect, useLayoutEffect, useMemo, useRef, useCallback } fr
 import useFocusTrap from '../hooks/useFocusTrap.js';
 import { Outlet, NavLink, useLocation, useNavigate } from 'react-router';
 import {
-  Home,
   Package,
-  FileText,
   Terminal,
-  Bot,
   ChevronLeft,
   ChevronDown,
   ChevronRight,
   Menu,
-  History,
-  Code2,
-  Activity,
-  BarChart3,
   Cpu,
-  Gauge,
-  FlaskConical,
-  Braces,
   Wrench,
   ExternalLink,
   Crown,
-  Play,
-  ScrollText,
-  Camera,
   Brain,
   Heart,
   Fingerprint,
-  CheckCircle,
-  Dna,
-  Download,
-  Film,
-  MessageSquare,
-  Palette,
-  PenLine,
   Sparkles,
-  Target,
-  Clock,
-  Calendar,
   CalendarDays,
-  GraduationCap,
   Settings,
-  Users,
-  CalendarClock,
-  Upload,
-  SquareTerminal,
-  Globe,
-  Newspaper,
-  Orbit,
-  Ticket,
-  Network,
-  Flame,
-  BarChart2,
   Monitor,
-  Cigarette,
-  HeartPulse,
-  ClipboardList,
-  ListChecks,
-  Compass,
-  Feather,
-  Scale,
   LayoutDashboard,
-  Lightbulb,
-  GitBranch,
-  Link2,
-  ListMusic,
-  Database,
-  Shield,
-  ShieldCheck,
-  KeyRound,
-  Lock,
-  Wand2,
-  Rocket,
   Zap,
-  Inbox,
-  RefreshCw,
-  Dog,
-  FileInput,
-  FilePen,
-  MessageCircle,
-  Radio,
-  TrendingUp,
-  Swords,
-  HardDrive,
-  Layers,
   MessagesSquare,
-  BookOpen,
-  NotebookPen,
-  Mic,
-  Rss,
-  Archive,
-  Eraser,
   Sun,
   Moon,
-  Share2,
   Pin,
   PinOff,
   Navigation,
-  Music,
-  Workflow as WorkflowIcon,
-  ChartGantt,
-  Clapperboard,
-  PersonStanding,
-  Box,
-  Blocks,
-  Boxes,
-  Gamepad2,
-  Waypoints,
-  AtSign,
-  Drama,
-  UserRound,
-  Video
 } from 'lucide-react';
 // `__APP_VERSION__` is a Vite build-time define (see vite.config.js). Biome does
 // not honour ESLint-style "global" block comments, so it is declared in
@@ -132,6 +47,13 @@ import { useNavWorkingSet } from '../hooks/useNavWorkingSet.js';
 import { migrateLegacyNavPath } from '../utils/navWorkingSet.js';
 import { useInstanceFeatures } from '../hooks/useInstanceFeatures.js';
 import { filterNavByFeatures } from '../lib/navFeatures.js';
+import {
+  NAV_PRESENTATION,
+  SECTIONS_BEFORE_GOALS,
+  SECTIONS_AFTER_GOALS,
+  SECTIONS_BELOW_MORE,
+} from '../lib/navPresentation.js';
+import { isFullWidthRoute } from '../lib/layoutRoutes.js';
 import { NAV_COMMANDS } from '../../../server/lib/navManifest.js';
 import { useSidebarApps } from '../hooks/useSidebarApps.js';
 import { useSidebarSeries } from '../hooks/useSidebarSeries.js';
@@ -162,194 +84,6 @@ function ThemeModeToggle({ className = '' }) {
   );
 }
 
-// `NAV_COMMANDS` owns every structural field shared with the sidebar. This map
-// intentionally contains presentation only: giving a manifest path an icon is
-// what opts that destination into the sidebar. External and runtime-hydrated
-// rows have no manifest destination and stay explicitly local below.
-export const NAV_PRESENTATION = {
-  '/': { icon: Home, single: true },
-  '/review': { icon: ClipboardList, single: true },
-  '/eidoverse': { icon: Orbit, single: true },
-  '/apps': { icon: Package, dynamic: 'apps' },
-  '/brain/config': { icon: Settings },
-  '/brain/daily-log': { icon: NotebookPen },
-  '/brain/digest': { icon: Calendar },
-  '/brain/feeds': { icon: Rss },
-  '/brain/graph': { icon: Network },
-  '/brain/ideas': { icon: Lightbulb },
-  '/brain/import': { icon: Upload },
-  '/brain/inbox': { icon: MessageSquare },
-  '/brain/links': { icon: Link2 },
-  '/brain/memory': { icon: Database },
-  '/brain/notes': { icon: FileText },
-  '/brain/spotify': { icon: Music },
-  '/brain/youtube': { icon: Video },
-  '/rapid-reader': { icon: Zap },
-  '/songbook': { icon: ListMusic },
-  '/timeline': { icon: CalendarClock },
-  '/tribe': { icon: Users },
-  '/brain/trust': { icon: Shield },
-  '/wiki/overview': { icon: BookOpen },
-  '/calendar/agenda': { icon: CalendarDays },
-  '/calendar/config': { icon: Settings },
-  '/calendar/day': { icon: Calendar },
-  '/calendar/lifetime': { icon: Clock },
-  '/calendar/month': { icon: CalendarDays },
-  '/calendar/review': { icon: ClipboardList },
-  '/calendar/sync': { icon: RefreshCw },
-  '/calendar/week': { icon: CalendarDays },
-  '/cos/agents': { icon: Cpu },
-  '/cos/briefing': { icon: Newspaper },
-  '/cos/config': { icon: Settings },
-  '/cos/digest': { icon: Calendar },
-  '/feature-agents': { icon: Wand2 },
-  '/cos/gsd': { icon: Compass },
-  '/cos/health': { icon: Activity },
-  '/cos/learning': { icon: GraduationCap },
-  '/cos/memory': { icon: Brain },
-  '/cos/mind': { icon: MessageSquare },
-  '/cos/run-events': { icon: ScrollText },
-  '/cos/runs': { icon: Play },
-  '/cos/schedule': { icon: Clock },
-  '/agents': { icon: Users },
-  '/cos/productivity': { icon: BarChart2 },
-  '/cos/jobs': { icon: Bot },
-  '/cos/tasks': { icon: FileText },
-  '/cos/workflow': { icon: ChartGantt },
-  '/messages/beeper': { icon: MessageCircle },
-  '/messages/config': { icon: Settings },
-  '/messages/contacts': { icon: Users },
-  '/messages/drafts': { icon: FilePen },
-  '/messages/imessage': { icon: MessageSquare },
-  '/messages/inbox': { icon: Inbox },
-  '/messages/signal': { icon: MessageSquare },
-  '/stacker-news': { icon: Newspaper },
-  '/messages/sync': { icon: RefreshCw },
-  '/x': { icon: AtSign },
-  '/3d': { icon: Boxes },
-  '/authors': { icon: FilePen },
-  '/catalog': { icon: Sparkles },
-  '/creative-commission': { icon: CalendarClock },
-  '/creative-director': { icon: Clapperboard },
-  '/video': { icon: Clapperboard },
-  '/pipeline/editorial-checks': { icon: ListChecks },
-  '/fableloom': { icon: Waypoints },
-  '/game': { icon: Gamepad2 },
-  '/importer': { icon: FileInput },
-  '/media': { icon: Layers },
-  '/mood-boards': { icon: Palette },
-  '/music': { icon: Mic },
-  '/music-video': { icon: Music },
-  '/rounds': { icon: Music },
-  '/pipeline': { icon: WorkflowIcon, dynamic: 'pipelineSeries' },
-  '/sharing': { icon: Share2 },
-  '/sprites': { icon: PersonStanding },
-  '/start-story': { icon: Rocket },
-  '/story-builder': { icon: Wand2 },
-  '/media/threejs': { icon: Box },
-  '/universes': { icon: Globe, dynamic: 'universes' },
-  '/writers-room': { icon: NotebookPen },
-  '/devtools/agents': { icon: Cpu },
-  '/ambient': { icon: Sparkles },
-  '/browser': { icon: Globe },
-  '/capabilities': { icon: Compass },
-  '/devtools/runner': { icon: Code2 },
-  '/data': { icon: HardDrive },
-  '/devtools/datadog': { icon: Dog },
-  '/devtools/flows': { icon: WorkflowIcon },
-  '/devtools/github': { icon: GitBranch },
-  '/devtools/history': { icon: History },
-  '/devtools/image-clean': { icon: Eraser },
-  '/instances': { icon: Network },
-  '/devtools/jira': { icon: Ticket },
-  '/devtools/jira/reports': { icon: FileText },
-  '/loops': { icon: RefreshCw },
-  '/devtools/processes': { icon: Activity },
-  '/devtools/quota-burn': { icon: Flame },
-  '/security': { icon: Camera },
-  '/shell': { icon: SquareTerminal },
-  '/system-resources': { icon: Activity },
-  '/uploads': { icon: Upload },
-  '/devtools/usage': { icon: BarChart3 },
-  '/devtools/video-download': { icon: Film },
-  '/workspace-contexts': { icon: Layers },
-  '/goals/list': { icon: Target, single: true },
-  '/meatspace/age': { icon: Clock },
-  '/meatspace/alcohol': { icon: Activity },
-  '/meatspace/blood': { icon: HeartPulse },
-  '/meatspace/body': { icon: Scale },
-  '/meatspace/health': { icon: Heart },
-  '/meatspace/export': { icon: FileText },
-  '/meatspace/genome': { icon: Dna },
-  '/meatspace/lifestyle': { icon: ClipboardList },
-  '/meatspace/nicotine': { icon: Cigarette },
-  '/meatspace/overview': { icon: Activity },
-  '/meatspace/settings': { icon: Settings },
-  '/models/3d': { icon: Boxes },
-  '/models/embeddings': { icon: Braces },
-  '/models/harnesses': { icon: Blocks },
-  '/models/llms': { icon: Cpu },
-  '/models/loras': { icon: Sparkles },
-  '/models/media': { icon: HardDrive },
-  '/models/comparison': { icon: Gauge },
-  '/models/performance': { icon: Gauge },
-  '/local-llm/playground': { icon: FlaskConical },
-  '/models/status': { icon: Activity },
-  '/models/training': { icon: GraduationCap },
-  '/settings/ai-assignments': { icon: Bot },
-  '/settings/api-access': { icon: Globe },
-  '/api-reference/catalog': { icon: Braces },
-  '/settings/autofixer': { icon: Wrench },
-  '/settings/backup': { icon: Download },
-  '/settings/credentials': { icon: KeyRound },
-  '/models/code-reviewers': { icon: ShieldCheck },
-  '/settings/database': { icon: Database },
-  '/settings/features': { icon: ListChecks },
-  '/settings/general': { icon: Settings },
-  '/settings/mortalloom': { icon: Activity },
-  '/openclaw': { icon: MessagesSquare },
-  '/settings/orchestration': { icon: Cpu },
-  '/prompts': { icon: FileText },
-  '/ai': { icon: Bot },
-  '/settings/security': { icon: Lock },
-  '/settings/sharing': { icon: Share2 },
-  '/settings/telegram': { icon: MessageSquare },
-  '/settings/voice': { icon: Mic },
-  '/digital-twin/accounts': { icon: Globe },
-  '/digital-twin/appearance': { icon: Camera },
-  '/ask': { icon: MessageCircle },
-  '/digital-twin/autobiography': { icon: PenLine },
-  '/digital-twin/avatar-bio': { icon: UserRound },
-  '/character': { icon: Swords },
-  '/digital-twin/documents': { icon: FileText },
-  '/digital-twin/enrich': { icon: Sparkles },
-  '/digital-twin/export': { icon: Download },
-  '/digital-twin/goals': { icon: Target },
-  '/digital-twin/identity': { icon: Fingerprint },
-  '/digital-twin/import': { icon: Upload },
-  '/insights/overview': { icon: Lightbulb },
-  '/digital-twin/interview': { icon: MessageSquare },
-  '/digital-twin/legacy': { icon: Package },
-  '/digital-twin/overview': { icon: Heart },
-  '/digital-twin/personality': { icon: Brain },
-  '/digital-twin/personas': { icon: Drama },
-  '/privacy/overview': { icon: Shield },
-  '/digital-twin/taste': { icon: Palette },
-  '/digital-twin/test': { icon: CheckCircle },
-  '/digital-twin/time-capsule': { icon: Archive },
-  '/digital-twin/voice': { icon: Mic },
-  '/post/config': { icon: Settings },
-  '/post/explore': { icon: Compass },
-  '/post/history': { icon: History },
-  '/post/launcher': { icon: Play },
-  '/post/memory': { icon: Brain },
-  '/post/morse': { icon: Radio },
-  '/post/plan': { icon: ListChecks },
-  '/post/progress': { icon: TrendingUp },
-  '/post/rhetoric': { icon: Feather },
-  '/post/wordplay': { icon: MessageCircle },
-};
-
 const SECTION_PRESENTATION = {
   Brain: { icon: Brain, defaultTo: '/brain/inbox' },
   Calendar: { icon: CalendarDays },
@@ -364,17 +98,6 @@ const SECTION_PRESENTATION = {
   POST: { icon: Zap, defaultTo: '/post/launcher' },
 };
 
-// Sidebar grouping is declared, never derived from array positions. The first
-// two lists are the alphabetical run of sections, split around the Goals row;
-// the third is the intentionally-last bucket that renders below the "More"
-// divider, so it is NOT alphabetical relative to the other two and can only be
-// declared. Adding a section means putting its name in the list it belongs to —
-// there are no indices to keep in sync.
-export const SECTIONS_BEFORE_GOALS = [
-  'Brain', 'Calendar', 'Chief of Staff', 'Comms', 'Create', 'Dev Tools',
-];
-export const SECTIONS_AFTER_GOALS = ['Health', 'Models', 'Settings'];
-export const SECTIONS_BELOW_MORE = ['Identity', 'POST'];
 
 const SECTION_ORDER = [...SECTIONS_BEFORE_GOALS, ...SECTIONS_AFTER_GOALS, ...SECTIONS_BELOW_MORE];
 
@@ -537,144 +260,6 @@ export function SingleNavRow({ item, collapsed, active, badgeCount, pinned, onTo
       )}
     </div>
   );
-}
-
-// Routes whose main content owns its own internal scroll region and needs the
-// bare full-width `<main>` (relative overflow-hidden) instead of the default
-// padded+scrolling one. Checked in order: exact path, then prefix, then
-// regex — see `isFullWidthRoute` below.
-const EXACT_FULL_WIDTH_PATHS = [
-  '/character',
-  '/eidoverse',
-  '/ai',
-  // Data Manager is a bordered title bar over a `flex-1 overflow-auto` body,
-  // so it owns its own scroll. EXACT, not a prefix — a `/data` prefix would
-  // also swallow the `/datadog` redirect route.
-  '/data',
-  '/devtools/flows',
-  '/ask',
-  // OpenClaw lives under the Settings nav group; it's a full-bleed
-  // chat surface (sidebar + message pane) that owns its own internal
-  // scroll, so it needs the bare full-width main like the other
-  // Full-width Settings pages (/prompts, /settings/*) and the Models Providers
-  // page at /ai.
-  '/openclaw',
-  '/prompts',
-  '/review',
-  '/shell',
-  // Tribe is a full-bleed two-pane page that owns its own internal
-  // scroll (PageHeader + a `flex-1 overflow-auto` main); keep it out
-  // of the default padded+scrolling main or it double-pads and clips.
-  '/tribe',
-  // Rapid Reader is a full-bleed brain sub-page: full-width PageHeader
-  // over an internal `flex-1 overflow-auto` scroll region.
-  '/rapid-reader',
-  // Timeline (/timeline and /timeline/:date) is a full-bleed brain
-  // sub-page: full-width PageHeader over an internal `flex-1
-  // overflow-auto` scroll region that wraps the centered max-w-4xl
-  // content — keep it out of the default padded main or it double-pads.
-  '/timeline',
-];
-
-const FULL_WIDTH_PATH_PREFIXES = [
-  '/ask/',
-  '/calendar',
-  // Only the Catalog DETAIL editor (/catalog/{type}/{id}) and the
-  // Ingest page (/catalog/ingest) are full-width — they own their
-  // own scroll. The /catalog list/index page stays scrolling-default.
-  '/catalog/',
-  '/cos',
-  // Both the Creative Director index and its detail editor manage
-  // their own internal scroll (flex-col h-full + overflow-auto body),
-  // so they need the bare full-width main — same as when they lived
-  // under the /media tabs.
-  '/creative-director',
-  '/brain',
-  '/digital-twin',
-  '/feature-agents',
-  '/goals',
-  '/insights',
-  '/meatspace',
-  '/media',
-  '/messages',
-  '/local-llm/',
-  '/pipeline/issues/',
-  '/pipeline/series/',
-  '/post',
-  // Models mirrors Settings: PageHeader + TabPills over a `flex-1 overflow-auto`
-  // body, so the page owns its own scroll. Without this it nests inside the
-  // padded scrolling main and the inner `h-full` clips below the fold.
-  '/models',
-  '/api-reference',
-  '/settings',
-  // Round EDITOR (/rounds/:id) and the Learning Guide (/rounds/guide)
-  // are full-width and own their own scroll; the bare /rounds index
-  // (list + create form) takes the normal padded+scrolling main.
-  '/rounds/',
-  '/wiki',
-  // Only the universe EDITOR (/universes/:id, /universes/new) is
-  // full-width — it manages its own scroll. The /universes index
-  // (list/table) takes the normal padded+scrolling main, mirroring
-  // the Series Pipeline index (/pipeline is not full-width either).
-  '/universes/',
-  // Story Builder DETAIL (/story-builder/:id/:step) is a full-width
-  // stepper that owns its own scroll; the bare /story-builder index
-  // (list + create form) takes the normal padded+scrolling main.
-  '/story-builder/',
-  // FableLoom EDITOR (/fableloom/:loomId/...) is a full-width canvas that
-  // owns its own scroll; the bare /fableloom index takes the normal
-  // padded+scrolling main.
-  '/fableloom/',
-  // The AI Providers editor is a drawer over the same page (/ai/new,
-  // /ai/:providerId), so its sub-routes need the bare full-width main the
-  // bare /ai index gets from EXACT_FULL_WIDTH_PATHS above — without it the
-  // page's own `flex-1 overflow-auto` body sits inside a padded, scrolling
-  // main and double-pads.
-  '/ai/',
-  '/writers-room',
-  '/agents',
-  '/shell/',
-  '/timeline/',
-  // Every SongBook route — index (/songbook), import (/songbook/import),
-  // and viewer (/songbook/:id) — is full-bleed and owns its own scroll
-  // (flex-col h-full + an internal overflow-auto region; the viewer adds
-  // its autoscroll container). They share the standard bordered
-  // PageHeader bar over that scroll region.
-  '/songbook',
-];
-
-const FULL_WIDTH_PATH_REGEXES = [
-  // Music mirrors the Media Gen page shell: title bar + tabs over a separately
-  // scrolling body. Keep this boundary-specific so `/music-video` retains its
-  // own route classification.
-  /^\/music(?:\/|$)/,
-  // Video workspace (`/video`) owns its own header+scroll shell. Generate
-  // Video (`/video/generate`) uses the MediaGen tab shell (header + tabs +
-  // overflow-auto body), so it must stay full-width with that shell — taking
-  // it off full-width double-pads; leaving it full-width without the shell
-  // clips the form. Boundary-specific so `/video-gen` (legacy redirect) is
-  // not swallowed the way a `/video` prefix would.
-  /^\/video(?:\/|$)/,
-  // Only Game DETAIL workspaces own an internal scroll region; the
-  // bare /game index stays on the normal padded page layout.
-  /^\/game\/[^/]+\/?$/,
-  // Only the App DETAIL editor (/apps/:id, /apps/:id/:tab) is
-  // full-width and owns its own scroll; the Add App form
-  // (/apps/create) is a plain scrolling page and must stay OUT of
-  // full-width, or its content clips below the fold (it has no
-  // internal overflow-y-auto container). The trailing (?:\/|$) +
-  // create(?:\/|$) lookahead also excludes the trailing-slash URL
-  // /apps/create/ (React Router treats it as the same route).
-  /^\/apps\/(?!create(?:\/|$))[^/]+(?:\/|$)/,
-];
-
-// Exported for the table-driven regression test in Layout.test.jsx — the 41
-// classification rules above have no other coverage, and a dropped or retyped
-// entry silently changes a page's layout.
-export function isFullWidthRoute(pathname) {
-  return EXACT_FULL_WIDTH_PATHS.includes(pathname) ||
-    FULL_WIDTH_PATH_PREFIXES.some((prefix) => pathname.startsWith(prefix)) ||
-    FULL_WIDTH_PATH_REGEXES.some((re) => re.test(pathname));
 }
 
 export default function Layout() {
