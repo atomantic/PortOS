@@ -300,8 +300,7 @@ export const isPg17OnlyDirective = (line) => PG17_ONLY_DIRECTIVES.some((re) => r
 // Abort escalation bounds for importDumpFile's read-failure path: after
 // SIGTERM, wait this long for the child's 'close' before escalating to
 // SIGKILL, then this much longer before reporting failure without a confirmed
-// close. Bounded so a stalled psql can never hang the sync request — while
-// still never reporting completion for a child that could write or commit.
+// close. The final bound reports failure without claiming termination was confirmed.
 const ABORT_TERM_GRACE_MS = 2_000;
 const ABORT_KILL_GRACE_MS = 2_000;
 
@@ -321,11 +320,10 @@ const ABORT_KILL_GRACE_MS = 2_000;
  * crash the Node process (there is no next(err) to bubble to). Returns the same
  * { stdout, stderr, exitCode } shape as runCmd().
  *
- * Failure semantics: a SQL error or timeout is reported once psql exits. A dump
- * READ failure is different — the import is half-delivered, so the child is
+ * A dump READ failure leaves the import half-delivered, so the child is
  * aborted (SIGTERM, escalating to SIGKILL) WITHOUT the normal-EOF stdin end
  * that psql would commit as a finished --single-transaction script, and the
- * promise settles only after the child's 'close' is confirmed (see abort()).
+ * promise waits for 'close' or the bounded abort deadline (see abort()).
  */
 export function importDumpFile(dumpFile, port, env, timeout = 120_000) {
   return new Promise((resolve) => {
@@ -356,11 +354,11 @@ export function importDumpFile(dumpFile, port, env, timeout = 120_000) {
     let finished = false;
     // Set once a dump read failure starts tearing the child down. While an
     // abort is in flight the promise stays unsettled — it resolves only on a
-    // confirmed 'close' or when the bounded escalation gives up — so the
-    // caller never observes completion while psql could still write or commit.
+    // confirmed 'close' or when the bounded escalation gives up.
     let aborting = false;
     let abortDetail = null;
     let abortTimer = null;
+    let killRequested = false;
     const finish = (exitCode, extraDetail) => {
       if (finished) return;
       finished = true;
@@ -369,7 +367,7 @@ export function importDumpFile(dumpFile, port, env, timeout = 120_000) {
       src.destroy();
       // Only a normal completion ends stdin — that EOF is what psql reads as
       // end-of-script and commits under --single-transaction. An abort never
-      // sends it (and by the time finish runs after one, the child is gone).
+      // sends it, including when termination could not be confirmed.
       if (!aborting && psql.stdin.writable) psql.stdin.end();
       if (exitCode !== 0) {
         const detail = stripAnsi(stderr || stdout || extraDetail || '').replace(/\s+/g, ' ').trim();
@@ -397,19 +395,24 @@ export function importDumpFile(dumpFile, port, env, timeout = 120_000) {
     // (scripts/db.sh --clean). Abort instead: stop pumping, leave stdin open,
     // and terminate the child so its open transaction rolls back with the
     // connection. Settlement then waits on the child's 'close' — bounded by
-    // SIGTERM → SIGKILL escalation below — so failure is reported only once
-    // the import can no longer commit a partial prefix.
+    // SIGTERM → SIGKILL escalation below. Even if neither signal succeeds,
+    // stdin stays open so the partial prefix cannot commit on normal EOF.
+    const escalateAbort = () => {
+      if (finished || killRequested) return;
+      // kill() can synchronously emit 'error'; arm the guard and deadline first.
+      killRequested = true;
+      clearTimeout(abortTimer);
+      abortTimer = setTimeout(() => finish(1, abortDetail), ABORT_KILL_GRACE_MS);
+      psql.kill('SIGKILL');
+    };
     const abort = (detail) => {
       if (finished || aborting) return;
       aborting = true;
       abortDetail = detail;
       clearTimeout(timer); // the import timeout's bound is superseded by the abort bound
       src.destroy();
+      abortTimer = setTimeout(escalateAbort, ABORT_TERM_GRACE_MS);
       psql.kill('SIGTERM');
-      abortTimer = setTimeout(() => {
-        psql.kill('SIGKILL');
-        abortTimer = setTimeout(() => finish(1, abortDetail), ABORT_KILL_GRACE_MS);
-      }, ABORT_TERM_GRACE_MS);
     };
 
     psql.stdout.on('data', (d) => { stdout = capture(stdout, d.toString()); });
@@ -419,7 +422,7 @@ export function importDumpFile(dumpFile, port, env, timeout = 120_000) {
         // A failed kill during teardown — the child may still be running.
         // Escalate and keep waiting on close rather than reporting failure
         // while it can still commit.
-        psql.kill('SIGKILL');
+        escalateAbort();
         return;
       }
       finish(1, err.message);

@@ -318,6 +318,35 @@ describe('importDumpFile (no-shell streaming import)', () => {
     }
   });
 
+  it('bounds escalation when both termination signals synchronously emit errors', async () => {
+    vi.useFakeTimers();
+    try {
+      const child = makeFakePsql({ closeOnKill: false });
+      const failKill = () => {
+        child.emit('error', Object.assign(new Error('kill EPERM'), { code: 'EPERM' }));
+        return false;
+      };
+      // Two consecutive failures reproduce Node's synchronous error delivery;
+      // the fallback prevents a regressed implementation overflowing the test runner.
+      child.kill.mockImplementation(() => false)
+        .mockImplementationOnce(failKill).mockImplementationOnce(failKill);
+      spawn.mockReturnValue(child);
+      const stdinEnd = vi.spyOn(child.stdin, 'end');
+      createReadStream.mockImplementationOnce(() => makeFailingSource('SELECT 1;\n'));
+
+      const promise = importDumpFile('/fake/dump.sql', '5561', {});
+      await vi.advanceTimersByTimeAsync(10_000);
+      const result = await promise;
+      expect(child.kill.mock.calls.map(([signal]) => signal)).toEqual(['SIGTERM', 'SIGKILL']);
+      expect(stdinEnd).not.toHaveBeenCalled();
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain('dump read failed mid-stream');
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('keeps waiting for close when the child errors mid-abort and settles once', async () => {
     const child = makeFakePsql({ closeOnKill: false });
     spawn.mockReturnValue(child);
