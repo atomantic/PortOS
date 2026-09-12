@@ -457,9 +457,10 @@ const EXACT_TEXT_EDITS_MAX = 12;
  * wholesale gave a one-sentence repair thousands of unrelated words of blast
  * radius, and an over-limit rewrite could then be truncated mid-sentence by the
  * canonical sanitizer. Exact replacements keep the untouched text byte-for-byte
- * stable. Ambiguous/missing anchors and over-limit results are skipped rather
- * than guessed at; the next verification round will leave the original finding
- * visible instead of persisting a speculative rewrite.
+ * stable. Ambiguous/missing anchors are skipped rather than guessed at. Check
+ * capacity after all replacements: an early expansion may rely on a later
+ * compression. If the final field exceeds its limit, preserve the original
+ * field instead of persisting a partial version of the proposed change.
  */
 export function applyExactTextEdits(current, rawEdits, maxLength) {
   const original = typeof current === 'string' ? current : '';
@@ -480,15 +481,13 @@ export function applyExactTextEdits(current, rawEdits, maxLength) {
       rejected += 1;
       continue;
     }
-    const candidate = `${value.slice(0, first)}${replacement}${value.slice(first + find.length)}`;
-    if (candidate.length > maxLength) {
-      rejected += 1;
-      continue;
-    }
-    value = candidate;
+    value = `${value.slice(0, first)}${replacement}${value.slice(first + find.length)}`;
     applied += 1;
   }
   rejected += Math.max(0, rawEdits.length - EXACT_TEXT_EDITS_MAX);
+  if (value.length > maxLength) {
+    return { value: original, applied: 0, rejected: rejected + applied };
+  }
   return { value, applied, rejected };
 }
 

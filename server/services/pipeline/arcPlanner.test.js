@@ -1056,6 +1056,39 @@ describe('arcPlanner — resolveVerifyIssues', () => {
     expect(out.mutations).toEqual({ arcFieldsEdited: 0, volumesEdited: 0, characterArcsEdited: 0, episodesEdited: 0 });
   });
 
+  it('persists the complete repair when later compression brings the field under its cap', async () => {
+    const s = await setupSeries();
+    const padding = 'x'.repeat(7960);
+    const summary = `Old motive. ${padding} Redundant explanation.`;
+    await seriesSvc.updateSeries(s.id, { arc: { logline: 'L', summary } });
+    const replacement = 'A costly choice earns the rescue.';
+    stageRunnerSpy = vi.fn(async () => ({
+      content: {
+        patchMode: 'exact-text-v1',
+        arc: {
+          resolves: ['f1'],
+          summaryEdits: [
+            { find: 'Old motive.', replace: replacement },
+            { find: ' Redundant explanation.', replace: '' },
+          ],
+        },
+      },
+      runId: 'r-net-fitting', providerId: 'p', model: 'm',
+    }));
+    const out = await planner.resolveVerifyIssues(s.id, {
+      findings: [{ id: 'f1', severity: 'medium', problem: 'The rescue is unearned.' }],
+    });
+    expect(out).toMatchObject({ applied: true, rejectedExactEdits: 0 });
+    expect((await seriesSvc.getSeries(s.id)).arc.summary).toBe(`${replacement} ${padding}`);
+  });
+
+  it('preserves the whole field when the final replacement set still exceeds the cap', () => {
+    expect(planner.applyExactTextEdits('first and second', [
+      { find: 'first', replace: 'a larger first choice' },
+      { find: 'second', replace: 'last' },
+    ], 20)).toEqual({ value: 'first and second', applied: 0, rejected: 2 });
+  });
+
   it('counts what a spine-scope resolve wrote, per record kind (#3843)', async () => {
     // An arc-spine resolver may not touch episodes at all, so `episodesEdited`
     // is 0 on every one of its rounds — the gate reported that alone and a
