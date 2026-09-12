@@ -18,7 +18,7 @@
 
 import { randomUUID } from 'crypto';
 import { sanitizeCoverLike } from './renderSlot.js';
-import { ARC_LIMITS } from './storyArcLimits.js';
+import { ARC_LIMITS, SERIES_DESIGN_MODES, SERIES_DESIGN_TEXT_MAX, SERIES_DESIGN_FIELDS } from './storyArcLimits.js';
 import { isStr, trimTo, trimToClause } from './textUtils.js';
 export { ARC_LIMITS } from './storyArcLimits.js';
 
@@ -466,6 +466,31 @@ export function sanitizeForeshadowing(raw) {
   return out;
 }
 
+/** Normalize only author-supplied intent; legacy arcs acquire no invented brief. */
+export function sanitizeSeriesDesign(raw) {
+  if (!raw || !SERIES_DESIGN_MODES.includes(raw.mode)) return null;
+  return {
+    mode: raw.mode,
+    ...Object.fromEntries(Object.keys(SERIES_DESIGN_FIELDS).map((field) => [field, trimTo(raw[field], SERIES_DESIGN_TEXT_MAX)])),
+  };
+}
+
+/** Read-only authored intent shared by planning, verification and other story consumers. */
+export function renderSeriesDesign(raw) {
+  const design = sanitizeSeriesDesign(raw);
+  if (!design) return '';
+  return [
+    'Series design (author-owned; do not rewrite this brief):',
+    `Mode: ${design.mode}`,
+    ...Object.entries(SERIES_DESIGN_FIELDS).filter(([field]) => design[field]).map(([field, label]) => `${label}: ${design[field]}`),
+    design.mode === 'finite'
+      ? 'Evaluate causal progress toward the declared ending and whether that ending is earned. Do not demand more seasons after the intended conclusion.'
+      : 'Evaluate recognizable recurring activity, variation in episode problems and outcomes, and whether declared continuing tensions are exhausted prematurely.',
+    'Use only the supplied story material. Name existing episodes as evidence for concrete contradictions and return them through the existing actionable findings contract. Missing detail or uncertainty alone is not a finding; at spine-only scope do not invent episode evidence. An intentional one-off or breather can serve the series without matching every pattern.',
+    'Preserve the configured issue count, reader map and emotional shape. Do not require sample episodes, future-season quotas, a prescribed act count, or forced character transformation. Repair the plan, never the authored brief.',
+  ].join('\n');
+}
+
 /**
  * Sanitize the optional `series.arc` field. Returns `null` if the input is
  * empty (no identifying fields) — callers store `null` to mean "no arc yet."
@@ -497,9 +522,12 @@ export function sanitizeArc(raw) {
   // The foreshadowing ledger is identifying content too — an arc whose only
   // authored content is a set of planted seeds must survive.
   const foreshadowing = sanitizeForeshadowing(raw.foreshadowing);
-  if (!logline && !summary && !protagonistArc && themes.length === 0 && !shape && !readerMap && !tickingClock && foreshadowing.length === 0) return null;
+  // Keep explicit null in populated arcs: outgoing sync must distinguish a clear
+  // from an old sender that never knew this field. Legacy omission stays absent.
+  const seriesDesign = sanitizeSeriesDesign(raw.seriesDesign);
+  if (!logline && !summary && !protagonistArc && themes.length === 0 && !shape && !readerMap && !tickingClock && foreshadowing.length === 0 && !seriesDesign) return null;
   const status = ARC_STATUSES.includes(raw.status) ? raw.status : 'draft';
-  return { logline, summary, protagonistArc, themes, shape, readerMap, tickingClock, foreshadowing, status };
+  return { logline, summary, protagonistArc, themes, shape, readerMap, tickingClock, foreshadowing, ...(raw.seriesDesign !== undefined ? { seriesDesign } : {}), status };
 }
 
 /**

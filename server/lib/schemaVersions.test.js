@@ -30,13 +30,13 @@ describe('PORTOS_SCHEMA_VERSIONS', () => {
   it('declares pipeline collection layout versions', () => {
     // pipelineIssues v3 adds the independently persisted climax arc role.
     expect(PORTOS_SCHEMA_VERSIONS.pipelineIssues).toBe(3);
-    // pipelineSeries bumped to 13 when characterArcs[].evolution was added
+    // pipelineSeries bumped to 14 for authored arc.seriesDesign; v13 added characterArcs[].evolution
     // (#6440) (v2 = readerMap, v3 = tickingClock, v4 = styleGuide,
     // v5 = coverImage, v6 = characterArcs, v7 = factCritical + factReference,
     // v8 = editorialCheckConfig, v9 = severityWeights + blockingSeverities,
     // v10 = arc.foreshadowing, v11 = styleGuide.voiceExemplars +
     // voiceAntiExemplars, v12 = exportSettings).
-    expect(PORTOS_SCHEMA_VERSIONS.pipelineSeries).toBe(13);
+    expect(PORTOS_SCHEMA_VERSIONS.pipelineSeries).toBe(14);
   });
 
   it('declares mediaCollections layout version', () => {
@@ -45,10 +45,11 @@ describe('PORTOS_SCHEMA_VERSIONS', () => {
 
   it('version-gates the persisted FableLoom shot and reference shape', () => {
     // v7 adds timed shots and draft character image anchors; v8 adds the
-    // optional per-character five-stage evolution lens on the series plan.
+    // optional per-character five-stage evolution lens on the series plan; v9
+    // adds the shared finite/renewable series-design brief.
     // Older peers stay behind the full render contract until they advertise
     // support for the additive fields.
-    expect(PORTOS_SCHEMA_VERSIONS.fableLoom).toBe(8);
+    expect(PORTOS_SCHEMA_VERSIONS.fableLoom).toBe(9);
   });
 
   it('version-gates the additive Creative Commission taste brief shape', () => {
@@ -62,7 +63,7 @@ describe('buildPortosMeta', () => {
     expect(meta.portosVersion).toMatch(/^\d+\.\d+\.\d+/);
     expect(meta.schemaVersions.universes).toBe(11);
     expect(meta.schemaVersions.pipelineIssues).toBe(3);
-    expect(meta.schemaVersions.pipelineSeries).toBe(13);
+    expect(meta.schemaVersions.pipelineSeries).toBe(14);
   });
 
   it('overrides merge into schemaVersions', async () => {

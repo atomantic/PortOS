@@ -364,6 +364,15 @@ describe('storyBuilder — lock state machine + gating', () => {
 });
 
 describe('storyBuilder — integrity / staleness', () => {
+  it('marks reviewed story steps stale when the authored design changes', async () => {
+    const session = await sb.createStorySession({ title: 'Repair crew' });
+    await seriesSvc.updateSeries(session.seriesId, { arc: { seriesDesign: { mode: 'renewable' } } });
+    await sb.lockStep(session.id, 'readerMap');
+    expect((await sb.getStorySessionView(session.id)).staleSteps).not.toContain('readerMap');
+    await seriesSvc.updateSeries(session.seriesId, { arc: { seriesDesign: { mode: 'finite', endingCondition: 'Finish the final repair.' } } });
+    expect((await sb.getStorySessionView(session.id)).staleSteps).toContain('readerMap');
+  });
+
   it('flags a locked downstream step stale when an upstream record changes', async () => {
     const s = await sb.createStorySession({ title: 'X' });
     // Give the series an arc + reader map, then lock the readerMap step.
@@ -727,6 +736,17 @@ describe('storyBuilder — generate delegation', () => {
 });
 
 describe('storyBuilder — refine delegation', () => {
+  it('refineStep(plotArc) preserves a brief edited while the model is running', async () => {
+    const session = await sb.createStorySession({ title: 'The case' });
+    await seriesSvc.updateSeries(session.seriesId, { arc: { logline: 'Case', seriesDesign: { mode: 'renewable' } } });
+    stageRunnerSpy = vi.fn(async () => {
+      await seriesSvc.updateSeries(session.seriesId, { arc: { logline: 'Case', seriesDesign: { mode: 'finite', endingCondition: 'Resolve the case.' } } });
+      return { content: { logline: 'Refined', seriesDesign: { mode: 'renewable' } }, runId: 'r', providerId: 'p', model: 'm' };
+    });
+    await sb.refineStep(session.id, 'plotArc', { feedback: 'Tighten the pitch.' });
+    expect((await seriesSvc.getSeries(session.seriesId)).arc.seriesDesign).toMatchObject({ mode: 'finite', endingCondition: 'Resolve the case.' });
+  });
+
   it('refineStep(plotArc) persists the refined arc narrative onto the series', async () => {
     const s = await sb.createStorySession({ title: 'X' });
     await seriesSvc.updateSeries(s.seriesId, { arc: { logline: 'old', summary: 'old summary', shape: 'man-in-hole' } });

@@ -58,6 +58,7 @@ export async function generateArcOverview(seriesId, options = {}) {
     // The arc-overview prompt doesn't author the reader map — preserve any
     // existing one (like `shape`) so regenerating the arc never silently wipes
     // a reader map the user already built on the next step.
+    seriesDesign: series.arc?.seriesDesign,
     readerMap: series.arc?.readerMap ?? null,
     // Same for the ticking clock — the overview prompt doesn't author it, so
     // preserve any existing countdown across a regenerate.
@@ -234,6 +235,7 @@ export async function refineArc(seriesId, feedback, options = {}) {
     protagonistArc: refinedStr(content.protagonistArc, arc.protagonistArc),
     themes: refinedThemes,
     shape: arc.shape ?? null,
+    seriesDesign: arc.seriesDesign,
     readerMap: arc.readerMap ?? null,
     // The arc-refine prompt edits the narrative fields only — preserve the
     // ticking clock (like readerMap/shape) so a refine never wipes it.
@@ -899,6 +901,7 @@ export async function resolveVerifyIssues(seriesId, options = {}) {
     // The resolve prompt doesn't author the reader map — preserve any existing
     // one so auto-resolve never silently wipes a reader map the user already
     // built on the next step. Mirrors `generateArcOverview` above.
+    seriesDesign: series.arc?.seriesDesign,
     readerMap: series.arc?.readerMap ?? null,
     // A sparse repair can move existing countdown beats without replacing them.
     tickingClock: mergeTickingClockPatch(series.arc?.tickingClock, edits.arc?.tickingClock).value ?? null,
@@ -1317,7 +1320,7 @@ export async function restoreArcState(seriesId, snapshot, { episodeEdits = null 
   // `series.seasons[]`.
   await withReexportSuppressed('series', seriesId, async () => {
     await updateSeries(seriesId, {
-      arc: snapshot.arc,
+      arc: { ...snapshot.arc, seriesDesign: (await getSeries(seriesId)).arc?.seriesDesign },
       seasons: snapshot.seasons,
       ...(Array.isArray(snapshot.characterArcs) ? { characterArcs: snapshot.characterArcs } : {}),
     });
@@ -1622,7 +1625,7 @@ export async function commitSeasonsWithRemap(currentSeries, { arc, seasons }, op
       { status: 400, code: ERR_VALIDATION },
     );
   }
-  const mergedArc = mergeArcWithLocks(latestSeries.arc, arc, latestSeries.locked?.arcFields);
+  const mergedArc = mergeArcWithLocks(latestSeries.arc, { ...arc, seriesDesign: latestSeries.arc?.seriesDesign }, latestSeries.locked?.arcFields);
   // Per-season locks: restore any locked existing seasons over LLM-proposed
   // rewrites, and re-insert any locked seasons the LLM dropped. Re-sanitize
   // so the locked records merge with the new shape (sort by number, dedup).

@@ -12,7 +12,8 @@ import { updatePipelineSeries } from '../services/api';
 //   onFlushPending  → flushPending(): if local bible fields diverged from the
 //                     last server snapshot, PATCH so generate / verify / resolve
 //                     run against the on-screen state. Returns `true` when a save
-//                     occurred so the caller can surface a confirmation toast.
+//                     occurred, `false` for a clean no-op, and `null` if a save failed.
+//                     Dependent actions must stop on `null`.
 //
 // A fourth callback, `onRegisterDraftFlush` → registerDraftFlush(fn), lets a
 // descendant that owns an unsaved *draft* (the ArcContent logline / summary /
@@ -20,7 +21,7 @@ import { updatePipelineSeries } from '../services/api';
 // bible PATCH, so "flush before you act" covers an open arc editor too — without
 // which clicking Lock & continue / Generate / Save while the editor is open
 // silently discards what is on screen (#3907). The registered fn returns `true`
-// when it saved, and is expected to swallow its own errors.
+// when it saved, `false` for no changes, and `null` after reporting a save error.
 //
 // Both PipelineSeries and the embedded StoryBuilder arc step used to hand-roll
 // this identical contract; the only real divergence is WHICH bible fields each
@@ -86,14 +87,17 @@ export function useArcCanvasSync({
           if (onFlushError) onFlushError(err);
           return null;
         });
-      if (updated) {
-        updateSeriesFromServer(updated);
-        didSave = true;
-      }
+      if (!updated) return null;
+      updateSeriesFromServer(updated);
+      didSave = true;
     }
     // Bible PATCH first, THEN the draft — the draft committer's response then
     // carries the bible fields too, so lastSavedRef ends on the freshest record.
-    if (draftFlushRef.current && await draftFlushRef.current()) didSave = true;
+    if (draftFlushRef.current) {
+      const draftSaved = await draftFlushRef.current();
+      if (draftSaved === null) return null;
+      if (draftSaved) didSave = true;
+    }
     return didSave;
   }, [series, flushFields, payloadDefaults, silent, onFlushError, updateSeriesFromServer]);
 

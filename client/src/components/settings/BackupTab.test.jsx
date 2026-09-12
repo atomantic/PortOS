@@ -163,6 +163,52 @@ describe('BackupTab', () => {
       expect(toast.success).toHaveBeenCalledWith('Database restored from snap-2026-06-09', { icon: '💾' });
     });
 
+    it('binds database preview and confirmation to the selected source', async () => {
+      getBackupSnapshots.mockResolvedValue([
+        ...Array.from({ length: 10 }, (_, index) => ({
+          id: `newer-${index}`,
+          source: 'current-machine',
+          sourceLabel: 'current-machine (current machine)',
+          selectionKey: `current-machine/newer-${index}`,
+        })),
+        {
+          id: 'shared-id',
+          source: 'previous-machine',
+          sourceLabel: 'previous-machine',
+          selectionKey: 'previous-machine/shared-id',
+        },
+      ]);
+      restoreDatabase
+        .mockResolvedValueOnce({ status: 'ok', sizeBytes: 2048, tableCount: 12 })
+        .mockResolvedValueOnce({ status: 'ok' });
+      await renderTab();
+
+      expect(screen.queryByText('Source: previous-machine')).not.toBeInTheDocument();
+      fireEvent.click(screen.getByRole('button', { name: 'Show all 11 snapshots' }));
+      expect(await screen.findByText('Source: previous-machine')).toBeInTheDocument();
+      await act(async () => {
+        const restoreButtons = await screen.findAllByRole('button', { name: /Restore DB/i });
+        fireEvent.click(restoreButtons.at(-1));
+      });
+      expect(restoreDatabase).toHaveBeenNthCalledWith(1, {
+        snapshotId: 'shared-id',
+        source: 'previous-machine',
+        dryRun: true,
+      }, { silent: true });
+      expect(screen.getByText((_, element) =>
+        element?.tagName === 'P' && element.textContent.includes('on previous-machine')))
+        .toBeInTheDocument();
+
+      await act(async () => {
+        fireEvent.click(screen.getByRole('button', { name: /^Restore$/i }));
+      });
+      expect(restoreDatabase).toHaveBeenNthCalledWith(2, {
+        snapshotId: 'shared-id',
+        source: 'previous-machine',
+        dryRun: false,
+      }, { silent: true });
+    });
+
     it('toasts an error when the confirmed restore fails', async () => {
       withSnapshot();
       restoreDatabase

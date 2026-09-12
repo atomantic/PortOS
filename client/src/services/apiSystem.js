@@ -210,14 +210,14 @@ export const getBackupStatus = (options) => request('/backup/status', options);
 export const triggerBackup = (options) => request('/backup/run', { method: 'POST', ...options });
 export const getBackupSnapshots = (options) => request('/backup/snapshots', options);
 export const restoreBackup = (data, options = {}) => request('/backup/restore', { method: 'POST', body: JSON.stringify(data), ...options });
-export async function downloadBackupSnapshot(snapshotId) {
+export async function downloadBackupSnapshot(snapshotId, source) {
   // The server names the file the same way; deriving it here too lets the save
   // picker open BEFORE the fetch, while the click's transient user activation is
   // still valid. Waiting for response headers first — as this used to — routinely
   // outlives that window on a cold external drive, Chromium then refuses the
   // picker, and the download falls back to buffering a multi-gigabyte archive in
   // tab memory: exactly the case the streaming path exists to avoid.
-  const filename = `portos-snapshot-${snapshotId}.tar.gz`;
+  const filename = `portos-snapshot-${source ? `${source}-` : ''}${snapshotId}.tar.gz`;
 
   let writable = null;
   if (typeof window !== 'undefined' && typeof window.showSaveFilePicker === 'function') {
@@ -240,7 +240,8 @@ export async function downloadBackupSnapshot(snapshotId) {
   };
 
   try {
-    const response = await fetch(`${API_BASE}/backup/snapshots/${encodeURIComponent(snapshotId)}/download`, {
+    const query = source ? `?source=${encodeURIComponent(source)}` : '';
+    const response = await fetch(`${API_BASE}/backup/snapshots/${encodeURIComponent(snapshotId)}/download${query}`, {
       credentials: 'same-origin',
     });
     if (!response.ok) {

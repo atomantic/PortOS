@@ -623,3 +623,5 @@ export * as voiceEcho from './voiceEcho.js';
 export * from './voiceEngines.js';
 
 export * from './auditQuality.js';
+
+export * from './mindToolRecipes.js';

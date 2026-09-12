@@ -194,7 +194,8 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // a wholly-absent `characterArcs`, not a present-but-sub-field-stripped
   // one). Bump makes the older peer reject the ahead-version series transfer
   // instead. Per-category gate → only series sync pauses with old peers.
-  pipelineSeries: 13,
+  // v14: author-owned arc.seriesDesign; older sanitizers must not erase it.
+  pipelineSeries: 14,
   // NOT bumped for the manuscript-review sibling doc now bundled on series
   // pushes/exports (`data/pipeline-series/{id}/manuscript-review.json`).
   // Unlike `readerMap` (v2), the review is NOT a field inside the series
@@ -407,7 +408,11 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // restores local lenses from a <v8 sender that omits the key
   // (`preserveLegacyCharacterEvolutions`), the same belt-and-braces the
   // delivery plan got at v4.
-  fableLoom: 8,
+  // v9 = `seriesPlan.seriesDesign` — the optional shared finite/renewable
+  // author brief. A <=v8 peer would strip it during an unrelated whole-record
+  // edit, so newer transfers are gated and legacy omissions restore the local
+  // value through `preserveLegacySeriesDesign`.
+  fableLoom: 9,
   // v1 = Creative Director projects (PostgreSQL `creative_director_projects`)
   // federated via the per-record peer-sync push pipeline (record kind
   // `creativeDirectorProject`, sync category `creativeDirectorProjects`, #1564).

@@ -1,3 +1,4 @@
+import mindToolRecipeRoutes from './mindToolRecipeRoutes.js';
 import { persistentMindMemoryProtectionSchema } from '../lib/persistentMindMemory.js';
 import { getPersistentMindThinkingRequestCatalog, cancelPersistentMindThinkingRequest } from '../services/persistentMindThinkingRequests.js';
 /** Persistent Chief-of-Staff mind conversation and lifecycle routes. */
@@ -65,6 +66,7 @@ import {
 } from '../services/persistentMindSupervisor.js';
 
 const router = Router();
+router.use('/mind/recipes', mindToolRecipeRoutes);
 
 const idempotencyId = z.string().trim().min(1).max(200);
 const eventId = z.string().trim().min(1).max(128);
@@ -269,9 +271,10 @@ router.get('/mind/tools', asyncHandler(async (_req, res) => {
       granted: !allowed || allowed.has(app.id),
     }));
   }
-  const { getCosToolCatalog } = await import('../services/cosToolRegistry.js');
+  const { getCosToolCatalog, readCosToolRecipeCatalog } = await import('../services/cosToolRegistry.js');
+  const recipes = await readCosToolRecipeCatalog({ scope: 'mind' });
   res.json({
-    semanticTools: getCosToolCatalog({ scope: 'mind', capabilities }).tools,
+    semanticTools: getCosToolCatalog({ scope: 'mind', capabilities, recipes }).tools,
     schemaVersion: PERSISTENT_MIND_CAPABILITIES_SCHEMA_VERSION,
     capabilities,
     boundaries: PERSISTENT_MIND_TOOL_BOUNDARIES,

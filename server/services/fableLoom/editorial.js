@@ -33,6 +33,7 @@ import {
   FABLELOOM_PROTAGONIST_PRESENCE,
 } from '../../lib/fableLoomPlayback.js';
 import { renderStoryCanonDigest } from '../../lib/universePromptRenderers.js';
+import { renderSeriesDesign } from '../../lib/storyArc.js';
 import { normalizeFableLoomCameraMovement } from '../../lib/fableLoomCameraMovements.js';
 import { startAIOp } from '../aiStatusEvents.js';
 import { buildPrompt } from '../promptService.js';
@@ -165,6 +166,7 @@ const storyContext = (loom) => [
   loom.protagonistWardrobeId
     ? `Canonical protagonist wardrobe id: ${loom.protagonistWardrobeId}`
     : '',
+  renderSeriesDesign(loom.seriesPlan?.seriesDesign),
 ].filter(Boolean).join('\n');
 
 const withoutTemporalMetadata = (value) => {
@@ -229,6 +231,9 @@ const assertEditorialDependenciesUnchanged = (current, fingerprint, { code, mess
 };
 
 const seriesPlanDigest = (loom) => JSON.stringify({
+  ...(Object.prototype.hasOwnProperty.call(loom.seriesPlan || {}, 'seriesDesign')
+    ? { seriesDesign: loom.seriesPlan.seriesDesign }
+    : {}),
   storyArc: loom.seriesPlan?.storyArc || '',
   plotPoints: asArray(loom.seriesPlan?.plotPoints),
   sideQuests: asArray(loom.seriesPlan?.sideQuests),
@@ -1273,6 +1278,7 @@ export const __testing = {
   sanitizeEvaluation,
   sanitizePlaythroughReview,
   seriesPlanDigest,
+  storyContext,
   teleplayDigest,
   withCompletePlaythroughDigest,
 };

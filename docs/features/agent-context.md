@@ -1,10 +1,10 @@
 # Agent Tools (MCP)
 
-PortOS can expose bounded context and governed semantic tools to CoS agents running on the same machine. The surface uses MCP Streamable HTTP, is disabled by default, and never initiates an LLM request. Context scopes, semantic reads, and semantic writes are independently granted.
+PortOS can expose bounded context, governed semantic tools, and saved read recipes to CoS agents running on the same machine. The surface uses MCP Streamable HTTP, is disabled by default, and never initiates an LLM request. Context scopes, semantic reads, semantic writes, and recipe invocation are independently granted.
 
 ## Enable it
 
-Open **Settings → API Access → Agent Tools (MCP)** and enable **local MCP context**. The setting is stored machine-locally in the existing `settings.json` store; no context data is copied into a new store. Enabling the transport does not grant semantic reads or writes; both action grants default off.
+Open **Settings → API Access → Agent Tools (MCP)** and enable **local MCP context**. The setting is stored machine-locally in the existing `settings.json` store; no context data is copied into a new store. Enabling the transport does not grant semantic reads, writes, or saved recipes; every action grant defaults off.
 
 The endpoint is:
 
@@ -64,8 +64,13 @@ The same MCP endpoint can advertise the curated `portos_tool` catalog used by Pe
 |---|---|---|
 | Semantic PortOS reads | Off | Bounded Brain, goals, journal, calendar, health-summary, feed, catalog, time/weather, process-status, and CoS-status adapters. |
 | Semantic PortOS updates | Off | Typed Brain capture, journal append, goal progress/notes, health logging, and feed-state actions. |
+| Saved read recipes | Off | Invoke eligible recipes from the machine-local Persistent Mind library. Recipe authoring remains Mind-only, and every underlying semantic read grant is still required. |
 
 Every semantic tool has a stable namespaced ID, a provider-safe MCP name, a closed input schema, side-effect/idempotency annotations, and a normalized result. MCP `tools/list` includes only actions granted in Settings. Shell/filesystem access, raw HTTP, arbitrary URLs, SQL, browser control, process control, paid generation, external messaging, credentials, and Persistent Mind task creation are not part of the CoS-agent MCP catalog.
+
+Saved recipes are re-read on every stateless `tools/list`, manifest, HTTP catalog, and invocation. A recipe is advertised only when its active revision contains one to five read steps that are all available in agent scope and the agent holds the recipe grant plus every underlying read grant. Each child executes with freshly loaded Agent Tools authority; revoking access stops later children and immediately denies a cached recipe name. Agent calls receive a local five-child budget when no Persistent Mind turn budget exists.
+
+Native catalog records expose only recipe provenance, active revision, underlying tool names, availability, and a bounded disabled reason. OpenAI, Anthropic, and MCP formats receive the recipe purpose, input schema, and a short local-recipe revision suffix. Definition literals, bindings, revision history, and execution results are never included. Updating, archiving, or restoring a recipe changes the HTTP catalog `ETag` so stateless clients can re-list without session notifications.
 
 For retry-safe semantic writes, send an `Idempotency-Key` header with the MCP POST. PortOS binds it to the normalized tool call; a repeated key with different content fails rather than executing a different action.
 

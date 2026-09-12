@@ -13,7 +13,7 @@ import { getBeeperStatus, checkBeeperConnection } from '../services/beeperStatus
 import { completeBeeperOAuth, connectWithPastedToken, disconnectBeeper, startBeeperOAuth } from '../services/beeperOAuth.js';
 import { runBeeperSweep } from '../services/beeperSync.js';
 import {
-  clearOutboxBreaker, createOutboxEntry, discardOutboxEntry, listOutboxEntries, sendOutboxEntry,
+  clearOutboxBreaker, createOutboxEntry, discardOutboxEntry, reconcileOutboxEntry, listOutboxEntries, sendOutboxEntry,
 } from '../services/beeperOutbox.js';
 import {
   listConversations,
@@ -484,6 +484,13 @@ router.post('/outbox/:id/send', asyncHandler(async (req, res) => {
   const { confirmFirstContact } = validateRequest(beeperOutboxSendSchema, req.body ?? {});
   const entry = await sendOutboxEntry(id, { confirmFirstContact: confirmFirstContact === true })
     .catch((err) => { throw mapBeeperWriteError(err); });
+  res.json(entry);
+}));
+
+// Human recovery reads Beeper delivery state; it never sends another message.
+router.post('/outbox/:id/reconcile', asyncHandler(async (req, res) => {
+  const { id } = validateRequest(beeperOutboxParamsSchema, req.params);
+  const entry = await reconcileOutboxEntry(id).catch((err) => { throw mapBeeperWriteError(err); });
   res.json(entry);
 }));
 

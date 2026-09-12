@@ -103,7 +103,7 @@ vi.mock('./brainStorage.js', async (importOriginal) => ({
 }));
 import { reloadSettings } from './settings.js';
 import { invalidateAllCaches as invalidateBrainCaches } from './brainStorage.js';
-import { DEFAULT_EXCLUDES, computeEffectiveExcludes, generateManifest, listSnapshots, openSnapshotStream, restoreSnapshot } from './backup.js';
+import { DEFAULT_EXCLUDES, computeEffectiveExcludes, listSnapshots, openSnapshotStream, restoreSnapshot } from './backup.js';
 
 // fs.access is mocked file-wide because backup.js probes the .in-progress marker
 // with it. Restore the real implementation before EVERY test: vi.clearAllMocks()
@@ -283,11 +283,16 @@ describe('listSnapshots', () => {
     // The backup target is commonly an iCloud folder; macOS drops a `.DS_Store`
     // FILE into every dir. It must not be treated as a snapshot id (reading
     // `<.DS_Store>/manifest.json` would throw ENOTDIR).
-    vi.spyOn(fs, 'readdir').mockResolvedValue([
-      dirent('.DS_Store', false),
-      dirent('2026-06-08T15-18-34', true),
-      dirent('2026-06-07T09-00-00', true),
-    ]);
+    const readdirSpy = vi.spyOn(fs, 'readdir').mockImplementation(async (path) => {
+      if (String(path) === joinPath('/dest', 'snapshots')) {
+        return [dirent('.DS_Store', false), dirent(machineHost, true)];
+      }
+      return [
+        dirent('.DS_Store', false),
+        dirent('2026-06-08T15-18-34', true),
+        dirent('2026-06-07T09-00-00', true),
+      ];
+    });
     vi.spyOn(fs, 'readFile').mockImplementation(async (p) => {
       if (String(p).includes('.DS_Store')) throw new Error('ENOTDIR — .DS_Store should never be read');
       return JSON.stringify({ generatedAt: '2026-06-08T00:00:00Z', fileCount: 10 });
@@ -297,6 +302,58 @@ describe('listSnapshots', () => {
     expect(ids).toHaveLength(2);
     expect(ids).toContain('2026-06-08T15-18-34');
     expect(ids).not.toContain('.DS_Store');
+    readdirSpy.mockRestore();
+  });
+
+  it('discovers legacy and machine snapshots with collision-safe identities', async () => {
+    const destRoot = await fs.mkdtemp(joinPath(tmpdir(), 'portos-backup-sources-'));
+    const snapshotId = '2026-06-08T15-18-34';
+    const legacyId = '2025-12-31T23-59-59';
+    const roots = [
+      joinPath(destRoot, 'snapshots', legacyId),
+      joinPath(destRoot, 'snapshots', 'legacy', snapshotId),
+      joinPath(destRoot, 'snapshots', 'previous-machine', snapshotId),
+      joinPath(destRoot, 'snapshots', machineHost, snapshotId),
+    ];
+    try {
+      await Promise.all(roots.map(root => fs.mkdir(joinPath(root, 'data'), { recursive: true })));
+      await Promise.all(roots.map((root, index) => fs.writeFile(
+        joinPath(root, 'manifest.json'),
+        JSON.stringify({ generatedAt: `2026-01-0${index + 1}T00:00:00Z`, fileCount: index + 1 }),
+      )));
+
+      const result = await listSnapshots(destRoot);
+
+      expect(result).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          id: legacyId,
+          source: '@legacy',
+          sourceLabel: 'Legacy (pre-namespace)',
+          selectionKey: `@legacy/${legacyId}`,
+        }),
+        expect.objectContaining({
+          id: snapshotId,
+          source: 'legacy',
+          selectionKey: `legacy/${snapshotId}`,
+          currentMachine: false,
+        }),
+        expect.objectContaining({
+          id: snapshotId,
+          source: 'previous-machine',
+          selectionKey: `previous-machine/${snapshotId}`,
+          currentMachine: false,
+        }),
+        expect.objectContaining({
+          id: snapshotId,
+          source: machineHost,
+          selectionKey: `${machineHost}/${snapshotId}`,
+          currentMachine: true,
+        }),
+      ]));
+      expect(new Set(result.map(snapshot => snapshot.selectionKey))).toHaveProperty('size', 4);
+    } finally {
+      await fs.rm(destRoot, { recursive: true, force: true });
+    }
   });
 
   it('returns [] for a falsy destPath without touching the filesystem', async () => {
@@ -350,6 +407,31 @@ describe('openSnapshotStream', () => {
     expect(fs.stat).not.toHaveBeenCalled();
   });
 
+  it('rejects a traversing source before touching the disk or spawning tar', async () => {
+    await expect(openSnapshotStream('/dest', 'snap-1', { source: '../other-machine' }))
+      .rejects.toMatchObject({ status: 400, code: 'VALIDATION_ERROR' });
+    expect(spawn).not.toHaveBeenCalled();
+    expect(fs.stat).not.toHaveBeenCalled();
+  });
+
+  it('rejects an explicitly selected source namespace that is a symbolic link', async () => {
+    const destRoot = await fs.mkdtemp(joinPath(tmpdir(), 'portos-backup-source-link-'));
+    const outsideRoot = await fs.mkdtemp(joinPath(tmpdir(), 'portos-backup-source-outside-'));
+    try {
+      await fs.mkdir(joinPath(destRoot, 'snapshots'), { recursive: true });
+      await fs.mkdir(joinPath(outsideRoot, 'snap-1'), { recursive: true });
+      await fs.symlink(outsideRoot, joinPath(destRoot, 'snapshots', 'previous-machine'));
+
+      await expect(openSnapshotStream(destRoot, 'snap-1', { source: 'previous-machine' }))
+        .rejects.toMatchObject({ status: 400, code: 'VALIDATION_ERROR' });
+      expect(spawn).not.toHaveBeenCalled();
+      expect(fs.stat).not.toHaveBeenCalled();
+    } finally {
+      await fs.rm(destRoot, { recursive: true, force: true });
+      await fs.rm(outsideRoot, { recursive: true, force: true });
+    }
+  });
+
   it('refuses a snapshot whose .in-progress marker survived a crash', async () => {
     // activeSnapshotId is module state and resets on restart; the marker is what
     // still says "this tree was never finished" after PM2 restarts mid-backup.
@@ -384,15 +466,36 @@ describe('openSnapshotStream', () => {
     await expect(done).resolves.toBeUndefined();
   });
 
+  it('archives an explicitly selected previous-machine snapshot', async () => {
+    const proc = readySnapshot();
+
+    const stream = await openSnapshotStream('/dest', 'snap-1', { source: 'previous-machine' });
+
+    expect(spawn).toHaveBeenCalledWith(
+      'tar',
+      ['-czf', '-', '-C', resolve(join('/dest', 'snapshots', 'previous-machine')), 'snap-1'],
+      { shell: false },
+    );
+    const done = ended(stream);
+    stream.resume();
+    proc.emit('close', 0);
+    await expect(done).resolves.toBeUndefined();
+  });
+
   it('archives a legacy pre-manifest snapshot without consulting a manifest', async () => {
     // listSnapshots deliberately keeps snapshots taken before manifests existed,
     // so a missing manifest.json must never gate the download.
     const proc = readySnapshot();
 
-    const stream = await openSnapshotStream('/dest', 'legacy-snapshot');
+    const stream = await openSnapshotStream('/dest', 'legacy-snapshot', { source: '@legacy' });
 
     expect(fs.readFile).not.toHaveBeenCalled();
     expect(fs.stat.mock.calls.flat().join(' ')).not.toContain('manifest.json');
+    expect(spawn).toHaveBeenCalledWith(
+      'tar',
+      ['-czf', '-', '-C', resolve(join('/dest', 'snapshots')), 'legacy-snapshot'],
+      { shell: false },
+    );
     const done = ended(stream);
     stream.resume();
     proc.emit('close', 0);
@@ -745,6 +848,13 @@ describe('restorePostgres', () => {
   };
   beforeEach(async () => {
     vi.clearAllMocks();
+    // listSnapshots installs a persistent readdir spy that returns Dirents.
+    // Restore string-returning filesystem reads before Windows ENOENT handling
+    // checks for an atomic-write swap sibling.
+    const realFs = await vi.importActual('fs/promises');
+    if (vi.isMockFunction(fs.readdir)) {
+      fs.readdir.mockImplementation((...args) => realFs.readdir(...args));
+    }
     // clearAllMocks does not undo stubEnv — a PGPASSWORD stub from a failed
     // (thrown) test would otherwise leak into every test after it.
     vi.unstubAllEnvs();
@@ -786,6 +896,23 @@ describe('restorePostgres', () => {
     expect(result.sizeBytes).toBe(4096);
     expect(result.tableCount).toBe(1);
     expect(spawn).not.toHaveBeenCalled();
+  });
+
+  it('reads a previous-machine dump from the explicitly selected namespace', async () => {
+    vi.spyOn(fs, 'stat').mockResolvedValue({ size: 4096, isFile: () => true });
+    mockLegacyDumpRead();
+
+    await expect(restorePostgres('/dest', 'shared-id', {
+      source: 'previous-machine',
+      dryRun: true,
+    })).resolves.toMatchObject({ status: 'ok', dryRun: true });
+
+    expect(fs.stat).toHaveBeenCalledWith(resolve(
+      '/dest', 'snapshots', 'previous-machine', 'shared-id', 'portos-db.sql',
+    ));
+    expect(fs.readFile).toHaveBeenCalledWith(resolve(
+      '/dest', 'snapshots', 'previous-machine', 'shared-id', 'manifest.json',
+    ), 'utf-8');
   });
 
   it('refuses a real restore when PG is not connected', async () => {
@@ -1132,6 +1259,172 @@ describe('generateManifest', () => {
   });
 });
 
+describe('restoreSnapshot manifest verification', () => {
+  let tmpRoot;
+  let snapshotDir;
+  let snapshotDataDir;
+  let realFs;
+
+  beforeEach(async () => {
+    vi.restoreAllMocks();
+    vi.clearAllMocks();
+    realFs = await vi.importActual('fs/promises');
+    fs.stat.mockImplementation(realFs.stat);
+    fs.readFile.mockImplementation(realFs.readFile);
+    fs.access.mockImplementation(realFs.access);
+    spawn.mockReset();
+    tmpRoot = await realFs.mkdtemp(joinPath(tmpdir(), 'portos-restore-integrity-'));
+    snapshotDir = joinPath(tmpRoot, 'snapshots', machineHost, 'snap-1');
+    snapshotDataDir = joinPath(snapshotDir, 'data');
+    await realFs.mkdir(snapshotDataDir, { recursive: true });
+  });
+
+  afterEach(async () => {
+    await realFs?.rm(tmpRoot, { recursive: true, force: true });
+    await realFs?.rm(joinPath(PATHS.data, 'restore-integrity'), { recursive: true, force: true });
+  });
+
+  async function writeSnapshotFile(relativePath, content) {
+    const path = joinPath(snapshotDataDir, relativePath);
+    await realFs.mkdir(joinPath(path, '..'), { recursive: true });
+    await realFs.writeFile(path, content);
+    return createHash('sha256').update(Buffer.from(content)).digest('hex');
+  }
+
+  async function writeManifest(files) {
+    await realFs.writeFile(joinPath(snapshotDir, 'manifest.json'), JSON.stringify({
+      generatedAt: '2026-09-12T00:00:00.000Z',
+      fileCount: Object.keys(files).length,
+      files,
+    }));
+  }
+
+  async function finishRestore(options = {}) {
+    const proc = fakeProc();
+    spawn.mockReturnValueOnce(proc);
+    const pending = restoreSnapshot(tmpRoot, 'snap-1', options);
+    await vi.waitFor(() => expect(spawn).toHaveBeenCalled());
+    proc.emit('close', 0);
+    return pending;
+  }
+
+  it('rechecks snapshot bytes on execution and refuses a post-preview change before rsync', async () => {
+    const relativePath = 'restore-integrity/example.json';
+    const originalHash = await writeSnapshotFile(relativePath, 'trusted backup');
+    await writeManifest({ [relativePath]: originalHash });
+    const livePath = joinPath(PATHS.data, relativePath);
+    await realFs.mkdir(joinPath(livePath, '..'), { recursive: true });
+    await realFs.writeFile(livePath, 'healthy live data');
+
+    await expect(finishRestore({ dryRun: true })).resolves.toMatchObject({
+      verification: { status: 'verified', checkedFiles: 1 },
+    });
+
+    await realFs.writeFile(joinPath(snapshotDataDir, relativePath), 'changed after preview');
+    spawn.mockReset();
+    await expect(restoreSnapshot(tmpRoot, 'snap-1', { dryRun: false }))
+      .rejects.toMatchObject({ code: 'BACKUP_FILE_INTEGRITY_FAILED' });
+    expect(spawn).not.toHaveBeenCalled();
+    expect(await realFs.readFile(livePath, 'utf8')).toBe('healthy live data');
+  });
+
+  it('refuses a file added after preview when it is absent from the manifest', async () => {
+    const relativePath = 'restore-integrity/example.json';
+    const originalHash = await writeSnapshotFile(relativePath, 'trusted backup');
+    await writeManifest({ [relativePath]: originalHash });
+    const livePath = joinPath(PATHS.data, relativePath);
+    await realFs.mkdir(joinPath(livePath, '..'), { recursive: true });
+    await realFs.writeFile(livePath, 'healthy live data');
+
+    await expect(finishRestore({ dryRun: true })).resolves.toMatchObject({
+      verification: { status: 'verified', checkedFiles: 1 },
+    });
+
+    await writeSnapshotFile('restore-integrity/unrecorded.json', 'added after backup');
+    spawn.mockReset();
+    await expect(restoreSnapshot(tmpRoot, 'snap-1', { dryRun: false }))
+      .rejects.toMatchObject({ code: 'BACKUP_FILE_INTEGRITY_FAILED' });
+    expect(spawn).not.toHaveBeenCalled();
+    expect(await realFs.readFile(livePath, 'utf8')).toBe('healthy live data');
+  });
+
+  it.each([
+    ['missing', async (path) => realFs.unlink(path)],
+    ['unreadable', async (path) => {
+      fs.readFile.mockImplementation(async (candidate, ...args) => {
+        if (String(candidate) === path) throw Object.assign(new Error('unreadable'), { code: 'EACCES' });
+        return realFs.readFile(candidate, ...args);
+      });
+    }],
+  ])('refuses a %s selected file before rsync', async (_case, breakFile) => {
+    const relativePath = 'brain/example.json';
+    const filePath = joinPath(snapshotDataDir, relativePath);
+    const hash = await writeSnapshotFile(relativePath, 'snapshot data');
+    await writeManifest({ [relativePath]: hash });
+    await breakFile(filePath);
+
+    await expect(restoreSnapshot(tmpRoot, 'snap-1', { subdirFilter: 'brain' }))
+      .rejects.toMatchObject({ code: 'BACKUP_FILE_INTEGRITY_FAILED' });
+    expect(spawn).not.toHaveBeenCalled();
+  });
+
+  it('validates the whole manifest but hashes only the literal selective scope', async () => {
+    const brainHash = await writeSnapshotFile('brain/example.json', 'brain');
+    await writeSnapshotFile('media/example.json', 'media');
+    await writeManifest({
+      'brain/example.json': brainHash,
+      'media/example.json': '0'.repeat(64),
+      '../portos-db.sql': '1'.repeat(64),
+    });
+
+    await expect(finishRestore({ dryRun: true, subdirFilter: 'brain' })).resolves.toMatchObject({
+      verification: { status: 'verified', checkedFiles: 1 },
+    });
+  });
+
+  it('ignores an unrecorded file outside a literal selective scope', async () => {
+    const brainHash = await writeSnapshotFile('brain/example.json', 'brain');
+    await writeSnapshotFile('media/unrecorded.json', 'outside selection');
+    await writeManifest({ 'brain/example.json': brainHash });
+
+    await expect(finishRestore({ dryRun: true, subdirFilter: 'brain' })).resolves.toMatchObject({
+      verification: { status: 'verified', checkedFiles: 1 },
+    });
+  });
+
+  it.each([
+    ['malformed JSON', '{"files":'],
+    ['a null root', 'null'],
+    ['an invalid shape', JSON.stringify({ fileCount: 1, files: [] })],
+    ['an unsafe data path', JSON.stringify({ fileCount: 1, files: { '../outside.json': '0'.repeat(64) } })],
+  ])('fails closed when an existing manifest has %s', async (_case, manifestBytes) => {
+    await realFs.writeFile(joinPath(snapshotDir, 'manifest.json'), manifestBytes);
+
+    await expect(restoreSnapshot(tmpRoot, 'snap-1'))
+      .rejects.toMatchObject({ code: expect.stringMatching(/^BACKUP_MANIFEST_(UNREADABLE|INVALID)$/) });
+    expect(spawn).not.toHaveBeenCalled();
+  });
+
+  it('keeps legacy snapshots explicit and preserves manifest-compatible symlinks', async () => {
+    await expect(finishRestore({ dryRun: true })).resolves.toMatchObject({
+      verification: { status: 'unverified', reason: 'manifest_absent', checkedFiles: 0 },
+    });
+
+    const targetHash = await writeSnapshotFile('example.txt', 'example');
+    await realFs.symlink('example.txt', joinPath(snapshotDataDir, 'readable-link'));
+    await realFs.symlink('missing.txt', joinPath(snapshotDataDir, 'dangling-link'));
+    await writeManifest({
+      'example.txt': targetHash,
+      'readable-link': targetHash,
+    });
+    spawn.mockReset();
+
+    await expect(finishRestore({ dryRun: true })).resolves.toMatchObject({
+      verification: { status: 'verified', checkedFiles: 2 },
+    });
+  });
+});
+
 // restoreSnapshot's service-side subdirFilter guard (issue #1822). These reject
 // BEFORE runRsync/spawn is reached, so no fake child process is needed — an
 // invalid filter must never make it into an `--include=` rsync arg.
@@ -1237,7 +1530,8 @@ describe('restoreSnapshot subdirFilter guard', () => {
       proc.emit('close', null, 'SIGTERM');
 
       await expect(pending).rejects.toThrow(/files may already have been overwritten/i);
-      expect(reloadSettings).not.toHaveBeenCalled();
+      expect(reloadSettings).toHaveBeenCalledTimes(1);
+      expect(invalidateBrainCaches).toHaveBeenCalledTimes(1);
     } finally {
       vi.useRealTimers();
     }
@@ -1470,6 +1764,15 @@ describe('restoreSnapshot snapshotId, filter flags, and settings re-sync', () =>
   });
 
   describe('subdirFilter rsync flags', () => {
+    it('reads a legacy flat snapshot when that source is explicitly selected', async () => {
+      await runRestore('/dest', 'legacy-snapshot', { source: '@legacy', dryRun: true });
+
+      expect(spawn.mock.calls[0][1]).toEqual(expect.arrayContaining([
+        `${resolve('/dest', 'snapshots', 'legacy-snapshot', 'data')}/`,
+        PATHS.data,
+      ]));
+    });
+
     it('builds the exact include/exclude chain for a valid subdirFilter', async () => {
       await runRestore('/dest', 'snap-1', { dryRun: true, subdirFilter: 'brain' });
 
@@ -1543,7 +1846,20 @@ describe('restoreSnapshot snapshotId, filter flags, and settings re-sync', () =>
       expect(reloadSettings).not.toHaveBeenCalled();
     });
 
-    it('does not reload settings when rsync fails a live restore', async () => {
+    it('leaves caches untouched when a dry-run rsync fails', async () => {
+      const proc = fakeProc();
+      spawn.mockReturnValue(proc);
+      const pending = restoreSnapshot('/dest', 'snap-1', { dryRun: true });
+      await vi.waitFor(() => expect(spawn).toHaveBeenCalled());
+      proc.stderr.emit('data', Buffer.from('preview failed'));
+      proc.emit('close', 1);
+
+      await expect(pending).rejects.toThrow(/^rsync exited with code 1/);
+      expect(reloadSettings).not.toHaveBeenCalled();
+      expect(invalidateBrainCaches).not.toHaveBeenCalled();
+    });
+
+    it('reconciles settings and Brain state when rsync fails a live restore', async () => {
       const proc = fakeProc();
       spawn.mockReturnValue(proc);
       const pending = restoreSnapshot('/dest', 'snap-1', { dryRun: false });
@@ -1552,211 +1868,29 @@ describe('restoreSnapshot snapshotId, filter flags, and settings re-sync', () =>
       proc.emit('close', 1);
 
       await expect(pending).rejects.toThrow(/rsync exited with code 1.*files may already have been overwritten/i);
-      expect(reloadSettings).not.toHaveBeenCalled();
+      expect(reloadSettings).toHaveBeenCalledTimes(1);
+      expect(invalidateBrainCaches).toHaveBeenCalledTimes(1);
     });
-  });
-});
 
-// Manifest hash verification for file restore (issue #7167). Every case runs
-// against real temporary snapshot and destination trees — never the install's
-// data/ — with rsync stubbed at the spawn boundary, so a verification failure
-// is proven to reject BEFORE any byte could be written to the live tree.
-describe('restoreSnapshot manifest verification', () => {
-  const SNAPSHOT_ID = '2026-09-12T00-00-00';
-  let realFs;
-  let destRoot;
-  let snapshotDir;
-  let snapshotDataDir;
+    it('reports reconciliation failures without hiding the primary rsync failure', async () => {
+      invalidateBrainCaches.mockImplementationOnce(() => {
+        throw new Error('Brain cache reset failed');
+      });
+      reloadSettings.mockRejectedValueOnce(new Error('settings reload failed'));
+      const proc = fakeProc();
+      spawn.mockReturnValue(proc);
+      const pending = restoreSnapshot('/dest', 'snap-1', { dryRun: false });
+      await vi.waitFor(() => expect(spawn).toHaveBeenCalled());
+      proc.stderr.emit('data', Buffer.from('transfer failed'));
+      proc.emit('close', 1);
 
-  const writeTree = async (files) => {
-    for (const [rel, content] of Object.entries(files)) {
-      const filePath = joinPath(snapshotDataDir, rel);
-      await realFs.mkdir(joinPath(filePath, '..'), { recursive: true });
-      await realFs.writeFile(filePath, content);
-    }
-  };
-
-  // Build a real snapshot (files + manifest written by the real
-  // generateManifest, optionally hashing a sibling dump) so verification runs
-  // against production-format bytes, not a hand-shaped fixture.
-  const makeSnapshot = async (files, { dumpSql = null } = {}) => {
-    await writeTree(files);
-    const dumpPath = dumpSql === null ? null : joinPath(snapshotDir, 'portos-db.sql');
-    if (dumpPath) await realFs.writeFile(dumpPath, dumpSql);
-    await generateManifest(snapshotDataDir, joinPath(snapshotDir, 'manifest.json'), dumpPath);
-  };
-
-  // Drive a mocked rsync to a clean exit so a restore that passes verification
-  // resolves through the real code path.
-  const driveRestore = async (options) => {
-    const proc = fakeProc();
-    spawn.mockReturnValue(proc);
-    const pending = restoreSnapshot(destRoot, SNAPSHOT_ID, options);
-    await vi.waitFor(() => expect(spawn).toHaveBeenCalled());
-    proc.emit('close', 0);
-    return pending;
-  };
-
-  beforeEach(async () => {
-    // Same spy hygiene as the generateManifest/getState suites: earlier suites
-    // leave persistent fs spies and factory-level stat/readFile stubs, and
-    // these tests need the real filesystem end to end.
-    vi.restoreAllMocks();
-    vi.clearAllMocks();
-    realFs = await vi.importActual('fs/promises');
-    fs.stat.mockImplementation(realFs.stat);
-    fs.readFile.mockImplementation(realFs.readFile);
-    fs.access.mockImplementation(realFs.access);
-    fs.writeFile.mockImplementation(realFs.writeFile);
-    spawn.mockReset();
-    reloadSettings.mockClear();
-    invalidateBrainCaches.mockClear();
-
-    destRoot = await realFs.mkdtemp(joinPath(tmpdir(), 'portos-restore-dest-'));
-    snapshotDir = joinPath(destRoot, 'snapshots', machineHost, SNAPSHOT_ID);
-    snapshotDataDir = joinPath(snapshotDir, 'data');
-    await realFs.mkdir(snapshotDataDir, { recursive: true });
-  });
-
-  afterEach(async () => {
-    await realFs.rm(destRoot, { recursive: true, force: true });
-  });
-
-  it.each([true, false])(
-    'rejects a damaged snapshot file before rsync (dryRun=%s) and leaves live data untouched',
-    async (dryRun) => {
-      await makeSnapshot({ 'example.json': 'original snapshot bytes' });
-      // Backup media damage: the snapshot bytes no longer match the manifest.
-      await realFs.writeFile(joinPath(snapshotDataDir, 'example.json'), 'corrupted bytes');
-      const liveFile = joinPath(PATHS.data, 'restore-verify-example.json');
-      await realFs.writeFile(liveFile, 'HEALTHY LIVE DATA');
-      try {
-        await expect(restoreSnapshot(destRoot, SNAPSHOT_ID, { dryRun }))
-          .rejects.toMatchObject({ status: 409, code: 'SNAPSHOT_MANIFEST_MISMATCH' });
-        expect(spawn).not.toHaveBeenCalled();
-        await expect(realFs.readFile(liveFile, 'utf-8')).resolves.toBe('HEALTHY LIVE DATA');
-      } finally {
-        await realFs.rm(liveFile, { force: true });
-      }
-    },
-  );
-
-  it('rejects when a manifest-recorded file is missing from the snapshot', async () => {
-    await makeSnapshot({ 'a.json': 'A', 'b.json': 'B' });
-    await realFs.rm(joinPath(snapshotDataDir, 'b.json'));
-
-    await expect(restoreSnapshot(destRoot, SNAPSHOT_ID, { dryRun: true }))
-      .rejects.toMatchObject({ code: 'SNAPSHOT_MANIFEST_MISMATCH' });
-    await expect(restoreSnapshot(destRoot, SNAPSHOT_ID, { dryRun: true }))
-      .rejects.toThrow(/missing: b\.json/);
-    expect(spawn).not.toHaveBeenCalled();
-  });
-
-  it('rejects when a recorded file cannot be read from the backup media', async () => {
-    await makeSnapshot({ 'example.json': 'bytes' });
-    const target = joinPath(snapshotDataDir, 'example.json');
-    fs.stat.mockImplementation((path, ...args) => path === target
-      ? Promise.reject(Object.assign(new Error('media I/O failure'), { code: 'EIO' }))
-      : realFs.stat(path, ...args));
-
-    await expect(restoreSnapshot(destRoot, SNAPSHOT_ID, { dryRun: false }))
-      .rejects.toMatchObject({ code: 'SNAPSHOT_MANIFEST_MISMATCH' });
-    await expect(restoreSnapshot(destRoot, SNAPSHOT_ID, { dryRun: false }))
-      .rejects.toThrow(/unreadable: example\.json/);
-    expect(spawn).not.toHaveBeenCalled();
-  });
-
-  it('re-verifies on the actual restore instead of trusting the earlier preview', async () => {
-    await makeSnapshot({ 'example.json': 'v1' });
-    await expect(driveRestore({ dryRun: true })).resolves.toMatchObject({
-      verification: { status: 'verified', checkedFiles: 1 },
+      await expect(pending).rejects.toMatchObject({
+        message: expect.stringMatching(/rsync exited with code 1.*Live restore cache reconciliation failed.*Brain cache reset failed.*settings reload failed.*Restart PortOS/i),
+        cause: expect.objectContaining({ message: expect.stringMatching(/rsync exited with code 1/) }),
+      });
+      expect(reloadSettings).toHaveBeenCalledTimes(1);
+      expect(invalidateBrainCaches).toHaveBeenCalledTimes(1);
     });
-    expect(spawn).toHaveBeenCalledTimes(1);
-
-    // The snapshot bytes change between preview and execution — the execution
-    // must not inherit the preview's clean bill.
-    await realFs.writeFile(joinPath(snapshotDataDir, 'example.json'), 'corrupted after preview');
-    await expect(restoreSnapshot(destRoot, SNAPSHOT_ID, { dryRun: false }))
-      .rejects.toMatchObject({ code: 'SNAPSHOT_MANIFEST_MISMATCH' });
-    expect(spawn).toHaveBeenCalledTimes(1); // still only the preview's rsync
-  });
-
-  it('verifies only the selected scope and never treats the dump key as a data path', async () => {
-    await makeSnapshot(
-      { 'brain/ok.json': 'good', 'media/damaged.json': 'will corrupt' },
-      { dumpSql: 'CREATE TABLE a;' },
-    );
-    // Damage lands OUTSIDE the selected brain/ scope and in the dump itself —
-    // neither may block a selective brain/ restore.
-    await realFs.writeFile(joinPath(snapshotDataDir, 'media', 'damaged.json'), 'CORRUPT');
-    await realFs.writeFile(joinPath(snapshotDir, 'portos-db.sql'), 'CORRUPT DUMP');
-
-    await expect(driveRestore({ dryRun: false, subdirFilter: 'brain' }))
-      .resolves.toMatchObject({ verification: { status: 'verified', checkedFiles: 1 } });
-    expect(spawn).toHaveBeenCalledTimes(1);
-  });
-
-  it('blocks a selective restore when a file INSIDE the selected scope is damaged', async () => {
-    await makeSnapshot({ 'brain/ok.json': 'good', 'media/fine.json': 'fine' });
-    await realFs.writeFile(joinPath(snapshotDataDir, 'brain', 'ok.json'), 'CORRUPT');
-
-    await expect(restoreSnapshot(destRoot, SNAPSHOT_ID, { dryRun: false, subdirFilter: 'brain' }))
-      .rejects.toMatchObject({ code: 'SNAPSHOT_MANIFEST_MISMATCH' });
-    expect(spawn).not.toHaveBeenCalled();
-  });
-
-  it('restores a valid snapshot and reports verified status', async () => {
-    await makeSnapshot(
-      { 'a.json': 'A', 'sub/b.json': 'B' },
-      { dumpSql: 'CREATE TABLE a;' },
-    );
-
-    await expect(driveRestore({ dryRun: false })).resolves.toMatchObject({
-      verification: { status: 'verified', checkedFiles: 2 },
-    });
-    expect(reloadSettings).toHaveBeenCalledTimes(1);
-  });
-
-  it('retains symlink compatibility: links to regular files verify against their target', async () => {
-    await realFs.writeFile(joinPath(snapshotDataDir, 'example.txt'), 'example');
-    await realFs.symlink('example.txt', joinPath(snapshotDataDir, 'readable-link'));
-    await realFs.symlink('excluded.txt', joinPath(snapshotDataDir, 'dangling-link'));
-    // Real manifest: hashes example.txt and readable-link's target, records
-    // nothing for the dangling link (generateManifest's documented behavior).
-    await generateManifest(snapshotDataDir, joinPath(snapshotDir, 'manifest.json'));
-
-    await expect(driveRestore({ dryRun: false })).resolves.toMatchObject({
-      verification: { status: 'verified', checkedFiles: 2 },
-    });
-  });
-
-  it('restores a legacy manifest-less snapshot as explicitly unverified', async () => {
-    await writeTree({ 'a.json': 'A' }); // pre-manifest snapshot: no manifest.json
-
-    await expect(driveRestore({ dryRun: false })).resolves.toMatchObject({
-      verification: { status: 'unverified', reason: 'no_manifest' },
-    });
-    expect(spawn).toHaveBeenCalledTimes(1);
-  });
-
-  it.each([
-    ['unparseable JSON', '{ "files": { '],
-    ['a parsed non-object', 'null'],
-    ['a non-object files map', JSON.stringify({ files: ['a.json'] })],
-    ['a non-hash digest', JSON.stringify({ files: { 'a.json': 'not-a-hash' } })],
-    // Valid hex on a traversing/absolute key — isolates the path check from
-    // the digest check (a hostile manifest must not redirect verification).
-    ['a traversal key', JSON.stringify({ files: { '../../outside.txt': 'a'.repeat(64) } })],
-    ['an absolute key', JSON.stringify({ files: { '/etc/passwd': 'a'.repeat(64) } })],
-  ])('fails closed when an existing manifest.json holds %s', async (_label, manifestText) => {
-    await writeTree({ 'a.json': 'A' });
-    await realFs.writeFile(joinPath(snapshotDir, 'manifest.json'), manifestText);
-
-    await expect(restoreSnapshot(destRoot, SNAPSHOT_ID, { dryRun: true }))
-      .rejects.toMatchObject({ status: 409, code: 'SNAPSHOT_MANIFEST_UNREADABLE' });
-    await expect(restoreSnapshot(destRoot, SNAPSHOT_ID, { dryRun: false }))
-      .rejects.toMatchObject({ code: 'SNAPSHOT_MANIFEST_UNREADABLE' });
-    expect(spawn).not.toHaveBeenCalled();
   });
 });
 

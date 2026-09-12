@@ -12,9 +12,9 @@ export const ACCEPTED_OLD_MD5 = {
 };
 
 export const NEW_SHIPPED_MD5 = {
-  'fableloom-weave-episode.md': 'abea2442af2be2039b70deee4919c00e',
-  'fableloom-outline-episode.md': '2ff6fb72777ff0c6fc70f3afd0ddfd53',
-  'fableloom-review-episode-outline.md': '0f549ed25dea8566ce2d3c515968783b',
+  'fableloom-weave-episode.md': '94f22c0807924dadf151341c30720c71',
+  'fableloom-outline-episode.md': '76f5211b851de7a0a23d9c11c5969b25',
+  'fableloom-review-episode-outline.md': '3e548d8de54dd23312a6f1024910fedc',
 };
 
 const { applyMigration, up } = makePromptReplaceMigration({

@@ -128,6 +128,22 @@ describe('ApiExplorer', () => {
     expect(screen.getByText('CoS Agent MCP')).toBeTruthy();
   });
 
+  it('shows saved recipe provenance, revision, read actions, and the agent disabled reason', async () => {
+    const recipe = {
+      name: 'recipe.project-check', providerName: 'recipe_project_check', description: 'Read a project check-in.', granted: true,
+      input_schema: { type: 'object', properties: {} }, policy: { sideEffect: 'read' },
+      recipe: { source: 'persistent-mind-library', revision: 3, underlyingTools: ['brain.search'] },
+    };
+    api.getCosToolCatalog.mockImplementation(({ scope }) => Promise.resolve(scope === 'agent'
+      ? { stats: { total: 1, granted: 0 }, tools: [{ ...recipe, granted: false, recipe: { ...recipe.recipe, disabledReason: 'Saved recipe access is disabled for CoS Agent MCP.' } }] }
+      : { stats: { total: 1, granted: 1 }, tools: [recipe] }));
+    renderPage('/api-reference/tools');
+    expect(await screen.findByText('recipe.project-check')).toBeTruthy();
+    expect(screen.getByText(/Persistent Mind library · revision 3/)).toBeTruthy();
+    expect(screen.getByText(/Read actions: brain.search/)).toBeTruthy();
+    expect(screen.getByText(/CoS MCP: Saved recipe access is disabled/)).toBeTruthy();
+  });
+
   it('keeps the current REST surface when earlier reads succeed or fail late', async () => {
     let finishInternal;
     let failPublic;

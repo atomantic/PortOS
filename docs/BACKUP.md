@@ -22,6 +22,7 @@ A backup run (`runBackup` in `server/services/backup.js`) writes to:
 ```
 
 - Snapshots are namespaced by `<hostname>` so one shared destination (e.g. an iCloud folder) can host backups from several federated machines without `snapshotId` collisions.
+- Snapshot lists include every machine namespace in the destination, plus snapshots written directly under `snapshots/` by PortOS versions from before hostname namespaces. Each row identifies its source, so equal timestamp IDs from different machines remain separate choices. Download, file restore, and database restore keep that source attached through preview and execution. API requests that omit `source` retain the existing behavior and select the current machine; `source: "@legacy"` selects the pre-namespace root.
 - The `manifest.json` hashes the SQL dump too (keyed as `../portos-db.sql`, since the dump lives one level above the `data/` tree), so a truncated or corrupt dump is detectable rather than silently trusted.
 
 ### What is excluded by default
@@ -61,17 +62,17 @@ Key behaviors, accurate to the code:
 
 ## How restore works
 
-Restore is two independent operations — restoring files and restoring the DB are separate decisions. Both are **dry-run by default** and validate `snapshotId` against path traversal before touching anything.
+Restore is two independent operations — restoring files and restoring the DB are separate decisions. Both are **dry-run by default** and validate `snapshotId` and an optional source namespace against path traversal before touching anything. Explicit source selections also reject symbolic-link aliases for the snapshots root, source namespace, or selected snapshot before archive or restore reads begin.
 
 A backup run that fails after creating its snapshot directory records a durable `.failed` marker before releasing its `.in-progress` guards. Failed snapshots are never eligible for file or database restore (`SNAPSHOT_FAILED`); they remain downloadable so their partial files can be inspected or recovered manually. If PortOS cannot write the failed marker, it keeps the existing incomplete markers instead, which also block restore. Snapshots created by older PortOS versions without a manifest or failure marker retain their legacy behavior because an unmarked historical failure cannot be distinguished reliably from a genuine pre-manifest snapshot.
 
 ### Files — `restoreSnapshot()`
 
-rsyncs `<snapshot>/data/` back to `./data/`. `dryRun: true` (the default) reports what would change without writing; an optional `subdirFilter` limits the restore to one subdirectory.
+Before rsync can read or overwrite live data, PortOS strictly reads `manifest.json`, validates every manifest path and SHA-256 value, and hashes every recorded regular file in the selected restore scope. A missing, unreadable, mismatching, or unrecorded selected file refuses both preview and execution before rsync starts. Selective restore verifies only its literal selected subtree and ignores the separately handled `../portos-db.sql` entry. The same preflight runs again for execution, so changing or adding snapshot bytes after a successful preview cannot bypass verification. Readable symlinks retain the hash behavior used when the manifest was created; dangling symlinks remain outside the regular-file manifest and retain rsync's archive compatibility.
 
-**Manifest verification runs before every file restore — preview and execution alike.** When the snapshot carries a `manifest.json`, its structure is strictly validated and every recorded file the restore would write (all data files on a full restore, only the selected `subdirFilter` entries on a selective one) is re-hashed and compared before rsync is spawned. A missing, unreadable, or hash-mismatched file rejects the restore with `SNAPSHOT_MANIFEST_MISMATCH`, leaving live data untouched; an existing manifest that is corrupt, unreadable, or malformed rejects with `SNAPSHOT_MANIFEST_UNREADABLE` — fail closed, never restore on a manifest that can't be trusted. The parent-relative `../portos-db.sql` manifest entry is skipped here: it names the DB dump, not a data-file path, and `restorePostgres()` verifies it separately. The actual restore re-verifies rather than trusting a prior preview, so bytes changed between preview and execution are still caught.
+Snapshots from PortOS versions that predate `manifest.json` remain restorable as an explicit compatibility case. Restore responses report `verification.status` as `verified` (with `checkedFiles`) or `unverified` with reason `manifest_absent`; the confirmation panel warns when a legacy restore cannot be verified. An existing manifest that is malformed or unreadable fails closed and is never treated as legacy absence.
 
-Snapshots written before manifests existed have no `manifest.json` at all and remain restorable as an explicit **unverified** compatibility case — the restore result reports `verification: { status: 'unverified', reason: 'no_manifest' }` (vs `{ status: 'verified', checkedFiles }`), which the restore confirmation flow surfaces so a legacy restore is never mistaken for a verified one. Manifest keys are validated as safe relative paths before they are resolved, and symlinked files keep their documented behavior (`stat` follows links exactly as `generateManifest` does, so a link to a regular file verifies against its target's hash and dangling links stay out of scope).
+After the preflight, rsync copies `<snapshot>/data/` back to `./data/`. `dryRun: true` (the default) reports what would change without writing; an optional `subdirFilter` limits the restore to one subdirectory.
 
 ### Database — `restorePostgres()`
 

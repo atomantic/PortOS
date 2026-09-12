@@ -11,7 +11,7 @@ import { killWithEscalation } from '../lib/killWithEscalation.js';
 import { access, lstat, readdir, readFile, stat, unlink, writeFile } from 'fs/promises';
 import { PassThrough } from 'node:stream';
 import { hostname } from 'os';
-import { join, resolve, relative, isAbsolute, posix } from 'path';
+import { join, resolve, relative, isAbsolute } from 'path';
 import { PATHS, ensureDir, readJSONFile, readJSONFileStrict, atomicWrite, sha256File } from '../lib/fileUtils.js';
 import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
 import { createLineReader } from '../lib/streamLines.js';
@@ -20,7 +20,7 @@ import { checkHealth, getServerMajorVersion } from '../lib/db.js';
 import { resolvePgDumpBinary } from '../lib/pgTools.js';
 import { getBackendName } from './memoryBackend.js';
 import { emitErrorEvent, ServerError } from '../lib/errorHandler.js';
-import { isSafeSubdirFilter } from '../lib/sharedSchemas.js';
+import { isSafeSnapshotSource, isSafeSubdirFilter } from '../lib/sharedSchemas.js';
 import { getIo } from './socket.js';
 import { reloadSettings } from './settings.js';
 import { invalidateAllCaches as invalidateBrainCaches } from './brainStorage.js';
@@ -47,10 +47,6 @@ const STATE_PATH = join(PATHS.data, 'backup', 'state.json');
 // tree from both completed and legacy snapshots after a restart.
 const SNAPSHOT_IN_PROGRESS_MARKER = '.in-progress';
 const SNAPSHOT_FAILED_MARKER = '.failed';
-// The pg_dump lives one level ABOVE the snapshot's data/ tree, so its manifest
-// key is parent-relative. File restore must recognize and skip this key rather
-// than resolving it as a data-file path — restorePostgres verifies it.
-const SNAPSHOT_DUMP_MANIFEST_KEY = '../portos-db.sql';
 let activeSnapshotId = null;
 
 const markerPath = (snapshotDir) => join(snapshotDir, SNAPSHOT_IN_PROGRESS_MARKER);
@@ -73,7 +69,7 @@ const markerExists = (snapshotDir, snapshotId) =>
 const failedMarkerExists = (snapshotDir) =>
   markerExistsAt(failedMarkerPath(snapshotDir));
 
-async function snapshotState(snapshotDir, snapshotId) {
+async function snapshotState(snapshotDir, snapshotId, currentSource = true) {
   const [markedInProgress, failed] = await Promise.all([
     markerExists(snapshotDir, snapshotId),
     failedMarkerExists(snapshotDir),
@@ -82,13 +78,13 @@ async function snapshotState(snapshotDir, snapshotId) {
     failed,
     // Once `.failed` exists the run is finished even if marker cleanup was
     // interrupted. The durable failed state still blocks every restore.
-    incomplete: snapshotId === activeSnapshotId || (markedInProgress && !failed),
+    incomplete: (currentSource && snapshotId === activeSnapshotId) || (markedInProgress && !failed),
   };
 }
 
 /** Reject a snapshot that is still being written before any consumer reads it. */
-async function assertSnapshotComplete(snapshotDir, snapshotId) {
-  const { incomplete } = await snapshotState(snapshotDir, snapshotId);
+async function assertSnapshotComplete(snapshotDir, snapshotId, currentSource) {
+  const { incomplete } = await snapshotState(snapshotDir, snapshotId, currentSource);
   if (incomplete) {
     throw new ServerError(`Snapshot is still being written: ${snapshotId}`, {
       status: 409,
@@ -98,8 +94,8 @@ async function assertSnapshotComplete(snapshotDir, snapshotId) {
 }
 
 /** Reject snapshots whose backup run finished unsuccessfully before restoring. */
-async function assertSnapshotRestorable(snapshotDir, snapshotId) {
-  const { incomplete, failed } = await snapshotState(snapshotDir, snapshotId);
+async function assertSnapshotRestorable(snapshotDir, snapshotId, currentSource) {
+  const { incomplete, failed } = await snapshotState(snapshotDir, snapshotId, currentSource);
   if (incomplete) {
     throw new ServerError(`Snapshot is still being written: ${snapshotId}`, {
       status: 409,
@@ -217,6 +213,10 @@ export const DEFAULT_EXCLUDES = [
 // destination (e.g. iCloud) can host backups from multiple machines without
 // their snapshot IDs colliding.
 const MACHINE_HOST = hostname().toLowerCase().replace(/[^\w.\-]/g, '_') || 'unknown';
+const LEGACY_SNAPSHOT_SOURCE = '@legacy';
+const SNAPSHOT_ID_PATTERN = /^[\w\-.:T]+$/;
+const SHA256_PATTERN = /^[0-9a-f]{64}$/;
+const MANIFEST_ABSENT = Symbol('manifest-absent');
 
 const DEFAULT_STATE = {
   lastRun: null,
@@ -732,9 +732,9 @@ export async function generateManifest(snapshotDataDir, manifestPath, pgDumpPath
     }
     if (dumpInfo?.isFile()) {
       // Parent-relative key: the dump lives one level ABOVE snapshotDataDir
-      // (alongside it, not inside it). A manifest-verify must not assume
-      // every key resolves under snapshotDataDir — see verifySnapshotManifest.
-      files[SNAPSHOT_DUMP_MANIFEST_KEY] = await sha256File(pgDumpPath)
+      // (alongside it, not inside it). A future manifest-verify must not assume
+      // every key resolves under snapshotDataDir.
+      files['../portos-db.sql'] = await sha256File(pgDumpPath)
         .catch(err => { throw manifestReadFailure('dump hash', err); });
     }
   }
@@ -753,23 +753,40 @@ export async function generateManifest(snapshotDataDir, manifestPath, pgDumpPath
 /**
  * List all snapshots in the backup destination.
  * @param {string} destPath - Path to external drive backup root
- * @returns {Array<{ id, createdAt, fileCount, incomplete, failed }>} sorted newest-first
+ * @returns {Array<{ id, source, selectionKey, createdAt, fileCount, incomplete, failed }>} sorted newest-first
  */
 export async function listSnapshots(destPath) {
   if (!destPath) return [];
 
-  const snapshotsDir = join(destPath, 'snapshots', MACHINE_HOST);
+  const snapshotsRoot = join(destPath, 'snapshots');
   // withFileTypes so we can skip non-directory entries: the backup target is
   // commonly an iCloud/Finder folder, where macOS drops a `.DS_Store` FILE into
   // every directory. Treating it as a snapshot id and reading
   // `<.DS_Store>/manifest.json` throws ENOTDIR. Also skip dotfile-named dirs so
   // nothing hidden can masquerade as a snapshot (real ids are timestamps).
-  const entries = await readdir(snapshotsDir, { withFileTypes: true }).catch(() => []);
-  const ids = entries.filter(e => e.isDirectory() && !e.name.startsWith('.')).map(e => e.name);
+  const rootEntries = await readdir(snapshotsRoot, { withFileTypes: true }).catch(() => []);
+  const directories = rootEntries.filter(entry => entry.isDirectory() && !entry.name.startsWith('.'));
+  const descriptors = (await Promise.all(directories.map(async (entry) => {
+    const rootEntryPath = join(snapshotsRoot, entry.name);
+    const contents = await readdir(rootEntryPath, { withFileTypes: true }).catch(() => []);
+    const isLegacySnapshot = SNAPSHOT_ID_PATTERN.test(entry.name) && contents.some(child =>
+      (child.name === 'data' && child.isDirectory())
+      || child.name === 'manifest.json'
+      || child.name === 'portos-db.sql'
+      || child.name === SNAPSHOT_IN_PROGRESS_MARKER
+      || child.name === SNAPSHOT_FAILED_MARKER);
+
+    if (isLegacySnapshot) return [{ id: entry.name, source: LEGACY_SNAPSHOT_SOURCE }];
+    if (!isSafeSnapshotSource(entry.name) || entry.name === LEGACY_SNAPSHOT_SOURCE) return [];
+
+    return contents
+      .filter(child => child.isDirectory() && !child.name.startsWith('.') && SNAPSHOT_ID_PATTERN.test(child.name))
+      .map(child => ({ id: child.name, source: entry.name }));
+  }))).flat();
 
   const snapshots = await Promise.all(
-    ids.map(async (id) => {
-      const snapshotDir = join(snapshotsDir, id);
+    descriptors.map(async ({ id, source }) => {
+      const { snapshotDir, currentSource } = resolveSnapshotPath(destPath, id, source);
       const manifestPath = join(snapshotDir, 'manifest.json');
       // logError:false — a snapshot taken before manifests existed legitimately
       // has none; the null is handled below, so it isn't worth a warning per list.
@@ -778,9 +795,15 @@ export async function listSnapshots(destPath) {
       // Report a still-being-written snapshot rather than hiding it: the row is
       // real and the user should see the run in flight, but download and restore
       // must not be offered for it. Mirrors assertSnapshotComplete's two signals.
-      const { incomplete, failed } = await snapshotState(snapshotDir, id);
+      const { incomplete, failed } = await snapshotState(snapshotDir, id, currentSource);
       return {
         id,
+        source,
+        sourceLabel: source === LEGACY_SNAPSHOT_SOURCE
+          ? 'Legacy (pre-namespace)'
+          : source === MACHINE_HOST ? `${source} (current machine)` : source,
+        selectionKey: `${source}/${id}`,
+        currentMachine: source === MACHINE_HOST,
         createdAt: manifest?.generatedAt ?? null,
         fileCount: manifest?.fileCount ?? 0,
         incomplete,
@@ -790,15 +813,15 @@ export async function listSnapshots(destPath) {
   );
 
   return snapshots.sort((a, b) => {
-    if (!a.createdAt) return 1;
-    if (!b.createdAt) return -1;
-    return b.createdAt.localeCompare(a.createdAt);
+    if (a.createdAt && b.createdAt) return b.createdAt.localeCompare(a.createdAt)
+      || a.selectionKey.localeCompare(b.selectionKey);
+    if (a.createdAt) return -1;
+    if (b.createdAt) return 1;
+    return b.id.localeCompare(a.id) || a.source.localeCompare(b.source);
   });
 }
 
-const SNAPSHOT_ID_PATTERN = /^[\w\-.:T]+$/;
-
-function resolveSnapshotPath(destPath, snapshotId) {
+function resolveSnapshotPath(destPath, snapshotId, source) {
   if (!snapshotId || !SNAPSHOT_ID_PATTERN.test(snapshotId)) {
     throw new ServerError(`Invalid snapshotId: ${snapshotId}`, {
       status: 400,
@@ -806,9 +829,29 @@ function resolveSnapshotPath(destPath, snapshotId) {
     });
   }
 
-  const snapshotsRoot = resolve(join(destPath, 'snapshots', MACHINE_HOST));
-  const snapshotDir = resolve(join(snapshotsRoot, snapshotId));
-  const rel = relative(snapshotsRoot, snapshotDir);
+  const resolvedSource = source ?? MACHINE_HOST;
+  if (!isSafeSnapshotSource(resolvedSource)) {
+    throw new ServerError(`Invalid snapshot source: ${resolvedSource}`, {
+      status: 400,
+      code: 'VALIDATION_ERROR',
+    });
+  }
+
+  const snapshotsRoot = resolve(join(destPath, 'snapshots'));
+  const sourceRoot = resolvedSource === LEGACY_SNAPSHOT_SOURCE
+    ? snapshotsRoot
+    : resolve(join(snapshotsRoot, resolvedSource));
+  const sourceRel = relative(snapshotsRoot, sourceRoot);
+  if (resolvedSource !== LEGACY_SNAPSHOT_SOURCE
+      && (!sourceRel || sourceRel.startsWith('..') || isAbsolute(sourceRel))) {
+    throw new ServerError(`Path traversal detected for snapshot source: ${resolvedSource}`, {
+      status: 400,
+      code: 'VALIDATION_ERROR',
+    });
+  }
+
+  const snapshotDir = resolve(join(sourceRoot, snapshotId));
+  const rel = relative(sourceRoot, snapshotDir);
   if (!rel || rel.startsWith('..') || isAbsolute(rel)) {
     throw new ServerError(`Path traversal detected for snapshotId: ${snapshotId}`, {
       status: 400,
@@ -816,7 +859,36 @@ function resolveSnapshotPath(destPath, snapshotId) {
     });
   }
 
-  return { snapshotsRoot, snapshotDir };
+  return {
+    snapshotsRoot: sourceRoot,
+    snapshotsBase: snapshotsRoot,
+    snapshotDir,
+    currentSource: resolvedSource === MACHINE_HOST,
+    explicitSource: source !== undefined,
+  };
+}
+
+async function assertExplicitSnapshotSourceSafe({
+  snapshotsBase,
+  snapshotsRoot,
+  snapshotDir,
+  explicitSource,
+}, snapshotId) {
+  if (!explicitSource) return;
+
+  const [baseInfo, sourceInfo, snapshotInfo] = await Promise.all([
+    lstat(snapshotsBase).catch(() => null),
+    lstat(snapshotsRoot).catch(() => null),
+    lstat(snapshotDir).catch(() => null),
+  ]);
+  if (baseInfo?.isSymbolicLink?.()
+      || sourceInfo?.isSymbolicLink?.()
+      || snapshotInfo?.isSymbolicLink?.()) {
+    throw new ServerError(`Snapshot source escapes through a symbolic link: ${snapshotId}`, {
+      status: 400,
+      code: 'VALIDATION_ERROR',
+    });
+  }
 }
 
 /**
@@ -825,13 +897,15 @@ function resolveSnapshotPath(destPath, snapshotId) {
  * @param {string} snapshotId - Snapshot ID to archive
  * @returns {Promise<import('stream').Readable>}
  */
-export async function openSnapshotStream(destPath, snapshotId) {
-  const { snapshotsRoot, snapshotDir } = resolveSnapshotPath(destPath, snapshotId);
+export async function openSnapshotStream(destPath, snapshotId, { source } = {}) {
+  const resolved = resolveSnapshotPath(destPath, snapshotId, source);
+  const { snapshotsRoot, snapshotDir, currentSource } = resolved;
+  await assertExplicitSnapshotSourceSafe(resolved, snapshotId);
   const info = await stat(snapshotDir).catch(() => null);
   if (!info?.isDirectory?.()) {
     throw new ServerError(`Snapshot not found: ${snapshotId}`, { status: 404, code: 'NOT_FOUND' });
   }
-  await assertSnapshotComplete(snapshotDir, snapshotId);
+  await assertSnapshotComplete(snapshotDir, snapshotId, currentSource);
 
   // tar's stderr is a pipe (spawn's default) and MUST be drained: left unread
   // it fills its ~64KB buffer on a tree that warns a lot — files changing under
@@ -882,127 +956,158 @@ export async function openSnapshotStream(destPath, snapshotId) {
   return archive;
 }
 
-// A manifest key names a path RELATIVE to the snapshot's data/ dir. The
-// manifest is data read off the backup medium — which may be a shared or
-// damaged volume — so every key is validated before it is joined onto a real
-// path: a corrupt or hostile manifest must not point the verifier outside the
-// snapshot tree. `..` is detected by splitting on BOTH separators so a
-// Windows-written manifest can't smuggle traversal through `..\`.
-const SHA256_HEX = /^[0-9a-f]{64}$/;
-function isSafeManifestKey(key) {
-  if (typeof key !== 'string' || !key || key.includes('\0')) return false;
-  if (isAbsolute(key) || key.startsWith('/') || key.startsWith('\\')) return false;
-  if (/^[a-zA-Z]:($|[\\/])/.test(key)) return false; // drive-letter absolute
-  if (key.split(/[\\/]/).includes('..')) return false;
-  return true;
+async function reconcileLiveFileRestore(subdirFilter) {
+  const refreshes = [
+    ...(!subdirFilter || subdirFilter === 'brain' || subdirFilter.startsWith('brain/')
+      ? [{ label: 'Brain cache invalidation', run: invalidateBrainCaches }]
+      : []),
+    { label: 'settings reload', run: reloadSettings },
+  ];
+  const results = await Promise.allSettled(
+    refreshes.map(({ run }) => Promise.resolve().then(run)),
+  );
+  const failures = results.flatMap((result, index) => result.status === 'rejected'
+    ? [`${refreshes[index].label}: ${result.reason?.message ?? String(result.reason)}`]
+    : []);
+
+  if (failures.length > 0) {
+    throw new Error(
+      `Live restore cache reconciliation failed (${failures.join('; ')}). Restart PortOS before relying on restored settings or Brain data.`,
+      { cause: results.find(result => result.status === 'rejected').reason },
+    );
+  }
 }
 
-// Sentinel default for readJSONFileStrict so a confirmed-absent manifest (the
-// legacy pre-manifest snapshot case) is distinguished from a manifest file that
-// exists but parses to a falsy/non-object value — the former is an explicit
-// unverified compatibility path, the latter must fail closed.
-const MANIFEST_ABSENT = {};
+function manifestDataEntries(manifest, srcDir, subdirFilter) {
+  if (!manifest || typeof manifest !== 'object' || Array.isArray(manifest)
+      || !manifest.files || typeof manifest.files !== 'object' || Array.isArray(manifest.files)
+      || !Number.isInteger(manifest.fileCount) || manifest.fileCount < 0
+      || typeof manifest.generatedAt !== 'string' || Number.isNaN(Date.parse(manifest.generatedAt))) {
+    return null;
+  }
 
-const manifestVerificationError = (snapshotId, detail) => new ServerError(
-  `Snapshot ${snapshotId} failed manifest verification: ${detail}. Choose another snapshot or repair the backup media before retrying.`,
-  { status: 409, code: 'SNAPSHOT_MANIFEST_MISMATCH' },
+  const entries = Object.entries(manifest.files);
+  if (manifest.fileCount !== entries.length) return null;
+
+  const selected = [];
+  const dataPaths = new Set();
+  for (const [entry, expectedHash] of entries) {
+    if (typeof expectedHash !== 'string' || !SHA256_PATTERN.test(expectedHash)) return null;
+    if (entry === '../portos-db.sql') continue;
+
+    // Manifests are portable across supported platforms, so normalize both
+    // separator forms before validating or comparing a literal filter. Validate
+    // before resolving: resolve() would otherwise erase evidence of `..`.
+    const normalized = entry.replaceAll('\\', '/');
+    const segments = normalized.split('/');
+    if (!normalized || normalized.startsWith('/') || /^[A-Za-z]:\//.test(normalized)
+        || segments.some(segment => !segment || segment === '.' || segment === '..')) {
+      return null;
+    }
+
+    const filePath = resolve(srcDir, ...segments);
+    const rel = relative(resolve(srcDir), filePath);
+    if (!rel || rel.startsWith('..') || isAbsolute(rel)) return null;
+    if (dataPaths.has(normalized)) return null;
+    dataPaths.add(normalized);
+
+    if (!subdirFilter || normalized === subdirFilter || normalized.startsWith(`${subdirFilter}/`)) {
+      selected.push({ filePath, expectedHash });
+    }
+  }
+
+  return { selected, dataPaths };
+}
+
+const snapshotFileIntegrityError = (snapshotId) => new ServerError(
+  `Snapshot file integrity check failed: ${snapshotId}`,
+  { status: 409, code: 'BACKUP_FILE_INTEGRITY_FAILED' },
 );
 
-/**
- * Verify a snapshot's manifest.json against its data/ bytes before restore.
- * Runs ahead of EVERY restore — preview and execution alike — so damaged or
- * mismatched snapshot bytes can never reach rsync and overwrite live data.
- *
- * Returns a verification descriptor the route/UI can surface:
- *   { status: 'verified', checkedFiles: n }          manifest present, all selected entries hashed clean
- *   { status: 'unverified', reason: 'no_manifest' }  legacy snapshot written before manifests existed
- * Throws ServerError (409) when the manifest exists but is unreadable,
- * malformed, or a selected file is missing/unreadable/hash-mismatched.
- *
- * @param {string} snapshotDir - Resolved snapshot directory
- * @param {string} snapshotId - For messages only
- * @param {string|null} subdirFilter - Already-validated selective restore scope
- */
-async function verifySnapshotManifest(snapshotDir, snapshotId, subdirFilter) {
-  const manifestPath = join(snapshotDir, 'manifest.json');
-  const manifestRead = await readJSONFileStrict(manifestPath, MANIFEST_ABSENT);
-  if (!manifestRead.ok) {
-    throw new ServerError(`Snapshot manifest is unreadable: ${snapshotId}`, {
-      status: 409,
-      code: 'SNAPSHOT_MANIFEST_UNREADABLE',
-    });
-  }
-  const manifest = manifestRead.value;
-  if (manifest === MANIFEST_ABSENT) {
-    return { status: 'unverified', reason: 'no_manifest' };
-  }
-
-  // Structural validation is strict on the security-relevant part: `files`
-  // must be a map of safe relative keys to sha256 hex digests. Anything else —
-  // a non-object manifest, an array, a garbage hash, an absolute/traversing
-  // key — means the manifest cannot be trusted and the restore fails closed.
-  const files = manifest?.files;
-  const malformed = !manifest || typeof manifest !== 'object' || Array.isArray(manifest)
-    || !files || typeof files !== 'object' || Array.isArray(files)
-    || Object.entries(files).some(([key, hash]) =>
-      key !== SNAPSHOT_DUMP_MANIFEST_KEY && (!isSafeManifestKey(key) || !SHA256_HEX.test(hash)));
-  if (malformed) {
-    throw new ServerError(`Snapshot manifest is malformed: ${snapshotId}`, {
-      status: 409,
-      code: 'SNAPSHOT_MANIFEST_UNREADABLE',
-    });
-  }
-
-  // The dump key is verified by restorePostgres — it is not a data-file path
-  // and must never be resolved under data/. Selection mirrors what the rsync
-  // filter chain would restore: all recorded data files for a full restore, or
-  // only entries at/under the literal subdirFilter for a selective one. Keys
-  // are normalized to `/` (and `.`/duplicate separators collapsed) so a
-  // manifest written on Windows still matches an `/`-separated filter.
-  const filterNorm = subdirFilter
-    ? posix.normalize(subdirFilter.replace(/\\/g, '/').replace(/\/+$/, ''))
-    : null;
-  const selectAll = !filterNorm || filterNorm === '.';
-  const selected = Object.entries(files).filter(([key]) => {
-    if (key === SNAPSHOT_DUMP_MANIFEST_KEY) return false;
-    if (selectAll) return true;
-    const normalized = posix.normalize(key.replace(/\\/g, '/'));
-    return normalized === filterNorm || normalized.startsWith(`${filterNorm}/`);
+async function snapshotManifestFilePaths(srcDir, subdirFilter) {
+  const scopePath = subdirFilter
+    ? resolve(srcDir, ...subdirFilter.split('/'))
+    : srcDir;
+  const scopeInfo = await lstat(scopePath).catch(err => {
+    if (err?.code === 'ENOENT') return null;
+    throw err;
   });
+  if (!scopeInfo) return [];
 
-  const srcDir = join(snapshotDir, 'data');
-  for (const [key, expectedHash] of selected) {
-    const filePath = resolve(srcDir, key);
-    const rel = relative(srcDir, filePath);
-    if (!rel || rel.startsWith('..') || isAbsolute(rel)) {
-      // Defense-in-depth: isSafeManifestKey already rejected traversal, so
-      // reaching here means the two checks drifted — fail closed either way.
-      throw new ServerError(`Snapshot manifest is malformed: ${snapshotId}`, {
-        status: 409,
-        code: 'SNAPSHOT_MANIFEST_UNREADABLE',
-      });
-    }
-    const info = await stat(filePath).catch((err) => {
-      throw manifestVerificationError(
-        snapshotId,
-        err?.code === 'ENOENT' || err?.code === 'ENOTDIR'
-          ? `recorded file is missing: ${key}`
-          : `recorded file is unreadable: ${key}`,
-      );
+  const candidates = scopeInfo.isDirectory()
+    ? (await readdir(scopePath, { recursive: true })).map(entry => join(scopePath, entry))
+    : [scopePath];
+  const paths = [];
+
+  for (const filePath of candidates) {
+    const info = await stat(filePath).catch(async err => {
+      // Match generateManifest(): dangling links are intentionally outside the
+      // manifest, while readable links to regular files are hashed and tracked.
+      if (err?.code === 'ENOENT') {
+        const entryInfo = await lstat(filePath);
+        if (entryInfo.isSymbolicLink()) return null;
+      }
+      throw err;
     });
-    // stat follows links, mirroring generateManifest (a symlink to a regular
-    // file is hashed under the link's path — that documented compatibility is
-    // retained). Anything that is no longer a regular file cannot match.
-    if (!info.isFile()) {
-      throw manifestVerificationError(snapshotId, `recorded file is not a regular file: ${key}`);
+    if (!info?.isFile()) continue;
+
+    const normalized = relative(srcDir, filePath).replaceAll('\\', '/');
+    if (!normalized || normalized.startsWith('../') || isAbsolute(normalized)) {
+      throw new Error('Snapshot entry escaped the data directory');
     }
-    const actualHash = await sha256File(filePath).catch(() => {
-      throw manifestVerificationError(snapshotId, `recorded file is unreadable: ${key}`);
+    paths.push(normalized);
+  }
+
+  return paths;
+}
+
+async function verifySnapshotFiles(snapshotDir, srcDir, snapshotId, subdirFilter) {
+  // A unique fallback distinguishes a genuinely absent legacy manifest from an
+  // existing file whose parsed value is JSON null.
+  const manifestRead = await readJSONFileStrict(
+    join(snapshotDir, 'manifest.json'),
+    MANIFEST_ABSENT,
+    { logError: false },
+  );
+  if (!manifestRead.ok) {
+    throw new ServerError(`Snapshot integrity manifest is unreadable: ${snapshotId}`, {
+      status: 409,
+      code: 'BACKUP_MANIFEST_UNREADABLE',
     });
-    if (actualHash !== expectedHash) {
-      throw manifestVerificationError(snapshotId, `hash mismatch for file: ${key}`);
+  }
+  if (manifestRead.value === MANIFEST_ABSENT) {
+    return { status: 'unverified', reason: 'manifest_absent', checkedFiles: 0 };
+  }
+
+  const manifestEntries = manifestDataEntries(manifestRead.value, srcDir, subdirFilter);
+  if (!manifestEntries) {
+    throw new ServerError(`Snapshot integrity manifest is invalid: ${snapshotId}`, {
+      status: 409,
+      code: 'BACKUP_MANIFEST_INVALID',
+    });
+  }
+  const { selected, dataPaths } = manifestEntries;
+
+  // Hash agreement is insufficient if rsync can also copy files the manifest
+  // never recorded. Rebuild the same regular-file inventory in the selected
+  // scope and reject additions before rsync reads or overwrites anything.
+  const snapshotPaths = await snapshotManifestFilePaths(srcDir, subdirFilter)
+    .catch(() => null);
+  if (!snapshotPaths || snapshotPaths.some(entry => !dataPaths.has(entry))) {
+    throw snapshotFileIntegrityError(snapshotId);
+  }
+
+  for (const { filePath, expectedHash } of selected) {
+    const info = await lstat(filePath).catch(() => null);
+    if (!info || (!info.isFile() && !info.isSymbolicLink())) {
+      throw snapshotFileIntegrityError(snapshotId);
+    }
+    const actualHash = await sha256File(filePath).catch(() => null);
+    if (!actualHash || actualHash !== expectedHash) {
+      throw snapshotFileIntegrityError(snapshotId);
     }
   }
+
   return { status: 'verified', checkedFiles: selected.length };
 }
 
@@ -1014,9 +1119,11 @@ async function verifySnapshotManifest(snapshotDir, snapshotId, subdirFilter) {
  * @param {boolean} [options.dryRun=true] - If true, do not write any files
  * @param {string|null} [options.subdirFilter=null] - Limit restore to a subdirectory
  */
-export async function restoreSnapshot(destPath, snapshotId, { dryRun = true, subdirFilter = null } = {}) {
-  const { snapshotsRoot, snapshotDir } = resolveSnapshotPath(destPath, snapshotId);
-  await assertSnapshotRestorable(snapshotDir, snapshotId);
+export async function restoreSnapshot(destPath, snapshotId, { dryRun = true, subdirFilter = null, source } = {}) {
+  const resolved = resolveSnapshotPath(destPath, snapshotId, source);
+  const { snapshotDir, currentSource } = resolved;
+  await assertExplicitSnapshotSourceSafe(resolved, snapshotId);
+  await assertSnapshotRestorable(snapshotDir, snapshotId, currentSource);
   const srcDir = join(snapshotDir, 'data');
 
   // Defense-in-depth for non-route callers (the route already validates via
@@ -1028,15 +1135,10 @@ export async function restoreSnapshot(destPath, snapshotId, { dryRun = true, sub
     throw new Error(`Invalid subdirFilter: ${subdirFilter}`);
   }
 
-  // Integrity preflight (#7167): when the snapshot carries a manifest, every
-  // recorded file this restore would write must still match its SHA-256 before
-  // rsync runs — otherwise a damaged backup overwrites healthy live data with
-  // corrupt bytes. This re-verifies on the actual restore rather than trusting
-  // a prior preview: bytes changed between the two calls are caught here.
-  const verification = await verifySnapshotManifest(snapshotDir, snapshotId, subdirFilter);
-  if (verification.status === 'unverified') {
-    console.warn(`⚠️ restore: snapshot ${snapshotId} has no integrity manifest — restoring unverified (legacy snapshot)`);
-  }
+  // Run the preflight independently for preview and execution. A preview is an
+  // aid to confirmation, not an integrity lease: snapshot bytes may change
+  // between requests, especially on removable or network-backed destinations.
+  const verification = await verifySnapshotFiles(snapshotDir, srcDir, snapshotId, subdirFilter);
 
   const flags = ['--itemize-changes'];
   if (dryRun) flags.push('--dry-run');
@@ -1046,32 +1148,28 @@ export async function restoreSnapshot(destPath, snapshotId, { dryRun = true, sub
     flags.push('--exclude=*');
   }
 
-  let changedFiles;
-  try {
-    changedFiles = await runRsync(srcDir, PATHS.data, flags);
-  } catch (err) {
-    if (!dryRun) {
-      const partialRestoreError = new Error(
-        `${err.message}. Some files may already have been overwritten because file restore is not transactional.`,
-        { cause: err },
-      );
-      if (err?.code) partialRestoreError.code = err.code;
-      throw partialRestoreError;
-    }
-    throw err;
+  // Rsync may overwrite live files before reporting failure. Settle the
+  // transfer so every live attempt reaches reconciliation before it rejects.
+  const [transfer] = await Promise.allSettled([runRsync(srcDir, PATHS.data, flags)]);
+  const reconciliationError = !dryRun
+    ? await reconcileLiveFileRestore(subdirFilter).then(
+      () => null,
+      error => error,
+    )
+    : null;
+
+  if (transfer.status === 'rejected') {
+    if (dryRun) throw transfer.reason;
+    const partialRestoreError = new Error(
+      `${transfer.reason.message}. Some files may already have been overwritten because file restore is not transactional.${reconciliationError ? ` ${reconciliationError.message}` : ''}`,
+      { cause: transfer.reason },
+    );
+    if (transfer.reason?.code) partialRestoreError.code = transfer.reason.code;
+    throw partialRestoreError;
   }
-  if (!dryRun) {
-    // A live restore writes outside normal service mutation paths. Re-sync the
-    // caches whose backing files may have changed instead of serving the
-    // pre-restore projection until each record is next mutated or the process
-    // restarts. Selective restores may target either `brain` itself or a nested
-    // path such as `brain/inbox`.
-    if (!subdirFilter || subdirFilter === 'brain' || subdirFilter.startsWith('brain/')) {
-      invalidateBrainCaches();
-    }
-    await reloadSettings();
-  }
-  return { dryRun, snapshotId, subdirFilter, changedFiles, verification };
+  if (reconciliationError) throw reconciliationError;
+
+  return { dryRun, snapshotId, subdirFilter, changedFiles: transfer.value, verification };
 }
 
 /**
@@ -1087,9 +1185,11 @@ export async function restoreSnapshot(destPath, snapshotId, { dryRun = true, sub
  * @param {string} snapshotId
  * @param {{dryRun?: boolean}} [options]
  */
-export async function restorePostgres(destPath, snapshotId, { dryRun = true } = {}) {
-  const { snapshotDir } = resolveSnapshotPath(destPath, snapshotId);
-  await assertSnapshotRestorable(snapshotDir, snapshotId);
+export async function restorePostgres(destPath, snapshotId, { dryRun = true, source } = {}) {
+  const resolved = resolveSnapshotPath(destPath, snapshotId, source);
+  const { snapshotDir, currentSource } = resolved;
+  await assertExplicitSnapshotSourceSafe(resolved, snapshotId);
+  await assertSnapshotRestorable(snapshotDir, snapshotId, currentSource);
   const sqlPath = join(snapshotDir, 'portos-db.sql');
 
   const info = await stat(sqlPath).catch(() => null);
@@ -1116,7 +1216,7 @@ export async function restorePostgres(destPath, snapshotId, { dryRun = true } = 
     return { status: 'failed', reason: 'manifest_unreadable' };
   }
   const manifest = manifestRead.value;
-  const expectedHash = manifest?.files?.[SNAPSHOT_DUMP_MANIFEST_KEY];
+  const expectedHash = manifest?.files?.['../portos-db.sql'];
   if (expectedHash) {
     const actualHash = await sha256File(sqlPath);
     if (actualHash !== expectedHash) {

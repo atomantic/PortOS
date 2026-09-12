@@ -57,6 +57,23 @@ export const cancelPersistentMindThinkingRequest = (options = {}) =>
   request('/cos/mind/thinking-request', { method: 'DELETE', ...options });
 export const getPersistentMindContext = (options = {}) => request('/cos/mind/context', options);
 export const getPersistentMindTools = (options = {}) => request('/cos/mind/tools', options);
+export const getMindRecipes = (options = {}) => request('/cos/mind/recipes', options);
+export const getMindRecipe = (id, options = {}) => request(`/cos/mind/recipes/${encodeURIComponent(id)}`, options);
+export const createMindRecipe = (definition, options = {}) => request('/cos/mind/recipes', {
+  method: 'POST', body: JSON.stringify({ definition }), ...options,
+});
+export const updateMindRecipe = (id, body, options = {}) => request(`/cos/mind/recipes/${encodeURIComponent(id)}`, {
+  method: 'PUT', body: JSON.stringify(body), ...options,
+});
+export const validateMindRecipe = (definition, options = {}) => request('/cos/mind/recipes/validate', {
+  method: 'POST', body: JSON.stringify({ definition }), ...options,
+});
+export const archiveMindRecipe = (id, expectedRevision, options = {}) => request(`/cos/mind/recipes/${encodeURIComponent(id)}/archive`, {
+  method: 'POST', body: JSON.stringify({ expectedRevision }), ...options,
+});
+export const restoreMindRecipe = (id, body, options = {}) => request(`/cos/mind/recipes/${encodeURIComponent(id)}/restore`, {
+  method: 'POST', body: JSON.stringify(body), ...options,
+});
 export const getCosToolCatalog = ({ scope = 'all', format = 'portos', intent, ...options } = {}) => {
   const params = new URLSearchParams({ scope, format });
   if (intent) params.set('intent', intent);

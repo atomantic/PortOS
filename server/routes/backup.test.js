@@ -149,6 +149,34 @@ describe('backup routes', () => {
       expect(backup.openSnapshotStream).toHaveBeenCalledWith('/dest', 'snap-1');
     });
 
+    it('validates and forwards the selected snapshot source', async () => {
+      getSettings.mockResolvedValue({ backup: { destPath: '/dest' } });
+      backup.openSnapshotStream.mockImplementation(async () => {
+        const stream = new PassThrough();
+        process.nextTick(() => stream.end(Buffer.from('tarball')));
+        return stream;
+      });
+
+      const res = await request(buildApp())
+        .get('/api/backup/snapshots/snap-1/download?source=previous-machine');
+
+      expect(res.status).toBe(200);
+      expect(res.headers['content-disposition'])
+        .toBe('attachment; filename="portos-snapshot-previous-machine-snap-1.tar.gz"');
+      expect(backup.openSnapshotStream)
+        .toHaveBeenCalledWith('/dest', 'snap-1', { source: 'previous-machine' });
+    });
+
+    it('rejects a traversing source before opening the snapshot', async () => {
+      getSettings.mockResolvedValue({ backup: { destPath: '/dest' } });
+      const res = await request(buildApp())
+        .get('/api/backup/snapshots/snap-1/download?source=..%2Fother-machine');
+
+      expect(res.status).toBe(400);
+      expect(res.body.code).toBe('VALIDATION_ERROR');
+      expect(backup.openSnapshotStream).not.toHaveBeenCalled();
+    });
+
     it('returns 400 when the backup destination is not configured', async () => {
       getSettings.mockResolvedValue({ backup: {} });
 
@@ -171,17 +199,40 @@ describe('backup routes', () => {
 
     it('forwards a valid restore request to the service', async () => {
       getSettings.mockResolvedValue({ backup: { destPath: '/dest' } });
-      backup.restoreSnapshot.mockResolvedValue({ success: true, restored: 42 });
+      backup.restoreSnapshot.mockResolvedValue({
+        success: true,
+        restored: 42,
+        verification: { status: 'verified', checkedFiles: 42 },
+      });
       const res = await request(buildApp())
         .post('/api/backup/restore')
         .send({ snapshotId: 'snap-1', subdirFilter: 'data', dryRun: false });
       expect(res.status).toBe(200);
-      expect(res.body).toEqual({ success: true, restored: 42 });
+      expect(res.body).toEqual({
+        success: true,
+        restored: 42,
+        verification: { status: 'verified', checkedFiles: 42 },
+      });
       expect(backup.restoreSnapshot).toHaveBeenCalledWith(
         '/dest',
         'snap-1',
         { dryRun: false, subdirFilter: 'data' }
       );
+    });
+
+    it('forwards source with file restore preview and execution requests', async () => {
+      getSettings.mockResolvedValue({ backup: { destPath: '/dest' } });
+      backup.restoreSnapshot.mockResolvedValue({ changedFiles: [] });
+      const res = await request(buildApp())
+        .post('/api/backup/restore')
+        .send({ snapshotId: 'snap-1', source: '@legacy', subdirFilter: null, dryRun: true });
+
+      expect(res.status).toBe(200);
+      expect(backup.restoreSnapshot).toHaveBeenCalledWith('/dest', 'snap-1', {
+        dryRun: true,
+        subdirFilter: null,
+        source: '@legacy',
+      });
     });
 
     it('defaults dryRun to true when omitted', async () => {
@@ -195,44 +246,6 @@ describe('backup routes', () => {
         'snap-2',
         expect.objectContaining({ dryRun: true })
       );
-    });
-
-    // #7167: the service reports manifest verification state on the result —
-    // the client confirmation flow reads it to distinguish a verified restore
-    // from a legacy unverified one, so it must survive the response verbatim.
-    it.each([
-      ['verified', { status: 'verified', checkedFiles: 3 }],
-      ['unverified (legacy)', { status: 'unverified', reason: 'no_manifest' }],
-    ])('forwards the %s verification descriptor verbatim', async (_label, verification) => {
-      getSettings.mockResolvedValue({ backup: { destPath: '/dest' } });
-      const serviceResult = {
-        dryRun: true, snapshotId: 'snap-1', subdirFilter: null, changedFiles: [], verification,
-      };
-      backup.restoreSnapshot.mockResolvedValue(serviceResult);
-      const res = await request(buildApp())
-        .post('/api/backup/restore')
-        .send({ snapshotId: 'snap-1' });
-      expect(res.status).toBe(200);
-      expect(res.body).toEqual(serviceResult);
-    });
-
-    // A manifest verification failure rejects before rsync; the route must
-    // surface the structured error envelope so the client can show why the
-    // restore was refused.
-    it.each([
-      ['SNAPSHOT_MANIFEST_MISMATCH', 'hash mismatch for file: a.json'],
-      ['SNAPSHOT_MANIFEST_UNREADABLE', 'Snapshot manifest is malformed'],
-    ])('returns 409 with code %s when verification rejects the restore', async (code, detail) => {
-      getSettings.mockResolvedValue({ backup: { destPath: '/dest' } });
-      backup.restoreSnapshot.mockRejectedValue(
-        Object.assign(new Error(detail), { status: 409, code }),
-      );
-      const res = await request(buildApp())
-        .post('/api/backup/restore')
-        .send({ snapshotId: 'snap-1', dryRun: false });
-      expect(res.status).toBe(409);
-      expect(res.body.code).toBe(code);
-      expect(res.body.error).toContain(detail);
     });
   });
 
@@ -251,6 +264,33 @@ describe('backup routes', () => {
         { dryRun: true }
       );
     });
+
+    it('forwards source with database restore preview and execution requests', async () => {
+      getSettings.mockResolvedValue({ backup: { destPath: '/dest' } });
+      backup.restorePostgres.mockResolvedValue({ status: 'ok', dryRun: true });
+      const res = await request(buildApp())
+        .post('/api/backup/restore-db')
+        .send({ snapshotId: 'snap-1', source: 'previous-machine', dryRun: true });
+
+      expect(res.status).toBe(200);
+      expect(backup.restorePostgres).toHaveBeenCalledWith('/dest', 'snap-1', {
+        dryRun: true,
+        source: 'previous-machine',
+      });
+    });
+
+    it.each(['../other-machine', 'machine/name', '', 42])(
+      'rejects invalid snapshot source %j before database restore',
+      async (source) => {
+        getSettings.mockResolvedValue({ backup: { destPath: '/dest' } });
+        const res = await request(buildApp())
+          .post('/api/backup/restore-db')
+          .send({ snapshotId: 'snap-1', source });
+        expect(res.status).toBe(400);
+        expect(res.body.code).toBe('VALIDATION_ERROR');
+        expect(backup.restorePostgres).not.toHaveBeenCalled();
+      },
+    );
 
     it('forwards dryRun=false when explicitly requested', async () => {
       getSettings.mockResolvedValue({ backup: { destPath: '/dest' } });

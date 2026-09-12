@@ -19,9 +19,9 @@
  *     a double-click cannot double-post.
  *  2. **A send is NEVER retried automatically.** Beeper has no idempotency key
  *     on `POST /v1/chats/{chatID}/messages`, so a retry delivers a second real
- *     message to a real person. A transport failure leaves exactly one row in
- *     `failed`, with the code and message, and no second POST. Re-sending is a
- *     NEW row, created by a new human action; the failed one stays visible.
+ *     message to a real person. A response-less transport failure leaves the
+ *     row in `awaiting-confirmation`, because the POST may have landed. Only a
+ *     definitive rejection becomes `failed` and offers a new human send.
  *  3. **Confirmation is a resolve, never a re-send.** The send is asynchronous
  *     and answers only `{ chatID, pendingMessageID }`. The row confirms on the
  *     `message.upserted` invalidation relayed by #33, with a 30-second fallback
@@ -38,7 +38,7 @@
  * asserts that structurally rather than by convention.
  */
 
-import { query } from '../lib/db.js';
+import { query, withTransaction } from '../lib/db.js';
 import { BeeperApiError, getMessage, listMessagesPage, sendMessage } from './beeperClient.js';
 import { normalizeMessageRow } from './beeperSync.js';
 import { beeperSocketEvents } from './beeperSocketEvents.js';
@@ -59,15 +59,20 @@ export const CONFIRMATION_TIMEOUT_MS = 30_000;
  *
  * The outcome is UNKNOWABLE: the request may have been delivered, refused, or
  * never have left. Rule 2 above therefore still holds — nothing re-POSTs it.
- * The row lands `failed` so it is actionable (a failed row's Retry composes a
- * NEW row, exactly like typing the message again), and the copy says what
- * actually happened rather than claiming a delivery verdict PortOS does not
- * have. The client renders this sentence verbatim off the code, so the same
- * string is repeated in `client/src/components/messages/beeper/BeeperThread.jsx`
- * — the two bundles cannot share a module, so they share a test instead.
+ * The row lands in the existing terminal `failed` state so it cannot spin
+ * forever, while this error code tells the client to show uncertainty with no
+ * Retry control. The copy says what actually happened rather than claiming a
+ * delivery verdict PortOS does not have. The client renders this sentence
+ * verbatim off the code, so the same string is repeated in
+ * `client/src/components/messages/beeper/BeeperThread.jsx` — the two bundles
+ * cannot share a module, so they share a test instead.
  */
 export const SEND_INTERRUPTED_CODE = 'SEND_INTERRUPTED';
 export const SEND_INTERRUPTED_MESSAGE = 'Delivery unconfirmed: PortOS restarted mid-send. Check the chat before retrying.';
+
+/** A send whose POST may have landed, but whose response never reached PortOS. */
+export const DELIVERY_UNCONFIRMED_CODE = 'DELIVERY_UNCONFIRMED';
+export const DELIVERY_UNCONFIRMED_MESSAGE = 'Delivery unconfirmed; check the chat before sending again.';
 
 /**
  * PostgreSQL's `undefined_table`. The boot reconcile runs before the DB phase
@@ -106,8 +111,53 @@ let sendTimestamps = [];
 let consecutiveFailures = 0;
 let breaker = { tripped: false, reason: null, trippedAt: null };
 
-// outboxId → { chatId, body, pendingMessageId, requestedAt, timer, resolving }
+// outboxId → { chatId, body, pendingMessageId, requestedAt,
+//   deliveryOutcomeUnknown, timer, resolving }
 const pendingConfirmations = new Map();
+const localTransitions = new Map();
+const activeSends = new Set();
+const reconciliationOperations = new Map();
+export const PERSISTENCE_RETRY_DELAYS_MS = Object.freeze([1000, 2000, 4000]);
+const PERSISTENCE_RECOVERY_MESSAGE = 'Delivery unconfirmed: saving the send outcome failed. Check delivery to reconcile without sending again.';
+
+function invalidateOutbox(id) {
+  beeperSocketEvents.emit('invalidate', { kind: 'outbox.updated', chatID: null, ids: [id], seq: null, ts: new Date(runtime.now()).toISOString() });
+}
+
+function recoveryView(entry) {
+  if (!entry) return entry;
+  if (!localTransitions.has(entry.id)) return entry;
+  return { ...entry, state: 'awaiting-confirmation', errorCode: DELIVERY_UNCONFIRMED_CODE, errorMessage: PERSISTENCE_RECOVERY_MESSAGE };
+}
+
+// Own only local persistence here: the closure must NEVER contain a send POST.
+// Retain it after the bounded timer budget, so a human can resume it later.
+async function runLocalTransition(id, transition) {
+  if (transition.running) return transition.running;
+  runtime.clearTimeout(transition.timer);
+  transition.running = transition.write().then((value) => {
+    if (localTransitions.get(id) === transition) localTransitions.delete(id);
+    transition.committed?.(value);
+    invalidateOutbox(id);
+    return value;
+  }).catch(() => {
+    if (transition.attempt < PERSISTENCE_RETRY_DELAYS_MS.length) {
+      const delay = PERSISTENCE_RETRY_DELAYS_MS[transition.attempt++];
+      transition.timer = runtime.setTimeout(() => {
+        runLocalTransition(id, transition).catch((err) => console.error(`${LOG_PREFIX}: local recovery failed (${err.code || 'unknown'})`));
+      }, delay);
+    }
+    invalidateOutbox(id);
+    return null;
+  }).finally(() => { transition.running = null; });
+  return transition.running;
+}
+
+function persistTransition(id, write, committed) {
+  const transition = { write, committed, attempt: 0, running: null, timer: null };
+  localTransitions.set(id, transition);
+  return runLocalTransition(id, transition);
+}
 let invalidateListenerAttached = false;
 
 /** Test seam for injected time (mirrors `beeperSocket.js`'s runtime object). */
@@ -201,7 +251,7 @@ function registerSendSuccess() {
 const ENTRY_COLUMNS = `id, conversation_id AS "conversationId", chat_id AS "chatId", body, state,
   pending_message_id AS "pendingMessageId", message_id AS "messageId",
   error_code AS "errorCode", error_message AS "errorMessage",
-  created_at AS "createdAt", approved_at AS "approvedAt", sent_at AS "sentAt"`;
+  send_requested_at AS "requestedAt", created_at AS "createdAt", updated_at AS "updatedAt", approved_at AS "approvedAt", sent_at AS "sentAt"`;
 
 async function readEntry(id) {
   const result = await query(`SELECT ${ENTRY_COLUMNS} FROM beeper_outbox WHERE id = $1`, [id]);
@@ -215,7 +265,7 @@ export async function listOutboxEntries({ conversationId, limit = 50 } = {}) {
      WHERE conversation_id = $1 ORDER BY created_at DESC LIMIT $2`,
     [conversationId, Math.min(200, Math.max(1, Math.trunc(limit) || 50))],
   );
-  return Array.isArray(result?.rows) ? result.rows : [];
+  return Array.isArray(result?.rows) ? result.rows.map(recoveryView) : [];
 }
 
 /**
@@ -313,6 +363,23 @@ async function markFailed(id, code, message) {
   );
 }
 
+async function markAwaitingConfirmation(id, {
+  pendingMessageId = null, errorCode = null, errorMessage = null,
+} = {}) {
+  const updated = await query(
+    `UPDATE beeper_outbox SET state = 'awaiting-confirmation', pending_message_id = $2,
+       error_code = $3, error_message = $4, updated_at = NOW()
+     WHERE id = $1 RETURNING ${ENTRY_COLUMNS}`,
+    [id, pendingMessageId, errorCode, errorMessage],
+  );
+  return updated.rows[0];
+}
+
+/** No HTTP response means the server cannot prove whether the POST landed. */
+function isDeliveryOutcomeUnknown(err) {
+  return err?.status === 0 || err?.code === 'NETWORK_ERROR';
+}
+
 /**
  * Discard a row the human declined to send — the first-contact confirmation's
  * "Cancel" (#53's fix; the original design deliberately left the row
@@ -377,9 +444,10 @@ export async function sendOutboxEntry(id, { confirmFirstContact = false } = {}) 
 
   // The serialization point. A second concurrent send of the same row loses
   // this conditional UPDATE and never reaches the POST.
+  const requestedAt = runtime.now();
   const claimed = await query(
-    "UPDATE beeper_outbox SET state = 'sending', updated_at = NOW() WHERE id = $1 AND state = 'approved' RETURNING id",
-    [id],
+    "UPDATE beeper_outbox SET state = 'sending', send_requested_at = $2::timestamptz, updated_at = NOW() WHERE id = $1 AND state = 'approved' RETURNING id",
+    [id, new Date(requestedAt).toISOString()],
   );
   if ((claimed?.rowCount ?? 0) !== 1) {
     throw new BeeperApiError('Outbox entry is already being sent', {
@@ -389,13 +457,23 @@ export async function sendOutboxEntry(id, { confirmFirstContact = false } = {}) 
 
   // Retry is OFF (the client's send-safe default): no idempotency key means a
   // retried POST is a second real message. One attempt, one row, no second POST.
+  activeSends.add(id);
   const result = await sendMessage(entry.chatId, { text: entry.body })
     .then((value) => ({ ok: true, value }))
     .catch((err) => ({ ok: false, err }));
+  activeSends.delete(id);
+  const confirmation = { ...entry, pendingMessageId: null, requestedAt };
 
   if (!result.ok) {
     const err = result.err;
-    await markFailed(id, err?.code, err?.message);
+    if (isDeliveryOutcomeUnknown(err)) {
+      registerSendFailure();
+      const updated = await persistTransition(id,
+        () => markAwaitingConfirmation(id, { errorCode: DELIVERY_UNCONFIRMED_CODE, errorMessage: DELIVERY_UNCONFIRMED_MESSAGE }),
+        () => armConfirmation({ ...confirmation, deliveryOutcomeUnknown: true }));
+      return updated ?? recoveryView(entry);
+    }
+    await persistTransition(id, () => markFailed(id, err?.code, err?.message));
     registerSendFailure();
     console.error(`${LOG_PREFIX}: send failed (${err?.code || 'SEND_FAILED'})`);
     throw new BeeperApiError(err?.message || 'Beeper send failed', {
@@ -408,15 +486,11 @@ export async function sendOutboxEntry(id, { confirmFirstContact = false } = {}) 
 
   registerSendSuccess();
   const pendingMessageId = typeof result.value?.pendingMessageID === 'string' ? result.value.pendingMessageID : null;
-  const updated = await query(
-    `UPDATE beeper_outbox SET state = 'awaiting-confirmation', pending_message_id = $2,
-       error_code = NULL, error_message = NULL, updated_at = NOW()
-     WHERE id = $1 RETURNING ${ENTRY_COLUMNS}`,
-    [id, pendingMessageId],
-  );
+  const updated = await persistTransition(id,
+    () => markAwaitingConfirmation(id, { pendingMessageId }),
+    () => armConfirmation({ ...confirmation, pendingMessageId }));
   console.log(`${LOG_PREFIX}: sent, awaiting confirmation${pendingMessageId ? '' : ' (no pending id returned)'}`);
-  armConfirmation({ id, chatId: entry.chatId, conversationId: entry.conversationId, body: entry.body, pendingMessageId });
-  return updated.rows[0];
+  return updated ?? recoveryView(entry);
 }
 
 // ---------------------------------------------------------------------------
@@ -455,14 +529,18 @@ function handleInvalidation(frame) {
  * dating a week-old re-armed row to boot time would reject the very message it
  * is looking for.
  */
-function armConfirmation({ id, chatId, conversationId, body, pendingMessageId, requestedAt = runtime.now() }) {
+function armConfirmation({
+  id, chatId, conversationId, body, pendingMessageId,
+  requestedAt = runtime.now(), deliveryOutcomeUnknown = false,
+}) {
   const timer = runtime.setTimeout(() => {
     resolveConfirmation(id, 'fallback-timeout').catch((err) => {
       console.error(`${LOG_PREFIX}: fallback confirmation failed: ${err.message}`);
     });
   }, CONFIRMATION_TIMEOUT_MS);
   pendingConfirmations.set(id, {
-    chatId, conversationId, body, pendingMessageId, requestedAt, timer, resolving: false,
+    chatId, conversationId, body, pendingMessageId, requestedAt,
+    deliveryOutcomeUnknown, timer, resolving: false,
   });
   if (!invalidateListenerAttached) {
     beeperSocketEvents.on('invalidate', handleInvalidation);
@@ -494,12 +572,23 @@ async function lookupSentMessage(pending) {
 
   const page = await listMessagesPage(pending.chatId);
   const items = Array.isArray(page?.items) ? page.items : [];
-  // A minute of slack below the send: `timestamp` is assigned by the network,
-  // not by PortOS, and the two clocks are not the same clock.
-  const floor = pending.requestedAt - 60_000;
-  return items.find((message) => message?.isSender === true
-    && message?.text === pending.body
-    && (!message?.timestamp || new Date(message.timestamp).getTime() >= floor)) ?? null;
+  // A normal send response proves the POST landed, so tolerate clock skew (and
+  // old payloads without a timestamp) while finding its final id. When the
+  // response itself was lost, body alone is not evidence: an earlier identical
+  // message could otherwise turn an unknowable outcome into a false `sent`.
+  // Be conservative there and require a valid network timestamp at or after
+  // this attempt. Clock skew may leave a real send unconfirmed, which is safer
+  // than attaching a prior message and inviting the wrong delivery verdict.
+  const floor = pending.deliveryOutcomeUnknown
+    ? pending.requestedAt
+    : pending.requestedAt - 60_000;
+  return items.find((message) => {
+    if (message?.isSender !== true || message?.text !== pending.body) return false;
+    const messageTime = Date.parse(message?.timestamp ?? '');
+    return pending.deliveryOutcomeUnknown
+      ? Number.isFinite(messageTime) && messageTime >= floor
+      : !message?.timestamp || (Number.isFinite(messageTime) && messageTime >= floor);
+  }) ?? null;
 }
 
 /**
@@ -517,10 +606,10 @@ async function lookupSentMessage(pending) {
  * the field cannot flip a message the user sent onto the other side of the
  * thread.
  */
-async function mirrorSentMessage(conversationId, message) {
+async function mirrorSentMessage(client, conversationId, message) {
   const row = normalizeMessageRow(message, new Date(runtime.now()).toISOString());
   if (!row.id) return;
-  await query(
+  await client.query(
     `INSERT INTO beeper_messages (id, conversation_id, sender_id, body, sent_at, edited_at, unsent_at, sort_key, is_sender)
      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, TRUE)
      ON CONFLICT (id) DO UPDATE SET
@@ -557,8 +646,8 @@ function releasePending(id) {
  */
 async function resolveConfirmation(id, reason) {
   const pending = pendingConfirmations.get(id);
-  if (!pending) return null;
-  if (reason === 'fallback-timeout') pending.deadlineReached = true;
+  if (!pending || localTransitions.has(id)) return null;
+  if (reason === 'fallback-timeout' || reason === 'manual') pending.deadlineReached = true;
   // The one-shot timer can fire during a socket lookup. Let that lookup own
   // the deadline outcome rather than dropping the only fallback signal.
   if (pending.resolving) return null;
@@ -576,7 +665,11 @@ async function resolveConfirmation(id, reason) {
     // armed. On the fallback path it is the end of the road.
     console.error(`${LOG_PREFIX}: confirmation lookup failed (${found.err?.code || 'unknown'})`);
     if (reason === 'fallback-timeout') {
-      await noteUnresolved(id, `Confirmation lookup failed: ${found.err?.code || 'unknown error'}`);
+      await noteUnresolved(
+        id,
+        `Confirmation lookup failed: ${found.err?.code || 'unknown error'}`,
+        pending.deliveryOutcomeUnknown,
+      );
     }
     return null;
   }
@@ -584,52 +677,51 @@ async function resolveConfirmation(id, reason) {
   const message = found.value;
   if (!message) {
     if (reason === 'fallback-timeout') {
-      await noteUnresolved(id, 'Beeper reported no matching message within 30s — it may still have been delivered, so it was not re-sent.');
+      await noteUnresolved(
+        id,
+        'Beeper reported no matching message within 30s — it may still have been delivered, so it was not re-sent.',
+        pending.deliveryOutcomeUnknown,
+      );
     }
     return null;
   }
 
   const status = typeof message?.sendStatus?.status === 'string' ? message.sendStatus.status : null;
-  if (status && status.startsWith('FAIL')) {
-    releasePending(id);
-    await markFailed(id, `SEND_${status}`, message?.sendStatus?.message || message?.sendStatus?.reason || 'Beeper reported a failed send');
-    console.error(`${LOG_PREFIX}: Beeper reported ${status} for a sent message`);
+  if (status?.startsWith('FAIL')) {
+    await persistTransition(id,
+      () => markFailed(id, `SEND_${status}`, message?.sendStatus?.message || message?.sendStatus?.reason || 'Beeper reported a failed send'),
+      () => releasePending(id));
     return null;
   }
 
-  const settled = await query(
-    `UPDATE beeper_outbox SET state = 'sent', message_id = $2, sent_at = COALESCE($3::timestamptz, NOW()),
-       error_code = NULL, error_message = NULL, updated_at = NOW()
-     WHERE id = $1 AND state = 'awaiting-confirmation' RETURNING ${ENTRY_COLUMNS}`,
-    [id, String(message.id), message?.timestamp ?? null],
-  );
-  releasePending(id);
-  if ((settled?.rowCount ?? 0) !== 1) return null;
-
-  await mirrorSentMessage(pending.conversationId, message);
-  // Ids and kinds only, on the same relay #33 already forwards to subscribed
-  // browsers — never the body, which stays on this machine.
-  beeperSocketEvents.emit('invalidate', {
-    kind: 'message.upserted',
-    chatID: pending.chatId,
-    ids: [String(message.id)],
-    seq: null,
-    ts: new Date(runtime.now()).toISOString(),
+  return persistTransition(id, () => withTransaction(async (client) => {
+    const settled = await client.query(
+      `UPDATE beeper_outbox SET state = 'sent', message_id = $2, sent_at = COALESCE($3::timestamptz, NOW()),
+         error_code = NULL, error_message = NULL, updated_at = NOW()
+       WHERE id = $1 AND state = 'awaiting-confirmation' RETURNING ${ENTRY_COLUMNS}`,
+      [id, String(message.id), message?.timestamp ?? null],
+    );
+    if ((settled?.rowCount ?? 0) !== 1) return null;
+    await mirrorSentMessage(client, pending.conversationId, message);
+    return settled.rows[0];
+  }), () => {
+    releasePending(id);
+    beeperSocketEvents.emit('invalidate', {
+      kind: 'message.upserted', chatID: pending.chatId, ids: [String(message.id)],
+      seq: null, ts: new Date(runtime.now()).toISOString(),
+    });
+    console.log(`${LOG_PREFIX}: send confirmed via ${reason}`);
   });
-  console.log(`${LOG_PREFIX}: send confirmed via ${reason}`);
-  return settled.rows[0];
 }
 
 /** Record why a send is unconfirmed without moving it out of flight. */
-async function noteUnresolved(id, message) {
-  releasePending(id);
-  await query(
-    `UPDATE beeper_outbox SET error_code = 'CONFIRMATION_UNRESOLVED', error_message = $2, updated_at = NOW()
+async function noteUnresolved(id, message, deliveryOutcomeUnknown = false) {
+  await persistTransition(id, () => query(
+    `UPDATE beeper_outbox SET error_code = $2, error_message = $3, updated_at = NOW()
      WHERE id = $1 AND state = 'awaiting-confirmation'`,
-    [id, message],
-  );
-  beeperSocketEvents.emit('invalidate', { kind: 'outbox.updated', chatID: null, ids: [id], seq: null, ts: new Date(runtime.now()).toISOString() });
-  console.warn(`${LOG_PREFIX}: send unconfirmed after ${CONFIRMATION_TIMEOUT_MS / 1000}s — left in flight, never re-sent`);
+    [id, deliveryOutcomeUnknown ? DELIVERY_UNCONFIRMED_CODE : 'CONFIRMATION_UNRESOLVED', message],
+  ), () => releasePending(id));
+  console.warn(`${LOG_PREFIX}: send unconfirmed — never re-sent`);
 }
 
 /**
@@ -639,6 +731,42 @@ async function noteUnresolved(id, message) {
  */
 export function cancelPendingConfirmations() {
   for (const id of [...pendingConfirmations.keys()]) releasePending(id);
+  for (const transition of localTransitions.values()) runtime.clearTimeout(transition.timer);
+  localTransitions.clear();
+  activeSends.clear();
+  reconciliationOperations.clear();
+}
+
+/** Human-triggered reconciliation. Remote operations are GETs only. */
+export function reconcileOutboxEntry(id) {
+  if (reconciliationOperations.has(id)) return reconciliationOperations.get(id);
+  const operation = reconcileEntry(id).finally(() => reconciliationOperations.delete(id));
+  reconciliationOperations.set(id, operation);
+  return operation;
+}
+
+async function reconcileEntry(id) {
+  let entry = await readEntry(id);
+  if (!entry) throw new BeeperApiError('Outbox entry not found', { status: 404, code: 'OUTBOX_ENTRY_NOT_FOUND' });
+  if (activeSends.has(id)) return entry;
+  const transition = localTransitions.get(id);
+  if (transition) {
+    await runLocalTransition(id, transition);
+    if (localTransitions.has(id)) return recoveryView(entry);
+    entry = await readEntry(id);
+  }
+  const uncertainFailure = entry.state === 'failed' && [SEND_INTERRUPTED_CODE, DELIVERY_UNCONFIRMED_CODE, 'NETWORK_ERROR'].includes(entry.errorCode);
+  if (!['sending', 'awaiting-confirmation'].includes(entry.state) && !uncertainFailure) return entry;
+  if (!pendingConfirmations.has(id)) {
+    const unknown = entry.state === 'sending' || uncertainFailure || entry.errorCode === DELIVERY_UNCONFIRMED_CODE;
+    const requestedAt = persistedSendMoment(entry);
+    if (entry.state !== 'awaiting-confirmation') {
+      entry = await markAwaitingConfirmation(id, { errorCode: DELIVERY_UNCONFIRMED_CODE, errorMessage: DELIVERY_UNCONFIRMED_MESSAGE });
+    }
+    armConfirmation({ ...entry, requestedAt, deliveryOutcomeUnknown: unknown });
+  }
+  await resolveConfirmation(id, 'manual');
+  return recoveryView(await readEntry(id));
 }
 
 // ---------------------------------------------------------------------------
@@ -647,7 +775,7 @@ export function cancelPendingConfirmations() {
 
 /** The send moment a re-armed row is matched against, from what the row kept. */
 function persistedSendMoment(row) {
-  const stamped = Date.parse(row?.updatedAt ?? row?.createdAt ?? '');
+  const stamped = Date.parse(row?.requestedAt ?? row?.updatedAt ?? row?.createdAt ?? '');
   return Number.isFinite(stamped) ? stamped : runtime.now();
 }
 
@@ -659,18 +787,16 @@ function persistedSendMoment(row) {
  *
  * `sending` and `awaiting-confirmation` are exit-only through in-memory state:
  * `pendingConfirmations`, its timer, and the socket listener. A restart mid-
- * flight takes all three with it, and no route can move a row out of either
- * state — so without this the row is permanently un-actionable, and the client
- * renders it as a spinner with no Retry and no Dismiss, forever, across every
- * later restart.
+ * flight takes all three with it. Boot reconciles automatically; a human can
+ * also invoke the lookup-only reconciliation route without restarting.
  *
  * Two different faults, two different answers:
  *
  *  - **`sending` → `failed` / `SEND_INTERRUPTED`.** The POST was in flight; its
  *    outcome is unknowable. Never auto-resent (rule 2 has no exception for a
  *    crash — Beeper has no idempotency key, so a "recovery" resend is a second
- *    real message). `failed` is the actionable state: the user reads the copy,
- *    checks the chat, and Retry composes a NEW row like any other failed one.
+ *    real message). `failed` terminates the spinner, while the error code keeps
+ *    the client from presenting the ordinary definitive-failure Retry control.
  *  - **`awaiting-confirmation` → re-armed.** The send DID leave; only the
  *    resolve was lost. Re-arming replays the lookup from the row's own
  *    `chat_id` / `pending_message_id` / `body`, which is a read on both paths
@@ -686,7 +812,7 @@ function persistedSendMoment(row) {
  */
 export async function reconcileOutboxOnBoot() {
   const interrupted = await query(
-    `UPDATE beeper_outbox SET state = 'failed', error_code = $1, error_message = $2, updated_at = NOW()
+    `UPDATE beeper_outbox SET state = 'failed', error_code = $1, error_message = $2
      WHERE state = 'sending' RETURNING id`,
     [SEND_INTERRUPTED_CODE, SEND_INTERRUPTED_MESSAGE],
   ).catch((err) => {
@@ -696,9 +822,13 @@ export async function reconcileOutboxOnBoot() {
   // The table does not exist yet, so neither do the rows this would reconcile.
   if (!interrupted) return { interrupted: 0, rearmed: 0 };
 
+  // JSON access tolerates the first upgrade boot, which can precede ensureSchema.
+  // Old rows have no immutable timestamp: keep their prior conservative floor.
   const inFlight = await query(
     `SELECT id, conversation_id AS "conversationId", chat_id AS "chatId", body,
-       pending_message_id AS "pendingMessageId", created_at AS "createdAt", updated_at AS "updatedAt"
+       pending_message_id AS "pendingMessageId", error_code AS "errorCode",
+       created_at AS "createdAt", updated_at AS "updatedAt",
+       to_jsonb(beeper_outbox)->>'send_requested_at' AS "requestedAt"
      FROM beeper_outbox WHERE state = 'awaiting-confirmation'`,
   );
 
@@ -712,6 +842,7 @@ export async function reconcileOutboxOnBoot() {
       body: row.body,
       pendingMessageId: row.pendingMessageId,
       requestedAt: persistedSendMoment(row),
+      deliveryOutcomeUnknown: row.errorCode === DELIVERY_UNCONFIRMED_CODE,
     });
     rearmed += 1;
   }

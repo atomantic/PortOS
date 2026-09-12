@@ -5,6 +5,7 @@ import { MemoryRouter } from 'react-router';
 
 const api = vi.hoisted(() => ({
   getPersistentMindTools: vi.fn(),
+  getMindRecipes: vi.fn().mockResolvedValue({ recipes: [] }),
   getProviders: vi.fn(),
   updateCosConfig: vi.fn(),
 }));
@@ -48,6 +49,22 @@ describe('PersistentMindTools', () => {
     api.updateCosConfig.mockResolvedValue({ success: true });
   });
 
+  it('allows user recipe management with its separate Mind grant off and preserves the grant on later saves', async () => {
+    const user = userEvent.setup();
+    renderPage();
+    const grant = await screen.findByRole('checkbox', { name: 'Allow mind to manage saved tool recipes' });
+    expect(grant).not.toBeChecked();
+    expect(screen.getByRole('button', { name: 'New recipe' })).toBeEnabled();
+    await user.click(grant);
+    await waitFor(() => expect(api.updateCosConfig).toHaveBeenCalledWith({
+      persistentMindCapabilities: expect.objectContaining({ schemaVersion: 9, manageToolRecipes: true, readPortos: false }),
+    }, { silent: true }));
+    await user.click(screen.getByRole('checkbox', { name: 'Allow bounded PortOS reads' }));
+    await waitFor(() => expect(api.updateCosConfig).toHaveBeenLastCalledWith({
+      persistentMindCapabilities: expect.objectContaining({ manageToolRecipes: true, readPortos: true }),
+    }, { silent: true }));
+  });
+
   it('updates executable tool access after changing a grant', async () => {
     api.getPersistentMindTools.mockResolvedValue(response({ semanticTools: [{
       name: 'eidoverse.augment', description: 'Build a private world', granted: false,
@@ -65,7 +82,7 @@ describe('PersistentMindTools', () => {
     expect(toggle).not.toBeChecked();
     await userEvent.setup().click(toggle);
     await waitFor(() => expect(api.updateCosConfig).toHaveBeenCalledWith({
-      persistentMindCapabilities: expect.objectContaining({ schemaVersion: 8, visitEidoversePeers: true, manageEidoverse: false }),
+      persistentMindCapabilities: expect.objectContaining({ schemaVersion: 9, visitEidoversePeers: true, manageEidoverse: false }),
     }, { silent: true }));
   });
 
@@ -96,7 +113,7 @@ describe('PersistentMindTools', () => {
     await user.click(toggle);
 
     await waitFor(() => expect(api.updateCosConfig).toHaveBeenCalledWith(
-      { persistentMindCapabilities: { schemaVersion: 8, createTasks: true, manageMind: false, manageEidoverse: false, visitEidoversePeers: false, callUser: false, adjustLocalContext: false, readPortos: false, writePortos: false, taskModelAllowlist: [] } },
+      { persistentMindCapabilities: { schemaVersion: 9, createTasks: true, manageMind: false, manageToolRecipes: false, manageEidoverse: false, visitEidoversePeers: false, callUser: false, adjustLocalContext: false, readPortos: false, writePortos: false, taskModelAllowlist: [] } },
       { silent: true },
     ));
     expect(await screen.findByText(/persistent-mind capabilities granted/)).toHaveTextContent('1 of 1');
@@ -116,9 +133,10 @@ describe('PersistentMindTools', () => {
 
     await waitFor(() => expect(api.updateCosConfig).toHaveBeenCalledWith(
       { persistentMindCapabilities: {
-        schemaVersion: 8,
+        schemaVersion: 9,
         createTasks: false,
         manageMind: true,
+        manageToolRecipes: false,
         manageEidoverse: false,
         visitEidoversePeers: false,
         callUser: false,
@@ -153,9 +171,10 @@ describe('PersistentMindTools', () => {
 
     await waitFor(() => expect(api.updateCosConfig).toHaveBeenCalledWith(
       { persistentMindCapabilities: {
-        schemaVersion: 8,
+        schemaVersion: 9,
         createTasks: true,
         manageMind: false,
+        manageToolRecipes: false,
         manageEidoverse: false,
         visitEidoversePeers: false,
         callUser: false,
@@ -219,9 +238,10 @@ describe('PersistentMindTools', () => {
     await user.click(callToggle);
     await waitFor(() => expect(api.updateCosConfig).toHaveBeenCalledWith(
       { persistentMindCapabilities: {
-        schemaVersion: 8,
+        schemaVersion: 9,
         createTasks: false,
         manageMind: false,
+        manageToolRecipes: false,
         manageEidoverse: false,
         visitEidoversePeers: false,
         callUser: true,

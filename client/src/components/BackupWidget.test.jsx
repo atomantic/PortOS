@@ -98,6 +98,50 @@ describe('BackupWidget snapshots', () => {
     expect(mockToast.success).toHaveBeenCalledWith('Snapshot downloaded');
   });
 
+  it('keeps duplicate snapshot ids distinct and binds restore approval to source', async () => {
+    mockGetBackupSnapshots.mockResolvedValue([
+      {
+        id: 'same-id',
+        source: 'current-machine',
+        sourceLabel: 'current-machine (current machine)',
+        selectionKey: 'current-machine/same-id',
+        fileCount: 2,
+      },
+      {
+        id: 'same-id',
+        source: 'previous-machine',
+        sourceLabel: 'previous-machine',
+        selectionKey: 'previous-machine/same-id',
+        fileCount: 2,
+      },
+    ]);
+    mockRestoreBackup
+      .mockResolvedValueOnce({ changedFiles: ['brain/example.json'] })
+      .mockResolvedValueOnce({ changedFiles: ['brain/example.json'] });
+    renderWidget();
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Snapshots' }));
+    expect(await screen.findByText('Source: previous-machine')).toBeInTheDocument();
+    fireEvent.click(screen.getAllByRole('button', { name: 'Restore' })[1]);
+    fireEvent.click(screen.getByRole('button', { name: 'Preview changes' }));
+
+    expect(await screen.findByText('brain/example.json')).toBeInTheDocument();
+    expect(mockRestoreBackup).toHaveBeenNthCalledWith(1, {
+      snapshotId: 'same-id',
+      source: 'previous-machine',
+      subdirFilter: null,
+      dryRun: true,
+    }, { silent: true });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Restore 1 file(s)' }));
+    await waitFor(() => expect(mockRestoreBackup).toHaveBeenNthCalledWith(2, {
+      snapshotId: 'same-id',
+      source: 'previous-machine',
+      subdirFilter: null,
+      dryRun: false,
+    }, { silent: true }));
+  });
+
   it('stays silent when the user dismisses the save dialog', async () => {
     mockDownloadBackupSnapshot.mockRejectedValue(
       Object.assign(new Error('The user aborted a request.'), { name: 'AbortError' }),
@@ -130,6 +174,7 @@ describe('BackupWidget snapshots', () => {
         snapshotId: '2026-08-25T11-00-00',
         subdirFilter: 'brain',
         changedFiles: ['brain/example.json'],
+        verification: { status: 'verified', checkedFiles: 1 },
       })
       .mockReturnValueOnce(new Promise(resolve => { finishRestore = resolve; }));
     renderWidget();
@@ -139,6 +184,7 @@ describe('BackupWidget snapshots', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Preview changes' }));
 
     expect(await screen.findByText('brain/example.json')).toBeInTheDocument();
+    expect(screen.getByRole('status')).toHaveTextContent('Snapshot integrity verified (1 selected file(s)).');
     expect(mockRestoreBackup).toHaveBeenNthCalledWith(1, {
       snapshotId: '2026-08-25T11-00-00',
       subdirFilter: 'brain',
@@ -161,6 +207,47 @@ describe('BackupWidget snapshots', () => {
       finishRestore({ changedFiles: ['brain/example.json'] });
     });
     expect(mockToast.success).toHaveBeenCalledWith('Restore complete — 1 file(s) restored');
+  });
+
+  it('keeps the legacy snapshot warning through restore completion', async () => {
+    mockRestoreBackup.mockResolvedValue({
+      dryRun: true,
+      changedFiles: ['settings.json'],
+      verification: { status: 'unverified', reason: 'manifest_absent', checkedFiles: 0 },
+    });
+    renderWidget();
+
+    await openRestorePanel();
+    fireEvent.click(screen.getByRole('button', { name: 'Preview changes' }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'Legacy snapshot: no integrity manifest is available. PortOS cannot verify these backup bytes before restore.',
+    );
+    expect(screen.getByRole('button', { name: 'Restore 1 file(s)' })).toBeEnabled();
+    fireEvent.click(screen.getByRole('button', { name: 'Restore 1 file(s)' }));
+    await waitFor(() => expect(mockToast.success).toHaveBeenCalledWith(
+      'Restore complete — 1 file(s) restored (unverified legacy snapshot)',
+    ));
+  });
+
+  it('reports execution verification even when the preview was verified', async () => {
+    mockRestoreBackup
+      .mockResolvedValueOnce({
+        changedFiles: ['settings.json'],
+        verification: { status: 'verified', checkedFiles: 1 },
+      })
+      .mockResolvedValueOnce({
+        changedFiles: ['settings.json'],
+        verification: { status: 'unverified', reason: 'manifest_absent', checkedFiles: 0 },
+      });
+    renderWidget();
+    await openRestorePanel();
+    fireEvent.click(screen.getByRole('button', { name: 'Preview changes' }));
+    await screen.findByRole('status');
+    fireEvent.click(screen.getByRole('button', { name: 'Restore 1 file(s)' }));
+    await waitFor(() => expect(mockToast.success).toHaveBeenCalledWith(
+      'Restore complete — 1 file(s) restored (unverified legacy snapshot)',
+    ));
   });
 
   it('invalidates a selective preview when the filter is cleared', async () => {
@@ -211,43 +298,6 @@ describe('BackupWidget snapshots', () => {
     expect(screen.queryByText('brain/example.json')).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /Restore \d+ file/ })).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Preview changes' })).toBeEnabled();
-  });
-
-  // #7167: the server reports manifest verification state on restore results.
-  // A manifest-less legacy snapshot must be flagged in the confirmation flow,
-  // and a verified one labeled, so neither reads as the other.
-  it('flags a manifest-less legacy snapshot as unverified through the restore flow', async () => {
-    const legacy = { status: 'unverified', reason: 'no_manifest' };
-    mockRestoreBackup
-      .mockResolvedValueOnce({ dryRun: true, changedFiles: ['a.json'], verification: legacy })
-      .mockResolvedValueOnce({ dryRun: false, changedFiles: ['a.json'], verification: legacy });
-    renderWidget();
-
-    await openRestorePanel();
-    fireEvent.click(screen.getByRole('button', { name: 'Preview changes' }));
-
-    expect(await screen.findByText(/cannot be verified/)).toBeInTheDocument();
-
-    fireEvent.click(screen.getByRole('button', { name: 'Restore 1 file(s)' }));
-    await waitFor(() => expect(mockToast.success).toHaveBeenCalledWith(
-      'Restore complete — 1 file(s) restored (unverified legacy snapshot)',
-    ));
-  });
-
-  it('labels a manifest-verified preview instead of the unverified warning', async () => {
-    mockRestoreBackup.mockResolvedValueOnce({
-      dryRun: true,
-      changedFiles: [],
-      verification: { status: 'verified', checkedFiles: 2 },
-    });
-    renderWidget();
-
-    await openRestorePanel();
-    fireEvent.click(screen.getByRole('button', { name: 'Preview changes' }));
-
-    expect(await screen.findByText(/integrity verified against manifest/)).toBeInTheDocument();
-    expect(screen.queryByText(/cannot be verified/)).not.toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Nothing to restore' })).toBeDisabled();
   });
 
   it('reports a current preview failure and re-enables previewing', async () => {

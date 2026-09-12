@@ -31,6 +31,17 @@ import { dispatchTool, getToolSpecs, getToolSpecsForIntent } from './voice/tools
 import { executePersistentMindTaskRequests } from './persistentMindTaskCapability.js';
 import { cleanupPersistentMind } from './persistentMindMaintenance.js';
 
+import {
+  currentAgentAuthority,
+  currentMindAuthority,
+  executeRecipe,
+  executeRecipeManagement,
+  readMindRecipeTools,
+  readRecipeToolsForScope,
+  recipeManagementTools,
+  resolveRecipeInvocation,
+} from './mindToolRecipeRuntime.js';
+
 const MAX_CALL_RESULTS = 500;
 const MAX_IDEMPOTENCY_TOMBSTONES = 10_000;
 const IDEMPOTENCY_RETENTION_MS = 24 * 60 * 60 * 1_000;
@@ -337,37 +348,52 @@ const localContextTools = (() => {
     },
   ];
 })();
-const toolCatalog = (intent) => [...thinkingTools, ...localContextTools, taskTool, mindCleanupTool, mindProtectMemoryTool, mindChooseNameTool, userActionsQueryTool, ...eidoverseTools, ...voiceTools(intent)];
+const toolCatalog = (intent) => [...recipeManagementTools, ...thinkingTools, ...localContextTools, taskTool, mindCleanupTool, mindProtectMemoryTool, mindChooseNameTool, userActionsQueryTool, ...eidoverseTools, ...voiceTools(intent)];
 const toolCalls = new Map();
 const toolCallFingerprints = new Map();
 
 const normalizeToolCapabilities = (raw) => ({
   ...normalizePortosSemanticToolGrants(raw),
   createTasks: raw?.createTasks === true,
+  manageToolRecipes: raw?.manageToolRecipes === true,
   manageMind: raw?.manageMind === true,
   chooseThinkingPreset: raw?.chooseThinkingPreset === true,
   adjustLocalContext: raw?.adjustLocalContext === true,
+  callToolRecipes: raw?.callToolRecipes === true,
 });
 
-const publicTool = (tool, { scope, capabilities }) => ({
-  type: tool.type,
-  name: tool.name,
-  version: tool.version,
-  providerName: tool.providerName,
-  aliases: tool.aliases,
-  description: tool.description,
-  input_schema: tool.input_schema,
-  output_schema: tool.output_schema,
-  policy: tool.policy,
-  availableInScope: scope === 'all' || tool.policy.scopes.includes(scope),
-  granted: !['agent', 'mind'].includes(scope)
-    ? null
-    : tool.policy.requiredCapabilities.every((capability) => capabilities[capability] === true),
-});
+const publicTool = (tool, { scope, capabilities }) => {
+  const missingCapabilities = tool.policy.requiredCapabilities
+    .filter((capability) => capabilities[capability] !== true);
+  const recipeAvailable = tool.recipe?.available !== false;
+  const recipeDisabledReason = tool.recipe?.disabledReason
+    || (missingCapabilities.includes('callToolRecipes') ? 'Saved recipe access is disabled for CoS Agent MCP.' : null)
+    || (missingCapabilities.includes('manageToolRecipes') ? 'Saved recipe access is disabled for Persistent Mind.' : null)
+    || (missingCapabilities.length ? `Requires ${missingCapabilities.join(', ')}.` : null);
+  return {
+    type: tool.type,
+    name: tool.name,
+    version: tool.version,
+    providerName: tool.providerName,
+    aliases: tool.aliases,
+    description: tool.description,
+    input_schema: tool.input_schema,
+    output_schema: tool.output_schema,
+    policy: tool.policy,
+    availableInScope: scope === 'all' || tool.policy.scopes.includes(scope),
+    granted: !['agent', 'mind'].includes(scope)
+      ? null
+      : recipeAvailable && missingCapabilities.length === 0,
+    ...(tool.recipe ? { recipe: {
+      ...tool.recipe,
+      ...(recipeDisabledReason ? { disabledReason: recipeDisabledReason } : {}),
+    } } : {}),
+  };
+};
 
-export const getCosToolCatalog = ({ scope = 'all', intent, capabilities } = {}) => {
+export const getCosToolCatalog = ({ scope = 'all', intent, capabilities, recipes = [] } = {}) => {
   const grants = normalizeToolCapabilities(capabilities);
-  const tools = toolCatalog(intent)
+  const tools = [...toolCatalog(intent), ...(['mind', 'agent'].includes(scope) ? recipes : [])]
     .filter((tool) => scope === 'all' || tool.policy.scopes.includes(scope))
     .map((tool) => publicTool(tool, { scope, capabilities: grants }));
   return {
@@ -387,15 +413,18 @@ export const getCosToolCatalog = ({ scope = 'all', intent, capabilities } = {}) 
 export const formatCosToolCatalog = (catalog, format = 'portos') => {
   if (format === 'portos') return catalog;
   const tools = catalog.tools.filter((tool) => tool.granted !== false).map((tool) => {
+    const description = tool.recipe
+      ? `${tool.description} Saved local Persistent Mind recipe revision ${tool.recipe.revision}.`.slice(0, 500)
+      : tool.description;
     if (format === 'openai') {
-      return { type: 'function', function: { name: tool.providerName, description: tool.description, parameters: tool.input_schema } };
+      return { type: 'function', function: { name: tool.providerName, description, parameters: tool.input_schema } };
     }
     if (format === 'anthropic') {
-      return { name: tool.providerName, description: tool.description, input_schema: tool.input_schema };
+      return { name: tool.providerName, description, input_schema: tool.input_schema };
     }
     return {
       name: tool.providerName,
-      description: tool.description,
+      description,
       inputSchema: tool.input_schema,
       outputSchema: tool.output_schema,
       annotations: {
@@ -409,8 +438,13 @@ export const formatCosToolCatalog = (catalog, format = 'portos') => {
   return { type: `${format}_tool_catalog`, schemaVersion: catalog.schemaVersion, scope: catalog.scope, tools };
 };
 
-export const buildPersistentMindToolPrompt = (capabilities) => {
-  const catalog = getCosToolCatalog({ scope: 'mind', capabilities });
+export const readCosToolRecipeCatalog = async ({ scope = 'mind' } = {}) => {
+  if (!['agent', 'mind'].includes(scope)) return [];
+  return readRecipeToolsForScope(scope, getCosToolCatalog({ scope }).tools);
+};
+
+export const buildPersistentMindToolPrompt = (capabilities, recipes = []) => {
+  const catalog = getCosToolCatalog({ scope: 'mind', capabilities, recipes });
   const tools = catalog.tools.filter((tool) => tool.granted).map((tool) => ({
     name: tool.name,
     description: tool.description,
@@ -428,6 +462,8 @@ ${JSON.stringify(tools)}
 
 Calls without requestId are coalesced by canonical tool name and arguments within this turn. Supply distinct requestId values only when two intentionally identical actions must both run.`;
 };
+
+export const readPersistentMindRecipeCatalog = (capabilities) => readMindRecipeTools(capabilities, getCosToolCatalog({ scope: 'mind' }).tools);
 
 const resolveTool = (name) => toolCatalog().find((tool) =>
   tool.name === name || tool.providerName === name || tool.aliases.includes(name));
@@ -466,7 +502,9 @@ const validateArguments = (tool, args) => {
   return parsed.data;
 };
 
-const executeAdapter = async (tool, args, context) => {
+const executeAdapter = async (tool, args, context, authority) => {
+  if (tool.adapter.kind === 'recipe-management') return executeRecipeManagement(tool, args, context);
+  if (tool.adapter.kind === 'recipe') return executeRecipe(tool, args, context, authority);
   if (tool.adapter.kind.startsWith('thinking-')) {
     const { getPersistentMindThinkingRequestCatalog, requestPersistentMindThinkingPreset } = await import('./persistentMindThinkingRequests.js');
     return tool.adapter.kind === 'thinking-catalog'
@@ -604,11 +642,24 @@ const normalizeAdapterResult = ({ parsedCall, tool, result }) => {
 
 export const executeCosToolCall = async ({ call, authority, context = {} }) => {
   const parsedCall = cosToolCallSchema.parse(call);
-  const tool = resolveTool(parsedCall.name);
+  let tool = resolveTool(parsedCall.name);
+  if (parsedCall.name.startsWith('recipe.')) {
+    const scope = authority?.scope;
+    if (!['agent', 'mind'].includes(scope)) throw new ServerError('Recipes require mind or agent scope', { status: 403, code: 'TOOL_SCOPE_DENIED' });
+    authority = scope === 'agent'
+      ? await currentAgentAuthority(authority)
+      : await currentMindAuthority(authority);
+    const accessCapability = scope === 'agent' ? 'callToolRecipes' : 'manageToolRecipes';
+    if (authority.capabilities[accessCapability] !== true) throw new ServerError('Recipe access is not granted', { status: 403, code: 'TOOL_CAPABILITY_DENIED' });
+    const { getRecipeByName } = await import('./mindToolRecipes.js');
+    tool = await resolveRecipeInvocation(await getRecipeByName(parsedCall.name), getCosToolCatalog({ scope }).tools, { scope });
+  } else if (tool?.adapter.kind === 'recipe-management' && authority?.scope === 'mind') {
+    authority = await currentMindAuthority(authority);
+  }
   if (!tool) throw new ServerError(`Unknown tool '${parsedCall.name}'`, { status: 404, code: 'TOOL_NOT_FOUND' });
   validateAuthority(tool, authority);
   const args = validateArguments(tool, parsedCall.arguments);
-  const fingerprint = sha256Text(canonicalStringify({ name: tool.name, arguments: args, scope: authority?.scope || 'ui' }));
+  const fingerprint = sha256Text(canonicalStringify({ name: tool.name, arguments: args, scope: authority?.scope || 'ui', ...(tool.adapter.kind === 'recipe' ? { recipeId: tool.adapter.recipe.id, revision: tool.adapter.recipe.activeRevision } : {}) }));
   pruneToolCallFingerprints();
   const existing = toolCalls.get(parsedCall.requestId);
   if (existing) {
@@ -627,7 +678,7 @@ export const executeCosToolCall = async ({ call, authority, context = {} }) => {
   }
 
   const promise = Promise.resolve()
-    .then(() => executeAdapter(tool, args, { ...context, requestId: parsedCall.requestId }))
+    .then(() => executeAdapter(tool, args, { ...context, requestId: parsedCall.requestId }, authority))
     .then(
       (result) => normalizeAdapterResult({ parsedCall, tool, result }),
       (error) => ({

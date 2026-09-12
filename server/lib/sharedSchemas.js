@@ -1,4 +1,6 @@
 import { z } from 'zod';
+import { SERIES_DESIGN_MODES, SERIES_DESIGN_TEXT_MAX, SERIES_DESIGN_FIELDS } from './storyArcLimits.js';
+
 import { RENDER_TARGET_BACKEND_AUTO, RECORD_RENDER_MODEL_MAX } from './renderTargets.js';
 import { QUEUEABLE_IMAGE_MODES } from './generationModes.js';
 import { GROK_VIDEO_DURATIONS } from './grokVideoClip.js';
@@ -21,6 +23,11 @@ import { GROK_VIDEO_DURATIONS } from './grokVideoClip.js';
  * zodCompat from accumulating imports on renderTargets/imageGen/grok modules.
  */
 
+// Optional author-owned story intent, shared by Pipeline and other story consumers.
+export const seriesDesignSchema = z.object({
+  mode: z.enum(SERIES_DESIGN_MODES),
+  ...Object.fromEntries(Object.keys(SERIES_DESIGN_FIELDS).map((field) => [field, z.string().trim().max(SERIES_DESIGN_TEXT_MAX).optional()])),
+});
 // Clip lengths grok's image_to_video delivers, as a Zod union built from the
 // single shared list (see grokVideoClip.js). `z.literal` per value rather than
 // `z.number().refine()` keeps the "expected 6 | 10" error message the
@@ -93,3 +100,13 @@ export const isSafeSubdirFilter = (v) =>
   && /^[a-z0-9._/-]+$/i.test(v)
   && !v.split('/').includes('..')
   && !v.startsWith('/');
+
+// Backup sources are directory names under snapshots/. `@legacy` is reserved
+// for the pre-namespace snapshots root; `@` cannot occur in the sanitized
+// machine names used by backup.js, so a real machine named "legacy" stays
+// independently addressable.
+export const isSafeSnapshotSource = (v) =>
+  typeof v === 'string'
+  && v.length > 0
+  && v.length <= 255
+  && (v === '@legacy' || (v !== '.' && v !== '..' && /^[a-z0-9._-]+$/i.test(v)));
