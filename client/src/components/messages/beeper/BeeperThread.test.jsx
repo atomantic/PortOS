@@ -71,6 +71,7 @@ const TRIPPED_BREAKER = { tripped: true, reason: 'too many sends' };
 // `SEND_INTERRUPTED_MESSAGE` in `server/services/beeperOutbox.js` are pinned by
 // a test on each side rather than by an import.
 const SEND_INTERRUPTED_COPY = 'Delivery unconfirmed: PortOS restarted mid-send. Check the chat before retrying.';
+const DELIVERY_UNCONFIRMED_COPY = 'Delivery unconfirmed; check the chat before sending again.';
 const UNRESOLVED_REASON = 'Beeper reported no matching message within 30s — it may still have been delivered, so it was not re-sent.';
 
 // A send that settled long ago. `GET /outbox` returns up to 50 entries in every
@@ -91,6 +92,20 @@ const INTERRUPTED_ENTRY = {
   body: 'hello there',
   errorCode: 'SEND_INTERRUPTED',
   errorMessage: SEND_INTERRUPTED_COPY,
+};
+const RESPONSE_LOST_ENTRY = {
+  id: 'outbox-6',
+  state: 'awaiting-confirmation',
+  body: 'hello there',
+  errorCode: 'DELIVERY_UNCONFIRMED',
+  errorMessage: DELIVERY_UNCONFIRMED_COPY,
+};
+const LEGACY_NETWORK_ENTRY = {
+  id: 'outbox-7',
+  state: 'failed',
+  body: 'hello there',
+  errorCode: 'NETWORK_ERROR',
+  errorMessage: 'Beeper request failed: connection reset',
 };
 
 const renderThread = (overrides = {}) => render(<BeeperThread {...BASE_PROPS} {...overrides} />);
@@ -246,19 +261,36 @@ describe('BeeperThread — terminal outbox states never spin', () => {
     expect(screen.queryByRole('button', { name: 'Retry' })).toBeNull();
   });
 
-  it('renders an interrupted send with the exact copy and the usual failed-row Retry', () => {
-    const onSend = vi.fn();
-    const { container } = renderThread({ outboxEntries: [INTERRUPTED_ENTRY], onSend });
+  it('renders an interrupted send as unconfirmed with no Retry', () => {
+    const { container } = renderThread({ outboxEntries: [INTERRUPTED_ENTRY] });
 
     const row = screen.getByTestId('beeper-outbox-row');
-    expect(row).toHaveAttribute('data-outcome', 'failed');
+    expect(row).toHaveAttribute('data-outcome', 'unconfirmed');
     expect(within(row).getByText(SEND_INTERRUPTED_COPY)).toBeInTheDocument();
     expect(container.querySelector('.animate-spin')).toBeNull();
+    expect(within(row).queryByRole('button', { name: 'Retry' })).toBeNull();
+  });
 
-    fireEvent.click(within(row).getByRole('button', { name: 'Retry' }));
-    // Retry composes a NEW entry from that row's text, exactly like any other
-    // failed row — never a resend of a POST whose outcome is unknown.
-    expect(onSend).toHaveBeenCalledWith('hello there', { clearsDraft: false });
+  it('shows a response-less send as unconfirmed while read-only confirmation remains possible', () => {
+    const { container } = renderThread({ outboxEntries: [RESPONSE_LOST_ENTRY] });
+
+    const row = screen.getByTestId('beeper-outbox-row');
+    expect(row).toHaveAttribute('data-outcome', 'unconfirmed');
+    expect(within(row).getByText(DELIVERY_UNCONFIRMED_COPY)).toBeInTheDocument();
+    expect(within(row).queryByText(/Not delivered/)).toBeNull();
+    expect(within(row).queryByRole('button', { name: 'Retry' })).toBeNull();
+    expect(container.querySelector('.animate-spin')).toBeNull();
+  });
+
+  it('renders persisted NETWORK_ERROR rows safely without a migration or Retry', () => {
+    renderThread({ outboxEntries: [LEGACY_NETWORK_ENTRY] });
+
+    const row = screen.getByTestId('beeper-outbox-row');
+    expect(row).toHaveAttribute('data-state', 'failed');
+    expect(row).toHaveAttribute('data-outcome', 'unconfirmed');
+    expect(within(row).getByText(DELIVERY_UNCONFIRMED_COPY)).toBeInTheDocument();
+    expect(within(row).queryByText(/Not delivered/)).toBeNull();
+    expect(within(row).queryByRole('button', { name: 'Retry' })).toBeNull();
   });
 
   it('keeps both terminal states across a remount, the shape a reload takes', () => {
@@ -270,7 +302,7 @@ describe('BeeperThread — terminal outbox states never spin', () => {
 
     // Rendered oldest-last: `entries` arrives newest-first and is reversed.
     expect(screen.getAllByTestId('beeper-outbox-row').map((row) => row.dataset.outcome))
-      .toEqual(['failed', 'unconfirmed']);
+      .toEqual(['unconfirmed', 'unconfirmed']);
     expect(within(screen.getAllByTestId('beeper-outbox-row')[0]).getByText(SEND_INTERRUPTED_COPY)).toBeInTheDocument();
     expect(container.querySelector('.animate-spin')).toBeNull();
   });
