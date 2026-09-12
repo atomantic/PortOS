@@ -422,6 +422,29 @@ describe('rankFoundationCharacters — core-cast repair targets', () => {
     }));
     expect(seriesFoundationCharacters(characters, {})).toHaveLength(6);
   });
+
+  it('includes cast referenced only by established aliases in episodes or authored arcs', () => {
+    const characters = [
+      { id: 'lead', name: 'Lead' },
+      { id: 'handler', name: 'Rival agency handler', aliases: ['Corin Voss', '  CORIN VOSS  '], locked: true },
+      { id: 'medic', name: 'Field medic', aliases: ['Mina Sol'] },
+      { id: 'extra', name: 'Unrelated extra', aliases: [] },
+    ];
+    const series = { characterArcs: [{ characterId: 'lead' }, { characterName: 'Mina Sol' }] };
+    const issues = [{ stages: { idea: { input: 'Corin Voss offers the team a contract.' } } }];
+
+    expect(seriesFoundationCharacters(characters, series, issues).map((character) => character.id))
+      .toEqual(expect.arrayContaining(['lead', 'handler', 'medic']));
+    expect(seriesFoundationCharacters(characters, series, issues).map((character) => character.id))
+      .not.toContain('extra');
+    expect(rankFoundationCharacters(characters, series, issues).map(({ character }) => character.id))
+      .not.toContain('handler');
+    const context = __testing.buildFoundationContext({ series, universe: {}, canon: { characters }, issues, contentMax: 30_000 });
+    expect(context.characterRoster).toContain('**Rival agency handler** (also known as Corin Voss');
+    expect(foundationInputsHash(series, { characters }, issues)).not.toBe(foundationInputsHash(series, {
+      characters: characters.map((character) => character.id === 'handler' ? { ...character, aliases: ['Corin Voss', 'Brightline representative'] } : character),
+    }, issues));
+  });
 });
 
 describe('countFoundationCharacterBlanks — objective repair evidence', () => {

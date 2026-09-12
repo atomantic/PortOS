@@ -11,7 +11,7 @@ import { countWords } from '../../lib/textUtils.js';
 import { renderCharacterArcsForPrompt } from '../../lib/seriesCharacterArc.js';
 import { renderEntitiesSummary } from '../../lib/universePromptRenderers.js';
 import { isBlankString, isBlankArray } from '../universeCharacterExpand.js';
-import { PSYCHOLOGY_DRIVE_AXES } from '../../lib/storyBible.js';
+import { normalizeBibleName, PSYCHOLOGY_DRIVE_AXES } from '../../lib/storyBible.js';
 import { buildCastIntegrityReport } from '../../lib/characterIntegrity.js';
 import { renderCastIntegrity } from '../../lib/castIntegrityPrompt.js';
 
@@ -118,9 +118,15 @@ export function rankFoundationCharacters(characters, series, issues = [], { incl
         + (isBlankArray(character.secrets) ? 1 : 0)
         + VISUAL_FOUNDATION_STRING_FIELDS.filter((field) => isBlankString(character[field])).length
         + VISUAL_FOUNDATION_LIST_FIELDS.filter((field) => isBlankArray(character[field])).length;
-      const mentions = countOccurrences(storyText, character.name);
+      const names = [...new Set([character.name, ...(Array.isArray(character.aliases) ? character.aliases : [])]
+        .filter((name) => typeof name === 'string')
+        .map(normalizeBibleName)
+        .filter(Boolean))];
+      // An established alias is a story reference too. Use the strongest
+      // spelling so overlapping names do not inflate a character's rank.
+      const mentions = Math.max(0, ...names.map((name) => countOccurrences(storyText, name)));
       const authoredArc = authoredArcKeys.has(character.id)
-        || authoredArcKeys.has(`name:${String(character.name || '').trim().toLowerCase()}`);
+        || names.some((name) => authoredArcKeys.has(`name:${name}`));
       const coreRole = /protagonist|lead|hero|antagonist|villain|deuteragonist|mentor/i.test(character.role || '');
       const seriesOwned = !!series?.id && character.sourceSeriesId === series.id;
       return { character, index, mentions, authoredArc, coreRole, seriesOwned, blanks };
@@ -260,6 +266,7 @@ export function foundationInputs(series, universe, issues = []) {
     characters: seriesCharacters.map((c) => ({
       id: c.id,
       name: c.name,
+      aliases: Array.isArray(c.aliases) ? c.aliases : [],
       role: c.role || '',
       ...pickFrameworkFields(c),
       ...pickProfileFields(c),
@@ -303,6 +310,10 @@ export function renderCharacterLine(c, { core = false } = {}) {
   const framework = FRAMEWORK_STRING_FIELDS
     .map((field) => `${field}: ${concise(c?.[field])}`)
     .join(' | ');
+  const aliases = (Array.isArray(c?.aliases) ? c.aliases : [])
+    .filter((alias) => typeof alias === 'string' && alias.trim())
+    .map((alias) => concise(alias, 80))
+    .join(', ');
   const profile = PROFILE_STRING_FIELDS
     .map((field) => `${field}: ${concise(c?.[field])}`)
     .join(' | ');
@@ -346,7 +357,7 @@ export function renderCharacterLine(c, { core = false } = {}) {
       `drives: ${drives}`,
     ].join(' | ')
     : '';
-  return `- ${core ? '[CORE] ' : ''}**${c?.name || 'Unnamed'}**${role} — dramatic framework: ${framework} | profile: ${profile} | arcType: ${c?.arcType || '—'} | secrets: ${secrets || '—'}${control ? ` | control: ${control}` : ''}${ruling} | visual foundation: ${visual}`;
+  return `- ${core ? '[CORE] ' : ''}**${c?.name || 'Unnamed'}**${role}${aliases ? ` (also known as ${concise(aliases, 320)})` : ''} — dramatic framework: ${framework} | profile: ${profile} | arcType: ${c?.arcType || '—'} | secrets: ${secrets || '—'}${control ? ` | control: ${control}` : ''}${ruling} | visual foundation: ${visual}`;
 }
 
 const joinedLength = (lines) => lines.reduce((total, line) => total + line.length + 1, 0);
