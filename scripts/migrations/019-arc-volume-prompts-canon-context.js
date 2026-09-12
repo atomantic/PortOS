@@ -64,7 +64,7 @@ export const ACCEPTED_OLD_MD5 = {
 export const NEW_SHIPPED_MD5 = {
   'pipeline-arc-overview.md':   '5ed760caaf3cf88916ec28b220e2f590', // post-250 arc spine checkpoint
   'pipeline-arc-verify.md':     '4b60a322e35b536405d0fbf543580562', // post-276 distinct climax
-  'pipeline-arc-resolve.md':    '638b988c84b3e5599f7a2ce09fa149ce', // post-274 planning economy
+  'pipeline-arc-resolve.md':    '122950b9f5ce84708ac1510ef13b1bce', // post-274 planning economy
   'pipeline-volume-verify.md':  '9c0839d7fe1760c0891464afd4a3b8fd', // post-274 planning economy
 };
 

@@ -785,6 +785,7 @@ export async function buildResolveContext(series, findings, preloadedWorld, opti
   return {
     ...ctx,
     characterArcsJson: JSON.stringify(series.characterArcs || [], null, 2),
+    tickingClockJson: JSON.stringify(series.arc?.tickingClock ?? null, null, 2),
     findingsJson: JSON.stringify(stampFindingIds(findings), null, 2),
     // The bounded per-finding fallback: the prompt is told the one-record,
     // one-field contract the server will enforce on this response, so an
