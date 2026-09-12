@@ -1,11 +1,11 @@
 import { TailcatServeProvider } from '../components/instances/TailcatServeProvider';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render as renderUI, screen, fireEvent, waitFor, act } from '@testing-library/react';
+import { render as renderUI, screen, within, fireEvent, waitFor, act } from '@testing-library/react';
 import TailcatServePanel from '../components/instances/TailcatServePanel';
 import { AddPeerForm, PeerCard } from './Instances.jsx';
 import { DEFAULT_TAILCAT_REMOTE_PORT } from '../lib/ports.js';
 import { DEFAULT_PEER_PORT, DEFAULT_TAILCAT_LOCAL_PORT } from '../lib/ports.js';
-import { addPeer, addTailcatPeer, startTailcatServe, getTailcatServe, stopTailcatServe, removePeer, listPeerSubscriptions } from '../services/api';
+import { addPeer, addTailcatPeer, startTailcatServe, getTailcatServe, stopTailcatServe, removePeer, listPeerSubscriptions, getPeerFullSyncCoverage, syncPeer } from '../services/api';
 
 vi.mock('../services/api', () => ({
   getInstances: vi.fn(),
@@ -201,5 +201,78 @@ describe('PeerCard removal confirmation', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Confirm removing peer Living Room' }));
     await waitFor(() => expect(removePeer).toHaveBeenCalledWith('peer-1'));
+  });
+});
+
+describe('PeerCard snapshot progress', () => {
+  const peer = {
+    id: 'peer-snapshot', instanceId: 'remote-snapshot', name: 'Snapshot peer',
+    address: '192.0.2.20', port: 5555, status: 'online', enabled: true,
+    directions: ['outbound'], syncCategories: { universe: true, pipeline: true },
+    remoteSyncSeqs: { checksums: { universe: 'new', pipeline: 'same' } },
+  };
+  const syncStatus = {
+    cursors: { 'remote-snapshot': { checksums: { universe: 'old', pipeline: 'same' } } },
+  };
+  const subscriptions = [
+    { recordKind: 'universe', recordId: 'universe-1', peerId: peer.instanceId },
+    { recordKind: 'series', recordId: 'series-1', peerId: peer.instanceId },
+  ];
+  const badge = label => within(screen.getByText(label + ':').parentElement);
+
+  beforeEach(() => {
+    listPeerSubscriptions.mockResolvedValue({ subscriptions });
+    getPeerFullSyncCoverage.mockResolvedValue({ fullyMirrored: true, total: 2 });
+  });
+
+  // Outbound delivery coverage must never replace inbound snapshot progress.
+  it('uses checksums with loaded subscriptions and independent full-sync coverage', async () => {
+    const props = { peer: { ...peer, fullSync: true }, syncStatus, onRefresh: vi.fn() };
+    const view = renderUI(<PeerCard {...props} />);
+    fireEvent.click(screen.getByRole('button', { name: /sync categories/i }));
+    expect(await screen.findByText('Fully mirrored · 2 records')).toBeInTheDocument();
+    await act(async () => {});
+    expect(badge('Universe').getByText('behind')).toBeInTheDocument();
+    expect(badge('Pipeline').getByText('synced')).toBeInTheDocument();
+    expect(screen.queryByText('live-push')).not.toBeInTheDocument();
+
+    view.rerender(<PeerCard {...props} syncStatus={{
+      cursors: { [peer.instanceId]: { checksums: { universe: 'new', pipeline: 'old' } } },
+    }} />);
+    expect(badge('Universe').getByText('synced')).toBeInTheDocument();
+    expect(badge('Pipeline').getByText('behind')).toBeInTheDocument();
+
+    view.rerender(<PeerCard {...props}
+      peer={{ ...props.peer, remoteSyncSeqs: { checksums: { universe: 'new' } } }}
+      syncStatus={{ cursors: { [peer.instanceId]: { checksums: { pipeline: 'same' } } } }}
+    />);
+    expect(badge('Universe').getByText('pending')).toBeInTheDocument();
+    expect(badge('Pipeline').getByText('pending')).toBeInTheDocument();
+  });
+
+  // A slow or failed subscription endpoint must not hide a known mismatch.
+  it('shows known status while subscriptions are unresolved and after they fail', async () => {
+    let rejectSubscriptions;
+    listPeerSubscriptions.mockReturnValue(new Promise((_, reject) => { rejectSubscriptions = reject; }));
+    renderUI(<PeerCard peer={peer} syncStatus={syncStatus} onRefresh={vi.fn()} />);
+    expect(badge('Universe').getByText('behind')).toBeInTheDocument();
+    expect(badge('Pipeline').getByText('synced')).toBeInTheDocument();
+    await act(async () => { rejectSubscriptions(new Error('Subscriptions unavailable')); });
+    expect(badge('Universe').getByText('behind')).toBeInTheDocument();
+    expect(badge('Pipeline').getByText('synced')).toBeInTheDocument();
+  });
+
+  // Active sync takes precedence until the user-triggered request completes.
+  it('shows syncing ahead of checksum status and restores status on completion', async () => {
+    let resolveSync;
+    syncPeer.mockReturnValue(new Promise(resolve => { resolveSync = resolve; }));
+    renderUI(<PeerCard peer={peer} syncStatus={syncStatus} onRefresh={vi.fn()} />);
+    await act(async () => {});
+    fireEvent.click(screen.getByRole('button', { name: /sync now/i }));
+    expect(badge('Universe').getByText('syncing…')).toBeInTheDocument();
+    expect(badge('Pipeline').getByText('syncing…')).toBeInTheDocument();
+    await act(async () => { resolveSync({}); });
+    expect(badge('Universe').getByText('behind')).toBeInTheDocument();
+    expect(badge('Pipeline').getByText('synced')).toBeInTheDocument();
   });
 });
