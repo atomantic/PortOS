@@ -366,10 +366,20 @@ export function BackupTab() {
           <ul className="space-y-1.5">
             {snapshots.slice(0, 10).map((snap) => (
               <li key={snap.id} className="flex items-center justify-between gap-2 text-xs bg-port-bg border border-port-border rounded-lg px-2.5 py-1.5">
-                <span className="text-gray-300 truncate">{snap.id}</span>
+                <span className="min-w-0">
+                  <span className="block text-gray-300 truncate">{snap.id}</span>
+                  {snap.failed && (
+                    <span className="block text-port-error">Backup failed — download only</span>
+                  )}
+                  {snap.incomplete && (
+                    <span className="block text-gray-500">Still being written…</span>
+                  )}
+                </span>
                 <button
                   onClick={() => handleRestoreDb(snap.id)}
-                  className="shrink-0 px-2 py-1 bg-port-border hover:bg-port-border/70 text-white rounded transition-colors"
+                  disabled={snap.failed || snap.incomplete}
+                  title={snap.failed ? 'Failed backup snapshots can only be downloaded for salvage' : undefined}
+                  className="shrink-0 px-2 py-1 bg-port-border hover:bg-port-border/70 text-white rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   Restore DB
                 </button>
