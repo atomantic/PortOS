@@ -154,7 +154,15 @@ export default function ProviderModelSelector({
   // pinned to a now-disabled provider still renders its value instead of
   // silently blanking the select (`selectableProviders` is the one rule).
   const visibleProviders = selectableProviders(providerList, { selectedId: selectedProviderId, allowed: providerAllowed });
-  const compatibleModels = filterHardwareCompatibleProviderModels(availableModels, selectedProvider)
+  // Defaults may be omitted from a provider's browsable catalog. Offer a real
+  // pin as well as the blank inheritance option, including on required forms.
+  const catalogModels = Array.isArray(availableModels) ? availableModels : [];
+  const defaultModel = selectedProvider?.defaultModel;
+  const selectableModels = defaultModel
+    && !catalogModels.some((model) => modelOption(model)?.value === defaultModel)
+    ? [defaultModel, ...catalogModels]
+    : catalogModels;
+  const compatibleModels = filterHardwareCompatibleProviderModels(selectableModels, selectedProvider)
     .filter((model) => !modelAllowed || modelAllowed(model, selectedProvider));
   // Keep a configured default visible even when it is a CLI-default sentinel
   // omitted from the browsable catalog, alongside unavailable saved pins.
