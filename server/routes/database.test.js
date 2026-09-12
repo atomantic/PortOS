@@ -5,7 +5,7 @@
  * we can control every shell invocation without touching the real filesystem
  * or running actual Docker/psql commands.
  */
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import express from 'express';
 import { request } from '../lib/testHelper.js';
 
@@ -229,6 +229,10 @@ describe('POST /api/database/destroy', () => {
     vi.clearAllMocks();
   });
 
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
   describe('input validation', () => {
     it('returns 400 when backend is missing', async () => {
       const app = makeApp();
@@ -290,6 +294,8 @@ describe('POST /api/database/destroy', () => {
 
   describe('docker destroy path', () => {
     it('invokes docker stop, rm, and volume rm commands when destroying non-active docker backend', async () => {
+      vi.stubEnv('PGHOST', 'localhost');
+      vi.stubEnv('PGPORT', '5432');
       // Call order:
       // 0: runDbScript(['status'])  → mode is "native" (so docker is the non-active backend)
       // 1: docker compose stop db
@@ -324,11 +330,14 @@ describe('POST /api/database/destroy', () => {
         c => c[1].includes('volume') && c[1].includes('rm')
       );
       expect(volumeRmCall).toBeDefined();
+      expect(execFile.mock.calls.some(c => c[0] === 'psql')).toBe(false);
     });
   });
 
   describe('native destroy path', () => {
-    it('invokes psql DROP DATABASE when destroying the non-active native backend', async () => {
+    it('targets the canonical native endpoint instead of the active Docker port', async () => {
+      vi.stubEnv('PGHOST', 'localhost');
+      vi.stubEnv('PGPORT', '5561');
       // Call order:
       // 0: runDbScript(['status']) → mode is "docker" (so native is non-active)
       // 1: psql DROP DATABASE …
@@ -350,6 +359,48 @@ describe('POST /api/database/destroy', () => {
       expect(psqlCall).toBeDefined();
       // The args should contain a DROP DATABASE statement
       expect(psqlCall[1].join(' ')).toMatch(/DROP DATABASE/i);
+      expect(psqlCall[1][psqlCall[1].indexOf('-p') + 1]).toBe('5432');
+      expect(psqlCall[1]).not.toContain('5561');
+    });
+  });
+
+  describe('endpoint identity safety', () => {
+    it.each([
+      ['native', 'docker', '5432', '127.0.0.1'],
+      ['docker', 'native', '5561', '::1'],
+    ])('refuses %s when its target aliases the active %s endpoint', async (backend, mode, port, host) => {
+      vi.stubEnv('PGHOST', host);
+      vi.stubEnv('PGPORT', port);
+      mockExecFile([
+        { exitCode: 0, stdout: `Current mode: ${mode}`, stderr: '' },
+      ]);
+
+      const app = makeApp();
+      const res = await request(app)
+        .post('/api/database/destroy')
+        .send({ backend });
+
+      expect(res.status).toBe(400);
+      expect(res.body.error).toMatch(/active backend/i);
+      expect(execFile).toHaveBeenCalledTimes(1);
+    });
+
+    it.each([
+      ['failed', { exitCode: 1, stdout: '', stderr: 'status failed' }],
+      ['unparseable', { exitCode: 0, stdout: 'Database status unavailable', stderr: '' }],
+    ])('fails closed on a %s status probe', async (_case, statusResponse) => {
+      vi.stubEnv('PGHOST', 'localhost');
+      vi.stubEnv('PGPORT', '5561');
+      mockExecFile([statusResponse]);
+
+      const app = makeApp();
+      const res = await request(app)
+        .post('/api/database/destroy')
+        .send({ backend: 'native' });
+
+      expect(res.status).toBe(500);
+      expect(res.body.error).toMatch(/cannot verify/i);
+      expect(execFile).toHaveBeenCalledTimes(1);
     });
   });
 });
