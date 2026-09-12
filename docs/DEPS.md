@@ -31,7 +31,7 @@ Before removing a Tier 3 candidate, run a transitive-dep check (`npm ls <pkg>`).
 | `@googleapis/gmail` | 1 | KEEP | Messages/Gmail integration | Scoped official Google SDK |
 | `chokidar` | 1 | KEEP | server file watching | Mature cross-platform file-system watcher used by server services |
 | `express` | 1 | KEEP | `server/index.js` + routes | Framework |
-| `google-auth-library` | 1 | KEEP | Google OAuth | Pairs with `@googleapis/*` |
+| `google-auth-library` | — | REMOVED (direct) | Google OAuth | Consolidated under `@googleapis/calendar`'s transitive `googleapis-common` dependency |
 | `kokoro-js` | 2 | REMOVED | Former in-process TTS | Replaced by the in-tree Piper backend; existing settings migrate |
 | `node-pty` | 1 | KEEP | shell/terminal services | Native PTY binding (N-API) |
 | `pg` | 1 | KEEP | Postgres access | Official `pg` driver |
