@@ -447,6 +447,17 @@ export default function Loras() {
         </div>
       </div>
 
+      {/* A HuggingFace download keeps running when the user leaves Discover,
+          but every readout of it (the form's bar, the card's percent) lives in
+          that panel — so a multi-gigabyte transfer would silently have no
+          indicator anywhere. Mirror it here, and only while Discover is closed,
+          so the two are never on screen at once. */}
+      {view !== VIEW_DISCOVER && (hfInstalling || installingVideoKey) && (
+        <div className="bg-port-card border border-port-border rounded-lg p-3">
+          <HfDownloadProgress progress={hfProgress} />
+        </div>
+      )}
+
       {view === VIEW_DISCOVER && (
         <div id={`${VIEW_PANEL_PREFIX}-${VIEW_DISCOVER}`} role="tabpanel" aria-labelledby={`tab-${VIEW_DISCOVER}`} className="space-y-6">
           {lastInstalled && (
@@ -480,6 +491,10 @@ export default function Loras() {
               </div>
               <CivitaiKeyBadge auth={auth} onManage={() => setAuthPrompt({ url: null, message: '' })} />
             </div>
+            {/* No `autoFocus`: this form used to mount once with the page, so
+                focusing it was a landing convenience. It now remounts on every
+                switch into Discover, where it would steal focus from the tab
+                the user just activated and swallow their next arrow key. */}
             <div className="flex gap-2">
               <input
                 type="text"
@@ -489,7 +504,6 @@ export default function Loras() {
                 placeholder="https://civitai.com/models/2600698/realstagram"
                 className="flex-1 bg-port-bg border border-port-border rounded px-3 py-2 text-sm text-gray-200 placeholder:text-gray-600"
                 disabled={installing}
-                autoFocus
               />
               <button
                 type="submit"

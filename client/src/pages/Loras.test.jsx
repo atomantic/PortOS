@@ -133,6 +133,43 @@ describe('Loras Installed / Discover views', () => {
     expect(screen.queryByLabelText('Civitai model URL')).not.toBeInTheDocument();
   });
 
+  it('does not steal focus from the tab that opened Discover', async () => {
+    renderPage();
+    await screen.findByText('Example LoRA');
+
+    const discoverTab = screen.getByRole('tab', { name: /Discover \/ install/ });
+    fireEvent.click(discoverTab);
+    await screen.findByLabelText('Civitai model URL');
+
+    // The install form remounts on every switch now, so an autoFocus on it
+    // would swallow the arrow key that should walk back to Installed.
+    expect(screen.getByLabelText('Civitai model URL')).not.toHaveFocus();
+  });
+
+  // A multi-gigabyte HuggingFace download survives the switch to Installed,
+  // but every readout of it lives in the Discover panel — without a mirror the
+  // transfer runs with no indicator anywhere on the page.
+  it('keeps an in-flight download visible after switching away from Discover', async () => {
+    listLorasFull.mockResolvedValue([]);
+    let reportProgress;
+    installLoraFromHuggingfaceStream.mockImplementation(({ onProgress }) => new Promise(() => {
+      reportProgress = onProgress;
+    }));
+    await renderDiscover();
+
+    const input = await screen.findByLabelText('HuggingFace LoRA URL');
+    fireEvent.change(input, { target: { value: 'https://huggingface.co/example-org/example-lora' } });
+    fireEvent.submit(input.closest('form'));
+    await clickStartDownload();
+    await waitFor(() => expect(reportProgress).toBeTypeOf('function'));
+    act(() => reportProgress({ received: 512, total: 1024, progress: 0.5 }));
+    expect(await screen.findByText('Downloading… 50%')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('tab', { name: /Installed/ }));
+
+    expect(await screen.findByText('Downloading… 50%')).toBeInTheDocument();
+  });
+
   it('offers a discovery hand-off from the empty Installed state', async () => {
     listLorasFull.mockResolvedValue([]);
     renderPage();
