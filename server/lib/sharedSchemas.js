@@ -100,3 +100,13 @@ export const isSafeSubdirFilter = (v) =>
   && /^[a-z0-9._/-]+$/i.test(v)
   && !v.split('/').includes('..')
   && !v.startsWith('/');
+
+// Backup sources are directory names under snapshots/. `@legacy` is reserved
+// for the pre-namespace snapshots root; `@` cannot occur in the sanitized
+// machine names used by backup.js, so a real machine named "legacy" stays
+// independently addressable.
+export const isSafeSnapshotSource = (v) =>
+  typeof v === 'string'
+  && v.length > 0
+  && v.length <= 255
+  && (v === '@legacy' || (v !== '.' && v !== '..' && /^[a-z0-9._-]+$/i.test(v)));

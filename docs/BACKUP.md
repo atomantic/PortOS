@@ -22,6 +22,7 @@ A backup run (`runBackup` in `server/services/backup.js`) writes to:
 ```
 
 - Snapshots are namespaced by `<hostname>` so one shared destination (e.g. an iCloud folder) can host backups from several federated machines without `snapshotId` collisions.
+- Snapshot lists include every machine namespace in the destination, plus snapshots written directly under `snapshots/` by PortOS versions from before hostname namespaces. Each row identifies its source, so equal timestamp IDs from different machines remain separate choices. Download, file restore, and database restore keep that source attached through preview and execution. API requests that omit `source` retain the existing behavior and select the current machine; `source: "@legacy"` selects the pre-namespace root.
 - The `manifest.json` hashes the SQL dump too (keyed as `../portos-db.sql`, since the dump lives one level above the `data/` tree), so a truncated or corrupt dump is detectable rather than silently trusted.
 
 ### What is excluded by default
@@ -61,7 +62,7 @@ Key behaviors, accurate to the code:
 
 ## How restore works
 
-Restore is two independent operations — restoring files and restoring the DB are separate decisions. Both are **dry-run by default** and validate `snapshotId` against path traversal before touching anything.
+Restore is two independent operations — restoring files and restoring the DB are separate decisions. Both are **dry-run by default** and validate `snapshotId` and an optional source namespace against path traversal before touching anything. Explicit source selections also reject symbolic-link aliases for the snapshots root, source namespace, or selected snapshot before archive or restore reads begin.
 
 A backup run that fails after creating its snapshot directory records a durable `.failed` marker before releasing its `.in-progress` guards. Failed snapshots are never eligible for file or database restore (`SNAPSHOT_FAILED`); they remain downloadable so their partial files can be inspected or recovered manually. If PortOS cannot write the failed marker, it keeps the existing incomplete markers instead, which also block restore. Snapshots created by older PortOS versions without a manifest or failure marker retain their legacy behavior because an unmarked historical failure cannot be distinguished reliably from a genuine pre-manifest snapshot.
 
