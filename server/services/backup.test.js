@@ -76,7 +76,13 @@ vi.mock('../lib/childProcess.js', async (importOriginal) => ({
 // used by backup.js + fileUtils.js keeps its real implementation.
 vi.mock('fs/promises', async (importOriginal) => {
   const actual = await importOriginal();
-  return { ...actual, stat: vi.fn(actual.stat), readFile: vi.fn(actual.readFile), access: vi.fn(actual.access) };
+  return {
+    ...actual,
+    stat: vi.fn(actual.stat),
+    readFile: vi.fn(actual.readFile),
+    access: vi.fn(actual.access),
+    writeFile: vi.fn(actual.writeFile),
+  };
 });
 
 import { checkHealth, getServerMajorVersion } from '../lib/db.js';
@@ -106,6 +112,7 @@ import { DEFAULT_EXCLUDES, computeEffectiveExcludes, listSnapshots, openSnapshot
 beforeEach(async () => {
   const actual = await vi.importActual('fs/promises');
   fs.access.mockImplementation(actual.access);
+  fs.writeFile.mockImplementation(actual.writeFile);
 });
 
 // Mirrors backup.js's MACHINE_HOST derivation so expected paths can be built
@@ -308,14 +315,14 @@ describe('openSnapshotStream', () => {
   });
 
   beforeEach(() => {
-    fs.access.mockRejectedValue(new Error('ENOENT'));
+    fs.access.mockRejectedValue(Object.assign(new Error('missing'), { code: 'ENOENT' }));
   });
 
   // An existing, COMPLETE snapshot directory, ready for tar: the directory stats
   // fine while the .in-progress marker is absent.
   function readySnapshot() {
     fs.stat.mockResolvedValue({ isDirectory: () => true });
-    fs.access.mockRejectedValue(new Error('ENOENT'));   // no .in-progress marker
+    fs.access.mockRejectedValue(Object.assign(new Error('missing'), { code: 'ENOENT' }));
     const proc = fakeProc();
     spawn.mockReturnValue(proc);
     return proc;
@@ -324,7 +331,9 @@ describe('openSnapshotStream', () => {
   // Same directory, but a marker left behind by a crashed run.
   function crashedSnapshot() {
     fs.stat.mockResolvedValue({ isDirectory: () => true });
-    fs.access.mockResolvedValue(undefined);             // .in-progress present
+    fs.access.mockImplementation((path) => String(path).endsWith('.failed')
+      ? Promise.reject(Object.assign(new Error('missing'), { code: 'ENOENT' }))
+      : Promise.resolve());                             // .in-progress present
   }
 
   const ended = (stream) => new Promise((resolveEnd) => stream.once('end', resolveEnd));
@@ -749,7 +758,9 @@ describe('restorePostgres', () => {
   // dump into the live database is the most destructive thing this module can
   // do, so the guard has to cover it — not just download and file restore.
   it('refuses an incomplete snapshot before reading the dump', async () => {
-    fs.access.mockResolvedValue(undefined);            // .in-progress present
+    fs.access.mockImplementation((path) => String(path).endsWith('.failed')
+      ? Promise.reject(Object.assign(new Error('missing'), { code: 'ENOENT' }))
+      : Promise.resolve());                            // .in-progress present
     const statSpy = vi.spyOn(fs, 'stat');
 
     await expect(restorePostgres('/dest', '2026-06-05T00-00-00', { dryRun: false }))
@@ -1864,13 +1875,10 @@ describe('runBackup lifecycle', () => {
     await pending;
   });
 
-  // The old on-disk '.in-progress' marker was never removed on failure, which
-  // left a failed snapshot permanently un-downloadable with no recovery path.
-  it('clears the in-progress guard when a run fails, leaving the snapshot downloadable', async () => {
+  it('persists a failed snapshot across restart, blocks both restores, and keeps salvage download available', async () => {
     const io = { emit: vi.fn() };
     const proc = fakeProc();
     spawn.mockReturnValue(proc);
-    const { openSnapshotStream: open } = await import('./backup.js');
 
     const pending = runBackup(destRoot, io);
     await waitFor(() => spawn.mock.calls.length === 1, 'rsync spawn');
@@ -1878,11 +1886,89 @@ describe('runBackup lifecycle', () => {
     proc.emit('close', 23);
     await expect(pending).rejects.toThrow(/rsync exited with code 23/);
 
+    const snapshotDir = await findSnapshotDir();
+    const fsp = await actualFs();
+    await expect(fsp.access(joinPath(snapshotDir, '.failed'))).resolves.toBeUndefined();
+    await expect(fsp.access(joinPath(snapshotDir, '.in-progress'))).rejects.toMatchObject({ code: 'ENOENT' });
+    await expect(fsp.access(joinPath(destRoot, 'snapshots', machineHost, `.${snapshotId}.in-progress`)))
+      .rejects.toMatchObject({ code: 'ENOENT' });
+
+    // Module restart clears activeSnapshotId; the on-disk marker remains the
+    // sole source of failure classification and restore refusal.
+    vi.resetModules();
+    const {
+      listSnapshots: listAfterRestart,
+      openSnapshotStream: openAfterRestart,
+      restoreSnapshot: restoreFilesAfterRestart,
+      restorePostgres: restoreDbAfterRestart,
+    } = await import('./backup.js');
+
+    await expect(listAfterRestart(destRoot)).resolves.toContainEqual(expect.objectContaining({
+      id: snapshotId,
+      failed: true,
+      incomplete: false,
+    }));
+    spawn.mockClear();
+    await expect(restoreFilesAfterRestart(destRoot, snapshotId, { dryRun: true }))
+      .rejects.toMatchObject({
+        status: 409,
+        code: 'SNAPSHOT_FAILED',
+        message: expect.stringContaining('Choose a completed backup'),
+      });
+    await expect(restoreDbAfterRestart(destRoot, snapshotId, { dryRun: true }))
+      .rejects.toMatchObject({
+        status: 409,
+        code: 'SNAPSHOT_FAILED',
+        message: expect.stringContaining('Choose a completed backup'),
+      });
+    expect(spawn).not.toHaveBeenCalled();
+
     const tar = fakeProc();
     spawn.mockReturnValue(tar);
-    const stream = await open(destRoot, snapshotId);
+    const stream = await openAfterRestart(destRoot, snapshotId);
     expect(stream).toBeDefined();
     stream.destroy();
+  });
+
+  it('retains incomplete guards when the failed marker cannot be written while releasing the process lock', async () => {
+    const io = { emit: vi.fn() };
+    const proc = fakeProc();
+    spawn.mockReturnValue(proc);
+
+    const pending = runBackup(destRoot, io);
+    await waitFor(() => spawn.mock.calls.length === 1, 'rsync spawn');
+    const snapshotDir = await findSnapshotDir();
+    const snapshotId = basename(snapshotDir);
+    const fsp = await actualFs();
+    fs.writeFile.mockImplementation((path, ...args) => String(path).endsWith('.failed')
+      ? Promise.reject(Object.assign(new Error('read-only destination'), { code: 'EACCES' }))
+      : fsp.writeFile(path, ...args));
+
+    proc.emit('close', 23);
+    await expect(pending).rejects.toThrow(/rsync exited with code 23/);
+
+    await expect(fsp.access(joinPath(snapshotDir, '.failed'))).rejects.toMatchObject({ code: 'ENOENT' });
+    await expect(fsp.access(joinPath(snapshotDir, '.in-progress'))).resolves.toBeUndefined();
+    await expect(fsp.access(joinPath(destRoot, 'snapshots', machineHost, `.${snapshotId}.in-progress`)))
+      .resolves.toBeUndefined();
+
+    const { openSnapshotStream: open, restoreSnapshot: restore } = await import('./backup.js');
+    spawn.mockClear();
+    await expect(open(destRoot, snapshotId))
+      .rejects.toMatchObject({ status: 409, code: 'SNAPSHOT_INCOMPLETE' });
+    await expect(restore(destRoot, snapshotId, { dryRun: true }))
+      .rejects.toMatchObject({ status: 409, code: 'SNAPSHOT_INCOMPLETE' });
+    expect(spawn).not.toHaveBeenCalled();
+
+    // Failure-state persistence cannot strand the process-level running lock.
+    const retryRoot = await fsp.mkdtemp(joinPath(tmpdir(), 'portos-backup-retry-'));
+    const retryProc = fakeProc();
+    spawn.mockReturnValue(retryProc);
+    const retry = runBackup(retryRoot, io);
+    await waitFor(() => spawn.mock.calls.length === 1, 'retry rsync spawn');
+    retryProc.emit('close', 0);
+    await expect(retry).resolves.toMatchObject({ status: 'ok' });
+    await fsp.rm(retryRoot, { recursive: true, force: true });
   });
 
   it('on rsync failure: releases the lock, records status error, emits backup:failed, and rethrows', async () => {
