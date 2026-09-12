@@ -1,7 +1,7 @@
 # PortOS API and MCP Unified Tool Contract
 
 Status: current implementation audit
-Date: 2026-08-28
+Date: 2026-09-12
 
 This document is the implementation-facing bridge between PortOS's exhaustive
 HTTP inventory, the governed semantic registry, Persistent Mind, and Agent
@@ -21,8 +21,8 @@ The current source contains:
 - 22 provider-neutral semantic tools: one `cos.create-task` tool and 21
   semantic adapters inherited from the voice registry.
 - Five read-only context tools on the Agent Tools MCP transport. The MCP
-  transport may additionally advertise the 21 semantic adapters when its
-  separate read/write grants are enabled.
+  transport may additionally advertise the 21 semantic adapters and eligible
+  machine-local saved read recipes when their independent grants are enabled.
 
 The route catalog is the exhaustive HTTP map. Both it and the Socket.IO
 inventory are derived directly from their source declarations, so there is no
@@ -47,7 +47,7 @@ step; the server derives and caches both inventories from source.
 
 | Method | Endpoint | Request and response behavior |
 |---|---|---|
-| `GET` | `/api/cos/tools` | Query: `scope=all\|agent\|mind\|ui\|voice`, optional `intent` (trimmed, ≤500 characters), and `format=portos\|openai\|anthropic\|mcp`. Returns a catalog with an `ETag`; `If-None-Match` returns `304`. |
+| `GET` | `/api/cos/tools` | Query: `scope=all\|agent\|mind\|ui\|voice`, optional `intent` (trimmed, ≤500 characters), and `format=portos\|openai\|anthropic\|mcp`. Mind and agent scopes refresh saved recipe availability. Returns a catalog with an `ETag`; recipe revision/archive/restore changes alter it, and `If-None-Match` returns `304`. |
 | `POST` | `/api/cos/tools/call` | Body is a strict `portos_tool_call`. Optional `Idempotency-Key` must equal `requestId`. Authority is derived as the HTTP `ui` principal from the server auth context. |
 | `GET` | `/api/cos/tools/calls/:requestId` | Returns the retained normalized result for a process-local call, or `404 TOOL_CALL_NOT_FOUND`. Retention is in memory, so callers must not treat this as durable job history. |
 
@@ -65,14 +65,15 @@ input schema, checks scope and capabilities, then invokes a named adapter.
 
 The transport accepts loopback socket addresses only and rejects a non-loopback
 `Origin`. The normal PortOS authentication gate still applies when an instance
-password is configured. Context tools remain read-only. Semantic actions are a
-separate default-off grant and are executed through the same registry as the
-HTTP and Persistent Mind paths.
+password is configured. Context tools remain read-only. Semantic actions and
+saved recipe invocation are separate default-off grants and execute through
+the same registry as the HTTP and Persistent Mind paths.
 
 ### Persistent Mind authority inventory
 
 `GET /api/cos/mind/tools` remains a separate authority view. It reports the
-Persistent Mind capability schema, boundaries, task catalog, and grant state;
+Persistent Mind capability schema, boundaries, task catalog, grant state, and
+current saved recipe descriptors;
 it is not the generic semantic catalog. Persistent Mind execution uses the
 same registry internally and has a five-call semantic/tool budget plus a
 five-task-per-turn budget. No new authority is implied by the broader HTTP
@@ -155,6 +156,25 @@ task tool is not in the Agent MCP catalog. It is a Persistent Mind-only
 capability and validates its app, provider, model, effort, mode, required
 checks, tracker, readiness, and landing policy before queueing.
 
+### Saved read recipes
+
+Saved `recipe.*` tools come from the versioned Persistent Mind recipe library.
+They are discovered on each Mind/agent catalog read rather than added to the
+static adapter list. The native catalog exposes provenance, active revision,
+underlying canonical read-tool names, availability, and a bounded disabled
+reason. It never exposes definition literals, bindings, revision history, or
+execution results. Provider formats carry only the purpose, invocation schema,
+and a bounded local-recipe revision suffix.
+
+Agent MCP has its own `callToolRecipes` grant; it never inherits Persistent
+Mind's `manageToolRecipes` authority and cannot author, update, archive, or
+restore definitions. An agent recipe must validate entirely against the agent
+scope, requires every underlying semantic grant, refreshes settings before
+each child, and uses at most five child calls even outside a Mind turn. A
+Mind-only primitive therefore remains unavailable to an agent even when the
+recipe author could use it. Normal catalog reads and calls re-resolve the
+active revision, so revocation, archive, restore, and schema drift fail closed.
+
 ## MCP context tool definitions
 
 These five tools are advertised from `server/lib/agentContextValidation.js`
@@ -224,6 +244,10 @@ Provider translations are mechanical projections of the same entry:
 - MCP uses `name`, `description`, `inputSchema`, `outputSchema`, and standard
   read-only/destructive/idempotent/open-world annotations.
 
+For a saved recipe, each provider description also carries a bounded
+machine-local origin and active-revision suffix because those formats have no
+native recipe metadata field.
+
 ## Authority and bridge
 
 ```text
@@ -239,7 +263,7 @@ REST/OpenAPI route inventory ──> discovery only; raw routes are never tools
 | Caller | Server-derived authority | Default | Allowed mutation path |
 |---|---|---|---|
 | Persistent Mind | `scope: mind`, persisted capability grant | off | `cos.create-task`, semantic writes when separately granted |
-| Agent MCP | `scope: agent`, Agent Tools action grant | off | semantic writes when separately granted |
+| Agent MCP | `scope: agent`, Agent Tools action and saved-recipe grants | off | semantic writes when separately granted; saved recipes can orchestrate only granted agent-scope reads |
 | HTTP registry | `scope: ui`, PortOS auth context | reads may be anonymous on a passwordless install | writes require an authenticated PortOS session |
 | Voice adapter | existing voice pipeline context | existing voice policy | existing voice-side confirmation/pipeline controls |
 
@@ -270,10 +294,11 @@ exposable merely because they appear in the internal OpenAPI inventory.
    confirm, or durable result endpoint. Those routes remain proposed design
    backlog and must not be advertised by a client generated from this current
    contract.
-4. **The five-call budget is a Persistent Mind budget.** It is enforced by the
-   Persistent Mind adapter across its bounded turn loop. It is not a generic
-   HTTP/MCP rate limit; callers using those transports must rely on grants,
-   typed adapters, idempotency, and the deployment trust boundary.
+4. **Recipe calls are bounded on both agent surfaces.** Persistent Mind charges
+   every recipe child to its shared five-call turn budget. Agent MCP has no
+   turn loop, so each recipe invocation receives its own five-child budget.
+   This is not a generic HTTP/MCP rate limit; ordinary calls continue to rely
+   on grants, typed adapters, idempotency, and the deployment trust boundary.
 5. **Disabled MCP manifest nuance.** The MCP execution route is blocked while
    the feature is disabled, but a previously saved semantic action grant can
    still appear in the readable manifest because advertised semantic tools are

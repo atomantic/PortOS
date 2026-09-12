@@ -11,7 +11,7 @@ const DEFAULT_AGENT_CONTEXT = {
   enabled: false,
   profile: 'metadata',
   scopes: ['navigation', 'workspaces'],
-  actions: { readPortos: false, writePortos: false, manageEidoverse: false, visitEidoversePeers: false },
+  actions: { readPortos: false, writePortos: false, callToolRecipes: false, manageEidoverse: false, visitEidoversePeers: false },
 };
 const AGENT_CONTEXT_SCOPES = [
   { id: 'navigation', label: 'Navigation', hint: 'PortOS page labels, aliases, and paths.' },
@@ -313,6 +313,14 @@ export function ApiAccessTab() {
               onChange={(value) => patchAgentContextAction('writePortos', value)}
               label="Allow semantic PortOS updates"
               hint="Typed Brain, journal, goals, health-log, and feed-state actions; no raw routes or shell."
+            />
+            <Toggle
+              id="agent-context-action-recipes"
+              checked={agentContext.actions.callToolRecipes}
+              disabled={savingId !== null}
+              onChange={(value) => patchAgentContextAction('callToolRecipes', value)}
+              label="Allow saved read recipes"
+              hint="Invoke eligible Persistent Mind recipes with these Agent Tools grants. Recipe authoring stays Mind-only."
             />
             <Toggle
               id="agent-context-action-eidoverse-travel"

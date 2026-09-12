@@ -57,7 +57,8 @@ export default function PersistentMindTools({ onCapabilitiesChange, onSavingChan
       } : null,
       semanticTools: (current.semanticTools || []).map((tool) => ({
         ...tool,
-        granted: tool.policy.requiredCapabilities.every((capability) => capabilities[capability] === true),
+        granted: tool.recipe?.available !== false
+          && tool.policy.requiredCapabilities.every((capability) => capabilities[capability] === true),
       })),
       tools: (current.tools || []).map((tool) => ({
         ...tool,
@@ -86,6 +87,13 @@ export default function PersistentMindTools({ onCapabilitiesChange, onSavingChan
                     <details key={tool.name} className="min-w-0 rounded border border-port-border p-2 text-xs">
                       <summary className="cursor-pointer break-words font-medium text-port-text">{tool.name} · {tool.granted ? 'Granted' : 'Disabled'}</summary>
                       <p className="mt-2 text-port-text-muted">{tool.description}</p>
+                      {tool.recipe && (
+                        <div className="mt-2 rounded border border-port-border bg-port-bg p-2 text-port-text-muted">
+                          <p>Saved recipe · Persistent Mind library · revision {tool.recipe.revision}</p>
+                          <p className="mt-1">Read actions: {tool.recipe.underlyingTools?.join(', ') || 'unavailable'}</p>
+                          {!tool.granted && tool.recipe.disabledReason && <p className="mt-1 text-port-warning">{tool.recipe.disabledReason}</p>}
+                        </div>
+                      )}
                       <pre className="mt-2 max-h-48 overflow-auto whitespace-pre-wrap break-words text-port-text-muted">{JSON.stringify(tool.input_schema, null, 2)}</pre>
                     </details>
                   ))}
