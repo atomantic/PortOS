@@ -1,17 +1,13 @@
 import { defineConfig } from 'vitest/config';
 import react from '@vitejs/plugin-react';
-import { resolve } from 'path';
 
 import { vitestCiPool } from '../scripts/vitestCiPool.js';
-
-const CONFIG_DIR = import.meta.dirname;
 
 export default defineConfig({
   plugins: [react()],
   resolve: {
-    alias: {
-      three: resolve(CONFIG_DIR, 'node_modules/three'),
-    },
+    // Share Three.js without bypassing its package exports with a directory alias.
+    dedupe: ['three'],
   },
   test: {
     // Four DOM workers exhausted Testing Library's existing 3s async budget

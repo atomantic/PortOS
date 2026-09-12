@@ -15,7 +15,6 @@ import {
 
 const ANALYZE_BUNDLE = process.env.ANALYZE === 'true';
 const CONFIG_DIR = import.meta.dirname;
-const THREE_MODULE_PATH = resolve(CONFIG_DIR, 'node_modules/three');
 
 const rootPkg = JSON.parse(readFileSync(resolve(CONFIG_DIR, '../package.json'), 'utf-8'));
 
@@ -160,9 +159,8 @@ export default defineConfig(({ command, mode }) => {
       }),
     ].filter(Boolean),
     resolve: {
-      alias: {
-        three: THREE_MODULE_PATH,
-      },
+      // Share Three.js without bypassing its package exports with a directory alias.
+      dedupe: ['three'],
     },
     // Recharts is imported by lazy-loaded pages. Its published ESM files use
     // bare es-toolkit/compat/* imports, so prebundle it before a lazy tab can
