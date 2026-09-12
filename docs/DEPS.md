@@ -78,7 +78,7 @@ Before removing a Tier 3 candidate, run a transitive-dep check (`npm ls <pkg>`).
 | `vitest` | 1 | KEEP | client test runner | happy-dom environment |
 | `happy-dom` | 1 | KEEP | test DOM | Paired with vitest. Replaced `jsdom` in #6144 — same suite, ~65% less time in `environment` |
 | `@testing-library/jest-dom` | 1 | KEEP | test matchers | |
-| `@testing-library/dom` | 1 | KEEP | DOM test utilities | Foundation for the client Testing Library stack |
+| `@testing-library/dom` | — | REMOVED (direct) | DOM test utilities | 2026-09-12 → imported through `@testing-library/react`; remains in the tree transitively, so this removes only the redundant direct pin |
 | `@testing-library/react` | 1 | KEEP | component tests | |
 | `@testing-library/user-event` | 1 | KEEP | interaction tests | |
 | `rollup-plugin-visualizer` | 2 | KEEP | bundle-size analysis | Dev-only, opt-in |
