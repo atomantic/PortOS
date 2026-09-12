@@ -29,12 +29,12 @@ export function PersistentMindThoughtStatus({ state, model }) {
     <span
       role="status"
       aria-busy={thinking}
-      className={`inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-xs font-medium ${thinking ? 'border-port-accent/60 bg-port-accent/10 text-port-accent' : 'border-port-border text-port-text-muted'}`}
+      className={`inline-flex min-w-0 max-w-full items-center gap-2 rounded-full border px-3 py-1.5 text-xs font-medium ${thinking ? 'border-port-accent/60 bg-port-accent/10 text-port-accent' : 'border-port-border text-port-text-muted'}`}
     >
-      <Brain size={14} className={thinking ? 'animate-pulse motion-reduce:animate-none' : ''} aria-hidden="true" />
-      <span>{label}</span>
+      <Brain size={14} className={thinking ? 'shrink-0 animate-pulse motion-reduce:animate-none' : 'shrink-0'} aria-hidden="true" />
+      <span className="truncate" title={label}>{label}</span>
       {thinking && (
-        <span className="inline-flex gap-0.5" aria-hidden="true">
+        <span className="inline-flex shrink-0 gap-0.5" aria-hidden="true">
           {[0, 1, 2].map((index) => (
             <span
               key={index}
