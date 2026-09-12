@@ -1100,7 +1100,7 @@ export async function applyEpisodeResolutions(seriesId, series, episodes) {
     if (metadataChanged && (MANUSCRIPT_TYPES.some((stage) => {
       const value = issue.stages?.[stage];
       return value?.output?.trim() || value?.input?.trim();
-    }) || pages?.pages?.length || pages?.cover?.proofImage || pages?.cover?.finalImage)) {
+    }) || pages?.pages?.length || ['cover', 'backCover'].some((slot) => pages?.[slot]?.proofImage || pages?.[slot]?.finalImage))) {
       applied.push({ issueId: issue.id, number: issue.number, seasonNumber: edit.seasonNumber, skipped: 'existing-production' });
       continue;
     }

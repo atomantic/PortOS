@@ -1675,14 +1675,15 @@ describe('arcPlanner — resolveVerifyIssues', () => {
     expect(await issuesSvc.getIssue(issue.id)).toMatchObject({ arcRole: 'b-plot', lengthProfile: 'custom', pageTarget: 48, minutesTarget: 42 });
   });
 
-  it.each(['manuscript', 'page layout'])('refuses metadata and accompanying synopsis changes beneath an existing %s', async (production) => {
+  it.each(['manuscript', 'page layout', 'back-cover image'])('refuses metadata and accompanying synopsis changes beneath an existing %s', async (production) => {
     const s = await setupSeries();
     await seriesSvc.updateSeries(s.id, { arc: { logline: 'A crew must make a costly choice.' } });
     const season = await seasonsSvc.createSeason(s.id, { title: 'Volume', episodeCountTarget: 1 });
     const issue = await issuesSvc.createIssue({ seriesId: s.id, seasonId: season.id, title: 'Turn' });
     await issuesSvc.updateStage(issue.id, 'idea', { input: 'Established plan.' });
     if (production === 'manuscript') await issuesSvc.updateStage(issue.id, 'prose', { output: 'Existing manuscript.', status: 'ready' });
-    else await issuesSvc.updateStage(issue.id, 'comicPages', { pages: [{ pageNumber: 1, panels: [] }], status: 'ready' });
+    else if (production === 'page layout') await issuesSvc.updateStage(issue.id, 'comicPages', { pages: [{ pageNumber: 1, panels: [] }], status: 'ready' });
+    else await issuesSvc.updateStage(issue.id, 'comicPages', { backCover: { proofImage: { filename: 'back-cover.png' } } });
     const produced = await issuesSvc.getIssue(issue.id);
     stageRunnerSpy = vi.fn(async () => ({ content: { episodes: [{
       resolves: ['f1'], seasonNumber: season.number, episodeNumber: issue.number,
