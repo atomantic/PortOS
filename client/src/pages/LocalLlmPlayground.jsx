@@ -369,15 +369,20 @@ export default function LocalLlmPlayground() {
     setSelectedTargets([{ backend: installedTargets[0].backend, modelId: installedTargets[0].modelId }]);
   }, [installedTargets, selectedTargets.length]);
 
-  // With nothing selected — no installed models, a stale URL target that was
-  // dropped, or every compare target deselected — the run can't proceed, so the
-  // narrow disclosure opens on the model list (or on the "no models installed"
-  // message) instead of collapsing the prerequisite out of sight. `modelsOpen`
-  // is deliberately not a dependency: closing it by hand must not re-open it.
+  // Nothing is selectable — the install has no local models, or none that pass
+  // the hardware filter — so the narrow disclosure opens on that empty state
+  // instead of collapsing the prerequisite out of sight.
+  //
+  // Gated on the INSTALLED list, not on the selection: with models present the
+  // auto-select effect above fills an empty selection in the same flush, so
+  // keying on the momentarily-empty selection would open the inventory on every
+  // visit that carries no URL target and never close it again — which is the
+  // regression this page is being fixed for. `modelsOpen` is deliberately not a
+  // dependency: closing the empty state by hand must not re-open it.
   useEffect(() => {
-    if (loadingStatus || selectedTargets.length > 0) return;
+    if (loadingStatus || installedTargets.length > 0) return;
     setModelsOpen(true);
-  }, [loadingStatus, selectedTargets.length]);
+  }, [installedTargets.length, loadingStatus]);
 
   const selectedKeys = useMemo(() => new Set(selectedTargets.map(localLlmTargetKey)), [selectedTargets]);
   // `/api/ps` reports what's resident but not which model is mid-generation, so

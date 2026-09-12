@@ -17,8 +17,8 @@ vi.mock('../components/ui/Toast', () => ({
 import LocalLlmPlayground from './LocalLlmPlayground';
 import { getLoadedLlmModels, getLocalLlmCatalog, getLocalLlmStatus, streamLocalLlmTest } from '../services/api';
 
-const renderPlayground = () => render(
-  <MemoryRouter initialEntries={['/local-llm/playground?backend=ollama&model=command-r-plus%3A104b']}>
+const renderPlayground = (entry = '/local-llm/playground?backend=ollama&model=command-r-plus%3A104b') => render(
+  <MemoryRouter initialEntries={[entry]}>
     <LocalLlmPlayground />
   </MemoryRouter>,
 );
@@ -93,6 +93,20 @@ describe('LocalLlmPlayground task order', () => {
     const advanced = advancedToggle();
     expect(prompt.compareDocumentPosition(run) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(run.compareDocumentPosition(advanced) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it('stays collapsed when the first model is auto-selected from a URL carrying no target', async () => {
+    // The ⌘K / sidebar entry path: no backend+model params, so the selection is
+    // empty on the render where loading finishes and the auto-select effect
+    // fills it in the same flush. Keying the disclosure off that momentarily
+    // empty selection would leave the inventory expanded here — the exact
+    // above-the-fold regression being fixed.
+    renderPlayground('/local-llm/playground');
+
+    await waitFor(() => expect(modelsToggle().textContent).toContain('command-r-plus:104b'));
+    expect(modelsToggle()).toHaveAttribute('aria-expanded', 'false');
+    expect(modelsPanelCollapsed()).toBe(true);
+    expect(screen.getByRole('button', { name: 'Run chat' }).disabled).toBe(false);
   });
 
   it('keeps the selection and the prompt text across opening and closing the picker', async () => {
