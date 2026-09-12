@@ -735,6 +735,14 @@ describe('dumpPostgres status classification', () => {
 
 describe('restorePostgres', () => {
   let restorePostgres;
+  const mockLegacyDumpRead = (sql = 'CREATE TABLE a (...);\n') => {
+    vi.spyOn(fs, 'readFile').mockImplementation(async (path) => {
+      if (String(path).endsWith('manifest.json')) {
+        throw Object.assign(new Error('missing'), { code: 'ENOENT' });
+      }
+      return sql;
+    });
+  };
   beforeEach(async () => {
     vi.clearAllMocks();
     // clearAllMocks does not undo stubEnv — a PGPASSWORD stub from a failed
@@ -771,7 +779,7 @@ describe('restorePostgres', () => {
 
   it('dry-run reports size/tableCount without spawning psql', async () => {
     vi.spyOn(fs, 'stat').mockResolvedValue({ size: 4096, isFile: () => true });
-    vi.spyOn(fs, 'readFile').mockResolvedValue('CREATE TABLE a (...);\n');
+    mockLegacyDumpRead();
     const result = await restorePostgres('/dest', '2026-06-05T00-00-00', { dryRun: true });
     expect(result.status).toBe('ok');
     expect(result.dryRun).toBe(true);
@@ -782,7 +790,7 @@ describe('restorePostgres', () => {
 
   it('refuses a real restore when PG is not connected', async () => {
     vi.spyOn(fs, 'stat').mockResolvedValue({ size: 4096, isFile: () => true });
-    vi.spyOn(fs, 'readFile').mockResolvedValue('CREATE TABLE a (...);\n');
+    mockLegacyDumpRead();
     checkHealth.mockResolvedValue({ connected: false, hasSchema: false });
     const result = await restorePostgres('/dest', '2026-06-05T00-00-00', { dryRun: false });
     expect(result).toEqual({ status: 'skipped', reason: 'not_configured' });
@@ -798,7 +806,7 @@ describe('restorePostgres', () => {
 
   it('drains verbose psql output so progress cannot stall on pipe backpressure', async () => {
     vi.spyOn(fs, 'stat').mockResolvedValue({ size: 4096, isFile: () => true });
-    vi.spyOn(fs, 'readFile').mockResolvedValue('CREATE TABLE a (...);\n');
+    mockLegacyDumpRead();
     checkHealth.mockResolvedValue({ connected: true, hasSchema: true });
     let child;
     spawn.mockImplementationOnce((_bin, _args, options) => {
@@ -826,7 +834,7 @@ describe('restorePostgres', () => {
 
   it('real restore returns failed/restore_error on non-zero psql exit', async () => {
     vi.spyOn(fs, 'stat').mockResolvedValue({ size: 4096, isFile: () => true });
-    vi.spyOn(fs, 'readFile').mockResolvedValue('CREATE TABLE a (...);\n');
+    mockLegacyDumpRead();
     checkHealth.mockResolvedValue({ connected: true, hasSchema: true });
     const proc = fakeProc();
     spawn.mockReturnValue(proc);
@@ -899,37 +907,24 @@ describe('restorePostgres', () => {
     expect(result.tableCount).toBe(1);
   });
 
-  // A manifest.json that is PRESENT but unparseable reads the same as absent:
-  // readJSONFile returns its `null` default, so there is no expected hash to
-  // compare against and verification is skipped rather than hard-failing.
-  // Pinning that here so a future "throw on corrupt manifest" change is a
-  // deliberate decision instead of a silent behavior swap.
-  it('skips verification (does not throw) when manifest.json is malformed JSON', async () => {
+  it.each([
+    ['malformed JSON', '{ "files": { '],
+    ['a non-ENOENT read failure', Object.assign(new Error('media I/O failure'), { code: 'EIO' })],
+  ])('refuses dry-run and real restore when manifest.json has %s', async (_case, manifestResult) => {
     vi.spyOn(fs, 'stat').mockResolvedValue({ size: DUMP_SQL.length, isFile: () => true });
-    vi.spyOn(fs, 'readFile').mockImplementation(async (p) => (
-      String(p).endsWith('manifest.json') ? '{ "files": { ' : DUMP_SQL
-    ));
-    const result = await restorePostgres('/dest', '2026-06-05T00-00-00', { dryRun: true });
-    expect(result).toEqual({ status: 'ok', dryRun: true, sizeBytes: DUMP_SQL.length, tableCount: 1 });
-  });
-
-  // A malformed manifest must not become a free pass for a real restore either:
-  // the replay still happens (verification skipped), so assert it reaches psql
-  // rather than silently returning skipped.
-  it('still runs a real restore when manifest.json is malformed JSON', async () => {
-    vi.spyOn(fs, 'stat').mockResolvedValue({ size: DUMP_SQL.length, isFile: () => true });
-    vi.spyOn(fs, 'readFile').mockImplementation(async (p) => (
-      String(p).endsWith('manifest.json') ? 'not json at all' : DUMP_SQL
-    ));
+    vi.spyOn(fs, 'readFile').mockImplementation(async (p) => {
+      if (!String(p).endsWith('manifest.json')) return DUMP_SQL;
+      if (manifestResult instanceof Error) throw manifestResult;
+      return manifestResult;
+    });
     checkHealth.mockResolvedValue({ connected: true, hasSchema: true });
-    const proc = fakeProc();
-    spawn.mockReturnValue(proc);
-    const p = restorePostgres('/dest', '2026-06-05T00-00-00', { dryRun: false });
-    await flush();
-    proc.emit('close', 0);
-    const result = await p;
-    expect(result.status).toBe('ok');
-    expect(spawn).toHaveBeenCalledTimes(1);
+
+    await expect(restorePostgres('/dest', '2026-06-05T00-00-00', { dryRun: true }))
+      .resolves.toEqual({ status: 'failed', reason: 'manifest_unreadable' });
+    await expect(restorePostgres('/dest', '2026-06-05T00-00-00', { dryRun: false }))
+      .resolves.toEqual({ status: 'failed', reason: 'manifest_unreadable' });
+    expect(checkHealth).not.toHaveBeenCalled();
+    expect(spawn).not.toHaveBeenCalled();
   });
 
   // psql missing from the host (ENOENT) surfaces as a spawn 'error' event, not a
@@ -937,7 +932,7 @@ describe('restorePostgres', () => {
   // restore UI would hang forever — assert it resolves as a structured failure.
   it('resolves failed/restore_error when the psql spawn emits an error event', async () => {
     vi.spyOn(fs, 'stat').mockResolvedValue({ size: 4096, isFile: () => true });
-    vi.spyOn(fs, 'readFile').mockResolvedValue('CREATE TABLE a (...);\n');
+    mockLegacyDumpRead();
     checkHealth.mockResolvedValue({ connected: true, hasSchema: true });
     const proc = fakeProc();
     spawn.mockReturnValue(proc);
@@ -955,7 +950,7 @@ describe('restorePostgres', () => {
     vi.useFakeTimers();
     try {
       vi.spyOn(fs, 'stat').mockResolvedValue({ size: 4096, isFile: () => true });
-      vi.spyOn(fs, 'readFile').mockResolvedValue('CREATE TABLE a (...);\n');
+      mockLegacyDumpRead();
       checkHealth.mockResolvedValue({ connected: true, hasSchema: true });
       const proc = fakeProc();
       spawn.mockReturnValue(proc);
@@ -980,7 +975,7 @@ describe('restorePostgres', () => {
     vi.useFakeTimers();
     try {
       vi.spyOn(fs, 'stat').mockResolvedValue({ size: 4096, isFile: () => true });
-      vi.spyOn(fs, 'readFile').mockResolvedValue('CREATE TABLE a (...);\n');
+      mockLegacyDumpRead();
       checkHealth.mockResolvedValue({ connected: true, hasSchema: true });
       const proc = fakeProc();
       spawn.mockReturnValue(proc);
@@ -1006,7 +1001,7 @@ describe('restorePostgres', () => {
   it('passes --single-transaction and ON_ERROR_STOP=1 with the default PGPASSWORD', async () => {
     vi.stubEnv('PGPASSWORD', '');
     vi.spyOn(fs, 'stat').mockResolvedValue({ size: 4096, isFile: () => true });
-    vi.spyOn(fs, 'readFile').mockResolvedValue('CREATE TABLE a (...);\n');
+    mockLegacyDumpRead();
     checkHealth.mockResolvedValue({ connected: true, hasSchema: true });
     const proc = fakeProc();
     spawn.mockReturnValue(proc);
@@ -1026,7 +1021,7 @@ describe('restorePostgres', () => {
   it('prefers an explicit PGPASSWORD over the portos default', async () => {
     vi.stubEnv('PGPASSWORD', 'from-env');
     vi.spyOn(fs, 'stat').mockResolvedValue({ size: 4096, isFile: () => true });
-    vi.spyOn(fs, 'readFile').mockResolvedValue('CREATE TABLE a (...);\n');
+    mockLegacyDumpRead();
     checkHealth.mockResolvedValue({ connected: true, hasSchema: true });
     const proc = fakeProc();
     spawn.mockReturnValue(proc);

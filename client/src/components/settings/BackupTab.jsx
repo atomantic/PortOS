@@ -204,9 +204,12 @@ export function BackupTab() {
       return;
     }
     if (preview.status !== 'ok') {
-      toast.error(preview.reason === 'manifest_mismatch'
+      const message = preview.reason === 'manifest_mismatch'
         ? 'Snapshot dump failed integrity verification'
-        : `DB restore unavailable: ${preview.reason || 'unknown'}`);
+        : preview.reason === 'manifest_unreadable'
+          ? 'Snapshot verification metadata could not be read. Choose another snapshot or repair the backup media before retrying.'
+          : `DB restore unavailable: ${preview.reason || 'unknown'}`;
+      toast.error(message);
       return;
     }
     setRestorePreview(preview);
