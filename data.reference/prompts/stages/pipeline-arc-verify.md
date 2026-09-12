@@ -89,9 +89,25 @@ flagging any entity as ungrounded.
 {{#arcSpineOnly}}
 This is the pre-episode **arc-spine checkpoint**. Judge the protected premise,
 active principals, whole-series dramatic engine, character causality, and
-volume allocation. Episode arrays are intentionally empty: do not flag missing
+volume allocation. The editable tree's episode arrays are intentionally empty: do not flag missing
 episodes, episode arc roles, or episode-level continuity. The spine must be safe
-to expand before episode generation begins.
+to expand before further episode generation begins.
+{{#arcSpineHasEpisodePlans}}
+
+### Existing issue plans — read-only references
+
+This series already has the authored issue plans below. Use them to resolve
+what a summary omits: an event present in an issue is not missing from the
+story. If the spine needs to state that event, identify the summary gap and
+recommend carrying up the existing event, at its existing issue number, without
+inventing a replacement. Judge the spine, not these issue plans; leave repairs
+to their own content for the later full-arc gate. Draft prose, expanded beats
+and artwork are outside this reference set.
+
+```json
+{{spineEpisodePlansJson}}
+```
+{{/arcSpineHasEpisodePlans}}
 {{/arcSpineOnly}}
 
 ## What to look for
