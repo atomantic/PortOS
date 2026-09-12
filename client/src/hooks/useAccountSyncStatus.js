@@ -26,12 +26,12 @@ function outcome(result, label, successText) {
 }
 
 /** One per-account cycle joins manual HTTP and socket terminal notifications. */
-export function useAccountSyncStatus({ eventPrefix, label, successText, onRefresh, onStart, onTerminal }) {
+export function useAccountSyncStatus({ eventPrefix, label, successText, onRefresh, onStart, onTerminal, isStandaloneCompletion }) {
   const [syncing, setSyncing] = useState({});
   const mounted = useMounted();
   const cycles = useRef(new Map());
   const callbacks = useRef({});
-  callbacks.current = { label, successText, onRefresh, onStart, onTerminal };
+  callbacks.current = { label, successText, onRefresh, onStart, onTerminal, isStandaloneCompletion };
 
   const begin = useCallback((accountId, manual = false) => {
     const cycle = { awaitingStart: manual, settled: false };
@@ -41,20 +41,23 @@ export function useAccountSyncStatus({ eventPrefix, label, successText, onRefres
     return cycle;
   }, []);
 
-  const finish = useCallback((accountId, result, expectedCycle) => {
+  const finish = useCallback((accountId, result, expectedCycle, standalone = false) => {
     if (!mounted.current) return;
     let cycle = cycles.current.get(accountId);
     if (expectedCycle && cycle !== expectedCycle) return;
-    if (cycle?.settled) return;
-    if (!cycle) {
+    if (!standalone && cycle?.settled) return;
+    if (!standalone && !cycle) {
       cycle = {};
       cycles.current.set(accountId, cycle);
     }
-    cycle.settled = true;
+    if (!standalone) cycle.settled = true;
     const current = callbacks.current;
     const terminal = outcome(result, current.label, current.successText);
-    setSyncing(prev => ({ ...prev, [accountId]: terminal.auth ? 'auth-required' : null }));
-    current.onTerminal?.(accountId);
+    // Standalone pushes notify independently and cannot settle a manual sync.
+    if (!standalone) {
+      setSyncing(prev => ({ ...prev, [accountId]: terminal.auth ? 'auth-required' : null }));
+      current.onTerminal?.(accountId);
+    }
     toast[terminal.type](terminal.text);
     if (terminal.refresh) current.onRefresh?.();
   }, [mounted]);
@@ -63,11 +66,13 @@ export function useAccountSyncStatus({ eventPrefix, label, successText, onRefres
     const started = ({ accountId }) => {
       const cycle = cycles.current.get(accountId);
       // A server start acknowledges the manual cycle; it must not orphan its
-      // pending HTTP response. Later starts open a fresh notification cycle.
-      if (cycle?.awaitingStart && !cycle.settled) cycle.awaitingStart = false;
+      // pending HTTP response, or reopen it if HTTP settled first. Later starts
+      // open a fresh notification cycle.
+      if (cycle?.awaitingStart) cycle.awaitingStart = false;
       else begin(accountId);
     };
-    const completed = ({ accountId, ...result }) => finish(accountId, result);
+    const completed = ({ accountId, ...result }) =>
+      finish(accountId, result, undefined, callbacks.current.isStandaloneCompletion?.(result));
     const failed = ({ accountId, error }) => finish(accountId, { status: 'error', error: error ?? 'unknown error' });
     const authRequired = ({ accountId }) => finish(accountId, { status: 'auth-required' });
     const handlers = { started, completed, failed, 'auth-required': authRequired };

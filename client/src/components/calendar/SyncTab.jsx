@@ -26,6 +26,8 @@ export default function SyncTab({ accounts, onRefresh }) {
     label: 'Calendar sync',
     successText: ({ newEvents }) => `Calendar sync complete: ${newEvents ?? 0} events`,
     onRefresh,
+    // Direct Google pushes carry calendarId and have no started event.
+    isStandaloneCompletion: ({ calendarId }) => Boolean(calendarId),
     onStart: clearProgress,
     onTerminal: clearProgress,
   });

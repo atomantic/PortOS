@@ -57,15 +57,35 @@ describe('Calendar sync lifecycle', () => {
     render(<SyncTab accounts={[account]} onRefresh={vi.fn()} />);
     fireEvent.click(syncButton());
     await waitFor(() => expect(syncButton()).toBeEnabled());
+    emit('started'); // The socket can deliver its start after HTTP settled.
+    expect(syncButton()).toBeEnabled();
     expect(toast.warning).toHaveBeenCalledWith(expect.stringContaining('no usable token'));
     expect(api.syncCalendarAccount).toHaveBeenCalledWith(account.id, { silent: true });
 
     api.syncCalendarAccount.mockResolvedValue({ status: 'success', newEvents: 4 });
     fireEvent.click(syncButton());
-    emit('started');
     await waitFor(() => expect(toast.success).toHaveBeenCalledTimes(1));
+    emit('started');
+    expect(syncButton()).toBeEnabled();
     emit('completed', { status: 'success', newEvents: 4 });
     expect(toast.success).toHaveBeenCalledTimes(1);
+  });
+
+  it('reports repeated standalone Google pushes without settling an active manual sync', async () => {
+    const onRefresh = vi.fn();
+    render(<SyncTab accounts={[account]} onRefresh={onRefresh} />);
+    emit('completed', { calendarId: 'work', status: 'success', newEvents: 1 });
+    emit('completed', { calendarId: 'work', status: 'success', newEvents: 2 });
+    expect(toast.success).toHaveBeenCalledTimes(2);
+    expect(onRefresh).toHaveBeenCalledTimes(2);
+    expect(syncButton()).toBeEnabled();
+    emit('started');
+    emit('completed', { calendarId: 'work', status: 'success', newEvents: 3 });
+    expect(screen.queryByRole('button', { name: 'Sync' })).toBeNull();
+    emit('completed', { status: 'success', newEvents: 4 });
+    expect(syncButton()).toBeEnabled();
+    expect(toast.success).toHaveBeenLastCalledWith('Calendar sync complete: 4 events');
+    await waitFor(() => expect(api.getCalendarTokenStatus).toHaveBeenCalled());
   });
 
   it('ignores an older HTTP result after a newer socket cycle starts', async () => {

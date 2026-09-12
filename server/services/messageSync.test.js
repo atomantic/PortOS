@@ -446,7 +446,7 @@ describe('syncAccount', () => {
     syncPlaywright.mockResolvedValue([]);
     updateSyncStatus.mockResolvedValue();
 
-    const result = await syncAccount(VALID_UUID, mockIo);
+    await syncAccount(VALID_UUID, mockIo);
 
     expect(syncPlaywright).toHaveBeenCalled();
   });
