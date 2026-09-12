@@ -50,8 +50,10 @@ export default function TabPills({
     .map((tab, index) => (tab.disabled ? null : index))
     .filter((index) => index !== null);
 
+  const activeIndex = visibleTabs.findIndex((t) => t.id === activeTab);
+
+  // Fresh tab arrays and live counts must not pull the page back to the bar.
   useEffect(() => {
-    const activeIndex = visibleTabs.findIndex((t) => t.id === activeTab);
     if (activeIndex !== -1 && tabRefs.current[activeIndex]?.scrollIntoView) {
       tabRefs.current[activeIndex].scrollIntoView({
         behavior: 'smooth',
@@ -59,7 +61,7 @@ export default function TabPills({
         inline: 'nearest',
       });
     }
-  }, [activeTab, visibleTabs]);
+  }, [activeTab, activeIndex, variant]);
 
   const handleTabKeyDown = (event, index) => {
     if (!['ArrowRight', 'ArrowDown', 'ArrowLeft', 'ArrowUp', 'Home', 'End'].includes(event.key)) {
