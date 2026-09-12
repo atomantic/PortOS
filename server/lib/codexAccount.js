@@ -203,7 +203,9 @@ const normalizeWindow = (raw) => {
   const windowDurationMins = typeof raw.windowDurationMins === 'number' && Number.isFinite(raw.windowDurationMins)
     ? raw.windowDurationMins
     : null;
-  const resetsAt = trimmedString(raw.resetsAt);
+  const resetsAt = typeof raw.resetsAt === 'number' && Number.isFinite(raw.resetsAt) && Math.abs(raw.resetsAt) <= 8.64e12
+    ? new Date(raw.resetsAt * 1000).toISOString()
+    : trimmedString(raw.resetsAt);
   const limitName = trimmedString(raw.limitName);
   if (usedPercent === null && windowDurationMins === null && resetsAt === null) return null;
   return { usedPercent, windowDurationMins, resetsAt, limitName };

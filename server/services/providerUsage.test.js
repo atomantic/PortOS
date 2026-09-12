@@ -51,6 +51,9 @@ vi.mock('./usageFleetBilling.js', () => ({
   getApiBilledInstanceIds: vi.fn().mockResolvedValue([])
 }));
 
+vi.mock('./codexAppServer.js', () => ({ getCodexAccountReadiness: vi.fn() }));
+import { getCodexAccountReadiness } from './codexAppServer.js';
+
 import { mkdtemp, mkdir, writeFile, rm } from 'fs/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';
@@ -741,5 +744,44 @@ describe('TUI usage fetchers (via getProviderQuotas)', () => {
     const [afterFailure] = await getProviderQuotas();
     expect(afterFailure.fetchedAt).toBe(first.fetchedAt);
     vi.useRealTimers();
+  });
+});
+
+describe('Codex explicit quota refresh', () => {
+  let home;
+  beforeEach(async () => {
+    home = await mkdtemp(join(tmpdir(), 'portos-codex-refresh-'));
+    vi.stubEnv('CODEX_HOME', home);
+    getAllProviders.mockResolvedValue({ providers: [{ id: 'codex', enabled: true, type: 'cli', command: 'codex' }] });
+    getCodexAccountReadiness.mockReset();
+  });
+
+  afterEach(async () => {
+    vi.unstubAllEnvs();
+    await rm(home, { recursive: true, force: true });
+  });
+
+  it('reads live quota on refresh and publishes only the quota projection', async () => {
+    getCodexAccountReadiness.mockResolvedValue({
+      checkedAt: Date.now(), account: { planType: 'pro', email: 'private@example.com' },
+      rateLimits: { primary: { usedPercent: 27, windowDurationMins: 300, resetsAt: new Date(Date.now() + 3600000).toISOString() }, secondary: null },
+    });
+    const [card] = await getProviderQuotas({ family: 'codex', wait: 'fresh' });
+    expect(getCodexAccountReadiness).toHaveBeenCalledWith({ fresh: true });
+    expect(card).toMatchObject({ approximate: false, plan: 'pro', limits: [{ percentUsed: 27, periodHours: 5 }] });
+    expect(JSON.stringify(card)).not.toContain('private@example.com');
+    expect(card.note).toContain('Live Codex account quota');
+  });
+
+  it('keeps a successful empty quota empty and explains a failed live refresh', async () => {
+    getCodexAccountReadiness.mockResolvedValue({ checkedAt: Date.now(), rateLimits: { primary: null, secondary: null } });
+    const [empty] = await getProviderQuotas({ family: 'codex', wait: 'fresh' });
+    expect(empty).toMatchObject({ approximate: false, limits: [] });
+    getCodexAccountReadiness.mockResolvedValue({ rateLimits: null });
+    const [fallback] = await getProviderQuotas({ family: 'codex', wait: 'fresh' });
+    expect(fallback.note).toContain('Live Codex quota refresh unavailable');
+    getCodexAccountReadiness.mockClear();
+    await getProviderQuotas({ family: 'codex', wait: 'never' });
+    expect(getCodexAccountReadiness).not.toHaveBeenCalled();
   });
 });
