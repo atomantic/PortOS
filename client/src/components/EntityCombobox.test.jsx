@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { describe, it, expect, vi } from 'vitest';
 import { render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
@@ -11,6 +12,57 @@ const items = [
 ];
 
 describe('EntityCombobox', () => {
+  it('keeps keyboard focus and Enter aligned through navigation, filtering and reopening', async () => {
+    const user = userEvent.setup();
+    const onPick = vi.fn();
+    const onCreate = vi.fn();
+    const manyItems = Array.from({ length: 20 }, (_, i) => ({
+      id: String(i), name: `Option ${i}`,
+    }));
+    function Picker() {
+      const [value, setValue] = useState('Option');
+      return (
+        <EntityCombobox
+          items={manyItems}
+          value={value}
+          onChange={setValue}
+          onPick={onPick}
+          onCreate={onCreate}
+          inputId="keyboard-picker"
+        />
+      );
+    }
+    render(<Picker />);
+    const input = screen.getByRole('combobox');
+    const expectActive = (name) => {
+      expect(input).toHaveFocus();
+      expect(input).toHaveAttribute('aria-activedescendant', screen.getByRole('option', { name }).id);
+    };
+
+    await user.click(input);
+    await user.keyboard('{ArrowDown>20/}');
+    expectActive('Create “Option”');
+    await user.keyboard('{ArrowUp}');
+    expectActive('Option 19');
+    await user.keyboard('{Enter}');
+    expect(onPick).toHaveBeenCalledWith(manyItems[19]);
+    expect(screen.queryByRole('listbox')).toBeNull();
+
+    await user.keyboard('{ArrowDown}');
+    expectActive('Option 19');
+    await user.clear(input);
+    await user.type(input, 'Missing');
+    expectActive('Create “Missing”');
+    await user.keyboard('{Escape}');
+    expect(input).not.toHaveAttribute('aria-activedescendant');
+    await user.keyboard('{ArrowUp}');
+    expectActive('Create “Missing”');
+    await user.keyboard('{Enter}');
+    expect(onCreate).toHaveBeenCalledTimes(1);
+    expect(input).toHaveFocus();
+    expect(screen.queryByRole('listbox')).toBeNull();
+  });
+
   it('lists every item (except the selected one) when opened on a selection', async () => {
     const user = userEvent.setup();
     render(
