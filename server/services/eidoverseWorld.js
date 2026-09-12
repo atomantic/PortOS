@@ -45,7 +45,6 @@ import {
   projectedJiraTickets,
   projectedStorage,
 } from './eidoverseWorldSources.js';
-import { resolvePersistentMindChosenName } from '../lib/persistentMindChosenName.js';
 
 export { buildProjectionPlan, DEFAULT_EIDOVERSE_PROJECTION_RECIPE, projectedJiraTickets, projectedStorage };
 
@@ -409,8 +408,15 @@ function configFromState(state, presence = cosPresence) {
   };
 }
 
-function applyConfigDefaults(state, fallback) {
+function applyConfigDefaults(state, fallback, chosenCosId) {
   let changed = false;
+  if (chosenCosId && chosenCosId !== state.cos.id) {
+    rememberRetiredOwner(state, state.world, state.cos.id, { id: state.cos.id, avatar: state.cos.avatar });
+    state.cos.id = chosenCosId;
+    state.cos.role = null;
+    state.ownership.retired = state.ownership.retired.filter((entry) => !(entry.world === state.world && entry.id === chosenCosId));
+    changed = true;
+  }
   if (!validIdentity(state.human.name, '')) {
     state.human.name = fallback.name;
     state.human.source = fallback.source;
@@ -436,15 +442,16 @@ function applyConfigDefaults(state, fallback) {
 
 async function readEidoverseWorldConfig(self) {
   const state = await loadState();
-  applyConfigDefaults(state, fallbackIdentity(self));
+  applyConfigDefaults(state, fallbackIdentity(self), await resolveSuggestedCosId());
   return configFromState(state);
 }
 
 export async function ensureEidoverseWorldConfig() {
   const self = await ensureSelf();
   const fallback = fallbackIdentity(self);
+  const chosenCosId = await resolveSuggestedCosId();
   return mutateState((state) => {
-    applyConfigDefaults(state, fallback);
+    applyConfigDefaults(state, fallback, chosenCosId);
     return configFromState(state);
   });
 }
@@ -480,6 +487,7 @@ export async function updateEidoverseWorldConfig(patch) {
   return worldLock(async () => {
     const self = await ensureSelf();
     const fallback = fallbackIdentity(self);
+    const chosenCosId = await resolveSuggestedCosId();
     const fullReset = patch.reset?.scope === 'all';
     const updated = await mutateState((state) => {
       const previousPresenceConfig = {
@@ -504,6 +512,7 @@ export async function updateEidoverseWorldConfig(patch) {
           ? validIdentity(patch.cosId, DEFAULT_COS_ID)
           : DEFAULT_COS_ID;
       }
+      if (chosenCosId) state.cos.id = chosenCosId;
       if (Object.hasOwn(patch, 'cosAvatar')) state.cos.avatar = patch.cosAvatar || DEFAULT_COS_AVATAR;
       if (patch.cosEnabled !== undefined) state.cos.enabled = patch.cosEnabled;
       if (fullReset) {
@@ -1151,6 +1160,26 @@ async function seedHumanRoleAndCosGrant(config, { signal, verbIntervalMs } = {})
     }
     return { humanRole, cosRole };
   }).then((roles) => connection.close().then(async () => {
+    // Both names may change together. Reuse a recorded prior owner to grant
+    // the new identities before the normal cleanup retires that owner.
+    if (roles.humanRole !== 'owner' && roles.cosRole !== 'owner') {
+      const state = await loadState();
+      const previous = state.ownership.retired.find((entry) => entry.world === config.world && entry.actorId);
+      if (previous) {
+        const priorConnection = createWorldConnection({
+          world: config.world, id: previous.actorId,
+          avatar: previous.actorAvatar || config.cos.avatar, agent: true,
+        });
+        await priorConnection.waitForSnapshot({ signal }).then(async (snapshot) => {
+          if ((snapshot?.yourRights?.role || roleFromSnapshot(snapshot, previous.actorId)) !== 'owner') return;
+          for (const id of new Set([config.human.id, config.cos.id])) {
+            await sendPacedVerb(priorConnection, 'grant', { id, role: 'owner' }, { signal, pacing, verbIntervalMs });
+          }
+          roles.humanRole = 'owner';
+          roles.cosRole = 'owner';
+        }).finally(() => priorConnection.close());
+      }
+    }
     await rememberObservedRoles(roles);
     return roles;
   }), (error) => connection.close().then(() => { throw error; }));
@@ -1166,7 +1195,8 @@ async function ensureCosPresenceInternal({ fresh = false, signal, verbIntervalMs
       code: 'EIDOVERSE_COS_DISABLED',
     });
   }
-  if (fresh || (cosPresence && !cosPresence.connection.isOpen())) await closeCosPresenceInternal();
+  if (fresh || (cosPresence && (!cosPresence.connection.isOpen()
+    || cosPresence.connection.id !== config.cos.id || cosPresence.connection.world !== config.world))) await closeCosPresenceInternal();
   if (cosPresence?.connection.isOpen()) return cosPresence;
 
   await seedHumanRoleAndCosGrant(config, { signal, verbIntervalMs });
@@ -2023,8 +2053,8 @@ export async function sayInEidoverseWorld(text, { signal, verbIntervalMs } = {})
 
 async function resolveSuggestedCosId(currentCosId) {
   try {
-    const { readPersistentMindMemories } = await import('./persistentMindContext.js');
-    const name = resolvePersistentMindChosenName(await readPersistentMindMemories());
+    const { readPersistentMindName } = await import('./persistentMindContext.js');
+    const name = await readPersistentMindName();
     if (!name) return null;
     const clean = validIdentity(name, '');
     if (!clean || clean === currentCosId) return null;
