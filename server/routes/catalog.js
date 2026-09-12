@@ -71,7 +71,7 @@ router.get('/scraps/:id', asyncHandler(async (req, res) => {
 }));
 
 router.post('/scraps', asyncHandler(async (req, res) => {
-  validateRequest(catalogScrapCreateSchema, req.body);
+  const body = validateRequest(catalogScrapCreateSchema, req.body);
   // Scrap embedding was previously generated on create but never read — there is no
   // semantic-search route or "find similar scraps" UI. Removed pending a search endpoint
   // that justifies the LLM round-trip; the catalog_scraps.embedding column remains for
@@ -81,17 +81,17 @@ router.post('/scraps', asyncHandler(async (req, res) => {
   // unchanged — extraction (POST /scraps/:id/extract) transparently unions the
   // children.
   const scrap = await catalogDB.createChunkedScrap({
-    title: req.body.title,
-    rawText: req.body.rawText,
-    sourceKind: req.body.sourceKind,
-    metadata: req.body.metadata,
+    title: body.title,
+    rawText: body.rawText,
+    sourceKind: body.sourceKind,
+    metadata: body.metadata,
   });
   res.status(201).json({ scrap });
 }));
 
 router.patch('/scraps/:id', asyncHandler(async (req, res) => {
-  validateRequest(catalogScrapPatchSchema, req.body);
-  const updated = await catalogDB.updateScrap(req.params.id, req.body);
+  const body = validateRequest(catalogScrapPatchSchema, req.body);
+  const updated = await catalogDB.updateScrap(req.params.id, body);
   if (!updated) throw new ServerError('Scrap not found', { status: 404 });
   res.json(updated);
 }));
@@ -102,7 +102,7 @@ router.delete('/scraps/:id', asyncHandler(async (req, res) => {
 }));
 
 router.post('/scraps/:id/extract', asyncHandler(async (req, res) => {
-  validateRequest(catalogExtractRequestSchema, req.body || {});
+  const body = validateRequest(catalogExtractRequestSchema, req.body || {});
   const scrap = await catalogDB.getScrap(req.params.id);
   if (!scrap) throw new ServerError('Scrap not found', { status: 404 });
   // Extraction runs on the PARENT scrap (it unions across its child chunks).
@@ -113,7 +113,7 @@ router.post('/scraps/:id/extract', asyncHandler(async (req, res) => {
   }
   const draft = await extractIngredientsForScrap({
     scrapId: scrap.id,
-    providerOverride: req.body?.providerOverride,
+    providerOverride: body.providerOverride,
   });
   res.json({ scrap, draft });
 }));
@@ -161,7 +161,7 @@ router.post('/ingest/brain', asyncHandler(async (req, res) => {
 }));
 
 router.post('/scraps/:id/commit', asyncHandler(async (req, res) => {
-  validateRequest(catalogScrapCommitSchema, req.body);
+  const body = validateRequest(catalogScrapCommitSchema, req.body);
   const scrap = await catalogDB.getScrap(req.params.id);
   if (!scrap) throw new ServerError('Scrap not found', { status: 404 });
 
@@ -170,12 +170,12 @@ router.post('/scraps/:id/commit', asyncHandler(async (req, res) => {
   // stay OUTSIDE the transaction: they're network round-trips to the provider,
   // not DB writes, and a half-embedded batch is fine (failed embeds just land
   // as null `embedding` on the row, same as today).
-  const seeds = req.body.accepted.map((d) => ingredientEmbedSeed(d));
+  const seeds = body.accepted.map((d) => ingredientEmbedSeed(d));
   const embeds = await embedBatch(seeds);
 
   const created = await catalogDB.commitScrap({
     scrapId: scrap.id,
-    accepted: req.body.accepted,
+    accepted: body.accepted,
     embeds,
   });
 
@@ -264,22 +264,22 @@ router.get('/ingredients/:id/details', asyncHandler(async (req, res) => {
 }));
 
 router.post('/ingredients', asyncHandler(async (req, res) => {
-  validateRequest(catalogIngredientCreateSchema, req.body);
+  const body = validateRequest(catalogIngredientCreateSchema, req.body);
   const ing = await catalogDB.createIngredient({
-    type: req.body.type,
-    name: req.body.name,
-    payload: req.body.payload || {},
-    tags: req.body.tags || [],
-    ...(await embedIngredient(req.body)),
+    type: body.type,
+    name: body.name,
+    payload: body.payload || {},
+    tags: body.tags || [],
+    ...(await embedIngredient(body)),
   });
   res.status(201).json(ing);
 }));
 
 router.patch('/ingredients/:id', asyncHandler(async (req, res) => {
-  validateRequest(catalogIngredientPatchSchema, req.body);
+  const body = validateRequest(catalogIngredientPatchSchema, req.body);
   // `source`/`actor` are revision-history metadata, not ingredient columns —
   // strip them from the DB patch and forward as the revision context instead.
-  const { source, actor, ...fieldPatch } = req.body;
+  const { source, actor, ...fieldPatch } = body;
   // Re-embed only when name or payload changes — tag-only edits skip embed.
   let embeddingPatch = {};
   if (fieldPatch.name !== undefined || fieldPatch.payload !== undefined) {
@@ -359,14 +359,14 @@ router.delete('/ingredients/:id', asyncHandler(async (req, res) => {
 }));
 
 router.post('/ingredients/:id/link', asyncHandler(async (req, res) => {
-  validateRequest(catalogIngredientLinkSchema, req.body);
-  await catalogDB.linkIngredientToRef(req.params.id, req.body.refKind, req.body.refId, req.body.role);
+  const body = validateRequest(catalogIngredientLinkSchema, req.body);
+  await catalogDB.linkIngredientToRef(req.params.id, body.refKind, body.refId, body.role);
   res.status(201).json({ success: true });
 }));
 
 router.delete('/ingredients/:id/link', asyncHandler(async (req, res) => {
-  validateRequest(catalogIngredientLinkSchema, req.body);
-  await catalogDB.unlinkIngredientFromRef(req.params.id, req.body.refKind, req.body.refId, req.body.role);
+  const body = validateRequest(catalogIngredientLinkSchema, req.body);
+  await catalogDB.unlinkIngredientFromRef(req.params.id, body.refKind, body.refId, body.role);
   res.status(204).end();
 }));
 
@@ -405,25 +405,25 @@ router.get('/ingredients/:id/relations', asyncHandler(async (req, res) => {
 }));
 
 router.post('/ingredients/:id/relations', asyncHandler(async (req, res) => {
-  validateRequest(catalogRelationLinkSchema, req.body);
-  if (req.params.id === req.body.toId) {
+  const body = validateRequest(catalogRelationLinkSchema, req.body);
+  if (req.params.id === body.toId) {
     throw new ServerError('Cannot relate an ingredient to itself', { status: 400 });
   }
   // Both ends must exist — FK would reject anyway, but a 404 reads cleaner
   // than a raw FK violation and matches the link route's failure surface.
   const [from, to] = await Promise.all([
     catalogDB.getIngredient(req.params.id),
-    catalogDB.getIngredient(req.body.toId),
+    catalogDB.getIngredient(body.toId),
   ]);
   if (!from) throw new ServerError('Ingredient not found', { status: 404 });
   if (!to) throw new ServerError('Related ingredient not found', { status: 404 });
-  await catalogDB.linkIngredientRelation(req.params.id, req.body.toId, req.body.kind);
+  await catalogDB.linkIngredientRelation(req.params.id, body.toId, body.kind);
   res.status(201).json({ success: true });
 }));
 
 router.delete('/ingredients/:id/relations', asyncHandler(async (req, res) => {
-  validateRequest(catalogRelationLinkSchema, req.body);
-  await catalogDB.unlinkIngredientRelation(req.params.id, req.body.toId, req.body.kind);
+  const body = validateRequest(catalogRelationLinkSchema, req.body);
+  await catalogDB.unlinkIngredientRelation(req.params.id, body.toId, body.kind);
   res.status(204).end();
 }));
 
@@ -454,40 +454,40 @@ router.get('/ingredients/:id/media/missing', asyncHandler(async (req, res) => {
 }));
 
 router.post('/ingredients/:id/media', asyncHandler(async (req, res) => {
-  validateRequest(catalogMediaAttachSchema, req.body);
+  const body = validateRequest(catalogMediaAttachSchema, req.body);
   const ing = await catalogDB.getIngredient(req.params.id);
   if (!ing) throw new ServerError('Ingredient not found', { status: 404 });
   // Only IMAGE kinds resolve against the gallery today, so only they get the
   // existence guard — attaching an audio/video/document key (no library
   // resolver yet) stores the reference without a 422. The integrity endpoint
   // mirrors this scoping when reporting missing assets.
-  if (IMAGE_MEDIA_KINDS.has(req.body.kind) && !resolveImageInputPath(req.body.mediaKey)) {
-    throw new ServerError(`Media key "${req.body.mediaKey}" not found in the media library`, { status: 422 });
+  if (IMAGE_MEDIA_KINDS.has(body.kind) && !resolveImageInputPath(body.mediaKey)) {
+    throw new ServerError(`Media key "${body.mediaKey}" not found in the media library`, { status: 422 });
   }
-  const media = await catalogDB.attachMedia(req.params.id, req.body.mediaKey, req.body.kind, {
-    role: req.body.role ?? null,
-    caption: req.body.caption ?? null,
+  const media = await catalogDB.attachMedia(req.params.id, body.mediaKey, body.kind, {
+    role: body.role ?? null,
+    caption: body.caption ?? null,
   });
   res.status(201).json(media);
 }));
 
 router.post('/ingredients/:id/media/portrait', asyncHandler(async (req, res) => {
-  validateRequest(catalogPortraitSetSchema, req.body);
+  const body = validateRequest(catalogPortraitSetSchema, req.body);
   const ing = await catalogDB.getIngredient(req.params.id);
   if (!ing) throw new ServerError('Ingredient not found', { status: 404 });
-  if (!resolveImageInputPath(req.body.mediaKey)) {
-    throw new ServerError(`Media key "${req.body.mediaKey}" not found in the media library`, { status: 422 });
+  if (!resolveImageInputPath(body.mediaKey)) {
+    throw new ServerError(`Media key "${body.mediaKey}" not found in the media library`, { status: 422 });
   }
-  const media = await catalogDB.setPortraitMedia(req.params.id, req.body.mediaKey, {
-    role: req.body.role ?? null,
-    caption: req.body.caption ?? null,
+  const media = await catalogDB.setPortraitMedia(req.params.id, body.mediaKey, {
+    role: body.role ?? null,
+    caption: body.caption ?? null,
   });
   res.status(201).json(media);
 }));
 
 router.delete('/ingredients/:id/media', asyncHandler(async (req, res) => {
-  validateRequest(catalogMediaDetachSchema, req.body);
-  await catalogDB.detachMedia(req.params.id, req.body.mediaKey, req.body.kind);
+  const body = validateRequest(catalogMediaDetachSchema, req.body);
+  await catalogDB.detachMedia(req.params.id, body.mediaKey, body.kind);
   res.status(204).end();
 }));
 
@@ -514,8 +514,8 @@ router.post('/ingredients/:id/media/voice', asyncHandler(async (req, res) => {
 // or rolls back together so a malformed entry can't leave the catalog
 // half-populated.
 router.post('/bulk-import', asyncHandler(async (req, res) => {
-  validateRequest(catalogBulkImportSchema, req.body);
-  const { format, payload, defaults = {} } = req.body;
+  const body = validateRequest(catalogBulkImportSchema, req.body);
+  const { format, payload, defaults = {} } = body;
 
   // Parse → normalize → per-entry Zod validate BEFORE we open a transaction.
   // Reject the whole batch on any invalid entry; report the first failure
@@ -715,17 +715,17 @@ router.get('/sync', asyncHandler(async (req, res) => {
 }));
 
 router.post('/sync/apply', asyncHandler(async (req, res) => {
-  validateRequest(catalogSyncEnvelopeSchema, req.body);
+  const body = validateRequest(catalogSyncEnvelopeSchema, req.body);
   // applyRemoteChanges throws CatalogSyncVersionMismatchError (status 412)
   // when the peer is ahead on the `catalog` schema; centralized error
   // middleware translates `err.status` to the HTTP response.
-  const stats = await catalogSync.applyRemoteChanges(req.body);
+  const stats = await catalogSync.applyRemoteChanges(body);
   res.json(stats);
 }));
 
 router.post('/embeddings/backfill', asyncHandler(async (req, res) => {
-  validateRequest(catalogEmbeddingsBackfillSchema, req.body || {});
-  const limit = Math.min(Math.max(parseInt(req.body?.limit, 10) || 50, 1), 200);
+  const body = validateRequest(catalogEmbeddingsBackfillSchema, req.body || {});
+  const limit = body.limit ?? 50;
 
   // When `includeStale` is true, also re-embed rows whose stored
   // embedding_model differs from the current settings model — catches the
@@ -733,7 +733,7 @@ router.post('/embeddings/backfill', asyncHandler(async (req, res) => {
   // case. Resolved server-side so the client doesn't have to know the
   // current settings.
   let staleModel = null;
-  if (req.body?.includeStale === true) {
+  if (body.includeStale === true) {
     const { getEmbeddingsConfig } = await import('../services/embeddings.js');
     const cfg = await getEmbeddingsConfig();
     staleModel = cfg.model || null;
@@ -774,8 +774,8 @@ router.post('/embeddings/backfill', asyncHandler(async (req, res) => {
 // stuck install — without force the marker gates the walk and the endpoint
 // just reports the prior stats.
 router.post('/migration/rerun', asyncHandler(async (req, res) => {
-  validateRequest(catalogMigrationRerunSchema, req.body || {});
-  const result = await migrateBibleToCatalog({ force: req.body?.force === true });
+  const body = validateRequest(catalogMigrationRerunSchema, req.body || {});
+  const result = await migrateBibleToCatalog({ force: body.force === true });
   res.json(result);
 }));
 
