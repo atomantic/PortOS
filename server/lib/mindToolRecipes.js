@@ -141,7 +141,7 @@ export function validateMindToolRecipe(candidate, catalog) {
     const field = `steps.${index}`;
     if (earlier.has(step.id)) fail(`${field}.id`, 'step ids must be unique', step.id);
     const tool = catalog.find((entry) => entry.name === step.tool);
-    if (!tool || tool.policy.sideEffect !== 'read' || !tool.policy.scopes.includes('mind') || tool.name.startsWith('recipe.')) fail(`${field}.tool`, 'select a current canonical read tool in mind scope', step.id);
+    if (!tool || tool.policy.sideEffect !== 'read' || !tool.policy.scopes.includes('mind') || (tool.name.startsWith('recipe.') || tool.name.startsWith('mind.recipes.'))) fail(`${field}.tool`, 'select a current canonical read tool in mind scope', step.id);
     const contract = tool.input_schema;
     for (const required of contract.required || []) if (!Object.hasOwn(step.arguments, required)) fail(`${field}.arguments.${required}`, 'required argument is missing', step.id);
     for (const [name, binding] of Object.entries(step.arguments)) {
