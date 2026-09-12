@@ -69,7 +69,7 @@ import { EventEmitter } from 'events';
 import { createHash } from 'crypto';
 import { hostname } from 'os';
 import { PassThrough } from 'node:stream';
-import { spawn as spawnChild } from 'node:child_process';
+import { spawn as spawnChild, spawnSync } from 'node:child_process';
 import { spawn } from '../lib/childProcess.js';
 // Partial mock: only override spawn. Preserve execFile et al. because
 // backup.js transitively imports fileUtils.js, which promisifies execFile.
@@ -1482,7 +1482,13 @@ describe('restoreSnapshot manifest verification', () => {
     });
   });
 
-  it('restores differing bytes when size and mtime match through real rsync', async () => {
+  it('restores differing bytes when size and mtime match through real rsync', async context => {
+    // Windows CI does not provision MSYS rsync. Unix coverage remains mandatory;
+    // installed Windows rsync errors still fail this test rather than being hidden.
+    if (process.platform === 'win32' && spawnSync('rsync', ['--version']).error?.code === 'ENOENT') {
+      context.skip('Windows runner has no rsync executable; real rsync remains required on Linux/macOS.');
+      return;
+    }
     const relativePath = 'brain/example.json';
     const snapshotContent = '{"value":"old"}';
     const liveContent = '{"value":"new"}';

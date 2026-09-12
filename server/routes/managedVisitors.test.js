@@ -169,15 +169,19 @@ it('cancels an unknown pending admission by original scope, waits for its acknow
   expect(await shared.broker.cancelAdmission(auth, original)).toMatchObject({ confirmed: true, pending: false });
 });
 
-it('an unknown host admission outcome remains quarantined through the exact broker-supplied deadline', async () => {
+it('an unknown host admission outcome respects sent and possible pre-boot lease deadlines', async () => {
+  credentials = await shared.broker.provision(appId, { ...credentialInput, ttlMs: 600000 });
+  const bootBound = clock + 300000;
   const auth = await shared.broker.authenticate(credentials.credential);
   host.admit.mockRejectedValueOnce(new Error('timeout without acknowledgment'));
   await expect(shared.broker.admit(auth, admission)).rejects.toThrow(/timeout/);
   const original = { individualId, individualSessionId, worldId };
   expect(host.admit.mock.calls[0][1]).toEqual({ deadlineMs: clock + admission.ttlMs });
-  expect(await shared.broker.cancelAdmission(auth, original)).toMatchObject({ confirmed: false, pending: false, expiresAt: clock + admission.ttlMs });
+  expect(await shared.broker.cancelAdmission(auth, original)).toMatchObject({ confirmed: false, pending: false, expiresAt: bootBound });
   await expect(shared.broker.admit(auth, admission)).rejects.toThrow(/already/);
   clock += admission.ttlMs;
+  expect((await shared.broker.cancelAdmission(auth, original)).confirmed).toBe(false);
+  clock = bootBound;
   expect(await shared.broker.cancelAdmission(auth, original)).toMatchObject({ confirmed: true, pending: false });
 });
 
@@ -191,13 +195,35 @@ it('an unconfirmed leave revokes a pending action even while retaining its clean
   await expect(shared.broker.leave(auth, visit.sessionId, scope(visit))).rejects.toThrow(/unconfirmed/);
   release(); await expect(pending).rejects.toThrow(/revoked/);
 });
-it('an invalid host expiry cannot extend quarantine beyond the broker admission deadline', async () => {
+it('an invalid host expiry cannot extend quarantine beyond trusted admission and boot bounds', async () => {
+  credentials = await shared.broker.provision(appId, { ...credentialInput, ttlMs: 600000 });
+  const bootBound = clock + 300000;
   const auth = await shared.broker.authenticate(credentials.credential), normal = host.admit.getMockImplementation();
   host.admit.mockImplementationOnce(async body => ({ ...await normal(body), expiresAt: clock + 999999 }));
   host.leave.mockRejectedValue(new Error('offline'));
   await expect(shared.broker.admit(auth, admission)).rejects.toThrow(/expired/);
   const original = { individualId, individualSessionId, worldId };
-  expect((await shared.broker.cancelAdmission(auth, original)).expiresAt).toBe(clock + admission.ttlMs);
-  clock += admission.ttlMs;
+  expect((await shared.broker.cancelAdmission(auth, original)).expiresAt).toBe(bootBound);
+  clock = bootBound;
   expect((await shared.broker.cancelAdmission(auth, original)).confirmed).toBe(true);
+});
+
+// Restart deliberately reuses persisted credentials and the still-live host, not session maps.
+it('does not confirm unknown cleanup after restart before the maximum pre-boot lease expires', async () => {
+  credentials = await shared.broker.provision(appId, { ...credentialInput, ttlMs: 600000 });
+  const auth = await shared.broker.authenticate(credentials.credential);
+  const visit = await shared.broker.admit(auth, { ...admission, ttlMs: 300000 });
+  const rebooted = createManagedVisitorBroker({ path: join(directory, 'credentials.json'), getApp: async id => ({ id }), host, now: () => clock });
+  const original = { individualId, individualSessionId, worldId };
+  await expect(rebooted.leave(auth, visit.sessionId, scope(visit))).rejects.toThrow(/restart.*unconfirmed/);
+  expect(host.leave).not.toHaveBeenCalled();
+  expect(await rebooted.cancelAdmission(auth, original)).toMatchObject({ confirmed: false, pending: false, expiresAt: clock + 300000 });
+  await expect(rebooted.leave(auth, visit.sessionId, { ...scope(visit), individualId: 'outside' })).rejects.toThrow(/scope/);
+  clock += 299999;
+  expect((await rebooted.cancelAdmission(auth, original)).confirmed).toBe(false);
+  clock += 1;
+  expect((await rebooted.leave(auth, visit.sessionId, scope(visit))).status).toBe('left');
+  expect((await rebooted.cancelAdmission(auth, original)).confirmed).toBe(true);
+  clock -= 1;
+  await expect(rebooted.cancelAdmission(auth, original)).rejects.toThrow(/clock/);
 });

@@ -27,6 +27,12 @@ export function createManagedVisitorBroker({ path, getApp, host, now = Date.now 
   const queue = createFileWriteQueue(), sessions = new Map(), pendingAdmissions = new Map();
   const wallNow = now;
   let lastTime = wallNow();
+  if (!Number.isSafeInteger(lastTime) || lastTime < 0 || !Number.isSafeInteger(lastTime + 300000)) throw fail('Broker boot clock is invalid.');
+  const bootQuarantineUntil = lastTime + 300000;
+  const confirmedSessions = new Map(), confirmedScopes = new Map();
+  const originalScopeKey = scope => JSON.stringify([scope.appId, scope.individualId, scope.individualSessionId, scope.worldId]);
+  function remember(map, key, value) { map.set(key, value); if (map.size > 256) map.delete(map.keys().next().value); }
+  function unknownCleanupBound(scope) { return confirmedScopes.has(originalScopeKey(scope)) || time() >= bootQuarantineUntil ? null : bootQuarantineUntil; }
   function time() {
     const current = wallNow();
     if (!Number.isSafeInteger(current) || current < lastTime) {
@@ -68,7 +74,11 @@ export function createManagedVisitorBroker({ path, getApp, host, now = Date.now 
     sessions.set(session.id, session);
     const acknowledged = wallNow() >= (session.admissionDeadline ?? session.hostExpiresAt) || session.hostId !== null && await host.leave(session.hostId, session.scope)
       .then(result => result?.status === 'left' && result.sessionId === session.hostId && scopeKeys.every(key => result[key] === session.scope[key]), () => false);
-    if (acknowledged) sessions.delete(session.id);
+    if (acknowledged) {
+      sessions.delete(session.id);
+      remember(confirmedSessions, session.id, { ...session.scope });
+      if (session.provenAdmission) remember(confirmedScopes, originalScopeKey(session.scope), true);
+    }
     return acknowledged;
   }
   async function revokeSessions(appId) { await Promise.all([...sessions.values()].filter(s => s.scope.appId === appId).map(close)); }
@@ -130,9 +140,11 @@ export function createManagedVisitorBroker({ path, getApp, host, now = Date.now 
       session.expiresAt = Math.min(result.expiresAt, begin + ttlMs);
       const valid = session.expiresAt > time() && result.expiresAt <= time() + ttlMs;
       // Rotation while an admission is pending must not publish fresh authority from the old credential.
+      session.provenAdmission = valid;
       const current = await credential(auth).then(() => true, () => false);
       if (!valid || !current || attempt.canceled) throw fail('Admission expired or credential changed during negotiation.');
       sessions.set(session.id, session);
+      remember(confirmedScopes, originalScopeKey(session.scope), true);
       return { ...result, sessionId: session.id, expiresAt: session.expiresAt };
     })().catch(async error => { if (candidate) await close(candidate); throw error; })
       .finally(() => { if (pendingAdmissions.get(key) === attempt) pendingAdmissions.delete(key); });
@@ -169,9 +181,15 @@ export function createManagedVisitorBroker({ path, getApp, host, now = Date.now 
   }
 
   async function leave(auth, id, input) {
-    const request = visitorScopeSchema.parse(input); await credential(auth);
+    const request = visitorScopeSchema.parse(input), c = await credential(auth);
+    if (!c.individualIds.includes(request.individualId) || !c.worldIds.includes(request.worldId)) throw fail('Cleanup is outside the approved app scope.', 403);
     const session = sessions.get(id);
-    if (!session) return { version: 1, appId: auth.appId, ...request, sessionId: id, status: 'left' };
+    if (!session) {
+      const receipt = confirmedSessions.get(id);
+      if (receipt && scopeKeys.some(key => receipt[key] !== (key === 'appId' ? auth.appId : request[key]))) throw fail('Visitor cleanup scope mismatch.', 403);
+      if (!receipt && time() < bootQuarantineUntil) throw fail('Unknown cleanup after broker restart is unconfirmed until the maximum host lease deadline.');
+      return { version: 1, appId: auth.appId, ...request, sessionId: id, status: 'left' };
+    }
     if (session.scope.appId !== auth.appId || scopeKeys.some(key => (key === 'appId' ? auth.appId : request[key]) !== session.scope[key])) throw fail('Visitor cleanup scope mismatch.', 403);
     if (!await close(session)) throw fail('Host cleanup is unconfirmed; retain paused ownership until retry or expiry.');
     return { version: 1, appId: auth.appId, ...request, sessionId: id, status: 'left' };
@@ -184,8 +202,9 @@ export function createManagedVisitorBroker({ path, getApp, host, now = Date.now 
     await Promise.all([...sessions.values()].filter(session => matches(session.scope)).map(close));
     const pending = [...pendingAdmissions.values()].some(attempt => matches(attempt.scope));
     const unresolved = [...sessions.values()].filter(session => matches(session.scope));
-    return { version: 1, appId: auth.appId, ...request, confirmed: !pending && !unresolved.length, pending,
-      expiresAt: pending ? null : unresolved.length ? Math.max(...unresolved.map(session => session.admissionDeadline ?? session.hostExpiresAt)) : null };
+    const bootBound = unknownCleanupBound({ appId: auth.appId, ...request });
+    return { version: 1, appId: auth.appId, ...request, confirmed: !pending && !unresolved.length && bootBound === null, pending,
+      expiresAt: pending ? null : unresolved.length || bootBound !== null ? Math.max(bootBound ?? 0, ...unresolved.map(session => session.admissionDeadline ?? session.hostExpiresAt)) : null };
   }
   return { authenticate, provision, revoke, capabilities, admit, leave, cancelAdmission,
     listCredentials: async () => (await read()).credentials.map(publicCredential),
