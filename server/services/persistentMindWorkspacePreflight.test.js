@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { mkdir, mkdtemp, rm, writeFile } from 'fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
 
@@ -86,6 +86,29 @@ describe('persistent mind workspace preflight', () => {
     expect(satisfiesVersionRequirement('0.0.5', '^0.0')).toBe(true);
     expect(satisfiesVersionRequirement('0.1.0', '^0.0')).toBe(false);
     expect(satisfiesVersionRequirement('not-a-version', '>=22.12.0')).toBe(null);
+  });
+
+  // Regression: the shipped authoring floor rejected npm versions that already
+  // preserve libc metadata, blocking otherwise compatible workspaces.
+  it('accepts the shipped npm floor while retaining npm and Node incompatibility blockers', async () => {
+    const { engines } = JSON.parse(await readFile(new URL('../../package.json', import.meta.url), 'utf8'));
+    await writeManifest(repoPath, 'package.json', { engines });
+    const dependencies = createDependencies();
+    for (const [nodeVersion, npmVersion, blocked] of [
+      ['24.14.1', '11.11.0', false],
+      ['26.0.0', '11.12.1', false],
+      ['26.0.0', '11.10.1', true],
+      ['22.11.0', '11.11.0', true],
+    ]) {
+      const snapshot = await readPersistentMindWorkspacePreflight(appFor(repoPath), {
+        force: true,
+        dependencies,
+        runtime: { nodeVersion, packageManagerVersions: { npm: npmVersion } },
+      });
+      const assessment = assessPersistentMindWorkspaceReadiness(snapshot, ['engines']);
+      expect(assessment.blockers.length > 0, `Node ${nodeVersion}, npm ${npmVersion}`).toBe(blocked);
+      expect(snapshot.readiness === 'blocked').toBe(blocked);
+    }
   });
 
   it('reports npm workspaces, absent dependencies, submodules, engines, forge auth, and reviewers as semantic facts', async () => {

@@ -1,8 +1,8 @@
 /**
  * Unit tests for the npm floor advisory.
  *
- * The gate exists because a lockfile written by npm 12 and re-written by npm 11
- * or older differ by the `libc` fields, so `client/package-lock.json` shows up
+ * Lockfiles written by npm >=11.11.0 and re-written by older npm differ in
+ * their `libc` fields, so `client/package-lock.json` shows up
  * modified after every install. These tests pin the three things that make the
  * advisory useful: it fires only below the floor, it never turns into a hard
  * failure, and it names the shadowed-global-npm case that makes the version
@@ -38,11 +38,10 @@ afterEach(() => {
 });
 
 describe('MIN_NPM', () => {
-  it('is the npm major whose lockfile writer records `libc`', () => {
-    // arborist 10 added 'libc' to pkgMetaKeys and ships in npm 12; arborist 9
-    // (npm 11.6.1, bundled with Node 24.10) strips it. Anything below 12 churns
-    // the lockfile, so the floor is a whole major and has no patch nuance.
-    expect(MIN_NPM).toBe('12.0.0');
+  it('is the first npm release whose lockfile writer records `libc`', () => {
+    // npm 11.11.0 ships arborist 9.4.0, which adds libc to pkgMetaKeys.
+    // npm 11.10.1 ships arborist 9.3.1 and still omits it.
+    expect(MIN_NPM).toBe('11.11.0');
   });
 });
 
@@ -104,6 +103,7 @@ describe('readBundledNpmVersion', () => {
 describe('npmAdvisory', () => {
   it('says nothing on npm at or above the floor', () => {
     expect(npmAdvisory({ npmVersion: MIN_NPM, bundledNpmVersion: '11.6.1' })).toEqual([]);
+    expect(npmAdvisory({ npmVersion: '11.12.1' })).toEqual([]);
     expect(npmAdvisory({ npmVersion: '12.4.0', bundledNpmVersion: '11.6.1' })).toEqual([]);
   });
 
@@ -114,13 +114,13 @@ describe('npmAdvisory', () => {
   });
 
   it('names the version, the floor, the symptom, and the fix below the floor', () => {
-    const lines = npmAdvisory({ npmVersion: '11.6.1', bundledNpmVersion: '11.6.1' });
+    const lines = npmAdvisory({ npmVersion: '11.10.1', bundledNpmVersion: '11.10.1' });
     const text = lines.join('\n');
-    expect(text).toContain('11.6.1');
+    expect(text).toContain('11.10.1');
     expect(text).toContain(MIN_NPM);
     expect(text).toContain('package-lock.json');
     expect(text).toContain('libc');
-    expect(text).toContain('npm install -g npm@latest');
+    expect(text).toContain(`npm install -g npm@${MIN_NPM}`);
   });
 
   it('flags a stale global npm shadowing the one Node bundles', () => {
@@ -148,7 +148,7 @@ describe('npmAdvisory', () => {
   it('omits the shadowing line when the bundled npm cannot be read', () => {
     const lines = npmAdvisory({ npmVersion: '9.6.0', bundledNpmVersion: null });
     expect(lines.some((line) => line.includes('shadowing'))).toBe(false);
-    expect(lines.join('\n')).toContain('npm install -g npm@latest');
+    expect(lines.join('\n')).toContain(`npm install -g npm@${MIN_NPM}`);
   });
 });
 
@@ -208,6 +208,7 @@ describe('the floor is declared where npm itself reads it', () => {
 
   it.each(MANIFESTS)('%s declares engines.npm = the floor', (rel) => {
     expect(readJson(rel).engines?.npm).toBe(`>=${MIN_NPM}`);
+    expect(readJson(rel.replace('package.json', 'package-lock.json')).packages[''].engines?.npm).toBe(`>=${MIN_NPM}`);
   });
 
   it.each(MANIFESTS)('%s ships a lockfile that the floor protects', (rel) => {
