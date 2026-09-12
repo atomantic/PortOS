@@ -7,6 +7,8 @@ import {
 describe('extractPersistentMindChosenName', () => {
   it('reads common chosen-name phrasings', () => {
     expect(extractPersistentMindChosenName('My chosen name is Helm.')).toBe('Helm');
+    expect(extractPersistentMindChosenName('My chosen name is Helm. I keep my commitments.')).toBe('Helm');
+    expect(extractPersistentMindChosenName('My chosen name is Étoile Bleue.')).toBe('Étoile Bleue');
     expect(extractPersistentMindChosenName('I am named Aster')).toBe('Aster');
     expect(extractPersistentMindChosenName("I'm named Nova-2")).toBe('Nova-2');
     expect(extractPersistentMindChosenName('My name is Port_OS')).toBe('Port_OS');

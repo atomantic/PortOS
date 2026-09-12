@@ -35,7 +35,7 @@ const RESERVED = new Set(['world', '*']);
  */
 export function extractPersistentMindChosenName(text) {
   if (typeof text !== 'string' || !text.trim()) return null;
-  const exact = text.trim().match(/^My chosen name is (.+?)\.?$/iu)?.[1];
+  const exact = text.trim().match(/^My chosen name is ([^.!?;\r\n]+)\.?$/iu)?.[1];
   if (exact && !RESERVED.has(exact.toLowerCase()) && persistentMindChosenNameSchema.safeParse(exact).success) return exact;
   for (const pattern of CHOSEN_NAME_PATTERNS) {
     const match = text.match(pattern);
