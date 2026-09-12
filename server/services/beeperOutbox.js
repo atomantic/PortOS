@@ -116,6 +116,7 @@ let breaker = { tripped: false, reason: null, trippedAt: null };
 const pendingConfirmations = new Map();
 const localTransitions = new Map();
 const activeSends = new Set();
+const reconciliationOperations = new Map();
 export const PERSISTENCE_RETRY_DELAYS_MS = Object.freeze([1000, 2000, 4000]);
 const PERSISTENCE_RECOVERY_MESSAGE = 'Delivery unconfirmed: saving the send outcome failed. Check delivery to reconcile without sending again.';
 
@@ -250,7 +251,7 @@ function registerSendSuccess() {
 const ENTRY_COLUMNS = `id, conversation_id AS "conversationId", chat_id AS "chatId", body, state,
   pending_message_id AS "pendingMessageId", message_id AS "messageId",
   error_code AS "errorCode", error_message AS "errorMessage",
-  created_at AS "createdAt", updated_at AS "updatedAt", approved_at AS "approvedAt", sent_at AS "sentAt"`;
+  send_requested_at AS "requestedAt", created_at AS "createdAt", updated_at AS "updatedAt", approved_at AS "approvedAt", sent_at AS "sentAt"`;
 
 async function readEntry(id) {
   const result = await query(`SELECT ${ENTRY_COLUMNS} FROM beeper_outbox WHERE id = $1`, [id]);
@@ -443,9 +444,10 @@ export async function sendOutboxEntry(id, { confirmFirstContact = false } = {}) 
 
   // The serialization point. A second concurrent send of the same row loses
   // this conditional UPDATE and never reaches the POST.
+  const requestedAt = runtime.now();
   const claimed = await query(
-    "UPDATE beeper_outbox SET state = 'sending', updated_at = NOW() WHERE id = $1 AND state = 'approved' RETURNING id",
-    [id],
+    "UPDATE beeper_outbox SET state = 'sending', send_requested_at = $2::timestamptz, updated_at = NOW() WHERE id = $1 AND state = 'approved' RETURNING id",
+    [id, new Date(requestedAt).toISOString()],
   );
   if ((claimed?.rowCount ?? 0) !== 1) {
     throw new BeeperApiError('Outbox entry is already being sent', {
@@ -455,7 +457,6 @@ export async function sendOutboxEntry(id, { confirmFirstContact = false } = {}) 
 
   // Retry is OFF (the client's send-safe default): no idempotency key means a
   // retried POST is a second real message. One attempt, one row, no second POST.
-  const requestedAt = runtime.now();
   activeSends.add(id);
   const result = await sendMessage(entry.chatId, { text: entry.body })
     .then((value) => ({ ok: true, value }))
@@ -733,10 +734,18 @@ export function cancelPendingConfirmations() {
   for (const transition of localTransitions.values()) runtime.clearTimeout(transition.timer);
   localTransitions.clear();
   activeSends.clear();
+  reconciliationOperations.clear();
 }
 
 /** Human-triggered reconciliation. Remote operations are GETs only. */
-export async function reconcileOutboxEntry(id) {
+export function reconcileOutboxEntry(id) {
+  if (reconciliationOperations.has(id)) return reconciliationOperations.get(id);
+  const operation = reconcileEntry(id).finally(() => reconciliationOperations.delete(id));
+  reconciliationOperations.set(id, operation);
+  return operation;
+}
+
+async function reconcileEntry(id) {
   let entry = await readEntry(id);
   if (!entry) throw new BeeperApiError('Outbox entry not found', { status: 404, code: 'OUTBOX_ENTRY_NOT_FOUND' });
   if (activeSends.has(id)) return entry;
@@ -766,7 +775,7 @@ export async function reconcileOutboxEntry(id) {
 
 /** The send moment a re-armed row is matched against, from what the row kept. */
 function persistedSendMoment(row) {
-  const stamped = Date.parse(row?.updatedAt ?? row?.createdAt ?? '');
+  const stamped = Date.parse(row?.requestedAt ?? row?.updatedAt ?? row?.createdAt ?? '');
   return Number.isFinite(stamped) ? stamped : runtime.now();
 }
 
@@ -803,7 +812,7 @@ function persistedSendMoment(row) {
  */
 export async function reconcileOutboxOnBoot() {
   const interrupted = await query(
-    `UPDATE beeper_outbox SET state = 'failed', error_code = $1, error_message = $2, updated_at = NOW()
+    `UPDATE beeper_outbox SET state = 'failed', error_code = $1, error_message = $2
      WHERE state = 'sending' RETURNING id`,
     [SEND_INTERRUPTED_CODE, SEND_INTERRUPTED_MESSAGE],
   ).catch((err) => {
@@ -813,10 +822,13 @@ export async function reconcileOutboxOnBoot() {
   // The table does not exist yet, so neither do the rows this would reconcile.
   if (!interrupted) return { interrupted: 0, rearmed: 0 };
 
+  // JSON access tolerates the first upgrade boot, which can precede ensureSchema.
+  // Old rows have no immutable timestamp: keep their prior conservative floor.
   const inFlight = await query(
     `SELECT id, conversation_id AS "conversationId", chat_id AS "chatId", body,
        pending_message_id AS "pendingMessageId", error_code AS "errorCode",
-       created_at AS "createdAt", updated_at AS "updatedAt"
+       created_at AS "createdAt", updated_at AS "updatedAt",
+       to_jsonb(beeper_outbox)->>'send_requested_at' AS "requestedAt"
      FROM beeper_outbox WHERE state = 'awaiting-confirmation'`,
   );
 

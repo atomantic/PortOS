@@ -231,12 +231,12 @@ export default function useBeeperOutbox(conversationId, { onSent } = {}) {
   const dismiss = useCallback((entry) => discardEntry(entry), [discardEntry]);
 
   const reconcile = useCallback(async (entry) => {
+    const generation = ++scope.refreshGeneration;
     const updated = await reconcileOutboxEntry(entry.id, { silent: true }).catch((err) => {
       if (mountedRef.current && scopeRef.current === scope) toast.error(err.message || 'Could not check delivery');
       return null;
     });
-    if (!updated || !mountedRef.current || scopeRef.current !== scope) return;
-    ++scope.refreshGeneration;
+    if (!updated || !mountedRef.current || scopeRef.current !== scope || generation !== scope.refreshGeneration) return;
     setEntries((prev) => prev.map((row) => row.id === updated.id ? updated : row));
   }, [scope]);
 

@@ -306,9 +306,11 @@ export const beeperDdl = [
     error_message TEXT,
     created_at TIMESTAMPTZ DEFAULT NOW(),
     approved_at TIMESTAMPTZ,
+    send_requested_at TIMESTAMPTZ,
     sent_at TIMESTAMPTZ,
     updated_at TIMESTAMPTZ DEFAULT NOW()
   )`,
+  `ALTER TABLE beeper_outbox ADD COLUMN IF NOT EXISTS send_requested_at TIMESTAMPTZ`,
   `CREATE INDEX IF NOT EXISTS idx_beeper_outbox_conversation_state ON beeper_outbox (conversation_id, state, created_at DESC)`,
 
   // #96 backfill — one idempotent statement, LAST in this array because it

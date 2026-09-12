@@ -139,6 +139,7 @@ const query = vi.fn(async (sql, params = []) => {
     const row = outbox.get(params[0]);
     if (row?.state !== 'approved') return { rows: [], rowCount: 0 };
     row.state = 'sending';
+    row.requestedAt = params[1];
     return { rows: [{ id: row.id }], rowCount: 1 };
   }
   if (/UPDATE beeper_outbox SET state = 'awaiting-confirmation'/.test(sql)) {
@@ -986,4 +987,27 @@ describe('local persistence recovery without another send', () => {
     expect(sendMessage).not.toHaveBeenCalled();
     expect(mirrored).toHaveLength(1);
   });
+});
+
+
+it('keeps the original send time through timeout, boot and overlapping manual recovery', async () => {
+  const entry = await createOutboxEntry({ conversationId: CONVERSATION_ID, body: 'hello there' });
+  sendMessage.mockRejectedValueOnce(new BeeperApiError('response lost', { status: 0, code: 'NETWORK_ERROR' }));
+  listMessagesPage.mockResolvedValue({ items: [] });
+  await sendOutboxEntry(entry.id, { confirmFirstContact: true });
+  clock.runTimersWithDelay(CONFIRMATION_TIMEOUT_MS);
+  await flush();
+  const row = outbox.get(entry.id);
+  row.updatedAt = '2026-09-01T00:01:00.000Z';
+  // Represent process loss at either durable nonterminal state.
+  row.state = 'sending';
+  await reconcileOutboxOnBoot();
+  expect(row.state).toBe('failed');
+  listMessagesPage.mockResolvedValue({ items: [sentMessage()] });
+  const first = reconcileOutboxEntry(entry.id);
+  const second = reconcileOutboxEntry(entry.id);
+  expect(first).toBe(second);
+  expect(await first).toMatchObject({ state: 'sent' });
+  expect(mirrored).toHaveLength(1);
+  expect(sendMessage).toHaveBeenCalledTimes(1);
 });

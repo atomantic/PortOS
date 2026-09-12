@@ -1822,6 +1822,7 @@ CREATE TABLE IF NOT EXISTS beeper_outbox (
   error_message TEXT,
   created_at TIMESTAMPTZ DEFAULT NOW(),
   approved_at TIMESTAMPTZ,
+  send_requested_at TIMESTAMPTZ,
   sent_at TIMESTAMPTZ,
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );
