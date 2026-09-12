@@ -6,6 +6,7 @@ import { ArrowLeft, ArrowRightLeft, Brain, Check, ChevronDown, Clock, Copy, Cpu,
 import BrailleSpinner from '../components/BrailleSpinner';
 import PlaygroundOutput from '../components/localLlm/PlaygroundOutput';
 import ModelsTabsHeader from '../components/models/ModelsTabsHeader';
+import CollapsibleSection from '../components/ui/CollapsibleSection';
 import toast from '../components/ui/Toast';
 import { copyToClipboard } from '../lib/clipboard';
 import { localLlmTargetKey } from '../lib/localLlmTargetKey';
@@ -15,6 +16,14 @@ import { compareLocalLlmModels, getLoadedLlmModels, getLocalLlmCatalog, getLocal
 
 const BACKEND_LABEL = { ollama: 'Ollama', lmstudio: 'LM Studio' };
 const DEFAULT_PROMPT = 'Write a short, vivid paragraph about a lighthouse computer waking up at dawn.';
+// Single source for the timeout choices so the collapsed Advanced-options
+// summary names the selected one without re-deriving the label from the ms.
+const TIMEOUT_OPTIONS = [
+  { value: 60000, label: '1 minute', short: '1 min' },
+  { value: 180000, label: '3 minutes', short: '3 min' },
+  { value: 300000, label: '5 minutes', short: '5 min' },
+  { value: 600000, label: '10 minutes', short: '10 min' },
+];
 const CATEGORY_LABELS = {
   general: 'General purpose',
   coding: 'Coding & agents',
@@ -243,9 +252,12 @@ export default function LocalLlmPlayground() {
   const [chatResults, setChatResults] = useState([]);
   const [streamingChat, setStreamingChat] = useState(null);
   const [compareResult, setCompareResult] = useState(null);
-  // Models sidebar is always shown on xl+; on smaller screens it collapses so
-  // the prompt/controls stay above the fold. Open by default on first load.
-  const [modelsOpen, setModelsOpen] = useState(true);
+  // Models sidebar is always shown on xl+; on smaller screens it is a
+  // disclosure. It starts CLOSED so the prompt and the Run button are the first
+  // things a narrow viewport shows — the whole inventory expanded ahead of them
+  // pushed Run ~2,400px down a 375×812 screen (#7232). The effect below reopens
+  // it whenever there is no selection, so the prerequisite is never hidden.
+  const [modelsOpen, setModelsOpen] = useState(false);
 
   const mountedRef = useMounted();
   // Holds the AbortController for the in-flight run so the Cancel button can
@@ -357,6 +369,21 @@ export default function LocalLlmPlayground() {
     setSelectedTargets([{ backend: installedTargets[0].backend, modelId: installedTargets[0].modelId }]);
   }, [installedTargets, selectedTargets.length]);
 
+  // Nothing is selectable — the install has no local models, or none that pass
+  // the hardware filter — so the narrow disclosure opens on that empty state
+  // instead of collapsing the prerequisite out of sight.
+  //
+  // Gated on the INSTALLED list, not on the selection: with models present the
+  // auto-select effect above fills an empty selection in the same flush, so
+  // keying on the momentarily-empty selection would open the inventory on every
+  // visit that carries no URL target and never close it again — which is the
+  // regression this page is being fixed for. `modelsOpen` is deliberately not a
+  // dependency: closing the empty state by hand must not re-open it.
+  useEffect(() => {
+    if (loadingStatus || installedTargets.length > 0) return;
+    setModelsOpen(true);
+  }, [installedTargets.length, loadingStatus]);
+
   const selectedKeys = useMemo(() => new Set(selectedTargets.map(localLlmTargetKey)), [selectedTargets]);
   // `/api/ps` reports what's resident but not which model is mid-generation, so
   // derive the "processing" flag from our own in-flight run: the streaming chat
@@ -371,6 +398,31 @@ export default function LocalLlmPlayground() {
   const primaryTarget = selectedTargets[0] || null;
   const canRunChat = Boolean(primaryTarget && prompt.trim());
   const canCompare = selectedTargets.length > 0 && prompt.trim();
+
+  // What the collapsed Models disclosure says it is hiding: the selected model
+  // by name when there is one, a count beyond that. Falls back to the raw
+  // modelId while the catalog is still loading so the header is never blank.
+  const selectionSummary = useMemo(() => {
+    if (selectedTargets.length === 0) return 'None selected';
+    if (selectedTargets.length > 1) return `${selectedTargets.length} models selected`;
+    const key = localLlmTargetKey(selectedTargets[0]);
+    const match = installedTargets.find((target) => localLlmTargetKey(target) === key);
+    return match?.name || selectedTargets[0].modelId;
+  }, [installedTargets, selectedTargets]);
+
+  // Same idea for the collapsed Advanced options header — the tuning that is
+  // out of sight still reports its current values, so a stale temperature or a
+  // set system prompt can't silently shape a run.
+  const advancedSummary = useMemo(() => {
+    const parts = [];
+    if (systemPrompt.trim()) parts.push('system prompt set');
+    parts.push(`temp ${numOr(temperature, 0.3)}`);
+    parts.push(`${numOr(maxTokens, 1000)} tokens`);
+    const timeout = TIMEOUT_OPTIONS.find((option) => option.value === numOr(timeoutMs, 300000));
+    if (timeout) parts.push(timeout.short);
+    if (activeMode === 'compare') parts.push(runMode === 'parallel' ? 'parallel' : 'round robin');
+    return parts.join(' · ');
+  }, [activeMode, maxTokens, runMode, systemPrompt, temperature, timeoutMs]);
 
   const toggleTarget = (target) => {
     const key = localLlmTargetKey(target);
@@ -485,22 +537,36 @@ export default function LocalLlmPlayground() {
       <div className="flex-1 overflow-auto p-4 space-y-4">
         <div className="grid grid-cols-1 xl:grid-cols-[320px_1fr] gap-4">
           <aside className="bg-port-card border border-port-border rounded-lg p-4 space-y-4">
-            <button
-              type="button"
-              onClick={() => setModelsOpen((v) => !v)}
-              className="w-full flex items-center justify-between gap-2 xl:cursor-default"
-              aria-expanded={modelsOpen}
-            >
-              <span className="flex items-center gap-2">
+            {/* One header slot holding both breakpoints' variants, so the
+                aside's `space-y-4` doesn't put a gap above the narrow toggle
+                for the desktop heading that is display:none beside it.
+                The list is permanently visible on xl+, so the toggle exists
+                only on narrow screens — an always-rendered button would report
+                `aria-expanded=false` while the desktop sidebar is fully open. */}
+            <div>
+              <div className="hidden xl:flex items-center justify-between gap-2">
                 <span className="text-sm font-medium text-gray-300">Models</span>
-                <span className="text-xs text-gray-500 xl:hidden">({selectedTargets.length} selected)</span>
-              </span>
-              <span className="flex items-center gap-2">
                 {loadingStatus && <BrailleSpinner />}
-                <ChevronDown size={16} className={`text-gray-500 xl:hidden transition-transform ${modelsOpen ? '' : '-rotate-90'}`} />
-              </span>
-            </button>
-            <div className={`${modelsOpen ? 'block' : 'hidden'} xl:block space-y-4`}>
+              </div>
+              <button
+                type="button"
+                onClick={() => setModelsOpen((v) => !v)}
+                className="xl:hidden w-full min-h-11 flex items-center justify-between gap-2"
+                aria-expanded={modelsOpen}
+                aria-controls="local-llm-models"
+              >
+                <span className="flex items-baseline gap-2 min-w-0">
+                  <span className="text-sm font-medium text-gray-300 shrink-0">Models</span>
+                  <span className="text-xs text-gray-500 truncate">{selectionSummary}</span>
+                </span>
+                <span className="flex items-center gap-2 shrink-0">
+                  {loadingStatus && <BrailleSpinner />}
+                  <span className="text-xs text-port-accent">{modelsOpen ? 'Hide models' : 'Change models'}</span>
+                  <ChevronDown size={16} className={`text-gray-500 transition-transform ${modelsOpen ? '' : '-rotate-90'}`} />
+                </span>
+              </button>
+            </div>
+            <div id="local-llm-models" className={`${modelsOpen ? 'block' : 'hidden'} xl:block space-y-4`}>
             {installedTargets.length === 0 && !loadingStatus ? (
               <p className={`text-sm ${modelLoadError ? 'text-port-warning' : 'text-gray-500'}`}>
                 {modelLoadError || 'No installed local models found.'}
@@ -604,8 +670,70 @@ export default function LocalLlmPlayground() {
                 })}
               </div>
 
-              <div className="grid grid-cols-1 lg:grid-cols-[1fr_280px] gap-4">
-                <div className="space-y-3">
+              {/* Prompt then Run, with nothing optional between them: the tuning
+                  fields used to sit above the action, which put Run below the
+                  fold even once the model list was collapsed (#7232). */}
+              <div className="space-y-2">
+                <label htmlFor="local-llm-prompt" className="block text-xs text-gray-500">Prompt</label>
+                <textarea
+                  id="local-llm-prompt"
+                  value={prompt}
+                  onChange={(e) => setPrompt(e.target.value)}
+                  rows={7}
+                  className="w-full bg-port-bg border border-port-border rounded-lg px-3 py-2 text-sm text-white placeholder-gray-600 focus:outline-none focus:border-port-accent resize-y"
+                />
+              </div>
+
+              <div className="flex flex-wrap items-center gap-3">
+                {busy ? (
+                  <button
+                    onClick={cancelRun}
+                    className="w-full sm:w-auto flex items-center justify-center gap-2 px-4 py-2 bg-port-error/15 hover:bg-port-error/25 text-port-error text-sm font-medium rounded-lg"
+                  >
+                    <X size={15} />
+                    Cancel
+                  </button>
+                ) : (
+                  <button
+                    onClick={activeMode === 'chat' ? runChat : runCompare}
+                    disabled={activeMode === 'chat' ? !canRunChat : !canCompare}
+                    className="w-full sm:w-auto flex items-center justify-center gap-2 px-4 py-2 bg-port-accent/20 hover:bg-port-accent/30 text-port-accent text-sm font-medium rounded-lg disabled:opacity-50"
+                  >
+                    {activeMode === 'chat' ? <Send size={15} /> : <Play size={15} />}
+                    {activeMode === 'chat' ? 'Run chat' : 'Run comparison'}
+                  </button>
+                )}
+                {activeMode === 'compare' && selectedTargets.length > 0 && (
+                  <span className="text-xs text-gray-500">
+                    Runs against {selectedTargets.length} model{selectedTargets.length === 1 ? '' : 's'}
+                  </span>
+                )}
+                {/* The run's missing prerequisite is named beside the disabled
+                    button rather than left for the user to infer from the
+                    collapsed inventory; the effect above has also reopened the
+                    picker by the time this renders. */}
+                {!loadingStatus && selectedTargets.length === 0 && (
+                  <span className="text-xs text-port-warning">
+                    {installedTargets.length === 0 ? (
+                      <>
+                        No local models installed —{' '}
+                        <Link to="/models/llms" className="text-port-accent hover:underline">install one</Link>
+                        {' '}to run a prompt.
+                      </>
+                    ) : 'No model selected — pick one under Models.'}
+                  </span>
+                )}
+              </div>
+
+              <CollapsibleSection
+                id="local-llm-advanced"
+                label="Advanced options"
+                summary={advancedSummary}
+                size="bar"
+                className="border-t border-port-border"
+                bodyClassName="pt-1 pb-1 space-y-3"
+              >
+                <div className="space-y-1">
                   <label htmlFor="local-llm-system" className="block text-xs text-gray-500">System prompt</label>
                   <textarea
                     id="local-llm-system"
@@ -615,57 +743,35 @@ export default function LocalLlmPlayground() {
                     className="w-full bg-port-bg border border-port-border rounded-lg px-3 py-2 text-sm text-white placeholder-gray-600 focus:outline-none focus:border-port-accent resize-y"
                     placeholder="Optional"
                   />
-                  <label htmlFor="local-llm-prompt" className="block text-xs text-gray-500">Prompt</label>
-                  <textarea
-                    id="local-llm-prompt"
-                    value={prompt}
-                    onChange={(e) => setPrompt(e.target.value)}
-                    rows={7}
-                    className="w-full bg-port-bg border border-port-border rounded-lg px-3 py-2 text-sm text-white placeholder-gray-600 focus:outline-none focus:border-port-accent resize-y"
-                  />
                 </div>
-
-                <div className="space-y-3">
-                  <label className="block text-xs text-gray-500" htmlFor="local-llm-temperature">Temperature</label>
-                  <input id="local-llm-temperature" type="number" min="0" max="2" step="0.1" value={temperature} onChange={(e) => setTemperature(e.target.value)} className="w-full bg-port-bg border border-port-border rounded-lg px-3 py-2 text-sm text-white" />
-                  <label className="block text-xs text-gray-500" htmlFor="local-llm-max-tokens">Max tokens</label>
-                  <input id="local-llm-max-tokens" type="number" min="1" max="8192" step="64" value={maxTokens} onChange={(e) => setMaxTokens(e.target.value)} className="w-full bg-port-bg border border-port-border rounded-lg px-3 py-2 text-sm text-white" />
-                  <label className="block text-xs text-gray-500" htmlFor="local-llm-timeout">Timeout</label>
-                  <select id="local-llm-timeout" value={timeoutMs} onChange={(e) => setTimeoutMs(Number(e.target.value))} className="w-full bg-port-bg border border-port-border rounded-lg px-3 py-2 text-sm text-white">
-                    <option value={60000}>1 minute</option>
-                    <option value={180000}>3 minutes</option>
-                    <option value={300000}>5 minutes</option>
-                    <option value={600000}>10 minutes</option>
-                  </select>
+                <div className="grid gap-3 grid-cols-[repeat(auto-fit,minmax(min(100%,11rem),1fr))]">
+                  <div className="space-y-1">
+                    <label className="block text-xs text-gray-500" htmlFor="local-llm-temperature">Temperature</label>
+                    <input id="local-llm-temperature" type="number" min="0" max="2" step="0.1" value={temperature} onChange={(e) => setTemperature(e.target.value)} className="w-full bg-port-bg border border-port-border rounded-lg px-3 py-2 text-sm text-white" />
+                  </div>
+                  <div className="space-y-1">
+                    <label className="block text-xs text-gray-500" htmlFor="local-llm-max-tokens">Max tokens</label>
+                    <input id="local-llm-max-tokens" type="number" min="1" max="8192" step="64" value={maxTokens} onChange={(e) => setMaxTokens(e.target.value)} className="w-full bg-port-bg border border-port-border rounded-lg px-3 py-2 text-sm text-white" />
+                  </div>
+                  <div className="space-y-1">
+                    <label className="block text-xs text-gray-500" htmlFor="local-llm-timeout">Timeout</label>
+                    <select id="local-llm-timeout" value={timeoutMs} onChange={(e) => setTimeoutMs(Number(e.target.value))} className="w-full bg-port-bg border border-port-border rounded-lg px-3 py-2 text-sm text-white">
+                      {TIMEOUT_OPTIONS.map((option) => (
+                        <option key={option.value} value={option.value}>{option.label}</option>
+                      ))}
+                    </select>
+                  </div>
                   {activeMode === 'compare' && (
-                    <>
+                    <div className="space-y-1">
                       <label className="block text-xs text-gray-500" htmlFor="local-llm-mode">Execution</label>
                       <select id="local-llm-mode" value={runMode} onChange={(e) => setRunMode(e.target.value)} className="w-full bg-port-bg border border-port-border rounded-lg px-3 py-2 text-sm text-white">
                         <option value="round-robin">Round robin</option>
                         <option value="parallel">Parallel</option>
                       </select>
-                    </>
-                  )}
-                  {busy ? (
-                    <button
-                      onClick={cancelRun}
-                      className="w-full flex items-center justify-center gap-2 px-3 py-2 bg-port-error/15 hover:bg-port-error/25 text-port-error text-sm font-medium rounded-lg"
-                    >
-                      <X size={15} />
-                      Cancel
-                    </button>
-                  ) : (
-                    <button
-                      onClick={activeMode === 'chat' ? runChat : runCompare}
-                      disabled={activeMode === 'chat' ? !canRunChat : !canCompare}
-                      className="w-full flex items-center justify-center gap-2 px-3 py-2 bg-port-accent/20 hover:bg-port-accent/30 text-port-accent text-sm font-medium rounded-lg disabled:opacity-50"
-                    >
-                      {activeMode === 'chat' ? <Send size={15} /> : <Play size={15} />}
-                      {activeMode === 'chat' ? 'Run chat' : 'Run comparison'}
-                    </button>
+                    </div>
                   )}
                 </div>
-              </div>
+              </CollapsibleSection>
             </section>
 
             {activeMode === 'chat' ? (
