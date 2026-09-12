@@ -21,6 +21,7 @@ const api = vi.hoisted(() => ({
   updateCosConfig: vi.fn(),
   getPersistentMindContext: vi.fn(),
   getPersistentMindTools: vi.fn(),
+  getMindRecipes: vi.fn().mockResolvedValue({ recipes: [] }),
   getPersistentMindRuntime: vi.fn(),
   getPersistentMindVisibility: vi.fn(),
   createPersistentMindMemory: vi.fn(),
@@ -406,7 +407,7 @@ describe('MindTab', () => {
     await user.click(taskAccess);
 
     await waitFor(() => expect(api.updateCosConfig).toHaveBeenCalledWith(
-      { persistentMindCapabilities: { schemaVersion: 8, createTasks: true, manageMind: false, manageEidoverse: false, visitEidoversePeers: false, callUser: false, adjustLocalContext: false, readPortos: false, writePortos: false, taskModelAllowlist: [] } },
+      { persistentMindCapabilities: { schemaVersion: 9, createTasks: true, manageMind: false, manageToolRecipes: false, manageEidoverse: false, visitEidoversePeers: false, callUser: false, adjustLocalContext: false, readPortos: false, writePortos: false, taskModelAllowlist: [] } },
       { silent: true },
     ));
     expect(screen.getAllByText(/code review then merge/i).length).toBeGreaterThan(0);

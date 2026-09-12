@@ -3,9 +3,10 @@ import * as api from '../../services/api';
 import toast from '../ui/Toast';
 
 const normalizeCapabilities = (value) => ({
-  schemaVersion: 8,
+  schemaVersion: 9,
   createTasks: value?.createTasks === true,
   manageMind: value?.manageMind === true,
+  manageToolRecipes: value?.manageToolRecipes === true,
   manageEidoverse: value?.manageEidoverse === true,
   visitEidoversePeers: value?.visitEidoversePeers === true,
   callUser: value?.callUser === true,
@@ -20,6 +21,11 @@ const normalizeCapabilities = (value) => ({
 });
 
 const OPTIONS = [
+  {
+    key: 'manageToolRecipes',
+    label: 'Allow mind to manage saved tool recipes',
+    hint: 'Definition authority only; underlying reads still require bounded PortOS read access. Mind authoring and invocation arrive in a later phase. You can manage the library below with this grant off.',
+  },
   {
     key: 'readPortos',
     label: 'Allow bounded PortOS reads',
@@ -77,7 +83,7 @@ export default function PersistentMindTaskAccessControls({
 
   useEffect(() => {
     if (!saving) setDraft(normalizeCapabilities(capabilities));
-  }, [capabilities?.schemaVersion, capabilities?.createTasks, capabilities?.manageMind, capabilities?.manageEidoverse, capabilities?.visitEidoversePeers, capabilities?.callUser, capabilities?.adjustLocalContext, capabilities?.readPortos, capabilities?.writePortos, capabilities?.taskModelAllowlist, capabilities?.taskModelAllowlistInvalid, capabilities?.allowedAppIds?.join('\0'), saving]);
+  }, [capabilities?.schemaVersion, capabilities?.createTasks, capabilities?.manageMind, capabilities?.manageToolRecipes, capabilities?.manageEidoverse, capabilities?.visitEidoversePeers, capabilities?.callUser, capabilities?.adjustLocalContext, capabilities?.readPortos, capabilities?.writePortos, capabilities?.taskModelAllowlist, capabilities?.taskModelAllowlistInvalid, capabilities?.allowedAppIds?.join('\0'), saving]);
 
   const save = async (key, enabled) => {
     const previous = draft;

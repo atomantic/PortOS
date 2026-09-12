@@ -52,3 +52,5 @@ init-db.sql, each with a one-line reason.
 
 `ensureSchemaImpl()` calls these two builders and runs each list through
 `pool.query` in order.
+
+| `mindToolRecipes.js` | `mindToolRecipesDdl`: machine-local recipe definitions and immutable revisions. |

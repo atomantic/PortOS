@@ -41,7 +41,7 @@ toasts on throw). **Custom catch ⇒ `silent: true`** — otherwise toasts fire 
 | `apiApps.js` | App CRUD + PM2 ops (start/stop/restart) + local open actions (editor, folder, Xcode) + `getAppIssues` (open GitHub/GitLab issues for the Issues tab). |
 | `apiWorkspaceContexts.js` | Per-project working-context save/restore (branch, shells, tasks). |
 | `apiAccounts.js` | Platform accounts. |
-| `apiAgents.js` | Running-agent process management, CoS run-event diagnostics, the CoS task schedule (intervals, on-demand triggers, manual maintenance runs via `getMaintenanceRuns`/`startMaintenanceRun`/`stopMaintenanceRun`), and persistent-mind conversation, lifecycle, context, and runtime-telemetry calls. |
+| `apiAgents.js` | Running-agent process management, CoS run-event diagnostics, the CoS task schedule (intervals, on-demand triggers, manual maintenance runs via `getMaintenanceRuns`/`startMaintenanceRun`/`stopMaintenanceRun`), and persistent-mind conversation, lifecycle, context, runtime-telemetry calls, and versioned tool recipe library CRUD, validation, archive, and restore calls. |
 | `apiCommands.js` | CLI command dispatch. |
 | `apiDashboard.js` | Dashboard state. |
 | `apiDatabase.js` | Database introspection. |

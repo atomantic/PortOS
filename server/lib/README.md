@@ -640,3 +640,5 @@ pm` default, `NPM_CONFIG_PREFIX`, nvm/Volta) installed `codex` successfully and 
 | `voiceEngines.js` | Shared TTS engine IDs, display metadata, supported-engine set, persisted configuration keys, and retired TTS config migration. |
 
 | `auditQuality.js` | Category discovery strategies, assessment prompt and strict schema, sentinel parsing, and freshness-aware app quality aggregation with deterministic latest-per-category selection across peers. |
+
+| `mindToolRecipes.js` | Closed recipe schemas, current semantic-contract validation, and safe JSON field binding resolution. |

@@ -30,6 +30,7 @@ import { loraDdl } from './lora.js';
 import { privacyDdl } from './privacy.js';
 import { stackerNewsDdl } from './stackerNews.js';
 import { xDdl } from './x.js';
+import { mindToolRecipesDdl } from './mindToolRecipes.js';
 import { beeperDdl } from './beeper.js';
 import { auditDdl, auditedTables, buildAuditTriggers } from './audit.js';
 
@@ -53,6 +54,7 @@ export {
   stackerNewsDdl,
   xDdl,
   beeperDdl,
+  mindToolRecipesDdl,
   auditDdl,
   auditedTables,
   buildAuditTriggers,
@@ -92,6 +94,7 @@ export function buildCatalogDdl() {
     ...stackerNewsDdl,
     ...xDdl,
     ...beeperDdl,
+    ...mindToolRecipesDdl,
     ...auditDdl,
     ...buildAuditTriggers(),
   ];
