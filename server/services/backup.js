@@ -12,7 +12,7 @@ import { access, lstat, readdir, readFile, stat, unlink, writeFile } from 'fs/pr
 import { PassThrough } from 'node:stream';
 import { hostname } from 'os';
 import { join, resolve, relative, isAbsolute } from 'path';
-import { PATHS, ensureDir, readJSONFile, atomicWrite, sha256File } from '../lib/fileUtils.js';
+import { PATHS, ensureDir, readJSONFile, readJSONFileStrict, atomicWrite, sha256File } from '../lib/fileUtils.js';
 import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
 import { createLineReader } from '../lib/streamLines.js';
 import { getEvent } from './eventScheduler.js';
@@ -944,7 +944,7 @@ export async function restoreSnapshot(destPath, snapshotId, { dryRun = true, sub
  *   { status: 'ok', dryRun, sizeBytes, tableCount }   (dry-run or applied)
  *   { status: 'skipped', reason: 'no_dump' }           (no sql file in snapshot)
  *   { status: 'skipped', reason: 'not_configured' }    (real restore, PG unreachable)
- *   { status: 'failed', reason: 'restore_error'|'timeout', error }
+ *   { status: 'failed', reason: 'manifest_unreadable'|'manifest_mismatch'|'restore_error'|'timeout', error? }
  * @param {string} destPath - Backup destination root
  * @param {string} snapshotId
  * @param {{dryRun?: boolean}} [options]
@@ -966,12 +966,18 @@ export async function restorePostgres(destPath, snapshotId, { dryRun = true } = 
   // '../portos-db.sql' (it lives ALONGSIDE the snapshot data/ dir, not inside
   // it). Backward-compat: snapshots taken before manifests existed — or missing
   // the dump key — have nothing to verify against, so we SKIP verification and
-  // proceed rather than hard-failing. Only a manifest that IS present AND
-  // carries a mismatching hash refuses the restore.
+  // proceed rather than hard-failing. An existing manifest refuses the restore
+  // when it cannot be read or when its recorded dump hash does not match.
   const manifestPath = join(snapshotDir, 'manifest.json');
-  // Read-only verification metadata; preserve the legacy no-manifest behavior
-  // below. This path never writes the manifest back.
-  const manifest = await readJSONFile(manifestPath, null);
+  // Read-only verification metadata. A confirmed ENOENT remains the legacy
+  // no-manifest case, while corrupt bytes and every other read failure mean the
+  // dump cannot be trusted. This path never writes the manifest back.
+  const manifestRead = await readJSONFileStrict(manifestPath, null);
+  if (!manifestRead.ok) {
+    console.error(`❌ restore: integrity manifest unreadable for snapshot ${snapshotId}`);
+    return { status: 'failed', reason: 'manifest_unreadable' };
+  }
+  const manifest = manifestRead.value;
   const expectedHash = manifest?.files?.['../portos-db.sql'];
   if (expectedHash) {
     const actualHash = await sha256File(sqlPath);

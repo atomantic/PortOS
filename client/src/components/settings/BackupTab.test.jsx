@@ -209,6 +209,22 @@ describe('BackupTab', () => {
       expect(toast.error).toHaveBeenCalledWith('Snapshot dump failed integrity verification');
       expect(screen.queryByText(/Restore database\?/i)).toBeNull();
     });
+
+    it('explains an unreadable integrity manifest and does not open confirmation', async () => {
+      withSnapshot();
+      restoreDatabase.mockResolvedValue({ status: 'failed', reason: 'manifest_unreadable' });
+      await renderTab();
+
+      await act(async () => {
+        fireEvent.click(await screen.findByRole('button', { name: /Restore DB/i }));
+      });
+
+      expect(restoreDatabase).toHaveBeenCalledTimes(1);
+      expect(toast.error).toHaveBeenCalledWith(
+        'Snapshot verification metadata could not be read. Choose another snapshot or repair the backup media before retrying.'
+      );
+      expect(screen.queryByText(/Restore database\?/i)).toBeNull();
+    });
   });
 
   describe('Run Now gating (saved state)', () => {
