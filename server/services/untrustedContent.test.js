@@ -38,6 +38,13 @@ describe('shared external-content boundary', () => {
       mocks.scan.mockResolvedValue(verdict);
       expect(await runUntrustedContentAnalysis(args)).toMatchObject({ ok: false });
     }
+    // A completed scan that flags content is a distinct outcome from the guard
+    // failing to run — telling an operator to "check the abuse guard" for a
+    // working, correct block is misleading (it reports ready either way).
+    mocks.scan.mockResolvedValue({ ok: true, safe: false, code: 'security-guard-classified-malicious' });
+    expect(await runUntrustedContentAnalysis(args)).toMatchObject({ code: 'security-guard-classified-malicious', message: expect.stringContaining('expected screening behavior') });
+    mocks.scan.mockResolvedValue({ ok: false, code: 'security-guard-not-ready' });
+    expect(await runUntrustedContentAnalysis(args)).toMatchObject({ code: 'security-guard-not-ready', message: expect.stringContaining('could not run') });
     expect(await runUntrustedContentAnalysis({ ...args, content: 'x'.repeat(1001), policy: { maxInputChars: 1000 } })).toMatchObject({ code: 'untrusted-content-too-large' });
     mocks.scan.mockResolvedValue({ ok: true, safe: true });
     expect(await runUntrustedContentAnalysis({ ...args, content: 'x'.repeat(4096) })).toMatchObject({ code: 'untrusted-content-context-too-small' });
