@@ -45,10 +45,11 @@ describe('PORTOS_SCHEMA_VERSIONS', () => {
 
   it('version-gates the persisted FableLoom shot and reference shape', () => {
     // v7 adds timed shots and draft character image anchors; v8 adds the
-    // optional per-character five-stage evolution lens on the series plan.
+    // optional per-character five-stage evolution lens on the series plan; v9
+    // adds the shared finite/renewable series-design brief.
     // Older peers stay behind the full render contract until they advertise
     // support for the additive fields.
-    expect(PORTOS_SCHEMA_VERSIONS.fableLoom).toBe(8);
+    expect(PORTOS_SCHEMA_VERSIONS.fableLoom).toBe(9);
   });
 
   it('version-gates the additive Creative Commission taste brief shape', () => {

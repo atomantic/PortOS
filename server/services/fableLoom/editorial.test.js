@@ -150,6 +150,40 @@ const completeOutline = () => ({
 });
 
 describe('editorial prompt graph contract', () => {
+  it('carries the exact optional series brief through branching editorial context without making it editable', () => {
+    const plain = makeLoom();
+    const designed = sanitizeLoom({
+      ...plain,
+      seriesPlan: {
+        ...plain.seriesPlan,
+        seriesDesign: {
+          mode: 'finite',
+          episodeActivity: 'Trace one fork of the divided signal.',
+          endingCondition: 'The sender is identified and the beacon is silenced.',
+        },
+      },
+    });
+
+    expect(JSON.parse(__testing.seriesPlanDigest(plain))).not.toHaveProperty('seriesDesign');
+    expect(JSON.parse(__testing.seriesPlanDigest(designed)).seriesDesign).toEqual(designed.seriesPlan.seriesDesign);
+    expect(__testing.storyContext(designed)).toContain('Series design (author-owned; do not rewrite this brief):');
+    expect(__testing.teleplayDigest(designed)).toContain('transition=take-left sourceNode=opening targetNode=left');
+    expect(__testing.teleplayDigest(designed)).toContain('transition=take-right sourceNode=opening targetNode=right');
+    expect(__testing.editorialFingerprint(designed)).not.toBe(__testing.editorialFingerprint(plain));
+    expect(() => __testing.assertEditorialSnapshotUnchanged(
+      designed,
+      __testing.editorialFingerprint(plain),
+      { code: 'STALE', message: 'Series design changed' },
+    )).toThrow(/series design changed/i);
+
+    const remediated = applyFableLoomEditorialPatch(designed, {
+      seriesPlan: { storyArc: 'Both exclusive routes reveal one source.' },
+    }).loom;
+    expect(remediated.seriesPlan.seriesDesign).toEqual(designed.seriesPlan.seriesDesign);
+    expect(remediated.episodes[0].nodes.map((node) => node.id))
+      .toEqual(['opening', 'left', 'right', 'ending']);
+  });
+
   it('gives the editor exact transition, source, and target ids for safe patches', () => {
     const digest = __testing.teleplayDigest(makeLoom());
 

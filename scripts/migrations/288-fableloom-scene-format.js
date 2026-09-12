@@ -32,7 +32,7 @@ export const ACCEPTED_OLD_MD5 = {
 
 // Post-change shipped hashes (format contract rendered from the loom record).
 export const NEW_SHIPPED_MD5 = {
-  'fableloom-weave-episode.md': 'abea2442af2be2039b70deee4919c00e', // post-324 challenge mapping
+  'fableloom-weave-episode.md': '94f22c0807924dadf151341c30720c71', // post-384 series design
   'fableloom-branch-node.md': '39a208c8cc593d0531af50760e3cf0da',
   'fableloom-play-turn.md': 'e35ad91aae263e3adf28d1e047a46661',
 };

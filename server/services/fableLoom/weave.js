@@ -19,6 +19,7 @@ import { runStagedLLM } from '../stageRunner.js';
 import { resolveLlmRoutePin } from '../../lib/llmRoutePin.js';
 import { renderStoryCanonDigest } from '../../lib/universePromptRenderers.js';
 import { renderCharacterEvolutionListForPrompt } from '../../lib/characterEvolution.js';
+import { renderSeriesDesign } from '../../lib/storyArc.js';
 import { GRAPH_ISSUE_CODES, analyzeEpisodeGraph, describeGraphForPrompt } from '../../lib/fableLoomGraph.js';
 import {
   FABLELOOM_CAMERA_MOVEMENT_VALUES,
@@ -201,6 +202,7 @@ const seriesPlanContext = (loom, episode) => {
     }
   }
   return [
+    renderSeriesDesign(plan.seriesDesign),
     plan.storyArc ? `Series arc: ${plan.storyArc}` : '',
     ...plotPoints,
     ...sideQuests,
@@ -239,6 +241,9 @@ const storyContext = (loom, episode, { includeSeriesPlan = true } = {}) => [
 ].filter(Boolean).join('\n');
 
 const seriesPlanDigest = (loom) => JSON.stringify({
+  ...(Object.prototype.hasOwnProperty.call(loom.seriesPlan || {}, 'seriesDesign')
+    ? { seriesDesign: loom.seriesPlan.seriesDesign }
+    : {}),
   storyArc: loom.seriesPlan?.storyArc || '',
   plotPoints: (loom.seriesPlan?.plotPoints || []).map((item) => ({
     ...item, description: item.description || '',
@@ -1142,6 +1147,7 @@ export async function feedbackSeriesPlan(loomId, {
     throw new ServerError('Series-plan feedback is required', { status: 400, code: 'FEEDBACK_REQUIRED' });
   }
   const loom = await requireLoom(loomId);
+  const sourceFingerprint = seriesPlanGenerationFingerprint(loom);
   const canonDigest = await buildCanonDigest(loom);
   const { content, runId } = await runLoomAi('fableloom-feedback-series-plan', {
     storyContext: storyContext(loom, undefined, { includeSeriesPlan: false }),
@@ -1162,6 +1168,12 @@ export async function feedbackSeriesPlan(loomId, {
   if (!hasPlanEdit) throw aiShapeError('The model returned no usable series-plan edits');
 
   const updated = await mutateLoom(loomId, (current) => {
+    if (seriesPlanGenerationFingerprint(current) !== sourceFingerprint) {
+      throw new ServerError('The story changed while its plan feedback was being applied', {
+        status: 409,
+        code: 'LOOM_CHANGED_DURING_GENERATION',
+      });
+    }
     const plan = { ...current.seriesPlan };
     if (hasOwn(content, 'storyArc') && typeof content.storyArc === 'string') plan.storyArc = content.storyArc;
     plan.plotPoints = applyPlanItemEdits(plan.plotPoints, content.plotPointEdits, content.plotPointOrder, {
