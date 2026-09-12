@@ -366,18 +366,33 @@ describe('beeperClient', () => {
   // -------------------------------------------------------------------------
 
   describe('timeout behavior (fake timers)', () => {
-    function bodyThatRejectsOnAbort(status, signal, { trickle = false } = {}) {
+    function bodyThatRejectsOnAbort(status, signal) {
       return {
         ok: status >= 200 && status < 300,
         status,
         text: () => new Promise((_resolve, reject) => {
-          const trickleId = trickle ? setInterval(() => {}, 5) : null;
           signal.addEventListener('abort', () => {
-            if (trickleId !== null) clearInterval(trickleId);
             reject(new DOMException('aborted while reading body', 'AbortError'));
           }, { once: true });
         }),
       };
+    }
+
+    function tricklingJsonResponse(status, signal) {
+      let chunksSent = 0;
+      const stream = new ReadableStream({
+        start(controller) {
+          const trickleId = setInterval(() => {
+            chunksSent++;
+            controller.enqueue(new TextEncoder().encode(' '));
+          }, 5);
+          signal.addEventListener('abort', () => {
+            clearInterval(trickleId);
+            controller.error(signal.reason || new DOMException('aborted', 'AbortError'));
+          }, { once: true });
+        },
+      });
+      return { response: new Response(stream, { status }), chunksSent: () => chunksSent };
     }
 
     // Fork issue #61, decision 7: 1s proved too tight for a briefly-busy Beeper
@@ -482,9 +497,12 @@ describe('beeperClient', () => {
       vi.useFakeTimers();
       try {
         let requestSignal;
+        let chunksSent;
         vi.stubGlobal('fetch', vi.fn().mockImplementation((_url, opts) => {
           requestSignal = opts.signal;
-          return Promise.resolve(bodyThatRejectsOnAbort(200, requestSignal, { trickle: true }));
+          const trickle = tricklingJsonResponse(200, requestSignal);
+          chunksSent = trickle.chunksSent;
+          return Promise.resolve(trickle.response);
         }));
 
         const request = getInfo({ baseUrl: DEFAULT_BASE_URL, timeoutMs: 30 });
@@ -495,6 +513,7 @@ describe('beeperClient', () => {
         await vi.advanceTimersByTimeAsync(30);
 
         await rejection;
+        expect(chunksSent()).toBeGreaterThan(1);
         expect(requestSignal.aborted).toBe(true);
       } finally {
         vi.useRealTimers();
