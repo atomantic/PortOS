@@ -16,7 +16,7 @@ import { DEFAULT_PEER_PORT, DEFAULT_TAILCAT_REMOTE_PORT, PORTS } from '../lib/po
 import * as tailcatPeer from '../services/tailcatPeer.js';
 import * as tailcatServe from '../services/tailcatServe.js';
 import { getTailscaleStatus } from '../lib/tailscale.js';
-import { federatedMediaPeerSettingsSchema, validateRequest } from '../lib/validation.js';
+import { federatedMediaPeerSettingsSchema, optionalBooleanMap, validateRequest } from '../lib/validation.js';
 
 const router = Router();
 
@@ -43,39 +43,10 @@ const addPeerSchema = z.object({
   auth: peerAuthSchema
 });
 
-const syncCategoriesSchema = z.object({
-  brain: z.boolean().optional(),
-  memory: z.boolean().optional(),
-  goals: z.boolean().optional(),
-  character: z.boolean().optional(),
-  digitalTwin: z.boolean().optional(),
-  meatspace: z.boolean().optional(),
-  universe: z.boolean().optional(),
-  pipeline: z.boolean().optional(),
-  // Default Zod object parsing strips unknown keys, so every key in
-  // DEFAULT_SYNC_CATEGORIES (server/services/instances.js) MUST appear
-  // here — otherwise PATCH/PUT updates from the Instances UI silently
-  // no-op for the missing category. Same regression class as a prior
-  // universe + pipeline sync-category omission (see .changelog/v2.7.0.md).
-  mediaCollections: z.boolean().optional(),
-  videoHistory: z.boolean().optional(),
-  storyBuilder: z.boolean().optional(),
-  usage: z.boolean().optional(),
-  fableLoom: z.boolean().optional(),
-  authors: z.boolean().optional(),
-  artists: z.boolean().optional(),
-  albums: z.boolean().optional(),
-  tracks: z.boolean().optional(),
-  creativeDirectorProjects: z.boolean().optional(),
-  moodBoards: z.boolean().optional(),
-  writersRoomWorks: z.boolean().optional(),
-  writersRoomFolders: z.boolean().optional(),
-  writersRoomExercises: z.boolean().optional(),
-  musicVideoProjects: z.boolean().optional(),
-  commissionFeedback: z.boolean().optional(),
-  creativeCommissions: z.boolean().optional(),
-  catalog: z.boolean().optional()
-}).optional();
+// Derive accepted keys from the service owner so new categories survive validation.
+const syncCategoriesSchema = z.object(
+  optionalBooleanMap(Object.keys(instances.DEFAULT_SYNC_CATEGORIES))
+).optional();
 
 const updatePeerSchema = z.object({
   name: z.string().optional(),
@@ -374,7 +345,7 @@ router.post('/peers/:id/connect', asyncHandler(async (req, res) => {
 // them so the sync is bidirectional. No :id — the peer is identified by the
 // instanceId in the body (we may not know its local-peer-id mapping).
 router.post('/peers/sync-categories', asyncHandler(async (req, res) => {
-  const data = reciprocalSyncSchema.parse(req.body);
+  const data = validateRequest(reciprocalSyncSchema, req.body);
   const { changed } = await instances.applyReciprocalSync(data.instanceId, data.syncCategories, { fullSync: data.fullSync });
   // 200 even when the peer is unknown to us / nothing changed — this is a
   // best-effort convergence signal, not a command that must succeed. We return
