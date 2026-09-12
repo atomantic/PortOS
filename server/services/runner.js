@@ -516,7 +516,10 @@ export async function executeCliRun({ runId, provider, prompt, workspacePath, sc
     // stale markers, while this close event is the one place that can turn the
     // marker into a canceled terminal outcome.
     const stopRequested = toolkit.services.runner.consumeExternalRunStop?.(runId) === true;
-    const hostInterrupted = !!signal && isHostShuttingDown();
+    // Codex handles the shutdown signal itself and exits 1, so Node may report
+    // no signal. Preserve a graceful exit 0 while classifying that failure as
+    // interruption before echoed prompt text can be mistaken for quota output.
+    const hostInterrupted = isHostShuttingDown() && (!!signal || (exitCode != null && exitCode !== 0));
     const canceled = !spawnError && !immediateFallbackAnalysis && (stopRequested || hostInterrupted);
 
     try {

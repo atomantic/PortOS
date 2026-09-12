@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import EventEmitter from 'events';
 import { ChildProcess } from '../lib/childProcess.js';
+import { markHostShuttingDown, resetHostShutdownFlagForTests } from '../lib/hostShutdown.js';
 
 // executeCliRun validates that a requested workspace actually exists before
 // spawning (#3180 — a bad repoPath used to silently run in the PortOS root), so
@@ -123,6 +124,7 @@ function makeChild() {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  resetHostShutdownFlagForTests();
   setAIToolkit(fakeToolkit(), { dataDir: '/tmp/test-runner' });
 });
 
@@ -434,6 +436,34 @@ describe('executeCliRun — wall-clock timeout classification', () => {
 });
 
 describe('executeCliRun — intentional cancellation', () => {
+  it.each([1, 0])('handles shutdown exit %i without a Node signal or provider penalty', async (exitCode) => {
+    const child = makeChild();
+    spawn.mockReturnValue(child);
+    const errorDetection = { analyzeError: vi.fn() };
+    const onRunFailed = vi.fn();
+    setAIToolkit(fakeToolkit(errorDetection), {
+      dataDir: '/tmp/test-runner', hooks: { onRunFailed },
+    });
+    const onComplete = vi.fn();
+    await executeCliRun({
+      runId: 'run-shutdown-code',
+      provider: { id: 'codex', command: 'codex', args: [], defaultModel: 'gpt-test', timeout: 5000 },
+      prompt: 'A character readily credits competence.',
+      workspacePath: TEST_WORKSPACE,
+      onComplete,
+    });
+    child.stdout.emit('data', Buffer.from('A character readily credits competence.\nturn interrupted\n'));
+    markHostShuttingDown();
+    child.emit('close', exitCode, null);
+    await flushMicrotasks();
+
+    expect(onComplete).toHaveBeenCalledWith(expect.objectContaining(exitCode === 0
+      ? { success: true }
+      : { success: false, canceled: true, completionReason: 'host-shutdown', errorCategory: ERROR_CATEGORIES.CANCELED }));
+    expect(errorDetection.analyzeError).not.toHaveBeenCalled();
+    expect(onRunFailed).not.toHaveBeenCalled();
+  });
+
   it('skips output classification and provider-failure hooks after stopRun', async () => {
     const child = makeChild();
     spawn.mockReturnValue(child);
