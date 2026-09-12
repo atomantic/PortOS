@@ -75,6 +75,23 @@ export const agentUpdateSchema = partialWithoutDefaults(agentSchema).extend({
   personality: partialWithoutDefaults(agentPersonalitySchema).optional(),
 });
 
+// Request body for AI personality generation. Reuse the create shape so seed
+// text has the same bounds as a persisted personality before it reaches a
+// provider prompt.
+export const agentGenerateSchema = z.object({
+  seed: agentSchema.partial().extend({
+    personality: partialWithoutDefaults(agentPersonalitySchema).optional(),
+  }).optional().default({}),
+  providerId: z.string().min(1).max(128).nullable().optional(),
+  model: z.string().min(1).max(300).nullable().optional()
+}).strict();
+
+// Toggle is a separate write contract: unlike a partial agent update, enabled
+// is required and must remain a boolean all the way to storage.
+export const agentToggleSchema = z.object({
+  enabled: z.boolean()
+}).strict();
+
 // =============================================================================
 // PLATFORM ACCOUNT SCHEMAS
 // =============================================================================
