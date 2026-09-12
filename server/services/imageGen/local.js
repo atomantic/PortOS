@@ -32,7 +32,6 @@ import { killWithEscalation } from '../../lib/killWithEscalation.js';
 import { renderTimingFields } from '../../lib/renderTiming.js';
 import { createLineReader } from '../../lib/streamLines.js';
 import { claimHeavyLocalJob } from '../../lib/heavyJobClaim.js';
-import { prepareLocalMemory, gpuBlockersMessage } from '../localMemory.js';
 import { safeChildProcessOptions } from '../../lib/processEnv.js';
 import { IMAGE_GEN_MODE, LOCAL_IMAGEGEN_DEFAULT_MODEL } from './modes.js';
 import { parseByteProgress, formatDownloadMessage } from '../videoGen/generateVideoHelpers.js';
@@ -675,6 +674,7 @@ export async function generateImage({ pythonPath, prompt = '', negativePrompt = 
   let proc;
   let claimHandedOff = false;
   try {
+    const { prepareLocalMemory, gpuBlockersMessage } = await import('../localMemory.js');
     const memoryReport = await prepareLocalMemory();
     // Something the unload above cannot evict already owns the GPU (today: the
     // vLLM Qwen container). Refuse here rather than let mflux die inside its
