@@ -77,6 +77,7 @@ import {
   repairableSeriesFoundationCharacters,
   seriesFoundationCharacters,
 } from './foundationJudgeContext.js';
+import { repairOversizedCharacter } from './foundationCharacterOverflow.js';
 import { escapeRegExp, trimTo, isNonBlankStr } from '../../lib/textUtils.js';
 
 // Compatibility surface: callers keep importing these projection helpers from
@@ -201,8 +202,7 @@ export function computeWeightedScore(dimensions) {
 /**
  * Largest weighted distance from a perfect rubric score, retained for snapshot
  * diagnostics: `weight × (10 − score)`. Gate repair selection instead uses
- * foundationFixTarget with the requested threshold. Ties break toward the lower
- * raw score, then rubric order.
+ * foundationFixTarget with the requested threshold. Ties break toward the lower raw score, then rubric order.
  * (Fixing a high-weight low-score dimension first is what converges the gate;
  * "weakest" by bare score would waste rounds polishing a 10%-weight craft nit
  * while a thin 40%-weight world drags the composite down.) Pure + unit-tested.
@@ -613,10 +613,6 @@ const REPAIR_OUTLINE_MAX_CHARS = 12_000;
 // reasoning model chews through before the clock runs out, not context size.
 const REPAIR_SERIES_MAX_CHARS = 12_000;
 const REPAIR_CHARACTERS_MAX_CHARS = 12_000;
-// Split ensembles first. A single fully authored character can exceed the
-// normal section budget even with no roster attached; give that one record a
-// bounded larger envelope instead of truncating its canonical constraints.
-const REPAIR_SINGLE_CHARACTER_MAX_CHARS = 24_000;
 
 // The character-foundation stage reasons over the whole ensemble at once, so it
 // is the slowest repair stage by a wide margin. Ten minutes proved short enough
@@ -634,8 +630,7 @@ const CRAFT_REPAIR_MAX_ATTEMPTS = 2;
 // a smaller brief. That is the one way these differ from `renderArc`, which is
 // plain text and hard-clamps: below the JSON skeleton's own size (a few hundred
 // chars of keys and notes) these renderers overshoot the budget rather than
-// emitting something unparseable. Ordinary section budgets are 12,000; a
-// complete single-character repair may use the bounded 24,000 fallback above.
+// emitting something unparseable. The real budgets are 12,000.
 const JSON_TRUNCATION_MARK = '… [truncated to fit the prompt budget]';
 function fitJsonToBudget(payload, trimKeys, maxChars) {
   const shrunk = { ...payload };
@@ -900,7 +895,7 @@ async function runFoundationRepair(series, issues, dimension, finding, character
       foundationFindingJson: JSON.stringify(findingPayload, null, 2),
       seriesJson: renderRepairSeriesJson(series),
       outline: renderArc(series, issues, { maxChars: REPAIR_OUTLINE_MAX_CHARS }),
-      charactersJson: renderRepairCharactersJson(charactersPayload, options.charactersMaxChars),
+      charactersJson: renderRepairCharactersJson(charactersPayload),
     }, {
       returnsJson: true,
       providerDefault: options.providerId,
@@ -939,6 +934,7 @@ async function repairCharacters(series, issues, universe, finding, options) {
     ))
     : [[]];
   const proposals = [];
+  const overflowOriginals = new Map();
   let workingRoster = [...seriesRoster];
   const workingNewCharacters = [];
   while (targetBatches.length > 0) {
@@ -946,12 +942,10 @@ async function repairCharacters(series, issues, universe, finding, options) {
     const batchIds = new Set(originalBatch.map((character) => character.id));
     const targetBatch = workingRoster.filter((character) => batchIds.has(character.id));
     const ensembleCharacters = [...workingRoster, ...workingNewCharacters];
-    const charactersPayload = {
+    const preview = JSON.parse(renderRepairCharactersJson({
       targetCharacters: targetBatch.map(renderPromptCharacter),
       fullSeriesRoster: ensembleCharacters.map(renderPromptCharacter),
-    };
-    let charactersMaxChars = REPAIR_CHARACTERS_MAX_CHARS;
-    let preview = JSON.parse(renderRepairCharactersJson(charactersPayload, charactersMaxChars));
+    }));
     if (preview.targetNote) {
       // Shrink the batch before shrinking the records it is allowed to edit.
       // A 40-character field cap erased whole designs in a real repair prompt.
@@ -960,21 +954,23 @@ async function repairCharacters(series, issues, universe, finding, options) {
         targetBatches.unshift(originalBatch.slice(0, midpoint), originalBatch.slice(midpoint));
         continue;
       }
-      charactersMaxChars = REPAIR_SINGLE_CHARACTER_MAX_CHARS;
-      preview = JSON.parse(renderRepairCharactersJson(charactersPayload, charactersMaxChars));
-      if (preview.targetNote) {
-        throw new Error(`Character foundation cannot safely fit the complete repair context for ${targetBatch[0]?.name || 'the target character'} within ${charactersMaxChars} characters. Shorten that character's supporting detail before retrying; no truncated character repair was sent.`);
-      }
     }
-    const proposal = await runFoundationRepair(series, issues, 'character', finding, targetBatch, {
-      ...options,
-      charactersMaxChars,
-      // Locked cast members are immutable constraints, but the model still
-      // needs to see them when differentiating relationships and voices.
-      // Later batches also see the accepted shape of earlier proposals, so two
-      // batches cannot independently invent the same voice or relationship.
-      ensembleCharacters,
-    });
+    const overflow = Boolean(preview.targetNote);
+    const proposal = overflow
+      ? await repairOversizedCharacter(targetBatch[0], {
+        finding,
+        phase: options.phase || 'post-arc reconciliation',
+        seriesJson: renderRepairSeriesJson(series),
+        outline: renderArc(series, issues, { maxChars: REPAIR_OUTLINE_MAX_CHARS }),
+        rosterJson: renderRepairCharactersJson(ensembleCharacters.map(compactRosterCharacter), 2_000),
+      }, REPAIRABLE_CHARACTER_FIELDS, { ...options, timeoutOverride: CHARACTER_FOUNDATION_TIMEOUT_MS })
+      : await runFoundationRepair(series, issues, 'character', finding, targetBatch, {
+        ...options,
+        // Locked cast members constrain relationships and voices. Later batches
+        // also see accepted proposals so they do not invent duplicate identities.
+        ensembleCharacters,
+      });
+    if (overflow) overflowOriginals.set(targetBatch[0].id, targetBatch[0]);
     const boundedProposal = {
       ...proposal,
       characters: (Array.isArray(proposal.characters) ? proposal.characters : [])
@@ -988,6 +984,7 @@ async function repairCharacters(series, issues, universe, finding, options) {
     workingRoster = workingRoster.map((character) => {
       const raw = proposedById.get(character.id);
       if (!raw) return character;
+      if (overflowOriginals.has(character.id)) return { ...character, ...raw };
       return sanitizeCharacter({ ...character, ...raw, id: character.id, name: character.name }) || character;
     });
     const knownNames = new Set([...workingRoster, ...workingNewCharacters]
@@ -1013,6 +1010,11 @@ async function repairCharacters(series, issues, universe, finding, options) {
   const addedCharacters = [];
   await updateUniverse(universe.id, (latest) => {
     const latestCharacters = Array.isArray(latest?.characters) ? latest.characters : [];
+    for (const [id, original] of overflowOriginals) {
+      if (JSON.stringify(latestCharacters.find((character) => character.id === id)) !== JSON.stringify(original)) {
+        throw new Error('Character foundation overflow repair source changed during validation; no edits applied.');
+      }
+    }
     let changed = false;
     const characters = latestCharacters.map((character) => {
       if (!targetIds.has(character.id) || character.locked === true) return character;
@@ -1022,6 +1024,9 @@ async function repairCharacters(series, issues, universe, finding, options) {
       if (!sanitized) return character;
       const next = { ...character };
       for (const field of REPAIRABLE_CHARACTER_FIELDS) {
+        // Overflow validation covers only the explicit patch. Never rewrite
+        // untouched supporting detail through the sanitizer.
+        if (overflowOriginals.has(character.id) && !Object.hasOwn(raw, field)) continue;
         const value = sanitized[field];
         // Object-valued fields (`psychology`) are authored when the sanitizer
         // returned one at all — it collapses an empty proposal to null/absent.
