@@ -54,7 +54,7 @@ Before removing a Tier 3 candidate, run a transitive-dep check (`npm ls <pkg>`).
 | `@react-three/fiber` | 1 | KEEP | CyberCity 3D | React renderer for Three |
 | `@scalar/api-reference-react` | — | REMOVED | Dev Tools → API Explorer | 2026-09-11 → native REST Reference tab (issue #7012). Was the heaviest client dep (~half the lockfile, 3.24 MB dist, Vue 3 + Vercel AI SDK). See detailed finding |
 | `@xterm/xterm` | 1 | KEEP | browser terminal | |
-| `@xterm/addon-fit` | 1 | KEEP | xterm sizing | |
+| `@xterm/addon-fit` | — | REMOVED | xterm sizing | 2026-09-12 → in-tree terminal sizing helper (issue #7014) |
 | `@xterm/addon-web-links` | 1 | KEEP | xterm links | |
 | `lucide-react` | 1 | KEEP | icons | Widely-used |
 | `react` | 1 | KEEP | UI | |
