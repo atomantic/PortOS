@@ -4,14 +4,14 @@ import * as api from '../../services/api';
 import socket from '../../services/socket';
 import EventDetail from './EventDetail';
 import ChronotypeOverlay from './ChronotypeOverlay';
-import { buildSubcalendarColorMap, eventChipStyle } from './calendarUtils';
+import { buildSubcalendarColorMap, eventChipStyle, getEventDayMinutes } from './calendarUtils';
 import BrailleSpinner from '../BrailleSpinner';
 import { useThemeContext } from '../ThemeContext';
 import { formatMonthDay, formatWeekdayShort, formatDateShort, formatHourOfDay } from '../../utils/formatters';
 import useUrlParams from '../../hooks/useUrlParams';
 
-const START_HOUR = 6;
-const END_HOUR = 23;
+const START_HOUR = 0;
+const END_HOUR = 24;
 const HOURS = Array.from({ length: END_HOUR - START_HOUR }, (_, i) => i + START_HOUR);
 const PX_PER_HOUR = 80;
 const PX_PER_15MIN = PX_PER_HOUR / 4; // 20px per 15-min block
@@ -32,29 +32,23 @@ function getWeekDays(weekStart) {
   });
 }
 
-function getEventMinutes(event) {
-  const start = new Date(event.startTime);
-  const end = new Date(event.endTime);
-  return {
-    startMin: start.getHours() * 60 + start.getMinutes(),
-    endMin: end.getHours() * 60 + end.getMinutes()
-  };
-}
-
-function getEventPosition(event) {
-  const { startMin, endMin } = getEventMinutes(event);
+function getEventPosition(event, day) {
+  const { startMin, endMin } = getEventDayMinutes(event, day);
   const top = ((startMin - START_MINUTES) / 60) * PX_PER_HOUR;
-  const height = Math.max(((endMin - startMin) / 60) * PX_PER_HOUR, PX_PER_15MIN);
-  return { top: Math.max(top, 0), height };
+  const height = Math.min(
+    Math.max(((endMin - startMin) / 60) * PX_PER_HOUR, PX_PER_15MIN),
+    HOURS.length * PX_PER_HOUR - top,
+  );
+  return { top, height };
 }
 
 function eventKey(e) {
   return `${e.accountId}-${e.id}`;
 }
 
-function layoutEvents(events) {
+function layoutEvents(events, day) {
   const items = events.map(e => {
-    const { startMin, endMin } = getEventMinutes(e);
+    const { startMin, endMin } = getEventDayMinutes(e, day);
     return { event: e, startMin, endMin: Math.max(endMin, startMin + 15) };
   }).sort((a, b) => a.startMin - b.startMin || a.endMin - b.endMin);
 
@@ -110,7 +104,7 @@ export default function WeekView({ accounts }) {
   const [searchParams, updateParams] = useUrlParams();
   const { theme } = useThemeContext();
 
-  const weekDays = getWeekDays(weekStart);
+  const weekDays = useMemo(() => getWeekDays(weekStart), [weekStart]);
   const weekEnd = new Date(weekStart);
   weekEnd.setDate(weekEnd.getDate() + 7);
   const weekStartIso = weekStart.toISOString();
@@ -151,10 +145,9 @@ export default function WeekView({ accounts }) {
   const selectedEvent = events.find((event) => `${event.accountId}:${event.id}` === selectedEventKey) || null;
 
   // Group events by day
-  const eventsByDay = useMemo(() => weekDays.map(day => {
-    const dayStr = day.toDateString();
-    return events.filter(e => !e.isAllDay && new Date(e.startTime).toDateString() === dayStr);
-  }), [events, weekDays]);
+  const eventsByDay = useMemo(() => weekDays.map(day =>
+    events.filter(e => !e.isAllDay && getEventDayMinutes(e, day))
+  ), [events, weekDays]);
 
   const allDayByDay = useMemo(() => weekDays.map(day => {
     const dayStr = day.toDateString();
@@ -163,8 +156,8 @@ export default function WeekView({ accounts }) {
 
   // Memoize layouts per day
   const layoutsByDay = useMemo(
-    () => eventsByDay.map(dayEvents => layoutEvents(dayEvents)),
-    [eventsByDay]
+    () => eventsByDay.map((dayEvents, index) => layoutEvents(dayEvents, weekDays[index])),
+    [eventsByDay, weekDays]
   );
 
   const now = new Date();
@@ -275,7 +268,7 @@ export default function WeekView({ accounts }) {
                 return (
                   <div key={dayIndex} className="flex-1 relative border-l border-port-border/50">
                     {dayEvents.map(event => {
-                      const { top, height } = getEventPosition(event);
+                      const { top, height } = getEventPosition(event, weekDays[dayIndex]);
                       const key = eventKey(event);
                       const { column, totalColumns } = layout.get(key) || { column: 0, totalColumns: 1 };
                       const widthPercent = 100 / totalColumns;
@@ -289,7 +282,6 @@ export default function WeekView({ accounts }) {
                           style={{
                             top,
                             height,
-                            minHeight: PX_PER_15MIN,
                             left: `calc(${leftPercent}% + 1px)`,
                             width: `calc(${widthPercent}% - 2px)`,
                             ...eventChipStyle(evColor, theme?.mode)

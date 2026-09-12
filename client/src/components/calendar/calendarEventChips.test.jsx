@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, cleanup, act } from '@testing-library/react';
+import { render, screen, cleanup, act, fireEvent, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 
 // One suite for the three views because the thing under test is one contract
@@ -35,9 +35,10 @@ import ChronotypeOverlay from './ChronotypeOverlay';
 const SUBCALENDAR_COLOR = '#fbd75b';
 const ACCOUNTS = [{ subcalendars: [{ calendarId: 'cal-1', color: SUBCALENDAR_COLOR }] }];
 
-const at = (hour) => {
+const at = (hour, minute = 0, dayOffset = 0) => {
   const d = new Date();
-  d.setHours(hour, 0, 0, 0);
+  d.setDate(d.getDate() + dayOffset);
+  d.setHours(hour, minute, 0, 0);
   return d.toISOString();
 };
 
@@ -108,7 +109,10 @@ beforeEach(() => {
   api.getChronotypeEnergySchedule.mockResolvedValue(null);
 });
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  vi.useRealTimers();
+});
 
 describe.each([
   ['MonthView', (accounts) => <MonthView accounts={accounts} />, ['Quarter Close']],
@@ -138,6 +142,83 @@ describe.each([
     await act(async () => {});
     expectNoImportantUtilityUnderGrading(container);
     for (const title of titles) expectTitleInheritsGrading(chipFor(title), title);
+  });
+});
+
+describe.each([
+  ['DayView', DayView],
+  ['WeekView', WeekView],
+])('%s full-day event placement', (name, View) => {
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date(2026, 8, 8, 12));
+  });
+
+  const event = (id, startTime, endTime) => ({ ...TIMED, id, title: id, startTime, endTime });
+  const positions = (title) => screen.queryAllByRole('button', { name: title }).map(chip => ({
+    top: Number.parseFloat(chip.style.top), height: Number.parseFloat(chip.style.height),
+  }));
+  const expectFullDayGrid = () => {
+    const firstRow = screen.getByText('12 AM').closest('[style]');
+    const hourRows = [...firstRow.parentElement.children].filter(row => row.style.height === '80px');
+    expect(hourRows).toHaveLength(24);
+    expect(screen.getByText('11 PM')).toBeInTheDocument();
+  };
+
+  it('keeps all 24 hours when the only event is during ordinary hours', async () => {
+    api.getCalendarEvents.mockResolvedValue({ events: [event('Ordinary meeting', at(10), at(11))] });
+    await renderView(<View accounts={ACCOUNTS} />);
+    expectFullDayGrid();
+    expect(positions('Ordinary meeting')).toEqual([{ top: 800, height: 80 }]);
+  });
+
+  it('positions early and late events inside the grid and opens their details', async () => {
+    api.getCalendarEvents.mockResolvedValue({ events: [
+      event('Early meeting', at(5), at(5, 30)),
+      event('Late meeting', at(23, 30), at(23, 45)),
+      event('Midnight finish', at(22), at(0, 0, 1)),
+    ] });
+    await renderView(<View accounts={ACCOUNTS} />);
+    expectFullDayGrid();
+    expect(positions('Early meeting')).toEqual([{ top: 400, height: 40 }]);
+    expect(positions('Late meeting')).toEqual([{ top: 1880, height: 20 }]);
+    expect(positions('Midnight finish')).toEqual([{ top: 1760, height: 160 }]);
+
+    for (const title of ['Early meeting', 'Late meeting', 'Midnight finish']) {
+      fireEvent.click(chipFor(title));
+      const detail = await screen.findByRole('dialog', { name: title });
+      fireEvent.click(within(detail).getByRole('button', { name: 'Close' }));
+    }
+  });
+
+  it('clips overnight portions to each intersecting day and treats midnight as exclusive', async () => {
+    api.getCalendarEvents.mockResolvedValue({ events: [
+      event('Overnight arrival', at(22, 0, -1), at(1)),
+      event('Overnight departure', at(23), at(2, 0, 1)),
+      event('Already ended', at(23, 0, -1), at(0)),
+    ] });
+    await renderView(<View accounts={ACCOUNTS} />);
+    if (name === 'DayView') {
+      expect(positions('Overnight arrival')).toEqual([{ top: 0, height: 80 }]);
+      expect(positions('Overnight departure')).toEqual([{ top: 1840, height: 80 }]);
+      expect(positions('Already ended')).toEqual([]);
+    } else {
+      expect(positions('Overnight arrival')).toEqual([{ top: 1760, height: 160 }, { top: 0, height: 80 }]);
+      expect(positions('Overnight departure')).toEqual([{ top: 1840, height: 80 }, { top: 0, height: 160 }]);
+      expect(positions('Already ended')).toEqual([{ top: 1840, height: 80 }]);
+    }
+  });
+});
+
+it('requests the next local midnight on a daylight-saving transition day', async () => {
+  vi.useFakeTimers({ toFake: ['Date'] });
+  vi.setSystemTime(new Date(2026, 2, 8, 12));
+  api.getCalendarEvents.mockResolvedValue({ events: [] });
+  await renderView(<DayView accounts={ACCOUNTS} />);
+  expect(api.getCalendarEvents).toHaveBeenCalledWith({
+    startDate: new Date(2026, 2, 8).toISOString(),
+    endDate: new Date(2026, 2, 9).toISOString(),
+    limit: 200,
   });
 });
 
