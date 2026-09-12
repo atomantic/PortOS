@@ -69,7 +69,7 @@ import { EventEmitter } from 'events';
 import { createHash } from 'crypto';
 import { hostname } from 'os';
 import { PassThrough } from 'node:stream';
-import { spawn as spawnChild } from 'node:child_process';
+import { spawn as spawnChild, spawnSync } from 'node:child_process';
 import { spawn } from '../lib/childProcess.js';
 // Partial mock: only override spawn. Preserve execFile et al. because
 // backup.js transitively imports fileUtils.js, which promisifies execFile.
@@ -110,7 +110,15 @@ vi.mock('./brainStorage.js', async (importOriginal) => ({
 }));
 import { reloadSettings } from './settings.js';
 import { invalidateAllCaches as invalidateBrainCaches } from './brainStorage.js';
-import { DEFAULT_EXCLUDES, computeEffectiveExcludes, listSnapshots, openSnapshotStream, restoreSnapshot } from './backup.js';
+import { DEFAULT_EXCLUDES, computeEffectiveExcludes, listSnapshots, openSnapshotStream, restoreSnapshot, resolveRsyncBinary } from './backup.js';
+
+// Resolved once: the restore path spawns whatever `resolveRsyncBinary()` names,
+// so probe THAT rather than a hard-coded 'rsync' — an install pointed at a
+// bundled binary via PORTOS_RSYNC is still covered.
+const hasRealRsync = (() => {
+  const probe = spawnSync(resolveRsyncBinary(), ['--version'], { stdio: 'ignore' });
+  return !probe.error && probe.status === 0;
+})();
 
 // fs.access is mocked file-wide because backup.js probes the .in-progress marker
 // with it. Restore the real implementation before EVERY test: vi.clearAllMocks()
@@ -1482,7 +1490,13 @@ describe('restoreSnapshot manifest verification', () => {
     });
   });
 
-  it('restores differing bytes when size and mtime match through real rsync', async () => {
+  // The ONE case here that shells out to a REAL rsync — every other one drives
+  // a faked child process — so it can only run where rsync is actually
+  // installed. The Windows CI runner has none, and a `spawn rsync ENOENT` there
+  // is an environment gap, not a regression in the restore path. Probed rather
+  // than gated on `process.platform` so a Windows box carrying MSYS/Git-Bash
+  // rsync still gets the coverage, and a Linux box without it still skips.
+  it.skipIf(!hasRealRsync)('restores differing bytes when size and mtime match through real rsync', async () => {
     const relativePath = 'brain/example.json';
     const snapshotContent = '{"value":"old"}';
     const liveContent = '{"value":"new"}';
