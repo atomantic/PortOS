@@ -782,6 +782,7 @@ export default function AutopilotPanel({ series, onSeriesUpdate, onIssuesUpdate 
   // fresh Run/Resume would see that stale terminal frame and immediately tear
   // the new run down. Terminal frames whose runId doesn't match are ignored.
   const activeRunIdRef = useRef(null);
+  const activeRunSeriesIdRef = useRef(seriesId);
   const settledRunIdRef = useRef(null);
   const terminalVersionRef = useRef(0);
 
@@ -810,9 +811,11 @@ export default function AutopilotPanel({ series, onSeriesUpdate, onIssuesUpdate 
         if (canceled || terminalVersion !== terminalVersionRef.current || !s?.active) return;
         // The live start frame owns identity; the persisted marker can still
         // describe a previous run, and dry-runs never persist one.
-        const runId = s.start?.runId || s.autopilot?.runId || null;
+        const knownRunId = activeRunSeriesIdRef.current === seriesId ? activeRunIdRef.current : null;
+        const runId = s.start?.runId || knownRunId || null;
         if (settledRunIdRef.current && runId === settledRunIdRef.current) return;
         activeRunIdRef.current = runId;
+        activeRunSeriesIdRef.current = seriesId;
         // SSE replays only the last frame, so the run's `start` frame comes back
         // on the status payload instead — same shape, same reader.
         if (s.start) applyStartFrame(s.start);
@@ -934,6 +937,7 @@ export default function AutopilotPanel({ series, onSeriesUpdate, onIssuesUpdate 
     // Track this run's id BEFORE enabling the stream so the terminal-frame
     // effect can reject a stale terminal frame from the previous run.
     activeRunIdRef.current = res.runId || null;
+    activeRunSeriesIdRef.current = seriesId;
     setAttachVersion((version) => version + 1);
     setActive(true);
     // `options` is the single dep for every persisted option — the registry reads

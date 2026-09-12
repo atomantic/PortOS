@@ -102,6 +102,22 @@ describe('AutopilotPanel', () => {
     expect(screen.queryByRole('button', { name: /pause safely/i })).not.toBeInTheDocument();
   });
 
+  it('keeps the started run identity when status still carries a previous marker', async () => {
+    getPipelineAutopilotStatus.mockResolvedValueOnce({ active: false })
+      .mockResolvedValueOnce({ active: true, autopilot: { runId: 'previous-run' }, start: null });
+    const view = renderPanel({ id: 's1', targetFormat: 'comic' });
+    await waitFor(() => expect(getPipelineAutopilotStatus).toHaveBeenCalledTimes(1));
+    fireEvent.click(screen.getByRole('button', { name: /run autopilot/i }));
+    await waitFor(() => expect(getPipelineAutopilotStatus).toHaveBeenCalledTimes(2));
+    await act(async () => {});
+    sseLatest = { type: 'paused', runId: 'r1', reason: 'pilot needs work' };
+    sseFrames = [sseLatest];
+    view.rerender(<MemoryRouter><AutopilotPanel series={{ id: 's1', targetFormat: 'comic' }} /></MemoryRouter>);
+    await waitFor(() => expect(toast.warning).toHaveBeenCalledTimes(1));
+    expect(screen.getByRole('button', { name: /run autopilot/i })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /pause safely/i })).not.toBeInTheDocument();
+  });
+
   it('passes options chosen in the popover', async () => {
     renderPanel({ id: 's1', targetFormat: 'comic' });
     await waitFor(() => expect(getPipelineAutopilotStatus).toHaveBeenCalled());
