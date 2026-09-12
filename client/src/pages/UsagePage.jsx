@@ -126,7 +126,9 @@ function ProviderQuotaCard({ quota, onRefresh, refreshing, disabled }) {
             title={`Refresh ${quota.label} usage`}
             aria-label={`Refresh ${quota.label} usage`}
           >
-            <RefreshCw size={14} className={`w-3 h-3 sm:w-3.5 sm:h-3.5 ${refreshing ? 'animate-spin' : ''}`} />
+            {/* `will-change-transform` — see the section-level Refresh button's
+                comment on the compositor-layer artifact this avoids. */}
+            <RefreshCw size={14} className={`w-3 h-3 sm:w-3.5 sm:h-3.5 will-change-transform ${refreshing ? 'animate-spin' : ''}`} />
           </button>
         </div>
       </div>
@@ -309,7 +311,11 @@ function ProviderQuotaSection() {
           className="flex items-center gap-1.5 px-2 sm:px-3 py-1.5 text-xs sm:text-sm text-gray-400 hover:text-white disabled:opacity-50"
           title="Refresh every provider's usage"
         >
-          <RefreshCw size={15} className={loading ? 'animate-spin' : ''} /> Refresh all
+          {/* `will-change-transform` promotes the icon to its own compositor
+              layer before `animate-spin` starts — without it this button's
+              continuous rotate restarts each poll and can leave a stale
+              rasterized frame behind the live one on some GPUs. */}
+          <RefreshCw size={15} className={`will-change-transform ${loading ? 'animate-spin' : ''}`} /> Refresh all
         </button>
       </div>
 
