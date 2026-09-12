@@ -61,6 +61,7 @@ import {
   resumePersistentMind,
   startPersistentMind,
   stopPersistentMind,
+  wakePersistentMind,
 } from '../services/persistentMindSupervisor.js';
 
 const router = Router();
@@ -346,6 +347,10 @@ router.post('/mind/annotations', asyncHandler(async (req, res) => {
   const result = await appendPersistentMindAnnotation(input);
   if (result.error) throw new ServerError(result.error, { status: 409, code: 'INVALID_STATE' });
   res.status(202).json({ success: true, duplicate: result.duplicate === true, annotationId: input.id });
+}));
+
+router.post('/mind/wake', asyncHandler(async (_req, res) => {
+  res.json(requireSuccess(await wakePersistentMind()));
 }));
 
 router.post('/mind/start', asyncHandler(async (_req, res) => {

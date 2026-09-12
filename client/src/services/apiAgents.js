@@ -75,6 +75,7 @@ export const deletePersistentMindAttachment = (attachmentId, options = {}) =>
   request(`/cos/mind/attachments/${encodeURIComponent(attachmentId)}`, { method: 'DELETE', ...options });
 export const addPersistentMindAnnotation = (body, options = {}) =>
   request('/cos/mind/annotations', { method: 'POST', body: JSON.stringify(body), ...options });
+export const wakePersistentMind = (options = {}) => request('/cos/mind/wake', { method: 'POST', ...options });
 export const startPersistentMind = (options = {}) => request('/cos/mind/start', { method: 'POST', ...options });
 export const pausePersistentMind = (reason, options = {}) => request('/cos/mind/pause', {
   method: 'POST', body: JSON.stringify({ reason }), ...options,
