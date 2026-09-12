@@ -12,9 +12,9 @@ import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { writeFileSync } from 'fs';
 import { join } from 'path';
 import express from 'express';
-import { request } from '../lib/testHelper.js';
-import { mockPathsDataRoot } from '../lib/mockPathsDataRoot.js';
-import { bindSettingsFile } from '../lib/settingsTestUtil.js';
+const { request } = await import('../lib/testHelper.js');
+const { mockPathsDataRoot } = await import('../lib/mockPathsDataRoot.js');
+const { bindSettingsFile } = await import('../lib/settingsTestUtil.js');
 
 const { tempRoot, makeProxy, cleanup } = mockPathsDataRoot({ prefix: 'portos-publicapi-' });
 

@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
-import { buildToolResource, TOOL_RESOURCE_TYPE } from './apiToolResource.js';
-import { API_OPERATION_CONTRACTS } from './apiOperationContracts.js';
-import { ERROR_CODES_BY_STATUS } from './errorHandler.js';
+const { buildToolResource, TOOL_RESOURCE_TYPE } = await import('./apiToolResource.js');
+const { API_OPERATION_CONTRACTS } = await import('./apiOperationContracts.js');
+const { ERROR_CODES_BY_STATUS } = await import('./errorHandler.js');
 
 const resource = buildToolResource({ version: '9.9.9' });
 const byName = (name) => resource.tools.find((tool) => tool.name === name);

@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import express from 'express';
-import { request } from '../lib/testHelper.js';
+const { request } = await import('../lib/testHelper.js');
 
 vi.mock('../services/voice/tts.js', async () => ({
   synthesize: vi.fn(),
@@ -14,9 +14,9 @@ vi.mock('../services/voice/proactiveSpeech.js', () => ({
   MAX_PROACTIVE_TEXT_LEN: 2000,
 }));
 
-import * as tts from '../services/voice/tts.js';
-import * as config from '../services/voice/config.js';
-import voicePublicRoutes from './voicePublic.js';
+const tts = await import('../services/voice/tts.js');
+const config = await import('../services/voice/config.js');
+const { default: voicePublicRoutes } = await import('./voicePublic.js');
 
 const buildApp = () => {
   const app = express();

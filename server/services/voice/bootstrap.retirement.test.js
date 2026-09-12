@@ -19,9 +19,9 @@ vi.mock('../../lib/childProcess.js', () => ({ execFile: vi.fn() }));
 vi.mock('../settings.js', () => ({ getSettings: vi.fn(), updateSettings: vi.fn() }));
 
 import { existsSync } from 'fs';
-import { whichFirst } from '../../lib/processEnv.js';
+const { whichFirst } = await import('../../lib/processEnv.js');
 const { execPm2 } = await import('../pm2.js');
-import { execFile } from '../../lib/childProcess.js';
+const { execFile } = await import('../../lib/childProcess.js');
 const { getProviderById } = await import('../providers.js');
 const { VOICE_DEFAULTS } = await import('./config.js');
 const { reconcile } = await import('./bootstrap.js');

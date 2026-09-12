@@ -11,12 +11,12 @@ vi.mock('./profiles.js', () => ({ getProfileForSynthesis: vi.fn() }));
 vi.mock('./bootstrap.js', () => ({ which: vi.fn() }));
 vi.mock('../../lib/processEnv.js', () => ({ whichFirst: vi.fn().mockResolvedValue(null) }));
 
-import { getVoiceConfig } from './config.js';
-import { synthesizePiper } from './tts-piper.js';
-import { findPiperVoice } from './piper-voices.js';
-import { synthesizeQwen3 } from './tts-qwen3.js';
-import { getProfileForSynthesis } from './profiles.js';
-import { listVoiceEngines, normalizeVoiceEngine, synthesize } from './tts.js';
+const { getVoiceConfig } = await import('./config.js');
+const { synthesizePiper } = await import('./tts-piper.js');
+const { findPiperVoice } = await import('./piper-voices.js');
+const { synthesizeQwen3 } = await import('./tts-qwen3.js');
+const { getProfileForSynthesis } = await import('./profiles.js');
+const { listVoiceEngines, normalizeVoiceEngine, synthesize } = await import('./tts.js');
 
 const CONFIG = {
   tts: {

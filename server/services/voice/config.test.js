@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 vi.mock('../settings.js', () => ({ getSettings: vi.fn(), updateSettings: vi.fn() }));
-import { getSettings, updateSettings } from '../settings.js';
-import { VOICE_DEFAULTS, getVoiceConfig, updateVoiceConfig, invalidateVoiceConfigCache } from './config.js';
+const { getSettings, updateSettings } = await import('../settings.js');
+const { VOICE_DEFAULTS, getVoiceConfig, updateVoiceConfig, invalidateVoiceConfigCache } = await import('./config.js');
 
 beforeEach(() => { vi.clearAllMocks(); invalidateVoiceConfigCache(); });
 
