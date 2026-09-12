@@ -94,6 +94,17 @@ describe('BackupTab', () => {
       getBackupSnapshots.mockResolvedValue([{ id: 'snap-2026-06-09' }]);
     };
 
+    it('labels failed snapshots and does not offer database restore', async () => {
+      getBackupSnapshots.mockResolvedValue([{ id: 'snap-failed', failed: true }]);
+      await renderTab();
+
+      expect(await screen.findByText('Backup failed — download only')).toBeInTheDocument();
+      const restore = screen.getByRole('button', { name: /Restore DB/i });
+      expect(restore).toBeDisabled();
+      fireEvent.click(restore);
+      expect(restoreDatabase).not.toHaveBeenCalled();
+    });
+
     it('runs a dry-run and opens the confirm modal — without restoring', async () => {
       withSnapshot();
       restoreDatabase.mockResolvedValue({ status: 'ok', sizeBytes: 2048, tableCount: 12 });

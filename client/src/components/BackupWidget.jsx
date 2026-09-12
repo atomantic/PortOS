@@ -230,7 +230,7 @@ function SnapshotList({ restoringSnapshotId, onRestoreStateChange }) {
       // the oldest — walk every rendered tuple (id + fileCount) so a stale
       // server-side fileCount recount or a middle-row mutation can't hide
       // behind the head/tail id check.
-      compare: (prev, next) => equalListByKeys(prev, next, ['id', 'fileCount', 'incomplete']),
+      compare: (prev, next) => equalListByKeys(prev, next, ['id', 'fileCount', 'incomplete', 'failed']),
     },
   );
   const [selectedId, setSelectedId] = useState(null);
@@ -267,7 +267,11 @@ function SnapshotList({ restoringSnapshotId, onRestoreStateChange }) {
             <div className="min-w-0 flex-1">
               <div className="text-xs text-gray-300 font-mono truncate">{snap.id}</div>
               <div className="text-xs text-gray-600">
-                {snap.incomplete ? 'Still being written…' : `${snap.fileCount} files`}
+                {snap.incomplete
+                  ? 'Still being written…'
+                  : snap.failed
+                    ? 'Backup failed — download available for salvage'
+                    : `${snap.fileCount} files`}
               </div>
             </div>
             <div className="flex shrink-0 items-center gap-1">
@@ -285,7 +289,8 @@ function SnapshotList({ restoringSnapshotId, onRestoreStateChange }) {
               </button>
               <button
                 onClick={() => setSelectedId(selectedId === snap.id ? null : snap.id)}
-                disabled={snap.incomplete || restoringSnapshotId !== null}
+                disabled={snap.incomplete || snap.failed || restoringSnapshotId !== null}
+                title={snap.failed ? 'Failed backup snapshots can only be downloaded for salvage' : undefined}
                 className="flex items-center gap-1 px-2 py-1 text-xs text-port-accent hover:text-port-accent/80 transition-colors disabled:opacity-50 disabled:cursor-not-allowed min-h-[32px]"
               >
                 <RotateCcw size={12} />
@@ -293,7 +298,7 @@ function SnapshotList({ restoringSnapshotId, onRestoreStateChange }) {
               </button>
             </div>
           </div>
-          {selectedId === snap.id && (
+          {selectedId === snap.id && !snap.incomplete && !snap.failed && (
             <RestorePanel
               snapshot={snap}
               onClose={() => setSelectedId(null)}

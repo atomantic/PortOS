@@ -69,6 +69,24 @@ describe('BackupWidget snapshots', () => {
     expect(screen.getByRole('button', { name: 'Restore' })).toBeDisabled();
   });
 
+  it('keeps failed snapshots downloadable for salvage but disables restore', async () => {
+    mockGetBackupSnapshots.mockResolvedValue([
+      { id: '2026-08-25T12-00-00', fileCount: 2, failed: true, incomplete: false },
+    ]);
+    renderWidget();
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Snapshots' }));
+    expect(await screen.findByText('Backup failed — download available for salvage')).toBeInTheDocument();
+    const download = screen.getByRole('button', { name: /Download snapshot/ });
+    const restore = screen.getByRole('button', { name: 'Restore' });
+    expect(download).toBeEnabled();
+    expect(restore).toBeDisabled();
+
+    fireEvent.click(download);
+    await waitFor(() => expect(mockDownloadBackupSnapshot).toHaveBeenCalledWith('2026-08-25T12-00-00'));
+    expect(mockRestoreBackup).not.toHaveBeenCalled();
+  });
+
   it('offers a download action for each snapshot and confirms success', async () => {
     renderWidget();
 

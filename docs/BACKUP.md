@@ -17,7 +17,8 @@ A backup run (`runBackup` in `server/services/backup.js`) writes to:
 <destPath>/snapshots/<hostname>/<snapshotId>/
 ├── data/             # rsync mirror of ./data/ (minus excludes)
 ├── portos-db.sql     # pg_dump logical dump
-└── manifest.json     # SHA-256 of every data/ file AND ../portos-db.sql
+├── manifest.json     # SHA-256 of every data/ file AND ../portos-db.sql
+└── .failed           # present only when snapshot creation failed
 ```
 
 - Snapshots are namespaced by `<hostname>` so one shared destination (e.g. an iCloud folder) can host backups from several federated machines without `snapshotId` collisions.
@@ -61,6 +62,8 @@ Key behaviors, accurate to the code:
 ## How restore works
 
 Restore is two independent operations — restoring files and restoring the DB are separate decisions. Both are **dry-run by default** and validate `snapshotId` against path traversal before touching anything.
+
+A backup run that fails after creating its snapshot directory records a durable `.failed` marker before releasing its `.in-progress` guards. Failed snapshots are never eligible for file or database restore (`SNAPSHOT_FAILED`); they remain downloadable so their partial files can be inspected or recovered manually. If PortOS cannot write the failed marker, it keeps the existing incomplete markers instead, which also block restore. Snapshots created by older PortOS versions without a manifest or failure marker retain their legacy behavior because an unmarked historical failure cannot be distinguished reliably from a genuine pre-manifest snapshot.
 
 ### Files — `restoreSnapshot()`
 
