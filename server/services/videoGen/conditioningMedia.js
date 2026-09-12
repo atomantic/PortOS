@@ -53,6 +53,28 @@ export async function prepareVideoConditioningMedia({
     );
   }
   const hasMultiKeyframes = Array.isArray(keyframes) && keyframes.length >= 2;
+  if (hasMultiKeyframes) {
+    // The route validates shape, but a non-route caller (test, persisted
+    // queue replay, future internal API) could pass malformed entries.
+    // Validate before any resize subprocess starts so a rejection cannot
+    // strand temp files created for the other conditioning inputs.
+    keyframes.forEach((kf, i) => {
+      if (!kf || typeof kf !== 'object') {
+        throw new ServerError(`keyframes[${i}] must be an object: got ${typeof kf}`, { status: 400, code: 'KEYFRAME_INVALID_SHAPE' });
+      }
+      if (typeof kf.path !== 'string' || !kf.path) {
+        throw new ServerError(`keyframes[${i}].path must be a non-empty string`, { status: 400, code: 'KEYFRAME_INVALID_SHAPE' });
+      }
+      // The Python helper enforces `index` is an int; a float or numeric
+      // string here would crash mid-render. Coerce + verify integerness
+      // up-front so non-route callers (tests, persisted queue replays)
+      // get a clear 400 instead of a Python traceback.
+      const n = Number(kf.index);
+      if (!Number.isInteger(n)) {
+        throw new ServerError(`keyframes[${i}].index must be an integer: got ${kf.index}`, { status: 400, code: 'KEYFRAME_INVALID_SHAPE' });
+      }
+    });
+  }
   const ffmpeg = (sourceImagePath || lastImageWillBeUsed || hasMultiKeyframes) ? await findFfmpeg() : null;
   const ffprobe = model.runtime === 'minimax_h3_ref2va' ? await findFfprobe() : null;
   const resizeImage = async (srcPath, tag) => {
@@ -88,26 +110,6 @@ export async function prepareVideoConditioningMedia({
   const resizedKeyframeTempPaths = [];
   let resolvedKeyframes = null;
   if (hasMultiKeyframes) {
-    // The route validates shape, but a non-route caller (test, persisted
-    // queue replay, future internal API) could pass malformed entries.
-    // Fail fast with a clear error instead of letting `undefined` paths
-    // flow into ffmpeg or the Python helper, where the failure is opaque.
-    keyframes.forEach((kf, i) => {
-      if (!kf || typeof kf !== 'object') {
-        throw new ServerError(`keyframes[${i}] must be an object: got ${typeof kf}`, { status: 400, code: 'KEYFRAME_INVALID_SHAPE' });
-      }
-      if (typeof kf.path !== 'string' || !kf.path) {
-        throw new ServerError(`keyframes[${i}].path must be a non-empty string`, { status: 400, code: 'KEYFRAME_INVALID_SHAPE' });
-      }
-      // The Python helper enforces `index` is an int; a float or numeric
-      // string here would crash mid-render. Coerce + verify integerness
-      // up-front so non-route callers (tests, persisted queue replays)
-      // get a clear 400 instead of a Python traceback.
-      const n = Number(kf.index);
-      if (!Number.isInteger(n)) {
-        throw new ServerError(`keyframes[${i}].index must be an integer: got ${kf.index}`, { status: 400, code: 'KEYFRAME_INVALID_SHAPE' });
-      }
-    });
     const results = await Promise.all(keyframes.map((kf, i) => resizeImage(kf.path, `kf${i}`)));
     resolvedKeyframes = results.map((r, i) => {
       if (r.tempPath) resizedKeyframeTempPaths.push(r.tempPath);

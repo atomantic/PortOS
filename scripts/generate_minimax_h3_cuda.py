@@ -175,6 +175,21 @@ def validate_checkpoint_indexes(snapshot: Path) -> None:
     def fail_walk(error):
         raise error
 
+    snapshot_abs = os.path.abspath(snapshot)
+    allowed_roots = {os.path.realpath(snapshot_abs)}
+    # Hugging Face snapshots normally link files into the sibling `blobs/`
+    # directory. Keep that supported link shape, but do not let an arbitrary
+    # symlink turn a checkpoint shard into a read of another local file.
+    for ancestor in Path(snapshot_abs).parents:
+        if ancestor.name == "snapshots":
+            allowed_roots.add(os.path.realpath(ancestor.parent / "blobs"))
+
+    def is_under(path, root):
+        try:
+            return os.path.commonpath((path, root)) == root
+        except ValueError:
+            return False
+
     for folder, directories, files in os.walk(snapshot, onerror=fail_walk):
         # HF caches symlink FILES, not component directories. Do not silently
         # skip an index hidden behind a directory symlink during this walk.
@@ -207,8 +222,12 @@ def validate_checkpoint_indexes(snapshot: Path) -> None:
                 # An unused, partially cached component may lack shards. Leave
                 # missing-file reporting to the loader, but never open a FIFO,
                 # directory, device, or dangling symlink that DOES exist.
-                if os.path.lexists(target) and not os.path.isfile(target):
-                    raise ValueError("Checkpoint shard must be a regular file.")
+                if os.path.lexists(target):
+                    resolved_target = os.path.realpath(target)
+                    if not any(is_under(resolved_target, root) for root in allowed_roots):
+                        raise ValueError("Checkpoint shard symlink escapes the model cache.")
+                    if not os.path.isfile(target):
+                        raise ValueError("Checkpoint shard must be a regular file.")
 
 
 def load_pipeline(snapshot: Path, profile: str):
