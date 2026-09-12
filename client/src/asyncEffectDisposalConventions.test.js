@@ -57,6 +57,10 @@
  *     added beside it is invisible. Pinning that needs per-statement dataflow,
  *     which a lexical scan cannot do; the allowlist rows are deliberately
  *     file-scoped for the same reason.
+ *   - The self-retrigger rule reads control flow only as far as "this block's
+ *     last statement is a `return`". A path that leaves by `throw`, or through a
+ *     branch whose return sits anywhere but last, reads as reachable — which
+ *     errs toward reporting, so the cost is an allowlist row, not a miss.
  *   - The fetch/apply pair moved into a helper the effect calls is invisible,
  *     and so is a guard living in that helper.
  *   - `depsAllStable` resolves a `useRef` / `useMounted` handle only by a
@@ -321,7 +325,28 @@ export function unguardedEffects(src) {
 }
 
 /**
- * Spans of the nested `{…}` blocks in an effect body that contain a `return`.
+ * Whether a block's own last statement is a `return`, so every path through it
+ * leaves the effect.
+ *
+ * "Contains a return" is not enough: `{ setLoading(true); if (cached) return; }`
+ * falls through whenever `cached` is false, and the write still re-triggers.
+ * Nested `{…}` become `;` so the statement split sees `if (b) {…}` as finished
+ * and `{ if (b) { setX(); } return; }` still reads as an unconditional bail.
+ */
+function alwaysReturns(inner) {
+  let flat = '';
+  let depth = 0;
+  for (const char of inner) {
+    if (char === '{') { depth += 1; if (depth === 1) flat += ';'; continue; }
+    if (char === '}') { depth = Math.max(0, depth - 1); continue; }
+    if (depth === 0) flat += char;
+  }
+  const statements = flat.split(';').map((s) => s.trim()).filter(Boolean);
+  return /^return\b/.test(statements.at(-1) || '');
+}
+
+/**
+ * Spans of the nested `{…}` blocks in an effect body that always return.
  *
  * Anything inside one is on a path that leaves the effect, so it cannot reach —
  * and therefore cannot cancel — a request set up after it. The callback's own
@@ -339,7 +364,7 @@ function bailingBlocks(body) {
     else if (body[i] === '}' && open.length) {
       const start = open.pop();
       // depth 1 is the callback body itself
-      if (open.length >= 1 && /\breturn\b/.test(body.slice(start, i))) spans.push([start, i]);
+      if (open.length >= 1 && alwaysReturns(body.slice(start + 1, i))) spans.push([start, i]);
     }
   }
   return spans;
@@ -742,6 +767,20 @@ describe('identity-keyed async effects drop superseded responses', () => {
           return () => { active = false; };
         }, [a, b, offset]);
       `)).toBe(0);
+
+      // A block that only CONDITIONALLY returns does not exempt the write —
+      // with `cached` false, execution falls through to the request.
+      expect(flagged(`
+        useEffect(() => {
+          if (enabled) {
+            setLoading(true);
+            if (cached) return;
+          }
+          let active = true;
+          load(id).then((v) => { if (active) setValue(v); });
+          return () => { active = false; };
+        }, [id, loading]);
+      `)).toBe(1);
 
       // A generation ref is the sanctioned fix, not a violation.
       expect(flagged(`
