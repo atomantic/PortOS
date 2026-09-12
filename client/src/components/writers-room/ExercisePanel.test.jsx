@@ -1,6 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { act, render, screen } from '@testing-library/react';
-import { fireEvent } from '@testing-library/dom';
+import { act, fireEvent, render, screen } from '@testing-library/react';
 
 // The "Add to draft" promotion (#5300) only offers itself for a finished
 // sprint that (a) actually captured prose, (b) belongs to the work currently

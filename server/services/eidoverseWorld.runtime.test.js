@@ -189,7 +189,27 @@ vi.mock('ws', () => {
   return { WebSocket: FakeWebSocket };
 });
 
-const world = await import('./eidoverseWorld.js');
+const TEST_VERB_INTERVAL_MS = 0;
+const PACING_CONTRACT_INTERVAL_MS = 5;
+const testOptions = (options = {}) => ({ verbIntervalMs: TEST_VERB_INTERVAL_MS, ...options });
+const rawWorld = await import('./eidoverseWorld.js');
+const world = new Proxy(rawWorld, {
+  get(target, property, receiver) {
+    const value = Reflect.get(target, property, receiver);
+    if (typeof value !== 'function') return value;
+    if (property === 'augmentEidoverseWorld') {
+      return (operations, options) => value(operations, testOptions(options));
+    }
+    if (property === 'sayInEidoverseWorld') {
+      return (text, options) => value(text, testOptions(options));
+    }
+    if (['ensureEidoverseWorldPresence', 'projectEidoverseWorld', 'reconcilePendingEidoverseWorld',
+      'admitEidoverseGuest'].includes(property)) {
+      return (options) => value(testOptions(options));
+    }
+    return value;
+  },
+});
 const { EIDOVERSE_WORLD_DESIGN_V1 } = await import('../lib/eidoverseWorldDesign.js');
 
 beforeEach(async () => {
@@ -754,7 +774,7 @@ describe('Eidoverse private-world lifecycle', () => {
     expect(object).toBeDefined();
     await world.updateEidoverseWorldConfig({ labelAliases: { [object.resourceKey]: 'Example tower' } });
     const { SCRIPT_HANDLERS } = await import('./autonomousJobs/scriptHandlers.js');
-    const next = await SCRIPT_HANDLERS['eidoverse-projection']();
+    const next = await SCRIPT_HANDLERS['eidoverse-projection']({ verbIntervalMs: TEST_VERB_INTERVAL_MS });
     expect(next.summary.objectCount).toBeGreaterThan(0);
     expect(JSON.stringify(next).length).toBeLessThan(4096);
     expect(JSON.stringify(next)).not.toContain('Example tower');
@@ -858,7 +878,7 @@ describe('Eidoverse private-world lifecycle', () => {
     mocks.persistedState.lastAppliedDesignVersion = 1;
     mocks.persistedState.pendingDesignVersion = 2;
 
-    await world.projectEidoverseWorld();
+    await rawWorld.projectEidoverseWorld({ verbIntervalMs: PACING_CONTRACT_INTERVAL_MS });
 
     const authoredVerbs = mocks.sent.filter(({ type, verb }) => type === 'verb' && verb !== 'grant');
     const firstInfrastructure = authoredVerbs.findIndex(({ verb }) => verb === 'spawn');
@@ -875,7 +895,7 @@ describe('Eidoverse private-world lifecycle', () => {
       { world: 'portos', id: 'Example Retired Owner B' },
     ];
 
-    await world.projectEidoverseWorld();
+    await rawWorld.projectEidoverseWorld({ verbIntervalMs: PACING_CONTRACT_INTERVAL_MS });
 
     const cosVerbs = mocks.sent.filter(({ type, actor }) => type === 'verb' && actor === 'portos-cos');
     expect(cosVerbs.slice(0, 2).map(({ verb }) => verb)).toEqual(['grant', 'grant']);

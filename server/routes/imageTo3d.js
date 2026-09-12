@@ -23,7 +23,7 @@ import {
   SUBJECT_SCALE_MIN_EXCLUSIVE, SUBJECT_SCALE_MAX,
 } from '../services/imageTo3d/renderOptions.js';
 import { createInstallLogger } from '../lib/installLogger.js';
-import { openSseStream } from '../lib/sseDownload.js';
+import { onClientDisconnect, openSseStream } from '../lib/sseDownload.js';
 
 const router = Router();
 
@@ -75,45 +75,59 @@ const installsInFlight = new Set();
  * target's adapter (`services/imageTo3d/adapters.js`) — adding a target needs no
  * new branch here.
  */
+const annotateTargetStatus = async (target) => {
+  const adapter = getTargetAdapter(target.id);
+  const installed = adapter ? adapter.isInstalled() : null;
+  // An installed target can still be silently degraded (e.g. TRELLIS.2's Metal
+  // texture bake — #2952); a target's adapter opts into reporting that via
+  // `describeInstallState()`. Only probed once installed — there is nothing to
+  // report before then.
+  const state = installed && adapter?.describeInstallState ? await adapter.describeInstallState() : null;
+  return { ...target, installed, ...state?.fields };
+};
+
 router.get('/targets', asyncHandler(async (_req, res) => {
   const capabilities = await detectHostCapabilities();
-  const targets = await Promise.all(listTargets(capabilities).map(async (target) => {
-    const adapter = getTargetAdapter(target.id);
-    const installed = adapter ? adapter.isInstalled() : null;
-    // An installed target can still be silently degraded (e.g. TRELLIS.2's Metal
-    // texture bake — #2952); a target's adapter opts into reporting that via
-    // `describeInstallState()`. Only probed once installed — there is nothing to
-    // report before then.
-    const state = installed && adapter?.describeInstallState ? await adapter.describeInstallState() : null;
-    return { ...target, installed, ...state?.fields };
-  }));
+  const targets = await Promise.all(listTargets(capabilities).map(annotateTargetStatus));
   res.json({ capabilities, targets });
 }));
 
+const requireInstallableTarget = (targetId) => {
+  const target = getTarget(targetId);
+  const adapter = getTargetAdapter(targetId);
+  if (!target || !adapter?.install) {
+    throw new ServerError(`Unknown or non-installable image-to-3D target: ${targetId}`, {
+      status: 400,
+      code: 'IMAGE_TO_3D_TARGET_NOT_INSTALLABLE',
+    });
+  }
+  return { target, adapter };
+};
+
+const sendTargetInstallStatus = async (targetId, res) => {
+  requireInstallableTarget(targetId);
+  const capabilities = await detectHostCapabilities();
+  const target = listTargets(capabilities).find((candidate) => candidate.id === targetId) || getTarget(targetId);
+  res.json({ capabilities, target: await annotateTargetStatus(target) });
+};
+
+const installQuerySchema = z.object({ repair: z.enum(['0', '1']).optional() });
+
 /**
  * SSE-driven target install/repair, shared by every registered target. The
- * client opens an EventSource and gets staged progress (`stage` → `log` →
+ * client opens a POST fetch stream and gets staged progress (`stage` → `log` →
  * `complete` / `error`) while the target's adapter installs. Gated on hardware
  * support and single-flighted per target; killed if the client navigates away.
  * Only fires the real install on this explicit user request — never from boot
  * (AGENTS.md no-cold-bootstrap policy). Mirrors imageGenSetup.js's `/flux2-install`.
  */
-async function handleTargetInstall(targetId, req, res) {
+async function handleTargetInstall(targetId, target, adapter, repair, req, res) {
   const { send, safeEnd } = openSseStream(res);
-
-  const target = getTarget(targetId);
-  const adapter = getTargetAdapter(targetId);
-  if (!target || !adapter?.install) {
-    send({ type: 'error', message: `Unknown or non-installable image-to-3D target: ${targetId}` });
-    return safeEnd();
-  }
 
   // `repair=1` re-runs setup over an existing install. That is the documented fix
   // for a degraded install (e.g. TRELLIS.2's Metal texture bake — #2952): without
   // it, "Repair install" would hit the already-installed short-circuit below and
   // do nothing.
-  const repair = req.query.repair === '1';
-
   if (adapter.isInstalled() && !repair) {
     send({ type: 'stage', stage: 'verify', message: `${target.label} already installed.` });
     // "Installed" is not the same as "installed well" — surface any adapter
@@ -176,7 +190,7 @@ async function handleTargetInstall(targetId, req, res) {
     slotReleased = true;
     installsInFlight.delete(targetId);
   };
-  req.on('close', () => {
+  onClientDisconnect(req, res, () => {
     aborted = true;
     installLog.cancel();
     // `close` also fires on normal completion; only a live handle means an
@@ -249,11 +263,26 @@ async function handleTargetInstall(targetId, req, res) {
     });
 }
 
-router.get('/targets/:targetId/install', asyncHandler((req, res) => handleTargetInstall(req.params.targetId, req, res)));
+router.get('/targets/:targetId/install', asyncHandler(async (req, res) => {
+  await sendTargetInstallStatus(req.params.targetId, res);
+}));
+
+router.post('/targets/:targetId/install', asyncHandler(async (req, res) => {
+  const { target, adapter } = requireInstallableTarget(req.params.targetId);
+  const { repair } = validateRequest(installQuerySchema, req.query);
+  await handleTargetInstall(req.params.targetId, target, adapter, repair === '1', req, res);
+}));
 
 // Compatibility alias for the pre-#3080 TRELLIS.2-specific install URL — existing
 // client bookmarks/links keep working.
-router.get('/trellis2/install', asyncHandler((req, res) => handleTargetInstall('trellis2', req, res)));
+router.get('/trellis2/install', asyncHandler(async (_req, res) => {
+  await sendTargetInstallStatus('trellis2', res);
+}));
+router.post('/trellis2/install', asyncHandler(async (req, res) => {
+  const { target, adapter } = requireInstallableTarget('trellis2');
+  const { repair } = validateRequest(installQuerySchema, req.query);
+  await handleTargetInstall('trellis2', target, adapter, repair === '1', req, res);
+}));
 
 // ── Image-to-3D model records ─────────────────────────────────────────────
 // Namespaced under /models so `/:id` never shadows the `/targets` and

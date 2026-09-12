@@ -32,10 +32,8 @@ import { killWithEscalation } from '../../lib/killWithEscalation.js';
 import { renderTimingFields } from '../../lib/renderTiming.js';
 import { createLineReader } from '../../lib/streamLines.js';
 import { claimHeavyLocalJob } from '../../lib/heavyJobClaim.js';
-import { prepareLocalMemory, gpuBlockersMessage } from '../localMemory.js';
 import { safeChildProcessOptions } from '../../lib/processEnv.js';
 import { IMAGE_GEN_MODE, LOCAL_IMAGEGEN_DEFAULT_MODEL } from './modes.js';
-import { computePixelDelta } from './regen.js';
 import { parseByteProgress, formatDownloadMessage } from '../videoGen/generateVideoHelpers.js';
 
 const IS_WIN = process.platform === 'win32';
@@ -676,6 +674,7 @@ export async function generateImage({ pythonPath, prompt = '', negativePrompt = 
   let proc;
   let claimHandedOff = false;
   try {
+    const { prepareLocalMemory, gpuBlockersMessage } = await import('../localMemory.js');
     const memoryReport = await prepareLocalMemory();
     // Something the unload above cannot evict already owns the GPU (today: the
     // vLLM Qwen container). Refuse here rather than let mflux die inside its
@@ -717,7 +716,7 @@ export async function generateImage({ pythonPath, prompt = '', negativePrompt = 
     finalized = true;
     job.status = 'error';
     const reason = `Failed to spawn ${bin}: ${err.message}`;
-    console.log(`❌ Image generation spawn error [${jobId.slice(0, 8)}]: ${reason}`);
+    console.error(`❌ Image generation spawn error [${jobId.slice(0, 8)}]: ${reason}`);
     broadcastSse(job, { type: 'error', error: reason });
     imageGenEvents.emit('failed', { mode: IMAGE_GEN_MODE.LOCAL, generationId: jobId, error: reason });
     activeProcess = null;
@@ -918,7 +917,7 @@ export async function generateImage({ pythonPath, prompt = '', negativePrompt = 
     if (emptyFrame) {
       job.status = 'error';
       job.error = emptyFrame;
-      console.log(`❌ Image generation failed [${jobId.slice(0, 8)}]: ${emptyFrame}`);
+      console.error(`❌ Image generation failed [${jobId.slice(0, 8)}]: ${emptyFrame}`);
       broadcastSse(job, { type: 'error', error: emptyFrame });
       imageGenEvents.emit('failed', { mode: IMAGE_GEN_MODE.LOCAL, generationId: jobId, error: emptyFrame });
       closeJobAfterDelay(jobs, jobId);
@@ -982,7 +981,7 @@ export async function generateImage({ pythonPath, prompt = '', negativePrompt = 
       const errorText = userMessage
         ? `${userMessage}\n\n(diagnostic) ${reason}`
         : `Generation failed: ${reason}\n${tail}`;
-      console.log(`❌ Image generation failed [${jobId.slice(0, 8)}]: ${userMessage || reason}`);
+      console.error(`❌ Image generation failed [${jobId.slice(0, 8)}]: ${userMessage || reason}`);
       job.error = userMessage || reason;
       job.errorKind = userKind;
       job.errorRepo = userRepo;
@@ -1022,7 +1021,9 @@ export async function generateImage({ pythonPath, prompt = '', negativePrompt = 
       // mflux strength-0.0 footgun, silent txt2img fallbacks, and over-mutation.
       // Best-effort — a decode failure just skips the stamp.
       if (regenOf && validInitImagePath) {
-        const delta = await computePixelDelta(validInitImagePath, outputPath).catch(() => null);
+        const delta = await import('./regen.js')
+          .then(({ computePixelDelta }) => computePixelDelta(validInitImagePath, outputPath))
+          .catch(() => null);
         if (delta) {
           meta.regenPixelDeltaPct = delta.pixelDeltaPct;
           meta.regenPsnr = delta.psnr;
@@ -1111,6 +1112,12 @@ const MAX_GALLERY_UPLOAD_BYTES = 16 * 1024 * 1024;
 // the cleaner's guard (lib/imageClean.js MAX_PIXELS) — sharp throws past it.
 const MAX_GALLERY_UPLOAD_PIXELS = 96 * 1000 * 1000;
 
+async function refreshImageIndex(filename) {
+  await import('../mediaAssetIndex/index.js')
+    .then(m => m.indexImage({ filename }))
+    .catch(err => console.error(`❌ Media index image refresh failed: ${err.message}`));
+}
+
 /**
  * Persist user-uploaded image bytes (base64) into the gallery dir under
  * `data/images/` so the file rides the existing `image` peer-sync asset path
@@ -1144,6 +1151,7 @@ export async function saveUploadedGalleryImage(base64Data) {
   const filename = `upload-${randomUUID().slice(0, 8)}.png`;
   await ensureDir(PATHS.images);
   await atomicWrite(join(PATHS.images, filename), png);
+  await refreshImageIndex(filename);
   console.log(`📥 Saved uploaded gallery image: ${filename} (${(png.length / 1024).toFixed(0)}KB PNG, from ${detected.mime})`);
   return { filename, path: `/data/images/${filename}` };
 }
@@ -1209,6 +1217,7 @@ export async function setImageHidden(filename, hidden) {
   const { path: sidecarPath, metadata } = await readImageSidecar(filename);
   metadata.hidden = !!hidden;
   await atomicWrite(sidecarPath, metadata);
+  await refreshImageIndex(filename);
   return { ok: true, hidden: metadata.hidden };
 }
 
@@ -1219,6 +1228,7 @@ export async function updateImagePrompt(filename, prompt) {
   if (trimmedPrompt) metadata.prompt = trimmedPrompt;
   else delete metadata.prompt;
   await atomicWrite(sidecarPath, metadata);
+  await refreshImageIndex(filename);
   return { filename, prompt: trimmedPrompt };
 }
 

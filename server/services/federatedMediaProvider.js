@@ -44,6 +44,7 @@ import {
 import { listMusicEngineCapabilities } from './musicEngineCapabilities.js';
 import { BYOV_VIDEO_RUNTIMES, isByovRuntimeReady } from './videoGen/runtimes.js';
 import { minimaxH3ControlError } from './videoGen/minimaxH3Controls.js';
+import { wan22FrameCountError } from './videoGen/wan22Controls.js';
 import { readCallerInstanceId } from './sharing/peerPullAuthorization.js';
 import { findPeerById } from './sharing/peerSyncShared.js';
 
@@ -282,16 +283,8 @@ const validateFederatedVideoControls = (input, model) => {
     });
     if (controlError) throw controlError;
   }
-  if (model.runtime === 'wan22') {
-    const frameStride = Number(model.frameStride);
-    if (Number.isFinite(frameStride) && frameStride > 0 && (Number(numFrames) - 1) % frameStride !== 0) {
-      unavailable(
-        `${model.name} requires a ${frameStride}n+1 frame count; got ${numFrames}.`,
-        'WAN22_INVALID_FRAME_COUNT',
-        400,
-      );
-    }
-  }
+  const frameCountError = wan22FrameCountError(model, numFrames);
+  if (frameCountError) unavailable(frameCountError.message, frameCountError.code, frameCountError.status);
 };
 
 export function normalizeFederatedMediaProviderConfig(settings) {

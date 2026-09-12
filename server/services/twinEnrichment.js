@@ -335,10 +335,12 @@ function daysAgoIso(days, now) {
 // ---------------------------------------------------------------------------
 
 export async function getTasteEvidence() {
-  return readJSONFile(TASTE_OBSERVED_FILE, null);
+  // Durable despite the derived rollups: aggregate and interpret retain user-authored interpretation.
+  return readJSONFile(TASTE_OBSERVED_FILE, null, { strict: true });
 }
 
 export async function getChronotypeEvidence() {
+  // Authoritative rebuild: aggregation replaces this histogram from activity rows; no prior fields are retained.
   return readJSONFile(CHRONOTYPE_OBSERVED_FILE, null);
 }
 
@@ -440,6 +442,7 @@ export async function getObservedEvidence() {
   const [taste, chronotype, statedChronotype] = await Promise.all([
     getTasteEvidence(),
     getChronotypeEvidence(),
+    // Read-only comparison: this stated record is never written by this service.
     readJSONFile(join(DIR, 'chronotype.json'), null),
   ]);
   // Only treat the stated chronotype as a real answer once it's been derived —

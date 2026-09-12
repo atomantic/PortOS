@@ -5,7 +5,7 @@ vi.mock('./github.js', () => ({
   execGh: vi.fn(async () => '[]'),
   ensureForgeReachable: (...args) => ensureForgeReachableMock(...args),
 }));
-vi.mock('./gitlab.js', () => ({ execGlabJson: vi.fn(async () => ({ rows: [], reason: 'ok' })) }));
+vi.mock('./gitlab.js', () => ({ execGlab: vi.fn(), execGlabJson: vi.fn(async () => ({ rows: [], reason: 'ok' })) }));
 // gitRemote is the only effectful dependency of the real forge classifier, so
 // mock IT and let `resolveRepoForgeTarget` run for real — the github-vs-gitlab
 // routing under test is exactly that mapping.
@@ -18,9 +18,9 @@ vi.mock('../lib/fileUtils.js', () => ({
   safeJSONParse: (raw, fallback) => { try { return JSON.parse(raw); } catch { return fallback; } },
 }));
 
-import { listAppIssues } from './appIssues.js';
+import { listAppIssues, prepareAppIssueClaim } from './appIssues.js';
 import { execGh } from './github.js';
-import { execGlabJson } from './gitlab.js';
+import { execGlab, execGlabJson } from './gitlab.js';
 import { getOriginInfo, readOriginRemoteUrl } from '../lib/gitRemote.js';
 
 // `workTracker: 'auto'` resolves to whatever the origin host is — the common case.
@@ -307,5 +307,42 @@ describe('listAppIssues — the list must match the tracker a claim would use', 
     execGh.mockResolvedValue(JSON.stringify([{ number: 1, title: 't', labels: [], assignees: [] }]));
     const result = await listAppIssues({ ...APP, workTracker: 'github' });
     expect(result).toMatchObject({ forge: 'github', tracker: 'github', reason: 'ok' });
+  });
+});
+
+describe('prepareAppIssueClaim', () => {
+  it('removes only invitations present on GitHub and verifies the result', async () => {
+    execGh.mockResolvedValueOnce(JSON.stringify({ labels: [{ name: 'Help Wanted' }, { name: 'good first issue' }, { name: 'bug' }] }))
+      .mockResolvedValueOnce('').mockResolvedValueOnce(JSON.stringify({ labels: [{ name: 'bug' }] }));
+    await prepareAppIssueClaim(APP, '42', 'github');
+    expect(execGh.mock.calls.map(([args]) => args)).toEqual([
+      ['issue', 'view', '42', '--repo', 'github.com/acme/widget', '--json', 'labels'],
+      ['issue', 'edit', '42', '--repo', 'github.com/acme/widget', '--remove-label', 'Help Wanted', '--remove-label', 'good first issue'],
+      ['issue', 'view', '42', '--repo', 'github.com/acme/widget', '--json', 'labels'],
+    ]);
+  });
+
+  it('does not mutate an issue without contributor labels', async () => {
+    execGh.mockResolvedValue(JSON.stringify({ labels: [] }));
+    await prepareAppIssueClaim(APP, '42', 'github');
+    expect(execGh).toHaveBeenCalledTimes(1);
+  });
+
+  it('uses GitLab and preserves unrelated labels', async () => {
+    useGitlabOrigin();
+    execGlab.mockResolvedValueOnce(JSON.stringify({ labels: ['help wanted', 'bug'] }))
+      .mockResolvedValueOnce('').mockResolvedValueOnce(JSON.stringify({ labels: ['bug'] }));
+    await prepareAppIssueClaim(APP, '42', 'gitlab');
+    expect(execGlab).toHaveBeenNthCalledWith(2, ['issue', 'update', '42', '--unlabel', 'help wanted'], '/repo', undefined, { rejectOnError: true });
+    expect(execGh).not.toHaveBeenCalled();
+  });
+
+  it('rejects unreadable labels, failed edits, and labels that remain after an edit', async () => {
+    execGh.mockResolvedValueOnce('{}');
+    await expect(prepareAppIssueClaim(APP, '42', 'github')).rejects.toThrow('Could not read issue labels');
+    execGh.mockResolvedValueOnce('{"labels":["help wanted"]}').mockRejectedValueOnce(new Error('offline'));
+    await expect(prepareAppIssueClaim(APP, '42', 'github')).rejects.toThrow('offline');
+    execGh.mockResolvedValue('{"labels":["help wanted"]}');
+    await expect(prepareAppIssueClaim(APP, '42', 'github')).rejects.toThrow('Contributor labels remain');
   });
 });

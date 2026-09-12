@@ -69,8 +69,7 @@ export const MODEL_ABUSE_GUARD_PYTHON_IMPORTS = Object.freeze([
 
 // Independent of the image runtime's package aliases. These releases satisfy
 // Transformers 5.16's Hub >=1.5,<2 / safetensors >=0.8 requirements. The runner
-// uses the supported overflowing-window tokenizer API, not prepare_for_model
-// removed in v5. Updating these pins requires the explicit install canary.
+// slices the complete token stream into the pinned DeBERTa window format. Updating these pins requires the explicit install canary.
 export const MODEL_ABUSE_GUARD_PYTHON_PACKAGES = Object.freeze([
   'torch==2.14.0',
   'transformers==5.16.1',

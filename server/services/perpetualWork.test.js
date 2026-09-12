@@ -676,7 +676,7 @@ describe('perpetualWork', () => {
 
     it('keeps an issue assigned to the authenticated account claimable', async () => {
       routeSpawn({
-        'glab api': { stdout: 'octo\n' }, // glab api user -q .username
+        'glab api': { stdout: '{"username":"octo"}\n' }, // glab api user
         'glab issue': { stdout: JSON.stringify([{ iid: 10, title: 'retry my claim', assignees: [{ username: 'octo' }], labels: [] }]) },
         'git branch': { stdout: 'main\n' },
         'glab mr': { stdout: '[]' }
@@ -704,7 +704,7 @@ describe('perpetualWork', () => {
 
     it('self mode resolves the authenticated glab username and filters the list by it', async () => {
       routeSpawn({
-        'glab api': { stdout: 'octo\n' }, // glab api user -q .username
+        'glab api': { stdout: '{"username":"octo"}\n' }, // glab api user
         'glab issue': { stdout: JSON.stringify([{ iid: 10, title: 'mine', assignees: [], labels: [] }]) },
         'git branch': { stdout: 'main\n' },
         'glab mr': { stdout: '[]' }
@@ -724,7 +724,7 @@ describe('perpetualWork', () => {
 
     it('self mode reports no-authored-issues when the author filter hides a non-empty queue', async () => {
       spawn.mockImplementation((cmd, args = []) => {
-        if (cmd === 'glab' && args[0] === 'api') return fakeChild('octo\n'); // glab api user
+        if (cmd === 'glab' && args[0] === 'api') return fakeChild('{"username":"octo"}\n'); // glab api user
         if (cmd === 'glab' && args[0] === 'issue') {
           const filtered = args.includes('--author');
           return fakeChild(filtered ? '[]' : JSON.stringify([{ iid: 10, title: 'x', assignees: [], labels: [] }]));
@@ -815,8 +815,8 @@ describe('perpetualWork', () => {
       // `members/all` (not `members`) so GROUP-inherited access counts — that's how
       // most GitLab teams are granted, and `members` alone would drop them.
       spawn.mockImplementation((cmd, args = []) => {
-        if (cmd === 'glab' && args[0] === 'api' && args.includes('user')) return fakeChild('octo\n');
-        if (cmd === 'glab' && args[0] === 'api') return fakeChild('teammate\n');
+        if (cmd === 'glab' && args[0] === 'api' && args.includes('user')) return fakeChild('{"username":"octo"}\n');
+        if (cmd === 'glab' && args[0] === 'api') return fakeChild('{"username":"teammate"}\n{"username":"octo"}\n');
         if (cmd === 'glab' && args[0] === 'issue') {
           const byAuthor = {
             octo: [{ iid: 10, title: 'mine', assignees: [], labels: [], author: { username: 'octo' } }],
@@ -836,6 +836,8 @@ describe('perpetualWork', () => {
       expect(out.sample).toEqual([10, 11]);
       const membersCall = spawn.mock.calls.find(([cmd, a]) => cmd === 'glab' && a[0] === 'api' && String(a[2] || '').includes('members'));
       expect(membersCall[1]).toContain('projects/:id/members/all');
+      expect(membersCall[1]).toContain('ndjson');
+      expect(membersCall[1]).not.toContain('-q');
       // The trusted SET can't be one `--author` arg, so it fans out to one
       // server-side query per login — the outsider's issue is never listed.
       const authored = spawn.mock.calls
@@ -844,9 +846,20 @@ describe('perpetualWork', () => {
       expect(authored).toEqual(['octo', 'teammate']);
     });
 
+    it.each(['not json', '{}', '{"username":42}'])('rejects malformed GitLab member data: %s', async (body) => {
+      spawn.mockImplementation((cmd, args = []) => {
+        if (cmd === 'glab' && args[0] === 'api' && args.includes('user')) return fakeChild('{"username":"octo"}');
+        if (cmd === 'glab' && args[0] === 'api') return fakeChild(body);
+        return fakeChild('');
+      });
+      const out = await detectGitlabIssues(app, { issueAuthorFilter: 'collaborators' });
+      expect(out).toMatchObject({ reason: 'glab-members-failed', transient: true });
+      expect(spawn.mock.calls.some(([cmd, args]) => cmd === 'glab' && args[0] === 'issue')).toBe(false);
+    });
+
     it('collaborators filter goes transient when the members probe fails', async () => {
       spawn.mockImplementation((cmd, args = []) => {
-        if (cmd === 'glab' && args[0] === 'api' && args.includes('user')) return fakeChild('octo\n');
+        if (cmd === 'glab' && args[0] === 'api' && args.includes('user')) return fakeChild('{"username":"octo"}\n');
         if (cmd === 'glab' && args[0] === 'api') return fakeChild('', 1);
         return fakeChild('');
       });

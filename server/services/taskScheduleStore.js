@@ -176,7 +176,7 @@ function migrateLegacyPrReviewerPipeline(config) {
 async function readSchedule() {
   await ensureDataDir();
 
-  const loaded = await readJSONFile(SCHEDULE_FILE, null);
+  const loaded = await readJSONFile(SCHEDULE_FILE, null, { strict: true });
   if (!loaded) {
     return { schedule: { ...DEFAULT_SCHEDULE }, needsSave: false };
   }

@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
+import { listImageGalleryPage, deleteImage } from '../services/api';
 
 const MODEL = { id: 'dev', name: 'FLUX.1 Dev', runner: 'mflux', steps: 20, guidance: 3.5 };
 
@@ -38,7 +39,7 @@ vi.mock('../services/api', () => ({
   generateImageMultipart: vi.fn(async () => ({})),
   listImageModels: vi.fn(async () => [MODEL]),
   listLorasFull: vi.fn(async () => []),
-  listImageGallery: vi.fn(async () => []),
+  listImageGalleryPage: vi.fn(async () => ({ items: [], total: 0, hiddenTotal: 0 })),
   cancelImageGen: vi.fn(async () => ({})),
   deleteImage: vi.fn(async () => ({})),
   setImageHidden: vi.fn(async () => ({})),
@@ -72,7 +73,6 @@ vi.mock('../hooks/useMediaAnnotations', () => ({
   useMediaAnnotations: () => ({ annotations: {}, updateAnnotation: vi.fn(), getCardProps: vi.fn(() => ({})) }),
 }));
 vi.mock('../hooks/useAutoRefetch', () => ({ useAutoRefetch: vi.fn() }));
-vi.mock('../hooks/usePreviewRoute', () => ({ default: () => [null, vi.fn()] }));
 vi.mock('../components/ui/Toast', () => ({
   default: Object.assign(vi.fn(), { error: vi.fn(), success: vi.fn(), loading: vi.fn() }),
 }));
@@ -80,7 +80,15 @@ vi.mock('../components/media/PromptEnhancer', () => ({ default: () => <button ty
 vi.mock('../components/media/PromptFromMedia', () => ({ default: () => <button type="button">Prompt from media</button> }));
 vi.mock('../components/media/UniverseStylePicker', () => ({ default: () => null }));
 vi.mock('../components/media/StylePresetPicker', () => ({ default: () => null }));
-vi.mock('../components/media/MediaPreview', () => ({ default: () => null }));
+vi.mock('../components/media/MediaCard', () => ({
+  default: ({ item, onToggleHidden, onDelete }) => <div>
+    <button type="button" onClick={() => onToggleHidden(item)}>{item.filename}</button>
+    <button type="button" aria-label={`Delete ${item.filename}`} onClick={() => onDelete(item)}>Delete</button>
+  </div>,
+}));
+vi.mock('../components/media/MediaPreview', () => ({
+  default: ({ preview }) => preview ? <div role="dialog" aria-label={`Preview ${preview.filename}`} /> : null,
+}));
 vi.mock('../components/media/MediaJobsQueue', () => ({ default: () => null }));
 vi.mock('../components/media/ResolutionField', () => ({ default: () => null }));
 vi.mock('../components/Drawer', () => ({ default: () => null }));
@@ -93,10 +101,10 @@ vi.mock('../components/imageGen/LoraPicker', () => ({ default: () => null }));
 
 const { default: ImageGen } = await import('./ImageGen.jsx');
 
-const mount = async () => {
+const mount = async (path = '/media/image') => {
   await act(async () => {
     render(
-      <MemoryRouter initialEntries={['/media/image']}>
+      <MemoryRouter initialEntries={[path]}>
         <ImageGen />
       </MemoryRouter>,
     );
@@ -105,6 +113,8 @@ const mount = async () => {
 
 describe('ImageGen backend-probe gating', () => {
   beforeEach(() => {
+    deleteImage.mockReset().mockResolvedValue({});
+    listImageGalleryPage.mockReset().mockResolvedValue({ items: [], total: 0, hiddenTotal: 0 });
     state.generateImage.mockReset().mockResolvedValue({ jobId: 'job-1' });
     state.statusPromise = new Promise((resolve) => { state.resolveStatus = resolve; });
     window.matchMedia = vi.fn(() => ({
@@ -112,6 +122,38 @@ describe('ImageGen backend-probe gating', () => {
       addEventListener: vi.fn(),
       removeEventListener: vi.fn(),
     }));
+  });
+
+  it('requests only five recent images, shows the global count, and queries favorites before limiting', async () => {
+    const items = Array.from({ length: 5 }, (_, n) => ({ filename: `recent-${n}.png` }));
+    listImageGalleryPage.mockResolvedValueOnce({ items, total: 2100, hiddenTotal: 70 })
+      .mockResolvedValueOnce({ items: [{ filename: 'old-favorite.png' }], total: 1, hiddenTotal: 0 });
+    await mount();
+    expect(await screen.findByText('Recent renders (5 of 2100)')).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'View all →' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Show hidden \(70\)/ })).toBeInTheDocument();
+    expect(listImageGalleryPage).toHaveBeenCalledTimes(1);
+    expect(listImageGalleryPage).toHaveBeenLastCalledWith(
+      { limit: 5, hidden: false, starred: false, summary: true }, { silent: true });
+    fireEvent.click(screen.getByRole('button', { name: 'Favorites' }));
+    expect(await screen.findByText('old-favorite.png')).toBeInTheDocument();
+    expect(screen.getByText('Recent renders (1 of 1)')).toBeInTheDocument();
+    expect(listImageGalleryPage).toHaveBeenLastCalledWith(
+      { limit: 5, hidden: false, starred: true, summary: true }, { silent: true });
+  });
+
+  it('opens an older hidden deep link independently of the recent strip and retains a card when deletion fails', async () => {
+    listImageGalleryPage.mockImplementation(async ({ filename }) => filename
+      ? { items: [{ filename, hidden: true }], total: 1 }
+      : { items: [{ filename: 'recent.png' }], total: 1, hiddenTotal: 1 });
+    await mount('/media/image?preview=image:older.png');
+    expect(await screen.findByRole('dialog', { name: 'Preview older.png' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Show hidden/ })).toBeInTheDocument();
+    expect(listImageGalleryPage).toHaveBeenCalledWith({ limit: 1, filename: 'older.png' }, { silent: true });
+    deleteImage.mockRejectedValueOnce(new Error('cannot delete'));
+    await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Delete recent.png' })));
+    expect(screen.getByRole('button', { name: 'recent.png' })).toBeInTheDocument();
+    expect(screen.getByText('Recent renders (1 of 1)')).toBeInTheDocument();
   });
 
   // The probe decides which backend can RUN, not what the user may TYPE. While

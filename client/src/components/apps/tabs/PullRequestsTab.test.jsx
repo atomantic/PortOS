@@ -136,7 +136,7 @@ describe('PullRequestsTab', () => {
     ));
   });
 
-  it('carries the same provider/model pin into a PR review run', async () => {
+  it('preserves scheduled review stages unless the user explicitly enables the override', async () => {
     api.getProviders.mockResolvedValue({
       providers: [{
         id: 'claude', name: 'Claude', type: 'cli', enabled: true,
@@ -152,10 +152,30 @@ describe('PullRequestsTab', () => {
     fireEvent.click(screen.getByRole('button', { name: /PR review/ }));
 
     await waitFor(() => expect(api.reviewAppPullRequest).toHaveBeenCalledWith(
-      'app-1', 17, { provider: 'claude', model: 'claude-opus-5', effort: undefined },
+      'app-1', 17, {},
     ));
   });
 
+  it('passes an explicitly enabled eligibility provider override', async () => {
+    api.getProviders.mockResolvedValue({
+      providers: [{
+        id: 'claude', name: 'Claude', type: 'cli', enabled: true,
+        models: ['claude-opus-5', 'claude-sonnet-5'], defaultModel: 'claude-sonnet-5',
+      }],
+    });
+    await renderTab();
+
+    await screen.findByText('Fix the save path');
+    fireEvent.change(await screen.findByLabelText('Provider'), { target: { value: 'claude' } });
+    fireEvent.change(screen.getByLabelText('Model'), { target: { value: 'claude-opus-5' } });
+
+    fireEvent.click(screen.getByLabelText('Use Run with for PR review eligibility'));
+    fireEvent.click(screen.getByRole('button', { name: /PR review/ }));
+
+    await waitFor(() => expect(api.reviewAppPullRequest).toHaveBeenCalledWith(
+      'app-1', 17, { provider: 'claude', model: 'claude-opus-5', effort: undefined },
+    ));
+  });
   it('queues a review-loop resolve action and shows its task state', async () => {
     await renderTab();
 
@@ -283,7 +303,7 @@ describe('PullRequestsTab', () => {
     fireEvent.click(await screen.findByRole('button', { name: /PR review/ }));
 
     await waitFor(() => expect(api.reviewAppPullRequest).toHaveBeenCalledWith(
-      'app-1', 17, { provider: undefined, model: undefined, effort: undefined },
+      'app-1', 17, {},
     ));
     expect(await screen.findByRole('link', { name: /PR review: Queued/ })).toBeInTheDocument();
     // The resolve action is a separate lane and must stay offered.
@@ -305,6 +325,49 @@ describe('PullRequestsTab', () => {
     }));
 
     expect(await screen.findByRole('link', { name: /PR review: Active/ })).toBeInTheDocument();
+  });
+
+  it('restores the preflight explanation after reloading the PR list', async () => {
+    api.getAppPullRequests.mockResolvedValue(okPayload([{ ...PULL_REQUEST,
+      reviewAction: { taskId: 'preflight-17', status: 'failed', error: 'Prompt Guard stopped before an agent started.' },
+    }]));
+    await renderTab();
+    expect(await screen.findByRole('alert')).toHaveTextContent('Prompt Guard stopped');
+    expect(screen.getByRole('button', { name: 'Retry PR review' })).toBeInTheDocument();
+  });
+
+  it('replaces a queued review with a durable preflight explanation and retry', async () => {
+    await renderTab();
+    fireEvent.click(await screen.findByRole('button', { name: /PR review/ }));
+    await screen.findByRole('link', { name: /PR review: Queued/ });
+    act(() => socketHandlers.get('cos:tasks:changed')({ task: {
+      id: 'preflight-17', status: 'completed',
+      metadata: { app: 'app-1', analysisType: 'pr-reviewer', targetPullRequest: 17,
+        preflightFailure: 'security-guard-process-failed', note: 'Prompt Guard stopped before an agent started.' },
+    } }));
+    expect(screen.getByRole('alert')).toHaveTextContent('before an agent started');
+    expect(screen.getByRole('link', { name: 'View failure record' })).toHaveAttribute('href', '/cos/tasks?task=preflight-17&source=internal');
+    fireEvent.click(screen.getByRole('button', { name: 'Retry PR review' }));
+    await waitFor(() => expect(api.reviewAppPullRequest).toHaveBeenCalledTimes(2));
+    expect(await screen.findByRole('link', { name: /PR review: Queued/ })).toBeInTheDocument();
+  });
+
+  it('names a failed resolve retry as a merge action and retries that same action', async () => {
+    api.getAppPullRequests.mockResolvedValue(okPayload([{
+      ...PULL_REQUEST,
+      agentAction: { taskId: 'resolve-failed', status: 'failed' },
+    }]));
+    await renderTab();
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Resolve & merge failed');
+    expect(screen.queryByRole('link', { name: 'Abuse Guard setup' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Retry PR review' })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Retry resolve & merge' }));
+    await waitFor(() => expect(api.resolveAppPullRequest).toHaveBeenCalledWith(
+      'app-1', 17, { provider: undefined, model: undefined, effort: undefined },
+    ));
+    expect(api.reviewAppPullRequest).not.toHaveBeenCalled();
+    expect(await screen.findByRole('link', { name: /Resolve & merge: Queued/ })).toBeInTheDocument();
   });
 
   it('hydrates an in-flight pr-reviewer run without offering the button again', async () => {

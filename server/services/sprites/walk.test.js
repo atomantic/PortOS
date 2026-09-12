@@ -1240,6 +1240,19 @@ describe('unlockWalkSet', () => {
     expect(reapproved.selection.directions.east.status).toBe('approved');
   });
 
+  it('preserves the finalized set and status when the selection is unreadable', async () => {
+    const id = await finalizedCharacter();
+    const walkDir = join(TEST_ROOT, 'sprites', id, 'walk');
+    const setPath = join(walkDir, `${id}-walk-set-v1.json`);
+    const before = await readFile(setPath, 'utf8');
+    await writeFile(join(walkDir, `${id}-walk-selection-v1.json`), '{broken');
+
+    await expect(unlockWalkSet(id)).rejects.toMatchObject({ code: 'UNREADABLE_STORE' });
+
+    expect(await readFile(setPath, 'utf8')).toBe(before);
+    expect((await records.getRecord(id)).status).toBe('walk-complete');
+  });
+
   it('refuses to unlock a legacy source-pipeline import', async () => {
     const id = await characterWithLockedAnchors(newId(), ['east']);
     await mkdir(join(TEST_ROOT, 'sprites', id, 'walk'), { recursive: true });
@@ -2616,5 +2629,31 @@ describe('getWalkState', () => {
       expect(runs).toHaveLength(1);
       expect(runs[0].kind).toBe('grok-game-animation-frames-run');
     });
+  });
+});
+
+describe('unreadable walk persistence', () => {
+  it('refuses to reseed a damaged selection and preserves sibling targets after repair', async () => {
+    const id = newId();
+    await records.createRecord({ kind: 'character', name: 'Walker' }, id);
+    const dir = join(TEST_ROOT, 'sprites', id, 'walk');
+    await mkdir(dir, { recursive: true });
+    const path = join(dir, `${id}-walk-selection-v1.json`);
+    await writeFile(path, '{');
+    await expect(setWalkTarget(id, { frameCount: 12, fps: 10 })).rejects.toThrow(/Unreadable/);
+    expect(await readFile(path, 'utf8')).toBe('{');
+    await writeFile(path, JSON.stringify({ directions: {}, animationTargets: { ambient: { frameCount: 6, fps: 8 } } }));
+    await setWalkTarget(id, { frameCount: 12, fps: 10 });
+    expect(JSON.parse(await readFile(path, 'utf8')).animationTargets.ambient).toEqual({ frameCount: 6, fps: 8 });
+  });
+  it('does not bypass a damaged finalized walk set', async () => {
+    const id = newId();
+    await records.createRecord({ kind: 'character', name: 'Walker' }, id);
+    const dir = join(TEST_ROOT, 'sprites', id, 'walk');
+    await mkdir(dir, { recursive: true });
+    const path = join(dir, `${id}-walk-set-v1.json`);
+    await writeFile(path, '{');
+    await expect(setWalkTarget(id, { frameCount: 12, fps: 10 })).rejects.toThrow(/Unreadable/);
+    expect(await readFile(path, 'utf8')).toBe('{');
   });
 });

@@ -127,7 +127,7 @@ router.post('/', asyncHandler(async (req, res) => {
       pythonPath: settings.imageGen?.local?.pythonPath || null,
     },
   }).catch((err) => {
-    console.log(`❌ Continuous video episode [${jobId.slice(0, 8)}] orchestration crashed: ${err.message}`);
+    console.error(`❌ Continuous video episode [${jobId.slice(0, 8)}] orchestration crashed: ${err.message}`);
   });
 
   res.json({ jobId, generationId: jobId, status: 'running' });

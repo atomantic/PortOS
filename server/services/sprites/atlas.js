@@ -714,7 +714,7 @@ export async function compileAtlasInTail(recordId, {
   // exist — otherwise a deleted runtime/vN PNG would loop forever ("recompile"
   // → pointer returned untouched → still missing); falling through re-writes
   // the same version (nextAtlasVersion only counts versions whose PNG exists).
-  const current = await readJSONFile(join(dir, RUNTIME_POINTER_REL), null);
+  const current = await readJSONFile(join(dir, RUNTIME_POINTER_REL), null, { strict: true });
   const currentAtlasOnDisk = current ? await pathExists(join(dir, current.atlasPath)) : false;
   if (
     current
@@ -790,7 +790,7 @@ export async function compileAtlasInTail(recordId, {
   // dir. Advance until the slot is empty or its manifest matches these bytes
   // (the re-materialize case).
   for (;;) {
-    const survivor = await readJSONFile(join(runtimeAbs, `v${version}`, `${stem}-v${version}-manifest.json`), null);
+    const survivor = await readJSONFile(join(runtimeAbs, `v${version}`, `${stem}-v${version}-manifest.json`), null, { strict: true });
     if (!survivor || (
       survivor.atlasSha256 === atlasSha256
       && trackFrameCountsUpToDate(survivor.geometry, frameCountFields)
@@ -808,7 +808,7 @@ export async function compileAtlasInTail(recordId, {
   // exact atlas bytes, since a freshly-built one would differ only in
   // createdAt and trip the immutable-write refusal.
   const manifestAbs = join(dir, manifestRel);
-  const survivingManifest = await readJSONFile(manifestAbs, null);
+  const survivingManifest = await readJSONFile(manifestAbs, null, { strict: true });
   if (
     survivingManifest?.atlasSha256 === atlasSha256
     && trackFrameCountsUpToDate(survivingManifest.geometry, frameCountFields)
@@ -950,8 +950,8 @@ export async function compileAtlasInTail(recordId, {
 export async function getAtlasState(recordId) {
   const dir = spriteDir(recordId);
   const [current, publications] = await Promise.all([
-    readJSONFile(join(dir, RUNTIME_POINTER_REL), null),
-    readJSONFile(join(dir, RUNTIME_PUBLICATIONS_REL), []),
+    readJSONFile(join(dir, RUNTIME_POINTER_REL), null, { strict: true }),
+    readJSONFile(join(dir, RUNTIME_PUBLICATIONS_REL), [], { strict: true }),
   ]);
   return { current, publications: [...publications].reverse() };
 }

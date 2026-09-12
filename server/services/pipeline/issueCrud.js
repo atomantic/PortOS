@@ -17,7 +17,7 @@ import * as seriesSvc from './series.js';
 import {
   store, queueSeriesIssuesWrite, readState, readStateForSeries,
   saveIssueNow, saveIssuesNow, renumberInline, sanitizeIssue,
-  snapshotRunHistory, stripRunHistoryFromIssue, makeErr, ISSUE_ID_RE,
+  snapshotRunHistory, makeErr, ISSUE_ID_RE,
   ERR_NOT_FOUND, ERR_VALIDATION, ERR_DUPLICATE, ERR_SEASON_LOCKED,
   TITLE_MAX, SERIES_ID_MAX, ISSUES_PER_RESPONSE_MAX,
 } from './issuesShared.js';
@@ -34,25 +34,24 @@ export async function listIssues({
   // Scope the read to one series when filtering by it — avoids loading every
   // issue in the install just to discard the rest (the `seriesId.localeCompare`
   // tiebreak below is a no-op within a single series).
-  const { issues } = seriesId ? await readStateForSeries(seriesId) : await readState();
+  const { issues } = seriesId ? await readStateForSeries(seriesId, { withHistory }) : await readState({ withHistory });
   const live = includeDeleted ? issues : issues.filter((i) => !i.deleted);
   const filtered = seriesId ? live.filter((i) => i.seriesId === seriesId) : live;
   const sorted = [...filtered].sort((a, b) => {
     if (a.seriesId !== b.seriesId) return a.seriesId.localeCompare(b.seriesId);
     return (a.number || 0) - (b.number || 0);
   });
-  const project = withHistory ? (i) => i : stripRunHistoryFromIssue;
   const safeLimit = Math.min(Math.max(1, limit), ISSUES_PER_RESPONSE_MAX);
   const safeOffset = Math.max(0, offset);
   if (paginated) {
     return {
-      items: sorted.slice(safeOffset, safeOffset + safeLimit).map(project),
+      items: sorted.slice(safeOffset, safeOffset + safeLimit),
       total: sorted.length,
       offset: safeOffset,
       limit: safeLimit,
     };
   }
-  return sorted.slice(0, ISSUES_PER_RESPONSE_MAX).map(project);
+  return sorted.slice(0, ISSUES_PER_RESPONSE_MAX);
 }
 
 /**
@@ -96,10 +95,10 @@ export async function listAllIssues({ includeDeleted = false, withHistory = true
     ? [...new Set(seriesIds.filter((id) => typeof id === 'string' && id))]
     : null;
   const issues = scopedSeriesIds
-    ? await store().loadAllForSeriesIds(scopedSeriesIds)
-    : (await readState()).issues;
+    ? await store().loadAllForSeriesIds(scopedSeriesIds, { withHistory })
+    : (await readState({ withHistory })).issues;
   const live = includeDeleted ? issues : issues.filter((i) => !i.deleted);
-  return withHistory ? live : live.map(stripRunHistoryFromIssue);
+  return live;
 }
 
 /**
@@ -119,34 +118,25 @@ export async function listAllIssues({ includeDeleted = false, withHistory = true
  * @param {boolean} [options.withHistory=true] - false strips per-stage run history
  */
 export async function listIssuesForSeries(seriesId, { includeDeleted = false, withHistory = true } = {}) {
-  const { issues } = await readStateForSeries(seriesId);
+  const { issues } = await readStateForSeries(seriesId, { withHistory });
   const live = includeDeleted ? issues : issues.filter((i) => !i.deleted);
   const sorted = [...live].sort((a, b) => (a.number || 0) - (b.number || 0));
-  return withHistory ? sorted : sorted.map(stripRunHistoryFromIssue);
+  return sorted;
 }
 
 /**
- * Recently-updated issues across all series. Sorts the FULL issue set by
- * `updatedAt` desc before applying `limit` — unlike `listIssues`, which
- * sorts by `seriesId/number` then caps at `ISSUES_PER_RESPONSE_MAX`. That
- * cap would silently miss the most-recent issues once the dataset grows
- * beyond 1000, so the sidebar's recent-issues view needs this dedicated
- * helper.
+ * Recently updated issues, bounded at the store before PG records reach Node.
+ * Full records remain the default for internal callers; summary is the HTTP
+ * list's explicit projection and never changes detail/export/sync reads.
  */
-export async function listRecentIssues({ limit = 10, withHistory = true, includeDeleted = false } = {}) {
-  const { issues } = await readState();
-  const live = includeDeleted ? issues : issues.filter((i) => !i.deleted);
+export async function listRecentIssues({ limit = 10, withHistory = true, includeDeleted = false, summary = false } = {}) {
   // Coerce in two passes so non-finite inputs ('abc', undefined) fall to
   // the default rather than letting JS's `0 || 10` short-circuit return
   // 10 for an explicit limit=0.
   const raw = Number(limit);
   const fallback = Number.isFinite(raw) ? Math.floor(raw) : 10;
   const clamped = Math.max(1, Math.min(50, fallback));
-  const project = withHistory ? (i) => i : stripRunHistoryFromIssue;
-  return [...live]
-    .sort((a, b) => (b.updatedAt || '').localeCompare(a.updatedAt || ''))
-    .slice(0, clamped)
-    .map(project);
+  return store().loadRecent({ limit: clamped, withHistory, includeDeleted, summary });
 }
 
 export async function getIssue(id, { includeDeleted = false } = {}) {

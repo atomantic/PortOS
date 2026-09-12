@@ -65,5 +65,9 @@ describe('LocalSetupPanel install failure', () => {
     renderPanel();
     await waitFor(() => expect(screen.getByText(/install 1 missing package/i)).toBeTruthy());
     expect(screen.queryByRole('button', { name: /queue agent to investigate/i })).toBeNull();
+    expect(useInstallStream).toHaveBeenCalledWith(
+      null,
+      expect.objectContaining({ method: 'POST' }),
+    );
   });
 });

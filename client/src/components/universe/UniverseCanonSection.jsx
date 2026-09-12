@@ -1063,7 +1063,7 @@ function KindSection() {
           title={`Add a ${kind.singular} manually`}
           aria-label={`Add ${kind.singular}`}
           aria-expanded={adding}
-          className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] text-gray-400 hover:text-port-accent disabled:opacity-30 disabled:cursor-not-allowed border border-port-border hover:border-port-accent/50"
+          className="inline-flex shrink-0 min-h-11 sm:min-h-0 items-center gap-1 px-1.5 py-0.5 rounded text-[10px] text-gray-400 hover:text-port-accent disabled:opacity-30 disabled:cursor-not-allowed border border-port-border hover:border-port-accent/50"
         >
           {creating ? <Loader2 size={11} className="animate-spin" /> : <Plus size={11} />}
           Add
@@ -1076,7 +1076,7 @@ function KindSection() {
           disabled={catalogLinking}
           title={`Add an existing ${kind.singular} from the shared Catalog`}
           aria-label={`Pick ${kind.singular} from Catalog`}
-          className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] text-gray-400 hover:text-port-accent disabled:opacity-30 disabled:cursor-not-allowed border border-port-border hover:border-port-accent/50"
+          className="inline-flex shrink-0 min-h-11 sm:min-h-0 items-center gap-1 px-1.5 py-0.5 rounded text-[10px] text-gray-400 hover:text-port-accent disabled:opacity-30 disabled:cursor-not-allowed border border-port-border hover:border-port-accent/50"
         >
           {catalogLinking ? <Loader2 size={11} className="animate-spin" /> : <Sparkles size={11} />}
           Pick from Catalog
@@ -1091,7 +1091,7 @@ function KindSection() {
             ? `Every ${kind.singular} already has a reference image`
             : `Queue reference renders for ${renderableCount} ${renderableCount === 1 ? kind.singular : kind.label.toLowerCase()} without an image yet`}
           aria-label={`Render all ${kind.label}`}
-          className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] text-gray-400 hover:text-port-accent disabled:opacity-30 disabled:cursor-not-allowed border border-port-border hover:border-port-accent/50"
+          className="inline-flex shrink-0 min-h-11 sm:min-h-0 items-center gap-1 px-1.5 py-0.5 rounded text-[10px] text-gray-400 hover:text-port-accent disabled:opacity-30 disabled:cursor-not-allowed border border-port-border hover:border-port-accent/50"
         >
           {renderingAll ? <Loader2 size={11} className="animate-spin" /> : <ImagePlus size={11} />}
           Render all{renderableCount > 0 ? ` (${renderableCount})` : ''}
@@ -1111,7 +1111,7 @@ function KindSection() {
             : `Lock all ${kind.label.toLowerCase()} — AI refine / differentiate will skip them`}
           aria-label={allLocked ? `Unlock all ${kind.label}` : `Lock all ${kind.label}`}
           aria-pressed={allLocked}
-          className={`p-1 rounded disabled:opacity-30 disabled:cursor-not-allowed ${
+          className={`min-h-11 min-w-11 sm:min-h-0 sm:min-w-0 shrink-0 inline-flex items-center justify-center p-1 rounded disabled:opacity-30 disabled:cursor-not-allowed ${
             allLocked
               ? 'text-port-accent hover:bg-port-accent/20'
               : 'text-gray-500 hover:text-gray-300'
@@ -1187,8 +1187,8 @@ function KindSection() {
   if (compact) {
     return (
       <div>
-        <div className="flex items-center justify-end gap-1.5 mb-2">
-          <span className="text-[10px] text-gray-500 mr-auto">
+        <div className="flex flex-wrap items-center gap-1.5 mb-2">
+          <span className="text-[10px] text-gray-500 mr-auto shrink-0">
             {filtered ? `${all.length} / ${totalCount}` : all.length} {all.length === 1 ? kind.singular : kind.label.toLowerCase()}
           </span>
           {controls}
@@ -1201,13 +1201,13 @@ function KindSection() {
 
   return (
     <section className="rounded border border-port-border bg-port-bg/60">
-      <div className="flex items-center gap-2 px-3 py-2 border-b border-port-border">
+      <div className="flex flex-wrap items-center gap-2 px-3 py-2 border-b border-port-border">
         <Icon size={14} className="text-gray-400" />
         <h3 className="text-sm font-semibold text-white">{kind.label}</h3>
         <span className="text-[10px] text-gray-500">
           {filtered ? `${all.length} / ${totalCount}` : all.length}
         </span>
-        <div className="ml-auto flex items-center gap-1.5">
+        <div className="ml-auto flex flex-wrap items-center gap-1.5">
           {controls}
         </div>
       </div>

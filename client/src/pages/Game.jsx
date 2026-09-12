@@ -19,7 +19,7 @@ import {
   getGame,
   getGameIntegrity,
   listGames,
-  listImageGallery,
+  getGalleryImages,
   listSpriteRecords,
   listTracks,
   launchNativeApp,
@@ -82,12 +82,12 @@ export default function Game() {
       getApps(silent),
       listSpriteRecords(silent),
       listTracks(silent),
-      listImageGallery(silent),
     ]).catch(() => null);
     if (!result) {
       toast.error('Failed to load the Game studio');
     } else {
-      const [gameRows, appRows, spriteRows, trackRows, galleryRows] = result;
+      const [gameRows, appRows, spriteRows, trackRows] = result;
+      const galleryRows = await getGalleryImages((gameRows.find(game => game.id === id)?.artworkBindings || []).map(binding => binding.imageFilename), silent).catch(() => []);
       setGames(Array.isArray(gameRows) ? gameRows : []);
       setApps((Array.isArray(appRows) ? appRows : []).filter((app) => !app.archived));
       setSprites(Array.isArray(spriteRows) ? spriteRows : []);
@@ -95,7 +95,7 @@ export default function Game() {
       setGallery((Array.isArray(galleryRows) ? galleryRows : []).filter((image) => !image.hidden));
     }
     setLoading(false);
-  }, []);
+  }, [id]);
 
   useEffect(() => { load(); }, [load]);
 

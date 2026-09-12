@@ -32,9 +32,9 @@ export default function RuntimeInstallModal({
   // (e.g. TRELLIS.2's `repair=1`, which re-runs setup.sh over an existing install
   // to rebuild backends that failed to compile the first time — #2952).
   params,
-  // EventSource is GET-only. Installers that mutate host state use POST via the
-  // hook's fetch-stream mode so a dropped connection cannot auto-retry work.
-  streamMethod = 'GET',
+  // Runtime actions mutate host state, so the shared default uses POST via the
+  // hook's fetch-stream mode. GET installer URLs remain read-only status aliases.
+  streamMethod = 'POST',
   // Chatty installers keep the rendered log stable by batching lines.
   flushMs = 100,
   // The footer line once the stream completes. Defaults to "is ready", which is

@@ -6,15 +6,33 @@ import toast from '../ui/Toast';
 const listImageGallery = vi.fn();
 const listMediaCollections = vi.fn();
 vi.mock('../../services/apiImageVideo', () => ({
-  listImageGallery: (...args) => listImageGallery(...args),
-  listMediaCollections: (...args) => listMediaCollections(...args),
+  listImageGalleryPage: async (filters) => {
+    const rows = await listImageGallery(filters);
+    const cols = filters.collectionId ? await listMediaCollections.getMockImplementation()().catch(() => []) : [];
+    const collection = cols.find(c => c.id === filters.collectionId);
+    const items = rows.filter(row => !row.hidden
+      && (!filters.universeId || row.universeId === filters.universeId)
+      && (!filters.collectionId || collection?.items.some(item => item.kind === 'image' && item.ref === row.filename))
+      && (!filters.entryCategory || row.entryCategory === filters.entryCategory)
+      && (!filters.entryKind || row.entryKind === filters.entryKind)
+      && filters.q.toLowerCase().split(/\s+/).every(token => JSON.stringify(row).toLowerCase().includes(token)));
+    return { items: items.slice(filters.offset, filters.offset + filters.limit), total: items.length, offset: filters.offset, limit: filters.limit };
+  },
+  listImageGalleryFacets: async options => {
+    const rows = await listImageGallery.getMockImplementation()();
+    const cols = await listMediaCollections(options).catch(() => []);
+    const values = field => [...new Set(rows.map(row => row[field]).filter(value => typeof value === 'string' && value))];
+    return { universes: values('universeId').map(id => ({ id, name: rows.find(row => row.universeId === id).universeName })),
+      categories: values('entryCategory'), kinds: values('entryKind'),
+      collections: cols.filter(c => c.items.some(item => item.kind === 'image' && rows.some(row => row.filename === item.ref))) };
+  },
 }));
 
-const listUniverses = vi.fn();
+const listUniverseNames = vi.fn();
 // universeBuilderShared imports the WORLD_CATEGORY_* constants from this module,
 // so the mock has to carry them or the shared lib loads with undefined values.
 vi.mock('../../services/apiUniverseBuilder', () => ({
-  listUniverses: (...args) => listUniverses(...args),
+  listUniverseNames: (...args) => listUniverseNames(...args),
   WORLD_CATEGORIES: ['landscapes', 'environments', 'structures', 'vehicles'],
   WORLD_CATEGORY_KEY_MAX: 64,
 }));
@@ -66,8 +84,8 @@ describe('GalleryImagePicker', () => {
     listImageGallery.mockResolvedValue(GALLERY);
     listMediaCollections.mockReset();
     listMediaCollections.mockResolvedValue(COLLECTIONS);
-    listUniverses.mockReset();
-    listUniverses.mockResolvedValue(UNIVERSES);
+    listUniverseNames.mockReset();
+    listUniverseNames.mockResolvedValue(UNIVERSES);
     uploadGalleryImage.mockReset();
     toast.error.mockReset();
   });
@@ -86,9 +104,9 @@ describe('GalleryImagePicker', () => {
 
   it('fetches and renders gallery images on open', async () => {
     render(<GalleryImagePicker open onClose={vi.fn()} onSelect={vi.fn()} />);
-    expect(listImageGallery).toHaveBeenCalledTimes(1);
+    expect(listImageGallery).toHaveBeenCalledWith(expect.objectContaining({ limit: 60, offset: 0, hidden: false }));
     expect(await screen.findByAltText('a neon sunset')).toBeTruthy();
-    expect(screen.getByAltText('a quiet forest')).toBeTruthy();
+    expect(await screen.findByAltText('a quiet forest')).toBeTruthy();
   });
 
   it('filters by query across prompt + model (AND tokens)', async () => {
@@ -96,7 +114,7 @@ describe('GalleryImagePicker', () => {
     await screen.findByAltText('a neon sunset');
     fireEvent.change(screen.getByPlaceholderText(/Search prompt/i), { target: { value: 'forest sdxl' } });
     await waitFor(() => expect(screen.queryByAltText('a neon sunset')).toBeNull());
-    expect(screen.getByAltText('a quiet forest')).toBeTruthy();
+    expect(await screen.findByAltText('a quiet forest')).toBeTruthy();
   });
 
   it('calls onSelect with the normalized item and closes on tile click', async () => {
@@ -214,8 +232,8 @@ describe('GalleryImagePicker', () => {
 
     fireEvent.change(scopeSelect(), { target: { value: 'uni:uni-a' } });
     await waitFor(() => expect(screen.queryByAltText('a quiet forest')).toBeNull());
-    expect(screen.getByAltText('a neon sunset')).toBeTruthy();
-    expect(screen.getByAltText('a chrome mecha')).toBeTruthy();
+    expect(await screen.findByAltText('a neon sunset')).toBeTruthy();
+    expect(await screen.findByAltText('a chrome mecha')).toBeTruthy();
   });
 
   it('filters by collection membership and omits collections with no image in the gallery', async () => {
@@ -227,7 +245,7 @@ describe('GalleryImagePicker', () => {
 
     fireEvent.change(scopeSelect(), { target: { value: 'col:col-1' } });
     await waitFor(() => expect(screen.queryByAltText('a neon sunset')).toBeNull());
-    expect(screen.getByAltText('a quiet forest')).toBeTruthy();
+    expect(await screen.findByAltText('a quiet forest')).toBeTruthy();
     expect(screen.queryByAltText('a chrome mecha')).toBeNull();
   });
 
@@ -239,12 +257,12 @@ describe('GalleryImagePicker', () => {
 
     fireEvent.change(typeSelect(), { target: { value: 'cat:vehicles' } });
     await waitFor(() => expect(screen.queryByAltText('a neon sunset')).toBeNull());
-    expect(screen.getByAltText('a chrome mecha')).toBeTruthy();
+    expect(await screen.findByAltText('a chrome mecha')).toBeTruthy();
 
     // entryKind is matched by the same select — 'variation' only tags forest.
     fireEvent.change(typeSelect(), { target: { value: 'kind:variation' } });
     await waitFor(() => expect(screen.queryByAltText('a chrome mecha')).toBeNull());
-    expect(screen.getByAltText('a quiet forest')).toBeTruthy();
+    expect(await screen.findByAltText('a quiet forest')).toBeTruthy();
   });
 
   it('keeps a category keyed like an entry kind distinct from that kind', async () => {
@@ -258,11 +276,11 @@ describe('GalleryImagePicker', () => {
 
     fireEvent.change(typeSelect(), { target: { value: 'cat:canon' } });
     await waitFor(() => expect(screen.queryByAltText('kind canon')).toBeNull());
-    expect(screen.getByAltText('category canon')).toBeTruthy();
+    expect(await screen.findByAltText('category canon')).toBeTruthy();
 
     fireEvent.change(typeSelect(), { target: { value: 'kind:canon' } });
     await waitFor(() => expect(screen.queryByAltText('category canon')).toBeNull());
-    expect(screen.getByAltText('kind canon')).toBeTruthy();
+    expect(await screen.findByAltText('kind canon')).toBeTruthy();
   });
 
   it('AND-combines the filters with the text query', async () => {
@@ -273,13 +291,15 @@ describe('GalleryImagePicker', () => {
     fireEvent.change(scopeSelect(), { target: { value: 'uni:uni-a' } });
     fireEvent.change(screen.getByPlaceholderText(/Search prompt/i), { target: { value: 'mecha' } });
     await waitFor(() => expect(screen.queryByAltText('a neon sunset')).toBeNull());
-    expect(screen.getByAltText('a chrome mecha')).toBeTruthy();
+    expect(await screen.findByAltText('a chrome mecha')).toBeTruthy();
+
+    await waitFor(() => expect(listImageGallery).toHaveBeenLastCalledWith(expect.objectContaining({ q: 'mecha', universeId: 'uni-a', offset: 0 })));
 
     // Query that matches only an out-of-scope image yields nothing, not a fallback.
     fireEvent.change(screen.getByPlaceholderText(/Search prompt/i), { target: { value: 'forest' } });
     await waitFor(() => expect(screen.queryByAltText('a chrome mecha')).toBeNull());
     expect(screen.queryByAltText('a quiet forest')).toBeNull();
-    expect(screen.getByText(/No images match your search or filters/i)).toBeTruthy();
+    expect(await screen.findByText(/No images match your search or filters/i)).toBeTruthy();
   });
 
   it('restores the full grid when the filters are cleared back to All', async () => {
@@ -294,13 +314,13 @@ describe('GalleryImagePicker', () => {
     fireEvent.change(scopeSelect(), { target: { value: '' } });
     fireEvent.change(typeSelect(), { target: { value: '' } });
     await waitFor(() => expect(screen.getByAltText('a neon sunset')).toBeTruthy());
-    expect(screen.getByAltText('a quiet forest')).toBeTruthy();
-    expect(screen.getByAltText('a chrome mecha')).toBeTruthy();
+    expect(await screen.findByAltText('a quiet forest')).toBeTruthy();
+    expect(await screen.findByAltText('a chrome mecha')).toBeTruthy();
   });
 
   it('degrades to image-derived universes and no collections when those fetches fail', async () => {
     listMediaCollections.mockRejectedValue(new Error('nope'));
-    listUniverses.mockRejectedValue(new Error('nope'));
+    listUniverseNames.mockRejectedValue(new Error('nope'));
     render(<GalleryImagePicker open onClose={vi.fn()} onSelect={vi.fn()} />);
     await screen.findByAltText('a neon sunset');
 
@@ -310,14 +330,14 @@ describe('GalleryImagePicker', () => {
 
     fireEvent.change(scopeSelect(), { target: { value: 'uni:uni-b' } });
     await waitFor(() => expect(screen.queryByAltText('a neon sunset')).toBeNull());
-    expect(screen.getByAltText('a quiet forest')).toBeTruthy();
+    expect(await screen.findByAltText('a quiet forest')).toBeTruthy();
   });
 
   it('passes silent:true so the picker owns its own filter-fetch failure handling', async () => {
     render(<GalleryImagePicker open onClose={vi.fn()} onSelect={vi.fn()} />);
     await screen.findByAltText('a neon sunset');
     expect(listMediaCollections).toHaveBeenCalledWith({ silent: true });
-    expect(listUniverses).toHaveBeenCalledWith({ silent: true });
+    expect(listUniverseNames).toHaveBeenCalledWith({ silent: true });
   });
 
   it('skips malformed sidecar metadata instead of throwing while building options', async () => {
@@ -329,7 +349,7 @@ describe('GalleryImagePicker', () => {
       { filename: 'proto.png', path: '/data/images/proto.png', prompt: 'prototype key', entryCategory: 'constructor' },
     ]);
     listMediaCollections.mockResolvedValue([{ id: 'col-1', name: 5, items: [{ kind: 'image', ref: 'ok.png' }] }]);
-    listUniverses.mockResolvedValue([{ id: 'uni-a', name: 99 }]);
+    listUniverseNames.mockResolvedValue([{ id: 'uni-a', name: 99 }]);
     render(<GalleryImagePicker open onClose={vi.fn()} onSelect={vi.fn()} />);
     await screen.findByAltText('bad metadata');
 
@@ -341,7 +361,7 @@ describe('GalleryImagePicker', () => {
 
     fireEvent.change(typeSelect(), { target: { value: 'cat:places' } });
     await waitFor(() => expect(screen.queryByAltText('bad metadata')).toBeNull());
-    expect(screen.getByAltText('good metadata')).toBeTruthy();
+    expect(await screen.findByAltText('good metadata')).toBeTruthy();
   });
 
   it('drops the previous collections/universes on close so a reopen cannot filter on stale membership', async () => {
@@ -360,7 +380,7 @@ describe('GalleryImagePicker', () => {
   it('does not render the filter selects when nothing is filterable', async () => {
     listImageGallery.mockResolvedValue([{ filename: 'plain.png', path: '/data/images/plain.png', prompt: 'plain' }]);
     listMediaCollections.mockResolvedValue([]);
-    listUniverses.mockResolvedValue([]);
+    listUniverseNames.mockResolvedValue([]);
     render(<GalleryImagePicker open onClose={vi.fn()} onSelect={vi.fn()} />);
     await screen.findByAltText('plain');
     expect(screen.queryByLabelText(/universe or collection/i)).toBeNull();

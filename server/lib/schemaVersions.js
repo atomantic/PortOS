@@ -489,6 +489,10 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // decomposed draft-version metadata in drafts[]) is LWW-overwritten whole; the
   // file-primary `.md` draft prose bodies ride a separate body manifest (SHA256
   // diff + receiver-pull), never round-tripped through the record.
+  // Bible JSON siblings also ride an optional bibleManifest (#6943), with
+  // independent file updatedAt LWW. Older receivers retry without that key;
+  // omission never deletes files. The first incompatible bible shape needs its
+  // own version gate before it can cross peers; this additive transport stays v1.
   writersRoomWorks: 1,
   // v1 = Writers Room folders (PostgreSQL `writers_room_folders`) federated via
   // the per-record peer-sync push pipeline (record kind `writersRoomFolder`,
@@ -744,7 +748,7 @@ export const RECORD_KIND_SCHEMA_CATEGORIES = Object.freeze({
  *   no RECORD_KIND_SCHEMA_CATEGORIES entry.
  *
  * `appQuality`: numeric-only local evidence at GET /api/apps/quality-federation,
- * validated against its exact wire version by collectPortosQuality; never written or pushed.
+ * validated against its exact wire version by collectAppQuality; never written or pushed.
  *
  * Do NOT add a real record-push category here to silence the guard — that would
  * leave its push transfers ungated (silent cross-install corruption). Only

@@ -961,11 +961,36 @@ async function doPullOneAsset(peer, base, entry, urlPrefix, localDir, safeName) 
   // a missing sidecar just means the image lands in Unsorted without a prompt.
   if (entry.kind === 'image') {
     await pullSidecarForImage(peer, base, safeName).catch(() => {});
+    await import('../mediaAssetIndex/index.js').then(m => m.indexImage({ filename: safeName })).catch(err => console.error(`❌ Media index peer asset refresh: ${err.message}`));
   }
   // After a video pull, regenerate the thumbnail LOCALLY rather than pulling it
   // as a sibling asset. Its own `asset-arrived` event lets a poster that already
   // 404'd leave MediaImage's "Syncing" placeholder without a remount.
   if (entry.kind === 'video') {
     await reconcileVideoThumbnail(safeName, fullPath, peer.instanceId);
+  }
+}
+
+/** Pull only the three authored bible files; analysis snapshots never enter this path. */
+export async function pullMissingWorkBibles(senderInstanceId, entries) {
+  if (!isStr(senderInstanceId) || !Array.isArray(entries) || !entries.length) return;
+  const peer = await findPeerById(senderInstanceId);
+  if (!peer) return;
+  const { workBiblePath, BIBLE_FILES, applyWorkBibleBytes } = await import('../writersRoom/bibleSync.js');
+  for (const entry of entries) {
+    if (!workBiblePath(entry?.workId, entry?.kind)) continue;
+    const filename = `${BIBLE_FILES[entry.kind]}.json`;
+    const key = `writers-room-bible:${entry.workId}:${entry.kind}`;
+    // Destination queue serializes incoming peers; the apply step rechecks local LWW.
+    await assetWriteQueue(key, async () => {
+      const url = `${peerBaseUrl(peer)}/data/writers-room/works/${encodeURIComponent(entry.workId)}/${filename}`;
+      const buffer = await fetchCappedAssetBuffer(peer, url, filename, WORK_BODY_PULL_MAX_BYTES);
+      if (!buffer) return;
+      const current = await getWorkForSync(entry.workId);
+      if (!current || current.deleted || current.ephemeral) return;
+      if (await applyWorkBibleBytes(entry, buffer, { via: 'peer-sync', peerId: senderInstanceId })) {
+        peerSyncEvents.emit('asset-arrived', { filename, kind: 'writers-room-bible', workId: entry.workId, peerId: senderInstanceId });
+      }
+    }).catch((err) => console.error(`❌ peerSync: bible pull failed: ${err.message}`));
   }
 }

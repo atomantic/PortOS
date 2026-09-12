@@ -61,6 +61,14 @@ beforeEach(() => {
 });
 
 describe('GeneralTab unsaved changes', () => {
+  it('places save-backed settings before the instant theme picker', async () => {
+    await renderTab();
+
+    const headings = screen.getAllByRole('heading').map(heading => heading.textContent);
+    expect(headings).toEqual(expect.arrayContaining(['Timezone', 'Interface Theme']));
+    expect(headings.indexOf('Timezone')).toBeLessThan(headings.indexOf('Interface Theme'));
+  });
+
   it('guards edits made against the displayed fallback after loading fails', async () => {
     getSettings.mockRejectedValueOnce(new Error('settings offline'));
     const router = await renderTab({ expectedTimezone: null });

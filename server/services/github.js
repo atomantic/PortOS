@@ -1,11 +1,11 @@
 import { spawn } from '../lib/childProcess.js';
+import { isHostShuttingDown } from '../lib/hostShutdown.js';
 import { join } from 'path';
 import { atomicWrite, readJSONFile, PATHS, ensureDir, safeJSONParse } from '../lib/fileUtils.js';
 import { withSpawnCwdEnv } from '../lib/spawnCwd.js';
 import { ServerError } from '../lib/errorHandler.js';
 import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
 import { createMutex } from '../lib/asyncMutex.js';
-import { getSettings, updateSettings } from './settings.js';
 import { dispatchHintFromLabels } from '../lib/dispatchLabels.js';
 
 const DATA_DIR = PATHS.data;
@@ -34,7 +34,8 @@ async function load() {
   const now = Date.now();
   if (cache && (now - cacheTimestamp) < CACHE_TTL_MS) return cache;
   await ensureDir(DATA_DIR);
-  cache = await readJSONFile(REPOS_FILE, defaultData());
+  // This cache includes user flags and secret assignments, not just remote repo data.
+  cache = await readJSONFile(REPOS_FILE, defaultData(), { strict: true });
   cacheTimestamp = now;
   return cache;
 }
@@ -146,7 +147,7 @@ export function execGh(args, timeoutMs = DEFAULT_EXEC_GH_TIMEOUT_MS, { cwd = nul
     const settle = (ok) => {
       if (settled) return;
       settled = true;
-      if (backoffKey !== null) recordGhCallOutcome(backoffKey, ok, backoffMaxMs);
+      if (backoffKey !== null && ok !== null) recordGhCallOutcome(backoffKey, ok, backoffMaxMs);
     };
     const timer = setTimeout(() => {
       timedOut = true;
@@ -158,12 +159,20 @@ export function execGh(args, timeoutMs = DEFAULT_EXEC_GH_TIMEOUT_MS, { cwd = nul
     }, timeoutMs);
     child.stdout.on('data', (d) => { stdout += d.toString(); });
     child.stderr.on('data', (d) => { stderr += d.toString(); });
-    child.on('close', (code) => {
-      if (timedOut) return;
+    child.on('close', (code, signal) => {
+      if (timedOut || settled) return;
       clearTimeout(timer);
-      if (code !== 0) {
+      if (signal === 'SIGTERM' || (code !== 0 && isHostShuttingDown())) {
+        // PM2 may deliver SIGTERM to the child before the host latch is set.
+        // Other signals count as failures unless the host confirms shutdown.
+        // Cancellation says nothing about forge health; preserve prior backoff.
+        settle(null);
+        reject(Object.assign(new Error(signal ? `gh command cancelled by ${signal}` : 'gh command cancelled during host shutdown'), {
+          name: 'AbortError', signal, terminated: Boolean(signal)
+        }));
+      } else if (code !== 0) {
         settle(false);
-        const error = new Error(stderr.trim() || `gh exited with code ${code}`);
+        const error = new Error(stderr.trim() || `gh exited with ${signal ? `signal ${signal}` : `code ${code}`}`);
         error.ghExitCode = code;
         error.ghStderr = stderr.trim();
         reject(error);
@@ -371,6 +380,8 @@ export async function setSecret(name, value) {
     const accountData = await load();
     await requireActiveCachedAccount(accountData);
 
+    // Secret operations alone need settings; repo reads and sync keep this subtree lazy.
+    const { getSettings, updateSettings } = await import('./settings.js');
     // Store value in settings.json (never returned to client)
     const settings = await getSettings();
     const secrets = settings.secrets || {};
@@ -405,6 +416,7 @@ export async function syncSecretToRepos(name) {
 async function syncSecretToReposNow(name) {
   const data = await load();
   const auth = await requireActiveCachedAccount(data);
+  const { getSettings } = await import('./settings.js');
   const settings = await getSettings();
   const value = settings.secrets?.[name];
   if (!value) throw new ServerError(`No value stored for secret: ${name}`, { status: 400, code: 'SECRET_NOT_CONFIGURED' });

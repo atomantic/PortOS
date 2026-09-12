@@ -1,9 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router';
 
 const api = vi.hoisted(() => ({
   getApiCatalog: vi.fn(),
+  getInternalOpenApiSpec: vi.fn(),
+  getOpenApiSpec: vi.fn(),
   getPersistentMindTools: vi.fn(),
   getCosToolCatalog: vi.fn(),
   getSocketEventCatalog: vi.fn(),
@@ -11,9 +13,6 @@ const api = vi.hoisted(() => ({
 }));
 
 vi.mock('../services/api', () => api);
-vi.mock('../components/api-explorer/ScalarReference', () => ({
-  default: ({ url }) => <div data-testid="scalar-reference">{url}</div>,
-}));
 vi.mock('../lib/clipboard', () => ({ copyToClipboard: vi.fn() }));
 
 import ApiExplorer from './ApiExplorer';
@@ -64,9 +63,30 @@ const renderPage = (path) => render(
   </MemoryRouter>,
 );
 
+const internalSpec = {
+  openapi: '3.0.3',
+  info: { title: 'PortOS Internal API', version: '1.7.0' },
+  paths: {
+    '/api/apps': { get: { summary: 'List apps', tags: ['apps'] } },
+    '/api/apps/{id}/restart': {
+      post: { summary: 'Restart an app', tags: ['apps'] },
+      parameters: [{ name: 'id', in: 'path' }],
+    },
+  },
+};
+const publicSpec = {
+  openapi: '3.0.3',
+  info: { title: 'PortOS Public API', version: '1.7.0' },
+  paths: {
+    '/api/voice/public/synthesize': { post: { summary: 'Synthesize speech', tags: ['voice'] } },
+  },
+};
+
 beforeEach(() => {
   vi.clearAllMocks();
   api.getApiCatalog.mockResolvedValue(catalog);
+  api.getInternalOpenApiSpec.mockResolvedValue(internalSpec);
+  api.getOpenApiSpec.mockResolvedValue(publicSpec);
   api.getPersistentMindTools.mockResolvedValue(mindTools);
   api.getCosToolCatalog.mockImplementation(({ scope }) => Promise.resolve(scope === 'agent' ? agentSemanticTools : semanticTools));
   api.getSocketEventCatalog.mockResolvedValue(socketEvents);
@@ -83,14 +103,21 @@ describe('ApiExplorer', () => {
     expect(screen.getByText('/api/apps/:id/restart')).toBeTruthy();
   });
 
-  it('loads Scalar only on the REST reference tab with the internal spec', async () => {
+  it('renders the native REST reference from the internal OpenAPI spec and switches to the exposed surface', async () => {
     renderPage('/api-reference/rest');
-    expect(await screen.findByTestId('scalar-reference')).toHaveTextContent('/api/api-docs/internal/openapi.json');
+    expect(await screen.findByText('/api/apps')).toBeTruthy();
+    expect(screen.getByText('List apps')).toBeTruthy();
+    expect(screen.queryByText('/api/voice/public/synthesize')).toBeNull();
+    expect(api.getInternalOpenApiSpec).toHaveBeenCalled();
+    expect(api.getOpenApiSpec).not.toHaveBeenCalled();
     expect(screen.getByRole('button', { name: 'Internal' })).toHaveAttribute('aria-pressed', 'true');
-    expect(screen.getByRole('button', { name: 'Exposed' })).toHaveAttribute('aria-pressed', 'false');
+    expect(screen.getByRole('link', { name: /Open JSON/i })).toHaveAttribute('href', '/api/api-docs/internal/openapi.json');
     fireEvent.click(screen.getByRole('button', { name: 'Exposed' }));
-    expect(screen.getByTestId('scalar-reference')).toHaveTextContent('/api/api-docs/openapi.json');
+    expect(await screen.findByText('/api/voice/public/synthesize')).toBeTruthy();
+    expect(screen.queryByText('/api/apps')).toBeNull();
+    expect(api.getOpenApiSpec).toHaveBeenCalled();
     expect(screen.getByRole('button', { name: 'Exposed' })).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByRole('link', { name: /Open JSON/i })).toHaveAttribute('href', '/api/api-docs/openapi.json');
   });
 
   it('shows the persistent mind semantic tool boundary separately from raw HTTP', async () => {
@@ -99,6 +126,29 @@ describe('ApiExplorer', () => {
     expect(screen.getByText('No arbitrary shell or file-system access')).toBeTruthy();
     expect(screen.getByText('Mind: disabled')).toBeTruthy();
     expect(screen.getByText('CoS Agent MCP')).toBeTruthy();
+  });
+
+  it('keeps the current REST surface when earlier reads succeed or fail late', async () => {
+    let finishInternal;
+    let failPublic;
+    api.getInternalOpenApiSpec.mockImplementationOnce(() => new Promise(resolve => { finishInternal = resolve; }));
+    renderPage('/api-reference/rest');
+    fireEvent.click(screen.getByRole('button', { name: 'Exposed' }));
+    await screen.findByText('/api/voice/public/synthesize');
+    await act(async () => { finishInternal(internalSpec); });
+    expect(screen.queryByText('/api/apps')).not.toBeInTheDocument();
+    expect(screen.getByText('/api/voice/public/synthesize')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Internal' }));
+    await screen.findByText('/api/apps');
+    api.getOpenApiSpec.mockImplementationOnce(() => new Promise((_resolve, reject) => { failPublic = reject; }));
+    fireEvent.click(screen.getByRole('button', { name: 'Exposed' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Internal' }));
+    await screen.findByText('/api/apps');
+    await act(async () => { failPublic(new Error('Old public request failed')); });
+    expect(screen.getByText('/api/apps')).toBeInTheDocument();
+    expect(screen.queryByText(/OpenAPI spec unavailable/)).not.toBeInTheDocument();
+    expect(screen.getByRole('link', { name: /Open JSON/i })).toHaveAttribute('href', '/api/api-docs/internal/openapi.json');
   });
 
   it('renders the generated Socket.IO catalog and AsyncAPI link', async () => {

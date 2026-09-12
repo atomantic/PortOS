@@ -112,7 +112,7 @@ const walkWriteTail = (recordId, fn) => withAnimationWriteTail(recordId, fn);
 export const withWalkWriteTail = walkWriteTail;
 
 async function loadWalkSet(recordId) {
-  return readJSONFile(join(spriteDir(recordId), walkSetRelPath(recordId)), null);
+  return readJSONFile(join(spriteDir(recordId), walkSetRelPath(recordId)), null, { strict: true });
 }
 
 // A phase-1 imported walk set (#2895) is copied verbatim from the source
@@ -146,7 +146,7 @@ export const isImportedWalkSet = (walkSet) => (
 );
 
 async function loadSelection(recordId) {
-  return readJSONFile(join(spriteDir(recordId), selectionRelPath(recordId)), null);
+  return readJSONFile(join(spriteDir(recordId), selectionRelPath(recordId)), null, { strict: true });
 }
 
 function seedSelection(recordId) {
@@ -167,7 +167,7 @@ function seedSelection(recordId) {
 // Read a run record by its directory (record-relative), so `grok/<id>/` and
 // the importer's `runs/<id>/` share one reader.
 async function loadRunRecordAt(recordId, runDirRel) {
-  return readJSONFile(join(spriteDir(recordId), runDirRel, RUN_RECORD_NAME), null);
+  return readJSONFile(join(spriteDir(recordId), runDirRel, RUN_RECORD_NAME), null, { strict: true });
 }
 
 async function loadRunRecord(recordId, runId) {
@@ -456,6 +456,7 @@ const REDRAW_STRIP_FIELDS = ['stripAlpha', 'stripAlphaOriginal', 'stripKeyed'];
 async function loadRedrawRun(recordId, direction, entry) {
   const manifestRel = toRecordRelativeAssetPath(recordId, entry.runManifest);
   if (!manifestRel) return null;
+  // Read-only redraw projection; this fallback never enters a manifest write.
   const manifest = await readJSONFile(join(spriteDir(recordId), manifestRel), null);
   const cycle = manifest?.cycle;
   const frameCount = Number(cycle?.frameCount);
@@ -1560,6 +1561,7 @@ export async function getWalkSourceFrames(recordId, runId, { extract = false } =
     resolveRunClipRel(recordId, run, runDirRel),
     listRawFrameNames(recordId, rawRel),
     run.postprocessManifest
+      // Read-only source-frame inspection; postprocess writes a fresh authoritative manifest.
       ? readJSONFile(join(spriteDir(recordId), run.postprocessManifest), null)
       : null,
   ]);
@@ -1854,6 +1856,8 @@ async function unlockWalkSetImpl(recordId, { acknowledgeNoClips = false } = {}) 
     throw new ServerError('No finalized walk set to unlock', { status: 409, code: 'WALK_SET_NOT_FINAL' });
   }
   await assertSetReDerivable(recordId, walkSet, { acknowledgeNoClips });
+  // Validate the selection before removing the intact finalized authority.
+  const previous = await loadSelection(recordId);
   await dropFinalizedWalkSet(recordId);
   // Seed a fresh (empty) selection so EVERY direction re-opens: with the walk
   // set gone each direction would still read `approved` from the old selection
@@ -1862,7 +1866,6 @@ async function unlockWalkSetImpl(recordId, { acknowledgeNoClips = false } = {}) 
   // The set's pinned cycle targets survive: unlocking revises the SAME set, and
   // dropping them would silently re-derive a target from whatever direction the
   // user happened to re-approve first.
-  const previous = await loadSelection(recordId);
   await atomicWrite(join(spriteDir(recordId), selectionRelPath(recordId)), {
     ...seedSelection(recordId),
     animationTargets: previous?.animationTargets || {},
@@ -2108,6 +2111,7 @@ async function approveWalkDirectionImpl(recordId, { direction, runId }) {
   const manifestRel = toRecordRelativeAssetPath(recordId, run.postprocessManifest)
     || run.postprocessManifest;
   const manifestAbs = resolveSpriteAssetPath(recordId, manifestRel);
+  // Approval validates this immutable evidence below; it never writes back the fallback.
   const packaged = await readJSONFile(manifestAbs, null);
   const frameCountValid = Number.isInteger(packaged?.frameCount)
     && packaged.frameCount >= WALK_MIN_FRAME_COUNT && packaged.frameCount <= WALK_MAX_FRAME_COUNT

@@ -189,6 +189,62 @@ describe('artificialAnalysis service', () => {
         globalThis.fetch = originalFetch;
       }
     });
+
+    it('maps a hung page request to a redacted 502 timeout', async () => {
+      vi.useFakeTimers();
+      const apiKey = 'secret-test-key';
+      vi.stubGlobal('fetch', vi.fn((_url, { signal }) => new Promise((_resolve, reject) => {
+        signal.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')));
+      })));
+
+      try {
+        const pending = fetchAllArtificialAnalysisModels(apiKey);
+        vi.advanceTimersByTime(15_000);
+
+        const error = await pending.catch(rejection => rejection);
+        expect(error).toMatchObject({
+          name: 'ServerError',
+          status: 502,
+          message: 'Artificial Analysis request timed out; retry sync',
+        });
+        expect(fetch).toHaveBeenCalledTimes(1);
+        expect(fetch).toHaveBeenCalledWith(
+          expect.stringContaining('page=1'),
+          expect.objectContaining({ headers: { 'x-api-key': apiKey } }),
+        );
+        expect(error.message).not.toContain(apiKey);
+      } finally {
+        vi.useRealTimers();
+        vi.unstubAllGlobals();
+      }
+    });
+
+    it('stops after 50 pages when pagination never ends', async () => {
+      const fetchMock = vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({
+          intelligence_index_version: 4.3,
+          data: [{ id: 'model', name: 'Page Model', slug: 'page-model' }],
+          pagination: { has_more: true },
+        }),
+      });
+      vi.stubGlobal('fetch', fetchMock);
+
+      try {
+        await expect(fetchAllArtificialAnalysisModels('test-key')).rejects.toMatchObject({
+          name: 'ServerError',
+          status: 502,
+          message: 'Artificial Analysis pagination exceeded 50 pages; retry sync',
+        });
+        expect(fetchMock).toHaveBeenCalledTimes(50);
+        expect(fetchMock).toHaveBeenLastCalledWith(
+          'https://artificialanalysis.ai/api/v2/language/models/free?page=50',
+          expect.objectContaining({ headers: { 'x-api-key': 'test-key' } }),
+        );
+      } finally {
+        vi.unstubAllGlobals();
+      }
+    });
   });
 
   describe('syncArtificialAnalysisCatalog', () => {

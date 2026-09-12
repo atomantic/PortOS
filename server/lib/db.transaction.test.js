@@ -36,7 +36,7 @@ describe('withTransaction', () => {
     await expect(withTransaction(vi.fn())).rejects.toBe(beginError);
 
     expect(client.query.mock.calls).toEqual([['BEGIN']]);
-    expect(client.release).toHaveBeenCalledOnce();
+    expect(client.release).toHaveBeenCalledWith(beginError);
   });
 
   it('rolls back and releases the client when the handler throws', async () => {
@@ -47,7 +47,7 @@ describe('withTransaction', () => {
     await expect(withTransaction(async () => { throw handlerError; })).rejects.toBe(handlerError);
 
     expect(client.query.mock.calls).toEqual([['BEGIN'], ['ROLLBACK']]);
-    expect(client.release).toHaveBeenCalledOnce();
+    expect(client.release).toHaveBeenCalledWith(handlerError);
   });
 
   it('commits, releases, and returns the handler result on success', async () => {
@@ -57,7 +57,7 @@ describe('withTransaction', () => {
     await expect(withTransaction(async () => 'saved')).resolves.toBe('saved');
 
     expect(client.query.mock.calls).toEqual([['BEGIN'], ['COMMIT']]);
-    expect(client.release).toHaveBeenCalledOnce();
+    expect(client.release).toHaveBeenCalledWith(undefined);
   });
 
   it('keeps savepoint queries available to transaction handlers', async () => {
@@ -75,6 +75,36 @@ describe('withTransaction', () => {
       ['ROLLBACK TO SAVEPOINT nested_work'],
       ['COMMIT'],
     ]);
-    expect(client.release).toHaveBeenCalledOnce();
+    expect(client.release).toHaveBeenCalledWith(undefined);
+  });
+
+  it('rethrows the original error when ROLLBACK also fails', async () => {
+    const handlerError = new Error('statement timeout');
+    const rollbackError = new Error('Connection terminated unexpectedly');
+    const client = makeClient(
+      vi.fn()
+        .mockResolvedValueOnce({})
+        .mockRejectedValueOnce(rollbackError),
+    );
+    pool.client = client;
+
+    await expect(withTransaction(async () => { throw handlerError; })).rejects.toBe(handlerError);
+
+    expect(client.query.mock.calls).toEqual([['BEGIN'], ['ROLLBACK']]);
+    expect(client.release).toHaveBeenCalledWith(handlerError);
+  });
+
+  it('passes a connection-drop error to release so pg evicts the client', async () => {
+    const dropError = new Error('Connection terminated unexpectedly');
+    const client = makeClient(
+      vi.fn()
+        .mockResolvedValueOnce({})
+        .mockRejectedValueOnce(new Error('ROLLBACK on closed socket')),
+    );
+    pool.client = client;
+
+    await expect(withTransaction(async () => { throw dropError; })).rejects.toBe(dropError);
+
+    expect(client.release).toHaveBeenCalledWith(dropError);
   });
 });

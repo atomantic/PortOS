@@ -20,6 +20,7 @@ import { randomUUID } from 'crypto';
 import { promisify } from 'util';
 import { ensureDir, PATHS, unlinkGuarded, rmGuarded } from '../../lib/fileUtils.js';
 import { ServerError } from '../../lib/errorHandler.js';
+import { wan22FrameCountError } from './wan22Controls.js';
 import {
   isDefaultI2vReferenceMode, normalizeI2vReferenceMode, resolveI2vReferenceStrength,
 } from '../../lib/videoReferenceModes.js';
@@ -198,16 +199,11 @@ export async function generateVideo({ pythonPath, prompt, negativePrompt = '', m
   // argument when the caller deliberately leaves the resolution unset.
   ({ width, height } = resolveVideoDimensions(model, width, height));
   numFrames = numFrames ?? model.defaultFrames ?? DEFAULT_NUM_FRAMES;
+  const frameCountError = wan22FrameCountError(model, numFrames);
+  if (frameCountError) throw frameCountError;
   let wanModelPath = null;
   const wanRequiredWeights = [];
   if (model.runtime === 'wan22' || model.runtime === 'wan22_cuda') {
-    const frameStride = Number(model.frameStride);
-    if (Number.isFinite(frameStride) && frameStride > 0 && (Number(numFrames) - 1) % frameStride !== 0) {
-      throw new ServerError(
-        `${model.name} requires a ${frameStride}n+1 frame count; got ${numFrames}.`,
-        { status: 400, code: 'WAN22_INVALID_FRAME_COUNT' },
-      );
-    }
     wanModelPath = await resolvePinnedSnapshotPath(model, {
       notCachedCode: 'WAN22_MODEL_NOT_CACHED',
       onMissingRevision: 'throw',
@@ -861,7 +857,7 @@ export async function generateVideo({ pythonPath, prompt, negativePrompt = '', m
   } catch (err) {
     job.status = 'error';
     const reason = err.message || 'Failed to build video gen args';
-    console.log(`❌ Video generation buildArgs error [${jobId.slice(0, 8)}]: ${reason}`);
+    console.error(`❌ Video generation buildArgs error [${jobId.slice(0, 8)}]: ${reason}`);
     broadcastSse(job, { type: 'error', error: reason });
     videoGenEvents.emit('failed', { generationId: jobId, error: reason, failure: normalizeVideoFailure(err, { prompts: [prompt, negativePrompt] }) });
     void cleanupTempFiles({ includeUploads: true, includeUntrackedAudio: true });

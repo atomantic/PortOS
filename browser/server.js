@@ -197,7 +197,9 @@ async function openLivenessKeepAlive() {
   });
 
   ws.addEventListener('error', (event) => {
-    console.error(`❌ Keep-alive WS error: ${event?.message || 'unknown'}`);
+    if (shuttingDown) return;
+    const message = event?.error?.message || event?.message || event?.error?.code || 'connection lost';
+    console.warn(`⚠️ Keep-alive WS reset: ${message} — will reconnect`);
   });
 }
 

@@ -10,7 +10,7 @@ PortOS includes an optional voice assistant with support for fully local operati
 |-------|----------------|--------------|--------|
 | Speech-to-text | Browser [Web Speech API](https://developer.mozilla.org/en-US/docs/Web/API/Web_Speech_API) (default — **note**: Chromium browsers forward audio to a vendor cloud speech service) or [whisper.cpp](https://github.com/ggerganov/whisper.cpp) via `whisper-server` (HTTP :5562, fully local) | — | ✅ (whisper) / ⚠️ (web-speech) |
 | LLM | LM Studio (`/v1/chat/completions`) | OpenAI-compatible local server | ✅ |
-| Text-to-speech | [Kokoro-82M](https://huggingface.co/onnx-community/Kokoro-82M-v1.0-ONNX) via `kokoro-js` (in-process) | [Piper](https://github.com/rhasspy/piper) (CLI) | ✅ |
+| Text-to-speech | [Piper](https://github.com/rhasspy/piper) (CLI) | Qwen3-TTS | ✅ |
 | Voice activity | AudioWorklet + RMS VAD (hands-free) or `MediaRecorder` (push-to-talk) — Web Speech mode bypasses server audio and posts final text via `voice:text` | — | ✅ |
 
 The TTS engine is selectable in **Settings → Voice → TTS engine**.
@@ -87,7 +87,7 @@ call rings unanswered and a `medium` notification records the miss instead of
 silently dropping it. Quiet hours change only the greeting's tone, never
 whether the call is picked up — you placed it, so PortOS answers at any hour.
 Once answered, the call runs exactly like an outbound one: whisper STT →
-voice LLM/persona → Kokoro/Piper TTS, the same silence/max-duration/hangup
+voice LLM/persona → Piper/Qwen3 TTS, the same silence/max-duration/hangup
 rules, and a transcript in the daily journal. If the Persistent Mind is
 running, the call carries its persona and context and the transcript is
 handed back to it as a message on hangup, continuing the same conversation on
@@ -124,16 +124,14 @@ device and the same host tab, so starting one while the other is active on
 this tab is refused with a specific reason rather than fighting over the
 device.
 
-### Why Kokoro is the default
+### Default TTS engine
 
-Kokoro is a 82M-parameter frontier TTS model that runs in-process via ONNX Runtime + transformers.js — **no Python, no extra binaries, cross-platform**. Quality is significantly higher than Piper (more natural prosody, expressive pacing). First synthesis after server start has a 2–3 s cold start as the model loads; warm calls are 200–500 ms per sentence on CPU.
-
-Use **Piper** instead if you need lower latency per call (~100 ms cold start), are on a memory-constrained machine, or want a particular pre-trained voice from rhasspy's catalogue.
+Piper is the default local TTS engine. Kokoro is retired: existing settings migrate to Piper while preserving custom Piper voices. Upgraded installs wait for **Save & Reconcile** before installing Piper. Existing Kokoro character profiles remain available as historical records; select or promote a Piper replacement to synthesize new audio.
 
 ## First-time setup
 
 1. Open PortOS → **Settings → Voice**.
-2. Pick your TTS engine (default: Kokoro), Whisper model size, and CoreML toggle (macOS).
+2. Pick your TTS engine (default: Piper), Whisper model size, and CoreML toggle (macOS).
 3. Toggle **Enable voice mode** and click **Save & Reconcile**.
 
 PortOS will:
@@ -143,12 +141,12 @@ PortOS will:
 - If Piper is selected, download the pre-built Piper binary + phonemize libs from [rhasspy/piper](https://github.com/rhasspy/piper) and [rhasspy/piper-phonemize](https://github.com/rhasspy/piper-phonemize) GitHub Releases (Piper is not on Homebrew), then fetch the selected voice `.onnx` into `~/.portos/voice/voices/`
 - Start `portos-whisper` under PM2
 
-Kokoro models live under `~/.cache/huggingface/hub/` and download lazily on first synthesis.
+Piper voice models live under `~/.portos/voice/voices/`.
 
 You can also run the bootstrap script directly:
 
 ```bash
-TTS_ENGINE=kokoro INSTALL_COREML=1 bash scripts/setup-voice.sh
+TTS_ENGINE=piper INSTALL_COREML=1 bash scripts/setup-voice.sh
 TTS_ENGINE=piper VOICE_NAME=en_US-ryan-high bash scripts/setup-voice.sh
 MODEL_NAME=ggml-small.en.bin bash scripts/setup-voice.sh
 ```
@@ -164,11 +162,8 @@ All options live in `data/settings.json` under `voice` (Settings UI patches this
 | `stt.model` | `base.en` | `tiny.en` · `base.en` · `small.en` · `medium.en` · `large-v3` |
 | `stt.coreml` | `false` | Optional on macOS. Enable to use the CoreML encoder companion (requires a custom whisper.cpp build with `-DWHISPER_COREML=1`). |
 | `stt.endpoint` | `http://127.0.0.1:5562` | whisper-server listen address (whisper engine only). |
-| `tts.engine` | `kokoro` | `kokoro` or `piper` |
+| `tts.engine` | `piper` | `piper` or `qwen3-tts` |
 | `tts.rate` | `1.0` | Speech rate, 0.5–2.0 |
-| `tts.kokoro.voice` | `af_heart` | See [Kokoro voices](https://huggingface.co/onnx-community/Kokoro-82M-v1.0-ONNX) — A-grade are `af_heart`, `af_bella`. |
-| `tts.kokoro.dtype` | `q8` | `q4` · `q8` · `fp16` · `fp32` (size/quality trade-off) |
-| `tts.kokoro.modelId` | `onnx-community/Kokoro-82M-v1.0-ONNX` | HuggingFace repo id |
 | `tts.piper.voice` | `en_GB-jenny_dioco-medium` | Piper voice id (path-encoded) |
 | `tts.piper.voicePath` | `~/.portos/voice/voices/<voice>.onnx` | ONNX file location |
 | `llm.model` | `auto` | `auto` picks first loaded LM Studio model |
@@ -215,7 +210,7 @@ browser mic → MediaRecorder (PTT) OR AudioWorklet + RMS VAD (hands-free)
   → Socket.IO 'voice:turn' (audio) OR 'voice:text' (Web Speech final)
   → whisper.cpp /inference          (STT for audio path)
   → LM Studio /v1/chat (streaming)  (LLM)
-  → sentence-boundary TTS dispatch  (Kokoro in-process | Piper CLI)
+  → sentence-boundary TTS dispatch  (Piper CLI | Qwen3-TTS runtime)
   → Socket.IO 'voice:tts:audio'     → Web Audio playback queue
 ```
 
@@ -254,8 +249,6 @@ reuses the same `voice:call:audio` PCM frames (`voice:capture:start` /
 
 - **Whisper badge red** — `brew install whisper-cpp`, then `which whisper-server`.
 - **CoreML missing** — re-run `INSTALL_COREML=1 bash scripts/setup-voice.sh` (or toggle voice off/on after enabling CoreML).
-- **Kokoro shows `lazy`** — model loads on first synthesis. Hit "Test voice" to warm it up.
-- **Kokoro slow on first call** — first call after server start downloads model (~80 MB for q8) and initializes the runtime. Subsequent calls are 200–500 ms.
 - **Piper spawn fails** — `which piper` and check voice file at `~/.portos/voice/voices/<name>.onnx`.
 - **LM Studio red** — start LM Studio and load a chat model; the voice pipeline uses `/v1/chat/completions`.
 - **No audio playback** — browsers require a user gesture before AudioContext can play. Click the page once or press the mic button.
@@ -264,8 +257,6 @@ reuses the same `voice:call:audio` PCM frames (`voice:capture:start` /
 
 | Engine | Cold start | Warm latency (per sentence) | Quality |
 |--------|------------|------------------------------|---------|
-| Kokoro q8 (CPU) | 2–3 s | 200–500 ms | High |
-| Kokoro fp32 (CPU) | 3–5 s | 400–900 ms | Highest |
 | Piper | ~100 ms (CLI spawn) | ~100 ms | Mid |
 | Whisper base.en (no CoreML) | 0 (server resident) | 400–800 ms / 2 s of audio | Good |
 | Whisper base.en + CoreML | 0 | 150–300 ms / 2 s of audio | Good |

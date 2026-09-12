@@ -290,7 +290,7 @@ export async function generateImage({
     cleanC2PA,
     denoise,
   }).catch((err) => {
-    console.log(`❌ agy run failed [${jobId.slice(0, 8)}]: ${err?.message}`);
+    console.error(`❌ agy run failed [${jobId.slice(0, 8)}]: ${err?.message}`);
   });
 
   return {

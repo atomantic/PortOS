@@ -100,7 +100,7 @@ toasts on throw). **Custom catch ⇒ `silent: true`** — otherwise toasts fire 
 
 | File | Purpose |
 |---|---|
-| `apiImageVideo.js` | Image-gen local backend extras (gallery, models, LoRAs, cancel, delete). |
+| `apiImageVideo.js` | Image-gen local backend extras; bounded image/mixed gallery pages, global facets and collection summaries, exact-reference `getGalleryImages`, plus models, LoRAs, cancel and delete. |
 | `apiLoraTraining.js` | Character LoRA training — datasets (CRUD, upload, generate, slice, caption), training runs (start/list/cancel + status), character→LoRA link lookup. |
 | `apiMedia.js` | Screenshots + media assets. Also owns the multi-file upload orchestration — `processScreenshotUploads` / `processAttachmentUploads` — moved from `utils/fileUpload.js` since they perform network I/O, not pure transforms. `utils/fileUpload.js` keeps only the pure helpers/constants and no longer re-exports these. |
 | `apiMediaJobs.js` | Media generation job tracking + `refineMediaPrompt` / `promptFromMedia` (vision reverse-prompt). |
@@ -114,8 +114,8 @@ toasts on throw). **Custom catch ⇒ `silent: true`** — otherwise toasts fire 
 | `apiShell.js` | Shell sessions over HTTP: hand a photo (plus a message) to the agent TUI running in a session. Keystrokes/output stay on the `shell:*` socket protocol. |
 | `apiThreejsModels.js` | Procedural Three.js model workspaces: gallery-image generation, refinement, source export, deletion, and the subject-family checklist options. |
 | `apiImageTo3d.js` | Image-to-3D (`/3d`): selectable targets (TRELLIS.2) with host availability/install status, and per-image model records — create/list/get/generate/delete + GLB asset URL, the full-resolution OBJ download URL, and the AR Quick Look USDZ upload/download pair. |
-| `apiPipeline.js` | Pipeline (issues + stages + canon). |
-| `apiUniverseBuilder.js` | Universe Builder (generate + edit + commit). |
+| `apiPipeline.js` | Pipeline (issues + stages + canon; series names and index summaries). |
+| `apiUniverseBuilder.js` | Universe Builder (generate + edit + commit; names and index summaries). |
 | `apiAuthors.js` | Author personas (name, writing style, bio, headshot description/style). |
 | `apiArtists.js` | Music artist personas (name, genre, bio, musical style, portrait description/style). |
 | `apiAlbums.js` | Music albums (title, artist FK + name, description, genre, release year, cover art, ordered track ids). |

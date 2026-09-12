@@ -119,7 +119,8 @@ describe('SongBookViewer', () => {
     expect(await screen.findByText('Example Song')).toBeTruthy();
     // Section header + lyric line from parseTabSheet.
     expect(await screen.findByText('Chorus')).toBeTruthy();
-    expect(screen.getByText('Nonsense words here')).toBeTruthy();
+    expect([...screen.getByText('Nonsense').closest('[data-chord-lyric-pair]').children]
+      .map((chunk) => chunk.lastChild.textContent).join('')).toBe('Nonsense words here');
     // Meta badges
     expect(screen.getByText('Key C')).toBeTruthy();
     expect(screen.getByText('Capo 2')).toBeTruthy();
@@ -965,7 +966,8 @@ K:  o - - - - - o -`;
       // mode" is asserted on the form going away, not on the sheet appearing.
       await waitFor(() => expect(screen.queryByLabelText('Content')).toBeNull());
       expect(screen.queryByText(/Discard your unsaved changes/)).toBeNull();
-      expect(screen.getByText('Nonsense words here')).toBeTruthy();
+      expect([...screen.getByText('Nonsense').closest('[data-chord-lyric-pair]').children]
+      .map((chunk) => chunk.lastChild.textContent).join('')).toBe('Nonsense words here');
     });
 
     it('confirms before the View toggle discards unsaved edits', async () => {

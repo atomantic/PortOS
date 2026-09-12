@@ -297,17 +297,18 @@ export const AUDIT_DEFINITIONS = Object.freeze({
       noun: 'API contract finding(s)',
     }),
   },
+  // Legacy IDs and filing labels preserve saved schedules and audit history.
   'react-lifecycle': {
     quotaBurnId: 'react-lifecycle-audit',
-    label: 'React lifecycle & state',
-    description: 'React lifecycle audit — configurable: file issues (default) or implement fixes',
+    label: 'UI lifecycle & state',
+    description: 'UI lifecycle audit — configurable: file issues (default) or implement fixes',
     defaultFileIssues: true,
     filing: filing({
       slugPrefix: 'react-lifecycle-',
       label: 'react-lifecycle-audit',
       issueLabel: 'react-lifecycle',
-      labelDescription: 'Proposed from a React lifecycle/state audit',
-      noun: 'React lifecycle finding(s)',
+      labelDescription: 'Proposed from a UI lifecycle/state audit',
+      noun: 'UI lifecycle finding(s)',
     }),
   },
   observability: {

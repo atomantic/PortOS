@@ -48,7 +48,7 @@ const sanitizeBucket = (raw) => {
 
 async function readRegistry() {
   await ensureDir(join(PATHS.data, 'sharing'));
-  const raw = await readJSONFile(REGISTRY_PATH(), { buckets: [] }, { logError: false });
+  const raw = await readJSONFile(REGISTRY_PATH(), { buckets: [] }, { logError: false, strict: true });
   const buckets = Array.isArray(raw.buckets) ? raw.buckets.map(sanitizeBucket).filter(Boolean) : [];
   return { buckets };
 }
@@ -150,7 +150,7 @@ export async function ensureBucketLayout(bucket) {
   await ensureDir(join(base, 'assets', 'videos'));
   await ensureDir(join(base, 'assets', 'blobs'));
   const bucketJsonPath = join(base, 'bucket.json');
-  const existing = await readJSONFile(bucketJsonPath, null, { logError: false });
+  const existing = await readJSONFile(bucketJsonPath, null, { logError: false, strict: true });
   if (!existing) {
     // bucket.json is the shared identity. Stamp the schema version at
     // creation time so peers can tell at a glance which protocol the bucket
@@ -170,6 +170,7 @@ export async function ensureBucketLayout(bucket) {
 /** Read the on-disk bucket.json so routes/UI can report producedBy + schema info. */
 export async function readBucketJson(bucket) {
   const bucketJsonPath = join(bucket.path, 'bucket.json');
+  // Read-only UI metadata; ensureBucketLayout uses its own strict creation guard.
   return readJSONFile(bucketJsonPath, null, { logError: false });
 }
 
@@ -210,8 +211,9 @@ export async function createBucket(input = {}) {
     updatedAt: now,
   });
   state.buckets.push(bucket);
-  await writeRegistry(state);
+  // Validate/read the shared identity before publishing the local registration.
   await ensureBucketLayout(bucket);
+  await writeRegistry(state);
   return bucket;
 }
 

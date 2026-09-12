@@ -4,6 +4,7 @@ vi.mock('../../services/appQuality.js', () => ({ getAppQualityHistory: vi.fn(asy
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import express from 'express';
 import { request } from '../../lib/testHelper.js';
+import { errorEvents } from '../../lib/errorHandler.js';
 import crudRoutes from './crud.js';
 import { enrichAppsWithQuality, getAppQualityHistory } from '../../services/appQuality.js';
 
@@ -62,11 +63,37 @@ describe('Apps CRUD Routes', () => {
     exportPortosQuality.mockResolvedValue({ schemaVersion: 1, measurements: [] });
     const result = await request(app).get('/api/apps/quality-federation?days=30').set('X-PortOS-Instance-Id', 'peer');
     expect(result.status).toBe(200);
-    expect(exportPortosQuality).toHaveBeenCalledWith('peer', 30);
+    expect(exportPortosQuality).toHaveBeenCalledWith('peer', 30, {}, undefined);
     expect(appsService.getAppById).not.toHaveBeenCalled();
+    const repository = 'a'.repeat(64);
+    expect((await request(app).get(`/api/apps/quality-federation?repository=${repository}`).set('X-PortOS-Instance-Id', 'peer')).status).toBe(200);
+    expect(exportPortosQuality).toHaveBeenLastCalledWith('peer', 90, {}, repository);
+    expect((await request(app).get('/api/apps/quality-federation?repository=invalid')).status).toBe(400);
     expect((await request(app).get('/api/apps/quality-federation?days=999')).status).toBe(400);
     exportPortosQuality.mockResolvedValue(null);
-    expect((await request(app).get('/api/apps/quality-federation')).status).toBe(403);
+    const emit = vi.fn();
+    app.set('io', { emit });
+    const onError = vi.fn();
+    errorEvents.on('error', onError);
+    const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const refused = await request(app).get('/api/apps/quality-federation');
+      expect(refused.status).toBe(403);
+      expect(refused.body.code).toBe('PEER_PULL_FORBIDDEN');
+      expect(onError).toHaveBeenCalledWith(expect.objectContaining({
+        code: 'PEER_PULL_FORBIDDEN',
+        severity: 'warning',
+      }), expect.anything());
+      expect(emit).toHaveBeenCalledWith('error:occurred', expect.objectContaining({
+        code: 'PEER_PULL_FORBIDDEN',
+        status: 403,
+        severity: 'warning',
+      }));
+      expect(consoleErrorSpy).not.toHaveBeenCalled();
+    } finally {
+      errorEvents.off('error', onError);
+      consoleErrorSpy.mockRestore();
+    }
   });
 
   describe('GET /api/apps', () => {
@@ -89,6 +116,40 @@ describe('Apps CRUD Routes', () => {
       expect(response.body[0].overallStatus).toBe('online');
     });
 
+    it('returns the nav projection without invoking PM2 enrichment', async () => {
+      const mockApps = [{
+        id: 'app-001', name: 'Test App', icon: 'package', archived: false, type: 'express',
+        repoPath: '/tmp/test', pm2ProcessNames: ['test-app'],
+      }];
+      appsService.getAllApps.mockResolvedValue(mockApps);
+
+      const response = await request(app).get('/api/apps?view=nav');
+
+      expect(response.status).toBe(200);
+      expect(response.body).toEqual([{
+        id: 'app-001', name: 'Test App', icon: 'package', archived: false, type: 'express',
+      }]);
+      expect(pm2Service.listProcessesStrict).not.toHaveBeenCalled();
+    });
+
+    it('returns the PM2-backed probe projection without the enriched body', async () => {
+      appsService.getAllApps.mockResolvedValue([{
+        id: 'app-001', name: 'Test App', icon: 'package', type: 'express',
+        uiPort: 5555, apiPort: 5551, pm2ProcessNames: ['test-app'], processes: [],
+      }]);
+      pm2Service.listProcessesStrict.mockResolvedValue([{ name: 'test-app', status: 'online' }]);
+
+      const response = await request(app).get('/api/apps?view=probe');
+
+      expect(response.status).toBe(200);
+      expect(response.body).toEqual([{
+        id: 'app-001', name: 'Test App', icon: 'package', overallStatus: 'online',
+        uiPort: 5555, apiPort: 5551, type: 'express',
+      }]);
+      expect(pm2Service.listProcessesStrict).toHaveBeenCalledTimes(1);
+      expect(response.body[0].pm2Status).toBeUndefined();
+    });
+
     it('keeps quality reports off peer probes and returns them only for explicit local UI reads', async () => {
       appsService.getAllApps.mockResolvedValue([{ id: 'portos-default', name: 'PortOS', type: 'ios-native', repoPath: '/tmp/test' }]);
       const peer = await request(app).get('/api/apps');
@@ -98,6 +159,8 @@ describe('Apps CRUD Routes', () => {
       expect(local.body[0].quality).toEqual({ score: 75 });
       const invalid = await request(app).get('/api/apps?includeQuality=anything');
       expect(invalid.status).toBe(400);
+      const invalidView = await request(app).get('/api/apps?view=anything');
+      expect(invalidView.status).toBe(400);
       appsService.getAppById.mockResolvedValue({ id: 'portos-default', name: 'PortOS', type: 'ios-native' });
       const detail = await request(app).get('/api/apps/portos-default?includeQuality=true');
       expect(detail.body.quality).toEqual({ score: 75 });

@@ -208,7 +208,7 @@ export async function generateVideo({
 
   runFalVideo(job, jobId, { apiKey, modelId, prompt, negativePrompt, duration, aspectRatio: effectiveAspectRatio, sourceImagePath, outputPath, filename, meta })
     .catch((err) => {
-      console.log(`❌ fal video run failed [${jobId.slice(0, 8)}]: ${err?.message}`);
+      console.error(`❌ fal video run failed [${jobId.slice(0, 8)}]: ${err?.message}`);
     });
 
   return {

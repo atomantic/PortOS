@@ -22,7 +22,7 @@ import {
   proseExportEpubUrl,
   proseExportPdfUrl,
   listMediaCollections,
-  listImageGallery,
+  getGalleryImages,
   listVideoHistory,
 } from '../services/api';
 import { useAsyncAction } from '../hooks/useAsyncAction';
@@ -106,13 +106,14 @@ export default function PipelineExport() {
     let canceled = false;
     Promise.all([
       listMediaCollections({ silent: true }),
-      listImageGallery({ silent: true }),
       listVideoHistory({ silent: true }),
-    ]).then(([collections, images, videos]) => {
+    ]).then(async ([collections, videos]) => {
       if (canceled) return;
       const list = Array.isArray(collections) ? collections : [];
       const collection = list.find((c) => c.seriesId === seriesId || c.id === `sc-${seriesId}`);
       if (!collection) { setSeriesAssets([]); return; }
+      const images = await getGalleryImages((collection.items || []).filter(item => item.kind === 'image').map(item => item.ref), { silent: true });
+      if (canceled) return;
       const imagesByName = new Map((images || []).map((i) => [i.filename, i]));
       const videosById = new Map((videos || []).map((v) => [v.id, v]));
       const out = [];

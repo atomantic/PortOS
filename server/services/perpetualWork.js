@@ -269,7 +269,10 @@ const withGithubHost = async (args, repoPath) => [
 async function resolveAuthenticatedLogin(cli, args, repoPath, env) {
   const probeArgs = cli === 'gh' ? await withGithubHost(args, repoPath) : args;
   const res = await runCli(cli, probeArgs, repoPath, env);
-  const login = (res.stdout || '').trim();
+  const rawLogin = cli === 'glab'
+    ? (await import('../lib/streamJsonParser.js')).safeParse(res.stdout)?.username
+    : res.stdout;
+  const login = typeof rawLogin === 'string' ? rawLogin.trim() : '';
   return (res.code !== 0 || !login) ? { error: `${cli}-unavailable` } : { login };
 }
 
@@ -290,8 +293,15 @@ async function resolveTrustedLogins(cfg, repoPath, env) {
     : cfg.membersArgs;
   const res = await runCli(cfg.cli, membersArgs, repoPath, env);
   if (res.code !== 0) return { error: cfg.membersFail, remedy: cfg.membersRemedy };
+  const lines = (res.stdout || '').split('\n').filter(line => line.trim());
+  // glab api emits raw NDJSON; unlike gh api it has no -q selector.
+  const parseMember = cfg.cli === 'glab' ? (await import('../lib/streamJsonParser.js')).safeParse : null;
+  const members = parseMember ? lines.map(line => parseMember(line)?.username) : lines;
+  if (members.some(member => typeof member !== 'string' || !member.trim())) {
+    return { error: cfg.membersFail, remedy: cfg.membersRemedy };
+  }
   const logins = new Set([login.toLowerCase()]);
-  for (const line of (res.stdout || '').split('\n')) {
+  for (const line of members) {
     const member = line.trim().toLowerCase();
     if (member) logins.add(member);
   }
@@ -324,7 +334,7 @@ const canonicalizeIds = (ids) => [...new Set(ids
     : a.localeCompare(b);
 });
 
-const GLAB_SELF_LOGIN_ARGS = ['api', 'user', '-q', '.username'];
+const GLAB_SELF_LOGIN_ARGS = ['api', 'user'];
 
 // Upper bound on the `--author <login>` queries the `collaborators` gate fans
 // out per detection pass. Each login costs one CLI round-trip, and this runs on
@@ -454,7 +464,7 @@ const FORGE_ISSUE_CONFIG = {
     // group-level access is how most GitLab teams are actually granted. `:id` is
     // glab's own project placeholder, resolved from the checked-out remote.
     selfLoginArgs: GLAB_SELF_LOGIN_ARGS,
-    membersArgs: ['api', '--paginate', 'projects/:id/members/all', '-q', '.[].username'],
+    membersArgs: ['api', '--paginate', 'projects/:id/members/all', '--output', 'ndjson'],
     membersFail: 'glab-members-failed',
     membersRemedy: 'the "Me + collaborators" filter needs a glab account that can read this project\'s member list — pick a different author filter, or re-auth glab',
     // GitLab keys the number on `iid`, the author login on `username`, and

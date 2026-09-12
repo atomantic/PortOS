@@ -56,6 +56,11 @@ function renderAt(entry = '/3d', extra = null) {
 describe('Media3D — runtime state', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    window.matchMedia = vi.fn(() => ({
+      matches: false,
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+    }));
     listImageTo3dModels.mockResolvedValue([]);
     getHfTokenStatus.mockResolvedValue({ hfTokenPresent: false, source: 'none' });
   });
@@ -92,6 +97,11 @@ describe('Media3D — runtime state', () => {
 describe('Media3D — generation workspace', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    window.matchMedia = vi.fn(() => ({
+      matches: false,
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+    }));
     listImageTo3dModels.mockResolvedValue([]);
     getImageTo3dTargets.mockResolvedValue({ targets: [target({ installed: true })] });
     getHfTokenStatus.mockResolvedValue({ hfTokenPresent: false, source: 'none' });
@@ -214,6 +224,16 @@ describe('Media3D — generation workspace', () => {
     const btn = await screen.findByRole('button', { name: /Generate 3D/i });
     expect(btn).toBeDisabled();
     expect(screen.getByText(/Pick a source image to continue/i)).toBeInTheDocument();
+  });
+
+  it('puts the primary action before closed render options on a narrow viewport', async () => {
+    const { container } = renderAt('/3d');
+    const generate = await screen.findByRole('button', { name: /Generate 3D/i });
+    const options = container.querySelector('details');
+
+    expect(options).toBeInTheDocument();
+    expect(options).not.toHaveAttribute('open');
+    expect(generate.compareDocumentPosition(options) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
   it('gates Generate when the chosen target still needs installing', async () => {

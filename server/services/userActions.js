@@ -299,7 +299,7 @@ function retentionCutoff(now = Date.now()) {
 const queueWrite = createFileWriteQueue();
 
 async function loadFileEvents() {
-  const raw = await readJSONFile(eventsFile(), { events: [] }, { allowArray: false });
+  const raw = await readJSONFile(eventsFile(), { events: [] }, { allowArray: false, strict: true });
   return Array.isArray(raw?.events) ? raw.events : [];
 }
 

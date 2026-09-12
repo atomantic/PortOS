@@ -1,10 +1,14 @@
 import { getSettings, updateSettingsWith } from './settings.js';
 import { ServerError } from '../lib/errorHandler.js';
+import { fetchWithTimeout } from '../lib/fetchWithTimeout.js';
 import { modelComparisonImportSchema } from '../lib/validation.js';
 import { importModelComparison } from './modelComparison.js';
 import { canonicalCatalogModelSlug } from '../lib/comparisonModelScope.js';
 
 export const KNOWN_EFFORTS = ['non-reasoning', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultracode'];
+
+const ARTIFICIAL_ANALYSIS_REQUEST_TIMEOUT_MS = 15_000;
+const ARTIFICIAL_ANALYSIS_MAX_PAGES = 50;
 
 export function slugify(text) {
   return String(text || '')
@@ -188,13 +192,20 @@ export function transformAAModelsToObservations(models, options = {}) {
 
 export async function fetchAllArtificialAnalysisModels(apiKey) {
   if (!apiKey) throw new ServerError('Artificial Analysis API key is required', { status: 400 });
-  let page = 1;
   const allModels = [];
   let intelligenceIndexVersion;
-  while (true) {
-    const res = await fetch(`https://artificialanalysis.ai/api/v2/language/models/free?page=${page}`, {
-      headers: { 'x-api-key': apiKey },
-    });
+  for (let page = 1; page <= ARTIFICIAL_ANALYSIS_MAX_PAGES; page++) {
+    let res;
+    try {
+      res = await fetchWithTimeout(`https://artificialanalysis.ai/api/v2/language/models/free?page=${page}`, {
+        headers: { 'x-api-key': apiKey },
+      }, ARTIFICIAL_ANALYSIS_REQUEST_TIMEOUT_MS);
+    } catch (error) {
+      if (error?.name === 'AbortError') {
+        throw new ServerError('Artificial Analysis request timed out; retry sync', { status: 502 });
+      }
+      throw error;
+    }
     if (!res.ok) {
       throw new ServerError(`Artificial Analysis API failed (${res.status}): ${res.statusText || 'request rejected'}`, { status: res.status === 401 || res.status === 403 ? 401 : 502 });
     }
@@ -209,7 +220,9 @@ export async function fetchAllArtificialAnalysisModels(apiKey) {
     intelligenceIndexVersion = version;
     allModels.push(...json.data);
     if (!json.pagination?.has_more) break;
-    page++;
+    if (page === ARTIFICIAL_ANALYSIS_MAX_PAGES) {
+      throw new ServerError('Artificial Analysis pagination exceeded 50 pages; retry sync', { status: 502 });
+    }
   }
   return { models: allModels, intelligenceIndexVersion };
 }

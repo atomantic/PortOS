@@ -28,6 +28,7 @@ import {
   diffAssetManifestAgainstLocal,
   pullMissingAssetsFromPeer,
   pullMissingWorkBodies,
+  pullMissingWorkBibles,
 } from './peerSyncAssets.js';
 import { RECORD_KINDS } from './recordKinds.js';
 import { findPeerSubscription, subscribePeer } from './peerSubscriptions.js';
@@ -204,7 +205,7 @@ export async function applyIncomingPush(payload) {
   if (!isPlainObject(payload)) {
     throw makeErr('payload must be an object', ERR_VALIDATION);
   }
-  const { kind, record, issues, linkedCollection, linkedTrack, catalogBundle, manuscriptReview, reverseOutline, assetManifest, draftBodyManifest, sourceInstanceId, portosMeta } = payload;
+  const { kind, record, issues, linkedCollection, linkedTrack, catalogBundle, manuscriptReview, reverseOutline, assetManifest, draftBodyManifest, bibleManifest, sourceInstanceId, portosMeta } = payload;
   if (!PEER_SUBSCRIBABLE_KINDS.includes(kind)) {
     throw makeErr(`unknown kind: ${kind}`, ERR_VALIDATION);
   }
@@ -451,6 +452,7 @@ export async function applyIncomingPush(payload) {
   // Same guards as the asset path: skip for local-ephemeral and tombstone pushes.
   let missingDraftBodies = [];
   if (kind === 'writersRoomWork' && !localEphemeral && record.deleted !== true) {
+    const { diffWorkBibleManifest } = await import('../writersRoom/bibleSync.js');
     // Scope the manifest to THIS work: a body entry's path is works/<workId>/...,
     // so an entry whose workId != the pushed record's id would write bytes into a
     // DIFFERENT local work's draft (clobbering unrelated prose when the merge
@@ -460,6 +462,21 @@ export async function applyIncomingPush(payload) {
       ? draftBodyManifest.filter((e) => e && e.workId === record.id)
       : [];
     missingDraftBodies = await diffWorkBodyManifest(ownBodies, { includeMismatched: workMergeApplied });
+    const ownBibles = Array.isArray(bibleManifest) ? bibleManifest.filter((e) => e?.workId === record.id) : [];
+    const bibleDiffFailed = (err) => {
+      pending.add('bibleSyncPending');
+      console.error(`❌ peerSync: bible diff failed: ${err.message}`);
+    };
+    const missingBibles = await diffWorkBibleManifest(ownBibles, { onError: bibleDiffFailed }).catch((err) => {
+      bibleDiffFailed(err);
+      return [];
+    });
+    if (missingBibles.length) {
+      pending.add('bibleSyncPending');
+      pullMissingWorkBibles(sourceInstanceId, missingBibles).catch((err) => {
+        console.error(`❌ peerSync: bible pull failed: ${err.message}`);
+      });
+    }
     if (missingDraftBodies.length > 0) {
       pullMissingWorkBodies(sourceInstanceId, missingDraftBodies).catch((err) => {
         console.log(`⚠️ peerSync: draft-body pull from ${sourceInstanceId} failed: ${err.message}`);

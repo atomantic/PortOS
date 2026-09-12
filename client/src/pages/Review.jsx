@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useNavigate } from 'react-router';
 import {
   ClipboardList,
@@ -94,6 +94,8 @@ export default function Review() {
   const [editingId, setEditingId] = useState(null);
   const [filter, setFilter] = useState('pending');
   const [briefingFullscreen, setBriefingFullscreen] = useState(false);
+  const [counts, setCounts] = useState(null);
+  const countsRequestId = useRef(0);
 
   // Cross-domain live queue (M42 P5). These rows are derived live from each
   // producer, not stored, so "dismiss" is a per-session client-side hide rather
@@ -112,6 +114,13 @@ export default function Review() {
     setLoading(false);
   }, [filter]);
 
+  const fetchCounts = useCallback(() => {
+    const requestId = ++countsRequestId.current;
+    api.getReviewCounts({ silent: true }).then(data => {
+      if (requestId === countsRequestId.current) setCounts(data);
+    }).catch(() => null);
+  }, []);
+
   const fetchBriefing = useCallback(async () => {
     const data = await api.getReviewBriefing().catch(() => null);
     setBriefing(data);
@@ -125,12 +134,14 @@ export default function Review() {
 
   useEffect(() => {
     fetchItems();
+    fetchCounts();
     fetchBriefing();
     fetchQueue();
-  }, [fetchItems, fetchBriefing, fetchQueue]);
+  }, [fetchItems, fetchCounts, fetchBriefing, fetchQueue]);
 
   useEffect(() => {
     const handleCreated = (item) => {
+      fetchCounts();
       if (item.metadata?.privateSecurity) { fetchItems(); return; }
       setItems(prev => {
         if (prev.some(i => i.id === item.id)) return prev;
@@ -138,15 +149,18 @@ export default function Review() {
       });
     };
     const handleUpdated = (item) => {
+      fetchCounts();
       if (item.metadata?.privateSecurity) { fetchItems(); return; }
       setItems(prev => prev.map(i => i.id === item.id ? item : i));
     };
     const handleDeleted = (item) => {
+      fetchCounts();
       setItems(prev => prev.filter(i => i.id !== item.id));
     };
     // Bulk status change ("Mark all read" / "Complete all") — one state
     // update for every affected id instead of N per-item events.
     const handleBulkUpdated = ({ ids, status, updatedAt }) => {
+      fetchCounts();
       const idSet = new Set(ids);
       setItems(prev => prev.map(i => idSet.has(i.id) ? { ...i, status, updatedAt } : i));
     };
@@ -162,7 +176,7 @@ export default function Review() {
       socket.off('review:item:deleted', handleDeleted);
       socket.off('review:items:bulk-updated', handleBulkUpdated);
     };
-  }, [fetchItems]);
+  }, [fetchCounts, fetchItems]);
 
   // Live-invalidate the cross-domain queue. A burst of producer events (e.g.
   // a draft sent fires both messages:draft:sent and messages:changed) coalesces
@@ -251,11 +265,18 @@ export default function Review() {
   // without memoization every one of these filter/sort passes over `items` reruns
   // on unrelated re-renders (typing, hover state). Hooks must run before the
   // loading early-return, so they live here above it.
-  const grouped = useMemo(() => items.reduce((acc, item) => {
+  // Keep the detailed list aligned with the active status tab while socket
+  // events update the cached items from every status.
+  const visibleItems = useMemo(() => {
+    if (filter === 'all') return items;
+    return items.filter(item => item.status === filter);
+  }, [items, filter]);
+
+  const grouped = useMemo(() => visibleItems.reduce((acc, item) => {
     if (!acc[item.type]) acc[item.type] = [];
     acc[item.type].push(item);
     return acc;
-  }, {}), [items]);
+  }, {}), [visibleItems]);
 
   const queueItems = useMemo(
     () => (queue?.items || []).filter(i => !dismissedQueueIds.has(i.id)),
@@ -287,13 +308,12 @@ export default function Review() {
   }
 
   // Cheap derivations off the memoized `pendingItems`/`actionableItems` — plain
-  // consts, not memos: each is O(n) filter or O(8) slice with no consumer that
+  // consts, not memos: the action list is an O(8) slice with no consumer that
   // needs referential stability, so a hook here would be pure ceremony.
-  const pendingAlerts = pendingItems.filter(i => i.type === 'alert');
-  const pendingCos = pendingItems.filter(i => i.type === 'cos');
-  const pendingTodos = pendingItems.filter(i => i.type === 'todo');
   const topActionItems = actionableItems.slice(0, 8);
 
+  // This count controls actions for the currently loaded filter; the global
+  // triage summary below comes from the unfiltered counts endpoint.
   const pendingCount = pendingItems.length;
   const remainingActionCount = Math.max(0, actionableItems.length - topActionItems.length);
 
@@ -341,10 +361,10 @@ export default function Review() {
 
         {/* Triage summary */}
         <section className="flex flex-wrap gap-2">
-          <SummaryPill icon={BellRing} label="Pending" value={pendingCount} tone="text-white" />
-          <SummaryPill icon={AlertTriangle} label="Alerts" value={pendingAlerts.length} tone="text-port-warning" urgent={pendingAlerts.length > 0} />
-          <SummaryPill icon={Crown} label="CoS" value={pendingCos.length} tone="text-port-accent" />
-          <SummaryPill icon={ClipboardList} label="Todos" value={pendingTodos.length} tone="text-port-success" />
+          <SummaryPill icon={BellRing} label="Pending" value={counts?.total ?? 0} tone="text-white" />
+          <SummaryPill icon={AlertTriangle} label="Alerts" value={counts?.alert ?? 0} tone="text-port-warning" urgent={(counts?.alert ?? 0) > 0} />
+          <SummaryPill icon={Crown} label="CoS" value={counts?.cos ?? 0} tone="text-port-accent" />
+          <SummaryPill icon={ClipboardList} label="Todos" value={counts?.todo ?? 0} tone="text-port-success" />
         </section>
 
         {/* Cross-domain "Needs Attention" queue (M42 P5) — live-pulled from
@@ -511,10 +531,10 @@ export default function Review() {
         })}
         </div>
 
-        {items.length === 0 && (
+        {visibleItems.length === 0 && (
           <div className="text-center py-12 text-gray-500">
             <ClipboardList size={48} className="mx-auto mb-3 opacity-30" />
-            <p className="text-lg">No review items yet</p>
+            <p className="text-lg">No review items in this view</p>
             <p className="text-sm mt-1">This hub will fill up as agents surface alerts, actions, and briefing context.</p>
           </div>
         )}

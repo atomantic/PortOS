@@ -432,6 +432,7 @@ export async function readMeasuredUsage({ workspacePath, startTime, endTime, fam
         // chat_history.jsonl carries no timestamps, so the session is placed by
         // summary.json and billed whole or not at all; the session-level claim
         // is what stops two overlapping runs from each taking it.
+        // Read-only transcript input: no write-back to the summary file.
         const summary = await readJSONFile(join(sessionDir, 'summary.json'), null);
         if (!summary) continue;
         const startedMs = Date.parse(summary.created_at || '');
@@ -773,6 +774,8 @@ export async function recordCompletedRunUsage(metadata, output, { home = homedir
       if (!metadata?.id) return;
       await markUsageRunReconciled(metadata.id);
       const metadataPath = join(PATHS.runs, metadata.id, 'metadata.json');
+      // Non-strict exception: missing/unreadable metadata skips the marker
+      // write; the usage ledger remains authoritative for the accounting.
       const persisted = await readJSONFile(metadataPath, null);
       if (!persisted) return;
       persisted.usageReconciled = true;

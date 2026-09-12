@@ -291,6 +291,17 @@ describe('pruneImportedLegacyFiles', () => {
     expect(await exists(join(dataDir, 'legacy-prune.applied.json'))).toBe(false);
   });
 
+  it('retains healthy parked series alongside an incomplete canonical record until import finishes', async () => {
+    await mkdir(join(dataDir, 'pipeline-series/ser-good'), { recursive: true });
+    await mkdir(join(dataDir, 'pipeline-series/ser-bad'), { recursive: true });
+    await writeJSON(join(dataDir, 'pipeline-series/ser-good/index.json.imported'), { id: 'ser-good' });
+    await writeJSON(join(dataDir, 'pipeline-series/ser-bad/index.json'), { id: 'ser-bad' });
+    const result = await pruneImportedLegacyFiles({ dataDir, db: stubDb({ pipeline_series: ['ser-good'] }) });
+    expect(result.markerWritten).toBe(false);
+    expect(await exists(join(dataDir, 'pipeline-series/ser-good/index.json.imported'))).toBe(true);
+    expect(await exists(join(dataDir, 'pipeline-series/ser-bad/index.json'))).toBe(true);
+  });
+
   it('prunes the creative-director JSON export when its project ids are present', async () => {
     await writeJSON(join(dataDir, 'creative-director-projects.migrated.json'), { imported: 1 });
     await writeJSON(join(dataDir, 'creative-director-projects.json.imported'), [{ id: 'cd-1' }]);

@@ -16,6 +16,7 @@
 // `controlsIdPrefix` wires `aria-controls` (and `id="tab-<id>"`) to matching tabpanels — pass
 // `'tabpanel'` to mirror ChiefOfStaff's wiring. `t.trailing` is an optional
 // ReactNode rendered after the count (e.g. PipelineIssue's per-stage status dot).
+import { useRef, useEffect } from 'react';
 import { Loader2 } from 'lucide-react';
 
 const SIZE = {
@@ -44,6 +45,50 @@ export default function TabPills({
 }) {
   const sz = SIZE[size] || SIZE.md;
   const visibleTabs = tabs.filter(Boolean);
+  const tabRefs = useRef([]);
+  const enabledTabIndexes = visibleTabs
+    .map((tab, index) => (tab.disabled ? null : index))
+    .filter((index) => index !== null);
+
+  const activeIndex = visibleTabs.findIndex((t) => t.id === activeTab);
+
+  // Fresh tab arrays and live counts must not pull the page back to the bar.
+  useEffect(() => {
+    if (activeIndex !== -1 && tabRefs.current[activeIndex]?.scrollIntoView) {
+      tabRefs.current[activeIndex].scrollIntoView({
+        behavior: 'smooth',
+        block: 'nearest',
+        inline: 'nearest',
+      });
+    }
+  }, [activeTab, activeIndex, variant]);
+
+  const handleTabKeyDown = (event, index) => {
+    if (!['ArrowRight', 'ArrowDown', 'ArrowLeft', 'ArrowUp', 'Home', 'End'].includes(event.key)) {
+      return;
+    }
+
+    const currentPosition = enabledTabIndexes.indexOf(index);
+    if (currentPosition === -1 || enabledTabIndexes.length === 0) {
+      return;
+    }
+
+    let targetPosition;
+    if (event.key === 'Home') {
+      targetPosition = 0;
+    } else if (event.key === 'End') {
+      targetPosition = enabledTabIndexes.length - 1;
+    } else {
+      const direction = event.key === 'ArrowRight' || event.key === 'ArrowDown' ? 1 : -1;
+      targetPosition = (currentPosition + direction + enabledTabIndexes.length) % enabledTabIndexes.length;
+    }
+
+    const targetIndex = enabledTabIndexes[targetPosition];
+    const targetTab = visibleTabs[targetIndex];
+    event.preventDefault();
+    onChange(targetTab.id);
+    tabRefs.current[targetIndex]?.focus();
+  };
 
   // Mobile `<select>` collapse, shared by both variants so `mobileDropdown` works
   // regardless of `variant` (the underline tab bar just overflow-scrolls without it).
@@ -78,7 +123,7 @@ export default function TabPills({
           role={isFilter ? 'group' : 'tablist'}
           aria-label={ariaLabel}
         >
-          {visibleTabs.map((t) => {
+          {visibleTabs.map((t, index) => {
             const Icon = t.icon;
             const active = t.id === activeTab;
             const running = runningKind && t.runningKind === runningKind;
@@ -91,8 +136,11 @@ export default function TabPills({
                 aria-pressed={isFilter ? active : undefined}
                 aria-controls={!isFilter && controlsIdPrefix ? `${controlsIdPrefix}-${t.id}` : undefined}
                 id={!isFilter && controlsIdPrefix ? `tab-${t.id}` : undefined}
+                ref={!isFilter ? (node) => { tabRefs.current[index] = node; } : undefined}
+                tabIndex={!isFilter ? (active ? 0 : -1) : undefined}
                 disabled={t.disabled}
                 onClick={() => onChange(t.id)}
+                onKeyDown={!isFilter ? (event) => handleTabKeyDown(event, index) : undefined}
                 className={`flex items-center ${sz.gap} ${sz.padding} rounded ${sz.text} transition-colors whitespace-nowrap ${
                   active
                     ? 'bg-port-accent/20 text-port-accent border border-port-accent/40'
@@ -128,7 +176,7 @@ export default function TabPills({
         role="tablist"
         aria-label={ariaLabel}
       >
-      {visibleTabs.map((t) => {
+      {visibleTabs.map((t, index) => {
         const Icon = t.icon;
         const active = t.id === activeTab;
         const running = runningKind && t.runningKind === runningKind;
@@ -140,8 +188,11 @@ export default function TabPills({
             aria-selected={active}
             aria-controls={controlsIdPrefix ? `${controlsIdPrefix}-${t.id}` : undefined}
             id={controlsIdPrefix ? `tab-${t.id}` : undefined}
+            ref={(node) => { tabRefs.current[index] = node; }}
+            tabIndex={active ? 0 : -1}
             disabled={t.disabled}
             onClick={() => onChange(t.id)}
+            onKeyDown={(event) => handleTabKeyDown(event, index)}
             title={hideLabelOnMobile ? t.label : undefined}
             className={`flex items-center ${stretch ? 'flex-1 min-w-0 justify-center' : 'shrink-0 justify-center'} ${sz.gap} ${sz.padding} ${sz.text} font-medium transition-colors whitespace-nowrap min-h-[44px] sm:min-h-[40px] border-b-2 -mb-px ${
               active

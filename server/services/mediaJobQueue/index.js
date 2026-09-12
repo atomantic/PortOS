@@ -621,7 +621,7 @@ function startWorker() {
   workerStarted = true;
   // Detach from awaiting so init can return; the loop runs forever.
   drainLoop().catch((err) => {
-    console.log(`❌ mediaJobQueue worker crashed: ${err.message}`);
+    console.error(`❌ mediaJobQueue worker crashed: ${err.message}`, err.stack || '');
     workerStarted = false;
   });
 }
@@ -665,7 +665,7 @@ function startLaneJob(job, { lane }) {
     } catch (err) {
       // runJob threw before its own terminal handlers ran (e.g. PYTHON
       // not configured). Recover so a single bad job can't freeze its lane.
-      console.log(`❌ media-job [${job.id.slice(0, 8)}] ${label} runJob threw: ${err.message}`);
+      console.error(`❌ media-job [${job.id.slice(0, 8)}] ${label} runJob threw: ${err.message}`, err.stack || '');
       if (job.status === 'running') {
         job.status = job.cancelRequested ? 'canceled' : 'failed';
         videoHolds.captureFailure(job, err);

@@ -63,7 +63,7 @@ export const getSettings = settingsStore.get;
 export const updateSettings = settingsStore.update;
 
 export async function getHistory(limit) {
-  const stored = await readJSONFile(resultsFile(), []);
+  const stored = await readJSONFile(resultsFile(), [], { strict: true });
   const list = Array.isArray(stored) ? stored : [];
   return typeof limit === 'number' ? list.slice(0, limit) : list;
 }

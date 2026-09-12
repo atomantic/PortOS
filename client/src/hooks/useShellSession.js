@@ -2,13 +2,13 @@ import { useEffect, useRef, useState, useCallback } from 'react';
 import useMounted from './useMounted';
 import { useSearchParams, useParams, useNavigate } from 'react-router';
 import { Terminal } from '@xterm/xterm';
-import { FitAddon } from '@xterm/addon-fit';
 import { WebLinksAddon } from '@xterm/addon-web-links';
 import '@xterm/xterm/css/xterm.css';
 import { useSocket } from './useSocket';
 import { useThemeContext } from '../components/ThemeContext';
 import { buildTerminalTheme, parseCssColorToHex } from '../lib/terminalTheme';
 import { attachDictationBridge } from '../lib/terminalDictation';
+import { fitTerminal } from '../lib/terminalFit';
 import {
   attachTerminalTouchScroll,
   attachTerminalWheelScroll,
@@ -107,7 +107,6 @@ export function useShellSession({ isFullscreen } = {}) {
   const navigate = useNavigate();
   const terminalRef = useRef(null);
   const termInstanceRef = useRef(null);
-  const fitAddonRef = useRef(null);
   const sessionIdRef = useRef(null);
   const initialOptsRef = useRef(null);
   const hasInitializedRef = useRef(false);
@@ -267,10 +266,8 @@ export function useShellSession({ isFullscreen } = {}) {
       allowProposedApi: true
     });
 
-    const fitAddon = new FitAddon();
     const webLinksAddon = new WebLinksAddon();
 
-    term.loadAddon(fitAddon);
     term.loadAddon(webLinksAddon);
 
     term.open(terminalRef.current);
@@ -286,18 +283,16 @@ export function useShellSession({ isFullscreen } = {}) {
     const detachWheelScroll = attachTerminalWheelScroll(term);
 
     requestAnimationFrame(() => {
-      fitAddon.fit();
+      fitTerminal(term);
     });
 
     termInstanceRef.current = term;
-    fitAddonRef.current = fitAddon;
 
     return () => {
       detachTouchScroll();
       detachWheelScroll();
       term.dispose();
       termInstanceRef.current = null;
-      fitAddonRef.current = null;
     };
   }, []);
 
@@ -314,13 +309,14 @@ export function useShellSession({ isFullscreen } = {}) {
 
   // Refit the terminal to its container and tell the PTY about the new size.
   const refitTerminal = useCallback(() => {
-    if (!fitAddonRef.current || !termInstanceRef.current) return;
-    fitAddonRef.current.fit();
+    const term = termInstanceRef.current;
+    if (!term) return;
+    fitTerminal(term);
     if (socket && sessionIdRef.current) {
       socket.emit('shell:resize', {
         sessionId: sessionIdRef.current,
-        cols: termInstanceRef.current.cols,
-        rows: termInstanceRef.current.rows
+        cols: term.cols,
+        rows: term.rows
       });
     }
   }, [socket]);

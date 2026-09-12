@@ -1,5 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+const reportInfrastructureFailure = vi.hoisted(() => vi.fn(async () => null));
+vi.mock('./reviewInfrastructureFailure.js', () => ({ reportReviewInfrastructureFailure: reportInfrastructureFailure }));
+
 const issueWatcherMock = vi.hoisted(() => ({
   isTaskOutputPayload: vi.fn((payload) => Boolean(payload?.issueComments || payload?.pullRequests)),
   processTaskOutput: vi.fn(),
@@ -411,11 +414,21 @@ describe('runPrReviewerSecurityPreflight', () => {
   }
 
   beforeEach(() => {
+    reportInfrastructureFailure.mockClear();
     securityMock.listExternalOpenPullRequests.mockReset();
     securityMock.runPrReviewerSecurityScan.mockReset();
     securityMock.securityScanFingerprint.mockReset().mockReturnValue('scan-key-1');
     guardMock.writePublicReviewInputSnapshot.mockReset().mockResolvedValue(true);
     taskStoreMock.getCosTasks.mockReset().mockResolvedValue({ tasks: [] });
+  });
+
+  it('stops a broken local guard and queues infrastructure diagnosis without forwarding the PR', async () => {
+    listed(externalPr(12, HEAD_12));
+    securityMock.runPrReviewerSecurityScan.mockResolvedValue({ ok: false, code: 'security-guard-not-ready' });
+    const result = await runPrReviewerSecurityPreflight('pr-reviewer', APP, preflightMetadata(), null, schedule());
+    expect(result).toMatchObject({ skipped: true, reason: 'security-guard-not-ready' });
+    expect(reportInfrastructureFailure).toHaveBeenCalledWith({ code: 'security-guard-not-ready', task: { metadata: { app: APP.id } } });
+    expect(guardMock.writePublicReviewInputSnapshot).not.toHaveBeenCalled();
   });
 
   it('passes every other task type straight through', async () => {

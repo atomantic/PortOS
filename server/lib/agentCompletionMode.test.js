@@ -80,6 +80,7 @@ describe('resolveCompletionMode', () => {
       resolveCompletionMode({ claimFlow: true }),
       resolveCompletionMode({ isReadOnly: true }),
       resolveCompletionMode({ isReviewLoopFollowUp: true }),
+      resolveCompletionMode({ slashdoCommand: 'release' }),
       resolveCompletionMode({ isTui: true, canRunSlashCommands: false }),
       resolveCompletionMode({ isTui: true }),
       resolveCompletionMode({ worktreeInfo: wt, willOpenPR: false }),

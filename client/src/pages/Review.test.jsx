@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 
 // A CoS action body is arbitrary agent-authored markdown — thousands of words,
@@ -42,8 +42,24 @@ const SHORT_ITEM = {
   metadata: {}
 };
 
+const COMPLETED_ITEM = {
+  ...ITEM,
+  id: 'item-3',
+  status: 'completed',
+  title: 'Completed review item',
+  description: 'Already completed.'
+};
+
+const CREATED_PENDING_ITEM = {
+  ...ITEM,
+  id: 'item-4',
+  title: 'New pending review item',
+  description: 'Created after the completed view loaded.'
+};
+
 vi.mock('../services/api', () => ({
-  getReviewItems: vi.fn(() => Promise.resolve([ITEM, SHORT_ITEM])),
+  getReviewItems: vi.fn(() => Promise.resolve([ITEM, SHORT_ITEM, COMPLETED_ITEM])),
+  getReviewCounts: vi.fn(),
   getReviewBriefing: vi.fn(() => Promise.resolve(null)),
   getReviewQueue: vi.fn(() => Promise.resolve({ items: [], sources: {} })),
   createReviewTodo: vi.fn(() => Promise.resolve({})),
@@ -66,7 +82,16 @@ vi.mock('react-router', () => ({
 }));
 
 import Review from './Review';
+import * as api from '../services/api';
 import socket from '../services/socket';
+
+const SUMMARY_COUNTS = { total: 8, alert: 3, todo: 1, briefing: 0, cos: 4 };
+
+const summaryValue = (label) => {
+  const labelNode = screen.getAllByText(label, { exact: true })
+    .find(node => node.matches('span.text-xs'));
+  return labelNode?.parentElement?.querySelector('span.text-sm')?.textContent;
+};
 
 // jsdom reports 0 for scrollHeight/clientHeight, so nothing measures as
 // overflowing unless we force it.
@@ -74,6 +99,11 @@ const forceOverflow = () =>
   vi.spyOn(HTMLElement.prototype, 'scrollHeight', 'get').mockReturnValue(500);
 
 afterEach(() => vi.restoreAllMocks());
+
+beforeEach(() => {
+  vi.clearAllMocks();
+  api.getReviewCounts.mockResolvedValue(SUMMARY_COUNTS);
+});
 
 const actionQueueBody = () => document.getElementById(`review-item-body-action-queue-${ITEM.id}`);
 
@@ -195,6 +225,8 @@ describe('Review Hub bulk status updates (#6853)', () => {
     await waitFor(() => {
       expect(actionQueueBody()).toBeFalsy();
       expect(document.getElementById(`review-item-body-action-queue-${SHORT_ITEM.id}`)).toBeFalsy();
+      expect(screen.queryByText(ITEM.title)).not.toBeInTheDocument();
+      expect(screen.queryByText(SHORT_ITEM.title)).not.toBeInTheDocument();
     });
   });
 
@@ -206,5 +238,118 @@ describe('Review Hub bulk status updates (#6853)', () => {
 
     unmount();
     expect(socket.off.mock.calls.some(([name]) => name === 'review:items:bulk-updated')).toBe(true);
+  });
+});
+
+describe('Review Hub status-filtered socket items (#6925)', () => {
+  it('removes individually updated items from the active status list', async () => {
+    render(<Review />);
+    await waitFor(() => expect(screen.getAllByText(ITEM.title).length).toBeGreaterThan(0));
+
+    const handler = [...socket.on.mock.calls]
+      .reverse()
+      .find(([name]) => name === 'review:item:updated')?.[1];
+    expect(handler).toBeTypeOf('function');
+
+    act(() => {
+      handler({ ...ITEM, status: 'completed' });
+    });
+
+    await waitFor(() => {
+      expect(screen.queryByText(ITEM.title)).not.toBeInTheDocument();
+      expect(screen.queryByText(COMPLETED_ITEM.title)).not.toBeInTheDocument();
+    });
+  });
+
+  it('keeps socket-created pending items out of the completed view', async () => {
+    render(<Review />);
+    const filterSelect = await screen.findByLabelText('Filter review items by status');
+    fireEvent.change(filterSelect, { target: { value: 'completed' } });
+
+    await waitFor(() => expect(screen.getByText(COMPLETED_ITEM.title)).toBeInTheDocument());
+
+    const handler = [...socket.on.mock.calls]
+      .reverse()
+      .find(([name]) => name === 'review:item:created')?.[1];
+    expect(handler).toBeTypeOf('function');
+
+    act(() => {
+      handler(CREATED_PENDING_ITEM);
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText(COMPLETED_ITEM.title)).toBeInTheDocument();
+      expect(document.getElementById(`review-item-title-section-alert-${CREATED_PENDING_ITEM.id}`)).not.toBeInTheDocument();
+    });
+  });
+});
+
+describe('Review Hub triage summary (#6926)', () => {
+  it('keeps global pending counts when the list filter changes', async () => {
+    render(<Review />);
+    await waitFor(() => expect(summaryValue('Pending')).toBe('8'));
+
+    fireEvent.change(screen.getByRole('combobox', { name: 'Filter review items by status' }), {
+      target: { value: 'completed' }
+    });
+    await waitFor(() => expect(api.getReviewItems).toHaveBeenLastCalledWith({ status: 'completed' }));
+
+    expect(summaryValue('Pending')).toBe('8');
+    expect(summaryValue('Alerts')).toBe('3');
+    expect(summaryValue('CoS')).toBe('4');
+    expect(summaryValue('Todos')).toBe('1');
+  });
+
+  it('refreshes global pending counts when a review item changes', async () => {
+    const updatedCounts = { total: 7, alert: 2, todo: 1, briefing: 0, cos: 4 };
+    api.getReviewCounts
+      .mockReset()
+      .mockResolvedValueOnce(SUMMARY_COUNTS)
+      .mockResolvedValueOnce(updatedCounts);
+
+    render(<Review />);
+    await waitFor(() => expect(summaryValue('Pending')).toBe('8'));
+
+    const handler = socket.on.mock.calls.find(([name]) => name === 'review:item:updated')?.[1];
+    expect(handler).toBeTypeOf('function');
+
+    await act(async () => {
+      handler({ ...ITEM, status: 'completed' });
+      await Promise.resolve();
+    });
+
+    await waitFor(() => expect(summaryValue('Pending')).toBe('7'));
+    expect(summaryValue('Alerts')).toBe('2');
+    expect(api.getReviewCounts).toHaveBeenCalledTimes(2);
+  });
+
+  it('keeps the newest count response when refreshes resolve out of order', async () => {
+    let resolveInitial;
+    let resolveRefresh;
+    api.getReviewCounts
+      .mockReset()
+      .mockImplementationOnce(() => new Promise(resolve => { resolveInitial = resolve; }))
+      .mockImplementationOnce(() => new Promise(resolve => { resolveRefresh = resolve; }));
+
+    render(<Review />);
+    await waitFor(() => expect(resolveInitial).toBeTypeOf('function'));
+
+    const handler = socket.on.mock.calls.find(([name]) => name === 'review:item:updated')?.[1];
+    expect(handler).toBeTypeOf('function');
+    act(() => handler({ ...ITEM, status: 'completed' }));
+    await waitFor(() => expect(resolveRefresh).toBeTypeOf('function'));
+
+    await act(async () => {
+      resolveRefresh({ total: 7, alert: 2, todo: 1, briefing: 0, cos: 4 });
+      await Promise.resolve();
+    });
+    expect(summaryValue('Pending')).toBe('7');
+
+    await act(async () => {
+      resolveInitial(SUMMARY_COUNTS);
+      await Promise.resolve();
+    });
+    expect(summaryValue('Pending')).toBe('7');
+    expect(summaryValue('Alerts')).toBe('2');
   });
 });

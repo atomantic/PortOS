@@ -722,7 +722,7 @@ export async function probePeer(peer) {
     const forPeerQs = typeof ourInstanceId === 'string' && ourInstanceId && ourInstanceId !== UNKNOWN_INSTANCE_ID
       ? `?forPeer=${encodeURIComponent(ourInstanceId)}`
       : '';
-    // Fetch health details, apps, sync status, and opted-in media capacity in
+    // Fetch health details, the PM2-backed app probe projection, sync status, and opted-in media capacity in
     // parallel under the same bounded probe budget. The first three paths are
     // the frozen peer-probe contract documented in docs/API.md: deployed peers
     // call them across independently upgraded installs, so remove/rename or
@@ -731,7 +731,7 @@ export async function probePeer(peer) {
     // request.
     const [healthRes, appsRes, syncRes, mediaProviderStatus] = await Promise.all([
       peerFetch(`${baseUrl}/api/system/health/details`, { signal }, peer),
-      peerFetch(`${baseUrl}/api/apps`, { signal }, peer).catch(() => null),
+      peerFetch(`${baseUrl}/api/apps?view=probe`, { signal }, peer).catch(() => null),
       peerFetch(`${baseUrl}/api/instances/sync-status${forPeerQs}`, { signal }, peer).catch(() => null),
       normalizePeerMediaProviderConfig(peer).enabled
         ? probeFederatedMediaProvider(peer, { signal })

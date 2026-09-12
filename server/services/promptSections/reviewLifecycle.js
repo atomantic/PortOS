@@ -455,20 +455,21 @@ function buildPrSideClosingSteps({ leaveOpen, exitStep, mergeGuard = '', forge }
  */
 const prSidePhaseTexts = (prNumber) => ({
   supportsVerbose: true,
+  supportsUsernameReviewers: true,
   prepareLoopBody: body => body,
   diffCommand: forge => forge.diffCmd,
-  prDiffHint: `; on GitHub \`gh pr diff ${prNumber || ''}\` also works`,
+  prDiffHint: forge => forge.mergeGateForge === 'gitlab' ? '' : `; on GitHub \`gh pr diff ${prNumber || ''}\` also works`,
   applyNoteOn: '**Reviewer applies:** let each CLI reviewer apply its own fixes to the working tree, then verify, run tests, and push.',
   applyNoteOff: "**Reviewer applies (off):** read each CLI reviewer's findings and apply the fixes yourself (default).",
-  missingRequiredCliText: 'do NOT substitute your own self-review and do NOT merge; post a PR comment naming the missing command and exit.',
+  missingRequiredCliText: forge => `do NOT substitute your own self-review and do NOT merge; post a ${forge.noun} comment naming the missing command and exit.`,
   missingOptionalCliBlocks: 'the merge',
-  challengeBlockedText: 'post a PR comment and stop',
+  challengeBlockedText: forge => `post a ${forge.noun} comment and stop`,
   challengeContinueText: 'merge',
   requiredReviewNote: '',
   rebaseNote: '',
   statePersistenceNote: '',
   procedureNote: '',
-  hardStopAction: 'post a PR comment summarising blockers and exit',
+  hardStopAction: (forge, { verbose = false } = {}) => `post a ${forge.noun} comment summarising ${verbose ? 'the unresolved ' : ''}blockers and exit`,
   crossPhaseNote: () => '',
   fixStep: ({ hasCopilot }) => '2. If unresolved findings: fix in this worktree, run tests, commit (`feat:`/`fix:` prefix, no Co-Authored-By)'
     + ', push' + (hasCopilot ? ', and (for Copilot) resolve the addressed threads.' : '.'),
@@ -498,9 +499,10 @@ function buildLocalPhaseTexts({ baseBranch, prBranch, localPhaseReviewRequired }
   return {
     heading: '### Local Review Before Opening the PR/MR',
     baseRef: renderedBaseBranch,
+    supportsUsernameReviewers: false,
     // Local reviewers diff the worktree, so the forge's PR/MR diff never applies.
     diffCommand: () => `git diff ${renderedBaseBranch}...HEAD`,
-    prDiffHint: '',
+    prDiffHint: () => '',
     supportsVerbose: false,
     canPreRequestCopilot: true,
     // The maintained recipe pushes after each reviewer pass; a local-only phase
@@ -508,9 +510,9 @@ function buildLocalPhaseTexts({ baseBranch, prBranch, localPhaseReviewRequired }
     prepareLoopBody: prepareLocalReviewLoopBody,
     applyNoteOn: '**Reviewer applies:** let each CLI reviewer apply its own fixes to the working tree, then verify and run tests; keep fixes committed locally. Do NOT push or open the PR/MR from this loop.',
     applyNoteOff: "**Reviewer applies (off):** read each CLI reviewer's findings and apply the fixes yourself (default); keep fixes committed locally. Do NOT push or open the PR/MR from this loop.",
-    missingRequiredCliText: 'do NOT substitute your own self-review. Record `LOCAL_OVERALL_STATUS=review-blocked`, continue to the PR/MR publication step, and leave the PR/MR unmerged until the reviewer is available.',
+    missingRequiredCliText: () => 'do NOT substitute your own self-review. Record `LOCAL_OVERALL_STATUS=review-blocked`, continue to the PR/MR publication step, and leave the PR/MR unmerged until the reviewer is available.',
     missingOptionalCliBlocks: 'the push or PR/MR creation',
-    challengeBlockedText: 'stop without pushing or opening a PR/MR',
+    challengeBlockedText: () => 'stop without pushing or opening a PR/MR',
     challengeContinueText: 'the PR/MR creation step',
     // A required reviewer that cannot run is not a clean review. In a pre-PR
     // phase it is recorded as review-blocked so publication can preserve the
@@ -521,9 +523,9 @@ function buildLocalPhaseTexts({ baseBranch, prBranch, localPhaseReviewRequired }
     rebaseNote: '**Rebase conflict gate:** resolve routine conflicts and finish the rebase in this agent session. If a conflict genuinely cannot be resolved safely, run `git rebase --abort 2>/dev/null || true` and stop; never publish a conflicted or half-rebased worktree.',
     statePersistenceNote: '**State persistence:** shell calls do not share variables. Reload state before each reviewer, preserve it while persisting `LOCAL_REVIEWER_START_SHA`; reload before commit/stop calculations and the final aggregate. Any read/write failure blocks publication; only an explicitly recorded `review-blocked` reviewer-availability result may proceed to publication.',
     procedureNote: '**Pre-PR rule:** keep reviewer fixes committed locally. Do NOT push or open a PR/MR here; the outer workflow publishes after the local review phase completes.\n\n',
-    hardStopAction: localPhaseReviewRequired
+    hardStopAction: () => (localPhaseReviewRequired
       ? 'do NOT push or open a PR/MR when substantive findings remain or fixes leave the build/tests red; if the only failure is reviewer unavailability, record `review-blocked`, publish the PR/MR, and leave it unmerged'
-      : 'do NOT push or open a PR/MR; report the unresolved blocker and exit',
+      : 'do NOT push or open a PR/MR; report the unresolved blocker and exit'),
     crossPhaseNote: () => '',
     opening,
     compactOpening: opening,
@@ -748,7 +750,7 @@ export function buildReviewLoopFollowUpSection(metadata = {}, { verbose = false,
     ? [
       `**Missing reviewer CLI:** verify each configured binary is on PATH (${cliBinaries.map(c => `\`command -v ${c.binary}\``).join(' / ')}) before concluding it is unavailable.`,
       requiredCliBinaries.length
-        ? `If a required reviewer binary is genuinely missing (${requiredCliBinaries.map(c => `\`${c.binary}\``).join(' / ')}), that reviewer is UNSATISFIED — ${phase.missingRequiredCliText}`
+        ? `If a required reviewer binary is genuinely missing (${requiredCliBinaries.map(c => `\`${c.binary}\``).join(' / ')}), that reviewer is UNSATISFIED — ${phase.missingRequiredCliText(forge)}`
         : '',
       optionalCliBinaries.length
         ? `A missing optional reviewer binary (${optionalCliBinaries.map(c => `\`${c.binary}\``).join(' / ')}) is an inconclusive optional result and does not block ${phase.missingOptionalCliBlocks}; record it and continue without substituting a self-review.`
@@ -773,18 +775,24 @@ export function buildReviewLoopFollowUpSection(metadata = {}, { verbose = false,
   const { backendToken: localLlmBackendToken, invocation: localLlmInvocation } = buildLocalLlmInvocation({
     localLlmBackends, reviewerModelMap, reviewerEffortMap, diffCommand, apiBase,
   });
-  const githubUsersInvocation = forge.requestReviewersText(usernames);
+  const githubUsersInvocation = phase.supportsUsernameReviewers
+    ? forge.requestReviewersText(usernames)
+    : 'username reviewers will be requested after the PR/MR is published';
+  const localUsernameReviewerNote = !phase.supportsUsernameReviewers && hasGithubUser
+    ? 'Username reviewers will be requested after the PR/MR is published.'
+    : null;
   const multiBullets = [
     hasCopilot ? `**copilot**: ${copilotIsFirst
       ? 'wait for the initial Copilot review the system already pre-requested (Copilot leads the list)'
       : 'request a Copilot review when you reach its turn'} (poll every 5–15s, max 5 min/round), then re-request on later rounds.` : null,
-    hasCli ? `**${cliReviewerHeading}**: invoke that CLI to review this branch's diff against its base (use the CLI's own base-diff mode or \`git diff ${renderedBaseBranch}...HEAD\`${phase.prDiffHint}).${cliBinaryNote}${reviewerPinNote}${cliProcedurePointer}` : null,
+    hasCli ? `**${cliReviewerHeading}**: invoke that CLI to review this branch's diff against its base (use the CLI's own base-diff mode or \`git diff ${renderedBaseBranch}...HEAD\`${phase.prDiffHint(forge)}).${cliBinaryNote}${reviewerPinNote}${cliProcedurePointer}` : null,
     hasLocalLlm ? `**${localLlmBackends.join(' / ')}**: ${localLlmInvocation}` : null,
-    hasGithubUser ? `**@github reviewers**: ${githubUsersInvocation}` : null,
+    phase.supportsUsernameReviewers && hasGithubUser ? `**@github reviewers**: ${githubUsersInvocation}` : null,
+    localUsernameReviewerNote,
   ].filter(Boolean).join(' ');
   // Name the BINARY, not the slug: `Invoke the \`antigravity\` CLI` sent a
   // follow-up agent hunting for a command that does not exist.
-  const singleCliInvocation = `Invoke ${describeReviewerCli(cliReviewers[0])} to review this branch's diff against its base (use the CLI's own base-diff mode or \`git diff ${renderedBaseBranch}...HEAD\`${phase.prDiffHint}). Capture its findings as concrete issues to address.${reviewerPinNote}${cliProcedurePointer}`;
+  const singleCliInvocation = `Invoke ${describeReviewerCli(cliReviewers[0])} to review this branch's diff against its base (use the CLI's own base-diff mode or \`git diff ${renderedBaseBranch}...HEAD\`${phase.prDiffHint(forge)}). Capture its findings as concrete issues to address.${reviewerPinNote}${cliProcedurePointer}`;
   // Resolved sequentially so a future reviewer kind only adds one branch
   // instead of deepening the nested ternary.
   let waitOrInvokeStep;
@@ -818,7 +826,7 @@ export function buildReviewLoopFollowUpSection(metadata = {}, { verbose = false,
     '```bash',
     `curl -sS -X POST ${apiBase}/api/cos/tasks/${sourceTaskId}/challenge -H 'Content-Type: application/json' -d '{"reason":"<why the finding is wrong>","evidence":"<file:line or diff quote>","reviewer":"<disputed reviewer>"}'`,
     '```',
-    `A \`409\` (\`CHALLENGE_EXHAUSTED\` = the one challenge is spent, or \`CHALLENGE_BUDGET_EXHAUSTED\` = the task is out of retry budget) means you can't dispute — then fix the finding or, if genuinely blocked, ${phase.challengeBlockedText}. After filing, RE-CHECK: re-run the disputed reviewer (or another configured reviewer) against the current diff, then resolve — overturned → \`POST .../challenge/resolve\` with \`{"outcome":"upheld"}\` and continue to ${phase.challengeContinueText}; confirmed → fix it, or send \`{"outcome":"escalated"}\` to hand the dispute to the user.` + (hasLocalLlm ? ` For a local reviewer you may instead POST \`{"recheck":{"backend":"${localLlmBackendToken}","diff":"<unified diff>"}}\` and let the server re-run it and auto-derive the outcome.` : ''),
+    `A \`409\` (\`CHALLENGE_EXHAUSTED\` = the one challenge is spent, or \`CHALLENGE_BUDGET_EXHAUSTED\` = the task is out of retry budget) means you can't dispute — then fix the finding or, if genuinely blocked, ${phase.challengeBlockedText(forge)}. After filing, RE-CHECK: re-run the disputed reviewer (or another configured reviewer) against the current diff, then resolve — overturned → \`POST .../challenge/resolve\` with \`{"outcome":"upheld"}\` and continue to ${phase.challengeContinueText}; confirmed → fix it, or send \`{"outcome":"escalated"}\` to hand the dispute to the user.` + (hasLocalLlm ? ` For a local reviewer you may instead POST \`{"recheck":{"backend":"${localLlmBackendToken}","diff":"<unified diff>"}}\` and let the server re-run it and auto-derive the outcome.` : ''),
   ].join('\n');
   // Per-reviewer round caps. This prompt drives the loop in PROSE (it isn't
   // slashdo parsing a `~max=<n>` suffix), so a configured cap only binds if it's
@@ -884,7 +892,7 @@ ${extraNotes.length ? '\n' + extraNotes.join('\n') + '\n' : ''}
 3. Re-review with the same reviewer until it reports clean, then advance to the next reviewer in the list.
 ${closingSteps.join('\n')}
 
-**Hard stop:** if a reviewer's loop hasn't converged after 10 iterations, post a PR comment summarising the unresolved blockers and exit. Do not loop indefinitely.
+**Hard stop:** if a reviewer's loop hasn't converged after 10 iterations, ${phase.hardStopAction(forge, { verbose: true })}. Do not loop indefinitely.
 
 ${repeatedCommentsNote}
 
@@ -905,8 +913,8 @@ ${cliReviewerProcedure}${(rprBody && (hasCopilot || hasGithubUser)) ? `\n### /do
     ? 'all required reviewers are satisfied and optional reviewers are satisfied or explicitly inconclusive (or the stop mode triggers)'
     : 'all configured reviewers are satisfied (or the stop mode triggers)';
   const hardStopNote = optionalConfiguredReviewers.length
-    ? `**Hard stop:** if a required reviewer's loop is not converged after 10 rounds, ${phase.hardStopAction}. An optional reviewer may end with an inconclusive result without blocking, but a substantive rejection, failed build/test, or push failure still blocks.`
-    : `**Hard stop:** if a reviewer's loop is not converged after 10 rounds, ${phase.hardStopAction}.`;
+    ? `**Hard stop:** if a required reviewer's loop is not converged after 10 rounds, ${phase.hardStopAction(forge)}. An optional reviewer may end with an inconclusive result without blocking, but a substantive rejection, failed build/test, or push failure still blocks.`
+    : `**Hard stop:** if a reviewer's loop is not converged after 10 rounds, ${phase.hardStopAction(forge)}.`;
   return [
     heading,
     phase.compactOpening(phaseCtx),

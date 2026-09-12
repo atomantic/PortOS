@@ -31,7 +31,7 @@ import { join } from 'path';
 import { sanitizeTaskMetadata, PIPELINE_STAGE_BEHAVIOR_FLAGS, MAX_TOTAL_SPAWNS, resolveClaimReviewerConfig, reviewerConfigMetadata, hasReviewerOverride } from '../lib/validation.js';
 import { PATHS } from '../lib/fileUtils.js';
 import { isPlainObject } from '../lib/objects.js';
-import { hasQuotaBurnProvenance } from '../lib/quotaBurnOrigin.js';
+import { hasQuotaBurnProvenance, isManualOnDemandRequest } from '../lib/quotaBurnOrigin.js';
 import { isAutoApprovableInvestigation } from '../lib/investigationTasks.js';
 import { parsePlanItems, extractAllIds, findInProgressIds, pickFirstAvailable, diagnoseUnpickablePlan } from '../lib/planIds.js';
 import { loadState, saveState, withStateLock, isImprovementEnabled, isDaemonRunning } from './cosState.js';
@@ -93,6 +93,7 @@ import {
   buildPlanConstraintBlock,
   resolveBranchReconcileBlock,
   resolveIssueAuthorFilterBlock,
+  resolveIssueCandidateListBlock,
   resolveIssueExcludeLabelsBlock,
   resolveIssueReconcileBlock,
   resolvePrWatcherBlock,
@@ -492,6 +493,7 @@ export async function buildClaimWorkTask(app, {
     // interpreted as a backreference (see the scheduler's same-pattern note).
     .replace(/\{reviewers\}/g, () => reviewersCsv)
     .replace(/\{issueAuthorFilter\}/g, () => issueAuthorFilterBlock)
+    .replace(/\{issueCandidateList\}/g, () => resolveIssueCandidateListBlock(promptTaskType, resolvedAuthorFilter))
     .replace(/\{issueExcludeLabels\}/g, () => issueExcludeLabelsBlock)
     + appendTargetWorkItemBlock(promptTaskType, targetRef, issueExcludeLabelsBlock)
     + appendPrefetchedIssueContext(promptTaskType, targetRef, issueContext)
@@ -2095,9 +2097,8 @@ export async function drainProgrammaticOnDemandRequests({ taskScheduleMod, reque
       await taskScheduleMod.clearOnDemandRequest(request.id);
       continue;
     }
-    // Parity with the agent engines: the type may have been disabled after the
-    // request was queued.
-    if (!taskConfig?.enabled) {
+    // Match the agent drain: manual runs bypass cadence, never task removal.
+    if (!taskConfig || (!isManualOnDemandRequest(request) && !taskConfig.enabled)) {
       emitLog('info', `On-demand request skipped — task type '${request.taskType}' is disabled`, { requestId: request.id });
       await taskScheduleMod.clearOnDemandRequest(request.id);
       continue;
@@ -2204,6 +2205,30 @@ export async function emitOnDemandEmpty({ taskScheduleMod, request, targetApp, t
     const { checkGhHealth } = await import('./github.js');
     const health = await checkGhHealth().catch(() => null);
     if (health && !health.ok && health.remedy) forge = { cli: 'gh', remedy: health.remedy };
+  }
+
+  // A preflight has no agent lifecycle, but an explicit failed run still needs
+  // a durable record. Terminal status prevents either spawn engine from running
+  // this diagnostic as a task; retry must enter through the security scan again.
+  if (request.taskType === 'pr-reviewer' && appId && reason?.startsWith('security-') && reason !== 'security-scan-report-pending') {
+    const note = `PR review stopped before an agent started (${reason}). No PR actions were taken. `
+      + (reason.startsWith('security-guard-')
+        ? 'Open Models → LLMs → Abuse Guard, check its setup and repair it if needed, then retry PR review. The classifier did not return a usable safety verdict; this is not a finding against the PR.'
+        : 'Check the repository connection and security scan configuration, then retry PR review.');
+    await addTask({
+      id: `pr-review-preflight-${request.id}`,
+      status: 'completed',
+      priority: 'MEDIUM',
+      priorityValue: 2,
+      taskType: 'internal',
+      description: `PR review preflight failed for ${targetApp.name}${request.targetPullRequest ? ` #${request.targetPullRequest}` : ''}`,
+      metadata: {
+        app: appId, analysisType: 'pr-reviewer',
+        targetPullRequest: request.targetPullRequest ?? null,
+        preflightFailure: reason, note,
+        completedAt: new Date().toISOString(),
+      },
+    }, 'internal', { raw: true, suppressDequeue: true });
   }
 
   cosEvents.emit('schedule:on-demand-empty', {
@@ -2523,11 +2548,19 @@ function applyProviderModelPins(metadata, interval, appPin, hookOverride, reques
   }
   applyOneProviderPin(metadata, appPin);
   applyOneProviderPin(metadata, hookOverride);
+  // A pipeline's current stage is more specific than the whole-task defaults.
+  // Stage 0 may already have advanced through a server-owned preflight.
+  const stage = metadata.pipeline?.stages?.[metadata.pipeline.currentStage ?? 0];
+  if (stage) {
+    applyOneProviderPin(metadata, stage);
+    if (stage.providerId) delete metadata.effort;
+    if (stage.effort) metadata.effort = stage.effort;
+  }
   // Most specific: an explicit per-request pin (e.g. one "PR review" click from
   // the Pull Requests tab), applied last so it wins over every configured pin
   // above. A public-review posture still gates the final provider to its own
-  // eligible set at spawn time (resolveAgentProviderAndModel) — an ineligible
-  // pin here is dropped with a warning there, same as any other stored pin.
+  // eligible set at spawn time (resolveAgentProviderAndModel). An unsupported
+  // pin blocks instead of granting permission to spend on another provider.
   applyOneProviderPin(metadata, { providerId: requestOverride?.provider || null, model: requestOverride?.model || null });
   if (requestOverride?.effort) {
     metadata.effort = requestOverride.effort;

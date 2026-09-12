@@ -286,7 +286,7 @@ async function publishAtlasImpl(recordId, { acknowledgeOverwrite = false } = {})
   // Reuse the current pointer's geometry so publish ships the atlas the user
   // compiled and previewed — a bare default-geometry recompile would silently
   // discard a custom-geometry compile and flip the pointer back to defaults.
-  const pointer = await readJSONFile(join(dir, RUNTIME_POINTER_REL), null);
+  const pointer = await readJSONFile(join(dir, RUNTIME_POINTER_REL), null, { strict: true });
   const geometryOverride = pointer?.geometry
     ? {
       cellSize: pointer.geometry.cellSize,
@@ -405,7 +405,7 @@ async function publishAtlasImpl(recordId, { acknowledgeOverwrite = false } = {})
       throw new ServerError('Compiled atlas bytes no longer match their recorded sha256 — recompile before publishing', { status: 422, code: 'ATLAS_OUTPUT_TAMPERED' });
     }
 
-    const publications = await readJSONFile(join(dir, RUNTIME_PUBLICATIONS_REL), []);
+    const publications = await readJSONFile(join(dir, RUNTIME_PUBLICATIONS_REL), [], { strict: true });
     const previous = [...publications].reverse().find(
       (p) => p.appId === binding.appId && p.atlasDestPath === binding.atlasDestPath,
     );

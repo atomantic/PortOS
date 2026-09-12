@@ -61,7 +61,7 @@ function subId({ bucketId, recordKind, recordId }) {
 
 async function readState() {
   await ensureDir(join(PATHS.data, 'sharing'));
-  const raw = await readJSONFile(STATE_PATH(), { subscriptions: [] }, { logError: false });
+  const raw = await readJSONFile(STATE_PATH(), { subscriptions: [] }, { logError: false, strict: true });
   const subs = Array.isArray(raw.subscriptions) ? raw.subscriptions : [];
   return { subscriptions: subs };
 }
@@ -217,6 +217,7 @@ export async function unsubscribe(id) {
     const legacyName = legacySubscriptionFilename(sub);
     const legacyPath = join(bucket.path, 'manifests', legacyName);
     if (existsSync(legacyPath) && isStr(myInstanceId)) {
+      // Read-only ownership check before unlink; never saves a fallback document.
       const legacy = await readJSONFile(legacyPath, null, { logError: false });
       if (legacy && legacy.senderInstanceId === myInstanceId) {
         await unlink(legacyPath).catch((err) => {

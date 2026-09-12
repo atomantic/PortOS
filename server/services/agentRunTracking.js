@@ -104,6 +104,8 @@ export async function completeAgentRun(runId, output, exitCode, duration, errorA
   const runDir = join(RUNS_DIR, runId);
   const metaPath = join(runDir, 'metadata.json');
 
+  // Non-strict exception: unreadable metadata aborts completion before either
+  // metadata or output is written; it never becomes a saveable default.
   const metadata = await readJSONFile(metaPath, null);
   if (!metadata) return;
   if (metadata.endTime) return;

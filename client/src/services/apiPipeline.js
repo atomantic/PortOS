@@ -56,6 +56,8 @@ export const getPipelineConfig = (options = {}) => request('/pipeline/config', o
 // ---- Series ----
 // `options` lets a caller suppress request()'s auto-toast with `{ silent: true }`
 // (e.g. an optional join that should fail quietly) — see AGENTS.md.
+export const listPipelineSeriesNames = (options = {}) => request('/pipeline/series/names', options);
+export const listPipelineSeriesSummaries = (options = {}) => request('/pipeline/series/summaries', options);
 export const listPipelineSeries = (options = {}) => request('/pipeline/series', options);
 export const getPipelineSeries = (id, options = {}) => request(`/pipeline/series/${encodeURIComponent(id)}`, options);
 export const createPipelineSeries = (data, options = {}) => request('/pipeline/series', {

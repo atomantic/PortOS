@@ -8,7 +8,7 @@ export const getReviewItems = (params) => {
   const query = qs.toString();
   return request(`/review/items${query ? `?${query}` : ''}`);
 };
-export const getReviewCounts = () => request('/review/counts');
+export const getReviewCounts = (options = {}) => request('/review/counts', options);
 export const getReviewBriefing = () => request('/review/briefing');
 // Cross-domain live queue (brain inbox, ask, CoS approvals, drafts, health, backups)
 export const getReviewQueue = (options = {}) => request('/review/queue', options);

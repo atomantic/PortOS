@@ -11,11 +11,21 @@
  * snapshot ephemeral-filter, and LWW staleness.
  *
  * PURE leaf I/O — the store facade owns serialization + sanitize; reads return
- * `data` verbatim (the columns are a queryable mirror, never read back).
+ * full `data` verbatim by default, or explicit lean/summary projections.
  */
 
 import { query } from '../../../lib/db.js';
 import { mirrorTimestamp } from '../../../lib/pgTimestamp.js';
+import { PIPELINE_STAGE_IDS } from '../../../lib/pipelineStages.js';
+
+// Only trusted, closed stage IDs form SQL paths. PostgreSQL removes history
+// before serializing JSONB for Node; every other field remains lossless.
+// A malformed stage is left for the sanitizer, never traversed as a JSON array.
+const LEAN_DATA = PIPELINE_STAGE_IDS.reduce(
+  (sql, stageId) => `${sql} #- CASE
+    WHEN jsonb_typeof(data->'stages'->'${stageId}') = 'object'
+    THEN '{stages,${stageId},runHistory}'::text[] ELSE '{}'::text[] END`, 'data',
+);
 
 /** Raw on-disk-equivalent record (the `data` JSONB), or null. No sanitize. */
 export async function readRaw(id) {
@@ -40,8 +50,8 @@ export async function listIds({ includeDeleted = true } = {}) {
 }
 
 /** Every record's raw `data` JSONB in one query (live/ephemeral/tombstones). */
-export async function listRaw() {
-  const { rows } = await query(`SELECT data FROM pipeline_issues`);
+export async function listRaw({ withHistory = true } = {}) {
+  const { rows } = await query(`SELECT ${withHistory ? 'data' : LEAN_DATA} AS data FROM pipeline_issues`);
   return rows.map((r) => r.data);
 }
 
@@ -51,8 +61,8 @@ export async function listRaw() {
  * Returns live/ephemeral/tombstones (the service applies the `deleted` filter),
  * matching `listRaw`'s contract but scoped.
  */
-export async function listRawBySeries(seriesId) {
-  const { rows } = await query(`SELECT data FROM pipeline_issues WHERE series_id = $1`, [seriesId]);
+export async function listRawBySeries(seriesId, { withHistory = true } = {}) {
+  const { rows } = await query(`SELECT ${withHistory ? 'data' : LEAN_DATA} AS data FROM pipeline_issues WHERE series_id = $1`, [seriesId]);
   return rows.map((r) => r.data);
 }
 
@@ -61,11 +71,28 @@ export async function listRawBySeries(seriesId) {
  * an uncapped cross-series scan use this instead of loading the whole table or
  * issuing one query per series.
  */
-export async function listRawBySeriesIds(seriesIds) {
+export async function listRawBySeriesIds(seriesIds, { withHistory = true } = {}) {
   if (seriesIds.length === 0) return [];
   const { rows } = await query(
-    `SELECT data FROM pipeline_issues WHERE series_id = ANY($1::text[])`,
+    `SELECT ${withHistory ? 'data' : LEAN_DATA} AS data FROM pipeline_issues WHERE series_id = ANY($1::text[])`,
     [seriesIds],
+  );
+  return rows.map((r) => r.data);
+}
+
+/**
+ * Limit in PostgreSQL before transferring records. Summary reads extract only
+ * the recent HTTP endpoint's fields; title has no mirrored column.
+ */
+export async function listRecentRaw({ limit, withHistory = true, includeDeleted = false, summary = false }) {
+  const projection = summary
+    ? "jsonb_build_object('id', id, 'title', data->'title', 'number', number, 'seriesId', series_id, 'updatedAt', data->'updatedAt', 'createdAt', data->'createdAt')"
+    : withHistory ? 'data' : LEAN_DATA;
+  const { rows } = await query(
+    `SELECT ${projection} AS data FROM pipeline_issues
+     ${includeDeleted ? '' : 'WHERE deleted IS NOT TRUE'}
+     ORDER BY updated_at DESC NULLS LAST, id DESC LIMIT $1`,
+    [limit],
   );
   return rows.map((r) => r.data);
 }

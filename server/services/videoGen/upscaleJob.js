@@ -469,7 +469,7 @@ export async function runVideoUpscale({
       if (path) await unlinkGuarded(path).catch(() => {});
     }
     const reason = entry.canceled ? 'Canceled while running' : (err.message || 'Upscale failed');
-    console.log(`❌ Video upscale ${entry.canceled ? 'canceled' : 'failed'} [${jobId.slice(0, 8)}]: ${reason}`);
+    console.error(`❌ Video upscale ${entry.canceled ? 'canceled' : 'failed'} [${jobId.slice(0, 8)}]: ${reason}`);
     videoGenEvents.emit('failed', { generationId: jobId, error: reason });
     return null;
   } finally {

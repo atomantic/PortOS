@@ -710,11 +710,13 @@ export async function buildPushPayload(sub, sourceInstanceId) {
     return { ...envelope, ...(linkedTrack ? { linkedTrack } : {}) };
   }
   if (sub.recordKind === 'writersRoomWork') {
+    const { buildWorkBibleManifest } = await import('../writersRoom/bibleSync.js');
     // The work manifest carries draft-version METADATA; the file-primary `.md`
     // prose bodies ride a separate `draftBodyManifest` (SHA256 per draft) the
     // receiver diffs + pulls. A tombstone ships neither asset manifest.
     const draftBodyManifest = record.deleted === true ? [] : await buildWorkBodyManifest(record);
-    return { ...envelope, draftBodyManifest };
+    const bibleManifest = record.deleted === true ? [] : await buildWorkBibleManifest(record);
+    return { ...envelope, draftBodyManifest, ...(bibleManifest.length ? { bibleManifest } : {}) };
   }
   return envelope;
 }

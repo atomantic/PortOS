@@ -93,6 +93,25 @@ describe.skipIf(!runDb)('media asset index DB round-trip', () => {
     expect(await db.countAssets({ kind: 'image' })).toBe(before);
   });
 
+  it('pages mixed authoritative videos and indexed images with search and scopes before LIMIT', async () => {
+    const image = { filename: `${PFX}paged.png`, prompt: 'fox', universeId: 'example-u', entryCategory: 'places', entryKind: 'canon', width: 1024, height: 768, createdAt: '2026-01-03T00:00:00Z' };
+    await db.upsertAsset({ mediaKey: `image:${image.filename}`, kind: 'image', ref: image.filename, data: image, createdAt: image.createdAt });
+    const video = { id: `${PFX}paged-video`, filename: 'clip.mp4', prompt: 'fox', upscaledFrom: 'source', createdAt: '2026-01-02T00:00:00Z' };
+    // Stale derived video is deliberately ignored in favor of the live snapshot.
+    await db.upsertAsset({ mediaKey: `video:${video.id}`, kind: 'video', ref: video.id, data: { ...video, prompt: 'outdated' }, createdAt: video.createdAt });
+    const options = { videos: [video], mediaKeys: [`image:${image.filename}`, `video:${video.id}`], q: 'fox' };
+    expect(await db.listAssets({ ...options, typed: true, limit: 1, offset: 1 })).toEqual([{ kind: 'video', data: video }]);
+    expect(await db.countAssets(options)).toBe(2);
+    expect(await db.listAssets({ ...options, limit: 1, offset: 5 })).toEqual([]);
+    expect(await db.countAssets({ ...options, excludeKeys: [`image:${image.filename}`] })).toBe(1);
+    expect(await db.listAssets({ ...options, kind: 'image', universeId: 'example-u', entryCategory: 'places', entryKind: 'canon', q: '1024x768 image', limit: 1 })).toEqual([image]);
+    expect(await db.listAssets({ ...options, q: 'upscaled 2x', limit: 1 })).toEqual([video]);
+    expect(await db.listAssets({ ...options, filename: 'clip.mp4', limit: 1 })).toEqual([video]);
+    expect(await db.listAssets({ ...options, orderedKeys: [`video:${video.id}`, `image:${image.filename}`], typed: true, limit: 1 })).toEqual([{ kind: 'video', data: video }]);
+    await db.removeAsset(`image:${image.filename}`);
+    await db.removeAsset(`video:${video.id}`);
+  });
+
   it('upsert refreshes data + created_at on conflict', async () => {
     const key = `image:${PFX}b.png`;
     await db.upsertAsset({ mediaKey: key, kind: 'image', ref: `${PFX}b.png`, data: { filename: `${PFX}b.png`, v: 1 }, createdAt: '2026-01-01T00:00:00.000Z' });

@@ -142,7 +142,7 @@ const indexMutex = createMutex();
 
 async function loadIndex() {
   await ensureDir(INGEST_DIR);
-  const loaded = await readJSONFile(INDEX_FILE, {});
+  const loaded = await readJSONFile(INDEX_FILE, {}, { strict: true });
   return loaded && typeof loaded === 'object' && !Array.isArray(loaded) ? loaded : {};
 }
 

@@ -429,10 +429,7 @@ export default function CanonCard({
 
   const title = (
     <div className="flex items-center gap-2 flex-wrap">
-      {/* Wrap rather than truncate: the title column is what gives way to the
-          action strip on a phone, and a name clipped to its first word hides
-          which entry the card is. `min-w-0` is what lets `break-words` engage —
-          a flex item can otherwise not shrink below its longest word. */}
+      {/* Preserve the full name, including unbroken names, within the title slot. */}
       <span className="min-w-0 text-sm text-white font-medium break-words">{entry.name}</span>
       {entry.aliases?.length ? (
         <span className="min-w-0 text-[10px] text-gray-500 break-words">
@@ -588,7 +585,7 @@ export default function CanonCard({
   // accent-on-locked styling for the lock toggle. Keeps the canon section
   // visually consistent with the bucket cards above it.
   const actions = (
-    <div className="flex items-center gap-2">
+    <div className="flex flex-wrap items-center gap-1 sm:gap-2">
       <button
         type="button"
         onClick={onRender}

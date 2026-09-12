@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import express from 'express';
-import { request } from '../lib/testHelper.js';
+const { request } = await import('../lib/testHelper.js');
 
 vi.mock('../services/voice/tts.js', async () => ({
   synthesize: vi.fn(),
@@ -14,9 +14,9 @@ vi.mock('../services/voice/proactiveSpeech.js', () => ({
   MAX_PROACTIVE_TEXT_LEN: 2000,
 }));
 
-import * as tts from '../services/voice/tts.js';
-import * as config from '../services/voice/config.js';
-import voicePublicRoutes from './voicePublic.js';
+const tts = await import('../services/voice/tts.js');
+const config = await import('../services/voice/config.js');
+const { default: voicePublicRoutes } = await import('./voicePublic.js');
 
 const buildApp = () => {
   const app = express();
@@ -29,18 +29,18 @@ describe('Public Voice API (/api/voice/public)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     config.getVoiceConfig.mockResolvedValue({
-      tts: { engine: 'kokoro', kokoro: { voice: 'af_heart' }, piper: { voice: 'en_GB-jenny_dioco-medium' } },
+      tts: { engine: 'piper', kokoro: { voice: 'af_heart' }, piper: { voice: 'en_GB-jenny_dioco-medium' } },
     });
   });
 
   describe('POST /synthesize', () => {
     it('synthesizes text and returns audio/wav with headers', async () => {
-      tts.synthesize.mockResolvedValue({ wav: Buffer.from('RIFFfake'), latencyMs: 42, engine: 'kokoro' });
+      tts.synthesize.mockResolvedValue({ wav: Buffer.from('RIFFfake'), latencyMs: 42, engine: 'piper' });
       const res = await request(buildApp()).post('/api/voice/public/synthesize').send({ text: 'hello' });
       expect(res.status).toBe(200);
       expect(res.headers['content-type']).toMatch(/audio\/wav/);
       expect(res.headers['x-tts-latency-ms']).toBe('42');
-      expect(res.headers['x-tts-engine']).toBe('kokoro');
+      expect(res.headers['x-tts-engine']).toBe('piper');
       expect(tts.synthesize).toHaveBeenCalledWith('hello', expect.objectContaining({ engine: undefined }));
     });
 
@@ -82,15 +82,15 @@ describe('Public Voice API (/api/voice/public)', () => {
 
   describe('GET /voices', () => {
     it('delegates to listVoices with the requested engine', async () => {
-      tts.listVoices.mockResolvedValue({ engine: 'kokoro', voices: [{ id: 'af_heart' }] });
-      const res = await request(buildApp()).get('/api/voice/public/voices?engine=kokoro');
+      tts.listVoices.mockResolvedValue({ engine: 'piper', voices: [{ id: 'af_heart' }] });
+      const res = await request(buildApp()).get('/api/voice/public/voices?engine=piper');
       expect(res.status).toBe(200);
-      expect(res.body.engine).toBe('kokoro');
-      expect(tts.listVoices).toHaveBeenCalledWith('kokoro');
+      expect(res.body.engine).toBe('piper');
+      expect(tts.listVoices).toHaveBeenCalledWith('piper');
     });
 
     it('ignores an unknown engine query value', async () => {
-      tts.listVoices.mockResolvedValue({ engine: 'kokoro', voices: [] });
+      tts.listVoices.mockResolvedValue({ engine: 'piper', voices: [] });
       await request(buildApp()).get('/api/voice/public/voices?engine=bogus');
       expect(tts.listVoices).toHaveBeenCalledWith(undefined);
     });
@@ -108,8 +108,7 @@ describe('Public Voice API (/api/voice/public)', () => {
       expect(res.body.engines).toEqual([...tts.VALID_ENGINES]);
       expect(Object.keys(res.body.defaults)).toEqual([...tts.VALID_ENGINES]);
       expect(res.body.defaults['qwen3-tts']).toBeNull();
-      expect(res.body.active).toBe('kokoro');
-      expect(res.body.defaults.kokoro).toBe('af_heart');
+      expect(res.body.active).toBe('piper');
       expect(res.body.defaults.piper).toBe('en_GB-jenny_dioco-medium');
     });
   });

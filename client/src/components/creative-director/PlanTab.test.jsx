@@ -11,8 +11,8 @@ vi.mock('../../services/apiCreativeDirector.js', () => ({
   replanCreativeDirectorProject: vi.fn(),
   updateCreativeDirectorPlanStep: vi.fn(),
 }));
-vi.mock('../../services/apiUniverseBuilder.js', () => ({ listUniverses: vi.fn(async () => []) }));
-vi.mock('../../services/apiPipeline.js', () => ({ listPipelineSeries: vi.fn(async () => []) }));
+vi.mock('../../services/apiUniverseBuilder.js', () => ({ listUniverseNames: vi.fn(async () => []) }));
+vi.mock('../../services/apiPipeline.js', () => ({ listPipelineSeriesNames: vi.fn(async () => []) }));
 vi.mock('../ui/Toast', () => ({ default: { success: vi.fn(), error: vi.fn(), info: vi.fn() } }));
 
 import PlanTab from './PlanTab.jsx';

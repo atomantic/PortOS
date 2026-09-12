@@ -77,6 +77,8 @@ let cachedRuntime = null;
 let selfTestFailed = false;
 let installInFlight = null;
 let installKill = null;
+let runtimeIssue = null;
+let lastInstallFailure = null;
 
 const failure = (code, extra = {}) => ({ ok: false, passed: false, safe: false, code, ...extra });
 // What a report names as its guard model when only the deterministic layer ran.
@@ -324,6 +326,24 @@ function availableGuardPython() {
   return null;
 }
 
+// Never return raw subprocess output: it can contain tokens, private paths,
+// or authenticated package-index URLs. Match evidence to static diagnoses.
+function setupIssue(text, fallback = 'runtime-check-failed') {
+  const missing = MODEL_ABUSE_GUARD_PYTHON_IMPORTS.find((name) => String(text || '').includes(`No module named '${name}'`));
+  if (missing) return { code: 'package-missing', package: missing, message: `The classifier package ${missing} is missing.`, action: 'Repair model-abuse guard to install the pinned packages.' };
+  const diagnoses = [
+    [/No module named/, 'package-missing', 'A classifier package or dependency is missing.', 'Repair model-abuse guard to install the pinned packages.'],
+    [/CERTIFICATE_VERIFY_FAILED|certificate verify failed/i, 'certificate-failed', 'Python could not verify the package server certificate.', 'Repair Python certificate trust, then retry installation.'],
+    [/No matching distribution|Could not find a version that satisfies/i, 'wheel-unavailable', 'A pinned package has no matching distribution for this Python and platform.', 'Use a Python version and platform supported by the pinned packages, then repair the runtime.'],
+    [/ResolutionImpossible|conflicting dependencies/i, 'dependency-conflict', 'The classifier dependencies could not be resolved.', 'Check the pinned package compatibility before retrying.'],
+    [/No space left on device/i, 'disk-full', 'There is not enough disk space for the classifier.', 'Free disk space, then retry installation.'],
+    [/timed? ?out|ReadTimeout|ConnectionError|NameResolution|Temporary failure|Network is unreachable|No route to host|connection error|NewConnectionError/i, 'network-failed', 'The download could not reach its server.', 'Check this machine’s network and Python connection to the download server, then retry.'],
+  ];
+  const match = diagnoses.find(([pattern]) => pattern.test(String(text || '')));
+  if (match) return { code: match[1], message: match[2], action: match[3] };
+  return { code: fallback, message: 'The dedicated classifier runtime could not be verified.', action: 'Repair model-abuse guard and inspect the reported install stage and exit code.' };
+}
+
 function probeScript() {
   const imports = MODEL_ABUSE_GUARD_PYTHON_IMPORTS
     .map((name) => `import ${name}`)
@@ -339,17 +359,15 @@ async function isBasePythonSupported(pythonPath) {
     .then(({ stdout }) => stdout.trim() === 'supported').catch(() => false);
 }
 
-// A benign sentence the helper must classify end to end before the installer
-// reports success. Importing packages proves prerequisites, not classification:
-// a helper that loads the model and then dies on the first window (the
-// unbatched-tensor bug that failed every Stage 1 scan on transformers 4.57)
-// passed the import probe and only surfaced as a bare
-// `security-guard-process-failed` at scan time.
-const RUNTIME_CANARY_TEXT = 'The quick brown fox jumps over the lazy dog.';
+// Verify classification across several overlapping windows, not just imports
+// or a short sentence: both unbatched tensors and broken tokenizer overflow
+// have passed weaker probes while making real PR scans fail.
+const RUNTIME_CANARY_TEXT = 'The quick brown fox jumps over the lazy dog. '.repeat(100);
 
 async function isRuntimeReady(pythonPath) {
-  if (!pythonPath) return false;
+  if (!pythonPath) { runtimeIssue = null; return false; }
   if (cachedRuntime?.pythonPath === pythonPath && Date.now() - cachedRuntime.checkedAt < 60_000) return true;
+  runtimeIssue = null;
   const importsReady = await execFileAsync(
     pythonPath,
     ['-c', probeScript()],
@@ -359,7 +377,8 @@ async function isRuntimeReady(pythonPath) {
       maxBuffer: 4_000,
     }),
   ).then(({ stdout }) => stdout.trim().split(/\r?\n/).pop() === '{"ready":true}')
-    .catch(() => false);
+    .catch((error) => { runtimeIssue = setupIssue(error.stderr || error.message); return false; });
+  if (!importsReady && !runtimeIssue) runtimeIssue = { code: 'package-version-mismatch', message: 'Installed classifier package versions do not match the pinned runtime.', action: 'Repair model-abuse guard to install the expected versions.' };
   if (importsReady) cachedRuntime = { pythonPath, checkedAt: Date.now() };
   return importsReady;
 }
@@ -369,7 +388,7 @@ async function canaryPasses(pythonPath, modelDir) {
     .catch(() => ({ ok: false }));
   if (!result.ok) return false;
   const verdict = normalizeModelAbuseGuardResult(result.parsed, { minBenignScore: MODEL_ABUSE_GUARD_MIN_BENIGN_SCORE });
-  return verdict.ok === true && verdict.safe === true;
+  return verdict.ok === true && verdict.safe === true && verdict.chunkCount > 1;
 }
 
 /**
@@ -410,6 +429,9 @@ export async function getModelAbuseGuardStatus() {
     stages,
     ready,
     selfTestFailed,
+    runtimeIssue,
+    lastInstallFailure,
+    expectedPackages: [...MODEL_ABUSE_GUARD_PYTHON_PACKAGES],
     setupState: ready ? 'ready' : installationPresent ? 'incomplete' : 'not-installed',
     classifierMode: 'required',
     minBenignScore: MODEL_ABUSE_GUARD_MIN_BENIGN_SCORE,
@@ -424,14 +446,21 @@ export async function getModelAbuseGuardStatus() {
  */
 export function installModelAbuseGuard({ onEvent } = {}) {
   if (installInFlight) return installInFlight;
+  lastInstallFailure = null;
+  let activeStage = 'huggingface-token';
+  const failInstall = (code, diagnostic = setupIssue('', code)) => {
+    lastInstallFailure = { ...diagnostic, stage: activeStage };
+    return failure(code, { diagnostic: lastInstallFailure });
+  };
   installInFlight = (async () => {
-    // Do this before creating a venv or installing packages. The model is gated
-    // on Hugging Face, so a missing token is an operator prerequisite—not a
-    // reason to leave a half-useful runtime behind and discover the problem
-    // only after setup has changed the install.
-    if (!(await getHfToken())) return failure('security-guard-huggingface-token-required');
+    // A fresh model download needs access before changing the runtime.
+    // A cached snapshot needs no Hugging Face credentials for runtime repair.
+    const cachedFiles = await findCachedRepoFiles(MODEL_ABUSE_GUARD.repository, MODEL_ABUSE_GUARD_REQUIRED_FILES, { revision: MODEL_ABUSE_GUARD.revision });
+    if (!cachedFiles && !(await getHfToken())) return failInstall('security-guard-huggingface-token-required');
+    activeStage = 'python';
     const basePython = detectVenvBasePythonSync();
-    if (!await isBasePythonSupported(basePython)) return failure('security-guard-python-unavailable');
+    if (!await isBasePythonSupported(basePython)) return failInstall('security-guard-python-unavailable');
+    activeStage = 'venv';
     await ensureDir(dirname(GUARD_VENV_DIR));
     emitInstall(onEvent, 'stage', 'Preparing the dedicated Prompt Guard runtime…', 'venv');
     const clear = existsSync(GUARD_PYTHON) && !await isBasePythonSupported(GUARD_PYTHON);
@@ -439,48 +468,62 @@ export function installModelAbuseGuard({ onEvent } = {}) {
     cachedRuntime = null;
     selfTestFailed = false;
 
+    activeStage = 'packages';
+    let packageIssue = null;
     emitInstall(onEvent, 'stage', 'Installing the fixed classifier runtime packages…', 'packages');
     const packageRun = installPackages(pythonPath, [...MODEL_ABUSE_GUARD_PYTHON_PACKAGES], ({ type, message }) => {
+      const issue = setupIssue(message);
+      if (issue.code !== 'runtime-check-failed' && !packageIssue) {
+        packageIssue = issue;
+        emitInstall(onEvent, 'stage', `${issue.message} ${issue.action}`, 'packages');
+      }
       if (type === 'complete') emitInstall(onEvent, 'stage', 'Classifier runtime packages are ready.', 'packages');
       else if (type === 'error') emitInstall(onEvent, 'error', 'Classifier runtime package installation failed.', 'packages');
       else if (message && /install|uninstall/i.test(message)) emitInstall(onEvent, 'stage', 'Installing classifier runtime packages…', 'packages');
-    });
+    }, { preferUv: true });
     installKill = packageRun.kill;
     const packageResult = await packageRun.promise;
     installKill = null;
-    if (!packageResult?.ok) return failure('security-guard-runtime-install-failed');
-
-    emitInstall(onEvent, 'stage', 'Downloading the pinned Prompt Guard model snapshot…', 'model');
-    const download = downloadHfRepo({
-      repo: MODEL_ABUSE_GUARD.repository,
-      revision: MODEL_ABUSE_GUARD.revision,
-      only: [...MODEL_ABUSE_GUARD_REQUIRED_FILES],
-      pythonPath,
-      onEvent: (event) => {
-        if (event?.type === 'error') emitInstall(onEvent, 'error', 'Prompt Guard model download failed.', 'model');
-        else if (event?.type === 'progress') emitInstall(onEvent, 'progress', event.stage || 'Downloading Prompt Guard…', 'model');
-        else if (event?.type === 'complete') emitInstall(onEvent, 'stage', 'Pinned Prompt Guard model snapshot downloaded.', 'model');
-      },
+    if (!packageResult?.ok) return failInstall('security-guard-runtime-install-failed', {
+      ...(packageIssue || setupIssue('', 'package-install-failed')),
+      ...(Number.isInteger(packageResult?.code) ? { exitCode: packageResult.code } : {}),
     });
-    installKill = download.kill;
-    const downloadResult = await download.promise;
-    installKill = null;
-    if (!downloadResult?.ok) return failure(downloadResult?.errorKind === 'gated_repo'
-      ? 'security-guard-huggingface-access-required'
-      : 'security-guard-model-download-failed');
 
+    activeStage = 'model';
+    if (!cachedFiles) {
+      emitInstall(onEvent, 'stage', 'Downloading the pinned Prompt Guard model snapshot…', 'model');
+      const download = downloadHfRepo({
+        repo: MODEL_ABUSE_GUARD.repository,
+        revision: MODEL_ABUSE_GUARD.revision,
+        only: [...MODEL_ABUSE_GUARD_REQUIRED_FILES],
+        pythonPath,
+        onEvent: (event) => {
+          if (event?.type === 'error') emitInstall(onEvent, 'error', 'Prompt Guard model download failed.', 'model');
+          else if (event?.type === 'progress') emitInstall(onEvent, 'progress', event.stage || 'Downloading Prompt Guard…', 'model');
+          else if (event?.type === 'complete') emitInstall(onEvent, 'stage', 'Pinned Prompt Guard model snapshot downloaded.', 'model');
+        },
+      });
+      installKill = download.kill;
+      const downloadResult = await download.promise;
+      installKill = null;
+      if (!downloadResult?.ok) return failInstall(downloadResult?.errorKind === 'gated_repo'
+        ? 'security-guard-huggingface-access-required'
+        : 'security-guard-model-download-failed', setupIssue(downloadResult?.errorMessage, 'model-download-failed'));
+    }
+
+    activeStage = 'verification';
     const status = await getModelAbuseGuardStatus();
-    if (!status.ready) return failure('security-guard-install-incomplete');
+    if (!status.ready) return failInstall('security-guard-install-incomplete', runtimeIssue || undefined);
     const files = await findCachedRepoFiles(MODEL_ABUSE_GUARD.repository, MODEL_ABUSE_GUARD_REQUIRED_FILES, { revision: MODEL_ABUSE_GUARD.revision });
     if (!files?.[0] || !await canaryPasses(pythonPath, dirname(files[0]))) {
       cachedRuntime = null;
       selfTestFailed = true;
-      return failure('security-guard-self-test-failed');
+      return failInstall('security-guard-self-test-failed');
     }
     emitInstall(onEvent, 'complete', 'Prompt Guard is ready for model-abuse screening.');
     return { ok: true, ...status };
   })()
-    .catch(() => failure('security-guard-install-failed'))
+    .catch((error) => failInstall('security-guard-install-failed', setupIssue(error.stderr || error.message)))
     .finally(() => {
       installKill = null;
       installInFlight = null;
@@ -615,11 +658,17 @@ export async function runModelAbuseScan({
     : MODEL_ABUSE_GUARD_TIMEOUT_MS;
   const processResult = await runClassifier({ pythonPath, modelDir, content, timeoutMs: boundedTimeout })
     .catch(() => ({ ok: false, code: 'security-guard-process-failed' }));
-  if (!processResult.ok) return failure(processResult.code || 'security-guard-process-failed', {
-    guardId: MODEL_ABUSE_GUARD_ID,
-    model: MODEL_ABUSE_GUARD.name,
-    revision: MODEL_ABUSE_GUARD.revision,
-  });
+  if (!processResult.ok) {
+    if (processResult.code === 'security-guard-process-failed') {
+      cachedRuntime = null;
+      selfTestFailed = true;
+    }
+    return failure(processResult.code || 'security-guard-process-failed', {
+      guardId: MODEL_ABUSE_GUARD_ID,
+      model: MODEL_ABUSE_GUARD.name,
+      revision: MODEL_ABUSE_GUARD.revision,
+    });
+  }
   const verdict = normalizeModelAbuseGuardResult(processResult.parsed, {
     minBenignScore,
   });

@@ -22,6 +22,7 @@
  * queue an AI provider call. Boot only loads on-disk state and ARMS schedulers;
  * every scheduler here is off by default or user-configured.
  */
+import { isTestRunner } from '../lib/runtimeEnv.js';
 import { readPortosEnvValue } from '../lib/portosEnv.js';
 import { join } from 'path';
 import { resolveInstallRoot } from '../lib/dataRoot.js';
@@ -161,6 +162,16 @@ import { localCachedModelIds } from './localCachedModels.js';
 import { stopCodexAppServer } from './codexAppServer.js';
 
 /**
+ * Keep boot failures actionable when a service rejects during fire-and-forget
+ * initialization. The message is useful for a quick scan; the stack identifies
+ * the source location when boot is the only time the failure is reproducible.
+ */
+const logBootstrapFailure = (prefix, error, logger = console.error) => {
+  const message = error?.message ?? String(error);
+  logger(`${prefix}: ${message}`, error?.stack || '');
+};
+
+/**
  * Pre-route boot. Everything a route handler may depend on being ready the
  * moment the first request lands: applied data migrations, a constructed AI
  * Toolkit (routes are built from it), and the spawner/autofixer/task-learning
@@ -176,7 +187,7 @@ export const bootstrapServices = async ({ io, dataDir, dataReferenceDir, serverD
     ensureProviderReady: (provider) => ensureProviderReadyForExecution(provider),
     onRunCreated: (metadata) => {
       recordSession(metadata.providerId, metadata.providerName, metadata.model).catch(err => {
-        console.error(`❌ Failed to record usage session: ${err.message}`);
+        logBootstrapFailure('❌ Failed to record usage session', err);
       });
     },
     onRunCompleted: (metadata, output) => {
@@ -304,10 +315,10 @@ export const bootstrapServices = async ({ io, dataDir, dataReferenceDir, serverD
       if (readPortosEnvValue('PORTOS_FLEET_LLM_ENABLED') === '1') return;
       const activeLocalLlmBackend = getLocalLlmBackend();
       ensureBackendProvider(activeLocalLlmBackend).catch((err) =>
-        console.error(`⚠️ Failed to enable local LLM backend provider: ${err.message}`));
+        logBootstrapFailure('⚠️ Failed to enable local LLM backend provider', err));
       if (activeLocalLlmBackend === 'ollama') {
         ensureOllamaRunning({ preferPersistent: true }).catch((err) =>
-          console.error(`⚠️ Failed to start Ollama for active local LLM backend: ${err.message}`));
+          logBootstrapFailure('⚠️ Failed to start Ollama for active local LLM backend', err));
       }
     },
 
@@ -348,7 +359,7 @@ const startBackgroundServices = ({ spawnerReady, io }) => {
   // AI provider call — safe under AGENTS.md's no-cold-bootstrap rule, on the
   // same footing as the `--version` probes providerPrerequisites.js already
   // runs. The CoS runner is a separate process and adopts it separately.
-  adoptNpmGlobalBinDir().catch((err) => console.error(`❌ npm global bin adoption failed: ${err.message}`));
+  adoptNpmGlobalBinDir().catch((err) => logBootstrapFailure('❌ npm global bin adoption failed', err));
 
   // Explicit call (not a module-level side effect) so test imports of cos.js
   // don't spin up its event listeners and timers. The spawner gate itself lives
@@ -364,16 +375,16 @@ const startBackgroundServices = ({ spawnerReady, io }) => {
     .then((result) => {
       if (result.reconciled) console.log('🌐 Reconciled pending Eidoverse World Design update');
     })
-    .catch(err => console.error(`⚠️ Eidoverse World Design reconciliation deferred: ${err.message}`));
+    .catch(err => logBootstrapFailure('⚠️ Eidoverse World Design reconciliation deferred', err));
 
   // Initialize agent automation scheduler and action executor
-  automationScheduler.init().catch(err => console.error(`❌ Agent scheduler init failed: ${err.message}`));
+  automationScheduler.init().catch(err => logBootstrapFailure('❌ Agent scheduler init failed', err));
   // agentActionExecutor.init() is synchronous — guard with try/catch so a thrown
   // error logs cleanly instead of crashing the server at module load.
   try {
     agentActionExecutor.init();
   } catch (err) {
-    console.error(`❌ agentActionExecutor init failed: ${err instanceof Error ? err.message : String(err)}`);
+    logBootstrapFailure('❌ agentActionExecutor init failed', err);
   }
 
   // Inbox recovery is deferred until after initSyncLog() (see the ensureSelf chain
@@ -381,14 +392,14 @@ const startBackgroundServices = ({ spawnerReady, io }) => {
   // records, so its updateInboxLog() calls append to sync_log.jsonl and MUST run
   // after the log's currentSeq is loaded, or they'd write low/duplicate sequence
   // numbers and corrupt peer cursors.
-  recoverStuckAnalyses().catch(err => console.error(`❌ Writers Room recovery failed: ${err.message}`));
-  recoverStuckAutoRuns().catch(err => console.error(`❌ Pipeline auto-run recovery failed: ${err.message}`));
-  recoverStuckAutopilots().catch(err => console.error(`❌ Pipeline autopilot recovery failed: ${err.message}`));
+  recoverStuckAnalyses().catch(err => logBootstrapFailure('❌ Writers Room recovery failed', err));
+  recoverStuckAutoRuns().catch(err => logBootstrapFailure('❌ Pipeline auto-run recovery failed', err));
+  recoverStuckAutopilots().catch(err => logBootstrapFailure('❌ Pipeline autopilot recovery failed', err));
   // A provider child cannot survive a server restart. Make interrupted
   // Three.js generations retryable; this is state recovery only, never a
   // cold-bootstrap provider call.
-  recoverInterruptedThreejsModels().catch(err => console.error(`❌ Three.js model recovery failed: ${err.message}`));
-  recoverInterruptedImageTo3dModels().catch(err => console.error(`❌ Image-to-3D model recovery failed: ${err.message}`));
+  recoverInterruptedThreejsModels().catch(err => logBootstrapFailure('❌ Three.js model recovery failed', err));
+  recoverInterruptedImageTo3dModels().catch(err => logBootstrapFailure('❌ Image-to-3D model recovery failed', err));
   // Arm the managed-model-server idle reaper. Timer only — it reads timestamps
   // and may stop a PM2 process, and makes no AI provider call, so it is safe
   // under AGENTS.md's "No cold-bootstrap LLM calls". Off in practice until the
@@ -412,19 +423,19 @@ const startBackgroundServices = ({ spawnerReady, io }) => {
   initBrainMemoryBridge();
   // Load any on-disk POST drill cache into memory. Does NOT trigger LLM calls —
   // cache fill only happens on explicit user request (see meatspacePostRoutes.js).
-  initDrillCache().catch(err => console.error(`❌ POST drill cache init failed: ${err.message}`));
+  initDrillCache().catch(err => logBootstrapFailure('❌ POST drill cache init failed', err));
   // Register the optional daily POST reminder (opt-in, off by default) if the
   // user has enabled it — deterministic cron nudge, no LLM calls.
   // catchUpMissedSlot: true so a reminder whose slot elapsed while the server
   // was down (or during a redeploy) still fires once we're back up, instead of
   // silently waiting for tomorrow's tick (#2015).
-  registerPostReminderSchedule({ catchUpMissedSlot: true }).catch(err => console.error(`❌ POST reminder init failed: ${err.message}`));
+  registerPostReminderSchedule({ catchUpMissedSlot: true }).catch(err => logBootstrapFailure('❌ POST reminder init failed', err));
   // Initialize backup scheduler for daily data backups
-  startBackupScheduler().catch(err => console.error(`❌ Backup scheduler init failed: ${err.message}`));
+  startBackupScheduler().catch(err => logBootstrapFailure('❌ Backup scheduler init failed', err));
   // Initialize Privacy Center opt-out recheck scheduler — OFF by default; only
   // re-runs the broker scan + opt-out pass when the user opts in via
   // Settings → Privacy (sanctioned scheduled-automation exception) (#2145).
-  startPrivacyRecheckScheduler().catch(err => console.error(`❌ Privacy recheck scheduler init failed: ${err.message}`));
+  startPrivacyRecheckScheduler().catch(err => logBootstrapFailure('❌ Privacy recheck scheduler init failed', err));
   // Quota-burn loop — ONE install-level loop that spends subscription quota that
   // would otherwise expire. OFF by default: the tick returns before touching a
   // provider unless the user enabled it on the Quota Burn page, where the
@@ -438,7 +449,7 @@ const startBackgroundServices = ({ spawnerReady, io }) => {
   // series only when the user configured + enabled one via Settings → Series
   // Autopilot. Each scheduled run still passes through the cos autonomy gate +
   // daily budget (sanctioned scheduled-automation exception) (#2174).
-  startSeriesAutopilotScheduler().catch(err => console.error(`❌ Series Autopilot scheduler init failed: ${err.message}`));
+  startSeriesAutopilotScheduler().catch(err => logBootstrapFailure('❌ Series Autopilot scheduler init failed', err));
   // Autonomous Creation Engine (#2657) — arm a cron per enabled Creative
   // Commission. Boot only ARMS timers; nothing fires until a cadence elapses, and
   // each fire gates on creative autonomy `execute` + the daily cos budget (so an
@@ -459,25 +470,25 @@ const startBackgroundServices = ({ spawnerReady, io }) => {
   // Initialize iMessage sync scheduler — OFF by default; only polls chat.db when
   // the user opts in from the iMessage Settings drawer on Comms → Messages → iMessage
   // (needs macOS Full Disk Access) (#2151).
-  startImessageScheduler().catch(err => console.error(`❌ iMessage sync scheduler init failed: ${err.message}`));
+  startImessageScheduler().catch(err => logBootstrapFailure('❌ iMessage sync scheduler init failed', err));
   // Initialize Signal sync scheduler — OFF by default; only reads the SQLCipher
   // chat DB (via the keychain-wrapped key) when the user opts in via
   // Settings → Signal (#2154).
-  startSignalScheduler().catch(err => console.error(`❌ Signal sync scheduler init failed: ${err.message}`));
+  startSignalScheduler().catch(err => logBootstrapFailure('❌ Signal sync scheduler init failed', err));
   // Initialize Spotify sync scheduler — OFF by default; only polls the
   // recently-played API when the user connects Spotify + opts in via
   // Settings → Spotify (#2152).
-  startSpotifyScheduler().catch(err => console.error(`❌ Spotify sync scheduler init failed: ${err.message}`));
+  startSpotifyScheduler().catch(err => logBootstrapFailure('❌ Spotify sync scheduler init failed', err));
   // Initialize YouTube watch-history sync scheduler — OFF by default; only scrapes
   // the signed-in history page in the managed browser when the user opts in via
   // Settings → YouTube (#2153).
-  startYoutubeScheduler().catch(err => console.error(`❌ YouTube sync scheduler init failed: ${err.message}`));
+  startYoutubeScheduler().catch(err => logBootstrapFailure('❌ YouTube sync scheduler init failed', err));
   // Initialize the Beeper ingestion sweep — OFF by default; registers only when
   // the Beeper instance feature is on AND a token is configured, and then only
   // runs when `settings.beeper.enabled` is set (fork issue #32). Deliberately
   // NOT gated on Beeper's own `app.state`, which was measured reporting
   // `initializing` for 105s while every account was connected.
-  startBeeperScheduler().catch(err => console.error(`❌ Beeper sync scheduler init failed: ${err.message}`));
+  startBeeperScheduler().catch(err => logBootstrapFailure('❌ Beeper sync scheduler init failed', err));
   // Reconcile the outbox's two non-terminal states against the process that
   // just died: a row left in `sending` becomes a failed row the user can act on
   // (never an automatic resend — Beeper has no idempotency key), and a row left
@@ -485,13 +496,13 @@ const startBackgroundServices = ({ spawnerReady, io }) => {
   // sends. Deliberately NOT on the ingestion gate above: a send stranded by a
   // restart is stranded whether or not scheduled sync is switched on, and it is
   // otherwise un-actionable forever, since nothing but this can move it.
-  reconcileOutboxOnBoot().catch(err => console.error(`❌ Beeper outbox boot reconcile failed: ${err.message}`));
+  reconcileOutboxOnBoot().catch(err => logBootstrapFailure('❌ Beeper outbox boot reconcile failed', err));
   // Arm the Beeper realtime transport on the SAME gate as the sweep above
   // (feature on + token present, never `app.state`) — one long-lived WebSocket
   // to the local Beeper Desktop whose only job is to make ingestion prompt
   // (fork issue #33). Correctness stays with the sweep: a reconnect, a `seq`
   // gap or an `app.state` recovery each ask it to run early.
-  startBeeperSocket().catch(err => console.error(`❌ Beeper realtime transport init failed: ${err.message}`));
+  startBeeperSocket().catch(err => logBootstrapFailure('❌ Beeper realtime transport init failed', err));
   // Periodically GC orphan zero-issue/zero-canon importer shells left by an
   // abandoned analyze (issue #727).
   startOrphanShellGc();
@@ -527,37 +538,37 @@ const startBackgroundServices = ({ spawnerReady, io }) => {
   // and a listener reading the now-absent settings key would wipe the registry.
   readUserTypeSlice()
     .then(list => setUserCatalogTypes(Array.isArray(list) ? list : []))
-    .catch(err => console.error(`❌ Catalog user-type warm failed: ${err.message}`));
+    .catch(err => logBootstrapFailure('❌ Catalog user-type warm failed', err));
   // Initialize Telegram (manual bot or MCP bridge based on settings)
   getInitSettings().then(s => {
     if (s.telegram?.method === 'mcp-bridge') {
-      telegramBridge.init().catch(err => console.error(`❌ TG Bridge init failed: ${err.message}`));
+      telegramBridge.init().catch(err => logBootstrapFailure('❌ TG Bridge init failed', err));
     } else {
-      telegram.init().catch(err => console.error(`❌ Telegram init failed: ${err.message}`));
+      telegram.init().catch(err => logBootstrapFailure('❌ Telegram init failed', err));
     }
-  }).catch(err => console.error(`❌ Telegram settings read failed: ${err.message}`));
+  }).catch(err => logBootstrapFailure('❌ Telegram settings read failed', err));
   // Reconcile voice stack (start portos-whisper if voice.enabled)
-  getVoiceConfig().then(reconcileVoice).catch(err => console.error(`❌ Voice reconcile failed: ${err.message}`));
+  getVoiceConfig().then(cfg => reconcileVoice(cfg, { allowSetup: false })).catch(err => logBootstrapFailure('❌ Voice reconcile failed', err));
   // Re-arm any voice timers that survived a restart (independent of voice.enabled —
   // a pending reminder should still fire even if voice is currently off).
-  initVoiceTimers().catch(err => console.error(`❌ Voice timer init failed: ${err.message}`));
+  initVoiceTimers().catch(err => logBootstrapFailure('❌ Voice timer init failed', err));
   // Check for update completion marker from a previous update cycle. The full
   // read/validate/record/cleanup lifecycle lives in updateChecker.js.
-  processUpdateMarker().catch(err => console.error(`❌ Update marker processing failed: ${err.message}`));
+  processUpdateMarker().catch(err => logBootstrapFailure('❌ Update marker processing failed', err));
 
   // Clear stale updateInProgress if the server was killed mid-update
-  clearStaleUpdateInProgress().catch(err => console.error(`❌ Stale update recovery failed: ${err.message}`));
+  clearStaleUpdateInProgress().catch(err => logBootstrapFailure('❌ Stale update recovery failed', err));
 
   // Capture the commit this process booted at, so /api/update/status can detect
   // a bare `git pull` that advanced on-disk HEAD without restarting (issue #1779).
   // Best-effort — a tarball/non-git install just yields no boot commit.
-  captureBootCommit().catch(err => console.error(`❌ Boot commit capture failed: ${err.message}`));
+  captureBootCommit().catch(err => logBootstrapFailure('❌ Boot commit capture failed', err));
 
   // Start periodic update checker (checks GitHub releases every 30 min)
   startUpdateScheduler();
 
   // Restore any active loops from previous session
-  restoreLoops().catch(err => console.error(`❌ Loop restore failed: ${err.message}`));
+  restoreLoops().catch(err => logBootstrapFailure('❌ Loop restore failed', err));
 };
 
 /**
@@ -570,7 +581,7 @@ const initMediaJobDependentHooks = () => {
   // LoRA training run records reconcile against the live queue (interrupted
   // runs → failed) and mirror queue-side cancels — must run after the queue
   // has loaded its persisted jobs.
-  initLoraTraining().catch(err => console.error(`❌ loraTraining init failed: ${err.message}`));
+  initLoraTraining().catch(err => logBootstrapFailure('❌ loraTraining init failed', err));
   // Universe Builder needs the media job queue running before it can listen
   // for `completed` events — so initialize the hook here.
   initUniverseBuilderCollectionHook();
@@ -635,7 +646,7 @@ const initMediaJobDependentHooks = () => {
   // the retry-on-EAGAIN path inside the store is what guarantees the
   // hardening. Fire-and-forget — failures are logged.
   initMortalLoomStore().catch((err) => {
-    console.warn(`⚠️ MortalLoom store init failed: ${err.message}`);
+    logBootstrapFailure('⚠️ MortalLoom store init failed', err, console.warn);
   });
 };
 
@@ -645,7 +656,7 @@ const initMediaJobDependentHooks = () => {
  * the real migration scripts, and the real stores.
  *
  * Escape hatches for the health gate (dev/tests only, UNSUPPORTED for
- * production): `MEMORY_BACKEND=file` (explicit file backend) and `NODE_ENV=test`
+ * production): `MEMORY_BACKEND=file` (explicit file backend) and test runners
  * (test suites boot without a database). Both downgrade "PostgreSQL is required"
  * from a fail-fast to a warning.
  *
@@ -659,7 +670,7 @@ const runDatabaseBootPhase = () => runDatabasePhase({
     const { dbReady } = await gateOnDatabase({
       checkHealth,
       ensureSchema,
-      escapeHatch: process.env.MEMORY_BACKEND === 'file' || process.env.NODE_ENV === 'test'
+      escapeHatch: process.env.MEMORY_BACKEND === 'file' || isTestRunner()
     });
     // ensureSchema is threaded through to the migrations below so the phase
     // resolves the db.js module exactly once.
@@ -774,7 +785,7 @@ const announceListening = ({ io, httpServer, localHttpServer, httpsEnabled, port
         if (late?.shortCommit) console.log(`   🧬 build ${formatBuildIdentity(late)}`);
         else console.log(`   🧬 build — git probe did not finish in time; /api/system/build will report it`);
       })
-      .catch((err) => console.error(`❌ Build identity probe failed: ${err.message}`));
+      .catch((err) => logBootstrapFailure('❌ Build identity probe failed', err));
   }
   if (!httpsEnabled) {
     console.log(`   🌐 http://localhost:${port}`);
@@ -800,7 +811,7 @@ const announceListening = ({ io, httpServer, localHttpServer, httpsEnabled, port
     io.attach(localHttpServer);
     localHttpServer.listen(localHttpPort, '127.0.0.1');
     localHttpServer.on('error', (err) => {
-      console.warn(`⚠️  Loopback HTTP mirror on :${localHttpPort} failed: ${err.message} — http://localhost:${localHttpPort} won't work; use https://...:${port}`);
+      console.warn(`⚠️  Loopback HTTP mirror on :${localHttpPort} failed: ${err.message} — http://localhost:${localHttpPort} won't work; use https://...:${port}`, err.stack || '');
     });
   }
 };
@@ -851,7 +862,7 @@ export const runBootSequence = ({ io, httpServer, localHttpServer, httpsEnabled,
     // path here, explicitly resolve it so cos.start's gate doesn't hit the 60s
     // timeout fallback for nothing.
     recoverCreativeDirectorProjects: () => recoverInFlightProjects().catch(async (e) => {
-      console.log(`⚠️ CD boot recovery failed: ${e.message}`);
+      logBootstrapFailure('⚠️ CD boot recovery failed', e, console.log);
       const { markRecoveryDone } = await import('./creativeDirector/recovery.js');
       markRecoveryDone();
     }),
@@ -879,10 +890,10 @@ export const runBootSequence = ({ io, httpServer, localHttpServer, httpsEnabled,
         // Best-effort: re-attach tailcat forwards persisted across restarts.
         void import('./tailcatPeer.js')
           .then(({ restoreForwards }) => restoreForwards())
-          .catch((err) => console.log(`⚠️ tailcat forward restore failed: ${err.message}`));
+          .catch((err) => logBootstrapFailure('⚠️ tailcat forward restore failed', err, console.warn));
         void import('./tailcatServe.js')
           .then(({ restoreServe }) => restoreServe())
-          .catch((err) => console.log(`⚠️ tailcat serve restore failed: ${err.message}`));
+          .catch((err) => logBootstrapFailure('⚠️ tailcat serve restore failed', err, console.warn));
       },
       initSyncOrchestrator
     }))
@@ -892,33 +903,38 @@ export const runBootSequence = ({ io, httpServer, localHttpServer, httpsEnabled,
 // settles (e.g. a WebSocket-upgraded socket the server no longer tracks, or a
 // leaked DB client) can't hang shutdown; process.exit() reclaims the resources at
 // the OS level. Both callbacks passed to run resolve the same settle-once
-// promise: finish logs success, finishWithError logs an error and continues.
+// promise: finish logs success, finishWithError logs an error (and its stack)
+// and continues.
 // The backstop is .unref()'d so it never keeps the event loop alive on its own.
 const withGrace = (label, ms, run) => new Promise((resolve) => {
   let settled = false;
-  const complete = (msg, log) => {
+  const complete = (msg, log, error) => {
     if (settled) return;
     settled = true;
-    if (msg) log(msg);
+    if (msg) {
+      if (error) logBootstrapFailure(msg, error, log);
+      else log(msg);
+    }
     resolve();
   };
   const finish = (msg) => complete(msg, console.log);
-  const finishWithError = (msg) => complete(msg, console.error);
+  const finishWithError = (msg, error) => complete(msg, console.error, error);
   run({ finish, finishWithError });
   setTimeout(() => finishWithError(`⚠️ ${label} close exceeded ${ms}ms — proceeding`), ms).unref?.();
 });
 
-// graceMs is deliberately short: closeAllConnections() force-drops every
-// connection, so there is no graceful drain left to wait for — the only thing that
-// can outlast it is a WebSocket-upgraded socket the server no longer tracks (and
+// graceMs is deliberately bounded: closeAllConnections() force-drops every
+// connection, so there is no graceful drain left to wait for. The close callback
+// still needs a short window for TLS/socket teardown — the only thing that can
+// outlast it is a WebSocket-upgraded socket the server no longer tracks (and
 // io.close()'s engine.close() already tore those down protocol-side; the OS reaps
-// the TCP remnant on process.exit). So don't tax every restart waiting on it.
+// the TCP remnant on process.exit).
 // ERR_SERVER_NOT_RUNNING means it was already closed (io.close() closes whichever
 // server is its current this.httpServer) — success for us, not a failure.
-const closeServer = (server, label, graceMs = 250) => withGrace(label, graceMs, ({ finish, finishWithError }) => {
+const closeServer = (server, label, graceMs = 1000) => withGrace(label, graceMs, ({ finish, finishWithError }) => {
   if (!server) return finish();
   server.close((err) => {
-    if (err && err.code !== 'ERR_SERVER_NOT_RUNNING') finishWithError(`⚠️ Error closing ${label}: ${err.message}`);
+    if (err && err.code !== 'ERR_SERVER_NOT_RUNNING') finishWithError(`⚠️ Error closing ${label}`, err);
     else finish(`✅ ${label} closed`);
   });
   // Order matters: close() above stops accepting NEW connections; NOW force-drop
@@ -945,15 +961,15 @@ export const registerShutdownHandlers = ({ io, httpServer, localHttpServer }) =>
     // died because PortOS is going down, not because the agent finished (#3202).
     markHostShuttingDown();
     await import('./tailcatPeer.js').then(({ stopAllForwards }) => stopAllForwards())
-      .catch(() => console.error('❌ Tailcat forward shutdown failed'));
+      .catch((err) => logBootstrapFailure('❌ Tailcat forward shutdown failed', err));
     await import('./tailcatServe.js').then(({ stopServeProcess }) => stopServeProcess())
-      .catch(() => console.error('❌ Tailcat serve shutdown failed'));
+      .catch((err) => logBootstrapFailure('❌ Tailcat serve shutdown failed', err));
     // Disarm the idle reaper before anything awaits: a sweep that fires mid
     // -shutdown would `pm2 stop` a model server the user never asked to lose,
     // and PortOS is about to stop being the thing that could restart it.
     stopIdleReaper();
     await import('./fleetLlmHost.js').then(({ stopFleetLlmHost }) => stopFleetLlmHost())
-      .catch(() => console.error('❌ Dedicated model host shutdown failed'));
+      .catch((err) => logBootstrapFailure('❌ Dedicated model host shutdown failed', err));
     // Same reasoning for the hosted-session sweeper: a tick mid-shutdown would
     // emit into a namespace we are about to close.
     stopHostedSessionSweep();
@@ -1002,7 +1018,7 @@ export const registerShutdownHandlers = ({ io, httpServer, localHttpServer }) =>
     // marker we fail to write only degrades recovery to the pre-existing orphan path.
     const markerWritten = withGrace('Host-shutdown marker', 1500, ({ finish, finishWithError }) =>
       writeHostShutdownMarker({ agentIds: [...activeAgents.keys()], signal })
-        .then(() => finish(), (err) => finishWithError(`⚠️ Host-shutdown marker failed: ${err.message}`)));
+        .then(() => finish(), (err) => finishWithError('⚠️ Host-shutdown marker failed', err)));
 
     // Terminate the Codex app-server child before the socket teardown below.
     // pm2's TreeKill would reap it anyway, but a direct SIGTERM keeps a manual
@@ -1011,13 +1027,13 @@ export const registerShutdownHandlers = ({ io, httpServer, localHttpServer }) =>
     await withGrace('Codex app-server', 2000, ({ finish, finishWithError }) =>
       stopCodexAppServer().then(
         () => finish(),
-        (err) => finishWithError(`⚠️ Codex app-server stop failed: ${err.message}`),
+        (err) => finishWithError('⚠️ Codex app-server stop failed', err),
       ));
 
     // Drop existing long-lived sockets (SSE + keep-alive) up front so the closes
     // below don't wait on connections that never end on their own.
-    try { httpServer.closeAllConnections?.(); } catch (e) { console.error(`⚠️ closeAllConnections(http): ${e.message}`); }
-    try { localHttpServer?.closeAllConnections?.(); } catch (e) { console.error(`⚠️ closeAllConnections(mirror): ${e.message}`); }
+    try { httpServer.closeAllConnections?.(); } catch (e) { logBootstrapFailure('⚠️ closeAllConnections(http)', e); }
+    try { localHttpServer?.closeAllConnections?.(); } catch (e) { logBootstrapFailure('⚠️ closeAllConnections(mirror)', e); }
 
     // socket.io's io.close() closes engine.io AND its current this.httpServer — and
     // every io.attach() reassigns this.httpServer (socket.io index.js:303), so with
@@ -1028,11 +1044,11 @@ export const registerShutdownHandlers = ({ io, httpServer, localHttpServer }) =>
     // hangs forever — the real cause of the reconcile "stopping apps" hang.
     await withGrace('Socket.IO', 3000, ({ finish, finishWithError }) =>
       io.close((err) => {
-        if (err) finishWithError(`⚠️ Error closing Socket.IO: ${err.message}`);
+        if (err) finishWithError('⚠️ Error closing Socket.IO', err);
         else finish('✅ Socket.IO closed');
       }));
     await import('./tailcatIngress.js').then(({ stopTailcatIngress }) => stopTailcatIngress())
-      .catch(() => console.error('❌ Tailcat ingress shutdown failed'));
+      .catch((err) => logBootstrapFailure('❌ Tailcat ingress shutdown failed', err));
     // Close BOTH servers explicitly. Whichever one io.close() already closed resolves
     // immediately (ERR_SERVER_NOT_RUNNING → treated as success by closeServer), and
     // the bounded backstop in closeServer guarantees neither can hang shutdown even
@@ -1048,7 +1064,7 @@ export const registerShutdownHandlers = ({ io, httpServer, localHttpServer }) =>
       // be released, so one hung/leaked connection (e.g. a LISTEN channel) would
       // otherwise stall shutdown until the force-exit timer.
       await withGrace('DB pool', 3000, ({ finish, finishWithError }) =>
-        close().then(() => finish('✅ DB pool closed'), (err) => finishWithError(`⚠️ DB pool close failed: ${err.message}`)));
+        close().then(() => finish('✅ DB pool closed'), (err) => finishWithError('⚠️ DB pool close failed', err)));
     } else {
       console.warn('ℹ️ DB pool close not available; skipping DB shutdown');
     }

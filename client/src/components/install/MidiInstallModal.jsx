@@ -16,6 +16,7 @@ export default function MidiInstallModal({ open, onClose, onComplete }) {
       runtime="muscriptor"
       label="MuScriptor (MIDI transcription)"
       installUrlBase="/api/midi-runtime/install"
+      streamMethod="POST"
       description="Installing the MuScriptor runtime and Python packages (large download on first run)…"
       onClose={onClose}
       onComplete={onComplete}

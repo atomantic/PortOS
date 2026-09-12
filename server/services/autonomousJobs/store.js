@@ -26,7 +26,7 @@ async function initJobs() {
   await ensureDir(DATA_DIR)
   await syncSkillTemplatesFromSample()
 
-  const loaded = await readJSONFile(JOBS_FILE, null)
+  const loaded = await readJSONFile(JOBS_FILE, null, { strict: true })
   if (!loaded) {
     const initial = createDefaultJobsData()
     await migrateScriptsState(initial)
@@ -96,10 +96,13 @@ async function syncSkillTemplatesFromSample() {
  */
 async function loadJobs() {
   if (!initPromise) {
-    initPromise = initJobs()
+    initPromise = initJobs().catch((err) => {
+      initPromise = null
+      throw err
+    })
   }
   await initPromise
-  const loaded = await readJSONFile(JOBS_FILE, null)
+  const loaded = await readJSONFile(JOBS_FILE, null, { strict: true })
   if (!loaded) return createDefaultJobsData()
   const { data } = mergeWithDefaults(loaded)
   return data

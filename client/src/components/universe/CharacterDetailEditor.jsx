@@ -962,7 +962,7 @@ function VoiceProfileSection({ universeId, entry, disabled }) {
               ) : null}
             </div>
           ) : (
-            <p className="text-[10px] text-gray-500">Promote the selected Kokoro or Piper preset to give this character a stable local voice.</p>
+            <p className="text-[10px] text-gray-500">Promote the selected Piper preset to give this character a stable local voice.</p>
           )}
 
           <div className="flex flex-wrap gap-1.5">

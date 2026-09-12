@@ -20,7 +20,7 @@ const MEATSPACE_DIR = PATHS.meatspace;
 const SESSIONS_FILE = join(MEATSPACE_DIR, 'post-sessions.json');
 const TRAINING_FILE = join(MEATSPACE_DIR, 'post-training-log.json');
 
-async function loadFileSessions({ strict = false } = {}) {
+async function loadFileSessions({ strict = true } = {}) {
   const raw = await readJSONFile(SESSIONS_FILE, { sessions: [] }, { allowArray: false, strict });
   if (strict && (!isPlainObject(raw) || !Array.isArray(raw.sessions))) {
     throw new Error(`POST sessions malformed: ${SESSIONS_FILE}`);
@@ -28,7 +28,7 @@ async function loadFileSessions({ strict = false } = {}) {
   return Array.isArray(raw?.sessions) ? raw.sessions : [];
 }
 
-async function loadFileTraining({ strict = false } = {}) {
+async function loadFileTraining({ strict = true } = {}) {
   const raw = await readJSONFile(TRAINING_FILE, { entries: [] }, { allowArray: false, strict });
   if (strict && !Array.isArray(raw?.entries)) {
     throw new Error(`POST training log malformed: ${TRAINING_FILE}`);

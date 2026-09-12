@@ -444,7 +444,7 @@ export async function generateChainedVideo({ chunks, chunkPrompts, contextFrames
       chainedFrom: chunkIds,
     });
   })().catch((err) => {
-    console.log(`❌ chain orchestration crashed [${outerJobId.slice(0, 8)}]: ${err.message}`);
+    console.error(`❌ chain orchestration crashed [${outerJobId.slice(0, 8)}]: ${err.message}`);
     finishFail(err.message, normalizeVideoFailure(err, failureOptions));
   });
 

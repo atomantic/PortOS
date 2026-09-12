@@ -125,6 +125,7 @@ export async function pullSidecarForImage(peer, base, imageFilename) {
   if (sidecarGenParamsHash(parsed) === null) return false;
   await ensureDir(PATHS.images);
   await atomicWrite(join(PATHS.images, sidecarName), buf);
+  await import('../mediaAssetIndex/index.js').then(m => m.indexImage({ filename: imageFilename })).catch(err => console.error(`❌ Media index sidecar refresh: ${err.message}`));
   console.log(`📥 peerSync: pulled sidecar ${sidecarName} from ${peer.name || peer.instanceId}`);
   return true;
 }

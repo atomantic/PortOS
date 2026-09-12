@@ -512,12 +512,12 @@ const seedTemplate = (id) => SEED_ROUNDS.find((s) => s.id === id) || null;
 // is re-entrancy hygiene, not a multi-actor lock (see AGENTS.md Security Model).
 const enqueue = createFileWriteQueue();
 
-// Pure read + sanitize — NO write side effect. When the file is absent or
-// malformed, returns the seed in-memory without persisting it. Mutations call
-// this inside their enqueue() so the read-modify-write cycle never re-enters
+// Pure read + sanitize — NO write side effect. An absent file or a parsed
+// legacy shape without rounds returns the seed in memory. Unreadable bytes
+// reject. Mutations call this inside enqueue() so the cycle never re-enters
 // the queue (which would deadlock).
 async function readRounds() {
-  const state = await readJSONFile(STATE_PATH, null, { allowArray: false });
+  const state = await readJSONFile(STATE_PATH, null, { allowArray: false, strict: true });
   if (!state || !Array.isArray(state.rounds)) {
     return SEED_ROUNDS.map(sanitizeRound).filter(Boolean);
   }
@@ -529,14 +529,14 @@ async function readRounds() {
 // as mutations and re-checks inside the queue, so a create that landed first
 // can't be clobbered by a late seed write (read-path lazy-init race).
 export async function listRounds() {
-  const state = await readJSONFile(STATE_PATH, null, { allowArray: false });
+  const state = await readJSONFile(STATE_PATH, null, { allowArray: false, strict: true });
   if (state && Array.isArray(state.rounds)) {
     return state.rounds.map(sanitizeRound).filter(Boolean);
   }
   return enqueue(async () => {
     // Re-check inside the queue: a queued create may have already written the
     // file (with seed + new song). If so, don't overwrite it with bare seed.
-    const fresh = await readJSONFile(STATE_PATH, null, { allowArray: false });
+    const fresh = await readJSONFile(STATE_PATH, null, { allowArray: false, strict: true });
     if (fresh && Array.isArray(fresh.rounds)) {
       return fresh.rounds.map(sanitizeRound).filter(Boolean);
     }

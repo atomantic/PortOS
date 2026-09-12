@@ -1,9 +1,6 @@
-// Visual picker over the local image gallery — the "search + grid" alternative
-// to the plain file `<input>` in InitImagePicker. Opens as a modal, fetches the
-// gallery on open (GET /api/image-gen/gallery via listImageGallery), and lets
-// the user search by prompt/model/seed/LoRA/etc. (shared lib/mediaSearch logic,
-// same as MediaHistory) and click a thumbnail to pick it. Calls `onSelect(item)`
-// with the normalized media item (item.filename + item.previewUrl) then closes.
+// Visual picker over paginated local image metadata. Search, collection/universe
+// scope and type filters run before server paging; global facets keep older
+// images discoverable. onSelect receives the normalized media item.
 //
 // Two dropdowns narrow the grid further: a grouped Universe/Collection scope
 // and an entry Type. Both AND-combine with the text query.
@@ -24,13 +21,13 @@ import Modal from '../ui/Modal';
 import FilePickerButton from '../ui/FilePickerButton';
 import MediaCard from '../media/MediaCard';
 import { normalizeImage } from '../media/normalize';
-import { listImageGallery, listMediaCollections } from '../../services/apiImageVideo';
-import { listUniverses } from '../../services/apiUniverseBuilder';
+import { listImageGalleryFacets } from '../../services/apiImageVideo';
+import { listUniverseNames } from '../../services/apiUniverseBuilder';
 import { uploadGalleryImage } from '../../services/apiSystem';
 import {
   readFileAsBase64, validateImageFile, JSON_UPLOAD_MAX_FILE_SIZE, UPLOAD_IMAGE_ACCEPT,
 } from '../../utils/fileUpload';
-import { buildMediaHaystack, tokenizeQuery, matchHaystack } from '../../lib/mediaSearch';
+import { useGalleryPage } from '../../hooks/useGalleryPage';
 import { humanizeCategory } from '../../lib/universeBuilderShared';
 import toast from '../ui/Toast';
 
@@ -47,7 +44,6 @@ const KIND_PREFIX = 'kind:';
 // A collection stores membership as `{ kind, ref }` (server/lib/mediaItemKey.js),
 // which serializes to the same `<kind>:<ref>` string `normalizeImage` puts on
 // `item.key` — so membership is a set lookup, not a filename comparison.
-const membershipKey = (it) => `${it?.kind}:${it?.ref}`;
 const byLabel = (a, b) => a.label.localeCompare(b.label);
 // Image sidecars are unvalidated JSON on disk and arrive from peers, so a
 // non-string `entryCategory` / `universeName` is representable. Everything
@@ -58,11 +54,9 @@ const asText = (value) => (typeof value === 'string' && value.trim() ? value : n
 export default function GalleryImagePicker({
   open, onClose, onSelect, allowUpload = false, maxBytes = JSON_UPLOAD_MAX_FILE_SIZE,
 }) {
-  const [items, setItems] = useState([]);
-  const [loading, setLoading] = useState(false);
+  const [facets, setFacets] = useState({ universes: [], categories: [], kinds: [], collections: [] });
   const [uploading, setUploading] = useState(false);
   const [query, setQuery] = useState('');
-  const [collections, setCollections] = useState([]);
   const [universes, setUniverses] = useState([]);
   // '' = All. Otherwise `uni:<id>` or `col:<id>`.
   const [scope, setScope] = useState('');
@@ -80,125 +74,28 @@ export default function GalleryImagePicker({
     return () => { sessionRef.current += 1; };
   }, [open]);
 
-  // Fetch the gallery each time the picker opens so newly generated images show
-  // up without a page reload. Reset the search on close so a re-open starts clean.
+  const page = useGalleryPage({ q: query, hidden: false,
+    universeId: scope.startsWith(UNI_PREFIX) ? scope.slice(UNI_PREFIX.length) : undefined,
+    collectionId: scope.startsWith(COL_PREFIX) ? scope.slice(COL_PREFIX.length) : undefined,
+    entryCategory: type.startsWith(CAT_PREFIX) ? type.slice(CAT_PREFIX.length) : undefined,
+    entryKind: type.startsWith(KIND_PREFIX) ? type.slice(KIND_PREFIX.length) : undefined,
+  }, { enabled: open });
+  const { loading } = page;
+  const items = useMemo(() => page.items.map(normalizeImage), [page.items]);
+  const filtered = items;
   useEffect(() => {
-    if (!open) { setQuery(''); setScope(''); setType(''); return; }
+    if (!open) { setQuery(''); setScope(''); setType(''); setFacets({ universes: [], categories: [], kinds: [], collections: [] }); setUniverses([]); return; }
     let cancelled = false;
-    setLoading(true);
-    listImageGallery()
-      .then((images) => {
-        if (cancelled) return;
-        const normalized = (Array.isArray(images) ? images : [])
-          .map(normalizeImage)
-          // Skip hidden images — the picker is for reuse, not gallery management.
-          .filter((it) => !it.hidden);
-        setItems(normalized);
-      })
-      .catch(() => { if (!cancelled) setItems([]); })
-      .finally(() => { if (!cancelled) setLoading(false); });
+    listImageGalleryFacets({ silent: true }).then(value => { if (!cancelled) setFacets(value); })
+      .catch(() => { if (!cancelled) toast.error('Could not load gallery filters'); });
+    listUniverseNames({ silent: true }).then(value => { if (!cancelled) setUniverses(value); }).catch(() => {});
     return () => { cancelled = true; };
   }, [open]);
-
-  // Filter sources are best-effort: either fetch failing just drops that group
-  // from the scope dropdown, leaving text + type filtering intact. `silent`
-  // because the empty-list fallback below is this caller's error UI.
-  useEffect(() => {
-    // Drop the previous lists on close rather than letting them straddle a
-    // reopen: the gallery refetch can land first, and stale membership matched
-    // against fresh images offers options that filter to the wrong set.
-    if (!open) { setCollections([]); setUniverses([]); return undefined; }
-    let cancelled = false;
-    listMediaCollections({ silent: true })
-      .then((list) => { if (!cancelled) setCollections(Array.isArray(list) ? list : []); })
-      .catch(() => { if (!cancelled) setCollections([]); });
-    listUniverses({ silent: true })
-      .then((list) => { if (!cancelled) setUniverses(Array.isArray(list) ? list : []); })
-      .catch(() => { if (!cancelled) setUniverses([]); });
-    return () => { cancelled = true; };
-  }, [open]);
-
-  // Cache each item's haystack per fetched list; keystrokes then only re-run the
-  // cheap token match instead of rebuilding every haystack (mirrors MediaHistory).
-  const haystacks = useMemo(() => items.map(buildMediaHaystack), [items]);
-  const tokens = useMemo(() => tokenizeQuery(query), [query]);
-
-  // Universes are seeded from the images' own `universeId`/`universeName` stamps
-  // so the group still populates when listUniverses fails; the fetched record
-  // only supplies a fresher display name for a universe that was renamed after
-  // the sidecar was written. Universes with no image here are dropped — a scope
-  // that can only ever yield an empty grid isn't worth an option row.
-  const universeOptions = useMemo(() => {
-    const present = new Map();
-    for (const it of items) {
-      const id = asText(it.universeId);
-      if (id && !present.has(id)) present.set(id, asText(it.universeName) || id);
-    }
-    for (const u of universes) {
-      const id = asText(u?.id);
-      const name = asText(u?.name);
-      if (id && name && present.has(id)) present.set(id, name);
-    }
-    return [...present.entries()]
-      .map(([id, label]) => ({ value: `${UNI_PREFIX}${id}`, label }))
-      .sort(byLabel);
-  }, [items, universes]);
-
-  const galleryKeys = useMemo(() => new Set(items.map((it) => it.key)), [items]);
-
-  // Same "must match something" rule as universes. A collection also holds video
-  // refs, which this image-only picker can never surface.
-  const collectionOptions = useMemo(() => collections
-    .filter((c) => asText(c?.id) && Array.isArray(c?.items) && c.items.some((it) => galleryKeys.has(membershipKey(it))))
-    .map((c) => ({ value: `${COL_PREFIX}${c.id}`, label: asText(c.name) || c.id }))
-    .sort(byLabel), [collections, galleryKeys]);
-
-  const [categoryOptions, kindOptions] = useMemo(() => {
-    const categories = new Set();
-    const kinds = new Set();
-    for (const it of items) {
-      const category = asText(it.entryCategory);
-      const kind = asText(it.entryKind);
-      if (category) categories.add(category);
-      if (kind) kinds.add(kind);
-    }
-    const toOptions = (values, prefix) => [...values]
-      .map((value) => ({ value: `${prefix}${value}`, label: humanizeCategory(value) }))
-      .sort(byLabel);
-    return [toOptions(categories, CAT_PREFIX), toOptions(kinds, KIND_PREFIX)];
-  }, [items]);
-
-  // Membership set for the selected collection — `null` whenever no collection
-  // is scoped, which is the signal the filter uses to skip the check entirely.
-  const scopedCollectionKeys = useMemo(() => {
-    if (!scope.startsWith(COL_PREFIX)) return null;
-    const collection = collections.find((c) => c?.id === scope.slice(COL_PREFIX.length));
-    return new Set((collection?.items || []).map(membershipKey));
-  }, [scope, collections]);
-
-  // A selection that survived a gallery/collection refetch but no longer has an
-  // option row would silently filter everything out — drop it back to "All".
-  useEffect(() => {
-    if (scope && ![...universeOptions, ...collectionOptions].some((o) => o.value === scope)) setScope('');
-  }, [scope, universeOptions, collectionOptions]);
-  useEffect(() => {
-    if (type && ![...categoryOptions, ...kindOptions].some((o) => o.value === type)) setType('');
-  }, [type, categoryOptions, kindOptions]);
-
-  const filtered = useMemo(() => {
-    const universeId = scope.startsWith(UNI_PREFIX) ? scope.slice(UNI_PREFIX.length) : null;
-    const category = type.startsWith(CAT_PREFIX) ? type.slice(CAT_PREFIX.length) : null;
-    const kind = type.startsWith(KIND_PREFIX) ? type.slice(KIND_PREFIX.length) : null;
-    if (tokens.length === 0 && !universeId && !scopedCollectionKeys && !category && !kind) return items;
-    return items.filter((item, idx) => {
-      if (tokens.length > 0 && !matchHaystack(haystacks[idx], tokens)) return false;
-      if (universeId && item.universeId !== universeId) return false;
-      if (scopedCollectionKeys && !scopedCollectionKeys.has(item.key)) return false;
-      if (category && item.entryCategory !== category) return false;
-      if (kind && item.entryKind !== kind) return false;
-      return true;
-    });
-  }, [items, haystacks, tokens, scope, scopedCollectionKeys, type]);
+  const universeOptions = useMemo(() => facets.universes.map(u => ({ value: `${UNI_PREFIX}${u.id}`,
+    label: asText(universes.find(v => v.id === u.id)?.name) || u.name || u.id })).sort(byLabel), [facets, universes]);
+  const collectionOptions = useMemo(() => facets.collections.map(c => ({ value: `${COL_PREFIX}${c.id}`, label: asText(c.name) || c.id })).sort(byLabel), [facets]);
+  const categoryOptions = useMemo(() => facets.categories.map(value => ({ value: `${CAT_PREFIX}${value}`, label: humanizeCategory(value) })).sort(byLabel), [facets]);
+  const kindOptions = useMemo(() => facets.kinds.map(value => ({ value: `${KIND_PREFIX}${value}`, label: humanizeCategory(value) })).sort(byLabel), [facets]);
 
   // Upload a file off disk into the gallery, then select it like any gallery
   // image. Saving goes through the peer-syncable `/data/images/` upload so the
@@ -348,13 +245,13 @@ export default function GalleryImagePicker({
       </div>
 
       <div className="flex-1 overflow-y-auto p-3">
-        {loading ? (
+        {loading && items.length === 0 ? (
           <div className="flex items-center justify-center gap-2 text-xs text-gray-400 py-10">
             <RefreshCw className="w-4 h-4 animate-spin" /> Loading gallery…
           </div>
         ) : filtered.length === 0 ? (
           <div className="text-xs text-gray-500 py-10 text-center">
-            {items.length === 0 ? 'No images in your gallery yet.' : 'No images match your search or filters.'}
+            {query || scope || type ? 'No images match your search or filters.' : 'No images in your gallery yet.'}
           </div>
         ) : (
           <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3">
@@ -369,6 +266,8 @@ export default function GalleryImagePicker({
             ))}
           </div>
         )}
+        {page.error && <p role="alert" className="text-sm text-port-error">{page.error} <button type="button" onClick={page.retry}>Retry</button></p>}
+        {page.hasMore && <button type="button" disabled={loading} onClick={page.loadMore} className="w-full min-h-[44px] text-port-accent">{loading ? 'Loading…' : `Show more (${page.total - items.length} remaining)`}</button>}
       </div>
     </Modal>
   );

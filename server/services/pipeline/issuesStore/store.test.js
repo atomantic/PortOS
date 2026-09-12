@@ -69,6 +69,34 @@ describe('pipeline issues store facade — file backend', () => {
     expect(await s.loadAllForSeriesIds([])).toEqual([]);
   });
 
+  it('lean lists keep active fields and never alter persisted history', async () => {
+    const s = getIssuesStore(passthroughSanitize);
+    const record = { id: 'iss-1', seriesId: 'ser-1', title: 'One',
+      stages: { idea: { output: 'active', runHistory: [{ output: 'older' }] } } };
+    await s.saveOneNow(record.id, record);
+    for (const rows of [
+      await s.loadAll({ withHistory: false }),
+      await s.loadAllForSeries('ser-1', { withHistory: false }),
+      await s.loadAllForSeriesIds(['ser-1'], { withHistory: false }),
+    ]) {
+      expect(rows[0].stages.idea).toEqual({ output: 'active', runHistory: [] });
+    }
+    expect((await s.loadOne(record.id)).stages).toEqual(record.stages);
+    expect((await s.loadAll())[0].stages).toEqual(record.stages);
+  });
+
+  it('recent file reads match the bounded live summary contract', async () => {
+    const s = getIssuesStore(passthroughSanitize);
+    for (let n = 0; n < 5; n += 1) {
+      await s.saveOneNow(`iss-${n}`, { id: `iss-${n}`, seriesId: 'ser-1', title: 'One', number: n,
+        updatedAt: `2026-01-0${n + 1}T00:00:00.000Z`, deleted: n === 4, stages: {} });
+    }
+    const rows = await s.loadRecent({ limit: 2, summary: true });
+    expect(rows.map((r) => r.id)).toEqual(['iss-3', 'iss-2']);
+    expect(Object.keys(rows[0]).sort()).toEqual(['id', 'number', 'seriesId', 'title', 'updatedAt']);
+    expect((await s.loadRecent({ limit: 1, includeDeleted: true }))[0].id).toBe('iss-4');
+  });
+
   it('listIds({ includeDeleted: false }) drops tombstones; default keeps them (#2540)', async () => {
     const s = getIssuesStore(passthroughSanitize);
     await s.saveOneNow('iss-live', { id: 'iss-live', seriesId: 'ser-1', title: 'Live' });

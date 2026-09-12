@@ -31,13 +31,13 @@ export const API_REGISTRY = [
   {
     id: 'voice',
     label: 'Voice / TTS',
-    description: 'Text-to-speech synthesis and voice enumeration (Kokoro, Piper).',
+    description: 'Text-to-speech synthesis and voice enumeration (Piper, Qwen3-TTS).',
     publicPrefixes: ['/api/voice/public/'],
     publicBase: '/api/voice/public',
     example: {
       method: 'POST',
       path: '/api/voice/public/synthesize',
-      body: { text: 'Hello from PortOS', engine: 'kokoro' },
+      body: { text: 'Hello from PortOS', engine: 'piper' },
       output: 'speech.wav',
     },
     settingsKey: 'voice',

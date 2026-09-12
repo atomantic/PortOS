@@ -1,21 +1,21 @@
 import { it, expect, vi } from 'vitest';
 import { mockNoPeers } from '../lib/mockPathsDataRoot.js';
-import { exportPortosQuality, collectPortosQuality } from './appQualityFederation.js';
+import { exportPortosQuality, collectPortosQuality, collectAppQuality, buildQualitySnapshot, readReleaseQuality } from './appQualityFederation.js';
 import { enrichAppsWithQuality, getAppQualityHistory } from './appQuality.js';
 vi.mock('./instances.js', () => mockNoPeers());
 const now = Date.parse('2026-09-10T12:00:00Z');
-const peer = { id: 'peer-a', instanceId: 'instance-a', enabled: true, fullSync: true, address: '192.0.2.1', port: 5555 };
+const peer = { id: 'peer-a', instanceId: 'instance-a', enabled: true, address: '192.0.2.1', port: 5555 };
 const getOriginInfo = async () => ({ host: 'github.com', fullName: 'atomantic/PortOS' });
 const row = (category, score, assessed_at = '2026-09-10T10:00:00Z', extra = {}) => ({
   app_id: 'portos-default', category, agent_id: `agent-${category}`, assessed_at,
   report: { version: 1, category, score, worstSeverity: 5, coverage: 'broad', confidence: 'high',
     summary: 'Private paths /Users/person/project and audit narrative', scannedFiles: 12, totalFiles: 12 }, ...extra,
 });
-const deps = rows => ({ now, getOriginInfo, getPeers: async () => [peer], query: vi.fn(async () => ({ rows })) });
+const deps = rows => ({ now, getOriginInfo, readSnapshot: async () => null, getPeers: async () => [peer], query: vi.fn(async () => ({ rows })) });
 const response = payload => new Response(JSON.stringify(payload), { status: 200 });
 
 // Uniquely pins numeric-only privacy, peer consent and cross-install score convergence.
-it('exports only validated local numeric evidence to approved full-sync peers', async () => {
+it('exports only validated local numeric evidence to approved sync peers', async () => {
   const local = deps([row('security', 40)]);
   const payload = await exportPortosQuality(peer.instanceId, 30, local);
   expect(payload).toMatchObject({ schemaVersion: 1, measurements: [{ report: { category: 'security', score: 40 } }] });
@@ -23,7 +23,7 @@ it('exports only validated local numeric evidence to approved full-sync peers', 
   expect(local.query.mock.calls[0][1][0]).toBe('portos-default');
   expect(local.query.mock.calls[0][1][1].toISOString()).toBe('2026-07-13T00:00:00.000Z');
   for (const caller of [undefined, 'unknown']) expect(await exportPortosQuality(caller, 30, local)).toBeNull();
-  for (const disabled of [{ enabled: false }, { fullSync: false }, { syncEnabled: false }, { directions: ['inbound'] }]) {
+  for (const disabled of [{ enabled: false }, { syncEnabled: false }, { directions: ['inbound'] }]) {
     const blocked = { ...local, getPeers: async () => [{ ...peer, ...disabled }] };
     expect(await exportPortosQuality(peer.instanceId, 30, blocked)).toBeNull();
     expect(await collectPortosQuality(30, blocked)).toMatchObject({ records: [], federation: { peers: 0 } });
@@ -83,4 +83,31 @@ it('lets newer partial evidence supersede older broad scores and breaks ties con
     scores.push((await getAppQualityHistory('portos-default', 30, combined)).points.at(-1).score);
   }
   expect(new Set(scores).size).toBe(1);
+});
+
+it('matches managed repositories with different local ids and excludes other origins', async () => {
+  const getOriginInfo = async path => ({ host: 'github.com', fullName: path === '/unrelated' ? 'owner/other' : 'owner/app' });
+  const source = { ...deps([row('security', 88)]), getOriginInfo };
+  const payload = await buildQualitySnapshot({ id: 'remote-id', repoPath: '/remote/app' }, 30, source);
+  const local = { ...deps([]), getOriginInfo, peerFetch: vi.fn(async () => response(payload)),
+    getAppById: async id => ({ id, repoPath: '/local/app' }) };
+  const [app] = await enrichAppsWithQuality([{ id: 'local-id', repoPath: '/local/app' }], local);
+  expect(app.quality).toMatchObject({ score: 88, federation: { available: 1 } });
+  expect(local.peerFetch.mock.calls[0][0]).toContain(`&repository=${payload.repository}`);
+  expect((await getAppQualityHistory('local-id', 30, local)).points.at(-1).score).toBe(88);
+  expect((await collectAppQuality({ id: 'other', repoPath: '/unrelated' }, 30, local)).records).toEqual([]);
+  source.getAllApps = async () => [{ id: 'remote-id', repoPath: '/remote/app' }];
+  expect(await exportPortosQuality(peer.instanceId, 30, source, payload.repository)).toEqual(payload);
+  expect(source.query.mock.calls.at(-1)[1][0]).toBe('remote-id');
+  expect(await exportPortosQuality(peer.instanceId, 30, source, '0'.repeat(64))).toBeNull();
+});
+
+it('loads release evidence without peers and never re-exports it', async () => {
+  const payload = await buildQualitySnapshot(undefined, 30, deps([row('security', 82)]));
+  const local = { ...deps([]), getPeers: async () => [], readSnapshot: async () => JSON.stringify(payload) };
+  expect((await enrichAppsWithQuality([{ id: 'portos-default' }], local))[0].quality.score).toBe(82);
+  expect((await getAppQualityHistory('portos-default', 30, local)).points.at(-1).score).toBe(82);
+  expect((await buildQualitySnapshot(undefined, 30, local)).measurements).toEqual([]);
+  expect(await readReleaseQuality({ ...local, getOriginInfo: async () => ({ host: 'github.com', fullName: 'fork/PortOS' }) })).toEqual([]);
+  expect(await readReleaseQuality({ ...local, readSnapshot: async () => 'broken' })).toEqual([]);
 });

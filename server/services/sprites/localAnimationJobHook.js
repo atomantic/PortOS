@@ -88,7 +88,7 @@ async function settleSpriteAnimationJob(job) {
     // error — so the new id is stamped on the run before the attach, and a later
     // sweep of that same job then reads as already-filed.
     const recordPath = join(spriteDir(recordId), runRel, RUN_RECORD_NAME);
-    const record = await readJSONFile(recordPath, null);
+    const record = await readJSONFile(recordPath, null, { strict: true });
     const isRetryOfFiledRun = record?.status === 'error'
       && typeof job.id === 'string' && job.id !== record.jobId;
     if (record?.status !== 'rendering' && !isRetryOfFiledRun) return false;

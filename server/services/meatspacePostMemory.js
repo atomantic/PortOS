@@ -354,7 +354,7 @@ const ELEMENTS_SONG = {
 // =============================================================================
 
 async function loadMemoryItems() {
-  const data = await readJSONFile(MEMORY_ITEMS_FILE, { items: [] }, { allowArray: false });
+  const data = await readJSONFile(MEMORY_ITEMS_FILE, { items: [] }, { allowArray: false, strict: true });
   const items = data?.items && Array.isArray(data.items) ? data.items : [];
 
   // Ensure built-in Elements Song is always present and content stays current

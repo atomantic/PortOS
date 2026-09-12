@@ -15,7 +15,7 @@ import { buildSpriteRecord, applySpriteRecordPatch, mergeImportedRecord } from '
 const RECORDS_FILE = join(PATHS.data, 'sprite-records.json');
 
 async function loadAll() {
-  const raw = await readJSONFile(RECORDS_FILE, []);
+  const raw = await readJSONFile(RECORDS_FILE, [], { strict: true });
   return Array.isArray(raw) ? raw : [];
 }
 

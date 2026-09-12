@@ -771,17 +771,17 @@ export async function getDigitalTwinSnapshot() {
   // cadence or have prompts enabled without local opt-in. Only the stories sync.
   const [identity, chronotype, longevity, feedback, taste, tasteObserved, chronotypeObserved, meta, documents, stories, socialAccounts] =
     await Promise.all([
-      readJSONFile(IDENTITY_FILE, null),
-      readJSONFile(CHRONOTYPE_FILE, null),
-      readJSONFile(LONGEVITY_FILE, null),
-      readJSONFile(FEEDBACK_FILE, null),
-      readJSONFile(TASTE_FILE, null),
-      readJSONFile(TASTE_OBSERVED_FILE, null),
-      readJSONFile(CHRONOTYPE_OBSERVED_FILE, null),
-      readJSONFile(META_FILE, null),
+      readJSONFile(IDENTITY_FILE, null, { strict: true }),
+      readJSONFile(CHRONOTYPE_FILE, null, { strict: true }),
+      readJSONFile(LONGEVITY_FILE, null, { strict: true }),
+      readJSONFile(FEEDBACK_FILE, null, { strict: true }),
+      readJSONFile(TASTE_FILE, null, { strict: true }),
+      readJSONFile(TASTE_OBSERVED_FILE, null, { strict: true }),
+      readJSONFile(CHRONOTYPE_OBSERVED_FILE, null, { strict: true }),
+      readJSONFile(META_FILE, null, { strict: true }),
       readMarkdownDocuments(),
-      readJSONFile(AUTOBIO_STORIES_FILE, null),
-      readJSONFile(SOCIAL_ACCOUNTS_FILE, null),
+      readJSONFile(AUTOBIO_STORIES_FILE, null, { strict: true }),
+      readJSONFile(SOCIAL_ACCOUNTS_FILE, null, { strict: true }),
     ]);
   const data = { identity, chronotype, longevity, feedback, taste, tasteObserved, chronotypeObserved, meta, documents, autobiography: { stories }, socialAccounts };
   return { data, checksum: computeChecksum(data) };
@@ -791,7 +791,7 @@ export async function getDigitalTwinSnapshot() {
 
 async function applyMerge(path, remote, mergeFn, { dir } = {}) {
   if (remote === undefined || remote === null) return 0;
-  const local = await readJSONFile(path, null);
+  const local = await readJSONFile(path, null, { strict: true });
   const { merged, changed } = mergeFn(local, remote);
   if (!changed) return 0;
   if (dir) await ensureDir(dir);
@@ -813,7 +813,7 @@ async function applyMerge(path, remote, mergeFn, { dir } = {}) {
  * `createdAt` superseded the tombstone.
  */
 async function readSuppressedDocuments() {
-  const meta = await readJSONFile(META_FILE, null);
+  const meta = await readJSONFile(META_FILE, null, { strict: true });
   if (!isPlainObject(meta)) return new Set();
   const live = new Set(
     (Array.isArray(meta.documents) ? meta.documents : [])
@@ -881,7 +881,7 @@ async function applyDocuments(documents, suppressed) {
 
 async function applyTaste(remoteTaste) {
   if (!isPlainObject(remoteTaste)) return 0;
-  const local = await readJSONFile(TASTE_FILE, null);
+  const local = await readJSONFile(TASTE_FILE, null, { strict: true });
   const { merged, changed } = mergeTaste(local, remoteTaste);
   if (!changed) return 0;
   await atomicWrite(TASTE_FILE, merged);

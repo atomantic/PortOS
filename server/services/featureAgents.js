@@ -43,7 +43,7 @@ export function calculateBackoff(consecutiveIdles) {
  * Read the feature agents data file
  */
 async function readData() {
-  const data = await readJSONFile(FA_FILE, { version: 1, lastUpdated: new Date().toISOString(), agents: [] });
+  const data = await readJSONFile(FA_FILE, { version: 1, lastUpdated: new Date().toISOString(), agents: [] }, { strict: true });
   return data;
 }
 
@@ -459,6 +459,7 @@ export async function getFeatureAgentRuns(id, limit = 20) {
   // independent small JSON reads, so a sequential loop needlessly serializes
   // disk latency on the run-history endpoint.
   const loaded = await Promise.all(
+    // Read-only run history: unreadable entries are filtered, never rewritten.
     runFiles.map(file => readJSONFile(join(runDir, file), null))
   );
 

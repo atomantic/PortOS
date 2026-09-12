@@ -5,7 +5,7 @@
 #   STT_ENGINE      'whisper' (default) | 'web-speech'
 #   MODEL_NAME      Whisper GGUF to fetch (default: ggml-base.en.bin)
 #   VOICE_NAME      Piper voice name (default: en_GB-jenny_dioco-medium)
-#   TTS_ENGINE      'kokoro' (default) | 'piper'
+#   TTS_ENGINE      'piper' (default) | 'qwen3-tts'
 #   INSTALL_COREML  '1' — ignored on Windows (CoreML is Apple Silicon only)
 
 $ErrorActionPreference = 'Stop'
@@ -17,7 +17,7 @@ $PIPER_DIR   = Join-Path $VOICE_HOME 'piper'
 
 $MODEL_NAME  = if ($env:MODEL_NAME)  { $env:MODEL_NAME  } else { 'ggml-base.en.bin' }
 $VOICE_NAME  = if ($env:VOICE_NAME)  { $env:VOICE_NAME  } else { 'en_GB-jenny_dioco-medium' }
-$TTS_ENGINE  = if ($env:TTS_ENGINE)  { $env:TTS_ENGINE  } else { 'kokoro' }
+$TTS_ENGINE  = if ($env:TTS_ENGINE)  { $env:TTS_ENGINE  } else { 'piper' }
 $STT_ENGINE  = if ($env:STT_ENGINE)  { $env:STT_ENGINE  } else { 'whisper' }
 
 New-Item -ItemType Directory -Force -Path $MODELS_DIR | Out-Null
@@ -116,5 +116,5 @@ if ($TTS_ENGINE -eq 'piper') {
     Write-Host "   piper:          $(Join-Path $PIPER_DIR 'piper.exe')"
     Write-Host "   piper voice:    $(Join-Path $VOICES_DIR "$VOICE_NAME.onnx")"
 } else {
-    Write-Host '   kokoro models:  managed by transformers.js (~/.cache/huggingface/)'
+    Write-Host '   Qwen3 models: managed in Settings → Voice'
 }

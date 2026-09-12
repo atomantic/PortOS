@@ -3,9 +3,9 @@ import {
   CODEX_EFFORT_LEVELS,
   ANTIGRAVITY_EFFORT_LEVELS,
   CURSOR_EFFORT_LEVELS,
-  GROK_EFFORT_LEVELS,
-  CODEX_ULTRA_EFFORT_LEVELS
+  GROK_EFFORT_LEVELS
 } from '../utils/providers';
+import { codexEffortLevelsForModel } from '../../../server/lib/providerModels.js';
 
 /**
  * Client mirrors of the reviewer vocabulary in `server/lib/reviewerConfig.js` —
@@ -16,7 +16,7 @@ import {
  *
  * **Why these live in a leaf module rather than in `components/cos/constants.js`.**
  * The server suite pins this mirror against the server's own derived ladders (see
- * the `client mirror of the reviewer effort ladders` test in
+ * the `client mirror of the reviewer vocabulary` test in
  * `server/lib/reviewerConfig.test.js`) — a level offered here but rejected there
  * would show the user a pin that silently never persists, and the reverse would
  * hide a tier their CLI accepts. That test runs in the SERVER workspace, which has
@@ -102,26 +102,19 @@ export const normalizeReviewerSlug = (reviewer) => {
 
 // The ladder for one reviewer token, or `null` when it takes no effort. Accepts
 // the `gemini` alias and `@username` tokens (both → null for the latter).
-// For `codex` reviewers, the ladder is gated on the pinned model: gpt-6 family
-// models reject `minimal`. Pass the model id to get the right tier set for that
-// model; omit it to get the default static ladder.
+// For `codex` reviewers, the ladder is gated on the pinned model. Pass the model
+// id to get the server-owned tier set for that model; omit it to get the default
+// static ladder.
 export const reviewerEffortLevels = (reviewer, model = null) => {
   const slug = normalizeReviewerSlug(reviewer);
   if (!slug) return null;
 
   const base = REVIEWER_EFFORT_LEVELS[slug] || null;
 
-  // For codex, gate minimal on gpt-6 family models that reject it.
-  // Mirror of codexEffortLevelsForModel from server/lib/providerModels.js.
+  // For codex, use the server's model-gated ladder so the picker and CLI stay
+  // aligned as supported model families change.
   if (slug === 'codex' && model && base) {
-    const modelId = String(model || '').trim().toLowerCase();
-    // gpt-6 and later don't accept minimal; gpt-5.6 and earlier do
-    if (/^gpt-[6-9]([.-]|$)/.test(modelId)) {
-      // Check if it's an ultra model (gpt-5.6 or gpt-6-astra)
-      const isUltra = ['gpt-5.6', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-6-astra'].includes(modelId);
-      const ultraLadder = isUltra ? CODEX_ULTRA_EFFORT_LEVELS : CODEX_EFFORT_LEVELS;
-      return ultraLadder.filter(l => l !== 'minimal');
-    }
+    return codexEffortLevelsForModel(model);
   }
 
   return base;

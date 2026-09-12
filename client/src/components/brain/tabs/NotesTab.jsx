@@ -83,9 +83,57 @@ export default function NotesTab() {
   const searchRef = useRef(null);
   const editorRef = useRef(null);
 
+  // Invalidate work at the interaction boundary, including A → B → A switches.
+  const vaultScopeRef = useRef(0);
+  const selectSeqRef = useRef(0);
+  const scanSeqRef = useRef(0);
+  const searchSeqRef = useRef(0);
+  const mountedRef = useRef(false);
+  const isCurrentScope = scope => mountedRef.current && vaultScopeRef.current === scope;
+
+  const clearSelection = () => {
+    selectSeqRef.current += 1;
+    setSelectedNote(null);
+    setNoteContent('');
+    setEditing(false);
+    setLoadingNote(false);
+    dismissForce();
+    cancelDelete();
+  };
+
+  const selectVault = vaultId => {
+    vaultScopeRef.current += 1;
+    scanSeqRef.current += 1;
+    searchSeqRef.current += 1;
+    clearSelection();
+    setNotes([]);
+    setTotalNotes(0);
+    setSkippedNotes(0);
+    setFolders([]);
+    setTags([]);
+    setShowTags(false);
+    setExpandedFolders(new Set());
+    setSearchQuery('');
+    setSearchResults(null);
+    setFolderFilter('');
+    setShowCreateForm(false);
+    setNewNotePath('');
+    setCreating(false);
+    setScanning(false);
+    setSelectedVaultId(vaultId);
+  };
+
   // Load vaults on mount
   useEffect(() => {
+    mountedRef.current = true;
     loadVaults();
+    return () => {
+      mountedRef.current = false;
+      vaultScopeRef.current += 1;
+      selectSeqRef.current += 1;
+      scanSeqRef.current += 1;
+      searchSeqRef.current += 1;
+    };
   }, []);
 
   // Load notes when vault changes
@@ -96,11 +144,13 @@ export default function NotesTab() {
     }
   }, [selectedVaultId, folderFilter]);
 
-  const loadVaults = async () => {
+  const loadVaults = async (preferredVaultId) => {
+    const scope = vaultScopeRef.current;
     const data = await api.getNotesVaults().catch(() => []);
+    if (!isCurrentScope(scope)) return;
     setVaults(data);
-    if (data.length > 0 && !selectedVaultId) {
-      setSelectedVaultId(data[0].id);
+    if (data.length > 0 && (preferredVaultId || !selectedVaultId)) {
+      selectVault(preferredVaultId || data[0].id);
     }
     if (data.length === 0) {
       setShowVaultSetup(true);
@@ -110,14 +160,18 @@ export default function NotesTab() {
   };
 
   const detectAvailableVaults = async () => {
+    const scope = vaultScopeRef.current;
     const detected = await api.detectNotesVaults().catch(() => []);
-    setDetectedVaults(detected);
+    if (isCurrentScope(scope)) setDetectedVaults(detected);
   };
 
   const loadNotes = async () => {
     if (!selectedVaultId) return;
+    const scope = vaultScopeRef.current;
+    const sequence = ++scanSeqRef.current;
     setScanning(true);
     const data = await api.scanNotesVault(selectedVaultId, { folder: folderFilter, limit: 500 }).catch(() => null);
+    if (!isCurrentScope(scope) || sequence !== scanSeqRef.current) return;
     if (data) {
       setNotes(data.notes);
       setTotalNotes(data.total);
@@ -128,32 +182,38 @@ export default function NotesTab() {
 
   const loadFolders = async () => {
     if (!selectedVaultId) return;
+    const scope = vaultScopeRef.current;
     const data = await api.getNotesVaultFolders(selectedVaultId).catch(() => null);
-    if (data?.folders) setFolders(data.folders);
+    if (isCurrentScope(scope) && data?.folders) setFolders(data.folders);
   };
 
   const loadTags = async () => {
     if (!selectedVaultId) return;
+    const scope = vaultScopeRef.current;
     const data = await api.getNotesVaultTags(selectedVaultId).catch(() => null);
-    if (data?.tags) setTags(data.tags);
+    if (isCurrentScope(scope) && data?.tags) setTags(data.tags);
   };
 
   const handleAddVault = async (name, path) => {
+    const scope = vaultScopeRef.current;
     setAddingVault(true);
     const result = await api.addNotesVault({ name, path }).catch(() => null);
+    if (!isCurrentScope(scope)) return;
     setAddingVault(false);
     if (result) {
       toast.success(`Added vault: ${result.name}`);
       setShowVaultSetup(false);
-      await loadVaults();
-      setSelectedVaultId(result.id);
+      await loadVaults(result.id);
     }
   };
 
   const handleSelectNote = async (notePath) => {
+    const scope = vaultScopeRef.current;
+    clearSelection();
+    const sequence = selectSeqRef.current;
     setLoadingNote(true);
-    setEditing(false);
     const data = await api.getNote(selectedVaultId, notePath).catch(() => null);
+    if (!isCurrentScope(scope) || sequence !== selectSeqRef.current) return;
     if (data) {
       setSelectedNote(data);
       setNoteContent(data.content);
@@ -164,8 +224,10 @@ export default function NotesTab() {
   // `force` is ONLY ever passed by <ForceSaveNoteRow>'s confirm (#3717) — never
   // by the Save button or ⌘S.
   const handleSaveNote = async (options) => {
+    const scope = vaultScopeRef.current;
+    const sequence = selectSeqRef.current;
     const data = await save(options);
-    if (!data) return;
+    if (!data || !isCurrentScope(scope) || sequence !== selectSeqRef.current) return;
     setSelectedNote(data);
     setEditing(false);
     toast.success('Note saved');
@@ -174,32 +236,41 @@ export default function NotesTab() {
 
   const handleCreateNote = async () => {
     if (!newNotePath.trim()) return;
+    const scope = vaultScopeRef.current;
+    const sequence = selectSeqRef.current;
     setCreating(true);
     const data = await api.createNote(selectedVaultId, newNotePath.trim()).catch(() => null);
+    if (!isCurrentScope(scope)) return;
     setCreating(false);
     if (data) {
       toast.success(`Created: ${data.name}`);
       setShowCreateForm(false);
       setNewNotePath('');
       loadNotes();
-      handleSelectNote(data.path);
+      if (sequence === selectSeqRef.current) handleSelectNote(data.path);
     }
   };
 
   const handleDeleteNote = async (notePath) => {
+    const scope = vaultScopeRef.current;
+    const sequence = selectSeqRef.current;
     await api.deleteNote(selectedVaultId, notePath).catch(() => null);
+    if (!isCurrentScope(scope)) return;
     toast.success('Note deleted');
     cancelDelete();
     setNotes(prev => prev.filter(n => n.path !== notePath));
-    if (selectedNote?.path === notePath) {
-      setSelectedNote(null);
+    if (sequence === selectSeqRef.current && selectedNote?.path === notePath) {
+      clearSelection();
     }
   };
 
   const handleSearch = useCallback(async () => {
     if (!searchQuery.trim() || !selectedVaultId) return;
+    const scope = vaultScopeRef.current;
+    const sequence = ++searchSeqRef.current;
     setSearching(true);
     const data = await api.searchNotes(selectedVaultId, searchQuery.trim()).catch(() => null);
+    if (!mountedRef.current || scope !== vaultScopeRef.current || sequence !== searchSeqRef.current) return;
     setSearching(false);
     if (data) {
       setSearchResults(data);
@@ -207,6 +278,7 @@ export default function NotesTab() {
   }, [searchQuery, selectedVaultId]);
 
   const clearSearch = () => {
+    searchSeqRef.current += 1;
     setSearchQuery('');
     setSearchResults(null);
   };
@@ -272,12 +344,7 @@ export default function NotesTab() {
             <select
               aria-label="Vault"
               value={selectedVaultId || ''}
-              onChange={e => {
-                setSelectedVaultId(e.target.value);
-                setSelectedNote(null);
-                setSearchResults(null);
-                setFolderFilter('');
-              }}
+              onChange={e => selectVault(e.target.value)}
               className="flex-1 min-w-0 min-h-[44px] bg-port-bg border border-port-border rounded px-2 py-1.5 text-sm text-white"
             >
               {vaults.map(v => (
@@ -463,7 +530,7 @@ export default function NotesTab() {
             {/* Note header */}
             <div className="px-4 py-3 border-b border-port-border flex items-center gap-3">
               <button
-                onClick={() => setSelectedNote(null)}
+                onClick={clearSelection}
                 aria-label="Back"
                 className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1 rounded hover:bg-port-card text-gray-400 hover:text-white md:hidden"
               >

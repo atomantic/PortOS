@@ -22,7 +22,7 @@ export const AUDIT_DISCOVERY = Object.freeze({
   simplify: 'Scan source exports, callers and repeated blocks across the repository; rank proven dead subsystems and duplicated behavior by maintenance cost and drift.',
   'module-hygiene': 'Inventory module sizes, imports, responsibilities and catalogs across source roots; inspect the largest responsibility tangles and most reused missing abstractions.',
   'api-contract': 'Inventory all routes, schemas and clients; compare request/response and version contracts, prioritizing destructive writes and widely consumed APIs.',
-  'react-lifecycle': 'Scan effects, subscriptions, async state updates and shared hooks across components; rank resource leaks, stale writes and corrupted user state.',
+  'react-lifecycle': 'Identify the UI runtime, then scan resource lifetimes, subscriptions, async state updates and shared state across views; rank resource leaks, stale writes and corrupted user state.',
   observability: 'Inventory critical workflows and their failure/status signals; rank invisible data loss, silent failures and operations that cannot be diagnosed.',
   copy: 'Inventory shared messages, destructive confirmations, setup and empty/error screens; rank wording that causes wrong actions or prevents task completion.',
   'better-complexity': 'Run an available language-aware complexity analyzer over all first-party source roots. Otherwise use repository-wide branching searches to shortlist functions, then count decision points manually. Publish the top measured functions and counts; file length is only a discovery hint.',
@@ -50,6 +50,14 @@ Allowed coverage: broad, partial, unavailable, not-applicable. Allowed confidenc
 }
 
 export const appQualityQuerySchema = z.object({ includeQuality: z.enum(['true', 'false']).optional() });
+
+// The list endpoint has two intentionally narrow projections in addition to
+// its frozen default response: the sidebar/navigation shape and the PM2-backed
+// peer-probe shape. Keep the detail endpoint on appQualityQuerySchema so a
+// view flag cannot silently change its response contract.
+export const appListQuerySchema = appQualityQuerySchema.extend({
+  view: z.enum(['nav', 'probe']).optional(),
+});
 
 export const auditQualityReportSchema = z.object({
   version: z.literal(1),
@@ -132,3 +140,7 @@ export function compareQualityRecords(a, b) {
   return Date.parse(a.assessedAt) - Date.parse(b.assessedAt)
     || (a.measurementId || a.agentId || '').localeCompare(b.measurementId || b.agentId || '');
 }
+
+export const appQualityFederationQuerySchema = appQualityHistoryQuerySchema.extend({
+  repository: z.string().regex(/^[a-f0-9]{64}$/).optional(),
+});

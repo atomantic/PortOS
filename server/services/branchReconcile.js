@@ -23,6 +23,7 @@
  */
 
 import { stat } from 'node:fs/promises';
+import { isHostShuttingDown } from '../lib/hostShutdown.js';
 import { getBranches, getDefaultBranch, hasBranchMergeEvidence, deleteBranch } from './git.js';
 import { execGit } from '../lib/execGit.js';
 import { listWorktrees, forceRemoveWorktreeDir, classifyWorktreeDirt, reapMergedWorktrees } from './worktreeManager.js';
@@ -248,7 +249,9 @@ async function getOpenPrsByHead(repoPath, providedOrigin) {
     '--limit', String(PR_LIST_LIMIT),
     '--json', 'number,headRefName,mergeable,isDraft,url'
   ], undefined, { backoffKey: repoSpec }).catch((err) => {
-    console.error(`❌ branch-reconcile: gh pr list failed for ${repoSpec}: ${err.message}`);
+    if (!isHostShuttingDown() && err.name !== 'AbortError') {
+      console.error(`❌ branch-reconcile: gh pr list failed for ${repoSpec}: ${err.message}`);
+    }
     return null;
   });
   if (raw === null) return null;
@@ -557,13 +560,14 @@ export function parseRemoteHeads(stdout) {
  */
 export async function listRemoteHeads(repoPath) {
   const res = await execGit(['ls-remote', '--heads', RECONCILED_REMOTE], repoPath, { ignoreExitCode: true })
-    .catch((err) => ({ error: err.message }));
+    .catch((err) => ({ error: err.message, signal: err.signal }));
   if (!res || res.exitCode !== 0) {
+    if (isHostShuttingDown() || res?.signal === 'SIGTERM') return null;
     // One log line serves every caller across every managed app, so it has to
     // name the repo that went unread and git's own reason — without both, a
     // network blip, an unauthenticated remote and a repo with no `origin` at
     // all are one indistinguishable line and the operator has nothing to act on.
-    const why = (res?.error || res?.stderr || '').trim().split('\n')[0] || `exit ${res?.exitCode}`;
+    const why = (res?.error || res?.stderr || '').trim().split('\n')[0] || (res?.signal ? `signal ${res.signal}` : `exit ${res?.exitCode}`);
     console.error(`❌ branch-reconcile: git ls-remote ${RECONCILED_REMOTE} failed in ${repoPath} (${why}) — remote branch state unknown this cycle`);
     return null;
   }

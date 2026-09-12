@@ -481,6 +481,9 @@ export const RESTORABLE_FIELDS = Object.freeze({
   // their own helpers). The whole manifest is hashed for DETECTION by
   // contentHashForRecord (no scalar narrowing); this set is what the Conflicts UI
   // offers for restore. `writersRoomWork` matches the record kind.
+  writersRoomCharacters: ['characters'],
+  writersRoomPlaces: ['places'],
+  writersRoomObjects: ['objects'],
   writersRoomWork: ['title', 'kind', 'status', 'folderId', 'imageStyle', 'liveMode'],
   // Writers Room folders (#1645): the user-authored structural fields the merge
   // can restore through `restoreFolder`. Server-owned / structural fields are

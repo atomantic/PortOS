@@ -21,6 +21,8 @@ function withNoChangeAuditGuidance(guidance, noChangeSuccess) {
     : guidance;
 }
 
+const RELEASE_FLOW_GUIDANCE = 'Follow the bundled release workflow through its final verification and report. It owns release delivery; do not stop at a prepared commit or hand publication back to PortOS. If it cannot complete, report INCOMPLETE and the first unverified checkpoint instead of claiming a successful release.';
+
 const REASONING_ONLY_BULLET = '**This is a reasoning-only task.** The worktree is discarded on exit — do NOT commit, push, merge, or open a PR. Write your result to the completion sentinel (see the Completion section) and stop.';
 const DISCARD_WORKTREE_HYGIENE = '- **Do NOT commit, push, or open a PR.** This worktree is discarded on exit — your only output is the completion sentinel (see the Completion section above).';
 
@@ -76,6 +78,7 @@ export function buildCompletionGuidelineBullet({
     [COMPLETION_MODES.ACTION_OUTPUT]: () => '**This task produces no code output.** Its result is the API request or command your instructions describe (a PortOS endpoint call, a filed tracker issue, …) — do NOT run `/do:push`, `/do:pr`, `/simplify`, `git commit`, `git push`, or open a PR. Write the completion sentinel (see the Completion section) and stop.',
     [COMPLETION_MODES.DISCARD_WORKTREE]: () => REASONING_ONLY_BULLET,
     [COMPLETION_MODES.CLAIM_FLOW]: () => '**This is a self-managed claim flow.** Follow the claim prompt above through its phase-specific worktree, PR/MR, review, merge or human-handoff, and cleanup steps. Do NOT stop after committing or hand the lifecycle back to PortOS.',
+    [COMPLETION_MODES.RELEASE_FLOW]: () => RELEASE_FLOW_GUIDANCE,
     [COMPLETION_MODES.READ_ONLY]: () => '**This is a read-only task.** Do NOT commit, push, or modify any files in the repository. Only read data and generate reports.',
     // A PR follow-up already carries its own PRIMARY OBJECTIVE section with the
     // full procedure, and its cleanup runs with `skipMerge`. The generic "your
@@ -118,6 +121,7 @@ const NO_COMMIT_TARGET_MODES = new Set([
   COMPLETION_MODES.ACTION_OUTPUT,
   COMPLETION_MODES.DISCARD_WORKTREE,
   COMPLETION_MODES.CLAIM_FLOW,
+  COMPLETION_MODES.RELEASE_FLOW,
   COMPLETION_MODES.READ_ONLY,
 ]);
 
@@ -178,6 +182,10 @@ export function buildFallbackCompletionInstructions({
     [COMPLETION_MODES.READ_ONLY]: () => ({
       step4: 'Do NOT commit, push, or modify any files — this is a read-only task; read what you need and report your findings',
       gitHygiene: '- **Do NOT commit, push, or modify any files.** This is a read-only task — read what you need and report your findings.',
+    }),
+    [COMPLETION_MODES.RELEASE_FLOW]: () => ({
+      step4: RELEASE_FLOW_GUIDANCE,
+      gitHygiene: `- ${RELEASE_FLOW_GUIDANCE}`,
     }),
     [COMPLETION_MODES.REVIEW_LOOP_FOLLOW_UP]: () => ({
       step4: 'Follow the follow-up section above — push any fixes you make to the PR branch; a run that needed no fix makes no commit and that is a success, not a miss',
@@ -375,6 +383,16 @@ export function buildActionOutputCompletionSection({ isTui = false, sentinelPath
   ].join('\n');
 }
 
+/** The release procedure is the deliverable; the sentinel only records its verified outcome. */
+export function buildReleaseFlowCompletionSection({ isTui = false, sentinelPath = null } = {}) {
+  const lines = ['## Release Workflow Handoff', RELEASE_FLOW_GUIDANCE];
+  if (isTui && sentinelPath) {
+    lines.push('', 'After the workflow reaches its documented final outcome, write that outcome to the completion sentinel and stop:', '',
+      ...buildSentinelWriteSteps(1, sentinelPath, '   ## Release outcome\n   <verified release URL, no-release-needed result, or INCOMPLETE with its first unverified checkpoint>'));
+  }
+  return lines.join('\n');
+}
+
 /** Audit reports are a deliverable even when the run only files issues. */
 export function buildAuditOutputCompletionSection(task, sentinelPath) {
   const category = resolveTaskHookType(task);
@@ -415,12 +433,18 @@ export function claimReviewersCsv(task, codeReviewDefaults, defaultReviewers) {
  *
  * @param {string} [reviewersCsv] - the emitted `--review-with` token list to pin;
  *   empty suppresses the block (`buildReviewerPinNote` returns '').
+ * @param {boolean} [leavePrOpen] - keep reviews and CI, but hand off before merge.
  */
-export function buildClaimFlowCompletionSection({ isTui = false, sentinelPath = null, reviewersCsv = '' } = {}) {
+export function buildClaimFlowCompletionSection({ isTui = false, sentinelPath = null, reviewersCsv = '', leavePrOpen = false } = {}) {
   const pin = buildReviewerPinNote(reviewersCsv);
   const lines = [
     ...(pin ? [pin, ''] : []),
     '## Claim Workflow Handoff',
+    ...(leavePrOpen ? [
+      'PR completion policy: LEAVE OPEN for further human review. This overrides any merge, auto-merge, issue-close, or merged-branch cleanup instruction in the claim prompt and delegated slashdo commands. Do not pass --merge, enable auto-merge, merge the PR/MR, or close the issue/ticket.',
+      'Complete implementation, configured reviews, publication, and CI checks as usual. Once those gates pass, leave the PR/MR open, report its URL and review/CI results, and preserve the claim markers, issue state, branch, and worktree for the human handoff. This is a successful completion; do not wait for a human or require MERGED status. Apply this policy to every child claim in a swarm.',
+      '',
+    ] : []),
     'This is a self-managed claim flow. The claim prompt above owns its claim worktree, branch, PR/MR, review, merge or human-handoff, and cleanup. Follow its phase-specific exit conditions — do NOT stop after a code commit or hand the lifecycle back to PortOS.',
     '',
     'Required-review publication rule: if a required local reviewer cannot return a verdict because of a missing CLI, quota/provider or transport failure, timeout, malformed/empty response, or no-verdict result, record the local phase as `review-blocked` rather than substituting a self-review. Still push and open the PR/MR, post a comment saying it is intentionally left open and will not be merged until the required review completes, preserve the claim markers and branch, and stop before merge. A substantive rejection, failed build/test, unpushed fix, or state/publication failure still blocks publication.',
@@ -471,6 +495,7 @@ export function buildAutoMergeCommitStep(baseBranch = null) {
  * apart from their non-slashdo equivalents.
  */
 export function worktreeCommitGuidance({ isTui, mode = null, canTypeSlashCommands = false, rendersInlinePrLifecycle = false, isWorktreeOnExistingBranch, willOpenPR, discardWorktree, claimFlow = false, noChangeSuccess = false }) {
+  if (mode === COMPLETION_MODES.RELEASE_FLOW) return RELEASE_FLOW_GUIDANCE;
   if (discardWorktree) return DISCARD_WORKTREE_NOTE;
   if (claimFlow) return 'The claim workflow in the Completion section owns the push, PR/MR, review, merge or human-handoff, and cleanup steps.';
   if (isTui) return withNoChangeAuditGuidance('Commit your changes to this branch — see **Completion Workflow** below.', noChangeSuccess);

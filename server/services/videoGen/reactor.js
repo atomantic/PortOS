@@ -258,7 +258,7 @@ export async function generateVideo({
   runReactorVideo(job, jobId, {
     apiKey, ...request, sourceImagePath, outputPath, filename, meta,
   }).catch((err) => {
-    console.log(`❌ reactor video run failed [${jobId.slice(0, 8)}]: ${err?.message}`);
+    console.error(`❌ reactor video run failed [${jobId.slice(0, 8)}]: ${err?.message}`);
   });
 
   return {

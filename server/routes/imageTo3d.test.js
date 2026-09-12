@@ -274,10 +274,27 @@ describe('image-to-3d routes', () => {
   });
 });
 
-describe('GET /trellis2/install (SSE)', () => {
+describe('POST /trellis2/install (SSE)', () => {
+  it('keeps both GET install URLs read-only and returns target status', async () => {
+    trellis2.installTrellis2.mockClear();
+    trellis2.isTrellis2Installed.mockReturnValue(false);
+    const canonical = await request(makeApp()).get('/api/image-to-3d/targets/trellis2/install');
+    const legacy = await request(makeApp()).get('/api/image-to-3d/trellis2/install');
+    expect(canonical.status).toBe(200);
+    expect(canonical.body.target).toMatchObject({ id: 'trellis2', installed: false });
+    expect(legacy.body.target).toMatchObject({ id: 'trellis2', installed: false });
+    expect(trellis2.installTrellis2).not.toHaveBeenCalled();
+  });
+
+  it('streams the canonical POST target install route', async () => {
+    trellis2.isTrellis2Installed.mockReturnValueOnce(false);
+    const res = await request(makeApp()).post('/api/image-to-3d/targets/trellis2/install');
+    expect(sseFrames(res.text).at(-1)).toMatchObject({ type: 'complete' });
+  });
+
   it('streams stage → complete on the happy path', async () => {
     trellis2.isTrellis2Installed.mockReturnValueOnce(false);
-    const res = await request(makeApp()).get('/api/image-to-3d/trellis2/install');
+    const res = await request(makeApp()).post('/api/image-to-3d/trellis2/install');
     const frames = sseFrames(res.text);
     expect(frames).toContainEqual({ type: 'stage', stage: 'clone', message: 'git clone …' });
     expect(frames.at(-1)).toMatchObject({ type: 'complete' });
@@ -292,7 +309,7 @@ describe('GET /trellis2/install (SSE)', () => {
     trellis2.probeMetalToolchain.mockResolvedValueOnce({
       available: false, installable: true, hint: 'it will be downloaded',
     });
-    const res = await request(makeApp()).get('/api/image-to-3d/trellis2/install');
+    const res = await request(makeApp()).post('/api/image-to-3d/trellis2/install');
     expect(trellis2.installTrellis2).toHaveBeenCalledWith(
       expect.objectContaining({ installMetalToolchain: true }),
     );
@@ -307,7 +324,7 @@ describe('GET /trellis2/install (SSE)', () => {
     trellis2.probeMetalToolchain.mockResolvedValueOnce({
       available: false, installable: false, blocker: 'requires-xcode', hint: 'install Xcode',
     });
-    const res = await request(makeApp()).get('/api/image-to-3d/trellis2/install');
+    const res = await request(makeApp()).post('/api/image-to-3d/trellis2/install');
     expect(sseFrames(res.text).find((f) => f.stage === 'preflight')?.message).toContain('install Xcode');
     // A warning, not a refusal — geometry is unaffected — and no step that would fail.
     expect(trellis2.installTrellis2).toHaveBeenCalledWith(
@@ -318,7 +335,7 @@ describe('GET /trellis2/install (SSE)', () => {
   it('adds no toolchain step or warning when it is already present', async () => {
     trellis2.installTrellis2.mockClear();
     trellis2.isTrellis2Installed.mockReturnValueOnce(false);
-    const res = await request(makeApp()).get('/api/image-to-3d/trellis2/install');
+    const res = await request(makeApp()).post('/api/image-to-3d/trellis2/install');
     expect(sseFrames(res.text).find((f) => f.stage === 'preflight')).toBeUndefined();
     expect(trellis2.installTrellis2).toHaveBeenCalledWith(
       expect.objectContaining({ installMetalToolchain: false }),
@@ -330,7 +347,7 @@ describe('GET /trellis2/install (SSE)', () => {
     // existing install once the Metal Toolchain is present (#2952).
     trellis2.installTrellis2.mockClear();
     trellis2.isTrellis2Installed.mockReturnValueOnce(true);
-    const res = await request(makeApp()).get('/api/image-to-3d/trellis2/install?repair=1');
+    const res = await request(makeApp()).post('/api/image-to-3d/trellis2/install?repair=1');
     expect(trellis2.installTrellis2).toHaveBeenCalled();
     expect(sseFrames(res.text).at(-1)).toMatchObject({ type: 'complete' });
   });
@@ -340,7 +357,7 @@ describe('GET /trellis2/install (SSE)', () => {
     trellis2.probeTrellis2TextureBake.mockResolvedValueOnce({
       quality: 'fallback', missing: ['mtldiffrast'], degradedQuality: [], modules: {}, help: 'repair me',
     });
-    const res = await request(makeApp()).get('/api/image-to-3d/trellis2/install');
+    const res = await request(makeApp()).post('/api/image-to-3d/trellis2/install');
     const frames = sseFrames(res.text);
     const warning = frames.find((f) => f.stage === 'verify' && f.type === 'log')?.message;
     expect(warning).toContain('repair me');
@@ -356,7 +373,7 @@ describe('GET /trellis2/install (SSE)', () => {
     // not just whatever the server process happened to be launched with.
     trellis2.installTrellis2.mockClear();
     trellis2.isTrellis2Installed.mockReturnValueOnce(false);
-    await request(makeApp()).get('/api/image-to-3d/trellis2/install');
+    await request(makeApp()).post('/api/image-to-3d/trellis2/install');
     expect(trellis2.installTrellis2).toHaveBeenCalledWith(expect.objectContaining({
       env: expect.objectContaining({ HF_TOKEN: 'hf_test', HUGGINGFACE_HUB_TOKEN: 'hf_test' }),
     }));
@@ -368,7 +385,7 @@ describe('GET /trellis2/install (SSE)', () => {
     trellis2.installTrellis2.mockClear();
     trellis2.isTrellis2Installed.mockReturnValueOnce(false);
     hfChildEnv.mockRejectedValueOnce(new Error('settings.json is not valid JSON'));
-    const res = await request(makeApp()).get('/api/image-to-3d/trellis2/install');
+    const res = await request(makeApp()).post('/api/image-to-3d/trellis2/install');
     const frames = sseFrames(res.text);
     expect(frames.at(-1)).toMatchObject({
       type: 'error',
@@ -381,7 +398,7 @@ describe('GET /trellis2/install (SSE)', () => {
   it('short-circuits with complete when already installed (no install spawned)', async () => {
     trellis2.installTrellis2.mockClear();
     trellis2.isTrellis2Installed.mockReturnValueOnce(true);
-    const res = await request(makeApp()).get('/api/image-to-3d/trellis2/install');
+    const res = await request(makeApp()).post('/api/image-to-3d/trellis2/install');
     const frames = sseFrames(res.text);
     expect(frames.at(-1)).toMatchObject({ type: 'complete', message: expect.stringMatching(/already/i) });
     expect(trellis2.installTrellis2).not.toHaveBeenCalled();
@@ -396,7 +413,7 @@ describe('GET /trellis2/install (SSE)', () => {
       )),
       kill: vi.fn(),
     }));
-    const res = await request(makeApp()).get('/api/image-to-3d/trellis2/install');
+    const res = await request(makeApp()).post('/api/image-to-3d/trellis2/install');
     const frames = sseFrames(res.text);
     expect(frames.at(-1)).toMatchObject({
       type: 'error',
@@ -414,7 +431,7 @@ describe('GET /trellis2/install (SSE)', () => {
       )),
       kill: vi.fn(),
     }));
-    const res = await request(makeApp()).get('/api/image-to-3d/trellis2/install');
+    const res = await request(makeApp()).post('/api/image-to-3d/trellis2/install');
     const frames = sseFrames(res.text);
     expect(frames.at(-1)).toMatchObject({ type: 'error', message: expect.stringMatching(/exited 1$/) });
     expect(frames.at(-1).message).not.toMatch(/network hiccup/i);
@@ -424,7 +441,7 @@ describe('GET /trellis2/install (SSE)', () => {
     trellis2.installTrellis2.mockClear();
     trellis2.isTrellis2Installed.mockReturnValueOnce(false);
     targets.unavailableReason.mockReturnValueOnce('requires-apple-silicon');
-    const res = await request(makeApp()).get('/api/image-to-3d/trellis2/install');
+    const res = await request(makeApp()).post('/api/image-to-3d/trellis2/install');
     const frames = sseFrames(res.text);
     // The human label, not the raw kebab-case reason code (#3579).
     expect(frames.at(-1)).toMatchObject({ type: 'error', message: expect.stringMatching(/Requires an Apple Silicon Mac/) });

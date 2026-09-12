@@ -4,8 +4,8 @@ Living reference of every third-party dependency in PortOS, why it's kept, and w
 
 That "every dependency" claim is enforced by `docs/deps-doc.test.js` (run by `cd server && npm test`): adding a dependency to any workspace manifest without a row here fails the suite, and a Quick Reference row naming a package no manifest declares fails too unless its verdict records the removal (`REMOVED` / `REPLACED`).
 
-**Last audited:** 2026-09-02 (scoped: `pdf-lib` → `@cantoo/pdf-lib`, issue #5672; parity sweep that added the missing `playwright-core` row and put this document under test — `docs/deps-doc.test.js`, issue #5708); prior 2026-08-04 (scoped audit of the `keyv`/`cacheable` supply-chain compromise); prior follow-up 2026-07-14 (issue #2547), prior full audit 2026-04-28 (default mode), tables corrected 2026-07-01 during a docs audit.
-**Verdict:** All dependencies justified. The 2026-08-04 audit replaced the entire `eslint` stack with `@biomejs/biome`, dropping 110 net client packages including the `file-entry-cache → flat-cache → keyv` chain named in the August 2026 Shai-Hulud npm compromise (PortOS held safe versions throughout — see the detailed finding below). The same pass closed a latent hole where `ignore-scripts=true` was only active for repo-root installs, not for any workspace install or CI. Since the last full audit: `sax` was removed (replaced with an owned parser, issue #1824), `portos-ai-toolkit` was vendored in-tree (`server/lib/aiToolkit/`), and monolithic `googleapis` was replaced with scoped `@googleapis/*` packages. The 2026-07-14 follow-up bumped `kokoro-js` to its latest patch `1.2.1` (still on maintenance watch — no publish since 2025-05) and aligned the dual `pm2` pins (root + server both `7.0.4`). The 2026-09-02 follow-up replaced abandoned `pdf-lib` (no publish since 2022-05) with the maintained MIT fork `@cantoo/pdf-lib@2.9.1` — a same-public-API swap across the four export paths, done while `npm audit` was still clean rather than under advisory pressure.
+**Last audited:** 2026-09-12 (scoped: remove the redundant direct `google-auth-library`, issue #7013); prior 2026-09-11 (scoped: drop `@scalar/api-reference-react`, issue #7012); prior 2026-09-02 (scoped: `pdf-lib` → `@cantoo/pdf-lib`, issue #5672; parity sweep that added the missing `playwright-core` row and put this document under test — `docs/deps-doc.test.js`, issue #5708); prior 2026-08-04 (scoped audit of the `keyv`/`cacheable` supply-chain compromise); prior follow-up 2026-07-14 (issue #2547), prior full audit 2026-04-28 (default mode), tables corrected 2026-07-01 during a docs audit.
+**Verdict:** All remaining dependencies justified. The 2026-09-12 follow-up removed the direct `google-auth-library@11.0.2` pin (issue #7013); Google OAuth now uses the copy already pulled transitively by the scoped Calendar SDK, so this is a manifest/lockfile cleanup rather than a reduction of the transitive tree. The 2026-09-11 follow-up removed `@scalar/api-reference-react` (issue #7012) — the heaviest client dependency, ~half the lockfile and 3.24 MB of dist assets, including Vue 3 and the Vercel AI SDK advisory GHSA-866g-f22w-33x8. The REST Reference tab now lists OpenAPI operations natively. The 2026-08-04 audit replaced the entire `eslint` stack with `@biomejs/biome`, dropping 110 net client packages including the `file-entry-cache → flat-cache → keyv` chain named in the August 2026 Shai-Hulud npm compromise (PortOS held safe versions throughout — see the detailed finding below). The same pass closed a latent hole where `ignore-scripts=true` was only active for repo-root installs, not for any workspace install or CI. Since the last full audit: `sax` was removed (replaced with an owned parser, issue #1824), `portos-ai-toolkit` was vendored in-tree (`server/lib/aiToolkit/`), and monolithic `googleapis` was replaced with scoped `@googleapis/*` packages. The 2026-07-14 follow-up bumped `kokoro-js` to its latest patch `1.2.1` (still on maintenance watch — no publish since 2025-05) and aligned the dual `pm2` pins (root + server both `7.0.4`). The 2026-09-02 follow-up replaced abandoned `pdf-lib` (no publish since 2022-05) with the maintained MIT fork `@cantoo/pdf-lib@2.9.1` — a same-public-API swap across the four export paths, done while `npm audit` was still clean rather than under advisory pressure.
 
 ## Audit Methodology
 
@@ -31,8 +31,8 @@ Before removing a Tier 3 candidate, run a transitive-dep check (`npm ls <pkg>`).
 | `@googleapis/gmail` | 1 | KEEP | Messages/Gmail integration | Scoped official Google SDK |
 | `chokidar` | 1 | KEEP | server file watching | Mature cross-platform file-system watcher used by server services |
 | `express` | 1 | KEEP | `server/index.js` + routes | Framework |
-| `google-auth-library` | 1 | KEEP | Google OAuth | Pairs with `@googleapis/*` |
-| `kokoro-js` | 2 | KEEP | `server/services/voice/tts-kokoro.js` | Only pure-JS in-process TTS; replacement = Python subprocess + pooling |
+| `google-auth-library` | — | REMOVED (direct) | Google OAuth | Consolidated under `@googleapis/calendar`'s transitive `googleapis-common` dependency |
+| `kokoro-js` | 2 | REMOVED | Former in-process TTS | Replaced by the in-tree Piper backend; existing settings migrate |
 | `node-pty` | 1 | KEEP | shell/terminal services | Native PTY binding (N-API) |
 | `pg` | 1 | KEEP | Postgres access | Official `pg` driver |
 | `playwright-core` | 1 | KEEP | `server/services/fableLoom/falVideoAutomation.js` — fal.ai scene video automation | Drives the PortOS-managed browser over CDP (`chromium.connectOverCDP`). `-core` rather than the full `playwright` package deliberately: the browser is provisioned separately by `npm run setup:browser`, so the bundled browser download would be dead weight |
@@ -52,9 +52,9 @@ Before removing a Tier 3 candidate, run a transitive-dep check (`npm ls <pkg>`).
 | `@dnd-kit/sortable` | 1 | KEEP | drag/drop | |
 | `@react-three/drei` | 1 | KEEP | CyberCity 3D | Three.js helpers |
 | `@react-three/fiber` | 1 | KEEP | CyberCity 3D | React renderer for Three |
-| `@scalar/api-reference-react` | 2 | KEEP | Dev Tools → API Explorer | Interactive OpenAPI reference UI. Heaviest client dependency by far — 261/599 packages, 3.24 MB of dist assets. Kept for lack of a maintained lighter alternative; bounded by a budget test. See detailed finding |
+| `@scalar/api-reference-react` | — | REMOVED | Dev Tools → API Explorer | 2026-09-11 → native REST Reference tab (issue #7012). Was the heaviest client dep (~half the lockfile, 3.24 MB dist, Vue 3 + Vercel AI SDK). See detailed finding |
 | `@xterm/xterm` | 1 | KEEP | browser terminal | |
-| `@xterm/addon-fit` | 1 | KEEP | xterm sizing | |
+| `@xterm/addon-fit` | — | REMOVED | xterm sizing | 2026-09-12 → in-tree terminal sizing helper (issue #7014) |
 | `@xterm/addon-web-links` | 1 | KEEP | xterm links | |
 | `lucide-react` | 1 | KEEP | icons | Widely-used |
 | `react` | 1 | KEEP | UI | |
@@ -78,7 +78,7 @@ Before removing a Tier 3 candidate, run a transitive-dep check (`npm ls <pkg>`).
 | `vitest` | 1 | KEEP | client test runner | happy-dom environment |
 | `happy-dom` | 1 | KEEP | test DOM | Paired with vitest. Replaced `jsdom` in #6144 — same suite, ~65% less time in `environment` |
 | `@testing-library/jest-dom` | 1 | KEEP | test matchers | |
-| `@testing-library/dom` | 1 | KEEP | DOM test utilities | Foundation for the client Testing Library stack |
+| `@testing-library/dom` | — | REMOVED (direct) | DOM test utilities | 2026-09-12 → imported through `@testing-library/react`; remains in the tree transitively, so this removes only the redundant direct pin |
 | `@testing-library/react` | 1 | KEEP | component tests | |
 | `@testing-library/user-event` | 1 | KEEP | interaction tests | |
 | `rollup-plugin-visualizer` | 2 | KEEP | bundle-size analysis | Dev-only, opt-in |
@@ -100,28 +100,31 @@ Before removing a Tier 3 candidate, run a transitive-dep check (`npm ls <pkg>`).
 - **Grep caveat for the next audit**: `server/services/legacyExport.js` contains a byte sequence that makes `file(1)` classify it as `data`, so plain `grep -r` **silently skips it** — a repo-wide dependency sweep must use `grep -ra`. That is exactly how the fourth import site was missed when this migration was first scoped; it surfaced only as an `ERR_MODULE_NOT_FOUND` in the suite.
 - **Re-audit trigger**: revisit if `@cantoo/pdf-lib` itself goes >12 months without a publish, or on any CVE against it. The fallback is the same shape as the swap in: another maintained fork, or upstream `pdf-lib` if it ever resumes releases.
 
-### `@scalar/api-reference-react` — KEEP (Tier 2)
+### `@scalar/api-reference-react` — REMOVED 2026-09-11 (issue #7012)
 
-- **Usage**: 1 import, in `client/src/components/api-explorer/ScalarReference.jsx`, which `client/src/pages/ApiExplorer.jsx` reaches through a `lazy()` dynamic import on one route (Dev Tools → API Explorer, the REST Reference tab). No other call site.
-- **Measured footprint** (2026-09-02, fresh `npm run build --prefix client`):
-  - **Packages**: 261 of the client's 599 installed packages (44%) are reachable ONLY via Scalar — computed by walking each top-level dependency's transitive closure in `client/package-lock.json` and subtracting every closure that does not include Scalar. Scalar's own subtree is 282. The exclusive set includes an entire second UI framework (`vue`, `radix-vue`, `@headlessui/vue`, `@floating-ui/vue`, `vue-sonner`, `@unhead/vue`) and the Vercel AI SDK (`ai`, `@ai-sdk/gateway`, `@ai-sdk/provider`, `@ai-sdk/provider-utils`, `@ai-sdk/vue`).
-  - **Bundle**: 3.24 MB of dist assets against ~13.0 MB of built JS — `OperationBlock.vue-*.js` (2.21 MB, the single largest chunk in the app, roughly twice the whole three.js vendor bundle), `ScalarReference-*.js` (608 KB), `AgentScalarChatInterface.vue-*.js` (197 KB), `ScalarReference-*.css` (250 KB).
-- **The AI SDK is a hard dependency, not an optional peer**: `@scalar/api-reference` depends on `@scalar/agent-chat`, whose own dependencies include `ai` and `@ai-sdk/vue`. `agent: { disabled: true }` in `ScalarReference.jsx` is a **runtime** config value, so Rollup cannot tree-shake on it — the agent chat interface is emitted as its own chunk regardless. Turning the feature off changes the UI, not the build.
-- **What bounds the user-facing cost**: the `lazy()` import. None of this is in the initial payload; it downloads only when a developer opens the REST Reference tab.
-- **Replacement complexity**: Complex, and every surveyed alternative is worse. `rapidoc` has had no publish since 2024-10 (trading a heavy maintained dependency for an unmaintained one), and `@stoplight/elements` is comparably large. Owning an OpenAPI renderer is a project of its own.
-- **Decision**: KEEP, bounded by a test. What was missing here was measurement, not removal.
-- **Regression cover**: `client/src/pages/ApiExplorer.bundle.test.js` sums the Scalar-attributable `client/dist/assets` files and asserts they stay under a **4.0 MB** budget (~23% headroom over the measured 3.24 MB). It skips itself when `client/dist` is absent, so the plain unit-test job stays green; CI runs it as its own step right after `npm run build --prefix client`, against a fresh build rather than a stale `dist/`. A companion assertion pins non-vacuity — it fails if no `ScalarReference-*.js` chunk is found, so a Vite chunk-naming change cannot turn the budget into a 0-byte pass. This is the only test in the client suite that looks at build output; every other one runs against source, so a version bump that doubles the chunk is otherwise completely unobserved.
-- **Re-audit trigger**: revisit if the budget test fails (re-measure and decide deliberately — do not reflexively raise the number), if Scalar drops the `agent` config toggle, or if a maintained framework-free OpenAPI renderer appears.
+- **Usage (was)**: 1 import, in `client/src/components/api-explorer/ScalarReference.jsx`, which `client/src/pages/ApiExplorer.jsx` reached through a `lazy()` dynamic import on one route (Dev Tools → API Explorer, the REST Reference tab).
+- **Measured footprint at removal** (2026-09-02, fresh `npm run build --prefix client`):
+  - **Packages**: 261 of the client's 599 installed packages (44%) were reachable ONLY via Scalar. Scalar's own subtree was 282. The exclusive set included an entire second UI framework (`vue`, `radix-vue`, `@headlessui/vue`, `@floating-ui/vue`, `vue-sonner`, `@unhead/vue`) and the Vercel AI SDK (`ai`, `@ai-sdk/gateway`, `@ai-sdk/provider`, `@ai-sdk/provider-utils`, `@ai-sdk/vue`).
+  - **Bundle**: 3.24 MB of dist assets against ~13.0 MB of built JS — `OperationBlock.vue-*.js` (2.21 MB), `ScalarReference-*.js` (608 KB), `AgentScalarChatInterface.vue-*.js` (197 KB), `ScalarReference-*.css` (250 KB).
+- **Why it left**: `agent: { disabled: true }` was a runtime config value, so Rollup could not tree-shake the agent chat / AI SDK. An isolated Scalar/Swagger static page would have kept the same lockfile and advisory surface. The native catalog already listed HTTP operations; the REST tab now does the same for the Internal vs Exposed OpenAPI documents.
+- **Replacement**: `RestReferenceView` in `client/src/pages/ApiExplorer.jsx` fetches `/api/api-docs/internal/openapi.json` or `/api/api-docs/openapi.json` and lists operations. No second UI framework.
+- **Regression cover**: `client/src/pages/ApiExplorer.bundle.test.js` asserts the client manifest no longer declares `@scalar/api-reference-react`, and after `npm run build --prefix client` asserts no Scalar/Vue-named chunks remain in `client/dist/assets`. The chunk assertion skips when `dist/` is absent; CI runs it as its own step right after the client build.
+- **Re-audit trigger**: none — do not reintroduce Scalar or another OpenAPI SPA (rapidoc, Stoplight Elements) without a new depfree issue. The native list plus the raw JSON links is the reference UI.
 
-### `kokoro-js` — KEEP (Tier 2)
+### `kokoro-js` — REMOVED 2026-09-11
 
-- **Usage**: 1 dynamic import in `server/services/voice/tts-kokoro.js` (~80 LOC module). 3 call sites: `KokoroTTS.from_pretrained()`, `tts.generate(text, {voice, speed})`, `audio.toWav()`.
-- **Maintenance**: pinned at `1.2.1` (latest; published 2025-05-03). **Maintenance watch** — no publish since ~May 2025, so the package is effectively stale even at latest. This is not disqualifying today (small, pure-JS, no CVEs), but re-evaluate on the trigger below.
-- **Vulns**: None (npm audit clean).
-- **Replacement complexity**: Moderate (~50–80 LOC) but requires Python subprocess + JSON IPC + process pooling + lifecycle management. Operational overhead exceeds the supply-chain risk.
-- **Decision**: KEEP (on maintenance watch). The only pure-JS in-process TTS option; Web Speech API is cloud-dependent and Piper requires CLI install.
-- **Re-audit trigger**: the >12-months-stale trigger already fired and was actioned by this audit (bumped to latest, put on watch). Re-evaluate on any of: a CVE reported, the model-load path breaking against a newer Transformers.js, or the package still showing no upstream publish at the next dependency audit — then revisit and migrate (see escape hatch below).
-- **Piper escape hatch (if dropped later)**: Piper is **already implemented** as a peer backend — `server/services/voice/tts-piper.js` (`synthesizePiper(text, cfg, signal) → { wav, latencyMs }`, plus `listPiperVoices`), which `server/services/voice/tts.js` already dispatches to alongside `synthesizeKokoro`. Both backends share the same `(text, cfg, signal) → { wav, latencyMs }` contract, so dropping `kokoro-js` is a delete, not a rewrite: remove the `kokoro` branch (and the `tts-kokoro.js` module + its `kokoro-js` dependency) from the dispatcher in `tts.js` and let Piper be the default engine. The tradeoff Piper carries — and the reason it isn't the default today — is a native `piper` binary + ONNX voice download (vs. `kokoro-js`'s npm-only, in-process install).
+- **Decision**: retire the in-process backend in favor of the existing Piper CLI backend (#7011).
+- **Dependencies**: removed kokoro-js and its exclusive tar/protobufjs overrides. Sharp remains a direct dependency used by image processing.
+- **Upgrade**: migration 376 switches saved Kokoro settings to Piper, preserving the old settings and any customized Piper voice. Reads and saves also normalize restored legacy settings. Settings → Voice explains the change; choose a voice and use **Save & Reconcile** to install the binary/model. No models download during migration.
+- **Character profiles**: historical Kokoro profiles and audio remain intact. Synthesis reports an actionable retirement error; select/promote a Piper preset to replace the binding rather than silently changing a character's voice.
+
+### `google-auth-library` — REMOVED (direct) 2026-09-12 (issue #7013)
+
+- **Usage (was)**: `server/services/googleAuth.js` imported `OAuth2Client` directly for the shared Calendar/Messages OAuth flow.
+- **Resolution**: the service now uses `auth.OAuth2` from the existing `@googleapis/calendar` SDK. That export is the same `OAuth2Client` class supplied through `googleapis-common`, so authorization URLs, token exchange, credentials, and refresh-token persistence keep the existing behavior.
+- **Transitive cost**: the lockfile retains `google-auth-library@10.9.1` under `googleapis-common` (shared by the Calendar and Gmail SDKs) and removes the direct `11.0.2` copy plus its exclusive nested dependencies. This removes a redundant direct pin, not the transitive package itself.
+- **Regression cover**: `docs/deps-doc.test.js` and the Calendar route/account/sync suites pass; a direct module-load smoke check confirms that `auth.OAuth2` is constructible.
+
 
 ### `eslint` (and the `keyv` / `flat-cache` / `file-entry-cache` chain) — REMOVED 2026-08-04
 
@@ -155,7 +158,7 @@ This is intentionally NOT done in default mode — current dependency footprint 
 Defined in `package.json` (root + server + client + autofixer) — kept current to dodge known upstream advisories:
 
 - `ws@8.21.3` (all three)
-- `lodash@4.18.1`, `follow-redirects@1.16.0`, `js-yaml@4.3.1`, `ip-address@10.5.0` (root + server)
+- `lodash@4.18.1`, `follow-redirects@1.16.0`, `js-yaml@4.3.2`, `ip-address@10.5.0` (root + server)
 - `nanoid@3.3.18`, `socket.io-parser@4.2.7` (server + client)
 - `path-to-regexp@8.4.2`, `body-parser@2.3.0`, `qs@6.15.3` (server + autofixer — the express-reachable subset; `autofixer/` mirrors only these three because a pin for a package absent from the tree reads as protection that does not exist)
 - `tar@7.5.22` (server only)

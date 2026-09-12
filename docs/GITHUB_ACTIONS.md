@@ -323,7 +323,7 @@ The selected work is split across parallel jobs:
   dependencies, and its lockfile is deliberately gitignored.)
 - **Client tests and build** — affected client tests; production build whenever
   client source changed; client lint on the same install so Biome does not pay a
-  second `npm ci`. Lint, build, and the bundle budget run on shard 1 only.
+  second `npm ci`. Lint, build, and the Scalar-removal bundle pin run on shard 1 only.
 - **DB tests** — provisions only the isolated `portos_test` database and runs
   the serial DB suite when database-sensitive files changed.
 - **Windows server tests** — the same server selection, but only on full CI
@@ -360,7 +360,7 @@ fixed, disjoint subset, and their union is the complete suite. A scoped plan
 never shards (its handful of files would trip Vitest's shard-count guard) and
 passes no flag at all, so its invocation stays identical to a local
 `npm run test:ci`. Once-only steps — smoke boot, lint, the client build, the
-bundle budget — pin themselves to shard 1. `CI Gate` sees a matrix job as one
+Scalar-removal bundle pin — pin themselves to shard 1. `CI Gate` sees a matrix job as one
 `needs` result, so nothing downstream changes; public-repo runner minutes are
 free, so the fan-out costs only concurrency.
 

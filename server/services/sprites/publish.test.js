@@ -787,3 +787,15 @@ describe('layout sidecar (#2982)', () => {
     expect(await readFile(join(APP_REPO, BINDING.atlasDestPath)).catch(() => null)).toBeNull();
   });
 });
+
+describe('unreadable publication state', () => {
+  it.each(['current.json', 'publications.json'])('refuses publication with damaged %s', async (name) => {
+    const { id } = await characterWithAtlas();
+    await setPublishBinding(id, BINDING);
+    const path = join(TEST_ROOT, 'sprites', id, 'runtime', name);
+    await writeFile(path, '{');
+    await expect(publishAtlas(id)).rejects.toThrow(/Unreadable/);
+    expect(await readFile(path, 'utf8')).toBe('{');
+    await expect(readFile(join(APP_REPO, BINDING.atlasDestPath))).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+});

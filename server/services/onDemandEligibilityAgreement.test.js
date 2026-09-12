@@ -141,3 +141,22 @@ describe('on-demand eligibility, page vs schedule', () => {
     expect((await agreedVerdict('security'))?.code).toBe('disabled');
   });
 });
+
+
+describe('manual runs with schedules disabled', () => {
+  it.each(['user', 'maintenance'])('queues %s work without changing schedule settings', async (kind) => {
+    world.tasks.security.enabled = false;
+    world.apps[0].taskTypeOverrides.security = { enabled: false };
+    const manualBurn = { ...burn, maintenanceRunId: 'manual-1' };
+    const catalog = await getQuotaBurnTaskCatalog({ manual: true });
+    expect(resolveQuotaBurnStepAvailability(burnStep('security', 'app-1'), catalog)).toBeNull();
+    const request = await triggerOnDemandTask('security', 'app-1', {
+      emit: false,
+      ...(kind === 'maintenance' ? { origin: ON_DEMAND_ORIGINS.QUOTA_BURN, burn: manualBurn } : {}),
+    });
+    expect(request).toMatchObject({ id: expect.any(String), appId: 'app-1' });
+    expect(world.tasks.security.enabled).toBe(false);
+    expect(world.apps[0].taskTypeOverrides.security.enabled).toBe(false);
+    expect((await agreedVerdict('security', 'app-1')).code).toBe('disabled');
+  });
+});

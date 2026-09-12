@@ -35,6 +35,7 @@ export default function ModelAbuseGuardPanel() {
   const [statusError, setStatusError] = useState(false);
   const [installing, setInstalling] = useState(false);
   const [progressMsg, setProgressMsg] = useState('');
+  const [installError, setInstallError] = useState('');
   const [installingStage, setInstallingStage] = useState(null);
   const progressTimer = useRef(null);
   const { present: tokenPresent, source: tokenSource, refresh: refreshToken } = useHfTokenStatus();
@@ -64,7 +65,7 @@ export default function ModelAbuseGuardPanel() {
       }
       if (data?.event === 'error') {
         setInstalling(false);
-        progressTimer.current = setTimeout(() => setProgressMsg(''), 5000);
+        setInstallError(data.message || 'Installation failed. Refresh status for diagnostics.');
         loadGuardStatus();
       }
     };
@@ -76,14 +77,16 @@ export default function ModelAbuseGuardPanel() {
   }, [loadGuardStatus]);
 
   const installGuard = () => {
+    setInstallError('');
+    setInstallingStage(null);
     setInstalling(true);
     setProgressMsg('Installing the dedicated guard…');
-    return installModelAbuseGuard()
+    return installModelAbuseGuard({ silent: true })
       .then((result) => {
         if (result?.ready === true) toast.success('Model-abuse guard installed and ready');
         return loadGuardStatus();
       })
-      .catch(() => loadGuardStatus())
+      .catch((error) => { setInstallError(error.message || 'Installation failed.'); return loadGuardStatus(); })
       .finally(() => {
         setInstalling(false);
         setInstallingStage(null);
@@ -240,6 +243,14 @@ export default function ModelAbuseGuardPanel() {
             <span className="text-[11px] text-gray-500">{progressMsg}</span>
           )}
         </div>
+        {(installError || guardStatus?.lastInstallFailure) && (
+          <div role="alert" className="text-xs text-port-warning space-y-1 break-words">
+            {installError && <p>{installError}</p>}
+            {guardStatus?.lastInstallFailure && <p>{guardStatus.lastInstallFailure.stage}: {guardStatus.lastInstallFailure.code}{Number.isInteger(guardStatus.lastInstallFailure.exitCode) ? ` (exit ${guardStatus.lastInstallFailure.exitCode})` : ''}. {guardStatus.lastInstallFailure.message} {guardStatus.lastInstallFailure.action}</p>}
+          </div>
+        )}
+        {guardStatus?.runtimeIssue && <p className="text-xs text-port-warning">{guardStatus.runtimeIssue.message} {guardStatus.runtimeIssue.action}</p>}
+        {guardStatus?.expectedPackages && <details className="text-xs text-gray-400 break-words"><summary>Expected classifier packages</summary><p>{guardStatus.expectedPackages.join(', ')}</p></details>}
         {incomplete && <p role="status" className="text-xs text-port-warning">A partial or failed installation blocks screening, including sources with an optional classifier. Repair the setup before retrying those tasks.</p>}
         <p className="text-xs text-gray-400">Install downloads Python packages and model weights. Accept the model terms and add a read token first.</p>
       </div>

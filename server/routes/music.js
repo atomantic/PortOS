@@ -37,7 +37,7 @@ import { listEngineModels, addAudioModel, removeAudioModel, isValidRepoId } from
 import { listMusicEngineCapabilities } from '../services/musicEngineCapabilities.js';
 import { describeMusic, writeLyrics } from '../services/musicDesigner.js';
 import { startHfDownloadStream } from '../services/hfDownloadStream.js';
-import { openSseStream } from '../lib/sseDownload.js';
+import { onClientDisconnect, openSseStream } from '../lib/sseDownload.js';
 import { createInstallLogger } from '../lib/installLogger.js';
 import { inspectModelCache } from '../lib/hfCache.js';
 import { getCudaCapability } from '../lib/cudaCapability.js';
@@ -63,13 +63,12 @@ router.get('/engines', asyncHandler(async (_req, res) => {
 }));
 
 // --- Install music runtime venvs -------------------------------------------
-// Mirrors the image/video in-app setup flow: the client opens an EventSource
+// Mirrors the image/video in-app setup flow: the client opens a POST fetch stream
 // and we shell out to the canonical setup script with the selected engine's
 // INSTALL_* env var set. Keeping the bash path as the single installer source
 // avoids a second Node implementation drifting from scripts/setup-image-video.sh.
 
-router.get('/setup/runtime-status', asyncHandler(async (req, res) => {
-  const runtime = String(req.query?.runtime || '');
+const requireMusicEngine = (runtime) => {
   const engine = ENGINES[runtime];
   if (!engine) {
     throw new ServerError(
@@ -77,6 +76,12 @@ router.get('/setup/runtime-status', asyncHandler(async (req, res) => {
       { status: 400, code: 'UNKNOWN_MUSIC_RUNTIME' },
     );
   }
+  return engine;
+};
+
+const sendRuntimeStatus = async (req, res) => {
+  const runtime = String(req.query?.runtime || '');
+  const engine = requireMusicEngine(runtime);
   res.json({
     runtime: engine.id,
     label: engine.name,
@@ -85,19 +90,23 @@ router.get('/setup/runtime-status', asyncHandler(async (req, res) => {
     expectedVenvPath: engine.venvDefault,
     installEnvVar: engine.installEnv,
   });
-}));
+};
+
+router.get('/setup/runtime-status', asyncHandler(sendRuntimeStatus));
+
+// Backward-compatible read surface for stale clients and status pollers. GET
+// reports readiness only; installing is restricted to the POST route below.
+router.get('/setup/runtime-install', asyncHandler(sendRuntimeStatus));
 
 const runtimeInstallInFlight = new Map();
 
-router.get('/setup/runtime-install', asyncHandler(async (req, res) => {
+router.post('/setup/runtime-install', asyncHandler(async (req, res) => {
   const runtime = String(req.query?.runtime || '');
-  const engine = ENGINES[runtime];
+  // Validate before flushing SSE headers so callers receive the standard
+  // { error, code, timestamp } response for a bad runtime.
+  const engine = requireMusicEngine(runtime);
   const { send, safeEnd } = openSseStream(res);
 
-  if (!engine) {
-    send({ type: 'error', message: `Unknown music runtime: ${runtime}` });
-    return safeEnd();
-  }
   if (runtimeInstallInFlight.has(engine.id)) {
     send({ type: 'error', message: `Another ${engine.name} install is already running. Wait for it to finish or restart PortOS.` });
     return safeEnd();
@@ -191,7 +200,7 @@ router.get('/setup/runtime-install', asyncHandler(async (req, res) => {
     }
   });
 
-  req.on('close', () => {
+  onClientDisconnect(req, res, () => {
     if (finished) return;
     installLog.cancel();
     stopSetupScript(child);

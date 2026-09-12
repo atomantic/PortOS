@@ -6,6 +6,7 @@
  */
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { readFile, stat, readdir, rename } from 'fs/promises';
 import { posixPath as toPosix } from '../lib/testHelper.js';
 
 let files = {};            // path → string (markers)
@@ -26,6 +27,12 @@ vi.mock('../lib/migrationMarker.js', () => ({
 }));
 
 vi.mock('fs/promises', () => ({
+  readFile: vi.fn(async (path) => {
+    const key = toPosix(path);
+
+    if (!(key in recordsByDir)) { const error = new Error('ENOENT'); error.code = 'ENOENT'; throw error; }
+    return JSON.stringify(recordsByDir[key]);
+  }),
   rename: vi.fn(async (from, to) => { renamed.push([toPosix(from), toPosix(to)]); }),
   readdir: vi.fn(async () => (dirEntries === null ? [] : dirEntries)),
   stat: vi.fn(async (path) => {
@@ -117,4 +124,23 @@ describe('migrateSeriesToDB', () => {
     expect(table.has('ser-1')).toBe(true);
     expect(table.has('ser-bad')).toBe(false);
   });
+});
+
+it.each(['stat', 'readdir'])('surfaces unexpected %s failures without marking a completed import', async operation => {
+  dirEntries = ['ser-a'];
+  const error = Object.assign(new Error('access denied'), { code: 'EACCES' });
+  ({ stat, readdir })[operation].mockRejectedValueOnce(error);
+  await expect(importer()).rejects.toThrow('access denied');
+  expect(MARKER in files).toBe(false);
+});
+
+it.each(['read', 'park'])('retries after a source %s failure without falsely completing', async operation => {
+  dirEntries = ['ser-a'];
+  recordsByDir['/fake/data/pipeline-series/ser-a/index.json'] = rec('ser-a');
+  const error = Object.assign(new Error('access denied'), { code: 'EACCES' });
+  (operation === 'read' ? readFile : rename).mockRejectedValueOnce(error);
+  expect(await importer()).toMatchObject({ reason: 'incomplete' });
+  expect(MARKER in files).toBe(false);
+  expect(await importer()).toMatchObject({ reason: 'imported' });
+  expect(MARKER in files).toBe(true);
 });

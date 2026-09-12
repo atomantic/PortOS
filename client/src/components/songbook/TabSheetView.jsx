@@ -1,5 +1,6 @@
+import { createPortal } from 'react-dom';
 import { memo, useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
-import { parseTabSheet, TAB_ARTICULATIONS } from '../../lib/tabNotation.js';
+import { parseTabSheet, TAB_ARTICULATIONS, chordLineSegments, pairedLineChunks, chordLyricRows } from '../../lib/tabNotation.js';
 import usePopoverPosition from '../../hooks/usePopoverPosition.js';
 import ChordDiagram from './ChordDiagram.jsx';
 import { activeCtrlClass, ctrlBtnClass } from './constants.js';
@@ -11,9 +12,8 @@ import { activeCtrlClass, ctrlBtnClass } from './constants.js';
  * Takes the (already-transposed) sheet `text` and renders parseTabSheet's
  * classified lines:
  * - section     → styled heading
- * - chords      → monospace line with each chord token highlighted at its
- *                 original column (whitespace-pre keeps alignment)
- * - chordlyric  → chord row built from col offsets rendered above the bare lyric
+ * - chords/lyric and chordlyric → paired word groups that wrap both rows together
+ * - standalone chords → highlighted monospace chord line
  * - tabstaff    → consecutive staff lines grouped in one overflow-x-auto block
  *                 so a wide staff scrolls as a unit without wrapping
  * - lyric/text  → plain monospace pre-wrap
@@ -43,46 +43,8 @@ import { activeCtrlClass, ctrlBtnClass } from './constants.js';
 
 const POPOVER_WIDTH = 172;
 
-// Split a chords line into plain/chord segments using the parser's col offsets.
-// Chord segments carry their index within the line's `chords` array — the other
-// half of the `{ lineIndex, chordIndex }` coordinate the play-along highlight
-// addresses tokens by.
-const chordLineSegments = (text, chords) => {
-  const segments = [];
-  let cursor = 0;
-  chords.forEach(({ name, col }, chordIndex) => {
-    if (col > cursor) segments.push({ text: text.slice(cursor, col), chord: false });
-    segments.push({ text: text.slice(col, col + name.length), chord: true, chordIndex });
-    cursor = col + name.length;
-  });
-  if (cursor < text.length) segments.push({ text: text.slice(cursor), chord: false });
-  return segments;
-};
-
-// Build the padded chord row for a chordlyric line as segments: each chord
-// name lands at its col offset into the lyric; names that would collide keep
-// one space.
-const chordRowSegments = (chords) => {
-  const segments = [];
-  let length = 0;
-  chords.forEach(({ name, col }, chordIndex) => {
-    let pad = '';
-    if (length < col) pad = ' '.repeat(col - length);
-    else if (length > 0) pad = ' ';
-    if (pad) {
-      segments.push({ text: pad, chord: false });
-      length += pad.length;
-    }
-    segments.push({ text: name, chord: true, chordIndex });
-    length += name.length;
-  });
-  return segments;
-};
-
-// A tappable chord token. `inline` keeps vertical padding from growing the
-// line box (it paints outside instead), so the enlarged touch target doesn't
-// disturb the monospace sheet layout; horizontal padding cancels via negative
-// margins.
+// A tappable chord token. Paired rows reserve its vertical touch padding;
+// horizontal padding cancels via negative margins to retain column alignment.
 const ChordToken = ({ name, tokenKey, expanded, sounding, onTap }) => (
   <button
     type="button"
@@ -160,13 +122,14 @@ function TabSheetView({
 
   // Group consecutive tabstaff lines into one horizontally-scrollable block so
   // the six strings of a staff scroll together. Each block keeps the index its
-  // FIRST line had in `lines` — a non-staff block holds exactly one line, so
-  // that index is the `lineIndex` the play-along highlight addresses.
+  // FIRST line had in `lines`; a chord/lyric pair keeps the chord line index
+  // that the play-along highlight addresses.
   const blocks = useMemo(() => {
     const out = [];
     lines.forEach((line, lineIndex) => {
       const prev = out[out.length - 1];
-      if (line.type === 'tabstaff' && prev?.type === 'tabstaff') prev.lines.push(line);
+      if (line.type === 'lyric' && prev?.type === 'chords') prev.lines.push(line);
+      else if (line.type === 'tabstaff' && prev?.type === 'tabstaff') prev.lines.push(line);
       else out.push({ type: line.type, lineIndex, lines: [line] });
     });
     return out;
@@ -301,6 +264,29 @@ function TabSheetView({
         const soundingChordIndex = soundingChord?.lineIndex === block.lineIndex
           ? soundingChord.chordIndex
           : null;
+        if (line.type === 'chordlyric' || (line.type === 'chords' && block.lines.length === 2)) {
+          const rows = line.type === 'chordlyric'
+            ? chordLyricRows(line)
+            : { lyric: block.lines[1].text, chordText: line.text, chords: line.chords };
+          return (
+            <div key={bi} className="flex flex-wrap overflow-x-auto" data-chord-lyric-pair="">
+              {pairedLineChunks(rows.lyric, rows.chordText, rows.chords).map((chunk, ci) => (
+                <div key={ci} className="shrink-0 whitespace-pre" data-chord-lyric-chunk="">
+                  <div className="h-[calc(1.5em+1rem)]">
+                    <ChordSegments
+                      segments={chunk.segments}
+                      blockKey={`${bi}:${ci}`}
+                      activeKey={popover?.key ?? null}
+                      soundingChordIndex={soundingChordIndex}
+                      onTap={onChordTap}
+                    />
+                  </div>
+                  <div className="min-h-[1.5em]">{chunk.lyric}</div>
+                </div>
+              ))}
+            </div>
+          );
+        }
         switch (line.type) {
           case 'section':
             // {end_of_*} directives carry an empty label — render nothing visible.
@@ -323,21 +309,6 @@ function TabSheetView({
                 />
               </div>
             );
-          case 'chordlyric':
-            return (
-              <div key={bi} className="overflow-x-auto">
-                <div className="whitespace-pre text-port-accent font-semibold leading-tight">
-                  <ChordSegments
-                    segments={chordRowSegments(line.chords)}
-                    blockKey={bi}
-                    activeKey={popover?.key ?? null}
-                    soundingChordIndex={soundingChordIndex}
-                    onTap={onChordTap}
-                  />
-                </div>
-                <div className="whitespace-pre">{line.text || ' '}</div>
-              </div>
-            );
           case 'blank':
             return <div key={bi}>{' '}</div>;
           case 'directive':
@@ -351,7 +322,7 @@ function TabSheetView({
         }
       })}
 
-      {popover && (
+      {popover && createPortal(
         <div
           ref={popoverRef}
           role="dialog"
@@ -367,7 +338,12 @@ function TabSheetView({
             <span className="text-[10px] uppercase tracking-wide text-gray-500">{instrumentView}</span>
           </div>
           <ChordDiagram name={popover.name} instrument={instrumentView} />
-        </div>
+          <button type="button" className="mt-2 text-sm text-port-accent py-2 w-full" onClick={() => {
+            setPopover(null);
+            anchorElRef.current?.focus();
+          }}>Close chord diagram</button>
+        </div>,
+        document.body,
       )}
     </div>
   );

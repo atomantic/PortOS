@@ -711,6 +711,23 @@ export async function listSeries({ includeDeleted = false } = {}) {
   return [...filtered].sort((a, b) => (b.updatedAt || '').localeCompare(a.updatedAt || ''));
 }
 
+/** Lightweight sidebar/picker rows, sorted like the full series list. */
+export async function listSeriesNames() {
+  return (await store().listNames())
+    .filter((r) => isStr(r?.id) && r.id && trimTo(r.name, NAME_MAX))
+    .sort((a, b) => (b.updatedAt || '').localeCompare(a.updatedAt || '') || b.id.localeCompare(a.id))
+    .map((r) => ({ id: r.id, name: trimTo(r.name, NAME_MAX) }));
+}
+
+/** Index rows retain the displayed shape and cover without the story body. */
+export async function listSeriesSummaries() {
+  return (await store().listSummaries()).map(sanitizeSeries).filter(Boolean)
+    .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt) || b.id.localeCompare(a.id))
+    .map(({ id, name, universeId, logline, coverImage, origin, issueCountTarget, arc, createdAt, updatedAt }) =>
+      ({ id, name, universeId, logline, coverImage, origin, issueCountTarget,
+        arc: arc?.shape ? { shape: arc.shape } : null, createdAt, updatedAt }));
+}
+
 export async function getSeries(id, { includeDeleted = false } = {}) {
   const found = await store().loadOne(id);
   if (!found) throw makeErr(`Series not found: ${id}`, ERR_NOT_FOUND);

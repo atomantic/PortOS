@@ -187,7 +187,7 @@ export async function generateVideo({
   runGrokVideo(job, jobId, bin, args, {
     useStdin, fullPrompt, cleanupPromptFile, scratchDir, stagingPath, outputPath, filename, meta, uploadedTempPath,
   }).catch((err) => {
-    console.log(`❌ grok video run failed [${jobId.slice(0, 8)}]: ${err?.message}`);
+    console.error(`❌ grok video run failed [${jobId.slice(0, 8)}]: ${err?.message}`);
   });
 
   return {

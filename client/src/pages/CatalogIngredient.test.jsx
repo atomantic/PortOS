@@ -92,7 +92,7 @@ vi.mock('../components/pipeline/MediaJobThumb', async () => {
   }
   return { default: MockMediaJobThumb };
 });
-vi.mock('../services/apiImageVideo', () => ({ listImageGallery: vi.fn(async () => []) }));
+vi.mock('../services/apiImageVideo', () => ({ listImageGalleryPage: vi.fn(async () => ({ items: [], total: 0, offset: 0, limit: 60 })) }));
 vi.mock('../components/IngredientPicker', () => ({ default: () => null }));
 vi.mock('../components/MediaImage', () => ({ default: ({ src, alt }) => <img src={src} alt={alt} /> }));
 vi.mock('../components/loraTraining/CharacterLoraChip', () => ({ default: () => null }));

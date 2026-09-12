@@ -28,7 +28,7 @@ function resolveTimeSlotMinute(timeSlot) {
 }
 
 async function loadGoals() {
-  return readJSONFile(GOALS_FILE, { goals: [] });
+  return readJSONFile(GOALS_FILE, { goals: [] }, { strict: true });
 }
 
 async function saveGoals(data) {

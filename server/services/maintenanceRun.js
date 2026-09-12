@@ -18,9 +18,8 @@
  * holds, and a second run is just a second record.
  *
  * What it shares with a burn is the INVOCATION: every step is dispatched through
- * `quotaBurnInvoke.invokeQuotaBurnStep`, so the schedule's own gate ladder (task
- * enabled, per-app switch, master Improve, target scope, duplicate requests)
- * still applies, each handler is pinned to the family the user named, and the
+ * `quotaBurnInvoke.invokeQuotaBurnStep`. Manual runs bypass schedule switches;
+ * master Improve, target scope and duplicate-request guards still apply, each handler is pinned to the family the user named, and the
  * task carries the family provenance that makes it cooldown-exempt and lets an
  * observed refusal be credited to the right window. The `maintenanceRunId`
  * provenance field is what tells the quota-burn loop to leave these agents
@@ -75,7 +74,7 @@ const perRun = createKeyCachedQueue();
 let retryTimer = null;
 
 export async function listMaintenanceRuns() {
-  const loaded = await readJSONFile(runsFile(), null);
+  const loaded = await readJSONFile(runsFile(), null, { strict: true });
   return Array.isArray(loaded?.runs) ? loaded.runs : [];
 }
 
@@ -133,7 +132,8 @@ async function assertNoRunningRun(appId) {
  * when the app is unknown or archived, the provider is not an enabled
  * subscription CLI/TUI provider in a known family — the SAME gate every dispatch
  * re-applies (`resolveBurnProvider`), so a run can never start on a provider
- * its steps would then refuse — or the app already has a running run.
+ * its steps would then refuse — or a full ladder targets an app with a running run.
+ * Explicit quality selections may run alongside other runs; they never claim backlog issues.
  *
  * The first evaluation runs before this returns, so the caller learns whether
  * step one actually went out (or why it is holding) in the same response.
@@ -155,13 +155,14 @@ export async function startMaintenanceRun({ appId, providerId, model = null, eff
     const claimProvider = claimFamilyId ? await resolveBurnProvider({ job: effectiveClaimHandler, family: { id: claimFamilyId } }) : null;
     if (!claimProvider) throw new ServerError(`provider "${effectiveClaimHandler.providerId}" is not an enabled subscription CLI/TUI provider`, { status: 400, code: 'MAINTENANCE_RUN_PROVIDER_UNAVAILABLE' });
   }
-  await assertNoRunningRun(appId);
+  if (!taskTypes) await assertNoRunningRun(appId);
 
   const id = `maint-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
   const now = new Date().toISOString();
   const pins = { providerId, model: model || null, effort: effort || null };
   const run = await insertRun({
     id, appId, familyId, claimFamilyId, ...pins,
+    taskTypes,
     status: MAINTENANCE_RUN_STATUS.RUNNING,
     steps: buildMaintenanceSteps({ appId, idPrefix: id, ...pins, mode, claimBetweenAudits, claimHandler: effectiveClaimHandler, taskTypes }),
     completed: {},
@@ -226,7 +227,7 @@ export async function resumeMaintenanceRun(id) {
   const resumed = await perRun(id, async () => {
     const run = await getMaintenanceRun(id);
     if (!run || run.status === MAINTENANCE_RUN_STATUS.RUNNING) return run;
-    await assertNoRunningRun(run.appId);
+    if (!run.taskTypes) await assertNoRunningRun(run.appId);
     console.log(`🧹 Maintenance run ${id} resumed`);
     return patchRun(id, { status: MAINTENANCE_RUN_STATUS.RUNNING, finishedAt: null, reason: null });
   });
@@ -273,7 +274,7 @@ async function evaluate(id, { ignoreTaskId }) {
   const queued = (await getOnDemandRequests()).find((request) => request?.burn?.maintenanceRunId === id);
   if (queued) return hold(`waiting for the CoS daemon to accept request ${queued.id} (${queued.taskType})`);
 
-  const catalog = await getQuotaBurnTaskCatalog();
+  const catalog = await getQuotaBurnTaskCatalog({ manual: true });
   const completed = { ...run.completed };
   for (const step of run.steps) {
     if (completed[step.id]) continue;

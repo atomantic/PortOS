@@ -276,3 +276,18 @@ it('rejects an unavailable claim provider before starting any work', async () =>
   await expect(startMaintenanceRun({ appId: 'app-1', providerId: 'codex', claimHandler: { providerId: 'unavailable', model: 'example' } })).rejects.toMatchObject({ code: 'MAINTENANCE_RUN_PROVIDER_UNAVAILABLE' });
   expect(state.invoked).toEqual([]);
 });
+
+it('dispatches independent quality runs while another run is pending and resumes them independently', async () => {
+  const { run: ladder } = await start();
+  state.requests = [{ id: 'demand-1', burn: { maintenanceRunId: ladder.id } }];
+  const { run: security } = await startMaintenanceRun({ appId: 'app-1', providerId: 'codex', taskTypes: ['security'] });
+  const { run: performance } = await startMaintenanceRun({ appId: 'app-1', providerId: 'codex', taskTypes: ['performance'], mode: 'fix' });
+  expect(dispatchedTypes()).toEqual(['better-structural-drift', 'security', 'performance']);
+  await stopMaintenanceRun(security.id);
+  expect((await getMaintenanceRun(performance.id)).status).toBe('running');
+  expect((await resumeMaintenanceRun(security.id)).run.status).toBe('running');
+  await __onMaintenanceAgentCompleted(agentFor(performance, 0));
+  expect((await getMaintenanceRun(performance.id)).status).toBe('completed');
+  expect((await getMaintenanceRun(security.id)).status).toBe('running');
+  expect((await getMaintenanceRun(ladder.id)).completed).toEqual({});
+});

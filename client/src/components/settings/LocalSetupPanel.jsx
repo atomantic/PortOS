@@ -79,7 +79,7 @@ export default function LocalSetupPanel({ pythonPath, onPythonPathChange, onPack
     return () => clearTimeout(t);
   }, [pythonPath, refreshCheck]);
 
-  // The shared install-stream hook owns the EventSource lifecycle, log
+  // The shared install-stream hook owns the fetch-stream lifecycle, log
   // accumulation (capped at the same 200 lines as before), connection-lost
   // handling, unmount teardown, and auto-scroll.
   const {
@@ -91,6 +91,7 @@ export default function LocalSetupPanel({ pythonPath, onPythonPathChange, onPack
     logsEndRef,
   } = useInstallStream(installUrl, {
     maxLogLines: 200,
+    method: 'POST',
     onComplete: () => {
       toast.success('Packages installed');
       refreshCheck(pythonPath);

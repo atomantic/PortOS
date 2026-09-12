@@ -34,6 +34,7 @@ describe('memoryBackend backend selection', () => {
     // Start each test from a clean env; individual tests opt in to flags.
     delete process.env.MEMORY_BACKEND;
     delete process.env.NODE_ENV;
+    delete process.env.VITEST;
   });
 
   afterEach(() => {
@@ -91,13 +92,14 @@ describe('memoryBackend backend selection', () => {
     expect(name).toBe('file');
   });
 
-  it('uses the file backend in test mode even when Postgres is HEALTHY — never probes a live dev DB', async () => {
+  it.each([['test', undefined], [undefined, '1'], ['development', '1']])('bypasses a healthy DB with NODE_ENV=%s and VITEST=%s', async (nodeEnv, vitest) => {
     // Regression guard: a developer's machine commonly has a live `portos` DB
     // running (federated to real peers). The test runner must never write to
     // it — fixture creation would pollute the DB and fan out to peers, and
     // cleanup tombstones would delete real records. Test mode must short-circuit
     // to the file backend BEFORE the health probe runs.
-    process.env.NODE_ENV = 'test';
+    if (nodeEnv !== undefined) process.env.NODE_ENV = nodeEnv;
+    if (vitest !== undefined) process.env.VITEST = vitest;
     checkHealth.mockResolvedValue({ connected: true, hasSchema: true });
     const mod = await loadFresh();
     const name = await mod.ensureBackend();

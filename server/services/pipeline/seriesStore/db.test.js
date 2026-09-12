@@ -56,6 +56,25 @@ describe.skipIf(!runDb)('pipeline series DB adapter round-trip', () => {
     await close();
   });
 
+
+  it('projects names and summary fields without transporting full arc or seasons', async () => {
+    await db.writeRaw('ser-live', S('ser-live', {
+      universeId: 'u-test', logline: 'A city', coverImage: 'cover.png', issueCountTarget: 4,
+      arc: { shape: 'man-in-hole', summary: 'Full arc' }, seasons: [{ name: 'Full season' }],
+    }));
+    await db.writeRaw('ser-deleted', S('ser-deleted', { deleted: true }));
+    const names = await db.listNames();
+    expect(names).toEqual([{ id: 'ser-live', name: 'ser-live', updatedAt: '2026-01-02T00:00:00.000Z' }]);
+    const summaries = await db.listSummaries();
+    expect(summaries).toHaveLength(1);
+    expect(summaries[0]).toMatchObject({
+      universeId: 'u-test', logline: 'A city', coverImage: 'cover.png', issueCountTarget: 4,
+      arc: { shape: 'man-in-hole' },
+    });
+    expect(summaries[0]).not.toHaveProperty('seasons');
+    expect(summaries[0]).not.toHaveProperty('data');
+  });
+
   it('writes a record and reads it back verbatim', async () => {
     const rec = S('ser-1', { universeId: 'u-1', seasons: [{ id: 'sea-1', number: 1 }], arc: { logline: 'x' } });
     await db.writeRaw('ser-1', rec);

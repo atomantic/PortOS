@@ -230,6 +230,12 @@ const writersRoomWorkPushSchema = z.object({
   kind: z.literal('writersRoomWork'),
   ...peerSyncPushBase,
   ...draftBodyManifestField,
+  bibleManifest: z.array(z.object({
+    workId: z.string().trim().min(1).max(120),
+    kind: z.enum(['character', 'place', 'object']),
+    sha256: hex64,
+    updatedAt: z.string().datetime({ offset: true }),
+  }).strict()).max(3).optional(),
 }).strict();
 // Writers Room folders + exercises (#1645) push the bare record — body-less, no
 // asset manifest entries, no draft bodies, no bundled children. The base shape

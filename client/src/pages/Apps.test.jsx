@@ -171,6 +171,27 @@ describe('Apps row action hierarchy', () => {
     await waitFor(() => expect(api.openAppInXcode).toHaveBeenCalledWith('app-ios'));
   });
 
+  it('keeps a long non-PM2 repository path wrapping within its column instead of overflowing', async () => {
+    // A single unbroken directory segment can't rely on slash-based line
+    // breaking, so the fix must allow mid-word wrapping (break-all) — which
+    // also drops the flex item's min-content width enough for it to shrink
+    // to the available column instead of forcing the row wider.
+    api.getApps.mockResolvedValue([{
+      ...APPS[0],
+      id: 'app-longpath',
+      name: 'Example Long Path App',
+      type: 'ios-native',
+      repoPath: '/srv/thisisaverylongsingledirectorysegmentwithnobreakpoints/example-ios',
+      pm2ProcessNames: [],
+      processes: [],
+    }]);
+    render(<MemoryRouter><Apps /></MemoryRouter>);
+    await screen.findByRole('link', { name: 'Example Long Path App' });
+
+    const repoPathSpan = screen.getByText('/srv/thisisaverylongsingledirectorysegmentwithnobreakpoints/example-ios');
+    expect(repoPathSpan.className).toEqual(expect.stringContaining('break-all'));
+  });
+
   it('withholds the overflow menu for the PortOS baseline app', async () => {
     api.getApps.mockResolvedValue([{ ...APPS[0], id: 'portos-default', name: 'PortOS' }]);
     render(<MemoryRouter><Apps /></MemoryRouter>);

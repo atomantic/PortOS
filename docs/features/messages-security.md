@@ -23,6 +23,12 @@ The GitHub role split does not change explicitly configured Jira or existing Git
 
 PR review does not execute contributor tests or apply patches in its default stages. Read-only filesystem access and a disposable worktree are not equivalent to denying tools or isolating malicious code. A provider must expose an actual maintained recipe for the requested posture; unsupported stage pins must be corrected in schedule settings. A screening pass never grants broader permissions.
 
+PR review stage provider/model pins are strict: disabled, unsupported or unavailable selections stop the review rather than switching to a subscription provider or a different model. Local classifier setup/runtime failures and review provider/model failures raise a notification and queue a deduplicated CoS investigation. Investigation prompts contain only server-owned diagnostics, never contributor text, model output or transport errors. A malicious-content finding is not an infrastructure incident.
+
+The PR page follows the saved stage providers by default. Its **Use Run with for PR review eligibility** checkbox explicitly overrides only the eligibility stage for that invocation; the final review keeps its own stage settings. Stage-specific settings take precedence over broader schedule/app defaults. The shared Abuse Guard text API selection does not replace these PR stage selections: Stage 1 always uses the dedicated local classifier, while stages 2 and 3 use the providers configured in **CoS > Schedule > PR Reviewer**.
+
+After an approval, the deterministic coordinator merges a green, mergeable PR or requests GitHub auto-merge while CI is pending. The enable-only GraphQL mutation names the reviewed head SHA, so it cannot authorize a different commit or immediately bypass pending checks on an unprotected repository. A rejected auto-merge request raises a notification and retains the approval for the existing bounded merge poller.
+
 ## Configure an install
 
 Open **Models > LLMs > Abuse Guard** (`/models/llms/abuse`). Install the classifier explicitly, then choose an enabled text API provider and model for shared analysis. Use a local API endpoint for private messages. The page exposes shared policy defaults and source overrides; a failed or incomplete installation offers a repair path. Opening the page and reading status never runs inference or downloads a model.

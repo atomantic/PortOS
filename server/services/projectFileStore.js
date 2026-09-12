@@ -16,7 +16,7 @@ export function createProjectFileStore({ file, kind, idPrefix, logEmoji, logLabe
   const sync = makeSyncKind(kind);
 
   async function loadAll() {
-    const raw = await readJSONFile(file, []);
+    const raw = await readJSONFile(file, [], { strict: true });
     return Array.isArray(raw) ? raw : [];
   }
 

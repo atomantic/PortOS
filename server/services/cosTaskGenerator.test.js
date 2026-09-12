@@ -13,6 +13,7 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { readFileSync } from 'fs';
+import * as taskStore from './cosTaskStore.js';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 
@@ -1156,6 +1157,7 @@ describe('emitOnDemandEmpty', () => {
   });
 
   it("surfaces the pr-reviewer preflight's recorded skip reason on an idle outcome", async () => {
+    const persist = vi.spyOn(taskStore, 'addTask').mockResolvedValue({ id: 'diagnostic' });
     recordPerpetualTransient('pr-reviewer', 'app-1', { reason: 'security-guard-not-ready' });
     const events = [];
     const handler = (d) => events.push(d);
@@ -1171,6 +1173,11 @@ describe('emitOnDemandEmpty', () => {
       cosEvents.off('schedule:on-demand-empty', handler);
     }
     expect(events[0]).toMatchObject({ taskType: 'pr-reviewer', outcome: 'idle', reason: 'security-guard-not-ready' });
+    expect(persist).toHaveBeenCalledWith(expect.objectContaining({
+      status: 'completed',
+      metadata: expect.objectContaining({ preflightFailure: 'security-guard-not-ready', note: expect.stringContaining('before an agent started') }),
+    }), 'internal', { raw: true, suppressDequeue: true });
+    persist.mockRestore();
   });
 
   it('consumes the pr-reviewer skip reason on read, so a stale one cannot be reported twice', async () => {
@@ -1810,6 +1817,61 @@ describe('automated drain refills do not clear their own convergence brakes', ()
 // reaches for `/do:pr` mid-flow would have slashdo resolve `--review-with` from
 // the HOST's saved defaults — a different reviewer set (and often an auto-merge
 // default) silently replacing the one PortOS resolved.
+describe('claim prompt author-filter scripts', () => {
+  it.each([
+    ['github', 'claim-issue', 'gh'],
+    ['gitlab', 'claim-issue-gitlab', 'glab'],
+  ])('renders the selected author mode in manual and scheduled %s queries', async (tracker, taskType, cli) => {
+    const { DEFAULT_TASK_PROMPTS } = await import('./taskPromptDefaults.js');
+    const { getTaskPrompt } = await import('./taskPromptService.js');
+    const { resolveAppWorkTracker } = await import('../lib/workTracker.js');
+    const app = { id: 'acme', name: 'Acme App', repoPath: '/repos/acme' };
+    for (const mode of ['self', 'owner', 'any', 'collaborators', undefined, 'constructor']) {
+      resolveAppWorkTracker.mockResolvedValueOnce({ resolved: tracker, source: 'test' });
+      getTaskInterval.mockResolvedValueOnce({ prompt: null, taskMetadata: { issueAuthorFilter: mode } });
+      getTaskPrompt.mockResolvedValueOnce(DEFAULT_TASK_PROMPTS[taskType]);
+      const manual = await buildClaimWorkTask(app);
+      const scheduled = await cosTaskPreStepBlocks.buildImprovementTaskDescription({
+        promptTemplate: DEFAULT_TASK_PROMPTS[taskType], app, promptTaskType: taskType,
+        metadata: { issueAuthorFilter: mode }, blocks: {},
+      });
+      for (const prompt of [manual.prompt, scheduled]) {
+        const phase1 = prompt.split('## Phase 1 — Pick the target issue')[1].split('3. Build the in-flight set')[0];
+        const query = phase1.split('\n').find(line => line.trim().startsWith(`${cli} issue list `));
+        expect(query).toBeDefined();
+        const expectedAuthor = mode === 'owner' ? '$OWNER'
+          : ['any', 'collaborators'].includes(mode) ? null
+            : cli === 'gh' ? '@me' : '$ME';
+        if (expectedAuthor) expect(query).toContain(`--author "${expectedAuthor}"`);
+        else expect(query).not.toContain('--author');
+        expect(phase1.includes('OWNER=')).toBe(mode === 'owner');
+        expect(phase1).not.toContain('Owner-only mode (default)');
+        expect(prompt).not.toContain('{issueCandidateList}');
+        expect(prompt).not.toContain('{issueAuthorFilter}');
+        if (cli === 'gh') {
+          if (mode === 'owner') expect(phase1).toContain('owner-is-org');
+          expect(query).toContain('--search "sort:created-asc"');
+          expect(query).toContain('--limit 500');
+          expect(query).toContain('number,title,author,assignees,labels,createdAt');
+        } else {
+          expect(query).toContain('--per-page 100 --output json');
+          expect(phase1).toContain('glab api user 2>/dev/null | jq -er .username');
+          if (mode === 'owner') expect(phase1).toContain('owner-is-group');
+          if (expectedAuthor === '$ME') expect(phase1).toContain('[ -n "$ME" ] ||');
+        }
+        if (mode === 'collaborators') {
+          expect(prompt).toContain('TRUSTED_SELF="$(set -o pipefail;');
+          expect(prompt).toContain('TRUSTED_MEMBERS="$(set -o pipefail;');
+          if (cli === 'glab') {
+            expect(prompt).toContain('--output ndjson | jq -r ".username"');
+            expect(prompt).not.toContain('glab api user -q');
+          }
+        }
+      }
+    }
+  });
+});
+
 describe('buildClaimWorkTask reviewer pin', () => {
   const app = { id: 'acme', name: 'Acme App', repoPath: '/repos/acme' };
 

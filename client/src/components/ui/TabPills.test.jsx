@@ -29,6 +29,82 @@ describe('TabPills — underline variant (default)', () => {
     expect(onChange).toHaveBeenCalledWith('places');
   });
 
+  it.each(['underline', 'pills'])('uses a roving tabindex for the %s variant', (variant) => {
+    render(<TabPills variant={variant} tabs={sampleTabs} activeTab="places" onChange={() => {}} />);
+    expect(screen.getByRole('tab', { name: /Cast/i })).toHaveAttribute('tabindex', '-1');
+    expect(screen.getByRole('tab', { name: /Places/i })).toHaveAttribute('tabindex', '0');
+    expect(screen.getByRole('tab', { name: /Objects/i })).toHaveAttribute('tabindex', '-1');
+  });
+
+  it.each(['underline', 'pills'])('navigates tabs with arrow keys and wraps for the %s variant', async (variant) => {
+    const onChange = vi.fn();
+    const user = userEvent.setup();
+    render(<TabPills variant={variant} tabs={sampleTabs} activeTab="cast" onChange={onChange} />);
+
+    const castTab = screen.getByRole('tab', { name: /Cast/i });
+    const placesTab = screen.getByRole('tab', { name: /Places/i });
+    const objectsTab = screen.getByRole('tab', { name: /Objects/i });
+
+    castTab.focus();
+    await user.keyboard('{ArrowRight}');
+    expect(onChange).toHaveBeenLastCalledWith('places');
+    expect(document.activeElement).toBe(placesTab);
+
+    await user.keyboard('{ArrowDown}');
+    expect(onChange).toHaveBeenLastCalledWith('objects');
+    expect(document.activeElement).toBe(objectsTab);
+
+    await user.keyboard('{ArrowLeft}');
+    expect(onChange).toHaveBeenLastCalledWith('places');
+    expect(document.activeElement).toBe(placesTab);
+
+    await user.keyboard('{ArrowUp}');
+    expect(onChange).toHaveBeenLastCalledWith('cast');
+    expect(document.activeElement).toBe(castTab);
+
+    objectsTab.focus();
+    await user.keyboard('{ArrowRight}');
+    expect(onChange).toHaveBeenLastCalledWith('cast');
+    expect(document.activeElement).toBe(castTab);
+  });
+
+  it('uses Home and End to move to the first and last enabled tabs', async () => {
+    const onChange = vi.fn();
+    const user = userEvent.setup();
+    render(<TabPills tabs={sampleTabs} activeTab="places" onChange={onChange} />);
+
+    const castTab = screen.getByRole('tab', { name: /Cast/i });
+    const placesTab = screen.getByRole('tab', { name: /Places/i });
+    const objectsTab = screen.getByRole('tab', { name: /Objects/i });
+
+    placesTab.focus();
+    await user.keyboard('{Home}');
+    expect(onChange).toHaveBeenLastCalledWith('cast');
+    expect(document.activeElement).toBe(castTab);
+
+    await user.keyboard('{End}');
+    expect(onChange).toHaveBeenLastCalledWith('objects');
+    expect(document.activeElement).toBe(objectsTab);
+  });
+
+  it('skips disabled tabs during keyboard navigation', async () => {
+    const onChange = vi.fn();
+    const user = userEvent.setup();
+    const tabs = [
+      { id: 'a', label: 'A' },
+      { id: 'b', label: 'B', disabled: true },
+      { id: 'c', label: 'C' },
+    ];
+    render(<TabPills tabs={tabs} activeTab="a" onChange={onChange} />);
+
+    const aTab = screen.getByRole('tab', { name: 'A' });
+    const cTab = screen.getByRole('tab', { name: 'C' });
+    aTab.focus();
+    await user.keyboard('{ArrowRight}');
+    expect(onChange).toHaveBeenCalledWith('c');
+    expect(document.activeElement).toBe(cTab);
+  });
+
   it('shows the count next to the label when count > 0, hides it at 0 or undefined', () => {
     render(<TabPills tabs={sampleTabs} activeTab="cast" onChange={() => {}} />);
     const castBtn = screen.getByRole('tab', { name: /Cast/i });
@@ -151,4 +227,23 @@ describe('TabPills — filter variant', () => {
     await user.click(screen.getByRole('button', { name: /Objects/i }));
     expect(onChange).toHaveBeenCalledWith('objects');
   });
+});
+
+it('reveals selections without scrolling again for refreshed tab data', () => {
+  const scroll = vi.spyOn(HTMLElement.prototype, 'scrollIntoView').mockImplementation(() => {});
+  try {
+    const view = (activeTab, tabs) => <><TabPills tabs={tabs} activeTab={activeTab} onChange={vi.fn()} /><input aria-label="Draft" /></>;
+    const { rerender } = render(view('cast', []));
+    expect(scroll).not.toHaveBeenCalled();
+    rerender(view('cast', sampleTabs));
+    expect(scroll).toHaveBeenCalledTimes(1);
+    screen.getByRole('textbox', { name: 'Draft' }).focus();
+    rerender(view('cast', sampleTabs.map(tab => ({ ...tab, count: 10 }))));
+    expect(scroll).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole('textbox', { name: 'Draft' })).toHaveFocus();
+    rerender(view('places', sampleTabs));
+    expect(scroll).toHaveBeenCalledTimes(2);
+  } finally {
+    scroll.mockRestore();
+  }
 });

@@ -408,6 +408,19 @@ describe('app pull-request routes', () => {
     expect(triggerOnDemandTask).not.toHaveBeenCalled();
   });
 
+  it('retains a failed preflight on the row and lets retry run the scan again', async () => {
+    getAllTasks.mockResolvedValue({ user: { tasks: [] }, cos: { tasks: [{
+      id: 'preflight-17', status: 'completed',
+      metadata: { app: 'app-001', analysisType: 'pr-reviewer', targetPullRequest: 17,
+        preflightFailure: 'security-guard-process-failed', note: 'Prompt Guard stopped before an agent started.' },
+    }] } });
+    const listed = await request(app).get('/api/apps/app-001/pull-requests');
+    expect(listed.body.pullRequests[0].reviewAction).toMatchObject({ status: 'failed', taskId: 'preflight-17', error: expect.stringContaining('before an agent') });
+    const retried = await request(app).post('/api/apps/app-001/pull-requests/17/review');
+    expect(retried.status).toBe(202);
+    expect(triggerOnDemandTask).toHaveBeenCalledWith('pr-reviewer', 'app-001', { targetPullRequest: 17 });
+  });
+
   it('queues a pr-reviewer run scoped to one request', async () => {
     const response = await request(app).post('/api/apps/app-001/pull-requests/17/review');
 

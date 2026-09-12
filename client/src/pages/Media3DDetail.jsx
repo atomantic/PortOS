@@ -49,15 +49,36 @@ export default function Media3DDetail() {
   const [normalMap, setNormalMap] = useState(false);
   const [subjectScale, setSubjectScale] = useState(SUBJECT_SCALE_DEFAULT);
   const optionsSeededFor = useRef(null);
+  const routeIdRef = useRef(id);
+  const routeGenerationRef = useRef(0);
+  // Invalidate an older request during render so it cannot win between the
+  // route commit and the passive effect that starts the replacement request.
+  if (routeIdRef.current !== id) {
+    routeIdRef.current = id;
+    routeGenerationRef.current += 1;
+  }
+  const routeGeneration = routeGenerationRef.current;
+  const updateRecordForRoute = useCallback((next) => {
+    if (!next || !mountedRef.current || routeIdRef.current !== id
+      || routeGenerationRef.current !== routeGeneration || String(next.id) !== id) return;
+    setRecord(next);
+  }, [id, mountedRef, routeGeneration]);
 
   const load = useCallback(async ({ initial = false } = {}) => {
+    const requestedId = id;
+    const requestedGeneration = routeGenerationRef.current;
+    const isCurrentRoute = () => mountedRef.current
+      && routeIdRef.current === requestedId
+      && routeGenerationRef.current === requestedGeneration;
     const next = await getImageTo3dModel(id, { silent: true }).catch((err) => {
-      if (err?.status === 404) { if (mountedRef.current) setNotFound(true); }
-      else if (initial) toast.error(err?.message || 'Failed to load 3D model');
+      if (err?.status === 404) { if (isCurrentRoute()) setNotFound(true); }
+      else if (initial && isCurrentRoute()) toast.error(err?.message || 'Failed to load 3D model');
       return null;
     });
-    if (next && mountedRef.current) { setRecord(next); setNotFound(false); }
-    if (initial && mountedRef.current) setLoading(false);
+    if (next && isCurrentRoute() && String(next.id) === requestedId) {
+      setRecord(next); setNotFound(false);
+    }
+    if (initial && isCurrentRoute()) setLoading(false);
     return next;
   }, [id, mountedRef]);
 
@@ -66,6 +87,12 @@ export default function Media3DDetail() {
   // the previous record's content (and doesn't carry a stale not-found flag).
   useEffect(() => {
     setLoading(true); setNotFound(false);
+    setRecord(null);
+    setBusy(false); setConfirmingDelete(false);
+    optionsSeededFor.current = null;
+    setSteps(''); setSeed(''); setKeyBackground(false); setDetail('auto');
+    setAlphaMode(''); setNormalMap(false); setSubjectScale(SUBJECT_SCALE_DEFAULT);
+    setLoadedScene(null);
     load({ initial: true });
   }, [load]);
 
@@ -81,8 +108,8 @@ export default function Media3DDetail() {
 
   // Seed the option fields from the latest run once per id.
   useEffect(() => {
-    if (!record || optionsSeededFor.current === record.id) return;
-    optionsSeededFor.current = record.id;
+    if (!record || String(record.id) !== id || optionsSeededFor.current === id) return;
+    optionsSeededFor.current = id;
     const fields = fieldsFromRun(record.runs?.at?.(-1));
     setSteps(fields.steps);
     setSeed(fields.seed);
@@ -91,33 +118,46 @@ export default function Media3DDetail() {
     setAlphaMode(fields.alphaMode);
     setNormalMap(fields.normalMap);
     setSubjectScale(fields.subjectScale);
-  }, [record]);
+  }, [id, record]);
 
   const handleRegenerate = useCallback(async () => {
     if (busy || record?.status === 'generating') return;
+    const requestedId = id;
+    const requestedGeneration = routeGenerationRef.current;
+    const isCurrentRoute = () => mountedRef.current
+      && routeIdRef.current === requestedId
+      && routeGenerationRef.current === requestedGeneration;
     setBusy(true);
     const next = await generateImageTo3dModel(
-      id,
+      requestedId,
       renderOptionsBody({ steps, seed, keyBackground, detail, alphaMode, normalMap, subjectScale }),
       { silent: true },
     ).catch((err) => {
-      toast.error(err?.message || 'Could not start the render.');
+      if (isCurrentRoute()) toast.error(err?.message || 'Could not start the render.');
       return null;
     });
-    if (mountedRef.current) setBusy(false);
-    if (next && mountedRef.current) setRecord(next);
+    if (isCurrentRoute()) {
+      setBusy(false);
+      if (next && String(next.id) === requestedId) setRecord(next);
+    }
   }, [busy, record?.status, id, steps, seed, keyBackground, detail, alphaMode, normalMap,
     subjectScale, mountedRef]);
 
   const handleDelete = useCallback(async () => {
-    const ok = await deleteImageTo3dModel(id, { silent: true }).then(() => true).catch((err) => {
-      toast.error(err?.message || 'Delete failed');
+    const requestedId = id;
+    const requestedGeneration = routeGenerationRef.current;
+    const isCurrentRoute = () => mountedRef.current
+      && routeIdRef.current === requestedId
+      && routeGenerationRef.current === requestedGeneration;
+    const ok = await deleteImageTo3dModel(requestedId, { silent: true }).then(() => true).catch((err) => {
+      if (isCurrentRoute()) toast.error(err?.message || 'Delete failed');
       return false;
     });
-    if (ok) navigate('/3d');
-  }, [id, navigate]);
+    if (ok && isCurrentRoute()) navigate('/3d');
+  }, [id, navigate, mountedRef]);
 
-  if (loading) {
+  const recordMatchesRoute = record && String(record.id) === id;
+  if (loading || (record && !recordMatchesRoute)) {
     return (
       <div className="mx-auto max-w-4xl">
         <PageSkeleton
@@ -286,9 +326,9 @@ export default function Media3DDetail() {
         </div>
       </section>
 
-      <ArExportPanel record={record} scene={loadedScene} onRecordChange={setRecord} />
+      <ArExportPanel record={record} scene={loadedScene} onRecordChange={updateRecordForRoute} />
 
-      <RigPanel record={record} onRecordChange={setRecord} />
+      <RigPanel record={record} onRecordChange={updateRecordForRoute} />
     </div>
   );
 }

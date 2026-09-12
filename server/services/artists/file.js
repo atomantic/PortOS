@@ -20,7 +20,8 @@ import {
 const ARTISTS_FILE = join(PATHS.data, 'artists.json');
 
 async function loadAll() {
-  const raw = await readJSONFile(ARTISTS_FILE, []);
+  // Artists are durable user records; never save an empty fallback over unreadable bytes.
+  const raw = await readJSONFile(ARTISTS_FILE, [], { strict: true });
   return (Array.isArray(raw) ? raw : []).map(sanitizeArtist).filter(Boolean);
 }
 

@@ -37,7 +37,7 @@ const DEFAULT_PRODUCTIVITY = {
  */
 export async function loadProductivity() {
   await ensureDir(DATA_DIR);
-  const data = await readJSONFile(PRODUCTIVITY_FILE, null);
+  const data = await readJSONFile(PRODUCTIVITY_FILE, null, { strict: true });
   // Clone the defaults on every read: callers (onTaskCompleted) mutate the
   // nested pattern maps in place, so handing back the module-level constant
   // would leak one call's counters into the next "no file yet" read.

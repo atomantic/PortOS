@@ -6,6 +6,7 @@ import {
   isoWeekParts,
   isoWeeksInYear,
   parseWeekId,
+  weekStartFromWeekId,
 } from './isoWeek.js';
 
 // Local-calendar dates: the week id is a local-day concept, so build the
@@ -89,6 +90,29 @@ describe('parseWeekId', () => {
   it('returns null rather than NaN for anything else', () => {
     for (const bad of ['', '2026', '2026-01', 'W01', '2026-W', '2026-W00', '2026-W54', null, undefined, 20261, {}]) {
       expect(parseWeekId(bad)).toBeNull();
+    }
+  });
+});
+
+describe('weekStartFromWeekId', () => {
+  it('returns the local-midnight Monday of the named week', () => {
+    expect(weekStartFromWeekId('2026-W12')).toEqual(on(2026, 3, 16));
+    expect(weekStartFromWeekId('2026-W15')).toEqual(on(2026, 4, 6));
+  });
+
+  it('lands on the December Monday when week 1 belongs to the next year', () => {
+    expect(weekStartFromWeekId('2026-W01')).toEqual(on(2025, 12, 29));
+  });
+
+  it('round-trips through getWeekId for ordinary, leap-week, and year-boundary ids', () => {
+    for (const id of ['2025-W01', '2025-W52', '2026-W01', '2026-W15', '2026-W53']) {
+      expect(getWeekId(weekStartFromWeekId(id))).toBe(id);
+    }
+  });
+
+  it('returns null for the same garbage parseWeekId rejects', () => {
+    for (const bad of ['', '2026', '2026-W00', '2026-W54', null, undefined]) {
+      expect(weekStartFromWeekId(bad)).toBeNull();
     }
   });
 });

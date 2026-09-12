@@ -42,6 +42,7 @@ import {
   isStockTextEncoder, supportsVideoTextEncoder, videoTextEncoderUnsupportedError,
 } from '../../lib/videoTextEncoders.js';
 import { minimaxH3ControlError } from './minimaxH3Controls.js';
+import { wan22FrameCountError } from './wan22Controls.js';
 import { resolveContextFrames } from '../../lib/videoContinuity.js';
 import {
   IC_LORA_MODE_VALUES, icLoraSpecForMode,
@@ -172,15 +173,8 @@ export async function validateVideoRetryParams(params = {}) {
     });
     if (controlError) throw controlError;
   }
-  if (model.runtime === 'wan22' || model.runtime === 'wan22_cuda') {
-    const frameStride = Number(model.frameStride);
-    if (Number.isFinite(frameStride) && frameStride > 0 && (Number(numFrames) - 1) % frameStride !== 0) {
-      throw new ServerError(
-        `${model.name} requires a ${frameStride}n+1 frame count; got ${numFrames}.`,
-        { status: 400, code: 'WAN22_INVALID_FRAME_COUNT' },
-      );
-    }
-  }
+  const frameCountError = wan22FrameCountError(model, numFrames);
+  if (frameCountError) throw frameCountError;
 }
 
 /**
@@ -644,26 +638,21 @@ async function resolvePreparedParams({
       throw controlError;
     }
   }
-  // Wan profiles have a narrower temporal-shape contract than the shared
-  // request schema can express (the mode side is the shared gate above). Mirror
-  // the worker's frame-grid guard here so a direct API caller cannot persist a
-  // job that is already known to fail.
-  if (effectiveModel?.runtime === 'wan22' || effectiveModel?.runtime === 'wan22_cuda') {
-    const numFrames = body.numFrames != null ? Number(body.numFrames) : DEFAULT_NUM_FRAMES;
-    const frameStride = Number(effectiveModel.frameStride);
-    if (Number.isFinite(frameStride) && frameStride > 0 && (numFrames - 1) % frameStride !== 0) {
-      await cleanupStaged();
-      throw new ServerError(
-        `${effectiveModel.name} requires a ${frameStride}n+1 frame count; got ${numFrames}.`,
-        { status: 400, code: 'WAN22_INVALID_FRAME_COUNT' },
-      );
-    }
+  // Pin Wan's validated count for the worker while preserving other runtimes'
+  // existing behavior of leaving omitted controls unset in persisted params.
+  const isWan = effectiveModel?.runtime === 'wan22' || effectiveModel?.runtime === 'wan22_cuda';
+  let effectiveNumFrames = isWan
+    ? body.numFrames ?? effectiveModel.defaultFrames ?? DEFAULT_NUM_FRAMES
+    : body.numFrames;
+  const frameCountError = wan22FrameCountError(effectiveModel, effectiveNumFrames);
+  if (frameCountError) {
+    await cleanupStaged();
+    throw frameCountError;
   }
 
   let sourceImagePath = null;
   let lastImagePath = null;
   let audioFilePath = null;
-  let effectiveNumFrames = body.numFrames;
   let icReferenceUploadPath = null;
   let uploadedTempPath = null;
   const extraUploadedTempPaths = [];

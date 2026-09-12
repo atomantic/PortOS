@@ -19,7 +19,7 @@ export const synthesizePiper = (text, cfg, signal) => {
   const voiceId = cfg.piper.voice;
   const voicePath = expandPath(cfg.piper.voicePath || voicePathFor(voiceId));
   if (!existsSync(voicePath)) {
-    return Promise.reject(new Error(`piper voice missing: ${voicePath}`));
+    return Promise.reject(new Error(`Piper voice missing. Open Settings → Voice and use Save & Reconcile to install Piper and the selected voice.`));
   }
 
   const rate = Math.max(0.25, Math.min(4, cfg.rate ?? 1.0));
@@ -107,7 +107,19 @@ export const synthesizePiper = (text, cfg, signal) => {
       }
     });
 
-    child.stdin.end(text);
+    // Guard the pipe before writing — a piper binary that fails to spawn or
+    // exits before reading stdin emits EPIPE, and an unlistened stream
+    // 'error' here crashes the server rather than rejecting this promise.
+    // See guardChildStdin. Loaded lazily (this module is reached by every
+    // suite touching the voice pipeline) so the eager import cost only lands
+    // on a call that actually synthesizes — see "Import scoping" in
+    // server/AGENTS.md.
+    import('../../lib/bufferedSpawn.js')
+      .then(({ guardChildStdin, deliverChildStdin }) => {
+        guardChildStdin(child);
+        deliverChildStdin(child, text, 'piper synthesis');
+      })
+      .catch(doReject);
   });
 };
 

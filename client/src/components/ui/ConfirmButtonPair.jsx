@@ -30,6 +30,8 @@ export default function ConfirmButtonPair({
   busyText,
   tone = 'error',
   ariaLabel,
+  confirmAriaLabel,
+  cancelAriaLabel,
   className = '',
   largeTouchTargets = false,
 }) {
@@ -53,6 +55,7 @@ export default function ConfirmButtonPair({
         type="button"
         onClick={onConfirm}
         disabled={busy}
+        aria-label={confirmAriaLabel}
         className={`inline-flex ${buttonSizeClass} items-center gap-1 px-2 py-1 text-xs rounded transition-colors disabled:opacity-50 ${confirmTone}`}
       >
         {busy ? (
@@ -66,6 +69,7 @@ export default function ConfirmButtonPair({
         type="button"
         onClick={onCancel}
         disabled={busy}
+        aria-label={cancelAriaLabel}
         className={`${buttonSizeClass} px-2 py-1 text-xs text-gray-400 hover:text-white transition-colors disabled:opacity-50`}
       >
         {cancelText}

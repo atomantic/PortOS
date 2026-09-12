@@ -38,7 +38,7 @@ describe('scheduleTimer', () => {
   it('arms a timer that raises a notification when it elapses', async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-05-26T12:00:00Z'));
-    const res = scheduleTimer({ totalMs: 600000, label: 'call mom' });
+    const res = await scheduleTimer({ totalMs: 600000, label: 'call mom' });
     expect(res.deduped).toBe(false);
     expect(typeof res.id).toBe('string');
     await vi.advanceTimersByTimeAsync(600000);
@@ -53,7 +53,7 @@ describe('scheduleTimer', () => {
   it('persists a pending timer (handle stripped) and clears it after firing', async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-05-26T12:00:00Z'));
-    scheduleTimer({ totalMs: 600000, label: 'tea' });
+    await scheduleTimer({ totalMs: 600000, label: 'tea' });
     await tick(); await tick(); // let the schedule's queued persist() write run
     const afterSchedule = atomicWriteMock.mock.calls.at(-1)[1];
     expect(afterSchedule.timers).toHaveLength(1);
@@ -65,19 +65,19 @@ describe('scheduleTimer', () => {
     vi.useRealTimers();
   });
 
-  it('rejects an out-of-range duration without arming anything', () => {
+  it('rejects an out-of-range duration without arming anything', async () => {
     vi.useFakeTimers();
-    expect(scheduleTimer({ totalMs: 500, label: 'too short' })).toBeNull();
-    expect(scheduleTimer({ totalMs: 25 * 60 * 60 * 1000, label: 'too long' })).toBeNull();
-    expect(scheduleTimer({ totalMs: NaN, label: 'nan' })).toBeNull();
+    expect(await scheduleTimer({ totalMs: 500, label: 'too short' })).toBeNull();
+    expect(await scheduleTimer({ totalMs: 25 * 60 * 60 * 1000, label: 'too long' })).toBeNull();
+    expect(await scheduleTimer({ totalMs: NaN, label: 'nan' })).toBeNull();
     vi.useRealTimers();
   });
 
   it('dedups a re-issued identical timer but keeps a distinct label / out-of-window one', async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-05-26T12:00:00Z'));
-    const a = scheduleTimer({ totalMs: 600000, label: 'tea' });
-    const b = scheduleTimer({ totalMs: 600000, label: 'tea' });
+    const a = await scheduleTimer({ totalMs: 600000, label: 'tea' });
+    const b = await scheduleTimer({ totalMs: 600000, label: 'tea' });
     expect(b.deduped).toBe(true);
     expect(b.id).toBe(a.id);
 
@@ -88,12 +88,12 @@ describe('scheduleTimer', () => {
     expect(snap.timers.filter((t) => t.label === 'tea')).toHaveLength(1);
 
     // Different label → not a duplicate.
-    expect(scheduleTimer({ totalMs: 600000, label: 'eggs' }).deduped).toBe(false);
+    expect((await scheduleTimer({ totalMs: 600000, label: 'eggs' })).deduped).toBe(false);
 
     // Same label but fireAt now 20s past the original → outside the dedup
     // window → a genuinely new timer.
     vi.advanceTimersByTime(20000);
-    expect(scheduleTimer({ totalMs: 600000, label: 'tea' }).deduped).toBe(false);
+    expect((await scheduleTimer({ totalMs: 600000, label: 'tea' })).deduped).toBe(false);
     vi.useRealTimers();
   });
 });
@@ -153,29 +153,16 @@ describe('initVoiceTimers', () => {
     expect(second).toEqual({ skipped: true });
   });
 
-  it('skips a persisted record whose id is already live in memory (boot race, both branches)', async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date('2026-05-26T12:00:00Z'));
-    const now = Date.now();
-    // Simulate the race: a timer_set is scheduled (and persisted) while boot
-    // init is still mid-read, so init reads the same id back. Mark the persisted
-    // copy OVERDUE to exercise the overdue branch — the in-memory timer is
-    // authoritative, so init must skip the record entirely (neither fire it as
-    // overdue nor re-arm a second handle), leaving exactly one live timer.
-    const scheduled = scheduleTimer({ totalMs: 300000, label: 'overlap' });
-    await tick(); await tick(); // let scheduleTimer's persist settle first
-    storeRef.value = {
-      version: 1,
-      timers: [{ id: scheduled.id, label: 'overlap', fireAt: now - 1000, createdAt: now }],
-    };
-    const res = await initVoiceTimers();
-    expect(res).toEqual({ armed: 0, fired: 0 }); // skipped — not fired-as-overdue, not re-armed
-    addNotificationMock.mockClear();
-    await vi.advanceTimersByTimeAsync(300000);
-    expect(addNotificationMock).toHaveBeenCalledTimes(1); // the one live timer fires once
-    expect(addNotificationMock).toHaveBeenCalledWith(
-      expect.objectContaining({ title: '⏰ overlap', metadata: expect.objectContaining({ timerId: scheduled.id }) })
-    );
-    vi.useRealTimers();
+  it('waits for a concurrent boot restore before scheduling and persisting a new timer', async () => {
+    let finishRead;
+    readJSONFileMock.mockImplementationOnce(() => new Promise(resolve => { finishRead = resolve; }));
+    const initializing = initVoiceTimers();
+    const scheduling = scheduleTimer({ totalMs: 300000, label: 'new' });
+    await tick();
+    expect(atomicWriteMock).not.toHaveBeenCalled();
+    finishRead({ version: 1, timers: [{ id: 'keep', label: 'existing', fireAt: Date.now() + 600000 }] });
+    expect(await initializing).toEqual({ armed: 1, fired: 0 });
+    await scheduling;
+    expect(storeRef.value.timers.map(timer => timer.label)).toEqual(['existing', 'new']);
   });
 });

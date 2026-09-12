@@ -115,7 +115,7 @@ export async function runSceneRender(project, scene) {
     const detail = lapsedPin && lapsedPin !== videoPin.mode
       ? ` This project is pinned to '${lapsedPin}', but that backend is not enabled, so the render fell back to local.`
       : '';
-    console.log(`❌ CD scene ${scene.sceneId}: local video gen not configured (settings.imageGen.local.pythonPath missing)${detail}`);
+    console.error(`❌ CD scene ${scene.sceneId}: local video gen not configured (settings.imageGen.local.pythonPath missing)${detail}`);
     await updateScene(project.id, scene.sceneId, {
       ...(project.workspace === 'video' ? { expectedWorkRevision: scene.workRevision || 0 } : {}),
       status: 'failed',
@@ -360,7 +360,7 @@ async function handleRenderCompleted(projectId, sceneId, jobId, opts = {}) {
     // completion hook decide what to do next.
     if (opts.continuationFellBack && scene.useContinuationFromPrior) {
       const reason = `scene ${sceneId} requested continuation but fell back to text-to-video`;
-      console.log(`❌ CD auto-accept: ${reason} — failing the entire smoke project so the regression is visible immediately (one accepted scene + later failures would still stitch + complete and hide this).`);
+      console.error(`❌ CD auto-accept: ${reason} — failing the entire smoke project so the regression is visible immediately (one accepted scene + later failures would still stitch + complete and hide this).`);
       // Failing only the scene isn't enough: advanceAfterSceneSettled keeps
       // going as long as at least one scene was accepted, which would then
       // stitch the surviving clips into a `complete` project and report the
@@ -384,7 +384,7 @@ async function handleRenderCompleted(projectId, sceneId, jobId, opts = {}) {
     const playable = await verifyVideoPlayable(videoPath);
     if (!playable.ok) {
       const reason = playable.reason || 'video file unplayable';
-      console.log(`❌ CD auto-accept: video unplayable for ${jobId.slice(0, 8)}: ${reason} — failing smoke project directly (retrying would waste renders; a broken render must not produce a green smoke result).`);
+      console.error(`❌ CD auto-accept: video unplayable for ${jobId.slice(0, 8)}: ${reason} — failing smoke project directly (retrying would waste renders; a broken render must not produce a green smoke result).`);
       await updateScene(projectId, sceneId, { ...(opts.workRevision === undefined ? {} : { expectedWorkRevision: opts.workRevision }),
         status: 'failed',
         evaluation: {
@@ -508,7 +508,7 @@ async function handleRenderFailed(projectId, sceneId, errorMsg, { retry = true, 
     await runSceneRender(fresh, updated);
     return;
   }
-  console.log(`❌ CD scene ${sceneId} render failed terminally: ${errorMsg}`);
+  console.error(`❌ CD scene ${sceneId} render failed terminally: ${errorMsg}`);
   await updateScene(projectId, sceneId, { ...(workRevision === undefined ? {} : { expectedWorkRevision: workRevision }),
     status: 'failed',
     evaluation: {

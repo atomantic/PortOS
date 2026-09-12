@@ -66,6 +66,7 @@ export const ENVELOPE_EXTENSIONS = Object.freeze([
   // The linked track record riding a musicVideoProject push (#1858) — a
   // musicVideoProjects-only subscriber has no `tracks` cycle to fall back on.
   Object.freeze({ key: 'linkedTrack', pendingKey: 'trackSyncPending' }),
+  Object.freeze({ key: 'bibleManifest', pendingKey: 'bibleSyncPending' }),
 ]);
 
 /**
@@ -115,7 +116,9 @@ export function subscriptionId({ peerId, recordKind, recordId }) {
 
 export async function readState() {
   await ensureDir(join(PATHS.data, 'sharing'));
-  const raw = await readJSONFile(STATE_PATH(), { subscriptions: [] }, { logError: false });
+  // Strict: every subscription mutation writes this value back. A swallowed
+  // parse/read failure would replace the whole federation with one new row.
+  const raw = await readJSONFile(STATE_PATH(), { subscriptions: [] }, { logError: false, strict: true });
   const subs = Array.isArray(raw?.subscriptions) ? raw.subscriptions : [];
   return { subscriptions: subs };
 }

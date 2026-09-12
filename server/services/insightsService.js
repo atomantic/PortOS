@@ -302,6 +302,7 @@ export async function getGenomeHealthCorrelations() {
  * Returns { available: false, reason: 'not_generated' } if no cache exists.
  */
 export async function getThemeAnalysis() {
+  // Cache: explicit generation replaces themes entirely from authoritative source records.
   const cached = await readJSONFile(THEMES_FILE, null);
   if (!cached) {
     return { available: false, reason: 'not_generated' };
@@ -388,6 +389,7 @@ Example format:
  * Returns { available: false, reason: 'not_generated' } if no cache exists.
  */
 export async function getCrossDomainNarrative() {
+  // Read-only presentation; refresh uses a separate strict read to retain the prior narrative.
   const cached = await readJSONFile(NARRATIVE_FILE, null);
   if (!cached) {
     return { available: false, reason: 'not_generated' };
@@ -409,7 +411,7 @@ export async function getCrossDomainNarrative() {
  */
 export async function refreshCrossDomainNarrative(providerId, model) {
   // Load existing narrative for diff support
-  const existingNarrative = await readJSONFile(NARRATIVE_FILE, null);
+  const existingNarrative = await readJSONFile(NARRATIVE_FILE, null, { strict: true });
 
   const provider = providerId
     ? await getProviderById(providerId)

@@ -17,7 +17,7 @@ import { timeAgo } from '../../../utils/formatters';
 
 const FORGE_LABEL = { github: 'GitHub', gitlab: 'GitLab' };
 
-const ACTION_STATUS_RANK = { queuing: 0, queued: 1, active: 2, completed: 3, blocked: 3 };
+const ACTION_STATUS_RANK = { queuing: 0, queued: 1, active: 2, completed: 3, blocked: 3, failed: 3 };
 const ACTION_STATUS_LABEL = {
   queued: 'Queued — view',
   active: 'Active — view',
@@ -30,6 +30,7 @@ const actionStatusForTask = status => ({
   in_progress: 'active',
   completed: 'completed',
   blocked: 'blocked',
+  failed: 'failed',
 }[status] || null);
 
 // The two per-row agent actions. They share every piece of state machinery —
@@ -137,8 +138,8 @@ export default function PullRequestsTab({ appId, appName }) {
   const actionsRef = useRef(emptyActions());
   const requestRef = useRef(0);
 
-  // Page-level provider/model/effort pin for every Resolve & merge / PR review
-  // click on this tab — initially the active provider and configured model.
+  // Resolve & merge defaults to the active provider. PR review follows its
+  // saved stages unless the user explicitly enables the eligibility override.
   // Auto remains available for server-side routing. Mirrors the Issues
   // tab's "Run with" picker: a session convenience, never persisted.
   const {
@@ -146,6 +147,7 @@ export default function PullRequestsTab({ appId, appName }) {
     setSelectedProviderId, setSelectedModel
   } = useProviderModels({ filter: enabledProcessProviderFilter, allowDefault: true, preselectDefaults: true, silent: true, withEffort: true });
   const [effort, setEffort] = useState('');
+  const [overrideReviewProvider, setOverrideReviewProvider] = useState(false);
 
   // One writer for the whole `{ kind: { number: action } }` bag so the ref the
   // socket handler reads and the state React renders can never disagree.
@@ -171,7 +173,7 @@ export default function PullRequestsTab({ appId, appName }) {
 
   const applyTaskUpdate = useCallback(task => {
     if (!task?.id) return;
-    const nextStatus = actionStatusForTask(task.status);
+    const nextStatus = task.metadata?.preflightFailure ? 'failed' : actionStatusForTask(task.status);
     if (!nextStatus) return;
 
     replaceActions(current => {
@@ -183,7 +185,7 @@ export default function PullRequestsTab({ appId, appName }) {
           const matches = action.taskId === task.id
             || (!action.taskId && ACTION_KINDS[kind].matches(task, appId, Number(number)));
           if (!matches || actionRank(nextStatus) < actionRank(action.status)) continue;
-          updated[number] = { ...action, taskId: action.taskId || task.id, status: nextStatus };
+          updated[number] = { ...action, taskId: action.taskId || task.id, status: nextStatus, error: task.metadata?.note };
           changed = true;
         }
         next[kind] = updated;
@@ -224,6 +226,7 @@ export default function PullRequestsTab({ appId, appName }) {
               ...(current || {}),
               taskId: current?.taskId || record.taskId || null,
               status: serverAction,
+              error: record.error,
             };
           }
         }
@@ -316,7 +319,7 @@ export default function PullRequestsTab({ appId, appName }) {
   });
 
   const handleReview = pullRequest => queueAction('review', pullRequest, {
-    call: () => api.reviewAppPullRequest(appId, pullRequest.number, providerSettings),
+    call: () => api.reviewAppPullRequest(appId, pullRequest.number, overrideReviewProvider ? providerSettings : {}),
     queued: `Queued the pr-reviewer task for ${forgeLabel} #${pullRequest.number}`,
     already: `pr-reviewer is already queued for ${forgeLabel} #${pullRequest.number}`,
   });
@@ -372,7 +375,7 @@ export default function PullRequestsTab({ appId, appName }) {
         </p>
         {(data?.pullRequests || []).some(pullRequest => pullRequest.reviewEligible) && (
           <p>
-            PR review points the <span className="font-mono">pr-reviewer</span> scheduled task at this one request instead of letting it sweep every open contributor PR. It appears only on requests it can review — opened by someone else against the default branch — and its security scan still holds the review behind approval.
+            PR review points the <span className="font-mono">pr-reviewer</span> scheduled task at this one request instead of letting it sweep every open contributor PR. It appears only on requests it can review — opened by someone else against the default branch — and uses the providers saved on its review stages. The security scan must pass before either review stage runs.
           </p>
         )}
       </div>
@@ -397,6 +400,13 @@ export default function PullRequestsTab({ appId, appName }) {
             highlightToolUse
           />
         </div>
+      </div>
+
+      <div className="text-xs text-gray-400">
+        <input id="override-pr-review-provider" type="checkbox" checked={overrideReviewProvider}
+          onChange={event => setOverrideReviewProvider(event.target.checked)} className="mr-2" />
+        <label htmlFor="override-pr-review-provider">Use Run with for PR review eligibility</label>
+        <p className="mt-1">Off by default to preserve your scheduled providers. The final code review keeps its own stage settings.</p>
       </div>
 
       {error && (
@@ -487,7 +497,20 @@ export default function PullRequestsTab({ appId, appName }) {
                   <div className="shrink-0 lg:pt-0.5 flex flex-wrap items-start gap-2">
                     {rowActionsFor(pullRequest).map(({ kind, onQueue }) => {
                       const { label, Icon, title } = ACTION_KINDS[kind];
-                      const actionStatus = actions[kind][pullRequest.number]?.status;
+                      const action = actions[kind][pullRequest.number];
+                      const actionStatus = action?.status;
+                      if (actionStatus === 'failed') {
+                        return (
+                          <div key={kind} className="max-w-md text-xs text-port-error space-y-2" role="alert">
+                            <p>{action.error || (kind === 'review' ? 'PR review failed. View the failure record for details.' : 'Resolve & merge failed. View the failure record for details.')}</p>
+                            <div className="flex flex-wrap gap-3">
+                              <Link className="underline" to={`/cos/tasks?task=${encodeURIComponent(action.taskId)}&source=internal`}>View failure record</Link>
+                              {kind === 'review' && <Link className="underline" to="/models/llms/abuse">Abuse Guard setup</Link>}
+                              <button type="button" className="underline" onClick={() => onQueue(pullRequest)}>{kind === 'review' ? 'Retry PR review' : 'Retry resolve & merge'}</button>
+                            </div>
+                          </div>
+                        );
+                      }
                       if (actionStatus && actionStatus !== 'queuing') {
                         return (
                           <Link

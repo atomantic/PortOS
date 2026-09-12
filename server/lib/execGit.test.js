@@ -74,6 +74,28 @@ describe('execGit', () => {
     });
   });
 
+  it('preserves signal termination and partial output when ignoring exit codes', async () => {
+    const child = makeChild();
+    spawn.mockReturnValue(child);
+    const promise = execGit(['ls-remote'], '/repo', { ignoreExitCode: true });
+    child.stdout.emit('data', 'partial');
+    child.emit('close', null, 'SIGTERM');
+    await expect(promise).resolves.toEqual({
+      stdout: 'partial', stderr: '', exitCode: null, signal: 'SIGTERM', terminated: true
+    });
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('rejects a signal exit with cancellation metadata', async () => {
+    const child = makeChild();
+    spawn.mockReturnValue(child);
+    const promise = execGit(['fetch'], '/repo');
+    child.emit('close', null, 'SIGTERM');
+    await expect(promise).rejects.toMatchObject({
+      name: 'AbortError', message: 'git command cancelled by SIGTERM', signal: 'SIGTERM', terminated: true
+    });
+  });
+
   it('rejects with a timeout error and kills the child after the timeout', async () => {
     const child = makeChild();
     spawn.mockReturnValue(child);

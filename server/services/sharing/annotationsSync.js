@@ -148,7 +148,7 @@ export async function exportAnnotationsToBucket(bucket, localAnnotations, sender
   // file, so a key dropped from bucket A doesn't tombstone the same key on
   // bucket B (it may still be valid there).
   const tombstoneTs = new Date().toISOString();
-  const prior = await readJSONFile(recordPath, null, { logError: false });
+  const prior = await readJSONFile(recordPath, null, { logError: false, strict: true });
   const priorKeys = prior && prior.annotations && typeof prior.annotations === 'object'
     ? Object.keys(prior.annotations)
     : [];
@@ -210,7 +210,8 @@ async function flushAll() {
   const [buckets, senderInstanceId, localAnnotations] = await Promise.all([
     listBuckets().catch(() => []),
     getInstanceId().catch(() => null),
-    listLocalAuthorAnnotations().catch(() => ({})),
+    // A failed source read is not a deletion: abort before tombstone synthesis.
+    listLocalAuthorAnnotations(),
   ]);
   if (!senderInstanceId || senderInstanceId === UNKNOWN_INSTANCE_ID) return;
   const autoMerge = buckets.filter((b) => b.mode === 'auto-merge');

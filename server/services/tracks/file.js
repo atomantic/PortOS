@@ -20,7 +20,8 @@ import {
 const TRACKS_FILE = join(PATHS.data, 'tracks.json');
 
 async function loadAll() {
-  const raw = await readJSONFile(TRACKS_FILE, []);
+  // Tracks are durable user records; never save an empty fallback over unreadable bytes.
+  const raw = await readJSONFile(TRACKS_FILE, [], { strict: true });
   return (Array.isArray(raw) ? raw : []).map(sanitizeTrack).filter(Boolean);
 }
 

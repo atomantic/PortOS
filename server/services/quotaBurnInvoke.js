@@ -98,9 +98,10 @@ const entryOf = (map, key) => (map && Object.hasOwn(map, key) ? map[key] : null)
  * `loadSchedule()` is uncached (a disk read plus a deep merge over every default
  * interval), so going back to the stores per step made the status page's probe
  * pay that whole cost once per configured step. The pure resolver ignores every
- * key it does not know.
+ * key it does not know. Manual maintenance catalogs bypass built-in cadence
+ * switches without changing saved settings or the automatic burn catalog.
  */
-export async function getQuotaBurnTaskCatalog() {
+export async function getQuotaBurnTaskCatalog({ manual = false } = {}) {
   const [{ loadSchedule }, { getTaskTypeInvocation }, { getActiveApps }, { createFeatureGate }, { getAllJobs }, { isImprovementEnabled, loadState }] =
     await Promise.all([
       import('./taskScheduleStore.js'),
@@ -132,11 +133,11 @@ export async function getQuotaBurnTaskCatalog() {
   const builtin = {};
   await Promise.all(Object.entries(schedule?.tasks || {}).map(async ([taskType, config]) => {
     builtin[taskType] = {
-      enabled: config?.enabled === true,
+      enabled: manual || config?.enabled === true,
       featureEnabled: await featureEnabled(config),
       feature: config?.feature || null,
       eligible: getTaskTypeInvocation(taskType).userInvokable !== false,
-      appIds: appIdsByTaskType.get(taskType) || [],
+      appIds: manual ? undefined : appIdsByTaskType.get(taskType) || [],
       config,
     };
   }));

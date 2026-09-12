@@ -5,6 +5,10 @@ import { vitestCiPool } from '../scripts/vitestCiPool.js';
 
 export default defineConfig({
   plugins: [react()],
+  resolve: {
+    // Share Three.js without bypassing its package exports with a directory alias.
+    dedupe: ['three'],
+  },
   test: {
     // Four DOM workers exhausted Testing Library's existing 3s async budget
     // on the public runner before ChiefOfStaff's config panel settled. Keep the

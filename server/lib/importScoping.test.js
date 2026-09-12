@@ -38,6 +38,18 @@ const reaches = (entry, target) => staticImportClosure(abs(entry)).files.has(abs
 
 // Each row: the entry that was narrowed, the module it must no longer
 const NARROWED = [
+  ['services/imageGen/local.js', 'services/localMemory.js',
+    'loads GPU memory management only for generation, not gallery reads'],
+  ['services/imageGen/local.js', 'services/imageGen/regen.js',
+    'loads pixel comparison only for a regeneration, not gallery reads'],
+  ['services/persistentMindSupervisor.js', 'services/persistentMindContext.js',
+    'loads context and memory orchestration only after a turn is admitted'],
+  ['services/github.js', 'services/settings.js',
+    'loads settings only for secret operations, not repository reads or sync'],
+  ['services/sharing/peerSyncPush.js', 'services/writersRoom/bibleSync.js',
+    'loads bible asset handling only for Writers Room work pushes'],
+  ['services/sharing/peerSyncReceive.js', 'services/writersRoom/bibleSync.js',
+    'loads bible asset handling only for Writers Room work receives'],
   ['services/persistentMindAttachments.js', 'services/persistentMindSupervisor.js',
     'owns screenshot attachment lifecycle without supervisor turn execution'],
   ['services/mtplxModelManager.js', 'services/huggingFaceCatalog.js',
@@ -402,7 +414,12 @@ describe('deferred imports stay deferred (#6156)', () => {
 // ~30 modules). Measured against current main: 103,462 -> 101,702 (-1,760);
 // suites whose closure reaches services/instances.js: 181 -> 33. Lower the
 // ceiling to the new measured total plus the standard ~1.5k allowance.
-const MAX_STATIC_INSTANTIATIONS = 103202;
+// #6992 adds the existing hostShutdown latch to GitHub command completion and
+// branch reconciliation. Its dependencies were already in these callers'
+// closures; the measured baseline 103,190 -> 103,228 is the shutdown module
+// itself in 38 additional suite closures, not a new heavy subtree. Preserve
+// the existing headroom by accounting for exactly that additive lifecycle edge.
+const MAX_STATIC_INSTANTIATIONS = 103240;
 
 
 const SKIP_DIRS = new Set(['node_modules', 'coverage', 'dist', 'data']);

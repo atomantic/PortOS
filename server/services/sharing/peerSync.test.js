@@ -168,6 +168,10 @@ vi.mock('../fableLoom/index.js', () => ({
   listLooms: vi.fn().mockResolvedValue([]),
   mergeLoomsFromSync: vi.fn().mockResolvedValue({ applied: true, count: 1 }),
 }));
+vi.mock('../writersRoom/bibleSync.js', async (importOriginal) => ({
+  ...(await importOriginal()),
+  diffWorkBibleManifest: vi.fn().mockResolvedValue([]),
+}));
 vi.mock('../writersRoom/sync.js', async (importOriginal) => ({
   ...(await importOriginal()),
   listWorksForSync: vi.fn().mockResolvedValue([]),
@@ -290,6 +294,7 @@ import {
   listFoldersForSync, getFolderForSync, mergeFoldersFromSync,
   listExercisesForSync, getExerciseForSync, mergeExercisesFromSync,
 } from '../writersRoom/sync.js';
+import { diffWorkBibleManifest } from '../writersRoom/bibleSync.js';
 import { listCommissionFeedbackForSync, getCommissionFeedbackForSync, mergeCommissionFeedbackFromSync } from '../creativeCommissions/feedbackStore.js';
 import { listCommissionsForSync, getCommissionForSync, mergeCommissionsFromSync } from '../creativeCommissions/store.js';
 import { peerFetch } from '../../lib/peerHttpClient.js';
@@ -499,6 +504,16 @@ describe('peerSync', () => {
       const cursors = await listCursors();
       expect(cursors['peer-a']).toBeDefined();
       expect(cursors['peer-a'].subscribedSince).toBeGreaterThan(0);
+    });
+
+    it('refuses to subscribe over an unreadable list and preserves its bytes', async () => {
+      const file = join(PATHS.data, 'sharing', 'peer_subscriptions.json');
+      await writeFile(file, '{"subscriptions":');
+      const before = await readFile(file);
+
+      await expect(subscribePeer({ peerId: 'peer-a', recordKind: 'universe', recordId: 'u1' }))
+        .rejects.toMatchObject({ code: 'UNREADABLE_STORE', status: 500 });
+      expect(await readFile(file)).toEqual(before);
     });
 
     it('is idempotent — re-subscribing returns the existing record without duplicating', async () => {
@@ -4394,6 +4409,19 @@ describe('peerSync', () => {
           });
         },
       },
+      bibleManifest: {
+        recordKind: 'writersRoomWork', recordId: 'wr-work-aaaa',
+        arm: async () => {
+          vi.mocked(getPeers).mockResolvedValue([{
+            instanceId: 'peer-a', name: 'Peer A', address: '192.0.2.10', port: 5555,
+            enabled: true, syncEnabled: true, directions: ['outbound', 'inbound'], syncCategories: { writersRoomWorks: true },
+          }]);
+          vi.mocked(getWorkForSync).mockResolvedValue({ id: 'wr-work-aaaa', title: 'Example work', drafts: [] });
+          const dir = join(PATHS.data, 'writers-room', 'works', 'wr-work-aaaa');
+          await mkdir(dir, { recursive: true });
+          await writeFile(join(dir, 'characters.json'), JSON.stringify({ characters: [], updatedAt: '2026-06-02T00:00:00Z' }));
+        },
+      },
       linkedTrack: {
         recordKind: 'musicVideoProject', recordId: 'mv-1',
         arm: async () => {
@@ -4417,6 +4445,25 @@ describe('peerSync', () => {
     const refresh = ({ recordKind, recordId }) => findPeerSubscription('peer-a', recordKind, recordId);
     const payloadOf = (call) => JSON.parse(call[1].body);
 
+    it('re-pushes a bible-only edit even when the work record is unchanged', async () => {
+      const carrier = CARRIERS.bibleManifest;
+      await carrier.arm();
+      vi.mocked(peerFetch).mockResolvedValue(acceptsPush());
+      await pushRecordToPeer(await claim(carrier));
+      vi.mocked(peerFetch).mockClear();
+      const file = join(PATHS.data, 'writers-room', 'works', carrier.recordId, 'characters.json');
+      await writeFile(file, JSON.stringify({ characters: [{ name: 'New cast member' }], updatedAt: '2026-06-03T00:00:00Z' }));
+      expect((await pushRecordToPeer(await refresh(carrier))).pushed).toBe(true);
+      expect(payloadOf(vi.mocked(peerFetch).mock.calls[0]).bibleManifest).toHaveLength(1);
+      // A corrupt optional sibling must not hold the work and its prose hostage.
+      vi.mocked(peerFetch).mockClear();
+      await writeFile(file, '{');
+      expect((await pushRecordToPeer(await refresh(carrier))).pushed).toBe(true);
+      const withoutBible = payloadOf(vi.mocked(peerFetch).mock.calls[0]);
+      expect(withoutBible.record.id).toBe(carrier.recordId);
+      expect(withoutBible).not.toHaveProperty('bibleManifest');
+    });
+
     it('pins the wire vocabulary older peers depend on', () => {
       // Older senders and receivers read exactly these names off the wire — a
       // rename here is a cross-version break, not a refactor.
@@ -4427,6 +4474,7 @@ describe('peerSync', () => {
         ['manuscriptReview', 'reviewSyncPending'],
         ['reverseOutline', 'outlineSyncPending'],
         ['linkedTrack', 'trackSyncPending'],
+        ['bibleManifest', 'bibleSyncPending'],
       ]));
     });
 
@@ -4548,6 +4596,14 @@ describe('peerSync', () => {
     describe('receiver — applyIncomingPush', () => {
       // How each sidecar reaches the receiver, and the merge that can throw.
       const RECEIVE_CARRIERS = {
+        bibleManifest: {
+          merge: diffWorkBibleManifest,
+          payload: () => ({
+            kind: 'writersRoomWork', record: { id: 'wr-work-aaaa', drafts: [] },
+            bibleManifest: [{ workId: 'wr-work-aaaa', kind: 'character', sha256: 'a'.repeat(64), updatedAt: '2026-06-02T00:00:00Z' }],
+            assetManifest: [], sourceInstanceId: 'peer-a',
+          }),
+        },
         manuscriptReview: {
           merge: mergeReviewFromSync,
           payload: () => ({
@@ -4581,6 +4637,20 @@ describe('peerSync', () => {
           }),
         },
       };
+
+      it('scopes bible pulls to the pushed work and keeps pending pulls retryable', async () => {
+        const payload = RECEIVE_CARRIERS.bibleManifest.payload();
+        const own = payload.bibleManifest[0];
+        payload.bibleManifest.push({ ...own, workId: 'wr-work-bbbb' });
+        // No peer fetch in this test: diff returns a pending target with no registered peer.
+        vi.mocked(diffWorkBibleManifest).mockResolvedValueOnce([own]);
+        const result = await applyIncomingPush(payload);
+        expect(vi.mocked(diffWorkBibleManifest)).toHaveBeenLastCalledWith([own], expect.any(Object));
+        expect(result.bibleSyncPending).toBe(true);
+        payload.bibleManifest = undefined;
+        await applyIncomingPush(payload);
+        expect(vi.mocked(diffWorkBibleManifest)).toHaveBeenLastCalledWith([], expect.any(Object));
+      });
 
       it('has a receiver-side carrier for every sidecar row', () => {
         expect(Object.keys(RECEIVE_CARRIERS).sort()).toEqual(SIDECARS.map((e) => e.key).sort());
