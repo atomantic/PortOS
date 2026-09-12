@@ -94,6 +94,14 @@ describe('pipeline volume beat-sheet runner', () => {
     expect(generated.every((g) => g.stageId === 'idea')).toBe(true);
   });
 
+  it('generates only selected pilot beats without expanding later issue placeholders', async () => {
+    const { series, season, issues } = await seed();
+    await runner.startVolumeBeatsRun(series.id, season.id, { issueIds: [issues[0].id] });
+    await waitFor(() => runner.__testing.runs.get(season.id)?.lastPayload?.type === 'complete');
+    expect(generated.map((entry) => entry.issueId)).toEqual([issues[0].id]);
+    expect((await issuesSvc.getIssue(issues[1].id)).stages.idea.output).toBe('');
+  });
+
   it("skip-existing mode skips issues whose idea stage has output (status: 'ready' / 'edited')", async () => {
     const { series, season, issues } = await seed({ issueCount: 3 });
     await issuesSvc.updateStage(issues[1].id, 'idea', { status: 'ready', output: 'PREFILLED-BEATS' });

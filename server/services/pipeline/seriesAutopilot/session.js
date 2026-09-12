@@ -156,6 +156,7 @@ export async function persistMarker(seriesId, patch) {
   const resumable = ['running', 'paused', 'error'].includes(patch.status) && run?.options
     ? {
       includeVisual: run.options.includeVisual !== false,
+      ...(run.options.productionScope ? { productionScope: run.options.productionScope } : {}),
       fileGaps: run.options.fileGaps === true,
       ...(run.options.providerOverride ? { providerOverride: run.options.providerOverride } : {}),
       ...(run.options.modelOverride ? { modelOverride: run.options.modelOverride } : {}),
@@ -366,7 +367,9 @@ export const roleLlm = (record, role = 'creative') => {
   const roleRoute = role === 'judge'
     ? inheritLlmRoute(options.judgeLlm, base)
     : base;
-  const stageRoute = options.stageLlm?.[record?.currentStep]?.[role];
+  const inheritedStep = { pilotDraft: 'textStages', pilotReview: 'editorialReview' }[record?.currentStep];
+  const stageRoute = options.stageLlm?.[record?.currentStep]?.[role]
+    || options.stageLlm?.[inheritedStep]?.[role];
   if (stageRoute && typeof stageRoute === 'object' && Object.keys(stageRoute).length > 0) {
     return inheritLlmRoute(stageRoute, roleRoute);
   }

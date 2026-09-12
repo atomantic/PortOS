@@ -75,6 +75,7 @@ export async function startVolumeBeatsRun(seriesId, seasonId, options = {}) {
       const all = await listIssues({ seriesId });
       const volumeIssues = all
         .filter((i) => i.seasonId === seasonId)
+        .filter((i) => !Array.isArray(options.issueIds) || options.issueIds.includes(i.id))
         .sort(compareIssuesByPosition);
 
       broadcast({

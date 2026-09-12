@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 
 vi.mock('../../services/api', () => ({
@@ -80,6 +80,42 @@ describe('AutopilotPanel', () => {
     await waitFor(() => expect(startPipelineAutopilot).toHaveBeenCalledWith(
       's1', { includeVisual: true, fileGaps: false }, { silent: true },
     ));
+  });
+
+  it('sends pilot scope and does not reattach a settled run from a delayed status response', async () => {
+    let resolveStatus;
+    getPipelineAutopilotStatus.mockResolvedValueOnce({ active: false })
+      .mockImplementationOnce(() => new Promise((resolve) => { resolveStatus = resolve; }));
+    const view = renderPanel({ id: 's1', targetFormat: 'comic' });
+    await waitFor(() => expect(getPipelineAutopilotStatus).toHaveBeenCalledTimes(1));
+    fireEvent.change(screen.getByLabelText('Produce'), { target: { value: 'first-issue' } });
+    fireEvent.click(screen.getByRole('button', { name: /run autopilot/i }));
+    await waitFor(() => expect(getPipelineAutopilotStatus).toHaveBeenCalledTimes(2));
+    expect(startPipelineAutopilot).toHaveBeenCalledWith('s1', expect.objectContaining({ productionScope: 'first-issue' }), { silent: true });
+    sseLatest = { type: 'paused', runId: 'r1', reason: 'pilot needs work' };
+    sseFrames = [sseLatest];
+    view.rerender(<MemoryRouter><AutopilotPanel series={{ id: 's1', targetFormat: 'comic' }} /></MemoryRouter>);
+    await waitFor(() => expect(toast.warning).toHaveBeenCalledTimes(1));
+    await act(async () => resolveStatus({ active: true, autopilot: null, start: { runId: 'r1', mode: 'execute', provider: 'codex', model: 'selected-model' } }));
+    expect(screen.getByRole('button', { name: /run autopilot/i })).toBeInTheDocument();
+    expect(toast.warning).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole('button', { name: /pause safely/i })).not.toBeInTheDocument();
+  });
+
+  it('keeps the started run identity when status still carries a previous marker', async () => {
+    getPipelineAutopilotStatus.mockResolvedValueOnce({ active: false })
+      .mockResolvedValueOnce({ active: true, autopilot: { runId: 'previous-run' }, start: null });
+    const view = renderPanel({ id: 's1', targetFormat: 'comic' });
+    await waitFor(() => expect(getPipelineAutopilotStatus).toHaveBeenCalledTimes(1));
+    fireEvent.click(screen.getByRole('button', { name: /run autopilot/i }));
+    await waitFor(() => expect(getPipelineAutopilotStatus).toHaveBeenCalledTimes(2));
+    await act(async () => {});
+    sseLatest = { type: 'paused', runId: 'r1', reason: 'pilot needs work' };
+    sseFrames = [sseLatest];
+    view.rerender(<MemoryRouter><AutopilotPanel series={{ id: 's1', targetFormat: 'comic' }} /></MemoryRouter>);
+    await waitFor(() => expect(toast.warning).toHaveBeenCalledTimes(1));
+    expect(screen.getByRole('button', { name: /run autopilot/i })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /pause safely/i })).not.toBeInTheDocument();
   });
 
   it('passes options chosen in the popover', async () => {
@@ -640,14 +676,14 @@ describe('AutopilotPanel', () => {
   it('shows the production-ready banner for a clean done marker', async () => {
     renderPanel({ id: 's1', targetFormat: 'comic', autopilot: { status: 'done', craftGapIssues: 0 } });
     await waitFor(() => expect(getPipelineAutopilotStatus).toHaveBeenCalled());
-    expect(screen.getByText(/draft is production-ready/i)).toBeInTheDocument();
+    expect(screen.getByText(/selected production pass finished/i)).toBeInTheDocument();
   });
 
   it('qualifies a done marker that filed script-craft gaps as a caution (#1572)', async () => {
     renderPanel({ id: 's1', targetFormat: 'comic', autopilot: { status: 'done', craftGapIssues: 2, craftGapFindings: 3 } });
     await waitFor(() => expect(getPipelineAutopilotStatus).toHaveBeenCalled());
     expect(screen.getByText(/Completed with 2 filed script-craft gaps — resolve before rendering/i)).toBeInTheDocument();
-    expect(screen.queryByText(/draft is production-ready/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/selected production pass finished/i)).not.toBeInTheDocument();
   });
 
   it('uses the singular gap label when exactly one craft gap was filed (#1572)', async () => {
@@ -660,7 +696,7 @@ describe('AutopilotPanel', () => {
     renderPanel({ id: 's1', targetFormat: 'comic', autopilot: { status: 'done', craftGapIssues: 0, editorialCheckErrors: 2 } });
     await waitFor(() => expect(getPipelineAutopilotStatus).toHaveBeenCalled());
     expect(screen.getByText(/2 editorial checks errored — review before trusting/i)).toBeInTheDocument();
-    expect(screen.queryByText(/draft is production-ready/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/selected production pass finished/i)).not.toBeInTheDocument();
   });
 
   it('prefers the craft-gap caution over the editorial-check caution when both are present (#1573)', async () => {

@@ -87,6 +87,8 @@ const autopilotStartSchema = z.object({
   // run — e.g. ['comic'] produces the comic draft and skips teleplay generation.
   // Absent/empty = author every format the series targets.
   targetFormats: z.array(z.enum(['comic', 'tv'])).optional(),
+  // Bound production while retaining the full series plan as editorial context.
+  productionScope: z.enum(['series', 'first-issue']).optional(),
   // Per-run convergence bounds for the verify/review loops (0 = skip that gate).
   // When omitted, the autopilot falls back to the persisted
   // pipelineEditorialChecks.{maxArcVerifyRounds,maxEditorialRounds,maxBeatContinuityRounds}

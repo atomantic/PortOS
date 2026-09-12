@@ -74,7 +74,9 @@ export default function ArcCanvas({ series, issues, onSeriesUpdate, onIssuesUpda
 
   return (
     <div className="space-y-4">
-      <div className="grid grid-cols-1 @5xl:grid-cols-[minmax(0,1.45fr)_minmax(360px,0.55fr)] gap-4 items-start">
+      <details className="group rounded-lg border border-port-border">
+        <summary className="cursor-pointer p-3 text-sm text-gray-300">Arc overview & editorial roadmap</summary>
+      <div className="p-3 grid grid-cols-1 @5xl:grid-cols-[minmax(0,1.45fr)_minmax(360px,0.55fr)] gap-4 items-start">
         <ArcHeader
           series={series}
           onSeriesUpdate={onSeriesUpdate}
@@ -84,6 +86,7 @@ export default function ArcCanvas({ series, issues, onSeriesUpdate, onIssuesUpda
         />
         <EditorialRoadmapPanel series={series} seasons={seasons} issues={issues} />
       </div>
+      </details>
 
       {seasons.length > 0 ? (
         <section className="space-y-3">

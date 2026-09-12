@@ -133,9 +133,11 @@ export async function resolveBeatContinuity(seriesId, options = {}) {
     seriesId,
     series,
     shapeBeatResolutions(content?.episodes),
+    { allowedIssueIds: options.allowedIssueIds },
   );
   const notes = typeof content?.notes === 'string' ? content.notes.trim().slice(0, 2000) : '';
-  return { series, applied: true, notes, findings, episodesResolved, runId, providerId, model };
+  const outsideScope = episodesResolved.some((edit) => edit.skipped === 'outside-production-scope');
+  return { series, applied: !outsideScope, outsideScope, notes, findings, episodesResolved, runId, providerId, model };
 }
 
 /**
@@ -158,10 +160,19 @@ export async function resolveBeatContinuity(seriesId, options = {}) {
  * dropped with a log so a number-scheme mismatch is diagnosable. Never throws.
  * Returns `[{ issueId, number, seasonNumber, corrected, clearedStages, skipped }]`.
  */
-export async function applyBeatResolutions(seriesId, series, episodes) {
+export async function applyBeatResolutions(seriesId, series, episodes, { allowedIssueIds } = {}) {
   if (!Array.isArray(episodes) || episodes.length === 0) return [];
   const issues = await listIssues({ seriesId });
   const seasonIdByNumber = seasonIdByNumberOf(series);
+  // Preflight the entire candidate before writing any beats or clearing derived
+  // scripts/art. A pilot-only run cannot regenerate a later issue it invalidates.
+  if (Array.isArray(allowedIssueIds)) {
+    const allowed = new Set(allowedIssueIds);
+    const outside = episodes.map((edit) => matchIssueForEpisodeEdit(issues, seasonIdByNumber, edit))
+      .filter((issue) => issue && !allowed.has(issue.id)
+        && issue.stages?.idea?.locked !== true && issue.stages?.idea?.output?.trim());
+    if (outside.length) return outside.map((issue) => ({ issueId: issue.id, number: issue.number, skipped: 'outside-production-scope' }));
+  }
   const applied = [];
   for (const edit of episodes) {
     // Season match required when a resolvable season was named, else

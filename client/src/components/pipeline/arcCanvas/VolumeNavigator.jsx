@@ -19,13 +19,13 @@ export default function VolumeNavigator({ seasons, issuesBySeason, activeSeasonI
               type="button"
               onClick={() => onSelect(season.id)}
               aria-pressed={active}
-              className={`snap-start shrink-0 w-44 text-left rounded border overflow-hidden bg-port-bg transition-colors ${
+              className={`snap-start shrink-0 w-60 flex text-left rounded border overflow-hidden bg-port-bg transition-colors ${
                 active
                   ? 'border-port-accent shadow-[0_0_0_1px_rgba(59,130,246,0.35)]'
                   : 'border-port-border hover:border-port-accent/50'
               }`}
             >
-              <div className="aspect-[3/4] bg-port-bg">
+              <div className="w-12 h-16 shrink-0 bg-port-bg">
                 <CoverArt
                   record={season.cover}
                   label={`Volume ${season.number} cover`}
@@ -33,7 +33,7 @@ export default function VolumeNavigator({ seasons, issuesBySeason, activeSeasonI
                   placeholderClassName="rounded-none border-0"
                 />
               </div>
-              <div className="p-2 min-h-[72px]">
+              <div className="p-2 min-w-0">
                 <div className="flex items-center gap-1.5">
                   <span className="text-[10px] font-mono text-gray-500">V{season.number}</span>
                   <span className="text-[10px] uppercase tracking-wider text-gray-500">

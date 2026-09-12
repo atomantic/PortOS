@@ -35,7 +35,7 @@ import { createDiscardedBank } from './discardedEvidence.js';
 import { createArcMutationLedger } from '../arcMutationLedger.js';
 import { broadcast, budgetPause, providerOverrideOpts, providerIdOpts, roleLlm, seasonPreserveOpts } from './session.js';
 import { recordModelOutcome } from './modelPerformance.js';
-import { requiredScriptStages, textReady } from './stepResolver.js';
+import { productionIssues, requiredScriptStages, textReady } from './stepResolver.js';
 
 const MAX_PLANNING_GATE_HANDOFFS = 6;
 
@@ -724,8 +724,17 @@ export async function runBeatContinuity(seriesId, record) {
     // single step can't overspend the daily cap mid-loop.
     const beforeResolve = await budgetPause();
     if (beforeResolve) return beforeResolve;
-    const resolved = await resolveBeatContinuity(seriesId, { findings: blocking, ...providerOverrideOpts(record) });
+    const scopedIssues = record.options.productionScope === 'first-issue'
+      ? productionIssues(await listIssues({ seriesId }), record.options).map((issue) => issue.id)
+      : undefined;
+    const resolved = await resolveBeatContinuity(seriesId, {
+      findings: blocking, ...providerOverrideOpts(record),
+      ...(scopedIssues ? { allowedIssueIds: scopedIssues } : {}),
+    });
     await recordDomainUsage('cos', { actions: 1 });
+    if (resolved?.outsideScope) {
+      return { pause: true, pauseKind: 'scope', reason: 'Continuity repair needs to rewrite a later drafted issue. Select whole-series production to rebuild its scripts and art; no beat edits were applied.', residual: blocking };
+    }
     // No per-record counts here, and none missing: this resolver rewrites
     // episode beats and nothing else, so `episodesEdited` IS the whole account
     // of what it wrote — unlike the arc gate, whose resolver spans the arc,
@@ -1268,14 +1277,21 @@ export const runBeats = (seriesId, seasonId, record) => runChildToCompletion(ser
   attemptedSet: record.runState.beatsAttempted,
   kind: 'beats',
   id: seasonId,
-  start: () => volumeBeatsRunner.startVolumeBeatsRun(seriesId, seasonId, { mode: 'skip-existing', ...providerIdOpts(record) }),
+  start: async () => {
+    const scoped = productionIssues(await listIssues({ seriesId }), record.options);
+    return volumeBeatsRunner.startVolumeBeatsRun(seriesId, seasonId, {
+      mode: 'skip-existing',
+      ...(record.options.productionScope === 'first-issue' ? { issueIds: scoped.map((issue) => issue.id) } : {}),
+      ...providerIdOpts(record),
+    });
+  },
   isActive: volumeBeatsRunner.isVolumeBeatsRunActive,
   // Beats succeeded when every issue in the volume has a ready `idea` stage —
   // the same predicate the resolver uses to decide a volume still needs beats.
   // Before #1574 a failed beats run was silently marked attempted and only
   // surfaced (if at all) when a downstream stage found `idea` empty.
   checkReady: async () => {
-    const inSeason = (await listIssues({ seriesId })).filter((i) => i.seasonId === seasonId);
+    const inSeason = productionIssues(await listIssues({ seriesId }), record.options).filter((i) => i.seasonId === seasonId);
     const missing = inSeason.filter((i) => !isStageReady(i.stages?.idea));
     if (missing.length === 0) return null;
     return {

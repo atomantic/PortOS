@@ -1,3 +1,4 @@
+import { compareIssuesInSeries } from '../../../lib/pipelineIssueOrder.js';
 /**
  * arcPlanner/manuscriptDerive.js — derive an arc from existing manuscript /
  * source text and commit the derived plan. Built on ./context.js + ./arcCore.js.
@@ -8,7 +9,7 @@ import { getSeries, updateSeries } from '../series.js';
 import { getIssue, listIssues, recomputeIssueNumbersForSeries, updateIssue, updateStage } from '../issues.js';
 import { emitRecordUpdated, withReexportSuppressed } from '../../sharing/recordEvents.js';
 import { buildSeason, sanitizeArc, sanitizeSeason } from '../../../lib/storyArc.js';
-import { ERR_VALIDATION, collectIssueSourceText, compareIssuesByPosition, makeErr, shapeSeasonOutlines } from './context.js';
+import { ERR_VALIDATION, collectIssueSourceText, makeErr, shapeSeasonOutlines } from './context.js';
 import { commitSeasonsWithRemap, mergeSeasonsWithLocks } from './arcCore.js';
 
 /**
@@ -110,7 +111,7 @@ export async function deriveFromManuscript(seriesId, { providerOverride, modelOv
   const { arc, seasons, raw, runId, providerId, model } = await generateArcFromSource(seriesId, {
     sourceText, providerOverride, modelOverride,
   });
-  const issues = (await listIssues({ seriesId })).sort(compareIssuesByPosition);
+  const issues = (await listIssues({ seriesId })).sort(compareIssuesInSeries);
   const issueMapping = issues.map((iss, i) => ({
     id: iss.id,
     number: iss.number,
