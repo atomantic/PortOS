@@ -119,3 +119,21 @@ describe('TasksTab spawning window', () => {
     expect(screen.getByRole('button', { name: /Process task now/i })).toBeInTheDocument();
   });
 });
+
+it('focuses a deep link when its task arrives, then preserves user focus on refresh', async () => {
+  const task = { id: 'task-example', description: 'Review an example task', status: 'completed', metadata: {} };
+  const view = (tasks) => <MemoryRouter initialEntries={['/cos/tasks?task=task-example&source=user']}>
+    <input aria-label="Draft" />
+    <TasksTab tasks={tasks} onRefresh={vi.fn()} providers={[]} apps={[]} />
+  </MemoryRouter>;
+  const { rerender } = render(view(emptyTasks));
+  rerender(view({ user: { tasks: [task] }, cos: { tasks: [] } }));
+  await waitFor(() => expect(document.getElementById('cos-task-user-task-example')).toHaveFocus());
+  const draft = screen.getByRole('textbox', { name: 'Draft' });
+  draft.focus();
+  const row = document.getElementById('cos-task-user-task-example');
+  const scroll = vi.spyOn(row, 'scrollIntoView');
+  rerender(view({ user: { tasks: [{ ...task }] }, cos: { tasks: [] } }));
+  await waitFor(() => expect(draft).toHaveFocus());
+  expect(scroll).not.toHaveBeenCalled();
+});

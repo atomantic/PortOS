@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import { useSearchParams } from 'react-router';
 import { Play, ChevronDown, ChevronRight } from 'lucide-react';
 import toast from '../../ui/Toast';
@@ -137,11 +137,16 @@ export default function TasksTab({ tasks, agents = [], liveOutputs = {}, onRefre
     setUserTasksLocal(userTasks);
   }, [userTasks]);
 
+  const focusedSelection = useRef(false);
+  useEffect(() => {
+    focusedSelection.current = false;
+  }, [selectedTaskId, selectedTaskSource]);
+
   // Queue summary links identify one concrete task. Completed sections are
   // collapsed by default, so open the relevant one before attempting to focus
   // and center the row.
   useEffect(() => {
-    if (!selectedTaskId || !selectedTaskSource) return;
+    if (!selectedTaskId || !selectedTaskSource || focusedSelection.current) return;
     const selected = (selectedTaskSource === 'user' ? userTasks : cosTasks)
       .find((task) => task.id === selectedTaskId);
     if (selected?.status !== 'completed') return;
@@ -150,11 +155,12 @@ export default function TasksTab({ tasks, agents = [], liveOutputs = {}, onRefre
   }, [cosTasks, selectedTaskId, selectedTaskSource, userTasks]);
 
   useEffect(() => {
-    if (!selectedTaskId || !selectedTaskSource) return;
+    if (!selectedTaskId || !selectedTaskSource || focusedSelection.current) return;
     const row = document.getElementById(taskRowId(selectedTaskId, selectedTaskSource));
     if (!row) return;
     row.scrollIntoView?.({ block: 'center' });
     row.focus({ preventScroll: true });
+    focusedSelection.current = true;
   }, [
     cosTasks,
     selectedTaskId,
