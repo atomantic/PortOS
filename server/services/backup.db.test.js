@@ -1,21 +1,20 @@
 /**
- * Real psql/pg_dump regression for restoring a pre-federation folder schema.
+ * Real psql regression for restoring a pre-federation folder schema.
  * Runs only via test:db against a guarded test database, never live records.
  */
 import { afterAll, describe, expect, it } from 'vitest';
-import { mkdtemp, mkdir, rm } from 'node:fs/promises';
+import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { execFileSync, spawnSync } from 'node:child_process';
-import { checkHealth, ensureSchema, query, close, POOL_CONFIG } from '../lib/db.js';
+import { spawnSync } from 'node:child_process';
+import { checkHealth, ensureSchema, query, close } from '../lib/db.js';
 import { requireDbOrSkip } from '../lib/dbTestGate.js';
 import { runDbMigrations } from '../scripts/run-db-migrations.js';
 import { listFolders } from './writersRoom/db.js';
 
 const health = await checkHealth();
 const ready = requireDbOrSkip('services/backup.db.test',
-  health.connected && spawnSync('psql', ['--version']).status === 0 &&
-    spawnSync('pg_dump', ['--version']).status === 0,
+  health.connected && spawnSync('psql', ['--version']).status === 0,
   'test database or PostgreSQL client tools unavailable');
 let dest;
 const folderId = 'restore-schema-folder-probe';
@@ -38,28 +37,37 @@ describe.skipIf(!ready)('restore older database schema', () => {
     await ensureSchema({ force: true });
     await runDbMigrations();
     const appliedBefore = await query('SELECT id, applied_at FROM schema_migrations WHERE id <> $1 ORDER BY id', [pendingMigration]);
-    await query('DELETE FROM schema_migrations WHERE id = $1', [pendingMigration]);
     const folder = { id: folderId, name: 'Recovered folder' };
     await query('INSERT INTO writers_room_folders (id, name, data) VALUES ($1, $2, $3)', [folderId, folder.name, folder]);
     await query("INSERT INTO pipeline_issues (id, series_id, data) VALUES ($1, 'restore-schema-series', $2)", [
       issueId, { stages: { storyboards: { scenes: [{ description: 'Synthetic scene' }] } } },
     ]);
-    await query('ALTER TABLE writers_room_folders DROP COLUMN deleted, DROP COLUMN deleted_at');
 
     dest = await mkdtemp(join(tmpdir(), 'portos-restore-schema-'));
     const snapshotDir = join(dest, 'snapshots', 'fixture-source', 'old-schema');
     await mkdir(snapshotDir, { recursive: true });
-    execFileSync('pg_dump', [
-      '--no-owner', '--no-acl', '--clean', '--if-exists',
-      '-h', POOL_CONFIG.host, '-p', String(POOL_CONFIG.port),
-      '-U', POOL_CONFIG.user, '-d', POOL_CONFIG.database,
-      '--table=writers_room_folders', '--table=schema_migrations', '--table=pipeline_issues',
-      '-f', join(snapshotDir, 'portos-db.sql'),
-    ], { env: { ...process.env, PGPASSWORD: POOL_CONFIG.password } });
+    // Synthetic clean dump from before folder tombstones and migration 007.
+    // Avoid requiring pg_dump to match the test server's major version: CI's
+    // psql client can replay this SQL across versions, unlike an older pg_dump.
+    const ledgerRows = appliedBefore.rows.map(row =>
+      `('${row.id.replaceAll("'", "''")}', '${row.applied_at.toISOString()}')`,
+    ).join(', ');
+    await writeFile(join(snapshotDir, 'portos-db.sql'), `
+      DROP TABLE IF EXISTS writers_room_folders;
+      CREATE TABLE writers_room_folders (
+        id TEXT PRIMARY KEY, parent_id TEXT, name TEXT NOT NULL,
+        sort_order INTEGER DEFAULT 0, data JSONB NOT NULL DEFAULT '{}',
+        created_at TIMESTAMPTZ DEFAULT NOW(), updated_at TIMESTAMPTZ DEFAULT NOW()
+      );
+      INSERT INTO writers_room_folders (id, name, data)
+        VALUES ('${folderId}', 'Recovered folder', '${JSON.stringify(folder)}');
+      DROP TABLE IF EXISTS schema_migrations;
+      CREATE TABLE schema_migrations (id TEXT PRIMARY KEY, applied_at TIMESTAMPTZ DEFAULT NOW());
+      INSERT INTO schema_migrations (id, applied_at) VALUES ${ledgerRows};
+    `);
 
-    // The running version has cached successful readiness before restore.
-    await ensureSchema({ force: true });
-    await runDbMigrations();
+    // Readiness and the migration ledger both reflect the current version.
+    // Replay must replace the ledger and rerun 007 against the synthetic issue.
     await query('UPDATE writers_room_folders SET data = $2 WHERE id = $1', [folderId, { id: folderId, name: 'After backup' }]);
     const { restorePostgres } = await import('./backup.js');
     const result = await restorePostgres(dest, 'old-schema', { source: 'fixture-source', dryRun: false });
