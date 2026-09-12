@@ -72,7 +72,7 @@ Before rsync can read or overwrite live data, PortOS strictly reads `manifest.js
 
 Snapshots from PortOS versions that predate `manifest.json` remain restorable as an explicit compatibility case. Restore responses report `verification.status` as `verified` (with `checkedFiles`) or `unverified` with reason `manifest_absent`; the confirmation panel warns when a legacy restore cannot be verified. An existing manifest that is malformed or unreadable fails closed and is never treated as legacy absence.
 
-After the preflight, rsync copies `<snapshot>/data/` back to `./data/`. `dryRun: true` (the default) reports what would change without writing; an optional `subdirFilter` limits the restore to one subdirectory.
+After the preflight, rsync copies `<snapshot>/data/` back to `./data/`. Restore always passes `--checksum`, so rsync compares file contents even when the live file has the same size and modification time as the snapshot; equal-content files remain skippable, while differing bytes appear in previews and are restored. This applies to dry-run and live restores, including selective subdirectory restores and legacy snapshots without a manifest. `dryRun: true` (the default) reports what would change without writing; an optional `subdirFilter` limits the restore to one subdirectory.
 
 ### Database — `restorePostgres()`
 

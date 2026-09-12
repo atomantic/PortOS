@@ -1140,7 +1140,10 @@ export async function restoreSnapshot(destPath, snapshotId, { dryRun = true, sub
   // between requests, especially on removable or network-backed destinations.
   const verification = await verifySnapshotFiles(snapshotDir, srcDir, snapshotId, subdirFilter);
 
-  const flags = ['--itemize-changes'];
+  // Restore must compare destination bytes even when size and mtime match.
+  // Rsync's default quick-check would otherwise report a successful no-op for
+  // equal-length edits that retain the snapshot timestamp.
+  const flags = ['--itemize-changes', '--checksum'];
   if (dryRun) flags.push('--dry-run');
   if (subdirFilter) {
     flags.push(`--include=${subdirFilter}/***`);
