@@ -1,4 +1,4 @@
-import { useState, useEffect, useId } from 'react';
+import { useState, useEffect, useId, useRef } from 'react';
 import { Save, Plus, X, Play, ShieldOff, ChevronDown, ChevronRight } from 'lucide-react';
 import toast from '../ui/Toast';
 import BrailleSpinner from '../BrailleSpinner';
@@ -19,6 +19,10 @@ const sameSet = (a, b) => a.length === b.length && a.every(x => b.includes(x));
 // null, or any other shape. Normalize before it reaches React state — otherwise
 // downstream `.some` / `.includes` / `.filter` calls crash the Backup tab.
 const asArray = (v) => Array.isArray(v) ? v : [];
+const snapshotIdentity = (snapshot) =>
+  snapshot.selectionKey || `${snapshot.source || 'current'}/${snapshot.id}`;
+const snapshotSourceLabel = (snapshot) =>
+  snapshot.sourceLabel || snapshot.source || 'Current machine';
 
 export function BackupTab() {
   const destPathId = useId();
@@ -49,8 +53,10 @@ export function BackupTab() {
   const [pgBackup, setPgBackup] = useState(null);
   const [backupStatus, setBackupStatus] = useState('never');
   const [snapshots, setSnapshots] = useState([]);
-  const [restoreTarget, setRestoreTarget] = useState(null); // snapshotId pending confirm
+  const [showAllSnapshots, setShowAllSnapshots] = useState(false);
+  const [restoreTarget, setRestoreTarget] = useState(null); // source-bound request pending confirm
   const [restorePreview, setRestorePreview] = useState(null); // dry-run result
+  const restorePreviewGenerationRef = useRef(0);
   // The default-exclusions catalog is a 15+ row reference list the user rarely
   // edits — collapsed by default so the fields they came to change (destination,
   // enabled, schedule) and the action bar are what the tab actually shows.
@@ -193,12 +199,19 @@ export function BackupTab() {
     );
   };
 
-  const handleRestoreDb = async (snapshotId) => {
+  const handleRestoreDb = async (snapshot) => {
+    const generation = restorePreviewGenerationRef.current + 1;
+    restorePreviewGenerationRef.current = generation;
     setRestorePreview(null);
     setRestoreTarget(null);
+    const request = {
+      snapshotId: snapshot.id,
+      ...(snapshot.source ? { source: snapshot.source } : {}),
+    };
     // Dry-run first to show what would restore, then open the confirm modal.
-    const preview = await restoreDatabase({ snapshotId, dryRun: true }, { silent: true })
+    const preview = await restoreDatabase({ ...request, dryRun: true }, { silent: true })
       .catch(() => null);
+    if (restorePreviewGenerationRef.current !== generation) return;
     if (!preview || preview.status === 'skipped') {
       toast.error(preview?.reason === 'no_dump' ? 'No DB dump in this snapshot' : 'DB restore unavailable');
       return;
@@ -213,16 +226,16 @@ export function BackupTab() {
       return;
     }
     setRestorePreview(preview);
-    setRestoreTarget(snapshotId);
+    setRestoreTarget({ request, sourceLabel: snapshotSourceLabel(snapshot) });
   };
 
   const confirmRestoreDb = async () => {
-    const snapshotId = restoreTarget;
+    const target = restoreTarget;
     setRestoreTarget(null);
-    const result = await restoreDatabase({ snapshotId, dryRun: false }, { silent: true })
+    const result = await restoreDatabase({ ...target.request, dryRun: false }, { silent: true })
       .catch(() => ({ status: 'failed', reason: 'request_error' }));
     if (result.status === 'ok') {
-      toast.success(`Database restored from ${snapshotId}`, { icon: '💾' });
+      toast.success(`Database restored from ${target.request.snapshotId}`, { icon: '💾' });
     } else {
       toast.error(`DB restore failed: ${result.reason || 'unknown'}`);
     }
@@ -367,10 +380,11 @@ export function BackupTab() {
         <div className="space-y-2">
           <p className="block text-sm text-gray-400">Snapshots</p>
           <ul className="space-y-1.5">
-            {snapshots.slice(0, 10).map((snap) => (
-              <li key={snap.id} className="flex items-center justify-between gap-2 text-xs bg-port-bg border border-port-border rounded-lg px-2.5 py-1.5">
+            {(showAllSnapshots ? snapshots : snapshots.slice(0, 10)).map((snap) => (
+              <li key={snapshotIdentity(snap)} className="flex items-center justify-between gap-2 text-xs bg-port-bg border border-port-border rounded-lg px-2.5 py-1.5">
                 <span className="min-w-0">
                   <span className="block text-gray-300 truncate">{snap.id}</span>
+                  <span className="block text-gray-500 truncate">Source: {snapshotSourceLabel(snap)}</span>
                   {snap.failed && (
                     <span className="block text-port-error">Backup failed — download only</span>
                   )}
@@ -379,7 +393,7 @@ export function BackupTab() {
                   )}
                 </span>
                 <button
-                  onClick={() => handleRestoreDb(snap.id)}
+                  onClick={() => handleRestoreDb(snap)}
                   disabled={snap.failed || snap.incomplete}
                   title={snap.failed ? 'Failed backup snapshots can only be downloaded for salvage' : undefined}
                   className="shrink-0 px-2 py-1 bg-port-border hover:bg-port-border/70 text-white rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
@@ -389,6 +403,16 @@ export function BackupTab() {
               </li>
             ))}
           </ul>
+          {snapshots.length > 10 && (
+            <button
+              type="button"
+              onClick={() => setShowAllSnapshots(value => !value)}
+              aria-expanded={showAllSnapshots}
+              className="text-xs text-port-accent hover:text-port-accent/80 transition-colors min-h-[32px]"
+            >
+              {showAllSnapshots ? 'Show newest 10 snapshots' : `Show all ${snapshots.length} snapshots`}
+            </button>
+          )}
         </div>
       )}
 
@@ -402,7 +426,8 @@ export function BackupTab() {
         <div className="bg-port-card border border-port-border rounded-xl p-5 space-y-4">
           <h3 className="text-white text-sm font-medium">Restore database?</h3>
           <p className="text-sm text-gray-400">
-            This replays <code>portos-db.sql</code> from snapshot <code className="text-gray-300">{restoreTarget}</code>
+            This replays <code>portos-db.sql</code> from snapshot <code className="text-gray-300">{restoreTarget?.request.snapshotId}</code>
+            {' '}on <span className="text-gray-300">{restoreTarget?.sourceLabel}</span>
             {restorePreview && <> ({formatBytes(restorePreview.sizeBytes || 0)} · {restorePreview.tableCount} tables)</>}
             {' '}into the live PostgreSQL database. Existing rows may be overwritten.
           </p>

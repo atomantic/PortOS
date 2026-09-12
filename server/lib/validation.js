@@ -10,7 +10,7 @@ import { MAX_MONTHLY_COST } from './subscriptionSavings.js';
 import { QUEUEABLE_IMAGE_MODES, VIDEO_GEN_MODES } from './generationModes.js';
 import { RENDER_TARGETS, RENDER_TARGET_BACKEND_AUTO } from './renderTargets.js';
 import {
-  grokVideoDurationSchema, cloudModelIdString, recordRenderPinFields, isSafeSubdirFilter, csvIdsParam,
+  grokVideoDurationSchema, cloudModelIdString, recordRenderPinFields, isSafeSnapshotSource, isSafeSubdirFilter, csvIdsParam,
 } from './sharedSchemas.js';
 import { PR_COMPLETION_VALUES } from './prDisposition.js';
 import { EFFORT_LEVELS } from './providerModels.js';
@@ -61,7 +61,7 @@ export { optionalBooleanMap };
 // re-exported so every existing `import { … } from '../lib/validation.js'`
 // keeps working unchanged.
 export {
-  grokVideoDurationSchema, cloudModelIdString, recordRenderPinFields, isSafeSubdirFilter,
+  grokVideoDurationSchema, cloudModelIdString, recordRenderPinFields, isSafeSnapshotSource, isSafeSubdirFilter,
 };
 
 // =============================================================================
@@ -994,14 +994,23 @@ export const instanceFeatureGroupUpdateSchema = z.object({
 export const subdirFilterSchema = z.string()
   .refine(isSafeSubdirFilter, 'subdirFilter must be a relative path with no wildcard, ".." , or leading "/" segments');
 
+export const snapshotSourceSchema = z.string()
+  .refine(isSafeSnapshotSource, 'source must be "@legacy" or a single machine-name segment');
+
+export const snapshotDownloadQuerySchema = z.object({
+  source: snapshotSourceSchema.optional(),
+}).strict();
+
 export const restoreRequestSchema = z.object({
   snapshotId: z.string().min(1),
+  source: snapshotSourceSchema.optional(),
   subdirFilter: subdirFilterSchema.optional().nullable(),
   dryRun: z.boolean().optional().default(true)
 });
 
 export const restoreDbRequestSchema = z.object({
   snapshotId: z.string().min(1),
+  source: snapshotSourceSchema.optional(),
   dryRun: z.boolean().optional().default(true)
 });
 

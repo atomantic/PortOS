@@ -283,11 +283,16 @@ describe('listSnapshots', () => {
     // The backup target is commonly an iCloud folder; macOS drops a `.DS_Store`
     // FILE into every dir. It must not be treated as a snapshot id (reading
     // `<.DS_Store>/manifest.json` would throw ENOTDIR).
-    vi.spyOn(fs, 'readdir').mockResolvedValue([
-      dirent('.DS_Store', false),
-      dirent('2026-06-08T15-18-34', true),
-      dirent('2026-06-07T09-00-00', true),
-    ]);
+    const readdirSpy = vi.spyOn(fs, 'readdir').mockImplementation(async (path) => {
+      if (String(path) === joinPath('/dest', 'snapshots')) {
+        return [dirent('.DS_Store', false), dirent(machineHost, true)];
+      }
+      return [
+        dirent('.DS_Store', false),
+        dirent('2026-06-08T15-18-34', true),
+        dirent('2026-06-07T09-00-00', true),
+      ];
+    });
     vi.spyOn(fs, 'readFile').mockImplementation(async (p) => {
       if (String(p).includes('.DS_Store')) throw new Error('ENOTDIR — .DS_Store should never be read');
       return JSON.stringify({ generatedAt: '2026-06-08T00:00:00Z', fileCount: 10 });
@@ -297,6 +302,58 @@ describe('listSnapshots', () => {
     expect(ids).toHaveLength(2);
     expect(ids).toContain('2026-06-08T15-18-34');
     expect(ids).not.toContain('.DS_Store');
+    readdirSpy.mockRestore();
+  });
+
+  it('discovers legacy and machine snapshots with collision-safe identities', async () => {
+    const destRoot = await fs.mkdtemp(joinPath(tmpdir(), 'portos-backup-sources-'));
+    const snapshotId = '2026-06-08T15-18-34';
+    const legacyId = '2025-12-31T23-59-59';
+    const roots = [
+      joinPath(destRoot, 'snapshots', legacyId),
+      joinPath(destRoot, 'snapshots', 'legacy', snapshotId),
+      joinPath(destRoot, 'snapshots', 'previous-machine', snapshotId),
+      joinPath(destRoot, 'snapshots', machineHost, snapshotId),
+    ];
+    try {
+      await Promise.all(roots.map(root => fs.mkdir(joinPath(root, 'data'), { recursive: true })));
+      await Promise.all(roots.map((root, index) => fs.writeFile(
+        joinPath(root, 'manifest.json'),
+        JSON.stringify({ generatedAt: `2026-01-0${index + 1}T00:00:00Z`, fileCount: index + 1 }),
+      )));
+
+      const result = await listSnapshots(destRoot);
+
+      expect(result).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          id: legacyId,
+          source: '@legacy',
+          sourceLabel: 'Legacy (pre-namespace)',
+          selectionKey: `@legacy/${legacyId}`,
+        }),
+        expect.objectContaining({
+          id: snapshotId,
+          source: 'legacy',
+          selectionKey: `legacy/${snapshotId}`,
+          currentMachine: false,
+        }),
+        expect.objectContaining({
+          id: snapshotId,
+          source: 'previous-machine',
+          selectionKey: `previous-machine/${snapshotId}`,
+          currentMachine: false,
+        }),
+        expect.objectContaining({
+          id: snapshotId,
+          source: machineHost,
+          selectionKey: `${machineHost}/${snapshotId}`,
+          currentMachine: true,
+        }),
+      ]));
+      expect(new Set(result.map(snapshot => snapshot.selectionKey))).toHaveProperty('size', 4);
+    } finally {
+      await fs.rm(destRoot, { recursive: true, force: true });
+    }
   });
 
   it('returns [] for a falsy destPath without touching the filesystem', async () => {
@@ -350,6 +407,31 @@ describe('openSnapshotStream', () => {
     expect(fs.stat).not.toHaveBeenCalled();
   });
 
+  it('rejects a traversing source before touching the disk or spawning tar', async () => {
+    await expect(openSnapshotStream('/dest', 'snap-1', { source: '../other-machine' }))
+      .rejects.toMatchObject({ status: 400, code: 'VALIDATION_ERROR' });
+    expect(spawn).not.toHaveBeenCalled();
+    expect(fs.stat).not.toHaveBeenCalled();
+  });
+
+  it('rejects an explicitly selected source namespace that is a symbolic link', async () => {
+    const destRoot = await fs.mkdtemp(joinPath(tmpdir(), 'portos-backup-source-link-'));
+    const outsideRoot = await fs.mkdtemp(joinPath(tmpdir(), 'portos-backup-source-outside-'));
+    try {
+      await fs.mkdir(joinPath(destRoot, 'snapshots'), { recursive: true });
+      await fs.mkdir(joinPath(outsideRoot, 'snap-1'), { recursive: true });
+      await fs.symlink(outsideRoot, joinPath(destRoot, 'snapshots', 'previous-machine'));
+
+      await expect(openSnapshotStream(destRoot, 'snap-1', { source: 'previous-machine' }))
+        .rejects.toMatchObject({ status: 400, code: 'VALIDATION_ERROR' });
+      expect(spawn).not.toHaveBeenCalled();
+      expect(fs.stat).not.toHaveBeenCalled();
+    } finally {
+      await fs.rm(destRoot, { recursive: true, force: true });
+      await fs.rm(outsideRoot, { recursive: true, force: true });
+    }
+  });
+
   it('refuses a snapshot whose .in-progress marker survived a crash', async () => {
     // activeSnapshotId is module state and resets on restart; the marker is what
     // still says "this tree was never finished" after PM2 restarts mid-backup.
@@ -384,15 +466,36 @@ describe('openSnapshotStream', () => {
     await expect(done).resolves.toBeUndefined();
   });
 
+  it('archives an explicitly selected previous-machine snapshot', async () => {
+    const proc = readySnapshot();
+
+    const stream = await openSnapshotStream('/dest', 'snap-1', { source: 'previous-machine' });
+
+    expect(spawn).toHaveBeenCalledWith(
+      'tar',
+      ['-czf', '-', '-C', resolve(join('/dest', 'snapshots', 'previous-machine')), 'snap-1'],
+      { shell: false },
+    );
+    const done = ended(stream);
+    stream.resume();
+    proc.emit('close', 0);
+    await expect(done).resolves.toBeUndefined();
+  });
+
   it('archives a legacy pre-manifest snapshot without consulting a manifest', async () => {
     // listSnapshots deliberately keeps snapshots taken before manifests existed,
     // so a missing manifest.json must never gate the download.
     const proc = readySnapshot();
 
-    const stream = await openSnapshotStream('/dest', 'legacy-snapshot');
+    const stream = await openSnapshotStream('/dest', 'legacy-snapshot', { source: '@legacy' });
 
     expect(fs.readFile).not.toHaveBeenCalled();
     expect(fs.stat.mock.calls.flat().join(' ')).not.toContain('manifest.json');
+    expect(spawn).toHaveBeenCalledWith(
+      'tar',
+      ['-czf', '-', '-C', resolve(join('/dest', 'snapshots')), 'legacy-snapshot'],
+      { shell: false },
+    );
     const done = ended(stream);
     stream.resume();
     proc.emit('close', 0);
@@ -793,6 +896,23 @@ describe('restorePostgres', () => {
     expect(result.sizeBytes).toBe(4096);
     expect(result.tableCount).toBe(1);
     expect(spawn).not.toHaveBeenCalled();
+  });
+
+  it('reads a previous-machine dump from the explicitly selected namespace', async () => {
+    vi.spyOn(fs, 'stat').mockResolvedValue({ size: 4096, isFile: () => true });
+    mockLegacyDumpRead();
+
+    await expect(restorePostgres('/dest', 'shared-id', {
+      source: 'previous-machine',
+      dryRun: true,
+    })).resolves.toMatchObject({ status: 'ok', dryRun: true });
+
+    expect(fs.stat).toHaveBeenCalledWith(resolve(
+      '/dest', 'snapshots', 'previous-machine', 'shared-id', 'portos-db.sql',
+    ));
+    expect(fs.readFile).toHaveBeenCalledWith(resolve(
+      '/dest', 'snapshots', 'previous-machine', 'shared-id', 'manifest.json',
+    ), 'utf-8');
   });
 
   it('refuses a real restore when PG is not connected', async () => {
@@ -1644,6 +1764,15 @@ describe('restoreSnapshot snapshotId, filter flags, and settings re-sync', () =>
   });
 
   describe('subdirFilter rsync flags', () => {
+    it('reads a legacy flat snapshot when that source is explicitly selected', async () => {
+      await runRestore('/dest', 'legacy-snapshot', { source: '@legacy', dryRun: true });
+
+      expect(spawn.mock.calls[0][1]).toEqual(expect.arrayContaining([
+        `${resolve('/dest', 'snapshots', 'legacy-snapshot', 'data')}/`,
+        PATHS.data,
+      ]));
+    });
+
     it('builds the exact include/exclude chain for a valid subdirFilter', async () => {
       await runRestore('/dest', 'snap-1', { dryRun: true, subdirFilter: 'brain' });
 
