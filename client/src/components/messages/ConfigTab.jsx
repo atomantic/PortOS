@@ -288,11 +288,11 @@ export default function ConfigTab({ accounts, setAccounts }) {
     <div className="space-y-8">
       {/* Accounts */}
       <section>
-        <div className="flex items-center justify-between mb-3">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 mb-3">
           <h2 className="text-lg font-semibold text-white">Email Accounts</h2>
           <button
             onClick={() => setShowForm(!showForm)}
-            className="flex items-center gap-2 px-3 py-2 bg-port-accent text-white rounded-lg text-sm hover:bg-port-accent/80 transition-colors"
+            className="flex items-center justify-center gap-2 px-3 py-2 bg-port-accent text-white rounded-lg text-sm hover:bg-port-accent/80 transition-colors self-start sm:self-auto"
           >
             <Plus size={16} />
             Add Account
@@ -320,7 +320,7 @@ export default function ConfigTab({ accounts, setAccounts }) {
                   <button
                     onClick={handleReauthorize}
                     disabled={reauthorizing}
-                    className={`flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-lg transition-colors disabled:opacity-50 ${
+                    className={`flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-lg transition-colors disabled:opacity-50 shrink-0 self-start sm:self-auto ${
                       gmailAuthorized
                         ? 'text-gray-400 hover:text-white'
                         : 'bg-port-warning/20 text-port-warning hover:bg-port-warning/30'
@@ -365,7 +365,7 @@ export default function ConfigTab({ accounts, setAccounts }) {
                         <p>2. Select or create a Google Cloud project.</p>
                         <p>3. Click Continue and PortOS will finish the setup.</p>
                       </div>
-                      <div className="flex gap-2 pt-1">
+                      <div className="flex flex-wrap gap-2 pt-1">
                         <button
                           onClick={handleAutoConfigContinue}
                           className="flex items-center gap-1 rounded bg-port-accent px-3 py-1.5 text-xs text-white hover:bg-port-accent/80"
@@ -422,14 +422,14 @@ export default function ConfigTab({ accounts, setAccounts }) {
                 </div>
               )}
 
-              <div className="flex items-center justify-between">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
                 <div className="flex items-center gap-2 text-sm">
                   <span className="w-2 h-2 rounded-full bg-gray-500" />
                   <span className="text-gray-300">Gmail API</span>
                 </div>
                 <button
                   onClick={handleEnableGmailApi}
-                  className="flex items-center gap-1.5 px-3 py-1.5 text-xs text-gray-400 hover:text-white transition-colors"
+                  className="flex items-center gap-1.5 px-3 py-1.5 text-xs text-gray-400 hover:text-white transition-colors self-start sm:self-auto"
                   title="Open Google Cloud Console to enable Gmail API"
                 >
                   <ExternalLink size={12} />
@@ -510,74 +510,74 @@ export default function ConfigTab({ accounts, setAccounts }) {
                 key={account.id}
                 className="p-4 bg-port-card rounded-lg border border-port-border"
               >
-                <div className="flex items-center justify-between">
-                <div className="flex items-center gap-3">
-                  <Icon size={20} className={account.enabled ? 'text-port-accent' : 'text-gray-600'} />
-                  <div>
-                    <div className="text-sm font-medium text-white">{account.name}</div>
-                    <div className="text-xs text-gray-500">
-                      {TYPE_LABELS[account.type]} · {account.email || 'No email set'}
-                    </div>
-                    {account.lastSyncAt && (
-                      <div className="text-xs text-gray-600">
-                        Last sync: {formatDateTime(account.lastSyncAt)} ({account.lastSyncStatus})
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                  <div className="flex items-center gap-3 min-w-0">
+                    <Icon size={20} className={`shrink-0 ${account.enabled ? 'text-port-accent' : 'text-gray-600'}`} />
+                    <div className="min-w-0 flex-1">
+                      <div className="text-sm font-medium text-white truncate">{account.name}</div>
+                      <div className="text-xs text-gray-500 truncate">
+                        {TYPE_LABELS[account.type]} · {account.email || 'No email set'}
                       </div>
-                    )}
+                      {account.lastSyncAt && (
+                        <div className="text-xs text-gray-600 truncate">
+                          Last sync: {formatDateTime(account.lastSyncAt)} ({account.lastSyncStatus})
+                        </div>
+                      )}
+                    </div>
                   </div>
-                </div>
-                <div className="flex items-center gap-2">
-                  {account.type === 'gmail' && (
+                  <div className="flex flex-wrap items-center gap-2 pt-2 sm:pt-0 border-t border-port-border/40 sm:border-0">
+                    {account.type === 'gmail' && (
+                      <button
+                        onClick={() => handleToggleIngestSent(account)}
+                        className={`px-2 py-1 rounded text-xs transition-colors ${
+                          account.syncConfig?.ingestSent !== false
+                            ? 'bg-port-accent/20 text-port-accent'
+                            : 'bg-gray-700 text-gray-400'
+                        }`}
+                        title="Ingest sent mail so Tribe outreach won't nudge threads you've already replied to"
+                      >
+                        {account.syncConfig?.ingestSent !== false ? 'Reply detection: on' : 'Reply detection: off'}
+                      </button>
+                    )}
                     <button
-                      onClick={() => handleToggleIngestSent(account)}
+                      onClick={() => handleToggle(account)}
                       className={`px-2 py-1 rounded text-xs transition-colors ${
-                        account.syncConfig?.ingestSent !== false
-                          ? 'bg-port-accent/20 text-port-accent'
+                        isPendingAuthorization
+                          ? 'bg-port-warning/20 text-port-warning'
+                          : account.enabled
+                          ? 'bg-port-success/20 text-port-success'
                           : 'bg-gray-700 text-gray-400'
                       }`}
-                      title="Ingest sent mail so Tribe outreach won't nudge threads you've already replied to"
+                      title={isPendingAuthorization ? 'Account is enabled but waiting for Google authorization' : undefined}
                     >
-                      {account.syncConfig?.ingestSent !== false ? 'Reply detection: on' : 'Reply detection: off'}
+                      {isPendingAuthorization ? 'Pending authorization' : account.enabled ? 'Enabled' : 'Disabled'}
                     </button>
-                  )}
-                  <button
-                    onClick={() => handleToggle(account)}
-                    className={`px-2 py-1 rounded text-xs transition-colors ${
-                      isPendingAuthorization
-                        ? 'bg-port-warning/20 text-port-warning'
-                        : account.enabled
-                        ? 'bg-port-success/20 text-port-success'
-                        : 'bg-gray-700 text-gray-400'
-                    }`}
-                    title={isPendingAuthorization ? 'Account is enabled but waiting for Google authorization' : undefined}
-                  >
-                    {isPendingAuthorization ? 'Pending authorization' : account.enabled ? 'Enabled' : 'Disabled'}
-                  </button>
-                  <button
-                    onClick={() => handleClearCache(account.id)}
-                    disabled={clearingCache === account.id}
-                    className={`px-2 py-1 rounded text-xs transition-colors ${
-                      confirmClear === account.id
-                        ? 'bg-port-error/20 text-port-error'
-                        : 'bg-port-warning/10 text-port-warning hover:bg-port-warning/20'
-                    } disabled:opacity-50`}
-                    onBlur={() => setConfirmClear(null)}
-                    title="Clear cached messages for this account"
-                  >
-                    {clearingCache === account.id ? 'Clearing...' : confirmClear === account.id ? 'Are you sure?' : 'Clear Cache'}
-                  </button>
-                  <button
-                    onClick={() => requestDelete(account.id)}
-                    disabled={deleting === account.id}
-                    className="p-1 text-gray-500 hover:text-port-error transition-colors"
-                    title="Delete account"
-                  >
-                    {deleting === account.id ? (
-                      <RefreshCw size={16} className="animate-spin" />
-                    ) : (
-                      <Trash2 size={16} />
-                    )}
-                  </button>
-                </div>
+                    <button
+                      onClick={() => handleClearCache(account.id)}
+                      disabled={clearingCache === account.id}
+                      className={`px-2 py-1 rounded text-xs transition-colors ${
+                        confirmClear === account.id
+                          ? 'bg-port-error/20 text-port-error'
+                          : 'bg-port-warning/10 text-port-warning hover:bg-port-warning/20'
+                      } disabled:opacity-50`}
+                      onBlur={() => setConfirmClear(null)}
+                      title="Clear cached messages for this account"
+                    >
+                      {clearingCache === account.id ? 'Clearing...' : confirmClear === account.id ? 'Are you sure?' : 'Clear Cache'}
+                    </button>
+                    <button
+                      onClick={() => requestDelete(account.id)}
+                      disabled={deleting === account.id}
+                      className="p-1 text-gray-500 hover:text-port-error transition-colors"
+                      title="Delete account"
+                    >
+                      {deleting === account.id ? (
+                        <RefreshCw size={16} className="animate-spin" />
+                      ) : (
+                        <Trash2 size={16} />
+                      )}
+                    </button>
+                  </div>
                 </div>
                 {isConfirming(account.id) && (
                   <InlineConfirmRow
@@ -619,9 +619,9 @@ export default function ConfigTab({ accounts, setAccounts }) {
       <section>
         <h2 className="text-lg font-semibold text-white mb-3">Reply Tone</h2>
         <div className="p-4 bg-port-card rounded-lg border border-port-border">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-3">
-              <User size={20} className={config?.voiceMode ? 'text-port-accent-2' : 'text-gray-600'} />
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div className="flex items-center gap-3 min-w-0">
+              <User size={20} className={`shrink-0 ${config?.voiceMode ? 'text-port-accent-2' : 'text-gray-600'}`} />
               <div>
                 <div className="text-sm font-medium text-white">Conversational tone</div>
                 <div className="text-xs text-gray-500">
@@ -631,7 +631,7 @@ export default function ConfigTab({ accounts, setAccounts }) {
             </div>
             <button
               onClick={() => { setConfig(prev => ({ ...prev, voiceMode: !prev.voiceMode })); setConfigDirty(true); }}
-              className={`px-3 py-1.5 rounded text-xs font-medium transition-colors ${
+              className={`px-3 py-1.5 rounded text-xs font-medium transition-colors shrink-0 self-start sm:self-auto ${
                 config?.voiceMode
                   ? 'bg-port-accent-2/20 text-port-accent-2'
                   : 'bg-gray-700 text-gray-400'
