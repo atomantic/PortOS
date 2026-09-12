@@ -632,6 +632,8 @@ Every mounted API prefix (see `server/index.js` for the authoritative list). Dom
 | `/api/agent-context` | Opt-in, loopback-only MCP context plus separately granted semantic PortOS actions |
 | `/api/workspace-contexts` | Workspace context management |
 | `/api/apps/:appId/reference-repos` | Per-app reference repos |
+| `/api/managed-visitor-admin` | Owner-only provisioning and revocation of scoped managed-app visitor credentials; [contract](features/managed-visitors.md) |
+| `/api/managed-visitors/v1` | Loopback managed visitor admission, observation, bounded actions and confirmed cleanup; requires a separate scoped app credential even when the instance password is off; [contract](features/managed-visitors.md) |
 | `/api/network-exposure` | Network exposure checks |
 | `/api/history` | User/system action history log |
 | `/api/commands` | Allowlisted command execution |
