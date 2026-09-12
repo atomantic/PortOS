@@ -745,6 +745,13 @@ describe('restorePostgres', () => {
   };
   beforeEach(async () => {
     vi.clearAllMocks();
+    // listSnapshots installs a persistent readdir spy that returns Dirents.
+    // Restore string-returning filesystem reads before Windows ENOENT handling
+    // checks for an atomic-write swap sibling.
+    const realFs = await vi.importActual('fs/promises');
+    if (vi.isMockFunction(fs.readdir)) {
+      fs.readdir.mockImplementation((...args) => realFs.readdir(...args));
+    }
     // clearAllMocks does not undo stubEnv — a PGPASSWORD stub from a failed
     // (thrown) test would otherwise leak into every test after it.
     vi.unstubAllEnvs();
