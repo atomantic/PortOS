@@ -10,11 +10,11 @@ vi.mock('../../services/apiImageVideo', () => ({
   listMediaCollections: (...args) => listMediaCollections(...args),
 }));
 
-const listUniverses = vi.fn();
+const listUniverseNames = vi.fn();
 // universeBuilderShared imports the WORLD_CATEGORY_* constants from this module,
 // so the mock has to carry them or the shared lib loads with undefined values.
 vi.mock('../../services/apiUniverseBuilder', () => ({
-  listUniverses: (...args) => listUniverses(...args),
+  listUniverseNames: (...args) => listUniverseNames(...args),
   WORLD_CATEGORIES: ['landscapes', 'environments', 'structures', 'vehicles'],
   WORLD_CATEGORY_KEY_MAX: 64,
 }));
@@ -66,8 +66,8 @@ describe('GalleryImagePicker', () => {
     listImageGallery.mockResolvedValue(GALLERY);
     listMediaCollections.mockReset();
     listMediaCollections.mockResolvedValue(COLLECTIONS);
-    listUniverses.mockReset();
-    listUniverses.mockResolvedValue(UNIVERSES);
+    listUniverseNames.mockReset();
+    listUniverseNames.mockResolvedValue(UNIVERSES);
     uploadGalleryImage.mockReset();
     toast.error.mockReset();
   });
@@ -300,7 +300,7 @@ describe('GalleryImagePicker', () => {
 
   it('degrades to image-derived universes and no collections when those fetches fail', async () => {
     listMediaCollections.mockRejectedValue(new Error('nope'));
-    listUniverses.mockRejectedValue(new Error('nope'));
+    listUniverseNames.mockRejectedValue(new Error('nope'));
     render(<GalleryImagePicker open onClose={vi.fn()} onSelect={vi.fn()} />);
     await screen.findByAltText('a neon sunset');
 
@@ -317,7 +317,7 @@ describe('GalleryImagePicker', () => {
     render(<GalleryImagePicker open onClose={vi.fn()} onSelect={vi.fn()} />);
     await screen.findByAltText('a neon sunset');
     expect(listMediaCollections).toHaveBeenCalledWith({ silent: true });
-    expect(listUniverses).toHaveBeenCalledWith({ silent: true });
+    expect(listUniverseNames).toHaveBeenCalledWith({ silent: true });
   });
 
   it('skips malformed sidecar metadata instead of throwing while building options', async () => {
@@ -329,7 +329,7 @@ describe('GalleryImagePicker', () => {
       { filename: 'proto.png', path: '/data/images/proto.png', prompt: 'prototype key', entryCategory: 'constructor' },
     ]);
     listMediaCollections.mockResolvedValue([{ id: 'col-1', name: 5, items: [{ kind: 'image', ref: 'ok.png' }] }]);
-    listUniverses.mockResolvedValue([{ id: 'uni-a', name: 99 }]);
+    listUniverseNames.mockResolvedValue([{ id: 'uni-a', name: 99 }]);
     render(<GalleryImagePicker open onClose={vi.fn()} onSelect={vi.fn()} />);
     await screen.findByAltText('bad metadata');
 
@@ -360,7 +360,7 @@ describe('GalleryImagePicker', () => {
   it('does not render the filter selects when nothing is filterable', async () => {
     listImageGallery.mockResolvedValue([{ filename: 'plain.png', path: '/data/images/plain.png', prompt: 'plain' }]);
     listMediaCollections.mockResolvedValue([]);
-    listUniverses.mockResolvedValue([]);
+    listUniverseNames.mockResolvedValue([]);
     render(<GalleryImagePicker open onClose={vi.fn()} onSelect={vi.fn()} />);
     await screen.findByAltText('plain');
     expect(screen.queryByLabelText(/universe or collection/i)).toBeNull();

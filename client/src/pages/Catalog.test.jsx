@@ -24,10 +24,10 @@ vi.mock('../services/apiCatalog', () => ({
 // Bulk "Add to universe/series" sources its menu from the FULL live lists (so
 // empty universes/series are valid destinations), not the facet arrays.
 vi.mock('../services/apiUniverseBuilder', () => ({
-  listUniverses: vi.fn(),
+  listUniverseNames: vi.fn(),
 }));
 vi.mock('../services/apiPipeline', () => ({
-  listPipelineSeries: vi.fn(),
+  listPipelineSeriesNames: vi.fn(),
 }));
 
 vi.mock('../components/ui/Toast', () => ({
@@ -60,8 +60,8 @@ import {
   rerunCatalogMigration,
 } from '../services/apiCatalog';
 import { listCatalogTypes } from '../services/apiCatalogTypes';
-import { listUniverses } from '../services/apiUniverseBuilder';
-import { listPipelineSeries } from '../services/apiPipeline';
+import { listUniverseNames } from '../services/apiUniverseBuilder';
+import { listPipelineSeriesNames } from '../services/apiPipeline';
 import toast from '../components/ui/Toast';
 
 const sample = [
@@ -97,8 +97,8 @@ beforeEach(() => {
   linkCatalogIngredient.mockResolvedValue({ success: true });
   getCatalogStats.mockResolvedValue({ total: 2, byType: { character: 1, place: 1 } });
   getCatalogFacets.mockResolvedValue(sampleFacets);
-  listUniverses.mockResolvedValue([{ id: 'u-1', name: 'Echo Saints' }]);
-  listPipelineSeries.mockResolvedValue([{ id: 's-1', name: 'Season 1', universeId: 'u-1' }]);
+  listUniverseNames.mockResolvedValue([{ id: 'u-1', name: 'Echo Saints' }]);
+  listPipelineSeriesNames.mockResolvedValue([{ id: 's-1', name: 'Season 1', universeId: 'u-1' }]);
   rerunCatalogMigration.mockResolvedValue({ stats: { promoted: 0 } });
   // Default: system registry only (the hook merges with the static fallback).
   listCatalogTypes.mockResolvedValue({ types: [] });
@@ -500,7 +500,7 @@ describe('Catalog page', () => {
   it('lists empty (link-less) universes in the Add-to menu so they can be seeded', async () => {
     // A brand-new universe with zero catalog links is absent from /facets but
     // must still be a valid placement target.
-    listUniverses.mockResolvedValue([
+    listUniverseNames.mockResolvedValue([
       { id: 'u-1', name: 'Echo Saints' },
       { id: 'u-empty', name: 'Fresh Empty Universe' },
     ]);

@@ -40,6 +40,8 @@ const reaches = (entry, target) => staticImportClosure(abs(entry)).files.has(abs
 const NARROWED = [
   ['services/imageGen/local.js', 'services/imageGen/regen.js',
     'loads pixel comparison only for a regeneration, not gallery reads'],
+  ['services/persistentMindSupervisor.js', 'services/persistentMindContext.js',
+    'loads context and memory orchestration only after a turn is admitted'],
   ['services/github.js', 'services/settings.js',
     'loads settings only for secret operations, not repository reads or sync'],
   ['services/sharing/peerSyncPush.js', 'services/writersRoom/bibleSync.js',

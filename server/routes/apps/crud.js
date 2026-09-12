@@ -1,4 +1,4 @@
-import { appQualityQuerySchema, appQualityHistoryQuerySchema, appQualityFederationQuerySchema } from '../../lib/auditQuality.js';
+import { appListQuerySchema, appQualityQuerySchema, appQualityHistoryQuerySchema, appQualityFederationQuerySchema } from '../../lib/auditQuality.js';
 import { exportPortosQuality } from '../../services/appQualityFederation.js';
 import { enrichAppsWithQuality, getAppQualityHistory } from '../../services/appQuality.js';
 /**
@@ -39,11 +39,25 @@ router.get('/quality-federation', asyncHandler(async (req, res) => {
   res.json(payload);
 }));
 
-// GET /api/apps - List all apps. The route fetches the raw records; the
-// appListEnrichment service owns the PM2 status/port/process enrichment.
+// GET /api/apps - List all apps. The bare response is the frozen PM2-enriched
+// peer-probe contract. `view=nav` is the cheap sidebar projection; `view=probe`
+// keeps PM2 enrichment but returns only the fields the peer UI consumes.
 router.get('/', asyncHandler(async (req, res) => {
-  const { includeQuality } = validateRequest(appQualityQuerySchema, req.query);
-  const apps = await enrichAppsWithPm2Status(await appsService.getAllApps());
+  const { includeQuality, view } = validateRequest(appListQuerySchema, req.query);
+  const rawApps = await appsService.getAllApps();
+  if (view === 'nav') {
+    res.json(rawApps.map(({ id, name, icon, archived, type }) => ({ id, name, icon, archived, type })));
+    return;
+  }
+
+  const apps = await enrichAppsWithPm2Status(rawApps);
+  if (view === 'probe') {
+    res.json(apps.map(({ id, name, icon, overallStatus, uiPort, apiPort, type }) => ({
+      id, name, icon, overallStatus, uiPort, apiPort, type,
+    })));
+    return;
+  }
+
   // The bare list is the frozen peer-probe contract. Local UI opts into
   // assessment prose explicitly so it never rides automatic federation probes.
   res.json(includeQuality === 'true' ? await enrichAppsWithQuality(apps) : apps);

@@ -7,9 +7,9 @@ import { MemoryRouter } from 'react-router';
 // buttons) that fetch on mount. Stub them so the test only exercises the
 // duplicate-detection banner + merge flow added here.
 vi.mock('../services/api', () => ({
-  listUniverses: vi.fn(),
+  listUniverseSummaries: vi.fn(),
   deleteUniverse: vi.fn(),
-  listPipelineSeries: vi.fn(),
+  listPipelineSeriesSummaries: vi.fn(),
   listMediaCollections: vi.fn(),
   listUniverseDuplicates: vi.fn(),
   previewUniverseMerge: vi.fn(),
@@ -42,11 +42,11 @@ const renderPage = () => render(<MemoryRouter><Universes /></MemoryRouter>);
 
 beforeEach(() => {
   vi.clearAllMocks();
-  api.listUniverses.mockResolvedValue([
+  api.listUniverseSummaries.mockResolvedValue([
     { id: 'u-new', name: 'Clandestiny', createdAt: '2026-05-22T00:00:00Z', updatedAt: '2026-05-22T00:00:00Z' },
     { id: 'u-old', name: 'Clandestiny', createdAt: '2026-05-11T00:00:00Z', updatedAt: '2026-05-11T00:00:00Z' },
   ]);
-  api.listPipelineSeries.mockResolvedValue([]);
+  api.listPipelineSeriesSummaries.mockResolvedValue([]);
   api.listMediaCollections.mockResolvedValue([]);
   api.listUniverseDuplicates.mockResolvedValue({ groups: [dupGroup] });
 });
@@ -109,9 +109,9 @@ describe('Universes page — row thumbnail', () => {
     api.listUniverseDuplicates.mockResolvedValue({ groups: [] });
   });
 
-  it('shows the base style image (last styleImageRef), matching the detail page', async () => {
-    api.listUniverses.mockResolvedValue([
-      { id: 'u1', name: 'Neon Expanse', styleImageRefs: ['old-style.png', 'base-style.png'], updatedAt: '2026-06-01T00:00:00Z' },
+  it('shows the projected canon count and base style image, matching the detail page', async () => {
+    api.listUniverseSummaries.mockResolvedValue([
+      { id: 'u1', name: 'Neon Expanse', styleImageRef: 'base-style.png', canonCount: 7, updatedAt: '2026-06-01T00:00:00Z' },
     ]);
     // A media-collection image exists too, but the base style image wins.
     api.listMediaCollections.mockResolvedValue([
@@ -121,15 +121,14 @@ describe('Universes page — row thumbnail', () => {
     await waitFor(() => expect(screen.getAllByText('Neon Expanse').length).toBeGreaterThan(0));
     const img = container.querySelector('img');
     expect(img).toBeTruthy();
+    expect(screen.getAllByText('7').length).toBeGreaterThan(0);
     expect(img.getAttribute('src')).toContain('base-style.png');
     expect(img.getAttribute('src')).not.toContain('contact-sheet.png');
   });
 
-  it('treats an empty styleImageRefs array like a missing one and falls back to the media image', async () => {
-    // Key-present-but-empty must behave like key-absent (the `refs.length` guard),
-    // not crash on `refs[refs.length - 1]` (which would yield refs[-1] → undefined).
-    api.listUniverses.mockResolvedValue([
-      { id: 'u3', name: 'Void', styleImageRefs: [], updatedAt: '2026-06-01T00:00:00Z' },
+  it('falls back to the media image when the summary has no style image', async () => {
+    api.listUniverseSummaries.mockResolvedValue([
+      { id: 'u3', name: 'Void', styleImageRef: null, updatedAt: '2026-06-01T00:00:00Z' },
     ]);
     api.listMediaCollections.mockResolvedValue([
       { universeId: 'u3', items: [{ kind: 'image', ref: 'media.png', addedAt: '2026-06-10T00:00:00Z' }] },
@@ -140,7 +139,7 @@ describe('Universes page — row thumbnail', () => {
   });
 
   it('falls back to the latest media-collection image when no base style image exists', async () => {
-    api.listUniverses.mockResolvedValue([
+    api.listUniverseSummaries.mockResolvedValue([
       { id: 'u2', name: 'Reality', updatedAt: '2026-06-01T00:00:00Z' },
     ]);
     api.listMediaCollections.mockResolvedValue([

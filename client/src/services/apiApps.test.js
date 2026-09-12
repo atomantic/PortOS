@@ -63,8 +63,9 @@ it('requests quality only for opted-in views and preserves caller request option
   await getApp('portos-default');
   await getApps({ includeQuality: true, signal });
   await getApp('portos-default', { includeQuality: true, signal });
+  await getApps({ view: 'nav' });
   expect(fetch.mock.calls.map(([url]) => url)).toEqual([
-    '/api/apps', '/api/apps/portos-default', '/api/apps?includeQuality=true', '/api/apps/portos-default?includeQuality=true',
+    '/api/apps', '/api/apps/portos-default', '/api/apps?includeQuality=true', '/api/apps/portos-default?includeQuality=true', '/api/apps?view=nav',
   ]);
   expect(fetch.mock.calls[2][1]).toMatchObject({ signal });
   expect(fetch.mock.calls[2][1]).not.toHaveProperty('includeQuality');

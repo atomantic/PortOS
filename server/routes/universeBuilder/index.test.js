@@ -291,6 +291,27 @@ describe('universe-builder routes', () => {
     mergeFieldsWithAIMock.mockReset();
   });
 
+
+  it('serves names and summaries before the id route while keeping the full list', async () => {
+    const app = buildApp();
+    const created = await request(app).post('/api/universe-builder').send({
+      name: 'Projected', logline: 'A world', premise: 'A large bible',
+      styleImageRefs: ['first.png', 'latest.png'],
+      characters: [{ id: 'c-one', name: 'Ada' }],
+    });
+    expect(created.status).toBe(201);
+    const names = await request(app).get('/api/universe-builder/names');
+    expect(names.status).toBe(200);
+    expect(names.body).toEqual([{ id: created.body.id, name: 'Projected' }]);
+    const summaries = await request(app).get('/api/universe-builder/summaries');
+    expect(summaries.status).toBe(200);
+    expect(summaries.body[0]).toMatchObject({ canonCount: 1, styleImageRef: 'latest.png', logline: 'A world' });
+    expect(summaries.body[0]).not.toHaveProperty('characters');
+    expect(summaries.body[0]).not.toHaveProperty('premise');
+    const full = await request(app).get('/api/universe-builder');
+    expect(full.body[0]).toMatchObject({ premise: 'A large bible', characters: [{ name: 'Ada' }] });
+  });
+
   it('GET / returns []', async () => {
     const res = await request(buildApp()).get('/api/universe-builder');
     expect(res.status).toBe(200);

@@ -16,7 +16,7 @@
 // `controlsIdPrefix` wires `aria-controls` (and `id="tab-<id>"`) to matching tabpanels — pass
 // `'tabpanel'` to mirror ChiefOfStaff's wiring. `t.trailing` is an optional
 // ReactNode rendered after the count (e.g. PipelineIssue's per-stage status dot).
-import { useRef } from 'react';
+import { useRef, useEffect } from 'react';
 import { Loader2 } from 'lucide-react';
 
 const SIZE = {
@@ -49,6 +49,17 @@ export default function TabPills({
   const enabledTabIndexes = visibleTabs
     .map((tab, index) => (tab.disabled ? null : index))
     .filter((index) => index !== null);
+
+  useEffect(() => {
+    const activeIndex = visibleTabs.findIndex((t) => t.id === activeTab);
+    if (activeIndex !== -1 && tabRefs.current[activeIndex]?.scrollIntoView) {
+      tabRefs.current[activeIndex].scrollIntoView({
+        behavior: 'smooth',
+        block: 'nearest',
+        inline: 'nearest',
+      });
+    }
+  }, [activeTab, visibleTabs]);
 
   const handleTabKeyDown = (event, index) => {
     if (!['ArrowRight', 'ArrowDown', 'ArrowLeft', 'ArrowUp', 'Home', 'End'].includes(event.key)) {

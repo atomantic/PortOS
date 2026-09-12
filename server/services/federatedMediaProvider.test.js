@@ -910,6 +910,30 @@ describe('federated media provider — prompt-free status and projection payload
     expect(payload(completed)).not.toContain(scenario.sentinel);
   });
 
+  it.each(['wan22', 'wan22_cuda'])('rejects off-grid %s frames before federated enqueue', async (runtime) => {
+    state.videoModels = [{
+      id: 'wan_test', name: 'Test Wan', runtime, repo: 'example/wan-test',
+      supportedModes: ['text'], frameStride: 4, defaultFrames: 120,
+    }];
+    state.cachedRepos = new Set(['example/wan-test']);
+    const providerConfig = {
+      ...config(), audioModels: [], videoModels: [{ engine: 'local', modelId: 'wan_test' }],
+    };
+    state.settings = { federation: { mediaProvider: providerConfig } };
+    const submit = (frames) => submitFederatedMediaJob({
+      callerId: 'peer-example', config: providerConfig,
+      input: { kind: 'video', engine: 'local', modelId: 'wan_test', prompt: 'a lighthouse', ...frames },
+    });
+    const error = {
+      status: 400, code: 'WAN22_INVALID_FRAME_COUNT',
+      message: 'Test Wan requires a 4n+1 frame count; got 120.',
+    };
+    await expect(submit({ numFrames: 120 })).rejects.toMatchObject(error);
+    await expect(submit({})).rejects.toMatchObject(error);
+    expect(enqueueJob).not.toHaveBeenCalled();
+    await expect(submit({ numFrames: 81 })).resolves.toHaveProperty('job');
+  });
+
   it('populates frameStride, maxNumFrames, and resolutionOptions for visual models and null for audio', async () => {
     state.videoModels = [{
       id: 'wan22_t2v_a14b',

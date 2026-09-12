@@ -77,8 +77,8 @@ const featureMock = vi.hoisted(() => ({ features: null }));
 
 vi.mock('../services/api', () => ({
   getApps: vi.fn(() => Promise.resolve([])),
-  listPipelineSeries: vi.fn(() => Promise.resolve([])),
-  listUniverses: vi.fn(() => Promise.resolve([])),
+  listPipelineSeriesNames: vi.fn(() => Promise.resolve([])),
+  listUniverseNames: vi.fn(() => Promise.resolve([])),
   getDailyActions: vi.fn(() => Promise.resolve({ actions: [] })),
   getInstanceFeatures: vi.fn(() => Promise.resolve({ features: featureMock.features })),
 }));
@@ -120,6 +120,12 @@ const renderLayout = async (initialPath = '/brain/inbox') => {
 const pinnedSection = () => screen.queryByTestId('pinned-section');
 
 describe('Layout — manifest-derived sidebar structure', () => {
+  it('loads sidebar apps through the lean navigation projection', async () => {
+    await renderLayout();
+
+    expect(api.getApps).toHaveBeenCalledWith({ silent: true, view: 'nav' });
+  });
+
   it('keeps NAV_PRESENTATION presentation-only and keyed to live manifest paths', () => {
     const manifestPaths = new Set(NAV_COMMANDS.map((command) => command.path));
     expect(Object.keys(NAV_PRESENTATION).filter((path) => !manifestPaths.has(path))).toEqual([]);
@@ -179,8 +185,8 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.unstubAllGlobals();
-  api.listPipelineSeries.mockResolvedValue([]);
-  api.listUniverses.mockResolvedValue([]);
+  api.listPipelineSeriesNames.mockResolvedValue([]);
+  api.listUniverseNames.mockResolvedValue([]);
 });
 
 describe('Layout — pinned single nav rows', () => {
@@ -475,8 +481,8 @@ describe('Layout — Data Manager scroll mode', () => {
 
 describe('Layout — dynamic third-level navigation', () => {
   it('collapses and expands the Series and Universes children', async () => {
-    api.listPipelineSeries.mockResolvedValue([{ id: 'series-1', name: 'Example Series' }]);
-    api.listUniverses.mockResolvedValue([{ id: 'universe-1', name: 'Example Universe' }]);
+    api.listPipelineSeriesNames.mockResolvedValue([{ id: 'series-1', name: 'Example Series' }]);
+    api.listUniverseNames.mockResolvedValue([{ id: 'universe-1', name: 'Example Universe' }]);
 
     await renderLayout('/media');
 

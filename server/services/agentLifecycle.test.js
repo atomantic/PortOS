@@ -487,7 +487,7 @@ describe('self-update spawn gate — funnel coverage (#4124)', () => {
     const body = AGENT_FINALIZATION_SRC.slice(idx, updateIdx);
     // The verdict is stamped into taskUpdate via the shared helper BEFORE the updateTask
     // call, so it federates in the same write that marks the task terminal.
-    expect(body).toMatch(/await stampLiExecutionVerdict\(taskUpdate, task, \{ success, validationPassed, errorAnalysis \}\)/);
+    expect(body).toMatch(/await stampLiExecutionVerdict\(taskUpdate, task, \{ success: verdict\.success, validationPassed, errorAnalysis: verdict\.errorAnalysis \}\)/);
   });
 
   it('stampLiExecutionVerdict builds the verdict from the task liProposal marker via the shared builder (#2779)', () => {

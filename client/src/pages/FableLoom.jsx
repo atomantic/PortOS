@@ -25,7 +25,7 @@ import { effectiveModelFor, effortAwareModelOptions } from '../utils/providers';
 import { fieldClass, labelClass } from '../components/fableloom/fieldStyles';
 import { LOOM_FORMATS, isTeleplayFormat, loomFormatLabel } from '../components/fableloom/loomFormats';
 import {
-  createLoom, deleteLoom, generateLoomSeriesPlan, listLooms, listPipelineSeries, listUniverses,
+  createLoom, deleteLoom, generateLoomSeriesPlan, listLooms, listPipelineSeriesNames, listUniverseNames,
 } from '../services/api';
 import { FABLELOOM_PARTICIPATION_MODES } from '../../../server/lib/fableLoomParticipation.js';
 
@@ -49,8 +49,8 @@ export default function FableLoom() {
 
   useEffect(() => {
     listLooms().then(setLooms).catch(() => setLooms([]));
-    listUniverses({ silent: true }).then(setUniverses).catch(() => {});
-    listPipelineSeries({ silent: true }).then(setSeries).catch(() => {});
+    listUniverseNames({ silent: true }).then(setUniverses).catch(() => {});
+    listPipelineSeriesNames({ silent: true }).then(setSeries).catch(() => {});
   }, []);
 
   const universeNames = useMemo(() => new Map(universes.map((u) => [u.id, u.name])), [universes]);

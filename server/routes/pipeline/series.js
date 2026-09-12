@@ -359,6 +359,14 @@ router.get('/series', asyncHandler(async (req, res) => {
   res.json(paginateArray(series, req.query, { defaultLimit: 50, maxLimit: 500 }));
 }));
 
+router.get('/series/names', asyncHandler(async (_req, res) => {
+  res.json(await seriesSvc.listSeriesNames());
+}));
+
+router.get('/series/summaries', asyncHandler(async (_req, res) => {
+  res.json(await seriesSvc.listSeriesSummaries());
+}));
+
 router.post('/series', asyncHandler(async (req, res) => {
   const body = validateRequest(seriesCreateSchema, req.body ?? {});
   // Hierarchy invariant: every series belongs to exactly one universe. Enforce

@@ -10,8 +10,8 @@ import {
   replanCreativeDirectorProject,
   updateCreativeDirectorPlanStep,
 } from '../../services/apiCreativeDirector.js';
-import { listUniverses } from '../../services/apiUniverseBuilder.js';
-import { listPipelineSeries } from '../../services/apiPipeline.js';
+import { listUniverseNames } from '../../services/apiUniverseBuilder.js';
+import { listPipelineSeriesNames } from '../../services/apiPipeline.js';
 import {
   annotatePlanSteps,
   planCostSummary,
@@ -73,8 +73,8 @@ export default function PlanTab({ project, onProjectUpdate }) {
       : EMPTY_DIRECTIVE);
     setSearchParams((prev) => { const n = new URLSearchParams(prev); n.set('directive', 'edit'); return n; }, { replace: true });
     // Lazy-load the pickers on open.
-    if (!universes.length) listUniverses({ silent: true }).then((u) => setUniverses(Array.isArray(u) ? u : (u?.items || []))).catch(() => {});
-    if (!series.length) listPipelineSeries({ silent: true }).then((s) => setSeries(Array.isArray(s) ? s : (s?.items || []))).catch(() => {});
+    if (!universes.length) listUniverseNames({ silent: true }).then((u) => setUniverses(Array.isArray(u) ? u : (u?.items || []))).catch(() => {});
+    if (!series.length) listPipelineSeriesNames({ silent: true }).then((s) => setSeries(Array.isArray(s) ? s : (s?.items || []))).catch(() => {});
   }, [project.directive, setSearchParams, universes.length, series.length]);
 
   const closeComposer = useCallback(() => {

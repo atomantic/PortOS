@@ -2865,6 +2865,24 @@ describe('generateVideo — close-handler resilience (issue #1334)', () => {
   });
 });
 
+describe.each(['wan22', 'wan22_cuda'])('generateVideo — Wan frame defaults %s', (runtime) => {
+  it.each([undefined, 120])('rejects off-grid frames (%s) before spawn', async (numFrames) => {
+    const { getVideoModels } = await import('../../lib/mediaModels.js');
+    const { spawnDetached } = await import('../../lib/detachedSpawn.js');
+    vi.mocked(getVideoModels).mockReturnValueOnce([{
+      id: 'wan_test', name: 'Test Wan', runtime,
+      supportedModes: ['text'], frameStride: 4, defaultFrames: 120,
+    }]);
+    await expect(generateVideo({
+      modelId: 'wan_test', prompt: 'test', mode: 'text', numFrames,
+    })).rejects.toMatchObject({
+      status: 400, code: 'WAN22_INVALID_FRAME_COUNT',
+      message: 'Test Wan requires a 4n+1 frame count; got 120.',
+    });
+    expect(spawnDetached).not.toHaveBeenCalled();
+  });
+});
+
 describe('generateVideo — Wan MLX-Gen contract', () => {
   it('passes the locked Lightning sampler and exact high/low adapter pair', async () => {
     const { spawnDetached } = await import('../../lib/detachedSpawn.js');

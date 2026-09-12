@@ -93,6 +93,40 @@ describe('Apps CRUD Routes', () => {
       expect(response.body[0].overallStatus).toBe('online');
     });
 
+    it('returns the nav projection without invoking PM2 enrichment', async () => {
+      const mockApps = [{
+        id: 'app-001', name: 'Test App', icon: 'package', archived: false, type: 'express',
+        repoPath: '/tmp/test', pm2ProcessNames: ['test-app'],
+      }];
+      appsService.getAllApps.mockResolvedValue(mockApps);
+
+      const response = await request(app).get('/api/apps?view=nav');
+
+      expect(response.status).toBe(200);
+      expect(response.body).toEqual([{
+        id: 'app-001', name: 'Test App', icon: 'package', archived: false, type: 'express',
+      }]);
+      expect(pm2Service.listProcessesStrict).not.toHaveBeenCalled();
+    });
+
+    it('returns the PM2-backed probe projection without the enriched body', async () => {
+      appsService.getAllApps.mockResolvedValue([{
+        id: 'app-001', name: 'Test App', icon: 'package', type: 'express',
+        uiPort: 5555, apiPort: 5551, pm2ProcessNames: ['test-app'], processes: [],
+      }]);
+      pm2Service.listProcessesStrict.mockResolvedValue([{ name: 'test-app', status: 'online' }]);
+
+      const response = await request(app).get('/api/apps?view=probe');
+
+      expect(response.status).toBe(200);
+      expect(response.body).toEqual([{
+        id: 'app-001', name: 'Test App', icon: 'package', overallStatus: 'online',
+        uiPort: 5555, apiPort: 5551, type: 'express',
+      }]);
+      expect(pm2Service.listProcessesStrict).toHaveBeenCalledTimes(1);
+      expect(response.body[0].pm2Status).toBeUndefined();
+    });
+
     it('keeps quality reports off peer probes and returns them only for explicit local UI reads', async () => {
       appsService.getAllApps.mockResolvedValue([{ id: 'portos-default', name: 'PortOS', type: 'ios-native', repoPath: '/tmp/test' }]);
       const peer = await request(app).get('/api/apps');
@@ -102,6 +136,8 @@ describe('Apps CRUD Routes', () => {
       expect(local.body[0].quality).toEqual({ score: 75 });
       const invalid = await request(app).get('/api/apps?includeQuality=anything');
       expect(invalid.status).toBe(400);
+      const invalidView = await request(app).get('/api/apps?view=anything');
+      expect(invalidView.status).toBe(400);
       appsService.getAppById.mockResolvedValue({ id: 'portos-default', name: 'PortOS', type: 'ios-native' });
       const detail = await request(app).get('/api/apps/portos-default?includeQuality=true');
       expect(detail.body.quality).toEqual({ score: 75 });
