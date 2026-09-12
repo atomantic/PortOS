@@ -258,10 +258,12 @@ function flipFlagEnd(body) {
     const end = match.index + match[0].length;
     const rest = body.slice(end);
     if (!flip.test(rest)) continue;
-    // Occurrences outside the declaration: the flip is one, so a flag that is
-    // never consulted has exactly one. Any more means it is read somewhere.
-    const uses = rest.match(new RegExp(`\\b${name}\\b`, 'g')) || [];
-    if (uses.length > 1) return end;
+    // A READ — an occurrence not being assigned to. Counting bare occurrences
+    // would let a second write stand in for a read (`active = true; … active =
+    // false;`), which is the cosmetic guard this check exists to reject. `==`
+    // and `===` are comparisons, so they stay reads.
+    const read = new RegExp(`\\b${name}\\b(?!\\s*=[^=])`);
+    if (read.test(rest)) return end;
   }
   return -1;
 }
@@ -319,6 +321,31 @@ export function unguardedEffects(src) {
 }
 
 /**
+ * Spans of the nested `{…}` blocks in an effect body that contain a `return`.
+ *
+ * Anything inside one is on a path that leaves the effect, so it cannot reach —
+ * and therefore cannot cancel — a request set up after it. The callback's own
+ * outermost block is excluded: it holds the cleanup's `return`, so counting it
+ * would swallow the whole body.
+ *
+ * Nesting matters (`if (a) { if (b) { setX(); } return; }` bails too), so every
+ * enclosing block is reported, not just the innermost.
+ */
+function bailingBlocks(body) {
+  const spans = [];
+  const open = [];
+  for (let i = 0; i < body.length; i += 1) {
+    if (body[i] === '{') open.push(i);
+    else if (body[i] === '}' && open.length) {
+      const start = open.pop();
+      // depth 1 is the callback body itself
+      if (open.length >= 1 && /\breturn\b/.test(body.slice(start, i))) spans.push([start, i]);
+    }
+  }
+  return spans;
+}
+
+/**
  * The mirror-image mistake: a lifetime-scoped flip flag in an effect that
  * SYNCHRONOUSLY writes a state value appearing in its own dependency array.
  *
@@ -338,8 +365,11 @@ export function unguardedEffects(src) {
  * The fix is a request-generation ref: the re-run early-returns without
  * bumping, so the in-flight request stays current.
  *
- * Only a SYNCHRONOUS write counts. The same setter called inside `.then()` runs
- * after the response has already been applied, so it cannot cancel itself.
+ * Only a SYNCHRONOUS write counts, and only one that can actually reach the
+ * request. The same setter inside `.then()` runs after the response has already
+ * been applied, so it cannot cancel itself; and one inside a block that returns
+ * (`if (!enabled) { setOffset(0); return; }`) is on a path that bails before any
+ * request exists.
  */
 export function selfDisposingEffects(src) {
   const blanked = blankLexical(src);
@@ -352,16 +382,14 @@ export function selfDisposingEffects(src) {
     const { body, deps } = split;
     const async = ASYNC_BOUNDARY.exec(body);
     if (!async) continue;
-    const flagEnd = flipFlagEnd(body);
-    if (flagEnd === -1) continue;
+    if (flipFlagEnd(body) === -1) continue;
+    const bailing = bailingBlocks(body);
     const depNames = new Set(deps.split(',').map((d) => d.trim()).filter(Boolean));
     for (const setter of body.matchAll(SETTER_CALL)) {
       if (TIMER_SETTERS.has(setter[2])) continue;
       const at = setter.index + setter[1].length;
-      // Only between the flag and the request. A setter ABOVE the declaration
-      // sits in an early-return branch that bails before the flag exists, so it
-      // can never be on the same path as the request it would cancel.
-      if (at < flagEnd || at > async.index) continue;
+      if (at > async.index) continue;
+      if (bailing.some(([open, close]) => at > open && at < close)) continue;
       // `setLoadingOutput` → `loadingOutput`, the state value it writes.
       const stateName = setter[2][3].toLowerCase() + setter[2].slice(4);
       if (!depNames.has(stateName)) continue;
@@ -574,6 +602,25 @@ describe('identity-keyed async effects drop superseded responses', () => {
           return () => { active = false; };
         }, [id]);
       `)).toHaveLength(1);
+
+      // A second WRITE is not a read; it must not stand in for one.
+      expect(unguardedEffects(`
+        useEffect(() => {
+          let active = true;
+          active = true;
+          load(id).then(setValue);
+          return () => { active = false; };
+        }, [id]);
+      `)).toHaveLength(1);
+
+      // A comparison IS a read — `==`/`===` must not be mistaken for assignment.
+      expect(unguardedEffects(`
+        useEffect(() => {
+          let active = true;
+          load(id).then((v) => { if (active === true) setValue(v); });
+          return () => { active = false; };
+        }, [id]);
+      `)).toEqual([]);
     });
 
     it('does not accept a mounted guard as an identity guard', () => {
@@ -669,6 +716,31 @@ describe('identity-keyed async effects drop superseded responses', () => {
           load(offset).then((v) => { if (!cancelled) setItems(v); });
           return () => { cancelled = true; };
         }, [enabled, offset]);
+      `)).toBe(0);
+
+      // …but a bare `return` guard above it does NOT put the write on a bailing
+      // path: `setLoading(true)` here still runs, and still re-triggers.
+      expect(flagged(`
+        useEffect(() => {
+          if (loading) return;
+          setLoading(true);
+          let active = true;
+          load(id).then((v) => { if (active) setValue(v); });
+          return () => { active = false; };
+        }, [id, loading]);
+      `)).toBe(1);
+
+      // Nested inside a block that bails, two levels down.
+      expect(flagged(`
+        useEffect(() => {
+          if (a) {
+            if (b) { setOffset(0); }
+            return;
+          }
+          let active = true;
+          load(offset).then((v) => { if (active) setItems(v); });
+          return () => { active = false; };
+        }, [a, b, offset]);
       `)).toBe(0);
 
       // A generation ref is the sanctioned fix, not a violation.
