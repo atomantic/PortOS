@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtempSync } from 'fs';
-import { writeFileSync, rmSync, utimesSync } from 'fs';
+import { writeFileSync, rmSync, existsSync, utimesSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { tmpdir } from 'os';
