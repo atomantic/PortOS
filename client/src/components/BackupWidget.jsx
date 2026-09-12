@@ -128,7 +128,9 @@ function RestorePanel({ snapshot, onClose, restoring, onRestoreStateChange }) {
     });
     onRestoreStateChange(null);
     if (result) {
-      toast.success(`Restore complete — ${result.changedFiles?.length ?? 0} file(s) restored`);
+      // Execution re-verifies the snapshot; report its status after the preview closes.
+      const suffix = result.verification?.status === 'unverified' ? ' (unverified legacy snapshot)' : '';
+      toast.success(`Restore complete — ${result.changedFiles?.length ?? 0} file(s) restored${suffix}`);
       onClose();
     }
   }, [acceptedPreview, onClose, onRestoreStateChange, previewMatchesCurrentRequest, restoring, snapshot]);

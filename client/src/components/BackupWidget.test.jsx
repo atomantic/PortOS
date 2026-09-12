@@ -209,8 +209,8 @@ describe('BackupWidget snapshots', () => {
     expect(mockToast.success).toHaveBeenCalledWith('Restore complete — 1 file(s) restored');
   });
 
-  it('warns before confirming a legacy snapshot without an integrity manifest', async () => {
-    mockRestoreBackup.mockResolvedValueOnce({
+  it('keeps the legacy snapshot warning through restore completion', async () => {
+    mockRestoreBackup.mockResolvedValue({
       dryRun: true,
       changedFiles: ['settings.json'],
       verification: { status: 'unverified', reason: 'manifest_absent', checkedFiles: 0 },
@@ -224,6 +224,30 @@ describe('BackupWidget snapshots', () => {
       'Legacy snapshot: no integrity manifest is available. PortOS cannot verify these backup bytes before restore.',
     );
     expect(screen.getByRole('button', { name: 'Restore 1 file(s)' })).toBeEnabled();
+    fireEvent.click(screen.getByRole('button', { name: 'Restore 1 file(s)' }));
+    await waitFor(() => expect(mockToast.success).toHaveBeenCalledWith(
+      'Restore complete — 1 file(s) restored (unverified legacy snapshot)',
+    ));
+  });
+
+  it('reports execution verification even when the preview was verified', async () => {
+    mockRestoreBackup
+      .mockResolvedValueOnce({
+        changedFiles: ['settings.json'],
+        verification: { status: 'verified', checkedFiles: 1 },
+      })
+      .mockResolvedValueOnce({
+        changedFiles: ['settings.json'],
+        verification: { status: 'unverified', reason: 'manifest_absent', checkedFiles: 0 },
+      });
+    renderWidget();
+    await openRestorePanel();
+    fireEvent.click(screen.getByRole('button', { name: 'Preview changes' }));
+    await screen.findByRole('status');
+    fireEvent.click(screen.getByRole('button', { name: 'Restore 1 file(s)' }));
+    await waitFor(() => expect(mockToast.success).toHaveBeenCalledWith(
+      'Restore complete — 1 file(s) restored (unverified legacy snapshot)',
+    ));
   });
 
   it('invalidates a selective preview when the filter is cleared', async () => {
