@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
+import { useState, useEffect, useRef, useCallback, useMemo, useId } from 'react';
 import { createPortal } from 'react-dom';
 import { useLocation, useNavigate } from 'react-router';
 import { Brain, Cpu, Package, History, HeartPulse, Search, Loader2, Navigation, Play, LayoutGrid, BookMarked, Send } from 'lucide-react';
@@ -69,6 +69,9 @@ export default function CmdKSearch() {
   const { open, setOpen } = useCmdKSearch();
   const navigate = useNavigate();
   const location = useLocation();
+  const paletteId = useId();
+  const listboxId = `${paletteId}-results`;
+  const optionId = (item) => `${paletteId}-option-${encodeURIComponent(JSON.stringify([item.kind, item.sourceId, item.type, item.id, item.path ?? item.url]))}`;
   const inputRef = useRef(null);
   const modalRef = useRef(null);
 
@@ -252,11 +255,11 @@ export default function CmdKSearch() {
   }, [manifest, gatedNav, query, recentPaths, location.pathname]);
 
   const flatSearchResults = useMemo(
-    () => searchResults.flatMap((source) => {
+    () => (loading ? [] : searchResults).flatMap((source) => {
       const visible = expandedSources.has(source.id) ? source.results : source.results.slice(0, 3);
       return visible.map((r) => ({ ...r, kind: 'search', sourceId: source.id }));
     }),
-    [searchResults, expandedSources]
+    [searchResults, expandedSources, loading]
   );
 
   const catalogHits = useMemo(
@@ -275,10 +278,13 @@ export default function CmdKSearch() {
     [combined, catalogHits, flatSearchResults]
   );
 
+  const activeIndex = focusable.length ? Math.min(focusedIndex, focusable.length - 1) : -1;
+  const activeResult = focusable[activeIndex];
+
   useEffect(() => {
-    const el = resultRefs.current[focusedIndex];
+    const el = resultRefs.current[activeIndex];
     if (el) el.scrollIntoView({ block: 'nearest' });
-  }, [focusedIndex]);
+  }, [activeIndex, focusable]);
 
   useEffect(() => {
     if (open) inputRef.current?.focus();
@@ -388,14 +394,16 @@ export default function CmdKSearch() {
       return;
     }
 
+    if (e.target !== inputRef.current && e.key !== 'Escape') return;
+
     if (e.key === 'ArrowDown') {
       e.preventDefault();
       if (focusable.length > 0) setFocusedIndex((i) => Math.min(i + 1, focusable.length - 1));
     } else if (e.key === 'ArrowUp') {
       e.preventDefault();
-      if (focusable.length > 0) setFocusedIndex((i) => Math.max(i - 1, 0));
+      if (focusable.length > 0) setFocusedIndex(Math.max(activeIndex - 1, 0));
     } else if (e.key === 'Enter') {
-      const item = focusable[focusedIndex];
+      const item = activeResult;
       if (item) dispatchCommand(item);
     } else if (e.key === 'Escape') {
       close();
@@ -408,10 +416,11 @@ export default function CmdKSearch() {
 
   const renderRow = (item, { icon: Icon, title, subtitle, badge }) => {
     const currentIdx = flatIdx++;
-    const isFocused = focusedIndex === currentIdx;
+    const isFocused = activeIndex === currentIdx;
     return (
       <div
-        key={`${item.kind}:${item.path ?? item.id ?? item.sourceId + ':' + title}`}
+        key={optionId(item)}
+        id={optionId(item)}
         ref={(el) => { resultRefs.current[currentIdx] = el; }}
         onClick={() => dispatchCommand(item)}
         className={`flex items-start gap-3 px-3 py-2 min-h-[44px] rounded-lg cursor-pointer transition-colors ${
@@ -437,7 +446,7 @@ export default function CmdKSearch() {
   };
 
   const renderGroup = (headerIcon, headerLabel, rows) => rows.length > 0 && (
-    <div className="mb-2">
+    <div role="group" aria-label={headerLabel} className="mb-2">
       <div className="flex items-center gap-2 px-3 py-2 text-xs text-gray-400 uppercase tracking-wide">
         {headerIcon}
         <span>{headerLabel}</span>
@@ -491,6 +500,11 @@ export default function CmdKSearch() {
                 onChange={(e) => setQuery(e.target.value)}
                 placeholder="Go to page, run an action, or search Brain / Memory / Apps…"
                 className="w-full bg-transparent text-white placeholder-gray-500 outline-hidden text-sm"
+                role="combobox"
+                aria-expanded="true"
+                aria-autocomplete="list"
+                aria-controls={listboxId}
+                aria-activedescendant={activeResult ? optionId(activeResult) : undefined}
                 aria-label="Command palette"
               />
             )}
@@ -514,95 +528,96 @@ export default function CmdKSearch() {
         </div>
 
         {!captureMode && <div className="max-h-96 overflow-y-auto p-2">
-          {renderGroup(
-            <History size={14} />,
-            'Recent destinations',
-            combined.recentNav.map((c) =>
-              renderRow(c, { icon: History, title: c.label, subtitle: `${c.section} · ${c.path}`, badge: 'RECENT' })
-            )
-          )}
+          <div id={listboxId} role="listbox" aria-label="Command palette results">
+            {renderGroup(
+              <History size={14} />,
+              'Recent destinations',
+              combined.recentNav.map((c) =>
+                renderRow(c, { icon: History, title: c.label, subtitle: `${c.section} · ${c.path}`, badge: 'RECENT' })
+              )
+            )}
 
-          {renderGroup(
-            <Navigation size={14} />,
-            'Go to',
-            combined.nav.map((c) =>
-              renderRow(c, { icon: Navigation, title: c.label, subtitle: `${c.section} · ${c.path}`, badge: 'GO' })
-            )
-          )}
+            {renderGroup(
+              <Navigation size={14} />,
+              'Go to',
+              combined.nav.map((c) =>
+                renderRow(c, { icon: Navigation, title: c.label, subtitle: `${c.section} · ${c.path}`, badge: 'GO' })
+              )
+            )}
 
-          {renderGroup(
-            <Play size={14} />,
-            'Run',
-            combined.actions.map((a) =>
-              renderRow(a, { icon: Play, title: a.label, subtitle: (a.description || a.section || '').slice(0, 80), badge: 'RUN' })
-            )
-          )}
+            {renderGroup(
+              <Play size={14} />,
+              'Run',
+              combined.actions.map((a) =>
+                renderRow(a, { icon: Play, title: a.label, subtitle: (a.description || a.section || '').slice(0, 80), badge: 'RUN' })
+              )
+            )}
 
-          {renderGroup(
-            <LayoutGrid size={14} />,
-            'Dashboard layout',
-            combined.layouts.map((l) =>
-              renderRow(l, { icon: LayoutGrid, title: l.label, subtitle: 'Switch dashboard layout', badge: 'LAYOUT' })
-            )
-          )}
+            {renderGroup(
+              <LayoutGrid size={14} />,
+              'Dashboard layout',
+              combined.layouts.map((l) =>
+                renderRow(l, { icon: LayoutGrid, title: l.label, subtitle: 'Switch dashboard layout', badge: 'LAYOUT' })
+              )
+            )}
 
-          {renderGroup(
-            <BookMarked size={14} />,
-            'Catalog',
-            catalogHits.map((c) =>
-              renderRow(c, { icon: BookMarked, title: c.name, subtitle: c.type, badge: c.type.toUpperCase() })
-            )
-          )}
+            {renderGroup(
+              <BookMarked size={14} />,
+              'Catalog',
+              catalogHits.map((c) =>
+                renderRow(c, { icon: BookMarked, title: c.name, subtitle: c.type, badge: c.type.toUpperCase() })
+              )
+            )}
 
-          {loading && (
-            <div className="flex items-center justify-center py-4">
-              <Loader2 size={18} className="animate-spin text-gray-400" />
-            </div>
-          )}
-
-          {!loading && query.length >= 2 && searchResults.length === 0 && catalogHits.length === 0 && combined.commandCount === 0 && (
-            <div className="text-center text-sm text-gray-500 py-8">
-              No results for &ldquo;{query}&rdquo;
-            </div>
-          )}
-
-          {!loading && !query && combined.commandCount === 0 && (
-            <div className="text-center text-sm text-gray-600 py-8">
-              Start typing to go to a page, run an action, or search.
-            </div>
-          )}
-
-          {!loading && searchResults.map((source) => {
-            const SourceIcon = ICON_MAP[source.icon] ?? Search;
-            const isExpanded = expandedSources.has(source.id);
-            const visible = isExpanded ? source.results : source.results.slice(0, 3);
-            const hasMore = source.results.length > 3 && !isExpanded;
-
-            return (
-              <div key={source.id} className="mb-2">
-                <div className="flex items-center gap-2 px-3 py-2 text-xs text-gray-400 uppercase tracking-wide">
-                  <SourceIcon size={14} />
-                  <span>{source.label}</span>
-                </div>
-
-                {visible.map((result) =>
-                  renderRow(
-                    { ...result, kind: 'search' },
-                    { title: result.title, subtitle: result.snippet }
-                  )
-                )}
-
-                {hasMore && (
-                  <button
-                    onClick={() => setExpandedSources((prev) => new Set(prev).add(source.id))}
-                    className="text-xs text-port-accent px-3 py-1 hover:underline"
-                  >
-                    Show {source.results.length - 3} more
-                  </button>
-                )}
+            {loading && (
+              <div className="flex items-center justify-center py-4">
+                <Loader2 size={18} className="animate-spin text-gray-400" />
               </div>
-            );
-          })}
+            )}
+
+            {!loading && query.length >= 2 && searchResults.length === 0 && catalogHits.length === 0 && combined.commandCount === 0 && (
+              <div className="text-center text-sm text-gray-500 py-8">
+                No results for &ldquo;{query}&rdquo;
+              </div>
+            )}
+
+            {!loading && !query && combined.commandCount === 0 && (
+              <div className="text-center text-sm text-gray-600 py-8">
+                Start typing to go to a page, run an action, or search.
+              </div>
+            )}
+
+            {!loading && searchResults.map((source) => {
+              const SourceIcon = ICON_MAP[source.icon] ?? Search;
+              const isExpanded = expandedSources.has(source.id);
+              const visible = isExpanded ? source.results : source.results.slice(0, 3);
+
+              return (
+                <div key={source.id} role="group" aria-label={source.label} className="mb-2">
+                  <div className="flex items-center gap-2 px-3 py-2 text-xs text-gray-400 uppercase tracking-wide">
+                    <SourceIcon size={14} />
+                    <span>{source.label}</span>
+                  </div>
+
+                  {visible.map((result) =>
+                    renderRow(
+                      { ...result, kind: 'search', sourceId: source.id },
+                      { title: result.title, subtitle: result.snippet }
+                    )
+                  )}
+                </div>
+              );
+            })}
+          </div>
+          {!loading && searchResults.filter((source) => source.results.length > 3 && !expandedSources.has(source.id)).map((source) => (
+            <button
+              key={source.id}
+              onClick={() => setExpandedSources((prev) => new Set(prev).add(source.id))}
+              className="text-xs text-port-accent px-3 py-1 hover:underline"
+            >
+              Show {source.results.length - 3} more from {source.label}
+            </button>
+          ))}
         </div>}
 
         {captureMode && (

@@ -99,6 +99,8 @@ describe('CmdKSearch inline Brain capture', () => {
     const input = screen.getByRole('textbox', { name: 'Capture to Brain' });
     expect(input).toHaveFocus();
     expect(input).toHaveAttribute('placeholder', 'Thought or URL…');
+    expect(input).not.toHaveAttribute('aria-activedescendant');
+    expect(screen.queryByRole('listbox')).not.toBeInTheDocument();
     expect(toast).not.toHaveBeenCalled();
   });
 
@@ -116,7 +118,7 @@ describe('CmdKSearch inline Brain capture', () => {
 
   it('enters capture mode from the keyboard', async () => {
     await renderBrainCapturePalette();
-    const input = screen.getByRole('textbox', { name: 'Command palette' });
+    const input = screen.getByRole('combobox', { name: 'Command palette' });
 
     fireEvent.keyDown(input, { key: 'Enter' });
 
@@ -198,7 +200,7 @@ describe('CmdKSearch inline Brain capture', () => {
 
   it('uses Escape to return to the prior query before closing the palette', async () => {
     await renderBrainCapturePalette();
-    const searchInput = screen.getByRole('textbox', { name: 'Command palette' });
+    const searchInput = screen.getByRole('combobox', { name: 'Command palette' });
     fireEvent.change(searchInput, { target: { value: 'capture' } });
     fireEvent.keyDown(searchInput, { key: 'Enter' });
     const captureInput = screen.getByRole('textbox', { name: 'Capture to Brain' });
@@ -210,7 +212,7 @@ describe('CmdKSearch inline Brain capture', () => {
     window.removeEventListener('keydown', leakedEscape);
 
     expect(screen.getByRole('dialog', { name: 'Command palette' })).toBeInTheDocument();
-    const restoredSearch = screen.getByRole('textbox', { name: 'Command palette' });
+    const restoredSearch = screen.getByRole('combobox', { name: 'Command palette' });
     expect(restoredSearch).toHaveValue('capture');
     expect(restoredSearch).toHaveFocus();
     expect(leakedEscape).not.toHaveBeenCalled();
@@ -229,7 +231,7 @@ describe('CmdKSearch inline Brain capture', () => {
     fireEvent.keyDown(captureInput, { key: 'Enter' });
 
     fireEvent.keyDown(captureInput, { key: 'Escape' });
-    const searchInput = screen.getByRole('textbox', { name: 'Command palette' });
+    const searchInput = screen.getByRole('combobox', { name: 'Command palette' });
     fireEvent.change(searchInput, { target: { value: 'keep searching' } });
     await act(async () => { resolveCapture({ ok: true, result: { summary: 'Captured.' } }); });
 
@@ -247,13 +249,81 @@ describe('CmdKSearch inline Brain capture', () => {
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
 
     fireEvent.keyDown(document, { key: 'k', metaKey: true });
-    expect(await screen.findByRole('textbox', { name: 'Command palette' })).toHaveValue('');
+    expect(await screen.findByRole('combobox', { name: 'Command palette' })).toHaveValue('');
     fireEvent.click(await screen.findByRole('option', { name: /Capture to Brain/ }));
     expect(screen.getByRole('textbox', { name: 'Capture to Brain' })).toHaveValue('');
   });
 });
 
 describe('CmdKSearch dialog accessibility', () => {
+  it('keeps the active option stable through filtering and executes the indicated destination', async () => {
+    render(
+      <MemoryRouter initialEntries={['/current']}>
+        <CmdKSearch />
+        <LocationProbe />
+      </MemoryRouter>,
+    );
+    fireEvent.keyDown(document, { key: 'k', metaKey: true });
+    const input = await screen.findByRole('combobox', { name: 'Command palette' });
+    const listbox = screen.getByRole('listbox', { name: 'Command palette results' });
+    await screen.findByRole('option', { name: /Brain Inbox/ });
+    expect(input).toHaveAttribute('aria-controls', listbox.id);
+    expect(input).toHaveAttribute('aria-expanded', 'true');
+    const options = within(listbox).getAllByRole('option');
+    expect(new Set(options.map((option) => option.id)).size).toBe(options.length);
+    expect(options.every((option) => option.id)).toBe(true);
+    expect(input).toHaveAttribute('aria-activedescendant', options[0].id);
+    fireEvent.keyDown(input, { key: 'ArrowDown' });
+    expect(input).toHaveAttribute('aria-activedescendant', options[1].id);
+    expect(options[1]).toHaveAttribute('aria-selected', 'true');
+    expect(input).toHaveFocus();
+    fireEvent.keyDown(input, { key: 'ArrowUp' });
+    expect(input).toHaveAttribute('aria-activedescendant', options[0].id);
+
+    const brainId = screen.getByRole('option', { name: /Brain Inbox/ }).id;
+    fireEvent.change(input, { target: { value: 'brain' } });
+    expect(input).toHaveAttribute('aria-activedescendant', brainId);
+    fireEvent.change(input, { target: { value: 'zzzzzz' } });
+    expect(input).not.toHaveAttribute('aria-activedescendant');
+    fireEvent.change(input, { target: { value: 'brain' } });
+    expect(input).toHaveAttribute('aria-activedescendant', brainId);
+    fireEvent.keyDown(input, { key: 'Enter' });
+    expect(screen.getByTestId('location')).toHaveTextContent('/brain/inbox');
+  });
+
+  it('clears hidden search selections during loading and owns expanded results without owning buttons', async () => {
+    vi.useFakeTimers();
+    const source = (title) => ({
+      id: 'brain', label: 'Brain', icon: 'Brain',
+      results: Array.from({ length: 4 }, (_, i) => ({ id: String(i), title: title + i, url: '/brain/' + title })),
+    });
+    search.mockResolvedValueOnce({ sources: [source('First')] })
+      .mockResolvedValueOnce({ sources: [source('Next')] });
+    render(<MemoryRouter><CmdKSearch /></MemoryRouter>);
+    await act(async () => { fireEvent.keyDown(document, { key: 'k', metaKey: true }); });
+    const input = screen.getByRole('combobox');
+    fireEvent.change(input, { target: { value: 'zz' } });
+    await act(async () => { await vi.advanceTimersByTimeAsync(300); });
+    const first = screen.getByRole('option', { name: 'First0' });
+    expect(input).toHaveAttribute('aria-activedescendant', first.id);
+    const listbox = screen.getByRole('listbox');
+    expect(within(listbox).queryByRole('button')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Show 1 more from Brain' }));
+    const expanded = within(listbox).getAllByRole('option');
+    expect(expanded).toHaveLength(4);
+    expect(new Set(expanded.map((option) => option.id)).size).toBe(4);
+    expect(screen.getByRole('option', { name: 'First0' }).id).toBe(first.id);
+    fireEvent.change(input, { target: { value: 'yy' } });
+    expect(input).not.toHaveAttribute('aria-activedescendant');
+    expect(screen.queryByRole('option')).not.toBeInTheDocument();
+    await act(async () => { await vi.advanceTimersByTimeAsync(300); });
+    const next = screen.getByRole('option', { name: 'Next0' });
+    expect(input).toHaveAttribute('aria-activedescendant', next.id);
+    expect(document.getElementById(first.id)).toBeNull();
+    expect(input).toHaveFocus();
+    vi.useRealTimers();
+  });
+
   it('traps focus inside the modal and restores it to the opener on close', async () => {
     render(
       <MemoryRouter>
@@ -269,7 +339,7 @@ describe('CmdKSearch dialog accessibility', () => {
     const dialog = await screen.findByRole('dialog', { name: 'Command palette' });
     expect(dialog).toHaveAttribute('aria-modal', 'true');
 
-    const input = within(dialog).getByRole('textbox', { name: 'Command palette' });
+    const input = within(dialog).getByRole('combobox', { name: 'Command palette' });
     expect(input).toHaveFocus();
 
     fireEvent.keyDown(input, { key: 'Tab' });
@@ -328,7 +398,7 @@ describe('CmdKSearch instance feature gating', () => {
       </MemoryRouter>,
     );
     fireEvent.keyDown(document, { key: 'k', metaKey: true });
-    const input = await screen.findByRole('textbox', { name: 'Command palette' });
+    const input = await screen.findByRole('combobox', { name: 'Command palette' });
     fireEvent.change(input, { target: { value: query } });
     await act(async () => {});
   };
