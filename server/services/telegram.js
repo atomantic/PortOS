@@ -79,9 +79,10 @@ export async function init(sendTestMessage = false) {
   reconnectionAttempts = 0;
 
   // Validate token
-  const me = await bot.getMe().catch(err => {
+  const me = await bot.getMe().catch(async err => {
     console.error(`📱 Telegram: invalid token — ${err.message}`);
-    bot = null;
+    // Polling starts at construction; stop it before dropping the failed bot.
+    await cleanup();
     return null;
   });
 

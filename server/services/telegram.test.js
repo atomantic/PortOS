@@ -164,6 +164,34 @@ describe('telegram service', () => {
     return active;
   }
 
+  it('stops a failed startup before returning and can connect again', async () => {
+    const telegram = await loadTelegramActive();
+    h.getMe.mockRejectedValueOnce(new Error('Temporary validation outage'));
+    let finishShutdown;
+    const shutdown = new Promise(resolve => { finishShutdown = resolve; });
+    h.stopPolling.mockReturnValueOnce(shutdown);
+
+    let initialized = false;
+    const failedInit = telegram.init(false).then(() => { initialized = true; });
+    await vi.waitFor(() => expect(h.stopPolling).toHaveBeenCalledTimes(1));
+    expect(initialized).toBe(false);
+    finishShutdown();
+    await failedInit;
+    expect(telegram.getStatus()).toMatchObject({ connected: false, botUsername: null });
+    expect(h.textHandlers).toHaveLength(0);
+
+    await telegram.init(false);
+    expect(h.stopPolling).toHaveBeenCalledTimes(1);
+    expect(telegram.getStatus()).toMatchObject({ connected: true, botUsername: 'example_bot' });
+    const help = h.textHandlers.find(({ regex }) => regex.test('/help'));
+    await help.fn({ chat: { id: 42 }, text: '/help' });
+    expect(h.sendMessage).toHaveBeenCalledWith('42', expect.stringContaining('PortOS Bot Commands'), { parse_mode: 'HTML' });
+
+    await telegram.cleanup();
+    expect(h.stopPolling).toHaveBeenCalledTimes(2);
+    expect(telegram.getStatus()).toMatchObject({ connected: false, botUsername: null });
+  });
+
   describe('rate limiting (token bucket)', () => {
     it('sends up to the bucket max then rejects further messages in the same window', async () => {
       const telegram = await loadTelegramActive();
