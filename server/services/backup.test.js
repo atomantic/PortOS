@@ -1109,6 +1109,21 @@ describe('generateManifest', () => {
 
     expect(manifest.files['../portos-db.sql']).toMatch(/^[0-9a-f]{64}$/);
   });
+
+  it('preserves dangling links without dropping hashes for readable link targets', async () => {
+    const fsp = await vi.importActual('fs/promises');
+    const dataDir = joinPath(tmpRoot, 'data');
+    await fsp.mkdir(dataDir);
+    await fsp.writeFile(joinPath(dataDir, 'example.txt'), 'example');
+    await fsp.symlink('example.txt', joinPath(dataDir, 'readable-link'));
+    await fsp.symlink('excluded.txt', joinPath(dataDir, 'dangling-link'));
+    const { generateManifest } = await import('./backup.js');
+    const manifest = await generateManifest(dataDir, joinPath(tmpRoot, 'manifest.json'));
+    expect(manifest.fileCount).toBe(2);
+    expect(manifest.files['readable-link']).toBe(manifest.files['example.txt']);
+    expect(manifest.files).not.toHaveProperty('dangling-link');
+    expect((await fsp.lstat(joinPath(dataDir, 'dangling-link'))).isSymbolicLink()).toBe(true);
+  });
 });
 
 // restoreSnapshot's service-side subdirFilter guard (issue #1822). These reject

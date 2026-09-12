@@ -8,7 +8,7 @@
 
 import { spawn } from '../lib/childProcess.js';
 import { killWithEscalation } from '../lib/killWithEscalation.js';
-import { access, readdir, readFile, stat, unlink, writeFile } from 'fs/promises';
+import { access, lstat, readdir, readFile, stat, unlink, writeFile } from 'fs/promises';
 import { PassThrough } from 'node:stream';
 import { hostname } from 'os';
 import { join, resolve, relative, isAbsolute } from 'path';
@@ -646,9 +646,17 @@ export async function generateManifest(snapshotDataDir, manifestPath, pgDumpPath
 
   for (const entry of entries) {
     const filePath = join(snapshotDataDir, entry);
-    const info = await stat(filePath)
-      .catch(err => { throw manifestReadFailure('data stat', err); });
-    if (!info.isFile()) continue;
+    const info = await stat(filePath).catch(async err => {
+      // rsync --archive preserves links even when their targets are absent or
+      // excluded. Preserve that compatibility, but never skip a missing entry.
+      if (err.code === 'ENOENT') {
+        const entryInfo = await lstat(filePath)
+          .catch(entryErr => { throw manifestReadFailure('data lstat', entryErr); });
+        if (entryInfo.isSymbolicLink()) return null;
+      }
+      throw manifestReadFailure('data stat', err);
+    });
+    if (!info || !info.isFile()) continue;
     files[entry] = await sha256File(filePath)
       .catch(err => { throw manifestReadFailure('data hash', err); });
   }
