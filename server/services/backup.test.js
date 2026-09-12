@@ -1237,7 +1237,8 @@ describe('restoreSnapshot subdirFilter guard', () => {
       proc.emit('close', null, 'SIGTERM');
 
       await expect(pending).rejects.toThrow(/files may already have been overwritten/i);
-      expect(reloadSettings).not.toHaveBeenCalled();
+      expect(reloadSettings).toHaveBeenCalledTimes(1);
+      expect(invalidateBrainCaches).toHaveBeenCalledTimes(1);
     } finally {
       vi.useRealTimers();
     }
@@ -1543,7 +1544,20 @@ describe('restoreSnapshot snapshotId, filter flags, and settings re-sync', () =>
       expect(reloadSettings).not.toHaveBeenCalled();
     });
 
-    it('does not reload settings when rsync fails a live restore', async () => {
+    it('leaves caches untouched when a dry-run rsync fails', async () => {
+      const proc = fakeProc();
+      spawn.mockReturnValue(proc);
+      const pending = restoreSnapshot('/dest', 'snap-1', { dryRun: true });
+      await vi.waitFor(() => expect(spawn).toHaveBeenCalled());
+      proc.stderr.emit('data', Buffer.from('preview failed'));
+      proc.emit('close', 1);
+
+      await expect(pending).rejects.toThrow(/^rsync exited with code 1/);
+      expect(reloadSettings).not.toHaveBeenCalled();
+      expect(invalidateBrainCaches).not.toHaveBeenCalled();
+    });
+
+    it('reconciles settings and Brain state when rsync fails a live restore', async () => {
       const proc = fakeProc();
       spawn.mockReturnValue(proc);
       const pending = restoreSnapshot('/dest', 'snap-1', { dryRun: false });
@@ -1552,7 +1566,28 @@ describe('restoreSnapshot snapshotId, filter flags, and settings re-sync', () =>
       proc.emit('close', 1);
 
       await expect(pending).rejects.toThrow(/rsync exited with code 1.*files may already have been overwritten/i);
-      expect(reloadSettings).not.toHaveBeenCalled();
+      expect(reloadSettings).toHaveBeenCalledTimes(1);
+      expect(invalidateBrainCaches).toHaveBeenCalledTimes(1);
+    });
+
+    it('reports reconciliation failures without hiding the primary rsync failure', async () => {
+      invalidateBrainCaches.mockImplementationOnce(() => {
+        throw new Error('Brain cache reset failed');
+      });
+      reloadSettings.mockRejectedValueOnce(new Error('settings reload failed'));
+      const proc = fakeProc();
+      spawn.mockReturnValue(proc);
+      const pending = restoreSnapshot('/dest', 'snap-1', { dryRun: false });
+      await vi.waitFor(() => expect(spawn).toHaveBeenCalled());
+      proc.stderr.emit('data', Buffer.from('transfer failed'));
+      proc.emit('close', 1);
+
+      await expect(pending).rejects.toMatchObject({
+        message: expect.stringMatching(/rsync exited with code 1.*Live restore cache reconciliation failed.*Brain cache reset failed.*settings reload failed.*Restart PortOS/i),
+        cause: expect.objectContaining({ message: expect.stringMatching(/rsync exited with code 1/) }),
+      });
+      expect(reloadSettings).toHaveBeenCalledTimes(1);
+      expect(invalidateBrainCaches).toHaveBeenCalledTimes(1);
     });
   });
 });
