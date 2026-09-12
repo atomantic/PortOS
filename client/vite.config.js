@@ -15,6 +15,7 @@ import {
 
 const ANALYZE_BUNDLE = process.env.ANALYZE === 'true';
 const CONFIG_DIR = import.meta.dirname;
+const THREE_MODULE_PATH = resolve(CONFIG_DIR, 'node_modules/three');
 
 const rootPkg = JSON.parse(readFileSync(resolve(CONFIG_DIR, '../package.json'), 'utf-8'));
 
@@ -158,6 +159,11 @@ export default defineConfig(({ command, mode }) => {
         template: 'treemap',
       }),
     ].filter(Boolean),
+    resolve: {
+      alias: {
+        three: THREE_MODULE_PATH,
+      },
+    },
     // Recharts is imported by lazy-loaded pages. Its published ESM files use
     // bare es-toolkit/compat/* imports, so prebundle it before a lazy tab can
     // expose those specifiers directly to the browser.
