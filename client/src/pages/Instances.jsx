@@ -607,8 +607,15 @@ function FullSyncCoverageBadge({ peerId, peerInstanceId, refreshKey }) {
   if (!peerInstanceId) {
     return <span className="text-[10px] text-gray-600">awaiting first connection…</span>;
   }
-  if (!loaded || !coverage) {
+  if (!loaded) {
     return <span className="text-[10px] text-gray-600">checking coverage…</span>;
+  }
+  if (!coverage || coverage.available === false || coverage.partial === true) {
+    return (
+      <span className="flex items-center gap-1 text-[10px] text-port-warning" title="Coverage could not be verified. Any available counts are partial; retry on the next refresh.">
+        <AlertCircle size={11} /> Coverage unavailable
+      </span>
+    );
   }
   if (coverage.fullyMirrored) {
     return (

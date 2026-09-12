@@ -156,9 +156,8 @@ export async function autoSubscribeRecordToAllPeers(recordKind, recordId) {
  * imports merge entry points from universeBuilder / pipeline.series).
  */
 /**
- * Per-kind lister thunks for `listRecordsForKind` below. Each entry mirrors the
- * exact error handling the kind had before this was table-ized — every lister
- * here still swallows its own failure with `.catch(() => [])`. Universe/series
+ * Per-kind lister thunks for `listRecordsForKind` below. Read failures propagate
+ * so callers can distinguish unavailable inventory from an empty one. Universe/series
  * are wrapped so their `import()` stays lazy, invoked only when that kind is
  * actually requested — the map's own construction imports nothing.
  *
@@ -175,40 +174,40 @@ const RECORD_KIND_LISTERS = {
   // merge entry point).
   universe: async () => {
     const { listUniverses } = await import('../universeBuilder.js');
-    return listUniverses({ includeDeleted: false }).catch(() => []);
+    return listUniverses({ includeDeleted: false });
   },
   // Dynamic-imported to avoid a static cycle (peerSync already imports its
   // merge entry point).
   series: async () => {
     const { listSeries } = await import('../pipeline/series.js');
-    return listSeries({ includeDeleted: false }).catch(() => []);
+    return listSeries({ includeDeleted: false });
   },
-  mediaCollection: () => listCollections({ includeDeleted: false }).catch(() => []),
-  author: () => listAuthors({ includeDeleted: false }).catch(() => []),
-  artist: () => listArtists({ includeDeleted: false }).catch(() => []),
-  album: () => listAlbums({ includeDeleted: false }).catch(() => []),
-  track: () => listTracks({ includeDeleted: false }).catch(() => []),
-  creativeDirectorProject: () => listProjects({ includeDeleted: false }).catch(() => []),
-  moodBoard: () => listBoards({ includeDeleted: false }).catch(() => []),
-  fableLoom: () => listLooms({ includeDeleted: false }).catch(() => []),
+  mediaCollection: () => listCollections({ includeDeleted: false }),
+  author: () => listAuthors({ includeDeleted: false }),
+  artist: () => listArtists({ includeDeleted: false }),
+  album: () => listAlbums({ includeDeleted: false }),
+  track: () => listTracks({ includeDeleted: false }),
+  creativeDirectorProject: () => listProjects({ includeDeleted: false }),
+  moodBoard: () => listBoards({ includeDeleted: false }),
+  fableLoom: () => listLooms({ includeDeleted: false }),
   // Live works as { id, updatedAt } (full-sync coverage compares updatedAt to
   // detect a stale confirmed push; bare {id} stubs would report a changed
   // manuscript as fully mirrored). Without this branch, enabling the
   // writersRoomWorks category (or full-sync) would backfill nothing.
-  writersRoomWork: () => listWorksForSync().catch(() => []),
+  writersRoomWork: () => listWorksForSync(),
   // Live folders as { id, updatedAt } (#1645) — same coverage-compare reason
   // as works. Body-less, so no asset/body manifest backfill.
-  writersRoomFolder: () => listFoldersForSync().catch(() => []),
+  writersRoomFolder: () => listFoldersForSync(),
   // Live exercises as { id, updatedAt } (#1645). updatedAt is derived from
   // finishedAt ?? startedAt in the facade so coverage keys on the wire value.
-  writersRoomExercise: () => listExercisesForSync().catch(() => []),
-  musicVideoProject: () => listMusicVideoProjects({ includeDeleted: false }).catch(() => []),
+  writersRoomExercise: () => listExercisesForSync(),
+  musicVideoProject: () => listMusicVideoProjects({ includeDeleted: false }),
   // Live feedback reactions as { id, updatedAt } (#2686) — same coverage-compare
   // reason as folders. Body-less, so no asset manifest backfill.
-  commissionFeedback: () => listCommissionFeedbackForSync().catch(() => []),
+  commissionFeedback: () => listCommissionFeedbackForSync(),
   // Live commission briefs as { id, updatedAt } (#2686). Body-less on the wire
   // (schedule/runs/assignment stripped), so no asset manifest backfill.
-  creativeCommission: () => listCommissionsForSync().catch(() => []),
+  creativeCommission: () => listCommissionsForSync(),
 };
 
 /**
@@ -234,7 +233,10 @@ export async function autoSubscribePeerToAllRecords(peerId, recordKind) {
   const peers = await getPeers().catch(() => []);
   const peer = peers.find(p => p.instanceId === peerId);
   if (!peer || !peerAllowsOutbound(peer) || !peerHasCategory(peer, recordKind)) return [];
-  const records = await listRecordsForKind(recordKind);
+  const records = await listRecordsForKind(recordKind).catch(() => {
+    console.log(`⚠️ peerSync: backfill inventory unavailable for ${recordKind}/records`);
+    return [];
+  });
   if (records.length === 0) return [];
   // Compute the set difference up front: which local records aren't yet
   // subscribed to this peer? The peer:online convergence path fires this
@@ -288,18 +290,27 @@ export async function autoSubscribePeerToAllRecords(peerId, recordKind) {
  * sequence numbers, not row counts, and would misreport coverage). A record is
  * "pending" when it has no subscription to this peer OR its subscription hasn't
  * been confirmed-delivered yet. Returns per-kind breakdown plus totals, and
- * `fullyMirrored` (pending === 0).
+ * `fullyMirrored` only when all reads succeeded and pending === 0. Failed reads
+ * expose only kind/operation identifiers; retained counts are explicitly partial.
  */
 export async function getFullSyncCoverageForPeer(peerId) {
-  const empty = { total: 0, confirmed: 0, pending: 0, fullyMirrored: true, byKind: {} };
+  const empty = { total: 0, confirmed: 0, pending: 0, fullyMirrored: true, byKind: {}, available: true, partial: false, failedReads: [] };
   if (!isNonBlankStr(peerId)) return empty;
   // Each kind's record list + subscription list are independent I/O — fetch all
   // kinds (and the two lists within a kind) concurrently.
   const perKind = await Promise.all(PEER_SUBSCRIBABLE_KINDS.map(async (kind) => {
-    const [records, subs] = await Promise.all([
-      listRecordsForKind(kind).catch(() => []),
-      listPeerSubscriptions({ peerId, recordKind: kind }).catch(() => []),
+    const results = await Promise.allSettled([
+      listRecordsForKind(kind),
+      listPeerSubscriptions({ peerId, recordKind: kind }),
     ]);
+    const failedReads = results.flatMap((result, index) => {
+      if (result.status === 'fulfilled') return [];
+      const operation = index === 0 ? 'records' : 'subscriptions';
+      console.log(`⚠️ peerSync: full-sync coverage unavailable for ${kind}/${operation}`);
+      return [{ kind, operation }];
+    });
+    const records = results[0].status === 'fulfilled' ? results[0].value : [];
+    const subs = results[1].status === 'fulfilled' ? results[1].value : [];
     // Map each subscribed record to its confirmed-delivery water-mark (ms epoch).
     const confirmedAtById = new Map(subs.filter(s => s.lastConfirmedPushedAt).map(s => [s.recordId, s.lastConfirmedPushedAt]));
     // A record counts as mirrored only when a confirmed push covers its CURRENT
@@ -315,18 +326,21 @@ export async function getFullSyncCoverageForPeer(peerId) {
       // No parseable updatedAt → can't prove staleness; trust the confirmation.
       return !Number.isFinite(updatedAt) || confirmedAt >= updatedAt;
     }).length;
-    return { kind, total: kindTotal, confirmed: kindConfirmed, pending: kindTotal - kindConfirmed };
+    return { kind, total: kindTotal, confirmed: kindConfirmed, pending: kindTotal - kindConfirmed, failedReads };
   }));
   const byKind = {};
+  const failedReads = perKind.flatMap(k => k.failedReads);
   let total = 0;
   let confirmed = 0;
   for (const k of perKind) {
     byKind[k.kind] = { total: k.total, confirmed: k.confirmed, pending: k.pending };
+    if (k.failedReads.length > 0) byKind[k.kind].partial = true;
     total += k.total;
     confirmed += k.confirmed;
   }
   const pending = total - confirmed;
-  return { total, confirmed, pending, fullyMirrored: pending === 0, byKind };
+  const available = failedReads.length === 0;
+  return { total, confirmed, pending, fullyMirrored: available && pending === 0, byKind, available, partial: !available, failedReads };
 }
 
 /**
@@ -700,8 +714,8 @@ export async function syncNowForPeer(peerId) {
   if (!peer?.instanceId) return { ok: false };
   for (const kind of PEER_SUBSCRIBABLE_KINDS) {
     if (peerHasCategory(peer, kind)) {
-      await autoSubscribePeerToAllRecords(peer.instanceId, kind).catch((err) => {
-        console.log(`⚠️ peerSync: syncNow backfill ${kind} → ${peerId} failed: ${err.message}`);
+      await autoSubscribePeerToAllRecords(peer.instanceId, kind).catch(() => {
+        console.log(`⚠️ peerSync: syncNow backfill failed for ${kind}`);
       });
     }
   }
@@ -773,7 +787,9 @@ export function installPeerSyncListener() {
         // full-sync peer whose instanceId we only just learned) still back-
         // subscribes every kind here.
         if (peerHasCategory(peer, kind)) {
-          await autoSubscribePeerToAllRecords(peer.instanceId, kind).catch(() => {});
+          await autoSubscribePeerToAllRecords(peer.instanceId, kind).catch(() => {
+            console.log(`⚠️ peerSync: peer:online backfill failed for ${kind}`);
+          });
         }
       }
       await retryPendingPushesForPeer(peer.instanceId).catch(() => {});
