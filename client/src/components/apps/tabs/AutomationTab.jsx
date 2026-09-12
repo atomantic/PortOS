@@ -129,12 +129,13 @@ export default function AutomationTab({ appId, appName }) {
   };
 
   const handleTrigger = async (taskType) => {
+    const toastId = toast.loading(`Sending ${taskType} request for ${appName}…`);
     const result = await api.triggerCosOnDemandTask(taskType, appId, { silent: true }).catch(err => {
       toast.error(err.message);
       return null;
-    });
+    }).finally(() => toast.dismiss(toastId));
     if (result?.success) {
-      toast.success(`Triggered ${taskType} for ${appName}`);
+      toast.success(`Queued ${taskType} request for ${appName} — checks and available capacity determine when an agent appears`);
     }
     return result?.success ? result : null;
   };
