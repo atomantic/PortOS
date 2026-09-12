@@ -1025,7 +1025,7 @@ describe('sweepTombstones — track GC cohort widened by musicVideoProject bundl
     // `unchanged`-hash short-circuit means it may NEVER take another real push
     // that would stamp the field — pinning the track cutoff at the row's old
     // createdAt forever. A saved lastPushedHash is a safe historical proxy:
-    // persistPushSuccess has always withheld the hash when trackSyncPending was
+    // persistPushDeliveryEvidence has always withheld the hash when trackSyncPending was
     // true (#1858, predating this field), so a non-null hash means that row's
     // last successful push already had its bundled track merge confirmed.
     getMinAckAcrossPeers.mockResolvedValue(NOW);
