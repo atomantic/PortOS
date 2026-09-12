@@ -199,9 +199,10 @@ export function computeWeightedScore(dimensions) {
 }
 
 /**
- * The dimension the improve loop should target next: the LARGEST weighted
- * deficit `weight × (10 − score)` — i.e. the single fix that moves the weighted
- * composite the most. Ties break toward the lower raw score, then rubric order.
+ * Largest weighted distance from a perfect rubric score, retained for snapshot
+ * diagnostics: `weight × (10 − score)`. Gate repair selection instead uses
+ * foundationFixTarget with the requested threshold. Ties break toward the lower
+ * raw score, then rubric order.
  * (Fixing a high-weight low-score dimension first is what converges the gate;
  * "weakest" by bare score would waste rounds polishing a 10%-weight craft nit
  * while a thin 40%-weight world drags the composite down.) Pure + unit-tested.
@@ -633,7 +634,8 @@ const CRAFT_REPAIR_MAX_ATTEMPTS = 2;
 // a smaller brief. That is the one way these differ from `renderArc`, which is
 // plain text and hard-clamps: below the JSON skeleton's own size (a few hundred
 // chars of keys and notes) these renderers overshoot the budget rather than
-// emitting something unparseable. The real budgets are 12,000.
+// emitting something unparseable. Ordinary section budgets are 12,000; a
+// complete single-character repair may use the bounded 24,000 fallback above.
 const JSON_TRUNCATION_MARK = '… [truncated to fit the prompt budget]';
 function fitJsonToBudget(payload, trimKeys, maxChars) {
   const shrunk = { ...payload };
