@@ -304,8 +304,10 @@ describe('goalProgress.js', () => {
 
       const result = await getGoalProgress();
 
-      expect(result.updatedAt).toBeDefined();
-      expect(new Date(result.updatedAt)).toBeInstanceOf(Date);
+      expect(result.updatedAt).not.toBeNull();
+      expect(typeof result.updatedAt).toBe('string');
+      expect(Number.isNaN(Date.parse(result.updatedAt))).toBe(false);
+      expect(new Date(result.updatedAt).toISOString()).toBe(result.updatedAt);
     });
   });
 
