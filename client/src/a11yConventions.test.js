@@ -3362,9 +3362,23 @@ describe('a11y conventions', () => {
       return bindings;
     };
 
-    // Read off the import clause and the call expression, never off raw text:
-    // a quoted `"useSensor(KeyboardSensor)"` in a title or a className must not
-    // be able to forge the exemption.
+    // Blank out every string literal before looking for the registration call.
+    // Comments are already masked, but a quoted `"useSensor(KeyboardSensor)"`
+    // in a title or a className would otherwise forge the exemption — and the
+    // forged text would be invisible in review, which is the same trap the
+    // clickable-element rule above is written around.
+    const withoutStringLiterals = (src) => src.replace(
+      /"(?:[^"\\\n]|\\.)*"|'(?:[^'\\\n]|\\.)*'|`(?:[^`\\]|\\.)*`/g,
+      (literal) => `"${' '.repeat(Math.max(literal.length - 2, 0))}"`,
+    );
+
+    // Read off the import clause and the call expression, never off raw text.
+    // The registration is looked for FILE-wide rather than inside the specific
+    // `<DndContext sensors={…}>` it belongs to, because every DndContext in this
+    // tree builds its sensors in the same module and no file mounts two with
+    // different sensor lists. A file that grows a second, pointer-only context
+    // beside a keyboard-enabled one would slip through — split it, or tighten
+    // this to resolve the `sensors` prop per mount.
     const offendersIn = (file, src) => {
       const core = namedImportsFrom(src, '@dnd-kit/core');
       const contextLocal = core.get('DndContext');
@@ -3372,7 +3386,7 @@ describe('a11y conventions', () => {
       const sensorLocal = core.get('KeyboardSensor');
       const useSensorLocal = core.get('useSensor');
       if (sensorLocal && useSensorLocal
-        && new RegExp(`\\b${useSensorLocal}\\s*\\(\\s*${sensorLocal}\\b`).test(src)) return [];
+        && new RegExp(`\\b${useSensorLocal}\\s*\\(\\s*${sensorLocal}\\b`).test(withoutStringLiterals(src))) return [];
       const index = src.indexOf(`<${contextLocal}`);
       return [`${file}:${lineOf(src, Math.max(index, 0))}`];
     };
@@ -3388,8 +3402,15 @@ describe('a11y conventions', () => {
     expect(probe("import { DndContext as Dnd, KeyboardSensor as KS, useSensor as sensor } from '@dnd-kit/core';\nconst s = sensor(KS, {});\n<Dnd sensors={s} />")).toEqual([]);
     // …and importing the symbol without ever registering it is not.
     expect(probe(`${IMPORT_BOTH}\nconst s = useSensor(PointerSensor);\n<DndContext sensors={s} />`)).toEqual(['probe.jsx:3']);
-    // Neither is a quoted mention, nor one from some other module.
-    expect(probe(`${IMPORT_POINTER}\n<DndContext title="useSensor(KeyboardSensor)" />`)).toEqual(['probe.jsx:2']);
+    // Neither is a quoted mention — and it must be pinned against an import
+    // list that ALREADY has KeyboardSensor in it, or the case passes for the
+    // unrelated reason that the symbol was never imported, and the forgery
+    // branch is never exercised at all.
+    expect(probe(`${IMPORT_BOTH}\nconst s = useSensor(PointerSensor);\n<DndContext sensors={s} title="useSensor(KeyboardSensor)" />`)).toEqual(['probe.jsx:3']);
+    expect(probe(`${IMPORT_BOTH}\nconst label = \`useSensor(KeyboardSensor)\`;\n<DndContext sensors={useSensor(PointerSensor)} />`)).toEqual(['probe.jsx:3']);
+    // …but blanking the literals must not shift the reported line number.
+    expect(probe(`${IMPORT_BOTH}\nconst note = "a\\nb";\n<DndContext sensors={useSensor(PointerSensor)} />`)).toEqual(['probe.jsx:3']);
+    // Nor does a same-named import from some other module count.
     expect(probe(`${IMPORT_POINTER}\nimport { KeyboardSensor, useSensor } from './fake';\nconst s = useSensor(KeyboardSensor);\n<DndContext sensors={s} />`)).toEqual(['probe.jsx:4']);
     // A file that never mounts a DndContext is out of the rule's remit, even
     // when it uses dnd-kit for something else.
