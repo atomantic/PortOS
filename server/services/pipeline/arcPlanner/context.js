@@ -341,6 +341,7 @@ export async function buildArcBaseContext(series, preloadedWorld) {
   return {
     series: {
       name: series.name,
+      targetFormat: series.targetFormat,
       logline: series.logline,
       premise: series.premise,
     },
@@ -382,6 +383,7 @@ export async function buildArcOverviewContext(series, preloadedWorld) {
   return {
     series: {
       name: series.name,
+      targetFormat: series.targetFormat,
       logline: series.logline,
       premise: series.premise,
       // Structured style guide folded into the free-text notes (see
@@ -544,20 +546,28 @@ export const renderVerifySeasonFields = (s) => ({
 export async function buildVerifyContext(series, preloadedWorld, { spineOnly = false } = {}) {
   const seasons = sanitizeSeasonList(series.seasons || []);
   const [issues, base, canon] = await Promise.all([
-    // Spine mode renders no episode leaves, so skip the load rather than fetch
-    // and sanitize every issue's full record (stage run history included) only
-    // for `groupIssuesBySeasonTree` to drop it.
-    spineOnly ? [] : listIssues({ seriesId: series.id }),
+    listIssues({ seriesId: series.id }),
     buildArcBaseContext(series, preloadedWorld),
     getSeriesPlanningCanon(series),
   ]);
-  const tree = groupIssuesBySeasonTree(seasons, issues, {
+  const tree = groupIssuesBySeasonTree(seasons, spineOnly ? [] : issues, {
     renderLeaf: renderVerifyIssueLeaf,
     seasonFields: renderVerifySeasonFields,
   });
+  // A resumed or edited series can already have authored issue plans. Keep
+  // these outside the spine's editable tree, but let both judge and resolver
+  // reconcile summary omissions against the actual plans instead of inventing
+  // a second version of events. Draft prose, expanded beats and art stay out.
+  const plannedIssues = spineOnly ? issues.filter((issue) => issue.stages?.idea?.input?.trim()) : [];
+  const referenceTree = plannedIssues.length ? groupIssuesBySeasonTree(seasons, plannedIssues, {
+    renderLeaf: renderVerifyIssueLeaf,
+    seasonFields: (season) => ({ number: season.number, title: season.title }),
+  }) : [];
   return {
     ...base,
     arcSpineOnly: spineOnly,
+    arcSpineHasEpisodePlans: plannedIssues.length > 0,
+    spineEpisodePlansJson: referenceTree.length ? JSON.stringify(referenceTree, null, 2) : '',
     seasonsTreeJson: JSON.stringify(tree, null, 2),
     existingCharactersJson: JSON.stringify(canon.characters, null, 2),
     existingPlacesJson: JSON.stringify(canon.places, null, 2),

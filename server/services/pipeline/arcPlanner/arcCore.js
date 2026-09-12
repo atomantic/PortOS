@@ -749,12 +749,13 @@ export function isolatedCandidateRejection(edits, { exactTextMode = false, serie
 // these same findings authored THESE and was reverted" list (see
 // buildResolveContext) — set only by a corrective pass.
 // `options.spineOnly` mirrors verifyArc's pre-episode arc-spine mode: the
-// resolver sees the same episode-empty plan and may only patch the series arc,
+// resolver sees the same episode-empty editable tree and may only patch the series arc,
 // per-character arcs, and volumes (#3789). It is a PAIRING constraint, not an independent knob — it
 // must match the verify that produced `options.findings`, or the resolver
 // answers at an altitude the gate never judged. Episode-synopsis corrections
-// stay available for the later full arc gate, which runs after episodes exist
-// and actually judges them.
+// stay available for the later full arc gate. Existing episode plans are
+// read-only references here so a summary repair preserves their established
+// events; their presence does not expand this checkpoint's write scope.
 export async function resolveVerifyIssues(seriesId, options = {}) {
   const spineOnly = options.spineOnly === true;
   const isolated = options.isolated === true;

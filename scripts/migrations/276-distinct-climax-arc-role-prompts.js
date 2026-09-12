@@ -16,7 +16,7 @@ export const ACCEPTED_OLD_MD5 = {
 export const NEW_SHIPPED_MD5 = {
   'pipeline-season-episodes.md': '7c24df53c097c2525a52bfb766239647',
   'pipeline-idea-expansion.md': 'a032e4a724251ed3e3495d33c4dbab8e',
-  'pipeline-arc-verify.md': '4b60a322e35b536405d0fbf543580562',
+  'pipeline-arc-verify.md': 'f09e81655ec897c74a2fae68ad31b9c4',
   'importer-issue-proposal.md': '9ba2ff965fba61efb85a3568bb530055',
 };
 
