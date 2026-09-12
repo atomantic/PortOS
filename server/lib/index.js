@@ -22,6 +22,7 @@ export * from './autonomousJobTask.js';
 export * from './asyncApiSpec.js';
 export * from './avatarVariants.js';
 export * from './avatarStyles.js';
+export * as managedVisitorValidation from './managedVisitorValidation.js';
 export * as agentValidation from './agentValidation.js';
 export * as agentContextValidation from './agentContextValidation.js';
 export * as appleHealthValidation from './appleHealthValidation.js';

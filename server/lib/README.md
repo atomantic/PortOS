@@ -21,6 +21,8 @@ The barrel `server/lib/index.js` is a machine-checkable enumeration of every pub
 
 ## Validation (Zod schemas + request validators)
 
+`managedVisitorValidation.js` — strict scoped managed-visitor credentials, admissions, observations and bounded action schemas.
+
 | Module | Purpose |
 |---|---|
 | `appDeployFlags.js` | Shared allowlist of flags PortOS may forward to a managed app's `deploy.sh`, consumed by socket validation and deployment orchestration without reversing the lib/services dependency. |
