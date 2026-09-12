@@ -2,6 +2,7 @@ import { act, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { MemoryRouter, Route, Routes, useNavigate } from 'react-router';
 
+const mockOverviewRender = vi.fn();
 const mockAgentDeferreds = {};
 const mockPlatformDeferreds = {};
 
@@ -24,7 +25,10 @@ vi.mock('../BrailleSpinner', () => ({
   default: ({ text }) => <div role="status" aria-label={text}>{text}</div>,
 }));
 
-vi.mock('./tabs/OverviewTab', () => ({ default: () => null }));
+vi.mock('./tabs/OverviewTab', () => ({ default: props => {
+  mockOverviewRender(props);
+  return null;
+} }));
 vi.mock('./tabs/ToolsTab', () => ({ default: () => null }));
 vi.mock('./tabs/WorldTab', () => ({ default: () => null }));
 vi.mock('./tabs/PublishedTab', () => ({ default: () => null }));
@@ -103,6 +107,7 @@ describe('AgentDetail route lifecycle', () => {
     await act(async () => {
       screen.getByText('go-b').click();
     });
+    expect(mockOverviewRender.mock.calls.every(([props]) => props.agentId === props.agent.id)).toBe(true);
     expect(screen.queryByText('Agent Alpha')).not.toBeInTheDocument();
     expect(screen.getByRole('status', { name: 'Loading agent' })).toBeInTheDocument();
 
@@ -116,5 +121,26 @@ describe('AgentDetail route lifecycle', () => {
       screen.getByRole('button', { name: 'Enabled' }).click();
     });
     expect(api.toggleAgentPersonality).toHaveBeenCalledWith('agent-b', false);
+  });
+
+  it('keeps the new agent load active when an old toggle completes', async () => {
+    renderAgentDetail();
+    await act(async () => {
+      mockAgentDeferreds['agent-a'].resolve({ id: 'agent-a', name: 'Agent Alpha', enabled: true });
+      mockPlatformDeferreds['agent-a'].resolve([]);
+    });
+    let completeToggle;
+    api.toggleAgentPersonality.mockImplementationOnce(() => new Promise(resolve => {
+      completeToggle = resolve;
+    }));
+    await act(async () => { screen.getByRole('button', { name: 'Enabled' }).click(); });
+    await act(async () => { screen.getByText('go-b').click(); });
+    await act(async () => { completeToggle(); });
+    await act(async () => {
+      mockAgentDeferreds['agent-b'].resolve({ id: 'agent-b', name: 'Agent Beta', enabled: true });
+      mockPlatformDeferreds['agent-b'].resolve([]);
+    });
+    expect(screen.getByText('Agent Beta')).toBeInTheDocument();
+    expect(screen.queryByRole('status', { name: 'Loading agent' })).not.toBeInTheDocument();
   });
 });

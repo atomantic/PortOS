@@ -13,6 +13,11 @@ import SchedulesTab from './tabs/SchedulesTab';
 import ActivityTab from './tabs/ActivityTab';
 
 export default function AgentDetail() {
+  const { agentId } = useParams();
+  return <AgentDetailContent key={agentId} />;
+}
+
+function AgentDetailContent() {
   const { agentId, tab } = useParams();
   const navigate = useNavigate();
   const activeTab = tab || 'overview';
