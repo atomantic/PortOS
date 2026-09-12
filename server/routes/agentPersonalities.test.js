@@ -111,6 +111,25 @@ describe('Agent Personalities Routes', () => {
       );
     });
 
+    it('accepts an individual personality hint without requiring a style', async () => {
+      generateAgentPersonality.mockResolvedValue({ name: 'Generated Agent' });
+
+      const response = await request(makeApp())
+        .post('/api/agents/personalities/generate')
+        .send({ seed: { personality: { tone: 'warm and precise' } } });
+
+      expect(response.status).toBe(200);
+      expect(generateAgentPersonality).toHaveBeenCalledWith(
+        {
+          description: '',
+          enabled: true,
+          personality: { tone: 'warm and precise' },
+        },
+        undefined,
+        undefined,
+      );
+    });
+
     it('defaults an omitted seed to an empty object', async () => {
       generateAgentPersonality.mockResolvedValue({ name: 'Generated Agent' });
 

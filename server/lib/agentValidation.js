@@ -79,7 +79,9 @@ export const agentUpdateSchema = partialWithoutDefaults(agentSchema).extend({
 // text has the same bounds as a persisted personality before it reaches a
 // provider prompt.
 export const agentGenerateSchema = z.object({
-  seed: agentSchema.partial().optional().default({}),
+  seed: agentSchema.partial().extend({
+    personality: partialWithoutDefaults(agentPersonalitySchema).optional(),
+  }).optional().default({}),
   providerId: z.string().min(1).max(128).nullable().optional(),
   model: z.string().min(1).max(300).nullable().optional()
 }).strict();
