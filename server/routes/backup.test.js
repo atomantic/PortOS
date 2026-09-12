@@ -384,6 +384,7 @@ describe('backup routes', () => {
     it.each([
       ['manifest_unreadable', { status: 'failed', reason: 'manifest_unreadable' }],
       ['manifest_mismatch', { status: 'failed', reason: 'manifest_mismatch' }],
+      ['restore_schema_reconciliation', { status: 'failed', reason: 'restore_schema_reconciliation', error: 'The database dump was applied, but schema recovery is incomplete. Restart PortOS.' }],
       ['restore_error', { status: 'failed', reason: 'restore_error', error: 'psql: exited 1' }],
       ['no_dump', { status: 'skipped', reason: 'no_dump' }],
       ['not_configured', { status: 'skipped', reason: 'not_configured' }]

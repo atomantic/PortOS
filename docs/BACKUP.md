@@ -76,7 +76,7 @@ After the preflight, rsync copies `<snapshot>/data/` back to `./data/`. `dryRun:
 
 ### Database — `restorePostgres()`
 
-Replays the snapshot's `portos-db.sql` into the live database via `psql -v ON_ERROR_STOP=1 --single-transaction`, so the restore is **atomic**: it either fully applies or rolls back, never leaving a mixed snapshot/current state.
+Replays the snapshot's `portos-db.sql` into the live database via `psql -v ON_ERROR_STOP=1 --single-transaction`, so the **SQL replay is atomic**: a failed replay rolls back. After replay commits, PortOS forces the current additive schema upgrades and then runs ordered DB migrations using the restored `schema_migrations` ledger. Already-applied migrations are skipped. Success is returned only after both phases finish; dry-run performs neither replay nor schema changes.
 
 | Result | Meaning |
 |---|---|
@@ -86,6 +86,9 @@ Replays the snapshot's `portos-db.sql` into the live database via `psql -v ON_ER
 | `{ status: 'failed', reason: 'manifest_unreadable' }` | An existing `manifest.json` is corrupt or unreadable — choose another snapshot or repair the backup media before retrying |
 | `{ status: 'failed', reason: 'manifest_mismatch' }` | Snapshot's `portos-db.sql` hash disagrees with `manifest.json` — dump considered untrustworthy |
 | `{ status: 'failed', reason: 'restore_error', error }` | `psql` replay failed (stderr captured) |
+| `{ status: 'failed', reason: 'restore_schema_reconciliation', error }` | The dump committed, but current schema recovery failed; the restore was **not rolled back** |
+
+On schema-reconciliation failure, restart PortOS to retry its schema upgrades and pending migrations. If recovery still fails, inspect the server logs and repair the database before continuing to use affected features. Reconciliation can partially apply upgrades; it is separate from the completed replay transaction.
 
 A non-dry-run restore requires a reachable DB first (`checkHealth()`), so a restore never half-applies against a down database.
 

@@ -47,10 +47,17 @@ afterAll(() => {
 // Mock the DB health check and child_process.spawn before importing backup.js
 vi.mock('../lib/db.js', () => ({
   checkHealth: vi.fn(),
+  ensureSchema: vi.fn().mockResolvedValue(undefined),
   // Default to null (version unknown) so dumpPostgres keeps the bare-`pg_dump`
   // path and the existing status tests don't trigger live binary discovery.
   getServerMajorVersion: vi.fn(() => null),
 }));
+
+vi.mock('../scripts/run-db-migrations.js', () => ({
+  runDbMigrations: vi.fn().mockResolvedValue(0),
+}));
+import { ensureSchema } from '../lib/db.js';
+import { runDbMigrations } from '../scripts/run-db-migrations.js';
 
 // Mock the memory-backend resolver so dumpPostgres can tell whether Postgres is
 // the ACTIVE backend (explicit or auto-detected) when the DB is unreachable.
@@ -896,6 +903,8 @@ describe('restorePostgres', () => {
     expect(result.sizeBytes).toBe(4096);
     expect(result.tableCount).toBe(1);
     expect(spawn).not.toHaveBeenCalled();
+    expect(ensureSchema).not.toHaveBeenCalled();
+    expect(runDbMigrations).not.toHaveBeenCalled();
   });
 
   it('reads a previous-machine dump from the explicitly selected namespace', async () => {
@@ -973,6 +982,54 @@ describe('restorePostgres', () => {
     expect(result.status).toBe('failed');
     expect(result.reason).toBe('restore_error');
     expect(result.error).toContain('already exists');
+    expect(ensureSchema).not.toHaveBeenCalled();
+    expect(runDbMigrations).not.toHaveBeenCalled();
+  });
+
+  it('waits for forced schema repair and then migrations before reporting success', async () => {
+    vi.spyOn(fs, 'stat').mockResolvedValue({ size: 4096, isFile: () => true });
+    mockLegacyDumpRead();
+    checkHealth.mockResolvedValue({ connected: true });
+    let finishSchema;
+    let finishMigrations;
+    ensureSchema.mockImplementationOnce(() => new Promise(resolve => { finishSchema = resolve; }));
+    runDbMigrations.mockImplementationOnce(() => new Promise(resolve => { finishMigrations = resolve; }));
+    const proc = fakeProc();
+    spawn.mockReturnValue(proc);
+    let settled = false;
+    const pending = restorePostgres('/dest', 'snap-1', { dryRun: false }).then(result => {
+      settled = true;
+      return result;
+    });
+    await flush();
+    proc.emit('close', 0);
+    await flush();
+    expect(ensureSchema).toHaveBeenCalledWith({ force: true });
+    expect(runDbMigrations).not.toHaveBeenCalled();
+    expect(settled).toBe(false);
+    finishSchema();
+    await vi.waitFor(() => expect(runDbMigrations).toHaveBeenCalledOnce());
+    expect(settled).toBe(false);
+    finishMigrations(0);
+    await expect(pending).resolves.toMatchObject({ status: 'ok', dryRun: false });
+  });
+
+  it.each(['schema', 'migrations'])('reports committed replay when %s reconciliation fails', async (phase) => {
+    vi.spyOn(fs, 'stat').mockResolvedValue({ size: 4096, isFile: () => true });
+    mockLegacyDumpRead();
+    checkHealth.mockResolvedValue({ connected: true });
+    (phase === 'schema' ? ensureSchema : runDbMigrations).mockRejectedValueOnce(new Error('upgrade failed'));
+    const proc = fakeProc();
+    spawn.mockReturnValue(proc);
+    const pending = restorePostgres('/dest', 'snap-1', { dryRun: false });
+    await flush();
+    proc.emit('close', 0);
+    const result = await pending;
+    expect(result).toMatchObject({ status: 'failed', reason: 'restore_schema_reconciliation' });
+    expect(result.error).toContain('dump was applied');
+    expect(result.error).toContain('not rolled back');
+    expect(result.error).toContain('Restart PortOS');
+    if (phase === 'schema') expect(runDbMigrations).not.toHaveBeenCalled();
   });
 
   // Manifest SHA-256 verification (#980). The dump is hashed in generateManifest

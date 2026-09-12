@@ -209,6 +209,25 @@ describe('BackupTab', () => {
       }, { silent: true });
     });
 
+    it('explains that schema recovery failed after the dump committed', async () => {
+      withSnapshot();
+      restoreDatabase
+        .mockResolvedValueOnce({ status: 'ok', sizeBytes: 2048, tableCount: 12 })
+        .mockResolvedValueOnce({ status: 'failed', reason: 'restore_schema_reconciliation' });
+      await renderTab();
+      await act(async () => {
+        fireEvent.click(await screen.findByRole('button', { name: /Restore DB/i }));
+      });
+      await act(async () => {
+        fireEvent.click(screen.getByRole('button', { name: /^Restore$/i }));
+      });
+      expect(toast.success).not.toHaveBeenCalled();
+      expect(toast.error).toHaveBeenCalledWith(
+        expect.stringMatching(/dump was applied.*not rolled back.*Restart PortOS/),
+        { duration: Infinity },
+      );
+    });
+
     it('toasts an error when the confirmed restore fails', async () => {
       withSnapshot();
       restoreDatabase
