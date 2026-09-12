@@ -192,6 +192,7 @@ export * from './syncCounts.js';
 export * from './tabNotation.js';
 export * from './tailnetPeer.js';
 export * from './terminalDictation.js';
+export * from './terminalFit.js';
 export * from './terminalScroll.js';
 export * from './terminalTheme.js';
 export * from './textUtils.js';
