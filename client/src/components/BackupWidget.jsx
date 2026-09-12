@@ -178,6 +178,18 @@ function RestorePanel({ snapshot, onClose, restoring, onRestoreStateChange }) {
       {/* Dry-run results */}
       {preview && (
         <div>
+          {preview.verification?.status === 'verified' && (
+            <p className="mb-2 flex items-center gap-1.5 text-xs text-port-success" role="status">
+              <CheckCircle size={13} />
+              Snapshot integrity verified ({preview.verification.checkedFiles} selected file(s)).
+            </p>
+          )}
+          {preview.verification?.status === 'unverified' && (
+            <p className="mb-2 flex items-start gap-1.5 rounded border border-port-warning/40 bg-port-warning/10 p-2 text-xs text-port-warning" role="alert">
+              <AlertTriangle size={13} className="mt-0.5 shrink-0" />
+              Legacy snapshot: no integrity manifest is available. PortOS cannot verify these backup bytes before restore.
+            </p>
+          )}
           <p className="text-xs text-gray-500 mb-1">
             {preview.changedFiles?.length ?? 0} file(s) would change:
           </p>
