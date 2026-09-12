@@ -131,6 +131,10 @@ export async function drainOnDemandRequests(ctx, adapter) {
 
     await taskScheduleMod.clearOnDemandRequest(request.id);
 
+    const preparationStartedAt = performance.now();
+    const requestedAt = Date.parse(request.requestedAt);
+    const queueWaitMs = Number.isFinite(requestedAt) ? Math.max(0, Date.now() - requestedAt) : null;
+
     // A HUMAN "Run" re-checks live state (park + convergence signature + dispatch
     // budget all cleared); an automated refill (origin: 'refill') inherits them,
     // or the drain has no brakes left. The origin check lives inside
@@ -221,6 +225,16 @@ export async function drainOnDemandRequests(ctx, adapter) {
       // and nobody is waiting on it, so toasting "nothing to do" for every automated
       // hop would turn a healthy overnight drain into a pile of notifications.
       await emitOnDemandEmpty({ taskScheduleMod, request, targetApp, taskConfig: schedule.tasks[request.taskType] });
+    }
+    if (userInitiated) {
+      const preparationMs = Math.round(performance.now() - preparationStartedAt);
+      emitLog('info', `On-demand preparation finished: ${request.taskType} (${request.id}) — queue wait ${queueWaitMs ?? 'unknown'}ms, preparation ${preparationMs}ms, ${task ? 'task generated' : 'no task generated'}`, {
+        requestId: request.id,
+        appId: targetApp?.id ?? null,
+        queueWaitMs,
+        preparationMs,
+        taskGenerated: !!task,
+      });
     }
   }
 

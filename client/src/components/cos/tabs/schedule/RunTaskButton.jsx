@@ -72,8 +72,8 @@ export default function RunTaskButton({ taskType, apps, onTrigger, installWide =
       setTriggering(false);
       if (!result) return;
       setLastRequest(app?.name
-        ? `Request sent to ${app.name}`
-        : installWide ? 'Request sent for all apps' : 'Request sent');
+        ? `Request queued for ${app.name}`
+        : installWide ? 'Request queued for all apps' : 'Request queued');
     };
 
     // ScheduleTab owns error feedback and always resolves to null on failure.
@@ -88,12 +88,15 @@ export default function RunTaskButton({ taskType, apps, onTrigger, installWide =
     <span
       role="status"
       title={lastRequest || undefined}
-      className={lastRequest
-        ? 'mt-1 flex min-w-0 max-w-48 items-center gap-1 text-[11px] text-port-success'
+      className={lastRequest || triggering
+        ? `mt-1 flex min-w-0 max-w-48 flex-col items-start gap-1 text-[11px] ${lastRequest ? 'text-port-success' : 'text-gray-400'}`
         : 'sr-only'}
     >
-      {lastRequest && <CheckCircle2 size={12} className="shrink-0" />}
-      <span className={lastRequest ? 'min-w-0 flex-1 truncate' : ''}>{triggering ? 'Sending request' : lastRequest}</span>
+      <span className="flex items-start gap-1">
+        {lastRequest && <CheckCircle2 size={12} className="shrink-0" />}
+        <span>{triggering ? 'Sending request' : lastRequest}</span>
+      </span>
+      {lastRequest && <span className="text-gray-400">Checks and available capacity determine when {programmatic ? 'work starts' : 'an agent appears'}. See CoS for progress.</span>}
     </span>
   );
 

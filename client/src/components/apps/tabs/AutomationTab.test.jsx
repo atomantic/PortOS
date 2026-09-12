@@ -75,6 +75,39 @@ beforeEach(() => {
 });
 
 describe('AutomationTab per-app options', () => {
+  it('acknowledges a slow run immediately, prevents duplicate clicks, and retains the queued receipt', async () => {
+    await renderTab({ security: { enabled: true } });
+    let resolveRun;
+    api.triggerCosOnDemandTask.mockReturnValueOnce(new Promise(resolve => { resolveRun = resolve; }));
+    mockToast.loading.mockReturnValueOnce('run-toast');
+    const row = rowFor('security');
+    fireEvent.click(within(row).getByRole('button', { name: 'Run Now' }));
+    expect(mockToast.loading).toHaveBeenCalledWith('Sending security request for MyApp…');
+    const sending = within(row).getByRole('button', { name: 'Sending…' });
+    expect(sending).toBeDisabled();
+    fireEvent.click(sending);
+    expect(api.triggerCosOnDemandTask).toHaveBeenCalledTimes(1);
+    expect(mockToast.success).not.toHaveBeenCalled();
+    await act(async () => resolveRun({ success: true, request: { id: 'request-1' } }));
+    expect(mockToast.dismiss).toHaveBeenCalledWith('run-toast');
+    expect(mockToast.success).toHaveBeenCalledWith(expect.stringContaining('Queued security request for MyApp'));
+    expect(within(row).getByText('Request queued')).toBeVisible();
+    expect(within(row).getByRole('button', { name: 'Run Now' })).toBeEnabled();
+  });
+
+  it('clears sending feedback on rejection without claiming the run was queued', async () => {
+    await renderTab({ security: { enabled: true } });
+    api.triggerCosOnDemandTask.mockRejectedValueOnce(new Error('CoS unavailable'));
+    mockToast.loading.mockReturnValueOnce('failed-run-toast');
+    const row = rowFor('security');
+    fireEvent.click(within(row).getByRole('button', { name: 'Run Now' }));
+    await waitFor(() => expect(mockToast.dismiss).toHaveBeenCalledWith('failed-run-toast'));
+    expect(mockToast.error).toHaveBeenCalledWith('CoS unavailable');
+    expect(mockToast.success).not.toHaveBeenCalled();
+    expect(within(row).queryByText('Request queued')).toBeNull();
+    expect(within(row).getByRole('button', { name: 'Run Now' })).toBeEnabled();
+  });
+
   it('puts custom automations before the shared schedule cards and shows app cadence', async () => {
     await renderTab({ security: { enabled: true, interval: 'on-demand' } });
     const custom = screen.getByText('Custom Tasks');
