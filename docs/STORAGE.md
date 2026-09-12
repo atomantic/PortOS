@@ -466,3 +466,7 @@ scheduled-task defaults remain unchanged. `mind.choose-name` uses `manageMind`,
 normal semantic validation, call budgets, idempotency and trajectory outcomes.
 Without that grant the existing automatic core-identity memory path can retain
 an initial conversational choice; it does not grant semantic write authority.
+
+### Managed-app visitor credentials
+
+`data/managed-visitor-credentials.json` is `file-primary`, intentionally machine-local and never federated: bounded app credential digests, exact individual/world allowlists and expiries configure this install's loopback visitor broker. There are no cross-record queries, sync cursors or tombstones. No plaintext credential or neural/private history is stored. The empty schema-1 seed initializes new installs; this new standalone document changes no existing record format. Backups retain the credential configuration with other local data. Ephemeral visitor admissions are memory-only, expire independently at the host, and never resume on startup. Adapter: `server/services/managedVisitorBroker.js`; protocol: [managed visitors](features/managed-visitors.md).

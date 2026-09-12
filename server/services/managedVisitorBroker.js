@@ -1,0 +1,169 @@
+import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
+import { readFile, stat } from 'node:fs/promises';
+import { dirname } from 'node:path';
+import { atomicWrite, ensureDir } from '../lib/fileCore.js';
+import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
+import { ServerError } from '../lib/errorHandler.js';
+import { visitorCredentialSchema, visitorAdmissionSchema, visitorScopeSchema, visitorActionSchema, visitorCredentialDocumentSchema,
+  visitorHostAdmissionSchema, visitorHostObservationSchema, visitorHostActionSchema, visitorIdSchema } from '../lib/managedVisitorValidation.js';
+
+const hash = token => createHash('sha256').update(token).digest('hex');
+const fail = (message, status = 409) => new ServerError(message, { status, code: 'MANAGED_VISITOR_UNAVAILABLE' });
+const scopeKeys = ['appId', 'individualId', 'individualSessionId', 'worldId', 'epoch'];
+const publicCredential = ({ digest, ...record }) => record;
+export const managedVisitorContract = Object.freeze({ version: 1, bodies: ['fly-v1'], controllerRaster: { width: 8, height: 4, channels: 3 },
+  actions: ['start', 'pause', 'rest', 'move', 'leave'], expiryEnforced: true });
+export function supportsManagedVisitors(capabilities) {
+  const value = capabilities?.managedVisitors;
+  return value?.version === 1 && value.expiryEnforced === true && Array.isArray(value.bodies) && value.bodies.every(v => typeof v === 'string')
+    && value.bodies.includes('fly-v1') && Array.isArray(value.actions) && value.actions.every(v => typeof v === 'string')
+    && value.controllerRaster?.width === 8 && value.controllerRaster?.height === 4 && value.controllerRaster?.channels === 3
+    && managedVisitorContract.actions.every(action => value.actions?.includes(action));
+}
+
+/** Local credentials persist; ephemeral admissions do not survive broker restart.
+ * No peer sync, AI provider, arbitrary host URL or private runtime payload is accepted. */
+export function createManagedVisitorBroker({ path, getApp, host, now = Date.now }) {
+  const queue = createFileWriteQueue(), sessions = new Map(), pendingAdmissions = new Set();
+  const wallNow = now;
+  let lastTime = wallNow();
+  function time() {
+    const current = wallNow();
+    if (!Number.isSafeInteger(current) || current < lastTime) {
+      for (const session of [...sessions.values()]) close(session).catch(() => null);
+      sessions.clear();
+      throw fail('Broker clock changed; visitor authority revoked.');
+    }
+    lastTime = current; return current;
+  }
+  const read = async () => {
+    const metadata = await stat(path).catch(error => { if (error.code === 'ENOENT') return null; throw error; });
+    if (!metadata) return { schemaVersion: 1, credentials: [] };
+    if (metadata.size > 65536) throw fail('Managed visitor credential store exceeds its bound.');
+    const document = await readFile(path, 'utf8').then(JSON.parse).catch(() => { throw fail('Managed visitor credential store is unreadable.'); });
+    const result = visitorCredentialDocumentSchema.safeParse(document);
+    if (!result.success || new Set(result.data.credentials.map(c => c.appId)).size !== result.data.credentials.length) throw fail('Managed visitor credential store is incompatible.');
+    return result.data;
+  };
+  async function write(document) {
+    const text = JSON.stringify(visitorCredentialDocumentSchema.parse(document));
+    if (Buffer.byteLength(text) > 65536) throw fail('Managed visitor credential capacity reached.');
+    await ensureDir(dirname(path)); await atomicWrite(path, text);
+  }
+  async function app(id) { const value = await getApp(id); if (!value || value.archived) throw fail('Managed app is unavailable.', 403); }
+  async function credential(auth) {
+    await app(auth.appId);
+    const current = (await read()).credentials.find(record => record.appId === auth.appId);
+    if (!current || current.digest !== auth.digest || current.expiresAt <= time()) throw fail('Managed app credential expired or revoked.', 401);
+    return current;
+  }
+  async function authenticate(token) {
+    if (typeof token !== 'string' || !/^mv1_[a-f0-9]{64}$/.test(token)) throw fail('Managed app credential required.', 401);
+    const digest = hash(token), record = (await read()).credentials.find(record => timingSafeEqual(Buffer.from(record.digest, 'hex'), Buffer.from(digest, 'hex')));
+    if (!record) throw fail('Managed app credential required.', 401);
+    const auth = { appId: record.appId, digest }; await credential(auth); return auth;
+  }
+  async function close(session) {
+    sessions.delete(session.id);
+    // Local authority is gone even if the host is disconnected; negotiated host expiry is the backstop.
+    await host.leave(session.hostId, session.scope).catch(() => null);
+  }
+  async function revokeSessions(appId) { await Promise.all([...sessions.values()].filter(s => s.scope.appId === appId).map(close)); }
+  async function provision(appId, input) {
+    const value = visitorCredentialSchema.parse(input); await app(appId);
+    return queue(async () => {
+      const document = await read(), token = `mv1_${randomBytes(32).toString('hex')}`;
+      const record = { appId, digest: hash(token), individualIds: [...new Set(value.individualIds)], worldIds: [...new Set(value.worldIds)], createdAt: time(), expiresAt: time() + value.ttlMs };
+      document.credentials = document.credentials.filter(record => record.appId !== appId);
+      if (document.credentials.length >= 64) throw fail('Managed credential capacity reached.');
+      document.credentials.push(record); await write(document);
+      await revokeSessions(appId); return { ...publicCredential(record), credential: token };
+    });
+  }
+  async function revoke(appId) {
+    return queue(async () => {
+      const document = await read(); document.credentials = document.credentials.filter(record => record.appId !== appId);
+      await write(document); await revokeSessions(appId); return { revoked: true };
+    });
+  }
+  async function capabilities(auth) {
+    const c = await credential(auth), capability = await host.capabilities();
+    return { version: 1, available: supportsManagedVisitors(capability), appId: auth.appId, worldIds: c.worldIds, individualIds: c.individualIds,
+      contract: managedVisitorContract, reason: supportsManagedVisitors(capability) ? null : 'Managed host has not negotiated the nonhumanoid visitor contract.' };
+  }
+  function validateResult(schema, result, expected) {
+    const parsed = schema.safeParse(result);
+    if (!parsed.success || scopeKeys.some(key => parsed.data[key] !== expected[key])) throw fail('Host response does not match the scoped visitor contract.');
+    return parsed.data;
+  }
+  async function admit(auth, input) {
+    const value = visitorAdmissionSchema.parse(input), c = await credential(auth);
+    if (!c.individualIds.includes(value.individualId) || !c.worldIds.includes(value.worldId)) throw fail('Visitor is outside the owner-approved app scope.', 403);
+    if (!supportsManagedVisitors(await host.capabilities())) throw fail('Managed host lacks the required nonhumanoid capability.');
+    const key = JSON.stringify([auth.appId, value.individualId]);
+    for (const session of [...sessions.values()]) if (session.expiresAt <= time()) await close(session);
+    if (sessions.size + pendingAdmissions.size >= 64 || pendingAdmissions.has(key) || [...sessions.values()].some(s => s.key === key)) throw fail('Individual already visiting or admission capacity reached.');
+    pendingAdmissions.add(key);
+    let candidate = null;
+    return (async () => {
+      const begin = time(), ttlMs = Math.min(value.ttlMs, c.expiresAt - begin);
+      if (ttlMs < 1000) throw fail('Credential expires too soon for admission.');
+      const response = await host.admit({ version: 1, appId: auth.appId, ...value, ttlMs });
+      const parsed = visitorHostAdmissionSchema.safeParse(response);
+      const scope = { appId: auth.appId, individualId: value.individualId, individualSessionId: value.individualSessionId, worldId: value.worldId, epoch: response?.epoch };
+      if (!parsed.success || scopeKeys.some(key => parsed.data[key] !== scope[key])) {
+        // A malformed acknowledgement may still represent a live admission. Clean up
+        // only using the request's original identity/world and syntactically valid lease keys.
+        if (visitorIdSchema.safeParse(response?.sessionId).success && visitorIdSchema.safeParse(response?.epoch).success) {
+          await host.leave(response.sessionId, scope).catch(() => null);
+        }
+        throw fail('Host returned an invalid scoped admission.');
+      }
+      const result = parsed.data;
+      const session = { id: randomUUID(), hostId: result.sessionId, scope, key, digest: auth.digest, expiresAt: result.expiresAt, hostExpiresAt: result.expiresAt, sequence: -1, frameId: -1, pending: false };
+      candidate = session;
+      session.expiresAt = Math.min(result.expiresAt, begin + ttlMs);
+      const valid = session.expiresAt > time() && result.expiresAt <= time() + ttlMs;
+      // Rotation while an admission is pending must not publish fresh authority from the old credential.
+      const current = await credential(auth).then(() => true, () => false);
+      if (!valid || !current) throw fail('Admission expired or credential changed during negotiation.');
+      sessions.set(session.id, session);
+      return { ...result, sessionId: session.id, expiresAt: session.expiresAt };
+    })().catch(async error => { if (candidate) await close(candidate); throw error; })
+      .finally(() => pendingAdmissions.delete(key));
+  }
+  async function sessionFor(auth, id, input) {
+    await credential(auth);
+    const session = sessions.get(id);
+    if (!session || session.digest !== auth.digest || session.expiresAt <= time() || scopeKeys.some(key => (key === 'appId' ? auth.appId : input[key]) !== session.scope[key])) throw fail('Visitor session scope, epoch or expiry mismatch.', 403);
+    if (session.pending) throw fail('A visitor operation is already pending.');
+    return session;
+  }
+  async function operate(auth, id, input, observation) {
+    const request = (observation ? visitorScopeSchema : visitorActionSchema).parse(input), session = await sessionFor(auth, id, request);
+    if (!observation && request.sequence !== session.sequence + 1) throw fail('Visitor action sequence is stale or out of order.');
+    session.pending = true;
+    return (async () => {
+      const reply = await (observation ? host.observe(session.hostId, session.scope) : host.action(session.hostId, { ...session.scope, sequence: request.sequence, action: request.action }));
+      const stillValid = await credential(auth).then(() => true, () => false);
+      if (!stillValid || sessions.get(id) !== session || session.expiresAt <= time()) throw fail('Visitor authority changed while the host operation was pending.');
+      const result = validateResult(observation ? visitorHostObservationSchema : visitorHostActionSchema, reply, session.scope);
+      if (result.sessionId !== session.hostId) throw fail('Host session mismatch.');
+      if (observation) {
+        if (result.frameId <= session.frameId || result.capturedAtMs > time() || time() - result.capturedAtMs > 250) throw fail('Host observation is stale or future-dated.');
+        session.frameId = result.frameId;
+      } else {
+        const expected = { start: 'running', pause: 'paused', rest: 'resting', move: 'running', leave: 'left' }[request.action.type];
+        if (result.sequence !== request.sequence || result.status !== expected || result.expiresAt !== session.hostExpiresAt) throw fail('Host action sequence/status mismatch.');
+        session.sequence = result.sequence;
+        if (request.action.type === 'leave') sessions.delete(id);
+      }
+      return { ...result, sessionId: id, ...(observation ? {} : { expiresAt: session.expiresAt }) };
+    })().catch(async () => { await close(session); throw fail('Host operation unavailable or inconsistent; visitor authority revoked.'); })
+      .finally(() => { session.pending = false; });
+  }
+
+  return { authenticate, provision, revoke, capabilities, admit,
+    listCredentials: async () => (await read()).credentials.map(publicCredential),
+    observe: (auth, id, input) => operate(auth, id, input, true), action: (auth, id, input) => operate(auth, id, input, false) };
+}
