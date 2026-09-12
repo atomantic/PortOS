@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { Link, useParams, useNavigate } from 'react-router';
 import { ArrowLeft } from 'lucide-react';
 import BrailleSpinner from '../BrailleSpinner';
@@ -13,6 +13,11 @@ import SchedulesTab from './tabs/SchedulesTab';
 import ActivityTab from './tabs/ActivityTab';
 
 export default function AgentDetail() {
+  const { agentId } = useParams();
+  return <AgentDetailContent key={agentId} />;
+}
+
+function AgentDetailContent() {
   const { agentId, tab } = useParams();
   const navigate = useNavigate();
   const activeTab = tab || 'overview';
@@ -21,9 +26,32 @@ export default function AgentDetail() {
   const [loading, setLoading] = useState(true);
   const [notFound, setNotFound] = useState(false);
   const [platformAccounts, setPlatformAccounts] = useState([]);
+  const mountedRef = useRef(false);
+  const latestAgentIdRef = useRef(agentId);
+  const agentRequestRef = useRef(0);
+  const platformRequestRef = useRef(0);
 
-  const fetchAgent = useCallback(async () => {
-    const data = await api.getAgentPersonality(agentId).catch(() => null);
+  latestAgentIdRef.current = agentId;
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
+
+  const fetchAgent = useCallback(async (isCurrent = () => true) => {
+    const requestId = ++agentRequestRef.current;
+    const requestedAgentId = agentId;
+    const data = await api.getAgentPersonality(requestedAgentId).catch(() => null);
+    if (
+      !isCurrent() ||
+      !mountedRef.current ||
+      requestId !== agentRequestRef.current ||
+      latestAgentIdRef.current !== requestedAgentId
+    ) {
+      return;
+    }
     if (!data) {
       setNotFound(true);
       setLoading(false);
@@ -34,11 +62,35 @@ export default function AgentDetail() {
   }, [agentId]);
 
   useEffect(() => {
-    fetchAgent();
+    let cancelled = false;
+    setAgent(null);
+    setPlatformAccounts([]);
+    setLoading(true);
+    setNotFound(false);
+    fetchAgent(() => !cancelled);
+    return () => {
+      cancelled = true;
+    };
   }, [fetchAgent]);
 
   useEffect(() => {
-    api.getPlatformAccounts(agentId).then(setPlatformAccounts).catch(() => {});
+    let cancelled = false;
+    const requestId = ++platformRequestRef.current;
+    const requestedAgentId = agentId;
+    api.getPlatformAccounts(requestedAgentId).then(accounts => {
+      if (
+        cancelled ||
+        !mountedRef.current ||
+        requestId !== platformRequestRef.current ||
+        latestAgentIdRef.current !== requestedAgentId
+      ) {
+        return;
+      }
+      setPlatformAccounts(accounts);
+    }).catch(() => {});
+    return () => {
+      cancelled = true;
+    };
   }, [agentId]);
 
   const hasMoltbookAccount = useMemo(
