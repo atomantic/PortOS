@@ -171,12 +171,20 @@ describe('backup routes', () => {
 
     it('forwards a valid restore request to the service', async () => {
       getSettings.mockResolvedValue({ backup: { destPath: '/dest' } });
-      backup.restoreSnapshot.mockResolvedValue({ success: true, restored: 42 });
+      backup.restoreSnapshot.mockResolvedValue({
+        success: true,
+        restored: 42,
+        verification: { status: 'verified', checkedFiles: 42 },
+      });
       const res = await request(buildApp())
         .post('/api/backup/restore')
         .send({ snapshotId: 'snap-1', subdirFilter: 'data', dryRun: false });
       expect(res.status).toBe(200);
-      expect(res.body).toEqual({ success: true, restored: 42 });
+      expect(res.body).toEqual({
+        success: true,
+        restored: 42,
+        verification: { status: 'verified', checkedFiles: 42 },
+      });
       expect(backup.restoreSnapshot).toHaveBeenCalledWith(
         '/dest',
         'snap-1',

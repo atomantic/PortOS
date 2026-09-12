@@ -130,6 +130,7 @@ describe('BackupWidget snapshots', () => {
         snapshotId: '2026-08-25T11-00-00',
         subdirFilter: 'brain',
         changedFiles: ['brain/example.json'],
+        verification: { status: 'verified', checkedFiles: 1 },
       })
       .mockReturnValueOnce(new Promise(resolve => { finishRestore = resolve; }));
     renderWidget();
@@ -139,6 +140,7 @@ describe('BackupWidget snapshots', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Preview changes' }));
 
     expect(await screen.findByText('brain/example.json')).toBeInTheDocument();
+    expect(screen.getByRole('status')).toHaveTextContent('Snapshot integrity verified (1 selected file(s)).');
     expect(mockRestoreBackup).toHaveBeenNthCalledWith(1, {
       snapshotId: '2026-08-25T11-00-00',
       subdirFilter: 'brain',
@@ -161,6 +163,23 @@ describe('BackupWidget snapshots', () => {
       finishRestore({ changedFiles: ['brain/example.json'] });
     });
     expect(mockToast.success).toHaveBeenCalledWith('Restore complete — 1 file(s) restored');
+  });
+
+  it('warns before confirming a legacy snapshot without an integrity manifest', async () => {
+    mockRestoreBackup.mockResolvedValueOnce({
+      dryRun: true,
+      changedFiles: ['settings.json'],
+      verification: { status: 'unverified', reason: 'manifest_absent', checkedFiles: 0 },
+    });
+    renderWidget();
+
+    await openRestorePanel();
+    fireEvent.click(screen.getByRole('button', { name: 'Preview changes' }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'Legacy snapshot: no integrity manifest is available. PortOS cannot verify these backup bytes before restore.',
+    );
+    expect(screen.getByRole('button', { name: 'Restore 1 file(s)' })).toBeEnabled();
   });
 
   it('invalidates a selective preview when the filter is cleared', async () => {
