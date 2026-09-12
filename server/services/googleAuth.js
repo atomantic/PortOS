@@ -1,8 +1,9 @@
-import { OAuth2Client } from 'google-auth-library';
+import { auth } from '@googleapis/calendar';
 import { join } from 'path';
 import { atomicWrite, ensureDir, PATHS, tryReadFile } from '../lib/fileUtils.js';
 import { ServerError } from '../lib/errorHandler.js';
 
+const { OAuth2: OAuth2Client } = auth;
 const AUTH_DIR = join(PATHS.calendar, 'google-auth');
 const CREDENTIALS_FILE = join(AUTH_DIR, 'credentials.json');
 const TOKENS_FILE = join(AUTH_DIR, 'tokens.json');
