@@ -153,6 +153,18 @@ describe('TagPicker combobox interactions', () => {
     expect(onChange).toHaveBeenCalledExactlyOnceWith(['Existing', 'Example tag']);
   });
 
+  it('preserves pending input when removing a focused chip before leaving for Save', async () => {
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    render(<ControlledPicker value={['Existing']} onChange={onChange} />);
+    const input = screen.getByRole('combobox');
+    await user.type(input, 'Pending');
+    await user.click(screen.getByRole('button', { name: 'Remove tag Existing' }));
+    expect(document.activeElement).toBe(input);
+    await user.click(screen.getByRole('button', { name: 'Save' }));
+    expect(onChange.mock.calls.map(([tags]) => tags)).toEqual([[], ['Pending']]);
+  });
+
   it('tabs past suggestions and commits normalized pending input before Save', async () => {
     listCatalogTags.mockResolvedValue({ items });
     const user = userEvent.setup();

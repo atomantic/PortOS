@@ -67,6 +67,8 @@ export default function TagPicker({
   };
 
   const removeTag = (label) => {
+    // Keep a live focus target so leaving the picker still commits pending text.
+    inputRef.current?.focus();
     const key = canonicalTagKey(label);
     onChange?.(value.filter((t) => canonicalTagKey(t) !== key));
   };
