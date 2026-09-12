@@ -16,5 +16,5 @@ it('host response buffering is bounded and malformed/non-success replies do not 
   const host = createManagedVisitorHost({ token: 'a'.repeat(64), fetchImpl });
   await expect(host.observe('session', {})).rejects.toThrow(/bound/); expect(canceled).toBe(true);
   fetchImpl.mockResolvedValueOnce(new Response('not json')); expect(await host.capabilities()).toBe(null);
-  fetchImpl.mockResolvedValueOnce(new Response('{}', { status: 401 })); await expect(host.admit({})).rejects.toThrow(/refused/);
+  fetchImpl.mockResolvedValueOnce(new Response('{}', { status: 401 })); await expect(host.admit({}, { deadlineMs: Date.now() + 1000 })).rejects.toThrow(/refused/);
 });

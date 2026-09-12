@@ -4,10 +4,11 @@ import { ServerError } from '../lib/errorHandler.js';
 export function createManagedVisitorHost({ token = process.env.PORTOS_EIDOVERSE_VISITOR_TOKEN, fetchImpl = fetch, port = 8940 } = {}) {
   if (!Number.isInteger(port) || port < 1 || port > 65535) throw new ServerError('Invalid managed visitor host port.', { status: 400 });
   const enabled = typeof token === 'string' && /^[a-f0-9]{64}$/.test(token);
-  async function request(path, body) {
+  async function request(path, body, deadlineMs) {
     if (!enabled) throw new ServerError('Managed visitor host credential is not configured.', { status: 409 });
+    if (path === '/admissions' && (!Number.isSafeInteger(deadlineMs) || deadlineMs <= Date.now())) throw new ServerError('Invalid managed visitor admission deadline.', { status: 409 });
     const response = await fetchImpl(`http://127.0.0.1:${port}/api/managed-visitors/v1${path}`, {
-      method: body === undefined ? 'GET' : 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      method: body === undefined ? 'GET' : 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json', ...(deadlineMs === undefined ? {} : { 'X-Managed-Visitor-Deadline': String(deadlineMs) }) },
       ...(body === undefined ? {} : { body: JSON.stringify(body) }), redirect: 'error', signal: AbortSignal.timeout(3000),
     });
     if (!response.ok) throw new ServerError('Managed visitor host refused the operation.', { status: 409 });
@@ -25,7 +26,7 @@ export function createManagedVisitorHost({ token = process.env.PORTOS_EIDOVERSE_
   }
   return {
     capabilities: () => enabled ? request('/version').then(value => value.capabilities, () => null) : Promise.resolve(null),
-    admit: body => request('/admissions', body),
+    admit: (body, { deadlineMs } = {}) => request('/admissions', body, deadlineMs),
     observe: (id, body) => request(`/sessions/${encodeURIComponent(id)}/observations`, body),
     leave: (id, body) => request(`/sessions/${encodeURIComponent(id)}/leave`, body),
     action: (id, body) => request(`/sessions/${encodeURIComponent(id)}/actions`, body),

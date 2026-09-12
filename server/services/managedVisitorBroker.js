@@ -4,7 +4,7 @@ import { dirname } from 'node:path';
 import { atomicWrite, ensureDir } from '../lib/fileCore.js';
 import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
 import { ServerError } from '../lib/errorHandler.js';
-import { visitorCredentialSchema, visitorAdmissionSchema, visitorScopeSchema, visitorActionSchema, visitorCredentialDocumentSchema,
+import { visitorCancellationSchema, visitorCredentialSchema, visitorAdmissionSchema, visitorScopeSchema, visitorActionSchema, visitorCredentialDocumentSchema,
   visitorHostAdmissionSchema, visitorHostObservationSchema, visitorHostActionSchema, visitorIdSchema } from '../lib/managedVisitorValidation.js';
 
 const hash = token => createHash('sha256').update(token).digest('hex');
@@ -12,10 +12,10 @@ const fail = (message, status = 409) => new ServerError(message, { status, code:
 const scopeKeys = ['appId', 'individualId', 'individualSessionId', 'worldId', 'epoch'];
 const publicCredential = ({ digest, ...record }) => record;
 export const managedVisitorContract = Object.freeze({ version: 1, bodies: ['fly-v1'], controllerRaster: { width: 8, height: 4, channels: 3 },
-  actions: ['start', 'pause', 'rest', 'move', 'leave'], expiryEnforced: true });
+  actions: ['start', 'pause', 'rest', 'move', 'leave'], expiryEnforced: true, admissionDeadline: true });
 export function supportsManagedVisitors(capabilities) {
   const value = capabilities?.managedVisitors;
-  return value?.version === 1 && value.expiryEnforced === true && Array.isArray(value.bodies) && value.bodies.every(v => typeof v === 'string')
+  return value?.version === 1 && value.expiryEnforced === true && value.admissionDeadline === true && Array.isArray(value.bodies) && value.bodies.every(v => typeof v === 'string')
     && value.bodies.includes('fly-v1') && Array.isArray(value.actions) && value.actions.every(v => typeof v === 'string')
     && value.controllerRaster?.width === 8 && value.controllerRaster?.height === 4 && value.controllerRaster?.channels === 3
     && managedVisitorContract.actions.every(action => value.actions?.includes(action));
@@ -24,14 +24,13 @@ export function supportsManagedVisitors(capabilities) {
 /** Local credentials persist; ephemeral admissions do not survive broker restart.
  * No peer sync, AI provider, arbitrary host URL or private runtime payload is accepted. */
 export function createManagedVisitorBroker({ path, getApp, host, now = Date.now }) {
-  const queue = createFileWriteQueue(), sessions = new Map(), pendingAdmissions = new Set();
+  const queue = createFileWriteQueue(), sessions = new Map(), pendingAdmissions = new Map();
   const wallNow = now;
   let lastTime = wallNow();
   function time() {
     const current = wallNow();
     if (!Number.isSafeInteger(current) || current < lastTime) {
       for (const session of [...sessions.values()]) close(session).catch(() => null);
-      sessions.clear();
       throw fail('Broker clock changed; visitor authority revoked.');
     }
     lastTime = current; return current;
@@ -64,9 +63,13 @@ export function createManagedVisitorBroker({ path, getApp, host, now = Date.now 
     const auth = { appId: record.appId, digest }; await credential(auth); return auth;
   }
   async function close(session) {
-    sessions.delete(session.id);
-    // Local authority is gone even if the host is disconnected; negotiated host expiry is the backstop.
-    await host.leave(session.hostId, session.scope).catch(() => null);
+    session.revoked = true;
+    // Keep an unresolved cleanup receipt so a retry cannot falsely acknowledge return.
+    sessions.set(session.id, session);
+    const acknowledged = wallNow() >= (session.admissionDeadline ?? session.hostExpiresAt) || session.hostId !== null && await host.leave(session.hostId, session.scope)
+      .then(result => result?.status === 'left' && result.sessionId === session.hostId && scopeKeys.every(key => result[key] === session.scope[key]), () => false);
+    if (acknowledged) sessions.delete(session.id);
+    return acknowledged;
   }
   async function revokeSessions(appId) { await Promise.all([...sessions.values()].filter(s => s.scope.appId === appId).map(close)); }
   async function provision(appId, input) {
@@ -103,39 +106,41 @@ export function createManagedVisitorBroker({ path, getApp, host, now = Date.now 
     const key = JSON.stringify([auth.appId, value.individualId]);
     for (const session of [...sessions.values()]) if (session.expiresAt <= time()) await close(session);
     if (sessions.size + pendingAdmissions.size >= 64 || pendingAdmissions.has(key) || [...sessions.values()].some(s => s.key === key)) throw fail('Individual already visiting or admission capacity reached.');
-    pendingAdmissions.add(key);
+    const attempt = { scope: { appId: auth.appId, individualId: value.individualId, individualSessionId: value.individualSessionId, worldId: value.worldId }, canceled: false };
+    pendingAdmissions.set(key, attempt);
     let candidate = null;
     return (async () => {
       const begin = time(), ttlMs = Math.min(value.ttlMs, c.expiresAt - begin);
       if (ttlMs < 1000) throw fail('Credential expires too soon for admission.');
-      const response = await host.admit({ version: 1, appId: auth.appId, ...value, ttlMs });
+      candidate = { id: randomUUID(), hostId: null, scope: { ...attempt.scope, epoch: null }, key, digest: auth.digest, expiresAt: begin + ttlMs, hostExpiresAt: begin + ttlMs, admissionDeadline: begin + ttlMs, revoked: true };
+      const response = await host.admit({ version: 1, appId: auth.appId, ...value, ttlMs }, { deadlineMs: begin + ttlMs });
       const parsed = visitorHostAdmissionSchema.safeParse(response);
       const scope = { appId: auth.appId, individualId: value.individualId, individualSessionId: value.individualSessionId, worldId: value.worldId, epoch: response?.epoch };
       if (!parsed.success || scopeKeys.some(key => parsed.data[key] !== scope[key])) {
         // A malformed acknowledgement may still represent a live admission. Clean up
         // only using the request's original identity/world and syntactically valid lease keys.
         if (visitorIdSchema.safeParse(response?.sessionId).success && visitorIdSchema.safeParse(response?.epoch).success) {
-          await host.leave(response.sessionId, scope).catch(() => null);
+          candidate = { ...candidate, hostId: response.sessionId, scope };
         }
         throw fail('Host returned an invalid scoped admission.');
       }
       const result = parsed.data;
-      const session = { id: randomUUID(), hostId: result.sessionId, scope, key, digest: auth.digest, expiresAt: result.expiresAt, hostExpiresAt: result.expiresAt, sequence: -1, frameId: -1, pending: false };
+      const session = { id: randomUUID(), hostId: result.sessionId, scope, key, digest: auth.digest, expiresAt: result.expiresAt, hostExpiresAt: result.expiresAt, admissionDeadline: begin + ttlMs, sequence: -1, frameId: -1, pending: false };
       candidate = session;
       session.expiresAt = Math.min(result.expiresAt, begin + ttlMs);
       const valid = session.expiresAt > time() && result.expiresAt <= time() + ttlMs;
       // Rotation while an admission is pending must not publish fresh authority from the old credential.
       const current = await credential(auth).then(() => true, () => false);
-      if (!valid || !current) throw fail('Admission expired or credential changed during negotiation.');
+      if (!valid || !current || attempt.canceled) throw fail('Admission expired or credential changed during negotiation.');
       sessions.set(session.id, session);
       return { ...result, sessionId: session.id, expiresAt: session.expiresAt };
     })().catch(async error => { if (candidate) await close(candidate); throw error; })
-      .finally(() => pendingAdmissions.delete(key));
+      .finally(() => { if (pendingAdmissions.get(key) === attempt) pendingAdmissions.delete(key); });
   }
   async function sessionFor(auth, id, input) {
     await credential(auth);
     const session = sessions.get(id);
-    if (!session || session.digest !== auth.digest || session.expiresAt <= time() || scopeKeys.some(key => (key === 'appId' ? auth.appId : input[key]) !== session.scope[key])) throw fail('Visitor session scope, epoch or expiry mismatch.', 403);
+    if (!session || session.revoked || session.digest !== auth.digest || session.expiresAt <= time() || scopeKeys.some(key => (key === 'appId' ? auth.appId : input[key]) !== session.scope[key])) throw fail('Visitor session scope, epoch or expiry mismatch.', 403);
     if (session.pending) throw fail('A visitor operation is already pending.');
     return session;
   }
@@ -146,7 +151,7 @@ export function createManagedVisitorBroker({ path, getApp, host, now = Date.now 
     return (async () => {
       const reply = await (observation ? host.observe(session.hostId, session.scope) : host.action(session.hostId, { ...session.scope, sequence: request.sequence, action: request.action }));
       const stillValid = await credential(auth).then(() => true, () => false);
-      if (!stillValid || sessions.get(id) !== session || session.expiresAt <= time()) throw fail('Visitor authority changed while the host operation was pending.');
+      if (!stillValid || session.revoked || sessions.get(id) !== session || session.expiresAt <= time()) throw fail('Visitor authority changed while the host operation was pending.');
       const result = validateResult(observation ? visitorHostObservationSchema : visitorHostActionSchema, reply, session.scope);
       if (result.sessionId !== session.hostId) throw fail('Host session mismatch.');
       if (observation) {
@@ -163,7 +168,26 @@ export function createManagedVisitorBroker({ path, getApp, host, now = Date.now 
       .finally(() => { session.pending = false; });
   }
 
-  return { authenticate, provision, revoke, capabilities, admit,
+  async function leave(auth, id, input) {
+    const request = visitorScopeSchema.parse(input); await credential(auth);
+    const session = sessions.get(id);
+    if (!session) return { version: 1, appId: auth.appId, ...request, sessionId: id, status: 'left' };
+    if (session.scope.appId !== auth.appId || scopeKeys.some(key => (key === 'appId' ? auth.appId : request[key]) !== session.scope[key])) throw fail('Visitor cleanup scope mismatch.', 403);
+    if (!await close(session)) throw fail('Host cleanup is unconfirmed; retain paused ownership until retry or expiry.');
+    return { version: 1, appId: auth.appId, ...request, sessionId: id, status: 'left' };
+  }
+  async function cancelAdmission(auth, input) {
+    const request = visitorCancellationSchema.parse(input), c = await credential(auth);
+    if (!c.individualIds.includes(request.individualId) || !c.worldIds.includes(request.worldId)) throw fail('Cancellation is outside the approved app scope.', 403);
+    const matches = scope => scope.appId === auth.appId && Object.keys(request).every(key => scope[key] === request[key]);
+    for (const attempt of pendingAdmissions.values()) if (matches(attempt.scope)) attempt.canceled = true;
+    await Promise.all([...sessions.values()].filter(session => matches(session.scope)).map(close));
+    const pending = [...pendingAdmissions.values()].some(attempt => matches(attempt.scope));
+    const unresolved = [...sessions.values()].filter(session => matches(session.scope));
+    return { version: 1, appId: auth.appId, ...request, confirmed: !pending && !unresolved.length, pending,
+      expiresAt: pending ? null : unresolved.length ? Math.max(...unresolved.map(session => session.admissionDeadline ?? session.hostExpiresAt)) : null };
+  }
+  return { authenticate, provision, revoke, capabilities, admit, leave, cancelAdmission,
     listCredentials: async () => (await read()).credentials.map(publicCredential),
     observe: (auth, id, input) => operate(auth, id, input, true), action: (auth, id, input) => operate(auth, id, input, false) };
 }

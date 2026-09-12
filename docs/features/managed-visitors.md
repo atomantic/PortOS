@@ -51,7 +51,7 @@ One operation per session can be pending. Malformed, mismatched or uncertain hos
 Requests go only to fixed loopback port 8940 under `/api/managed-visitors/v1`, with the separate host bearer, a three-second deadline, redirects disabled and response buffering capped at 16 KiB. `/version` must negotiate:
 
 ```json
-{"capabilities":{"managedVisitors":{"version":1,"bodies":["fly-v1"],"controllerRaster":{"width":8,"height":4,"channels":3},"actions":["start","pause","rest","move","leave"],"expiryEnforced":true}}}
+{"capabilities":{"managedVisitors":{"version":1,"bodies":["fly-v1"],"controllerRaster":{"width":8,"height":4,"channels":3},"actions":["start","pause","rest","move","leave"],"expiryEnforced":true,"admissionDeadline":true}}}
 ```
 
 Host admissions add `version:1` and the authenticated `appId` to the app request. Later host operations add `appId` to the scoped body and use the private host session ID, which PortOS never exposes as app authority. Host admission/action responses include `expiresAt`; the broker checks it and clamps the outward deadline to its own earlier limit. Both layers independently enforce scope and expiry.
@@ -59,3 +59,11 @@ Host admissions add `version:1` and the authenticated `appId` to the app request
 A dedicated unsequenced `POST /sessions/:hostId/leave` takes `{appId,individualId,individualSessionId,worldId,epoch}` for idempotent revocation. It must invalidate a pending action even when its sequence is uncertain. This is how credential revocation avoids racing the normal action sequence. If the host cannot be reached, broker authority is still revoked immediately and independently enforced host expiry bounds the remaining ephemeral presence.
 
 This foundation does not implement connectome execution, retained learning, travel consent inference, arbitrary world authority or client-side embodiment. Fly Garden remains paused at home unless its own explicit visitor adapter is subsequently enabled. Source changes do not enable a production visitor.
+
+## Reconcile interrupted admission and return
+
+`POST /sessions/:sessionId/leave` accepts the exact ordinary scope without a sequence. It revokes pending action authority immediately; a late action cannot become current again. Return is acknowledged only after matching host cleanup or the trusted admission deadline. An unconfirmed cleanup retains a revoked receipt so a retry cannot mistake the missing active session for an acknowledged return.
+
+When an admission times out before returning a session ID, use `POST /admissions/cancel` with exactly `{individualId,individualSessionId,worldId}` and the app credential. It cancels matching pending attempts and removes matching published visits, without touching another recipient or runtime session. The response contains `version`, `appId`, those scope IDs, `confirmed`, `pending` and nullable `expiresAt`. Keep local embodiment ownership paused while `confirmed:false`; retry cancellation until confirmed. A pending acknowledgment is cleaned when it arrives and cannot publish authority after cancellation.
+
+Host negotiation additionally requires `admissionDeadline:true`. Every host admission carries `X-Managed-Visitor-Deadline`, an absolute same-machine wall-clock upper bound chosen before the host call. The host must validate it after consuming the body and clamp its lease expiry to that bound. If the host call itself times out without a lease ID, PortOS keeps a revoked unresolved receipt until this trustworthy deadline. Invalid host expiry values cannot extend that bound. A stale or older host lacking this capability is unavailable; no TTL is guessed from receipt time.

@@ -36,7 +36,7 @@ beforeEach(async () => {
       camera: 'controller', sensorySource: 'engineered-gentle-patch-spatial-proxy-v1', width: 8, height: 4, rgb: Array(96).fill(0), pose: { x: 0, z: 0, yaw: 0 } })),
     action: vi.fn(async (id, { sequence, action, ...body }) => ({ version: 1, ...body, sessionId: id, sequence, expiresAt: clock + admission.ttlMs,
       status: { start: 'running', pause: 'paused', rest: 'resting', move: 'running', leave: 'left' }[action.type], pose: { x: 0, z: 0, yaw: 0 } })),
-    leave: vi.fn(async () => ({ status: 'left' })),
+    leave: vi.fn(async (sessionId, body) => ({ version: 1, sessionId, ...body, status: 'left' })),
   };
   shared.broker = createManagedVisitorBroker({ path: join(directory, 'credentials.json'), getApp: async id => id === appId ? { id } : null, host, now: () => clock });
   app = express(); app.use(express.json()); app.use(authGate);
@@ -147,4 +147,57 @@ it('revocation during a pending action discards its late response and admission 
   const current = await shared.broker.authenticate(credentials.credential), admitNormally = host.admit.getMockImplementation();
   host.admit.mockImplementationOnce(async body => { clock += 1001; return admitNormally(body); });
   await expect(shared.broker.admit(current, { ...admission, ttlMs: 1000 })).rejects.toThrow(/expired/);
+});
+
+it('unsequenced scoped leave revokes pending actions and retries unconfirmed cleanup without falsely returning home', async () => {
+  const auth = await shared.broker.authenticate(credentials.credential), visit = await shared.broker.admit(auth, admission);
+  host.leave.mockRejectedValueOnce(new Error('offline'));
+  await expect(shared.broker.leave(auth, visit.sessionId, scope(visit))).rejects.toThrow(/unconfirmed/);
+  await expect(shared.broker.observe(auth, visit.sessionId, scope(visit))).rejects.toThrow(/scope/);
+  expect((await shared.broker.leave(auth, visit.sessionId, scope(visit))).status).toBe('left');
+  expect((await shared.broker.leave(auth, visit.sessionId, scope(visit))).status).toBe('left');
+});
+it('cancels an unknown pending admission by original scope, waits for its acknowledgment and cleans it before confirming', async () => {
+  const auth = await shared.broker.authenticate(credentials.credential); let release;
+  delayed = new Promise(resolve => { release = resolve; });
+  const pending = shared.broker.admit(auth, admission);
+  await vi.waitFor(() => expect(host.admit).toHaveBeenCalledTimes(1));
+  const original = { individualId, individualSessionId, worldId };
+  expect(await shared.broker.cancelAdmission(auth, original)).toMatchObject({ confirmed: false, pending: true, expiresAt: null });
+  release(); await expect(pending).rejects.toThrow(/changed/);
+  expect(host.leave).toHaveBeenCalledTimes(1);
+  expect(await shared.broker.cancelAdmission(auth, original)).toMatchObject({ confirmed: true, pending: false });
+});
+
+it('an unknown host admission outcome remains quarantined through the exact broker-supplied deadline', async () => {
+  const auth = await shared.broker.authenticate(credentials.credential);
+  host.admit.mockRejectedValueOnce(new Error('timeout without acknowledgment'));
+  await expect(shared.broker.admit(auth, admission)).rejects.toThrow(/timeout/);
+  const original = { individualId, individualSessionId, worldId };
+  expect(host.admit.mock.calls[0][1]).toEqual({ deadlineMs: clock + admission.ttlMs });
+  expect(await shared.broker.cancelAdmission(auth, original)).toMatchObject({ confirmed: false, pending: false, expiresAt: clock + admission.ttlMs });
+  await expect(shared.broker.admit(auth, admission)).rejects.toThrow(/already/);
+  clock += admission.ttlMs;
+  expect(await shared.broker.cancelAdmission(auth, original)).toMatchObject({ confirmed: true, pending: false });
+});
+
+it('an unconfirmed leave revokes a pending action even while retaining its cleanup receipt', async () => {
+  const auth = await shared.broker.authenticate(credentials.credential), visit = await shared.broker.admit(auth, admission);
+  let release; const normal = host.action.getMockImplementation();
+  host.action.mockImplementationOnce(async (...args) => { await new Promise(resolve => { release = resolve; }); return normal(...args); });
+  const pending = shared.broker.action(auth, visit.sessionId, { ...scope(visit), sequence: 0, action: { type: 'start' } });
+  await vi.waitFor(() => expect(release).toBeTypeOf('function'));
+  host.leave.mockRejectedValue(new Error('unconfirmed'));
+  await expect(shared.broker.leave(auth, visit.sessionId, scope(visit))).rejects.toThrow(/unconfirmed/);
+  release(); await expect(pending).rejects.toThrow(/revoked/);
+});
+it('an invalid host expiry cannot extend quarantine beyond the broker admission deadline', async () => {
+  const auth = await shared.broker.authenticate(credentials.credential), normal = host.admit.getMockImplementation();
+  host.admit.mockImplementationOnce(async body => ({ ...await normal(body), expiresAt: clock + 999999 }));
+  host.leave.mockRejectedValue(new Error('offline'));
+  await expect(shared.broker.admit(auth, admission)).rejects.toThrow(/expired/);
+  const original = { individualId, individualSessionId, worldId };
+  expect((await shared.broker.cancelAdmission(auth, original)).expiresAt).toBe(clock + admission.ttlMs);
+  clock += admission.ttlMs;
+  expect((await shared.broker.cancelAdmission(auth, original)).confirmed).toBe(true);
 });

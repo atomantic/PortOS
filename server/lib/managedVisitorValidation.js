@@ -1,6 +1,7 @@
 import { z } from 'zod';
 const id = z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/);
 export const visitorScopeSchema = z.object({ individualId: id, individualSessionId: id, worldId: id, epoch: id }).strict();
+export const visitorCancellationSchema = visitorScopeSchema.omit({ epoch: true }).strict();
 export const visitorCredentialSchema = z.object({ individualIds: z.array(id).min(1).max(64), worldIds: z.array(id).min(1).max(32),
   ttlMs: z.number().int().min(60000).max(7 * 86400000) }).strict();
 export const visitorAdmissionSchema = z.object({ individualId: id, individualSessionId: id, worldId: id,
