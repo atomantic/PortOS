@@ -259,9 +259,10 @@ function ParticipantRow({
  * It deliberately does not claim a delivery verdict. The POST was in flight
  * when the process died, so whether it landed is unknowable from here; the copy
  * points at the chat, because looking is the only thing that actually answers
- * it, and Retry composes a new message rather than resending that one.
+ * it. The row offers no Retry control while the outcome remains uncertain.
  */
 const SEND_INTERRUPTED_COPY = 'Delivery unconfirmed: PortOS restarted mid-send. Check the chat before retrying.';
+const DELIVERY_UNCONFIRMED_COPY = 'Delivery unconfirmed; check the chat before sending again.';
 
 /** The outbox states that still have something to say above the composer. */
 const RENDERED_OUTBOX_STATES = new Set(['approved', 'sending', 'awaiting-confirmation', 'failed']);
@@ -351,7 +352,7 @@ function TitleTribeChip({ conversation, onOpenParticipants, onOpenPerson }) {
  *
  * Only ONE of the four outcomes below spins, and the spinner is the exception
  * rather than the default. Every state that will not change on its own — a
- * failure, an interrupted send, an unconfirmed one, a refused one — resolves to
+ * definitive failure, an interrupted send, an unconfirmed one, a refused one — resolves to
  * a terminal line that says what happened, because a spinner for a state
  * nothing can ever advance is a lie the user cannot dismiss, and it survives
  * every reload.
@@ -366,11 +367,12 @@ function TitleTribeChip({ conversation, onOpenParticipants, onOpenPerson }) {
  * reason, a Retry, and — since nothing here was ever posted to Beeper — a
  * Dismiss that gives up on it outright.
  *
- * The two Retries are not the same action, and the breaker splits them (PR
- * #60 blocker 2). A `failed` row's Retry composes a NEW entry through the
- * composer's own send path, which the breaker blocks exactly as it blocks
- * Send — so with the breaker tripped that button is disabled and carries the
- * same reason as the Send button, rather than staying live and doing nothing.
+ * The two safe Retries are not the same action, and the breaker splits them (PR
+ * #60 blocker 2). A definitively `failed` row's Retry composes a NEW entry
+ * through the composer's own send path, which the breaker blocks exactly as it
+ * blocks Send — so with the breaker tripped that button is disabled and
+ * carries the same reason as the Send button, rather than staying live and
+ * doing nothing. Uncertain failures never render that control.
  * A `stalled` row's Retry re-dispatches the existing row: the server decides,
  * and its 429 toasts, so it stays enabled.
  */
@@ -378,7 +380,9 @@ function OutboxRow({
   entry, sending, isConfirming, onRetry, onDismiss, breakerTripped, breakerReason,
 }) {
   const failed = entry.state === 'failed';
-  const interrupted = failed && entry.errorCode === 'SEND_INTERRUPTED';
+  const interrupted = entry.errorCode === 'SEND_INTERRUPTED';
+  const responseLost = entry.errorCode === 'DELIVERY_UNCONFIRMED'
+    || (failed && entry.errorCode === 'NETWORK_ERROR');
   // Recorded by the server's 30s fallback when it could not find the message it
   // had just sent. The row stays `awaiting-confirmation` on purpose — the send
   // may well have been delivered, and marking it failed would invite the one
@@ -386,16 +390,20 @@ function OutboxRow({
   // carries the reason the server recorded, and offers NO Retry. It never
   // changes on its own, so it must never spin.
   const unresolved = !failed && entry.errorCode === 'CONFIRMATION_UNRESOLVED';
+  const unconfirmed = interrupted || responseLost || unresolved;
   const stalled = entry.state === 'approved' && !sending && !isConfirming;
-  const blocked = failed || stalled;
+  const blocked = (failed && !unconfirmed) || stalled;
   const confirming = entry.state === 'awaiting-confirmation' || entry.state === 'sent';
   const retryBlocked = breakerTripped && !stalled;
-  const outcome = blocked ? (failed ? 'failed' : 'stalled') : (unresolved ? 'unconfirmed' : 'pending');
-  // An interrupted send gets the copy verbatim and nothing else: prefixing
-  // "Not delivered" would assert a verdict the crash destroyed the evidence for.
-  let blockedReason = 'Not sent — the send was refused';
-  if (interrupted) blockedReason = SEND_INTERRUPTED_COPY;
-  else if (failed) blockedReason = `Not delivered${entry.errorMessage ? ` — ${entry.errorMessage}` : ''}`;
+  const outcome = unconfirmed ? 'unconfirmed' : (blocked ? (failed ? 'failed' : 'stalled') : 'pending');
+  const blockedReason = failed
+    ? `Not delivered${entry.errorMessage ? ` — ${entry.errorMessage}` : ''}`
+    : 'Not sent — the send was refused';
+  const unconfirmedReason = interrupted
+    ? (entry.errorMessage || SEND_INTERRUPTED_COPY)
+    : (responseLost
+      ? DELIVERY_UNCONFIRMED_COPY
+      : `Sent, unconfirmed${entry.errorMessage ? ` — ${entry.errorMessage}` : ''}`);
   return (
     <div
       data-testid="beeper-outbox-row"
@@ -433,12 +441,12 @@ function OutboxRow({
               )}
             </>
           )}
-          {unresolved && (
+          {unconfirmed && (
             <span className="text-port-warning">
-              {`Sent, unconfirmed${entry.errorMessage ? ` — ${entry.errorMessage}` : ''}`}
+              {unconfirmedReason}
             </span>
           )}
-          {!blocked && !unresolved && (
+          {!blocked && !unconfirmed && (
             <span className="flex items-center gap-1 text-gray-400">
               <Loader2 size={10} className="animate-spin" />
               {confirming ? 'Confirming…' : 'Sending…'}
@@ -536,8 +544,9 @@ export default function BeeperThread({
       handleSendClick();
     }
   };
-  // A failed row's only recovery: compose the SAME text again as a brand new
-  // outbox entry. Never a resend of the failed row — see the file docstring.
+  // A definitively failed row's recovery: compose the SAME text again as a
+  // brand new outbox entry. Never a resend of the failed row — see the file
+  // docstring. Uncertain failures never render the control that reaches here.
   // A stalled `approved` row (PR #60 blocker 1) is the opposite case: nothing
   // ever reached Beeper for it, so retrying re-sends the SAME row instead —
   // composing a new one on every click would just manufacture more phantoms

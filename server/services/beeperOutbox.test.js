@@ -142,6 +142,8 @@ const query = vi.fn(async (sql, params = []) => {
     const row = outbox.get(params[0]);
     row.state = 'awaiting-confirmation';
     row.pendingMessageId = params[1];
+    row.errorCode = params[2];
+    row.errorMessage = params[3];
     return { rows: [entryView(row)], rowCount: 1 };
   }
   if (/UPDATE beeper_outbox SET state = 'failed'/.test(sql)) {
@@ -186,7 +188,7 @@ vi.mock('../lib/db.js', () => ({ query: (...args) => query(...args) }));
 
 const {
   BREAKER_MAX_CONSECUTIVE_FAILURES, BREAKER_MAX_SENDS_IN_WINDOW, BREAKER_WINDOW_MS,
-  CONFIRMATION_TIMEOUT_MS, SEND_INTERRUPTED_MESSAGE,
+  CONFIRMATION_TIMEOUT_MS, DELIVERY_UNCONFIRMED_CODE, DELIVERY_UNCONFIRMED_MESSAGE, SEND_INTERRUPTED_MESSAGE,
   cancelPendingConfirmations, clearOutboxBreaker, configureOutboxRuntime, createOutboxEntry,
   discardOutboxEntry, getOutboxBreakerState, getOutboxStatus, isFirstContact, listOutboxEntries,
   reconcileOutboxOnBoot, resetOutboxRuntime, sendOutboxEntry,
@@ -480,23 +482,69 @@ describe('isFirstContact — has PortOS addressed this conversation before', () 
   });
 });
 
-describe('sendOutboxEntry — transport failure', () => {
-  it('leaves exactly one failed row with the error, and posts nothing a second time', async () => {
+describe('sendOutboxEntry — ambiguous and definitive outcomes', () => {
+  it('confirms a response-less send through chat/body/time lookup without another POST', async () => {
     markPriorSend();
     const entry = await approvedEntry();
     sendMessage.mockRejectedValueOnce(new BeeperApiError('Beeper request failed: connection refused', {
       status: 0, code: 'NETWORK_ERROR', retryable: false,
     }));
+    listMessagesPage.mockResolvedValueOnce({ items: [sentMessage()] });
 
-    await expect(sendOutboxEntry(entry.id)).rejects.toMatchObject({ code: 'NETWORK_ERROR', retryable: false });
+    await expect(sendOutboxEntry(entry.id)).resolves.toMatchObject({
+      state: 'awaiting-confirmation',
+      errorCode: DELIVERY_UNCONFIRMED_CODE,
+      errorMessage: DELIVERY_UNCONFIRMED_MESSAGE,
+    });
 
     expect(sendMessage).toHaveBeenCalledTimes(1);
-    const rows = [...outbox.values()].filter((row) => row.state === 'failed');
-    expect(rows).toHaveLength(1);
-    expect(rows[0].id).toBe(entry.id);
-    expect(rows[0].errorCode).toBe('NETWORK_ERROR');
-    expect(rows[0].errorMessage).toContain('connection refused');
-    // No confirmation was armed for a send that never left.
+    expect(clock.pending()).toBe(1);
+
+    clock.advance(CONFIRMATION_TIMEOUT_MS);
+    clock.runTimersWithDelay(CONFIRMATION_TIMEOUT_MS);
+    await flush();
+
+    expect(getMessage).not.toHaveBeenCalled();
+    expect(listMessagesPage).toHaveBeenCalledWith(CHAT_ID);
+    expect(outbox.get(entry.id)).toMatchObject({ state: 'sent', messageId: 'msg-final-1' });
+    expect(sendMessage).toHaveBeenCalledTimes(1);
+  });
+
+  it('leaves a response-less send comprehensibly unconfirmed when read-only lookup finds no match', async () => {
+    markPriorSend();
+    const entry = await approvedEntry();
+    sendMessage.mockRejectedValueOnce(new BeeperApiError('Beeper request failed: connection reset', {
+      status: 0, code: 'NETWORK_ERROR', retryable: false,
+    }));
+    listMessagesPage.mockResolvedValueOnce({ items: [] });
+
+    await sendOutboxEntry(entry.id);
+    clock.advance(CONFIRMATION_TIMEOUT_MS);
+    clock.runTimersWithDelay(CONFIRMATION_TIMEOUT_MS);
+    await flush();
+
+    expect(outbox.get(entry.id)).toMatchObject({
+      state: 'awaiting-confirmation', errorCode: 'CONFIRMATION_UNRESOLVED',
+    });
+    expect(outbox.get(entry.id).errorMessage).toContain('may still have been delivered');
+    expect(sendMessage).toHaveBeenCalledTimes(1);
+  });
+
+  it('marks a definitive upstream rejection failed and leaves deliberate Retry available', async () => {
+    markPriorSend();
+    const entry = await approvedEntry();
+    sendMessage.mockRejectedValueOnce(new BeeperApiError('Recipient rejected the message', {
+      status: 400, code: 'INVALID_REQUEST', retryable: false,
+    }));
+
+    await expect(sendOutboxEntry(entry.id)).rejects.toMatchObject({
+      status: 400, code: 'INVALID_REQUEST', retryable: false,
+    });
+
+    expect(outbox.get(entry.id)).toMatchObject({
+      state: 'failed', errorCode: 'INVALID_REQUEST', errorMessage: 'Recipient rejected the message',
+    });
+    expect(sendMessage).toHaveBeenCalledTimes(1);
     expect(clock.pending()).toBe(0);
   });
 });
@@ -756,7 +804,9 @@ describe('runaway breaker', () => {
       // eslint-disable-next-line no-await-in-loop -- ordered failures
       const entry = await approvedEntry(`attempt ${i}`);
       // eslint-disable-next-line no-await-in-loop
-      await expect(sendOutboxEntry(entry.id)).rejects.toMatchObject({ code: 'NETWORK_ERROR' });
+      await expect(sendOutboxEntry(entry.id)).resolves.toMatchObject({
+        state: 'awaiting-confirmation', errorCode: DELIVERY_UNCONFIRMED_CODE,
+      });
     }
     expect(getOutboxBreakerState()).toMatchObject({
       tripped: true, consecutiveFailures: BREAKER_MAX_CONSECUTIVE_FAILURES,
@@ -791,7 +841,9 @@ describe('runaway breaker', () => {
     const failOnce = async (label) => {
       sendMessage.mockRejectedValueOnce(new BeeperApiError('Beeper request failed', { status: 0, code: 'NETWORK_ERROR' }));
       const entry = await approvedEntry(label);
-      await expect(sendOutboxEntry(entry.id)).rejects.toMatchObject({ code: 'NETWORK_ERROR' });
+      await expect(sendOutboxEntry(entry.id)).resolves.toMatchObject({
+        state: 'awaiting-confirmation', errorCode: DELIVERY_UNCONFIRMED_CODE,
+      });
     };
 
     await failOnce('one');

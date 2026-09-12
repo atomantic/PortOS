@@ -183,16 +183,24 @@ describe('useBeeperOutbox', () => {
     await waitFor(() => expect(result.current.entries).toHaveLength(1));
   });
 
-  it('never re-sends after a transport failure — it reports it and refetches the failed row', async () => {
-    sendOutboxEntry.mockRejectedValue(new ApiError('Beeper request failed', 'NETWORK_ERROR'));
-    listOutboxEntries.mockResolvedValue({ entries: [{ ...ENTRY, state: 'failed', errorCode: 'NETWORK_ERROR' }] });
-    const { result } = renderHook(() => useBeeperOutbox(CONVERSATION_ID));
+  it('keeps a response-less send visible as unconfirmed without toasting or sending again', async () => {
+    const onSent = vi.fn();
+    sendOutboxEntry.mockResolvedValue({
+      ...ENTRY,
+      state: 'awaiting-confirmation',
+      errorCode: 'DELIVERY_UNCONFIRMED',
+      errorMessage: 'Delivery unconfirmed; check the chat before sending again.',
+    });
+    const { result } = renderHook(() => useBeeperOutbox(CONVERSATION_ID, { onSent }));
 
     await act(async () => { await result.current.submit('hello there'); });
 
     expect(sendOutboxEntry).toHaveBeenCalledTimes(1);
-    expect(toastError).toHaveBeenCalled();
-    await waitFor(() => expect(result.current.entries[0].state).toBe('failed'));
+    expect(toastError).not.toHaveBeenCalled();
+    expect(onSent).toHaveBeenCalledTimes(1);
+    expect(result.current.entries[0]).toMatchObject({
+      state: 'awaiting-confirmation', errorCode: 'DELIVERY_UNCONFIRMED',
+    });
     expect(sendOutboxEntry).toHaveBeenCalledTimes(1);
   });
 

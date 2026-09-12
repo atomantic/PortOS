@@ -19,9 +19,9 @@
  *     a double-click cannot double-post.
  *  2. **A send is NEVER retried automatically.** Beeper has no idempotency key
  *     on `POST /v1/chats/{chatID}/messages`, so a retry delivers a second real
- *     message to a real person. A transport failure leaves exactly one row in
- *     `failed`, with the code and message, and no second POST. Re-sending is a
- *     NEW row, created by a new human action; the failed one stays visible.
+ *     message to a real person. A response-less transport failure leaves the
+ *     row in `awaiting-confirmation`, because the POST may have landed. Only a
+ *     definitive rejection becomes `failed` and offers a new human send.
  *  3. **Confirmation is a resolve, never a re-send.** The send is asynchronous
  *     and answers only `{ chatID, pendingMessageID }`. The row confirms on the
  *     `message.upserted` invalidation relayed by #33, with a 30-second fallback
@@ -59,15 +59,20 @@ export const CONFIRMATION_TIMEOUT_MS = 30_000;
  *
  * The outcome is UNKNOWABLE: the request may have been delivered, refused, or
  * never have left. Rule 2 above therefore still holds — nothing re-POSTs it.
- * The row lands `failed` so it is actionable (a failed row's Retry composes a
- * NEW row, exactly like typing the message again), and the copy says what
- * actually happened rather than claiming a delivery verdict PortOS does not
- * have. The client renders this sentence verbatim off the code, so the same
- * string is repeated in `client/src/components/messages/beeper/BeeperThread.jsx`
- * — the two bundles cannot share a module, so they share a test instead.
+ * The row lands in the existing terminal `failed` state so it cannot spin
+ * forever, while this error code tells the client to show uncertainty with no
+ * Retry control. The copy says what actually happened rather than claiming a
+ * delivery verdict PortOS does not have. The client renders this sentence
+ * verbatim off the code, so the same string is repeated in
+ * `client/src/components/messages/beeper/BeeperThread.jsx` — the two bundles
+ * cannot share a module, so they share a test instead.
  */
 export const SEND_INTERRUPTED_CODE = 'SEND_INTERRUPTED';
 export const SEND_INTERRUPTED_MESSAGE = 'Delivery unconfirmed: PortOS restarted mid-send. Check the chat before retrying.';
+
+/** A send whose POST may have landed, but whose response never reached PortOS. */
+export const DELIVERY_UNCONFIRMED_CODE = 'DELIVERY_UNCONFIRMED';
+export const DELIVERY_UNCONFIRMED_MESSAGE = 'Delivery unconfirmed; check the chat before sending again.';
 
 /**
  * PostgreSQL's `undefined_table`. The boot reconcile runs before the DB phase
@@ -313,6 +318,23 @@ async function markFailed(id, code, message) {
   );
 }
 
+async function markAwaitingConfirmation(id, {
+  pendingMessageId = null, errorCode = null, errorMessage = null,
+} = {}) {
+  const updated = await query(
+    `UPDATE beeper_outbox SET state = 'awaiting-confirmation', pending_message_id = $2,
+       error_code = $3, error_message = $4, updated_at = NOW()
+     WHERE id = $1 RETURNING ${ENTRY_COLUMNS}`,
+    [id, pendingMessageId, errorCode, errorMessage],
+  );
+  return updated.rows[0];
+}
+
+/** No HTTP response means the server cannot prove whether the POST landed. */
+function isDeliveryOutcomeUnknown(err) {
+  return err?.status === 0 || err?.code === 'NETWORK_ERROR';
+}
+
 /**
  * Discard a row the human declined to send — the first-contact confirmation's
  * "Cancel" (#53's fix; the original design deliberately left the row
@@ -389,12 +411,30 @@ export async function sendOutboxEntry(id, { confirmFirstContact = false } = {}) 
 
   // Retry is OFF (the client's send-safe default): no idempotency key means a
   // retried POST is a second real message. One attempt, one row, no second POST.
+  const requestedAt = runtime.now();
   const result = await sendMessage(entry.chatId, { text: entry.body })
     .then((value) => ({ ok: true, value }))
     .catch((err) => ({ ok: false, err }));
 
   if (!result.ok) {
     const err = result.err;
+    if (isDeliveryOutcomeUnknown(err)) {
+      const updated = await markAwaitingConfirmation(id, {
+        errorCode: DELIVERY_UNCONFIRMED_CODE,
+        errorMessage: DELIVERY_UNCONFIRMED_MESSAGE,
+      });
+      registerSendFailure();
+      console.warn(`${LOG_PREFIX}: send response lost — delivery left unconfirmed, never re-sent`);
+      armConfirmation({
+        id,
+        chatId: entry.chatId,
+        conversationId: entry.conversationId,
+        body: entry.body,
+        pendingMessageId: null,
+        requestedAt,
+      });
+      return updated;
+    }
     await markFailed(id, err?.code, err?.message);
     registerSendFailure();
     console.error(`${LOG_PREFIX}: send failed (${err?.code || 'SEND_FAILED'})`);
@@ -408,15 +448,10 @@ export async function sendOutboxEntry(id, { confirmFirstContact = false } = {}) 
 
   registerSendSuccess();
   const pendingMessageId = typeof result.value?.pendingMessageID === 'string' ? result.value.pendingMessageID : null;
-  const updated = await query(
-    `UPDATE beeper_outbox SET state = 'awaiting-confirmation', pending_message_id = $2,
-       error_code = NULL, error_message = NULL, updated_at = NOW()
-     WHERE id = $1 RETURNING ${ENTRY_COLUMNS}`,
-    [id, pendingMessageId],
-  );
+  const updated = await markAwaitingConfirmation(id, { pendingMessageId });
   console.log(`${LOG_PREFIX}: sent, awaiting confirmation${pendingMessageId ? '' : ' (no pending id returned)'}`);
-  armConfirmation({ id, chatId: entry.chatId, conversationId: entry.conversationId, body: entry.body, pendingMessageId });
-  return updated.rows[0];
+  armConfirmation({ id, chatId: entry.chatId, conversationId: entry.conversationId, body: entry.body, pendingMessageId, requestedAt });
+  return updated;
 }
 
 // ---------------------------------------------------------------------------
@@ -669,8 +704,8 @@ function persistedSendMoment(row) {
  *  - **`sending` → `failed` / `SEND_INTERRUPTED`.** The POST was in flight; its
  *    outcome is unknowable. Never auto-resent (rule 2 has no exception for a
  *    crash — Beeper has no idempotency key, so a "recovery" resend is a second
- *    real message). `failed` is the actionable state: the user reads the copy,
- *    checks the chat, and Retry composes a NEW row like any other failed one.
+ *    real message). `failed` terminates the spinner, while the error code keeps
+ *    the client from presenting the ordinary definitive-failure Retry control.
  *  - **`awaiting-confirmation` → re-armed.** The send DID leave; only the
  *    resolve was lost. Re-arming replays the lookup from the row's own
  *    `chat_id` / `pending_message_id` / `body`, which is a read on both paths
