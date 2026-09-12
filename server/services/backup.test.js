@@ -1466,6 +1466,7 @@ describe('restoreSnapshot manifest verification', () => {
     await expect(finishRestore({ dryRun: true })).resolves.toMatchObject({
       verification: { status: 'unverified', reason: 'manifest_absent', checkedFiles: 0 },
     });
+    expect(spawn.mock.calls[0][1]).toContain('--checksum');
 
     const targetHash = await writeSnapshotFile('example.txt', 'example');
     await realFs.symlink('example.txt', joinPath(snapshotDataDir, 'readable-link'));
@@ -1479,6 +1480,57 @@ describe('restoreSnapshot manifest verification', () => {
     await expect(finishRestore({ dryRun: true })).resolves.toMatchObject({
       verification: { status: 'verified', checkedFiles: 2 },
     });
+  });
+
+  it('restores differing bytes when size and mtime match through real rsync', async () => {
+    const relativePath = 'brain/example.json';
+    const snapshotContent = '{"value":"old"}';
+    const liveContent = '{"value":"new"}';
+    const sourcePath = joinPath(snapshotDataDir, relativePath);
+    const livePath = joinPath(PATHS.data, relativePath);
+    const snapshotHash = await writeSnapshotFile(relativePath, snapshotContent);
+    await writeManifest({ [relativePath]: snapshotHash });
+    await realFs.mkdir(joinPath(livePath, '..'), { recursive: true });
+    await realFs.writeFile(livePath, liveContent);
+
+    const matchingMtime = new Date('2026-09-12T00:00:00.000Z');
+    await realFs.utimes(sourcePath, matchingMtime, matchingMtime);
+    await realFs.utimes(livePath, matchingMtime, matchingMtime);
+
+    const previousRsync = process.env.PORTOS_RSYNC;
+    delete process.env.PORTOS_RSYNC;
+    spawn.mockImplementation((...args) => spawnChild(...args));
+
+    try {
+      const fullPreview = await restoreSnapshot(tmpRoot, 'snap-1', { dryRun: true });
+      expect(fullPreview.changedFiles.some(line => line.includes(relativePath))).toBe(true);
+      expect(await realFs.readFile(livePath, 'utf8')).toBe(liveContent);
+
+      await restoreSnapshot(tmpRoot, 'snap-1', { dryRun: false });
+      expect(await realFs.readFile(livePath, 'utf8')).toBe(snapshotContent);
+
+      await realFs.writeFile(livePath, liveContent);
+      await realFs.utimes(livePath, matchingMtime, matchingMtime);
+      const selectivePreview = await restoreSnapshot(tmpRoot, 'snap-1', {
+        dryRun: true,
+        subdirFilter: 'brain',
+      });
+      expect(selectivePreview.changedFiles.some(line => line.includes(relativePath))).toBe(true);
+      expect(await realFs.readFile(livePath, 'utf8')).toBe(liveContent);
+
+      await restoreSnapshot(tmpRoot, 'snap-1', { dryRun: false, subdirFilter: 'brain' });
+      expect(await realFs.readFile(livePath, 'utf8')).toBe(snapshotContent);
+
+      const equalPreview = await restoreSnapshot(tmpRoot, 'snap-1', {
+        dryRun: true,
+        subdirFilter: 'brain',
+      });
+      expect(equalPreview.changedFiles.filter(line => line.includes(relativePath))).toEqual([]);
+    } finally {
+      if (previousRsync === undefined) delete process.env.PORTOS_RSYNC;
+      else process.env.PORTOS_RSYNC = previousRsync;
+      spawn.mockReset();
+    }
   });
 });
 
@@ -1545,7 +1597,7 @@ describe('restoreSnapshot subdirFilter guard', () => {
       });
       expect(spawn).toHaveBeenCalledWith(
         '/custom/bin/rsync',
-        expect.arrayContaining(['--archive', '--itemize-changes', '--progress', '--dry-run']),
+        expect.arrayContaining(['--archive', '--itemize-changes', '--progress', '--checksum', '--dry-run']),
         { shell: false },
       );
     } finally {
@@ -1845,6 +1897,7 @@ describe('restoreSnapshot snapshotId, filter flags, and settings re-sync', () =>
         '--itemize-changes',
         '--progress',
         '--itemize-changes',
+        '--checksum',
         '--dry-run',
         '--include=brain/***',
         '--include=*/',
