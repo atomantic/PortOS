@@ -1868,19 +1868,44 @@ describe('runBackup lifecycle', () => {
     await expect(retry).resolves.toMatchObject({ status: 'ok' });
   });
 
-  it('rejects a missing destination before locking, spawning, or emitting', async () => {
+  it.each(['ENOENT', 'EACCES', 'EIO'])('persists a failed preflight (%s) over prior success and permits repair', async (code) => {
+    const { saveState, getState } = await import('./backup.js');
+    const priorRun = '2026-01-01T00:00:00.000Z';
+    await saveState({ lastRun: priorRun, lastSnapshotId: 'previous-snapshot', status: 'ok', error: null });
     const io = { emit: vi.fn() };
-    await expect(runBackup(joinPath(destRoot, 'does-not-exist'), io))
-      .rejects.toThrow(/Backup destination not found/);
-    expect(spawn).not.toHaveBeenCalled();
-    expect(io.emit).not.toHaveBeenCalled();
+    const cause = Object.assign(new Error('private destination detail'), { code });
+    fs.access.mockRejectedValueOnce(cause);
+    const attemptStarted = Date.now();
 
-    // The failed precondition must not have left the lock engaged.
+    await expect(runBackup(destRoot, io)).rejects.toMatchObject({
+      code: `BACKUP_DESTINATION_${code}`,
+      cause
+    });
+    const state = await getState(); // The status route serves this persisted state.
+    expect(state).toMatchObject({
+      status: 'error',
+      lastSnapshotId: 'previous-snapshot',
+      error: `${code === 'ENOENT' ? 'Backup destination not found' : 'Backup destination inaccessible'} (${code})`
+    });
+    expect(Date.parse(state.lastRun)).toBeGreaterThanOrEqual(attemptStarted);
+    expect(JSON.stringify(state)).not.toContain('private destination detail');
+    expect(spawn).not.toHaveBeenCalled();
+    expect(io.emit.mock.calls).toEqual([['backup:failed', { snapshotId: null, error: state.error }]]);
+    expect(await (await actualFs()).readdir(destRoot)).toEqual([]);
+
+    // Scheduled runs have no socket, but must still replace stale status.
+    await saveState({ status: 'ok', lastRun: priorRun });
+    fs.access.mockRejectedValueOnce(cause);
+    await expect(runBackup(destRoot)).rejects.toMatchObject({ cause });
+    expect(await getState()).toMatchObject({ status: 'error', lastSnapshotId: 'previous-snapshot' });
+
     const proc = fakeProc();
     spawn.mockReturnValue(proc);
     const pending = runBackup(destRoot, io);
-    await waitFor(() => spawn.mock.calls.length === 1, 'rsync spawn after bad dest');
+    await waitFor(() => spawn.mock.calls.length === 1, 'rsync spawn after destination repair');
     proc.emit('close', 0);
     await expect(pending).resolves.toMatchObject({ status: 'ok' });
+    expect(await getState()).toMatchObject({ status: 'ok', error: null });
   });
+
 });

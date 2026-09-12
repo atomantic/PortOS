@@ -398,16 +398,10 @@ export async function runBackup(destPath, io = null, { excludePaths = [], disabl
     throw new Error('Backup destination not configured');
   }
 
-  await access(destPath).catch(() => {
-    throw new Error(`Backup destination not found: ${destPath}`);
-  });
-
   isRunning = true;
-  const snapshotId = new Date().toISOString().replace(/:/g, '-').replace(/\..+/, '');
-  const snapshotsRoot = join(destPath, 'snapshots', MACHINE_HOST);
-  const snapshotDir = join(snapshotsRoot, snapshotId);
-  const parentMarker = parentMarkerPath(snapshotDir, snapshotId);
-  const dataDestDir = join(snapshotDir, 'data');
+  let snapshotId = null;
+  let snapshotDir;
+  let parentMarker;
 
   const effectiveExcludes = computeEffectiveExcludes({ excludePaths, disabledDefaultExcludes });
 
@@ -415,8 +409,8 @@ export async function runBackup(destPath, io = null, { excludePaths = [], disabl
   let manifest;
 
   const clearInProgress = async () => {
-    await unlink(markerPath(snapshotDir)).catch(() => {});
-    await unlink(parentMarker).catch(() => {});
+    if (snapshotDir) await unlink(markerPath(snapshotDir)).catch(() => {});
+    if (parentMarker) await unlink(parentMarker).catch(() => {});
     activeSnapshotId = null;
   };
 
@@ -435,6 +429,20 @@ export async function runBackup(destPath, io = null, { excludePaths = [], disabl
   };
 
   try {
+    await access(destPath).catch((cause) => {
+      // Never expose the filesystem message: it can include private paths.
+      const code = ['ENOENT', 'EACCES', 'EPERM', 'EIO'].includes(cause.code) ? cause.code : 'UNKNOWN';
+      const message = code === 'ENOENT' ? 'Backup destination not found' : 'Backup destination inaccessible';
+      const error = new ServerError(`${message} (${code})`, { code: `BACKUP_DESTINATION_${code}` });
+      error.cause = cause;
+      throw error;
+    });
+    snapshotId = new Date().toISOString().replace(/:/g, '-').replace(/\..+/, '');
+    const snapshotsRoot = join(destPath, 'snapshots', MACHINE_HOST);
+    snapshotDir = join(snapshotsRoot, snapshotId);
+    parentMarker = parentMarkerPath(snapshotDir, snapshotId);
+    const dataDestDir = join(snapshotDir, 'data');
+
     console.log(`💾 Backup starting: snapshot ${snapshotId} (excluding ${effectiveExcludes.length} paths)`);
     if (io) io.emit('backup:started', { snapshotId });
 
