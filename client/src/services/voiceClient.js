@@ -1,7 +1,7 @@
 // Browser-side voice capture + playback. Supports two modes:
 //   - Push-to-talk: MediaRecorder, manual start/stop.
 //   - Continuous:   AudioWorklet + energy VAD auto-submits on silence,
-//                   and fires barge-in (voice:interrupt + stopPlayback) when
+//                   and fires barge-in (voice:interrupt + cancelVoicePlayback) when
 //                   the user starts talking over the bot.
 // Both emit 'voice:turn' over Socket.IO and play incoming TTS via Web Audio.
 
@@ -27,22 +27,18 @@ let stream = null;
 let recorder = null;
 let chunks = [];
 let audioCtx = null;
-let playQueue = Promise.resolve();
-let currentSource = null;
-let ttsQueueDepth = 0;
-let playbackGeneration = 0;
-// Timestamp after which the post-TTS echo-tail window ends. See VAD.ttsTailMs.
-let ttsCooldownUntil = 0;
-// Raised when a turn is cancelled (barge-in, explicit interrupt, reset, new
-// text turn); cleared when the server emits voice:transcript for the next
-// turn. While raised, incoming voice:tts:audio is dropped — prevents
-// in-flight chunks from the old turn overlaying the new turn's audio.
-let rejectingTts = false;
-// Generation counter for speakSynthesized (fast-path trigger/Nano replies).
-// Bumped on every new synthesized reply AND on stopPlayback, so a reply whose
-// TTS fetch is still in flight when a newer turn (or a barge-in) supersedes it
-// is dropped instead of playing over/after the newer audio.
-let synthGen = 0;
+// One owner for shared playback. Server-turn admission is independent of the
+// two invalidation lifetimes: cancellation retires decode/queue work AND
+// pending synthesis fetches; a new synthetic reply retires only older fetches.
+const playback = {
+  queue: Promise.resolve(),
+  source: null,
+  depth: 0,
+  echoTailUntil: 0,
+  acceptsServerTurnAudio: true,
+  decodeGeneration: 0,
+  synthesisGeneration: 0,
+};
 
 const pickMime = () => {
   const candidates = ['audio/webm;codecs=opus', 'audio/webm', 'audio/ogg;codecs=opus', 'audio/mp4'];
@@ -63,32 +59,45 @@ const ensureCtx = () => {
   return audioCtx;
 };
 
-const stopPlayback = () => {
-  playbackGeneration += 1;
-  if (currentSource) {
-    try { currentSource.stop(); } catch { /* already stopped */ }
-    currentSource = null;
+const cancelVoicePlayback = () => {
+  playback.decodeGeneration += 1;
+  if (playback.source) {
+    try { playback.source.stop(); } catch { /* already stopped */ }
+    playback.source = null;
   }
-  playQueue = Promise.resolve();
-  ttsQueueDepth = 0;
-  ttsCooldownUntil = 0;
+  playback.queue = Promise.resolve();
+  playback.depth = 0;
+  playback.echoTailUntil = 0;
   // Any chunks still in-flight from the cancelled turn must not be played —
   // they'll arrive asynchronously after we've torn down local playback.
-  rejectingTts = true;
+  playback.acceptsServerTurnAudio = false;
   // Supersede any fast-path synthesized reply whose fetch is still in flight.
-  synthGen += 1;
+  playback.synthesisGeneration += 1;
+};
+
+// A transcript reopens server audio without invalidating any pending work.
+const beginServerTurnAudio = () => {
+  playback.acceptsServerTurnAudio = true;
+};
+
+// Client-side replies have no transcript. Reopen admission and supersede older
+// synthesis fetches, while preserving already-decoding/queued playback.
+const beginSynthesizedReply = () => {
+  const generation = ++playback.synthesisGeneration;
+  playback.acceptsServerTurnAudio = true;
+  return generation;
 };
 
 const enqueuePlay = async (bytes) => {
-  const generation = playbackGeneration;
+  const generation = playback.decodeGeneration;
   const ctx = ensureCtx();
   // decodeAudioData consumes its buffer — clone so we don't mutate the socket frame
   const copy = bytes.slice(0);
   const buffer = await ctx.decodeAudioData(copy);
-  if (generation !== playbackGeneration) return;
-  ttsQueueDepth += 1;
-  playQueue = playQueue.then(() => new Promise((resolve) => {
-    if (generation !== playbackGeneration) {
+  if (generation !== playback.decodeGeneration) return;
+  playback.depth += 1;
+  playback.queue = playback.queue.then(() => new Promise((resolve) => {
+    if (generation !== playback.decodeGeneration) {
       resolve();
       return;
     }
@@ -96,22 +105,22 @@ const enqueuePlay = async (bytes) => {
     src.buffer = buffer;
     src.connect(ctx.destination);
     src.onended = () => {
-      if (currentSource === src) currentSource = null;
-      ttsQueueDepth = Math.max(0, ttsQueueDepth - 1);
-      // Skip the tail when we're rejecting (playback was torn down) —
-      // there's no real audio left for a room echo to trail off from.
-      if (ttsQueueDepth === 0 && !rejectingTts) {
-        ttsCooldownUntil = performance.now() + VAD.ttsTailMs;
+      if (playback.source === src) playback.source = null;
+      playback.depth = Math.max(0, playback.depth - 1);
+      // Preserve the admission-based tail policy, including proactive/preview
+      // audio played while server-turn admission is still closed.
+      if (playback.depth === 0 && playback.acceptsServerTurnAudio) {
+        playback.echoTailUntil = performance.now() + VAD.ttsTailMs;
       }
       resolve();
     };
-    currentSource = src;
+    playback.source = src;
     src.start();
   }));
 };
 
-const isTtsActive = () => ttsQueueDepth > 0 || currentSource !== null;
-const isInTtsEchoWindow = () => isTtsActive() || performance.now() < ttsCooldownUntil;
+const isTtsActive = () => playback.depth > 0 || playback.source !== null;
+const isInTtsEchoWindow = () => isTtsActive() || performance.now() < playback.echoTailUntil;
 
 // Ring of recently-spoken TTS sentences (with cached trigrams). Echo
 // detection uses two stacked filters:
@@ -266,33 +275,32 @@ const toExactArrayBuffer = (wav) => {
   return null;
 };
 
-socket.on('voice:tts:audio', ({ sentence, wav }) => {
-  if (rejectingTts) return; // stale chunk from a cancelled turn — drop it
+const playServerTurnAudio = ({ sentence, wav }) => {
+  if (!playback.acceptsServerTurnAudio) return; // stale chunk from a cancelled turn — drop it
   rememberTtsSentence(sentence);
   const ab = toExactArrayBuffer(wav);
   if (!ab) return;
   enqueuePlay(ab).catch((err) => console.warn('[voice] playback failed:', err));
-});
+};
+
+socket.on('voice:tts:audio', playServerTurnAudio);
 
 // A provider timeout can happen after earlier sentences were already emitted.
 // Clear those browser-side frames too, so recovery does not leave the stale
 // reply speaking over the next turn.
-socket.on('voice:tts:cancel', () => stopPlayback());
+socket.on('voice:tts:cancel', () => cancelVoicePlayback());
 
 // Proactive CoS speech. Server-pushed lines (alerts/briefings/reminders) come
 // in on a separate channel so the client can render a distinct visual cue;
 // VoiceWidget decides whether/how to display them (toast + history appending).
 // Reuse the same audio playback queue + TTS echo memory as user-initiated
-// turns so mic barge-in (voice:interrupt → stopPlayback) cancels proactive
+// turns so mic barge-in (voice:interrupt → cancelVoicePlayback) cancels proactive
 // audio for free.
 //
-// NOTE: deliberately NOT gated by `rejectingTts`. That flag suppresses stale
-// chunks from a CANCELLED turn (it stays sticky after stopPlayback() until the
-// next voice:transcript), but a proactive alert is its own event — gating it
-// would silently drop reminders/briefings whenever the user had recently
-// interrupted a turn, which is exactly when proactive nudges are most useful.
+// Proactive events bypass server-turn admission without reopening it. A
+// canceled turn must not silence later reminders while awaiting a transcript.
 const proactiveListeners = new Set();
-socket.on('voice:speak', ({ sentence, wav, priority, source, ts }) => {
+const playProactiveAudio = ({ sentence, wav, priority, source, ts }) => {
   rememberTtsSentence(sentence);
   const ab = toExactArrayBuffer(wav);
   if (!ab) return;
@@ -300,7 +308,9 @@ socket.on('voice:speak', ({ sentence, wav, priority, source, ts }) => {
   for (const fn of proactiveListeners) {
     fn({ sentence, priority: priority || 'normal', source: source || 'cos', ts: ts || Date.now() });
   }
-});
+};
+
+socket.on('voice:speak', playProactiveAudio);
 
 // Subscribe to proactive-speech UI events. Returns an unsubscribe function.
 // The CoS speech audio plays unconditionally (it's the whole point), but
@@ -361,11 +371,10 @@ socket.on('voice:output:detached', () => {
   // Another tab just took over proactive output. Drain any proactive audio
   // still playing/queued here so the handoff is clean — otherwise this tab
   // keeps speaking a briefing while the new primary starts the next one and
-  // both talk at once, breaking the single-recipient contract. stopPlayback
-  // only sets the sticky reject flag for per-turn `voice:tts:audio` (the
-  // proactive `voice:speak` handler is intentionally ungated), so a future
+  // both talk at once, breaking the single-recipient contract. Cancellation
+  // closes server-turn admission; playProactiveAudio bypasses it, so a future
   // proactive line still plays if this tab later reclaims output.
-  stopPlayback();
+  cancelVoicePlayback();
 });
 // A disconnect ends this socket's ownership — the server released it and, on
 // reconnect, this tab gets a fresh socket with no claim (it only re-announces
@@ -395,13 +404,13 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') {
 // voice:transcript marks the start of a new turn's outputs — any pending
 // rejection from a previous cancellation should be lifted now so this turn's
 // TTS chunks actually play.
-socket.on('voice:transcript', () => { rejectingTts = false; });
+socket.on('voice:transcript', beginServerTurnAudio);
 
 export const startCapture = async () => {
   if (recorder) return;
   // Barge-in: abort any in-flight turn and silence current playback
   socket.emit('voice:interrupt');
-  stopPlayback();
+  cancelVoicePlayback();
 
   // Claimed BEFORE getUserMedia — an output-only session already in force would
   // refuse the request outright.
@@ -464,7 +473,7 @@ export const stopCapture = async ({ submit = true } = {}) => {
 export const sendText = (text, source = 'text') => {
   const trimmed = (text || '').trim();
   if (!trimmed) return;
-  stopPlayback();
+  cancelVoicePlayback();
   socket.emit('voice:text', { text: trimmed, source });
 };
 
@@ -504,12 +513,12 @@ socket.on('connect', () => {
 
 export const interrupt = () => {
   socket.emit('voice:interrupt');
-  stopPlayback();
+  cancelVoicePlayback();
 };
 
 export const resetConversation = () => {
   socket.emit('voice:reset');
-  stopPlayback();
+  cancelVoicePlayback();
 };
 
 export const isCapturing = () => recorder !== null;
@@ -623,25 +632,20 @@ export const sendScreenshotResult = (requestId, dataUrl) => {
   socket.emit('voice:screenshot:result', { requestId, dataUrl: dataUrl || null });
 };
 
-export const playWav = (arrayBuffer) => enqueuePlay(arrayBuffer);
+const playPreviewAudio = (arrayBuffer) => enqueuePlay(arrayBuffer);
+
+export const playWav = (arrayBuffer) => playPreviewAudio(arrayBuffer);
 
 // Speak arbitrary text through the server's configured TTS WITHOUT running the
 // LLM. Used by the fast-resolution cascade to voice trigger confirmations and
 // on-device Nano replies (see voiceFastPath.js). Reuses the same playback queue
-// + echo memory as server-streamed TTS, so barge-in (stopPlayback) and
+// + echo memory as server-streamed TTS, so barge-in (cancelVoicePlayback) and
 // echo-suppression keep working exactly as they do for normal turns. Resolves
 // once the audio is decoded and queued (not when playback finishes).
 export const speakSynthesized = async (text, { engine, voice, rate, signal } = {}) => {
   const clean = (text || '').trim();
   if (!clean) return false;
-  // Claim this generation; a newer reply or a stopPlayback/barge-in bumps
-  // synthGen and supersedes us (checked after the fetch).
-  const gen = ++synthGen;
-  // We're starting a fresh reply — lift any sticky rejection left by a prior
-  // barge-in (normally cleared by voice:transcript, which a client-side turn
-  // never emits), then remember the sentence so the next inbound STT result
-  // that echoes it back through the mic is suppressed.
-  rejectingTts = false;
+  const gen = beginSynthesizedReply();
   rememberTtsSentence(clean);
   const body = { text: clean };
   if (engine) body.engine = engine;
@@ -657,18 +661,18 @@ export const speakSynthesized = async (text, { engine, voice, rate, signal } = {
   const wav = await res.arrayBuffer();
   // Superseded while the synth was in flight — drop this stale audio rather than
   // playing it over/after the newer turn's reply.
-  if (gen !== synthGen) return false;
+  if (gen !== playback.synthesisGeneration) return false;
   await enqueuePlay(wav);
   return true;
 };
 
 // Resolves once every currently-queued TTS chunk has finished playing locally.
 // Used by continuous mode to know when to return from 'speaking' → listening.
-export const whenPlaybackDrained = () => playQueue.then(() => !isTtsActive());
+export const whenPlaybackDrained = () => playback.queue.then(() => !isTtsActive());
 
 // ─── Continuous mode (hands-free VAD) ─────────────────────────────────────
 // AudioWorklet streams PCM, RMS-based VAD auto-submits on silence, and
-// barge-in (voice:interrupt + stopPlayback) fires when the user talks over
+// barge-in (voice:interrupt + cancelVoicePlayback) fires when the user talks over
 // the bot. Thresholds are auto-calibrated from ambient noise at startup.
 
 const VAD = {
@@ -821,7 +825,7 @@ const handleFrame = (frame) => {
         onsetFrames = 0;
         if (isTtsActive()) {
           socket.emit('voice:interrupt');
-          stopPlayback();
+          cancelVoicePlayback();
         }
         speechChunks = snapshotPreRoll();
         continuousCallbacks?.onSpeechStart?.();
@@ -1022,7 +1026,7 @@ export const startWebSpeechCapture = ({ language, ...callbacks } = {}) => {
 
   // Barge-in: abort any in-flight turn and silence current playback
   socket.emit('voice:interrupt');
-  stopPlayback();
+  cancelVoicePlayback();
 
   const recognition = new SpeechRecognition();
   recognition.continuous = true;
