@@ -65,6 +65,15 @@ load-bearing: preserve them exactly and patch only the field(s) a finding names.
 {{characterArcsJson}}
 ```
 
+## Current countdown metadata
+
+These persisted reminder IDs and issue positions are authoritative. Repair a
+contradiction here directly; changing only the summary leaves it in place.
+
+```json
+{{tickingClockJson}}
+```
+
 ## Story shape (Vonnegut)
 
 {{{shapeGuidance}}}
@@ -136,7 +145,7 @@ Hard contract for this response:
   entry, or one existing `seasons[]` entry, or one `episodes[]` entry. Not two.
 - Within that record, make **exactly one change**: one `{ "find", "replace" }`
   replacement in one long field, OR one short field (title / logline / themes /
-  `episodeCountTarget` / `number`), OR one existing character-transition patch.
+  `episodeCountTarget` / `number`), OR one existing character-transition or countdown-reminder patch.
 - Do **not** add a volume. Keep the record's `id` (and any character /
   transition id) so the patch lands on the right record — but do not echo any
   other field you are not changing.
@@ -178,6 +187,8 @@ Resolve the findings above with edits that cannot re-create any of these. Concre
 11. **Within an edited record, return only the fields that must change.** A character arc patch must repeat its existing `characterId` (or exact `characterName` when it has no ID), then include only changed top-level fields and changed transitions. Every transition patch must repeat its existing `id`; omit untouched transitions. To remove a transition that is itself the contradiction, return its `id` plus `"delete": true`. Omit every untouched key instead of paraphrasing the stored value "for completeness". The server preserves omitted fields and IDs. This field-level sparsity is load-bearing: rewriting an unrelated field can create the next round's contradiction even when the targeted finding was fixed.
 12. **Stay inside the measured field budgets and end every replacement cleanly.** Hard limits are: arc logline 500 characters; arc summary 8,000; protagonist arc 4,000; volume logline 500; volume synopsis 8,000; volume ending hook 1,000; episode synopsis 4,000. Use the exact `current` / `max` / `remaining` values above: for each field, the combined replacement delta (`replace.length - find.length`) must not exceed `remaining`. Prefer a shorter correction or delete redundant wording nearby when the field has little headroom. Every `replace` must end at a complete clause or sentence. Never rely on the server to truncate prose. Keep a volume synopsis near 200 words when that can carry the issue allocation, and an episode synopsis roughly 150–300 words; expand only as much as the finding genuinely requires.
 
+13. **Repair countdown metadata through `arc.tickingClock`.** Include only changed `label` (200 characters), `stakes` (1,000), `plantedAtArcPosition`, or `dueAtArcPosition`. Its `reminders[]` is a sparse patch list: repeat an existing reminder's exact `id` and include only corrected `atIssue` and/or `note` (500 characters). Positions are nonnegative integers. Untouched reminders and fields survive. Do not add or delete reminder IDs, disable the clock, change its kind, or return a replacement countdown. If no clock exists, explain the missing authoring step in `notes`. An isolated repair may change one clock scalar or one existing reminder; changing that reminder's position and note together is one causal repair.
+
 ## Output contract
 
 Return ONLY valid JSON matching this shape — no prose, no markdown fence, no commentary:
@@ -192,6 +203,11 @@ Return ONLY valid JSON matching this shape — no prose, no markdown fence, no c
       { "find": "exact unique existing sentence", "replace": "complete corrected sentence" }
     ],
     "themes": ["string", "..."],
+    "tickingClock": {
+      "reminders": [
+        { "id": "rm-... (repeat the existing reminder ID)", "atIssue": 12, "note": "only the corrected countdown beat" }
+      ]
+    },
     "protagonistArcEdits": [
       { "find": "exact unique existing clause", "replace": "complete corrected clause" }
     ]

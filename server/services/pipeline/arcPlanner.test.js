@@ -1516,8 +1516,7 @@ describe('arcPlanner — resolveVerifyIssues', () => {
   });
 
   it('preserves series.arc.tickingClock when the resolve LLM does not author one', async () => {
-    // Same drift class as readerMap above — the resolve prompt never authors a
-    // ticking clock, so omitting it must not wipe the user's existing countdown.
+    // Sparse countdown repairs must preserve a clock omitted by the model.
     const s = await setupSeries();
     await seriesSvc.updateSeries(s.id, {
       arc: {
@@ -1540,6 +1539,57 @@ describe('arcPlanner — resolveVerifyIssues', () => {
     expect(out.series.arc.logline).toBe('L2');
     expect(out.series.arc.tickingClock?.enabled).toBe(true);
     expect(out.series.arc.tickingClock?.label).toBe('The dam breaks');
+  });
+
+  it.each([false, true])('repairs one countdown reminder by ID and rejects multiple isolated edits (extra=%s)', async (extra) => {
+    const s = await setupSeries();
+    await seriesSvc.updateSeries(s.id, {
+      arc: { logline: 'L', tickingClock: {
+        enabled: true, label: 'The dam breaks', kind: 'deadline', stakes: 'town floods',
+        plantedAtArcPosition: 2, dueAtArcPosition: 10,
+        reminders: [{ id: 'rm-first', atIssue: 3, note: '72 hours' }, { id: 'rm-last', atIssue: 9, note: '1 hour' }],
+      } },
+    });
+    const before = (await seriesSvc.getSeries(s.id)).arc.tickingClock;
+    stageRunnerSpy = vi.fn(async () => ({
+      content: { patchMode: 'exact-text-v1', arc: { resolves: ['f1'], tickingClock: {
+        enabled: false, reminders: [
+          { id: before.reminders[0].id, atIssue: 6, note: '72 hours; matching stops' },
+          { id: 'rm-unmatched', atIssue: 7, note: 'Do not mint this row' },
+          ...(extra ? [{ id: before.reminders[1].id, atIssue: 8 }] : []),
+        ],
+      } } },
+      runId: 'r-clock', providerId: 'p', model: 'm',
+    }));
+    const out = await planner.resolveVerifyIssues(s.id, {
+      spineOnly: true, isolated: true,
+      findings: [{ severity: 'medium', problem: 'The first reminder precedes the countdown start' }],
+    });
+    const ctx = stageRunnerSpy.mock.calls[0][1];
+    expect(JSON.parse(ctx.tickingClockJson)).toEqual(before);
+    const after = (await seriesSvc.getSeries(s.id)).arc.tickingClock;
+    if (extra) {
+      expect(out).toMatchObject({ applied: false, noChangeReason: 'isolated-candidate-rejected' });
+      expect(after).toEqual(before);
+    } else {
+      expect(out.applied).toBe(true);
+      expect(out.mutations.arcFieldsEdited).toBe(1);
+      expect(after).toEqual({ ...before, reminders: [{ ...before.reminders[0], atIssue: 6, note: '72 hours; matching stops' }, before.reminders[1]] });
+    }
+  });
+
+  it('preserves a disabled countdown when a model patch would erase its last identifying field', async () => {
+    const s = await setupSeries();
+    await seriesSvc.updateSeries(s.id, { arc: { logline: 'L', tickingClock: { enabled: false, label: 'The dam breaks' } } });
+    stageRunnerSpy = vi.fn(async () => ({
+      content: { arc: { resolves: ['f1'], tickingClock: { label: '' } } },
+      runId: 'r-clock', providerId: 'p', model: 'm',
+    }));
+    const out = await planner.resolveVerifyIssues(s.id, {
+      findings: [{ severity: 'medium', problem: 'Clarify the deadline' }],
+    });
+    expect(out.applied).toBe(false);
+    expect((await seriesSvc.getSeries(s.id)).arc.tickingClock.label).toBe('The dam breaks');
   });
 
   it('applies episode-synopsis corrections the resolve LLM returns (heals episode-level findings)', async () => {
