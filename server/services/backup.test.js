@@ -1132,6 +1132,142 @@ describe('generateManifest', () => {
   });
 });
 
+describe('restoreSnapshot manifest verification', () => {
+  let tmpRoot;
+  let snapshotDir;
+  let snapshotDataDir;
+  let realFs;
+
+  beforeEach(async () => {
+    vi.restoreAllMocks();
+    vi.clearAllMocks();
+    realFs = await vi.importActual('fs/promises');
+    fs.stat.mockImplementation(realFs.stat);
+    fs.readFile.mockImplementation(realFs.readFile);
+    fs.access.mockImplementation(realFs.access);
+    spawn.mockReset();
+    tmpRoot = await realFs.mkdtemp(joinPath(tmpdir(), 'portos-restore-integrity-'));
+    snapshotDir = joinPath(tmpRoot, 'snapshots', machineHost, 'snap-1');
+    snapshotDataDir = joinPath(snapshotDir, 'data');
+    await realFs.mkdir(snapshotDataDir, { recursive: true });
+  });
+
+  afterEach(async () => {
+    await realFs?.rm(tmpRoot, { recursive: true, force: true });
+    await realFs?.rm(joinPath(PATHS.data, 'restore-integrity'), { recursive: true, force: true });
+  });
+
+  async function writeSnapshotFile(relativePath, content) {
+    const path = joinPath(snapshotDataDir, relativePath);
+    await realFs.mkdir(joinPath(path, '..'), { recursive: true });
+    await realFs.writeFile(path, content);
+    return createHash('sha256').update(Buffer.from(content)).digest('hex');
+  }
+
+  async function writeManifest(files) {
+    await realFs.writeFile(joinPath(snapshotDir, 'manifest.json'), JSON.stringify({
+      generatedAt: '2026-09-12T00:00:00.000Z',
+      fileCount: Object.keys(files).length,
+      files,
+    }));
+  }
+
+  async function finishRestore(options = {}) {
+    const proc = fakeProc();
+    spawn.mockReturnValueOnce(proc);
+    const pending = restoreSnapshot(tmpRoot, 'snap-1', options);
+    await vi.waitFor(() => expect(spawn).toHaveBeenCalled());
+    proc.emit('close', 0);
+    return pending;
+  }
+
+  it('rechecks snapshot bytes on execution and refuses a post-preview change before rsync', async () => {
+    const relativePath = 'restore-integrity/example.json';
+    const originalHash = await writeSnapshotFile(relativePath, 'trusted backup');
+    await writeManifest({ [relativePath]: originalHash });
+    const livePath = joinPath(PATHS.data, relativePath);
+    await realFs.mkdir(joinPath(livePath, '..'), { recursive: true });
+    await realFs.writeFile(livePath, 'healthy live data');
+
+    await expect(finishRestore({ dryRun: true })).resolves.toMatchObject({
+      verification: { status: 'verified', checkedFiles: 1 },
+    });
+
+    await realFs.writeFile(joinPath(snapshotDataDir, relativePath), 'changed after preview');
+    spawn.mockReset();
+    await expect(restoreSnapshot(tmpRoot, 'snap-1', { dryRun: false }))
+      .rejects.toMatchObject({ code: 'BACKUP_FILE_INTEGRITY_FAILED' });
+    expect(spawn).not.toHaveBeenCalled();
+    expect(await realFs.readFile(livePath, 'utf8')).toBe('healthy live data');
+  });
+
+  it.each([
+    ['missing', async (path) => realFs.unlink(path)],
+    ['unreadable', async (path) => {
+      fs.readFile.mockImplementation(async (candidate, ...args) => {
+        if (String(candidate) === path) throw Object.assign(new Error('unreadable'), { code: 'EACCES' });
+        return realFs.readFile(candidate, ...args);
+      });
+    }],
+  ])('refuses a %s selected file before rsync', async (_case, breakFile) => {
+    const relativePath = 'brain/example.json';
+    const filePath = joinPath(snapshotDataDir, relativePath);
+    const hash = await writeSnapshotFile(relativePath, 'snapshot data');
+    await writeManifest({ [relativePath]: hash });
+    await breakFile(filePath);
+
+    await expect(restoreSnapshot(tmpRoot, 'snap-1', { subdirFilter: 'brain' }))
+      .rejects.toMatchObject({ code: 'BACKUP_FILE_INTEGRITY_FAILED' });
+    expect(spawn).not.toHaveBeenCalled();
+  });
+
+  it('validates the whole manifest but hashes only the literal selective scope', async () => {
+    const brainHash = await writeSnapshotFile('brain/example.json', 'brain');
+    await writeSnapshotFile('media/example.json', 'media');
+    await writeManifest({
+      'brain/example.json': brainHash,
+      'media/example.json': '0'.repeat(64),
+      '../portos-db.sql': '1'.repeat(64),
+    });
+
+    await expect(finishRestore({ dryRun: true, subdirFilter: 'brain' })).resolves.toMatchObject({
+      verification: { status: 'verified', checkedFiles: 1 },
+    });
+  });
+
+  it.each([
+    ['malformed JSON', '{"files":'],
+    ['a null root', 'null'],
+    ['an invalid shape', JSON.stringify({ fileCount: 1, files: [] })],
+    ['an unsafe data path', JSON.stringify({ fileCount: 1, files: { '../outside.json': '0'.repeat(64) } })],
+  ])('fails closed when an existing manifest has %s', async (_case, manifestBytes) => {
+    await realFs.writeFile(joinPath(snapshotDir, 'manifest.json'), manifestBytes);
+
+    await expect(restoreSnapshot(tmpRoot, 'snap-1'))
+      .rejects.toMatchObject({ code: expect.stringMatching(/^BACKUP_MANIFEST_(UNREADABLE|INVALID)$/) });
+    expect(spawn).not.toHaveBeenCalled();
+  });
+
+  it('keeps legacy snapshots explicit and preserves manifest-compatible symlinks', async () => {
+    await expect(finishRestore({ dryRun: true })).resolves.toMatchObject({
+      verification: { status: 'unverified', reason: 'manifest_absent', checkedFiles: 0 },
+    });
+
+    const targetHash = await writeSnapshotFile('example.txt', 'example');
+    await realFs.symlink('example.txt', joinPath(snapshotDataDir, 'readable-link'));
+    await realFs.symlink('missing.txt', joinPath(snapshotDataDir, 'dangling-link'));
+    await writeManifest({
+      'example.txt': targetHash,
+      'readable-link': targetHash,
+    });
+    spawn.mockReset();
+
+    await expect(finishRestore({ dryRun: true })).resolves.toMatchObject({
+      verification: { status: 'verified', checkedFiles: 2 },
+    });
+  });
+});
+
 // restoreSnapshot's service-side subdirFilter guard (issue #1822). These reject
 // BEFORE runRsync/spawn is reached, so no fake child process is needed — an
 // invalid filter must never make it into an `--include=` rsync arg.
