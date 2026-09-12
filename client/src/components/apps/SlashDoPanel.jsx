@@ -4,6 +4,9 @@ import { Terminal, Loader2 } from 'lucide-react';
 import toast from '../ui/Toast';
 import { NON_PM2_TYPES } from './constants';
 import { slashdoLabel, slashdoWorkflowsForApp } from '../../lib/slashdoCatalog';
+import ProviderModelSelector from '../ProviderModelSelector';
+import useProviderModels from '../../hooks/useProviderModels';
+import { enabledProcessProviderFilter } from '../../utils/providers';
 import SlashDoRunDrawer from './SlashDoRunDrawer';
 import * as api from '../../services/api';
 
@@ -14,6 +17,9 @@ import * as api from '../../services/api';
 
 export default function SlashDoPanel({ appId, appName, appType }) {
   const [loading, setLoading] = useState(null);
+  const picker = useProviderModels({ filter: enabledProcessProviderFilter, allowDefault: true, silent: true, withEffort: true });
+  const [effort, setEffort] = useState('');
+  const agentPicker = { ...picker, effort, setEffort };
   // A `configurable` command opens a pre-flight drawer instead of firing
   // immediately: the run's provider / model / effort / reviewer / simplify
   // settings, plus (for `/do:next`) which work item to claim. Holds the whole
@@ -37,7 +43,11 @@ export default function SlashDoPanel({ appId, appName, appType }) {
     }
     const label = slashdoLabel(command.command);
     setLoading(command.command);
-    const result = await api.createSlashdoTask(command.command, appId, {}, { silent: true }).catch(err => {
+    const result = await api.createSlashdoTask(command.command, appId, {
+      provider: picker.selectedProviderId || undefined,
+      model: picker.selectedModel || undefined,
+      effort: effort || undefined
+    }, { silent: true }).catch(err => {
       toast.error(err.message || `Failed to queue ${label}`);
       return null;
     });
@@ -48,6 +58,24 @@ export default function SlashDoPanel({ appId, appName, appType }) {
   return (
     <div>
       <div className="text-xs text-gray-500 uppercase tracking-wide mb-2">Agent Operations</div>
+      <div className="mb-3 max-w-3xl">
+        <ProviderModelSelector
+          providers={picker.providers}
+          selectedProviderId={picker.selectedProviderId}
+          selectedModel={picker.selectedModel}
+          availableModels={picker.availableModels}
+          onProviderChange={id => { picker.setSelectedProviderId(id); setEffort(''); }}
+          onModelChange={picker.setSelectedModel}
+          effort={effort}
+          onEffortChange={setEffort}
+          loading={picker.loading}
+          disabled={!!loading}
+          emptyProviderOption="Auto (default)"
+          emptyModelOption="Default model"
+          highlightToolUse
+        />
+        <p className="mt-1 text-xs text-gray-500">Overrides apply to all actions below for this session.</p>
+      </div>
       <div className="flex flex-wrap gap-2">
         {commands.map(cmd => (
           <button
@@ -62,8 +90,7 @@ export default function SlashDoPanel({ appId, appName, appType }) {
           </button>
         ))}
       </div>
-      {/* Mounted only while open — the drawer fetches providers on mount, and
-          unmounting is what resets the form between runs. */}
+      {/* Task settings reset between runs; agent overrides stay in the panel. */}
       {drawerCommand && (
         <SlashDoRunDrawer
           open
@@ -71,6 +98,7 @@ export default function SlashDoPanel({ appId, appName, appType }) {
           label={slashdoLabel(drawerCommand.command)}
           appId={appId}
           appName={appName}
+          agentPicker={agentPicker}
           onClose={() => setDrawerCommand(null)}
           onQueued={() => {
             const label = slashdoLabel(drawerCommand.command);
