@@ -59,6 +59,24 @@ export const TimelineBlock = memo(function TimelineBlock({
     width: `${Math.max(60, dur * pxPerSec)}px`,
     opacity: isDragging ? 0.4 : 1,
   };
+  // This block is both the drag handle and the click-to-select target, and
+  // dnd-kit's keyboard activator lives on `listeners.onKeyDown` — so the
+  // `clickableProps` spread that used to sit here REPLACED that activator and
+  // left the block announcing itself as draggable with no working pickup
+  // (#7243). Split the keys instead: Enter selects, Space and the arrows that
+  // follow it belong to dnd-kit. The `currentTarget` guard is the one
+  // `clickableProps` carries, so Enter on the inner Remove button still removes.
+  // `role`/`tabIndex` below repeat what `attributes` already sets, so the
+  // clickable-element guard reads the triple off the tag.
+  const handleKeyDown = (event) => {
+    if (event.currentTarget != null && event.target !== event.currentTarget) return;
+    if (event.key !== 'Enter') {
+      listeners?.onKeyDown?.(event);
+      return;
+    }
+    event.preventDefault();
+    onSelect(clip._key);
+  };
   return (
     <div
       ref={setNodeRef}
@@ -73,7 +91,9 @@ export const TimelineBlock = memo(function TimelineBlock({
       onClick={() => onSelect(clip._key)}
       {...attributes}
       {...listeners}
-      {...clickableProps(() => onSelect(clip._key))}
+      role="button"
+      tabIndex={0}
+      onKeyDown={handleKeyDown}
     >
       {thumbSrc && (
         <img src={thumbSrc} alt="" draggable={false} className="w-full h-full object-cover rounded-md opacity-80" />

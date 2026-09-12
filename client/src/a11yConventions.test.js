@@ -35,6 +35,11 @@
  *   7. An icon-only `<button>` sized to its bare icon (`p-1` around a
  *      12-14px glyph = a 22px target) instead of the 44px floor the rest of
  *      the app enforces.
+ *   8. A `DndContext` whose sensor list has no `KeyboardSensor`. dnd-kit's
+ *      `attributes` make every drag handle a tab stop that announces itself as
+ *      draggable and points at "press the space bar to pick up" instructions,
+ *      so a pointer-only sensor list actively instructs the user to use an
+ *      interaction nothing is listening for.
  *
  * Scoped to git-tracked `.jsx` under `client/src` so an untracked scratch file
  * can't fail the suite.
@@ -45,6 +50,7 @@ import { readFileSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { trackedJsxFiles as trackedJsx, trackedSourceFiles as trackedSources } from './test/trackedFiles.js';
+import { escapeRegExp } from './lib/textUtils.js';
 
 const CLIENT_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -3322,5 +3328,85 @@ describe('a11y conventions', () => {
     const offenders = [];
     for (const file of scanned) offenders.push(...offendersIn(file, rawSourceOf(file)));
     expect(offenders, `Icon-only <button> under the 44px touch-target minimum — add min-h-[44px] min-w-[44px] inline-flex items-center justify-center and leave the icon size alone:\n${offenders.join("\n")}`).toEqual([]);
+  });
+
+  it('registers a KeyboardSensor in every DndContext (#7243)', () => {
+    // `useDraggable`/`useSortable` return `attributes` that UNCONDITIONALLY
+    // carry role="button", tabIndex={0}, aria-roledescription="draggable" and
+    // an aria-describedby pointing at dnd-kit's own "press the space bar to
+    // pick up" instruction text. So a DndContext registered with PointerSensor
+    // alone is worse than a missing feature: every handle is a tab stop that
+    // tells the user to press a key nothing is listening for.
+    //
+    // #6911 fixed KanbanBoard and three siblings kept the defect, because
+    // nothing asked the question tree-wide. This is that question. It is
+    // file-local on purpose — every DndContext in this tree builds its sensors
+    // in the same module — so a future call site that imports its sensors from
+    // elsewhere should extend the rule rather than be quietly exempted.
+    //
+    // Which getter to pass is the surface's call: a SortableContext wants
+    // @dnd-kit/sortable's `sortableKeyboardCoordinates`, free `useDroppable`
+    // zones want `createFreeDroppableKeyboardCoordinates` from
+    // lib/dndKeyboardCoordinates.js, and a board with its own geometry writes
+    // one (KanbanBoard.jsx's `kanbanKeyboardCoordinates`).
+    const namedImportsFrom = (src, moduleId) => {
+      const re = new RegExp(`import\\s*(?:[\\w$]+\\s*,\\s*)?\\{([^}]*)\\}\\s*from\\s*['"]${escapeRegExp(moduleId)}['"]`, 'g');
+      const bindings = new Map();
+      let m;
+      while ((m = re.exec(src))) {
+        for (const part of m[1].split(',')) {
+          const [imported, local] = part.trim().split(/\s+as\s+/).map((s) => s.trim());
+          if (imported) bindings.set(imported, local || imported);
+        }
+      }
+      return bindings;
+    };
+
+    // Read off the import clause and the call expression, never off raw text:
+    // a quoted `"useSensor(KeyboardSensor)"` in a title or a className must not
+    // be able to forge the exemption.
+    const offendersIn = (file, src) => {
+      const core = namedImportsFrom(src, '@dnd-kit/core');
+      const contextLocal = core.get('DndContext');
+      if (!contextLocal) return [];
+      const sensorLocal = core.get('KeyboardSensor');
+      const useSensorLocal = core.get('useSensor');
+      if (sensorLocal && useSensorLocal
+        && new RegExp(`\\b${useSensorLocal}\\s*\\(\\s*${sensorLocal}\\b`).test(src)) return [];
+      const index = src.indexOf(`<${contextLocal}`);
+      return [`${file}:${lineOf(src, Math.max(index, 0))}`];
+    };
+
+    // Probe first — the tree is green, so nothing in it pins what the matcher
+    // rejects, and a silent change of shape would turn the rule vacuous.
+    const probe = (src) => offendersIn('probe.jsx', src);
+    const IMPORT_BOTH = "import { DndContext, KeyboardSensor, PointerSensor, useSensor, useSensors } from '@dnd-kit/core';";
+    const IMPORT_POINTER = "import { DndContext, PointerSensor, useSensor, useSensors } from '@dnd-kit/core';";
+    expect(probe(`${IMPORT_POINTER}\nconst s = useSensor(PointerSensor);\n<DndContext sensors={s} />`)).toEqual(['probe.jsx:3']);
+    expect(probe(`${IMPORT_BOTH}\nconst s = useSensors(useSensor(PointerSensor), useSensor(KeyboardSensor, { coordinateGetter }));\n<DndContext sensors={s} />`)).toEqual([]);
+    // An aliased import is the same registration under another name…
+    expect(probe("import { DndContext as Dnd, KeyboardSensor as KS, useSensor as sensor } from '@dnd-kit/core';\nconst s = sensor(KS, {});\n<Dnd sensors={s} />")).toEqual([]);
+    // …and importing the symbol without ever registering it is not.
+    expect(probe(`${IMPORT_BOTH}\nconst s = useSensor(PointerSensor);\n<DndContext sensors={s} />`)).toEqual(['probe.jsx:3']);
+    // Neither is a quoted mention, nor one from some other module.
+    expect(probe(`${IMPORT_POINTER}\n<DndContext title="useSensor(KeyboardSensor)" />`)).toEqual(['probe.jsx:2']);
+    expect(probe(`${IMPORT_POINTER}\nimport { KeyboardSensor, useSensor } from './fake';\nconst s = useSensor(KeyboardSensor);\n<DndContext sensors={s} />`)).toEqual(['probe.jsx:4']);
+    // A file that never mounts a DndContext is out of the rule's remit, even
+    // when it uses dnd-kit for something else.
+    expect(probe("import { useDraggable } from '@dnd-kit/core';\nconst d = useDraggable({ id });")).toEqual([]);
+
+    // `maskComments` is the most expensive routine in this file, so mask only
+    // the handful of files that mention dnd-kit at all — the raw substring is a
+    // superset of "imports DndContext", and a commented-out import is still
+    // rejected because the masked source is what `offendersIn` then reads.
+    const scanned = trackedSourceFiles().filter((file) => rawSourceOf(file).includes('@dnd-kit/core'));
+    const withContext = scanned.filter((file) => namedImportsFrom(maskedSourceOf(file), '@dnd-kit/core').has('DndContext'));
+    // Assert the scan really found the live call sites, so a change to the file
+    // walker can't turn this into a pass over zero DndContexts.
+    expect(withContext.length, 'no client source mounts a DndContext — has trackedSourceFiles() changed its path shape?').toBeGreaterThanOrEqual(7);
+
+    const offenders = [];
+    for (const file of withContext) offenders.push(...offendersIn(file, maskedSourceOf(file)));
+    expect(offenders, `DndContext registered without a KeyboardSensor — every dnd-kit handle already announces itself as draggable and tells the user to press Space, so a pointer-only sensor list is a WCAG 2.1.1 failure. Add useSensor(KeyboardSensor, { coordinateGetter }) (sortableKeyboardCoordinates for a SortableContext, createFreeDroppableKeyboardCoordinates from lib/dndKeyboardCoordinates.js for free droppables):\n${offenders.join('\n')}`).toEqual([]);
   });
 });
