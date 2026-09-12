@@ -32,7 +32,7 @@ Before removing a Tier 3 candidate, run a transitive-dep check (`npm ls <pkg>`).
 | `chokidar` | 1 | KEEP | server file watching | Mature cross-platform file-system watcher used by server services |
 | `express` | 1 | KEEP | `server/index.js` + routes | Framework |
 | `google-auth-library` | 1 | KEEP | Google OAuth | Pairs with `@googleapis/*` |
-| `kokoro-js` | 2 | KEEP | `server/services/voice/tts-kokoro.js` | Only pure-JS in-process TTS; replacement = Python subprocess + pooling |
+| `kokoro-js` | 2 | REMOVED | Former in-process TTS | Replaced by the in-tree Piper backend; existing settings migrate |
 | `node-pty` | 1 | KEEP | shell/terminal services | Native PTY binding (N-API) |
 | `pg` | 1 | KEEP | Postgres access | Official `pg` driver |
 | `playwright-core` | 1 | KEEP | `server/services/fableLoom/falVideoAutomation.js` — fal.ai scene video automation | Drives the PortOS-managed browser over CDP (`chromium.connectOverCDP`). `-core` rather than the full `playwright` package deliberately: the browser is provisioned separately by `npm run setup:browser`, so the bundled browser download would be dead weight |
@@ -111,15 +111,13 @@ Before removing a Tier 3 candidate, run a transitive-dep check (`npm ls <pkg>`).
 - **Regression cover**: `client/src/pages/ApiExplorer.bundle.test.js` asserts the client manifest no longer declares `@scalar/api-reference-react`, and after `npm run build --prefix client` asserts no Scalar/Vue-named chunks remain in `client/dist/assets`. The chunk assertion skips when `dist/` is absent; CI runs it as its own step right after the client build.
 - **Re-audit trigger**: none — do not reintroduce Scalar or another OpenAPI SPA (rapidoc, Stoplight Elements) without a new depfree issue. The native list plus the raw JSON links is the reference UI.
 
-### `kokoro-js` — KEEP (Tier 2)
+### `kokoro-js` — REMOVED 2026-09-11
 
-- **Usage**: 1 dynamic import in `server/services/voice/tts-kokoro.js` (~80 LOC module). 3 call sites: `KokoroTTS.from_pretrained()`, `tts.generate(text, {voice, speed})`, `audio.toWav()`.
-- **Maintenance**: pinned at `1.2.1` (latest; published 2025-05-03). **Maintenance watch** — no publish since ~May 2025, so the package is effectively stale even at latest. This is not disqualifying today (small, pure-JS, no CVEs), but re-evaluate on the trigger below.
-- **Vulns**: None (npm audit clean).
-- **Replacement complexity**: Moderate (~50–80 LOC) but requires Python subprocess + JSON IPC + process pooling + lifecycle management. Operational overhead exceeds the supply-chain risk.
-- **Decision**: KEEP (on maintenance watch). The only pure-JS in-process TTS option; Web Speech API is cloud-dependent and Piper requires CLI install.
-- **Re-audit trigger**: the >12-months-stale trigger already fired and was actioned by this audit (bumped to latest, put on watch). Re-evaluate on any of: a CVE reported, the model-load path breaking against a newer Transformers.js, or the package still showing no upstream publish at the next dependency audit — then revisit and migrate (see escape hatch below).
-- **Piper escape hatch (if dropped later)**: Piper is **already implemented** as a peer backend — `server/services/voice/tts-piper.js` (`synthesizePiper(text, cfg, signal) → { wav, latencyMs }`, plus `listPiperVoices`), which `server/services/voice/tts.js` already dispatches to alongside `synthesizeKokoro`. Both backends share the same `(text, cfg, signal) → { wav, latencyMs }` contract, so dropping `kokoro-js` is a delete, not a rewrite: remove the `kokoro` branch (and the `tts-kokoro.js` module + its `kokoro-js` dependency) from the dispatcher in `tts.js` and let Piper be the default engine. The tradeoff Piper carries — and the reason it isn't the default today — is a native `piper` binary + ONNX voice download (vs. `kokoro-js`'s npm-only, in-process install).
+- **Decision**: retire the in-process backend in favor of the existing Piper CLI backend (#7011).
+- **Dependencies**: removed kokoro-js and its exclusive tar/protobufjs overrides. Sharp remains a direct dependency used by image processing.
+- **Upgrade**: migration 376 switches saved Kokoro settings to Piper, preserving the old settings and any customized Piper voice. Reads and saves also normalize restored legacy settings. Settings → Voice explains the change; choose a voice and use **Save & Reconcile** to install the binary/model. No models download during migration.
+- **Character profiles**: historical Kokoro profiles and audio remain intact. Synthesis reports an actionable retirement error; select/promote a Piper preset to replace the binding rather than silently changing a character's voice.
+
 
 ### `eslint` (and the `keyv` / `flat-cache` / `file-entry-cache` chain) — REMOVED 2026-08-04
 

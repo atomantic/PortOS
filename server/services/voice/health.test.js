@@ -21,7 +21,6 @@ vi.mock('./config.js', () => ({
   voiceHome: mocks.voiceHome,
   PIPER_BIN_NAME: 'piper.exe',
 }));
-vi.mock('./tts-kokoro.js', () => ({ readyState: mocks.readyState }));
 vi.mock('./bootstrap.js', () => ({ which: mocks.which }));
 vi.mock('./llm.js', () => ({ resolveLlmEndpoint: mocks.resolveLlmEndpoint, authHeaders: mocks.authHeaders }));
 vi.mock('../../lib/fetchWithTimeout.js', () => ({ fetchWithTimeout: mocks.fetchWithTimeout }));

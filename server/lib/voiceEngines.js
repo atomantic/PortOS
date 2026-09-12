@@ -1,17 +1,6 @@
 // Shared TTS engine metadata. The registry is returned by /api/voice/engines so
 // clients can render and update engines without copying IDs or config keys.
 export const TTS_ENGINE_REGISTRY = Object.freeze({
-  kokoro: Object.freeze({
-    configKey: 'kokoro',
-    label: 'Kokoro',
-    description: 'In-process, high quality',
-    voiceHint: 'Grade letter = Kokoro author\'s quality rating. ❤️ 🔥 🎧 mark the best-sounding voices. Click ▶ to preview without saving.',
-    capabilities: {
-      preset: true, voiceDesign: false, instantClone: false, fineTune: false,
-      streaming: false, instructionControl: false, emotionControl: false,
-      seed: false, wordTimings: false, rate: true, pitch: false, formant: false,
-    },
-  }),
   piper: Object.freeze({
     configKey: 'piper',
     label: 'Piper',
@@ -43,3 +32,8 @@ export const TTS_ENGINE_CONFIG_KEYS = Object.freeze(Object.fromEntries(
 
 export const TTS_ENGINE_IDS = Object.freeze(Object.keys(TTS_ENGINE_REGISTRY));
 export const VALID_ENGINES = new Set(TTS_ENGINE_IDS);
+
+// Keep retired settings readable when an older client saves or a backup is restored.
+export const migrateRetiredTtsConfig = (tts) => tts?.engine === 'kokoro'
+  ? { ...tts, engine: 'piper', retiredEngine: 'kokoro' }
+  : tts;

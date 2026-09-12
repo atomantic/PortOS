@@ -358,7 +358,7 @@ export default function MemoryManagement({ onLoadedModelsChange } = {}) {
               danger
             />
           )}
-          {ttsState.state !== 'lazy' && (
+          {!ttsState.retired && ttsState.state !== 'lazy' && (
             <Row
               icon={Volume2}
               title="Kokoro TTS"

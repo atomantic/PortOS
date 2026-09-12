@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
-import { buildToolResource, TOOL_RESOURCE_TYPE } from './apiToolResource.js';
-import { API_OPERATION_CONTRACTS } from './apiOperationContracts.js';
-import { ERROR_CODES_BY_STATUS } from './errorHandler.js';
+const { buildToolResource, TOOL_RESOURCE_TYPE } = await import('./apiToolResource.js');
+const { API_OPERATION_CONTRACTS } = await import('./apiOperationContracts.js');
+const { ERROR_CODES_BY_STATUS } = await import('./errorHandler.js');
 
 const resource = buildToolResource({ version: '9.9.9' });
 const byName = (name) => resource.tools.find((tool) => tool.name === name);
@@ -52,7 +52,7 @@ describe('buildToolResource', () => {
   it('flattens an object request body into the argument schema and keeps property descriptions', () => {
     const input = byName('voice.synthesize').input_schema;
     expect(input.required).toEqual(['text']);
-    expect(input.properties.engine.enum).toEqual(['kokoro', 'piper', 'qwen3-tts']);
+    expect(input.properties.engine.enum).toEqual(['piper', 'qwen3-tts']);
     // The description is what lets a model pick a valid rate — minimization must not strip it.
     expect(input.properties.rate.description).toMatch(/Speech rate/);
     expect(input.additionalProperties).toBe(false);
@@ -60,7 +60,7 @@ describe('buildToolResource', () => {
 
   it('turns query parameters into input properties', () => {
     const input = byName('voice.list-voices').input_schema;
-    expect(input.properties.engine).toEqual({ type: 'string', enum: ['kokoro', 'piper', 'qwen3-tts'] });
+    expect(input.properties.engine).toEqual({ type: 'string', enum: ['piper', 'qwen3-tts'] });
     expect(input.required).toBeUndefined(); // the engine param is optional
   });
 

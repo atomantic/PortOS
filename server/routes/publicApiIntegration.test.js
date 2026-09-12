@@ -12,9 +12,9 @@ import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { writeFileSync } from 'fs';
 import { join } from 'path';
 import express from 'express';
-import { request } from '../lib/testHelper.js';
-import { mockPathsDataRoot } from '../lib/mockPathsDataRoot.js';
-import { bindSettingsFile } from '../lib/settingsTestUtil.js';
+const { request } = await import('../lib/testHelper.js');
+const { mockPathsDataRoot } = await import('../lib/mockPathsDataRoot.js');
+const { bindSettingsFile } = await import('../lib/settingsTestUtil.js');
 
 const { tempRoot, makeProxy, cleanup } = mockPathsDataRoot({ prefix: 'portos-publicapi-' });
 
@@ -24,14 +24,7 @@ vi.mock('../lib/fileUtils.js', async () => {
 });
 
 // Mock only the TTS engine backends so synthesize()/listVoices() don't load
-// Kokoro/Piper. The dispatcher (tts.js), config, and routes are all real.
-vi.mock('../services/voice/tts-kokoro.js', () => ({
-  synthesizeKokoro: vi.fn(async () => ({ wav: Buffer.from('RIFFkokoro'), latencyMs: 5 })),
-  listKokoroVoices: vi.fn(async () => [{ name: 'af_heart' }]),
-  readyState: vi.fn(() => 'lazy'),
-  unloadKokoro: vi.fn(() => ({ unloaded: false })),
-  loadedModelKey: vi.fn(() => null),
-}));
+// Piper. The dispatcher (tts.js), config, and routes are all real.
 vi.mock('../services/voice/tts-piper.js', () => ({
   synthesizePiper: vi.fn(async () => ({ wav: Buffer.from('RIFFpiper'), latencyMs: 7 })),
   listPiperVoices: vi.fn(async () => [{ name: 'en_GB-jenny_dioco-medium' }]),
@@ -80,23 +73,22 @@ describe('public voice API — end-to-end through authGate', () => {
     expect(res.headers['content-type']).toMatch(/audio\/wav/);
   });
 
-  it('400 UNKNOWN_VOICE for an unknown Kokoro voice override', async () => {
-    // synthesize() validates Kokoro voices against the catalog (symmetric with
-    // Piper) so a bogus id returns the documented 400 instead of erroring in
-    // the model. tts.js + kokoro-voices.js are real here; only the backend is mocked.
+  it('400 UNKNOWN_VOICE for an unknown Piper voice override', async () => {
+    // The real dispatcher validates against the Piper catalog before synthesis;
+    // only the backend is mocked.
     const app = await buildApp();
     const res = await request(app)
       .post('/api/voice/public/synthesize')
-      .send({ text: 'hi', engine: 'kokoro', voice: 'not_a_real_voice' });
+      .send({ text: 'hi', engine: 'piper', voice: 'not_a_real_voice' });
     expect(res.status).toBe(400);
     expect(res.body.code).toBe('UNKNOWN_VOICE');
   });
 
-  it('accepts a valid Kokoro voice override', async () => {
+  it('accepts a valid Piper voice override', async () => {
     const app = await buildApp();
     const res = await request(app)
       .post('/api/voice/public/synthesize')
-      .send({ text: 'hi', engine: 'kokoro', voice: 'af_heart' });
+      .send({ text: 'hi', engine: 'piper', voice: 'en_GB-jenny_dioco-medium' });
     expect(res.status).toBe(200);
   });
 
