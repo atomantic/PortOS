@@ -137,9 +137,11 @@ export default function EditAppDrawer({ app, onClose, onSave }) {
   }, []);
 
   useEffect(() => {
+    let cancelled = false;
     api.getAppWorkTracker(app.id)
-      .then(setWorkTrackerInfo)
-      .catch(() => setWorkTrackerInfo(null));
+      .then(info => { if (!cancelled) setWorkTrackerInfo(info); })
+      .catch(() => { if (!cancelled) setWorkTrackerInfo(null); });
+    return () => { cancelled = true; };
   }, [app.id]);
 
   // Load the app's effective Layered Intelligence config + the CLI provider list

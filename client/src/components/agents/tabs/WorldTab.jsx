@@ -143,14 +143,17 @@ export default function WorldTab({ agentId }) {
 
   // Auto-resolve the moltworld account for this agent
   useEffect(() => {
+    let live = true;
     api.getPlatformAccounts(agentId, 'moltworld').then(data => {
+      if (!live) return;
       const active = data.filter(a => a.status === 'active');
       if (active.length > 0) {
         setAccountId(active[0].id);
         setAccountName(active[0].credentials?.username || '');
       }
       setLoading(false);
-    }).catch(() => setLoading(false));
+    }).catch(() => { if (live) setLoading(false); });
+    return () => { live = false; };
   }, [agentId]);
 
   const fetchStatus = useCallback(async () => {

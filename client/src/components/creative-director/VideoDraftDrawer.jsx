@@ -27,7 +27,8 @@ export default function VideoDraftDrawer({ open, onClose, project, onSaved, cata
   const [sourceQuery, setSourceQuery] = useState('');
   const [saving, setSaving] = useState(false);
   useEffect(() => {
-    if (!open) return;
+    if (!open) return undefined;
+    let active = true;
     setSourceId('');
     setSourceQuery('');
     const draft = project?.videoDraft;
@@ -37,11 +38,12 @@ export default function VideoDraftDrawer({ open, onClose, project, onSaved, cata
       min: draft?.durationRange?.min || 30, max: draft?.durationRange?.max || 60,
       reviewPolicy: draft?.reviewPolicy || 'review', transition: draft?.transition || 'cut', audioMode: draft?.audio?.mode || 'native', trackId: draft?.audio?.trackId || '', audioPrompt: draft?.audio?.prompt || '', audioProvider: draft?.audio?.providerId || '', audioModel: draft?.audio?.model || '',
       sources: draft?.sources || catalogIngredientIds.map(id => ({ kind: 'catalog', id })) });
-    listTracks({ silent: true }).then(data => setTracks(Array.isArray(data) ? data : data?.tracks || [])).catch(() => {});
-    listMusicEngines({ silent: true }).then(data => setEngines(data?.engines || [])).catch(() => {});
+    listTracks({ silent: true }).then(data => { if (active) setTracks(Array.isArray(data) ? data : data?.tracks || []); }).catch(() => {});
+    listMusicEngines({ silent: true }).then(data => { if (active) setEngines(data?.engines || []); }).catch(() => {});
     const rows = data => Array.isArray(data) ? data : data?.items || data?.series || data?.universes || [];
-    Promise.all([listUniverseNames({ silent: true }), listPipelineSeriesNames({ silent: true }), listCatalogIngredients({ limit: 100, silent: true })]).then(([u, s, c]) => setSourceOptions({ universe: rows(u), series: rows(s), catalog: rows(c) })).catch(() => toast.error('Unable to load source choices. Close and reopen to retry.'));
-    listVideoModels({ silent: true }).then(m => setModels(m || [])).catch(() => {});
+    Promise.all([listUniverseNames({ silent: true }), listPipelineSeriesNames({ silent: true }), listCatalogIngredients({ limit: 100, silent: true })]).then(([u, s, c]) => { if (active) setSourceOptions({ universe: rows(u), series: rows(s), catalog: rows(c) }); }).catch(() => { if (active) toast.error('Unable to load source choices. Close and reopen to retry.'); });
+    listVideoModels({ silent: true }).then(m => { if (active) setModels(m || []); }).catch(() => {});
+    return () => { active = false; };
   }, [open, project?.id]);
   const change = (key, value) => setForm(prev => ({ ...prev, [key]: value }));
   const input = (key, label, options = {}) => <label htmlFor={`video-draft-${key}`} className="block text-sm">{label}<input id={`video-draft-${key}`} className={fieldClass} value={form[key] ?? ''} onChange={e => change(key, e.target.value)} {...options} /></label>;

@@ -57,10 +57,12 @@ export default function LiveSampleGallery({ run, frames, progress, message }) {
 
   // One-shot seed of every sample persisted so far (survives a mid-run reload).
   useEffect(() => {
-    if (!run?.id) return;
+    if (!run?.id) return undefined;
+    let active = true;
     listLoraTrainingSamples(run.id)
-      .then((res) => { if (mountedRef.current) setSeed(Array.isArray(res?.samples) ? res.samples : []); })
+      .then((res) => { if (active && mountedRef.current) setSeed(Array.isArray(res?.samples) ? res.samples : []); })
       .catch(err => console.warn('⚠️ Failed to load training samples: ' + err.message));
+    return () => { active = false; };
   }, [run?.id]);
 
   // Merge seed + live frames into a step-sorted, dedup'd sample list.

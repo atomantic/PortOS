@@ -1110,11 +1110,13 @@ function StoryBuilderDetail({ storyId, stepParam }) {
   // Load the step manifest first; gate the loading spinner on BOTH it and the
   // session so the detail view never renders with an empty step rail.
   useEffect(() => {
+    let active = true;
     setLoading(true);
     getStoryBuilderSteps({ silent: true })
-      .then((r) => setSteps(r.steps || []))
+      .then((r) => { if (active) setSteps(r.steps || []); })
       .catch(() => {})
-      .finally(reload);
+      .finally(() => { if (active) reload(); });
+    return () => { active = false; };
   }, [reload]);
 
   const stepIds = steps.map((s) => s.id);

@@ -39,6 +39,8 @@ export default function PipelineReverseOutline() {
   // panel is shareable, bookmarkable, and survives a reload.
   const [searchParams, updateParams] = useUrlParams();
   const activeRunIdRef = useRef(null);
+  // Supersession token for the outline re-read below.
+  const outlineRequestRef = useRef(0);
 
   // Load series + outline, and re-attach to an in-flight run on (re)mount.
   useEffect(() => {
@@ -70,10 +72,17 @@ export default function PipelineReverseOutline() {
   useEffect(() => {
     if (!active || !latest || !RUN_ENDED.has(latest.type)) return;
     if (activeRunIdRef.current && latest.runId && latest.runId !== activeRunIdRef.current) return;
+    // A request-generation ref, not a `let active` flag: `active` is in this
+    // effect's own dependency array, so the write below re-runs the effect
+    // immediately and a lifetime-scoped flag would be flipped by its own
+    // cleanup before the response landed. The re-run early-returns without
+    // bumping, so the in-flight request stays current and only a genuinely
+    // newer one supersedes it.
     setActive(false);
     activeRunIdRef.current = null;
     if (latest.type === 'complete') {
-      getReverseOutline(seriesId).then((o) => setOutline(o)).catch(() => {});
+      const req = ++outlineRequestRef.current;
+      getReverseOutline(seriesId).then((o) => { if (req === outlineRequestRef.current) setOutline(o); }).catch(() => {});
       if (latest.status === 'no-content') toast.warning('Nothing drafted yet — write or import a manuscript first');
       else toast.success(`Reverse outline ready — ${latest.sceneCount || 0} scenes`);
     } else if (latest.type === 'canceled') {

@@ -99,14 +99,17 @@ export default function CreativeDirector({ basePath = '/creative-director', brow
   }, []);
 
   useEffect(() => {
+    let active = true;
     fetchProjects();
     listVideoModels().then((m) => {
+      if (!active) return;
       setModels(m || []);
       // Prefer the first non-deprecated model as the default so new projects
       // don't start on a legacy backend.
       const preferred = (m || []).find((entry) => !entry.deprecated) || (m || [])[0];
       if (preferred && !form.modelId) setForm((f) => ({ ...f, modelId: preferred.id }));
     }).catch(() => {});
+    return () => { active = false; };
   }, [fetchProjects]);
 
   // Consume each remix handoff, then clear the history state so a
@@ -119,21 +122,23 @@ export default function CreativeDirector({ basePath = '/creative-director', brow
         if (!next.has('new')) next.set('new', 'video');
         navigate({ pathname: '/creative-director', search: next.toString(), hash: location.hash }, { replace: true, state: location.state });
       }
-      return;
+      return undefined;
     }
     const ids = location.state?.remix?.ingredientIds;
-    if (!Array.isArray(ids) || ids.length === 0) return;
+    if (!Array.isArray(ids) || ids.length === 0) return undefined;
     const cleanIds = ids.filter(Boolean).slice(0, 50);
-    if (cleanIds.length === 0) return;
+    if (cleanIds.length === 0) return undefined;
+    let active = true;
     setRemixIds(cleanIds);
     if (!videoDraftOpen) setShowForm(true);
     listCatalogIngredientsByIds(cleanIds, { silent: true })
-      .then((res) => setRemixIngredients(Array.isArray(res) ? res : (Array.isArray(res?.items) ? res.items : [])))
+      .then((res) => { if (active) setRemixIngredients(Array.isArray(res) ? res : (Array.isArray(res?.items) ? res.items : [])); })
       .catch(() => {});
     // Clear the handoff state so a refresh doesn't re-seed (ids already captured).
     const nextSearch = new URLSearchParams(location.search);
     if (videoDraftOpen) nextSearch.set('new', 'video');
     navigate({ pathname: location.pathname, search: nextSearch.toString(), hash: location.hash }, { replace: true, state: {} });
+    return () => { active = false; };
   }, [browseOnly, location.key]);
 
   // Drop any pending remix handoff so abandoned ingredient ids can't leak into

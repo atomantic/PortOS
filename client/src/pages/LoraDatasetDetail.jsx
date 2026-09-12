@@ -310,13 +310,16 @@ export default function LoraDatasetDetail({ recordId }) {
 
   // Pull the live canon subject once for variation-axis options + sheet link.
   useEffect(() => {
-    if (!dataset?.character?.universeId) return;
+    if (!dataset?.character?.universeId) return undefined;
+    let cancelled = false;
     getUniverse(dataset.character.universeId, { silent: true })
       .then((u) => {
+        if (cancelled) return;
         const entries = Array.isArray(u?.[subjectKind(dataset)]) ? u[subjectKind(dataset)] : [];
         setSubject(entries.find((entry) => entry.id === dataset.character.entryId) || null);
       })
       .catch(() => {});
+    return () => { cancelled = true; };
   }, [dataset?.character?.universeId, dataset?.character?.entryKind, dataset?.character?.entryId]);
 
   // Object/place variation axes (Lighting/Settings) live as server-side

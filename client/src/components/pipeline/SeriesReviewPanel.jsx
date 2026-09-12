@@ -86,6 +86,8 @@ export default function SeriesReviewPanel({ series, onSeriesUpdate, onIssuesUpda
 
   const reviewRunIdRef = useRef(null);
   const fixRunIdRef = useRef(null);
+  // Supersession token for the post-fix series/issues re-read below.
+  const fixResultRequestRef = useRef(0);
   // The series this panel currently represents — used to drop a late-resolving
   // verdict response from a series the user has already switched away from.
   const activeSeriesRef = useRef(seriesId);
@@ -160,14 +162,22 @@ export default function SeriesReviewPanel({ series, onSeriesUpdate, onIssuesUpda
   useEffect(() => {
     if (!fixing || !fixLatest || !FIX_RUN_ENDED.has(fixLatest.type)) return;
     if (fixRunIdRef.current && fixLatest.runId && fixLatest.runId !== fixRunIdRef.current) return;
+    // A request-generation ref, not a `let active` flag: `fixing` is in this
+    // effect's own dependency array, so the write below re-runs the effect
+    // immediately and a lifetime-scoped flag would be flipped by its own
+    // cleanup before the response landed. The re-run early-returns without
+    // bumping, so the in-flight request stays current and only a genuinely
+    // newer one supersedes it.
+    const req = ++fixResultRequestRef.current;
+    const current = () => req === fixResultRequestRef.current;
     setFixing(false);
     if (fixLatest.type === 'complete') {
       const fixed = fixLatest.fixed ?? 0;
       if (fixed > 0) {
         // Fixes landed — the manuscript + findings changed, so the verdict is
         // stale; clear it and prompt a re-review to confirm.
-        getPipelineSeries(seriesId, { silent: true }).then((s) => { if (s) onSeriesUpdateRef.current?.(s); }).catch(() => null);
-        listPipelineIssues(seriesId, { silent: true }).then((is) => onIssuesUpdateRef.current?.(Array.isArray(is) ? is : [])).catch(() => null);
+        getPipelineSeries(seriesId, { silent: true }).then((s) => { if (s && current()) onSeriesUpdateRef.current?.(s); }).catch(() => null);
+        listPipelineIssues(seriesId, { silent: true }).then((is) => { if (current()) onIssuesUpdateRef.current?.(Array.isArray(is) ? is : []); }).catch(() => null);
         setReview(null);
         setConfirmDismissed(false);
         toast.success(`Fixed ${fixed} of ${fixLatest.total ?? 0} — re-review to confirm${fixLatest.budgetStopped ? ' (stopped: daily budget reached)' : ''}`);

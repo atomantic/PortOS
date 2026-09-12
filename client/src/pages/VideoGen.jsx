@@ -148,12 +148,15 @@ export default function VideoGen() {
   };
   const [episodeImportScenes, setEpisodeImportScenes] = useState(null);
   useEffect(() => {
-    if (!episodeOpen || !episodeLoomId || !episodeEpisodeId) return;
+    if (!episodeOpen || !episodeLoomId || !episodeEpisodeId) return undefined;
+    let active = true;
     getLoom(episodeLoomId, { silent: true }).then((loom) => {
+      if (!active) return;
       const episode = loom?.episodes?.find((e) => e.id === episodeEpisodeId);
       const draftScenes = loomEpisodeToDraftScenes(episode, { format: loom?.format });
       if (draftScenes.length) setEpisodeImportScenes(draftScenes);
     }).catch(() => {});
+    return () => { active = false; };
     // Only re-run when a fresh loom/episode is targeted, not on every render.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [episodeOpen, episodeLoomId, episodeEpisodeId]);

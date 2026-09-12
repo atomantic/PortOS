@@ -31,10 +31,12 @@ function ConsentTrail({ subjectId }) {
   const [open, setOpen] = useState(false);
 
   useEffect(() => {
-    if (!open || consents !== null) return;
+    if (!open || consents !== null) return undefined;
+    let active = true;
     getPrivacySubjectConsents(subjectId, { silent: true })
-      .then((rows) => setConsents(rows || []))
-      .catch(() => setConsents('error'));
+      .then((rows) => { if (active) setConsents(rows || []); })
+      .catch(() => { if (active) setConsents('error'); });
+    return () => { active = false; };
   }, [open, consents, subjectId]);
 
   // Collapsing clears a failed read so re-expanding retries. Without this the

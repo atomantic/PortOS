@@ -133,13 +133,15 @@ export default function PipelineIssue() {
   // re-render with the freshly-persisted output. Cheaper than re-fetching on
   // every frame.
   useEffect(() => {
-    if (!latest) return;
+    if (!latest) return undefined;
+    let active = true;
     if (latest.type === 'stage:complete' || latest.type === 'complete' || latest.type === 'error' || latest.type === 'canceled') {
-      getPipelineIssue(issueId).then(setIssue).catch(() => null);
+      getPipelineIssue(issueId).then((i) => { if (active) setIssue(i); }).catch(() => null);
     }
     if (latest.type === 'complete' || latest.type === 'canceled' || latest.type === 'error') {
       setAutoRunActive(false);
     }
+    return () => { active = false; };
   }, [latest, issueId]);
 
   const handleAutoRun = async (opts = {}) => {

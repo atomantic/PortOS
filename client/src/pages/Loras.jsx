@@ -199,8 +199,10 @@ export default function Loras() {
   }, []);
 
   useEffect(() => {
+    let active = true;
     refresh();
-    getCivitaiAuth().then(setAuth).catch(() => {});
+    getCivitaiAuth().then((a) => { if (active) setAuth(a); }).catch(() => {});
+    return () => { active = false; };
   }, [refresh]);
 
   // Discovery is fetched the first time its view is opened, not on mount —

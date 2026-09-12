@@ -50,27 +50,37 @@ export default function ToolsTab({ agentId, agent }) {
 
   // Auto-resolve the moltbook account for this agent
   useEffect(() => {
+    let live = true;
     api.getPlatformAccounts(agentId, 'moltbook').then(data => {
+      if (!live) return;
       const active = data.filter(a => a.status === 'active');
       if (active.length > 0) {
         setSelectedAccountId(active[0].id);
         setAccountName(active[0].credentials?.username || '');
       }
       setLoading(false);
-    }).catch(err => { console.warn('⚠️ Failed to resolve moltbook account: ' + err.message); setLoading(false); });
+    }).catch(err => {
+      if (!live) return;
+      console.warn('⚠️ Failed to resolve moltbook account: ' + err.message);
+      setLoading(false);
+    });
+    return () => { live = false; };
   }, [agentId]);
 
   // Load rate limits + submolts when account resolves
   useEffect(() => {
     if (!selectedAccountId) {
       setRateLimits(null);
-      return;
+      return undefined;
     }
-    api.getAgentRateLimits(selectedAccountId).then(setRateLimits).catch(err => console.warn('⚠️ Failed to refresh rate limits: ' + err.message));
+    let live = true;
+    api.getAgentRateLimits(selectedAccountId).then(data => { if (live) setRateLimits(data); }).catch(err => console.warn('⚠️ Failed to refresh rate limits: ' + err.message));
     api.getAgentSubmolts(selectedAccountId).then(data => {
+      if (!live) return;
       const list = data.submolts || data || [];
       setSubmolts(Array.isArray(list) ? list : []);
     }).catch(err => console.warn('⚠️ Failed to load submolts: ' + err.message));
+    return () => { live = false; };
   }, [selectedAccountId]);
 
   // Calculate cooldown end timestamps from rate limit data

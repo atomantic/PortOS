@@ -143,10 +143,12 @@ export function VoiceTab() {
   // Refetch the voice catalog whenever the user flips TTS engine so the picker
   // reflects the selected engine's voices (without requiring a save first).
   useEffect(() => {
-    if (!currentEngine) return;
+    if (!currentEngine) return undefined;
+    let active = true;
     listVoices(currentEngine)
-      .then((v) => setVoiceList(v))
-      .catch(() => setVoiceList({ engine: currentEngine, voices: [] }));
+      .then((v) => { if (active) setVoiceList(v); })
+      .catch(() => { if (active) setVoiceList({ engine: currentEngine, voices: [] }); });
+    return () => { active = false; };
   }, [currentEngine]);
 
   // Functional setState form so sequential patch() calls in one event handler
