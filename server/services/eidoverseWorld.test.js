@@ -2,9 +2,8 @@ import { describe, expect, it } from 'vitest';
 import {
   buildProjectionPlan,
   DEFAULT_EIDOVERSE_PROJECTION_RECIPE,
-  projectedJiraTickets,
-  projectedStorage,
-} from './eidoverseWorld.js';
+} from './eidoverseWorldProjection.js';
+import { projectedJiraTickets, projectedStorage } from '../lib/eidoverseWorldSignals.js';
 import { eidoverseProjectionRecipeSchema } from '../lib/validation.js';
 import { EIDOVERSE_META_ENTITY_ID, EIDOVERSE_WORLD_DESIGN_VERSION } from '../lib/eidoverseWorldDesign.js';
 import { EIDOVERSE_LABEL_VISIBILITIES } from '../lib/eidoverseWorldLabels.js';

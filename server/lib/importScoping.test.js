@@ -38,6 +38,17 @@ const reaches = (entry, target) => staticImportClosure(abs(entry)).files.has(abs
 
 // Each row: the entry that was narrowed, the module it must no longer
 const NARROWED = [
+  ['services/eidoverseWorld.js', 'services/eidoverseWorldSources.js',
+    'uses pure Eidoverse signals without eagerly loading source readers'],
+  ['services/eidoverseTravel.js', 'services/eidoverseWorldSources.js',
+    'uses pure Eidoverse signals without eagerly loading source readers'],
+  ['services/eidoverseWorld.test.js', 'services/eidoverseWorldSources.js',
+    'uses pure Eidoverse signals without eagerly loading source readers'],
+  ['services/eidoverseTravel.test.js', 'services/eidoverseWorldSources.js',
+    'uses pure Eidoverse signals without eagerly loading source readers'],
+  ['lib/eidoverseWorldSignals.js', 'services/eidoverseWorldSources.js',
+    'uses pure Eidoverse signals without eagerly loading source readers'],
+
   ['services/imageGen/local.js', 'services/localMemory.js',
     'loads GPU memory management only for generation, not gallery reads'],
   ['services/imageGen/local.js', 'services/imageGen/regen.js',
@@ -120,6 +131,11 @@ describe('narrowed imports stay narrow (#6009)', () => {
   // Positive controls. Without these the negatives above would also pass if
   // `staticImportClosure` stopped resolving these files at all.
   it('still sees the modules the narrowed entries were pointed AT', () => {
+    expect(reaches('services/eidoverseWorld.js', 'lib/eidoverseWorldSignals.js')).toBe(true);
+    expect(reaches('services/eidoverseTravel.js', 'lib/eidoverseWorldSignals.js')).toBe(true);
+    expect(reaches('services/eidoverseWorld.test.js', 'services/eidoverseWorldProjection.js')).toBe(true);
+    expect(reaches('services/eidoverseWorldSources.js', 'lib/eidoverseWorldSignals.js')).toBe(true);
+    expect(reaches('services/eidoverseWorldSources.js', 'services/apps.js')).toBe(true);
     expect(reaches('services/persistentMindSupervisor.js', 'services/persistentMindAttachments.js')).toBe(true);
     expect(reaches('services/persistentMindAttachments.js', 'lib/fileUtils.js')).toBe(true);
     expect(reaches('services/mtplxModelManager.js', 'services/huggingFaceMetadata.js')).toBe(true);
