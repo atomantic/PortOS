@@ -7,6 +7,7 @@ import { PATHS } from '../lib/fileUtils.js';
 import { stripAnsi } from '../lib/ansiStrip.js';
 import { resolvePgDumpBinary } from '../lib/pgTools.js';
 import { resolveBashBinary, toBashPath } from '../lib/bashResolver.js';
+import { resolvePostgresPort } from '../lib/ports.js';
 
 const rootDir = PATHS.root;
 const dbScript = toBashPath(join(rootDir, 'scripts', 'db.sh'));
@@ -262,9 +263,20 @@ const pgQuoteIdentifier = (name) => `"${String(name).replace(/"/g, '""')}"`;
 // Safely escape a PostgreSQL string literal value by doubling single-quotes.
 const pgEscapeString = (val) => String(val).replace(/'/g, "''");
 
-// Native (5432) and Docker (5561) use different ports, so both can run simultaneously.
-const NATIVE_PORT = '5432';
-const DOCKER_PORT = '5561';
+// Native and Docker use different ports, so both can run simultaneously. Resolve
+// them through the canonical port map rather than inheriting PGPORT, which names
+// whichever backend this server process is actively connected to.
+const NATIVE_PORT = String(resolvePostgresPort('native'));
+const DOCKER_PORT = String(resolvePostgresPort('docker'));
+
+const normalizePgHost = (host) => {
+  const value = String(host || 'localhost').trim().toLowerCase();
+  return ['localhost', '127.0.0.1', '::1', '[::1]'].includes(value) ? 'loopback' : value;
+};
+
+const endpointsAlias = (leftHost, leftPort, rightHost, rightPort) =>
+  normalizePgHost(leftHost) === normalizePgHost(rightHost)
+  && Number(leftPort) === Number(rightPort);
 
 // Prefer Homebrew postgresql@17 binaries over system pg (avoids version mismatch)
 // Check both arm64 (/opt/homebrew) and Intel (/usr/local) prefixes
@@ -519,11 +531,28 @@ export async function stopDatabase(backend) {
 
 /** Destroy an inactive database backend's data. */
 export async function destroyDatabase(backend) {
-  // Safety: don't destroy the active backend
+  // Safety: authorize deletion only from a successful, recognized mode probe.
+  // parseDbMode intentionally has a Docker fallback for non-destructive callers,
+  // so destruction validates the probe independently and fails closed.
   const statusResult = await runDbScript(['status']);
-  const currentMode = parseDbMode(statusResult.stdout);
+  const currentMode = statusResult.exitCode === 0
+    ? statusResult.stdout.match(/Current mode:\s*(docker|native)\b/)?.[1]
+    : null;
+  if (!currentMode) {
+    throw new ServerError('Cannot verify the active database backend. No data was destroyed.', { status: 500 });
+  }
   if (backend === currentMode) {
     throw new ServerError('Cannot destroy the active backend. Switch to the other backend first.', { status: 400 });
+  }
+
+  // The requested backend owns the destructive target. PGPORT/PGHOST describe
+  // the active pool and must never redirect an inactive-backend deletion. Refuse
+  // the operation if the independently-resolved target still aliases that pool.
+  const targetPort = backend === 'native' ? NATIVE_PORT : DOCKER_PORT;
+  const activePort = process.env.PGPORT || String(resolvePostgresPort(currentMode));
+  const activeHost = process.env.PGHOST || 'localhost';
+  if (endpointsAlias('localhost', targetPort, activeHost, activePort)) {
+    throw new ServerError('Cannot destroy a database endpoint used by the active backend.', { status: 400 });
   }
 
   if (backend === 'docker') {
@@ -538,9 +567,8 @@ export async function destroyDatabase(backend) {
 
   // Native: drop the portos database (system pg stays running)
   const sysUser = process.env.USER || 'portos';
-  const nativePort = process.env.PGPORT || '5432';
   const result = await runCmd('psql', [
-    '-h', 'localhost', '-p', nativePort, '-U', sysUser, '-d', 'postgres',
+    '-h', 'localhost', '-p', NATIVE_PORT, '-U', sysUser, '-d', 'postgres',
     '-c', `DROP DATABASE IF EXISTS ${pgQuoteIdentifier(pgDb)}`
   ], 15_000);
   return { success: result.exitCode === 0, output: result.stdout };
