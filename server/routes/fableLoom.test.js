@@ -241,6 +241,11 @@ describe('FableLoom routes', () => {
 
   it('validates and forwards structured series-plan patches', async () => {
     const seriesPlan = {
+      seriesDesign: {
+        mode: 'finite',
+        episodeActivity: 'The courier decodes one dangerous signal.',
+        endingCondition: 'The source is identified and silenced.',
+      },
       storyArc: 'A courier becomes a leader.',
       plotPoints: [{ id: 'plot-1', title: 'The choice', description: 'She stays.', episodeId: 'ep-1' }],
       sideQuests: [{ id: 'quest-1', title: 'Lost map', description: 'Recover it.', status: 'active', startEpisodeId: 'ep-1', endEpisodeId: null }],
@@ -249,6 +254,15 @@ describe('FableLoom routes', () => {
     const response = await request(makeApp()).patch('/api/fableloom/loom-1').send({ seriesPlan });
     expect(response.status).toBe(200);
     expect(fableLoom.updateLoom).toHaveBeenCalledWith('loom-1', { seriesPlan });
+
+    fableLoom.updateLoom.mockResolvedValueOnce({ id: 'loom-1', seriesPlan: { ...seriesPlan, seriesDesign: null } });
+    const cleared = await request(makeApp()).patch('/api/fableloom/loom-1').send({
+      seriesPlan: { ...seriesPlan, seriesDesign: null },
+    });
+    expect(cleared.status).toBe(200);
+    expect(fableLoom.updateLoom).toHaveBeenLastCalledWith('loom-1', {
+      seriesPlan: { ...seriesPlan, seriesDesign: null },
+    });
   });
 
   it('episode + node CRUD dispatches with route params', async () => {

@@ -26,6 +26,8 @@ When Story requests a cold opening review, evaluate ONLY the supplied opening an
 
 For a full outline review, evaluate whether the episode has a clear dramatic job, escalation, protagonist agency, branch consequences, meaningful and distinct endings, continuity with adjacent episodes, side-quest movement, and a compelling handoff. Check that choices are legible from their preceding beat and that the audience connection rules are dramatized rather than merely technical. Check that off-screen protagonist beats are reserved for direct audience conversations and that visible beats keep the canonical wardrobe. Flag only concrete risks that a writer can fix before teleplay expansion.
 
+Honor any Series design in the Story section. Renewable intent requires a credible source of further stories, while finite intent may reach its declared ending condition. Do not treat mutually exclusive branches as events that all occur or rewrite a valid ending solely to prolong the series. Anchor each design-related risk to the supplied episode and outline scene key. Judge an ending by its local branch promise and the stated later continuation; voicemail and teaser handoffs remain independent.
+
 Return ONLY valid JSON matching this shape — no prose, markdown fence, or commentary:
 
 ```json

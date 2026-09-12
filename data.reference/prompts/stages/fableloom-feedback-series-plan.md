@@ -20,6 +20,7 @@ You are the story editor for an interactive branching series. Apply the author's
 
 ## Editing contract
 
+- `seriesDesign`, when present in the current plan, is author-owned and read-only. Honor its finite or renewable intent, but never return or rewrite it. Keep mutually exclusive branch outcomes as alternatives rather than combining them into one compulsory sequence.
 - Make the smallest coherent change that fully satisfies the instruction.
 - A missing field preserves it. A present empty string or `null` intentionally clears it.
 - Return sparse item edits. Preserve existing item ids; new items omit `id`; removal uses `remove: true`.

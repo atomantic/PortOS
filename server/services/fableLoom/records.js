@@ -16,6 +16,7 @@ import { randomUUID } from 'crypto';
 import { ServerError } from '../../lib/errorHandler.js';
 import { sanitizeLlmRoutePin } from '../../lib/llmRoutePin.js';
 import { sanitizeCharacterEvolutionList } from '../../lib/characterEvolution.js';
+import { sanitizeSeriesDesign } from '../../lib/storyArc.js';
 import { compareNewerWins } from '../../lib/lwwTimestamp.js';
 import { sanitizeSoftDeleteFields } from '../../lib/syncWire.js';
 import {
@@ -245,6 +246,7 @@ function sanitizeSeriesPlan(raw, episodes) {
   // the same way `sanitizeStoryOutline` keeps an unknown `targetKey` so
   // DANGLING_TRANSITION can report it. Absent on every pre-#6440 plan.
   const characterEvolutions = sanitizeCharacterEvolutionList(source.characterEvolutions);
+  const seriesDesign = sanitizeSeriesDesign(source.seriesDesign);
   return {
     storyArc: trimTo(source.storyArc, LOOM_LIMITS.STORY_ARC_MAX),
     plotPoints: (Array.isArray(source.plotPoints) ? source.plotPoints : [])
@@ -278,6 +280,9 @@ function sanitizeSeriesPlan(raw, episodes) {
     // above follows) and `preserveLegacyCharacterEvolutions` can tell "this
     // sender cannot represent the field" from "the author cleared it".
     ...(characterEvolutions.length ? { characterEvolutions } : {}),
+    // Keep legacy omission byte-identical while preserving an explicit null as
+    // a clear on current-version records and sync payloads.
+    ...(source.seriesDesign !== undefined ? { seriesDesign } : {}),
   };
 }
 
@@ -737,14 +742,29 @@ const preserveLegacyCharacterEvolutions = (remotePlan, localPlan, senderVersion)
     : {}
 );
 
+// The shared author-owned series brief arrived with v9. A pre-v9 sender's
+// omission means it cannot represent the field; a v9 sender's omission is the
+// wholesale series-plan PATCH clear used by the local editor.
+const preserveLegacySeriesDesign = (remotePlan, localPlan, senderVersion) => (
+  senderVersion < 9
+    && localPlan
+    && Object.prototype.hasOwnProperty.call(localPlan, 'seriesDesign')
+    && !Object.prototype.hasOwnProperty.call(remotePlan || {}, 'seriesDesign')
+    ? { seriesDesign: localPlan.seriesDesign }
+    : {}
+);
+
 // Everything an older sender cannot represent inside `seriesPlan`, in one
-// place: the v4 delivery plan, the v5 plot-point kinds, and the v8 evolution
-// lenses. Returns `remote` BY REFERENCE when there is nothing to restore, so
-// the common merge allocates no copy.
+// place: the v4 delivery plan, the v5 plot-point kinds, the v8 evolution
+// lenses, and the v9 series design. Returns `remote` BY REFERENCE when there is
+// nothing to restore, so the common merge allocates no copy.
 const preserveLegacySeriesPlan = (remote, local, senderVersion) => {
   const evolutions = preserveLegacyCharacterEvolutions(remote, local, senderVersion);
+  const seriesDesign = preserveLegacySeriesDesign(remote, local, senderVersion);
   if (senderVersion >= 5) {
-    return evolutions.characterEvolutions ? { ...remote, ...evolutions } : remote;
+    return evolutions.characterEvolutions || seriesDesign.seriesDesign !== undefined
+      ? { ...remote, ...evolutions, ...seriesDesign }
+      : remote;
   }
   const localPlotPoints = new Map((local?.plotPoints || []).map((item) => [item.id, item]));
   return {
@@ -757,6 +777,7 @@ const preserveLegacySeriesPlan = (remote, local, senderVersion) => {
     // Last, so the key lands where `sanitizeSeriesPlan` puts it — this merge
     // result is persisted without a re-sanitize.
     ...evolutions,
+    ...seriesDesign,
   };
 };
 
@@ -766,9 +787,9 @@ const preserveLegacySeriesPlan = (remote, local, senderVersion) => {
 // them. A sender at the current schema version's present null remains an
 // intentional clear.
 const preserveLegacyVisualProduction = (remote, local, senderVersion) => {
-  if (!local || senderVersion >= 8) return remote;
+  if (!local || senderVersion >= 9) return remote;
   const seriesPlan = preserveLegacySeriesPlan(remote.seriesPlan, local.seriesPlan, senderVersion);
-  // A v7 sender's ONLY unrepresentable field is the evolution lens above —
+  // A v7/v8 sender's only unrepresentable plan fields are restored above —
   // every branch below is gated at <7 or lower. Returning early keeps the
   // dominant legacy path off the O(episodes x nodes) rebuild it would all skip.
   if (senderVersion >= 7) {
@@ -849,7 +870,7 @@ export async function mergeLoomsFromSync(
   remoteLooms,
   {
     source = { via: 'sync', peerId: null },
-    senderSchemaVersions = { fableLoom: 8 },
+    senderSchemaVersions = { fableLoom: 9 },
   } = {},
 ) {
   if (!Array.isArray(remoteLooms)) return { applied: false, count: 0 };

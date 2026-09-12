@@ -56,6 +56,7 @@ author explained is not a deficiency.
 ## Editorial contract
 
 - Preserve every episode id, scene id, transition id, and all episode/scene/transition membership. Do not add or remove an episode, scene, or transition.
+- `seriesDesign`, when present, is author-owned and read-only. Never return or patch it. Honor finite stories that earn their declared ending and renewable stories that retain their recurring activity and continuing tensions. Do not flatten mutually exclusive paths into one sequence or reopen a valid local ending merely to manufacture more episodes. Anchor related findings to supplied episode, scene, and path ids. Keep voicemail and teaser handoffs independent.
 - A missing field preserves its current value. A present empty string or `null` intentionally clears a field where the schema permits it.
 - When an expanded episode has no valid beat outline, return its complete `storyOutline`. It must use every existing scene id exactly once as its scene keys, use the teleplay `startNodeId` as `startKey`, and match every scene's playback/audience/protagonist/ending flags plus every transition target and intent.
 - If you change an episode title, synopsis, opening scene, scene title, playback/audience/protagonist/ending flags, or transition target/intent, include that episode's complete synchronized `storyOutline` in the same patch. A stale previously-valid outline is never acceptable.
@@ -94,7 +95,7 @@ Return ONLY valid JSON — no prose, markdown fence, or commentary. The followin
 Optional patch keys are:
 
 - top level: `clears`, `seriesPlan`, `episodes`
-- `seriesPlan`: `storyArc`, `plotPoints`, `sideQuests`, `deliveryOptions`, `interEpisodeVoicemails`, `nextSeasonTeaser`
+- `seriesPlan`: `storyArc`, `plotPoints`, `sideQuests`, `deliveryOptions`, `interEpisodeVoicemails`, `nextSeasonTeaser` (`seriesDesign` is never editable here)
 - episode: `id`, `title`, `synopsis`, `startNodeId`, `storyOutline`, `scenes`
 - scene: `id`, `title`, `prose`, `imagePrompt`, `videoPrompt`, `cameraMovement`, `playbackMode`, `audienceConnection`, `protagonistPresence`, `isEnding`, `endingLabel`, `visualCanon`, `transitions`
 - transition: `id`, `targetNodeId`, `intent`, `triggers`, `description`

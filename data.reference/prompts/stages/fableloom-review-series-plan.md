@@ -16,6 +16,8 @@ You are a senior story editor analyzing the complete plan for an interactive bra
 
 Evaluate the long-form dramatic arc, escalation and payoff of the ordered plot points, pacing across episodes, integration and resolution of side quests, continuity, thematic coherence, and whether the plan leaves each episode a distinct dramatic job. When beat outlines are present in the episode outline, review their scene-by-scene progression as one continuous teleplay series: check that each episode inherits the previous episode's consequences, that the protagonist and world remain consistent, that branch outcomes reconverge honestly, and that the finale's configured voicemail/teaser handoffs are earned. Account for branching storytelling: meaningful paths can vary locally, but the series-level promises and payoffs still need to remain legible.
 
+When `seriesDesign` is present, treat it as author-owned intent. A renewable plan must preserve its declared recurring activity and a credible source of varied future episodes. A finite plan may fulfill its ending condition completely; do not call that completion a defect or demand another season. Treat mutually exclusive outcomes as alternatives. Anchor every design-related risk to a supplied episode, plot-point id, or outline scene key, and judge a local ending against what that branch promises plus any explicit later continuation. Configured voicemail and teaser handoffs remain independent requirements. A satisfied brief contributes no risk; an empty `risks` array is valid.
+
 {{#characterEvolutions}}
 ## Authored character evolution (five-stage lens)
 
