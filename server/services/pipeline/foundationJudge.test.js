@@ -1242,8 +1242,39 @@ describe('applyFoundationFix — dimension → owning-service routing table', ()
     }
   });
 
-  it('refuses an oversized single-character repair before calling a provider or writing canon', async () => {
-    const universe = { id: 'uni-1', characters: [{ id: 'lead', name: 'Lead', background: 'x'.repeat(20_000) }] };
+  it('repairs a complete single character exceeding the normal batch budget without losing its constraints', async () => {
+    const character = {
+      id: 'lead', name: 'Lead', background: 'Known history. '.repeat(125).trim(),
+      physicalDescription: 'Known clothing. '.repeat(120).trim(),
+      personality: 'Known behavior. '.repeat(120).trim(),
+      motivations: 'Personal goals. '.repeat(120).trim(),
+      relationships: 'Trusted people. '.repeat(120).trim(),
+      skills: 'Learned skills. '.repeat(120).trim(),
+      silhouetteNotes: 'Visible shapes. '.repeat(120).trim(),
+      ghost: 'The specific past event. '.repeat(30).trim(),
+    };
+    const universe = { id: 'uni-1', characters: [character] };
+    universeBuilder.getUniverse.mockResolvedValue(universe);
+    let saved;
+    universeBuilder.updateUniverse.mockImplementation(async (_id, mutator) => {
+      saved = { ...universe, ...mutator(universe) }; return saved;
+    });
+    stageRunner.runStagedLLM.mockResolvedValue({ content: { characters: [{ id: 'lead', wound: 'Trust carries a personal cost.' }] } });
+
+    await applyFoundationFix('ser-1', 'character', { finding: { gap: 'Lead needs a clearer fear.' } });
+
+    expect(stageRunner.runStagedLLM).toHaveBeenCalledTimes(1);
+    const rendered = stageRunner.runStagedLLM.mock.calls[0][1].charactersJson;
+    expect(rendered.length).toBeGreaterThan(12_000);
+    expect(rendered.length).toBeLessThanOrEqual(24_000);
+    const payload = JSON.parse(rendered);
+    expect(payload.targetNote).toBeUndefined();
+    expect(payload.targetCharacters).toEqual([expect.objectContaining(character)]);
+    expect(saved.characters[0]).toMatchObject({ ...character, wound: 'Trust carries a personal cost.' });
+  });
+
+  it('refuses a single character exceeding the expanded budget before calling a provider or writing canon', async () => {
+    const universe = { id: 'uni-1', characters: [{ id: 'lead', name: 'Lead', background: 'x'.repeat(30_000) }] };
     universeBuilder.getUniverse.mockResolvedValue(universe);
     await expect(applyFoundationFix('ser-1', 'character', { finding: { gap: 'Lead needs a clearer fear.' } }))
       .rejects.toThrow('cannot safely fit the complete repair context for Lead');

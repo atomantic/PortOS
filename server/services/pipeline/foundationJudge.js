@@ -241,7 +241,22 @@ export function foundationGateStatus(dimensions, weightedScore, threshold = DEFA
 
 export function foundationFixTarget(dimensions, threshold = DEFAULT_FOUNDATION_THRESHOLD) {
   const { dimensionFloor, failingDimensions } = foundationGateStatus(dimensions, 0, threshold);
-  if (failingDimensions.length === 0) return weakestDimension(dimensions);
+  if (failingDimensions.length === 0) {
+    const target = Number.isFinite(threshold) ? threshold : DEFAULT_FOUNDATION_THRESHOLD;
+    // Repair the shortfall that keeps this run below its requested bar. Using
+    // distance from 10 sent a 7.8/8 foundation back to worldbuilding (already 8)
+    // while its only deficient dimension, structure (7), remained untouched.
+    const belowTarget = FOUNDATION_DIMENSIONS
+      .filter((dimension) => dimensions?.[dimension] && clampScore(dimensions[dimension].score) < target)
+      .map((dimension) => ({
+        dimension,
+        score: clampScore(dimensions[dimension].score),
+        deficit: Math.round(FOUNDATION_WEIGHTS[dimension] * (target - clampScore(dimensions[dimension].score)) * 100) / 100,
+      }))
+      .sort((a, b) => b.deficit - a.deficit || a.score - b.score
+        || FOUNDATION_DIMENSIONS.indexOf(a.dimension) - FOUNDATION_DIMENSIONS.indexOf(b.dimension));
+    return belowTarget[0] || weakestDimension(dimensions);
+  }
   return failingDimensions
     .map((dimension) => ({
       dimension,
@@ -597,6 +612,10 @@ const REPAIR_OUTLINE_MAX_CHARS = 12_000;
 // reasoning model chews through before the clock runs out, not context size.
 const REPAIR_SERIES_MAX_CHARS = 12_000;
 const REPAIR_CHARACTERS_MAX_CHARS = 12_000;
+// Split ensembles first. A single fully authored character can exceed the
+// normal section budget even with no roster attached; give that one record a
+// bounded larger envelope instead of truncating its canonical constraints.
+const REPAIR_SINGLE_CHARACTER_MAX_CHARS = 24_000;
 
 // The character-foundation stage reasons over the whole ensemble at once, so it
 // is the slowest repair stage by a wide margin. Ten minutes proved short enough
@@ -879,7 +898,7 @@ async function runFoundationRepair(series, issues, dimension, finding, character
       foundationFindingJson: JSON.stringify(findingPayload, null, 2),
       seriesJson: renderRepairSeriesJson(series),
       outline: renderArc(series, issues, { maxChars: REPAIR_OUTLINE_MAX_CHARS }),
-      charactersJson: renderRepairCharactersJson(charactersPayload),
+      charactersJson: renderRepairCharactersJson(charactersPayload, options.charactersMaxChars),
     }, {
       returnsJson: true,
       providerDefault: options.providerId,
@@ -925,10 +944,12 @@ async function repairCharacters(series, issues, universe, finding, options) {
     const batchIds = new Set(originalBatch.map((character) => character.id));
     const targetBatch = workingRoster.filter((character) => batchIds.has(character.id));
     const ensembleCharacters = [...workingRoster, ...workingNewCharacters];
-    const preview = JSON.parse(renderRepairCharactersJson({
+    const charactersPayload = {
       targetCharacters: targetBatch.map(renderPromptCharacter),
       fullSeriesRoster: ensembleCharacters.map(renderPromptCharacter),
-    }));
+    };
+    let charactersMaxChars = REPAIR_CHARACTERS_MAX_CHARS;
+    let preview = JSON.parse(renderRepairCharactersJson(charactersPayload, charactersMaxChars));
     if (preview.targetNote) {
       // Shrink the batch before shrinking the records it is allowed to edit.
       // A 40-character field cap erased whole designs in a real repair prompt.
@@ -937,10 +958,15 @@ async function repairCharacters(series, issues, universe, finding, options) {
         targetBatches.unshift(originalBatch.slice(0, midpoint), originalBatch.slice(midpoint));
         continue;
       }
-      throw new Error(`Character foundation cannot safely fit the complete repair context for ${targetBatch[0]?.name || 'the target character'} within ${REPAIR_CHARACTERS_MAX_CHARS} characters. Shorten that character's supporting detail before retrying; no truncated character repair was sent.`);
+      charactersMaxChars = REPAIR_SINGLE_CHARACTER_MAX_CHARS;
+      preview = JSON.parse(renderRepairCharactersJson(charactersPayload, charactersMaxChars));
+      if (preview.targetNote) {
+        throw new Error(`Character foundation cannot safely fit the complete repair context for ${targetBatch[0]?.name || 'the target character'} within ${charactersMaxChars} characters. Shorten that character's supporting detail before retrying; no truncated character repair was sent.`);
+      }
     }
     const proposal = await runFoundationRepair(series, issues, 'character', finding, targetBatch, {
       ...options,
+      charactersMaxChars,
       // Locked cast members are immutable constraints, but the model still
       // needs to see them when differentiating relationships and voices.
       // Later batches also see the accepted shape of earlier proposals, so two
