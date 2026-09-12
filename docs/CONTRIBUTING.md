@@ -1,5 +1,8 @@
 # Contributing Guide
 
+Before starting work, read [how to claim an issue and submit a PR](../CONTRIBUTING.md).
+Issues labeled `in-progress` or assigned to someone are not available to claim.
+
 PortOS is a highly opinionated, personal project — a single developer's "everything app," built and maintained for that developer's own machine and workflow. It's MIT-licensed and open to the public, but it is **not** built or governed as a general-purpose open source project: there's no roadmap vote, no maintainer team, and no commitment to stability for anyone else's deployment. Read this before opening a PR so expectations are clear going in.
 
 ## Before You Open a PR
