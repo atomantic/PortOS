@@ -6,7 +6,13 @@
 
 import { Router } from 'express';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
-import { validateRequest, agentSchema, agentUpdateSchema } from '../lib/validation.js';
+import {
+  validateRequest,
+  agentSchema,
+  agentUpdateSchema,
+  agentGenerateSchema,
+  agentToggleSchema,
+} from '../lib/validation.js';
 import * as agentPersonalities from '../services/agentPersonalities.js';
 import { generateAgentPersonality } from '../services/agentPersonalityGenerator.js';
 import { logAction } from '../services/history.js';
@@ -73,7 +79,7 @@ router.delete('/:id', asyncHandler(async (req, res) => {
 
 // POST /generate - Generate agent personality using AI
 router.post('/generate', asyncHandler(async (req, res) => {
-  const { seed = {}, providerId, model } = req.body;
+  const { seed, providerId, model } = validateRequest(agentGenerateSchema, req.body);
 
   const generated = await generateAgentPersonality(seed, providerId, model);
 
@@ -83,7 +89,7 @@ router.post('/generate', asyncHandler(async (req, res) => {
 // POST /:id/toggle - Toggle agent enabled status
 router.post('/:id/toggle', asyncHandler(async (req, res) => {
   const { id } = req.params;
-  const { enabled } = req.body;
+  const { enabled } = validateRequest(agentToggleSchema, req.body);
 
   const agent = await agentPersonalities.toggleAgent(id, enabled);
   if (!agent) {
