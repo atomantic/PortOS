@@ -435,7 +435,16 @@ describe('deferred imports stay deferred (#6156)', () => {
 // closures; the measured baseline 103,190 -> 103,228 is the shutdown module
 // itself in 38 additional suite closures, not a new heavy subtree. Preserve
 // the existing headroom by accounting for exactly that additive lifecycle edge.
-const MAX_STATIC_INSTANTIATIONS = 103240;
+// #7239 points cosValidation.js, peerSyncValidation.js and taskBlockCategories.js
+// at the task vocabularies declared in lib/taskParser.js, so the HTTP enum, the
+// peer wire enum and the block-category set cannot drift from what TASKS.md can
+// actually represent. taskParser.js is a zero-import leaf, so each edge costs
+// exactly one module in a suite that did not already reach it: this branch's own
+// delta is +92 — 60 such suites plus the new lib/peerSyncValidation.test.js
+// closure (32). There is nothing to narrow — the leaf IS the narrow form — so
+// raise by exactly that delta and keep the existing headroom. The measured total
+// is 103,356 after rebasing onto a main that grew by 36 on its own.
+const MAX_STATIC_INSTANTIATIONS = 103368;
 
 
 const SKIP_DIRS = new Set(['node_modules', 'coverage', 'dist', 'data']);

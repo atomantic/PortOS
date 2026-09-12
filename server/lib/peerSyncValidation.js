@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { catalogSyncIngredientSchema, catalogSyncRefSchema } from './catalogValidation.js';
+import { TASK_STATUS_VALUES, TASK_PRIORITY_VALUES } from './taskParser.js';
 
 // =============================================================================
 // PEER SYNC SCHEMAS
@@ -374,13 +375,15 @@ export const peerCosHistoryManifestSchema = z.object({
 // `challenged` (#2441) rides the wire like any other status — the challenge
 // case + resolution live in `metadata` (permissive record below), so they
 // federate verbatim with no extra top-level fields.
-const TASK_STATUSES = ['pending', 'in_progress', 'challenged', 'blocked', 'completed'];
-const TASK_PRIORITIES = ['CRITICAL', 'HIGH', 'MEDIUM', 'LOW'];
+// The vocabularies come from taskParser.js — the module that DEFINES what a
+// TASKS.md row can hold — rather than a hand-written copy here. A wire value the
+// markdown store cannot represent is a task the receiver would drop on its next
+// file write (#7239), so the two lists must not be able to drift.
 const peerCosTaskEntrySchema = z.object({
   id: z.string().trim().min(1).max(200),
   taskType: z.enum(['user', 'internal']),
-  status: z.enum(TASK_STATUSES),
-  priority: z.enum(TASK_PRIORITIES),
+  status: z.enum(TASK_STATUS_VALUES),
+  priority: z.enum(TASK_PRIORITY_VALUES),
   description: z.string().max(20_000),
   approvalRequired: z.boolean().optional(),
   autoApproved: z.boolean().optional(),

@@ -2275,3 +2275,34 @@ describe('cosTaskStore.resolveTaskChallengeWithRecheck (#2471)', () => {
     expect(mock.reviewCalls.length).toBe(0);
   });
 });
+
+describe('cosTaskStore — a repaired task is returned exactly as it is persisted (#7239)', () => {
+  // The markdown store can only represent five statuses and four priorities, and
+  // every write rewrites the whole file. Repairing only inside
+  // generateTasksMarkdown would write one thing and hand back another, so every
+  // consumer of the return value / `tasks:changed` would read the pre-repair
+  // status until something re-read the file.
+  it('updateTask returns the parked status, not the unrepresentable one it was given', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const created = await addTask({ description: 'work worth keeping' }, 'user');
+    const updated = await updateTask(created.id, { status: 'archived' }, 'user');
+    warn.mockRestore();
+
+    expect(updated.status).toBe('blocked');
+    expect(updated.metadata.unrepresentableStatus).toBe('archived');
+    // And a fresh read of the file agrees with what the call returned.
+    expect(await getTaskById(created.id)).toMatchObject({
+      status: updated.status,
+      metadata: expect.objectContaining({ unrepresentableStatus: 'archived' }),
+    });
+  });
+
+  it('addTask returns the coerced priority for a producer that bypasses the route schema', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const created = await addTask({ description: 'urgent-ish', priority: 'URGENT' }, 'user');
+    warn.mockRestore();
+
+    expect(created.priority).toBe('MEDIUM');
+    expect((await getTaskById(created.id)).priority).toBe('MEDIUM');
+  });
+});

@@ -9,6 +9,7 @@ import {
 } from './cosValidation.js';
 import { EFFORT_LEVELS } from './providerModels.js';
 import { JOB_INTERVAL_VALUES, ON_DEMAND_INTERVAL } from './autonomousJobIntervals.js';
+import { TASK_STATUS_VALUES, TASK_PRIORITY_VALUES } from './taskParser.js';
 
 describe('cosValidation effort field', () => {
   it('accepts every EFFORT_LEVELS value on create and rejects unknown values', () => {
@@ -343,5 +344,40 @@ describe('scheduled slashdo metadata', () => {
     expect(sanitizeTaskMetadata(metadata)).toEqual(metadata);
     expect(sanitizeTaskMetadata({ slashdoCommand: '../../release', slashdoArgs: 42 })).toBeNull();
     expect(sanitizeTaskMetadata({ slashdoArgs: 'x'.repeat(4001) })).toBeNull();
+  });
+});
+
+describe('cosValidation task status/priority vocabulary (#7239)', () => {
+  // A value TASKS.md cannot represent used to be a 200 that irreversibly deleted
+  // the task and its prompt payload on the next full-file rewrite. The store now
+  // repairs rather than drops, but the request still belongs at the boundary as a
+  // 400 — and the vocabularies must come from the format, not a local copy.
+  it('accepts every representable priority on create and update, in any case', () => {
+    for (const priority of TASK_PRIORITY_VALUES) {
+      expect(createCosTaskSchema.parse({ description: 'x', priority: priority.toLowerCase() }).priority).toBe(priority);
+      expect(updateCosTaskSchema.parse({ priority: ` ${priority} ` }).priority).toBe(priority);
+    }
+  });
+
+  it('accepts every representable status on update, in any case', () => {
+    for (const status of TASK_STATUS_VALUES) {
+      expect(updateCosTaskSchema.parse({ status: status.toUpperCase() }).status).toBe(status);
+    }
+  });
+
+  it('rejects a priority or status outside the vocabulary', () => {
+    expect(createCosTaskSchema.safeParse({ description: 'x', priority: 'URGENT' }).success).toBe(false);
+    // A trailing space used to survive `.toUpperCase()` and reach the store.
+    expect(createCosTaskSchema.safeParse({ description: 'x', priority: 'urgent ' }).success).toBe(false);
+    expect(updateCosTaskSchema.safeParse({ priority: 'URGENT' }).success).toBe(false);
+    expect(updateCosTaskSchema.safeParse({ status: 'done' }).success).toBe(false);
+    expect(updateCosTaskSchema.safeParse({ status: 'archived' }).success).toBe(false);
+  });
+
+  it("treats the form's empty selection as absent, not as a rejection", () => {
+    // Same shape the effort field asserts above: the route gates on `!== undefined`,
+    // so an undefined-valued key is absent as far as the store is concerned.
+    expect(createCosTaskSchema.parse({ description: 'x', priority: '' }).priority).toBeUndefined();
+    expect(updateCosTaskSchema.parse({ status: '' }).status).toBeUndefined();
   });
 });

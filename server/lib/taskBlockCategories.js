@@ -11,11 +11,13 @@
  * matches nothing — the real category is `agent-paused` — and silently missed
  * `challenge-escalation` entirely.
  *
- * Pure and dependency-free (beyond the pause category it shares with
- * `taskPauseHold.js`) so all three read ONE vocabulary.
+ * Pure and dependency-free (beyond the two categories it shares with
+ * `taskPauseHold.js` and `taskParser.js`, both themselves dependency-free) so
+ * all three read ONE vocabulary.
  */
 
 import { AGENT_PAUSED_CATEGORY } from './taskPauseHold.js';
+import { UNKNOWN_STATUS_BLOCKED_CATEGORY } from './taskParser.js';
 
 /**
  * A PERMANENT provider-config failure: the task's resolved provider cannot run
@@ -84,6 +86,11 @@ export const USER_DECISION_BLOCKED_CATEGORIES = new Set([
   'challenge-escalation', // parked awaiting the user's arbitration
   'app-unresolved',
   'workspace-invalid',
+  // A task the markdown store could not represent, parked here by
+  // generateTasksMarkdown's repair instead of being deleted (#7239). Its real
+  // status is unknown, so auto-expiring it to `completed` at 14 days would
+  // silently retire — and federate as done — the very work the repair rescued.
+  UNKNOWN_STATUS_BLOCKED_CATEGORY,
   // Same shape: a config error only the user can clear. Exempt from the 14-day
   // `sweepResolvedFailureTasks` auto-expiry (cosTaskStore.js), which would
   // otherwise flip it to `completed` with `resolution: 'auto-expired'` and
