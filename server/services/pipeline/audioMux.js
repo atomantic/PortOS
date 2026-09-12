@@ -20,10 +20,13 @@
  * referencing `[0:a]` against a silent AI-gen clip would abort the whole graph.
  * (`muxMusicBed` still replaces the track — it's the no-VO music-only path.)
  *
- * Failure handling: this is a value-add overlay, not a correctness gate. If
- * the mux pass throws (ffmpeg missing, malformed audio, etc.), callers
- * should log and leave the silent video in place — graceful degradation
- * beats blocking the whole stitch on an optional cosmetic step.
+ * Failure handling: this is a value-add overlay, not a correctness gate. Every
+ * entry point returns `{ ok: false, reason }` rather than throwing — ffmpeg
+ * missing, malformed audio, AND the in-place install that swaps the muxed file
+ * over the episode (which goes through `installEncodedVideo`, so a rename that
+ * cannot land rolls the original back instead of losing it). Callers log and
+ * leave the prior video in place — graceful degradation beats blocking the
+ * whole stitch on an optional cosmetic step.
  *
  * ffmpeg floor: the VO graph uses `amix ... normalize=0` + `sidechaincompress`
  * (ffmpeg 4.4+, 2021). On an older ffmpeg `muxVoLines` returns ok:false and the
@@ -32,11 +35,11 @@
  */
 
 import { join } from 'path';
-import { rename, unlink } from 'fs/promises';
+import { unlink } from 'fs/promises';
 import { existsSync } from 'fs';
 import { randomUUID } from 'crypto';
 import { PATHS } from '../../lib/fileUtils.js';
-import { findFfmpeg, runFfmpegProcess, hasAudioStream, safeUnder } from '../../lib/ffmpeg.js';
+import { findFfmpeg, runFfmpegProcess, hasAudioStream, safeUnder, installEncodedVideo } from '../../lib/ffmpeg.js';
 import { statMusicTrack } from './musicLibrary.js';
 
 // 0.5 ≈ -6 dB — quiet enough to sit under dialogue once VO mixing lands
@@ -144,9 +147,12 @@ export async function muxMusicBed(inputVideoPath, { musicPath, musicGain = DEFAU
     await unlink(tmpOut).catch(() => {});
     return result;
   }
-  // Rename only after ffmpeg confirms success — a crashed mux pass leaves
-  // the silent original intact rather than a half-written video.
-  await rename(tmpOut, inputVideoPath);
+  // Install only after ffmpeg confirms success — a crashed mux pass leaves the
+  // silent original intact rather than a half-written video. A failed install
+  // rolls back and degrades to "bed skipped" rather than throwing out of the
+  // caller's stitch (#7237); see the failure-handling note at the top.
+  const installed = await installEncodedVideo(tmpOut, inputVideoPath, 'music bed');
+  if (!installed.ok) return installed;
   return { ok: true };
 }
 
@@ -296,7 +302,8 @@ export async function muxVoLines(inputVideoPath, { voLines = [], musicPath = nul
     await unlink(tmpOut).catch(() => {});
     return result;
   }
-  await rename(tmpOut, inputVideoPath);
+  const installed = await installEncodedVideo(tmpOut, inputVideoPath, 'VO mux');
+  if (!installed.ok) return installed;
   return { ok: true, lineCount: placed.length, ducked: !!usableMusic, clipAudio };
 }
 
@@ -492,7 +499,8 @@ export async function muxCueBed(inputVideoPath, { cues = [], voLines = [], music
     await unlink(tmpOut).catch(() => {});
     return result;
   }
-  await rename(tmpOut, inputVideoPath);
+  const installed = await installEncodedVideo(tmpOut, inputVideoPath, 'cue bed');
+  if (!installed.ok) return installed;
   return { ok: true, cueCount: placedCues.length, ducked: placedVo.length > 0, clipAudio };
 }
 
@@ -525,7 +533,8 @@ export async function muxStripAudio(inputVideoPath, { signal } = {}) {
     await unlink(tmpOut).catch(() => {});
     return result;
   }
-  await rename(tmpOut, inputVideoPath);
+  const installed = await installEncodedVideo(tmpOut, inputVideoPath, 'silent strip');
+  if (!installed.ok) return installed;
   return { ok: true };
 }
 

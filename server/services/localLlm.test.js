@@ -822,7 +822,11 @@ describe('localLlm', () => {
       // `pathExists(APP)` is the dispatch check that routed upgradeBackend here, so
       // it answers true independently of the in-memory model — which lets a test
       // exercise the bundle being gone by the time the rename runs.
-      pathExistsImpl.fn = async (p) => (p === APP ? true : path.basename(p) === 'Ollama.app' && extracted.present);
+      // Separator-agnostic: the code under test builds the extracted bundle path
+      // with `path.join`, which spells it `\Ollama.app` on Windows — a hard-coded
+      // `/` made this fake report "no Ollama.app in the archive" there and turned
+      // every assertion in this block into that one wrong error.
+      pathExistsImpl.fn = async (p) => (p === APP ? true : /[\\/]Ollama\.app$/.test(p) && extracted.present);
       vi.stubGlobal('fetch', vi.fn(async (url) => {
         if (String(url).includes('api.github.com')) {
           return {

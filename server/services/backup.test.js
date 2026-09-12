@@ -110,7 +110,11 @@ vi.mock('./brainStorage.js', async (importOriginal) => ({
 }));
 import { reloadSettings } from './settings.js';
 import { invalidateAllCaches as invalidateBrainCaches } from './brainStorage.js';
-import { DEFAULT_EXCLUDES, computeEffectiveExcludes, listSnapshots, openSnapshotStream, restoreSnapshot } from './backup.js';
+import { DEFAULT_EXCLUDES, computeEffectiveExcludes, listSnapshots, openSnapshotStream, restoreSnapshot, resolveRsyncBinary } from './backup.js';
+
+// Resolved once: the restore path spawns whatever `resolveRsyncBinary()` names,
+// so probe THAT rather than a hard-coded 'rsync' — an install pointed at a
+// bundled binary via PORTOS_RSYNC is still covered.
 
 // fs.access is mocked file-wide because backup.js probes the .in-progress marker
 // with it. Restore the real implementation before EVERY test: vi.clearAllMocks()
