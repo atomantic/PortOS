@@ -196,6 +196,44 @@ describe('backup routes', () => {
         expect.objectContaining({ dryRun: true })
       );
     });
+
+    // #7167: the service reports manifest verification state on the result —
+    // the client confirmation flow reads it to distinguish a verified restore
+    // from a legacy unverified one, so it must survive the response verbatim.
+    it.each([
+      ['verified', { status: 'verified', checkedFiles: 3 }],
+      ['unverified (legacy)', { status: 'unverified', reason: 'no_manifest' }],
+    ])('forwards the %s verification descriptor verbatim', async (_label, verification) => {
+      getSettings.mockResolvedValue({ backup: { destPath: '/dest' } });
+      const serviceResult = {
+        dryRun: true, snapshotId: 'snap-1', subdirFilter: null, changedFiles: [], verification,
+      };
+      backup.restoreSnapshot.mockResolvedValue(serviceResult);
+      const res = await request(buildApp())
+        .post('/api/backup/restore')
+        .send({ snapshotId: 'snap-1' });
+      expect(res.status).toBe(200);
+      expect(res.body).toEqual(serviceResult);
+    });
+
+    // A manifest verification failure rejects before rsync; the route must
+    // surface the structured error envelope so the client can show why the
+    // restore was refused.
+    it.each([
+      ['SNAPSHOT_MANIFEST_MISMATCH', 'hash mismatch for file: a.json'],
+      ['SNAPSHOT_MANIFEST_UNREADABLE', 'Snapshot manifest is malformed'],
+    ])('returns 409 with code %s when verification rejects the restore', async (code, detail) => {
+      getSettings.mockResolvedValue({ backup: { destPath: '/dest' } });
+      backup.restoreSnapshot.mockRejectedValue(
+        Object.assign(new Error(detail), { status: 409, code }),
+      );
+      const res = await request(buildApp())
+        .post('/api/backup/restore')
+        .send({ snapshotId: 'snap-1', dryRun: false });
+      expect(res.status).toBe(409);
+      expect(res.body.code).toBe(code);
+      expect(res.body.error).toContain(detail);
+    });
   });
 
   describe('POST /api/backup/restore-db', () => {

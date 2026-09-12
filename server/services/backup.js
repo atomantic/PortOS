@@ -11,7 +11,7 @@ import { killWithEscalation } from '../lib/killWithEscalation.js';
 import { access, lstat, readdir, readFile, stat, unlink, writeFile } from 'fs/promises';
 import { PassThrough } from 'node:stream';
 import { hostname } from 'os';
-import { join, resolve, relative, isAbsolute } from 'path';
+import { join, resolve, relative, isAbsolute, posix } from 'path';
 import { PATHS, ensureDir, readJSONFile, readJSONFileStrict, atomicWrite, sha256File } from '../lib/fileUtils.js';
 import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
 import { createLineReader } from '../lib/streamLines.js';
@@ -47,6 +47,10 @@ const STATE_PATH = join(PATHS.data, 'backup', 'state.json');
 // tree from both completed and legacy snapshots after a restart.
 const SNAPSHOT_IN_PROGRESS_MARKER = '.in-progress';
 const SNAPSHOT_FAILED_MARKER = '.failed';
+// The pg_dump lives one level ABOVE the snapshot's data/ tree, so its manifest
+// key is parent-relative. File restore must recognize and skip this key rather
+// than resolving it as a data-file path — restorePostgres verifies it.
+const SNAPSHOT_DUMP_MANIFEST_KEY = '../portos-db.sql';
 let activeSnapshotId = null;
 
 const markerPath = (snapshotDir) => join(snapshotDir, SNAPSHOT_IN_PROGRESS_MARKER);
@@ -728,9 +732,9 @@ export async function generateManifest(snapshotDataDir, manifestPath, pgDumpPath
     }
     if (dumpInfo?.isFile()) {
       // Parent-relative key: the dump lives one level ABOVE snapshotDataDir
-      // (alongside it, not inside it). A future manifest-verify must not assume
-      // every key resolves under snapshotDataDir.
-      files['../portos-db.sql'] = await sha256File(pgDumpPath)
+      // (alongside it, not inside it). A manifest-verify must not assume
+      // every key resolves under snapshotDataDir — see verifySnapshotManifest.
+      files[SNAPSHOT_DUMP_MANIFEST_KEY] = await sha256File(pgDumpPath)
         .catch(err => { throw manifestReadFailure('dump hash', err); });
     }
   }
@@ -878,6 +882,130 @@ export async function openSnapshotStream(destPath, snapshotId) {
   return archive;
 }
 
+// A manifest key names a path RELATIVE to the snapshot's data/ dir. The
+// manifest is data read off the backup medium — which may be a shared or
+// damaged volume — so every key is validated before it is joined onto a real
+// path: a corrupt or hostile manifest must not point the verifier outside the
+// snapshot tree. `..` is detected by splitting on BOTH separators so a
+// Windows-written manifest can't smuggle traversal through `..\`.
+const SHA256_HEX = /^[0-9a-f]{64}$/;
+function isSafeManifestKey(key) {
+  if (typeof key !== 'string' || !key || key.includes('\0')) return false;
+  if (isAbsolute(key) || key.startsWith('/') || key.startsWith('\\')) return false;
+  if (/^[a-zA-Z]:($|[\\/])/.test(key)) return false; // drive-letter absolute
+  if (key.split(/[\\/]/).includes('..')) return false;
+  return true;
+}
+
+// Sentinel default for readJSONFileStrict so a confirmed-absent manifest (the
+// legacy pre-manifest snapshot case) is distinguished from a manifest file that
+// exists but parses to a falsy/non-object value — the former is an explicit
+// unverified compatibility path, the latter must fail closed.
+const MANIFEST_ABSENT = {};
+
+const manifestVerificationError = (snapshotId, detail) => new ServerError(
+  `Snapshot ${snapshotId} failed manifest verification: ${detail}. Choose another snapshot or repair the backup media before retrying.`,
+  { status: 409, code: 'SNAPSHOT_MANIFEST_MISMATCH' },
+);
+
+/**
+ * Verify a snapshot's manifest.json against its data/ bytes before restore.
+ * Runs ahead of EVERY restore — preview and execution alike — so damaged or
+ * mismatched snapshot bytes can never reach rsync and overwrite live data.
+ *
+ * Returns a verification descriptor the route/UI can surface:
+ *   { status: 'verified', checkedFiles: n }          manifest present, all selected entries hashed clean
+ *   { status: 'unverified', reason: 'no_manifest' }  legacy snapshot written before manifests existed
+ * Throws ServerError (409) when the manifest exists but is unreadable,
+ * malformed, or a selected file is missing/unreadable/hash-mismatched.
+ *
+ * @param {string} snapshotDir - Resolved snapshot directory
+ * @param {string} snapshotId - For messages only
+ * @param {string|null} subdirFilter - Already-validated selective restore scope
+ */
+async function verifySnapshotManifest(snapshotDir, snapshotId, subdirFilter) {
+  const manifestPath = join(snapshotDir, 'manifest.json');
+  const manifestRead = await readJSONFileStrict(manifestPath, MANIFEST_ABSENT);
+  if (!manifestRead.ok) {
+    throw new ServerError(`Snapshot manifest is unreadable: ${snapshotId}`, {
+      status: 409,
+      code: 'SNAPSHOT_MANIFEST_UNREADABLE',
+    });
+  }
+  const manifest = manifestRead.value;
+  if (manifest === MANIFEST_ABSENT) {
+    return { status: 'unverified', reason: 'no_manifest' };
+  }
+
+  // Structural validation is strict on the security-relevant part: `files`
+  // must be a map of safe relative keys to sha256 hex digests. Anything else —
+  // a non-object manifest, an array, a garbage hash, an absolute/traversing
+  // key — means the manifest cannot be trusted and the restore fails closed.
+  const files = manifest?.files;
+  const malformed = !manifest || typeof manifest !== 'object' || Array.isArray(manifest)
+    || !files || typeof files !== 'object' || Array.isArray(files)
+    || Object.entries(files).some(([key, hash]) =>
+      key !== SNAPSHOT_DUMP_MANIFEST_KEY && (!isSafeManifestKey(key) || !SHA256_HEX.test(hash)));
+  if (malformed) {
+    throw new ServerError(`Snapshot manifest is malformed: ${snapshotId}`, {
+      status: 409,
+      code: 'SNAPSHOT_MANIFEST_UNREADABLE',
+    });
+  }
+
+  // The dump key is verified by restorePostgres — it is not a data-file path
+  // and must never be resolved under data/. Selection mirrors what the rsync
+  // filter chain would restore: all recorded data files for a full restore, or
+  // only entries at/under the literal subdirFilter for a selective one. Keys
+  // are normalized to `/` (and `.`/duplicate separators collapsed) so a
+  // manifest written on Windows still matches an `/`-separated filter.
+  const filterNorm = subdirFilter
+    ? posix.normalize(subdirFilter.replace(/\\/g, '/').replace(/\/+$/, ''))
+    : null;
+  const selectAll = !filterNorm || filterNorm === '.';
+  const selected = Object.entries(files).filter(([key]) => {
+    if (key === SNAPSHOT_DUMP_MANIFEST_KEY) return false;
+    if (selectAll) return true;
+    const normalized = posix.normalize(key.replace(/\\/g, '/'));
+    return normalized === filterNorm || normalized.startsWith(`${filterNorm}/`);
+  });
+
+  const srcDir = join(snapshotDir, 'data');
+  for (const [key, expectedHash] of selected) {
+    const filePath = resolve(srcDir, key);
+    const rel = relative(srcDir, filePath);
+    if (!rel || rel.startsWith('..') || isAbsolute(rel)) {
+      // Defense-in-depth: isSafeManifestKey already rejected traversal, so
+      // reaching here means the two checks drifted — fail closed either way.
+      throw new ServerError(`Snapshot manifest is malformed: ${snapshotId}`, {
+        status: 409,
+        code: 'SNAPSHOT_MANIFEST_UNREADABLE',
+      });
+    }
+    const info = await stat(filePath).catch((err) => {
+      throw manifestVerificationError(
+        snapshotId,
+        err?.code === 'ENOENT' || err?.code === 'ENOTDIR'
+          ? `recorded file is missing: ${key}`
+          : `recorded file is unreadable: ${key}`,
+      );
+    });
+    // stat follows links, mirroring generateManifest (a symlink to a regular
+    // file is hashed under the link's path — that documented compatibility is
+    // retained). Anything that is no longer a regular file cannot match.
+    if (!info.isFile()) {
+      throw manifestVerificationError(snapshotId, `recorded file is not a regular file: ${key}`);
+    }
+    const actualHash = await sha256File(filePath).catch(() => {
+      throw manifestVerificationError(snapshotId, `recorded file is unreadable: ${key}`);
+    });
+    if (actualHash !== expectedHash) {
+      throw manifestVerificationError(snapshotId, `hash mismatch for file: ${key}`);
+    }
+  }
+  return { status: 'verified', checkedFiles: selected.length };
+}
+
 /**
  * Restore a snapshot back to PATHS.data using rsync.
  * @param {string} destPath - Path to external drive backup root
@@ -898,6 +1026,16 @@ export async function restoreSnapshot(destPath, snapshotId, { dryRun = true, sub
   // schema does so the two can't drift — see issue #1822.
   if (subdirFilter != null && !isSafeSubdirFilter(subdirFilter)) {
     throw new Error(`Invalid subdirFilter: ${subdirFilter}`);
+  }
+
+  // Integrity preflight (#7167): when the snapshot carries a manifest, every
+  // recorded file this restore would write must still match its SHA-256 before
+  // rsync runs — otherwise a damaged backup overwrites healthy live data with
+  // corrupt bytes. This re-verifies on the actual restore rather than trusting
+  // a prior preview: bytes changed between the two calls are caught here.
+  const verification = await verifySnapshotManifest(snapshotDir, snapshotId, subdirFilter);
+  if (verification.status === 'unverified') {
+    console.warn(`⚠️ restore: snapshot ${snapshotId} has no integrity manifest — restoring unverified (legacy snapshot)`);
   }
 
   const flags = ['--itemize-changes'];
@@ -933,7 +1071,7 @@ export async function restoreSnapshot(destPath, snapshotId, { dryRun = true, sub
     }
     await reloadSettings();
   }
-  return { dryRun, snapshotId, subdirFilter, changedFiles };
+  return { dryRun, snapshotId, subdirFilter, changedFiles, verification };
 }
 
 /**
@@ -978,7 +1116,7 @@ export async function restorePostgres(destPath, snapshotId, { dryRun = true } = 
     return { status: 'failed', reason: 'manifest_unreadable' };
   }
   const manifest = manifestRead.value;
-  const expectedHash = manifest?.files?.['../portos-db.sql'];
+  const expectedHash = manifest?.files?.[SNAPSHOT_DUMP_MANIFEST_KEY];
   if (expectedHash) {
     const actualHash = await sha256File(sqlPath);
     if (actualHash !== expectedHash) {

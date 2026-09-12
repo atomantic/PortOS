@@ -213,6 +213,43 @@ describe('BackupWidget snapshots', () => {
     expect(screen.getByRole('button', { name: 'Preview changes' })).toBeEnabled();
   });
 
+  // #7167: the server reports manifest verification state on restore results.
+  // A manifest-less legacy snapshot must be flagged in the confirmation flow,
+  // and a verified one labeled, so neither reads as the other.
+  it('flags a manifest-less legacy snapshot as unverified through the restore flow', async () => {
+    const legacy = { status: 'unverified', reason: 'no_manifest' };
+    mockRestoreBackup
+      .mockResolvedValueOnce({ dryRun: true, changedFiles: ['a.json'], verification: legacy })
+      .mockResolvedValueOnce({ dryRun: false, changedFiles: ['a.json'], verification: legacy });
+    renderWidget();
+
+    await openRestorePanel();
+    fireEvent.click(screen.getByRole('button', { name: 'Preview changes' }));
+
+    expect(await screen.findByText(/cannot be verified/)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Restore 1 file(s)' }));
+    await waitFor(() => expect(mockToast.success).toHaveBeenCalledWith(
+      'Restore complete — 1 file(s) restored (unverified legacy snapshot)',
+    ));
+  });
+
+  it('labels a manifest-verified preview instead of the unverified warning', async () => {
+    mockRestoreBackup.mockResolvedValueOnce({
+      dryRun: true,
+      changedFiles: [],
+      verification: { status: 'verified', checkedFiles: 2 },
+    });
+    renderWidget();
+
+    await openRestorePanel();
+    fireEvent.click(screen.getByRole('button', { name: 'Preview changes' }));
+
+    expect(await screen.findByText(/integrity verified against manifest/)).toBeInTheDocument();
+    expect(screen.queryByText(/cannot be verified/)).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Nothing to restore' })).toBeDisabled();
+  });
+
   it('reports a current preview failure and re-enables previewing', async () => {
     mockRestoreBackup.mockRejectedValueOnce(new Error('disk offline'));
     renderWidget();

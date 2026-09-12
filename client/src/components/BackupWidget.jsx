@@ -120,7 +120,10 @@ function RestorePanel({ snapshot, onClose, restoring, onRestoreStateChange }) {
     });
     onRestoreStateChange(null);
     if (result) {
-      toast.success(`Restore complete — ${result.changedFiles?.length ?? 0} file(s) restored`);
+      // A legacy snapshot has no manifest to verify against — say so plainly
+      // rather than letting "complete" read as "integrity-checked".
+      const suffix = result.verification?.status === 'unverified' ? ' (unverified legacy snapshot)' : '';
+      toast.success(`Restore complete — ${result.changedFiles?.length ?? 0} file(s) restored${suffix}`);
       onClose();
     }
   }, [acceptedPreview, onClose, onRestoreStateChange, previewMatchesCurrentRequest, restoring, snapshot.id]);
@@ -178,6 +181,21 @@ function RestorePanel({ snapshot, onClose, restoring, onRestoreStateChange }) {
       {/* Dry-run results */}
       {preview && (
         <div>
+          {/* Verification state is part of the confirmation: a verified snapshot
+              is labeled as such, and a manifest-less legacy snapshot is flagged
+              so its restore is never mistaken for an integrity-checked one. */}
+          {preview.verification?.status === 'unverified' ? (
+            <div className="mb-1 flex items-start gap-2 rounded bg-port-warning/10 border border-port-warning/20 p-2">
+              <AlertTriangle size={14} className="text-port-warning shrink-0 mt-0.5" />
+              <p className="text-xs text-port-warning">
+                Legacy snapshot with no integrity manifest — its contents cannot be verified and will be restored unverified.
+              </p>
+            </div>
+          ) : preview.verification?.status === 'verified' ? (
+            <p className="text-xs text-gray-600 mb-1">
+              Snapshot integrity verified against manifest ({preview.verification.checkedFiles} file(s) checked).
+            </p>
+          ) : null}
           <p className="text-xs text-gray-500 mb-1">
             {preview.changedFiles?.length ?? 0} file(s) would change:
           </p>
