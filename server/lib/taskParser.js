@@ -53,48 +53,143 @@ export const PRIORITY_VALUES = {
 };
 
 /**
- * Parse a single task line
+ * The canonical task vocabularies, derived from the two maps above so nothing
+ * can re-declare a drifting copy.
+ *
+ * These exist because `generateTasksMarkdown` can only REPRESENT these values:
+ * a status outside the set lands in no section and a priority outside it fails
+ * `matchTaskLine`'s regex on the next read. TASKS.md is the only store for a
+ * queued task, so an unrepresentable value used to delete the task and its
+ * `metadata.prompt` outright (#7239). Validate against these at every boundary
+ * that can set a status or priority — the HTTP schemas (cosValidation.js) and
+ * the peer wire schema (peerSyncValidation.js) both read them from here.
+ */
+export const TASK_STATUS_VALUES = Object.freeze([...new Set(Object.values(STATUS_MAP))]);
+export const TASK_PRIORITY_VALUES = Object.freeze(Object.keys(PRIORITY_VALUES));
+
+/**
+ * The `blockedCategory` stamped on a task whose status was outside
+ * TASK_STATUS_VALUES when the file was written. The task is parked rather than
+ * dropped, and its original status is preserved in `metadata.unrepresentableStatus`
+ * so a human (or a later migration) can resolve what it should have been.
+ */
+export const UNKNOWN_STATUS_BLOCKED_CATEGORY = 'unknown-status';
+
+const REPAIRED_STATUS = 'blocked';
+const REPAIRED_PRIORITY = 'MEDIUM';
+
+/**
+ * Write-side backstop: return a task the markdown format can actually represent.
+ *
+ * Coerce rather than throw. A peer or an install that already holds a task with
+ * an out-of-vocabulary value must be repaired on READ, not made to crash every
+ * subsequent task-file write — and a row that cannot be written is a row that is
+ * silently deleted, which is the failure this guard exists to stop.
+ *
+ * Never mutates its argument; a representable task is returned as-is, so the
+ * common path allocates nothing. Exported because the two places that CONSTRUCT
+ * a task (`cosTaskIntake.buildQueuedTask`, `cosTaskStore.updateTask`) run it on
+ * the object they are about to persist, so the task they return and emit on
+ * `tasks:changed` says exactly what the file says. Applying it here as well keeps
+ * it a backstop for rows an older install or a peer already wrote.
+ */
+export function toRepresentableTask(task) {
+  const statusOk = TASK_STATUS_VALUES.includes(task?.status);
+  const priorityOk = TASK_PRIORITY_VALUES.includes(task?.priority);
+  if (statusOk && priorityOk) return task;
+
+  const repairs = [];
+  if (!statusOk) repairs.push(`status \`${String(task?.status)}\` -> ${REPAIRED_STATUS}`);
+  if (!priorityOk) repairs.push(`priority \`${String(task?.priority)}\` -> ${REPAIRED_PRIORITY}`);
+  console.warn(`⚠️ Task ${task?.id} is not representable in TASKS.md; repairing ${repairs.join(', ')}`);
+
+  return {
+    ...task,
+    status: statusOk ? task.status : REPAIRED_STATUS,
+    priority: priorityOk ? task.priority : REPAIRED_PRIORITY,
+    priorityValue: priorityOk ? task.priorityValue : PRIORITY_VALUES[REPAIRED_PRIORITY],
+    // A status repair ALWAYS stamps `unknown-status`, never defers to a category
+    // the task already carried: that prior value is arbitrary (it describes some
+    // earlier block, not this one) and a reapable one would let the 14-day
+    // auto-expiry flip the rescued task to `completed` — the exact loss the
+    // exemption in taskBlockCategories.js exists to prevent. The old value is kept
+    // beside it rather than discarded.
+    metadata: statusOk ? (task.metadata || {}) : {
+      ...task?.metadata,
+      ...(task?.metadata?.blockedCategory ? { priorBlockedCategory: task.metadata.blockedCategory } : {}),
+      blockedCategory: UNKNOWN_STATUS_BLOCKED_CATEGORY,
+      unrepresentableStatus: String(task?.status)
+    }
+  };
+}
+
+/**
+ * Match a single task line into a raw task (no repair — see `pushTask`).
  * Format: - [ ] #task-001 | HIGH | Description
  * Or with approval flag: - [ ] #sys-001 | HIGH | AUTO | Description
+ *
+ * The four patterns are tried in order, and the first two are the format as
+ * written — a well-formed file never reaches the others, so their behavior is
+ * unchanged. The last two are the RECOVERY path (#7239) for a row an older
+ * install already wrote, or a hand edit: they accept any priority field and any
+ * checkbox character, so the row and its indented metadata (which includes
+ * `metadata.prompt`, the whole agent-facing payload) survive to be repaired
+ * instead of being dropped along with everything indented under it.
+ *
+ * Recovery accepts ANY non-pipe priority field, because the boundary that wrote
+ * these rows accepted any string — `VERY HIGH`, `123` and `URGENT!` were all
+ * reachable through the route before this issue, and a narrower pattern would
+ * leave exactly those rows to be deleted by the next write.
  */
-function parseTaskLine(line) {
-  // First try: - [status] #id | PRIORITY | APPROVAL_FLAG | description
-  let match = line.match(/^-\s*\[([ x~!?])\]\s*#([\w-]+)\s*\|\s*(CRITICAL|HIGH|MEDIUM|LOW)\s*\|\s*(AUTO|APPROVAL)\s*\|\s*(.+)$/i);
+const TASK_LINE_PATTERNS = [
+  { withFlag: true, re: /^-\s*\[([ x~!?])\]\s*#([\w-]+)\s*\|\s*(CRITICAL|HIGH|MEDIUM|LOW)\s*\|\s*(AUTO|APPROVAL)\s*\|\s*(.+)$/i },
+  { withFlag: false, re: /^-\s*\[([ x~!?])\]\s*#([\w-]+)\s*\|\s*(CRITICAL|HIGH|MEDIUM|LOW)\s*\|\s*(.+)$/i },
+  { withFlag: true, recovery: true, re: /^-\s*\[([^\]])\]\s*#([\w-]+)\s*\|\s*([^|]+)\|\s*(AUTO|APPROVAL)\s*\|\s*(.+)$/i },
+  { withFlag: false, recovery: true, re: /^-\s*\[([^\]])\]\s*#([\w-]+)\s*\|\s*([^|]+)\|\s*(.+)$/i }
+];
 
-  if (match) {
-    const [, statusChar, id, priority, approvalFlag, description] = match;
-    const statusKey = `[${statusChar}]`;
+function matchTaskLine(line) {
+  for (const { re, withFlag, recovery } of TASK_LINE_PATTERNS) {
+    const match = line.match(re);
+    if (!match) continue;
+
+    const [, statusChar, id, priority, ...rest] = match;
+    // Lower-cased because the patterns are case-insensitive: a hand-written [X]
+    // means completed, not an unknown marker. A marker that really is unknown
+    // stays as its raw token so toRepresentableTask parks the row as blocked
+    // rather than defaulting it to pending, which would make a hand-edited row
+    // auto-approved and runnable.
+    const statusKey = `[${statusChar.toLowerCase()}]`;
+    const approvalFlag = withFlag ? rest[0].toUpperCase() : null;
+    const description = withFlag ? rest[1] : rest[0];
+
+    const taskId = hasKnownPrefix(id) ? id : `task-${id}`;
 
     return {
-      id: hasKnownPrefix(id) ? id : `task-${id}`,
-      status: STATUS_MAP[statusKey] || 'pending',
-      priority: priority.toUpperCase(),
-      priorityValue: PRIORITY_VALUES[priority.toUpperCase()] || 2,
-      approvalRequired: approvalFlag.toUpperCase() === 'APPROVAL',
-      autoApproved: approvalFlag.toUpperCase() === 'AUTO',
+      id: taskId,
+      status: STATUS_MAP[statusKey] ?? statusKey,
+      priority: priority.trim().toUpperCase(),
+      priorityValue: PRIORITY_VALUES[priority.trim().toUpperCase()] || 2,
+      // A recovered row is an ambiguous split — the priority field could itself
+      // have held a pipe ('UR|GENT', 'UR|AUTO' were both reachable through the old
+      // free-string boundary), so which segment was the approval flag is a guess.
+      // Recovery must never make a row MORE permissive than it was, so a recovered
+      // INTERNAL task lands in the approval queue rather than the dequeue: those
+      // are the rows where the flag gates an agent spawn, and the flag is written
+      // back (includeApprovalFlags), so the hold survives the next read.
+      //
+      // A user task carries no flag in the format at all — every one is
+      // auto-approved by construction — so holding one here would be a claim the
+      // next write erases. Its row is restored to the ordinary user queue, which
+      // is exactly what it was before the corruption. A strict match on either
+      // kind keeps its exact prior semantics.
+      approvalRequired: (recovery && isInternalTaskId(taskId)) || approvalFlag === 'APPROVAL',
+      autoApproved: !(recovery && isInternalTaskId(taskId)) && (withFlag ? approvalFlag === 'AUTO' : true),
       description: description.trim(),
       metadata: {}
     };
   }
-
-  // Fallback: - [status] #id | PRIORITY | description (no approval flag)
-  match = line.match(/^-\s*\[([ x~!?])\]\s*#([\w-]+)\s*\|\s*(CRITICAL|HIGH|MEDIUM|LOW)\s*\|\s*(.+)$/i);
-
-  if (!match) return null;
-
-  const [, statusChar, id, priority, description] = match;
-  const statusKey = `[${statusChar}]`;
-
-  return {
-    id: hasKnownPrefix(id) ? id : `task-${id}`,
-    status: STATUS_MAP[statusKey] || 'pending',
-    priority: priority.toUpperCase(),
-    priorityValue: PRIORITY_VALUES[priority.toUpperCase()] || 2,
-    approvalRequired: false,
-    autoApproved: true,
-    description: description.trim(),
-    metadata: {}
-  };
+  return null;
 }
 
 // Sentinel prefix for JSON-encoded metadata values
@@ -194,7 +289,7 @@ export function parseTasksMarkdown(content) {
   const rawIds = new Set();
   for (const line of lines) {
     if (line.startsWith('- [')) {
-      const parsed = parseTaskLine(line);
+      const parsed = matchTaskLine(line);
       if (parsed) rawIds.add(parsed.id);
     }
   }
@@ -219,7 +314,12 @@ export function parseTasksMarkdown(content) {
       console.warn(`⚠️ Duplicate task id "${originalId}" in tasks markdown — renamed to "${task.id}"`);
     }
     seenIds.add(task.id);
-    tasks.push(task);
+    // Repair HERE, not at match time: the row's indented metadata lines are
+    // attached between the two, and one of them can be a `blockedCategory` left
+    // over from an earlier block. Repairing first would let that line overwrite
+    // the `unknown-status` hold the repair just stamped, dropping the rescued
+    // task back into the 14-day auto-expiry it is exempt from.
+    tasks.push(toRepresentableTask(task));
   };
 
   for (const line of lines) {
@@ -237,7 +337,7 @@ export function parseTasksMarkdown(content) {
     // Task line
     if (line.startsWith('- [')) {
       pushTask(currentTask);
-      currentTask = parseTaskLine(line);
+      currentTask = matchTaskLine(line);
       if (currentTask) {
         currentTask.section = currentSection;
       }
@@ -304,7 +404,10 @@ function flattenDescription(task) {
  * @param {boolean} includeApprovalFlags - Whether to include AUTO/APPROVAL flags (for internal CoS tasks)
  */
 export function generateTasksMarkdown(tasks, includeApprovalFlags = false) {
-  const grouped = groupTasksByStatus(tasks);
+  // Repair BEFORE grouping: groupTasksByStatus buckets only the five known
+  // statuses, so an unrepresentable task would fall out of every bucket and be
+  // written nowhere. Every task handed in gets a row (#7239).
+  const grouped = groupTasksByStatus(tasks.map(toRepresentableTask));
   const lines = ['# Tasks', ''];
 
   const statusToCheckbox = {
@@ -464,12 +567,17 @@ export function validateTask(task) {
     errors.push('Task must have a description');
   }
 
-  if (!['pending', 'in_progress', 'challenged', 'blocked', 'completed'].includes(task.status)) {
+  // Both read the vocabularies above rather than a hand-written list — this was
+  // the fourth copy of the same five statuses in the tree (#7239).
+  if (!TASK_STATUS_VALUES.includes(task.status)) {
     errors.push('Invalid task status');
   }
 
-  if (!Object.keys(PRIORITY_VALUES).includes(task.priority)) {
-    errors.push('Invalid priority (must be CRITICAL, HIGH, MEDIUM, or LOW)');
+  if (!TASK_PRIORITY_VALUES.includes(task.priority)) {
+    // Derived, but phrased exactly as before — this message is the one a user reads.
+    const options = [...TASK_PRIORITY_VALUES];
+    const last = options.pop();
+    errors.push(`Invalid priority (must be ${[...options, `or ${last}`].join(', ')})`);
   }
 
   return {

@@ -17,7 +17,7 @@ import { reviewerModelsFromDefaults } from '../lib/reviewerConfig.js';
 import { readFile, writeFile, stat } from 'fs/promises';
 import { existsSync } from 'fs';
 import { join } from 'path';
-import { parseTasksMarkdown, groupTasksByStatus, getAutoApprovedTasks, getAwaitingApprovalTasks, generateTasksMarkdown, PRIORITY_VALUES } from '../lib/taskParser.js';
+import { parseTasksMarkdown, groupTasksByStatus, getAutoApprovedTasks, getAwaitingApprovalTasks, generateTasksMarkdown, toRepresentableTask, PRIORITY_VALUES } from '../lib/taskParser.js';
 import { MAX_TOTAL_SPAWNS } from '../lib/validation.js';
 import { RETRY_HOLD_KEY, RETRY_HOLD_SINCE_KEY } from '../lib/taskRetryHold.js';
 import { resolveTaskTargetBranch, shouldStripTaskTargetBranch } from '../lib/taskTargetBranch.js';
@@ -687,8 +687,11 @@ async function writeTaskUpdate(taskId, updates, taskType, { now, suppressDequeue
   const nextMetadata = normalizedDescription ? normalizedDescription.metadata : updatedMetadata;
   const nextDescription = normalizedDescription ? normalizedDescription.description : updates.description;
 
-  // Update the task
-  const updatedTask = {
+  // Update the task. Through `toRepresentableTask` so the object we return and
+  // emit on `tasks:changed` is the one the file will hold — repairing only inside
+  // generateTasksMarkdown would leave every consumer reading the pre-repair status
+  // until something re-read the file (#7239).
+  const updatedTask = toRepresentableTask({
     ...tasks[taskIndex],
     ...(updates.description && { description: nextDescription }),
     ...(updates.priority && {
@@ -697,7 +700,7 @@ async function writeTaskUpdate(taskId, updates, taskType, { now, suppressDequeue
     }),
     ...(updates.status && { status: updates.status }),
     metadata: nextMetadata
-  };
+  });
 
   tasks[taskIndex] = updatedTask;
 

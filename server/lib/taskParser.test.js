@@ -10,7 +10,10 @@ import {
   addTask,
   removeTask,
   getNextTask,
-  validateTask
+  validateTask,
+  TASK_STATUS_VALUES,
+  TASK_PRIORITY_VALUES,
+  UNKNOWN_STATUS_BLOCKED_CATEGORY
 } from './taskParser.js';
 
 describe('Task Parser', () => {
@@ -821,5 +824,242 @@ describe('Task Parser — challenged status (#2441)', () => {
   it('validates challenged as a legal status', () => {
     const result = validateTask({ id: 'task-902', description: 'x', status: 'challenged', priority: 'HIGH' });
     expect(result.valid).toBe(true);
+  });
+});
+
+describe('unrepresentable status/priority never drops a task (#7239)', () => {
+  // TASKS.md is the ONLY store for a queued task and every write is a full-file
+  // rewrite, so a value the format cannot represent used to delete the task and
+  // its `metadata.prompt` outright: an unknown status fell out of every bucket in
+  // `groupTasksByStatus` and was written nowhere; an unknown priority reached the
+  // file and then failed `parseTaskLine`'s regex on the next read.
+  const tasks = [
+    { id: 'task-A', status: 'pending', priority: 'HIGH', priorityValue: 3, description: 'keep me', metadata: { context: 'a' } },
+    { id: 'task-B', status: 'archived', priority: 'HIGH', priorityValue: 3, description: 'unknown status', metadata: { prompt: 'the agent-facing payload' } },
+    { id: 'task-C', status: 'pending', priority: 'URGENT', priorityValue: 2, description: 'unknown priority', metadata: { context: 'c' } },
+  ];
+
+  it('survives a generate -> parse round trip with its metadata intact', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const reparsed = parseTasksMarkdown(generateTasksMarkdown(tasks));
+    warn.mockRestore();
+
+    expect(reparsed.map(t => t.id).sort()).toEqual(['task-A', 'task-B', 'task-C']);
+    // The whole point: the prompt payload is not lost with the row.
+    expect(reparsed.find(t => t.id === 'task-B').metadata.prompt).toBe('the agent-facing payload');
+  });
+
+  it('parks the unknown status as blocked and records what it was', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const repaired = parseTasksMarkdown(generateTasksMarkdown(tasks)).find(t => t.id === 'task-B');
+    warn.mockRestore();
+
+    expect(repaired.status).toBe('blocked');
+    expect(repaired.metadata.blockedCategory).toBe(UNKNOWN_STATUS_BLOCKED_CATEGORY);
+    expect(repaired.metadata.unrepresentableStatus).toBe('archived');
+  });
+
+  it('recovers a row an older install already wrote to disk, with its prompt payload', () => {
+    // The write-side repair cannot help a row that is ALREADY on disk: an unknown
+    // priority fails parseTaskLine's regex, so the task and every indented
+    // metadata line under it were dropped on read and deleted by the next write.
+    // PortOS is distributed software — installs that predate the fix hold these.
+    const onDisk = [
+      '# Tasks',
+      '',
+      '## Pending',
+      '- [ ] #task-A | HIGH | representable',
+      '- [ ] #task-C | URGENT | written before the fix',
+      '  - prompt: the agent-facing payload',
+      '- [a] #task-D | HIGH | hand-edited checkbox',
+      '  - prompt: also worth keeping',
+      ''
+    ].join('\n');
+
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const parsed = parseTasksMarkdown(onDisk);
+    warn.mockRestore();
+
+    expect(parsed.map(t => t.id)).toEqual(['task-A', 'task-C', 'task-D']);
+    expect(parsed.find(t => t.id === 'task-C').priority).toBe('MEDIUM');
+    expect(parsed.find(t => t.id === 'task-C').metadata.prompt).toBe('the agent-facing payload');
+    // An unrecognized checkbox already defaults to pending, so only the row itself
+    // was at risk there.
+    expect(parsed.find(t => t.id === 'task-D').metadata.prompt).toBe('also worth keeping');
+  });
+
+  it('repairs a recovered row once per parse, not once per scan pass', () => {
+    // parseTasksMarkdown walks the lines twice (an id pre-scan, then the real
+    // parse); only the second pass may repair, or every read doubles the log.
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    parseTasksMarkdown('# Tasks\n\n## Pending\n- [ ] #task-C | URGENT | one row\n');
+    expect(warn).toHaveBeenCalledTimes(1);
+    warn.mockRestore();
+  });
+
+  it('recovers every priority the old boundary could write, not just single words', () => {
+    // `priority: z.string()` accepted anything and updateTask wrote it verbatim:
+    // 'VERY HIGH', '123' and 'URGENT!' are all rows a pre-fix install can hold.
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const parsed = parseTasksMarkdown([
+      '# Tasks', '', '## Pending',
+      '- [ ] #task-B | VERY HIGH | multiword',
+      '  - prompt: payload B',
+      '- [ ] #task-C | 123 | numeric',
+      '  - prompt: payload C',
+      '- [ ] #task-E | URGENT! | punctuated',
+      ''
+    ].join('\n'));
+    warn.mockRestore();
+
+    expect(parsed.map(t => t.id)).toEqual(['task-B', 'task-C', 'task-E']);
+    expect(parsed.every(t => t.priority === 'MEDIUM')).toBe(true);
+    expect(parsed[0].metadata.prompt).toBe('payload B');
+  });
+
+  it.each([
+    ['a pipe before the flag', '- [ ] #sys-1 | UR|GENT | APPROVAL | work'],
+    ['a pipe that looks like a flag', '- [ ] #sys-2 | UR|AUTO | APPROVAL | work'],
+  ])('recovers an internal row with %s into the approval queue, and keeps it there', (_label, line) => {
+    // A recovered row is an ambiguous split: the priority field itself could have
+    // held a pipe, so which segment was the approval flag is a guess. For an
+    // INTERNAL task that flag gates an agent spawn, so recovery must not make the
+    // row more permissive — and the hold has to survive the write that heals the
+    // file, or the next read releases it.
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const recovered = parseTasksMarkdown('# Tasks\n\n## Pending\n' + line + '\n  - prompt: payload\n');
+    warn.mockRestore();
+
+    expect(recovered[0].approvalRequired).toBe(true);
+    expect(getAutoApprovedTasks(recovered)).toEqual([]);
+    expect(getAwaitingApprovalTasks(recovered)).toHaveLength(1);
+    expect(recovered[0].metadata.prompt).toBe('payload');
+
+    // Internal files are written WITH approval flags, so the healed row re-reads
+    // as approval-required rather than silently returning to the dequeue.
+    const reread = parseTasksMarkdown(generateTasksMarkdown(recovered, true));
+    expect(reread[0].approvalRequired).toBe(true);
+    expect(getAutoApprovedTasks(reread)).toEqual([]);
+  });
+
+  it('restores a recovered USER row to the ordinary queue', () => {
+    // A user task carries no approval flag in the format at all — every one is
+    // auto-approved by construction — so holding one would be a claim the next
+    // write erases. The row goes back to being exactly what it was.
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const [recovered] = parseTasksMarkdown('# Tasks\n\n## Pending\n- [ ] #task-C | URGENT | plain user row\n  - prompt: payload\n');
+    warn.mockRestore();
+
+    expect(recovered.autoApproved).toBe(true);
+    expect(recovered.approvalRequired).toBe(false);
+    expect(recovered.metadata.prompt).toBe('payload');
+  });
+
+  it("leaves a STRICT row's approval semantics exactly as they were", () => {
+    // The recovery rule must not touch the format as written — a description that
+    // happens to contain '| AUTO |' is still an ordinary auto-approved user row.
+    const wellFormed = parseTasksMarkdown([
+      '# Tasks', '', '## Pending',
+      '- [ ] #task-1 | HIGH | Explain | AUTO | behavior',
+      '- [ ] #sys-3 | HIGH | AUTO | normal internal',
+      ''
+    ].join('\n'));
+    expect(wellFormed.map(t => t.autoApproved)).toEqual([true, true]);
+    expect(wellFormed.map(t => t.approvalRequired)).toEqual([false, false]);
+    expect(getAutoApprovedTasks(wellFormed)).toHaveLength(2);
+  });
+
+  it('parks an unrecognized checkbox instead of making it a runnable pending task', () => {
+    // Defaulting an unknown marker to 'pending' would recover the row straight
+    // into the dequeue — a hand-edited line would spawn an agent. It has to land
+    // on the unknown-status hold, which is blocked and therefore never dequeued.
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const [parked] = parseTasksMarkdown('# Tasks\n\n## Pending\n- [a] #task-D | HIGH | AUTO | work\n  - prompt: payload D\n');
+    warn.mockRestore();
+
+    expect(parked.status).toBe('blocked');
+    expect(parked.metadata.blockedCategory).toBe(UNKNOWN_STATUS_BLOCKED_CATEGORY);
+    expect(parked.metadata.unrepresentableStatus).toBe('[a]');
+    expect(parked.metadata.prompt).toBe('payload D');
+    expect(getAutoApprovedTasks([parked])).toEqual([]);
+  });
+
+  it('is not overwritten by a blockedCategory line further down the same row', () => {
+    // The row's indented metadata is attached AFTER the line is matched, so a
+    // stale category from an earlier block would clobber the unknown-status hold
+    // if the repair ran at match time — putting the rescued task back into the
+    // 14-day auto-expiry it is exempt from.
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const [parked] = parseTasksMarkdown([
+      '# Tasks', '', '## Pending',
+      '- [a] #task-D | HIGH | work',
+      '  - blockedCategory: worktree-failed',
+      '  - prompt: preserved payload',
+      ''
+    ].join('\n'));
+    warn.mockRestore();
+
+    expect(parked.metadata.blockedCategory).toBe(UNKNOWN_STATUS_BLOCKED_CATEGORY);
+    expect(parked.metadata.priorBlockedCategory).toBe('worktree-failed');
+    expect(parked.metadata.prompt).toBe('preserved payload');
+  });
+
+  it('reads a hand-written [X] as completed rather than an unknown marker', () => {
+    // The patterns are case-insensitive, so [X] always matched — it just fell
+    // through STATUS_MAP and silently resurrected a finished task as pending.
+    expect(parseTasksMarkdown('# Tasks\n\n## Completed\n- [X] #task-E | HIGH | done\n')[0].status).toBe('completed');
+  });
+
+  it('still refuses a line that is not a task row at all', () => {
+    expect(parseTasksMarkdown('# Tasks\n\n## Pending\n- [ ] no-hash-id | HIGH | desc\n')).toEqual([]);
+    expect(parseTasksMarkdown('# Tasks\n\n## Pending\n- [ ] #task-X | only two fields\n')).toEqual([]);
+  });
+
+  it('overrides a block category the task already carried, keeping the old one beside it', () => {
+    // A category left over from an earlier block says nothing about THIS repair,
+    // and a reapable one (worktree-failed) would let the 14-day auto-expiry flip
+    // the rescued task to completed — the loss the exemption exists to prevent.
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const md = generateTasksMarkdown([{
+      id: 'task-D', status: 'archived', priority: 'HIGH', priorityValue: 3,
+      description: 'stale category', metadata: { blockedCategory: 'worktree-failed' },
+    }]);
+    warn.mockRestore();
+
+    const repaired = parseTasksMarkdown(md)[0];
+    expect(repaired.metadata.blockedCategory).toBe(UNKNOWN_STATUS_BLOCKED_CATEGORY);
+    expect(repaired.metadata.priorBlockedCategory).toBe('worktree-failed');
+  });
+
+  it('coerces the unknown priority to MEDIUM without touching its status', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const repaired = parseTasksMarkdown(generateTasksMarkdown(tasks)).find(t => t.id === 'task-C');
+    warn.mockRestore();
+
+    expect(repaired.status).toBe('pending');
+    expect(repaired.priority).toBe('MEDIUM');
+    // A priority-only repair must not park the task or stamp a block category.
+    expect(repaired.metadata.blockedCategory).toBeUndefined();
+  });
+
+  it('warns once per repaired task and stays silent when every task is representable', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    generateTasksMarkdown(tasks);
+    expect(warn.mock.calls.map(([line]) => line)).toEqual([
+      expect.stringContaining('task-B'),
+      expect.stringContaining('task-C'),
+    ]);
+
+    warn.mockClear();
+    generateTasksMarkdown([tasks[0]]);
+    expect(warn).not.toHaveBeenCalled();
+    warn.mockRestore();
+  });
+
+  it('derives the vocabularies from the format itself', () => {
+    expect([...TASK_STATUS_VALUES].sort())
+      .toEqual(['blocked', 'challenged', 'completed', 'in_progress', 'pending']);
+    expect([...TASK_PRIORITY_VALUES].sort())
+      .toEqual(['CRITICAL', 'HIGH', 'LOW', 'MEDIUM']);
   });
 });
