@@ -87,15 +87,31 @@ When rewriting the arc + volume synopses, preserve the picked shape — do not c
 ```
 
 {{#arcSpineOnly}}
-This is the pre-episode **arc-spine checkpoint**. The episode arrays are
-intentionally empty — no episode lineup exists yet, and the verification pass
-that produced the findings below judged this same episode-free plan. Resolve
+This is the **arc-spine checkpoint**. The editable tree's episode arrays are
+intentionally empty, and the verification pass that produced the findings below
+judged this same arc-and-volume scope. Resolve
 every finding by editing the **arc, per-character arcs, and volumes only**. Do **not** return an
 `episodes[]` array: the server discards it here, so an episode rewrite spends
 the round without closing anything. Every instruction below about anchoring in
 per-episode synopses, or about correcting an episode whose own content caused a
 finding, describes the later full-arc gate and does not apply at this
 checkpoint.
+{{#arcSpineHasEpisodePlans}}
+
+### Existing issue plans — read-only references
+
+This series already has the authored issue plans below. The verifier saw the
+same references. Reconcile an incomplete arc or volume summary by carrying up
+the event already authored in its issue, at its existing issue number. Do not
+invent a new event, move a choice to another issue, or add a second suppression,
+rescue or payoff merely because the summary omitted the first one. These plans
+are evidence, not editable targets: the server still rejects `episodes[]` in
+this checkpoint. Leave an issue's own content repair to the later full-arc gate.
+
+```json
+{{spineEpisodePlansJson}}
+```
+{{/arcSpineHasEpisodePlans}}
 {{/arcSpineOnly}}
 
 ## Structural recommendation

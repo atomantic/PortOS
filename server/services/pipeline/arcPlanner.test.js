@@ -60,7 +60,7 @@ describe('arcPlanner — generateArcOverview', () => {
   });
 
   it('runs the prompt and returns sanitized arc + seasons preview', async () => {
-    const s = await setupSeries();
+    const s = await setupSeries({ targetFormat: 'tv' });
     stageRunnerSpy = vi.fn(async () => ({
       content: {
         logline: 'A foundry city falls and rises.',
@@ -81,7 +81,7 @@ describe('arcPlanner — generateArcOverview', () => {
     const out = await planner.generateArcOverview(s.id);
     expect(stageRunnerSpy).toHaveBeenCalledWith(
       'pipeline-arc-overview',
-      expect.objectContaining({ series: expect.objectContaining({ name: 'Salt Run' }) }),
+      expect.objectContaining({ series: expect.objectContaining({ name: 'Salt Run', targetFormat: 'tv' }) }),
       expect.objectContaining({ returnsJson: true, source: 'pipeline-arc-overview' }),
     );
     expect(out.arc).toMatchObject({
@@ -1718,32 +1718,57 @@ describe('arcPlanner — resolveVerifyIssues', () => {
     expect(planner.resolvedEpisodeEdits(result)).toEqual([]);
   });
 
-  // The pre-episode arc-spine gate verifies an episode-EMPTY plan (#3789). A
-  // resolver handed the full lineup answered spine findings with episode
-  // rewrites the gate never read: they could not close what was flagged, and
-  // the round got reverted for doubling the blocker count. Both halves of the
-  // loop have to see the same plan.
-  it('renders the resolve prompt with empty episode arrays in spineOnly mode', async () => {
+  it('gives the spine judge and resolver the same read-only existing plans without expanding the editable tree', async () => {
     const s = await setupSeries();
     await seriesSvc.updateSeries(s.id, { arc: { logline: 'L' } });
     const season = await seasonsSvc.createSeason(s.id, { title: 'Vol 1', episodeCountTarget: 1 });
     const issue = await issuesSvc.createIssue({ seriesId: s.id, seasonId: season.id, title: 'Ep' });
-    await issuesSvc.updateStage(issue.id, 'idea', { input: 'seeded episode synopsis', status: 'empty' });
+    await issuesSvc.updateStage(issue.id, 'idea', { input: 'seeded episode synopsis', output: 'expanded beats stay outside the spine', status: 'ready' });
+    await issuesSvc.updateStage(issue.id, 'prose', { output: 'draft prose stays outside the spine', status: 'ready' });
+    await issuesSvc.createIssue({ seriesId: s.id, seasonId: season.id, title: 'Empty placeholder' });
+    const other = await setupSeries();
+    const otherIssue = await issuesSvc.createIssue({ seriesId: other.id, title: 'Unrelated' });
+    await issuesSvc.updateStage(otherIssue.id, 'idea', { input: 'another series plan', status: 'empty' });
 
     stageRunnerSpy = vi.fn(async () => ({
       content: { arc: { logline: 'L2', summary: 'S', themes: [], protagonistArc: '' }, seasons: [], notes: '' },
       runId: 'r', providerId: 'p', model: 'm',
     }));
 
+    await planner.verifyArc(s.id, { spineOnly: true });
     await planner.resolveVerifyIssues(s.id, {
       spineOnly: true,
       findings: [{ severity: 'high', problem: 'spine problem', suggestion: 'fix the arc' }],
     });
 
-    const ctx = stageRunnerSpy.mock.calls[0][1];
-    expect(ctx.arcSpineOnly).toBe(true);
-    expect(JSON.parse(ctx.seasonsTreeJson)[0].episodes).toEqual([]);
-    expect(ctx.seasonsTreeJson).not.toContain('seeded episode synopsis');
+    const [verify, resolve] = stageRunnerSpy.mock.calls.map((call) => call[1]);
+    expect(resolve.spineEpisodePlansJson).toBe(verify.spineEpisodePlansJson);
+    for (const ctx of [verify, resolve]) {
+      expect(ctx.series.targetFormat).toBe(s.targetFormat);
+      expect(ctx.arcSpineOnly).toBe(true);
+      expect(JSON.parse(ctx.seasonsTreeJson)[0].episodes).toEqual([]);
+      expect(ctx.seasonsTreeJson).not.toContain('seeded episode synopsis');
+      expect(ctx.arcSpineHasEpisodePlans).toBe(true);
+      expect(JSON.parse(ctx.spineEpisodePlansJson)[0].episodes).toEqual([
+        expect.objectContaining({ number: issue.number, title: 'Ep', synopsis: 'seeded episode synopsis' }),
+      ]);
+      expect(ctx.spineEpisodePlansJson).not.toMatch(/expanded beats|draft prose|Empty placeholder|another series plan/);
+    }
+  });
+
+  it('omits spine references before issue planning and keeps full-arc plans in the normal tree', async () => {
+    const s = await setupSeries();
+    await seriesSvc.updateSeries(s.id, { arc: { logline: 'L' } });
+    const season = await seasonsSvc.createSeason(s.id, { title: 'Vol 1', episodeCountTarget: 1 });
+    const issue = await issuesSvc.createIssue({ seriesId: s.id, seasonId: season.id, title: 'Ep' });
+    stageRunnerSpy = vi.fn(async () => ({ content: { issues: [] }, runId: 'r', providerId: 'p', model: 'm' }));
+    await planner.verifyArc(s.id, { spineOnly: true });
+    expect(stageRunnerSpy.mock.calls[0][1]).toMatchObject({ arcSpineOnly: true, arcSpineHasEpisodePlans: false, spineEpisodePlansJson: '' });
+    await issuesSvc.updateStage(issue.id, 'idea', { input: 'authored plan', status: 'empty' });
+    await planner.verifyArc(s.id);
+    const full = stageRunnerSpy.mock.calls[1][1];
+    expect(full).toMatchObject({ arcSpineOnly: false, arcSpineHasEpisodePlans: false, spineEpisodePlansJson: '' });
+    expect(JSON.parse(full.seasonsTreeJson)[0].episodes[0].synopsis).toBe('authored plan');
   });
 
   it('discards episode edits in spineOnly mode and leaves the planned synopses untouched', async () => {
