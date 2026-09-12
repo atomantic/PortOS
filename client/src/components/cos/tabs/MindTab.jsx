@@ -568,9 +568,11 @@ export default function MindTab() {
   };
 
   const runLifecycle = async (action) => {
+    if (lifecyclePending) return;
     setLifecyclePending(action);
     setLifecycleError(null);
     try {
+      if (action === 'wake') await api.wakePersistentMind({ silent: true });
       if (action === 'start') await api.startPersistentMind({ silent: true });
       if (action === 'pause') await api.pausePersistentMind('Paused from Mind page', { silent: true });
       if (action === 'resume') await api.resumePersistentMind({ silent: true });
@@ -722,6 +724,7 @@ export default function MindTab() {
               : mind?.profile?.model}
           />
           {!state?.started && <ActionButton label={profileReady ? 'Start' : 'Configure'} icon={profileReady ? CirclePlay : Settings2} pending={profileReady && lifecyclePending === 'start'} disabled={loading || setupSaving} onClick={() => (profileReady ? runLifecycle('start') : openPanel('settings'))} />}
+          <ActionButton label="Wake now" icon={CirclePlay} pending={lifecyclePending === 'wake'} disabled={loading || setupSaving || !profileReady || Boolean(lifecyclePending) || Boolean(state?.activeTurn)} onClick={() => runLifecycle('wake')} />
           {state?.started && !isPaused && <ActionButton label="Pause" icon={CirclePause} pending={lifecyclePending === 'pause'} onClick={() => runLifecycle('pause')} />}
           {state?.started && isPaused && <ActionButton label="Resume" icon={CirclePlay} pending={lifecyclePending === 'resume'} onClick={() => runLifecycle('resume')} />}
           {state?.started && <ActionButton label="Stop" icon={Square} pending={lifecyclePending === 'stop'} onClick={() => runLifecycle('stop')} />}

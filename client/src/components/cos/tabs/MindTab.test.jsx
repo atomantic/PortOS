@@ -10,6 +10,7 @@ const api = vi.hoisted(() => ({
   uploadPersistentMindAttachment: vi.fn(),
   deletePersistentMindAttachment: vi.fn(),
   addPersistentMindAnnotation: vi.fn(),
+  wakePersistentMind: vi.fn(),
   startPersistentMind: vi.fn(),
   pausePersistentMind: vi.fn(),
   resumePersistentMind: vi.fn(),
@@ -171,6 +172,16 @@ describe('MindTab', () => {
       runtimeResidueCleared: true,
       state: { enabled: true, started: false, status: 'idle', pauseReason: null },
     });
+  });
+
+  it('offers an immediate wake and displays failures', async () => {
+    api.wakePersistentMind.mockRejectedValue(new Error('Wake unavailable'));
+    renderTab();
+    const button = await screen.findByRole('button', { name: 'Wake now' });
+    await waitFor(() => expect(button).not.toBeDisabled());
+    fireEvent.click(button);
+    await screen.findByText('Wake unavailable');
+    expect(api.wakePersistentMind).toHaveBeenCalledWith({ silent: true });
   });
 
   it('restores event details from the URL and keeps the chat composer single-purpose', async () => {

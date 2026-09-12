@@ -1119,6 +1119,33 @@ export async function startPersistentMind() {
   return result.value;
 }
 
+/** A deliberate user wake retries now through the normal admission gates. */
+export async function wakePersistentMind() {
+  const result = await mutateMindState((mind) => {
+    // A running turn already satisfies this request; never interrupt or queue
+    // an extra billable turn for repeated clicks while it is thinking.
+    if (mind.activeTurn) return { mind, value: { success: true, alreadyRunning: true } };
+    return {
+      mind: {
+        ...mind,
+        enabled: true,
+        started: true,
+        status: 'waiting',
+        pauseReason: null,
+        nextEligibleWakeAt: null,
+        selfWake: mind.queuedMessages.length > 0 ? mind.selfWake : initialSelfWake('explicit-wake'),
+      },
+      value: { success: true, alreadyRunning: false },
+    };
+  });
+  cancelUsageLimitProbe();
+  usageLimitProbeAttempt = 0;
+  armWatchdog();
+  await scheduleNextWake();
+  emitMindStatus(result.state);
+  return result.value;
+}
+
 export async function pausePersistentMind(reason = 'Paused by user') {
   const { state, interrupted } = await interruptActiveTurn(reason, 'paused');
   if (!interrupted) {
@@ -1403,7 +1430,13 @@ export async function enqueuePersistentMindMessage({
         ...mind,
         pendingAttachments,
         queuedMessages: [...mind.queuedMessages, message],
-        status: mind.started && mind.status !== 'paused' ? 'waiting' : mind.status,
+        // Sending a new message is explicit consent to start/resume. Keep an
+        // in-flight turn intact; FIFO admission picks this message up next.
+        enabled: true,
+        started: true,
+        status: mind.activeTurn ? mind.status : 'waiting',
+        pauseReason: null,
+        nextEligibleWakeAt: null,
       },
       value: { success: true, duplicate: false, messageId, acceptedMessage: message },
     };
@@ -1430,6 +1463,11 @@ export async function enqueuePersistentMindMessage({
           : [],
       },
     });
+  }
+  if (result.value.success && !result.value.duplicate) {
+    cancelUsageLimitProbe();
+    usageLimitProbeAttempt = 0;
+    armWatchdog();
   }
   if (result.value.success && result.state.started) await scheduleNextWake();
   emitMindStatus(result.state);

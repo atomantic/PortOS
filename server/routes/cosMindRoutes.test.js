@@ -19,6 +19,7 @@ const mocks = vi.hoisted(() => ({
   getProviderById: vi.fn(),
   createPersistentMindAttachment: vi.fn(),
   deletePersistentMindAttachment: vi.fn(),
+  wakePersistentMind: vi.fn(),
   startPersistentMind: vi.fn(),
   pausePersistentMind: vi.fn(),
   resumePersistentMind: vi.fn(),
@@ -71,6 +72,7 @@ vi.mock('../services/persistentMindSupervisor.js', () => ({
   deletePersistentMindAttachment: mocks.deletePersistentMindAttachment,
   getPersistentMindState: mocks.getPersistentMindState,
   enqueuePersistentMindMessage: mocks.enqueuePersistentMindMessage,
+  wakePersistentMind: mocks.wakePersistentMind,
   startPersistentMind: mocks.startPersistentMind,
   pausePersistentMind: mocks.pausePersistentMind,
   resumePersistentMind: mocks.resumePersistentMind,
@@ -172,6 +174,14 @@ describe('persistent mind routes', () => {
       apps: [{ id: 'demo-app', name: 'Demo App', planOnly: true }],
       providers: [{ id: 'codex', name: 'Codex', type: 'cli', models: [{ id: 'gpt-5', efforts: ['low', 'high'] }] }],
     });
+  });
+
+  it('requests an immediate manual wake', async () => {
+    mocks.wakePersistentMind.mockResolvedValue({ success: true });
+    const res = await post('/mind/wake');
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(true);
+    expect(mocks.wakePersistentMind).toHaveBeenCalledOnce();
   });
 
   it('serves a bounded cursor snapshot with only the safe profile fields', async () => {

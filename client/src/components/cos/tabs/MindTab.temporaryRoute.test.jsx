@@ -141,7 +141,7 @@ describe('MindTab temporary thinking sessions', () => {
     expect(api.resumePersistentMind).not.toHaveBeenCalled();
   });
 
-  it('keeps a paused mind paused while previewing, and says the message will queue', async () => {
+  it('keeps previewing inert and explains that sending resumes a paused mind', async () => {
     const user = userEvent.setup();
     api.getPersistentMind.mockResolvedValue(response({
       state: { ...response().state, status: 'paused', pauseReason: 'Paused by user' },
@@ -151,7 +151,7 @@ describe('MindTab temporary thinking sessions', () => {
 
     await user.selectOptions(screen.getByLabelText('Send with another model'), 'deep-think');
 
-    await waitFor(() => expect(screen.getByText(/The mind is paused\./)).toBeTruthy());
+    await waitFor(() => expect(screen.getByText(/Sending this message resumes it/)).toBeTruthy());
     expect(api.resumePersistentMind).not.toHaveBeenCalled();
     expect(api.startPersistentMind).not.toHaveBeenCalled();
     expect(api.sendPersistentMindMessage).not.toHaveBeenCalled();
