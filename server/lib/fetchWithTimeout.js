@@ -35,8 +35,30 @@ export function fetchWithTimeout(url, options = {}, timeoutMs = 15000, retry = {
   // exhausted one.
   return fetchOnce(url, options, timeoutMs).catch((err) => {
     if (retries < 1 || typeof shouldRetry !== 'function' || !shouldRetry(err)) throw err;
-    return new Promise((resolve) => setTimeout(resolve, retryDelayMs))
+    return waitForRetry(retryDelayMs, options.signal)
       .then(() => fetchWithTimeout(url, options, timeoutMs, { ...retry, retries: retries - 1 }));
+  });
+}
+
+/**
+ * Pause before a retry while honoring the same caller cancellation signal as
+ * the fetch attempts. This keeps a caller-owned total deadline authoritative
+ * even when it expires between attempts.
+ */
+function waitForRetry(delayMs, signal) {
+  if (!signal) return new Promise((resolve) => setTimeout(resolve, delayMs));
+  if (signal.aborted) return Promise.reject(signal.reason || new DOMException('aborted', 'AbortError'));
+
+  return new Promise((resolve, reject) => {
+    const onAbort = () => {
+      clearTimeout(timeoutId);
+      reject(signal.reason || new DOMException('aborted', 'AbortError'));
+    };
+    const timeoutId = setTimeout(() => {
+      signal.removeEventListener('abort', onAbort);
+      resolve();
+    }, delayMs);
+    signal.addEventListener('abort', onAbort, { once: true });
   });
 }
 

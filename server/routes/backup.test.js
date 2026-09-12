@@ -304,6 +304,7 @@ describe('backup routes', () => {
     // can surface the reason — collapsing them into a 500 envelope would hide
     // which check refused the restore.
     it.each([
+      ['manifest_unreadable', { status: 'failed', reason: 'manifest_unreadable' }],
       ['manifest_mismatch', { status: 'failed', reason: 'manifest_mismatch' }],
       ['restore_error', { status: 'failed', reason: 'restore_error', error: 'psql: exited 1' }],
       ['no_dump', { status: 'skipped', reason: 'no_dump' }],
