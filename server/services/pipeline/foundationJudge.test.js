@@ -897,6 +897,18 @@ describe('foundation repair prompt — bounded outline', () => {
 });
 
 describe('foundation judge context — complete planning altitude', () => {
+  it('retains the causal end of a character history and each secret in the judge context', () => {
+    const ghost = 'After an earlier rescue failed, the lead spent a long night completing incident paperwork at the office. A friend stayed without asking anything in return; she mistook care for payment for her useful work.';
+    const secrets = ['She altered the original report.', 'Her friend has already seen the unedited copy.', 'The supervisor kept a duplicate.'];
+    const ctx = __testing.buildFoundationContext({
+      series: { characterArcs: [{ characterId: 'chr-1' }] }, universe: {},
+      canon: { characters: [{ id: 'chr-1', name: 'Lead', ghost, secrets }] },
+      issues: [], contentMax: 30_000,
+    });
+    expect(ctx.characterRoster).toContain(ghost);
+    for (const secret of secrets) expect(ctx.characterRoster).toContain(secret);
+  });
+
   it('shows narrative canon but omits noncanonical visual prompt families the repair cannot change', () => {
     const ctx = __testing.buildFoundationContext({
       series: { name: 'Example Series', seasons: [] },
@@ -1176,6 +1188,69 @@ describe('judgeFoundation — cache / fast-pass', () => {
 });
 
 describe('applyFoundationFix — dimension → owning-service routing table', () => {
+  it('repairs a named character without rewriting the already-developed ensemble', async () => {
+    const characters = [
+      { id: 'lead', name: 'Lead', want: 'Stay with the crew' },
+      { id: 'handler', name: 'Rival handler', aliases: ['Corin Voss'], age: '46', pronouns: 'he/him' },
+    ];
+    const universe = { id: 'uni-1', characters };
+    seriesSvc.getSeries.mockResolvedValue({ id: 'ser-1', universeId: 'uni-1', characterArcs: characters.map((c) => ({ characterId: c.id })) });
+    universeBuilder.getUniverse.mockResolvedValue(universe);
+    let saved;
+    universeBuilder.updateUniverse.mockImplementation(async (_id, mutator) => {
+      saved = { ...universe, ...mutator(universe) }; return saved;
+    });
+    stageRunner.runStagedLLM.mockResolvedValue({ content: {
+      characters: [
+        { id: 'handler', wound: 'Unplanned movement recalls the crush.' },
+        { id: 'lead', want: 'An unrelated new ambition' },
+      ],
+      characterArcs: [{ characterId: 'lead', characterName: 'Lead', want: 'An unrelated new ambition', startState: 'alone', endState: 'famous' }],
+    } });
+
+    await applyFoundationFix('ser-1', 'character', { finding: { gap: 'Corin Voss lacks a specific control belief.', fix: 'Complete his psychology.' } });
+
+    const payload = JSON.parse(stageRunner.runStagedLLM.mock.calls[0][1].charactersJson);
+    expect(payload.targetCharacters).toEqual([expect.objectContaining({ id: 'handler', age: '46', pronouns: 'he/him' })]);
+    expect(saved.characters.find((c) => c.id === 'lead').want).toBe('Stay with the crew');
+    expect(saved.characters.find((c) => c.id === 'handler').wound).toBe('Unplanned movement recalls the crush.');
+    expect(seriesSvc.updateSeries).not.toHaveBeenCalled();
+  });
+
+  it('splits large character repairs before any target history or design is truncated', async () => {
+    const characters = Array.from({ length: 6 }, (_, index) => ({
+      id: `chr-${index}`, name: `Cast ${index}`, background: 'Known life and consequences. '.repeat(80),
+      physicalDescription: 'Established appearance and clothing. '.repeat(50),
+    }));
+    const universe = { id: 'uni-1', characters };
+    seriesSvc.getSeries.mockResolvedValue({ id: 'ser-1', universeId: 'uni-1', characterArcs: characters.map((c) => ({ characterId: c.id })) });
+    universeBuilder.getUniverse.mockResolvedValue(universe);
+    stageRunner.runStagedLLM.mockResolvedValue({ content: { characters: [] } });
+
+    await applyFoundationFix('ser-1', 'character', { finding: { gap: 'The ensemble needs distinct drives.', fix: 'Complete the cast.' } });
+
+    const payloads = stageRunner.runStagedLLM.mock.calls.map(([, vars]) => JSON.parse(vars.charactersJson));
+    expect(payloads.length).toBeGreaterThan(1);
+    expect(payloads.flatMap((p) => p.targetCharacters).map((c) => c.id)).toEqual(characters.map((c) => c.id));
+    for (const payload of payloads) {
+      expect(payload.targetNote).toBeUndefined();
+      for (const target of payload.targetCharacters) {
+        const original = characters.find((c) => c.id === target.id);
+        expect(target.background).toBe(original.background);
+        expect(target.physicalDescription).toBe(original.physicalDescription);
+      }
+    }
+  });
+
+  it('refuses an oversized single-character repair before calling a provider or writing canon', async () => {
+    const universe = { id: 'uni-1', characters: [{ id: 'lead', name: 'Lead', background: 'x'.repeat(20_000) }] };
+    universeBuilder.getUniverse.mockResolvedValue(universe);
+    await expect(applyFoundationFix('ser-1', 'character', { finding: { gap: 'Lead needs a clearer fear.' } }))
+      .rejects.toThrow('cannot safely fit the complete repair context for Lead');
+    expect(stageRunner.runStagedLLM).not.toHaveBeenCalled();
+    expect(universeBuilder.updateUniverse).not.toHaveBeenCalled();
+  });
+
   it('routes structure → arc resolve (resolveVerifyIssues) with a synthesized finding', async () => {
     const r = await applyFoundationFix('ser-1', 'structure', { finding: { gap: 'thin midpoint', fix: 'add a reversal' } });
     expect(arcPlanner.resolveVerifyIssues).toHaveBeenCalledWith('ser-1', expect.objectContaining({
