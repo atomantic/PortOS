@@ -14,13 +14,8 @@
       "vocabularyPrompt": ""
     },
     "tts": {
-      "engine": "kokoro",
+      "engine": "piper",
       "rate": 1.0,
-      "kokoro": {
-        "modelId": "onnx-community/Kokoro-82M-v1.0-ONNX",
-        "dtype": "q8",
-        "voice": "af_heart"
-      },
       "piper": {
         "voice": "en_GB-jenny_dioco-medium",
         "voicePath": "~/.portos/voice/voices/en_GB-jenny_dioco-medium.onnx",

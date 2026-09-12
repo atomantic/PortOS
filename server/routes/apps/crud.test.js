@@ -4,6 +4,7 @@ vi.mock('../../services/appQuality.js', () => ({ getAppQualityHistory: vi.fn(asy
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import express from 'express';
 import { request } from '../../lib/testHelper.js';
+import { errorEvents } from '../../lib/errorHandler.js';
 import crudRoutes from './crud.js';
 import { enrichAppsWithQuality, getAppQualityHistory } from '../../services/appQuality.js';
 
@@ -70,7 +71,29 @@ describe('Apps CRUD Routes', () => {
     expect((await request(app).get('/api/apps/quality-federation?repository=invalid')).status).toBe(400);
     expect((await request(app).get('/api/apps/quality-federation?days=999')).status).toBe(400);
     exportPortosQuality.mockResolvedValue(null);
-    expect((await request(app).get('/api/apps/quality-federation')).status).toBe(403);
+    const emit = vi.fn();
+    app.set('io', { emit });
+    const onError = vi.fn();
+    errorEvents.on('error', onError);
+    const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const refused = await request(app).get('/api/apps/quality-federation');
+      expect(refused.status).toBe(403);
+      expect(refused.body.code).toBe('PEER_PULL_FORBIDDEN');
+      expect(onError).toHaveBeenCalledWith(expect.objectContaining({
+        code: 'PEER_PULL_FORBIDDEN',
+        severity: 'warning',
+      }), expect.anything());
+      expect(emit).toHaveBeenCalledWith('error:occurred', expect.objectContaining({
+        code: 'PEER_PULL_FORBIDDEN',
+        status: 403,
+        severity: 'warning',
+      }));
+      expect(consoleErrorSpy).not.toHaveBeenCalled();
+    } finally {
+      errorEvents.off('error', onError);
+      consoleErrorSpy.mockRestore();
+    }
   });
 
   describe('GET /api/apps', () => {

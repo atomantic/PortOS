@@ -7,11 +7,10 @@
 #                   skips whisper-cpp install + model download entirely
 #   MODEL_NAME      Whisper GGUF to fetch (default: ggml-base.en.bin)
 #   VOICE_NAME      Piper voice name      (default: en_GB-jenny_dioco-medium) — only used when TTS_ENGINE=piper
-#   TTS_ENGINE      'kokoro' (default) | 'piper'
+#   TTS_ENGINE      'piper' (default) | 'qwen3-tts'
 #   INSTALL_COREML  '1' to download CoreML encoder for Whisper on macOS (default: 0)
 #
-# Models live under ~/.portos/voice/{models,voices}/. Kokoro models are managed
-# automatically by transformers.js under ~/.cache/huggingface/.
+# Models live under ~/.portos/voice/{models,voices}/.
 
 set -euo pipefail
 
@@ -20,7 +19,7 @@ MODELS_DIR="${VOICE_HOME}/models"
 VOICES_DIR="${VOICE_HOME}/voices"
 MODEL_NAME="${MODEL_NAME:-ggml-base.en.bin}"
 VOICE_NAME="${VOICE_NAME:-en_GB-jenny_dioco-medium}"
-TTS_ENGINE="${TTS_ENGINE:-kokoro}"
+TTS_ENGINE="${TTS_ENGINE:-piper}"
 STT_ENGINE="${STT_ENGINE:-whisper}"
 INSTALL_COREML="${INSTALL_COREML:-0}"
 
@@ -145,5 +144,5 @@ if [[ "$TTS_ENGINE" == "piper" ]]; then
   echo "   piper:          ${PIPER_DIR}/piper"
   echo "   piper voice:    ${VOICES_DIR}/${VOICE_NAME}.onnx"
 else
-  echo "   kokoro models:  managed by transformers.js (~/.cache/huggingface/)"
+  echo "   Qwen3 models: managed in Settings → Voice"
 fi

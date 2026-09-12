@@ -28,9 +28,11 @@ export const repairImageModel = (modelId, { deep = false } = {}) => request(`/im
 });
 export const listImageGallery = (options = {}) => request('/image-gen/gallery', options);
 // Opt-in page envelope; keep listImageGallery's legacy array/options signature.
-export const listImageGalleryPage = ({ limit = 60, offset = 0, q = '', hidden } = {}, options = {}) => {
+export const listImageGalleryPage = ({ limit = 60, offset = 0, q = '', hidden, starred, summary, filename } = {}, options = {}) => {
   const params = new URLSearchParams({ limit, offset, q });
-  if (hidden !== undefined) params.set('hidden', hidden);
+  for (const [key, value] of Object.entries({ hidden, starred, summary, filename })) {
+    if (value !== undefined) params.set(key, value);
+  }
   return request(`/image-gen/gallery?${params}`, options);
 };
 export const getActiveImageJob = () => request('/image-gen/active');

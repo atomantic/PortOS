@@ -189,7 +189,8 @@ describe('trusted rebuild allowlist', () => {
     const hooked = packagesWithInstallHooks('server');
     expect(hooked, 'scan returned null even though server/node_modules exists — it is looking at the wrong path').not.toBeNull();
     expect(hooked.has('node-pty'), 'scan did not find node-pty — it declares install+postinstall').toBe(true);
-    expect(hooked.size).toBeGreaterThanOrEqual(3);
+    // node-pty is the cross-platform non-vacuity witness. Retiring Kokoro
+    // removes its hooked transitive dependencies; Windows can have only this one.
   });
 
   // The lockfile-driven twin of the test below. This one runs in EVERY CI job for

@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import express from 'express';
-import { request } from '../lib/testHelper.js';
+const { request } = await import('../lib/testHelper.js');
 
 // Mock all voice service modules before importing the router so the route
 // file's top-level imports resolve to the mocks.
@@ -52,13 +52,6 @@ vi.mock('../services/voice/fineTuning.js', () => ({
   cancelFineTuningJob: vi.fn(),
   promoteCheckpoint: vi.fn(),
 }));
-// GET /api/voice/tts/status + POST /api/voice/tts/unload destructure these at
-// module load — mock them so the route resolves without spinning up Kokoro.
-vi.mock('../services/voice/tts-kokoro.js', () => ({
-  readyState: vi.fn(() => 'lazy'),
-  unloadKokoro: vi.fn(() => ({ unloaded: false })),
-  loadedModelKey: vi.fn(() => null),
-}));
 vi.mock('../services/voice/piper-voices.js', () => ({
   findPiperVoice: vi.fn(),
 }));
@@ -76,21 +69,20 @@ vi.mock('../services/voice/facetimeBridge.js', () => ({
   hangup: vi.fn(),
 }));
 
-import * as config from '../services/voice/config.js';
-import * as health from '../services/voice/health.js';
-import * as bootstrap from '../services/voice/bootstrap.js';
-import * as tts from '../services/voice/tts.js';
-import * as voiceProfiles from '../services/voice/profiles.js';
-import * as profileBenchmarks from '../services/voice/profileBenchmarks.js';
-import * as qwen3TtsRuntime from '../services/voice/qwen3TtsRuntime.js';
-import * as fineTuning from '../services/voice/fineTuning.js';
-import { ServerError } from '../lib/errorHandler.js';
-import * as piperVoices from '../services/voice/piper-voices.js';
-import * as proactiveSpeech from '../services/voice/proactiveSpeech.js';
-import * as kokoro from '../services/voice/tts-kokoro.js';
-import * as facetimeBridge from '../services/voice/facetimeBridge.js';
-import voiceRoutes from './voice.js';
-import { errorEvents } from '../lib/errorHandler.js';
+const config = await import('../services/voice/config.js');
+const health = await import('../services/voice/health.js');
+const bootstrap = await import('../services/voice/bootstrap.js');
+const tts = await import('../services/voice/tts.js');
+const voiceProfiles = await import('../services/voice/profiles.js');
+const profileBenchmarks = await import('../services/voice/profileBenchmarks.js');
+const qwen3TtsRuntime = await import('../services/voice/qwen3TtsRuntime.js');
+const fineTuning = await import('../services/voice/fineTuning.js');
+const { ServerError } = await import('../lib/errorHandler.js');
+const piperVoices = await import('../services/voice/piper-voices.js');
+const proactiveSpeech = await import('../services/voice/proactiveSpeech.js');
+const facetimeBridge = await import('../services/voice/facetimeBridge.js');
+const { default: voiceRoutes } = await import('./voice.js');
+const { errorEvents } = await import('../lib/errorHandler.js');
 
 // Node's EventEmitter throws if 'error' is emitted with zero listeners.
 // asyncHandler emits to errorEvents on every route failure, so swallow it
@@ -140,11 +132,11 @@ describe('Voice Routes', () => {
     it('promotes a preset with the current local model and delivery provenance', async () => {
       voiceProfiles.promotePresetProfile.mockResolvedValue({ id: 'voice-profile-1' });
       const res = await request(buildApp()).post('/api/voice/profiles/preset').send({
-        universeId: 'uni-1', characterId: 'char-1', voiceId: 'kokoro:af_heart',
+        universeId: 'uni-1', characterId: 'char-1', voiceId: 'piper:en_US-lessac-medium',
       });
       expect(res.status).toBe(201);
       expect(voiceProfiles.promotePresetProfile).toHaveBeenCalledWith(expect.objectContaining({
-        modelRevision: 'kokoro-test:q8', delivery: { rate: 1 },
+        modelRevision: 'piper:en_US-lessac-medium', delivery: { rate: 1 },
       }));
       expect(res.body).toEqual({ profile: { id: 'voice-profile-1' } });
     });
@@ -366,6 +358,23 @@ describe('Voice Routes', () => {
       expect(config.updateVoiceConfig).not.toHaveBeenCalled();
     });
 
+    it.each([
+      [true, {}, true],
+      [true, { error: 'setup failed' }, false],
+      [false, { skipped: true }, false],
+    ])('clears retirement only after enabled successful reconciliation (%s, %j)', async (enabled, result, cleared) => {
+      const migrated = { enabled, tts: { engine: 'piper', retiredEngine: 'kokoro' } };
+      const settled = { enabled, tts: { engine: 'piper' } };
+      config.updateVoiceConfig.mockReset();
+      config.updateVoiceConfig.mockResolvedValueOnce(migrated).mockResolvedValueOnce(settled);
+      bootstrap.reconcile.mockResolvedValue(result);
+      const res = await request(buildApp()).put('/api/voice/config').send({ enabled });
+      expect(res.status).toBe(200);
+      expect(config.updateVoiceConfig).toHaveBeenCalledTimes(cleared ? 2 : 1);
+      expect(res.body.config).toEqual(cleared ? settled : migrated);
+      if (cleared) expect(config.updateVoiceConfig).toHaveBeenLastCalledWith({ tts: { retiredEngine: null } });
+    });
+
     it('reports reconcile failures without 500-ing the route', async () => {
       config.updateVoiceConfig.mockResolvedValue({ ...DEFAULT_CFG, enabled: true });
       bootstrap.reconcile.mockRejectedValue(new Error('whisper-server not on PATH'));
@@ -553,22 +562,18 @@ describe('Voice Routes', () => {
   });
 
   describe('GET /api/voice/tts/status', () => {
-    it('returns the Kokoro residency snapshot', async () => {
-      kokoro.readyState.mockReturnValue('loaded');
-      kokoro.loadedModelKey.mockReturnValue('kokoro-v1:af_heart');
+    it('returns an inert compatibility snapshot for retired Kokoro', async () => {
       const res = await request(buildApp()).get('/api/voice/tts/status');
       expect(res.status).toBe(200);
-      expect(res.body).toEqual({ kokoro: { state: 'loaded', loadedKey: 'kokoro-v1:af_heart' } });
+      expect(res.body).toEqual({ kokoro: { state: 'lazy', loadedKey: null, retired: true } });
     });
   });
 
   describe('POST /api/voice/tts/unload', () => {
-    it('drops the cached Kokoro instance and echoes its result', async () => {
-      kokoro.unloadKokoro.mockReturnValue({ unloaded: true });
+    it('keeps unload safe for cached clients', async () => {
       const res = await request(buildApp()).post('/api/voice/tts/unload');
       expect(res.status).toBe(200);
-      expect(res.body).toEqual({ unloaded: true });
-      expect(kokoro.unloadKokoro).toHaveBeenCalledTimes(1);
+      expect(res.body).toEqual({ unloaded: false, retired: true });
     });
   });
 

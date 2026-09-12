@@ -199,7 +199,7 @@ describe('CharacterDetailEditor — production package (#5378)', () => {
       entry={{ ...ARIA, voiceId: 'kokoro:af_heart' }} universeId="uni-1" characters={[ARIA]} onPatch={() => {}}
     />);
     fireEvent.click(screen.getByRole('tab', { name: 'Voice' }));
-    expect(await screen.findByText(/Promote the selected Kokoro or Piper preset/i)).toBeInTheDocument();
+    expect(await screen.findByText(/Promote the selected Piper preset/i)).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: /Promote selected preset/i }));
     await waitFor(() => expect(promoteVoicePreset).toHaveBeenCalledWith({
       universeId: 'uni-1', characterId: 'chr-aria', characterName: 'Aria', voiceId: 'kokoro:af_heart',
