@@ -309,6 +309,13 @@ const pgEnv = (port) => ({
 const PG17_ONLY_DIRECTIVES = [/^\\restrict /, /^\\unrestrict /, /^SET transaction_timeout/];
 export const isPg17OnlyDirective = (line) => PG17_ONLY_DIRECTIVES.some((re) => re.test(line));
 
+// Abort escalation bounds for importDumpFile's read-failure path: after
+// SIGTERM, wait this long for the child's 'close' before escalating to
+// SIGKILL, then this much longer before reporting failure without a confirmed
+// close. The final bound reports failure without claiming termination was confirmed.
+const ABORT_TERM_GRACE_MS = 2_000;
+const ABORT_KILL_GRACE_MS = 2_000;
+
 /**
  * Import a pg_dump SQL file into the target database WITHOUT invoking a shell.
  *
@@ -324,6 +331,11 @@ export const isPg17OnlyDirective = (line) => PG17_ONLY_DIRECTIVES.some((re) => r
  * async boundary resolves rather than throws — an uncaught throw here would
  * crash the Node process (there is no next(err) to bubble to). Returns the same
  * { stdout, stderr, exitCode } shape as runCmd().
+ *
+ * A dump READ failure leaves the import half-delivered, so the child is
+ * aborted (SIGTERM, escalating to SIGKILL) WITHOUT the normal-EOF stdin end
+ * that psql would commit as a finished --single-transaction script, and the
+ * promise waits for 'close' or the bounded abort deadline (see abort()).
  */
 export function importDumpFile(dumpFile, port, env, timeout = 120_000) {
   return new Promise((resolve) => {
@@ -352,17 +364,36 @@ export function importDumpFile(dumpFile, port, env, timeout = 120_000) {
     let stderr = '';
     const capture = (buf, chunk) => (buf.length >= CAPTURE_LIMIT ? buf : buf + chunk);
     let finished = false;
+    // Set once a dump read failure starts tearing the child down. While an
+    // abort is in flight the promise stays unsettled — it resolves only on a
+    // confirmed 'close' or when the bounded escalation gives up.
+    let aborting = false;
+    let abortDetail = null;
+    let abortTimer = null;
+    let killRequested = false;
     const finish = (exitCode, extraDetail) => {
       if (finished) return;
       finished = true;
       clearTimeout(timer);
+      clearTimeout(abortTimer);
       src.destroy();
-      if (psql.stdin.writable) psql.stdin.end();
+      // Only a normal completion ends stdin — that EOF is what psql reads as
+      // end-of-script and commits under --single-transaction. An abort never
+      // sends it, including when termination could not be confirmed.
+      if (!aborting && psql.stdin.writable) psql.stdin.end();
       if (exitCode !== 0) {
         const detail = stripAnsi(stderr || stdout || extraDetail || '').replace(/\s+/g, ' ').trim();
         console.error(`🗄️ psql import exited ${exitCode}: ${detail}`);
       }
-      resolve({ stdout: stripAnsi(stdout), stderr: stripAnsi(stderr), exitCode });
+      // Keep the triggering detail (read error, spawn failure, timeout) in the
+      // diagnostic the caller surfaces — psql is usually killed before it can
+      // write anything, so its stderr alone would report a bare failure.
+      const stderrText = stripAnsi(stderr);
+      const detailText = stripAnsi(extraDetail || '');
+      const stderrOut = detailText && !stderrText.includes(detailText)
+        ? [stderrText, detailText].filter(Boolean).join('\n')
+        : stderrText;
+      resolve({ stdout: stripAnsi(stdout), stderr: stderrOut, exitCode });
     };
 
     const timer = setTimeout(() => {
@@ -370,10 +401,48 @@ export function importDumpFile(dumpFile, port, env, timeout = 120_000) {
       finish(1, `import timed out after ${timeout}ms`);
     }, timeout);
 
+    // A dump read failure must NOT end stdin: end-of-script is a successful
+    // run to psql, so --single-transaction would commit whatever complete
+    // statements already arrived — the export's leading DROPs included
+    // (scripts/db.sh --clean). Abort instead: stop pumping, leave stdin open,
+    // and terminate the child so its open transaction rolls back with the
+    // connection. Settlement then waits on the child's 'close' — bounded by
+    // SIGTERM → SIGKILL escalation below. Even if neither signal succeeds,
+    // stdin stays open so the partial prefix cannot commit on normal EOF.
+    const escalateAbort = () => {
+      if (finished || killRequested) return;
+      // kill() can synchronously emit 'error'; arm the guard and deadline first.
+      killRequested = true;
+      clearTimeout(abortTimer);
+      abortTimer = setTimeout(() => finish(1, abortDetail), ABORT_KILL_GRACE_MS);
+      psql.kill('SIGKILL');
+    };
+    const abort = (detail) => {
+      if (finished || aborting) return;
+      aborting = true;
+      abortDetail = detail;
+      clearTimeout(timer); // the import timeout's bound is superseded by the abort bound
+      src.destroy();
+      abortTimer = setTimeout(escalateAbort, ABORT_TERM_GRACE_MS);
+      psql.kill('SIGTERM');
+    };
+
     psql.stdout.on('data', (d) => { stdout = capture(stdout, d.toString()); });
     psql.stderr.on('data', (d) => { stderr = capture(stderr, d.toString()); });
-    psql.on('error', (err) => finish(1, err.message));
-    psql.on('close', (code) => finish(typeof code === 'number' ? code : 1));
+    psql.on('error', (err) => {
+      if (aborting) {
+        // A failed kill during teardown — the child may still be running.
+        // Escalate and keep waiting on close rather than reporting failure
+        // while it can still commit.
+        escalateAbort();
+        return;
+      }
+      finish(1, err.message);
+    });
+    psql.on('close', (code) => {
+      if (aborting) finish(1, abortDetail);
+      else finish(typeof code === 'number' ? code : 1);
+    });
     // psql may exit early (e.g. ON_ERROR_STOP) while we're still writing — the
     // resulting EPIPE would otherwise crash the process.
     psql.stdin.on('error', () => {});
@@ -394,19 +463,24 @@ export function importDumpFile(dumpFile, port, env, timeout = 120_000) {
         pending = pending.slice(nl + 1);
         if (!writeLine(line)) {
           src.pause();
-          psql.stdin.once('drain', () => { src.resume(); pump(); });
+          psql.stdin.once('drain', () => {
+            if (finished || aborting) return;
+            src.resume();
+            pump();
+          });
           return;
         }
       }
     };
 
     src.on('data', (chunk) => {
-      if (finished) return;
+      if (finished || aborting) return; // a queued chunk must not pump after abort
       pending += chunk;
       pump();
     });
-    src.on('error', (err) => finish(1, err.message));
+    src.on('error', (err) => abort(err.message));
     src.on('end', () => {
+      if (finished || aborting) return; // the success EOF must never follow an abort
       // Flush a final line that lacked a trailing newline, then close stdin so
       // psql runs the script and emits 'close'.
       if (pending.length) { writeLine(pending); pending = ''; }
