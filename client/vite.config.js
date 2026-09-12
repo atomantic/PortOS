@@ -15,6 +15,7 @@ import {
 
 const ANALYZE_BUNDLE = process.env.ANALYZE === 'true';
 const CONFIG_DIR = import.meta.dirname;
+const BUILD_OUT_DIR = process.env.PORTOS_CLIENT_BUILD_OUT_DIR || resolve(CONFIG_DIR, 'dist');
 
 const rootPkg = JSON.parse(readFileSync(resolve(CONFIG_DIR, '../package.json'), 'utf-8'));
 
@@ -152,7 +153,7 @@ export default defineConfig(({ command, mode }) => {
     plugins: [
       react(),
       ANALYZE_BUNDLE && visualizer({
-        filename: 'dist/bundle-report.html',
+        filename: resolve(BUILD_OUT_DIR, 'bundle-report.html'),
         gzipSize: true,
         brotliSize: true,
         template: 'treemap',
