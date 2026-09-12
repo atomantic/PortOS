@@ -42,7 +42,7 @@ import { manuscriptContentBudgetChars, estimateTokens } from '../../lib/contextB
 import { getStage } from '../promptService.js';
 import { composeStyleNotes, sanitizeStyleGuide, STYLE_GUIDE_LIMITS } from '../../lib/styleGuide.js';
 import { sanitizeCharacterArcList } from '../../lib/seriesCharacterArc.js';
-import { BIBLE_KEYS, BIBLE_SOURCE, sanitizeCharacter } from '../../lib/storyBible.js';
+import { BIBLE_KEYS, BIBLE_SOURCE, normalizeBibleName, sanitizeCharacter } from '../../lib/storyBible.js';
 import { getUniverse, updateUniverse } from '../universeBuilder.js';
 import { isBlankString, isBlankArray } from '../universeCharacterExpand.js';
 import { expandWorldTemplate, narrativeRepairTargets } from '../universeBuilderExpand.js';
@@ -77,7 +77,7 @@ import {
   repairableSeriesFoundationCharacters,
   seriesFoundationCharacters,
 } from './foundationJudgeContext.js';
-import { trimTo, isNonBlankStr } from '../../lib/textUtils.js';
+import { escapeRegExp, trimTo, isNonBlankStr } from '../../lib/textUtils.js';
 
 // Compatibility surface: callers keep importing these projection helpers from
 // foundationJudge.js while their implementation lives with the context builder.
@@ -826,25 +826,24 @@ function craftRepairViolations(proposal) {
   return violations;
 }
 
+const renderPromptCharacter = (character) => ({
+  id: character.id,
+  name: character.name,
+  role: character.role,
+  ...Object.fromEntries(PROFILE_STRING_FIELDS.map((field) => [field, character[field] || ''])),
+  ...pickFrameworkFields(character),
+  ...pickVisualFoundationFields(character),
+  postureNotes: character.postureNotes || '',
+  specialTraits: character.specialTraits || '',
+  stats: Array.isArray(character.stats) ? character.stats : [],
+  props: Array.isArray(character.props) ? character.props : [],
+  expressions: Array.isArray(character.expressions) ? character.expressions : [],
+  handGestures: Array.isArray(character.handGestures) ? character.handGestures : [],
+  wardrobes: Array.isArray(character.wardrobes) ? character.wardrobes : [],
+});
+
 async function runFoundationRepair(series, issues, dimension, finding, characters, options) {
   const stage = dimension === 'character' ? CHARACTER_FOUNDATION_STAGE : REPAIR_STAGE;
-  const renderPromptCharacter = (character) => ({
-    id: character.id,
-    name: character.name,
-    role: character.role,
-    personality: character.personality,
-    background: character.background,
-    relationships: character.relationships,
-    ...pickFrameworkFields(character),
-    ...pickVisualFoundationFields(character),
-    postureNotes: character.postureNotes || '',
-    specialTraits: character.specialTraits || '',
-    stats: Array.isArray(character.stats) ? character.stats : [],
-    props: Array.isArray(character.props) ? character.props : [],
-    expressions: Array.isArray(character.expressions) ? character.expressions : [],
-    handGestures: Array.isArray(character.handGestures) ? character.handGestures : [],
-    wardrobes: Array.isArray(character.wardrobes) ? character.wardrobes : [],
-  });
   const charactersPayload = dimension === 'character'
     ? {
       targetCharacters: characters.map(renderPromptCharacter),
@@ -901,7 +900,18 @@ async function runFoundationRepair(series, issues, dimension, finding, character
 
 async function repairCharacters(series, issues, universe, finding, options) {
   const seriesRoster = seriesFoundationCharacters(universe?.characters, series, issues);
-  const targets = seriesRoster.filter((character) => character?.locked !== true);
+  const repairable = seriesRoster.filter((character) => character?.locked !== true);
+  const directive = normalizeBibleName(`${finding?.gap || ''} ${finding?.fix || ''}`);
+  const namedCast = seriesRoster.filter((character) => [character.name, ...(Array.isArray(character.aliases) ? character.aliases : [])]
+    .some((name) => typeof name === 'string' && name.trim()
+      && new RegExp(`(?<![\\p{L}\\p{N}_])${escapeRegExp(normalizeBibleName(name))}(?![\\p{L}\\p{N}_])`, 'u').test(directive)));
+  // A named post-arc finding owns that character's repair. Starting a new
+  // foundation or reconciling an ensemble-wide finding still covers the cast.
+  const namedRepair = options.phase !== 'pre-arc character foundation' && namedCast.length > 0;
+  const targets = namedRepair
+    ? namedCast.filter((character) => character.locked !== true)
+    : repairable;
+  if (namedRepair && targets.length === 0) return { applied: false, reason: 'the named character repair targets are locked' };
   const targetBatches = targets.length > 0
     ? Array.from({ length: Math.ceil(targets.length / CHARACTER_FOUNDATION_BATCH_SIZE) }, (_, index) => (
       targets.slice(index * CHARACTER_FOUNDATION_BATCH_SIZE, (index + 1) * CHARACTER_FOUNDATION_BATCH_SIZE)
@@ -910,20 +920,41 @@ async function repairCharacters(series, issues, universe, finding, options) {
   const proposals = [];
   let workingRoster = [...seriesRoster];
   const workingNewCharacters = [];
-  for (const originalBatch of targetBatches) {
+  while (targetBatches.length > 0) {
+    const originalBatch = targetBatches.shift();
     const batchIds = new Set(originalBatch.map((character) => character.id));
     const targetBatch = workingRoster.filter((character) => batchIds.has(character.id));
+    const ensembleCharacters = [...workingRoster, ...workingNewCharacters];
+    const preview = JSON.parse(renderRepairCharactersJson({
+      targetCharacters: targetBatch.map(renderPromptCharacter),
+      fullSeriesRoster: ensembleCharacters.map(renderPromptCharacter),
+    }));
+    if (preview.targetNote) {
+      // Shrink the batch before shrinking the records it is allowed to edit.
+      // A 40-character field cap erased whole designs in a real repair prompt.
+      if (originalBatch.length > 1) {
+        const midpoint = Math.ceil(originalBatch.length / 2);
+        targetBatches.unshift(originalBatch.slice(0, midpoint), originalBatch.slice(midpoint));
+        continue;
+      }
+      throw new Error(`Character foundation cannot safely fit the complete repair context for ${targetBatch[0]?.name || 'the target character'} within ${REPAIR_CHARACTERS_MAX_CHARS} characters. Shorten that character's supporting detail before retrying; no truncated character repair was sent.`);
+    }
     const proposal = await runFoundationRepair(series, issues, 'character', finding, targetBatch, {
       ...options,
       // Locked cast members are immutable constraints, but the model still
       // needs to see them when differentiating relationships and voices.
       // Later batches also see the accepted shape of earlier proposals, so two
       // batches cannot independently invent the same voice or relationship.
-      ensembleCharacters: [...workingRoster, ...workingNewCharacters],
+      ensembleCharacters,
     });
-    proposals.push(proposal);
+    const boundedProposal = {
+      ...proposal,
+      characters: (Array.isArray(proposal.characters) ? proposal.characters : [])
+        .filter((character) => batchIds.has(character?.id)),
+    };
+    proposals.push(boundedProposal);
 
-    const proposedById = new Map((Array.isArray(proposal.characters) ? proposal.characters : [])
+    const proposedById = new Map(boundedProposal.characters
       .filter((character) => typeof character?.id === 'string')
       .map((character) => [character.id, character]));
     workingRoster = workingRoster.map((character) => {
@@ -1014,7 +1045,9 @@ async function repairCharacters(series, issues, universe, finding, options) {
     .map((arc) => ({
       ...arc,
       characterId: characterIdByName.get(String(arc?.characterName || '').trim().toLowerCase()) || arc?.characterId,
-    })));
+    })))
+    .filter((arc) => !namedRepair || targetIds.has(arc.characterId)
+      || addedCharacters.some((character) => character.id === arc.characterId));
   let arcsApplied = false;
   if (proposedArcs.length > 0) {
     const latestSeries = await getSeries(series.id);
