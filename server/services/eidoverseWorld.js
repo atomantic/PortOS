@@ -40,11 +40,10 @@ import {
   EIDOVERSE_PROJECTION_KINDS,
 } from './eidoverseWorldProjection.js';
 import {
-  collectEidoverseWorldSources,
   eidoverseHostId,
   projectedJiraTickets,
   projectedStorage,
-} from './eidoverseWorldSources.js';
+} from '../lib/eidoverseWorldSignals.js';
 
 export { buildProjectionPlan, DEFAULT_EIDOVERSE_PROJECTION_RECIPE, projectedJiraTickets, projectedStorage };
 
@@ -1804,6 +1803,7 @@ export async function projectEidoverseWorld({ signal, compact = false, verbInter
     const config = await ensureEidoverseWorldConfig();
     const lockedConfig = await resolveAndLockAssets(config, { signal });
     const presence = await ensureCosPresenceInternal({ fresh: true, signal, verbIntervalMs });
+    const { collectEidoverseWorldSources } = await import('./eidoverseWorldSources.js');
     const source = await collectEidoverseWorldSources({ signal });
     const hostId = eidoverseHostId(await getInstanceId());
     throwIfAborted(signal);

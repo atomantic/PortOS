@@ -9,7 +9,7 @@ import { getPeers } from './instances.js';
 import { getInstanceFeatures } from './instanceFeatures.js';
 import { ensureEidoverseHost } from './eidoverseHost.js';
 import { admitEidoverseGuest, supportsEidoverseGuestEntry, getEidoverseWorldStatus } from './eidoverseWorld.js';
-import { eidoversePeerId } from './eidoverseWorldSources.js';
+import { eidoversePeerId } from '../lib/eidoverseWorldSignals.js';
 
 const VERSION = 1;
 const TTL = 30 * 60 * 1000;

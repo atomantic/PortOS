@@ -10,7 +10,7 @@ vi.mock('./eidoverseHost.js', () => ({ ensureEidoverseHost: async () => ({ proto
 vi.mock('./eidoverseWorld.js', () => ({ supportsEidoverseGuestEntry: async () => mocks.protocol, getEidoverseWorldStatus: async () => ({ setup: { installed: true, runtimeStatus: 'online', worldDataReady: true }, cos: { enabled: true } }), admitEidoverseGuest: (...args) => mocks.admission(...args) }));
 
 import router from '../routes/eidoverseTravelRoutes.js';
-import { eidoversePeerId } from './eidoverseWorldSources.js';
+import { eidoversePeerId } from '../lib/eidoverseWorldSignals.js';
 import { errorMiddleware } from '../lib/errorHandler.js';
 import { eidoverseVisitChat, getEidoverseGuestDescriptor, leaveEidoversePeer, listEidoverseDestinations, receiveEidoverseChat, receiveEidoverseLeave, visitEidoversePeer } from './eidoverseTravel.js';
 
