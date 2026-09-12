@@ -93,12 +93,20 @@ export async function removeAsset(mediaKey) {
 
 // Parameters stay bound, including literal substring search (percent and underscore
 // in a prompt are not SQL wildcards). Count and page share exactly one predicate.
-function assetFilter({ kind, q = '', hidden } = {}) {
+function assetFilter({ kind, q = '', hidden, filename, mediaKeys } = {}) {
   const params = [];
   const clauses = [];
   if (kind) { params.push(kind); clauses.push(`kind = $${params.length}`); }
   if (hidden !== undefined) {
     clauses.push(hidden ? `data->>'hidden' = 'true'` : `COALESCE(data->>'hidden', 'false') <> 'true'`);
+  }
+  if (filename !== undefined) {
+    params.push(filename);
+    clauses.push(`ref = $${params.length}`);
+  }
+  if (mediaKeys !== undefined) {
+    params.push(mediaKeys);
+    clauses.push(`media_key = ANY($${params.length}::text[])`);
   }
   for (const token of q.trim().toLowerCase().split(/\s+/).filter(Boolean)) {
     params.push(token);

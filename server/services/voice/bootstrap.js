@@ -42,8 +42,8 @@ export const verifyModels = (cfg) => {
     const voicePath = expandPath(cfg.tts.piper.voicePath);
     out.ttsVoice = existsSync(voicePath) ? voicePath : null;
   } else {
-    // Kokoro models are managed by transformers.js cache — assume present.
-    out.ttsVoice = `kokoro:${cfg.tts.kokoro?.modelId}`;
+    // Qwen3 runtime owns its model readiness.
+    out.ttsVoice = null;
   }
 
   if (cfg.stt.coreml) {
@@ -64,7 +64,7 @@ export const runSetupScript = async (cfg) => {
     MODEL_NAME: modelName,
     VOICE_NAME: voiceName,
     STT_ENGINE: sttEngine,
-    TTS_ENGINE: cfg.tts.engine || 'kokoro',
+    TTS_ENGINE: cfg.tts.engine || 'piper',
     INSTALL_COREML: cfg.stt.coreml ? '1' : '0',
   };
   console.log(`🔧 voice: setup-voice (stt=${sttEngine}/${modelName}, tts=${cfg.tts.engine}, coreml=${env.INSTALL_COREML})`);
@@ -399,8 +399,24 @@ export const preloadModel = async (cfg) => {
  * Reconcile PM2 state with desired voice.enabled. Called from
  * PUT /api/voice/config and at server boot.
  */
-export const reconcile = async (cfg) => {
+export const reconcile = async (cfg, { allowSetup = true } = {}) => {
   if (!cfg.enabled) return stopWhisper();
+  // A retired-engine upgrade must wait for the user's Save & Reconcile action.
+  // Do not turn a normal restart into a new binary/model download.
+  if (!allowSetup && cfg.tts?.retiredEngine === 'kokoro') {
+    const bins = await verifyBinaries(cfg);
+    const models = verifyModels(cfg);
+    if (bins.piperRequired && (!bins.piper || !models.ttsVoice)) {
+      // Keep an already-provisioned speech recognizer available while TTS
+      // waits for consent. No setup scripts or LLM preloads run on this path.
+      if (cfg.stt?.engine === 'web-speech') {
+        await stopWhisper().catch(() => null);
+      } else if (bins.whisper && models.sttModel && (!cfg.stt.coreml || models.coreml)) {
+        return { ...await startWhisper(cfg), setupRequired: 'piper' };
+      }
+      return { setupRequired: 'piper' };
+    }
+  }
 
   // Don't block reconcile on this — it can take minutes on first install.
   // The user will see a clear log line and their first turn may fail with the

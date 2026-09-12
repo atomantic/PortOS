@@ -85,7 +85,7 @@
     { "id": "ext.cosRunner", "label": "CoS Runner (portos-cos)", "group": "external", "file": "server/cos-runner/index.js", "desc": "Standalone PM2 process that spawns and streams AI agent CLIs, isolated from the main server." },
     { "id": "ext.pythonRunners", "label": "Python media runners", "group": "external", "desc": "mflux/diffusers image, video, and LoRA-training runner processes." },
     { "id": "ext.whisper", "label": "Whisper (STT)", "group": "external", "desc": "Speech-to-text binary transcribing voice turns." },
-    { "id": "ext.tts", "label": "Piper / Kokoro (TTS)", "group": "external", "desc": "Text-to-speech binaries synthesizing reply audio sentence-by-sentence." },
+    { "id": "ext.tts", "label": "Piper / Qwen3 (TTS)", "group": "external", "desc": "Text-to-speech binaries synthesizing reply audio sentence-by-sentence." },
     { "id": "ext.pty", "label": "PTY (node-pty)", "group": "external", "desc": "Pseudo-terminal processes running the user's shell." },
     { "id": "ext.peers", "label": "Federated peers", "group": "external", "desc": "Other PortOS installs reachable over the private network." },
     { "id": "ext.updateSh", "label": "update.sh", "group": "external", "file": "update.sh", "desc": "Detached updater script: git pull --rebase --autostash + PM2 restart." },
@@ -139,7 +139,7 @@
         { "from": "svc.voicePipeline", "to": "svc.voiceTools", "transport": "call", "label": "dispatchTool", "payload": "tool calls { name, args } from the LLM loop" },
         { "from": "svc.voiceTools", "to": "lib.navManifest", "transport": "call", "label": "resolveNavCommand", "payload": "spoken target fuzzy-matched against NAV_COMMANDS aliases (ui_navigate)" },
         { "from": "svc.voiceTools", "to": "svc.voiceClient", "transport": "socket", "label": "UI action events", "payload": "navigation / UI action requests executed by the client" },
-        { "from": "svc.voicePipeline", "to": "ext.tts", "transport": "spawn", "label": "synthesize", "payload": "reply sentences → WAV audio via piper/kokoro" },
+        { "from": "svc.voicePipeline", "to": "ext.tts", "transport": "spawn", "label": "synthesize", "payload": "reply sentences → WAV audio via Piper/Qwen3" },
         { "from": "svc.voicePipeline", "to": "svc.voiceClient", "transport": "socket", "label": "voice:tts:audio", "payload": "{ sentence, wav } frames played back as they arrive" }
       ]
     },

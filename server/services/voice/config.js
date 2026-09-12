@@ -7,6 +7,7 @@ import { join } from 'path';
 import { getSettings, updateSettings } from '../settings.js';
 import { deepMerge } from '../../lib/objects.js';
 import { expandHome } from '../../lib/fileUtils.js';
+import { migrateRetiredTtsConfig } from '../../lib/voiceEngines.js';
 import { PORTS } from '../../lib/ports.js';
 
 const VOICE_HOME = join(homedir(), '.portos', 'voice');
@@ -62,13 +63,8 @@ export const VOICE_DEFAULTS = Object.freeze({
   },
 
   tts: {
-    engine: 'kokoro', // 'kokoro' | 'piper' | 'qwen3-tts'
+    engine: 'piper', // 'piper' | 'qwen3-tts'
     rate: 1.0,
-    kokoro: {
-      modelId: 'onnx-community/Kokoro-82M-v1.0-ONNX',
-      dtype: 'q8', // 'fp32' | 'fp16' | 'q8' | 'q4' | 'q4f16'
-      voice: 'af_heart',
-    },
     piper: {
       voice: 'en_GB-jenny_dioco-medium',
       voicePath: '~/.portos/voice/voices/en_GB-jenny_dioco-medium.onnx',
@@ -175,6 +171,7 @@ export const getVoiceConfig = async () => {
   if (cachedConfig) return cachedConfig;
   const settings = await getSettings();
   cachedConfig = deepMerge(VOICE_DEFAULTS, settings.voice || {});
+  cachedConfig.tts = migrateRetiredTtsConfig(cachedConfig.tts);
   return cachedConfig;
 };
 
@@ -184,6 +181,8 @@ export const updateVoiceConfig = async (patch) => {
   const settings = await getSettings();
   const current = deepMerge(VOICE_DEFAULTS, settings.voice || {});
   const next = deepMerge(current, patch || {});
+  next.tts = migrateRetiredTtsConfig(next.tts);
+  if (next.tts.retiredEngine === null) delete next.tts.retiredEngine;
   await updateSettings({ voice: next });
   cachedConfig = next;
   return next;

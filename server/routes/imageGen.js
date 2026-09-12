@@ -792,12 +792,15 @@ const galleryQuerySchema = z.object({
   offset: z.coerce.number().int().min(0).max(Number.MAX_SAFE_INTEGER).default(0),
   q: z.string().max(500).default(''),
   hidden: z.enum(['true', 'false']).optional().transform(v => v === undefined ? undefined : v === 'true'),
+  starred: z.enum(['true', 'false']).optional().transform(v => v === 'true'),
+  summary: z.enum(['true', 'false']).optional().transform(v => v === 'true'),
+  filename: z.string().min(1).max(255).optional(),
 });
 
 router.get('/gallery', asyncHandler(async (req, res) => {
   // No paging keys preserves the full legacy array for callers not migrated yet.
   // New callers use ?limit=5 (recent strip) or ?limit=60&offset=0&q=...
-  const paginated = ['limit', 'offset', 'q', 'hidden'].some(key => req.query[key] !== undefined);
+  const paginated = ['limit', 'offset', 'q', 'hidden', 'starred', 'summary', 'filename'].some(key => req.query[key] !== undefined);
   if (!paginated) return res.json(await local.listGallery());
   const options = validateRequest(galleryQuerySchema, req.query);
   const { listGalleryPage } = await import('../services/mediaAssetIndex/gallery.js');

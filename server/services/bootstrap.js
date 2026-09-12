@@ -548,7 +548,7 @@ const startBackgroundServices = ({ spawnerReady, io }) => {
     }
   }).catch(err => logBootstrapFailure('❌ Telegram settings read failed', err));
   // Reconcile voice stack (start portos-whisper if voice.enabled)
-  getVoiceConfig().then(reconcileVoice).catch(err => logBootstrapFailure('❌ Voice reconcile failed', err));
+  getVoiceConfig().then(cfg => reconcileVoice(cfg, { allowSetup: false })).catch(err => logBootstrapFailure('❌ Voice reconcile failed', err));
   // Re-arm any voice timers that survived a restart (independent of voice.enabled —
   // a pending reminder should still fire even if voice is currently off).
   initVoiceTimers().catch(err => logBootstrapFailure('❌ Voice timer init failed', err));
