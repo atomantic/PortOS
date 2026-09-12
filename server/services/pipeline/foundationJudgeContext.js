@@ -241,6 +241,7 @@ export function foundationInputs(series, universe, issues = []) {
       synopsis: issue?.stages?.idea?.input || '',
     }));
   return {
+    judgeContextVersion: 2,
     world: universe
       ? {
         // The starter prompt is the author's protected originating intent, not
@@ -308,7 +309,7 @@ export function renderCharacterLine(c, { core = false } = {}) {
     return compact.length <= maxChars ? compact : `${compact.slice(0, maxChars - 1).trimEnd()}…`;
   };
   const framework = FRAMEWORK_STRING_FIELDS
-    .map((field) => `${field}: ${concise(c?.[field])}`)
+    .map((field) => `${field}: ${concise(c?.[field], field === 'ghost' ? 1_000 : 600)}`)
     .join(' | ');
   const aliases = (Array.isArray(c?.aliases) ? c.aliases : [])
     .filter((alias) => typeof alias === 'string' && alias.trim())
@@ -318,7 +319,7 @@ export function renderCharacterLine(c, { core = false } = {}) {
     .map((field) => `${field}: ${concise(c?.[field])}`)
     .join(' | ');
   const secrets = (Array.isArray(c?.secrets) ? c.secrets : [])
-    .map(concise)
+    .map((secret) => concise(secret, 300))
     .slice(0, 3)
     .join('; ');
   // The harsh judge needs the actual render identity, not a presence marker.

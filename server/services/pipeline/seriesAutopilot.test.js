@@ -2255,6 +2255,23 @@ describe('autopilot conductor', () => {
     expect(applyFoundationFix).toHaveBeenCalledWith(seriesId, 'character', expect.any(Object));
   });
 
+  it('foundation gate: repairs the dimension below the requested bar before polishing an already-ready world', async () => {
+    foundationScore = 7.8;
+    foundationDimensionScores = { worldbuilding: 8, character: 8, structure: 7, craft: 8 };
+    applyFoundationFix.mockImplementationOnce(async (_seriesId, dimension) => {
+      foundationScore = 8;
+      foundationDimensionScores = { worldbuilding: 8, character: 8, structure: 8, craft: 8 };
+      return { dimension, applied: true };
+    });
+    const { seriesId } = await seedComplete();
+    await autopilot.startSeriesAutopilot(seriesId, { foundationThreshold: 8, maxFoundationRounds: 2 });
+    await waitFor(runFinished(seriesId));
+
+    expect(applyFoundationFix).toHaveBeenCalledTimes(1);
+    expect(applyFoundationFix).toHaveBeenCalledWith(seriesId, 'structure', expect.any(Object));
+    expect(autopilot.__testing.runs.get(seriesId)?.lastPayload?.type).toBe('complete');
+  });
+
   it('foundation gate: lets a newly surfaced target run before applying divergence patience', async () => {
     const snap = (weightedScore, scores) => ({
       seriesId: 'ser-example', status: 'complete', weightedScore,
@@ -2289,18 +2306,18 @@ describe('autopilot conductor', () => {
   });
 
   it('foundation gate: reverts a repair that leaves its target unchanged, then retries it from the checkpoint', async () => {
-    const snapshot = (weightedScore) => ({
+    const snapshot = (weightedScore, worldbuilding = 8) => ({
       seriesId: 'ser-example', status: 'complete', weightedScore,
       dimensions: {
-        worldbuilding: { score: 8, gap: 'The active-node evidence rule is undefined.', fix: 'Define it.' },
-        character: { score: 7, gap: 'Aruun privacy is mislabeled as a relapse.', fix: 'Separate privacy from safety disclosure.' },
-        structure: { score: 6, gap: 'The charter handoff is thin.', fix: 'Stage the handoff.' },
-        craft: { score: 7, gap: 'The panel grammar is thin.', fix: 'Add panel rules.' },
+        worldbuilding: { score: worldbuilding, gap: 'The active-node evidence rule is undefined.', fix: 'Define it.' },
+        character: { score: 6, gap: 'Aruun privacy is mislabeled as a relapse.', fix: 'Separate privacy from safety disclosure.' },
+        structure: { score: 7, gap: 'The charter handoff is thin.', fix: 'Stage the handoff.' },
+        craft: { score: 8, gap: 'The panel grammar is thin.', fix: 'Add panel rules.' },
       },
     });
     judgeFoundation
       .mockImplementationOnce(async () => snapshot(7.2))
-      .mockImplementationOnce(async () => snapshot(7.1));
+      .mockImplementationOnce(async () => snapshot(7.1, 7.75));
     const checkpoint = { seriesId: 'ser-example', marker: 'before-character-repair' };
     snapshotFoundationState.mockResolvedValueOnce(checkpoint);
 

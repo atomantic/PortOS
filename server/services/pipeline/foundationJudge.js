@@ -42,7 +42,7 @@ import { manuscriptContentBudgetChars, estimateTokens } from '../../lib/contextB
 import { getStage } from '../promptService.js';
 import { composeStyleNotes, sanitizeStyleGuide, STYLE_GUIDE_LIMITS } from '../../lib/styleGuide.js';
 import { sanitizeCharacterArcList } from '../../lib/seriesCharacterArc.js';
-import { BIBLE_KEYS, BIBLE_SOURCE, sanitizeCharacter } from '../../lib/storyBible.js';
+import { BIBLE_KEYS, BIBLE_SOURCE, normalizeBibleName, sanitizeCharacter } from '../../lib/storyBible.js';
 import { getUniverse, updateUniverse } from '../universeBuilder.js';
 import { isBlankString, isBlankArray } from '../universeCharacterExpand.js';
 import { expandWorldTemplate, narrativeRepairTargets } from '../universeBuilderExpand.js';
@@ -77,7 +77,8 @@ import {
   repairableSeriesFoundationCharacters,
   seriesFoundationCharacters,
 } from './foundationJudgeContext.js';
-import { trimTo, isNonBlankStr } from '../../lib/textUtils.js';
+import { repairOversizedCharacter } from './foundationCharacterOverflow.js';
+import { escapeRegExp, trimTo, isNonBlankStr } from '../../lib/textUtils.js';
 
 // Compatibility surface: callers keep importing these projection helpers from
 // foundationJudge.js while their implementation lives with the context builder.
@@ -199,9 +200,9 @@ export function computeWeightedScore(dimensions) {
 }
 
 /**
- * The dimension the improve loop should target next: the LARGEST weighted
- * deficit `weight × (10 − score)` — i.e. the single fix that moves the weighted
- * composite the most. Ties break toward the lower raw score, then rubric order.
+ * Largest weighted distance from a perfect rubric score, retained for snapshot
+ * diagnostics: `weight × (10 − score)`. Gate repair selection instead uses
+ * foundationFixTarget with the requested threshold. Ties break toward the lower raw score, then rubric order.
  * (Fixing a high-weight low-score dimension first is what converges the gate;
  * "weakest" by bare score would waste rounds polishing a 10%-weight craft nit
  * while a thin 40%-weight world drags the composite down.) Pure + unit-tested.
@@ -241,7 +242,22 @@ export function foundationGateStatus(dimensions, weightedScore, threshold = DEFA
 
 export function foundationFixTarget(dimensions, threshold = DEFAULT_FOUNDATION_THRESHOLD) {
   const { dimensionFloor, failingDimensions } = foundationGateStatus(dimensions, 0, threshold);
-  if (failingDimensions.length === 0) return weakestDimension(dimensions);
+  if (failingDimensions.length === 0) {
+    const target = Number.isFinite(threshold) ? threshold : DEFAULT_FOUNDATION_THRESHOLD;
+    // Repair the shortfall that keeps this run below its requested bar. Using
+    // distance from 10 sent a 7.8/8 foundation back to worldbuilding (already 8)
+    // while its only deficient dimension, structure (7), remained untouched.
+    const belowTarget = FOUNDATION_DIMENSIONS
+      .filter((dimension) => dimensions?.[dimension] && clampScore(dimensions[dimension].score) < target)
+      .map((dimension) => ({
+        dimension,
+        score: clampScore(dimensions[dimension].score),
+        deficit: Math.round(FOUNDATION_WEIGHTS[dimension] * (target - clampScore(dimensions[dimension].score)) * 100) / 100,
+      }))
+      .sort((a, b) => b.deficit - a.deficit || a.score - b.score
+        || FOUNDATION_DIMENSIONS.indexOf(a.dimension) - FOUNDATION_DIMENSIONS.indexOf(b.dimension));
+    return belowTarget[0] || weakestDimension(dimensions);
+  }
   return failingDimensions
     .map((dimension) => ({
       dimension,
@@ -826,25 +842,24 @@ function craftRepairViolations(proposal) {
   return violations;
 }
 
+const renderPromptCharacter = (character) => ({
+  id: character.id,
+  name: character.name,
+  role: character.role,
+  ...Object.fromEntries(PROFILE_STRING_FIELDS.map((field) => [field, character[field] || ''])),
+  ...pickFrameworkFields(character),
+  ...pickVisualFoundationFields(character),
+  postureNotes: character.postureNotes || '',
+  specialTraits: character.specialTraits || '',
+  stats: Array.isArray(character.stats) ? character.stats : [],
+  props: Array.isArray(character.props) ? character.props : [],
+  expressions: Array.isArray(character.expressions) ? character.expressions : [],
+  handGestures: Array.isArray(character.handGestures) ? character.handGestures : [],
+  wardrobes: Array.isArray(character.wardrobes) ? character.wardrobes : [],
+});
+
 async function runFoundationRepair(series, issues, dimension, finding, characters, options) {
   const stage = dimension === 'character' ? CHARACTER_FOUNDATION_STAGE : REPAIR_STAGE;
-  const renderPromptCharacter = (character) => ({
-    id: character.id,
-    name: character.name,
-    role: character.role,
-    personality: character.personality,
-    background: character.background,
-    relationships: character.relationships,
-    ...pickFrameworkFields(character),
-    ...pickVisualFoundationFields(character),
-    postureNotes: character.postureNotes || '',
-    specialTraits: character.specialTraits || '',
-    stats: Array.isArray(character.stats) ? character.stats : [],
-    props: Array.isArray(character.props) ? character.props : [],
-    expressions: Array.isArray(character.expressions) ? character.expressions : [],
-    handGestures: Array.isArray(character.handGestures) ? character.handGestures : [],
-    wardrobes: Array.isArray(character.wardrobes) ? character.wardrobes : [],
-  });
   const charactersPayload = dimension === 'character'
     ? {
       targetCharacters: characters.map(renderPromptCharacter),
@@ -901,34 +916,75 @@ async function runFoundationRepair(series, issues, dimension, finding, character
 
 async function repairCharacters(series, issues, universe, finding, options) {
   const seriesRoster = seriesFoundationCharacters(universe?.characters, series, issues);
-  const targets = seriesRoster.filter((character) => character?.locked !== true);
+  const repairable = seriesRoster.filter((character) => character?.locked !== true);
+  const directive = normalizeBibleName(`${finding?.gap || ''} ${finding?.fix || ''}`);
+  const namedCast = seriesRoster.filter((character) => [character.name, ...(Array.isArray(character.aliases) ? character.aliases : [])]
+    .some((name) => typeof name === 'string' && name.trim()
+      && new RegExp(`(?<![\\p{L}\\p{N}_])${escapeRegExp(normalizeBibleName(name))}(?![\\p{L}\\p{N}_])`, 'u').test(directive)));
+  // A named post-arc finding owns that character's repair. Starting a new
+  // foundation or reconciling an ensemble-wide finding still covers the cast.
+  const namedRepair = options.phase !== 'pre-arc character foundation' && namedCast.length > 0;
+  const targets = namedRepair
+    ? namedCast.filter((character) => character.locked !== true)
+    : repairable;
+  if (namedRepair && targets.length === 0) return { applied: false, reason: 'the named character repair targets are locked' };
   const targetBatches = targets.length > 0
     ? Array.from({ length: Math.ceil(targets.length / CHARACTER_FOUNDATION_BATCH_SIZE) }, (_, index) => (
       targets.slice(index * CHARACTER_FOUNDATION_BATCH_SIZE, (index + 1) * CHARACTER_FOUNDATION_BATCH_SIZE)
     ))
     : [[]];
   const proposals = [];
+  const overflowOriginals = new Map();
   let workingRoster = [...seriesRoster];
   const workingNewCharacters = [];
-  for (const originalBatch of targetBatches) {
+  while (targetBatches.length > 0) {
+    const originalBatch = targetBatches.shift();
     const batchIds = new Set(originalBatch.map((character) => character.id));
     const targetBatch = workingRoster.filter((character) => batchIds.has(character.id));
-    const proposal = await runFoundationRepair(series, issues, 'character', finding, targetBatch, {
-      ...options,
-      // Locked cast members are immutable constraints, but the model still
-      // needs to see them when differentiating relationships and voices.
-      // Later batches also see the accepted shape of earlier proposals, so two
-      // batches cannot independently invent the same voice or relationship.
-      ensembleCharacters: [...workingRoster, ...workingNewCharacters],
-    });
-    proposals.push(proposal);
+    const ensembleCharacters = [...workingRoster, ...workingNewCharacters];
+    const preview = JSON.parse(renderRepairCharactersJson({
+      targetCharacters: targetBatch.map(renderPromptCharacter),
+      fullSeriesRoster: ensembleCharacters.map(renderPromptCharacter),
+    }));
+    if (preview.targetNote) {
+      // Shrink the batch before shrinking the records it is allowed to edit.
+      // A 40-character field cap erased whole designs in a real repair prompt.
+      if (originalBatch.length > 1) {
+        const midpoint = Math.ceil(originalBatch.length / 2);
+        targetBatches.unshift(originalBatch.slice(0, midpoint), originalBatch.slice(midpoint));
+        continue;
+      }
+    }
+    const overflow = Boolean(preview.targetNote);
+    const proposal = overflow
+      ? await repairOversizedCharacter(targetBatch[0], {
+        finding,
+        phase: options.phase || 'post-arc reconciliation',
+        seriesJson: renderRepairSeriesJson(series),
+        outline: renderArc(series, issues, { maxChars: REPAIR_OUTLINE_MAX_CHARS }),
+        rosterJson: renderRepairCharactersJson(ensembleCharacters.map(compactRosterCharacter), 2_000),
+      }, REPAIRABLE_CHARACTER_FIELDS, { ...options, timeoutOverride: CHARACTER_FOUNDATION_TIMEOUT_MS })
+      : await runFoundationRepair(series, issues, 'character', finding, targetBatch, {
+        ...options,
+        // Locked cast members constrain relationships and voices. Later batches
+        // also see accepted proposals so they do not invent duplicate identities.
+        ensembleCharacters,
+      });
+    if (overflow) overflowOriginals.set(targetBatch[0].id, targetBatch[0]);
+    const boundedProposal = {
+      ...proposal,
+      characters: (Array.isArray(proposal.characters) ? proposal.characters : [])
+        .filter((character) => batchIds.has(character?.id)),
+    };
+    proposals.push(boundedProposal);
 
-    const proposedById = new Map((Array.isArray(proposal.characters) ? proposal.characters : [])
+    const proposedById = new Map(boundedProposal.characters
       .filter((character) => typeof character?.id === 'string')
       .map((character) => [character.id, character]));
     workingRoster = workingRoster.map((character) => {
       const raw = proposedById.get(character.id);
       if (!raw) return character;
+      if (overflowOriginals.has(character.id)) return { ...character, ...raw };
       return sanitizeCharacter({ ...character, ...raw, id: character.id, name: character.name }) || character;
     });
     const knownNames = new Set([...workingRoster, ...workingNewCharacters]
@@ -954,6 +1010,11 @@ async function repairCharacters(series, issues, universe, finding, options) {
   const addedCharacters = [];
   await updateUniverse(universe.id, (latest) => {
     const latestCharacters = Array.isArray(latest?.characters) ? latest.characters : [];
+    for (const [id, original] of overflowOriginals) {
+      if (JSON.stringify(latestCharacters.find((character) => character.id === id)) !== JSON.stringify(original)) {
+        throw new Error('Character foundation overflow repair source changed during validation; no edits applied.');
+      }
+    }
     let changed = false;
     const characters = latestCharacters.map((character) => {
       if (!targetIds.has(character.id) || character.locked === true) return character;
@@ -963,6 +1024,9 @@ async function repairCharacters(series, issues, universe, finding, options) {
       if (!sanitized) return character;
       const next = { ...character };
       for (const field of REPAIRABLE_CHARACTER_FIELDS) {
+        // Overflow validation covers only the explicit patch. Never rewrite
+        // untouched supporting detail through the sanitizer.
+        if (overflowOriginals.has(character.id) && !Object.hasOwn(raw, field)) continue;
         const value = sanitized[field];
         // Object-valued fields (`psychology`) are authored when the sanitizer
         // returned one at all — it collapses an empty proposal to null/absent.
@@ -1014,7 +1078,9 @@ async function repairCharacters(series, issues, universe, finding, options) {
     .map((arc) => ({
       ...arc,
       characterId: characterIdByName.get(String(arc?.characterName || '').trim().toLowerCase()) || arc?.characterId,
-    })));
+    })))
+    .filter((arc) => !namedRepair || targetIds.has(arc.characterId)
+      || addedCharacters.some((character) => character.id === arc.characterId));
   let arcsApplied = false;
   if (proposedArcs.length > 0) {
     const latestSeries = await getSeries(series.id);

@@ -139,6 +139,7 @@
     "server/services/universeCanon.js"
   ],
   "pipeline-character-foundation": [
+    "server/services/pipeline/foundationCharacterOverflow.js",
     "server/services/pipeline/foundationJudge.js"
   ],
   "pipeline-character-refine": [
