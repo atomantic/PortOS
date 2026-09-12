@@ -17,6 +17,8 @@ import { resolve } from 'path';
 import { expandHome } from '../lib/fileUtils.js';
 import { isProjectorName, isShardedGguf } from '../lib/localLlmDisk.js';
 import { ServerError } from '../lib/errorHandler.js';
+import { withAbortTimeout } from '../lib/abortTimeout.js';
+import { anyAbortSignal } from '../lib/requestAbort.js';
 import {
   assessDownloadPreflight,
   assertDownloadFits,
@@ -184,23 +186,36 @@ const siblingFor = (model, filename) => {
   return siblings.find((row) => row?.rfilename === filename) || null;
 };
 
-// The preview path (previewSpecDecodeDownload) calls this with no signal —
-// a real download's own abort chain covers the actual transfer, but a
-// metadata/size lookup that just blocks the confirm modal needs its own
-// bound, or a stalled-but-reachable HF hangs the preview indefinitely.
+// Planning is short-lived whether it serves the preview or a confirmed download.
+// Its deadline is separate from the transfer watchdog: multi-gigabyte weights may
+// stream for hours, while metadata headers/body and the size fallback must settle.
 const METADATA_FETCH_TIMEOUT_MS = 10_000;
 
 const resolveSpecDownloadPlan = async ({ source, destPath, token, signal }) => {
-  const boundedSignal = signal || AbortSignal.timeout(METADATA_FETCH_TIMEOUT_MS);
   const headers = buildHfAuthHeaders(token);
-  const model = await fetchHuggingfaceModel(source.repo, { token, signal: boundedSignal });
-  const file = pickGgufSibling(model, { file: source.file, quant: source.quant, repo: source.repo });
-  const url = buildHfResolveUrl(source.repo, 'main', file);
-  let meta = siblingDownloadMeta(siblingFor(model, file));
-  if (!meta.bytes) {
-    const probed = await probeRemoteSize(url, { headers, signal: boundedSignal });
-    meta = { bytes: probed.bytes || meta.bytes, sha256: meta.sha256 || probed.sha256 };
-  }
+  const { file, url, meta } = await withAbortTimeout(METADATA_FETCH_TIMEOUT_MS, async (deadline) => {
+    const boundedSignal = anyAbortSignal([signal, deadline]);
+    try {
+      const model = await fetchHuggingfaceModel(source.repo, { token, signal: boundedSignal });
+      const selectedFile = pickGgufSibling(model, { file: source.file, quant: source.quant, repo: source.repo });
+      const selectedUrl = buildHfResolveUrl(source.repo, 'main', selectedFile);
+      let selectedMeta = siblingDownloadMeta(siblingFor(model, selectedFile));
+      if (!selectedMeta.bytes) {
+        const probed = await probeRemoteSize(selectedUrl, { headers, signal: boundedSignal });
+        boundedSignal.throwIfAborted();
+        selectedMeta = { bytes: probed.bytes || selectedMeta.bytes, sha256: selectedMeta.sha256 || probed.sha256 };
+      }
+      return { file: selectedFile, url: selectedUrl, meta: selectedMeta };
+    } catch (err) {
+      if (deadline.aborted && !signal?.aborted) {
+        throw new ServerError(
+          `Hugging Face metadata lookup for ${source.repo} timed out — retry the download.`,
+          { status: 504, code: 'SPEC_METADATA_TIMEOUT' },
+        );
+      }
+      throw err;
+    }
+  });
   const preflight = await assessDownloadPreflight({ destPath, expectedBytes: meta.bytes });
   return { file, url, headers, meta, preflight };
 };
