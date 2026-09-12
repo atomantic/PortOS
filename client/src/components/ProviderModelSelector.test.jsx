@@ -56,7 +56,7 @@ describe('ProviderModelSelector', () => {
     const props = {
       providers: [{ id: 'codex', name: 'Codex', defaultModel: 'gpt-6-astra' }],
       selectedProviderId: 'codex', selectedModel: '',
-      availableModels: ['another-model'], emptyModelOption: 'Select a model',
+      availableModels: ['another-model'], emptyModelOption: 'Select a model', includeDefaultModel: true,
       onModelChange,
     };
     const { rerender } = renderSelector(props);
@@ -73,7 +73,7 @@ describe('ProviderModelSelector', () => {
   it('does not duplicate catalog defaults or offer a policy-disallowed default', () => {
     const props = {
       providers: [{ id: 'p1', defaultModel: 'm1' }], selectedProviderId: 'p1',
-      selectedModel: '', availableModels: [{ id: 'm1', name: 'Model One' }],
+      selectedModel: '', availableModels: [{ id: 'm1', name: 'Model One' }], includeDefaultModel: true,
       emptyModelOption: 'Default model', onProviderChange: () => {}, onModelChange: () => {},
     };
     const { rerender } = renderSelector(props);
@@ -81,6 +81,11 @@ describe('ProviderModelSelector', () => {
     rerender(<ProviderModelSelector {...props} availableModels={['m2']}
       selectionPolicy={{ model: model => model !== 'm1' }} />);
     expect(screen.getAllByRole('option').some(option => option.value === 'm1')).toBe(false);
+  });
+
+  it('preserves caller-filtered catalogs unless the form opts into default pins', () => {
+    renderSelector({ providers: [{ id: 'p1', defaultModel: 'text-only' }], availableModels: ['vision-model'], selectedModel: '' });
+    expect(screen.getAllByRole('option').some(option => option.value === 'text-only')).toBe(false);
   });
 
   it('renders only the provider options by default (no empty sentinel)', () => {

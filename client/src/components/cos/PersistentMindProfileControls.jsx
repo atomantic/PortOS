@@ -194,7 +194,7 @@ export default function PersistentMindProfileControls({
         effort={draft.effort}
         disabled={disabled || saving || !draft.enabled}
         emptyProviderOption="Select an AI provider"
-        emptyModelOption="Select a model"
+        emptyModelOption="Select a model" includeDefaultModel
         alwaysShowModel
         highlightToolUse
         layout="stacked"
