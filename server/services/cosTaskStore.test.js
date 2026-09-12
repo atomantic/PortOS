@@ -121,6 +121,7 @@ import {
 } from './cosTaskStore.js';
 import { aggregateAutoFixDiagnostics, getAutoFixMetrics } from './autoFixMetrics.js';
 import { PRIORITY_VALUES, generateTasksMarkdown } from '../lib/taskParser.js';
+import { getTaskPrompt, getTaskContextNote } from '../lib/cosTaskPrompt.js';
 import { AGENT_PAUSED_CATEGORY, PAUSE_METADATA_KEYS, registerPauseReleaseAdapter, __resetPauseReleaseAdapter } from '../lib/taskPauseHold.js';
 import { MAX_TOTAL_SPAWNS } from '../lib/cosValidation.js';
 
@@ -663,6 +664,71 @@ describe('cosTaskStore.addTask', () => {
       const updated = await updateTask('task-edit', { context: 'note\nsecond line' }, 'user');
       expect(updated.metadata.context).toBe('note\nsecond line');
       expect(updated.metadata.prompt).toBe(AGENT_BODY);
+    });
+
+    // The task editor renders the description as an AutoSizeTextarea, so Enter
+    // and paste put newlines into the ORDINARY edit path. Before #7240 the
+    // update path wrote them straight into the one-line markdown row: the
+    // description silently truncated, the body's `  - key: value` lines were
+    // scraped into the task's OWN metadata, and a pasted `- [ ] #id | …` row
+    // minted a phantom auto-approved task the spawner would run.
+    const CORRUPTING_DESCRIPTION = [
+      'Fix the login flow',
+      'Also update:',
+      '  - app: other-app',
+      '  - provider: openai',
+      '- [ ] #task-999 | HIGH | phantom task',
+    ].join('\n');
+
+    it('normalizes a multi-line description on update without corrupting the task file', async () => {
+      await addTask(
+        { description: 'Fix the login flow', id: 'task-multiline-desc', app: 'my-app', provider: 'claude', context: 'note' },
+        'user'
+      );
+      const updated = await updateTask('task-multiline-desc', { description: CORRUPTING_DESCRIPTION }, 'user');
+
+      // The row stays a one-line record, so the file reparses to exactly one task.
+      expect(updated.description).toBe('Fix the login flow');
+      const { tasks } = await getUserTasks();
+      expect(tasks).toHaveLength(1);
+      expect(tasks[0].id).toBe('task-multiline-desc');
+
+      // The description body no longer re-targets the task's own execution metadata.
+      expect(tasks[0].metadata.app).toBe('my-app');
+      expect(tasks[0].metadata.provider).toBe('claude');
+
+      // And the submitted text is fully recoverable — nothing silently truncated.
+      expect(getTaskPrompt(tasks[0])).toBe(CORRUPTING_DESCRIPTION);
+    });
+
+    it('appends a multi-line description edit to the note when the task already has a prompt', async () => {
+      await addTask(
+        { description: 'claim', id: 'task-desc-with-prompt', prompt: AGENT_BODY, context: 'note' },
+        'user'
+      );
+      const updated = await updateTask('task-desc-with-prompt', { description: CORRUPTING_DESCRIPTION }, 'user');
+
+      // `updateTask` must never overwrite a real prompt (cosTaskPrompt.js contract).
+      expect(updated.metadata.prompt).toBe(AGENT_BODY);
+      expect(updated.description).toBe('Fix the login flow');
+      const reloaded = await getTaskById('task-desc-with-prompt');
+      expect(getTaskContextNote(reloaded)).toBe(`note\n\n(from description)\n${CORRUPTING_DESCRIPTION}`);
+      expect((await getUserTasks()).tasks).toHaveLength(1);
+    });
+
+    it('does not re-append the same description overflow on a repeated save', async () => {
+      await addTask({ description: 'claim', id: 'task-desc-resave', prompt: AGENT_BODY }, 'user');
+      await updateTask('task-desc-resave', { description: CORRUPTING_DESCRIPTION }, 'user');
+      const again = await updateTask('task-desc-resave', { description: CORRUPTING_DESCRIPTION }, 'user');
+      expect(again.metadata.context).toBe(`(from description)\n${CORRUPTING_DESCRIPTION}`);
+    });
+
+    it('leaves a single-line description edit untouched', async () => {
+      await addTask({ description: 'claim', id: 'task-desc-single', context: 'note' }, 'user');
+      const updated = await updateTask('task-desc-single', { description: 'renamed' }, 'user');
+      expect(updated.description).toBe('renamed');
+      expect(updated.metadata.prompt).toBeUndefined();
+      expect(updated.metadata.context).toBe('note');
     });
 
     it('treats prompt as a legacy direct field on update (edit stamp + clear)', async () => {

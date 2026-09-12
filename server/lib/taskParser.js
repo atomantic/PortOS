@@ -280,6 +280,26 @@ export function sortByPriority(tasks) {
 }
 
 /**
+ * Last-resort write-side guard: a task row is a ONE-LINE record, so a newline in
+ * `description` does not merely look wrong — it re-parses as file structure. The
+ * lines after the break are read as the task's own metadata (`  - app: x`
+ * re-targets which app the agent runs against) or, for a `- [ ] #id | …` row, as
+ * a whole extra auto-approved task the spawner will run, while the description
+ * itself is silently truncated to its first line (#7240).
+ *
+ * Callers normalize first (`cosTaskStore.addTask` / `writeTaskUpdate` re-home the
+ * body into the newline-safe `metadata.prompt` / `metadata.context`); this only
+ * stops a future writer from reintroducing the corruption, and says so loudly
+ * because reaching it means the body was NOT preserved anywhere.
+ */
+function flattenDescription(task) {
+  const description = task.description;
+  if (typeof description !== 'string' || !/\r?\n/.test(description)) return description;
+  console.warn(`⚠️ Flattened newline(s) in task ${task.id} description for single-line markdown storage`);
+  return description.replace(/\r?\n/g, ' ');
+}
+
+/**
  * Generate TASKS.md content from tasks array
  * @param {boolean} includeApprovalFlags - Whether to include AUTO/APPROVAL flags (for internal CoS tasks)
  */
@@ -314,7 +334,7 @@ export function generateTasksMarkdown(tasks, includeApprovalFlags = false) {
       const approvalFlag = includeApprovalFlags && (task.approvalRequired || task.autoApproved !== undefined)
         ? ` | ${task.approvalRequired ? 'APPROVAL' : 'AUTO'}`
         : '';
-      lines.push(`- ${checkbox} #${task.id} | ${task.priority}${approvalFlag} | ${task.description}`);
+      lines.push(`- ${checkbox} #${task.id} | ${task.priority}${approvalFlag} | ${flattenDescription(task)}`);
 
       // Add metadata (escape newlines in values for single-line storage).
       // Pass the raw value — escapeNewlines JSON-encodes arrays/objects itself;

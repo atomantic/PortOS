@@ -26,7 +26,7 @@ import { REQUEUED_AT_KEY } from '../lib/taskRequeue.js';
 import { resolveTaskStatusTransition, isTerminalTaskStatus } from '../lib/taskStatusTransition.js';
 import { isInvestigationTask } from '../lib/investigationTasks.js';
 import { PAUSED_BLOCKED_CATEGORIES, USER_DECISION_BLOCKED_CATEGORIES } from '../lib/taskBlockCategories.js';
-import { splitTaskPromptFields } from '../lib/cosTaskPrompt.js';
+import { splitTaskPromptFields, TASK_PROMPT_KEY, TASK_CONTEXT_KEY } from '../lib/cosTaskPrompt.js';
 import { normalizeOrchestrationMode, normalizeOrchestrationProfile } from '../lib/orchestrationProfile.js';
 import { loadState, withStateLock, ROOT_DIR } from './cosState.js';
 import { cosEvents } from './cosEvents.js';
@@ -43,6 +43,50 @@ export const firstLine = (s) => (s || '').split('\n').map(l => l.trim()).find(l 
 
 const CLAIM_KEY_SET = new Set(CLAIM_METADATA_KEYS);
 
+// Heading the update path stamps on text it lifts out of a multi-line description
+// edit and into the newline-safe note, so the provenance survives a later read.
+const DESCRIPTION_OVERFLOW_HEADING = '(from description)';
+
+/**
+ * Normalize a multi-line `description` on the UPDATE path, preserving the body.
+ *
+ * Markdown task rows are ONE-LINE records: `generateTasksMarkdown` emits the
+ * description into `- [ ] #id | PRIORITY | <description>` and
+ * `parseTasksMarkdown` reads only that first line. `addTask` has collapsed a
+ * multi-line description for exactly that reason since #4153 — `writeTaskUpdate`
+ * did not, so saving a multi-line edit from the task editor's textarea wrote the
+ * extra lines into the file as free text. Reparsing then silently truncated the
+ * description, scraped any `  - key: value` line into the task's OWN metadata
+ * (re-targeting its app/provider/prompt), and minted a phantom auto-approved
+ * task out of any pasted `- [ ] #id | …` row that the spawner would then run
+ * (#7240).
+ *
+ * Unlike `addTask` this never DROPS the remainder. The full submitted text goes
+ * to `metadata.prompt` when the task has none; when it already has one, the text
+ * is appended to `metadata.context` instead, because `updateTask` must not
+ * overwrite a real prompt (the contract in `server/lib/cosTaskPrompt.js`). Both
+ * fields round-trip newlines through the JSON sentinel, and `taskContextBlock`
+ * already renders prompt + note together — nothing is lost and nothing is
+ * silently replaced. An explicitly-cleared prompt (`''`) counts as present, the
+ * same absent-vs-cleared rule the rest of the store follows.
+ *
+ * Returns `null` when there is nothing to normalize; never mutates its input.
+ */
+function normalizeUpdatedDescription(description, metadata) {
+  if (typeof description !== 'string' || !description.includes('\n')) return null;
+  const nextMetadata = { ...metadata };
+  if (typeof nextMetadata[TASK_PROMPT_KEY] === 'string') {
+    const block = `${DESCRIPTION_OVERFLOW_HEADING}\n${description}`;
+    const existing = typeof nextMetadata[TASK_CONTEXT_KEY] === 'string' ? nextMetadata[TASK_CONTEXT_KEY] : '';
+    // Re-saving the same edit must not grow the note without bound.
+    if (!existing.includes(block)) {
+      nextMetadata[TASK_CONTEXT_KEY] = existing ? `${existing}\n\n${block}` : block;
+    }
+  } else {
+    nextMetadata[TASK_PROMPT_KEY] = description;
+  }
+  return { description: firstLine(description), metadata: nextMetadata };
+}
 
 // The `blockedCategory` vocabulary lives in `lib/taskBlockCategories.js` — the
 // pause logic, the failure reaper below, and the investigation auto-retry all
@@ -637,16 +681,22 @@ async function writeTaskUpdate(taskId, updates, taskType, { now, suppressDequeue
     if (updatedMetadata[key] === undefined) delete updatedMetadata[key];
   });
 
+  // Collapse a multi-line description to the one-line record the markdown row can
+  // hold, re-homing the body into prompt/context rather than dropping it (#7240).
+  const normalizedDescription = normalizeUpdatedDescription(updates.description, updatedMetadata);
+  const nextMetadata = normalizedDescription ? normalizedDescription.metadata : updatedMetadata;
+  const nextDescription = normalizedDescription ? normalizedDescription.description : updates.description;
+
   // Update the task
   const updatedTask = {
     ...tasks[taskIndex],
-    ...(updates.description && { description: updates.description }),
+    ...(updates.description && { description: nextDescription }),
     ...(updates.priority && {
       priority: updates.priority.toUpperCase(),
       priorityValue: PRIORITY_VALUES[updates.priority.toUpperCase()] || 2
     }),
     ...(updates.status && { status: updates.status }),
-    metadata: updatedMetadata
+    metadata: nextMetadata
   };
 
   tasks[taskIndex] = updatedTask;
