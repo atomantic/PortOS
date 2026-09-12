@@ -305,34 +305,49 @@ function AppDetail() {
   return (
     <div className="flex flex-col h-full">
       {/* Header */}
-      <div className="px-4 sm:px-6 py-4 border-b border-port-border bg-port-card">
-        <div className="flex flex-col sm:flex-row sm:items-center gap-3">
-          <Link to="/apps" className="text-gray-400 hover:text-white transition-colors self-start">
-            <ArrowLeft size={20} />
-          </Link>
+      <div className="px-4 sm:px-6 py-3 sm:py-4 border-b border-port-border bg-port-card">
+        <div className="flex flex-col lg:flex-row lg:items-center gap-2 lg:gap-3">
           <div className="flex-1 min-w-0">
-            <div className="flex flex-wrap items-center gap-3">
-              <h1
-                className="min-w-0 line-clamp-2 break-words text-xl font-bold text-white"
-                title={app.name}
+            <div className="flex items-center gap-2">
+              <Link
+                to="/apps"
+                aria-label="Back to Apps"
+                className="flex items-center justify-center shrink-0 min-h-8 min-w-8 text-gray-400 hover:text-white transition-colors rounded focus-visible:outline focus-visible:outline-2 focus-visible:outline-port-accent"
               >
-                {app.name}
-              </h1>
-              {NON_PM2_TYPES.has(app.type) ? (
-                <span className="px-1.5 py-0.5 bg-port-accent/20 text-port-accent text-xs rounded">
-                  {getAppTypeLabel(app.type)}
-                </span>
-              ) : (
-                <StatusBadge status={app.overallStatus || 'unknown'} size="sm" />
-              )}
+                <ArrowLeft size={20} />
+              </Link>
+              <div className="flex flex-1 min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
+                <h1
+                  className="min-w-0 line-clamp-2 break-words text-xl font-bold text-white"
+                  title={app.name}
+                >
+                  {app.name}
+                </h1>
+                {NON_PM2_TYPES.has(app.type) ? (
+                  <span className="px-1.5 py-0.5 bg-port-accent/20 text-port-accent text-xs rounded">
+                    {getAppTypeLabel(app.type)}
+                  </span>
+                ) : (
+                  <StatusBadge status={app.overallStatus || 'unknown'} size="sm" />
+                )}
+              </div>
+              <button
+                onClick={() => setEditing(true)}
+                aria-label="Edit app"
+                title="Edit app"
+                className="shrink-0 min-h-8 min-w-8 px-2 py-1 bg-port-accent/20 text-port-accent hover:bg-port-accent/30 transition-colors rounded-lg border border-port-border flex items-center justify-center gap-1"
+              >
+                <Pencil size={14} />
+                <span className="hidden sm:inline text-xs">Edit</span>
+              </button>
             </div>
             {app.pm2ProcessNames?.length > 0 && (
-              <div className="text-xs text-gray-500 mt-1">
+              <div className="text-xs text-gray-500 mt-1 break-words">
                 {app.pm2ProcessNames.join(', ')}
               </div>
             )}
           </div>
-          <div className="flex flex-wrap items-center gap-1.5">
+          <div className="flex flex-wrap items-center gap-1 lg:max-w-[60%]">
             {/* Start/Stop/Restart - only for PM2 apps */}
             {!NON_PM2_TYPES.has(app.type) && (
             <div className="inline-flex rounded-lg overflow-hidden border border-port-border">
@@ -460,13 +475,6 @@ function AppDetail() {
             {app.hasDeployScript && (
               <DeployPanel appId={appId} appName={app.name} />
             )}
-            <button
-              onClick={() => setEditing(true)}
-              className="px-2 py-1 bg-port-accent/20 text-port-accent hover:bg-port-accent/30 transition-colors rounded-lg border border-port-border flex items-center gap-1"
-            >
-              <Pencil size={14} />
-              <span className="text-xs">Edit</span>
-            </button>
           </div>
         </div>
 
