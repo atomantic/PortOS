@@ -1266,7 +1266,7 @@ describe('Integration: Calendar Linking', () => {
   it('should return goal unchanged when unlinking non-existent calendar', async () => {
     const goal = await createGoal({ title: 'Exercise' });
     const updated = await unlinkCalendarFromGoal(goal.id, 'nonexistent');
-    expect(updated).toBeDefined();
+    expect(updated).toEqual(goal);
   });
 
   it('should return null when unlinking from non-existent goal', async () => {
