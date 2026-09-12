@@ -1109,6 +1109,21 @@ describe('generateManifest', () => {
 
     expect(manifest.files['../portos-db.sql']).toMatch(/^[0-9a-f]{64}$/);
   });
+
+  it('preserves dangling links without dropping hashes for readable link targets', async () => {
+    const fsp = await vi.importActual('fs/promises');
+    const dataDir = joinPath(tmpRoot, 'data');
+    await fsp.mkdir(dataDir);
+    await fsp.writeFile(joinPath(dataDir, 'example.txt'), 'example');
+    await fsp.symlink('example.txt', joinPath(dataDir, 'readable-link'));
+    await fsp.symlink('excluded.txt', joinPath(dataDir, 'dangling-link'));
+    const { generateManifest } = await import('./backup.js');
+    const manifest = await generateManifest(dataDir, joinPath(tmpRoot, 'manifest.json'));
+    expect(manifest.fileCount).toBe(2);
+    expect(manifest.files['readable-link']).toBe(manifest.files['example.txt']);
+    expect(manifest.files).not.toHaveProperty('dangling-link');
+    expect((await fsp.lstat(joinPath(dataDir, 'dangling-link'))).isSymbolicLink()).toBe(true);
+  });
 });
 
 // restoreSnapshot's service-side subdirFilter guard (issue #1822). These reject
@@ -1697,6 +1712,112 @@ describe('runBackup lifecycle', () => {
         pgBackup: SKIPPED_PG,
       }],
     ]);
+  });
+
+  it.each([
+    ['data readdir', 'EIO'],
+    ['data readdir', 'EACCES'],
+    ['data stat', 'EIO'],
+    ['data stat', 'ENOENT'],
+    ['dump stat', 'EACCES'],
+    ['dump stat', 'EIO'],
+  ])('fails on %s %s and succeeds after repair', async (operation, code) => {
+    const fsp = await actualFs();
+    const io = { emit: vi.fn() };
+    const proc = fakeProc();
+    spawn.mockReturnValue(proc);
+    const pending = runBackup(destRoot, io);
+    await waitFor(() => spawn.mock.calls.length === 1, 'rsync spawn');
+    const snapshotDir = await findSnapshotDir();
+    const dataDir = joinPath(snapshotDir, 'data');
+    const entryPath = joinPath(dataDir, 'example.json');
+    await fsp.writeFile(entryPath, '{}');
+    const fault = Object.assign(new Error('private filesystem details'), { code });
+    const expected = `Backup manifest ${operation} failed (${code})`;
+    const method = operation === 'data readdir' ? 'readdir' : 'stat';
+    const target = operation === 'data readdir' ? dataDir
+      : operation === 'data stat' ? entryPath : joinPath(snapshotDir, 'portos-db.sql');
+    const spy = vi.spyOn(fs, method).mockImplementation((path, ...args) =>
+      path === target ? Promise.reject(fault) : fsp[method](path, ...args));
+    const rejected = expect(pending).rejects.toThrow(expected);
+    proc.emit('close', 0);
+    await rejected;
+
+    expect(await readJson(joinPath(dataRoot, 'backup', 'state.json')))
+      .toMatchObject({ status: 'error', error: expected });
+    expect(io.emit.mock.calls.filter(([event]) => event === 'backup:completed')).toEqual([]);
+    expect(io.emit).toHaveBeenCalledWith('backup:failed', {
+      snapshotId: basename(snapshotDir), error: expected,
+    });
+    await expect(fsp.access(joinPath(snapshotDir, 'manifest.json'))).rejects.toMatchObject({ code: 'ENOENT' });
+
+    spy.mockRestore();
+    fs.stat.mockImplementation(fsp.stat);
+    spawn.mockClear();
+    const retryProc = fakeProc();
+    spawn.mockReturnValue(retryProc);
+    const retry = runBackup(destRoot, io);
+    await waitFor(() => spawn.mock.calls.length === 1, 'retry rsync');
+    retryProc.emit('close', 0);
+    await expect(retry).resolves.toMatchObject({ status: 'ok' });
+    expect(await readJson(joinPath(dataRoot, 'backup', 'state.json')))
+      .toMatchObject({ status: 'ok', error: null });
+  });
+
+  it.each([
+    ['skipped', 'file', 'ok'],
+    ['failed', 'postgres', 'degraded'],
+  ])('allows an empty inventory and absent %s dump', async (pgStatus, backend, status) => {
+    process.env.MEMORY_BACKEND = backend;
+    getBackendName.mockReturnValue(null);
+    // Production subscribes to the error bus; EventEmitter otherwise throws
+    // an unhandled 'error' while broadcasting the expected degraded warning.
+    const { errorEvents } = await import('../lib/errorHandler.js');
+    const warning = vi.fn();
+    if (pgStatus === 'failed') errorEvents.once('error', warning);
+    const io = { emit: vi.fn() };
+    const proc = fakeProc();
+    spawn.mockReturnValue(proc);
+    const pending = runBackup(destRoot, io);
+    await waitFor(() => spawn.mock.calls.length === 1, 'rsync spawn');
+    proc.emit('close', 0);
+    await expect(pending).resolves.toMatchObject({
+      status, pgBackup: { status: pgStatus }, manifest: { fileCount: 0, files: {} },
+    });
+    expect(await readJson(joinPath(dataRoot, 'backup', 'state.json')))
+      .toMatchObject({ status, pgBackup: { status: pgStatus } });
+    expect(io.emit).toHaveBeenCalledWith('backup:completed', expect.objectContaining({ status }));
+    if (pgStatus === 'failed') expect(warning).toHaveBeenCalledWith(
+      expect.objectContaining({ code: 'BACKUP_DB_DUMP_FAILED' }), expect.any(Object));
+  });
+
+  it('fails if a successful dump disappears before inventory', async () => {
+    checkHealth.mockResolvedValue({ connected: true, hasSchema: true });
+    getServerMajorVersion.mockResolvedValue(null);
+    const fsp = await actualFs();
+    const io = { emit: vi.fn() };
+    const rsync = fakeProc();
+    const pg = fakeProc();
+    spawn.mockReturnValueOnce(rsync).mockReturnValueOnce(pg);
+    const pending = runBackup(destRoot, io);
+    await waitFor(() => spawn.mock.calls.length === 1, 'rsync spawn');
+    const snapshotDir = await findSnapshotDir();
+    const dumpPath = joinPath(snapshotDir, 'portos-db.sql');
+    rsync.emit('close', 0);
+    await waitFor(() => spawn.mock.calls.length === 2, 'pg_dump spawn');
+    await fsp.writeFile(dumpPath, 'CREATE TABLE example (id integer);');
+    // Enumeration starts only after dumpPostgres has verified and returned ok.
+    vi.spyOn(fs, 'readdir').mockImplementation(async (path, ...args) => {
+      if (path === joinPath(snapshotDir, 'data')) await fsp.unlink(dumpPath);
+      return fsp.readdir(path, ...args);
+    });
+    const rejected = expect(pending).rejects.toThrow('Backup manifest dump stat failed (ENOENT)');
+    pg.emit('close', 0);
+    await rejected;
+    expect(await readJson(joinPath(dataRoot, 'backup', 'state.json')))
+      .toMatchObject({ status: 'error' });
+    expect(io.emit.mock.calls.filter(([event]) => event === 'backup:completed')).toEqual([]);
+    await expect(fsp.access(joinPath(snapshotDir, 'manifest.json'))).rejects.toMatchObject({ code: 'ENOENT' });
   });
 
   it('returns { skipped: true } for a concurrent call without a second rsync', async () => {
