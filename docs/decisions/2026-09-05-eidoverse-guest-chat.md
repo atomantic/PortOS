@@ -29,8 +29,12 @@ visitor access. Registration is routing consent, not cryptographic proof of a
 caller: when the instance password is enabled the existing auth gate also
 requires its configured credentials. No path mints a PortOS owner login.
 
-The resident grants a fresh opaque identity `visitor` with generation disabled
-before entry. The renderer's explicit guest protocol ignores an existing browser
+The resident grants an unused identity `visitor` with generation disabled
+before entry. Named admission preserves the source human or CoS in-world handle
+when available, adding a bounded numeric suffix for occupied names. Existing
+roles and entities are never reused or downgraded. Missing or reserved handles
+retain the opaque guest fallback. Handles travel only in explicit admission
+bodies, never status/capability payloads. The renderer's explicit guest protocol ignores an existing browser
 login, refuses missing visitor grants and ownerless worlds, and restricts
 snapshot/scrollback chat to the visit's admission sequence. Guest debug history
 is unavailable. This prevents automatic history delivery during the guest flow;
@@ -57,6 +61,10 @@ may read/reply during its already-authorized reasoning turns; received text is
 untrusted conversation and cannot grant capabilities or authorize tool actions.
 
 ## Compatibility
+
+Named admission is an additive `visitorNames: 1` capability. Origins omit the
+optional name for older peers with strict admission schemas; upgraded peers still
+accept nameless admissions.
 
 The federation contract is version 1 and requires the renderer's independently
 versioned `guestEntry: 1` capability. Unsupported or offline peers are not travel

@@ -7,7 +7,7 @@ vi.mock('./instances.js', () => ({ getPeers: async () => mocks.peers }));
 vi.mock('./instanceIdentity.js', () => ({ getInstanceId: async () => 'origin-instance', UNKNOWN_INSTANCE_ID: 'unknown' }));
 vi.mock('./instanceFeatures.js', () => ({ getInstanceFeatures: async () => ({ features: [{ id: 'eidoverse', enabled: mocks.feature }] }) }));
 vi.mock('./eidoverseHost.js', () => ({ ensureEidoverseHost: async () => ({ protocol: 'http', port: 5563, running: true }) }));
-vi.mock('./eidoverseWorld.js', () => ({ supportsEidoverseGuestEntry: async () => mocks.protocol, getEidoverseWorldStatus: async () => ({ setup: { installed: true, runtimeStatus: 'online', worldDataReady: true }, cos: { enabled: true } }), admitEidoverseGuest: (...args) => mocks.admission(...args) }));
+vi.mock('./eidoverseWorld.js', () => ({ ensureEidoverseWorldConfig: async () => ({ human: { name: 'Example Human' }, cos: { id: 'Example Mind' } }), supportsEidoverseGuestEntry: async () => mocks.protocol, getEidoverseWorldStatus: async () => ({ setup: { installed: true, runtimeStatus: 'online', worldDataReady: true }, cos: { enabled: true } }), admitEidoverseGuest: (...args) => mocks.admission(...args) }));
 
 import router from '../routes/eidoverseTravelRoutes.js';
 import { eidoversePeerId } from '../lib/eidoverseWorldSignals.js';
@@ -62,7 +62,7 @@ describe('registered-peer Eidoverse guest workflow over HTTP', () => {
     const peerId = eidoversePeerId(destination);
     expect(await listEidoverseDestinations()).toEqual({ destinations: [{ peerId, label: 'Example destination' }] });
     const visit = await visitEidoversePeer({ peerId });
-    expect(mocks.admission).toHaveBeenCalledWith({ agent: true });
+    expect(mocks.admission).toHaveBeenCalledWith({ agent: true, name: 'Example Mind' });
     const sent = await eidoverseVisitChat({ visitId: visit.visitId, text: 'Hello from the example visitor.' });
     expect(sent.messages).toEqual([{ seq: 0, actor: 'guest-example', text: 'Hello from the example visitor.' }]);
     const connection = mocks.connections.at(-1);
@@ -75,6 +75,7 @@ describe('registered-peer Eidoverse guest workflow over HTTP', () => {
 
   it('limits browser tickets to visitor metadata and pins agent sessions to the originating peer', async () => {
     const { url } = await visitEidoversePeer({ peerId: eidoversePeerId(destination), agent: false });
+    expect(mocks.admission).toHaveBeenLastCalledWith({ agent: false, name: 'Example Human' });
     const ticket = new URL(url).hash.slice(1);
     expect(new URL(url).pathname).toBe('/eidoverse/guest');
     const response = await fetch(`${base}/guest`, { headers: { 'X-Eidoverse-Guest': ticket } });
@@ -85,12 +86,27 @@ describe('registered-peer Eidoverse guest workflow over HTTP', () => {
     });
     await expect(receiveEidoverseChat('origin-instance', { sessionId: ticket, text: 'No agent connection' })).rejects.toMatchObject({ status: 409 });
     const admission = await (await post('/visit', { agent: true })).json();
+    expect(mocks.admission).toHaveBeenLastCalledWith({ agent: true, name: undefined });
+    expect((await post('/visit', { name: 'x'.repeat(65) })).status).toBe(400);
+    expect((await post('/visit', { name: 'bad\nname' })).status).toBe(400);
     await expect(getEidoverseGuestDescriptor(admission.sessionId)).rejects.toMatchObject({ status: 404 });
     await expect(receiveEidoverseChat('destination-instance', { sessionId: admission.sessionId, text: 'Wrong peer' })).rejects.toMatchObject({ status: 404 });
     expect((await post('/visit', { agent: true }, 'unregistered-instance')).status).toBe(403);
     expect((await post('/chat', { sessionId: admission.sessionId, text: 'x'.repeat(2001) })).status).toBe(400);
     await receiveEidoverseLeave('origin-instance', { sessionId: admission.sessionId });
     await receiveEidoverseLeave('origin-instance', { sessionId: ticket });
+  });
+
+  it('omits the name for an older peer with strict admission validation', async () => {
+    const nativeFetch = globalThis.fetch;
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      if (String(input).endsWith('/capabilities')) return Response.json({ version: 1, available: true });
+      if (String(input).endsWith('/visit')) expect(JSON.parse(init.body)).toEqual({ agent: true });
+      return nativeFetch(input, init);
+    });
+    const visit = await visitEidoversePeer({ peerId: eidoversePeerId(destination) });
+    expect(mocks.admission).toHaveBeenLastCalledWith({ agent: true, name: undefined });
+    await leaveEidoversePeer({ visitId: visit.visitId });
   });
 
   it('rechecks revocation, expiry, feature availability, and renderer compatibility', async () => {
