@@ -442,6 +442,17 @@ describe('no-code / API-action task completion (CD agents must NOT be told to /d
 });
 
 describe('claim-flow completion handoff', () => {
+  it.each([true, false])('honors leave-open on the %s light/full claim path', async (light) => {
+    const task = makeTask({ metadata: { analysisType: 'claim-issue', claimFlow: true, useWorktree: false, openPR: false, prCompletion: 'leave-open' } });
+    const prompt = light
+      ? buildLightContextPrompt(task, '/repo', null, isTruthyMeta, { isTui: true, providerId: 'codex-tui', providerCommand: 'codex' })
+      : await buildAgentPrompt(task, {}, '/repo', null, isTruthyMeta, { providerType: 'api' });
+    expect(prompt).toContain('PR completion policy: LEAVE OPEN');
+    expect(prompt).toContain('Complete implementation, configured reviews, publication, and CI checks as usual');
+    expect(prompt).toContain('preserve the claim markers, issue state, branch, and worktree');
+    expect(prompt).toContain('do not wait for a human or require MERGED status');
+  });
+
   it('keeps self-managed claim work out of the generic false/false handoff', () => {
     const prompt = buildLightContextPrompt(
       makeTask({ metadata: { claimFlow: true, useWorktree: false, openPR: false, simplify: true } }),
@@ -450,6 +461,7 @@ describe('claim-flow completion handoff', () => {
     );
 
     expect(prompt).toMatch(/## Claim Workflow Handoff/);
+    expect(prompt).not.toContain('PR completion policy: LEAVE OPEN');
     expect(prompt).toMatch(/owns its claim worktree, branch, PR\/MR, review, merge or human-handoff, and cleanup/);
     expect(prompt).toMatch(/\.agent-done/);
     expect(prompt).not.toMatch(/PortOS will merge it back after completion/);
@@ -464,6 +476,7 @@ describe('claim-flow completion handoff', () => {
     );
 
     expect(prompt).toMatch(/## Claim Workflow Handoff/);
+    expect(prompt).not.toContain('PR completion policy: LEAVE OPEN');
     expect(prompt).toMatch(/follow the claim workflow prompt above/i);
     expect(prompt).not.toMatch(/PortOS will merge it back after completion/);
   });

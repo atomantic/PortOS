@@ -515,7 +515,7 @@ export default function CatalogIngest() {
               </select>
             </div>
             <div>
-              <label htmlFor="bulk-text" className="block text-sm font-medium mb-1 text-white">Payload</label>
+              <label htmlFor="bulk-text" className="block text-sm font-medium mb-1 text-white">Data to import</label>
               <textarea id="bulk-text" rows={10} value={bulkText} onChange={(e) => setBulkText(e.target.value)}
                 placeholder={bulkFormat === 'csv'
                   ? 'type,name,description,tags\ncharacter,Alice,A curious sleuth,"noir, gritty"\nplace,The Hollow,Abandoned subway tunnel,'
@@ -523,7 +523,7 @@ export default function CatalogIngest() {
                     ? '[\n  { "type": "character", "name": "Alice", "description": "A curious sleuth", "tags": ["noir"] }\n]'
                     : '## Character: Alice\nA curious sleuth.\ntags: noir, gritty\n\n## Place: The Hollow\nAbandoned subway tunnel.\n'}
                 className="w-full px-3 py-2 bg-port-bg border border-port-border rounded text-white text-sm font-mono focus:outline-none focus:border-port-accent" />
-              <p className="text-xs text-gray-500 mt-1">{bulkText.length.toLocaleString()} chars</p>
+              <p className="text-xs text-gray-500 mt-1">{bulkText.length.toLocaleString()} {bulkText.length === 1 ? 'character' : 'characters'}</p>
             </div>
             <div className="flex items-center justify-end gap-2">
               <button type="button" onClick={() => setBulkOpen(false)} disabled={bulkSubmitting}

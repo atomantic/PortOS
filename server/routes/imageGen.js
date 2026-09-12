@@ -787,8 +787,21 @@ router.get('/loras', asyncHandler(async (_req, res) => {
   res.json(await local.listLoraFilenames());
 }));
 
-router.get('/gallery', asyncHandler(async (_req, res) => {
-  res.json(await local.listGallery());
+const galleryQuerySchema = z.object({
+  limit: z.coerce.number().int().min(1).max(200).default(60),
+  offset: z.coerce.number().int().min(0).max(Number.MAX_SAFE_INTEGER).default(0),
+  q: z.string().max(500).default(''),
+  hidden: z.enum(['true', 'false']).optional().transform(v => v === undefined ? undefined : v === 'true'),
+});
+
+router.get('/gallery', asyncHandler(async (req, res) => {
+  // No paging keys preserves the full legacy array for callers not migrated yet.
+  // New callers use ?limit=5 (recent strip) or ?limit=60&offset=0&q=...
+  const paginated = ['limit', 'offset', 'q', 'hidden'].some(key => req.query[key] !== undefined);
+  if (!paginated) return res.json(await local.listGallery());
+  const options = validateRequest(galleryQuerySchema, req.query);
+  const { listGalleryPage } = await import('../services/mediaAssetIndex/gallery.js');
+  res.json(await listGalleryPage(options, local.listGallery));
 }));
 
 // SSE progress stream. Local renders run via the mediaJobQueue and emit

@@ -103,6 +103,10 @@ export async function persistVariant({
     atomicWrite(sidecarPath, untimedVariantMeta),
   ]);
 
+  await import('../mediaAssetIndex/index.js')
+    .then(m => m.indexImage({ filename: outFilename }))
+    .catch(err => console.error(`❌ Media index variant refresh failed: ${err.message}`));
+
   const filedCollections = await autoFileCleanedToSourceCollections(sourceFilename, outFilename).catch((err) => {
     console.warn(`⚠️ Auto-file ${outFilename} → source collections failed: ${err?.message || err}`);
     return [];

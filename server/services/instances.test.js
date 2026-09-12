@@ -1149,7 +1149,10 @@ describe('instances.js', () => {
       readJSONFile.mockResolvedValue({ self: null, peers });
 
       const healthData = { instanceId: 'remote-id', version: '1.0.0', hostname: 'remote-host' };
-      const appsData = [{ id: 'app1', name: 'MyApp', overallStatus: 'running' }];
+      const appsData = [{
+        id: 'app1', name: 'MyApp', icon: 'package', overallStatus: 'online',
+        uiPort: 3000, apiPort: 3001, type: 'express',
+      }];
 
       fetch
         .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve(healthData) }) // health
@@ -1162,8 +1165,10 @@ describe('instances.js', () => {
       expect(result.instanceId).toBe('remote-id');
       expect(result.version).toBe('1.0.0');
       expect(result.lastSeen).toBeDefined();
+      expect(result.lastApps).toEqual(appsData);
       expect(connectToPeer).toHaveBeenCalledWith(peer);
       expect(fetch).toHaveBeenCalledTimes(3);
+      expect(fetch.mock.calls[1][0]).toBe('http://10.0.0.1:5555/api/apps?view=probe');
     });
 
     it('discovers and persists capacity only for an opted-in media provider peer', async () => {
@@ -1193,7 +1198,7 @@ describe('instances.js', () => {
         if (String(url).endsWith('/api/system/health/details')) {
           return { ok: true, json: async () => ({ instanceId: 'remote-id', version: '1.0.0' }) };
         }
-        if (String(url).endsWith('/api/apps')) return { ok: true, json: async () => [] };
+        if (String(url).includes('/api/apps?view=probe')) return { ok: true, json: async () => [] };
         if (String(url).includes('/api/instances/sync-status')) return { ok: true, json: async () => ({}) };
         if (String(url).includes('/api/federation/media/v1/status')) {
           return { ok: true, status: 200, text: async () => JSON.stringify(providerStatus) };

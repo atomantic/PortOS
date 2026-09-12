@@ -42,9 +42,9 @@ describe('ci.yml shard wiring', () => {
   });
 
   it('runs once-only steps on the first shard alone', () => {
-    // Smoke boot, lint, the production build, and the bundle budget are not
+    // Smoke boot, lint, the production build, and the Scalar-removal pin are not
     // sharded work; on every shard they would triple the cost for no coverage.
-    for (const step of ['Smoke-boot server', 'Lint client', 'Build client', 'Check API Explorer bundle budget']) {
+    for (const step of ['Smoke-boot server', 'Lint client', 'Build client', 'Check API Explorer bundle has no Scalar chunks']) {
       const start = WORKFLOW.indexOf(`- name: ${step}\n`);
       expect(start, step).toBeGreaterThan(0);
       const condition = WORKFLOW.slice(start).match(/\n {8}if: (.*)\n/)[1];

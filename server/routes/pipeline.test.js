@@ -490,6 +490,28 @@ describe('pipeline routes', () => {
     expect(nullUni.status).toBe(400);
   });
 
+
+  it('serves series names and summary fields without changing the full list', async () => {
+    const app = makeApp();
+    const created = await request(app).post('/api/pipeline/series').send({
+      name: 'Projected', universeId: 'u-test', premise: 'A large bible',
+      logline: 'A city', issueCountTarget: 4, arc: { shape: 'man-in-hole', summary: 'Full arc' },
+    });
+    expect(created.status).toBe(201);
+    const names = await request(app).get('/api/pipeline/series/names');
+    expect(names.status).toBe(200);
+    expect(names.body).toEqual([{ id: created.body.id, name: 'Projected' }]);
+    const summaries = await request(app).get('/api/pipeline/series/summaries');
+    expect(summaries.status).toBe(200);
+    expect(summaries.body[0]).toMatchObject({
+      universeId: 'u-test', logline: 'A city', issueCountTarget: 4, arc: { shape: 'man-in-hole' },
+    });
+    expect(summaries.body[0]).not.toHaveProperty('premise');
+    expect(summaries.body[0].arc).not.toHaveProperty('summary');
+    const full = await request(app).get('/api/pipeline/series');
+    expect(full.body[0]).toMatchObject({ premise: 'A large bible', arc: { summary: 'Full arc' } });
+  });
+
   it('GET /series preserves the bare array and supports bounded pagination', async () => {
     const app = makeApp();
     await request(app).post('/api/pipeline/series').send({ name: 'Alpha', universeId: 'u-test' });
@@ -878,7 +900,7 @@ describe('pipeline routes', () => {
       const r = await request(app).get('/api/pipeline/issues/recent?limit=5');
       expect(r.status).toBe(200);
       expect(spy).toHaveBeenCalledTimes(1);
-      expect(spy).toHaveBeenCalledWith(expect.objectContaining({ withHistory: false }));
+      expect(spy).toHaveBeenCalledWith(expect.objectContaining({ withHistory: false, summary: true }));
       expect(r.body[0]).not.toHaveProperty('stages');
       spy.mockRestore();
     });

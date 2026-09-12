@@ -6,12 +6,15 @@ import socket from '../services/socket';
 // `apps:changed`. Archived apps are filtered out and the rest sorted by name.
 // Unlike the series/universes lists this is socket-driven (not focus-debounced)
 // because app create/rename/archive events are pushed live.
-export function useSidebarApps() {
+// The default is the cheap navigation projection. A detail-oriented consumer
+// can opt into the frozen full list with includeDetails without changing the
+// hook's socket refresh behavior.
+export function useSidebarApps({ includeDetails = false } = {}) {
   const [apps, setApps] = useState([]);
   useEffect(() => {
     let cancelled = false;
     const fetchApps = () => {
-      api.getApps({ silent: true })
+      api.getApps({ silent: true, ...(includeDetails ? {} : { view: 'nav' }) })
         .then((result) => {
           if (cancelled) return;
           setApps((result || [])
@@ -28,6 +31,6 @@ export function useSidebarApps() {
       cancelled = true;
       socket.off('apps:changed', fetchApps);
     };
-  }, []);
+  }, [includeDetails]);
   return apps;
 }

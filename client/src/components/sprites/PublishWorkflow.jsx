@@ -86,7 +86,9 @@ export default function PublishWorkflow({
   const seedCell = savedContract?.cellSize != null ? String(savedContract.cellSize) : '';
   const seedCols = savedContract?.columnCount != null ? String(savedContract.columnCount) : '';
 
-  const apps = useSidebarApps();
+  // This picker shows each app's repository path, so retain the full list
+  // contract while the Layout/sidebar callers use the lean nav projection.
+  const apps = useSidebarApps({ includeDetails: true });
   const [appId, setAppId] = useState(saved?.appId || '');
   const [destPath, setDestPath] = useState(saved?.atlasDestPath || '');
   const [portraitPath, setPortraitPath] = useState(saved?.portraitDestPath || '');

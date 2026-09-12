@@ -63,12 +63,12 @@ export default function AppQuality({ app, detail = false }) {
                 <td className="py-2 text-xs text-gray-400">
                   <div>{category.stale ? 'Stale · ' : ''}{category.coverage}{category.confidence && ` · ${category.confidence} confidence`}
                     {category.assessedAt && ` · ${formatDateShort(category.assessedAt)}`}</div>
-                  <Link to={runnerLink(category.id)} aria-label={`Configure and run ${category.label}`} className="block mt-1 text-port-accent hover:underline">Configure and run</Link>
+                  <Link to={runnerLink(category.id)} aria-label={`Configure and run ${category.label}`} className="mt-2 inline-flex items-center rounded border border-port-accent bg-port-accent/15 px-2.5 py-1.5 text-xs font-medium text-port-accent transition-colors hover:bg-port-accent/25">Configure and run</Link>
                   {category.summary && <details className="mt-1"><summary className="cursor-pointer text-port-accent">Assessment details</summary><p className="break-words">{category.summary}</p></details>}
                   {category.totalFiles > 0 && <div>{category.scannedFiles}/{category.totalFiles} files scanned · Worst severity: {category.worstSeverity}/10</div>}
                   {category.sourcePeerName && !category.sourcePeerId && <div>Source: {category.sourcePeerName}</div>}
                   {category.sourcePeerId && <div>Source: {category.sourcePeerName || 'federated peer'} · <Link className="text-port-accent hover:underline" to="/instances">View instances</Link></div>}
-                  {!category.sourcePeerId && category.agentId && <Link className="text-port-accent hover:underline" to={`/cos/agents/${category.agentId}`}>Audit run</Link>}
+                  {!category.sourcePeerId && category.agentId && <Link className="mt-2 inline-flex items-center rounded border border-port-border bg-port-bg/40 px-2.5 py-1.5 text-xs font-medium text-port-text-muted transition-colors hover:border-port-accent/60 hover:text-port-accent" to={`/cos/agents/${category.agentId}`} aria-label={`View audit run for ${category.label}`}>View audit run</Link>}
                 </td>
               </tr>
               {selectedCategory?.id === category.id && <tr><td colSpan={3} className="pb-3">

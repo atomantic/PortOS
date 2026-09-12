@@ -19,7 +19,13 @@ export async function screenUntrustedContent({ content, source, policy: override
   if (content.length > policy.maxInputChars) return failure('untrusted-content-too-large', 'The complete content exceeds the configured limit; no partial analysis was accepted.');
   const { runModelAbuseScan } = await import('./modelAbuseGuard.js');
   const screening = await runModelAbuseScan({ content, classifierMode: policy.classifierMode, minBenignScore: policy.minBenignScore });
-  if (!screening.ok || screening.safe !== true) return { ...failure(screening.code || 'untrusted-content-screening-failed', 'External content was blocked or screening was unavailable. Check Models > LLMs > Abuse Guard.'), screening };
+  // A completed scan that flags content (deterministic findings, or a
+  // classifier verdict of malicious/low-confidence) means the guard is
+  // working correctly — that is a distinct outcome from the guard failing to
+  // run at all, and telling the operator to "check the abuse guard" for a
+  // legitimate block sends them to a status panel that will just say ready.
+  if (!screening.ok) return { ...failure(screening.code || 'untrusted-content-screening-failed', 'Model-abuse screening could not run. Check Models > LLMs > Abuse Guard.'), screening };
+  if (screening.safe !== true) return { ...failure(screening.code || 'untrusted-content-blocked', 'The model-abuse guard flagged this content and blocked it. This is expected screening behavior, not a guard setup problem.'), screening };
   return { ok: true, safe: true, policy, screening, fingerprint: modelAbuseContentFingerprint(source, {}, content) };
 }
 

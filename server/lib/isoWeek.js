@@ -84,6 +84,30 @@ export function parseWeekId(weekId) {
 }
 
 /**
+ * Local-midnight Monday of the ISO week identified by `weekId`.
+ * Inverse of `getWeekId` for a well-formed id; null for the same garbage
+ * `parseWeekId` rejects, so a caller can tell "unparseable" from a real Monday.
+ *
+ * Arithmetic runs in UTC on the local Y-M-D (same as `isoWeekThursday`) so a
+ * DST spring-forward cannot skip the Monday; the returned Date is then rebuilt
+ * from those UTC Y-M-D parts as a local midnight.
+ *
+ * @param {string} weekId
+ * @returns {Date | null}
+ */
+export function weekStartFromWeekId(weekId) {
+  const parsed = parseWeekId(weekId);
+  if (!parsed) return null;
+  // Jan 4 is always in ISO week 1 of `year`. Its Thursday is the week-1 anchor.
+  const week1Thursday = new Date(Date.UTC(parsed.year, 0, 4));
+  const isoDay = week1Thursday.getUTCDay() || 7;
+  week1Thursday.setUTCDate(week1Thursday.getUTCDate() + 4 - isoDay);
+  const monday = new Date(week1Thursday);
+  monday.setUTCDate(week1Thursday.getUTCDate() - 3 + (parsed.week - 1) * 7);
+  return new Date(monday.getUTCFullYear(), monday.getUTCMonth(), monday.getUTCDate());
+}
+
+/**
  * How many ISO weeks a week-numbering year holds — 52, or 53 in a "leap week"
  * year (2015, 2020, 2026, …). December 28th is always in the last ISO week of
  * its own numbering year, so this derives the answer from the same math as

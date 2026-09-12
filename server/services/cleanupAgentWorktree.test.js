@@ -241,7 +241,7 @@ import { existsSync as existsSyncMock } from 'fs';
 // All five come from `agentWorktreeCleanup.js`, the module that defines them.
 // They used to be pulled through the `subAgentSpawner.js` barrel, which was
 // retired in #3450.
-import { cleanupAgentWorktree, spawnMergeRecoveryTask, spawnReviewLoopFollowUp, resolveResumePointer, resolveTaskResumePatch, recordTaskResumePointer, releaseRetryHold, resumePointerMetadata } from './agentWorktreeCleanup.js';
+import { cleanupAgentWorktree, resolveWorktreeDisposition, spawnMergeRecoveryTask, spawnReviewLoopFollowUp, resolveResumePointer, resolveTaskResumePatch, recordTaskResumePointer, releaseRetryHold, resumePointerMetadata } from './agentWorktreeCleanup.js';
 import { getAgent, getAgentRecord, getTaskById, addTask, forceSpawnTask, updateTask } from './cos.js';
 import { removeWorktree } from './worktreeManager.js';
 import { PATHS } from '../lib/fileUtils.js';
@@ -2196,5 +2196,33 @@ describe('cleanupAgentWorktree - remote copy of a locally merged branch', () => 
       .mockRejectedValueOnce(new Error('spawn git ENOENT'));
     git.hasBranchMergeEvidence.mockResolvedValueOnce(true);
     await expect(cleanupAgentWorktree('agent-1', true, {})).resolves.toEqual([]);
+  });
+});
+
+// The names are the policy contract; lifecycle behavior remains covered above.
+// In particular, no branch identity is uncertainty even when ok is true.
+describe('resolveWorktreeDisposition', () => {
+  it.each([
+    [true, 'always', null, {}, 'open-pr', false, false],
+    [false, 'always', null, {}, 'merge-or-preserve', false, true],
+    [true, 'never', null, {}, 'merge-or-preserve', true, false],
+    [false, 'never', null, {}, 'merge-or-preserve', false, true],
+    [true, 'if-missing', { category: 'pr-missing' }, {}, 'open-pr', false, false],
+    [true, 'if-missing', { ok: true, branch: 'example' }, {}, 'stand-down', true, false],
+    [true, 'if-missing', { ok: true, branch: 'example', noChangesToShip: true }, {}, 'stand-down', true, false],
+    [true, 'if-missing', { ok: true, branch: null }, {}, 'stand-down-uncertain', true, true],
+    [true, 'if-missing', { category: 'forge-unreachable' }, {}, 'stand-down-uncertain', true, true],
+    [true, 'if-missing', null, {}, 'stand-down-uncertain', true, true],
+    [false, 'if-missing', { status: 'found', url: 'https://github.com/test/repo/pull/1' }, {}, 'stranded-pr-handoff', false, true],
+    [false, 'if-missing', { status: 'found' }, {}, 'merge-or-preserve', false, true],
+    [false, 'if-missing', { status: 'unavailable' }, {}, 'merge-or-preserve', false, true],
+    [false, 'if-missing', { status: 'none' }, {}, 'merge-or-preserve', false, true],
+    [true, 'always', null, { discardWorktree: true }, 'discard', false, false],
+    [false, 'if-missing', { status: 'found', url: 'https://github.com/test/repo/pull/1' }, { discardWorktree: true }, 'discard', false, false],
+    [true, 'always', null, { isWorktree: false, discardWorktree: true }, 'not-a-worktree', false, false],
+    [true, 'never', null, { skipMerge: true }, 'merge-or-preserve', false, false],
+  ])('success=%s creation=%s verdict=%j overrides=%j → %s', (success, prCreation, prClaimVerdict, overrides, disposition, merge, preserveBranch) => {
+    expect(resolveWorktreeDisposition({ success, prCreation, prClaimVerdict, ...overrides }))
+      .toEqual({ disposition, merge, preserveBranch });
   });
 });

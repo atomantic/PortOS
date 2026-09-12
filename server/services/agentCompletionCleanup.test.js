@@ -8,7 +8,10 @@
  * completion path; the extraction gives them a direct home.
  */
 
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { mkdtemp, writeFile, readFile, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 vi.mock('./cosEvents.js', () => ({ emitLog: vi.fn() }));
 vi.mock('./cosAgentLifecycle.js', () => ({ updateAgent: vi.fn() }));
@@ -24,16 +27,28 @@ vi.mock('./git.js', () => ({ push: vi.fn(), getRepoBranches: vi.fn(), generatePR
 vi.mock('./codeReview.js', () => ({ resolveReviewLoopOptions: vi.fn().mockResolvedValue({}) }));
 vi.mock('./agentWorktreeCleanup.js', () => ({
   cleanupAgentWorktree: vi.fn().mockResolvedValue([]),
-  spawnMergeRecoveryTask: vi.fn(),
+  spawnMergeRecoveryTask: vi.fn().mockResolvedValue({}),
   releaseRetryHold: vi.fn().mockResolvedValue({}),
 }));
+vi.mock('./notifications.js', () => ({
+  addNotification: vi.fn().mockResolvedValue({}),
+  NOTIFICATION_TYPES: { PLAN_QUESTION: 'plan_question', AGENT_WARNING: 'agent_warning' },
+  PRIORITY_LEVELS: { MEDIUM: 'medium', HIGH: 'high' },
+}));
+vi.mock('./creativeDirector/completionHook.js', () => ({ handleCreativeDirectorCompletion: vi.fn().mockResolvedValue({}) }));
 vi.mock('./taskPromptService.js', () => ({ getStagePrompt: vi.fn().mockResolvedValue('do stage work in {appName}') }));
 
 import { handlePipelineProgression, runAgentCompletionCleanup, runSpawnerCompletionCleanup } from './agentCompletionCleanup.js';
 import { updateTask, addTask, reviveBlockedTask, getAgent } from './cos.js';
-import { cleanupAgentWorktree, releaseRetryHold } from './agentWorktreeCleanup.js';
+import { cleanupAgentWorktree, releaseRetryHold, spawnMergeRecoveryTask } from './agentWorktreeCleanup.js';
 import { resolveReviewLoopOptions } from './codeReview.js';
 import { promptOpensOwnPr } from './promptSections/completion.js';
+
+import * as git from './git.js';
+import * as jira from './jira.js';
+import { addNotification } from './notifications.js';
+import { updateAgent } from './cosAgentLifecycle.js';
+import { handleCreativeDirectorCompletion } from './creativeDirector/completionHook.js';
 
 const runningPipeline = (overrides = {}) => ({
   id: 'p1',
@@ -571,6 +586,14 @@ describe('runSpawnerCompletionCleanup — the in-process spawners\' dispatch', (
     expect(releaseRetryHold).toHaveBeenCalledWith({ agentId: 'a1', task: args.task, success: false });
   });
 
+  it('continues cleanup and releases the hold when pipeline persistence fails', async () => {
+    updateTask.mockRejectedValueOnce(new Error('pipeline unavailable'));
+    const task = { id: 't', metadata: { pipeline: runningPipeline({ currentStage: 1 }) } };
+    await runSpawnerCompletionCleanup(spawnerArgs({ task }));
+    expect(cleanupAgentWorktree).toHaveBeenCalledWith('a1', true, expect.any(Object));
+    expect(releaseRetryHold).toHaveBeenCalledWith({ agentId: 'a1', task, success: true });
+  });
+
   // The dominant path: a harness that opened and landed its own PR. Cleanup can
   // spawn no follow-up, so the reviewer defaults are never even read.
   it('skips the reviewer resolve for a run whose own PR claim finalize verified', async () => {
@@ -581,5 +604,84 @@ describe('runSpawnerCompletionCleanup — the in-process spawners\' dispatch', (
 
     expect(resolveReviewLoopOptions).not.toHaveBeenCalled();
     expect(cleanupAgentWorktree).toHaveBeenCalledWith('a1', true, expect.objectContaining({ prCreation: 'never', skipMerge: true }));
+  });
+});
+
+// These public workflows must deliver the same domain hand-offs regardless of
+// whether the server owns the child process or receives a runner event.
+describe.each(['runner', 'spawner'])('%s completion side effects', (path) => {
+  let workspace;
+  const complete = (metadata, success = true) => {
+    const args = {
+      agentId: 'a1', task: { id: 't', description: 'Fix example', metadata },
+      outputBuffer: 'Implemented the example',
+    };
+    return path === 'runner'
+      ? runAgentCompletionCleanup({ ...args, agent: { providerId: 'codex' }, effectiveSuccess: success })
+      : runSpawnerCompletionCleanup({ ...args, success, prOwnership: { taskOpenPR: true, agentOpensOwnPr: false } });
+  };
+
+  beforeEach(async () => {
+    workspace = await mkdtemp(join(tmpdir(), 'completion-test-'));
+    getAgent.mockResolvedValue({ metadata: { workspacePath: workspace, sourceWorkspace: '/example/repo' }, result: { success: true } });
+    git.push.mockResolvedValue({});
+    git.getRepoBranches.mockResolvedValue({ baseBranch: 'main', devBranch: 'develop' });
+    git.generatePRDescription.mockResolvedValue('Example changes');
+    git.suggestPRTitle.mockResolvedValue('Fix example');
+    git.createPR.mockResolvedValue({ success: true, url: 'https://github.com/example/app/pull/1' });
+    git.checkout.mockResolvedValue({});
+    jira.getInstances.mockResolvedValue({ instances: { example: { baseUrl: 'https://jira.example.com' } } });
+    jira.addComment.mockResolvedValue({});
+  });
+  afterEach(async () => {
+    await rm(workspace, { recursive: true, force: true });
+    getAgent.mockResolvedValue(null);
+  });
+
+  it('hands a successful JIRA branch to its PR and ticket, skips generic cleanup, and releases the hold', async () => {
+    await complete({ jiraTicketId: 'EXAMPLE-1', jiraBranch: 'feature/EXAMPLE-1', jiraInstanceId: 'example' });
+    expect(git.push).toHaveBeenCalledWith(workspace, 'feature/EXAMPLE-1');
+    expect(git.createPR).toHaveBeenCalledWith(workspace, {
+      title: 'EXAMPLE-1: Fix example',
+      body: 'Resolves [EXAMPLE-1](https://jira.example.com/browse/EXAMPLE-1)\n\nExample changes',
+      base: 'develop', head: 'feature/EXAMPLE-1',
+    });
+    expect(jira.addComment).toHaveBeenCalledWith('example', 'EXAMPLE-1',
+      'Agent completed task successfully.\n\n*Pull Request:* https://github.com/example/app/pull/1');
+    expect(git.checkout).toHaveBeenCalledWith(workspace, 'develop');
+    expect(cleanupAgentWorktree).not.toHaveBeenCalled();
+    expect(releaseRetryHold).toHaveBeenCalledWith(expect.objectContaining({ agentId: 'a1', success: true }));
+  });
+
+  it('dispatches Creative Director completion with the finalized verdict before worktree cleanup', async () => {
+    const metadata = { creativeDirector: { projectId: 'example-project', stage: 'treatment' } };
+    await complete(metadata);
+    expect(handleCreativeDirectorCompletion).toHaveBeenCalledWith(expect.objectContaining({ metadata }), 'a1', true);
+    expect(handleCreativeDirectorCompletion.mock.invocationCallOrder[0]).toBeLessThan(cleanupAgentWorktree.mock.invocationCallOrder[0]);
+  });
+
+  it('preserves the result and publishes cleanup warnings with a recovery task', async () => {
+    const warnings = ['Merge failed: resolve example conflict'];
+    cleanupAgentWorktree.mockResolvedValueOnce(warnings);
+    await complete({ appName: 'Example App' });
+    expect(updateAgent).toHaveBeenCalledWith('a1', { result: { success: true, warnings } });
+    expect(addNotification).toHaveBeenCalledWith(expect.objectContaining({
+      type: 'agent_warning', title: 'Agent cleanup issue: Example App',
+      description: warnings[0], priority: 'high', metadata: { agentId: 'a1', taskId: 't', warnings },
+    }));
+    expect(spawnMergeRecoveryTask).toHaveBeenCalledWith(warnings, 'a1', expect.objectContaining({ id: 't' }), 'Example App', '/example/repo');
+  });
+
+  it('turns the plan-question marker into a notification and consumes it before cleanup', async () => {
+    const marker = '# Plan Question: Choose the example scope\nPlease clarify the example.';
+    await writeFile(join(workspace, '.plan-questions.md'), marker);
+    await complete({ analysisType: 'plan-task', app: 'example-app' });
+    expect(addNotification).toHaveBeenCalledWith({
+      type: 'plan_question', title: 'Choose the example scope', message: marker,
+      priority: 'medium', link: '/apps/example-app/documents',
+      metadata: { appId: 'example-app', agentId: 'a1', taskType: 'plan-task' },
+    });
+    await expect(readFile(join(workspace, '.plan-questions.md'))).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(addNotification.mock.invocationCallOrder[0]).toBeLessThan(cleanupAgentWorktree.mock.invocationCallOrder[0]);
   });
 });

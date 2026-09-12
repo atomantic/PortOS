@@ -1,8 +1,15 @@
 import toast from '../components/ui/Toast';
 import { request, API_BASE } from './apiCore.js';
 
-// Apps
-export const getApps = ({ includeQuality = false, ...options } = {}) => request(includeQuality ? '/apps?includeQuality=true' : '/apps', options);
+// Apps. The default response remains the PM2-enriched list; `view=nav` and
+// `view=probe` are explicit projections for hot name-only and peer callers.
+export const getApps = ({ includeQuality = false, view, ...options } = {}) => {
+  const query = new URLSearchParams();
+  if (includeQuality) query.set('includeQuality', 'true');
+  if (view) query.set('view', view);
+  const suffix = query.toString() ? `?${query}` : '';
+  return request(`/apps${suffix}`, options);
+};
 export const getApp = (id, { includeQuality = false, ...options } = {}) => request(includeQuality ? `/apps/${id}?includeQuality=true` : `/apps/${id}`, options);
 export const getAppQualityHistory = (id, days, options) => request(`/apps/${id}/quality-history?days=${days}`, { silent: true, ...options });
 // Managed checkout topology: returns sanitized local/fork/upstream revision

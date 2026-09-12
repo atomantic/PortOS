@@ -21,6 +21,7 @@
  */
 
 import { query, withTransaction } from '../../lib/db.js';
+import { LOGLINE_MAX } from '../../lib/universeBibleLimits.js';
 import { mirrorTimestamp } from '../../lib/pgTimestamp.js';
 
 // Keep the runs[] log bounded to the most-recent 200 — matches the file
@@ -89,7 +90,39 @@ export async function listRaw() {
  */
 export async function listNames() {
   const { rows } = await query(
-    `SELECT id, name, data->>'createdAt' AS "createdAt" FROM universes WHERE deleted = FALSE`,
+    `SELECT id, name, to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') AS "createdAt" FROM universes WHERE deleted = FALSE`,
+  );
+  return rows;
+}
+
+/**
+ * Index projection. Only legacy canon layouts need the full sanitizer to fold
+ * category variations into canon; ordinary records return counts, not arrays.
+ */
+export async function listSummaries() {
+  const { rows } = await query(
+    `SELECT id, name,
+            data->>'logline' AS logline,
+            left(btrim(data->>'starterPrompt'), $1) AS "starterPrompt",
+            data->'origin' AS origin,
+            data->>'createdAt' AS "createdAt",
+            data->>'updatedAt' AS "updatedAt",
+            data->'styleImageRefs'->>-1 AS "styleImageRef",
+            (CASE WHEN jsonb_typeof(data->'characters') = 'array' THEN jsonb_array_length(data->'characters') ELSE 0 END
+             + CASE WHEN jsonb_typeof(data->'places') = 'array' THEN jsonb_array_length(data->'places') ELSE 0 END
+             + CASE WHEN jsonb_typeof(data->'objects') = 'array' THEN jsonb_array_length(data->'objects') ELSE 0 END) AS "canonCount",
+            CASE WHEN (CASE WHEN jsonb_typeof(data->'schemaVersion') = 'number'
+                            THEN (data->>'schemaVersion')::numeric < 4 ELSE TRUE END)
+                      OR EXISTS (
+                        SELECT 1 FROM jsonb_object_keys(
+                          CASE WHEN jsonb_typeof(data->'categories') = 'object' THEN data->'categories' ELSE '{}'::jsonb END
+                        ) AS category(key)
+                        WHERE key ~* '^[^a-z0-9]*characters?([^a-z0-9]|$)'
+                      )
+                 THEN jsonb_set(data, '{starterPrompt}', to_jsonb(left(btrim(COALESCE(data->>'starterPrompt', '')), $1)))
+                 ELSE NULL END AS "legacyRecord"
+       FROM universes WHERE deleted = FALSE`,
+    [LOGLINE_MAX],
   );
   return rows;
 }

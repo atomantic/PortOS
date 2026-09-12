@@ -3,17 +3,17 @@ import { render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 import Pipeline from './Pipeline';
 
-const listPipelineSeries = vi.fn();
-const listUniverses = vi.fn();
+const listPipelineSeriesSummaries = vi.fn();
+const listUniverseNames = vi.fn();
 const listLooms = vi.fn();
 
 vi.mock('../services/api', () => ({
-  listPipelineSeries: (...a) => listPipelineSeries(...a),
+  listPipelineSeriesSummaries: (...a) => listPipelineSeriesSummaries(...a),
   createPipelineSeries: vi.fn(),
   deletePipelineSeries: vi.fn(),
   generateSeriesTitleLogo: vi.fn(),
   generateSeriesConcepts: vi.fn(),
-  listUniverses: (...a) => listUniverses(...a),
+  listUniverseNames: (...a) => listUniverseNames(...a),
   listLooms: (...a) => listLooms(...a),
   WORLD_LOGLINE_MAX: 400,
   WORLD_PREMISE_MAX: 2000,
@@ -42,8 +42,8 @@ const renderPage = () => render(
 describe('Pipeline series list — branching-narrative badge', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    listPipelineSeries.mockResolvedValue(SERIES);
-    listUniverses.mockResolvedValue([]);
+    listPipelineSeriesSummaries.mockResolvedValue(SERIES);
+    listUniverseNames.mockResolvedValue([]);
     listLooms.mockResolvedValue([
       { id: 'loom-1', seriesId: 'series-1' },
       { id: 'loom-2', seriesId: 'series-1' },

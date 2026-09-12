@@ -64,6 +64,27 @@ describe('pipeline series service', () => {
     __resetSubscriptionAdapter();
   });
 
+
+  it('projects names and summaries while retaining full editor records and hiding tombstones', async () => {
+    await svc.createSeries({
+      name: 'Story', universeId: 'u-test', logline: 'A city goes silent.',
+      premise: 'The full premise', issueCountTarget: 4,
+      arc: { shape: 'man-in-hole', summary: 'A full arc' },
+    });
+    const removed = await svc.createSeries({ name: 'Removed' });
+    await svc.deleteSeries(removed.id);
+    const full = await svc.listSeries();
+    expect(await svc.listSeriesNames()).toEqual(full.map(({ id, name }) => ({ id, name })));
+    expect(await svc.listSeriesSummaries()).toEqual(full.map((s) => ({
+      id: s.id, name: s.name, universeId: s.universeId, logline: s.logline,
+      coverImage: s.coverImage, origin: s.origin, issueCountTarget: s.issueCountTarget,
+      arc: s.arc?.shape ? { shape: s.arc.shape } : null,
+      createdAt: s.createdAt, updatedAt: s.updatedAt,
+    })));
+    expect(full[0].premise).toBe('The full premise');
+    expect(full[0].arc.summary).toBe('A full arc');
+  });
+
   it('listSeries returns [] for fresh state', async () => {
     expect(await svc.listSeries()).toEqual([]);
   });

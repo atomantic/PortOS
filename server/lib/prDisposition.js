@@ -69,6 +69,9 @@ export function leavesPrForHuman(task) {
   return PR_STAYS_OPEN_SET.has(metadata.analysisType) || !!metadata.jiraTicketId;
 }
 
+// Shared by the PR-claim producer and cleanup classifier.
+export const PR_MISSING_CATEGORY = 'pr-missing';
+
 /**
  * Who opens the change request for a completing worktree agent (#3733).
  *

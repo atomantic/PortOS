@@ -1,7 +1,7 @@
 vi.mock('../../services/apiTracks.js', () => ({ listTracks: vi.fn(async () => []) }));
 vi.mock('../../services/apiMusic.js', () => ({ listMusicEngines: vi.fn(() => Promise.resolve({ engines: [] })) }));
-vi.mock('../../services/apiUniverseBuilder.js', () => ({ listUniverses: vi.fn(() => Promise.resolve([])) }));
-vi.mock('../../services/apiPipeline.js', () => ({ listPipelineSeries: vi.fn(() => Promise.resolve([])) }));
+vi.mock('../../services/apiUniverseBuilder.js', () => ({ listUniverseNames: vi.fn(() => Promise.resolve([])) }));
+vi.mock('../../services/apiPipeline.js', () => ({ listPipelineSeriesNames: vi.fn(() => Promise.resolve([])) }));
 vi.mock('../../services/apiCatalog.js', () => ({ listCatalogIngredients: vi.fn(() => Promise.resolve([])) }));
 import { it, expect, vi } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';

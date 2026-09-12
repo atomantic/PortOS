@@ -9,7 +9,10 @@ import { familyForProvider } from '../../../../server/lib/providerFamilies';
 import { getMaintenanceRuns, startMaintenanceRun, stopMaintenanceRun } from '../../services/apiAgents';
 
 const eligibleProvider = provider => provider.enabled && isProcessProvider(provider) && familyForProvider(provider);
-const needsCheck = category => category.score == null || category.stale || category.coverage !== 'broad' || category.confidence === 'low';
+const needsCheck = category => {
+  if (category.coverage === 'not-applicable' || (category.coverage === 'unavailable' && category.assessedAt)) return false;
+  return category.score == null || category.stale || category.coverage !== 'broad' || category.confidence === 'low';
+};
 
 export default function AppQualityRunner({ app, children }) {
   const categories = app.quality?.categories || [];
@@ -75,7 +78,7 @@ export default function AppQualityRunner({ app, children }) {
       onModelChange={picker.setSelectedModel} effort={effort} onEffortChange={setEffort} loading={picker.loading} disabled={busy}
       emptyProviderOption="Select a subscription provider" emptyModelOption="Select a model" highlightToolUse />
     <p className="text-xs text-gray-400">{taskTypes.length} scheduled agents, run sequentially within this batch. Launch another batch to run checks in parallel. {mode === 'fix' ? 'Each selected audit can change code and open a PR.' : 'Findings become issues; no fixes or backlog claim jobs.'} Schedules can stay disabled. The Improve setting still applies.</p>
-    <details className="text-xs"><summary className="cursor-pointer text-port-accent">Selected checks ({taskTypes.length})</summary><p className="mt-1">{categories.filter(category => taskTypes.includes(category.id)).map(category => category.label).join(', ') || 'All categories have qualifying evidence.'}</p></details>
+    <details className="text-xs"><summary className="cursor-pointer text-port-accent">Selected checks ({taskTypes.length})</summary><p className="mt-1">{categories.filter(category => taskTypes.includes(category.id)).map(category => category.label).join(', ') || 'No checks need evidence. Unavailable assessments and N/A categories are excluded.'}</p></details>
     <button type="button" onClick={start} disabled={busy || picker.loading || !picker.selectedProviderId || !picker.selectedModel || !taskTypes.length || app.quality?.unavailable}
       className="px-3 py-2 rounded bg-port-accent text-port-bg text-sm font-medium disabled:opacity-50">{taskTypes.length === 1 ? 'Run now' : `Run ${taskTypes.length} checks now`}</button>
     {!loaded && <p className="text-xs" role="status">Loading runner status… <button type="button" className="text-port-accent" onClick={loadRuns}>Retry</button></p>}

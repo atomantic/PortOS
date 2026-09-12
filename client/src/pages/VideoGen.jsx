@@ -1814,7 +1814,7 @@ export default function VideoGen() {
                 Sleep display during this render
                 <span className="block text-[11px] text-gray-500">
                   Reduces WindowServer GPU contention on affected Apple silicon. Change the install-wide
-                  default under Settings &rarr; Media Generation.
+                  default in Media Gen Settings (gear icon or ⌘K "Media Gen Settings").
                 </span>
               </span>
             </label>

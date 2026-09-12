@@ -24,9 +24,12 @@
  */
 
 import { execGh, ensureForgeReachable } from './github.js';
-import { execGlabJson } from './gitlab.js';
+import { execGlab, execGlabJson } from './gitlab.js';
 import { resolveAppForgeTarget } from '../lib/workTracker.js';
 import { safeJSONParse } from '../lib/fileUtils.js';
+import { CONTRIBUTOR_LABELS } from '../lib/dispatchLabels.js';
+import { withGlabJson } from '../lib/glabArgs.js';
+import { ServerError } from '../lib/errorHandler.js';
 
 // Single-user repos never realistically exceed this; `glab` caps a page at 100.
 const GH_LIST_LIMIT = 200;
@@ -229,4 +232,34 @@ export async function listAppIssues(app) {
     headline: result.headline || null,
     remedy: result.remedy || null,
   };
+}
+
+/** Release contributor invitations before a manual targeted claim can be queued. */
+export async function prepareAppIssueClaim(app, issueNumber, tracker) {
+  const { tracker: resolvedTracker, target } = await resolveAppForgeTarget(app);
+  if (!target || resolvedTracker !== tracker || target.forge !== tracker) {
+    throw new ServerError('Could not resolve the issue tracker for this claim', { status: 400, code: 'CLAIM_TRACKER_MISMATCH' });
+  }
+  const readLabels = async () => {
+    const raw = tracker === 'github'
+      ? await execGh(['issue', 'view', issueNumber, '--repo', target.repoSpec, '--json', 'labels'])
+      : await execGlab(withGlabJson(['issue', 'view', issueNumber]), app.repoPath, undefined, { rejectOnError: true });
+    const issue = safeJSONParse(raw, null);
+    if (!Array.isArray(issue?.labels) || issue.labels.some(label => typeof label !== 'string' && typeof label?.name !== 'string')) {
+      throw new ServerError('Could not read issue labels before claiming', { status: 502, code: 'CLAIM_LABELS_UNAVAILABLE' });
+    }
+    return issue.labels.map(label => typeof label === 'string' ? label : label.name)
+      .filter(name => CONTRIBUTOR_LABELS.includes(name.toLowerCase()));
+  };
+  const labels = await readLabels();
+  if (!labels.length) return;
+  if (tracker === 'github') {
+    await execGh(['issue', 'edit', issueNumber, '--repo', target.repoSpec,
+      ...labels.flatMap(label => ['--remove-label', label])]);
+  } else {
+    await execGlab(['issue', 'update', issueNumber, '--unlabel', labels.join(',')], app.repoPath, undefined, { rejectOnError: true });
+  }
+  if ((await readLabels()).length) {
+    throw new ServerError('Contributor labels remain on the issue; claim was not queued', { status: 502, code: 'CLAIM_LABELS_REMAIN' });
+  }
 }

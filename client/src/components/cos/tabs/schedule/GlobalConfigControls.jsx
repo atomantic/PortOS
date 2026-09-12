@@ -217,6 +217,7 @@ export default function GlobalConfigControls({ taskType, config, onUpdate, onTri
     setUpdating(false);
   };
 
+  const claimFlow = !!config.taskMetadata?.claimFlow || ISSUE_AUTHOR_FILTER_TASK_TYPES.has(taskType);
   const prCompletion = pinnedPrCompletion(config.taskMetadata);
   // Reviewers only run under review-then-merge, so the picker hides for the two
   // policies that never reach them — but an unpinned ('') task may still inherit
@@ -228,7 +229,7 @@ export default function GlobalConfigControls({ taskType, config, onUpdate, onTri
   // Without this the picker — and the "Use system Code Review Defaults" reset
   // beside it — never render for claim-work, leaving a reviewer override that
   // every claim obeys with no control anywhere that can clear it.
-  const reviewersApply = config.taskMetadata?.claimFlow
+  const reviewersApply = claimFlow
     ? true
     : config.taskMetadata?.openPR
       ? prCompletion === '' || prCompletion === 'review-then-merge'
@@ -647,7 +648,7 @@ export default function GlobalConfigControls({ taskType, config, onUpdate, onTri
             );
           })}
         </div>
-        {config.taskMetadata?.openPR && (
+        {(config.taskMetadata?.openPR || claimFlow) && (
           <FormField label="After opening PR" className="mt-3" labelClassName="text-sm text-gray-400 block mb-2">
             <select
               value={prCompletion}
@@ -655,13 +656,13 @@ export default function GlobalConfigControls({ taskType, config, onUpdate, onTri
               disabled={updating}
               className="w-full bg-port-card border border-port-border rounded px-3 py-2 text-white text-sm"
             >
-              <option value="">App default</option>
-              {PR_COMPLETION_OPTIONS.map(option => (
+              <option value="">{claimFlow ? 'Automatic merge after reviews and CI (default)' : 'App default'}</option>
+              {PR_COMPLETION_OPTIONS.filter(option => !claimFlow || option.value !== 'merge-on-green').map(option => (
                 <option key={option.value} value={option.value}>{option.label}</option>
               ))}
             </select>
             <p className="text-xs text-gray-500 mt-1">
-              {prCompletionOption(prCompletion)?.description || PR_COMPLETION_INHERIT_HINT}
+              {claimFlow ? 'Configured reviews and CI still run. Leave open hands the PR to you for further review without merging or closing the issue.' : prCompletionOption(prCompletion)?.description || PR_COMPLETION_INHERIT_HINT}
             </p>
           </FormField>
         )}

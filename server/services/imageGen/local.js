@@ -1111,6 +1111,12 @@ const MAX_GALLERY_UPLOAD_BYTES = 16 * 1024 * 1024;
 // the cleaner's guard (lib/imageClean.js MAX_PIXELS) — sharp throws past it.
 const MAX_GALLERY_UPLOAD_PIXELS = 96 * 1000 * 1000;
 
+async function refreshImageIndex(filename) {
+  await import('../mediaAssetIndex/index.js')
+    .then(m => m.indexImage({ filename }))
+    .catch(err => console.error(`❌ Media index image refresh failed: ${err.message}`));
+}
+
 /**
  * Persist user-uploaded image bytes (base64) into the gallery dir under
  * `data/images/` so the file rides the existing `image` peer-sync asset path
@@ -1144,6 +1150,7 @@ export async function saveUploadedGalleryImage(base64Data) {
   const filename = `upload-${randomUUID().slice(0, 8)}.png`;
   await ensureDir(PATHS.images);
   await atomicWrite(join(PATHS.images, filename), png);
+  await refreshImageIndex(filename);
   console.log(`📥 Saved uploaded gallery image: ${filename} (${(png.length / 1024).toFixed(0)}KB PNG, from ${detected.mime})`);
   return { filename, path: `/data/images/${filename}` };
 }
@@ -1209,6 +1216,7 @@ export async function setImageHidden(filename, hidden) {
   const { path: sidecarPath, metadata } = await readImageSidecar(filename);
   metadata.hidden = !!hidden;
   await atomicWrite(sidecarPath, metadata);
+  await refreshImageIndex(filename);
   return { ok: true, hidden: metadata.hidden };
 }
 
@@ -1219,6 +1227,7 @@ export async function updateImagePrompt(filename, prompt) {
   if (trimmedPrompt) metadata.prompt = trimmedPrompt;
   else delete metadata.prompt;
   await atomicWrite(sidecarPath, metadata);
+  await refreshImageIndex(filename);
   return { filename, prompt: trimmedPrompt };
 }
 

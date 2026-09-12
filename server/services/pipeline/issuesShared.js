@@ -18,7 +18,7 @@
  * data/pipeline-issues/{id}/index.json (PG-backed via the store facade).
  */
 
-import { getIssuesStore } from './issuesStore/store.js';
+import { getIssuesStore, stripRunHistoryFromIssue } from './issuesStore/store.js';
 import { createKeyCachedQueue } from '../../lib/createKeyCachedQueue.js';
 import { IMAGE_GEN_MODE, QUEUEABLE_IMAGE_MODES } from '../imageGen/modes.js';
 import {
@@ -333,23 +333,6 @@ export function snapshotRunHistory(prevStage, patch, stageId, { force = false } 
   return [snapshot, ...dedupedPrior].slice(0, STAGE_RUN_HISTORY_MAX);
 }
 
-// Strip per-stage `runHistory` from a sanitized issue so list-shaped
-// endpoints can opt out of shipping each stage's full version history. Text
-// stages can hold up to STAGE_RUN_HISTORY_MAX (5) entries × ~600KB each, so
-// a maxed-out issue is ~12MB of payload that the sidebar + per-series list
-// never render. Opt-in via `withHistory: false` on `listIssues` /
-// `listRecentIssues` — the default is full-shape because internal callers
-// (notably `exportSeries`) round-trip every stored field through the bucket
-// export, and dropping history there would lose it on the receiving peer.
-const stripRunHistoryFromIssue = (issue) => {
-  if (!issue || typeof issue !== 'object' || !issue.stages) return issue;
-  const strippedStages = {};
-  for (const [stageId, stage] of Object.entries(issue.stages)) {
-    strippedStages[stageId] = stage?.runHistory?.length ? { ...stage, runHistory: [] } : stage;
-  }
-  return { ...issue, stages: strippedStages };
-};
-
 // Episode-video render settings the user chose at kickoff time. Persisted
 // on the stage so a page reload doesn't reset them to the defaults — the
 // restart flow can render the same pickers populated with the user's
@@ -640,15 +623,15 @@ const sanitizeIssue = (raw) => {
   };
 };
 
-async function readState() {
-  return { issues: await store().loadAll() };
+async function readState(options) {
+  return { issues: await store().loadAll(options) };
 }
 
 // Series-scoped read — uses the indexed `idx_issues_series` query (PG) so a
 // per-series scan doesn't load + sanitize every issue in the install. Callers
 // that already filter by seriesId in JS should source from here instead.
-async function readStateForSeries(seriesId) {
-  return { issues: await store().loadAllForSeries(seriesId) };
+async function readStateForSeries(seriesId, options) {
+  return { issues: await store().loadAllForSeries(seriesId, options) };
 }
 
 async function saveIssueNow(issue) {

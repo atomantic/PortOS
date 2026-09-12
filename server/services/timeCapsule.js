@@ -186,7 +186,8 @@ export async function listSnapshots() {
  */
 export async function getSnapshot(id) {
   const snapshotFile = join(SNAPSHOTS_DIR, `${id}.json`);
-  return readJSONFile(snapshotFile, null);
+  const { value } = await readJSONFileStrict(snapshotFile, null);
+  return value;
 }
 
 /**

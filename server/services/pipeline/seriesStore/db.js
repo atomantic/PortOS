@@ -66,6 +66,28 @@ export async function listRaw() {
   return rows.map((r) => r.data);
 }
 
+/** Names and ordering only: no JSONB body is read for sidebar navigation. */
+export async function listNames() {
+  const { rows } = await query(
+    `SELECT id, name, to_char(updated_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') AS "updatedAt"
+       FROM pipeline_series WHERE deleted = FALSE`,
+  );
+  return rows;
+}
+
+/** Fields used by index rows and universe-scoped pickers, without arc/seasons. */
+export async function listSummaries() {
+  const { rows } = await query(
+    `SELECT id, name, universe_id AS "universeId",
+            data->>'logline' AS logline, data->>'coverImage' AS "coverImage",
+            data->'origin' AS origin, data->'issueCountTarget' AS "issueCountTarget",
+            jsonb_build_object('shape', data->'arc'->'shape') AS arc,
+            data->>'createdAt' AS "createdAt", data->>'updatedAt' AS "updatedAt"
+       FROM pipeline_series WHERE deleted = FALSE`,
+  );
+  return rows;
+}
+
 /**
  * Upsert one record. `data` is written verbatim (lossless); the typed mirror
  * columns are bind-sanitized so a hand-edited/legacy record with a malformed

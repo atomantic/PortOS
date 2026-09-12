@@ -305,3 +305,10 @@ describe('AppOverrideRow — enabled toggle', () => {
     expect(onUpdate).toHaveBeenCalledWith('app-1', 'feature-ideas', { enabled: true, interval: 'on-demand' });
   });
 });
+
+it('allows an app to override the claim PR handoff policy', async () => {
+   const onUpdate = renderRow({ taskType: 'claim-issue', globalTaskMetadata: { claimFlow: true, openPR: false, prCompletion: 'leave-open' } });
+   expect(screen.getByRole('option', { name: 'Inherit (Leave PR open)' })).toBeInTheDocument();
+   await act(async () => { fireEvent.change(prSelect(), { target: { value: 'review-then-merge' } }); });
+   expect(onUpdate).toHaveBeenCalledWith(APP.id, 'claim-issue', expect.objectContaining({ taskMetadata: { prCompletion: 'review-then-merge' } }));
+});

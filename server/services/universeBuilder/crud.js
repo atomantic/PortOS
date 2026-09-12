@@ -19,7 +19,7 @@ import {
   sanitizeStyleReference, sanitizeInfluences, sanitizeLocked, mergeInfluencesWithLocks,
   makeErr, UNIVERSE_ID_RE,
   ERR_NOT_FOUND, ERR_VALIDATION, ERR_DUPLICATE, ERR_HAS_LIVE_SERIES,
-  NAME_MAX_LENGTH, CURRENT_SCHEMA_VERSION, ENTRY_REF_KIND, IMAGE_REFS_PER_ENTRY_MAX,
+  NAME_MAX_LENGTH, LOGLINE_MAX, CURRENT_SCHEMA_VERSION, ENTRY_REF_KIND, IMAGE_REFS_PER_ENTRY_MAX,
   STYLE_REFERENCES_MAX, STYLE_NOTES_MAX,
 } from './sanitize.js';
 import {
@@ -76,6 +76,27 @@ export async function listUniverses({ includeDeleted = false } = {}) {
   const filtered = includeDeleted ? universes : universes.filter((u) => !u.deleted);
   // Newest first — matches user expectation for a "your universes" list.
   return [...filtered].sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''));
+}
+
+/** Small index rows; the full-list API remains available to editors/export. */
+export async function listUniverseSummaries() {
+  const rows = await store().listSummaries();
+  return rows.flatMap((row) => {
+    const u = sanitizeTemplate(row.legacyRecord || row);
+    if (!u || u.deleted) return [];
+    return [{
+      id: u.id, name: u.name, logline: u.logline,
+      // Importer only needs a one-line subtitle, never the full starter treatment.
+      starterPrompt: trimTo(u.starterPrompt, LOGLINE_MAX).trim(),
+      origin: u.origin, createdAt: u.createdAt, updatedAt: u.updatedAt,
+      canonCount: row.legacyRecord
+        ? u.characters.length + u.places.length + u.objects.length
+        : row.canonCount,
+      styleImageRef: row.legacyRecord
+        ? u.styleImageRefs.at(-1) || null
+        : sanitizeImageRefFilename(row.styleImageRef) || null,
+    }];
+  }).sort((a, b) => b.createdAt.localeCompare(a.createdAt) || b.id.localeCompare(a.id));
 }
 
 /**

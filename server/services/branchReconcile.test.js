@@ -8,7 +8,7 @@
  *   inFlight / wip correctly).
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 vi.mock('./git.js', () => ({
   getBranches: vi.fn(),
@@ -94,12 +94,13 @@ import {
   limitBranchesForAgent,
   branchPriorityRank, prioritizeBranches, worktreeProtectionExpiresAt, describeIdleReconcilePark,
   SHIPPED_CLAIM_IDLE_MS, STALE_CLAIM_IDLE_MS,
-  upstreamBranchName, parseRemoteHeads, partitionRemoteOrphans, reapOrphanedRemotes
+  listRemoteHeads, upstreamBranchName, parseRemoteHeads, partitionRemoteOrphans, reapOrphanedRemotes
 } from './branchReconcile.js';
 import * as git from './git.js';
 import * as wt from './worktreeManager.js';
 import { execGit } from '../lib/execGit.js';
 import { execGh } from './github.js';
+import { markHostShuttingDown, resetHostShutdownFlagForTests } from '../lib/hostShutdown.js';
 import { getOriginInfo } from '../lib/gitRemote.js';
 
 beforeEach(() => {
@@ -2098,5 +2099,44 @@ describe('describeIdleReconcilePark', () => {
     const out = describeIdleReconcilePark([{ branch: 'a', reason: 'worktree-locked' }], []);
     expect(out.reason).toBe('merged-branches-held-back');
     expect(out.notLaterThan).toBeNull();
+  });
+});
+
+describe('shutdown interruption (#6992)', () => {
+  afterEach(() => {
+    resetHostShutdownFlagForTests();
+    vi.restoreAllMocks();
+  });
+
+  it('keeps PR state unknown without reporting a cancellation as a forge error', async () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    git.getBranches.mockResolvedValue([
+      { name: 'claim/issue-1', isDefault: false, current: false, tracking: 'origin/claim/issue-1', merged: false }
+    ]);
+    wt.listWorktrees.mockResolvedValue([]);
+    execGh.mockRejectedValue(Object.assign(new Error('gh command cancelled by SIGTERM'), { name: 'AbortError', signal: 'SIGTERM' }));
+    git.hasBranchMergeEvidence.mockResolvedValue(false);
+    const inputs = await gatherBranchState('/repo', { defaultBranch: 'main' });
+    expect(inputs[0].prStateUnavailable).toBe(true);
+    expect(classifyBranches(inputs)[0].state).toBe('WIP');
+    expect(error).not.toHaveBeenCalled();
+  });
+
+  it('never treats interrupted partial remote output as an answered branch list', async () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    execGit.mockResolvedValue({ stdout: 'abc\trefs/heads/main', stderr: '', exitCode: null, signal: 'SIGTERM', terminated: true });
+    await expect(listRemoteHeads('/repo')).resolves.toBeNull();
+    expect(error).not.toHaveBeenCalled();
+    markHostShuttingDown();
+    execGit.mockRejectedValue(new Error('child gone'));
+    await expect(listRemoteHeads('/repo')).resolves.toBeNull();
+    expect(error).not.toHaveBeenCalled();
+  });
+
+  it('still reports unexpected signals outside shutdown with their signal name', async () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    execGit.mockResolvedValue({ stdout: '', stderr: '', exitCode: null, signal: 'SIGSEGV', terminated: true });
+    await expect(listRemoteHeads('/repo')).resolves.toBeNull();
+    expect(error).toHaveBeenCalledWith(expect.stringContaining('signal SIGSEGV'));
   });
 });
