@@ -74,10 +74,6 @@ export const JSON_WRITEBACK_EXCEPTIONS = [
     "reason": "No failed-read write-back: updateTool returns on null; registerTool is an explicit complete replacement."
   },
   {
-    "key": "timeCapsule.js :: snapshotFile",
-    "reason": "Immutable snapshots: createSnapshot writes a new UUID from freshly collected data; getSnapshot only displays existing snapshots and never writes its fallback back."
-  },
-  {
     "key": "twinEnrichment.js :: CHRONOTYPE_OBSERVED_FILE",
     "reason": "Authoritative rebuild: activity rows rebuild the complete chronotype histogram without retaining previous fields."
   },
