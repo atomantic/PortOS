@@ -4,6 +4,7 @@ import { Link } from 'react-router';
 import * as api from '../services/api';
 import BrailleSpinner from '../components/BrailleSpinner';
 import Banner from '../components/ui/Banner';
+import PersistentMindRecipeLibrary from '../components/cos/PersistentMindRecipeLibrary';
 import PersistentMindTaskAccessControls from '../components/cos/PersistentMindTaskAccessControls';
 import PersistentMindTaskModelAllowlistControls from '../components/cos/PersistentMindTaskModelAllowlistControls';
 
@@ -70,6 +71,7 @@ export default function PersistentMindTools({ onCapabilitiesChange, onSavingChan
 
   return (
     <div className="space-y-4">
+          <PersistentMindRecipeLibrary />
           {error && <Banner tone="error" title="Tools unavailable">{error}. The last loaded state is preserved; retry when the connection recovers.</Banner>}
 
           {loading && !data ? (

@@ -1,3 +1,4 @@
+import mindToolRecipeRoutes from './mindToolRecipeRoutes.js';
 import { persistentMindMemoryProtectionSchema } from '../lib/persistentMindMemory.js';
 import { getPersistentMindThinkingRequestCatalog, cancelPersistentMindThinkingRequest } from '../services/persistentMindThinkingRequests.js';
 /** Persistent Chief-of-Staff mind conversation and lifecycle routes. */
@@ -65,6 +66,7 @@ import {
 } from '../services/persistentMindSupervisor.js';
 
 const router = Router();
+router.use('/mind/recipes', mindToolRecipeRoutes);
 
 const idempotencyId = z.string().trim().min(1).max(200);
 const eventId = z.string().trim().min(1).max(128);

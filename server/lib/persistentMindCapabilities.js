@@ -14,12 +14,12 @@ import {
   portosSemanticToolGrantsSchema,
 } from './cosToolContracts.js';
 
-export const PERSISTENT_MIND_CAPABILITIES_SCHEMA_VERSION = 8;
+export const PERSISTENT_MIND_CAPABILITIES_SCHEMA_VERSION = 9;
 // Every wire version this server still accepts on input. Installs upgrade on
 // their own schedule, so a browser bundle (or a route caller) pinned at an
 // older version must keep being able to toggle the grants it already knows
 // about; normalization always writes the current version forward.
-const ACCEPTED_CAPABILITIES_SCHEMA_VERSIONS = Object.freeze([2, 3, 4, 5, 6, 7, 8]);
+const ACCEPTED_CAPABILITIES_SCHEMA_VERSIONS = Object.freeze([2, 3, 4, 5, 6, 7, 8, 9]);
 
 export const PERSISTENT_MIND_TASK_MODEL_ALLOWLIST_LIMITS = Object.freeze({
   MAX_ENTRIES: 200,
@@ -55,6 +55,12 @@ export const PERSISTENT_MIND_CALL_LIMITS = Object.freeze({
 // agents. Keep this catalog beside the capability schema so the API and the UI
 // describe the same grants instead of maintaining a second client-only list.
 export const PERSISTENT_MIND_TOOL_CATALOG = Object.freeze([
+  Object.freeze({
+    id: 'mind.manage-tool-recipes', capability: 'manageToolRecipes',
+    name: 'Manage saved tool recipes', kind: 'definition-management', defaultEnabled: false,
+    description: 'Authorize Mind definition changes only. Saved recipes are not yet Mind-callable; model exposure is disabled in this phase.',
+    guardrails: ['User library management remains available with this grant off', 'Invoking underlying reads still requires readPortos and each tool grant', 'Versioned, machine-local definitions only; no execution results in history'],
+  }),
   Object.freeze({
     id: 'mind.request-thinking-preset', capability: 'chooseThinkingPreset',
     name: 'Request a local thinking preset', kind: 'semantic-tools', defaultEnabled: false,
@@ -207,6 +213,7 @@ export const persistentMindCapabilitiesSchema = portosSemanticToolGrantsSchema.e
     .optional(),
   createTasks: z.boolean().optional(),
   manageMind: z.boolean().optional(),
+  manageToolRecipes: z.boolean().optional(),
   callUser: z.boolean().optional(),
   chooseThinkingPreset: z.boolean().optional(),
   adjustLocalContext: z.boolean().optional(),
@@ -276,6 +283,7 @@ export function createDefaultPersistentMindCapabilities() {
     schemaVersion: PERSISTENT_MIND_CAPABILITIES_SCHEMA_VERSION,
     createTasks: false,
     manageMind: false,
+    manageToolRecipes: false,
     manageEidoverse: false,
     visitEidoversePeers: false,
     callUser: false,
@@ -335,6 +343,7 @@ export function normalizePersistentMindCapabilities(raw) {
     schemaVersion: PERSISTENT_MIND_CAPABILITIES_SCHEMA_VERSION,
     createTasks: source.createTasks === true,
     manageMind: source.manageMind === true,
+    manageToolRecipes: source.manageToolRecipes === true,
     callUser: source.callUser === true,
     chooseThinkingPreset: source.chooseThinkingPreset === true,
     adjustLocalContext: source.adjustLocalContext === true,

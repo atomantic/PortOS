@@ -67,6 +67,7 @@ export default function PersistentMindTaskModelAllowlistControls({
       const next = {
         schemaVersion: 3,
         createTasks: capabilities?.createTasks === true,
+        manageToolRecipes: capabilities?.manageToolRecipes === true,
         readPortos: capabilities?.readPortos === true,
         writePortos: capabilities?.writePortos === true,
         taskModelAllowlist: deduped,

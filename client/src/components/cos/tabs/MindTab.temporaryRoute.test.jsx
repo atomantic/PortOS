@@ -19,6 +19,7 @@ const api = vi.hoisted(() => ({
   updateCosConfig: vi.fn(),
   getPersistentMindContext: vi.fn(),
   getPersistentMindTools: vi.fn(),
+  getMindRecipes: vi.fn().mockResolvedValue({ recipes: [] }),
   getPersistentMindRuntime: vi.fn(),
   getPersistentMindVisibility: vi.fn(),
   createPersistentMindMemory: vi.fn(),
