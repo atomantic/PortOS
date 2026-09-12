@@ -351,6 +351,14 @@ router.post('/ingredients/:id/revisions/:revisionId/restore', asyncHandler(async
   );
   if (!updated) throw new ServerError('Ingredient not found', { status: 404 });
   res.json(updated);
+  // A restore changes the same mirrored name/payload fields as an ordinary
+  // PATCH, so refresh every linked universe after the Catalog write succeeds.
+  // Keep this best-effort and post-response: the restore is already durable,
+  // and a failed universe cache update must not turn it into a failed request
+  // or escape as an unhandled rejection.
+  projectToCanon(req.params.id, updated).catch((err) => {
+    console.error(`🔁 catalog→canon projection failed for ${req.params.id}: ${err.message}`);
+  });
 }));
 
 router.delete('/ingredients/:id', asyncHandler(async (req, res) => {
