@@ -53,7 +53,7 @@ vi.mock('../services/api.js', () => ({
   getApps: vi.fn(async () => [{ id: 'app-1', name: 'Example App' }]),
   listSpriteRecords: vi.fn(async () => [{ id: 'hero', name: 'Hero', kind: 'character', status: 'ready' }]),
   listTracks: vi.fn(async () => []),
-  listImageGallery: vi.fn(async () => []),
+  getGalleryImages: vi.fn(async () => []),
   getGameIntegrity: vi.fn(async (id) => {
     api.integrityCalls.push(id);
     return api.integrityByGame[id] ?? null;

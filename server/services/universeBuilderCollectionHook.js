@@ -117,6 +117,7 @@ async function enrichSidecar(filename, patch) {
   // lightbox metadata fetch, or another batch entry — can't observe a
   // mid-truncate empty file.
   await atomicWrite(path, next);
+  await import('./mediaAssetIndex/index.js').then(m => m.indexImage({ filename })).catch(err => console.error(`❌ Media index universe metadata refresh: ${err.message}`));
 }
 
 let completedHandler = null;

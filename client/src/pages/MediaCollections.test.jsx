@@ -19,7 +19,8 @@ vi.mock('../services/api', () => ({
   createMediaCollection: vi.fn(),
   deleteMediaCollection: vi.fn(),
   listVideoHistory: vi.fn().mockResolvedValue([]),
-  listImageGallery: vi.fn().mockResolvedValue([]),
+  listGalleryCollectionSummaries: vi.fn(async () => [{ id: 'unsorted', total: mockUnsortedItems.length,
+    counts: { image: mockUnsortedItems.length, video: 0 }, cover: null }]),
 }));
 
 // ── Mock useSyncIntegrity ────────────────────────────────────────────────────

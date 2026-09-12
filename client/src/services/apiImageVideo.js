@@ -28,12 +28,25 @@ export const repairImageModel = (modelId, { deep = false } = {}) => request(`/im
 });
 export const listImageGallery = (options = {}) => request('/image-gen/gallery', options);
 // Opt-in page envelope; keep listImageGallery's legacy array/options signature.
-export const listImageGalleryPage = ({ limit = 60, offset = 0, q = '', hidden, starred, summary, filename } = {}, options = {}) => {
+export const listImageGalleryPage = ({ limit = 60, offset = 0, q = '', hidden, starred, summary, filename, kind, media, collectionId, universeId, entryCategory, entryKind } = {}, options = {}) => {
   const params = new URLSearchParams({ limit, offset, q });
-  for (const [key, value] of Object.entries({ hidden, starred, summary, filename })) {
+  for (const [key, value] of Object.entries({ hidden, starred, summary, filename, kind, media, collectionId, universeId, entryCategory, entryKind })) {
     if (value !== undefined) params.set(key, value);
   }
   return request(`/image-gen/gallery?${params}`, options);
+};
+export const listMediaGalleryPage = (filters = {}, options = {}) => listImageGalleryPage({ ...filters, media: true, kind: filters.kind || 'all' }, options);
+export const listGalleryCollectionSummaries = (options = {}) => request('/image-gen/gallery/collections', options);
+export const listImageGalleryFacets = (options = {}) => request('/image-gen/gallery/facets', options);
+export const getGalleryImages = async (filenames, options = {}) => {
+  const unique = [...new Set(filenames.filter(Boolean))];
+  const items = [];
+  for (let offset = 0; offset < unique.length; offset += 200) {
+    items.push(...await request('/image-gen/gallery/lookup', {
+      ...options, method: 'POST', body: JSON.stringify({ filenames: unique.slice(offset, offset + 200) }),
+    }));
+  }
+  return items;
 };
 export const getActiveImageJob = () => request('/image-gen/active');
 // cancelImageGen({ all: true }) cancels every queued/running image job.

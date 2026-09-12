@@ -4,6 +4,11 @@ import { existsSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 
+const indexedSidecars = [];
+vi.mock('../mediaAssetIndex/index.js', () => ({
+  indexImage: async ({ filename }) => indexedSidecars.push(JSON.parse(await readFile(join(PATHS.images, filename.replace(/\.png$/, '.metadata.json')), 'utf8'))),
+}));
+
 // Mock peerFetch for network isolation.
 vi.mock('../../lib/peerHttpClient.js', async () => ({
   peerFetch: vi.fn(),
@@ -34,6 +39,7 @@ let tmp;
 let originalImagesPath;
 
 beforeEach(async () => {
+  indexedSidecars.length = 0;
   originalImagesPath = PATHS.images;
   tmp = join(tmpdir(), `portos-sidecar-test-${Date.now()}-${Math.random()}`);
   await mkdir(join(tmp, 'images'), { recursive: true });
@@ -67,6 +73,7 @@ describe('pullSidecarForImage', () => {
     expect(existsSync(sidecarPath)).toBe(true);
     const written = JSON.parse(await readFile(sidecarPath, 'utf8'));
     expect(written.prompt).toBe('a cat');
+    expect(indexedSidecars).toEqual([written]);
   });
 
   it('returns false and writes nothing when peer returns !ok (404)', async () => {

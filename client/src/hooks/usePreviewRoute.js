@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useRef } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router';
 
 // URL-driven MediaPreview state. Returns `[preview, setPreview]` with the same
@@ -24,7 +24,7 @@ import { useSearchParams } from 'react-router';
 // the browser back button closes the modal. Subsequent prev/next navigation
 // and the open→closed transition use replace so the gallery doesn't pollute
 // the history stack.
-export default function usePreviewRoute(items, { paramName = 'preview' } = {}) {
+export default function usePreviewRoute(items, { paramName = 'preview', resolveItem } = {}) {
   const [searchParams, setSearchParams] = useSearchParams();
   // React Router may replace both values after navigation. Refs let callers
   // keep one action identity (important for memoized gallery cards) while the
@@ -35,7 +35,7 @@ export default function usePreviewRoute(items, { paramName = 'preview' } = {}) {
   setSearchParamsRef.current = setSearchParams;
   const previewParam = searchParams.get(paramName);
 
-  const preview = useMemo(() => {
+  const localPreview = useMemo(() => {
     if (!previewParam) return null;
     const list = Array.isArray(items) ? items : [];
     return (
@@ -45,6 +45,15 @@ export default function usePreviewRoute(items, { paramName = 'preview' } = {}) {
       || null
     );
   }, [items, previewParam]);
+
+  const [resolved, setResolved] = useState(null);
+  useEffect(() => {
+    if (!previewParam || localPreview || !resolveItem) return;
+    let cancelled = false;
+    resolveItem(previewParam).then(item => { if (!cancelled) setResolved({ param: previewParam, item, resolver: resolveItem }); }).catch(() => {});
+    return () => { cancelled = true; };
+  }, [previewParam, localPreview, resolveItem]);
+  const preview = localPreview || (resolved?.param === previewParam && resolved.resolver === resolveItem ? resolved.item : null);
 
   const setPreview = useCallback((item) => {
     const currentSearchParams = searchParamsRef.current;

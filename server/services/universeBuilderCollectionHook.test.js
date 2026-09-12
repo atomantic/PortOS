@@ -28,6 +28,11 @@ vi.mock('../lib/fileUtils.js', async () => {
 vi.mock('./instances.js', () => mockNoPeers());
 vi.mock('./sharing/peerSync.js', () => mockNoPeerSync());
 
+const indexedSidecars = [];
+vi.mock('./mediaAssetIndex/index.js', () => ({
+  indexImage: async ({ filename }) => indexedSidecars.push(readSidecar(filename)),
+}));
+
 const { mediaJobEvents } = await import('./mediaJobQueue/index.js');
 const collections = await import('./mediaCollections.js');
 const recordEvents = await import('./sharing/recordEvents.js');
@@ -68,6 +73,7 @@ describe('universeBuilderCollectionHook', () => {
   let recordListener;
 
   beforeEach(() => {
+    indexedSidecars.length = 0;
     rmSync(tempData, { recursive: true, force: true });
     mkdirSync(tempData, { recursive: true });
     hook.__testing.reset();
@@ -217,6 +223,7 @@ describe('universeBuilderCollectionHook', () => {
     expect(sc.universeRunId).toBe('r-canon');
     expect(sc.entryKind).toBe('canon');
     expect(sc.entryCategory).toBe('characters');
+    await waitFor(() => indexedSidecars.some(row => row.universeId === seeded.id && row.entryCategory === 'characters'));
     expect(sc.entryId).toBe(characterId);
     expect(sc.entryName).toBe('Ash');           // canonical name wins
     expect(sc.entryLabel).toBe('Ash — pyromancer cut'); // compiled label preserved

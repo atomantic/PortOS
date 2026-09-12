@@ -93,7 +93,7 @@ export async function removeAsset(mediaKey) {
 
 // Parameters stay bound, including literal substring search (percent and underscore
 // in a prompt are not SQL wildcards). Count and page share exactly one predicate.
-function assetFilter({ kind, q = '', hidden, filename, mediaKeys } = {}) {
+function assetFilter({ kind, q = '', hidden, filename, mediaKeys, excludeKeys, universeId, entryCategory, entryKind, cover } = {}) {
   const params = [];
   const clauses = [];
   if (kind) { params.push(kind); clauses.push(`kind = $${params.length}`); }
@@ -102,38 +102,87 @@ function assetFilter({ kind, q = '', hidden, filename, mediaKeys } = {}) {
   }
   if (filename !== undefined) {
     params.push(filename);
-    clauses.push(`ref = $${params.length}`);
+    clauses.push(`(ref = $${params.length} OR data->>'filename' = $${params.length})`);
   }
   if (mediaKeys !== undefined) {
     params.push(mediaKeys);
     clauses.push(`media_key = ANY($${params.length}::text[])`);
   }
+  if (excludeKeys !== undefined) {
+    params.push(excludeKeys);
+    clauses.push(`NOT (media_key = ANY($${params.length}::text[]))`);
+  }
+  for (const [field, value] of Object.entries({ universeId, entryCategory, entryKind })) {
+    if (value !== undefined) {
+      params.push(value);
+      clauses.push(`data->>'${field}' = $${params.length}`);
+    }
+  }
+  if (cover) clauses.push("(kind = 'image' OR NULLIF(data->>'thumbnail', '') IS NOT NULL)");
   for (const token of q.trim().toLowerCase().split(/\s+/).filter(Boolean)) {
     params.push(token);
-    clauses.push(`strpos(lower(data::text), $${params.length}) > 0`);
+    clauses.push(`strpos(lower(concat_ws(' ', data::text, kind,
+      (data->>'width') || 'x' || (data->>'height'),
+      CASE WHEN data->>'extractedFromVideoId' IS NOT NULL THEN 'extracted frame' END,
+      CASE WHEN data->>'stitchedFrom' IS NOT NULL THEN 'stitched' END,
+      CASE WHEN data->>'upscaledFrom' IS NOT NULL THEN 'upscaled 2x' END)), $${params.length}) > 0`);
   }
   return { params, where: clauses.length ? ` WHERE ${clauses.join(' AND ')}` : '' };
 }
 
+// Videos stay authoritative in video-history: prompt/visibility edits and uploads
+// do not all refresh the derived index. Mixed pages join that snapshot in SQL,
+// rather than using stale video rows or downloading either full list to the client.
+function assetSource(params, videos) {
+  if (videos === undefined) return { cte: '', table: 'media_assets' };
+  params.push(JSON.stringify(videos.map(data => ({ data, createdAt: Number.isFinite(Date.parse(data.createdAt)) ? new Date(data.createdAt).toISOString() : new Date(0).toISOString() }))));
+  return {
+    cte: `WITH gallery_assets AS (
+      SELECT media_key, kind, ref, data, created_at FROM media_assets WHERE kind = 'image'
+      UNION ALL
+      SELECT 'video:' || (value->'data'->>'id'), 'video', value->'data'->>'id', value->'data',
+        (value->>'createdAt')::timestamptz
+      FROM jsonb_array_elements($${params.length}::jsonb)
+    ) `,
+    table: 'gallery_assets',
+  };
+}
+
 /** List index rows. Omitting limit retains the legacy array contract. */
-export async function listAssets({ limit, offset = 0, ...filters } = {}) {
+export async function listAssets({ limit, offset = 0, videos, typed = false, orderedKeys, ...filters } = {}) {
   const { params, where } = assetFilter(filters);
+  const { cte, table } = assetSource(params, videos);
+  let order = 'created_at DESC, media_key ASC';
+  if (orderedKeys) {
+    params.push(orderedKeys);
+    order = `array_position($${params.length}::text[], media_key), media_key ASC`;
+  }
   let paging = '';
   if (limit !== undefined) {
     params.push(limit, offset);
     paging = ` LIMIT $${params.length - 1} OFFSET $${params.length}`;
   }
   const result = await query(
-    `SELECT data FROM media_assets${where} ORDER BY created_at DESC, media_key ASC${paging}`, params,
+    `${cte}SELECT ${typed ? 'kind, ' : ''}data FROM ${table}${where} ORDER BY ${order}${paging}`, params,
   );
-  return result.rows.map(rowToAsset);
+  return result.rows.map(row => typed ? { kind: row.kind, data: row.data } : rowToAsset(row));
 }
 
 /** Count matching rows without materializing their JSONB payloads. */
-export async function countAssets(filters = {}) {
+export async function countAssets({ videos, ...filters } = {}) {
   const { params, where } = assetFilter(filters);
-  const result = await query(`SELECT COUNT(*) AS count FROM media_assets${where}`, params);
+  const { cte, table } = assetSource(params, videos);
+  const result = await query(`${cte}SELECT COUNT(*) AS count FROM ${table}${where}`, params);
   return parseInt(result.rows[0].count, 10);
+}
+
+/** Compact global picker options, independent of the loaded page/search. */
+export async function galleryFacets() {
+  const fields = ['universeId', 'universeName', 'entryCategory', 'entryKind'];
+  const result = await query(`SELECT DISTINCT ${fields.map(field =>
+    `CASE WHEN jsonb_typeof(data->'${field}') = 'string' THEN data->>'${field}' END AS "${field}"`).join(', ')}
+    FROM media_assets WHERE kind = 'image' AND COALESCE(data->>'hidden', 'false') <> 'true'`);
+  return result.rows;
 }
 
 // Strict video-history reader for reconcile. The live store's loadHistory()

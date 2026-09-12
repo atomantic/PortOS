@@ -309,6 +309,7 @@ async function copyAssetsLocally(bucketPath, assetRefs) {
       const sidecarTarget = join(targetDir, imageSidecarName(filename));
       if (!existsSync(sidecarTarget)) await copyFileGuarded(sidecarPath, sidecarTarget);
     }
+    if (kind === 'image') await import('../mediaAssetIndex/index.js').then(m => m.indexImage({ filename })).catch(err => console.error(`❌ Media index imported asset refresh: ${err.message}`));
   }));
   return { copied, available, missing };
 }

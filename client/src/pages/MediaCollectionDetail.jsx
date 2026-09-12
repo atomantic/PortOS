@@ -16,33 +16,13 @@ import {
   getMediaCollection, updateMediaCollection,
   listMediaCollections,
   addMediaCollectionItem, removeMediaCollectionItem,
-  listImageGallery, listVideoHistory,
+  listMediaGalleryPage,
   deleteImage, deleteVideoHistoryItem,
   pullMissingMetadata,
 } from '../services/api';
 import useMediaPreviewActions from '../hooks/useMediaPreviewActions';
 import usePreviewRoute from '../hooks/usePreviewRoute';
-
-// Hydrate a collection's "<kind>:<ref>" pointer list into the same
-// normalized records MediaCard expects. We do this on the client so the
-// service stays a pure pointer store — that way an image that's been
-// re-edited keeps its current metadata when you open the collection.
-const hydrate = (collection, imagesByName, videosById) => {
-  const out = [];
-  for (const it of collection.items || []) {
-    if (it.kind === 'image') {
-      const img = imagesByName.get(it.ref);
-      if (img) out.push({ ...normalizeImage(img), addedAt: it.addedAt });
-    } else if (it.kind === 'video') {
-      const vid = videosById.get(it.ref);
-      if (vid) out.push({ ...normalizeVideo(vid), addedAt: it.addedAt });
-    }
-  }
-  // Newest-added first — matches the cover-resolution order so the user's
-  // mental model of "what's at the top" stays consistent.
-  out.sort((a, b) => new Date(b.addedAt || 0) - new Date(a.addedAt || 0));
-  return out;
-};
+import { useGalleryPage } from '../hooks/useGalleryPage';
 
 export default function MediaCollectionDetail() {
   const { id } = useParams();
@@ -53,15 +33,14 @@ export default function MediaCollectionDetail() {
   // doesn't pay a per-mount listMediaCollections() round-trip when opened.
   // Already loaded for the unsorted view as part of buildUnsortedCollection().
   const [allCollections, setAllCollections] = useState(null);
-  const [imagesByName, setImagesByName] = useState(new Map());
-  const [videosById, setVideosById] = useState(new Map());
   const [loading, setLoading] = useState(true);
   const [editingName, setEditingName] = useState(false);
   const [nameDraft, setNameDraft] = useState('');
   // Preview state is URL-driven (`?preview=<filename>`) — see `usePreviewRoute`
   // call below, declared after `items` so the resolver can match against it.
   const [selectMode, setSelectMode] = useState(false);
-  const [selected, setSelected] = useState(new Set());
+  const [selected, setSelected] = useState(new Map());
+  useEffect(() => { setSelected(new Map()); setSelectMode(false); setPickerMode(null); }, [id]);
   const [bulkBusy, setBulkBusy] = useState(false);
   // 'move' = add to target + remove from current; 'copy' = add only.
   const [pickerMode, setPickerMode] = useState(null);
@@ -69,52 +48,29 @@ export default function MediaCollectionDetail() {
   const copyBtnRef = useRef(null);
   const { annotations, toggleStar, updateAnnotation, getCardProps } = useMediaAnnotations();
 
+  const page = useGalleryPage({ collectionId: id, kind: 'all' }, { media: true });
   const refresh = useCallback(async () => {
     setLoading(true);
-    if (isUnsorted) {
-      const [cols, images, videos] = await Promise.all([
-        listMediaCollections().catch(() => []),
-        listImageGallery().catch(() => []),
-        listVideoHistory().catch(() => []),
-      ]);
-      setAllCollections(Array.isArray(cols) ? cols : []);
-      setCollection(buildUnsortedCollection(cols, images, videos));
-      setImagesByName(new Map((images || []).map((i) => [i.filename, i])));
-      setVideosById(new Map((videos || []).map((v) => [v.id, v])));
-      setLoading(false);
-      return;
-    }
-    const [c, cols, images, videos] = await Promise.all([
-      getMediaCollection(id, { silent: true }).catch((err) => {
-        toast.error(err.message || 'Collection not found');
-        return null;
-      }),
-      listMediaCollections().catch(() => []),
-      listImageGallery().catch(() => []),
-      listVideoHistory().catch(() => []),
+    page.refresh();
+    const [c, cols] = await Promise.all([
+      isUnsorted ? Promise.resolve(buildUnsortedCollection([], [], [])) : getMediaCollection(id, { silent: true }).catch(err => { toast.error(err.message || 'Collection not found'); return null; }),
+      listMediaCollections({ silent: true }).catch(() => []),
     ]);
-    setCollection(c);
-    setAllCollections(Array.isArray(cols) ? cols : []);
-    setNameDraft(c?.name || '');
-    setImagesByName(new Map((images || []).map((i) => [i.filename, i])));
-    setVideosById(new Map((videos || []).map((v) => [v.id, v])));
-    setLoading(false);
-  }, [id, isUnsorted]);
+    setCollection(c); setAllCollections(cols); setNameDraft(c?.name || ''); setLoading(false);
+  }, [id, isUnsorted, page.refresh]);
   useEffect(() => { refresh(); }, [refresh]);
-
-  const items = useMemo(
-    () => collection ? hydrate(collection, imagesByName, videosById) : [],
-    [collection, imagesByName, videosById]
-  );
-  const [preview, setPreview] = usePreviewRoute(items);
+  const items = useMemo(() => page.items.filter(row => isUnsorted || collection?.items?.some(ref => ref.kind === row.kind && ref.ref === (row.kind === 'image' ? row.data.filename : row.data.id)))
+    .map(row => row.kind === 'image' ? normalizeImage(row.data) : normalizeVideo(row.data)), [page.items, collection, isUnsorted]);
+  const resolvePreview = useCallback(async key => {
+    const kind = key.startsWith('video:') ? 'video' : key.startsWith('image:') ? 'image' : 'all';
+    const result = await listMediaGalleryPage({ collectionId: id, kind, filename: key.replace(/^(image|video):/, ''), limit: 1 }, { silent: true });
+    const row = result.items[0];
+    return row ? row.kind === 'image' ? normalizeImage(row.data) : normalizeVideo(row.data) : null;
+  }, [id]);
+  const [preview, setPreview] = usePreviewRoute(items, { resolveItem: resolvePreview });
 
   // Unsorted-only action: pull gen-params sidecars for bare images from peers.
-  const unsortedImageFilenames = useMemo(
-    () => (isUnsorted && collection
-      ? (collection.items || []).filter((it) => it.kind === 'image').map((it) => it.ref)
-      : []),
-    [isUnsorted, collection],
-  );
+  const unsortedImageFilenames = useMemo(() => isUnsorted ? items.filter(item => item.kind === 'image').map(item => item.filename) : [], [items, isUnsorted]);
   const [runPullPrompts, pullingPrompts] = useAsyncAction(async () => {
     const result = await pullMissingMetadata(unsortedImageFilenames, { silent: true });
     if (!result) return null;
@@ -157,9 +113,8 @@ export default function MediaCollectionDetail() {
   // unfile an item from a single collection without deleting it, the user
   // either un-checks the current collection via the folder+ menu, or selects
   // it in select-mode and uses the bulk "Remove" action. Dropping the file
-  // from the local image/video maps makes `hydrate()` filter it out of every
-  // collection view at once — server-side `collection.items[]` may briefly
-  // hold a dangling ref until the next mutation rewrites the file.
+  // from the loaded page removes it immediately; refreshing then restores
+  // a contiguous page after the server changes its ordering.
   const handleDelete = useCallback(async (item) => {
     const ok = await (item.kind === 'image'
       ? deleteImage(item.filename, { silent: true })
@@ -169,56 +124,31 @@ export default function MediaCollectionDetail() {
       return null;
     });
     if (!ok) return;
-    if (item.kind === 'image') {
-      setImagesByName((m) => {
-        const next = new Map(m);
-        next.delete(item.filename);
-        return next;
-      });
-    } else {
-      setVideosById((m) => {
-        const next = new Map(m);
-        next.delete(item.id);
-        return next;
-      });
-    }
+    page.setItems(rows => rows.filter(row => !(row.kind === item.kind && (row.kind === 'image' ? row.data.filename === item.filename : row.data.id === item.id))));
+    page.setTotal(total => Math.max(0, total - 1));
+    page.refresh();
     toast.success(`Deleted ${item.kind === 'image' ? item.filename : 'video'}`);
-  }, []);
+  }, [page.setItems, page.setTotal, page.refresh]);
 
   const handlePromptSaved = useCallback((item, prompt) => {
-    const nextPrompt = prompt === '(no prompt)' ? '' : prompt;
-    if (item.kind === 'image') {
-      setImagesByName((current) => {
-        const existing = current.get(item.filename);
-        if (!existing) return current;
-        const next = new Map(current);
-        next.set(item.filename, { ...existing, prompt: nextPrompt });
-        return next;
-      });
-      return;
-    }
-    setVideosById((current) => {
-      const existing = current.get(item.id);
-      if (!existing) return current;
-      const next = new Map(current);
-      next.set(item.id, { ...existing, prompt: nextPrompt });
-      return next;
-    });
-  }, []);
+    page.setItems(rows => rows.map(row => row.kind === item.kind && (row.kind === 'image' ? row.data.filename === item.filename : row.data.id === item.id)
+      ? { ...row, data: { ...row.data, prompt: prompt === '(no prompt)' ? '' : prompt } } : row));
+    page.refresh();
+  }, [page.setItems, page.refresh]);
 
-  // Unordered membership — Set, not array.
-  const toggleSelect = useCallback((key) => setSelected((prev) => {
-    const next = new Set(prev);
-    if (next.has(key)) next.delete(key); else next.add(key);
+  // Keep selected records across page resets so partial moves remain retryable.
+  const toggleSelect = useCallback((item) => setSelected((prev) => {
+    const next = new Map(prev);
+    if (next.has(item.key)) next.delete(item.key); else next.set(item.key, item);
     return next;
   }), []);
-  const handleSelectCard = useCallback((item) => toggleSelect(item.key), [toggleSelect]);
+  const handleSelectCard = useCallback((item) => toggleSelect(item), [toggleSelect]);
   const handleAnnotate = useCallback((item) => {
     navigate(`/media/annotate/${encodeURIComponent(item.key)}`);
   }, [navigate]);
-  const exitSelectMode = () => { setSelectMode(false); setSelected(new Set()); setPickerMode(null); };
+  const exitSelectMode = () => { setSelectMode(false); setSelected(new Map()); setPickerMode(null); };
   const selectedItems = useMemo(
-    () => items.filter((it) => selected.has(it.key)),
+    () => [...selected.values()].map(item => items.find(current => current.key === item.key) || item),
     [items, selected],
   );
 
@@ -253,7 +183,7 @@ export default function MediaCollectionDetail() {
       const r = await removeMediaCollectionItem(collection.id, it.key, { silent: true }).catch(() => null);
       if (r) lastOk = r; else failed++;
     }
-    if (lastOk) setCollection(lastOk);
+    if (lastOk) { setCollection(lastOk); page.refresh(); }
     setBulkBusy(false);
     exitSelectMode();
     if (failed) toast.error(`Removed ${selectedItems.length - failed}; ${failed} failed`);
@@ -295,14 +225,14 @@ export default function MediaCollectionDetail() {
         }
         // The last successful removal carries the authoritative server state,
         // so a partial failure still reconciles the items that did move out.
-        if (lastOk) setCollection(lastOk);
+        if (lastOk) { setCollection(lastOk); page.refresh(); }
       }
     }
     setBulkBusy(false);
     if (removeFailedKeys.size > 0) {
       // Stay in select mode with only the half-moved items selected so the
       // user can re-run the move (or remove) on exactly what failed.
-      setSelected(removeFailedKeys);
+      setSelected(new Map(selectedItems.filter(item => removeFailedKeys.has(item.key)).map(item => [item.key, item])));
     } else {
       exitSelectMode();
     }
@@ -324,8 +254,7 @@ export default function MediaCollectionDetail() {
   // Remix / SendToVideo / Continue / Clean share a single implementation
   // with MediaHistory, ImageGen, and the Universe Builder lightbox via
   // `useMediaPreviewActions`. The collection-specific post-clean step (add
-  // the cleaned image to THIS collection + seed imagesByName so hydrate()
-  // renders it immediately, no refresh round-trip) is wired through
+  // the cleaned image to THIS collection and refresh its page) is wired through
   // `onCleanComplete`.
   const { handleRemix, handleSendToImage, handleSendToVideo, handleContinue, handleClean, handleRemoveWatermark } = useMediaPreviewActions({
     onCleanComplete: async (cleaned) => {
@@ -342,17 +271,12 @@ export default function MediaCollectionDetail() {
       }).catch(() => null);
       if (updated) setCollection(updated);
       else await refresh();
-      // Without this the next render misses the cleaned file until
-      // refresh() reruns.
-      setImagesByName((m) => {
-        const next = new Map(m);
-        next.set(cleaned.filename, cleaned);
-        return next;
-      });
+      page.setItems(rows => [{ kind: 'image', data: cleaned }, ...rows.filter(row => row.kind !== 'image' || row.data.filename !== cleaned.filename)]);
+      page.refresh();
     },
   });
 
-  if (loading) {
+  if (loading || (page.loading && page.items.length === 0)) {
     return (
       <PageSkeleton
         label="Loading collection"
@@ -430,7 +354,7 @@ export default function MediaCollectionDetail() {
           <ArrowLeft className="w-5 h-5" />
         </Link>
         {renderTitle()}
-        <span className="text-xs text-gray-500">{items.length} item{items.length === 1 ? '' : 's'}</span>
+        <span className="text-xs text-gray-500">{page.total} item{page.total === 1 ? '' : 's'}</span>
         {!selectMode && (
           <div className="ml-auto flex items-center gap-2">
             {isUnsorted && (
@@ -470,15 +394,15 @@ export default function MediaCollectionDetail() {
           </span>
           <button
             type="button"
-            onClick={() => setSelected(new Set(items.map((it) => it.key)))}
-            disabled={bulkBusy || selected.size === items.length}
+            onClick={() => setSelected(new Map(items.map((it) => [it.key, it])))}
+            disabled={bulkBusy || items.every(item => selected.has(item.key))}
             className="px-2 py-1 text-[11px] bg-port-border hover:bg-port-border/70 text-white rounded disabled:opacity-40"
           >
-            Select all
+            {page.hasMore ? 'Select loaded' : 'Select all'}
           </button>
           <button
             type="button"
-            onClick={() => setSelected(new Set())}
+            onClick={() => setSelected(new Map())}
             disabled={bulkBusy || selected.size === 0}
             className="px-2 py-1 text-[11px] bg-port-border hover:bg-port-border/70 text-white rounded disabled:opacity-40"
           >
@@ -619,6 +543,9 @@ export default function MediaCollectionDetail() {
           })}
         </div>
       )}
+
+      {page.error && <p role="alert" className="text-port-error">{page.error} <button type="button" onClick={page.retry}>Retry</button></p>}
+      {page.hasMore && <button type="button" disabled={page.loading} onClick={page.loadMore} className="w-full min-h-[44px] text-port-accent">{page.loading ? 'Loading…' : `Show more (${page.total - items.length} remaining)`}</button>}
 
       <MediaPreview
         preview={preview}

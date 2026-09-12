@@ -97,7 +97,7 @@ export function isAutoCollection(collection) {
 
 /** Item count for a collection (0 for a malformed/absent items array). */
 export function collectionItemCount(collection) {
-  return Array.isArray(collection?.items) ? collection.items.length : 0;
+  return Number.isFinite(collection?.itemCount) ? collection.itemCount : Array.isArray(collection?.items) ? collection.items.length : 0;
 }
 
 // The sort control's options, in menu order. First entry is the default.

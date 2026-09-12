@@ -42,13 +42,17 @@ const api = vi.hoisted(() => ({
 vi.mock('../services/api', () => ({
   getTimelineProject: async () => api.project,
   listVideoHistory: async () => api.history,
-  listImageGallery: async () => {
+  getGalleryImages: async (filenames) => {
     if (api.galleryThrows) throw new Error('network');
-    return api.gallery;
+    return api.gallery.filter(row => filenames.includes(row.filename));
   },
   listMusicLibrary: async () => api.music,
   updateTimelineProject: async () => ({ updatedAt: 'u2' }),
   renderTimelineProject: async () => ({ jobId: 'j1' }),
+}));
+
+vi.mock('../services/apiImageVideo', () => ({
+  listImageGalleryPage: async ({ limit, offset }) => ({ items: api.gallery.slice(offset, offset + limit), total: api.gallery.length, offset, limit }),
 }));
 
 const VideoTimelineEditor = (await import('./VideoTimelineEditor')).default;
@@ -222,7 +226,7 @@ describe('lane caps', () => {
     await renderEditor();
 
     fireEvent.click(screen.getByRole('tab', { name: /Stills/ }));
-    fireEvent.click(screen.getAllByRole('button', { name: 'Overlay' })[0]);
+    fireEvent.click((await screen.findAllByRole('button', { name: 'Overlay' }))[0]);
 
     expect(toastError).toHaveBeenCalledWith(expect.stringContaining('Overlay lane limit reached (50)'));
   });
@@ -232,7 +236,7 @@ describe('lane caps', () => {
     await renderEditor();
 
     fireEvent.click(screen.getByRole('tab', { name: /Stills/ }));
-    fireEvent.click(screen.getAllByRole('button', { name: 'Overlay' })[0]);
+    fireEvent.click((await screen.findAllByRole('button', { name: 'Overlay' }))[0]);
 
     expect(toastError).not.toHaveBeenCalled();
     await waitFor(() => expect(screen.getByRole('button', { name: 'Remove plate.png from timeline' })).toBeInTheDocument());

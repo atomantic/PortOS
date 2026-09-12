@@ -961,6 +961,7 @@ async function doPullOneAsset(peer, base, entry, urlPrefix, localDir, safeName) 
   // a missing sidecar just means the image lands in Unsorted without a prompt.
   if (entry.kind === 'image') {
     await pullSidecarForImage(peer, base, safeName).catch(() => {});
+    await import('../mediaAssetIndex/index.js').then(m => m.indexImage({ filename: safeName })).catch(err => console.error(`❌ Media index peer asset refresh: ${err.message}`));
   }
   // After a video pull, regenerate the thumbnail LOCALLY rather than pulling it
   // as a sibling asset. Its own `asset-arrived` event lets a poster that already
