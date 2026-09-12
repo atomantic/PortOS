@@ -407,6 +407,13 @@ export const reconcile = async (cfg, { allowSetup = true } = {}) => {
     const bins = await verifyBinaries(cfg);
     const models = verifyModels(cfg);
     if (bins.piperRequired && (!bins.piper || !models.ttsVoice)) {
+      // Keep an already-provisioned speech recognizer available while TTS
+      // waits for consent. No setup scripts or LLM preloads run on this path.
+      if (cfg.stt?.engine === 'web-speech') {
+        await stopWhisper().catch(() => null);
+      } else if (bins.whisper && models.sttModel && (!cfg.stt.coreml || models.coreml)) {
+        return { ...await startWhisper(cfg), setupRequired: 'piper' };
+      }
       return { setupRequired: 'piper' };
     }
   }

@@ -182,6 +182,7 @@ export const updateVoiceConfig = async (patch) => {
   const current = deepMerge(VOICE_DEFAULTS, settings.voice || {});
   const next = deepMerge(current, patch || {});
   next.tts = migrateRetiredTtsConfig(next.tts);
+  if (next.tts.retiredEngine === null) delete next.tts.retiredEngine;
   await updateSettings({ voice: next });
   cachedConfig = next;
   return next;

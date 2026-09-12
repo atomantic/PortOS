@@ -146,9 +146,12 @@ router.put('/config', asyncHandler(async (req, res) => {
       { status: 400, code: 'VALIDATION_ERROR' },
     );
   }
-  const next = await updateVoiceConfig(parsed.data);
+  let next = await updateVoiceConfig(parsed.data);
   invalidateHealthCache();
   const reconciliation = await reconcile(next).catch((err) => ({ error: err.message }));
+  if (next.enabled && next.tts?.retiredEngine && !reconciliation?.error && !reconciliation?.setupRequired) {
+    next = await updateVoiceConfig({ tts: { retiredEngine: null } });
+  }
   req.app.get('io')?.emit('voice:config:changed', {
     enabled: next.enabled,
     sttEngine: next.stt?.engine,

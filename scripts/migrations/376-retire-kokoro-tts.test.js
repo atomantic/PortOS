@@ -42,3 +42,16 @@ describe('retire Kokoro settings migration', () => {
     await expect(migration.up({ rootDir })).rejects.toThrow();
   });
 });
+
+it('keeps a fresh settings seed on Piper without an upgrade marker', async () => {
+  const rootDir = await mkdtemp(join(tmpdir(), 'piper-fresh-'));
+  roots.push(rootDir);
+  await mkdir(join(rootDir, 'data'));
+  const path = join(rootDir, 'data/settings.json');
+  const seed = await readFile(new URL('../../data.reference/settings.json', import.meta.url), 'utf8');
+  await writeFile(path, seed);
+  await migration.up({ rootDir });
+  const settings = JSON.parse(await readFile(path, 'utf8'));
+  expect(settings.voice.tts.engine).toBe('piper');
+  expect(settings.voice.tts).not.toHaveProperty('retiredEngine');
+});

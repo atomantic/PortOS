@@ -358,6 +358,23 @@ describe('Voice Routes', () => {
       expect(config.updateVoiceConfig).not.toHaveBeenCalled();
     });
 
+    it.each([
+      [true, {}, true],
+      [true, { error: 'setup failed' }, false],
+      [false, { skipped: true }, false],
+    ])('clears retirement only after enabled successful reconciliation (%s, %j)', async (enabled, result, cleared) => {
+      const migrated = { enabled, tts: { engine: 'piper', retiredEngine: 'kokoro' } };
+      const settled = { enabled, tts: { engine: 'piper' } };
+      config.updateVoiceConfig.mockReset();
+      config.updateVoiceConfig.mockResolvedValueOnce(migrated).mockResolvedValueOnce(settled);
+      bootstrap.reconcile.mockResolvedValue(result);
+      const res = await request(buildApp()).put('/api/voice/config').send({ enabled });
+      expect(res.status).toBe(200);
+      expect(config.updateVoiceConfig).toHaveBeenCalledTimes(cleared ? 2 : 1);
+      expect(res.body.config).toEqual(cleared ? settled : migrated);
+      if (cleared) expect(config.updateVoiceConfig).toHaveBeenLastCalledWith({ tts: { retiredEngine: null } });
+    });
+
     it('reports reconcile failures without 500-ing the route', async () => {
       config.updateVoiceConfig.mockResolvedValue({ ...DEFAULT_CFG, enabled: true });
       bootstrap.reconcile.mockRejectedValue(new Error('whisper-server not on PATH'));

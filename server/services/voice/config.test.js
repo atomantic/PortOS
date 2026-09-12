@@ -26,3 +26,13 @@ describe('voice configuration defaults', () => {
     });
   });
 });
+
+it('persists retirement acknowledgement without removing customized TTS settings', async () => {
+  const tts = { engine: 'piper', retiredEngine: 'kokoro', rate: 1.3, piper: { voice: 'custom', voicePath: '~/custom.onnx' } };
+  getSettings.mockResolvedValue({ voice: { enabled: true, tts } });
+  const saved = await updateVoiceConfig({ tts: { retiredEngine: null } });
+  expect(saved.tts).not.toHaveProperty('retiredEngine');
+  expect(saved.tts).toMatchObject({ engine: 'piper', rate: 1.3, piper: tts.piper });
+  expect(updateSettings).toHaveBeenCalledWith({ voice: saved });
+  expect(await getVoiceConfig()).toBe(saved);
+});
