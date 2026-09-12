@@ -42,33 +42,70 @@ const STATE_PATH = join(PATHS.data, 'backup', 'state.json');
 //   - `activeSnapshotId` catches the in-process case with no I/O.
 //   - the `.in-progress` marker survives a hard crash or PM2 restart, which
 //     resets module state while the partial directory stays on the drive.
-// The marker is removed on BOTH the success and failure paths — clearing it only
-// on success is what previously left a failed run's snapshot blocked forever.
+// A finished failure replaces these guards with `.failed`: downloads remain
+// available for manual salvage, while restore paths can distinguish the partial
+// tree from both completed and legacy snapshots after a restart.
 const SNAPSHOT_IN_PROGRESS_MARKER = '.in-progress';
+const SNAPSHOT_FAILED_MARKER = '.failed';
 let activeSnapshotId = null;
 
 const markerPath = (snapshotDir) => join(snapshotDir, SNAPSHOT_IN_PROGRESS_MARKER);
+const failedMarkerPath = (snapshotDir) => join(snapshotDir, SNAPSHOT_FAILED_MARKER);
 const parentMarkerPath = (snapshotDir, snapshotId) =>
   join(resolve(snapshotDir, '..'), `.${snapshotId}${SNAPSHOT_IN_PROGRESS_MARKER}`);
+const markerExistsAt = (path) =>
+  access(path).then(
+    () => true,
+    (err) => err?.code === 'ENOENT' || err?.code === 'ENOTDIR' ? false : true,
+  );
 const markerExists = (snapshotDir, snapshotId) =>
   Promise.all([
-    access(markerPath(snapshotDir)).then(() => true, () => false),
+    markerExistsAt(markerPath(snapshotDir)),
     snapshotId
-      ? access(parentMarkerPath(snapshotDir, snapshotId)).then(() => true, () => false)
+      ? markerExistsAt(parentMarkerPath(snapshotDir, snapshotId))
       : false,
   ]).then(([snapshotMarker, parentMarker]) => snapshotMarker || parentMarker);
 
-/**
- * Reject a snapshot that is still being written. Every consumer that reads a
- * snapshot as if it were finished — download, file restore, DB restore — must
- * call this; restoring half a backup over live data is the worst outcome here.
- */
+const failedMarkerExists = (snapshotDir) =>
+  markerExistsAt(failedMarkerPath(snapshotDir));
+
+async function snapshotState(snapshotDir, snapshotId) {
+  const [markedInProgress, failed] = await Promise.all([
+    markerExists(snapshotDir, snapshotId),
+    failedMarkerExists(snapshotDir),
+  ]);
+  return {
+    failed,
+    // Once `.failed` exists the run is finished even if marker cleanup was
+    // interrupted. The durable failed state still blocks every restore.
+    incomplete: snapshotId === activeSnapshotId || (markedInProgress && !failed),
+  };
+}
+
+/** Reject a snapshot that is still being written before any consumer reads it. */
 async function assertSnapshotComplete(snapshotDir, snapshotId) {
-  const incomplete = snapshotId === activeSnapshotId || await markerExists(snapshotDir, snapshotId);
+  const { incomplete } = await snapshotState(snapshotDir, snapshotId);
   if (incomplete) {
     throw new ServerError(`Snapshot is still being written: ${snapshotId}`, {
       status: 409,
       code: 'SNAPSHOT_INCOMPLETE',
+    });
+  }
+}
+
+/** Reject snapshots whose backup run finished unsuccessfully before restoring. */
+async function assertSnapshotRestorable(snapshotDir, snapshotId) {
+  const { incomplete, failed } = await snapshotState(snapshotDir, snapshotId);
+  if (incomplete) {
+    throw new ServerError(`Snapshot is still being written: ${snapshotId}`, {
+      status: 409,
+      code: 'SNAPSHOT_INCOMPLETE',
+    });
+  }
+  if (failed) {
+    throw new ServerError(`Snapshot backup failed: ${snapshotId}. Choose a completed backup to restore.`, {
+      status: 409,
+      code: 'SNAPSHOT_FAILED',
     });
   }
 }
@@ -408,20 +445,32 @@ export async function runBackup(destPath, io = null, { excludePaths = [], disabl
   let changedFiles = [];
   let manifest;
 
-  const clearInProgress = async () => {
+  const clearInProgressMarkers = async () => {
     if (snapshotDir) await unlink(markerPath(snapshotDir)).catch(() => {});
     if (parentMarker) await unlink(parentMarker).catch(() => {});
+  };
+
+  const releaseActiveSnapshot = () => {
     activeSnapshotId = null;
   };
 
   const complete = async (result) => {
-    await clearInProgress();
+    if (snapshotDir) await unlink(failedMarkerPath(snapshotDir)).catch(() => {});
+    await clearInProgressMarkers();
+    releaseActiveSnapshot();
     isRunning = false;
     return result;
   };
 
   const fail = async (err) => {
-    await clearInProgress();
+    // Persist failure BEFORE removing the incomplete guards. If the marker
+    // cannot be written, retain those guards so a partial tree never becomes a
+    // restore source. The process lock is independent and is always released.
+    const failureRecorded = snapshotDir
+      ? await writeFile(failedMarkerPath(snapshotDir), '').then(() => true, () => false)
+      : false;
+    if (failureRecorded) await clearInProgressMarkers();
+    releaseActiveSnapshot();
     isRunning = false;
     await saveState({ lastRun: new Date().toISOString(), status: 'error', error: err.message, pgBackup: null }).catch(() => {});
     if (io) io.emit('backup:failed', { snapshotId, error: err.message });
@@ -700,7 +749,7 @@ export async function generateManifest(snapshotDataDir, manifestPath, pgDumpPath
 /**
  * List all snapshots in the backup destination.
  * @param {string} destPath - Path to external drive backup root
- * @returns {Array<{ id, createdAt, fileCount }>} sorted newest-first
+ * @returns {Array<{ id, createdAt, fileCount, incomplete, failed }>} sorted newest-first
  */
 export async function listSnapshots(destPath) {
   if (!destPath) return [];
@@ -725,12 +774,13 @@ export async function listSnapshots(destPath) {
       // Report a still-being-written snapshot rather than hiding it: the row is
       // real and the user should see the run in flight, but download and restore
       // must not be offered for it. Mirrors assertSnapshotComplete's two signals.
-      const incomplete = id === activeSnapshotId || await markerExists(snapshotDir, id);
+      const { incomplete, failed } = await snapshotState(snapshotDir, id);
       return {
         id,
         createdAt: manifest?.generatedAt ?? null,
         fileCount: manifest?.fileCount ?? 0,
-        incomplete
+        incomplete,
+        failed,
       };
     })
   );
@@ -838,7 +888,7 @@ export async function openSnapshotStream(destPath, snapshotId) {
  */
 export async function restoreSnapshot(destPath, snapshotId, { dryRun = true, subdirFilter = null } = {}) {
   const { snapshotsRoot, snapshotDir } = resolveSnapshotPath(destPath, snapshotId);
-  await assertSnapshotComplete(snapshotDir, snapshotId);
+  await assertSnapshotRestorable(snapshotDir, snapshotId);
   const srcDir = join(snapshotDir, 'data');
 
   // Defense-in-depth for non-route callers (the route already validates via
@@ -901,7 +951,7 @@ export async function restoreSnapshot(destPath, snapshotId, { dryRun = true, sub
  */
 export async function restorePostgres(destPath, snapshotId, { dryRun = true } = {}) {
   const { snapshotDir } = resolveSnapshotPath(destPath, snapshotId);
-  await assertSnapshotComplete(snapshotDir, snapshotId);
+  await assertSnapshotRestorable(snapshotDir, snapshotId);
   const sqlPath = join(snapshotDir, 'portos-db.sql');
 
   const info = await stat(sqlPath).catch(() => null);

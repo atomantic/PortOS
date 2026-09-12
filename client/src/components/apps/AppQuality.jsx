@@ -30,6 +30,17 @@ export default function AppQuality({ app, detail = false }) {
         Assessments describe the code before fixes. The overall score is the equal-weight mean of broad, medium/high-confidence assessments from the last 30 days.
         {' '}{quality?.ratedCategories ?? 0}/{quality?.totalCategories ?? 0} categories contribute. Missing, partial, low-confidence and stale assessments are excluded, not counted as perfect.
       </p>
+      <details className="text-xs text-gray-400">
+        <summary className="cursor-pointer text-port-accent">How audit scores work</summary>
+        <p className="mt-1">
+          Scores are the auditing agent’s evidence-based assessment, not a calculation from the number of issues filed.
+          {' '}90–100 means no material defect found after broad review; 70–89 means localized moderate debt;
+          {' '}40–69 means significant recurring or widespread problems; 10–39 means severe defects in core workflows;
+          {' '}0–9 means pervasive critical failure. A run with no findings can therefore score below 100.
+          {' '}Worst severity 0/10 means no material finding was verified, not a perfect category score.
+          {' '}Assessment details contain the agent’s stated rationale; coverage and confidence describe the strength of its evidence.
+        </p>
+      </details>
       {quality?.federation && (
         <p className="text-xs text-gray-400">
           Unified app score: newest assessment per category across this install and {quality.federation.available ?? 0} available sync peers with the same repository. Versions may differ.
@@ -65,6 +76,11 @@ export default function AppQuality({ app, detail = false }) {
                     {category.assessedAt && ` · ${formatDateShort(category.assessedAt)}`}</div>
                   <Link to={runnerLink(category.id)} aria-label={`Configure and run ${category.label}`} className="mt-2 inline-flex items-center rounded border border-port-accent bg-port-accent/15 px-2.5 py-1.5 text-xs font-medium text-port-accent transition-colors hover:bg-port-accent/25">Configure and run</Link>
                   {category.summary && <details className="mt-1"><summary className="cursor-pointer text-port-accent">Assessment details</summary><p className="break-words">{category.summary}</p></details>}
+                  {category.id === 'better-dependency-freedom' && <p className="mt-1 text-xs">
+                    Dependency freedom assesses whether packages earn their place, not whether the project has zero dependencies.
+                    {' '}There is no automatic penalty for dependency count. Zero removal candidates or issues filed does not guarantee 100/100:
+                    {' '}the clean-audit range is 90–100. The assessment rationale should explain the chosen score.
+                  </p>}
                   {category.totalFiles > 0 && <div>{category.scannedFiles}/{category.totalFiles} files scanned · Worst severity: {category.worstSeverity}/10</div>}
                   {category.sourcePeerName && !category.sourcePeerId && <div>Source: {category.sourcePeerName}</div>}
                   {category.sourcePeerId && <div>Source: {category.sourcePeerName || 'federated peer'} · <Link className="text-port-accent hover:underline" to="/instances">View instances</Link></div>}
