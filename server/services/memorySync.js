@@ -17,6 +17,8 @@
  */
 
 import { query, withTransaction, arrayToPgvector, pgvectorToArray } from '../lib/db.js';
+import { PERSISTENT_MIND_ID } from '../lib/persistentMindTrajectory.js';
+import { PERSISTENT_MIND_CHOSEN_NAME_TAG } from '../lib/persistentMindChosenName.js';
 import { dedupeByKey } from '../lib/arrayUtils.js';
 
 /**
@@ -37,9 +39,11 @@ export async function getChangesSince(sinceSequence = '0', limit = 100) {
             origin_instance_id
      FROM memories
      WHERE sync_sequence > $1
+       AND source_agent_id IS DISTINCT FROM $3
+       AND NOT ($4 = ANY(COALESCE(tags, '{}'::text[])))
      ORDER BY sync_sequence ASC
      LIMIT $2`,
-    [sinceSequence, limit + 1]
+    [sinceSequence, limit + 1, PERSISTENT_MIND_ID, PERSISTENT_MIND_CHOSEN_NAME_TAG]
   );
 
   const hasMore = result.rows.length > limit;
@@ -114,7 +118,8 @@ export async function applyRemoteChanges(incomingMemories) {
     return Number.isNaN(at) ? -Infinity : at;
   };
   const deduped = dedupeByKey(
-    incomingMemories,
+    incomingMemories.filter((mem) => mem.sourceAgentId !== PERSISTENT_MIND_ID
+      && !mem.tags?.includes(PERSISTENT_MIND_CHOSEN_NAME_TAG)),
     (mem) => mem.id,
     (held, next) => (lwwClock(held) >= lwwClock(next) ? held : next),
   );
@@ -143,6 +148,9 @@ export async function applyRemoteChanges(incomingMemories) {
         );
       });
 
+      params.push(PERSISTENT_MIND_ID, PERSISTENT_MIND_CHOSEN_NAME_TAG);
+      const localMindParam = params.length - 1;
+      const nameTagParam = params.length;
       // access_count and last_accessed are instance-local, not synced
       const result = await client.query(
         `INSERT INTO memories (
@@ -162,6 +170,8 @@ export async function applyRemoteChanges(incomingMemories) {
             source_app_id = EXCLUDED.source_app_id,
             origin_instance_id = EXCLUDED.origin_instance_id
           WHERE EXCLUDED.updated_at > memories.updated_at
+            AND memories.source_agent_id IS DISTINCT FROM $${localMindParam}
+            AND NOT ($${nameTagParam} = ANY(COALESCE(memories.tags, '{}'::text[])))
           RETURNING (xmax = 0) AS is_insert`,
         params
       );

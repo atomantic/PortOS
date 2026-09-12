@@ -80,6 +80,22 @@ const renderTab = (path = '/cos/mind') => render(
 );
 
 describe('MindTab', () => {
+  it('shows a prominent chosen identity and refreshes a rename from the trajectory notification', async () => {
+    api.getPersistentMind.mockResolvedValue(response({ identity: { mindId: 'cos-persistent-mind', name: 'Example Star' } }));
+    renderTab();
+    expect(await screen.findByRole('heading', { name: 'Example Star' })).toHaveAttribute('aria-live', 'polite');
+    api.getPersistentMind.mockResolvedValue(response({ identity: { mindId: 'cos-persistent-mind', name: 'Étoile' } }));
+    act(() => socket.emitServer('cos:mind:event', { kind: 'mind.capability.result' }));
+    expect(await screen.findByRole('heading', { name: 'Étoile' })).toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: 'Example Star' })).not.toBeInTheDocument();
+  });
+
+  it('shows the unnamed state without confusing the provider model with identity', async () => {
+    renderTab();
+    expect(await screen.findByRole('heading', { name: 'Name not yet chosen' })).toBeInTheDocument();
+    expect(screen.getByText(/Free to change later/)).toBeInTheDocument();
+  });
+
   beforeEach(() => {
     vi.clearAllMocks();
     socket.reset();

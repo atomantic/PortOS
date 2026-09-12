@@ -1,3 +1,4 @@
+import { resolvePersistentMindChosenName } from '../lib/persistentMindChosenName.js';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mock = vi.hoisted(() => ({
@@ -27,6 +28,7 @@ vi.mock('../lib/fileUtils.js', async (importOriginal) => ({
 vi.mock('./persistentMindContext.js', () => ({
   createPersistentMindMemoryFromCandidate: (...args) => mock.createPersistentMindMemoryFromCandidate(...args),
   readPersistentMindMemories: vi.fn(async () => mock.memories),
+  readPersistentMindName: vi.fn(async () => resolvePersistentMindChosenName(mock.memories)),
 }));
 vi.mock('./promptRunner.js', () => ({
   runPromptThroughProvider: (...args) => mock.runPrompt(...args),
@@ -62,6 +64,7 @@ const profile = { provider: { id: 'example-api', type: 'api' }, model: 'example-
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mock.memories = [{ id: 'memory-1', type: 'fact', content: 'A durable fact.', sourceAgentId: 'cos-persistent-mind', status: 'active' }];
   mock.root.config.persistentMindCapabilities = { createTasks: true };
   mock.readTaskCatalog.mockResolvedValue({ apps: [{ id: 'portos' }], providers: [{ id: 'codex' }] });
   mock.readTaskInventory.mockResolvedValue([]);
@@ -76,6 +79,33 @@ beforeEach(() => {
     memoryCandidates: [{ content: 'Remember this.', type: 'fact', category: 'other', tags: [], protection: 'important' }],
     selfWake: null,
   }) });
+});
+
+describe('naming on authorized turns', () => {
+  it('asks unnamed minds to choose and refreshes identity after a successful semantic action', async () => {
+    mock.root.config.persistentMindCapabilities = { manageMind: true };
+    mock.runPrompt.mockResolvedValueOnce({ text: JSON.stringify({ message: '', toolCalls: [{ requestId: 'choose', name: 'mind.choose-name', arguments: { name: 'Example Star' } }] }) });
+    mock.executeToolCall.mockImplementationOnce(async () => {
+      mock.memories = [{ content: 'Example Star', tags: ['mind:chosen-name', 'mind:core-identity'] }];
+      return { state: 'completed', result: { success: true, name: 'Example Star' } };
+    });
+    const recordCapabilityEvent = vi.fn();
+    await createPersistentMindTurnAdapter().run({ ...profile, turnId: 'name-turn', wake: { kind: 'self' }, context: { text: 'Continuity' }, recordCapabilityEvent });
+    expect(mock.runPrompt.mock.calls[0][0].prompt).toContain('Choose a name for yourself on this normally authorized wake using mind.choose-name');
+    expect(mock.runPrompt.mock.calls[1][0].prompt).toContain('Current chosen display name: "Example Star"');
+    expect(mock.runPrompt.mock.calls[1][0].prompt).not.toContain('You have no chosen name yet');
+    expect(recordCapabilityEvent).toHaveBeenCalledWith(expect.objectContaining({ kind: 'result', data: expect.objectContaining({ tool: 'mind.choose-name', success: true, displayText: 'Chosen display name: Example Star' }) }));
+  });
+
+  it('preserves an existing conversational choice and offers unnamed minds the existing protected-memory path without granting tools', async () => {
+    mock.memories = [{ content: 'My chosen name is Example.', protection: 'core-identity' }];
+    await createPersistentMindTurnAdapter().run({ ...profile, turnId: 'named-turn', wake: { kind: 'self' }, context: { text: '' } });
+    expect(mock.runPrompt.mock.calls[0][0].prompt).toContain('Current chosen display name: "Example"');
+    expect(mock.runPrompt.mock.calls[0][0].prompt).not.toContain('You have no chosen name yet');
+    mock.memories = [];
+    await createPersistentMindTurnAdapter().run({ ...profile, turnId: 'unnamed-turn', wake: { kind: 'self' }, context: { text: '' } });
+    expect(mock.runPrompt.mock.calls[1][0].prompt).toContain('as a core-identity memory');
+  });
 });
 
 describe('persistent mind adapter', () => {
