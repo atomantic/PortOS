@@ -238,7 +238,7 @@ export default function PersistentMindThinkingPresets({
             loading={providersLoading}
             disabled={disabled || saving}
             emptyProviderOption="Select an AI provider"
-            emptyModelOption="Select a model"
+            emptyModelOption="Select a model" includeDefaultModel
             alwaysShowModel
             highlightToolUse
             layout="stacked"

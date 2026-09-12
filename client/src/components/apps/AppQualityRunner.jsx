@@ -76,7 +76,7 @@ export default function AppQualityRunner({ app, children }) {
     <ProviderModelSelector providers={picker.providers} selectedProviderId={picker.selectedProviderId} selectedModel={picker.selectedModel}
       availableModels={picker.availableModels} onProviderChange={value => { picker.setSelectedProviderId(value); setEffort(''); }}
       onModelChange={picker.setSelectedModel} effort={effort} onEffortChange={setEffort} loading={picker.loading} disabled={busy}
-      emptyProviderOption="Select a subscription provider" emptyModelOption="Select a model" highlightToolUse />
+      emptyProviderOption="Select a subscription provider" emptyModelOption="Select a model" includeDefaultModel highlightToolUse />
     <p className="text-xs text-gray-400">{taskTypes.length} scheduled agents, run sequentially within this batch. Launch another batch to run checks in parallel. {mode === 'fix' ? 'Each selected audit can change code and open a PR.' : 'Findings become issues; no fixes or backlog claim jobs.'} Schedules can stay disabled. The Improve setting still applies.</p>
     <details className="text-xs"><summary className="cursor-pointer text-port-accent">Selected checks ({taskTypes.length})</summary><p className="mt-1">{categories.filter(category => taskTypes.includes(category.id)).map(category => category.label).join(', ') || 'No checks need evidence. Unavailable assessments and N/A categories are excluded.'}</p></details>
     <button type="button" onClick={start} disabled={busy || picker.loading || !picker.selectedProviderId || !picker.selectedModel || !taskTypes.length || app.quality?.unavailable}

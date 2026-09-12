@@ -38,6 +38,8 @@
  *   value `""` and this label, letting the caller represent a "no explicit
  *   provider / use the default" choice. Omit (the default) to force a selection.
  * @param {string} [props.emptyModelOption] - Same idea for the model select.
+ * @param {boolean} [props.includeDefaultModel] - Offer the configured default as
+ *   an explicit pin on required-model forms, even when absent from the catalog.
  * @param {boolean} [props.alwaysShowModel] - Render the model select even when
  *   `availableModels` is empty (default: only render it when there are models).
  *   Pair with `emptyModelOption` when the default choice is itself meaningful.
@@ -109,6 +111,7 @@ export default function ProviderModelSelector({
   emptyProviderOption,
   emptyModelOption,
   alwaysShowModel = false,
+  includeDefaultModel = false,
   layout = 'row',
   highlightToolUse = false,
   effort,
@@ -154,7 +157,15 @@ export default function ProviderModelSelector({
   // pinned to a now-disabled provider still renders its value instead of
   // silently blanking the select (`selectableProviders` is the one rule).
   const visibleProviders = selectableProviders(providerList, { selectedId: selectedProviderId, allowed: providerAllowed });
-  const compatibleModels = filterHardwareCompatibleProviderModels(availableModels, selectedProvider)
+  // Defaults may be omitted from a provider's browsable catalog. Offer a real
+  // pin as well as the blank inheritance option, including on required forms.
+  const catalogModels = Array.isArray(availableModels) ? availableModels : [];
+  const defaultModel = selectedProvider?.defaultModel;
+  const selectableModels = includeDefaultModel && defaultModel
+    && !catalogModels.some((model) => modelOption(model)?.value === defaultModel)
+    ? [defaultModel, ...catalogModels]
+    : catalogModels;
+  const compatibleModels = filterHardwareCompatibleProviderModels(selectableModels, selectedProvider)
     .filter((model) => !modelAllowed || modelAllowed(model, selectedProvider));
   // Keep a configured default visible even when it is a CLI-default sentinel
   // omitted from the browsable catalog, alongside unavailable saved pins.

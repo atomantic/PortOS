@@ -28,7 +28,7 @@ export default function MaintenanceStepSettings({ run, step, providers, loading,
         onProviderChange={providerId => setDraft({ providerId, model: '', effort: '' })}
         onModelChange={model => setDraft(current => ({ ...current, model }))}
         effort={draft.effort} onEffortChange={effort => setDraft(current => ({ ...current, effort }))}
-        emptyProviderOption="Select a subscription provider" emptyModelOption="Select a model"
+        emptyProviderOption="Select a subscription provider" emptyModelOption="Select a model" includeDefaultModel
         alwaysShowModel layout="stacked" loading={loading} disabled={saving} />
       <p className="text-port-text-muted">Blank effort uses the task’s saved setting. Applies to this stage only.</p>
       <button type="button" onClick={save} disabled={saving || loading || !dirty || !provider || !draft.model}
