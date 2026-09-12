@@ -724,8 +724,11 @@ describe('mediaJobQueue', () => {
     expect(result).toMatchObject({ ok: false, code: 'ALREADY_TERMINAL', error: 'Job is already finishing' });
     expect(mediaJobQueue.getJob(job.jobId).cancelRequested).toBeFalsy();
     expect(mediaJobQueue.getJob(job.jobId).params.videoProduction.submissionUncertain).toBe(false);
-    const persisted = JSON.parse(readFileSync(join(tempDataDir, 'media-jobs.json'), 'utf8'));
-    expect(JSON.stringify(persisted)).not.toContain('"submissionUncertain":true');
+    const snapshotFile = join(tempDataDir, 'media-jobs.json');
+    await waitFor(() => JSON.parse(readFileSync(snapshotFile, 'utf8')).jobs
+      .some((entry) => entry.id === job.jobId && entry.status === 'running'));
+    const persisted = JSON.parse(readFileSync(snapshotFile, 'utf8')).jobs.find((entry) => entry.id === job.jobId);
+    expect(persisted.params.videoProduction.submissionUncertain).toBe(false);
     videoGenEvents.emit('failed', { generationId: job.jobId, error: 'History write failed' });
     await waitFor(() => mediaJobQueue.getJob(job.jobId).status === 'failed');
     expect(mediaJobQueue.getJob(job.jobId).error).toBe('History write failed');
