@@ -22,6 +22,8 @@
 import { rm, stat } from 'fs/promises';
 import { join, resolve, sep } from 'path';
 import { ServerError } from '../lib/errorHandler.js';
+import { withAbortTimeout } from '../lib/abortTimeout.js';
+import { anyAbortSignal } from '../lib/requestAbort.js';
 import {
   assessDownloadPreflight,
   assertDownloadFits,
@@ -125,7 +127,20 @@ const isFinishedOnDisk = async (destPath, expectedBytes) =>
  * "already on disk" would disable the very button that completes it.
  */
 async function planRepoDownload({ repo, token, signal, cacheDir }) {
-  const model = await fetchHuggingfaceModel(repo, { token, signal, blobs: true });
+  const model = await withAbortTimeout(METADATA_FETCH_TIMEOUT_MS, async (deadline) => {
+    const boundedSignal = anyAbortSignal([signal, deadline]);
+    try {
+      return await fetchHuggingfaceModel(repo, { token, signal: boundedSignal, blobs: true });
+    } catch (err) {
+      if (deadline.aborted && !signal?.aborted) {
+        throw new ServerError(
+          `Hugging Face metadata lookup for ${repo} timed out — retry the download.`,
+          { status: 504, code: 'SLOTSTREAM_METADATA_TIMEOUT' },
+        );
+      }
+      throw err;
+    }
+  });
   const siblings = Array.isArray(model?.siblings) ? model.siblings : [];
   const files = selectSlotstreamRepoFiles(siblings);
   // A repo whose only surviving files are config/tokenizer would otherwise
@@ -183,7 +198,6 @@ export async function previewSlotstreamDownload({ model = null, cacheDir } = {})
   const plan = await planRepoDownload({
     repo,
     token,
-    signal: AbortSignal.timeout(METADATA_FETCH_TIMEOUT_MS),
     cacheDir,
   });
   const remaining = Math.max(0, plan.totalBytes - plan.finishedBytes - plan.partialBytes);

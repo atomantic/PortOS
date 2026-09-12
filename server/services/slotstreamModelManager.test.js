@@ -58,6 +58,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  vi.useRealTimers();
   await rm(cacheDir, { recursive: true, force: true });
   vi.unstubAllGlobals();
 });
@@ -182,6 +183,100 @@ describe('downloadSlotstreamModel', () => {
     expect(result.error).toBeTruthy();
     expect(frames.at(-1).event).toBe('error');
     expect(isSlotstreamDownloadInFlight(join(cacheDir, DIR_NAME))).toBe(false);
+  });
+
+  it.each(['headers', 'body'])('times out hanging metadata %s, emits an error, and releases the exclusive slot', async (phase) => {
+    vi.useFakeTimers();
+    vi.stubGlobal('fetch', vi.fn(async (_url, { signal }) => {
+      if (phase === 'headers') {
+        return new Promise((_resolve, reject) => {
+          signal.addEventListener('abort', () => reject(signal.reason), { once: true });
+        });
+      }
+      return {
+        ok: true,
+        status: 200,
+        text: () => new Promise((_resolve, reject) => {
+          signal.addEventListener('abort', () => reject(signal.reason), { once: true });
+        }),
+      };
+    }));
+    const frames = [];
+    const download = downloadSlotstreamModel({ model: REPO, cacheDir, onProgress: (frame) => frames.push(frame) });
+
+    await vi.waitFor(() => expect(globalThis.fetch).toHaveBeenCalledOnce());
+    await vi.advanceTimersByTimeAsync(15_000);
+    await expect(download).resolves.toMatchObject({
+      success: false,
+      cancelled: false,
+      code: 'SLOTSTREAM_METADATA_TIMEOUT',
+    });
+    expect(frames.at(-1)).toMatchObject({ event: 'error' });
+    expect(frames.at(-1).message).toMatch(/metadata lookup.*timed out.*retry/i);
+    expect(isSlotstreamDownloadInFlight(join(cacheDir, DIR_NAME))).toBe(false);
+  });
+
+  it('times out a hanging metadata body during preview', async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal('fetch', vi.fn(async (_url, { signal }) => ({
+      ok: true,
+      status: 200,
+      text: () => new Promise((_resolve, reject) => {
+        signal.addEventListener('abort', () => reject(signal.reason), { once: true });
+      }),
+    })));
+    const preview = previewSlotstreamDownload({ model: REPO, cacheDir });
+    const assertion = expect(preview).rejects.toMatchObject({ code: 'SLOTSTREAM_METADATA_TIMEOUT', status: 504 });
+
+    await vi.waitFor(() => expect(globalThis.fetch).toHaveBeenCalledOnce());
+    await vi.advanceTimersByTimeAsync(15_000);
+    await assertion;
+  });
+
+  it('preserves explicit cancellation while metadata is pending', async () => {
+    vi.stubGlobal('fetch', vi.fn((_url, { signal }) => (
+      new Promise((_resolve, reject) => signal.addEventListener('abort', () => reject(signal.reason), { once: true }))
+    )));
+    const frames = [];
+    const download = downloadSlotstreamModel({ model: REPO, cacheDir, onProgress: (frame) => frames.push(frame) });
+    await vi.waitFor(() => expect(globalThis.fetch).toHaveBeenCalledOnce());
+    expect(cancelSlotstreamModelDownload({ model: REPO, cacheDir })).toBe(true);
+
+    await expect(download).resolves.toMatchObject({
+      success: false,
+      cancelled: true,
+      code: 'SLOTSTREAM_DOWNLOAD_CANCELLED',
+    });
+    expect(frames.at(-1).event).toBe('cancelled');
+  });
+
+  it('does not apply the metadata deadline to a checkpoint transfer', async () => {
+    vi.useFakeTimers();
+    let transferSignal;
+    let finishShard;
+    vi.stubGlobal('fetch', vi.fn(async (url, options) => {
+      const href = String(url);
+      if (href.startsWith('https://huggingface.co/api/models/')) return metadataResponse();
+      const name = Object.keys(FILES).find((file) => href.endsWith(`/${file}`));
+      if (name === 'config.json') return new Response(CONFIG, { headers: { 'content-length': String(CONFIG.length) } });
+      transferSignal = options.signal;
+      const body = new ReadableStream({
+        start(controller) {
+          finishShard = () => {
+            controller.enqueue(new TextEncoder().encode(SHARD));
+            controller.close();
+          };
+        },
+      });
+      return new Response(body, { headers: { 'content-length': String(SHARD.length) } });
+    }));
+    const download = downloadSlotstreamModel({ model: REPO, cacheDir });
+    await vi.waitFor(() => expect(transferSignal).toBeDefined());
+
+    await vi.advanceTimersByTimeAsync(15_000);
+    expect(transferSignal.aborted).toBe(false);
+    finishShard();
+    await expect(download).resolves.toMatchObject({ success: true });
   });
 
   it('refuses a second download of the same checkpoint while one is running', async () => {
