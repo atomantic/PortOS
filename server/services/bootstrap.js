@@ -923,14 +923,15 @@ const withGrace = (label, ms, run) => new Promise((resolve) => {
   setTimeout(() => finishWithError(`⚠️ ${label} close exceeded ${ms}ms — proceeding`), ms).unref?.();
 });
 
-// graceMs is deliberately short: closeAllConnections() force-drops every
-// connection, so there is no graceful drain left to wait for — the only thing that
-// can outlast it is a WebSocket-upgraded socket the server no longer tracks (and
+// graceMs is deliberately bounded: closeAllConnections() force-drops every
+// connection, so there is no graceful drain left to wait for. The close callback
+// still needs a short window for TLS/socket teardown — the only thing that can
+// outlast it is a WebSocket-upgraded socket the server no longer tracks (and
 // io.close()'s engine.close() already tore those down protocol-side; the OS reaps
-// the TCP remnant on process.exit). So don't tax every restart waiting on it.
+// the TCP remnant on process.exit).
 // ERR_SERVER_NOT_RUNNING means it was already closed (io.close() closes whichever
 // server is its current this.httpServer) — success for us, not a failure.
-const closeServer = (server, label, graceMs = 250) => withGrace(label, graceMs, ({ finish, finishWithError }) => {
+const closeServer = (server, label, graceMs = 1000) => withGrace(label, graceMs, ({ finish, finishWithError }) => {
   if (!server) return finish();
   server.close((err) => {
     if (err && err.code !== 'ERR_SERVER_NOT_RUNNING') finishWithError(`⚠️ Error closing ${label}`, err);
