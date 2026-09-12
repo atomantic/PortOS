@@ -43,14 +43,66 @@ vi.mock('../lib/downloadPreflight.js', async (importOriginal) => {
     },
   };
 });
+// `pathExists` is what routes upgradeBackend to the macOS .app path (and what the
+// extract step asks about the unzipped bundle), so it has to be answerable per
+// test rather than a constant false.
+const pathExistsImpl = vi.hoisted(() => ({ fn: async () => false }));
 vi.mock('../lib/fileUtils.js', async () => {
   const fsMod = await import('fs');
   return {
     PATHS: state,
-    pathExists: async () => false,
+    pathExists: async (p) => pathExistsImpl.fn(p),
+    ensureDir: async (dir) => fsMod.mkdirSync(dir, { recursive: true }),
     sleep: async () => {},
     atomicWrite: async (file, data) => fsMod.writeFileSync(file, data),
   };
+});
+
+// The macOS .app upgrade renames / removes / stats REAL absolute paths under
+// /Applications. Model only those in memory — everything else (the temp dir the
+// download actually writes to) keeps the real implementation — so no test can
+// touch the developer machine's own Ollama install.
+const appFs = vi.hoisted(() => {
+  const enoent = (op, p) => Object.assign(new Error(`ENOENT: ${op} '${p}'`), { code: 'ENOENT' });
+  return {
+    entries: new Map(), // absolute path -> 'dir' | 'file'
+    renameFailure: null, // { code, message } forced on the next /Applications rename
+    manages: (p) => String(p).startsWith('/Applications/'),
+    enoent,
+    reset() {
+      this.entries.clear();
+      this.renameFailure = null;
+    },
+  };
+});
+vi.mock('fs/promises', async (importOriginal) => {
+  const real = await importOriginal();
+  const patched = {
+    rename: async (from, to) => {
+      if (!appFs.manages(from) && !appFs.manages(to)) return real.rename(from, to);
+      if (appFs.renameFailure) {
+        const forced = appFs.renameFailure;
+        appFs.renameFailure = null;
+        throw Object.assign(new Error(forced.message), { code: forced.code });
+      }
+      if (!appFs.entries.has(from)) throw appFs.enoent('rename', from);
+      appFs.entries.set(to, appFs.entries.get(from));
+      appFs.entries.delete(from);
+    },
+    rm: async (target, opts) => {
+      if (!appFs.manages(target)) return real.rm(target, opts);
+      appFs.entries.delete(target);
+    },
+    stat: async (target) => {
+      if (!appFs.manages(target)) return real.stat(target);
+      const kind = appFs.entries.get(target);
+      if (!kind) throw appFs.enoent('stat', target);
+      return { isDirectory: () => kind === 'dir' };
+    },
+  };
+  // Patch the default export too, so a module importing `fs from 'fs/promises'`
+  // can't reach the unguarded real calls through the other spelling.
+  return { ...real, ...patched, default: { ...(real.default ?? real), ...patched } };
 });
 
 const mocks = vi.hoisted(() => ({
@@ -174,6 +226,8 @@ beforeEach(async () => {
   for (const fn of Object.values(mocks.providers)) fn.mockReset();
   cp.spawn = cp.defaults.spawn; // reset child_process drivers to benign defaults
   cp.execFile = cp.defaults.execFile;
+  pathExistsImpl.fn = async () => false;
+  appFs.reset();
   delete process.env.LLM_BACKEND;
   state.root = fs.mkdtempSync(path.join(os.tmpdir(), 'portos-llm-svc-'));
   vi.resetModules();
@@ -747,6 +801,133 @@ describe('localLlm', () => {
       } finally {
         restorePlatform();
       }
+    });
+  });
+
+  // The .app swap is the only upgrade path that REPLACES a working install on
+  // disk, so each test below pins where the bundle ends up — not which commands
+  // ran. Before #7238 the old bundle was `rm`'d first and its failure swallowed,
+  // which could leave the machine with no Ollama at all, or a nested
+  // Ollama.app/Ollama.app reported as a successful upgrade.
+  describe('upgradeBackend — macOS Ollama.app swap', () => {
+    const APP = '/Applications/Ollama.app';
+    const aside = () => [...appFs.entries.keys()].filter((p) => p.startsWith(`${APP}.portos-old-`));
+
+    // Runs the .app path end to end with every shell-out stubbed. `mv` mutates the
+    // in-memory /Applications model the way the real one would, so the assertions
+    // can read the resulting filesystem shape.
+    const runMacUpgrade = async ({ mv = 'ok', running = '0.33.3' } = {}) => {
+      const restorePlatform = pinPlatform('darwin');
+      const extracted = { present: true };
+      // `pathExists(APP)` is the dispatch check that routed upgradeBackend here, so
+      // it answers true independently of the in-memory model — which lets a test
+      // exercise the bundle being gone by the time the rename runs.
+      pathExistsImpl.fn = async (p) => (p === APP ? true : p.endsWith('/Ollama.app') && extracted.present);
+      vi.stubGlobal('fetch', vi.fn(async (url) => {
+        if (String(url).includes('api.github.com')) {
+          return {
+            ok: true,
+            json: async () => ({ tag_name: 'v0.34.0', assets: [{ name: 'Ollama-darwin.zip', size: 1024, browser_download_url: 'https://example.com/Ollama-darwin.zip' }] })
+          };
+        }
+        return { ok: true, body: new ReadableStream({ start(c) { c.enqueue(new Uint8Array([0x50, 0x4b])); c.close(); } }) };
+      }));
+      cp.spawn = vi.fn((cmd, args) => {
+        if (cmd !== 'mv') return fakeChild();
+        if (mv === 'fails') return fakeChild({ code: 1, lines: ['mv: Operation not permitted'] });
+        // A real `mv` consumes the source; `mv === 'nonDirectory'` is the
+        // pathological landing this swap must refuse to call success.
+        extracted.present = false;
+        appFs.entries.set(args[1], mv === 'nonDirectory' ? 'file' : 'dir');
+        return fakeChild();
+      });
+      mocks.ollama.getStatus
+        .mockResolvedValueOnce({ version: '0.33.3' })   // `before`
+        .mockResolvedValueOnce({ version: running });   // `after`, post-relaunch
+      try {
+        return await svc.upgradeBackend('ollama');
+      } finally {
+        // An abort short-circuits before `after` is read, and `clearAllMocks` in
+        // beforeEach clears recorded calls but NOT a queued `…Once` value — so an
+        // unconsumed one would surface in whichever later test calls getStatus next.
+        mocks.ollama.getStatus.mockReset();
+        vi.unstubAllGlobals();
+        restorePlatform();
+      }
+    };
+
+    it('aborts with the install fully intact when the old bundle cannot be moved aside', async () => {
+      appFs.entries.set(APP, 'dir');
+      appFs.renameFailure = { code: 'EPERM', message: 'Operation not permitted' };
+
+      const r = await runMacUpgrade();
+
+      expect(r).toMatchObject({ success: false, error: expect.stringContaining('Could not move the existing') });
+      expect(r.error).toMatch(/untouched/);
+      // The working install is still exactly where it was, and no `mv` was tried.
+      expect(appFs.entries.get(APP)).toBe('dir');
+      expect(aside()).toEqual([]);
+      expect(cp.spawn.mock.calls.map(([cmd]) => cmd)).not.toContain('mv');
+    });
+
+    it('restores the previous bundle and keeps the download when the install fails', async () => {
+      appFs.entries.set(APP, 'dir');
+
+      const r = await runMacUpgrade({ mv: 'fails' });
+
+      expect(r.success).toBe(false);
+      expect(r.error).toMatch(/previous Ollama install has been restored/);
+      // The rollback landed: the bundle is back at its real path, nothing stranded.
+      expect(appFs.entries.get(APP)).toBe('dir');
+      expect(aside()).toEqual([]);
+      // …and the downloaded bundle survived, so the user can finish by hand.
+      expect(r.error).toMatch(/downloaded bundle is still at .*Ollama\.app/);
+    });
+
+    it('refuses to call a non-directory landing a successful upgrade', async () => {
+      // The pre-#7238 `rm`-then-`mv` could leave Ollama.app/Ollama.app and report
+      // success. Anything that is not a bundle directory must roll back instead.
+      appFs.entries.set(APP, 'dir');
+
+      const r = await runMacUpgrade({ mv: 'nonDirectory' });
+
+      expect(r).toMatchObject({ success: false, error: expect.stringContaining('not a directory') });
+      expect(appFs.entries.get(APP)).toBe('dir'); // restored, not the stray file
+      expect(aside()).toEqual([]);
+    });
+
+    it('installs over a previous bundle and clears the aside copy on success', async () => {
+      appFs.entries.set(APP, 'dir');
+
+      const r = await runMacUpgrade({ running: '0.34.0' });
+
+      expect(r).toMatchObject({ success: true, backend: 'ollama' });
+      expect(r.note).toContain('0.33.3 → 0.34.0');
+      expect(appFs.entries.get(APP)).toBe('dir');
+      expect(aside()).toEqual([]); // no `.portos-old-*` litter left in /Applications
+    });
+
+    it('reports failure when the running version did not advance', async () => {
+      // Matches the Homebrew path's check: a second install ahead of the bundle on
+      // PATH can keep serving the old binary past a perfectly successful swap.
+      appFs.entries.set(APP, 'dir');
+
+      const r = await runMacUpgrade({ running: '0.33.3' });
+
+      expect(r).toMatchObject({ success: false, backend: 'ollama' });
+      expect(r.error).toMatch(/still 0\.33\.3/);
+      expect(appFs.entries.get(APP)).toBe('dir'); // the new bundle stays installed
+    });
+
+    it('treats a missing bundle as a fresh install rather than an aside-move failure', async () => {
+      // Nothing registered at /Applications, so the rename raises ENOENT: that is
+      // "nothing to move aside", not a failure — the upgrade proceeds with no
+      // rollback copy to clean up.
+      const r = await runMacUpgrade({ running: '0.34.0' });
+
+      expect(r.success).toBe(true);
+      expect(appFs.entries.get(APP)).toBe('dir');
+      expect(aside()).toEqual([]);
     });
   });
 
