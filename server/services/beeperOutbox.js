@@ -38,7 +38,7 @@
  * asserts that structurally rather than by convention.
  */
 
-import { query } from '../lib/db.js';
+import { query, withTransaction } from '../lib/db.js';
 import { BeeperApiError, getMessage, listMessagesPage, sendMessage } from './beeperClient.js';
 import { normalizeMessageRow } from './beeperSync.js';
 import { beeperSocketEvents } from './beeperSocketEvents.js';
@@ -114,6 +114,49 @@ let breaker = { tripped: false, reason: null, trippedAt: null };
 // outboxId → { chatId, body, pendingMessageId, requestedAt,
 //   deliveryOutcomeUnknown, timer, resolving }
 const pendingConfirmations = new Map();
+const localTransitions = new Map();
+const activeSends = new Set();
+export const PERSISTENCE_RETRY_DELAYS_MS = Object.freeze([1000, 2000, 4000]);
+const PERSISTENCE_RECOVERY_MESSAGE = 'Delivery unconfirmed: saving the send outcome failed. Check delivery to reconcile without sending again.';
+
+function invalidateOutbox(id) {
+  beeperSocketEvents.emit('invalidate', { kind: 'outbox.updated', chatID: null, ids: [id], seq: null, ts: new Date(runtime.now()).toISOString() });
+}
+
+function recoveryView(entry) {
+  if (!entry) return entry;
+  if (!localTransitions.has(entry.id)) return entry;
+  return { ...entry, state: 'awaiting-confirmation', errorCode: DELIVERY_UNCONFIRMED_CODE, errorMessage: PERSISTENCE_RECOVERY_MESSAGE };
+}
+
+// Own only local persistence here: the closure must NEVER contain a send POST.
+// Retain it after the bounded timer budget, so a human can resume it later.
+async function runLocalTransition(id, transition) {
+  if (transition.running) return transition.running;
+  runtime.clearTimeout(transition.timer);
+  transition.running = transition.write().then((value) => {
+    if (localTransitions.get(id) === transition) localTransitions.delete(id);
+    transition.committed?.(value);
+    invalidateOutbox(id);
+    return value;
+  }).catch(() => {
+    if (transition.attempt < PERSISTENCE_RETRY_DELAYS_MS.length) {
+      const delay = PERSISTENCE_RETRY_DELAYS_MS[transition.attempt++];
+      transition.timer = runtime.setTimeout(() => {
+        runLocalTransition(id, transition).catch((err) => console.error(`${LOG_PREFIX}: local recovery failed (${err.code || 'unknown'})`));
+      }, delay);
+    }
+    invalidateOutbox(id);
+    return null;
+  }).finally(() => { transition.running = null; });
+  return transition.running;
+}
+
+function persistTransition(id, write, committed) {
+  const transition = { write, committed, attempt: 0, running: null, timer: null };
+  localTransitions.set(id, transition);
+  return runLocalTransition(id, transition);
+}
 let invalidateListenerAttached = false;
 
 /** Test seam for injected time (mirrors `beeperSocket.js`'s runtime object). */
@@ -207,7 +250,7 @@ function registerSendSuccess() {
 const ENTRY_COLUMNS = `id, conversation_id AS "conversationId", chat_id AS "chatId", body, state,
   pending_message_id AS "pendingMessageId", message_id AS "messageId",
   error_code AS "errorCode", error_message AS "errorMessage",
-  created_at AS "createdAt", approved_at AS "approvedAt", sent_at AS "sentAt"`;
+  created_at AS "createdAt", updated_at AS "updatedAt", approved_at AS "approvedAt", sent_at AS "sentAt"`;
 
 async function readEntry(id) {
   const result = await query(`SELECT ${ENTRY_COLUMNS} FROM beeper_outbox WHERE id = $1`, [id]);
@@ -221,7 +264,7 @@ export async function listOutboxEntries({ conversationId, limit = 50 } = {}) {
      WHERE conversation_id = $1 ORDER BY created_at DESC LIMIT $2`,
     [conversationId, Math.min(200, Math.max(1, Math.trunc(limit) || 50))],
   );
-  return Array.isArray(result?.rows) ? result.rows : [];
+  return Array.isArray(result?.rows) ? result.rows.map(recoveryView) : [];
 }
 
 /**
@@ -413,31 +456,23 @@ export async function sendOutboxEntry(id, { confirmFirstContact = false } = {}) 
   // Retry is OFF (the client's send-safe default): no idempotency key means a
   // retried POST is a second real message. One attempt, one row, no second POST.
   const requestedAt = runtime.now();
+  activeSends.add(id);
   const result = await sendMessage(entry.chatId, { text: entry.body })
     .then((value) => ({ ok: true, value }))
     .catch((err) => ({ ok: false, err }));
+  activeSends.delete(id);
+  const confirmation = { ...entry, pendingMessageId: null, requestedAt };
 
   if (!result.ok) {
     const err = result.err;
     if (isDeliveryOutcomeUnknown(err)) {
-      const updated = await markAwaitingConfirmation(id, {
-        errorCode: DELIVERY_UNCONFIRMED_CODE,
-        errorMessage: DELIVERY_UNCONFIRMED_MESSAGE,
-      });
       registerSendFailure();
-      console.warn(`${LOG_PREFIX}: send response lost — delivery left unconfirmed, never re-sent`);
-      armConfirmation({
-        id,
-        chatId: entry.chatId,
-        conversationId: entry.conversationId,
-        body: entry.body,
-        pendingMessageId: null,
-        requestedAt,
-        deliveryOutcomeUnknown: true,
-      });
-      return updated;
+      const updated = await persistTransition(id,
+        () => markAwaitingConfirmation(id, { errorCode: DELIVERY_UNCONFIRMED_CODE, errorMessage: DELIVERY_UNCONFIRMED_MESSAGE }),
+        () => armConfirmation({ ...confirmation, deliveryOutcomeUnknown: true }));
+      return updated ?? recoveryView(entry);
     }
-    await markFailed(id, err?.code, err?.message);
+    await persistTransition(id, () => markFailed(id, err?.code, err?.message));
     registerSendFailure();
     console.error(`${LOG_PREFIX}: send failed (${err?.code || 'SEND_FAILED'})`);
     throw new BeeperApiError(err?.message || 'Beeper send failed', {
@@ -450,10 +485,11 @@ export async function sendOutboxEntry(id, { confirmFirstContact = false } = {}) 
 
   registerSendSuccess();
   const pendingMessageId = typeof result.value?.pendingMessageID === 'string' ? result.value.pendingMessageID : null;
-  const updated = await markAwaitingConfirmation(id, { pendingMessageId });
+  const updated = await persistTransition(id,
+    () => markAwaitingConfirmation(id, { pendingMessageId }),
+    () => armConfirmation({ ...confirmation, pendingMessageId }));
   console.log(`${LOG_PREFIX}: sent, awaiting confirmation${pendingMessageId ? '' : ' (no pending id returned)'}`);
-  armConfirmation({ id, chatId: entry.chatId, conversationId: entry.conversationId, body: entry.body, pendingMessageId, requestedAt });
-  return updated;
+  return updated ?? recoveryView(entry);
 }
 
 // ---------------------------------------------------------------------------
@@ -569,10 +605,10 @@ async function lookupSentMessage(pending) {
  * the field cannot flip a message the user sent onto the other side of the
  * thread.
  */
-async function mirrorSentMessage(conversationId, message) {
+async function mirrorSentMessage(client, conversationId, message) {
   const row = normalizeMessageRow(message, new Date(runtime.now()).toISOString());
   if (!row.id) return;
-  await query(
+  await client.query(
     `INSERT INTO beeper_messages (id, conversation_id, sender_id, body, sent_at, edited_at, unsent_at, sort_key, is_sender)
      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, TRUE)
      ON CONFLICT (id) DO UPDATE SET
@@ -609,8 +645,8 @@ function releasePending(id) {
  */
 async function resolveConfirmation(id, reason) {
   const pending = pendingConfirmations.get(id);
-  if (!pending) return null;
-  if (reason === 'fallback-timeout') pending.deadlineReached = true;
+  if (!pending || localTransitions.has(id)) return null;
+  if (reason === 'fallback-timeout' || reason === 'manual') pending.deadlineReached = true;
   // The one-shot timer can fire during a socket lookup. Let that lookup own
   // the deadline outcome rather than dropping the only fallback signal.
   if (pending.resolving) return null;
@@ -650,46 +686,41 @@ async function resolveConfirmation(id, reason) {
   }
 
   const status = typeof message?.sendStatus?.status === 'string' ? message.sendStatus.status : null;
-  if (status && status.startsWith('FAIL')) {
-    releasePending(id);
-    await markFailed(id, `SEND_${status}`, message?.sendStatus?.message || message?.sendStatus?.reason || 'Beeper reported a failed send');
-    console.error(`${LOG_PREFIX}: Beeper reported ${status} for a sent message`);
+  if (status?.startsWith('FAIL')) {
+    await persistTransition(id,
+      () => markFailed(id, `SEND_${status}`, message?.sendStatus?.message || message?.sendStatus?.reason || 'Beeper reported a failed send'),
+      () => releasePending(id));
     return null;
   }
 
-  const settled = await query(
-    `UPDATE beeper_outbox SET state = 'sent', message_id = $2, sent_at = COALESCE($3::timestamptz, NOW()),
-       error_code = NULL, error_message = NULL, updated_at = NOW()
-     WHERE id = $1 AND state = 'awaiting-confirmation' RETURNING ${ENTRY_COLUMNS}`,
-    [id, String(message.id), message?.timestamp ?? null],
-  );
-  releasePending(id);
-  if ((settled?.rowCount ?? 0) !== 1) return null;
-
-  await mirrorSentMessage(pending.conversationId, message);
-  // Ids and kinds only, on the same relay #33 already forwards to subscribed
-  // browsers — never the body, which stays on this machine.
-  beeperSocketEvents.emit('invalidate', {
-    kind: 'message.upserted',
-    chatID: pending.chatId,
-    ids: [String(message.id)],
-    seq: null,
-    ts: new Date(runtime.now()).toISOString(),
+  return persistTransition(id, () => withTransaction(async (client) => {
+    const settled = await client.query(
+      `UPDATE beeper_outbox SET state = 'sent', message_id = $2, sent_at = COALESCE($3::timestamptz, NOW()),
+         error_code = NULL, error_message = NULL, updated_at = NOW()
+       WHERE id = $1 AND state = 'awaiting-confirmation' RETURNING ${ENTRY_COLUMNS}`,
+      [id, String(message.id), message?.timestamp ?? null],
+    );
+    if ((settled?.rowCount ?? 0) !== 1) return null;
+    await mirrorSentMessage(client, pending.conversationId, message);
+    return settled.rows[0];
+  }), () => {
+    releasePending(id);
+    beeperSocketEvents.emit('invalidate', {
+      kind: 'message.upserted', chatID: pending.chatId, ids: [String(message.id)],
+      seq: null, ts: new Date(runtime.now()).toISOString(),
+    });
+    console.log(`${LOG_PREFIX}: send confirmed via ${reason}`);
   });
-  console.log(`${LOG_PREFIX}: send confirmed via ${reason}`);
-  return settled.rows[0];
 }
 
 /** Record why a send is unconfirmed without moving it out of flight. */
 async function noteUnresolved(id, message, deliveryOutcomeUnknown = false) {
-  releasePending(id);
-  await query(
+  await persistTransition(id, () => query(
     `UPDATE beeper_outbox SET error_code = $2, error_message = $3, updated_at = NOW()
      WHERE id = $1 AND state = 'awaiting-confirmation'`,
     [id, deliveryOutcomeUnknown ? DELIVERY_UNCONFIRMED_CODE : 'CONFIRMATION_UNRESOLVED', message],
-  );
-  beeperSocketEvents.emit('invalidate', { kind: 'outbox.updated', chatID: null, ids: [id], seq: null, ts: new Date(runtime.now()).toISOString() });
-  console.warn(`${LOG_PREFIX}: send unconfirmed after ${CONFIRMATION_TIMEOUT_MS / 1000}s — left in flight, never re-sent`);
+  ), () => releasePending(id));
+  console.warn(`${LOG_PREFIX}: send unconfirmed — never re-sent`);
 }
 
 /**
@@ -699,6 +730,34 @@ async function noteUnresolved(id, message, deliveryOutcomeUnknown = false) {
  */
 export function cancelPendingConfirmations() {
   for (const id of [...pendingConfirmations.keys()]) releasePending(id);
+  for (const transition of localTransitions.values()) runtime.clearTimeout(transition.timer);
+  localTransitions.clear();
+  activeSends.clear();
+}
+
+/** Human-triggered reconciliation. Remote operations are GETs only. */
+export async function reconcileOutboxEntry(id) {
+  let entry = await readEntry(id);
+  if (!entry) throw new BeeperApiError('Outbox entry not found', { status: 404, code: 'OUTBOX_ENTRY_NOT_FOUND' });
+  if (activeSends.has(id)) return entry;
+  const transition = localTransitions.get(id);
+  if (transition) {
+    await runLocalTransition(id, transition);
+    if (localTransitions.has(id)) return recoveryView(entry);
+    entry = await readEntry(id);
+  }
+  const uncertainFailure = entry.state === 'failed' && [SEND_INTERRUPTED_CODE, DELIVERY_UNCONFIRMED_CODE, 'NETWORK_ERROR'].includes(entry.errorCode);
+  if (!['sending', 'awaiting-confirmation'].includes(entry.state) && !uncertainFailure) return entry;
+  if (!pendingConfirmations.has(id)) {
+    const unknown = entry.state === 'sending' || uncertainFailure || entry.errorCode === DELIVERY_UNCONFIRMED_CODE;
+    const requestedAt = persistedSendMoment(entry);
+    if (entry.state !== 'awaiting-confirmation') {
+      entry = await markAwaitingConfirmation(id, { errorCode: DELIVERY_UNCONFIRMED_CODE, errorMessage: DELIVERY_UNCONFIRMED_MESSAGE });
+    }
+    armConfirmation({ ...entry, requestedAt, deliveryOutcomeUnknown: unknown });
+  }
+  await resolveConfirmation(id, 'manual');
+  return recoveryView(await readEntry(id));
 }
 
 // ---------------------------------------------------------------------------
@@ -719,10 +778,8 @@ function persistedSendMoment(row) {
  *
  * `sending` and `awaiting-confirmation` are exit-only through in-memory state:
  * `pendingConfirmations`, its timer, and the socket listener. A restart mid-
- * flight takes all three with it, and no route can move a row out of either
- * state — so without this the row is permanently un-actionable, and the client
- * renders it as a spinner with no Retry and no Dismiss, forever, across every
- * later restart.
+ * flight takes all three with it. Boot reconciles automatically; a human can
+ * also invoke the lookup-only reconciliation route without restarting.
  *
  * Two different faults, two different answers:
  *

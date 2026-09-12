@@ -931,3 +931,14 @@ describe('BeeperThread — change and unlink a linked participant', () => {
     expect(screen.queryByLabelText('Link Sam Example to a Tribe person')).not.toBeInTheDocument();
   });
 });
+
+
+it('offers a lookup-only delivery check for persistence uncertainty, preserving the explanation', () => {
+  const reconcileOutboxEntry = vi.fn();
+  const entry = { ...UNRESOLVED_ENTRY, errorCode: 'DELIVERY_UNCONFIRMED', errorMessage: 'Delivery unconfirmed: saving the send outcome failed. Check delivery to reconcile without sending again.' };
+  renderThread({ outboxEntries: [entry], reconcileOutboxEntry });
+  expect(screen.getByText(entry.errorMessage)).toBeInTheDocument();
+  fireEvent.click(screen.getByRole('button', { name: 'Check delivery' }));
+  expect(reconcileOutboxEntry).toHaveBeenCalledWith(entry);
+  expect(screen.queryByRole('button', { name: 'Retry' })).toBeNull();
+});

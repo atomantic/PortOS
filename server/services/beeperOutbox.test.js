@@ -68,6 +68,8 @@ const mirroredSql = [];
 // stands in for.
 const mirroredMessages = [];
 let nextId = 1;
+let failingSql = null;
+let failedWrites = 0;
 
 /** A `beeper_messages` row synced in from Beeper, never through this outbox. */
 function seedMirroredMessage(conversationId, { isSender = true } = {}) {
@@ -77,6 +79,7 @@ function seedMirroredMessage(conversationId, { isSender = true } = {}) {
 const entryView = (row) => ({ ...row });
 
 const query = vi.fn(async (sql, params = []) => {
+  if (failingSql?.test(sql)) { failedWrites++; throw new Error('database unavailable'); }
   if (/SELECT id, source_chat_id/.test(sql)) {
     const conversation = conversations.get(params[0]);
     return { rows: conversation ? [{ id: params[0], sourceChatId: conversation }] : [], rowCount: conversation ? 1 : 0 };
@@ -134,7 +137,7 @@ const query = vi.fn(async (sql, params = []) => {
   }
   if (/UPDATE beeper_outbox SET state = 'sending'/.test(sql)) {
     const row = outbox.get(params[0]);
-    if (!row || row.state !== 'approved') return { rows: [], rowCount: 0 };
+    if (row?.state !== 'approved') return { rows: [], rowCount: 0 };
     row.state = 'sending';
     return { rows: [{ id: row.id }], rowCount: 1 };
   }
@@ -155,7 +158,7 @@ const query = vi.fn(async (sql, params = []) => {
   }
   if (/UPDATE beeper_outbox SET state = 'sent'/.test(sql)) {
     const row = outbox.get(params[0]);
-    if (!row || row.state !== 'awaiting-confirmation') return { rows: [], rowCount: 0 };
+    if (row?.state !== 'awaiting-confirmation') return { rows: [], rowCount: 0 };
     row.state = 'sent';
     row.messageId = params[1];
     row.sentAt = params[2] ?? '2026-09-01T00:00:05.000Z';
@@ -165,14 +168,14 @@ const query = vi.fn(async (sql, params = []) => {
   }
   if (/UPDATE beeper_outbox SET error_code = \$2/.test(sql)) {
     const row = outbox.get(params[0]);
-    if (!row || row.state !== 'awaiting-confirmation') return { rows: [], rowCount: 0 };
+    if (row?.state !== 'awaiting-confirmation') return { rows: [], rowCount: 0 };
     row.errorCode = params[1];
     row.errorMessage = params[2];
     return { rows: [], rowCount: 1 };
   }
   if (/DELETE FROM beeper_outbox WHERE id = \$1 AND state = 'approved'/.test(sql)) {
     const row = outbox.get(params[0]);
-    if (!row || row.state !== 'approved') return { rows: [], rowCount: 0 };
+    if (row?.state !== 'approved') return { rows: [], rowCount: 0 };
     outbox.delete(params[0]);
     return { rows: [], rowCount: 1 };
   }
@@ -184,14 +187,26 @@ const query = vi.fn(async (sql, params = []) => {
   throw new Error(`unexpected SQL in test: ${sql.slice(0, 60)}`);
 });
 
-vi.mock('../lib/db.js', () => ({ query: (...args) => query(...args) }));
+vi.mock('../lib/db.js', () => ({
+  query: (...args) => query(...args),
+  withTransaction: async (fn) => {
+    const snapshot = [...outbox.entries()].map(([id, row]) => [id, { ...row }]);
+    const mirrorLength = mirrored.length;
+    return fn({ query }).catch((err) => {
+      outbox.clear();
+      for (const [id, row] of snapshot) outbox.set(id, row);
+      mirrored.length = mirrorLength;
+      throw err;
+    });
+  },
+}));
 
 const {
   BREAKER_MAX_CONSECUTIVE_FAILURES, BREAKER_MAX_SENDS_IN_WINDOW, BREAKER_WINDOW_MS,
   CONFIRMATION_TIMEOUT_MS, DELIVERY_UNCONFIRMED_CODE, DELIVERY_UNCONFIRMED_MESSAGE, SEND_INTERRUPTED_MESSAGE,
   cancelPendingConfirmations, clearOutboxBreaker, configureOutboxRuntime, createOutboxEntry,
   discardOutboxEntry, getOutboxBreakerState, getOutboxStatus, isFirstContact, listOutboxEntries,
-  reconcileOutboxOnBoot, resetOutboxRuntime, sendOutboxEntry,
+  reconcileOutboxEntry, PERSISTENCE_RETRY_DELAYS_MS, reconcileOutboxOnBoot, resetOutboxRuntime, sendOutboxEntry,
 } = await import('./beeperOutbox.js');
 const { beeperSocketEvents } = await import('./beeperSocketEvents.js');
 
@@ -287,6 +302,8 @@ function strandedRow(state, overrides = {}) {
 }
 
 beforeEach(() => {
+  failingSql = null;
+  failedWrites = 0;
   outbox.clear();
   conversations.clear();
   mirrored.length = 0;
@@ -901,5 +918,72 @@ describe('runaway breaker', () => {
     await failOnce('four');
     await failOnce('five');
     expect(getOutboxBreakerState()).toMatchObject({ tripped: false, consecutiveFailures: 2 });
+  });
+});
+
+
+describe('local persistence recovery without another send', () => {
+  it('retains an accepted pending id until the delayed database transition recovers', async () => {
+    const entry = await createOutboxEntry({ conversationId: CONVERSATION_ID, body: 'hello there' });
+    failingSql = /SET state = 'awaiting-confirmation'/;
+    const result = await sendOutboxEntry(entry.id, { confirmFirstContact: true });
+    expect(result).toMatchObject({ state: 'awaiting-confirmation', errorCode: DELIVERY_UNCONFIRMED_CODE });
+    expect(outbox.get(entry.id).state).toBe('sending');
+    expect(failedWrites).toBe(1);
+    failingSql = null;
+    expect(clock.runTimersWithDelay(PERSISTENCE_RETRY_DELAYS_MS[0])).toBe(1);
+    await flush();
+    expect(outbox.get(entry.id)).toMatchObject({ state: 'awaiting-confirmation', pendingMessageId: 'pending-1' });
+    clock.runTimersWithDelay(CONFIRMATION_TIMEOUT_MS);
+    await flush();
+    expect(outbox.get(entry.id).state).toBe('sent');
+    expect(sendMessage).toHaveBeenCalledTimes(1);
+  });
+
+  it('recovers a rejected transport outcome after its failure write fails', async () => {
+    const entry = await createOutboxEntry({ conversationId: CONVERSATION_ID, body: 'hello there' });
+    sendMessage.mockRejectedValueOnce(new BeeperApiError('rejected', { status: 403, code: 'FORBIDDEN' }));
+    failingSql = /SET state = 'failed'/;
+    await expect(sendOutboxEntry(entry.id, { confirmFirstContact: true })).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect((await listOutboxEntries({ conversationId: CONVERSATION_ID }))[0].errorCode).toBe(DELIVERY_UNCONFIRMED_CODE);
+    failingSql = null;
+    clock.runTimersWithDelay(PERSISTENCE_RETRY_DELAYS_MS[0]);
+    await flush();
+    expect(outbox.get(entry.id)).toMatchObject({ state: 'failed', errorCode: 'FORBIDDEN' });
+    expect(sendMessage).toHaveBeenCalledTimes(1);
+  });
+
+  it('rolls back sent when mirroring fails, stops after bounded delays, and lets a human finish the retained transaction', async () => {
+    const entry = await createOutboxEntry({ conversationId: CONVERSATION_ID, body: 'hello there' });
+    await sendOutboxEntry(entry.id, { confirmFirstContact: true });
+    failingSql = /INSERT INTO beeper_messages/;
+    clock.runTimersWithDelay(CONFIRMATION_TIMEOUT_MS);
+    await flush();
+    expect(outbox.get(entry.id).state).toBe('awaiting-confirmation');
+    expect(mirrored).toHaveLength(0);
+    for (const delay of PERSISTENCE_RETRY_DELAYS_MS) {
+      expect(clock.runTimersWithDelay(delay)).toBe(1);
+      await flush();
+    }
+    expect(failedWrites).toBe(4);
+    expect(clock.pending()).toBe(0);
+    expect((await listOutboxEntries({ conversationId: CONVERSATION_ID }))[0]).toMatchObject({ errorCode: DELIVERY_UNCONFIRMED_CODE });
+    failingSql = null;
+    await reconcileOutboxEntry(entry.id);
+    expect(outbox.get(entry.id)).toMatchObject({ state: 'sent', messageId: 'msg-final-1' });
+    expect(mirrored).toHaveLength(1);
+    expect(getOutboxStatus().awaitingConfirmation).toBe(0);
+    await reconcileOutboxEntry(entry.id);
+    expect(mirrored).toHaveLength(1);
+    expect(sendMessage).toHaveBeenCalledTimes(1);
+  });
+
+  it('manually reconciles a durable stranded sending row with lookup only', async () => {
+    const entry = await createOutboxEntry({ conversationId: CONVERSATION_ID, body: 'hello there' });
+    outbox.get(entry.id).state = 'sending';
+    listMessagesPage.mockResolvedValue({ items: [sentMessage()] });
+    expect(await reconcileOutboxEntry(entry.id)).toMatchObject({ state: 'sent' });
+    expect(sendMessage).not.toHaveBeenCalled();
+    expect(mirrored).toHaveLength(1);
   });
 });

@@ -17,6 +17,7 @@ vi.mock('../services/beeperOutbox.js', () => ({
   createOutboxEntry: vi.fn(),
   sendOutboxEntry: vi.fn(),
   discardOutboxEntry: vi.fn(),
+  reconcileOutboxEntry: vi.fn(),
   listOutboxEntries: vi.fn(),
   clearOutboxBreaker: vi.fn(),
 }));
@@ -55,7 +56,7 @@ import {
 } from '../services/beeperOAuth.js';
 import { runBeeperSweep } from '../services/beeperSync.js';
 import {
-  clearOutboxBreaker, createOutboxEntry, discardOutboxEntry, listOutboxEntries, sendOutboxEntry,
+  clearOutboxBreaker, createOutboxEntry, discardOutboxEntry, listOutboxEntries, sendOutboxEntry, reconcileOutboxEntry,
 } from '../services/beeperOutbox.js';
 import {
   listConversations,
@@ -883,5 +884,20 @@ describe('attachment mirror routes (#37)', () => {
     const res = await request(buildApp()).delete(`/api/beeper/conversations/${CONV_ID}`);
     expect(res.status).toBe(200);
     expect(res.body).toMatchObject({ purged: true, filesRemoved: 3, bytesFreed: 4096 });
+  });
+});
+
+
+describe('POST /api/beeper/outbox/:id/reconcile', () => {
+  beforeEach(() => vi.clearAllMocks());
+  const ENTRY_ID = '44444444-4444-4444-8444-444444444444';
+  it('validates the row and returns lookup recovery without invoking the send service', async () => {
+    expect((await request(buildApp()).post('/api/beeper/outbox/not-a-uuid/reconcile').send({})).status).toBe(400);
+    expect(reconcileOutboxEntry).not.toHaveBeenCalled();
+    vi.mocked(reconcileOutboxEntry).mockResolvedValue({ id: ENTRY_ID, state: 'sent' });
+    const res = await request(buildApp()).post(`/api/beeper/outbox/${ENTRY_ID}/reconcile`).send({});
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ id: ENTRY_ID, state: 'sent' });
+    expect(sendOutboxEntry).not.toHaveBeenCalled();
   });
 });
