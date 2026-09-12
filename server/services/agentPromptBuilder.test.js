@@ -3465,6 +3465,35 @@ describe('buildAgentPrompt — slashdo-backed tasks', () => {
     if (providerType === 'tui') expect(prompt).toContain('.agent-done-release-test');
   });
 
+  // Regression: overview Better runs previously received commit-only handoffs,
+  // leaving their self-managed audit worktrees unpublished on Codex hosts.
+  describe.each(['better', 'better-swift'])('%s delivery', (command) => {
+    it.each([
+      ['tui', 'codex-tui', 'codex'],
+      ['cli', 'codex', 'codex'],
+      ['tui', 'claude-code-tui', 'claude'],
+      ['api', 'test-api', null],
+    ])('owns publication on %s/%s', async (providerType, providerId, providerCommand) => {
+      vi.mocked(loadSlashdoFile).mockResolvedValue('# Better\n\nCanonical audit procedure.');
+      const prompt = await buildAgentPrompt(
+        makeTask({ metadata: sanitizeTaskMetadata({
+          useWorktree: false, openPR: false, simplify: true,
+          worktreeChangesExpected: true, slashdoCommand: command,
+        }) }), {}, '/r', null, isTruthyMeta,
+        { providerType, providerId, providerCommand, agentId: 'better-test' });
+      expect(prompt).toContain('Canonical audit procedure.');
+      expect(prompt).toContain('Better Workflow Handoff');
+      expect(prompt).toContain('merge into the repository default branch');
+      expect(prompt).toContain('current-head CI and configured reviews pass');
+      expect(prompt).toContain('A clean audit needs no PR');
+      expect(prompt).toContain('report INCOMPLETE');
+      expect(prompt).not.toMatch(/Do NOT push|do NOT push|Commit only|commit only|PortOS will (?:push|merge)/);
+      expect(prompt).not.toContain('## Completion Workflow');
+      expect(prompt).not.toContain('## Simplify Step');
+      if (providerType === 'tui') expect(prompt).toContain('.agent-done-better-test');
+    });
+  });
+
   it('recovers the bundled release for an older queued task whose command was stripped', async () => {
     vi.mocked(loadSlashdoFile).mockResolvedValue('# Release\n\nCanonical release procedure.');
     const prompt = await buildAgentPrompt(
