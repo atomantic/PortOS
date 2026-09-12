@@ -120,7 +120,7 @@ export const agentContextNavigationOutputSchema = z.object({
 export const agentContextProfileOutputSchema = z.object({
   profile: z.enum(AGENT_CONTEXT_PROFILES),
   scopes: z.array(z.enum(AGENT_CONTEXT_SCOPES)),
-  actions: portosSemanticToolGrantsSchema,
+  actions: agentContextActionGrantsSchema,
   limits: z.object({
     defaultResults: z.number().int().positive(),
     maxResults: z.number().int().positive(),

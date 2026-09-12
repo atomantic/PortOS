@@ -297,8 +297,8 @@ const successToolResult = (output) => ({
   structuredContent: output,
 });
 
-const semanticToolsForConfig = async (config) => {
-  const recipes = await readCosToolRecipeCatalog({ scope: 'agent' });
+const semanticToolsForConfig = async (config, readRecipeCatalog) => {
+  const recipes = await readRecipeCatalog({ scope: 'agent' });
   const catalog = getCosToolCatalog({ scope: 'agent', capabilities: config.actions, recipes });
   return {
     ...catalog,
@@ -306,7 +306,8 @@ const semanticToolsForConfig = async (config) => {
   };
 };
 
-const semanticMcpToolsForConfig = async (config) => formatCosToolCatalog(await semanticToolsForConfig(config), 'mcp').tools;
+const semanticMcpToolsForConfig = async (config, readRecipeCatalog) =>
+  formatCosToolCatalog(await semanticToolsForConfig(config, readRecipeCatalog), 'mcp').tools;
 
 export function createAgentContextContract({
   readSettings = getSettings,
@@ -317,6 +318,7 @@ export function createAgentContextContract({
   getBrainRecords = getBrainProjections,
   previewIdentityExport = previewLegacyExport,
   getSourceStatus = async () => 'fresh',
+  readRecipeCatalog = readCosToolRecipeCatalog,
 } = {}) {
   const sourceLoaders = createSourceLoaders({
     navigationCommands,
@@ -350,7 +352,7 @@ export function createAgentContextContract({
       actions: config.actions,
       tools: [
         ...advertiseAgentContextTools(config.scopes),
-        ...await semanticMcpToolsForConfig(config),
+        ...await semanticMcpToolsForConfig(config, readRecipeCatalog),
       ],
     };
   };
@@ -362,7 +364,7 @@ export function createAgentContextContract({
 
     const tool = AGENT_CONTEXT_TOOL_REGISTRY.find((candidate) => candidate.name === name);
     if (!tool || !TOOL_HANDLERS[name]) {
-      const semanticTool = (await semanticToolsForConfig(config)).tools.find((candidate) =>
+      const semanticTool = (await semanticToolsForConfig(config, readRecipeCatalog)).tools.find((candidate) =>
         candidate.name === name || candidate.providerName === name || candidate.aliases.includes(name));
       if (!semanticTool) return errorToolResult(`Unknown or ungranted tool: ${cap(name, 120)}`);
       return executeCosToolCall({
