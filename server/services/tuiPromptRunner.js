@@ -37,7 +37,8 @@
 
 import { spawn as ptySpawn } from 'node-pty';
 
-import { join, resolve } from 'path';
+import { basename, isAbsolute, join, resolve } from 'path';
+import { access } from 'node:fs/promises';
 import { ensureDir, PATHS, tryReadFile } from '../lib/fileUtils.js';
 import { createStreamingAnsiStripper, stripAnsi } from '../lib/ansiStrip.js';
 import {
@@ -148,7 +149,7 @@ const PTY_ROWS = 50;
  *   it reports itself, not a provider incident for the autofixer to escalate.
  * @returns {Promise<void>}
  */
-export async function executeTuiRun({ runId, provider, prompt, workspacePath, onData, onComplete, onReady, timeout, idleMs, label, guard = false, reportFailure = true }) {
+export async function executeTuiRun({ runId, provider, prompt, screenshots = [], workspacePath, onData, onComplete, onReady, timeout, idleMs, label, guard = false, reportFailure = true }) {
   if (!provider || typeof provider !== 'object') {
     throw new Error('executeTuiRun: provider is required');
   }
@@ -159,6 +160,15 @@ export async function executeTuiRun({ runId, provider, prompt, workspacePath, on
   const invocation = buildTuiInvocation(provider, provider.defaultModel);
   const { command } = invocation;
   const args = buildOneShotTuiArgs(command, invocation.args);
+  if (screenshots.length > 0) {
+    if (!isCodexCommand(command)) throw new Error('This TUI provider cannot receive image attachments');
+    for (const screenshot of screenshots) {
+      if (typeof screenshot !== 'string' || !screenshot) throw new Error('Invalid screenshot path');
+      const imagePath = isAbsolute(screenshot) ? screenshot : resolve(PATHS.screenshots, basename(screenshot));
+      await access(imagePath);
+      args.push('--image', imagePath);
+    }
+  }
   const promptDelayMs = provider.tuiPromptDelayMs ?? DEFAULT_TUI_PROMPT_DELAY_MS;
   const idleThresholdMs = idleMs ?? provider.tuiOneShotIdleMs ?? DEFAULT_ONE_SHOT_IDLE_MS;
   const totalTimeoutMs = timeout ?? provider.timeout ?? DEFAULT_TIMEOUT_MS;

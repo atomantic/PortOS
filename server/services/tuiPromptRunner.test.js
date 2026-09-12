@@ -453,6 +453,27 @@ describe('executeTuiRun', () => {
   });
 
   describe('startup hooks', () => {
+    it('passes image paths as native Codex arguments and refuses missing images before spawn', async () => {
+      const provider = { id: 'codex-tui', type: 'tui', command: 'codex', defaultModel: 'gpt-6-astra' };
+      const imagePath = join(runsTmpDirRef.current, 'example image.png');
+      await writeFile(imagePath, 'image fixture');
+      const promise = executeTuiRun({
+        runId: 'run-images', provider, prompt: 'Describe image',
+        screenshots: [imagePath], workspacePath: TEST_WORKSPACE,
+      });
+      await vi.waitFor(() => expect(ptySpawnMock).toHaveBeenCalledTimes(1));
+      const args = ptySpawnMock.mock.calls[0][1];
+      expect(args.slice(args.indexOf('--image'), args.indexOf('--image') + 2)).toEqual(['--image', imagePath]);
+      ptyInstances[0].emitExit({ exitCode: 0 });
+      await promise;
+      ptySpawnMock.mockClear();
+      await expect(executeTuiRun({
+        runId: 'run-missing-image', provider, prompt: 'Describe image',
+        screenshots: [join(runsTmpDirRef.current, 'missing.png')], workspacePath: TEST_WORKSPACE,
+      })).rejects.toThrow();
+      expect(ptySpawnMock).not.toHaveBeenCalled();
+    });
+
     it('disables Codex multi-agent fan-out for one-shot prompt runs', async () => {
       const provider = {
         id: 'codex-tui', type: 'tui', command: '/opt/homebrew/bin/codex', defaultModel: 'gpt-x',

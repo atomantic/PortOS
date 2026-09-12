@@ -30,6 +30,10 @@ import {
 export const CODEX_COMMAND = 'codex';
 export const CODEX_CLI_ID = 'codex';
 
+/** The interactive Codex runner forwards images with its native --image flag. */
+export const isVisionCapableCodexTuiProvider = (provider) =>
+  provider?.type === 'tui' && isCodexCommand(provider.command);
+
 /**
  * Match by normalized binary basename (like isGrokCommand/isKimiCommand) so a
  * path- or `.exe`-configured provider is still recognized.

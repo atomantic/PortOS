@@ -149,6 +149,24 @@ describe('promptRunner — happy paths', () => {
     })).rejects.toMatchObject({ code: 'VISION_PROVIDER_UNSUPPORTED' });
   });
 
+  it('forwards image attachments through the pinned Codex TUI', async () => {
+    const provider = { id: 'codex-tui', type: 'tui', command: 'codex', defaultModel: 'gpt-6-astra' };
+    tuiRunner.executeTuiRun.mockImplementation(async ({ screenshots, onComplete }) => {
+      expect(screenshots).toEqual(['/tmp/example.png']);
+      onComplete({ success: true, text: 'Image description' });
+    });
+    const output = await runPromptThroughProvider({
+      provider, prompt: 'Inspect image', screenshots: ['/tmp/example.png'], source: 'test', allowFallback: false,
+    });
+    expect(output.text).toBe('Image description');
+    expect(assertVisionRunUsedImages(output, provider)).toBe(provider);
+    expect(runner.executeCliRun).not.toHaveBeenCalled();
+    await expect(runPromptThroughProvider({
+      provider: { ...provider, command: 'claude' }, prompt: 'Inspect image',
+      screenshots: ['/tmp/example.png'], source: 'test', allowFallback: false,
+    })).rejects.toMatchObject({ code: 'VISION_PROVIDER_UNSUPPORTED' });
+  });
+
   it('routes API providers through executeApiRun, accumulates text, resolves { text, runId, model }', async () => {
     runner.executeApiRun.mockImplementation(async ({ onData, onComplete }) => {
       onData('foo');
