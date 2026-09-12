@@ -112,14 +112,6 @@ import { reloadSettings } from './settings.js';
 import { invalidateAllCaches as invalidateBrainCaches } from './brainStorage.js';
 import { DEFAULT_EXCLUDES, computeEffectiveExcludes, listSnapshots, openSnapshotStream, restoreSnapshot, resolveRsyncBinary } from './backup.js';
 
-// Resolved once: the restore path spawns whatever `resolveRsyncBinary()` names,
-// so probe THAT rather than a hard-coded 'rsync' — an install pointed at a
-// bundled binary via PORTOS_RSYNC is still covered.
-const hasRealRsync = (() => {
-  const probe = spawnSync(resolveRsyncBinary(), ['--version'], { stdio: 'ignore' });
-  return !probe.error && probe.status === 0;
-})();
-
 // fs.access is mocked file-wide because backup.js probes the .in-progress marker
 // with it. Restore the real implementation before EVERY test: vi.clearAllMocks()
 // resets call history but NOT implementations, so a single test's
@@ -1490,13 +1482,13 @@ describe('restoreSnapshot manifest verification', () => {
     });
   });
 
-  // The ONE case here that shells out to a REAL rsync — every other one drives
-  // a faked child process — so it can only run where rsync is actually
-  // installed. The Windows CI runner has none, and a `spawn rsync ENOENT` there
-  // is an environment gap, not a regression in the restore path. Probed rather
-  // than gated on `process.platform` so a Windows box carrying MSYS/Git-Bash
-  // rsync still gets the coverage, and a Linux box without it still skips.
-  it.skipIf(!hasRealRsync)('restores differing bytes when size and mtime match through real rsync', async () => {
+  it('restores differing bytes when size and mtime match through real rsync', async context => {
+    // Windows CI does not provision MSYS rsync. Unix coverage remains mandatory;
+    // installed Windows rsync errors still fail this test rather than being hidden.
+    if (process.platform === 'win32' && spawnSync('rsync', ['--version']).error?.code === 'ENOENT') {
+      context.skip('Windows runner has no rsync executable; real rsync remains required on Linux/macOS.');
+      return;
+    }
     const relativePath = 'brain/example.json';
     const snapshotContent = '{"value":"old"}';
     const liveContent = '{"value":"new"}';
