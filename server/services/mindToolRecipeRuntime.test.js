@@ -1,7 +1,8 @@
 import { beforeEach, expect, it, vi } from 'vitest';
 import { randomUUID } from 'node:crypto';
-const mock = vi.hoisted(() => ({ capabilities: {}, recipes: [], dispatch: vi.fn(), runPrompt: vi.fn(), mutations: [] }));
+const mock = vi.hoisted(() => ({ capabilities: {}, agentContext: {}, recipes: [], dispatch: vi.fn(), runPrompt: vi.fn(), mutations: [] }));
 vi.mock('./cosState.js', () => ({ loadState: async () => ({ config: { persistentMindCapabilities: mock.capabilities } }) }));
+vi.mock('./settings.js', () => ({ getSettings: async () => ({ agentContext: mock.agentContext }) }));
 vi.mock('./voice/tools.js', () => ({
   getToolSpecs: () => [{ function: { name: 'brain_search', description: 'Search records.', parameters: { type: 'object', properties: { query: { type: 'string' } }, required: ['query'] } } }],
   getToolSpecsForIntent: () => ({ specs: [] }),
@@ -43,7 +44,7 @@ vi.mock('./mindToolRecipes.js', async () => {
     },
   };
 });
-import { executeCosToolCall, readPersistentMindRecipeCatalog, getCosToolCatalog, __testing } from './cosToolRegistry.js';
+import { executeCosToolCall, readCosToolRecipeCatalog, readPersistentMindRecipeCatalog, getCosToolCatalog, __testing } from './cosToolRegistry.js';
 import { createPersistentMindTurnAdapter } from './persistentMindAdapter.js';
 const definition = (steps = 2) => ({
   schemaVersion: 1, name: 'recipe.project-check', purpose: 'Read a project check-in',
@@ -55,7 +56,9 @@ const authority = () => ({ scope: 'mind', capabilities: mock.capabilities });
 const call = (name, args = {}, context = {}, requestId = randomUUID()) => executeCosToolCall({ call: { name, arguments: args, requestId }, authority: authority(), context });
 const save = () => call('mind.recipes.create', { definition: definition() });
 beforeEach(() => {
-  vi.clearAllMocks(); mock.capabilities = { manageToolRecipes: true, readPortos: true }; mock.recipes = []; mock.mutations = [];
+  vi.clearAllMocks(); mock.capabilities = { manageToolRecipes: true, readPortos: true };
+  mock.agentContext = { enabled: true, scopes: ['navigation'], actions: { callToolRecipes: true, readPortos: true } };
+  mock.recipes = []; mock.mutations = [];
   __testing.toolCalls.clear(); __testing.toolCallFingerprints.clear(); mock.dispatch.mockResolvedValue({ summary: 'Synthetic private result' });
 });
 it('creates, discovers and runs a two-read recipe on the next continuation, then reuses it on a later wake', async () => {
@@ -89,6 +92,65 @@ it('cannot multiply the adapter turn budget through a five-step wrapper or later
   expect(mock.runPrompt).toHaveBeenCalledTimes(2);
   expect(mock.runPrompt.mock.calls[1][0].prompt).toContain('budget is exhausted');
   expect(mock.runPrompt.mock.calls[1][0].prompt).toContain('"state":"partial"');
+});
+it('exposes only agent-eligible recipes and enforces a fresh grant with a local five-child budget', async () => {
+  await call('mind.recipes.create', { definition: definition(5) });
+  const recipes = await readCosToolRecipeCatalog({ scope: 'agent' });
+  const agentCatalog = getCosToolCatalog({ scope: 'agent', capabilities: mock.agentContext.actions, recipes });
+  const advertised = agentCatalog.tools.find((tool) => tool.name === 'recipe.project-check');
+  expect(advertised).toMatchObject({
+    granted: true,
+    recipe: { source: 'persistent-mind-library', revision: 1, underlyingTools: ['brain.search'] },
+  });
+  expect(JSON.stringify(advertised)).not.toContain('arguments');
+  const result = await executeCosToolCall({
+    call: { name: 'recipe.project-check', arguments: { project: 'Example' }, requestId: randomUUID() },
+    authority: { scope: 'agent', capabilities: mock.agentContext.actions },
+  });
+  expect(result).toMatchObject({ state: 'completed', result: { revision: 1, outcomes: expect.any(Array) } });
+  expect(result.result.outcomes).toHaveLength(5);
+  expect(mock.dispatch).toHaveBeenCalledTimes(5);
+
+  mock.agentContext.actions.callToolRecipes = false;
+  await expect(executeCosToolCall({
+    call: { name: 'recipe.project-check', arguments: { project: 'Example' }, requestId: randomUUID() },
+    authority: { scope: 'agent', capabilities: { callToolRecipes: true, readPortos: true } },
+  })).rejects.toMatchObject({ code: 'TOOL_CAPABILITY_DENIED' });
+});
+it('marks a recipe using a Mind-only primitive unavailable to agents', async () => {
+  mock.capabilities.chooseThinkingPreset = true;
+  const mindOnly = definition(1);
+  mindOnly.steps[0].tool = 'mind.thinking-presets';
+  mindOnly.steps[0].arguments = {};
+  mindOnly.outputs = { presets: { step: 'read0', path: [] } };
+  await call('mind.recipes.create', { definition: mindOnly });
+  const recipes = await readCosToolRecipeCatalog({ scope: 'agent' });
+  const catalog = getCosToolCatalog({ scope: 'agent', capabilities: mock.agentContext.actions, recipes });
+  expect(catalog.tools.find((tool) => tool.name === mindOnly.name)).toMatchObject({
+    granted: false,
+    recipe: { available: false, disabledReason: expect.stringMatching(/agent scope/) },
+  });
+});
+it('re-reads agent authority before every child and stops a recipe after revocation', async () => {
+  await save();
+  mock.dispatch.mockImplementationOnce(async () => {
+    mock.agentContext.actions.callToolRecipes = false;
+    return { summary: 'Private' };
+  });
+  const result = await executeCosToolCall({
+    call: { name: 'recipe.project-check', arguments: { project: 'Example' }, requestId: randomUUID() },
+    authority: { scope: 'agent', capabilities: { callToolRecipes: true, readPortos: true } },
+  });
+  expect(result).toMatchObject({ state: 'failed', result: { state: 'partial', failingStep: 'read1' } });
+  expect(mock.dispatch).toHaveBeenCalledTimes(1);
+});
+it('intersects fresh Agent Tools grants with the original caller authority', async () => {
+  await save();
+  await expect(executeCosToolCall({
+    call: { name: 'recipe.project-check', arguments: { project: 'Example' }, requestId: randomUUID() },
+    authority: { scope: 'agent', capabilities: { callToolRecipes: true, readPortos: false } },
+  })).rejects.toMatchObject({ code: 'TOOL_CAPABILITY_DENIED' });
+  expect(mock.dispatch).not.toHaveBeenCalled();
 });
 it('stops after revocation, removes discovery, and keeps already completed reads marked partial', async () => {
   await save();

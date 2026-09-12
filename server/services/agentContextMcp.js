@@ -13,12 +13,13 @@ import {
   AGENT_CONTEXT_TOOL_REGISTRY,
   advertiseAgentContextTools,
   agentContextSettingsSchema,
+  normalizeAgentContextActionGrants,
 } from '../lib/agentContextValidation.js';
-import { normalizePortosSemanticToolGrants } from '../lib/cosToolContracts.js';
 import {
   executeCosToolCall,
   formatCosToolCatalog,
   getCosToolCatalog,
+  readCosToolRecipeCatalog,
 } from './cosToolRegistry.js';
 
 export const AGENT_CONTEXT_EXCLUSIONS = Object.freeze([
@@ -63,7 +64,7 @@ export function resolveAgentContextConfig(settings = {}) {
     enabled: parsed.data.enabled ?? false,
     profile: parsed.data.profile ?? 'metadata',
     scopes: parsed.data.scopes ?? [...AGENT_CONTEXT_DEFAULT_SCOPES],
-    actions: normalizePortosSemanticToolGrants(parsed.data.actions),
+    actions: normalizeAgentContextActionGrants(parsed.data.actions),
     invalid: false,
   };
 }
@@ -296,15 +297,16 @@ const successToolResult = (output) => ({
   structuredContent: output,
 });
 
-const semanticToolsForConfig = (config) => {
-  const catalog = getCosToolCatalog({ scope: 'agent', capabilities: config.actions });
+const semanticToolsForConfig = async (config) => {
+  const recipes = await readCosToolRecipeCatalog({ scope: 'agent' });
+  const catalog = getCosToolCatalog({ scope: 'agent', capabilities: config.actions, recipes });
   return {
     ...catalog,
     tools: catalog.tools.filter((tool) => tool.granted === true),
   };
 };
 
-const semanticMcpToolsForConfig = (config) => formatCosToolCatalog(semanticToolsForConfig(config), 'mcp').tools;
+const semanticMcpToolsForConfig = async (config) => formatCosToolCatalog(await semanticToolsForConfig(config), 'mcp').tools;
 
 export function createAgentContextContract({
   readSettings = getSettings,
@@ -348,7 +350,7 @@ export function createAgentContextContract({
       actions: config.actions,
       tools: [
         ...advertiseAgentContextTools(config.scopes),
-        ...semanticMcpToolsForConfig(config),
+        ...await semanticMcpToolsForConfig(config),
       ],
     };
   };
@@ -360,7 +362,7 @@ export function createAgentContextContract({
 
     const tool = AGENT_CONTEXT_TOOL_REGISTRY.find((candidate) => candidate.name === name);
     if (!tool || !TOOL_HANDLERS[name]) {
-      const semanticTool = semanticToolsForConfig(config).tools.find((candidate) =>
+      const semanticTool = (await semanticToolsForConfig(config)).tools.find((candidate) =>
         candidate.name === name || candidate.providerName === name || candidate.aliases.includes(name));
       if (!semanticTool) return errorToolResult(`Unknown or ungranted tool: ${cap(name, 120)}`);
       return executeCosToolCall({
