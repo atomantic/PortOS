@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from 'fs/promises';
+import { mkdir, mkdtemp, rm, writeFile } from 'fs/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
@@ -209,6 +209,21 @@ describe('slotstreamServerManager', () => {
       const err = await startSlotstreamServer().catch((e) => e);
       expect(err.message).toMatch(/never downloads weights|no model weights cached/i);
       expect(err.message).not.toMatch(/terminal/);
+      expect(execPm2Calls.some((args) => args[0] === 'start')).toBe(false);
+    });
+
+    it('refuses incomplete checkpoints using the real cache inventory', async () => {
+      const cacheDir = join(testLogDir, 'cache');
+      const modelDir = join(cacheDir, 'incomplete');
+      await mkdir(modelDir, { recursive: true });
+      await writeFile(join(modelDir, 'config.json'), '{}');
+      slotstreamModels.listSlotstreamCachedModels.mockRestore();
+      const readCache = slotstreamModels.listSlotstreamCachedModels;
+      vi.spyOn(slotstreamModels, 'listSlotstreamCachedModels').mockImplementation(() => readCache({ cacheDir }));
+      await expect(startSlotstreamServer({ model: 'incomplete' })).rejects.toThrow(/no model weights cached/i);
+      await writeFile(join(modelDir, 'model.safetensors'), 'weights');
+      await writeFile(join(modelDir, slotstreamModels.SLOTSTREAM_INCOMPLETE_MARKER), 'interrupted');
+      await expect(startSlotstreamServer({ model: 'incomplete' })).rejects.toThrow(/no model weights cached/i);
       expect(execPm2Calls.some((args) => args[0] === 'start')).toBe(false);
     });
 
