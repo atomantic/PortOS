@@ -106,8 +106,6 @@ const codexAccountFinding = (provider, readiness) => {
       return { code: 'codexAccount', label: 'No ChatGPT account is signed in' };
     case CODEX_ACCOUNT_STATUS.reauthRequired:
       return { code: 'codexAccount', label: 'ChatGPT sign-in has expired' };
-    case CODEX_ACCOUNT_STATUS.quotaExhausted:
-      return { code: 'codexQuota', label: 'ChatGPT usage limit reached' };
     default:
       return null;
   }

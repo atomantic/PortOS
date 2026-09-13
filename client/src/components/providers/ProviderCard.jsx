@@ -211,11 +211,11 @@ export default function ProviderCard({
             className={`text-xs px-2 py-0.5 rounded ${style.badge}`}
             title={cardState.state === PROVIDER_CARD_STATE.BLOCKED
               ? missingSummary
-              : (status?.message || style.hint)}
+              : (status?.message || (codexSubscription && codexAccount?.status === 'quota-exhausted' ? 'ChatGPT usage limit reached — calls route to the fallback.' : style.hint))}
           >
             {style.label}
-            {cardState.state === PROVIDER_CARD_STATE.BENCHED && status?.reason
-              ? ` · ${status.reason}`
+            {cardState.state === PROVIDER_CARD_STATE.BENCHED && (status?.reason || (codexSubscription && codexAccount?.status === 'quota-exhausted' ? 'usage-limit' : ''))
+              ? ` · ${status?.reason || 'usage-limit'}`
               : ''}
           </span>
           {/* A switched-off provider that would also need a CLI or a key says

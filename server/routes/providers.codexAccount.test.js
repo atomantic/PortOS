@@ -211,6 +211,18 @@ describe('GET /api/providers decorates the Codex cards', () => {
     expect(cards.codex.missingPrerequisites).toEqual([]);
     expect(cards.codex.prerequisitesMet).toBe(true);
   });
+
+  it('does not treat quota exhaustion as a missing prerequisite', async () => {
+    codexAppServer.peekCodexAccountReadiness.mockReturnValue({
+      ...READY,
+      status: CODEX_ACCOUNT_STATUS.quotaExhausted,
+    });
+
+    const cards = byId(await request(appWith()).get('/api/providers'));
+
+    expect(cards.codex.missingPrerequisites).toEqual([]);
+    expect(cards.codex.prerequisitesMet).toBe(true);
+  });
 });
 
 describe('GET /api/providers/codex/models', () => {

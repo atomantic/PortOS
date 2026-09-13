@@ -382,7 +382,9 @@ export const providerCardState = (provider, {
   // is a real answer ("nothing missing"). Anything else (an older server, a
   // payload fetched before the field existed) means not published, and the
   // local derivation below stands in.
-  const published = Array.isArray(provider?.missingPrerequisites) ? provider.missingPrerequisites : null;
+  const published = Array.isArray(provider?.missingPrerequisites)
+    ? provider.missingPrerequisites.filter((entry) => entry?.code !== 'codexQuota')
+    : null;
   const missing = published ? [...published] : [];
   const addMissing = (code, label) => {
     if (!missing.some((entry) => entry?.code === code && (code !== 'envVar' || entry?.label === label))) {
@@ -428,8 +430,6 @@ export const providerCardState = (provider, {
     addMissing('codexAccount', 'No ChatGPT account is signed in');
   } else if (codexSubscription && accountStatus === 'reauth-required') {
     addMissing('codexAccount', 'ChatGPT sign-in has expired');
-  } else if (codexSubscription && accountStatus === 'quota-exhausted') {
-    addMissing('codexQuota', 'ChatGPT usage limit reached');
   }
 
   // Switched off wins over every finding — see the precedence note above. The
@@ -438,6 +438,8 @@ export const providerCardState = (provider, {
   if (codexSubscription && codexAccount === null) return { state: PROVIDER_CARD_STATE.UNKNOWN, missing };
   if (codexSubscription && accountStatus === 'unknown') return { state: PROVIDER_CARD_STATE.UNKNOWN, missing };
   if (missing.length > 0) return { state: PROVIDER_CARD_STATE.BLOCKED, missing };
-  if (status?.available === false) return { state: PROVIDER_CARD_STATE.BENCHED, missing };
+  if (status?.available === false || (codexSubscription && accountStatus === 'quota-exhausted')) {
+    return { state: PROVIDER_CARD_STATE.BENCHED, missing };
+  }
   return { state: PROVIDER_CARD_STATE.READY, missing };
 };
