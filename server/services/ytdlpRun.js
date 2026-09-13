@@ -158,8 +158,10 @@ export async function runYtDlp({ ytDlp, args, onProgress, registerProcess }) {
   if (exit.signal === 'SIGTERM' || exit.signal === 'SIGKILL') {
     // Don't flush on cancel — a SIGKILL'd child leaves only a partial marker
     // line in the carry, and emitting it would fire a stray progress/stage
-    // callback right before the caller reports the cancellation.
-    return { canceled: true, code: exit.code ?? null, signal: exit.signal, reason: null, title };
+    // callback right before the caller reports the cancellation. `output` is
+    // still reported (minus that unflushed carry) so every return from this
+    // function has the one shape its callers can rely on.
+    return { canceled: true, code: exit.code ?? null, signal: exit.signal, reason: null, title, output: tail.text() };
   }
   // Flush any final line the child wrote without a trailing newline before exit.
   // yt-dlp's `ERROR:` line is often exactly that last line, so flushing has to
