@@ -810,10 +810,12 @@ describe('Codex quota freshness across a passive re-read', () => {
     })],
   });
 
+  // Real Codex rollout filenames replace ':' with '-' (colons are invalid in
+  // Windows filenames); sanitize here so callers can pass a raw ISO `name`.
   const writeSession = async (codexHome, { day, name, lines }) => {
     const dir = join(codexHome, 'sessions', ...day.split('-'));
     await mkdir(dir, { recursive: true });
-    await writeFile(join(dir, `rollout-${name}.jsonl`), `${lines.join('\n')}\n`);
+    await writeFile(join(dir, `rollout-${name.replaceAll(':', '-')}.jsonl`), `${lines.join('\n')}\n`);
   };
 
   const isoDaysAgo = (days) => new Date(Date.now() - days * 86400000).toISOString();
