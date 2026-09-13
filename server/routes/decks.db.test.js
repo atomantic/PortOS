@@ -134,10 +134,17 @@ describe.skipIf(!ready)('decks over HTTP and PostgreSQL', () => {
     expect((await post(`/${deck.id}/samples`, { sample })).body.samples).toHaveLength(1);
     expect((await del(`/${deck.id}/samples/deck-sample-1`)).body.samples).toHaveLength(0);
 
+    // A delete tombstones the deck so the deletion can reach subscribed peers
+    // (#decks federation). It reads as gone, and a second delete 404s — but the
+    // card rows survive until the tombstone GC hard-removes the deck, which is
+    // what lets a conflict-journal restore bring the roster back. The cascade
+    // itself is covered by `services/decksSync.db.test.js`.
     expect((await del(`/${deck.id}`)).status).toBe(200);
     expect((await get(`/${deck.id}`)).status).toBe(404);
-    const { rows } = await query('SELECT COUNT(*)::int AS n FROM deck_cards WHERE deck_id = $1', [deck.id]);
-    expect(rows[0].n).toBe(0);
+    expect((await get('')).body.some((d) => d.id === deck.id)).toBe(false);
+    const { rows } = await query('SELECT deleted, deleted_at FROM decks WHERE id = $1', [deck.id]);
+    expect(rows[0]).toMatchObject({ deleted: true });
+    expect(rows[0].deleted_at).toBeTruthy();
     expect((await del(`/${deck.id}`)).status).toBe(404);
   });
 });

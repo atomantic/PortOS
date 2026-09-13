@@ -9,23 +9,52 @@
  * the shared gallery (`data/images/`) and are referenced by filename, the same
  * way universe canon entries carry `imageRefs`.
  *
- * Machine-local: decks never federate (root AGENTS.md privacy rule) — a deck
- * that references a universe carries only that universe's id.
+ * Federated (record kind `deck`, sync category `decks`): a deck rides one push
+ * carrying its own row plus the FULL card roster, merged whole-record LWW on
+ * the deck's `updatedAt`. The install-capability pins (`imageMode` /
+ * `imageModelId` / `promptLlm`) and each card's in-flight `render` job state
+ * are machine-local and stripped from the wire (`syncWire.js`'s `deck` case) —
+ * a peer may not have the pinned provider, and a jobId means nothing there.
+ * Rendered gallery bytes flow through the push asset manifest, so a received
+ * card's `imageRefs` resolve locally. A deck that references a universe carries
+ * only that universe's id — no canon text crosses with it.
  */
 
 import { randomUUID } from 'node:crypto';
 import { query, withTransaction, ensureSchema } from '../lib/db.js';
 import { ServerError } from '../lib/errorHandler.js';
-import { trimTo } from '../lib/textUtils.js';
+import { trimTo, isNonBlankStr } from '../lib/textUtils.js';
 import { sanitizeLlmRoutePin } from '../lib/llmRoutePin.js';
 import { universeVisualStyleTokens } from '../lib/universeVisualStyle.js';
 import { DECK_CARD_SIZE, DECK_CARD_SIZE_BY_KIND, DEFAULT_LAYOUT_PROMPT, deckCardRoster, deckCompletion } from '../lib/deckTemplates.js';
 import { DECK_CARD_IMAGE_REFS_MAX, DECK_SAMPLES_MAX } from '../lib/deckValidation.js';
 import { recordRenderPin } from '../lib/renderTargets.js';
+import { createRecordWriteQueue } from '../lib/fileWriteQueue.js';
+import {
+  contentHashForRecord, setSyncBaseHash, deleteSyncBaseHash, flushBaseHashes,
+  withBaseHashFlushBatch, maybeJournalBeforeOverwrite,
+} from '../lib/conflictJournal.js';
+import { emitRecordUpdated, emitRecordDeleted, autoSubscribeRecordToAllPeers } from './sharing/recordEvents.js';
 
 const notFound = (what = 'Deck') => new ServerError(`${what} not found`, {
   status: 404, code: what === 'Deck' ? 'DECK_NOT_FOUND' : 'DECK_CARD_NOT_FOUND',
 });
+
+const isoOrNull = (v) => (v instanceof Date ? v.toISOString() : (v || null));
+
+// The peer-sync record kind for a deck (see the Federation section below).
+export const DECK_KIND = 'deck';
+
+// Per-DECK write tail. EVERY writer goes through it — the REST patches, the
+// render-completion hook, the delete, the peer merge and the tombstone sweep —
+// because the merge's read-modify-write spans two awaits (read local, then
+// upsert) and a REST PATCH landing between them would be silently overwritten.
+// Serializing only the merge side would leave exactly that gap open. Card
+// writes key on their DECK id, not the card id: a card patch also touches the
+// deck row, and the merge rewrites the whole roster, so they contend.
+// Nothing inside a queued function may call another queued function — the tail
+// is not re-entrant and a nested same-key call would deadlock.
+const queueRecordWrite = createRecordWriteQueue();
 
 const filenames = (values) => (Array.isArray(values) ? values : []).map((v) => trimTo(v)).filter(Boolean);
 
@@ -48,8 +77,13 @@ const projectDeck = (row) => {
     imageModelId: pin.modelId,
     cardSize: d.cardSize?.width && d.cardSize?.height ? d.cardSize : { ...(DECK_CARD_SIZE_BY_KIND[row.kind] || DECK_CARD_SIZE) },
     promptLlm: sanitizeLlmRoutePin(d.promptLlm),
-    createdAt: row.created_at,
-    updatedAt: row.updated_at,
+    // ISO strings, not the driver's Date objects: these are the LWW clock the
+    // sync merge compares and the wire form hashes, and a Date compares as
+    // "not a string" (so every remote would win). JSON output is unchanged.
+    createdAt: isoOrNull(row.created_at),
+    updatedAt: isoOrNull(row.updated_at),
+    deleted: row.deleted === true,
+    deletedAt: row.deleted === true ? isoOrNull(row.deleted_at) : null,
   };
 };
 
@@ -71,7 +105,7 @@ const projectCard = (row) => {
     imageRefs: filenames(d.imageRefs),
     primaryImageRef: trimTo(d.primaryImageRef) || null,
     render: d.render && typeof d.render === 'object' ? d.render : null,
-    updatedAt: row.updated_at,
+    updatedAt: isoOrNull(row.updated_at),
   };
 };
 
@@ -82,14 +116,19 @@ const loadCards = async (client, deckId) => {
   return rows.map(projectCard);
 };
 
-export async function listDecks() {
+export async function listDecks({ includeDeleted = false } = {}) {
   await ensureSchema();
-  const { rows } = await query('SELECT * FROM decks ORDER BY updated_at DESC, id');
+  const { rows } = await query(
+    `SELECT * FROM decks ${includeDeleted ? '' : 'WHERE deleted IS NOT TRUE'} ORDER BY updated_at DESC, id`,
+  );
   // Completion reads three card fields; project just those instead of every
   // card's prompt/history so the index page doesn't pull the whole deck.
+  // Scoped to the decks actually being returned — a tombstone keeps its roster
+  // until the GC sweep, so an unscoped scan drags every pending-deletion deck's
+  // cards through this query for a `byDeck` entry nothing ever looks up.
   const { rows: cardRows } = await query(`SELECT deck_id, jsonb_build_object(
       'prompt', left(definition->>'prompt', 1), 'imageRefs', COALESCE(definition->'imageRefs', '[]'::jsonb), 'render', definition->'render'
-    ) AS definition FROM deck_cards`);
+    ) AS definition FROM deck_cards WHERE deck_id = ANY($1::uuid[])`, [rows.map((r) => r.id)]);
   const byDeck = Map.groupBy(cardRows, (r) => r.deck_id);
   return rows.map((row) => ({
     ...projectDeck(row),
@@ -97,10 +136,10 @@ export async function listDecks() {
   }));
 }
 
-export async function getDeck(id) {
+export async function getDeck(id, { includeDeleted = false } = {}) {
   await ensureSchema();
   const { rows } = await query('SELECT * FROM decks WHERE id = $1', [id]);
-  if (!rows[0]) throw notFound();
+  if (!rows[0] || (!includeDeleted && rows[0].deleted === true)) throw notFound();
   const cards = await loadCards({ query }, id);
   return { ...projectDeck(rows[0]), cards, completion: deckCompletion(cards) };
 }
@@ -114,16 +153,17 @@ export async function getDeck(id) {
  */
 async function patchDeck(id, mutate) {
   await ensureSchema();
-  await withTransaction(async (client) => {
+  await queueRecordWrite(id, () => withTransaction(async (client) => {
     const { rows } = await client.query('SELECT * FROM decks WHERE id = $1', [id]);
-    if (!rows[0]) throw notFound();
+    if (!rows[0] || rows[0].deleted === true) throw notFound();
     const d = { ...(rows[0].definition || {}) };
     const columns = (await mutate(d, rows[0])) || {};
     await client.query(
       'UPDATE decks SET name = $2, universe_id = $3, definition = $4, updated_at = NOW() WHERE id = $1',
       [id, columns.name ?? rows[0].name, columns.universeId === undefined ? rows[0].universe_id : columns.universeId, d],
     );
-  });
+  }));
+  emitRecordUpdated(DECK_KIND, id);
   return getDeck(id);
 }
 
@@ -135,7 +175,12 @@ async function patchDeck(id, mutate) {
  */
 async function patchCard(deckId, cardId, mutate, { missingOk = false, touch = true } = {}) {
   await ensureSchema();
-  return withTransaction(async (client) => {
+  return queueRecordWrite(deckId, () => withTransaction(async (client) => {
+    const { rows: deckRows } = await client.query('SELECT deleted FROM decks WHERE id = $1', [deckId]);
+    if (!deckRows[0] || deckRows[0].deleted === true) {
+      if (missingOk) return null;
+      throw notFound();
+    }
     const { rows } = await client.query('SELECT * FROM deck_cards WHERE deck_id = $1 AND id = $2', [deckId, cardId]);
     if (!rows[0]) {
       if (missingOk) return null;
@@ -148,7 +193,7 @@ async function patchCard(deckId, cardId, mutate, { missingOk = false, touch = tr
     );
     if (touch) await client.query('UPDATE decks SET updated_at = NOW() WHERE id = $1', [deckId]);
     return projectCard(written[0]);
-  });
+  }));
 }
 
 // ── Deck CRUD ────────────────────────────────────────────────────────────────
@@ -204,7 +249,29 @@ export async function createDeck({ name, kind, description = '', universeId = nu
     );
   });
   console.log(`🃏 deck created "${trimTo(name)}" kind=${kind} cards=${roster.length}${universeId ? ` universe=${universeId}` : ''}`);
+  // Announce to the per-record push pipeline AND auto-subscribe every
+  // decks-enabled peer, so a brand-new deck (and its later tombstone)
+  // propagates without waiting for a manual subscribe. Mirrors the music-video
+  // / creative-director `announceNewProject` shape.
+  emitRecordUpdated(DECK_KIND, id);
+  autoSubscribeRecordToAllPeers(DECK_KIND, id).catch(() => {});
   return getDeck(id);
+}
+
+/**
+ * Apply the authored style-guide fields a patch carries onto a deck definition
+ * copy. Absent keys preserve; a present key applies. Shared by `updateDeck` and
+ * the conflict-journal `restoreDeck` (whose restorable set is exactly these) so
+ * a restore can't drift from a normal edit. The install-capability pins are NOT
+ * here — a restore never carries them (they're stripped from the wire).
+ */
+function applyDefinitionPatch(d, patch) {
+  if (patch.description !== undefined) d.description = trimTo(patch.description);
+  if (patch.styleNotes !== undefined) d.styleNotes = trimTo(patch.styleNotes);
+  if (patch.influences !== undefined) d.influences = universeVisualStyleTokens({ influences: patch.influences });
+  if (patch.layoutPrompt !== undefined) d.layoutPrompt = trimTo(patch.layoutPrompt);
+  if (patch.samples !== undefined) d.samples = Array.isArray(patch.samples) ? patch.samples.slice(0, DECK_SAMPLES_MAX) : [];
+  if (patch.cardSize !== undefined) d.cardSize = { width: patch.cardSize.width, height: patch.cardSize.height };
 }
 
 /**
@@ -214,13 +281,9 @@ export async function createDeck({ name, kind, description = '', universeId = nu
  */
 export function updateDeck(id, patch = {}) {
   return patchDeck(id, (d) => {
-    if (patch.description !== undefined) d.description = trimTo(patch.description);
-    if (patch.styleNotes !== undefined) d.styleNotes = trimTo(patch.styleNotes);
-    if (patch.influences !== undefined) d.influences = universeVisualStyleTokens({ influences: patch.influences });
-    if (patch.layoutPrompt !== undefined) d.layoutPrompt = trimTo(patch.layoutPrompt);
+    applyDefinitionPatch(d, patch);
     if (patch.imageMode !== undefined) d.imageMode = patch.imageMode || null;
     if (patch.imageModelId !== undefined) d.imageModelId = patch.imageModelId || null;
-    if (patch.cardSize !== undefined) d.cardSize = { width: patch.cardSize.width, height: patch.cardSize.height };
     if (patch.promptLlm !== undefined) d.promptLlm = sanitizeLlmRoutePin(patch.promptLlm);
     return {
       ...(patch.name !== undefined ? { name: trimTo(patch.name) } : {}),
@@ -229,19 +292,30 @@ export function updateDeck(id, patch = {}) {
   });
 }
 
+/**
+ * Soft-delete a deck. A hard delete never reaches a peer — the tombstone is
+ * what converges a subscribed instance, and the GC sweep hard-removes it once
+ * every peer has had the grace window to see it (`pruneTombstonedDecks`).
+ * Card rows are kept so a conflict-journal restore can un-tombstone the deck
+ * with its roster intact; the sweep's ON DELETE CASCADE clears them for good.
+ */
 export async function deleteDeck(id) {
   await ensureSchema();
-  const { rowCount } = await query('DELETE FROM decks WHERE id = $1', [id]);
+  const rowCount = await queueRecordWrite(id, async () => (await query(
+    'UPDATE decks SET deleted = TRUE, deleted_at = NOW(), updated_at = NOW() WHERE id = $1 AND deleted IS NOT TRUE',
+    [id],
+  )).rowCount);
   if (!rowCount) throw notFound();
   console.log(`🃏 deck deleted ${id}`);
+  emitRecordDeleted(DECK_KIND, id);
   return { ok: true };
 }
 
 // ── Cards ────────────────────────────────────────────────────────────────────
 
 /** Patch one card's authored fields (prompt, negative, name, refs, canon link). */
-export function updateCard(deckId, cardId, patch = {}) {
-  return patchCard(deckId, cardId, (d) => {
+export async function updateCard(deckId, cardId, patch = {}) {
+  const card = await patchCard(deckId, cardId, (d) => {
     if (patch.name !== undefined) d.name = trimTo(patch.name);
     if (patch.prompt !== undefined) { d.prompt = trimTo(patch.prompt); d.promptSource = 'edited'; }
     if (patch.negativePrompt !== undefined) d.negativePrompt = trimTo(patch.negativePrompt);
@@ -251,6 +325,8 @@ export function updateCard(deckId, cardId, patch = {}) {
     // A primary that no longer exists in the history falls back to the latest.
     if (d.primaryImageRef && !filenames(d.imageRefs).includes(d.primaryImageRef)) d.primaryImageRef = null;
   });
+  emitRecordUpdated(DECK_KIND, deckId);
+  return card;
 }
 
 /**
@@ -267,7 +343,10 @@ export async function applyCardGenerations(deckId, entries = []) {
     }, { missingOk: true, touch: false });
     if (card) applied += 1;
   }
-  if (applied) await query('UPDATE decks SET updated_at = NOW() WHERE id = $1', [deckId]);
+  if (applied) {
+    await queueRecordWrite(deckId, () => query('UPDATE decks SET updated_at = NOW() WHERE id = $1', [deckId]));
+    emitRecordUpdated(DECK_KIND, deckId);
+  }
   return applied;
 }
 
@@ -281,14 +360,14 @@ export async function markCardsRenderQueued(deckId, entries = []) {
   if (!entries.length) return;
   await ensureSchema();
   const stampedAt = new Date().toISOString();
-  await query(
+  await queueRecordWrite(deckId, () => query(
     `UPDATE deck_cards c
        SET definition = c.definition || jsonb_build_object('render', v.render), updated_at = NOW()
        FROM unnest($2::uuid[], $3::jsonb[]) AS v(id, render)
        WHERE c.deck_id = $1 AND c.id = v.id
          AND COALESCE(c.definition->'render'->>'jobId', '') <> v.render->>'jobId'`,
     [deckId, entries.map((e) => e.cardId), entries.map((e) => ({ ...e.render, updatedAt: stampedAt }))],
-  );
+  ));
 }
 
 /**
@@ -308,12 +387,17 @@ export function markCardRenderTerminal(deckId, cardId, { jobId, status, error = 
  * append the gallery filename, promote it to primary, clear the in-flight
  * record. Returns the card, or null when the card no longer exists.
  */
-export function attachCardRender({ deckId, cardId, filename, jobId }) {
-  return patchCard(deckId, cardId, (d) => {
+export async function attachCardRender({ deckId, cardId, filename, jobId }) {
+  const card = await patchCard(deckId, cardId, (d) => {
     d.imageRefs = [...filenames(d.imageRefs).filter((f) => f !== filename), filename].slice(-DECK_CARD_IMAGE_REFS_MAX);
     d.primaryImageRef = filename;
     d.render = { ...(d.render || {}), jobId, status: 'completed', error: null, filename, updatedAt: new Date().toISOString() };
   }, { missingOk: true });
+  // `imageRefs` / `primaryImageRef` are wire-visible, so a completed render is
+  // a real content change peers must receive (the in-flight `render` stamps
+  // above are stripped from the wire and deliberately announce nothing).
+  if (card) emitRecordUpdated(DECK_KIND, deckId);
+  return card;
 }
 
 // ── Samples (style references) ───────────────────────────────────────────────
@@ -347,5 +431,236 @@ export function addSample(id, sample, { adopt } = {}) {
 export function removeSample(id, sampleId) {
   return patchDeck(id, (d) => {
     d.samples = (Array.isArray(d.samples) ? d.samples : []).filter((s) => s?.id !== sampleId);
+  });
+}
+
+// ── Federation (record kind `deck`, sync category `decks`) ───────────────────
+//
+// A deck rides ONE push carrying the deck row plus its full card roster, merged
+// whole-record LWW on the deck's `updatedAt`. Cards are addressed by their
+// stable roster `key` (not by row id) so two machines that minted the same deck
+// kind converge on the same 52/78 slots instead of doubling them. Card ids stay
+// machine-local for the same reason: the receiver keeps its own row id for a key
+// it already holds, and mints one for a key it doesn't.
+
+/**
+ * One deck's sanitized record (tombstone surfaced), or null when unknown. Only
+ * a genuine miss answers null — a DB fault must NOT read as "absent," or the
+ * merge would treat an existing deck as new and skip the LWW compare entirely.
+ */
+export async function getDeckForSync(id) {
+  return getDeck(id, { includeDeleted: true }).catch((error) => {
+    if (error?.code === 'DECK_NOT_FOUND') return null;
+    throw error;
+  });
+}
+
+/** Every LIVE deck as `{ id, updatedAt }` — the full-sync coverage compare set. */
+export async function listDecksForSync() {
+  await ensureSchema();
+  const { rows } = await query('SELECT id, updated_at FROM decks WHERE deleted IS NOT TRUE');
+  return rows.map((r) => ({ id: r.id, updatedAt: isoOrNull(r.updated_at) }));
+}
+
+/** Deck ids — live only by default, or all (incl. tombstones) for the sweep. */
+export async function listDeckIdsForSync({ includeDeleted = false } = {}) {
+  await ensureSchema();
+  const { rows } = await query(
+    `SELECT id FROM decks ${includeDeleted ? '' : 'WHERE deleted IS NOT TRUE'}`,
+  );
+  return rows.map((r) => r.id);
+}
+
+// The wire-form card fields the receiver persists. `id` and `render` are
+// machine-local (a row id and an in-flight jobId mean nothing on a peer), so a
+// remote card never overwrites either.
+const cardDefinitionFromRemote = (card) => ({
+  name: trimTo(card?.name),
+  group: trimTo(card?.group),
+  groupLabel: trimTo(card?.groupLabel),
+  rank: card?.rank ?? null,
+  motif: trimTo(card?.motif) || null,
+  prompt: trimTo(card?.prompt),
+  negativePrompt: trimTo(card?.negativePrompt),
+  canonRef: card?.canonRef && typeof card.canonRef === 'object' ? card.canonRef : null,
+  imageRefs: filenames(card?.imageRefs).slice(-DECK_CARD_IMAGE_REFS_MAX),
+  primaryImageRef: trimTo(card?.primaryImageRef) || null,
+});
+
+// The deck-level definition fields that travel. The install-capability pins
+// (`imageMode` / `imageModelId` / `promptLlm`) are absent from the wire, so the
+// receiver's own pins are carried forward from its local copy instead of being
+// reset to null by a remote win.
+const definitionFromRemote = (remote, local) => ({
+  description: trimTo(remote?.description),
+  styleNotes: trimTo(remote?.styleNotes),
+  influences: universeVisualStyleTokens(remote),
+  layoutPrompt: trimTo(remote?.layoutPrompt),
+  samples: Array.isArray(remote?.samples) ? remote.samples.slice(0, DECK_SAMPLES_MAX) : [],
+  cardSize: remote?.cardSize?.width && remote?.cardSize?.height
+    ? { width: remote.cardSize.width, height: remote.cardSize.height }
+    : undefined,
+  imageMode: local?.imageMode ?? null,
+  imageModelId: local?.imageModelId ?? null,
+  promptLlm: local?.promptLlm ?? null,
+});
+
+// Newest ISO timestamp wins; a tie keeps the local copy (no churn on equal clocks).
+const remoteWinsOver = (remoteAt, localAt) => {
+  if (!isNonBlankStr(remoteAt)) return false;
+  if (!isNonBlankStr(localAt)) return true;
+  return new Date(remoteAt).getTime() > new Date(localAt).getTime();
+};
+
+/**
+ * Apply one remote deck inside a transaction: upsert the deck row (tombstone
+ * included) and reconcile its cards by roster `key` — upsert what the remote
+ * carries, drop the keys it no longer has. A tombstone carries no cards, so it
+ * leaves the local roster alone (a restore then has something to restore to).
+ */
+async function writeRemoteDeck(id, remote, local) {
+  const localDefinition = local ? {
+    imageMode: local.imageMode, imageModelId: local.imageModelId, promptLlm: local.promptLlm,
+  } : null;
+  await withTransaction(async (client) => {
+    const definition = definitionFromRemote(remote, localDefinition);
+    if (definition.cardSize === undefined) {
+      definition.cardSize = { ...(DECK_CARD_SIZE_BY_KIND[remote.kind] || DECK_CARD_SIZE) };
+    }
+    await client.query(
+      `INSERT INTO decks (id, name, kind, universe_id, definition, updated_at, deleted, deleted_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+       ON CONFLICT (id) DO UPDATE SET
+         name = EXCLUDED.name, kind = EXCLUDED.kind, universe_id = EXCLUDED.universe_id,
+         definition = EXCLUDED.definition, updated_at = EXCLUDED.updated_at,
+         deleted = EXCLUDED.deleted, deleted_at = EXCLUDED.deleted_at`,
+      [
+        id, trimTo(remote.name), remote.kind, remote.universeId || null, definition,
+        remote.updatedAt, remote.deleted === true,
+        remote.deleted === true ? (remote.deletedAt || new Date().toISOString()) : null,
+      ],
+    );
+    if (remote.deleted === true) return;
+    const cards = Array.isArray(remote.cards) ? remote.cards : [];
+    if (!cards.length) return;
+    await client.query(
+      `INSERT INTO deck_cards (id, deck_id, position, key, definition)
+       SELECT COALESCE(existing.id, v.new_id), $1, v.position, v.key, v.definition
+       FROM unnest($2::uuid[], $3::int[], $4::text[], $5::jsonb[]) AS v(new_id, position, key, definition)
+       LEFT JOIN deck_cards existing ON existing.deck_id = $1 AND existing.key = v.key
+       ON CONFLICT (deck_id, key) DO UPDATE SET
+         position = EXCLUDED.position, definition = EXCLUDED.definition, updated_at = NOW()`,
+      [
+        id,
+        cards.map(() => randomUUID()),
+        cards.map((c, i) => (Number.isInteger(c?.position) ? c.position : i)),
+        cards.map((c) => String(c.key)),
+        cards.map(cardDefinitionFromRemote),
+      ],
+    );
+    await client.query(
+      'DELETE FROM deck_cards WHERE deck_id = $1 AND key <> ALL($2::text[])',
+      [id, cards.map((c) => String(c.key))],
+    );
+  });
+}
+
+/**
+ * Merge an incoming batch of deck records from a peer (LWW, tombstone-aware).
+ * Serialized per-id against the REST writers, journals the about-to-be-
+ * overwritten local version when the remote wins, and re-stamps the
+ * conflict-journal base hash for the record it just wrote.
+ */
+export async function mergeDecksFromSync(remoteRecords, { source = { via: 'sync', peerId: null } } = {}) {
+  if (!Array.isArray(remoteRecords) || !remoteRecords.length) return { applied: false, count: 0 };
+  await ensureSchema();
+  let changed = 0;
+  for (const remote of remoteRecords) {
+    const id = remote?.id;
+    // `kind` is a CHECK-constrained column — a record naming an unknown deck
+    // kind would fail the INSERT, so drop it on the floor like a missing id.
+    if (!isNonBlankStr(id) || !isNonBlankStr(remote?.kind) || !DECK_CARD_SIZE_BY_KIND[remote.kind]) continue;
+    const applied = await queueRecordWrite(id, async () => {
+      const local = await getDeckForSync(id);
+      if (local && !remoteWinsOver(remote.updatedAt, local.updatedAt)) return false;
+      // An already-tombstoned local deck re-receiving the same tombstone is a
+      // no-op — writing it would restart its GC grace period every cycle.
+      if (local?.deleted === true && remote.deleted === true) return false;
+      if (local) {
+        await maybeJournalBeforeOverwrite({ kind: DECK_KIND, id, local, remote, source });
+      }
+      await writeRemoteDeck(id, remote, local);
+      const merged = await getDeckForSync(id);
+      if (merged) await setSyncBaseHash(DECK_KIND, id, contentHashForRecord(DECK_KIND, merged));
+      return true;
+    });
+    if (applied) changed += 1;
+  }
+  await flushBaseHashes();
+  if (changed > 0) console.log(`🃏 deck sync: merged ${changed} deck(s)`);
+  return changed === 0 ? { applied: false, count: 0 } : { applied: true, count: changed };
+}
+
+/**
+ * Hard-remove tombstoned decks deleted before `cutoffEpochMs`; evicts each base
+ * hash. `cutoffEpochMs` is an ABSOLUTE epoch-ms instant (what `cutoffForKind`
+ * produces), not a duration — matching every other `pruneTombstonedX`.
+ */
+export async function pruneTombstonedDecks(cutoffEpochMs) {
+  if (!Number.isFinite(cutoffEpochMs)) return { pruned: 0, ids: [] };
+  await ensureSchema();
+  const cutoff = new Date(cutoffEpochMs).toISOString();
+  const { rows } = await query(
+    'SELECT id FROM decks WHERE deleted IS TRUE AND deleted_at IS NOT NULL AND deleted_at < $1',
+    [cutoff],
+  );
+  const ids = [];
+  await withBaseHashFlushBatch(async () => {
+    for (const row of rows) {
+      // Re-check the predicate INSIDE the per-id tail: a merge that rewrote
+      // this tombstone with a fresher deletedAt mid-sweep restarted its grace
+      // period, and hard-deleting it early would let an offline peer
+      // resurrect the record. Cards go with it via ON DELETE CASCADE.
+      const pruned = await queueRecordWrite(row.id, async () => {
+        const { rowCount } = await query(
+          'DELETE FROM decks WHERE id = $1 AND deleted IS TRUE AND deleted_at < $2',
+          [row.id, cutoff],
+        );
+        return rowCount > 0;
+      });
+      if (!pruned) continue;
+      ids.push(row.id);
+      await deleteSyncBaseHash(DECK_KIND, row.id).catch(() => {});
+    }
+  });
+  if (ids.length) console.log(`🃏 deck tombstone GC: pruned ${ids.length} deck(s)`);
+  return { pruned: ids.length, ids };
+}
+
+/**
+ * Restore a tombstoned/overwritten deck from a conflict-journal snapshot:
+ * apply the restorable fields, un-tombstone, and bump `updatedAt` so the
+ * restore wins the next LWW and re-pushes. Returns null for a deck that has
+ * already been hard-pruned (→ ERR_TARGET_GONE at the route).
+ */
+export async function restoreDeck(id, patch = {}) {
+  await ensureSchema();
+  return queueRecordWrite(id, async () => {
+    const { rows } = await query('SELECT * FROM decks WHERE id = $1', [id]);
+    if (!rows[0]) return null;
+    const d = { ...(rows[0].definition || {}) };
+    applyDefinitionPatch(d, patch);
+    await query(
+      `UPDATE decks SET name = $2, universe_id = $3, definition = $4,
+         updated_at = NOW(), deleted = FALSE, deleted_at = NULL WHERE id = $1`,
+      [
+        id,
+        patch.name !== undefined ? trimTo(patch.name) : rows[0].name,
+        patch.universeId !== undefined ? (patch.universeId || null) : rows[0].universe_id,
+        d,
+      ],
+    );
+    emitRecordUpdated(DECK_KIND, id);
+    return getDeck(id);
   });
 }

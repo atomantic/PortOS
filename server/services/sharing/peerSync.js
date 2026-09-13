@@ -42,6 +42,7 @@ import { listBoards } from '../moodBoard/index.js';
 import { listLooms } from '../fableLoom/index.js';
 import { listWorksForSync, listFoldersForSync, listExercisesForSync } from '../writersRoom/sync.js';
 import { listCommissionFeedbackForSync } from '../creativeCommissions/feedbackStore.js';
+import { listDecksForSync } from '../decks.js';
 import { listCommissionsForSync } from '../creativeCommissions/store.js';
 import { initCursor } from './peerTombstoneCursors.js';
 import {
@@ -208,6 +209,10 @@ const RECORD_KIND_LISTERS = {
   // Live commission briefs as { id, updatedAt } (#2686). Body-less on the wire
   // (schedule/runs/assignment stripped), so no asset manifest backfill.
   creativeCommission: () => listCommissionsForSync(),
+  // Live decks as { id, updatedAt } — the coverage compare keys on the same
+  // clock the wire LWW does, so a deck edited since its last confirmed push
+  // reads as stale rather than fully mirrored.
+  deck: () => listDecksForSync(),
 };
 
 /**

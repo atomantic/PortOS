@@ -617,7 +617,7 @@ return an `{ items, total }` envelope.
 
 ### Decks
 
-Playing-card / tarot deck designer (Create → Decks). Decks are db-primary and machine-local; card images live in the shared gallery and are referenced by filename.
+Playing-card / tarot deck designer (Create → Decks). Decks are db-primary and federate to peers as record kind `deck` under the **Decks** sync category (off by default, per peer) — the deck ships with its full card roster, while the image/LLM pins and each card's in-flight render job stay machine-local. Card images live in the shared gallery, are referenced by filename, and ride the push asset manifest.
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
@@ -625,7 +625,7 @@ Playing-card / tarot deck designer (Create → Decks). Decks are db-primary and 
 | POST | `/decks` | Create a deck (`name`, `kind` = `playing` \| `tarot`, optional `universeId`, `seedStyleFromUniverse`); mints the full card roster |
 | GET | `/decks/:id` | Deck + cards + completion |
 | PATCH | `/decks/:id` | Style guide (`styleNotes`, `influences`, `layoutPrompt`), universe link, render pin (`imageMode`/`imageModelId`), LLM pins |
-| DELETE | `/decks/:id` | Delete the deck and its cards (gallery images are kept) |
+| DELETE | `/decks/:id` | Tombstone the deck so the deletion reaches subscribed peers; it disappears from reads immediately and the rows are hard-removed by the tombstone GC sweep (gallery images are kept) |
 | PATCH | `/decks/:id/cards/:cardId` | Edit a card (`prompt`, `negativePrompt`, `primaryImageRef`, `imageRefs`, `canonRef`) |
 | POST | `/decks/:id/analyze-sample` | Stateless vision analysis of a gallery image → proposed style guide + diff |
 | POST | `/decks/:id/samples` | Persist a reviewed sample; `adopt` applies the proposal in the same write |

@@ -15,7 +15,7 @@ import { EventEmitter } from 'events';
 import { PATHS, atomicWrite, readJSONFile, ensureDir } from '../../lib/fileUtils.js';
 import { getPeers, resolveEffectiveCategories } from '../instances.js';
 
-export const PEER_SUBSCRIBABLE_KINDS = Object.freeze(['universe', 'series', 'mediaCollection', 'author', 'artist', 'album', 'track', 'creativeDirectorProject', 'moodBoard', 'fableLoom', 'writersRoomWork', 'writersRoomFolder', 'writersRoomExercise', 'musicVideoProject', 'commissionFeedback', 'creativeCommission']);
+export const PEER_SUBSCRIBABLE_KINDS = Object.freeze(['universe', 'series', 'mediaCollection', 'author', 'artist', 'album', 'track', 'creativeDirectorProject', 'moodBoard', 'fableLoom', 'writersRoomWork', 'writersRoomFolder', 'writersRoomExercise', 'musicVideoProject', 'commissionFeedback', 'creativeCommission', 'deck']);
 
 /**
  * The optional top-level keys a NEWER sender may attach to a push envelope
@@ -163,6 +163,7 @@ export const KIND_TO_CATEGORY = Object.freeze({
   musicVideoProject: 'musicVideoProjects',
   commissionFeedback: 'commissionFeedback',
   creativeCommission: 'creativeCommissions',
+  deck: 'decks',
 });
 
 // The half every outbound predicate shares: the peer exists, the user has not

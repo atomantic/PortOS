@@ -228,6 +228,17 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // gate against. The FIRST incompatible outline-doc shape change (reverseOutline.js
   // SCHEMA_VERSION 1→2) MUST introduce a gate then, same as the review above.
   mediaCollections: 1,
+  // v1 = card decks (PostgreSQL `decks` + `deck_cards`) federated via the
+  // per-record peer-sync push pipeline (record kind `deck`, sync category
+  // `decks`). A brand-NEW synced record type, so it gets its own per-category
+  // gate: a v1 sender pushing to a ≤v0 (pre-feature) receiver is sender-ahead
+  // on `decks` and gets a 409 — only the decks category pauses, every other
+  // category keeps flowing. A v1 receiver still accepts a ≤v0 sender
+  // (sender-behind): pre-feature peers never push a `deck` record at all. The
+  // FIRST incompatible deck/card-shape change MUST bump this to 2 (where a v1
+  // peer would round-trip the new shape through an unaware sanitizer and LWW
+  // the strip back onto the newer peer).
+  decks: 1,
   // v1 = author personas (PostgreSQL `authors` table) federated via the
   // per-record peer-sync push pipeline (record kind `author`, sync category
   // `authors`). A brand-NEW synced record type like `storyBuilder` below, so it
@@ -729,6 +740,7 @@ export const RECORD_KIND_SCHEMA_CATEGORIES = Object.freeze({
   musicVideoProject: Object.freeze(['musicVideoProjects']),
   commissionFeedback: Object.freeze(['commissionFeedback']),
   creativeCommission: Object.freeze(['creativeCommissions']),
+  deck: Object.freeze(['decks']),
 });
 
 /**

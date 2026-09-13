@@ -41,6 +41,7 @@ import { restoreBoard } from './moodBoard/index.js';
 import { updateWork, restoreFolder, restoreExercise } from './writersRoom/local.js';
 import { restoreCommissionFeedback } from './creativeCommissions/feedbackStore.js';
 import { restoreCommission } from './creativeCommissions/store.js';
+import { restoreDeck } from './decks.js';
 import { restoreLoom } from './fableLoom/index.js';
 
 export const ERR_NOT_FOUND = 'CONFLICT_JOURNAL_NOT_FOUND';
@@ -181,6 +182,12 @@ async function applyToRecord(kind, recordId, patch, { replace = false } = {}) {
     // bumps updatedAt so the restore wins the next LWW. Machine-local schedule/
     // runs/assignment are kept as-is. Returns null for a missing record (#2686).
     const restored = await restoreCommission(recordId, patch).catch(translateGone);
+    if (!restored) throw makeErr(`The ${kind} this conflict targets no longer exists — discard the entry.`, ERR_TARGET_GONE);
+  } else if (kind === 'deck') {
+    // restoreDeck merges the snapshot's style-guide/identity fields, un-tombstones,
+    // and bumps updatedAt so the restore wins the next LWW and re-pushes. Returns
+    // null for a deck already hard-pruned by the tombstone sweep (→ ERR_TARGET_GONE).
+    const restored = await restoreDeck(recordId, patch).catch(translateGone);
     if (!restored) throw makeErr(`The ${kind} this conflict targets no longer exists — discard the entry.`, ERR_TARGET_GONE);
   } else if (kind === 'fableLoom') {
     // Restore the authored story graph and playback settings through the normal

@@ -7,7 +7,7 @@ import {
   Database, Brain, CheckCircle2, AlertCircle, Clock,
   RefreshCcw, Timer,
   Target, Sword, Fingerprint, HeartPulse, ChevronDown, ChevronRight,
-  Lock, Globe, Sparkles, Film, Images, Library, BookOpen, FilePen, Music, Music2, Disc3, Clapperboard, Palette, BookText, FolderTree, Video, Waypoints, Gauge
+  Lock, Globe, Sparkles, Film, Images, Library, BookOpen, FilePen, Music, Music2, Disc3, Clapperboard, Palette, BookText, FolderTree, Video, Waypoints, Gauge, Spade
 } from 'lucide-react';
 import { useSearchParams } from 'react-router';
 import Drawer from '../components/Drawer';
@@ -576,13 +576,14 @@ const SYNC_CATEGORY_META = [
   { key: 'musicVideoProjects', label: 'Music Video', icon: Video, description: 'Music Video projects: director board + beat-aligned scenes (PostgreSQL)' },
   { key: 'creativeCommissions', label: 'Commissions', icon: Target, description: 'Creative Commission briefs (name + intent + genre + generation settings) — the schedule + run history stay machine-local (PostgreSQL)' },
   { key: 'commissionFeedback', label: 'Commission Feedback', icon: Target, description: 'Creative Commission taste reactions that steer the next run — the schedule stays machine-local (PostgreSQL)' },
+  { key: 'decks', label: 'Decks', icon: Spade, description: 'Card decks: style guide, samples, per-card prompts + rendered card art — the image/LLM pins stay machine-local (PostgreSQL)' },
   { key: 'catalog', label: 'Catalog', icon: Library, description: 'Creative ingredients catalog: orphan ingredients + ref links (PostgreSQL)' }
 ];
 
 // Snapshot categories — exclude the per-record / delta-based categories that
 // have no 60s snapshot checksum: brain + memory (delta), catalog, and creative
 // record kinds handled by the per-record peer-push pipeline.
-const NON_SNAPSHOT_KEYS = new Set(['brain', 'memory', 'catalog', 'authors', 'artists', 'albums', 'tracks', 'creativeDirectorProjects', 'moodBoards', 'fableLoom', 'writersRoomWorks', 'writersRoomFolders', 'writersRoomExercises', 'musicVideoProjects', 'commissionFeedback', 'creativeCommissions']);
+const NON_SNAPSHOT_KEYS = new Set(['brain', 'memory', 'catalog', 'authors', 'artists', 'albums', 'tracks', 'creativeDirectorProjects', 'moodBoards', 'fableLoom', 'writersRoomWorks', 'writersRoomFolders', 'writersRoomExercises', 'musicVideoProjects', 'commissionFeedback', 'creativeCommissions', 'decks']);
 const SNAPSHOT_CATEGORIES = SYNC_CATEGORY_META.filter(m => !NON_SNAPSHOT_KEYS.has(m.key));
 
 // Indicator backed by REAL coverage diffing (record IDs vs confirmed pushes),

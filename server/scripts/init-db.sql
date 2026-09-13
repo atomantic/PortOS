@@ -2080,7 +2080,9 @@ CREATE TABLE IF NOT EXISTS decks (
     universe_id TEXT,
     definition JSONB NOT NULL DEFAULT '{}'::jsonb,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    deleted BOOLEAN NOT NULL DEFAULT FALSE,
+    deleted_at TIMESTAMPTZ
   );
 CREATE TABLE IF NOT EXISTS deck_cards (
     id UUID PRIMARY KEY,
@@ -2092,3 +2094,4 @@ CREATE TABLE IF NOT EXISTS deck_cards (
     UNIQUE (deck_id, key)
   );
 CREATE INDEX IF NOT EXISTS idx_deck_cards_deck ON deck_cards (deck_id, position);
+CREATE INDEX IF NOT EXISTS idx_decks_deleted ON decks (deleted, updated_at DESC);
