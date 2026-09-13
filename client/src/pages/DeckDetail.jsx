@@ -228,7 +228,9 @@ function DeckEditor({ id }) {
             {universe ? (
               <Link to={`/universes/${universe.id}`} className="inline-flex items-center gap-1 hover:text-white"><Globe className="w-3 h-3" aria-hidden="true" />{universe.name}</Link>
             ) : null}
-            <span>{completion.rendered}/{completion.total} rendered · {completion.prompted} prompted{completion.inFlight ? ` · ${completion.inFlight} rendering` : ''}{completion.failed ? ` · ${completion.failed} failed` : ''}</span>
+            {/* Both counters read as fractions of the deck: a bare "79 prompted"
+                beside "0/79 rendered" looks like a different denominator. */}
+            <span>{completion.rendered}/{completion.total} rendered · {completion.prompted}/{completion.total} prompted{completion.inFlight ? ` · ${completion.inFlight} rendering` : ''}{completion.failed ? ` · ${completion.failed} failed` : ''}</span>
           </div>
           <div className="max-w-md">
             <ProgressBar percent={completion.percent} label="Deck render progress" tone={completion.percent === 100 ? 'success' : 'accent'} />

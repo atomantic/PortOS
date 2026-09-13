@@ -154,6 +154,7 @@ export default function StyleProbeImage({ universe, onUniverseChange, canRender 
         onComplete={handleComplete}
         onPreview={onPreview}
         canRender={canProbe && Boolean(universe?.id) && styleReady}
+        disabledHint="Save the world and add embrace influences to enable"
         alt="Base style"
         size="xl"
       />

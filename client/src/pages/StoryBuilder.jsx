@@ -890,6 +890,7 @@ function StepCharacters({ session, universe, locked, onChanged, onUniverseCharRe
             onRender={() => renderChar(c)}
             onComplete={(fn) => onCharComplete(fn, c.id)}
             canRender={!locked && Boolean(universe?.id)}
+            disabledHint={locked ? 'This story is locked' : 'Pick a universe to enable rendering'}
             alt={c.name}
           />
           <div className="flex-1 min-w-0">

@@ -10,14 +10,16 @@
  *      `EntryCardThumbnail` behavior, extracted here to keep both paths in
  *      lock-step).
  *   3. Empty — no jobId, no images → 48x48 placeholder box with a centered
- *      Sparkles button that fires `onRender()`. Keeps row heights consistent
- *      across freshly-extracted entries (no images yet) and rendered ones,
- *      and surfaces a one-click render affordance without scrolling to the
- *      row's action column.
+ *      `emptyIcon` button (Sparkles by default) that fires `onRender()`. Keeps
+ *      row heights consistent across freshly-extracted entries (no images yet)
+ *      and rendered ones, and surfaces a one-click render affordance without
+ *      scrolling to the row's action column.
  *
- * The fixed footprint avoids row-height jitter between empty / pending /
- * rendered states. Disabled when `canRender` is false (no backend selected,
- * save pending, etc.) so the button shape is still visible but inert.
+ * All three states are laid out in the same `THUMB_DIMENSIONS` box, so a row
+ * never jitters as a render starts and finishes. Disabled when `canRender` is
+ * false (no backend selected, save pending, etc.) so the button shape is still
+ * visible but inert — `disabledHint` is what says why, and every host has a
+ * different reason, so it has no useful default beyond a neutral one.
  */
 import { useCallback, useState, useEffect } from 'react';
 import { Sparkles, Star } from 'lucide-react';
@@ -52,6 +54,16 @@ export default function EntryThumbSlot({
   // arity note above; fires after it, so the clear happens first either way.
   onTerminalStatus = null,
   canRender = true,
+  // The empty slot's affordance. Glyph and label travel together because a host
+  // whose empty state is not "render this" needs to change both: a deck card
+  // with no prompt yet points at its editor instead.
+  emptyIcon: EmptyIcon = Sparkles,
+  emptyHint = 'Render image for this item',
+  // Why the affordance is inert, in the host's own words — shown on hover and
+  // announced as the button's name. There is no shared right answer (an empty
+  // description, an unsaved world, a locked story, no configured backend), so a
+  // host that can disable the slot should always pass this.
+  disabledHint = 'Render unavailable',
   alt = 'Render',
   // `'lg'` renders the empty-state box at 64x96 with a bigger Sparkles
   // affordance (reserved for slots that ride a wider card). `'xl'` is the
@@ -75,28 +87,30 @@ export default function EntryThumbSlot({
     [onComplete, onTerminalStatus],
   );
   if (inFlightJobId) {
-    // `xs` (48x80) matches the empty + completed states below so all three
-    // states share a footprint and the row doesn't jump mid-render. `'lg'`
-    // upgrades the pending box to `sm` (64x64); `'xl'` uses `lg` (128x128).
-    // `MediaJobThumb` doesn't have portrait variants past `xs`, so the
-    // larger pending states are square — one-time jitter when the render
-    // finishes and the portrait completed-thumb takes over.
+    // `xs` (48x80) matches the empty + completed states below. `'lg'` upgrades
+    // the pending box to `sm` (64x64); `'xl'` uses `lg` (128x128).
+    // `MediaJobThumb` has no portrait variant past `xs`, so the larger pending
+    // states are square — centered inside the slot's own portrait box, or every
+    // host would have to reserve the height itself to stop the row jumping when
+    // a render starts and again when it finishes.
     const pendingSize = size === 'xl' ? 'lg' : size === 'lg' ? 'sm' : 'xs';
     return (
-      <MediaJobThumb
-        jobId={inFlightJobId}
-        label={alt}
-        size={pendingSize}
-        onPreview={onPreview}
-        onFilename={onComplete}
-        // A terminal failure/cancel never yields a filename, so `onComplete`
-        // (which clears the in-flight job) would otherwise never fire and the
-        // job stays pinned. Callers that scope render state per entity keep that
-        // state across switches (no remount to reset it), so a failed job would
-        // leave the slot stuck — clear it via the no-filename path so the slot
-        // returns to an actionable state and the entity can be re-rendered.
-        onStatus={onStatus}
-      />
+      <div className={`${THUMB_DIMENSIONS[size] || THUMB_DIMENSIONS.sm} shrink-0 flex items-center justify-center`}>
+        <MediaJobThumb
+          jobId={inFlightJobId}
+          label={alt}
+          size={pendingSize}
+          onPreview={onPreview}
+          onFilename={onComplete}
+          // A terminal failure/cancel never yields a filename, so `onComplete`
+          // (which clears the in-flight job) would otherwise never fire and the
+          // job stays pinned. Callers that scope render state per entity keep
+          // that state across switches (no remount to reset it), so a failed job
+          // would leave the slot stuck — clear it via the no-filename path so the
+          // slot returns to an actionable state and the entity can be re-rendered.
+          onStatus={onStatus}
+        />
+      </div>
     );
   }
   const refs = Array.isArray(imageRefs) ? imageRefs : [];
@@ -122,15 +136,16 @@ export default function EntryThumbSlot({
   // completed image, eliminating row jitter across the three states.
   const dim = THUMB_DIMENSIONS[size] || THUMB_DIMENSIONS.sm;
   const iconSize = size === 'xl' ? 32 : size === 'lg' ? 18 : 14;
+  const hint = canRender && onRender ? emptyHint : disabledHint;
   return (
     <button
       type="button"
       onClick={() => onRender?.()}
       disabled={!onRender || !canRender}
-      title={canRender ? 'Render image for this item' : 'Save the universe first to enable render'} aria-label={canRender ? 'Render image for this item' : 'Save the universe first to enable render'}
+      title={hint} aria-label={hint}
       className={`${dim} shrink-0 flex items-center justify-center rounded border border-dashed border-port-border bg-port-bg/40 text-gray-500 hover:border-port-accent/50 hover:text-port-accent hover:bg-port-accent/5 disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:border-port-border disabled:hover:text-gray-500 disabled:hover:bg-port-bg/40 transition-colors`}
     >
-      <Sparkles size={iconSize} />
+      <EmptyIcon size={iconSize} />
     </button>
   );
 }

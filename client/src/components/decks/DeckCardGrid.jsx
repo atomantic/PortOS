@@ -1,66 +1,80 @@
 import { useMemo } from 'react';
-import { Link2 } from 'lucide-react';
+import { AlertTriangle, Check, Hourglass, Link2, PencilLine, Play } from 'lucide-react';
 import EntryThumbSlot from '../universe/EntryThumbSlot';
 import Pill from '../ui/Pill';
-import { CARD_STATUS, cardInFlightJobId, cardStatus } from '../../lib/decks';
+import { CARD_STATUS, cardInFlightJobId, cardStatus, deckCompletion } from '../../lib/decks';
 
-const STATUS_TONE = {
-  [CARD_STATUS.EMPTY]: 'context',
-  [CARD_STATUS.PROMPTED]: 'muted',
-  [CARD_STATUS.QUEUED]: 'accent',
-  [CARD_STATUS.RUNNING]: 'accent',
-  [CARD_STATUS.RENDERED]: 'success',
-  [CARD_STATUS.FAILED]: 'error',
-};
-const STATUS_LABEL = {
-  [CARD_STATUS.EMPTY]: 'needs prompt',
-  [CARD_STATUS.PROMPTED]: 'ready',
+// One badge per card state, named for what the user can DO next rather than for
+// the internal status word: "ready" alone did not answer "does this card have a
+// prompt yet?", which is the question the grid exists to answer at a glance.
+const STATUS_META = {
+  [CARD_STATUS.EMPTY]: { tone: 'warning', icon: PencilLine, label: 'Needs prompt' },
+  [CARD_STATUS.PROMPTED]: { tone: 'accent', icon: Play, label: 'Ready to render' },
   // The queue never stamps 'running' on the card; the slot's live thumb shows
-  // progress, so both in-flight states read as one word.
-  [CARD_STATUS.QUEUED]: 'rendering',
-  [CARD_STATUS.RUNNING]: 'rendering',
-  [CARD_STATUS.RENDERED]: 'rendered',
-  [CARD_STATUS.FAILED]: 'failed',
+  // progress, so both in-flight states read the same.
+  [CARD_STATUS.QUEUED]: { tone: 'muted', icon: Hourglass, label: 'Rendering…' },
+  [CARD_STATUS.RUNNING]: { tone: 'muted', icon: Hourglass, label: 'Rendering…' },
+  [CARD_STATUS.RENDERED]: { tone: 'success', icon: Check, label: 'Rendered' },
+  [CARD_STATUS.FAILED]: { tone: 'error', icon: AlertTriangle, label: 'Failed' },
 };
 
 /**
  * The deck laid out by group (suit / arcana / jokers / back), one three-state
  * thumbnail slot per card: pending render → live progress, rendered → the
- * primary image, empty → a one-click render affordance. Status and in-flight
- * job derive from the card's persisted `render` record, so a slot settling
- * locally and a reload after the server filed the render read the same way.
- * Clicking a card's name opens its drawer; the slot's image opens the lightbox.
+ * primary image, empty → a one-click render (or, with no prompt written yet, a
+ * shortcut into the card editor). Status and in-flight job derive from the
+ * card's persisted `render` record, so a slot settling locally and a reload
+ * after the server filed the render read the same way. Clicking a card's name
+ * opens its drawer; the slot's image opens the lightbox.
+ *
+ * Every card wears a labelled badge for its state and every group header spells
+ * its counts out in words, so "which cards still need a prompt, and which are
+ * ready to render" is answerable without opening a single card.
  */
 export default function DeckCardGrid({ deck, onOpenCard, onRenderCard, onPreview, onRenderComplete, onRenderTerminal }) {
   const groups = useMemo(() => {
     const byGroup = Map.groupBy(deck.cards, (card) => card.group);
-    return [...byGroup].map(([key, cards]) => ({ key, label: cards[0].groupLabel || key, cards }));
+    return [...byGroup].map(([key, cards]) => {
+      const counts = deckCompletion(cards);
+      return { key, label: cards[0].groupLabel || key, cards, counts, needPrompt: counts.total - counts.prompted };
+    });
   }, [deck.cards]);
 
   return (
     <div className="space-y-6">
       {groups.map((group) => (
         <section key={group.key} aria-label={group.label}>
-          <h2 className="text-sm font-medium text-white mb-2 flex items-center gap-2">
+          <h2 className="text-sm font-medium text-white mb-2 flex items-center gap-2 flex-wrap">
             {group.label}
-            <span className="text-xs text-gray-500">{group.cards.filter((c) => c.imageRefs?.length).length}/{group.cards.length}</span>
+            <span className="text-xs font-normal text-gray-400">
+              {group.counts.rendered}/{group.counts.total} rendered
+            </span>
+            {group.needPrompt ? (
+              <Pill tone="warning" size="xs" icon={PencilLine}>{group.needPrompt} need a prompt</Pill>
+            ) : null}
           </h2>
           <ul className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-6">
             {group.cards.map((card) => {
               const inFlight = cardInFlightJobId(card);
               const status = cardStatus(card);
+              const meta = STATUS_META[status];
+              const needsPrompt = !card.prompt;
               return (
-                <li key={card.id} className="flex flex-col items-center gap-1.5 rounded-lg border border-port-border bg-port-card p-2">
+                <li key={card.id} className="flex h-full flex-col items-center gap-1.5 rounded-lg border border-port-border bg-port-card p-2">
                   <EntryThumbSlot
                     size="xl"
                     inFlightJobId={inFlight}
                     imageRefs={card.imageRefs}
                     primaryImageRef={card.primaryImageRef}
-                    onRender={() => onRenderCard(card)}
+                    // A card with no prompt has nothing to render, so its
+                    // empty slot opens the editor rather than sitting there
+                    // greyed out — the one thing that unblocks it.
+                    onRender={() => (needsPrompt ? onOpenCard(card) : onRenderCard(card))}
                     onPreview={() => onPreview(card)}
                     onComplete={(filename) => onRenderComplete(card.id, filename)}
                     onTerminalStatus={(s) => onRenderTerminal(card.id, s)}
-                    canRender={!!card.prompt && !inFlight}
+                    emptyIcon={needsPrompt ? PencilLine : undefined}
+                    emptyHint={needsPrompt ? `Write a prompt for ${card.name}` : `Render ${card.name}`}
                     alt={card.name}
                   />
                   <button
@@ -76,7 +90,7 @@ export default function DeckCardGrid({ deck, onOpenCard, onRenderCard, onPreview
                       </span>
                     ) : null}
                   </button>
-                  <Pill tone={STATUS_TONE[status]} size="xs">{STATUS_LABEL[status]}</Pill>
+                  <Pill tone={meta.tone} size="xs" icon={meta.icon} className="mt-auto">{meta.label}</Pill>
                 </li>
               );
             })}
