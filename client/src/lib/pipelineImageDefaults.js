@@ -7,12 +7,16 @@
 
 import { isCloudCliMode, IMAGE_GEN_MODE } from './imageGenBackends';
 
+// The geometry + prompt knobs of a render config, with no backend or model —
+// the half that is NOT install-wide state. `settings.pipeline.imageGen` is the
+// Pipeline visual form's own sticky buffer, so a surface that is not that form
+// starts from these shipped values instead of inheriting whatever a comic page
+// was last rendered with (see `useImageRenderSettings`).
+//
 // 1024×1536 = 2:3 portrait, the closest preset to a real comic-book trim
 // (~0.65 ratio). The "hi-res portrait" entry in imageGenResolutions is
 // gated to codex + FLUX2, which lines up with our codex-first default.
-export const PIPELINE_IMAGE_DEFAULTS = Object.freeze({
-  mode: IMAGE_GEN_MODE.LOCAL,
-  modelId: 'flux2-klein-4b',
+export const IMAGE_RENDER_KNOB_DEFAULTS = Object.freeze({
   width: 1024,
   height: 1536,
   steps: '',
@@ -20,6 +24,12 @@ export const PIPELINE_IMAGE_DEFAULTS = Object.freeze({
   seed: '',
   negativePrompt: '',
   extraStyle: '',
+});
+
+export const PIPELINE_IMAGE_DEFAULTS = Object.freeze({
+  mode: IMAGE_GEN_MODE.LOCAL,
+  modelId: 'flux2-klein-4b',
+  ...IMAGE_RENDER_KNOB_DEFAULTS,
 });
 
 // Resolve the per-render config. Codex-enabled systems default to codex

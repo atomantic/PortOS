@@ -66,6 +66,7 @@ export { default as usePopoverPosition } from './usePopoverPosition.js';
 export { default as useAgyModels } from './useAgyModels.js';
 export * from './useAgyModels.js';
 export { default as useLocalLlmStatus } from './useLocalLlmStatus.js';
+export { default as useLocalImageModels } from './useLocalImageModels.js';
 export { default as useLocalModels } from './useLocalModels.js';
 export { default as useVisionModelIds } from './useVisionModelIds.js';
 export { default as useToolUseModelIds } from './useToolUseModelIds.js';

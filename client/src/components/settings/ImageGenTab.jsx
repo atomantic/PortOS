@@ -21,14 +21,15 @@ import { isLoopbackHost } from '../../lib/loopbackHost.js';
 import { PORTS } from '../../lib/ports.js';
 import {
   getSettings, updateSettings, getImageGenStatus, generateImage,
-  registerTool, updateTool, getToolsList, listImageModels,
+  registerTool, updateTool, getToolsList,
   saveHfToken, clearHfToken,
 } from '../../services/api';
-import { deriveAvailableBackends, imageGenReadiness, isCloudCliMode, IMAGE_GEN_MODE, AGY_IMAGEGEN_DEFAULT_MODEL, AGY_IMAGEGEN_IMAGE_MODEL, CODEX_IMAGEGEN_DEFAULT_EFFORT, CODEX_IMAGEGEN_DEFAULT_MODEL, GROK_ASPECT_RATIOS, LOCAL_IMAGEGEN_DEFAULT_MODEL, RENDER_TARGET_BACKEND_AUTO, RENDER_TARGET_OPTIONS, VIDEO_RENDER_MODES, modeLabel, normalizeRenderPinValue, supportsCloudModelOverride } from '../../lib/imageGenBackends';
+import { deriveAvailableBackends, imageGenReadiness, isCloudCliMode, IMAGE_GEN_MODE, AGY_IMAGEGEN_DEFAULT_MODEL, AGY_IMAGEGEN_IMAGE_MODEL, CODEX_IMAGEGEN_DEFAULT_EFFORT, CODEX_IMAGEGEN_DEFAULT_MODEL, GROK_ASPECT_RATIOS, RENDER_TARGET_BACKEND_AUTO, RENDER_TARGET_OPTIONS, VIDEO_RENDER_MODES, localModelSelectOptions, modeLabel, normalizeRenderPinValue, supportsCloudModelOverride } from '../../lib/imageGenBackends';
 import { resolveCleanersFromConfig } from '../../lib/imageCleaners';
 import { useMediaJobSse } from '../../hooks/useMediaJobSse';
 import { useAgyModels } from '../../hooks/useAgyModels';
 import { useHfTokenStatus } from '../../hooks/useHfTokenStatus';
+import useLocalImageModels from '../../hooks/useLocalImageModels';
 import { effortLevelsForProvider } from '../../utils/providers';
 
 const SDAPI_TOOL_ID = 'sdapi';
@@ -130,10 +131,12 @@ export function ImageGenTab() {
   // hand-editing settings.json. Client-side defaults in lib/pipelineImageDefaults
   // and lib/wrImageDefaults still hardcode their own model and do not consult it.
   const [localModelId, setLocalModelId] = useState('');
-  // Catalog for the picker, probed once the Local tab is mounted. `null` until
-  // the fetch resolves (vs `[]` for "fetched and genuinely empty") so the
-  // select can say "loading" rather than silently offering nothing.
-  const [localModels, setLocalModels] = useState(null);
+  // Catalog for the picker, probed once the Local tab is mounted — the same
+  // "don't probe a tab nobody looked at" rule as the Agy list below.
+  // Hardware-incompatible entries are filtered out by the hook's fetch: a
+  // default this machine's runner refuses is a render error waiting to happen,
+  // and `checkLocalConnection` already reports it as unavailable.
+  const { models: localModels } = useLocalImageModels(localMounted);
   const [exposeA1111, setExposeA1111] = useState(false);
   // Codex CLI provider config — gated by `codexEnabled` so users without
   // a paid Codex plan that includes image_gen can hide the option entirely.
@@ -359,30 +362,14 @@ export function ImageGenTab() {
       .finally(() => setLoading(false));
   }, []);
 
-  // Local model catalog — fetched once the Local tab has been opened, on the
-  // same "don't probe a tab nobody looked at" rule as the Agy list below.
-  // Hardware-incompatible entries are filtered out by `listImageModels`: a
-  // default that this machine's runner refuses is a render error waiting to
-  // happen, and `checkLocalConnection` already reports it as unavailable.
-  useEffect(() => {
-    if (!localMounted) return;
-    let alive = true;
-    listImageModels()
-      .then((list) => { if (alive) setLocalModels(Array.isArray(list) ? list : []); })
-      .catch(() => { if (alive) setLocalModels([]); });
-    return () => { alive = false; };
-  }, [localMounted]);
-
-  // A pin the live catalog no longer lists (model rotated out, or this machine
-  // stopped being compatible) still has to render as the selected option —
-  // otherwise the select paints blank, reads as "install default", and a save
-  // would silently drop a pin the server is still honouring.
-  const pinIsOrphaned = localModelId && localModels !== null && !localModels.some((m) => m.id === localModelId);
-  const localModelOptions = pinIsOrphaned
-    ? [{ id: localModelId, name: `${localModelId} (unavailable on this machine)` }, ...localModels]
-    : localModels ?? [];
-  const localDefaultLabel = localModels?.find((m) => m.id === LOCAL_IMAGEGEN_DEFAULT_MODEL)?.name
-    || LOCAL_IMAGEGEN_DEFAULT_MODEL;
+  // Shared with the per-record local-model picker (RecordRenderPinRow), which
+  // needs the same orphaned-pin handling: a pin the live catalog no longer
+  // lists still has to render as the selected option, or the select paints
+  // blank, reads as "install default", and a save silently drops a pin the
+  // server is still honouring.
+  const { options: localModelOptions, fallbackLabel: localDefaultLabel } = localModelSelectOptions(
+    localModels, localModelId,
+  );
 
   // Probe only while the Agy tab is actually open — the list spawns `agy models`
   // server-side, so an unopened tab must not pay for a child process.
