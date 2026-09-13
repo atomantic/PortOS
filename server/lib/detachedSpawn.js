@@ -469,6 +469,10 @@ function createLogTailer(handle, { controlDir, pollMs, cleanup }) {
  * @param {string} [opts.cwd] - working directory for the job
  * @param {string} opts.controlDir - job-private dir for log/pid/exit files
  * @param {number} [opts.pollMs] - tail/poll cadence (default 250ms)
+ * @param {number} [opts.pidTimeoutMs] - how long to wait for the supervisor to
+ *   record a PID before treating the launch as failed (default 10000ms).
+ *   Overridable so a test driving the real double-fork/supervisor launch can
+ *   give a slow CI host more headroom without weakening the production default.
  * @param {boolean} [opts.cleanup] - remove controlDir after the job terminates
  *   (default false — keep the logs, e.g. inside a run dir for post-mortem)
  * @param {boolean} [opts.killProcessGroup] - signal `-pid` on cancel/reap so a
@@ -479,7 +483,8 @@ function createLogTailer(handle, { controlDir, pollMs, cleanup }) {
  * @returns {Promise<object>} ChildProcess-like handle (resolves once the PID is known)
  */
 export async function spawnDetached(bin, args = [], {
-  env, cwd, controlDir, pollMs = DEFAULT_POLL_MS, cleanup = false, killProcessGroup = false,
+  env, cwd, controlDir, pollMs = DEFAULT_POLL_MS, pidTimeoutMs = PID_TIMEOUT_MS,
+  cleanup = false, killProcessGroup = false,
 } = {}) {
   if (!controlDir) throw new Error('spawnDetached requires a controlDir');
 
@@ -556,7 +561,7 @@ export async function spawnDetached(bin, args = [], {
   // close) or throw as unhandled (error), matching ChildProcess async timing.
   let launchError = null;
   const awaitPid = async () => {
-    for (let waited = 0; waited < PID_TIMEOUT_MS; waited += pollMs) {
+    for (let waited = 0; waited < pidTimeoutMs; waited += pollMs) {
       if (launcherSpawnError) { launchError = launcherSpawnError; return; }
       const raw = await readFile(pidFile, 'utf8').catch(() => '');
       const pid = Number.parseInt(raw, 10);
@@ -571,7 +576,7 @@ export async function spawnDetached(bin, args = [], {
     // Otherwise it's a hard launch failure.
     const exitRaw = await readFile(exitFile, 'utf8').catch(() => '');
     if (exitRaw.length === 0) {
-      launchError = new Error(`detached spawn produced no PID within ${PID_TIMEOUT_MS}ms`);
+      launchError = new Error(`detached spawn produced no PID within ${pidTimeoutMs}ms`);
     }
   };
 
