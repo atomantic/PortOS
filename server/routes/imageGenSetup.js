@@ -109,19 +109,31 @@ router.post('/flux2-install', asyncHandler(async (req, res) => {
   // Server-console visibility for the multi-GB torch install (start / stage
   // milestones / outcome) — installFlux2Venv streams progress only to `send`.
   installLog = createInstallLogger({ installer: 'FLUX.2 venv', target: FLUX2_VENV_DEFAULT });
-  const emit = (ev) => { installLog.onEvent(ev); send(ev); };
+  // The client reads a stream that closes with no terminal frame as
+  // "Connection to installer lost" — a phantom transport error that hides the
+  // real cause. installFlux2Venv emits one on every non-cancelled failure;
+  // this tracks whether it did so the reconcile below can backstop a path that
+  // ever forgets, rather than letting the modal lie about why it stopped.
+  let terminalSent = false;
+  const emit = (ev) => {
+    if (ev?.type === 'error' || ev?.type === 'complete') terminalSent = true;
+    installLog.onEvent(ev);
+    send(ev);
+  };
   installLog.start();
 
   const { promise, kill } = installFlux2Venv(emit);
   killInstall = kill;
   flux2InstallInFlight = promise;
   promise
-    // installFlux2Venv resolves { ok:false } on some pip failures without
-    // emitting a terminal SSE event, so reconcile the outcome from the result
-    // (a no-op if `onEvent` already logged a complete/error frame).
+    // Reconcile the outcome from the result — a no-op for the console logger if
+    // `onEvent` already saw a complete/error frame.
     .then((result) => {
       if (result?.ok) installLog.success(result?.pythonPath ? `ready: ${result.pythonPath}` : undefined);
       else installLog.failure(`failed at stage ${result?.stage || 'unknown'}`);
+      if (!result?.ok && !result?.cancelled && !terminalSent) {
+        emit({ type: 'error', message: `FLUX.2 install failed at the ${result?.stage || 'unknown'} stage. See the install log above.` });
+      }
     })
     .catch((err) => emit({ type: 'error', message: err?.message || 'Unknown installer failure' }))
     .finally(() => {

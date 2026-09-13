@@ -20,7 +20,24 @@ const mockState = {
   // of execShouldFail (which also drives the unrelated arch probe).
   fluxImportShouldFail: false,
   fluxImportCalls: 0,
+  // `sys.version_info` answers per interpreter path, for the MIN_VENV_PYTHON
+  // gate. Unlisted paths answer with `defaultVersion`.
+  versionByPath: new Map(),
+  defaultVersion: '3.12.4',
+  // Exit codes for the pip/venv children installFlux2Venv spawns, keyed by a
+  // substring of the joined argv ('pip install --upgrade pip' etc). Anything
+  // unmatched exits 0.
+  spawnExitByArgs: new Map(),
+  // Every [bin, ...args] installFlux2Venv spawned, in order.
+  spawnCalls: [],
+  // Every [bin, '-m', 'venv', …] createVenv ran, in order.
+  venvCalls: [],
 };
+
+// pythonSetup composes paths with path.join, which is backslashed on a Windows
+// runner while every fixture below is written POSIX-style. One normalizer,
+// shared by the fs and childProcess mocks.
+const toPosix = (p) => String(p).split('\\').join('/');
 
 vi.mock('node:os', async () => {
   const actual = await vi.importActual('node:os');
@@ -40,7 +57,7 @@ vi.mock('node:fs', async () => {
   // fixtures — the module's own platform is pinned via mockState.platform.
   return {
     ...actual,
-    existsSync: (p) => mockState.presentPaths.has(String(p).split('\\').join('/')),
+    existsSync: (p) => mockState.presentPaths.has(toPosix(p)),
     // uv's install root is enumerated rather than listed, so the candidate
     // builder readdirs it. `null` means "uv not installed" — the common case —
     // and must throw the way the real readdirSync does so the builder swallows
@@ -65,7 +82,23 @@ vi.mock('./childProcess.js', async () => {
       return;
     }
     const probeArg = args?.[1] || '';
-    if (probeArg.includes('platform.machine')) {
+    if (args?.[0] === '-m' && probeArg === 'venv') {
+      // Mimic `python -m venv`: record the invocation and make the resulting
+      // interpreter exist, so createVenv's post-condition check passes.
+      mockState.venvCalls.push([bin, ...args]);
+      // presentPaths holds POSIX spellings; `join` gives the mock a
+      // backslashed targetDir on a Windows runner, so normalize like the
+      // existsSync mock does or the created interpreter never "exists".
+      mockState.presentPaths.add(toPosix(`${args[args.length - 1]}/bin/python3`));
+      resolve({ stdout: '', stderr: '' });
+    } else if (probeArg.includes('sys.version_info')) {
+      const key = toPosix(bin);
+      const version = mockState.versionByPath.has(key)
+        ? mockState.versionByPath.get(key)
+        : mockState.defaultVersion;
+      if (!version) reject(new Error('not an interpreter'));
+      else resolve({ stdout: `${version}\n`, stderr: '' });
+    } else if (probeArg.includes('platform.machine')) {
       const a = mockState.archByPath.get(bin) ?? mockState.arch;
       resolve({ stdout: `${a}\n`, stderr: '' });
     } else if (probeArg.includes('Flux2KleinPipeline')) {
@@ -76,7 +109,20 @@ vi.mock('./childProcess.js', async () => {
       resolve({ stdout: '', stderr: '' });
     }
   });
-  return { ...actual, execFile: fakeExecFile };
+  const { EventEmitter } = await vi.importActual('node:events');
+  // streamSpawn only needs stdout/stderr emitters plus a 'close' event.
+  const fakeSpawn = (bin, args) => {
+    mockState.spawnCalls.push([bin, ...args]);
+    const proc = new EventEmitter();
+    proc.stdout = new EventEmitter();
+    proc.stderr = new EventEmitter();
+    proc.kill = () => { proc.killed = true; };
+    const joined = args.join(' ');
+    const hit = [...mockState.spawnExitByArgs.entries()].find(([needle]) => joined.includes(needle));
+    setImmediate(() => proc.emit('close', hit ? hit[1] : 0));
+    return proc;
+  };
+  return { ...actual, execFile: fakeExecFile, spawn: fakeSpawn };
 });
 
 // The PATH fallbacks shell out for real; stub them so a test box's own Python
@@ -105,6 +151,11 @@ const resetState = () => {
   mockState.uvPythonDirs = null;
   mockState.fluxImportShouldFail = false;
   mockState.fluxImportCalls = 0;
+  mockState.versionByPath = new Map();
+  mockState.defaultVersion = '3.12.4';
+  mockState.spawnExitByArgs = new Map();
+  mockState.spawnCalls = [];
+  mockState.venvCalls = [];
 };
 
 describe('REQUIRED_PACKAGES', () => {
@@ -493,5 +544,142 @@ describe('isFlux2VenvHealthy', () => {
     await vi.advanceTimersByTimeAsync(10 * 60_000);
     await expect(isFlux2VenvHealthy()).resolves.toBe(true);
     expect(mockState.fluxImportCalls).toBe(1);
+  });
+});
+
+describe('classifyVenvBases', () => {
+  beforeEach(resetState);
+
+  it('splits candidates on the MIN_VENV_PYTHON floor, keeping the ranked order', async () => {
+    mockState.presentPaths.add('/opt/anaconda3/bin/python3');
+    mockState.presentPaths.add('/opt/homebrew/bin/python3');
+    mockState.presentPaths.add('/usr/bin/python3');
+    mockState.versionByPath.set('/opt/anaconda3/bin/python3', '3.8.5');
+    mockState.versionByPath.set('/opt/homebrew/bin/python3', '3.12.7');
+    mockState.versionByPath.set('/usr/bin/python3', '3.9.6');
+
+    const { classifyVenvBases } = await loadModule();
+    const { supported, rejected } = await classifyVenvBases();
+
+    expect(supported.map(posixPath)).toEqual(['/opt/homebrew/bin/python3']);
+    expect(rejected.map(({ path, version }) => `${posixPath(path)} ${version}`))
+      .toEqual(['/opt/anaconda3/bin/python3 3.8.5', '/usr/bin/python3 3.9.6']);
+  });
+
+  it('rejects an interpreter whose version probe fails — "can\'t tell" is not "new enough"', async () => {
+    mockState.presentPaths.add('/opt/homebrew/bin/python3');
+    mockState.versionByPath.set('/opt/homebrew/bin/python3', null);
+
+    const { classifyVenvBases } = await loadModule();
+    const { supported, rejected } = await classifyVenvBases();
+
+    expect(supported).toEqual([]);
+    expect(rejected).toEqual([{ path: '/opt/homebrew/bin/python3', version: 'unknown' }]);
+  });
+});
+
+// A stock /opt/anaconda3 ships Python 3.8, and it outranks Homebrew in the
+// candidate list (conda is not PEP 668 externally-managed). Building the FLUX.2
+// venv from it downloads the whole multi-GB torch tree and only THEN dies
+// building sdnq's wheel, because pip's build isolation resolves a setuptools
+// too old to parse PEP 639's string `project.license`. The gate has to happen
+// at detect time, on the base interpreter.
+describe('installFlux2Venv base-interpreter floor', () => {
+  beforeEach(resetState);
+
+  const runInstall = async (mod) => {
+    const events = [];
+    const { promise } = mod.installFlux2Venv((ev) => events.push(ev));
+    return { result: await promise, events };
+  };
+
+  it('skips a too-old base that outranks a supported one', async () => {
+    mockState.presentPaths.add('/opt/anaconda3/bin/python3');
+    mockState.presentPaths.add('/opt/homebrew/bin/python3');
+    mockState.versionByPath.set('/opt/anaconda3/bin/python3', '3.8.5');
+    mockState.versionByPath.set('/opt/homebrew/bin/python3', '3.12.7');
+
+    const mod = await loadModule();
+    const { result } = await runInstall(mod);
+
+    expect(result.ok).toBe(true);
+    expect(mockState.venvCalls.map(([bin]) => posixPath(bin))).toEqual(['/opt/homebrew/bin/python3']);
+  });
+
+  it('fails at detect naming the versions it found, instead of downloading torch first', async () => {
+    mockState.presentPaths.add('/opt/anaconda3/bin/python3');
+    mockState.versionByPath.set('/opt/anaconda3/bin/python3', '3.8.5');
+
+    const mod = await loadModule();
+    const { result, events } = await runInstall(mod);
+
+    expect(result).toEqual({ ok: false, stage: 'detect' });
+    expect(mockState.venvCalls).toEqual([]);
+    expect(mockState.spawnCalls).toEqual([]);
+    const error = events.find((ev) => ev.type === 'error');
+    expect(error.message).toContain('/opt/anaconda3/bin/python3 (3.8.5)');
+    expect(error.message).toContain('3.10+');
+  });
+
+  it('rebuilds a venv left behind by an earlier run against a too-old base', async () => {
+    mockState.presentPaths.add('/opt/homebrew/bin/python3');
+    mockState.presentPaths.add('/Users/test/.portos/venv-flux2/bin/python3');
+    mockState.versionByPath.set('/opt/homebrew/bin/python3', '3.12.7');
+    mockState.versionByPath.set('/Users/test/.portos/venv-flux2/bin/python3', '3.8.5');
+
+    const mod = await loadModule();
+    const { result } = await runInstall(mod);
+
+    expect(result.ok).toBe(true);
+    // Without --clear, `python -m venv` reuses the 3.8 interpreter in place and
+    // every retry fails identically.
+    expect(mockState.venvCalls[0]).toContain('--clear');
+  });
+
+  it('reuses a venv that already clears the floor', async () => {
+    mockState.presentPaths.add('/opt/homebrew/bin/python3');
+    mockState.presentPaths.add('/Users/test/.portos/venv-flux2/bin/python3');
+    mockState.versionByPath.set('/opt/homebrew/bin/python3', '3.12.7');
+    mockState.versionByPath.set('/Users/test/.portos/venv-flux2/bin/python3', '3.12.7');
+
+    const mod = await loadModule();
+    const { result } = await runInstall(mod);
+
+    expect(result.ok).toBe(true);
+    expect(mockState.venvCalls).toEqual([]);
+  });
+});
+
+// The SSE client reads a stream that closes without a terminal frame as
+// "Connection to installer lost. Restart PortOS or try again." — so a pip step
+// that exits non-zero used to surface as a phantom transport error with the
+// real cause buried in the scrollback.
+describe('installFlux2Venv failure reporting', () => {
+  beforeEach(resetState);
+
+  const failingStage = async (needle) => {
+    mockState.presentPaths.add('/opt/homebrew/bin/python3');
+    mockState.spawnExitByArgs.set(needle, 1);
+    const mod = await loadModule();
+    const events = [];
+    const { promise } = mod.installFlux2Venv((ev) => events.push(ev));
+    return { result: await promise, events };
+  };
+
+  it('emits a terminal error frame when the pip install exits non-zero', async () => {
+    const { result, events } = await failingStage('--progress-bar');
+
+    expect(result).toEqual({ ok: false, stage: 'install' });
+    const error = events.find((ev) => ev.type === 'error');
+    expect(error.message).toContain('Installing the FLUX.2 packages failed');
+    expect(error.message).toContain('exit code 1');
+  });
+
+  it('emits a terminal error frame when the pip bootstrap exits non-zero', async () => {
+    const { result, events } = await failingStage('--upgrade pip wheel setuptools');
+
+    expect(result).toEqual({ ok: false, stage: 'upgrade-pip' });
+    expect(events.find((ev) => ev.type === 'error').message)
+      .toContain('Could not upgrade pip/wheel/setuptools');
   });
 });
