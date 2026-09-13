@@ -355,3 +355,32 @@ describe('<TracksManager> delete confirm + save wiring', () => {
     );
   });
 });
+
+describe('<TracksManager> album picker', () => {
+  beforeEach(() => {
+    listAlbums.mockResolvedValue([{ id: 'album-1', title: 'Debut LP' }]);
+    listMusicVideoProjects.mockResolvedValue([]);
+  });
+  afterEach(() => {
+    cleanup();
+    vi.clearAllMocks();
+  });
+
+  it('keeps a linked album the fetched list no longer has selectable, instead of painting the select blank', async () => {
+    listTracks.mockResolvedValue([{ ...TRACK, albumId: 'retired-album' }]);
+    renderAt('track-1');
+    await screen.findByDisplayValue('Example Song');
+    const select = screen.getByLabelText('Album');
+    expect(select.value).toBe('retired-album');
+    expect(within(select).getByRole('option', { name: 'Linked album (unavailable)' })).toBeTruthy();
+  });
+
+  it('does not add a synthetic option once the linked album is in the fetched list', async () => {
+    listTracks.mockResolvedValue([{ ...TRACK, albumId: 'album-1' }]);
+    renderAt('track-1');
+    await screen.findByDisplayValue('Example Song');
+    const select = screen.getByLabelText('Album');
+    expect(select.value).toBe('album-1');
+    expect(within(select).getAllByRole('option', { name: 'Debut LP' })).toHaveLength(1);
+  });
+});

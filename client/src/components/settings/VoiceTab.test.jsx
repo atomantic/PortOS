@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 import VoiceTab from './VoiceTab';
+import { getProviders } from '../../services/apiProviders';
 
 const voiceApi = vi.hoisted(() => ({
   getVoiceStatus: vi.fn(),
@@ -146,5 +147,107 @@ describe('VoiceTab TTS engine registry', () => {
 
     expect(await screen.findByRole('combobox', { name: 'TTS engine' })).toHaveValue('qwen3-tts');
     expect(screen.getByRole('combobox', { name: 'Voice' }).disabled).toBe(false);
+  });
+
+  it('keeps a linked voice the fetched catalog no longer has selectable', async () => {
+    voiceApi.getVoiceConfig.mockResolvedValue({
+      ...structuredClone(config),
+      tts: { ...structuredClone(config.tts), qwen3: { voice: 'retired-voice' } },
+    });
+
+    render(<MemoryRouter><VoiceTab /></MemoryRouter>);
+
+    const voiceSelect = await screen.findByRole('combobox', { name: 'Voice' });
+    expect(voiceSelect).toHaveValue('retired-voice');
+    expect(screen.getByRole('option', { name: 'retired-voice (current)' })).toBeTruthy();
+  });
+});
+
+describe('VoiceTab LLM / code-agent pickers', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    voiceApi.getVoiceConfig.mockResolvedValue(structuredClone(config));
+    voiceApi.getVoiceStatus.mockResolvedValue({ services: {} });
+    voiceApi.listVoiceEngines.mockResolvedValue({ engines: [] });
+    voiceApi.listVoices.mockResolvedValue({ engine: 'qwen3-tts', voices: [] });
+  });
+
+  it('keeps a linked LLM provider, model, and vision model the registry no longer lists selectable', async () => {
+    getProviders.mockResolvedValue({
+      providers: [{ id: 'lmstudio', type: 'api', name: 'LM Studio', models: ['some-model'] }],
+    });
+    voiceApi.getVoiceConfig.mockResolvedValue({
+      ...structuredClone(config),
+      llm: {
+        ...structuredClone(config.llm),
+        provider: 'retired-provider',
+        model: 'retired-model',
+        visionModel: 'retired-vision-model',
+      },
+    });
+
+    render(<MemoryRouter><VoiceTab /></MemoryRouter>);
+
+    const providerSelect = await screen.findByRole('combobox', { name: 'LLM provider' });
+    expect(providerSelect).toHaveValue('retired-provider');
+    expect(screen.getByRole('option', { name: 'retired-provider (not an API provider)' })).toBeTruthy();
+
+    expect(screen.getByRole('combobox', { name: 'LLM model' })).toHaveValue('retired-model');
+    expect(screen.getByRole('option', { name: 'retired-model (current)' })).toBeTruthy();
+
+    expect(screen.getByRole('combobox', { name: 'Vision model' })).toHaveValue('retired-vision-model');
+    expect(screen.getByRole('option', { name: 'retired-vision-model (current)' })).toBeTruthy();
+  });
+
+  it('shows the saved LLM provider without a false "not an API provider" label while the registry has not loaded', async () => {
+    getProviders.mockReturnValue(new Promise(() => {})); // never resolves
+    voiceApi.getVoiceConfig.mockResolvedValue({
+      ...structuredClone(config),
+      llm: { ...structuredClone(config.llm), provider: 'lmstudio' },
+    });
+
+    render(<MemoryRouter><VoiceTab /></MemoryRouter>);
+
+    const providerSelect = await screen.findByRole('combobox', { name: 'LLM provider' });
+    expect(providerSelect).toHaveValue('lmstudio');
+    expect(screen.getByRole('option', { name: 'lmstudio' })).toBeTruthy();
+    expect(screen.queryByRole('option', { name: /not an API provider/ })).toBeNull();
+  });
+
+  it('keeps a linked coding agent and its model selectable once the registry has loaded', async () => {
+    getProviders.mockResolvedValue({
+      providers: [{ id: 'claude-code', type: 'cli', name: 'Claude Code', models: ['sonnet'] }],
+    });
+    voiceApi.getVoiceConfig.mockResolvedValue({
+      ...structuredClone(config),
+      llm: {
+        ...structuredClone(config.llm),
+        codeAgent: { enabled: true, provider: 'retired-agent', model: 'retired-agent-model' },
+      },
+    });
+
+    render(<MemoryRouter><VoiceTab /></MemoryRouter>);
+
+    const agentSelect = await screen.findByRole('combobox', { name: 'Coding agent' });
+    expect(agentSelect).toHaveValue('retired-agent');
+    expect(screen.getByRole('option', { name: 'retired-agent (not a coding agent)' })).toBeTruthy();
+    expect(screen.getByRole('combobox', { name: 'Model' })).toHaveValue('retired-agent-model');
+    expect(screen.getByRole('option', { name: 'retired-agent-model (current)' })).toBeTruthy();
+  });
+
+  it('does not mislabel a saved coding agent while the registry has not loaded', async () => {
+    getProviders.mockReturnValue(new Promise(() => {})); // never resolves
+    voiceApi.getVoiceConfig.mockResolvedValue({
+      ...structuredClone(config),
+      llm: {
+        ...structuredClone(config.llm),
+        codeAgent: { enabled: true, provider: 'retired-agent', model: 'retired-agent-model' },
+      },
+    });
+
+    render(<MemoryRouter><VoiceTab /></MemoryRouter>);
+
+    await screen.findByRole('combobox', { name: 'Coding agent' });
+    expect(screen.queryByRole('option', { name: /not a coding agent/ })).toBeNull();
   });
 });

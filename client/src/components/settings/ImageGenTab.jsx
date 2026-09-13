@@ -26,6 +26,7 @@ import {
 } from '../../services/api';
 import { deriveAvailableBackends, imageGenReadiness, isCloudCliMode, IMAGE_GEN_MODE, AGY_IMAGEGEN_DEFAULT_MODEL, AGY_IMAGEGEN_IMAGE_MODEL, CODEX_IMAGEGEN_DEFAULT_EFFORT, CODEX_IMAGEGEN_DEFAULT_MODEL, GROK_ASPECT_RATIOS, RENDER_TARGET_BACKEND_AUTO, RENDER_TARGET_OPTIONS, VIDEO_RENDER_MODES, localModelSelectOptions, modeLabel, normalizeRenderPinValue, supportsCloudModelOverride } from '../../lib/imageGenBackends';
 import { resolveCleanersFromConfig } from '../../lib/imageCleaners';
+import { withUnlistedOption } from '../../lib/withUnlistedOption';
 import { useMediaJobSse } from '../../hooks/useMediaJobSse';
 import { useAgyModels } from '../../hooks/useAgyModels';
 import { useHfTokenStatus } from '../../hooks/useHfTokenStatus';
@@ -418,9 +419,11 @@ export function ImageGenTab() {
   // the derivation above (e.g. external with a blank URL) — the server would
   // still route the render there, so hiding it would make the select disagree
   // with what the button actually does.
-  const testModeOptions = savedBackends.some((b) => b.id === saved.mode)
-    ? savedBackends
-    : [{ id: saved.mode, label: modeLabel(saved.mode) }, ...savedBackends];
+  const testModeOptions = withUnlistedOption(
+    savedBackends,
+    saved.mode,
+    (id) => ({ id, label: modeLabel(id) }),
+  );
   // A pick that a later save disabled falls back to the saved default rather
   // than queueing a render that can only 400.
   const effectiveTestMode = testModeOptions.some((b) => b.id === testMode) ? testMode : saved.mode;

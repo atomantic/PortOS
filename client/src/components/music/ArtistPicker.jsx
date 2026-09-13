@@ -11,6 +11,7 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router';
 import { listArtists } from '../../services/api';
+import { withUnlistedOption } from '../../lib/withUnlistedOption';
 
 export default function ArtistPicker({ id = 'music-artist', value, name, onChange, disabled = false }) {
   const [artists, setArtists] = useState([]);
@@ -33,7 +34,11 @@ export default function ArtistPicker({ id = 'music-artist', value, name, onChang
 
   // An artistId not in the fetched list (deleted persona) shouldn't silently
   // snap to "none" — surface it so the link isn't lost.
-  const unknownLink = value && !artists.some((a) => a.id === value);
+  const artistOptions = withUnlistedOption(
+    artists,
+    value,
+    (artistId) => ({ id: artistId, name: name || 'Linked artist (unavailable)' }),
+  );
 
   return (
     <div>
@@ -45,10 +50,9 @@ export default function ArtistPicker({ id = 'music-artist', value, name, onChang
         className="w-full px-3 py-2 bg-port-bg border border-port-border rounded text-white disabled:opacity-50"
       >
         <option value="">— No artist —</option>
-        {artists.map((a) => (
+        {artistOptions.map((a) => (
           <option key={a.id} value={a.id}>{a.name}</option>
         ))}
-        {unknownLink ? <option value={value}>{name || 'Linked artist (unavailable)'}</option> : null}
       </select>
       <p className="text-[11px] text-gray-500 mt-1">
         {artists.length === 0 && !loading ? (

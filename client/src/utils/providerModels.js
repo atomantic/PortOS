@@ -93,6 +93,16 @@ export const selectableModelsForProvider = (provider, models) =>
  * configured-default sentinel (the shipped agy `defaultModel`, which
  * `filterSelectableModels` exists to hide) and any typo'd/stale pin.
  *
+ * Deliberately NOT layered on the generic `withUnlistedOption` helper
+ * (client/src/lib/): that helper's contract is "present under `key`, else
+ * prepend" over a list of `{id, ...}` objects, while `models` here is a flat
+ * array of model-id STRINGS with no `key` to match on, the extra Antigravity
+ * effort-suffix gate above narrows staleness to more than mere absence, and
+ * this appends (kept last, after the real catalog) rather than prepends —
+ * flipping either would change which option a picker shows first for no
+ * behavioral gain. The same reasoning applies to `unlistedSelection` in
+ * `resolveProviderModelOptions` below, over the Codex account catalog.
+ *
  * CLIENT-ONLY (no server mirror) — this is a rendering concern.
  * @param {{id?:string, command?:string}|null|undefined} provider
  * @param {unknown[]} models - the already-filtered option list
