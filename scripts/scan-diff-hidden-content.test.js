@@ -40,12 +40,16 @@ describe('scan-diff-hidden-content', () => {
   // A gate that cannot find the diff must not report success on the one event
   // that always has one.
   it('fails closed when a pull-request run cannot resolve its base', async () => {
-    const result = await runHiddenContentScan({ argv: ['--base', 'no-such-ref'], env: { GITHUB_EVENT_NAME: 'pull_request' } });
-    expect(result.code).toBe(2);
+    const unresolvable = { resolveDiffBase: () => null };
+    expect((await runHiddenContentScan({ argv: [], env: { GITHUB_EVENT_NAME: 'pull_request' }, ...unresolvable })).code).toBe(2);
+    // An explicitly named base that does not resolve is an error on any event:
+    // the run asked for a specific comparison and did not get it.
+    expect((await runHiddenContentScan({ argv: ['--base', 'no-such-ref'], env: {}, ...unresolvable })).code).toBe(2);
   });
 
   it('skips a run that genuinely has no pull-request base', async () => {
-    const result = await runHiddenContentScan({ argv: ['--base', ''], env: { GITHUB_EVENT_NAME: 'schedule' } });
+    const result = await runHiddenContentScan({ argv: [], env: { GITHUB_EVENT_NAME: 'schedule' }, resolveDiffBase: () => null });
     expect(result.code).toBe(0);
+    expect(result.lines.join(' ')).toContain('skipped');
   });
 });

@@ -354,6 +354,10 @@ const VARIATION_SELECTOR_RE = /[\uFE00-\uFE0F\u{E0100}-\u{E01EF}]/u;
 const EMOJI_PRESENTATION_SELECTORS = new Set(['\uFE0E', '\uFE0F']);
 const PICTOGRAPHIC_RE = /\p{Extended_Pictographic}/u;
 
+// A keycap ("1" + U+FE0F + U+20E3) is the one sequence where the selector
+// follows an ordinary digit or symbol rather than a pictograph.
+const KEYCAP = '\u20E3';
+
 /**
  * Whether the variation selector at `index` is the ordinary emoji-presentation
  * one: U+FE0E/U+FE0F directly after a pictographic character, and not itself
@@ -366,9 +370,6 @@ const PICTOGRAPHIC_RE = /\p{Extended_Pictographic}/u;
  * The 240 selectors of the supplement (U+E0100+) carry no emoji meaning at all
  * and are never exempt.
  */
-// A keycap ("1" + U+FE0F + U+20E3) is the one sequence where the selector
-// follows an ordinary digit or symbol rather than a pictograph.
-const KEYCAP = '\u20E3';
 const isEmojiPresentationSelector = (value, index) => {
   if (!EMOJI_PRESENTATION_SELECTORS.has(value[index])) return false;
   if (VARIATION_SELECTOR_RE.test(value.slice(index + 1, index + 3))) return false;
@@ -393,7 +394,7 @@ const INVISIBLE_CLUSTER_WINDOW = 200;
  * not, and only positions are held — never a copy of the input.
  */
 export function invisibleClusterSummary(value) {
-  if (typeof value !== "string" || !value) return null;
+  if (typeof value !== 'string' || !value) return null;
   const positions = [];
   for (const match of value.matchAll(HIDDEN_CODEPOINT_RE)) positions.push(match.index);
   for (let i = 0; i + INVISIBLE_CLUSTER_COUNT - 1 < positions.length; i += 1) {

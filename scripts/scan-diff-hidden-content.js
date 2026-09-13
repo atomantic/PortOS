@@ -62,7 +62,12 @@ export function resolveBase(explicit) {
  * Run the gate. Returns the process exit code and the lines to print, so the
  * suite can exercise the real verdict in-process rather than through a spawn.
  */
-export async function runHiddenContentScan({ argv = [], stdin = null, env = process.env } = {}) {
+export async function runHiddenContentScan({
+  argv = [],
+  stdin = null,
+  env = process.env,
+  resolveDiffBase = resolveBase,
+} = {}) {
   const baseFlag = argv.indexOf('--base');
   const explicit = baseFlag === -1 ? null : argv[baseFlag + 1];
   let diff;
@@ -70,7 +75,7 @@ export async function runHiddenContentScan({ argv = [], stdin = null, env = proc
   if (argv.includes('--stdin')) {
     diff = typeof stdin === 'string' ? stdin : await readStdin(stdin || process.stdin);
   } else {
-    const base = resolveBase(explicit);
+    const base = resolveDiffBase(explicit);
     if (!base) {
       // A pull request always has a base, so failing to find one there means
       // the gate would scan nothing — the one outcome a gate must not report
