@@ -21,6 +21,10 @@ const api = vi.hoisted(() => ({
   createProvider: vi.fn(),
   updateProvider: vi.fn(),
   refreshProviderModels: vi.fn(),
+  // The retired-model-pin panel reads on mount. Resolved empty so a healthy
+  // install renders nothing extra — the panel has its own suite.
+  getModelPinWarnings: vi.fn().mockResolvedValue({ pins: [], providers: {} }),
+  clearModelPin: vi.fn(),
   setActiveProvider: vi.fn().mockResolvedValue({}),
   getOrchestrationProfiles: vi.fn().mockResolvedValue({ profiles: [] }),
   createRun: vi.fn().mockResolvedValue({ runId: 'run-1' }),

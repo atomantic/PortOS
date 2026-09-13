@@ -17,6 +17,7 @@ import {
 import { Router } from 'express';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { testVision, runVisionTestSuite, checkVisionHealth } from '../services/visionTest.js';
+import { auditModelPins, clearModelPin } from '../services/modelPinAudit.js';
 import { providerSchema, providerActiveSchema, validate } from '../lib/aiToolkit/validation.js';
 import { withRefreshCapability } from '../lib/aiToolkit/internal/modelFetchers.js';
 import { ALLOWED_COMMANDS } from '../cos-runner/allowedCommands.js';
@@ -26,6 +27,7 @@ import {
   validateRequest,
   codexLoginCancelSchema,
   codexLoginStartSchema,
+  modelPinClearSchema,
   providerVisionTestSchema,
   providerVisionSuiteSchema,
   providerBindingCreateSchema,
@@ -797,6 +799,22 @@ export function createPortOSProviderRoutes(aiToolkit) {
       ? { ...publicStatus, rateLimitWindow: allowedWindow }
       : publicStatus;
   };
+
+  // GET /model-pins — stored model pins naming a model their provider no longer
+  // lists (#7315). Registered BEFORE '/:id' so the literal path is not read as a
+  // provider id. Derived on read, never persisted: see services/modelPinAudit.js.
+  router.get('/model-pins', asyncHandler(async (_req, res) => {
+    res.json(await auditModelPins());
+  }));
+
+  // POST /model-pins/clear — clear ONE pin back to "inherit". A pin is the
+  // user's own choice, so PortOS surfaces a retirement and never rewrites it;
+  // this is that one-click clear. Clearing a pin that is already gone is a
+  // success with `cleared: false`, not a 404 — the outcome the caller wanted.
+  router.post('/model-pins/clear', asyncHandler(async (req, res) => {
+    const { pinId } = validateRequest(modelPinClearSchema, req.body ?? {});
+    res.json(await clearModelPin(pinId));
+  }));
 
   router.get('/status', asyncHandler(async (req, res) => {
     const statuses = providerStatusService.getAllStatuses();
