@@ -942,17 +942,65 @@ describe('unrepresentable status/priority never drops a task (#7239)', () => {
     expect(getAutoApprovedTasks(reread)).toEqual([]);
   });
 
-  it('restores a recovered USER row to the ordinary queue', () => {
-    // A user task carries no approval flag in the format at all — every one is
-    // auto-approved by construction — so holding one would be a claim the next
-    // write erases. The row goes back to being exactly what it was.
+  it('withholds a recovered USER row from the dequeue without claiming approval', () => {
+    // The payload survives, but the row is not handed to the spawn engine: the
+    // recovery patterns cannot tell a genuine legacy row from a sentence inside a
+    // legacy description body (#7300). It claims no APPROVAL, because the user file
+    // writes no flags — that claim would only strand the row until the next write.
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const [recovered] = parseTasksMarkdown('# Tasks\n\n## Pending\n- [ ] #task-C | URGENT | plain user row\n  - prompt: payload\n');
     warn.mockRestore();
 
-    expect(recovered.autoApproved).toBe(true);
+    expect(recovered.autoApproved).toBe(false);
     expect(recovered.approvalRequired).toBe(false);
+    expect(getAutoApprovedTasks([recovered])).toEqual([]);
     expect(recovered.metadata.prompt).toBe('payload');
+
+    // The user file writes no approval flags, so the healed row is an ordinary
+    // strict row again — exactly what it was before the corruption.
+    const reread = parseTasksMarkdown(generateTasksMarkdown([recovered], false));
+    expect(reread[0].autoApproved).toBe(true);
+    expect(reread[0].approvalRequired).toBe(false);
+    expect(reread[0].priority).toBe('MEDIUM');
+  });
+
+  it('does not mint a runnable task from a task-shaped line inside a description body', () => {
+    // The reported defect: a pre-#7240 file can hold a multi-line description whose
+    // continuation sits at column 0. 'note' is not an internal id, so before #7300
+    // the widened priority field made this sentence an auto-approved pending task
+    // the spawn engine would run.
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const parsed = parseTasksMarkdown([
+      '# Tasks', '', '## Pending',
+      '- [ ] #sys-9 | HIGH | AUTO | Real internal task',
+      '  - prompt: real payload',
+      '- [ ] #note | see this | do the thing',
+      ''
+    ].join('\n'));
+    warn.mockRestore();
+
+    expect(getAutoApprovedTasks(parsed).map(t => t.id)).toEqual(['sys-9']);
+
+    const phantom = parsed.find(t => t.id === 'task-note');
+    expect(phantom.status).toBe('pending');
+    expect(phantom.autoApproved).toBe(false);
+
+    // The internal file DOES write approval flags, so healing the file must not
+    // release the phantom into the dequeue on the next read.
+    const reread = parseTasksMarkdown(generateTasksMarkdown(parsed, true));
+    expect(getAutoApprovedTasks(reread).map(t => t.id)).toEqual(['sys-9']);
+    expect(reread.find(t => t.id === 'task-note').approvalRequired).toBe(true);
+  });
+
+  it('keeps a flagless internal task flagless when it never carried autoApproved', () => {
+    // Only an explicit `autoApproved: false` is a hold. A task that never carried
+    // the field (investigation producers construct several) must keep its flagless
+    // row, or every write would newly claim APPROVAL on it.
+    const markdown = generateTasksMarkdown([
+      { id: 'sys-8', status: 'pending', priority: 'HIGH', priorityValue: 3, description: 'no flags', metadata: {} }
+    ], true);
+    expect(markdown).toContain('- [ ] #sys-8 | HIGH | no flags');
+    expect(parseTasksMarkdown(markdown)[0].autoApproved).toBe(true);
   });
 
   it("leaves a STRICT row's approval semantics exactly as they were", () => {

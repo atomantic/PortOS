@@ -139,7 +139,10 @@ export function toRepresentableTask(task) {
  * Recovery accepts ANY non-pipe priority field, because the boundary that wrote
  * these rows accepted any string — `VERY HIGH`, `123` and `URGENT!` were all
  * reachable through the route before this issue, and a narrower pattern would
- * leave exactly those rows to be deleted by the next write.
+ * leave exactly those rows to be deleted by the next write. The cost of that
+ * width is that a `- [ ] #id | text | text` SENTENCE inside a legacy multi-line
+ * description also matches, so no recovered row is ever auto-approved (#7300) —
+ * see the approval flags in `matchTaskLine`.
  */
 const TASK_LINE_PATTERNS = [
   { withFlag: true, re: /^-\s*\[([ x~!?])\]\s*#([\w-]+)\s*\|\s*(CRITICAL|HIGH|MEDIUM|LOW)\s*\|\s*(AUTO|APPROVAL)\s*\|\s*(.+)$/i },
@@ -170,21 +173,29 @@ function matchTaskLine(line) {
       status: STATUS_MAP[statusKey] ?? statusKey,
       priority: priority.trim().toUpperCase(),
       priorityValue: PRIORITY_VALUES[priority.trim().toUpperCase()] || 2,
-      // A recovered row is an ambiguous split — the priority field could itself
-      // have held a pipe ('UR|GENT', 'UR|AUTO' were both reachable through the old
-      // free-string boundary), so which segment was the approval flag is a guess.
-      // Recovery must never make a row MORE permissive than it was, so a recovered
-      // INTERNAL task lands in the approval queue rather than the dequeue: those
-      // are the rows where the flag gates an agent spawn, and the flag is written
-      // back (includeApprovalFlags), so the hold survives the next read.
+      // NO recovered row is auto-approved (#7300). The recovery patterns accept any
+      // non-pipe priority field, which is right for a row the old free-string
+      // boundary really wrote — but it also matches a `- [ ] #id | text | text`
+      // SENTENCE sitting at column 0 inside a legacy multi-line description body,
+      // and a match there mints a task nobody wrote. Handing that to the dequeue is
+      // an agent spawn from prose, so a recovered row is preserved for a human and
+      // withheld from `getAutoApprovedTasks` regardless of its id. This is the same
+      // hold the unknown-checkbox path takes, from the other side of the row.
       //
-      // A user task carries no flag in the format at all — every one is
-      // auto-approved by construction — so holding one here would be a claim the
-      // next write erases. Its row is restored to the ordinary user queue, which
-      // is exactly what it was before the corruption. A strict match on either
-      // kind keeps its exact prior semantics.
+      // An INTERNAL recovered row additionally lands in the approval queue, because
+      // its split is ambiguous in a second way — the priority field could itself have
+      // held a pipe ('UR|GENT', 'UR|AUTO' were both reachable), so which segment was
+      // the approval flag is a guess, and that flag gates an agent spawn.
+      //
+      // A user-prefixed row claims no approval: the user file writes no flags, so the
+      // claim would be erased by the next write and only strand the row in the
+      // meantime (`approveTask` reads the internal file, and TaskItem hides Approve
+      // for a user task). Its `autoApproved: false` is what the internal file's
+      // write turns into an APPROVAL flag, so the hold survives there and evaporates
+      // in the user file — which is exactly where it is not needed, since user tasks
+      // are never dequeued autonomously. A strict match on either kind is untouched.
       approvalRequired: (recovery && isInternalTaskId(taskId)) || approvalFlag === 'APPROVAL',
-      autoApproved: !(recovery && isInternalTaskId(taskId)) && (withFlag ? approvalFlag === 'AUTO' : true),
+      autoApproved: !recovery && (withFlag ? approvalFlag === 'AUTO' : true),
       description: description.trim(),
       metadata: {}
     };
@@ -434,8 +445,14 @@ export function generateTasksMarkdown(tasks, includeApprovalFlags = false) {
 
     for (const task of sortByPriority(sectionTasks)) {
       const checkbox = statusToCheckbox[task.status];
-      const approvalFlag = includeApprovalFlags && (task.approvalRequired || task.autoApproved !== undefined)
-        ? ` | ${task.approvalRequired ? 'APPROVAL' : 'AUTO'}`
+      // `autoApproved === false` writes APPROVAL, not AUTO (#7300). A task that says
+      // it is not auto-approved must not be healed into a row the next read dequeues:
+      // APPROVAL is the only flag this format has that survives the round trip as a
+      // hold. An `undefined` autoApproved is NOT that claim — it stays on the old
+      // path so a task that never carried the field keeps its flagless row.
+      const heldBack = task.approvalRequired || task.autoApproved === false;
+      const approvalFlag = includeApprovalFlags && (heldBack || task.autoApproved !== undefined)
+        ? ` | ${heldBack ? 'APPROVAL' : 'AUTO'}`
         : '';
       lines.push(`- ${checkbox} #${task.id} | ${task.priority}${approvalFlag} | ${flattenDescription(task)}`);
 
