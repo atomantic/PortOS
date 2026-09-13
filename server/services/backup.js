@@ -36,6 +36,16 @@ const BACKUP_PROCESS_IDLE_TIMEOUT_MS = 10 * 60 * 1000;
 const BACKUP_PROCESS_WALL_TIMEOUT_MS = 4 * 60 * 60 * 1000;
 const BACKUP_PROCESS_PROGRESS_POLL_MS = 30 * 1000;
 
+// `-ii` heartbeats once per file rsync finishes deciding about, so a single
+// file whose `--checksum` digest outlasts the idle deadline still emits
+// nothing for its whole duration (#7302). The digest reads BOTH copies — the
+// snapshot side and the live side — so a restore floors its idle timeout at
+// 2x the largest in-scope file over this throughput. Sized near the bottom of
+// a healthy network/iCloud destination (~25 MB/s observed), the floor keeps
+// the tight default for small trees and relaxes only where a long silence is
+// explainable.
+const RESTORE_DIGEST_WORST_CASE_BPS = 10 * 1024 * 1024;
+
 const STATE_PATH = join(PATHS.data, 'backup', 'state.json');
 // A snapshot mid-assembly is a truncated tree that looks like a finished backup.
 // Two signals guard it, because neither alone is sufficient:
@@ -242,9 +252,17 @@ export function backupStatusForPg(pgResult) {
 // INTERNAL HELPERS
 // =============================================================================
 
+// Whole minutes for realistic deadlines ("10 minutes"), seconds below one
+// minute, so the timeout message stays truthful under an override either way.
+const describeIdleDuration = (ms) => {
+  if (ms < 60_000) return `${Math.max(1, Math.round(ms / 1000))} seconds`;
+  const minutes = Math.round(ms / 60_000);
+  return `${minutes} minute${minutes === 1 ? '' : 's'}`;
+};
+
 class BackupProcessTimeoutError extends Error {
-  constructor(label, timeoutKind) {
-    const duration = timeoutKind === 'idle' ? '10 minutes without progress' : '4 hours';
+  constructor(label, timeoutKind, idleTimeoutMs = BACKUP_PROCESS_IDLE_TIMEOUT_MS) {
+    const duration = timeoutKind === 'idle' ? `${describeIdleDuration(idleTimeoutMs)} without progress` : '4 hours';
     super(`${label} timed out after ${duration}`);
     this.name = 'BackupProcessTimeoutError';
     this.code = 'BACKUP_PROCESS_TIMEOUT';
@@ -260,8 +278,20 @@ class BackupProcessTimeoutError extends Error {
  * pg_dump writes directly to `progressPath` and is normally silent. Polling its
  * growing output file lets a healthy large dump reset the idle timer without
  * adding verbose flags or buffering its SQL in memory.
+ *
+ * `idleTimeoutMs` overrides the default idle deadline for a caller whose
+ * process can legitimately stay silent longer — restoreSnapshot derives one
+ * from the largest in-scope file because a single file's `--checksum` digest
+ * emits no output until it finishes (#7302). Callers that can produce regular
+ * output leave the tight default so a genuinely wedged child is still caught
+ * quickly.
  */
-function watchBackupProcess(proc, { label, progressPath = null } = {}) {
+function watchBackupProcess(proc, { label, progressPath = null, idleTimeoutMs } = {}) {
+  // Internal callers only, but a non-positive or non-numeric override would
+  // silently disarm (0, NaN) or tighten (-1) the deadline — fall back instead.
+  const idleDeadlineMs = Number.isFinite(idleTimeoutMs) && idleTimeoutMs > 0
+    ? idleTimeoutMs
+    : BACKUP_PROCESS_IDLE_TIMEOUT_MS;
   let finished = false;
   let timeoutError = null;
   let idleTimer = null;
@@ -272,7 +302,7 @@ function watchBackupProcess(proc, { label, progressPath = null } = {}) {
 
   const startTermination = (timeoutKind) => {
     if (finished || timeoutError || proc.exitCode !== null || proc.signalCode !== null) return;
-    timeoutError = new BackupProcessTimeoutError(label, timeoutKind);
+    timeoutError = new BackupProcessTimeoutError(label, timeoutKind, idleDeadlineMs);
     console.warn(`⚠️ ${timeoutError.message} — terminating child process`);
     try {
       escalationTimer = killWithEscalation(proc, {
@@ -288,7 +318,7 @@ function watchBackupProcess(proc, { label, progressPath = null } = {}) {
 
   const armIdleTimer = () => {
     if (idleTimer) clearTimeout(idleTimer);
-    idleTimer = setTimeout(() => startTermination('idle'), BACKUP_PROCESS_IDLE_TIMEOUT_MS);
+    idleTimer = setTimeout(() => startTermination('idle'), idleDeadlineMs);
     idleTimer.unref?.();
   };
 
@@ -346,20 +376,22 @@ export function resolveRsyncBinary(env = process.env) {
   return override || 'rsync';
 }
 
-function runRsync(srcDir, destDir, flags = []) {
+function runRsync(srcDir, destDir, flags = [], { idleTimeoutMs } = {}) {
   return new Promise((resolve, reject) => {
     // `--itemize-changes` emits only after each file finishes. `--progress` is
     // also supported by macOS's bundled rsync 2.6.9 and emits within a large
     // file, giving the idle watchdog evidence that a slow transfer is healthy.
     // Both report only TRANSFERRING files, so a caller that adds `--checksum`
     // must also pass `-ii` or its scan of an unchanged tree is silent for the
-    // whole digest and the watchdog kills it — see restoreSnapshot.
+    // whole digest and the watchdog kills it — see restoreSnapshot. Even `-ii`
+    // is a per-file heartbeat, so a caller expecting one very large file may
+    // widen the idle deadline via `idleTimeoutMs` (see restoreSnapshot).
     const args = ['--archive', '--itemize-changes', '--progress', ...flags, srcDir + '/', destDir];
     const proc = spawn(resolveRsyncBinary(), args, { shell: false });
 
     const changed = [];
     let stderr = '';
-    const watchdog = watchBackupProcess(proc, { label: 'backup rsync' });
+    const watchdog = watchBackupProcess(proc, { label: 'backup rsync', idleTimeoutMs });
 
     const stdoutReader = createLineReader((line) => {
       if (line.startsWith('>') || line.startsWith('<')) {
@@ -1054,7 +1086,14 @@ const snapshotFileIntegrityError = (snapshotId, unmanifestedPath = null) => new 
   { status: 409, code: 'BACKUP_FILE_INTEGRITY_FAILED' },
 );
 
-async function snapshotManifestFilePaths(srcDir, subdirFilter) {
+/**
+ * Rebuild the in-scope regular-file inventory the manifest describes.
+ * `paths` feed the unmanifested-file check; `largestFileBytes` is free here —
+ * the same `stat`s produce it — and sizes the restore's idle-deadline floor
+ * (rsync `--checksum` digests only regular files in scope, so the largest one
+ * bounds the longest explainable silence between `-ii` heartbeats).
+ */
+async function snapshotScopeInventory(srcDir, subdirFilter) {
   const scopePath = subdirFilter
     ? resolve(srcDir, ...subdirFilter.split('/'))
     : srcDir;
@@ -1062,12 +1101,13 @@ async function snapshotManifestFilePaths(srcDir, subdirFilter) {
     if (err?.code === 'ENOENT') return null;
     throw err;
   });
-  if (!scopeInfo) return [];
+  if (!scopeInfo) return { paths: [], largestFileBytes: 0 };
 
   const candidates = scopeInfo.isDirectory()
     ? (await readdir(scopePath, { recursive: true })).map(entry => join(scopePath, entry))
     : [scopePath];
   const paths = [];
+  let largestFileBytes = 0;
 
   for (const filePath of candidates) {
     const info = await stat(filePath).catch(async err => {
@@ -1080,7 +1120,10 @@ async function snapshotManifestFilePaths(srcDir, subdirFilter) {
       throw err;
     });
     if (!info?.isFile()) continue;
+    // OS metadata never reaches rsync (OS_METADATA_RSYNC_EXCLUDES), so it must
+    // not inflate the digest floor either.
     if (isOsMetadataFile(basename(filePath))) continue;
+    if (info.size > largestFileBytes) largestFileBytes = info.size;
 
     const normalized = relative(srcDir, filePath).replaceAll('\\', '/');
     if (!normalized || normalized.startsWith('../') || isAbsolute(normalized)) {
@@ -1089,7 +1132,7 @@ async function snapshotManifestFilePaths(srcDir, subdirFilter) {
     paths.push(normalized);
   }
 
-  return paths;
+  return { paths, largestFileBytes };
 }
 
 async function verifySnapshotFiles(snapshotDir, srcDir, snapshotId, subdirFilter) {
@@ -1107,7 +1150,17 @@ async function verifySnapshotFiles(snapshotDir, srcDir, snapshotId, subdirFilter
     });
   }
   if (manifestRead.value === MANIFEST_ABSENT) {
-    return { status: 'unverified', reason: 'manifest_absent', checkedFiles: 0 };
+    // No manifest to verify against, but the restore's idle-deadline floor
+    // still needs the largest in-scope file. Walk it best-effort: a scope that
+    // can't be surveyed keeps the default deadline rather than failing a
+    // restore that would previously have run.
+    const legacyInventory = await snapshotScopeInventory(srcDir, subdirFilter).catch(() => null);
+    return {
+      status: 'unverified',
+      reason: 'manifest_absent',
+      checkedFiles: 0,
+      largestFileBytes: legacyInventory?.largestFileBytes ?? 0,
+    };
   }
 
   const manifestEntries = manifestDataEntries(manifestRead.value, srcDir, subdirFilter);
@@ -1122,9 +1175,10 @@ async function verifySnapshotFiles(snapshotDir, srcDir, snapshotId, subdirFilter
   // Hash agreement is insufficient if rsync can also copy files the manifest
   // never recorded. Rebuild the same regular-file inventory in the selected
   // scope and reject additions before rsync reads or overwrites anything.
-  const snapshotPaths = await snapshotManifestFilePaths(srcDir, subdirFilter)
+  const inventory = await snapshotScopeInventory(srcDir, subdirFilter)
     .catch(() => null);
-  if (!snapshotPaths) throw snapshotFileIntegrityError(snapshotId);
+  if (!inventory) throw snapshotFileIntegrityError(snapshotId);
+  const { paths: snapshotPaths, largestFileBytes } = inventory;
   const unmanifested = snapshotPaths.find(entry => !dataPaths.has(entry));
   if (unmanifested) throw snapshotFileIntegrityError(snapshotId, unmanifested);
 
@@ -1139,7 +1193,20 @@ async function verifySnapshotFiles(snapshotDir, srcDir, snapshotId, subdirFilter
     }
   }
 
-  return { status: 'verified', checkedFiles: selected.length };
+  return { status: 'verified', checkedFiles: selected.length, largestFileBytes };
+}
+
+/**
+ * Idle deadline for a restore's rsync. `--checksum` digests BOTH copies of a
+ * same-size file before rsync reports the entry, so the largest in-scope file
+ * bounds the longest silence a healthy scan can produce: floor the deadline at
+ * both copies over a conservative worst-case throughput. A scope holding only
+ * small files keeps the default — the relaxed deadline is spent only where a
+ * long silence is explainable (#7302).
+ */
+function restoreIdleTimeoutMs(largestFileBytes = 0) {
+  const digestMs = (2 * largestFileBytes * 1000) / RESTORE_DIGEST_WORST_CASE_BPS;
+  return Math.max(BACKUP_PROCESS_IDLE_TIMEOUT_MS, Math.ceil(digestMs));
 }
 
 /**
@@ -1194,7 +1261,7 @@ export async function restoreSnapshot(destPath, snapshotId, { dryRun = true, sub
   //
   // Before the include chain below: rsync takes the FIRST matching rule, so an
   // exclude placed after `--include=/<filter>/***` would never be consulted.
-  // These are the files `snapshotManifestFilePaths` skips — keeping the two in
+  // These are the files `snapshotScopeInventory` skips — keeping the two in
   // step is what preserves "everything transferred was verified".
   const flags = ['-ii', '--checksum', ...OS_METADATA_RSYNC_EXCLUDES];
   if (dryRun) flags.push('--dry-run');
@@ -1211,7 +1278,11 @@ export async function restoreSnapshot(destPath, snapshotId, { dryRun = true, sub
 
   // Rsync may overwrite live files before reporting failure. Settle the
   // transfer so every live attempt reaches reconciliation before it rejects.
-  const [transfer] = await Promise.allSettled([runRsync(srcDir, PATHS.data, flags)]);
+  // The preflight just walked the scope, so its largest file is free — one
+  // file whose digest outlasts the default deadline emits no `-ii` heartbeat
+  // until it finishes (#7302), so this restore's idle floor scales to it.
+  const idleTimeoutMs = restoreIdleTimeoutMs(verification.largestFileBytes);
+  const [transfer] = await Promise.allSettled([runRsync(srcDir, PATHS.data, flags, { idleTimeoutMs })]);
   const reconciliationError = !dryRun
     ? await reconcileLiveFileRestore(subdirFilter).then(
       () => null,

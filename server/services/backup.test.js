@@ -1714,6 +1714,104 @@ describe('restoreSnapshot manifest verification', () => {
       await realFs.rm(joinPath(PATHS.data, 'restore-watchdog'), { recursive: true, force: true });
     }
   });
+
+  // #7302: `-ii` heartbeats only when rsync finishes deciding about a file, so
+  // ONE file whose `--checksum` digest outlasts the 10-minute idle deadline
+  // emits nothing the whole time — a healthy restore reads as wedged. The
+  // preflight already stats every in-scope file, so restoreSnapshot floors the
+  // deadline at 2x the largest file over a worst-case throughput. Fake the
+  // size, keep real bytes: hashing must stay instant, and these are the same
+  // stats the production walk uses.
+  const fakeFileSize = (relativePath, size) => {
+    const target = joinPath(snapshotDataDir, relativePath);
+    vi.spyOn(fs, 'stat').mockImplementation(async (candidate, ...args) => {
+      const info = await realFs.stat(candidate, ...args);
+      if (String(candidate) !== target) return info;
+      // A spread would drop fs.Stats' prototype — isFile() et al. live there,
+      // not on own properties — so clone onto the same prototype and override
+      // only the reported size.
+      return Object.assign(Object.create(Object.getPrototypeOf(info)), info, { size });
+    });
+  };
+
+  it('keeps a silent rsync alive past the default deadline while a huge file digests, then still enforces the scaled floor', async () => {
+    // 40 GiB in scope → floor = 2 * 40 GiB / 10 MiB/s = 8192 s ≈ 136.5 min.
+    const relativePath = 'restore-watchdog/huge.bin';
+    await writeManifest({ [relativePath]: await writeSnapshotFile(relativePath, 'tiny real bytes') });
+    fakeFileSize(relativePath, 40 * 1024 ** 3);
+    vi.useFakeTimers();
+    try {
+      const proc = fakeProc();
+      spawn.mockReturnValue(proc);
+      const pending = restoreSnapshot(tmpRoot, 'snap-1', { dryRun: true });
+      await vi.waitFor(() => expect(spawn).toHaveBeenCalled());
+
+      // Silent well past the old deadline: the floor, not the default, governs.
+      await vi.advanceTimersByTimeAsync(10 * 60 * 1000);
+      expect(proc.kill).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(120 * 60 * 1000);
+      expect(proc.kill).not.toHaveBeenCalled();
+
+      // The floor is still a deadline — a wedged digest terminates, just later.
+      await vi.advanceTimersByTimeAsync(10 * 60 * 1000);
+      expect(proc.kill).toHaveBeenCalledWith('SIGTERM');
+      proc.emit('close', null, 'SIGTERM');
+      await expect(pending).rejects.toMatchObject({
+        code: 'BACKUP_PROCESS_TIMEOUT',
+        timeoutKind: 'idle',
+        message: expect.stringMatching(/minutes without progress/),
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('still kills a silent rsync at the default deadline when the scope holds only small files', async () => {
+    const relativePath = 'restore-watchdog/small.json';
+    await writeManifest({ [relativePath]: await writeSnapshotFile(relativePath, '{"a":1}') });
+    vi.useFakeTimers();
+    try {
+      const proc = fakeProc();
+      spawn.mockReturnValue(proc);
+      const pending = restoreSnapshot(tmpRoot, 'snap-1', { dryRun: true });
+      await vi.waitFor(() => expect(spawn).toHaveBeenCalled());
+
+      await vi.advanceTimersByTimeAsync(10 * 60 * 1000);
+      expect(proc.kill).toHaveBeenCalledWith('SIGTERM');
+      proc.emit('close', null, 'SIGTERM');
+      await expect(pending).rejects.toMatchObject({
+        code: 'BACKUP_PROCESS_TIMEOUT',
+        timeoutKind: 'idle',
+        message: expect.stringMatching(/10 minutes without progress/),
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('applies the same scaled floor to a manifest-absent legacy snapshot', async () => {
+    // No manifest: nothing to hash, but the sizing walk still runs so a huge
+    // legacy file gets the same benefit of the doubt as a verified one.
+    const relativePath = 'restore-watchdog/legacy-huge.bin';
+    await writeSnapshotFile(relativePath, 'tiny real bytes');
+    fakeFileSize(relativePath, 40 * 1024 ** 3);
+    vi.useFakeTimers();
+    try {
+      const proc = fakeProc();
+      spawn.mockReturnValue(proc);
+      const pending = restoreSnapshot(tmpRoot, 'snap-1', { dryRun: true });
+      await vi.waitFor(() => expect(spawn).toHaveBeenCalled());
+
+      await vi.advanceTimersByTimeAsync(10 * 60 * 1000);
+      expect(proc.kill).not.toHaveBeenCalled();
+      proc.emit('close', 0);
+      await expect(pending).resolves.toMatchObject({
+        verification: { status: 'unverified', reason: 'manifest_absent' },
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
 
 // restoreSnapshot's service-side subdirFilter guard (issue #1822). These reject
