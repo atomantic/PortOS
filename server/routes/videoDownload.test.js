@@ -10,7 +10,13 @@ vi.mock('../services/videoDownload.js', () => ({
   deleteDownload: vi.fn(async () => ({ ok: true })),
 }));
 
+vi.mock('../services/ytdlpUpdate.js', () => ({
+  getYtDlpUpdateStatus: vi.fn(async () => ({ installed: true, version: '2026.08.19', canUpdate: true })),
+  updateYtDlp: vi.fn(async () => ({ success: true, version: '2026.08.19' })),
+}));
+
 import * as svc from '../services/videoDownload.js';
+import * as ytdlpUpdate from '../services/ytdlpUpdate.js';
 import { errorMiddleware } from '../lib/errorHandler.js';
 import videoDownloadRoutes from './videoDownload.js';
 
@@ -82,5 +88,31 @@ describe('video download routes (#1946)', () => {
     expect(r.status).toBe(200);
     expect(r.body).toEqual({ ok: true });
     expect(svc.cancelVideoDownload).toHaveBeenCalledWith('job-1');
+  });
+
+  // `yt-dlp` has to stay a literal first segment rather than falling into
+  // `/:jobId/events`, the same collision `downloads` is guarded against above.
+  it('GET /yt-dlp reports update status instead of being read as a jobId', async () => {
+    const r = await request(app).get('/api/devtools/video-download/yt-dlp');
+    expect(r.status).toBe(200);
+    expect(r.body.version).toBe('2026.08.19');
+    expect(svc.attachDownloadSseClient).not.toHaveBeenCalled();
+  });
+
+  it('POST /yt-dlp/update returns the update result', async () => {
+    const r = await request(app).post('/api/devtools/video-download/yt-dlp/update');
+    expect(r.status).toBe(200);
+    expect(r.body).toEqual({ success: true, version: '2026.08.19' });
+    expect(svc.cancelVideoDownload).not.toHaveBeenCalled();
+  });
+
+  // A refusal (Homebrew pin, missing binary, failed upgrade) is returned rather
+  // than thrown by the service, so the route is the only place it can become an
+  // error the page renders — a 200 here would report a failed update as done.
+  it('POST /yt-dlp/update surfaces a refusal as an error, not a success', async () => {
+    ytdlpUpdate.updateYtDlp.mockResolvedValueOnce({ success: false, error: 'yt-dlp is pinned in Homebrew.' });
+    const r = await request(app).post('/api/devtools/video-download/yt-dlp/update');
+    expect(r.status).toBe(502);
+    expect(r.body.error ?? r.body.message).toContain('pinned');
   });
 });

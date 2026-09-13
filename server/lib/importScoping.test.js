@@ -444,7 +444,14 @@ describe('deferred imports stay deferred (#6156)', () => {
 // closure (32). There is nothing to narrow — the leaf IS the narrow form — so
 // raise by exactly that delta and keep the existing headroom. The measured total
 // is 103,356 after rebasing onto a main that grew by 36 on its own.
-const MAX_STATIC_INSTANTIATIONS = 103368;
+// The yt-dlp update path adds services/ytdlpUpdate.js (closure 22 — 17 of them
+// lib/bufferedSpawn.js, which the Video Downloader route already reached) and
+// its own test file. The measured whole-tree delta is +16: nearly everything
+// ytdlpUpdate.js reaches was already in some suite's closure, so the cost is
+// the new modules themselves rather than a new heavy subtree. There is nothing
+// to narrow — bufferedSpawn IS how this tree captures a subprocess's output —
+// so raise by exactly that delta and keep the existing headroom.
+const MAX_STATIC_INSTANTIATIONS = 103384;
 
 
 const SKIP_DIRS = new Set(['node_modules', 'coverage', 'dist', 'data']);
