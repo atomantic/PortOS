@@ -102,6 +102,9 @@ function pullRequest(overrides = {}) {
     deletions: 0,
     baseRefName: 'main',
     baseRefOid: 'b'.repeat(40),
+    // Part of the screened content: a PR read without its commit log cannot be
+    // verified against the fingerprint the preflight stamped.
+    commits: [{ messageHeadline: 'Contributor update', messageBody: '' }],
     headRefName: 'contributor/update',
     headRefOid: 'a'.repeat(40),
     mergeable: 'MERGEABLE',

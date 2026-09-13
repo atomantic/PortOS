@@ -22,9 +22,9 @@ import {
   LINKED_ISSUE_STANDARD_BODY_MAX_CHARS,
   linkedIssueIntentContent,
   linkedIssueIntentFingerprint,
-  modelAbuseContentFingerprint,
   normalizeLinkedIssues,
 } from '../lib/modelAbuseGuard.js';
+import { pullRequestReviewContent, pullRequestReviewFingerprint } from '../lib/prReviewContent.js';
 import { screenUntrustedContent } from './untrustedContent.js';
 import { safeJSONParse } from '../lib/fileUtils.js';
 
@@ -256,30 +256,12 @@ const formatSecurityFindings = (findings) => findings.map((finding) => (
   `${finding.severity} — ${finding.location}: ${finding.reason}`
 )).join('\n');
 
-const MAX_COMMIT_LOG_CHARS = 100_000;
-
-function formatCommitLog(commits) {
-  if (!Array.isArray(commits) || commits.length === 0) return '';
-  const log = commits.map((commit) => {
-    const headline = typeof commit?.messageHeadline === 'string' ? commit.messageHeadline : '';
-    const body = typeof commit?.messageBody === 'string' ? commit.messageBody : '';
-    return [headline, body].filter(Boolean).join('\n');
-  }).filter(Boolean).join('\n\n');
-  return log.length > MAX_COMMIT_LOG_CHARS ? log.slice(0, MAX_COMMIT_LOG_CHARS) : log;
-}
-
-const contentFor = (pr, diff, commits) => {
-  const commitLog = formatCommitLog(commits);
-  return [
-    'Pull request title:',
-    pr.title,
-    'Pull request description:',
-    pr.body,
-    ...(commitLog ? ['Commit messages:', commitLog] : []),
-    'Complete unified diff:',
-    diff,
-  ].join('\n\n');
-};
+// The screened surface and its fingerprint are defined in `lib/prReviewContent.js`
+// because the coordinator recomputes the same value from a fresh forge read
+// before it acts. Never build either shape locally.
+const contentFor = (pr, diff, commits) => pullRequestReviewContent({
+  title: pr.title, body: pr.body, commits, diff,
+});
 
 const structuralVerdict = (findings) => ({
   ok: true,
@@ -294,11 +276,9 @@ const structuralVerdict = (findings) => ({
   layers: { deterministic: 'blocked', classifier: 'not-run', verdict: 'validated' },
 });
 
-const contentFingerprintFor = (pr, diff, commits) => modelAbuseContentFingerprint(
-  'pull-request',
-  { number: pr?.number, headSha: pr?.headRefOid },
-  contentFor(pr, diff, commits),
-);
+const contentFingerprintFor = (pr, diff, commits) => pullRequestReviewFingerprint({
+  number: pr?.number, headSha: pr?.headRefOid, title: pr?.title, body: pr?.body, commits, diff,
+});
 
 const reportFor = (pr, diff, commits, verdict) => ({
   number: pr.number,

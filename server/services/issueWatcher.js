@@ -31,6 +31,7 @@ import { mergePR, resolveForgeForRepo } from './git.js';
 import { addNotification, NOTIFICATION_TYPES, PRIORITY_LEVELS } from './notifications.js';
 import { normalizeEligibilityFacts } from './modelAbuseGuard.js';
 import { issuePrerequisiteWaived, linkedIssueIntentFingerprint } from '../lib/modelAbuseGuard.js';
+import { pullRequestReviewContent, pullRequestReviewFingerprint } from '../lib/prReviewContent.js';
 import { trimTo } from '../lib/textUtils.js';
 
 const IN_PROGRESS_LABEL_SPEC = dispatchLabelSpec(IN_PROGRESS_LABEL);
@@ -572,8 +573,11 @@ async function readPullRequest(ctx, number) {
     // (`prHandbackPolicy.js`). `headRepository`/`headRepositoryOwner` are where
     // a fork's head branch actually lives, which is what lets the remediation
     // agent's worktree attach to it at all (#6064). `assignees` keeps that
-    // assignment idempotent across scheduled sweeps.
-    '--json', 'id,number,title,body,url,state,isDraft,author,assignees,labels,files,additions,deletions,baseRefName,baseRefOid,headRefName,headRefOid,isCrossRepository,maintainerCanModify,headRepository,headRepositoryOwner,mergeable,mergeStateStatus,statusCheckRollup',
+    // assignment idempotent across scheduled sweeps. `commits` is part of the
+    // screened content, so `pullRequestContentFingerprint` cannot verify a PR
+    // read without it — safe to ask for on a single PR, unlike the bulk listing
+    // the preflight has to keep it out of (GraphQL node budget).
+    '--json', 'id,number,title,body,url,state,isDraft,author,assignees,labels,commits,files,additions,deletions,baseRefName,baseRefOid,headRefName,headRefOid,isCrossRepository,maintainerCanModify,headRepository,headRepositoryOwner,mergeable,mergeStateStatus,statusCheckRollup',
   ], ctx);
 }
 
@@ -697,11 +701,9 @@ const issueAbuseInput = (item) => [
   'External comment:', item.commentBody,
 ].join('\n\n');
 
-const pullRequestAbuseInput = (item) => [
-  'Pull request title:', item.title,
-  'Pull request description:', item.body,
-  'Complete unified diff:', item.diff,
-].join('\n\n');
+const pullRequestAbuseInput = (item) => pullRequestReviewContent({
+  title: item.title, body: item.body, commits: item.commits, diff: item.diff,
+});
 
 function abuseFingerprint(kind, item, content) {
   const identity = kind === 'issue-comment'
@@ -711,16 +713,25 @@ function abuseFingerprint(kind, item, content) {
 }
 
 /**
- * Stable identity for the exact PR title, description, and diff screened by
- * the model-abuse boundary. The output hook compares this with a fresh forge
- * read before it can review, rebase, or merge anything.
+ * Stable identity for the exact PR content screened by the model-abuse
+ * boundary. The output hook compares this with a fresh forge read before it can
+ * review, rebase, or merge anything.
+ *
+ * The commit log is part of that content, so `pr.commits` must carry the same
+ * commits the preflight screened — `readPullRequest` asks for them. A PR read
+ * without them yields null rather than a fingerprint that stands for a smaller
+ * surface than the one that was stamped.
  */
 export function pullRequestContentFingerprint(pr, diff) {
-  return abuseFingerprint(
-    'pull-request',
-    { number: pr?.number, headSha: pr?.headSha || pr?.headRefOid },
-    pullRequestAbuseInput({ title: fullText(pr?.title), body: fullText(pr?.body), diff: fullText(diff) }),
-  );
+  if (!Array.isArray(pr?.commits)) return null;
+  return pullRequestReviewFingerprint({
+    number: pr?.number,
+    headSha: pr?.headSha || pr?.headRefOid,
+    title: pr?.title,
+    body: pr?.body,
+    commits: pr.commits,
+    diff,
+  });
 }
 
 function modelAbuseReport(kind, item, fingerprint, verdict) {
@@ -911,6 +922,7 @@ async function processPendingApprovals(app, ctx) {
       continue;
     }
     if (pr.headRefOid !== approval.headSha) {
+      dropPullRequestDecision(pr.number, 'a new head commit replaced the approved one, so the pending merge was dropped');
       changed = true;
       continue;
     }
@@ -924,6 +936,7 @@ async function processPendingApprovals(app, ctx) {
       // A maintainer can edit the title/body or a contributor can replace the
       // head after the review. An old approval is never enough to merge the
       // new content, so discard the pending action and require a fresh run.
+      dropPullRequestDecision(pr.number, 'its content no longer matches the approved revision, so the pending merge was dropped');
       changed = true;
       continue;
     }
@@ -1257,6 +1270,20 @@ function mergeApproval(existing, approval) {
   return [...existing.filter((entry) => entry.number !== approval.number), approval];
 }
 
+/**
+ * Say out loud that a completed review decision was thrown away.
+ *
+ * Every guard in the action loop fails closed by skipping the PR, which is the
+ * right posture and a terrible signal: the pipeline logs three green stages and
+ * the PR is left exactly as it was, with nothing anywhere naming the reason. A
+ * fingerprint builder that drifted out of sync with the preflight's looked
+ * identical to "the contributor pushed mid-review" — from the outside, both are
+ * silence (#7323). Name the PR and the reason at every exit.
+ */
+function dropPullRequestDecision(number, reason) {
+  console.warn(`⚠️ issue-watcher: no action on PR #${number} — ${reason}`);
+}
+
 /** Validated reply/review/rebase/merge pass run after cognition. */
 export async function processTaskOutput({ appId, success, payload, task, requireEligibilityFacts = false } = {}) {
   if (!appId || !success) return { action: 'no-op', reason: !success ? 'agent-failed' : 'missing-app' };
@@ -1330,22 +1357,43 @@ export async function processTaskOutput({ appId, success, payload, task, require
   for (const raw of payload.pullRequests) {
     const decision = normalizeReviewDecision(raw);
     const target = decision && expectedPullRequests.get(decision.number);
-    if (!target || decision.headSha !== target.headSha) continue;
+    if (!decision) {
+      dropPullRequestDecision('?', 'the reviewer returned a decision this hook could not validate');
+      continue;
+    }
+    if (!target || decision.headSha !== target.headSha) {
+      dropPullRequestDecision(decision.number, 'it is not the screened PR/commit this run was handed');
+      continue;
+    }
     const pr = await readPullRequest(ctx, decision.number);
-    if (!pr || pr.state !== 'OPEN' || pr.headRefOid !== target.headSha) continue;
+    if (!pr || pr.state !== 'OPEN' || pr.headRefOid !== target.headSha) {
+      dropPullRequestDecision(decision.number, !pr ? 'it could not be read from GitHub' : 'it closed or moved to a new head commit during the review');
+      continue;
+    }
     const diff = await runGh(['pr', 'diff', String(pr.number), '--repo', ctx.repoSpec], ctx).catch(() => null);
-    if (diff === null) continue;
+    if (diff === null) {
+      dropPullRequestDecision(decision.number, 'its diff could not be re-read for verification');
+      continue;
+    }
     const currentContentFingerprint = pullRequestContentFingerprint(pr, diff);
     // A PR description can change without changing its head SHA. Require the
     // exact content screened before cognition, not merely the same revision,
     // before any review, rebase, or merge action.
-    if (!target.contentFingerprint || currentContentFingerprint !== target.contentFingerprint) continue;
+    if (!target.contentFingerprint || currentContentFingerprint !== target.contentFingerprint) {
+      dropPullRequestDecision(decision.number, 'its content no longer matches what the security scan screened');
+      await notifyPendingApproval(app, { number: pr.number, url: pr.url },
+        'The review finished, but the PR content no longer matches what the security scan screened, so PortOS took no action on it.');
+      continue;
+    }
     const eligibilityRequired = requireEligibilityFacts
       || Object.prototype.hasOwnProperty.call(target, 'eligibilityFacts');
     const eligibilityStillCurrent = async () => {
       if (!eligibilityRequired) return true;
       const current = await eligibilityFactsStillCurrent(ctx, pr, target);
-      if (!current) approvals = approvals.filter((entry) => entry.number !== pr.number);
+      if (!current) {
+        approvals = approvals.filter((entry) => entry.number !== pr.number);
+        dropPullRequestDecision(decision.number, 'the linked issue state or author assignment changed since the eligibility gate ran');
+      }
       return current;
     };
     const anchors = parseAddedDiffLines(diff);
@@ -1381,7 +1429,10 @@ export async function processTaskOutput({ appId, success, payload, task, require
           || await submitReview(ctx, pr.number, { body: summary, event: 'COMMENT', comments: findings })
         : await submitReview(ctx, pr.number, { body: summary, event: 'COMMENT', comments: findings })
           || await postReviewFallback(ctx, pr.number, summary);
-      if (!posted) continue;
+      if (!posted) {
+        dropPullRequestDecision(decision.number, 'GitHub rejected the review comment');
+        continue;
+      }
       reviewed += 1;
       // The review is posted and the PR is going nowhere on its own. Hand it to
       // whoever can act on it — a remediation agent when the head branch is
@@ -1410,7 +1461,10 @@ export async function processTaskOutput({ appId, success, payload, task, require
       body: approveBody,
       event: 'APPROVE',
     }));
-    if (!approved) continue;
+    if (!approved) {
+      dropPullRequestDecision(decision.number, 'GitHub rejected the approving review, so no CI approval or merge followed');
+      continue;
+    }
     reviewed += 1;
     await approveHeldWorkflowRuns(ctx, pr);
 
