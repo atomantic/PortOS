@@ -186,7 +186,7 @@ export async function listExternalOpenPullRequests(app) {
     'pr', 'list', '--repo', repoSpec,
     '--base', defaultBranch, '--state', 'open',
     '--limit', String(SECURITY_SCAN_MAX_OPEN_PRS),
-    '--json', 'number,author,url,headRefOid,updatedAt,title,body,commits',
+    '--json', 'number,author,url,headRefOid,updatedAt,title,body',
   ]).catch(() => null);
   if (raw === null) return failure('security-scan-pr-list-failed');
 
@@ -202,7 +202,6 @@ export async function listExternalOpenPullRequests(app) {
     url: typeof pr?.url === 'string' ? pr.url : '',
     title: typeof pr?.title === 'string' ? pr.title : null,
     body: typeof pr?.body === 'string' ? pr.body : '',
-    commits: Array.isArray(pr?.commits) ? pr.commits : [],
   }));
   if (listedPrs.some((pr) => (
     !Number.isInteger(pr.number)
@@ -269,8 +268,8 @@ function formatCommitLog(commits) {
   return log.length > MAX_COMMIT_LOG_CHARS ? log.slice(0, MAX_COMMIT_LOG_CHARS) : log;
 }
 
-const contentFor = (pr, diff) => {
-  const commitLog = formatCommitLog(pr.commits);
+const contentFor = (pr, diff, commits) => {
+  const commitLog = formatCommitLog(commits);
   return [
     'Pull request title:',
     pr.title,
@@ -295,17 +294,17 @@ const structuralVerdict = (findings) => ({
   layers: { deterministic: 'blocked', classifier: 'not-run', verdict: 'validated' },
 });
 
-const contentFingerprintFor = (pr, diff) => modelAbuseContentFingerprint(
+const contentFingerprintFor = (pr, diff, commits) => modelAbuseContentFingerprint(
   'pull-request',
   { number: pr?.number, headSha: pr?.headRefOid },
-  contentFor(pr, diff),
+  contentFor(pr, diff, commits),
 );
 
-const reportFor = (pr, diff, verdict) => ({
+const reportFor = (pr, diff, commits, verdict) => ({
   number: pr.number,
   url: pr.url,
   headRefOid: pr.headRefOid,
-  contentFingerprint: contentFingerprintFor(pr, diff),
+  contentFingerprint: contentFingerprintFor(pr, diff, commits),
   updatedAt: pr.updatedAt,
   passed: verdict.safe === true,
   safe: verdict.safe === true,
@@ -318,6 +317,20 @@ const reportFor = (pr, diff, verdict) => ({
   chunkCount: Number.isInteger(verdict.chunkCount) ? verdict.chunkCount : null,
   minBenignScore: Number.isFinite(verdict.minBenignScore) ? verdict.minBenignScore : null,
 });
+
+/**
+ * Commit messages are screened content, but they cannot ride the bulk listing:
+ * GitHub prices `commits` on `gh pr list` at the query's LIMIT rather than its
+ * hit count, so at the 200-PR cap it trips the 500,000 potential-node ceiling
+ * and the whole listing is refused. Read the log per PR, in the scan.
+ */
+async function fetchPullRequestCommits(number, repoSpec) {
+  const raw = await execGh([
+    'pr', 'view', String(number), '--repo', repoSpec, '--json', 'commits',
+  ]).catch(() => null);
+  const parsed = safeJSONParse(raw, null);
+  return Array.isArray(parsed?.commits) ? parsed.commits : null;
+}
 
 /**
  * Scan every currently-open external PR in order. The complete input is sent
@@ -352,8 +365,14 @@ export async function runPrReviewerSecurityScan({ app, target = null, largeInput
   let guardRevision = MODEL_ABUSE_GUARD.revision;
   for (const pr of resolvedTarget.prs) {
     if (pr.inputComplete === false || pr.linkedIssues?.some(issue => issue.truncated)) return failure('security-scan-linked-issue-too-large', { reviewedPrs, scanKey });
-    const diff = await execGh(['pr', 'diff', String(pr.number), '--repo', resolvedTarget.repoSpec]).catch(() => null);
+    const [diff, commits] = await Promise.all([
+      execGh(['pr', 'diff', String(pr.number), '--repo', resolvedTarget.repoSpec]).catch(() => null),
+      fetchPullRequestCommits(pr.number, resolvedTarget.repoSpec),
+    ]);
     if (diff === null) return failure('security-scan-diff-unavailable', { reviewedPrs, scanKey });
+    // Fail closed on an unreadable commit log: screening a PR as though it had
+    // no commit messages is the hidden-content gap the log was added to close.
+    if (commits === null) return failure('security-scan-pr-commits-unreadable', { reviewedPrs, scanKey });
     if (typeof diff !== 'string' || diff.length > SECURITY_SCAN_MAX_DIFF_CHARS) {
       return failure('security-scan-diff-too-large', { reviewedPrs, scanKey });
     }
@@ -369,7 +388,8 @@ export async function runPrReviewerSecurityScan({ app, target = null, largeInput
     // halves separately — the diff by `contentFingerprint`, the issue text by
     // `eligibilityFacts.intentFingerprint`.
     const intentContent = linkedIssueIntentContent(pr.linkedIssues);
-    const content = intentContent ? `${contentFor(pr, diff)}\n\n${intentContent}` : contentFor(pr, diff);
+    const prContent = contentFor(pr, diff, commits);
+    const content = intentContent ? `${prContent}\n\n${intentContent}` : prContent;
     if (content.length > SECURITY_SCAN_MAX_DIFF_CHARS) {
       return failure('security-scan-input-too-large', { reviewedPrs, scanKey });
     }
@@ -387,7 +407,7 @@ export async function runPrReviewerSecurityScan({ app, target = null, largeInput
     guardModel = verdict.model || guardModel;
     guardRevision = verdict.revision ?? null;
 
-    const report = reportFor(pr, diff, verdict);
+    const report = reportFor(pr, diff, commits, verdict);
     reviewedPrs.push(report);
     if (reportChars(reviewedPrs) > SECURITY_SCAN_MAX_REPORT_CHARS) {
       return failure('security-scan-report-too-large', { reviewedPrs, scanKey });
