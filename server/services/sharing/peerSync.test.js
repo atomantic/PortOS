@@ -199,6 +199,13 @@ vi.mock('../creativeCommissions/store.js', async (importOriginal) => ({
   getCommissionForSync: vi.fn(),
   mergeCommissionsFromSync: vi.fn().mockResolvedValue({ applied: true, count: 1 }),
 }));
+vi.mock('../decks.js', () => ({
+  listDecksForSync: vi.fn().mockResolvedValue([]),
+  listDeckIdsForSync: vi.fn().mockResolvedValue([]),
+  getDeckForSync: vi.fn(),
+  mergeDecksFromSync: vi.fn().mockResolvedValue({ applied: true, count: 1 }),
+  pruneTombstonedDecks: vi.fn().mockResolvedValue({ pruned: 0, ids: [] }),
+}));
 
 vi.mock('../../lib/peerHttpClient.js', async () => ({
   peerFetch: vi.fn(),
@@ -297,6 +304,7 @@ import {
 import { diffWorkBibleManifest } from '../writersRoom/bibleSync.js';
 import { listCommissionFeedbackForSync, getCommissionFeedbackForSync, mergeCommissionFeedbackFromSync } from '../creativeCommissions/feedbackStore.js';
 import { listCommissionsForSync, getCommissionForSync, mergeCommissionsFromSync } from '../creativeCommissions/store.js';
+import { getDeckForSync, mergeDecksFromSync } from '../decks.js';
 import { peerFetch } from '../../lib/peerHttpClient.js';
 import { RESPONSE_TOO_LARGE } from '../../lib/httpClient.js';
 import { reconcileMediaAssets } from '../mediaAssetIndex/index.js';
@@ -490,7 +498,7 @@ describe('peerSync', () => {
       // caught — this list is canonical and its order can affect iteration
       // elsewhere (e.g. syncNow's per-kind backfill). Issues piggyback on series
       // subscriptions; direct issue subs are intentionally rejected (Stage 2).
-      expect(PEER_SUBSCRIBABLE_KINDS).toEqual(['universe', 'series', 'mediaCollection', 'author', 'artist', 'album', 'track', 'creativeDirectorProject', 'moodBoard', 'fableLoom', 'writersRoomWork', 'writersRoomFolder', 'writersRoomExercise', 'musicVideoProject', 'commissionFeedback', 'creativeCommission']);
+      expect(PEER_SUBSCRIBABLE_KINDS).toEqual(['universe', 'series', 'mediaCollection', 'author', 'artist', 'album', 'track', 'creativeDirectorProject', 'moodBoard', 'fableLoom', 'writersRoomWork', 'writersRoomFolder', 'writersRoomExercise', 'musicVideoProject', 'commissionFeedback', 'creativeCommission', 'deck']);
     });
   });
 
@@ -5148,6 +5156,7 @@ describe('media-library federation (#1566)', () => {
       musicVideoProject: { get: getMusicVideoProject, merge: mergeMusicVideoProjectsFromSync },
       commissionFeedback: { get: getCommissionFeedbackForSync, merge: mergeCommissionFeedbackFromSync },
       creativeCommission: { get: getCommissionForSync, merge: mergeCommissionsFromSync },
+      deck: { get: getDeckForSync, merge: mergeDecksFromSync },
     };
 
     it('every PEER_SUBSCRIBABLE_KINDS entry has a test fixture (guards the parity suite itself against a silently-skipped kind)', () => {

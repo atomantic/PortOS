@@ -489,7 +489,19 @@ describe('deferred imports stay deferred (#6156)', () => {
 // the toolkit's own catalog module precisely to avoid dragging that subtree in,
 // and no production module gained an edge — so raise by exactly that delta and
 // keep the headroom.
-const MAX_STATIC_INSTANTIATIONS = 103925;
+// Federating card decks (record kind `deck`) measures +30: `services/decks.js`
+// becomes a static edge of the four peer-sync modules a new federated kind must
+// register in (recordKinds.js, peerSync.js, tombstoneGc.js,
+// conflictJournalResolver.js), dragging the one subtree it owns that those
+// modules did not already reach — `lib/deckTemplates.js` and the deck
+// validation/prompt leaves beside it. Everything else it imports (db.js,
+// conflictJournal.js, recordEvents.js, renderTargets.js) those four already
+// had. There is no narrowing available: the descriptor table needs the getter
+// and merger at module scope, by construction. The federation suite that
+// covers it (services/decksSync.db.test.js) measures a further +40, all of it
+// that one new test file's own closure — decks.js plus the syncWire/db-gate
+// leaves it asserts against, no production edge. Raise by exactly those deltas.
+const MAX_STATIC_INSTANTIATIONS = 103995;
 
 
 const SKIP_DIRS = new Set(['node_modules', 'coverage', 'dist', 'data']);

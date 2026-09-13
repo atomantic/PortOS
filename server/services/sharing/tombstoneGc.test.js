@@ -77,6 +77,10 @@ vi.mock('../creativeCommissions/store.js', () => ({
 }));
 vi.mock('../../lib/conflictJournal.js', () => ({
   pruneOrphanedBaseHashes: vi.fn().mockResolvedValue({ pruned: 0 }),
+  // `pruneTombstonedDecks` (services/decks.js) batches its base-hash evictions,
+  // so the deck arm of the sweep reaches these two as well.
+  withBaseHashFlushBatch: vi.fn(async (fn) => fn()),
+  deleteSyncBaseHash: vi.fn().mockResolvedValue(undefined),
 }));
 vi.mock('./peerSync.js', () => ({
   listPeerSubscriptions: vi.fn(),
@@ -554,6 +558,7 @@ describe('sweepTombstones — return shape', () => {
       writersRoomExercises: 12,
       commissionFeedback: 0,
       creativeCommissions: 0,
+      decks: 0,
       orphanBaseHashes: 0,
       orphanSubscriptions: 0,
       refused: [],

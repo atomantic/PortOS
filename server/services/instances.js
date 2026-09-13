@@ -264,6 +264,7 @@ const DEFAULT_SYNC_CATEGORIES = {
   musicVideoProjects: false,
   commissionFeedback: false,
   creativeCommissions: false,
+  decks: false,
   catalog: false
 };
 
@@ -380,6 +381,7 @@ const PER_RECORD_CATEGORY_KINDS = Object.freeze([
   ['musicVideoProjects', 'musicVideoProject'],
   ['commissionFeedback', 'commissionFeedback'],
   ['creativeCommissions', 'creativeCommission'],
+  ['decks', 'deck'],
 ]);
 
 export async function addPeer({ address, port = DEFAULT_PEER_PORT, name, host, auth, transport, protocol = 'http' }) {

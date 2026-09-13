@@ -74,6 +74,73 @@ describe('syncWire', () => {
       expect(sanitizeRecordForWire('universe', 'string')).toBeNull();
     });
 
+    describe('deck (#decks)', () => {
+      const deck = () => ({
+        id: 'deck-1',
+        name: 'Example Deck',
+        kind: 'tarot',
+        universeId: 'u-1',
+        styleNotes: 'woodcut',
+        // Install-capability pins + derived completion — none of these travel.
+        imageMode: 'grok',
+        imageModelId: 'grok-image-1',
+        promptLlm: { provider: 'claude', model: 'claude-opus-5' },
+        completion: { rendered: 3, total: 78 },
+        cards: [
+          { id: 'row-b', deckId: 'deck-1', key: 'b', prompt: 'two', imageRefs: ['b.png'], primaryImageRef: 'b.png', render: { jobId: 'job-9', status: 'queued' } },
+          { id: 'row-a', deckId: 'deck-1', key: 'a', prompt: 'one', imageRefs: [] },
+        ],
+        deleted: false,
+        deletedAt: null,
+      });
+
+      it('strips the install-capability pins and derived completion', () => {
+        const wire = sanitizeRecordForWire('deck', deck());
+        expect(wire).not.toHaveProperty('imageMode');
+        expect(wire).not.toHaveProperty('imageModelId');
+        expect(wire).not.toHaveProperty('promptLlm');
+        expect(wire).not.toHaveProperty('completion');
+        expect(wire.name).toBe('Example Deck');
+        expect(wire.universeId).toBe('u-1');
+      });
+
+      it('ships cards keyed by roster key, sorted, without local row ids or in-flight render state', () => {
+        const wire = sanitizeRecordForWire('deck', deck());
+        expect(wire.cards.map((c) => c.key)).toEqual(['a', 'b']);
+        for (const card of wire.cards) {
+          expect(card).not.toHaveProperty('id');
+          expect(card).not.toHaveProperty('deckId');
+          expect(card).not.toHaveProperty('render');
+        }
+        // Rendered gallery refs DO travel — the push asset manifest carries
+        // their bytes, so the receiver can show the finished cards.
+        expect(wire.cards[1].imageRefs).toEqual(['b.png']);
+        expect(wire.cards[1].primaryImageRef).toBe('b.png');
+      });
+
+      it('is byte-stable against local card ordering and render churn (the content hash must not move on a no-op)', () => {
+        const a = deck();
+        const b = deck();
+        b.cards.reverse();
+        b.cards[0].render = { jobId: 'job-different', status: 'failed' };
+        b.imageMode = 'local';
+        expect(JSON.stringify(sanitizeRecordForWire('deck', a)))
+          .toBe(JSON.stringify(sanitizeRecordForWire('deck', b)));
+      });
+
+      it('drops cards with no roster key (they cannot be addressed on the receiver)', () => {
+        const record = deck();
+        record.cards.push({ id: 'row-c', key: '  ', prompt: 'orphan' });
+        expect(sanitizeRecordForWire('deck', record).cards).toHaveLength(2);
+      });
+
+      it('normalizes the soft-delete pair on a tombstone', () => {
+        const wire = sanitizeRecordForWire('deck', { ...deck(), deleted: true, deletedAt: '2026-05-01T00:00:00Z' });
+        expect(wire.deleted).toBe(true);
+        expect(wire.deletedAt).toBe('2026-05-01T00:00:00Z');
+      });
+    });
+
     it('returns null for unknown kinds', () => {
       expect(sanitizeRecordForWire('mystery', { id: 'x' })).toBeNull();
     });

@@ -44,6 +44,7 @@ export const DB_TEST_INCLUDE = [
   'routes/catalog.test.js',
   'routes/mindToolRecipes.db.test.js',
   'routes/decks.db.test.js',
+  'services/decksSync.db.test.js',
   'scripts/run-db-migrations.test.js',
 ];
 

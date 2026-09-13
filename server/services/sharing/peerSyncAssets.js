@@ -594,6 +594,34 @@ export async function buildBoardAssetManifest(board) {
   return [...dedup.values()];
 }
 
+/**
+ * Hash every gallery image a deck (#decks) references so a subscribed peer can
+ * pull the bytes and actually SEE the deck: each card's render history
+ * (`imageRefs`, which already includes `primaryImageRef`) plus the style
+ * samples the vision step analyzed (`samples[].imageRef`). De-duped by
+ * filename — the same render can be a card ref and a sample — and each
+ * missing-local-file entry is skipped silently (mirrors buildBoardAssetManifest:
+ * a null-hash entry would make every receiver re-request bytes the sender
+ * cannot fulfil).
+ */
+export async function buildDeckAssetManifest(deck) {
+  const filenames = new Set();
+  for (const card of Array.isArray(deck?.cards) ? deck.cards : []) {
+    for (const ref of Array.isArray(card?.imageRefs) ? card.imageRefs : []) {
+      const safe = sanitizeAssetFilename(ref);
+      if (safe) filenames.add(safe);
+    }
+    const primary = sanitizeAssetFilename(card?.primaryImageRef);
+    if (primary) filenames.add(primary);
+  }
+  for (const sample of Array.isArray(deck?.samples) ? deck.samples : []) {
+    const safe = sanitizeAssetFilename(sample?.imageRef);
+    if (safe) filenames.add(safe);
+  }
+  const entries = await Promise.all([...filenames].map((f) => hashImageForManifest(f)));
+  return entries.filter(Boolean);
+}
+
 export async function buildAssetManifestForSeries(series, issues, linkedCollection = null) {
   const seriesAssets = await buildAssetManifest(series);
   const dedup = new Map(seriesAssets.map((a) => [`${a.kind}:${a.filename}`, a]));

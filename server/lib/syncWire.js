@@ -350,6 +350,29 @@ export function sanitizeRecordForWire(kind, record) {
       const { deleted: _d, deletedAt: _da, ...rest } = record;
       return { ...rest, ...sanitizeSoftDeleteFields(record) };
     }
+    case 'deck': {
+      // A deck (#decks) federates as ONE whole-record LWW unit: the deck row
+      // plus its full card roster. Three classes of field stay wire-local:
+      //  - `imageMode` / `imageModelId` / `promptLlm` are install-capability
+      //    pins (the peer may not have that provider configured) — same
+      //    contract as musicVideoProject's render pins.
+      //  - `completion` is derived from the cards, so shipping it would be a
+      //    second source of truth AND a hash that moves with no user edit.
+      //  - each card's `id` (a local row id) and `render` (an in-flight media
+      //    jobId, meaningless on another machine). `imageRefs` /
+      //    `primaryImageRef` DO travel: the push asset manifest carries their
+      //    gallery bytes, so the receiver can show the rendered cards.
+      // Cards are addressed by their stable roster `key` and sorted by it so
+      // the wire form (and the conflict-journal content hash) is byte-stable
+      // regardless of local row ordering.
+      const { deleted: _d, deletedAt: _da, imageMode: _im, imageModelId: _imi,
+        promptLlm: _pl, completion: _c, cards, ...rest } = record;
+      const wireCards = (Array.isArray(cards) ? cards : [])
+        .filter((c) => isNonBlankStr(c?.key))
+        .map(({ id: _cid, deckId: _did, render: _r, ...card }) => card)
+        .sort((a, b) => a.key.localeCompare(b.key));
+      return { ...rest, cards: wireCards, ...sanitizeSoftDeleteFields(record) };
+    }
     case 'musicVideoProject': {
       // Music Video projects are whole-record LWW, but their image render pin
       // and video backend are install-capability choices: a peer may not have
