@@ -27,10 +27,6 @@ import {
 } from '../lib/modelAbuseGuard.js';
 import { screenUntrustedContent } from './untrustedContent.js';
 import { safeJSONParse } from '../lib/fileUtils.js';
-import {
-  scanDiffForHiddenContent,
-  STRUCTURAL_HIDDEN_CONTENT_CATEGORIES,
-} from '../lib/diffHiddenContentScan.js';
 
 export const SECURITY_SCAN_MAX_OPEN_PRS = 200;
 export const SECURITY_SCAN_MAX_DIFF_CHARS = MODEL_ABUSE_GUARD_MAX_INPUT_CHARS;
@@ -262,7 +258,6 @@ const formatSecurityFindings = (findings) => findings.map((finding) => (
 )).join('\n');
 
 const MAX_COMMIT_LOG_CHARS = 100_000;
-const STRUCTURAL_CATEGORY_SET = new Set(STRUCTURAL_HIDDEN_CONTENT_CATEGORIES);
 
 function formatCommitLog(commits) {
   if (!Array.isArray(commits) || commits.length === 0) return '';
@@ -286,9 +281,6 @@ const contentFor = (pr, diff) => {
     diff,
   ].join('\n\n');
 };
-
-const structuralFindingsFrom = (diff) => scanDiffForHiddenContent(diff)
-  .filter((finding) => STRUCTURAL_CATEGORY_SET.has(finding.category));
 
 const structuralVerdict = (findings) => ({
   ok: true,
@@ -348,6 +340,12 @@ export async function runPrReviewerSecurityScan({ app, target = null, largeInput
   const reviewedPrs = [];
   const reviewInputs = [];
   let hasFindings = false;
+  // Loaded at the call site so the widely-imported preflight module does not
+  // statically instantiate the diff scanner (import-budget #6156).
+  const { scanDiffForHiddenContent, STRUCTURAL_HIDDEN_CONTENT_CATEGORIES } = await import('../lib/diffHiddenContentScan.js');
+  const structuralCategorySet = new Set(STRUCTURAL_HIDDEN_CONTENT_CATEGORIES);
+  const structuralFindingsFrom = (diff) => scanDiffForHiddenContent(diff)
+    .filter((finding) => structuralCategorySet.has(finding.category));
   // Named by the verdicts, not the module constant: a scan that ran only the
   // deterministic layer must not be recorded as classified by Prompt Guard.
   let guardModel = MODEL_ABUSE_GUARD.name;
