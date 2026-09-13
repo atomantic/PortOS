@@ -619,6 +619,7 @@ const deterministicVerdict = (findings, classifier) => ({
  */
 export async function runModelAbuseScan({
   content,
+  source = null,
   timeoutMs = MODEL_ABUSE_GUARD_TIMEOUT_MS,
   classifierMode = 'required',
   minBenignScore = MODEL_ABUSE_GUARD_MIN_BENIGN_SCORE,
@@ -630,7 +631,7 @@ export async function runModelAbuseScan({
   if (typeof content !== 'string' || !content.trim()) return failure('security-guard-empty-input');
   if (content.length > MODEL_ABUSE_GUARD_MAX_INPUT_CHARS) return failure('security-guard-input-too-large');
 
-  const deterministicFindings = detectDeterministicModelAbuseSignals(content);
+  const deterministicFindings = detectDeterministicModelAbuseSignals(content, { source });
   if (deterministicFindings.length > 0) {
     return deterministicVerdict(deterministicFindings, 'not-run');
   }

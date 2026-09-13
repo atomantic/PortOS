@@ -25,7 +25,11 @@ import { fileURLToPath } from 'url';
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 
 /** Run by the CI `impact` job before any dependency install. */
-const PRE_INSTALL_ENTRYPOINTS = ['scripts/ci-base-sha.js', 'scripts/ci-test-plan.js'];
+const PRE_INSTALL_ENTRYPOINTS = [
+  'scripts/ci-base-sha.js',
+  'scripts/ci-test-plan.js',
+  'scripts/scan-diff-hidden-content.js',
+];
 
 /**
  * Scripts that must ALSO load from a bare checkout, but for their own reason

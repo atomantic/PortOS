@@ -18,7 +18,7 @@ export async function screenUntrustedContent({ content, source, policy: override
   if (typeof content !== 'string' || !content.trim()) return failure('untrusted-content-empty', 'There is no external content to analyze.');
   if (content.length > policy.maxInputChars) return failure('untrusted-content-too-large', 'The complete content exceeds the configured limit; no partial analysis was accepted.');
   const { runModelAbuseScan } = await import('./modelAbuseGuard.js');
-  const screening = await runModelAbuseScan({ content, classifierMode: policy.classifierMode, minBenignScore: policy.minBenignScore });
+  const screening = await runModelAbuseScan({ content, source, classifierMode: policy.classifierMode, minBenignScore: policy.minBenignScore });
   // A completed scan that flags content (deterministic findings, or a
   // classifier verdict of malicious/low-confidence) means the guard is
   // working correctly — that is a distinct outcome from the guard failing to
