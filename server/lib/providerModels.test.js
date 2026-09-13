@@ -49,7 +49,9 @@ import {
   isKimiProvider,
   splitAntigravityModel,
   antigravityBaseModels,
+  antigravityCatalogListsModel,
   antigravityModelEffortLevels,
+  pickAntigravityRelayModel,
   resolveInjectedTuiModel
 } from './providerModels.js';
 import { readFileSync } from 'fs';
@@ -386,6 +388,59 @@ describe('providerModels', () => {
         { id: 'antigravity-cli', command: 'agy', models: AGY_CATALOG },
         ANTIGRAVITY_CONFIGURED_DEFAULT,
       )).toBe(ANTIGRAVITY_EFFORT_LEVELS);
+    });
+  });
+
+  // The catalog moves under the pins: migration 335 dropped the whole
+  // gemini-3.5 tier, and every unpinned agy image render then failed with
+  // "--effort is not supported for model gemini-3.5-flash". These two answer
+  // "is this pin still served?" and "what do we fall back to?".
+  describe('antigravityCatalogListsModel', () => {
+    it('accepts a listed id, and a base whose suffixed variants are listed', () => {
+      expect(antigravityCatalogListsModel('gemini-3.6-flash-low', AGY_CATALOG)).toBe(true);
+      expect(antigravityCatalogListsModel('claude-sonnet-4-6', AGY_CATALOG)).toBe(true);
+      // --model takes the base; the suffix only decides --effort.
+      expect(antigravityCatalogListsModel('gemini-3.6-flash', AGY_CATALOG)).toBe(true);
+      // A tier the base lacks is still the same MODEL — antigravityModelEffortLevels
+      // clamps it downstream, so this is not the "retired id" case.
+      expect(antigravityCatalogListsModel('gemini-3.1-pro-medium', AGY_CATALOG)).toBe(true);
+    });
+
+    it('reports a retired id as unlisted', () => {
+      expect(antigravityCatalogListsModel('gemini-3.5-flash-low', AGY_CATALOG)).toBe(false);
+    });
+
+    // "No catalog" must never read as "the model is gone": the list is empty on
+    // a fresh install, before the first refresh, and when the probe failed.
+    it('treats an absent or empty catalog as knowing everything', () => {
+      expect(antigravityCatalogListsModel('gemini-3.5-flash-low', [])).toBe(true);
+      expect(antigravityCatalogListsModel('gemini-3.5-flash-low', null)).toBe(true);
+    });
+  });
+
+  describe('pickAntigravityRelayModel', () => {
+    it('prefers a flash model at the weakest tier, in the order agy listed them', () => {
+      expect(pickAntigravityRelayModel(AGY_CATALOG)).toBe('gemini-3.6-flash-low');
+      expect(pickAntigravityRelayModel([
+        ANTIGRAVITY_CONFIGURED_DEFAULT,
+        'gemini-3.8-flash-high',
+        'gemini-3.8-flash-low',
+        'gemini-3.6-flash-low',
+      ])).toBe('gemini-3.8-flash-low');
+    });
+
+    it('falls back to any weakest tier, then to any flash model', () => {
+      expect(pickAntigravityRelayModel(['gemini-3.1-pro-high', 'gemini-3.1-pro-low'])).toBe('gemini-3.1-pro-low');
+      expect(pickAntigravityRelayModel(['claude-sonnet-4-6', 'gemini-flash-experimental'])).toBe('gemini-flash-experimental');
+    });
+
+    // Nothing cheap listed → keep what the caller had rather than escalating
+    // onto a reasoning-heavy tier behind the user's back. The sentinel is never
+    // a relay candidate: it means "send no --model at all".
+    it('returns null rather than escalating onto a reasoning tier', () => {
+      expect(pickAntigravityRelayModel(['claude-opus-4-6-thinking', 'claude-sonnet-4-6'])).toBe(null);
+      expect(pickAntigravityRelayModel([ANTIGRAVITY_CONFIGURED_DEFAULT])).toBe(null);
+      expect(pickAntigravityRelayModel(null)).toBe(null);
     });
   });
 

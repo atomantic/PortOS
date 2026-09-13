@@ -480,7 +480,16 @@ describe('deferred imports stay deferred (#6156)', () => {
 // db.js, the hook suite reaches the media queue, the prompt/render suites reach
 // the modules they mock — plus the two pure leaves the lib barrel gains and the
 // schema composer's decks.js, counted by the suites that load those barrels.
-const MAX_STATIC_INSTANTIATIONS = 103918;
+// Pinning the shipped image-gen model defaults to the seeded provider catalog
+// measures +7, all of it ONE new test file's own closure: imageGenCapabilities.js
+// and the generationModes.js leaf behind it, plus providerModels.js and its
+// three leaves, reached so the guard can assert the agy pin is the tier
+// pickAntigravityRelayModel would choose rather than a second hand-maintained
+// opinion. It reads data.reference/providers.json as JSON rather than importing
+// the toolkit's own catalog module precisely to avoid dragging that subtree in,
+// and no production module gained an edge — so raise by exactly that delta and
+// keep the headroom.
+const MAX_STATIC_INSTANTIATIONS = 103925;
 
 
 const SKIP_DIRS = new Set(['node_modules', 'coverage', 'dist', 'data']);

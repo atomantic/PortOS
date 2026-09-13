@@ -69,8 +69,33 @@ export const CODEX_IMAGEGEN_DEFAULT_EFFORT = 'low';
 // code-level-default rationale as Codex: reaches every install and peer with no
 // migration; an explicit `imageGen.agy.model` in Settings still wins. If this
 // tier ever proves flaky at issuing generate_image, escalate exactly one rung
-// (gemini-3.5-flash-medium) and record why here.
-export const AGY_IMAGEGEN_DEFAULT_MODEL = 'gemini-3.5-flash-low';
+// (gemini-3.8-flash-medium) and record why here.
+//
+// THE INCIDENT BOTH PINS BELOW ARE GUARDED AGAINST — the canonical telling; the
+// helpers and tests that defend it point back here rather than restating it.
+// Vendors retire model ids between builds, and no migration carries a
+// code-level default along. Migration 335 dropped the whole gemini-3.5 tier
+// from the shipped Antigravity catalog while this constant still read
+// `gemini-3.5-flash-low`, so every unpinned agy render failed with `--effort is
+// not supported for model "gemini-3.5-flash"` — silently, until someone tried
+// to generate an image. Two defenses, layered:
+//
+//  - `imageGenCapabilities.test.js` pins BOTH constants to the ids
+//    `data.reference/providers.json` still seeds, so a catalog migration that
+//    forgets its pin fails in CI instead of on a user's render;
+//  - agy additionally self-heals at render time
+//    (`imageGen/agy.js#resolveAgyDriverModel`), because an install can outrun
+//    its PortOS version: the catalog refreshes from the live CLI on its own
+//    schedule. That covers only this PortOS-chosen pin — a model the user typed
+//    is theirs. Codex has no such heal: its pin is passed through verbatim by
+//    `imageGen/codex.js` with no model/effort pairing to validate, so a retired
+//    id surfaces as codex's own error rather than a confusing one, and the CI
+//    guard above is the defense. Give it one if that ever stops being true.
+//
+// So this constant is a shipped STARTING POINT — but keep it current: it is
+// what the Settings/ImageGen pickers display as "the default", and what an
+// install with no catalog falls back to.
+export const AGY_IMAGEGEN_DEFAULT_MODEL = 'gemini-3.8-flash-low';
 
 // The image model behind agy's generate_image tool — fixed server-side by
 // Antigravity and NOT selectable by PortOS. Re-probed 2026-07-30 against agy

@@ -248,6 +248,65 @@ export function antigravityModelEffortLevels(model, models) {
 }
 
 /**
+ * Is `id` a model the install's agy catalog still lists?
+ *
+ * Compared on BASE ids: once `--effort` carries the tier, `gemini-3.6-flash`
+ * and `gemini-3.6-flash-low` are the same `--model` value, and a tier the base
+ * does not offer is clamped by `antigravityModelEffortLevels` rather than being
+ * a different model.
+ *
+ * An EMPTY catalog answers `true`. "We have no catalog" must never read as "the
+ * model is gone" — the list is empty on a fresh install, when the provider
+ * service isn't initialized, and whenever the `agy models` probe failed — and a
+ * false negative there would swap out a model that works.
+ *
+ * @param {string} id - base or suffixed model id (a blank one reads as unlisted;
+ *   callers ask this about a pin they already hold)
+ * @param {unknown[]|null|undefined} models - the provider's model catalog
+ * @returns {boolean}
+ */
+export function antigravityCatalogListsModel(id, models) {
+  const bases = antigravityBaseModels((Array.isArray(models) ? models : []).filter(m => typeof m === 'string'));
+  return !bases.length || bases.includes(splitAntigravityModel(id).base);
+}
+
+/**
+ * The cheapest catalog entry that can drive an unattended agy relay — the tier
+ * to pick on the user's behalf when an agent is needed only to issue one tool
+ * call and does no creative work of its own. Today's caller is image gen's
+ * shipped pin, `AGY_IMAGEGEN_DEFAULT_MODEL`, whose comment carries the whole
+ * rationale and the incident that made a frozen id untenable.
+ *
+ * Re-derives that choice from whatever the catalog currently holds, in agy's
+ * own listed order (newest first):
+ *
+ *   1. a flash model at the weakest effort tier — cheapest, and empirically
+ *      enough to relay a tool call;
+ *   2. any model at that tier, when no flash model is listed at all;
+ *   3. any flash model, when the catalog exposes no effort suffixes;
+ *   4. `null` — nothing cheap is listed, so the caller keeps what it had rather
+ *      than escalating onto a reasoning-heavy tier (`claude-opus-4-6-thinking`)
+ *      behind the user's back.
+ *
+ * The tier is read off `ANTIGRAVITY_EFFORT_LEVELS` rather than spelled `low`,
+ * so a renamed ladder moves this with it. "flash" stays a literal: it is
+ * Google's own family name, not something PortOS derives.
+ *
+ * @param {unknown[]|null|undefined} models - the provider's model catalog
+ * @returns {string|null}
+ */
+export function pickAntigravityRelayModel(models) {
+  const cheapest = ANTIGRAVITY_EFFORT_LEVELS[0];
+  const tiers = filterSelectableModels((Array.isArray(models) ? models : []).filter(m => typeof m === 'string'))
+    .map(id => ({ id, ...splitAntigravityModel(id) }));
+  const pick = (match) => tiers.find(match)?.id;
+  return pick(m => m.effort === cheapest && m.base.includes('flash'))
+    || pick(m => m.effort === cheapest)
+    || pick(m => m.base.includes('flash'))
+    || null;
+}
+
+/**
  * True when a provider is codex-flavored — the shipped `codex`/`codex-tui`
  * provider ids or any provider whose launch command basename is `codex`
  * (path/exe tolerant). The single home for the codex signature, same posture

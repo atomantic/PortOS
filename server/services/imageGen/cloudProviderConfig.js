@@ -96,6 +96,13 @@ export const CLOUD_PROVIDER_SPECS = Object.freeze({
     params: (a, override) => ({
       agyPath: a.agyPath,
       model: override || a.model || AGY_IMAGEGEN_DEFAULT_MODEL,
+      // Provenance, which the resolved `model` above erases: this is the only
+      // place that still knows whether the id is PortOS's own shipped pin or
+      // something a human chose. The agy provider re-points a shipped pin that
+      // the vendor has retired from its catalog, and must never do that to a
+      // user's — an id typed into Settings (or sent as a per-render override)
+      // is a deliberate choice, even when it happens to equal the shipped one.
+      modelIsShippedDefault: !override && !a.model,
     }),
   }),
 });
