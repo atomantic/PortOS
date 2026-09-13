@@ -988,7 +988,11 @@ export function installFlux2Venv(onLog) {
     if (killed) return { ok: false, stage: 'detect', cancelled: true };
 
     stage('venv', `Creating FLUX.2 venv at ${FLUX2_VENV_DEFAULT}…`);
-    const targetDir = FLUX2_VENV_DEFAULT.replace(IS_WIN ? /\\Scripts\\python\.exe$/ : /\/bin\/python3$/, '');
+    // `<venv>/bin/python3` (or `<venv>\\Scripts\\python.exe`) → `<venv>`. Two
+    // dirnames rather than a separator-specific regex: the regex silently
+    // no-ops on the other platform's spelling, leaving targetDir pointing at
+    // the interpreter itself and the venv nested a level too deep.
+    const targetDir = dirname(dirname(FLUX2_VENV_DEFAULT));
     // createVenv reuses an existing interpreter as-is, so a venv left behind by
     // an earlier run against a too-old base would survive every retry — and
     // keep failing the same way. Rebuild it rather than pip into it.

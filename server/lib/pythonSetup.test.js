@@ -34,6 +34,11 @@ const mockState = {
   venvCalls: [],
 };
 
+// pythonSetup composes paths with path.join, which is backslashed on a Windows
+// runner while every fixture below is written POSIX-style. One normalizer,
+// shared by the fs and childProcess mocks.
+const toPosix = (p) => String(p).split('\\').join('/');
+
 vi.mock('node:os', async () => {
   const actual = await vi.importActual('node:os');
   return {
@@ -52,7 +57,7 @@ vi.mock('node:fs', async () => {
   // fixtures — the module's own platform is pinned via mockState.platform.
   return {
     ...actual,
-    existsSync: (p) => mockState.presentPaths.has(String(p).split('\\').join('/')),
+    existsSync: (p) => mockState.presentPaths.has(toPosix(p)),
     // uv's install root is enumerated rather than listed, so the candidate
     // builder readdirs it. `null` means "uv not installed" — the common case —
     // and must throw the way the real readdirSync does so the builder swallows
@@ -81,11 +86,15 @@ vi.mock('./childProcess.js', async () => {
       // Mimic `python -m venv`: record the invocation and make the resulting
       // interpreter exist, so createVenv's post-condition check passes.
       mockState.venvCalls.push([bin, ...args]);
-      mockState.presentPaths.add(`${args[args.length - 1]}/bin/python3`);
+      // presentPaths holds POSIX spellings; `join` gives the mock a
+      // backslashed targetDir on a Windows runner, so normalize like the
+      // existsSync mock does or the created interpreter never "exists".
+      mockState.presentPaths.add(toPosix(`${args[args.length - 1]}/bin/python3`));
       resolve({ stdout: '', stderr: '' });
     } else if (probeArg.includes('sys.version_info')) {
-      const version = mockState.versionByPath.has(bin)
-        ? mockState.versionByPath.get(bin)
+      const key = toPosix(bin);
+      const version = mockState.versionByPath.has(key)
+        ? mockState.versionByPath.get(key)
         : mockState.defaultVersion;
       if (!version) reject(new Error('not an interpreter'));
       else resolve({ stdout: `${version}\n`, stderr: '' });
