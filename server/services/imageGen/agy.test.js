@@ -30,6 +30,15 @@ vi.mock('../../lib/childProcess.js', async (importOriginal) => {
   };
 });
 
+// The install's agy model catalog, which generateImage reads (through a
+// deferred import of services/providers.js) to clamp the effort ladder and to
+// re-point a rotated-out shipped default. Empty = "no catalog", the shape a
+// fresh install / uninitialized toolkit produces.
+const catalog = vi.hoisted(() => ({ models: [] }));
+vi.mock('../providers.js', () => ({
+  getProviderById: async (id) => (id === 'antigravity-cli' ? { id, models: catalog.models } : null),
+}));
+
 const TEST_ROOT = join(tmpdir(), `portos-agy-test-${process.pid}-${Date.now()}`);
 const FAKE_IMAGES_DIR = join(TEST_ROOT, 'data-images');
 vi.mock('../../lib/fileUtils.js', async () => {
@@ -42,6 +51,7 @@ vi.mock('../../lib/fileUtils.js', async () => {
 });
 
 const agy = await import('./agy.js');
+const { AGY_IMAGEGEN_DEFAULT_MODEL } = await import('../../lib/imageGenCapabilities.js');
 const { imageGenEvents } = await import('../imageGenEvents.js');
 const flush = () => new Promise((resolve) => setImmediate(resolve));
 const stagingPathFor = (jobId) => join(tmpdir(), `portos-agy-${jobId}`, 'output.png');
@@ -53,6 +63,7 @@ const closeChild = async (index = 0, code = 1) => {
 };
 
 beforeEach(async () => {
+  catalog.models = [];
   spawnCalls.length = 0;
   imageGenEvents.removeAllListeners();
   agy._internals.setHarvestTimeoutForTests(10);
@@ -174,6 +185,67 @@ describe('agy image provider', () => {
       initImagePath: 'source.png',
     })).rejects.toMatchObject({ code: 'VALIDATION_ERROR', status: 400 });
     expect(spawnCalls).toHaveLength(0);
+  });
+
+  // A catalog can outrun the install's PortOS version, retiring the shipped pin
+  // under it (see AGY_IMAGEGEN_DEFAULT_MODEL for the incident). The default is
+  // PortOS's own choice, so it re-points to the cheapest tier still listed.
+  it('re-points the shipped default when the catalog no longer lists it', async () => {
+    catalog.models = ['gemini-4.2-flash-high', 'gemini-4.2-flash-low', 'claude-sonnet-4-6'];
+    const job = await agy.generateImage({
+      prompt: 'a fox',
+      model: AGY_IMAGEGEN_DEFAULT_MODEL,
+      modelIsShippedDefault: true,
+    });
+
+    expect(job.model).toBe('gemini-4.2-flash-low');
+    const { args } = spawnCalls[0];
+    expect(args).toEqual(expect.arrayContaining(['--model', 'gemini-4.2-flash', '--effort', 'low']));
+    expect(args).not.toContain(AGY_IMAGEGEN_DEFAULT_MODEL);
+    await closeChild();
+  });
+
+  // A pin the USER typed is a deliberate choice: substituting it would render
+  // something else under agy's name and bury agy's own "unknown model" error.
+  // It rides through verbatim — with no --effort, since the catalog knows no
+  // tiers for it and agy validates the PAIR.
+  it('never substitutes a user-pinned model the catalog does not list', async () => {
+    catalog.models = ['gemini-4.2-flash-low', 'claude-sonnet-4-6'];
+    const job = await agy.generateImage({ prompt: 'a fox', model: 'private-build-low' });
+
+    expect(job.model).toBe('private-build-low');
+    const { args } = spawnCalls[0];
+    expect(args).toEqual(expect.arrayContaining(['--model', 'private-build-low']));
+    expect(args).not.toContain('--effort');
+    await closeChild();
+  });
+
+  // The gate is PROVENANCE, not string equality: the same id is PortOS's to
+  // re-point when it inherited it, and the user's to keep when they typed it.
+  // resolveCloudProviderConfig is the only layer that still knows which.
+  it('leaves the shipped id alone when the user pinned it themselves', async () => {
+    catalog.models = ['gemini-4.2-flash-low'];
+    const job = await agy.generateImage({
+      prompt: 'a fox',
+      model: AGY_IMAGEGEN_DEFAULT_MODEL,
+      modelIsShippedDefault: false,
+    });
+
+    expect(job.model).toBe(AGY_IMAGEGEN_DEFAULT_MODEL);
+    expect(spawnCalls[0].args).not.toContain('gemini-4.2-flash');
+    await closeChild();
+  });
+
+  // agy rejects the PAIR, not the model: "gemini-3.1-pro has no 'medium'
+  // effort (available: low, high)". The catalog is what narrows the ladder.
+  it('clamps a baked effort tier the chosen base does not offer', async () => {
+    catalog.models = ['gemini-3.1-pro-high', 'gemini-3.1-pro-low'];
+    await agy.generateImage({ prompt: 'a fox', model: 'gemini-3.1-pro-medium' });
+
+    const { args } = spawnCalls[0];
+    expect(args).toEqual(expect.arrayContaining(['--model', 'gemini-3.1-pro', '--effort', 'low']));
+    expect(args).not.toContain('medium');
+    await closeChild();
   });
 
   it('rejects invalid custom model ids', async () => {

@@ -200,6 +200,10 @@ import * as imageGen from '../services/imageGen/index.js';
 import * as characterService from '../services/character.js';
 import * as mediaJobQueue from '../services/mediaJobQueue/index.js';
 import { getSettings } from '../services/settings.js';
+// Asserted against the CONSTANT, never a literal copy of it: the shipped agy
+// pin has to be re-pointed whenever Google retires an id, and a hard-coded
+// expectation here turns that routine bump into a false failure.
+import { AGY_IMAGEGEN_DEFAULT_MODEL } from '../lib/imageGenCapabilities.js';
 import { findOrCreateUniverseCollection } from '../services/mediaCollections.js';
 import { prepareRemoteMediaJob } from '../services/federatedMedia/remoteSubmission.js';
 
@@ -902,8 +906,8 @@ describe('Image Gen Routes', () => {
         .send({ prompt: 'a lighthouse' });
 
       expect(response.status).toBe(200);
-      expect(response.body.model).toBe('gemini-3.5-flash-low');
-      expect(mediaJobQueue.enqueueJob.mock.calls.at(-1)[0].params.model).toBe('gemini-3.5-flash-low');
+      expect(response.body.model).toBe(AGY_IMAGEGEN_DEFAULT_MODEL);
+      expect(mediaJobQueue.enqueueJob.mock.calls.at(-1)[0].params.model).toBe(AGY_IMAGEGEN_DEFAULT_MODEL);
     });
 
     // No getSettings mock here on purpose: Zod rejects before the route ever

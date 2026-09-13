@@ -18,11 +18,17 @@ import { isAbsolute, join, resolve as pathResolve, sep } from 'path';
 import { tmpdir } from 'os';
 import sharp from 'sharp';
 import {
+  ANTIGRAVITY_CLI_ID,
   ensureAntigravityPrintArgs,
   isAntigravityModelId,
   parseAntigravityModelList,
   prepareAntigravityPrompt,
 } from '../../lib/antigravity.js';
+import {
+  antigravityCatalogListsModel,
+  pickAntigravityRelayModel,
+  splitAntigravityModel,
+} from '../../lib/providerModels.js';
 import { bufferedSpawn, killProcessTree, prepareCliSpawn } from '../../lib/bufferedSpawn.js';
 import { atomicWrite, copyFileGuarded, detectImageFormat, ensureDir, PATHS, rmGuarded, unlinkGuarded } from '../../lib/fileUtils.js';
 import { ServerError } from '../../lib/errorHandler.js';
@@ -204,9 +210,57 @@ ${noFabricationClause(AGY_TOOL)}
 Do not create any other files, do not modify any code or workspace content, and do not run unrelated tools. When the file is written, you are done.`;
 }
 
+/**
+ * The agy session model + catalog this render should drive.
+ *
+ * Two things want the catalog, and only a model carrying a baked effort tier
+ * can need either — so an id with no tier (and a render with no pin at all)
+ * skips the read. The shipped default does carry one, so a default-config
+ * render always pays it; that is one cached provider-record read against a
+ * multi-second CLI spawn.
+ *
+ *  - agy validates the (model, effort) PAIR and rejects a tier the base does
+ *    not offer ("gemini-3.1-pro has no 'medium' effort"), so
+ *    `ensureAntigravityPrintArgs` has to see `models` to clamp the ladder down
+ *    to the tiers that base really has. Without it every suffixed id resolves
+ *    against the full low/medium/high ladder and can emit an unsupported pair.
+ *    Image gen was the last agy spawn site not passing the catalog through.
+ *  - a SHIPPED default the vendor has retired is ours to re-point — see
+ *    `AGY_IMAGEGEN_DEFAULT_MODEL` for the incident. `shippedDefault` is the
+ *    provenance flag `cloudProviderConfig` sets, NOT a comparison against the
+ *    constant: a user who types today's shipped id into Settings still owns
+ *    that pin, and substituting it would hide agy's own "unknown model" error
+ *    behind a silently different render. The re-point lands on the job's
+ *    sidecar and returned record, which is what regen and provenance read.
+ *
+ * The catalog comes from the install's provider record (cache-fronted by the
+ * provider service), NOT from an `agy models` spawn: the render path must not
+ * pay a second child process, and a probe failure would stall it behind a
+ * timeout. The deferred import keeps `services/providers.js` and the toolkit
+ * subtree behind it out of every image-gen suite closure (server suite import
+ * budget, `lib/importScoping.test.js`); `.catch` covers the uninitialized
+ * toolkit, and no catalog means "leave the caller's model alone".
+ */
+async function resolveAgyDriverModel(model, shippedDefault) {
+  if (!model || !splitAntigravityModel(model).effort) return { model: model || null, models: null };
+  const models = await import('../providers.js')
+    .then(({ getProviderById }) => getProviderById(ANTIGRAVITY_CLI_ID))
+    .then((provider) => provider?.models)
+    .catch(() => null);
+  if (shippedDefault && !antigravityCatalogListsModel(model, models)) {
+    const replacement = pickAntigravityRelayModel(models);
+    if (replacement) {
+      console.log(`🔀 agy default model ${model} is no longer listed — driving with ${replacement}`);
+      return { model: replacement, models };
+    }
+  }
+  return { model, models };
+}
+
 export async function generateImage({
   agyPath,
   model,
+  modelIsShippedDefault = false,
   prompt = '',
   width,
   height,
@@ -248,7 +302,11 @@ export async function generateImage({
   const fullPrompt = buildAgyPrompt({
     prompt, negativePrompt, width, height, stagingPath, inputImages, initImageStrength,
   });
-  const baseArgs = ensureAntigravityPrintArgs([], { model });
+  // `driverModel` is what agy actually runs on — a retired shipped default is
+  // re-pointed here, so every record below reports the model that rendered
+  // rather than the one the caller asked for. See resolveAgyDriverModel.
+  const { model: driverModel, models } = await resolveAgyDriverModel(model, modelIsShippedDefault);
+  const baseArgs = ensureAntigravityPrintArgs([], { model: driverModel, models });
   const { args } = prepareAntigravityPrompt(baseArgs, fullPrompt);
   const bin = agyPath || DEFAULT_BIN;
   const meta = {
@@ -259,7 +317,7 @@ export async function generateImage({
     height: height ? Number(height) : null,
     filename,
     mode: IMAGE_GEN_MODE.AGY,
-    model: model || null,
+    model: driverModel,
     // The agent/session model above drives the CLI; the image itself always
     // renders on Antigravity's fixed server-side backend — record it so
     // provenance names the model that actually produced the pixels (#3231).
@@ -299,7 +357,7 @@ export async function generateImage({
     path: `/data/images/${filename}`,
     generationId: jobId,
     mode: IMAGE_GEN_MODE.AGY,
-    model: model || null,
+    model: driverModel,
     status: 'running',
   };
 }
