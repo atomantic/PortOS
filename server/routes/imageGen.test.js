@@ -1285,6 +1285,38 @@ describe('Image Gen Routes', () => {
       expect(response.text).toContain('Already installed');
     });
 
+    // The client renders a stream that closes with no terminal frame as
+    // "Connection to installer lost. Restart PortOS or try again." — a phantom
+    // transport error that hides the real failure. installFlux2Venv emits its
+    // own error frame; this is the route's backstop for a path that doesn't.
+    it('POST /setup/flux2-install reports a silent installer failure instead of closing the stream bare', async () => {
+      const { installFlux2Venv, isFlux2VenvHealthy } = await import('../lib/pythonSetup.js');
+      isFlux2VenvHealthy.mockResolvedValueOnce(false);
+      installFlux2Venv.mockReturnValueOnce({
+        promise: Promise.resolve({ ok: false, stage: 'install' }),
+        kill: vi.fn(),
+      });
+
+      const response = await request(app).post('/api/image-gen/setup/flux2-install');
+
+      expect(response.status).toBe(200);
+      expect(response.text).toContain('"type":"error"');
+      expect(response.text).toContain('failed at the install stage');
+    });
+
+    it('POST /setup/flux2-install stays silent when the client cancelled the install', async () => {
+      const { installFlux2Venv, isFlux2VenvHealthy } = await import('../lib/pythonSetup.js');
+      isFlux2VenvHealthy.mockResolvedValueOnce(false);
+      installFlux2Venv.mockReturnValueOnce({
+        promise: Promise.resolve({ ok: false, stage: 'install', cancelled: true }),
+        kill: vi.fn(),
+      });
+
+      const response = await request(app).post('/api/image-gen/setup/flux2-install');
+
+      expect(response.text).not.toContain('"type":"error"');
+    });
+
     it('does not start an install after the client disconnects during the health probe', async () => {
       const { installFlux2Venv, isFlux2VenvHealthy } = await import('../lib/pythonSetup.js');
       let finishProbe;

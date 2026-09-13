@@ -228,6 +228,72 @@ export function detectVenvBasePythonSync() {
   return venvBaseCandidatesSync()[0] || detectPythonSync();
 }
 
+// Minimum CPython for a venv PortOS builds the torch/diffusers stack into.
+//
+// Below 3.10, pip resolves an old setuptools (<77) inside its own build
+// isolation, and that setuptools rejects the PEP 639 *string* form of
+// `project.license`. A git-sourced dependency that uses it — `sdnq` declares
+// `license = "GPL-3.0-only"` — then dies in "Getting requirements to build
+// wheel" with `project.license must be valid exactly by one definition`, which
+// reads like a pip bug and lands only AFTER the multi-GB torch download. The
+// same floor is what mflux/mlx need (scripts/setup-image-video.sh checks it
+// before the `pip install --user` path) and what the model-abuse guard's own
+// `isBasePythonSupported` enforces, so gate the BASE interpreter up front
+// rather than diagnosing the build failure downstream.
+//
+// Nothing here caps the upper end: a base newer than the torch wheels support
+// fails with pip's own "No matching distribution" message, which is already
+// actionable, and hard-coding a ceiling would reject each new CPython release
+// until someone remembered to raise it.
+export const MIN_VENV_PYTHON = Object.freeze([3, 10]);
+export const MIN_VENV_PYTHON_LABEL = MIN_VENV_PYTHON.join('.');
+
+// `{ version, major, minor }` for an interpreter, or null when it can't be run
+// (missing, not an interpreter, a Store alias, a venv whose base was pruned).
+// Deliberately null rather than throwing: every caller treats "can't tell" the
+// same as "too old", because building a torch venv from it is a coin flip.
+export async function probePythonVersion(pythonPath, { env, timeout = 10_000 } = {}) {
+  if (!pythonPath) return null;
+  const { stdout } = await execFileAsync(
+    pythonPath,
+    ['-c', 'import sys; print("%d.%d.%d" % sys.version_info[:3])'],
+    // Room for a chatty interpreter's banner/deprecation noise before the
+    // version line: a maxBuffer overflow rejects the interpreter outright, and
+    // "rejected" here means refusing to install at all.
+    safeChildProcessOptions({ ...(env ? { env } : {}), timeout, maxBuffer: 64 * 1024 }),
+  ).catch(() => ({ stdout: '' }));
+  const line = String(stdout).trim().split(/\r?\n/).pop() || '';
+  const parts = /^(\d+)\.(\d+)\.(\d+)$/.exec(line);
+  if (!parts) return null;
+  return { version: line, major: Number(parts[1]), minor: Number(parts[2]) };
+}
+
+export const meetsMinVenvPython = (probed) =>
+  !!probed && (probed.major > MIN_VENV_PYTHON[0]
+    || (probed.major === MIN_VENV_PYTHON[0] && probed.minor >= MIN_VENV_PYTHON[1]));
+
+export async function isSupportedVenvBase(pythonPath, options) {
+  return meetsMinVenvPython(await probePythonVersion(pythonPath, options));
+}
+
+// venvBaseCandidatesSync() split by MIN_VENV_PYTHON, preserving its ordering
+// (the tier ranking in that function is about torch loading correctly, and
+// still decides which SUPPORTED base wins). `rejected` carries the version we
+// found so the installer can say *why* a Python it can see is unusable instead
+// of claiming none exists. Probes run in parallel: the list is short and
+// already existsSync-filtered.
+export async function classifyVenvBases() {
+  const candidates = venvBaseCandidatesSync();
+  const probed = await Promise.all(candidates.map((p) => probePythonVersion(p)));
+  const supported = [];
+  const rejected = [];
+  candidates.forEach((path, i) => {
+    if (meetsMinVenvPython(probed[i])) supported.push(path);
+    else rejected.push({ path, version: probed[i]?.version || 'unknown' });
+  });
+  return { supported, rejected };
+}
+
 export async function detectPython() {
   // mlx ships arm64-only wheels; prefer an arm64 interpreter on Apple Silicon
   // so /opt/anaconda3 (often x86_64) doesn't beat /opt/homebrew/bin/python3.
@@ -860,28 +926,77 @@ export function installFlux2Venv(onLog) {
   const log = (message) => onLog({ type: 'log', message });
 
   const trackProc = (p) => { currentProc = p; };
-  const runPython = async (args) =>
-    (await streamSpawn(args[0], args.slice(1), onLog, trackProc)) === 0;
+  // Last non-zero exit, so `fail` can name it. streamSpawn already forwards the
+  // child's own output as `log` frames, so the error frame only has to say
+  // which step died and point at those lines.
+  let lastExitCode = null;
+  const runPython = async (args) => {
+    const code = await streamSpawn(args[0], args.slice(1), onLog, trackProc);
+    if (code !== 0) lastExitCode = code;
+    return code === 0;
+  };
+
+  // Every non-cancelled failure MUST emit a terminal `error` frame. The SSE
+  // route ends the stream when this promise settles, and useInstallStream reads
+  // a close with no terminal frame as "Connection to installer lost. Restart
+  // PortOS or try again." — so a plain pip failure used to surface as a
+  // phantom transport error with the real cause buried in the log.
+  const fail = (stageName, message) => {
+    const exit = lastExitCode == null ? '' : ` (exit code ${lastExitCode})`;
+    onLog({ type: 'error', message: `${message}${exit} See the install log above for the failing step.` });
+    return { ok: false, stage: stageName };
+  };
 
   const promise = (async () => {
-    stage('detect', 'Looking for system Python…');
+    stage('detect', `Looking for Python ${MIN_VENV_PYTHON_LABEL}+…`);
     // The base to CREATE the FLUX.2 venv from — deliberately not detectPython(),
     // which ranks PortOS's own already-provisioned image-gen venv first and is
     // answering a different question ("which interpreter can we pip into").
     // Building a venv from an already-provisioned venv is fragile — its
     // pyvenv.cfg can pin an interpreter path a later system upgrade removes.
-    const baseCandidates = venvBaseCandidatesSync();
-    const basePython = detectVenvBasePythonSync();
+    //
+    // Version-filtered, not just "first one that exists": the candidate list is
+    // ranked for torch loading correctly, and its lower tiers routinely hold a
+    // long-EOL interpreter (a stock /opt/anaconda3 ships 3.8) that installs the
+    // whole multi-GB torch tree and only then fails building sdnq's wheel. See
+    // MIN_VENV_PYTHON.
+    const { supported: baseCandidates, rejected } = await classifyVenvBases();
+    if (!baseCandidates.length) {
+      // Same last resort detectVenvBasePythonSync() carries: with nothing in the
+      // ranked pool, an app-managed venv or a PATH python (the WindowsApps alias
+      // is already filtered out there) beats refusing to install — as long as it
+      // clears the floor.
+      const lastResort = detectPythonSync();
+      const probed = await probePythonVersion(lastResort);
+      if (meetsMinVenvPython(probed)) baseCandidates.push(lastResort);
+      else if (lastResort && !rejected.some((r) => r.path === lastResort)) {
+        rejected.push({ path: lastResort, version: probed?.version || 'unknown' });
+      }
+    }
+    const basePython = baseCandidates[0];
     if (!basePython) {
-      onLog({ type: 'error', message: 'No system Python 3 found. Install Python 3.10+ and try again.' });
+      const seen = rejected.map(({ path, version }) => `${path} (${version})`).join(', ');
+      onLog({
+        type: 'error',
+        message: seen
+          ? `No Python ${MIN_VENV_PYTHON_LABEL}+ found — FLUX.2 needs one to build its venv. Found only: ${seen}. Install a newer Python (e.g. \`brew install python@3.12\` or \`uv python install 3.12\`) and try again.`
+          : `No system Python 3 found. Install Python ${MIN_VENV_PYTHON_LABEL}+ and try again.`,
+      });
       return { ok: false, stage: 'detect' };
     }
     log(`Using base Python: ${basePython}`);
+    if (killed) return { ok: false, stage: 'detect', cancelled: true };
 
     stage('venv', `Creating FLUX.2 venv at ${FLUX2_VENV_DEFAULT}…`);
     const targetDir = FLUX2_VENV_DEFAULT.replace(IS_WIN ? /\\Scripts\\python\.exe$/ : /\/bin\/python3$/, '');
+    // createVenv reuses an existing interpreter as-is, so a venv left behind by
+    // an earlier run against a too-old base would survive every retry — and
+    // keep failing the same way. Rebuild it rather than pip into it.
+    const staleVenv = existsSync(FLUX2_VENV_DEFAULT) && !await isSupportedVenvBase(FLUX2_VENV_DEFAULT);
+    if (staleVenv) log(`Existing venv is older than Python ${MIN_VENV_PYTHON_LABEL} — rebuilding it.`);
+    if (killed) return { ok: false, stage: 'venv', cancelled: true };
     const venvFallback = baseCandidates.find((p) => p !== basePython);
-    let venvPython = await createVenv(basePython, targetDir).catch((err) => {
+    let venvPython = await createVenv(basePython, targetDir, { clear: staleVenv }).catch((err) => {
       log(`venv creation failed against ${basePython}: ${err.message}`);
       return null;
     });
@@ -904,7 +1019,7 @@ export function installFlux2Venv(onLog) {
 
     stage('upgrade-pip', 'Upgrading pip + wheel + setuptools…');
     if (!await runPython([venvPython, '-m', 'pip', 'install', '--upgrade', 'pip', 'wheel', 'setuptools'])) {
-      return { ok: false, stage: 'upgrade-pip' };
+      return fail('upgrade-pip', 'Could not upgrade pip/wheel/setuptools in the new venv.');
     }
     if (killed) return { ok: false, stage: 'upgrade-pip', cancelled: true };
 
@@ -921,15 +1036,15 @@ export function installFlux2Venv(onLog) {
       const torchArgs = ['install', '--upgrade', '--progress-bar', 'on', ...FLUX2_TORCH_SPECS];
       if (useCuda) torchArgs.push('--index-url', cudaIndex);
       if (!await runPython([venvPython, '-m', 'pip', ...torchArgs])) {
-        return { ok: false, stage: 'install' };
+        return fail('install', 'Installing torch + torchvision failed.');
       }
       if (killed) return { ok: false, stage: 'install', cancelled: true };
       const otherSpecs = FLUX2_PIP_SPECS.filter((s) => !FLUX2_TORCH_SPECS.includes(s));
       if (!await runPython([venvPython, '-m', 'pip', 'install', '--upgrade', '--progress-bar', 'on', ...otherSpecs])) {
-        return { ok: false, stage: 'install' };
+        return fail('install', 'Installing the FLUX.2 packages failed.');
       }
     } else if (!await runPython([venvPython, '-m', 'pip', 'install', '--upgrade', '--progress-bar', 'on', ...FLUX2_PIP_SPECS])) {
-      return { ok: false, stage: 'install' };
+      return fail('install', 'Installing the FLUX.2 packages failed.');
     }
     if (killed) return { ok: false, stage: 'install', cancelled: true };
 
