@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, act } from '@testing-library/react';
+import { render, screen, fireEvent, act, within } from '@testing-library/react';
 import AddToCollectionMenu from './AddToCollectionMenu';
 
 // Covers the picker's list presentation (#3312): CollectionPickerShell orders
@@ -35,11 +35,14 @@ const collections = [
 const openMenu = async () => {
   render(<AddToCollectionMenu item={item} />);
   fireEvent.click(screen.getByTitle('Add to collection'));
-  await screen.findByRole('menuitemcheckbox', { name: /Keepers/ });
+  await screen.findByRole('button', { name: /Keepers/ });
 };
 
+// Scoped to the row-list container (not the trigger button or the inline
+// "create" form) — the rows carry no role since dropping role="menu"/
+// role="menuitemcheckbox" (#7265), so an unscoped query would also match those.
 const rowTitles = () =>
-  screen.getAllByRole('menuitemcheckbox').map((el) => el.textContent.trim());
+  within(document.querySelector('.flex-1.min-h-0.overflow-y-auto')).getAllByRole('button').map((el) => el.textContent.trim());
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -63,7 +66,7 @@ describe('AddToCollectionMenu row presentation', () => {
   it('lifts the auto-creator prefix into a badge and keeps the full name as the tooltip', async () => {
     await openMenu();
 
-    const row = screen.getByRole('menuitemcheckbox', { name: /Zephyr Drift/ });
+    const row = screen.getByRole('button', { name: /Zephyr Drift/ });
     expect(row.querySelector('[title]')).toHaveAttribute('title', 'Creative Director: Zephyr Drift');
     // The badge is its own element so the distinguishing tail owns the row width.
     expect(screen.getAllByText('Creative Director')).toHaveLength(2);
@@ -73,8 +76,8 @@ describe('AddToCollectionMenu row presentation', () => {
   it('still lists empty collections — filing INTO an empty collection is the point', async () => {
     await openMenu();
 
-    expect(screen.getByRole('menuitemcheckbox', { name: /Wallpapers/ })).toBeInTheDocument();
-    expect(screen.getByRole('menuitemcheckbox', { name: /Example Universe/ })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Wallpapers/ })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Example Universe/ })).toBeInTheDocument();
   });
 
   it('matches search tokens in any order (AND-token, not a single substring)', async () => {

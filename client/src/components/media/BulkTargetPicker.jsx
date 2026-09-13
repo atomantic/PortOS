@@ -32,7 +32,6 @@ export default function BulkTargetPicker({
       disabled={busy}
       onClick={() => onPick(c.id, c.name)}
       className="w-full flex items-center gap-2 px-2 py-1.5 text-left text-[12px] text-gray-200 hover:bg-port-border rounded disabled:opacity-50"
-      role="menuitem"
     >
       <CollectionRowLabel name={c.name} />
       <span className="text-[10px] text-gray-500 shrink-0">{c.items?.length ?? 0}</span>

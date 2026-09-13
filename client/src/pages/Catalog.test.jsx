@@ -302,7 +302,7 @@ describe('Catalog page', () => {
 
     // Open the Remix menu and choose Story Builder.
     fireEvent.click(screen.getByRole('button', { name: /Remix into/i }));
-    fireEvent.click(await screen.findByRole('menuitem', { name: 'Story Builder' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Story Builder' }));
 
     expect(navigateMock).toHaveBeenCalledWith('/story-builder', {
       state: { remix: { ingredientIds: ['i-1', 'i-2'] } },
@@ -455,7 +455,7 @@ describe('Catalog page', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /Add to universe\/series/i }));
     // The menu lazy-loads the full universe/series lists; wait for it to populate.
-    const item = await screen.findByRole('menuitem', { name: 'Echo Saints' });
+    const item = await screen.findByRole('button', { name: 'Echo Saints' });
     await act(async () => { fireEvent.click(item); });
 
     // character → cast-character, place → cast-place.
@@ -509,7 +509,7 @@ describe('Catalog page', () => {
     fireEvent.click(screen.getByLabelText('Select Echo Saint'));
     fireEvent.click(screen.getByRole('button', { name: /Add to universe\/series/i }));
 
-    expect(await screen.findByRole('menuitem', { name: 'Fresh Empty Universe' })).toBeTruthy();
+    expect(await screen.findByRole('button', { name: 'Fresh Empty Universe' })).toBeTruthy();
   });
 
   // These buttons hide the tail of their label on a narrow viewport, so the full

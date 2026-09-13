@@ -3799,4 +3799,85 @@ function B() { const sensors = useSensors(useSensor(PointerSensor)); return <Dnd
     }
     expect(offenders, `Hand-rolled role="tablist" — render the shared components/ui/TabPills.jsx instead; it owns the roving tabindex + Arrow/Home/End contract a hand-rolled bar cannot honor (WCAG 4.1.2):\n${offenders.join('\n')}`).toEqual([]);
   });
+
+  // --- role="menu" without the arrow-key contract (#7265) --------------------
+  //
+  // `role="menu"` promises the WAI-ARIA menu pattern — the container owns
+  // arrow-key focus among its `menuitem`/`menuitemcheckbox`/`menuitemradio`
+  // children (Arrow keys move, Home/End jump, Escape closes to the trigger) —
+  // and NVDA/JAWS switch into focus mode on it, where arrow keys are the only
+  // way to read the contents. `components/ui/OverflowMenu.jsx` and
+  // `components/ThemeSwitcher.jsx` are the only two implementations that keep
+  // that promise (both wire ArrowUp/ArrowDown cycling); every other menu-role
+  // container audited in #7265 implemented none of it. The fix documented at
+  // `components/shell/ShellProviderLauncher.jsx:142` ("Deliberately NOT
+  // role="menu"/"menuitem": those roles promise arrow-key…") is to drop the
+  // role rather than hand-roll the contract a fifth time — this scan is the
+  // backstop that keeps an eighth copy from shipping the same gap.
+
+  const ARROW_KEY_MENU_ALLOWLIST = new Set([
+    'src/components/ui/OverflowMenu.jsx',
+    'src/components/ThemeSwitcher.jsx',
+  ]);
+
+  // Every element whose `role` attribute literally reads "menu", wherever one
+  // is written — same reading as `handRolledTablists` above.
+  const handRolledMenus = function* (src) {
+    if (!src.includes('menu')) return;
+    for (const node of forEachOpeningTag(src)) {
+      if (normalizedAttributeValue(attributeValue(node.tag, 'role')) === 'menu') yield node;
+    }
+  };
+
+  // A file's own offenders: every `role="menu"` element it contains, unless
+  // the file is the allowlist (which keeps the promise regardless of what else
+  // it contains) or the file's own source ever compares a key to ArrowDown/
+  // ArrowUp (the same coarse, file-scoped signal the issue's own audit used —
+  // `rg ArrowDown` returned zero hits in every offending file). File-scoped
+  // rather than per-element: a menu's key handler is usually a sibling
+  // `onKeyDown` on the trigger or a wrapper, not an attribute on the role
+  // itself, so there is no single element to read the answer off of.
+  const menuOffenders = (file, src) => {
+    if (ARROW_KEY_MENU_ALLOWLIST.has(file)) return [];
+    const menus = [...handRolledMenus(src)];
+    if (menus.length === 0 || /ArrowDown|ArrowUp/.test(src)) return [];
+    return menus.map(({ index }) => `${file}:${lineOf(src, index)}`);
+  };
+
+  it('fails a role="menu" with no arrow-key handling (#7265)', () => {
+    // Probe the matcher first — the tree is green by construction (the seven
+    // audited sites in #7265 all dropped the role in the same change), so
+    // nothing in it pins what the walk rejects, and a silent change of shape
+    // would turn the rule vacuous.
+    const probe = (src) => [...handRolledMenus(src)].map(({ index }) => lineOf(src, index));
+    expect(probe('<div role="menu"><button role="menuitem">A</button></div>')).toEqual([1]);
+    expect(probe("<p>x</p>\n<div\n  role='menu'\n/>")).toEqual([2]);
+    expect(probe('<div role={"menu"} />')).toEqual([1]);
+    expect(probe('<div role="menu" /><ul role="menu" />')).toEqual([1, 1]);
+    // A bare role="menuitem" with no enclosing menu, or a dynamic role, is a
+    // different question and out of this rule's remit.
+    expect(probe('<div role="menuitem" /><div role={roleFor(kind)} />')).toEqual([]);
+    expect(probe(maskComments('{/* <div role="menu" /> */}'))).toEqual([]);
+
+    // Bypass probe on the RULE, not just the matcher: a fixture that should
+    // fail actually fails, and one with arrow-key handling actually passes.
+    expect(menuOffenders('src/x.jsx', '<div role="menu"><button role="menuitem">A</button></div>'))
+      .toEqual(['src/x.jsx:1']);
+    expect(menuOffenders('src/x.jsx', '<div role="menu" onKeyDown={(e) => { if (e.key === "ArrowDown") open(); }} />'))
+      .toEqual([]);
+    // The allowlist exempts a file outright, regardless of arrow-key handling.
+    expect(menuOffenders('src/components/ui/OverflowMenu.jsx', '<div role="menu" />')).toEqual([]);
+
+    // Prove the walk sees the real spelling on both compliant implementations
+    // — a matcher that silently missed one would allowlist it vacuously.
+    for (const file of ARROW_KEY_MENU_ALLOWLIST) {
+      expect(
+        [...handRolledMenus(maskedSourceOf(file))].length,
+        `${file} no longer writes role="menu" — is it still in the allowlist?`,
+      ).toBeGreaterThanOrEqual(1);
+    }
+
+    const offenders = trackedSourceFiles().flatMap((file) => menuOffenders(file, maskedSourceOf(file)));
+    expect(offenders, `role="menu" with no ArrowDown/ArrowUp handling — the menu role promises the WAI-ARIA menu pattern (arrow-key focus among menuitem children); either implement it (see components/ui/OverflowMenu.jsx) or drop the role (see components/shell/ShellProviderLauncher.jsx:142):\n${offenders.join('\n')}`).toEqual([]);
+  });
 });

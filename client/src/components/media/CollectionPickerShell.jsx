@@ -195,7 +195,7 @@ export default function CollectionPickerShell({
   return createPortal(
     <div
       ref={menuRef}
-      role="menu"
+      aria-label={title}
       className="fixed bg-port-card border border-port-border rounded-lg shadow-xl z-[100] p-1.5 flex flex-col max-h-dvh-cap"
       style={{
         left: style?.left ?? `${VIEWPORT_PADDING}px`,

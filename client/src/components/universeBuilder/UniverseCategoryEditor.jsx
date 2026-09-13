@@ -191,14 +191,14 @@ export function CategoryEditor({
                 className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1 text-port-accent hover:bg-port-accent/20 rounded"
                 title="Move this bucket into a canon trunk (variations stay in place)"
                 aria-label="Assign bucket to a canon trunk"
-                aria-haspopup="menu"
+                aria-haspopup="true"
                 aria-expanded={assignOpen}
               >
                 <FolderTree size={14} />
               </button>
               {assignOpen && (
                 <div
-                  role="menu"
+                  aria-label="Move bucket to trunk"
                   className="absolute right-0 top-full mt-1 z-20 w-44 bg-port-card border border-port-border rounded shadow-lg p-1 flex flex-col gap-0.5"
                 >
                   <div className="px-2 pt-1 pb-1 text-[10px] uppercase tracking-wide text-gray-500">
@@ -209,7 +209,6 @@ export function CategoryEditor({
                     return (
                       <button
                         key={trunk.kind}
-                        role="menuitem"
                         onClick={() => { setAssignOpen(false); onAssignBucketKind(trunk.kind); }}
                         className="text-left text-xs px-2 py-1.5 text-gray-200 hover:bg-port-accent/20 rounded flex items-center gap-2"
                       >
@@ -229,20 +228,19 @@ export function CategoryEditor({
                 className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1 text-port-accent hover:bg-port-accent/20 disabled:opacity-30 disabled:cursor-not-allowed rounded"
                 title="Ask the LLM for more variations in this category"
                 aria-label="Generate more variations"
-                aria-haspopup="menu"
+                aria-haspopup="true"
                 aria-expanded={genOpen}
               >
                 {generating ? <Loader2 size={14} className="animate-spin" /> : <Sparkles size={14} />}
               </button>
               {genOpen && (
                 <div
-                  role="menu"
+                  aria-label="Generate more variations"
                   className="absolute right-0 top-full mt-1 z-20 w-44 bg-port-card border border-port-border rounded shadow-lg p-1 flex flex-col gap-0.5"
                 >
                   {GENERATE_PRESETS.map((n) => (
                     <button
                       key={n}
-                      role="menuitem"
                       onClick={() => runGenerate(n)}
                       className="text-left text-xs px-2 py-1.5 text-gray-200 hover:bg-port-accent/20 rounded"
                     >
@@ -497,7 +495,7 @@ function VariationCard({
             disabled={!canPromote || promotingIdx !== null}
             className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1 text-gray-400 hover:text-port-success disabled:opacity-30 disabled:cursor-not-allowed rounded"
             title={promoteTitle} aria-label={promoteTitle}
-            aria-haspopup={requiresTargetKind ? 'menu' : undefined}
+            aria-haspopup={requiresTargetKind ? 'true' : undefined}
             aria-expanded={requiresTargetKind ? pickerIdx === idx : undefined}
           >
             {promotingIdx === idx
@@ -506,7 +504,7 @@ function VariationCard({
           </button>
           {pickerIdx === idx && requiresTargetKind && (
             <div
-              role="menu"
+              aria-label="Promote to canon as…"
               className="absolute right-0 top-full mt-1 z-20 w-44 bg-port-card border border-port-border rounded shadow-lg p-1 flex flex-col gap-0.5"
             >
               <div className="px-2 pt-1 pb-1 text-[10px] uppercase tracking-wide text-gray-500">
@@ -515,7 +513,6 @@ function VariationCard({
               {TRUNK_TABS.map((trunk) => (
                 <button
                   key={trunk.kind}
-                  role="menuitem"
                   onClick={() => runPromote(idx, v, { targetKind: trunk.kind })}
                   className="text-left text-xs px-2 py-1.5 text-gray-200 hover:bg-port-success/20 rounded"
                 >

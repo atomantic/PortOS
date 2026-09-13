@@ -52,18 +52,20 @@ describe('CategoryEditor — promote wiring', () => {
     renderEditor({ bucketKind: null, onPromote });
 
     const promoteBtn = screen.getByRole('button', { name: /Promote to canon — pick a trunk/i });
-    expect(promoteBtn).toHaveAttribute('aria-haspopup', 'menu');
+    expect(promoteBtn).toHaveAttribute('aria-haspopup', 'true');
     expect(promoteBtn).toHaveAttribute('aria-expanded', 'false');
 
     await user.click(promoteBtn);
     expect(onPromote).not.toHaveBeenCalled();
     expect(promoteBtn).toHaveAttribute('aria-expanded', 'true');
 
-    const menu = screen.getByRole('menu');
+    // Dropped role="menu"/role="menuitem" (#7265) — the picker is a plain
+    // popover with an aria-label, not the WAI-ARIA menu pattern.
+    const menu = screen.getByLabelText('Promote to canon as…');
     expect(within(menu).getByText(/Promote to canon as/i)).toBeInTheDocument();
-    expect(within(menu).getByRole('menuitem', { name: 'Cast' })).toBeInTheDocument();
-    expect(within(menu).getByRole('menuitem', { name: 'Places' })).toBeInTheDocument();
-    expect(within(menu).getByRole('menuitem', { name: 'Objects' })).toBeInTheDocument();
+    expect(within(menu).getByRole('button', { name: 'Cast' })).toBeInTheDocument();
+    expect(within(menu).getByRole('button', { name: 'Places' })).toBeInTheDocument();
+    expect(within(menu).getByRole('button', { name: 'Objects' })).toBeInTheDocument();
   });
 
   it('clicking a picker option invokes onPromote with the chosen targetKind', async () => {
@@ -72,7 +74,7 @@ describe('CategoryEditor — promote wiring', () => {
     renderEditor({ bucketKind: null, onPromote });
 
     await user.click(screen.getByRole('button', { name: /Promote to canon — pick a trunk/i }));
-    await user.click(screen.getByRole('menuitem', { name: 'Places' }));
+    await user.click(screen.getByRole('button', { name: 'Places' }));
 
     expect(onPromote).toHaveBeenCalledTimes(1);
     expect(onPromote).toHaveBeenCalledWith(sampleVariation, { targetKind: 'places' });
