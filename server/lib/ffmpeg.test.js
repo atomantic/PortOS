@@ -1,12 +1,12 @@
-import { describe, it, expect, beforeAll, beforeEach, afterAll } from 'vitest';
+import { describe, it, expect, beforeAll, beforeEach, afterAll, afterEach } from 'vitest';
 
-import { writeFileSync, mkdtempSync, rmSync } from 'fs';
+import { writeFileSync, readFileSync, readdirSync, mkdtempSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import { join, resolve } from 'path';
 
 import {
   verifyVideoPlayable, safeUnder, runFfmpegProcess, hasAudioStream, buildTrimConcatArgs,
-  probeVideoStreamInfo, findFfmpeg,
+  probeVideoStreamInfo, findFfmpeg, installEncodedVideo,
   BT709_TAG_FILTER, BT709_CONTAINER_ARGS, bt709TagFilter, supportsSetparamsFilter, __resetSetparamsProbe,
 } from './ffmpeg.js';
 
@@ -362,5 +362,71 @@ describe('bt709TagFilter / supportsSetparamsFilter', () => {
     expect([...BT709_CONTAINER_ARGS]).toEqual([
       '-color_primaries', 'bt709', '-color_trc', 'bt709', '-colorspace', 'bt709',
     ]);
+  });
+});
+
+// The in-place install is the one helper in this module that can destroy an
+// existing video, and it is now shared out to `pipeline/audioMux.js` (#7237) —
+// so its rollback contract is pinned here rather than inferred from the three
+// in-module callers.
+//
+// The failure is injected for real, not stubbed: a tmpPath that does not exist
+// makes the `rename` onto the target fail with ENOENT on BOTH platforms, which
+// is also the only injection that exercises the Windows branch honestly (there
+// the target is moved aside to a .bak first, so the assertion that the original
+// survives is really an assertion that the backup was restored).
+describe('installEncodedVideo', () => {
+  let installDir;
+  beforeEach(() => { installDir = mkdtempSync(join(tmpdir(), 'portos-install-')); });
+  afterEach(() => { rmSync(installDir, { recursive: true, force: true }); });
+
+  it('installs the temp file over the target and reports the target path', async () => {
+    const target = join(installDir, 'clip.mp4');
+    const tmp = join(installDir, 'clip.mp4.tmp');
+    writeFileSync(target, 'original');
+    writeFileSync(tmp, 'encoded');
+
+    expect(await installEncodedVideo(tmp, target, 'trimmed')).toEqual({ ok: true, outPath: target });
+    expect(readFileSync(target, 'utf8')).toBe('encoded');
+    expect(readdirSync(installDir)).toEqual(['clip.mp4']);
+  });
+
+  it('leaves the original byte-identical when the install fails', async () => {
+    const target = join(installDir, 'clip.mp4');
+    writeFileSync(target, 'original');
+    // A tmpPath that does not exist fails the rename with ENOENT on BOTH
+    // platforms — and on Windows it fails AFTER the target has been moved aside
+    // to its .bak, so "the original is still here" is really "the backup was
+    // restored". That branch is unreachable on a POSIX runner, which is why the
+    // temp-file cleanup gets its own injection below.
+    const result = await installEncodedVideo(join(installDir, 'never-encoded.mp4'), target, 'trimmed');
+    expect(result.ok).toBe(false);
+    expect(result.reason).toMatch(/^Failed to install trimmed video: /);
+    expect(readFileSync(target, 'utf8')).toBe('original');
+    expect(readdirSync(installDir)).toEqual(['clip.mp4']);
+  });
+
+  it('removes the temp encode when it cannot be installed', async () => {
+    // Target inside a directory that does not exist: the rename fails ENOENT on
+    // both platforms with the temp file genuinely PRESENT, so the unlink in the
+    // rollback is what this observes. (On Windows the move-aside step also hits
+    // ENOENT and correctly reads as "no original to back up".)
+    const tmp = join(installDir, 'clip.mp4.tmp');
+    writeFileSync(tmp, 'encoded');
+    const result = await installEncodedVideo(tmp, join(installDir, 'gone', 'clip.mp4'), 'upscaled');
+    expect(result.ok).toBe(false);
+    expect(result.reason).toMatch(/^Failed to install upscaled video: /);
+    // The half-finished encode does not accumulate in the videos directory.
+    expect(readdirSync(installDir)).toEqual([]);
+  });
+
+  it('installs onto a target that does not exist yet', async () => {
+    const target = join(installDir, 'fresh.mp4');
+    const tmp = join(installDir, 'fresh.mp4.tmp');
+    writeFileSync(tmp, 'encoded');
+
+    expect(await installEncodedVideo(tmp, target, 'upscaled')).toEqual({ ok: true, outPath: target });
+    expect(readFileSync(target, 'utf8')).toBe('encoded');
+    expect(readdirSync(installDir)).toEqual(['fresh.mp4']);
   });
 });

@@ -87,7 +87,7 @@ export default function PersistentMindRuntimePanel({ runtime, error, loading, on
       </div>
 
       {(loading || error) && (
-        <p className={`md:col-span-3 text-xs ${error ? 'text-port-warning' : 'text-port-text-muted'}`}>
+        <p role="status" className={`md:col-span-3 text-xs ${error ? 'text-port-warning' : 'text-port-text-muted'}`}>
           {error ? `Live telemetry delayed: ${error}. Showing the last successful snapshot when available.` : 'Refreshing live telemetry…'}
         </p>
       )}

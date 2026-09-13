@@ -895,7 +895,7 @@ export default function ReviewerPicker({
             Add
           </button>
         </div>
-        {usernameError && <span className="text-xs text-port-error">{usernameError}</span>}
+        {usernameError && <span role="alert" className="text-xs text-port-error">{usernameError}</span>}
       </div>
 
       {showRunFlags && selected.length >= 2 && (

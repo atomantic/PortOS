@@ -875,222 +875,126 @@ export default function TaskAddForm({ providers, providersLoaded = true, apps, o
       )}
 
       <div className="space-y-2">
-        <div>
-          <label htmlFor="task-description" className="sr-only">Task description (required)</label>
-          <AutoSizeTextarea
-            id="task-description"
-            ref={descriptionRef}
-            placeholder="Task description *"
-            value={newTask.description}
-            onChange={e => setNewTask(t => ({ ...t, description: e.target.value }))}
-            onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey && !isSubmitting) { e.preventDefault(); handleAddTask(); } }}
-            className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm min-h-[44px]"
-            aria-required="true"
-          />
+        <div className="flex flex-col @sm:flex-row gap-2 items-start">
+          <div className="flex-1 min-w-0 w-full">
+            <label htmlFor="task-description" className="sr-only">Task description (required)</label>
+            <AutoSizeTextarea
+              id="task-description"
+              ref={descriptionRef}
+              placeholder="Task description *"
+              value={newTask.description}
+              onChange={e => setNewTask(t => ({ ...t, description: e.target.value }))}
+              onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey && !isSubmitting) { e.preventDefault(); handleAddTask(); } }}
+              className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm min-h-[44px]"
+              aria-required="true"
+            />
+          </div>
+          {renderUploadControls()}
         </div>
+        {renderPreviews()}
         {renderFullFormFields()}
       </div>
     </div>
   );
 
+  function renderUploadControls() {
+    return (
+      <div className="flex items-center gap-2 shrink-0 flex-wrap">
+        <FilePickerButton
+          accept="image/*"
+          multiple
+          onChange={handleFileSelect}
+          ariaLabel="Attach screenshots"
+          className="flex items-center gap-2 px-3 py-2 bg-port-bg border border-port-border rounded-lg text-gray-400 hover:text-white text-sm transition-colors min-h-[44px]"
+        >
+          <Image size={16} aria-hidden="true" />
+          Screenshot
+        </FilePickerButton>
+        <FilePickerButton
+          accept={ATTACHMENT_ACCEPT}
+          multiple
+          onChange={handleAttachmentSelect}
+          ariaLabel="Attach files"
+          className="flex items-center gap-2 px-3 py-2 bg-port-bg border border-port-border rounded-lg text-gray-400 hover:text-white text-sm transition-colors min-h-[44px]"
+        >
+          <Paperclip size={16} aria-hidden="true" />
+          Attach
+        </FilePickerButton>
+        {screenshots.length > 0 && (
+          <span className="text-xs text-gray-500">{screenshots.length} screenshot{screenshots.length > 1 ? 's' : ''}</span>
+        )}
+        {attachments.length > 0 && (
+          <span className="text-xs text-gray-500">{attachments.length} file{attachments.length > 1 ? 's' : ''}</span>
+        )}
+      </div>
+    );
+  }
+
+  function renderPreviews() {
+    if (screenshots.length === 0 && attachments.length === 0) return null;
+    return (
+      <div className="space-y-2">
+        {/* Screenshot Previews */}
+        {screenshots.length > 0 && (
+          <div className="flex gap-2 flex-wrap">
+            {screenshots.map(s => (
+              <div key={s.id} className="relative group">
+                <img
+                  src={s.preview}
+                  alt={s.filename}
+                  className="w-20 h-20 object-cover rounded-lg border border-port-border"
+                />
+                <button
+                  type="button"
+                  onClick={() => removeScreenshot(s.id)}
+                  className="absolute -top-2 -right-2 w-5 h-5 bg-port-error rounded-full flex items-center justify-center md:opacity-0 md:group-hover:opacity-100 focus-visible:opacity-100 md:focus-visible:opacity-100 transition-opacity"
+                  aria-label={`Remove screenshot ${s.filename}`}
+                >
+                  <X size={12} aria-hidden="true" />
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+        {/* Attachment Previews */}
+        {attachments.length > 0 && (
+          <div className="flex gap-2 flex-wrap">
+            {attachments.map(a => (
+              <div key={a.id} className="relative group flex items-center gap-2 px-3 py-2 bg-port-bg border border-port-border rounded-lg">
+                {a.isImage && a.preview ? (
+                  <img
+                    src={a.preview}
+                    alt={a.originalName}
+                    className="w-8 h-8 object-cover rounded"
+                  />
+                ) : (
+                  <FileText size={20} className="text-gray-400" aria-hidden="true" />
+                )}
+                <div className="flex flex-col">
+                  <span className="text-xs text-white truncate max-w-[120px]" title={a.originalName}>
+                    {a.originalName}
+                  </span>
+                  <span className="text-xs text-gray-500">{formatBytes(a.size)}</span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => removeAttachment(a.id)}
+                  className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center ml-1 p-0.5 text-gray-500 hover:text-port-error transition-colors"
+                  aria-label={`Remove attachment ${a.originalName}`}
+                >
+                  <X size={14} aria-hidden="true" />
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    );
+  }
+
   function renderFullFormFields() {
     return (
       <>
-        {!compact && (
-          <AppContextPicker
-            apps={apps}
-            value={newTask.app}
-            onChange={(appId) => setNewTask(t => ({ ...t, app: appId }))}
-            label="Target application"
-            placeholder="PortOS (default)"
-            showRepoPath
-          />
-        )}
-        {isFederated && (
-          <InstancePicker
-            id="task-target-instance"
-            value={targetInstanceId}
-            onChange={setTargetInstanceId}
-            instances={assignableInstances}
-          />
-        )}
-        <div className="grid grid-cols-1 @sm:flex @sm:items-center gap-x-4 gap-y-1 @sm:flex-wrap">
-          <label className="flex items-center gap-2 cursor-pointer select-none py-1">
-            <input
-              type="checkbox"
-              checked={enhancePrompt}
-              onChange={(e) => setEnhancePrompt(e.target.checked)}
-              className="w-4 h-4 rounded border-port-border bg-port-bg text-port-accent focus:ring-port-accent focus:ring-offset-0"
-            />
-            <span className="flex items-center gap-1.5 text-sm text-gray-400">
-              <Sparkles size={14} className="text-yellow-500" />
-              Enhance
-            </span>
-          </label>
-          {planOnlyTrackerStatus !== 'unsupported' && (
-            <label htmlFor="task-plan-only" className="flex items-center gap-2 cursor-pointer select-none whitespace-nowrap py-1">
-              <input
-                id="task-plan-only"
-                type="checkbox"
-                checked={planOnly}
-                disabled={!planOnlySupported}
-                onChange={(e) => handlePlanOnlyChange(e.target.checked)}
-                className="w-4 h-4 rounded border-port-border bg-port-bg text-port-accent focus:ring-port-accent focus:ring-offset-0 disabled:opacity-40"
-              />
-              <span className="flex items-center gap-1.5 text-sm text-gray-400" title="Read the codebase and file a GitHub or GitLab issue without implementing the task.">
-                <FileText size={14} className="text-port-accent" />
-                Plan &amp; file issue
-              </span>
-            </label>
-          )}
-          {planOnlyTrackerStatus === 'pending' && (
-            <p className="basis-full text-xs text-gray-500">
-              Checking the app&apos;s work tracker before enabling issue planning.
-            </p>
-          )}
-          {planOnlyTrackerStatus === 'unsupported' && (
-            <p className="basis-full text-xs text-gray-500">
-              Plan &amp; file issue is available for GitHub or GitLab issue trackers.
-            </p>
-          )}
-          {planOnly && (
-            <div className="basis-full space-y-2">
-              <p className="text-xs text-gray-500">
-                Read-only planning: file the issue without code changes, a worktree, PR, simplify pass, or review.
-              </p>
-              {issueTargets.appId === (selectedApp?.id || PORTOS_APP_ID) && issueTargets.value?.canChoose && (
-                <div className="max-w-md">
-                  <label htmlFor="task-issue-target" className="mb-1 block text-xs text-gray-400">File issue on</label>
-                  <select
-                    id="task-issue-target"
-                    value={issueTarget}
-                    onChange={(event) => setIssueTarget(event.target.value)}
-                    className="w-full rounded-lg border border-port-border bg-port-bg px-3 py-2 text-sm text-white"
-                  >
-                    <option value="upstream">Upstream · {issueTargets.value.upstream?.fullName}</option>
-                    <option value="origin">Origin fork · {issueTargets.value.origin?.fullName}</option>
-                  </select>
-                  <p className="mt-1 text-xs text-gray-500">Upstream is the default so project work is not stranded on a personal fork.</p>
-                </div>
-              )}
-            </div>
-          )}
-          {!planOnly && (
-            <>
-              <label className="flex items-center gap-2 cursor-pointer select-none whitespace-nowrap py-1">
-                <input
-                  type="checkbox"
-                  checked={useWorktree}
-                  onChange={(e) => {
-                    // Enabling a worktree defaults "Open PR" on (safer than an
-                    // unreviewed auto-merge to the default branch); the user can
-                    // still uncheck it. Disabling forces it off (openPR is
-                    // meaningless without a worktree).
-                    setUseWorktree(e.target.checked);
-                    setOpenPR(e.target.checked);
-                  }}
-                  className="w-4 h-4 rounded border-port-border bg-port-bg text-port-accent focus:ring-port-accent focus:ring-offset-0"
-                />
-                <span className="flex items-center gap-1.5 text-sm text-gray-400" title="Work in an isolated git worktree on a feature branch. If unchecked, commits directly to the default branch.">
-                  <GitBranch size={14} className="text-emerald-400" />
-                  Worktree
-                </span>
-              </label>
-              {!useWorktree && (
-                <label htmlFor="task-when-done" className="flex flex-wrap items-center gap-2 py-1 basis-full @sm:basis-auto">
-                  <span className="text-sm text-gray-400">When done</span>
-                  <select id="task-when-done" value={whenDone} onChange={(e) => setWhenDone(e.target.value)} className="w-full @sm:w-auto @sm:min-w-52 rounded border border-port-border bg-port-bg px-2 py-1 text-sm text-white focus:border-port-accent focus:outline-hidden">
-                    <option value="leave-uncommitted">Leave code uncommitted</option>
-                    <option value="commit-push">Commit and push to default branch</option>
-                  </select>
-                </label>
-              )}
-              <label className="flex items-center gap-2 cursor-pointer select-none whitespace-nowrap py-1">
-                <input
-                  type="checkbox"
-                  checked={openPR}
-                  disabled={!useWorktree}
-                  onChange={(e) => setOpenPR(e.target.checked)}
-                  className="w-4 h-4 rounded border-port-border bg-port-bg text-port-accent focus:ring-port-accent focus:ring-offset-0 disabled:opacity-40"
-                />
-                <span className={`flex items-center gap-1.5 text-sm ${useWorktree ? 'text-gray-400' : 'text-gray-600'}`} title="Open a pull request to the default branch. If unchecked with worktree enabled, auto-merges on completion.">
-                  <GitPullRequest size={14} className={useWorktree ? 'text-port-accent' : 'text-gray-600'} />
-                  Open PR
-                </span>
-              </label>
-              <label className="flex items-center gap-2 cursor-pointer select-none whitespace-nowrap py-1">
-                <input
-                  type="checkbox"
-                  checked={simplify}
-                  onChange={(e) => setSimplify(e.target.checked)}
-                  className="w-4 h-4 rounded border-port-border bg-port-bg text-port-accent focus:ring-port-accent focus:ring-offset-0"
-                />
-                <span className="flex items-center gap-1.5 text-sm text-gray-400">
-                  <Wand2 size={14} className="text-port-accent-2" />
-                  Simplify
-                </span>
-              </label>
-              {openPR && (
-                <label htmlFor="task-pr-completion" className="flex flex-wrap items-center gap-2 py-1 basis-full @sm:basis-auto">
-                  <span className="text-sm text-gray-400">After opening PR</span>
-                  <select
-                    id="task-pr-completion"
-                    value={prCompletion}
-                    title={prCompletionOption(prCompletion)?.description}
-                    onChange={(e) => setPrCompletion(e.target.value)}
-                    className="w-full @sm:w-auto @sm:min-w-44 rounded border border-port-border bg-port-bg px-2 py-1 text-sm text-white focus:border-port-accent focus:outline-hidden"
-                  >
-                    {PR_COMPLETION_OPTIONS.map(option => (
-                      <option key={option.value} value={option.value}>{option.label}</option>
-                    ))}
-                  </select>
-                </label>
-              )}
-              {openPR && prCompletion === 'review-then-merge' && (
-                <div className="basis-full mt-1">
-                  <ReviewerPicker
-                    reviewers={reviewOverrides.reviewers ?? reviewDefaults.reviewers}
-                    usernames={reviewOverrides.usernames ?? reviewDefaults.usernames}
-                    optionalReviewers={reviewOverrides.optionalReviewers ?? reviewDefaults.optionalReviewers}
-                    reviewerMaxRounds={reviewOverrides.reviewerMaxRounds ?? reviewDefaults.reviewerMaxRounds}
-                    reviewerModels={reviewOverrides.reviewerModels ?? reviewDefaults.reviewerModels}
-                    reviewerEfforts={reviewOverrides.reviewerEfforts ?? reviewDefaults.reviewerEfforts}
-                    modelOptions={reviewerModelOptions}
-                    installed={reviewerCliInstalled}
-                    stopMode={reviewOverrides.stopMode ?? reviewDefaults.stopMode}
-                    reviewerApplies={reviewOverrides.reviewerApplies ?? reviewDefaults.reviewerApplies}
-                    // The same fallback the props above were seeded from — the
-                    // picker omits whatever still equals it, so touching one
-                    // control no longer freezes every field into a permanent
-                    // override (#6219, mirroring #6208's GlobalConfigControls fix).
-                    defaults={reviewDefaults}
-                    onChange={(patch) => {
-                      // The picker emits only what differs from `defaults`, so
-                      // the patch IS the complete override set — replace outright
-                      // rather than merge, or a key reverted back to the default
-                      // would keep pinning its stale value.
-                      setReviewOverrides(patch);
-                    }}
-                  />
-                </div>
-              )}
-              {appHasJira && (
-                <label className="flex items-center gap-2 cursor-pointer select-none whitespace-nowrap py-1">
-                  <input
-                    type="checkbox"
-                    checked={createJiraTicket}
-                    onChange={(e) => setCreateJiraTicket(e.target.checked)}
-                    className="w-4 h-4 rounded border-port-border bg-port-bg text-port-accent focus:ring-port-accent focus:ring-offset-0"
-                  />
-                  <span className="flex items-center gap-1.5 text-sm text-gray-400">
-                    <Ticket size={14} className="text-port-accent" />
-                    JIRA ticket
-                  </span>
-                </label>
-              )}
-            </>
-          )}
-        </div>
         <div className="flex flex-wrap items-center justify-between gap-2 pt-1 border-t border-port-border/40">
           <div className="flex flex-wrap items-center gap-1.5 text-xs text-gray-400">
             <span>Execution:</span>
@@ -1309,89 +1213,209 @@ export default function TaskAddForm({ providers, providersLoaded = true, apps, o
             Your enabled providers are HTTP API providers with no file-writing harness, so they can't run agent tasks. Enable <span className="font-semibold">Claude Ollama</span> for Ollama, <span className="font-semibold">OpenCode llama TUI</span> for llama.cpp / DFlash, or <span className="font-semibold">OpenCode MTPLX</span> for a separately running MTPLX server, on the AI Providers page to run file-writing tasks on a local model.
           </div>
         )}
-        {/* Screenshot and Attachment Upload */}
-        <div className="flex items-center gap-3 flex-wrap">
-          <FilePickerButton
-            accept="image/*"
-            multiple
-            onChange={handleFileSelect}
-            ariaLabel="Attach screenshots"
-            className="flex items-center gap-2 px-3 py-2 bg-port-bg border border-port-border rounded-lg text-gray-400 hover:text-white text-sm transition-colors min-h-[44px]"
-          >
-            <Image size={16} aria-hidden="true" />
-            Screenshot
-          </FilePickerButton>
-          <FilePickerButton
-            accept={ATTACHMENT_ACCEPT}
-            multiple
-            onChange={handleAttachmentSelect}
-            ariaLabel="Attach files"
-            className="flex items-center gap-2 px-3 py-2 bg-port-bg border border-port-border rounded-lg text-gray-400 hover:text-white text-sm transition-colors min-h-[44px]"
-          >
-            <Paperclip size={16} aria-hidden="true" />
-            Attach
-          </FilePickerButton>
-          {screenshots.length > 0 && (
-            <span className="text-xs text-gray-500">{screenshots.length} screenshot{screenshots.length > 1 ? 's' : ''}</span>
+
+        {compact && (
+          <div className="space-y-2">
+            {renderUploadControls()}
+            {renderPreviews()}
+          </div>
+        )}
+
+        {!compact && (
+          <AppContextPicker
+            apps={apps}
+            value={newTask.app}
+            onChange={(appId) => setNewTask(t => ({ ...t, app: appId }))}
+            label="Target application"
+            placeholder="PortOS (default)"
+            showRepoPath
+          />
+        )}
+        {isFederated && (
+          <InstancePicker
+            id="task-target-instance"
+            value={targetInstanceId}
+            onChange={setTargetInstanceId}
+            instances={assignableInstances}
+          />
+        )}
+        <div className="grid grid-cols-1 @sm:flex @sm:items-center gap-x-4 gap-y-1 @sm:flex-wrap">
+          <label className="flex items-center gap-2 cursor-pointer select-none py-1">
+            <input
+              type="checkbox"
+              checked={enhancePrompt}
+              onChange={(e) => setEnhancePrompt(e.target.checked)}
+              className="w-4 h-4 rounded border-port-border bg-port-bg text-port-accent focus:ring-port-accent focus:ring-offset-0"
+            />
+            <span className="flex items-center gap-1.5 text-sm text-gray-400">
+              <Sparkles size={14} className="text-yellow-500" />
+              Enhance
+            </span>
+          </label>
+          {planOnlyTrackerStatus !== 'unsupported' && (
+            <label htmlFor="task-plan-only" className="flex items-center gap-2 cursor-pointer select-none whitespace-nowrap py-1">
+              <input
+                id="task-plan-only"
+                type="checkbox"
+                checked={planOnly}
+                disabled={!planOnlySupported}
+                onChange={(e) => handlePlanOnlyChange(e.target.checked)}
+                className="w-4 h-4 rounded border-port-border bg-port-bg text-port-accent focus:ring-port-accent focus:ring-offset-0 disabled:opacity-40"
+              />
+              <span className="flex items-center gap-1.5 text-sm text-gray-400" title="Read the codebase and file a GitHub or GitLab issue without implementing the task.">
+                <FileText size={14} className="text-port-accent" />
+                Plan &amp; file issue
+              </span>
+            </label>
           )}
-          {attachments.length > 0 && (
-            <span className="text-xs text-gray-500">{attachments.length} file{attachments.length > 1 ? 's' : ''}</span>
+          {planOnlyTrackerStatus === 'pending' && (
+            <p className="basis-full text-xs text-gray-500">
+              Checking the app&apos;s work tracker before enabling issue planning.
+            </p>
+          )}
+          {planOnlyTrackerStatus === 'unsupported' && (
+            <p className="basis-full text-xs text-gray-500">
+              Plan &amp; file issue is available for GitHub or GitLab issue trackers.
+            </p>
+          )}
+          {planOnly && (
+            <div className="basis-full space-y-2">
+              <p className="text-xs text-gray-500">
+                Read-only planning: file the issue without code changes, a worktree, PR, simplify pass, or review.
+              </p>
+              {issueTargets.appId === (selectedApp?.id || PORTOS_APP_ID) && issueTargets.value?.canChoose && (
+                <div className="max-w-md">
+                  <label htmlFor="task-issue-target" className="mb-1 block text-xs text-gray-400">File issue on</label>
+                  <select
+                    id="task-issue-target"
+                    value={issueTarget}
+                    onChange={(event) => setIssueTarget(event.target.value)}
+                    className="w-full rounded-lg border border-port-border bg-port-bg px-3 py-2 text-sm text-white"
+                  >
+                    <option value="upstream">Upstream · {issueTargets.value.upstream?.fullName}</option>
+                    <option value="origin">Origin fork · {issueTargets.value.origin?.fullName}</option>
+                  </select>
+                  <p className="mt-1 text-xs text-gray-500">Upstream is the default so project work is not stranded on a personal fork.</p>
+                </div>
+              )}
+            </div>
+          )}
+          {!planOnly && (
+            <>
+              <label className="flex items-center gap-2 cursor-pointer select-none whitespace-nowrap py-1">
+                <input
+                  type="checkbox"
+                  checked={useWorktree}
+                  onChange={(e) => {
+                    // Enabling a worktree defaults "Open PR" on (safer than an
+                    // unreviewed auto-merge to the default branch); the user can
+                    // still uncheck it. Disabling forces it off (openPR is
+                    // meaningless without a worktree).
+                    setUseWorktree(e.target.checked);
+                    setOpenPR(e.target.checked);
+                  }}
+                  className="w-4 h-4 rounded border-port-border bg-port-bg text-port-accent focus:ring-port-accent focus:ring-offset-0"
+                />
+                <span className="flex items-center gap-1.5 text-sm text-gray-400" title="Work in an isolated git worktree on a feature branch. If unchecked, commits directly to the default branch.">
+                  <GitBranch size={14} className="text-emerald-400" />
+                  Worktree
+                </span>
+              </label>
+              {!useWorktree && (
+                <label htmlFor="task-when-done" className="flex flex-wrap items-center gap-2 py-1 basis-full @sm:basis-auto">
+                  <span className="text-sm text-gray-400">When done</span>
+                  <select id="task-when-done" value={whenDone} onChange={(e) => setWhenDone(e.target.value)} className="w-full @sm:w-auto @sm:min-w-52 rounded border border-port-border bg-port-bg px-2 py-1 text-sm text-white focus:border-port-accent focus:outline-hidden">
+                    <option value="leave-uncommitted">Leave code uncommitted</option>
+                    <option value="commit-push">Commit and push to default branch</option>
+                  </select>
+                </label>
+              )}
+              <label className="flex items-center gap-2 cursor-pointer select-none whitespace-nowrap py-1">
+                <input
+                  type="checkbox"
+                  checked={openPR}
+                  disabled={!useWorktree}
+                  onChange={(e) => setOpenPR(e.target.checked)}
+                  className="w-4 h-4 rounded border-port-border bg-port-bg text-port-accent focus:ring-port-accent focus:ring-offset-0 disabled:opacity-40"
+                />
+                <span className={`flex items-center gap-1.5 text-sm ${useWorktree ? 'text-gray-400' : 'text-gray-600'}`} title="Open a pull request to the default branch. If unchecked with worktree enabled, auto-merges on completion.">
+                  <GitPullRequest size={14} className={useWorktree ? 'text-port-accent' : 'text-gray-600'} />
+                  Open PR
+                </span>
+              </label>
+              <label className="flex items-center gap-2 cursor-pointer select-none whitespace-nowrap py-1">
+                <input
+                  type="checkbox"
+                  checked={simplify}
+                  onChange={(e) => setSimplify(e.target.checked)}
+                  className="w-4 h-4 rounded border-port-border bg-port-bg text-port-accent focus:ring-port-accent focus:ring-offset-0"
+                />
+                <span className="flex items-center gap-1.5 text-sm text-gray-400">
+                  <Wand2 size={14} className="text-port-accent-2" />
+                  Simplify
+                </span>
+              </label>
+              {openPR && (
+                <label htmlFor="task-pr-completion" className="flex flex-wrap items-center gap-2 py-1 basis-full @sm:basis-auto">
+                  <span className="text-sm text-gray-400">After opening PR</span>
+                  <select
+                    id="task-pr-completion"
+                    value={prCompletion}
+                    title={prCompletionOption(prCompletion)?.description}
+                    onChange={(e) => setPrCompletion(e.target.value)}
+                    className="w-full @sm:w-auto @sm:min-w-44 rounded border border-port-border bg-port-bg px-2 py-1 text-sm text-white focus:border-port-accent focus:outline-hidden"
+                  >
+                    {PR_COMPLETION_OPTIONS.map(option => (
+                      <option key={option.value} value={option.value}>{option.label}</option>
+                    ))}
+                  </select>
+                </label>
+              )}
+              {openPR && prCompletion === 'review-then-merge' && (
+                <div className="basis-full mt-1">
+                  <ReviewerPicker
+                    reviewers={reviewOverrides.reviewers ?? reviewDefaults.reviewers}
+                    usernames={reviewOverrides.usernames ?? reviewDefaults.usernames}
+                    optionalReviewers={reviewOverrides.optionalReviewers ?? reviewDefaults.optionalReviewers}
+                    reviewerMaxRounds={reviewOverrides.reviewerMaxRounds ?? reviewDefaults.reviewerMaxRounds}
+                    reviewerModels={reviewOverrides.reviewerModels ?? reviewDefaults.reviewerModels}
+                    reviewerEfforts={reviewOverrides.reviewerEfforts ?? reviewDefaults.reviewerEfforts}
+                    modelOptions={reviewerModelOptions}
+                    installed={reviewerCliInstalled}
+                    stopMode={reviewOverrides.stopMode ?? reviewDefaults.stopMode}
+                    reviewerApplies={reviewOverrides.reviewerApplies ?? reviewDefaults.reviewerApplies}
+                    // The same fallback the props above were seeded from — the
+                    // picker omits whatever still equals it, so touching one
+                    // control no longer freezes every field into a permanent
+                    // override (#6219, mirroring #6208's GlobalConfigControls fix).
+                    defaults={reviewDefaults}
+                    onChange={(patch) => {
+                      // The picker emits only what differs from `defaults`, so
+                      // the patch IS the complete override set — replace outright
+                      // rather than merge, or a key reverted back to the default
+                      // would keep pinning its stale value.
+                      setReviewOverrides(patch);
+                    }}
+                  />
+                </div>
+              )}
+              {appHasJira && (
+                <label className="flex items-center gap-2 cursor-pointer select-none whitespace-nowrap py-1">
+                  <input
+                    type="checkbox"
+                    checked={createJiraTicket}
+                    onChange={(e) => setCreateJiraTicket(e.target.checked)}
+                    className="w-4 h-4 rounded border-port-border bg-port-bg text-port-accent focus:ring-port-accent focus:ring-offset-0"
+                  />
+                  <span className="flex items-center gap-1.5 text-sm text-gray-400">
+                    <Ticket size={14} className="text-port-accent" />
+                    JIRA ticket
+                  </span>
+                </label>
+              )}
+            </>
           )}
         </div>
-        {/* Screenshot Previews */}
-        {screenshots.length > 0 && (
-          <div className="flex gap-2 flex-wrap">
-            {screenshots.map(s => (
-              <div key={s.id} className="relative group">
-                <img
-                  src={s.preview}
-                  alt={s.filename}
-                  className="w-20 h-20 object-cover rounded-lg border border-port-border"
-                />
-                <button
-                  type="button"
-                  onClick={() => removeScreenshot(s.id)}
-                  className="absolute -top-2 -right-2 w-5 h-5 bg-port-error rounded-full flex items-center justify-center md:opacity-0 md:group-hover:opacity-100 focus-visible:opacity-100 md:focus-visible:opacity-100 transition-opacity"
-                  aria-label={`Remove screenshot ${s.filename}`}
-                >
-                  <X size={12} aria-hidden="true" />
-                </button>
-              </div>
-            ))}
-          </div>
-        )}
-        {/* Attachment Previews */}
-        {attachments.length > 0 && (
-          <div className="flex gap-2 flex-wrap">
-            {attachments.map(a => (
-              <div key={a.id} className="relative group flex items-center gap-2 px-3 py-2 bg-port-bg border border-port-border rounded-lg">
-                {a.isImage && a.preview ? (
-                  <img
-                    src={a.preview}
-                    alt={a.originalName}
-                    className="w-8 h-8 object-cover rounded"
-                  />
-                ) : (
-                  <FileText size={20} className="text-gray-400" aria-hidden="true" />
-                )}
-                <div className="flex flex-col">
-                  <span className="text-xs text-white truncate max-w-[120px]" title={a.originalName}>
-                    {a.originalName}
-                  </span>
-                  <span className="text-xs text-gray-500">{formatBytes(a.size)}</span>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => removeAttachment(a.id)}
-                  className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center ml-1 p-0.5 text-gray-500 hover:text-port-error transition-colors"
-                  aria-label={`Remove attachment ${a.originalName}`}
-                >
-                  <X size={14} aria-hidden="true" />
-                </button>
-              </div>
-            ))}
-          </div>
-        )}
         {/* Template Save Inline Input */}
         {showTemplateSave && (
           <div className="flex flex-wrap gap-2 items-center">

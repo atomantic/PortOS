@@ -435,7 +435,44 @@ describe('deferred imports stay deferred (#6156)', () => {
 // closures; the measured baseline 103,190 -> 103,228 is the shutdown module
 // itself in 38 additional suite closures, not a new heavy subtree. Preserve
 // the existing headroom by accounting for exactly that additive lifecycle edge.
-const MAX_STATIC_INSTANTIATIONS = 103240;
+// #7239 points cosValidation.js, peerSyncValidation.js and taskBlockCategories.js
+// at the task vocabularies declared in lib/taskParser.js, so the HTTP enum, the
+// peer wire enum and the block-category set cannot drift from what TASKS.md can
+// actually represent. taskParser.js is a zero-import leaf, so each edge costs
+// exactly one module in a suite that did not already reach it: this branch's own
+// delta is +92 — 60 such suites plus the new lib/peerSyncValidation.test.js
+// closure (32). There is nothing to narrow — the leaf IS the narrow form — so
+// raise by exactly that delta and keep the existing headroom. The measured total
+// is 103,356 after rebasing onto a main that grew by 36 on its own.
+// The yt-dlp update path adds services/ytdlpUpdate.js (closure 22 — 17 of them
+// lib/bufferedSpawn.js, which the Video Downloader route already reached) and
+// its own test file. The measured whole-tree delta is +16: nearly everything
+// ytdlpUpdate.js reaches was already in some suite's closure, so the cost is
+// the new modules themselves rather than a new heavy subtree. There is nothing
+// to narrow — bufferedSpawn IS how this tree captures a subprocess's output —
+// so raise by exactly that delta and keep the existing headroom.
+// The preflight task card (#7258) adds lib/preflightPlan.js — a zero-import
+// leaf — and services/preflightTaskCard.js, which reaches only cosTaskStore.js
+// (already in every closure that drains on-demand requests). Nearly all of the
+// measured +136 is the barrel: registering the leaf in lib/index.js, which the
+// module-organization rule requires, instantiates one more module in every
+// closure that reaches the barrel. There is nothing to narrow — the leaf pulls
+// nothing — so raise by exactly that delta and keep the existing headroom.
+// The idle-review steal's card hand-off measures +1: one new test file, which
+// reaches cosTaskGenerator.js through `await import()` (after its vi.mocks, as
+// that suite must), so its static closure is itself alone. Its one new module
+// edge — preflightTaskCard.js → taskScheduleConstants.js, for the "only a USER
+// origin is carded" policy — is free: onDemandDrain.js already reached that
+// leaf directly, and gave up its own edge to the same shared helper. Nothing to
+// narrow — a deferred import IS the narrow form.
+// The Codex quota-freshness fix measures +4: providerUsage.js and
+// providerQuotaShare.js stop hand-rolling "which reading is newer" and reach for
+// lwwTimestamp.js (the canonical LWW polarity) plus singleFlight.js. Both are
+// dependency-free leaves, so the delta is the two modules themselves across the
+// handful of closures that reach these services — there is no subtree behind
+// them to narrow, and deferring a compare used on every passive quota read
+// would trade the whole point of the shared rule for four instantiations.
+const MAX_STATIC_INSTANTIATIONS = 103525;
 
 
 const SKIP_DIRS = new Set(['node_modules', 'coverage', 'dist', 'data']);

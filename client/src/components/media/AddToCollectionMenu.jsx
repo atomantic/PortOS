@@ -55,13 +55,11 @@ export default function AddToCollectionMenu({ item, size = 'sm' }) {
     const inIt = c.items.some((it) => `${it.kind}:${it.ref}` === itemKey);
     return (
       <button
-        key={c.id}
         type="button"
         disabled={busyId === c.id}
         onClick={() => handleToggleMembership(c, updateCollections)}
         className="w-full flex items-center justify-between gap-2 px-2 py-1.5 text-left text-[12px] text-gray-200 hover:bg-port-border rounded disabled:opacity-50"
-        role="menuitemcheckbox"
-        aria-checked={inIt}
+        aria-pressed={inIt}
       >
         <CollectionRowLabel name={c.name} />
         {inIt && <Check className="w-3.5 h-3.5 text-port-success shrink-0" />}
@@ -97,7 +95,6 @@ export default function AddToCollectionMenu({ item, size = 'sm' }) {
         onClick={handleToggleOpen}
         className={`shrink-0 ${sizeCls.button} bg-port-border hover:bg-port-border/70 text-white rounded flex items-center justify-center`}
         title="Add to collection" aria-label="Add to collection"
-        aria-haspopup="menu"
         aria-expanded={open}
       >
         <FolderPlus className={sizeCls.icon} />

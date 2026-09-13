@@ -439,6 +439,56 @@ describe('streamResumableDownload', () => {
     expect(await readFile(destPath, 'utf8')).toBe('ggufgg');
   });
 
+  it('stops after one clean restart when the server keeps returning an incompatible 206', async () => {
+    const destPath = await makeDir();
+    await writeFile(partialPathFor(destPath), 'gg');
+    let callCount = 0;
+    const fetchImpl = async () => {
+      callCount += 1;
+      return {
+        ok: true,
+        status: 206,
+        headers: {
+          get: (name) => ({
+            'content-length': '6',
+            'content-range': callCount === 1 ? 'bytes 0-5/6' : 'bytes 2-5/6',
+          }[name] || null),
+        },
+        body: webBody('ggufgg'),
+      };
+    };
+    await expect(streamResumableDownload({
+      url: 'https://example.com/w.gguf', destPath, fetchImpl,
+    })).rejects.toMatchObject({ code: 'DOWNLOAD_RECOVERY_LIMIT' });
+    expect(callCount).toBe(2);
+  });
+
+  it('fails before refetching when stale partial cleanup is denied', async () => {
+    const destPath = await makeDir();
+    await writeFile(partialPathFor(destPath), 'gg');
+    let callCount = 0;
+    const fetchImpl = async () => {
+      callCount += 1;
+      return {
+        ok: false,
+        status: 416,
+        headers: { get: (name) => (name === 'content-range' ? 'bytes */6' : null) },
+        body: webBody(),
+      };
+    };
+    const removeFile = async (path) => {
+      if (path === partialPathFor(destPath)) throw Object.assign(new Error('permission denied'), { code: 'EACCES' });
+      await rm(path, { force: true });
+    };
+    await expect(streamResumableDownload({
+      url: 'https://example.com/w.gguf', destPath, fetchImpl, removeFile,
+    })).rejects.toMatchObject({
+      code: 'DOWNLOAD_RECOVERY_CLEANUP_FAILED',
+      message: expect.stringContaining('repair destination permissions and retry'),
+    });
+    expect(callCount).toBe(1);
+  });
+
   // A body that ends cleanly (no stream error) short of the advertised total
   // is a truncation — without a published digest to catch it (the HF LoRA
   // path has none), a short file would otherwise be renamed into place and

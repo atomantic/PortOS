@@ -27,3 +27,14 @@ export const ARC_LIMITS = Object.freeze({
   EPISODE_LOGLINE_MAX: 500,
   EPISODE_SYNOPSIS_MAX: 4000,
 });
+
+// Shared authoring contract, also consumed by the Arc Canvas and API schema.
+export const SERIES_DESIGN_MODES = Object.freeze(['finite', 'renewable']);
+export const SERIES_DESIGN_TEXT_MAX = 1000;
+export const SERIES_DESIGN_FIELDS = Object.freeze({
+  episodeActivity: 'Episode activity',
+  conflictSource: 'Conflict source',
+  audiencePromise: 'Audience promise',
+  continuingTensions: 'Continuing tensions',
+  endingCondition: 'Ending condition',
+});

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { onActivateKeyDown, clickableProps, isButtonActivation, isPressKey, isEditableTarget, shouldIgnoreGlobalKey, noPointerFocusSurfaceProps } from './a11yKeyboard.js';
+import { onActivateKeyDown, clickableProps, isButtonActivation, isPressKey, isEditableTarget, shouldIgnoreGlobalKey, isFocusEscapeKey, noPointerFocusSurfaceProps } from './a11yKeyboard.js';
 
 describe('onActivateKeyDown', () => {
   it('returns undefined when handler is not a function', () => {
@@ -203,6 +203,27 @@ describe('shouldIgnoreGlobalKey', () => {
     openDialog();
     expect(shouldIgnoreGlobalKey({ key: 'a', target: plainTarget })).toBe(true);
     expect(shouldIgnoreGlobalKey({ key: 'a', target: plainTarget }, { enabledInDialog: true })).toBe(false);
+  });
+});
+
+describe('isFocusEscapeKey', () => {
+  it('is true only for a backtab — Shift+Tab is the "leave this widget" gesture', () => {
+    expect(isFocusEscapeKey({ key: 'Tab', shiftKey: true })).toBe(true);
+    // Plain Tab stays with the widget (shell completion), as do other keys.
+    expect(isFocusEscapeKey({ key: 'Tab', shiftKey: false })).toBe(false);
+    expect(isFocusEscapeKey({ key: 'Tab' })).toBe(false);
+    expect(isFocusEscapeKey({ key: 'Escape', shiftKey: true })).toBe(false);
+    expect(isFocusEscapeKey({ key: 'a', shiftKey: true })).toBe(false);
+  });
+
+  it('does not exclude chords — a Ctrl/Alt+Shift+Tab belongs to the browser or OS, not the widget', () => {
+    expect(isFocusEscapeKey({ key: 'Tab', shiftKey: true, ctrlKey: true })).toBe(true);
+    expect(isFocusEscapeKey({ key: 'Tab', shiftKey: true, altKey: true })).toBe(true);
+  });
+
+  it('is false for a missing event', () => {
+    expect(isFocusEscapeKey(null)).toBe(false);
+    expect(isFocusEscapeKey(undefined)).toBe(false);
   });
 });
 

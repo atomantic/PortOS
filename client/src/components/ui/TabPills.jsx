@@ -38,7 +38,6 @@ export default function TabPills({
   mobileSelectClassName = '',
   ariaLabel,
   controlsIdPrefix,
-  hideLabelOnMobile = false,
   className = '',
   listRef,
   onScroll,
@@ -198,7 +197,6 @@ export default function TabPills({
             disabled={t.disabled}
             onClick={() => onChange(t.id)}
             onKeyDown={(event) => handleTabKeyDown(event, index)}
-            title={hideLabelOnMobile ? t.label : undefined}
             className={`flex items-center ${stretch ? 'flex-1 min-w-0 justify-center' : 'shrink-0 justify-center'} ${sz.gap} ${sz.padding} ${sz.text} font-medium transition-colors whitespace-nowrap min-h-[44px] sm:min-h-[40px] border-b-2 -mb-px ${
               active
                 ? 'text-port-accent border-port-accent bg-port-accent/5'
@@ -210,11 +208,6 @@ export default function TabPills({
               : (Icon && <Icon size={sz.icon} aria-hidden="true" className="shrink-0" />)}
             {t.label && (stretch ? (
               <span className="truncate">{t.label}</span>
-            ) : hideLabelOnMobile ? (
-              <>
-                <span className="hidden sm:inline">{t.label}</span>
-                <span className="sr-only sm:hidden">{t.label}</span>
-              </>
             ) : (
               <span>{t.label}</span>
             ))}

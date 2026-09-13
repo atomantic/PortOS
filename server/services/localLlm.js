@@ -28,7 +28,7 @@ import { localModelSafety } from '../lib/localModelSafety.js';
 
 import { execFile } from '../lib/childProcess.js';import { promisify } from 'util'
 import { createWriteStream } from 'fs'
-import { rm } from 'fs/promises'
+import { rename, rm, stat } from 'fs/promises'
 import { join } from 'path'
 import { tmpdir } from 'os'
 import { fileURLToPath } from 'url'
@@ -359,6 +359,13 @@ async function waitForOllamaVersion(timeoutMs = 30_000) {
  *
  * The .app keeps its own user prefs / model store (`~/.ollama`) so this is
  * non-destructive; only the bundle itself gets swapped.
+ *
+ * The swap is STAGED: the existing bundle is renamed to `<app>.portos-old-<ts>`
+ * and only removed once the replacement is verifiably a directory at the real
+ * path, so any failure downstream rolls back to the working install instead of
+ * leaving the machine with no Ollama at all. It then verifies the RUNNING
+ * version advanced, because a second install ahead of the bundle on PATH can
+ * keep serving the old binary past a perfectly successful swap.
  */
 async function upgradeOllamaMacApp(emit) {
   const appPath = '/Applications/Ollama.app'
@@ -421,13 +428,45 @@ async function upgradeOllamaMacApp(emit) {
   }
 
   emit('Installing /Applications/Ollama.app…')
-  // rm the old bundle first — `mv` can't merge with an existing directory on macOS.
-  await rm(appPath, { recursive: true, force: true }).catch(() => {})
-  const move = await runStreaming('mv', [extractedApp, appPath], emit, 60_000)
-  if (!move.success) {
+  // Stage-and-swap: move the existing bundle ASIDE rather than deleting it. `mv`
+  // still can't merge with an existing directory on macOS, so the destination has
+  // to be cleared first — but an `rm` there means a failed `mv` (timeout, ENOSPC,
+  // an MDM/SIP policy on /Applications) leaves the user with no Ollama at all.
+  // The aside copy is the rollback. Its failure is NOT swallowed either: a
+  // straggler holding the bundle open makes `rename` fail, and continuing would
+  // let `mv` nest the new bundle INSIDE the surviving old one and exit 0.
+  const asidePath = `${appPath}.portos-old-${Date.now()}`
+  const asideErr = await rename(appPath, asidePath).then(() => null, (err) => err)
+  if (asideErr && asideErr.code !== 'ENOENT') {
     await rm(tmpDir, { recursive: true, force: true }).catch(() => {})
-    return { success: false, error: `Could not install ${appPath}: ${move.error}. PortOS may not have permission to write to /Applications — try running the official installer manually.` }
+    return { success: false, error: `Could not move the existing ${appPath} aside (${asideErr.message}), so the upgrade was not attempted and your current Ollama install is untouched. Quit Ollama completely and retry, or install the official app from ${DOWNLOAD_URL.ollama}.` }
   }
+  // ENOENT above just means nothing was installed here — there is no rollback copy.
+  const movedAside = !asideErr
+  const move = await runStreaming('mv', [extractedApp, appPath], emit, 60_000)
+  // The destination was verifiably absent, so a nested Ollama.app/Ollama.app is
+  // impossible — assert the installed path really is a bundle directory anyway,
+  // since everything downstream (quarantine strip, launch) trusts it.
+  const installed = move.success && await stat(appPath).then((s) => s.isDirectory(), () => false)
+  if (!installed) {
+    // Whatever is at appPath now (nothing, a half-copied cross-device `mv`, or a
+    // non-directory) is not a usable bundle, and it is never the user's working
+    // install — that was renamed aside. Clear it unconditionally so the restore
+    // can't fail on a non-empty destination, which is the exact data loss this
+    // staging exists to prevent.
+    await rm(appPath, { recursive: true, force: true }).catch(() => {})
+    const restoreErr = movedAside ? await rename(asidePath, appPath).then(() => null, (err) => err) : null
+    const restored = !movedAside
+      ? ''
+      : restoreErr
+        ? ` Your previous Ollama install could NOT be restored (${restoreErr.message}) — it is at ${asidePath}, move it back to ${appPath} by hand.`
+        : ' Your previous Ollama install has been restored.'
+    // Keep tmpDir: the downloaded bundle is the user's only way to finish by hand.
+    const leftover = (await pathExists(extractedApp)) ? ` The downloaded bundle is still at ${extractedApp} if you want to move it into place yourself.` : ''
+    const why = move.success ? `${appPath} is not a directory after the move` : move.error
+    return { success: false, error: `Could not install ${appPath}: ${why}.${restored}${leftover} PortOS may not have permission to write to /Applications — try running the official installer manually.` }
+  }
+  if (movedAside) await rm(asidePath, { recursive: true, force: true }).catch(() => {})
   // Strip quarantine so Gatekeeper doesn't refuse to launch the freshly-downloaded bundle.
   await runStreaming('xattr', ['-dr', 'com.apple.quarantine', appPath], () => {}, 30_000).catch(() => null)
   await rm(tmpDir, { recursive: true, force: true }).catch(() => {})
@@ -447,6 +486,16 @@ async function upgradeOllamaMacApp(emit) {
       success: true,
       backend: 'ollama',
       note: `Upgraded to ${release.tag_name}, but Ollama did not come back online within 30s. Open Ollama.app if it isn't already running.`
+    }
+  }
+  // Verify the version actually moved — same check the Homebrew path below runs,
+  // and for the same reason: a second Ollama install ahead of the bundle on PATH
+  // can keep serving the old binary, so a swapped .app is not proof of upgrade.
+  if ((tagClean && compareSemver(tagClean, after) > 0) || (!tagClean && (!before || compareSemver(after, before) <= 0))) {
+    return {
+      success: false,
+      backend: 'ollama',
+      error: `Installed ${appPath} (${release.tag_name}), but the Ollama serving requests is still ${after}${before ? ` (was ${before})` : ''}. Another Ollama installation may be ahead of the app bundle on your PATH. Quit Ollama completely, relaunch it from ${appPath}, or install the official app from ${DOWNLOAD_URL.ollama}.`
     }
   }
   console.log(`⬆️ Upgraded Ollama: ${before || 'unknown'} → ${after} (${release.tag_name})`)

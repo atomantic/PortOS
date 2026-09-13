@@ -210,7 +210,7 @@ function PersistentMindStatus({ mind, loaded, error }) {
         </div>
       </div>
       {(error || state?.lastError || state?.pauseReason) && (
-        <p className="mt-3 rounded-md border border-port-warning/30 bg-port-warning/10 px-3 py-2 text-xs text-port-warning">
+        <p role="status" className="mt-3 rounded-md border border-port-warning/30 bg-port-warning/10 px-3 py-2 text-xs text-port-warning">
           {error || state.lastError || state.pauseReason}
         </p>
       )}

@@ -83,7 +83,7 @@
 
 import { join } from 'path';
 import { readdir, lstat, rm } from 'fs/promises';
-import { atomicWrite, readJSONFile, ensureDir } from './fileUtils.js';
+import { atomicWrite, readJSONFile, readJSONFileStrict, unreadableStoreError, ensureDir } from './fileUtils.js';
 import { createFileWriteQueue, createRecordWriteQueue } from './fileWriteQueue.js';
 import { isVitestRunner } from './runtimeEnv.js';
 
@@ -189,11 +189,22 @@ export function createCollectionStore({
 
   /**
    * Load the type-level index.json. Returns the default shape (with the
-   * code-expected `schemaVersion`) when the file is missing — does NOT write
+   * code-expected `schemaVersion`) when the file is ABSENT — does NOT write
    * to disk. Use `saveTypeIndex` / `saveOne` to persist.
+   *
+   * Strict (#7261): every `config`-slot writer starts from this read and writes
+   * the result back, so a swallowed present-but-unreadable index (EACCES, EIO,
+   * truncated bytes, a cloud-sync conflict copy) would persist the shipped
+   * `defaultTypeIndexConfig` over real user state AND stamp the code's current
+   * `schemaVersion` over records still in the old on-disk layout. Throwing here
+   * means `idealoomLists.updateSettings` and universeBuilder's run writers
+   * reject BEFORE any byte is written, leaving the file intact for repair;
+   * request-path callers surface it as a 5xx (`unreadableStoreError` carries
+   * `status: 500`). Same posture as `settingsStore.get()`.
    */
   async function loadTypeIndex() {
-    const raw = await readJSONFile(typeIndexPath(), null, { logError: false });
+    const { ok, value: raw } = await readJSONFileStrict(typeIndexPath(), null, { allowArray: false });
+    if (!ok) throw unreadableStoreError(typeIndexPath());
     if (!isPlainObject(raw)) return buildEmptyTypeIndex();
     return {
       schemaVersion: Number.isInteger(raw.schemaVersion) ? raw.schemaVersion : schemaVersion,
@@ -266,6 +277,14 @@ export function createCollectionStore({
    * Load one record by id. Returns `null` when the record dir is missing or
    * the on-disk JSON fails to parse; runs the configured `sanitizeRecord` on
    * the parsed payload (sanitizer can also return `null` to reject).
+   *
+   * Non-strict by design (unlike `loadTypeIndex` above, #7261): a per-record
+   * read is not a read-modify-write of shared state — `saveOneNow` writes a
+   * record the caller already holds in full, so an unreadable neighbor can
+   * never be overwritten by defaults. The "which ids failed" signal a strict
+   * read would carry is already preserved by `loadAllResult` below, and a
+   * corrupt single record must not take down a collection-wide load. Callers
+   * that need to tell "absent" from "corrupt" use `loadAllResult`.
    */
   async function loadOne(id) {
     if (!isValidId(id)) return null;
@@ -282,7 +301,8 @@ export function createCollectionStore({
    * compare the raw on-disk shape to the sanitized shape (e.g. detect "this
    * record's nested ids need persisting" — sanitize mints missing ids on the
    * fly but doesn't persist them until the next write). Returns the parsed
-   * JSON or `null`; ignores the sanitizer entirely.
+   * JSON or `null`; ignores the sanitizer entirely. Non-strict for the same
+   * reason as `loadOne` above.
    */
   async function loadOneRaw(id) {
     if (!isValidId(id)) return null;
@@ -404,27 +424,47 @@ export function createCollectionStore({
    * expected `schemaVersion`. Returns a status object rather than throwing so
    * `server/index.js` can log all collections in one pass.
    *
-   *   ok=true   — on-disk version matches code (or type index is missing,
-   *               which is treated as a fresh install — the next write
-   *               stamps the correct version).
-   *   ok=false  — on-disk version is older OR newer than code. Older → a
-   *               pending migration didn't run. Newer → code rolled back
-   *               below a forward-only migration.
+   *   ok=true   — on-disk version matches code (`reason: 'match'`), or the type
+   *               index is ABSENT (`reason: 'missing'`), which is treated as a
+   *               fresh install — the next write stamps the correct version.
+   *   ok=false  — on-disk version is older (`reason: 'older'`) or newer
+   *               (`reason: 'newer'`) than code. Older → a pending migration
+   *               didn't run. Newer → code rolled back below a forward-only
+   *               migration. OR the file is present but could not be read
+   *               (`reason: 'unreadable'`, `onDisk: null`).
+   *
+   * The `unreadable` verdict exists because this gate is the ONE boot-time check
+   * that catches a skipped or rolled-back storage migration (#7261). Reporting
+   * "fresh install" for a file we could not read would silence that alarm for a
+   * collection whose records are still in the old layout — and the next write
+   * would then stamp the current version over it, falsifying the marker
+   * permanently.
    */
   async function verifySchemaVersion() {
-    const raw = await readJSONFile(typeIndexPath(), null, { logError: false });
+    const { ok: readable, value: raw } = await readJSONFileStrict(typeIndexPath(), null, { allowArray: false, logError: false });
+    if (!readable) {
+      return {
+        ok: false,
+        onDisk: null,
+        expected: schemaVersion,
+        type,
+        reason: 'unreadable',
+        message: `collection "${type}": index.json at ${typeIndexPath()} exists but could not be read or parsed — repair or delete it and restart. Until then the storage-version check for this collection cannot run.`,
+      };
+    }
     if (!isPlainObject(raw) || raw.schemaVersion == null) {
       return {
         ok: true,
         onDisk: null,
         expected: schemaVersion,
         type,
+        reason: 'missing',
         message: `collection "${type}": no index.json (fresh install) — first write will stamp schemaVersion=${schemaVersion}`,
       };
     }
     const onDisk = Number.isInteger(raw.schemaVersion) ? raw.schemaVersion : null;
     if (onDisk === schemaVersion) {
-      return { ok: true, onDisk, expected: schemaVersion, type, message: `collection "${type}" @ v${schemaVersion}` };
+      return { ok: true, onDisk, expected: schemaVersion, type, reason: 'match', message: `collection "${type}" @ v${schemaVersion}` };
     }
     if (onDisk != null && onDisk < schemaVersion) {
       return {
@@ -432,6 +472,7 @@ export function createCollectionStore({
         onDisk,
         expected: schemaVersion,
         type,
+        reason: 'older',
         message: `collection "${type}": on-disk v${onDisk}, code expects v${schemaVersion} — a migration didn't run. Check scripts/migrations/ and run \`npm run migrations\`.`,
       };
     }
@@ -440,6 +481,7 @@ export function createCollectionStore({
       onDisk,
       expected: schemaVersion,
       type,
+      reason: 'newer',
       message: `collection "${type}": on-disk v${onDisk}, code expects v${schemaVersion} — code rolled back below a forward-only migration. Roll forward or restore from a backup.`,
     };
   }

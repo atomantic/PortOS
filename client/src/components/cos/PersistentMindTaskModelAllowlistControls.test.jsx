@@ -31,6 +31,7 @@ describe('PersistentMindTaskModelAllowlistControls', () => {
       persistentMindCapabilities: {
         schemaVersion: 3,
         createTasks: true,
+        manageToolRecipes: false,
         readPortos: false,
         writePortos: false,
         taskModelAllowlist: [{ providerId: 'ollama', model: 'example-local' }],

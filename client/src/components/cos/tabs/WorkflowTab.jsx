@@ -169,16 +169,31 @@ function TimelineRow({ node, occurrences, windows, timeline, hours, timezone, se
         <button type="button" onClick={() => onSelect(node.id)} className="relative block min-h-12 overflow-hidden text-left">
           <TrackGrid divisions={divisions} />
           <span className="absolute inset-y-0 left-0 z-10 border-l border-port-accent/70" />
-          {windows.map(window => (
-            <span
-              key={window.id}
-              className="absolute inset-y-2 rounded border border-amber-400/40 bg-gradient-to-r from-amber-500/30 via-amber-400/15 to-amber-500/5"
-              style={{ left: `${timelinePercent(window.startAt, timeline)}%`, right: `${100 - timelinePercent(window.endAt, timeline)}%` }}
-              title="Actively draining work; duration depends on the backlog"
-            >
-              <span className="absolute left-2 top-1/2 -translate-y-1/2 whitespace-nowrap text-[10px] font-medium text-amber-200"><InfinityIcon className="mr-1 inline h-3 w-3" />draining</span>
-            </span>
-          ))}
+          {windows.map(bar => {
+            // A live drain is filled; a future recurrence is a washed-out
+            // outline, so "running now" stays distinguishable from "runs then".
+            const live = bar.state === 'draining';
+            const label = `${live ? 'Draining since' : 'Drain starts'} ${formatPoint(bar.startAt, hours, timezone)}`;
+            return (
+              // role="img" so `aria-label` is honored — ARIA prohibits naming a
+              // bare span (role generic), which would leave the bar nameless to
+              // screen readers while still satisfying a getByLabelText test.
+              <span
+                key={bar.id}
+                role="img"
+                aria-label={label}
+                className={`absolute inset-y-2 z-10 flex items-center gap-1 overflow-hidden rounded border px-1 ${live ? 'border-amber-400/50 bg-gradient-to-r from-amber-500/35 to-amber-500/10' : 'border-dashed border-amber-400/35 bg-amber-500/10'}`}
+                // `minWidth` over-constrains left/right so the box grows right
+                // from its start: an hour is ~4% of a 24h track and under 1% of
+                // a 7-day one, which would otherwise render as a hairline.
+                style={{ left: `${timelinePercent(bar.startAt, timeline)}%`, right: `${100 - timelinePercent(bar.endAt, timeline)}%`, minWidth: '1.25rem' }}
+                title={`${label} · perpetual: the bar shows a nominal hour, the drain continues while backlog remains`}
+              >
+                <InfinityIcon className="h-3 w-3 shrink-0 text-amber-200" />
+                {live && <span className="truncate text-[10px] font-medium text-amber-200">draining</span>}
+              </span>
+            );
+          })}
           {occurrences.map(occurrence => {
             const meta = dueNowMeta(occurrence, node, timezone);
             // Due-now is an amber FILL, collision a warning RING — kept on separate
@@ -356,7 +371,7 @@ export default function WorkflowTab({ apps, providers, providersLoaded }) {
         </div>
       </header>
 
-      {error && <div className="flex items-center gap-2 rounded border border-port-error/40 bg-port-error/10 p-3 text-sm text-port-error"><AlertTriangle className="h-4 w-4" />{error}</div>}
+      {error && <div role="status" className="flex items-center gap-2 rounded border border-port-error/40 bg-port-error/10 p-3 text-sm text-port-error"><AlertTriangle className="h-4 w-4" />{error}</div>}
       {loading && !graph && <div className="py-12 text-center text-sm text-gray-500">Building schedule timeline…</div>}
 
       {graph && model && (
@@ -388,6 +403,7 @@ export default function WorkflowTab({ apps, providers, providersLoaded }) {
                     <span className="inline-flex items-center gap-1"><span className="h-2.5 w-2.5 rounded-sm bg-cyan-400" /> interval job</span>
                     <span className="inline-flex items-center gap-1"><span className="h-2.5 w-2.5 rotate-45 rounded-sm bg-amber-300" /> reset/recheck</span>
                     <span className="inline-flex items-center gap-1"><span className="h-2.5 w-2.5 rounded-sm bg-amber-400" /> due now (catch-up)</span>
+                    <span className="inline-flex items-center gap-1"><span className="h-2.5 w-4 rounded-sm border border-dashed border-amber-400/50 bg-amber-500/15" /> perpetual drain (~1h)</span>
                   </div>
                   <span className="inline-flex items-center gap-1"><CalendarDays className="h-3 w-3" />{graph.timezone}</span>
                 </div>
@@ -464,7 +480,7 @@ export default function WorkflowTab({ apps, providers, providersLoaded }) {
               <div className="flex flex-wrap gap-x-4 gap-y-1 text-[10px] text-gray-600">
                 <span><AlertTriangle className="mr-1 inline h-3 w-3 text-port-warning" />A ring means another launch is within 15 minutes; actual overlap depends on runtime.</span>
                 <span><Clock3 className="mr-1 inline h-3 w-3 text-amber-300" />An amber marker at Now means the task is already due (catch-up, first run, or overdue) — it launches on the next check rather than waiting for its next cadence slot.</span>
-                <span><TimerReset className="mr-1 inline h-3 w-3" />Perpetual bands have no fixed end while backlog remains.</span>
+                <span><TimerReset className="mr-1 inline h-3 w-3" />A perpetual task gets one bar per recurrence showing a nominal hour of runtime — the drain keeps going while backlog remains, so a run can outlast its bar. A filled bar at Now means it is draining already.</span>
               </div>
             </div>
 

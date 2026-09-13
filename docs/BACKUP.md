@@ -17,10 +17,12 @@ A backup run (`runBackup` in `server/services/backup.js`) writes to:
 <destPath>/snapshots/<hostname>/<snapshotId>/
 ├── data/             # rsync mirror of ./data/ (minus excludes)
 ├── portos-db.sql     # pg_dump logical dump
-└── manifest.json     # SHA-256 of every data/ file AND ../portos-db.sql
+├── manifest.json     # SHA-256 of every data/ file AND ../portos-db.sql
+└── .failed           # present only when snapshot creation failed
 ```
 
 - Snapshots are namespaced by `<hostname>` so one shared destination (e.g. an iCloud folder) can host backups from several federated machines without `snapshotId` collisions.
+- Snapshot lists include every machine namespace in the destination, plus snapshots written directly under `snapshots/` by PortOS versions from before hostname namespaces. Each row identifies its source, so equal timestamp IDs from different machines remain separate choices. Download, file restore, and database restore keep that source attached through preview and execution. API requests that omit `source` retain the existing behavior and select the current machine; `source: "@legacy"` selects the pre-namespace root.
 - The `manifest.json` hashes the SQL dump too (keyed as `../portos-db.sql`, since the dump lives one level above the `data/` tree), so a truncated or corrupt dump is detectable rather than silently trusted.
 
 ### What is excluded by default
@@ -32,9 +34,15 @@ A backup run (`runBackup` in `server/services/backup.js`) writes to:
 
 The effective exclude list is computed by the pure `computeEffectiveExcludes()` helper (unit-tested in `backup.test.js`). The scheduled cron handler in `backupScheduler.js` re-reads settings on every run, so `destPath`, `excludePaths`, `disabledDefaultExcludes`, and `enabled` all take effect on the next run without a restart. See [Scheduling & status](#scheduling--status) for how the cron registration itself tracks settings.
 
-#### Why every default exclude must be anchored with a leading `/`
+#### Why every exclude must be anchored with a leading `/`
 
 `DEFAULT_EXCLUDES` is **rsync filter syntax** — the leading `/` means "relative to the transfer root". Without the anchor, `loras/*.safetensors` also matches any `loras/` directory nested anywhere under `data/`, silently dropping unrelated user data (e.g. `brain/.../loras/`). An unanchored pattern is a data-loss bug, not a style nit.
+
+The same rule applies to **user-entered** Additional Exclude Paths, which is the list that is easy to get wrong: rsync matches a pattern with no leading `/` at *every* level of the tree, so typing `cache/` to skip `data/cache/` also drops `training-runs/*/cache/`, and `raw/` reaches into sprite runs. The failure is silent — the snapshot reports success, it is simply smaller, and the omission surfaces only at restore. So `computeEffectiveExcludes()` **anchors each user pattern on read** (`server/lib/backupExcludes.js`), prepending `/` to anything that is not already anchored and is not deliberately wildcard-led.
+
+- Anchoring happens at read time, never in storage: `settings.json` keeps exactly what you typed, so there is nothing to migrate and nothing is rewritten under you. The Backup tab anchors a pattern as you add it and renders the computed effective list, so the chip you see is the filter that will run.
+- **`**/name/` is the explicit way to ask for any-depth matching.** A pattern starting with `*` or `**` is passed through unchanged — that is how you deliberately say "every `cache/` anywhere", rather than getting it by accident.
+- Patterns are bounded at the settings boundary (`backupConfigSchema` in `server/lib/validation.js`), and a `..` segment or a NUL byte is rejected rather than sanitized. The 256-character cap is measured on the **anchored** form — the string rsync is handed — so the boundary accepts exactly what `computeEffectiveExcludes()` keeps, and a pattern can never be saved as valid and then silently dropped at run time.
 
 The two `overridable` tiers are enforced, not advisory. A hand-edited `settings.json` that lists a non-overridable path in `disabledDefaultExcludes` is silently dropped server-side; `computeEffectiveExcludes()` enforces both the overridable allow-list and `Array.isArray` guards for hand-edited settings. The Backup tab switches describe default rule state: switching on disables that default exclusion, and switching off re-enables it. The summary counts enabled and disabled default rules, not included files.
 
@@ -60,23 +68,33 @@ Key behaviors, accurate to the code:
 
 ## How restore works
 
-Restore is two independent operations — restoring files and restoring the DB are separate decisions. Both are **dry-run by default** and validate `snapshotId` against path traversal before touching anything.
+Restore is two independent operations — restoring files and restoring the DB are separate decisions. Both are **dry-run by default** and validate `snapshotId` and an optional source namespace against path traversal before touching anything. Explicit source selections also reject symbolic-link aliases for the snapshots root, source namespace, or selected snapshot before archive or restore reads begin.
+
+A backup run that fails after creating its snapshot directory records a durable `.failed` marker before releasing its `.in-progress` guards. Failed snapshots are never eligible for file or database restore (`SNAPSHOT_FAILED`); they remain downloadable so their partial files can be inspected or recovered manually. If PortOS cannot write the failed marker, it keeps the existing incomplete markers instead, which also block restore. Snapshots created by older PortOS versions without a manifest or failure marker retain their legacy behavior because an unmarked historical failure cannot be distinguished reliably from a genuine pre-manifest snapshot.
 
 ### Files — `restoreSnapshot()`
 
-rsyncs `<snapshot>/data/` back to `./data/`. `dryRun: true` (the default) reports what would change without writing; an optional `subdirFilter` limits the restore to one subdirectory.
+Before rsync can read or overwrite live data, PortOS strictly reads `manifest.json`, validates every manifest path and SHA-256 value, and hashes every recorded regular file in the selected restore scope. A missing, unreadable, mismatching, or unrecorded selected file refuses both preview and execution before rsync starts. Selective restore verifies only its literal selected subtree and ignores the separately handled `../portos-db.sql` entry. The same preflight runs again for execution, so changing or adding snapshot bytes after a successful preview cannot bypass verification. Readable symlinks retain the hash behavior used when the manifest was created; dangling symlinks remain outside the regular-file manifest and retain rsync's archive compatibility.
+
+Snapshots from PortOS versions that predate `manifest.json` remain restorable as an explicit compatibility case. Restore responses report `verification.status` as `verified` (with `checkedFiles`) or `unverified` with reason `manifest_absent`; the confirmation panel warns when a legacy restore cannot be verified. An existing manifest that is malformed or unreadable fails closed and is never treated as legacy absence.
+
+After the preflight, rsync copies `<snapshot>/data/` back to `./data/`. Restore always passes `--checksum`, so rsync compares file contents even when the live file has the same size and modification time as the snapshot; equal-content files remain skippable, while differing bytes appear in previews and are restored. This applies to dry-run and live restores, including selective subdirectory restores and legacy snapshots without a manifest. `dryRun: true` (the default) reports what would change without writing; an optional `subdirFilter` limits the restore to one subdirectory.
 
 ### Database — `restorePostgres()`
 
-Replays the snapshot's `portos-db.sql` into the live database via `psql -v ON_ERROR_STOP=1 --single-transaction`, so the restore is **atomic**: it either fully applies or rolls back, never leaving a mixed snapshot/current state.
+Replays the snapshot's `portos-db.sql` into the live database via `psql -v ON_ERROR_STOP=1 --single-transaction`, so the **SQL replay is atomic**: a failed replay rolls back. After replay commits, PortOS forces the current additive schema upgrades and then runs ordered DB migrations using the restored `schema_migrations` ledger. Already-applied migrations are skipped. Success is returned only after both phases finish; dry-run performs neither replay nor schema changes.
 
 | Result | Meaning |
 |---|---|
 | `{ status: 'ok', dryRun, sizeBytes, tableCount }` | Dry-run report, or a successful real restore |
 | `{ status: 'skipped', reason: 'no_dump' }` | No `portos-db.sql` in the snapshot (or 0 bytes) |
 | `{ status: 'skipped', reason: 'not_configured' }` | Real restore requested but Postgres is unreachable — refuses to half-restore |
+| `{ status: 'failed', reason: 'manifest_unreadable' }` | An existing `manifest.json` is corrupt or unreadable — choose another snapshot or repair the backup media before retrying |
 | `{ status: 'failed', reason: 'manifest_mismatch' }` | Snapshot's `portos-db.sql` hash disagrees with `manifest.json` — dump considered untrustworthy |
 | `{ status: 'failed', reason: 'restore_error', error }` | `psql` replay failed (stderr captured) |
+| `{ status: 'failed', reason: 'restore_schema_reconciliation', error }` | The dump committed, but current schema recovery failed; the restore was **not rolled back** |
+
+On schema-reconciliation failure, restart PortOS to retry its schema upgrades and pending migrations. If recovery still fails, inspect the server logs and repair the database before continuing to use affected features. Reconciliation can partially apply upgrades; it is separate from the completed replay transaction.
 
 A non-dry-run restore requires a reachable DB first (`checkHealth()`), so a restore never half-applies against a down database.
 

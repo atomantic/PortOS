@@ -63,11 +63,18 @@ describe.skipIf(!runDb)('catalogCanonProjection', () => {
     await catalogDB.linkIngredientToRef(ing.id, 'universe', uB, 'canon-character');
 
     const seenUniverses = [];
+    const projected = [];
     const updateUniverse = vi.fn(async (universeId, mutator) => {
       seenUniverses.push(universeId);
       // Simulate the embedded entry carrying this ingredientId so the mutator
       // produces a patch (returns null otherwise → counted as skipped).
-      const patch = mutator({ characters: [{ id: 'e1', ingredientId: ing.id, name: 'old' }] });
+      const patch = mutator({
+        characters: [{
+          id: 'e1', ingredientId: ing.id, name: 'old',
+          createdAt: '2026-01-01T00:00:00.000Z', staleField: 'remove me',
+        }],
+      });
+      projected.push(patch.characters[0]);
       return patch; // truthy → counted as "written"
     });
 
@@ -75,6 +82,11 @@ describe.skipIf(!runDb)('catalogCanonProjection', () => {
     expect(stats.universes).toBe(2);
     expect(stats.written).toBe(2);
     expect(seenUniverses.sort()).toEqual([uA, uB].sort());
+    expect(projected[0]).toMatchObject({
+      id: 'e1', ingredientId: ing.id, name: 'Renamed', role: 'Hero',
+      createdAt: '2026-01-01T00:00:00.000Z',
+    });
+    expect(projected[0]).not.toHaveProperty('staleField');
     // Guard set drains — no leaked in-flight token.
     expect(_inFlightSize()).toBe(0);
   });

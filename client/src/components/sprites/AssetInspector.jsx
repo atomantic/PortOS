@@ -183,7 +183,7 @@ export default function AssetInspector({ recordId, asset, onClose, onDeleted = n
               {isRuntimeVersionFile && ' The whole runtime version — atlas sprite sheet and its sidecar manifest — is removed together.'}
               {' '}This can’t be undone.
             </p>
-            {deleteError && <p className="text-xs text-port-error break-all">{deleteError}</p>}
+            {deleteError && <p role="alert" className="text-xs text-port-error break-all">{deleteError}</p>}
             <div className="flex items-center gap-2">
               <button
                 type="button"

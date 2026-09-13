@@ -19,7 +19,11 @@
  *
  * `base == null` ⇒ treat as a clean update (conservative: we only ever MISS
  * journaling the first divergence after this feature ships for a given record,
- * never wedge and never false-positive on routine sequential updates).
+ * never wedge and never false-positive on routine sequential updates) — UNLESS
+ * the base-hash store itself is untrustworthy: a present-but-unreadable
+ * `sync_base_hashes.json` latches `_persistBlocked` (#7260), under which every
+ * overwrite journals fail-closed (an unknown baseline is a possible
+ * divergence) and nothing ever writes back over the unreadable file.
  *
  * The base hash advances to the remote's hash on EVERY accepted overwrite
  * (clean OR conflicting) — without that, the 60s snapshot loop would re-journal
@@ -32,7 +36,7 @@
 
 import { join } from 'path';
 import { randomUUID, createHash } from 'crypto';
-import { PATHS, atomicWrite, readJSONFile, ensureDir } from './fileUtils.js';
+import { PATHS, atomicWrite, readJSONFileStrict, ensureDir } from './fileUtils.js';
 import { createCollectionStore } from './collectionStore.js';
 import { canonicalStringify, isPlainObject } from './objects.js';
 import { sanitizeRecordForWire, stripMusicVideoLocalRenderPins } from './syncWire.js';
@@ -216,6 +220,17 @@ let _flushTail = Promise.resolve();
 // an await-separated multi-record push loop (peer:online convergence) collapses
 // N `sync_base_hashes.json` rewrites into one at the batch's terminal flush.
 let _flushBatchDepth = 0;
+// Latched when the base-hash file was present-but-unreadable at load (#7260 —
+// the `persistBlocked` shape from services/mediaJobQueue). flushBaseHashes()
+// whole-file-REPLACES sync_base_hashes.json with the in-memory map, so
+// persisting on top of a baseline we failed to read would discard every entry
+// the process didn't happen to stamp — and unlike a rebuildable cache, the map
+// records what the two machines last agreed on, which no longer exists
+// anywhere once it is gone. While latched: nothing flushes (the file survives
+// for the user to repair), and maybeJournalBeforeOverwrite fails CLOSED —
+// "baseline unknown" is treated as "possible conflict" and journaled. The
+// latch is process-lifetime; nothing in production calls __reset.
+let _persistBlocked = false;
 
 const baseKey = (kind, id) => `${kind}:${id}`;
 
@@ -223,8 +238,24 @@ async function ensureBaseLoaded() {
   if (_baseHashes) return _baseHashes;
   if (!_loadPromise) {
     _loadPromise = (async () => {
-      const obj = await readJSONFile(BASE_HASH_FILE(), {}, { logError: false });
-      _baseHashes = new Map(obj && typeof obj === 'object' ? Object.entries(obj) : []);
+      // Strict (#7260): a present-but-unreadable file (EACCES, EIO,
+      // truncated/partial bytes, a cloud-sync conflict copy) must NOT read as
+      // a genuine empty — that silently disabled conflict detection and let
+      // the next flush destroy every stored baseline. ENOENT is the only
+      // trustworthy empty (first sync). `allowArray: false` makes an
+      // array-shaped file unreadable; a non-object scalar parses `ok` but
+      // still isn't a baseline map, so it latches too.
+      const { ok, value } = await readJSONFileStrict(BASE_HASH_FILE(), {}, { allowArray: false });
+      if (ok && isPlainObject(value)) {
+        _baseHashes = new Map(Object.entries(value));
+      } else {
+        _persistBlocked = true;
+        _baseHashes = new Map();
+        // Name the recovery step: the latch is process-lifetime, so without
+        // this the user has conflict detection that silently stops persisting
+        // and no indication that repairing or deleting one file restores it.
+        console.error(`❌ conflictJournal: ${BASE_HASH_FILE()} is present but unreadable — base hashes are preserved on disk (persistence latched off) and overwrites journal fail-closed; repair or delete it and restart to re-enable persistence`);
+      }
       return _baseHashes;
     })();
   }
@@ -332,11 +363,18 @@ export async function pruneOrphanedBaseHashes(resolves) {
  *  stamps stay coalesced (`_baseDirty`) and the single disk write fires when the
  *  outermost batch closes. Callers still get a thenable (`_flushTail`) so any
  *  `await flushBaseHashes()` resolves immediately rather than blocking inside
- *  the batch. */
+ *  the batch.
+ *
+ *  No-ops while `_persistBlocked` is latched (#7260): the read that seeded the
+ *  map was untrustworthy, so persisting it back would replace a file that may
+ *  hold the real baselines with whatever this process stamped since boot.
+ *  `deleteSyncBaseHash` / `pruneOrphanedBaseHashes` still evict in memory (the
+ *  session map stays coherent) but their flush is refused for the same reason. */
 export function flushBaseHashes() {
-  // Defer while inside a batch, and no-op when nothing is dirty — either way the
-  // outstanding `_flushTail` thenable is the right thing to await.
-  if (_flushBatchDepth > 0 || !_baseDirty) return _flushTail;
+  // Defer while inside a batch, refuse while the store is untrustworthy, and
+  // no-op when nothing is dirty — each way the outstanding `_flushTail`
+  // thenable is the right thing to await.
+  if (_persistBlocked || _flushBatchDepth > 0 || !_baseDirty) return _flushTail;
   _flushTail = _flushTail.then(async () => {
     if (!_baseDirty) return;
     _baseDirty = false;
@@ -415,7 +453,11 @@ export async function detectConflict({ kind, id, local, remote }) {
   const remoteHash = contentHashForRecord(kind, remote, { maxVersion });
   const isConflict = baseHash != null && localHash != null && remoteHash != null
     && localHash !== baseHash && remoteHash !== baseHash && localHash !== remoteHash;
-  return { isConflict, baseHash, localHash, remoteHash };
+  // `baseUnavailable` (#7260): the stored baseline file could not be read, so
+  // `isConflict === false` here means "no base to compare against," NOT
+  // "proven clean". Callers that journal must branch on this flag — the merge
+  // path treats it as fail-closed (see maybeJournalBeforeOverwrite).
+  return { isConflict, baseHash, localHash, remoteHash, baseUnavailable: _persistBlocked };
 }
 
 // User-authored content fields a restore/merge may write back, per kind. This
@@ -667,9 +709,15 @@ export async function journalConflict({ kind, id, local, remote, source, hashes 
  */
 export async function maybeJournalBeforeOverwrite({ kind, id, local, remote, source }) {
   try {
-    const { isConflict, baseHash, localHash, remoteHash } = await detectConflict({ kind, id, local, remote });
+    const { isConflict, baseHash, localHash, remoteHash, baseUnavailable } = await detectConflict({ kind, id, local, remote });
     const localIsTombstone = local?.deleted === true;
-    if (isConflict && localHash != null && !localIsTombstone) {
+    // Fail CLOSED while the baseline store is untrustworthy (#7260): with the
+    // base hashes unreadable we cannot prove this merge ISN'T a divergence, so
+    // "baseline unknown" is treated as "possible conflict" and journaled. A
+    // spurious journal entry costs the user one dismissal; a missed one costs
+    // their edit. The nothing-to-lose guards still apply — an ephemeral local
+    // (no hashable wire form) or a local tombstone has no content to preserve.
+    if ((isConflict || baseUnavailable) && localHash != null && !localIsTombstone) {
       await journalConflict({ kind, id, local, remote, source, hashes: { baseHash, localHash, remoteHash } });
     }
     // Advance the base to an UNRESTRICTED (current-version) hash of `remote`,
@@ -687,6 +735,22 @@ export async function maybeJournalBeforeOverwrite({ kind, id, local, remote, sou
   }
 }
 
+/**
+ * True while the `_persistBlocked` latch is held (#7260): the base-hash file
+ * was present-but-unreadable at load, so persistence is latched off (the file
+ * is preserved for repair) and overwrites journal fail-closed. Surfaced in
+ * the conflict-journal status payload so an empty Conflicts list can't be
+ * mistaken for "no conflicts" while detection is degraded.
+ *
+ * Awaits the memoized load so the flag reflects the file's actual state even
+ * when no merge has touched the store yet this process — a status poll must
+ * not report healthy just because nothing has read the file.
+ */
+export async function isBaseHashPersistBlocked() {
+  await ensureBaseLoaded();
+  return _persistBlocked;
+}
+
 // Test-only reset of the in-memory base-hash cache so suites that swap PATHS.data
 // between tests don't bleed state across the module-level cache.
 export function __resetBaseHashCacheForTests() {
@@ -695,5 +759,6 @@ export function __resetBaseHashCacheForTests() {
   _baseDirty = false;
   _flushTail = Promise.resolve();
   _flushBatchDepth = 0;
+  _persistBlocked = false;
   _store = null;
 }

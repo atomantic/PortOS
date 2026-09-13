@@ -17,6 +17,11 @@
  *     `event_msg`/`token_count` lines carry a CUMULATIVE `total_token_usage`
  *     plus the per-turn `last_token_usage`.
  *
+ *   Kimi Code — ~/.kimi-code/sessions/wd_.../session_.../agents/<id>/wire.jsonl
+ *     Indexed by the global ~/.kimi-code/session_index.jsonl. `usage.record`
+ *     lines carry real per-call billed usage as a discrete delta — see the
+ *     section below for the full shape and how it was confirmed.
+ *
  * Both formats have a de-duplication hazard that makes naive summing wrong by
  * a large factor, documented at each parser. Both parsers are pure (text in,
  * totals out), tolerant of truncated trailing lines (a session still being
@@ -719,4 +724,156 @@ export function parseAgyHistory(jsonlText) {
     });
   }
   return out;
+}
+
+/**
+ * ---------------------------------------------------------------------------
+ * Kimi Code CLI (`kimi`)
+ * ---------------------------------------------------------------------------
+ *
+ * `~/.kimi-code/session_index.jsonl` — a single GLOBAL, append-only log of
+ * every session ever created on the machine (every cwd, not just one):
+ * `{ sessionId, sessionDir, workDir }`, `workDir` the exact (unslugified) cwd
+ * the session started in. Unlike Claude's project-slug directory or Grok's
+ * `encodeURIComponent(cwd)` folder, there is no cwd-derived directory name to
+ * decode — `sessions/wd_<basename>_<hash>/` exists, but the hash suffix is
+ * undocumented, so this index is the supported lookup.
+ *
+ * `<sessionDir>/agents/<agentId>/wire.jsonl` — one JSON record per line,
+ * append-only, `type` names the record and every line carries `time` (epoch
+ * ms, a NUMBER — not an ISO string like Claude's). `main` is the top-level
+ * agent; a spawned subagent gets its own `agents/<subAgentId>/` directory and
+ * its OWN wire.jsonl — confirmed from the CLI's own embedded context-recovery
+ * documentation string: "agents/main/ is the main agent; each subagent has
+ * its own agents/<agentId>/wire.jsonl. A parent's log holds only the Agent
+ * tool call and the subagent's returned result — the subagent's own steps are
+ * in its own file." So a session's real cost is the SUM over every agent
+ * directory beneath it, not `main` alone.
+ *
+ * Billed usage lives in `usage.record` lines:
+ *   { type: 'usage.record', agentId, model,
+ *     usage: { inputOther, output, inputCacheRead, inputCacheCreation },
+ *     usageScope: 'turn'|'session', time }
+ * `model` and the `usage` shape were confirmed by reading the shipped CLI
+ * binary's bundled source (`usageRecordSchema`, `UsageAgentModel`, and the
+ * `addUsage`/`inputTotal` reducers in `packages/agent-core-v2/src/agent/usage`)
+ * — no live successful call was available to verify end-to-end when this was
+ * written (#6045), so this is corroborated from source, not from an observed
+ * response. Each record is a DISCRETE per-call delta: `UsageAgentModel.record()`
+ * ADDS every new record onto a running total rather than replacing it, so —
+ * unlike Codex's cumulative rollout — there is no snapshot-vs-delta trap; every
+ * in-window record is simply summed. `inputOther` is already the FRESH
+ * (uncached) portion (`inputTotal(usage) = inputOther + inputCacheRead +
+ * inputCacheCreation`), so it maps straight onto `tokensIn` with no
+ * cache-inclusive split to undo, unlike Grok's `inputTokens`.
+ *
+ * No id distinguishes one `usage.record` from another, so the dedupe/claim key
+ * is content-derived exactly like the Claude parser's keyless-line fallback.
+ */
+
+/**
+ * `~/.kimi-code/session_index.jsonl` → one entry per unique `sessionDir`, in
+ * first-seen order. The file is append-only and can carry more than one line
+ * per session (e.g. across a resume), so later duplicates are dropped rather
+ * than overwriting the first `workDir` seen for that directory.
+ *
+ * @param {string} jsonlText raw file contents (may end mid-line)
+ * @returns {Array<{ sessionId: string|null, sessionDir: string, workDir: string|null }>}
+ */
+export function parseKimiSessionIndex(jsonlText) {
+  const seen = new Set();
+  const out = [];
+  for (const entry of parseJsonLines(jsonlText)) {
+    const sessionDir = typeof entry.sessionDir === 'string' ? entry.sessionDir : null;
+    if (!sessionDir || seen.has(sessionDir)) continue;
+    seen.add(sessionDir);
+    out.push({
+      sessionId: typeof entry.sessionId === 'string' ? entry.sessionId : null,
+      sessionDir,
+      workDir: typeof entry.workDir === 'string' ? entry.workDir : null
+    });
+  }
+  return out;
+}
+
+/** One agent's `usage.record` buckets, cache tiers already split by the CLI. */
+const kimiBuckets = (usage) => ({
+  messages: 1,
+  tokensIn: num(usage?.inputOther),
+  tokensOut: num(usage?.output),
+  cacheReadTokens: num(usage?.inputCacheRead),
+  cacheWriteTokens: num(usage?.inputCacheCreation)
+});
+
+/**
+ * Parse one agent's `wire.jsonl` into billed totals from its `usage.record`
+ * lines. Call once per `agents/<agentId>/wire.jsonl` under a session directory
+ * and fold the results — a session's total spans every agent directory it has.
+ *
+ * @param {string} jsonlText raw file contents (may end mid-line)
+ * @param {{ from?: number|null, to?: number|null, exclude?: {has:(k:string)=>boolean}|null }} [opts]
+ *   `from`/`to` are epoch-ms bounds (compared directly against each line's own
+ *   numeric `time`); `exclude` holds keys already billed to another run.
+ * @returns {{ model: string|null, models: string[], byModel: object,
+ *   messages: number, tokensIn: number, tokensOut: number,
+ *   cacheReadTokens: number, cacheWriteTokens: number, countedKeys: string[],
+ *   records: number }} `records` is the number of `usage.record` lines SEEN
+ *   before windowing/claiming — the sentinel that separates "this agent file
+ *   never billed anything" (a session that failed or was interrupted before
+ *   any call completed — correctly zero, since nothing was actually spent)
+ *   from "it did, and this window's share is legitimately zero".
+ */
+export function parseKimiWireLog(jsonlText, { from = null, to = null, exclude = null } = {}) {
+  const totals = emptyTotals();
+  const byModel = new Map();
+  const modelCounts = new Map();
+  const counted = [];
+  const contentSeen = new Map();
+  let records = 0;
+
+  for (const entry of parseJsonLines(jsonlText)) {
+    if (entry.type !== 'usage.record') continue;
+    records += 1;
+    const usage = entry.usage;
+    if (!usage || typeof usage !== 'object') continue;
+
+    const ts = typeof entry.time === 'number' && Number.isFinite(entry.time) ? entry.time : null;
+    if (!inWindow(ts, from, to)) continue;
+
+    const model = typeof entry.model === 'string' && entry.model ? entry.model : null;
+    const bucketKey = model ?? UNKNOWN_MODEL;
+
+    // No id on a usage.record — key it by its own content, the same fallback
+    // the Claude parser uses for a keyless line: stable under insertion, with
+    // an occurrence tiebreaker so two genuinely identical records don't merge.
+    const content = [entry.time ?? '', entry.agentId ?? '', bucketKey, num(usage.inputOther), num(usage.output), num(usage.inputCacheRead), num(usage.inputCacheCreation)].join('|');
+    const occurrence = contentSeen.get(content) ?? 0;
+    contentSeen.set(content, occurrence + 1);
+    const key = `@${content}#${occurrence}`;
+    if (exclude?.has(key)) continue;
+
+    const buckets = kimiBuckets(usage);
+    if (totalTranscriptTokens(buckets) === 0) continue;
+    counted.push(key);
+    for (const field of Object.keys(totals)) totals[field] += buckets[field];
+
+    if (model) modelCounts.set(model, (modelCounts.get(model) || 0) + 1);
+    if (!byModel.has(bucketKey)) byModel.set(bucketKey, emptyTotals());
+    const bucket = byModel.get(bucketKey);
+    for (const field of Object.keys(bucket)) bucket[field] += buckets[field];
+  }
+
+  const models = [...modelCounts.keys()];
+  const chosenModel = models.length
+    ? [...modelCounts.entries()].sort((a, b) => b[1] - a[1])[0][0]
+    : null;
+
+  return {
+    model: chosenModel,
+    models,
+    byModel: Object.fromEntries(byModel),
+    ...totals,
+    countedKeys: counted,
+    records
+  };
 }

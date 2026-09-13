@@ -15,6 +15,7 @@ import {
 describe('persistent mind capabilities', () => {
   it('describes every persistent-mind grant from the capability contract', () => {
     expect(PERSISTENT_MIND_TOOL_CATALOG).toEqual([
+      expect.objectContaining({ capability: 'manageToolRecipes', defaultEnabled: false }),
       expect.objectContaining({ capability: 'chooseThinkingPreset', defaultEnabled: false }),
       expect.objectContaining({ id: 'cos.create-task', capability: 'createTasks', defaultEnabled: false }),
       expect.objectContaining({ id: 'portos.read', capability: 'readPortos', defaultEnabled: false }),
@@ -50,10 +51,10 @@ describe('persistent mind capabilities', () => {
     expect(persistentMindCapabilitiesSchema.safeParse({ schemaVersion: 3, callUser: true }).success).toBe(true);
     expect(persistentMindCapabilitiesSchema.safeParse({ schemaVersion: 5 }).success).toBe(true);
     expect(persistentMindCapabilitiesSchema.safeParse({ schemaVersion: 8 }).success).toBe(true);
-    expect(persistentMindCapabilitiesSchema.safeParse({ schemaVersion: 9 }).success).toBe(false);
+    expect(persistentMindCapabilitiesSchema.safeParse({ schemaVersion: 10 }).success).toBe(false);
     expect(persistentMindCapabilitiesSchema.safeParse({ taskModelAllowlist: [{ providerId: 'ollama', model: 'example-local' }] }).success).toBe(true);
     expect(normalizePersistentMindCapabilities({ schemaVersion: 2, createTasks: true }))
-      .toMatchObject({ schemaVersion: 8, createTasks: true, manageMind: false, manageEidoverse: false, callUser: false, adjustLocalContext: false });
+      .toMatchObject({ schemaVersion: 9, createTasks: true, manageMind: false, manageEidoverse: false, callUser: false, adjustLocalContext: false });
     expect(persistentMindCapabilitiesSchema.safeParse({ allowedAppIds: ['example-app', 'second-app'] }).success).toBe(true);
     expect(persistentMindCapabilitiesSchema.safeParse({ allowedAppIds: Array.from({ length: 51 }, (_, index) => `app-${index}`) }).success).toBe(false);
     expect(persistentMindCapabilitiesSchema.safeParse({ createTasks: true, shell: true }).success).toBe(false);

@@ -108,10 +108,15 @@ const blockUntil = (marker) => `while [ ! -f "${marker}" ]; do sleep 0.02; done`
 describe('spawnDetached', () => {
   it('streams stdout and stderr, then closes with the exit code', async () => {
     const controlDir = await tmpControlDir();
+    // Windows CI runners occasionally take longer than the 10s production
+    // default to spin up the launcher/supervisor powershell chain on a cold,
+    // loaded host — this is the first real spawn in the suite, so it eats
+    // that startup cost. Give it CI headroom without touching the
+    // production timeout.
     const handle = await spawnDetached(
       'sh',
       ['-c', 'printf "out-a\\nout-b\\n"; printf "err-1\\n" 1>&2; exit 0'],
-      { controlDir, pollMs: 25 }
+      { controlDir, pollMs: 25, pidTimeoutMs: 30000 }
     );
     const getOut = collect(handle.stdout);
     const getErr = collect(handle.stderr);

@@ -80,6 +80,8 @@ flagging any entity as ungrounded.
 
 {{{shapeGuidance}}}
 
+If a Series design brief is supplied above, treat it as authored intent. For renewable stories, consider recurring activity, varied episode problems/outcomes and continuing tensions; for finite stories, consider causal progress and the earned declared ending. Ground contradictions in the supplied episodes and use the existing actionable findings format when reviewing. At synopsis-only scope, limit conclusions to available material. A deliberate breather is valid; uncertainty alone does not warrant a finding. Do not invent a brief when absent, add sample-episode batches or future-season quotas, force character transformation, or change the configured issue count, reader map or emotional shape. Resolvers repair story material, never the brief.
+
 ## Volumes + episodes
 
 ```json

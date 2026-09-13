@@ -68,6 +68,31 @@ describe('LoomSeriesPlan', () => {
     expect(onLoomUpdate).toHaveBeenCalledWith(updated);
   });
 
+  it('authors and clears the shared series-design brief without adding it to legacy saves', async () => {
+    const user = userEvent.setup();
+    api.updateLoom.mockImplementation(async (_id, { seriesPlan }) => loom({ seriesPlan }));
+    render(<RouterProvider router={createMemoryRouter([
+      { path: '/', element: <StatefulPlan initial={loom()} /> },
+    ], { initialEntries: ['/'] })} />);
+
+    await user.selectOptions(screen.getByRole('combobox', { name: 'Story intent' }), 'renewable');
+    await user.type(screen.getByRole('textbox', { name: 'Episode activity' }), 'Decode a dangerous signal.');
+    await user.type(screen.getByRole('textbox', { name: 'Continuing tensions' }), 'Each relay hides another sender.');
+    await user.click(screen.getByRole('button', { name: /save plan/i }));
+
+    await waitFor(() => expect(api.updateLoom).toHaveBeenCalledTimes(1));
+    expect(api.updateLoom.mock.calls[0][1].seriesPlan.seriesDesign).toEqual(expect.objectContaining({
+      mode: 'renewable',
+      episodeActivity: 'Decode a dangerous signal.',
+      continuingTensions: 'Each relay hides another sender.',
+    }));
+
+    await user.selectOptions(screen.getByRole('combobox', { name: 'Story intent' }), '');
+    await user.click(screen.getByRole('button', { name: /save plan/i }));
+    await waitFor(() => expect(api.updateLoom).toHaveBeenCalledTimes(2));
+    expect(api.updateLoom.mock.calls[1][1].seriesPlan).not.toHaveProperty('seriesDesign');
+  });
+
   it('adds a playable challenge as an episode-mapped plot-point contract', async () => {
     const user = userEvent.setup();
     api.updateLoom.mockResolvedValue(loom());

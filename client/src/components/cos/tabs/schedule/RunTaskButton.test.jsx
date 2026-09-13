@@ -88,8 +88,9 @@ describe('RunTaskButton', () => {
 
     await act(async () => { resolveTrigger({ id: 'request-1' }); });
 
-    expect(screen.getByRole('status')).toHaveTextContent('Request sent to Example App');
-    expect(screen.getByText('Request sent to Example App')).toBeVisible();
+    expect(screen.getByRole('status')).toHaveTextContent('Request queued for Example App');
+    expect(screen.getByText('Request queued for Example App')).toBeVisible();
+    expect(screen.getByRole('status')).toHaveTextContent('Checks and available capacity determine when an agent appears');
     expect(screen.getByRole('button', { name: /Run on App/i })).toBeEnabled();
   });
 

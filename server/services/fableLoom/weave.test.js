@@ -157,6 +157,15 @@ const generatedChallengeGraph = () => ({
   })),
 });
 
+const finiteSeriesDesign = () => ({
+  mode: 'finite',
+  episodeActivity: 'Mara decodes one royal summons per episode.',
+  conflictSource: 'Every summons asks her to protect the crown at a personal cost.',
+  audiencePromise: 'A complete mystery and one irreversible choice each episode.',
+  continuingTensions: 'Mara distrusts the council that still needs her.',
+  endingCondition: 'Mara chooses whether the city deserves a restored crown.',
+});
+
 describe('mapGeneratedGraph', () => {
   it('mints server ids, remaps targets, and drops unknown-target transitions', () => {
     const { nodes, startNodeId } = mapGeneratedGraph(generatedGraph());
@@ -1262,6 +1271,84 @@ describe('descriptive canon reveal gate at the FableLoom prompt boundary (#6426)
 });
 
 describe('series plan AI', () => {
+  it('passes the author-owned series design through every plan operation without rewriting it', async () => {
+    const { loomId } = await setup();
+    const seriesDesign = finiteSeriesDesign();
+    await updateLoom(loomId, { seriesPlan: { seriesDesign } });
+
+    runStagedLLM.mockResolvedValueOnce({
+      content: {
+        storyArc: 'Mara follows the summons to their source.',
+        plotPoints: [{ title: 'The first summons' }],
+        sideQuests: [{ title: 'The missing seal' }],
+      },
+      runId: 'design-draft',
+    });
+    const generated = await generateSeriesPlan(loomId);
+    expect(JSON.parse(runStagedLLM.mock.calls[0][1].seriesPlanJson).seriesDesign).toEqual(seriesDesign);
+    expect(generated.loom.seriesPlan.seriesDesign).toEqual(seriesDesign);
+
+    runStagedLLM.mockResolvedValueOnce({
+      content: { summary: 'The finite spine is coherent.', risks: [] },
+      runId: 'design-review',
+    });
+    await reviewSeriesPlan(loomId, { planningOnly: true });
+    expect(JSON.parse(runStagedLLM.mock.calls[1][1].seriesPlanJson).seriesDesign).toEqual(seriesDesign);
+
+    runStagedLLM.mockResolvedValueOnce({
+      content: { storyArc: 'Mara follows the summons and rejects the crown.', changes: ['Clarified the ending.'] },
+      runId: 'design-feedback',
+    });
+    const feedback = await feedbackSeriesPlan(loomId, { feedback: 'Clarify the ending.' });
+    expect(JSON.parse(runStagedLLM.mock.calls[2][1].seriesPlanJson).seriesDesign).toEqual(seriesDesign);
+    expect(feedback.loom.seriesPlan.seriesDesign).toEqual(seriesDesign);
+  });
+
+  it('rejects stale series-plan feedback when the author changes the series design in flight', async () => {
+    const { loomId } = await setup();
+    await updateLoom(loomId, { seriesPlan: { seriesDesign: finiteSeriesDesign() } });
+    let finishFeedback;
+    runStagedLLM.mockImplementationOnce(() => new Promise((resolve) => { finishFeedback = resolve; }));
+
+    const pending = feedbackSeriesPlan(loomId, { feedback: 'Tighten the arc.' });
+    await vi.waitFor(() => expect(runStagedLLM).toHaveBeenCalledOnce());
+    await updateLoom(loomId, { seriesPlan: {
+      seriesDesign: { ...finiteSeriesDesign(), endingCondition: 'Mara destroys the crown.' },
+    } });
+    finishFeedback({ content: { storyArc: 'A stale revision.' }, runId: 'stale-feedback' });
+
+    await expect(pending).rejects.toMatchObject({ code: 'LOOM_CHANGED_DURING_GENERATION' });
+    expect((await getLoom(loomId)).seriesPlan.seriesDesign.endingCondition).toBe('Mara destroys the crown.');
+  });
+
+  it('supplies the series design to outline, weave, outline review, and teleplay review', async () => {
+    const { loomId, episodeId } = await setup();
+    const seriesDesign = finiteSeriesDesign();
+    await updateLoom(loomId, { seriesPlan: { seriesDesign } });
+    const renderedDesign = 'Episode activity: Mara decodes one royal summons per episode.';
+
+    runStagedLLM.mockResolvedValueOnce({ content: generatedOutline(), runId: 'design-outline' });
+    await generateEpisodeOutline(loomId, episodeId);
+    expect(runStagedLLM.mock.calls[0][1].storyContext).toContain(renderedDesign);
+    await validateEpisodeOutline(loomId, episodeId);
+
+    runStagedLLM.mockResolvedValueOnce({ content: { summary: 'The opening is clear.', risks: [] }, runId: 'design-cold-review' });
+    runStagedLLM.mockResolvedValueOnce({ content: { summary: 'The outline fits.', risks: [] }, runId: 'design-outline-review' });
+    await reviewEpisodeOutline(loomId, episodeId, { planningGate: true });
+    expect(runStagedLLM.mock.calls[2][1].storyContext).toContain(renderedDesign);
+
+    runStagedLLM.mockResolvedValueOnce({ content: generatedGraphFromOutline(), runId: 'design-weave' });
+    await weaveEpisode(loomId, episodeId, { expandFromOutline: true });
+    expect(runStagedLLM.mock.calls[3][1].storyContext).toContain(renderedDesign);
+
+    runStagedLLM.mockResolvedValueOnce({
+      content: { summary: 'The finite series lands.', risks: [] },
+      runId: 'design-teleplay-review',
+    });
+    await reviewSeriesTeleplay(loomId);
+    expect(JSON.parse(runStagedLLM.mock.calls[4][1].seriesPlanJson).seriesDesign).toEqual(seriesDesign);
+  });
+
   it('drafts and persists a complete scaffold while preserving episode records', async () => {
     const { loomId, episodeId } = await setup();
     getUniverseMock.mockResolvedValueOnce({

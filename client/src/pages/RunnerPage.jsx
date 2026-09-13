@@ -285,7 +285,7 @@ ${prompt.trim()}`;
               </div>
             </div>
             {continueContext.success === false && continueContext.error && (
-              <div>
+              <div role="status">
                 <div className="text-xs text-port-error uppercase tracking-wide mb-1">Error</div>
                 <div className="text-port-error/80 bg-port-error/10 rounded px-2 py-1 font-mono text-xs max-h-20 overflow-auto">
                   {continueContext.error}

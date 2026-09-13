@@ -176,7 +176,7 @@ export default function MtplxServerCard({
             </div>
           )}
           {status?.cacheError && (
-            <p className="text-xs text-gray-500">Couldn't read MTPLX's model cache ({status.cacheError}) — an on-demand start will fall through to MTPLX's own default checkpoint.</p>
+            <p role="status" className="text-xs text-gray-500">Couldn't read MTPLX's model cache ({status.cacheError}) — an on-demand start will fall through to MTPLX's own default checkpoint.</p>
           )}
           <p className="text-[11px] text-gray-500">
             MTPLX starts on demand when a request needs it. You can also start it now with the

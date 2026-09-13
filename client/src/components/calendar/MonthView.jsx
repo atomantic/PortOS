@@ -1,11 +1,12 @@
 import { useState, useEffect, useMemo, useRef } from 'react';
-import {ChevronLeft, ChevronRight} from 'lucide-react';
+import {CalendarDays, ChevronLeft, ChevronRight} from 'lucide-react';
 import * as api from '../../services/api';
 import socket from '../../services/socket';
 import EventDetail from './EventDetail';
 import Drawer from '../Drawer';
 import { buildSubcalendarColorMap, eventChipStyle } from './calendarUtils';
 import BrailleSpinner from '../BrailleSpinner';
+import EmptyState from '../EmptyState';
 import { useThemeContext } from '../ThemeContext';
 import { formatMonthYear, formatTimeOfDay, formatDateFull, localDateKey } from '../../utils/formatters';
 import useUrlParams from '../../hooks/useUrlParams';
@@ -138,6 +139,14 @@ export default function MonthView({ accounts }) {
         <div className="flex items-center justify-center py-12">
           <BrailleSpinner text="Loading" />
         </div>
+      ) : accounts.length === 0 ? (
+        <EmptyState
+          icon={CalendarDays}
+          title="No calendar connected"
+          message="Connect a calendar account to see your month."
+          actionTo="/calendar/config"
+          actionLabel="Add a calendar account"
+        />
       ) : (
         <div className="border border-port-border rounded-lg overflow-hidden bg-port-card">
           {/* Day name headers */}

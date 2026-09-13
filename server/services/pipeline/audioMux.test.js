@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { mkdir, rm, writeFile } from 'fs/promises';
+import { mkdir, readdir, readFile, rm, writeFile } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { escapeRegExp } from '../../lib/textUtils.js';
@@ -39,6 +39,10 @@ vi.mock('../../lib/ffmpeg.js', async () => {
 const spawnCalls = [];
 let mockExitCode = 0;
 let mockStderr = '';
+// Simulate "ffmpeg reported success but its output never landed", which is how
+// the in-place install is driven to a REAL failure without stubbing the helper
+// that performs it. See the #7237 suite at the bottom of this file.
+let mockSkipOutputWrite = false;
 vi.mock('../../lib/childProcess.js', async () => {
   const actual = await vi.importActual('../../lib/childProcess.js');
   const fs = await import('fs/promises');
@@ -56,7 +60,7 @@ vi.mock('../../lib/childProcess.js', async () => {
       // that side effect on the success path so the subsequent rename in
       // muxMusicBed has a file to move.
       Promise.resolve().then(async () => {
-        if (mockExitCode === 0) {
+        if (mockExitCode === 0 && !mockSkipOutputWrite) {
           const outPath = args[args.length - 1];
           await fs.writeFile(outPath, Buffer.from('muxed')).catch(() => {});
         }
@@ -74,6 +78,7 @@ beforeEach(async () => {
   spawnCalls.length = 0;
   mockExitCode = 0;
   mockStderr = '';
+  mockSkipOutputWrite = false;
   findFfmpegMock.mockReset();
   // Default: input video has no audio stream (matches today's silent AI-gen
   // clips). Tests that exercise clip-audio preservation opt in explicitly.
@@ -700,4 +705,97 @@ describe('muxStripAudio', () => {
     expect(args[args.indexOf('-c:v') + 1]).toBe('copy');
     expect(args).not.toContain('-filter_complex');
   });
+});
+
+// Every entry point here replaces the stitched episode IN PLACE, and all four
+// used to do it with a bare uncaught `rename` (#7237). On Windows that rename
+// always fails (the destination exists), so the throw escaped
+// `stitchRunner.maybeMuxPipelineAudio` — which awaits the mux inside the stitch
+// `try` — and marked a successfully-rendered episode Failed, orphaning it and
+// leaving the temp sibling on disk forever. On POSIX the same throw is reachable
+// on EACCES/ENOSPC/EBUSY.
+//
+// The failure is injected at the real install, not by stubbing
+// `installEncodedVideo`: `mockSkipOutputWrite` makes the fake ffmpeg exit 0
+// WITHOUT producing its output file, so the genuine helper runs, its genuine
+// rename fails, and its genuine rollback is what these assertions observe.
+describe('in-place install failure (graceful degradation, #7237)', () => {
+  beforeEach(() => {
+    findFfmpegMock.mockReset();
+    findFfmpegMock.mockResolvedValue('/usr/local/bin/ffmpeg');
+    hasAudioStreamMock.mockReset();
+    hasAudioStreamMock.mockResolvedValue(false);
+    spawnCalls.length = 0;
+    mockSkipOutputWrite = true;
+  });
+  afterEach(() => { mockSkipOutputWrite = false; });
+
+  const ORIGINAL = 'the-stitched-episode';
+
+  // Each case builds the arguments one mux entry point needs to get all the way
+  // to its install step, so a failure here can only be the install.
+  const cases = [
+    {
+      name: 'muxMusicBed',
+      label: 'music bed',
+      run: async (video) => {
+        const music = join(FAKE_MUSIC_DIR, 'bed.mp3');
+        await writeFile(music, Buffer.from('mus'));
+        return muxMusicBed(video, { musicPath: music });
+      },
+    },
+    {
+      name: 'muxVoLines',
+      label: 'VO mux',
+      run: async (video, assetDir) => {
+        const line = join(assetDir, 'line.wav');
+        await writeFile(line, Buffer.from('wav'));
+        return muxVoLines(video, { voLines: [{ path: line, offsetSec: 1 }], musicPath: null });
+      },
+    },
+    {
+      name: 'muxCueBed',
+      label: 'cue bed',
+      run: async (video, assetDir) => {
+        const cue = join(assetDir, 'cue.wav');
+        await writeFile(cue, Buffer.from('wav'));
+        return muxCueBed(video, { cues: [{ path: cue, startSec: 0, endSec: 30, gain: 0.5 }] });
+      },
+    },
+    {
+      name: 'muxStripAudio',
+      label: 'silent strip',
+      run: async (video) => muxStripAudio(video),
+    },
+  ];
+
+  for (const { name, label, run } of cases) {
+    it(`${name} resolves ok:false instead of throwing, keeps the episode, and leaves no temp file`, async () => {
+      // The episode gets a directory of its OWN — the strict listing below is
+      // what proves no temp sibling (or rolled-back .bak) was stranded, so the
+      // input assets have to live somewhere else.
+      const dir = join(TEST_HOME, name);
+      const assetDir = join(TEST_HOME, `${name}-assets`);
+      await mkdir(dir, { recursive: true });
+      await mkdir(assetDir, { recursive: true });
+      const video = join(dir, 'episode.mp4');
+      await writeFile(video, Buffer.from(ORIGINAL));
+
+      // `.resolves` (not `.rejects`): a throw here is the regression itself,
+      // because it bypasses every `result.ok` branch in stitchRunner.
+      const result = await run(video, assetDir);
+      expect(result.ok).toBe(false);
+      // The reason is the helper's, passed straight through — the errno text
+      // itself is platform-specific (EPERM on Windows, ENOENT here).
+      expect(result.reason).toMatch(new RegExp(`^Failed to install ${label} video: `));
+
+      // ffmpeg really ran — this is the install failing, not an early bail.
+      expect(spawnCalls).toHaveLength(1);
+      // The episode the caller keeps is byte-identical to what it handed in.
+      expect(await readFile(video, 'utf8')).toBe(ORIGINAL);
+      // No `.muxing.` / `.vomux.` / `.cuemux.` / `.silent.` sibling stranded in
+      // the videos directory, and no rolled-back `.bak` either.
+      expect(await readdir(dir)).toEqual(['episode.mp4']);
+    });
+  }
 });

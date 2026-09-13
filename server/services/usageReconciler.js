@@ -53,9 +53,12 @@ import {
   parseAgyHistory,
   parseGrokChatHistory,
   parseGrokTurns,
+  parseKimiSessionIndex,
+  parseKimiWireLog,
   totalTranscriptTokens
 } from '../lib/providerTranscriptUsage.js';
 import { familyForProvider } from '../lib/providerFamilies.js';
+import { commandBasename } from '../lib/providerModels.js';
 import { markUsageRunReconciled, recordRunUsage } from './usage.js';
 
 // Widen the correlation window past the recorded run bounds: the CLI writes its
@@ -161,6 +164,7 @@ const GROK_ID = /grok/i;
 // `agy` is a three-letter binary name, so it needs word boundaries or it would
 // match inside an unrelated id; `antigravity` is the long form of the same CLI.
 const AGY_ID = /(^|[^a-z0-9])agy([^a-z0-9]|$)|antigravity/i;
+const KIMI_ID = /kimi/i;
 
 /**
  * Which model id to record for a measured bucket.
@@ -212,9 +216,27 @@ function attributedModel(recordedModel, transcriptModel, singleModel) {
  *
  * The ids match `lib/providerFamilies.js`'s family ids on purpose: a sibling
  * session found in a run's workspace is mapped back to an enabled provider
- * through `familyForProvider`, so the two vocabularies have to agree.
+ * through `familyForProvider`, so the two vocabularies have to agree — with
+ * one exception, documented at `resolveFamilyProvider`: `kimi` has no
+ * subscription plan for `familyForProvider` to know about, so it is resolved
+ * there through a small local matcher instead.
+ *
+ * `cursor` is deliberately absent — #6045 gated both `cursor` and `kimi` on
+ * "only if a durable cwd-keyed session store is found", and Cursor CLI
+ * 2026.09.10 has none: `~/.cursor/chats/<hash>/<chatId>/meta.json` is
+ * cwd-keyed but carries only `{ cwd, createdAtMs, updatedAtMs,
+ * hasConversation }` — no per-turn token counts or message text anywhere;
+ * `~/.cursor/ai-tracking/*.db` tracks AI-vs-human code-line attribution for
+ * commit scoring, not token usage. A nested `--review-with cursor` pass still
+ * falls back to the chars/4 estimate. Re-check on a Cursor CLI upgrade that
+ * adds transcript persistence.
+ *
+ * `kimi` IS present — Kimi Code CLI 0.42.0 writes real per-call billed usage
+ * to `~/.kimi-code/sessions/.../agents/<id>/wire.jsonl` (`usage.record`
+ * lines); see the Kimi section of `providerTranscriptUsage.js` for the full
+ * shape and how it was confirmed.
  * @param {{ providerId?: string|null, command?: string|null }} run
- * @returns {'claude'|'codex'|'grok'|'agy'|null}
+ * @returns {'claude'|'codex'|'grok'|'agy'|'kimi'|null}
  */
 export function transcriptFamily({ providerId = null, command = null } = {}) {
   const haystack = `${providerId || ''} ${command || ''}`;
@@ -224,12 +246,13 @@ export function transcriptFamily({ providerId = null, command = null } = {}) {
   if (CODEX_ID.test(haystack)) return 'codex';
   if (GROK_ID.test(haystack)) return 'grok';
   if (AGY_ID.test(haystack)) return 'agy';
+  if (KIMI_ID.test(haystack)) return 'kimi';
   if (CLAUDE_ID.test(haystack)) return 'claude';
   return null;
 }
 
 /** Every family whose CLI writes a readable session store. */
-export const TRANSCRIPT_FAMILIES = ['claude', 'codex', 'grok', 'agy'];
+export const TRANSCRIPT_FAMILIES = ['claude', 'codex', 'grok', 'agy', 'kimi'];
 
 /** `reconcileRunUsage` returns one record or several — normalize to a list. */
 const asRecordList = (records) => (Array.isArray(records) ? records : [records]);
@@ -288,7 +311,7 @@ function codexDateDirs(root, fromMs, toMs) {
  * @param {string} run.workspacePath cwd the run executed in
  * @param {string|null} run.startTime ISO
  * @param {string|null} run.endTime ISO
- * @param {'claude'|'codex'|'grok'|'agy'} run.family
+ * @param {'claude'|'codex'|'grok'|'agy'|'kimi'} run.family
  * @param {string} [run.home] override for tests
  * @returns {Promise<null|{ source: 'measured'|'estimate'|'mixed', family: string,
  *   sessions: number, model: string|null, messages: number, tokensIn: number,
@@ -485,6 +508,27 @@ export async function readMeasuredUsage({ workspacePath, startTime, endTime, fam
       // lets the caller attribute it to the provider's own configured model.
       fold({ ...estimated, models: [], byModel: { [UNKNOWN_MODEL]: { ...estimated } } }, 'estimate');
     }
+  } else if (family === 'kimi') {
+    // `~/.kimi-code/session_index.jsonl` is a single GLOBAL, append-only index
+    // of every session ever created on this machine — filter by exact `workDir`
+    // rather than trying to decode `sessions/wd_<basename>_<hash>/`, whose hash
+    // suffix is undocumented.
+    const indexText = await tryReadFile(join(home, '.kimi-code', 'session_index.jsonl'));
+    for (const session of indexText ? parseKimiSessionIndex(indexText) : []) {
+      if (!cwdMatches(session.workDir, workspacePath)) continue;
+      // Real usage lives per-AGENT, not per-session: a subagent's own spend is
+      // in its own `agents/<subAgentId>/wire.jsonl`, never the parent's (see the
+      // Kimi section of `providerTranscriptUsage.js`) — sum every agent dir.
+      const agentsRoot = join(session.sessionDir, 'agents');
+      for (const agentId of await listSubdirs(agentsRoot)) {
+        const wirePath = join(agentsRoot, agentId, 'wire.jsonl');
+        const text = await tryReadFile(wirePath);
+        if (!text) continue;
+        const parsed = parseKimiWireLog(text, { from, to, exclude: excludeFor(wirePath) });
+        reserveFrom(wirePath, parsed);
+        fold(parsed);
+      }
+    }
   } else {
     const sessionsRoot = join(home, '.codex', 'sessions');
     for (const dir of codexDateDirs(sessionsRoot, from ?? Date.now(), to ?? from ?? Date.now())) {
@@ -623,6 +667,18 @@ function recordsFromMeasured(providerId, recordedModel, measured, role) {
   }];
 }
 
+// `lib/providerFamilies.js` deliberately excludes `kimi` from PROVIDER_FAMILIES
+// (see that file's docblock) because Kimi Code has no subscription plan and no
+// `/usage` panel for `providerUsage.js` to scrape — `familyForProvider` can
+// therefore never return `'kimi'`. This is a TRANSCRIPT family, not a
+// subscription-quota one, so it is matched here directly instead: mirrors the
+// `commandBasename`/id-regex shape `providerFamilies.js` uses for every other
+// family, without adding a `kimi` entry to the quota-scraping FAMILY_FETCHERS
+// registry that array drives.
+const matchesKimiProvider = (provider) => (
+  commandBasename(provider?.command) === 'kimi' || KIMI_ID.test(provider?.id || '')
+);
+
 /**
  * The enabled provider a sibling family's sessions should be billed to, or null
  * when this install has none configured for that family.
@@ -640,8 +696,11 @@ function recordsFromMeasured(providerId, recordedModel, measured, role) {
  * @param {object} measured the `readMeasuredUsage` result, for its model names
  */
 export function resolveFamilyProvider(providers, family, measured = null) {
+  const matchesFamily = family === 'kimi'
+    ? matchesKimiProvider
+    : (provider) => familyForProvider(provider) === family;
   const candidates = (providers || []).filter((provider) => (
-    provider?.enabled !== false && familyForProvider(provider) === family
+    provider?.enabled !== false && matchesFamily(provider)
   ));
   const byType = (type) => candidates.filter((provider) => provider.type === type);
   const pool = byType('cli').length ? byType('cli') : byType('tui');

@@ -352,6 +352,37 @@ describe('PullRequestsTab', () => {
     expect(await screen.findByRole('link', { name: /PR review: Queued/ })).toBeInTheDocument();
   });
 
+  // #7258: the preflight card is the programmatic phase of this row's run, and
+  // it COMPLETES the moment the review agent task is created. Reading that as
+  // the row's own completion would freeze it at "Completed" and ignore every
+  // later update, because a row binds to one task id for good.
+  it('follows a finished preflight card onto the review task it started', async () => {
+    await renderTab();
+    fireEvent.click(await screen.findByRole('button', { name: /PR review/ }));
+    await screen.findByRole('link', { name: /PR review: Queued/ });
+    act(() => socketHandlers.get('cos:tasks:changed')({ task: {
+      id: 'preflight-demand-1', status: 'in_progress',
+      metadata: { app: 'app-1', analysisType: 'pr-reviewer', targetPullRequest: 17,
+        preflight: { phase: 'preparing', steps: [] } },
+    } }));
+    expect(await screen.findByRole('link', { name: /PR review: Active/ })).toBeInTheDocument();
+
+    act(() => socketHandlers.get('cos:tasks:changed')({ task: {
+      id: 'preflight-demand-1', status: 'completed',
+      metadata: { app: 'app-1', analysisType: 'pr-reviewer', targetPullRequest: 17,
+        preflightResultTaskId: 'app-improve-17',
+        preflight: { phase: 'done', outcome: 'handed-off', steps: [] } },
+    } }));
+    expect(await screen.findByRole('link', { name: /PR review: Active/ })).toBeInTheDocument();
+
+    act(() => socketHandlers.get('cos:tasks:changed')({ task: {
+      id: 'app-improve-17', status: 'completed',
+      metadata: { app: 'app-1', analysisType: 'pr-reviewer', targetPullRequest: 17 },
+    } }));
+    expect(await screen.findByRole('link', { name: /PR review: Completed/ }))
+      .toHaveAttribute('href', '/cos/tasks?task=app-improve-17&source=internal');
+  });
+
   it('names a failed resolve retry as a merge action and retries that same action', async () => {
     api.getAppPullRequests.mockResolvedValue(okPayload([{
       ...PULL_REQUEST,

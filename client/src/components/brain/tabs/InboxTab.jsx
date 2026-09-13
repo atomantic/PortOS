@@ -623,7 +623,7 @@ export default function InboxTab({ onRefresh, settings }) {
 
         {/* Error entries */}
         {errorEntries.length > 0 && (
-          <div className="mb-4">
+          <div role="status" className="mb-4">
             <div className="text-port-error font-medium mb-2 flex items-center gap-2">
               <AlertCircle size={16} />
               Errors ({errorEntries.length})

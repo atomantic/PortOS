@@ -53,6 +53,7 @@ vi.mock('./persistentMindCallCapability.js', () => ({
   executePersistentMindCallRequest: (...args) => mock.executeCallRequest(...args),
 }));
 vi.mock('./cosToolRegistry.js', () => ({
+  readPersistentMindRecipeCatalog: vi.fn(async () => []),
   buildPersistentMindToolPrompt: ({ readPortos, writePortos }) => `PortOS tools: read=${Boolean(readPortos)} write=${Boolean(writePortos)}`,
   executeCosToolCall: (...args) => mock.executeToolCall(...args),
   isCosTaskToolName: (name) => name === 'cos.create-task' || name === 'cos_create_task',

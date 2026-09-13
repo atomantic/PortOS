@@ -321,18 +321,19 @@ const blockingFinding = (category, reason) => ({
 const MODEL_TARGET_RE = /\b(?:agents?|assistants?|models?|llms?|ai|claude|codex|copilot|gemini|gpt|grok|reviewers?|bots?)\b/i;
 
 /**
- * Code points that render as nothing, reorder what a human sees, or smuggle
- * ASCII inside otherwise-invisible characters — a contributor cannot type these
+ * Code points a reader never sees. Each of these renders as nothing (or as
+ * nothing more than the character before it), so no human puts one in a diff
  * by accident, and every one of them reaches a model's tokenizer:
  * zero-width spaces/joiners and bidi marks (U+200B–U+200F), bidi embedding /
  * override controls (U+202A–U+202E, U+2066–U+2069 — "Trojan Source"), word
  * joiner and invisible operators (U+2060–U+2064), line/paragraph separators
  * (U+2028, U+2029), the BOM as a mid-text character (U+FEFF), Mongolian vowel
  * separator and Hangul fillers (U+180E, U+115F, U+1160, U+3164, U+FFA0), the
- * Unicode tag block used for ASCII smuggling (U+E0000–U+E007F), and the
- * variation-selector supplement (U+E0100–U+E01EF).
+ * Unicode tag block used for ASCII smuggling (U+E0000–U+E007F), and BOTH
+ * variation-selector blocks (U+FE00–U+FE0F and U+E0100–U+E01EF), which encode
+ * a byte apiece in the selector-smuggling attack.
  */
-const HIDDEN_CODEPOINT_RE = /[\u115F\u1160\u180E\u200B-\u200F\u2028\u2029\u202A-\u202E\u2060-\u2064\u2066-\u2069\u3164\uFEFF\uFFA0\u{E0000}-\u{E007F}\u{E0100}-\u{E01EF}]/gu;
+const HIDDEN_CODEPOINT_RE = /[\u115F\u1160\u180E\u200B-\u200F\u2028\u2029\u202A-\u202E\u2060-\u2064\u2066-\u2069\u3164\uFE00-\uFE0F\uFEFF\uFFA0\u{E0000}-\u{E007F}\u{E0100}-\u{E01EF}]/gu;
 
 // Emoji ZWJ sequences (family and flag emoji) legitimately contain U+200D; strip them
 // before the hidden-code-point scan so an emoji-rich changelog is not a finding.
@@ -349,15 +350,139 @@ const joinerInsideEmoji = (value, index) => {
   return [...around.matchAll(EMOJI_ZWJ_SEQUENCE_RE)].some((m) => m.index <= offset && offset < m.index + m[0].length);
 };
 
-function hiddenCodePointSummary(value) {
+const VARIATION_SELECTOR_RE = /[\uFE00-\uFE0F\u{E0100}-\u{E01EF}]/u;
+const EMOJI_PRESENTATION_SELECTORS = new Set(['\uFE0E', '\uFE0F']);
+const PICTOGRAPHIC_RE = /\p{Extended_Pictographic}/u;
+
+// A keycap ("1" + U+FE0F + U+20E3) is the one sequence where the selector
+// follows an ordinary digit or symbol rather than a pictograph.
+const KEYCAP = '\u20E3';
+
+/**
+ * Whether the variation selector at `index` is the ordinary emoji-presentation
+ * one: U+FE0E/U+FE0F directly after a pictographic character, and not itself
+ * followed by another selector.
+ *
+ * That narrow carve-out is what keeps an ordinary warning emoji out of the
+ * findings — it is written as a pictograph plus one selector. The smuggling
+ * shape stays a finding, because it encodes a byte per selector and CHAINS
+ * them after one visible character — so a run of two is already the signature.
+ * The 240 selectors of the supplement (U+E0100+) carry no emoji meaning at all
+ * and are never exempt.
+ */
+const isEmojiPresentationSelector = (value, index) => {
+  if (!EMOJI_PRESENTATION_SELECTORS.has(value[index])) return false;
+  if (VARIATION_SELECTOR_RE.test(value.slice(index + 1, index + 3))) return false;
+  if (value[index + 1] === KEYCAP) return true;
+  return PICTOGRAPHIC_RE.test(value.slice(Math.max(0, index - 2), index));
+};
+
+// Density thresholds for the invisible characters the rules above EXEMPT:
+// an emoji presentation selector or a joiner inside an emoji sequence. One
+// of those is ordinary text; a cluster of them is a channel, because each
+// selector can carry a bit or a byte. No line in this repository holds more
+// than three, so six inside one window is far outside normal use.
+const INVISIBLE_CLUSTER_COUNT = 6;
+const INVISIBLE_CLUSTER_WINDOW = 200;
+
+/**
+ * Describe a cluster of invisible code points, or return null.
+ *
+ * This is the backstop for the exemptions: a payload built ONLY out of
+ * sequences each of which is individually legitimate still shows up as an
+ * implausible concentration. Counts every invisible code point, exempt or
+ * not, and only positions are held — never a copy of the input.
+ */
+export function invisibleClusterSummary(value) {
+  if (typeof value !== 'string' || !value) return null;
+  const positions = [];
+  for (const match of value.matchAll(HIDDEN_CODEPOINT_RE)) positions.push(match.index);
+  for (let i = 0; i + INVISIBLE_CLUSTER_COUNT - 1 < positions.length; i += 1) {
+    const last = i + INVISIBLE_CLUSTER_COUNT - 1;
+    if (positions[last] - positions[i] <= INVISIBLE_CLUSTER_WINDOW) {
+      return `${positions.length} invisible code points, ${INVISIBLE_CLUSTER_COUNT} of them within ${INVISIBLE_CLUSTER_WINDOW} characters`;
+    }
+  }
+  return null;
+}
+
+export function hiddenCodePointSummary(value) {
   const counts = new Map();
   for (const match of value.matchAll(HIDDEN_CODEPOINT_RE)) {
     if (match[0] === ZERO_WIDTH_JOINER && joinerInsideEmoji(value, match.index)) continue;
+    if (isEmojiPresentationSelector(value, match.index)) continue;
     const key = formatCodePoint(match[0]);
     counts.set(key, (counts.get(key) || 0) + 1);
   }
   if (counts.size === 0) return null;
   return [...counts.entries()].map(([key, count]) => (count > 1 ? `${key} ×${count}` : key)).join(', ');
+}
+
+// One pass, one alphabet. Base64url (`-`/`_`) is in the class too, so the
+// same sniff catches a payload encoded to dodge the standard alphabet, and a
+// run short enough to hold nothing (under 32 characters) is not a candidate
+// at all — every run examined is another chance for a random hash to collide
+// with a signature. Only the head of a run is captured, so a megabyte-long
+// blob costs 32 characters of memory rather than a copy of itself.
+const ENCODED_RUN_RE = /([A-Za-z0-9+/_-]{32})([A-Za-z0-9+/_-]*)={0,2}/g;
+const HEX_RUN_RE = /^[0-9a-fA-F]+$/;
+// Long enough that nobody reads it as content. A lockfile integrity hash is
+// 88 base64 characters and a sha512 is 128 hex, so the machine-generated
+// strings an ordinary diff carries clear this bar by a wide margin.
+const OPAQUE_RUN_CHARS = 200;
+
+/**
+ * Magic numbers for container formats that hide their payload from the person
+ * reading the diff: compressed archives and native executables.
+ *
+ * Every signature here is at least three bytes. A two-byte one (`MZ`, or a
+ * zlib header, which is only "low nibble 8 and divisible by 31") collides with
+ * a random commit sha often enough to matter — a diff carries hundreds of
+ * hashes, and a false block is a broken merge. Real compressed payloads are
+ * long, so the opaque-run rule catches the headerless ones anyway.
+ */
+const BINARY_MAGIC = [
+  // Third byte is the compression method: deflate, in every gzip in practice.
+  { label: 'gzip', bytes: [0x1f, 0x8b, 0x08] },
+  { label: 'zip', bytes: [0x50, 0x4b, 0x03, 0x04] },
+  { label: 'bzip2', bytes: [0x42, 0x5a, 0x68] },
+  { label: 'xz', bytes: [0xfd, 0x37, 0x7a, 0x58, 0x5a, 0x00] },
+  { label: 'zstd', bytes: [0x28, 0xb5, 0x2f, 0xfd] },
+  { label: '7z', bytes: [0x37, 0x7a, 0xbc, 0xaf, 0x27, 0x1c] },
+  { label: 'ELF executable', bytes: [0x7f, 0x45, 0x4c, 0x46] },
+  { label: 'Mach-O executable', bytes: [0xcf, 0xfa, 0xed, 0xfe] },
+  { label: 'Java class', bytes: [0xca, 0xfe, 0xba, 0xbe] },
+];
+
+const describeMagic = (bytes) => BINARY_MAGIC
+  .find((magic) => magic.bytes.every((byte, index) => bytes[index] === byte))?.label || null;
+
+/**
+ * Name the encoded-payload problem in one clause, or return null.
+ *
+ * A decoded signature is reported ahead of a long opaque run: "this is a gzip
+ * member" tells a reviewer what to do, "this is 200 opaque characters" only
+ * tells them to look. Both readings come from one walk of the candidate runs,
+ * because an unanchored 200-character quantifier re-tries at every offset and
+ * costs half a second on a 2MB diff all by itself.
+ */
+export function describeEncodedPayload(value) {
+  if (typeof value !== 'string' || !value) return null;
+  let opaque = null;
+  for (const match of value.matchAll(ENCODED_RUN_RE)) {
+    const head = match[1];
+    // Hex is a subset of the base64 alphabet, so one run can be both: read it
+    // as hex only when the whole head is hex digits.
+    const encoding = HEX_RUN_RE.test(head) ? 'hex' : 'base64';
+    const label = describeMagic(encoding === 'hex'
+      ? Buffer.from(head.slice(0, 12), 'hex')
+      : Buffer.from(head.slice(0, 8), 'base64'));
+    if (label) return `embeds ${label} data as ${encoding}, so the bytes a reviewer reads are not the bytes that run`;
+    if (!opaque && head.length + match[2].length >= OPAQUE_RUN_CHARS) {
+      opaque = `carries an opaque encoded run of ${OPAQUE_RUN_CHARS}+ characters that no reviewer can read`;
+    }
+  }
+  return opaque;
 }
 
 // Comment syntaxes GitHub renders as nothing: HTML comments (body bounded so
@@ -459,14 +584,31 @@ const VISIBLE_TEXT_RULES = [
  * merely mentions "payload" in one hunk and "agent" in another is not a
  * finding. Findings carry generic explanations and never quote the source
  * text, so a finding cannot become another injection channel when displayed.
+ *
+ * `source` scopes the encoded-payload rule to content that is supposed to be
+ * readable code (a pull request, an issue). A private message legitimately
+ * carries base64 — an inline attachment, a data: URI — and blocking one as
+ * model abuse would be wrong about both the content and the threat.
  */
-export function detectDeterministicModelAbuseSignals(value) {
+export const CODE_CONTENT_SOURCES = Object.freeze(['github-pr', 'github-issue']);
+
+export function detectDeterministicModelAbuseSignals(value, { source = null } = {}) {
   if (typeof value !== 'string' || !value) return [];
   const findings = [];
 
   const hidden = hiddenCodePointSummary(value);
   if (hidden) {
     findings.push(blockingFinding('hidden-unicode', `Content contains invisible or direction-control Unicode (${hidden}) that a human reader would not see but a model would read.`));
+  }
+
+  const cluster = hidden ? null : invisibleClusterSummary(value);
+  if (cluster) {
+    findings.push(blockingFinding('hidden-unicode-cluster', `Content concentrates invisible characters (${cluster}) densely enough to carry data no reader sees.`));
+  }
+
+  const encoded = CODE_CONTENT_SOURCES.includes(source) ? describeEncodedPayload(value) : null;
+  if (encoded) {
+    findings.push(blockingFinding('encoded-payload', `Content ${encoded}.`));
   }
 
   const hiddenComment = [...value.matchAll(HIDDEN_COMMENT_RE)].some((match) => {

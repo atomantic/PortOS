@@ -81,14 +81,14 @@ describe('ArcContent draft flush registration', () => {
     expect(updatePipelineSeries).not.toHaveBeenCalled();
   });
 
-  it('reports no save (and keeps the editor open) when the PATCH rejects', async () => {
+  it('reports failed save (and keeps the editor open) when the PATCH rejects', async () => {
     updatePipelineSeries.mockRejectedValue(new Error('boom'));
     const { registered } = renderWithRegistry();
     openEditorAndType('New logline');
 
     let did;
     await act(async () => { did = await registered.fn(); });
-    expect(did).toBe(false);
+    expect(did).toBe(null);
     expect(toastMock.error).toHaveBeenCalled();
     // Editor stays open so the unsaved text is still on screen and recoverable.
     expect(screen.getByPlaceholderText('One-sentence whole-arc pitch')).toBeTruthy();
@@ -103,5 +103,42 @@ describe('ArcContent draft flush registration', () => {
     expect(registered.fn).toBeTypeOf('function');
     unmount();
     expect(registered.fn).toBe(null);
+  });
+});
+
+
+describe('Series design authoring', () => {
+  it('authors a brief before an arc exists and flushes it', async () => {
+    const { registered } = renderWithRegistry({ series: { id: 'new', arc: null } });
+    fireEvent.click(screen.getByRole('button', { name: 'Add series design' }));
+    fireEvent.change(screen.getByLabelText('Story intent'), { target: { value: 'finite' } });
+    fireEvent.change(screen.getByLabelText('Ending condition'), { target: { value: 'Solve the central case.' } });
+    expect(updatePipelineSeries).not.toHaveBeenCalled();
+    await act(async () => { await registered.fn(); });
+    expect(updatePipelineSeries).toHaveBeenCalledWith('new', { arc: { seriesDesign: { mode: 'finite', endingCondition: 'Solve the central case.' } } }, { silent: true });
+  });
+
+  it('keeps a failed brief draft available', async () => {
+    updatePipelineSeries.mockRejectedValue(new Error('offline'));
+    const { registered } = renderWithRegistry();
+    fireEvent.click(screen.getByText('Edit arc'));
+    fireEvent.change(screen.getByLabelText('Story intent'), { target: { value: 'renewable' } });
+    await act(async () => { expect(await registered.fn()).toBe(null); });
+    expect(screen.getByLabelText('Story intent').value).toBe('renewable');
+    fireEvent.click(screen.getByText('Cancel'));
+  });
+
+  it('clears a saved brief explicitly', async () => {
+    const { registered } = renderWithRegistry({ series: { ...SERIES, arc: { ...SERIES.arc, seriesDesign: { mode: 'renewable' } } } });
+    fireEvent.click(screen.getByText('Edit arc'));
+    const selectors = screen.getAllByLabelText('Story intent');
+    fireEvent.change(selectors[0], { target: { value: '' } });
+    await act(async () => { await registered.fn(); });
+    expect(updatePipelineSeries.mock.calls[0][1].arc.seriesDesign).toBe(null);
+  });
+
+  it('disables authoring when the arc is locked', () => {
+    renderWithRegistry({ series: { ...SERIES, locked: { arc: true } } });
+    expect(screen.getByText('Edit arc').disabled).toBe(true);
   });
 });

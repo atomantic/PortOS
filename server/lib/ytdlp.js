@@ -22,3 +22,13 @@ export const findYtDlp = async () => {
   cachedYtDlpPath = await whichFirst('yt-dlp');
   return cachedYtDlpPath;
 };
+
+/**
+ * Forget the resolved path so the next `findYtDlp()` probes disk again.
+ *
+ * An in-place update can relink the keg under a different prefix, and an
+ * install performed while the server is running has to become visible without a
+ * restart — both would otherwise keep serving the cached answer (including the
+ * cached `null` from before the install).
+ */
+export const resetYtDlpCache = () => { cachedYtDlpPath = undefined; };

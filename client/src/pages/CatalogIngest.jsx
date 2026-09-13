@@ -643,7 +643,7 @@ export default function CatalogIngest() {
                   {Number.isFinite(s.count) && s.count > 0 && (
                     <span className="text-xs text-gray-500">({s.count})</span>
                   )}
-                  {s.error && <span className="text-xs text-port-error">— {s.error}</span>}
+                  {s.error && <span role="status" className="text-xs text-port-error">— {s.error}</span>}
                 </li>
               ))}
             </ul>

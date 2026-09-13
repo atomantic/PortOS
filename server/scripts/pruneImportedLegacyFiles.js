@@ -90,6 +90,28 @@ const MARKER_FILENAME = 'legacy-prune.applied.json';
 // absent file, which legitimately yields no ids.)
 class ParkedArtifactUnreadable extends Error {}
 
+// Directory and stat probes participate in the same fail-closed contract as
+// parked JSON reads. ENOENT is the only result that proves an artifact is
+// absent; every other filesystem error leaves its domain unverifiable.
+async function readParkedDir(base, dir) {
+  try {
+    return await readdir(join(base, dir), { withFileTypes: true });
+  } catch (err) {
+    if (err.code === 'ENOENT') return [];
+    throw new ParkedArtifactUnreadable(`${dir}: ${err.message}`);
+  }
+}
+
+async function parkedPathExists(base, rel) {
+  try {
+    await stat(join(base, rel));
+    return true;
+  } catch (err) {
+    if (err.code === 'ENOENT') return false;
+    throw new ParkedArtifactUnreadable(`${rel}: ${err.message}`);
+  }
+}
+
 // Read a parked JSON artifact. Returns null when ABSENT; throws
 // ParkedArtifactUnreadable when present-but-unreadable/unparseable — so a
 // corrupt recovery file blocks its domain instead of being mistaken for empty.
@@ -118,12 +140,12 @@ async function readParkedJson(base, file) {
 // `leaf` defaults to the live record file; pass `index.json.imported` for the
 // in-place rename layout (pipeline-series) and a missing leaf is skipped there.
 async function idsFromRecordDirs(base, dir, { leaf = 'index.json', requireLeaf = false } = {}) {
-  const entries = await readdir(join(base, dir), { withFileTypes: true }).catch(() => []);
+  const entries = await readParkedDir(base, dir);
   const ids = [];
   for (const entry of entries) {
     if (!entry.isDirectory() || entry.name === 'index.json' || entry.name.startsWith('.')) continue;
     const rel = join(dir, entry.name, leaf);
-    if (requireLeaf && !await pathExists(join(base, rel))) continue; // unrelated sibling dir
+    if (requireLeaf && !await parkedPathExists(base, rel)) continue; // unrelated sibling dir
     const record = await readParkedJson(base, rel);
     if (record === null) {
       if (requireLeaf) continue; // leaf vanished between listing and read — skip
@@ -175,7 +197,7 @@ async function universeRunIds(base) {
 // A present-but-corrupt manifest, or one with an id-less work / draft, throws.
 async function writersRoomManifestIds(base) {
   const worksDir = 'writers-room/works';
-  const subdirs = await readdir(join(base, worksDir), { withFileTypes: true }).catch(() => []);
+  const subdirs = await readParkedDir(base, worksDir);
   const workIds = [];
   const draftIds = [];
   for (const entry of subdirs) {
@@ -206,21 +228,20 @@ async function writersRoomManifestIds(base) {
 // (pipeline-series/writers-room) keep their dir, so we look for the specific
 // un-renamed legacy file.
 async function pipelineSeriesPending(base) {
-  const entries = await readdir(join(base, 'pipeline-series'), { withFileTypes: true }).catch(() => []);
+  const entries = await readParkedDir(base, 'pipeline-series');
   for (const e of entries) {
     if (!e.isDirectory()) continue;
-    const live = join(base, 'pipeline-series', e.name, 'index.json');
-    const parked = join(base, 'pipeline-series', e.name, 'index.json.imported');
-    if (await pathExists(live) && !await pathExists(parked)) return true;
+    if (await parkedPathExists(base, join('pipeline-series', e.name, 'index.json')) &&
+        !await parkedPathExists(base, join('pipeline-series', e.name, 'index.json.imported'))) return true;
   }
   return false;
 }
 async function writersRoomPending(base) {
-  if (await pathExists(join(base, 'writers-room/folders.json'))) return true;
-  if (await pathExists(join(base, 'writers-room/exercises.json'))) return true;
-  const works = await readdir(join(base, 'writers-room/works'), { withFileTypes: true }).catch(() => []);
+  if (await parkedPathExists(base, 'writers-room/folders.json')) return true;
+  if (await parkedPathExists(base, 'writers-room/exercises.json')) return true;
+  const works = await readParkedDir(base, 'writers-room/works');
   for (const e of works) {
-    if (e.isDirectory() && await pathExists(join(base, 'writers-room/works', e.name, 'manifest.json'))) return true;
+    if (e.isDirectory() && await parkedPathExists(base, join('writers-room/works', e.name, 'manifest.json'))) return true;
   }
   return false;
 }
@@ -241,7 +262,7 @@ const DB_DOMAINS = [
       { table: 'universes', ids: await idsFromRecordDirs(base, 'universes.imported') },
       { table: 'universe_runs', ids: await universeRunIds(base) },
     ],
-    pending: (base) => pathExists(join(base, 'universes')),
+    pending: (base) => parkedPathExists(base, 'universes'),
     artifacts: ['universes.imported'],
   },
   {
@@ -250,7 +271,7 @@ const DB_DOMAINS = [
     verify: async (base) => [
       { table: 'pipeline_issues', ids: await idsFromRecordDirs(base, 'pipeline-issues.imported') },
     ],
-    pending: (base) => pathExists(join(base, 'pipeline-issues')),
+    pending: (base) => parkedPathExists(base, 'pipeline-issues'),
     artifacts: ['pipeline-issues.imported'],
   },
   {
@@ -272,7 +293,7 @@ const DB_DOMAINS = [
     verify: async (base) => [
       { table: 'story_builder_sessions', ids: await idsFromRecordDirs(base, 'story-builder.imported') },
     ],
-    pending: (base) => pathExists(join(base, 'story-builder')),
+    pending: (base) => parkedPathExists(base, 'story-builder'),
     artifacts: ['story-builder.imported'],
   },
   {
@@ -299,14 +320,10 @@ const DB_DOMAINS = [
     verify: async (base) => [
       { table: 'creative_director_projects', ids: await idsFromJsonArray(base, 'creative-director-projects.json.imported') },
     ],
-    pending: (base) => pathExists(join(base, 'creative-director-projects.json')),
+    pending: (base) => parkedPathExists(base, 'creative-director-projects.json'),
     artifacts: ['creative-director-projects.json.imported'],
   },
 ];
-
-async function pathExists(p) {
-  return stat(p).then(() => true, () => false);
-}
 
 async function readJson(base, file) {
   const raw = await tryReadFile(join(base, file));
@@ -323,24 +340,30 @@ async function missingIds(query, table, ids) {
   return ids.filter((id) => !present.has(id));
 }
 
-// Remove a path (file or dir) under `base`. force:true → no throw if absent.
-// Returns true if the path existed before removal (so we can report a count).
-async function removeUnder(base, rel) {
-  const abs = join(base, rel);
-  const existed = await pathExists(abs);
-  if (existed) await rm(abs, { recursive: true, force: true });
-  return existed;
+// Resolve every artifact a domain will remove before deleting any of them. This
+// makes a nested-directory enumeration failure block the whole domain without
+// partially pruning its top-level recovery files first.
+async function collectDomainArtifacts(base, domain) {
+  const artifacts = [];
+  for (const rel of domain.artifacts) {
+    if (await parkedPathExists(base, rel)) artifacts.push(rel);
+  }
+  for (const { baseDir, leaf } of (domain.nestedGlobs ?? [])) {
+    const entries = await readParkedDir(base, baseDir);
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue;
+      const rel = join(baseDir, entry.name, leaf);
+      if (await parkedPathExists(base, rel)) artifacts.push(rel);
+    }
+  }
+  return artifacts;
 }
 
-// Remove `<baseDir>/<sub>/<leaf>` for every immediate subdir of baseDir.
-async function removeNestedGlob(base, baseDir, leaf) {
-  const entries = await readdir(join(base, baseDir), { withFileTypes: true }).catch(() => []);
-  let removed = 0;
-  for (const entry of entries) {
-    if (!entry.isDirectory()) continue;
-    if (await removeUnder(base, join(baseDir, entry.name, leaf))) removed++;
+async function removeDomainArtifacts(base, artifacts) {
+  for (const entry of artifacts) {
+    await rm(join(base, entry), { recursive: true, force: true });
   }
-  return removed;
+  return artifacts.length;
 }
 
 /**
@@ -369,7 +392,16 @@ export async function pruneImportedLegacyFiles({ force = false, db, dataDir } = 
       // blocked so the global completion marker is withheld; otherwise a later
       // boot (after the source is repaired and finally parked) would skip the
       // prune forever via the applied marker.
-      if (await domain.pending(base)) {
+      let pending;
+      try {
+        pending = await domain.pending(base);
+      } catch (err) {
+        if (!(err instanceof ParkedArtifactUnreadable)) throw err;
+        console.warn(`🧹 legacy-prune: ${domain.label} pending state unreadable (${err.message}); withholding completion so a later boot retries`);
+        totals.blocked++;
+        continue;
+      }
+      if (pending) {
         console.warn(`🧹 legacy-prune: ${domain.label} pending — no migration marker but legacy source still on disk; withholding completion so a later boot prunes it`);
         totals.blocked++;
       }
@@ -405,13 +437,16 @@ export async function pruneImportedLegacyFiles({ force = false, db, dataDir } = 
       continue;
     }
 
-    let domainRemoved = 0;
-    for (const rel of domain.artifacts) {
-      if (await removeUnder(base, rel)) domainRemoved++;
+    let artifacts;
+    try {
+      artifacts = await collectDomainArtifacts(base, domain);
+    } catch (err) {
+      if (!(err instanceof ParkedArtifactUnreadable)) throw err;
+      console.warn(`🧹 legacy-prune: ${domain.label} cleanup blocked — recovery artifact enumeration failed (${err.message}); keeping recovery files`);
+      totals.blocked++;
+      continue;
     }
-    for (const glob of (domain.nestedGlobs ?? [])) {
-      domainRemoved += await removeNestedGlob(base, glob.baseDir, glob.leaf);
-    }
+    const domainRemoved = await removeDomainArtifacts(base, artifacts);
     if (domainRemoved > 0) {
       totals.removed += domainRemoved;
       totals.pruned.push(`${domain.label}(${domainRemoved})`);

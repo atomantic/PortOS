@@ -138,11 +138,13 @@ export default function MediaModels() {
   useEffect(() => {
     if (textEncoderDownloads.downloading) {
       wasDownloadingTextEncoder.current = true;
-      return;
+      return undefined;
     }
-    if (!wasDownloadingTextEncoder.current) return;
+    if (!wasDownloadingTextEncoder.current) return undefined;
     wasDownloadingTextEncoder.current = false;
-    listCachedModels({ silent: true }).then(setData).catch(() => {});
+    let active = true;
+    listCachedModels({ silent: true }).then((d) => { if (active) setData(d); }).catch(() => {});
+    return () => { active = false; };
   }, [textEncoderDownloads.downloading]);
 
   const handleDeleteModel = async (id) => {
@@ -531,7 +533,7 @@ export default function MediaModels() {
             </button>
           </div>
           {addError && (
-            <p className="text-xs text-port-error flex items-start gap-1">
+            <p role="alert" className="text-xs text-port-error flex items-start gap-1">
               <AlertTriangle className="w-3 h-3 mt-0.5 shrink-0" /> {addError}
             </p>
           )}

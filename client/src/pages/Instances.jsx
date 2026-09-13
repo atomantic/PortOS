@@ -1515,15 +1515,16 @@ function InstancesContent() {
     // are independent of peer state, and fetching them sequentially added
     // ~100-500ms to first paint on machines where `tailscale status --json`
     // is slow to respond.
+    let active = true;
     Promise.all([
       fetchData(),
-      getTailnetInfo().then(setTailnetInfo).catch(() => setTailnetInfo(null)),
-      getNetworkExposure({ silent: true }).then(setNetworkExposure).catch(() => setNetworkExposure(null)),
+      getTailnetInfo().then((info) => { if (active) setTailnetInfo(info); }).catch(() => { if (active) setTailnetInfo(null); }),
+      getNetworkExposure({ silent: true }).then((e) => { if (active) setNetworkExposure(e); }).catch(() => { if (active) setNetworkExposure(null); }),
       // Stored results only — the audit itself never runs on page load.
       getBrainParityReports({ silent: true })
-        .then((data) => setParityReports(data?.reports ?? {}))
-        .catch(() => setParityReports({}))
-    ]).finally(() => setLoading(false));
+        .then((data) => { if (active) setParityReports(data?.reports ?? {}); })
+        .catch(() => { if (active) setParityReports({}); })
+    ]).finally(() => { if (active) setLoading(false); });
 
     socket.emit('instances:subscribe');
     const handlePeersUpdated = (updatedPeers) => {
@@ -1537,6 +1538,7 @@ function InstancesContent() {
     // refetch all peers + syncStatus for a change that touches only one card.
 
     return () => {
+      active = false;
       socket.emit('instances:unsubscribe');
       socket.off('instances:peers:updated', handlePeersUpdated);
     };

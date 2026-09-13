@@ -124,7 +124,7 @@ export default function MidiVisualization({ url, filename, model }) {
             // Placeholder for the roll that is about to mount here, so it
             // carries the roll's own ROLL_BG rather than a theme token —
             // otherwise the panel changes color as the canvas swaps in.
-            <div
+            <div role="status"
               className={`flex items-center justify-center gap-2 rounded-lg text-xs ${status === 'error' ? 'text-port-error' : 'text-gray-400'}`}
               style={{ height: COMPACT_H, backgroundColor: ROLL_BG }}
             >

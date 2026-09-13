@@ -51,10 +51,12 @@ export default function PersonaMasterDetail({
   };
 
   useEffect(() => {
+    let active = true;
     listRecords({ silent: true })
-      .then((list) => setRecords(Array.isArray(list) ? list : []))
-      .catch((err) => toast.error(err.message || `Failed to load ${plural.toLowerCase()}`))
-      .finally(() => setLoading(false));
+      .then((list) => { if (active) setRecords(Array.isArray(list) ? list : []); })
+      .catch((err) => { if (active) toast.error(err.message || `Failed to load ${plural.toLowerCase()}`); })
+      .finally(() => { if (active) setLoading(false); });
+    return () => { active = false; };
   }, [listRecords, plural]);
 
   useEffect(() => {

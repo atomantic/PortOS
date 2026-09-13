@@ -6,7 +6,7 @@
  * + teleplay) and streams progress via SSE.
  */
 
-import { useEffect, useState, useMemo } from 'react';
+import { useEffect, useRef, useState, useMemo } from 'react';
 import { Link, useParams, useNavigate } from 'react-router';
 import {
   ArrowLeft, Sparkles, Loader2, X, Lightbulb, BookOpen, FileText, Film as FilmIcon,
@@ -87,6 +87,11 @@ const lockStageIdsForTab = (id) => {
 
 export default function PipelineIssue() {
   const { issueId, stage: stageParam } = useParams();
+  // Supersession token + live issue identity for the post-frame issue re-read.
+  // Assigned during render so the comparison always sees the CURRENT issue.
+  const issueRequestRef = useRef(0);
+  const issueIdRef = useRef(issueId);
+  issueIdRef.current = issueId;
   const navigate = useNavigate();
   // `comicPages` URL still routes (folded into the Comic Script tab below);
   // we redirect those to `comicScript` since the merged editor lives there.
@@ -135,7 +140,16 @@ export default function PipelineIssue() {
   useEffect(() => {
     if (!latest) return;
     if (latest.type === 'stage:complete' || latest.type === 'complete' || latest.type === 'error' || latest.type === 'canceled') {
-      getPipelineIssue(issueId).then(setIssue).catch(() => null);
+      // A request-generation ref, not a `let active` flag: `latest` is in this
+      // effect's own dependency array and every progress frame changes it, so a
+      // lifetime-scoped flag would be flipped by the next frame's cleanup and
+      // drop this read — with no replacement, since an ordinary progress frame
+      // starts none. Superseded only by a newer read or a different issue.
+      const req = ++issueRequestRef.current;
+      const forIssue = issueId;
+      getPipelineIssue(issueId)
+        .then((i) => { if (req === issueRequestRef.current && issueIdRef.current === forIssue) setIssue(i); })
+        .catch(() => null);
     }
     if (latest.type === 'complete' || latest.type === 'canceled' || latest.type === 'error') {
       setAutoRunActive(false);

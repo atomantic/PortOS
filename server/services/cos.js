@@ -159,7 +159,7 @@ import {
 // predicate are shared with the scheduler unit tests so they exercise the real
 // guards instead of a local replica. The async tiers stay here as
 // `spawnDequeuePriorityN(ctx)` helpers.
-import { createDequeueCapacity, countRunningAgentsByLocalEndpoint, isIdleTierEligible } from './cosDequeue.js';
+import { closeStolenIdleReviewCard, createDequeueCapacity, countRunningAgentsByLocalEndpoint, isIdleTierEligible } from './cosDequeue.js';
 import { buildLocalEndpointSlotContext, localEndpointCapacityError } from './cosLocalEndpointSlots.js';
 import {
   initializePersistentMindSupervisor,
@@ -795,8 +795,25 @@ async function resetOrphanedTasks({ bootRecovery = false } = {}) {
   // cooldown enforcement, and max-spawn limits (prevents runaway respawning)
   const { handleOrphanedTask } = await import('./agentManagement.js');
 
+  // A programmatic-phase card (services/preflightTaskCard.js) is `in_progress`
+  // with no agent BY DESIGN — it describes deterministic pre-agent work, has no
+  // prompt, and must never be handed to `handleOrphanedTask`, which would flip
+  // it to `pending` and spawn an agent on a task that is only a progress
+  // display. A card stranded by a restart is closed as interrupted instead, and
+  // one still inside its grace window is left alone: a pr-reviewer security
+  // scan is minutes of real work, and reaping a live preflight would make the
+  // card lie in the one direction that matters.
+  const { finishPreflightCard, isPreflightCard, isStalePreflightCard } = await import('./preflightTaskCard.js');
+
   const processOrphanedTasks = async (tasks) => {
     for (const task of tasks) {
+      if (isPreflightCard(task)) {
+        if (isStalePreflightCard(task)) {
+          emitLog('info', `Closing preflight card ${task.id} — no process is still running its checks`, { taskId: task.id });
+          await finishPreflightCard(task.id, { outcome: 'interrupted' });
+        }
+        continue;
+      }
       if (runningAgentTaskIds.includes(task.id)) {
         // A local agent is actively working this task — renew its federation
         // lease (the heartbeat, issue #1563) so a peer sharing this task list
@@ -1097,16 +1114,20 @@ async function spawnDequeuePriority3IdleReview(ctx) {
   const freshCosTasks = await getCosTasks();
   const pendingSystemTasks = freshCosTasks.autoApproved?.length || 0;
   if (pendingSystemTasks === 0) {
-    const { task: idleTask, pendingPerpetualDispatch } = await generateIdleReviewTask(state, { ignoreTaskId });
+    const { task: idleTask, pendingPerpetualDispatch, preflightCardId } = await generateIdleReviewTask(state, { ignoreTaskId });
     // Committed tier — `generateIdleReviewTask` has already bound the app-review
     // marker and advanced the 30-minute cooldown, and only `holdTask` releases
     // that marker, which requires the emit. A denial would leave the app reading
     // "in review" indefinitely (#978's mode). See canSpawnCommitted (#4834).
-    if (idleTask && capacity.canSpawnCommitted(idleTask, ctx.autonomousSpawnCeiling)) {
+    const admitted = idleTask && capacity.canSpawnCommitted(idleTask, ctx.autonomousSpawnCeiling);
+    if (admitted) {
       await recordDeferredPerpetualDispatch(pendingPerpetualDispatch, await import('./taskSchedule.js'));
       cosEvents.emit('task:ready', idleTask);
       capacity.trackSpawn(idleTask);
     }
+    // This tier may have STOLEN a human's on-demand request. Closing its card is
+    // the tier's job because only here is the admission decision final.
+    await closeStolenIdleReviewCard(preflightCardId, admitted ? idleTask : null);
   }
 }
 

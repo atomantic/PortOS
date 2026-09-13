@@ -1,10 +1,11 @@
 import { useState, useEffect, useCallback } from 'react';
-import { RefreshCw, AlertCircle, Trash2, TestTube, Calendar } from 'lucide-react';
+import { RefreshCw, AlertCircle, Trash2, TestTube, Calendar, CalendarDays } from 'lucide-react';
 import toast from '../ui/Toast';
 import { formatDateTime } from '../../utils/formatters';
 import * as api from '../../services/api';
 import socket from '../../services/socket';
 import { useAccountSyncStatus } from '../../hooks/useAccountSyncStatus';
+import EmptyState from '../EmptyState';
 
 export default function SyncTab({ accounts, onRefresh }) {
   const [tokenStatus, setTokenStatus] = useState(null);
@@ -73,7 +74,13 @@ export default function SyncTab({ accounts, onRefresh }) {
       <div>
         <h2 className="text-lg font-semibold text-white mb-3">Sync Status</h2>
         {accounts.length === 0 && (
-          <p className="text-gray-500 text-sm">No accounts configured. Add one in the Config tab.</p>
+          <EmptyState
+            icon={CalendarDays}
+            title="No calendar connected"
+            message="Add a calendar account to start syncing events."
+            actionTo="/calendar/config"
+            actionLabel="Add a calendar account"
+          />
         )}
         <div className="space-y-2">
           {accounts.map((account) => (

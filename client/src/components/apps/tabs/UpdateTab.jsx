@@ -293,7 +293,7 @@ export default function UpdateTab() {
                 </div>
               )}
               {forkSyncError && (
-                <div className="mt-2 text-xs text-port-error whitespace-pre-wrap">{forkSyncError}</div>
+                <div role="alert" className="mt-2 text-xs text-port-error whitespace-pre-wrap">{forkSyncError}</div>
               )}
             </div>
           </div>

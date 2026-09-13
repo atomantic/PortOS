@@ -398,7 +398,7 @@ export default function SyncDetailDrawer({ kind, recordId, onClose }) {
         )}
 
         {!loading && error && (
-          <p className="text-port-error text-sm">Failed to load sync status.</p>
+          <p role="status" className="text-port-error text-sm">Failed to load sync status.</p>
         )}
 
         {/* noSyncingPeers is also true when peers EXIST but this category's

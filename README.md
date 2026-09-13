@@ -473,6 +473,10 @@ Full catalog (including design plans, ADRs, and research notes): [docs/README.md
 
 ## Contributing
 
+Read [CONTRIBUTING.md](./CONTRIBUTING.md) for issue claiming and PR acceptance.
+Comment to request an issue and wait for assignment before starting; issues
+labeled `in-progress` or already assigned are not up for grabs.
+
 Pull requests are welcome. This is a personal project, so:
 
 - **Breakage happens.** Major version bumps (e.g. v2.0.0) may rename pages, reorganize data directories, or change schemas in ways that require a migration pass on your local data. Check the relevant `.changelog/vX.Y.Z.md` for what changed.

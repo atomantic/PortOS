@@ -18,6 +18,7 @@ import { QUEUEABLE_IMAGE_MODES } from './generationModes.js';
 import { PUBLIC_REVIEW_EXECUTION_PROFILES } from './agentExecutionProfiles.js';
 import { ORCHESTRATION_MODES, ORCHESTRATION_ROLES } from './orchestrationProfile.js';
 import { AGENT_RUN_EVENT_KINDS, RUN_EVENT_READ_LIMITS } from './agentRunEvents.js';
+import { TASK_STATUS_VALUES, TASK_PRIORITY_VALUES } from './taskParser.js';
 import { recurrenceRuleSchema } from './recurrenceValidation.js';
 import { JOB_INTERVAL_VALUES } from './autonomousJobIntervals.js';
 import { TASK_DATA_INPUT_DEFINITIONS, TASK_DATA_INPUT_IDS } from './taskDataInputCatalog.js';
@@ -160,13 +161,36 @@ const orchestrationModeUpdateSchema = z.preprocess(emptyToNull, z.enum(ORCHESTRA
 
 const reviewerSchema = z.string().refine(isReviewer, 'Unknown reviewer');
 
+// Priority and status are bounded by what TASKS.md can REPRESENT, not by a free
+// string. The markdown store is the only copy of a queued task, and a value
+// outside these vocabularies used to delete the task and its `metadata.prompt`
+// on the next full-file rewrite — a 200 response for irreversible data loss
+// (#7239). `generateTasksMarkdown` now repairs rather than drops, but the
+// request that would have caused it belongs at the boundary as a 400.
+//
+// Case-insensitive with a trim, because real callers already send `'high'`
+// (apps/tabs/GitTab.jsx, GitRecoveryAction.jsx) alongside `'MEDIUM'`; an empty
+// string is the form's unset and stays absent rather than becoming a rejection.
+const normalizeEnumInput = transform => value =>
+  typeof value === 'string' ? (transform(value.trim()) || undefined) : value;
+
+const taskPriorityInputSchema = z.preprocess(
+  normalizeEnumInput(v => v.toUpperCase()),
+  z.enum(TASK_PRIORITY_VALUES).optional()
+);
+
+const taskStatusInputSchema = z.preprocess(
+  normalizeEnumInput(v => v.toLowerCase()),
+  z.enum(TASK_STATUS_VALUES).optional()
+);
+
 // The metadata-bound fields below are carried onto the task by
 // `services/cosTaskIntake.js#buildTaskMetadata`; its test fails when a field is
 // added here without a mapping there (or an explicit non-metadata verdict).
 export const createCosTaskSchema = z.object({
   description: z.string().min(1),
   diagnostics: cosTaskDiagnosticsSchema.optional(),
-  priority: z.string().optional(),
+  priority: taskPriorityInputSchema,
   // `context` is the one-line human note; `prompt` is the full agent-facing
   // payload (#4153). A producer that passes a multi-line `context` is still
   // accepted — `cosTaskStore.addTask` routes it to `metadata.prompt`.
@@ -307,8 +331,8 @@ export const createCosTaskSchema = z.object({
 
 export const updateCosTaskSchema = z.object({
   description: z.string().min(1).optional(),
-  priority: z.string().optional(),
-  status: z.string().optional(),
+  priority: taskPriorityInputSchema,
+  status: taskStatusInputSchema,
   context: z.string().optional(),
   prompt: z.string().optional(),
   model: z.string().optional(),

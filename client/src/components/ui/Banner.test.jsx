@@ -88,4 +88,59 @@ describe('Banner', () => {
     svg = container.querySelector('svg');
     expect(svg.getAttribute('class')).not.toContain('mt-0.5');
   });
+  // A Banner is almost always rendered conditionally after an async action, so
+  // an inert <div> announces nothing when it appears (WCAG 4.1.3).
+  it.each([
+    ['error', 'alert'],
+    ['warning', 'status'],
+    ['success', 'status'],
+    ['info', 'status'],
+  ])('renders tone=%s inside a %s live region', (tone, role) => {
+    render(<Banner tone={tone}>x</Banner>);
+    expect(screen.getByRole(role).textContent).toContain('x');
+  });
+
+  it('falls back to the status role for an unknown tone, matching the warning class fallback', () => {
+    render(<Banner tone="bogus">x</Banner>);
+    expect(screen.getByRole('status').textContent).toContain('x');
+  });
+
+  it('lets a call site override the role it passes through', () => {
+    render(<Banner tone="error" role="note">x</Banner>);
+    expect(screen.queryByRole('alert')).toBeNull();
+    expect(screen.getByRole('note')).toBeTruthy();
+  });
+
+  // Tone is otherwise hue-only: an icon-less error and success banner with the
+  // same copy are identical to a colorblind user and to a screen reader.
+  it.each([
+    ['error', 'Error'],
+    ['warning', 'Warning'],
+    ['success', 'Success'],
+    ['info', 'Note'],
+  ])('prefixes tone=%s with the visually-hidden word "%s"', (tone, word) => {
+    const { container } = render(<Banner tone={tone}>Backup failed</Banner>);
+    // Accessible text, not a class assertion — what a reader actually hears.
+    expect(container.textContent).toBe(`${word}: Backup failed`);
+    expect(screen.getByText(`${word}:`, { exact: false }).className).toContain('sr-only');
+  });
+
+  it('omits the tone word when srLabel={false}', () => {
+    const { container } = render(<Banner tone="error" srLabel={false}>Error: already said it</Banner>);
+    expect(container.textContent).toBe('Error: already said it');
+    expect(container.querySelector('.sr-only')).toBeNull();
+  });
+
+  // The sr-only span and the role are purely additive — the visual rendering
+  // must be byte-identical to what the component emitted before they existed,
+  // so these pin the WHOLE class string rather than a contains() fragment.
+  it.each([
+    [{ tone: 'warning', size: 'sm', align: 'start' }, 'px-3 py-2 text-xs border rounded border-port-warning/30 bg-port-warning/10 text-port-warning flex items-start gap-2'],
+    [{ tone: 'error', size: 'md', align: 'center' }, 'px-4 py-3 text-sm border rounded-lg border-port-error/30 bg-port-error/10 text-port-error flex items-center gap-2'],
+    [{ tone: 'success', size: 'lg', align: 'start' }, 'p-4 text-sm border rounded-lg border-port-success/30 bg-port-success/10 text-port-success flex items-start gap-3'],
+    [{ tone: 'info', size: 'sm', align: 'center' }, 'px-3 py-2 text-xs border rounded border-port-accent/30 bg-port-accent/10 text-port-accent flex items-center gap-2'],
+  ])('renders %o with an unchanged class string', (props, expected) => {
+    const { container } = render(<Banner {...props}>x</Banner>);
+    expect(container.querySelector('div.flex').className).toBe(expected);
+  });
 });

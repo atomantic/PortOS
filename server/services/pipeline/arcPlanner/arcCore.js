@@ -58,6 +58,7 @@ export async function generateArcOverview(seriesId, options = {}) {
     // The arc-overview prompt doesn't author the reader map — preserve any
     // existing one (like `shape`) so regenerating the arc never silently wipes
     // a reader map the user already built on the next step.
+    seriesDesign: series.arc?.seriesDesign,
     readerMap: series.arc?.readerMap ?? null,
     // Same for the ticking clock — the overview prompt doesn't author it, so
     // preserve any existing countdown across a regenerate.
@@ -234,6 +235,7 @@ export async function refineArc(seriesId, feedback, options = {}) {
     protagonistArc: refinedStr(content.protagonistArc, arc.protagonistArc),
     themes: refinedThemes,
     shape: arc.shape ?? null,
+    seriesDesign: arc.seriesDesign,
     readerMap: arc.readerMap ?? null,
     // The arc-refine prompt edits the narrative fields only — preserve the
     // ticking clock (like readerMap/shape) so a refine never wipes it.
@@ -457,9 +459,10 @@ const EXACT_TEXT_EDITS_MAX = 12;
  * wholesale gave a one-sentence repair thousands of unrelated words of blast
  * radius, and an over-limit rewrite could then be truncated mid-sentence by the
  * canonical sanitizer. Exact replacements keep the untouched text byte-for-byte
- * stable. Ambiguous/missing anchors and over-limit results are skipped rather
- * than guessed at; the next verification round will leave the original finding
- * visible instead of persisting a speculative rewrite.
+ * stable. Ambiguous/missing anchors are skipped rather than guessed at. Check
+ * capacity after all replacements: an early expansion may rely on a later
+ * compression. If the final field exceeds its limit, preserve the original
+ * field instead of persisting a partial version of the proposed change.
  */
 export function applyExactTextEdits(current, rawEdits, maxLength) {
   const original = typeof current === 'string' ? current : '';
@@ -480,15 +483,13 @@ export function applyExactTextEdits(current, rawEdits, maxLength) {
       rejected += 1;
       continue;
     }
-    const candidate = `${value.slice(0, first)}${replacement}${value.slice(first + find.length)}`;
-    if (candidate.length > maxLength) {
-      rejected += 1;
-      continue;
-    }
-    value = candidate;
+    value = `${value.slice(0, first)}${replacement}${value.slice(first + find.length)}`;
     applied += 1;
   }
   rejected += Math.max(0, rawEdits.length - EXACT_TEXT_EDITS_MAX);
+  if (value.length > maxLength) {
+    return { value: original, applied: 0, rejected: rejected + applied };
+  }
   return { value, applied, rejected };
 }
 
@@ -900,6 +901,7 @@ export async function resolveVerifyIssues(seriesId, options = {}) {
     // The resolve prompt doesn't author the reader map — preserve any existing
     // one so auto-resolve never silently wipes a reader map the user already
     // built on the next step. Mirrors `generateArcOverview` above.
+    seriesDesign: series.arc?.seriesDesign,
     readerMap: series.arc?.readerMap ?? null,
     // A sparse repair can move existing countdown beats without replacing them.
     tickingClock: mergeTickingClockPatch(series.arc?.tickingClock, edits.arc?.tickingClock).value ?? null,
@@ -1318,7 +1320,7 @@ export async function restoreArcState(seriesId, snapshot, { episodeEdits = null 
   // `series.seasons[]`.
   await withReexportSuppressed('series', seriesId, async () => {
     await updateSeries(seriesId, {
-      arc: snapshot.arc,
+      arc: { ...snapshot.arc, seriesDesign: (await getSeries(seriesId)).arc?.seriesDesign },
       seasons: snapshot.seasons,
       ...(Array.isArray(snapshot.characterArcs) ? { characterArcs: snapshot.characterArcs } : {}),
     });
@@ -1623,7 +1625,7 @@ export async function commitSeasonsWithRemap(currentSeries, { arc, seasons }, op
       { status: 400, code: ERR_VALIDATION },
     );
   }
-  const mergedArc = mergeArcWithLocks(latestSeries.arc, arc, latestSeries.locked?.arcFields);
+  const mergedArc = mergeArcWithLocks(latestSeries.arc, { ...arc, seriesDesign: latestSeries.arc?.seriesDesign }, latestSeries.locked?.arcFields);
   // Per-season locks: restore any locked existing seasons over LLM-proposed
   // rewrites, and re-insert any locked seasons the LLM dropped. Re-sanitize
   // so the locked records merge with the new shape (sort by number, dedup).

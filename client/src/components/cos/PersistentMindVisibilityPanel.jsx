@@ -176,7 +176,7 @@ export default function PersistentMindVisibilityPanel({ visibility, error, loadi
       )}
 
       {error && (
-        <div className="mt-3 border-t border-port-border pt-3 text-xs text-port-warning">
+        <div role="status" className="mt-3 border-t border-port-border pt-3 text-xs text-port-warning">
           <p>Visibility refresh delayed: {error}. The last successful snapshot remains in use.</p>
         </div>
       )}

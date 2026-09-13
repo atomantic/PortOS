@@ -281,7 +281,7 @@ export default function LocalSetupPanel({ pythonPath, onPythonPathChange, onPack
                 </pre>
               )}
               {installError && (
-                <div className="mt-2 flex flex-wrap items-center gap-2">
+                <div role="alert" className="mt-2 flex flex-wrap items-center gap-2">
                   <span className="text-xs text-port-error">Install failed — see the log above.</span>
                   <QueueInstallInvestigationButton
                     label="PortOS local Python packages"

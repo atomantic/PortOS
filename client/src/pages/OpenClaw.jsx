@@ -276,9 +276,13 @@ export default function OpenClaw() {
     loadRuntime();
     if (!featureEnabled) {
       setApps([]);
-      return;
+      return undefined;
     }
-    coreApi.getApps().then(data => setApps((data || []).filter(app => !app.archived))).catch(() => setApps([]));
+    let active = true;
+    coreApi.getApps()
+      .then(data => { if (active) setApps((data || []).filter(app => !app.archived)); })
+      .catch(() => { if (active) setApps([]); });
+    return () => { active = false; };
   }, [featureEnabled, loadRuntime]);
 
   useEffect(() => {
@@ -504,14 +508,14 @@ export default function OpenClaw() {
           </div>
 
           {pageError && (
-            <div className="mx-4 mt-4 flex items-start gap-2 rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-sm text-red-200">
+            <div role="alert" className="mx-4 mt-4 flex items-start gap-2 rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-sm text-red-200">
               <AlertCircle size={16} className="mt-0.5 shrink-0" />
               <span>{pageError}</span>
             </div>
           )}
 
           {messagesError && (
-            <div className="mx-4 mt-4 flex items-start gap-2 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm text-amber-100">
+            <div role="status" className="mx-4 mt-4 flex items-start gap-2 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm text-amber-100">
               <AlertCircle size={16} className="mt-0.5 shrink-0" />
               <span>{messagesError}</span>
             </div>

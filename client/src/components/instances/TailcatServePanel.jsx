@@ -95,7 +95,7 @@ export default function TailcatServePanel({ onChange, compact = false }) {
         <TailcatAddress address={status?.tcAddress} preview={status?.tcAddressRedacted} disabled={busy} />
 
         {status?.lastError && status?.status !== 'active' && (
-          <p className="text-[11px] text-port-error mt-2 leading-snug break-words">
+          <p role="status" className="text-[11px] text-port-error mt-2 leading-snug break-words">
             {status.lastError}
             {status.lastErrorAt && <span className="text-gray-500"> · {timeAgo(status.lastErrorAt)}</span>}
           </p>

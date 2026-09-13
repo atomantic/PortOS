@@ -165,7 +165,7 @@ export default function DeployPanel({ appId, appName }) {
                 {line.text}
               </div>
             ))}
-            {error && <div className="text-port-error mt-2 whitespace-pre-wrap break-words">Error: {error}</div>}
+            {error && <div role="alert" className="text-port-error mt-2 whitespace-pre-wrap break-words">Error: {error}</div>}
           </div>
 
           {result && (

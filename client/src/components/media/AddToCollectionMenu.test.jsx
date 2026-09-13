@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, act } from '@testing-library/react';
+import { render, screen, fireEvent, act, within } from '@testing-library/react';
 import AddToCollectionMenu from './AddToCollectionMenu';
 
 // Covers the picker's list presentation (#3312): CollectionPickerShell orders
@@ -35,11 +35,13 @@ const collections = [
 const openMenu = async () => {
   render(<AddToCollectionMenu item={item} />);
   fireEvent.click(screen.getByTitle('Add to collection'));
-  await screen.findByRole('menuitemcheckbox', { name: /Keepers/ });
+  await screen.findByRole('button', { name: /Keepers/ });
 };
 
+// The rows live in the picker's <ul>; the trigger and the create-form submit
+// are also buttons, so scope the query to the list.
 const rowTitles = () =>
-  screen.getAllByRole('menuitemcheckbox').map((el) => el.textContent.trim());
+  within(screen.getByRole('list')).getAllByRole('button').map((el) => el.textContent.trim());
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -63,7 +65,7 @@ describe('AddToCollectionMenu row presentation', () => {
   it('lifts the auto-creator prefix into a badge and keeps the full name as the tooltip', async () => {
     await openMenu();
 
-    const row = screen.getByRole('menuitemcheckbox', { name: /Zephyr Drift/ });
+    const row = screen.getByRole('button', { name: /Zephyr Drift/ });
     expect(row.querySelector('[title]')).toHaveAttribute('title', 'Creative Director: Zephyr Drift');
     // The badge is its own element so the distinguishing tail owns the row width.
     expect(screen.getAllByText('Creative Director')).toHaveLength(2);
@@ -73,8 +75,8 @@ describe('AddToCollectionMenu row presentation', () => {
   it('still lists empty collections — filing INTO an empty collection is the point', async () => {
     await openMenu();
 
-    expect(screen.getByRole('menuitemcheckbox', { name: /Wallpapers/ })).toBeInTheDocument();
-    expect(screen.getByRole('menuitemcheckbox', { name: /Example Universe/ })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Wallpapers/ })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Example Universe/ })).toBeInTheDocument();
   });
 
   it('matches search tokens in any order (AND-token, not a single substring)', async () => {

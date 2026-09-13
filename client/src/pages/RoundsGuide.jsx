@@ -11,6 +11,7 @@
 
 import { Link } from 'react-router';
 import { Music, ArrowLeft, Drum, Layers, GraduationCap, FileMusic } from 'lucide-react';
+import PageHeader from '../components/PageHeader';
 import Pill from '../components/ui/Pill';
 import {
   RHYTHM_SHAPES,
@@ -74,18 +75,24 @@ function SectionHeading({ icon: Icon, title, subtitle }) {
 export default function RoundsGuide() {
   return (
     <div className="flex flex-col h-full">
-      <div className="flex items-center gap-3 px-4 py-3 border-b border-port-border bg-port-card shrink-0">
-        <Link
-          to="/rounds"
-          className="p-1 text-gray-400 hover:text-white transition-colors"
-          title="Back to Rounds"
-          aria-label="Back to Rounds"
-        >
-          <ArrowLeft size={18} />
-        </Link>
-        <Music size={18} className="text-port-accent shrink-0" />
-        <span className="text-white font-semibold">Rounds · Learning Guide</span>
-      </div>
+      {/* Shared PageHeader supplies the route's <h1> (#7245); the back link
+          rides in the actions slot — where detail pages park their return
+          navigation — and keeps the 44px touch target. */}
+      <PageHeader
+        icon={Music}
+        title="Rounds · Learning Guide"
+        className="bg-port-card"
+        actions={(
+          <Link
+            to="/rounds"
+            className="inline-flex items-center justify-center min-h-[44px] min-w-[44px] p-1 text-gray-400 hover:text-white transition-colors"
+            title="Back to Rounds"
+            aria-label="Back to Rounds"
+          >
+            <ArrowLeft size={18} />
+          </Link>
+        )}
+      />
 
       <div className="flex-1 overflow-y-auto p-4 md:p-6">
         <div className="max-w-4xl mx-auto space-y-10">

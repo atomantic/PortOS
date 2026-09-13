@@ -636,7 +636,7 @@ function CodexSubscriptionPanel({
       )}
       {typeof account?.checkedAt === 'number' && <p className="text-gray-500">Last usage refresh: {new Date(account.checkedAt).toLocaleString()}</p>}
       {catalogCount !== null && <p className="text-gray-500">Subscription catalog: {catalogCount} model{catalogCount === 1 ? '' : 's'} available.</p>}
-      {modelError && <p className="text-port-warning">Using the last known model catalog while a refresh is unavailable.</p>}
+      {modelError && <p role="status" className="text-port-warning">Using the last known model catalog while a refresh is unavailable.</p>}
       {verificationUrl && (
         <div className="rounded bg-port-card px-2.5 py-2 text-gray-300 space-y-1">
           <p>Headless sign-in: open the verification page and enter this code.</p>

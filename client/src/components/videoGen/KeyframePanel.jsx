@@ -89,7 +89,7 @@ export default function KeyframePanel({
             </button>
             <span className="text-[10px] text-gray-500">{keyframes.length}/8</span>
           </div>
-          {keyframesError && <p className="text-[10px] text-port-error leading-snug">{keyframesError}</p>}
+          {keyframesError && <p role="alert" className="text-[10px] text-port-error leading-snug">{keyframesError}</p>}
           <p className="text-[10px] text-gray-500 leading-snug">
             Keyframes pull from your gallery only. Indices must be strictly ascending and below numFrames ({numFrames}).
           </p>

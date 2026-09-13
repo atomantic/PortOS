@@ -152,7 +152,7 @@ function ProviderQuotaCard({ quota, onRefresh, refreshing, disabled }) {
           meter, so the note rides along — otherwise the one state where the
           reading's age matters most is the one state that hides it. */}
       {quota.supported && !quota.pending && quota.error && (
-        <div className="flex items-start gap-1.5 sm:gap-2 text-xs sm:text-sm text-gray-400 py-1">
+        <div role="status" className="flex items-start gap-1.5 sm:gap-2 text-xs sm:text-sm text-gray-400 py-1">
           <AlertTriangle size={15} className="text-port-warning mt-0.5 shrink-0" />
             <span>
               {quota.error}

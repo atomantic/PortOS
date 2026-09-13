@@ -1742,7 +1742,7 @@ describe('pr-reviewer security preflight wiring', () => {
   it('runs the direct preflight before stage gates and resolves the next-stage prompt', () => {
     const start = GEN_SRC.indexOf('export async function prepareManagedAppImprovementTask');
     const body = GEN_SRC.slice(start, GEN_SRC.indexOf('return { task, pendingPerpetualDispatch };', start));
-    const preflightAt = body.indexOf('runPrReviewerSecurityPreflight(taskType, app, metadata, targetPullRequest, taskSchedule)');
+    const preflightAt = body.indexOf('runPrReviewerSecurityPreflight(taskType, app, metadata, targetPullRequest, taskSchedule, {');
     const preconditionAt = body.indexOf('shouldSkipForPrecondition(metadata, app, taskType)');
     const promptAt = body.indexOf('getStagePrompt(taskType, currentStageIndex)');
 
@@ -1759,11 +1759,11 @@ describe('pr-reviewer security preflight wiring', () => {
 
   it('carries a stolen on-demand request\'s PR target through the idle-review path', () => {
     const start = GEN_SRC.indexOf('const appRequests = onDemandRequests.filter(');
-    const body = GEN_SRC.slice(start, GEN_SRC.indexOf('\n  return { task, pendingPerpetualDispatch };', start));
+    const body = GEN_SRC.slice(start, GEN_SRC.indexOf('\n  return { task, pendingPerpetualDispatch, preflightCardId: stolenCardId };', start));
     // The idle tier can consume a queued on-demand request instead of Priority 0.
     // Dropping the target there re-widens a one-row click into a full sweep.
     expect(body).toContain('targetPullRequest = request.targetPullRequest ?? null');
-    expect(body).toMatch(/prepareManagedAppImprovementTask\([\s\S]*?targetPullRequest\n/);
+    expect(body).toMatch(/prepareManagedAppImprovementTask\([\s\S]*?targetPullRequest,?\n/);
   });
 
   it('keeps a targeted run distinguishable from the sweep in the duplicate guard', () => {

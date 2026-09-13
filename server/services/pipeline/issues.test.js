@@ -24,6 +24,12 @@ tryReadFile: vi.fn().mockResolvedValue(null),
     fileStore.set(path, data);
   }),
   readJSONFile: vi.fn(async (path, fallback) => (fileStore.has(path) ? fileStore.get(path) : fallback)),
+  // Strict-read counterpart (#7260): a held entry is a trustworthy read; a
+  // missing one is the ENOENT "genuine empty". This in-memory model has no
+  // present-but-unreadable state — conflictJournal.test.js covers the latch.
+  readJSONFileStrict: vi.fn(async (path, fallback) => (fileStore.has(path)
+    ? { ok: true, value: fileStore.get(path) }
+    : { ok: true, value: fallback })),
 }));
 
 vi.mock('../../lib/conflictJournal.js', async (importOriginal) => {

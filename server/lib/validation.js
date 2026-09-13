@@ -10,7 +10,8 @@ import { MAX_MONTHLY_COST } from './subscriptionSavings.js';
 import { QUEUEABLE_IMAGE_MODES, VIDEO_GEN_MODES } from './generationModes.js';
 import { RENDER_TARGETS, RENDER_TARGET_BACKEND_AUTO } from './renderTargets.js';
 import {
-  grokVideoDurationSchema, cloudModelIdString, recordRenderPinFields, isSafeSubdirFilter, csvIdsParam,
+  grokVideoDurationSchema, cloudModelIdString, recordRenderPinFields, isSafeSnapshotSource, isSafeSubdirFilter, csvIdsParam,
+  EXCLUDE_PATTERN_MAX_LENGTH, isSafeExcludePattern,
 } from './sharedSchemas.js';
 import { PR_COMPLETION_VALUES } from './prDisposition.js';
 import { EFFORT_LEVELS } from './providerModels.js';
@@ -61,7 +62,7 @@ export { optionalBooleanMap };
 // re-exported so every existing `import { … } from '../lib/validation.js'`
 // keeps working unchanged.
 export {
-  grokVideoDurationSchema, cloudModelIdString, recordRenderPinFields, isSafeSubdirFilter,
+  grokVideoDurationSchema, cloudModelIdString, recordRenderPinFields, isSafeSnapshotSource, isSafeSubdirFilter,
 };
 
 // =============================================================================
@@ -887,7 +888,18 @@ export const backupConfigSchema = z.object({
   destPath: z.string().nullable().optional(),
   cronExpression: z.string().optional().default(DEFAULT_BACKUP_CRON),
   enabled: z.boolean().optional().default(true),
-  excludePaths: z.array(z.string()).optional().default([]),
+  // rsync filter patterns, bounded and kept inside the data root. `..` (any
+  // segment) and NUL are rejected rather than sanitized, so a hand-edited
+  // settings.json can't hand rsync a pattern that walks upward or smuggles a
+  // separator. Anchoring itself happens at READ time in
+  // `computeEffectiveExcludes` — the stored value stays what the user typed —
+  // but the length bound is measured on the ANCHORED form, so this accepts
+  // exactly what that normalizer will keep. The outer .max() is a cheap ceiling
+  // on a pathological payload; isSafeExcludePattern owns the real rule.
+  excludePaths: z.array(
+    z.string().trim().min(1).max(EXCLUDE_PATTERN_MAX_LENGTH + 1)
+      .refine(isSafeExcludePattern, { message: `Exclude pattern must be at most ${EXCLUDE_PATTERN_MAX_LENGTH} characters once anchored, and may not contain ".." or a NUL byte` })
+  ).optional().default([]),
   disabledDefaultExcludes: z.array(z.string()).optional().default([])
 });
 
@@ -994,14 +1006,23 @@ export const instanceFeatureGroupUpdateSchema = z.object({
 export const subdirFilterSchema = z.string()
   .refine(isSafeSubdirFilter, 'subdirFilter must be a relative path with no wildcard, ".." , or leading "/" segments');
 
+export const snapshotSourceSchema = z.string()
+  .refine(isSafeSnapshotSource, 'source must be "@legacy" or a single machine-name segment');
+
+export const snapshotDownloadQuerySchema = z.object({
+  source: snapshotSourceSchema.optional(),
+}).strict();
+
 export const restoreRequestSchema = z.object({
   snapshotId: z.string().min(1),
+  source: snapshotSourceSchema.optional(),
   subdirFilter: subdirFilterSchema.optional().nullable(),
   dryRun: z.boolean().optional().default(true)
 });
 
 export const restoreDbRequestSchema = z.object({
   snapshotId: z.string().min(1),
+  source: snapshotSourceSchema.optional(),
   dryRun: z.boolean().optional().default(true)
 });
 

@@ -8,7 +8,7 @@
  * deliberately not the same as `[]` (read, and empty).
  */
 
-import { readdir, stat } from 'fs/promises';
+import { readdir, readFile, stat } from 'fs/promises';
 import { homedir, totalmem } from 'os';
 import { join } from 'path';
 
@@ -62,21 +62,37 @@ export function planSlotstreamMemory({ totalBytes, overrideGb } = {}) {
   };
 }
 
-/**
- * Whether a cache subdirectory holds something a start could actually serve.
- *
- * A `.partial` (or its `.etag` sidecar) means a download is running or was
- * abandoned mid-file, so the directory is NOT a checkpoint yet — listing it
- * would clear the card's empty-cache warning and offer `--model` a directory
- * that exits before binding a port. A directory with no completed file at all
- * is the same story. A hand-placed checkpoint never carries a `.partial`, so
- * this cannot hide one.
- */
-async function isServableCheckpoint(dir) {
+/** Persists across failed transfers, cancellation, restart, and partial-file GC. */
+export const SLOTSTREAM_INCOMPLETE_MARKER = '.portos-download-incomplete';
+
+/** Local structural admission, also used before a downloader clears its marker. */
+export async function isServableCheckpoint(dir, { ignoreIncomplete = false } = {}) {
   const entries = await readdir(dir).catch(() => null);
-  if (!entries) return false;
-  const complete = entries.filter((name) => !name.endsWith('.partial') && !name.endsWith('.partial.etag'));
-  return complete.length > 0 && complete.length === entries.length;
+  if (!entries || (!ignoreIncomplete && entries.includes(SLOTSTREAM_INCOMPLETE_MARKER))) return false;
+  if (entries.some((name) => name.endsWith('.partial') || name.endsWith('.partial.etag'))) return false;
+  const nonemptyFile = async (name) => {
+    const info = await stat(join(dir, name)).catch(() => null);
+    return Boolean(info?.isFile() && info.size > 0);
+  };
+  if (!(await nonemptyFile('config.json'))) return false;
+  const weights = entries.filter((name) => name.endsWith('.safetensors'));
+  const indexes = entries.filter((name) => name.endsWith('.safetensors.index.json'));
+  if (!weights.length && !indexes.length) return false;
+  for (const name of weights) if (!(await nonemptyFile(name))) return false;
+  for (const name of indexes) {
+    const index = await readFile(join(dir, name), 'utf8').then(JSON.parse).catch(() => null);
+    const map = index?.weight_map;
+    if (!map || typeof map !== 'object' || Array.isArray(map)) return false;
+    const shards = Object.values(map);
+    if (!shards.length) return false;
+    for (const shard of new Set(shards)) {
+      // Index values are data: only checkpoint-relative safetensors paths qualify.
+      if (typeof shard !== 'string' || !shard.endsWith('.safetensors') ||
+          /^[/\\]/.test(shard) || shard.split(/[/\\]/).some((part) => !part || part === '..' || part === '.') ||
+          !(await nonemptyFile(shard))) return false;
+    }
+  }
+  return true;
 }
 
 /**

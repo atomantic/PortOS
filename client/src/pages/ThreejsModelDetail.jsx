@@ -575,7 +575,7 @@ export default function ThreejsModelDetail() {
       )}
 
       {record.error && (
-        <div className="rounded-lg border border-port-error/30 bg-port-error/10 px-3 py-2 text-sm text-port-error">
+        <div role="status" className="rounded-lg border border-port-error/30 bg-port-error/10 px-3 py-2 text-sm text-port-error">
           {record.error}
         </div>
       )}

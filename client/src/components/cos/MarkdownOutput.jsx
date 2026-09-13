@@ -3,7 +3,10 @@
 // `![alt](url)` image embeds are matched BEFORE the `[text](url)` link form so
 // the leading `!` isn't dropped. A same-origin (`/…`) or http(s) src is allowed;
 // anything else (data:, javascript:, etc.) renders as the alt text only.
-const INLINE_RE = /(!\[[^\]]*\]\([^)]+\)|`[^`]*`|\*\*[^*]+\*\*|\*[^*]+\*|_[^_]+_|\[[^\]]+\]\([^)]+\))/g;
+// Unlike `*emphasis*`, GFM only opens/closes `_emphasis_` at a word boundary, so
+// the lookarounds keep intraword underscores (QUALITY_AUDIT_JSON, SOME_ENV_VAR,
+// snake_case) literal instead of being consumed as emphasis delimiters.
+const INLINE_RE = /(!\[[^\]]*\]\([^)]+\)|`[^`]*`|\*\*[^*]+\*\*|\*[^*]+\*|(?<!\w)_(?!\s)[^_]+(?<!\s)_(?!\w)|\[[^\]]+\]\([^)]+\))/g;
 
 const safeSrc = (url) => (/^(https?:\/\/|\/[^/])/.test(url) ? url : null);
 
@@ -57,7 +60,7 @@ const H_STYLES = [
   'text-xs font-semibold text-gray-300 mt-2 mb-0.5',
 ];
 
-function parseBlocks(md) {
+function parseBlocks(md, baseLevel) {
   const lines = (md || '').split('\n');
   const blocks = [];
   let i = 0;
@@ -74,10 +77,12 @@ function parseBlocks(md) {
       i = end + 1; continue;
     }
 
-    // Heading
+    // Heading — clamped into a band below the host card's own heading so
+    // embedded markdown never outranks the page outline (#7264). H_STYLES stays
+    // indexed by the source `#` count: only the tag name shifts, never the look.
     const hm = line.match(/^(#{1,6})\s+(.*)/);
     if (hm) {
-      const Tag = `h${hm[1].length}`;
+      const Tag = `h${Math.min(6, baseLevel + hm[1].length - 1)}`;
       blocks.push(<Tag key={i} className={H_STYLES[hm[1].length - 1]}>{parseInline(hm[2])}</Tag>);
       i++; continue;
     }
@@ -146,10 +151,10 @@ function parseBlocks(md) {
   return blocks;
 }
 
-export default function MarkdownOutput({ content }) {
+export default function MarkdownOutput({ content, baseLevel = 3 }) {
   return (
     <div className="markdown-output min-w-0 overflow-hidden break-words">
-      {parseBlocks(content)}
+      {parseBlocks(content, baseLevel)}
     </div>
   );
 }

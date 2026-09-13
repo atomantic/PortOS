@@ -64,6 +64,19 @@ it('makes the category actions look like distinct clickable controls', async () 
   expect(screen.getByRole('link', { name: 'View audit run for Security' })).toHaveClass('inline-flex', 'border', 'bg-port-bg/40', 'rounded');
 });
 
+it('orders the category breakdown from lowest score to highest, with unscored categories last', async () => {
+  const app = { id: 'example', quality: { categories: [
+    { id: 'ux', label: 'UX', score: 80, coverage: 'broad' },
+    { id: 'security', label: 'Security', score: 20, coverage: 'broad' },
+    { id: 'perf', label: 'Perf', score: null, coverage: 'unavailable' },
+    { id: 'tests', label: 'Tests', score: 60, coverage: 'broad' },
+  ] } };
+  render(<MemoryRouter><AppQuality app={app} detail /></MemoryRouter>);
+  await screen.findByText(/No scored assessments/);
+  const rowLabels = screen.getAllByRole('row').slice(1).map(row => within(row).queryByRole('rowheader')?.textContent);
+  expect(rowLabels.filter(Boolean)).toEqual(['SecurityRunner settings', 'TestsRunner settings', 'UXRunner settings', 'PerfRunner settings']);
+});
+
 it('opens the shared runner beside unavailable category evidence while preserving URL filters', async () => {
   const app = { id: 'example', quality: { categories: [
     { id: 'security', label: 'Security', score: null, coverage: 'unavailable' },

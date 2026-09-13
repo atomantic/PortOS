@@ -1286,7 +1286,7 @@ describe('plot.structure-momentum — LLM check (#1310)', () => {
         expect(opts.context).toHaveProperty('sceneMap');
         expect(opts.context).toHaveProperty('plotlineMap');
         expect(opts.context).toHaveProperty('authoredSetups');
-        expect(opts.fixedOverheadTokens).toBeGreaterThan(0);
+        expect(opts.fixedOverheadTokens).toBe(2_750);
         return ['# Issue 1\n\nThe brother thread is never mentioned again.'];
       },
       callStagedLLM: async (_stage, vars) => {
@@ -1334,6 +1334,38 @@ describe('plot.structure-momentum — LLM check (#1310)', () => {
     });
     await getCheck(PLOT_STRUCTURE).run(ctx);
     expect(finals).toEqual(['', '', 'true']);
+  });
+
+  it('normalizes and deduplicates an anchored repeated-tactic finding across manuscript parts', async () => {
+    let calls = 0;
+    const rawFinding = {
+      severity: 'medium',
+      issueNumber: 7,
+      location: 'Stalled scene — the kitchen appeal',
+      problem: 'Mara repeats the same appeal after each refusal, so neither tactic nor leverage changes.',
+      suggestion: 'Have Mara produce the receipt, forcing Ivo to choose between exposure and cooperation.',
+      anchorQuote: 'You have to trust me this time.',
+    };
+    const ctx = wholeCtx({
+      config: { maxFindings: 2 },
+      planManuscriptChunks: async () => [
+        '# Issue 7\n\nYou have to trust me this time.',
+        '# Issue 7\n\nI am asking you again to trust me.',
+      ],
+      callStagedLLM: async () => {
+        calls += 1;
+        return { content: { findings: [rawFinding] } };
+      },
+    });
+
+    const findings = await getCheck(PLOT_STRUCTURE).run(ctx);
+
+    expect(findings).toEqual([{
+      ...rawFinding,
+      category: 'plot',
+      subtype: null,
+    }]);
+    expect(calls).toBe(2);
   });
 });
 

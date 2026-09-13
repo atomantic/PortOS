@@ -93,7 +93,7 @@ export default function AudioPanel({
               : `Video duration follows the selected audio and snaps up to ${numFrames} frames on the model's temporal grid${maxDurationSeconds != null ? ` (up to ${maxDurationSeconds.toFixed(1)}s)` : ''}.`))
           : `Audio length should match ${(numFrames / fps).toFixed(1)}s (frames ÷ fps). Longer clips are trimmed to fit; shorter clips fail.`}
       </p>
-      {durationError && <p className="text-[11px] text-port-error leading-snug">{durationError}</p>}
+      {durationError && <p role="alert" className="text-[11px] text-port-error leading-snug">{durationError}</p>}
       {!hasCompatibleModel && (
         <p className="text-[11px] text-port-warning">No audio-to-video model is available on this instance.</p>
       )}

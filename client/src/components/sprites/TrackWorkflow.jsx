@@ -192,7 +192,7 @@ export default function TrackWorkflow({
                   {reopening ? 'Reopening…' : 'Reopen for replacement'}
                 </button>
               )}
-              {run?.postprocessError && <p className="text-[10px] text-red-300">{run.postprocessError}</p>}
+              {run?.postprocessError && <p role="status" className="text-[10px] text-red-300">{run.postprocessError}</p>}
             </article>
           );
         })}

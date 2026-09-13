@@ -288,6 +288,8 @@ async function runChunkedManuscriptCheck(ctx, { chunks, category, max, callChunk
 //     trimmable context (a plain whole-manuscript scan). MUST account for every
 //     non-manuscript prompt var, on top of EDITORIAL_PROMPT_OVERHEAD_TOKENS.
 //
+// `promptOverheadTokens` may raise the shared fixed reserve for an unusually
+// detailed stage template; it does not affect the trimmable context blocks.
 // `buildVars(chunk, meta, context)` returns the stage vars — only the manuscript
 // var changes per chunk; `meta.isFinal` is true on the last (or only) chunk so a
 // check can gate whole-corpus judgments to it (the Chekhov "planted, never fired"
@@ -295,7 +297,7 @@ async function runChunkedManuscriptCheck(ctx, { chunks, category, max, callChunk
 // check). Existing checks ignore the extra args. These checks are all
 // manuscript-scoped, so findings keep a model-supplied issue number
 // (`withIssueNumber: true`).
-export async function runManuscriptLlmCheck(ctx, { stage, category, overheadTokens = 0, context = null, buildVars, crossChunkDigest = false, crossChunkSetup = false, setupFocus = '', reserveSetupDigest = false, subtypes = null }) {
+export async function runManuscriptLlmCheck(ctx, { stage, category, overheadTokens = 0, promptOverheadTokens = EDITORIAL_PROMPT_OVERHEAD_TOKENS, context = null, buildVars, crossChunkDigest = false, crossChunkSetup = false, setupFocus = '', reserveSetupDigest = false, subtypes = null }) {
   const max = ctx.config?.maxFindings ?? 12;
   // Chunks are planned at the full usable budget; the digest is fitted into each
   // later chunk's spare room inside runChunkedManuscriptCheck (it yields to the
@@ -303,7 +305,7 @@ export async function runManuscriptLlmCheck(ctx, { stage, category, overheadToke
   // trimmed to keep the manuscript a budget floor; the trimmed blocks come back on
   // `chunks.context` so they're what we feed the model.
   const chunks = context
-    ? await ctx.planManuscriptChunks(stage, { context, fixedOverheadTokens: EDITORIAL_PROMPT_OVERHEAD_TOKENS })
+    ? await ctx.planManuscriptChunks(stage, { context, fixedOverheadTokens: promptOverheadTokens })
     : await ctx.planManuscriptChunks(stage, { overheadTokens });
   // The runner returns the (possibly trimmed) context on `chunks.context`; fall back
   // to the originals if it didn't echo them (a chunker that doesn't implement the
@@ -438,4 +440,3 @@ export async function runManuscriptLlmCheckInline(ctx, { category, instructions 
     },
   });
 }
-

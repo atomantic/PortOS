@@ -21,7 +21,7 @@
  * description → `metadata.prompt` classification stay in `cosTaskStore.js`.
  */
 
-import { hasKnownPrefix, PRIORITY_VALUES } from '../lib/taskParser.js';
+import { hasKnownPrefix, PRIORITY_VALUES, toRepresentableTask } from '../lib/taskParser.js';
 import { SWARM_COUNT_MAX, SWARM_COUNT_MIN } from '../lib/cosValidation.js';
 import { KEYED_REVIEWER_PINS, REVIEW_STOP_MODES, normalizeReviewers, normalizeReviewUsernames, normalizeOptionalReviewers } from '../lib/reviewerConfig.js';
 import { isPlainObject } from '../lib/objects.js';
@@ -294,7 +294,11 @@ export function buildQueuedTask(taskData, taskType, { now = Date.now() } = {}) {
   // Generate a unique ID if not provided
   const id = taskData.id || `${taskType === 'user' ? 'task' : 'sys'}-${Date.now().toString(36)}`;
   const metadata = buildTaskMetadata(taskData, taskType, { now });
-  return {
+  // Through `toRepresentableTask` so the object we return is the one TASKS.md will
+  // hold: an internal producer that bypasses the HTTP schema can still hand us a
+  // priority the format cannot write, and repairing only at write time would make
+  // the returned task disagree with the file (#7239).
+  return toRepresentableTask({
     id: hasKnownPrefix(id) ? id : `${taskType === 'user' ? 'task' : 'sys'}-${id}`,
     status: 'pending',
     priority: (taskData.priority || 'MEDIUM').toUpperCase(),
@@ -304,5 +308,5 @@ export function buildQueuedTask(taskData, taskType, { now = Date.now() } = {}) {
     approvalRequired: taskType === 'internal' && taskData.approvalRequired,
     autoApproved: taskType === 'internal' && !taskData.approvalRequired,
     section: 'pending'
-  };
+  });
 }

@@ -47,10 +47,17 @@ afterAll(() => {
 // Mock the DB health check and child_process.spawn before importing backup.js
 vi.mock('../lib/db.js', () => ({
   checkHealth: vi.fn(),
+  ensureSchema: vi.fn().mockResolvedValue(undefined),
   // Default to null (version unknown) so dumpPostgres keeps the bare-`pg_dump`
   // path and the existing status tests don't trigger live binary discovery.
   getServerMajorVersion: vi.fn(() => null),
 }));
+
+vi.mock('../scripts/run-db-migrations.js', () => ({
+  runDbMigrations: vi.fn().mockResolvedValue(0),
+}));
+import { ensureSchema } from '../lib/db.js';
+import { runDbMigrations } from '../scripts/run-db-migrations.js';
 
 // Mock the memory-backend resolver so dumpPostgres can tell whether Postgres is
 // the ACTIVE backend (explicit or auto-detected) when the DB is unreachable.
@@ -62,7 +69,7 @@ import { EventEmitter } from 'events';
 import { createHash } from 'crypto';
 import { hostname } from 'os';
 import { PassThrough } from 'node:stream';
-import { spawn as spawnChild } from 'node:child_process';
+import { spawn as spawnChild, spawnSync } from 'node:child_process';
 import { spawn } from '../lib/childProcess.js';
 // Partial mock: only override spawn. Preserve execFile et al. because
 // backup.js transitively imports fileUtils.js, which promisifies execFile.
@@ -76,7 +83,13 @@ vi.mock('../lib/childProcess.js', async (importOriginal) => ({
 // used by backup.js + fileUtils.js keeps its real implementation.
 vi.mock('fs/promises', async (importOriginal) => {
   const actual = await importOriginal();
-  return { ...actual, stat: vi.fn(actual.stat), readFile: vi.fn(actual.readFile), access: vi.fn(actual.access) };
+  return {
+    ...actual,
+    stat: vi.fn(actual.stat),
+    readFile: vi.fn(actual.readFile),
+    access: vi.fn(actual.access),
+    writeFile: vi.fn(actual.writeFile),
+  };
 });
 
 import { checkHealth, getServerMajorVersion } from '../lib/db.js';
@@ -97,7 +110,8 @@ vi.mock('./brainStorage.js', async (importOriginal) => ({
 }));
 import { reloadSettings } from './settings.js';
 import { invalidateAllCaches as invalidateBrainCaches } from './brainStorage.js';
-import { DEFAULT_EXCLUDES, computeEffectiveExcludes, listSnapshots, openSnapshotStream, restoreSnapshot } from './backup.js';
+import { DEFAULT_EXCLUDES, computeEffectiveExcludes, listSnapshots, openSnapshotStream, restoreSnapshot, resolveRsyncBinary } from './backup.js';
+import { EXCLUDE_PATTERN_MAX_LENGTH, anchorUserExclude, anchorUserExcludes, isSafeExcludePattern } from '../lib/sharedSchemas.js';
 
 // fs.access is mocked file-wide because backup.js probes the .in-progress marker
 // with it. Restore the real implementation before EVERY test: vi.clearAllMocks()
@@ -106,6 +120,7 @@ import { DEFAULT_EXCLUDES, computeEffectiveExcludes, listSnapshots, openSnapshot
 beforeEach(async () => {
   const actual = await vi.importActual('fs/promises');
   fs.access.mockImplementation(actual.access);
+  fs.writeFile.mockImplementation(actual.writeFile);
 });
 
 // Mirrors backup.js's MACHINE_HOST derivation so expected paths can be built
@@ -190,13 +205,97 @@ describe('computeEffectiveExcludes', () => {
     expect(result).toContain(target);
   });
 
-  it('merges user excludePaths on top of active defaults', () => {
+  it('merges user excludePaths on top of active defaults, anchored to the data root', () => {
     const result = computeEffectiveExcludes({
       excludePaths: ['my/custom/path', 'cache/'],
       disabledDefaultExcludes: []
     });
-    expect(result).toContain('my/custom/path');
-    expect(result).toContain('cache/');
+    // Anchored: a bare `cache/` is rsync for "every cache/ at any depth", which
+    // would also drop training-runs/*/cache/ and friends (#7241).
+    expect(result).toContain('/my/custom/path');
+    expect(result).toContain('/cache/');
+    expect(result).not.toContain('my/custom/path');
+    expect(result).not.toContain('cache/');
+  });
+
+  it('anchors every returned pattern unless it is deliberately wildcard-led', () => {
+    const result = computeEffectiveExcludes({
+      excludePaths: ['repos/', 'cache', '**/raw/', '/already/anchored'],
+      disabledDefaultExcludes: []
+    });
+    expect(result).toEqual(expect.arrayContaining(['/repos/', '/cache', '**/raw/', '/already/anchored']));
+    // The whole list — defaults included — is anchored or wildcard-led. This is
+    // the invariant, not the four spellings above: an unanchored entry anywhere
+    // in the list silently drops user data at any depth.
+    for (const pattern of result) {
+      expect(pattern.startsWith('/') || pattern.startsWith('*'), pattern).toBe(true);
+    }
+  });
+
+  it('passes a **-led user pattern through unchanged', () => {
+    // Any-depth matching stays available DELIBERATELY — it is just no longer
+    // what a user gets by accident from typing a bare directory name.
+    const result = computeEffectiveExcludes({
+      excludePaths: ['**/node_modules/', '*.tmp'],
+      disabledDefaultExcludes: []
+    });
+    expect(result).toContain('**/node_modules/');
+    expect(result).toContain('*.tmp');
+  });
+
+  it('dedupes user patterns that differ only by anchoring or whitespace', () => {
+    const result = computeEffectiveExcludes({
+      excludePaths: ['repos/', '/repos/', '  repos/  '],
+      disabledDefaultExcludes: []
+    });
+    expect(result.filter(p => p === '/repos/')).toHaveLength(1);
+  });
+
+  it('measures the length bound on the ANCHORED form, not the raw input', () => {
+    // A 255-char relative pattern anchors to exactly 256 and survives; 256 would
+    // anchor to 257. Bounding the RAW input instead would let the settings
+    // boundary accept a chip that this normalizer then silently dropped, so the
+    // snapshot would run without an exclude the UI had shown as saved.
+    const fits = 'a'.repeat(EXCLUDE_PATTERN_MAX_LENGTH - 1);
+    const overflows = 'a'.repeat(EXCLUDE_PATTERN_MAX_LENGTH);
+    const result = computeEffectiveExcludes({ excludePaths: [fits, overflows], disabledDefaultExcludes: [] });
+    expect(result).toContain(`/${fits}`);
+    expect(result).not.toContain(`/${overflows}`);
+    // An ALREADY-anchored pattern of exactly the max is untouched and kept.
+    const anchoredMax = `/${'b'.repeat(EXCLUDE_PATTERN_MAX_LENGTH - 1)}`;
+    expect(computeEffectiveExcludes({ excludePaths: [anchoredMax] })).toContain(anchoredMax);
+    // The settings boundary agrees with the normalizer in both directions.
+    expect(isSafeExcludePattern(fits)).toBe(true);
+    expect(isSafeExcludePattern(overflows)).toBe(false);
+    expect(isSafeExcludePattern(anchoredMax)).toBe(true);
+  });
+
+  // The Backup settings tab anchors a pattern as the user adds it, so the chip
+  // they see is the filter that runs. A one-sided edit to either copy would put
+  // the preview and the snapshot out of step silently — which is the whole
+  // failure mode #7241 is about. The mirror is a dependency-free leaf, so
+  // importing it here costs nothing.
+  it('the client mirror applies the identical rule', async () => {
+    const mirror = await import('../../client/src/lib/backupExcludes.js');
+    const cases = ['repos/', 'cache', '**/raw/', '*.tmp', '/anchored', '  spaced/  ', '', '../../etc', 'a/../../b',
+      'x'.repeat(EXCLUDE_PATTERN_MAX_LENGTH - 1), 'x'.repeat(EXCLUDE_PATTERN_MAX_LENGTH), `/${'x'.repeat(EXCLUDE_PATTERN_MAX_LENGTH - 1)}`];
+    for (const input of cases) {
+      expect(mirror.anchorUserExclude(input), input).toBe(anchorUserExclude(input));
+      expect(mirror.isSafeExcludePattern(input), input).toBe(isSafeExcludePattern(input));
+    }
+    expect(mirror.anchorUserExcludes(cases)).toEqual(anchorUserExcludes(cases));
+    expect(mirror.EXCLUDE_PATTERN_MAX_LENGTH).toBe(EXCLUDE_PATTERN_MAX_LENGTH);
+  });
+
+  it('drops a user pattern that tries to escape the data root', () => {
+    // Defense in depth — the settings boundary rejects these, but a hand-edited
+    // settings.json is read straight through by the scheduler.
+    const result = computeEffectiveExcludes({
+      excludePaths: ['../../etc/', 'a/../../b', 'ok/path'],
+      disabledDefaultExcludes: []
+    });
+    expect(result).toContain('/ok/path');
+    expect(result.some(p => p.includes('..'))).toBe(false);
   });
 
   it('dedupes when a user exclude matches an active default', () => {
@@ -213,7 +312,7 @@ describe('computeEffectiveExcludes', () => {
       excludePaths: ['', null, undefined, 'real/path'],
       disabledDefaultExcludes: []
     });
-    expect(result).toContain('real/path');
+    expect(result).toContain('/real/path');
     expect(result).not.toContain('');
     expect(result).not.toContain(null);
   });
@@ -276,11 +375,16 @@ describe('listSnapshots', () => {
     // The backup target is commonly an iCloud folder; macOS drops a `.DS_Store`
     // FILE into every dir. It must not be treated as a snapshot id (reading
     // `<.DS_Store>/manifest.json` would throw ENOTDIR).
-    vi.spyOn(fs, 'readdir').mockResolvedValue([
-      dirent('.DS_Store', false),
-      dirent('2026-06-08T15-18-34', true),
-      dirent('2026-06-07T09-00-00', true),
-    ]);
+    const readdirSpy = vi.spyOn(fs, 'readdir').mockImplementation(async (path) => {
+      if (String(path) === joinPath('/dest', 'snapshots')) {
+        return [dirent('.DS_Store', false), dirent(machineHost, true)];
+      }
+      return [
+        dirent('.DS_Store', false),
+        dirent('2026-06-08T15-18-34', true),
+        dirent('2026-06-07T09-00-00', true),
+      ];
+    });
     vi.spyOn(fs, 'readFile').mockImplementation(async (p) => {
       if (String(p).includes('.DS_Store')) throw new Error('ENOTDIR — .DS_Store should never be read');
       return JSON.stringify({ generatedAt: '2026-06-08T00:00:00Z', fileCount: 10 });
@@ -290,6 +394,58 @@ describe('listSnapshots', () => {
     expect(ids).toHaveLength(2);
     expect(ids).toContain('2026-06-08T15-18-34');
     expect(ids).not.toContain('.DS_Store');
+    readdirSpy.mockRestore();
+  });
+
+  it('discovers legacy and machine snapshots with collision-safe identities', async () => {
+    const destRoot = await fs.mkdtemp(joinPath(tmpdir(), 'portos-backup-sources-'));
+    const snapshotId = '2026-06-08T15-18-34';
+    const legacyId = '2025-12-31T23-59-59';
+    const roots = [
+      joinPath(destRoot, 'snapshots', legacyId),
+      joinPath(destRoot, 'snapshots', 'legacy', snapshotId),
+      joinPath(destRoot, 'snapshots', 'previous-machine', snapshotId),
+      joinPath(destRoot, 'snapshots', machineHost, snapshotId),
+    ];
+    try {
+      await Promise.all(roots.map(root => fs.mkdir(joinPath(root, 'data'), { recursive: true })));
+      await Promise.all(roots.map((root, index) => fs.writeFile(
+        joinPath(root, 'manifest.json'),
+        JSON.stringify({ generatedAt: `2026-01-0${index + 1}T00:00:00Z`, fileCount: index + 1 }),
+      )));
+
+      const result = await listSnapshots(destRoot);
+
+      expect(result).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          id: legacyId,
+          source: '@legacy',
+          sourceLabel: 'Legacy (pre-namespace)',
+          selectionKey: `@legacy/${legacyId}`,
+        }),
+        expect.objectContaining({
+          id: snapshotId,
+          source: 'legacy',
+          selectionKey: `legacy/${snapshotId}`,
+          currentMachine: false,
+        }),
+        expect.objectContaining({
+          id: snapshotId,
+          source: 'previous-machine',
+          selectionKey: `previous-machine/${snapshotId}`,
+          currentMachine: false,
+        }),
+        expect.objectContaining({
+          id: snapshotId,
+          source: machineHost,
+          selectionKey: `${machineHost}/${snapshotId}`,
+          currentMachine: true,
+        }),
+      ]));
+      expect(new Set(result.map(snapshot => snapshot.selectionKey))).toHaveProperty('size', 4);
+    } finally {
+      await fs.rm(destRoot, { recursive: true, force: true });
+    }
   });
 
   it('returns [] for a falsy destPath without touching the filesystem', async () => {
@@ -308,14 +464,14 @@ describe('openSnapshotStream', () => {
   });
 
   beforeEach(() => {
-    fs.access.mockRejectedValue(new Error('ENOENT'));
+    fs.access.mockRejectedValue(Object.assign(new Error('missing'), { code: 'ENOENT' }));
   });
 
   // An existing, COMPLETE snapshot directory, ready for tar: the directory stats
   // fine while the .in-progress marker is absent.
   function readySnapshot() {
     fs.stat.mockResolvedValue({ isDirectory: () => true });
-    fs.access.mockRejectedValue(new Error('ENOENT'));   // no .in-progress marker
+    fs.access.mockRejectedValue(Object.assign(new Error('missing'), { code: 'ENOENT' }));
     const proc = fakeProc();
     spawn.mockReturnValue(proc);
     return proc;
@@ -324,7 +480,9 @@ describe('openSnapshotStream', () => {
   // Same directory, but a marker left behind by a crashed run.
   function crashedSnapshot() {
     fs.stat.mockResolvedValue({ isDirectory: () => true });
-    fs.access.mockResolvedValue(undefined);             // .in-progress present
+    fs.access.mockImplementation((path) => String(path).endsWith('.failed')
+      ? Promise.reject(Object.assign(new Error('missing'), { code: 'ENOENT' }))
+      : Promise.resolve());                             // .in-progress present
   }
 
   const ended = (stream) => new Promise((resolveEnd) => stream.once('end', resolveEnd));
@@ -339,6 +497,31 @@ describe('openSnapshotStream', () => {
       .rejects.toMatchObject({ status: 400, code: 'VALIDATION_ERROR' });
     expect(spawn).not.toHaveBeenCalled();
     expect(fs.stat).not.toHaveBeenCalled();
+  });
+
+  it('rejects a traversing source before touching the disk or spawning tar', async () => {
+    await expect(openSnapshotStream('/dest', 'snap-1', { source: '../other-machine' }))
+      .rejects.toMatchObject({ status: 400, code: 'VALIDATION_ERROR' });
+    expect(spawn).not.toHaveBeenCalled();
+    expect(fs.stat).not.toHaveBeenCalled();
+  });
+
+  it('rejects an explicitly selected source namespace that is a symbolic link', async () => {
+    const destRoot = await fs.mkdtemp(joinPath(tmpdir(), 'portos-backup-source-link-'));
+    const outsideRoot = await fs.mkdtemp(joinPath(tmpdir(), 'portos-backup-source-outside-'));
+    try {
+      await fs.mkdir(joinPath(destRoot, 'snapshots'), { recursive: true });
+      await fs.mkdir(joinPath(outsideRoot, 'snap-1'), { recursive: true });
+      await fs.symlink(outsideRoot, joinPath(destRoot, 'snapshots', 'previous-machine'));
+
+      await expect(openSnapshotStream(destRoot, 'snap-1', { source: 'previous-machine' }))
+        .rejects.toMatchObject({ status: 400, code: 'VALIDATION_ERROR' });
+      expect(spawn).not.toHaveBeenCalled();
+      expect(fs.stat).not.toHaveBeenCalled();
+    } finally {
+      await fs.rm(destRoot, { recursive: true, force: true });
+      await fs.rm(outsideRoot, { recursive: true, force: true });
+    }
   });
 
   it('refuses a snapshot whose .in-progress marker survived a crash', async () => {
@@ -375,15 +558,36 @@ describe('openSnapshotStream', () => {
     await expect(done).resolves.toBeUndefined();
   });
 
+  it('archives an explicitly selected previous-machine snapshot', async () => {
+    const proc = readySnapshot();
+
+    const stream = await openSnapshotStream('/dest', 'snap-1', { source: 'previous-machine' });
+
+    expect(spawn).toHaveBeenCalledWith(
+      'tar',
+      ['-czf', '-', '-C', resolve(join('/dest', 'snapshots', 'previous-machine')), 'snap-1'],
+      { shell: false },
+    );
+    const done = ended(stream);
+    stream.resume();
+    proc.emit('close', 0);
+    await expect(done).resolves.toBeUndefined();
+  });
+
   it('archives a legacy pre-manifest snapshot without consulting a manifest', async () => {
     // listSnapshots deliberately keeps snapshots taken before manifests existed,
     // so a missing manifest.json must never gate the download.
     const proc = readySnapshot();
 
-    const stream = await openSnapshotStream('/dest', 'legacy-snapshot');
+    const stream = await openSnapshotStream('/dest', 'legacy-snapshot', { source: '@legacy' });
 
     expect(fs.readFile).not.toHaveBeenCalled();
     expect(fs.stat.mock.calls.flat().join(' ')).not.toContain('manifest.json');
+    expect(spawn).toHaveBeenCalledWith(
+      'tar',
+      ['-czf', '-', '-C', resolve(join('/dest', 'snapshots')), 'legacy-snapshot'],
+      { shell: false },
+    );
     const done = ended(stream);
     stream.resume();
     proc.emit('close', 0);
@@ -726,8 +930,23 @@ describe('dumpPostgres status classification', () => {
 
 describe('restorePostgres', () => {
   let restorePostgres;
+  const mockLegacyDumpRead = (sql = 'CREATE TABLE a (...);\n') => {
+    vi.spyOn(fs, 'readFile').mockImplementation(async (path) => {
+      if (String(path).endsWith('manifest.json')) {
+        throw Object.assign(new Error('missing'), { code: 'ENOENT' });
+      }
+      return sql;
+    });
+  };
   beforeEach(async () => {
     vi.clearAllMocks();
+    // listSnapshots installs a persistent readdir spy that returns Dirents.
+    // Restore string-returning filesystem reads before Windows ENOENT handling
+    // checks for an atomic-write swap sibling.
+    const realFs = await vi.importActual('fs/promises');
+    if (vi.isMockFunction(fs.readdir)) {
+      fs.readdir.mockImplementation((...args) => realFs.readdir(...args));
+    }
     // clearAllMocks does not undo stubEnv — a PGPASSWORD stub from a failed
     // (thrown) test would otherwise leak into every test after it.
     vi.unstubAllEnvs();
@@ -749,7 +968,9 @@ describe('restorePostgres', () => {
   // dump into the live database is the most destructive thing this module can
   // do, so the guard has to cover it — not just download and file restore.
   it('refuses an incomplete snapshot before reading the dump', async () => {
-    fs.access.mockResolvedValue(undefined);            // .in-progress present
+    fs.access.mockImplementation((path) => String(path).endsWith('.failed')
+      ? Promise.reject(Object.assign(new Error('missing'), { code: 'ENOENT' }))
+      : Promise.resolve());                            // .in-progress present
     const statSpy = vi.spyOn(fs, 'stat');
 
     await expect(restorePostgres('/dest', '2026-06-05T00-00-00', { dryRun: false }))
@@ -760,18 +981,37 @@ describe('restorePostgres', () => {
 
   it('dry-run reports size/tableCount without spawning psql', async () => {
     vi.spyOn(fs, 'stat').mockResolvedValue({ size: 4096, isFile: () => true });
-    vi.spyOn(fs, 'readFile').mockResolvedValue('CREATE TABLE a (...);\n');
+    mockLegacyDumpRead();
     const result = await restorePostgres('/dest', '2026-06-05T00-00-00', { dryRun: true });
     expect(result.status).toBe('ok');
     expect(result.dryRun).toBe(true);
     expect(result.sizeBytes).toBe(4096);
     expect(result.tableCount).toBe(1);
     expect(spawn).not.toHaveBeenCalled();
+    expect(ensureSchema).not.toHaveBeenCalled();
+    expect(runDbMigrations).not.toHaveBeenCalled();
+  });
+
+  it('reads a previous-machine dump from the explicitly selected namespace', async () => {
+    vi.spyOn(fs, 'stat').mockResolvedValue({ size: 4096, isFile: () => true });
+    mockLegacyDumpRead();
+
+    await expect(restorePostgres('/dest', 'shared-id', {
+      source: 'previous-machine',
+      dryRun: true,
+    })).resolves.toMatchObject({ status: 'ok', dryRun: true });
+
+    expect(fs.stat).toHaveBeenCalledWith(resolve(
+      '/dest', 'snapshots', 'previous-machine', 'shared-id', 'portos-db.sql',
+    ));
+    expect(fs.readFile).toHaveBeenCalledWith(resolve(
+      '/dest', 'snapshots', 'previous-machine', 'shared-id', 'manifest.json',
+    ), 'utf-8');
   });
 
   it('refuses a real restore when PG is not connected', async () => {
     vi.spyOn(fs, 'stat').mockResolvedValue({ size: 4096, isFile: () => true });
-    vi.spyOn(fs, 'readFile').mockResolvedValue('CREATE TABLE a (...);\n');
+    mockLegacyDumpRead();
     checkHealth.mockResolvedValue({ connected: false, hasSchema: false });
     const result = await restorePostgres('/dest', '2026-06-05T00-00-00', { dryRun: false });
     expect(result).toEqual({ status: 'skipped', reason: 'not_configured' });
@@ -787,7 +1027,7 @@ describe('restorePostgres', () => {
 
   it('drains verbose psql output so progress cannot stall on pipe backpressure', async () => {
     vi.spyOn(fs, 'stat').mockResolvedValue({ size: 4096, isFile: () => true });
-    vi.spyOn(fs, 'readFile').mockResolvedValue('CREATE TABLE a (...);\n');
+    mockLegacyDumpRead();
     checkHealth.mockResolvedValue({ connected: true, hasSchema: true });
     let child;
     spawn.mockImplementationOnce((_bin, _args, options) => {
@@ -815,7 +1055,7 @@ describe('restorePostgres', () => {
 
   it('real restore returns failed/restore_error on non-zero psql exit', async () => {
     vi.spyOn(fs, 'stat').mockResolvedValue({ size: 4096, isFile: () => true });
-    vi.spyOn(fs, 'readFile').mockResolvedValue('CREATE TABLE a (...);\n');
+    mockLegacyDumpRead();
     checkHealth.mockResolvedValue({ connected: true, hasSchema: true });
     const proc = fakeProc();
     spawn.mockReturnValue(proc);
@@ -827,6 +1067,54 @@ describe('restorePostgres', () => {
     expect(result.status).toBe('failed');
     expect(result.reason).toBe('restore_error');
     expect(result.error).toContain('already exists');
+    expect(ensureSchema).not.toHaveBeenCalled();
+    expect(runDbMigrations).not.toHaveBeenCalled();
+  });
+
+  it('waits for forced schema repair and then migrations before reporting success', async () => {
+    vi.spyOn(fs, 'stat').mockResolvedValue({ size: 4096, isFile: () => true });
+    mockLegacyDumpRead();
+    checkHealth.mockResolvedValue({ connected: true });
+    let finishSchema;
+    let finishMigrations;
+    ensureSchema.mockImplementationOnce(() => new Promise(resolve => { finishSchema = resolve; }));
+    runDbMigrations.mockImplementationOnce(() => new Promise(resolve => { finishMigrations = resolve; }));
+    const proc = fakeProc();
+    spawn.mockReturnValue(proc);
+    let settled = false;
+    const pending = restorePostgres('/dest', 'snap-1', { dryRun: false }).then(result => {
+      settled = true;
+      return result;
+    });
+    await flush();
+    proc.emit('close', 0);
+    await flush();
+    expect(ensureSchema).toHaveBeenCalledWith({ force: true });
+    expect(runDbMigrations).not.toHaveBeenCalled();
+    expect(settled).toBe(false);
+    finishSchema();
+    await vi.waitFor(() => expect(runDbMigrations).toHaveBeenCalledOnce());
+    expect(settled).toBe(false);
+    finishMigrations(0);
+    await expect(pending).resolves.toMatchObject({ status: 'ok', dryRun: false });
+  });
+
+  it.each(['schema', 'migrations'])('reports committed replay when %s reconciliation fails', async (phase) => {
+    vi.spyOn(fs, 'stat').mockResolvedValue({ size: 4096, isFile: () => true });
+    mockLegacyDumpRead();
+    checkHealth.mockResolvedValue({ connected: true });
+    (phase === 'schema' ? ensureSchema : runDbMigrations).mockRejectedValueOnce(new Error('upgrade failed'));
+    const proc = fakeProc();
+    spawn.mockReturnValue(proc);
+    const pending = restorePostgres('/dest', 'snap-1', { dryRun: false });
+    await flush();
+    proc.emit('close', 0);
+    const result = await pending;
+    expect(result).toMatchObject({ status: 'failed', reason: 'restore_schema_reconciliation' });
+    expect(result.error).toContain('dump was applied');
+    expect(result.error).toContain('not rolled back');
+    expect(result.error).toContain('Restart PortOS');
+    if (phase === 'schema') expect(runDbMigrations).not.toHaveBeenCalled();
   });
 
   // Manifest SHA-256 verification (#980). The dump is hashed in generateManifest
@@ -888,37 +1176,24 @@ describe('restorePostgres', () => {
     expect(result.tableCount).toBe(1);
   });
 
-  // A manifest.json that is PRESENT but unparseable reads the same as absent:
-  // readJSONFile returns its `null` default, so there is no expected hash to
-  // compare against and verification is skipped rather than hard-failing.
-  // Pinning that here so a future "throw on corrupt manifest" change is a
-  // deliberate decision instead of a silent behavior swap.
-  it('skips verification (does not throw) when manifest.json is malformed JSON', async () => {
+  it.each([
+    ['malformed JSON', '{ "files": { '],
+    ['a non-ENOENT read failure', Object.assign(new Error('media I/O failure'), { code: 'EIO' })],
+  ])('refuses dry-run and real restore when manifest.json has %s', async (_case, manifestResult) => {
     vi.spyOn(fs, 'stat').mockResolvedValue({ size: DUMP_SQL.length, isFile: () => true });
-    vi.spyOn(fs, 'readFile').mockImplementation(async (p) => (
-      String(p).endsWith('manifest.json') ? '{ "files": { ' : DUMP_SQL
-    ));
-    const result = await restorePostgres('/dest', '2026-06-05T00-00-00', { dryRun: true });
-    expect(result).toEqual({ status: 'ok', dryRun: true, sizeBytes: DUMP_SQL.length, tableCount: 1 });
-  });
-
-  // A malformed manifest must not become a free pass for a real restore either:
-  // the replay still happens (verification skipped), so assert it reaches psql
-  // rather than silently returning skipped.
-  it('still runs a real restore when manifest.json is malformed JSON', async () => {
-    vi.spyOn(fs, 'stat').mockResolvedValue({ size: DUMP_SQL.length, isFile: () => true });
-    vi.spyOn(fs, 'readFile').mockImplementation(async (p) => (
-      String(p).endsWith('manifest.json') ? 'not json at all' : DUMP_SQL
-    ));
+    vi.spyOn(fs, 'readFile').mockImplementation(async (p) => {
+      if (!String(p).endsWith('manifest.json')) return DUMP_SQL;
+      if (manifestResult instanceof Error) throw manifestResult;
+      return manifestResult;
+    });
     checkHealth.mockResolvedValue({ connected: true, hasSchema: true });
-    const proc = fakeProc();
-    spawn.mockReturnValue(proc);
-    const p = restorePostgres('/dest', '2026-06-05T00-00-00', { dryRun: false });
-    await flush();
-    proc.emit('close', 0);
-    const result = await p;
-    expect(result.status).toBe('ok');
-    expect(spawn).toHaveBeenCalledTimes(1);
+
+    await expect(restorePostgres('/dest', '2026-06-05T00-00-00', { dryRun: true }))
+      .resolves.toEqual({ status: 'failed', reason: 'manifest_unreadable' });
+    await expect(restorePostgres('/dest', '2026-06-05T00-00-00', { dryRun: false }))
+      .resolves.toEqual({ status: 'failed', reason: 'manifest_unreadable' });
+    expect(checkHealth).not.toHaveBeenCalled();
+    expect(spawn).not.toHaveBeenCalled();
   });
 
   // psql missing from the host (ENOENT) surfaces as a spawn 'error' event, not a
@@ -926,7 +1201,7 @@ describe('restorePostgres', () => {
   // restore UI would hang forever — assert it resolves as a structured failure.
   it('resolves failed/restore_error when the psql spawn emits an error event', async () => {
     vi.spyOn(fs, 'stat').mockResolvedValue({ size: 4096, isFile: () => true });
-    vi.spyOn(fs, 'readFile').mockResolvedValue('CREATE TABLE a (...);\n');
+    mockLegacyDumpRead();
     checkHealth.mockResolvedValue({ connected: true, hasSchema: true });
     const proc = fakeProc();
     spawn.mockReturnValue(proc);
@@ -944,7 +1219,7 @@ describe('restorePostgres', () => {
     vi.useFakeTimers();
     try {
       vi.spyOn(fs, 'stat').mockResolvedValue({ size: 4096, isFile: () => true });
-      vi.spyOn(fs, 'readFile').mockResolvedValue('CREATE TABLE a (...);\n');
+      mockLegacyDumpRead();
       checkHealth.mockResolvedValue({ connected: true, hasSchema: true });
       const proc = fakeProc();
       spawn.mockReturnValue(proc);
@@ -969,7 +1244,7 @@ describe('restorePostgres', () => {
     vi.useFakeTimers();
     try {
       vi.spyOn(fs, 'stat').mockResolvedValue({ size: 4096, isFile: () => true });
-      vi.spyOn(fs, 'readFile').mockResolvedValue('CREATE TABLE a (...);\n');
+      mockLegacyDumpRead();
       checkHealth.mockResolvedValue({ connected: true, hasSchema: true });
       const proc = fakeProc();
       spawn.mockReturnValue(proc);
@@ -995,7 +1270,7 @@ describe('restorePostgres', () => {
   it('passes --single-transaction and ON_ERROR_STOP=1 with the default PGPASSWORD', async () => {
     vi.stubEnv('PGPASSWORD', '');
     vi.spyOn(fs, 'stat').mockResolvedValue({ size: 4096, isFile: () => true });
-    vi.spyOn(fs, 'readFile').mockResolvedValue('CREATE TABLE a (...);\n');
+    mockLegacyDumpRead();
     checkHealth.mockResolvedValue({ connected: true, hasSchema: true });
     const proc = fakeProc();
     spawn.mockReturnValue(proc);
@@ -1015,7 +1290,7 @@ describe('restorePostgres', () => {
   it('prefers an explicit PGPASSWORD over the portos default', async () => {
     vi.stubEnv('PGPASSWORD', 'from-env');
     vi.spyOn(fs, 'stat').mockResolvedValue({ size: 4096, isFile: () => true });
-    vi.spyOn(fs, 'readFile').mockResolvedValue('CREATE TABLE a (...);\n');
+    mockLegacyDumpRead();
     checkHealth.mockResolvedValue({ connected: true, hasSchema: true });
     const proc = fakeProc();
     spawn.mockReturnValue(proc);
@@ -1126,6 +1401,257 @@ describe('generateManifest', () => {
   });
 });
 
+describe('restoreSnapshot manifest verification', () => {
+  let tmpRoot;
+  let snapshotDir;
+  let snapshotDataDir;
+  let realFs;
+
+  beforeEach(async () => {
+    vi.restoreAllMocks();
+    vi.clearAllMocks();
+    realFs = await vi.importActual('fs/promises');
+    fs.stat.mockImplementation(realFs.stat);
+    fs.readFile.mockImplementation(realFs.readFile);
+    fs.access.mockImplementation(realFs.access);
+    spawn.mockReset();
+    tmpRoot = await realFs.mkdtemp(joinPath(tmpdir(), 'portos-restore-integrity-'));
+    snapshotDir = joinPath(tmpRoot, 'snapshots', machineHost, 'snap-1');
+    snapshotDataDir = joinPath(snapshotDir, 'data');
+    await realFs.mkdir(snapshotDataDir, { recursive: true });
+  });
+
+  afterEach(async () => {
+    await realFs?.rm(tmpRoot, { recursive: true, force: true });
+    await realFs?.rm(joinPath(PATHS.data, 'restore-integrity'), { recursive: true, force: true });
+  });
+
+  async function writeSnapshotFile(relativePath, content) {
+    const path = joinPath(snapshotDataDir, relativePath);
+    await realFs.mkdir(joinPath(path, '..'), { recursive: true });
+    await realFs.writeFile(path, content);
+    return createHash('sha256').update(Buffer.from(content)).digest('hex');
+  }
+
+  async function writeManifest(files) {
+    await realFs.writeFile(joinPath(snapshotDir, 'manifest.json'), JSON.stringify({
+      generatedAt: '2026-09-12T00:00:00.000Z',
+      fileCount: Object.keys(files).length,
+      files,
+    }));
+  }
+
+  async function finishRestore(options = {}) {
+    const proc = fakeProc();
+    spawn.mockReturnValueOnce(proc);
+    const pending = restoreSnapshot(tmpRoot, 'snap-1', options);
+    await vi.waitFor(() => expect(spawn).toHaveBeenCalled());
+    proc.emit('close', 0);
+    return pending;
+  }
+
+  it('rechecks snapshot bytes on execution and refuses a post-preview change before rsync', async () => {
+    const relativePath = 'restore-integrity/example.json';
+    const originalHash = await writeSnapshotFile(relativePath, 'trusted backup');
+    await writeManifest({ [relativePath]: originalHash });
+    const livePath = joinPath(PATHS.data, relativePath);
+    await realFs.mkdir(joinPath(livePath, '..'), { recursive: true });
+    await realFs.writeFile(livePath, 'healthy live data');
+
+    await expect(finishRestore({ dryRun: true })).resolves.toMatchObject({
+      verification: { status: 'verified', checkedFiles: 1 },
+    });
+
+    await realFs.writeFile(joinPath(snapshotDataDir, relativePath), 'changed after preview');
+    spawn.mockReset();
+    await expect(restoreSnapshot(tmpRoot, 'snap-1', { dryRun: false }))
+      .rejects.toMatchObject({ code: 'BACKUP_FILE_INTEGRITY_FAILED' });
+    expect(spawn).not.toHaveBeenCalled();
+    expect(await realFs.readFile(livePath, 'utf8')).toBe('healthy live data');
+  });
+
+  it('refuses a file added after preview when it is absent from the manifest', async () => {
+    const relativePath = 'restore-integrity/example.json';
+    const originalHash = await writeSnapshotFile(relativePath, 'trusted backup');
+    await writeManifest({ [relativePath]: originalHash });
+    const livePath = joinPath(PATHS.data, relativePath);
+    await realFs.mkdir(joinPath(livePath, '..'), { recursive: true });
+    await realFs.writeFile(livePath, 'healthy live data');
+
+    await expect(finishRestore({ dryRun: true })).resolves.toMatchObject({
+      verification: { status: 'verified', checkedFiles: 1 },
+    });
+
+    await writeSnapshotFile('restore-integrity/unrecorded.json', 'added after backup');
+    spawn.mockReset();
+    await expect(restoreSnapshot(tmpRoot, 'snap-1', { dryRun: false }))
+      .rejects.toMatchObject({ code: 'BACKUP_FILE_INTEGRITY_FAILED' });
+    expect(spawn).not.toHaveBeenCalled();
+    expect(await realFs.readFile(livePath, 'utf8')).toBe('healthy live data');
+  });
+
+  it('names the unmanifested file so the operator can act on it', async () => {
+    const relativePath = 'restore-integrity/example.json';
+    await writeManifest({ [relativePath]: await writeSnapshotFile(relativePath, 'trusted backup') });
+    await writeSnapshotFile('restore-integrity/unrecorded.json', 'added after backup');
+
+    await expect(restoreSnapshot(tmpRoot, 'snap-1', { dryRun: true }))
+      .rejects.toThrow(/restore-integrity\/unrecorded\.json/);
+  });
+
+  it('restores despite OS metadata a file browser dropped into the snapshot', async () => {
+    // The destination is commonly an iCloud/Finder folder, so merely BROWSING a
+    // snapshot writes .DS_Store beside the data — long after the manifest was
+    // sealed. Refusing that would strand an intact snapshot permanently.
+    const relativePath = 'brain/example.json';
+    await writeManifest({ [relativePath]: await writeSnapshotFile(relativePath, 'snapshot data') });
+    await writeSnapshotFile('brain/.DS_Store', 'finder metadata');
+    await writeSnapshotFile('brain/._example.json', 'appledouble');
+
+    await expect(finishRestore({ dryRun: true, subdirFilter: 'brain' }))
+      .resolves.toMatchObject({ verification: { status: 'verified', checkedFiles: 1 } });
+    // ...and rsync must not carry them across either, or the transfer would
+    // exceed what the inventory verified.
+    expect(spawn.mock.calls[0][1]).toEqual(expect.arrayContaining([
+      '--exclude=.DS_Store', '--exclude=._*',
+    ]));
+  });
+
+  it.each([
+    ['missing', async (path) => realFs.unlink(path)],
+    ['unreadable', async (path) => {
+      fs.readFile.mockImplementation(async (candidate, ...args) => {
+        if (String(candidate) === path) throw Object.assign(new Error('unreadable'), { code: 'EACCES' });
+        return realFs.readFile(candidate, ...args);
+      });
+    }],
+  ])('refuses a %s selected file before rsync', async (_case, breakFile) => {
+    const relativePath = 'brain/example.json';
+    const filePath = joinPath(snapshotDataDir, relativePath);
+    const hash = await writeSnapshotFile(relativePath, 'snapshot data');
+    await writeManifest({ [relativePath]: hash });
+    await breakFile(filePath);
+
+    await expect(restoreSnapshot(tmpRoot, 'snap-1', { subdirFilter: 'brain' }))
+      .rejects.toMatchObject({ code: 'BACKUP_FILE_INTEGRITY_FAILED' });
+    expect(spawn).not.toHaveBeenCalled();
+  });
+
+  it('validates the whole manifest but hashes only the literal selective scope', async () => {
+    const brainHash = await writeSnapshotFile('brain/example.json', 'brain');
+    await writeSnapshotFile('media/example.json', 'media');
+    await writeManifest({
+      'brain/example.json': brainHash,
+      'media/example.json': '0'.repeat(64),
+      '../portos-db.sql': '1'.repeat(64),
+    });
+
+    await expect(finishRestore({ dryRun: true, subdirFilter: 'brain' })).resolves.toMatchObject({
+      verification: { status: 'verified', checkedFiles: 1 },
+    });
+  });
+
+  it('ignores an unrecorded file outside a literal selective scope', async () => {
+    const brainHash = await writeSnapshotFile('brain/example.json', 'brain');
+    await writeSnapshotFile('media/unrecorded.json', 'outside selection');
+    await writeManifest({ 'brain/example.json': brainHash });
+
+    await expect(finishRestore({ dryRun: true, subdirFilter: 'brain' })).resolves.toMatchObject({
+      verification: { status: 'verified', checkedFiles: 1 },
+    });
+  });
+
+  it.each([
+    ['malformed JSON', '{"files":'],
+    ['a null root', 'null'],
+    ['an invalid shape', JSON.stringify({ fileCount: 1, files: [] })],
+    ['an unsafe data path', JSON.stringify({ fileCount: 1, files: { '../outside.json': '0'.repeat(64) } })],
+  ])('fails closed when an existing manifest has %s', async (_case, manifestBytes) => {
+    await realFs.writeFile(joinPath(snapshotDir, 'manifest.json'), manifestBytes);
+
+    await expect(restoreSnapshot(tmpRoot, 'snap-1'))
+      .rejects.toMatchObject({ code: expect.stringMatching(/^BACKUP_MANIFEST_(UNREADABLE|INVALID)$/) });
+    expect(spawn).not.toHaveBeenCalled();
+  });
+
+  it('keeps legacy snapshots explicit and preserves manifest-compatible symlinks', async () => {
+    await expect(finishRestore({ dryRun: true })).resolves.toMatchObject({
+      verification: { status: 'unverified', reason: 'manifest_absent', checkedFiles: 0 },
+    });
+    expect(spawn.mock.calls[0][1]).toContain('--checksum');
+
+    const targetHash = await writeSnapshotFile('example.txt', 'example');
+    await realFs.symlink('example.txt', joinPath(snapshotDataDir, 'readable-link'));
+    await realFs.symlink('missing.txt', joinPath(snapshotDataDir, 'dangling-link'));
+    await writeManifest({
+      'example.txt': targetHash,
+      'readable-link': targetHash,
+    });
+    spawn.mockReset();
+
+    await expect(finishRestore({ dryRun: true })).resolves.toMatchObject({
+      verification: { status: 'verified', checkedFiles: 2 },
+    });
+  });
+
+  it('restores differing bytes when size and mtime match through real rsync', async context => {
+    // Windows CI does not provision MSYS rsync. Unix coverage remains mandatory;
+    // installed Windows rsync errors still fail this test rather than being hidden.
+    if (process.platform === 'win32' && spawnSync('rsync', ['--version']).error?.code === 'ENOENT') {
+      context.skip('Windows runner has no rsync executable; real rsync remains required on Linux/macOS.');
+      return;
+    }
+    const relativePath = 'brain/example.json';
+    const snapshotContent = '{"value":"old"}';
+    const liveContent = '{"value":"new"}';
+    const sourcePath = joinPath(snapshotDataDir, relativePath);
+    const livePath = joinPath(PATHS.data, relativePath);
+    const snapshotHash = await writeSnapshotFile(relativePath, snapshotContent);
+    await writeManifest({ [relativePath]: snapshotHash });
+    await realFs.mkdir(joinPath(livePath, '..'), { recursive: true });
+    await realFs.writeFile(livePath, liveContent);
+
+    const matchingMtime = new Date('2026-09-12T00:00:00.000Z');
+    await realFs.utimes(sourcePath, matchingMtime, matchingMtime);
+    await realFs.utimes(livePath, matchingMtime, matchingMtime);
+
+    const previousRsync = process.env.PORTOS_RSYNC;
+    delete process.env.PORTOS_RSYNC;
+    spawn.mockImplementation((...args) => spawnChild(...args));
+
+    try {
+      const fullPreview = await restoreSnapshot(tmpRoot, 'snap-1', { dryRun: true });
+      expect(fullPreview.changedFiles.some(line => line.includes(relativePath))).toBe(true);
+      expect(await realFs.readFile(livePath, 'utf8')).toBe(liveContent);
+
+      await restoreSnapshot(tmpRoot, 'snap-1', { dryRun: false });
+      expect(await realFs.readFile(livePath, 'utf8')).toBe(snapshotContent);
+
+      await realFs.writeFile(livePath, liveContent);
+      await realFs.utimes(livePath, matchingMtime, matchingMtime);
+      const selectivePreview = await restoreSnapshot(tmpRoot, 'snap-1', {
+        dryRun: true,
+        subdirFilter: 'brain',
+      });
+      expect(selectivePreview.changedFiles.some(line => line.includes(relativePath))).toBe(true);
+      expect(await realFs.readFile(livePath, 'utf8')).toBe(liveContent);
+
+      await restoreSnapshot(tmpRoot, 'snap-1', { dryRun: false, subdirFilter: 'brain' });
+      expect(await realFs.readFile(livePath, 'utf8')).toBe(snapshotContent);
+
+      const equalPreview = await restoreSnapshot(tmpRoot, 'snap-1', {
+        dryRun: true,
+        subdirFilter: 'brain',
+      });
+      expect(equalPreview.changedFiles.filter(line => line.includes(relativePath))).toEqual([]);
+    } finally {
+      if (previousRsync === undefined) delete process.env.PORTOS_RSYNC;
+      else process.env.PORTOS_RSYNC = previousRsync;
+      spawn.mockReset();
+    }
+  });
+});
+
 // restoreSnapshot's service-side subdirFilter guard (issue #1822). These reject
 // BEFORE runRsync/spawn is reached, so no fake child process is needed — an
 // invalid filter must never make it into an `--include=` rsync arg.
@@ -1189,7 +1715,7 @@ describe('restoreSnapshot subdirFilter guard', () => {
       });
       expect(spawn).toHaveBeenCalledWith(
         '/custom/bin/rsync',
-        expect.arrayContaining(['--archive', '--itemize-changes', '--progress', '--dry-run']),
+        expect.arrayContaining(['--archive', '--itemize-changes', '--progress', '--checksum', '--dry-run']),
         { shell: false },
       );
     } finally {
@@ -1231,7 +1757,8 @@ describe('restoreSnapshot subdirFilter guard', () => {
       proc.emit('close', null, 'SIGTERM');
 
       await expect(pending).rejects.toThrow(/files may already have been overwritten/i);
-      expect(reloadSettings).not.toHaveBeenCalled();
+      expect(reloadSettings).toHaveBeenCalledTimes(1);
+      expect(invalidateBrainCaches).toHaveBeenCalledTimes(1);
     } finally {
       vi.useRealTimers();
     }
@@ -1464,6 +1991,15 @@ describe('restoreSnapshot snapshotId, filter flags, and settings re-sync', () =>
   });
 
   describe('subdirFilter rsync flags', () => {
+    it('reads a legacy flat snapshot when that source is explicitly selected', async () => {
+      await runRestore('/dest', 'legacy-snapshot', { source: '@legacy', dryRun: true });
+
+      expect(spawn.mock.calls[0][1]).toEqual(expect.arrayContaining([
+        `${resolve('/dest', 'snapshots', 'legacy-snapshot', 'data')}/`,
+        PATHS.data,
+      ]));
+    });
+
     it('builds the exact include/exclude chain for a valid subdirFilter', async () => {
       await runRestore('/dest', 'snap-1', { dryRun: true, subdirFilter: 'brain' });
 
@@ -1479,8 +2015,19 @@ describe('restoreSnapshot snapshotId, filter flags, and settings re-sync', () =>
         '--itemize-changes',
         '--progress',
         '--itemize-changes',
+        '--checksum',
+        // OS metadata excludes come BEFORE the includes — rsync takes the first
+        // matching rule — and mirror what the integrity inventory skips.
+        '--exclude=.DS_Store',
+        '--exclude=.localized',
+        '--exclude=Thumbs.db',
+        '--exclude=desktop.ini',
+        '--exclude=._*',
         '--dry-run',
-        '--include=brain/***',
+        // Leading `/` is load-bearing: rsync matches an unanchored pattern
+        // against the end of every path, so `brain/***` would also restore
+        // `data/<anything>/brain/**` — outside the scope the preflight verified.
+        '--include=/brain/***',
         '--include=*/',
         '--exclude=*',
         `${srcDir}/`,
@@ -1488,11 +2035,20 @@ describe('restoreSnapshot snapshotId, filter flags, and settings re-sync', () =>
       ]);
     });
 
-    it('emits no include/exclude flags when no subdirFilter is given', async () => {
+    it('emits no scope include/exclude flags when no subdirFilter is given', async () => {
       await runRestore('/dest', 'snap-1', { dryRun: true });
 
       const args = spawn.mock.calls[0][1];
-      expect(args.filter(a => a.startsWith('--include=') || a.startsWith('--exclude='))).toEqual([]);
+      // The OS-metadata excludes always ride along (they mirror what the
+      // integrity inventory skips); nothing else scopes an unfiltered restore.
+      expect(args.filter(a => a.startsWith('--include='))).toEqual([]);
+      expect(args.filter(a => a.startsWith('--exclude='))).toEqual([
+        '--exclude=.DS_Store',
+        '--exclude=.localized',
+        '--exclude=Thumbs.db',
+        '--exclude=desktop.ini',
+        '--exclude=._*',
+      ]);
     });
 
     it('echoes the subdirFilter back in the result', async () => {
@@ -1537,7 +2093,20 @@ describe('restoreSnapshot snapshotId, filter flags, and settings re-sync', () =>
       expect(reloadSettings).not.toHaveBeenCalled();
     });
 
-    it('does not reload settings when rsync fails a live restore', async () => {
+    it('leaves caches untouched when a dry-run rsync fails', async () => {
+      const proc = fakeProc();
+      spawn.mockReturnValue(proc);
+      const pending = restoreSnapshot('/dest', 'snap-1', { dryRun: true });
+      await vi.waitFor(() => expect(spawn).toHaveBeenCalled());
+      proc.stderr.emit('data', Buffer.from('preview failed'));
+      proc.emit('close', 1);
+
+      await expect(pending).rejects.toThrow(/^rsync exited with code 1/);
+      expect(reloadSettings).not.toHaveBeenCalled();
+      expect(invalidateBrainCaches).not.toHaveBeenCalled();
+    });
+
+    it('reconciles settings and Brain state when rsync fails a live restore', async () => {
       const proc = fakeProc();
       spawn.mockReturnValue(proc);
       const pending = restoreSnapshot('/dest', 'snap-1', { dryRun: false });
@@ -1546,7 +2115,28 @@ describe('restoreSnapshot snapshotId, filter flags, and settings re-sync', () =>
       proc.emit('close', 1);
 
       await expect(pending).rejects.toThrow(/rsync exited with code 1.*files may already have been overwritten/i);
-      expect(reloadSettings).not.toHaveBeenCalled();
+      expect(reloadSettings).toHaveBeenCalledTimes(1);
+      expect(invalidateBrainCaches).toHaveBeenCalledTimes(1);
+    });
+
+    it('reports reconciliation failures without hiding the primary rsync failure', async () => {
+      invalidateBrainCaches.mockImplementationOnce(() => {
+        throw new Error('Brain cache reset failed');
+      });
+      reloadSettings.mockRejectedValueOnce(new Error('settings reload failed'));
+      const proc = fakeProc();
+      spawn.mockReturnValue(proc);
+      const pending = restoreSnapshot('/dest', 'snap-1', { dryRun: false });
+      await vi.waitFor(() => expect(spawn).toHaveBeenCalled());
+      proc.stderr.emit('data', Buffer.from('transfer failed'));
+      proc.emit('close', 1);
+
+      await expect(pending).rejects.toMatchObject({
+        message: expect.stringMatching(/rsync exited with code 1.*Live restore cache reconciliation failed.*Brain cache reset failed.*settings reload failed.*Restart PortOS/i),
+        cause: expect.objectContaining({ message: expect.stringMatching(/rsync exited with code 1/) }),
+      });
+      expect(reloadSettings).toHaveBeenCalledTimes(1);
+      expect(invalidateBrainCaches).toHaveBeenCalledTimes(1);
     });
   });
 });
@@ -1864,13 +2454,10 @@ describe('runBackup lifecycle', () => {
     await pending;
   });
 
-  // The old on-disk '.in-progress' marker was never removed on failure, which
-  // left a failed snapshot permanently un-downloadable with no recovery path.
-  it('clears the in-progress guard when a run fails, leaving the snapshot downloadable', async () => {
+  it('persists a failed snapshot across restart, blocks both restores, and keeps salvage download available', async () => {
     const io = { emit: vi.fn() };
     const proc = fakeProc();
     spawn.mockReturnValue(proc);
-    const { openSnapshotStream: open } = await import('./backup.js');
 
     const pending = runBackup(destRoot, io);
     await waitFor(() => spawn.mock.calls.length === 1, 'rsync spawn');
@@ -1878,11 +2465,89 @@ describe('runBackup lifecycle', () => {
     proc.emit('close', 23);
     await expect(pending).rejects.toThrow(/rsync exited with code 23/);
 
+    const snapshotDir = await findSnapshotDir();
+    const fsp = await actualFs();
+    await expect(fsp.access(joinPath(snapshotDir, '.failed'))).resolves.toBeUndefined();
+    await expect(fsp.access(joinPath(snapshotDir, '.in-progress'))).rejects.toMatchObject({ code: 'ENOENT' });
+    await expect(fsp.access(joinPath(destRoot, 'snapshots', machineHost, `.${snapshotId}.in-progress`)))
+      .rejects.toMatchObject({ code: 'ENOENT' });
+
+    // Module restart clears activeSnapshotId; the on-disk marker remains the
+    // sole source of failure classification and restore refusal.
+    vi.resetModules();
+    const {
+      listSnapshots: listAfterRestart,
+      openSnapshotStream: openAfterRestart,
+      restoreSnapshot: restoreFilesAfterRestart,
+      restorePostgres: restoreDbAfterRestart,
+    } = await import('./backup.js');
+
+    await expect(listAfterRestart(destRoot)).resolves.toContainEqual(expect.objectContaining({
+      id: snapshotId,
+      failed: true,
+      incomplete: false,
+    }));
+    spawn.mockClear();
+    await expect(restoreFilesAfterRestart(destRoot, snapshotId, { dryRun: true }))
+      .rejects.toMatchObject({
+        status: 409,
+        code: 'SNAPSHOT_FAILED',
+        message: expect.stringContaining('Choose a completed backup'),
+      });
+    await expect(restoreDbAfterRestart(destRoot, snapshotId, { dryRun: true }))
+      .rejects.toMatchObject({
+        status: 409,
+        code: 'SNAPSHOT_FAILED',
+        message: expect.stringContaining('Choose a completed backup'),
+      });
+    expect(spawn).not.toHaveBeenCalled();
+
     const tar = fakeProc();
     spawn.mockReturnValue(tar);
-    const stream = await open(destRoot, snapshotId);
+    const stream = await openAfterRestart(destRoot, snapshotId);
     expect(stream).toBeDefined();
     stream.destroy();
+  });
+
+  it('retains incomplete guards when the failed marker cannot be written while releasing the process lock', async () => {
+    const io = { emit: vi.fn() };
+    const proc = fakeProc();
+    spawn.mockReturnValue(proc);
+
+    const pending = runBackup(destRoot, io);
+    await waitFor(() => spawn.mock.calls.length === 1, 'rsync spawn');
+    const snapshotDir = await findSnapshotDir();
+    const snapshotId = basename(snapshotDir);
+    const fsp = await actualFs();
+    fs.writeFile.mockImplementation((path, ...args) => String(path).endsWith('.failed')
+      ? Promise.reject(Object.assign(new Error('read-only destination'), { code: 'EACCES' }))
+      : fsp.writeFile(path, ...args));
+
+    proc.emit('close', 23);
+    await expect(pending).rejects.toThrow(/rsync exited with code 23/);
+
+    await expect(fsp.access(joinPath(snapshotDir, '.failed'))).rejects.toMatchObject({ code: 'ENOENT' });
+    await expect(fsp.access(joinPath(snapshotDir, '.in-progress'))).resolves.toBeUndefined();
+    await expect(fsp.access(joinPath(destRoot, 'snapshots', machineHost, `.${snapshotId}.in-progress`)))
+      .resolves.toBeUndefined();
+
+    const { openSnapshotStream: open, restoreSnapshot: restore } = await import('./backup.js');
+    spawn.mockClear();
+    await expect(open(destRoot, snapshotId))
+      .rejects.toMatchObject({ status: 409, code: 'SNAPSHOT_INCOMPLETE' });
+    await expect(restore(destRoot, snapshotId, { dryRun: true }))
+      .rejects.toMatchObject({ status: 409, code: 'SNAPSHOT_INCOMPLETE' });
+    expect(spawn).not.toHaveBeenCalled();
+
+    // Failure-state persistence cannot strand the process-level running lock.
+    const retryRoot = await fsp.mkdtemp(joinPath(tmpdir(), 'portos-backup-retry-'));
+    const retryProc = fakeProc();
+    spawn.mockReturnValue(retryProc);
+    const retry = runBackup(retryRoot, io);
+    await waitFor(() => spawn.mock.calls.length === 1, 'retry rsync spawn');
+    retryProc.emit('close', 0);
+    await expect(retry).resolves.toMatchObject({ status: 'ok' });
+    await fsp.rm(retryRoot, { recursive: true, force: true });
   });
 
   it('on rsync failure: releases the lock, records status error, emits backup:failed, and rethrows', async () => {

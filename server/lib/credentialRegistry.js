@@ -219,6 +219,18 @@ export const CREDENTIALS = Object.freeze([
     settingsPath: null,
     configurePath: '/ai',
   }),
+  Object.freeze({
+    id: 'eidoverse-visitor-token',
+    privateStore: true,
+    label: 'Eidoverse Visitor Bridge',
+    unlocks: 'The managed-visitor broker\'s shared host credential, letting an app the owner explicitly provisions (e.g. Fly Garden) admit a paused body into an allowlisted Eidoverse world.',
+    tier: 'none',
+    getUrl: null,
+    envVars: Object.freeze(['PORTOS_EIDOVERSE_VISITOR_TOKEN']),
+    settingsPath: 'secrets.eidoverse.visitorToken',
+    configurePath: '/settings/credentials',
+    feature: 'eidoverse',
+  }),
 ]);
 
 export const CREDENTIAL_IDS = Object.freeze(CREDENTIALS.map((credential) => credential.id));

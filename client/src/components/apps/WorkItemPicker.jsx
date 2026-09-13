@@ -175,7 +175,7 @@ export default function WorkItemPicker({ appId, target, onChange }) {
             </div>
           )}
 
-          {error && <p className="text-xs text-port-error">{error}</p>}
+          {error && <p role="status" className="text-xs text-port-error">{error}</p>}
           {!error && !loading && work && items.length === 0 && (
             <p className="text-xs text-port-warning">{emptyMessage(work)}</p>
           )}

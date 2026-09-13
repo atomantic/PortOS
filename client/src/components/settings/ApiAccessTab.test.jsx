@@ -169,6 +169,7 @@ describe('ApiAccessTab', () => {
     expect(screen.getByLabelText('Disclosure profile').value).toBe('metadata');
     expect(screen.getByLabelText('Allow semantic PortOS reads').checked).toBe(false);
     expect(screen.getByLabelText('Allow semantic PortOS updates').checked).toBe(false);
+    expect(screen.getByLabelText('Allow saved read recipes').checked).toBe(false);
     expect(screen.getByLabelText('Allow private Eidoverse world management').checked).toBe(false);
   });
 
@@ -181,7 +182,7 @@ describe('ApiAccessTab', () => {
         enabled: true,
         profile: 'metadata',
         scopes: ['navigation', 'workspaces'],
-        actions: { readPortos: false, writePortos: false, manageEidoverse: false, visitEidoversePeers: false },
+        actions: { readPortos: false, writePortos: false, callToolRecipes: false, manageEidoverse: false, visitEidoversePeers: false },
       },
     }, { silent: true }));
   });
@@ -192,7 +193,7 @@ describe('ApiAccessTab', () => {
         enabled: true,
         profile: 'metadata',
         scopes: ['navigation'],
-        actions: { readPortos: false, writePortos: false, manageEidoverse: false },
+        actions: { readPortos: false, writePortos: false, callToolRecipes: false, manageEidoverse: false },
       },
     });
     await renderTab();
@@ -202,7 +203,7 @@ describe('ApiAccessTab', () => {
         enabled: true,
         profile: 'metadata',
         scopes: ['navigation'],
-        actions: { readPortos: true, writePortos: false, manageEidoverse: false, visitEidoversePeers: false },
+        actions: { readPortos: true, writePortos: false, callToolRecipes: false, manageEidoverse: false, visitEidoversePeers: false },
       },
     }, { silent: true }));
   });
@@ -216,7 +217,21 @@ describe('ApiAccessTab', () => {
         enabled: false,
         profile: 'metadata',
         scopes: ['navigation', 'workspaces'],
-        actions: { readPortos: false, writePortos: false, manageEidoverse: true, visitEidoversePeers: false },
+        actions: { readPortos: false, writePortos: false, callToolRecipes: false, manageEidoverse: true, visitEidoversePeers: false },
+      },
+    }, { silent: true }));
+  });
+
+  it('persists the saved-recipe MCP grant independently', async () => {
+    getSettings.mockResolvedValue({});
+    await renderTab();
+    fireEvent.click(screen.getByLabelText('Allow saved read recipes'));
+    await waitFor(() => expect(updateSettings).toHaveBeenCalledWith({
+      agentContext: {
+        enabled: false,
+        profile: 'metadata',
+        scopes: ['navigation', 'workspaces'],
+        actions: { readPortos: false, writePortos: false, callToolRecipes: true, manageEidoverse: false, visitEidoversePeers: false },
       },
     }, { silent: true }));
   });

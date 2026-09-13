@@ -21,7 +21,7 @@ export const ACCEPTED_OLD_MD5 = {
 };
 
 export const NEW_SHIPPED_MD5 = {
-  'fableloom-editorial-remediate.md': 'c0cce5cfe63ec4e94047415bbe83881b',
+  'fableloom-editorial-remediate.md': '75f23d18fdf3b4ca3f329db8c61aec9d',
 };
 
 const { applyMigration, up } = makePromptReplaceMigration({

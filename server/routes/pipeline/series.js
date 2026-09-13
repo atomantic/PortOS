@@ -10,7 +10,7 @@ import { asyncHandler, ServerError } from '../../lib/errorHandler.js';
 import {
   validateRequest, optionalBooleanMap, llmSchema, isPaginationRequested, paginateArray,
 } from '../../lib/validation.js';
-import { recordRenderPinFields } from '../../lib/sharedSchemas.js';
+import { recordRenderPinFields, seriesDesignSchema } from '../../lib/sharedSchemas.js';
 import { characterEvolutionSchema } from '../../lib/characterEvolutionValidation.js';
 import * as seriesSvc from '../../services/pipeline/series.js';
 import { TRIM_SIZES, INTERIOR_FONTS } from '../../lib/proseExportSettings.js';
@@ -55,6 +55,7 @@ const router = Router();
 // record itself; seasons get their own resource so the route layer can take
 // per-record CRUD without forcing the caller to PATCH the whole series.
 const arcSchema = z.object({
+  seriesDesign: seriesDesignSchema.nullable().optional(),
   logline: z.string().trim().max(ARC_LIMITS.LOGLINE_MAX).optional().default(''),
   summary: z.string().trim().max(ARC_LIMITS.SUMMARY_MAX).optional().default(''),
   protagonistArc: z.string().trim().max(ARC_LIMITS.PROTAGONIST_ARC_MAX).optional().default(''),

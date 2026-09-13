@@ -33,7 +33,7 @@ const referencedByName = (entry, referenceText) => {
   return name.length >= 2 && referenceText.includes(name);
 };
 
-const seriesPlanningText = (series, universe) => normalizeReferenceText(JSON.stringify({
+const seriesPlanningText = (series, universe, issues) => normalizeReferenceText(JSON.stringify({
   protectedWorldIntent: {
     starterPrompt: universe?.starterPrompt || '',
     logline: universe?.logline || '',
@@ -47,6 +47,10 @@ const seriesPlanningText = (series, universe) => normalizeReferenceText(JSON.str
     seasons: series?.seasons || [],
     characterArcs: series?.characterArcs || [],
   },
+  // Current issue plans can introduce supporting cast absent from the macro
+  // summaries. Old prose, beat outputs and sibling-series issues are not roots.
+  issuePlans: issues.filter((issue) => series?.id && issue?.seriesId === series.id)
+    .map((issue) => ({ title: issue.title, synopsis: issue.stages?.idea?.input || '' })),
 }));
 
 /**
@@ -56,16 +60,16 @@ const seriesPlanningText = (series, universe) => normalizeReferenceText(JSON.str
  * entity into a new arc prompt makes those records look equally authoritative
  * and can resurrect an incompatible plot.
  *
- * Stable character-arc ids/names and explicit mentions in protected world or
- * series fields are the roots. The selected characters' authored records then
+ * Stable character-arc ids/names and explicit mentions in protected world,
+ * series fields, or current issue plans are the roots. Selected records then
  * provide one bounded relationship hop to supporting characters, places, and
  * objects. Nothing is deleted from the universe or catalog — this only narrows
  * generative prompt context. An empty result is intentional: protected premise
  * text is safer than guessing that unrelated legacy canon belongs to the story.
  */
-export function scopeCanonForSeries(universe, series) {
+export function scopeCanonForSeries(universe, series, issues = []) {
   const canon = pickCanon(universe);
-  let referenceText = seriesPlanningText(series, universe);
+  let referenceText = seriesPlanningText(series, universe, issues);
   const arcCharacterIds = new Set((series?.characterArcs || [])
     .map((arc) => arc?.characterId)
     .filter(Boolean));
@@ -123,10 +127,13 @@ export async function getSeriesCanon(series) {
   return pickCanon(universe);
 }
 
-/** Series-scoped canon for generative planning prompts. */
-export async function getSeriesPlanningCanon(series) {
+/** Series-scoped canon, including current issue plans; accepts an already-read world. */
+export async function getSeriesPlanningCanon(series, preloadedUniverse) {
   if (!series?.universeId) return EMPTY;
-  const universe = await getUniverse(series.universeId).catch(() => null);
+  const universe = preloadedUniverse || await getUniverse(series.universeId).catch(() => null);
   if (!universe) return EMPTY;
-  return scopeCanonForSeries(universe, series);
+  // Keep issue-store imports out of the widely used full-canon reader's graph.
+  const { listIssues } = await import('./issues.js');
+  const issues = series.id ? await listIssues({ seriesId: series.id }) : [];
+  return scopeCanonForSeries(universe, series, issues);
 }

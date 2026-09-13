@@ -336,25 +336,79 @@ describe('projectWorkflowTimeline', () => {
     expect(timeline.occurrences).toEqual([]);
   });
 
-  it('renders an active perpetual task as an open-ended drain window and its reset', () => {
+  it('bounds an in-progress drain to a nominal hour instead of the whole horizon', () => {
     const timeline = projectWorkflowTimeline([{
       id: 'task:drain', kind: 'task', enabled: true, shouldRun: true,
       schedule: { type: 'on-demand', perpetual: true, recheckCron: '0 9 * * *' }
     }], range);
 
-    expect(timeline.windows[0]).toMatchObject({ nodeId: 'task:drain', state: 'draining' });
+    expect(timeline.windows[0]).toMatchObject({
+      nodeId: 'task:drain',
+      state: 'draining',
+      startAt: '2026-07-09T00:00:00.000Z',
+      endAt: '2026-07-09T01:00:00.000Z'
+    });
     expect(timeline.occurrences[0]).toMatchObject({ nodeId: 'task:drain', at: '2026-07-09T16:00:00.000Z', kind: 'recheck' });
   });
 
-  it('does not show an app-scoped perpetual task draining when every tracked app is parked', () => {
+  it('gives a parked perpetual task a runtime bar at each recurrence rather than none', () => {
     const timeline = projectWorkflowTimeline([{
       id: 'task:drain', kind: 'task', enabled: true, shouldRun: true,
       perpetualStatus: { globalParked: false, trackedAppCount: 2, parkedAppCount: 2 },
       schedule: { type: 'on-demand', perpetual: true, recheckCron: '0 9 * * *' }
     }], range);
 
-    expect(timeline.windows).toEqual([]);
+    // Parked: no bar at Now, but the projected recurrence still shows when the
+    // drain next starts.
+    expect(timeline.windows).toEqual([
+      expect.objectContaining({ nodeId: 'task:drain', state: 'scheduled', startAt: '2026-07-09T16:00:00.000Z' })
+    ]);
     expect(timeline.occurrences[0]).toMatchObject({ nodeId: 'task:drain', kind: 'recheck' });
+  });
+
+  // Nothing enforces a minimum recheck cadence, so a sub-hourly one would stack
+  // 200 overlapping bars — the endless band this change exists to remove.
+  it('skips a recurrence whose bar the preceding one already covers', () => {
+    const timeline = projectWorkflowTimeline([{
+      id: 'task:drain', kind: 'task', enabled: true,
+      schedule: { type: 'on-demand', perpetual: true, recheckCron: '*/20 * * * *' }
+    }], range);
+
+    // Every 20 minutes over 24h is 72 rechecks; an hour apiece leaves 24 bars.
+    expect(timeline.occurrences).toHaveLength(72);
+    expect(timeline.windows).toHaveLength(24);
+    expect(timeline.windows.slice(0, 2).map(item => [item.startAt, item.endAt])).toEqual([
+      ['2026-07-09T00:00:00.000Z', '2026-07-09T01:00:00.000Z'],
+      ['2026-07-09T01:00:00.000Z', '2026-07-09T02:00:00.000Z']
+    ]);
+  });
+
+  it('does not double up a recurrence that lands inside the in-progress drain bar', () => {
+    const timeline = projectWorkflowTimeline([{
+      id: 'task:drain', kind: 'task', enabled: true, shouldRun: true,
+      // Half an hour in, so the bar that opens at Now already covers it.
+      nextRunAt: '2026-07-09T00:30:00.000Z',
+      schedule: { type: 'on-demand', perpetual: true, recheckIntervalMs: 6 * 60 * 60_000 }
+    }], range);
+
+    expect(timeline.windows.map(item => [item.state, item.startAt])).toEqual([
+      ['draining', '2026-07-09T00:00:00.000Z'],
+      ['scheduled', '2026-07-09T06:30:00.000Z'],
+      ['scheduled', '2026-07-09T12:30:00.000Z'],
+      ['scheduled', '2026-07-09T18:30:00.000Z']
+    ]);
+  });
+
+  it('clamps a recurrence bar that would overrun the horizon', () => {
+    const timeline = projectWorkflowTimeline([{
+      id: 'task:drain', kind: 'task', enabled: true,
+      nextRunAt: '2026-07-09T23:40:00.000Z',
+      schedule: { type: 'on-demand', perpetual: true, recheckIntervalMs: 24 * 60 * 60_000 }
+    }], range);
+
+    expect(timeline.windows).toEqual([
+      expect.objectContaining({ startAt: '2026-07-09T23:40:00.000Z', endAt: '2026-07-10T00:00:00.000Z' })
+    ]);
   });
 
   it('tags an overdue cron task launch as due-now and carries its reason', () => {

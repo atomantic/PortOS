@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router';
 
 const api = vi.hoisted(() => ({
@@ -241,5 +241,51 @@ describe('InboxTab message selection URL', () => {
     const toolbar = container.querySelector('input[aria-label="Search messages"]').closest('.flex.flex-col');
     expect(toolbar).toBeTruthy();
     expect(toolbar.className).toMatch(/sm:flex-row/);
+  });
+});
+
+describe('InboxTab triage tab bar (#7244)', () => {
+  const message = {
+    id: 'message-1',
+    accountId: neverSyncedAccount.id,
+    subject: 'A message to inspect',
+    bodyText: 'Message body',
+    from: { name: 'Example Sender' },
+    date: '2026-08-16T00:00:00.000Z',
+    source: 'gmail',
+    evaluation: { action: 'reply', priority: 'medium' },
+  };
+
+  it('keeps one tab stop on the bar and moves it with arrow keys, updating the URL', async () => {
+    api.getMessageInbox.mockResolvedValue({ messages: [message], total: 1 });
+    renderInboxWithLocation([syncedAccount]);
+
+    const tablist = await screen.findByRole('tablist', { name: 'Triage filters' });
+    const tabs = within(tablist).getAllByRole('tab');
+    expect(tabs).toHaveLength(6);
+    // One tab stop for the whole bar — the active "All" filter — and the
+    // per-filter count still rides the tab label.
+    expect(tabs.filter((t) => t.getAttribute('tabindex') === '0')).toHaveLength(1);
+    const allTab = screen.getByRole('tab', { name: /^All/ });
+    expect(allTab).toHaveAttribute('tabindex', '0');
+    expect(within(allTab).getByText('1')).toBeInTheDocument();
+
+    // ArrowRight moves the tab stop and the active filter together; the filter
+    // change lands in the URL like a click does.
+    const replyTab = screen.getByRole('tab', { name: /^Reply/ });
+    allTab.focus();
+    fireEvent.keyDown(allTab, { key: 'ArrowRight' });
+    expect(replyTab).toHaveAttribute('aria-selected', 'true');
+    expect(document.activeElement).toBe(replyTab);
+    expect(screen.getByTestId('location')).toHaveTextContent('triage=reply');
+
+    // Home/End jump to the ends of the bar.
+    const untriagedTab = screen.getByRole('tab', { name: /^Untriaged/ });
+    fireEvent.keyDown(replyTab, { key: 'End' });
+    expect(document.activeElement).toBe(untriagedTab);
+    expect(untriagedTab).toHaveAttribute('aria-selected', 'true');
+    fireEvent.keyDown(untriagedTab, { key: 'Home' });
+    expect(document.activeElement).toBe(allTab);
+    expect(allTab).toHaveAttribute('aria-selected', 'true');
   });
 });

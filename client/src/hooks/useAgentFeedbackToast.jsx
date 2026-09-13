@@ -17,6 +17,8 @@ function AgentFeedbackToast({ t, agentData, onFeedback }) {
   const [output, setOutput] = useState(agentData?.output || []);
   const [loadingOutput, setLoadingOutput] = useState(false);
   const dismissTimer = useRef(null);
+  // Supersession token for the agent-output read below.
+  const outputRequestRef = useRef(0);
 
   const agentId = agentData?.id || agentData?.agentId;
   const taskDesc = agentData?.metadata?.taskDescription || agentData?.taskId || 'Task';
@@ -37,13 +39,20 @@ function AgentFeedbackToast({ t, agentData, onFeedback }) {
 
   // Fetch output on expand if not already loaded
   useEffect(() => {
-    if (expanded && output.length === 0 && !loadingOutput && agentId) {
-      setLoadingOutput(true);
-      api.getCosAgent(agentId)
-        .then(data => setOutput(data?.output || []))
-        .catch(err => console.warn('fetch agent output:', err?.message ?? String(err)))
-        .finally(() => setLoadingOutput(false));
-    }
+    if (!(expanded && output.length === 0 && !loadingOutput && agentId)) return;
+    // A request-generation ref, not a `let active` flag: `loadingOutput` is in this
+    // effect's own dependency array, so the write below re-runs the effect
+    // immediately and a lifetime-scoped flag would be flipped by its own
+    // cleanup before the response landed. The re-run early-returns without
+    // bumping, so the in-flight request stays current and only a genuinely
+    // newer one supersedes it.
+    const req = ++outputRequestRef.current;
+    const current = () => req === outputRequestRef.current;
+    setLoadingOutput(true);
+    api.getCosAgent(agentId)
+      .then(data => { if (current()) setOutput(data?.output || []); })
+      .catch(err => console.warn('fetch agent output:', err?.message ?? String(err)))
+      .finally(() => { if (current()) setLoadingOutput(false); });
   }, [expanded, output.length, loadingOutput, agentId]);
 
   return (

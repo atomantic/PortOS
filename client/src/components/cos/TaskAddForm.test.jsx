@@ -873,3 +873,53 @@ describe('TaskAddForm sole model auto-select', () => {
     expect(screen.getByLabelText('AI model')).toHaveValue('');
   });
 });
+
+describe('TaskAddForm layout ordering', () => {
+  it('renders screenshot and attach buttons next to the task description input', async () => {
+    render(<TaskAddForm providers={[]} apps={[{ id: 'portos', name: 'PortOS' }]} onTaskAdded={vi.fn()} />);
+    await act(async () => {});
+
+    const desc = screen.getByPlaceholderText('Task description *');
+    const screenshotBtn = screen.getByLabelText('Attach screenshots');
+    const attachBtn = screen.getByLabelText('Attach files');
+
+    expect(screenshotBtn).toBeInTheDocument();
+    expect(attachBtn).toBeInTheDocument();
+
+    // Verify screenshot and attach buttons sit in the same row/container as the description textarea
+    const descRow = desc.closest('div.flex-col');
+    expect(descRow).toBeInTheDocument();
+    expect(descRow.contains(screenshotBtn)).toBe(true);
+    expect(descRow.contains(attachBtn)).toBe(true);
+  });
+
+  it('places execution method and provider selector just under the description textarea, before app and options', async () => {
+    render(
+      <TaskAddForm
+        providers={[{ id: 'anthropic', name: 'Anthropic', enabled: true, models: ['claude-3-5-sonnet'] }]}
+        apps={[{ id: 'portos', name: 'PortOS' }]}
+        onTaskAdded={vi.fn()}
+      />
+    );
+    await act(async () => {});
+
+    const desc = screen.getByPlaceholderText('Task description *');
+    const directBtn = screen.getByRole('button', { name: 'Direct' });
+    const providerSelect = screen.getByLabelText('AI provider');
+    const appSelect = screen.getByLabelText('Target application');
+
+    // Verify strict DOM ordering: description -> Execution method -> Provider selector -> App context
+    expect(desc.compareDocumentPosition(directBtn) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(directBtn.compareDocumentPosition(providerSelect) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(providerSelect.compareDocumentPosition(appSelect) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it('renders upload controls in compact mode when expanded', async () => {
+    render(<TaskAddForm providers={[]} apps={[{ id: 'portos', name: 'PortOS' }]} onTaskAdded={vi.fn()} compact defaultExpanded />);
+    await act(async () => {});
+
+    expect(screen.getByLabelText('Attach screenshots')).toBeInTheDocument();
+    expect(screen.getByLabelText('Attach files')).toBeInTheDocument();
+  });
+});
+

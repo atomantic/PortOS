@@ -3,6 +3,7 @@ import { Download, Film, Loader2, Trash2, ExternalLink, Video } from 'lucide-rea
 import BrailleSpinner from '../components/BrailleSpinner';
 import toast from '../components/ui/Toast';
 import ConfirmButtonPair from '../components/ui/ConfirmButtonPair';
+import YtDlpUpdateCard from '../components/video/YtDlpUpdateCard';
 import { useVideoDownload, useConfirmDelete } from '../hooks';
 import { listVideoDownloads, deleteVideoDownload } from '../services/apiVideoDownload.js';
 import { timeAgo, formatTimecode } from '../utils/formatters';
@@ -57,6 +58,8 @@ export default function VideoDownloaderPage() {
           Download a full video from a YouTube or x.com/Twitter URL. Downloaded clips also appear in your media gallery.
         </p>
       </header>
+
+      <YtDlpUpdateCard />
 
       <form onSubmit={onSubmit} className="bg-port-card border border-port-border rounded-lg p-4 space-y-3">
         <label htmlFor="video-download-url" className="block text-sm text-gray-300">

@@ -10,7 +10,7 @@ import { compareIssuesInSeries } from '../../../lib/pipelineIssueOrder.js';
 
 import { MANUSCRIPT_TYPES } from '../series.js';
 import { listIssues, STAGE_INPUT_MAX } from '../issues.js';
-import { ARC_LIMITS, ARC_ROLES as ARC_ROLE_LIST, ARC_SHAPE_IDS, READER_MAP_BEAT_KINDS, buildSeason, renderArcShapeGuidance, renderTickingClock, sanitizeSeasonList } from '../../../lib/storyArc.js';
+import { ARC_LIMITS, ARC_ROLES as ARC_ROLE_LIST, ARC_SHAPE_IDS, READER_MAP_BEAT_KINDS, buildSeason, renderArcShapeGuidance, renderTickingClock, renderSeriesDesign, sanitizeSeasonList } from '../../../lib/storyArc.js';
 import { composeStyleNotes } from '../../../lib/styleGuide.js';
 import {
   CHARACTER_ARC_LIMITS,
@@ -20,7 +20,7 @@ import {
 import { describeStructure, recommendStructure } from '../../../lib/seasonStructure.js';
 import { computeIssueTargets, CUSTOM_PAGE_MIN, CUSTOM_PAGE_MAX, CUSTOM_MINUTE_MIN, CUSTOM_MINUTE_MAX, DEFAULT_LENGTH_PROFILE, LENGTH_PROFILE_NAMES } from '../../../lib/issueLength.js';
 import { getUniverse } from '../../universeBuilder.js';
-import { getSeriesPlanningCanon, scopeCanonForSeries } from '../seriesCanon.js';
+import { getSeriesPlanningCanon } from '../seriesCanon.js';
 import { CHARACTER_NARRATIVE_ARC_MAX, renderCanonForPrompt, renderCategoriesForPrompt, renderCharacterNarrativeContext, renderCompositesForPrompt, renderEntitiesSummary } from '../../../lib/universePromptRenderers.js';
 import { trimToClause } from '../../../lib/textUtils.js';
 
@@ -103,7 +103,7 @@ export async function loadWorldContext(series) {
   if (!series?.universeId) return null;
   const world = await getUniverse(series.universeId).catch(() => null);
   if (!world) return null;
-  const planningCanon = scopeCanonForSeries(world, series);
+  const planningCanon = await getSeriesPlanningCanon(series, world);
   const scopedWorld = { ...world, ...planningCanon };
 
   const embrace = Array.isArray(world.influences?.embrace) ? world.influences.embrace : [];
@@ -319,15 +319,15 @@ export async function collectManuscriptByType(seriesId) {
 // "the bible block" — both passes must see the same series identity.
 export const SHAPE_GUIDANCE_NONE = '(no Vonnegut story shape selected — the verifier should not flag shape adherence)';
 
-// Append the ticking-clock guidance (only when the clock is enabled) to an
+// Append the optional ticking-clock and authored series-design guidance to an
 // arc-level shape-guidance block. Every arc/reader-map prompt already renders
 // `{{{shapeGuidance}}}`, so folding the countdown in here surfaces it to
 // generation without adding a new template variable — and therefore without a
 // stage-prompt migration. Returns the guidance unchanged when there's no
-// enabled clock.
+// enabled clock or authored brief.
 export function appendTickingClock(shapeGuidance, arc) {
   const clock = renderTickingClock(arc?.tickingClock);
-  return clock ? `${shapeGuidance}\n\n${clock}` : shapeGuidance;
+  return [shapeGuidance, clock, renderSeriesDesign(arc?.seriesDesign)].filter(Boolean).join('\n\n');
 }
 
 export async function buildArcBaseContext(series, preloadedWorld) {

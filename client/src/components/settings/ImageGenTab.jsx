@@ -1193,7 +1193,7 @@ export function ImageGenTab() {
               <datalist id={agyModelsListId}>
                 {agyModels.map((modelId) => <option key={modelId} value={modelId} />)}
               </datalist>
-              {agyModelsError && <p className="text-xs text-port-warning mt-1">{agyModelsError}. You can still enter a custom model id.</p>}
+              {agyModelsError && <p role="status" className="text-xs text-port-warning mt-1">{agyModelsError}. You can still enter a custom model id.</p>}
               {/* This is the model `agy --model` runs the SESSION on — the agent that
                   calls the built-in generate_image tool. Agy exposes no knob for the
                   underlying image model (generate_image takes Prompt / ImageName /

@@ -40,6 +40,11 @@ const mocks = vi.hoisted(() => ({
   applyOnDemandConsent: vi.fn((t) => t),
   drainProgrammaticOnDemandRequests: vi.fn(async () => new Set()),
   emitOnDemandEmpty: vi.fn(async () => {}),
+  startPreflightCard: vi.fn(async () => {}),
+  recordPreflightOutcome: vi.fn(async () => null),
+  reportPreflightStep: vi.fn(async () => {}),
+  finishPreflightCard: vi.fn(async () => null),
+  finishPreflightDispatch: vi.fn(async () => null),
 }));
 
 vi.mock('./apps.js', () => ({ getActiveApps: (...a) => mocks.getActiveApps(...a) }));
@@ -64,6 +69,21 @@ vi.mock('./taskSchedule.js', () => ({
   applyOnDemandRunResets: (...a) => mocks.applyOnDemandRunResets(...a),
   recordExecution: (...a) => mocks.recordExecution(...a),
 }));
+// Only the card's I/O is doubled. `cardIdForRequest` keeps the REAL origin
+// policy (`isUserOriginRequest` is a pure leaf), so the 'opens no card for an
+// automated origin' tests below still exercise the decision, not a stub of it.
+vi.mock('./preflightTaskCard.js', async () => {
+  const { isUserOriginRequest } = await vi.importActual('./taskScheduleConstants.js');
+  return {
+    preflightCardId: (requestId) => `preflight-${requestId}`,
+    cardIdForRequest: (request) => (isUserOriginRequest(request) ? `preflight-${request.id}` : null),
+    startPreflightCard: (...a) => mocks.startPreflightCard(...a),
+    recordPreflightOutcome: (...a) => mocks.recordPreflightOutcome(...a),
+    reportPreflightStep: (...a) => mocks.reportPreflightStep(...a),
+    finishPreflightCard: (...a) => mocks.finishPreflightCard(...a),
+    finishPreflightDispatch: (...a) => mocks.finishPreflightDispatch(...a),
+  };
+});
 vi.mock('./cosTaskGenerator.js', () => ({
   prepareManagedAppImprovementTask: (...a) => mocks.prepareManagedAppImprovementTask(...a),
   generateSelfImprovementTaskForType: (...a) => mocks.generateSelfImprovementTaskForType(...a),
@@ -465,5 +485,86 @@ describe('schedule disablement at dispatch', () => {
     const { adapter, spawned } = generatorAdapter();
     await drainOnDemandRequests({ state: STATE }, adapter);
     expect(spawned).toHaveLength(shouldSpawn ? 1 : 0);
+  });
+});
+
+/**
+ * The programmatic-phase card (#7258). A "Run Now" used to put nothing on the
+ * Tasks page until an agent task existed — which for a task type with a real
+ * preflight (pr-reviewer screens every contributor diff for hidden Unicode and
+ * prompt injection first) is a minute or more later, so the click read as a
+ * no-op. The card is opened here, advanced by the preflight, and closed on
+ * every exit from the loop.
+ */
+describe('preflight task card', () => {
+  it('opens a card for a human Run before the capacity check, so a waiting Run is still visible', async () => {
+    mocks.getOnDemandRequests.mockResolvedValue([appRequest({ targetPullRequest: 42 })]);
+    const { adapter } = generatorAdapter({ availableSlots: 0 });
+    await drainOnDemandRequests({ state: STATE }, adapter);
+    expect(mocks.startPreflightCard).toHaveBeenCalledWith({
+      requestId: 'req-1', taskType: 'code-quality', appId: 'acme', appName: 'Acme App', targetPullRequest: 42,
+    });
+  });
+
+  it.each([['refill'], ['quota-burn']])('opens no card for the automated origin %s', async (origin) => {
+    mocks.getOnDemandRequests.mockResolvedValue([appRequest({ origin })]);
+    const { adapter } = generatorAdapter();
+    await drainOnDemandRequests({ state: STATE }, adapter);
+    expect(mocks.startPreflightCard).not.toHaveBeenCalled();
+    // No card means no card id either: every report and close site short-circuits
+    // on null rather than reading the task file to discover there is nothing there.
+    expect(mocks.prepareManagedAppImprovementTask).toHaveBeenCalledWith(
+      'code-quality', APP, STATE, expect.objectContaining({ preflightCardId: null }),
+    );
+    expect(mocks.finishPreflightCard).not.toHaveBeenCalledWith(expect.stringContaining('preflight-'), expect.anything());
+  });
+
+  it('hands the card to the generator so the preflight reports into the card the user is watching', async () => {
+    mocks.getOnDemandRequests.mockResolvedValue([appRequest()]);
+    const { adapter } = generatorAdapter();
+    await drainOnDemandRequests({ state: STATE }, adapter);
+    expect(mocks.prepareManagedAppImprovementTask).toHaveBeenCalledWith(
+      'code-quality', APP, STATE, expect.objectContaining({ preflightCardId: 'preflight-req-1' }),
+    );
+  });
+
+  it('closes the card against the persisted task id once an agent task exists', async () => {
+    mocks.getOnDemandRequests.mockResolvedValue([appRequest()]);
+    const { adapter } = generatorAdapter();
+    await drainOnDemandRequests({ state: STATE }, adapter);
+    expect(mocks.finishPreflightDispatch).toHaveBeenCalledWith('preflight-req-1', 'persisted-1');
+  });
+
+  it.each([
+    ['improvement disabled', () => mocks.isImprovementEnabled.mockReturnValue(false), 'improvement-disabled'],
+    ['task type disabled', () => mocks.loadSchedule.mockResolvedValue({ tasks: {} }), 'task-type-disabled'],
+    ['unknown app', () => mocks.getActiveApps.mockResolvedValue([]), 'app-unknown'],
+  ])('closes the card with a reason when the run is dropped: %s', async (_label, arrange, reason) => {
+    arrange();
+    mocks.getOnDemandRequests.mockResolvedValue([appRequest()]);
+    const { adapter } = generatorAdapter();
+    await drainOnDemandRequests({ state: STATE }, adapter);
+    expect(mocks.finishPreflightCard).toHaveBeenCalledWith('preflight-req-1', expect.objectContaining({
+      outcome: 'failed', reason,
+    }));
+  });
+
+  it('closes a card whose request a programmatic handler satisfied without any agent', async () => {
+    mocks.getOnDemandRequests.mockResolvedValue([appRequest()]);
+    mocks.drainProgrammaticOnDemandRequests.mockResolvedValue(new Set(['req-1']));
+    const { adapter } = generatorAdapter();
+    await drainOnDemandRequests({ state: STATE }, adapter);
+    expect(mocks.finishPreflightCard).toHaveBeenCalledWith('preflight-req-1', { outcome: 'programmatic' });
+    expect(mocks.startPreflightCard).not.toHaveBeenCalled();
+  });
+
+  it('leaves no card open when the run produces nothing', async () => {
+    mocks.getOnDemandRequests.mockResolvedValue([appRequest()]);
+    mocks.prepareManagedAppImprovementTask.mockResolvedValue({ task: null, pendingPerpetualDispatch: null });
+    const { adapter } = generatorAdapter();
+    await drainOnDemandRequests({ state: STATE }, adapter);
+    // emitOnDemandEmpty owns the specific reason; this is the backstop close.
+    expect(mocks.emitOnDemandEmpty).toHaveBeenCalledWith(expect.objectContaining({ preflightCardId: 'preflight-req-1' }));
+    expect(mocks.finishPreflightDispatch).toHaveBeenCalledWith('preflight-req-1');
   });
 });

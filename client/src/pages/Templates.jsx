@@ -141,7 +141,7 @@ export default function Templates() {
             </div>
 
             {error && (
-              <div className="p-3 bg-port-error/20 border border-port-error rounded-lg text-port-error text-sm">
+              <div role="alert" className="p-3 bg-port-error/20 border border-port-error rounded-lg text-port-error text-sm">
                 {error}
               </div>
             )}

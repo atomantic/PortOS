@@ -8,6 +8,8 @@ This is the most expensive single call in the pipeline (you reason over the full
 
 {{{shapeGuidance}}}
 
+If a Series design brief is supplied above, treat it as authored intent. For renewable stories, consider recurring activity, varied episode problems/outcomes and continuing tensions; for finite stories, consider causal progress and the earned declared ending. Ground contradictions in the supplied episodes and use the existing actionable findings format when reviewing. At synopsis-only scope, limit conclusions to available material. A deliberate breather is valid; uncertainty alone does not warrant a finding. Do not invent a brief when absent, add sample-episode batches or future-season quotas, force character transformation, or change the configured issue count, reader map or emotional shape. Resolvers repair story material, never the brief.
+
 {{#pickedShapeId}}
 The user has pre-picked this shape. Your `seasonOutlines` MUST trace this fortune curve — each volume's logline and endingHook should reflect its position on the curve (low → rising → peak → falling → recovery → triumph, etc., per the shape's beats). Include `"shape": "{{pickedShapeId}}"` verbatim in your JSON output so the picked shape round-trips.
 {{/pickedShapeId}}

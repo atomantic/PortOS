@@ -203,6 +203,16 @@ describe('extractSentinelPayloadFromTranscript', () => {
         .toEqual({ summary: '', payload: null });
     });
 
+    it('recovers a printed deliverable that has a trailing comma before a closing brace', async () => {
+      // Observed in the wild: a no-tool review stage printed a well-formed
+      // verdict, but one nested array item had a trailing comma before its
+      // closing `}` — strict JSON.parse rejected the whole block and the
+      // review was discarded as "no output" even though it approved the PR.
+      const transcript = '```json\n{"analysis":"a","proposal":{"scope":"self-improve","title":"t",}}\n```';
+      const { payload } = await extractSentinelPayloadFromTranscript(transcript, isReasonerPayload);
+      expect(payload.proposal.title).toBe('t');
+    });
+
     it('recovers the answer even when an earlier line left an unmatched quote', async () => {
       const { payload } = await extractSentinelPayloadFromTranscript(`\u2502 renaming "foo\n${ANSWER}`, isReasonerPayload);
       expect(payload).not.toBeNull();

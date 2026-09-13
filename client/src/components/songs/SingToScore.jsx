@@ -89,7 +89,7 @@ export default function SingToScore({ value = '', tempo = null, musicKey = 'C', 
           : 'Records a melody and transcribes it at the song tempo. Review the staff below before inserting.'}
       </p>
 
-      {error && <p className="mt-2 text-xs text-port-error">{error}</p>}
+      {error && <p role="alert" className="mt-2 text-xs text-port-error">{error}</p>}
       <MicProcessingHint processing={micProcessing} />
 
       {/* Transcribed result — live preview + insert controls. */}

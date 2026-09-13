@@ -412,6 +412,83 @@ describe('verifySchemaVersion', () => {
     expect(status.onDisk).toBe(5);
     expect(status.message).toMatch(/rolled back/);
   });
+
+  // #7261 — a present-but-unreadable index must NOT read as "fresh install".
+  // That verdict is what silences the one boot-time gate that catches a skipped
+  // or rolled-back storage migration, after which the next write stamps the
+  // current version over records still in the old layout.
+  it('reports unreadable (not "fresh install") for a truncated index.json', async () => {
+    const store = createCollectionStore({ dir, type: 'widgets', schemaVersion: 3 });
+    writeFileSync(join(dir, 'index.json'), '{"schemaVersion": 2, "config": {');
+    const status = await store.verifySchemaVersion();
+    expect(status.ok).toBe(false);
+    expect(status.reason).toBe('unreadable');
+    expect(status.onDisk).toBeNull();
+    expect(status.message).toMatch(/could not be read or parsed/);
+    expect(status.message).not.toMatch(/fresh install/);
+  });
+
+  it('reports unreadable for an array-shaped index.json', async () => {
+    const store = createCollectionStore({ dir, type: 'widgets', schemaVersion: 3 });
+    writeFileSync(join(dir, 'index.json'), '[]');
+    const status = await store.verifySchemaVersion();
+    expect(status.ok).toBe(false);
+    expect(status.reason).toBe('unreadable');
+  });
+
+  it('tags the absent and matching verdicts with their own reasons', async () => {
+    const store = createCollectionStore({ dir, type: 'widgets', schemaVersion: 3 });
+    expect((await store.verifySchemaVersion()).reason).toBe('missing');
+    await store.saveTypeIndex({});
+    expect((await store.verifySchemaVersion()).reason).toBe('match');
+  });
+});
+
+describe('unreadable type index (#7261)', () => {
+  const TRUNCATED = '{"schemaVersion": 2, "config": {"settings": {"obsidianVaultId": "vault-1"}}';
+  const indexPath = () => join(dir, 'index.json');
+
+  it('loadTypeIndex throws instead of returning shipped defaults', async () => {
+    const store = createCollectionStore({
+      dir,
+      type: 'widgets',
+      schemaVersion: 3,
+      defaultTypeIndexConfig: { settings: { obsidianVaultId: null } },
+    });
+    writeFileSync(indexPath(), TRUNCATED);
+    await expect(store.loadTypeIndex()).rejects.toThrow(/Unreadable JSON file/);
+  });
+
+  it('saveTypeIndex rejects and leaves the file byte-identical', async () => {
+    const store = createCollectionStore({ dir, type: 'widgets', schemaVersion: 3 });
+    writeFileSync(indexPath(), TRUNCATED);
+    await expect(store.saveTypeIndex({ config: { settings: { autoSync: true } } })).rejects.toThrow(/Unreadable JSON file/);
+    expect(await readFile(indexPath(), 'utf8')).toBe(TRUNCATED);
+  });
+
+  it('does not stamp the code schemaVersion over an unreadable index', async () => {
+    const store = createCollectionStore({ dir, type: 'widgets', schemaVersion: 7 });
+    writeFileSync(indexPath(), TRUNCATED);
+    await expect(store.saveTypeIndex({})).rejects.toThrow();
+    expect(await readFile(indexPath(), 'utf8')).not.toMatch(/"schemaVersion":\s*7/);
+  });
+
+  it('still records writes normally once the index is repaired', async () => {
+    const store = createCollectionStore({ dir, type: 'widgets', schemaVersion: 3 });
+    writeFileSync(indexPath(), TRUNCATED);
+    await expect(store.loadTypeIndex()).rejects.toThrow();
+    await atomicWrite(indexPath(), { schemaVersion: 3, type: 'widgets', config: { settings: { obsidianVaultId: 'vault-1' } } });
+    const saved = await store.saveTypeIndex({ config: { extra: true } });
+    expect(saved.schemaVersion).toBe(3);
+    expect(saved.config.settings.obsidianVaultId).toBe('vault-1');
+  });
+
+  it('leaves per-record reads and writes unaffected', async () => {
+    const store = createCollectionStore({ dir, type: 'widgets', schemaVersion: 3 });
+    writeFileSync(indexPath(), TRUNCATED);
+    await store.saveOne('rec-1', { id: 'rec-1', name: 'one' });
+    expect(await store.loadOne('rec-1')).toEqual({ id: 'rec-1', name: 'one' });
+  });
 });
 
 describe('verifyCollectionVersions', () => {

@@ -1377,3 +1377,66 @@ describe('per-character evolution lens on the series plan (#6440)', () => {
     });
   });
 });
+
+describe('author-owned series design on the series plan (#7204)', () => {
+  const renewableDesign = {
+    mode: 'renewable',
+    episodeActivity: 'Mara decodes one dangerous signal with the audience.',
+    conflictSource: 'Every sender needs a different sacrifice.',
+    audiencePromise: 'A choice changes who learns the truth.',
+    continuingTensions: 'The relay keeps revealing incompatible histories.',
+    endingCondition: '',
+  };
+
+  const seedLoomWithDesign = async () => {
+    const loom = await makeLoom({ name: 'The Signal Relay' });
+    return updateLoom(loom.id, {
+      seriesPlan: { ...loom.seriesPlan, seriesDesign: renewableDesign },
+    });
+  };
+
+  it('keeps a legacy plan byte-identical and does not inherit from a linked Pipeline series', async () => {
+    getSeriesMock.mockResolvedValueOnce({ id: 'series-1', arc: { seriesDesign: renewableDesign } });
+    const loom = await makeLoom({ name: 'Linked but independent', seriesId: 'series-1' });
+
+    expect(Object.prototype.hasOwnProperty.call(loom.seriesPlan, 'seriesDesign')).toBe(false);
+    expect(JSON.stringify(sanitizeLoom(loom).seriesPlan)).toBe(JSON.stringify(loom.seriesPlan));
+  });
+
+  it('round-trips the exact bounded brief and clears it through a wholesale plan patch', async () => {
+    const saved = await seedLoomWithDesign();
+    expect((await getLoom(saved.id)).seriesPlan.seriesDesign).toEqual(renewableDesign);
+
+    const { seriesDesign: _cleared, ...planWithoutDesign } = saved.seriesPlan;
+    const cleared = await updateLoom(saved.id, { seriesPlan: planWithoutDesign });
+    expect(Object.prototype.hasOwnProperty.call(cleared.seriesPlan, 'seriesDesign')).toBe(false);
+
+    const explicitClear = await updateLoom(saved.id, {
+      seriesPlan: { ...cleared.seriesPlan, seriesDesign: null },
+    });
+    expect(explicitClear.seriesPlan).toHaveProperty('seriesDesign', null);
+  });
+
+  it('preserves the brief from a v8 omission and lets a v9 sender clear it', async () => {
+    const loom = await seedLoomWithDesign();
+    const { seriesDesign: _dropped, ...planWithoutDesign } = loom.seriesPlan;
+
+    await mergeLoomsFromSync([{
+      ...loom,
+      name: 'Renamed by v8 peer',
+      updatedAt: '2099-01-01T00:00:00.000Z',
+      seriesPlan: planWithoutDesign,
+    }], { senderSchemaVersions: { fableLoom: 8 } });
+    expect((await getLoom(loom.id)).seriesPlan.seriesDesign).toEqual(renewableDesign);
+
+    await mergeLoomsFromSync([{
+      ...loom,
+      name: 'Cleared by v9 peer',
+      updatedAt: '2099-01-02T00:00:00.000Z',
+      seriesPlan: planWithoutDesign,
+    }], { senderSchemaVersions: { fableLoom: 9 } });
+    const cleared = await getLoom(loom.id);
+    expect(cleared.name).toBe('Cleared by v9 peer');
+    expect(Object.prototype.hasOwnProperty.call(cleared.seriesPlan, 'seriesDesign')).toBe(false);
+  });
+});

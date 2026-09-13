@@ -50,6 +50,7 @@ describe('expandWorldTemplate reasoning effort', () => {
       effort: 'ultra',
       source: 'universe-builder-expansion',
     }));
+    expect(runPromptThroughProviderMock.mock.calls[0][0]).not.toHaveProperty('timeout');
   });
 
   it('uses a narrative-only contract for foundation world repairs', async () => {
@@ -66,6 +67,7 @@ describe('expandWorldTemplate reasoning effort', () => {
     expect(call).toMatchObject({
       effort: 'ultra',
       source: 'universe-builder-narrative-repair',
+      timeout: 900_000,
     });
     expect(call.prompt).toContain('exact costs');
     expect(call.prompt).toContain('Define the relay hops and their metabolic cost.');
@@ -103,6 +105,7 @@ describe('expandWorldTemplate reasoning effort', () => {
     });
 
     expect(runPromptThroughProviderMock).toHaveBeenCalledTimes(2);
+    expect(runPromptThroughProviderMock.mock.calls.every(([call]) => call.timeout === 900_000)).toBe(true);
     expect(runPromptThroughProviderMock.mock.calls[1][0].prompt).toContain('premise exceeds 20000 characters (got 20001)');
     expect(runPromptThroughProviderMock.mock.calls[1][0].prompt).toContain(`"premise": "${'x'.repeat(200)}`);
     expect(runPromptThroughProviderMock.mock.calls[1][0].prompt).toContain('premise: at most 18000 characters');

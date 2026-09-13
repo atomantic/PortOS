@@ -125,7 +125,7 @@ export default function ActivityTab({ agentId }) {
                     </div>
                   )}
                   {activity.error && (
-                    <div className="text-sm text-port-error">
+                    <div role="status" className="text-sm text-port-error">
                       {activity.error.slice(0, 50)}
                       {activity.error.length > 50 && '...'}
                     </div>

@@ -90,7 +90,7 @@ export default function Login() {
           />
         </div>
         {error && (
-          <div className="text-sm text-port-error">{error}</div>
+          <div role="alert" className="text-sm text-port-error">{error}</div>
         )}
         <button
           type="submit"

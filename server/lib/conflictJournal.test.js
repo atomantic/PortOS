@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterAll } from 'vitest';
-import { mkdtempSync, rmSync, mkdirSync } from 'fs';
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync, existsSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { makePathsProxy } from './mockPathsDataRoot.js';
@@ -552,5 +552,138 @@ describe('conflictJournal — withBaseHashFlushBatch coalescing', () => {
       await Promise.resolve(); // did nothing dirty
     });
     expect(writeCounter.baseHash).toBe(0);
+  });
+});
+
+// #7260 — a present-but-unreadable sync_base_hashes.json must fail CLOSED:
+// the file is never rewritten from the partial in-memory map, every overwrite
+// journals (baseline unknown ⇒ possible conflict), and the latch is surfaced
+// so an empty Conflicts list can't read as "no conflicts".
+describe('conflictJournal — unreadable base-hash store fails closed (#7260)', () => {
+  const baseHashPath = () => join(TEST_DATA_ROOT, 'sharing', 'sync_base_hashes.json');
+  // Truncated mid-write bytes — a partial write from a hard power loss or a
+  // cloud-sync conflict copy. Present (NOT ENOENT) but unparseable.
+  const TRUNCATED = '{"universe:u-9":{"h":"deadbeef","v":1},"series:s-1":{"h":"abc';
+  const plantTruncated = () => {
+    mkdirSync(join(TEST_DATA_ROOT, 'sharing'), { recursive: true });
+    writeFileSync(baseHashPath(), TRUNCATED);
+  };
+
+  beforeEach(() => {
+    rmSync(TEST_DATA_ROOT, { recursive: true, force: true });
+    mkdirSync(TEST_DATA_ROOT, { recursive: true });
+    cj.__resetBaseHashCacheForTests();
+    writeCounter.baseHash = 0;
+  });
+
+  it('a truncated file survives setSyncBaseHash + flushBaseHashes byte-identical', async () => {
+    plantTruncated();
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    // The merge loop that used to destroy the file: stamp a fresh entry, flush.
+    await cj.setSyncBaseHash('universe', 'u-2', cj.contentHashForRecord('universe', uni({ id: 'u-2' })));
+    await cj.flushBaseHashes();
+    expect(readFileSync(baseHashPath(), 'utf8')).toBe(TRUNCATED);
+    expect(writeCounter.baseHash).toBe(0); // atomicWrite was never attempted
+    expect(await cj.isBaseHashPersistBlocked()).toBe(true);
+    // The in-memory stamp is still visible to reads (session coherence) — it
+    // just can never reach disk.
+    expect(await cj.getSyncBaseHash('universe', 'u-2'))
+      .toBe(cj.contentHashForRecord('universe', uni({ id: 'u-2' })));
+    errSpy.mockRestore();
+  });
+
+  it('a missing (ENOENT) file initializes empty and persists normally on first flush', async () => {
+    expect(existsSync(baseHashPath())).toBe(false);
+    const hash = cj.contentHashForRecord('universe', uni());
+    await cj.setSyncBaseHash('universe', 'u-1', hash);
+    await cj.flushBaseHashes();
+    expect(writeCounter.baseHash).toBe(1);
+    expect(JSON.parse(readFileSync(baseHashPath(), 'utf8'))['universe:u-1'].h).toBe(hash);
+    expect(await cj.isBaseHashPersistBlocked()).toBe(false);
+  });
+
+  it('logs the unreadable state once — with the file path and a repair instruction', async () => {
+    plantTruncated();
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    await cj.getSyncBaseHash('universe', 'u-1');       // triggers the load + latch
+    await cj.setSyncBaseHash('universe', 'u-2', 'h2'); // memoized — must not re-log
+    await cj.detectConflict({ kind: 'universe', id: 'u-3', local: uni({ id: 'u-3' }), remote: uni({ id: 'u-3' }) });
+    const latchLogs = errSpy.mock.calls
+      .map((call) => call.join(' '))
+      .filter((m) => m.includes('unreadable'));
+    expect(latchLogs).toHaveLength(1);
+    expect(latchLogs[0]).toContain(baseHashPath());
+    expect(latchLogs[0]).toContain('repair or delete it and restart');
+    errSpy.mockRestore();
+  });
+
+  it('journals the overwrite while latched — the local edit stays recoverable', async () => {
+    plantTruncated();
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const local = uni({ starterPrompt: 'precious local edit', updatedAt: '2026-05-02T00:00:00Z' });
+    const remote = uni({ starterPrompt: 'REMOTE overwrite', updatedAt: '2026-05-03T00:00:00Z' });
+    await cj.maybeJournalBeforeOverwrite({ kind: 'universe', id: 'u-1', local, remote, source: { via: 'sync', peerId: 'peer-B' } });
+    const entries = await pendingEntries();
+    expect(entries).toHaveLength(1);
+    // Recovery path intact: the archived snapshots carry both versions and the
+    // entry is a normal pending conflict the user can restore from.
+    expect(entries[0]).toMatchObject({ recordKind: 'universe', recordId: 'u-1', status: 'pending', baseHash: null });
+    expect(entries[0].localSnapshot.starterPrompt).toBe('precious local edit');
+    expect(entries[0].remoteSnapshot.starterPrompt).toBe('REMOTE overwrite');
+    errSpy.mockRestore();
+  });
+
+  it('detectConflict reports baseUnavailable without claiming a conflict it cannot prove', async () => {
+    plantTruncated();
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const r = await cj.detectConflict({ kind: 'universe', id: 'u-1', local: uni(), remote: uni({ starterPrompt: 'r' }) });
+    expect(r.isConflict).toBe(false);      // semantics unchanged — no base to compare
+    expect(r.baseHash).toBeNull();
+    expect(r.baseUnavailable).toBe(true);  // "unknown", not "clean"
+    errSpy.mockRestore();
+  });
+
+  it('deleteSyncBaseHash and pruneOrphanedBaseHashes refuse to flush while latched', async () => {
+    plantTruncated();
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    await cj.setSyncBaseHash('universe', 'u-a', 'h-a');
+    await cj.setSyncBaseHash('universe', 'u-b', 'h-b');
+    await cj.deleteSyncBaseHash('universe', 'u-a');            // flushes internally
+    const { pruned } = await cj.pruneOrphanedBaseHashes(async () => false); // evicts u-b
+    expect(pruned).toBe(1);                                     // in-memory eviction still ran
+    expect(readFileSync(baseHashPath(), 'utf8')).toBe(TRUNCATED);
+    expect(writeCounter.baseHash).toBe(0);
+    errSpy.mockRestore();
+  });
+
+  it('a directory where the file should be is present-but-unreadable too (EISDIR ≈ EACCES)', async () => {
+    // Portable stand-in for EACCES/EIO — a readFile errno that is NOT ENOENT.
+    mkdirSync(baseHashPath(), { recursive: true });
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    expect(await cj.isBaseHashPersistBlocked()).toBe(true);
+    await cj.setSyncBaseHash('universe', 'u-1', 'h1');
+    await cj.flushBaseHashes();
+    expect(writeCounter.baseHash).toBe(0);
+    errSpy.mockRestore();
+  });
+
+  it('still journals nothing-to-lose skips while latched (local tombstone, ephemeral local)', async () => {
+    plantTruncated();
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const remote = uni({ starterPrompt: 'REMOTE', updatedAt: '2026-05-03T00:00:00Z' });
+    // Local tombstone — no content to preserve.
+    await cj.maybeJournalBeforeOverwrite({
+      kind: 'universe', id: 'u-t',
+      local: uni({ id: 'u-t', deleted: true, deletedAt: '2026-05-02T00:00:00Z' }),
+      remote, source: { via: 'sync' },
+    });
+    // Ephemeral local — no hashable wire form.
+    await cj.maybeJournalBeforeOverwrite({
+      kind: 'universe', id: 'u-e',
+      local: uni({ id: 'u-e', ephemeral: true }),
+      remote, source: { via: 'sync' },
+    });
+    expect(await pendingEntries()).toHaveLength(0);
+    errSpy.mockRestore();
   });
 });

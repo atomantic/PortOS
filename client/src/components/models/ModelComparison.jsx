@@ -703,7 +703,7 @@ export default function ModelComparison() {
             />
           </div>
           {syncStatus && <p className="text-xs text-port-accent-text">{syncStatus}</p>}
-          {syncError && <p className="text-xs text-port-error">{syncError}</p>}
+          {syncError && <p role="alert" className="text-xs text-port-error">{syncError}</p>}
           <div className="flex justify-end gap-2 pt-2">
             <button
               type="button"

@@ -4,7 +4,8 @@ import {
   ChevronRight, ChevronDown, Plus, GripVertical, Search, Tag, Link2, Crown, Star, Wand2, AlertTriangle
 } from 'lucide-react';
 import toast from '../ui/Toast';
-import { DndContext, DragOverlay, PointerSensor, useSensor, useSensors, useDraggable, useDroppable } from '@dnd-kit/core';
+import { DndContext, DragOverlay, KeyboardSensor, PointerSensor, useSensor, useSensors, useDraggable, useDroppable } from '@dnd-kit/core';
+import { createFreeDroppableKeyboardCoordinates, keyboardAwareCollisionDetection } from '../../lib/dndKeyboardCoordinates';
 import * as api from '../../services/api';
 import GoalDetailPanel, { CATEGORY_CONFIG, HORIZON_OPTIONS, GOAL_TYPE_CONFIG, DEFAULT_NEW_GOAL } from './GoalDetailPanel';
 import { GOALS_LIST_PATH, goalDetailPath } from './goalConstants';
@@ -14,6 +15,13 @@ import useProviderModels from '../../hooks/useProviderModels';
 import ProviderModelSelector from '../ProviderModelSelector';
 import { enabledApiProviderFilter } from '../../utils/providers';
 import { clickableProps } from '../../lib/a11yKeyboard.js';
+
+// Arrow keys step row-to-row through the tree instead of nudging the drag 25px
+// at a time. The dragged goal's own row is skipped: it IS a drop target (every
+// row is), but dropping a goal onto itself is a no-op `handleDragEnd` discards.
+const goalsKeyboardCoordinates = createFreeDroppableKeyboardCoordinates({
+  isSkipped: ({ data, active }) => Boolean(data?.goal?.id) && data.goal.id === active?.data?.current?.goal?.id,
+});
 
 function urgencyIndicator(urgency) {
   if (urgency == null) return null;
@@ -76,8 +84,12 @@ function GoalRow({ goal, depth, expandedIds, onToggle, onSelect, selectedId, onA
         onClick={() => onSelect(goal)}
         {...clickableProps(() => onSelect(goal))}
       >
+        {/* dnd-kit's `attributes` make this a focusable role="button", so it
+            needs a name of its own — otherwise it is announced as an unlabeled
+            button sitting in front of every goal in the tree. */}
         <div
           className="shrink-0 cursor-grab active:cursor-grabbing touch-none hidden sm:block"
+          aria-label={`Reparent ${goal.title}`}
           {...attributes}
           {...listeners}
           onClick={e => e.stopPropagation()}
@@ -207,7 +219,10 @@ export default function GoalsListView({ data, onRefresh, selectedGoalId }) {
 
   const navigate = useNavigate();
 
-  const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 8 } }));
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 8 } }),
+    useSensor(KeyboardSensor, { coordinateGetter: goalsKeyboardCoordinates }),
+  );
 
   // Which goal is open comes from the route, so the panel is shareable/bookmarkable and
   // survives a reload. `goalsLoaded` keeps "the tree failed to load" distinct from "this
@@ -343,6 +358,39 @@ export default function GoalsListView({ data, onRefresh, selectedGoalId }) {
   }, [onRefresh]);
 
   const handleDragCancel = useCallback(() => setDraggedGoal(null), []);
+
+  // dnd-kit's stock announcements read out `drag-<uuid>`. Name the goals the
+  // user is reparenting instead, and say which target the drag is currently on.
+  const accessibility = useMemo(() => {
+    const goalTitle = (node) => node?.data?.current?.goal?.title || 'goal';
+    const targetName = (over) => {
+      if (!over) return null;
+      if (over.data?.current?.root) return 'the top level';
+      const title = over.data?.current?.goal?.title;
+      return title ? `under "${title}"` : null;
+    };
+    return {
+      announcements: {
+        onDragStart: ({ active }) => `Picked up ${goalTitle(active)}. Use the arrow keys to choose a new parent, Space to move it there, or Escape to cancel.`,
+        onDragOver: ({ active, over }) => {
+          const target = targetName(over);
+          return target
+            ? `${goalTitle(active)} is over ${target}.`
+            : `${goalTitle(active)} is not over a drop target.`;
+        },
+        onDragEnd: ({ active, over }) => {
+          const target = targetName(over);
+          return target
+            ? `Moved ${goalTitle(active)} ${target}.`
+            : `${goalTitle(active)} was dropped outside the tree and did not move.`;
+        },
+        onDragCancel: ({ active }) => `Cancelled moving ${goalTitle(active)}. It stayed where it was.`,
+      },
+      screenReaderInstructions: {
+        draggable: 'To reparent this goal, press Space or Enter. While moving, use the arrow keys to choose a new parent goal or the top-level drop zone, then press Space to move it there, or Escape to cancel.',
+      },
+    };
+  }, []);
 
   return (
     <div className="h-full flex flex-col sm:flex-row relative">
@@ -482,6 +530,8 @@ export default function GoalsListView({ data, onRefresh, selectedGoalId }) {
         {/* Tree list with drag-and-drop */}
         <DndContext
           sensors={sensors}
+          accessibility={accessibility}
+          collisionDetection={keyboardAwareCollisionDetection}
           onDragStart={handleDragStart}
           onDragEnd={handleDragEnd}
           onDragCancel={handleDragCancel}

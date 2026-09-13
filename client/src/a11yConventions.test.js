@@ -35,6 +35,11 @@
  *   7. An icon-only `<button>` sized to its bare icon (`p-1` around a
  *      12-14px glyph = a 22px target) instead of the 44px floor the rest of
  *      the app enforces.
+ *   8. A `DndContext` whose sensor list has no `KeyboardSensor`. dnd-kit's
+ *      `attributes` make every drag handle a tab stop that announces itself as
+ *      draggable and points at "press the space bar to pick up" instructions,
+ *      so a pointer-only sensor list actively instructs the user to use an
+ *      interaction nothing is listening for.
  *
  * Scoped to git-tracked `.jsx` under `client/src` so an untracked scratch file
  * can't fail the suite.
@@ -45,6 +50,7 @@ import { readFileSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { trackedJsxFiles as trackedJsx, trackedSourceFiles as trackedSources } from './test/trackedFiles.js';
+import { escapeRegExp } from './lib/textUtils.js';
 
 const CLIENT_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -1961,6 +1967,155 @@ function* imagesWithoutAlt(src) {
   }
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Conditional error renders must announce themselves (#7266).
+//
+// The shape is always the same: an async action fails, a flag flips, and red
+// text appears somewhere below the form while focus stays on the button that
+// started it. An inert <div> announces nothing, so a screen-reader user's
+// mental model after a failed save is "it worked" (WCAG 4.1.3 Status Messages).
+// The answer is either <Banner>, which now supplies role="alert"/"status"
+// itself, or an explicit role on the element.
+
+// Which host elements this rule is about: the ones that carry the failure text.
+// A conditionally-rendered <a>/<button> is a control the user reaches by
+// tabbing, and a component tag owns its own semantics — both are out of remit.
+const ERROR_TEXT_HOST_TAGS = new Set(['div', 'p', 'span', 'section', 'article']);
+
+// role="alert"/"status" carry implicit live semantics; aria-live is the
+// explicit spelling. Any of the three satisfies the rule.
+const LIVE_REGION_ATTRIBUTE = /(?:^|\s)(?:aria-live\s*=|role\s*=\s*(?:["'{]\s*)?["']?(?:alert|status|log|progressbar)\b)/;
+const hasLiveRegion = (tag) => LIVE_REGION_ATTRIBUTE.test(tag);
+
+// The expression immediately guarding the element at `index`, or null when the
+// element is not the direct result of a `{… && <tag>}` render. Only whitespace
+// and grouping parens may sit between the `&&` and the `<`: a tag that opened
+// after the guard is a child of some other element, not the guarded node.
+const guardExpressionBefore = (src, index) => {
+  let i = index - 1;
+  while (i >= 0 && /[\s(]/.test(src[i])) i -= 1;
+  if (i < 1 || src[i] !== '&' || src[i - 1] !== '&') return null;
+  const end = i - 1;
+  let start = end;
+  // Walk back to the `{` that opened the JSX expression container. A closing
+  // brace or a statement terminator means this `&&` is not a JSX guard at all.
+  // `>` deliberately does NOT stop the walk — inside a guard it is a comparison
+  // (`missing.length > 0 &&`) or an arrow tail far more often than a tag
+  // boundary, and stopping on it blinded the rule to every such guard.
+  while (start > 0 && !'{};'.includes(src[start - 1])) start -= 1;
+  if (start === 0 || src[start - 1] !== '{') return null;
+  const expression = src.slice(start, end).trim();
+  // What `>` was there to catch: JSX TEXT containing a bare `&&`, where the walk
+  // crosses the enclosing element's own opening tag. A guard expression holds no
+  // `<` (`a < b` in one is rare enough to lose), so its presence means the walk
+  // left the expression container.
+  return expression.includes('<') ? null : expression;
+};
+
+// Does this guard name an error? The last path segment is the one that names
+// the value — `status.error`, `fork?.error`, `s.result?.error` — so a
+// `preferredTone` or an `err.details` nested inside an already-live section is
+// not dragged in by a substring match on the whole expression.
+const ERROR_NAMED_SEGMENT = /(?:error|^errs?$)/i;
+const guardsOnError = (expression) => {
+  // `{a && b && <div>}` guards on the LAST operand — the earlier ones are
+  // preconditions that say nothing about what the element renders — and
+  // `{cond ? x : y && <div>}` on the last ternary arm. Peel both before asking
+  // what the guard names.
+  // `?(?!\.)` so the ternary peel does not eat optional chaining — splitting
+  // `errorContext?.missing?.length > 0` on a bare `?` leaves `.length > 0`, and
+  // the guard stops naming the error it is guarding on.
+  const operand = expression.split('&&').pop().split(/\?(?!\.)|:/).pop().trim();
+  // A NEGATED error guard renders the SUCCESS path — `{!loadError && <Viewer/>}`
+  // is the model, not the failure message — and announcing the normal content
+  // of a page as a status message is its own defect.
+  if (operand.startsWith('!') && !operand.startsWith('!=')) return false;
+  const segments = operand.split(/[.[\]()]/).map((part) => part.trim()).filter(Boolean);
+  const namesError = (text) => Boolean(text) && ERROR_NAMED_SEGMENT.test(text);
+  // A comparison is not a truthiness check, and reading only its tail turns
+  // `status !== 'error'` — a SUCCESS guard — into an error render.
+  const comparison = operand.match(/(!|=)==?/);
+  if (comparison) {
+    // `x !== y` renders when the two differ: the success path, or a detail
+    // beside an error already on screen. Either way, not the error itself.
+    if (comparison[1] === '!') return false;
+    const right = operand.slice(comparison.index + comparison[0].length).trim();
+    // `error === null` is the success branch spelled the other way round.
+    if (/^(?:null|undefined|false|''|""|0)$/.test(right)) return false;
+    return namesError(right) || namesError(segments[0]) || namesError(segments.at(-1));
+  }
+  // The tail names the value (`status.error`, `fork?.error`), but a standard
+  // Error is read through its properties, so the ROOT names it too
+  // (`error.message`). Everything between is a container, not the name.
+  return namesError(segments.at(-1)) || namesError(segments[0]);
+};
+
+// Does a live region already cover this element — one it sits inside, or one it
+// renders? Either way the text is announced exactly once, which is the point;
+// only an element with none anywhere on its path is silent.
+const announcesTag = (node) => node.tag && (hasLiveRegion(node.tag) || node.name === 'Banner');
+
+const isCoveredByLiveRegion = (node, nodes) => {
+  for (let parent = node.parent; parent; parent = parent.parent) {
+    if (announcesTag(parent)) return true;
+  }
+  return nodes.some((other) => announcesTag(other) && isDescendantOf(other, node));
+};
+
+const isDescendantOf = (node, ancestor) => {
+  for (let parent = node.parent; parent; parent = parent.parent) {
+    if (parent === ancestor) return true;
+  }
+  return false;
+};
+
+// The conditional renders this rule deliberately does not ask to announce,
+// keyed by the guard EXPRESSION rather than a line number so an edit above them
+// cannot silently retire the entry (or resurrect a stale one).
+const JUSTIFIED_SILENT_ERROR_RENDERS = new Map([
+  // Wraps <AppOperationBanner>, which declares role="status" itself. A one-file
+  // walk cannot see across the import, and a second role here would nest two
+  // live regions around the same text.
+  ['src/components/apps/tabs/RepositorySourcePanel.jsx', new Set(['(isOperating || restarting || operationError || operationCompleted)'])],
+  // Not a status message: `expandedSections.errors` is a disclosure toggle over
+  // a static list of historical error CATEGORIES. It appears because the user
+  // opened it, so announcing it would duplicate the button they just pressed.
+  ['src/components/cos/tabs/LearningTab.jsx', new Set([
+    'expandedSections.errors',
+    // Both of these render INSIDE that disclosure: a static analytics list of
+    // historical error categories and samples, already on screen when the user
+    // opens the section. Nothing appears in response to anything.
+    'error.affectedTypes?.length > 0',
+    'err.details',
+  ])],
+  // A truncation qualifier — "(results may be truncated)" — inside the <p> that
+  // already reports the count. It is a clause of that sentence, not a message,
+  // and announced on its own it says nothing.
+  ['src/components/apps/tabs/DatadogTab.jsx', new Set(['errors.length >= 100'])],
+]);
+
+// Two substring-cheap prechecks before the walk: a file that never writes
+// `&& <div` cannot hold the shape at all, and lexing one into the tag index
+// costs a pass over its whole text.
+const MAY_GUARD_ERROR_RENDER = /&&\s*\(?\s*<(?:div|p|span|section|article)[\s>/]/;
+
+function* silentErrorRenders(src, file) {
+  if (!MAY_GUARD_ERROR_RENDER.test(src) || !/err/i.test(src)) return;
+  // Materialized only once a candidate is actually found: the coverage check
+  // needs every node, and the files that reach it are a small minority.
+  let nodes = null;
+  for (const node of forEachOpeningTag(src)) {
+    if (!ERROR_TEXT_HOST_TAGS.has(node.name)) continue;
+    if (hasLiveRegion(node.tag)) continue;
+    const expression = guardExpressionBefore(src, node.index);
+    if (!expression || !guardsOnError(expression)) continue;
+    nodes ??= [...forEachOpeningTag(src)];
+    if (isCoveredByLiveRegion(node, nodes)) continue;
+    if (JUSTIFIED_SILENT_ERROR_RENDERS.get(file)?.has(expression)) continue;
+    yield node;
+  }
+}
+
 describe('a11y conventions', () => {
   // Modal.jsx IS the shared implementation; Drawer and Layout use the same
   // backdrop treatment for a slide-in panel / mobile nav scrim, both of which
@@ -3323,4 +3478,658 @@ describe('a11y conventions', () => {
     for (const file of scanned) offenders.push(...offendersIn(file, rawSourceOf(file)));
     expect(offenders, `Icon-only <button> under the 44px touch-target minimum — add min-h-[44px] min-w-[44px] inline-flex items-center justify-center and leave the icon size alone:\n${offenders.join("\n")}`).toEqual([]);
   });
+
+  it('registers a KeyboardSensor in every DndContext (#7243)', () => {
+    // `useDraggable`/`useSortable` return `attributes` that UNCONDITIONALLY
+    // carry role="button", tabIndex={0}, aria-roledescription="draggable" and
+    // an aria-describedby pointing at dnd-kit's own "press the space bar to
+    // pick up" instruction text. So a DndContext registered with PointerSensor
+    // alone is worse than a missing feature: every handle is a tab stop that
+    // tells the user to press a key nothing is listening for.
+    //
+    // #6911 fixed KanbanBoard and three siblings kept the defect, because
+    // nothing asked the question tree-wide. This is that question. It is
+    // file-local on purpose — every DndContext in this tree builds its sensors
+    // in the same module — so a future call site that imports its sensors from
+    // elsewhere should extend the rule rather than be quietly exempted.
+    //
+    // Which getter to pass is the surface's call: a SortableContext wants
+    // @dnd-kit/sortable's `sortableKeyboardCoordinates`, free `useDroppable`
+    // zones want `createFreeDroppableKeyboardCoordinates` from
+    // lib/dndKeyboardCoordinates.js, and a board with its own geometry writes
+    // one (KanbanBoard.jsx's `kanbanKeyboardCoordinates`).
+    const namedImportsFrom = (src, moduleId) => {
+      const re = new RegExp(`import\\s*(?:[\\w$]+\\s*,\\s*)?\\{([^}]*)\\}\\s*from\\s*['"]${escapeRegExp(moduleId)}['"]`, 'g');
+      const bindings = new Map();
+      let m;
+      while ((m = re.exec(src))) {
+        for (const part of m[1].split(',')) {
+          const [imported, local] = part.trim().split(/\s+as\s+/).map((s) => s.trim());
+          if (imported) bindings.set(imported, local || imported);
+        }
+      }
+      return bindings;
+    };
+
+    // Blank out every string literal before looking for the registration call.
+    // Comments are already masked, but a quoted `"useSensor(KeyboardSensor)"`
+    // in a title or a className would otherwise forge the exemption — and the
+    // forged text would be invisible in review, which is the same trap the
+    // clickable-element rule above is written around. Blanking preserves both
+    // length and newlines so every index into the result still names the line
+    // it names in the original.
+    const withoutStringLiterals = (src) => src.replace(
+      /"(?:[^"\\\n]|\\.)*"|'(?:[^'\\\n]|\\.)*'|`(?:[^`\\]|\\.)*`/g,
+      (literal) => literal[0] + literal.slice(1, -1).replace(/[^\n]/g, ' ') + literal.at(-1),
+    );
+
+    // The argument list of the call whose `(` follows `from`, brace/paren
+    // balanced so a nested `useSensor(P, { activationConstraint: {…} })` does
+    // not end it early.
+    const balancedSliceAt = (src, from, open, close) => {
+      const start = src.indexOf(open, from);
+      if (start === -1) return null;
+      let depth = 0;
+      for (let i = start; i < src.length; i += 1) {
+        if (src[i] === open) depth += 1;
+        else if (src[i] === close) {
+          depth -= 1;
+          if (depth === 0) return src.slice(start + 1, i);
+        }
+      }
+      return null;
+    };
+
+    // The sensor list THIS mount was handed: either `sensors={useSensors(…)}`
+    // written inline, or the `useSensors(…)` call the named binding resolves to.
+    //
+    // Returns null when the expression is some other shape — a call, an array
+    // literal, a prop — and the caller then falls back to the file-wide
+    // question. That fallback is deliberately the conservative direction: a
+    // spelling this cannot read is not evidence of a missing sensor, and a
+    // tree-wide guard that FALSELY fails a correct change costs more than one
+    // that misses an exotic shape. Widen the resolver when a real call site
+    // needs it rather than guessing.
+    //
+    // A name declared more than once is likewise unresolvable, not "the first
+    // one wins" — two components in one file each declaring `const sensors =
+    // useSensors(…)` would otherwise be checked against whichever came first,
+    // which both hides a pointer-only sibling AND falsely flags a correct one
+    // when the order is reversed. Same rule, same reason, as the shim lookup
+    // the clickable-element scan above uses.
+    const sensorListFor = (src, tagIndex, useSensorsLocal) => {
+      if (!useSensorsLocal) return null;
+      const tag = openingTagAt(src, tagIndex);
+      const expr = tag && balancedSliceAt(tag, tag.indexOf('sensors='), '{', '}')?.trim();
+      if (!expr) return null;
+      if (expr.startsWith(`${useSensorsLocal}(`)) return balancedSliceAt(expr, 0, '(', ')');
+      if (!/^[\w$]+$/.test(expr)) return null;
+      const decls = [...src.matchAll(new RegExp(`(?:const|let|var)\\s+${expr}\\s*=`, 'g'))];
+      if (decls.length !== 1) return null;
+      const assignsUseSensors = new RegExp(`(?:const|let|var)\\s+${expr}\\s*=\\s*${useSensorsLocal}\\s*\\(`);
+      return assignsUseSensors.test(src.slice(decls[0].index))
+        ? balancedSliceAt(src, decls[0].index, '(', ')')
+        : null;
+    };
+
+    // Read off the import clause and the call expression, never off raw text,
+    // and ask the question once per MOUNT rather than once per file — a file
+    // holding a keyboard-enabled context beside a pointer-only one must not
+    // have the first one exempt the second.
+    // NB: the import clause is read off the source with its strings INTACT —
+    // the module specifier is itself a string literal, so resolving the local
+    // names against a blanked copy finds no dnd-kit import at all and the whole
+    // rule silently passes. Blanking applies only to the text handed to
+    // `registers`, which is the one place a literal could forge a match.
+    const offendersIn = (file, src) => {
+      const core = namedImportsFrom(src, '@dnd-kit/core');
+      const contextLocal = core.get('DndContext');
+      if (!contextLocal) return [];
+      const sensorLocal = core.get('KeyboardSensor');
+      const useSensorLocal = core.get('useSensor');
+      const useSensorsLocal = core.get('useSensors');
+      const registers = (text) => Boolean(sensorLocal && useSensorLocal && text)
+        && new RegExp(`\\b${useSensorLocal}\\s*\\(\\s*${sensorLocal}\\b`).test(withoutStringLiterals(text));
+
+      const offenders = [];
+      for (const { index } of forEachOpeningTag(src, contextLocal)) {
+        if (registers(sensorListFor(src, index, useSensorsLocal) ?? src)) continue;
+        offenders.push(`${file}:${lineOf(src, index)}`);
+      }
+      return offenders;
+    };
+
+    // Probe first — the tree is green, so nothing in it pins what the matcher
+    // rejects, and a silent change of shape would turn the rule vacuous.
+    const probe = (src) => offendersIn('probe.jsx', src);
+    const IMPORT_BOTH = "import { DndContext, KeyboardSensor, PointerSensor, useSensor, useSensors } from '@dnd-kit/core';";
+    const IMPORT_POINTER = "import { DndContext, PointerSensor, useSensor, useSensors } from '@dnd-kit/core';";
+    expect(probe(`${IMPORT_POINTER}\nconst s = useSensor(PointerSensor);\n<DndContext sensors={s} />`)).toEqual(['probe.jsx:3']);
+    expect(probe(`${IMPORT_BOTH}\nconst s = useSensors(useSensor(PointerSensor), useSensor(KeyboardSensor, { coordinateGetter }));\n<DndContext sensors={s} />`)).toEqual([]);
+    // An aliased import is the same registration under another name…
+    expect(probe("import { DndContext as Dnd, KeyboardSensor as KS, useSensor as sensor } from '@dnd-kit/core';\nconst s = sensor(KS, {});\n<Dnd sensors={s} />")).toEqual([]);
+    // …and importing the symbol without ever registering it is not.
+    expect(probe(`${IMPORT_BOTH}\nconst s = useSensor(PointerSensor);\n<DndContext sensors={s} />`)).toEqual(['probe.jsx:3']);
+    // Neither is a quoted mention — and it must be pinned against an import
+    // list that ALREADY has KeyboardSensor in it, or the case passes for the
+    // unrelated reason that the symbol was never imported, and the forgery
+    // branch is never exercised at all.
+    expect(probe(`${IMPORT_BOTH}\nconst s = useSensor(PointerSensor);\n<DndContext sensors={s} title="useSensor(KeyboardSensor)" />`)).toEqual(['probe.jsx:3']);
+    expect(probe(`${IMPORT_BOTH}\nconst label = \`useSensor(KeyboardSensor)\`;\n<DndContext sensors={useSensor(PointerSensor)} />`)).toEqual(['probe.jsx:3']);
+    // …and blanking the literals must not shift the reported line, whether the
+    // literal carries an escape or a real newline.
+    expect(probe(`${IMPORT_BOTH}\nconst note = "a\\nb";\n<DndContext sensors={useSensor(PointerSensor)} />`)).toEqual(['probe.jsx:3']);
+    expect(probe(`${IMPORT_BOTH}\nconst note = \`one\ntwo\`;\n<DndContext sensors={useSensor(PointerSensor)} />`)).toEqual(['probe.jsx:4']);
+    // Nor does a same-named import from some other module count.
+    expect(probe(`${IMPORT_POINTER}\nimport { KeyboardSensor, useSensor } from './fake';\nconst s = useSensor(KeyboardSensor);\n<DndContext sensors={s} />`)).toEqual(['probe.jsx:4']);
+
+    // The list is resolved per MOUNT, so one keyboard-enabled context cannot
+    // exempt a pointer-only sibling in the same file — the false negative a
+    // file-wide search leaves behind.
+    const TWO_CONTEXTS = `${IMPORT_BOTH}
+const withKeys = useSensors(useSensor(PointerSensor), useSensor(KeyboardSensor, { coordinateGetter }));
+const pointerOnly = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }));
+<><DndContext sensors={withKeys} /><DndContext sensors={pointerOnly} /></>`;
+    expect(probe(TWO_CONTEXTS)).toEqual(['probe.jsx:4']);
+    // An inline list resolves the same way, nested option braces and all.
+    expect(probe(`${IMPORT_BOTH}\n<DndContext sensors={useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }))} />`)).toEqual(['probe.jsx:2']);
+    expect(probe(`${IMPORT_BOTH}\n<DndContext sensors={useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }), useSensor(KeyboardSensor))} />`)).toEqual([]);
+    // A `sensors` expression this cannot resolve falls back to the file-wide
+    // question rather than reporting a context it never read — the conservative
+    // direction, since a guard that falsely fails a correct change is worse
+    // than one that misses an exotic spelling.
+    expect(probe(`${IMPORT_BOTH}\nconst s = useSensors(useSensor(KeyboardSensor));\n<DndContext sensors={makeSensors()} />`)).toEqual([]);
+    // A name declared twice is unresolvable for the same reason: resolving to
+    // whichever declaration came first would hide the pointer-only component
+    // here, and FALSELY FLAG the keyboard-enabled one if the two were reversed.
+    const DUPLICATE_NAME = `${IMPORT_BOTH}
+function A() { const sensors = useSensors(useSensor(PointerSensor), useSensor(KeyboardSensor)); return <DndContext sensors={sensors} />; }
+function B() { const sensors = useSensors(useSensor(PointerSensor)); return <DndContext sensors={sensors} />; }`;
+    expect(probe(DUPLICATE_NAME)).toEqual([]);
+    // …and with no keyboard registration anywhere, the fallback still reports
+    // BOTH mounts, so the duplicate-name branch is a widening of scope, not an
+    // exemption.
+    expect(probe(DUPLICATE_NAME.replaceAll(', useSensor(KeyboardSensor)', ''))).toEqual(['probe.jsx:2', 'probe.jsx:3']);
+    // A file that never mounts a DndContext is out of the rule's remit, even
+    // when it uses dnd-kit for something else.
+    expect(probe("import { useDraggable } from '@dnd-kit/core';\nconst d = useDraggable({ id });")).toEqual([]);
+
+    // `maskComments` is the most expensive routine in this file, so mask only
+    // the handful of files that mention dnd-kit at all — the raw substring is a
+    // superset of "imports DndContext", and a commented-out import is still
+    // rejected because the masked source is what `offendersIn` then reads.
+    const scanned = trackedSourceFiles().filter((file) => rawSourceOf(file).includes('@dnd-kit/core'));
+    const withContext = scanned.filter((file) => namedImportsFrom(maskedSourceOf(file), '@dnd-kit/core').has('DndContext'));
+    // Assert the scan really found the live call sites, so a change to the file
+    // walker can't turn this into a pass over zero DndContexts.
+    expect(withContext.length, 'no client source mounts a DndContext — has trackedSourceFiles() changed its path shape?').toBeGreaterThanOrEqual(7);
+
+    const offenders = [];
+    for (const file of withContext) offenders.push(...offendersIn(file, maskedSourceOf(file)));
+    expect(offenders, `DndContext registered without a KeyboardSensor — every dnd-kit handle already announces itself as draggable and tells the user to press Space, so a pointer-only sensor list is a WCAG 2.1.1 failure. Add useSensor(KeyboardSensor, { coordinateGetter }) (sortableKeyboardCoordinates for a SortableContext, createFreeDroppableKeyboardCoordinates from lib/dndKeyboardCoordinates.js for free droppables):\n${offenders.join('\n')}`).toEqual([]);
+  });
+
+  // --- routed-page top-level heading (#7245) -------------------------------
+  //
+  // A routed page with no <h1> inverts the document outline: heading
+  // navigation opens at <h2>/<h3> — or worse, a nested page mounts a second
+  // <h1> beside the shell's — which fails WCAG 1.3.1/3.2.4 and was the exact
+  // defect #7245 fixed on the five audited routes.
+  //
+  // "Supplies a heading" means the routed element's file renders an <h1> or the
+  // shared <PageHeader> (which owns the h1), or forwards the question through
+  // the idioms this tree writes for routed components: a re-export barrel
+  // (`export { X } from './X'`, `export { default } from './Page'`), or a thin
+  // page that renders an imported component carrying the heading
+  // (Agents -> AgentList, AppDetail -> AppDetailView).
+  //
+  // Two carve-outs keep the question honest rather than broad:
+  //   - a nested <Route> inherits the heading from its ancestor's element —
+  //     the MediaGen shell owns /media/*'s <h1>, so a tab page mounted in its
+  //     outlet must not add a second;
+  //   - the lists below. HEADINGLESS_ROUTE_ELEMENTS is elements that render no
+  //     page body of their own — the app chrome, a redirect-only element, the
+  //     drawer-only deep link. ROUTE_HEADING_GAP_ALLOWLIST is the pre-existing
+  //     debt: pages whose hand-rolled header still stops below <h1>, on routes
+  //     the #7245 sweep never reached. Each row is a real defect — normalize
+  //     the page onto PageHeader (Ambient: an sr-only h1 — it is deliberately
+  //     chromeless) and delete the row; the stale-entry rule keeps the list
+  //     honest.
+
+  // name -> { file, exportedName } for every component a `<Route element>` in
+  // this source can name: the static relative imports, plus `lazyWithReload`
+  // declarations — `const X = lazyWithReload(() => import('./pages/X'))`, and
+  // the DevTools idiom `.then(m => ({ default: m.X }))`, which binds the page
+  // under a NAMED export of the target module rather than `default`.
+  const routeElementBindings = (appSrc, appFile) => {
+    const bindings = relativeImportBindings(appSrc, appFile);
+    const lazy = /const\s+([A-Z][\w$]*)\s*=\s*lazyWithReload\(\s*\(\)\s*=>\s*import\(\s*['"]([^'"]+)['"]\s*\)\s*(?:\.then\(\s*\w+\s*=>\s*\(\s*\{\s*default\s*:\s*\w+\.([A-Z][\w$]*)\s*\}\s*\)\s*\))?/g;
+    for (const m of appSrc.matchAll(lazy)) {
+      const file = resolveRelativeImport(appFile, m[2]);
+      if (file) bindings.set(m[1], { file, exportedName: m[3] ?? 'default' });
+    }
+    return bindings;
+  };
+
+  // `element={<X … />}` on a <Route> opening tag -> 'X'. Every element this
+  // file writes is a single component element; the first name in the
+  // expression is the component mounted.
+  const routeElementName = (routeTag) => /\belement\s*=\s*\{\s*<\s*([A-Z][\w$.]*)/.exec(routeTag)?.[1] ?? null;
+
+  // File -> does the component it exports under `exportedName` put a top-level
+  // heading on the page? The file's own <h1>/<PageHeader> first — then the
+  // barrel and thin-wrapper idioms. `seen` bounds the chase so a forwarding
+  // cycle resolves to "no" rather than recursing.
+  const suppliesPageHeading = (file, exportedName, seen = new Set()) => {
+    const key = `${file}#${exportedName}`;
+    if (seen.has(key) || seen.size >= 8) return false;
+    seen.add(key);
+    const src = maskedSourceOf(file);
+    const rendered = renderedTagNames(src);
+    if (rendered.has('h1') || rendered.has('PageHeader')) return true;
+    const imports = relativeImportBindings(src, file);
+    // A file that imports the shared header counts even before its tag is
+    // spelled out (#7245's rule) — and covers an aliased render of it.
+    for (const { file: imported } of imports.values()) {
+      if (/(^|\/)PageHeader\.jsx$/.test(imported)) return true;
+    }
+    const forwarded = reExportBindings(src, file).get(exportedName);
+    if (forwarded && suppliesPageHeading(forwarded.file, forwarded.exportedName, seen)) return true;
+    // A thin page that mounts an imported component carrying the heading —
+    // Agents mounts AgentList — satisfies the route without writing its own.
+    for (const [local, binding] of imports) {
+      if (rendered.has(local) && suppliesPageHeading(binding.file, binding.exportedName, seen)) return true;
+    }
+    return false;
+  };
+
+  // Every <Route> element in `appFile` that resolves to a tracked file,
+  // deduped by module+export, each carrying whether an ancestor <Route>'s
+  // element already supplies the heading (a tab shell like MediaGen owns it
+  // for the pages mounted in its outlet).
+  const routedPageElements = (appFile) => {
+    const appSrc = maskedSourceOf(appFile);
+    const bindings = routeElementBindings(appSrc, appFile);
+    const shelledByHeading = (node) => {
+      for (let p = node.parent; p; p = p.parent) {
+        if (p.name !== 'Route' || p.tag === null) continue;
+        const name = routeElementName(p.tag);
+        const binding = name && bindings.get(name);
+        if (binding && suppliesPageHeading(binding.file, binding.exportedName)) return true;
+      }
+      return false;
+    };
+    const elements = new Map();
+    for (const node of forEachOpeningTag(appSrc, 'Route')) {
+      const name = routeElementName(node.tag);
+      if (!name) continue;
+      const binding = bindings.get(name);
+      // A name with no import binding renders no page of its own — Navigate,
+      // and the local RedirectWithSearch/PrefixRedirect helpers.
+      if (!binding) continue;
+      const key = `${binding.file}#${binding.exportedName}`;
+      const shelled = shelledByHeading(node);
+      const prev = elements.get(key);
+      // First-write-wins is wrong here: a file mounted both under a heading
+      // shell and bare keeps the bare verdict, so the exemption can only ever
+      // narrow to a mount that really sits under an h1.
+      if (!prev) elements.set(key, { ...binding, elementName: name, shelled });
+      else if (prev.shelled) prev.shelled = shelled;
+    }
+    return [...elements.values()];
+  };
+
+  const HEADINGLESS_ROUTE_ELEMENTS = new Set([
+    'src/components/Layout.jsx',    // the app chrome — <Outlet/> children own the page h1
+    'src/pages/IMessage.jsx',       // redirect-only: renders <Navigate> to /messages/imessage
+    'src/pages/SyncView.jsx',       // deep link that mounts SyncDetailDrawer over the prior page
+  ]);
+
+  const ROUTE_HEADING_GAP_ALLOWLIST = new Set([
+    'src/pages/Ambient.jsx',        // chromeless ambient display — wants an sr-only h1, not a bar
+    'src/pages/Browser.jsx',
+    'src/pages/CapabilityMap.jsx',
+    'src/pages/ImageClean.jsx',
+    'src/pages/MoodBoardDetail.jsx',
+    'src/pages/RoundEditor.jsx',
+    'src/pages/Security.jsx',
+    'src/pages/UniverseBuilder.jsx',
+    'src/pages/Uploads.jsx',
+  ]);
+
+  it('gives every routed page a top-level heading (#7245)', () => {
+    // Probe first — the tree is green, so nothing in it pins what the walk
+    // rejects, and a silent change of shape would turn the rule vacuous.
+    withVirtualSources({
+      'src/ProbeApp.jsx': `
+        import { Routes, Route, Navigate } from 'react-router';
+        import Good from './pages/ProbeGood';
+        import Bad from './pages/ProbeBad';
+        import Thin from './pages/ProbeThin';
+        import Barrel from './pages/ProbeBarrel';
+        import Shell from './pages/ProbeShell';
+        import ShellBare from './pages/ProbeShellBare';
+        const LazyBad = lazyWithReload(() => import('./pages/ProbeLazyBad'));
+        const LazyGood = lazyWithReload(() => import('./pages/ProbeLazyGood'));
+        const LazyNamed = lazyWithReload(() => import('./pages/ProbeBarrel').then(m => ({ default: m.ProbeGood })));
+        export default function ProbeApp() {
+          return (
+            <Routes>
+              <Route path="/" element={<ShellBare />}>
+                <Route index element={<Good />} />
+                <Route path="bad" element={<Bad />} />
+                <Route path="thin" element={<Thin />} />
+                <Route path="barrel" element={<Barrel />} />
+                <Route path="lazy-bad" element={<LazyBad />} />
+                <Route path="lazy-good" element={<LazyGood />} />
+                <Route path="lazy-named" element={<LazyNamed />} />
+                <Route path="away" element={<Navigate to="/" replace />} />
+                <Route path="gone" element={<Unbound />} />
+                <Route path="shelled" element={<Shell />}>
+                  <Route path="kid" element={<Bad />} />
+                </Route>
+              </Route>
+            </Routes>
+          );
+        }
+      `,
+      'src/pages/ProbeGood.jsx': 'export default function ProbeGood() { return <h1>Good</h1>; }',
+      'src/pages/ProbeBad.jsx': 'export default function ProbeBad() { return <h2>Bad</h2>; }',
+      'src/pages/ProbeThin.jsx': "import ProbeGood from './ProbeGood';\nexport default function ProbeThin() { return <ProbeGood />; }",
+      'src/pages/ProbeBarrel.jsx': "export { default, default as ProbeGood } from './ProbeGood';",
+      'src/pages/ProbeLazyBad.jsx': 'export default function ProbeLazyBad() { return <h2>Lazy</h2>; }',
+      'src/pages/ProbeLazyGood.jsx': "import PageHeader from '../components/PageHeader';\nexport default function ProbeLazyGood() { return <PageHeader title=\"Lazy\" />; }",
+      'src/pages/ProbeShell.jsx': 'export default function ProbeShell() { return <h1>Shell</h1>; }',
+      'src/pages/ProbeShellBare.jsx': 'export default function ProbeShellBare() { return <div />; }',
+    }, () => {
+      const offenders = routedPageElements('src/ProbeApp.jsx')
+        .filter((e) => !e.shelled)
+        .filter((e) => !suppliesPageHeading(e.file, e.exportedName))
+        .map((e) => e.file);
+      // ShellBare (no heading of its own), Bad (h2 only), LazyBad — and NOT:
+      // Good (h1), Thin (delegate owns the h1), Barrel + LazyNamed (barrel
+      // target owns it), LazyGood (PageHeader), Navigate/Unbound (no page),
+      // and the Bad mounted under Shell's h1 outlet.
+      expect(offenders).toEqual([
+        'src/pages/ProbeShellBare.jsx',
+        'src/pages/ProbeBad.jsx',
+        'src/pages/ProbeLazyBad.jsx',
+      ]);
+    });
+
+    const elements = routedPageElements('src/App.jsx');
+    // Assert the walk really read the route table — a walker change that finds
+    // no Route elements must not pass over an empty set.
+    expect(elements.length, 'found no routed page elements in src/App.jsx — has the route table or its lazy-import idiom changed?').toBeGreaterThanOrEqual(90);
+
+    const offenders = elements
+      .filter((e) => !e.shelled)
+      .filter((e) => !HEADINGLESS_ROUTE_ELEMENTS.has(e.file) && !ROUTE_HEADING_GAP_ALLOWLIST.has(e.file))
+      .filter((e) => !suppliesPageHeading(e.file, e.exportedName))
+      .map((e) => `${e.file} (route element <${e.elementName}>)`);
+    expect(offenders, `Routed page renders no <h1> and no <PageHeader> — heading navigation opens below level 1 (WCAG 1.3.1/3.2.4). Give the page the shared PageHeader (or a direct <h1> where the surface is deliberately chromeless); a nested tab page under a heading shell gets a free pass only while the shell owns the h1:\n${offenders.join('\n')}`).toEqual([]);
+  });
+
+  it('keeps no stale entries in the routed-heading exemption lists (#7245)', () => {
+    // The allowlists only shrink. An entry whose element was deleted/renamed —
+    // or whose file now supplies a heading — is dead weight that quietly
+    // re-exempts the next heading omission routed to that file.
+    const routed = new Map(routedPageElements('src/App.jsx').map((e) => [e.file, e]));
+    const stale = [...HEADINGLESS_ROUTE_ELEMENTS, ...ROUTE_HEADING_GAP_ALLOWLIST]
+      .filter((file) => {
+        const entry = routed.get(file);
+        return entry === undefined || suppliesPageHeading(entry.file, entry.exportedName);
+      });
+    expect(stale, `routed-heading exemption entries that no longer match a heading-less routed element — delete them:\n${stale.join('\n')}`).toEqual([]);
+  });
+
+  // --- shared tab bar primitive (#7244) --------------------------------------
+  //
+  // `role="tablist"` promises the WAI-ARIA tabs contract — one tab stop per
+  // bar, Arrow/Home/End moving between tabs — and only
+  // `components/ui/TabPills.jsx` implements it (roving tabindex
+  // `tabIndex={active ? 0 : -1}` plus `handleTabKeyDown`, which also skips
+  // `disabled` tabs). A hand-rolled bar puts every tab in the tab order and
+  // answers the promised keys with nothing (WCAG 4.1.2); the four audited
+  // surfaces in #7244 are exactly the drift #6910's primitive never reached.
+  // client/src/AGENTS.md already says "reuse it, never roll a new tab bar" —
+  // this scan is the backstop that keeps the next hand-rolled tab bar from
+  // shipping the same gap again.
+
+  // Every element whose `role` attribute literally reads "tablist", wherever
+  // one is written. Reading the answer off the parsed tag covers
+  // `role="tablist"`, `role='tablist'` and `role={'tablist'}` as one question;
+  // a commented-out example is masked before the walk, a `title` attribute's
+  // text is never a tag's `role`, and a dynamic `role={expr}` resolves to no
+  // verdict — left to review rather than guessed at.
+  const handRolledTablists = function* (src) {
+    // 'tablist' absent → lexing the file cannot yield a tablist tag.
+    if (!src.includes('tablist')) return;
+    for (const node of forEachOpeningTag(src)) {
+      if (normalizedAttributeValue(attributeValue(node.tag, 'role')) === 'tablist') yield node;
+    }
+  };
+
+  it('routes every tablist through the shared <TabPills> primitive (#7244)', () => {
+    // Probe first — the tree is green by construction (the four audited sites
+    // moved onto TabPills in the same change), so nothing in it pins what the
+    // walk rejects, and a silent change of shape would turn the rule vacuous.
+    const probe = (src) => [...handRolledTablists(src)].map(({ index }) => lineOf(src, index));
+    expect(probe('<div role="tablist" aria-label="X"><button role="tab">A</button></div>')).toEqual([1]);
+    // …whichever way the literal is spelled, and wherever the tag starts.
+    expect(probe("<p>x</p>\n<div\n  role='tablist'\n/>")).toEqual([2]);
+    expect(probe('<div role={"tablist"} />')).toEqual([1]);
+    expect(probe('<div role="tablist" /><nav role="tablist" />')).toEqual([1, 1]);
+    // The shared primitive's call site carries no `role` — it is the answer,
+    // not the question.
+    expect(probe('<TabPills tabs={tabs} activeTab={a} onChange={c} />')).toEqual([]);
+    // A bare role="tab" outside a list is a different defect, and a dynamic
+    // role is unverifiable — both are out of this rule's remit.
+    expect(probe('<div role="tab" /><div role={roleFor(kind)} />')).toEqual([]);
+    // A JSX example written in a comment is masked before the walk, and a
+    // mention inside another attribute's quoted value is never read as a role.
+    expect(probe(maskComments('{/* <div role="tablist" /> */}'))).toEqual([]);
+    expect(probe('<div data-note="x" title="see tablist docs" />')).toEqual([]);
+
+    // Prove the walk sees the real spelling on the shared component itself —
+    // a matcher that silently missed it would pass the tree vacuously.
+    expect(
+      [...handRolledTablists(maskedSourceOf('src/components/ui/TabPills.jsx'))].length,
+      'components/ui/TabPills.jsx no longer writes role="tablist" — has the primitive changed shape?',
+    ).toBeGreaterThanOrEqual(1);
+
+    const offenders = [];
+    for (const file of trackedSourceFiles()) {
+      if (file === 'src/components/ui/TabPills.jsx') continue;
+      const src = maskedSourceOf(file);
+      for (const { index } of handRolledTablists(src)) {
+        offenders.push(`${file}:${lineOf(src, index)}`);
+      }
+    }
+    expect(offenders, `Hand-rolled role="tablist" — render the shared components/ui/TabPills.jsx instead; it owns the roving tabindex + Arrow/Home/End contract a hand-rolled bar cannot honor (WCAG 4.1.2):\n${offenders.join('\n')}`).toEqual([]);
+  });
+
+  // --- menu roles only where the contract is implemented (#7265) --------------
+  //
+  // `role="menu"` is the same class of promise as `role="tablist"` — screen
+  // readers suppress the browse cursor inside it and drive the contents with
+  // ArrowUp/ArrowDown roving focus, Home/End jumps, and Escape returning focus
+  // to the trigger. Claiming the role without implementing those keys makes
+  // the contents unreachable by the means the role announced (WCAG 4.1.2), and
+  // a menu may only own menuitem/group/separator children — a textbox or form
+  // inside it is an additional violation. Two components keep the contract:
+  // `components/ui/OverflowMenu.jsx` and `components/ThemeSwitcher.jsx`. The
+  // seven audited popovers that didn't dropped the claim in #7265 — the
+  // `ShellProviderLauncher.jsx` precedent, which keeps a plain named group of
+  // controls that Tab reaches natively. This scan is the backstop that keeps
+  // the eighth copy from landing.
+
+  // Files allowed to write menu-family roles — each implements the arrow-key
+  // contract itself. The allowlist only shrinks; a new compliant menu goes
+  // through `ui/OverflowMenu.jsx` instead of re-deriving the semantics.
+  const MENU_CONTRACT_ALLOWLIST = new Set([
+    'src/components/ui/OverflowMenu.jsx',
+    'src/components/ThemeSwitcher.jsx',
+  ]);
+
+  // The whole menu role family, not just "menu": BulkTargetPicker's rows were
+  // `role="menuitem"` in a different file than the `role="menu"` container, so
+  // a menu-only scan would have missed the row half of the audited defect.
+  const MENU_CONTRACT_ROLES = new Set(['menu', 'menubar', 'menuitem', 'menuitemcheckbox', 'menuitemradio']);
+
+  // The file-level "did anyone implement the promised keys" question. Any
+  // arrow key counts — a `menubar` legitimately answers Left/Right where a
+  // `menu` answers Up/Down. Comments are masked before this runs, so a doc
+  // comment mentioning ArrowDown can't forge the exemption.
+  const implementsArrowKeys = (src) => /\bArrow(?:Up|Down|Left|Right)\b/.test(src);
+
+  // Every element whose `role` attribute literally reads a menu-family role.
+  // Reading the answer off the parsed tag covers `role="menu"`, `role='menu'`
+  // and `role={'menu'}` as one question; a commented-out example is masked
+  // before the walk; a `closest('[role="menu"]')` selector string
+  // (meatspace/post/ElementsSong.jsx) is never a tag's role; and a dynamic
+  // `role={expr}` resolves to no verdict — left to review rather than guessed.
+  const menuContractSites = function* (src) {
+    // 'menu' absent → lexing the file cannot yield a menu-family tag.
+    if (!src.includes('menu')) return;
+    for (const node of forEachOpeningTag(src)) {
+      if (MENU_CONTRACT_ROLES.has(normalizedAttributeValue(attributeValue(node.tag, 'role')))) yield node;
+    }
+  };
+
+  it('ships menu roles only where arrow-key focus management backs them (#7265)', () => {
+    const offendersIn = (file, src) => {
+      if (MENU_CONTRACT_ALLOWLIST.has(file)) return [];
+      const sites = [...menuContractSites(src)];
+      if (sites.length === 0 || implementsArrowKeys(src)) return [];
+      return sites.map(({ index }) => `${file}:${lineOf(src, index)}`);
+    };
+
+    // Probes first — the tree is green by construction, so fixtures carry the
+    // proof that the walk rejects what the rule exists to reject.
+    const probe = (src, file = 'src/components/probe/Probe.jsx') => offendersIn(file, src);
+    // The audited shape: a menu claim with no arrow-key handling behind it.
+    expect(probe('<div role="menu"><button role="menuitem">A</button></div>'))
+      .toEqual(['src/components/probe/Probe.jsx:1', 'src/components/probe/Probe.jsx:1']);
+    // A bare menuitem in a file with no menu container is the same broken
+    // contract — the row half of the audited defect lived in its own file.
+    expect(probe('<ul><li><button role="menuitemcheckbox">B</button></li></ul>'))
+      .toEqual(['src/components/probe/Probe.jsx:1']);
+    // Whichever way the literal is spelled, and wherever the tag starts.
+    expect(probe("<ul\n  role='menu'\n/>")).toEqual(['src/components/probe/Probe.jsx:1']);
+    expect(probe('<div role={"menu"} />')).toEqual(['src/components/probe/Probe.jsx:1']);
+    // A menu WITH arrow-key handling keeps its contract — allowed anywhere.
+    expect(probe('const onKey = (e) => e.key === "ArrowDown" && focusNext();\n<div role="menu" onKeyDown={onKey} />')).toEqual([]);
+    expect(probe('const onKey = (e) => e.key === "ArrowRight" && focusNext();\n<div role="menubar" onKeyDown={onKey} />')).toEqual([]);
+    // The allowlisted primitives are exempt by name.
+    expect(probe('<div role="menu" />', 'src/components/ui/OverflowMenu.jsx')).toEqual([]);
+    expect(probe('<div role="menuitemradio" />', 'src/components/ThemeSwitcher.jsx')).toEqual([]);
+    // A selector string is not a role attribute, a commented example is masked
+    // before the walk, and a dynamic role is unverifiable — out of remit.
+    expect(probe('<div onKeyDown={(e) => e.target.closest?.("[role=\\"menu\\"]") && f()} />')).toEqual([]);
+    expect(probe(maskComments('{/* <div role="menu" /> */}'))).toEqual([]);
+    expect(probe('<div data-note="menu" role={roleFor(kind)} />')).toEqual([]);
+    // A comment naming the keys does not forge the exemption either.
+    expect(probe(maskComments('// ArrowDown is handled by the caller\n<div role="menu" />')))
+      .toEqual(['src/components/probe/Probe.jsx:2']);
+
+    // The allowlist is pinned to reality: both primitives must still write a
+    // menu-family role AND still implement the keys that exempt them.
+    for (const allowed of MENU_CONTRACT_ALLOWLIST) {
+      const src = maskedSourceOf(allowed);
+      expect(
+        [...menuContractSites(src)].length,
+        `${allowed} no longer writes a menu-family role — drop it from MENU_CONTRACT_ALLOWLIST`,
+      ).toBeGreaterThanOrEqual(1);
+      expect(
+        implementsArrowKeys(src),
+        `${allowed} lost its arrow-key handling — the role now promises keys nothing answers`,
+      ).toBe(true);
+    }
+
+    const offenders = [];
+    for (const file of trackedSourceFiles()) {
+      offenders.push(...offendersIn(file, maskedSourceOf(file)));
+    }
+    expect(offenders, `Menu-family role without arrow-key focus management — a role="menu" promises ArrowUp/ArrowDown roving focus, Home/End and Escape-to-trigger that a hand-rolled popover doesn't implement (WCAG 4.1.2). Drop the role (the ShellProviderLauncher.jsx precedent: a named group of plain controls needs none) or route the popover through components/ui/OverflowMenu.jsx:\n${offenders.join('\n')}`).toEqual([]);
+  });
+
+  it('gives every conditional error render a live region (#7266)', () => {
+    // Probe first — the tree is green by construction (this change swept it),
+    // so nothing left in it pins what the walk rejects, and a silent change of
+    // shape would turn the rule into a vacuous pass over zero matches.
+    const probe = (src) => [...silentErrorRenders(src, 'probe.jsx')].map(({ index }) => lineOf(src, index));
+    expect(probe('{error && <div>{error}</div>}')).toEqual([1]);
+    expect(probe('{saveError && (\n  <p className="x">{saveError}</p>\n)}')).toEqual([2]);
+    // Every accepted answer silences it: role, aria-live, or the shared Banner.
+    expect(probe('{error && <div role="alert">{error}</div>}')).toEqual([]);
+    expect(probe('{error && <div role="status">{error}</div>}')).toEqual([]);
+    expect(probe('{error && <div aria-live="polite">{error}</div>}')).toEqual([]);
+    expect(probe('{error && <Banner tone="error">{error}</Banner>}')).toEqual([]);
+    // …and a live region anywhere on the path covers what is inside it, in
+    // either direction: an ancestor that announces, or a wrapper that delegates
+    // to a Banner it renders.
+    expect(probe('<div role="alert">{error && <span>{error}</span>}</div>')).toEqual([]);
+    expect(probe('{error && <div><Banner tone="error">{error}</Banner></div>}')).toEqual([]);
+
+    // A NEGATED guard renders the success path, not the failure — announcing a
+    // page's normal content as a status message is its own defect.
+    expect(probe('{!loadError && <div>{model.name}</div>}')).toEqual([]);
+    expect(probe('{ready && !error && <div>done</div>}')).toEqual([]);
+    // A guard that names no error is out of remit, however close it reads…
+    expect(probe('{preferredTone && <div>{preferredTone}</div>}')).toEqual([]);
+    // A standard Error is read through its properties, so the guard names it at
+    // the ROOT of the path rather than at the tail.
+    expect(probe('{error.message && <div>{error.message}</div>}')).toEqual([1]);
+    expect(probe('{err.details && <div>{err.details}</div>}')).toEqual([1]);
+    // Deliberately NOT the middle of a path: `insights.recentUnknownErrors.length`
+    // names a COUNT on an analytics record, and reading every segment turns a
+    // panel that was always on screen into a status message.
+    expect(probe('{insights.recentUnknownErrors.length > 0 && <div>samples</div>}')).toEqual([]);
+    // A comparison is not a truthiness check. `=== 'error'` IS the error state;
+    // `!==` renders when two values differ — the success path, or a detail
+    // beside an error already on screen — and `=== null` is success spelled
+    // backwards.
+    expect(probe("{state.status === 'error' && <div>failed</div>}")).toEqual([1]);
+    expect(probe("{lastRun.errorCode === 'HF_AUTH' && <div>sign in</div>}")).toEqual([1]);
+    expect(probe("{status !== 'error' && <div>{model.name}</div>}")).toEqual([]);
+    expect(probe('{error === null && <div>done</div>}')).toEqual([]);
+    // A guard holding a comparison must survive the walk back to its `{` — the
+    // `>` in it is not a tag boundary.
+    expect(probe('{errorContext?.missing?.length > 0 && <p>Unresolved</p>}')).toEqual([1]);
+    // …but JSX TEXT holding a bare `&&` is not a guard, and the walk must not
+    // cross the enclosing tag to pretend it is.
+    expect(probe('<div className="x">retry && <span>{error}</span></div>')).toEqual([]);
+    // …and only the LAST operand is the guard; an error precondition on a
+    // render of something else is not an error message.
+    expect(probe('{error && retryCount && <div>{retryCount}</div>}')).toEqual([]);
+    expect(probe('{loading && error && <div>{error}</div>}')).toEqual([1]);
+    // Controls are reached by tabbing and own their own semantics — a
+    // conditionally-rendered <button>/<a>/component is a different question.
+    expect(probe('{error && <button onClick={retry}>Retry</button>}')).toEqual([]);
+    expect(probe('{error && <ErrorCard error={error} />}')).toEqual([]);
+    // A `&&` that is not a JSX guard must not drag the next element in.
+    expect(probe('const shown = a && b;\n<div>{x}</div>')).toEqual([]);
+    // A JSX example written in a comment is masked before the walk.
+    expect(probe(maskComments('{/* {error && <div>{error}</div>} */}'))).toEqual([]);
+
+    // Prove the walk still sees the shape on a real file — an allowlisted entry
+    // is only meaningful while the matcher would otherwise have flagged it.
+    for (const [file, expressions] of JUSTIFIED_SILENT_ERROR_RENDERS) {
+      const src = maskedSourceOf(file);
+      const flagged = [...silentErrorRenders(src, `${file}.unallowlisted`)]
+        .map(({ index }) => guardExpressionBefore(src, index));
+      for (const expression of expressions) {
+        expect(flagged, `${file} no longer renders \`${expression}\` — retire the allowlist entry`).toContain(expression);
+      }
+    }
+
+    const offenders = [];
+    for (const file of trackedJsxFiles()) {
+      const src = maskedSourceOf(file);
+      for (const node of silentErrorRenders(src, file)) {
+        offenders.push(`${file}:${lineOf(src, node.index)}`);
+      }
+    }
+    expect(offenders, `Conditionally-rendered error text that announces nothing — render <Banner tone="error"> (it supplies role="alert" itself), or add role="alert" for an error the user's own action produced and role="status" for a passive load failure (WCAG 4.1.3):\n${offenders.join('\n')}`).toEqual([]);  });
 });

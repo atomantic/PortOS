@@ -14,6 +14,7 @@ import { useParams, useNavigate, Link } from 'react-router';
 import { ArrowLeft, ImageIcon, FileText, Trash2, Plus, Save, Link2, Unlink, RefreshCw, Images, Film, Play, ScanEye, Copy } from 'lucide-react';
 import PageSkeleton from '../components/ui/PageSkeleton';
 import toast from '../components/ui/Toast';
+import TabPills from '../components/ui/TabPills';
 import InlineConfirmRow from '../components/ui/InlineConfirmRow';
 import GalleryImagePicker from '../components/imageGen/GalleryImagePicker';
 import GalleryVideoPicker from '../components/videoGen/GalleryVideoPicker';
@@ -449,26 +450,19 @@ function MoodBoardEditor({ id }) {
       {/* Add item */}
       <div className="bg-port-card border border-port-border rounded-md p-4 mb-6">
         <div className="flex flex-wrap items-center gap-2 mb-3">
-          <div className="flex items-center gap-2" role="tablist" aria-label="Item type">
-            <button
-              type="button"
-              role="tab"
-              aria-selected={itemType === 'image'}
-              onClick={() => setItemType('image')}
-              className={`flex items-center gap-1.5 px-3 py-1.5 text-sm rounded transition-colors ${itemType === 'image' ? 'bg-port-accent text-white' : 'bg-port-bg text-gray-400 hover:text-white'}`}
-            >
-              <ImageIcon className="w-4 h-4" aria-hidden="true" /> Image
-            </button>
-            <button
-              type="button"
-              role="tab"
-              aria-selected={itemType === 'text'}
-              onClick={() => setItemType('text')}
-              className={`flex items-center gap-1.5 px-3 py-1.5 text-sm rounded transition-colors ${itemType === 'text' ? 'bg-port-accent text-white' : 'bg-port-bg text-gray-400 hover:text-white'}`}
-            >
-              <FileText className="w-4 h-4" aria-hidden="true" /> Note
-            </button>
-          </div>
+          {/* The shared TabPills owns the roving tabindex + arrow-key
+              contract — never roll a tab bar (client/src/AGENTS.md). */}
+          <TabPills
+            variant="pills"
+            size="sm"
+            tabs={[
+              { id: 'image', label: 'Image', icon: ImageIcon },
+              { id: 'text', label: 'Note', icon: FileText },
+            ]}
+            activeTab={itemType}
+            onChange={setItemType}
+            ariaLabel="Item type"
+          />
           {/* Gallery pins (#4188) — pick or upload, added to the board immediately. */}
           <div className="flex items-center gap-2 sm:ml-auto">
             <button

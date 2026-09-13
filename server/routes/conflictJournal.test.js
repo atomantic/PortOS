@@ -14,6 +14,11 @@ const resolverMock = {
 };
 vi.mock('../services/conflictJournalResolver.js', () => resolverMock);
 
+// The route's only lib import is the latch flag — doubled so the payload test
+// controls it without depending on a real sync_base_hashes.json on disk.
+const libMock = { isBaseHashPersistBlocked: vi.fn() };
+vi.mock('../lib/conflictJournal.js', () => libMock);
+
 const conflictJournalRoutes = (await import('./conflictJournal.js')).default;
 
 const makeApp = () => {
@@ -25,7 +30,10 @@ const makeApp = () => {
 };
 
 describe('conflict-journal routes', () => {
-  beforeEach(() => vi.clearAllMocks());
+  beforeEach(() => {
+    vi.clearAllMocks();
+    libMock.isBaseHashPersistBlocked.mockResolvedValue(false);
+  });
 
   it('GET / lists conflicts (optionally filtered by status)', async () => {
     resolverMock.listConflicts.mockResolvedValue([{ id: 'e1', status: 'pending' }]);
@@ -33,6 +41,20 @@ describe('conflict-journal routes', () => {
     expect(res.status).toBe(200);
     expect(res.body.conflicts).toHaveLength(1);
     expect(resolverMock.listConflicts).toHaveBeenCalledWith({ status: 'pending' });
+    // Healthy store → the degraded flag is present and false.
+    expect(res.body.conflictDetection).toEqual({ degraded: false });
+  });
+
+  it('GET / surfaces conflictDetection.degraded while the base-hash store is latched (#7260)', async () => {
+    resolverMock.listConflicts.mockResolvedValue([]);
+    libMock.isBaseHashPersistBlocked.mockResolvedValue(true);
+    const res = await request(makeApp()).get('/api/conflict-journal');
+    expect(res.status).toBe(200);
+    expect(res.body.conflicts).toEqual([]);
+    // An empty list must not read as "no conflicts" — the flag + reason say
+    // detection is degraded instead.
+    expect(res.body.conflictDetection.degraded).toBe(true);
+    expect(res.body.conflictDetection.reason).toContain('sync_base_hashes.json');
   });
 
   it('GET / rejects an invalid status with 400', async () => {

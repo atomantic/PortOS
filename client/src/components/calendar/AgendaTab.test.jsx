@@ -50,13 +50,13 @@ describe('AgendaTab empty states', () => {
     await renderAgenda([{ id: 'disabled', name: 'Personal', enabled: false }]);
 
     const connectLink = await screen.findByRole('link', { name: 'Connect a calendar' });
-    expect(connectLink.getAttribute('href')).toBe('/calendar/sync');
+    expect(connectLink.getAttribute('href')).toBe('/calendar/config');
     expect(screen.getByText('No calendar connected')).toBeTruthy();
     expect(screen.queryByText('Sync your calendar accounts to see events here')).toBeNull();
     expect(screen.getByRole('button', { name: 'Sync' })).toBeDisabled();
 
     fireEvent.click(connectLink);
-    expect(screen.getByTestId('pathname')).toHaveTextContent('/calendar/sync');
+    expect(screen.getByTestId('pathname')).toHaveTextContent('/calendar/config');
   });
 
   it('offers an enabled in-page sync action when accounts have no events', async () => {

@@ -492,7 +492,7 @@ export default function PublishWorkflow({
                 />
               </FormField>
             </div>
-            {contractError && <p className="text-[11px] text-port-error">{contractError}</p>}
+            {contractError && <p role="alert" className="text-[11px] text-port-error">{contractError}</p>}
             {atlasSummary && (
               <p className="text-[11px] text-gray-500">
                 Current atlas grid: <span className="text-gray-300">{atlasSummary}</span>

@@ -21,6 +21,8 @@ PostgreSQL is a **required** install/runtime dependency (see [Backup & Restore](
 
 ## `db-primary` — app-native relational records
 
+- `mind_tool_recipes` / `mind_tool_recipe_versions` — machine-local authored read-tool definitions, stable IDs, active revision/archive metadata, and immutable revisions linked by recipe ID (#7194). No execution output is stored; no definitions or literals enter federation/status payloads. PostgreSQL backup covers both tables. Migration 381 registers schema-only installation; empty installs receive no user recipe seed. Unknown future definitions are retained but unavailable.
+
 **Definition.** Records that PortOS itself authors and relates: they have foreign keys, statuses, audit trails, search/vector indexes, and federated sync cursors/tombstones. The DB is the source of truth; there is no meaningful file representation of the record.
 
 **When to use.** The record participates in relationships (`series.universeId`, `issue.seriesId`, catalog refs), needs cross-record queries ("everything related to this universe"), needs full-text or vector search, or needs per-table sequence cursors for peer sync.
@@ -464,3 +466,7 @@ scheduled-task defaults remain unchanged. `mind.choose-name` uses `manageMind`,
 normal semantic validation, call budgets, idempotency and trajectory outcomes.
 Without that grant the existing automatic core-identity memory path can retain
 an initial conversational choice; it does not grant semantic write authority.
+
+### Managed-app visitor credentials
+
+`data/managed-visitor-credentials.json` is `file-primary`, intentionally machine-local and never federated: bounded app credential digests, exact individual/world allowlists and expiries configure this install's loopback visitor broker. There are no cross-record queries, sync cursors or tombstones. No plaintext credential or neural/private history is stored. The empty schema-1 seed initializes new installs; this new standalone document changes no existing record format. Backups retain the credential configuration with other local data. Ephemeral visitor admissions are memory-only, expire independently at the host, and never resume on startup. Adapter: `server/services/managedVisitorBroker.js`; protocol: [managed visitors](features/managed-visitors.md).

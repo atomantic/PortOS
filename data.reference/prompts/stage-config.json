@@ -932,7 +932,7 @@
     },
     "pipeline-editorial-plot-structure": {
       "name": "Pipeline — Editorial Check: Plot structure & momentum",
-      "description": "Editorial check (#1310): the macro pathologies editors flag at the manuscript/arc level — a passive protagonist, deus ex machina / convenient coincidence, idiot plot, flat or unclear stakes that never escalate, a sagging middle with no try-fail rhythm, and dropped subplots. Reads the stitched manuscript plus the reverse-outline scene map + plotline coverage (reconciling fizzled threads against tagged plotlines) and the authored reader-map hooks/payoffs; degrades to a whole-manuscript scan when no outline exists. Returns issue-anchored findings.",
+      "description": "Editorial check (#1310, #7205): structural pathologies at the manuscript, arc, and scene level — a passive protagonist, deus ex machina / convenient coincidence, idiot plot, flat or unclear stakes, a sagging middle, dropped subplots, and scenes that stall because characters repeat a tactic without an action, response, discovery, consequence, or material change. Distinguishes repeated strategy from repeated wording, preserves purposeful quiet/connective/static passages, and omits whole-scene judgments when chunk context is incomplete. Reads the stitched manuscript plus the reverse-outline scene map + plotline coverage and authored reader-map hooks/payoffs; degrades to a whole-manuscript scan when no outline exists. Returns issue-anchored findings with a concrete structural repair.",
       "model": "default",
       "returnsJson": true,
       "variables": []

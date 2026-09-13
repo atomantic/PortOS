@@ -1,7 +1,12 @@
 import { Router } from 'express';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { streamAttachment } from '../lib/streamAttachment.js';
-import { validateRequest, restoreRequestSchema, restoreDbRequestSchema } from '../lib/validation.js';
+import {
+  validateRequest,
+  restoreRequestSchema,
+  restoreDbRequestSchema,
+  snapshotDownloadQuerySchema,
+} from '../lib/validation.js';
 import * as backup from '../services/backup.js';
 import { getSettings } from '../services/settings.js';
 
@@ -49,9 +54,12 @@ router.get('/snapshots/:snapshotId/download', asyncHandler(async (req, res) => {
     throw new ServerError('No backup destination configured in settings', { status: 400, code: 'BACKUP_NOT_CONFIGURED' });
   }
   const { snapshotId } = req.params;
-  const stream = await backup.openSnapshotStream(destPath, snapshotId);
+  const { source } = validateRequest(snapshotDownloadQuerySchema, req.query);
+  const stream = source
+    ? await backup.openSnapshotStream(destPath, snapshotId, { source })
+    : await backup.openSnapshotStream(destPath, snapshotId);
   streamAttachment(res, stream, {
-    filename: `portos-snapshot-${snapshotId}.tar.gz`,
+    filename: `portos-snapshot-${source ? `${source}-` : ''}${snapshotId}.tar.gz`,
     contentType: 'application/gzip',
     failure: new ServerError('Snapshot download failed', { status: 500, code: 'BACKUP_DOWNLOAD_FAILED' }),
     label: `Backup snapshot ${snapshotId}`,
@@ -60,21 +68,28 @@ router.get('/snapshots/:snapshotId/download', asyncHandler(async (req, res) => {
 
 // POST /api/backup/restore
 router.post('/restore', asyncHandler(async (req, res) => {
-  const { snapshotId, subdirFilter, dryRun } = validateRequest(restoreRequestSchema, req.body);
+  const { snapshotId, source, subdirFilter, dryRun } = validateRequest(restoreRequestSchema, req.body);
   const settings = await getSettings();
-  const result = await backup.restoreSnapshot(settings.backup?.destPath, snapshotId, { dryRun, subdirFilter });
+  const result = await backup.restoreSnapshot(settings.backup?.destPath, snapshotId, {
+    dryRun,
+    subdirFilter,
+    ...(source ? { source } : {}),
+  });
   res.json(result);
 }));
 
 // POST /api/backup/restore-db
 router.post('/restore-db', asyncHandler(async (req, res) => {
-  const { snapshotId, dryRun } = validateRequest(restoreDbRequestSchema, req.body);
+  const { snapshotId, source, dryRun } = validateRequest(restoreDbRequestSchema, req.body);
   const settings = await getSettings();
   const destPath = settings.backup?.destPath;
   if (!destPath) {
     throw new ServerError('No backup destination configured in settings', { status: 400, code: 'BACKUP_NOT_CONFIGURED' });
   }
-  const result = await backup.restorePostgres(destPath, snapshotId, { dryRun });
+  const result = await backup.restorePostgres(destPath, snapshotId, {
+    dryRun,
+    ...(source ? { source } : {}),
+  });
   res.json(result);
 }));
 

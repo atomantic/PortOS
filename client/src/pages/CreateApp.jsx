@@ -612,7 +612,7 @@ export default function CreateApp() {
 
         {/* Error Display */}
         {error && (
-          <div className="p-4 bg-port-error/20 border border-port-error rounded-lg text-port-error">
+          <div role="alert" className="p-4 bg-port-error/20 border border-port-error rounded-lg text-port-error">
             {error}
           </div>
         )}

@@ -1,14 +1,16 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, act } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Routes, Route, useLocation, useParams } from 'react-router';
+import { stubSequentialLayout, pressKey, pressKeyTimes, dndAnnouncement } from '../../test/dndKeyboardDrag';
 
-const { toastError, toastSuccess, organizeGoals, createGoal, applyGoalOrganization } = vi.hoisted(() => ({
+const { toastError, toastSuccess, organizeGoals, createGoal, applyGoalOrganization, updateGoal } = vi.hoisted(() => ({
   toastError: vi.fn(),
   toastSuccess: vi.fn(),
   organizeGoals: vi.fn(),
   createGoal: vi.fn(),
   applyGoalOrganization: vi.fn(),
+  updateGoal: vi.fn(),
 }));
 
 vi.mock('../ui/Toast', () => ({
@@ -18,6 +20,7 @@ vi.mock('../../services/api', () => ({
   createGoal,
   organizeGoals,
   applyGoalOrganization,
+  updateGoal,
 }));
 vi.mock('../../hooks/useProviderModels', () => ({
   default: () => ({
@@ -214,5 +217,53 @@ describe('routed goal selection', () => {
     // does not exist" — the deep link may be perfectly valid.
     await renderList(vi.fn(), { path: '/goals/list/g1', data: null });
     expect(screen.queryByText('Goal not found')).not.toBeInTheDocument();
+  });
+});
+
+// Guards #7243: every goal row carries a grip that dnd-kit makes a focusable
+// role="button" announcing itself as draggable, but the view registered a
+// PointerSensor only — so the handle advertised a keyboard interaction that did
+// nothing. Reparenting is also reachable through GoalEditForm's "Parent Goal"
+// select, so this is not the hard block LibraryPane was; the dead affordance in
+// front of every goal in the tree is the defect.
+describe('GoalsListView keyboard reparenting (#7243)', () => {
+  let restoreLayout;
+  beforeEach(() => {
+    updateGoal.mockResolvedValue({ id: 'g2', parentId: 'g1' });
+    restoreLayout = stubSequentialLayout();
+  });
+  afterEach(() => restoreLayout());
+
+  const pickUp = async (goalTitle) => {
+    await renderList();
+    const handle = screen.getByLabelText(`Reparent ${goalTitle}`);
+    handle.focus();
+    await pressKey('Space', handle);
+  };
+
+  it('reparents a goal with Space, arrows and Space', async () => {
+    await pickUp('Restore the boat');
+    expect(dndAnnouncement()).toMatch(/Restore the boat/);
+
+    // Drop targets in document order are the root zone, then each goal row.
+    // Walk to the top of that list (the getter clamps rather than wrapping),
+    // then step down one to the first goal row.
+    await pressKeyTimes('ArrowUp', 3);
+    expect(dndAnnouncement()).toMatch(/over the top level/);
+    await pressKey('ArrowDown');
+    expect(dndAnnouncement()).toMatch(/under "Sail across an ocean"/);
+
+    await pressKey('Space');
+    expect(updateGoal).toHaveBeenCalledWith('g2', { parentId: 'g1' }, { silent: true });
+  });
+
+  it('cancels on Escape without reparenting', async () => {
+    await pickUp('Restore the boat');
+    await pressKeyTimes('ArrowUp', 3);
+    await pressKey('ArrowDown');
+    await pressKey('Escape');
+
+    expect(updateGoal).not.toHaveBeenCalled();
+    expect(dndAnnouncement()).toMatch(/Cancelled moving Restore the boat/);
   });
 });

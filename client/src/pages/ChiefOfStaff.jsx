@@ -9,7 +9,7 @@ import { isRiggedAvatarStyle, riggedRecordForStyle, useAvatarCapabilities } from
 import { coalesce } from '../utils/coalesce';
 import { sameJsonShape } from '../lib/sameJsonShape';
 import { WEBGL_AVATAR_STYLE_IDS } from '../lib/avatarStyles';
-import { Play, Pause, Square, Clock, CheckCircle, AlertCircle, Cpu, ChevronDown, ChevronUp, ChevronLeft, ChevronRight, Brain, PanelLeftClose, PanelLeftOpen } from 'lucide-react';
+import { Play, Pause, Square, Clock, CheckCircle, AlertCircle, Cpu, ChevronDown, ChevronUp, Brain, PanelLeftClose, PanelLeftOpen } from 'lucide-react';
 import toast from '../components/ui/Toast';
 import BrailleSpinner from '../components/BrailleSpinner';
 import TabPills from '../components/ui/TabPills';
@@ -141,9 +141,6 @@ export default function ChiefOfStaff() {
   // checks, the 30s poll — refreshes the banner without a separate signal. null
   // until the first fetch resolves; preserved across transient fetch failures.
   const [insights, setInsights] = useState(null);
-  const [canScrollLeft, setCanScrollLeft] = useState(false);
-  const [canScrollRight, setCanScrollRight] = useState(false);
-  const tabsRef = useRef(null);
   // Monotonic counter for queue/insight-state writes, so a slow fetchData cannot
   // overwrite a fresher optimistic mutation or fetchQueue result.
   const queueSeqRef = useRef(0);
@@ -718,28 +715,6 @@ export default function ChiefOfStaff() {
     [tasks.user?.grouped?.pending?.length, tasks.cos?.grouped?.pending?.length]
   );
 
-  // Check if tabs can scroll left/right
-  const checkTabsScroll = useCallback(() => {
-    const el = tabsRef.current;
-    if (!el) return;
-    setCanScrollLeft(el.scrollLeft > 0);
-    setCanScrollRight(el.scrollLeft < el.scrollWidth - el.clientWidth - 1);
-  }, []);
-
-  // Update scroll state on mount and resize
-  useEffect(() => {
-    checkTabsScroll();
-    window.addEventListener('resize', checkTabsScroll);
-    return () => window.removeEventListener('resize', checkTabsScroll);
-  }, [checkTabsScroll]);
-
-  const scrollTabs = useCallback((direction) => {
-    const el = tabsRef.current;
-    if (!el) return;
-    const scrollAmount = 200;
-    el.scrollBy({ left: direction === 'left' ? -scrollAmount : scrollAmount, behavior: 'smooth' });
-  }, []);
-
   const hasCanvasAvatar = CANVAS_AVATAR_STYLES.has(avatarStyle) || isRiggedAvatarStyle(avatarStyle);
 
   // Learning tile behaviour shared by the compact (sidebar/mobile) and mini
@@ -1169,37 +1144,16 @@ export default function ChiefOfStaff() {
           />
         </div>
 
-        {/* Tabs - scrollable with arrow navigation */}
+        {/* Tabs */}
         <div className="relative mb-4 shrink-0 lg:mb-6">
-          {/* Left scroll button */}
-          {canScrollLeft && (
-            <button
-              onClick={() => scrollTabs('left')}
-              className="absolute left-0 top-0 bottom-px z-10 flex items-center justify-center w-8 bg-gradient-to-r from-port-bg via-port-bg to-transparent hover:from-port-card"
-              aria-label="Scroll tabs left"
-            >
-              <ChevronLeft size={18} className="text-gray-400" />
-            </button>
-          )}
-          {/* Right scroll button */}
-          {canScrollRight && (
-            <button
-              onClick={() => scrollTabs('right')}
-              className="absolute right-0 top-0 bottom-px z-10 flex items-center justify-center w-8 bg-gradient-to-l from-port-bg via-port-bg to-transparent hover:from-port-card"
-              aria-label="Scroll tabs right"
-            >
-              <ChevronRight size={18} className="text-gray-400" />
-            </button>
-          )}
           <TabPills
             tabs={TABS}
             activeTab={activeTab}
             onChange={(id) => navigate(`/cos/${id}`)}
-            hideLabelOnMobile
+            mobileDropdown
+            mobileSelectId="cos-sections-select"
             ariaLabel="Chief of Staff sections"
             controlsIdPrefix="tabpanel"
-            listRef={tabsRef}
-            onScroll={checkTabsScroll}
             className="pb-px"
           />
         </div>

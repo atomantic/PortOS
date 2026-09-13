@@ -34,6 +34,20 @@ const ALIGNMENTS = {
   center: 'items-center',
 };
 
+// For a screen reader the tone was carried by nothing at all: the icon is
+// optional and aria-hidden by default, so an error banner and a success banner
+// with the same copy read identically. A visually-hidden word in front of the
+// body gives the tone a TEXT form, without a visual diff at any call site.
+// NB: that is a text alternative, not a visual one — the sighted half of WCAG
+// 1.4.1 still rests on passing an `icon`, which this deliberately does not
+// force on 124 existing call sites.
+const TONE_WORDS = {
+  warning: 'Warning',
+  error: 'Error',
+  success: 'Success',
+  info: 'Note',
+};
+
 export default function Banner({
   tone = 'warning',
   icon: Icon,
@@ -43,6 +57,10 @@ export default function Banner({
   // the text doesn't; the icon then renders as a bare exposed <svg>, so the
   // caller is responsible for labeling it (e.g. an aria-label) at the call site.
   iconAriaHidden = true,
+  // A visually-hidden tone word ("Error: ", "Success: ") prefixes the body so
+  // the tone reaches a screen reader. Pass false for the rare banner whose own
+  // copy already opens with the tone word.
+  srLabel = true,
   size = 'sm',
   align = 'start',
   title,
@@ -52,6 +70,7 @@ export default function Banner({
   ...rest
 }) {
   const t = TONES[tone] || TONES.warning;
+  const toneWord = TONE_WORDS[tone] || TONE_WORDS.warning;
   const s = SIZES[size] || SIZES.sm;
   const alignClass = ALIGNMENTS[align] || ALIGNMENTS.start;
   const radius = size === 'lg' || size === 'md' ? 'rounded-lg' : 'rounded';
@@ -62,6 +81,10 @@ export default function Banner({
 
   return (
     <div
+      // Rely on the implicit live semantics of alert/status — a redundant
+      // aria-live alongside them is what double-announces in some readers.
+      // Placed BEFORE {...rest} so a call site that passes its own role wins.
+      role={tone === 'error' ? 'alert' : 'status'}
       className={`${s.padding} ${s.text} border ${radius} ${t.wrapper} flex ${alignClass} ${s.gap} ${className}`.trim()}
       {...rest}
     >
@@ -73,6 +96,7 @@ export default function Banner({
         />
       ) : null}
       <div className="flex-1 min-w-0">
+        {srLabel ? <span className="sr-only">{toneWord}: </span> : null}
         {title ? <div className="font-medium">{title}</div> : null}
         {children}
       </div>

@@ -1,7 +1,7 @@
 import { describe, it, expect, afterAll, vi } from 'vitest';
-import { mkdtempSync, rmSync } from 'fs';
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync } from 'fs';
 import { tmpdir } from 'os';
-import { join } from 'path';
+import { join, dirname } from 'path';
 import { makePathsProxy } from '../lib/mockPathsDataRoot.js';
 
 var tempRoot; // eslint-disable-line no-var
@@ -76,5 +76,27 @@ describe('IdeaLoom local lists', () => {
       expect(await lists.updateList(badId, { title: 'Nope' })).toBeNull();
       expect(await lists.deleteList(badId)).toBe(false);
     }
+  });
+});
+
+// #7261 — the type index's `config.settings` slot IS the user's vault binding,
+// read-modify-written on every toggle. An unreadable index must reject the
+// write rather than persist DEFAULT_SETTINGS over the binding.
+describe('IdeaLoom settings against an unreadable index.json', () => {
+  const indexPath = () => join(getTempRoot(), 'brain', 'idealoom-lists', 'index.json');
+  const TRUNCATED = '{"schemaVersion": 1, "config": {"settings": {"obsidianVaultId": "vault-1", "enabled": true}';
+
+  it('leaves the file byte-identical and does not persist shipped defaults', async () => {
+    mkdirSync(dirname(indexPath()), { recursive: true });
+    writeFileSync(indexPath(), TRUNCATED);
+
+    await expect(lists.getSettings()).rejects.toThrow(/Unreadable JSON file/);
+    await expect(lists.updateSettings({ autoSync: true })).rejects.toThrow(/Unreadable JSON file/);
+
+    expect(readFileSync(indexPath(), 'utf8')).toBe(TRUNCATED);
+
+    // Repairing the file restores normal behavior — the binding survived.
+    writeFileSync(indexPath(), JSON.stringify({ schemaVersion: 1, type: 'idealoom-lists', config: { settings: { enabled: true, obsidianVaultId: 'vault-1', autoSync: false } } }));
+    expect(await lists.updateSettings({ autoSync: true })).toEqual({ enabled: true, obsidianVaultId: 'vault-1', autoSync: true });
   });
 });

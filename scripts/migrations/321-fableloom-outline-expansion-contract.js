@@ -7,7 +7,7 @@ export const ACCEPTED_OLD_MD5 = {
 };
 
 export const NEW_SHIPPED_MD5 = {
-  'fableloom-weave-episode.md': 'abea2442af2be2039b70deee4919c00e',
+  'fableloom-weave-episode.md': '94f22c0807924dadf151341c30720c71',
 };
 
 const { applyMigration, up } = makePromptReplaceMigration({

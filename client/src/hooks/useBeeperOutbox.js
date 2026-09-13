@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import toast from '../components/ui/Toast';
 import {
-  createOutboxEntry, discardOutboxEntry, listOutboxEntries, sendOutboxEntry,
+  createOutboxEntry, discardOutboxEntry, listOutboxEntries, sendOutboxEntry, reconcileOutboxEntry,
 } from '../services/apiBeeper';
 import useBeeperRealtime from './useBeeperRealtime';
 import useMounted from './useMounted';
@@ -230,6 +230,16 @@ export default function useBeeperOutbox(conversationId, { onSent } = {}) {
   /** Give up on a stalled `approved` row outright — see `discardEntry`. */
   const dismiss = useCallback((entry) => discardEntry(entry), [discardEntry]);
 
+  const reconcile = useCallback(async (entry) => {
+    const generation = ++scope.refreshGeneration;
+    const updated = await reconcileOutboxEntry(entry.id, { silent: true }).catch((err) => {
+      if (mountedRef.current && scopeRef.current === scope) toast.error(err.message || 'Could not check delivery');
+      return null;
+    });
+    if (!updated || !mountedRef.current || scopeRef.current !== scope || generation !== scope.refreshGeneration) return;
+    setEntries((prev) => prev.map((row) => row.id === updated.id ? updated : row));
+  }, [scope]);
+
   return {
     entries,
     sending,
@@ -240,6 +250,7 @@ export default function useBeeperOutbox(conversationId, { onSent } = {}) {
     cancelConfirmation,
     retry,
     dismiss,
+    reconcile,
     refresh,
   };
 }

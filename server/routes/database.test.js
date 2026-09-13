@@ -5,7 +5,7 @@
  * we can control every shell invocation without touching the real filesystem
  * or running actual Docker/psql commands.
  */
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import express from 'express';
 import { request } from '../lib/testHelper.js';
 
@@ -33,6 +33,17 @@ vi.mock('../lib/db.js', () => ({
   query: vi.fn(async () => ({ rows: [] })),
 }));
 
+// Wrap fs so a test can substitute a dump source that fails mid-stream — the
+// mid-import read error the abort path exists for. Everything else delegates
+// to the real module (the suite writes real temp dumps).
+vi.mock('fs', async (importOriginal) => {
+  const actual = await importOriginal();
+  return {
+    ...actual,
+    createReadStream: vi.fn(actual.createReadStream),
+  };
+});
+
 // Mock child_process.execFile + spawn at the module level.
 vi.mock('../lib/childProcess.js', async (importOriginal) => {
   const actual = await importOriginal();
@@ -45,8 +56,8 @@ vi.mock('../lib/childProcess.js', async (importOriginal) => {
 
 import { execFile, spawn } from '../lib/childProcess.js';
 import { EventEmitter } from 'events';
-import { PassThrough } from 'stream';
-import { writeFileSync, mkdtempSync, readFileSync } from 'fs';
+import { PassThrough, Readable } from 'stream';
+import { writeFileSync, mkdtempSync, readFileSync, createReadStream } from 'fs';
 import { tmpdir } from 'os';
 import { join as pathJoin } from 'path';
 import databaseRoutes from './database.js';
@@ -111,8 +122,10 @@ describe('importDumpFile (no-shell streaming import)', () => {
     vi.clearAllMocks();
   });
 
-  // Build a fake psql child process backed by real streams.
-  function makeFakePsql() {
+  // Build a fake psql child process backed by real streams. `closeOnKill`
+  // models a terminated psql emitting 'close' asynchronously; tests that must
+  // control exactly when the close lands pass false and emit it themselves.
+  function makeFakePsql({ closeOnKill = true } = {}) {
     const child = new EventEmitter();
     child.stdout = new PassThrough();
     child.stderr = new PassThrough();
@@ -123,11 +136,23 @@ describe('importDumpFile (no-shell streaming import)', () => {
       // Emulate psql exiting cleanly once stdin closes.
       child.emit('close', 0);
     });
-    child.kill = vi.fn();
+    child.kill = vi.fn((signal) => {
+      if (closeOnKill) process.nextTick(() => child.emit('close', null, signal));
+      return true;
+    });
     // Raw bytes piped to psql stdin, concatenated.
     child.__pipedBuffer = () => Buffer.concat(writes);
     child.__piped = (encoding = 'latin1') => Buffer.concat(writes).toString(encoding);
     return child;
+  }
+
+  // A dump source that delivers `prefix` (complete SQL statements), then fails
+  // the read — the mid-import error that must abort the child, not EOF it.
+  function makeFailingSource(prefix, message = 'dump read failed mid-stream') {
+    return Readable.from((async function* () {
+      yield prefix;
+      throw new Error(message);
+    })(), { encoding: 'latin1' });
   }
 
   it('spawns psql via argv without a shell and pipes filtered dump to stdin', async () => {
@@ -222,11 +247,138 @@ describe('importDumpFile (no-shell streaming import)', () => {
     const result = await importDumpFile('/nonexistent/dump.sql', '5432', {});
     expect(result.exitCode).not.toBe(0);
   });
+
+  it('aborts psql without a normal EOF when the dump read fails after a complete SQL prefix', async () => {
+    // closeOnKill: false — the test owns when the child's 'close' lands, so it
+    // can prove the promise stays unsettled until then.
+    const child = makeFakePsql({ closeOnKill: false });
+    spawn.mockReturnValue(child);
+    const stdinEnd = vi.spyOn(child.stdin, 'end');
+    createReadStream.mockImplementationOnce(() => makeFailingSource(
+      'DROP TABLE memories;\nINSERT INTO memories VALUES (1);\n'
+    ));
+
+    let settled = false;
+    const promise = importDumpFile('/fake/dump.sql', '5561', {})
+      .then((r) => { settled = true; return r; });
+
+    // The destructive prefix reached psql's stdin, the read failed, and the
+    // child was told to terminate — before the promise resolves.
+    await vi.waitFor(() => {
+      expect(child.__piped()).toContain('DROP TABLE memories;');
+      expect(child.kill).toHaveBeenCalledWith('SIGTERM');
+    });
+
+    // No end-of-script EOF: stdin.end() is what would let psql commit the
+    // already-delivered statements under --single-transaction.
+    expect(stdinEnd).not.toHaveBeenCalled();
+    // The caller is NOT told the import finished while the child could still
+    // be alive — settlement waits on the confirmed close.
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(settled).toBe(false);
+
+    child.emit('close', null, 'SIGTERM');
+    const result = await promise;
+    expect(result.exitCode).not.toBe(0);
+    // The original read error is preserved in the returned diagnostic.
+    expect(result.stderr).toContain('dump read failed mid-stream');
+    expect(stdinEnd).not.toHaveBeenCalled();
+  });
+
+  it('escalates a stalled abort to SIGKILL and still resolves the failure bounded', async () => {
+    vi.useFakeTimers();
+    try {
+      const child = makeFakePsql({ closeOnKill: false }); // wedged: never closes
+      spawn.mockReturnValue(child);
+      createReadStream.mockImplementationOnce(() => makeFailingSource(
+        'DROP TABLE memories;\n'
+      ));
+
+      const promise = importDumpFile('/fake/dump.sql', '5561', {});
+      // Under fake timers the stream's internal setImmediate is faked too;
+      // advancing the clock by 0 pumps it plus the generator microtasks, so
+      // the yield→data→throw→error chain runs and abort() fires SIGTERM.
+      await vi.advanceTimersByTimeAsync(0);
+      expect(child.kill).toHaveBeenCalledWith('SIGTERM');
+      expect(child.kill).not.toHaveBeenCalledWith('SIGKILL');
+
+      // SIGTERM grace, then SIGKILL grace — both bounds elapse with no close,
+      // so the import reports failure rather than hanging the sync request.
+      const result = await Promise.race([
+        promise,
+        vi.advanceTimersByTimeAsync(10_000).then(() => 'still pending'),
+      ]);
+      const signals = child.kill.mock.calls.map((c) => c[0]);
+      expect(signals).toEqual(['SIGTERM', 'SIGKILL']);
+      expect(result).not.toBe('still pending');
+      expect(result.exitCode).not.toBe(0);
+      expect(result.stderr).toContain('dump read failed mid-stream');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('bounds escalation when both termination signals synchronously emit errors', async () => {
+    vi.useFakeTimers();
+    try {
+      const child = makeFakePsql({ closeOnKill: false });
+      const failKill = () => {
+        child.emit('error', Object.assign(new Error('kill EPERM'), { code: 'EPERM' }));
+        return false;
+      };
+      // Two consecutive failures reproduce Node's synchronous error delivery;
+      // the fallback prevents a regressed implementation overflowing the test runner.
+      child.kill.mockImplementation(() => false)
+        .mockImplementationOnce(failKill).mockImplementationOnce(failKill);
+      spawn.mockReturnValue(child);
+      const stdinEnd = vi.spyOn(child.stdin, 'end');
+      createReadStream.mockImplementationOnce(() => makeFailingSource('SELECT 1;\n'));
+
+      const promise = importDumpFile('/fake/dump.sql', '5561', {});
+      await vi.advanceTimersByTimeAsync(10_000);
+      const result = await promise;
+      expect(child.kill.mock.calls.map(([signal]) => signal)).toEqual(['SIGTERM', 'SIGKILL']);
+      expect(stdinEnd).not.toHaveBeenCalled();
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain('dump read failed mid-stream');
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('keeps waiting for close when the child errors mid-abort and settles once', async () => {
+    const child = makeFakePsql({ closeOnKill: false });
+    spawn.mockReturnValue(child);
+    createReadStream.mockImplementationOnce(() => makeFailingSource(
+      'DROP TABLE memories;\n'
+    ));
+
+    const promise = importDumpFile('/fake/dump.sql', '5561', {});
+    await vi.waitFor(() => expect(child.kill).toHaveBeenCalledWith('SIGTERM'));
+
+    // A failed termination surfaces as 'error' — the child may still be
+    // running, so the abort escalates instead of resolving early.
+    child.emit('error', new Error('kill failed'));
+    expect(child.kill).toHaveBeenCalledWith('SIGKILL');
+
+    // The confirmed close settles the promise; a duplicate lifecycle event is
+    // a no-op.
+    child.emit('close', null, 'SIGKILL');
+    child.emit('close', null, 'SIGKILL');
+    const result = await promise;
+    expect(result.exitCode).not.toBe(0);
+    expect(result.stderr).toContain('dump read failed mid-stream');
+  });
 });
 
 describe('POST /api/database/destroy', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
   });
 
   describe('input validation', () => {
@@ -290,6 +442,8 @@ describe('POST /api/database/destroy', () => {
 
   describe('docker destroy path', () => {
     it('invokes docker stop, rm, and volume rm commands when destroying non-active docker backend', async () => {
+      vi.stubEnv('PGHOST', 'localhost');
+      vi.stubEnv('PGPORT', '5432');
       // Call order:
       // 0: runDbScript(['status'])  → mode is "native" (so docker is the non-active backend)
       // 1: docker compose stop db
@@ -324,11 +478,14 @@ describe('POST /api/database/destroy', () => {
         c => c[1].includes('volume') && c[1].includes('rm')
       );
       expect(volumeRmCall).toBeDefined();
+      expect(execFile.mock.calls.some(c => c[0] === 'psql')).toBe(false);
     });
   });
 
   describe('native destroy path', () => {
-    it('invokes psql DROP DATABASE when destroying the non-active native backend', async () => {
+    it('targets the canonical native endpoint instead of the active Docker port', async () => {
+      vi.stubEnv('PGHOST', 'localhost');
+      vi.stubEnv('PGPORT', '5561');
       // Call order:
       // 0: runDbScript(['status']) → mode is "docker" (so native is non-active)
       // 1: psql DROP DATABASE …
@@ -350,6 +507,48 @@ describe('POST /api/database/destroy', () => {
       expect(psqlCall).toBeDefined();
       // The args should contain a DROP DATABASE statement
       expect(psqlCall[1].join(' ')).toMatch(/DROP DATABASE/i);
+      expect(psqlCall[1][psqlCall[1].indexOf('-p') + 1]).toBe('5432');
+      expect(psqlCall[1]).not.toContain('5561');
+    });
+  });
+
+  describe('endpoint identity safety', () => {
+    it.each([
+      ['native', 'docker', '5432', '127.0.0.1'],
+      ['docker', 'native', '5561', '::1'],
+    ])('refuses %s when its target aliases the active %s endpoint', async (backend, mode, port, host) => {
+      vi.stubEnv('PGHOST', host);
+      vi.stubEnv('PGPORT', port);
+      mockExecFile([
+        { exitCode: 0, stdout: `Current mode: ${mode}`, stderr: '' },
+      ]);
+
+      const app = makeApp();
+      const res = await request(app)
+        .post('/api/database/destroy')
+        .send({ backend });
+
+      expect(res.status).toBe(400);
+      expect(res.body.error).toMatch(/active backend/i);
+      expect(execFile).toHaveBeenCalledTimes(1);
+    });
+
+    it.each([
+      ['failed', { exitCode: 1, stdout: '', stderr: 'status failed' }],
+      ['unparseable', { exitCode: 0, stdout: 'Database status unavailable', stderr: '' }],
+    ])('fails closed on a %s status probe', async (_case, statusResponse) => {
+      vi.stubEnv('PGHOST', 'localhost');
+      vi.stubEnv('PGPORT', '5561');
+      mockExecFile([statusResponse]);
+
+      const app = makeApp();
+      const res = await request(app)
+        .post('/api/database/destroy')
+        .send({ backend: 'native' });
+
+      expect(res.status).toBe(500);
+      expect(res.body.error).toMatch(/cannot verify/i);
+      expect(execFile).toHaveBeenCalledTimes(1);
     });
   });
 });

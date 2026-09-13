@@ -1551,14 +1551,18 @@ describe('executeTuiRun', () => {
       }));
     });
 
-    it('finalizes an explicit stop as canceled instead of a provider failure', async () => {
+    it.each([
+      { exitCode: null, signal: 'SIGTERM' },
+      { exitCode: 143, signal: 0 },
+      { exitCode: 0, signal: 0 },
+    ])('finalizes an explicit stop as canceled for PTY exit %j', async (exit) => {
       const provider = { id: 'claude', type: 'tui', command: 'echo' };
       const onComplete = vi.fn();
       runnerMocks.consumeRunStopRequested.mockReturnValueOnce(true);
       const promise = executeTuiRun({ runId: 'run-stopped', provider, prompt: 'a prompt long enough', workspacePath: TEST_WORKSPACE, onComplete, timeout: 60000 });
       await flushAsync();
 
-      ptyInstances[0].emitExit({ exitCode: null, signal: 'SIGTERM' });
+      ptyInstances[0].emitExit(exit);
 
       await promise;
       expect(runnerMocks.finalizeRunRecord).toHaveBeenCalledWith(expect.objectContaining({

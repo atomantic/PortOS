@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, act, within } from '@testing-library/react';
 import PinToMoodBoardMenu from './PinToMoodBoardMenu';
 
 // Mock the api surface the menu (and the shared shell) reach for.
@@ -36,8 +36,8 @@ describe('PinToMoodBoardMenu', () => {
     render(<PinToMoodBoardMenu item={imageItem} />);
     fireEvent.click(screen.getByTitle('Pin to mood board'));
 
-    const row = await screen.findByRole('menuitemcheckbox', { name: /Refs/ });
-    expect(row).toHaveAttribute('aria-checked', 'false');
+    const row = await screen.findByRole('button', { name: /Refs/ });
+    expect(row).toHaveAttribute('aria-pressed', 'false');
 
     await act(async () => { fireEvent.click(row); });
 
@@ -47,7 +47,7 @@ describe('PinToMoodBoardMenu', () => {
       { silent: true },
     );
     // Membership flips locally without a refetch.
-    await waitFor(() => expect(row).toHaveAttribute('aria-checked', 'true'));
+    await waitFor(() => expect(row).toHaveAttribute('aria-pressed', 'true'));
   });
 
   it('unpins when the board already contains the media-key (toggle)', async () => {
@@ -59,14 +59,14 @@ describe('PinToMoodBoardMenu', () => {
     render(<PinToMoodBoardMenu item={imageItem} />);
     fireEvent.click(screen.getByTitle('Pin to mood board'));
 
-    const row = await screen.findByRole('menuitemcheckbox', { name: /Refs/ });
-    expect(row).toHaveAttribute('aria-checked', 'true');
+    const row = await screen.findByRole('button', { name: /Refs/ });
+    expect(row).toHaveAttribute('aria-pressed', 'true');
 
     await act(async () => { fireEvent.click(row); });
 
     expect(api.removeMoodBoardItem).toHaveBeenCalledWith('b1', 'mbi-9', { silent: true });
     expect(api.addMoodBoardItem).not.toHaveBeenCalled();
-    await waitFor(() => expect(row).toHaveAttribute('aria-checked', 'false'));
+    await waitFor(() => expect(row).toHaveAttribute('aria-pressed', 'false'));
   });
 
   it('pins mediaKey-only when previewUrl is a non-renderable (blob) URL', async () => {
@@ -75,7 +75,7 @@ describe('PinToMoodBoardMenu', () => {
 
     render(<PinToMoodBoardMenu item={{ kind: 'video', key: 'video:job-7', previewUrl: null }} />);
     fireEvent.click(screen.getByTitle('Pin to mood board'));
-    const row = await screen.findByRole('menuitemcheckbox', { name: /Refs/ });
+    const row = await screen.findByRole('button', { name: /Refs/ });
     await act(async () => { fireEvent.click(row); });
 
     expect(api.addMoodBoardItem).toHaveBeenCalledWith(
@@ -93,7 +93,7 @@ describe('PinToMoodBoardMenu', () => {
       kind: 'image', key: 'canon-sheet:hero:sheet.png', previewUrl: '/data/image-refs/sheet.png',
     }} />);
     fireEvent.click(screen.getByTitle('Pin to mood board'));
-    const row = await screen.findByRole('menuitemcheckbox', { name: /Refs/ });
+    const row = await screen.findByRole('button', { name: /Refs/ });
     await act(async () => { fireEvent.click(row); });
 
     // The server rejects `canon-sheet:` as a mediaKey, so we send imageUrl only.
@@ -114,8 +114,8 @@ describe('PinToMoodBoardMenu', () => {
       kind: 'image', key: 'canon-sheet:hero:sheet.png', previewUrl: '/data/image-refs/sheet.png',
     }} />);
     fireEvent.click(screen.getByTitle('Pin to mood board'));
-    const row = await screen.findByRole('menuitemcheckbox', { name: /Refs/ });
-    expect(row).toHaveAttribute('aria-checked', 'true');
+    const row = await screen.findByRole('button', { name: /Refs/ });
+    expect(row).toHaveAttribute('aria-pressed', 'true');
 
     await act(async () => { fireEvent.click(row); });
     expect(api.removeMoodBoardItem).toHaveBeenCalledWith('b1', 'mbi-7', { silent: true });
@@ -132,9 +132,11 @@ describe('PinToMoodBoardMenu', () => {
 
     render(<PinToMoodBoardMenu item={imageItem} />);
     fireEvent.click(screen.getByTitle('Pin to mood board'));
-    await screen.findByRole('menuitemcheckbox', { name: /Palettes/ });
+    await screen.findByRole('button', { name: /Palettes/ });
 
-    expect(screen.getAllByRole('menuitemcheckbox').map((el) => el.textContent.trim()))
+    // Rows are buttons inside the picker's <ul> — scoping to the list keeps
+    // the trigger and create-form submit buttons out of the row order check.
+    expect(within(screen.getByRole('list')).getAllByRole('button').map((el) => el.textContent.trim()))
       .toEqual(['Universe: Refs', 'Palettes']);
   });
 
@@ -153,7 +155,7 @@ describe('PinToMoodBoardMenu', () => {
     // Valid media-key + a protocol-relative preview: pin the key, NOT the bad URL.
     render(<PinToMoodBoardMenu item={{ kind: 'image', key: 'image:hero.png', previewUrl: '//evil/x.png' }} />);
     fireEvent.click(screen.getByTitle('Pin to mood board'));
-    const row = await screen.findByRole('menuitemcheckbox', { name: /Refs/ });
+    const row = await screen.findByRole('button', { name: /Refs/ });
     await act(async () => { fireEvent.click(row); });
 
     expect(api.addMoodBoardItem).toHaveBeenCalledWith(

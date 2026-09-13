@@ -112,9 +112,11 @@ export default function AlcoholTab() {
   }, [chartView]);
 
   useEffect(() => {
+    let active = true;
     api.getAppleHealthCorrelation(correlationFrom, correlationTo)
-      .then(setCorrelationData)
-      .catch(() => setCorrelationData(null));
+      .then(data => { if (active) setCorrelationData(data); })
+      .catch(() => { if (active) setCorrelationData(null); });
+    return () => { active = false; };
   }, [correlationFrom, correlationTo]);
 
   const handleQuickAdd = async (drink) => {

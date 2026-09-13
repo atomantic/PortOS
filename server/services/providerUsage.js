@@ -7,7 +7,9 @@ import { commandBasename } from '../lib/providerModels.js';
 import { PROVIDER_FAMILIES } from '../lib/providerFamilies.js';
 import { scrapeTuiUsage } from '../lib/tuiUsageScrape.js';
 import { createStaleWhileRevalidate, PENDING, WAIT } from '../lib/staleWhileRevalidate.js';
-import { parseHumanReset } from '../lib/quotaReset.js';
+import { parseHumanReset, normalizeResetAt } from '../lib/quotaReset.js';
+import { compareNewerWins, parseTsMs } from '../lib/lwwTimestamp.js';
+import { createSingleFlight } from '../lib/singleFlight.js';
 import { readFileTail } from '../lib/fileUtils.js';
 import { codexHomeDir, readCodexRoutingOverride } from '../lib/codexUserConfig.js';
 import { getSettings } from './settings.js';
@@ -34,6 +36,13 @@ import { enabledCloudImageModes } from './imageGen/modes.js';
  * degraded panel) — in both cases it is the sentence to show in place of
  * meters, so consumers must not word it as a failure.
  *
+ * `fetchedAt` is WHEN THE READING WAS TAKEN, never when it was served — an
+ * adapter reading a log of past events stamps that log's own timestamp, not its
+ * clock. Every consumer ranks cards by it: the federated merge takes the
+ * freshest reading per limit key (`lib/fleetQuotas.js`), the shared store keeps
+ * the newest card per family (`services/providerQuotaShare.js`), and the UI
+ * ages what it shows. A card that overstates its freshness wins all three.
+ *
  * `metrics[]` is for a backend whose quota cannot be queried at all: it renders
  * as labelled stat tiles instead of a meter, so an adapter never has to invent
  * a percentage to have something to show. `burnable: false` marks a card the
@@ -48,9 +57,11 @@ import { enabledCloudImageModes } from './imageGen/modes.js';
  *
  * Caching: the claude adapter carries its own 60s cache + single-flight inside
  * claudeCodeUsage.js; the codex adapter is a bounded local-file tail read (1-2
- * leaf dirs on a typical layout); the Antigravity/Grok adapters carry a 5-min
- * cache + single-flight here (`cachedScrape`) because each TUI scrape costs
- * ~10-15s (spawn + sign-in + render), too slow to repeat per page poll.
+ * leaf dirs on a typical layout) plus a retained copy of the last LIVE account
+ * reading, served whenever it is the fresher of the two; the Antigravity/Grok
+ * adapters carry a 5-min cache + single-flight here (`cachedScrape`) because
+ * each TUI scrape costs ~10-15s (spawn + sign-in + render), too slow to repeat
+ * per page poll.
  */
 
 // --- Codex: parse rate-limit telemetry out of local session logs -----------
@@ -215,8 +226,19 @@ export function mapCodexQuota(rateLimits, timestamp, {
       routingOverridden ? CODEX_ROUTING_CAVEAT : null,
     ].filter(Boolean).join(' '),
     ...(limits.length ? {} : { error: codexNoWindowsMessage(rateLimits, now) }),
-    fetchedAt: new Date().toISOString()
+    // The TELEMETRY's own timestamp, not the clock we read it at: Codex emits
+    // `rate_limits` only while a turn runs, so this reading can be days old and
+    // `fetchedAt` is the card contract every consumer ranks by (see the card
+    // shape above). Stamping "now" here let a stale log tail outrank both a
+    // peer's current reading and this machine's own live account reading.
+    fetchedAt: telemetryIso(timestamp) || new Date().toISOString()
   };
+}
+
+/** An ISO string for a telemetry timestamp, or null when it isn't a usable date. */
+function telemetryIso(timestamp) {
+  const ms = parseTsMs(timestamp);
+  return ms === null ? null : new Date(ms).toISOString();
 }
 
 /**
@@ -260,31 +282,101 @@ async function listCodexRolloutFiles(codexHome) {
   return files;
 }
 
-// Passive reads stay local. A fresh request queries quota without starting a turn.
-async function fetchCurrentCodexQuota({ wait }) {
-  if (wait !== WAIT.FRESH) return fetchCodexQuota();
+/**
+ * The last live account reading, retained so a passive page load can serve it.
+ *
+ * NOT a TTL cache: `codexAppServer` already caches readiness for 15s, and a
+ * reading's usefulness here is decided by its own `fetchedAt` against the
+ * rollout log's, never by how long this module has held it. So the pair is
+ * exactly "retain the last reading" plus "coalesce concurrent live reads" —
+ * a single-flight and a variable, which is what the code does.
+ */
+let retainedLiveCodexCard = null;
+const codexLiveFlight = createSingleFlight();
+
+/** Test-only: forget the retained live Codex account reading. */
+export function __resetCodexLiveQuotaCache() {
+  retainedLiveCodexCard = null;
+}
+
+/**
+ * Query the signed-in ChatGPT account's quota through the Codex app-server.
+ * Starts no turn and spends no tokens. Throws when the account can't answer.
+ */
+async function readLiveCodexQuota() {
   const { getCodexAccountReadiness } = await import('./codexAppServer.js');
-  const readiness = await getCodexAccountReadiness({ fresh: true }).catch(() => null);
-  if (readiness?.rateLimits != null) {
-    const window = (value) => value && ({
-      used_percent: value.usedPercent,
-      window_minutes: value.windowDurationMins,
-      resets_at: value.resetsAt ? Date.parse(value.resetsAt) / 1000 : null,
-    });
-    const quota = mapCodexQuota({
-      primary: window(readiness.rateLimits.primary),
-      secondary: window(readiness.rateLimits.secondary),
-      plan_type: readiness.account?.planType,
-    }, null);
-    return {
-      ...quota,
-      approximate: false,
-      fetchedAt: new Date(readiness.checkedAt).toISOString(),
-      note: ['Live Codex account quota.', readCodexRoutingOverride()?.overridden === true ? CODEX_ROUTING_CAVEAT : null].filter(Boolean).join(' '),
-    };
+  const readiness = await getCodexAccountReadiness({ fresh: true });
+  if (readiness?.rateLimits == null) throw new Error('Codex reported no account rate limits');
+  const window = (value) => value && ({
+    used_percent: value.usedPercent,
+    window_minutes: value.windowDurationMins,
+    resets_at: value.resetsAt ? Date.parse(value.resetsAt) / 1000 : null,
+  });
+  const quota = mapCodexQuota({
+    primary: window(readiness.rateLimits.primary),
+    secondary: window(readiness.rateLimits.secondary),
+    plan_type: readiness.account?.planType,
+  }, null);
+  const checkedAt = Number.isFinite(readiness.checkedAt) ? readiness.checkedAt : Date.now();
+  retainedLiveCodexCard = {
+    ...quota,
+    approximate: false,
+    fetchedAt: new Date(checkedAt).toISOString(),
+    note: ['Live Codex account quota.', readCodexRoutingOverride()?.overridden === true ? CODEX_ROUTING_CAVEAT : null].filter(Boolean).join(' '),
+  };
+  return retainedLiveCodexCard;
+}
+
+/**
+ * Pure: the meters in a card that have NOT rolled over as of `now`.
+ *
+ * A retained reading ages meter-by-meter, not all at once — a card holding a
+ * spent 5h window beside a live weekly one is half stale, and serving it whole
+ * shows an exhausted meter whose reset time has already passed. Same rule
+ * `codexWindowExpired` applies to a rolled-over log entry, applied at serve
+ * time because the card outlives the read that produced it. A window whose
+ * reset can't be resolved hasn't been shown to have passed, so it counts live.
+ */
+const unexpiredLimits = (card, now) =>
+  (card?.limits || []).filter((limit) => {
+    const { epochMs } = normalizeResetAt(limit, { now });
+    return epochMs === null || epochMs > now;
+  });
+
+/**
+ * Passive reads stay local; a fresh request queries the account without
+ * starting a turn.
+ *
+ * The two sources disagree by design: the app-server knows the account's
+ * current state, while the rollout logs only know what the last Codex TURN was
+ * told — which may be days stale. Serving the log tail unconditionally on
+ * passive reads is what made the card snap back to an old percentage as soon as
+ * the user navigated away from an explicit Refresh.
+ *
+ * METERS decide, not clocks. A card carrying no meters is the absence of a
+ * reading, not a newer one: `fetchCodexQuota` stamps its own clock on a
+ * synthetic "no session logs" card and on window-less telemetry, so ranking the
+ * two cards by `fetchedAt` alone let an empty card retire a live account
+ * reading — an install that runs Codex only through PortOS (no rollout logs at
+ * all) lost its quota meters on the very next poll. Only when both sides
+ * actually have meters is the timestamp the question.
+ */
+async function fetchCurrentCodexQuota({ wait = WAIT.CACHED } = {}) {
+  if (wait === WAIT.FRESH) {
+    const live = await codexLiveFlight.run('codex:account', readLiveCodexQuota).catch(() => null);
+    if (live) return live;
+    const quota = await fetchCodexQuota();
+    return { ...quota, note: `Live Codex quota refresh unavailable; showing local telemetry. ${quota.note || ''}`.trim() };
   }
-  const quota = await fetchCodexQuota();
-  return { ...quota, note: `Live Codex quota refresh unavailable; showing local telemetry. ${quota.note || ''}`.trim() };
+  const now = Date.now();
+  const quota = await fetchCodexQuota({ now });
+  // Pruned at serve time and never written back: the retained card stays the
+  // canonical reading, so a later read prunes further rather than compounding.
+  const liveLimits = unexpiredLimits(retainedLiveCodexCard, now);
+  if (!liveLimits.length) return quota;
+  const live = { ...retainedLiveCodexCard, limits: liveLimits };
+  if (!quota.limits.length) return live;
+  return compareNewerWins(quota.fetchedAt, live.fetchedAt) ? quota : live;
 }
 
 /** Exported for tests (which point `codexHome` at a fixture tree). */

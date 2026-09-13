@@ -25,6 +25,7 @@ export * from './universeStylePreset.js';
 
 // === Pipeline / image-gen defaults ===
 export * from './autopilotMilestones.js';
+export * from './backupExcludes.js';
 export * from './beatColors.js';
 export * from './beeperMessageBody.js';
 export * from './beatGrid.js';
@@ -107,6 +108,7 @@ export * from './consoleFilters.js';
 export * from './cosTaskType.js';
 export * from './diffLines.js';
 export * from './diffWords.js';
+export * from './dndKeyboardCoordinates.js';
 export * from './dndTransform.js';
 export * from './downloadBlob.js';
 export * from './extensionErrors.js';

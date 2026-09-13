@@ -1,6 +1,10 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Folder, FolderPlus, FilePlus, FileText, ChevronDown, ChevronRight, Trash2, GripVertical, PanelLeftClose } from 'lucide-react';
-import { DndContext, DragOverlay, PointerSensor, useDraggable, useDroppable, useSensor, useSensors } from '@dnd-kit/core';
+import {
+  DndContext, DragOverlay, KeyboardSensor, PointerSensor,
+  useDraggable, useDroppable, useSensor, useSensors,
+} from '@dnd-kit/core';
+import { createFreeDroppableKeyboardCoordinates, keyboardAwareCollisionDetection } from '../../lib/dndKeyboardCoordinates';
 import toast from '../ui/Toast';
 import ConfirmButtonPair from '../ui/ConfirmButtonPair';
 import {
@@ -14,6 +18,11 @@ import { useConfirmDelete } from '../../hooks/useConfirmDelete';
 import { KIND_LABELS } from './labels';
 
 const UNFILED_DROP_ID = 'wr-unfiled';
+
+// Arrow keys step between the folder rows and the Unfiled zone rather than
+// nudging the drag 25px at a time, which is dnd-kit's default and skips right
+// past a collapsed folder row.
+const libraryKeyboardCoordinates = createFreeDroppableKeyboardCoordinates();
 
 export default function LibraryPane({
   folders, works, activeWorkId, onSelectWork, onRefresh, onCollapse,
@@ -93,12 +102,19 @@ export default function LibraryPane({
 
   // PointerSensor with a small activation distance so a quick click still
   // selects the work — only an actual drag gesture starts a DnD operation.
-  const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }));
+  // KeyboardSensor is not optional here: filing a work into a folder is the
+  // ONLY write of `folderId` in the client, so without it a keyboard-only user
+  // can never move a work in or out of a folder (WCAG 2.1.1).
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
+    useSensor(KeyboardSensor, { coordinateGetter: libraryKeyboardCoordinates }),
+  );
   const [draggingWork, setDraggingWork] = useState(null);
 
   const handleDragStart = useCallback((event) => {
     setDraggingWork(event.active.data.current?.work || null);
   }, []);
+
 
   const handleDragEnd = useCallback(async (event) => {
     setDraggingWork(null);
@@ -118,6 +134,45 @@ export default function LibraryPane({
     if (targetFolderId) setOpenFolders((s) => ({ ...s, [targetFolderId]: true }));
     onRefresh?.();
   }, [folders, onRefresh]);
+
+  // Escape (and a pointer drag released outside any zone) ends the drag without
+  // a drop; without this the overlay and the "Drop here to unfile" affordance
+  // stay on screen for good.
+  const handleDragCancel = useCallback(() => setDraggingWork(null), []);
+
+  // dnd-kit's stock announcements only ever say "draggable item N", which is an
+  // id. Name the work and the folder instead — for the Unfiled zone and for
+  // every folder, resolved off the drop target's own `folderId`.
+  const accessibility = useMemo(() => {
+    const zoneName = (over) => {
+      if (!over) return null;
+      const folderId = over.data?.current?.folderId ?? null;
+      if (!folderId) return 'Unfiled';
+      return folders.find((f) => f.id === folderId)?.name || 'a folder';
+    };
+    const workTitle = (active) => active?.data?.current?.work?.title || 'work';
+    return {
+      announcements: {
+        onDragStart: ({ active }) => `Picked up ${workTitle(active)}. Use the arrow keys to choose a folder, Space to file it there, or Escape to cancel.`,
+        onDragOver: ({ active, over }) => {
+          const zone = zoneName(over);
+          return zone
+            ? `${workTitle(active)} is over ${zone}.`
+            : `${workTitle(active)} is not over a folder.`;
+        },
+        onDragEnd: ({ active, over }) => {
+          const zone = zoneName(over);
+          return zone
+            ? `Filed ${workTitle(active)} in ${zone}.`
+            : `${workTitle(active)} was dropped outside a folder and did not move.`;
+        },
+        onDragCancel: ({ active }) => `Cancelled moving ${workTitle(active)}. It stayed where it was.`,
+      },
+      screenReaderInstructions: {
+        draggable: 'To move this work into a folder, press Space or Enter. While moving, use the arrow keys to choose a folder or the Unfiled section, then press Space to file it there, or Escape to cancel.',
+      },
+    };
+  }, [folders]);
 
   const renderWorkRow = (work) => (
     <WorkRow
@@ -214,7 +269,14 @@ export default function LibraryPane({
         </form>
       )}
 
-      <DndContext sensors={sensors} onDragStart={handleDragStart} onDragEnd={handleDragEnd}>
+      <DndContext
+        sensors={sensors}
+        accessibility={accessibility}
+        collisionDetection={keyboardAwareCollisionDetection}
+        onDragStart={handleDragStart}
+        onDragEnd={handleDragEnd}
+        onDragCancel={handleDragCancel}
+      >
         <ul className="space-y-1">
           {folders.length === 0 && grouped.get(null).length === 0 && !creatingFolder && !creatingWork && (
             <li className="px-2 py-3 text-center">

@@ -13,11 +13,13 @@ export function useSyncSourceSettings({ domain, defaultInterval, getStatus }) {
   const [status, setStatus] = useState(null);
 
   useEffect(() => {
+    let active = true;
     Promise.all([
       getSettings({ silent: true }).catch(() => ({})),
       getStatus({ silent: true }).catch(() => null),
     ])
       .then(([settings, sourceStatus]) => {
+        if (!active) return;
         const config = settings?.[domain] || {};
         const nextEnabled = typeof config.enabled === 'boolean' ? config.enabled : false;
         const nextInterval = Number.isFinite(config.intervalMinutes) ? config.intervalMinutes : defaultInterval;
@@ -27,7 +29,8 @@ export function useSyncSourceSettings({ domain, defaultInterval, getStatus }) {
         setSavedInterval(nextInterval);
         setStatus(sourceStatus);
       })
-      .finally(() => setLoading(false));
+      .finally(() => { if (active) setLoading(false); });
+    return () => { active = false; };
   }, [defaultInterval, domain, getStatus]);
 
   const dirty = enabled !== savedEnabled || Number(intervalMinutes) !== Number(savedInterval);

@@ -17,11 +17,19 @@ vi.mock('../components/ui/Toast', () => ({
 import LocalLlmPlayground from './LocalLlmPlayground';
 import { getLoadedLlmModels, getLocalLlmCatalog, getLocalLlmStatus, streamLocalLlmTest } from '../services/api';
 
-const renderPlayground = () => render(
-  <MemoryRouter initialEntries={['/local-llm/playground?backend=ollama&model=command-r-plus%3A104b']}>
+const renderPlayground = (entry = '/local-llm/playground?backend=ollama&model=command-r-plus%3A104b') => render(
+  <MemoryRouter initialEntries={[entry]}>
     <LocalLlmPlayground />
   </MemoryRouter>,
 );
+
+const modelsToggle = () => screen.getByRole('button', { name: /Change models|Hide models/ });
+// The narrow disclosure hides its panel with Tailwind's `hidden` class rather
+// than unmounting it (the same panel is the permanent xl+ sidebar), so the
+// collapsed state is read off the class — jsdom loads no stylesheet, so a
+// visibility query would report it visible either way.
+const modelsPanelCollapsed = () => document.getElementById('local-llm-models').className.includes('hidden');
+const advancedToggle = () => screen.getByRole('button', { name: /Advanced options/ });
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -56,6 +64,117 @@ beforeEach(() => {
         capabilities: ['chat', 'tools', 'multilingual'],
       },
     ],
+  });
+});
+
+// The audited fold regression (#7232): the model inventory rendered expanded
+// ahead of the task, and the optional tuning fields sat between the prompt and
+// the Run button. jsdom can't measure a fold, so these pin the two structural
+// facts that produced it — what is disclosed by default, and what order the
+// prompt, the run action, and the optional fields appear in.
+describe('LocalLlmPlayground task order', () => {
+  it('collapses the inventory and renders Run chat before the optional tuning fields', async () => {
+    renderPlayground();
+    await waitFor(() => expect(screen.getAllByText('command-r-plus:104b').length).toBeGreaterThan(0));
+
+    // A valid target is selected, so the inventory is disclosed, not expanded —
+    // and the collapsed header still names what is selected.
+    expect(modelsToggle()).toHaveAttribute('aria-expanded', 'false');
+    expect(modelsPanelCollapsed()).toBe(true);
+    expect(modelsToggle().textContent).toContain('command-r-plus:104b');
+
+    // The tuning fields are behind Advanced options, so nothing optional sits
+    // between the prompt and the action the user came for.
+    expect(screen.queryByLabelText('System prompt')).toBeNull();
+    expect(screen.queryByLabelText('Temperature')).toBeNull();
+
+    const prompt = screen.getByLabelText('Prompt');
+    const run = screen.getByRole('button', { name: 'Run chat' });
+    const advanced = advancedToggle();
+    expect(prompt.compareDocumentPosition(run) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(run.compareDocumentPosition(advanced) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it('stays collapsed when the first model is auto-selected from a URL carrying no target', async () => {
+    // The ⌘K / sidebar entry path: no backend+model params, so the selection is
+    // empty on the render where loading finishes and the auto-select effect
+    // fills it in the same flush. Keying the disclosure off that momentarily
+    // empty selection would leave the inventory expanded here — the exact
+    // above-the-fold regression being fixed.
+    renderPlayground('/local-llm/playground');
+
+    await waitFor(() => expect(modelsToggle().textContent).toContain('command-r-plus:104b'));
+    expect(modelsToggle()).toHaveAttribute('aria-expanded', 'false');
+    expect(modelsPanelCollapsed()).toBe(true);
+    expect(screen.getByRole('button', { name: 'Run chat' }).disabled).toBe(false);
+  });
+
+  it('keeps the selection and the prompt text across opening and closing the picker', async () => {
+    renderPlayground();
+    await waitFor(() => expect(screen.getAllByText('command-r-plus:104b').length).toBeGreaterThan(0));
+
+    fireEvent.change(screen.getByLabelText('Prompt'), { target: { value: 'a custom prompt' } });
+
+    fireEvent.click(modelsToggle());
+    expect(modelsToggle()).toHaveAttribute('aria-expanded', 'true');
+    expect(modelsPanelCollapsed()).toBe(false);
+
+    fireEvent.click(modelsToggle());
+    expect(modelsToggle()).toHaveAttribute('aria-expanded', 'false');
+    expect(screen.getByLabelText('Prompt').value).toBe('a custom prompt');
+    expect(modelsToggle().textContent).toContain('command-r-plus:104b');
+    expect(screen.getByRole('button', { name: 'Run chat' }).disabled).toBe(false);
+  });
+
+  it('preserves advanced values across the disclosure and a mode switch, and summarizes them while collapsed', async () => {
+    renderPlayground();
+    await waitFor(() => expect(screen.getAllByText('command-r-plus:104b').length).toBeGreaterThan(0));
+
+    fireEvent.click(advancedToggle());
+    fireEvent.change(screen.getByLabelText('Temperature'), { target: { value: '0.9' } });
+    fireEvent.change(screen.getByLabelText('System prompt'), { target: { value: 'be terse' } });
+
+    // Collapsed, the header reports what is out of sight so a set system prompt
+    // or a stale temperature can't silently shape the run.
+    fireEvent.click(advancedToggle());
+    expect(advancedToggle().textContent).toContain('system prompt set');
+    expect(advancedToggle().textContent).toContain('temp 0.9');
+    expect(advancedToggle().textContent).toContain('1000 tokens');
+
+    // Compare mode adds the execution mode to both the summary and the panel,
+    // and the values the user already set survive the switch.
+    fireEvent.click(screen.getByRole('button', { name: 'Compare' }));
+    expect(advancedToggle().textContent).toContain('round robin');
+    fireEvent.click(advancedToggle());
+    expect(screen.getByLabelText('Temperature').value).toBe('0.9');
+    expect(screen.getByLabelText('System prompt').value).toBe('be terse');
+    expect(screen.getByLabelText('Execution')).toBeTruthy();
+  });
+
+  it('exposes the compare count and Run comparison without opening the inventory', async () => {
+    renderPlayground();
+    await waitFor(() => expect(screen.getAllByText('command-r-plus:104b').length).toBeGreaterThan(0));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Compare' }));
+
+    expect(screen.getByRole('button', { name: 'Run comparison' }).disabled).toBe(false);
+    expect(screen.getByText('Runs against 1 model')).toBeTruthy();
+    expect(modelsToggle()).toHaveAttribute('aria-expanded', 'false');
+  });
+
+  it('opens the picker and names the next step when no model is available to select', async () => {
+    getLocalLlmStatus.mockResolvedValue({ backend: 'ollama', ollama: { models: [] }, lmstudio: { models: [] } });
+
+    renderPlayground();
+
+    // Nothing is selectable, so the prerequisite is disclosed rather than
+    // collapsed away, and the run action names why it is unavailable.
+    await waitFor(() => expect(modelsToggle()).toHaveAttribute('aria-expanded', 'true'));
+    expect(screen.getByText('No installed local models found.')).toBeTruthy();
+    expect(modelsPanelCollapsed()).toBe(false);
+    expect(screen.getByText(/No local models installed/)).toBeTruthy();
+    expect(screen.getByRole('link', { name: 'install one' })).toHaveAttribute('href', '/models/llms');
+    expect(screen.getByRole('button', { name: 'Run chat' }).disabled).toBe(true);
   });
 });
 

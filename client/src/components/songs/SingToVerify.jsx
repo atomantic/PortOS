@@ -120,7 +120,7 @@ export default function SingToVerify({ value = '', tempo = null, onChange }) {
         </div>
       </div>
 
-      {error && <p className="mt-2 text-xs text-port-error">{error}</p>}
+      {error && <p role="alert" className="mt-2 text-xs text-port-error">{error}</p>}
       <MicProcessingHint processing={micProcessing} />
 
       {rows.length > 0 && !recording && (

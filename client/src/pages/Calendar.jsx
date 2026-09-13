@@ -71,7 +71,7 @@ export default function Calendar() {
       case 'lifetime':
         return <CalendarLifetimeTab />;
       case 'review':
-        return <ReviewTab />;
+        return <ReviewTab accounts={accounts} />;
       case 'config':
         return <ConfigTab accounts={accounts} setAccounts={setAccounts} />;
       case 'sync':

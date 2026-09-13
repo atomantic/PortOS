@@ -62,6 +62,13 @@ export const authGate = async (req, res, next) => {
   // one authoritative verifier, so leave a request-local, non-secret marker
   // instead of re-running password verification in each provider route.
   req.portosAuthContext = { enabled, authenticated: false, method: null };
+  // App credentials authorize only this exact local broker namespace, whether
+  // or not the optional instance password is configured. Never exempt its admin API.
+  if (/^\/api\/managed-visitors\/v1(?:\/|$)/i.test(req.path)) {
+    const { authenticateManagedVisitorRequest } = await import('./managedVisitors.js');
+    req.managedVisitorAuth = await authenticateManagedVisitorRequest(req);
+    return next();
+  }
   if (!enabled) return next();
   // CSRF guard runs FIRST, before isPublicPath — public endpoints like
   // /api/auth/logout still mutate state (clear the cookie + revoke the

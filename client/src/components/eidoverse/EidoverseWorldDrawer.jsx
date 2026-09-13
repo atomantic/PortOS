@@ -449,9 +449,9 @@ export default function EidoverseWorldDrawer({
             V{design.lastAppliedVersion ?? '—'} → V{design.pendingVersion ?? design.selectedVersion}
           </span>
         </div>
-        {reconciliation.error && <p className="mt-3 text-sm text-port-error">{reconciliation.error}</p>}
+        {reconciliation.error && <p role="alert" className="mt-3 text-sm text-port-error">{reconciliation.error}</p>}
         {reconciliation.errorContext?.missing?.length > 0 && (
-          <p className="mt-2 text-xs text-port-error">Unresolved slots: {reconciliation.errorContext.missing.join(', ')}</p>
+          <p role="alert" className="mt-2 text-xs text-port-error">Unresolved slots: {reconciliation.errorContext.missing.join(', ')}</p>
         )}
         {reconciliation.errorContext?.remediation === '/apps' && (
           <Link className="mt-2 inline-block text-xs text-white underline" to="/apps">Update Eidoverse from Managed Apps</Link>

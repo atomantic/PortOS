@@ -31,6 +31,9 @@ const api = vi.hoisted(() => ({
   getCosPopularTemplates: vi.fn(),
   getCodeReviewDefaults: vi.fn(),
   getRiggedAvatars: vi.fn(),
+  // AgentsTab, reached by the mobile-select navigation test below.
+  getCosAgentDates: vi.fn(),
+  getCosAgentsByDate: vi.fn(),
 }));
 const toast = vi.hoisted(() => ({ success: vi.fn(), error: vi.fn() }));
 const socketStub = vi.hoisted(() => ({ connected: false, on: vi.fn(), off: vi.fn(), emit: vi.fn() }));
@@ -117,6 +120,8 @@ beforeEach(() => {
   api.getCosPopularTemplates.mockResolvedValue([]);
   api.getCodeReviewDefaults.mockResolvedValue({});
   api.getRiggedAvatars.mockResolvedValue({ records: [] });
+  api.getCosAgentDates.mockResolvedValue({ dates: [] });
+  api.getCosAgentsByDate.mockResolvedValue([]);
   localLlm.getLocalLlmStatus.mockResolvedValue({ ollama: { models: [] }, lmstudio: { models: [] } });
   localLlm.getToolUseModels.mockResolvedValue({ models: [] });
 });
@@ -200,6 +205,37 @@ describe('ChiefOfStaff loading skeleton', () => {
     await act(async () => {
       releaseInsights({ insights: [] });
     });
+  });
+});
+
+// Regression coverage for #7283 — past MOBILE_DROPDOWN_THRESHOLD tabs (16 on
+// this page), ChiefOfStaff used to pass `hideLabelOnMobile` (an icon-only
+// phone row plus hand-rolled scroll arrows) instead of the `mobileDropdown`
+// `<select>` every other many-tab section uses.
+describe('ChiefOfStaff mobile tab navigation (#7283)', () => {
+  it('renders a labelled mobile select naming the current tab instead of unlabelled icons', async () => {
+    await renderSettledAt('tasks');
+
+    const select = screen.getByRole('combobox', { name: 'Chief of Staff sections' });
+    expect(select).toHaveAttribute('id', 'cos-sections-select');
+    expect(select.value).toBe('tasks');
+  });
+
+  it('navigates to the selected tab route when an option is chosen', async () => {
+    await renderSettledAt('tasks');
+    const select = screen.getByRole('combobox', { name: 'Chief of Staff sections' });
+
+    fireEvent.change(select, { target: { value: 'agents' } });
+
+    const panel = await screen.findByRole('tabpanel');
+    expect(panel).toHaveAttribute('id', 'tabpanel-agents');
+  });
+
+  it('no longer renders the hand-rolled tab scroll-arrow buttons', async () => {
+    await renderSettledAt('tasks');
+
+    expect(screen.queryByRole('button', { name: 'Scroll tabs left' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Scroll tabs right' })).not.toBeInTheDocument();
   });
 });
 

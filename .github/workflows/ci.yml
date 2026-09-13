@@ -75,6 +75,14 @@ jobs:
       - name: Resolve the pull-request diff base
         run: node scripts/ci-base-sha.js
 
+      # Before any reviewer — human or model — reads this diff. Pattern
+      # matching over the added lines only: invisible Unicode and compressed or
+      # opaque encoded payloads are content the diff hides from the person
+      # approving it, so a hit fails the run rather than being reported. Every
+      # other job needs this one, so the whole suite stops here.
+      - name: Scan the diff for hidden content
+        run: node scripts/scan-diff-hidden-content.js
+
       - name: Select affected test surfaces
         id: plan
         env:

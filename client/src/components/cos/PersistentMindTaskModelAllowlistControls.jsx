@@ -67,6 +67,7 @@ export default function PersistentMindTaskModelAllowlistControls({
       const next = {
         schemaVersion: 3,
         createTasks: capabilities?.createTasks === true,
+        manageToolRecipes: capabilities?.manageToolRecipes === true,
         readPortos: capabilities?.readPortos === true,
         writePortos: capabilities?.writePortos === true,
         taskModelAllowlist: deduped,
@@ -123,7 +124,7 @@ export default function PersistentMindTaskModelAllowlistControls({
           Add model
         </button>
       </div>
-      {error && <p className="mt-3 rounded border border-port-warning/30 bg-port-warning/10 px-3 py-2 text-xs text-port-warning">{error}</p>}
+      {error && <p role="alert" className="mt-3 rounded border border-port-warning/30 bg-port-warning/10 px-3 py-2 text-xs text-port-warning">{error}</p>}
       {policyInvalid && <p className="mt-3 rounded border border-port-warning/30 bg-port-warning/10 px-3 py-2 text-xs text-port-warning">The saved policy is invalid, so task model selection is currently blocked. Add a valid model pair to repair it.</p>}
       {!policyInvalid && entries.length === 0 ? (
         <p className="mt-3 text-xs text-port-text-muted">No restriction configured — all enabled coding-provider models remain available.</p>

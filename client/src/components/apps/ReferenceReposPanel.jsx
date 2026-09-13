@@ -219,7 +219,7 @@ export default function ReferenceReposPanel({ appId, appName }) {
       )}
 
       {fetchError && (
-        <div className="bg-port-error/10 border border-port-error/40 text-port-error text-xs rounded p-2 inline-flex items-center gap-2">
+        <div role="status" className="bg-port-error/10 border border-port-error/40 text-port-error text-xs rounded p-2 inline-flex items-center gap-2">
           <AlertCircle size={12} /> Failed to refresh references: {fetchError}. Showing last known data.
         </div>
       )}

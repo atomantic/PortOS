@@ -10,7 +10,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterAll } from 'vitest';
-import { mkdtempSync, rmSync } from 'fs';
+import { mkdtempSync, rmSync, readFileSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { vi } from 'vitest';
@@ -139,6 +139,23 @@ describe('universe store facade — file backend', () => {
     expect((await s.loadRuns('u-A')).map((r) => r.id)).toEqual(['r-a']);
     await s.removeRunsForUniverses(['u-A']);
     expect((await s.loadRuns()).map((r) => r.universeId)).toEqual(['u-B']);
+  });
+
+  // #7261 — the run log lives in the type index's `config` slot, read-modify-
+  // written on every append. An unreadable index must reject the write rather
+  // than silently restart the history from an empty array.
+  it('run writers reject on an unreadable index.json and leave it byte-identical', async () => {
+    const s = getUniverseStore(passthroughSanitize);
+    await s.appendRun({ id: 'r-keep', universeId: 'u-1', jobIds: [], promptCount: 1, createdAt: '2026-01-01T00:00:00.000Z' });
+
+    const indexPath = join(TEST_DATA_ROOT, 'universes', 'index.json');
+    const truncated = readFileSync(indexPath, 'utf8').slice(0, -3);
+    writeFileSync(indexPath, truncated);
+
+    await expect(s.appendRun({ id: 'r-new', universeId: 'u-1', jobIds: [], promptCount: 2, createdAt: '2026-01-02T00:00:00.000Z' })).rejects.toThrow(/Unreadable JSON file/);
+    await expect(s.removeRunsForUniverses(['u-1'])).rejects.toThrow(/Unreadable JSON file/);
+    await expect(s.loadRuns()).rejects.toThrow(/Unreadable JSON file/);
+    expect(readFileSync(indexPath, 'utf8')).toBe(truncated);
   });
 
   it('loadRuns returns newest-first (created_at DESC, id DESC) to match the PG backend', async () => {

@@ -907,7 +907,7 @@ export default function MindTab() {
             </div>
           </section>
 
-          {(runtimeError || visibilityError) && <p className="rounded-xl border border-port-warning/40 bg-port-warning/10 p-3 text-xs text-port-warning">Some live status is delayed. The last successful snapshot remains visible.</p>}
+          {(runtimeError || visibilityError) && <p role="status" className="rounded-xl border border-port-warning/40 bg-port-warning/10 p-3 text-xs text-port-warning">Some live status is delayed. The last successful snapshot remains visible.</p>}
         </aside>
       </div>
 

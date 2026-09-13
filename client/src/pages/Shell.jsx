@@ -9,6 +9,7 @@ import TerminalHotKeys from '../components/shell/TerminalHotKeys';
 import ShellSessionTabs from '../components/shell/ShellSessionTabs';
 import ShellProviderLauncher from '../components/shell/ShellProviderLauncher';
 import InfoTooltip from '../components/ui/InfoTooltip';
+import Kbd from '../components/ui/Kbd';
 import { useInstanceFeatures } from '../hooks/useInstanceFeatures.js';
 
 // Typed-into-the-current-session shortcuts only. The AI CLIs that used to sit
@@ -270,7 +271,6 @@ export default function Shell() {
               title="cd to app folder"
               aria-label="cd to app folder"
               aria-expanded={folderDropdownOpen}
-              aria-haspopup="menu"
             >
               <FolderOpen size={14} />
               <span className="hidden sm:inline">cd to app</span>
@@ -307,6 +307,14 @@ export default function Shell() {
           style={{ padding: '8px' }}
         />
       </div>
+
+      {/* The keyboard exit has to be visible text, not a title tooltip: the
+          terminal claims Tab for completion, so Shift+Tab (handled in
+          useShellSession's custom key handler) is the documented way back out —
+          WCAG 2.1.2 wants the escape discoverable, not just wired. */}
+      <p className="shrink-0 px-1 text-xs text-gray-500">
+        <Kbd size="sm">Shift+Tab</Kbd> moves focus out of the terminal
+      </p>
 
       {/* Fullscreen control bar — compact, single-row, horizontally scrollable so
           the TUI-driving keys stay reachable by thumb without the stacked toolbars. */}

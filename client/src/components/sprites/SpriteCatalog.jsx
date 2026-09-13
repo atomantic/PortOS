@@ -50,7 +50,7 @@ function CatalogCard({ record, thumbPath, onOpen, onRenamed, onDeleted }) {
           disabled={busy}
           className="w-full bg-port-card border border-port-border rounded px-2 py-1 text-sm text-white"
         />
-        {error && <p className="text-xs text-port-error break-words">{error}</p>}
+        {error && <p role="alert" className="text-xs text-port-error break-words">{error}</p>}
         <div className="flex items-center gap-2">
           <button
             type="button"
@@ -80,7 +80,7 @@ function CatalogCard({ record, thumbPath, onOpen, onRenamed, onDeleted }) {
           Delete <span className="font-semibold break-words">{record.name}</span>? It leaves your
           library; the generated files stay on disk and its id stays reserved. This can’t be undone here.
         </p>
-        {error && <p className="text-xs text-port-error break-words">{error}</p>}
+        {error && <p role="alert" className="text-xs text-port-error break-words">{error}</p>}
         <ConfirmButtonPair
           confirmText="Delete"
           busyText="Deleting…"

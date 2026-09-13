@@ -1,12 +1,13 @@
 import { useState, useEffect, useCallback } from 'react';
-import {Check, X, ChevronLeft, ChevronRight, Clock, Target, AlertTriangle} from 'lucide-react';
+import {Check, X, ChevronLeft, ChevronRight, Clock, Target, AlertTriangle, CalendarDays} from 'lucide-react';
 import toast from '../ui/Toast';
 import * as api from '../../services/api';
 import { formatDurationMin, formatTimeOfDay } from '../../utils/formatters';
 import BrailleSpinner from '../BrailleSpinner';
+import EmptyState from '../EmptyState';
 import { localDateStr } from '../meatspace/constants';
 
-export default function ReviewTab() {
+export default function ReviewTab({ accounts = [] }) {
   const [date, setDate] = useState(localDateStr());
   const [review, setReview] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -164,10 +165,19 @@ export default function ReviewTab() {
 
       {/* Events */}
       {(!review?.events?.length) ? (
-        <div className="text-center py-12 text-gray-500">
-          <p>No events for this date</p>
-          <p className="text-sm mt-1">Sync your calendar to see events here</p>
-        </div>
+        accounts.length === 0 ? (
+          <EmptyState
+            icon={CalendarDays}
+            title="No calendar connected"
+            message="Connect a calendar account to review your events."
+            actionTo="/calendar/config"
+            actionLabel="Add a calendar account"
+          />
+        ) : (
+          <div className="text-center py-12 text-gray-500">
+            <p>No events for this date</p>
+          </div>
+        )
       ) : (
         <div className="space-y-2">
           {[...review.events]

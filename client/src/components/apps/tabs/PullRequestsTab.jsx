@@ -173,7 +173,17 @@ export default function PullRequestsTab({ appId, appName }) {
 
   const applyTaskUpdate = useCallback(task => {
     if (!task?.id) return;
-    const nextStatus = task.metadata?.preflightFailure ? 'failed' : actionStatusForTask(task.status);
+    // A task that names a SUCCESSOR finished by starting something else, so it
+    // is not this row's completion. The preflight card (#7258) is the case that
+    // exists today: it closes the instant the review agent task is created.
+    // Rebinding the row onto the successor keeps the action live — reading the
+    // card's own `completed` would park the row at "Completed" and then ignore
+    // every update the real review task emits, because a row binds to one task
+    // id for good.
+    const handedOff = task.metadata?.preflightResultTaskId || null;
+    const nextStatus = task.metadata?.preflightFailure
+      ? 'failed'
+      : handedOff ? 'active' : actionStatusForTask(task.status);
     if (!nextStatus) return;
 
     replaceActions(current => {
@@ -185,7 +195,14 @@ export default function PullRequestsTab({ appId, appName }) {
           const matches = action.taskId === task.id
             || (!action.taskId && ACTION_KINDS[kind].matches(task, appId, Number(number)));
           if (!matches || actionRank(nextStatus) < actionRank(action.status)) continue;
-          updated[number] = { ...action, taskId: action.taskId || task.id, status: nextStatus, error: task.metadata?.note };
+          // A hand-off re-points the row at the review task the card started;
+          // every other update keeps whatever id the row already bound.
+          updated[number] = {
+            ...action,
+            taskId: handedOff || action.taskId || task.id,
+            status: nextStatus,
+            error: task.metadata?.note,
+          };
           changed = true;
         }
         next[kind] = updated;
@@ -499,12 +516,21 @@ export default function PullRequestsTab({ appId, appName }) {
                       const { label, Icon, title } = ACTION_KINDS[kind];
                       const action = actions[kind][pullRequest.number];
                       const actionStatus = action?.status;
+                      // The task record this row's run is tracked by, once it has
+                      // one. The preflight card gives it a task id immediately,
+                      // and that card is where the live pre-agent checks are
+                      // shown — the old link went unconditionally to the Agents
+                      // page, so "Queued — view" landed on a page with nothing on
+                      // it until an agent actually spawned.
+                      const taskHref = action?.taskId
+                        ? `/cos/tasks?task=${encodeURIComponent(action.taskId)}&source=internal`
+                        : null;
                       if (actionStatus === 'failed') {
                         return (
                           <div key={kind} className="max-w-md text-xs text-port-error space-y-2" role="alert">
                             <p>{action.error || (kind === 'review' ? 'PR review failed. View the failure record for details.' : 'Resolve & merge failed. View the failure record for details.')}</p>
                             <div className="flex flex-wrap gap-3">
-                              <Link className="underline" to={`/cos/tasks?task=${encodeURIComponent(action.taskId)}&source=internal`}>View failure record</Link>
+                              <Link className="underline" to={taskHref}>View failure record</Link>
                               {kind === 'review' && <Link className="underline" to="/models/llms/abuse">Abuse Guard setup</Link>}
                               <button type="button" className="underline" onClick={() => onQueue(pullRequest)}>{kind === 'review' ? 'Retry PR review' : 'Retry resolve & merge'}</button>
                             </div>
@@ -515,7 +541,7 @@ export default function PullRequestsTab({ appId, appName }) {
                         return (
                           <Link
                             key={kind}
-                            to="/cos/agents"
+                            to={taskHref || '/cos/agents'}
                             className="px-3 py-1.5 bg-port-success/20 text-port-success hover:bg-port-success/30 border border-port-border rounded-lg text-xs flex items-center gap-1.5 transition-colors"
                           >
                             <Icon size={14} /> {label}: {ACTION_STATUS_LABEL[actionStatus] || 'Queued — view'}

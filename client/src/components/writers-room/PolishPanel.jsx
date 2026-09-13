@@ -52,12 +52,14 @@ export default function PolishPanel({ work, dirty, onBodyChanged }) {
   // On mount / work switch: reset stream state and load existing snapshots. If a
   // run is already active on the server (e.g. this panel was reopened), re-attach.
   useEffect(() => {
+    let live = true;
     setSseUrl(null);
     setSnapshots([]);
     refreshSnapshots();
     getWritersRoomPolishStatus(work.id)
-      .then((s) => { if (s?.active && mountedRef.current) setSseUrl(`/api/writers-room/works/${encodeURIComponent(work.id)}/polish/progress`); })
+      .then((s) => { if (s?.active && live && mountedRef.current) setSseUrl(`/api/writers-room/works/${encodeURIComponent(work.id)}/polish/progress`); })
       .catch(() => {});
+    return () => { live = false; };
   }, [work.id, refreshSnapshots, mountedRef]);
 
   // When the stream closes on a terminal frame, refresh snapshots and pull the

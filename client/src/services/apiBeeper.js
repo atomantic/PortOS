@@ -176,3 +176,6 @@ export const discardOutboxEntry = (id, options = {}) => request(`/beeper/outbox/
   method: 'DELETE',
   ...options,
 });
+
+/** Read delivery state and finish local persistence, without sending again. */
+export const reconcileOutboxEntry = (id, options = {}) => request(`/beeper/outbox/${encodeURIComponent(id)}/reconcile`, { method: 'POST', ...options });

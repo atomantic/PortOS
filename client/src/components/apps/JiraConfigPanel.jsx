@@ -208,7 +208,7 @@ export default function JiraConfigPanel({ app, onSaved }) {
   return (
     <form onSubmit={handleSubmit} className="space-y-3 max-w-3xl">
       {error && (
-        <div className="p-3 bg-port-error/20 border border-port-error rounded-lg text-port-error text-sm">
+        <div role="alert" className="p-3 bg-port-error/20 border border-port-error rounded-lg text-port-error text-sm">
           {error}
         </div>
       )}

@@ -48,7 +48,7 @@ import { getActiveApps, getAppTaskTypeOverrides } from './apps.js';
 // The single Priority-0 on-demand loop body, shared with the dequeueNextTask
 // engine in cos.js so the two can no longer drift (#6618).
 import { drainOnDemandRequests } from './onDemandDrain.js';
-import { isIdleTierEligible } from './cosDequeue.js';
+import { closeStolenIdleReviewCard, isIdleTierEligible } from './cosDequeue.js';
 import { resolveAgentProviderPin } from './appTaskProviderPin.js';
 import { getTaskTypeConfidence } from './taskLearning.js';
 import { classifySafetyKind, requiresSafetyApproval } from './taskLearning/safetyKind.js';
@@ -1026,12 +1026,16 @@ async function spawnPriority4IdleReview(ctx) {
     const freshCosTasks = await getCosTasks();
     const pendingSystemTasks = freshCosTasks.autoApproved?.length || 0;
     if (pendingSystemTasks === 0) {
-      const { task: idleTask, pendingPerpetualDispatch } = await generateIdleReviewTask(state);
-      if (idleTask && canSpawnTask(idleTask, autonomousSlotCeiling)) {
+      const { task: idleTask, pendingPerpetualDispatch, preflightCardId } = await generateIdleReviewTask(state);
+      const admitted = idleTask && canSpawnTask(idleTask, autonomousSlotCeiling);
+      if (admitted) {
         await recordDeferredPerpetualDispatch(pendingPerpetualDispatch, await import('./taskSchedule.js'));
         tasksToSpawn.push(idleTask);
         trackSpawn(idleTask);
       }
+      // This tier may have STOLEN a human's on-demand request. Closing its card is
+      // the tier's job because only here is the admission decision final.
+      await closeStolenIdleReviewCard(preflightCardId, admitted ? idleTask : null);
     }
   }
 }
@@ -1272,7 +1276,7 @@ export async function evaluateTasks(options) {
 export async function generateIdleReviewTask(state, { ignoreTaskId = null } = {}) {
   if (!isImprovementEnabled(state)) {
     emitLog('debug', 'Improvement tasks are disabled');
-    return { task: null, pendingPerpetualDispatch: null };
+    return { task: null, pendingPerpetualDispatch: null, preflightCardId: null };
   }
 
   // Get all active (non-archived) managed apps (including PortOS)
@@ -1300,17 +1304,17 @@ export async function generateIdleReviewTask(state, { ignoreTaskId = null } = {}
       });
 
       emitLog('info', `Generating improvement task for ${nextApp.name}`, { appId: nextApp.id });
-      const { task: idleTask, pendingPerpetualDispatch } = await generateManagedAppImprovementTask(nextApp, state, { ignoreTaskId });
+      const { task: idleTask, pendingPerpetualDispatch, preflightCardId } = await generateManagedAppImprovementTask(nextApp, state, { ignoreTaskId });
       // Only bind the active marker once a real task exists.
       if (idleTask) {
         await bindAppReviewAgent(nextApp.id, `idle-review-${Date.now()}`);
       }
-      return { task: idleTask, pendingPerpetualDispatch };
+      return { task: idleTask, pendingPerpetualDispatch, preflightCardId };
     }
   }
 
   emitLog('debug', 'No idle tasks available');
-  return { task: null, pendingPerpetualDispatch: null };
+  return { task: null, pendingPerpetualDispatch: null, preflightCardId: null };
 }
 
 /**
@@ -1945,10 +1949,16 @@ async function generateManagedAppImprovementTask(app, state, { ignoreTaskId = nu
   // silently promote the user's one-row click into a full-repo review — the
   // same widening the perpetual-refill skip guards against on the other side.
   let targetPullRequest = null;
+  // The card a human's "Run" already opened, when this steal is serving one —
+  // stealing the request means inheriting its card, because the on-demand drain
+  // will never see that request again. See `finishPreflightDispatch`.
+  let stolenCardId = null;
 
   if (appRequests.length > 0) {
     const request = appRequests[0];
     targetPullRequest = request.targetPullRequest ?? null;
+    const { cardIdForRequest } = await import('./preflightTaskCard.js');
+    stolenCardId = cardIdForRequest(request);
     await taskSchedule.clearOnDemandRequest(request.id);
     // Only a human "Run" may clear the drain's brakes (park state, dispatch
     // count); the policy lives in applyOnDemandRunResets so this idle-review
@@ -1965,7 +1975,10 @@ async function generateManagedAppImprovementTask(app, state, { ignoreTaskId = nu
 
     if (!nextTypeResult) {
       emitLog('info', `No app improvement tasks are eligible for ${app.name} based on schedule`);
-      return { task: null, pendingPerpetualDispatch: null };
+      // `stolenCardId`, never a literal null: this branch happens to be the one
+      // where no steal occurred, but a later early return added above it would
+      // strand the card all over again.
+      return { task: null, pendingPerpetualDispatch: null, preflightCardId: stolenCardId };
     }
 
     nextType = nextTypeResult.taskType;
@@ -1992,14 +2005,21 @@ async function generateManagedAppImprovementTask(app, state, { ignoreTaskId = nu
   // spawn; the per-type generator does not record execution itself.
   const prepared = await prepareManagedAppImprovementTask(nextType, app, state, {
     ignoreTaskId,
-    targetPullRequest
+    targetPullRequest,
+    // The deterministic pre-agent work (pr-reviewer's security preflight)
+    // reports into the stolen Run's card as it runs, exactly as it does on the
+    // on-demand drain — this is the whole reason the card is opened early.
+    preflightCardId: stolenCardId
   });
   const task = prepared?.task ?? null;
   const pendingPerpetualDispatch = prepared?.pendingPerpetualDispatch ?? null;
   // Idle-review can steal a queued on-demand request for this app. That
   // request is still a user Run — apply the same consent as Priority 0.
   if (selectionReason === 'on-demand') applyOnDemandConsent(task);
-  return { task, pendingPerpetualDispatch };
+  // The card is closed by whoever rules on the task (the spawn tier), not here:
+  // a task this returns can still be refused a slot, and a card closed
+  // `handed-off` would then name an agent that never started.
+  return { task, pendingPerpetualDispatch, preflightCardId: stolenCardId };
 }
 
 /**
@@ -2160,7 +2180,7 @@ export async function drainProgrammaticOnDemandRequests({ taskScheduleMod, reque
  * user-initiated on-demand path, so the client can toast it without
  * background-park noise.
  */
-export async function emitOnDemandEmpty({ taskScheduleMod, request, targetApp, taskConfig }) {
+export async function emitOnDemandEmpty({ taskScheduleMod, request, targetApp, taskConfig, preflightCardId = null }) {
   const appId = targetApp?.id || null;
   const parkInfo = await taskScheduleMod.getPerpetualParkInfo(request.taskType, appId).catch(() => null);
   const isDetectorDriven = taskConfig?.perpetual === true;
@@ -2207,28 +2227,39 @@ export async function emitOnDemandEmpty({ taskScheduleMod, request, targetApp, t
     if (health && !health.ok && health.remedy) forge = { cli: 'gh', remedy: health.remedy };
   }
 
-  // A preflight has no agent lifecycle, but an explicit failed run still needs
-  // a durable record. Terminal status prevents either spawn engine from running
-  // this diagnostic as a task; retry must enter through the security scan again.
-  if (request.taskType === 'pr-reviewer' && appId && reason?.startsWith('security-') && reason !== 'security-scan-report-pending') {
-    const note = `PR review stopped before an agent started (${reason}). No PR actions were taken. `
-      + (reason.startsWith('security-guard-')
-        ? 'Open Models → LLMs → Abuse Guard, check its setup and repair it if needed, then retry PR review. The classifier did not return a usable safety verdict; this is not a finding against the PR.'
-        : 'Check the repository connection and security scan configuration, then retry PR review.');
-    await addTask({
-      id: `pr-review-preflight-${request.id}`,
-      status: 'completed',
-      priority: 'MEDIUM',
-      priorityValue: 2,
-      taskType: 'internal',
-      description: `PR review preflight failed for ${targetApp.name}${request.targetPullRequest ? ` #${request.targetPullRequest}` : ''}`,
-      metadata: {
-        app: appId, analysisType: 'pr-reviewer',
-        targetPullRequest: request.targetPullRequest ?? null,
-        preflightFailure: reason, note,
-        completedAt: new Date().toISOString(),
-      },
-    }, 'internal', { raw: true, suppressDequeue: true });
+  // Close the run's card — or, for an automated run that never opened one, mint
+  // it in its terminal state. A preflight has no agent lifecycle, but an
+  // explicit failure still needs a durable record: terminal status prevents
+  // either spawn engine from running this diagnostic as a task, and a retry has
+  // to enter through the security scan again. The PR row paints from the
+  // `preflightFailure` + `note` this stamps.
+  const securityFailure = request.taskType === 'pr-reviewer' && appId
+    && reason?.startsWith('security-') && reason !== 'security-scan-report-pending';
+  const { finishPreflightCard, recordPreflightOutcome } = await import('./preflightTaskCard.js');
+  if (securityFailure) {
+    // Minted when absent: an automated cadence run reaches the same failure with
+    // no card to close, and it needs the record just as much.
+    await recordPreflightOutcome({
+      requestId: request.id,
+      taskType: request.taskType,
+      appId,
+      appName: targetApp?.name || null,
+      targetPullRequest: request.targetPullRequest ?? null,
+      outcome: 'failed',
+      reason,
+      note: `PR review stopped before an agent started (${reason}). No PR actions were taken. `
+        + (reason.startsWith('security-guard-')
+          ? 'Open Models → LLMs → Abuse Guard, check its setup and repair it if needed, then retry PR review. The classifier did not return a usable safety verdict; this is not a finding against the PR.'
+          : 'Check the repository connection and security scan configuration, then retry PR review.'),
+    });
+  } else {
+    // An ordinary empty outcome — parked, transient, plain nothing to do. Only
+    // ever closes a card that already exists: minting one for an automated run
+    // nobody is watching would fill the Tasks page with cadence noise.
+    await finishPreflightCard(preflightCardId, {
+      outcome: 'nothing-to-do',
+      reason: reason || parkInfo?.parkReason || outcome,
+    });
   }
 
   cosEvents.emit('schedule:on-demand-empty', {
@@ -2586,7 +2617,10 @@ export async function prepareManagedAppImprovementTask(taskType, app, state, {
   targetPullRequest = null,
   // Per-request provider/model/effort pin — see applyProviderModelPins.
   providerOverride = null,
-  runOverrides = null
+  runOverrides = null,
+  // The user's programmatic-phase card, when a human triggered this run. The
+  // deterministic pre-agent work reports its progress into it.
+  preflightCardId = null
 } = {}) {
   const { updateAppActivity } = await import('./appActivity.js');
   const taskSchedule = await import('./taskSchedule.js');
@@ -2640,7 +2674,10 @@ export async function prepareManagedAppImprovementTask(taskType, app, state, {
 
   if (taskType === 'pr-reviewer') ensurePrReviewerPipeline(metadata);
   initializePipelineMetadata(metadata);
-  const securityPreflight = await runPrReviewerSecurityPreflight(taskType, app, metadata, targetPullRequest, taskSchedule);
+  const { preflightReporter } = await import('./preflightTaskCard.js');
+  const securityPreflight = await runPrReviewerSecurityPreflight(taskType, app, metadata, targetPullRequest, taskSchedule, {
+    progress: preflightReporter(preflightCardId),
+  });
   // Record (or clear a stale) skip reason in the SAME call: clearing on a passed
   // gate matters too, or an unrelated later idle outcome for this app (e.g. a
   // downstream precondition skip below) could read back a reason that no longer

@@ -7,6 +7,7 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { asyncHandler, createServiceErrorMapper } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validation.js';
+import { isBaseHashPersistBlocked } from '../lib/conflictJournal.js';
 import * as resolver from '../services/conflictJournalResolver.js';
 
 const router = Router();
@@ -35,7 +36,17 @@ const resolveSchema = z.object({
 
 router.get('/', asyncHandler(async (req, res) => {
   const { status } = validateRequest(listQuerySchema, req.query ?? {});
-  res.json({ conflicts: await resolver.listConflicts({ status: status ?? null }) });
+  // #7260: while the sync base-hash file is present-but-unreadable the store is
+  // latched — persistence is off and every overwrite journals fail-closed.
+  // Surface the degradation so an empty `conflicts` list can't be mistaken for
+  // "no conflicts"; the Conflicts tab renders this as a warning banner.
+  const degraded = await isBaseHashPersistBlocked();
+  res.json({
+    conflicts: await resolver.listConflicts({ status: status ?? null }),
+    conflictDetection: degraded
+      ? { degraded: true, reason: 'sync_base_hashes.json is present but unreadable — repair or delete it and restart' }
+      : { degraded: false },
+  });
 }));
 
 router.get('/:id', asyncHandler(async (req, res) => {

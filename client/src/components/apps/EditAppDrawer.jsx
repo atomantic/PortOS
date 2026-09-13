@@ -137,9 +137,11 @@ export default function EditAppDrawer({ app, onClose, onSave }) {
   }, []);
 
   useEffect(() => {
+    let cancelled = false;
     api.getAppWorkTracker(app.id)
-      .then(setWorkTrackerInfo)
-      .catch(() => setWorkTrackerInfo(null));
+      .then(info => { if (!cancelled) setWorkTrackerInfo(info); })
+      .catch(() => { if (!cancelled) setWorkTrackerInfo(null); });
+    return () => { cancelled = true; };
   }, [app.id]);
 
   // Load the app's effective Layered Intelligence config + the CLI provider list
@@ -333,7 +335,7 @@ export default function EditAppDrawer({ app, onClose, onSave }) {
       closeOnBackdrop={false}
     >
         {error && (
-          <div className="mb-4 p-3 bg-port-error/20 border border-port-error rounded-lg text-port-error text-sm">
+          <div role="alert" className="mb-4 p-3 bg-port-error/20 border border-port-error rounded-lg text-port-error text-sm">
             {error}
           </div>
         )}

@@ -1,4 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { fireEvent, render, screen } from '@testing-library/react';
 
 // Stub @dnd-kit/core's DndContext so drag-end can be fired imperatively. The
@@ -43,7 +46,7 @@ vi.mock('@dnd-kit/sortable', async () => {
 const DashboardGrid = (await import('./DashboardGrid.jsx')).default;
 const {
   reflowToOrder, synthesizeGrid, reconcileGrid, readingOrderIds,
-  packVertically, itemHeightPx, rowsToPx, pxToRows,
+  packVertically, itemHeightPx, rowsToPx, pxToRows, stepGhost,
 } = await import('./DashboardGrid.jsx');
 
 // jsdom has no ResizeObserver, and useContainerWidth (which decides mobile vs
@@ -505,6 +508,261 @@ describe('DashboardGrid move re-sequences', () => {
 
     dragHandle('Move c', { dy: 0 });
     expect(onChange).not.toHaveBeenCalled();
+  });
+});
+
+// The keyboard path has to produce the SAME commits as the pointer path —
+// that is the whole design constraint (#7263). These assert on the committed
+// grid array, not on internal ghost state, so a second placement path
+// sneaking in would show up as a differently-shaped commit.
+describe('DashboardGrid keyboard arrange', () => {
+  beforeEach(() => { mockWidth = 1200; });
+
+  const grab = (label) => {
+    const handle = screen.getByLabelText(label);
+    handle.focus();
+    fireEvent.keyDown(handle, { key: 'Enter' });
+    return handle;
+  };
+  const press = (handle, key) => fireEvent.keyDown(handle, { key });
+
+  // THREE is full-width, so its cells have nowhere to go horizontally — the
+  // column clamp would swallow every sideways press.
+  const NARROW = [
+    { id: 'a', x: 0, w: 4, order: 0, h: 2 },
+    { id: 'b', x: 0, w: 4, order: 1, h: 2 },
+    { id: 'c', x: 0, w: 4, order: 2, h: 2 },
+  ];
+
+  it('moves a widget across columns and down the order, then commits on Enter', () => {
+    const onChange = renderGrid(NARROW);
+    const handle = grab('Move a');
+    press(handle, 'ArrowRight');
+    press(handle, 'ArrowRight');
+    press(handle, 'ArrowDown');
+    expect(onChange).not.toHaveBeenCalled();
+
+    press(handle, 'Enter');
+    const next = onChange.mock.calls[0][0];
+    expect(next.map((it) => it.id)).toEqual(['b', 'a', 'c']);
+    expect(next.map((it) => it.order)).toEqual([0, 1, 2]);
+    expect(next.find((it) => it.id === 'a').x).toBe(2);
+    // A move never declares a height, exactly like the drag.
+    for (const it of next) expect(it.fixedH).toBeUndefined();
+  });
+
+  it('resizes by columns and rows, pinning the height it committed', () => {
+    const onChange = renderGrid([{ id: 'a', x: 0, w: 12, order: 0, h: 2 }]);
+    const handle = grab('Resize a');
+    press(handle, 'ArrowLeft');
+    press(handle, 'ArrowLeft');
+    press(handle, 'ArrowDown');
+    press(handle, 'Enter');
+
+    const resized = onChange.mock.calls[0][0].find((it) => it.id === 'a');
+    expect(resized.w).toBe(10);
+    expect(resized.h).toBe(3);
+    expect(resized.fixedH).toBe(true);
+  });
+
+  it('leaves a width-only keyboard resize auto-sized', () => {
+    const onChange = renderGrid([{ id: 'a', x: 0, w: 12, order: 0, h: 2 }]);
+    const handle = grab('Resize a');
+    press(handle, 'ArrowLeft');
+    press(handle, 'Enter');
+    expect(onChange.mock.calls[0][0].find((it) => it.id === 'a').fixedH).toBeUndefined();
+  });
+
+  it('writes nothing when the grab is cancelled with Escape', () => {
+    const onChange = renderGrid();
+    const handle = grab('Move a');
+    press(handle, 'ArrowRight');
+    press(handle, 'ArrowDown');
+    press(handle, 'Escape');
+    expect(onChange).not.toHaveBeenCalled();
+    expect(handle).toHaveAttribute('aria-pressed', 'false');
+
+    // …and the next Enter starts a fresh grab rather than committing the
+    // abandoned one.
+    press(handle, 'Enter');
+    expect(handle).toHaveAttribute('aria-pressed', 'true');
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
+  it('abandons the grab when focus leaves the handle', () => {
+    const onChange = renderGrid();
+    const handle = grab('Move a');
+    press(handle, 'ArrowDown');
+    fireEvent.blur(handle);
+    expect(handle).toHaveAttribute('aria-pressed', 'false');
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
+  it('writes nothing when a grab is committed without stepping', () => {
+    const onChange = renderGrid();
+    const handle = grab('Move b');
+    press(handle, 'Enter');
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
+  it('reports grabbed state and narrates each step in the live region', () => {
+    renderGrid(NARROW);
+    const status = document.querySelector('[role="status"]');
+    expect(status).toHaveAttribute('aria-live', 'polite');
+
+    const handle = grab('Move a');
+    expect(handle).toHaveAttribute('aria-pressed', 'true');
+    expect(status.textContent).toContain('grabbed');
+    expect(status.textContent).toContain('column 1 of 12');
+
+    press(handle, 'ArrowRight');
+    expect(status.textContent).toContain('column 2 of 12');
+
+    press(handle, 'Enter');
+    expect(handle).toHaveAttribute('aria-pressed', 'false');
+    expect(status.textContent).toContain('placed');
+  });
+
+  // Only the two grid handles are grab toggles; the reorder handle announces
+  // itself through dnd-kit and auto-fit is a plain button, so neither should
+  // claim pressed semantics.
+  it('marks only the move and resize handles as toggles', () => {
+    renderGrid([{ id: 'a', x: 0, w: 12, order: 0, h: 3, fixedH: true }]);
+    expect(screen.getByLabelText('Move a')).toHaveAttribute('aria-pressed', 'false');
+    expect(screen.getByLabelText('Resize a')).toHaveAttribute('aria-pressed', 'false');
+    expect(screen.getByLabelText('Auto-fit height a')).not.toHaveAttribute('aria-pressed');
+  });
+
+  // A grabbed cell owns the arrows and Enter/Escape; letting them through
+  // scrolls the page under the ghost, or drops out of Arrange mode entirely.
+  it('claims the keys it handles while grabbed, and only those', () => {
+    renderGrid();
+    const handle = screen.getByLabelText('Move a');
+    handle.focus();
+    // Not grabbed: an arrow is somebody else's key.
+    expect(fireEvent.keyDown(handle, { key: 'ArrowRight' })).toBe(true);
+
+    fireEvent.keyDown(handle, { key: 'Enter' });
+    expect(fireEvent.keyDown(handle, { key: 'ArrowRight' })).toBe(false);
+    expect(fireEvent.keyDown(handle, { key: 'Escape' })).toBe(false);
+    // An unrelated key stays available to the page in both states.
+    expect(fireEvent.keyDown(handle, { key: 'Tab' })).toBe(true);
+  });
+
+  // A grab is modal, so it survives until something ends it — and leaving
+  // Arrange mode unmounts the handle without firing a blur. An abandoned ghost
+  // there keeps overriding the preview, so the grid draws a placement the user
+  // just cancelled.
+  it('drops a grab when the grid leaves Arrange mode', () => {
+    const onChange = vi.fn();
+    const { rerender } = render(
+      <DashboardGrid
+        items={NARROW}
+        editable
+        onChange={onChange}
+        renderItem={(item) => <div data-testid={`widget-${item.id}`}>{item.id}</div>}
+      />
+    );
+    const handle = screen.getByLabelText('Move a');
+    handle.focus();
+    fireEvent.keyDown(handle, { key: 'Enter' });
+    fireEvent.keyDown(handle, { key: 'ArrowRight' });
+
+    rerender(
+      <DashboardGrid
+        items={NARROW}
+        editable={false}
+        onChange={onChange}
+        renderItem={(item) => <div data-testid={`widget-${item.id}`}>{item.id}</div>}
+      />
+    );
+    expect(onChange).not.toHaveBeenCalled();
+    // The ghost is gone, so the cell is drawn where the saved layout puts it.
+    expect(cellFor('a').style.left).toBe('0px');
+
+    // Re-entering Arrange finds an idle handle, not a grabbed one.
+    rerender(
+      <DashboardGrid
+        items={NARROW}
+        editable
+        onChange={onChange}
+        renderItem={(item) => <div data-testid={`widget-${item.id}`}>{item.id}</div>}
+      />
+    );
+    expect(screen.getByLabelText('Move a')).toHaveAttribute('aria-pressed', 'false');
+  });
+
+  // ⌘← is browser navigation, ⌥↑ is a text jump — a chord is never a step.
+  it('leaves modifier chords to the browser', () => {
+    const onChange = renderGrid(NARROW);
+    const handle = grab('Move a');
+    expect(fireEvent.keyDown(handle, { key: 'ArrowRight', metaKey: true })).toBe(true);
+    expect(fireEvent.keyDown(handle, { key: 'ArrowDown', altKey: true })).toBe(true);
+    press(handle, 'Enter');
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
+  // The regression this file exists to prevent: a handle wired with
+  // onPointerDown alone announces an action and then does nothing from the
+  // keyboard.
+  it('leaves no handle with a pointer-only activation path', () => {
+    renderGrid();
+    for (const label of ['Move a', 'Resize a']) {
+      const handle = screen.getByLabelText(label);
+      handle.focus();
+      fireEvent.keyDown(handle, { key: ' ' });
+      expect(handle, `${label} ignored Space`).toHaveAttribute('aria-pressed', 'true');
+      fireEvent.keyDown(handle, { key: 'Escape' });
+    }
+  });
+
+  // …and the same guard for a handle that doesn't exist yet. The rendered
+  // check above can only speak for the handles a fixture happens to produce;
+  // a third pointer-driven handle added later would pass it by simply not
+  // being there, which is exactly how the first two got shipped inert.
+  it('gives every pointer-driven DragHandle in the source a keyboard path', () => {
+    const source = readFileSync(join(dirname(fileURLToPath(import.meta.url)), 'DashboardGrid.jsx'), 'utf8');
+    // Slice each element at its own closing bracket so a neighbour's props
+    // can never satisfy this on its behalf.
+    const offenders = source.split('<DragHandle').slice(1)
+      .map((rest) => rest.slice(0, rest.indexOf('/>')))
+      .filter((props) => props.includes('onPointerDown') && !props.includes('onKeyDown'));
+    expect(offenders, `DragHandle wired for pointer only:\n${offenders.join('\n---\n')}`).toEqual([]);
+  });
+});
+
+// The clamps are what keep the keyboard from reaching a placement the drag
+// could not, so they get pinned directly — an integration test can only show
+// that SOME edge held, not which bound produced it.
+describe('stepGhost', () => {
+  const move = { id: 'a', x: 0, w: 4, h: 3, order: 0 };
+
+  it('steps a move by one column and one rank', () => {
+    expect(stepGhost('move', move, 'ArrowRight', 3).x).toBe(1);
+    expect(stepGhost('move', move, 'ArrowDown', 3).order).toBe(1);
+  });
+
+  it('holds a move inside the grid and inside the sequence', () => {
+    expect(stepGhost('move', move, 'ArrowLeft', 3).x).toBe(0);
+    expect(stepGhost('move', move, 'ArrowUp', 3).order).toBe(0);
+    expect(stepGhost('move', { ...move, x: 8 }, 'ArrowRight', 3).x).toBe(8);
+    expect(stepGhost('move', { ...move, order: 2 }, 'ArrowDown', 3).order).toBe(2);
+  });
+
+  it('keeps a resize above the minimums and inside the right edge', () => {
+    expect(stepGhost('resize', { ...move, w: 2 }, 'ArrowLeft', 1).w).toBe(2);
+    expect(stepGhost('resize', { ...move, h: 2 }, 'ArrowUp', 1).h).toBe(2);
+    expect(stepGhost('resize', { ...move, x: 8, w: 4 }, 'ArrowRight', 1).w).toBe(4);
+  });
+
+  // Horizontal is columns-only by design: ↑/↓ owns the sequence, so a sideways
+  // step never re-ranks the cell behind the user's back.
+  it('leaves the sequence alone on a horizontal move step', () => {
+    expect(stepGhost('move', { ...move, order: 1 }, 'ArrowRight', 3).order).toBe(1);
+  });
+
+  it('ignores a key that is not an arrow', () => {
+    expect(stepGhost('move', move, 'Enter', 3)).toBe(move);
   });
 });
 

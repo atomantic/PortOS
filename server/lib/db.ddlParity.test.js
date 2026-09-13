@@ -324,6 +324,7 @@ describe('DDL parity (init-db.sql ↔ db/schema ensureSchema)', () => {
   it('beeper_* additive columns carry an ALTER TABLE for existing installs', () => {
     for (const { table, columns } of [
       { table: 'beeper_messages', columns: ['is_sender'] },
+      { table: 'beeper_outbox', columns: ['send_requested_at'] },
       { table: 'beeper_attachments', columns: ['local_path', 'fetched_at', 'unavailable_at', 'fetch_error'] },
       { table: 'beeper_conversations', columns: ['seen_at'] },
     ]) {

@@ -64,3 +64,5 @@ Comms & voice: [beeper](./features/beeper.md) · [openclaw-operator-chat](./feat
 - **[examples/](./examples/README.md)** — copy-ready config examples (e.g. Claude Code → Ollama settings).
 - **[`.changelog/README.md`](../.changelog/README.md)** — how `/do:release` synthesizes release notes from the commit log, and the versioned-file format.
 - **media/** — screenshots and logo used by the root README.
+
+- [Local managed-app visitor broker](features/managed-visitors.md) — opt-in credential provisioning, versioned nonhumanoid scope and host negotiation.

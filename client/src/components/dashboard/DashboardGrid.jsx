@@ -55,6 +55,16 @@ import { dndTransformToCss } from '../../lib/dndTransform';
 // regardless of which element the pointer crosses — the listener lives on
 // `window` for the duration of the gesture.
 //
+// KEYBOARD RUNS THE SAME GESTURE (#7263). Both handles are also grab toggles:
+// Enter/Space lifts the cell, the arrows step the ghost, Enter/Space drops it
+// and Escape puts it back. There is deliberately no second placement path —
+// `beginGesture` freezes the identical snapshot the pointer drag freezes,
+// `stepGhost` snaps in the same units the pointer rounds to, and the commit
+// goes through the same `applyGhost`. What differs is only where the next
+// ghost comes from: a pixel delta, or one arrow press. That is what keeps the
+// promise above (one vertical coordinate) intact — a keyboard step never
+// introduces a coordinate space the pointer path doesn't already have.
+//
 // Below MOBILE_BREAKPOINT_PX the grid collapses to a single column, so x/w
 // have nowhere to go — but ORDER still does. There, edit mode swaps the two
 // grid handles for one reorder handle that sorts the stack via dnd-kit (the
@@ -99,6 +109,26 @@ const MOBILE_BREAKPOINT_PX = 640;
 // that, two cells in the SAME column could read as "same row," and a cell
 // whose column ties would then re-rank itself on a zero-distance click.
 const SAME_ROW_PX = ROW_HEIGHT_PX / 2;
+
+// One arrow press, in the units the gesture already snaps to: a column on the
+// horizontal axis, and on the vertical axis one sequence rank (move) or one
+// row step (resize). Signs follow the pointer drag rather than the visual
+// metaphor — dragging DOWN grows a cell and pushes it later in the sequence,
+// so ArrowDown does both too.
+const ARROW_STEPS = {
+  ArrowLeft: { axis: 'x', delta: -1 },
+  ArrowRight: { axis: 'x', delta: 1 },
+  ArrowUp: { axis: 'y', delta: -1 },
+  ArrowDown: { axis: 'y', delta: 1 },
+};
+
+// Keys that lift and drop a handle. ' ' is what every browser still in scope
+// reports; 'Spacebar' is legacy IE/Edge and costs one array entry.
+const GRAB_KEYS = ['Enter', ' ', 'Spacebar'];
+
+function clamp(value, min, max) {
+  return Math.max(min, Math.min(max, value));
+}
 
 function getColWidth(containerWidth) {
   return (containerWidth - GAP_PX * (GRID_COLS - 1)) / GRID_COLS;
@@ -246,6 +276,52 @@ function applyGhost(baseline, kind, ghost, pin) {
     : insertAtOrder(swapped, ghost.id, ghost.order);
 }
 
+// Advance a keyboard gesture's ghost by one arrow press. The clamps are the
+// SAME ones the pointer path applies to its rounded pixel delta — a move stays
+// inside the 12 columns and inside the sequence, a resize keeps MIN_W/MIN_H
+// and cannot run off the right edge — so the two gestures can never reach a
+// placement the other couldn't.
+//
+// `count` is how many cells are in the sequence; the last rank is count-1
+// because a move re-INSERTS the cell rather than adding one.
+//
+// A step that would leave the grid comes back as the same values, so the
+// caller can compare placements and skip both the re-render and the
+// announcement rather than narrating a press that did nothing.
+//
+// The one deliberate divergence from the drag: a horizontal move step leaves
+// `order` alone, where the pointer path re-derives it from `rankAtPixel` on
+// every frame (which is what makes dragging a card sideways past its row
+// neighbour swap the two). Here ↑/↓ owns the sequence outright, so "change
+// columns, keep my place in the reading order" is expressible — and a press
+// never has a second, unasked-for effect the user can't see coming.
+export function stepGhost(kind, ghost, key, count) {
+  const step = ARROW_STEPS[key];
+  if (!step) return ghost;
+  if (kind === 'move') {
+    return step.axis === 'x'
+      ? { ...ghost, x: clamp(ghost.x + step.delta, 0, GRID_COLS - ghost.w) }
+      : { ...ghost, order: clamp(ghost.order + step.delta, 0, Math.max(0, count - 1)) };
+  }
+  return step.axis === 'x'
+    ? { ...ghost, w: clamp(ghost.w + step.delta, MIN_W, GRID_COLS - ghost.x) }
+    // No ceiling, same as the drag: the pack owns vertical space, so a tall
+    // cell costs page height and nothing else.
+    : { ...ghost, h: Math.max(MIN_H, ghost.h + step.delta) };
+}
+
+// What a screen reader hears. The registry label, not the raw id, and 1-based
+// numbers because they're read aloud to a human counting columns.
+function widgetLabel(item) {
+  return WIDGETS_BY_ID[item.id]?.label ?? item.id;
+}
+
+function describePlacement(kind, ghost, count) {
+  return kind === 'move'
+    ? `column ${ghost.x + 1} of ${GRID_COLS}, position ${ghost.order + 1} of ${count}`
+    : `${ghost.w} of ${GRID_COLS} columns wide, ${ghost.h} rows tall`;
+}
+
 // Everything that differs between the three handles, on one row each. `kind`
 // already discriminates them, so icon/size/placement hang off it rather than
 // travelling as separate props.
@@ -275,16 +351,34 @@ const HANDLE_KINDS = {
 // their own onPointerDown instead. `touchAction: 'none'` is what makes any of
 // them work under a finger — without it the browser claims the pointer stream
 // for scrolling.
-function DragHandle({ kind, item, onPointerDown, onClick, handleProps }) {
+//
+// The two grid handles additionally pass `onKeyDown`/`grabbed`, which is what
+// makes them toggle buttons rather than pointer-only affordances: `aria-pressed`
+// is the idle/grabbed state, and the grid's live region narrates each step.
+// `grabbed` stays undefined on the handles that are plain buttons (auto-fit) or
+// already announce themselves through dnd-kit (reorder), so those keep their
+// unpressed semantics.
+function DragHandle({ kind, item, onPointerDown, onClick, onKeyDown, onBlur, grabbed, handleProps }) {
   const { label, Icon, size, className } = HANDLE_KINDS[kind];
+  // The two states SWAP their surface/border/ink rather than layering a
+  // grabbed set on top of the idle one: Tailwind emits utilities in its own
+  // order, so `border-port-accent` and `border-port-border` in one class
+  // string are decided by the stylesheet, not by which came last here — the
+  // same trap `client/src/AGENTS.md` records for `inline-flex`.
+  const stateClass = grabbed
+    ? 'bg-port-accent/20 border-port-accent text-white ring-1 ring-port-accent'
+    : 'bg-port-bg/90 border-port-border text-gray-300 hover:text-white hover:border-port-accent';
   return (
     <button
       type="button"
       onPointerDown={onPointerDown}
       onClick={onClick}
+      onKeyDown={onKeyDown}
+      onBlur={onBlur}
+      aria-pressed={grabbed}
       // The registry label, not the raw id — this is read aloud.
-      aria-label={`${label} ${WIDGETS_BY_ID[item.id]?.label ?? item.id}`}
-      className={`absolute z-20 bg-port-bg/90 border border-port-border rounded text-gray-300 hover:text-white hover:border-port-accent ${className}`}
+      aria-label={`${label} ${widgetLabel(item)}`}
+      className={`absolute z-20 border rounded ${stateClass} ${className}`}
       style={{ touchAction: 'none' }}
       {...handleProps}
     >
@@ -383,7 +477,8 @@ export function readingOrderIds(grid) {
 // `renderItem` for all ~12 widgets to move one card.
 const GridCell = memo(function GridCell({
   item, isMobile, editable, sortable, left, top, width, height, autoHeight, isGridDragging,
-  suppressTransition, onStartGridDrag, onClearFixedHeight, onMeasure, renderItem,
+  suppressTransition, onStartGridDrag, onHandleKeyDown, onHandleBlur, grabbedKind,
+  onClearFixedHeight, onMeasure, renderItem,
 }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: item.id,
@@ -468,8 +563,22 @@ const GridCell = memo(function GridCell({
         </div>
         {editable && !isMobile && (
           <>
-            <DragHandle kind="move" item={item} onPointerDown={(e) => onStartGridDrag(e, item, 'move')} />
-            <DragHandle kind="resize" item={item} onPointerDown={(e) => onStartGridDrag(e, item, 'resize')} />
+            <DragHandle
+              kind="move"
+              item={item}
+              onPointerDown={(e) => onStartGridDrag(e, item, 'move')}
+              onKeyDown={(e) => onHandleKeyDown(e, item, 'move')}
+              onBlur={() => onHandleBlur(item, 'move')}
+              grabbed={grabbedKind === 'move'}
+            />
+            <DragHandle
+              kind="resize"
+              item={item}
+              onPointerDown={(e) => onStartGridDrag(e, item, 'resize')}
+              onKeyDown={(e) => onHandleKeyDown(e, item, 'resize')}
+              onBlur={() => onHandleBlur(item, 'resize')}
+              grabbed={grabbedKind === 'resize'}
+            />
             {item.fixedH && (
               <DragHandle kind="auto-height" item={item} onClick={() => onClearFixedHeight(item)} />
             )}
@@ -500,6 +609,10 @@ export default function DashboardGrid({ items, editable, onChange, onLayoutModeC
   const [drag, setDrag] = useState(null);
   // Measured natural heights, px, keyed by widget id.
   const [heights, setHeights] = useState({});
+  // What the grid's live region currently says. Only the keyboard gesture
+  // writes it: a pointer drag is already visible to the person doing it, and
+  // narrating 60 snaps a second would flood the speech queue.
+  const [announcement, setAnnouncement] = useState('');
 
   const onMeasure = useCallback((id, px) => {
     setHeights((prev) => (prev[id] === px ? prev : { ...prev, [id]: px }));
@@ -536,8 +649,15 @@ export default function DashboardGrid({ items, editable, onChange, onLayoutModeC
   );
   // Read by the drag handlers, which must not re-bind every time a widget
   // re-measures (that would churn every memoized cell mid-gesture).
+  //
+  // Held at the SETTLED pack while a gesture is live: `rects` packs
+  // `previewItems`, which folds the ghost in. Both readers below want where the
+  // cards really are, not where the preview is drawing them. A keyboard grab is
+  // modal and stays open indefinitely, so a pointer drag on a sibling handle
+  // (or a pin release) can land mid-gesture and would otherwise compute its
+  // rank against displaced tops and commit a card to the wrong slot.
   const rectsRef = useRef(rects);
-  rectsRef.current = rects;
+  if (!drag) rectsRef.current = rects;
 
   const containerHeight = useMemo(() => {
     let bottom = 0;
@@ -556,25 +676,19 @@ export default function DashboardGrid({ items, editable, onChange, onLayoutModeC
     [ordered, heights]
   );
 
-  const startDrag = useCallback((e, item, kind) => {
-    if (!editable || isMobile) return;
-    // Prevent text selection mid-drag. preventDefault on the handle's
-    // pointerdown is enough because the listener lives on window and we
-    // never let the pointer leave the gesture.
-    e.preventDefault();
-    e.stopPropagation();
-    // Freeze the pack's output for the gesture: the ghost has to start exactly
-    // where the card is DRAWN (grabbing the resize handle on an auto-height
-    // cell would otherwise snap it to a stale row count before the pointer
-    // moved), and the rank math has to compare against positions the preview
-    // isn't simultaneously shifting.
+  // Freeze everything a gesture reasons about, whatever started it. The ghost
+  // has to begin exactly where the card is DRAWN (grabbing the resize handle
+  // on an auto-height cell would otherwise snap it to a stale row count before
+  // the first step), and the rank math has to compare against positions the
+  // preview isn't simultaneously shifting.
+  const beginGesture = useCallback((item, kind) => {
     const baseRects = rectsRef.current;
     const baseline = withMeasuredHeights(items, baseRects);
     const found = baseline.find((it) => it.id === item.id) ?? item;
-    // A resize gesture's floor applies to where the drag STARTS too. Without
-    // it, a cell measuring under MIN_H rows (a widget rendering little or
-    // nothing) has its height "changed" by the clamp alone — so a purely
-    // horizontal drag would silently pin it.
+    // A resize gesture's floor applies to where it STARTS too. Without it, a
+    // cell measuring under MIN_H rows (a widget rendering little or nothing)
+    // has its height "changed" by the clamp alone — so a purely horizontal
+    // drag would silently pin it.
     //
     // A move's start is expressed as the rank the cell ALREADY reads at, not
     // its stored `order`. The two can differ: the pack places in sequence, but
@@ -586,19 +700,133 @@ export default function DashboardGrid({ items, editable, onChange, onLayoutModeC
     const startItem = kind === 'resize'
       ? { ...found, h: Math.max(MIN_H, found.h) }
       : { ...found, order: rankAtPixel(baseline, baseRects, item.id, startTop, found.x) };
-    dragRef.current = {
-      id: item.id,
-      kind,
-      startPointer: { x: e.clientX, y: e.clientY },
-      startTop,
-      startItem,
-      ghost: { ...startItem },
-    };
-    setDrag({ kind, baseline, baseRects, ghost: { ...startItem } });
-  }, [editable, isMobile, items]);
+    return { id: item.id, kind, baseline, baseRects, startTop, startItem, ghost: { ...startItem } };
+  }, [items]);
+
+  // Fold the gesture in `dragRef` back into the layout, then clear it. Shared
+  // by the pointer drop and the keyboard commit so "what a gesture writes" has
+  // exactly one definition; returns whether anything was actually written.
+  const finishGesture = useCallback((commit) => {
+    const gesture = dragRef.current;
+    dragRef.current = null;
+    setDrag(null);
+    if (!gesture || !commit) return false;
+    // Skip the write entirely when nothing actually changed — avoids a 200 OK
+    // on every accidental click of the drag handle.
+    if (samePlacement(gesture.startItem, gesture.ghost)) return false;
+    // A resize that actually changed the HEIGHT is the user declaring one:
+    // pin it. A width-only resize (or a move) leaves the cell auto-sized.
+    const pins = gesture.kind === 'resize' && gesture.ghost.h !== gesture.startItem.h;
+    onChange(applyGhost(gesture.baseline, gesture.kind, gesture.ghost, pins));
+    return true;
+  }, [onChange]);
+
+  const startDrag = useCallback((e, item, kind) => {
+    if (!editable || isMobile) return;
+    // Prevent text selection mid-drag. preventDefault on the handle's
+    // pointerdown is enough because the listener lives on window and we
+    // never let the pointer leave the gesture.
+    e.preventDefault();
+    e.stopPropagation();
+    const gesture = beginGesture(item, kind);
+    dragRef.current = { ...gesture, startPointer: { x: e.clientX, y: e.clientY } };
+    setDrag({ kind, baseline: gesture.baseline, baseRects: gesture.baseRects, ghost: { ...gesture.startItem } });
+  }, [editable, isMobile, beginGesture]);
+
+  // Enter/Space lifts a handle, the arrows step it, Enter/Space drops it and
+  // Escape puts it back — the same state machine dnd-kit gives the mobile
+  // reorder handle, so the two gestures feel like one feature.
+  const handleKeyDown = useCallback((e, item, kind) => {
+    if (!editable || isMobile) return;
+    // A chord belongs to the browser or the app, not to this handle — ⌘←
+    // navigates back, ⌥↑ jumps a paragraph. Only the bare key is a gesture.
+    if (e.metaKey || e.ctrlKey || e.altKey) return;
+    const gesture = dragRef.current;
+    const grabbed = Boolean(gesture?.keyboard) && gesture.id === item.id && gesture.kind === kind;
+    const count = items.length;
+
+    if (GRAB_KEYS.includes(e.key)) {
+      // Suppress the button's own activation: Enter/Space on a <button> would
+      // otherwise fire a click straight after this, and the grab toggle would
+      // cancel itself.
+      e.preventDefault();
+      e.stopPropagation();
+      if (!grabbed) {
+        const next = beginGesture(item, kind);
+        dragRef.current = { ...next, keyboard: true };
+        setDrag({ kind, keyboard: true, baseline: next.baseline, baseRects: next.baseRects, ghost: { ...next.startItem } });
+        setAnnouncement(`${widgetLabel(item)} grabbed. ${describePlacement(kind, next.startItem, count)}. Use the arrow keys, then Enter to place or Escape to cancel.`);
+        return;
+      }
+      const placed = finishGesture(true);
+      setAnnouncement(`${widgetLabel(item)} ${kind === 'resize' ? 'resized' : 'placed'}. ${placed ? describePlacement(kind, gesture.ghost, count) : 'Unchanged'}.`);
+      return;
+    }
+
+    if (!grabbed) return;
+
+    if (e.key === 'Escape') {
+      // Nothing was written, so dropping the gesture IS the restore — and the
+      // stop keeps Escape from also leaving Arrange mode behind our back.
+      e.preventDefault();
+      e.stopPropagation();
+      finishGesture(false);
+      setAnnouncement(`${widgetLabel(item)} returned to its original position.`);
+      return;
+    }
+
+    if (!ARROW_STEPS[e.key]) return;
+    // Claim the arrow before the page scrolls under the grabbed cell.
+    e.preventDefault();
+    e.stopPropagation();
+    const next = stepGhost(kind, gesture.ghost, e.key, count);
+    // A step clamped at an edge changes nothing — say nothing and re-render
+    // nothing rather than repeating the last position back at the user.
+    if (samePlacement(gesture.ghost, next)) return;
+    gesture.ghost = next;
+    setDrag((prev) => (prev ? { ...prev, ghost: { ...next } } : prev));
+    setAnnouncement(`${describePlacement(kind, next, count)}.`);
+  }, [editable, isMobile, items, beginGesture, finishGesture]);
+
+  // Tabbing (or clicking) away from a grabbed handle abandons the gesture
+  // rather than leaving a ghost the user can no longer steer. Scoped to the
+  // handle that actually holds the grab, so starting a POINTER drag on a
+  // sibling handle — whose pointerdown lands before this blur — isn't undone
+  // by it.
+  const handleBlur = useCallback((item, kind) => {
+    const gesture = dragRef.current;
+    if (!gesture?.keyboard || gesture.id !== item.id || gesture.kind !== kind) return;
+    finishGesture(false);
+    setAnnouncement(`${widgetLabel(item)} returned to its original position.`);
+  }, [finishGesture]);
+
+  // A keyboard grab is modal, so it can still be open when the grid leaves the
+  // mode that offers it — Save/Cancel on the Arrange toolbar, or a rotation
+  // crossing the mobile breakpoint. The handles simply unmount, which fires no
+  // blur, so without this the abandoned ghost keeps overriding the preview and
+  // the grid goes on drawing a placement the user already cancelled.
+  useEffect(() => {
+    if (editable && !isMobile) return;
+    if (dragRef.current) finishGesture(false);
+  }, [editable, isMobile, finishGesture]);
+
+  // The handle keeps focus while the cell travels under it, so the browser has
+  // no focus change to scroll to — stepping a widget down a tall dashboard
+  // would otherwise walk it past the fold with nothing to look at. `nearest`
+  // is a no-op while the cell is already on screen. Keyboard only: a pointer
+  // drag is anchored to a cursor the user can already see.
+  useEffect(() => {
+    if (!drag?.keyboard) return;
+    containerRef.current
+      ?.querySelector(`[data-widget-id="${drag.ghost.id}"]`)
+      ?.scrollIntoView?.({ block: 'nearest' });
+  }, [drag, containerRef]);
 
   useEffect(() => {
-    if (!drag) return undefined;
+    // A keyboard grab drives itself from the handle's own keydown — installing
+    // the window pointer listeners for it would let a click anywhere on the
+    // page drop the cell.
+    if (!drag || drag.keyboard) return undefined;
     const colWidth = getColWidth(containerWidth);
     // Both are fixed for the life of the gesture, and this effect re-installs
     // exactly when one starts — so capturing them here can't go stale, and the
@@ -645,17 +873,7 @@ export default function DashboardGrid({ items, editable, onChange, onLayoutModeC
 
     const finish = (commit) => {
       if (raf) { cancelAnimationFrame(raf); raf = 0; }
-      const gesture = dragRef.current;
-      dragRef.current = null;
-      setDrag(null);
-      if (!gesture || !commit) return;
-      // Skip the write entirely when nothing actually changed — avoids a
-      // 200 OK on every accidental click on the drag handle.
-      if (samePlacement(gesture.startItem, gesture.ghost)) return;
-      // A resize that actually changed the HEIGHT is the user declaring one:
-      // pin it. A width-only resize (or a move) leaves the cell auto-sized.
-      const pins = kind === 'resize' && gesture.ghost.h !== gesture.startItem.h;
-      onChange(applyGhost(baseline, kind, gesture.ghost, pins));
+      finishGesture(commit);
     };
 
     const onPointerUp = () => finish(true);
@@ -673,10 +891,12 @@ export default function DashboardGrid({ items, editable, onChange, onLayoutModeC
       window.removeEventListener('pointercancel', onPointerCancel);
       if (raf) cancelAnimationFrame(raf);
     };
-  // The active/idle key re-installs the listeners only when the gesture
+  // The mode key re-installs the listeners only when a POINTER gesture
   // starts/ends, never on a snap — pointermove writes dragRef.current
   // directly, and the `kind`/`baseline` captured above are gesture-constant.
-  }, [drag ? 'active' : 'idle', onChange, containerWidth]);
+  // A keyboard grab is its own mode, so switching between the two re-runs
+  // this instead of leaving the wrong listeners bound.
+  }, [drag ? (drag.keyboard ? 'keyboard' : 'pointer') : 'idle', finishGesture, containerWidth]);
 
   // A short activation distance keeps a tap on the handle from registering as
   // a drag; the keyboard sensor is what makes the handle usable without one.
@@ -752,6 +972,9 @@ export default function DashboardGrid({ items, editable, onChange, onLayoutModeC
                 isGridDragging={!isMobile && dragged}
                 suppressTransition={Boolean(drag) || !settled}
                 onStartGridDrag={startDrag}
+                onHandleKeyDown={handleKeyDown}
+                onHandleBlur={handleBlur}
+                grabbedKind={drag?.keyboard && drag.ghost.id === item.id ? drag.kind : null}
                 onClearFixedHeight={clearFixedHeight}
                 onMeasure={onMeasure}
                 renderItem={renderItem}
@@ -768,6 +991,13 @@ export default function DashboardGrid({ items, editable, onChange, onLayoutModeC
               style={{ ...columnRect(drag.ghost, colWidth), ...rects.get(drag.ghost.id) }}
             />
           )}
+
+          {/* Where a keyboard gesture narrates itself. The pointer drag is
+              already visible to whoever is doing it; an arrow step is not, so
+              this is the only feedback that says a press landed. `polite` so
+              a fast run of arrow presses queues behind the current utterance
+              instead of cutting it off. */}
+          <div role="status" aria-live="polite" className="sr-only">{announcement}</div>
         </div>
       </SortableContext>
     </DndContext>

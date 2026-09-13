@@ -22,6 +22,7 @@
  */
 
 import { getScheduleStatus } from './taskSchedule.js';
+import { DEFAULT_PERPETUAL_RECHECK_MS } from './taskScheduleConstants.js';
 import { AUDIT_TASK_TYPES } from '../lib/auditCatalog.js';
 import * as autonomousJobs from './autonomousJobs.js';
 import { checkJobGate, hasGate, getRegisteredGates } from './jobGates.js';
@@ -32,6 +33,12 @@ import { getUserTimezone } from './userTimezone.js';
 const HOUR = 3_600_000;
 const DAY = 24 * HOUR;
 const MAX_OCCURRENCES_PER_NODE = 200;
+// Nominal runtime drawn for one perpetual drain. A drain has no scheduled end —
+// it runs until its work-detector finds nothing actionable — but painting that
+// as a band from Now to the horizon made every perpetual task read as "always
+// running" and hid the one thing the timeline exists to show: when it next
+// starts. One bar per recurrence at a fixed nominal length restores that.
+const PERPETUAL_NOMINAL_RUN_MS = HOUR;
 
 /**
  * Stage definitions. `taskTypes` are entries from taskSchedule's tasks map;
@@ -283,7 +290,8 @@ export async function getWorkflowGraph({ horizonHours = 24, from = new Date() } 
 
 /**
  * Project heterogeneous scheduler definitions onto one clock. Occurrences are
- * launch/recheck instants; windows describe work that is currently perpetual.
+ * launch/recheck instants; windows are bounded runtime bars for perpetual
+ * drains — one at Now when a drain is live, plus one per projected recurrence.
  * Flexible rotation/on-demand tasks intentionally have neither because the
  * scheduler does not promise them a wall-clock position.
  */
@@ -405,20 +413,11 @@ function projectPerpetual(node, startMs, endMs, timezone, occurrences, windows) 
   const perpetual = node.perpetualStatus;
   const allTrackedAppsParked = perpetual?.trackedAppCount > 0 && perpetual.parkedAppCount === perpetual.trackedAppCount;
   const draining = node.shouldRun && !perpetual?.globalParked && !allTrackedAppsParked && node.statusReason !== 'perpetual-parked';
-  if (draining) {
-    windows.push({
-      id: `${node.id}:active`,
-      nodeId: node.id,
-      startAt: new Date(startMs).toISOString(),
-      endAt: new Date(endMs).toISOString(),
-      kind: 'perpetual',
-      state: 'draining'
-    });
-  }
 
   // A cron+perpetual task rechecks on its own expression (computePerpetualRecheckAt
   // derives the park from it); an on-demand one uses `recheckCron`.
   const recheckCron = node.schedule?.cronExpression || node.schedule?.recheckCron;
+  const rechecks = [];
   if (recheckCron) {
     appendCronOccurrences({
       node,
@@ -426,26 +425,58 @@ function projectPerpetual(node, startMs, endMs, timezone, occurrences, windows) 
       startMs,
       endMs,
       timezone,
-      target: occurrences,
+      target: rechecks,
       kind: 'recheck'
     });
-    return;
+  } else {
+    const nextRecheckMs = node.nextRunAt ? Date.parse(node.nextRunAt) : NaN;
+    const cadence = node.schedule?.recheckIntervalMs || DEFAULT_PERPETUAL_RECHECK_MS;
+    if (Number.isFinite(nextRecheckMs)) {
+      appendIntervalOccurrences({
+        node,
+        firstMs: nextRecheckMs,
+        cadence,
+        startMs,
+        endMs,
+        timezone,
+        target: rechecks,
+        kind: 'recheck'
+      });
+    }
   }
+  occurrences.push(...rechecks);
 
-  const nextRecheckMs = node.nextRunAt ? new Date(node.nextRunAt).getTime() : NaN;
-  const cadence = node.schedule?.recheckIntervalMs || DAY;
-  if (Number.isFinite(nextRecheckMs)) {
-    appendIntervalOccurrences({
-      node,
-      firstMs: nextRecheckMs,
-      cadence,
-      startMs,
-      endMs,
-      timezone,
-      target: occurrences,
-      kind: 'recheck'
-    });
+  // Each recurrence gets its own bounded runtime bar, so a perpetual task reads
+  // as "starts here, runs about this long" rather than one endless band. A
+  // recheck cadence shorter than the nominal run (nothing enforces a minimum)
+  // would stack bars straight back into that band, so a recurrence already
+  // inside the preceding bar is skipped rather than drawn over it.
+  let coveredUntilMs = -Infinity;
+  if (draining) {
+    windows.push(makePerpetualWindow(node, startMs, endMs, 'draining'));
+    coveredUntilMs = startMs + PERPETUAL_NOMINAL_RUN_MS;
   }
+  for (const recheck of rechecks) {
+    const atMs = Date.parse(recheck.at);
+    if (atMs < coveredUntilMs) continue;
+    windows.push(makePerpetualWindow(node, atMs, endMs, 'scheduled'));
+    coveredUntilMs = atMs + PERPETUAL_NOMINAL_RUN_MS;
+  }
+}
+
+function makePerpetualWindow(node, atMs, endMs, state) {
+  return {
+    id: `${node.id}:${state}:${atMs}`,
+    nodeId: node.id,
+    startAt: new Date(atMs).toISOString(),
+    // Nominal, not a promise: the drain runs until its work-detector reports
+    // nothing actionable, which may be shorter or longer than the bar.
+    endAt: new Date(Math.min(atMs + PERPETUAL_NOMINAL_RUN_MS, endMs)).toISOString(),
+    kind: 'perpetual',
+    // 'draining' = a drain the scheduler considers live right now;
+    // 'scheduled' = a future recurrence that will start a drain.
+    state
+  };
 }
 
 function projectIntervalJob(node, startMs, endMs, timezone, occurrences) {

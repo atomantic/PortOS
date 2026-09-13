@@ -869,7 +869,6 @@ export default function Catalog() {
               <button
                 type="button"
                 onClick={() => { setRemixMenuOpen((o) => !o); setAddMenuOpen(false); }}
-                aria-haspopup="menu"
                 aria-expanded={remixMenuOpen}
                 aria-label="Remix into…"
                 className="inline-flex w-full sm:w-auto items-center justify-center gap-2 px-3 py-2 min-h-[40px] rounded-lg bg-port-accent hover:bg-port-accent/90 text-white text-sm font-medium"
@@ -878,15 +877,19 @@ export default function Catalog() {
                 <span className="truncate">Remix<span className="hidden sm:inline"> into…</span></span>
               </button>
               {remixMenuOpen && (
+                // A plain list of actions, NOT role="menu" — that role would
+                // promise ArrowUp/ArrowDown roving focus this popover doesn't
+                // implement (#7265). The <ul>/<li>/<button> markup already
+                // conveys "a list of actions"; aria-expanded on the trigger
+                // carries the disclosure.
                 <ul
-                  role="menu"
+                  aria-label="Remix targets"
                   className="absolute bottom-full mb-2 left-0 right-0 sm:left-auto sm:min-w-[180px] bg-port-card border border-port-border rounded-lg shadow-lg overflow-hidden"
                 >
                   {REMIX_TARGETS.map((t) => (
-                    <li key={t.id} role="none">
+                    <li key={t.id}>
                       <button
                         type="button"
-                        role="menuitem"
                         onClick={() => handleRemix(t)}
                         className="w-full text-left px-3 py-2 text-sm text-gray-200 hover:bg-port-bg hover:text-white"
                       >
@@ -901,7 +904,6 @@ export default function Catalog() {
               <button
                 type="button"
                 onClick={openAddMenu}
-                aria-haspopup="menu"
                 aria-expanded={addMenuOpen}
                 aria-label="Add to universe/series…"
                 title="Place the selected ingredients into a universe or series"
@@ -914,8 +916,12 @@ export default function Catalog() {
                 // The bar is pinned to the bottom of the viewport and the menu
                 // opens upward, so cap it against the viewport rather than a
                 // fixed 18rem — in landscape that would run off the top.
+                // Same non-menu call as the Remix list above (#7265): a named
+                // group of plain buttons, reachable by Tab — no arrow-key
+                // roving focus is implemented here.
                 <div
-                  role="menu"
+                  role="group"
+                  aria-label="Add to universe or series"
                   className="absolute bottom-full mb-2 left-0 right-0 sm:left-auto sm:min-w-[220px] max-h-[60vh] sm:max-h-72 overflow-y-auto bg-port-card border border-port-border rounded-lg shadow-lg"
                 >
                   {placeTargetsLoading || placeTargets === null ? (
@@ -931,7 +937,6 @@ export default function Catalog() {
                             <button
                               key={`u-${t.refId}`}
                               type="button"
-                              role="menuitem"
                               onClick={() => handleAddToRef(t.refKind, t.refId, t.label)}
                               className="w-full text-left px-3 py-2 text-sm text-gray-200 hover:bg-port-bg hover:text-white"
                             >
@@ -947,7 +952,6 @@ export default function Catalog() {
                             <button
                               key={`s-${t.refId}`}
                               type="button"
-                              role="menuitem"
                               onClick={() => handleAddToRef(t.refKind, t.refId, t.label)}
                               className="w-full text-left px-3 py-2 text-sm text-gray-200 hover:bg-port-bg hover:text-white"
                             >

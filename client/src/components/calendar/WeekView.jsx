@@ -1,11 +1,12 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
-import {ChevronLeft, ChevronRight} from 'lucide-react';
+import {CalendarDays, ChevronLeft, ChevronRight} from 'lucide-react';
 import * as api from '../../services/api';
 import socket from '../../services/socket';
 import EventDetail from './EventDetail';
 import ChronotypeOverlay from './ChronotypeOverlay';
 import { buildSubcalendarColorMap, eventChipStyle, getEventDayMinutes } from './calendarUtils';
 import BrailleSpinner from '../BrailleSpinner';
+import EmptyState from '../EmptyState';
 import { useThemeContext } from '../ThemeContext';
 import { formatMonthDay, formatWeekdayShort, formatDateShort, formatHourOfDay } from '../../utils/formatters';
 import useUrlParams from '../../hooks/useUrlParams';
@@ -189,6 +190,14 @@ export default function WeekView({ accounts }) {
         <div className="flex items-center justify-center py-12">
           <BrailleSpinner text="Loading" />
         </div>
+      ) : accounts.length === 0 ? (
+        <EmptyState
+          icon={CalendarDays}
+          title="No calendar connected"
+          message="Connect a calendar account to see your week."
+          actionTo="/calendar/config"
+          actionLabel="Add a calendar account"
+        />
       ) : (
         <div className="border border-port-border rounded-lg overflow-auto bg-port-card">
           {/* Day headers */}

@@ -77,12 +77,12 @@ export default function PromptEditor({ config, promptValue, setPromptValue, edit
         ) : (
           <button
             type="button"
-            className="w-full bg-port-bg border border-port-border rounded px-3 py-2 text-xs text-gray-400 font-mono max-h-32 overflow-y-auto cursor-pointer hover:border-port-accent/50 text-left"
+            className="block w-full bg-port-bg border border-port-border rounded text-xs text-gray-400 font-mono cursor-pointer hover:border-port-accent/50 text-left"
             onClick={() => setEditingPrompt(true)}
             title="Click to edit prompt"
             aria-label="Edit prompt"
           >
-            <pre className="whitespace-pre-wrap break-words">{promptValue || 'No prompt configured'}</pre>
+            <pre className="max-h-32 overflow-y-auto px-3 py-2 whitespace-pre-wrap break-words">{promptValue || 'No prompt configured'}</pre>
           </button>
         )}
       </div>

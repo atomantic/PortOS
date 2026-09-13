@@ -75,6 +75,69 @@ beforeEach(() => {
 });
 
 describe('AutomationTab per-app options', () => {
+  it('acknowledges a slow run immediately, prevents duplicate clicks, and retains the queued receipt', async () => {
+    await renderTab({ security: { enabled: true } });
+    let resolveRun;
+    api.triggerCosOnDemandTask.mockReturnValueOnce(new Promise(resolve => { resolveRun = resolve; }));
+    mockToast.loading.mockReturnValueOnce('run-toast');
+    const row = rowFor('security');
+    fireEvent.click(within(row).getByRole('button', { name: 'Run Now' }));
+    expect(mockToast.loading).toHaveBeenCalledWith('Sending security request for MyApp…');
+    const sending = within(row).getByRole('button', { name: 'Sending…' });
+    expect(sending).toBeDisabled();
+    fireEvent.click(sending);
+    expect(api.triggerCosOnDemandTask).toHaveBeenCalledTimes(1);
+    expect(mockToast.success).not.toHaveBeenCalled();
+    await act(async () => resolveRun({ success: true, request: { id: 'request-1' } }));
+    expect(mockToast.dismiss).toHaveBeenCalledWith('run-toast');
+    expect(mockToast.success).toHaveBeenCalledWith(expect.stringContaining('Queued security request for MyApp'));
+    expect(within(row).getByText('Request queued')).toBeVisible();
+    expect(within(row).getByRole('button', { name: 'Run Now' })).toBeEnabled();
+  });
+
+  it('clears sending feedback on rejection without claiming the run was queued', async () => {
+    await renderTab({ security: { enabled: true } });
+    api.triggerCosOnDemandTask.mockRejectedValueOnce(new Error('CoS unavailable'));
+    mockToast.loading.mockReturnValueOnce('failed-run-toast');
+    const row = rowFor('security');
+    fireEvent.click(within(row).getByRole('button', { name: 'Run Now' }));
+    await waitFor(() => expect(mockToast.dismiss).toHaveBeenCalledWith('failed-run-toast'));
+    expect(mockToast.error).toHaveBeenCalledWith('CoS unavailable');
+    expect(mockToast.success).not.toHaveBeenCalled();
+    expect(within(row).queryByText('Request queued')).toBeNull();
+    expect(within(row).getByRole('button', { name: 'Run Now' })).toBeEnabled();
+  });
+
+  it('puts custom automations before the shared schedule cards and shows app cadence', async () => {
+    await renderTab({ security: { enabled: true, interval: 'on-demand' } });
+    const custom = screen.getByText('Custom Tasks');
+    const scheduled = screen.getByText('Scheduled Task Options');
+    expect(custom.compareDocumentPosition(scheduled) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    const row = rowFor('security');
+    expect(within(row).getByRole('button', { name: 'Run Now' })).toBeEnabled();
+    expect(within(row).queryByText('Never run')).toBeNull();
+    expect(within(row).queryByText('App coverage')).toBeNull();
+    expect(within(row).getByText('on-demand')).toBeInTheDocument();
+  });
+
+  it('saves the selected app toggle before permitting a run and preserves state on failure', async () => {
+    await renderTab();
+    const row = rowFor('security');
+    let rejectSave;
+    api.updateAppTaskTypeOverride.mockReturnValueOnce(new Promise((_resolve, reject) => { rejectSave = reject; }));
+    fireEvent.click(within(row).getByRole('switch', { name: 'security enabled for this app: off' }));
+    expect(api.updateAppTaskTypeOverride).toHaveBeenCalledWith('app-1', 'security', { enabled: true }, { silent: true });
+    expect(within(row).getByRole('button', { name: 'Run Now' })).toBeDisabled();
+    await act(async () => rejectSave(new Error('Save failed')));
+    expect(within(row).getByRole('switch', { name: 'security enabled for this app: off' })).toHaveAttribute('aria-checked', 'false');
+    fireEvent.click(within(row).getByRole('switch', { name: 'security enabled for this app: off' }));
+    api.updateAppTaskTypeOverride.mockResolvedValue({ success: true });
+    await waitFor(() => expect(within(row).getByRole('button', { name: 'Run Now' })).toBeEnabled());
+    api.triggerCosOnDemandTask.mockResolvedValue({ success: true });
+    fireEvent.click(within(row).getByRole('button', { name: 'Run Now' }));
+    await waitFor(() => expect(api.triggerCosOnDemandTask).toHaveBeenCalledWith('security', 'app-1', { silent: true }));
+  });
+
   it('Configure toggle expands the provider override panel', async () => {
     await renderTab();
     const row = rowFor('layered-intelligence');

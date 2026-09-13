@@ -33,6 +33,7 @@ import { FABLELOOM_PLAYTEST_LIMITS } from './fableLoomPlaytest.js';
 import { EFFORT_LEVELS } from './providerModels.js';
 import { QUEUEABLE_IMAGE_MODES, VIDEO_GEN_MODES } from './generationModes.js';
 import { llmRoutePinSchema } from './llmRoutePin.js';
+import { seriesDesignSchema } from './sharedSchemas.js';
 
 const name = z.string().trim().min(1).max(LOOM_LIMITS.NAME_MAX);
 const logline = z.string().max(LOOM_LIMITS.LOGLINE_MAX);
@@ -120,6 +121,9 @@ const seriesPlan = z.object({
   // wholesale-`seriesPlan` PATCH (the sync path is where an absent key
   // preserves — see preserveLegacyCharacterEvolutions).
   characterEvolutions: characterEvolutionListSchema.optional(),
+  // Omission clears on the wholesale plan PATCH; null is also accepted as an
+  // explicit clear and is preserved on current-version sync payloads.
+  seriesDesign: seriesDesignSchema.nullable().optional(),
 });
 
 const outlineTransitionSchema = z.object({

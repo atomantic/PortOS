@@ -272,7 +272,7 @@ export default function Media3DDetail() {
       )}
 
       {record.status === 'failed' && record.error && (
-        <div className="mb-4 flex items-start gap-1.5 rounded-lg border border-port-error/30 bg-port-error/10 px-3 py-2 text-sm text-port-error">
+        <div role="status" className="mb-4 flex items-start gap-1.5 rounded-lg border border-port-error/30 bg-port-error/10 px-3 py-2 text-sm text-port-error">
           <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" /> {record.error}
         </div>
       )}

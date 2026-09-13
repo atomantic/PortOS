@@ -35,6 +35,7 @@ import InstancePicker from '../InstancePicker';
 import EffortSelect from '../EffortSelect';
 import RelaunchAgentModal from './RelaunchAgentModal';
 import AgentCard from './AgentCard';
+import PreflightProgress from './PreflightProgress';
 
 const statusIcons = {
   pending: <Clock size={16} aria-hidden="true" className="text-yellow-500" />,
@@ -633,6 +634,11 @@ export default function TaskItem({ task, agent = null, liveOutput, isSystem, spa
                   className="text-sm text-gray-500 mt-1"
                 />
               )}
+              <PreflightProgress
+                preflight={task.metadata?.preflight}
+                idScope={idScope}
+                taskId={task.id}
+              />
               <SecurityScanReport
                 scan={task.metadata?.pipeline?.securityScan}
                 idScope={idScope}

@@ -130,7 +130,7 @@ export default function GoalsCard() {
       {state.status === 'loading' && <BrailleSpinner text="Loading goals" />}
 
       {state.status === 'error' && (
-        <p className="text-sm text-gray-500">
+        <p role="status" className="text-sm text-gray-500">
           Your goals could not be loaded right now.{' '}
           <Link to={GOALS_LIST_PATH} className="text-port-accent hover:underline">Open Goals</Link>
         </p>

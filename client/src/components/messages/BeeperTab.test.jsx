@@ -609,21 +609,26 @@ describe('the composer sends', () => {
     expect(screen.getAllByText(OUTBOUND_TEXT)).toHaveLength(1);
   });
 
-  it('shows Retry on a failed send and leaves the composer text intact — never re-sent automatically', async () => {
+  it('shows a response-less send as unconfirmed with no Retry or automatic re-send', async () => {
     apiBeeper.createOutboxEntry.mockResolvedValue({ id: 'outbox-1', conversationId: CONV_A, body: OUTBOUND_TEXT, state: 'approved' });
-    apiBeeper.sendOutboxEntry.mockRejectedValue(Object.assign(new Error('Beeper request failed: connection refused'), { code: 'NETWORK_ERROR' }));
-    apiBeeper.listOutboxEntries.mockResolvedValue({
-      entries: [{ id: 'outbox-1', conversationId: CONV_A, body: OUTBOUND_TEXT, state: 'failed', errorCode: 'NETWORK_ERROR' }],
+    apiBeeper.sendOutboxEntry.mockResolvedValue({
+      id: 'outbox-1',
+      conversationId: CONV_A,
+      body: OUTBOUND_TEXT,
+      state: 'awaiting-confirmation',
+      errorCode: 'DELIVERY_UNCONFIRMED',
+      errorMessage: 'Delivery unconfirmed; check the chat before sending again.',
     });
     const composer = await openComposer();
 
     fireEvent.click(screen.getByRole('button', { name: 'Send' }));
 
     const row = await screen.findByTestId('beeper-outbox-row');
-    await waitFor(() => expect(row).toHaveAttribute('data-state', 'failed'));
-    expect(within(row).getByRole('button', { name: 'Retry' })).toBeInTheDocument();
+    await waitFor(() => expect(row).toHaveAttribute('data-state', 'awaiting-confirmation'));
+    expect(within(row).getByText('Delivery unconfirmed; check the chat before sending again.')).toBeInTheDocument();
+    expect(within(row).queryByRole('button', { name: 'Retry' })).toBeNull();
     expect(apiBeeper.sendOutboxEntry).toHaveBeenCalledTimes(1);
-    expect(composer).toHaveValue(OUTBOUND_TEXT);
+    await waitFor(() => expect(composer).toHaveValue(''));
   });
 
   it('surfaces a first-contact refusal as an inline confirmation naming the network and recipient, then resends the SAME row', async () => {

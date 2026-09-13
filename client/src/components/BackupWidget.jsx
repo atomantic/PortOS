@@ -55,6 +55,11 @@ const HEALTH_STYLES = {
   }
 };
 
+const snapshotIdentity = (snapshot) =>
+  snapshot.selectionKey || `${snapshot.source || 'current'}/${snapshot.id}`;
+const snapshotSourceLabel = (snapshot) =>
+  snapshot.sourceLabel || snapshot.source || 'Current machine';
+
 // ---------------------------------------------------------------------------
 // RestorePanel
 // ---------------------------------------------------------------------------
@@ -68,10 +73,12 @@ function RestorePanel({ snapshot, onClose, restoring, onRestoreStateChange }) {
 
   const currentRequest = {
     snapshotId: snapshot.id,
+    ...(snapshot.source ? { source: snapshot.source } : {}),
     subdirFilter: filter.trim() || null,
   };
   const previewMatchesCurrentRequest = acceptedPreview
     && acceptedPreview.request.snapshotId === currentRequest.snapshotId
+    && acceptedPreview.request.source === currentRequest.source
     && acceptedPreview.request.subdirFilter === currentRequest.subdirFilter;
 
   const handleFilterChange = useCallback((event) => {
@@ -86,6 +93,7 @@ function RestorePanel({ snapshot, onClose, restoring, onRestoreStateChange }) {
     previewGenerationRef.current = generation;
     const request = {
       snapshotId: snapshot.id,
+      ...(snapshot.source ? { source: snapshot.source } : {}),
       subdirFilter: filter.trim() || null,
     };
     setPreviewing(true);
@@ -105,12 +113,12 @@ function RestorePanel({ snapshot, onClose, restoring, onRestoreStateChange }) {
       return;
     }
     if (outcome.previewResult) setAcceptedPreview({ request, result: outcome.previewResult });
-  }, [snapshot.id, filter]);
+  }, [snapshot.id, snapshot.source, filter]);
 
   const handleRestore = useCallback(async () => {
     if (!previewMatchesCurrentRequest || restoring) return;
 
-    onRestoreStateChange(snapshot.id);
+    onRestoreStateChange(snapshotIdentity(snapshot));
     const result = await api.restoreBackup({
       ...acceptedPreview.request,
       dryRun: false,
@@ -120,10 +128,12 @@ function RestorePanel({ snapshot, onClose, restoring, onRestoreStateChange }) {
     });
     onRestoreStateChange(null);
     if (result) {
-      toast.success(`Restore complete — ${result.changedFiles?.length ?? 0} file(s) restored`);
+      // Execution re-verifies the snapshot; report its status after the preview closes.
+      const suffix = result.verification?.status === 'unverified' ? ' (unverified legacy snapshot)' : '';
+      toast.success(`Restore complete — ${result.changedFiles?.length ?? 0} file(s) restored${suffix}`);
       onClose();
     }
-  }, [acceptedPreview, onClose, onRestoreStateChange, previewMatchesCurrentRequest, restoring, snapshot.id]);
+  }, [acceptedPreview, onClose, onRestoreStateChange, previewMatchesCurrentRequest, restoring, snapshot]);
 
   const preview = previewMatchesCurrentRequest ? acceptedPreview.result : null;
 
@@ -141,6 +151,8 @@ function RestorePanel({ snapshot, onClose, restoring, onRestoreStateChange }) {
           Cancel
         </button>
       </div>
+
+      <p className="text-xs text-gray-500">Source: {snapshotSourceLabel(snapshot)}</p>
 
       {/* Subdirectory filter */}
       <div>
@@ -178,6 +190,18 @@ function RestorePanel({ snapshot, onClose, restoring, onRestoreStateChange }) {
       {/* Dry-run results */}
       {preview && (
         <div>
+          {preview.verification?.status === 'verified' && (
+            <p className="mb-2 flex items-center gap-1.5 text-xs text-port-success" role="status">
+              <CheckCircle size={13} />
+              Snapshot integrity verified ({preview.verification.checkedFiles} selected file(s)).
+            </p>
+          )}
+          {preview.verification?.status === 'unverified' && (
+            <p className="mb-2 flex items-start gap-1.5 rounded border border-port-warning/40 bg-port-warning/10 p-2 text-xs text-port-warning" role="alert">
+              <AlertTriangle size={13} className="mt-0.5 shrink-0" />
+              Legacy snapshot: no integrity manifest is available. PortOS cannot verify these backup bytes before restore.
+            </p>
+          )}
           <p className="text-xs text-gray-500 mb-1">
             {preview.changedFiles?.length ?? 0} file(s) would change:
           </p>
@@ -230,15 +254,21 @@ function SnapshotList({ restoringSnapshotId, onRestoreStateChange }) {
       // the oldest — walk every rendered tuple (id + fileCount) so a stale
       // server-side fileCount recount or a middle-row mutation can't hide
       // behind the head/tail id check.
-      compare: (prev, next) => equalListByKeys(prev, next, ['id', 'fileCount', 'incomplete']),
+      compare: (prev, next) => equalListByKeys(prev, next, [
+        'selectionKey', 'id', 'source', 'fileCount', 'incomplete', 'failed',
+      ]),
     },
   );
   const [selectedId, setSelectedId] = useState(null);
   const [downloadingId, setDownloadingId] = useState(null);
 
-  const handleDownload = useCallback((snapshotId) => {
-    setDownloadingId(snapshotId);
-    api.downloadBackupSnapshot(snapshotId)
+  const handleDownload = useCallback((snapshot) => {
+    const identity = snapshotIdentity(snapshot);
+    setDownloadingId(identity);
+    const download = snapshot.source
+      ? api.downloadBackupSnapshot(snapshot.id, snapshot.source)
+      : api.downloadBackupSnapshot(snapshot.id);
+    download
       .then(() => toast.success('Snapshot downloaded'))
       // Dismissing the browser's save dialog is a choice, not a failure.
       .catch(err => { if (err?.name !== 'AbortError') toast.error(`Download failed: ${err.message}`); })
@@ -262,30 +292,36 @@ function SnapshotList({ restoringSnapshotId, onRestoreStateChange }) {
   return (
     <div className="mt-3 space-y-1">
       {snapshots.map(snap => (
-        <div key={snap.id}>
+        <div key={snapshotIdentity(snap)}>
           <div className="flex items-center justify-between gap-2 py-1.5 px-2 rounded bg-port-bg/50 hover:bg-port-bg/80 transition-colors">
             <div className="min-w-0 flex-1">
               <div className="text-xs text-gray-300 font-mono truncate">{snap.id}</div>
+              <div className="text-xs text-gray-500 truncate">Source: {snapshotSourceLabel(snap)}</div>
               <div className="text-xs text-gray-600">
-                {snap.incomplete ? 'Still being written…' : `${snap.fileCount} files`}
+                {snap.incomplete
+                  ? 'Still being written…'
+                  : snap.failed
+                    ? 'Backup failed — download available for salvage'
+                    : `${snap.fileCount} files`}
               </div>
             </div>
             <div className="flex shrink-0 items-center gap-1">
               <button
-                onClick={() => handleDownload(snap.id)}
+                onClick={() => handleDownload(snap)}
                 // Deliberately disabled across every row, not just this one:
                 // each download spawns a tar over the whole snapshot on the
                 // same external drive, so two at once only thrash the disk.
                 disabled={downloadingId !== null || snap.incomplete}
-                aria-label={`Download snapshot ${snap.id}`}
+                aria-label={`Download snapshot ${snap.id} from ${snapshotSourceLabel(snap)}`}
                 className="flex items-center gap-1 px-2 py-1 text-xs text-port-accent hover:text-port-accent/80 transition-colors disabled:opacity-50 disabled:cursor-not-allowed min-h-[32px]"
               >
-                {downloadingId === snap.id ? <BrailleSpinner /> : <Download size={12} />}
+                {downloadingId === snapshotIdentity(snap) ? <BrailleSpinner /> : <Download size={12} />}
                 Download
               </button>
               <button
-                onClick={() => setSelectedId(selectedId === snap.id ? null : snap.id)}
-                disabled={snap.incomplete || restoringSnapshotId !== null}
+                onClick={() => setSelectedId(selectedId === snapshotIdentity(snap) ? null : snapshotIdentity(snap))}
+                disabled={snap.incomplete || snap.failed || restoringSnapshotId !== null}
+                title={snap.failed ? 'Failed backup snapshots can only be downloaded for salvage' : undefined}
                 className="flex items-center gap-1 px-2 py-1 text-xs text-port-accent hover:text-port-accent/80 transition-colors disabled:opacity-50 disabled:cursor-not-allowed min-h-[32px]"
               >
                 <RotateCcw size={12} />
@@ -293,11 +329,11 @@ function SnapshotList({ restoringSnapshotId, onRestoreStateChange }) {
               </button>
             </div>
           </div>
-          {selectedId === snap.id && (
+          {selectedId === snapshotIdentity(snap) && !snap.incomplete && !snap.failed && (
             <RestorePanel
               snapshot={snap}
               onClose={() => setSelectedId(null)}
-              restoring={restoringSnapshotId === snap.id}
+              restoring={restoringSnapshotId === snapshotIdentity(snap)}
               onRestoreStateChange={onRestoreStateChange}
             />
           )}
@@ -416,7 +452,7 @@ const BackupWidget = memo(function BackupWidget() {
 
       {/* Error message */}
       {status?.status === 'error' && status.error && (
-        <div className="mb-4 p-3 rounded-lg bg-port-error/10 border border-port-error/20 flex items-start gap-2">
+        <div role="status" className="mb-4 p-3 rounded-lg bg-port-error/10 border border-port-error/20 flex items-start gap-2">
           <XCircle size={14} className="text-port-error shrink-0 mt-0.5" />
           <p className="text-xs text-port-error">{status.error}</p>
         </div>

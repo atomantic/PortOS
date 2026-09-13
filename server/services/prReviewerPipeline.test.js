@@ -431,6 +431,52 @@ describe('runPrReviewerSecurityPreflight', () => {
     expect(guardMock.writePublicReviewInputSnapshot).not.toHaveBeenCalled();
   });
 
+  // #7258: the whole preflight runs before any agent exists, so the Tasks page
+  // had nothing to show while contributor diffs were being screened. The card is
+  // driven from HERE — the one place that knows which check is actually running.
+  it('reports each check into the run card as it happens, naming the screening step', async () => {
+    listed(externalPr(12, HEAD_12), externalPr(13, HEAD_13));
+    securityMock.runPrReviewerSecurityScan.mockResolvedValue(scanResult({
+      reports: [report(12, HEAD_12, true), report(13, HEAD_13, false)],
+      reviewInputs: [reviewInput(12, HEAD_12)],
+      passed: false,
+    }));
+    const progress = vi.fn(async () => {});
+    await runPrReviewerSecurityPreflight('pr-reviewer', APP, preflightMetadata(), null, schedule(), { progress });
+
+    const keys = progress.mock.calls.map(([key]) => key);
+    expect(keys).toEqual(['cadence', 'list-prs', 'list-prs', 'in-flight', 'security-scan', 'security-scan', 'snapshot', 'snapshot']);
+    const scanStart = progress.mock.calls.find(([key, options]) => key === 'security-scan' && options?.status !== 'done');
+    expect(scanStart[1].detail).toBe('Screening 2 pull requests through the abuse guard');
+    const scanDone = progress.mock.calls.find(([key, options]) => key === 'security-scan' && options?.status === 'done');
+    expect(scanDone[1].detail).toBe('Scan findings — 2 screened, 1 flagged');
+  });
+
+  it('names the single request a targeted run covers, and reports nothing when no card is watching', async () => {
+    listed(externalPr(12, HEAD_12), externalPr(13, HEAD_13));
+    securityMock.runPrReviewerSecurityScan.mockResolvedValue(scanResult({
+      reports: [report(12, HEAD_12, true)], reviewInputs: [reviewInput(12, HEAD_12)],
+    }));
+    const progress = vi.fn(async () => {});
+    await runPrReviewerSecurityPreflight('pr-reviewer', APP, preflightMetadata(), 12, schedule(), { progress });
+    expect(progress).toHaveBeenCalledWith('list-prs', { detail: 'Scoped to pull request #12' });
+
+    // An automated cadence sweep passes no reporter; the scan must run regardless.
+    securityMock.runPrReviewerSecurityScan.mockClear();
+    await runPrReviewerSecurityPreflight('pr-reviewer', APP, preflightMetadata(), 12, schedule());
+    expect(securityMock.runPrReviewerSecurityScan).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps the scan running when the card cannot be painted', async () => {
+    listed(externalPr(12, HEAD_12));
+    securityMock.runPrReviewerSecurityScan.mockResolvedValue(scanResult({
+      reports: [report(12, HEAD_12, true)], reviewInputs: [reviewInput(12, HEAD_12)],
+    }));
+    const progress = vi.fn(async () => { throw new Error('task file is locked'); });
+    const result = await runPrReviewerSecurityPreflight('pr-reviewer', APP, preflightMetadata(), null, schedule(), { progress });
+    expect(result.skipped).toBe(false);
+  });
+
   it('passes every other task type straight through', async () => {
     const metadata = {};
     await expect(runPrReviewerSecurityPreflight('claim-work', APP, metadata, null, schedule())).resolves.toEqual({ skipped: false });

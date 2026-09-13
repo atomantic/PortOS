@@ -54,7 +54,7 @@ export default function SpriteDetailHeader({ record, onRenamed, onDeleted }) {
                 Cancel
               </button>
             </div>
-            {error && <p className="text-xs text-port-error break-words">{error}</p>}
+            {error && <p role="alert" className="text-xs text-port-error break-words">{error}</p>}
           </div>
         ) : (
           <div className="flex-1 min-w-0 flex items-center gap-1.5">
@@ -98,7 +98,7 @@ export default function SpriteDetailHeader({ record, onRenamed, onDeleted }) {
             Delete <span className="font-semibold break-words">{record.name}</span>? It leaves your
             library; the generated files stay on disk and its id stays reserved. This can’t be undone here.
           </p>
-          {error && <p className="text-xs text-port-error break-words">{error}</p>}
+          {error && <p role="alert" className="text-xs text-port-error break-words">{error}</p>}
           <ConfirmButtonPair
             confirmText="Delete"
             busyText="Deleting…"

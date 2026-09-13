@@ -32,6 +32,7 @@ When a validated beat outline is present, it is the authoritative story plan for
 
 ## Design contract
 
+- Honor any Series design in the Story section. Preserve its author-owned finite or renewable intent without copying it into story fields. Mutually exclusive paths are alternatives, not a checklist of events every path must contain. Preserve a deliberate finite ending when it fulfills its branch promise; for renewable intent, retain the declared source of further stories without flattening local outcomes. Configured voicemail and teaser handoffs remain independent requirements.
 - Choose the node count and ending count yourself from the story's pacing, dramatic coverage, and branching needs. Never compress multiple camera cuts into one node to hit an arbitrary count.
 - Each node is exactly ONE continuous shot with one primary framing and one camera movement. Split every change of angle, framing, location, time, or camera movement into another node.
 - Set `playbackMode: "cut"` on setup/action nodes that play once and automatically feed the next camera cut. They must have exactly one `Continue` transition.

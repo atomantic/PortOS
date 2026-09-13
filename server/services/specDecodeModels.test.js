@@ -143,6 +143,7 @@ describe('downloadSpecDecodeModel', () => {
   });
 
   afterEach(async () => {
+    vi.useRealTimers();
     _resetSpecDecodeDownloadsForTests();
     vi.restoreAllMocks();
     await rm(dir, { recursive: true, force: true });
@@ -304,6 +305,111 @@ describe('downloadSpecDecodeModel', () => {
 
     const status = await getSpecDecodePresetStatus();
     expect(status.every((p) => !p.model?.downloading && !p.draftModel?.downloading)).toBe(true);
+  });
+
+  it.each(['headers', 'body'])('times out hanging metadata %s, emits an error, and releases the slot for retry', async (phase) => {
+    vi.useFakeTimers();
+    stubPreset();
+    let metadataCalls = 0;
+    vi.stubGlobal('fetch', vi.fn(async (_url, { signal }) => {
+      metadataCalls += 1;
+      if (metadataCalls > 1) return new Response(JSON.stringify(siblings('Example-Q4_K_M.gguf')));
+      if (phase === 'headers') {
+        return new Promise((_resolve, reject) => {
+          signal.addEventListener('abort', () => reject(signal.reason), { once: true });
+        });
+      }
+      return {
+        ok: true,
+        status: 200,
+        text: () => new Promise((_resolve, reject) => {
+          signal.addEventListener('abort', () => reject(signal.reason), { once: true });
+        }),
+      };
+    }));
+    const frames = [];
+    const first = downloadSpecDecodeModel({
+      presetId: 'test-preset', role: 'model', onProgress: (frame) => frames.push(frame),
+    });
+    const assertion = expect(first).rejects.toMatchObject({ code: 'SPEC_METADATA_TIMEOUT', status: 504 });
+
+    await vi.waitFor(() => expect(globalThis.fetch).toHaveBeenCalledOnce());
+    await vi.advanceTimersByTimeAsync(10_000);
+    await assertion;
+    expect(frames.at(-1)).toMatchObject({ event: 'error' });
+    expect(frames.at(-1).message).toMatch(/metadata lookup.*timed out.*retry/i);
+
+    vi.useRealTimers();
+    vi.spyOn(huggingfaceLora, 'fetchHuggingfaceModel').mockResolvedValue(siblings('Example-Q4_K_M.gguf'));
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+      ok: true,
+      status: 200,
+      headers: { get: () => '2' },
+      body: Readable.toWeb(Readable.from([Buffer.from('gg')])),
+    });
+    await expect(downloadSpecDecodeModel({ presetId: 'test-preset', role: 'model' }))
+      .resolves.toMatchObject({ success: true });
+  });
+
+  it('keeps the size-probe fallback inside the metadata deadline', async () => {
+    vi.useFakeTimers();
+    stubPreset();
+    vi.spyOn(huggingfaceLora, 'fetchHuggingfaceModel').mockResolvedValue({
+      siblings: [{ rfilename: 'Example-Q4_K_M.gguf' }],
+    });
+    let aborted = false;
+    vi.spyOn(globalThis, 'fetch').mockImplementation((_url, { signal }) => {
+      if (aborted || signal.aborted) return Promise.reject(signal.reason);
+      return new Promise((_resolve, reject) => {
+        signal.addEventListener('abort', () => {
+          aborted = true;
+          reject(signal.reason);
+        }, { once: true });
+      });
+    });
+    const download = downloadSpecDecodeModel({ presetId: 'test-preset', role: 'model' });
+    const assertion = expect(download).rejects.toMatchObject({ code: 'SPEC_METADATA_TIMEOUT' });
+    await vi.waitFor(() => expect(globalThis.fetch).toHaveBeenCalled());
+
+    await vi.advanceTimersByTimeAsync(10_000);
+    await assertion;
+  });
+
+  it('preserves explicit cancellation while metadata headers are pending', async () => {
+    stubPreset();
+    vi.spyOn(huggingfaceLora, 'fetchHuggingfaceModel').mockImplementation((_repo, { signal }) => (
+      new Promise((_resolve, reject) => signal.addEventListener('abort', () => reject(signal.reason), { once: true }))
+    ));
+    const frames = [];
+    const download = downloadSpecDecodeModel({
+      presetId: 'test-preset', role: 'model', onProgress: (frame) => frames.push(frame),
+    });
+    await vi.waitFor(() => expect(frames).toHaveLength(1));
+    expect(cancelSpecDecodeModelDownload({ presetId: 'test-preset', role: 'model' })).toBe(true);
+
+    await expect(download).rejects.toMatchObject({ code: 'SPEC_DOWNLOAD_CANCELLED' });
+    expect(frames.at(-1).event).toBe('cancelled');
+  });
+
+  it('does not apply the metadata deadline to the weight transfer', async () => {
+    vi.useFakeTimers();
+    stubPreset();
+    vi.spyOn(huggingfaceLora, 'fetchHuggingfaceModel').mockResolvedValue(siblings('Example-Q4_K_M.gguf'));
+    let transferSignal;
+    let finish;
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (_url, { signal }) => {
+      transferSignal = signal;
+      const body = new Readable({ read() {} });
+      finish = () => body.push(Buffer.from('gg')) && body.push(null);
+      return { ok: true, status: 200, headers: { get: () => '2' }, body: Readable.toWeb(body) };
+    });
+    const download = downloadSpecDecodeModel({ presetId: 'test-preset', role: 'model' });
+    await vi.waitFor(() => expect(transferSignal).toBeDefined());
+
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(transferSignal.aborted).toBe(false);
+    finish();
+    await expect(download).resolves.toMatchObject({ success: true });
   });
 
   it('short-circuits when the weights are already on disk', async () => {

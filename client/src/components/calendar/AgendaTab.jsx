@@ -210,7 +210,7 @@ export default function AgendaTab({ accounts }) {
             icon={Clock}
             title="No calendar connected"
             message="Connect a calendar account to see upcoming events."
-            actionTo="/calendar/sync"
+            actionTo="/calendar/config"
             actionLabel="Connect a calendar"
           />
         ) : (

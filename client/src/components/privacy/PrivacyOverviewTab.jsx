@@ -18,16 +18,19 @@ export default function PrivacyOverviewTab({ subjectId }) {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
+    let active = true;
     setLoading(true);
     Promise.allSettled([
       getPrivacyStatus({ subjectId }), getPrivacyOrgs({}, { subjectId }),
       getPrivacyScanStatus({ subjectId }),
     ]).then(([s, o, b]) => {
+      if (!active) return;
       setStatus(s.status === 'fulfilled' ? s.value : { keyConfigured: false, recordCounts: {} });
       setOrgs(o.status === 'fulfilled' ? o.value : []);
       setScanStatus(b.status === 'fulfilled' ? b.value : { caseCounts: {}, enabledBrokers: 0 });
       setLoading(false);
     });
+    return () => { active = false; };
   }, [subjectId]);
 
   // Cross-tab links carry the active subject so a drill-down never silently

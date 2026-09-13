@@ -127,7 +127,7 @@ describe.each([
   });
 
   it('falls back to the accent chip when the subcalendar has no color', async () => {
-    await renderView(renderTarget([]));
+    await renderView(renderTarget([{ subcalendars: [] }]));
 
     for (const title of titles) {
       // `var(--port-accent, #3b82f6)` was the old fallback and is not a color —
@@ -142,6 +142,21 @@ describe.each([
     await act(async () => {});
     expectNoImportantUtilityUnderGrading(container);
     for (const title of titles) expectTitleInheritsGrading(chipFor(title), title);
+  });
+});
+
+describe.each([
+  ['MonthView', (accounts) => <MonthView accounts={accounts} />],
+  ['WeekView', (accounts) => <WeekView accounts={accounts} />],
+  ['DayView', (accounts) => <DayView accounts={accounts} />],
+])('%s zero-account empty state', (_name, renderTarget) => {
+  it('renders a connect-calendar empty state instead of an empty grid when there are 0 accounts', async () => {
+    await renderView(renderTarget([]));
+
+    expect(screen.getByText('No calendar connected')).toBeInTheDocument();
+    const link = screen.getByRole('link', { name: 'Add a calendar account' });
+    expect(link.getAttribute('href')).toBe('/calendar/config');
+    expect(screen.queryByText('12 AM')).not.toBeInTheDocument();
   });
 });
 

@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { render, screen, waitFor, fireEvent } from '@testing-library/react';
+import { render, screen, waitFor, fireEvent, within, act } from '@testing-library/react';
 
 // The editor's pure rules live in lib/videoTimelineModel.js and its blocks in
 // components/media/VideoTimelineLanes.jsx, both tested there. What only exists
@@ -211,6 +211,27 @@ describe('workspace layout — mobile library regression (#5424)', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Hide library' }));
     expect(workspace?.parentElement).toHaveClass('lg:grid-cols-[1fr_240px]');
+  });
+
+  it('keeps one tab stop on the Clip library bar and switches it with arrow keys (#7244)', async () => {
+    await renderEditor();
+
+    const tablist = screen.getByRole('tablist', { name: 'Clip library' });
+    const [clips, stills, audio] = within(tablist).getAllByRole('tab');
+    expect(clips).toHaveAttribute('tabindex', '0');
+    expect(stills).toHaveAttribute('tabindex', '-1');
+    expect(audio).toHaveAttribute('tabindex', '-1');
+
+    clips.focus();
+    fireEvent.keyDown(clips, { key: 'ArrowRight' });
+    // The arrow key moves the tab stop and switches the library pane together.
+    expect(stills).toHaveAttribute('aria-selected', 'true');
+    expect(stills).toHaveAttribute('tabindex', '0');
+    expect(document.activeElement).toBe(stills);
+    expect(screen.getByPlaceholderText('Search images…')).toBeInTheDocument();
+    // The stills pane fires its gallery fetch on selection — settle it so the
+    // update doesn't land outside act.
+    await act(async () => {});
   });
 });
 

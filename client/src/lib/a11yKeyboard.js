@@ -178,6 +178,32 @@ export function shouldIgnoreGlobalKey(event, { enabledInDialog = false, ignoreRe
 }
 
 /**
+ * True when a keystroke is the focus-escape gesture — a backtab (Shift+Tab),
+ * the conventional "leave this widget" move — that a key-capturing widget must
+ * release to the browser instead of consuming.
+ *
+ * The consumer is a widget whose input surface claims nearly every keystroke —
+ * the Shell page's xterm terminal, whose helper textarea sits in the tab order
+ * but whose `_keyDown` `preventDefault`s Tab, Shift+Tab and Escape alike
+ * (WCAG 2.1.2 keyboard trap). Installed as
+ * `term.attachCustomKeyEventHandler((e) => !isFocusEscapeKey(e))`, the `false`
+ * return makes xterm bail before it cancels the event, so the browser performs
+ * the backtab and focus lands on the previous tabbable element — and nothing
+ * is sent to the PTY. Plain Tab stays claimed: it is shell completion, and
+ * forward-leaving is what the controls laid out before the terminal are for.
+ *
+ * Chorded variants are deliberately not excluded — a Ctrl/Alt+Shift+Tab the
+ * browser or OS owns (previous browser tab, window switching) must pass
+ * through rather than be eaten by the widget too.
+ *
+ * @param {KeyboardEvent} event
+ * @returns {boolean}
+ */
+export function isFocusEscapeKey(event) {
+  return event?.key === 'Tab' && event?.shiftKey === true;
+}
+
+/**
  * Props for the ROOT of a surface that owns a key globally — a drill scored on
  * Space, the Morse keyer, RapidReader, the OpenWorld rig.
  *

@@ -30,6 +30,7 @@ import LoomAiRunStatus from './LoomAiRunStatus';
 import LoomEditorialAutomation from './LoomEditorialAutomation';
 import { fableLoomPlotPointKind } from '../../../../server/lib/fableLoomOutline.js';
 import CharacterEvolutionLens from '../character/CharacterEvolutionLens';
+import SeriesDesignEditor from '../pipeline/arcCanvas/SeriesDesignEditor.jsx';
 import { EVOLUTION_STAGES, isDeclaredEvolution } from '../../lib/characterEvolution.js';
 
 const PLAN_SECTIONS = [
@@ -51,6 +52,7 @@ const normalizeDeliveryOptions = (options) => ({
 });
 
 const normalizePlan = (plan) => ({
+  seriesDesign: plan?.seriesDesign || null,
   storyArc: plan?.storyArc || '',
   plotPoints: Array.isArray(plan?.plotPoints)
     ? plan.plotPoints.map((item) => ({ ...item, kind: fableLoomPlotPointKind(item) }))
@@ -69,15 +71,17 @@ const normalizePlan = (plan) => ({
 /**
  * The plan body the save PATCH actually sends.
  *
- * `characterEvolutions` is OMITTED when nothing is authored, so a plan that
- * never opted into the lens produces a request body byte-identical to the
- * pre-lens one (the server sanitizer omits the key on exactly that rule). An
- * absent key on this WHOLESALE-`seriesPlan` PATCH is itself the clear, so
- * removing the last lens still persists as a clear rather than a no-op.
+ * Optional author-owned fields are OMITTED when nothing is authored, so a
+ * legacy plan produces the same request body as before either field existed.
+ * An absent key on this WHOLESALE-`seriesPlan` PATCH is itself the clear, so
+ * removing the last lens or series brief persists as a clear rather than a
+ * no-op.
  */
-const planSavePayload = ({ characterEvolutions, ...rest }) => (
-  characterEvolutions?.length ? { ...rest, characterEvolutions } : rest
-);
+const planSavePayload = ({ characterEvolutions, seriesDesign, ...rest }) => ({
+  ...rest,
+  ...(characterEvolutions?.length ? { characterEvolutions } : {}),
+  ...(seriesDesign?.mode ? { seriesDesign } : {}),
+});
 
 const episodeBoundaryKey = (fromEpisodeId, toEpisodeId) => `${fromEpisodeId}::${toEpisodeId}`;
 
@@ -205,9 +209,14 @@ export default function LoomSeriesPlan({ loom, universe, onLoomUpdate }) {
       <div ref={contentRef} className="min-h-0 flex-1 overflow-y-auto p-4 md:p-6">
         <div className="max-w-5xl mx-auto">
           <div hidden={requestedSection !== 'arc'} role="tabpanel" aria-labelledby="tab-arc" id="series-section-arc" tabIndex={-1} className="rounded-lg border border-port-border bg-port-card p-4 focus:outline-none">
+            <SeriesDesignEditor
+              value={plan.seriesDesign}
+              onChange={(seriesDesign) => changePlan((current) => ({ ...current, seriesDesign }))}
+            />
             <FormField
               label="Story arc"
               hint="The beginning-to-end dramatic movement, central conflict, and intended resolution."
+              className="mt-4"
               labelClassName={labelClass}
             >
               <textarea

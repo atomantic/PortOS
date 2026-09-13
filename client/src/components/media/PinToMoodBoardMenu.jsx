@@ -126,13 +126,11 @@ export default function PinToMoodBoardMenu({ item, size = 'sm' }) {
     const pinned = !!findPinned(board, pinKey);
     return (
       <button
-        key={board.id}
         type="button"
         disabled={busyId === board.id}
         onClick={() => handleTogglePin(board, updateCollections)}
         className="w-full flex items-center justify-between gap-2 px-2 py-1.5 text-left text-[12px] text-gray-200 hover:bg-port-border rounded disabled:opacity-50"
-        role="menuitemcheckbox"
-        aria-checked={pinned}
+        aria-pressed={pinned}
       >
         <span className="break-words min-w-0 flex-1">{board.name}</span>
         {pinned && <Check className="w-3.5 h-3.5 text-port-success shrink-0" />}
@@ -174,7 +172,6 @@ export default function PinToMoodBoardMenu({ item, size = 'sm' }) {
         onClick={handleToggleOpen}
         className={`shrink-0 ${sizeCls.button} bg-port-border hover:bg-port-border/70 text-white rounded flex items-center justify-center`}
         title="Pin to mood board" aria-label="Pin to mood board"
-        aria-haspopup="menu"
         aria-expanded={open}
       >
         <LayoutGrid className={sizeCls.icon} />

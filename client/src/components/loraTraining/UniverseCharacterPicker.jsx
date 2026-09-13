@@ -39,12 +39,17 @@ export default function UniverseCharacterPicker({
   }, []);
 
   useEffect(() => {
-    if (!universeId) { setUniverse(null); setEntries(null); return; }
+    if (!universeId) { setUniverse(null); setEntries(null); return undefined; }
+    let active = true;
     setUniverse(null);
     setEntries(null);
     getUniverse(universeId, { silent: true })
-      .then((u) => setUniverse(u || {}))
-      .catch(err => { console.warn('⚠️ Failed to load universe: ' + err.message); setUniverse({}); });
+      .then((u) => { if (active) setUniverse(u || {}); })
+      .catch(err => {
+        console.warn('⚠️ Failed to load universe: ' + err.message);
+        if (active) setUniverse({});
+      });
+    return () => { active = false; };
   }, [universeId]);
 
   useEffect(() => {

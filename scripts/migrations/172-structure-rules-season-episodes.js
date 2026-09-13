@@ -31,7 +31,7 @@ export const ACCEPTED_OLD_MD5 = {
 
 // Post-change shipped hash (structure rules block added).
 export const NEW_SHIPPED_MD5 = {
-  'pipeline-season-episodes.md': '7c24df53c097c2525a52bfb766239647',
+  'pipeline-season-episodes.md': 'b3fc07d785599b5a4859af8bed3c1d4e',
 };
 
 const { applyMigration, up } = makePromptReplaceMigration({

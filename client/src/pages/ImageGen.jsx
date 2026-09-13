@@ -1443,7 +1443,7 @@ export default function ImageGen() {
             )}
             {progressPct != null && <span className="text-xs text-port-accent">{progressPct}%</span>}
             {(generating || error) && (
-              <span className={`text-xs truncate ${error ? 'text-port-error' : 'text-gray-400'}`}>
+              <span role="status" className={`text-xs truncate ${error ? 'text-port-error' : 'text-gray-400'}`}>
                 {error ? String(error).split('\n')[0] : (stage ? (STAGE_LABELS[stage.name] || stage.name) : statusMsg) || 'Working...'}
               </span>
             )}
@@ -1564,7 +1564,7 @@ export default function ImageGen() {
             cloudModelDefaultLabel={savedAgyModel || AGY_IMAGEGEN_DEFAULT_MODEL}
           />
           {isAgyMode && agy.error && (
-            <p className="text-xs text-port-warning">
+            <p role="status" className="text-xs text-port-warning">
               {agy.error} — renders will use the model saved in Settings → Image Gen.
             </p>
           )}
@@ -1662,7 +1662,7 @@ export default function ImageGen() {
           </details>
 
           {error && (
-            <div className="rounded-lg border border-port-error/40 bg-port-error/10 px-3 py-3 text-xs text-port-error space-y-2">
+            <div role="alert" className="rounded-lg border border-port-error/40 bg-port-error/10 px-3 py-3 text-xs text-port-error space-y-2">
               <div className="font-semibold text-sm">
                 {ERROR_HEADINGS[errorMeta?.kind] || 'Generation failed'}
               </div>

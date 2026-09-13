@@ -94,6 +94,17 @@ describe('BackupTab', () => {
       getBackupSnapshots.mockResolvedValue([{ id: 'snap-2026-06-09' }]);
     };
 
+    it('labels failed snapshots and does not offer database restore', async () => {
+      getBackupSnapshots.mockResolvedValue([{ id: 'snap-failed', failed: true }]);
+      await renderTab();
+
+      expect(await screen.findByText('Backup failed — download only')).toBeInTheDocument();
+      const restore = screen.getByRole('button', { name: /Restore DB/i });
+      expect(restore).toBeDisabled();
+      fireEvent.click(restore);
+      expect(restoreDatabase).not.toHaveBeenCalled();
+    });
+
     it('runs a dry-run and opens the confirm modal — without restoring', async () => {
       withSnapshot();
       restoreDatabase.mockResolvedValue({ status: 'ok', sizeBytes: 2048, tableCount: 12 });
@@ -152,6 +163,71 @@ describe('BackupTab', () => {
       expect(toast.success).toHaveBeenCalledWith('Database restored from snap-2026-06-09', { icon: '💾' });
     });
 
+    it('binds database preview and confirmation to the selected source', async () => {
+      getBackupSnapshots.mockResolvedValue([
+        ...Array.from({ length: 10 }, (_, index) => ({
+          id: `newer-${index}`,
+          source: 'current-machine',
+          sourceLabel: 'current-machine (current machine)',
+          selectionKey: `current-machine/newer-${index}`,
+        })),
+        {
+          id: 'shared-id',
+          source: 'previous-machine',
+          sourceLabel: 'previous-machine',
+          selectionKey: 'previous-machine/shared-id',
+        },
+      ]);
+      restoreDatabase
+        .mockResolvedValueOnce({ status: 'ok', sizeBytes: 2048, tableCount: 12 })
+        .mockResolvedValueOnce({ status: 'ok' });
+      await renderTab();
+
+      expect(screen.queryByText('Source: previous-machine')).not.toBeInTheDocument();
+      fireEvent.click(screen.getByRole('button', { name: 'Show all 11 snapshots' }));
+      expect(await screen.findByText('Source: previous-machine')).toBeInTheDocument();
+      await act(async () => {
+        const restoreButtons = await screen.findAllByRole('button', { name: /Restore DB/i });
+        fireEvent.click(restoreButtons.at(-1));
+      });
+      expect(restoreDatabase).toHaveBeenNthCalledWith(1, {
+        snapshotId: 'shared-id',
+        source: 'previous-machine',
+        dryRun: true,
+      }, { silent: true });
+      expect(screen.getByText((_, element) =>
+        element?.tagName === 'P' && element.textContent.includes('on previous-machine')))
+        .toBeInTheDocument();
+
+      await act(async () => {
+        fireEvent.click(screen.getByRole('button', { name: /^Restore$/i }));
+      });
+      expect(restoreDatabase).toHaveBeenNthCalledWith(2, {
+        snapshotId: 'shared-id',
+        source: 'previous-machine',
+        dryRun: false,
+      }, { silent: true });
+    });
+
+    it('explains that schema recovery failed after the dump committed', async () => {
+      withSnapshot();
+      restoreDatabase
+        .mockResolvedValueOnce({ status: 'ok', sizeBytes: 2048, tableCount: 12 })
+        .mockResolvedValueOnce({ status: 'failed', reason: 'restore_schema_reconciliation' });
+      await renderTab();
+      await act(async () => {
+        fireEvent.click(await screen.findByRole('button', { name: /Restore DB/i }));
+      });
+      await act(async () => {
+        fireEvent.click(screen.getByRole('button', { name: /^Restore$/i }));
+      });
+      expect(toast.success).not.toHaveBeenCalled();
+      expect(toast.error).toHaveBeenCalledWith(
+        expect.stringMatching(/dump was applied.*not rolled back.*Restart PortOS/),
+        { duration: Infinity },
+      );
+    });
+
     it('toasts an error when the confirmed restore fails', async () => {
       withSnapshot();
       restoreDatabase
@@ -196,6 +272,22 @@ describe('BackupTab', () => {
       expect(restoreDatabase).toHaveBeenCalledTimes(1);
       expect(restoreDatabase).toHaveBeenCalledWith({ snapshotId: 'snap-2026-06-09', dryRun: true }, { silent: true });
       expect(toast.error).toHaveBeenCalledWith('Snapshot dump failed integrity verification');
+      expect(screen.queryByText(/Restore database\?/i)).toBeNull();
+    });
+
+    it('explains an unreadable integrity manifest and does not open confirmation', async () => {
+      withSnapshot();
+      restoreDatabase.mockResolvedValue({ status: 'failed', reason: 'manifest_unreadable' });
+      await renderTab();
+
+      await act(async () => {
+        fireEvent.click(await screen.findByRole('button', { name: /Restore DB/i }));
+      });
+
+      expect(restoreDatabase).toHaveBeenCalledTimes(1);
+      expect(toast.error).toHaveBeenCalledWith(
+        'Snapshot verification metadata could not be read. Choose another snapshot or repair the backup media before retrying.'
+      );
       expect(screen.queryByText(/Restore database\?/i)).toBeNull();
     });
   });
@@ -374,6 +466,47 @@ describe('BackupTab', () => {
       expect(screen.getByRole('switch', { name: /Disable default exclusion \/models/i })).toBeTruthy();
     });
 
+    // #7241: a bare directory name is an rsync any-depth filter, so the chip has
+    // to show the anchored form the server will actually run — otherwise the user
+    // discovers what `cache/` really matched at restore time.
+    it('anchors a newly added exclude and shows the effective rsync filter list', async () => {
+      getBackupStatus.mockResolvedValue({ status: 'never', defaultExcludes: EXCLUDES, pgBackup: null });
+      await renderTab();
+
+      fireEvent.change(screen.getByLabelText('Additional Exclude Paths'), { target: { value: 'cache/' } });
+      fireEvent.click(screen.getByLabelText('Add exclude path'));
+      expect(screen.getByText('/cache/')).toBeTruthy();
+      expect(screen.queryByText('cache/')).toBeNull();
+
+      // A wildcard-led pattern is the deliberate any-depth escape hatch and is
+      // left exactly as typed.
+      fireEvent.change(screen.getByLabelText('Additional Exclude Paths'), { target: { value: '**/raw/' } });
+      fireEvent.click(screen.getByLabelText('Add exclude path'));
+      expect(screen.getByText('**/raw/')).toBeTruthy();
+
+      // The effective list is the defaults plus those two, collapsed until asked
+      // for so it can't push the action bar below the fold.
+      const disclosure = screen.getByRole('button', { name: /Effective exclude list/i });
+      expect(disclosure.getAttribute('aria-expanded')).toBe('false');
+      expect(disclosure.textContent).toMatch(/4 rsync patterns/);
+      fireEvent.click(disclosure);
+      for (const pattern of ['/cache', '/models', '/cache/', '**/raw/']) {
+        expect(screen.getAllByText(pattern).length).toBeGreaterThan(0);
+      }
+    });
+
+    it('refuses an exclude pattern that would escape the data root', async () => {
+      getBackupStatus.mockResolvedValue({ status: 'never', defaultExcludes: [], pgBackup: null });
+      await renderTab();
+
+      fireEvent.change(screen.getByLabelText('Additional Exclude Paths'), { target: { value: '../../etc' } });
+      // The server rejects this at the settings boundary; the button stays
+      // disabled so the user never gets a chip that cannot be saved.
+      expect(screen.getByLabelText('Add exclude path').disabled).toBe(true);
+      fireEvent.click(screen.getByLabelText('Add exclude path'));
+      expect(screen.queryByText('../../etc')).toBeNull();
+    });
+
     // Regression: wildcard rules must survive edits and reload without the UI
     // promising that disabling a default includes the matching files.
     it('preserves independent custom rules through default toggles, save, and reload', async () => {
@@ -405,12 +538,14 @@ describe('BackupTab', () => {
       fireEvent.change(screen.getByLabelText('Additional Exclude Paths'), { target: { value: 'loras/**' } });
       fireEvent.click(screen.getByLabelText('Add exclude path'));
       await act(async () => { fireEvent.click(screen.getByRole('button', { name: /^Save$/ })); });
-      expect(updateSettings).toHaveBeenLastCalledWith({ backup: { ...backup, disabledDefaultExcludes: ['/cache', loraPath], excludePaths: [...custom, 'loras/**'] } }, { silent: true });
+      // Anchored on the way in (#7241): `loras/**` is a path, not a wildcard-led
+      // any-depth pattern, so it becomes `/loras/**`.
+      expect(updateSettings).toHaveBeenLastCalledWith({ backup: { ...backup, disabledDefaultExcludes: ['/cache', loraPath], excludePaths: [...custom, '/loras/**'] } }, { silent: true });
       expect(toast.error).not.toHaveBeenCalled();
 
       cleanup();
       await renderTab();
-      for (const pattern of [...custom, 'loras/**']) expect(screen.getByText(pattern)).toBeTruthy();
+      for (const pattern of [...custom, '/loras/**']) expect(screen.getByText(pattern)).toBeTruthy();
       fireEvent.click(screen.getByRole('button', { name: /Default exclusions/ }));
       expect(screen.getByRole('switch', { name: `Disable default exclusion ${loraPath}` }).getAttribute('aria-checked')).toBe('true');
       expect(screen.getByText('(Default exclusion disabled)')).toBeTruthy();
@@ -585,12 +720,14 @@ describe('BackupTab', () => {
       updateSettings.mockResolvedValue({});
       await renderTab();
 
-      fireEvent.change(screen.getByPlaceholderText('repos/'), { target: { value: 'scratch/' } });
+      fireEvent.change(screen.getByPlaceholderText('/repos/'), { target: { value: 'scratch/' } });
       fireEvent.click(screen.getByLabelText('Add exclude path'));
       await act(async () => { fireEvent.click(screen.getByRole('button', { name: /^Save$/i })); });
 
+      // Anchored on the way in (#7241): an unanchored `scratch/` would match every
+      // scratch/ at any depth under data/, not the one the user meant.
       expect(updateSettings).toHaveBeenCalledWith(
-        { backup: expect.objectContaining({ enabled: true, cronExpression: '0 0 * * *', excludePaths: ['scratch/'] }) },
+        { backup: expect.objectContaining({ enabled: true, cronExpression: '0 0 * * *', excludePaths: ['/scratch/'] }) },
         { silent: true }
       );
     });

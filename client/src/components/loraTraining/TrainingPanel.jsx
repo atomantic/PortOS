@@ -241,7 +241,7 @@ export default function TrainingPanel({ dataset, readiness, triggerSaving, onRun
         </div>
       )}
       {lastRun?.status === 'failed' && lastRun.errorCode === 'HF_AUTH' && (
-        <div className="rounded-lg border border-port-warning/40 bg-port-warning/10 px-3 py-3 text-xs text-port-warning space-y-2">
+        <div role="status" className="rounded-lg border border-port-warning/40 bg-port-warning/10 px-3 py-3 text-xs text-port-warning space-y-2">
           <div className="font-semibold text-sm">Model access required</div>
           <div className="text-port-warning/90">
             The training base model is gated on HuggingFace. Accept its license with the account

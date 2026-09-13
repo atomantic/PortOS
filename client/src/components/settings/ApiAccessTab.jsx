@@ -11,7 +11,7 @@ const DEFAULT_AGENT_CONTEXT = {
   enabled: false,
   profile: 'metadata',
   scopes: ['navigation', 'workspaces'],
-  actions: { readPortos: false, writePortos: false, manageEidoverse: false, visitEidoversePeers: false },
+  actions: { readPortos: false, writePortos: false, callToolRecipes: false, manageEidoverse: false, visitEidoversePeers: false },
 };
 const AGENT_CONTEXT_SCOPES = [
   { id: 'navigation', label: 'Navigation', hint: 'PortOS page labels, aliases, and paths.' },
@@ -76,8 +76,10 @@ export function ApiAccessTab() {
   }, []);
 
   useEffect(() => {
+    let active = true;
     getSettings({ silent: true })
       .then((s) => {
+        if (!active) return;
         setAccess(s?.apiAccess || {});
         setAgentContext({
           ...DEFAULT_AGENT_CONTEXT,
@@ -86,10 +88,11 @@ export function ApiAccessTab() {
           actions: { ...DEFAULT_AGENT_CONTEXT.actions, ...(s?.agentContext?.actions || {}) },
         });
       })
-      .catch(() => toast.error('Failed to load API access settings'))
-      .finally(() => setLoading(false));
+      .catch(() => { if (active) toast.error('Failed to load API access settings'); })
+      .finally(() => { if (active) setLoading(false); });
     loadApiCards();
     loadSpec();
+    return () => { active = false; };
   }, [loadApiCards, loadSpec]);
 
   const entryFor = (id) => ({ ...DEFAULT_ACCESS, ...(access[id] || {}) });
@@ -313,6 +316,14 @@ export function ApiAccessTab() {
               onChange={(value) => patchAgentContextAction('writePortos', value)}
               label="Allow semantic PortOS updates"
               hint="Typed Brain, journal, goals, health-log, and feed-state actions; no raw routes or shell."
+            />
+            <Toggle
+              id="agent-context-action-recipes"
+              checked={agentContext.actions.callToolRecipes}
+              disabled={savingId !== null}
+              onChange={(value) => patchAgentContextAction('callToolRecipes', value)}
+              label="Allow saved read recipes"
+              hint="Invoke eligible Persistent Mind recipes with these Agent Tools grants. Recipe authoring stays Mind-only."
             />
             <Toggle
               id="agent-context-action-eidoverse-travel"

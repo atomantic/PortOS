@@ -358,7 +358,7 @@ const SceneCard = forwardRef(function SceneCard({
           </div>
         )}
         {view === 'error' && (
-          <div className="text-port-error text-[11px] px-3 text-center break-words">
+          <div role="alert" className="text-port-error text-[11px] px-3 text-center break-words">
             {error || 'Generation failed'}
           </div>
         )}

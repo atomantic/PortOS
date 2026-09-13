@@ -8,6 +8,7 @@ const mocks = vi.hoisted(() => ({
   format: vi.fn(),
   execute: vi.fn(),
   getCall: vi.fn(),
+  readRecipes: vi.fn(),
 }));
 
 vi.mock('../services/cosState.js', () => ({
@@ -21,6 +22,7 @@ vi.mock('../services/cosToolRegistry.js', () => ({
   formatCosToolCatalog: (...args) => mocks.format(...args),
   executeCosToolCall: (...args) => mocks.execute(...args),
   getCosToolCall: (...args) => mocks.getCall(...args),
+  readCosToolRecipeCatalog: (...args) => mocks.readRecipes(...args),
 }));
 
 import routes from './cosToolRoutes.js';
@@ -41,6 +43,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   mocks.catalog.mockReturnValue({ type: 'portos_tool_catalog', schemaVersion: 1, tools: [] });
   mocks.format.mockImplementation((catalog) => catalog);
+  mocks.readRecipes.mockResolvedValue([]);
   mocks.execute.mockResolvedValue({ type: 'portos_tool_result', requestId: 'call-1', state: 'completed' });
   mocks.getCall.mockResolvedValue({ type: 'portos_tool_result', requestId: 'call-1', state: 'completed' });
 });
@@ -63,6 +66,16 @@ describe('CoS tool routes', () => {
       scope: 'agent',
       capabilities: { readPortos: false, writePortos: true },
     }));
+  });
+
+  it('changes the catalog ETag when a saved recipe revision changes', async () => {
+    mocks.readRecipes.mockResolvedValueOnce([{ name: 'recipe.check', recipe: { revision: 1 } }])
+      .mockResolvedValueOnce([{ name: 'recipe.check', recipe: { revision: 2 } }]);
+    mocks.catalog.mockImplementation(({ recipes }) => ({ type: 'portos_tool_catalog', schemaVersion: 1, tools: recipes }));
+    const first = await request(buildApp()).get('/api/cos/tools?scope=agent');
+    const second = await request(buildApp()).get('/api/cos/tools?scope=agent');
+    expect(first.headers.etag).not.toBe(second.headers.etag);
+    expect(mocks.readRecipes).toHaveBeenCalledWith({ scope: 'agent' });
   });
 
   it('derives UI authority from the server auth context and checks idempotency headers', async () => {

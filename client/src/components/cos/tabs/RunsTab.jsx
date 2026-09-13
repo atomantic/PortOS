@@ -482,7 +482,7 @@ export default function RunsTab() {
                             </Banner>
                             {/* Show additional error details if available and different from error */}
                             {run.errorDetails && run.errorDetails !== run.error && (
-                              <div className="mt-2 bg-port-error/5 border border-port-error/20 rounded-lg p-3">
+                              <div role="status" className="mt-2 bg-port-error/5 border border-port-error/20 rounded-lg p-3">
                                 <div className="text-xs text-gray-500 mb-1">Additional Details</div>
                                 <pre className="text-xs text-port-error/80 font-mono whitespace-pre-wrap break-all">
                                   {run.errorDetails}

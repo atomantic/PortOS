@@ -308,7 +308,7 @@ export default function PlanTab({ project, onProjectUpdate }) {
                       <div className="text-xs text-port-warning mt-1 break-words">{s.result.reason}</div>
                     )}
                     {s.result?.error && (
-                      <div className="text-xs text-port-error mt-1 break-words">{s.result.error}</div>
+                      <div role="status" className="text-xs text-port-error mt-1 break-words">{s.result.error}</div>
                     )}
                     {link && (
                       <Link to={link.to} className="inline-flex items-center gap-1 text-xs text-port-accent mt-1">

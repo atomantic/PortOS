@@ -155,3 +155,20 @@ export function isIdleTierEligible({ spawned, hasPendingUserTasks, idleReviewEna
     && !hasPendingUserTasks
     && autonomyMode === 'execute';
 }
+
+/**
+ * Close the preflight card of a human "Run" this tier STOLE, now that the
+ * admission decision on the task it produced is final (`admittedTask` is that
+ * task, or null when none will run).
+ *
+ * Lives beside `isIdleTierEligible` for the same reason: both spawn engines run
+ * their own copy of the idle-review tier, and anything the two must agree on
+ * belongs in ONE body rather than in a pair of blocks a grep test has to police.
+ * The import is deferred so the far more common uncarded tick — every idle tick
+ * that did not steal a request — pays neither the module nor a task read.
+ */
+export async function closeStolenIdleReviewCard(cardId, admittedTask) {
+  if (!cardId) return null;
+  const { finishPreflightDispatch } = await import('./preflightTaskCard.js');
+  return finishPreflightDispatch(cardId, admittedTask?.id ?? null);
+}

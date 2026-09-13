@@ -455,7 +455,29 @@ describe('federated subscription-quota readings', () => {
     expect(self.quotas).toEqual([expect.objectContaining({ family: 'claude', plan: 'subscription' })]);
     // A quota refresh with no new AI runs must still move the slot, or no peer
     // would ever pull it: `capturedAt` is both the LWW stamp and the manifest.
-    expect(self.capturedAt).toBe('2026-08-31T00:00:00.000Z');
+    expect(Date.parse(self.capturedAt)).toBeGreaterThanOrEqual(Date.parse('2026-08-31T00:00:00.000Z'));
+  });
+
+  // `capturedAt` is the manifest fingerprint, so it has to move whenever the
+  // entry does. Deriving it from the freshest card's `fetchedAt` only worked
+  // while every adapter stamped its read clock: a Codex card carries the
+  // timestamp of the turn that produced it, so a corrected Codex reading can
+  // sit behind a sibling card's stamp and — without a write clock — leave the
+  // slot pinned, so no peer ever pulls the correction.
+  it('moves the LWW stamp when a card changes behind a newer sibling card', async () => {
+    await recordLocalQuotaCards([
+      quotaCard({ fetchedAt: '2026-08-31T12:00:00.000Z' }),
+      quotaCard({ family: 'codex', label: 'Codex', fetchedAt: '2026-08-30T08:00:00.000Z' }),
+    ]);
+    const before = (await readLocalQuotaCards()).capturedAt;
+
+    // New Codex telemetry, still older than the claude card's stamp.
+    const spent = [{ key: 'week', label: 'Current week', percentUsed: 100, percentRemaining: 0, resetsAt: null, timezone: null }];
+    const write = await recordLocalQuotaCards([
+      quotaCard({ family: 'codex', label: 'Codex', fetchedAt: '2026-08-30T09:00:00.000Z', limits: spent }),
+    ]);
+    expect(write.changed).toBe(true);
+    expect(Date.parse(write.capturedAt)).toBeGreaterThan(Date.parse(before));
   });
 
   it('re-records only what changed, so a repeated read is not a new slot to pull', async () => {
@@ -463,6 +485,20 @@ describe('federated subscription-quota readings', () => {
     // Same reading, later clock: the claim is unchanged, so the file is not.
     expect((await recordLocalQuotaCards([quotaCard({ fetchedAt: '2026-08-31T01:00:00.000Z' })])).changed).toBe(false);
     expect((await recordLocalQuotaCards([quotaCard({ limits: [] })])).changed).toBe(true);
+  });
+
+  // Codex cards are stamped with the TELEMETRY that produced them, not the
+  // clock they were read at, so a rollout-log tail can arrive AFTER a live
+  // account reading while describing an older moment. Letting it through would
+  // publish a reading this machine already knows is superseded.
+  it('keeps the newer reading when an older card for the same family arrives after it', async () => {
+    const spent = [{ key: 'week', label: 'Current week', percentUsed: 100, percentRemaining: 0, resetsAt: null, timezone: null }];
+    const live = quotaCard({ family: 'codex', label: 'Codex', fetchedAt: '2026-08-31T12:00:00.000Z', limits: spent });
+    const stale = quotaCard({ family: 'codex', label: 'Codex', fetchedAt: '2026-08-29T09:00:00.000Z' });
+    expect((await recordLocalQuotaCards([live])).changed).toBe(true);
+    expect((await recordLocalQuotaCards([stale])).changed).toBe(false);
+    const { quotas } = await readLocalQuotaCards();
+    expect(quotas.find((q) => q.family === 'codex').limits[0].percentUsed).toBe(100);
   });
 
   it('merges a narrowed read instead of retiring the families it skipped', async () => {

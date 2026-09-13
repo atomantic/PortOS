@@ -229,6 +229,28 @@ describe('MoodBoardDetail stale-response guards', () => {
   });
 });
 
+describe('MoodBoardDetail item-type tabs (#7244)', () => {
+  it('keeps one tab stop on the bar and switches the add form with arrow keys', async () => {
+    mockGetMoodBoard.mockResolvedValueOnce({ id: 'a', name: 'Board A', items: [] });
+    renderPage();
+    await waitFor(() => expect(boardNameValue()).toBe('Board A'));
+
+    const image = screen.getByRole('tab', { name: 'Image' });
+    const note = screen.getByRole('tab', { name: 'Note' });
+    expect(image).toHaveAttribute('tabindex', '0');
+    expect(note).toHaveAttribute('tabindex', '-1');
+
+    // ArrowRight moves the tab stop and swaps the add-item form together.
+    image.focus();
+    fireEvent.keyDown(image, { key: 'ArrowRight' });
+    expect(note).toHaveAttribute('aria-selected', 'true');
+    expect(note).toHaveAttribute('tabindex', '0');
+    expect(document.activeElement).toBe(note);
+    expect(screen.getByLabelText('Note')).toBeInTheDocument();
+    expect(screen.queryByLabelText('Image URL')).not.toBeInTheDocument();
+  });
+});
+
 describe('MoodBoardDetail video items (#4188)', () => {
   it('renders a video item as a poster with a play affordance, then plays inline', async () => {
     mockGetMoodBoard.mockResolvedValueOnce({

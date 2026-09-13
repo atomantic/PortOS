@@ -27,3 +27,11 @@ export const deleteVideoDownload = (id, options = {}) =>
     method: 'DELETE',
     ...options,
   });
+
+// yt-dlp's own version and whether PortOS can update it in place. A stale
+// yt-dlp is the usual cause of a failed YouTube download, so the page surfaces
+// the state and the one-click remedy next to the URL field.
+export const getYtDlpStatus = (options = {}) => request('/devtools/video-download/yt-dlp', options);
+
+export const updateYtDlp = (options = {}) =>
+  request('/devtools/video-download/yt-dlp/update', { method: 'POST', ...options });

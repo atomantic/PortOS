@@ -12,7 +12,7 @@
  * opens the drawer and get the finished entry back via `onUpscaled` for their
  * existing reactive local-state update (no refetch).
  */
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { Loader2 } from 'lucide-react';
 import Drawer from '../Drawer';
 import toast from '../ui/Toast';
@@ -98,12 +98,21 @@ export default function VideoUpscaleDrawer({ item, onClose, onUpscaled }) {
   const downloadUrl = downloading ? upscaleAdapterDownloadUrl(adapterKey) : null;
   const dl = useSseProgress(downloadUrl, { enabled: !!downloadUrl });
 
+  // Supersession token for the post-download plan re-probe below.
+  const planRequestRef = useRef(0);
   useEffect(() => {
     if (!downloading || !dl.latest) return;
+    // A request-generation ref, not a `let active` flag: `downloading` is in this
+    // effect's own dependency array, so the write below re-runs the effect
+    // immediately and a lifetime-scoped flag would be flipped by its own
+    // cleanup before the response landed. The re-run early-returns without
+    // bumping, so the in-flight request stays current and only a genuinely
+    // newer one supersedes it.
     if (dl.latest.type === 'complete') {
+      const req = ++planRequestRef.current;
       setDownloading(false);
       // Re-probe so `adapter.cached` flips and the option re-enables.
-      getUpscalePlan(itemId, 'ltx').then((res) => setPlan(res?.plan || null)).catch(() => {});
+      getUpscalePlan(itemId, 'ltx').then((res) => { if (req === planRequestRef.current) setPlan(res?.plan || null); }).catch(() => {});
     } else if (dl.latest.type === 'error') {
       setDownloading(false);
       toast.error(dl.latest.message || 'Adapter download failed');
@@ -185,7 +194,7 @@ export default function VideoUpscaleDrawer({ item, onClose, onUpscaled }) {
               <span className="block text-sm text-white">LTX-2.5 generative (synthesizes detail)</span>
               <span className="block text-[11px] text-gray-500">2× via a GPU model — adds detail rather than resizing pixels.</span>
               {planLoading && <span className="block text-[11px] text-gray-500 mt-1">Checking readiness…</span>}
-              {planError && <span className="block text-[11px] text-port-error mt-1">{planError}</span>}
+              {planError && <span role="status" className="block text-[11px] text-port-error mt-1">{planError}</span>}
               {generativeDisabledReason && (
                 <span id="upscale-method-ltx-reason" className="block text-[11px] text-port-warning mt-1">
                   {generativeDisabledReason}

@@ -20,6 +20,10 @@ tryReadFile: vi.fn().mockResolvedValue(null),
   ensureDir: vi.fn().mockResolvedValue(undefined),
   atomicWrite: vi.fn(async (path, data) => { fileStore.set(path, data); }),
   readJSONFile: vi.fn(async (path, fallback) => (fileStore.has(path) ? fileStore.get(path) : fallback)),
+  // collectionStore reads the type index strictly (#7261) — the in-memory
+  // store always yields a trustworthy read, so ok is unconditionally true.
+  readJSONFileStrict: vi.fn(async (path, fallback) => ({ ok: true, value: fileStore.has(path) ? fileStore.get(path) : fallback })),
+  unreadableStoreError: (filePath) => Object.assign(new Error(`Unreadable JSON file: ${filePath}`), { status: 500, code: 'UNREADABLE_STORE' }),
   // sanitizeFilename: strip path components so a traversal attempt diverges
   // from the input (the route 400s when safe !== input).
   sanitizeFilename: vi.fn((f) => String(f).replace(/^.*[\\/]/, '').replace(/\.\./g, '')),

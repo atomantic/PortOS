@@ -203,8 +203,23 @@ async function findActiveSecurityScanTask(appId, scanKey) {
  * hook's strict envelope check) is scoped to that one PR by construction rather
  * than by a prompt asking the agent to ignore the rest.
  */
-export async function runPrReviewerSecurityPreflight(taskType, app, metadata, targetPullRequest = null, taskSchedule = null) {
+export async function runPrReviewerSecurityPreflight(taskType, app, metadata, targetPullRequest = null, taskSchedule = null, { progress = null } = {}) {
   if (taskType !== 'pr-reviewer') return { skipped: false };
+
+  // Report the deterministic phase into the user's task card as it happens, so
+  // a run that spends a minute screening contributor diffs is visible from the
+  // moment the button was pressed rather than only once an agent exists. A run
+  // with no card (an automated cadence sweep) passes no reporter and every
+  // call below is a no-op. Failure to paint the card must never stop the scan.
+  const step = async (key, options) => {
+    if (!progress) return;
+    // Resolved rather than assumed thenable: a reporter that reports
+    // synchronously is a legitimate shape, and `.catch` on its undefined return
+    // would throw a TypeError straight out of the scan this must never stop.
+    await Promise.resolve(progress(key, options))
+      .catch((err) => console.error(`❌ Preflight progress for '${key}' could not be recorded: ${err.message}`));
+  };
+  await step('cadence');
 
   // A churn park has to be a STOP, not just a log line (#6124). pr-reviewer runs
   // on the ON_DEMAND cadence, and `shouldRunTask` only reads `parkedUntil` on a
@@ -232,6 +247,7 @@ export async function runPrReviewerSecurityPreflight(taskType, app, metadata, ta
 
   const { listExternalOpenPullRequests, runPrReviewerSecurityScan, securityScanFingerprint } = await import('./prReviewerSecurity.js');
   const { writePublicReviewInputSnapshot } = await import('./modelAbuseGuard.js');
+  await step('list-prs', targetPullRequest ? { detail: `Scoped to pull request #${targetPullRequest}` } : undefined);
   let target = await listExternalOpenPullRequests(app);
   if (!target.ok) {
     const reason = target.code || 'security-scan-target-unavailable';
@@ -262,6 +278,8 @@ export async function runPrReviewerSecurityPreflight(taskType, app, metadata, ta
     };
     metadata.targetPullRequest = targetPullRequest;
   }
+  await step('list-prs', { status: 'done', detail: `${target.prs.length} reviewable pull request${target.prs.length === 1 ? '' : 's'}` });
+  await step('in-flight');
   const scanKey = securityScanFingerprint(target);
   const active = await findActiveSecurityScanTask(app.id, scanKey);
   if (active.unavailable) {
@@ -274,6 +292,7 @@ export async function runPrReviewerSecurityPreflight(taskType, app, metadata, ta
     return { skipped: true, reason: 'security-scan-report-pending', task: active.task };
   }
 
+  await step('security-scan', { detail: `Screening ${target.prs.length} pull request${target.prs.length === 1 ? '' : 's'} through the abuse guard` });
   const scan = await runPrReviewerSecurityScan({
     app,
     target,
@@ -301,6 +320,12 @@ export async function runPrReviewerSecurityPreflight(taskType, app, metadata, ta
   }
 
   const status = !scan.ok ? 'unavailable' : (scan.passed ? 'passed' : 'findings');
+  const flagged = reports.filter((report) => !reportIsSafe(report)).length;
+  await step('security-scan', {
+    status: 'done',
+    detail: `Scan ${status} — ${reports.length} screened, ${flagged} flagged`,
+  });
+  await step('snapshot');
   const snapshotWritten = await writePublicReviewInputSnapshot({
     scanKey: scan.scanKey || scanKey,
     pullRequests: scan.ok ? (scan.reviewInputs || []) : [],
@@ -310,6 +335,7 @@ export async function runPrReviewerSecurityPreflight(taskType, app, metadata, ta
     emitLog('warn', `Skipping pr-reviewer for ${app.name}: ${reason}`, { appId: app.id, analysisType: taskType });
     return { skipped: true, reason };
   }
+  await step('snapshot', { status: 'done', detail: `${reports.length} report${reports.length === 1 ? '' : 's'} recorded` });
   const reviewOutput = buildSecurityScanPipelineOutput(scan, reports, status);
   // A partial/unavailable scan is never a usable allowlist. Keeping already
   // safe-looking reports here would let a later stage review a subset while

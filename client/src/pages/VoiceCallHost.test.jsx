@@ -159,6 +159,29 @@ describe('VoiceCallHost', () => {
     unmount();
     expect(socket.emit).toHaveBeenCalledWith('voice:call:detach');
   });
+
+  it('keeps one tab stop on the mode tabs and locks both once a host is attached (#7244)', async () => {
+    render(<VoiceCallHost />, { wrapper: MemoryRouter });
+
+    const call = screen.getByRole('tab', { name: 'Call' });
+    const capture = screen.getByRole('tab', { name: 'Capture system audio' });
+    expect(call).toHaveAttribute('tabindex', '0');
+    expect(capture).toHaveAttribute('tabindex', '-1');
+
+    // ArrowRight moves the tab stop and the mode together.
+    call.focus();
+    fireEvent.keyDown(call, { key: 'ArrowRight' });
+    expect(capture).toHaveAttribute('aria-selected', 'true');
+    expect(capture).toHaveAttribute('tabindex', '0');
+    expect(document.activeElement).toBe(capture);
+    expect(await screen.findByText('Start capture')).toBeTruthy();
+
+    // Once a host is attached the mode is locked: both tabs leave the tab
+    // order AND the arrow-key order rather than being focused.
+    act(() => socket.__fire('voice:capture:state', { hostAttached: true, active: true, turns: 1 }));
+    expect(call).toBeDisabled();
+    expect(capture).toBeDisabled();
+  });
 });
 
 describe('VoiceCallHost — meeting capture mode', () => {

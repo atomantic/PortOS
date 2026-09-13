@@ -132,13 +132,13 @@ function RepositoryCard({ source }) {
           )}
           {unsyncable && <p className="text-xs text-gray-500">{unsyncable}</p>}
           {source.remoteError && (
-            <p className="flex items-start gap-1.5 text-xs text-port-warning">
+            <p role="status" className="flex items-start gap-1.5 text-xs text-port-warning">
               <AlertTriangle size={13} className="mt-0.5 shrink-0" />
               {source.remoteError}; the displayed remote revision may be stale.
             </p>
           )}
           {fork?.error && (
-            <p className="flex items-start gap-1.5 text-xs text-port-warning">
+            <p role="status" className="flex items-start gap-1.5 text-xs text-port-warning">
               <AlertTriangle size={13} className="mt-0.5 shrink-0" />
               {fork.error}; fork freshness is unknown.
             </p>

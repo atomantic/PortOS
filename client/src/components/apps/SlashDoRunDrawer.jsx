@@ -194,7 +194,7 @@ function SlashDoRunDrawerBody({ open, command, label, appId, appName, onClose, o
           )}
         </section>
 
-        {submitError && <p className="text-xs text-port-error">{submitError}</p>}
+        {submitError && <p role="alert" className="text-xs text-port-error">{submitError}</p>}
 
         <div className="flex items-center justify-end gap-2 pt-2">
           <button

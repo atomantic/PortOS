@@ -377,7 +377,7 @@ function DirectionCard({
             />
           )}
           {run.status === 'error' && (
-            <p className="text-[10px] text-port-error break-words">{run.postprocessError || 'postprocess failed'}</p>
+            <p role="status" className="text-[10px] text-port-error break-words">{run.postprocessError || 'postprocess failed'}</p>
           )}
           {/* Gated on the in-flight target write (it repacks against the set
               target, so firing it before a target PATCH lands would use the

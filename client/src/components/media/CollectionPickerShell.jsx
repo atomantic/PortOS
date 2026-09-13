@@ -193,9 +193,16 @@ export default function CollectionPickerShell({
   const list = filtered;
 
   return createPortal(
+    // Deliberately NOT role="menu" (see #7265): that role promises arrow-key
+    // roving focus among menuitem-only children, and this popover owns a search
+    // input, an inline create <form>, and rows that are plain toggle buttons —
+    // none of which are permitted menu children. role="group" + the title as
+    // aria-label names the popover without claiming a contract we don't keep;
+    // Tab reaches every control natively (same call ShellProviderLauncher made).
     <div
       ref={menuRef}
-      role="menu"
+      role="group"
+      aria-label={title}
       className="fixed bg-port-card border border-port-border rounded-lg shadow-xl z-[100] p-1.5 flex flex-col max-h-dvh-cap"
       style={{
         left: style?.left ?? `${VIEWPORT_PADDING}px`,
@@ -234,7 +241,14 @@ export default function CollectionPickerShell({
         {list != null && collectionsState?.length > 0 && list.length === 0 && (
           <div className="text-[11px] text-gray-500 px-2 py-2">{noMatchMessage(query)}</div>
         )}
-        {list != null && list.map((c) => renderItem(c, { updateCollections }))}
+        {list != null && list.length > 0 && (
+          // A real list — "list, N items" is the honest announcement for these
+          // rows; the roles menu/menuitem promised arrow-key navigation this
+          // popover does not implement.
+          <ul>
+            {list.map((c) => <li key={c.id}>{renderItem(c, { updateCollections })}</li>)}
+          </ul>
+        )}
       </div>
       <form onSubmit={handleCreate} className="mt-1.5 pt-1.5 border-t border-port-border flex gap-1 shrink-0">
         <input

@@ -63,7 +63,7 @@ const FULL_TRIGGER_RULES = [
   // The scripts that decide what CI runs, run it, and gate the release on it.
   // A bug in any of them can make a scoped plan silently test nothing, so they
   // prove themselves against the complete suite rather than their own scope.
-  { re: /^scripts\/(?:lib\/githubOutput|ci-base-sha|ci-test-plan|run-ci-(?:lint|tests)|verify-ci-status)(?:\.test)?\.js$/, reason: 'CI pipeline script changed' },
+  { re: /^scripts\/(?:lib\/githubOutput|ci-base-sha|ci-test-plan|run-ci-(?:lint|tests)|scan-diff-hidden-content|verify-ci-status)(?:\.test)?\.js$/, reason: 'CI pipeline script changed' },
 ];
 
 // Files whose Windows behavior is not faithfully exercised by pinPlatform()
@@ -397,6 +397,7 @@ const structuralTestsFor = (changedFiles, trackedSet) => {
   // None of these files has a source sibling or imports an app module, so nothing
   // else selects them — without this entry they only ever run on a full suite.
   if (changedFiles.some((path) => /^client\/src\/.*\.jsx?$/.test(path))) {
+    add('client/src/asyncEffectDisposalConventions.test.js');
     add('client/src/globalShadowConventions.test.js');
     add('client/src/headingTruncationConventions.test.js');
     add('client/src/hooks/mountedRefConventions.test.js');

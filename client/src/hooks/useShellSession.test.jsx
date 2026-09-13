@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { renderHook, act, cleanup } from '@testing-library/react';
+import { renderHook, render, act, cleanup } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
+import { Terminal } from '@xterm/xterm';
 
 // Capture the socket handlers the hook registers so the test can drive the
 // shell:* protocol, and record every emit so we can assert the client half of
@@ -398,6 +399,72 @@ describe('useShellSession', () => {
       const [, opts] = lastEmit('shell:start');
       expect(opts.initialCommand).toBeUndefined();
       expect(lastEmit('shell:attach')).toBeUndefined();
+    });
+  });
+
+  // The terminal-init effect only runs when `terminalRef` is attached, which the
+  // socket-level tests above never do — so these mount a probe component that
+  // renders a real host <div>. That constructs a REAL Terminal, which is what
+  // makes the keyboard-trap assertions meaningful: xterm's own `_keyDown` either
+  // cancels the keydown (trapping focus) or releases it for the browser's
+  // default backtab. See issue #7262 (WCAG 2.1.2) — without the custom handler,
+  // Tab/Shift+Tab/Escape are all swallowed by the textarea.
+  describe('terminal accessibility', () => {
+    let attachSpy;
+    const mountShellTerminal = () => {
+      attachSpy = vi.spyOn(Terminal.prototype, 'attachCustomKeyEventHandler');
+      const Probe = () => {
+        const { terminalRef } = useShellSession({});
+        return <div ref={terminalRef} />;
+      };
+      const rendered = render(<Probe />, { wrapper });
+      return { term: attachSpy.mock.contexts[0], host: rendered.container.firstChild };
+    };
+    afterEach(() => attachSpy?.mockRestore());
+
+    it('constructs the terminal with screenReaderMode, so output reaches a live region', () => {
+      const { term, host } = mountShellTerminal();
+      // Pin the option itself — a future options rewrite must not silently drop it.
+      expect(term.options.screenReaderMode).toBe(true);
+      // Its observable effect: the .xterm-accessibility live region only exists
+      // under screenReaderMode; without it every rendered row is aria-hidden.
+      expect(host.querySelector('.xterm-accessibility .live-region')).toBeTruthy();
+    });
+
+    it('installs a custom key handler that releases Shift+Tab but keeps Tab for the shell', () => {
+      mountShellTerminal();
+      expect(attachSpy).toHaveBeenCalledTimes(1);
+      const handler = attachSpy.mock.calls[0][0];
+      // Shift+Tab is the documented focus-escape gesture — false tells xterm not
+      // to process the event at all, so the browser performs the backtab.
+      expect(handler({ key: 'Tab', shiftKey: true })).toBe(false);
+      // Plain Tab stays claimed — it is shell completion.
+      expect(handler({ key: 'Tab', shiftKey: false })).toBe(true);
+      // Escape is NOT the way out: TUIs bind it, so it must keep reaching the PTY.
+      expect(handler({ key: 'Escape', shiftKey: false })).toBe(true);
+    });
+
+    it('lets a Shift+Tab keydown through uncancelled so focus can leave the terminal', () => {
+      const { term } = mountShellTerminal();
+      // Input only reaches the socket once a session is attached.
+      fire('shell:sessions', []);
+      fire('shell:started', { sessionId: 'abc' });
+      emitted.length = 0;
+
+      const backtab = new KeyboardEvent('keydown', { key: 'Tab', keyCode: 9, shiftKey: true, cancelable: true });
+      term.textarea.dispatchEvent(backtab);
+      expect(backtab.defaultPrevented).toBe(false);
+      // The escape must also be clean: without the custom handler, SR mode still
+      // releases the key but fires ESC[Z into the PTY (zsh reads it as reverse
+      // completion). The early return sends nothing.
+      expect(emitted).toHaveLength(0);
+
+      // The control case: plain Tab is still claimed and reaches the PTY as
+      // completion input.
+      const complete = new KeyboardEvent('keydown', { key: 'Tab', keyCode: 9, cancelable: true });
+      term.textarea.dispatchEvent(complete);
+      expect(complete.defaultPrevented).toBe(true);
+      expect(lastEmit('shell:input')).toEqual(['shell:input', { sessionId: 'abc', data: '\t' }]);
     });
   });
 });

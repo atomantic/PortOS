@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { MemoryRouter } from 'react-router';
 import SyncTab from './SyncTab';
 
 const api = vi.hoisted(() => ({
@@ -25,6 +26,18 @@ beforeEach(() => {
   vi.clearAllMocks();
   listeners.clear();
   api.getCalendarTokenStatus.mockResolvedValue({ providers: [] });
+});
+
+describe('SyncTab empty state', () => {
+  it('shows a connect-calendar empty state with a link to Config when there are 0 accounts', async () => {
+    render(<MemoryRouter><SyncTab accounts={[]} onRefresh={vi.fn()} /></MemoryRouter>);
+    await waitFor(() => expect(api.getCalendarTokenStatus).toHaveBeenCalled());
+
+    expect(screen.getByText('No calendar connected')).toBeTruthy();
+    const link = screen.getByRole('link', { name: 'Add a calendar account' });
+    expect(link.getAttribute('href')).toBe('/calendar/config');
+    expect(screen.queryByText(/Add one in the Config tab/)).toBeNull();
+  });
 });
 
 describe('Calendar sync lifecycle', () => {

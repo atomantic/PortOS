@@ -37,13 +37,13 @@ export default function RunsTab({ project }) {
               Agent: <Link to={`/cos/agents?id=${encodeURIComponent(r.agentId)}`} className="text-port-accent font-mono">{r.agentId.slice(0, 8)}…</Link>
             </div>
           )}
-          {r.error && <div className="text-xs text-port-error mt-1">{r.error}</div>}
+          {r.error && <div role="status" className="text-xs text-port-error mt-1">{r.error}</div>}
           {/* failureReason is what recovery + orphan-settle write (e.g. "interrupted
               by restart", "agent process terminated unexpectedly (orphaned)") — a
               failed run with no `error` used to render blank, so surface it too so a
               failed run always says WHY (issue #2705). */}
           {r.failureReason && r.failureReason !== r.error && (
-            <div className="text-xs text-port-error mt-1">{r.failureReason}</div>
+            <div role="status" className="text-xs text-port-error mt-1">{r.failureReason}</div>
           )}
         </div>
       ))}

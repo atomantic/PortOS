@@ -60,7 +60,7 @@ import { join } from 'path';
 
 import {
   parseCodexRateLimits, mapCodexQuota, fetchCodexQuota, resolveEnabledFamilies, getProviderQuotas,
-  parseAgyUsage, parseGrokUsage, agyRefreshToIso, __resetUsageScrapeCache,
+  parseAgyUsage, parseGrokUsage, agyRefreshToIso, __resetUsageScrapeCache, __resetCodexLiveQuotaCache,
 } from './providerUsage.js';
 import { getAllProviders } from './providers.js';
 import { scrapeTuiUsage } from '../lib/tuiUsageScrape.js';
@@ -783,5 +783,192 @@ describe('Codex explicit quota refresh', () => {
     getCodexAccountReadiness.mockClear();
     await getProviderQuotas({ family: 'codex', wait: 'never' });
     expect(getCodexAccountReadiness).not.toHaveBeenCalled();
+  });
+});
+
+// The bug this covers: the usage page showed the true (exhausted) Codex quota
+// right after an explicit Refresh, then snapped back to a stale percentage as
+// soon as the user navigated away and returned. Passive reads served the
+// rollout-log tail unconditionally, and that tail only knows what the last
+// Codex TURN was told — which can be days old.
+describe('Codex quota freshness across a passive re-read', () => {
+  let home;
+  let staleTs;
+  // A turn that reported plenty of headroom, recorded two days before "now".
+  const staleTurn = (day, timestamp) => ({
+    day,
+    name: timestamp,
+    lines: [JSON.stringify({
+      timestamp,
+      payload: {
+        rate_limits: {
+          plan_type: 'pro',
+          primary: { used_percent: 7, window_minutes: 300, resets_at: Math.floor(Date.now() / 1000) + 3600 },
+          secondary: null,
+        },
+      },
+    })],
+  });
+
+  // Real Codex rollout filenames replace ':' with '-' (colons are invalid in
+  // Windows filenames); sanitize here so callers can pass a raw ISO `name`.
+  const writeSession = async (codexHome, { day, name, lines }) => {
+    const dir = join(codexHome, 'sessions', ...day.split('-'));
+    await mkdir(dir, { recursive: true });
+    await writeFile(join(dir, `rollout-${name.replaceAll(':', '-')}.jsonl`), `${lines.join('\n')}\n`);
+  };
+
+  const isoDaysAgo = (days) => new Date(Date.now() - days * 86400000).toISOString();
+  const dayOf = (iso) => iso.slice(0, 10);
+
+  beforeEach(async () => {
+    home = await mkdtemp(join(tmpdir(), 'portos-codex-freshness-'));
+    vi.stubEnv('CODEX_HOME', home);
+    getAllProviders.mockResolvedValue({ providers: [{ id: 'codex', enabled: true, type: 'cli', command: 'codex' }] });
+    getCodexAccountReadiness.mockReset();
+    __resetCodexLiveQuotaCache();
+    staleTs = isoDaysAgo(2);
+    await writeSession(home, staleTurn(dayOf(staleTs), staleTs));
+  });
+
+  afterEach(async () => {
+    __resetCodexLiveQuotaCache();
+    vi.unstubAllEnvs();
+    await rm(home, { recursive: true, force: true });
+  });
+
+  it('stamps a log-derived card with the TELEMETRY timestamp, not the read clock', async () => {
+    const [card] = await getProviderQuotas({ family: 'codex', wait: 'never' });
+    expect(card.limits).toHaveLength(1);
+    // Stamping "now" here is what let a two-day-old reading outrank both a
+    // peer's current one and this machine's own live account reading.
+    expect(Date.parse(card.fetchedAt)).toBe(Date.parse(staleTs));
+  });
+
+  it('keeps serving the live account reading after a refresh, instead of regressing to the log tail', async () => {
+    getCodexAccountReadiness.mockResolvedValue({
+      checkedAt: Date.now(),
+      account: { planType: 'pro' },
+      rateLimits: {
+        primary: { usedPercent: 100, windowDurationMins: 300, resetsAt: new Date(Date.now() + 3600000).toISOString() },
+        secondary: null,
+      },
+    });
+    const [refreshed] = await getProviderQuotas({ family: 'codex', wait: 'fresh' });
+    expect(refreshed.limits[0].percentUsed).toBe(100);
+
+    // Navigating back re-reads passively. The app-server must not be spawned
+    // again, and the two-day-old "7% used" log tail must not win.
+    getCodexAccountReadiness.mockClear();
+    const [again] = await getProviderQuotas({ family: 'codex', wait: 'never' });
+    expect(getCodexAccountReadiness).not.toHaveBeenCalled();
+    expect(again.limits[0].percentUsed).toBe(100);
+    expect(again.note).toContain('Live Codex account quota');
+  });
+
+  it('yields to the rollout log once a Codex turn has reported something newer', async () => {
+    getCodexAccountReadiness.mockResolvedValue({
+      checkedAt: Date.now() - 3600_000,
+      account: { planType: 'pro' },
+      rateLimits: {
+        primary: { usedPercent: 100, windowDurationMins: 300, resetsAt: new Date(Date.now() + 3600000).toISOString() },
+        secondary: null,
+      },
+    });
+    await getProviderQuotas({ family: 'codex', wait: 'fresh' });
+
+    const ts = new Date(Date.now() - 60_000).toISOString();
+    await writeSession(home, staleTurn(dayOf(ts), ts));
+    const [again] = await getProviderQuotas({ family: 'codex', wait: 'never' });
+    expect(again.limits[0].percentUsed).toBe(7); // the turn happened after the account read
+  });
+
+  it('drops a retained live reading whose metered window has since reset', async () => {
+    getCodexAccountReadiness.mockResolvedValue({
+      checkedAt: Date.now(),
+      account: { planType: 'pro' },
+      rateLimits: {
+        primary: { usedPercent: 100, windowDurationMins: 300, resetsAt: new Date(Date.now() + 1000).toISOString() },
+        secondary: null,
+      },
+    });
+    await getProviderQuotas({ family: 'codex', wait: 'fresh' });
+    vi.setSystemTime(new Date(Date.now() + 60_000));
+    try {
+      const [again] = await getProviderQuotas({ family: 'codex', wait: 'never' });
+      expect(again.limits[0]?.percentUsed).toBe(7); // the spent window rolled over
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // Reported by the agy reviewer: the picker ranked two whole cards by
+  // `fetchedAt`, but a card carrying no meters is the ABSENCE of a reading —
+  // and fetchCodexQuota stamps its own clock on the synthetic "no session logs"
+  // card, so it always looked newer.
+  it('keeps the live reading when the install has no rollout logs at all', async () => {
+    await rm(join(home, 'sessions'), { recursive: true, force: true });
+    getCodexAccountReadiness.mockResolvedValue({
+      checkedAt: Date.now() - 3600_000,
+      account: { planType: 'pro' },
+      rateLimits: {
+        primary: { usedPercent: 100, windowDurationMins: 300, resetsAt: new Date(Date.now() + 3600000).toISOString() },
+        secondary: null,
+      },
+    });
+    await getProviderQuotas({ family: 'codex', wait: 'fresh' });
+
+    const [again] = await getProviderQuotas({ family: 'codex', wait: 'never' });
+    expect(again.limits[0].percentUsed).toBe(100);
+    expect(again.error).toBeUndefined();
+  });
+
+  // Same root cause from the other side: a turn that reported only a spent
+  // credit balance produces window-less telemetry with a NEWER timestamp.
+  it('keeps the live reading when newer telemetry carries no windows', async () => {
+    getCodexAccountReadiness.mockResolvedValue({
+      checkedAt: Date.now() - 3600_000,
+      account: { planType: 'pro' },
+      rateLimits: {
+        primary: { usedPercent: 100, windowDurationMins: 300, resetsAt: new Date(Date.now() + 3600000).toISOString() },
+        secondary: null,
+      },
+    });
+    await getProviderQuotas({ family: 'codex', wait: 'fresh' });
+
+    await rm(join(home, 'sessions'), { recursive: true, force: true });
+    const ts = new Date(Date.now() - 60_000).toISOString();
+    await writeSession(home, {
+      day: dayOf(ts),
+      name: ts,
+      lines: [JSON.stringify({ timestamp: ts, payload: { rate_limits: { limit_id: 'premium', primary: null, secondary: null, credits: { unlimited: false, has_credits: false, balance: 0 } } } })],
+    });
+    const [again] = await getProviderQuotas({ family: 'codex', wait: 'never' });
+    expect(again.limits[0].percentUsed).toBe(100);
+  });
+
+  // A retained card ages meter-by-meter: one spent window can roll over while
+  // another is still live, and serving the card whole shows a 100% meter whose
+  // reset time has already passed.
+  it('prunes only the retained meters that have since reset', async () => {
+    getCodexAccountReadiness.mockResolvedValue({
+      checkedAt: Date.now(),
+      account: { planType: 'pro' },
+      rateLimits: {
+        primary: { usedPercent: 100, windowDurationMins: 300, resetsAt: new Date(Date.now() + 1000).toISOString() },
+        secondary: { usedPercent: 40, windowDurationMins: 10080, resetsAt: new Date(Date.now() + 86400000).toISOString() },
+      },
+    });
+    const [fresh] = await getProviderQuotas({ family: 'codex', wait: 'fresh' });
+    expect(fresh.limits.map((l) => l.key)).toEqual(['session', 'week']);
+
+    vi.setSystemTime(new Date(Date.now() + 60_000));
+    try {
+      const [again] = await getProviderQuotas({ family: 'codex', wait: 'never' });
+      expect(again.limits.map((l) => l.key)).toEqual(['week']); // the 5h window rolled over
+      expect(again.limits[0].percentUsed).toBe(40);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

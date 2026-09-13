@@ -40,6 +40,38 @@ unknown artifacts, or wide diffs.
 PRs into `release` skip the planner entirely and force the full suite: that PR
 is the single gate a release ships behind.
 
+### Hidden-content gate
+
+The `impact` job runs `node scripts/scan-diff-hidden-content.js` before it
+plans anything, and every other job needs `impact` — so a finding stops the
+whole run, before a reviewer (human, `/do:pr` reviewer, or PR bot) ever reads
+the diff. It is plain pattern matching over the diff's **added** lines, costs
+no provider call, and cannot be argued out of a verdict by the content it is
+reading. Three shapes fail the run:
+
+- **Invisible or direction-control Unicode** — zero-width characters, bidi
+  overrides (Trojan Source), the Unicode tag block (ASCII smuggling), and both
+  variation-selector blocks (U+FE00–U+FE0F, U+E0100–U+E01EF), which encode a
+  byte apiece in the selector-smuggling attack. Text the rendered PR shows
+  nobody while every model reading the diff sees it.
+- **A dense cluster of the invisible characters the rules exempt** — an emoji
+  presentation selector or a joiner inside an emoji sequence is ordinary text;
+  six of them inside 200 characters is a channel. This is the backstop that
+  keeps the exemptions from becoming the attack.
+- **A compressed or opaque encoded payload** — base64/base64url/hex that
+  decodes to a gzip/zip/xz/zstd member or a native executable, or a 200+
+  character opaque run. The bytes a reviewer approves are not the bytes that
+  run.
+
+A leading byte-order mark is allowed (several Windows shells require one),
+lockfiles skip the encoded-payload rule but never the Unicode ones, and a
+deliberate case opts out with the visible `portos-allow-hidden-content` marker
+**on that line** — so the exemption shows up in the diff a human reads. The
+detectors are shared with `server/lib/modelAbuseGuard.js`, which applies the
+same rules to external pull-request content before the model-abuse classifier
+sees it — and which honors no marker, because that author is not trusted to
+grant one.
+
 An always-run list (`ALWAYS_RUN_TESTS` in the planner) is added to every plan,
 so no impact scope can drop it. A documentation-only PR therefore still runs the
 server job with those files selected. Two kinds of test qualify:

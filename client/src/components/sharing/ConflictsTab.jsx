@@ -19,11 +19,16 @@ const asText = (v) => {
 export default function ConflictsTab() {
   const [loading, setLoading] = useState(true);
   const [conflicts, setConflicts] = useState([]);
+  // #7260 — when the server reports the sync base-hash store as unreadable,
+  // detection is running fail-closed (every overwrite journals) but nothing
+  // persists. Show it so an empty list can't read as "no conflicts".
+  const [degraded, setDegraded] = useState(null);
 
   const load = useCallback(async () => {
     setLoading(true);
     const res = await listConflicts('pending', { silent: true }).catch(() => ({ conflicts: [] }));
     setConflicts(res.conflicts || []);
+    setDegraded(res.conflictDetection?.degraded ? res.conflictDetection : null);
     setLoading(false);
   }, []);
 
@@ -35,6 +40,11 @@ export default function ConflictsTab() {
 
   return (
     <div className="space-y-4">
+      {degraded && (
+        <div className="bg-port-warning/10 border border-port-warning/40 rounded-lg px-3 py-2 text-sm text-port-warning">
+          ⚠️ Conflict detection is degraded — {degraded.reason || 'the sync base-hash store is unreadable'}. Overwrites are still archived here fail-closed.
+        </div>
+      )}
       <p className="text-sm text-gray-400">
         When two machines edited the same record, sync keeps the newest by timestamp — but the overwritten version is
         archived here so nothing is lost. Restore yours, merge back specific fields, or discard.

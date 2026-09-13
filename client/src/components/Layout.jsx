@@ -657,7 +657,6 @@ export default function Layout() {
             onClick={navigateToSection}
             className={`flex-1 min-w-0 ${sectionRowClasses} ${sidebarCollapsed ? 'lg:justify-center lg:px-2' : 'justify-between'}`}
             title={sidebarCollapsed ? item.label : undefined}
-            aria-haspopup={hasChildrenForFlyout ? 'menu' : undefined}
             aria-expanded={hasChildrenForFlyout ? flyoutSection === item.label : undefined}
           >
             <div className="flex items-center gap-3 min-w-0">
@@ -957,10 +956,13 @@ export default function Layout() {
       {collapsed && flyoutSection && (() => {
         const item = resolvedNavItems.find((i) => i.label === flyoutSection);
         if (!item || !item.children || item.children.length === 0) return null;
+        // A list of navigation links, not a command menu — so <nav> + <ul>/<li>,
+        // NOT role="menu"/"menuitem": those roles promise arrow-key roving
+        // focus between items that this flyout doesn't implement (#7265).
+        // Native Tab order reaches every link.
         return (
-          <div
+          <nav
             ref={flyoutRef}
-            role="menu"
             aria-label={`${item.label} pages`}
             onMouseEnter={cancelCloseFlyout}
             onMouseLeave={scheduleCloseFlyout}
@@ -972,57 +974,61 @@ export default function Layout() {
             <div className="px-3 py-1.5 text-[10px] uppercase text-gray-500 tracking-wider border-b border-port-border mb-1">
               {item.label}
             </div>
-            {item.children.map((child, childIndex) => {
-              if (child.separator) {
-                return <div key={`flyout-sep-${childIndex}`} className="mx-3 my-1 border-t border-port-border" />;
-              }
-              const ChildIcon = child.icon;
-              if (child.external) {
-                const childHref = child.dynamicHost
-                  ? `${window.location.protocol}//${window.location.hostname}${child.href.replace('//', '')}`
-                  : child.href;
+            <ul>
+              {item.children.map((child, childIndex) => {
+                if (child.separator) {
+                  // Decorative rule, not an item — hidden so it doesn't pad the
+                  // list's "N items" count for screen readers.
+                  return <li key={`flyout-sep-${childIndex}`} aria-hidden="true" className="mx-3 my-1 border-t border-port-border" />;
+                }
+                const ChildIcon = child.icon;
+                if (child.external) {
+                  const childHref = child.dynamicHost
+                    ? `${window.location.protocol}//${window.location.hostname}${child.href.replace('//', '')}`
+                    : child.href;
+                  return (
+                    <li key={`flyout-${child.href}`}>
+                      <a
+                        href={childHref}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        onClick={() => setFlyoutSection(null)}
+                        title={child.label}
+                        className="flex items-start justify-between gap-3 px-3 py-2 text-sm text-gray-300 hover:text-white hover:bg-port-border/50 min-w-0"
+                      >
+                        <div className="flex items-start gap-3 min-w-0">
+                          <ChildIcon size={16} className="shrink-0 mt-0.5" aria-hidden="true" />
+                          <span className="min-w-0 break-words leading-snug">{child.label}</span>
+                        </div>
+                        <ExternalLink size={12} className="text-gray-500 shrink-0 mt-0.5" />
+                      </a>
+                    </li>
+                  );
+                }
+                const childActive = child.end
+                  ? location.pathname === child.to
+                  : isActive(child.to);
                 return (
-                  <a
-                    key={`flyout-${child.href}`}
-                    href={childHref}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    role="menuitem"
-                    onClick={() => setFlyoutSection(null)}
-                    title={child.label}
-                    className="flex items-start justify-between gap-3 px-3 py-2 text-sm text-gray-300 hover:text-white hover:bg-port-border/50 min-w-0"
-                  >
-                    <div className="flex items-start gap-3 min-w-0">
+                  <li key={`flyout-${child.to}`}>
+                    <NavLink
+                      to={child.to}
+                      end={child.end}
+                      onClick={() => setFlyoutSection(null)}
+                      title={child.label}
+                      className={`flex items-start gap-3 px-3 py-2 text-sm min-w-0 ${
+                        childActive
+                          ? 'bg-port-accent/10 text-port-accent'
+                          : 'text-gray-300 hover:text-white hover:bg-port-border/50'
+                      }`}
+                    >
                       <ChildIcon size={16} className="shrink-0 mt-0.5" aria-hidden="true" />
                       <span className="min-w-0 break-words leading-snug">{child.label}</span>
-                    </div>
-                    <ExternalLink size={12} className="text-gray-500 shrink-0 mt-0.5" />
-                  </a>
+                    </NavLink>
+                  </li>
                 );
-              }
-              const childActive = child.end
-                ? location.pathname === child.to
-                : isActive(child.to);
-              return (
-                <NavLink
-                  key={`flyout-${child.to}`}
-                  to={child.to}
-                  end={child.end}
-                  role="menuitem"
-                  onClick={() => setFlyoutSection(null)}
-                  title={child.label}
-                  className={`flex items-start gap-3 px-3 py-2 text-sm min-w-0 ${
-                    childActive
-                      ? 'bg-port-accent/10 text-port-accent'
-                      : 'text-gray-300 hover:text-white hover:bg-port-border/50'
-                  }`}
-                >
-                  <ChildIcon size={16} className="shrink-0 mt-0.5" aria-hidden="true" />
-                  <span className="min-w-0 break-words leading-snug">{child.label}</span>
-                </NavLink>
-              );
-            })}
-          </div>
+              })}
+            </ul>
+          </nav>
         );
       })()}
 

@@ -34,6 +34,7 @@ import { loadState, saveState, withStateLock, isImprovementEnabled } from './cos
 import { markAppReviewCooldown, bindAppReviewAgent } from './appActivity.js';
 import { isManualOnDemandRequest, onDemandRequestMetadata } from '../lib/quotaBurnOrigin.js';
 import { addTask, reviveBlockedTask } from './cosTaskStore.js';
+import { cardIdForRequest, finishPreflightCard, finishPreflightDispatch, reportPreflightStep, startPreflightCard } from './preflightTaskCard.js';
 
 /**
  * Drain the on-demand request queue, generating + persisting a task per request
@@ -93,21 +94,62 @@ export async function drainOnDemandRequests(ctx, adapter) {
   }
 
   for (const request of onDemandRequests) {
+    // This request's programmatic-phase card, or null for the automated origins
+    // that are never carded — `cardIdForRequest` owns that policy, so this
+    // engine and the idle-review steal cannot disagree about who gets a card.
+    // Derived rather than stamped on the request, so every report and close site
+    // below needs no branch of its own: a null id short-circuits each of them
+    // BEFORE it reads the task file, which matters because an automated refill
+    // drain would otherwise pay a cold whole-file parse per request just to
+    // discover it has no card.
+    const cardId = cardIdForRequest(request);
+
     // Already handled above (and its request cleared) — `onDemandRequests` is
     // a snapshot taken before that drain.
-    if (handledProgrammatically.has(request.id)) continue;
+    if (handledProgrammatically.has(request.id)) {
+      await finishPreflightCard(cardId, { outcome: 'programmatic' });
+      continue;
+    }
+
+    // Open the card BEFORE the capacity check, so a Run that has to wait for a
+    // free slot still shows up on the Tasks page as waiting. Until this existed
+    // nothing appeared there until an agent task did — which for pr-reviewer is
+    // after the whole security preflight — and the click read as a no-op. Only
+    // a human's Run is carded: a drain refill or a quota-burn step has nobody
+    // waiting on it, and carding those would fill the page with noise. Repeat
+    // cycles re-enter here and `addTask` rejects the duplicate id, so a request
+    // that waits several cycles keeps ONE card rather than gaining one per tick.
+    if (cardId) {
+      await startPreflightCard({
+        requestId: request.id,
+        taskType: request.taskType,
+        appId: request.appId ?? null,
+        appName: apps.find(app => app.id === request.appId)?.name || null,
+        targetPullRequest: request.targetPullRequest ?? null,
+      });
+    }
+
+    // Abandon this request: clear it from the queue and tell the user's card why.
+    // One helper so the log line and the card can never name different reasons —
+    // the same hand-mirroring this module's header exists to eliminate.
+    const dropRequest = async (level, reason, note) => {
+      emitLog(level, `On-demand request dropped — ${note}`, { requestId: request.id, taskType: request.taskType });
+      await taskScheduleMod.clearOnDemandRequest(request.id);
+      await finishPreflightCard(cardId, { outcome: 'failed', reason, note });
+    };
+
     if (capacityExhausted()) break;
 
     if (!isImprovementEnabled(state)) {
-      emitLog('warn', `On-demand request dropped — improvement is disabled (Config → Improve)`, { requestId: request.id, taskType: request.taskType });
-      await taskScheduleMod.clearOnDemandRequest(request.id);
+      await dropRequest('warn', 'improvement-disabled',
+        'Improvement is turned off for this install. Turn it on in Config → Improve, then run this again.');
       continue;
     }
 
     // Removed tasks never run; only automated requests honor schedule disablement.
     if (!schedule.tasks[request.taskType] || (!isManualOnDemandRequest(request) && !schedule.tasks[request.taskType].enabled)) {
-      emitLog('info', `On-demand request skipped — task type '${request.taskType}' is disabled`, { requestId: request.id });
-      await taskScheduleMod.clearOnDemandRequest(request.id);
+      await dropRequest('info', 'task-type-disabled',
+        `The scheduled task type '${request.taskType}' is disabled or no longer registered.`);
       continue;
     }
 
@@ -123,13 +165,21 @@ export async function drainOnDemandRequests(ctx, adapter) {
     if (request.appId) {
       targetApp = apps.find(a => a.id === request.appId);
       if (!targetApp) {
-        emitLog('warn', `On-demand request for unknown app: ${request.appId}`, { requestId: request.id });
-        await taskScheduleMod.clearOnDemandRequest(request.id);
+        await dropRequest('warn', 'app-unknown',
+          `App '${request.appId}' is no longer active, so this run has nothing to target.`);
         continue;
       }
     }
 
     await taskScheduleMod.clearOnDemandRequest(request.id);
+    // Off the queue and into preparation. A task type with its own preflight
+    // (pr-reviewer) has no `prepare` step and reports its real first step
+    // moments later, so this is a no-op there rather than a competing claim.
+    await reportPreflightStep(cardId, 'prepare');
+
+    const preparationStartedAt = performance.now();
+    const requestedAt = Date.parse(request.requestedAt);
+    const queueWaitMs = Number.isFinite(requestedAt) ? Math.max(0, Date.now() - requestedAt) : null;
 
     // A HUMAN "Run" re-checks live state (park + convergence signature + dispatch
     // budget all cleared); an automated refill (origin: 'refill') inherits them,
@@ -151,6 +201,9 @@ export async function drainOnDemandRequests(ctx, adapter) {
       const prepared = await prepareManagedAppImprovementTask(request.taskType, targetApp, state, {
         skipPreconditions: true,
         targetPullRequest: request.targetPullRequest ?? null,
+        // The deterministic pre-agent work reports into the user's card as it
+        // runs — this is the whole reason the card exists early.
+        preflightCardId: cardId,
         providerOverride: request.providerOverride ?? null,
         // A quota-burn step's per-invocation run parameters. They must reach
         // the PROMPT, so unlike the provider/model/effort pins they cannot
@@ -198,6 +251,7 @@ export async function drainOnDemandRequests(ctx, adapter) {
       // it to `completed` — so without excluding it the re-issued claim is
       // rejected as a duplicate of the run that just finished and the drain stalls.
       const persisted = await addTask(task, 'internal', { raw: true, ...addTaskOptions, suppressDequeue: true });
+      await finishPreflightDispatch(cardId, persisted?.id || task.id);
       if (!persisted?.duplicate) {
         await recordDeferredPerpetualDispatch(pendingPerpetualDispatch, taskScheduleMod);
         emitSpawn(task);
@@ -220,7 +274,22 @@ export async function drainOnDemandRequests(ctx, adapter) {
       // `userInitiated` only: a drain refill ends by converging (that's the point),
       // and nobody is waiting on it, so toasting "nothing to do" for every automated
       // hop would turn a healthy overnight drain into a pile of notifications.
-      await emitOnDemandEmpty({ taskScheduleMod, request, targetApp, taskConfig: schedule.tasks[request.taskType] });
+      await emitOnDemandEmpty({ taskScheduleMod, request, targetApp, taskConfig: schedule.tasks[request.taskType], preflightCardId: cardId });
+    }
+    // Every other exit from this iteration (a task that capacity refused, or a
+    // refill with no task) still owes the card a close — a card left open would
+    // keep animating until the orphan sweep reaped it. Already-closed cards are
+    // a no-op, so the specific reason each path recorded above survives.
+    await finishPreflightDispatch(cardId);
+    if (userInitiated) {
+      const preparationMs = Math.round(performance.now() - preparationStartedAt);
+      emitLog('info', `On-demand preparation finished: ${request.taskType} (${request.id}) — queue wait ${queueWaitMs ?? 'unknown'}ms, preparation ${preparationMs}ms, ${task ? 'task generated' : 'no task generated'}`, {
+        requestId: request.id,
+        appId: targetApp?.id ?? null,
+        queueWaitMs,
+        preparationMs,
+        taskGenerated: !!task,
+      });
     }
   }
 

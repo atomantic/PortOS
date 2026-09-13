@@ -24,7 +24,7 @@
  * (`"3 renders · 24h"`), not addends, so there is nothing to unify honestly.
  */
 
-import { parseTsMs } from './lwwTimestamp.js';
+import { compareNewerWins, parseTsMs } from './lwwTimestamp.js';
 import { isNonBlankStr } from './textUtils.js';
 
 // Structural bounds on ONE peer-supplied quota payload. Same reasoning as the
@@ -115,11 +115,9 @@ function unifyLimits(contributions) {
     for (const limit of c.limits || []) {
       const incumbent = best.get(limit.key);
       if (!incumbent) order.push(limit.key);
-      const incumbentMs = incumbent ? parseTsMs(incumbent.fetchedAt) : null;
-      const candidateMs = parseTsMs(c.fetchedAt);
-      // Unparseable-loses, tie → incumbent: same polarity as every other
-      // cross-instance merge, so the local reading (always first) holds a tie.
-      if (!incumbent || (candidateMs !== null && (incumbentMs === null || candidateMs > incumbentMs))) {
+      // Unparseable-loses, tie → incumbent: the shared LWW polarity, so the
+      // local reading (always first) holds a tie.
+      if (!incumbent || compareNewerWins(c.fetchedAt, incumbent.fetchedAt)) {
         best.set(limit.key, { limit, fetchedAt: c.fetchedAt, instanceId: c.instanceId, name: c.name });
       }
     }

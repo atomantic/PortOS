@@ -28,6 +28,7 @@ const mocks = vi.hoisted(() => ({
   inspectPersistentMindRuntime: vi.fn(),
   readPersistentMindVisibility: vi.fn(),
   readPersistentMindTaskCatalog: vi.fn(),
+  listMindToolRecipes: vi.fn(),
   resolveImageCapability: vi.fn(),
   cleanupPersistentMind: vi.fn(),
 }));
@@ -64,6 +65,9 @@ vi.mock('../services/persistentMindMaintenance.js', () => ({
 }));
 vi.mock('../services/persistentMindTaskCapability.js', () => ({
   readPersistentMindTaskCatalog: mocks.readPersistentMindTaskCatalog,
+}));
+vi.mock('../services/mindToolRecipes.js', () => ({
+  listRecipes: mocks.listMindToolRecipes,
 }));
 vi.mock('../services/persistentMindAttachments.js', () => ({
   createPersistentMindAttachment: mocks.createPersistentMindAttachment,
@@ -189,6 +193,7 @@ describe('persistent mind routes', () => {
       apps: [{ id: 'demo-app', name: 'Demo App', planOnly: true }],
       providers: [{ id: 'codex', name: 'Codex', type: 'cli', models: [{ id: 'gpt-5', efforts: ['low', 'high'] }] }],
     });
+    mocks.listMindToolRecipes.mockResolvedValue({ recipes: [] });
   });
 
   it('requests an immediate manual wake', async () => {
@@ -213,7 +218,7 @@ describe('persistent mind routes', () => {
         thinkingInterface: 'text',
         wakeIntervalMinutes: 30,
       },
-      capabilities: { schemaVersion: 8, createTasks: true, manageMind: false, manageEidoverse: false, visitEidoversePeers: false, callUser: false, adjustLocalContext: false, readPortos: false, writePortos: false, taskModelAllowlist: [] },
+      capabilities: { schemaVersion: 9, createTasks: true, manageMind: false, manageEidoverse: false, visitEidoversePeers: false, callUser: false, adjustLocalContext: false, readPortos: false, writePortos: false, taskModelAllowlist: [] },
       harness: { type: 'api', recommendation: 'recommended' },
       imageCapability: { status: 'unknown' },
       autonomyMode: 'execute',
@@ -307,8 +312,8 @@ describe('persistent mind routes', () => {
         expect.objectContaining({ name: 'eidoverse.status', granted: false, input_schema: expect.any(Object) }),
         expect.objectContaining({ name: 'cos.create-task', granted: true }),
       ]),
-      schemaVersion: 8,
-      capabilities: { schemaVersion: 8, createTasks: true, manageMind: false, manageEidoverse: false, visitEidoversePeers: false, callUser: false, adjustLocalContext: false, readPortos: false, writePortos: false, taskModelAllowlist: [] },
+      schemaVersion: 9,
+      capabilities: { schemaVersion: 9, createTasks: true, manageMind: false, manageEidoverse: false, visitEidoversePeers: false, callUser: false, adjustLocalContext: false, readPortos: false, writePortos: false, taskModelAllowlist: [] },
       boundaries: expect.arrayContaining([expect.stringMatching(/arbitrary shell/i)]),
       tools: expect.arrayContaining([
         expect.objectContaining({ id: 'cos.create-task', capability: 'createTasks', granted: true, defaultEnabled: false }),

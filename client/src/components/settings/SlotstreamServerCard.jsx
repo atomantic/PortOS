@@ -219,7 +219,7 @@ export default function SlotstreamServerCard({
             </div>
           )}
           {status?.cacheError && (
-            <p className="text-xs text-gray-500">Couldn&apos;t read Slotstream&apos;s model cache ({status.cacheError}).</p>
+            <p role="status" className="text-xs text-gray-500">Couldn&apos;t read Slotstream&apos;s model cache ({status.cacheError}).</p>
           )}
           <p className="text-[11px] text-gray-500">
             Slotstream starts on demand when a request needs it. You can also start it now with a cached checkpoint; its idle window (set under Local Runtime Servers) stops it again. Neither path downloads weights.

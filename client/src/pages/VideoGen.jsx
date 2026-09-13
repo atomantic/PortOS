@@ -148,12 +148,15 @@ export default function VideoGen() {
   };
   const [episodeImportScenes, setEpisodeImportScenes] = useState(null);
   useEffect(() => {
-    if (!episodeOpen || !episodeLoomId || !episodeEpisodeId) return;
+    if (!episodeOpen || !episodeLoomId || !episodeEpisodeId) return undefined;
+    let active = true;
     getLoom(episodeLoomId, { silent: true }).then((loom) => {
+      if (!active) return;
       const episode = loom?.episodes?.find((e) => e.id === episodeEpisodeId);
       const draftScenes = loomEpisodeToDraftScenes(episode, { format: loom?.format });
       if (draftScenes.length) setEpisodeImportScenes(draftScenes);
     }).catch(() => {});
+    return () => { active = false; };
     // Only re-run when a fresh loom/episode is targeted, not on every render.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [episodeOpen, episodeLoomId, episodeEpisodeId]);
@@ -1377,7 +1380,7 @@ export default function VideoGen() {
             )}
             {progressPct != null && <span className="text-xs text-port-accent">{progressPct}%</span>}
             {(generating || error) && (
-              <span className={`text-xs truncate ${error ? 'text-port-error' : 'text-gray-400'}`}>
+              <span role="status" className={`text-xs truncate ${error ? 'text-port-error' : 'text-gray-400'}`}>
                 {error || statusMsg || 'Working...'}
               </span>
             )}
@@ -1664,7 +1667,7 @@ export default function VideoGen() {
                   />
                 )}
                 {activeWeightError && (
-                  <div className="mt-2 rounded-lg border border-port-error/40 bg-port-error/10 px-3 py-2 text-[11px] text-port-error">
+                  <div role="status" className="mt-2 rounded-lg border border-port-error/40 bg-port-error/10 px-3 py-2 text-[11px] text-port-error">
                     <p>{activeWeightError.message}</p>
                     <div className="mt-1 flex flex-wrap gap-2">
                       <button type="button" onClick={openSettings} className="underline hover:text-white">
@@ -1684,7 +1687,7 @@ export default function VideoGen() {
                   </div>
                 )}
                 {modelDownload.statusError && (
-                  <div className="mt-2 rounded-lg border border-port-warning/40 bg-port-warning/10 px-3 py-2 text-[11px] text-port-warning flex flex-wrap items-center justify-between gap-2">
+                  <div role="status" className="mt-2 rounded-lg border border-port-warning/40 bg-port-warning/10 px-3 py-2 text-[11px] text-port-warning flex flex-wrap items-center justify-between gap-2">
                     <span>{modelDownload.statusError}</span>
                     <button type="button" onClick={modelDownload.refresh} className="underline hover:text-white">
                       Retry cache check

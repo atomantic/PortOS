@@ -30,12 +30,14 @@ export default function TasksTab({ appId }) {
   }, [appId]);
 
   useEffect(() => {
+    let active = true;
     fetchAgents();
     // Fetch providers and apps for the task add form
     api.getProviders().catch(() => ({ providers: [] }))
-      .then(d => setProviders(d.providers || []));
+      .then(d => { if (active) setProviders(d.providers || []); });
     api.getApps().catch(() => [])
-      .then(a => setApps((a || []).filter(app => app.id !== 'portos-autofixer')));
+      .then(a => { if (active) setApps((a || []).filter(app => app.id !== 'portos-autofixer')); });
+    return () => { active = false; };
   }, [appId, fetchAgents]);
 
   if (loading) {

@@ -31,7 +31,8 @@ export default function OrgDrawer({ open, org, subjectId, vaultRecords, onClose,
   const [socialAccounts, setSocialAccounts] = useState([]); // Digital Twin accounts for the cross-link picker
 
   useEffect(() => {
-    if (!open) return;
+    if (!open) return undefined;
+    let active = true;
     setForm(org
       ? {
         name: org.name ?? '',
@@ -49,14 +50,15 @@ export default function OrgDrawer({ open, org, subjectId, vaultRecords, onClose,
     // Load existing holdings for an org being edited.
     if (org?.id) {
       getOrgHoldings(org.id, { silent: true })
-        .then((h) => setSelected(new Set((h || []).map((x) => x.vaultRecordId))))
+        .then((h) => { if (active) setSelected(new Set((h || []).map((x) => x.vaultRecordId))); })
         .catch(() => {});
     }
     // Load Digital Twin social accounts for the cross-link picker (#2147). Degrades
     // to no picker options if the twin has none — never blocks org editing.
     getSocialAccounts()
-      .then((res) => setSocialAccounts(res?.accounts || []))
-      .catch(() => setSocialAccounts([]));
+      .then((res) => { if (active) setSocialAccounts(res?.accounts || []); })
+      .catch(() => { if (active) setSocialAccounts([]); });
+    return () => { active = false; };
   }, [open, org]);
 
   const set = (k, v) => setForm((prev) => ({ ...prev, [k]: v }));

@@ -32,6 +32,18 @@ beforeEach(() => {
 });
 
 describe('ConflictsTab', () => {
+  it('shows the degraded-detection banner when the base-hash store is latched (#7260)', async () => {
+    api.listConflicts.mockResolvedValue({
+      conflicts: [],
+      conflictDetection: { degraded: true, reason: 'sync_base_hashes.json is present but unreadable — repair or delete it and restart' },
+    });
+    render(<ConflictsTab />);
+    expect(await screen.findByText(/Conflict detection is degraded/)).toBeInTheDocument();
+    expect(screen.getByText(/sync_base_hashes\.json/)).toBeInTheDocument();
+    // The empty list still renders beneath the warning.
+    expect(screen.getByText(/No pending conflicts/)).toBeInTheDocument();
+  });
+
   it('lists pending conflicts', async () => {
     render(<ConflictsTab />);
     await waitFor(() => expect(screen.getByText(/2 field\(s\)/)).toBeInTheDocument());

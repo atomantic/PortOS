@@ -7,6 +7,7 @@ const mocks = vi.hoisted(() => ({
   previewLegacyExport: vi.fn(),
   executeCosToolCall: vi.fn(),
   getCosToolCatalog: vi.fn(),
+  readCosToolRecipeCatalog: vi.fn(),
 }));
 
 vi.mock('./settings.js', () => ({ getSettings: vi.fn(async () => mocks.settings) }));
@@ -28,6 +29,7 @@ vi.mock('../lib/navManifest.js', () => ({
 vi.mock('./cosToolRegistry.js', () => ({
   executeCosToolCall: mocks.executeCosToolCall,
   getCosToolCatalog: mocks.getCosToolCatalog,
+  readCosToolRecipeCatalog: mocks.readCosToolRecipeCatalog,
   formatCosToolCatalog: (catalog) => ({
     tools: catalog.tools.map((tool) => ({
       name: tool.providerName,
@@ -53,8 +55,9 @@ describe('agentContextMcp service', () => {
     mocks.listContexts.mockResolvedValue([]);
     mocks.getBrainProjections.mockResolvedValue([]);
     mocks.previewLegacyExport.mockResolvedValue({ sections: {} });
-    mocks.getCosToolCatalog.mockImplementation(({ capabilities }) => ({
-      tools: capabilities?.readPortos ? [{
+    mocks.readCosToolRecipeCatalog.mockResolvedValue([]);
+    mocks.getCosToolCatalog.mockImplementation(({ capabilities, recipes = [] }) => ({
+      tools: [...(capabilities?.readPortos ? [{
         name: 'brain.search',
         providerName: 'brain_search',
         aliases: ['brain_search'],
@@ -63,7 +66,11 @@ describe('agentContextMcp service', () => {
         output_schema: { type: 'object' },
         policy: { sideEffect: 'read' },
         granted: true,
-      }] : [],
+      }] : []), ...recipes.map((tool) => ({
+        ...tool,
+        granted: tool.recipe?.available !== false
+          && tool.policy.requiredCapabilities.every((capability) => capabilities?.[capability] === true),
+      }))],
     }));
     mocks.executeCosToolCall.mockResolvedValue({
       type: 'portos_tool_result', requestId: 'agent-mcp:test', name: 'brain.search', state: 'completed', result: { ok: true },
@@ -77,8 +84,8 @@ describe('agentContextMcp service', () => {
     expect(manifest.scopes).toEqual(['navigation', 'workspaces']);
     expect(manifest.transport).toMatchObject({ loopbackOnly: true, stateful: false });
     expect(manifest).toMatchObject({
-      schemaVersion: 4,
-      actions: { readPortos: false, writePortos: false, manageEidoverse: false },
+      schemaVersion: 5,
+      actions: { readPortos: false, writePortos: false, callToolRecipes: false, manageEidoverse: false },
       limits: { maxApproxTokens: 5_000 },
     });
     expect(manifest.exclusions.join(' ')).toMatch(/Privacy Vault/);
@@ -107,9 +114,29 @@ describe('agentContextMcp service', () => {
       call: expect.objectContaining({ requestId: 'agent-mcp:test', name: 'brain.search' }),
       authority: {
         scope: 'agent',
-        capabilities: { readPortos: true, writePortos: false, manageEidoverse: true, visitEidoversePeers: false },
+        capabilities: { readPortos: true, writePortos: false, callToolRecipes: false, manageEidoverse: true, visitEidoversePeers: false },
       },
     }));
+  });
+
+  it('discovers saved recipes only with the independent grant and denies a cached name after revocation', async () => {
+    mocks.readCosToolRecipeCatalog.mockResolvedValue([{
+      name: 'recipe.project-check', providerName: 'recipe_project_check', aliases: [], description: 'Read a project check-in.',
+      input_schema: { type: 'object', properties: { project: { type: 'string' } }, required: ['project'], additionalProperties: false },
+      output_schema: { type: 'object' }, policy: { sideEffect: 'read', requiredCapabilities: ['callToolRecipes', 'readPortos'] },
+      recipe: { available: true, revision: 2, underlyingTools: ['brain.search'] },
+    }]);
+    mocks.settings = { agentContext: { enabled: true, scopes: ['navigation'], actions: { readPortos: true } } };
+    expect((await getAgentContextManifest()).tools.map((tool) => tool.name)).not.toContain('recipe_project_check');
+
+    mocks.settings.agentContext.actions.callToolRecipes = true;
+    expect((await getAgentContextManifest()).tools.map((tool) => tool.name)).toContain('recipe_project_check');
+    expect((await callAgentContextTool('recipe_project_check', { project: 'Example' })).isError).toBeUndefined();
+
+    mocks.settings.agentContext.actions.callToolRecipes = false;
+    const revoked = await callAgentContextTool('recipe_project_check', { project: 'Example' });
+    expect(revoked.isError).toBe(true);
+    expect(mocks.executeCosToolCall).toHaveBeenCalledTimes(1);
   });
 
   it('metadata profile can match private workspace text without returning it', async () => {

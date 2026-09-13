@@ -14,16 +14,46 @@
  *      blocked pass withholds the marker; a force-blocked run drops a stale one.
  */
 
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtemp, rm, mkdir, writeFile, stat } from 'fs/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { pruneImportedLegacyFiles } from './pruneImportedLegacyFiles.js';
 
+const fsFaults = vi.hoisted(() => ({ readdir: new Map(), stat: new Map() }));
+
+vi.mock('fs/promises', async (importOriginal) => {
+  const actual = await importOriginal();
+  const failIfScheduled = (operation, file) => {
+    const fault = fsFaults[operation].get(String(file));
+    if (!fault) return;
+    if (fault.after > 0) {
+      fault.after--;
+      return;
+    }
+    fsFaults[operation].delete(String(file));
+    throw Object.assign(new Error(`${operation} fault for test`), { code: fault.code });
+  };
+  return {
+    ...actual,
+    readdir: async (...args) => {
+      failIfScheduled('readdir', args[0]);
+      return actual.readdir(...args);
+    },
+    stat: async (...args) => {
+      failIfScheduled('stat', args[0]);
+      return actual.stat(...args);
+    },
+  };
+});
+
 let dataDir;
 
 const exists = (p) => stat(p).then(() => true, () => false);
 const writeJSON = (p, obj) => writeFile(p, JSON.stringify(obj), 'utf-8');
+const failOnce = (operation, file, code, { after = 0 } = {}) => {
+  fsFaults[operation].set(file, { code, after });
+};
 
 // A db stub backed by a per-table set of present ids. Answers the prune's only
 // query shape: `SELECT id FROM <table> WHERE id = ANY($1)`.
@@ -39,9 +69,13 @@ function stubDb(tables) {
 }
 
 beforeEach(async () => {
+  fsFaults.readdir.clear();
+  fsFaults.stat.clear();
   dataDir = await mkdtemp(join(tmpdir(), 'legacy-prune-'));
 });
 afterEach(async () => {
+  fsFaults.readdir.clear();
+  fsFaults.stat.clear();
   await rm(dataDir, { recursive: true, force: true });
 });
 
@@ -174,6 +208,101 @@ describe('pruneImportedLegacyFiles', () => {
 
     expect(res.markerWritten).toBe(true);
     expect(await exists(join(dataDir, 'story-builder.imported'))).toBe(false);
+  });
+
+  it('WITHHOLDS a parked domain when directory enumeration fails, then retries safely', async () => {
+    await writeJSON(join(dataDir, 'story-builder.migrated.json'), { imported: 1 });
+    const parked = join(dataDir, 'story-builder.imported');
+    await mkdir(join(parked, 'session-1'), { recursive: true });
+    await writeJSON(join(parked, 'session-1', 'index.json'), { id: 'session-1' });
+    let queries = 0;
+    const missingDb = stubDb({ story_builder_sessions: [] });
+    const countingDb = { async query(...args) { queries++; return missingDb.query(...args); } };
+    failOnce('readdir', parked, 'EIO');
+
+    const unavailable = await pruneImportedLegacyFiles({ dataDir, db: countingDb });
+    expect(unavailable.blocked).toBe(1);
+    expect(unavailable.markerWritten).toBe(false);
+    expect(queries).toBe(0);
+    expect(await exists(parked)).toBe(true);
+
+    const stillMissing = await pruneImportedLegacyFiles({ dataDir, db: missingDb });
+    expect(stillMissing.blocked).toBe(1);
+    expect(stillMissing.markerWritten).toBe(false);
+    expect(await exists(parked)).toBe(true);
+
+    const restored = await pruneImportedLegacyFiles({
+      dataDir,
+      db: stubDb({ story_builder_sessions: ['session-1'] }),
+    });
+    expect(restored.blocked).toBe(0);
+    expect(restored.markerWritten).toBe(true);
+    expect(await exists(parked)).toBe(false);
+  });
+
+  it('WITHHOLDS completion when pending-source directory discovery fails', async () => {
+    const seriesDir = join(dataDir, 'pipeline-series');
+    await mkdir(join(seriesDir, 'series-1'), { recursive: true });
+    await writeJSON(join(seriesDir, 'series-1', 'index.json'), { id: 'series-1' });
+    failOnce('readdir', seriesDir, 'EACCES');
+
+    const result = await pruneImportedLegacyFiles({ dataDir, db: stubDb({}) });
+
+    expect(result.blocked).toBe(1);
+    expect(result.markerWritten).toBe(false);
+    expect(await exists(join(dataDir, 'legacy-prune.applied.json'))).toBe(false);
+    expect(await exists(join(seriesDir, 'series-1', 'index.json'))).toBe(true);
+  });
+
+  it('WITHHOLDS nested cleanup when its directory enumeration fails before deletion', async () => {
+    await writeJSON(join(dataDir, 'writers-room.migrated.json'), { folders: 1, works: 1, exercises: 1 });
+    const writersRoom = join(dataDir, 'writers-room');
+    const worksDir = join(writersRoom, 'works');
+    const workDir = join(worksDir, 'work-1');
+    const artifacts = [
+      join(writersRoom, 'folders.imported.json'),
+      join(writersRoom, 'exercises.imported.json'),
+      join(workDir, 'manifest.imported.json'),
+    ];
+    await mkdir(workDir, { recursive: true });
+    await writeJSON(artifacts[0], [{ id: 'folder-1' }]);
+    await writeJSON(artifacts[1], [{ id: 'exercise-1' }]);
+    await writeJSON(artifacts[2], { id: 'work-1', drafts: [] });
+    failOnce('readdir', worksDir, 'EIO', { after: 1 });
+
+    const db = stubDb({
+      writers_room_folders: ['folder-1'],
+      writers_room_exercises: ['exercise-1'],
+      writers_room_works: ['work-1'],
+      writers_room_draft_versions: [],
+    });
+
+    const unavailable = await pruneImportedLegacyFiles({ dataDir, db });
+    expect(unavailable.blocked).toBe(1);
+    expect(unavailable.markerWritten).toBe(false);
+    for (const artifact of artifacts) expect(await exists(artifact)).toBe(true);
+
+    const recovered = await pruneImportedLegacyFiles({ dataDir, db });
+    expect(recovered.markerWritten).toBe(true);
+    for (const artifact of artifacts) expect(await exists(artifact)).toBe(false);
+  });
+
+  it('WITHHOLDS verification when a parked-artifact stat fails', async () => {
+    await writeJSON(join(dataDir, 'pipeline-series.migrated.json'), { imported: 1 });
+    const seriesDir = join(dataDir, 'pipeline-series');
+    const parked = join(seriesDir, 'series-1', 'index.json.imported');
+    await mkdir(join(seriesDir, 'series-1'), { recursive: true });
+    await writeJSON(parked, { id: 'series-1' });
+    failOnce('stat', parked, 'EACCES');
+
+    const result = await pruneImportedLegacyFiles({
+      dataDir,
+      db: stubDb({ pipeline_series: ['series-1'] }),
+    });
+
+    expect(result.blocked).toBe(1);
+    expect(result.markerWritten).toBe(false);
+    expect(await exists(parked)).toBe(true);
   });
 
   it('skips a domain with no migration marker (never parked anything)', async () => {

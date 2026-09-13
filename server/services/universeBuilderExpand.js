@@ -42,6 +42,10 @@ import {
 const LABEL_MAX = 80;
 const NARRATIVE_REPAIR_MAX_ATTEMPTS = 3;
 const NARRATIVE_REPAIR_HEADROOM = [0.9, 0.8];
+// Reconcile the full narrative bible before returning its replacement. The
+// runner's five-minute default can terminate a healthy reasoning-model repair
+// and trigger a provider fallback before it has produced the corrected text.
+const NARRATIVE_REPAIR_TIMEOUT_MS = 15 * 60_000;
 
 // A judge-directed narrative repair must ADD material — an operational ruleset,
 // a missing cost, a named hard limit — to a bible field that EARLIER repairs may
@@ -587,6 +591,7 @@ export async function expandWorldTemplate({
       onRunCreated,
       onRunSettled,
       prompt,
+      ...(narrativeOnly ? { timeout: NARRATIVE_REPAIR_TIMEOUT_MS } : {}),
       source: narrativeOnly ? "universe-builder-narrative-repair" : "universe-builder-expansion",
     });
     raw = result.text;

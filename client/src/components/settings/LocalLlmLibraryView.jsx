@@ -454,7 +454,7 @@ export default function LocalLlmLibraryView() {
           </div>
         )}
         {selectedData?.available && selectedData?.modelsError && (
-          <p className="text-xs text-port-warning">
+          <p role="status" className="text-xs text-port-warning">
             Couldn't list {labelFor(selected)} models (showing what's available): {selectedData.modelsError}
           </p>
         )}
@@ -520,7 +520,7 @@ export default function LocalLlmLibraryView() {
           </div>
         )}
         {catalogError && (
-          <p className="text-xs text-port-warning">{catalogError}</p>
+          <p role="status" className="text-xs text-port-warning">{catalogError}</p>
         )}
         {Number.isFinite(systemMemoryGb) && catalog.some((m) => Array.isArray(m.variants) && m.variants.length > 1) && (
           <p className="text-[11px] text-gray-500">

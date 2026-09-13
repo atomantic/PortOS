@@ -34,7 +34,7 @@ export default function ActivityLog({ steps, error, completed }) {
         );
       })}
       {error && (
-        <div className="flex items-start gap-2 px-2 py-1 rounded bg-port-error/10">
+        <div role="status" className="flex items-start gap-2 px-2 py-1 rounded bg-port-error/10">
           <X size={14} className="text-port-error shrink-0 mt-0.5" />
           <span className="text-xs text-port-error">{error}</span>
         </div>

@@ -251,7 +251,7 @@ export default function Jira() {
             </h2>
 
             {saveError && (
-              <div className="mb-4 p-3 bg-port-error/20 border border-port-error/40 rounded">
+              <div role="alert" className="mb-4 p-3 bg-port-error/20 border border-port-error/40 rounded">
                 <p className="text-port-error font-medium">Error saving JIRA instance</p>
                 <p className="text-port-error/80 text-sm mt-1">{saveError}</p>
               </div>

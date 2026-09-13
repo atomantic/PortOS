@@ -8,6 +8,8 @@ import {
   parseCodexRollout,
   parseGrokChatHistory,
   parseGrokTurns,
+  parseKimiSessionIndex,
+  parseKimiWireLog,
   totalTranscriptTokens,
   UNKNOWN_MODEL
 } from './providerTranscriptUsage.js';
@@ -684,6 +686,115 @@ describe('parseAgyHistory', () => {
     ].join('\n');
     expect(parseAgyHistory(text)).toEqual([
       { conversationId: 'conv-aaaa', workspace: '/tmp/example-workspace', timestamp: 1_800_000_001_000 }
+    ]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Kimi Code CLI — ~/.kimi-code/
+// ---------------------------------------------------------------------------
+
+const KIMI_MODEL = 'kimi-for-coding';
+
+const kimiUsageRecord = ({ agentId = 'main', model = KIMI_MODEL, time = 1_800_000_000_000, inputOther = 200, output = 40, inputCacheRead = 0, inputCacheCreation = 0 } = {}) => JSON.stringify({
+  type: 'usage.record',
+  agentId,
+  model,
+  usage: { inputOther, output, inputCacheRead, inputCacheCreation },
+  usageScope: 'turn',
+  time
+});
+
+describe('parseKimiWireLog', () => {
+  it('sums usage.record lines with the cache tiers already split', () => {
+    const parsed = parseKimiWireLog(kimiUsageRecord({ inputOther: 500, output: 120, inputCacheRead: 80, inputCacheCreation: 20 }));
+    expect(parsed.tokensIn).toBe(500);
+    expect(parsed.tokensOut).toBe(120);
+    expect(parsed.cacheReadTokens).toBe(80);
+    expect(parsed.cacheWriteTokens).toBe(20);
+    expect(parsed.model).toBe(KIMI_MODEL);
+    expect(parsed.byModel[KIMI_MODEL].tokensOut).toBe(120);
+  });
+
+  it('adds successive records rather than treating them as cumulative snapshots', () => {
+    // Unlike Codex's rollout, each usage.record is already its own delta — a
+    // turn with several LLM calls (tool-loop steps) writes several records,
+    // and summing them is correct rather than a double-count.
+    const text = [
+      kimiUsageRecord({ time: 1_800_000_000_000, output: 100 }),
+      kimiUsageRecord({ time: 1_800_000_001_000, output: 300 })
+    ].join('\n');
+    expect(parseKimiWireLog(text).tokensOut).toBe(400);
+  });
+
+  it('ignores every record type except usage.record', () => {
+    const text = [
+      JSON.stringify({ type: 'llm.request', agentId: 'main', provider: 'openai', time: 1_800_000_000_000 }),
+      JSON.stringify({ type: 'turn.ended', agentId: 'main', reason: 'completed', time: 1_800_000_000_500 }),
+      kimiUsageRecord({ output: 42 })
+    ].join('\n');
+    const parsed = parseKimiWireLog(text);
+    expect(parsed.tokensOut).toBe(42);
+    expect(parsed.records).toBe(1);
+  });
+
+  it('reports zero records for a session interrupted before any call completed', () => {
+    // A quota error or other failure before the response streams writes no
+    // usage.record at all — this IS the correct measured total (nothing was
+    // actually billed), distinct from a transcript that failed to parse.
+    const text = JSON.stringify({ type: 'turn.step.interrupted', agentId: 'main', reason: 'error', time: 1_800_000_000_000 });
+    const parsed = parseKimiWireLog(text);
+    expect(totalTranscriptTokens(parsed)).toBe(0);
+    expect(parsed.records).toBe(0);
+  });
+
+  it('windows records by the numeric epoch-ms time field', () => {
+    const text = [
+      kimiUsageRecord({ time: 1_800_000_000_000, output: 111 }),
+      kimiUsageRecord({ time: 1_800_003_600_000, output: 222 })
+    ].join('\n');
+    const parsed = parseKimiWireLog(text, { from: 1_800_003_000_000, to: 1_800_004_000_000 });
+    expect(parsed.tokensOut).toBe(222);
+  });
+
+  it('skips records another run already claimed', () => {
+    const text = [
+      kimiUsageRecord({ time: 1_800_000_000_000, output: 111 }),
+      kimiUsageRecord({ time: 1_800_000_001_000, output: 222 })
+    ].join('\n');
+    const first = parseKimiWireLog(text);
+    const second = parseKimiWireLog(text, { exclude: new Set(first.countedKeys.slice(0, 1)) });
+    expect(second.tokensOut).toBe(222);
+  });
+
+  it('sums per-model buckets across models, and attributes an unnamed record to UNKNOWN_MODEL', () => {
+    const text = [
+      kimiUsageRecord({ model: KIMI_MODEL, output: 10 }),
+      kimiUsageRecord({ model: 'other-model', time: 1_800_000_001_000, output: 20 }),
+      JSON.stringify({ type: 'usage.record', agentId: 'main', usage: { inputOther: 0, output: 5, inputCacheRead: 0, inputCacheCreation: 0 }, time: 1_800_000_002_000 })
+    ].join('\n');
+    const parsed = parseKimiWireLog(text);
+    expect(parsed.tokensOut).toBe(35);
+    expect(parsed.byModel[UNKNOWN_MODEL].tokensOut).toBe(5);
+    expect(parsed.models.sort()).toEqual([KIMI_MODEL, 'other-model'].sort());
+  });
+
+  it('tolerates a truncated trailing line from a session still being written', () => {
+    const text = `${kimiUsageRecord({ output: 111 })}\n{"type":"usage.record`;
+    expect(parseKimiWireLog(text).tokensOut).toBe(111);
+  });
+});
+
+describe('parseKimiSessionIndex', () => {
+  it('keeps only the first occurrence of each sessionDir', () => {
+    const text = [
+      JSON.stringify({ sessionId: 'session-aaaa', sessionDir: '/home/example/.kimi-code/sessions/wd_repo_aaaa/session_aaaa', workDir: '/work/example-repo' }),
+      JSON.stringify({ sessionId: 'session-aaaa', sessionDir: '/home/example/.kimi-code/sessions/wd_repo_aaaa/session_aaaa', workDir: '/work/example-repo' }),
+      JSON.stringify({ sessionId: 'session-bbbb', sessionDir: '/home/example/.kimi-code/sessions/wd_other_bbbb/session_bbbb', workDir: '/work/other-repo' })
+    ].join('\n');
+    expect(parseKimiSessionIndex(text)).toEqual([
+      { sessionId: 'session-aaaa', sessionDir: '/home/example/.kimi-code/sessions/wd_repo_aaaa/session_aaaa', workDir: '/work/example-repo' },
+      { sessionId: 'session-bbbb', sessionDir: '/home/example/.kimi-code/sessions/wd_other_bbbb/session_bbbb', workDir: '/work/other-repo' }
     ]);
   });
 });

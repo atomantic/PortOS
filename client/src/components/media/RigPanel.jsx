@@ -142,7 +142,7 @@ export default function RigPanel({ record, onRecordChange }) {
       )}
 
       {rig?.status === 'failed' && rig.error && (
-        <div className="mt-2 flex items-start gap-1.5 rounded-md border border-port-error/30 bg-port-error/10 px-3 py-2 text-xs text-port-error">
+        <div role="status" className="mt-2 flex items-start gap-1.5 rounded-md border border-port-error/30 bg-port-error/10 px-3 py-2 text-xs text-port-error">
           <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
           <span>{rig.error}</span>
         </div>
@@ -220,7 +220,7 @@ export default function RigPanel({ record, onRecordChange }) {
         )}
 
         {retarget?.status === 'failed' && retarget.error && (
-          <div className="mt-2 flex items-start gap-1.5 rounded-md border border-port-error/30 bg-port-error/10 px-3 py-2 text-xs text-port-error">
+          <div role="status" className="mt-2 flex items-start gap-1.5 rounded-md border border-port-error/30 bg-port-error/10 px-3 py-2 text-xs text-port-error">
             <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
             <span>{retarget.error}</span>
           </div>

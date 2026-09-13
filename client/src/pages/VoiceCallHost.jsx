@@ -21,6 +21,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Mic, MicOff, PhoneCall, Radio, Volume2 } from 'lucide-react';
 import socket from '../services/socket';
+import TabPills from '../components/ui/TabPills';
 import { useDrawerTab } from '../hooks';
 import {
   CALL_FRAME_SAMPLES,
@@ -320,28 +321,18 @@ export default function VoiceCallHost() {
         </p>
       </header>
 
-      <div role="tablist" aria-label="Call host mode" className="flex gap-2">
-        <button
-          type="button"
-          role="tab"
-          aria-selected={isCall}
-          disabled={attached}
-          onClick={() => setMode('call')}
-          className={`flex min-h-[44px] items-center gap-2 rounded px-3 text-sm disabled:opacity-50 ${isCall ? 'bg-port-accent/20 text-port-accent' : 'border border-port-border text-gray-300 hover:bg-port-border/50'}`}
-        >
-          <PhoneCall size={16} />Call
-        </button>
-        <button
-          type="button"
-          role="tab"
-          aria-selected={!isCall}
-          disabled={attached}
-          onClick={() => setMode('capture')}
-          className={`flex min-h-[44px] items-center gap-2 rounded px-3 text-sm disabled:opacity-50 ${!isCall ? 'bg-port-accent/20 text-port-accent' : 'border border-port-border text-gray-300 hover:bg-port-border/50'}`}
-        >
-          <Radio size={16} />Capture system audio
-        </button>
-      </div>
+      {/* The shared TabPills owns the roving tabindex + arrow-key contract;
+          `disabled` keeps a locked mode out of the arrow-key order too. */}
+      <TabPills
+        variant="pills"
+        tabs={[
+          { id: 'call', label: 'Call', icon: PhoneCall, disabled: attached },
+          { id: 'capture', label: 'Capture system audio', icon: Radio, disabled: attached },
+        ]}
+        activeTab={mode}
+        onChange={setMode}
+        ariaLabel="Call host mode"
+      />
 
       {blocked && <p role="alert" className="rounded border border-port-error bg-port-error/10 p-3 text-sm text-port-error">{blocked}</p>}
       {notice && <p role="status" className="rounded border border-port-warning bg-port-warning/10 p-3 text-sm text-port-warning">{notice}</p>}

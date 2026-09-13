@@ -316,7 +316,7 @@ function AppDetail() {
               >
                 <ArrowLeft size={20} />
               </Link>
-              <div className="flex flex-1 min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
+              <div className="flex flex-1 lg:flex-initial min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
                 <h1
                   className="min-w-0 line-clamp-2 break-words text-xl font-bold text-white"
                   title={app.name}

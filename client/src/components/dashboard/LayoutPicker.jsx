@@ -72,14 +72,17 @@ export default function LayoutPicker({ layouts, activeLayoutId, onSelect, onEdit
         title="Switch dashboard layout"
         aria-label={`Dashboard layout: ${active?.name || 'none'}`}
         aria-expanded={open}
-        aria-haspopup="true"
       >
         <LayoutGrid size={14} aria-hidden="true" />
         <span className="hidden sm:inline">{active?.name || 'Layout'}</span>
       </button>
 
       {open && (
+        // role="group" so the aria-label actually lands — a bare <div> is
+        // generic and name-prohibited. Not role="menu": no arrow-key roving
+        // focus is implemented here (#7265).
         <div
+          role="group"
           aria-label="Dashboard layout menu"
           className={`w-56 max-w-[calc(100vw-1rem)] bg-port-card border border-port-border rounded-lg shadow-2xl overflow-hidden z-50 ${menuPos ? '' : 'absolute right-0 mt-1'}`}
           style={menuPos || undefined}

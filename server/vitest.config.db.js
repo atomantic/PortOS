@@ -17,6 +17,8 @@ process.env.NODE_ENV = 'test';
 export const DB_TEST_INCLUDE = [
   'services/appQuality.db.test.js',
   '**/db.test.js',
+  'services/dbAdmin.db.test.js',
+  'services/backup.db.test.js',
   'services/catalogDB.test.js',
   'services/catalogDB.facets.db.test.js',
   'services/humanActivity.db.test.js',
@@ -40,6 +42,7 @@ export const DB_TEST_INCLUDE = [
   'services/creativeDirector/projectsDB.test.js',
   'services/musicVideo/projectsDB.test.js',
   'routes/catalog.test.js',
+  'routes/mindToolRecipes.db.test.js',
   'scripts/run-db-migrations.test.js',
 ];
 

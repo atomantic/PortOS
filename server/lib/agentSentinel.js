@@ -171,9 +171,16 @@ export async function salvageSentinelPayload(contents) {
  *
  * Blocks are walked in REVERSE closing order — the model's final answer wins
  * over an earlier prompt echo of the same schema, and an enclosing object wins
- * over its own nested children. Strict `safeJSONParse` per block (no lenient
- * repair): a transcript is not a file the agent committed to, so "almost JSON"
- * there stays a miss.
+ * over its own nested children. Each candidate goes through
+ * `tryParseWithRepair` rather than a bare strict parse: for a tool-free
+ * programmatic-I/O stage (e.g. pr-reviewer's no-filesystem-access review role),
+ * the transcript print IS the committed deliverable — there is no `.agent-done`
+ * file to fall back to — so it deserves the same trailing-comma / orphan-brace
+ * repair tolerance `salvageSentinelPayload` already applies to a written
+ * sentinel. The repairs are conservative and string-aware (never touch content
+ * that already parses, never fix unquoted keys or other non-JSON prose), so a
+ * genuinely non-JSON block (an object-literal echo, truncated prose) still
+ * fails to parse and is skipped.
  *
  * Async + LAZY imports for the same reason as `salvageSentinelPayload` — the
  * barrel re-export of this module must not statically pull jsonExtract's
@@ -189,15 +196,15 @@ export async function extractSentinelPayloadFromTranscript(transcript, isPayload
   if (typeof isPayload !== 'function') return none;
 
   const { stripAnsi } = await import('./ansiStrip.js');
-  const { findAllBalancedBlocks } = await import('./jsonExtract.js');
+  const { findAllBalancedBlocks, tryParseWithRepair } = await import('./jsonExtract.js');
   const blocks = findAllBalancedBlocks(stripAnsi(transcript));
 
   for (let i = blocks.length - 1; i >= 0; i -= 1) {
-    const parsed = safeJSONParse(blocks[i], null, { allowArray: false });
+    const { value: parsed, error } = tryParseWithRepair(blocks[i]);
     // `typeof` guard, not just truthiness: the `in` check below throws on a
     // primitive, and a best-effort salvage must never be the thing that breaks
     // finalize.
-    if (!parsed || typeof parsed !== 'object') continue;
+    if (error || !parsed || typeof parsed !== 'object' || Array.isArray(parsed)) continue;
     // Two shapes reach a transcript: the documented `{ summary, payload }`
     // envelope the agent should have written to the sentinel, and the BARE
     // payload object — what a model answering in the terminal actually prints.

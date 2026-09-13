@@ -97,7 +97,7 @@ describe('ScheduleTab on-demand feedback', () => {
     expect(toast.success).toHaveBeenCalledWith(
       'Queued review request for Example App — it will appear in Tasks when evaluation begins',
     );
-    expect(await screen.findByText('Request sent to Example App')).toBeVisible();
+    expect(await screen.findByText('Request queued for Example App')).toBeVisible();
     expect(screen.getByText('Pending On-Demand Tasks')).toBeVisible();
     expect(screen.getByText(/review \(Example App\) - requested/)).toBeVisible();
   });

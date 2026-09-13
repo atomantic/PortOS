@@ -106,8 +106,11 @@ export async function projectToCanon(ingredientId, updatedIngredient, deps = {})
 
     for (const universeId of universeIds) {
       stats.universes++;
-      // Mutator form: merge the catalog payload into every embedded entry that
-      // carries this ingredientId, across all canon arrays. `silent: true`
+      // Mutator form: replace the mirrored payload on every embedded entry that
+      // carries this ingredientId, across all canon arrays. Preserve only the
+      // canon entry's control fields: merging onto the whole entry would retain
+      // fields removed by an edit or revision restore and let stale canon data
+      // leak back into Catalog on the next reverse projection. `silent: true`
       // suppresses the per-universe peer-sync fan-out so a catalog edit that
       // touches N universes doesn't emit N recordUpdated events. `guardToken`
       // threads the originating ingredientId so updateUniverse's synchronous
@@ -121,7 +124,10 @@ export async function projectToCanon(ingredientId, updatedIngredient, deps = {})
           patch[arrayKey] = list.map((e) => {
             if (e?.ingredientId !== ingredientId) return e;
             touched = true;
-            return { ...e, ...payload, name, ingredientId, updatedAt };
+            const controlFields = Object.fromEntries(
+              NON_PAYLOAD_KEYS.filter((key) => e[key] !== undefined).map((key) => [key, e[key]]),
+            );
+            return { ...controlFields, ...payload, name, ingredientId, updatedAt };
           });
         }
         return touched ? patch : null;

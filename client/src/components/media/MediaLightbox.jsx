@@ -623,7 +623,7 @@ function SettingsPane({
               <div className="flex items-center gap-2 text-[10px] text-gray-500">
                 {promptStatus === 'saving' && <span>Saving…</span>}
                 {promptStatus === 'saved' && <span className="text-port-success">Saved</span>}
-                {promptStatus === 'error' && <span className="text-port-error">Save failed</span>}
+                {promptStatus === 'error' && <span role="alert" className="text-port-error">Save failed</span>}
                 <span>{promptDraft.length}/8000</span>
               </div>
             </div>

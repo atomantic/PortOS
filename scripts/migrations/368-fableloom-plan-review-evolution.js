@@ -28,7 +28,7 @@ export const ACCEPTED_OLD_MD5 = {
 };
 
 export const NEW_SHIPPED_MD5 = {
-  'fableloom-review-series-plan.md': '588c82fafd733581490f24cb6fb4bfa7',
+  'fableloom-review-series-plan.md': 'd82ff6df1d41c3e53fb0cc7ea49f8dc5',
 };
 
 const { applyMigration, up } = makePromptReplaceMigration({

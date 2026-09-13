@@ -70,13 +70,18 @@ export default function BibleSection({
   const mountedRef = useMounted();
 
   useEffect(() => {
-    if (itemsProp) return;
-    if (!workId) return;
+    if (itemsProp) return undefined;
+    if (!workId) return undefined;
+    // `active` is the WORK-switch guard and `mountedRef` the unmount one; they
+    // are not interchangeable. The component stays mounted across a work swap,
+    // so only `active` keeps the previous work's bible out of this one.
+    let active = true;
     setLoading(true);
     config.api.list(workId)
-      .then((list) => { if (mountedRef.current) setInternalItems(list); })
-      .catch(() => { if (mountedRef.current) setInternalItems([]); })
-      .finally(() => { if (mountedRef.current) setLoading(false); });
+      .then((list) => { if (active && mountedRef.current) setInternalItems(list); })
+      .catch(() => { if (active && mountedRef.current) setInternalItems([]); })
+      .finally(() => { if (active && mountedRef.current) setLoading(false); });
+    return () => { active = false; };
   }, [workId, itemsProp, mountedRef]);
 
   // Internal state uses a functional updater so back-to-back saves (the add

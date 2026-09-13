@@ -65,9 +65,11 @@ export default function HealthTab() {
   const to = new Date().toISOString().split('T')[0];
 
   useEffect(() => {
+    let active = true;
     api.getAppleHealthCorrelation(from, to)
-      .then(setCorrelationData)
-      .catch(() => setCorrelationData(null));
+      .then(data => { if (active) setCorrelationData(data); })
+      .catch(() => { if (active) setCorrelationData(null); });
+    return () => { active = false; };
   }, [from, to]);
 
   useEffect(() => {

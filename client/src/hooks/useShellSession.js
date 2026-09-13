@@ -7,6 +7,7 @@ import '@xterm/xterm/css/xterm.css';
 import { useSocket } from './useSocket';
 import { useThemeContext } from '../components/ThemeContext';
 import { buildTerminalTheme, parseCssColorToHex } from '../lib/terminalTheme';
+import { isFocusEscapeKey } from '../lib/a11yKeyboard';
 import { attachDictationBridge } from '../lib/terminalDictation';
 import { fitTerminal } from '../lib/terminalFit';
 import {
@@ -263,7 +264,14 @@ export function useShellSession({ isFullscreen } = {}) {
       fontFamily: '"Roboto Mono for Powerline", "MesloLGS NF", "MesloLGS Nerd Font", "Hack Nerd Font", "FiraCode Nerd Font", "JetBrainsMono Nerd Font", Menlo, Monaco, "Courier New", monospace',
       theme: readTerminalTheme(),
       scrollback: 5000,
-      allowProposedApi: true
+      allowProposedApi: true,
+      // Screen-reader mode is what makes xterm build its .xterm-accessibility
+      // live region — without it every rendered row stays aria-hidden and a
+      // screen-reader user focusing the terminal hears an empty textarea. It
+      // also relaxes _keyDown's blanket preventDefault on resolved keys, which
+      // the dictation bridge (lib/terminalDictation.js) is already written to
+      // defer to.
+      screenReaderMode: true
     });
 
     const webLinksAddon = new WebLinksAddon();
@@ -271,6 +279,17 @@ export function useShellSession({ isFullscreen } = {}) {
     term.loadAddon(webLinksAddon);
 
     term.open(terminalRef.current);
+
+    // WCAG 2.1.2 (no keyboard trap): xterm's helper textarea is in the tab
+    // order but its _keyDown preventDefaults Tab, Shift+Tab and Escape alike,
+    // so a keyboard user who tabs in cannot leave without a mouse. The
+    // documented escape is Shift+Tab — the conventional "leave this widget"
+    // backtab: returning false makes _keyDown bail before it cancels the
+    // event, so the browser performs the focus move to the previous tabbable
+    // element and nothing reaches the PTY. Plain Tab must stay claimed — it is
+    // shell completion. The gesture itself is the shared isFocusEscapeKey
+    // predicate so the stand-down rule lives in one place.
+    term.attachCustomKeyEventHandler((event) => !isFocusEscapeKey(event));
 
     // xterm binds no touch handlers of its own, so without this a swipe over the
     // terminal does nothing. Alternate-screen TUIs need the matching wheel capture so
@@ -282,13 +301,17 @@ export function useShellSession({ isFullscreen } = {}) {
     const detachTouchScroll = attachTerminalTouchScroll(term);
     const detachWheelScroll = attachTerminalWheelScroll(term);
 
-    requestAnimationFrame(() => {
+    // Deferred fit — cancelled in cleanup: an unmount inside the frame window
+    // would otherwise fit a disposed terminal (its _renderService.dimensions
+    // getter throws post-dispose — an uncaught error in a rAF callback).
+    const fitFrame = requestAnimationFrame(() => {
       fitTerminal(term);
     });
 
     termInstanceRef.current = term;
 
     return () => {
+      cancelAnimationFrame(fitFrame);
       detachTouchScroll();
       detachWheelScroll();
       term.dispose();

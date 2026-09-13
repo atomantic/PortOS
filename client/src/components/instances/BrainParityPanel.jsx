@@ -135,7 +135,7 @@ export default function BrainParityPanel({ peer, report: storedReport }) {
 
       {expanded && (
         <div className="mt-2 space-y-2 text-xs">
-          {error && <p className="text-port-warning">{error}</p>}
+          {error && <p role="status" className="text-port-warning">{error}</p>}
 
           {!report && !error && (
             <p className="text-gray-500">

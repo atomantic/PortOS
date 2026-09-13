@@ -205,7 +205,7 @@ export default function MtplxCheckpoints({
           </button>
         </form>
 
-        {searchError && <p className="text-xs text-port-warning">{searchError}</p>}
+        {searchError && <p role="alert" className="text-xs text-port-warning">{searchError}</p>}
 
         {results !== null && results.length === 0 && !searchError && (
           <p className="text-xs text-gray-500">No MTPLX-branded checkpoints matched that search.</p>

@@ -111,7 +111,9 @@ export default function ThreejsModels() {
       <header className="flex items-start gap-3">
         <Box className="mt-0.5 h-7 w-7 shrink-0 text-port-accent" />
         <div>
-          <h1 className="text-xl font-semibold text-white">Three.js Models</h1>
+          {/* h2, not h1 — the MediaGen shell route already owns the page <h1>
+              ("Media Gen") and this tab content mounts inside it (#7245). */}
+          <h2 className="text-xl font-semibold text-white">Three.js Models</h2>
           <p className="mt-1 text-sm text-gray-400">
             Reconstruct a gallery image as validated procedural geometry, preview it live, and export a standalone Three.js factory.
           </p>

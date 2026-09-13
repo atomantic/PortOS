@@ -24,10 +24,11 @@ export default function MemoryEditModal({ memory, apps, onSave, onClose }) {
 
   // Fetch full memory data if we only have index data
   useEffect(() => {
+    let active = true;
     const fetchFullMemory = async () => {
       if (!memory.content && memory.id) {
         const full = await api.getMemory(memory.id).catch(() => null);
-        if (full) {
+        if (full && active) {
           setFullMemory(full);
           setFormData({
             content: full.content || '',
@@ -43,6 +44,7 @@ export default function MemoryEditModal({ memory, apps, onSave, onClose }) {
       }
     };
     fetchFullMemory();
+    return () => { active = false; };
   }, [memory]);
 
   const handleSubmit = async (e) => {

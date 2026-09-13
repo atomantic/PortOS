@@ -43,8 +43,10 @@ export function useRepoStudyConfig({ enabled = true, resetKey = null, initialStu
   }, [resetKey]);
 
   useEffect(() => {
-    if (!enabled || typeof api.getApps !== 'function') return;
+    if (!enabled || typeof api.getApps !== 'function') return undefined;
+    let active = true;
     api.getApps({ silent: true }).then((apps) => {
+      if (!active) return;
       const eligible = (Array.isArray(apps) ? apps : [])
         .filter(app => app?.id && app.repoPath && !app.archived)
         .sort((a, b) => (a.id === PORTOS_APP_ID ? -1 : b.id === PORTOS_APP_ID ? 1 : a.name.localeCompare(b.name)));
@@ -53,6 +55,7 @@ export function useRepoStudyConfig({ enabled = true, resetKey = null, initialStu
         setTargetAppId(current => eligible.some(app => app.id === current) ? current : eligible[0].id);
       }
     }).catch(() => {});
+    return () => { active = false; };
   }, [enabled]);
 
   return {

@@ -79,6 +79,36 @@ const writeCodexRollout = async (dateParts, file, text) => {
   await writeFile(join(dir, file), text);
 };
 
+const KIMI_MODEL = 'kimi-for-coding';
+
+const kimiUsageRecordLine = ({ agentId = 'main', model = KIMI_MODEL, timeMs, inputOther = 200, output = 40, inputCacheRead = 0, inputCacheCreation = 0 }) => JSON.stringify({
+  type: 'usage.record',
+  agentId,
+  model,
+  usage: { inputOther, output, inputCacheRead, inputCacheCreation },
+  usageScope: 'turn',
+  time: timeMs
+});
+
+/**
+ * `~/.kimi-code/session_index.jsonl` (global) plus one session directory with
+ * an `agents/<agentId>/wire.jsonl` per entry in `agents`.
+ */
+const writeKimiSession = async ({ sessionId = 'session-aaaa', cwd = WORKSPACE, agents = { main: [] } }) => {
+  const sessionDir = join(home, '.kimi-code', 'sessions', 'wd_example_aaaa111111', `session_${sessionId}`);
+  await mkdir(sessionDir, { recursive: true });
+  await writeFile(
+    join(home, '.kimi-code', 'session_index.jsonl'),
+    `${JSON.stringify({ sessionId, sessionDir, workDir: cwd })}\n`,
+    { flag: 'a' }
+  );
+  for (const [agentId, lines] of Object.entries(agents)) {
+    const agentDir = join(sessionDir, 'agents', agentId);
+    await mkdir(agentDir, { recursive: true });
+    await writeFile(join(agentDir, 'wire.jsonl'), lines.join('\n'));
+  }
+};
+
 beforeEach(async () => {
   home = await mkdtemp(join(tmpdir(), 'portos-usage-'));
   vi.clearAllMocks();
@@ -114,9 +144,15 @@ describe('transcriptFamily', () => {
     expect(transcriptFamily({ providerId: 'custom', command: '/usr/local/bin/agy' })).toBe('agy');
   });
 
+  it('maps kimi provider ids to the kimi family', () => {
+    expect(transcriptFamily({ providerId: 'kimi-cli' })).toBe('kimi');
+    expect(transcriptFamily({ providerId: 'custom', command: '/usr/local/bin/kimi' })).toBe('kimi');
+  });
+
   it('returns null for providers that write no transcript', () => {
     // `legacy` would match the `agy` binary name without word boundaries.
-    for (const providerId of ['ollama', 'lmstudio', 'kimi', 'legacy', '', null]) {
+    // `cursor` writes no transcript at all (confirmed absent, #6045).
+    for (const providerId of ['ollama', 'lmstudio', 'cursor', 'legacy', '', null]) {
       expect(transcriptFamily({ providerId })).toBeNull();
     }
   });
@@ -237,6 +273,85 @@ describe('readMeasuredUsage', () => {
       home
     });
     expect(result?.tokensOut).toBe(40);
+  });
+
+  it('finds a kimi session by session_index.jsonl and sums its usage.record lines', async () => {
+    const timeMs = Date.parse('2026-07-01T10:05:00.000Z');
+    await writeKimiSession({
+      agents: { main: [kimiUsageRecordLine({ timeMs, inputOther: 200, output: 40, inputCacheRead: 50 })] }
+    });
+
+    const result = await readMeasuredUsage({
+      workspacePath: WORKSPACE,
+      startTime: '2026-07-01T10:00:00.000Z',
+      endTime: '2026-07-01T10:10:00.000Z',
+      family: 'kimi',
+      home
+    });
+
+    expect(result).toMatchObject({
+      source: 'measured',
+      sessions: 1,
+      tokensIn: 200,
+      tokensOut: 40,
+      cacheReadTokens: 50,
+      model: KIMI_MODEL
+    });
+  });
+
+  it('sums a subagent wire.jsonl separately from the main agent', async () => {
+    const timeMs = Date.parse('2026-07-01T10:05:00.000Z');
+    await writeKimiSession({
+      agents: {
+        main: [kimiUsageRecordLine({ agentId: 'main', timeMs, output: 40 })],
+        'subagent-1': [kimiUsageRecordLine({ agentId: 'subagent-1', timeMs, output: 15 })]
+      }
+    });
+
+    const result = await readMeasuredUsage({
+      workspacePath: WORKSPACE,
+      startTime: '2026-07-01T10:00:00.000Z',
+      endTime: '2026-07-01T10:10:00.000Z',
+      family: 'kimi',
+      home
+    });
+    expect(result?.tokensOut).toBe(55);
+    expect(result?.sessions).toBe(2);
+  });
+
+  it('ignores a kimi session from a different workDir', async () => {
+    const timeMs = Date.parse('2026-07-01T10:05:00.000Z');
+    await writeKimiSession({
+      cwd: '/work/other-repo',
+      agents: { main: [kimiUsageRecordLine({ timeMs })] }
+    });
+
+    const result = await readMeasuredUsage({
+      workspacePath: WORKSPACE,
+      startTime: '2026-07-01T10:00:00.000Z',
+      endTime: '2026-07-01T10:10:00.000Z',
+      family: 'kimi',
+      home
+    });
+    expect(result).toBeNull();
+  });
+
+  it('bills nothing for a kimi session interrupted before any call completed', async () => {
+    // A session that failed/aborted before streaming a response (e.g. a quota
+    // error) writes no `usage.record` line at all — correctly zero, since
+    // nothing was actually billed by the provider.
+    await writeKimiSession({
+      agents: { main: [JSON.stringify({ type: 'turn.ended', agentId: 'main', reason: 'failed', time: Date.parse('2026-07-01T10:05:00.000Z') })] }
+    });
+
+    const result = await readMeasuredUsage({
+      workspacePath: WORKSPACE,
+      startTime: '2026-07-01T10:00:00.000Z',
+      endTime: '2026-07-01T10:10:00.000Z',
+      family: 'kimi',
+      home
+    });
+    expect(result).toBeNull();
   });
 });
 
@@ -972,6 +1087,7 @@ const GROK_MODEL = 'example-grok-model';
 const GROK_PROVIDER = { id: 'grok-cli', type: 'cli', command: 'grok', enabled: true, defaultModel: GROK_MODEL };
 const AGY_PROVIDER = { id: 'antigravity-cli', type: 'cli', command: 'agy', enabled: true, defaultModel: 'example-agy-model' };
 const CLAUDE_PROVIDER = { id: 'claude-code', type: 'cli', command: 'claude', enabled: true, defaultModel: 'claude-opus-5' };
+const KIMI_PROVIDER = { id: 'kimi-cli', type: 'cli', command: 'kimi', enabled: true, defaultModel: KIMI_MODEL };
 
 const grokTurnLine = ({ promptId = 'prompt-1', ms, input = 15_000, cachedRead = 11_000, output = 1_800 }) => JSON.stringify({
   timestamp: Math.round(ms / 1000),
@@ -1057,6 +1173,14 @@ describe('resolveFamilyProvider', () => {
     expect(resolveFamilyProvider([{ ...GROK_PROVIDER, enabled: false }], 'grok')).toBeNull();
     expect(resolveFamilyProvider([CLAUDE_PROVIDER], 'grok')).toBeNull();
   });
+
+  it('resolves a kimi provider by command, even though it has no subscription-quota family', () => {
+    // `lib/providerFamilies.js` deliberately has no `kimi` entry (no plan to
+    // meter) — this must not make it unresolvable as a sibling-billing target.
+    expect(resolveFamilyProvider([KIMI_PROVIDER], 'kimi')?.id).toBe('kimi-cli');
+    expect(resolveFamilyProvider([{ ...KIMI_PROVIDER, enabled: false }], 'kimi')).toBeNull();
+    expect(resolveFamilyProvider([CLAUDE_PROVIDER], 'kimi')).toBeNull();
+  });
 });
 
 describe('grok sessions', () => {
@@ -1125,6 +1249,35 @@ describe('grok sessions', () => {
   });
 });
 
+describe('kimi sessions', () => {
+  const kimiRun = { providerId: 'kimi-cli', model: KIMI_MODEL, workspacePath: WORKSPACE, ...RUN_WINDOW };
+
+  it('measures a first-class kimi run from its usage.record lines', async () => {
+    await writeKimiSession({ agents: { main: [kimiUsageRecordLine({ timeMs: IN_WINDOW_MS, inputOther: 500, output: 120, inputCacheRead: 80 })] } });
+    const [record] = await reconcileRunUsage(kimiRun, { tokensIn: 1, tokensOut: 1 }, { home });
+    expect(record.source).toBe('measured');
+    expect(record.providerId).toBe('kimi-cli');
+    expect(record.tokensIn).toBe(500);
+    expect(record.cacheReadTokens).toBe(80);
+    expect(record.tokensOut).toBe(120);
+    expect(record.model).toBe(KIMI_MODEL);
+  });
+
+  it('reports no measured usage for a session that never completed a call', async () => {
+    await writeKimiSession({ agents: { main: [] } });
+    const record = await reconcileRunUsage(kimiRun, { tokensIn: 3, tokensOut: 4 }, { home });
+    expect(record.source).toBe('estimate');
+    expect(record.tokensIn).toBe(3);
+  });
+
+  it('ignores a session from another workspace', async () => {
+    await writeKimiSession({ cwd: '/tmp/other-workspace', agents: { main: [kimiUsageRecordLine({ timeMs: IN_WINDOW_MS })] } });
+    const record = await reconcileRunUsage(kimiRun, { tokensIn: 7, tokensOut: 9 }, { home });
+    expect(record.source).toBe('estimate');
+    expect(record.tokensIn).toBe(7);
+  });
+});
+
 describe('nested sibling-family attribution', () => {
   it('bills a nested grok review to grok, not to the Claude parent', async () => {
     await writeClaudeSession('a.jsonl', [
@@ -1144,6 +1297,24 @@ describe('nested sibling-family attribution', () => {
     expect(byProvider['grok-cli'].tokensOut).toBe(1_800);
     expect(byProvider['grok-cli'].cacheReadTokens).toBe(11_000);
     expect(byProvider['grok-cli'].source).toBe('measured');
+  });
+
+  it('bills a nested kimi review to kimi, not to the Claude parent (#6045)', async () => {
+    await writeClaudeSession('a.jsonl', [
+      claudeAssistant({ id: 'm1', timestamp: '2026-07-01T10:05:00.000Z' })
+    ]);
+    await writeKimiSession({ agents: { main: [kimiUsageRecordLine({ timeMs: IN_WINDOW_MS, inputOther: 300, output: 90 })] } });
+
+    const records = await reconcileRunUsage(claudeRun, { tokensIn: 1, tokensOut: 1 }, {
+      home,
+      providers: [CLAUDE_PROVIDER, KIMI_PROVIDER]
+    });
+    const byProvider = Object.fromEntries(records.map((record) => [record.providerId, record]));
+    expect(Object.keys(byProvider).sort()).toEqual(['claude-code', 'kimi-cli']);
+    expect(byProvider['claude-code'].tokensOut).toBe(50);
+    expect(byProvider['kimi-cli'].tokensIn).toBe(300);
+    expect(byProvider['kimi-cli'].tokensOut).toBe(90);
+    expect(byProvider['kimi-cli'].source).toBe('measured');
   });
 
   it('bills a nested Antigravity review as an estimate on the agy provider', async () => {

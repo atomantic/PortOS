@@ -844,7 +844,7 @@ export default function PostSessionLauncher({
                   )}
                   {quickDurationSaveState === 'saving' && <div>Saving budget...</div>}
                   {quickDurationSaveState === 'saved' && <div>Budget saved.</div>}
-                  {quickDurationSaveState === 'error' && <div className="text-port-error">Budget could not be saved; reverted.</div>}
+                  {quickDurationSaveState === 'error' && <div role="alert" className="text-port-error">Budget could not be saved; reverted.</div>}
                 </div>
               </div>
             )}
@@ -891,7 +891,7 @@ export default function PostSessionLauncher({
                 <p className="text-xs text-gray-500">
                   Versioned two-drill battery with alternating forms for comparable progress.
                 </p>
-                {benchmarkError && <p className="text-xs text-port-error">{benchmarkError}</p>}
+                {benchmarkError && <p role="alert" className="text-xs text-port-error">{benchmarkError}</p>}
               </div>
             )}
 

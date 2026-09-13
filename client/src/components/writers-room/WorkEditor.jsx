@@ -272,16 +272,28 @@ export default function WorkEditor({ work, onChange, onToggleExercise, exerciseO
   // The CharactersBible / PlacesBible drawers are the canonical editors;
   // mirror their lists here so the storyboard's image-prompt enrichment picks
   // up edits immediately.
+  //
+  // `active` is load-bearing, not hygiene. WorkEditor is rendered without a
+  // `key` (WritersRoom.jsx), so it stays mounted across a work swap and this
+  // effect merely re-fires. Without the guard, a slow bible read for work A
+  // lands after the swap and sticks: these lists are passed down as controlled
+  // props, and BibleSection returns early rather than refetching when it gets
+  // them, so nothing re-reads the server until the user re-runs an extraction.
+  // In the meantime StoryboardPanel enriches work B's image-gen prompts with
+  // work A's characters and places, and those renders are persisted.
   useEffect(() => {
+    let active = true;
     Promise.all([
       listWritersRoomCharacters(work.id).catch(() => []),
       listWritersRoomPlaces(work.id).catch(() => []),
       listWritersRoomObjects(work.id).catch(() => []),
     ]).then(([chars, plcs, objs]) => {
+      if (!active) return;
       setCharacters(chars || []);
       setPlaces(plcs || []);
       setObjects(objs || []);
     });
+    return () => { active = false; };
   }, [work.id]);
 
   useEffect(() => { onDirtyChange?.(dirty); }, [dirty, onDirtyChange]);

@@ -28,7 +28,7 @@ const DOMAIN_ARRAYS = [
   'coreDdl', 'tribeDdl', 'humanActivityDdl', 'postDdl', 'commissionsDdl', 'userActionsDdl', 'aiGraphDdl',
   'catalogDdl', 'catalogUserTypesDdl', 'mediaDdl', 'universesDdl',
   'libraryDdl', 'pipelineDdl', 'writersRoomDdl', 'loraDdl', 'privacyDdl', 'stackerNewsDdl', 'xDdl',
-  'beeperDdl',
+  'beeperDdl', 'mindToolRecipesDdl',
   'auditDdl',
 ];
 
@@ -67,6 +67,7 @@ describe('db/schema barrel + composer (#2832)', () => {
       ...schema.stackerNewsDdl,
       ...schema.xDdl,
       ...schema.beeperDdl,
+      ...schema.mindToolRecipesDdl,
       ...schema.auditDdl,
       ...buildAuditTriggers(),
     ];

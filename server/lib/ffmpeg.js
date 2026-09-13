@@ -471,13 +471,16 @@ const appendFilter = (chain, filter) => {
 // .bak first, install the new file, and restore the backup on any failure, so
 // the worst case is "the operation was skipped", never "the video is gone".
 //
-// Extracted because three callers (`trimVideoFromFrame`, `upscaleVideo2x`,
+// Extracted because three callers here (`trimVideoFromFrame`, `upscaleVideo2x`,
 // `optimizeForStreaming`) need this identical rollback, and a data-loss-
 // sensitive path with three copies is one that eventually gets fixed in only
-// two of them. `label` names the operation for the failure message.
+// two of them. Exported for the same reason: `pipeline/audioMux.js` replaces
+// the stitched episode in place from four more entry points, and its own bare
+// `rename` was exactly the copy that never got fixed (#7237). `label` names
+// the operation for the failure message.
 //
 // Returns `{ ok: true, outPath }` or `{ ok: false, reason }`.
-const installEncodedVideo = async (tmpPath, targetPath, label) => {
+export const installEncodedVideo = async (tmpPath, targetPath, label) => {
   let backupPath = null;
   try {
     if (IS_WIN) {

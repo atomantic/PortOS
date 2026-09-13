@@ -584,7 +584,7 @@ function JobRow({ job, onCancel, onRetry, onRunNow, onDelete }) {
         </div>
       </div>
       {job.status === 'failed' && job.error && (
-        <div className="text-xs text-port-error mt-2 truncate" title={job.error}>{job.error}</div>
+        <div role="status" className="text-xs text-port-error mt-2 truncate" title={job.error}>{job.error}</div>
       )}
       {job.status === 'running' && (
         <div className="mt-2 space-y-1">

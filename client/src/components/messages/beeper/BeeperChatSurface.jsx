@@ -679,6 +679,7 @@ export default function BeeperChatSurface({
     cancelConfirmation: cancelOutboxConfirmation,
     retry: retryOutboxEntry,
     dismiss: dismissOutboxEntry,
+    reconcile: reconcileOutboxEntry,
   } = useBeeperOutbox(conversationId, {
     onSent: (sentConversationId, body) => setDrafts((prev) => {
       // A send can finish after navigation or another draft edit. Clear only
@@ -1050,6 +1051,7 @@ export default function BeeperChatSurface({
             cancelConfirmation={cancelOutboxConfirmation}
             retryOutboxEntry={retryOutboxEntry}
             dismissOutboxEntry={dismissOutboxEntry}
+            reconcileOutboxEntry={reconcileOutboxEntry}
             breaker={breaker}
             people={people}
             linkingId={linkingId}
