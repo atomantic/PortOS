@@ -312,10 +312,32 @@ export function VoiceTab() {
   const llmModel = cfg.llm.model || 'auto';
   const llmVisionModel = cfg.llm.visionModel || 'auto';
   const selectedProvider = apiProviders.find((p) => p.id === llmProvider);
+  // Still used to gate the refresh buttons below, so kept alongside
+  // providerOptions rather than folded away.
   const providerMissing = apiProviders.length > 0 && !selectedProvider;
+  // An empty registry means "not loaded yet" (or the fetch failed), not
+  // "confirmed not an API provider" — the synthetic option's own text makes
+  // that distinction, since `withUnlistedOption` can't know why a value is
+  // absent from an empty list.
+  const providerOptions = withUnlistedOption(
+    apiProviders,
+    llmProvider,
+    (id) => ({ id, name: apiProviders.length === 0 ? id : `${id} (not an API provider)` }),
+  );
   const providerModels = selectedProvider?.models || [];
-  const modelMissing = llmModel !== 'auto' && !providerModels.includes(llmModel);
-  const visionModelMissing = llmVisionModel !== 'auto' && !providerModels.includes(llmVisionModel);
+  // `providerModels` is a flat id-string list; wrap each as `{id}` so the
+  // shared helper's default `key: 'id'` object contract applies uniformly to
+  // real and synthetic entries alike.
+  const modelChoices = providerModels.map((m) => ({ id: m }));
+  // 'auto' is a sentinel rendered as its own hardcoded option below, never a
+  // real catalog id — routing it through the helper would wrongly flag it as
+  // an unlisted pin and duplicate the `value="auto"` option.
+  const modelOptions = llmModel === 'auto'
+    ? modelChoices
+    : withUnlistedOption(modelChoices, llmModel, (id) => ({ id, current: true }));
+  const visionModelOptions = llmVisionModel === 'auto'
+    ? modelChoices
+    : withUnlistedOption(modelChoices, llmVisionModel, (id) => ({ id, current: true }));
 
   // Code-agent delegation picker. Empty provider/model = "system default" (the
   // CoS spawner's activeProvider + selectModelForTask). The saved choice is
@@ -324,12 +346,17 @@ export function VoiceTab() {
   const codeProvider = codeAgentCfg.provider || '';
   const codeModel = codeAgentCfg.model || '';
   const selectedCodeProvider = codeProviders.find((p) => p.id === codeProvider);
-  // Only flag a missing provider AFTER the registry loads — otherwise a saved
+  // Only flag a missing agent AFTER the registry loads — otherwise a saved
   // agent is briefly mislabeled "(not a coding agent)" during the fetch (or if
-  // it fails and codeProviders stays []). Mirrors providerMissing above.
-  const codeProviderMissing = codeProviders.length > 0 && !!codeProvider && !selectedCodeProvider;
+  // it fails and codeProviders stays []). Mirrors providerOptions above,
+  // but this picker suppresses the synthetic entirely while unloaded rather
+  // than showing an unannotated fallback.
+  const codeProviderOptions = codeProviders.length === 0
+    ? codeProviders
+    : withUnlistedOption(codeProviders, codeProvider, (id) => ({ id, name: `${id} (not a coding agent)` }));
   const codeProviderModels = selectedCodeProvider?.models || [];
-  const codeModelMissing = !!codeModel && !codeProviderModels.includes(codeModel);
+  const codeModelChoices = codeProviderModels.map((m) => ({ id: m }));
+  const codeModelOptions = withUnlistedOption(codeModelChoices, codeModel, (id) => ({ id, current: true }));
 
   // Fast-resolution cascade config + on-device availability pill.
   const fastPathCfg = cfg.llm.fastPath || {};
@@ -602,15 +629,11 @@ export function VoiceTab() {
             }}
             className={inputCls}
           >
-            {providerMissing && (
-              <option value={llmProvider}>{llmProvider} (not an API provider)</option>
-            )}
-            {apiProviders.map((p) => (
+            {providerOptions.map((p) => (
               <option key={p.id} value={p.id}>
                 {p.name}{p.enabled === false ? ' (disabled)' : ''}
               </option>
             ))}
-            {apiProviders.length === 0 && <option value={llmProvider}>{llmProvider}</option>}
           </select>
         </FormField>
 
@@ -629,9 +652,8 @@ export function VoiceTab() {
               className={`${inputCls} flex-1`}
             >
               <option value="auto">auto</option>
-              {modelMissing && <option value={llmModel}>{llmModel} (current)</option>}
-              {providerModels.map((m) => (
-                <option key={m} value={m}>{m}</option>
+              {modelOptions.map((opt) => (
+                <option key={opt.id} value={opt.id}>{opt.id}{opt.current ? ' (current)' : ''}</option>
               ))}
             </select>
             <button
@@ -658,9 +680,8 @@ export function VoiceTab() {
               className={`${inputCls} flex-1`}
             >
               <option value="auto">auto</option>
-              {visionModelMissing && <option value={llmVisionModel}>{llmVisionModel} (current)</option>}
-              {providerModels.map((m) => (
-                <option key={m} value={m}>{m}</option>
+              {visionModelOptions.map((opt) => (
+                <option key={opt.id} value={opt.id}>{opt.id}{opt.current ? ' (current)' : ''}</option>
               ))}
             </select>
             <button
@@ -789,10 +810,7 @@ export function VoiceTab() {
                 className={inputCls}
               >
                 <option value="">System default</option>
-                {codeProviderMissing && (
-                  <option value={codeProvider}>{codeProvider} (not a coding agent)</option>
-                )}
-                {codeProviders.map((p) => (
+                {codeProviderOptions.map((p) => (
                   <option key={p.id} value={p.id}>
                     {p.name}{p.enabled === false ? ' (disabled)' : ''}
                   </option>
@@ -806,9 +824,8 @@ export function VoiceTab() {
                 className={inputCls}
               >
                 <option value="">System default</option>
-                {codeModelMissing && <option value={codeModel}>{codeModel} (current)</option>}
-                {codeProviderModels.map((m) => (
-                  <option key={m} value={m}>{m}</option>
+                {codeModelOptions.map((opt) => (
+                  <option key={opt.id} value={opt.id}>{opt.id}{opt.current ? ' (current)' : ''}</option>
                 ))}
               </select>
             </FormField>
