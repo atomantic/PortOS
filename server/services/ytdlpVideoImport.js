@@ -109,7 +109,7 @@ export async function downloadVideoToDir({
     url,
   ];
 
-  const exit = await runYtDlp({ ytDlp, args, onProgress, registerProcess });
+  const exit = await runYtDlp({ ytDlp, args, url, onProgress, registerProcess });
 
   if (exit.canceled) {
     await cleanupProducedFiles(filePrefix, outDir);
@@ -126,6 +126,7 @@ export async function downloadVideoToDir({
     // yt-dlp actually printed, which outranks the guess.
     const reason = exit.code === 0
       ? describeYtDlpFailure(exit.code, exit.output, {
+        url,
         fallback: `no video was produced — it may be longer than ${Math.round(maxDurationSec / 60)} minutes or larger than ${Math.round(maxBytes / 1024 / 1024 / 1024)}GB, or (for x.com) login-walled, rate-limited, or otherwise unavailable`,
       })
       : exit.reason; // always populated for a non-zero exit (see runYtDlp)

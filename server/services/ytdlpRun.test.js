@@ -49,33 +49,44 @@ describe('ytdlpMarkerArgs', () => {
   });
 });
 
+const YT_URL = 'https://youtu.be/aaaaaaaaaaa';
+const X_URL = 'https://x.com/someone/status/1234567890';
+const FORBIDDEN = 'ERROR: unable to download video data: HTTP Error 403: Forbidden';
+
 describe('describeYtDlpFailure', () => {
   it('names the stale-binary remedy for the YouTube gating class', () => {
     // A 403 on media URLs is what a yt-dlp that has fallen behind YouTube's
     // player handshake reports for a video the browser plays fine; without the
     // hint the user has a real message and still no next step.
-    const reason = describeYtDlpFailure(1, 'ERROR: unable to download video data: HTTP Error 403: Forbidden');
+    const reason = describeYtDlpFailure(1, FORBIDDEN, { url: YT_URL });
     expect(reason).toContain('HTTP Error 403: Forbidden');
     expect(reason).toMatch(/yt-dlp -U/);
   });
 
   it('leaves an unrelated failure without the upgrade hint', () => {
-    const reason = describeYtDlpFailure(1, 'ERROR: Video unavailable');
+    const reason = describeYtDlpFailure(1, 'ERROR: Video unavailable', { url: YT_URL });
     expect(reason).toBe('yt-dlp failed: ERROR: Video unavailable');
     expect(reason).not.toMatch(/yt-dlp -U/);
   });
 
-  // Two failures that LOOK like the stale-player class and are not. Advising an
-  // upgrade for either sends the user to the one action that cannot help, so the
-  // exclusions are pinned rather than left to the regex's shape.
+  // Failures that LOOK like the stale-player class and are not. Advising an
+  // upgrade for any of them sends the user to the one action that cannot help,
+  // so each exclusion is pinned rather than left to the regex's shape.
   it('does not advise an upgrade for YouTube\'s bot check, whose remedy is cookies', () => {
-    const reason = describeYtDlpFailure(1, 'ERROR: Sign in to confirm you are not a bot');
+    const reason = describeYtDlpFailure(1, 'ERROR: Sign in to confirm you are not a bot', { url: YT_URL });
     expect(reason).not.toMatch(/yt-dlp -U/);
   });
 
-  it('does not advise an upgrade for a non-YouTube 403', () => {
-    const reason = describeYtDlpFailure(1, 'ERROR: unable to download: Forbidden (rate-limited)');
+  // The message alone can't decide this one: x.com returns a plain 403 for a
+  // login-walled or rate-limited post, which no yt-dlp upgrade fixes.
+  it('does not advise an upgrade for the same 403 from a non-YouTube source', () => {
+    const reason = describeYtDlpFailure(1, FORBIDDEN, { url: X_URL });
+    expect(reason).toContain('HTTP Error 403: Forbidden');
     expect(reason).not.toMatch(/yt-dlp -U/);
+  });
+
+  it('withholds the hint when the caller passed no URL at all', () => {
+    expect(describeYtDlpFailure(1, FORBIDDEN)).not.toMatch(/yt-dlp -U/);
   });
 
   it('falls back to the exit code when there is no output', () => {
@@ -93,7 +104,7 @@ describe('describeYtDlpFailure', () => {
     });
 
     it('still names the upgrade remedy when the printed cause is the gating class', () => {
-      const reason = describeYtDlpFailure(0, 'ERROR: HTTP Error 403: Forbidden', { fallback: 'no video was produced' });
+      const reason = describeYtDlpFailure(0, FORBIDDEN, { fallback: 'no video was produced', url: YT_URL });
       expect(reason).toMatch(/yt-dlp -U/);
     });
   });
@@ -173,6 +184,20 @@ describe('runYtDlp — exit classification', () => {
     const result = await runYtDlp(baseArgs);
     expect(result.reason).toContain('HTTP Error 403: Forbidden');
     expect(result.reason).not.toBe('yt-dlp exited 1');
+  });
+
+  // Pins that the URL actually reaches describeYtDlpFailure — without the
+  // forwarding, both of these would report the same reason.
+  it('forwards the source URL, so the hint follows the site and not just the message', async () => {
+    const child = () => fakeChild({ code: 1, script: [['stderr', `${FORBIDDEN}\n`]] });
+
+    spawn.mockReturnValue(child());
+    const youtube = await runYtDlp({ ...baseArgs, url: YT_URL });
+    expect(youtube.reason).toMatch(/yt-dlp -U/);
+
+    spawn.mockReturnValue(child());
+    const x = await runYtDlp({ ...baseArgs, url: X_URL });
+    expect(x.reason).not.toMatch(/yt-dlp -U/);
   });
 
   it('flushes an unterminated final stderr line into the failure reason', async () => {

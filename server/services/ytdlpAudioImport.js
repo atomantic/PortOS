@@ -99,7 +99,7 @@ export async function downloadAudioToTempMp3({
     url,
   ];
 
-  const exit = await runYtDlp({ ytDlp, args, onProgress, registerProcess });
+  const exit = await runYtDlp({ ytDlp, args, url, onProgress, registerProcess });
 
   if (exit.canceled) {
     await cleanupYtDlpTemp(tempPrefix);
@@ -114,6 +114,7 @@ export async function downloadAudioToTempMp3({
     // the prose and appends whatever yt-dlp did print, which outranks the guess.
     const reason = exit.code === 0
       ? describeYtDlpFailure(exit.code, exit.output, {
+        url,
         fallback: `no audio was produced — the source may be longer than ${Math.round(maxDurationSec / 60)} minutes or its audio larger than ${Math.round(maxBytes / 1024 / 1024)}MB, or it may be otherwise unavailable`,
       })
       : exit.reason; // always populated for a non-zero exit (see runYtDlp)

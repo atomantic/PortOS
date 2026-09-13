@@ -22,6 +22,7 @@
 import { spawn } from '../lib/childProcess.js';
 import { safeChildProcessOptions } from '../lib/processEnv.js';
 import { createLineReader, createOutputTail } from '../lib/streamLines.js';
+import { isYoutubeVideoUrl } from '../lib/youtubeUrl.js';
 
 /**
  * The wire protocol between our `--progress-template`/`--print` flags and the
@@ -69,10 +70,16 @@ export const ytdlpMarkerArgs = (postprocessStage) => [
  * message alone, so name the remedy rather than leaving the user to re-try.
  *
  * Every alternative below must be diagnostic of THAT class, or the hint sends
- * the user to the one action that cannot help. Deliberately excluded: a bare
- * `Forbidden` (any site's 403 — the x.com login-wall/rate-limit path returns
- * one, and `HTTP Error 403` already covers the YouTube case) and `Sign in to
- * confirm` (YouTube's bot check, whose remedy is cookies, not an upgrade).
+ * the user to the one action that cannot help. Excluded for that reason: `Sign
+ * in to confirm`, YouTube's bot check, whose remedy is cookies rather than an
+ * upgrade.
+ *
+ * The message alone is NOT enough to decide, though — these importers also pull
+ * from x.com/Twitter (login-walled and rate-limited posts return a plain 403)
+ * and, on the reference-audio path, from any public URL. So the hint is gated on
+ * the SOURCE as well: `describeYtDlpFailure` applies it only when the URL is a
+ * YouTube video. A caller that passes no URL gets no hint — silence beats
+ * pointing the user at an upgrade that cannot help.
  */
 const STALE_YTDLP_SIGNATURE = /HTTP Error 403|PO Token|nsig|Failed to extract any player response/i;
 
@@ -91,13 +98,17 @@ const STALE_YTDLP_HINT = 'the installed yt-dlp is likely out of date for YouTube
  *   a run that exited 0 and still produced nothing: only the caller knows which
  *   of its bounds was tripped. yt-dlp's own words outrank a guess, so they are
  *   appended to it whenever there are any.
+ * @param {string}     [o.url]      The source URL, which decides whether the
+ *   stale-player hint applies at all (see `STALE_YTDLP_SIGNATURE`). Omit it and
+ *   the hint is never added.
  */
-export function describeYtDlpFailure(code, output, { fallback } = {}) {
+export function describeYtDlpFailure(code, output, { fallback, url } = {}) {
   const said = (output || '').trim();
   const base = fallback
     ? [fallback, said].filter(Boolean).join(' — yt-dlp said: ')
     : (said ? `yt-dlp failed: ${said}` : `yt-dlp exited ${code}`);
-  return STALE_YTDLP_SIGNATURE.test(said) ? `${base} — ${STALE_YTDLP_HINT}` : base;
+  const stalePlayer = isYoutubeVideoUrl(url) && STALE_YTDLP_SIGNATURE.test(said);
+  return stalePlayer ? `${base} — ${STALE_YTDLP_HINT}` : base;
 }
 
 /**
@@ -106,6 +117,9 @@ export function describeYtDlpFailure(code, output, { fallback } = {}) {
  * @param {object}   opts
  * @param {string}   opts.ytDlp           yt-dlp binary path.
  * @param {string[]} opts.args            Fully-built argv (marker args included).
+ * @param {string}   [opts.url]          The source URL, forwarded to
+ *   `describeYtDlpFailure` so a YouTube-only remedy is never suggested for a
+ *   failure from another site. Omitting it only costs the hint.
  * @param {function} opts.onProgress      ({ percent, stage }) => void — SSE-agnostic.
  * @param {function} opts.registerProcess (proc|null) => void — lets the caller wire cancel.
  * @returns {Promise<{ canceled:boolean, code:number|null, signal:string|null, reason:string|null, title:string, output:string }>}
@@ -115,7 +129,7 @@ export function describeYtDlpFailure(code, output, { fallback } = {}) {
  *   `describeYtDlpFailure`) — and null on a clean exit. `output` is the raw tail
  *   of non-marker output, for callers that compose their own reason.
  */
-export async function runYtDlp({ ytDlp, args, onProgress, registerProcess }) {
+export async function runYtDlp({ ytDlp, args, url, onProgress, registerProcess }) {
   const proc = spawn(ytDlp, args, safeChildProcessOptions({ stdio: ['ignore', 'pipe', 'pipe'] }));
   registerProcess(proc);
 
@@ -174,7 +188,7 @@ export async function runYtDlp({ ytDlp, args, onProgress, registerProcess }) {
   // Exit 0 keeps `reason: null` — the caller owns the "exited 0 but produced
   // nothing" case, where the bound that was tripped is knowable only to it. A
   // spawn failure has no output to explain it, so its own message stands.
-  const reason = code === 0 ? null : (exit.reason ?? describeYtDlpFailure(code, output));
+  const reason = code === 0 ? null : (exit.reason ?? describeYtDlpFailure(code, output, { url }));
 
   return { canceled: false, code, signal: exit.signal ?? null, reason, title, output };
 }
