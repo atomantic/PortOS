@@ -23,10 +23,22 @@ export const DECK_KIND_LABELS = Object.freeze({
   [DECK_KIND.TAROT]: 'Tarot',
 });
 
-// 2:3 portrait — the aspect every deck kind renders at, and the same frame the
-// universe canon thumbnails already assume, so a card slots into the shared
-// `EntryThumbSlot` without cropping.
+// Fallback portrait size for an unrecognized deck kind (2:3, matching the
+// universe canon thumbnail convention `EntryThumbSlot` was built around).
+// Real decks use `DECK_CARD_SIZE_BY_KIND` below instead.
 export const DECK_CARD_SIZE = Object.freeze({ width: 1024, height: 1536 });
+
+// Per-kind default card size, at each kind's true physical trim ratio rather
+// than the generic 2:3 fallback above — poker cards are 2.5"×3.5" (5:7),
+// tarot cards are 2.75"×4.75" (11:19). Both hold the same 1536 long edge as
+// the generic default so render cost/detail stays comparable; `EntryThumbSlot`
+// renders with `object-cover`, so the modest difference from 2:3 crops fine
+// rather than distorting. A deck's own `cardSize` (persisted per-deck, see
+// `services/decks.js`) always wins — this is only the value new decks mint.
+export const DECK_CARD_SIZE_BY_KIND = Object.freeze({
+  [DECK_KIND.PLAYING]: Object.freeze({ width: 1096, height: 1536 }),
+  [DECK_KIND.TAROT]: Object.freeze({ width: 888, height: 1536 }),
+});
 
 // The one card every deck has that is not a face: the shared back design.
 export const DECK_BACK_KEY = 'back';

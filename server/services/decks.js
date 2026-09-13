@@ -19,7 +19,7 @@ import { ServerError } from '../lib/errorHandler.js';
 import { trimTo } from '../lib/textUtils.js';
 import { sanitizeLlmRoutePin } from '../lib/llmRoutePin.js';
 import { universeVisualStyleTokens } from '../lib/universeVisualStyle.js';
-import { DECK_CARD_SIZE, DEFAULT_LAYOUT_PROMPT, deckCardRoster, deckCompletion } from '../lib/deckTemplates.js';
+import { DECK_CARD_SIZE, DECK_CARD_SIZE_BY_KIND, DEFAULT_LAYOUT_PROMPT, deckCardRoster, deckCompletion } from '../lib/deckTemplates.js';
 import { DECK_CARD_IMAGE_REFS_MAX, DECK_SAMPLES_MAX } from '../lib/deckValidation.js';
 import { recordRenderPin } from '../lib/renderTargets.js';
 
@@ -46,7 +46,7 @@ const projectDeck = (row) => {
     samples: Array.isArray(d.samples) ? d.samples : [],
     imageMode: pin.mode,
     imageModelId: pin.modelId,
-    cardSize: d.cardSize?.width && d.cardSize?.height ? d.cardSize : { ...DECK_CARD_SIZE },
+    cardSize: d.cardSize?.width && d.cardSize?.height ? d.cardSize : { ...(DECK_CARD_SIZE_BY_KIND[row.kind] || DECK_CARD_SIZE) },
     promptLlm: sanitizeLlmRoutePin(d.promptLlm),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
@@ -179,7 +179,7 @@ export async function createDeck({ name, kind, description = '', universeId = nu
     ...seeded,
     layoutPrompt: DEFAULT_LAYOUT_PROMPT[kind],
     samples: [],
-    cardSize: { ...DECK_CARD_SIZE },
+    cardSize: { ...(DECK_CARD_SIZE_BY_KIND[kind] || DECK_CARD_SIZE) },
   };
   const roster = deckCardRoster(kind);
   await withTransaction(async (client) => {
