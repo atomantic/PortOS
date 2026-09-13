@@ -21,7 +21,7 @@
     "test:db:ci": "vitest run --config vitest.config.db.js --bail=1 --reporter=default --reporter=github-actions"
   },
   "dependencies": {
-    "@cantoo/pdf-lib": "2.9.1",
+    "@cantoo/pdf-lib": "2.9.2",
     "@googleapis/calendar": "16.0.0",
     "@googleapis/gmail": "18.0.0",
     "@novnc/novnc": "1.7.0",
