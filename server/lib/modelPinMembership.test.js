@@ -171,6 +171,16 @@ describe('modelPinIsOffered — same model, spelled differently', () => {
     expect(modelPinIsOffered(AGY, 'gemini-3.5-flash-low')).toBe(false);
   });
 
+  it('confines the namespace tolerance to OpenCode providers', () => {
+    // Ungated, `bare()` reduces any slash-bearing pin and matches it against a
+    // bare catalog on ANY vendor, so these would read as offered and the three
+    // spawn-time callers would hand the id to a CLI/API that rejects it. That
+    // was harmless while this rule only fed the retired-pin audit — a missed
+    // warning — and is a real over-permission now that it gates spawns.
+    expect(modelPinIsOffered({ id: 'openai', models: ['gpt-4o'] }, 'custom/gpt-4o')).toBe(false);
+    expect(modelPinIsOffered({ id: 'codex', command: 'codex', models: ['gpt-5'] }, 'openrouter/gpt-5')).toBe(false);
+  });
+
   it('matches an OpenCode `namespace/model` catalog against a bare pin', () => {
     // Pins are stored BARE and namespaced at spawn by `prefixOpencodeModel`.
     // A gateway-backed OpenCode provider is NOT a local daemon, so it reaches
@@ -186,11 +196,14 @@ describe('modelPinIsOffered — same model, spelled differently', () => {
     expect(modelPinIsOffered(gateway, 'claude-opus-4')).toBe(false);
   });
 
-  it('accepts a configured-default sentinel against any catalog', () => {
-    // The sentinel is a posture ("use the CLI's own default"), not a model:
-    // `resolveCliModel` turns it into no `--model` flag at all, so no catalog
-    // can retire it. Rejecting it 400'd a legitimate brain-settings save.
-    expect(modelPinIsOffered({ id: 'codex', models: ['gpt-5'] }, CODEX_CONFIGURED_DEFAULT)).toBe(true);
+  it('does NOT pass a configured-default sentinel through', () => {
+    // A sentinel is a posture, but only a CLI that HAS its own default can be
+    // handed one — so "is this catalog missing it?" is the wrong question here,
+    // and answering it `true` would let an API provider store a sentinel its
+    // endpoint would reject as a model id. The retired-pin audit answers it one
+    // level up (`providerCatalogListsModel`), and the pickers guard it with
+    // `isConfiguredDefaultModel`.
+    expect(modelPinIsOffered({ id: 'codex', models: ['gpt-5'] }, CODEX_CONFIGURED_DEFAULT)).toBe(false);
   });
 
   it('rejects a blank or non-string pin against a real catalog', () => {

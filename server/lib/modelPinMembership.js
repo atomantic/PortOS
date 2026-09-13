@@ -15,7 +15,7 @@
  * The endpoint half stayed behind in `localProviderRuntime.js`.
  */
 
-import { localRuntimeNamespace, isAntigravityProvider, antigravityCatalogListsModel, filterSelectableModels, isConfiguredDefaultModel } from './providerModels.js';
+import { localRuntimeNamespace, isAntigravityProvider, isOpencodeProvider, antigravityCatalogListsModel, filterSelectableModels } from './providerModels.js';
 import { PORTS } from './ports.js';
 import { isLocalInstanceHost, localEndpointPort } from './localEndpoint.js';
 
@@ -90,12 +90,9 @@ const bareOpencodeModel = (value) => value.slice(value.indexOf('/') + 1);
  * Whether a provider may be handed `model` — the ONE rule for validating a
  * stored model pin against a provider record.
  *
- * Three pins pass through unconditionally, for three different reasons:
+ * Two providers are pass-throughs, for opposite reasons:
  *
- *   - a CONFIGURED-DEFAULT SENTINEL is not a model at all, it is "use the CLI's
- *     own default". `resolveCliModel` turns it into no `--model` flag, so every
- *     provider can be handed it whatever its catalog says;
- *   - a provider that enumerates NO models has nothing to validate against, so
+ *   - one that enumerates NO models has nothing to validate against, so
  *     any id is its caller's to choose;
  *   - one backed by a LOCAL daemon has a `models` array that is only a cached
  *     snapshot, while the daemon on this machine is the authority. Every model
@@ -126,7 +123,15 @@ const bareOpencodeModel = (value) => value.slice(value.indexOf('/') + 1);
  *    would have spawned it.
  *  - **OpenCode addresses models as `namespace/model`.** A pin is stored BARE
  *    and namespaced at spawn (`prefixOpencodeModel`), so a catalog holding the
- *    qualified form — or a pin hand-written that way — is the same model.
+ *    qualified form — or a pin hand-written that way — is the same model. Gated
+ *    on the provider being OpenCode: ungated, the reduction would match any
+ *    slash-bearing pin against a bare catalog on ANY vendor.
+ *
+ * A configured-default sentinel is deliberately NOT a pass-through here. It is
+ * a posture rather than a model, but only a CLI that HAS its own default can be
+ * handed one, so the question "is this provider's catalog missing it?" is the
+ * wrong one to ask about it — `providerCatalogListsModel` answers it for the
+ * retired-pin audit, and the pickers guard it with `isConfiguredDefaultModel`.
  *
  * Anything else enumerates its own catalog, and a pin outside it reaches the
  * CLI as a model it cannot serve.
@@ -137,7 +142,6 @@ const bareOpencodeModel = (value) => value.slice(value.indexOf('/') + 1);
  */
 export function modelPinIsOffered(provider, model) {
   const offered = Array.isArray(provider?.models) ? provider.models : [];
-  if (isConfiguredDefaultModel(model)) return true;
   if (offered.length === 0 || localRuntimeKind(provider)) return true;
   if (offered.includes(model)) return true;
   if (typeof model !== 'string' || model.trim() === '') return false;
@@ -148,5 +152,12 @@ export function modelPinIsOffered(provider, model) {
   // base list as "no catalog", which is the same pass-through as above.
   const ids = filterSelectableModels(offered.filter((m) => typeof m === 'string'));
   if (isAntigravityProvider(provider)) return antigravityCatalogListsModel(id, ids);
+  // Gated on the provider actually BEING OpenCode. Ungated, the namespace
+  // reduction matches any slash-bearing pin against a bare catalog on any
+  // vendor — `custom/gpt-4o` would read as offered by an OpenAI record listing
+  // `gpt-4o`, and the three spawn-time callers would hand that id straight to a
+  // CLI/API that rejects it. Harmless while this rule only fed the audit (a
+  // missed warning); a real over-permission now that it gates spawns.
+  if (!isOpencodeProvider(provider)) return false;
   return ids.some((listed) => bareOpencodeModel(listed) === bareOpencodeModel(id));
 }

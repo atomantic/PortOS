@@ -470,7 +470,22 @@ describe('Antigravity base-model split', () => {
       it('never flags an empty catalog or a configured-default sentinel', () => {
         // "We have no catalog" must not read as "the model is gone".
         expect(resolveProviderModelOptions({ id: 'custom', models: [] }, 'anything').unlistedSelection).toBe(false);
-        expect(resolveProviderModelOptions(agy(AGY_CATALOG), ANTIGRAVITY_CONFIGURED_DEFAULT).unlistedSelection).toBe(false);
+        const sentinel = resolveProviderModelOptions(agy(AGY_CATALOG), ANTIGRAVITY_CONFIGURED_DEFAULT);
+        expect(sentinel.unlistedSelection).toBe(false);
+        // ...and it is not appended either: `filterSelectableModels` exists to
+        // keep the sentinel OUT of a task's model picker.
+        expect(sentinel.models).not.toContain(ANTIGRAVITY_CONFIGURED_DEFAULT);
+      });
+
+      it('keeps a working-but-unlisted pin selectable WITHOUT flagging it', () => {
+        // Selectable and flagged answer different questions. A local daemon's
+        // `models` is a cached snapshot, so an installed model missing from it
+        // is neither retired nor renderable — coupling the append to the flag
+        // left the select blank and the pin was lost on the next save.
+        const ollama = { id: 'opencode-ollama', command: 'opencode', ollamaBacked: true, models: ['ollama/qwen3:8b'] };
+        const result = resolveProviderModelOptions(ollama, 'qwen3:32b');
+        expect(result.unlistedSelection).toBe(false);
+        expect(result.models).toContain('qwen3:32b');
       });
 
       it('appends a retired BARE pin that withStaleAntigravityPin deliberately skips', () => {

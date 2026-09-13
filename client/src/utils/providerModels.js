@@ -199,16 +199,16 @@ export const MODEL_SOURCE = Object.freeze({
  * existing task template renders what it actually holds instead of silently
  * changing model — and the picker can say so.
  *
- * The shipped branch asks `modelPinIsOffered` (server/lib/modelPinMembership.js),
+ * The shipped branch's FLAG asks `modelPinIsOffered` (server/lib/modelPinMembership.js),
  * the SAME rule the spawner and the retired-pin audit use, rather than a bare
  * `includes`. That rule is what makes the flag honest here instead of noisy:
- * it passes a configured-default sentinel, an empty catalog, and a
- * local-daemon provider (whose `models` is a cached snapshot while the daemon
- * is the authority) — and it tolerates the two same-model-spelled-differently
- * forms, so a legacy agy `-high` pin whose BASE is still listed reads as
- * offered and only a genuinely retired one is flagged. Until #7327 this branch
- * hardcoded `false`, so the flag only ever fired for a Codex account catalog
- * and every OTHER picker rendered a rotted pin as a perfectly normal option.
+ * it passes an empty catalog and a local-daemon provider (whose `models` is a
+ * cached snapshot while the daemon is the authority), and it tolerates the two
+ * same-model-spelled-differently forms, so a legacy agy `-high` pin whose BASE
+ * is still listed reads as offered and only a genuinely retired one is
+ * flagged. Until #7327 this branch hardcoded `false`, so the flag only ever
+ * fired for a Codex account catalog and every OTHER picker rendered a rotted
+ * pin as a perfectly normal option.
  *
  * The ACCOUNT branch deliberately keeps its own bare membership test: a
  * successfully-read EMPTY account catalog means the account really exposes no
@@ -228,15 +228,20 @@ export const resolveProviderModelOptions = (provider, selectedModel) => {
   );
   const catalog = codexCatalogModelIds(provider);
   if (!catalog) {
-    // `withStaleAntigravityPin` may already have kept the pin selectable; this
-    // appends the cases it deliberately does not cover (a bare retired id on
-    // any provider). Selectable and flagged are complementary — never let one
-    // drop the other.
-    const unlisted = !!selectedModel && !modelPinIsOffered(provider, selectedModel);
+    // SELECTABLE and FLAGGED are decided separately, because they answer
+    // different questions. Anything stored and not already an option has to
+    // become one or the select renders BLANK and reads as "no model" — that
+    // covers a retired pin, and equally a pin the rule ACCEPTS that the list
+    // still lacks (an installed Ollama model absent from the record's cached
+    // snapshot, a bare OpenCode pin against a namespaced catalog). Only the
+    // flag asks whether the pin is dead. Coupling the two would have hidden
+    // every working-but-unlisted pin, which is the failure
+    // `withStaleAntigravityPin` already exists to prevent for one narrow case.
+    const stored = !!selectedModel && !isConfiguredDefaultModel(selectedModel);
     return {
-      models: unlisted && !shipped.includes(selectedModel) ? [...shipped, selectedModel] : shipped,
+      models: stored && !shipped.includes(selectedModel) ? [...shipped, selectedModel] : shipped,
       source: MODEL_SOURCE.shipped,
-      unlistedSelection: unlisted,
+      unlistedSelection: stored && !modelPinIsOffered(provider, selectedModel),
     };
   }
   const models = filterSelectableModels(catalog);
