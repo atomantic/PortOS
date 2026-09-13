@@ -96,20 +96,20 @@ export default function EntryThumbSlot({
     const pendingSize = size === 'xl' ? 'lg' : size === 'lg' ? 'sm' : 'xs';
     return (
       <div className={`${THUMB_DIMENSIONS[size] || THUMB_DIMENSIONS.sm} shrink-0 flex items-center justify-center`}>
-      <MediaJobThumb
-        jobId={inFlightJobId}
-        label={alt}
-        size={pendingSize}
-        onPreview={onPreview}
-        onFilename={onComplete}
-        // A terminal failure/cancel never yields a filename, so `onComplete`
-        // (which clears the in-flight job) would otherwise never fire and the
-        // job stays pinned. Callers that scope render state per entity keep that
-        // state across switches (no remount to reset it), so a failed job would
-        // leave the slot stuck — clear it via the no-filename path so the slot
-        // returns to an actionable state and the entity can be re-rendered.
-        onStatus={onStatus}
-      />
+        <MediaJobThumb
+          jobId={inFlightJobId}
+          label={alt}
+          size={pendingSize}
+          onPreview={onPreview}
+          onFilename={onComplete}
+          // A terminal failure/cancel never yields a filename, so `onComplete`
+          // (which clears the in-flight job) would otherwise never fire and the
+          // job stays pinned. Callers that scope render state per entity keep
+          // that state across switches (no remount to reset it), so a failed job
+          // would leave the slot stuck — clear it via the no-filename path so the
+          // slot returns to an actionable state and the entity can be re-rendered.
+          onStatus={onStatus}
+        />
       </div>
     );
   }
@@ -136,7 +136,7 @@ export default function EntryThumbSlot({
   // completed image, eliminating row jitter across the three states.
   const dim = THUMB_DIMENSIONS[size] || THUMB_DIMENSIONS.sm;
   const iconSize = size === 'xl' ? 32 : size === 'lg' ? 18 : 14;
-  const hint = canRender ? emptyHint : disabledHint;
+  const hint = canRender && onRender ? emptyHint : disabledHint;
   return (
     <button
       type="button"

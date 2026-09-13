@@ -35,6 +35,9 @@ describe('DeckRenderControls', () => {
     // hover on touch and no focus anywhere.
     expect(screen.getByText('All 79 cards have a prompt — rewrite to replace them.')).toBeInTheDocument();
     expect(btn(/^Rewrite all \(79\)$/)).toBeEnabled();
+    // ...and it is programmatically tied to the button, not merely nearby.
+    const note = screen.getByText('All 79 cards have a prompt — rewrite to replace them.');
+    expect(btn(/^Generate prompts$/)).toHaveAttribute('aria-describedby', note.id);
   });
 
   it('says why rendering is unavailable before any prompt exists', () => {
