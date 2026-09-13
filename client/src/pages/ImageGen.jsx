@@ -198,6 +198,11 @@ export default function ImageGen() {
   // AGY_IMAGEGEN_DEFAULT_MODEL — #3231).
   const [agyModel, setAgyModel] = useState('');
   const [savedAgyModel, setSavedAgyModel] = useState('');
+  // The install-wide default local model (Settings → Media → Local). `null`
+  // until settings resolve — distinct from '' ("loaded, no pin"), because the
+  // first-paint model pick below has to wait for the answer rather than race
+  // the catalog fetch and land on whatever happens to be first.
+  const [savedLocalModelId, setSavedLocalModelId] = useState(null);
 
   // i2i (Flux, local mflux only). source='upload' carries `file`; source='gallery'
   // carries `name` (basename from URL param). Coupled lifetime — always replace
@@ -403,12 +408,17 @@ export default function ImageGen() {
       // Shown as the "Settings default (…)" option label on the per-render Agy
       // model select, so the user can see what blank actually resolves to.
       setSavedAgyModel(s?.imageGen?.agy?.model || '');
+      setSavedLocalModelId(s?.imageGen?.local?.modelId || '');
       setSavedCleanC2PAByMode(c2);
       setSavedDenoiseByMode(dn);
       setSelectedMode(next);
       setCleanC2PA(c2[next] === true);
       setDenoise(dn[next] === true);
-    }).catch(() => {});
+    }).catch(() => {
+      // Settings unreachable — settle the pin to "none" so the model seed
+      // below still resolves instead of waiting forever on a failed fetch.
+      setSavedLocalModelId('');
+    });
   }, [refreshRegenAvailability]);
 
   // Switch the active backend AND re-seed the cleaner checkboxes from the
@@ -424,10 +434,7 @@ export default function ImageGen() {
   }, [savedCleanC2PAByMode, savedDenoiseByMode]);
 
   useEffect(() => {
-    listImageModels().then((m) => {
-      setModels(m);
-      if (m.length && !modelId) setModelId(m[0].id);
-    }).catch(() => {});
+    listImageModels().then(setModels).catch(() => {});
     // Use the richer /api/loras surface so the picker can show trigger
     // words + recommended scale + Civitai-derived runnerFamily.
     listLorasFull().then(setAvailableLoras).catch(() => {});
@@ -469,6 +476,17 @@ export default function ImageGen() {
     }).catch(() => {});
     return () => eventSourceRef.current?.close();
   }, []);
+
+  // Seed the model picker from the install-wide default (Settings → Media →
+  // Local), falling back to the first catalog entry when nothing is pinned or
+  // the pin no longer resolves. Runs once BOTH async answers are in — seeding
+  // from whichever resolved first is what made the page ignore the pin. A form
+  // already carrying a model (deep link, restored active job, a user pick) is
+  // never overwritten.
+  useEffect(() => {
+    if (modelId || savedLocalModelId === null || !models.length) return;
+    setModelId(models.some((m) => m.id === savedLocalModelId) ? savedLocalModelId : models[0].id);
+  }, [models, savedLocalModelId, modelId]);
 
   // Re-probe status whenever the effective backend changes — flipping the
   // chip from Local to Codex shouldn't leave the badge / notConnected

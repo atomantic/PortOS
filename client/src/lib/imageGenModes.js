@@ -50,6 +50,7 @@ import {
   CODEX_IMAGEGEN_DEFAULT_MODEL,
   GROK_ASPECT_RATIOS,
   I2I_CAPABLE_MODES,
+  LOCAL_IMAGEGEN_DEFAULT_MODEL,
   MODEL_OVERRIDE_CAPABLE_MODES,
   cloudPromptRequired,
   maxInputImages,
@@ -75,6 +76,10 @@ export {
   // pickers filter through and what `pickI2iMode` walks.
   I2I_CAPABLE_MODES,
   IMAGE_GEN_MODE,
+  // The local model a blank `imageGen.local.modelId` resolves to, so the
+  // Settings Local tab can name the install default instead of showing a blank
+  // select whose meaning the user has to guess.
+  LOCAL_IMAGEGEN_DEFAULT_MODEL,
   // Cloud CLIs that accept a per-render model override. Use
   // `supportsCloudModelOverride` at branch sites rather than a hand-rolled
   // `mode === CODEX || mode === AGY` disjunction.
