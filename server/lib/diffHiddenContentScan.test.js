@@ -143,6 +143,71 @@ describe('scanDiffForHiddenContent', () => {
     expect(scanDiffForHiddenContent('')).toEqual([]);
     expect(scanDiffForHiddenContent(null)).toEqual([]);
   });
+
+  it('flags invisible Unicode in a filename, which the added-line walk never sees', () => {
+    const path = `docs/read${ZERO_WIDTH_SPACE}me.md`;
+    expect(scanDiffForHiddenContent(diffOf(path, ['+# intro'])).map((finding) => finding.category))
+      .toEqual(['hidden-unicode']);
+  });
+
+  it('flags a new symlink that leaves the repository and leaves an in-repo one alone', () => {
+    const symlinkDiff = (path, target) => [
+      `diff --git a/${path} b/${path}`,
+      `new file mode 120000`,
+      `--- /dev/null`,
+      `+++ b/${path}`,
+      `@@ -0,0 +1 @@`,
+      `+${target}`,
+    ].join('\n');
+    expect(scanDiffForHiddenContent(symlinkDiff('config.json', '/etc/passwd')).map((f) => f.category))
+      .toEqual(['symlink-added']);
+    expect(scanDiffForHiddenContent(symlinkDiff('secrets', '../../.env')).map((f) => f.category))
+      .toEqual(['symlink-added']);
+    expect(scanDiffForHiddenContent(symlinkDiff(
+      '.claude/commands/do/pr.md',
+      '../../../lib/slashdo/commands/pr.md',
+    ))).toEqual([]);
+  });
+
+  it('flags a new git submodule and leaves an existing gitlink SHA bump alone', () => {
+    const added = [
+      'diff --git a/vendor/evil b/vendor/evil',
+      'new file mode 160000',
+      '--- /dev/null',
+      '+++ b/vendor/evil',
+      '@@ -0,0 +1 @@',
+      '+Subproject commit abcdefabcdefabcdefabcdefabcdefabcdefabcd',
+    ].join('\n');
+    expect(scanDiffForHiddenContent(added).map((f) => f.category)).toEqual(['gitlink-added']);
+    const bumped = [
+      'diff --git a/lib/slashdo b/lib/slashdo',
+      'index abcdefa..1234567 160000',
+      '--- a/lib/slashdo',
+      '+++ b/lib/slashdo',
+      '@@ -1 +1 @@',
+      '-Subproject commit abcdefabcdefabcdefabcdefabcdefabcdefabcd',
+      '+Subproject commit 1234567123456712345671234567123456712345',
+    ].join('\n');
+    expect(scanDiffForHiddenContent(bumped)).toEqual([]);
+  });
+
+  it('flags a non-media binary patch and leaves an image addition alone', () => {
+    const binary = (path) => [
+      `diff --git a/${path} b/${path}`,
+      'new file mode 100644',
+      `Binary files /dev/null and b/${path} differ`,
+    ].join('\n');
+    expect(scanDiffForHiddenContent(binary('server/hooks/spawn-helper')).map((f) => f.category))
+      .toEqual(['opaque-binary']);
+    expect(scanDiffForHiddenContent(binary('docs/screenshot.png'))).toEqual([]);
+  });
+
+  it('flags an inline script added to SVG markup', () => {
+    const findings = scanDiffForHiddenContent(diffOf('docs/icon.svg', [
+      '+<svg><script>fetch("https://example.test")</script></svg>',
+    ]));
+    expect(findings.map((f) => f.category)).toEqual(['inline-script']);
+  });
 });
 
 describe('formatHiddenContentFindings', () => {

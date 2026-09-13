@@ -47,13 +47,17 @@ plans anything, and every other job needs `impact` — so a finding stops the
 whole run, before a reviewer (human, `/do:pr` reviewer, or PR bot) ever reads
 the diff. It is plain pattern matching over the diff's **added** lines, costs
 no provider call, and cannot be argued out of a verdict by the content it is
-reading. Three shapes fail the run:
+reading. These shapes fail the run:
 
-- **Invisible or direction-control Unicode** — zero-width characters, bidi
-  overrides (Trojan Source), the Unicode tag block (ASCII smuggling), and both
-  variation-selector blocks (U+FE00–U+FE0F, U+E0100–U+E01EF), which encode a
-  byte apiece in the selector-smuggling attack. Text the rendered PR shows
-  nobody while every model reading the diff sees it.
+- **Invisible or direction-control Unicode** — C0/C1 controls (NUL, ESC/ANSI,
+  a lone CR that is not part of CRLF), soft hyphen, combining grapheme joiner,
+  zero-width characters, bidi overrides (Trojan Source), the Unicode tag block
+  (ASCII smuggling), and both variation-selector blocks (U+FE00–U+FE0F,
+  U+E0100–U+E01EF), which encode a byte apiece in the selector-smuggling
+  attack. Text the rendered PR shows nobody while every model reading the diff
+  sees it. The same code points in a **filename** fail too — `git diff` is
+  collected with `core.quotepath=false` so they arrive as those characters
+  rather than octal escapes.
 - **A dense cluster of the invisible characters the rules exempt** — an emoji
   presentation selector or a joiner inside an emoji sequence is ordinary text;
   six of them inside 200 characters is a channel. This is the backstop that
@@ -62,6 +66,15 @@ reading. Three shapes fail the run:
   decodes to a gzip/zip/xz/zstd member or a native executable, or a 200+
   character opaque run. The bytes a reviewer approves are not the bytes that
   run.
+- **A new symlink that leaves the repository** (absolute, `://`, above the
+  tree root, or a secret path like `.env`) or a **new git submodule** — the
+  review is of a path or a SHA, not of the bytes that would be read. Relative
+  in-repo links (the slashdo command wrappers) stay clear; bumping an existing
+  submodule SHA is not a new gitlink.
+- **A non-media binary patch** — `Binary files differ` / `GIT binary patch`
+  for anything that is not a common image, font, or audio/video file. The
+  bytes never appear in the diff.
+- **An inline script or `javascript:` URL** added to SVG/HTML/XML markup.
 
 A leading byte-order mark is allowed (several Windows shells require one),
 lockfiles skip the encoded-payload rule but never the Unicode ones, and a

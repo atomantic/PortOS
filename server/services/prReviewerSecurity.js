@@ -27,6 +27,10 @@ import {
 } from '../lib/modelAbuseGuard.js';
 import { screenUntrustedContent } from './untrustedContent.js';
 import { safeJSONParse } from '../lib/fileUtils.js';
+import {
+  scanDiffForHiddenContent,
+  STRUCTURAL_HIDDEN_CONTENT_CATEGORIES,
+} from '../lib/diffHiddenContentScan.js';
 
 export const SECURITY_SCAN_MAX_OPEN_PRS = 200;
 export const SECURITY_SCAN_MAX_DIFF_CHARS = MODEL_ABUSE_GUARD_MAX_INPUT_CHARS;
@@ -186,7 +190,7 @@ export async function listExternalOpenPullRequests(app) {
     'pr', 'list', '--repo', repoSpec,
     '--base', defaultBranch, '--state', 'open',
     '--limit', String(SECURITY_SCAN_MAX_OPEN_PRS),
-    '--json', 'number,author,url,headRefOid,updatedAt,title,body',
+    '--json', 'number,author,url,headRefOid,updatedAt,title,body,commits',
   ]).catch(() => null);
   if (raw === null) return failure('security-scan-pr-list-failed');
 
@@ -202,6 +206,7 @@ export async function listExternalOpenPullRequests(app) {
     url: typeof pr?.url === 'string' ? pr.url : '',
     title: typeof pr?.title === 'string' ? pr.title : null,
     body: typeof pr?.body === 'string' ? pr.body : '',
+    commits: Array.isArray(pr?.commits) ? pr.commits : [],
   }));
   if (listedPrs.some((pr) => (
     !Number.isInteger(pr.number)
@@ -256,14 +261,47 @@ const formatSecurityFindings = (findings) => findings.map((finding) => (
   `${finding.severity} — ${finding.location}: ${finding.reason}`
 )).join('\n');
 
-const contentFor = (pr, diff) => [
-  'Pull request title:',
-  pr.title,
-  'Pull request description:',
-  pr.body,
-  'Complete unified diff:',
-  diff,
-].join('\n\n');
+const MAX_COMMIT_LOG_CHARS = 100_000;
+const STRUCTURAL_CATEGORY_SET = new Set(STRUCTURAL_HIDDEN_CONTENT_CATEGORIES);
+
+function formatCommitLog(commits) {
+  if (!Array.isArray(commits) || commits.length === 0) return '';
+  const log = commits.map((commit) => {
+    const headline = typeof commit?.messageHeadline === 'string' ? commit.messageHeadline : '';
+    const body = typeof commit?.messageBody === 'string' ? commit.messageBody : '';
+    return [headline, body].filter(Boolean).join('\n');
+  }).filter(Boolean).join('\n\n');
+  return log.length > MAX_COMMIT_LOG_CHARS ? log.slice(0, MAX_COMMIT_LOG_CHARS) : log;
+}
+
+const contentFor = (pr, diff) => {
+  const commitLog = formatCommitLog(pr.commits);
+  return [
+    'Pull request title:',
+    pr.title,
+    'Pull request description:',
+    pr.body,
+    ...(commitLog ? ['Commit messages:', commitLog] : []),
+    'Complete unified diff:',
+    diff,
+  ].join('\n\n');
+};
+
+const structuralFindingsFrom = (diff) => scanDiffForHiddenContent(diff)
+  .filter((finding) => STRUCTURAL_CATEGORY_SET.has(finding.category));
+
+const structuralVerdict = (findings) => ({
+  ok: true,
+  safe: false,
+  findings: findings.map((finding) => ({
+    severity: 'blocking',
+    category: finding.category,
+    location: 'external-content',
+    reason: `${finding.path}:${finding.line} — ${finding.detail}`,
+  })),
+  model: 'Deterministic hidden-content checks (structural diff gate)',
+  layers: { deterministic: 'blocked', classifier: 'not-run', verdict: 'validated' },
+});
 
 const contentFingerprintFor = (pr, diff) => modelAbuseContentFingerprint(
   'pull-request',
@@ -337,7 +375,15 @@ export async function runPrReviewerSecurityScan({ app, target = null, largeInput
     if (content.length > SECURITY_SCAN_MAX_DIFF_CHARS) {
       return failure('security-scan-input-too-large', { reviewedPrs, scanKey });
     }
-    const screened = await screenUntrustedContent({ content, source: 'github-pr' });
+    // Structural findings (symlink out of the tree, new gitlink, non-media
+    // binary, inline script in markup) are not visible as text a model-abuse
+    // classifier can score, so they short-circuit before the classifier run.
+    // Title/body/commit injection still goes through the full screen when the
+    // diff itself is structurally clean.
+    const structural = structuralFindingsFrom(diff);
+    const screened = structural.length
+      ? { screening: structuralVerdict(structural) }
+      : await screenUntrustedContent({ content, source: 'github-pr' });
     const verdict = screened.screening || screened;
     if (!verdict.ok) return failure(verdict.code || 'security-scan-verdict-unavailable', { reviewedPrs, scanKey });
     guardModel = verdict.model || guardModel;
