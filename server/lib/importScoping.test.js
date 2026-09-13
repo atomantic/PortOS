@@ -547,7 +547,19 @@ describe('deferred imports stay deferred (#6156)', () => {
 // the sweep, lib/agentSentinel.js and the fileUtils chain those two already
 // share with the rest of the suite. No new edge into a heavy subtree — a new
 // test file simply costs its own closure once.
-const MAX_STATIC_INSTANTIATIONS = 104480;
+// #7326 extends the audit to the per-record `imageModelId` pins: +7 on top of
+// that (104,487), raised by exactly the delta the way #7327 did. All 7 is the two new
+// suites' OWN closures — modelPinRecords.test.js and modelPinRecords.db.test.js
+// each reach `services/modelPinRecords.js` plus its three light leaves (db.js,
+// renderTargets.js, runtimeEnv.js). Neither statically imports a record service:
+// the DB suite seeds and reads with raw SQL and lets `clearRecordPin` pull
+// decks.js the way production does, which is worth ~41 on its own. The production
+// change adds NO import to any module — the collector sits behind the same
+// memoized call-site `await import()` as the audit's other three stores, and the
+// mode -> provider map stays in modelPinAudit.js rather than moving to a shared
+// leaf, which would have cost ~54 (one more file in the static closure of every
+// suite reaching routes/providers.js).
+const MAX_STATIC_INSTANTIATIONS = 104487;
 
 
 const SKIP_DIRS = new Set(['node_modules', 'coverage', 'dist', 'data']);
