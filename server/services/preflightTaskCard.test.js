@@ -41,6 +41,27 @@ describe('preflightTaskCard', () => {
     expect(task.metadata.preflight.steps[0]).toMatchObject({ key: 'queued', status: 'active' });
   });
 
+  it('mints an id the task FILE round-trips, or every later write to the card misses in silence', async () => {
+    // Every later report and close re-derives `preflightCardId(requestId)` rather
+    // than keeping a handle from addTask, so that id has to survive a COS-TASKS.md
+    // round trip byte for byte. `preflight-` was unregistered, so the card
+    // persisted as `task-preflight-demand-1`: every `getTaskById` after it
+    // returned null and every best-effort write wrote NOTHING, leaving the card
+    // on "Waiting for a free task slot" for a whole pr-reviewer run.
+    //
+    // The rest of this suite mocks the store, which is exactly why that was
+    // invisible here; this test runs the real markdown boundary.
+    const { generateTasksMarkdown, parseTasksMarkdown, isInternalTaskId } = await import('../lib/taskParser.js');
+    await startPreflightCard({ requestId: 'demand-1', taskType: 'pr-reviewer', appId: 'portos', appName: 'PortOS', targetPullRequest: 42 });
+    const [card] = addTask.mock.calls[0];
+    const [reparsed] = parseTasksMarkdown(generateTasksMarkdown([card], true));
+    expect(reparsed.id).toBe(preflightCardId('demand-1'));
+    // And it has to parse as INTERNAL, or the sweep that closes a stranded card
+    // infers 'user' from the id and looks for it in the wrong task file.
+    expect(isInternalTaskId(reparsed.id)).toBe(true);
+    expect(isPreflightCard(reparsed)).toBe(true);
+  });
+
   it('writes nothing when there is no card — an automated run carries no reporter branch', async () => {
     getTaskById.mockResolvedValue(null);
     await reportPreflightStep('preflight-missing', 'security-scan');

@@ -28,8 +28,15 @@
  * - [ ] #sys-002 | MEDIUM | APPROVAL | Needs user approval
  */
 
-// Canonical prefix lists — add new prefixes here, not in scattered startsWith checks
-const INTERNAL_PREFIXES = ['sys-', 'app-improve-', 'cd-'];
+// Canonical prefix lists — add new prefixes here, not in scattered startsWith checks.
+//
+// REGISTERING A PREFIX IS MANDATORY, not cosmetic. An id whose prefix is absent
+// here is rewritten to `task-<id>` the next time the row is read, so a producer
+// that re-derives its own id can never address its record again — and because
+// those reads and writes are deliberately best-effort, they miss SILENTLY. That
+// is how a preflight card (`preflight-`) sat at "Waiting for a free task slot"
+// through an entire pr-reviewer run, then got reaped as interrupted.
+const INTERNAL_PREFIXES = ['sys-', 'app-improve-', 'cd-', 'preflight-'];
 const ALL_KNOWN_PREFIXES = ['task-', ...INTERNAL_PREFIXES];
 
 export const hasKnownPrefix = (id) => ALL_KNOWN_PREFIXES.some(p => id?.startsWith(p));
