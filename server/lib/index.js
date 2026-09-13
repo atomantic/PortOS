@@ -428,6 +428,7 @@ export * from './huggingfaceModel.js';
 export * from './localLlmCatalog.js';
 export * from './localPersistentMindRecommendation.js';
 export * from './modelAbuseGuard.js';
+export * from './diffHiddenContentScan.js';
 export * from './localLlmDisk.js';
 export * from './specDecodePresets.js';
 export * from './llamaCppInstall.js';
