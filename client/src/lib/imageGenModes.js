@@ -126,6 +126,7 @@ export const RENDER_TARGET_OPTIONS = Object.freeze([
   { id: RENDER_TARGET.MUSIC_VIDEO, label: 'Music Video scene frames & clips', video: true },
   { id: RENDER_TARGET.LORA_DATASET, label: 'LoRA training datasets' },
   { id: RENDER_TARGET.CREATIVE_AGENT, label: 'Creative agent renders', video: true },
+  { id: RENDER_TARGET.DECK, label: 'Deck card renders (playing cards & tarot)' },
 ]);
 
 // True when a video backend renders in a provider's cloud rather than on the

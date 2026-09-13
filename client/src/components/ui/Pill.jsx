@@ -32,6 +32,7 @@ const TONES = {
   note: 'text-gray-500 bg-port-bg border-port-border italic',
   context: 'text-gray-500 border-port-border uppercase tracking-wide',
   success: 'text-port-success bg-port-success/10 border-port-success/20',
+  error: 'text-port-error bg-port-error/10 border-port-error/20',
   warning: 'text-port-warning bg-port-warning/10 border-port-warning/20',
   bare: '',
 };

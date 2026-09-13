@@ -44,6 +44,12 @@
  *   - `onAttached(ctx, result)` — emit the domain event + success log. Only
  *                      called when `attach` resolved to a non-null result that
  *                      was not dropped by the guard.
+ *   - `onTerminal(ctx, status, job)` — OPTIONAL; when present the hook also
+ *                      subscribes to `failed` / `canceled` and calls it for
+ *                      every tagged job that ended without a result, decoded
+ *                      through the same `identify` (no `extractResult`, since
+ *                      there is nothing to extract). Async; a rejection is
+ *                      logged, never thrown.
  *
  * The canceled→client-spinner bridge that #1791 also adds is intentionally NOT
  * here: every client spinner correlates by media-job id (`generationId`), not by
@@ -72,6 +78,7 @@ export function createMediaJobImageHook(config) {
     sceneKey = null,
     attach,
     onAttached,
+    onTerminal = null,
     // Optional: ctx → a short per-record routing string appended to the failure
     // log (e.g. `workId/sceneId`), so a "render didn't attach" line is traceable
     // to a specific record the way each hand-written hook's log used to be.
@@ -95,23 +102,31 @@ export function createMediaJobImageHook(config) {
   const guard = createNewestWinsGuard();
 
   let completedHandler = null;
+  let terminalHandlers = null;
+
+  // The tag → identity half of `decode`, shared with the terminal path (a
+  // failed job carries no result to extract).
+  function identity(job) {
+    if (!job || job.kind !== kind) return null;
+    const tag = job.params?.[tagKey];
+    if (!tag) return null;
+    const id = identify(tag, job);
+    return id ? { ...id, job, tag } : null;
+  }
 
   // Decode the job into the hook's identity context, or null to ignore it, so
   // the kind/tag/result guards live in one place (the result fields are pulled
   // by the configurable `extractResult`).
   function decode(job) {
-    if (!job || job.kind !== kind) return null;
-    const tag = job.params?.[tagKey];
-    if (!tag) return null;
-    const identity = identify(tag, job);
-    if (!identity) return null;
+    const ctx = identity(job);
+    if (!ctx) return null;
     const fields = extractResult(job);
     if (!fields) return null;
     // Normalize queuedAt once here so the guard below AND any consumer's attach
     // (e.g. catalog's portrait guard) read the same `ctx.queuedAt` instead of
     // re-deriving it.
     const queuedAt = typeof job.queuedAt === 'string' ? job.queuedAt : null;
-    return { ...identity, job, tag, ...fields, queuedAt };
+    return { ...ctx, ...fields, queuedAt };
   }
 
   function init() {
@@ -154,6 +169,19 @@ export function createMediaJobImageHook(config) {
     };
 
     mediaJobEvents.on('completed', completedHandler);
+    if (onTerminal) {
+      const forStatus = (status) => (job) => {
+        const ctx = identity(job);
+        if (!ctx) return;
+        // Outside the request lifecycle: a rejection here has no error middleware.
+        Promise.resolve()
+          .then(() => onTerminal(ctx, status, job))
+          .catch((err) => console.log(`⚠️ ${label} ${status} bookkeeping failed${describe ? ` → ${describe(ctx)}` : ''}: ${err?.message || err}`));
+      };
+      terminalHandlers = { failed: forStatus('failed'), canceled: forStatus('canceled') };
+      mediaJobEvents.on('failed', terminalHandlers.failed);
+      mediaJobEvents.on('canceled', terminalHandlers.canceled);
+    }
     console.log(initLog);
   }
 
@@ -164,6 +192,11 @@ export function createMediaJobImageHook(config) {
       if (completedHandler) {
         mediaJobEvents.off('completed', completedHandler);
         completedHandler = null;
+      }
+      if (terminalHandlers) {
+        mediaJobEvents.off('failed', terminalHandlers.failed);
+        mediaJobEvents.off('canceled', terminalHandlers.canceled);
+        terminalHandlers = null;
       }
       serialize.clear();
       guard.clear();

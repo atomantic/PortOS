@@ -23,7 +23,9 @@ import {
  * @param {object}      [opts]
  * @param {object|null} [opts.record] - Record whose `imageMode`/`imageModelId` pin wins.
  * @param {string|null} [opts.target] - RENDER_TARGET id whose `renderDefaults` pin is next.
- * @returns {{ imageCfg: object }}
+ * @returns {{ imageCfg: object, backends: Array<{id:string,label:string}> }} —
+ *   `backends` is the enabled, non-external list the pin ladder was gated on
+ *   (empty until settings land), for callers that also render a backend picker.
  */
 export default function useImageRenderSettings({ record = null, target = null } = {}) {
   // `null` = not fetched yet (or the fetch failed), which is NOT the same as a
@@ -43,13 +45,15 @@ export default function useImageRenderSettings({ record = null, target = null } 
   // a freshly-fetched draft object on every save, and re-deriving an identical
   // cfg would churn the render opts for every consumer downstream.
   return useMemo(() => {
-    if (!settings) return { imageCfg: PIPELINE_IMAGE_DEFAULTS };
+    if (!settings) return { imageCfg: PIPELINE_IMAGE_DEFAULTS, backends: [] };
+    const backends = deriveAvailableBackends(settings, { excludeExternal: true });
     return {
       imageCfg: applyRecordRenderPin(
         readPipelineImageSettings(settings),
         [record, renderTargetPin(settings, target)],
-        deriveAvailableBackends(settings, { excludeExternal: true }),
+        backends,
       ),
+      backends,
     };
   }, [settings, target, record?.imageMode, record?.imageModelId]);
 }

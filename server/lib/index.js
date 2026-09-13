@@ -628,3 +628,5 @@ export * from './voiceEngines.js';
 export * from './auditQuality.js';
 
 export * from './mindToolRecipes.js';
+export * from './deckTemplates.js';
+export * from './deckValidation.js';

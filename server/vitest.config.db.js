@@ -43,6 +43,7 @@ export const DB_TEST_INCLUDE = [
   'services/musicVideo/projectsDB.test.js',
   'routes/catalog.test.js',
   'routes/mindToolRecipes.db.test.js',
+  'routes/decks.db.test.js',
   'scripts/run-db-migrations.test.js',
 ];
 

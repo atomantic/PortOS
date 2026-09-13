@@ -2070,3 +2070,25 @@ CREATE TABLE IF NOT EXISTS mind_tool_recipe_versions (
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     PRIMARY KEY (recipe_id, revision)
   );
+
+-- Decks: playing-card / tarot design projects. Cards are per-row so a render
+-- attaches to one card; image bytes stay in data/images and are referenced by name.
+CREATE TABLE IF NOT EXISTS decks (
+    id UUID PRIMARY KEY,
+    name TEXT NOT NULL,
+    kind TEXT NOT NULL CHECK (kind IN ('playing', 'tarot')),
+    universe_id TEXT,
+    definition JSONB NOT NULL DEFAULT '{}'::jsonb,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  );
+CREATE TABLE IF NOT EXISTS deck_cards (
+    id UUID PRIMARY KEY,
+    deck_id UUID NOT NULL REFERENCES decks (id) ON DELETE CASCADE,
+    position INTEGER NOT NULL,
+    key TEXT NOT NULL,
+    definition JSONB NOT NULL DEFAULT '{}'::jsonb,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE (deck_id, key)
+  );
+CREATE INDEX IF NOT EXISTS idx_deck_cards_deck ON deck_cards (deck_id, position);
