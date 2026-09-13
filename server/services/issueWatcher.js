@@ -1272,7 +1272,8 @@ async function verifyScreenedPullRequest(ctx, raw, expectedPullRequests) {
   // exact content screened before cognition, not merely the same revision,
   // before any review, rebase, or merge action.
   if (!target.contentFingerprint || screenedPullRequestFingerprint(pr, diff) !== target.contentFingerprint) {
-    return { number, reason: 'its content no longer matches what the security scan screened', notify: true };
+    // `pr` rides along so the notification can still link to it.
+    return { number, pr, reason: 'its content no longer matches what the security scan screened', notify: true };
   }
   return { ok: true, decision, target, pr, diff };
 }
@@ -1353,7 +1354,7 @@ export async function processTaskOutput({ appId, success, payload, task, require
     if (!verified.ok) {
       drops.record(verified.number, verified.reason);
       if (verified.notify) {
-        await notifyPendingApproval(app, { number: verified.number, url: null },
+        await notifyPendingApproval(app, { number: verified.number, url: verified.pr?.url || null },
           'The review finished, but the PR content no longer matches what the security scan screened, so PortOS took no action on it.');
       }
       continue;
