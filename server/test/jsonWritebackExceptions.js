@@ -66,7 +66,7 @@ export const JSON_WRITEBACK_EXCEPTIONS = [
     "reason": "No write-back cycle: transport manifests are input-only; exports build new manifests from authoritative records."
   },
   {
-    "key": "sprites/reference.js :: join ( candidatesDir , `  ${ name . replace ( /\\.png$/ , \"\" ) } .generation.json ` )",
+    "key": "sprites/reference.js :: join ( candidatesDir , `${ name . replace ( /\\.png$/ , \"\" ) }.generation.json` )",
     "reason": "No same-record write-back cycle: listing reads generation sidecars, generation writes new candidate names; approval reads provenance strictly."
   },
   {
