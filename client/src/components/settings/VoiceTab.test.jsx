@@ -147,4 +147,17 @@ describe('VoiceTab TTS engine registry', () => {
     expect(await screen.findByRole('combobox', { name: 'TTS engine' })).toHaveValue('qwen3-tts');
     expect(screen.getByRole('combobox', { name: 'Voice' }).disabled).toBe(false);
   });
+
+  it('keeps a linked voice the fetched catalog no longer has selectable', async () => {
+    voiceApi.getVoiceConfig.mockResolvedValue({
+      ...structuredClone(config),
+      tts: { ...structuredClone(config.tts), qwen3: { voice: 'retired-voice' } },
+    });
+
+    render(<MemoryRouter><VoiceTab /></MemoryRouter>);
+
+    const voiceSelect = await screen.findByRole('combobox', { name: 'Voice' });
+    expect(voiceSelect).toHaveValue('retired-voice');
+    expect(screen.getByRole('option', { name: 'retired-voice (current)' })).toBeTruthy();
+  });
 });

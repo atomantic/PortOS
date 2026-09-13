@@ -179,6 +179,7 @@ grep -i "what you want to do" client/src/lib/README.md
 | `uuid.js` | `uuidv4()` — spec-valid v4 uuid that also works on **insecure origins**. Reach for this instead of `crypto.randomUUID()`, which only exists in a secure context (HTTPS / localhost) and throws `crypto.randomUUID is not a function` for the many users who reach PortOS over plain HTTP via Tailscale. Falls back to `crypto.getRandomValues` (available on insecure origins), then `Math.random`. |
 | `webglSupport.js` | `isWebGLAvailable()` — memoized probe for a creatable WebGL/WebGL2 context. CoS 3D avatars (and similar r3f mounts) call this before `<Canvas>` so headless Chrome / no-GPU displays degrade to a hint instead of unhandled `WebGLRenderer` rejections. |
 | `voiceLabel.js` | `formatVoiceLabel(v, engine?)` — display label for a TTS voice record. Engine-specific formatters plug into a lookup table; new engines extend that map. |
+| `withUnlistedOption.js` | `withUnlistedOption(list, value, makeOption, {key = 'id'})` — keeps a stored-but-no-longer-listed pin (a retired model, a deleted persona, a stale voice/album link) selectable in a `<select>` instead of the value silently painting blank and a save dropping it: returns `list` unchanged when `value` is blank or already present under `key`, else prepends `makeOption(value)`. `key` overrides the matched field for a list keyed by something other than `id` (e.g. `'name'` for a voice list). |
 
 ## Page-scoped pure helpers
 

@@ -11,6 +11,7 @@ import { playWav, webSpeechSupported } from '../../services/voiceClient';
 import { nanoAvailability } from '../../services/browserLlm';
 import { readVoiceHidden, writeVoiceHidden } from '../../services/voiceVisibility';
 import { formatVoiceLabel } from '../../lib/voiceLabel';
+import { withUnlistedOption } from '../../lib/withUnlistedOption';
 import FormField from '../ui/FormField';
 import { useInstanceFeatures } from '../../hooks/useInstanceFeatures';
 
@@ -289,6 +290,20 @@ export function VoiceTab() {
     .find((key) => cfg.tts[key] && typeof cfg.tts[key] === 'object');
   const activeVoice = cfg.tts[engineConfigKey || fallbackConfigKey]?.voice;
   const selectedEngineMetadataMissing = Boolean(engineMeta && !engineConfigKey);
+  // A configured engine/voice the live registry no longer lists (retired
+  // engine, deleted voice) must still render as its own option — otherwise
+  // the select paints blank and a save would silently switch away from it.
+  const ttsEngineOptions = withUnlistedOption(ttsEngines, engine, (id) => ({ id, label: `${id} (current)` }));
+  // Voices are keyed by `name`, not `id`. `unlisted` flags the synthetic
+  // entry so the render below can show the same "(current)" text the old
+  // hand-rolled option used, instead of running a bare `{ name }` stand-in
+  // through formatVoiceLabel's engine-specific formatters.
+  const voiceOptions = withUnlistedOption(
+    voices,
+    activeVoice,
+    (name) => ({ name, unlisted: true }),
+    { key: 'name' },
+  );
 
   // LLM provider/model pickers. The saved provider/model are always shown even
   // when missing from the registry (e.g. provider deleted, or a model not in
@@ -463,10 +478,7 @@ export function VoiceTab() {
             onChange={(e) => patch('tts.engine', e.target.value)}
             className={inputCls}
           >
-            {!ttsEngines.some((item) => item.id === engine) && (
-              <option value={engine}>{engine} (current)</option>
-            )}
-            {ttsEngines.map((opt) => (
+            {ttsEngineOptions.map((opt) => (
               <option key={opt.id} value={opt.id}>
                 {opt.label || opt.id}{opt.description ? ` (${opt.description})` : ''}
               </option>
@@ -504,11 +516,8 @@ export function VoiceTab() {
               }}
               className={`${inputCls} flex-1`}
             >
-              {activeVoice && !voices.some((v) => v.name === activeVoice) && (
-                <option value={activeVoice}>{activeVoice} (current)</option>
-              )}
-              {voices.map((v) => (
-                <option key={v.name} value={v.name}>{formatVoiceLabel(v, engine)}</option>
+              {voiceOptions.map((v) => (
+                <option key={v.name} value={v.name}>{v.unlisted ? `${v.name} (current)` : formatVoiceLabel(v, engine)}</option>
               ))}
             </select>
             <button

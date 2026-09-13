@@ -213,6 +213,7 @@ export * from './universeBuilderExpand.js';
 export * from './videoTimelineModel.js';
 export * from './uuid.js';
 export * from './webglSupport.js';
+export * from './withUnlistedOption.js';
 export * from './wrSceneCursor.js';
 export * from './writingGuide.js';
 export * from './qrCode.js';

@@ -22,6 +22,7 @@ import ConfirmButtonPair from '../ui/ConfirmButtonPair';
 import Field from '../ui/FormField';
 import { useConfirmDelete } from '../../hooks/useConfirmDelete';
 import { formatBytes, formatTimecode } from '../../utils/formatters';
+import { withUnlistedOption } from '../../lib/withUnlistedOption';
 import ArtistPicker from './ArtistPicker';
 import MusicGenPanel from './MusicGenPanel';
 import ChiptunePanel from './ChiptunePanel';
@@ -364,6 +365,15 @@ export default function TracksManager() {
     });
   };
 
+  // A linked albumId the fetched list no longer carries (deleted album)
+  // shouldn't silently snap the select to "no album" — surface it so the
+  // link isn't lost.
+  const albumOptions = withUnlistedOption(
+    albums,
+    form.albumId,
+    (albumId) => ({ id: albumId, title: 'Linked album (unavailable)' }),
+  );
+
   return (
     <div>
       <div className="flex items-center justify-between mb-4 flex-wrap gap-3">
@@ -470,12 +480,9 @@ export default function TracksManager() {
                   className="w-full px-3 py-2 bg-port-bg border border-port-border rounded text-white text-sm"
                 >
                   <option value="">— Single (no album) —</option>
-                  {albums.map((a) => (
+                  {albumOptions.map((a) => (
                     <option key={a.id} value={a.id}>{a.title}</option>
                   ))}
-                  {form.albumId && !albums.some((a) => a.id === form.albumId) ? (
-                    <option value={form.albumId}>Linked album (unavailable)</option>
-                  ) : null}
                 </select>
               </Field>
               <Field compact label="Prompt" hint="Text/style prompt used by the on-device generators.">
