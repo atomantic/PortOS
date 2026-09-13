@@ -237,3 +237,26 @@ describe('codex routing advisory', () => {
       .toEqual([]);
   });
 });
+
+describe('codex account prerequisites', () => {
+  const codex = { id: 'codex', type: 'cli', command: 'codex' };
+
+  it('reports signed-out and reauth-required accounts as missing prerequisites', () => {
+    expect(providerPrerequisites(codex, { codexAccount: { status: 'signed-out' } }).missing)
+      .toEqual([{ code: 'codexAccount', label: 'No ChatGPT account is signed in' }]);
+    expect(providerPrerequisites(codex, { codexAccount: { status: 'reauth-required' } }).missing)
+      .toEqual([{ code: 'codexAccount', label: 'ChatGPT sign-in has expired' }]);
+  });
+
+  it('treats quota-exhausted as met with no missing prerequisites', () => {
+    const result = providerPrerequisites(codex, { codexAccount: { status: 'quota-exhausted' } });
+    expect(result.met).toBe(true);
+    expect(result.missing).toEqual([]);
+  });
+
+  it('ignores codexAccount for non-codex providers', () => {
+    const claude = { id: 'claude-code', type: 'cli', command: 'claude' };
+    expect(providerPrerequisites(claude, { codexAccount: { status: 'signed-out' } }).missing).toEqual([]);
+  });
+});
+

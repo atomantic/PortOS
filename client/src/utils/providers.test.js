@@ -1728,6 +1728,30 @@ describe('providerCardState', () => {
       state: PROVIDER_CARD_STATE.BLOCKED,
       missing: [{ code: 'codexAccount', label: 'No ChatGPT account is signed in' }],
     });
+    expect(providerCardState(codex, { codexAccount: { status: 'reauth-required' } })).toEqual({
+      state: PROVIDER_CARD_STATE.BLOCKED,
+      missing: [{ code: 'codexAccount', label: 'ChatGPT sign-in has expired' }],
+    });
+    expect(providerCardState(codex, { codexAccount: { status: 'quota-exhausted' } })).toEqual({
+      state: PROVIDER_CARD_STATE.BENCHED,
+      missing: [],
+    });
+    // A legacy server payload carrying codexQuota finding is filtered out and benched
+    expect(providerCardState({
+      ...codex,
+      missingPrerequisites: [{ code: 'codexQuota', label: 'ChatGPT usage limit reached' }],
+    }, { codexAccount: { status: 'quota-exhausted' } })).toEqual({
+      state: PROVIDER_CARD_STATE.BENCHED,
+      missing: [],
+    });
+    // A missing runtime still blocks even if quota is also exhausted
+    expect(providerCardState(codex, {
+      runtime: { label: 'Codex CLI', installed: false },
+      codexAccount: { status: 'quota-exhausted' },
+    })).toEqual({
+      state: PROVIDER_CARD_STATE.BLOCKED,
+      missing: [{ code: 'runtime', label: 'Codex CLI is not installed' }],
+    });
     expect(providerCardState(codex, { codexAccount: { status: 'unknown' } }))
       .toEqual({ state: PROVIDER_CARD_STATE.UNKNOWN, missing: [] });
     expect(providerCardState(codex, { codexAccount: null }))

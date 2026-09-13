@@ -132,6 +132,31 @@ describe('ProviderCard ChatGPT subscription', () => {
 
     expect(screen.queryByRole('link', { name: 'Open ChatGPT sign-in' })).toBeNull();
   });
+
+  it('badges quota-exhausted card as benched usage-limit with fallback routing explanation', () => {
+    render(
+      <MemoryRouter>
+        <ProviderCard
+          provider={{ id: 'codex', name: 'Codex', type: 'cli', command: 'codex', models: [], enabled: true }}
+          cardState={{ state: PROVIDER_CARD_STATE.BENCHED, missing: [] }}
+          runtime={null}
+          status={null}
+          isDefault={false}
+          providersById={{}}
+          runnerAllowedCommands={[]}
+          testResult={null}
+          codexAccount={{
+            status: 'quota-exhausted',
+            account: { planType: 'pro' },
+            rateLimits: { primary: { usedPercent: 100 } },
+          }}
+        />
+      </MemoryRouter>
+    );
+
+    expect(screen.getByText('BENCHED · usage-limit')).toBeInTheDocument();
+    expect(screen.getByTitle('ChatGPT usage limit reached — calls route to the fallback.')).toBeInTheDocument();
+  });
 });
 
 describe('ProviderCard model refresh', () => {

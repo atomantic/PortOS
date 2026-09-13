@@ -1498,6 +1498,32 @@ describe('readiness grouping', () => {
     expect(screen.queryByRole('button', { name: new RegExp('^Needs setup') })).not.toBeInTheDocument();
   });
 
+  it('badges a Codex provider whose ChatGPT quota is exhausted as Benched under Enabled', async () => {
+    api.getCodexAccount.mockResolvedValue({
+      readiness: {
+        status: 'quota-exhausted',
+        account: { planType: 'pro' },
+        rateLimits: { primary: { usedPercent: 100 } },
+      },
+    });
+    api.getProviders.mockResolvedValue({
+      providers: [{
+        id: 'codex',
+        name: 'Codex',
+        type: 'cli',
+        command: 'codex',
+        enabled: true,
+      }],
+      activeProvider: 'codex',
+    });
+
+    renderPage();
+
+    expect(await screen.findByText('BENCHED · usage-limit')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: new RegExp('^Enabled') })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: new RegExp('^Needs setup') })).not.toBeInTheDocument();
+  });
+
   it('folds a section away when its header is clicked', async () => {
     api.getProviders.mockResolvedValue({
       providers: [{ id: 'off', name: 'Switched Off', type: 'cli', command: 'claude', enabled: false }],
