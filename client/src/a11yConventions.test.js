@@ -3519,4 +3519,218 @@ function B() { const sensors = useSensors(useSensor(PointerSensor)); return <Dnd
     for (const file of withContext) offenders.push(...offendersIn(file, maskedSourceOf(file)));
     expect(offenders, `DndContext registered without a KeyboardSensor — every dnd-kit handle already announces itself as draggable and tells the user to press Space, so a pointer-only sensor list is a WCAG 2.1.1 failure. Add useSensor(KeyboardSensor, { coordinateGetter }) (sortableKeyboardCoordinates for a SortableContext, createFreeDroppableKeyboardCoordinates from lib/dndKeyboardCoordinates.js for free droppables):\n${offenders.join('\n')}`).toEqual([]);
   });
+
+  // --- routed-page top-level heading (#7245) -------------------------------
+  //
+  // A routed page with no <h1> inverts the document outline: heading
+  // navigation opens at <h2>/<h3> — or worse, a nested page mounts a second
+  // <h1> beside the shell's — which fails WCAG 1.3.1/3.2.4 and was the exact
+  // defect #7245 fixed on the five audited routes.
+  //
+  // "Supplies a heading" means the routed element's file renders an <h1> or the
+  // shared <PageHeader> (which owns the h1), or forwards the question through
+  // the idioms this tree writes for routed components: a re-export barrel
+  // (`export { X } from './X'`, `export { default } from './Page'`), or a thin
+  // page that renders an imported component carrying the heading
+  // (Agents -> AgentList, AppDetail -> AppDetailView).
+  //
+  // Two carve-outs keep the question honest rather than broad:
+  //   - a nested <Route> inherits the heading from its ancestor's element —
+  //     the MediaGen shell owns /media/*'s <h1>, so a tab page mounted in its
+  //     outlet must not add a second;
+  //   - the lists below. HEADINGLESS_ROUTE_ELEMENTS is elements that render no
+  //     page body of their own — the app chrome, a redirect-only element, the
+  //     drawer-only deep link. ROUTE_HEADING_GAP_ALLOWLIST is the pre-existing
+  //     debt: pages whose hand-rolled header still stops below <h1>, on routes
+  //     the #7245 sweep never reached. Each row is a real defect — normalize
+  //     the page onto PageHeader (Ambient: an sr-only h1 — it is deliberately
+  //     chromeless) and delete the row; the stale-entry rule keeps the list
+  //     honest.
+
+  // name -> { file, exportedName } for every component a `<Route element>` in
+  // this source can name: the static relative imports, plus `lazyWithReload`
+  // declarations — `const X = lazyWithReload(() => import('./pages/X'))`, and
+  // the DevTools idiom `.then(m => ({ default: m.X }))`, which binds the page
+  // under a NAMED export of the target module rather than `default`.
+  const routeElementBindings = (appSrc, appFile) => {
+    const bindings = relativeImportBindings(appSrc, appFile);
+    const lazy = /const\s+([A-Z][\w$]*)\s*=\s*lazyWithReload\(\s*\(\)\s*=>\s*import\(\s*['"]([^'"]+)['"]\s*\)\s*(?:\.then\(\s*\w+\s*=>\s*\(\s*\{\s*default\s*:\s*\w+\.([A-Z][\w$]*)\s*\}\s*\)\s*\))?/g;
+    for (const m of appSrc.matchAll(lazy)) {
+      const file = resolveRelativeImport(appFile, m[2]);
+      if (file) bindings.set(m[1], { file, exportedName: m[3] ?? 'default' });
+    }
+    return bindings;
+  };
+
+  // `element={<X … />}` on a <Route> opening tag -> 'X'. Every element this
+  // file writes is a single component element; the first name in the
+  // expression is the component mounted.
+  const routeElementName = (routeTag) => /\belement\s*=\s*\{\s*<\s*([A-Z][\w$.]*)/.exec(routeTag)?.[1] ?? null;
+
+  // File -> does the component it exports under `exportedName` put a top-level
+  // heading on the page? The file's own <h1>/<PageHeader> first — then the
+  // barrel and thin-wrapper idioms. `seen` bounds the chase so a forwarding
+  // cycle resolves to "no" rather than recursing.
+  const suppliesPageHeading = (file, exportedName, seen = new Set()) => {
+    const key = `${file}#${exportedName}`;
+    if (seen.has(key) || seen.size >= 8) return false;
+    seen.add(key);
+    const src = maskedSourceOf(file);
+    const rendered = renderedTagNames(src);
+    if (rendered.has('h1') || rendered.has('PageHeader')) return true;
+    const imports = relativeImportBindings(src, file);
+    // A file that imports the shared header counts even before its tag is
+    // spelled out (#7245's rule) — and covers an aliased render of it.
+    for (const { file: imported } of imports.values()) {
+      if (/(^|\/)PageHeader\.jsx$/.test(imported)) return true;
+    }
+    const forwarded = reExportBindings(src, file).get(exportedName);
+    if (forwarded && suppliesPageHeading(forwarded.file, forwarded.exportedName, seen)) return true;
+    // A thin page that mounts an imported component carrying the heading —
+    // Agents mounts AgentList — satisfies the route without writing its own.
+    for (const [local, binding] of imports) {
+      if (rendered.has(local) && suppliesPageHeading(binding.file, binding.exportedName, seen)) return true;
+    }
+    return false;
+  };
+
+  // Every <Route> element in `appFile` that resolves to a tracked file,
+  // deduped by module+export, each carrying whether an ancestor <Route>'s
+  // element already supplies the heading (a tab shell like MediaGen owns it
+  // for the pages mounted in its outlet).
+  const routedPageElements = (appFile) => {
+    const appSrc = maskedSourceOf(appFile);
+    const bindings = routeElementBindings(appSrc, appFile);
+    const shelledByHeading = (node) => {
+      for (let p = node.parent; p; p = p.parent) {
+        if (p.name !== 'Route' || p.tag === null) continue;
+        const name = routeElementName(p.tag);
+        const binding = name && bindings.get(name);
+        if (binding && suppliesPageHeading(binding.file, binding.exportedName)) return true;
+      }
+      return false;
+    };
+    const elements = new Map();
+    for (const node of forEachOpeningTag(appSrc, 'Route')) {
+      const name = routeElementName(node.tag);
+      if (!name) continue;
+      const binding = bindings.get(name);
+      // A name with no import binding renders no page of its own — Navigate,
+      // and the local RedirectWithSearch/PrefixRedirect helpers.
+      if (!binding) continue;
+      const key = `${binding.file}#${binding.exportedName}`;
+      const shelled = shelledByHeading(node);
+      const prev = elements.get(key);
+      // First-write-wins is wrong here: a file mounted both under a heading
+      // shell and bare keeps the bare verdict, so the exemption can only ever
+      // narrow to a mount that really sits under an h1.
+      if (!prev) elements.set(key, { ...binding, elementName: name, shelled });
+      else if (prev.shelled) prev.shelled = shelled;
+    }
+    return [...elements.values()];
+  };
+
+  const HEADINGLESS_ROUTE_ELEMENTS = new Set([
+    'src/components/Layout.jsx',    // the app chrome — <Outlet/> children own the page h1
+    'src/pages/IMessage.jsx',       // redirect-only: renders <Navigate> to /messages/imessage
+    'src/pages/SyncView.jsx',       // deep link that mounts SyncDetailDrawer over the prior page
+  ]);
+
+  const ROUTE_HEADING_GAP_ALLOWLIST = new Set([
+    'src/pages/Ambient.jsx',        // chromeless ambient display — wants an sr-only h1, not a bar
+    'src/pages/Browser.jsx',
+    'src/pages/CapabilityMap.jsx',
+    'src/pages/ImageClean.jsx',
+    'src/pages/MoodBoardDetail.jsx',
+    'src/pages/RoundEditor.jsx',
+    'src/pages/Security.jsx',
+    'src/pages/UniverseBuilder.jsx',
+    'src/pages/Uploads.jsx',
+  ]);
+
+  it('gives every routed page a top-level heading (#7245)', () => {
+    // Probe first — the tree is green, so nothing in it pins what the walk
+    // rejects, and a silent change of shape would turn the rule vacuous.
+    withVirtualSources({
+      'src/ProbeApp.jsx': `
+        import { Routes, Route, Navigate } from 'react-router';
+        import Good from './pages/ProbeGood';
+        import Bad from './pages/ProbeBad';
+        import Thin from './pages/ProbeThin';
+        import Barrel from './pages/ProbeBarrel';
+        import Shell from './pages/ProbeShell';
+        import ShellBare from './pages/ProbeShellBare';
+        const LazyBad = lazyWithReload(() => import('./pages/ProbeLazyBad'));
+        const LazyGood = lazyWithReload(() => import('./pages/ProbeLazyGood'));
+        const LazyNamed = lazyWithReload(() => import('./pages/ProbeBarrel').then(m => ({ default: m.ProbeGood })));
+        export default function ProbeApp() {
+          return (
+            <Routes>
+              <Route path="/" element={<ShellBare />}>
+                <Route index element={<Good />} />
+                <Route path="bad" element={<Bad />} />
+                <Route path="thin" element={<Thin />} />
+                <Route path="barrel" element={<Barrel />} />
+                <Route path="lazy-bad" element={<LazyBad />} />
+                <Route path="lazy-good" element={<LazyGood />} />
+                <Route path="lazy-named" element={<LazyNamed />} />
+                <Route path="away" element={<Navigate to="/" replace />} />
+                <Route path="gone" element={<Unbound />} />
+                <Route path="shelled" element={<Shell />}>
+                  <Route path="kid" element={<Bad />} />
+                </Route>
+              </Route>
+            </Routes>
+          );
+        }
+      `,
+      'src/pages/ProbeGood.jsx': 'export default function ProbeGood() { return <h1>Good</h1>; }',
+      'src/pages/ProbeBad.jsx': 'export default function ProbeBad() { return <h2>Bad</h2>; }',
+      'src/pages/ProbeThin.jsx': "import ProbeGood from './ProbeGood';\nexport default function ProbeThin() { return <ProbeGood />; }",
+      'src/pages/ProbeBarrel.jsx': "export { default, default as ProbeGood } from './ProbeGood';",
+      'src/pages/ProbeLazyBad.jsx': 'export default function ProbeLazyBad() { return <h2>Lazy</h2>; }',
+      'src/pages/ProbeLazyGood.jsx': "import PageHeader from '../components/PageHeader';\nexport default function ProbeLazyGood() { return <PageHeader title=\"Lazy\" />; }",
+      'src/pages/ProbeShell.jsx': 'export default function ProbeShell() { return <h1>Shell</h1>; }',
+      'src/pages/ProbeShellBare.jsx': 'export default function ProbeShellBare() { return <div />; }',
+    }, () => {
+      const offenders = routedPageElements('src/ProbeApp.jsx')
+        .filter((e) => !e.shelled)
+        .filter((e) => !suppliesPageHeading(e.file, e.exportedName))
+        .map((e) => e.file);
+      // ShellBare (no heading of its own), Bad (h2 only), LazyBad — and NOT:
+      // Good (h1), Thin (delegate owns the h1), Barrel + LazyNamed (barrel
+      // target owns it), LazyGood (PageHeader), Navigate/Unbound (no page),
+      // and the Bad mounted under Shell's h1 outlet.
+      expect(offenders).toEqual([
+        'src/pages/ProbeShellBare.jsx',
+        'src/pages/ProbeBad.jsx',
+        'src/pages/ProbeLazyBad.jsx',
+      ]);
+    });
+
+    const elements = routedPageElements('src/App.jsx');
+    // Assert the walk really read the route table — a walker change that finds
+    // no Route elements must not pass over an empty set.
+    expect(elements.length, 'found no routed page elements in src/App.jsx — has the route table or its lazy-import idiom changed?').toBeGreaterThanOrEqual(90);
+
+    const offenders = elements
+      .filter((e) => !e.shelled)
+      .filter((e) => !HEADINGLESS_ROUTE_ELEMENTS.has(e.file) && !ROUTE_HEADING_GAP_ALLOWLIST.has(e.file))
+      .filter((e) => !suppliesPageHeading(e.file, e.exportedName))
+      .map((e) => `${e.file} (route element <${e.elementName}>)`);
+    expect(offenders, `Routed page renders no <h1> and no <PageHeader> — heading navigation opens below level 1 (WCAG 1.3.1/3.2.4). Give the page the shared PageHeader (or a direct <h1> where the surface is deliberately chromeless); a nested tab page under a heading shell gets a free pass only while the shell owns the h1:\n${offenders.join('\n')}`).toEqual([]);
+  });
+
+  it('keeps no stale entries in the routed-heading exemption lists (#7245)', () => {
+    // The allowlists only shrink. An entry whose element was deleted/renamed —
+    // or whose file now supplies a heading — is dead weight that quietly
+    // re-exempts the next heading omission routed to that file.
+    const routed = new Map(routedPageElements('src/App.jsx').map((e) => [e.file, e]));
+    const stale = [...HEADINGLESS_ROUTE_ELEMENTS, ...ROUTE_HEADING_GAP_ALLOWLIST]
+      .filter((file) => {
+        const entry = routed.get(file);
+        return entry === undefined || suppliesPageHeading(entry.file, entry.exportedName);
+      });
+    expect(stale, `routed-heading exemption entries that no longer match a heading-less routed element — delete them:\n${stale.join('\n')}`).toEqual([]);
+  });
 });
