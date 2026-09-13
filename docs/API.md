@@ -615,6 +615,25 @@ return an `{ items, total }` envelope.
 | POST | `/agents/tools/moltworld/say` | Send chat message |
 | GET | `/agents/tools/moltworld/status` | Get world status |
 
+### Decks
+
+Playing-card / tarot deck designer (Create → Decks). Decks are db-primary and machine-local; card images live in the shared gallery and are referenced by filename.
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/decks` | List decks with render completion |
+| POST | `/decks` | Create a deck (`name`, `kind` = `playing` \| `tarot`, optional `universeId`, `seedStyleFromUniverse`); mints the full card roster |
+| GET | `/decks/:id` | Deck + cards + completion |
+| PATCH | `/decks/:id` | Style guide (`styleNotes`, `influences`, `layoutPrompt`), universe link, render pin (`imageMode`/`imageModelId`), LLM pins |
+| DELETE | `/decks/:id` | Delete the deck and its cards (gallery images are kept) |
+| PATCH | `/decks/:id/cards/:cardId` | Edit a card (`prompt`, `negativePrompt`, `primaryImageRef`, `imageRefs`, `canonRef`) |
+| POST | `/decks/:id/analyze-sample` | Stateless vision analysis of a gallery image → proposed style guide + diff |
+| POST | `/decks/:id/samples` | Persist a reviewed sample; `adopt` applies the proposal in the same write |
+| DELETE | `/decks/:id/samples/:sampleId` | Remove a sample |
+| POST | `/decks/:id/generate-prompts` | Cast a linked universe onto the cards, then write subject prompts (`cardIds`, `overwrite`, `cast`, provider/model/effort) |
+| POST | `/decks/:id/render` | Queue card renders through the media queue (`cardIds`, `onlyMissing`, `mode`, `model`, `seed`) |
+| POST | `/decks/:id/cards/:cardId/render` | Queue one card |
+
 ## Route Domain Index
 
 Every mounted API prefix (see `server/index.js` for the authoritative list). Domains documented in detail above are omitted. Each prefix corresponds to a router in `server/routes/`.
@@ -689,6 +708,7 @@ Every mounted API prefix (see `server/index.js` for the authoritative list). Dom
 | `/api/fableloom` | FableLoom interactive story generation |
 | `/api/music-video` | Music video projects |
 | `/api/mood-boards` | Mood boards |
+| `/api/decks` | Decks (playing-card / tarot designer) |
 | `/api/writers-room` | Writers Room |
 | `/api/universe-builder` | Universe Builder |
 | `/api/authors`, `/api/artists`, `/api/albums`, `/api/tracks`, `/api/music` | Music/creator catalogs |

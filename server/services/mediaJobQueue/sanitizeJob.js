@@ -18,7 +18,7 @@ const PARAM_ALLOWLIST = new Set([
   'chunks', 'chunkPrompts', 'contextFrames', 'loras',
   'cfgScale', 'guidance', 'quantize',
   'runId', 'runtime', 'datasetId', 'characterId', 'characterName',
-  'triggerWord', 'rank', 'baseModelId', 'spriteRef', 'spriteWalk',
+  'triggerWord', 'rank', 'baseModelId', 'spriteRef', 'spriteWalk', 'deckCard',
 ]);
 
 const MUSIC_STUDIO_KEYS = new Set([

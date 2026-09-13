@@ -68,6 +68,7 @@ describe('db/schema barrel + composer (#2832)', () => {
       ...schema.xDdl,
       ...schema.beeperDdl,
       ...schema.mindToolRecipesDdl,
+      ...schema.decksDdl,
       ...schema.auditDdl,
       ...buildAuditTriggers(),
     ];

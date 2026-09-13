@@ -472,7 +472,15 @@ describe('deferred imports stay deferred (#6156)', () => {
 // handful of closures that reach these services — there is no subtree behind
 // them to narrow, and deferring a compare used on every passive quota read
 // would trade the whole point of the shared rule for four instantiations.
-const MAX_STATIC_INSTANTIATIONS = 103525;
+// Decks (Create → Decks) measures +393 after narrowing everything that could
+// be: the route module, the boot-time hook, the render service and the prompt
+// services all defer their heavy subtrees (DB, prompt runner, media queue,
+// image-gen dispatcher) to the request that needs them. What remains is the
+// closures of the six new suites themselves — the DB-backed route suite reaches
+// db.js, the hook suite reaches the media queue, the prompt/render suites reach
+// the modules they mock — plus the two pure leaves the lib barrel gains and the
+// schema composer's decks.js, counted by the suites that load those barrels.
+const MAX_STATIC_INSTANTIATIONS = 103918;
 
 
 const SKIP_DIRS = new Set(['node_modules', 'coverage', 'dist', 'data']);

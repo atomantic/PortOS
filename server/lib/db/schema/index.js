@@ -31,6 +31,7 @@ import { privacyDdl } from './privacy.js';
 import { stackerNewsDdl } from './stackerNews.js';
 import { xDdl } from './x.js';
 import { mindToolRecipesDdl } from './mindToolRecipes.js';
+import { decksDdl } from './decks.js';
 import { beeperDdl } from './beeper.js';
 import { auditDdl, auditedTables, buildAuditTriggers } from './audit.js';
 
@@ -55,6 +56,7 @@ export {
   xDdl,
   beeperDdl,
   mindToolRecipesDdl,
+  decksDdl,
   auditDdl,
   auditedTables,
   buildAuditTriggers,
@@ -95,6 +97,7 @@ export function buildCatalogDdl() {
     ...xDdl,
     ...beeperDdl,
     ...mindToolRecipesDdl,
+    ...decksDdl,
     ...auditDdl,
     ...buildAuditTriggers(),
   ];

@@ -26,6 +26,7 @@ export const RENDER_TARGET = Object.freeze({
   LORA_DATASET: 'lora-dataset',
   CREATIVE_AGENT: 'creative-agent',
   FABLELOOM_PRODUCTION: 'fableloom-production',
+  DECK: 'deck',
 });
 
 export const RENDER_TARGETS = Object.freeze(Object.values(RENDER_TARGET));

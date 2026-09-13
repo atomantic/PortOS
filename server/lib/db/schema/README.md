@@ -54,3 +54,4 @@ init-db.sql, each with a one-line reason.
 `pool.query` in order.
 
 | `mindToolRecipes.js` | `mindToolRecipesDdl`: machine-local recipe definitions and immutable revisions. |
+| `decks.js` | `decksDdl`: machine-local deck design projects (`decks`) and their per-card rows (`deck_cards`). |
