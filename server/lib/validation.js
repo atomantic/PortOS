@@ -568,6 +568,15 @@ export const codexLoginStartSchema = z.object({
   deviceCode: z.boolean().optional().default(false),
 });
 
+// POST /api/providers/model-pins/clear (#7315) — clear ONE stored model pin
+// back to "inherit" by the id `GET /model-pins` reported. Addressed by pin id
+// rather than a "clear everything stale" verb so an audit landing between the
+// user's click and this write cannot widen what they approved. The id is
+// resolved against a freshly collected pin list, so this bounds the shape only.
+export const modelPinClearSchema = z.object({
+  pinId: z.string().trim().min(1).max(300),
+});
+
 // POST /api/providers/bindings/:id/link  (and /link/preview).
 //
 // Every revision the caller reviewed is named explicitly. Omitting one is

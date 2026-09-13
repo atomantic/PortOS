@@ -501,7 +501,22 @@ describe('deferred imports stay deferred (#6156)', () => {
 // covers it (services/decksSync.db.test.js) measures a further +40, all of it
 // that one new test file's own closure — decks.js plus the syncWire/db-gate
 // leaves it asserts against, no production edge. Raise by exactly those deltas.
-const MAX_STATIC_INSTANTIATIONS = 103995;
+// Surfacing stored model pins the provider catalog has retired (#7315) measures
+// +38. 11 are the modelPinReconcile leaf suite's own closure: the leaf plus
+// providerModels.js and its leaves, plus localProviderRuntime.js — the leaf
+// delegates its base membership rule to that module's `modelPinIsOffered`
+// rather than re-deriving it, which is what gives the audit the local-daemon
+// carve-out (an Ollama-backed provider's stored `models` is a stale snapshot,
+// so judging a pin against it reports a serving model as retired). 4 are the
+// route suite, which reaches the route through a dynamic import and statically
+// pulls only express and two error/test leaves. The audit suite adds nothing —
+// it reaches everything through vi.mock + await import. The rest is
+// routes/providers.js gaining services/modelPinAudit.js, whose own closure is
+// 34 light files: settings.js (already reached), imageGenCapabilities.js, and
+// dependency-free leaves. Its three HEAVY stores — apps.js, taskSchedule.js,
+// providers.js — stay behind memoized call-site `await import()`, without which
+// that one edge alone measured +449.
+const MAX_STATIC_INSTANTIATIONS = 104033;
 
 
 const SKIP_DIRS = new Set(['node_modules', 'coverage', 'dist', 'data']);

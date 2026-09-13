@@ -22,6 +22,17 @@ export const deleteProvider = (id) => request(`/providers/${id}`, { method: 'DEL
 export const getSampleProviders = () => request('/providers/samples');
 export const testProvider = (id) => request(`/providers/${id}/test`, { method: 'POST' });
 export const refreshProviderModels = (id, options) => request(`/providers/${id}/refresh-models`, { method: 'POST', ...options });
+// Stored model pins naming a model their provider no longer lists (#7315).
+// Derived on read, so it reflects a pin cleared a moment ago without a refresh.
+export const getModelPinWarnings = (options) => request('/providers/model-pins', options);
+// Clear ONE stale pin back to "inherit". PortOS never rewrites a user's pin on
+// its own — it surfaces the retirement and this is the user's one-click undo.
+export const clearModelPin = (pinId, options) => request('/providers/model-pins/clear', {
+  method: 'POST',
+  body: JSON.stringify({ pinId }),
+  ...options,
+});
+
 // Which provider runtimes (claude, codex, opencode, …) are runnable on this
 // host, and which of them PortOS can install for you. Installs happen only
 // after an explicit Providers-page click; the status payload carries booleans

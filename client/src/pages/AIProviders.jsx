@@ -23,6 +23,7 @@ import FleetProviderSetup from '../components/providers/FleetProviderSetup';
 import FleetHostSetup from '../components/providers/FleetHostSetup';
 import LocalPersistentMindSetupCard from '../components/settings/LocalPersistentMindSetupCard.jsx';
 import ProviderConnections from '../components/providers/ProviderConnections';
+import RetiredModelPinsPanel from '../components/providers/RetiredModelPinsPanel';
 
 // The two local apps an API provider can front. Their installer lives on the
 // Models → LLMs page (it starts the service too), so the provider card
@@ -88,6 +89,10 @@ export default function AIProviders() {
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState(false);
   const [testResults, setTestResults] = useState({});
+  // Bumped after every catalog refresh so the retired-pin panel re-reads: a
+  // refresh is the moment a retirement becomes observable, and the pin that
+  // just rotted should surface without the user reloading the page.
+  const [modelPinReloadKey, setModelPinReloadKey] = useState(0);
   const [refreshing, setRefreshing] = useState({});
   // `undefined` = this page has not asked the account endpoint yet; `null` =
   // the endpoint did not give a verdict. The distinction keeps a failed fetch
@@ -500,6 +505,7 @@ export default function AIProviders() {
         // The catalog a card just learned is graded by the readiness checklist,
         // which the server computes from the stored record.
         loadReadiness();
+        setModelPinReloadKey(key => key + 1);
       } else {
         toast.error('Failed to refresh models - provider may not support this feature');
       }
@@ -773,6 +779,10 @@ export default function AIProviders() {
       <ModelsTabsHeader activeTab="providers" />
 
       <div className="flex-1 overflow-auto p-4 space-y-6">
+
+      {/* A retirement only becomes observable when a catalog refresh lands, so
+          the panel re-reads on every refresh — see RetiredModelPinsPanel. */}
+      <RetiredModelPinsPanel reloadKey={modelPinReloadKey} />
 
       <LocalPersistentMindSetupCard compact onApplied={loadData} />
       <FleetHostSetup compact providers={providers} />
