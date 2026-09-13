@@ -28,7 +28,7 @@ import { ServerError } from '../../lib/errorHandler.js';
 import { PATHS, ensureDir, resolveGalleryImage, copyFileGuarded, unlinkGuarded } from '../../lib/fileUtils.js';
 import { getSettings } from '../settings.js';
 import { IMAGE_GEN_MODE, resolveImageCleaners } from './index.js';
-import { editIncapableModeError, isEditCapableMode, modeLabel } from './modes.js';
+import { LOCAL_IMAGEGEN_DEFAULT_MODEL, editIncapableModeError, isEditCapableMode, modeLabel } from './modes.js';
 import {
   cloudPromptRequired, maxInputImages, resolveCloudProviderConfig, resolveRenderTargetConfig,
 } from './cloudProviderConfig.js';
@@ -70,18 +70,27 @@ const RECORD_PIN_SOURCES = Object.freeze([
 const MIME_TO_EXT = { 'image/png': '.png', 'image/jpeg': '.jpg', 'image/webp': '.webp' };
 
 /**
- * Select the model a local render will actually use. An omitted model keeps
- * the historical `dev` preference only when that model can run on this host;
- * otherwise it falls through to the first compatible catalog entry.
+ * Select the model a local render will actually use. An omitted model prefers
+ * the install-wide pin (`settings.imageGen.local.modelId`, set on Settings →
+ * Media → Local), then the historical `dev` default — each only when it can
+ * actually run on this host; otherwise it falls through to the first
+ * compatible catalog entry.
+ *
+ * `pinnedId` is a PREFERENCE, not a request: a stale or incompatible pin is
+ * skipped rather than rejected, because the user who saved it is not the
+ * caller of this render and has no way to see a 400 from it. A caller's own
+ * `modelId` keeps its existing exact-match-or-throw handling upstream.
  *
  * @param {string|null|undefined} modelId
  * @param {object[]} [allModels]
+ * @param {string|null} [pinnedId] - settings.imageGen.local.modelId
  * @returns {object|undefined}
  */
-export function selectLocalImageModel(modelId, allModels = getImageModels()) {
+export function selectLocalImageModel(modelId, allModels = getImageModels(), pinnedId = null) {
   const requestedModel = allModels.find((model) => model.id === modelId);
   return requestedModel || [
-    allModels.find((model) => model.id === 'dev'),
+    allModels.find((model) => model.id === pinnedId),
+    allModels.find((model) => model.id === LOCAL_IMAGEGEN_DEFAULT_MODEL),
     ...allModels,
   ].filter(Boolean).find((model) => isHardwareCompatible(model.hardwareCompatibility)) || allModels[0];
 }
@@ -349,7 +358,8 @@ export async function prepareGenerateParams({ data, files, referenceImageFields 
  * called from the route right before it enqueues a local job.
  *
  * Resolves the effective model via the same fallback chain the local worker
- * uses (`params.modelId` → compatible `'dev'` → the first compatible model)
+ * uses (`params.modelId` → the install pin → compatible `'dev'` → the first
+ * compatible model)
  * and validates it can actually run: an edit-only model (e.g. Qwen-Image-Edit)
  * requires a source image, and any model that isn't FLUX.2 or diffusers-run
  * needs a configured pythonPath. Throws the identical `ServerError`s (same
@@ -379,7 +389,7 @@ export function resolveLocalImageModel(settings, params) {
   // omitted pin, prefer the historical `dev` default only when it is actually
   // compatible, then choose the first known-compatible model. This keeps a
   // Windows/Linux install from silently queueing the Apple-only default.
-  const selectedModel = selectLocalImageModel(params.modelId, allModels);
+  const selectedModel = selectLocalImageModel(params.modelId, allModels, settings.imageGen?.local?.modelId || null);
   if (selectedModel && !isHardwareCompatible(selectedModel.hardwareCompatibility)) {
     throw new ServerError(
       hardwareUnavailableReason(`Image model "${selectedModel.id}"`, selectedModel.hardwareCompatibility),
