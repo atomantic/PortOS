@@ -351,6 +351,9 @@ function runRsync(srcDir, destDir, flags = []) {
     // `--itemize-changes` emits only after each file finishes. `--progress` is
     // also supported by macOS's bundled rsync 2.6.9 and emits within a large
     // file, giving the idle watchdog evidence that a slow transfer is healthy.
+    // Both report only TRANSFERRING files, so a caller that adds `--checksum`
+    // must also pass `-ii` or its scan of an unchanged tree is silent for the
+    // whole digest and the watchdog kills it — see restoreSnapshot.
     const args = ['--archive', '--itemize-changes', '--progress', ...flags, srcDir + '/', destDir];
     const proc = spawn(resolveRsyncBinary(), args, { shell: false });
 
@@ -1171,11 +1174,29 @@ export async function restoreSnapshot(destPath, snapshotId, { dryRun = true, sub
   // Restore must compare destination bytes even when size and mtime match.
   // Rsync's default quick-check would otherwise report a successful no-op for
   // equal-length edits that retain the snapshot timestamp.
+  //
+  // `-ii` is what keeps that affordable. `--checksum` makes rsync digest BOTH
+  // copies of every file in scope, and a file that turns out to match emits
+  // nothing under plain `--itemize-changes`/`--progress` — those report only
+  // transferring files. A preview of a large unchanged tree therefore runs
+  // silent for as long as the digest takes, and runRsync's idle watchdog
+  // (BACKUP_PROCESS_IDLE_TIMEOUT_MS) SIGKILLs a perfectly healthy restore.
+  // Doubling itemize makes rsync report unchanged entries too (`.f <path>`),
+  // one line per file digested, which is what keeps the watchdog fed. The
+  // changed-file count runRsync returns is unaffected: the added lines start
+  // with `.`, and runRsync collects only `>`/`<` transfer lines.
+  //
+  // It must be the SHORT `-ii`, and it is deliberately not `--info=progress2`:
+  // macOS ships openrsync, where the long `--itemize-changes` does NOT stack
+  // when repeated and `--info=progress2` is rejected outright as an unknown
+  // option (it arrived in rsync 3.1). `-ii` behaves identically on openrsync
+  // and rsync 3.x, so no version probe is needed. See issue #7299.
+  //
   // Before the include chain below: rsync takes the FIRST matching rule, so an
   // exclude placed after `--include=/<filter>/***` would never be consulted.
   // These are the files `snapshotManifestFilePaths` skips — keeping the two in
   // step is what preserves "everything transferred was verified".
-  const flags = ['--itemize-changes', '--checksum', ...OS_METADATA_RSYNC_EXCLUDES];
+  const flags = ['-ii', '--checksum', ...OS_METADATA_RSYNC_EXCLUDES];
   if (dryRun) flags.push('--dry-run');
   if (subdirFilter) {
     // Anchored with a leading `/` — rsync matches an unanchored pattern against

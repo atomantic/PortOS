@@ -1650,6 +1650,70 @@ describe('restoreSnapshot manifest verification', () => {
       spawn.mockReset();
     }
   });
+
+  // #7299: `--checksum` makes rsync digest BOTH copies of every file in scope,
+  // and `--itemize-changes`/`--progress` report only TRANSFERRING files. A file
+  // that matches emitted nothing, so a preview of a large unchanged tree ran
+  // silent for the whole digest, tripped runRsync's idle watchdog, and SIGKILLed
+  // a perfectly healthy restore. `-ii` adds one unchanged-entry line per file
+  // digested. The assertion is on rsync's own stdout for the exact vector
+  // restoreSnapshot builds, paired with the pre-fix baseline (same vector, `-ii`
+  // removed) so it discriminates rather than passing on any output at all.
+  it('keeps real rsync emitting per file while checksumming an unchanged tree, without inflating the changed count', async context => {
+    // Windows CI does not provision MSYS rsync. Unix coverage remains mandatory;
+    // installed Windows rsync errors still fail this test rather than being hidden.
+    if (process.platform === 'win32' && spawnSync('rsync', ['--version']).error?.code === 'ENOENT') {
+      context.skip('Windows runner has no rsync executable; real rsync remains required on Linux/macOS.');
+      return;
+    }
+    const unchangedPath = 'restore-watchdog/unchanged.json';
+    const changedPath = 'restore-watchdog/changed.json';
+    await writeManifest({
+      [unchangedPath]: await writeSnapshotFile(unchangedPath, '{"value":"same"}'),
+      [changedPath]: await writeSnapshotFile(changedPath, '{"value":"old"}'),
+    });
+
+    // Equal length AND identical mtime on both sides: rsync's quick check sees
+    // no difference for either file, so only `--checksum` can tell them apart —
+    // the very condition that makes the scan expensive and silent.
+    const matchingMtime = new Date('2026-09-12T00:00:00.000Z');
+    for (const [relativePath, liveContent] of [[unchangedPath, '{"value":"same"}'], [changedPath, '{"value":"new"}']]) {
+      const livePath = joinPath(PATHS.data, relativePath);
+      await realFs.mkdir(joinPath(livePath, '..'), { recursive: true });
+      await realFs.writeFile(livePath, liveContent);
+      await realFs.utimes(joinPath(snapshotDataDir, relativePath), matchingMtime, matchingMtime);
+      await realFs.utimes(livePath, matchingMtime, matchingMtime);
+    }
+
+    const previousRsync = process.env.PORTOS_RSYNC;
+    delete process.env.PORTOS_RSYNC;
+    spawn.mockImplementation((...args) => spawnChild(...args));
+
+    try {
+      const preview = await restoreSnapshot(tmpRoot, 'snap-1', { dryRun: true });
+
+      // The extra `-ii` lines describe unchanged entries and start with `.`,
+      // so runRsync's `>`/`<` collector must be blind to them: the reported
+      // count stays exactly the files that really differ.
+      expect(preview.changedFiles.some(line => line.includes(changedPath))).toBe(true);
+      expect(preview.changedFiles.some(line => line.includes(unchangedPath))).toBe(false);
+
+      const args = spawn.mock.calls[0][1];
+      expect(args).toContain('-ii');
+      expect(args).toContain('--checksum');
+
+      // Replay the exact vector. `-ii` must be the SHORT form: macOS ships
+      // openrsync, where a repeated long `--itemize-changes` does not stack.
+      const stdoutFor = vector => spawnSync(resolveRsyncBinary(), vector, { encoding: 'utf8' }).stdout ?? '';
+      expect(stdoutFor(args)).toContain(unchangedPath);
+      expect(stdoutFor(args.filter(arg => arg !== '-ii'))).not.toContain(unchangedPath);
+    } finally {
+      if (previousRsync === undefined) delete process.env.PORTOS_RSYNC;
+      else process.env.PORTOS_RSYNC = previousRsync;
+      spawn.mockReset();
+      await realFs.rm(joinPath(PATHS.data, 'restore-watchdog'), { recursive: true, force: true });
+    }
+  });
 });
 
 // restoreSnapshot's service-side subdirFilter guard (issue #1822). These reject
@@ -2007,14 +2071,18 @@ describe('restoreSnapshot snapshotId, filter flags, and settings re-sync', () =>
       // Asserted as an exact array (not arrayContaining): the ORDER matters to
       // rsync — `--exclude=*` must come last, after both includes, or the
       // targeted restore silently degrades into a full-tree restore.
-      // `--itemize-changes` legitimately appears twice: runRsync always prepends
-      // it, and restoreSnapshot seeds its own flag list with it. Harmless to
-      // rsync, and pinned here so a future de-dup is a deliberate change.
+      // Itemize legitimately appears twice: runRsync always prepends the long
+      // `--itemize-changes`, and restoreSnapshot adds the SHORT `-ii` so rsync
+      // also reports files its `--checksum` digest found unchanged (#7299) —
+      // without those lines a big unchanged tree is silent long enough to trip
+      // the idle watchdog. The short form is load-bearing: macOS's openrsync
+      // does not stack a repeated long `--itemize-changes`. Pinned here so a
+      // future de-dup is a deliberate change.
       expect(spawn.mock.calls[0][1]).toEqual([
         '--archive',
         '--itemize-changes',
         '--progress',
-        '--itemize-changes',
+        '-ii',
         '--checksum',
         // OS metadata excludes come BEFORE the includes — rsync takes the first
         // matching rule — and mirror what the integrity inventory skips.
