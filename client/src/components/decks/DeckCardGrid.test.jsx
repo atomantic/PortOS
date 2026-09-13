@@ -33,32 +33,39 @@ const renderGrid = (over = {}) => {
 };
 
 describe('DeckCardGrid', () => {
-  it('groups cards by suit/arcana with a rendered count per group', () => {
+  it('spells out each group\'s rendered count and how many still need a prompt', () => {
     renderGrid();
     const major = screen.getByRole('region', { name: 'Major Arcana' });
-    expect(within(major).getByText('1/2')).toBeInTheDocument();
-    expect(within(screen.getByRole('region', { name: 'Cups' })).getByText('0/3')).toBeInTheDocument();
+    expect(within(major).getByText('1/2 rendered')).toBeInTheDocument();
+    expect(within(major).queryByText(/need a prompt/)).toBeNull();
+    const cups = screen.getByRole('region', { name: 'Cups' });
+    expect(within(cups).getByText('0/3 rendered')).toBeInTheDocument();
+    expect(within(cups).getByText('1 need a prompt')).toBeInTheDocument();
   });
 
-  it('offers a render only for prompted, idle cards and routes the click to that card', () => {
+  it('renders a prompted card from its slot and sends a promptless one to its editor', () => {
     const props = renderGrid();
-    // EntryThumbSlot names the empty slot by its state: a renderable card reads
-    // "Render image…", a blocked one carries the slot's disabled copy. Card a
-    // (prompted) and d (failed, retryable) are enabled; e has no prompt.
-    const enabled = screen.getAllByRole('button', { name: /render image for this item/i });
-    expect(enabled).toHaveLength(2);
-    expect(screen.getByRole('button', { name: /save the universe first/i })).toBeDisabled();
-    fireEvent.click(enabled[0]);
+    // Card a (prompted) and d (failed, retryable) render; e has no prompt, so
+    // its slot is an opening into the editor rather than a dead grey button.
+    const renderable = screen.getAllByRole('button', { name: /^Render Card [ad]$/ });
+    expect(renderable).toHaveLength(2);
+    fireEvent.click(renderable[0]);
     expect(props.onRenderCard).toHaveBeenCalledWith(expect.objectContaining({ id: 'a' }));
+
+    const write = screen.getByRole('button', { name: 'Write a prompt for Card e' });
+    expect(write).toBeEnabled();
+    fireEvent.click(write);
+    expect(props.onOpenCard).toHaveBeenCalledWith(expect.objectContaining({ id: 'e' }));
+    expect(props.onRenderCard).toHaveBeenCalledTimes(1);
   });
 
   it('derives every badge from the card record: in-flight, rendered, failed, ready, needs prompt', () => {
     renderGrid();
-    expect(screen.getByText('rendering')).toBeInTheDocument();
-    expect(screen.getByText('rendered')).toBeInTheDocument();
-    expect(screen.getByText('failed')).toBeInTheDocument();
-    expect(screen.getByText('ready')).toBeInTheDocument();
-    expect(screen.getByText('needs prompt')).toBeInTheDocument();
+    expect(screen.getByText('Rendering…')).toBeInTheDocument();
+    expect(screen.getByText('Rendered')).toBeInTheDocument();
+    expect(screen.getByText('Failed')).toBeInTheDocument();
+    expect(screen.getByText('Ready to render')).toBeInTheDocument();
+    expect(screen.getByText('Needs prompt')).toBeInTheDocument();
   });
 
   it('opens the drawer from the card name and shows the cast canon entry', () => {

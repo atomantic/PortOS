@@ -39,7 +39,7 @@ export default function RecordRenderPinRow({
         id={`${idPrefix}-mode`}
         value={pinnedMode}
         onChange={(e) => onChange({ imageMode: e.target.value || null, imageModelId: null })}
-        className="w-full max-w-full bg-port-bg border border-port-border rounded-lg px-2 py-2 text-sm text-white focus:outline-none focus:border-port-accent sm:w-44"
+        className="w-full max-w-full bg-port-bg border border-port-border rounded-lg px-2 py-2 text-sm text-white focus:outline-none focus:border-port-accent sm:w-auto sm:min-w-[11rem]"
       >
         {showAuto ? <option value="">{autoLabel}</option> : (!pinnedMode && <option value="" disabled>Pick a backend</option>)}
         {optionList.map((o) => <option key={o.id} value={o.id}>{o.label || o.id}</option>)}
@@ -53,7 +53,7 @@ export default function RecordRenderPinRow({
           onBlur={modelDraft.onBlur}
           placeholder="Model (optional)"
           aria-label={`${label} model`}
-          className="w-full max-w-full bg-port-bg border border-port-border rounded-lg px-2 py-2 text-sm text-white focus:outline-none focus:border-port-accent sm:w-52"
+          className="w-full max-w-full bg-port-bg border border-port-border rounded-lg px-2 py-2 text-sm text-white focus:outline-none focus:border-port-accent sm:w-auto sm:min-w-[11rem]"
         />
       ) : <span className="hidden sm:block" />}
     </div>

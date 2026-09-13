@@ -8,6 +8,11 @@ import useProviderModels from '../../hooks/useProviderModels';
  * picker whenever it changes (a refetched deck, another surface's edit), and
  * every user change is lifted as `{ providerId, model, effort }` — an empty
  * provider means "the active provider", matching the server's fallback.
+ *
+ * Deliberately NOT `compact`: compact mode hides the field labels, which left
+ * the deck page showing three unexplained dropdowns ("Claude Code CLI",
+ * "claude-sonnet-5", "Default effort") stacked under the labelled image-backend
+ * row with nothing saying they were the prompt writer's settings.
  */
 export default function DeckLlmPinPicker({ pin, onChange, label = 'Prompt model', disabled = false }) {
   const {
@@ -45,7 +50,6 @@ export default function DeckLlmPinPicker({ pin, onChange, label = 'Prompt model'
       emptyProviderOption="Active provider"
       emptyModelOption="Default model"
       alwaysShowModel
-      compact
       label={label}
       loading={loading}
       disabled={disabled}
