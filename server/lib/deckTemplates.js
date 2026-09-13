@@ -28,6 +28,13 @@ export const DECK_KIND_LABELS = Object.freeze({
 // Real decks use `DECK_CARD_SIZE_BY_KIND` below instead.
 export const DECK_CARD_SIZE = Object.freeze({ width: 1024, height: 1536 });
 
+// Per-edge bounds for a deck's card size. `deckValidation.js` builds its zod
+// `cardSizeSchema` from these and the client's size inputs clamp to them, so
+// the form can't submit a value the PATCH would 400 on and neither side holds
+// its own copy of the numbers.
+export const DECK_CARD_SIZE_MIN = 256;
+export const DECK_CARD_SIZE_MAX = 4096;
+
 // Per-kind default card size, at each kind's true physical trim ratio rather
 // than the generic 2:3 fallback above — poker cards are 2.5"×3.5" (5:7),
 // tarot cards are 2.75"×4.75" (11:19). Both hold the same 1536 long edge as

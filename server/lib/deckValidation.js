@@ -5,7 +5,7 @@
  */
 
 import { z } from 'zod';
-import { DECK_KINDS } from './deckTemplates.js';
+import { DECK_CARD_SIZE_MAX, DECK_CARD_SIZE_MIN, DECK_KINDS } from './deckTemplates.js';
 import { llmRoutePinSchema } from './llmRoutePin.js';
 import { INFLUENCE_ENTRY_MAX, INFLUENCES_PER_LIST_MAX, STYLE_NOTES_MAX } from './universeBibleLimits.js';
 
@@ -32,10 +32,8 @@ const influencesSchema = z.object({
   avoid: z.array(influenceEntry).max(INFLUENCES_PER_LIST_MAX).optional().default([]),
 }).strict();
 
-const cardSizeSchema = z.object({
-  width: z.number().int().min(256).max(4096),
-  height: z.number().int().min(256).max(4096),
-}).strict();
+const cardEdge = z.number().int().min(DECK_CARD_SIZE_MIN).max(DECK_CARD_SIZE_MAX);
+const cardSizeSchema = z.object({ width: cardEdge, height: cardEdge }).strict();
 
 export const deckCreateSchema = z.object({
   name: z.string().trim().min(1).max(DECK_NAME_MAX),
