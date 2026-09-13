@@ -3,7 +3,10 @@
 // `![alt](url)` image embeds are matched BEFORE the `[text](url)` link form so
 // the leading `!` isn't dropped. A same-origin (`/…`) or http(s) src is allowed;
 // anything else (data:, javascript:, etc.) renders as the alt text only.
-const INLINE_RE = /(!\[[^\]]*\]\([^)]+\)|`[^`]*`|\*\*[^*]+\*\*|\*[^*]+\*|_[^_]+_|\[[^\]]+\]\([^)]+\))/g;
+// Unlike `*emphasis*`, GFM only opens/closes `_emphasis_` at a word boundary, so
+// the lookarounds keep intraword underscores (QUALITY_AUDIT_JSON, SOME_ENV_VAR,
+// snake_case) literal instead of being consumed as emphasis delimiters.
+const INLINE_RE = /(!\[[^\]]*\]\([^)]+\)|`[^`]*`|\*\*[^*]+\*\*|\*[^*]+\*|(?<!\w)_(?!\s)[^_]+(?<!\s)_(?!\w)|\[[^\]]+\]\([^)]+\))/g;
 
 const safeSrc = (url) => (/^(https?:\/\/|\/[^/])/.test(url) ? url : null);
 
