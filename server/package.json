@@ -36,7 +36,7 @@
     "socket.io-client": "4.8.3",
     "undici": "8.10.2",
     "ws": "8.21.3",
-    "zod": "4.5.4"
+    "zod": "4.6.1"
   },
   "devDependencies": {
     "@babel/parser": "7.29.8",
