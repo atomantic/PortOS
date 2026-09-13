@@ -132,9 +132,9 @@ export default function FirstRunCard() {
       <div className="flex items-start gap-2 sm:gap-3">
         <Sparkles size={18} className="text-port-accent shrink-0 mt-0.5" />
         <div className="min-w-0 flex-1">
-          <h3 id="first-run-heading" className="text-base font-semibold text-white">
+          <h2 id="first-run-heading" className="text-base font-semibold text-white">
             Where do you want to start?
-          </h3>
+          </h2>
           <p className="hidden sm:block mt-1 text-sm text-gray-400">
             Pick a mission to turn on that slice of PortOS and jump in. Exploring
             on your own or picking a mission hides this on future visits. Pressing

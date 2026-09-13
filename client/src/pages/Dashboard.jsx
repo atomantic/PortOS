@@ -9,6 +9,7 @@ import { WIDGETS_BY_ID, FALLBACK_LAYOUT } from '../components/dashboard/widgetRe
 import WidgetSkeleton from '../components/dashboard/WidgetSkeleton';
 import FirstRunCard from '../components/onboarding/FirstRunCard.jsx';
 import { DASHBOARD_LAYOUT_CHANGED, INSTANCE_FEATURES_CHANGED } from '../constants/events.js';
+import PageHeader from '../components/PageHeader';
 import { ChevronsDownUp, GripHorizontal, Monitor, Move, Save, X } from 'lucide-react';
 import * as api from '../services/api';
 import socket from '../services/socket';
@@ -430,72 +431,76 @@ export default function Dashboard() {
 
   return (
     <div className="space-y-6">
-      <FirstRunCard />
-      <div className="flex flex-row items-center justify-between gap-2 sm:gap-4">
-        <h2 className="flex items-center gap-2.5 text-2xl font-bold text-white">
-          Dashboard
-          <span
-            className="relative inline-flex h-2.5 w-2.5"
-            title={health ? 'Server online' : 'Server offline'}
-            aria-label={health ? 'Server online' : 'Server offline'}
-          >
-            {health && (
-              <span className="absolute inline-flex h-full w-full rounded-full bg-port-success opacity-60 animate-ping" />
-            )}
+      {/* The shared PageHeader owns the page <h1> (#7245) — it must precede
+          FirstRunCard so the rendered outline opens at level 1 and the card's
+          own heading sits one level under it. The server-health dot rides in
+          the actions slot, PageHeader's documented place for status badges. */}
+      <PageHeader
+        title="Dashboard"
+        actions={(
+          <>
             <span
-              className={`relative inline-flex rounded-full h-2.5 w-2.5 ${health ? 'bg-port-success shadow-[0_0_8px_rgb(var(--port-success))]' : 'bg-port-error shadow-[0_0_8px_rgb(var(--port-error))]'}`}
-            />
-          </span>
-        </h2>
-        <div className="flex flex-wrap items-center justify-end gap-2 sm:gap-3">
-          {layouts.length > 0 && !editingGrid && (
-            <LayoutPicker
-              layouts={layouts}
-              activeLayoutId={activeLayoutId}
-              onSelect={selectLayout}
-              onEdit={() => setEditorOpen(true)}
-            />
-          )}
-          {!editingGrid && activeLayout && visibleWidgets.length > 0 && (
-            <button
-              onClick={startGridEdit}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-port-card border border-port-border hover:border-gray-600 transition-colors text-sm text-gray-400 hover:text-white min-h-[40px]"
-              title="Reorder, move and resize widgets"
+              className="relative inline-flex h-2.5 w-2.5"
+              title={health ? 'Server online' : 'Server offline'}
+              aria-label={health ? 'Server online' : 'Server offline'}
             >
-              <Move size={14} />
-              <span className="hidden sm:inline">Arrange</span>
-            </button>
-          )}
-          {editingGrid && (
-            <>
+              {health && (
+                <span className="absolute inline-flex h-full w-full rounded-full bg-port-success opacity-60 animate-ping" />
+              )}
+              <span
+                className={`relative inline-flex rounded-full h-2.5 w-2.5 ${health ? 'bg-port-success shadow-[0_0_8px_rgb(var(--port-success))]' : 'bg-port-error shadow-[0_0_8px_rgb(var(--port-error))]'}`}
+              />
+            </span>
+            {layouts.length > 0 && !editingGrid && (
+              <LayoutPicker
+                layouts={layouts}
+                activeLayoutId={activeLayoutId}
+                onSelect={selectLayout}
+                onEdit={() => setEditorOpen(true)}
+              />
+            )}
+            {!editingGrid && activeLayout && visibleWidgets.length > 0 && (
               <button
-                onClick={cancelGridEdit}
-                disabled={savingGrid}
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-port-card border border-port-border hover:border-gray-600 transition-colors text-sm text-gray-400 hover:text-white min-h-[40px] disabled:opacity-50"
+                onClick={startGridEdit}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-port-card border border-port-border hover:border-gray-600 transition-colors text-sm text-gray-400 hover:text-white min-h-[40px]"
+                title="Reorder, move and resize widgets"
               >
-                <X size={14} />
-                <span className="hidden sm:inline">Cancel</span>
+                <Move size={14} />
+                <span className="hidden sm:inline">Arrange</span>
               </button>
-              <button
-                onClick={saveGridEdit}
-                disabled={savingGrid}
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-port-accent text-white hover:bg-port-accent/80 transition-colors text-sm min-h-[40px] disabled:opacity-50"
-              >
-                <Save size={14} />
-                <span className="hidden sm:inline">{savingGrid ? 'Saving…' : 'Save layout'}</span>
-              </button>
-            </>
-          )}
-          <Link
-            to="/ambient"
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-port-card border border-port-border hover:border-gray-600 transition-colors text-sm text-gray-400 hover:text-white min-h-[40px]"
-            title="Ambient display mode"
-          >
-            <Monitor size={14} />
-            <span className="hidden sm:inline">Ambient</span>
-          </Link>
-        </div>
-      </div>
+            )}
+            {editingGrid && (
+              <>
+                <button
+                  onClick={cancelGridEdit}
+                  disabled={savingGrid}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-port-card border border-port-border hover:border-gray-600 transition-colors text-sm text-gray-400 hover:text-white min-h-[40px] disabled:opacity-50"
+                >
+                  <X size={14} />
+                  <span className="hidden sm:inline">Cancel</span>
+                </button>
+                <button
+                  onClick={saveGridEdit}
+                  disabled={savingGrid}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-port-accent text-white hover:bg-port-accent/80 transition-colors text-sm min-h-[40px] disabled:opacity-50"
+                >
+                  <Save size={14} />
+                  <span className="hidden sm:inline">{savingGrid ? 'Saving…' : 'Save layout'}</span>
+                </button>
+              </>
+            )}
+            <Link
+              to="/ambient"
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-port-card border border-port-border hover:border-gray-600 transition-colors text-sm text-gray-400 hover:text-white min-h-[40px]"
+              title="Ambient display mode"
+            >
+              <Monitor size={14} />
+              <span className="hidden sm:inline">Ambient</span>
+            </Link>
+          </>
+        )}
+      />
+      <FirstRunCard />
 
       {dataError && (
         <div className="p-4 bg-port-error/20 border border-port-error rounded-lg text-port-error">

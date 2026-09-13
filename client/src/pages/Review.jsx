@@ -25,6 +25,7 @@ import {
   Activity,
   DatabaseBackup
 } from 'lucide-react';
+import PageHeader from '../components/PageHeader';
 import PageSkeleton from '../components/ui/PageSkeleton';
 import CollapsibleText from '../components/ui/CollapsibleText';
 import MarkdownOutput from '../components/cos/MarkdownOutput';
@@ -298,7 +299,7 @@ export default function Review() {
   if (loading) {
     return <PageSkeleton
         label="Loading review hub"
-        headerRowClass="flex flex-col lg:flex-row lg:items-center justify-between gap-3"
+        header="bar"
         padded
         fullHeight
         titleWidthClass="w-40"
@@ -318,15 +319,13 @@ export default function Review() {
   const remainingActionCount = Math.max(0, actionableItems.length - topActionItems.length);
 
   return (
-    <div className="h-full overflow-auto p-4 md:p-6">
-      <div className="space-y-3">
-        {/* Header */}
-        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
-          <h2 className="text-xl font-bold text-white flex items-center gap-2">
-            <ClipboardList size={20} />
-            Review Hub
-          </h2>
-          <div className="flex items-center gap-2 flex-wrap">
+    <div className="flex flex-col h-full min-h-0">
+      <PageHeader
+        icon={ClipboardList}
+        iconColor="text-white"
+        title="Review Hub"
+        actions={(
+          <>
             <select
               aria-label="Filter review items by status"
               value={filter}
@@ -356,9 +355,10 @@ export default function Review() {
                 </button>
               </>
             )}
-          </div>
-        </div>
-
+          </>
+        )}
+      />
+      <div className="flex-1 min-h-0 overflow-auto p-4 md:p-6 space-y-3">
         {/* Triage summary */}
         <section className="flex flex-wrap gap-2">
           <SummaryPill icon={BellRing} label="Pending" value={counts?.total ?? 0} tone="text-white" />

@@ -6,6 +6,7 @@ import toast from '../components/ui/Toast';
 import InlineConfirmRow from '../components/ui/InlineConfirmRow';
 import OverflowMenu from '../components/ui/OverflowMenu';
 import AppIcon from '../components/AppIcon';
+import PageHeader from '../components/PageHeader';
 import PageSkeleton from '../components/ui/PageSkeleton';
 import { SkeletonBlock, SkeletonRegion, skeletonRepeat } from '../components/ui/Skeleton';
 import KanbanBoard from '../components/KanbanBoard';
@@ -212,36 +213,36 @@ export default function Apps() {
 
   return (
     <div>
-      {/* Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-6">
-        <div>
-          <h2 className="text-2xl font-bold text-white">Apps</h2>
-          <p className="text-gray-500 text-sm sm:text-base">Manage registered applications</p>
-        </div>
-        <div className="flex items-center gap-3">
-          {/* Archive Toggle — stays mounted while the archived view is open even
-              once it empties, so the way back never disappears. */}
-          {(showArchived || archivedApps.length > 0) && (
-            <button
-              onClick={() => setShowArchived(!showArchived)}
-              className={`px-3 py-2 rounded-lg text-sm flex items-center gap-2 transition-colors ${
-                showArchived
-                  ? 'bg-port-warning/20 text-port-warning border border-port-warning/30'
-                  : 'bg-port-border text-gray-400 hover:text-white'
-              }`}
+      <PageHeader
+        title="Apps"
+        subtitle="Manage registered applications"
+        className="mb-6"
+        actions={(
+          <>
+            {/* Archive Toggle — stays mounted while the archived view is open even
+                once it empties, so the way back never disappears. */}
+            {(showArchived || archivedApps.length > 0) && (
+              <button
+                onClick={() => setShowArchived(!showArchived)}
+                className={`px-3 py-2 rounded-lg text-sm flex items-center gap-2 transition-colors ${
+                  showArchived
+                    ? 'bg-port-warning/20 text-port-warning border border-port-warning/30'
+                    : 'bg-port-border text-gray-400 hover:text-white'
+                }`}
+              >
+                <Archive size={16} />
+                {showArchived ? `Active (${activeApps.length})` : `Archived (${archivedApps.length})`}
+              </button>
+            )}
+            <Link
+              to="/apps/create"
+              className="px-4 py-2 bg-port-accent hover:bg-port-accent/80 text-white rounded-lg transition-colors text-center"
             >
-              <Archive size={16} />
-              {showArchived ? `Active (${activeApps.length})` : `Archived (${archivedApps.length})`}
-            </button>
-          )}
-          <Link
-            to="/apps/create"
-            className="px-4 py-2 bg-port-accent hover:bg-port-accent/80 text-white rounded-lg transition-colors text-center"
-          >
-            + Add
-          </Link>
-        </div>
-      </div>
+              + Add
+            </Link>
+          </>
+        )}
+      />
 
       {/* In-flight update/standardize — page-level so it survives collapsing
           the row and remounting the page. */}
