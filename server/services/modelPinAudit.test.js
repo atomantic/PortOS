@@ -8,12 +8,18 @@ vi.mock('./apps.js', () => ({
   getActiveApps: vi.fn(),
   updateAppTaskTypeOverride: vi.fn(),
 }));
+// The per-record source (#7326) owns its own SQL and is covered in
+// modelPinRecords.test.js; here it stands in for 'a source that yields pins',
+// so the registry wiring — reconciliation, ordering, clear dispatch — is what
+// these assertions are about.
+vi.mock('./modelPinRecords.js', () => ({ collectRecordPins: vi.fn(), clearRecordPin: vi.fn() }));
 
 const { listProviders } = await import('./providers.js');
 const { removeByMetadata } = await import('./notifications.js');
 const { getSettings, updateSettingsWith } = await import('./settings.js');
 const { loadSchedule, updateTaskInterval } = await import('./taskSchedule.js');
 const { getActiveApps, updateAppTaskTypeOverride } = await import('./apps.js');
+const { collectRecordPins, clearRecordPin } = await import('./modelPinRecords.js');
 const {
   auditModelPins, clearModelPin, MODEL_OVERRIDE_CAPABLE_MODES, PINNED_IMAGE_MODE_IDS,
 } = await import('./modelPinAudit.js');
@@ -37,6 +43,20 @@ beforeEach(() => {
   loadSchedule.mockResolvedValue({ tasks: {} });
   getActiveApps.mockResolvedValue([]);
   removeByMetadata.mockResolvedValue({ success: true, removed: 0 });
+  collectRecordPins.mockResolvedValue([]);
+});
+
+// One record's stored render pin, as the record source reports it.
+const recordPin = (overrides = {}) => ({
+  id: 'record:universe:u-1',
+  family: 'universe',
+  recordId: 'u-1',
+  mode: 'agy',
+  model: 'gemini-3.5-flash-low',
+  label: 'Neon Dusk · universe render model',
+  location: 'Universes → Render',
+  href: '/universes/u-1?tab=render',
+  ...overrides,
 });
 
 describe('image-gen pin coverage', () => {
@@ -233,5 +253,76 @@ describe('clearModelPin', () => {
     expect(updateSettingsWith).not.toHaveBeenCalled();
     expect(updateTaskInterval).not.toHaveBeenCalled();
     expect(updateAppTaskTypeOverride).not.toHaveBeenCalled();
+    expect(clearRecordPin).not.toHaveBeenCalled();
+  });
+});
+
+describe('per-record pins (#7326)', () => {
+  it('reports a retired record pin with its deep link and what the provider now offers', async () => {
+    collectRecordPins.mockResolvedValue([recordPin()]);
+
+    const { pins, providers } = await auditModelPins();
+
+    expect(pins).toHaveLength(1);
+    expect(pins[0]).toMatchObject({
+      id: 'record:universe:u-1',
+      kind: 'record',
+      model: 'gemini-3.5-flash-low',
+      label: 'Neon Dusk · universe render model',
+      href: '/universes/u-1?tab=render',
+    });
+    expect(providers['antigravity-cli'].available).toEqual(['gemini-3.6-flash']);
+  });
+
+  it.each([
+    ['a local diffusion checkpoint', 'local', 'sdxl-base'],
+    ['the auto sentinel', 'auto', 'gemini-3.5-flash-low'],
+    ['no mode at all', null, 'gemini-3.5-flash-low'],
+  ])('drops a record pin whose mode names %s — its provider is not a CLI catalog', async (_case, mode, model) => {
+    // The false positive this gate exists to prevent: a working LOCAL pin
+    // reported as retired, with a one-click button offering to delete it.
+    collectRecordPins.mockResolvedValue([recordPin({ mode, model })]);
+
+    expect((await auditModelPins()).pins).toEqual([]);
+  });
+
+  it('leaves a record pinned to a model the provider still lists alone', async () => {
+    collectRecordPins.mockResolvedValue([recordPin({ model: 'gemini-3.6-flash-high' })]);
+
+    expect((await auditModelPins()).pins).toEqual([]);
+  });
+
+  it('orders record pins after the install-wide ones', async () => {
+    // A setting that mis-points every surface outranks one record's own choice.
+    getSettings.mockResolvedValue(settingsWith({
+      imageGen: { agy: { enabled: true, model: 'gemini-3.5-flash-low' } },
+    }));
+    collectRecordPins.mockResolvedValue([recordPin()]);
+
+    expect((await auditModelPins()).pins.map((pin) => pin.id))
+      .toEqual(['settings:imageGen.agy.model', 'record:universe:u-1']);
+  });
+
+  it('keeps the rest of the audit when the record scan throws', async () => {
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => {});
+    getSettings.mockResolvedValue(settingsWith({
+      imageGen: { agy: { enabled: true, model: 'gemini-3.5-flash-low' } },
+    }));
+    collectRecordPins.mockRejectedValue(new Error('database is down'));
+
+    expect((await auditModelPins()).pins.map((pin) => pin.id)).toEqual(['settings:imageGen.agy.model']);
+    expect(logged).toHaveBeenCalledWith(expect.stringContaining('record'));
+    logged.mockRestore();
+  });
+
+  it('clears a record pin through the record writer, carrying the family it belongs to', async () => {
+    collectRecordPins.mockResolvedValue([recordPin()]);
+
+    await expect(clearModelPin('record:universe:u-1')).resolves.toEqual({
+      cleared: true, id: 'record:universe:u-1',
+    });
+    expect(clearRecordPin).toHaveBeenCalledWith(expect.objectContaining({ family: 'universe', recordId: 'u-1' }));
+    // The model field alone — nothing here may write a mode or a provider.
+    expect(updateSettingsWith).not.toHaveBeenCalled();
   });
 });

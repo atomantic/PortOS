@@ -68,6 +68,34 @@ describe('RetiredModelPinsPanel', () => {
     expect(await screen.findByText('Universe Bible & canon renders — model:')).toBeTruthy();
   });
 
+  it('names a per-record pin by the record, and links to that record', async () => {
+    // A record pin (#7326) has no client-side registry to compose a name from —
+    // the record's own name is the name — so the panel falls through to the
+    // server's label rather than printing the pin kind.
+    api.getModelPinWarnings.mockResolvedValue({
+      pins: [{
+        id: 'record:universe:u-1',
+        kind: 'record',
+        family: 'universe',
+        recordId: 'u-1',
+        mode: 'agy',
+        providerId: 'antigravity-cli',
+        model: 'gemini-3.5-flash-low',
+        label: 'Example Universe · universe render model',
+        location: 'Universes → Render',
+        href: '/universes/u-1?tab=render',
+      }],
+      providers: STALE.providers,
+    });
+    renderPanel();
+
+    expect(await screen.findByText('Example Universe · universe render model:')).toBeTruthy();
+    expect(screen.getByText(/Universes → Render/)).toBeTruthy();
+    expect(screen.getByRole('link', { name: 'Open setting' })).toHaveAttribute(
+      'href', '/universes/u-1?tab=render',
+    );
+  });
+
   it('renders nothing on a healthy install', async () => {
     api.getModelPinWarnings.mockResolvedValue({ pins: [], providers: {} });
     const { container } = renderPanel();

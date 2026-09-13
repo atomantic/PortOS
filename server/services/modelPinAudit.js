@@ -53,10 +53,12 @@ let appsModule = null;
 let notificationsModule = null;
 let providersModule = null;
 let taskScheduleModule = null;
+let recordPinsModule = null;
 const loadAppsModule = () => (appsModule ||= import('./apps.js'));
 const loadNotificationsModule = () => (notificationsModule ||= import('./notifications.js'));
 const loadProvidersModule = () => (providersModule ||= import('./providers.js'));
 const loadTaskScheduleModule = () => (taskScheduleModule ||= import('./taskSchedule.js'));
+const loadRecordPinsModule = () => (recordPinsModule ||= import('./modelPinRecords.js'));
 
 /**
  * Which provider record serves each cloud image-gen mode that can carry a pin.
@@ -76,6 +78,18 @@ const PINNED_IMAGE_MODES = Object.freeze({
   [IMAGE_GEN_MODE.AGY]: { providerId: ANTIGRAVITY_CLI_ID, label: 'Agy CLI' },
   [IMAGE_GEN_MODE.CODEX]: { providerId: CODEX_CLI_ID, label: 'Codex CLI' },
 });
+
+/**
+ * The provider record that serves `mode`, or null when `mode` names no pinnable
+ * cloud backend.
+ *
+ * Every collector reading a `imageMode`/`imageModel` PAIR goes through this,
+ * and `local` answering null is the point: the same model field holds a LOCAL
+ * DIFFUSION CHECKPOINT id when the surface renders locally, and that is not a
+ * CLI catalog entry to reconcile against. Judging one would report a working
+ * local pin as retired and offer a button to delete it.
+ */
+const pinnedModeProviderId = (mode) => (typeof mode === 'string' && PINNED_IMAGE_MODES[mode]?.providerId) || null;
 
 /** Exported for the coverage guard above — not a runtime dependency. */
 export const PINNED_IMAGE_MODE_IDS = Object.freeze(Object.keys(PINNED_IMAGE_MODES));
@@ -126,7 +140,7 @@ function collectRenderDefaultPins({ settings }) {
     return pinIf({
       id: `settings:renderDefaults.${target}.imageModel`,
       target,
-      providerId: mode ? PINNED_IMAGE_MODES[mode]?.providerId : null,
+      providerId: pinnedModeProviderId(mode),
       model: normalizeRenderPinValue(entry?.imageModel),
       label: `${target} render model`,
       location: 'Settings → Media Gen → Render Defaults',
@@ -228,6 +242,32 @@ const PIN_SOURCES = Object.freeze([
     clear: async (pin) => {
       const { updateAppTaskTypeOverride } = await loadAppsModule();
       return updateAppTaskTypeOverride(pin.appId, pin.taskType, { model: null });
+    },
+  },
+  // Per-record `imageModelId` pins (#7326) — universes, series, sprite records,
+  // decks and music-video projects. ONE row rather than five: they share a
+  // storage shape, so `modelPinRecords.js` handles them with one query per
+  // family and dispatches the clear on `pin.family`. Last in the table because
+  // the panel reads install-wide pins first — a setting that mis-points every
+  // surface should be the row the user sees above one record's own choice.
+  //
+  // The record module finds the stored pairs and stops there; `pinnedModeProviderId`
+  // is applied HERE, exactly as `collectRenderDefaultPins` applies it, so the
+  // "a `local` pin names a diffusion checkpoint, not a CLI model" gate has one
+  // definition. It also keeps the mode map out of a module this one reaches
+  // through a deferred import — importing it back would close a cycle, and a
+  // shared leaf would put another file in the static closure of every suite
+  // that reaches `routes/providers.js`.
+  {
+    kind: 'record',
+    collect: async () => {
+      const { collectRecordPins } = await loadRecordPinsModule();
+      const stored = await collectRecordPins();
+      return stored.flatMap((pin) => pinIf({ ...pin, providerId: pinnedModeProviderId(pin.mode) }));
+    },
+    clear: async (pin) => {
+      const { clearRecordPin } = await loadRecordPinsModule();
+      return clearRecordPin(pin);
     },
   },
 ]);
