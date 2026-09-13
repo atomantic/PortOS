@@ -27,13 +27,11 @@
  * service, the route, and the suite can all share one membership rule.
  */
 
-import { modelPinIsOffered } from './localProviderRuntime.js';
+import { modelPinIsOffered } from './modelPinMembership.js';
 import {
   antigravityBaseModels,
-  antigravityCatalogListsModel,
   filterSelectableModels,
   isAntigravityProvider,
-  isConfiguredDefaultModel,
 } from './providerModels.js';
 
 /**
@@ -66,32 +64,27 @@ export function catalogOfferings(provider) {
 /**
  * Is `modelId` still served by `provider`?
  *
- * Delegates the base rule to `modelPinIsOffered` — the repo's existing "is this
- * stored pin valid against this provider record?" test — and adds only the
- * tolerances a RETIREMENT check needs on top. Re-deriving the base rule here
- * would have dropped its local-daemon carve-out, which is load-bearing: an
- * Ollama/LM Studio/MTPLX-backed provider's `models` array is a stale cached
- * snapshot while the daemon on this machine is the authority, so judging a
- * local pin against the record reports a model that is installed and serving as
- * retired — and this feature would then offer a one-click button to delete it.
+ * THE membership rule, `modelPinIsOffered`, verbatim — plus the one case a
+ * RETIREMENT check answers differently from a spawn-time check: nothing is
+ * pinned at all. This wrapper exists only to name that case and to give the
+ * audit a signature in its own vocabulary (`(provider, modelId)`, the pin's
+ * side of the question).
  *
- * That is the whole reason for the posture below: every case where the answer
- * is genuinely UNKNOWN answers `true`. A false "your pin is gone" tells the
- * user to change a setting that works, which is strictly worse than missing
- * one. `modelPinIsOffered` supplies two of those cases (an empty catalog, a
- * local-daemon provider); this function adds two more (nothing is pinned, and
- * no provider record could be resolved to compare against).
+ * The rule's posture is what makes this safe to surface in a UI: every case
+ * where the answer is genuinely UNKNOWN answers `true`. A false "your pin is
+ * gone" tells the user to change a setting that works, which is strictly worse
+ * than missing one. `modelPinIsOffered` supplies the configured-default
+ * sentinel, an empty catalog, a local-daemon provider, and the two
+ * same-model-spelled-differently tolerances (agy base ids, OpenCode's
+ * `namespace/model` form); this function adds the last two — nothing is
+ * pinned, and no provider record could be resolved to compare against.
  *
- * The two tolerances layered on top are both "the same model, spelled
- * differently", not a laxer rule:
- *
- *  - **agy compares on BASE ids.** Once `--effort` carries the tier,
- *    `gemini-3.6-flash` and `gemini-3.6-flash-low` are the same `--model`
- *    value, and a tier the base does not offer is clamped by
- *    `antigravityModelEffortLevels` rather than being a different model.
- *  - **OpenCode addresses models as `namespace/model`.** A pin is stored BARE
- *    and namespaced at spawn (`prefixOpencodeModel`), so a catalog holding the
- *    qualified form — or a pin hand-written that way — is the same model.
+ * Those tolerances used to be layered HERE, above a stricter
+ * `modelPinIsOffered`, which meant the audit and the three spawn-time callers
+ * disagreed about the same pin: `cliProviderRun` rejected a bare agy base id
+ * against a suffix-only catalog and silently fell back to the provider default
+ * — for a model it would itself have spawned. They moved down into the rule
+ * (#7327), so there is now one answer and the browser can mirror it.
  *
  * @param {{id?:string, command?:string, models?:unknown[]}|null|undefined} provider
  * @param {string|null|undefined} modelId
@@ -99,18 +92,8 @@ export function catalogOfferings(provider) {
  */
 export function providerCatalogListsModel(provider, modelId) {
   if (typeof modelId !== 'string' || modelId.trim() === '') return true;
-  const id = modelId.trim();
-  if (isConfiguredDefaultModel(id)) return true;
   if (!provider) return true;
-  // Empty catalog, local daemon, or a plain exact match — all "still served".
-  if (modelPinIsOffered(provider, id)) return true;
-
-  const ids = catalogModelIds(provider);
-  if (isAntigravityProvider(provider)) return antigravityCatalogListsModel(id, ids);
-  // `bare` is a no-op on an id with no slash, which is exactly how OpenCode
-  // itself splits `provider/model` — on the FIRST slash only.
-  const bare = (value) => value.slice(value.indexOf('/') + 1);
-  return ids.some((listed) => bare(listed) === bare(id));
+  return modelPinIsOffered(provider, modelId.trim());
 }
 
 /**
