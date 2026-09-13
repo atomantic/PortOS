@@ -23,17 +23,6 @@ vi.mock('../lib/gitRemote.js', () => ({
   getOriginInfo: (...args) => getOriginInfoMock(...args),
 }))
 
-// The coordinator half of the fingerprint contract lives in issueWatcher.js.
-// Its service-level dependencies are stubbed only so the module loads here;
-// the contract test below calls one pure exported function.
-vi.mock('./git.js', () => ({ mergePR: vi.fn(), resolveForgeForRepo: vi.fn() }))
-vi.mock('./apps.js', () => ({ getAppById: vi.fn(), updateApp: vi.fn() }))
-vi.mock('./notifications.js', () => ({
-  addNotification: vi.fn(), NOTIFICATION_TYPES: {}, PRIORITY_LEVELS: {},
-}))
-vi.mock('./prRemediationFollowUp.js', () => ({
-  PR_REMEDIATION_SPAWN: {}, spawnPrRemediationFollowUp: vi.fn(),
-}))
 vi.mock('../lib/workTracker.js', async (importActual) => {
   const actual = await importActual()
   return {
@@ -50,6 +39,7 @@ import {
   securityScanFingerprint,
   summarizeSecurityScanReport,
 } from './prReviewerSecurity.js'
+import { screenedPullRequestFingerprint } from '../lib/prReviewContent.js'
 
 const app = { id: 'app-example', repoPath: '/tmp/example-repo' }
 const guardVerdict = (safe = true) => ({
@@ -419,11 +409,11 @@ describe('pr-reviewer model-abuse preflight', () => {
 
 /**
  * The preflight STAMPS the fingerprint and the coordinator RECOMPUTES it from a
- * fresh forge read; a PR whose two values disagree is silently skipped, so a
- * one-sided change to the screened surface disables review, CI approval, and
- * merge for every external PR at once, with no error anywhere. Deriving the
- * expected value from either builder alone cannot catch that — only running the
- * real producer against the real consumer can.
+ * fresh forge read; a PR whose two values disagree is skipped, so a one-sided
+ * change to the screened surface disables review, CI approval, and merge for
+ * every external PR at once. Deriving the expected value from either builder
+ * alone cannot catch that — this runs the REAL preflight scan and compares what
+ * it stamped against what the coordinator recomputes from its own forge read.
  */
 describe('screened-content fingerprint contract', () => {
   const HEAD = 'a'.repeat(40)
@@ -442,16 +432,6 @@ describe('screened-content fingerprint contract', () => {
     ...overrides,
   })
 
-  // Loaded at call time, not statically: the coordinator drags a large service
-  // subtree behind it and this suite needs one function from it (see the server
-  // import budget in lib/importScoping.test.js). Memoized so parallel awaits
-  // share one evaluation of the mocked module.
-  let coordinator
-  const pullRequestContentFingerprint = async (...args) => {
-    coordinator = coordinator || import('./issueWatcher.js')
-    return (await coordinator).pullRequestContentFingerprint(...args)
-  }
-
   const scanOnce = async () => {
     routeGh({
       prs: [listedPr(12, 'contributor-a', HEAD)],
@@ -465,7 +445,7 @@ describe('screened-content fingerprint contract', () => {
   }
 
   it('recomputes the exact fingerprint the preflight stamped', async () => {
-    expect(await pullRequestContentFingerprint(coordinatorRead(), DIFF)).toBe(await scanOnce())
+    expect(screenedPullRequestFingerprint(coordinatorRead(), DIFF)).toBe(await scanOnce())
   })
 
   it('rejects a PR whose commit messages, title, body, or diff changed after screening', async () => {
@@ -475,13 +455,13 @@ describe('screened-content fingerprint contract', () => {
       coordinatorRead({ title: 'Contributor update 12 (edited)' }),
       coordinatorRead({ body: 'Rewritten description' }),
     ]
-    for (const pr of changed) expect(await pullRequestContentFingerprint(pr, DIFF)).not.toBe(stamped)
-    expect(await pullRequestContentFingerprint(coordinatorRead(), `${DIFF}\n+extra`)).not.toBe(stamped)
+    for (const pr of changed) expect(screenedPullRequestFingerprint(pr, DIFF)).not.toBe(stamped)
+    expect(screenedPullRequestFingerprint(coordinatorRead(), `${DIFF}\n+extra`)).not.toBe(stamped)
   })
 
   it('refuses to verify a PR read without its commit log instead of hashing a smaller surface', async () => {
     const stamped = await scanOnce()
-    expect(await pullRequestContentFingerprint(coordinatorRead({ commits: undefined }), DIFF)).toBeNull()
+    expect(screenedPullRequestFingerprint(coordinatorRead({ commits: undefined }), DIFF)).toBeNull()
     expect(stamped).toEqual(expect.any(String))
   })
 })

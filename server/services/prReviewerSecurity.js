@@ -24,7 +24,10 @@ import {
   linkedIssueIntentFingerprint,
   normalizeLinkedIssues,
 } from '../lib/modelAbuseGuard.js';
-import { pullRequestReviewContent, pullRequestReviewFingerprint } from '../lib/prReviewContent.js';
+// The screened surface and its fingerprint have ONE definition, because the
+// coordinator recomputes the same value from a fresh forge read before it acts.
+// Never rebuild either shape here.
+import { screenedPullRequestContent, screenedPullRequestFingerprint } from '../lib/prReviewContent.js';
 import { screenUntrustedContent } from './untrustedContent.js';
 import { safeJSONParse } from '../lib/fileUtils.js';
 
@@ -256,13 +259,6 @@ const formatSecurityFindings = (findings) => findings.map((finding) => (
   `${finding.severity} — ${finding.location}: ${finding.reason}`
 )).join('\n');
 
-// The screened surface and its fingerprint are defined in `lib/prReviewContent.js`
-// because the coordinator recomputes the same value from a fresh forge read
-// before it acts. Never build either shape locally.
-const contentFor = (pr, diff, commits) => pullRequestReviewContent({
-  title: pr.title, body: pr.body, commits, diff,
-});
-
 const structuralVerdict = (findings) => ({
   ok: true,
   safe: false,
@@ -276,15 +272,11 @@ const structuralVerdict = (findings) => ({
   layers: { deterministic: 'blocked', classifier: 'not-run', verdict: 'validated' },
 });
 
-const contentFingerprintFor = (pr, diff, commits) => pullRequestReviewFingerprint({
-  number: pr?.number, headSha: pr?.headRefOid, title: pr?.title, body: pr?.body, commits, diff,
-});
-
 const reportFor = (pr, diff, commits, verdict) => ({
   number: pr.number,
   url: pr.url,
   headRefOid: pr.headRefOid,
-  contentFingerprint: contentFingerprintFor(pr, diff, commits),
+  contentFingerprint: screenedPullRequestFingerprint(pr, diff, commits),
   updatedAt: pr.updatedAt,
   passed: verdict.safe === true,
   safe: verdict.safe === true,
@@ -368,7 +360,7 @@ export async function runPrReviewerSecurityScan({ app, target = null, largeInput
     // halves separately — the diff by `contentFingerprint`, the issue text by
     // `eligibilityFacts.intentFingerprint`.
     const intentContent = linkedIssueIntentContent(pr.linkedIssues);
-    const prContent = contentFor(pr, diff, commits);
+    const prContent = screenedPullRequestContent(pr, diff, commits);
     const content = intentContent ? `${prContent}\n\n${intentContent}` : prContent;
     if (content.length > SECURITY_SCAN_MAX_DIFF_CHARS) {
       return failure('security-scan-input-too-large', { reviewedPrs, scanKey });

@@ -523,11 +523,10 @@ describe('deferred imports stay deferred (#6156)', () => {
 // closure adds nothing: it imports only `lib/modelAbuseGuard.js`, which every one
 // of those already had. There is no narrowing available, and deferring it would
 // defeat the point — the preflight STAMPS a content fingerprint that the
-// coordinator RECOMPUTES before it acts, the check fails closed and silently, and
-// two builders that drift apart disable review, CI approval, and merge for every
-// external PR with no error anywhere. The contract test that pins the round trip
-// reaches the coordinator through a call-site `await import()`, so it adds none of
-// that service subtree.
+// coordinator RECOMPUTES before it acts, the check fails closed, and two builders
+// that drift apart disable review, CI approval, and merge for every external PR.
+// Putting both halves in one pure leaf is what keeps the contract test out of the
+// coordinator's service subtree entirely.
 const MAX_STATIC_INSTANTIATIONS = 104101;
 
 
