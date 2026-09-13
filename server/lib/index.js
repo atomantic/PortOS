@@ -560,6 +560,7 @@ export * from './mergeGateContract.js';
 export * from './preflightPlan.js';
 export * from './prDisposition.js';
 export * from './prHandbackPolicy.js';
+export * from './prReviewContent.js';
 export * from './prReviewReport.js';
 export * from './repoStateExpectations.js';
 export * from './shellCd.js';

@@ -22,9 +22,12 @@ import {
   LINKED_ISSUE_STANDARD_BODY_MAX_CHARS,
   linkedIssueIntentContent,
   linkedIssueIntentFingerprint,
-  modelAbuseContentFingerprint,
   normalizeLinkedIssues,
 } from '../lib/modelAbuseGuard.js';
+// The screened surface and its fingerprint have ONE definition, because the
+// coordinator recomputes the same value from a fresh forge read before it acts.
+// Never rebuild either shape here.
+import { screenedPullRequestContent, screenedPullRequestFingerprint } from '../lib/prReviewContent.js';
 import { screenUntrustedContent } from './untrustedContent.js';
 import { safeJSONParse } from '../lib/fileUtils.js';
 
@@ -256,31 +259,6 @@ const formatSecurityFindings = (findings) => findings.map((finding) => (
   `${finding.severity} — ${finding.location}: ${finding.reason}`
 )).join('\n');
 
-const MAX_COMMIT_LOG_CHARS = 100_000;
-
-function formatCommitLog(commits) {
-  if (!Array.isArray(commits) || commits.length === 0) return '';
-  const log = commits.map((commit) => {
-    const headline = typeof commit?.messageHeadline === 'string' ? commit.messageHeadline : '';
-    const body = typeof commit?.messageBody === 'string' ? commit.messageBody : '';
-    return [headline, body].filter(Boolean).join('\n');
-  }).filter(Boolean).join('\n\n');
-  return log.length > MAX_COMMIT_LOG_CHARS ? log.slice(0, MAX_COMMIT_LOG_CHARS) : log;
-}
-
-const contentFor = (pr, diff, commits) => {
-  const commitLog = formatCommitLog(commits);
-  return [
-    'Pull request title:',
-    pr.title,
-    'Pull request description:',
-    pr.body,
-    ...(commitLog ? ['Commit messages:', commitLog] : []),
-    'Complete unified diff:',
-    diff,
-  ].join('\n\n');
-};
-
 const structuralVerdict = (findings) => ({
   ok: true,
   safe: false,
@@ -294,17 +272,11 @@ const structuralVerdict = (findings) => ({
   layers: { deterministic: 'blocked', classifier: 'not-run', verdict: 'validated' },
 });
 
-const contentFingerprintFor = (pr, diff, commits) => modelAbuseContentFingerprint(
-  'pull-request',
-  { number: pr?.number, headSha: pr?.headRefOid },
-  contentFor(pr, diff, commits),
-);
-
 const reportFor = (pr, diff, commits, verdict) => ({
   number: pr.number,
   url: pr.url,
   headRefOid: pr.headRefOid,
-  contentFingerprint: contentFingerprintFor(pr, diff, commits),
+  contentFingerprint: screenedPullRequestFingerprint(pr, diff, commits),
   updatedAt: pr.updatedAt,
   passed: verdict.safe === true,
   safe: verdict.safe === true,
@@ -388,7 +360,7 @@ export async function runPrReviewerSecurityScan({ app, target = null, largeInput
     // halves separately — the diff by `contentFingerprint`, the issue text by
     // `eligibilityFacts.intentFingerprint`.
     const intentContent = linkedIssueIntentContent(pr.linkedIssues);
-    const prContent = contentFor(pr, diff, commits);
+    const prContent = screenedPullRequestContent(pr, diff, commits);
     const content = intentContent ? `${prContent}\n\n${intentContent}` : prContent;
     if (content.length > SECURITY_SCAN_MAX_DIFF_CHARS) {
       return failure('security-scan-input-too-large', { reviewedPrs, scanKey });

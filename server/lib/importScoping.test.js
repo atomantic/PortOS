@@ -516,7 +516,18 @@ describe('deferred imports stay deferred (#6156)', () => {
 // dependency-free leaves. Its three HEAVY stores — apps.js, taskSchedule.js,
 // providers.js — stay behind memoized call-site `await import()`, without which
 // that one edge alone measured +449.
-const MAX_STATIC_INSTANTIATIONS = 104033;
+// Giving the screened pull-request surface ONE definition (#7323) measures +68.
+// All of it is the new pure leaf `lib/prReviewContent.js` landing in the closure
+// of the 68 files that already reach `services/issueWatcher.js`,
+// `services/prReviewerSecurity.js`, or the `lib/` barrel — +1 file each. Its own
+// closure adds nothing: it imports only `lib/modelAbuseGuard.js`, which every one
+// of those already had. There is no narrowing available, and deferring it would
+// defeat the point — the preflight STAMPS a content fingerprint that the
+// coordinator RECOMPUTES before it acts, the check fails closed, and two builders
+// that drift apart disable review, CI approval, and merge for every external PR.
+// Putting both halves in one pure leaf is what keeps the contract test out of the
+// coordinator's service subtree entirely.
+const MAX_STATIC_INSTANTIATIONS = 104101;
 
 
 const SKIP_DIRS = new Set(['node_modules', 'coverage', 'dist', 'data']);
