@@ -158,6 +158,10 @@ export default function DeckRenderControls({
 function CardSize({ kind, size, onPatch }) {
   const kindDefault = DECK_CARD_SIZE_BY_KIND[kind] || DECK_CARD_SIZE;
   const commit = (axis) => (raw) => {
+    // A cleared field is a mid-edit state, not a request for the 256px floor
+    // `clampImageEdge` would snap an empty string to. `useFieldDraft` drops the
+    // draft either way, so the input snaps back to the stored size.
+    if (String(raw).trim() === '') return;
     const clamped = clampImageEdge(raw, SIZE_BOUNDS);
     if (clamped !== size[axis]) onPatch({ cardSize: { ...size, [axis]: clamped } });
   };

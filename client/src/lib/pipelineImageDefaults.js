@@ -5,7 +5,10 @@
 // models render multi-panel pages dramatically better than local diffusion,
 // so Codex is the right default whenever the user has it wired up.
 
-import { isCloudCliMode, IMAGE_GEN_MODE } from './imageGenBackends';
+import {
+  installLocalModelId, isCloudCliMode, IMAGE_GEN_MODE, LOCAL_IMAGEGEN_DEFAULT_MODEL,
+  pickUsableMode, renderPinLadder, renderTargetPin, supportsCloudModelOverride,
+} from './imageGenBackends';
 
 // The geometry + prompt knobs of a render config, with no backend or model —
 // the half that is NOT install-wide state. `settings.pipeline.imageGen` is the
@@ -31,6 +34,54 @@ export const PIPELINE_IMAGE_DEFAULTS = Object.freeze({
   modelId: 'flux2-klein-4b',
   ...IMAGE_RENDER_KNOB_DEFAULTS,
 });
+
+// The config a surface with NO settings blob yet reports — the shipped knobs on
+// the backend that is always usable. Frozen and module-level so an unresolved
+// caller hands every consumer the same identity rather than a fresh object.
+export const UNRESOLVED_RENDER_CFG = Object.freeze({
+  ...IMAGE_RENDER_KNOB_DEFAULTS,
+  mode: IMAGE_GEN_MODE.LOCAL,
+  modelId: LOCAL_IMAGEGEN_DEFAULT_MODEL,
+  cloudModel: null,
+});
+
+/**
+ * Resolve "what will a render on this surface actually run on" — the client
+ * mirror of the server's own ladder, and the ONE place a non-Pipeline surface
+ * derives a render config.
+ *
+ * The backend walks `renderPinLadder` (the record's own `imageMode`, then the
+ * target's `renderDefaults` pin, both gated on backends this install actually
+ * has) and falls through to the install-wide `imageGen.mode` via the shared
+ * `pickUsableMode`. The model then follows the backend it belongs to: local
+ * takes the pin, else `imageGen.local.modelId`, else the shipped default; an
+ * override-capable cloud CLI takes the pin as `cloudModel` and nothing else, so
+ * a cloud mode can never be advertised beside a local model.
+ *
+ * Nothing here reads `settings.pipeline.imageGen`. That slice is the Pipeline
+ * visual FORM's sticky buffer, and using it as a general base is what made a
+ * deck claim it would render on the model a comic page was last rendered with
+ * while the server used the install pin the whole time.
+ *
+ * @param {object|null} settings - The settings blob, or null when unresolved.
+ * @param {object}   [opts]
+ * @param {object|null} [opts.record]  - Record whose `imageMode`/`imageModelId` pin wins.
+ * @param {string|null} [opts.target]  - RENDER_TARGET id whose `renderDefaults` pin is next.
+ * @param {Array<{id:string}>|null} [opts.backends] - Enabled backends a pin is gated on;
+ *   `null` while the list isn't loaded (`[]` means "loaded, nothing enabled").
+ */
+export function resolveRenderCfg(settings, { record = null, target = null, backends = null } = {}) {
+  if (!settings) return UNRESOLVED_RENDER_CFG;
+  const pin = renderPinLadder([record, renderTargetPin(settings, target)], backends);
+  const mode = pin.mode || pickUsableMode(settings, [settings.imageGen?.mode]);
+  const isLocal = mode === IMAGE_GEN_MODE.LOCAL;
+  return {
+    ...IMAGE_RENDER_KNOB_DEFAULTS,
+    mode,
+    modelId: isLocal ? (pin.modelId || installLocalModelId(settings)) : null,
+    cloudModel: !isLocal && supportsCloudModelOverride(mode) ? pin.modelId : null,
+  };
+}
 
 // Resolve the per-render config. Codex-enabled systems default to codex
 // mode unless the user explicitly stored a different mode on
