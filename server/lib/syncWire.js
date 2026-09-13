@@ -367,11 +367,20 @@ export function sanitizeRecordForWire(kind, record) {
       // regardless of local row ordering.
       const { deleted: _d, deletedAt: _da, imageMode: _im, imageModelId: _imi,
         promptLlm: _pl, completion: _c, cards, ...rest } = record;
+      const soft = sanitizeSoftDeleteFields(record);
+      // A TOMBSTONE carries no roster at all. The sender still holds its cards
+      // locally (they survive until the GC sweep so a conflict-journal restore
+      // has something to restore), and the receiver's merge deliberately leaves
+      // its own roster untouched on a delete — so shipping them would make the
+      // deleted deck's content hash depend on whether a given peer ever held
+      // the live record, permanently diverging the base hashes of a sender that
+      // has cards and a receiver that inserted the tombstone cold.
+      if (soft.deleted) return { ...rest, ...soft };
       const wireCards = (Array.isArray(cards) ? cards : [])
         .filter((c) => isNonBlankStr(c?.key))
         .map(({ id: _cid, deckId: _did, render: _r, ...card }) => card)
         .sort((a, b) => a.key.localeCompare(b.key));
-      return { ...rest, cards: wireCards, ...sanitizeSoftDeleteFields(record) };
+      return { ...rest, cards: wireCards, ...soft };
     }
     case 'musicVideoProject': {
       // Music Video projects are whole-record LWW, but their image render pin

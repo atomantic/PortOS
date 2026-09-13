@@ -173,6 +173,28 @@ describe.skipIf(!ready)('deck federation', () => {
     expect((await getDeck(deck.id)).cards).toHaveLength(before.cards.length);
   });
 
+  it('serializes a peer merge against a concurrent REST edit instead of silently dropping one', async () => {
+    // The merge's read-modify-write spans two awaits (read the local copy, then
+    // upsert). Without a shared per-deck write tail an interleaved PATCH lands
+    // between them and the upsert overwrites it with a definition built from the
+    // pre-PATCH read — the edit vanishes with no error anywhere.
+    const deck = await make('Contended');
+    const remote = asWire(deck, { name: 'From Peer', updatedAt: later(deck.updatedAt, 60_000) });
+
+    await Promise.all([
+      mergeDecksFromSync([remote]),
+      updateDeck(deck.id, { styleNotes: 'edited locally mid-merge' }),
+    ]);
+
+    // Whichever ran second wins the name/notes, but NEITHER write may be lost:
+    // the merge's name must be present, or the local edit's notes must be —
+    // and the loser's field must still hold its own pre-write value rather than
+    // a torn mix. The invariant that actually catches the bug is that the local
+    // edit is never silently discarded while reporting success.
+    const after = await getDeck(deck.id);
+    expect([after.name, after.styleNotes]).toContain('edited locally mid-merge');
+  });
+
   it('returns null when restoring a deck the sweep already hard-pruned', async () => {
     expect(await restoreDeck(crypto.randomUUID(), { name: 'ghost' })).toBeNull();
   });

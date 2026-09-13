@@ -42,6 +42,20 @@ const notFound = (what = 'Deck') => new ServerError(`${what} not found`, {
 
 const isoOrNull = (v) => (v instanceof Date ? v.toISOString() : (v || null));
 
+// The peer-sync record kind for a deck (see the Federation section below).
+export const DECK_KIND = 'deck';
+
+// Per-DECK write tail. EVERY writer goes through it — the REST patches, the
+// render-completion hook, the delete, the peer merge and the tombstone sweep —
+// because the merge's read-modify-write spans two awaits (read local, then
+// upsert) and a REST PATCH landing between them would be silently overwritten.
+// Serializing only the merge side would leave exactly that gap open. Card
+// writes key on their DECK id, not the card id: a card patch also touches the
+// deck row, and the merge rewrites the whole roster, so they contend.
+// Nothing inside a queued function may call another queued function — the tail
+// is not re-entrant and a nested same-key call would deadlock.
+const queueRecordWrite = createRecordWriteQueue();
+
 const filenames = (values) => (Array.isArray(values) ? values : []).map((v) => trimTo(v)).filter(Boolean);
 
 // ── Projections ──────────────────────────────────────────────────────────────
@@ -109,9 +123,12 @@ export async function listDecks({ includeDeleted = false } = {}) {
   );
   // Completion reads three card fields; project just those instead of every
   // card's prompt/history so the index page doesn't pull the whole deck.
+  // Scoped to the decks actually being returned — a tombstone keeps its roster
+  // until the GC sweep, so an unscoped scan drags every pending-deletion deck's
+  // cards through this query for a `byDeck` entry nothing ever looks up.
   const { rows: cardRows } = await query(`SELECT deck_id, jsonb_build_object(
       'prompt', left(definition->>'prompt', 1), 'imageRefs', COALESCE(definition->'imageRefs', '[]'::jsonb), 'render', definition->'render'
-    ) AS definition FROM deck_cards`);
+    ) AS definition FROM deck_cards WHERE deck_id = ANY($1::uuid[])`, [rows.map((r) => r.id)]);
   const byDeck = Map.groupBy(cardRows, (r) => r.deck_id);
   return rows.map((row) => ({
     ...projectDeck(row),
@@ -136,7 +153,7 @@ export async function getDeck(id, { includeDeleted = false } = {}) {
  */
 async function patchDeck(id, mutate) {
   await ensureSchema();
-  await withTransaction(async (client) => {
+  await queueRecordWrite(id, () => withTransaction(async (client) => {
     const { rows } = await client.query('SELECT * FROM decks WHERE id = $1', [id]);
     if (!rows[0] || rows[0].deleted === true) throw notFound();
     const d = { ...(rows[0].definition || {}) };
@@ -145,7 +162,7 @@ async function patchDeck(id, mutate) {
       'UPDATE decks SET name = $2, universe_id = $3, definition = $4, updated_at = NOW() WHERE id = $1',
       [id, columns.name ?? rows[0].name, columns.universeId === undefined ? rows[0].universe_id : columns.universeId, d],
     );
-  });
+  }));
   emitRecordUpdated(DECK_KIND, id);
   return getDeck(id);
 }
@@ -158,7 +175,7 @@ async function patchDeck(id, mutate) {
  */
 async function patchCard(deckId, cardId, mutate, { missingOk = false, touch = true } = {}) {
   await ensureSchema();
-  return withTransaction(async (client) => {
+  return queueRecordWrite(deckId, () => withTransaction(async (client) => {
     const { rows: deckRows } = await client.query('SELECT deleted FROM decks WHERE id = $1', [deckId]);
     if (!deckRows[0] || deckRows[0].deleted === true) {
       if (missingOk) return null;
@@ -176,7 +193,7 @@ async function patchCard(deckId, cardId, mutate, { missingOk = false, touch = tr
     );
     if (touch) await client.query('UPDATE decks SET updated_at = NOW() WHERE id = $1', [deckId]);
     return projectCard(written[0]);
-  });
+  }));
 }
 
 // ── Deck CRUD ────────────────────────────────────────────────────────────────
@@ -284,10 +301,10 @@ export function updateDeck(id, patch = {}) {
  */
 export async function deleteDeck(id) {
   await ensureSchema();
-  const { rowCount } = await query(
+  const rowCount = await queueRecordWrite(id, async () => (await query(
     'UPDATE decks SET deleted = TRUE, deleted_at = NOW(), updated_at = NOW() WHERE id = $1 AND deleted IS NOT TRUE',
     [id],
-  );
+  )).rowCount);
   if (!rowCount) throw notFound();
   console.log(`🃏 deck deleted ${id}`);
   emitRecordDeleted(DECK_KIND, id);
@@ -327,7 +344,7 @@ export async function applyCardGenerations(deckId, entries = []) {
     if (card) applied += 1;
   }
   if (applied) {
-    await query('UPDATE decks SET updated_at = NOW() WHERE id = $1', [deckId]);
+    await queueRecordWrite(deckId, () => query('UPDATE decks SET updated_at = NOW() WHERE id = $1', [deckId]));
     emitRecordUpdated(DECK_KIND, deckId);
   }
   return applied;
@@ -343,14 +360,14 @@ export async function markCardsRenderQueued(deckId, entries = []) {
   if (!entries.length) return;
   await ensureSchema();
   const stampedAt = new Date().toISOString();
-  await query(
+  await queueRecordWrite(deckId, () => query(
     `UPDATE deck_cards c
        SET definition = c.definition || jsonb_build_object('render', v.render), updated_at = NOW()
        FROM unnest($2::uuid[], $3::jsonb[]) AS v(id, render)
        WHERE c.deck_id = $1 AND c.id = v.id
          AND COALESCE(c.definition->'render'->>'jobId', '') <> v.render->>'jobId'`,
     [deckId, entries.map((e) => e.cardId), entries.map((e) => ({ ...e.render, updatedAt: stampedAt }))],
-  );
+  ));
 }
 
 /**
@@ -425,12 +442,6 @@ export function removeSample(id, sampleId) {
 // kind converge on the same 52/78 slots instead of doubling them. Card ids stay
 // machine-local for the same reason: the receiver keeps its own row id for a key
 // it already holds, and mints one for a key it doesn't.
-
-export const DECK_KIND = 'deck';
-
-// Per-deck write tail: a merge's read-modify-write must not interleave with a
-// concurrent REST edit or a second merge for the same deck.
-const queueRecordWrite = createRecordWriteQueue();
 
 /**
  * One deck's sanitized record (tombstone surfaced), or null when unknown. Only

@@ -134,10 +134,21 @@ describe('syncWire', () => {
         expect(sanitizeRecordForWire('deck', record).cards).toHaveLength(2);
       });
 
-      it('normalizes the soft-delete pair on a tombstone', () => {
+      it('normalizes the soft-delete pair on a tombstone and ships no roster with it', () => {
         const wire = sanitizeRecordForWire('deck', { ...deck(), deleted: true, deletedAt: '2026-05-01T00:00:00Z' });
         expect(wire.deleted).toBe(true);
         expect(wire.deletedAt).toBe('2026-05-01T00:00:00Z');
+        // The receiver's merge leaves its own roster alone on a delete, so a
+        // tombstone that carried cards would hash differently on a peer that
+        // once held the live deck than on one inserting the tombstone cold.
+        expect(wire).not.toHaveProperty('cards');
+      });
+
+      it('hashes a tombstone identically whether or not the local copy still has its cards', () => {
+        const withCards = { ...deck(), deleted: true, deletedAt: '2026-05-01T00:00:00Z' };
+        const { cards: _dropped, ...withoutCards } = withCards;
+        expect(JSON.stringify(sanitizeRecordForWire('deck', withCards)))
+          .toBe(JSON.stringify(sanitizeRecordForWire('deck', withoutCards)));
       });
     });
 
