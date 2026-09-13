@@ -9,6 +9,7 @@ import Modal from '../ui/Modal';
 import { getSettings, updateSettings, getBackupStatus, getBackupSnapshots, restoreDatabase } from '../../services/api';
 import { formatBytes } from '../../utils/formatters';
 import CronSchedulePicker from '../CronSchedulePicker';
+import { anchorUserExclude, anchorUserExcludes, isSafeExcludePattern } from '../../lib/backupExcludes';
 
 // Set equality — rsync --exclude flags are order-independent, so reordering
 // is NOT a dirty state; only membership changes (added/removed entries) are.
@@ -19,6 +20,12 @@ const sameSet = (a, b) => a.length === b.length && a.every(x => b.includes(x));
 // null, or any other shape. Normalize before it reaches React state — otherwise
 // downstream `.some` / `.includes` / `.filter` calls crash the Backup tab.
 const asArray = (v) => Array.isArray(v) ? v : [];
+// Stored exclude patterns are now bounded at the settings boundary (`..`/NUL and
+// blanks rejected). A settings.json written before that — or hand-edited since —
+// can still hold an entry the PATCH would now 400 on, which would wedge the whole
+// Backup form. Drop those on load instead: the spelling of the survivors is left
+// untouched (anchoring is a read-time concern), so the form is not dirty.
+const asExcludeArray = (v) => asArray(v).filter(isSafeExcludePattern);
 const snapshotIdentity = (snapshot) =>
   snapshot.selectionKey || `${snapshot.source || 'current'}/${snapshot.id}`;
 const snapshotSourceLabel = (snapshot) =>
@@ -28,6 +35,7 @@ export function BackupTab() {
   const destPathId = useId();
   const additionalExcludeId = useId();
   const defaultExcludesPanelId = useId();
+  const effectiveExcludesPanelId = useId();
   const [loading, setLoading] = useState(true);
   // A settings response that never resolved is NOT 'the defaults' — the schedule
   // fields stay null and the form is replaced by an error panel, so an unreachable
@@ -61,6 +69,9 @@ export function BackupTab() {
   // edits — collapsed by default so the fields they came to change (destination,
   // enabled, schedule) and the action bar are what the tab actually shows.
   const [showDefaultExcludes, setShowDefaultExcludes] = useState(false);
+  // Same reasoning as the catalog above: the effective list is defaults + user
+  // entries, so it is longer still. Collapsed by default, one click from visible.
+  const [showEffectiveExcludes, setShowEffectiveExcludes] = useState(false);
 
   useEffect(() => {
     Promise.all([
@@ -71,7 +82,7 @@ export function BackupTab() {
       .then(([settings, status, snaps]) => {
         const backup = settings?.backup || {};
         const saved = backup.destPath || '';
-        const savedExcludes = asArray(backup.excludePaths);
+        const savedExcludes = asExcludeArray(backup.excludePaths);
         const savedDisabled = asArray(backup.disabledDefaultExcludes);
         setDestPath(saved);
         setSavedDestPath(saved);
@@ -132,10 +143,13 @@ export function BackupTab() {
     getBackupSnapshots({ silent: true }).then(s => setSnapshots(Array.isArray(s) ? s : [])).catch((err) => { console.warn(`⚠️ Failed to refresh snapshots: ${err?.message || err}`); });
   });
 
+  // Anchor exactly as the server does on read, so the chip the user sees IS the
+  // rsync filter that will run. A bare `repos/` would otherwise match every
+  // `repos/` at any depth under data/ and silently drop unrelated records (#7241).
   const addExclude = () => {
-    const trimmed = newExclude.trim();
-    if (!trimmed || excludePaths.includes(trimmed)) return;
-    setExcludePaths([...excludePaths, trimmed]);
+    const anchored = anchorUserExclude(newExclude);
+    if (!anchored) return;
+    if (!excludePaths.includes(anchored)) setExcludePaths([...excludePaths, anchored]);
     setNewExclude('');
   };
 
@@ -182,6 +196,15 @@ export function BackupTab() {
   }));
   const enabledDefaultCount = defaultExcludeRows.filter(d => d.defaultActive).length;
   const disabledDefaultCount = defaultExcludeRows.length - enabledDefaultCount;
+
+  // The rsync filter list this configuration actually produces — the client half
+  // of `computeEffectiveExcludes`, built from the same anchoring helper so the
+  // preview cannot drift from the run. Rendering it is the point: without it the
+  // user never sees how a pattern was interpreted until a restore comes up short.
+  const effectiveExcludes = [...new Set([
+    ...defaultExcludeRows.filter(d => d.defaultActive).map(d => d.path),
+    ...anchorUserExcludes(excludePaths),
+  ])];
 
   const renderPgStatus = () => {
     if (!pgBackup) return <span className="text-gray-500">No backup run yet</span>;
@@ -344,7 +367,7 @@ export function BackupTab() {
 
       <div className="space-y-2">
         <label htmlFor={additionalExcludeId} className="block text-sm text-gray-400">Additional Exclude Paths</label>
-        <p className="text-xs text-gray-500">Custom directories/patterns to skip during backup (relative to data/). Additional rules still apply when a default exclusion is disabled. Disabling a default does not guarantee matching files will be backed up.</p>
+        <p className="text-xs text-gray-500">Custom directories/patterns to skip during backup (relative to data/). Patterns are anchored to the data root, so <code>repos/</code> is stored as <code>/repos/</code> and skips only <code>data/repos/</code>. Start a pattern with <code>**/</code> to match at any depth instead. Additional rules still apply when a default exclusion is disabled. Disabling a default does not guarantee matching files will be backed up.</p>
         <div className="flex gap-2">
           <input
             id={additionalExcludeId}
@@ -353,11 +376,11 @@ export function BackupTab() {
             onChange={e => setNewExclude(e.target.value)}
             onKeyDown={e => e.key === 'Enter' && addExclude()}
             className="flex-1 bg-port-bg border border-port-border rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-port-accent"
-            placeholder="repos/"
+            placeholder="/repos/"
           />
           <button
             onClick={addExclude}
-            disabled={!newExclude.trim()}
+            disabled={!anchorUserExclude(newExclude)}
             aria-label="Add exclude path"
             className="inline-flex items-center justify-center min-w-[40px] min-h-[40px] px-3 py-2 bg-port-border hover:bg-port-border/70 text-white rounded-lg transition-colors disabled:opacity-50 shrink-0"
           >
@@ -374,6 +397,33 @@ export function BackupTab() {
                 </button>
               </span>
             ))}
+          </div>
+        )}
+
+        {effectiveExcludes.length > 0 && (
+          <div className="space-y-2 pt-1">
+            <button
+              type="button"
+              onClick={() => setShowEffectiveExcludes(v => !v)}
+              aria-expanded={showEffectiveExcludes}
+              aria-controls={effectiveExcludesPanelId}
+              className="flex items-center gap-2 w-full text-left text-sm text-gray-400 hover:text-white transition-colors"
+            >
+              {showEffectiveExcludes ? <ChevronDown size={14} className="shrink-0" /> : <ChevronRight size={14} className="shrink-0" />}
+              <span>Effective exclude list — {effectiveExcludes.length} rsync {effectiveExcludes.length === 1 ? 'pattern' : 'patterns'}</span>
+            </button>
+            {showEffectiveExcludes && (
+              <div id={effectiveExcludesPanelId} className="space-y-2">
+                <p className="text-xs text-gray-500">The exact <code>--exclude</code> filters the next snapshot will use: enabled default rules plus your anchored patterns. Saved changes above are reflected here.</p>
+                <ul className="flex flex-wrap gap-1.5">
+                  {effectiveExcludes.map((pattern) => (
+                    <li key={pattern}>
+                      <code className="inline-block px-1.5 py-0.5 bg-port-bg border border-port-border rounded text-xs text-gray-300 break-all">{pattern}</code>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
           </div>
         )}
       </div>

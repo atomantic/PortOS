@@ -82,7 +82,10 @@ describe('backup routes', () => {
 
     it('runs the backup and forwards excludePaths', async () => {
       getSettings.mockResolvedValue({
-        backup: { destPath: '/dest', excludePaths: ['node_modules', '.git'] }
+        // Anchored is the canonical spelling; the second entry is deliberately
+        // not, to pin that the route forwards STORED settings verbatim — anchoring
+        // is a read-time concern inside computeEffectiveExcludes (#7241).
+        backup: { destPath: '/dest', excludePaths: ['/node_modules', '.git'] }
       });
       backup.runBackup.mockResolvedValue({ success: true, files: 100 });
       const res = await request(buildApp()).post('/api/backup/run');
@@ -91,7 +94,7 @@ describe('backup routes', () => {
       expect(backup.runBackup).toHaveBeenCalledWith(
         '/dest',
         undefined,
-        { excludePaths: ['node_modules', '.git'], disabledDefaultExcludes: [] }
+        { excludePaths: ['/node_modules', '.git'], disabledDefaultExcludes: [] }
       );
     });
 

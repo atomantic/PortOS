@@ -110,3 +110,81 @@ export const isSafeSnapshotSource = (v) =>
   && v.length > 0
   && v.length <= 255
   && (v === '@legacy' || (v !== '.' && v !== '..' && /^[a-z0-9._-]+$/i.test(v)));
+
+// ---------------------------------------------------------------------------
+// Backup exclude patterns (#7241)
+//
+// The backup exclude list is rsync FILTER syntax, not a glob list. rsync anchors
+// a pattern to the transfer root only when it starts with `/`; anything else
+// matches at EVERY level of the tree. So a user who types `cache/` to skip
+// `data/cache/` also drops the per-run caches nested under training runs, and
+// `raw/` reaches into sprite runs and universes. The snapshot still reports
+// success — the omission surfaces only at restore, which is exactly when it
+// cannot be fixed.
+//
+// `DEFAULT_EXCLUDES` has always been anchored by hand (and a test in
+// `backup.test.js` fails if one entry is not); this is the same rule applied to
+// the one list a user actually edits. Lives here, beside `isSafeSubdirFilter`
+// and for the same reason: `backupConfigSchema` in `validation.js` and the
+// `computeEffectiveExcludes` guard in `services/backup.js` must share ONE rule,
+// and both modules already import this leaf — so declaring it here costs the
+// server suite no extra module instantiations (see lib/importScoping.test.js).
+// Anchoring happens at READ time, never by rewriting stored settings: the stored
+// value stays exactly what the user typed, so there is nothing to migrate.
+// Mirrored to `client/src/lib/backupExcludes.js` for the Backup settings tab.
+// ---------------------------------------------------------------------------
+
+/**
+ * Longest exclude pattern accepted, measured on the ANCHORED form — the string
+ * actually handed to rsync. Bounding the raw input instead would let a
+ * 256-character relative pattern pass validation and then anchor to 257, so the
+ * settings boundary would reject the very chip the UI had just shown as valid.
+ */
+export const EXCLUDE_PATTERN_MAX_LENGTH = 256;
+
+/**
+ * A pattern is left alone when it is already anchored (`/…`) or deliberately
+ * any-depth (`*…`, which covers rsync's `**` spelling). Everything else gets a
+ * leading `/`.
+ */
+const isAnchoredOrWildcardLed = (pattern) => pattern.startsWith('/') || pattern.startsWith('*');
+
+/**
+ * Normalize ONE user-entered pattern to the form rsync will be handed. This is
+ * the single declaration of what a legal pattern is — `isSafeExcludePattern`
+ * below is defined in terms of it, so the settings boundary can never accept
+ * something the read-time normalizer would then drop, or vice versa.
+ * @param {unknown} pattern
+ * @returns {string|null} the anchored pattern, or null when it is blank,
+ *   non-string, or unsafe (caller drops it).
+ */
+export function anchorUserExclude(pattern) {
+  if (typeof pattern !== 'string') return null;
+  const trimmed = pattern.trim();
+  // A NUL would truncate the rsync argument; `..` in any segment (`../x`,
+  // `a/../../x`, the bare `..`) walks out of the data root.
+  if (!trimmed || trimmed.includes('\0')) return null;
+  if (trimmed.split('/').includes('..')) return null;
+  const anchored = isAnchoredOrWildcardLed(trimmed) ? trimmed : `/${trimmed}`;
+  return anchored.length <= EXCLUDE_PATTERN_MAX_LENGTH ? anchored : null;
+}
+
+/**
+ * Whether a stored/submitted pattern survives normalization. Shared with
+ * `lib/validation.js` so the settings boundary rejects exactly what
+ * `computeEffectiveExcludes` would have dropped.
+ * @param {unknown} pattern
+ * @returns {boolean}
+ */
+export const isSafeExcludePattern = (pattern) => anchorUserExclude(pattern) !== null;
+
+/**
+ * Normalize a whole user list, dropping blank/unsafe entries and duplicates
+ * that only differed by anchoring or whitespace.
+ * @param {unknown} patterns
+ * @returns {string[]}
+ */
+export function anchorUserExcludes(patterns) {
+  const list = Array.isArray(patterns) ? patterns : [];
+  return [...new Set(list.map(anchorUserExclude).filter(Boolean))];
+}

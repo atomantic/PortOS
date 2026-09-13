@@ -111,6 +111,7 @@ vi.mock('./brainStorage.js', async (importOriginal) => ({
 import { reloadSettings } from './settings.js';
 import { invalidateAllCaches as invalidateBrainCaches } from './brainStorage.js';
 import { DEFAULT_EXCLUDES, computeEffectiveExcludes, listSnapshots, openSnapshotStream, restoreSnapshot, resolveRsyncBinary } from './backup.js';
+import { EXCLUDE_PATTERN_MAX_LENGTH, anchorUserExclude, anchorUserExcludes, isSafeExcludePattern } from '../lib/sharedSchemas.js';
 
 // fs.access is mocked file-wide because backup.js probes the .in-progress marker
 // with it. Restore the real implementation before EVERY test: vi.clearAllMocks()
@@ -204,13 +205,97 @@ describe('computeEffectiveExcludes', () => {
     expect(result).toContain(target);
   });
 
-  it('merges user excludePaths on top of active defaults', () => {
+  it('merges user excludePaths on top of active defaults, anchored to the data root', () => {
     const result = computeEffectiveExcludes({
       excludePaths: ['my/custom/path', 'cache/'],
       disabledDefaultExcludes: []
     });
-    expect(result).toContain('my/custom/path');
-    expect(result).toContain('cache/');
+    // Anchored: a bare `cache/` is rsync for "every cache/ at any depth", which
+    // would also drop training-runs/*/cache/ and friends (#7241).
+    expect(result).toContain('/my/custom/path');
+    expect(result).toContain('/cache/');
+    expect(result).not.toContain('my/custom/path');
+    expect(result).not.toContain('cache/');
+  });
+
+  it('anchors every returned pattern unless it is deliberately wildcard-led', () => {
+    const result = computeEffectiveExcludes({
+      excludePaths: ['repos/', 'cache', '**/raw/', '/already/anchored'],
+      disabledDefaultExcludes: []
+    });
+    expect(result).toEqual(expect.arrayContaining(['/repos/', '/cache', '**/raw/', '/already/anchored']));
+    // The whole list — defaults included — is anchored or wildcard-led. This is
+    // the invariant, not the four spellings above: an unanchored entry anywhere
+    // in the list silently drops user data at any depth.
+    for (const pattern of result) {
+      expect(pattern.startsWith('/') || pattern.startsWith('*'), pattern).toBe(true);
+    }
+  });
+
+  it('passes a **-led user pattern through unchanged', () => {
+    // Any-depth matching stays available DELIBERATELY — it is just no longer
+    // what a user gets by accident from typing a bare directory name.
+    const result = computeEffectiveExcludes({
+      excludePaths: ['**/node_modules/', '*.tmp'],
+      disabledDefaultExcludes: []
+    });
+    expect(result).toContain('**/node_modules/');
+    expect(result).toContain('*.tmp');
+  });
+
+  it('dedupes user patterns that differ only by anchoring or whitespace', () => {
+    const result = computeEffectiveExcludes({
+      excludePaths: ['repos/', '/repos/', '  repos/  '],
+      disabledDefaultExcludes: []
+    });
+    expect(result.filter(p => p === '/repos/')).toHaveLength(1);
+  });
+
+  it('measures the length bound on the ANCHORED form, not the raw input', () => {
+    // A 255-char relative pattern anchors to exactly 256 and survives; 256 would
+    // anchor to 257. Bounding the RAW input instead would let the settings
+    // boundary accept a chip that this normalizer then silently dropped, so the
+    // snapshot would run without an exclude the UI had shown as saved.
+    const fits = 'a'.repeat(EXCLUDE_PATTERN_MAX_LENGTH - 1);
+    const overflows = 'a'.repeat(EXCLUDE_PATTERN_MAX_LENGTH);
+    const result = computeEffectiveExcludes({ excludePaths: [fits, overflows], disabledDefaultExcludes: [] });
+    expect(result).toContain(`/${fits}`);
+    expect(result).not.toContain(`/${overflows}`);
+    // An ALREADY-anchored pattern of exactly the max is untouched and kept.
+    const anchoredMax = `/${'b'.repeat(EXCLUDE_PATTERN_MAX_LENGTH - 1)}`;
+    expect(computeEffectiveExcludes({ excludePaths: [anchoredMax] })).toContain(anchoredMax);
+    // The settings boundary agrees with the normalizer in both directions.
+    expect(isSafeExcludePattern(fits)).toBe(true);
+    expect(isSafeExcludePattern(overflows)).toBe(false);
+    expect(isSafeExcludePattern(anchoredMax)).toBe(true);
+  });
+
+  // The Backup settings tab anchors a pattern as the user adds it, so the chip
+  // they see is the filter that runs. A one-sided edit to either copy would put
+  // the preview and the snapshot out of step silently — which is the whole
+  // failure mode #7241 is about. The mirror is a dependency-free leaf, so
+  // importing it here costs nothing.
+  it('the client mirror applies the identical rule', async () => {
+    const mirror = await import('../../client/src/lib/backupExcludes.js');
+    const cases = ['repos/', 'cache', '**/raw/', '*.tmp', '/anchored', '  spaced/  ', '', '../../etc', 'a/../../b',
+      'x'.repeat(EXCLUDE_PATTERN_MAX_LENGTH - 1), 'x'.repeat(EXCLUDE_PATTERN_MAX_LENGTH), `/${'x'.repeat(EXCLUDE_PATTERN_MAX_LENGTH - 1)}`];
+    for (const input of cases) {
+      expect(mirror.anchorUserExclude(input), input).toBe(anchorUserExclude(input));
+      expect(mirror.isSafeExcludePattern(input), input).toBe(isSafeExcludePattern(input));
+    }
+    expect(mirror.anchorUserExcludes(cases)).toEqual(anchorUserExcludes(cases));
+    expect(mirror.EXCLUDE_PATTERN_MAX_LENGTH).toBe(EXCLUDE_PATTERN_MAX_LENGTH);
+  });
+
+  it('drops a user pattern that tries to escape the data root', () => {
+    // Defense in depth — the settings boundary rejects these, but a hand-edited
+    // settings.json is read straight through by the scheduler.
+    const result = computeEffectiveExcludes({
+      excludePaths: ['../../etc/', 'a/../../b', 'ok/path'],
+      disabledDefaultExcludes: []
+    });
+    expect(result).toContain('/ok/path');
+    expect(result.some(p => p.includes('..'))).toBe(false);
   });
 
   it('dedupes when a user exclude matches an active default', () => {
@@ -227,7 +312,7 @@ describe('computeEffectiveExcludes', () => {
       excludePaths: ['', null, undefined, 'real/path'],
       disabledDefaultExcludes: []
     });
-    expect(result).toContain('real/path');
+    expect(result).toContain('/real/path');
     expect(result).not.toContain('');
     expect(result).not.toContain(null);
   });
