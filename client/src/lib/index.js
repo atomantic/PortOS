@@ -25,6 +25,7 @@ export * from './universeStylePreset.js';
 
 // === Pipeline / image-gen defaults ===
 export * from './autopilotMilestones.js';
+export * from './backupExcludes.js';
 export * from './beatColors.js';
 export * from './beeperMessageBody.js';
 export * from './beatGrid.js';

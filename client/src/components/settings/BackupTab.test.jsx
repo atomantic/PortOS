@@ -466,6 +466,47 @@ describe('BackupTab', () => {
       expect(screen.getByRole('switch', { name: /Disable default exclusion \/models/i })).toBeTruthy();
     });
 
+    // #7241: a bare directory name is an rsync any-depth filter, so the chip has
+    // to show the anchored form the server will actually run — otherwise the user
+    // discovers what `cache/` really matched at restore time.
+    it('anchors a newly added exclude and shows the effective rsync filter list', async () => {
+      getBackupStatus.mockResolvedValue({ status: 'never', defaultExcludes: EXCLUDES, pgBackup: null });
+      await renderTab();
+
+      fireEvent.change(screen.getByLabelText('Additional Exclude Paths'), { target: { value: 'cache/' } });
+      fireEvent.click(screen.getByLabelText('Add exclude path'));
+      expect(screen.getByText('/cache/')).toBeTruthy();
+      expect(screen.queryByText('cache/')).toBeNull();
+
+      // A wildcard-led pattern is the deliberate any-depth escape hatch and is
+      // left exactly as typed.
+      fireEvent.change(screen.getByLabelText('Additional Exclude Paths'), { target: { value: '**/raw/' } });
+      fireEvent.click(screen.getByLabelText('Add exclude path'));
+      expect(screen.getByText('**/raw/')).toBeTruthy();
+
+      // The effective list is the defaults plus those two, collapsed until asked
+      // for so it can't push the action bar below the fold.
+      const disclosure = screen.getByRole('button', { name: /Effective exclude list/i });
+      expect(disclosure.getAttribute('aria-expanded')).toBe('false');
+      expect(disclosure.textContent).toMatch(/4 rsync patterns/);
+      fireEvent.click(disclosure);
+      for (const pattern of ['/cache', '/models', '/cache/', '**/raw/']) {
+        expect(screen.getAllByText(pattern).length).toBeGreaterThan(0);
+      }
+    });
+
+    it('refuses an exclude pattern that would escape the data root', async () => {
+      getBackupStatus.mockResolvedValue({ status: 'never', defaultExcludes: [], pgBackup: null });
+      await renderTab();
+
+      fireEvent.change(screen.getByLabelText('Additional Exclude Paths'), { target: { value: '../../etc' } });
+      // The server rejects this at the settings boundary; the button stays
+      // disabled so the user never gets a chip that cannot be saved.
+      expect(screen.getByLabelText('Add exclude path').disabled).toBe(true);
+      fireEvent.click(screen.getByLabelText('Add exclude path'));
+      expect(screen.queryByText('../../etc')).toBeNull();
+    });
+
     // Regression: wildcard rules must survive edits and reload without the UI
     // promising that disabling a default includes the matching files.
     it('preserves independent custom rules through default toggles, save, and reload', async () => {
@@ -497,12 +538,14 @@ describe('BackupTab', () => {
       fireEvent.change(screen.getByLabelText('Additional Exclude Paths'), { target: { value: 'loras/**' } });
       fireEvent.click(screen.getByLabelText('Add exclude path'));
       await act(async () => { fireEvent.click(screen.getByRole('button', { name: /^Save$/ })); });
-      expect(updateSettings).toHaveBeenLastCalledWith({ backup: { ...backup, disabledDefaultExcludes: ['/cache', loraPath], excludePaths: [...custom, 'loras/**'] } }, { silent: true });
+      // Anchored on the way in (#7241): `loras/**` is a path, not a wildcard-led
+      // any-depth pattern, so it becomes `/loras/**`.
+      expect(updateSettings).toHaveBeenLastCalledWith({ backup: { ...backup, disabledDefaultExcludes: ['/cache', loraPath], excludePaths: [...custom, '/loras/**'] } }, { silent: true });
       expect(toast.error).not.toHaveBeenCalled();
 
       cleanup();
       await renderTab();
-      for (const pattern of [...custom, 'loras/**']) expect(screen.getByText(pattern)).toBeTruthy();
+      for (const pattern of [...custom, '/loras/**']) expect(screen.getByText(pattern)).toBeTruthy();
       fireEvent.click(screen.getByRole('button', { name: /Default exclusions/ }));
       expect(screen.getByRole('switch', { name: `Disable default exclusion ${loraPath}` }).getAttribute('aria-checked')).toBe('true');
       expect(screen.getByText('(Default exclusion disabled)')).toBeTruthy();
@@ -677,12 +720,14 @@ describe('BackupTab', () => {
       updateSettings.mockResolvedValue({});
       await renderTab();
 
-      fireEvent.change(screen.getByPlaceholderText('repos/'), { target: { value: 'scratch/' } });
+      fireEvent.change(screen.getByPlaceholderText('/repos/'), { target: { value: 'scratch/' } });
       fireEvent.click(screen.getByLabelText('Add exclude path'));
       await act(async () => { fireEvent.click(screen.getByRole('button', { name: /^Save$/i })); });
 
+      // Anchored on the way in (#7241): an unanchored `scratch/` would match every
+      // scratch/ at any depth under data/, not the one the user meant.
       expect(updateSettings).toHaveBeenCalledWith(
-        { backup: expect.objectContaining({ enabled: true, cronExpression: '0 0 * * *', excludePaths: ['scratch/'] }) },
+        { backup: expect.objectContaining({ enabled: true, cronExpression: '0 0 * * *', excludePaths: ['/scratch/'] }) },
         { silent: true }
       );
     });

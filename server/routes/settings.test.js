@@ -1281,3 +1281,36 @@ describe('Settings routes — backup schedule resolution (#6632)', () => {
     expect(store.backup).toMatchObject({ enabled: true, cronExpression: '0 0 * * *', destPath: '/example-backups' });
   });
 });
+
+describe('Settings routes — backup excludePaths bounds (#7241)', () => {
+  beforeEach(() => {
+    store = {};
+    vi.clearAllMocks();
+  });
+
+  // These are rsync filter patterns handed straight to `--exclude`. A `..`
+  // segment walks out of the data root and a NUL truncates the argument, so the
+  // boundary rejects rather than sanitizes — a silently-trimmed pattern would
+  // exclude something other than what the user typed.
+  it.each([
+    ['a parent-directory escape', ['../../etc']],
+    ['a nested parent-directory escape', ['a/../../b']],
+    ['a NUL byte', [`repos${String.fromCharCode(0)}/etc`]],
+    ['a blank entry', ['']],
+    ['a pattern that overflows the cap once anchored', ['x'.repeat(256)]],
+    ['a pattern far past the cap', ['/'.padEnd(300, 'x')]],
+  ])('rejects %s', async (_label, excludePaths) => {
+    const res = await request(buildApp()).put('/api/settings').send({ backup: { excludePaths } });
+    expect(res.status).toBe(400);
+    expect(store.backup).toBeUndefined();
+  });
+
+  it('accepts anchored and wildcard-led patterns and stores them as typed', async () => {
+    const excludePaths = ['/repos/', '**/raw/', 'cache/'];
+    const res = await request(buildApp()).put('/api/settings').send({ backup: { excludePaths } });
+    expect(res.status).toBe(200);
+    // Stored verbatim — anchoring is a read-time concern in
+    // `computeEffectiveExcludes`, so nothing is rewritten under the user.
+    expect(store.backup.excludePaths).toEqual(excludePaths);
+  });
+});

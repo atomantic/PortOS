@@ -20,7 +20,7 @@ import { checkHealth, ensureSchema, getServerMajorVersion } from '../lib/db.js';
 import { resolvePgDumpBinary } from '../lib/pgTools.js';
 import { getBackendName } from './memoryBackend.js';
 import { emitErrorEvent, ServerError } from '../lib/errorHandler.js';
-import { isSafeSnapshotSource, isSafeSubdirFilter } from '../lib/sharedSchemas.js';
+import { isSafeSnapshotSource, isSafeSubdirFilter, anchorUserExcludes } from '../lib/sharedSchemas.js';
 import { getIo } from './socket.js';
 import { reloadSettings } from './settings.js';
 import { invalidateAllCaches as invalidateBrainCaches } from './brainStorage.js';
@@ -413,14 +413,19 @@ function runRsync(srcDir, destDir, flags = []) {
  * - Array.isArray guards: settings can be hand-edited or sent by a stale
  *   client, so a non-array value here would otherwise throw inside .filter
  *   and abort the backup before the defensive allow-list has a chance to apply.
+ * - User patterns are ANCHORED here (`anchorUserExcludes`), not in storage: a
+ *   bare `cache/` is rsync for "every cache/ at any depth", which silently drops
+ *   the per-run caches nested under training runs too. Normalizing on read leaves
+ *   the stored value exactly as typed, so there is no migration and nothing is
+ *   rewritten under the user. A `*`/`**`-led pattern stays as-is — that is the
+ *   deliberate way to ask for any-depth matching.
  */
 export function computeEffectiveExcludes({ excludePaths, disabledDefaultExcludes } = {}) {
   const overridablePaths = new Set(DEFAULT_EXCLUDES.filter(e => e.overridable).map(e => e.path));
   const disabledList = Array.isArray(disabledDefaultExcludes) ? disabledDefaultExcludes : [];
-  const userList = Array.isArray(excludePaths) ? excludePaths : [];
   const disabledSet = new Set(disabledList.filter(p => overridablePaths.has(p)));
   const activeDefaults = DEFAULT_EXCLUDES.filter(e => !disabledSet.has(e.path)).map(e => e.path);
-  const userExcludes = userList.filter(Boolean);
+  const userExcludes = anchorUserExcludes(excludePaths);
   return [...new Set([...activeDefaults, ...userExcludes])];
 }
 

@@ -34,9 +34,15 @@ A backup run (`runBackup` in `server/services/backup.js`) writes to:
 
 The effective exclude list is computed by the pure `computeEffectiveExcludes()` helper (unit-tested in `backup.test.js`). The scheduled cron handler in `backupScheduler.js` re-reads settings on every run, so `destPath`, `excludePaths`, `disabledDefaultExcludes`, and `enabled` all take effect on the next run without a restart. See [Scheduling & status](#scheduling--status) for how the cron registration itself tracks settings.
 
-#### Why every default exclude must be anchored with a leading `/`
+#### Why every exclude must be anchored with a leading `/`
 
 `DEFAULT_EXCLUDES` is **rsync filter syntax** — the leading `/` means "relative to the transfer root". Without the anchor, `loras/*.safetensors` also matches any `loras/` directory nested anywhere under `data/`, silently dropping unrelated user data (e.g. `brain/.../loras/`). An unanchored pattern is a data-loss bug, not a style nit.
+
+The same rule applies to **user-entered** Additional Exclude Paths, which is the list that is easy to get wrong: rsync matches a pattern with no leading `/` at *every* level of the tree, so typing `cache/` to skip `data/cache/` also drops `training-runs/*/cache/`, and `raw/` reaches into sprite runs. The failure is silent — the snapshot reports success, it is simply smaller, and the omission surfaces only at restore. So `computeEffectiveExcludes()` **anchors each user pattern on read** (`server/lib/backupExcludes.js`), prepending `/` to anything that is not already anchored and is not deliberately wildcard-led.
+
+- Anchoring happens at read time, never in storage: `settings.json` keeps exactly what you typed, so there is nothing to migrate and nothing is rewritten under you. The Backup tab anchors a pattern as you add it and renders the computed effective list, so the chip you see is the filter that will run.
+- **`**/name/` is the explicit way to ask for any-depth matching.** A pattern starting with `*` or `**` is passed through unchanged — that is how you deliberately say "every `cache/` anywhere", rather than getting it by accident.
+- Patterns are bounded at the settings boundary (`backupConfigSchema` in `server/lib/validation.js`), and a `..` segment or a NUL byte is rejected rather than sanitized. The 256-character cap is measured on the **anchored** form — the string rsync is handed — so the boundary accepts exactly what `computeEffectiveExcludes()` keeps, and a pattern can never be saved as valid and then silently dropped at run time.
 
 The two `overridable` tiers are enforced, not advisory. A hand-edited `settings.json` that lists a non-overridable path in `disabledDefaultExcludes` is silently dropped server-side; `computeEffectiveExcludes()` enforces both the overridable allow-list and `Array.isArray` guards for hand-edited settings. The Backup tab switches describe default rule state: switching on disables that default exclusion, and switching off re-enables it. The summary counts enabled and disabled default rules, not included files.
 
