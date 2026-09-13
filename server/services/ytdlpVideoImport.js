@@ -20,7 +20,7 @@
 import { readdir, unlink } from 'fs/promises';
 import { join, dirname } from 'path';
 import { ensureDir } from '../lib/fileUtils.js';
-import { runYtDlp, ytdlpMarkerArgs } from './ytdlpRun.js';
+import { runYtDlp, ytdlpMarkerArgs, describeYtDlpFailure } from './ytdlpRun.js';
 
 /**
  * Locate the final produced file for a download prefix. yt-dlp writes
@@ -121,10 +121,14 @@ export async function downloadVideoToDir({
     // A --match-filters/--max-filesize rejection exits 0 with no output file
     // (yt-dlp treats a filtered-out video as "nothing to do") — and --print
     // suppresses the specific reason, so name the known bounds. x.com/Twitter
-    // downloads also fail here on login-walled/rate-limited content.
+    // downloads also fail here on login-walled/rate-limited content. Only the
+    // bounds are ours; describeYtDlpFailure owns the prose and appends whatever
+    // yt-dlp actually printed, which outranks the guess.
     const reason = exit.code === 0
-      ? `no video was produced — it may be longer than ${Math.round(maxDurationSec / 60)} minutes or larger than ${Math.round(maxBytes / 1024 / 1024 / 1024)}GB, or (for x.com) login-walled, rate-limited, or otherwise unavailable`
-      : (exit.reason || `yt-dlp exited ${exit.code}`);
+      ? describeYtDlpFailure(exit.code, exit.output, {
+        fallback: `no video was produced — it may be longer than ${Math.round(maxDurationSec / 60)} minutes or larger than ${Math.round(maxBytes / 1024 / 1024 / 1024)}GB, or (for x.com) login-walled, rate-limited, or otherwise unavailable`,
+      })
+      : exit.reason; // always populated for a non-zero exit (see runYtDlp)
     await cleanupProducedFiles(filePrefix, outDir);
     return { outcome: 'failed', reason };
   }

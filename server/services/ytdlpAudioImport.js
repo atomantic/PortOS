@@ -29,7 +29,7 @@ import { join, dirname } from 'path';
 import { ServerError } from '../lib/errorHandler.js';
 import { findFfmpeg } from '../lib/ffmpeg.js';
 import { findYtDlp } from '../lib/ytdlp.js';
-import { runYtDlp, ytdlpMarkerArgs } from './ytdlpRun.js';
+import { runYtDlp, ytdlpMarkerArgs, describeYtDlpFailure } from './ytdlpRun.js';
 
 /**
  * Locate yt-dlp + ffmpeg, throwing an actionable ServerError if either is
@@ -109,11 +109,14 @@ export async function downloadAudioToTempMp3({
     // A --match-filters/--max-filesize rejection exits 0 with no output file
     // (yt-dlp treats a filtered-out video as "nothing to do", not an error) —
     // `--print`'s suppression of normal reporting (see ytdlpRun) means the
-    // specific reason never reaches our stdout/stderr parsing, so name the two
-    // known bounds explicitly rather than a bare exit code.
+    // specific reason often never reaches our stdout/stderr parsing, so name the
+    // two known bounds. Only those bounds are ours: describeYtDlpFailure owns
+    // the prose and appends whatever yt-dlp did print, which outranks the guess.
     const reason = exit.code === 0
-      ? `no audio was produced — the source may be longer than ${Math.round(maxDurationSec / 60)} minutes or its audio larger than ${Math.round(maxBytes / 1024 / 1024)}MB, or it may be otherwise unavailable`
-      : (exit.reason || `yt-dlp exited ${exit.code}`);
+      ? describeYtDlpFailure(exit.code, exit.output, {
+        fallback: `no audio was produced — the source may be longer than ${Math.round(maxDurationSec / 60)} minutes or its audio larger than ${Math.round(maxBytes / 1024 / 1024)}MB, or it may be otherwise unavailable`,
+      })
+      : exit.reason; // always populated for a non-zero exit (see runYtDlp)
     await cleanupYtDlpTemp(tempPrefix);
     return { outcome: 'failed', reason };
   }
