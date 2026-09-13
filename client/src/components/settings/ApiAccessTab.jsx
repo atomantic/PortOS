@@ -76,8 +76,10 @@ export function ApiAccessTab() {
   }, []);
 
   useEffect(() => {
+    let active = true;
     getSettings({ silent: true })
       .then((s) => {
+        if (!active) return;
         setAccess(s?.apiAccess || {});
         setAgentContext({
           ...DEFAULT_AGENT_CONTEXT,
@@ -86,10 +88,11 @@ export function ApiAccessTab() {
           actions: { ...DEFAULT_AGENT_CONTEXT.actions, ...(s?.agentContext?.actions || {}) },
         });
       })
-      .catch(() => toast.error('Failed to load API access settings'))
-      .finally(() => setLoading(false));
+      .catch(() => { if (active) toast.error('Failed to load API access settings'); })
+      .finally(() => { if (active) setLoading(false); });
     loadApiCards();
     loadSpec();
+    return () => { active = false; };
   }, [loadApiCards, loadSpec]);
 
   const entryFor = (id) => ({ ...DEFAULT_ACCESS, ...(access[id] || {}) });

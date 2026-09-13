@@ -276,9 +276,13 @@ export default function OpenClaw() {
     loadRuntime();
     if (!featureEnabled) {
       setApps([]);
-      return;
+      return undefined;
     }
-    coreApi.getApps().then(data => setApps((data || []).filter(app => !app.archived))).catch(() => setApps([]));
+    let active = true;
+    coreApi.getApps()
+      .then(data => { if (active) setApps((data || []).filter(app => !app.archived)); })
+      .catch(() => { if (active) setApps([]); });
+    return () => { active = false; };
   }, [featureEnabled, loadRuntime]);
 
   useEffect(() => {

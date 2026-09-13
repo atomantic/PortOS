@@ -170,11 +170,15 @@ function MemoryPracticeRunner({ item, mode, onSelectMode, onExitMode, onBack, on
 
   // Load chunk mastery when entering spaced mode
   useEffect(() => {
-    if (mode === 'spaced') {
-      getChunkMastery(item.id).then(data => {
-        setChunkMastery(data || []);
-      }).catch(err => { console.warn('⚠️ Failed to load chunk mastery: ' + err.message); setChunkMastery([]); });
-    }
+    if (mode !== 'spaced') return undefined;
+    let active = true;
+    getChunkMastery(item.id).then(data => {
+      if (active) setChunkMastery(data || []);
+    }).catch(err => {
+      console.warn('⚠️ Failed to load chunk mastery: ' + err.message);
+      if (active) setChunkMastery([]);
+    });
+    return () => { active = false; };
   }, [mode, item.id]);
 
   // Drive terminal transitions from an effect, never during render. The render

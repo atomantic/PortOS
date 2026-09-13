@@ -98,9 +98,13 @@ export default function FableLoomStory({ view = 'graph' }) {
     : undefined;
 
   useEffect(() => {
+    let canceled = false;
     setNotFound(false);
     setMediaJobs({});
-    getLoom(loomId).then(setLoom).catch(() => setNotFound(true));
+    getLoom(loomId)
+      .then((l) => { if (!canceled) setLoom(l); })
+      .catch(() => { if (!canceled) setNotFound(true); });
+    return () => { canceled = true; };
   }, [loomId]);
 
   const linkedSeriesId = loom?.seriesId || null;

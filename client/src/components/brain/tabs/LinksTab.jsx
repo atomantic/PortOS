@@ -151,10 +151,12 @@ export default function LinksTab({ onRefresh }) {
   }, []);
 
   useEffect(() => {
+    let active = true;
     fetchLinks();
     api.getBrainBuckets({ silent: true })
-      .then(data => setBuckets(data.buckets || []))
-      .catch(() => setBuckets([]));
+      .then(data => { if (active) setBuckets(data.buckets || []); })
+      .catch(() => { if (active) setBuckets([]); });
+    return () => { active = false; };
   }, [fetchLinks]);
 
   // Poll ONLY the links whose clone is in flight, patching each fresh record

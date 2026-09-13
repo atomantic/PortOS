@@ -190,12 +190,15 @@ export default function CustomTasksSection({ appId, appName, providerCatalog, ac
     if (providerCatalog) {
       setRawProviders(providerCatalog);
       setActiveProviderId(inheritedActiveProviderId || '');
-      return;
+      return undefined;
     }
+    let active = true;
     api.getProviders({ silent: true }).then(data => {
+      if (!active) return;
       setRawProviders(data?.providers || []);
       setActiveProviderId(data?.activeProvider || '');
     }).catch(() => {});
+    return () => { active = false; };
   }, [providerCatalog, inheritedActiveProviderId]);
 
   const validate = (form) => {

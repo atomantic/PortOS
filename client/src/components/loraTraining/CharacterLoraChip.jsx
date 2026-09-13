@@ -20,18 +20,25 @@ export default function CharacterLoraChip({ entryId, ingredientId, universeId, s
   const [opening, setOpening] = useState(false);
 
   useEffect(() => {
-    if (!entryId && !ingredientId) return;
+    if (!entryId && !ingredientId) return undefined;
+    let active = true;
     getCharacterLoras({ entryId, ingredientId }, { silent: true })
-      .then((list) => setLoras(Array.isArray(list) ? list : []))
-      .catch(err => { console.warn('⚠️ Failed to load character LoRAs: ' + err.message); setLoras([]); });
+      .then((list) => { if (active) setLoras(Array.isArray(list) ? list : []); })
+      .catch(err => {
+        console.warn('⚠️ Failed to load character LoRAs: ' + err.message);
+        if (active) setLoras([]);
+      });
+    return () => { active = false; };
   }, [entryId, ingredientId]);
 
   const canCreate = !!(universeId && entryId);
   useEffect(() => {
-    if (canCreate || (!entryId && !ingredientId)) return;
+    if (canCreate || (!entryId && !ingredientId)) return undefined;
+    let active = true;
     listLoraDatasets(entryId ? { entryKind: 'characters', entryId } : { entryKind: 'characters', ingredientId })
-      .then((list) => setExistingDataset(list?.[0] || null))
+      .then((list) => { if (active) setExistingDataset(list?.[0] || null); })
       .catch(err => console.warn('⚠️ Failed to load LoRA datasets: ' + err.message));
+    return () => { active = false; };
   }, [canCreate, entryId, ingredientId]);
 
   const openDataset = async () => {

@@ -138,11 +138,13 @@ export default function MediaModels() {
   useEffect(() => {
     if (textEncoderDownloads.downloading) {
       wasDownloadingTextEncoder.current = true;
-      return;
+      return undefined;
     }
-    if (!wasDownloadingTextEncoder.current) return;
+    if (!wasDownloadingTextEncoder.current) return undefined;
     wasDownloadingTextEncoder.current = false;
-    listCachedModels({ silent: true }).then(setData).catch(() => {});
+    let active = true;
+    listCachedModels({ silent: true }).then((d) => { if (active) setData(d); }).catch(() => {});
+    return () => { active = false; };
   }, [textEncoderDownloads.downloading]);
 
   const handleDeleteModel = async (id) => {

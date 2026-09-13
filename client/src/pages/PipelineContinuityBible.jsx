@@ -42,6 +42,11 @@ const FALLBACK_CATEGORIES = [
 
 export default function PipelineContinuityBible() {
   const { seriesId } = useParams();
+  // Live series identity for the ledger read below. Assigned during render so
+  // the comparison always sees the CURRENT series, not the one captured when
+  // the effect ran.
+  const seriesIdRef = useRef(seriesId);
+  seriesIdRef.current = seriesId;
   const navigate = useNavigate();
   const [series, setSeries] = useState(null);
   const [ledger, setLedger] = useState(null);
@@ -49,6 +54,8 @@ export default function PipelineContinuityBible() {
   const [active, setActive] = useState(false);
   const [starting, setStarting] = useState(false);
   const activeRunIdRef = useRef(null);
+  // Supersession token for the ledger re-read below.
+  const ledgerRequestRef = useRef(0);
 
   // Load series + ledger, and re-attach to an in-flight run on (re)mount.
   useEffect(() => {
@@ -80,10 +87,20 @@ export default function PipelineContinuityBible() {
   useEffect(() => {
     if (!active || !latest || !RUN_ENDED.has(latest.type)) return;
     if (activeRunIdRef.current && latest.runId && latest.runId !== activeRunIdRef.current) return;
+    // A request-generation ref, not a `let active` flag: `active` is in this
+    // effect's own dependency array, so the write below re-runs the effect
+    // immediately and a lifetime-scoped flag would be flipped by its own
+    // cleanup before the response landed. The re-run early-returns without
+    // bumping, so the in-flight request stays current and only a genuinely
+    // newer one supersedes it.
     setActive(false);
     activeRunIdRef.current = null;
     if (latest.type === 'complete') {
-      getContinuityBible(seriesId).then((l) => setLedger(l)).catch(() => {});
+      const req = ++ledgerRequestRef.current;
+      const forSeries = seriesId;
+      getContinuityBible(seriesId)
+        .then((l) => { if (req === ledgerRequestRef.current && seriesIdRef.current === forSeries) setLedger(l); })
+        .catch(() => {});
       if (latest.status === 'no-content') toast.warning('Nothing to build a ledger from — add canon or draft a manuscript first');
       else toast.success(`Continuity bible ready — ${latest.factCount || 0} facts`);
     } else if (latest.type === 'canceled') {

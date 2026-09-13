@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useCallback } from 'react';
+import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { Link } from 'react-router';
 import {
   Cpu,
@@ -356,20 +356,30 @@ export default function AgentCard({ agent, onPause, onKill, onDelete, onResume, 
     }
   };
 
+  // Supersession token for the full-output read below.
+  const outputRequestRef = useRef(0);
+
   // Fetch full output when expanded for completed agents (skip for remote)
   useEffect(() => {
-    if (expanded && inactive && !fullOutput && !loadingOutput && !remote) {
-      setLoadingOutput(true);
-      api.getCosAgent(agent.id)
-        .then(data => {
-          setFullOutput(toTranscript(data));
-        })
-        .catch(() => {
-          // Fall back to agent's stored output
-          setFullOutput(toTranscript(agent));
-        })
-        .finally(() => setLoadingOutput(false));
-    }
+    if (!(expanded && inactive && !fullOutput && !loadingOutput && !remote)) return;
+    // A request-generation ref, not a `let active` flag: `loadingOutput` is in this
+    // effect's own dependency array, so the write below re-runs the effect
+    // immediately and a lifetime-scoped flag would be flipped by its own
+    // cleanup before the response landed. The re-run early-returns without
+    // bumping, so the in-flight request stays current and only a genuinely
+    // newer one supersedes it.
+    const req = ++outputRequestRef.current;
+    const current = () => req === outputRequestRef.current;
+    setLoadingOutput(true);
+    api.getCosAgent(agent.id)
+      .then(data => {
+        if (current()) setFullOutput(toTranscript(data));
+      })
+      .catch(() => {
+        // Fall back to agent's stored output
+        if (current()) setFullOutput(toTranscript(agent));
+      })
+      .finally(() => { if (current()) setLoadingOutput(false); });
   }, [expanded, inactive, agent.id, fullOutput, loadingOutput, remote, agent.output]);
 
   const duration = agent.completedAt

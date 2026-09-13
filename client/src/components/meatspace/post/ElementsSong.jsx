@@ -66,16 +66,19 @@ export default function ElementsSong({ item: itemProp, onBack, loadItemOnMount, 
   const [mastery, setMastery] = useState(item?.mastery || { overallPct: 0, chunks: {}, elements: {} });
 
   useEffect(() => {
-    if (!itemProp && loadItemOnMount) {
-      getMemoryItem('elements-song').then(data => {
-        if (data) { setLoadedItem(data); setMastery(data.mastery || { overallPct: 0, chunks: {}, elements: {} }); }
-      }).catch(err => console.warn('⚠️ Failed to load elements song: ' + err.message));
-    }
+    if (itemProp || !loadItemOnMount) return undefined;
+    let active = true;
+    getMemoryItem('elements-song').then(data => {
+      if (data && active) { setLoadedItem(data); setMastery(data.mastery || { overallPct: 0, chunks: {}, elements: {} }); }
+    }).catch(err => console.warn('⚠️ Failed to load elements song: ' + err.message));
+    return () => { active = false; };
   }, [itemProp, loadItemOnMount]);
 
   useEffect(() => {
-    if (!item?.id) return;
-    getMemoryMastery(item.id).then(m => { if (m) setMastery(m); }).catch(err => console.warn('⚠️ Failed to load mastery: ' + err.message));
+    if (!item?.id) return undefined;
+    let active = true;
+    getMemoryMastery(item.id).then(m => { if (m && active) setMastery(m); }).catch(err => console.warn('⚠️ Failed to load mastery: ' + err.message));
+    return () => { active = false; };
   }, [item?.id]);
 
   function handlePracticeComplete(newMastery, continueDaily = false) {
