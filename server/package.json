@@ -22,8 +22,8 @@
   },
   "dependencies": {
     "@cantoo/pdf-lib": "2.9.2",
-    "@googleapis/calendar": "16.0.0",
-    "@googleapis/gmail": "18.0.0",
+    "@googleapis/calendar": "19.0.0",
+    "@googleapis/gmail": "21.0.0",
     "@novnc/novnc": "1.7.0",
     "chokidar": "5.0.0",
     "express": "5.2.1",
