@@ -1,6 +1,6 @@
 # PortOS Documentation
 
-Index of everything under `docs/`. Start with the [root README](../README.md) for the product overview and quick start.
+Index of everything under `docs/`. Start with the [root README](../README.md) for the product overview and quick start, and [ETHOS.md](../ETHOS.md) for the project's position on autonomy, digital-mind individuality, privacy boundaries, and why consent here is architecture rather than a service.
 
 **Something won't start?** Run `npm run doctor` — a read-only report of every install prerequisite (Node/npm floors, submodule, workspace deps, PostgreSQL + pgvector, migrations, seeded `data/`, pm2, media toolchain, cert, ports). It runs before `npm install` and prints one pasteable block; add `--json` for machine-readable output. Then see [TROUBLESHOOTING.md](./TROUBLESHOOTING.md).
 

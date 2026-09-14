@@ -2,6 +2,8 @@
 
 > A self-hosted "everything app" for the user's second brain and digital identity — centralizing creative production, knowledge capture, AI agent orchestration, health & longevity tracking, app management, communications, and lifelong learning into a single dashboard, accessible anywhere via Tailscale.
 
+> Ethos and non-negotiables: [ETHOS.md](./ETHOS.md).
+
 ## Purpose
 
 PortOS transforms a local development machine into an intelligent personal operating system — the user's everything app for managing their life, their health, their goals, their projects, their machines, and their creative output. It exists to help the user **interface more deeply with the world and with themselves**, **create more than they consume**, and **learn, grow, and explore the evolving world of software engineering**. It solves the fragmentation of modern life — knowledge capture, identity modeling, creative production, health tracking, AI orchestration, communication, and app management are scattered across dozens of tools with no unified interface. PortOS brings these together in a single dashboard that runs on your own hardware, keeps your data local, and is accessible from any device on your private Tailscale network.
