@@ -5,6 +5,7 @@
 // server dependency graph into a package whose package.json declares only
 // express.
 import { spawn } from 'child_process';
+import { existsSync } from 'fs';
 import { readFile } from 'fs/promises';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
@@ -19,6 +20,15 @@ export const PM2_BIN = join(dirname(require.resolve('pm2/package.json')), 'bin',
 /** Execute a PM2 CLI command via node (bypasses pm2.cmd) */
 export function execPm2(pm2Args) {
   return new Promise((resolve, reject) => {
+    // node_modules/pm2 can go stale (e.g. a dangling symlink left by a reaped
+    // worktree install) without require.resolve('pm2/package.json') noticing,
+    // since that only resolves the package dir, not this bin file. Catch it
+    // here with a one-line message instead of spawning node against a missing
+    // path, which surfaces as an opaque multi-line MODULE_NOT_FOUND dump.
+    if (!existsSync(PM2_BIN)) {
+      reject(new Error(`PM2 binary not found at ${PM2_BIN} — run "npm install" in the repo root`));
+      return;
+    }
     const child = spawn(process.execPath, [PM2_BIN, ...pm2Args], { windowsHide: true });
     let stdout = '';
     let stderr = '';
