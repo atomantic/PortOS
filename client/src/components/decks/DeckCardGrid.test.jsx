@@ -23,9 +23,13 @@ const deck = {
   ],
 };
 
+// The page resolves this once (`useDeckRenderTarget`) and hands the same object
+// to the render bar and the grid; the grid uses only these two fields.
+const renderTarget = (over = {}) => ({ summary: 'Local · flux2-klein-9b · 1096×1536', blocked: false, ...over });
+
 const renderGrid = (over = {}) => {
   const props = {
-    deck, onOpenCard: vi.fn(), onRenderCard: vi.fn(), onPreview: vi.fn(),
+    deck, renderTarget: renderTarget(), onOpenCard: vi.fn(), onRenderCard: vi.fn(), onPreview: vi.fn(),
     onRenderComplete: vi.fn(), onRenderTerminal: vi.fn(), ...over,
   };
   render(<DeckCardGrid {...props} />);
@@ -75,5 +79,32 @@ describe('DeckCardGrid', () => {
     fireEvent.click(screen.getAllByTitle('Edit this card')[1]);
     expect(props.onOpenCard).toHaveBeenCalledWith(expect.objectContaining({ id: 'b' }));
     expect(screen.getByText('Alice')).toBeInTheDocument();
+  });
+
+  // A rendered card's slot is a lightbox opener, so before this button the only
+  // way to redo the one card you disliked was its drawer or the whole deck.
+  it('re-renders one card on the options the bar above is configured with', () => {
+    const props = renderGrid();
+    const reRender = screen.getByRole('button', { name: 'Re-render Card b on Local · flux2-klein-9b · 1096×1536' });
+    fireEvent.click(reRender);
+    expect(props.onRenderCard).toHaveBeenCalledWith(expect.objectContaining({ id: 'b' }));
+    // A card that has never rendered gets the same button, worded for a first run.
+    expect(screen.getByRole('button', { name: 'Render Card a on Local · flux2-klein-9b · 1096×1536' })).toBeEnabled();
+  });
+
+  it('names why a card cannot be rendered rather than showing a bare dead icon', () => {
+    renderGrid();
+    // No prompt, and already rendering: both fixable, neither by this button.
+    expect(screen.getByRole('button', { name: 'Write a prompt for Card e before rendering it' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Card c is rendering' })).toBeDisabled();
+  });
+
+  it('stands every card button down while the local runtime is unavailable', () => {
+    renderGrid({ renderTarget: renderTarget({ blocked: true }) });
+    const blocked = screen.getAllByRole('button', { name: /the local image runtime is unavailable/ });
+    // Every card except the promptless one and the in-flight one, which each
+    // keep their own more specific reason.
+    expect(blocked).toHaveLength(3);
+    blocked.forEach((b) => expect(b).toBeDisabled());
   });
 });

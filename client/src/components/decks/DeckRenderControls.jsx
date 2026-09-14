@@ -6,12 +6,9 @@ import CollapsibleSection from '../ui/CollapsibleSection';
 import FormField from '../ui/FormField';
 import DeckLlmPinPicker from './DeckLlmPinPicker';
 import useFieldDraft from '../../hooks/useFieldDraft';
-import useImageRenderSettings from '../../hooks/useImageRenderSettings';
-import useLocalImageRuntime from '../../hooks/useLocalImageRuntime';
 import {
   DECK_CARD_SIZE, DECK_CARD_SIZE_BY_KIND, DECK_CARD_SIZE_MAX, DECK_CARD_SIZE_MIN,
 } from '../../lib/decks';
-import { IMAGE_GEN_MODE, IMAGE_RUNTIME_READINESS, RENDER_TARGET, modeLabel } from '../../lib/imageGenBackends';
 import { clampImageEdge } from '../../lib/imageGenResolutions';
 import { pluralize } from '../../lib/textUtils';
 
@@ -31,11 +28,16 @@ const SIZE_BOUNDS = { min: DECK_CARD_SIZE_MIN, max: DECK_CARD_SIZE_MAX, step: 8 
  * resting state of a fully-prompted deck, which is exactly the state that
  * looked broken. The accent button is whichever step is the next one to take,
  * so the deck always points at its own next action.
+ *
+ * `renderTarget` is the page's resolved `useDeckRenderTarget(deck)` — the same
+ * object the card grid renders its per-card button from, so the options named
+ * here and the options one card re-renders on cannot drift apart.
  */
 export default function DeckRenderControls({
-  deck, completion, onPatch, onGeneratePrompts, onRenderMissing, onRenderAll, generating = false, rendering = false,
+  deck, completion, renderTarget, onPatch, onGeneratePrompts, onRenderMissing, onRenderAll,
+  generating = false, rendering = false,
 }) {
-  const { imageCfg, backends } = useImageRenderSettings({ record: deck, target: RENDER_TARGET.DECK });
+  const { backends, size, summary: renderSummary, localRuntime, blocked: runtimeBlocked } = renderTarget;
   const total = completion?.total || 0;
   const prompted = completion?.prompted || 0;
   const rendered = completion?.rendered || 0;
@@ -44,25 +46,6 @@ export default function DeckRenderControls({
   const unprompted = Math.max(0, total - prompted);
   const busy = generating || rendering;
   const promptsAreTheNextStep = unprompted > 0;
-  const size = deck.cardSize || DECK_CARD_SIZE;
-  // What this deck will actually render on, in the order a sentence wants it.
-  // Formatted once: the collapsed header and the expanded note say the same
-  // three facts, and a fourth would otherwise have to be added to both.
-  const model = imageCfg.cloudModel || imageCfg.modelId;
-  const renderFacts = backends.length
-    ? [modeLabel(imageCfg.mode), model, `${size.width}×${size.height}`].filter(Boolean)
-    : [];
-  // `backends` is empty until the settings fetch lands, and until then imageCfg
-  // is the UNRESOLVED placeholder (local + the install default) — probing on
-  // that asks about the wrong model, and about a local runtime a cloud-pinned
-  // deck never touches. Wait for the real answer.
-  const rendersLocally = backends.length > 0 && imageCfg.mode === IMAGE_GEN_MODE.LOCAL;
-  const localRuntime = useLocalImageRuntime(rendersLocally ? (imageCfg.modelId || null) : null);
-  // Queueing 79 cards against a runtime the server will refuse is the reported
-  // complaint one step earlier than the error message, so the buttons stand down
-  // while it is unavailable. An unknown verdict does NOT block — a probe that
-  // could not answer must not be able to lock the deck out of rendering.
-  const runtimeBlocked = localRuntime.runtime?.readiness === IMAGE_RUNTIME_READINESS.UNAVAILABLE;
 
   return (
     <div className="bg-port-card border border-port-border rounded-md p-3 space-y-3">
@@ -75,7 +58,7 @@ export default function DeckRenderControls({
           icon={Sliders}
           id="deck-render-options"
           label="Render options"
-          summary={renderFacts.join(' · ')}
+          summary={renderSummary}
           buttonClassName="min-h-[38px]"
           bodyClassName="space-y-3 pt-2"
         >
@@ -91,9 +74,9 @@ export default function DeckRenderControls({
           <CardSize kind={deck.kind} size={size} onPatch={onPatch} />
           {/* What an "Auto" pin and a blank model actually resolve to — the
               controls above name the PIN, this names the outcome. */}
-          {renderFacts.length ? (
+          {renderSummary ? (
             <p className="text-[11px] text-gray-500">
-              Renders on <span className="text-gray-300">{renderFacts.join(' · ')}</span>
+              Renders on <span className="text-gray-300">{renderSummary}</span>
             </p>
           ) : null}
         </CollapsibleSection>

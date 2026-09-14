@@ -9,6 +9,10 @@
  * `MediaJobThumb`. In-flight state lives on each card's `render` record —
  * stamped optimistically when a render is queued, flipped when the slot
  * settles — so a render started here or on a previous visit reads the same.
+ *
+ * The deck's render target (backend pin, card trim, local-runtime verdict)
+ * resolves once here and is handed to both the action bar and the grid, so the
+ * options the bar advertises are exactly the ones a single card re-renders on.
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -27,6 +31,7 @@ import DeckCardGrid from '../components/decks/DeckCardGrid';
 import DeckCardDrawer from '../components/decks/DeckCardDrawer';
 import DeckStylePanel from '../components/decks/DeckStylePanel';
 import DeckRenderControls from '../components/decks/DeckRenderControls';
+import useDeckRenderTarget from '../hooks/useDeckRenderTarget';
 import useMounted from '../hooks/useMounted';
 import useUrlParams from '../hooks/useUrlParams';
 import usePreviewRoute from '../hooks/usePreviewRoute';
@@ -61,6 +66,10 @@ function DeckEditor({ id }) {
   const [rendering, setRendering] = useState(false);
   const [savingCard, setSavingCard] = useState(false);
   const loadSeqRef = useRef(0);
+  // Resolved once for the page: the render bar names these options, the grid's
+  // per-card re-render button renders on them, and both stand down together on
+  // an unavailable local runtime. Two consumers, one settings fetch.
+  const renderTarget = useDeckRenderTarget(deck);
 
   const load = useCallback(async () => {
     const seq = ++loadSeqRef.current;
@@ -259,6 +268,7 @@ function DeckEditor({ id }) {
       <DeckRenderControls
         deck={deck}
         completion={completion}
+        renderTarget={renderTarget}
         onPatch={patchDeck}
         onGeneratePrompts={generatePrompts}
         onRenderMissing={() => renderBatch({ onlyMissing: true }, 'Render missing')}
@@ -280,6 +290,7 @@ function DeckEditor({ id }) {
       ) : (
         <DeckCardGrid
           deck={deck}
+          renderTarget={renderTarget}
           onOpenCard={openCard}
           onRenderCard={renderCard}
           onPreview={(card) => previewFilename(card.primaryImageRef || card.imageRefs.at(-1))}
