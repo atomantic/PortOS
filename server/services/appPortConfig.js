@@ -10,16 +10,19 @@
  * still owns the precondition guard (`usesPm2` + path exists) and the HTTP
  * error/response mapping.
  *
- * Returns `{ persistFailed, uiPortOverride, changedKeys }`:
+ * Returns `{ persistFailed, uiPortOverride, changedKeys, portCollision }`:
  *   - persistFailed  — true when the user changed a port we could NOT write to
  *                      the source-of-truth config (caller should reject 422).
  *   - uiPortOverride — the derived uiPort to pin for served-by-API apps
  *                      (undefined when the app's ui port is a real literal).
  *   - changedKeys    — port keys that differed from the config (for context).
+ *   - portCollision  — set when an edit would hand one process a port ANOTHER
+ *                      process in the same config already holds (caller rejects
+ *                      422); nothing is written in that case.
  */
 
 import { parseEcosystemFromPath, writeEcosystemPortEdits } from './streamingDetect.js';
-import { deriveUiPort } from './appListEnrichment.js';
+import { attributeProcessPorts, deriveUiPort, findCrossProcessPortCollision } from '../lib/ecosystemProcessPorts.js';
 
 const PORT_KEYS = ['apiPort', 'uiPort', 'devUiPort'];
 const LABEL_BY_KEY = { apiPort: 'api', uiPort: 'ui', devUiPort: 'devUi' };
@@ -37,15 +40,18 @@ export async function applyEcosystemPortEdits(existing, data) {
   // a value equal to the config's current port is a no-op echo, and a value
   // that differs is a genuine edit to persist.
   const { processes: cfgProcs } = await parseEcosystemFromPath(existing.repoPath);
+  // Attribute each label to the process that belongs to THIS app, not to
+  // whichever process declares the label first (#7357): one ecosystem config
+  // routinely describes several product surfaces, and a sibling daemon's
+  // `ports.ui` is not the app's UI port. A label with no attributable process
+  // stays undefined, which is what lets the served-by-API derivation below take
+  // over instead of the config edit landing on the sibling's literal.
+  const { ports: attributedPorts, processNames: procNameByLabel } = attributeProcessPorts(cfgProcs, existing);
   const currentPort = {};
   const procNameByKey = {}; // which process block owns each label (for targeted rewrites)
-  for (const proc of cfgProcs || []) {
-    for (const [key, label] of Object.entries(LABEL_BY_KEY)) {
-      if (currentPort[key] === undefined && Number.isInteger(proc.ports?.[label])) {
-        currentPort[key] = proc.ports[label];
-        procNameByKey[key] = proc.name;
-      }
-    }
+  for (const [key, label] of Object.entries(LABEL_BY_KEY)) {
+    currentPort[key] = attributedPorts[label];
+    procNameByKey[key] = procNameByLabel[label];
   }
   // Count current values so a value-keyed rewrite never fires on a number shared
   // by another port field (e.g. uiPort derived from apiPort, both 6000) — that
@@ -78,6 +84,21 @@ export async function applyEcosystemPortEdits(existing, data) {
   const effectiveApiPort = Number.isInteger(data.apiPort) ? data.apiPort : currentPort.apiPort;
   const derivedUiPort = deriveUiPort(undefined, effectiveApiPort, currentPort.devUiPort);
   const uiIsDerived = currentPort.uiPort === undefined && Number.isInteger(derivedUiPort);
+  // Collision guard (#7357): never hand one process a port ANOTHER process in
+  // the same config already holds. Whatever the rewrite path — value-keyed or
+  // targeted — the result would be a correct-looking config that collides the
+  // moment PM2 restarts, so this runs BEFORE any write and rejects instead.
+  // Every edit is described by process + label here, including the value-keyed
+  // ones (which name a process for attribution but rewrite by value).
+  const portCollision = findCrossProcessPortCollision(cfgProcs, changedKeys.map(key => ({
+    processName: procNameByKey[key],
+    label: LABEL_BY_KEY[key],
+    newPort: data[key],
+  })));
+  if (portCollision) {
+    return { persistFailed: false, uiPortOverride: uiIsDerived ? derivedUiPort : undefined, changedKeys, portCollision };
+  }
+
   const remap = [];
   const targetedEdits = []; // shared-value keys: rewritten by process + label
   for (const key of changedKeys) {
@@ -122,5 +143,6 @@ export async function applyEcosystemPortEdits(existing, data) {
     persistFailed,
     uiPortOverride: uiIsDerived ? derivedUiPort : undefined,
     changedKeys,
+    portCollision: null,
   };
 }

@@ -172,7 +172,7 @@ router.put('/:id', asyncHandler(async (req, res, next) => {
   // as a failed request instead of a 200 that leaves apps.json and PM2
   // disagreeing (the write throws and bubbles to the error middleware).
   if (existing && usesPm2(existing.type) && await pathExists(existing.repoPath)) {
-    const { persistFailed, uiPortOverride } = await applyEcosystemPortEdits(existing, data);
+    const { persistFailed, uiPortOverride, portCollision } = await applyEcosystemPortEdits(existing, data);
 
     // Pin the stored uiPort to the derived value for served-by-API apps. This
     // both overwrites the drawer's echoed/stale UI field and keeps the stored
@@ -182,6 +182,16 @@ router.put('/:id', asyncHandler(async (req, res, next) => {
     // the derived value self-corrects on every save.
     if (uiPortOverride !== undefined) {
       data.uiPort = uiPortOverride;
+    }
+
+    // Collision gate: the edit would give one process a port another process in
+    // the same ecosystem config already holds. Nothing was written; reject so the
+    // user fixes the conflict rather than discovering it as a failed PM2 restart.
+    if (portCollision) {
+      throw new ServerError(
+        `Port ${portCollision.newPort} is already used by the ${portCollision.heldBy} process (${portCollision.heldLabel}) in ${existing.name}'s ecosystem config — pick a port no other process claims.`,
+        { status: 422, code: 'PORT_COLLISION' }
+      );
     }
 
     // Honesty gate: if the user changed a port we could NOT write to the
