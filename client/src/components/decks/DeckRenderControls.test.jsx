@@ -3,26 +3,17 @@ import { act, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import DeckRenderControls from './DeckRenderControls';
 
-// The backend row and the LLM pin both fetch provider/settings state; this
-// suite is about the render-options panel, the batch actions, and the notes
-// that explain them.
-vi.mock('../../hooks/useImageRenderSettings', () => ({
-  default: () => ({
-    imageCfg: { mode: 'local', modelId: 'flux2-klein-9b' },
-    backends: [{ id: 'local', label: 'Local' }],
-  }),
-}));
+// The LLM pin fetches provider state; this suite is about the render-options
+// panel, the batch actions, and the notes that explain them.
 vi.mock('./DeckLlmPinPicker', () => ({ default: () => <div /> }));
 // The pin row probes the local catalog + the install's model pin itself, so the
 // deck page threads neither through.
-const localRuntime = vi.hoisted(() => ({ value: { readiness: 'ready', modelId: 'flux2-klein-9b', model: 'FLUX.2 Klein 9B', runtimeLabel: 'Shared torch runtime', reason: null, remedy: null } }));
 vi.mock('../../services/api', () => ({
   listImageModels: vi.fn().mockResolvedValue([
     { id: 'flux2-klein-9b', name: 'FLUX.2 Klein 9B' },
     { id: 'qwen-image', name: 'Qwen-Image' },
   ]),
   getSettings: vi.fn().mockResolvedValue({ imageGen: { local: { modelId: 'flux2-klein-9b' } } }),
-  getImageGenStatus: vi.fn(async () => localRuntime.value),
 }));
 // The install modal opens its own SSE stream; this suite is about whether the
 // render bar surfaces the runtime verdict and its fix, not about installing.
@@ -33,6 +24,17 @@ const deck = {
   cardSize: { width: 1096, height: 1536 },
 };
 const completion = (over) => ({ total: 79, prompted: 0, rendered: 0, inFlight: 0, failed: 0, percent: 0, ...over });
+// The page resolves the render target once (`useDeckRenderTarget`) and hands
+// the same object to the bar and the grid, so the bar takes it as a prop.
+const ready = { readiness: 'ready', modelId: 'flux2-klein-9b', model: 'FLUX.2 Klein 9B', runtimeLabel: 'Shared torch runtime', reason: null, remedy: null };
+const renderTarget = (runtime = ready, over = {}) => ({
+  backends: [{ id: 'local', label: 'Local' }],
+  size: deck.cardSize,
+  summary: 'Local · flux2-klein-9b · 1096×1536',
+  localRuntime: { runtime, loading: false, refresh: vi.fn() },
+  blocked: runtime?.readiness === 'unavailable',
+  ...over,
+});
 
 // Async so the mount's own settings fetch settles here rather than surfacing as
 // an act() warning in whichever case happens to run first.
@@ -40,6 +42,7 @@ const renderControls = async (over = {}) => {
   const props = {
     deck,
     completion: completion(),
+    renderTarget: renderTarget(),
     onPatch: vi.fn(),
     onGeneratePrompts: vi.fn(),
     onRenderMissing: vi.fn(),
@@ -85,7 +88,8 @@ describe('DeckRenderControls render options', () => {
   });
 
   it('resets to the deck kind\'s own trim, and says which that is', async () => {
-    const { onPatch } = await renderControls({ deck: { ...deck, cardSize: { width: 512, height: 512 } } });
+    const smaller = { ...deck, cardSize: { width: 512, height: 512 } };
+    const { onPatch } = await renderControls({ deck: smaller, renderTarget: renderTarget(ready, { size: smaller.cardSize }) });
     await openOptions();
     await userEvent.click(btn(/Reset to 1096×1536/));
     expect(onPatch).toHaveBeenCalledWith({ cardSize: { width: 1096, height: 1536 } });
@@ -150,18 +154,13 @@ describe('DeckRenderControls local runtime', () => {
   };
 
   it('stays silent about a healthy runtime, and leaves the render buttons alone', async () => {
-    localRuntime.value = {
-      readiness: 'ready', modelId: 'flux2-klein-9b', model: 'FLUX.2 Klein 9B',
-      runtimeLabel: 'Shared torch runtime', reason: null, remedy: null,
-    };
     await renderControls({ completion: completion({ prompted: 79 }) });
     expect(screen.queryByRole('button', { name: /install runtime/i })).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: /^Render all/ })).toBeEnabled();
   });
 
   it('names the broken runtime and offers its one-button fix before any render is queued', async () => {
-    localRuntime.value = broken;
-    await renderControls();
+    await renderControls({ renderTarget: renderTarget(broken) });
     expect(screen.getByText(/not installed or healthy/i)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /install runtime/i })).toBeInTheDocument();
   });
@@ -169,8 +168,7 @@ describe('DeckRenderControls local runtime', () => {
   // The reported complaint one step earlier than the error message: queueing a
   // whole deck against a runtime the server is going to refuse.
   it('stands the render buttons down while the runtime is unavailable, and says why', async () => {
-    localRuntime.value = broken;
-    await renderControls({ completion: completion({ prompted: 79 }) });
+    await renderControls({ completion: completion({ prompted: 79 }), renderTarget: renderTarget(broken) });
     expect(screen.getByRole('button', { name: /^Render all/ })).toBeDisabled();
     expect(screen.getByRole('button', { name: /^Render missing/ })).toBeDisabled();
     expect(screen.getByText(/local image runtime is unavailable/i)).toBeInTheDocument();
@@ -178,8 +176,8 @@ describe('DeckRenderControls local runtime', () => {
 
   // An unanswerable probe must not be able to lock a working deck out.
   it('does not block rendering on an unknown verdict', async () => {
-    localRuntime.value = { readiness: 'unknown', modelId: 'flux2-klein-9b', model: 'FLUX.2 Klein 9B', reason: 'Could not verify', remedy: null };
-    await renderControls({ completion: completion({ prompted: 79 }) });
+    const unknown = { readiness: 'unknown', modelId: 'flux2-klein-9b', model: 'FLUX.2 Klein 9B', reason: 'Could not verify', remedy: null };
+    await renderControls({ completion: completion({ prompted: 79 }), renderTarget: renderTarget(unknown) });
     expect(screen.getByRole('button', { name: /^Render all/ })).toBeEnabled();
   });
 });

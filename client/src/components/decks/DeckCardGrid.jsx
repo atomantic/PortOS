@@ -1,5 +1,5 @@
 import { useMemo } from 'react';
-import { AlertTriangle, Check, Hourglass, Link2, PencilLine, Play } from 'lucide-react';
+import { AlertTriangle, Check, Hourglass, Link2, PencilLine, Play, RefreshCw } from 'lucide-react';
 import EntryThumbSlot from '../universe/EntryThumbSlot';
 import Pill from '../ui/Pill';
 import { CARD_STATUS, cardInFlightJobId, cardStatus, deckCompletion } from '../../lib/decks';
@@ -30,8 +30,20 @@ const STATUS_META = {
  * Every card wears a labelled badge for its state and every group header spells
  * its counts out in words, so "which cards still need a prompt, and which are
  * ready to render" is answerable without opening a single card.
+ *
+ * Each card also carries its own re-render button, because once a card HAS an
+ * image its slot is a lightbox opener — re-rendering the one card you dislike
+ * otherwise meant opening its drawer or re-rendering the whole deck. It queues
+ * through the same `onRenderCard` the empty slot uses, so the server resolves
+ * the deck's own pinned backend, model and card trim; `renderTarget` is the
+ * page's resolved `useDeckRenderTarget(deck)`, and is used only to NAME those
+ * options on the button and to stand it down for the same unavailable local
+ * runtime that stops the batch actions above.
  */
-export default function DeckCardGrid({ deck, onOpenCard, onRenderCard, onPreview, onRenderComplete, onRenderTerminal }) {
+export default function DeckCardGrid({
+  deck, renderTarget, onOpenCard, onRenderCard, onPreview, onRenderComplete, onRenderTerminal,
+}) {
+  const { summary: renderSummary, blocked: runtimeBlocked } = renderTarget;
   const groups = useMemo(() => {
     const byGroup = Map.groupBy(deck.cards, (card) => card.group);
     return [...byGroup].map(([key, cards]) => {
@@ -59,6 +71,7 @@ export default function DeckCardGrid({ deck, onOpenCard, onRenderCard, onPreview
               const status = cardStatus(card);
               const meta = STATUS_META[status];
               const needsPrompt = !card.prompt;
+              const reRenderHint = renderHint({ card, needsPrompt, inFlight, runtimeBlocked, renderSummary });
               return (
                 <li key={card.id} className="flex h-full flex-col items-center gap-1.5 rounded-lg border border-port-border bg-port-card p-2">
                   <EntryThumbSlot
@@ -73,6 +86,13 @@ export default function DeckCardGrid({ deck, onOpenCard, onRenderCard, onPreview
                     onPreview={() => onPreview(card)}
                     onComplete={(filename) => onRenderComplete(card.id, filename)}
                     onTerminalStatus={(s, error) => onRenderTerminal(card.id, s, error)}
+                    // The slot is the bigger of the card's two render
+                    // affordances, so a dead runtime has to stand it down too
+                    // or the button below stands down alone and reads broken.
+                    // A promptless slot is exempt: it opens the editor, which
+                    // works whatever the runtime is doing.
+                    canRender={needsPrompt || !runtimeBlocked}
+                    disabledHint={reRenderHint}
                     emptyIcon={needsPrompt ? PencilLine : undefined}
                     emptyHint={needsPrompt ? `Write a prompt for ${card.name}` : `Render ${card.name}`}
                     alt={card.name}
@@ -90,7 +110,19 @@ export default function DeckCardGrid({ deck, onOpenCard, onRenderCard, onPreview
                       </span>
                     ) : null}
                   </button>
-                  <Pill tone={meta.tone} size="xs" icon={meta.icon} className="mt-auto">{meta.label}</Pill>
+                  <div className="mt-auto flex w-full flex-wrap items-center justify-center gap-1">
+                    <Pill tone={meta.tone} size="xs" icon={meta.icon}>{meta.label}</Pill>
+                    <button
+                      type="button"
+                      onClick={() => onRenderCard(card)}
+                      disabled={needsPrompt || !!inFlight || runtimeBlocked}
+                      title={reRenderHint}
+                      aria-label={reRenderHint}
+                      className="min-h-[32px] min-w-[32px] inline-flex shrink-0 items-center justify-center rounded text-gray-500 hover:text-port-accent hover:bg-port-accent/10 disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-transparent disabled:hover:text-gray-500"
+                    >
+                      <RefreshCw size={13} aria-hidden="true" />
+                    </button>
+                  </div>
                   {/* Why it failed. The slot clears itself on a terminal
                       failure (so the card stays re-renderable), taking the
                       shared thumbnail's own message with it — this is the only
@@ -109,4 +141,17 @@ export default function DeckCardGrid({ deck, onOpenCard, onRenderCard, onPreview
       ))}
     </div>
   );
+}
+
+// Why this card's render button will or won't do anything, in one sentence.
+// Real text on the button's accessible name rather than a bare icon label,
+// because the two reasons it is inert (no prompt yet, a dead local runtime) are
+// both fixable elsewhere on the page — and a disabled button is neither
+// focusable nor hoverable on touch, so a `title` alone reaches nobody.
+function renderHint({ card, needsPrompt, inFlight, runtimeBlocked, renderSummary }) {
+  if (needsPrompt) return `Write a prompt for ${card.name} before rendering it`;
+  if (inFlight) return `${card.name} is rendering`;
+  if (runtimeBlocked) return `Cannot render ${card.name} — the local image runtime is unavailable`;
+  const verb = card.imageRefs?.length ? 'Re-render' : 'Render';
+  return renderSummary ? `${verb} ${card.name} on ${renderSummary}` : `${verb} ${card.name}`;
 }
