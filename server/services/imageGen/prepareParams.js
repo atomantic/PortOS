@@ -96,6 +96,18 @@ export function selectLocalImageModel(modelId, allModels = getImageModels(), pin
 }
 
 /**
+ * Select the local image model honoring the install-wide pin
+ * (`settings.imageGen.local.modelId`). Call this from any site that has
+ * settings and only needs identity (FLUX.2 gate, FableLoom capability)
+ * rather than the full `resolveLocalImageModel` pre-dispatch validator —
+ * that path also checks pythonPath / edit-only / unknown id, which is too
+ * heavy before init images exist.
+ */
+export function selectLocalImageModelFromSettings(settings, modelId, allModels = getImageModels()) {
+  return selectLocalImageModel(modelId, allModels, settings?.imageGen?.local?.modelId || null);
+}
+
+/**
  * @param {object} opts
  * @param {object} opts.data    - validated + coerced body from Zod (mutated in place)
  * @param {object} opts.files   - req.files from multer (may be undefined)
@@ -231,7 +243,7 @@ export async function prepareGenerateParams({ data, files, referenceImageFields 
   // downstream — that would orphan files on disk and produce metadata sidecars
   // that lie about how the render was conditioned.
   if (referenceImageCount && mode === IMAGE_GEN_MODE.LOCAL) {
-    const candidate = selectLocalImageModel(data.modelId);
+    const candidate = selectLocalImageModelFromSettings(settings, data.modelId);
     if (!isFlux2(candidate)) {
       cleanupReqFilesTemp();
       throw new ServerError(
@@ -389,7 +401,7 @@ export function resolveLocalImageModel(settings, params) {
   // omitted pin, prefer the historical `dev` default only when it is actually
   // compatible, then choose the first known-compatible model. This keeps a
   // Windows/Linux install from silently queueing the Apple-only default.
-  const selectedModel = selectLocalImageModel(params.modelId, allModels, settings.imageGen?.local?.modelId || null);
+  const selectedModel = selectLocalImageModelFromSettings(settings, params.modelId, allModels);
   if (selectedModel && !isHardwareCompatible(selectedModel.hardwareCompatibility)) {
     throw new ServerError(
       hardwareUnavailableReason(`Image model "${selectedModel.id}"`, selectedModel.hardwareCompatibility),

@@ -26,7 +26,7 @@ import { getImageModels, requiredReposForModel } from '../lib/mediaModels.js';
 import { inspectModelCache, verifyModelCache, repairModelCache, aggregateVerifies } from '../lib/hfCache.js';
 import { startHfDownloadStream } from '../services/hfDownloadStream.js';
 import { PATHS, ensureDir, resolveGalleryImage, unlinkGuarded, copyFileGuarded } from '../lib/fileUtils.js';
-import { prepareGenerateParams, resolveLocalImageModel, selectLocalImageModel } from '../services/imageGen/prepareParams.js';
+import { prepareGenerateParams, resolveLocalImageModel, selectLocalImageModelFromSettings } from '../services/imageGen/prepareParams.js';
 import { applyImageClean, applyWatermarkRemoval, applyLightRegenVariant } from '../services/imageGen/variants.js';
 import { join, basename } from 'node:path';
 import { STYLE_PRESETS } from '../lib/writersRoomStylePresets.js';
@@ -451,7 +451,9 @@ router.post('/generate', imageGenUploads, asyncHandler(async (req, res) => {
         );
       }
     }
-    const selected = mode === IMAGE_GEN_MODE.LOCAL ? selectLocalImageModel(params.modelId) : null;
+    const selected = mode === IMAGE_GEN_MODE.LOCAL
+      ? selectLocalImageModelFromSettings(settings, params.modelId)
+      : null;
     const cloud = selected ? null : resolveCloudProviderConfig(settings, mode, { model: params.cloudModel });
     const model = selected
       ? { ...selected, loraCompatKey: loraCompatKey(selected) }
