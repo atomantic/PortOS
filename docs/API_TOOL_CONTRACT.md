@@ -18,11 +18,15 @@ The current source contains:
   for the lifetime of the server process.
 - A Socket.IO inventory derived from server and client call sites on first use,
   then cached the same way.
-- 24 provider-neutral semantic tools: one `cos.create-task` tool, the
-  `issues.list` / `issues.file` forge pair, and 21 semantic adapters
-  inherited from the voice registry.
+- Provider-neutral semantic tools, filtered by scope: 48 at `mind`, 32 at
+  `agent` and `ui`, 23 at `voice`. The shared core is the 22 semantic
+  adapters inherited from the voice registry (tabulated below); `mind` adds
+  `cos.create-task`, the `issues.list` / `issues.file` forge pair, and the
+  `mind.*` family, while `agent` and `ui` add the `eidoverse.*` family and
+  `user-actions.query`. Read the live count from `getCosToolCatalog({ scope })`
+  rather than from this paragraph.
 - Five read-only context tools on the Agent Tools MCP transport. The MCP
-  transport may additionally advertise the 21 semantic adapters and eligible
+  transport may additionally advertise the 22 semantic adapters and eligible
   machine-local saved read recipes when their independent grants are enabled.
 
 The route catalog is the exhaustive HTTP map. Both it and the Socket.IO
@@ -151,7 +155,7 @@ is authoritative for descriptions and JSON Schema.
 | `cos.agents.status` | `code_agent_status` | none | read |
 | `catalog.search` | `catalog_lookup` | `query`; optional `type`, `limit` | read |
 
-All 21 entries are scope-eligible for `agent`, `ui`, and `voice`; the
+All 22 entries are scope-eligible for `agent`, `ui`, and `voice`; the
 Persistent Mind `mind` scope additionally includes `cos.create-task`,
 `issues.list`, and `issues.file`. None of the three is in the Agent MCP
 catalog. The task tool validates its app, provider, model, effort, mode,
@@ -292,8 +296,8 @@ exposable merely because they appear in the internal OpenAPI inventory.
 1. **Resolved documentation drift.** The prior unified spec said 2,066 HTTP
    operations, 23 Persistent Mind tools, 22 semantic tools, and a `cursor`
    catalog query. The current generated inventory is 2,069 operations; the
-   runtime registry is 24 tools total (21 semantic plus `cos.create-task`,
-   `issues.list`, and `issues.file`),
+   runtime registry answers per scope (48 at `mind`, 32 at `agent` and `ui`,
+   23 at `voice`) over a shared core of 22 semantic adapters,
    and the implemented catalog query is `scope`, `intent`, and `format`.
    The point-in-time spec's implemented-foundation text is corrected in this
    PR.
