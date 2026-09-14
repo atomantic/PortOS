@@ -124,7 +124,7 @@ function Scene({ state, speaking, background, variant, coverage = null }) {
 
 function MissingModelHint({ background = false, bundled = false }) {
   return (
-    <div className={`${background ? 'relative w-full h-full min-h-full' : 'relative w-full max-w-[8rem] lg:max-w-[12rem] aspect-[5/6]'} flex flex-col items-center justify-center rounded-lg border border-port-border bg-port-card/60 text-center p-3`}>
+    <div className={`${background ? 'relative w-full h-full min-h-full' : 'relative w-full aspect-[5/6]'} flex flex-col items-center justify-center rounded-lg border border-port-border bg-port-card/60 text-center p-3`}>
       <div className="text-3xl mb-2">🧍</div>
       {bundled ? (
         <>
@@ -144,7 +144,7 @@ function MissingModelHint({ background = false, bundled = false }) {
 
 function LoadingPlaceholder({ background = false }) {
   return (
-    <div className={`${background ? 'relative w-full h-full min-h-full' : 'relative w-full max-w-[8rem] lg:max-w-[12rem] aspect-[5/6]'} flex items-center justify-center`}>
+    <div className={`${background ? 'relative w-full h-full min-h-full' : 'relative w-full aspect-[5/6]'} flex items-center justify-center`}>
       <div className="text-xs text-gray-500 animate-pulse">loading…</div>
     </div>
   );

@@ -25,7 +25,7 @@ import CoSAvatarFrame from './CoSAvatarFrame';
  */
 
 const panelClass = (background) =>
-  `${background ? 'relative w-full h-full min-h-full' : 'relative w-full max-w-[8rem] lg:max-w-[12rem] aspect-[5/6]'} flex flex-col items-center justify-center rounded-lg border border-port-border bg-port-card/60 text-center p-3`;
+  `${background ? 'relative w-full h-full min-h-full' : 'relative w-full aspect-[5/6]'} flex flex-col items-center justify-center rounded-lg border border-port-border bg-port-card/60 text-center p-3`;
 
 function WebGLUnavailableHint({ background = false }) {
   return (
