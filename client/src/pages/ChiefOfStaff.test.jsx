@@ -208,34 +208,28 @@ describe('ChiefOfStaff loading skeleton', () => {
   });
 });
 
-// Regression coverage for #7283 — past MOBILE_DROPDOWN_THRESHOLD tabs (16 on
-// this page), ChiefOfStaff used to pass `hideLabelOnMobile` (an icon-only
-// phone row plus hand-rolled scroll arrows) instead of the `mobileDropdown`
-// `<select>` every other many-tab section uses.
-describe('ChiefOfStaff mobile tab navigation (#7283)', () => {
-  it('renders a labelled mobile select naming the current tab instead of unlabelled icons', async () => {
+// CoS is the busiest section (16 tabs), so it is past the compact threshold on
+// a phone. It collapses to TabPills' ICON ROW — the same buttons, labels kept
+// for assistive tech — rather than the `<select>` #7283 briefly made universal.
+// The scroll chevrons that used to be hand-rolled here now live in TabPills.
+describe('ChiefOfStaff mobile tab navigation', () => {
+  it('collapses to named icon links on the phone, not a select', async () => {
     await renderSettledAt('tasks');
 
-    const select = screen.getByRole('combobox', { name: 'Chief of Staff sections' });
-    expect(select).toHaveAttribute('id', 'cos-sections-select');
-    expect(select.value).toBe('tasks');
+    expect(screen.queryByRole('combobox', { name: 'Chief of Staff sections' })).toBeNull();
+    const tasksTab = screen.getByRole('tab', { name: 'Tasks' });
+    expect(tasksTab).toHaveAttribute('aria-selected', 'true');
+    expect(tasksTab.querySelector('svg')).toBeTruthy();
+    expect(tasksTab.querySelector('.max-sm\\:sr-only')).toBeTruthy();
   });
 
-  it('navigates to the selected tab route when an option is chosen', async () => {
+  it('navigates to the tab route when an icon is clicked', async () => {
     await renderSettledAt('tasks');
-    const select = screen.getByRole('combobox', { name: 'Chief of Staff sections' });
 
-    fireEvent.change(select, { target: { value: 'agents' } });
+    fireEvent.click(screen.getByRole('tab', { name: 'Agents' }));
 
     const panel = await screen.findByRole('tabpanel');
     expect(panel).toHaveAttribute('id', 'tabpanel-agents');
-  });
-
-  it('no longer renders the hand-rolled tab scroll-arrow buttons', async () => {
-    await renderSettledAt('tasks');
-
-    expect(screen.queryByRole('button', { name: 'Scroll tabs left' })).not.toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'Scroll tabs right' })).not.toBeInTheDocument();
   });
 });
 

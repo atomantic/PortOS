@@ -353,14 +353,15 @@ export function appliedNumeracyAnswerCorrect(value, question = {}) {
   if (!parsed) return false;
   let expected = question.expected;
   let actual = parsed.numeric;
+  // Mirrors correctAppliedAnswer in server/lib/postAppliedNumeracy.js: a bare
+  // number is read as the unit the prompt asked for, a different compatible unit
+  // converts, and a trailing noun on a unitless question is ignored.
   if (question.unit) {
-    const suppliedFactor = question.unitOptions?.[parsed.unit];
+    const suppliedFactor = question.unitOptions?.[parsed.unit ?? question.unit];
     const expectedFactor = question.unitOptions?.[question.unit];
     if (!suppliedFactor || !expectedFactor) return false;
     actual *= suppliedFactor;
     expected *= expectedFactor;
-  } else if (parsed.unit) {
-    return false;
   }
   const tolerance = question.tolerance || {};
   const margin = Math.max(tolerance.absolute || 0, Math.abs(expected) * (tolerance.relative || 0));
@@ -450,3 +451,12 @@ export const getDifficultyColor = (difficulty) => {
 // Re-exported from the leaf both server/services/meatspacePost.js and this
 // file used to carry separate copies of.
 export { nBackBalancedAccuracy } from '../../../../../server/lib/postScoring.js';
+
+/**
+ * The resolved config of a drill result, under whichever name that result
+ * carries it: a live in-session result keeps `config`, while a stored history
+ * task persists the same map as `difficulty` (see `postSessionTaskSchema` in
+ * `server/lib/postValidation.js`). Anything reading a drill's settings back out
+ * of a result has to handle both, so it is named once here.
+ */
+export const drillResultConfig = (result) => result?.config || result?.difficulty || null;

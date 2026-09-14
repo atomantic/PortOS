@@ -4,6 +4,7 @@ import ProgressBar from '../../ui/ProgressBar';
 import { scorePostLlmDrill } from '../../../services/api';
 import { DRILL_LABELS, WORDPLAY_LLM_DRILL_TYPES } from './constants';
 import { pluralize } from '../../../lib/textUtils';
+import { shouldIgnoreGlobalKey } from '../../../lib/a11yKeyboard.js';
 import { AILoadingIndicator, MissedExamplesDisplay, CompoundChainUI, BridgeWordUI, DoubleMeaningUI, IdiomTwistUI, scoreWordplayResponse } from './WordplayDrillUI';
 
 export function combineTrainingScoreResults(scoreResults) {
@@ -198,6 +199,26 @@ export default function PostLlmDrillRunner({ drill, timeLimitSec, drillIndex, dr
     }
   }, [drillType, finishDrill, questionIndex, responses, totalPrompts]);
 
+  // Enter advances past the training verdict from here rather than from an
+  // `autoFocus` on the Next button — see the rule in client/src/AGENTS.md. The
+  // LLM round-trip that scores the answer means Enter is usually long released
+  // by the time the verdict lands, so this is the latent form of the same bug,
+  // but the shape is the shape.
+  // A scoring FAILURE is also `scoring: false`, but its screen offers only
+  // "Retry scoring" — the answer was never appended to `responses`, so
+  // advancing from there would discard it and score the drill one response
+  // short. Stay disarmed until there is a verdict to acknowledge.
+  useEffect(() => {
+    if (!isTraining || !trainingFeedback || trainingFeedback.scoring || trainingFeedback.error) return undefined;
+    const onKey = (e) => {
+      if (e.key !== 'Enter' || shouldIgnoreGlobalKey(e)) return;
+      e.preventDefault();
+      acknowledgeTrainingFeedback();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [isTraining, trainingFeedback, acknowledgeTrainingFeedback]);
+
   // Story recall: transition from reading to answering
   function handleStartRecall() {
     setPhase('recall');
@@ -321,7 +342,6 @@ export default function PostLlmDrillRunner({ drill, timeLimitSec, drillIndex, dr
         </div>
         <button
           onClick={acknowledgeTrainingFeedback}
-          autoFocus
           className="w-full px-6 py-3 bg-port-accent-2 hover:bg-port-accent-2/80 text-port-on-accent-2 font-medium rounded-lg transition-colors"
         >
           Next

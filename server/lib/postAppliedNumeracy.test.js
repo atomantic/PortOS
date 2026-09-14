@@ -34,7 +34,7 @@ describe('Applied Numeracy', () => {
     expect(parseAppliedNumeracyAnswer('3/0')).toBe(null);
   });
 
-  it('requires a compatible unit while accepting equivalent unit conversions', () => {
+  it('reads a bare number as the requested unit while still converting named units', () => {
     const drill = generateAppliedNumeracyDrill({ seed: 10, family: 'unit', count: 1, difficulty: 1 });
     const question = drill.questions[0];
     const units = Object.entries(question.unitOptions);
@@ -42,12 +42,33 @@ describe('Applied Numeracy', () => {
     const equivalent = question.expected * question.unitOptions[question.unit] / alternateFactor;
 
     const accepted = scoreAppliedNumeracyDrill([{ answered: `${equivalent} ${alternateUnit}`, responseMs: 1000 }], 120000, drill.config);
-    const missingUnit = scoreAppliedNumeracyDrill([{ answered: String(question.expected), responseMs: 1000 }], 120000, drill.config);
+    const bareNumber = scoreAppliedNumeracyDrill([{ answered: String(question.expected), responseMs: 1000 }], 120000, drill.config);
+    // The unit is assumed, not ignored: the same digits under another unit stay wrong.
+    const bareWrongMagnitude = scoreAppliedNumeracyDrill([{ answered: String(equivalent), responseMs: 1000 }], 120000, drill.config);
     const wrongUnit = scoreAppliedNumeracyDrill([{ answered: `${question.expected} bananas`, responseMs: 1000 }], 120000, drill.config);
 
     expect(accepted.questions[0].correct).toBe(true);
-    expect(missingUnit.questions[0].correct).toBe(false);
+    expect(bareNumber.questions[0].correct).toBe(true);
+    expect(bareWrongMagnitude.questions[0].correct).toBe(false);
     expect(wrongUnit.questions[0].correct).toBe(false);
+  });
+
+  it('ignores a redundant noun on a question that has no unit of its own', () => {
+    const drill = generateAppliedNumeracyDrill({ seed: 22, family: 'rate', count: 1, difficulty: 2 });
+    const question = drill.questions[0];
+    const result = scoreAppliedNumeracyDrill([{ answered: `${question.expected} cards`, responseMs: 1000 }], 120000, drill.config);
+
+    expect(question.unit).toBeUndefined();
+    expect(result.questions[0].correct).toBe(true);
+  });
+
+  it('keeps the expected value out of the prompt label', () => {
+    // The label must carry no digits at all — the leak it guards against was an
+    // example built from the answer ("for example, 4000 ml").
+    const drill = generateAppliedNumeracyDrill({ seed: 10, count: 10, difficulty: 2 });
+    drill.questions.forEach((question) => {
+      expect(question.promptLabel).not.toMatch(/\d/);
+    });
   });
 
   it('honors inclusive absolute and relative tolerance boundaries', () => {

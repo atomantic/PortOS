@@ -1,120 +1,51 @@
-import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest';
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { StrictMode } from 'react';
-import { MemoryRouter } from 'react-router';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { act, cleanup, fireEvent, screen, waitFor } from '@testing-library/react';
+
+import {
+  loadImageGenPage,
+  renderImageGenPage,
+  resetImageGenMockState,
+  state,
+} from '../test/imageGenPageMocks.jsx';
 
 // Codex is i2i-capable and declares no input-image cap, so the form offers the
 // init image plus all four reference slots without needing a FLUX.2 install.
 const MODEL = { id: 'dev', name: 'FLUX.1 Dev', runner: 'mflux', steps: 20, guidance: 3.5 };
 
-const state = vi.hoisted(() => ({ created: [], createdFiles: [], revoked: [], fileSeq: 0 }));
+const objectUrl = { created: [], createdFiles: [], revoked: [], fileSeq: 0 };
 
-const nextFile = () => new File(['x'], `photo-${++state.fileSeq}.jpg`, { type: 'image/jpeg' });
+const nextFile = () => new File(['x'], `photo-${++objectUrl.fileSeq}.jpg`, { type: 'image/jpeg' });
 
 // Interactive stubs for the three pickers that own the object-URL lifecycle.
 // Each exposes the page's own handler as a button plus the previewUrl it is
 // currently rendering, so a test can assert the page never leaves a REVOKED
 // url wired to a live <img src>.
-vi.mock('../components/imageGen/InitImagePicker', () => ({
-  default: ({ initImage, onPick, onClear, onBrowse }) => (
-    <div>
-      <button type="button" onClick={() => onPick({ target: { files: [nextFile()] } })}>pick-init</button>
-      <button type="button" onClick={onClear}>clear-init</button>
-      <button type="button" onClick={onBrowse}>browse-init</button>
-      <span data-testid="init-url">{initImage.previewUrl || ''}</span>
-    </div>
-  ),
-}));
-vi.mock('../components/imageGen/ReferenceImagePicker', () => ({
-  default: ({ referenceImages, onPick, onClear }) => (
-    <div>
-      {referenceImages.map((slot, i) => (
-        <div key={i}>
-          <button type="button" onClick={() => onPick(i, { target: { files: [nextFile()] } })}>{`pick-ref-${i}`}</button>
-          <button type="button" onClick={() => onClear(i)}>{`clear-ref-${i}`}</button>
-          <span data-testid={`ref-url-${i}`}>{slot.previewUrl || ''}</span>
-        </div>
-      ))}
-    </div>
-  ),
-}));
-vi.mock('../components/imageGen/GalleryImagePicker', () => ({
-  default: ({ open, onSelect }) => (open
-    ? <button type="button" onClick={() => onSelect({ filename: 'gallery-pick.png' })}>gallery-select</button>
-    : null),
-}));
+const InitPicker = ({ initImage, onPick, onClear, onBrowse }) => (
+  <div>
+    <button type="button" onClick={() => onPick({ target: { files: [nextFile()] } })}>pick-init</button>
+    <button type="button" onClick={onClear}>clear-init</button>
+    <button type="button" onClick={onBrowse}>browse-init</button>
+    <span data-testid="init-url">{initImage.previewUrl || ''}</span>
+  </div>
+);
+const RefPicker = ({ referenceImages, onPick, onClear }) => (
+  <div>
+    {referenceImages.map((slot, i) => (
+      <div key={i}>
+        <button type="button" onClick={() => onPick(i, { target: { files: [nextFile()] } })}>{`pick-ref-${i}`}</button>
+        <button type="button" onClick={() => onClear(i)}>{`clear-ref-${i}`}</button>
+        <span data-testid={`ref-url-${i}`}>{slot.previewUrl || ''}</span>
+      </div>
+    ))}
+  </div>
+);
+const GalleryPicker = ({ open, onSelect }) => (open
+  ? <button type="button" onClick={() => onSelect({ filename: 'gallery-pick.png' })}>gallery-select</button>
+  : null);
 
-vi.mock('../services/api', () => ({
-  getInstances: vi.fn(async () => ({ peers: [] })),
-  getImageGenStatus: vi.fn(async () => ({ connected: true, mode: 'codex' })),
-  generateImage: vi.fn(async () => ({ jobId: 'job-1' })),
-  generateImageMultipart: vi.fn(async () => ({})),
-  listImageModels: vi.fn(async () => [MODEL]),
-  listLorasFull: vi.fn(async () => []),
-  listImageGalleryPage: vi.fn(async () => ({ items: [], total: 0, hiddenTotal: 0 })),
-  cancelImageGen: vi.fn(async () => ({})),
-  deleteImage: vi.fn(async () => ({})),
-  setImageHidden: vi.fn(async () => ({})),
-  cleanGalleryImage: vi.fn(async () => ({})),
-  getActiveImageJob: vi.fn(async () => ({ activeJob: null })),
-  getSettings: vi.fn(async () => ({ imageGen: { mode: 'codex' } })),
-  buildFormData: vi.fn(() => new FormData()),
-  listMediaJobs: vi.fn(async () => ({ jobs: [] })),
-  regenerateGalleryImage: vi.fn(async () => ({})),
-  getRegenAvailability: vi.fn(async () => ({ available: false })),
-  removeImageWatermark: vi.fn(async () => ({})),
-  getFlux2Status: vi.fn(async () => ({ installed: false, ready: false })),
-}));
+await loadImageGenPage();
 
-vi.mock('../hooks/useImageGenProgress', () => ({
-  useImageGenProgress: () => ({ progress: null, begin: vi.fn(), end: vi.fn(), resume: vi.fn() }),
-}));
-vi.mock('../hooks/useMediaJobSse', () => ({
-  useMediaJobSse: () => ({ attach: vi.fn(), eventSourceRef: { current: null } }),
-}));
-vi.mock('../hooks/useModelDownloadStatus', () => ({
-  useModelDownloadStatus: () => ({
-    getStatus: () => ({ cached: true }), start: vi.fn(), cancel: vi.fn(), repair: vi.fn(), refresh: vi.fn(),
-    downloading: false, repairing: false, progress: null, lastError: null, activeModelId: null, extra: {}, loading: false, statusError: null,
-  }),
-}));
-vi.mock('../hooks/useHfTokenStatus', () => ({ useHfTokenStatus: () => ({ present: true, refresh: vi.fn() }) }));
-vi.mock('../hooks/useAgyModels', () => ({ useAgyModels: () => ({ models: [], error: null }) }));
-vi.mock('../hooks/useMediaCompletionRefresh', () => ({ useMediaCompletionRefresh: vi.fn() }));
-vi.mock('../hooks/useMediaAnnotations', () => ({
-  useMediaAnnotations: () => ({ annotations: {}, updateAnnotation: vi.fn(), getCardProps: vi.fn(() => ({})) }),
-}));
-vi.mock('../hooks/useAutoRefetch', () => ({ useAutoRefetch: vi.fn() }));
-vi.mock('../hooks/usePreviewRoute', () => ({ default: () => [null, vi.fn()] }));
-vi.mock('../components/ui/Toast', () => ({
-  default: Object.assign(vi.fn(), { error: vi.fn(), success: vi.fn(), loading: vi.fn() }),
-}));
-vi.mock('../components/media/PromptEnhancer', () => ({ default: () => null }));
-vi.mock('../components/media/PromptFromMedia', () => ({ default: () => null }));
-vi.mock('../components/media/UniverseStylePicker', () => ({ default: () => null }));
-vi.mock('../components/media/StylePresetPicker', () => ({ default: () => null }));
-vi.mock('../components/media/MediaPreview', () => ({ default: () => null }));
-vi.mock('../components/media/MediaJobsQueue', () => ({ default: () => null }));
-vi.mock('../components/media/ResolutionField', () => ({ default: () => null }));
-vi.mock('../components/Drawer', () => ({ default: () => null }));
-vi.mock('../components/settings/ImageGenTab', () => ({ ImageGenTab: () => null }));
-vi.mock('../components/imageGen/Flux2InstallModal', () => ({ default: () => null }));
-vi.mock('../components/imageGen/LoraPicker', () => ({ default: () => null }));
-
-const { default: ImageGen } = await import('./ImageGen.jsx');
-
-const mount = async ({ strict = false } = {}) => {
-  const tree = (
-    <MemoryRouter initialEntries={['/media/image']}>
-      <ImageGen />
-    </MemoryRouter>
-  );
-  let result;
-  await act(async () => {
-    result = render(strict ? <StrictMode>{tree}</StrictMode> : tree);
-  });
-  return result;
-};
+const mount = ({ strict = false } = {}) => renderImageGenPage('/media/image', { strict });
 
 const click = async (name) => {
   await act(async () => { fireEvent.click(screen.getByRole('button', { name })); });
@@ -122,7 +53,7 @@ const click = async (name) => {
 
 // Blob URLs created but not yet revoked — what a real tab would still be
 // pinning the underlying File for.
-const liveUrls = () => state.created.filter((u) => !state.revoked.includes(u));
+const liveUrls = () => objectUrl.created.filter((u) => !objectUrl.revoked.includes(u));
 
 // jsdom ships none of these, so restoring means DELETING the property again —
 // assigning `undefined` back would leave an own property that later files see
@@ -138,18 +69,26 @@ describe('ImageGen object-URL lifecycle', () => {
   let restore = [];
 
   beforeEach(() => {
-    state.created = [];
-    state.createdFiles = [];
-    state.revoked = [];
-    state.fileSeq = 0;
+    resetImageGenMockState();
+    state.models = [MODEL];
+    state.settings = { imageGen: { mode: 'codex' } };
+    state.getImageGenStatus.mockResolvedValue({ connected: true, mode: 'codex' });
+    state.flux2Status = { installed: false, ready: false };
+    state.initImagePickerFactory = InitPicker;
+    state.referenceImagePickerFactory = RefPicker;
+    state.galleryImagePickerFactory = GalleryPicker;
+    objectUrl.created = [];
+    objectUrl.createdFiles = [];
+    objectUrl.revoked = [];
+    objectUrl.fileSeq = 0;
     restore = [
       stub(URL, 'createObjectURL', vi.fn((file) => {
-        const url = `blob:portos/${state.created.length + 1}`;
-        state.created.push(url);
-        state.createdFiles.push(file?.name ?? '');
+        const url = `blob:portos/${objectUrl.created.length + 1}`;
+        objectUrl.created.push(url);
+        objectUrl.createdFiles.push(file?.name ?? '');
         return url;
       })),
-      stub(URL, 'revokeObjectURL', vi.fn((url) => { state.revoked.push(url); })),
+      stub(URL, 'revokeObjectURL', vi.fn((url) => { objectUrl.revoked.push(url); })),
       // The page EXIF-normalizes uploads through createImageBitmap; jsdom has
       // no decoder, and the page's own `.catch` falls back to the original File.
       stub(window, 'createImageBitmap', vi.fn(() => Promise.reject(new Error('no decoder')))),
@@ -174,8 +113,8 @@ describe('ImageGen object-URL lifecycle', () => {
     // would still pass on a two-slot sample.
     for (let i = 0; i < 4; i += 1) await click(`pick-ref-${i}`);
 
-    await waitFor(() => expect(state.created).toHaveLength(5));
-    expect(state.revoked).toEqual([]);
+    await waitFor(() => expect(objectUrl.created).toHaveLength(5));
+    expect(objectUrl.revoked).toEqual([]);
 
     await act(async () => { unmount(); });
 
@@ -197,7 +136,7 @@ describe('ImageGen object-URL lifecycle', () => {
     await click('pick-init');
     await click('pick-ref-0');
     expect(pending).toHaveLength(2);
-    expect(state.created).toEqual([]);
+    expect(objectUrl.created).toEqual([]);
 
     await act(async () => { unmount(); });
     // Let the suspended handlers resume all the way through their `.catch`
@@ -207,7 +146,7 @@ describe('ImageGen object-URL lifecycle', () => {
       await new Promise((r) => setTimeout(r, 0));
     });
 
-    expect(state.created).toEqual([]);
+    expect(objectUrl.created).toEqual([]);
   });
 
   // Replacing keeps reclaiming immediately, and the url left rendered must be
@@ -216,18 +155,18 @@ describe('ImageGen object-URL lifecycle', () => {
     await mount();
     await click('pick-init');
     await click('pick-ref-0');
-    await waitFor(() => expect(state.created).toHaveLength(2));
-    const [firstInit, firstRef] = state.created;
+    await waitFor(() => expect(objectUrl.created).toHaveLength(2));
+    const [firstInit, firstRef] = objectUrl.created;
 
     await click('pick-init');
     await click('pick-ref-0');
-    await waitFor(() => expect(state.created).toHaveLength(4));
-    const [, , secondInit, secondRef] = state.created;
+    await waitFor(() => expect(objectUrl.created).toHaveLength(4));
+    const [, , secondInit, secondRef] = objectUrl.created;
 
-    expect(state.revoked).toContain(firstInit);
-    expect(state.revoked).toContain(firstRef);
-    expect(state.revoked).not.toContain(secondInit);
-    expect(state.revoked).not.toContain(secondRef);
+    expect(objectUrl.revoked).toContain(firstInit);
+    expect(objectUrl.revoked).toContain(firstRef);
+    expect(objectUrl.revoked).not.toContain(secondInit);
+    expect(objectUrl.revoked).not.toContain(secondRef);
     expect(screen.getByTestId('init-url')).toHaveTextContent(secondInit);
     expect(screen.getByTestId('ref-url-0')).toHaveTextContent(secondRef);
   });
@@ -242,7 +181,7 @@ describe('ImageGen object-URL lifecycle', () => {
     await click('pick-ref-0');
 
     await waitFor(() => expect(screen.getByTestId('ref-url-0')).not.toHaveTextContent(''));
-    expect(state.created).toHaveLength(2);
+    expect(objectUrl.created).toHaveLength(2);
 
     await act(async () => { unmount(); });
     expect(liveUrls()).toEqual([]);
@@ -254,14 +193,14 @@ describe('ImageGen object-URL lifecycle', () => {
     const { unmount } = await mount();
     await click('pick-init');
     await click('pick-ref-0');
-    await waitFor(() => expect(state.created).toHaveLength(2));
+    await waitFor(() => expect(objectUrl.created).toHaveLength(2));
 
     await click('clear-init');
     await click('clear-ref-0');
     expect(liveUrls()).toEqual([]);
 
     await act(async () => { unmount(); });
-    expect(state.revoked).toHaveLength(2);
+    expect(objectUrl.revoked).toHaveLength(2);
   });
 
   // `revokeIfBlob` exists for exactly this: gallery previews are plain
@@ -270,8 +209,8 @@ describe('ImageGen object-URL lifecycle', () => {
   it('never revokes a gallery /data/ preview url', async () => {
     const { unmount } = await mount();
     await click('pick-init');
-    await waitFor(() => expect(state.created).toHaveLength(1));
-    const [blobUrl] = state.created;
+    await waitFor(() => expect(objectUrl.created).toHaveLength(1));
+    const [blobUrl] = objectUrl.created;
 
     // Swap the upload for a gallery pick: the blob is reclaimed, the
     // `/data/...` path that replaces it is not a revoke candidate.
@@ -279,11 +218,11 @@ describe('ImageGen object-URL lifecycle', () => {
     await click('gallery-select');
 
     await waitFor(() => expect(screen.getByTestId('init-url')).toHaveTextContent('/data/images/gallery-pick.png'));
-    expect(state.revoked).toEqual([blobUrl]);
+    expect(objectUrl.revoked).toEqual([blobUrl]);
 
     await act(async () => { unmount(); });
 
-    expect(state.revoked).toEqual([blobUrl]);
+    expect(objectUrl.revoked).toEqual([blobUrl]);
   });
 
   // Two picks that overlap in the EXIF-normalization await must not each mint
@@ -301,17 +240,17 @@ describe('ImageGen object-URL lifecycle', () => {
     await click('pick-init');
     await click('pick-init');
     expect(pending).toHaveLength(2);
-    expect(state.created).toEqual([]);
+    expect(objectUrl.created).toEqual([]);
 
     await act(async () => {
       pending.forEach((fail) => fail());
       await new Promise((r) => setTimeout(r, 0));
     });
 
-    await waitFor(() => expect(state.created).toHaveLength(1));
-    expect(state.createdFiles).toEqual(['photo-2.jpg']);
+    await waitFor(() => expect(objectUrl.created).toHaveLength(1));
+    expect(objectUrl.createdFiles).toEqual(['photo-2.jpg']);
     expect(liveUrls()).toHaveLength(1);
-    expect(screen.getByTestId('init-url')).toHaveTextContent(state.created[0]);
+    expect(screen.getByTestId('init-url')).toHaveTextContent(objectUrl.created[0]);
   });
 
   it('creates exactly one url when two picks overlap on one reference slot, keeping the last pick', async () => {
@@ -324,16 +263,16 @@ describe('ImageGen object-URL lifecycle', () => {
     await click('pick-ref-0');
     await click('pick-ref-0');
     expect(pending).toHaveLength(2);
-    expect(state.created).toEqual([]);
+    expect(objectUrl.created).toEqual([]);
 
     await act(async () => {
       pending.forEach((fail) => fail());
       await new Promise((r) => setTimeout(r, 0));
     });
 
-    await waitFor(() => expect(state.created).toHaveLength(1));
-    expect(state.createdFiles).toEqual(['photo-2.jpg']);
+    await waitFor(() => expect(objectUrl.created).toHaveLength(1));
+    expect(objectUrl.createdFiles).toEqual(['photo-2.jpg']);
     expect(liveUrls()).toHaveLength(1);
-    expect(screen.getByTestId('ref-url-0')).toHaveTextContent(state.created[0]);
+    expect(screen.getByTestId('ref-url-0')).toHaveTextContent(objectUrl.created[0]);
   });
 });

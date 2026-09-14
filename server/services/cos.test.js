@@ -36,7 +36,7 @@ import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import { firstLine, isPerpetualRefillCandidate, perpetualRefillPlan } from './cos.js';
 import { canQueueImprovementTasks, DEFAULT_STATE } from './cosState.js';
-import { createDequeueCapacity, countRunningAgentsByLocalEndpoint, isIdleTierEligible } from './cosDequeue.js';
+import { createDequeueCapacity, countRunningAgentsByLocalEndpoint, isIdleTierEligible, isUserTaskRunnableUnattended } from './cosDequeue.js';
 import {
   createLocalEndpointSlotContext,
   cloudSwarmThreadCapacity,
@@ -112,6 +112,9 @@ function priorityDequeue(buckets, capacity, { paused = false } = {}) {
     const committed = ['onDemand', 'idle'].includes(bucketName);
     for (const task of buckets[bucketName] || []) {
       if (capacity.spawned >= capacity.availableSlots) return;
+      // The user tier withholds a row that says it is not auto-approved (#7300),
+      // through the same predicate both production engines call.
+      if (bucketName === 'user' && !isUserTaskRunnableUnattended(task)) continue;
       if (!(committed ? capacity.canSpawnCommitted(task) : capacity.canSpawn(task))) continue;
       capacity.trackSpawn(task);
       admitted.push({ ...task, _bucket: bucketName });
@@ -1286,6 +1289,43 @@ describe('cos.js source — priority + capacity invariants', () => {
     const fnBody = extractFnBody(GEN_SRC, fnStart);
 
     expect(fnBody).toMatch(/if\s*\(\s*availableSlots\s*<=\s*0\s*\)/);
+  });
+
+  it('user tier withholds a recovered row, in BOTH spawn engines (#7300)', () => {
+    // A user row parses auto-approved unless the parser took its RECOVERY path,
+    // which cannot tell a genuine legacy row from a task-shaped sentence inside a
+    // legacy multi-line description body. This tier otherwise spawns every pending
+    // row, so without the predicate that sentence becomes an unattended agent run.
+    const state = makeState({ maxConcurrentAgents: 5 });
+    const capacity = makeCapacityTracker(state);
+
+    const buckets = {
+      onDemand: [],
+      user: [
+        { ...task('task-note'), autoApproved: false },
+        { ...task('task-real'), autoApproved: true },
+        task('task-fieldless'),
+      ],
+      autoSystem: [],
+      idle: [],
+    };
+
+    // `undefined` is not a hold — a row that never carried the field still runs,
+    // so the guard narrows nothing that was already running.
+    expect(priorityDequeue(buckets, capacity).map(t => t.id)).toEqual(['task-real', 'task-fieldless']);
+
+    // Both engines run their own user tier, so the rule has to be called in each —
+    // one is a fix, two is the fix. The shared body is cosDequeue.js's.
+    const cosTier = extractFnBody(COS_SRC, COS_SRC.indexOf('async function spawnDequeuePriority1UserTasks'));
+    const genTier = extractFnBody(GEN_SRC, GEN_SRC.indexOf('async function spawnPriority1UserTasks'));
+    for (const [label, body, emit] of [
+      ['cos.js', cosTier, "cosEvents.emit('task:ready', userTask)"],
+      ['cosTaskGenerator.js', genTier, 'tasksToSpawn.push(userTask)'],
+    ]) {
+      const guardIdx = body.indexOf('isUserTaskRunnableUnattended(task)');
+      expect(guardIdx, `${label} user tier must consult isUserTaskRunnableUnattended`).toBeGreaterThan(-1);
+      expect(body.indexOf(emit), `${label} must admit the task only after the guard`).toBeGreaterThan(guardIdx);
+    }
   });
 
   it('dequeueNextTask orchestrates the spawnDequeuePriority* tiers in priority order', () => {

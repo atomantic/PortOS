@@ -100,6 +100,7 @@ legacy list for local Apps/Dashboard views.
 | GET | `/apps/:id/status` | Get PM2 status |
 | GET | `/apps/:id/logs` | Get recent logs |
 | POST | `/apps/:id/refresh-config` | Re-parse ecosystem config |
+| POST | `/apps/:id/quality-snapshot` | Rebuild the app's numeric quality snapshot and commit it to `.quality.json` at its repo root (staged and committed as that one path; never pushed). Answers `{ success, published, path }` plus the commit `hash`, or a `reason` of `no-repo-path` / `not-a-repo` / `no-evidence` / `no-changes` when nothing was written. Not gated on the app's `publishQualitySnapshot` toggle — that toggle only automates the same publish after each audit. Any app's committed `.quality.json` is read back as a "Release snapshot" quality source, PortOS's own checkout included (`npm run quality:snapshot` is the same publish, run from the release step). |
 
 ### Processes & Logs
 
@@ -124,6 +125,8 @@ legacy list for local Apps/Dashboard views.
 | GET | `/providers/readiness` | Requirements checklist per provider backed by a LOCAL daemon (llama.cpp / Ollama / LM Studio / MTPLX), keyed by provider id: is the daemon installed, is it answering at the endpoint THIS provider points at, and is it serving the provider's default model. Each entry also carries `setup` — what the one-click fix below can do about the unmet checks (`null` when nothing is auto-fixable here). Providers with no local dependency are absent from the map. Complements `/providers/runtimes` (which answers "can PortOS run this CLI?"). Booleans, labels, and the provider's own endpoint only — never a resolved binary path. Skips disabled providers; 15s endpoint-probe cache (one probe per distinct endpoint), 60s binary-PATH cache, both dropped by the llama-server start/stop/install routes. |
 | POST | `/providers/readiness/setup?provider=<id>` | Install and/or start the LOCAL DAEMON that provider points at (llama.cpp / Ollama / LM Studio / MTPLX), streaming progress as SSE — the "do it for me" half of `/providers/readiness`, so an unmet requirement is fixed from the card instead of from a vendor setup doc. The request names a PROVIDER only: the runtime kind and endpoint are re-derived server-side from the stored record, so no query value reaches a spawn argument (an optional `runtime=` is cross-checked and 409s on a mismatch). Every command comes from a fixed per-runtime table. Never downloads model weights, never starts llama-server (it needs a checkpoint you choose), and never runs MTPLX's privileged fan-control helper. Single-flight. |
 | POST | `/providers/readiness/serve-model?provider=<id>` | Relaunch the local daemon so it answers under the model id THIS provider sends — the other half of the readiness model mismatch. `llama-server` serves one model per process under the `--alias` on its launch line, so the fix keeps the loaded weights and changes only the name; the whole launch line is carried forward and the previous one restored if the relaunch is rejected or never answers. The model id is re-derived server-side from the stored record. 400s for a runtime that has no such label (Ollama / LM Studio / MTPLX name a model after its weights), 409s when PortOS did not start the daemon. |
+| GET | `/providers/model-pins` | Stored model pins naming a model their provider no longer lists. A vendor retires an id, the install's catalog refresh picks that up, and every pin still naming it rots silently until a render or a scheduled run dies with a raw vendor error. Answers `{ pins, providers }` — each pin carries where it lives and a deep link, and `providers` carries only the catalogs a stale pin actually names. Covers the Image Gen and render-default settings pins, global and per-app scheduled-task pins, per-record render pins, the Code Review Defaults reviewer pins (the `<reviewer>Model` scalars, the `provider:<id>` entries in `providerModels`, and `goalFidelity.model`), and user-saved CoS task-template pins. A reviewer pin names a BINARY that several provider records front, so it carries `providerIds` and is reported only when EVERY one of them stops listing the model — judging it against one record would call a tier retired that the other still serves. Derived on read, never persisted, so a pin cleared a moment ago is already gone from the answer and one that rotted before this shipped is reported on the first read. Every UNKNOWN case (no pin, empty catalog, unresolved provider) reads as "still listed" — a false "your pin is gone" tells the user to change a setting that works. |
+| POST | `/providers/model-pins/clear` | Clear ONE stale pin back to "inherit", named by the `pinId` the endpoint above reported. PortOS re-points only the shipped default it owns; a pin the USER chose is surfaced and never rewritten, because substituting it would render under the chosen model's name and bury the vendor's own "unknown model" error. Clears the model field only, never the sibling mode/provider/enabled choices. An id naming a pin that is already gone answers `{ cleared: false }` rather than 404ing, and an id matching no collected pin reaches no writer. |
 | GET | `/providers/codex/account?fresh=1` | Is a ChatGPT subscription signed in, and usable right now? Answers `{ readiness }` with a `status` of `runtime-missing` / `unknown` / `signed-out` / `login-pending` / `ready` / `quota-exhausted` / `reauth-required`, plus the plan name and quota percentages. Read from the Codex app-server's own `account/read` — PortOS never opens Codex's credential file and the payload carries no token, account id, or credential path. This is the ONLY call that may spawn `codex app-server`, and it runs from an explicit page fetch: nothing on the boot path calls it, and `GET /providers` decorates its Codex cards from the cached snapshot only. `fresh=1` skips the 15s TTL for the poll after a sign-in. |
 | POST | `/providers/codex/account/login` | Start an explicit ChatGPT sign-in. Returns `{ login }` — a bounded `loginId` plus `authUrl` (browser flow) or `verificationUrl` + `userCode` (device-code flow, via `{ "deviceCode": true }`). A POST because it begins an OAuth flow; never a side effect of a read. 409s while another sign-in is already pending. |
 | POST | `/providers/codex/account/login/cancel` | Abandon the pending sign-in named by `{ loginId }`, then re-read. 409s for an id that is not the pending login, so a stale tab cannot cancel a flow the user started afterwards. |
@@ -615,6 +618,25 @@ return an `{ items, total }` envelope.
 | POST | `/agents/tools/moltworld/say` | Send chat message |
 | GET | `/agents/tools/moltworld/status` | Get world status |
 
+### Decks
+
+Playing-card / tarot deck designer (Create → Decks). Decks are db-primary and federate to peers as record kind `deck` under the **Decks** sync category (off by default, per peer) — the deck ships with its full card roster, while the image/LLM pins and each card's in-flight render job stay machine-local. Card images live in the shared gallery, are referenced by filename, and ride the push asset manifest.
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/decks` | List decks with render completion |
+| POST | `/decks` | Create a deck (`name`, `kind` = `playing` \| `tarot`, optional `universeId`, `seedStyleFromUniverse`); mints the full card roster |
+| GET | `/decks/:id` | Deck + cards + completion |
+| PATCH | `/decks/:id` | Style guide (`styleNotes`, `influences`, `layoutPrompt`), universe link, render pin (`imageMode`/`imageModelId`), LLM pins |
+| DELETE | `/decks/:id` | Tombstone the deck so the deletion reaches subscribed peers; it disappears from reads immediately and the rows are hard-removed by the tombstone GC sweep (gallery images are kept) |
+| PATCH | `/decks/:id/cards/:cardId` | Edit a card (`prompt`, `negativePrompt`, `primaryImageRef`, `imageRefs`, `canonRef`) |
+| POST | `/decks/:id/analyze-sample` | Stateless vision analysis of a gallery image → proposed style guide + diff |
+| POST | `/decks/:id/samples` | Persist a reviewed sample; `adopt` applies the proposal in the same write |
+| DELETE | `/decks/:id/samples/:sampleId` | Remove a sample |
+| POST | `/decks/:id/generate-prompts` | Cast a linked universe onto the cards, then write subject prompts (`cardIds`, `overwrite`, `cast`, provider/model/effort) |
+| POST | `/decks/:id/render` | Queue card renders through the media queue (`cardIds`, `onlyMissing`, `mode`, `model`, `seed`) |
+| POST | `/decks/:id/cards/:cardId/render` | Queue one card |
+
 ## Route Domain Index
 
 Every mounted API prefix (see `server/index.js` for the authoritative list). Domains documented in detail above are omitted. Each prefix corresponds to a router in `server/routes/`.
@@ -689,6 +711,7 @@ Every mounted API prefix (see `server/index.js` for the authoritative list). Dom
 | `/api/fableloom` | FableLoom interactive story generation |
 | `/api/music-video` | Music video projects |
 | `/api/mood-boards` | Mood boards |
+| `/api/decks` | Decks (playing-card / tarot designer) |
 | `/api/writers-room` | Writers Room |
 | `/api/universe-builder` | Universe Builder |
 | `/api/authors`, `/api/artists`, `/api/albums`, `/api/tracks`, `/api/music` | Music/creator catalogs |

@@ -1,7 +1,7 @@
 /**
  * Federated peer-sync — per-kind record descriptor table.
  *
- * The 16 subscribable record kinds (`PEER_SUBSCRIBABLE_KINDS`,
+ * The 17 subscribable record kinds (`PEER_SUBSCRIBABLE_KINDS`,
  * `peerSyncShared.js`) each need the same four facts — how to load one by
  * id, how to merge an incoming batch, how to build its asset manifest, and
  * whether the kind has a local-only "ephemeral" opt-out flag. Before #6843
@@ -55,6 +55,7 @@ import {
 } from '../writersRoom/sync.js';
 import { getCommissionFeedbackForSync, mergeCommissionFeedbackFromSync } from '../creativeCommissions/feedbackStore.js';
 import { getCommissionForSync, mergeCommissionsFromSync } from '../creativeCommissions/store.js';
+import { getDeckForSync, mergeDecksFromSync } from '../decks.js';
 import {
   buildAssetManifest,
   buildAssetManifestForSeries,
@@ -67,6 +68,7 @@ import {
   buildMusicVideoAssetManifest,
   buildBoardAssetManifest,
   buildFableLoomAssetManifest,
+  buildDeckAssetManifest,
 } from './peerSyncAssets.js';
 import { isNonBlankStr } from '../../lib/textUtils.js';
 
@@ -182,6 +184,15 @@ export const RECORD_KINDS = Object.freeze({
     load: (id) => getCommissionForSync(id),
     merge: mergeCommissionsFromSync,
     buildAssetManifest: null, // body-less brief (#2686)
+    hasEphemeral: false,
+  },
+  deck: {
+    // The loader surfaces tombstones (a delete must push) and bundles the full
+    // card roster on the record itself, so no bundle-aware push hook is needed
+    // — the generic manifest builder reads `record.cards[]` directly.
+    load: (id) => getDeckForSync(id),
+    merge: mergeDecksFromSync,
+    buildAssetManifest: buildDeckAssetManifest,
     hasEphemeral: false,
   },
 });

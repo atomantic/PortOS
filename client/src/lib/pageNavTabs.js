@@ -25,4 +25,26 @@ export const buildPageNavTabs = (manifestTabs, presentation, pageName) => (
   })
 );
 
+/**
+ * The same merge for the SECTION axis (`getSectionNavTabs(section)`), whose tabs
+ * are sidebar destinations. Their icons therefore come from the sidebar's own
+ * registry rather than a page-owned map — one registry, so a section's sub-nav
+ * and its sidebar row can never disagree about what a destination looks like.
+ *
+ * Missing icon throws, for the reason `buildPageNavTabs` throws: on a phone the
+ * bar collapses to icons, and ONE tab without one silently demotes the whole
+ * section to the `<select>` the product rejected (see TabPills' `mobileCompact`).
+ *
+ * @param {Array<{id: string, to: string}>} sectionTabs from `getSectionNavTabs(section)`
+ * @param {Record<string, {icon?: Function}>} presentation path-keyed, i.e. NAV_PRESENTATION
+ * @param {string} section used in the drift error, e.g. Settings
+ */
+export const buildSectionNavTabs = (sectionTabs, presentation, section) => (
+  sectionTabs.map((tab) => {
+    const icon = presentation[tab.to]?.icon;
+    if (!icon) throw new Error(`${section}: no nav presentation icon for ${tab.to}`);
+    return { ...tab, icon };
+  })
+);
+
 export default buildPageNavTabs;

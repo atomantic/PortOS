@@ -3,7 +3,7 @@ import { Brain, Check, X, Play } from 'lucide-react';
 import { DRILL_LABELS, nBackBalancedAccuracy } from './constants';
 import useMounted from '../../../hooks/useMounted';
 import useKeyCapture from '../../../hooks/useKeyCapture';
-import { isPressKey, noPointerFocusSurfaceProps } from '../../../lib/a11yKeyboard.js';
+import { isPressKey, noPointerFocusSurfaceProps, shouldIgnoreGlobalKey } from '../../../lib/a11yKeyboard.js';
 import {
   CognitiveDrillTutorial,
   getDrillTutorial,
@@ -634,6 +634,23 @@ function DigitSpanRunner({ drill, drillIndex, drillCount, onComplete, isTraining
 
   useEffect(() => { if (phase === 'recall') inputRef.current?.focus(); }, [phase]);
 
+  // Enter advances past the training reveal from here rather than from an
+  // `autoFocus` on the Next button: the Enter that submitted the answer is still
+  // down when that button mounts and takes focus, so the browser activates it
+  // off the same keystroke (its keypress/keyup, or the first auto-repeat) and
+  // the reveal is gone in the tick it appeared. `shouldIgnoreGlobalKey` drops
+  // auto-repeat, so one press advances once.
+  useEffect(() => {
+    if (!feedback) return undefined;
+    const onKey = (e) => {
+      if (e.key !== 'Enter' || shouldIgnoreGlobalKey(e)) return;
+      e.preventDefault();
+      setSeqIdx(i => i + 1);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [feedback]);
+
   const advance = useCallback((answeredStr) => {
     const digits = sequences[seqIdx].digits || [];
     const { question, expected, answeredRaw } = scoreDigitSpanRecall({
@@ -725,7 +742,6 @@ function DigitSpanRunner({ drill, drillIndex, drillCount, onComplete, isTraining
       {feedback && (
         <button
           onClick={() => setSeqIdx(i => i + 1)}
-          autoFocus
           className="w-full px-6 py-3 bg-port-accent-2 hover:bg-port-accent-2/80 text-port-on-accent-2 font-medium rounded-lg transition-colors"
         >
           Next
@@ -793,6 +809,7 @@ function StroopRunner({ drill, drillIndex, drillCount, onComplete, isTraining })
   // Number keys 1..N pick the matching option.
   useEffect(() => {
     const onKey = (e) => {
+      if (shouldIgnoreGlobalKey(e)) return;
       if (feedback) { if (e.key === 'Enter') { e.preventDefault(); acknowledge(); } return; }
       const idx = parseInt(e.key, 10) - 1;
       if (Number.isInteger(idx) && idx >= 0 && idx < options.length) {
@@ -833,7 +850,6 @@ function StroopRunner({ drill, drillIndex, drillCount, onComplete, isTraining })
           </div>
           <button
             onClick={acknowledge}
-            autoFocus
             className="w-full px-6 py-3 bg-port-accent-2 hover:bg-port-accent-2/80 text-port-on-accent-2 font-medium rounded-lg transition-colors"
           >
             Next
@@ -1028,6 +1044,7 @@ function MentalRotationRunner({ drill, drillIndex, drillCount, onComplete, isTra
   // Number keys 1..N pick the matching option.
   useEffect(() => {
     const onKey = (e) => {
+      if (shouldIgnoreGlobalKey(e)) return;
       if (feedback) { if (e.key === 'Enter') { e.preventDefault(); acknowledge(); } return; }
       const optionCount = trials[trialIdx]?.options?.length || 0;
       const idx = parseInt(e.key, 10) - 1;
@@ -1065,7 +1082,6 @@ function MentalRotationRunner({ drill, drillIndex, drillCount, onComplete, isTra
               </div>
               <button
                 onClick={acknowledge}
-                autoFocus
                 className="w-full px-6 py-3 bg-port-accent-2 hover:bg-port-accent-2/80 text-port-on-accent-2 font-medium rounded-lg transition-colors"
               >
                 Next

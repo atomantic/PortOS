@@ -289,6 +289,95 @@ describe('MorseTrainer training log integration', () => {
   });
 });
 
+// The whole point of the copy drill is learning what you just got wrong. At
+// Koch level 2 the pool is K/M, so a user who never sees the verdict is
+// guessing a coin flip forever — these pin the verdict on screen and keep the
+// answer readable after it is dismissed.
+describe('MorseTrainer per-question feedback', () => {
+  beforeEach(() => {
+    window.AudioContext = MockAudioContext;
+  });
+  afterEach(() => {
+    delete window.AudioContext;
+  });
+
+  // Level 2's pool is K/M and the group length is 1, so the sent character is
+  // one of exactly two known patterns — enough to assert the verdict's shape
+  // without pinning the sampler's seeded choice.
+  const SENT_VERDICT = /^(K-\.-|M--)/;
+
+  async function startCopyRound(mode = 'copy') {
+    await renderMorse({ mode, onSelectMode: vi.fn(), onExitMode: vi.fn() });
+    fireEvent.click(await screen.findByRole('button', { name: /Start Round/i }));
+    const input = await screen.findByLabelText('Decoded characters');
+    input.focus();
+    return input;
+  }
+
+  // The submit gesture is the subject of half these tests, so it lives in one
+  // place — Z is never in the Koch pool, so every answer is a deliberate miss.
+  function answer(input, value = 'Z') {
+    fireEvent.change(input, { target: { value } });
+    fireEvent.keyDown(input, { key: 'Enter' });
+  }
+
+  it('shows what was sent, its Morse, and the pattern the user typed instead', async () => {
+    const input = await startCopyRound();
+    answer(input);
+
+    const verdict = await screen.findByTestId('morse-verdict');
+    expect(verdict.textContent).toMatch(SENT_VERDICT);
+    // The guess's own pattern is what makes the miss teachable.
+    expect(verdict.textContent).toContain('You typed Z (--..)');
+  });
+
+  it('keeps focus in the answer box so the submitting keystroke cannot dismiss the verdict', async () => {
+    const input = await startCopyRound();
+    answer(input);
+
+    await screen.findByTestId('morse-verdict');
+    // See the <input> comment in CopyDrill — an autofocused Next button is
+    // activated natively by the same Enter that submitted.
+    const next = screen.getByRole('button', { name: /^Next$/ });
+    expect(document.activeElement).toBe(input);
+    expect(document.activeElement).not.toBe(next);
+  });
+
+  it('ignores an auto-repeat Enter so one held keypress cannot answer and advance', async () => {
+    const input = await startCopyRound();
+    fireEvent.change(input, { target: { value: 'Z' } });
+    fireEvent.keyDown(input, { key: 'Enter', repeat: true });
+    expect(screen.queryByTestId('morse-verdict')).toBeNull();
+
+    fireEvent.keyDown(input, { key: 'Enter' });
+    const verdict = await screen.findByTestId('morse-verdict');
+    fireEvent.keyDown(input, { key: 'Enter', repeat: true });
+    expect(screen.getByTestId('morse-verdict')).toBe(verdict);
+  });
+
+  it('keeps the previous answer on screen through the next question', async () => {
+    const input = await startCopyRound();
+    answer(input);
+    await screen.findByTestId('morse-verdict');
+
+    fireEvent.click(screen.getByRole('button', { name: /^Next$/ }));
+
+    const previous = await screen.findByTestId('morse-previous-answer');
+    expect(previous.textContent).toMatch(/^Previous: (K -\.-|M --) → you typed Z ✗$/);
+  });
+
+  it('withholds the Morse hint from the head-copy recap (pure recall)', async () => {
+    const input = await startCopyRound('head-copy');
+    answer(input);
+    await screen.findByTestId('morse-verdict');
+
+    fireEvent.click(screen.getByRole('button', { name: /^Next$/ }));
+
+    const previous = await screen.findByTestId('morse-previous-answer');
+    expect(previous.textContent).toMatch(/^Previous: (K|M) → you typed Z ✗$/);
+  });
+});
+
 describe('resultsToItems (per-character flatten for the confusion matrix)', () => {
   it('aligns each prompt character with its guess positionally', () => {
     const items = resultsToItems([{ prompt: 'KM', guess: 'KR', correct: false, responseMs: 500 }]);

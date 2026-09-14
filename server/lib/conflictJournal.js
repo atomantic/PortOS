@@ -542,6 +542,12 @@ export const RESTORABLE_FIELDS = Object.freeze({
   // machine-local schedule/runs/assignment/enabled are never in a snapshot
   // (stripped from the wire) so they're excluded.
   creativeCommission: ['name', 'targetAbility', 'brief', 'generation', 'feedbackWindow'],
+  // A deck (#decks) restores its authored style guide + identity. `kind` is
+  // structural (the roster is minted from it and a CHECK constrains the
+  // column), `cards[]` is the roster itself (restored with the deck row by
+  // `restoreDeck`, not offered as an individually-overlayable field), and the
+  // install-capability pins never reach a snapshot (stripped from the wire).
+  deck: ['name', 'description', 'styleNotes', 'influences', 'layoutPrompt', 'samples', 'cardSize', 'universeId'],
   // FableLoom restores the authored story graph, playback configuration, and
   // story-level render preferences.
   // Universe/series ids are structural links and stay on the live record.

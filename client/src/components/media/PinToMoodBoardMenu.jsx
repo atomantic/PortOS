@@ -18,7 +18,7 @@ import {
 // `item` is the normalized MediaCard shape: `item.previewUrl` is a renderable
 // thumbnail URL (or null), and `item.key` is usually a `<kind>:<ref>` media-key
 // (e.g. `image:foo.png`, `video:job-123`) — but NOT always: the lightbox is
-// also used for synthetic items keyed `canon-sheet:…`, `comic-page:…`, `noun:…`
+// also used for synthetic items keyed `canon-sheet:…`, `comic-page:…`
 // that the server's media-key validator rejects. So we pin a real mediaKey only
 // when the key is a valid `image:`/`video:` media-key (for source linkage +
 // dedup), and fall back to an imageUrl-only pin otherwise — keying membership
@@ -67,7 +67,7 @@ export default function PinToMoodBoardMenu({ item, size = 'sm' }) {
   const triggerRef = useRef(null);
 
   // A real media-key only when it matches the server vocabulary; synthetic keys
-  // (canon-sheet:/comic-page:/noun:) fall through to an imageUrl-only pin.
+  // (canon-sheet:/comic-page:) fall through to an imageUrl-only pin.
   const mediaKey = isValidMediaKey(item.key) ? item.key : null;
   // Only http(s) / absolute app paths are valid imageUrls (mirror the board
   // item schema, which rejects a protocol-relative `//host` path even though it

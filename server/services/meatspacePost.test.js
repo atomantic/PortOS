@@ -551,6 +551,22 @@ describe('generateEstimation', () => {
     }
   });
 
+  it('keeps subtraction answerable BY ESTIMATING — larger first, at least 100 apart', () => {
+    // A percentage tolerance of a tiny difference is a sub-unit band: two
+    // independently-drawn 3-digit numbers land within 100 of each other about a
+    // fifth of the time, and `509 - 499` then grades to ±1 at the default 10% —
+    // exact arithmetic wearing an estimation label. Keeping the answer 3-digit
+    // is what rules that out; a tightened adaptive rung is knowingly harder
+    // than that, and the drill UI states the precision it demands. Ordering the
+    // pair also settles whether `309 - 925` wants 616 or -616.
+    const subtractions = generateEstimation(60).questions.filter(q => q.prompt.includes(' - '));
+    expect(subtractions.length).toBeGreaterThan(0);
+    for (const q of subtractions) {
+      const [a, b] = q.prompt.split(' - ').map(Number);
+      expect(a).toBeGreaterThanOrEqual(b + 100);
+    }
+  });
+
   it('preserves tolerancePct in config when provided', () => {
     const result = generateEstimation(3, 25);
     expect(result.config.tolerancePct).toBe(25);
@@ -729,6 +745,20 @@ describe('scoreDrill', () => {
     // 850 is NOT within 5% of 800 (40 tolerance), so incorrect
     const { questions: q5 } = scoreDrill('estimation', questions, 60000, { tolerancePct: 5 });
     expect(q5[0].correct).toBe(false);
+  });
+
+  it('grades an absent tolerance at the default band, and an explicit 0 as exact match', () => {
+    // `resolveEstimationTolerancePct` distinguishes the two: 0 is a real band
+    // (exact), so it cannot be read as "unset" — and null/undefined cannot be
+    // coerced through `Number()` into 0, which would grade exact-match on a
+    // drill the UI told the user was a 10% band.
+    const near = [{ prompt: '500 + 300', answered: 850, responseMs: 1000 }];
+    const exact = [{ prompt: '500 + 300', answered: 800, responseMs: 1000 }];
+    for (const config of [{}, { tolerancePct: null }, { tolerancePct: undefined }]) {
+      expect(scoreDrill('estimation', near, 60000, config).questions[0].correct).toBe(true);
+    }
+    expect(scoreDrill('estimation', near, 60000, { tolerancePct: 0 }).questions[0].correct).toBe(false);
+    expect(scoreDrill('estimation', exact, 60000, { tolerancePct: 0 }).questions[0].correct).toBe(true);
   });
 
   it('coerces string answered values to numbers', () => {

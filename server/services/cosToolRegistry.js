@@ -19,6 +19,10 @@ import {
   persistentMindTaskRequestSchema,
 } from '../lib/persistentMindCapabilities.js';
 import {
+  persistentMindIssueFileSchema,
+  persistentMindIssueListSchema,
+} from '../lib/persistentMindIssues.js';
+import {
   eidoverseWorldAugmentSchema,
   eidoverseWorldSaySchema,
   eidoverseChatReadSchema, eidoverseTravelVisitSchema, eidoverseVisitChatSchema, eidoverseVisitLeaveSchema,
@@ -134,6 +138,50 @@ const taskTool = Object.freeze({
   },
   adapter: { kind: 'persistent-mind-task' },
 });
+
+// Read and file, deliberately as two tools: the read is idempotent and free to
+// repeat, the file is not, and collapsing them would give one grant a single
+// side-effect policy that is honest about neither.
+const issueTools = Object.freeze([
+  {
+    type: 'portos_tool',
+    name: 'issues.list',
+    version: COS_TOOL_SCHEMA_VERSION,
+    providerName: providerToolName('issues.list'),
+    aliases: [],
+    description: "List a managed app's open GitHub/GitLab issues, newest activity first, with labels and a body preview. Read this before filing so you do not re-file work already tracked.",
+    input_schema: zodToOpenApiSchema(persistentMindIssueListSchema),
+    output_schema: objectOutputSchema,
+    policy: {
+      scopes: ['mind'],
+      requiredCapabilities: ['fileIssues'],
+      sideEffect: 'read',
+      idempotent: true,
+      async: false,
+      confirmation: 'capability-grant',
+    },
+    adapter: { kind: 'persistent-mind-issue-list' },
+  },
+  {
+    type: 'portos_tool',
+    name: 'issues.file',
+    version: COS_TOOL_SCHEMA_VERSION,
+    providerName: providerToolName('issues.file'),
+    aliases: [],
+    description: "File one issue on a managed app's GitHub/GitLab tracker to queue concrete work. Write a body someone can pick up cold, and choose the model and effort dispatch axes independently. An exact title match reuses the existing issue instead of filing a duplicate.",
+    input_schema: zodToOpenApiSchema(persistentMindIssueFileSchema),
+    output_schema: objectOutputSchema,
+    policy: {
+      scopes: ['mind'],
+      requiredCapabilities: ['fileIssues'],
+      sideEffect: 'write',
+      idempotent: false,
+      async: false,
+      confirmation: 'capability-grant',
+    },
+    adapter: { kind: 'persistent-mind-issue-file' },
+  },
+]);
 
 const mindCleanupTool = Object.freeze({
   type: 'portos_tool',
@@ -348,13 +396,14 @@ const localContextTools = (() => {
     },
   ];
 })();
-const toolCatalog = (intent) => [...recipeManagementTools, ...thinkingTools, ...localContextTools, taskTool, mindCleanupTool, mindProtectMemoryTool, mindChooseNameTool, userActionsQueryTool, ...eidoverseTools, ...voiceTools(intent)];
+const toolCatalog = (intent) => [...recipeManagementTools, ...thinkingTools, ...localContextTools, taskTool, ...issueTools, mindCleanupTool, mindProtectMemoryTool, mindChooseNameTool, userActionsQueryTool, ...eidoverseTools, ...voiceTools(intent)];
 const toolCalls = new Map();
 const toolCallFingerprints = new Map();
 
 const normalizeToolCapabilities = (raw) => ({
   ...normalizePortosSemanticToolGrants(raw),
   createTasks: raw?.createTasks === true,
+  fileIssues: raw?.fileIssues === true,
   manageToolRecipes: raw?.manageToolRecipes === true,
   manageMind: raw?.manageMind === true,
   chooseThinkingPreset: raw?.chooseThinkingPreset === true,
@@ -519,6 +568,12 @@ const executeAdapter = async (tool, args, context, authority) => {
   }
   if (tool.adapter.kind === 'voice-tool') {
     return dispatchTool(tool.adapter.legacyName, args, { sideEffects: [], signal: context.signal });
+  }
+  if (tool.adapter.kind.startsWith('persistent-mind-issue-')) {
+    const { filePersistentMindIssue, listPersistentMindIssues } = await import('./persistentMindIssueCapability.js');
+    return tool.adapter.kind === 'persistent-mind-issue-list'
+      ? listPersistentMindIssues(args)
+      : filePersistentMindIssue(args);
   }
   if (tool.adapter.kind === 'persistent-mind-name') {
     const { choosePersistentMindName } = await import('./persistentMindContext.js');

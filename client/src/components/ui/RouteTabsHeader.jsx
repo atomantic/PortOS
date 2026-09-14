@@ -1,9 +1,10 @@
 import { useNavigate } from 'react-router';
 import TabPills from './TabPills';
 
-// Above this many tabs, a phone-width pill row is a horizontal scroll nobody
-// finds the far end of. Six fits 375px; larger sections such as Models do not.
-const MOBILE_DROPDOWN_THRESHOLD = 6;
+// Above this many tabs, a phone-width pill row with labels no longer fits, so
+// the bar collapses to TabPills' compact treatment. Six fits 375px; larger
+// sections such as Models do not.
+const MOBILE_COMPACT_THRESHOLD = 6;
 
 const selectIdFor = (ariaLabel) => `${String(ariaLabel || 'section').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')}-select`;
 
@@ -21,19 +22,20 @@ const selectIdFor = (ariaLabel) => `${String(ariaLabel || 'section').toLowerCase
  * whose `to` lives outside their route prefix (Models → Playground) — the id
  * still selects it, so the host page passes its own `activeTab`.
  *
- * Past `MOBILE_DROPDOWN_THRESHOLD` tabs the bar collapses to a `<select>` under
- * `sm`. That is decided HERE rather than per section: every caller has the same
- * phone width and the same pill sizes, so leaving it to each one meant Settings
- * (19 tabs) kept scrolling horizontally while Models (9) collapsed. The select's
- * id is derived from `ariaLabel` for the same reason — a caller that passed
- * `mobileDropdown` but forgot the id silently downgraded from a real
- * `<label htmlFor>` to a bare aria-label, and nothing failed.
+ * Past `MOBILE_COMPACT_THRESHOLD` tabs the bar collapses under `sm` — to an
+ * icon-only row, or to a `<select>` when the tabs have no icons. That is decided
+ * HERE rather than per section: every caller has the same phone width and the
+ * same pill sizes, so leaving it to each one meant Settings (19 tabs) kept
+ * scrolling horizontally while Models (9) collapsed. The select fallback's id is
+ * derived from `ariaLabel` for the same reason — a caller that passed the flag
+ * but forgot the id silently downgraded from a real `<label htmlFor>` to a bare
+ * aria-label, and nothing failed.
  *
  * @param {{ tabs: Array<{id:string,label:string,to:string}>, activeTab: string, ariaLabel: string }} props
  */
 export default function RouteTabsHeader({ tabs, activeTab, ariaLabel }) {
   const navigate = useNavigate();
-  const mobileDropdown = tabs.length > MOBILE_DROPDOWN_THRESHOLD;
+  const mobileCompact = tabs.length > MOBILE_COMPACT_THRESHOLD;
 
   const handleChange = (tabId) => {
     const target = tabs.find((t) => t.id === tabId);
@@ -46,8 +48,8 @@ export default function RouteTabsHeader({ tabs, activeTab, ariaLabel }) {
       activeTab={activeTab}
       onChange={handleChange}
       ariaLabel={ariaLabel}
-      mobileDropdown={mobileDropdown}
-      mobileSelectId={mobileDropdown ? selectIdFor(ariaLabel) : undefined}
+      mobileCompact={mobileCompact}
+      mobileSelectId={selectIdFor(ariaLabel)}
       className="w-full min-w-0 shrink-0"
     />
   );

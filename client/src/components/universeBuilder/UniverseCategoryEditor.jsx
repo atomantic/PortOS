@@ -479,6 +479,7 @@ function VariationCard({
       imageRefs={renders}
       alt={`${v.label} render`}
       canRender={!!onRenderVariation && canRender}
+      disabledHint="Save the world and configure a render backend to enable"
       onRender={onRenderVariation ? () => onRenderVariation(v) : null}
       onPreview={onPreviewVariation || null}
     />

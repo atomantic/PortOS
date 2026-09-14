@@ -6,8 +6,11 @@ vi.mock('../../lib/mediaModels.js', () => ({
   getImageModels: vi.fn(() => []),
   isFlux2: (m) => m?.runner === 'flux2',
 }));
+// imageRuntimeRemedies.js classifies a model from BOTH predicates, so the mock
+// has to supply both or the shared classifier can't resolve.
 vi.mock('../../lib/runners.js', () => ({
   usesDiffusersRunner: (m) => m?.runner === 'z-image',
+  isFlux2: (m) => m?.runner === 'flux2',
 }));
 vi.mock('../settings.js', () => ({
   getSettings: vi.fn(async () => ({})),

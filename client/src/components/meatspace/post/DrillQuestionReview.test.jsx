@@ -230,3 +230,26 @@ describe('DrillQuestionReview — schulte-table / reaction-time timing review', 
     expect(screen.getByText('Correct')).toBeInTheDocument();
   });
 });
+
+describe('DrillQuestionReview — estimation grading band', () => {
+  // The Expected column shows the exact answer, so a ✓ next to "600 vs 616"
+  // only makes sense once the tolerance it was graded against is on screen.
+  const questions = [
+    { prompt: '925 - 309', expected: 616, answered: 600, correct: true, responseMs: 3100 },
+  ];
+
+  it('names the band a live result was graded against', () => {
+    render(<DrillQuestionReview type="estimation" questions={questions} config={{ tolerancePct: 10 }} />);
+    expect(screen.getByText('Within 10% counts — 2 significant figures is close enough')).toBeInTheDocument();
+  });
+
+  it('falls back to the default band when the record predates a stored tolerance', () => {
+    render(<DrillQuestionReview type="estimation" questions={questions} />);
+    expect(screen.getByText(/Within 10% counts/)).toBeInTheDocument();
+  });
+
+  it('stays out of an exactly-graded drill review', () => {
+    render(<DrillQuestionReview type="multiplication" questions={questions} config={{ count: 5 }} />);
+    expect(screen.queryByText(/significant figure/)).not.toBeInTheDocument();
+  });
+});

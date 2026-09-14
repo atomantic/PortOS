@@ -77,6 +77,28 @@ venv_python() {
 # shared with venv_python so the two probes can't drift apart.
 venv_exists() { [[ -x "$1/bin/python3" || -x "$1/Scripts/python.exe" ]]; }
 
+# True when $1 is a Python 3.10+ interpreter. Mirrors MIN_VENV_PYTHON in
+# server/lib/pythonSetup.js, and for the same reason: below 3.10 pip resolves an
+# old setuptools (<77) inside its build isolation, which rejects the PEP 639
+# *string* form of `project.license`. A git-sourced dependency that uses it
+# (sdnq declares `license = "GPL-3.0-only"`) then dies in "Getting requirements
+# to build wheel" — after the multi-GB torch download, with a schema error that
+# reads like a pip bug. mflux/mlx need the same floor.
+python_at_least_310() {
+  [[ -n "${1:-}" ]] && "$1" -c 'import sys; sys.exit(0 if sys.version_info[:2] >= (3, 10) else 1)' 2>/dev/null
+}
+
+# Echo the first Python 3.10+ on PATH, preferring $PYTHON_BIN. Empty when the
+# machine has none.
+newest_supported_python() {
+  local candidate
+  if python_at_least_310 "$PYTHON_BIN"; then command -v "$PYTHON_BIN"; return 0; fi
+  for candidate in python3.14 python3.13 python3.12 python3.11 python3.10; do
+    if have "$candidate" && python_at_least_310 "$candidate"; then command -v "$candidate"; return 0; fi
+  done
+  return 1
+}
+
 # mere.run is a signed native binary and is the one setup path that does not
 # need Python. Keep the bare-script default and every mixed install strict: only
 # an explicit INSTALL_MERERUN=1 request with no other runtime selected may run
@@ -177,7 +199,7 @@ if [[ "$INSTALL_MFLUX" == "1" ]]; then
   # the same pattern the flux2/ltx/wan runtimes use. PortOS's resolveMfluxPython()
   # auto-discovers that venv, so no Settings change is needed either way.
   MFLUX_USE_VENV=0
-  if "$PYTHON_BIN" -c 'import sys; sys.exit(0 if sys.version_info[:2] >= (3, 10) else 1)' 2>/dev/null; then
+  if python_at_least_310 "$PYTHON_BIN"; then
     # Step 1: force-reinstall mflux's OWN files with --no-deps to flush a stale
     # file layout left by a partial reinstall (we hit this on 0.12.1, where
     # `mflux/models/flux/cli/` went missing, breaking the entry-point shim)
@@ -1020,10 +1042,21 @@ if [[ "$INSTALL_FLUX2" == "1" ]]; then
   # fragile, so we use a sibling venv. server/lib/pythonSetup.js looks for
   # this venv's interpreter when the active model has runner=='flux2'.
   FLUX2_VENV="${HOME}/.portos/venv-flux2"
-  if ! venv_exists "$FLUX2_VENV"; then
-    echo "📦 Creating FLUX.2 venv at ${FLUX2_VENV}..."
-    mkdir -p "${HOME}/.portos"
-    "$PYTHON_BIN" -m venv "$FLUX2_VENV"
+  if ! FLUX2_BASE_PY="$(newest_supported_python)"; then
+    echo "❌ FLUX.2 needs Python 3.10+ to build its venv; \`$PYTHON_BIN\` is older and no newer python3.NN is on PATH." >&2
+    echo "   Install one (e.g. 'brew install python@3.12' or 'uv python install 3.12'), then re-run with PYTHON_BIN pointing at it." >&2
+    exit 1
+  fi
+  mkdir -p "${HOME}/.portos"
+  # A venv left behind by an earlier run against a too-old base can never
+  # install these packages, and `python -m venv` reuses it silently — so every
+  # retry would fail the same way. Rebuild it instead of pip-ing into it.
+  if venv_exists "$FLUX2_VENV" && ! python_at_least_310 "$(venv_python "$FLUX2_VENV")"; then
+    echo "♻️  FLUX.2 venv at ${FLUX2_VENV} predates Python 3.10 — recreating it..."
+    "$FLUX2_BASE_PY" -m venv --clear "$FLUX2_VENV"
+  elif ! venv_exists "$FLUX2_VENV"; then
+    echo "📦 Creating FLUX.2 venv at ${FLUX2_VENV} from ${FLUX2_BASE_PY}..."
+    "$FLUX2_BASE_PY" -m venv "$FLUX2_VENV"
   fi
   FLUX2_PY="$(venv_python "$FLUX2_VENV")"
 

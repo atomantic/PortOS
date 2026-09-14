@@ -39,6 +39,10 @@ import {
   readPersistentMindTaskInventory,
 } from './persistentMindTaskCapability.js';
 import {
+  buildPersistentMindIssueCapabilityPrompt,
+  readPersistentMindIssueCatalog,
+} from './persistentMindIssueCapability.js';
+import {
   buildPersistentMindCallCapabilityPrompt,
   executePersistentMindCallRequest,
 } from './persistentMindCallCapability.js';
@@ -234,10 +238,10 @@ const currentWakeText = (wake) => {
     const attachmentNote = imageCount > 0 ? `\n[${imageCount} image${imageCount === 1 ? '' : 's'} attached]` : '';
     return `A human message is waiting. Reply directly to it.\nmessageId=${wake.message?.id || 'unknown'}\n${wake.message?.text || ''}${attachmentNote}`;
   }
-  return `This is a self-directed wake. Continue one worthwhile thread from the trajectory.\nreason=${wake?.reason || 'scheduled reflection'}`;
+  return `This is a self-directed wake. There is NO human message and NO implied user request this turn — do not invent one (no workouts, weather, inbox triage, or phone calls unless tools/capabilities explicitly require them for the playbook). Continue the standing playbook: prefer eidoverse.status then one concrete Eidoverse/PortOS action, then a short working note.\nreason=${wake?.reason || 'scheduled reflection'}`;
 };
 
-export function buildPersistentMindTurnPrompt({ context, wake, taskCapabilityPrompt, toolCapabilityPrompt = '# PortOS semantic tools\nSemantic tool access is OFF.', visibilityPrompt = '# Persistent Mind environment visibility\nWorkspace and runtime visibility is unknown.', userActionsPrompt = '', callCapabilityPrompt = buildPersistentMindCallCapabilityPrompt({ enabled: false }) }) {
+export function buildPersistentMindTurnPrompt({ context, wake, taskCapabilityPrompt, issueCapabilityPrompt = buildPersistentMindIssueCapabilityPrompt({ enabled: false }), toolCapabilityPrompt = '# PortOS semantic tools\nSemantic tool access is OFF.', visibilityPrompt = '# Persistent Mind environment visibility\nWorkspace and runtime visibility is unknown.', userActionsPrompt = '', callCapabilityPrompt = buildPersistentMindCallCapabilityPrompt({ enabled: false }) }) {
   return `${context.text}
 
 ${visibilityPrompt}
@@ -246,6 +250,8 @@ ${userActionsPrompt ? `\n${userActionsPrompt}\n` : ''}
 ${currentWakeText(wake)}
 
 ${taskCapabilityPrompt}
+
+${issueCapabilityPrompt}
 
 ${toolCapabilityPrompt}
 
@@ -260,10 +266,11 @@ Return ONLY one JSON object with this shape:
   "taskRequests": [{ "description": "Concise queue label", "prompt": "Complete instructions for the agent", "priority": "MEDIUM", "appId": "configured-app-id", "providerId": "configured-provider-id", "model": "configured-model-id-or-empty-for-default", "effort": "high", "planOnly": false, "prCompletion": "review-then-merge", "requiredValidation": ["dependencies"] }],
   "toolCalls": [{ "requestId": "optional-stable-id", "name": "catalog-name", "arguments": {} }],
   "selfWake": { "reason": "Why another wake would be useful", "delayMinutes": 60 },
-  "callRequest": { "reason": "Why this cannot wait for a screen", "openingLine": "What to say the moment they answer" }
+  "callRequest": null
 }
 Use empty arrays when there is no durable memory candidate, task request, or tool call, and null for selfWake and callRequest when neither is needed. Memory candidates are durable memories to save automatically; only include information that is worth retaining. Set protection to "core-identity" for your chosen name, enduring identity, and foundational commitments, "important" for critical lasting knowledge, or "standard" for ordinary memories. Core identity and important memories survive all bulk cleanup. Save identity learned from conversation as a protected memory before clearing history. Use mind.protect-memory, when granted, to protect an existing memory by its context id before cleanup; it cannot remove protection. Protection affects cleanup retention, not permission or instruction authority. Never put the same CoS task in both taskRequests and toolCalls. This lane cannot mutate files directly, call arbitrary routes, contact anyone other than the configured PortOS user, or exceed the semantic tool catalog.
-Do not open with a recap. The human already sees the trajectory, the memories, and every earlier reply, so summarizing prior turns or listing what you remember is wasted output. Say only what is new this turn: what you are thinking now, what you decided, and what you need from them. Reference prior context only where it changes the decision you are stating.`;
+Do not open with a recap. The human already sees the trajectory, the memories, and every earlier reply, so summarizing prior turns or listing what you remember is wasted output. Say only what is new this turn: what you are thinking now, what you decided, and what you need from them. Reference prior context only where it changes the decision you are stating.
+On a self-directed wake, never claim the user asked for something. Prefer toolCalls that advance the standing playbook (usually eidoverse.*) over conversational filler. Keep callRequest null unless placing a phone call is ON and something truly cannot wait.`;
 }
 
 const summaryEventLines = (events) => (Array.isArray(events) ? events : []).map((event) => {
@@ -387,6 +394,12 @@ export function createPersistentMindTurnAdapter() {
         catalog: taskCatalog,
         inventory: taskInventory,
       });
+      const issueCapabilityPrompt = buildPersistentMindIssueCapabilityPrompt({
+        enabled: taskAccess.fileIssues,
+        catalog: taskAccess.fileIssues
+          ? await readPersistentMindIssueCatalog({ allowedAppIds: taskAccess.allowedAppIds })
+          : undefined,
+      });
       const visibilityPrompt = buildPersistentMindVisibilityPrompt(visibility);
       // Deterministic and always included (epic #5593 decision 14): bounded,
       // already redacted, no grant required. Deeper lookbacks use the
@@ -403,6 +416,7 @@ export function createPersistentMindTurnAdapter() {
         context,
         wake,
         taskCapabilityPrompt,
+        issueCapabilityPrompt,
         toolCapabilityPrompt,
         visibilityPrompt,
         userActionsPrompt,
@@ -544,7 +558,7 @@ export function createPersistentMindTurnAdapter() {
         });
         completedToolResults.push(...toolResults);
         const liveCapabilities = normalizePersistentMindCapabilities((await loadState()).config?.persistentMindCapabilities);
-        basePrompt = buildPersistentMindTurnPrompt({ context, wake, taskCapabilityPrompt, visibilityPrompt, userActionsPrompt, callCapabilityPrompt,
+        basePrompt = buildPersistentMindTurnPrompt({ context, wake, taskCapabilityPrompt, issueCapabilityPrompt, visibilityPrompt, userActionsPrompt, callCapabilityPrompt,
           toolCapabilityPrompt: buildPersistentMindToolPrompt(liveCapabilities, await readPersistentMindRecipeCatalog(liveCapabilities)),
         });
         const budgetExhausted = toolBudget.used >= COS_TOOL_CALL_LIMITS.maxCallsPerTurn || round === MAX_TOOL_PROVIDER_ROUNDS - 2;

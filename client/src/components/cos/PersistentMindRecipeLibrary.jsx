@@ -7,10 +7,10 @@ import { formatDateShort } from '../../utils/formatters';
 const EXAMPLE = {
   schemaVersion: 1,
   name: 'recipe.project-checkin',
-  purpose: 'Collect matching Brain notes and current goals.',
+  purpose: 'Collect matching catalog records and current goals.',
   parameters: { type: 'object', properties: { query: { type: 'string' } }, required: ['query'], additionalProperties: false },
   steps: [
-    { id: 'search', tool: 'brain.search', arguments: { query: { input: 'query' } } },
+    { id: 'search', tool: 'catalog.search', arguments: { query: { input: 'query' } } },
     { id: 'goals', tool: 'goals.list', arguments: {} },
   ],
   outputs: { matches: { step: 'search', path: [] }, goals: { step: 'goals', path: [] } },
@@ -128,7 +128,6 @@ function RecipeEditor({ id, onChanged, onSelect }) {
 
 export default function PersistentMindRecipeLibrary() {
   const [searchParams, setSearchParams] = useSearchParams();
-  // Tools already lives in a URL-driven Mind panel; preserve that panel and its other parameters.
   const selected = searchParams.get('recipe');
   const [recipes, setRecipes] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -141,8 +140,6 @@ export default function PersistentMindRecipeLibrary() {
     setLoading(true);
     api.getMindRecipes({ silent: true }).then((result) => {
       if (request !== version.current) return;
-      // Revisions only advance (including archive/restore), so a read started
-      // before a local save must not replace that newer row or lose other rows.
       setRecipes((current) => {
         const merged = new Map((result.recipes || []).map((recipe) => [recipe.id, recipe]));
         for (const recipe of current) {
@@ -164,8 +161,6 @@ export default function PersistentMindRecipeLibrary() {
     setRecipes((current) => current.some((entry) => entry.id === recipe.id)
       ? current.map((entry) => entry.id === recipe.id && entry.activeRevision <= recipe.activeRevision ? recipe : entry)
       : [recipe, ...current]);
-    // Publish the completed mutation even if its editor closed. Refresh to
-    // recover the complete library when the initial read was still pending.
     load();
   }, [load]);
   const onSelect = (id) => setSearchParams((current) => {

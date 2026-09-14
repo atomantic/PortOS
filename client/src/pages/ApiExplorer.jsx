@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link, Navigate, useNavigate, useParams } from 'react-router';
 import {
-  Bot, Braces, CheckCircle2, Copy, ExternalLink, RadioTower, Search,
+  BookOpen, Bot, Braces, CheckCircle2, Copy, ExternalLink, RadioTower, Search,
 } from 'lucide-react';
 import PageHeader from '../components/PageHeader';
 import RouteTabsHeader from '../components/ui/RouteTabsHeader';
@@ -30,10 +30,10 @@ function operationsFromOpenApi(spec) {
 }
 
 const TABS = [
-  { id: 'catalog', label: 'API Catalog', to: '/api-reference/catalog' },
-  { id: 'rest', label: 'REST Reference', to: '/api-reference/rest' },
-  { id: 'events', label: 'Event API', to: '/api-reference/events' },
-  { id: 'tools', label: 'Agent Tools', to: '/api-reference/tools' },
+  { id: 'catalog', label: 'API Catalog', to: '/api-reference/catalog', icon: BookOpen },
+  { id: 'rest', label: 'REST Reference', to: '/api-reference/rest', icon: Braces },
+  { id: 'events', label: 'Event API', to: '/api-reference/events', icon: RadioTower },
+  { id: 'tools', label: 'Agent Tools', to: '/api-reference/tools', icon: Bot },
 ];
 
 const VALID_TABS = new Set(TABS.map((tab) => tab.id));

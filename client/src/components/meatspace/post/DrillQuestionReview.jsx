@@ -1,5 +1,6 @@
 import { Check, X, MinusCircle, AlertTriangle } from 'lucide-react';
 import { powersBreakdownFromPrompt } from '../../../lib/powersBreakdown.js';
+import EstimationPrecision from './EstimationPrecision';
 
 // Sub-second precision — most drill response times are under a few seconds,
 // so the shared `formatDurationMs` (client/src/utils/formatters.js), which
@@ -98,9 +99,15 @@ function answeredForDisplay(type, q) {
   return formatGenericValue(type, q.answered);
 }
 
-function GenericReview({ questions, missed, type }) {
+function GenericReview({ questions, missed, type, config }) {
   return (
     <div>
+      {/* Estimation grades within a band, so the Expected column rarely matches
+          the answer beside it exactly. Name the rule, or a ✓ on "600 vs 616"
+          reads as a bug. */}
+      {type === 'estimation' && (
+        <EstimationPrecision tolerancePct={config?.tolerancePct} className="text-xs text-gray-500 mb-2" />
+      )}
       <MissedSummary missed={missed} formatPrompt={(q) => q.prompt} />
       <TableShell>
         <thead>
@@ -425,8 +432,12 @@ function TimingReview({ questions, missed, type }) {
  * `drillData` is the generated drill — used by Stroop (color swatch hex
  * lookup) and digit-span (true shown-digit sequence + direction). Optional,
  * and safely ignored by every other type.
+ *
+ * `config` is the drill's resolved config — used by estimation to state the
+ * tolerance its ✓/✗ column was graded against. Also optional; a history record
+ * stores it under `difficulty`, so callers pass whichever they hold.
  */
-export default function DrillQuestionReview({ type, questions, drillData }) {
+export default function DrillQuestionReview({ type, questions, drillData, config }) {
   const list = questions || [];
   if (!list.length) return null;
 
@@ -445,6 +456,6 @@ export default function DrillQuestionReview({ type, questions, drillData }) {
     case 'reaction-time':
       return <TimingReview questions={list} missed={missed} type={type} />;
     default:
-      return <GenericReview questions={list} missed={missed} type={type} />;
+      return <GenericReview questions={list} missed={missed} type={type} config={config} />;
   }
 }

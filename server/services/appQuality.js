@@ -3,7 +3,6 @@ import { ensureSchema, query } from '../lib/db.js';
 import { doneSentinelPath, parseSentinelPayload } from '../lib/agentSentinel.js';
 import { tryReadFile } from '../lib/jsonIo.js';
 import { parseAuditQualityReport, summarizeAppQuality, buildAppQualityHistory, latestQualityRecords } from '../lib/auditQuality.js';
-import { PORTOS_APP_ID } from '../lib/appIdentity.js';
 import { collectAppQuality, qualityRecord, readQualityRecords, readReleaseQuality } from './appQualityFederation.js';
 
 export async function recordAuditQuality({ task, taskType, agentId, workspacePath, success, assessedAt }, deps = {}) {
@@ -40,28 +39,30 @@ export async function enrichAppsWithQuality(apps, deps = {}) {
     console.error(`❌ App quality unavailable: ${err.message}`);
     return null;
   });
-  const release = apps.some(app => app.id === PORTOS_APP_ID) ? await readReleaseQuality(deps) : [];
-  return Promise.all(apps.map(async app => {
+  // Shipped evidence: any app's committed `.quality.json`.
+  // One unreadable checkout (git spawn failure, timeout) must cost that app its release
+  // records, never the whole list — same posture as the peer collect below.
+  const releases = await Promise.all(apps.map(app => readReleaseQuality(deps, app).catch(() => [])));
+  return Promise.all(apps.map(async (app, index) => {
     const shared = await collectAppQuality(app, 30, deps)
       .catch(() => ({ records: [], federation: { failed: true } }));
     return { ...app,
       quality: result ? { ...summarizeAppQuality(latestQualityRecords([
         ...result.rows.filter(row => row.app_id === app.id).map(qualityRecord),
-        ...shared.records, ...(app.id === PORTOS_APP_ID ? release : []),
+        ...shared.records, ...releases[index],
       ]), deps.now ?? Date.now()), federation: shared.federation }
         : { ...summarizeAppQuality(), unavailable: true },
     };
   }));
 }
 
-export async function getAppQualityHistory(appId, days, deps = {}) {
+/** Takes the full app record: the repo path is what locates a managed app's `.quality.json`. */
+export async function getAppQualityHistory(app, days, deps = {}) {
   const now = deps.now ?? Date.now();
-  const records = await readQualityRecords(appId, days, now, deps);
-  const app = appId === PORTOS_APP_ID ? { id: appId }
-    : await (deps.getAppById || (await import('./apps.js')).getAppById)(appId);
-  const shared = app ? await collectAppQuality(app, days, deps)
-    .catch(() => ({ records: [], federation: { failed: true } })) : null;
-  const release = appId === PORTOS_APP_ID ? await readReleaseQuality(deps) : [];
-  return { ...buildAppQualityHistory([...records, ...(shared?.records || []), ...release], days, now),
-    ...(shared ? { federation: shared.federation } : {}) };
+  const records = await readQualityRecords(app.id, days, now, deps);
+  const shared = await collectAppQuality(app, days, deps)
+    .catch(() => ({ records: [], federation: { failed: true } }));
+  const release = await readReleaseQuality(deps, app).catch(() => []);
+  return { ...buildAppQualityHistory([...records, ...shared.records, ...release], days, now),
+    federation: shared.federation };
 }

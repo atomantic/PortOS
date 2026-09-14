@@ -36,6 +36,17 @@ export const RESOLUTIONS = [
   { label: '1280×1972 (comic page — draft)', w: 1280, h: 1972, compatible: ['codex'] },
   { label: '1920×2951 (comic page — hi-res, margin)', w: 1920, h: 2951, compatible: ['codex'] },
   { label: '1988×3056 (comic page — hi-res, full bleed)', w: 1988, h: 3056, compatible: ['codex'] },
+  // Poker/tarot card trims at true physical ratio (2.5"×3.5" = 5:7 and
+  // 2.75"×4.75" respectively), sized to a 300dpi print resolution and a 2x
+  // hi-res doubling. Distinct from the Decks feature's DECK_CARD_SIZE
+  // (deckTemplates.js, a rounded 2:3 render frame shared by both card kinds)
+  // — these are for a standalone card-shaped image outside the deck workflow.
+  // Codex-only: the ratios are too specialty for the local runners' trained
+  // aspect windows.
+  { label: '750×1050 (poker card, 2.5:3.5)', w: 750, h: 1050, compatible: ['codex'] },
+  { label: '1500×2100 (poker card, 2.5:3.5 hi-res)', w: 1500, h: 2100, compatible: ['codex'] },
+  { label: '825×1425 (tarot card, 2.75:4.75)', w: 825, h: 1425, compatible: ['codex'] },
+  { label: '1650×2850 (tarot card, 2.75:4.75 hi-res)', w: 1650, h: 2850, compatible: ['codex'] },
   // gpt-image-2 final-render presets: hard ceiling is each edge ≤ 3840 and
   // total ≤ 8,294,400 pixels. All three below sit exactly at the pixel cap
   // — pick aspect by shape. Codex-only because mflux/diffusers are too slow

@@ -8,15 +8,15 @@ import MediaCard from '../components/media/MediaCard';
 import AttributionList from '../components/media/AttributionList';
 import MediaPreview from '../components/media/MediaPreview';
 import BulkTargetPicker from '../components/media/BulkTargetPicker';
-import { normalizeImage, normalizeVideo } from '../components/media/normalize';
+import { normalizeMediaRow } from '../components/media/normalize';
 import { useMediaAnnotations } from '../hooks/useMediaAnnotations';
 import { useAsyncAction } from '../hooks/useAsyncAction';
+import useGalleryPreviewResolver from '../hooks/useGalleryPreviewResolver';
 import { UNSORTED_ID, buildUnsortedCollection } from '../lib/unsorted';
 import {
   getMediaCollection, updateMediaCollection,
   listMediaCollections,
   addMediaCollectionItem, removeMediaCollectionItem,
-  listMediaGalleryPage,
   deleteImage, deleteVideoHistoryItem,
   pullMissingMetadata,
 } from '../services/api';
@@ -60,13 +60,8 @@ export default function MediaCollectionDetail() {
   }, [id, isUnsorted, page.refresh]);
   useEffect(() => { refresh(); }, [refresh]);
   const items = useMemo(() => page.items.filter(row => isUnsorted || collection?.items?.some(ref => ref.kind === row.kind && ref.ref === (row.kind === 'image' ? row.data.filename : row.data.id)))
-    .map(row => row.kind === 'image' ? normalizeImage(row.data) : normalizeVideo(row.data)), [page.items, collection, isUnsorted]);
-  const resolvePreview = useCallback(async key => {
-    const kind = key.startsWith('video:') ? 'video' : key.startsWith('image:') ? 'image' : 'all';
-    const result = await listMediaGalleryPage({ collectionId: id, kind, filename: key.replace(/^(image|video):/, ''), limit: 1 }, { silent: true });
-    const row = result.items[0];
-    return row ? row.kind === 'image' ? normalizeImage(row.data) : normalizeVideo(row.data) : null;
-  }, [id]);
+    .map(normalizeMediaRow), [page.items, collection, isUnsorted]);
+  const resolvePreview = useGalleryPreviewResolver({ collectionId: id });
   const [preview, setPreview] = usePreviewRoute(items, { resolveItem: resolvePreview });
 
   // Unsorted-only action: pull gen-params sidecars for bare images from peers.

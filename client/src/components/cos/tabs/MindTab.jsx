@@ -922,7 +922,7 @@ export default function MindTab() {
         closeOnBackdrop={false}
       >
         <div className="mb-4">
-          <TabPills tabs={MIND_PANEL_TABS} activeTab={activePanel || 'context'} onChange={openPanel} variant="pills" size="sm" mobileDropdown ariaLabel="Mind workspace sections" />
+          <TabPills tabs={MIND_PANEL_TABS} activeTab={activePanel || 'context'} onChange={openPanel} variant="pills" size="sm" mobileCompact ariaLabel="Mind workspace sections" />
         </div>
         {(visitedPanels.has('context') || activePanel === 'context') && <div hidden={activePanel !== 'context'} className="space-y-4">
           <PersistentMindRuntimePanel runtime={runtime} error={runtimeError} loading={runtimeLoading} />

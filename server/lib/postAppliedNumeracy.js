@@ -61,7 +61,9 @@ function unitQuestion({ prompt, expected, unit, dimension, method, tolerance = n
   );
   return {
     prompt,
-    promptLabel: `Enter a number and unit (for example, ${trimNumber(expected)} ${unit})`,
+    // Names the unit rather than illustrating it: an example built from `expected`
+    // ("for example, 4000 ml") hands the user the answer before they solve it.
+    promptLabel: `Enter a number in ${unit} (naming another compatible unit also works)`,
     expected,
     unit,
     dimension,
@@ -238,14 +240,17 @@ function correctAppliedAnswer(question, raw) {
   if (!parsed) return { parsed: null, correct: false };
   let expected = question.expected;
   let actual = parsed.value;
+  // These drills grade the arithmetic, not the transcription. The prompt always
+  // names the unit to answer in, so a bare number is read as that unit
+  // ("Convert 4 l to ml" → "4000" means 4000 ml) and naming a different
+  // compatible unit still converts. On a question with no unit of its own, a
+  // trailing noun ("6 parts", "72 cards") carries no arithmetic and is ignored.
   if (question.unit) {
-    const unitFactor = question.unitOptions?.[parsed.unit];
+    const unitFactor = question.unitOptions?.[parsed.unit ?? question.unit];
     const expectedFactor = question.unitOptions?.[question.unit];
     if (!unitFactor || !expectedFactor) return { parsed, correct: false };
     actual *= unitFactor;
     expected *= expectedFactor;
-  } else if (parsed.unit) {
-    return { parsed, correct: false };
   }
   const difference = Math.abs(actual - expected);
   const tolerance = question.tolerance || {};

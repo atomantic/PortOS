@@ -5,17 +5,19 @@ const models = vi.hoisted(() => ({ value: [] }));
 
 vi.mock('../settings.js', () => ({ getSettings: vi.fn(async () => settings.value) }));
 vi.mock('./local.js', () => ({
-  listImageModels: vi.fn(() => models.value),
   getActiveJob: () => null,
   attachSseClient: () => false,
   cancel: () => false,
 }));
+// The model registry moved behind the shared diagnosis in localRuntime.js, which
+// reads it from the lib leaf rather than through the renderer.
+vi.mock('../../lib/mediaModels.js', () => ({ getImageModels: vi.fn(() => models.value) }));
 vi.mock('./external.js', () => ({ checkConnection: vi.fn(), getActiveJob: () => null }));
 vi.mock('./codex.js', () => ({ checkConnection: vi.fn(), getActiveJob: () => null, cancelAll: () => false }));
 vi.mock('./grok.js', () => ({ checkConnection: vi.fn(), getActiveJob: () => null, cancelAll: () => false }));
 vi.mock('./agy.js', () => ({ checkConnection: vi.fn(), getActiveJob: () => null, cancelAll: () => false }));
 vi.mock('./setup.js', () => ({ getSetupCheck: vi.fn() }));
-vi.mock('../../lib/pythonSetup.js', () => ({ isFlux2VenvHealthy: vi.fn() }));
+vi.mock('../../lib/pythonSetup.js', () => ({ isFlux2VenvHealthy: vi.fn(), FLUX2_VENV_DEFAULT: '/test/venv-flux2/bin/python3' }));
 
 import { checkConnection } from './index.js';
 import { getSetupCheck } from './setup.js';
@@ -121,7 +123,8 @@ describe('local image connection readiness', () => {
     await expect(checkConnection()).resolves.toMatchObject({
       connected: false,
       readiness: 'unavailable',
-      reason: 'The FLUX.2 image runtime is not installed or healthy',
+      reason: expect.stringContaining('shared torch image runtime is not installed or healthy'),
+      remedy: { kind: 'install-torch-venv', label: 'Install runtime', venvPath: '/test/venv-flux2/bin/python3' },
     });
   });
 });

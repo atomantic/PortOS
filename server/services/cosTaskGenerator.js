@@ -48,7 +48,7 @@ import { getActiveApps, getAppTaskTypeOverrides } from './apps.js';
 // The single Priority-0 on-demand loop body, shared with the dequeueNextTask
 // engine in cos.js so the two can no longer drift (#6618).
 import { drainOnDemandRequests } from './onDemandDrain.js';
-import { closeStolenIdleReviewCard, isIdleTierEligible } from './cosDequeue.js';
+import { closeStolenIdleReviewCard, isIdleTierEligible, isUserTaskRunnableUnattended } from './cosDequeue.js';
 import { resolveAgentProviderPin } from './appTaskProviderPin.js';
 import { getTaskTypeConfidence } from './taskLearning.js';
 import { classifySafetyKind, requiresSafetyApproval } from './taskLearning/safetyKind.js';
@@ -916,6 +916,13 @@ async function spawnPriority1UserTasks(ctx) {
     const skipReason = getSkipReason(task.metadata, instanceId);
     if (skipReason) {
       emitLog('debug', `Skipping user task ${task.id} — ${skipReason}`, { taskId: task.id });
+      continue;
+    }
+    // A user row that says it is NOT auto-approved is withheld from the unattended
+    // spawn (#7300) — see isUserTaskRunnableUnattended for why, and for why the
+    // rule lives in cosDequeue.js rather than once per engine.
+    if (!isUserTaskRunnableUnattended(task)) {
+      emitLog('debug', `Skipping user task ${task.id} — recovered row is not auto-approved`, { taskId: task.id });
       continue;
     }
     if (await blockIfExceedsMaxSpawns(task, 'user')) continue;

@@ -472,7 +472,162 @@ describe('deferred imports stay deferred (#6156)', () => {
 // handful of closures that reach these services — there is no subtree behind
 // them to narrow, and deferring a compare used on every passive quota read
 // would trade the whole point of the shared rule for four instantiations.
-const MAX_STATIC_INSTANTIATIONS = 103525;
+// Decks (Create → Decks) measures +393 after narrowing everything that could
+// be: the route module, the boot-time hook, the render service and the prompt
+// services all defer their heavy subtrees (DB, prompt runner, media queue,
+// image-gen dispatcher) to the request that needs them. What remains is the
+// closures of the six new suites themselves — the DB-backed route suite reaches
+// db.js, the hook suite reaches the media queue, the prompt/render suites reach
+// the modules they mock — plus the two pure leaves the lib barrel gains and the
+// schema composer's decks.js, counted by the suites that load those barrels.
+// Pinning the shipped image-gen model defaults to the seeded provider catalog
+// measures +7, all of it ONE new test file's own closure: imageGenCapabilities.js
+// and the generationModes.js leaf behind it, plus providerModels.js and its
+// three leaves, reached so the guard can assert the agy pin is the tier
+// pickAntigravityRelayModel would choose rather than a second hand-maintained
+// opinion. It reads data.reference/providers.json as JSON rather than importing
+// the toolkit's own catalog module precisely to avoid dragging that subtree in,
+// and no production module gained an edge — so raise by exactly that delta and
+// keep the headroom.
+// Federating card decks (record kind `deck`) measures +30: `services/decks.js`
+// becomes a static edge of the four peer-sync modules a new federated kind must
+// register in (recordKinds.js, peerSync.js, tombstoneGc.js,
+// conflictJournalResolver.js), dragging the one subtree it owns that those
+// modules did not already reach — `lib/deckTemplates.js` and the deck
+// validation/prompt leaves beside it. Everything else it imports (db.js,
+// conflictJournal.js, recordEvents.js, renderTargets.js) those four already
+// had. There is no narrowing available: the descriptor table needs the getter
+// and merger at module scope, by construction. The federation suite that
+// covers it (services/decksSync.db.test.js) measures a further +40, all of it
+// that one new test file's own closure — decks.js plus the syncWire/db-gate
+// leaves it asserts against, no production edge. Raise by exactly those deltas.
+// Surfacing stored model pins the provider catalog has retired (#7315) measures
+// +38. 11 are the modelPinReconcile leaf suite's own closure: the leaf plus
+// providerModels.js and its leaves, plus localProviderRuntime.js — the leaf
+// delegates its base membership rule to that module's `modelPinIsOffered`
+// rather than re-deriving it, which is what gives the audit the local-daemon
+// carve-out (an Ollama-backed provider's stored `models` is a stale snapshot,
+// so judging a pin against it reports a serving model as retired). 4 are the
+// route suite, which reaches the route through a dynamic import and statically
+// pulls only express and two error/test leaves. The audit suite adds nothing —
+// it reaches everything through vi.mock + await import. The rest is
+// routes/providers.js gaining services/modelPinAudit.js, whose own closure is
+// 34 light files: settings.js (already reached), imageGenCapabilities.js, and
+// dependency-free leaves. Its three HEAVY stores — apps.js, taskSchedule.js,
+// providers.js — stay behind memoized call-site `await import()`, without which
+// that one edge alone measured +449.
+// Giving the screened pull-request surface ONE definition (#7323) measures +68.
+// All of it is the new pure leaf `lib/prReviewContent.js` landing in the closure
+// of the 68 files that already reach `services/issueWatcher.js`,
+// `services/prReviewerSecurity.js`, or the `lib/` barrel — +1 file each. Its own
+// closure adds nothing: it imports only `lib/modelAbuseGuard.js`, which every one
+// of those already had. There is no narrowing available, and deferring it would
+// defeat the point — the preflight STAMPS a content fingerprint that the
+// coordinator RECOMPUTES before it acts, the check fails closed, and two builders
+// that drift apart disable review, CI approval, and merge for every external PR.
+// Putting both halves in one pure leaf is what keeps the contract test out of the
+// coordinator's service subtree entirely.
+// Splitting the model-pin membership rule out of `localProviderRuntime.js` into
+// the browser-safe leaf `modelPinMembership.js` (#7327) measures +297. Almost
+// all of it is one extra module NODE, not a new subtree: `localProviderRuntime`
+// is reached from a great many suites and now instantiates the leaf beside it,
+// so each of those closures grows by one. The rest is the leaf's own suite —
+// the leaf plus `providerModels.js`, `localEndpoint.js` and `ports.js`, all of
+// which that suite's predecessor already pulled. Nothing gained an edge into a
+// heavy subtree, and the split REMOVES one for the browser, which is its point:
+// `localProviderRuntime` reaches `opencodeConfig.js` → `zod` to resolve
+// ENDPOINTS, a question no picker asks. Raise by exactly that delta.
+// #7328 raised this by a further 2: the retired-pin notifier's new suite and the
+// module it statically imports, lib/mirrorParity.js (dependency-free), for the
+// bootstrap source contract. Both the notifier and the audit behind it are
+// reached through `await import()`, so neither is in that closure — and
+// bootstrap.js gaining a static import of the notifier cost nothing, because no
+// server test file statically reaches bootstrap.js.
+// +80 for services/agentSentinelSweep.test.js: a new leaf suite whose closure is
+// the sweep, lib/agentSentinel.js and the fileUtils chain those two already
+// share with the rest of the suite. No new edge into a heavy subtree — a new
+// test file simply costs its own closure once.
+// #7326 extends the audit to the per-record `imageModelId` pins: +7 on top of
+// that (104,487), raised by exactly the delta the way #7327 did. All 7 is the two new
+// suites' OWN closures — modelPinRecords.test.js and modelPinRecords.db.test.js
+// each reach `services/modelPinRecords.js` plus its three light leaves (db.js,
+// renderTargets.js, runtimeEnv.js). Neither statically imports a record service:
+// the DB suite seeds and reads with raw SQL and lets `clearRecordPin` pull
+// decks.js the way production does, which is worth ~41 on its own. The production
+// change adds NO import to any module — the collector sits behind the same
+// memoized call-site `await import()` as the audit's other three stores, and the
+// mode -> provider map stays in modelPinAudit.js rather than moving to a shared
+// leaf, which would have cost ~54 (one more file in the static closure of every
+// suite reaching routes/providers.js).
+// Making the local image runtime describe itself the same way everywhere
+// measures +65, and every one of those is the module-catalog rule rather than a
+// heavy edge. The vocabulary the layers share — the status probe, the renderer's
+// pre-flight refusal, regen.js, and the client, which re-exports it through
+// imageGenModes.js so no component hand-copies a remedy kind — has to be a
+// leaf under lib/ (it imports only runners.js), and registering a new lib/ file
+// in index.js is mandatory (lib/index.test.js fails without it), which puts
+// imageRuntimeRemedies.js into the closure of the ~57 suites that reach the
+// barrel; the rest reach it through services/imageGen/local.js and regen.js,
+// which classify a model's runtime with the same helper, plus the new suite's
+// own closure. The diagnosis module itself (localRuntime.js, which pulls the
+// model registry and the setup-check cache) measured a further +111 from the
+// image-gen dispatcher and is NOT in this number: checkConnection reaches it
+// through a memoized call-site await import(), so the ~110 suites that never
+// probe a local runtime do not pay for it.
+// The managed-app `.quality.json` publisher raises this by a further 38, all of
+// it in two new suites, none of it a new edge into a widely-reached module:
+// `services/git.commit.test.js` pays git.js's closure (~34) to pin that an
+// automated commit is scoped to literal pathspecs, and
+// `services/appQualitySnapshotFile.test.js` plus crud.js's static import of that
+// dependency-free module account for the rest. The publisher itself reaches
+// git.js and appQualityFederation.js through `await import()`, and the audit
+// hook reaches the publisher the same way, so neither is in any closure.
+// `lib/terminalReplay.js` raises this by a further 37 — one instantiation per
+// test file whose closure reaches the `lib/index.js` barrel, and nothing more.
+// It cannot be narrowed away: the catalog rule (root AGENTS.md) requires every
+// new `server/lib/` module to be re-exported from the barrel, and
+// `lib/index.test.js` fails without it. The module is deliberately
+// dependency-free (a few regexes over a string), so it adds no edge into any
+// subtree — its only consumer, `services/shell.js`, deep-imports it directly.
+// Auditing reviewer and task-template model pins (#7339) measures +41, and none
+// of it is a new edge into a heavy subtree. The shared reviewer -> provider-record
+// table is a pure leaf (`lib/reviewerProviderMatchers.js`) importing only
+// `providerModels.js`, `providerTypes.js` and `arrayUtils.js`, which every module
+// that can reach it already instantiates; registering it in the `lib/` barrel is
+// mandatory (`lib/index.test.js`) and costs one node in each barrel reacher's
+// closure, and its own suite pulls those leaves plus `reviewerConfig.js`. The
+// remaining ~22 is `services/modelPinAuditNotifier.js` taking its ONE static
+// import — `lib/modelPinReconcile.js`, so the card and the panel name a pin's
+// provider records with the same function — which lands in that module's own
+// suite and in `bootstrap.js`'s closure; no server test file statically reaches
+// `bootstrap.js`, so the production edge costs nothing. The two stores the new
+// collectors read stay behind the audit's memoized call-site `await import()`
+// (`services/taskTemplates.js` is never in a static closure), and
+// `modelPinAudit.js` gaining `reviewerConfig.js` / `goalFidelity.js` cost
+// nothing — `routes/providers.js` already reaches both through
+// `lib/validation.js`.
+// Fixing the sibling-process port mis-attribution (#7357) measures +37, all of
+// it a new boundary test file plus one dependency-free leaf. The attribution
+// rules live in `lib/ecosystemProcessPorts.js`, which imports nothing, so the
+// ~13 existing closures that reach the two services now sharing it each gain one
+// node. `services/appPortConfig.test.js` has to go through the real filesystem
+// (the regression is "the config file must come back byte-identical", which the
+// route suite's mocked writer cannot observe), so it pays its own closure. That
+// closure is 24 rather than 83 because the same change moved `deriveUiPort` —
+// three pure lines the write-back path was importing the whole 81-module
+// `services/appListEnrichment.js` for — down into that leaf, which
+// re-exports it for its existing callers.
+//
+// Raised to 106,200 for the Persistent Mind forge-issue capability, and to
+// restore the documented ~1.5k of headroom. The capability's own net share is
+// +34, because the new suite's closure (~94) is most of the way offset by the
+// managed-app roster it shares with the task capability, which replaced a second
+// app/tracker reader. The headroom is the larger half of this raise: #7357 above
+// had already landed the number at EXACTLY the measured total, so any addition
+// at all failed it — the same zero-headroom state #6305 raised it out of, and
+// that is what makes this a budget rather than a high-water mark. Measured after
+// both changes: 104,739.
+const MAX_STATIC_INSTANTIATIONS = 106200;
 
 
 const SKIP_DIRS = new Set(['node_modules', 'coverage', 'dist', 'data']);

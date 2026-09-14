@@ -75,6 +75,10 @@ vi.mock('../creativeCommissions/store.js', () => ({
   pruneTombstonedCommissions: vi.fn().mockResolvedValue({ pruned: 0 }),
   listCommissionIdsForSync: vi.fn().mockResolvedValue([]),
 }));
+vi.mock('../decks.js', () => ({
+  pruneTombstonedDecks: vi.fn().mockResolvedValue({ pruned: 0 }),
+  listDeckIdsForSync: vi.fn().mockResolvedValue([]),
+}));
 vi.mock('../../lib/conflictJournal.js', () => ({
   pruneOrphanedBaseHashes: vi.fn().mockResolvedValue({ pruned: 0 }),
 }));
@@ -118,6 +122,7 @@ import {
 import { pruneTombstonedWorks, pruneTombstonedFolders, pruneTombstonedExercises } from '../writersRoom/sync.js';
 import { pruneTombstonedCommissionFeedback } from '../creativeCommissions/feedbackStore.js';
 import { pruneTombstonedCommissions } from '../creativeCommissions/store.js';
+import { pruneTombstonedDecks } from '../decks.js';
 import { pruneOrphanedBaseHashes } from '../../lib/conflictJournal.js';
 import { listPeerSubscriptions, pruneOrphanedPeerSubscriptions } from './peerSync.js';
 import { getMinAckAcrossPeers } from './peerTombstoneCursors.js';
@@ -164,7 +169,7 @@ describe('TOMBSTONE_GRACE_MS', () => {
 });
 
 describe('sweepTombstones — no peers subscribed', () => {
-  it('uses now-GRACE as the cutoff for all 16 subscribable kinds when nobody is subscribed (#6843: every cutoff variable, including the 6 renamed to match their kind id, reaches its prune call)', async () => {
+  it('uses now-GRACE as the cutoff for all 17 subscribable kinds when nobody is subscribed (#6843: every cutoff variable, including the 6 renamed to match their kind id, reaches its prune call)', async () => {
     await sweepTombstones({ now: NOW });
     const expectedCutoff = NOW - TOMBSTONE_GRACE_MS + 1;
     expect(pruneTombstonedUniverses).toHaveBeenCalledWith(expectedCutoff);
@@ -192,6 +197,7 @@ describe('sweepTombstones — no peers subscribed', () => {
     expect(pruneTombstonedExercises).toHaveBeenCalledWith(expectedCutoff);
     expect(pruneTombstonedCommissionFeedback).toHaveBeenCalledWith(expectedCutoff);
     expect(pruneTombstonedCommissions).toHaveBeenCalledWith(expectedCutoff);
+    expect(pruneTombstonedDecks).toHaveBeenCalledWith(expectedCutoff);
   });
 
   it('refusedFromCutoffs iterates PEER_SUBSCRIBABLE_KINDS (#6843) — refused stays scoped to the 4 kinds whose cutoff can actually be null', async () => {
@@ -554,6 +560,7 @@ describe('sweepTombstones — return shape', () => {
       writersRoomExercises: 12,
       commissionFeedback: 0,
       creativeCommissions: 0,
+      decks: 0,
       orphanBaseHashes: 0,
       orphanSubscriptions: 0,
       refused: [],

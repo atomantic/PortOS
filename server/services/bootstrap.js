@@ -96,6 +96,7 @@ import { startSpotifyScheduler } from './spotifyScheduler.js';
 import { startYoutubeScheduler } from './youtubeScheduler.js';
 import { reconcileStackerNewsSchedulers } from './stackerNewsScheduler.js';
 import { onProvidersSaved as onProvidersSavedForGraph } from './providerGraph.js';
+import { reportRetiredModelPins } from './modelPinAuditNotifier.js';
 import { startBrainScheduler } from './brainScheduler.js';
 import { startActivityDigestScheduler } from './activityDigestScheduler.js';
 import { startTwinEnrichmentScheduler } from './twinEnrichmentScheduler.js';
@@ -139,6 +140,7 @@ import { initCreativeDirectorMusicBedHook } from './creativeDirectorMusicBedHook
 import { initMusicStudioHook } from './musicStudioHook.js';
 import { initImageGenQuotaHook } from './imageGenQuota.js';
 import { initSpriteReferenceImageHook } from './spriteReferenceImageHook.js';
+import { initDeckRenderHook } from './deckRenderHook.js';
 import { initCreativeDirectorSceneImageHook } from './creativeDirectorSceneImageHook.js';
 import { initCreativeDirectorRenderFailureHook } from './creativeDirector/renderFailureHook.js';
 import { initComicPagesFilenameHook } from './pipeline/comicPagesFilenameHook.js';
@@ -276,7 +278,15 @@ export const bootstrapServices = async ({ io, dataDir, dataReferenceDir, serverD
       // providers.json — an old client's PATCH, a model refresh, a delete.
       // Injected rather than imported by the toolkit, which stays
       // self-contained. A no-op until the database phase enables the graph.
-      onProvidersSaved: () => onProvidersSavedForGraph(),
+      //
+      // The same write is also the moment a catalog refresh retires a model a
+      // stored pin names, so it re-runs the derive-on-read pin audit and logs
+      // the pins that NEWLY went stale (#7328). allSettled, not all: neither
+      // consumer may skip or fail the other.
+      onProvidersSaved: () => Promise.allSettled([
+        onProvidersSavedForGraph(),
+        reportRetiredModelPins(),
+      ]),
       // Keep the fallback chain off providers whose CLI is not installed on
       // this host (#4611), so a run falls through to the next candidate instead
       // of dying at spawn time. Sync by contract: it reads the runtime probe's
@@ -626,6 +636,8 @@ const initMediaJobDependentHooks = () => {
   // render into the sprite record's reference/candidates/ with a generation
   // sidecar (#2896).
   initSpriteReferenceImageHook();
+  // Deck card hook — files a completed card render onto its deck card row.
+  initDeckRenderHook();
   // Creative Director scene-frame hook — durably files a queued first-pass
   // reference-frame render onto its project scene's `sourceImageFile` on
   // completion, even if no client is watching (#1867).

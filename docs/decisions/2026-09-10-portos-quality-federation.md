@@ -67,3 +67,63 @@ release cannot masquerade as a fresh assessment. Forks with a different origin
 ignore the upstream snapshot. Shipped evidence is labeled "Release snapshot"
 and is never re-exported as a local run. Full run logs and transcripts remain
 machine-local; only numeric run assessments cross instances.
+
+## September 14: managed-app snapshots (`.quality.json`)
+
+The release snapshot above was PortOS-only: every other managed app's numeric
+evidence stayed in the database of whichever install ran the audit, so a second
+machine that had never audited the app showed no score for it. Managed apps now
+get the same shipped-evidence path.
+
+Each app carries an opt-in `publishQualitySnapshot` setting (unset/false = off).
+When it is on, every audit that records a measurement for the app rebuilds the
+app's numeric snapshot and commits it to `.quality.json` at the app's repo root.
+`POST /api/apps/:id/quality-snapshot` does the same on demand and is deliberately
+not gated on the toggle — a manual call is explicit intent.
+
+The file IS a snapshot, not a wrapper: the exact `{ schemaVersion, repository,
+measurements }` a federation export carries, serialized the same way as PortOS's
+own root `quality-snapshot.json`. The filename is generic and PortOS-agnostic on
+purpose — it is generated data any tool can read. If PortOS ever needs a config
+manifest inside a managed repo, that is a separate, hand-editable file; generated
+evidence and configuration do not share one path. **PortOS's own root
+`quality-snapshot.json` is unchanged** — same name, same publisher, same reader.
+
+Publishing is conservative. An app with no repo path, a repo path that is not a
+git checkout, or a snapshot with zero measurements is skipped, so an empty
+snapshot can never overwrite a populated file. A rebuild whose bytes match the
+committed file skips git entirely, so an audit that moved nothing leaves no
+commit. The commit is scoped with `git commit -- :(literal).quality.json`, so an
+automated write can never sweep in whatever the user had staged, and nothing is
+ever pushed. The audit-completion hook runs outside the request lifecycle and
+swallows every failure: a locked index never fails a completion.
+
+Reading is not gated on the toggle. PortOS reads a `.quality.json` in ANY managed
+app's repo as a "Release snapshot" quality source, with exactly the guards the
+PortOS snapshot already gets: schema validation, the normalized-origin repository
+hash must match, future assessment dates are dropped, the 30-day freshness rule
+and original dates still apply, a 4 MiB cap, and the records are labeled
+"Release snapshot" and never re-exported as local runs. A checkout of a different
+fork ignores the file. The content stays numeric-only — no summaries, paths, run
+ids or app names — so committing it to a public repository leaks nothing the
+federation wire contract would not already carry.
+
+## September 15: one snapshot file, one publisher
+
+The two sections above left PortOS publishing a root `quality-snapshot.json`
+through its own script and reading it through its own branch in `releasePayload`,
+beside every managed app's `.quality.json` — same bytes, same schema, same
+guards, two names and two code paths kept in step by hand.
+
+PortOS is a managed app with a `repoPath` like any other, so its release snapshot
+is now that same `.quality.json` at the checkout root, written by the same
+publisher and read by the same reader. The per-app `publishQualitySnapshot`
+toggle automates it for PortOS too, and stays **off by default there**: an audit
+that commits into the primary checkout on its own is opt-in, since that checkout
+is also where CoS worktrees and branches are managed. `npm run quality:snapshot`
+remains the explicit release trigger and now commits the file itself.
+
+The rename is a git rename of tracked, derived content — no migration, since
+`scripts/migrations/` governs `data/` paths and there is no install state to
+carry. A fork that published under the old name resolves one rename conflict;
+worst case it regenerates the file from its own database on the next publish.

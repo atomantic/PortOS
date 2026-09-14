@@ -105,6 +105,11 @@ export function normalizeImage(i) {
   };
 }
 
+// Gallery/history rows arrive as { kind, data } from the mixed-media endpoints.
+// Three callers were each re-deriving this ternary; the row shape belongs here,
+// beside the two normalizers it dispatches between.
+export const normalizeMediaRow = (row) => (row.kind === 'image' ? normalizeImage(row.data) : normalizeVideo(row.data));
+
 export function normalizeVideo(v) {
   const loraNames = (pickLoraFilenames(v) || []).filter(Boolean);
   return {

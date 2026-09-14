@@ -159,7 +159,7 @@ import {
 // predicate are shared with the scheduler unit tests so they exercise the real
 // guards instead of a local replica. The async tiers stay here as
 // `spawnDequeuePriorityN(ctx)` helpers.
-import { closeStolenIdleReviewCard, createDequeueCapacity, countRunningAgentsByLocalEndpoint, isIdleTierEligible } from './cosDequeue.js';
+import { closeStolenIdleReviewCard, createDequeueCapacity, countRunningAgentsByLocalEndpoint, isIdleTierEligible, isUserTaskRunnableUnattended } from './cosDequeue.js';
 import { buildLocalEndpointSlotContext, localEndpointCapacityError } from './cosLocalEndpointSlots.js';
 import {
   initializePersistentMindSupervisor,
@@ -1051,6 +1051,13 @@ async function spawnDequeuePriority1UserTasks(ctx) {
     const skipReason = getSkipReason(task.metadata, instanceId);
     if (skipReason) {
       emitLog('debug', `Skipping user task ${task.id} — ${skipReason}`, { taskId: task.id });
+      continue;
+    }
+    // A user row that says it is NOT auto-approved is withheld from the unattended
+    // spawn (#7300) — see isUserTaskRunnableUnattended for why, and for why the
+    // rule lives in cosDequeue.js rather than once per engine.
+    if (!isUserTaskRunnableUnattended(task)) {
+      emitLog('debug', `Skipping user task ${task.id} — recovered row is not auto-approved`, { taskId: task.id });
       continue;
     }
     if (await blockIfExceedsMaxSpawns(task, 'user')) continue;

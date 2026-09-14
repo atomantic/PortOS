@@ -11,6 +11,10 @@
  * the pure leaf `server/lib/providerModels.js`; `effortLevelsForProvider` /
  * `resolveCliEffort` delegate to the server's and add the one rung the browser
  * needs — the ladder the server publishes on a sanitized provider inventory.
+ * Whether a stored pin is still SERVED is likewise the server's own
+ * `modelPinIsOffered` (`server/lib/modelPinMembership.js`), not a second rule:
+ * a picker that flagged a pin the spawner would happily run — or stayed silent
+ * on one it would reject — is worse than not flagging at all.
  * The generation-control tables still mirror `server/lib/opencodeConfig.js` /
  * `server/lib/aiToolkit/internal/generationOptions.js`. Helpers marked
  * CLIENT-ONLY are rendering concerns with no server twin.
@@ -28,6 +32,10 @@ import {
   isConfiguredDefaultModel,
   splitAntigravityModel,
 } from '../../../server/lib/providerModels.js';
+// THE model-pin membership rule, shared with the spawner and the retired-pin
+// audit. Taken from the browser-safe leaf, not `localProviderRuntime.js`, whose
+// endpoint half reaches `opencodeConfig.js` → `zod` (not a client dependency).
+import { modelPinIsOffered } from '../../../server/lib/modelPinMembership.js';
 
 export {
   CODEX_CONFIGURED_DEFAULT,
@@ -92,6 +100,16 @@ export const selectableModelsForProvider = (provider, models) =>
  * qualifies. A bare "not in the list" test would also re-surface the
  * configured-default sentinel (the shipped agy `defaultModel`, which
  * `filterSelectableModels` exists to hide) and any typo'd/stale pin.
+ *
+ * Deliberately NOT layered on the generic `withUnlistedOption` helper
+ * (client/src/lib/): that helper's contract is "present under `key`, else
+ * prepend" over a list of `{id, ...}` objects, while `models` here is a flat
+ * array of model-id STRINGS with no `key` to match on, the extra Antigravity
+ * effort-suffix gate above narrows staleness to more than mere absence, and
+ * this appends (kept last, after the real catalog) rather than prepends —
+ * flipping either would change which option a picker shows first for no
+ * behavioral gain. The same reasoning applies to `unlistedSelection` in
+ * `resolveProviderModelOptions` below, over the Codex account catalog.
  *
  * CLIENT-ONLY (no server mirror) — this is a rendering concern.
  * @param {{id?:string, command?:string}|null|undefined} provider
@@ -176,9 +194,26 @@ export const MODEL_SOURCE = Object.freeze({
  * Every other state (never fetched, failed read, non-Codex provider) falls back
  * to the shipped list unchanged.
  *
- * ADDITIVE: a stored `selectedModel` the catalog no longer lists is retained as
- * its own option and reported via `unlistedSelection`, so an existing task
- * template renders what it actually holds instead of silently changing model.
+ * ADDITIVE in BOTH branches: a stored `selectedModel` the list no longer offers
+ * is retained as its own option and reported via `unlistedSelection`, so an
+ * existing task template renders what it actually holds instead of silently
+ * changing model — and the picker can say so.
+ *
+ * The shipped branch's FLAG asks `modelPinIsOffered` (server/lib/modelPinMembership.js),
+ * the SAME rule the spawner and the retired-pin audit use, rather than a bare
+ * `includes`. That rule is what makes the flag honest here instead of noisy:
+ * it passes an empty catalog and a local-daemon provider (whose `models` is a
+ * cached snapshot while the daemon is the authority), and it tolerates the two
+ * same-model-spelled-differently forms, so a legacy agy `-high` pin whose BASE
+ * is still listed reads as offered and only a genuinely retired one is
+ * flagged. Until #7327 this branch hardcoded `false`, so the flag only ever
+ * fired for a Codex account catalog and every OTHER picker rendered a rotted
+ * pin as a perfectly normal option.
+ *
+ * The ACCOUNT branch deliberately keeps its own bare membership test: a
+ * successfully-read EMPTY account catalog means the account really exposes no
+ * models, so a pin there IS unavailable — while `modelPinIsOffered` reads an
+ * empty catalog as "nothing to validate against" and would pass it.
  *
  * CLIENT-ONLY (no server mirror).
  * @param {{id?:string, command?:string, models?:unknown[]}|null|undefined} provider
@@ -192,7 +227,23 @@ export const resolveProviderModelOptions = (provider, selectedModel) => {
     selectedModel,
   );
   const catalog = codexCatalogModelIds(provider);
-  if (!catalog) return { models: shipped, source: MODEL_SOURCE.shipped, unlistedSelection: false };
+  if (!catalog) {
+    // SELECTABLE and FLAGGED are decided separately, because they answer
+    // different questions. Anything stored and not already an option has to
+    // become one or the select renders BLANK and reads as "no model" — that
+    // covers a retired pin, and equally a pin the rule ACCEPTS that the list
+    // still lacks (an installed Ollama model absent from the record's cached
+    // snapshot, a bare OpenCode pin against a namespaced catalog). Only the
+    // flag asks whether the pin is dead. Coupling the two would have hidden
+    // every working-but-unlisted pin, which is the failure
+    // `withStaleAntigravityPin` already exists to prevent for one narrow case.
+    const stored = !!selectedModel && !isConfiguredDefaultModel(selectedModel);
+    return {
+      models: stored && !shipped.includes(selectedModel) ? [...shipped, selectedModel] : shipped,
+      source: MODEL_SOURCE.shipped,
+      unlistedSelection: stored && !modelPinIsOffered(provider, selectedModel),
+    };
+  }
   const models = filterSelectableModels(catalog);
   const unlistedSelection = !!selectedModel
     && !isConfiguredDefaultModel(selectedModel)

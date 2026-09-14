@@ -3479,6 +3479,46 @@ describe('a11y conventions', () => {
     expect(offenders, `Icon-only <button> under the 44px touch-target minimum — add min-h-[44px] min-w-[44px] inline-flex items-center justify-center and leave the icon size alone:\n${offenders.join("\n")}`).toEqual([]);
   });
 
+  it('never autofocuses a button on a surface that submits with a key', () => {
+    // The Enter that submits an answer is still down when the control it
+    // reveals mounts and takes focus, so the browser activates that control off
+    // the same keystroke — its keypress/keyup, or the first auto-repeat — and
+    // whatever it was meant to reveal is gone in the tick it appeared. The
+    // Morse copy drill showed a right/wrong verdict per question that no user
+    // ever saw, which left a two-character drill an unlearnable coin flip.
+    //
+    // Scoped to files that submit on a key, because that is the whole vector: a
+    // dialog's confirm button or a tutorial's Start button is autofocused for
+    // good reason and nothing keys into it.
+    const KEY_SUBMIT = /<form\b[^>]*onSubmit|key\s*[=!]==\s*['"]Enter['"]/;
+    const offendersIn = (file, src) => {
+      if (!KEY_SUBMIT.test(src)) return [];
+      const out = [];
+      for (const node of forEachOpeningTag(src, 'button')) {
+        if (/(?:^|\s)autoFocus(?=[\s=/>])/.test(node.tag)) out.push(`${file}:${lineOf(src, node.index)}`);
+      }
+      return out;
+    };
+
+    // Probe first — the tree is green by construction, so nothing left in it
+    // pins what the walk rejects.
+    const form = '<form onSubmit={submit}><input autoFocus /></form>';
+    expect(offendersIn('probe.jsx', `${form}<button autoFocus>Next</button>`)).toEqual(['probe.jsx:1']);
+    expect(offendersIn('probe.jsx', `${form}<button onClick={next}>Next</button>`)).toEqual([]);
+    // An autofocused INPUT is the point — only the button is the defect…
+    expect(offendersIn('probe.jsx', form)).toEqual([]);
+    // …and a surface nothing keys into keeps its autofocused button.
+    expect(offendersIn('probe.jsx', '<button autoFocus>Start</button>')).toEqual([]);
+    // An Enter-keyed handler counts as a key submit even with no <form>.
+    expect(offendersIn('probe.jsx', "onKeyDown={(e) => { if (e.key === 'Enter') submit(); }}\n<button autoFocus>Next</button>")).toEqual(['probe.jsx:2']);
+    // A prop that merely starts with the same letters is not the attribute.
+    expect(offendersIn('probe.jsx', `${form}<button autoFocusDelay={1}>Next</button>`)).toEqual([]);
+
+    const offenders = [];
+    for (const file of trackedJsxFiles()) offenders.push(...offendersIn(file, maskedSourceOf(file)));
+    expect(offenders, `An autofocused <button> on a surface that submits with a key — the submitting keystroke activates it and skips whatever it revealed. Keep the submitting element focused (readOnly, not disabled), or move Enter-to-advance into a window handler gated on shouldIgnoreGlobalKey and leave the button unfocused (see client/src/AGENTS.md):\n${offenders.join('\n')}`).toEqual([]);
+  });
+
   it('registers a KeyboardSensor in every DndContext (#7243)', () => {
     // `useDraggable`/`useSortable` return `attributes` that UNCONDITIONALLY
     // carry role="button", tabIndex={0}, aria-roledescription="draggable" and

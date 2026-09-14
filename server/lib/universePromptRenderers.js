@@ -43,7 +43,7 @@ export function renderCompositesForPrompt(composites, { showLocked = false } = {
 export const CANON_PROMPT_ENTRIES_PER_KIND_MAX = 40;
 export const CANON_PROMPT_DESCRIPTION_MAX = 300;
 
-const truncDesc = (s) => {
+export const truncDesc = (s) => {
   if (typeof s !== 'string') return '';
   const trimmed = s.trim();
   if (trimmed.length <= CANON_PROMPT_DESCRIPTION_MAX) return trimmed;

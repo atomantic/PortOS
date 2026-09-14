@@ -42,8 +42,7 @@ export default function MediaGen() {
         activeTab={activeTab}
         onChange={(id) => navigate(id === 'video' ? '/video/generate' : `/media/${id}`)}
         ariaLabel="Media Gen sections"
-        mobileDropdown
-        mobileSelectId="media-gen-section-select"
+        mobileCompact
         className="w-full min-w-0"
       />
 

@@ -2,9 +2,9 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { MemoryRouter, Routes, Route } from 'react-router';
 
-// Regression coverage for #7283 — past MOBILE_DROPDOWN_THRESHOLD tabs, Brain
-// used to pass `hideLabelOnMobile` (an icon-only phone row) instead of the
-// `mobileDropdown` `<select>` every other many-tab section uses.
+// Brain's 14 tabs are past the compact threshold, so the bar collapses on a
+// phone. It collapses to TabPills' ICON ROW, not the `<select>` #7283 briefly
+// made universal — the preferred treatment for any bar whose tabs have icons.
 const api = vi.hoisted(() => ({
   getBrainSummary: vi.fn(),
   getBrainSettings: vi.fn(),
@@ -52,21 +52,22 @@ const renderSettledAt = async (tab) => {
   return result;
 };
 
-describe('Brain mobile tab navigation (#7283)', () => {
-  it('renders a labelled mobile select naming the current tab instead of unlabelled icons', async () => {
+describe('Brain mobile tab navigation', () => {
+  it('collapses to named icon links on the phone, not a select', async () => {
     await renderSettledAt('links');
 
-    const select = screen.getByRole('combobox', { name: 'Brain sections' });
-    expect(select).toHaveAttribute('id', 'brain-sections-select');
-    expect(select.value).toBe('links');
+    expect(screen.queryByRole('combobox', { name: 'Brain sections' })).toBeNull();
+    const linksTab = screen.getByRole('tab', { name: 'Links' });
+    expect(linksTab).toHaveAttribute('aria-selected', 'true');
+    expect(linksTab.querySelector('svg')).toBeTruthy();
+    expect(linksTab.querySelector('.max-sm\\:sr-only')).toBeTruthy();
   });
 
-  it('navigates to the selected tab route when an option is chosen', async () => {
+  it('navigates to the tab route when an icon is clicked', async () => {
     await renderSettledAt('inbox');
     expect(await screen.findByTestId('inbox-tab')).toBeInTheDocument();
 
-    const select = screen.getByRole('combobox', { name: 'Brain sections' });
-    fireEvent.change(select, { target: { value: 'memory' } });
+    fireEvent.click(screen.getByRole('tab', { name: 'Memory' }));
 
     expect(await screen.findByTestId('memory-tab')).toBeInTheDocument();
   });

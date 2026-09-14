@@ -435,6 +435,70 @@ describe('Antigravity base-model split', () => {
       expect(result.unlistedSelection).toBe(true);
     });
 
+    // #7327 — the shipped branch used to hardcode `unlistedSelection: false`, so
+    // the flag fired ONLY for a Codex account catalog and every other picker
+    // (Media Gen, CoS schedule, per-app overrides) rendered a rotted pin as a
+    // perfectly normal option. It now asks the same `modelPinIsOffered` rule the
+    // spawner and the retired-pin audit use.
+    describe('shipped catalog (#7327)', () => {
+      const agy = (models) => ({ id: 'antigravity-cli', command: 'agy', models });
+      const AGY_CATALOG = ['gemini-3.6-flash-low', 'gemini-3.6-flash-high', 'claude-sonnet-4-6'];
+
+      it('flags a retired pin AND keeps it selectable', () => {
+        const result = resolveProviderModelOptions(agy(AGY_CATALOG), 'gemini-3.5-flash');
+        expect(result.unlistedSelection).toBe(true);
+        // Selectable and flagged are complementary — a picker that hid the pin
+        // would render blank and read as "no model".
+        expect(result.models).toContain('gemini-3.5-flash');
+        expect(result.source).toBe(MODEL_SOURCE.shipped);
+      });
+
+      it('does not flag a legacy agy pin whose BASE is still listed', () => {
+        // `withStaleAntigravityPin` already keeps this selectable; the server
+        // splits it into base + `--effort` and runs it, so flagging it would be
+        // a false "your pin is gone".
+        const result = resolveProviderModelOptions(agy(AGY_CATALOG), 'gemini-3.6-flash-high');
+        expect(result.unlistedSelection).toBe(false);
+        expect(result.models).toContain('gemini-3.6-flash-high');
+      });
+
+      it('never flags a local-daemon pin, whose catalog is only a cached snapshot', () => {
+        const ollama = { id: 'opencode-ollama', command: 'opencode', ollamaBacked: true, models: ['ollama/qwen3:8b'] };
+        expect(resolveProviderModelOptions(ollama, 'qwen3:32b').unlistedSelection).toBe(false);
+      });
+
+      it('never flags an empty catalog or a configured-default sentinel', () => {
+        // "We have no catalog" must not read as "the model is gone".
+        expect(resolveProviderModelOptions({ id: 'custom', models: [] }, 'anything').unlistedSelection).toBe(false);
+        const sentinel = resolveProviderModelOptions(agy(AGY_CATALOG), ANTIGRAVITY_CONFIGURED_DEFAULT);
+        expect(sentinel.unlistedSelection).toBe(false);
+        // ...and it is not appended either: `filterSelectableModels` exists to
+        // keep the sentinel OUT of a task's model picker.
+        expect(sentinel.models).not.toContain(ANTIGRAVITY_CONFIGURED_DEFAULT);
+      });
+
+      it('keeps a working-but-unlisted pin selectable WITHOUT flagging it', () => {
+        // Selectable and flagged answer different questions. A local daemon's
+        // `models` is a cached snapshot, so an installed model missing from it
+        // is neither retired nor renderable — coupling the append to the flag
+        // left the select blank and the pin was lost on the next save.
+        const ollama = { id: 'opencode-ollama', command: 'opencode', ollamaBacked: true, models: ['ollama/qwen3:8b'] };
+        const result = resolveProviderModelOptions(ollama, 'qwen3:32b');
+        expect(result.unlistedSelection).toBe(false);
+        expect(result.models).toContain('qwen3:32b');
+      });
+
+      it('appends a retired BARE pin that withStaleAntigravityPin deliberately skips', () => {
+        // That helper only keeps an id carrying an effort SUFFIX. Without the
+        // append here a bare retired pin matched no option and the select
+        // rendered blank.
+        const codex = { id: 'codex', command: 'codex', models: ['gpt-5', 'gpt-5-mini'] };
+        const result = resolveProviderModelOptions(codex, 'gpt-4o');
+        expect(result.unlistedSelection).toBe(true);
+        expect(result.models).toEqual(['gpt-5', 'gpt-5-mini', 'gpt-4o']);
+      });
+    });
+
     it('leaves a non-subscription provider on its own catalog', () => {
       const agy = { id: 'antigravity-cli', command: 'agy', models: CATALOG, codexModelCatalog: { models: [], error: null } };
       expect(resolveProviderModelOptions(agy, '').source).toBe(MODEL_SOURCE.shipped);
@@ -586,6 +650,7 @@ describe('providerTypes re-exports the server predicates', () => {
       'isCodexProvider',
       'isCodexSubscriptionProvider',
       'isCursorProvider',
+      'isGrokBuildCli',
       'isGrokProvider',
       'isKimiProvider',
       'isOllamaBackedProvider',
@@ -1727,6 +1792,30 @@ describe('providerCardState', () => {
     expect(providerCardState(codex, { codexAccount: { status: 'signed-out' } })).toEqual({
       state: PROVIDER_CARD_STATE.BLOCKED,
       missing: [{ code: 'codexAccount', label: 'No ChatGPT account is signed in' }],
+    });
+    expect(providerCardState(codex, { codexAccount: { status: 'reauth-required' } })).toEqual({
+      state: PROVIDER_CARD_STATE.BLOCKED,
+      missing: [{ code: 'codexAccount', label: 'ChatGPT sign-in has expired' }],
+    });
+    expect(providerCardState(codex, { codexAccount: { status: 'quota-exhausted' } })).toEqual({
+      state: PROVIDER_CARD_STATE.BENCHED,
+      missing: [],
+    });
+    // A legacy server payload carrying codexQuota finding is filtered out and benched
+    expect(providerCardState({
+      ...codex,
+      missingPrerequisites: [{ code: 'codexQuota', label: 'ChatGPT usage limit reached' }],
+    }, { codexAccount: { status: 'quota-exhausted' } })).toEqual({
+      state: PROVIDER_CARD_STATE.BENCHED,
+      missing: [],
+    });
+    // A missing runtime still blocks even if quota is also exhausted
+    expect(providerCardState(codex, {
+      runtime: { label: 'Codex CLI', installed: false },
+      codexAccount: { status: 'quota-exhausted' },
+    })).toEqual({
+      state: PROVIDER_CARD_STATE.BLOCKED,
+      missing: [{ code: 'runtime', label: 'Codex CLI is not installed' }],
     });
     expect(providerCardState(codex, { codexAccount: { status: 'unknown' } }))
       .toEqual({ state: PROVIDER_CARD_STATE.UNKNOWN, missing: [] });

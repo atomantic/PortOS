@@ -26,6 +26,7 @@ import {
   CODEX_IMAGEGEN_DEFAULT_EFFORT,
   CODEX_IMAGEGEN_DEFAULT_MODEL,
   EDIT_INCAPABLE_IMAGE_MODES,
+  LOCAL_IMAGEGEN_DEFAULT_MODEL,
   isEditCapableMode,
 } from '../../lib/imageGenCapabilities.js';
 
@@ -45,6 +46,9 @@ export {
   CODEX_IMAGEGEN_DEFAULT_EFFORT,
   CODEX_IMAGEGEN_DEFAULT_MODEL,
   EDIT_INCAPABLE_IMAGE_MODES,
+  // The local runner's fallback model id. Re-exported so provenance writers
+  // (sprite candidate sidecars, #2896) keep their service-local import path.
+  LOCAL_IMAGEGEN_DEFAULT_MODEL,
   isEditCapableMode,
 };
 
@@ -166,12 +170,6 @@ export function nearestAspectRatio(width, height, ratios) {
 
 /** `nearestAspectRatio` bound to agy's alphabet. */
 export const nearestAgyAspectRatio = (width, height) => nearestAspectRatio(width, height, AGY_ASPECT_RATIOS);
-
-// The local runner's fallback model id when neither the request nor
-// settings.imageGen.local.modelId names one (local.js's parameter default).
-// Exported so provenance writers (sprite candidate sidecars, #2896) can
-// record the model that actually ran without hardcoding a second copy.
-export const LOCAL_IMAGEGEN_DEFAULT_MODEL = 'dev';
 
 /**
  * Resolve the queue-capable image mode for a render request: the per-request

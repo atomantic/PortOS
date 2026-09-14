@@ -50,11 +50,16 @@ import {
   CODEX_IMAGEGEN_DEFAULT_MODEL,
   GROK_ASPECT_RATIOS,
   I2I_CAPABLE_MODES,
+  LOCAL_IMAGEGEN_DEFAULT_MODEL,
   MODEL_OVERRIDE_CAPABLE_MODES,
   cloudPromptRequired,
   maxInputImages,
   supportsCloudModelOverride,
 } from '../../../server/lib/imageGenCapabilities.js';
+import {
+  IMAGE_RUNTIME_READINESS,
+  IMAGE_RUNTIME_REMEDY,
+} from '../../../server/lib/imageRuntimeRemedies.js';
 
 export {
   // Shipped per-backend defaults, so a UI that displays "the model/effort a job
@@ -75,6 +80,16 @@ export {
   // pickers filter through and what `pickI2iMode` walks.
   I2I_CAPABLE_MODES,
   IMAGE_GEN_MODE,
+  // The local image-runtime vocabulary the status probe, the renderer's
+  // pre-flight refusal and every blocked surface share. A component branches on
+  // `IMAGE_RUNTIME_REMEDY.X`, never on the literal string — a hand-copied
+  // remedy kind is a button that silently stops matching the server.
+  IMAGE_RUNTIME_READINESS,
+  IMAGE_RUNTIME_REMEDY,
+  // The local model a blank `imageGen.local.modelId` resolves to, so the
+  // Settings Local tab can name the install default instead of showing a blank
+  // select whose meaning the user has to guess.
+  LOCAL_IMAGEGEN_DEFAULT_MODEL,
   // Cloud CLIs that accept a per-render model override. Use
   // `supportsCloudModelOverride` at branch sites rather than a hand-rolled
   // `mode === CODEX || mode === AGY` disjunction.
@@ -126,6 +141,7 @@ export const RENDER_TARGET_OPTIONS = Object.freeze([
   { id: RENDER_TARGET.MUSIC_VIDEO, label: 'Music Video scene frames & clips', video: true },
   { id: RENDER_TARGET.LORA_DATASET, label: 'LoRA training datasets' },
   { id: RENDER_TARGET.CREATIVE_AGENT, label: 'Creative agent renders', video: true },
+  { id: RENDER_TARGET.DECK, label: 'Deck card renders (playing cards & tarot)' },
 ]);
 
 // True when a video backend renders in a provider's cloud rather than on the
@@ -165,6 +181,44 @@ export const renderTargetPin = (settings, target) => ({
   imageMode: settings?.renderDefaults?.[target]?.imageMode ?? null,
   imageModelId: settings?.renderDefaults?.[target]?.imageModel ?? null,
 });
+
+/**
+ * The local model a render resolves to when nothing else names one — the
+ * client mirror of the tail of the server's `selectLocalImageModel`
+ * (`settings.imageGen.local.modelId`, then `LOCAL_IMAGEGEN_DEFAULT_MODEL`).
+ *
+ * Every surface that is not the Pipeline visual form has to read THIS rather
+ * than `settings.pipeline.imageGen.modelId`: that key is the Pipeline form's
+ * own sticky state, so a model picked once on a comic page followed the Decks
+ * "Renders on Local · …" summary around and named a model a deck render would
+ * never actually use — the server has always read the install pin here.
+ */
+export const installLocalModelId = (settings) => (
+  normalizeRenderPinValue(settings?.imageGen?.local?.modelId) || LOCAL_IMAGEGEN_DEFAULT_MODEL
+);
+
+/**
+ * The option list + blank-option label a local-image-model `<select>` needs.
+ *
+ * A pin the live catalog no longer lists (model rotated out, or this machine
+ * stopped being compatible) still has to render as the selected option —
+ * otherwise the select paints blank, reads as "use the default", and the next
+ * save silently drops a pin the server is still honouring.
+ *
+ * @param {Array<{id:string,name?:string}>|null} models - Catalog; `null` while it loads.
+ * @param {string|null} pinned - Currently selected id ('' / null = no pin).
+ * @param {string} [fallbackId] - What a blank pin resolves to on this surface.
+ * @returns {{options: Array<{id:string,name?:string}>, fallbackLabel: string}}
+ */
+export function localModelSelectOptions(models, pinned, fallbackId = LOCAL_IMAGEGEN_DEFAULT_MODEL) {
+  const orphaned = pinned && models !== null && !models.some((m) => m.id === pinned);
+  return {
+    options: orphaned
+      ? [{ id: pinned, name: `${pinned} (unavailable on this machine)` }, ...models]
+      : models ?? [],
+    fallbackLabel: models?.find((m) => m.id === fallbackId)?.name || fallbackId,
+  };
+}
 
 /**
  * Resolve the effective render pin from an ordered ladder of pin sources — the

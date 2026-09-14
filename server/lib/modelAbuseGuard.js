@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { escapeRegExp } from './textUtils.js';
 
 /**
  * Static contract for PortOS's model-abuse boundary.
@@ -324,16 +325,27 @@ const MODEL_TARGET_RE = /\b(?:agents?|assistants?|models?|llms?|ai|claude|codex|
  * Code points a reader never sees. Each of these renders as nothing (or as
  * nothing more than the character before it), so no human puts one in a diff
  * by accident, and every one of them reaches a model's tokenizer:
- * zero-width spaces/joiners and bidi marks (U+200B–U+200F), bidi embedding /
- * override controls (U+202A–U+202E, U+2066–U+2069 — "Trojan Source"), word
- * joiner and invisible operators (U+2060–U+2064), line/paragraph separators
- * (U+2028, U+2029), the BOM as a mid-text character (U+FEFF), Mongolian vowel
- * separator and Hangul fillers (U+180E, U+115F, U+1160, U+3164, U+FFA0), the
- * Unicode tag block used for ASCII smuggling (U+E0000–U+E007F), and BOTH
- * variation-selector blocks (U+FE00–U+FE0F and U+E0100–U+E01EF), which encode
- * a byte apiece in the selector-smuggling attack.
+ * C0/C1 controls that are not tab/LF (NUL, backspace, ESC/ANSI, DEL, and the
+ * whole C1 block including CSI), a lone CR (CRLF is normalized first so a
+ * Windows checkout is not a finding), soft hyphen (U+00AD), combining grapheme
+ * joiner, Arabic letter mark, Khmer inherent vowels, Mongolian free variation
+ * selectors plus the vowel separator, Hangul fillers, zero-width spaces/
+ * joiners and bidi marks (U+200B–U+200F), bidi embedding / override controls
+ * (U+202A–U+202E, U+2066–U+2069 — "Trojan Source"), word joiner, invisible
+ * operators, and the deprecated format characters (U+2060–U+206F), line/
+ * paragraph separators (U+2028, U+2029), the BOM as a mid-text character
+ * (U+FEFF), interlinear annotation (U+FFF9–U+FFFB), the Unicode tag block used
+ * for ASCII smuggling (U+E0000–U+E007F), and BOTH variation-selector blocks
+ * (U+FE00–U+FE0F and U+E0100–U+E01EF), which encode a byte apiece in the
+ * selector-smuggling attack.
+ *
+ * Tab and LF stay out: they are ordinary source layout. CRLF is folded to LF
+ * before the scan so a trailing CR on a Windows line is not a finding, while a
+ * CR in the middle of a line (the terminal-overwrite trick) still is.
  */
-const HIDDEN_CODEPOINT_RE = /[\u115F\u1160\u180E\u200B-\u200F\u2028\u2029\u202A-\u202E\u2060-\u2064\u2066-\u2069\u3164\uFE00-\uFE0F\uFEFF\uFFA0\u{E0000}-\u{E007F}\u{E0100}-\u{E01EF}]/gu;
+const HIDDEN_CODEPOINT_RE = /[\u0000\u0008\u000D\u001B\u007F\u0080-\u009F\u00AD\u034F\u061C\u115F\u1160\u17B4\u17B5\u180B-\u180E\u200B-\u200F\u2028\u2029\u202A-\u202E\u2060-\u206F\u3164\uFE00-\uFE0F\uFEFF\uFFA0\uFFF9-\uFFFB\u{E0000}-\u{E007F}\u{E0100}-\u{E01EF}]/gu;
+
+const normalizeForHiddenScan = (value) => value.replaceAll('\r\n', '\n').replace(/\r$/, '');
 
 // Emoji ZWJ sequences (family and flag emoji) legitimately contain U+200D; strip them
 // before the hidden-code-point scan so an emoji-rich changelog is not a finding.
@@ -395,8 +407,9 @@ const INVISIBLE_CLUSTER_WINDOW = 200;
  */
 export function invisibleClusterSummary(value) {
   if (typeof value !== 'string' || !value) return null;
+  const normalized = normalizeForHiddenScan(value);
   const positions = [];
-  for (const match of value.matchAll(HIDDEN_CODEPOINT_RE)) positions.push(match.index);
+  for (const match of normalized.matchAll(HIDDEN_CODEPOINT_RE)) positions.push(match.index);
   for (let i = 0; i + INVISIBLE_CLUSTER_COUNT - 1 < positions.length; i += 1) {
     const last = i + INVISIBLE_CLUSTER_COUNT - 1;
     if (positions[last] - positions[i] <= INVISIBLE_CLUSTER_WINDOW) {
@@ -407,10 +420,12 @@ export function invisibleClusterSummary(value) {
 }
 
 export function hiddenCodePointSummary(value) {
+  if (typeof value !== 'string' || !value) return null;
+  const normalized = normalizeForHiddenScan(value);
   const counts = new Map();
-  for (const match of value.matchAll(HIDDEN_CODEPOINT_RE)) {
-    if (match[0] === ZERO_WIDTH_JOINER && joinerInsideEmoji(value, match.index)) continue;
-    if (isEmojiPresentationSelector(value, match.index)) continue;
+  for (const match of normalized.matchAll(HIDDEN_CODEPOINT_RE)) {
+    if (match[0] === ZERO_WIDTH_JOINER && joinerInsideEmoji(normalized, match.index)) continue;
+    if (isEmojiPresentationSelector(normalized, match.index)) continue;
     const key = formatCodePoint(match[0]);
     counts.set(key, (counts.get(key) || 0) + 1);
   }
@@ -489,6 +504,58 @@ export function describeEncodedPayload(value) {
 // an unterminated `<!--` in a diff hunk cannot scan to end of input) and the
 // "[//]: # (text)" / "[comment]: <> (text)" markdown link-reference trick.
 const HIDDEN_COMMENT_RE = /<!--([\s\S]{0,4000}?)-->|^[ \t]*\[(?:\/\/|comment)\]:\s*(?:#|<>)\s*\(([^)\n]*)\)/gim;
+// GitHub-flavored markdown also hides HTML whose attributes say to: the
+// boolean `hidden` attribute, aria-hidden="true", and inline styles that
+// collapse the node. `type="hidden"` / Tailwind `className="hidden"` are
+// deliberately not this — those are ordinary UI, and the inner text still
+// shows up in the Files tab.
+const HIDDEN_HTML_OPEN_RE = /<([a-z][\w:.-]*)\b([^>]{0,800})>/gi;
+const HIDING_ATTR_RE = /(?:^|\s)hidden(?:\s|=\s*(['"]?)(?:true|hidden)?\1|$)|aria-hidden\s*=\s*(['"]?)true\2|style\s*=\s*(['"])[^'"]*(?:display\s*:\s*none|visibility\s*:\s*hidden|opacity\s*:\s*0(?:\.0+)?|font-size\s*:\s*0)/i;
+// An element that cannot have children hides nothing, so it must not lend its
+// hiding attribute to whatever text happens to follow it. `<Icon aria-hidden />`
+// is the repo's own mandated a11y idiom (hundreds of call sites), and without
+// this the guard read the next 4000 characters of unrelated diff as that icon's
+// inner text — enough for an ordinary comment two functions later to satisfy the
+// abuse + model-target pair and fail the pr-reviewer preflight closed.
+const VOID_ELEMENTS = new Set([
+  'area', 'base', 'br', 'col', 'embed', 'hr', 'img', 'input',
+  'link', 'meta', 'param', 'source', 'track', 'wbr',
+]);
+// A trailing `/>` only means "no children" where the syntax is real: a void
+// element, or a JSX component (capitalized, or namespaced like `motion.div`).
+// On an ordinary HTML tag both the HTML5 parser and GFM IGNORE the slash and
+// open the element anyway, so trusting `/>` there would hand an attacker a
+// one-character bypass — `<div hidden />payload</div>` renders hidden and would
+// never be scanned.
+const selfClosingIsReal = (name, tag) => (
+  tag.endsWith('/>') && (/^[A-Z]/.test(name) || name.includes('.'))
+);
+
+const markupHidesInstruction = (body) => (
+  HIDDEN_COMMENT_ABUSE_RE.test(body) && (MODEL_TARGET_RE.test(body) || SECOND_PERSON_RE.test(body))
+);
+
+function hasHiddenMarkupInstruction(value) {
+  if ([...value.matchAll(HIDDEN_COMMENT_RE)].some((match) => markupHidesInstruction(match[1] ?? match[2] ?? ''))) {
+    return true;
+  }
+  for (const match of value.matchAll(HIDDEN_HTML_OPEN_RE)) {
+    if (!HIDING_ATTR_RE.test(match[2] || '')) continue;
+    if (VOID_ELEMENTS.has(match[1].toLowerCase()) || selfClosingIsReal(match[1], match[0])) continue;
+    const rest = value.slice(match.index + match[0].length, match.index + match[0].length + 4000);
+    // Escape the tag name: it reaches a regex, and a namespaced JSX name
+    // (`item.icon`) carries a metacharacter.
+    const tagName = escapeRegExp(match[1]);
+    const close = rest.match(new RegExp(`^([\\s\\S]*?)</${tagName}\\s*>`, 'i'));
+    // No close tag in range: scan the whole window. Stopping at the first `<`
+    // would be a bypass of its own — `<div hidden><p>payload</p>` truncates to
+    // the empty string — and an element that really cannot hide anything was
+    // already skipped above.
+    if (markupHidesInstruction(close ? close[1] : rest)) return true;
+  }
+  return false;
+}
+
 // A comment nobody sees needs only a model address plus one abuse verb to be
 // worth a human look — a lower bar than the visible-text rules below.
 const HIDDEN_COMMENT_ABUSE_RE = /\b(?:ignore|disregard|approve|merge|execute|override|bypass|reveal|dump|leak|exfiltrate|system\s+prompt|hidden\s+instructions?)\b/i;
@@ -611,12 +678,8 @@ export function detectDeterministicModelAbuseSignals(value, { source = null } = 
     findings.push(blockingFinding('encoded-payload', `Content ${encoded}.`));
   }
 
-  const hiddenComment = [...value.matchAll(HIDDEN_COMMENT_RE)].some((match) => {
-    const body = match[1] ?? match[2] ?? '';
-    return HIDDEN_COMMENT_ABUSE_RE.test(body) && (MODEL_TARGET_RE.test(body) || SECOND_PERSON_RE.test(body));
-  });
-  if (hiddenComment) {
-    findings.push(blockingFinding('hidden-comment-instruction', 'Content hides a model-directed instruction inside a comment that the rendered pull request never shows a human.'));
+  if (hasHiddenMarkupInstruction(value)) {
+    findings.push(blockingFinding('hidden-comment-instruction', 'Content hides a model-directed instruction inside a comment or hidden markup that the rendered pull request never shows a human.'));
   }
 
   for (const rule of VISIBLE_TEXT_RULES) {

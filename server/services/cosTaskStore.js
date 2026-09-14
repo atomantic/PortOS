@@ -17,7 +17,7 @@ import { reviewerModelsFromDefaults } from '../lib/reviewerConfig.js';
 import { readFile, writeFile, stat } from 'fs/promises';
 import { existsSync } from 'fs';
 import { join } from 'path';
-import { parseTasksMarkdown, groupTasksByStatus, getAutoApprovedTasks, getAwaitingApprovalTasks, generateTasksMarkdown, toRepresentableTask, PRIORITY_VALUES } from '../lib/taskParser.js';
+import { parseTasksMarkdown, groupTasksByStatus, getAutoApprovedTasks, getAwaitingApprovalTasks, generateTasksMarkdown, hasKnownPrefix, toRepresentableTask, PRIORITY_VALUES } from '../lib/taskParser.js';
 import { MAX_TOTAL_SPAWNS } from '../lib/validation.js';
 import { RETRY_HOLD_KEY, RETRY_HOLD_SINCE_KEY } from '../lib/taskRetryHold.js';
 import { resolveTaskTargetBranch, shouldStripTaskTargetBranch } from '../lib/taskTargetBranch.js';
@@ -396,6 +396,16 @@ export async function addTask(taskData, taskType = 'user', { raw = false, ignore
 
   // When raw=true, use the pre-built task object directly (for on-demand/generated tasks)
   let newTask = raw ? taskData : buildQueuedTask(taskData, taskType, { now });
+
+  // A raw producer mints its own id and this path writes it verbatim, but the
+  // next READ rewrites an unregistered prefix to `task-<id>` — so a producer
+  // that re-derives its id instead of keeping the one returned here misses on
+  // every later read and write, silently (those call sites are best-effort).
+  // The preflight card lost a whole pr-reviewer run that way. The fix is to
+  // register the prefix in lib/taskParser.js, not to rename the producer.
+  if (raw && newTask?.id && !hasKnownPrefix(newTask.id)) {
+    console.error(`❌ Task id ${newTask.id} uses an unregistered prefix — it will be read back as task-${newTask.id}. Register the prefix in lib/taskParser.js`);
+  }
 
   // Route a multi-line context payload to `metadata.prompt` (#4153). Applied to
   // BOTH branches — the raw path is how the generator, the reference-watch

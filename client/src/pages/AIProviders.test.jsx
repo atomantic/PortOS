@@ -21,6 +21,10 @@ const api = vi.hoisted(() => ({
   createProvider: vi.fn(),
   updateProvider: vi.fn(),
   refreshProviderModels: vi.fn(),
+  // The retired-model-pin panel reads on mount. Resolved empty so a healthy
+  // install renders nothing extra — the panel has its own suite.
+  getModelPinWarnings: vi.fn().mockResolvedValue({ pins: [], providers: {} }),
+  clearModelPin: vi.fn(),
   setActiveProvider: vi.fn().mockResolvedValue({}),
   getOrchestrationProfiles: vi.fn().mockResolvedValue({ profiles: [] }),
   createRun: vi.fn().mockResolvedValue({ runId: 'run-1' }),
@@ -1494,6 +1498,32 @@ describe('readiness grouping', () => {
 
     expect(await screen.findByText('BENCHED · usage-limit')).toBeInTheDocument();
     // Benched providers stay in the Enabled group — nothing is missing on them.
+    expect(screen.getByRole('button', { name: new RegExp('^Enabled') })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: new RegExp('^Needs setup') })).not.toBeInTheDocument();
+  });
+
+  it('badges a Codex provider whose ChatGPT quota is exhausted as Benched under Enabled', async () => {
+    api.getCodexAccount.mockResolvedValue({
+      readiness: {
+        status: 'quota-exhausted',
+        account: { planType: 'pro' },
+        rateLimits: { primary: { usedPercent: 100 } },
+      },
+    });
+    api.getProviders.mockResolvedValue({
+      providers: [{
+        id: 'codex',
+        name: 'Codex',
+        type: 'cli',
+        command: 'codex',
+        enabled: true,
+      }],
+      activeProvider: 'codex',
+    });
+
+    renderPage();
+
+    expect(await screen.findByText('BENCHED · usage-limit')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: new RegExp('^Enabled') })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: new RegExp('^Needs setup') })).not.toBeInTheDocument();
   });

@@ -3,6 +3,7 @@ import { generatePostDrill, submitPostSession, scorePostLlmDrill, submitTraining
 import toast from '../components/ui/Toast';
 import { safeReadJsonSession, safeRemoveSession, safeWriteJsonSession } from '../lib/safeStorage.js';
 import { uuidv4 } from '../lib/uuid.js';
+import { resolveEstimationTolerancePct } from '../../../server/lib/postScoring.js';
 import {
   LLM_DRILL_TYPES, MEMORY_DRILL_TYPES, DRILL_TO_DOMAIN, countLlmCorrect,
   WORDPLAY_LLM_DRILL_TYPES, LLM_TRAINING_CORRECT_THRESHOLD, appliedNumeracyAnswerCorrect,
@@ -350,7 +351,9 @@ export function usePostSession() {
     } else if (currentDrill.type === 'estimation') {
       const raw = (value === null || String(value).trim() === '') ? null : Number(value);
       answered = (raw !== null && isNaN(raw)) ? null : raw;
-      const tolerance = (currentDrill.config?.tolerancePct || 10) / 100;
+      // Same resolver the server rescore uses, so this optimistic ✓/✗ and the
+      // band the drill UI states on screen can never disagree with the saved score.
+      const tolerance = resolveEstimationTolerancePct(currentDrill.config?.tolerancePct) / 100;
       correct = answered !== null && Math.abs(answered - q.expected) <= Math.abs(q.expected * tolerance);
     } else {
       const raw = (value === null || String(value).trim() === '') ? null : Number(value);

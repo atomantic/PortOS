@@ -134,7 +134,7 @@ export default function Drawer({
               tabs={tabList}
               activeTab={currentTab}
               onChange={changeTab}
-              mobileDropdown
+              mobileCompact
               mobileSelectId="drawer-tab-select"
               ariaLabel={title ? `${title} sections` : 'Sections'}
               controlsIdPrefix="drawer-tabpanel"

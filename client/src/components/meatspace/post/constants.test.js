@@ -29,14 +29,23 @@ describe('appliedNumeracyAnswerCorrect', () => {
     unitAliases: { meters: 'm', kilometers: 'km' },
   };
 
-  it('accepts a compatible equivalent unit and rejects a missing unit', () => {
+  // Must stay in step with correctAppliedAnswer in server/lib/postAppliedNumeracy.js:
+  // this mirror drives the in-session feedback the server later re-scores.
+  it('accepts a compatible equivalent unit and reads a bare number as the requested unit', () => {
     expect(appliedNumeracyAnswerCorrect('1.5 km', unitQuestion)).toBe(true);
-    expect(appliedNumeracyAnswerCorrect('1500', unitQuestion)).toBe(false);
+    expect(appliedNumeracyAnswerCorrect('1500', unitQuestion)).toBe(true);
+    expect(appliedNumeracyAnswerCorrect('1.5', unitQuestion)).toBe(false);
+    expect(appliedNumeracyAnswerCorrect('1500 bananas', unitQuestion)).toBe(false);
   });
 
   it('accepts an equivalent fraction and rejects a zero denominator', () => {
     expect(appliedNumeracyAnswerCorrect('2/4', { expected: 0.5 })).toBe(true);
     expect(appliedNumeracyAnswerCorrect('2/0', { expected: 0.5 })).toBe(false);
+  });
+
+  it('ignores a redundant noun on a question that has no unit of its own', () => {
+    expect(appliedNumeracyAnswerCorrect('72 cards', { expected: 72 })).toBe(true);
+    expect(appliedNumeracyAnswerCorrect('71 cards', { expected: 72 })).toBe(false);
   });
 });
 

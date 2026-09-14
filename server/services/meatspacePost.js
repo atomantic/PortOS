@@ -11,7 +11,7 @@ import { EventEmitter } from 'events';
 import { atomicWrite, PATHS, ensureDir, readJSONFile } from '../lib/fileUtils.js';
 import { deepMerge } from '../lib/objects.js';
 import { LLM_DRILL_TYPES, MEMORY_DRILL_TYPES, POST_SUPPORTED_MEMORY_TYPES } from '../lib/postValidation.js';
-import { nBackBalancedAccuracy } from '../lib/postScoring.js';
+import { nBackBalancedAccuracy, resolveEstimationTolerancePct } from '../lib/postScoring.js';
 import { normalizeHistoricalPostLlmEvaluation, normalizePostLlmEvaluation } from '../lib/postLlmContracts.js';
 import { resolveTopicForDrillType, isTopicEnabled, isMemoryItemEnabled } from '../lib/postTopics.js';
 import {
@@ -1719,11 +1719,14 @@ export function generateSerialSubtraction(start, subtrahend = 7, steps = 10, sta
   return { type: 'serial-subtraction', config: { startValue: startVal, subtrahend, steps }, questions };
 }
 
+// Random integer in [min, max], inclusive.
+function between(min, max) {
+  return Math.floor(Math.random() * (max - min + 1)) + min;
+}
+
 // Random integer with exactly `digits` digits (1 → 1-9, 2 → 10-99, …).
 function randInt(digits) {
-  const maxVal = Math.pow(10, digits) - 1;
-  const minVal = digits > 1 ? Math.pow(10, digits - 1) : 1;
-  return Math.floor(Math.random() * (maxVal - minVal + 1)) + minVal;
+  return between(digits > 1 ? Math.pow(10, digits - 1) : 1, Math.pow(10, digits) - 1);
 }
 
 /**
@@ -1792,26 +1795,29 @@ export function generatePowers(bases, maxExponent = 10, count = 8, level = null,
   return { type: 'powers', config: { bases, maxExponent, count }, questions };
 }
 
+const MIN_ESTIMATION_DIFFERENCE = 100;
+
+// Subtraction operands, larger first and at least MIN_ESTIMATION_DIFFERENCE
+// apart. Two independently-drawn 3-digit numbers land closer than that about a
+// fifth of the time, and a PERCENTAGE tolerance of a tiny difference is a
+// sub-unit band — `509 - 499` grades to ±1 at the default 10%, exact arithmetic
+// wearing an estimation label. Keeping the answer itself 3-digit is what rules
+// that out; how precise the drillee must then be is the tolerance's job to say,
+// and the drill UI states it. Ordering the pair also settles whether a
+// `309 - 925` prompt wants 616 or -616.
+function estimationSubtractionPair() {
+  const hi = between(100 + MIN_ESTIMATION_DIFFERENCE, 999);
+  return [hi, between(100, hi - MIN_ESTIMATION_DIFFERENCE)];
+}
+
 export function generateEstimation(count = 5, tolerancePct) {
   const ops = ['+', '-', 'x'];
   const questions = [];
   for (let i = 0; i < count; i++) {
-    const a = Math.floor(Math.random() * 900) + 100; // 100-999
-    const b = Math.floor(Math.random() * 900) + 100;
     const op = ops[Math.floor(Math.random() * ops.length)];
-    let expected;
-    let prompt;
-    if (op === '+') {
-      expected = a + b;
-      prompt = `${a} + ${b}`;
-    } else if (op === '-') {
-      expected = a - b;
-      prompt = `${a} - ${b}`;
-    } else {
-      expected = a * b;
-      prompt = `${a} x ${b}`;
-    }
-    questions.push({ prompt, expected });
+    const [a, b] = op === '-' ? estimationSubtractionPair() : [randInt(3), randInt(3)];
+    const expected = op === '+' ? a + b : op === '-' ? a - b : a * b;
+    questions.push({ prompt: `${a} ${op} ${b}`, expected });
   }
   const config = { count };
   if (tolerancePct != null) config.tolerancePct = tolerancePct;
@@ -2138,7 +2144,7 @@ export function scoreDrill(type, questions, timeLimitMs, config = {}) {
     if (expected == null || answered == null || isNaN(answered)) {
       correct = false;
     } else if (type === 'estimation') {
-      const tolerance = ((config.tolerancePct ?? 10) / 100);
+      const tolerance = resolveEstimationTolerancePct(config.tolerancePct) / 100;
       correct = Math.abs(answered - expected) <= Math.abs(expected * tolerance);
     } else {
       correct = answered === expected;

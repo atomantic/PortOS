@@ -59,7 +59,7 @@ describe('PostDrillRunner Applied Numeracy', () => {
       timeExpired: vi.fn(),
     }} />);
 
-    const input = screen.getByLabelText('Your numeric answer and unit when requested');
+    const input = screen.getByLabelText('Your numeric answer');
     expect(input).toHaveAttribute('type', 'text');
     expect(input).toHaveAttribute('inputmode', 'decimal');
   });
@@ -101,5 +101,72 @@ describe('PostDrillRunner multi-blank recall', () => {
       { index: 1, value: null },
       { index: 2, value: 'fox' },
     ]);
+  });
+});
+
+describe('PostDrillRunner estimation precision', () => {
+  const estimationSession = (overrides = {}) => ({
+    currentDrill: {
+      type: 'estimation',
+      config: { count: 5, tolerancePct: 10 },
+      questions: [{ prompt: '925 - 309', expected: 616 }],
+      timeLimitSec: 120,
+    },
+    currentQuestionIndex: 0,
+    currentDrillIndex: 0,
+    drillCount: 1,
+    state: 'drilling',
+    isTraining: false,
+    lastAnswer: null,
+    submitAnswer: vi.fn(),
+    skipQuestion: vi.fn(),
+    acknowledgeAnswer: vi.fn(),
+    timeExpired: vi.fn(),
+    ...overrides,
+  });
+
+  it('states the tolerance and the precision it implies beside the question', () => {
+    render(<PostDrillRunner session={estimationSession()} />);
+
+    expect(screen.getByText('Within 10% counts — 2 significant figures is close enough')).toBeInTheDocument();
+    expect(screen.getByLabelText('Your estimate')).toBeInTheDocument();
+    expect(screen.getByPlaceholderText('Estimate')).toBeInTheDocument();
+  });
+
+  it('tracks a tightened tolerance rather than hardcoding the default band', () => {
+    render(<PostDrillRunner session={estimationSession({
+      currentDrill: {
+        type: 'estimation',
+        config: { count: 5, tolerancePct: 3 },
+        questions: [{ prompt: '925 - 309', expected: 616 }],
+        timeLimitSec: 120,
+      },
+    })} />);
+
+    expect(screen.getByText('Within 3% counts — 3 significant figures is close enough')).toBeInTheDocument();
+  });
+
+  it('repeats the rule with the answer key so a near miss reads as a near miss', () => {
+    render(<PostDrillRunner session={estimationSession({
+      isTraining: true,
+      lastAnswer: { prompt: '925 - 309', expected: 616, answered: 500, correct: false },
+    })} />);
+
+    expect(screen.getByText('616')).toBeInTheDocument();
+    expect(screen.getByText('Within 10% counts — 2 significant figures is close enough')).toBeInTheDocument();
+  });
+
+  it('leaves an exactly-graded drill alone', () => {
+    render(<PostDrillRunner session={estimationSession({
+      currentDrill: {
+        type: 'multiplication',
+        config: { count: 5 },
+        questions: [{ prompt: '12 x 13', expected: 156 }],
+        timeLimitSec: 120,
+      },
+    })} />);
+
+    expect(screen.queryByText(/significant figure/)).not.toBeInTheDocument();
+    expect(screen.getByLabelText('Your answer')).toBeInTheDocument();
   });
 });

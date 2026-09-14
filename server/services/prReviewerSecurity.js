@@ -22,9 +22,12 @@ import {
   LINKED_ISSUE_STANDARD_BODY_MAX_CHARS,
   linkedIssueIntentContent,
   linkedIssueIntentFingerprint,
-  modelAbuseContentFingerprint,
   normalizeLinkedIssues,
 } from '../lib/modelAbuseGuard.js';
+// The screened surface and its fingerprint have ONE definition, because the
+// coordinator recomputes the same value from a fresh forge read before it acts.
+// Never rebuild either shape here.
+import { screenedPullRequestContent, screenedPullRequestFingerprint } from '../lib/prReviewContent.js';
 import { screenUntrustedContent } from './untrustedContent.js';
 import { safeJSONParse } from '../lib/fileUtils.js';
 
@@ -256,26 +259,24 @@ const formatSecurityFindings = (findings) => findings.map((finding) => (
   `${finding.severity} — ${finding.location}: ${finding.reason}`
 )).join('\n');
 
-const contentFor = (pr, diff) => [
-  'Pull request title:',
-  pr.title,
-  'Pull request description:',
-  pr.body,
-  'Complete unified diff:',
-  diff,
-].join('\n\n');
+const structuralVerdict = (findings) => ({
+  ok: true,
+  safe: false,
+  findings: findings.map((finding) => ({
+    severity: 'blocking',
+    category: finding.category,
+    location: 'external-content',
+    reason: `${finding.path}:${finding.line} — ${finding.detail}`,
+  })),
+  model: 'Deterministic hidden-content checks (structural diff gate)',
+  layers: { deterministic: 'blocked', classifier: 'not-run', verdict: 'validated' },
+});
 
-const contentFingerprintFor = (pr, diff) => modelAbuseContentFingerprint(
-  'pull-request',
-  { number: pr?.number, headSha: pr?.headRefOid },
-  contentFor(pr, diff),
-);
-
-const reportFor = (pr, diff, verdict) => ({
+const reportFor = (pr, diff, commits, verdict) => ({
   number: pr.number,
   url: pr.url,
   headRefOid: pr.headRefOid,
-  contentFingerprint: contentFingerprintFor(pr, diff),
+  contentFingerprint: screenedPullRequestFingerprint(pr, diff, commits),
   updatedAt: pr.updatedAt,
   passed: verdict.safe === true,
   safe: verdict.safe === true,
@@ -288,6 +289,20 @@ const reportFor = (pr, diff, verdict) => ({
   chunkCount: Number.isInteger(verdict.chunkCount) ? verdict.chunkCount : null,
   minBenignScore: Number.isFinite(verdict.minBenignScore) ? verdict.minBenignScore : null,
 });
+
+/**
+ * Commit messages are screened content, but they cannot ride the bulk listing:
+ * GitHub prices `commits` on `gh pr list` at the query's LIMIT rather than its
+ * hit count, so at the 200-PR cap it trips the 500,000 potential-node ceiling
+ * and the whole listing is refused. Read the log per PR, in the scan.
+ */
+async function fetchPullRequestCommits(number, repoSpec) {
+  const raw = await execGh([
+    'pr', 'view', String(number), '--repo', repoSpec, '--json', 'commits',
+  ]).catch(() => null);
+  const parsed = safeJSONParse(raw, null);
+  return Array.isArray(parsed?.commits) ? parsed.commits : null;
+}
 
 /**
  * Scan every currently-open external PR in order. The complete input is sent
@@ -310,14 +325,26 @@ export async function runPrReviewerSecurityScan({ app, target = null, largeInput
   const reviewedPrs = [];
   const reviewInputs = [];
   let hasFindings = false;
+  // Loaded at the call site so the widely-imported preflight module does not
+  // statically instantiate the diff scanner (import-budget #6156).
+  const { scanDiffForHiddenContent, STRUCTURAL_HIDDEN_CONTENT_CATEGORIES } = await import('../lib/diffHiddenContentScan.js');
+  const structuralCategorySet = new Set(STRUCTURAL_HIDDEN_CONTENT_CATEGORIES);
+  const structuralFindingsFrom = (diff) => scanDiffForHiddenContent(diff)
+    .filter((finding) => structuralCategorySet.has(finding.category));
   // Named by the verdicts, not the module constant: a scan that ran only the
   // deterministic layer must not be recorded as classified by Prompt Guard.
   let guardModel = MODEL_ABUSE_GUARD.name;
   let guardRevision = MODEL_ABUSE_GUARD.revision;
   for (const pr of resolvedTarget.prs) {
     if (pr.inputComplete === false || pr.linkedIssues?.some(issue => issue.truncated)) return failure('security-scan-linked-issue-too-large', { reviewedPrs, scanKey });
-    const diff = await execGh(['pr', 'diff', String(pr.number), '--repo', resolvedTarget.repoSpec]).catch(() => null);
+    const [diff, commits] = await Promise.all([
+      execGh(['pr', 'diff', String(pr.number), '--repo', resolvedTarget.repoSpec]).catch(() => null),
+      fetchPullRequestCommits(pr.number, resolvedTarget.repoSpec),
+    ]);
     if (diff === null) return failure('security-scan-diff-unavailable', { reviewedPrs, scanKey });
+    // Fail closed on an unreadable commit log: screening a PR as though it had
+    // no commit messages is the hidden-content gap the log was added to close.
+    if (commits === null) return failure('security-scan-pr-commits-unreadable', { reviewedPrs, scanKey });
     if (typeof diff !== 'string' || diff.length > SECURITY_SCAN_MAX_DIFF_CHARS) {
       return failure('security-scan-diff-too-large', { reviewedPrs, scanKey });
     }
@@ -333,17 +360,26 @@ export async function runPrReviewerSecurityScan({ app, target = null, largeInput
     // halves separately — the diff by `contentFingerprint`, the issue text by
     // `eligibilityFacts.intentFingerprint`.
     const intentContent = linkedIssueIntentContent(pr.linkedIssues);
-    const content = intentContent ? `${contentFor(pr, diff)}\n\n${intentContent}` : contentFor(pr, diff);
+    const prContent = screenedPullRequestContent(pr, diff, commits);
+    const content = intentContent ? `${prContent}\n\n${intentContent}` : prContent;
     if (content.length > SECURITY_SCAN_MAX_DIFF_CHARS) {
       return failure('security-scan-input-too-large', { reviewedPrs, scanKey });
     }
-    const screened = await screenUntrustedContent({ content, source: 'github-pr' });
+    // Structural findings (symlink out of the tree, new gitlink, non-media
+    // binary, inline script in markup) are not visible as text a model-abuse
+    // classifier can score, so they short-circuit before the classifier run.
+    // Title/body/commit injection still goes through the full screen when the
+    // diff itself is structurally clean.
+    const structural = structuralFindingsFrom(diff);
+    const screened = structural.length
+      ? { screening: structuralVerdict(structural) }
+      : await screenUntrustedContent({ content, source: 'github-pr' });
     const verdict = screened.screening || screened;
     if (!verdict.ok) return failure(verdict.code || 'security-scan-verdict-unavailable', { reviewedPrs, scanKey });
     guardModel = verdict.model || guardModel;
     guardRevision = verdict.revision ?? null;
 
-    const report = reportFor(pr, diff, verdict);
+    const report = reportFor(pr, diff, commits, verdict);
     reviewedPrs.push(report);
     if (reportChars(reviewedPrs) > SECURITY_SCAN_MAX_REPORT_CHARS) {
       return failure('security-scan-report-too-large', { reviewedPrs, scanKey });

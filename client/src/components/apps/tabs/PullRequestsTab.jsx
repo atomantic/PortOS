@@ -542,7 +542,7 @@ export default function PullRequestsTab({ appId, appName }) {
                           <Link
                             key={kind}
                             to={taskHref || '/cos/agents'}
-                            className="px-3 py-1.5 bg-port-success/20 text-port-success hover:bg-port-success/30 border border-port-border rounded-lg text-xs flex items-center gap-1.5 transition-colors"
+                            className="px-3 py-1.5 bg-port-success/20 text-port-success hover:bg-port-success/30 border border-port-border rounded-lg text-xs flex items-center gap-1.5 whitespace-nowrap transition-colors"
                           >
                             <Icon size={14} /> {label}: {ACTION_STATUS_LABEL[actionStatus] || 'Queued — view'}
                           </Link>
@@ -555,7 +555,7 @@ export default function PullRequestsTab({ appId, appName }) {
                           onClick={() => onQueue(pullRequest)}
                           disabled={actionStatus === 'queuing'}
                           title={title(forgeLabel, pullRequest.number, appName)}
-                          className="px-3 py-1.5 bg-port-accent/20 text-port-accent enabled:hover:bg-port-accent/30 border border-port-border rounded-lg text-xs flex items-center gap-1.5 disabled:opacity-50 transition-colors"
+                          className="px-3 py-1.5 bg-port-accent/20 text-port-accent enabled:hover:bg-port-accent/30 border border-port-border rounded-lg text-xs flex items-center gap-1.5 whitespace-nowrap disabled:opacity-50 transition-colors"
                         >
                           {actionStatus === 'queuing'
                             ? <Loader2 size={14} className="animate-spin" />

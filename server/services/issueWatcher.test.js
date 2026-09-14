@@ -68,11 +68,11 @@ import {
   isTaskOutputPayload,
   parseAddedDiffLines,
   processTaskOutput,
-  pullRequestContentFingerprint,
   MAX_PENDING_APPROVAL_TICKS,
   MAX_PENDING_ISSUE_COMMENT_TICKS,
 } from './issueWatcher.js';
 import { linkedIssueIntentFingerprint } from '../lib/modelAbuseGuard.js';
+import { screenedPullRequestFingerprint } from '../lib/prReviewContent.js';
 import { MAX_PR_REMEDIATION_ATTEMPTS } from '../lib/prHandbackPolicy.js';
 import { IN_PROGRESS_LABEL, dispatchLabelSpec } from '../lib/dispatchLabels.js';
 
@@ -102,6 +102,9 @@ function pullRequest(overrides = {}) {
     deletions: 0,
     baseRefName: 'main',
     baseRefOid: 'b'.repeat(40),
+    // Part of the screened content: a PR read without its commit log cannot be
+    // verified against the fingerprint the preflight stamped.
+    commits: [{ messageHeadline: 'Contributor update', messageBody: '' }],
     headRefName: 'contributor/update',
     headRefOid: 'a'.repeat(40),
     mergeable: 'MERGEABLE',
@@ -452,7 +455,7 @@ describe('processTaskOutput', () => {
       pullRequests: [{
         number: 7,
         headSha: 'a'.repeat(40),
-        contentFingerprint: pullRequestContentFingerprint(pullRequest(), DIFF),
+        contentFingerprint: screenedPullRequestFingerprint(pullRequest(), DIFF),
       }],
     },
   };
@@ -1047,7 +1050,7 @@ describe('processTaskOutput', () => {
     const approval = {
       number: 7,
       headSha: 'a'.repeat(40),
-      contentFingerprint: pullRequestContentFingerprint(pullRequest(), DIFF),
+      contentFingerprint: screenedPullRequestFingerprint(pullRequest(), DIFF),
       url: 'https://github.com/o/r/pull/7',
       ciPolicy: 'required',
       rebaseRequired: false,
@@ -1116,7 +1119,7 @@ describe('handing back a PR the coordinator could not merge', () => {
       pullRequests: [{
         number: 7,
         headSha: 'a'.repeat(40),
-        contentFingerprint: pullRequestContentFingerprint(pullRequest(), DIFF),
+        contentFingerprint: screenedPullRequestFingerprint(pullRequest(), DIFF),
       }],
     },
   };
@@ -1314,7 +1317,7 @@ describe('handing back a PR the coordinator could not merge', () => {
         approvedPullRequests: [{
           number: 7,
           headSha: 'a'.repeat(40),
-          contentFingerprint: pullRequestContentFingerprint(pullRequest(WRITABLE_FORK), DIFF),
+          contentFingerprint: screenedPullRequestFingerprint(pullRequest(WRITABLE_FORK), DIFF),
           authorLogin: 'contributor',
           url: 'https://github.com/o/r/pull/7',
           ciPolicy: 'required',

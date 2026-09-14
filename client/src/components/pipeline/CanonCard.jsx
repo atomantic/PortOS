@@ -468,6 +468,7 @@ export default function CanonCard({
       onPreview={onPreview ? (visibleFilename) => onPreview(visibleFilename || thumbnailRef) : null}
       onRender={onRender}
       canRender={canRender}
+      disabledHint="Give this entry a description to enable rendering"
     />
   );
 

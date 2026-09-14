@@ -146,8 +146,7 @@ export default function Brain() {
         tabs={TABS}
         activeTab={activeTab}
         onChange={handleTabChange}
-        mobileDropdown
-        mobileSelectId="brain-sections-select"
+        mobileCompact
         ariaLabel="Brain sections"
       />
 

@@ -1,16 +1,18 @@
 import { appListQuerySchema, appQualityQuerySchema, appQualityHistoryQuerySchema, appQualityFederationQuerySchema } from '../../lib/auditQuality.js';
 import { exportPortosQuality } from '../../services/appQualityFederation.js';
 import { enrichAppsWithQuality, getAppQualityHistory } from '../../services/appQuality.js';
+import { publishAppQualitySnapshot } from '../../services/appQualitySnapshotFile.js';
 /**
  * App CRUD + status enrichment + archive lifecycle.
  *
- *   GET    /                 → App[]  (PM2-status-enriched)
- *   GET    /:id              → App    (PM2-status-enriched, + appVersion)
- *   POST   /                 → App
- *   PUT    /:id              → App    (ports written back to ecosystem config)
- *   DELETE /:id              → 204  (removes the PortOS registry association only)
- *   POST   /:id/archive      → App
- *   POST   /:id/unarchive    → App
+ *   GET    /                     → App[]  (PM2-status-enriched)
+ *   GET    /:id                  → App    (PM2-status-enriched, + appVersion)
+ *   POST   /                     → App
+ *   PUT    /:id                  → App    (ports written back to ecosystem config)
+ *   DELETE /:id                  → 204  (removes the PortOS registry association only)
+ *   POST   /:id/archive          → App
+ *   POST   /:id/unarchive        → App
+ *   POST   /:id/quality-snapshot → commits the app's `.quality.json` snapshot
  */
 
 import { Router } from 'express';
@@ -69,7 +71,14 @@ router.get('/', asyncHandler(async (req, res) => {
 
 router.get('/:id/quality-history', loadApp, asyncHandler(async (req, res) => {
   const { days } = validateRequest(appQualityHistoryQuerySchema, req.query);
-  res.json(await getAppQualityHistory(req.loadedApp.id, days));
+  res.json(await getAppQualityHistory(req.loadedApp, days));
+}));
+
+// POST /api/apps/:id/quality-snapshot - Commit this app's numeric snapshot into its
+// repo as `.quality.json`. Deliberately NOT gated on publishQualitySnapshot: the
+// toggle automates the audit hook, a manual call here is explicit intent.
+router.post('/:id/quality-snapshot', loadApp, asyncHandler(async (req, res) => {
+  res.json({ success: true, ...await publishAppQualitySnapshot(req.loadedApp) });
 }));
 
 // GET /api/apps/:id - Get single app
@@ -163,7 +172,7 @@ router.put('/:id', asyncHandler(async (req, res, next) => {
   // as a failed request instead of a 200 that leaves apps.json and PM2
   // disagreeing (the write throws and bubbles to the error middleware).
   if (existing && usesPm2(existing.type) && await pathExists(existing.repoPath)) {
-    const { persistFailed, uiPortOverride } = await applyEcosystemPortEdits(existing, data);
+    const { persistFailed, uiPortOverride, portCollision } = await applyEcosystemPortEdits(existing, data);
 
     // Pin the stored uiPort to the derived value for served-by-API apps. This
     // both overwrites the drawer's echoed/stale UI field and keeps the stored
@@ -173,6 +182,16 @@ router.put('/:id', asyncHandler(async (req, res, next) => {
     // the derived value self-corrects on every save.
     if (uiPortOverride !== undefined) {
       data.uiPort = uiPortOverride;
+    }
+
+    // Collision gate: the edit would give one process a port another process in
+    // the same ecosystem config already holds. Nothing was written; reject so the
+    // user fixes the conflict rather than discovering it as a failed PM2 restart.
+    if (portCollision) {
+      throw new ServerError(
+        `Port ${portCollision.newPort} is already used by the ${portCollision.heldBy} process (${portCollision.heldLabel}) in ${existing.name}'s ecosystem config — pick a port no other process claims.`,
+        { status: 422, code: 'PORT_COLLISION' }
+      );
     }
 
     // Honesty gate: if the user changed a port we could NOT write to the

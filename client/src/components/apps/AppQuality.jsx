@@ -1,11 +1,35 @@
 import AppQualityRunner from './AppQualityRunner';
 import AppQualityHistory from './AppQualityHistory';
-import { Fragment } from 'react';
+import { Fragment, useState } from 'react';
 import { Link, useSearchParams } from 'react-router';
 import { formatDateShort } from '../../utils/formatters';
+import { publishAppQualitySnapshot } from '../../services/apiApps';
+import toast from '../ui/Toast';
+
+// The server refuses rather than fails when there is nothing to publish, so each
+// `published: false` reason gets its own plain-language explanation.
+const PUBLISH_SKIPPED = {
+  'no-changes': 'Snapshot already up to date in .quality.json',
+  'no-evidence': 'No quality evidence yet — run an audit first',
+  'no-repo-path': 'App repo path is not a git repository',
+  'not-a-repo': 'App repo path is not a git repository',
+};
 
 export default function AppQuality({ app, detail = false }) {
   const [params] = useSearchParams();
+  const [publishing, setPublishing] = useState(false);
+  // User-initiated, so every outcome toasts (the wrapper is silent).
+  const publishSnapshot = async () => {
+    setPublishing(true);
+    const result = await publishAppQualitySnapshot(app.id).catch(err => ({ failure: err }));
+    setPublishing(false);
+    if (result?.failure) return toast.error(result.failure.message || 'Could not publish the quality snapshot');
+    if (result?.published) {
+      const shortHash = result.hash ? ` (${result.hash.slice(0, 7)})` : '';
+      return toast.success(`Quality snapshot committed to .quality.json${shortHash}`);
+    }
+    toast(PUBLISH_SKIPPED[result?.reason] || 'Nothing to publish to .quality.json');
+  };
   const quality = app.quality;
   const selectedCategory = quality?.categories?.find(category => category.id === params.get('qualityCheck'));
   const runnerLink = categoryId => {
@@ -59,7 +83,30 @@ export default function AppQuality({ app, detail = false }) {
             : 'No audit assessment has been saved. Completed maintenance tasks only supply a score when they return a valid quality report. Earlier runs are not scored retroactively; run a scheduled audit to collect an assessment.'}
         </p>
       )}
-      <div className="flex flex-wrap gap-4 text-sm text-port-accent"><Link to="/cos/schedule" className="hover:underline">Scheduled audit runners</Link><Link to="/cos/agents" className="hover:underline">View agents</Link></div>
+      <div className="flex flex-wrap items-center gap-2">
+        <Link
+          to="/cos/schedule"
+          className="inline-flex items-center rounded border border-port-border bg-port-bg/60 px-2.5 py-1.5 text-xs font-medium text-gray-200 transition-colors hover:border-port-accent hover:text-white"
+        >
+          Scheduled audit runners
+        </Link>
+        <Link
+          to="/cos/agents"
+          className="inline-flex items-center rounded border border-port-border bg-port-bg/60 px-2.5 py-1.5 text-xs font-medium text-gray-200 transition-colors hover:border-port-accent hover:text-white"
+        >
+          View agents
+        </Link>
+        {app.publishQualitySnapshot === true && (
+          <button
+            type="button"
+            onClick={publishSnapshot}
+            disabled={publishing}
+            className="inline-flex items-center rounded border border-port-accent bg-port-accent/15 px-2.5 py-1.5 text-xs font-medium text-port-accent transition-colors hover:bg-port-accent/25 disabled:opacity-40 disabled:cursor-not-allowed"
+          >
+            {publishing ? 'Publishing snapshot…' : 'Publish snapshot now'}
+          </button>
+        )}
+      </div>
       <div className="grid grid-cols-1 xl:grid-cols-2 gap-5 items-start">
       <div className="min-w-0 space-y-4">
         {!selectedCategory && runner}
@@ -69,12 +116,18 @@ export default function AppQuality({ app, detail = false }) {
         <section aria-label="Category breakdown" className="min-w-0">
           <h4 className="text-sm font-medium mb-2">Category breakdown</h4>
           <table className="w-full text-sm text-left">
-            <thead className="text-gray-400 sticky top-0 bg-port-card"><tr><th className="py-2 pr-3">Category</th><th className="pr-3">Score</th><th>Evidence</th></tr></thead>
+            <thead className="text-gray-400 sticky top-0 bg-port-card">
+              <tr>
+                <th className="py-2 px-3">Category</th>
+                <th className="py-2 px-3">Score</th>
+                <th className="py-2 px-3">Evidence</th>
+              </tr>
+            </thead>
             <tbody>{sortedCategories.map(category => (
               <Fragment key={category.id}><tr className={`border-t border-port-border align-top${score != null && category.score != null && category.coverage !== 'not-applicable' && category.score < score ? ' bg-port-warning/10' : ''}`}>
-                <th scope="row" className="py-2 pr-3 font-medium">{category.label}<Link className="block text-xs font-normal text-port-accent hover:underline" to={`/cos/schedule?task=${encodeURIComponent(category.id)}`} aria-label={`${category.label} runner`}>Runner settings</Link></th>
-                <td className="py-2 pr-3 whitespace-nowrap">{category.score == null ? '—' : `${category.score}/100`}</td>
-                <td className="py-2 text-xs text-gray-400">
+                <th scope="row" className="py-2.5 px-3 font-medium">{category.label}<Link className="block text-xs font-normal text-port-accent hover:underline" to={`/cos/schedule?task=${encodeURIComponent(category.id)}`} aria-label={`${category.label} runner`}>Runner settings</Link></th>
+                <td className="py-2.5 px-3 whitespace-nowrap">{category.score == null ? '—' : `${category.score}/100`}</td>
+                <td className="py-2.5 px-3 text-xs text-gray-400">
                   <div>{category.stale ? 'Stale · ' : ''}{category.coverage}{category.confidence && ` · ${category.confidence} confidence`}
                     {category.assessedAt && ` · ${formatDateShort(category.assessedAt)}`}</div>
                   <Link to={runnerLink(category.id)} aria-label={`Configure and run ${category.label}`} className="mt-2 inline-flex items-center rounded border border-port-accent bg-port-accent/15 px-2.5 py-1.5 text-xs font-medium text-port-accent transition-colors hover:bg-port-accent/25">Configure and run</Link>
@@ -90,7 +143,7 @@ export default function AppQuality({ app, detail = false }) {
                   {!category.sourcePeerId && category.agentId && <Link className="mt-2 inline-flex items-center rounded border border-port-border bg-port-bg/40 px-2.5 py-1.5 text-xs font-medium text-port-text-muted transition-colors hover:border-port-accent/60 hover:text-port-accent" to={`/cos/agents/${category.agentId}`} aria-label={`View audit run for ${category.label}`}>View audit run</Link>}
                 </td>
               </tr>
-              {selectedCategory?.id === category.id && <tr><td colSpan={3} className="pb-3">
+              {selectedCategory?.id === category.id && <tr><td colSpan={3} className="px-3 pb-3">
                 {runner}
               </td></tr>}
               </Fragment>

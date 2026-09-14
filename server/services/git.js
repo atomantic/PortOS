@@ -38,10 +38,18 @@ export {
 };
 
 /**
- * Get git status for a directory
+ * Get git status for a directory.
+ *
+ * `paths` scopes the answer to a pathspec, for a caller whose follow-up write
+ * is itself scoped — a repo-wide "is anything dirty?" does not answer "did THIS
+ * file change?", and a partial `git commit -- <path>` exits 1 when that path
+ * carries no change.
  */
-export async function getStatus(dir) {
-  const result = await execGit(['status', '--porcelain'], dir);
+export async function getStatus(dir, { paths = [] } = {}) {
+  const result = await execGit(
+    ['status', '--porcelain', ...(paths.length ? ['--', ...paths] : [])],
+    dir,
+  );
   // trimEnd (not trim): porcelain status codes use leading spaces (e.g. ' M' = unstaged)
   const lines = result.stdout.trimEnd().split('\n').filter(Boolean);
 
@@ -139,11 +147,16 @@ export async function unstageFiles(dir, files) {
 }
 
 /**
- * Create commit
+ * Create commit.
+ *
+ * `paths` scopes the commit to those repo-relative files (`git commit -m … -- <pathspecs>`),
+ * so an automated commit can never sweep in whatever the user happened to have staged.
+ * Same `:(literal)` pathspec handling as stageFiles. Omitted = commit the index as-is.
  */
-export async function commit(dir, message) {
+export async function commit(dir, message, { paths = [] } = {}) {
+  const pathspecs = paths.length ? ['--', ...validateFilePaths(paths).map(toLiteralPathspec)] : [];
   // Using spawn with -m argument passes message safely without shell interpretation
-  const result = await execGit(['commit', '-m', message], dir);
+  const result = await execGit(['commit', '-m', message, ...pathspecs], dir);
   const hashMatch = result.stdout.match(/\[[\w-]+ ([a-f0-9]+)\]/);
   return {
     hash: hashMatch ? hashMatch[1] : null,

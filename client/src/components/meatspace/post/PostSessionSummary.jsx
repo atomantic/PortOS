@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { CheckCircle, ChevronDown, ChevronUp, Dumbbell } from 'lucide-react';
-import { LLM_DRILL_TYPES, DRILL_TO_DOMAIN, DOMAINS, DRILL_LABELS, nBackBalancedAccuracy } from './constants';
+import { LLM_DRILL_TYPES, DRILL_TO_DOMAIN, DOMAINS, DRILL_LABELS, nBackBalancedAccuracy, drillResultConfig } from './constants';
 import DrillQuestionReview from './DrillQuestionReview';
 
 function fillBlankAttempts(questions) {
@@ -187,7 +187,12 @@ export default function PostSessionSummary({ drillResults = [], sessionScore = 0
                 {/* Math / Memory / Cognitive per-question review */}
                 {!isLlm && isExpanded && (result.questions?.length > 0) && (
                   <div className="mt-2 ml-2 bg-port-bg border border-port-border rounded p-3">
-                    <DrillQuestionReview type={result.type} questions={result.questions} drillData={result.drillData} />
+                    <DrillQuestionReview
+                      type={result.type}
+                      questions={result.questions}
+                      drillData={result.drillData}
+                      config={drillResultConfig(result)}
+                    />
                   </div>
                 )}
               </div>

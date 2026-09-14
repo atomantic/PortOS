@@ -41,6 +41,36 @@ describe('selectLocalImageModel', () => {
     ];
     expect(selectLocalImageModel(undefined, models).id).toBe('custom');
   });
+
+  // The install-wide pin (settings.imageGen.local.modelId, Settings → Media →
+  // Local). Without this rung the setting is a control that silently does
+  // nothing for any render whose body omits modelId.
+  it('prefers the install pin over the dev default when the caller omits a model', () => {
+    const models = [
+      { id: 'dev', hardwareCompatibility: { state: 'available' } },
+      { id: 'klein', hardwareCompatibility: { state: 'available' } },
+    ];
+    expect(selectLocalImageModel(undefined, models, 'klein').id).toBe('klein');
+  });
+
+  it('lets the caller\'s own model outrank the install pin', () => {
+    const models = [
+      { id: 'dev', hardwareCompatibility: { state: 'available' } },
+      { id: 'klein', hardwareCompatibility: { state: 'available' } },
+    ];
+    expect(selectLocalImageModel('dev', models, 'klein').id).toBe('dev');
+  });
+
+  it('skips an install pin this host cannot run rather than rejecting the render', () => {
+    // The user who saved the pin is not the caller of this render, so a stale
+    // or incompatible pin must degrade, never 400.
+    const models = [
+      { id: 'dev', hardwareCompatibility: { state: 'available' } },
+      { id: 'klein', hardwareCompatibility: { state: 'unavailable' } },
+    ];
+    expect(selectLocalImageModel(undefined, models, 'klein').id).toBe('dev');
+    expect(selectLocalImageModel(undefined, models, 'retired-model').id).toBe('dev');
+  });
 });
 
 beforeEach(() => {

@@ -172,3 +172,25 @@ export async function closeStolenIdleReviewCard(cardId, admittedTask) {
   const { finishPreflightDispatch } = await import('./preflightTaskCard.js');
   return finishPreflightDispatch(cardId, admittedTask?.id ?? null);
 }
+
+/**
+ * Priority 1 (user) tier: is this pending user row runnable unattended?
+ *
+ * The user tier otherwise spawns EVERY pending row, so `autoApproved` carried no
+ * weight in the user file — and that is exactly where its `false` is most
+ * informative. A strict row always parses auto-approved, so `false` on a user row
+ * can only come from the parser's RECOVERY match (taskParser.js), which cannot
+ * tell a genuine legacy row from a task-shaped SENTENCE sitting at column 0 inside
+ * a legacy multi-line description body (#7300). Spawning that is an agent run
+ * minted from prose. The row is preserved and stays pending for a human.
+ *
+ * `undefined` is NOT that claim — a task built without the field (most user rows)
+ * stays runnable, so this narrows nothing that was already running.
+ *
+ * Lives beside `isIdleTierEligible` for the same reason: both spawn engines run
+ * their own copy of the user tier, and anything the two must agree on belongs in
+ * ONE body rather than in a pair of blocks a grep test has to police.
+ */
+export function isUserTaskRunnableUnattended(task) {
+  return task?.autoApproved !== false;
+}

@@ -2,10 +2,7 @@ import { describe, it, expect, vi, afterEach } from 'vitest';
 import {
   LOCAL_RUNTIMES,
   isLocalInstanceEndpoint,
-  localBackendForProvider,
   localRuntimeForProvider,
-  localRuntimeKind,
-  modelPinIsOffered,
   normalizeOpenAiBaseUrl,
 } from './localProviderRuntime.js';
 import { opencodeLocalBaseUrl } from './opencodeConfig.js';
@@ -51,68 +48,6 @@ describe('isLocalInstanceEndpoint', () => {
     expect(isLocalInstanceEndpoint('localhost:1234')).toBe(false); // no scheme — not a URL
     expect(isLocalInstanceEndpoint('')).toBe(false);
     expect(isLocalInstanceEndpoint(null)).toBe(false);
-  });
-});
-
-describe('localRuntimeKind', () => {
-  it('reads the explicit backing markers first', () => {
-    expect(localRuntimeKind({ command: 'opencode', llamaBacked: true })).toBe('llama');
-    expect(localRuntimeKind({ command: 'opencode', mtplxBacked: true })).toBe('mtplx');
-    expect(localRuntimeKind({ command: 'opencode', vllmBacked: true })).toBe('vllm');
-    expect(localRuntimeKind({ command: 'opencode', sglangBacked: true })).toBe('sglang');
-    expect(localRuntimeKind({ command: 'opencode', ollamaBacked: true })).toBe('ollama');
-    // claude-ollama is not an OpenCode provider but is still Ollama-backed.
-    expect(localRuntimeKind({ command: 'claude', ollamaBacked: true })).toBe('ollama');
-    // The marker is what makes a RENAMED LM Studio wrapper still resolve. The
-    // name/endpoint fallback below would miss this record entirely — it carries
-    // neither an `lmstudio` id/name nor a :1234 endpoint of its own.
-    expect(localRuntimeKind({ command: 'opencode', name: 'Coding box', lmstudioBacked: true })).toBe('lmstudio');
-  });
-
-  it('treats OrcaRouter as remote, not a local daemon', () => {
-    expect(localRuntimeKind({ command: 'opencode', orcarouterBacked: true })).toBeNull();
-  });
-
-  it('falls back to the endpoint/name heuristic for plain API providers', () => {
-    expect(localRuntimeKind({ type: 'api', id: 'ollama', endpoint: 'http://localhost:11434/v1' })).toBe('ollama');
-    expect(localRuntimeKind({ type: 'api', id: 'x', endpoint: 'http://localhost:1234/v1' })).toBe('lmstudio');
-    expect(localRuntimeKind({ type: 'api', id: 'x', name: 'LM Studio local' })).toBe('lmstudio');
-  });
-
-  it('does NOT claim a peer machine daemon as a local runtime', () => {
-    // A provider pointed at another box on the LAN/tailnet used to match on the
-    // bare port, so the card offered to install Ollama HERE for a daemon that
-    // lives — and may simply be switched off — over there.
-    expect(localRuntimeKind({ type: 'api', id: 'x', endpoint: 'http://192.0.2.10:11434/v1' })).toBeNull();
-    expect(localRuntimeKind({ type: 'api', id: 'x', endpoint: 'http://192.0.2.10:1234/v1' })).toBeNull();
-    // Every loopback / bind-all spelling still resolves.
-    expect(localRuntimeKind({ type: 'api', id: 'x', endpoint: 'http://0.0.0.0:1234' })).toBe('lmstudio');
-    expect(localRuntimeKind({ type: 'api', id: 'x', endpoint: 'http://[::1]:1234/v1' })).toBe('lmstudio');
-  });
-
-  it('returns null for a remote provider and for junk input', () => {
-    expect(localRuntimeKind({ type: 'api', id: 'openai', endpoint: 'https://api.openai.com/v1' })).toBeNull();
-    expect(localRuntimeKind(null)).toBeNull();
-    expect(localRuntimeKind('nope')).toBeNull();
-  });
-
-  it('recognizes Slotstream by id, name, and dedicated port — never 11434', () => {
-    expect(localRuntimeKind({ id: 'slotstream' })).toBe('slotstream');
-    expect(localRuntimeKind({ name: 'Slotstream (local)' })).toBe('slotstream');
-    expect(localRuntimeKind({ endpoint: `http://127.0.0.1:${PORTS.SLOTSTREAM}/v1` })).toBe('slotstream');
-    expect(localRuntimeKind({ endpoint: 'http://127.0.0.1:11434/v1' })).toBe('ollama');
-  });
-
-  // #6466 — the shipped `mtplx` API record (`type: 'api'`, no `mtplxBacked`
-  // marker) is the one shape none of the earlier fallbacks reach, so it needs
-  // its own id-based arm rather than a generic port check.
-  it('recognizes the shipped mtplx API record by id, with no port arm', () => {
-    expect(localRuntimeKind({ id: 'mtplx', type: 'api', endpoint: 'http://127.0.0.1:8000/v1' })).toBe('mtplx');
-    // :8000 is a generic port a user's own local API could equally be bound
-    // to — MTPLX's is user-configurable, so an unrelated `id` on that same
-    // port must never resolve as MTPLX the way slotstream's DEDICATED port
-    // resolves above.
-    expect(localRuntimeKind({ id: 'some-local-api', type: 'api', endpoint: 'http://127.0.0.1:8000/v1' })).toBeNull();
   });
 });
 
@@ -241,77 +176,5 @@ describe('localRuntimeForProvider', () => {
     expect(runtime.kind).toBe('mtplx');
     expect(runtime.label).toBe('MTPLX');
     expect(runtime.endpoint).toBe('http://127.0.0.1:8000/v1');
-  });
-});
-
-describe('modelPinIsOffered', () => {
-  it('passes through when the provider lists no models of its own', () => {
-    expect(modelPinIsOffered({ id: 'custom-api', models: [] }, 'anything')).toBe(true);
-    expect(modelPinIsOffered({ id: 'custom-api' }, 'anything')).toBe(true);
-  });
-
-  it('validates a pin against the listed catalog for a non-local provider', () => {
-    const provider = { id: 'openai', models: ['gpt-x', 'gpt-y'] };
-    expect(modelPinIsOffered(provider, 'gpt-x')).toBe(true);
-    expect(modelPinIsOffered(provider, 'gpt-z')).toBe(false);
-  });
-
-  it('passes through for a local-daemon provider, whatever the pin', () => {
-    // Ollama/LM Studio's `models` array is a cached snapshot; the daemon on
-    // this machine is the authority, so a pin outside the stale list must
-    // still be considered offered.
-    const provider = { command: 'opencode', ollamaBacked: true, models: ['stale-model'] };
-    expect(modelPinIsOffered(provider, 'freshly-pulled-model')).toBe(true);
-  });
-
-  // #6466 — decision: the shipped mtplx API record is a pass-through too, once
-  // `localRuntimeKind` names it. `mtplx serve` names its process after whatever
-  // checkpoint is actually loaded, so the record's static `models` entry is the
-  // same kind of stale snapshot Ollama's is — judging a pin against it would
-  // reject a checkpoint that is installed and serving.
-  it('passes through for the shipped mtplx API record, whatever the pin', () => {
-    const provider = {
-      id: 'mtplx',
-      type: 'api',
-      endpoint: 'http://127.0.0.1:8000/v1',
-      models: ['mtplx-qwen38-27b-optimized-speed'],
-    };
-    expect(modelPinIsOffered(provider, 'a-different-checkpoint-the-daemon-now-serves')).toBe(true);
-  });
-
-  it('is id-based, not locality-gated, matching the existing ollama/slotstream id checks', () => {
-    // `localRuntimeKind`'s id-based arms (ollama, slotstream, and now mtplx)
-    // do not themselves check the endpoint's locality — the callers that need
-    // that distinction (`isMtplxProvider`, `localRuntimeForProvider`) apply it
-    // on top. `modelPinIsOffered` calls `localRuntimeKind` raw, so an `id:
-    // 'mtplx'` record pointed at another machine passes through here exactly
-    // as an `id: 'ollama'` one already does — not a new gap this issue opens.
-    const provider = {
-      id: 'mtplx',
-      type: 'api',
-      endpoint: 'http://192.0.2.10:8000/v1',
-      models: ['mtplx-qwen38-27b-optimized-speed'],
-    };
-    expect(modelPinIsOffered(provider, 'a-different-checkpoint')).toBe(true);
-  });
-});
-
-describe('localBackendForProvider', () => {
-  // Moved here from services/localModelHealing.js, which now re-exports it —
-  // these cases pin the behavior its healing path depends on.
-  it('matches by id, name, and local endpoint port', () => {
-    expect(localBackendForProvider({ id: 'ollama' })).toBe('ollama');
-    expect(localBackendForProvider({ name: 'My Ollama' })).toBe('ollama');
-    expect(localBackendForProvider({ endpoint: 'http://localhost:11434/v1' })).toBe('ollama');
-    expect(localBackendForProvider({ id: 'lmstudio' })).toBe('lmstudio');
-    expect(localBackendForProvider({ name: 'lm-studio' })).toBe('lmstudio');
-    expect(localBackendForProvider({ endpoint: 'http://127.0.0.1:1234/v1' })).toBe('lmstudio');
-  });
-
-  it('declines a remote host, an unknown port, and junk', () => {
-    expect(localBackendForProvider({ endpoint: 'http://192.0.2.10:11434/v1' })).toBeNull();
-    expect(localBackendForProvider({ endpoint: 'http://localhost:9999' })).toBeNull();
-    expect(localBackendForProvider({ id: 'anthropic', endpoint: 'https://api.anthropic.com/v1' })).toBeNull();
-    expect(localBackendForProvider(null)).toBeNull();
   });
 });

@@ -9,13 +9,15 @@
 import { useState, useEffect, useCallback, useId, useRef } from 'react';
 import {
   Save, Image as ImageIcon, Zap, Wrench, Cloud, Cpu, Globe, AlertTriangle,
-  Sparkles, Terminal, Key, Check, Trash2, SlidersHorizontal
+  Sparkles, Terminal, Key, Check, Trash2, SlidersHorizontal, Bot, FlaskConical
 } from 'lucide-react';
 import toast from '../ui/Toast';
 import FormField from '../ui/FormField';
 import TabPills from '../ui/TabPills';
 import BrailleSpinner from '../BrailleSpinner';
 import LocalSetupPanel from './LocalSetupPanel';
+import LocalRuntimeStatus from '../imageGen/LocalRuntimeStatus';
+import useLocalImageRuntime from '../../hooks/useLocalImageRuntime';
 import useDrawerTab from '../../hooks/useDrawerTab';
 import { isLoopbackHost } from '../../lib/loopbackHost.js';
 import { PORTS } from '../../lib/ports.js';
@@ -24,11 +26,13 @@ import {
   registerTool, updateTool, getToolsList,
   saveHfToken, clearHfToken,
 } from '../../services/api';
-import { deriveAvailableBackends, imageGenReadiness, isCloudCliMode, IMAGE_GEN_MODE, AGY_IMAGEGEN_DEFAULT_MODEL, AGY_IMAGEGEN_IMAGE_MODEL, CODEX_IMAGEGEN_DEFAULT_EFFORT, CODEX_IMAGEGEN_DEFAULT_MODEL, GROK_ASPECT_RATIOS, RENDER_TARGET_BACKEND_AUTO, RENDER_TARGET_OPTIONS, VIDEO_RENDER_MODES, modeLabel, normalizeRenderPinValue, supportsCloudModelOverride } from '../../lib/imageGenBackends';
+import { deriveAvailableBackends, imageGenReadiness, isCloudCliMode, IMAGE_GEN_MODE, LOCAL_IMAGEGEN_DEFAULT_MODEL, AGY_IMAGEGEN_DEFAULT_MODEL, AGY_IMAGEGEN_IMAGE_MODEL, CODEX_IMAGEGEN_DEFAULT_EFFORT, CODEX_IMAGEGEN_DEFAULT_MODEL, GROK_ASPECT_RATIOS, RENDER_TARGET_BACKEND_AUTO, RENDER_TARGET_OPTIONS, VIDEO_RENDER_MODES, localModelSelectOptions, modeLabel, normalizeRenderPinValue, supportsCloudModelOverride } from '../../lib/imageGenBackends';
 import { resolveCleanersFromConfig } from '../../lib/imageCleaners';
+import { withUnlistedOption } from '../../lib/withUnlistedOption';
 import { useMediaJobSse } from '../../hooks/useMediaJobSse';
 import { useAgyModels } from '../../hooks/useAgyModels';
 import { useHfTokenStatus } from '../../hooks/useHfTokenStatus';
+import useLocalImageModels from '../../hooks/useLocalImageModels';
 import { effortLevelsForProvider } from '../../utils/providers';
 
 const SDAPI_TOOL_ID = 'sdapi';
@@ -67,11 +71,11 @@ export const MEDIA_TABS = [
   { id: 'external', label: 'External', icon: Cloud, probeMode: IMAGE_GEN_MODE.EXTERNAL },
   { id: 'local', label: 'Local', icon: Cpu, probeMode: IMAGE_GEN_MODE.LOCAL },
   { id: 'codex', label: 'Codex CLI', icon: Terminal, probeMode: IMAGE_GEN_MODE.CODEX },
-  { id: 'grok', label: 'Grok CLI', icon: Sparkles, probeMode: IMAGE_GEN_MODE.GROK },
-  { id: 'agy', label: 'Agy CLI', icon: Terminal, probeMode: IMAGE_GEN_MODE.AGY },
+  { id: 'grok', label: 'Grok CLI', icon: Zap, probeMode: IMAGE_GEN_MODE.GROK },
+  { id: 'agy', label: 'Agy CLI', icon: Bot, probeMode: IMAGE_GEN_MODE.AGY },
   { id: 'tokens', label: 'Tokens', icon: Key },
   { id: 'expose', label: 'Expose', icon: Globe },
-  { id: 'test', label: 'Test', icon: Sparkles },
+  { id: 'test', label: 'Test', icon: FlaskConical },
 ];
 const MEDIA_TAB_IDS = MEDIA_TABS.map((t) => t.id);
 
@@ -114,8 +118,28 @@ export function ImageGenTab() {
   // reactor.inc fast-h3 API key (#6214) — same usability-gate shape as fal above.
   const [reactorApiKey, setReactorApiKey] = useState('');
   const videoGenSliceRef = useRef({});
+  // Same round-trip guard as videoGenSliceRef, for the same reason: the PUT
+  // replaces `imageGen` wholesale, and `imageGen.local` carries hand-edit-only
+  // keys this tab never renders — steps / guidance / quantize, read by
+  // fableLoom/production.js. Rebuilding the slice from the rendered fields
+  // alone silently wiped them on every Media save.
+  const localSliceRef = useRef({});
   const [sdapiUrl, setSdapiUrl] = useState('');
   const [pythonPath, setPythonPath] = useState('');
+  // Install-wide default local image model (`settings.imageGen.local.modelId`).
+  // '' = no pin, which the server resolves to LOCAL_IMAGEGEN_DEFAULT_MODEL.
+  // Every SERVER-side local-render caller reads this key (deckRender, sprite
+  // references, the pipeline visual stages, character sheets, FableLoom, and
+  // now selectLocalImageModel itself); until now it was only reachable by
+  // hand-editing settings.json. Client-side defaults in lib/pipelineImageDefaults
+  // and lib/wrImageDefaults still hardcode their own model and do not consult it.
+  const [localModelId, setLocalModelId] = useState('');
+  // Catalog for the picker, probed once the Local tab is mounted — the same
+  // "don't probe a tab nobody looked at" rule as the Agy list below.
+  // Hardware-incompatible entries are filtered out by the hook's fetch: a
+  // default this machine's runner refuses is a render error waiting to happen,
+  // and `checkLocalConnection` already reports it as unavailable.
+  const { models: localModels } = useLocalImageModels(localMounted);
   const [exposeA1111, setExposeA1111] = useState(false);
   // Codex CLI provider config — gated by `codexEnabled` so users without
   // a paid Codex plan that includes image_gen can hide the option entirely.
@@ -176,7 +200,7 @@ export function ImageGenTab() {
 
   // Snapshot of saved values so we can show the "dirty" state
   const [saved, setSaved] = useState({
-    mode: IMAGE_GEN_MODE.EXTERNAL, sdapiUrl: '', pythonPath: '', exposeA1111: false,
+    mode: IMAGE_GEN_MODE.EXTERNAL, sdapiUrl: '', pythonPath: '', localModelId: '', exposeA1111: false,
     codexEnabled: false, codexPath: '', codexModel: '', codexEffort: '', codexParallelLimit: 1,
     grokEnabled: false, grokPath: '', grokAspectRatio: '',
     agyEnabled: false, agyPath: '', agyModel: '',
@@ -264,6 +288,7 @@ export function ImageGenTab() {
         const m = ig.mode || IMAGE_GEN_MODE.EXTERNAL;
         const url = normalizeUrl(ig.external?.sdapiUrl || ig.sdapiUrl);
         const py = ig.local?.pythonPath || '';
+        const localModel = ig.local?.modelId || '';
         const expose = ig.expose?.a1111 === true;
         const cx = ig.codex || {};
         const cxEnabled = cx.enabled === true;
@@ -298,9 +323,11 @@ export function ImageGenTab() {
         setVideoGenDisplaySleep(vgDisplaySleep);
         setFalApiKey(vgFalApiKey);
         setReactorApiKey(vgReactorApiKey);
+        localSliceRef.current = (ig.local && typeof ig.local === 'object') ? ig.local : {};
         videoGenSliceRef.current = vg;
         setSdapiUrl(url);
         setPythonPath(py);
+        setLocalModelId(localModel);
         setExposeA1111(expose);
         setCodexEnabled(cxEnabled);
         setCodexPath(cxPath);
@@ -317,7 +344,7 @@ export function ImageGenTab() {
         setCleanC2PAByMode(c2);
         setDenoiseByMode(dn);
         setSaved({
-          mode: m, sdapiUrl: url, pythonPath: py, exposeA1111: expose,
+          mode: m, sdapiUrl: url, pythonPath: py, localModelId: localModel, exposeA1111: expose,
           codexEnabled: cxEnabled, codexPath: cxPath, codexModel: cxModel, codexEffort: cxEffort,
           codexParallelLimit: cxParallel,
           grokEnabled: gkEnabled, grokPath: gkPath, grokAspectRatio: gkRatio,
@@ -337,6 +364,15 @@ export function ImageGenTab() {
       .catch(() => toast.error('Failed to load image gen settings'))
       .finally(() => setLoading(false));
   }, []);
+
+  // Shared with the per-record local-model picker (RecordRenderPinRow), which
+  // needs the same orphaned-pin handling: a pin the live catalog no longer
+  // lists still has to render as the selected option, or the select paints
+  // blank, reads as "install default", and a save silently drops a pin the
+  // server is still honouring.
+  const { options: localModelOptions, fallbackLabel: localDefaultLabel } = localModelSelectOptions(
+    localModels, localModelId,
+  );
 
   // Probe only while the Agy tab is actually open — the list spawns `agy models`
   // server-side, so an unopened tab must not pay for a child process.
@@ -364,6 +400,15 @@ export function ImageGenTab() {
   const statusReadiness = imageGenReadiness(status);
   const statusReady = statusReadiness === 'ready';
   const statusUnknown = statusReadiness === 'unknown';
+  // The Local tab's own verdict, for the model IT has pinned — independent of
+  // `status`, which follows whichever backend tab is active.
+  const localRuntime = useLocalImageRuntime(localModelId || LOCAL_IMAGEGEN_DEFAULT_MODEL);
+  // A pip install into the mflux interpreter flips the verdict for an mflux
+  // model, and neither probe can observe that on its own.
+  const onLocalPackagesChanged = useCallback(() => {
+    localRuntime.refresh();
+    checkStatus();
+  }, [localRuntime, checkStatus]);
 
   // Backends the Test Render picker may offer — derived from the SAVED slice,
   // not the live form, because a test render runs against what the server has
@@ -385,9 +430,11 @@ export function ImageGenTab() {
   // the derivation above (e.g. external with a blank URL) — the server would
   // still route the render there, so hiding it would make the select disagree
   // with what the button actually does.
-  const testModeOptions = savedBackends.some((b) => b.id === saved.mode)
-    ? savedBackends
-    : [{ id: saved.mode, label: modeLabel(saved.mode) }, ...savedBackends];
+  const testModeOptions = withUnlistedOption(
+    savedBackends,
+    saved.mode,
+    (id) => ({ id, label: modeLabel(id) }),
+  );
   // A pick that a later save disabled falls back to the saved default rather
   // than queueing a render that can only 400.
   const effectiveTestMode = testModeOptions.some((b) => b.id === testMode) ? testMode : saved.mode;
@@ -395,6 +442,7 @@ export function ImageGenTab() {
   const isDirty = mode !== saved.mode
     || normalizeUrl(sdapiUrl) !== saved.sdapiUrl
     || pythonPath !== saved.pythonPath
+    || localModelId !== saved.localModelId
     || exposeA1111 !== saved.exposeA1111
     || codexEnabled !== saved.codexEnabled
     || codexPath !== saved.codexPath
@@ -438,7 +486,17 @@ export function ImageGenTab() {
       imageGen: {
         mode,
         external: { sdapiUrl: url, cleanC2PA: cleanC2PAByMode.external, denoise: denoiseByMode.external },
-        local: { pythonPath: pythonPath || undefined, cleanC2PA: cleanC2PAByMode.local, denoise: denoiseByMode.local },
+        local: {
+          ...localSliceRef.current,
+          pythonPath: pythonPath || undefined,
+          // `undefined` drops the key so an un-pinned install keeps resolving
+          // through LOCAL_IMAGEGEN_DEFAULT_MODEL rather than persisting a ''
+          // that every `|| LOCAL_IMAGEGEN_DEFAULT_MODEL` read would have to
+          // keep coercing.
+          modelId: localModelId || undefined,
+          cleanC2PA: cleanC2PAByMode.local,
+          denoise: denoiseByMode.local,
+        },
         codex: {
           enabled: codexEnabled, codexPath: cxPath, model: cxModel, effort: cxEffort, parallelLimit: cxParallel,
           cleanC2PA: cleanC2PAByMode.codex, denoise: denoiseByMode.codex,
@@ -481,7 +539,7 @@ export function ImageGenTab() {
       // after a successful save (state has " codex " but `saved` was
       // updated with the trimmed "codex").
       setSaved({
-        mode, sdapiUrl: url || '', pythonPath, exposeA1111,
+        mode, sdapiUrl: url || '', pythonPath, localModelId, exposeA1111,
         codexEnabled, codexPath: cxPath || '', codexModel: cxModel || '', codexEffort: cxEffort || '',
         codexParallelLimit: cxParallel,
         grokEnabled, grokPath: gkPath || '', grokAspectRatio: gkRatio || '',
@@ -497,6 +555,7 @@ export function ImageGenTab() {
       // dirty check compares like against like after a save.
       setRenderDefaults(patch.renderDefaults);
       videoGenSliceRef.current = patch.videoGen;
+      localSliceRef.current = patch.imageGen.local;
       if (cxParallel !== codexParallelLimit) {
         setCodexParallelLimit(cxParallel);
         setParallelLimitDraft(String(cxParallel));
@@ -657,8 +716,7 @@ export function ImageGenTab() {
         activeTab={mediaTab}
         onChange={setMediaTab}
         variant="pills"
-        mobileDropdown
-        mobileSelectId="media-settings-tab-select"
+        mobileCompact
         ariaLabel="Media generation settings sections"
         controlsIdPrefix="media-settings-tabpanel"
       />
@@ -930,7 +988,54 @@ export function ImageGenTab() {
             missing packages directly. HF model weights stream into the standard <code>~/.cache/huggingface</code>
             and are surfaced in <a href="/models/media" className="text-port-accent hover:underline">Models → Media</a>.
           </p>
-          <LocalSetupPanel pythonPath={pythonPath} onPythonPathChange={setPythonPath} />
+          {/* The verdict first, then the interpreter detail below it. The
+              packages panel only ever probes the mflux interpreter, so on its
+              own it reported "All required packages installed" for a machine
+              whose pinned model renders through the SHARED torch venv and could
+              not run at all. This is the same diagnosis the Image Gen status
+              pill and the renderer's pre-flight refusal use — settingsLink is
+              off because this IS the settings form. */}
+          <LocalRuntimeStatus
+            runtime={localRuntime.runtime}
+            loading={localRuntime.loading}
+            onRefresh={localRuntime.refresh}
+            settingsLink={false}
+          />
+          <LocalSetupPanel pythonPath={pythonPath} onPythonPathChange={setPythonPath} onPackagesChanged={onLocalPackagesChanged} />
+          <FormField
+            label="Default model"
+            labelClassName="block text-xs font-medium text-gray-400 mb-1"
+          >
+            <select
+              value={localModelId}
+              onChange={(e) => setLocalModelId(e.target.value)}
+              disabled={localModels === null}
+              className="w-full bg-port-bg border border-port-border rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-port-accent disabled:opacity-50"
+            >
+              <option value="">
+                {localModels === null ? 'Loading models…' : `Install default (${localDefaultLabel})`}
+              </option>
+              {localModelOptions.map((m) => <option key={m.id} value={m.id}>{m.name || m.id}</option>)}
+            </select>
+          </FormField>
+          {/* Deliberately does NOT point at the Defaults tab: its per-surface
+              model pin is gated on supportsCloudModelOverride and hidden for
+              Local, and renderDefaults[target].imageModel only ever reaches
+              resolveCloudProviderConfig — so for local renders it is inert.
+              What actually outranks this pin is a per-record/per-render model
+              choice, which is what the sentence names. */}
+          <p className="text-xs text-gray-500">
+            Used by every local render that doesn&apos;t choose its own model — the Image Gen
+            form, deck cards, sprite references, pipeline visuals, character sheets and
+            FableLoom. A model picked on one of those surfaces still wins for that render.
+            Weights download on first use; check what&apos;s already cached in{' '}
+            <a href="/models/media" className="text-port-accent hover:underline">Models → Media</a>.
+          </p>
+          {localModels?.length === 0 && (
+            <p role="status" className="text-xs text-port-warning">
+              No local image models are compatible with this machine.
+            </p>
+          )}
           <CleanersToggles
             cleanC2PA={cleanC2PAByMode.local}
             denoise={denoiseByMode.local}

@@ -7,16 +7,12 @@
 // every existing deep link keeps resolving and there is no second source of
 // truth for "what is open".
 //
-// Mobile is the case the issue measured: below `sm` the whole thing collapses
-// to ONE grouped `<select>` (~40px, no horizontal scanning) instead of a
-// 19-wide scrolling strip, which is what buys the fold back. TabPills'
-// `mobileDropdown` can't serve this — it renders a flat option list, and the
-// grouping is the entire point — so the select is spelled out here with
-// `<optgroup>` headers.
+// The grouping is also what makes this fit a phone: `mobileCompact` collapses
+// each row to icons below `sm`, and because only the active group's sections
+// render, that is five group icons over at most six section icons — never the
+// 19-wide scroll the groups were introduced to kill.
 import TabPills from '../ui/TabPills';
 import { SECTION_GROUPS, groupSections, sectionGroupId } from './constants';
-
-const SELECT_ID = 'digital-twin-section-select';
 
 export default function SectionNav({ activeSection, onChange }) {
   const activeGroupId = sectionGroupId(activeSection);
@@ -31,42 +27,24 @@ export default function SectionNav({ activeSection, onChange }) {
   };
 
   return (
-    <>
-      <div className="sm:hidden shrink-0 border-b border-port-border p-2">
-        <label htmlFor={SELECT_ID} className="sr-only">Digital Twin section</label>
-        <select
-          id={SELECT_ID}
-          value={activeSection}
-          onChange={(e) => onChange(e.target.value)}
-          className="w-full bg-port-card border border-port-border rounded px-3 py-2 text-white text-sm focus:outline-none focus:border-port-accent min-h-[40px]"
-        >
-          {SECTION_GROUPS.map((group) => (
-            <optgroup key={group.id} label={group.label}>
-              {groupSections(group).map((t) => (
-                <option key={t.id} value={t.id}>{t.label}</option>
-              ))}
-            </optgroup>
-          ))}
-        </select>
-      </div>
-
-      <div className="hidden sm:block shrink-0">
-        <TabPills
-          tabs={SECTION_GROUPS}
-          activeTab={activeGroupId}
-          onChange={handleGroupChange}
-          ariaLabel="Digital Twin groups"
-        />
-        <TabPills
-          tabs={sections}
-          activeTab={activeSection}
-          onChange={onChange}
-          variant="pills"
-          size="sm"
-          ariaLabel={`${activeGroup.label} sections`}
-          className="m-2"
-        />
-      </div>
-    </>
+    <div className="shrink-0">
+      <TabPills
+        tabs={SECTION_GROUPS}
+        activeTab={activeGroupId}
+        onChange={handleGroupChange}
+        mobileCompact
+        ariaLabel="Digital Twin groups"
+      />
+      <TabPills
+        tabs={sections}
+        activeTab={activeSection}
+        onChange={onChange}
+        variant="pills"
+        size="sm"
+        mobileCompact
+        ariaLabel={`${activeGroup.label} sections`}
+        className="m-2"
+      />
+    </div>
   );
 }

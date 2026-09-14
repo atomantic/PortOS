@@ -37,6 +37,12 @@ import { getWorkForSync } from '../writersRoom/sync.js';
 import { createKeyCachedQueue } from '../../lib/createKeyCachedQueue.js';
 import { peerSyncEvents, findPeerById } from './peerSyncShared.js';
 import { isStr } from '../../lib/textUtils.js';
+import { mapWithConcurrency } from '../../lib/mapWithConcurrency.js';
+
+// In-flight gallery-image hashes while building one deck's manifest. Sized to
+// libuv's default 4-thread fs pool with a little headroom, so a deck push can't
+// starve unrelated fs work in the process.
+const DECK_HASH_CONCURRENCY = 8;
 
 
 // --- Asset manifest -----------------------------------------------------
@@ -592,6 +598,43 @@ export async function buildBoardAssetManifest(board) {
     }
   }
   return [...dedup.values()];
+}
+
+/**
+ * Hash every gallery image a deck (#decks) references so a subscribed peer can
+ * pull the bytes and actually SEE the deck: each card's render history
+ * (`imageRefs`, which already includes `primaryImageRef`) plus the style
+ * samples the vision step analyzed (`samples[].imageRef`). De-duped by
+ * filename — the same render can be a card ref and a sample — and each
+ * missing-local-file entry is skipped silently (mirrors buildBoardAssetManifest:
+ * a null-hash entry would make every receiver re-request bytes the sender
+ * cannot fulfil).
+ *
+ * Hashing is bounded rather than a bare `Promise.all`: a deck is by far the
+ * widest asset fan-out in the system — 78 tarot cards x DECK_CARD_IMAGE_REFS_MAX
+ * (24) render-history refs is ~1.9k gallery files, and each hash stats and may
+ * stream-read the file. Firing those at once exhausts libuv's 4-thread fs pool
+ * (and the fd table), which stalls every other fs call in the process including
+ * the one serving the UI bundle. The other builders here need no cap because
+ * their fan-out is bounded by construction (one headshot, one cover, two refs
+ * per mood-board item).
+ */
+export async function buildDeckAssetManifest(deck) {
+  const filenames = new Set();
+  for (const card of Array.isArray(deck?.cards) ? deck.cards : []) {
+    for (const ref of Array.isArray(card?.imageRefs) ? card.imageRefs : []) {
+      const safe = sanitizeAssetFilename(ref);
+      if (safe) filenames.add(safe);
+    }
+    const primary = sanitizeAssetFilename(card?.primaryImageRef);
+    if (primary) filenames.add(primary);
+  }
+  for (const sample of Array.isArray(deck?.samples) ? deck.samples : []) {
+    const safe = sanitizeAssetFilename(sample?.imageRef);
+    if (safe) filenames.add(safe);
+  }
+  const entries = await mapWithConcurrency([...filenames], DECK_HASH_CONCURRENCY, hashImageForManifest);
+  return entries.filter(Boolean);
 }
 
 export async function buildAssetManifestForSeries(series, issues, linkedCollection = null) {

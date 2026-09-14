@@ -100,10 +100,11 @@ toasts on throw). **Custom catch ⇒ `silent: true`** — otherwise toasts fire 
 
 | File | Purpose |
 |---|---|
-| `apiImageVideo.js` | Image-gen local backend extras; bounded image/mixed gallery pages, global facets and collection summaries, exact-reference `getGalleryImages`, plus models, LoRAs, cancel and delete. |
+| `apiImageVideo.js` | Image-gen local backend extras; bounded image/mixed gallery pages, global facets and collection summaries, exact-reference `getGalleryImages`, one image's original-vs-cleaned variant set via `listImageVariants`, plus models, LoRAs, cancel and delete. |
 | `apiLoraTraining.js` | Character LoRA training — datasets (CRUD, upload, generate, slice, caption), training runs (start/list/cancel + status), character→LoRA link lookup. |
 | `apiMedia.js` | Screenshots + media assets. Also owns the multi-file upload orchestration — `processScreenshotUploads` / `processAttachmentUploads` — moved from `utils/fileUpload.js` since they perform network I/O, not pure transforms. `utils/fileUpload.js` keeps only the pure helpers/constants and no longer re-exports these. |
 | `apiMediaJobs.js` | Media generation job tracking + `refineMediaPrompt` / `promptFromMedia` (vision reverse-prompt). |
+| `apiDecks.js` | Decks (playing-card / tarot designer) — deck + card CRUD, sample-design style analysis, universe casting + prompt generation, single/batch card renders. |
 | `apiCreativeDirector.js` | Creative Director (video production). |
 | `apiCreativeCommission.js` | Creative Commissions (Autonomous Creation Engine — standing recurring briefs). |
 | `apiFableLoom.js` | FableLoom branching narratives — loom/episode/scene-node/transition CRUD, deterministic graph validation, AI authoring lanes, and the bounded editorial/playthrough autopilot lifecycle. |

@@ -31,6 +31,7 @@ import { mergePR, resolveForgeForRepo } from './git.js';
 import { addNotification, NOTIFICATION_TYPES, PRIORITY_LEVELS } from './notifications.js';
 import { normalizeEligibilityFacts } from './modelAbuseGuard.js';
 import { issuePrerequisiteWaived, linkedIssueIntentFingerprint } from '../lib/modelAbuseGuard.js';
+import { screenedPullRequestFingerprint } from '../lib/prReviewContent.js';
 import { trimTo } from '../lib/textUtils.js';
 
 const IN_PROGRESS_LABEL_SPEC = dispatchLabelSpec(IN_PROGRESS_LABEL);
@@ -491,7 +492,7 @@ async function gatherIssueComments(ctx, { since, trust, state }) {
         commentAuthor: author, commentBody: '', commentUrl: issue.html_url || null,
         claimRequest: false, claimAssignable: false,
       };
-      const fingerprint = abuseFingerprint('issue-comment', item, issueAbuseInput(item));
+      const fingerprint = abuseFingerprint(item, issueAbuseInput(item));
       if (state.issueSnapshots?.[issue.number] !== fingerprint) comments.push(item);
     }
     const issueComments = await listPaginated(ctx, `repos/${ctx.repoFullName}/issues/${issue.number}/comments`, [
@@ -572,8 +573,11 @@ async function readPullRequest(ctx, number) {
     // (`prHandbackPolicy.js`). `headRepository`/`headRepositoryOwner` are where
     // a fork's head branch actually lives, which is what lets the remediation
     // agent's worktree attach to it at all (#6064). `assignees` keeps that
-    // assignment idempotent across scheduled sweeps.
-    '--json', 'id,number,title,body,url,state,isDraft,author,assignees,labels,files,additions,deletions,baseRefName,baseRefOid,headRefName,headRefOid,isCrossRepository,maintainerCanModify,headRepository,headRepositoryOwner,mergeable,mergeStateStatus,statusCheckRollup',
+    // assignment idempotent across scheduled sweeps. `commits` is part of the
+    // screened content, so `screenedPullRequestFingerprint` cannot verify a PR
+    // read without it — safe to ask for on a single PR, unlike the bulk listing
+    // the preflight has to keep it out of (GraphQL node budget).
+    '--json', 'id,number,title,body,url,state,isDraft,author,assignees,labels,commits,files,additions,deletions,baseRefName,baseRefOid,headRefName,headRefOid,isCrossRepository,maintainerCanModify,headRepository,headRepositoryOwner,mergeable,mergeStateStatus,statusCheckRollup',
   ], ctx);
 }
 
@@ -697,49 +701,30 @@ const issueAbuseInput = (item) => [
   'External comment:', item.commentBody,
 ].join('\n\n');
 
-const pullRequestAbuseInput = (item) => [
-  'Pull request title:', item.title,
-  'Pull request description:', item.body,
-  'Complete unified diff:', item.diff,
-].join('\n\n');
-
-function abuseFingerprint(kind, item, content) {
-  const identity = kind === 'issue-comment'
-    ? { kind, issueNumber: item.issueNumber, commentId: item.commentId }
-    : { kind, number: item.number, headSha: item.headSha };
-  return modelAbuseContentFingerprint(kind, identity, content);
+// Only issue comments reach the abuse screen here; external PR intake belongs
+// exclusively to pr-reviewer, which stamps its own fingerprint.
+function abuseFingerprint(item, content) {
+  const kind = 'issue-comment';
+  return modelAbuseContentFingerprint(kind, { kind, issueNumber: item.issueNumber, commentId: item.commentId }, content);
 }
 
-/**
- * Stable identity for the exact PR title, description, and diff screened by
- * the model-abuse boundary. The output hook compares this with a fresh forge
- * read before it can review, rebase, or merge anything.
- */
-export function pullRequestContentFingerprint(pr, diff) {
-  return abuseFingerprint(
-    'pull-request',
-    { number: pr?.number, headSha: pr?.headSha || pr?.headRefOid },
-    pullRequestAbuseInput({ title: fullText(pr?.title), body: fullText(pr?.body), diff: fullText(diff) }),
-  );
-}
-
-function modelAbuseReport(kind, item, fingerprint, verdict) {
+function modelAbuseReport(item, fingerprint, verdict) {
   const report = {
-    kind,
+    kind: 'issue-comment',
     fingerprint,
     safe: verdict.safe === true,
     code: verdict.code || null,
     findingCount: Array.isArray(verdict.findings) ? verdict.findings.length : 0,
     findings: Array.isArray(verdict.findings) ? verdict.findings : [],
     guardId: verdict.guardId || MODEL_ABUSE_GUARD_ID,
-    ...(kind === 'issue-comment'
-      ? { issueNumber: item.issueNumber, commentId: item.commentId, commentUrl: item.commentUrl || null }
-      : { number: item.number, headSha: item.headSha, url: item.url || null }),
+    issueNumber: item.issueNumber,
+    commentId: item.commentId,
+    commentUrl: item.commentUrl || null,
   };
   return report;
 }
 
-async function screenModelAbuseInputs({ app, state, issueComments, pullRequests }) {
+async function screenModelAbuseInputs({ app, state, issueComments }) {
   const previous = new Map(
     (Array.isArray(state.modelAbuse?.blocked) ? state.modelAbuse.blocked : [])
       .filter((report) => report?.fingerprint && report.safe !== true)
@@ -748,29 +733,25 @@ async function screenModelAbuseInputs({ app, state, issueComments, pullRequests 
   const blocked = [];
   const newBlocked = [];
   const safeComments = [];
-  const safePullRequests = [];
   const safeCommentFingerprints = new Map();
-  const safePullRequestFingerprints = new Map();
 
-  const screenOne = async (kind, item, content) => {
+  const screenOne = async (item, content) => {
     if (typeof content !== 'string' || content.length > MODEL_ABUSE_GUARD_MAX_INPUT_CHARS) {
       return { ok: false, code: 'security-guard-input-too-large' };
     }
-    const fingerprint = kind === 'pull-request'
-      ? pullRequestContentFingerprint(item, item.diff)
-      : abuseFingerprint(kind, item, content);
+    const fingerprint = abuseFingerprint(item, content);
     const known = previous.get(fingerprint);
     if (known) return { ok: true, safe: false, report: known, reused: true };
     const { screenUntrustedContent } = await import('./untrustedContent.js');
-    const screened = await screenUntrustedContent({ content, source: kind === 'issue-comment' ? 'github-issue' : 'github-pr' });
+    const screened = await screenUntrustedContent({ content, source: 'github-issue' });
     const verdict = screened.screening || screened;
     if (!verdict.ok) return { ok: false, code: verdict.code || 'security-guard-unavailable' };
-    const report = modelAbuseReport(kind, item, fingerprint, verdict);
+    const report = modelAbuseReport(item, fingerprint, verdict);
     return { ok: true, safe: verdict.safe === true, report, reused: false };
   };
 
   for (const item of issueComments) {
-    const result = await screenOne('issue-comment', item, issueAbuseInput(item));
+    const result = await screenOne(item, issueAbuseInput(item));
     if (!result.ok) return { ok: false, code: result.code };
     if (result.safe) {
       safeComments.push(item);
@@ -781,19 +762,6 @@ async function screenModelAbuseInputs({ app, state, issueComments, pullRequests 
       if (!result.reused) newBlocked.push(result.report);
     }
   }
-  for (const item of pullRequests) {
-    const result = await screenOne('pull-request', item, pullRequestAbuseInput(item));
-    if (!result.ok) return { ok: false, code: result.code };
-    if (result.safe) {
-      safePullRequests.push(item);
-      safePullRequestFingerprints.set(item.number, result.report.fingerprint);
-    }
-    else {
-      blocked.push(result.report);
-      if (!result.reused) newBlocked.push(result.report);
-    }
-  }
-
   if (newBlocked.length > 0) {
     await addNotification({
       type: NOTIFICATION_TYPES.AGENT_WARNING,
@@ -810,9 +778,7 @@ async function screenModelAbuseInputs({ app, state, issueComments, pullRequests 
   return {
     ok: true,
     safeComments,
-    safePullRequests,
     safeCommentFingerprints,
-    safePullRequestFingerprints,
     blocked,
     newBlocked,
   };
@@ -826,7 +792,7 @@ async function assignSafeVolunteers(ctx, comments) {
     if (!item.claimAssignable || assignedIssues.has(item.issueNumber)) continue;
     const current = await readCurrentIssueComment(ctx, item);
     if (!current || current.issueAssignees.length > 0
-      || abuseFingerprint('issue-comment', current, issueAbuseInput(current)) !== abuseFingerprint('issue-comment', item, issueAbuseInput(item))) continue;
+      || abuseFingerprint(current, issueAbuseInput(current)) !== abuseFingerprint(item, issueAbuseInput(item))) continue;
     const succeeded = await assignVolunteer(ctx, item.issueNumber, item.commentAuthor);
     if (succeeded) {
       assignedIssues.add(item.issueNumber);
@@ -897,6 +863,7 @@ async function keepPendingApproval(app, approval, remaining, reason, { patch = {
 async function processPendingApprovals(app, ctx) {
   const approvals = Array.isArray(readState(app).approvedPullRequests) ? readState(app).approvedPullRequests : [];
   const remaining = [];
+  const drops = createDropLog();
   const handbacks = createHandbackTracker(app);
   let changed = false;
   for (const approval of approvals) {
@@ -911,6 +878,7 @@ async function processPendingApprovals(app, ctx) {
       continue;
     }
     if (pr.headRefOid !== approval.headSha) {
+      drops.record(pr.number, 'a new head commit replaced the approved one');
       changed = true;
       continue;
     }
@@ -919,11 +887,12 @@ async function processPendingApprovals(app, ctx) {
       typeof approvedDiff !== 'string'
       || approvedDiff.length > MAX_DIFF_CHARS
       || !approval.contentFingerprint
-      || pullRequestContentFingerprint(pr, approvedDiff) !== approval.contentFingerprint
+      || screenedPullRequestFingerprint(pr, approvedDiff) !== approval.contentFingerprint
     ) {
       // A maintainer can edit the title/body or a contributor can replace the
       // head after the review. An old approval is never enough to merge the
       // new content, so discard the pending action and require a fresh run.
+      drops.record(pr.number, 'its content no longer matches the approved revision');
       changed = true;
       continue;
     }
@@ -1032,8 +1001,7 @@ export async function gatherIssueWatcherInput({ app } = {}) {
   const since = firstRun ? new Date(0).toISOString() : state.cursor;
   const trust = await createGithubActorTrust({ runGh: (args) => runGh(args, ctx), host: ctx.host, repoFullName: ctx.repoFullName });
   const issueResult = await gatherIssueComments(ctx, { since, trust, state });
-  const pullRequests = []; // External PR intake belongs exclusively to pr-reviewer.
-  if (!issueResult.ok || pullRequests === null) {
+  if (!issueResult.ok) {
     await persistState(app.id, { lastCheckedAt: startedAt, lastError: 'activity-read-failed' });
     return { skip: { reason: 'activity-read-failed' } };
   }
@@ -1061,7 +1029,7 @@ export async function gatherIssueWatcherInput({ app } = {}) {
     lastCheckedAt: startedAt,
     lastError: null,
   });
-  if (pendingIssueComments.length === 0 && pullRequests.length === 0) {
+  if (pendingIssueComments.length === 0) {
     return { skip: { reason: firstRun ? 'baselined' : 'no-cognitive-activity' } };
   }
 
@@ -1075,7 +1043,6 @@ export async function gatherIssueWatcherInput({ app } = {}) {
     // Bound work per tick without truncating any record. Unselected entries
     // remain pending; every selected item is screened in full before an action.
     issueComments: takeIssueCommentsWithinBudget(pendingIssueComments),
-    pullRequests,
   });
   if (!screened.ok) {
     await persistState(app.id, {
@@ -1114,8 +1081,7 @@ export async function gatherIssueWatcherInput({ app } = {}) {
   const safeIssueComments = takeIssueCommentsWithinBudget(screened.safeComments.filter((item) => (
     !assignmentResult.assignedCommentKeys.has(`${item.issueNumber}:${item.commentId}`)
   )));
-  const safePullRequests = screened.safePullRequests;
-  if (safeIssueComments.length === 0 && safePullRequests.length === 0) {
+  if (safeIssueComments.length === 0) {
     return {
       skip: {
         reason: screened.blocked.length > 0 ? 'model-abuse-content-withheld' : 'no-cognitive-activity',
@@ -1136,12 +1102,9 @@ export async function gatherIssueWatcherInput({ app } = {}) {
           commentId,
           contentFingerprint: screened.safeCommentFingerprints.get(`${issueNumber}:${commentId}`),
         })),
-        pullRequests: safePullRequests.map(({ number, headSha, diffTruncated }) => ({
-          number,
-          headSha,
-          diffTruncated,
-          contentFingerprint: screened.safePullRequestFingerprints.get(number),
-        })),
+        // External PR intake belongs exclusively to pr-reviewer, which builds its
+        // own hook metadata; the analysis schema pins this to an empty array.
+        pullRequests: [],
       },
     },
   };
@@ -1257,6 +1220,64 @@ function mergeApproval(existing, approval) {
   return [...existing.filter((entry) => entry.number !== approval.number), approval];
 }
 
+/**
+ * Records a completed review decision that was thrown away, and why.
+ *
+ * Every guard in the action loop fails closed by skipping the PR, which is the
+ * right posture and a terrible signal: the pipeline reported three green stages
+ * over a PR it had not touched, and nothing anywhere named the reason. A
+ * fingerprint builder that had drifted out of sync with the preflight's looked
+ * exactly like "the contributor pushed mid-review" — from the outside, both are
+ * silence (#7323). So a drop is logged AND carried in the hook's result, which
+ * is what the pipeline hands back as the stage's own outcome.
+ */
+function createDropLog() {
+  const dropped = [];
+  return {
+    dropped,
+    record(number, reason) {
+      dropped.push({ number, reason });
+      console.warn(`⚠️ issue-watcher: no action on PR #${number} — ${reason}`);
+    },
+  };
+}
+
+/**
+ * Re-verify one reviewed PR against the content the security scan screened,
+ * with a single exit carrying the reason.
+ *
+ * These checks are what stand between a model's verdict and a real merge, and
+ * they are the reason the loop can silently do nothing. Keeping them in one
+ * place means the NEXT guard added here cannot forget to name itself — which is
+ * exactly how the last one got lost.
+ */
+async function verifyScreenedPullRequest(ctx, raw, expectedPullRequests) {
+  const decision = normalizeReviewDecision(raw);
+  if (!decision) {
+    return { number: raw?.number ?? '?', reason: 'the reviewer returned a decision this hook could not validate' };
+  }
+  const { number } = decision;
+  const target = expectedPullRequests.get(number);
+  if (!target || decision.headSha !== target.headSha) {
+    return { number, reason: 'it is not the screened PR/commit this run was handed' };
+  }
+  const pr = await readPullRequest(ctx, number);
+  if (!pr) return { number, reason: 'it could not be read from GitHub' };
+  if (pr.state !== 'OPEN' || pr.headRefOid !== target.headSha) {
+    return { number, reason: 'it closed or moved to a new head commit during the review' };
+  }
+  const diff = await runGh(['pr', 'diff', String(number), '--repo', ctx.repoSpec], ctx).catch(() => null);
+  if (diff === null) return { number, reason: 'its diff could not be re-read for verification' };
+  // A PR description can change without changing its head SHA. Require the
+  // exact content screened before cognition, not merely the same revision,
+  // before any review, rebase, or merge action.
+  if (!target.contentFingerprint || screenedPullRequestFingerprint(pr, diff) !== target.contentFingerprint) {
+    // `pr` rides along so the notification can still link to it.
+    return { number, pr, reason: 'its content no longer matches what the security scan screened', notify: true };
+  }
+  return { ok: true, decision, target, pr, diff };
+}
+
 /** Validated reply/review/rebase/merge pass run after cognition. */
 export async function processTaskOutput({ appId, success, payload, task, requireEligibilityFacts = false } = {}) {
   if (!appId || !success) return { action: 'no-op', reason: !success ? 'agent-failed' : 'missing-app' };
@@ -1310,7 +1331,7 @@ export async function processTaskOutput({ appId, success, payload, task, require
     const decision = commentDecisions.get(key);
     if (!decision || !['reply', 'none'].includes(decision.action)) continue;
     const current = await readCurrentIssueComment(ctx, item);
-    if (!current || !item.contentFingerprint || abuseFingerprint('issue-comment', current, issueAbuseInput(current)) !== item.contentFingerprint) continue;
+    if (!current || !item.contentFingerprint || abuseFingerprint(current, issueAbuseInput(current)) !== item.contentFingerprint) continue;
     if (decision.action === 'reply') {
       const posted = trimTo(decision.body, 5_000) && await postIssueReply(ctx, { ...current, body: decision.body });
       if (!posted) continue;
@@ -1322,30 +1343,32 @@ export async function processTaskOutput({ appId, success, payload, task, require
     && commentDecisions.size === expectedComments.size;
 
   let approvals = Array.isArray(readState(app).approvedPullRequests) ? readState(app).approvedPullRequests : [];
+  const drops = createDropLog();
   const handbacks = createHandbackTracker(app);
   let reviewed = 0;
   let merged = 0;
   let rebased = 0;
   let handedBack = 0;
   for (const raw of payload.pullRequests) {
-    const decision = normalizeReviewDecision(raw);
-    const target = decision && expectedPullRequests.get(decision.number);
-    if (!target || decision.headSha !== target.headSha) continue;
-    const pr = await readPullRequest(ctx, decision.number);
-    if (!pr || pr.state !== 'OPEN' || pr.headRefOid !== target.headSha) continue;
-    const diff = await runGh(['pr', 'diff', String(pr.number), '--repo', ctx.repoSpec], ctx).catch(() => null);
-    if (diff === null) continue;
-    const currentContentFingerprint = pullRequestContentFingerprint(pr, diff);
-    // A PR description can change without changing its head SHA. Require the
-    // exact content screened before cognition, not merely the same revision,
-    // before any review, rebase, or merge action.
-    if (!target.contentFingerprint || currentContentFingerprint !== target.contentFingerprint) continue;
+    const verified = await verifyScreenedPullRequest(ctx, raw, expectedPullRequests);
+    if (!verified.ok) {
+      drops.record(verified.number, verified.reason);
+      if (verified.notify) {
+        await notifyPendingApproval(app, { number: verified.number, url: verified.pr?.url || null },
+          'The review finished, but the PR content no longer matches what the security scan screened, so PortOS took no action on it.');
+      }
+      continue;
+    }
+    const { decision, target, pr, diff } = verified;
     const eligibilityRequired = requireEligibilityFacts
       || Object.prototype.hasOwnProperty.call(target, 'eligibilityFacts');
     const eligibilityStillCurrent = async () => {
       if (!eligibilityRequired) return true;
       const current = await eligibilityFactsStillCurrent(ctx, pr, target);
-      if (!current) approvals = approvals.filter((entry) => entry.number !== pr.number);
+      if (!current) {
+        approvals = approvals.filter((entry) => entry.number !== pr.number);
+        drops.record(decision.number, 'the linked issue state or author assignment changed since the eligibility gate ran');
+      }
       return current;
     };
     const anchors = parseAddedDiffLines(diff);
@@ -1381,7 +1404,10 @@ export async function processTaskOutput({ appId, success, payload, task, require
           || await submitReview(ctx, pr.number, { body: summary, event: 'COMMENT', comments: findings })
         : await submitReview(ctx, pr.number, { body: summary, event: 'COMMENT', comments: findings })
           || await postReviewFallback(ctx, pr.number, summary);
-      if (!posted) continue;
+      if (!posted) {
+        drops.record(decision.number, 'GitHub rejected the review comment');
+        continue;
+      }
       reviewed += 1;
       // The review is posted and the PR is going nowhere on its own. Hand it to
       // whoever can act on it — a remediation agent when the head branch is
@@ -1410,7 +1436,10 @@ export async function processTaskOutput({ appId, success, payload, task, require
       body: approveBody,
       event: 'APPROVE',
     }));
-    if (!approved) continue;
+    if (!approved) {
+      drops.record(decision.number, 'GitHub rejected the approving review, so no CI approval or merge could follow');
+      continue;
+    }
     reviewed += 1;
     await approveHeldWorkflowRuns(ctx, pr);
 
@@ -1523,5 +1552,5 @@ export async function processTaskOutput({ appId, success, payload, task, require
     lastError: commentsHandled ? null : 'issue-response-incomplete',
     ...(typeof handbackPatch === 'function' ? handbackPatch(state) : handbackPatch),
   }));
-  return { action: 'processed', replies, reviewed, rebased, merged, handedBack, commentsHandled };
+  return { action: 'processed', replies, reviewed, rebased, merged, handedBack, commentsHandled, dropped: drops.dropped };
 }

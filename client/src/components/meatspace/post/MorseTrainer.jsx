@@ -968,6 +968,15 @@ function ModeGrid({ onPick }) {
 
 const ROUND_SIZE = 10;
 
+// Render a prompt or a guess as its Morse pattern. A guess can hold anything the
+// user typed, so an unknown character reads as `?` rather than vanishing.
+function toMorse(text) {
+  return text
+    .split('')
+    .map((char) => (char === ' ' ? '/' : MORSE_TABLE[char] || '?'))
+    .join('   ');
+}
+
 // Flatten per-question copy results ({ prompt, guess, correct, responseMs }) into
 // per-character sent→guessed items for the server's confusion matrix. Aligned
 // positionally over the LONGER of prompt/guess so nothing is silently dropped:
@@ -996,7 +1005,9 @@ function CopyDrill({ prefs, progress, updatePrefs, ensureCtx, claimSession, rele
   const [prompt, setPrompt] = useState('');
   const [input, setInput] = useState('');
   const [results, setResults] = useState([]);
-  const [feedback, setFeedback] = useState(null);
+  // Only whether the latest answer is still on screen — the answer itself is
+  // read back out of `results`, so there is one record per question, not two.
+  const [verdictOpen, setVerdictOpen] = useState(false);
   const [playing, setPlaying] = useState(false);
   const [playbackError, setPlaybackError] = useState(null);
   const [done, setDone] = useState(false);
@@ -1019,7 +1030,7 @@ function CopyDrill({ prefs, progress, updatePrefs, ensureCtx, claimSession, rele
   async function startRound() {
     if (playingRef.current) return;
     setResults([]);
-    setFeedback(null);
+    setVerdictOpen(false);
     setSelection(null);
     setDone(false);
     roundStartRef.current = Date.now();
@@ -1064,7 +1075,7 @@ function CopyDrill({ prefs, progress, updatePrefs, ensureCtx, claimSession, rele
       setPrompt(text);
       setSelection(nextSelection);
       setInput('');
-      setFeedback(null);
+      setVerdictOpen(false);
     }
     setPlaying(true);
     // Handle a synthesis failure locally: the handlers that call this function
@@ -1094,14 +1105,14 @@ function CopyDrill({ prefs, progress, updatePrefs, ensureCtx, claimSession, rele
     const responseMs = questionStartRef.current ? Date.now() - questionStartRef.current : 0;
     const next = [...results, { prompt, guess, correct, responseMs, selection }];
     setResults(next);
-    setFeedback({ correct, prompt, guess });
+    setVerdictOpen(true);
     if (next.length >= ROUND_SIZE) {
       finishRound(next);
     }
   }
 
   function nextQuestion() {
-    setFeedback(null);
+    setVerdictOpen(false);
     playPrompt(true);
   }
 
@@ -1143,10 +1154,10 @@ function CopyDrill({ prefs, progress, updatePrefs, ensureCtx, claimSession, rele
   }
 
   function onKey(e) {
-    if (e.key === 'Enter') {
-      if (feedback) nextQuestion();
-      else if (input) submit();
-    }
+    // A held Enter auto-repeats, which would answer and advance off one press.
+    if (e.key !== 'Enter' || e.repeat) return;
+    if (verdictOpen) nextQuestion();
+    else if (input) submit();
   }
 
   if (done) {
@@ -1214,6 +1225,10 @@ function CopyDrill({ prefs, progress, updatePrefs, ensureCtx, claimSession, rele
     );
   }
 
+  // The question just answered: shown as the verdict while it is open, then as
+  // a persistent recap under the next prompt.
+  const latest = results[results.length - 1];
+
   return (
     <div className="bg-port-card border border-port-border rounded-lg p-6 space-y-4">
       {playbackError && <p role="alert" className="text-sm text-port-error">{playbackError}</p>}
@@ -1231,24 +1246,29 @@ function CopyDrill({ prefs, progress, updatePrefs, ensureCtx, claimSession, rele
       <div className="text-center py-6">
         {playing ? (
           <div className="text-cyan-400 text-sm animate-pulse">▮ ▮ ▮ playing...</div>
-        ) : feedback ? (
-          <div className="space-y-3">
-            {feedback.correct ? (
+        ) : verdictOpen ? (
+          <div className="space-y-3" data-testid="morse-verdict">
+            {latest.correct ? (
               <CheckCircle size={36} className="text-port-success mx-auto" />
             ) : (
               <XCircle size={36} className="text-port-error mx-auto" />
             )}
             <div className="text-3xl font-mono font-bold text-port-accent tracking-widest">
-              {feedback.prompt}
+              {latest.prompt}
             </div>
             {!headCopy && (
               <div className="font-mono text-port-accent/70 text-base tracking-widest">
-                {feedback.prompt.split('').map((c) => MORSE_TABLE[c] || '').join('   ')}
+                {toMorse(latest.prompt)}
               </div>
             )}
-            {!feedback.correct && (
+            {!latest.correct && (
               <div className="text-gray-400 text-xs pt-1">
-                You typed <span className="font-mono text-white">{feedback.guess || '—'}</span>
+                You typed <span className="font-mono text-white">{latest.guess || '—'}</span>
+                {/* The guess's own pattern is what makes the miss teachable —
+                    seeing -.- against -- is how K/M stops being a coin flip. */}
+                {!headCopy && latest.guess && (
+                  <span className="font-mono text-gray-500"> ({toMorse(latest.guess)})</span>
+                )}
               </div>
             )}
           </div>
@@ -1256,22 +1276,37 @@ function CopyDrill({ prefs, progress, updatePrefs, ensureCtx, claimSession, rele
           <div className="text-gray-500 text-sm">Type what you heard, then Enter</div>
         )}
       </div>
-      {!feedback && (
-        <input
-          ref={inputRef}
-          value={input}
-          onChange={(e) => setInput(e.target.value.toUpperCase().replace(/\s+/g, ' '))}
-          onKeyDown={onKey}
-          autoFocus
-          className="w-full px-4 py-3 bg-port-bg border border-port-border focus:border-port-accent rounded-lg text-white text-center font-mono text-lg uppercase tracking-widest outline-none"
-          placeholder="????"
-          aria-label="Decoded characters"
-        />
+      {/* Keeps the last answer readable through the next prompt, so a verdict
+          dismissed in a hurry is still learnable. */}
+      {!verdictOpen && latest && (
+        <div
+          className={`text-xs text-center font-mono ${latest.correct ? 'text-port-success' : 'text-port-error'}`}
+          data-testid="morse-previous-answer"
+        >
+          Previous: <span className="tracking-widest">{latest.prompt}</span>
+          {!headCopy && <span className="text-gray-500"> {toMorse(latest.prompt)}</span>}
+          {latest.correct ? ' ✓' : <> → you typed <span className="tracking-widest">{latest.guess || '—'}</span> ✗</>}
+        </div>
       )}
-      {feedback && (
+      {/* Stays mounted and focused through the verdict instead of handing focus
+          to an autofocused Next button: the Enter that submitted is still down,
+          and a focused button is activated natively by its own keypress/keyup or
+          first auto-repeat — dismissing the verdict in the tick it appeared.
+          readOnly, not disabled: disabled drops focus back to the button. */}
+      <input
+        ref={inputRef}
+        value={input}
+        onChange={(e) => setInput(e.target.value.toUpperCase().replace(/\s+/g, ' '))}
+        onKeyDown={onKey}
+        readOnly={verdictOpen}
+        autoFocus
+        className={`w-full px-4 py-3 bg-port-bg border rounded-lg text-white text-center font-mono text-lg uppercase tracking-widest outline-none ${verdictOpen ? 'border-port-border/50 opacity-60' : 'border-port-border focus:border-port-accent'}`}
+        placeholder="????"
+        aria-label="Decoded characters"
+      />
+      {verdictOpen && (
         <button
           onClick={nextQuestion}
-          autoFocus
           className="w-full px-6 py-3 bg-port-accent hover:bg-port-accent/80 text-white font-medium rounded-lg transition-colors"
         >
           {results.length >= ROUND_SIZE ? 'See Results' : 'Next'}

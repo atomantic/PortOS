@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback, useRef } from 'react';
 import { useParams, useNavigate, useSearchParams, Link } from 'react-router';
-import { ArrowLeft, Play, Pause, RefreshCw, SlidersHorizontal, Square, Trash2 } from 'lucide-react';
+import { ArrowLeft, ClipboardList, Eye, Film, FileText, LayoutList, Package, Play, Pause, RefreshCw, ScrollText, SlidersHorizontal, Square, Trash2 } from 'lucide-react';
 import TabPills from '../components/ui/TabPills.jsx';
 import PageSkeleton from '../components/ui/PageSkeleton';
 import toast from '../components/ui/Toast';
@@ -33,14 +33,14 @@ import useMediaJobProgress from '../hooks/useMediaJobProgress';
 
 const TERMINAL_PROJECT_STATUSES = new Set(['complete', 'failed', 'paused', 'draft']);
 
-const VIDEO_DRAFT_TABS = [{ id: 'overview', label: 'Overview' }, { id: 'review', label: 'Review' }, { id: 'artifacts', label: 'Artifacts' }, { id: 'segments', label: 'Shots' }, { id: 'runs', label: 'Runs' }];
+const VIDEO_DRAFT_TABS = [{ id: 'overview', label: 'Overview', icon: LayoutList }, { id: 'review', label: 'Review', icon: Eye }, { id: 'artifacts', label: 'Artifacts', icon: Package }, { id: 'segments', label: 'Shots', icon: Film }, { id: 'runs', label: 'Runs', icon: ScrollText }];
 
 const TABS = [
-  { id: 'overview', label: 'Overview' },
-  { id: 'plan', label: 'Plan' },
-  { id: 'treatment', label: 'Treatment' },
-  { id: 'segments', label: 'Segments' },
-  { id: 'runs', label: 'Runs' },
+  { id: 'overview', label: 'Overview', icon: LayoutList },
+  { id: 'plan', label: 'Plan', icon: ClipboardList },
+  { id: 'treatment', label: 'Treatment', icon: FileText },
+  { id: 'segments', label: 'Segments', icon: Film },
+  { id: 'runs', label: 'Runs', icon: ScrollText },
 ];
 
 export default function CreativeDirectorDetail({ basePath = '/creative-director' } = {}) {
@@ -323,7 +323,7 @@ export default function CreativeDirectorDetail({ basePath = '/creative-director'
             )}
           </div>
         </div>
-        <TabPills tabs={tabs} activeTab={activeTab} onChange={goTo} mobileDropdown ariaLabel="Video project sections" className="mt-3" />
+        <TabPills tabs={tabs} activeTab={activeTab} onChange={goTo} mobileCompact ariaLabel="Video project sections" className="mt-3" />
       </div>
 
       <div className="flex-1 overflow-auto p-6">

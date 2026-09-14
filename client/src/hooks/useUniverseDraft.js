@@ -19,10 +19,10 @@ import {
   ensureInfluences,
 } from '../services/api';
 import {
-  applyRecordRenderPin, deriveAvailableBackends, renderPinLadder, renderTargetPin,
+  deriveAvailableBackends, renderPinLadder, renderTargetPin,
   IMAGE_GEN_MODE, RENDER_TARGET,
 } from '../lib/imageGenBackends';
-import { PIPELINE_IMAGE_DEFAULTS, readPipelineImageSettings } from '../lib/pipelineImageDefaults';
+import { resolveRenderCfg } from '../lib/pipelineImageDefaults';
 import { sameJsonShape } from '../lib/sameJsonShape';
 import { upsertByIdPrepend } from '../lib/upsertByIdPrepend';
 import { mergeCanonByName } from '../lib/universeBuilderExpand';
@@ -93,7 +93,10 @@ export default function useUniverseDraft({ selectedId, goToWorld }) {
   const [availableLoras, setAvailableLoras] = useState([]);
   const [availableBackends, setAvailableBackends] = useState([]);
   const [defaultMode, setDefaultMode] = useState(null);
-  const [settingsImageCfg, setSettingsImageCfg] = useState(PIPELINE_IMAGE_DEFAULTS);
+  // The raw settings blob, held so the render config below can be re-resolved
+  // whenever this universe s own pin changes rather than only at fetch time.
+  // Null until the first successful read (and after a failed one).
+  const [renderSettings, setRenderSettings] = useState(null);
   // The Universe Bible target's own `settings.renderDefaults` pin — the rung
   // between this universe's pin and the install default. Held as the normalized
   // pin rather than the whole settings blob so the memo below has a stable dep.
@@ -208,7 +211,7 @@ export default function useUniverseDraft({ selectedId, goToWorld }) {
       setAvailableBackends(backends);
       const saved = settings?.imageGen?.mode;
       setDefaultMode(backends.find((backend) => backend.id === saved)?.id || backends[0]?.id || IMAGE_GEN_MODE.LOCAL);
-      setSettingsImageCfg(readPipelineImageSettings(settings));
+      setRenderSettings(settings);
       setTargetPin(renderTargetPin(settings, RENDER_TARGET.UNIVERSE_BIBLE));
     }
     setLoading(false);
@@ -706,8 +709,10 @@ export default function useUniverseDraft({ selectedId, goToWorld }) {
   // What every SINGLE-image render on this page uses: cast / places / objects
   // reference renders and clean plates.
   const imageCfg = useMemo(
-    () => applyRecordRenderPin(settingsImageCfg, pinSources, pinBackends),
-    [settingsImageCfg, targetPin, draft.imageMode, draft.imageModelId, availableBackends],
+    () => resolveRenderCfg(renderSettings, {
+      record: draft, target: RENDER_TARGET.UNIVERSE_BIBLE, backends: pinBackends,
+    }),
+    [renderSettings, targetPin, draft.imageMode, draft.imageModelId, availableBackends],
   );
   // The same ladder for the BATCH form's default mode. The client always sends
   // an explicit body.mode once settings load, so without resolving it here the

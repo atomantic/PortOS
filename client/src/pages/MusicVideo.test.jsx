@@ -80,11 +80,21 @@ vi.mock('../services/apiImageVideo.js', () => ({
     ],
   })),
   listVideoHistory: vi.fn(async () => [{ id: 'rh-9', filename: 'final.mp4' }]),
+  // Sidecar lookup behind useHydratedPreviewRoute: the board's scene prompt is
+  // only a label — `useMusicVideoSceneMedia` suffixes `concept.style` onto it
+  // before rendering, so only the sidecar knows what the renderer was sent.
+  getGalleryImages: vi.fn(async (filenames) => (filenames.includes('img1')
+    ? [{ filename: 'img1', prompt: 'a wide desert shot, neon noir', seed: 7, cleanedFrom: 'img0' }]
+    : [])),
   // By-id resolver behind useVideoFileSrc (#4165) — 404s (rejects) for any
   // other id, exactly as the real endpoint does.
   getVideoHistoryItem: vi.fn(async (id) => (id === 'rh-9'
     ? { id: 'rh-9', filename: 'final.mp4' }
     : Promise.reject(Object.assign(new Error('Not found'), { status: 404 })))),
+  // Scene refs are a projection, so the lightbox resolves variant lineage and
+  // any variant it opens through the gallery rather than this page's list.
+  listImageVariants: vi.fn(async () => ({ items: [] })),
+  listMediaGalleryPage: vi.fn(async () => ({ items: [] })),
 }));
 vi.mock('../services/apiTracks.js', () => ({
   listTracks: vi.fn(async () => []),
@@ -925,6 +935,20 @@ describe('MusicVideo media lightbox (#3718)', () => {
     const lightboxVideo = dialog.querySelector('video');
     expect(lightboxVideo?.getAttribute('src')).toBe('/data/videos/final.mp4');
     expect(lightboxVideo?.getAttribute('src')).not.toBe('/data/videos/rh-9.mp4');
+  });
+
+  it('shows the styled prompt the renderer was sent, not the board label', async () => {
+    // The scene's own prompt is 'a'; `useMusicVideoSceneMedia` appends the
+    // project's concept style before rendering, so the board label is wording
+    // the image model never saw. The sidecar is the only record of the real
+    // one — and it also carries the `cleanedFrom` lineage the hand-rolled item
+    // shape used to drop.
+    await openProject(PROJECT_WITH_CLIP);
+    fireEvent.click(await screen.findByRole('button', { name: 'View scene 1 reference frame full size' }));
+    const dialog = await screen.findByRole('dialog', { name: /Media viewer/i });
+    await waitFor(() => {
+      expect(dialog.querySelector('img')?.getAttribute('alt')).toBe('a wide desert shot, neon noir');
+    });
   });
 
   it('opens the lightbox from a ?preview= deep link on mount', async () => {

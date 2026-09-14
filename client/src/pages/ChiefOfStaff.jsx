@@ -1150,8 +1150,7 @@ export default function ChiefOfStaff() {
             tabs={TABS}
             activeTab={activeTab}
             onChange={(id) => navigate(`/cos/${id}`)}
-            mobileDropdown
-            mobileSelectId="cos-sections-select"
+            mobileCompact
             ariaLabel="Chief of Staff sections"
             controlsIdPrefix="tabpanel"
             className="pb-px"

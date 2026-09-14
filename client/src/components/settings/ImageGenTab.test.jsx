@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 
 vi.mock('../../services/api', () => ({
@@ -13,6 +13,7 @@ vi.mock('../../services/api', () => ({
   saveHfToken: vi.fn(),
   clearHfToken: vi.fn(),
   listAgyImageModels: vi.fn(),
+  listImageModels: vi.fn(),
 }));
 vi.mock('../../hooks/useHfTokenStatus', () => ({
   useHfTokenStatus: vi.fn(),
@@ -27,12 +28,14 @@ vi.mock('../ui/Toast', () => ({
 vi.mock('./LocalSetupPanel', () => ({
   default: ({ pythonPath }) => <div data-testid="local-setup-panel">{pythonPath}</div>,
 }));
+// The runtime card's install modal opens its own SSE stream.
+vi.mock('../imageGen/Flux2InstallModal', () => ({ default: () => null }));
 vi.mock('../../hooks/useMediaJobSse', () => ({
   useMediaJobSse: () => ({ attach: vi.fn(), close: vi.fn() }),
 }));
 
 import {
-  getSettings, getToolsList, updateSettings, listAgyImageModels, getImageGenStatus, generateImage,
+  getSettings, getToolsList, updateSettings, listAgyImageModels, listImageModels, getImageGenStatus, generateImage,
 } from '../../services/api';
 import { useHfTokenStatus } from '../../hooks/useHfTokenStatus';
 import { ImageGenTab, MEDIA_TABS } from './ImageGenTab';
@@ -60,9 +63,14 @@ beforeEach(() => {
     },
   });
   getToolsList.mockResolvedValue([]);
+  getImageGenStatus.mockResolvedValue({ connected: true, mode: 'local', readiness: 'ready', model: 'FLUX.1 Dev', modelId: 'dev' });
   useHfTokenStatus.mockReturnValue({ present: false, source: 'none', refresh: vi.fn() });
   updateSettings.mockResolvedValue({});
   listAgyImageModels.mockResolvedValue({ models: ['gemini-image', 'custom/image-v2'], error: null });
+  listImageModels.mockResolvedValue([
+    { id: 'dev', name: 'FLUX.1 Dev' },
+    { id: 'flux2-klein-4b', name: 'FLUX.2 Klein' },
+  ]);
 });
 
 describe('ImageGenTab grouped tabs', () => {
@@ -96,6 +104,8 @@ describe('ImageGenTab grouped tabs', () => {
     await renderTab();
     fireEvent.click(screen.getByRole('tab', { name: /^Local/i }));
     expect(screen.getByTestId('local-setup-panel')).toBeTruthy();
+    // The tab's lazy model-catalog probe resolves after the click.
+    await act(async () => {});
   });
 
   it('keeps LocalSetupPanel mounted (hidden) after leaving the Local tab so an in-flight install stream is not torn down', async () => {
@@ -103,6 +113,7 @@ describe('ImageGenTab grouped tabs', () => {
     // Not mounted until first visited (avoids a cold python-env probe).
     expect(screen.queryByTestId('local-setup-panel')).toBeNull();
     fireEvent.click(screen.getByRole('tab', { name: /^Local/i }));
+    await act(async () => {});
     const panel = screen.getByTestId('local-setup-panel');
     // Switch away — the panel must stay in the DOM (its install EventSource
     // survives), just visually hidden, rather than unmounting.
@@ -225,6 +236,90 @@ describe('ImageGenTab grouped tabs', () => {
     expect(patch.imageGen).toHaveProperty('grok');
     expect(patch.imageGen).toHaveProperty('agy');
     expect(patch.imageGen).toHaveProperty('expose');
+  });
+
+  it('pins the install-wide default local model and saves it under imageGen.local.modelId', async () => {
+    await renderTab(['/media/image?mediaTab=local']);
+    await act(async () => {});
+    const select = screen.getByLabelText('Default model');
+    // Nothing pinned in settings — blank names what the server actually
+    // resolves to, not an empty option the user has to guess at.
+    expect(select.value).toBe('');
+    expect(screen.getByRole('option', { name: 'Install default (FLUX.1 Dev)' })).toBeTruthy();
+
+    fireEvent.change(select, { target: { value: 'flux2-klein-4b' } });
+    fireEvent.click(screen.getByRole('button', { name: /^Save$/ }));
+    await waitFor(() => expect(updateSettings).toHaveBeenCalled());
+    expect(updateSettings.mock.calls[0][0].imageGen.local.modelId).toBe('flux2-klein-4b');
+  });
+
+  it('drops modelId from the save body when the pin is cleared, so the server default resolves again', async () => {
+    getSettings.mockResolvedValue({
+      imageGen: {
+        mode: 'local',
+        external: { sdapiUrl: '' },
+        local: { pythonPath: '/usr/bin/python3', modelId: 'flux2-klein-4b' },
+        codex: { enabled: false },
+        expose: { a1111: false },
+      },
+    });
+    await renderTab(['/media/image?mediaTab=local']);
+    await act(async () => {});
+    const select = screen.getByLabelText('Default model');
+    expect(select.value).toBe('flux2-klein-4b');
+
+    fireEvent.change(select, { target: { value: '' } });
+    fireEvent.click(screen.getByRole('button', { name: /^Save$/ }));
+    await waitFor(() => expect(updateSettings).toHaveBeenCalled());
+    // Absent, not '' — every consumer reads `local.modelId || DEFAULT`, and a
+    // persisted empty string is a value they would all have to keep coercing.
+    expect(JSON.parse(JSON.stringify(updateSettings.mock.calls[0][0])).imageGen.local)
+      .not.toHaveProperty('modelId');
+  });
+
+  it('keeps a pin the catalog no longer lists selectable rather than silently dropping it', async () => {
+    getSettings.mockResolvedValue({
+      imageGen: {
+        mode: 'local',
+        external: { sdapiUrl: '' },
+        local: { pythonPath: '/usr/bin/python3', modelId: 'retired-model' },
+        codex: { enabled: false },
+        expose: { a1111: false },
+      },
+    });
+    await renderTab(['/media/image?mediaTab=local']);
+    await act(async () => {});
+    // A select whose value matches no option paints blank and reads as
+    // "install default" — while the server is still honouring the pin.
+    expect(screen.getByLabelText('Default model').value).toBe('retired-model');
+    expect(screen.getByRole('option', { name: /retired-model \(unavailable on this machine\)/ })).toBeTruthy();
+  });
+
+  it('the imageGen.local save body round-trips sibling keys the tab does not edit', async () => {
+    // Same wholesale-slice-replace hazard the videoGen case below pins:
+    // imageGen.local carries hand-edit-only render knobs this tab never
+    // renders (steps / guidance / quantize, read by fableLoom/production.js).
+    // Rebuilding the slice from the rendered fields alone wipes them on every
+    // Media save. The server can't see this — it validates whatever arrives.
+    getSettings.mockResolvedValue({
+      imageGen: {
+        mode: 'local',
+        external: { sdapiUrl: '' },
+        local: { pythonPath: '/usr/bin/python3', steps: 28, guidance: 4.5, quantize: '4' },
+        codex: { enabled: false },
+        expose: { a1111: false },
+      },
+    });
+    await renderTab(['/media/image?mediaTab=local']);
+    await act(async () => {});
+
+    fireEvent.change(screen.getByLabelText('Default model'), { target: { value: 'flux2-klein-4b' } });
+    fireEvent.click(screen.getByRole('button', { name: /^Save$/ }));
+    await waitFor(() => expect(updateSettings).toHaveBeenCalled());
+    const local = updateSettings.mock.calls[0][0].imageGen.local;
+    expect(local).toMatchObject({ steps: 28, guidance: 4.5, quantize: '4' });
+    expect(local.modelId).toBe('flux2-klein-4b');
+    expect(local.pythonPath).toBe('/usr/bin/python3');
   });
 
   it('the videoGen save body round-trips sibling keys the tab does not edit (#3231 Phase 4)', async () => {
@@ -454,5 +549,36 @@ describe('ImageGenTab — Grok CLI section (#2859)', () => {
     const patch = updateSettings.mock.calls[0][0];
     expect(patch.imageGen.grok.enabled).toBe(false);
     expect(patch.imageGen.mode).toBe('local');
+  });
+});
+
+// The packages panel above the card only ever probes the mflux interpreter, so
+// on its own it told a machine whose selected default renders through the
+// shared torch venv that everything was installed — while the Image Gen page
+// two clicks away called the same machine unavailable.
+describe('ImageGenTab local runtime card', () => {
+  const brokenTorchRuntime = {
+    readiness: 'unavailable', modelId: 'flux2-klein-4b', model: 'FLUX.2 Klein',
+    runtimeLabel: 'Shared torch runtime (FLUX.2 · Z-Image · ERNIE · HiDream · Qwen)',
+    reason: 'The shared torch image runtime is not installed or healthy (expected at /home/u/.portos/venv-flux2/bin/python3)',
+    remedy: { kind: 'install-torch-venv', label: 'Install runtime', venvPath: '/home/u/.portos/venv-flux2/bin/python3' },
+  };
+
+  it('reports the shared torch runtime the pinned model actually needs', async () => {
+    getImageGenStatus.mockResolvedValue(brokenTorchRuntime);
+    await renderTab();
+    fireEvent.click(screen.getByRole('tab', { name: /^Local/i }));
+
+    expect(await screen.findByText(/not installed or healthy/i)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /install runtime/i })).toBeInTheDocument();
+  });
+
+  it('probes the runtime for the model the tab has pinned, not the install default', async () => {
+    await renderTab();
+    fireEvent.click(screen.getByRole('tab', { name: /^Local/i }));
+    await waitFor(() => expect(getImageGenStatus).toHaveBeenCalledWith('local', 'dev', expect.anything()));
+
+    fireEvent.change(screen.getByLabelText('Default model'), { target: { value: 'flux2-klein-4b' } });
+    await waitFor(() => expect(getImageGenStatus).toHaveBeenCalledWith('local', 'flux2-klein-4b', expect.anything()));
   });
 });

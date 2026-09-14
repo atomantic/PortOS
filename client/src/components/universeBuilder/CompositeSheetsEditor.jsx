@@ -276,6 +276,7 @@ function SheetRow({
       imageRefs={renders}
       alt={`${sheet.label} render`}
       canRender={canRender}
+      disabledHint="Save the world and configure a render backend to enable"
       onRender={onRender}
       onPreview={onPreview}
       onComplete={handleSettled}

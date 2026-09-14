@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { Link } from 'react-router';
-import { GitBranch, GitPullRequest, Lock, Copy, ShieldCheck } from 'lucide-react';
+import { BarChart3, Brain, GitBranch, GitPullRequest, Info, Lock, Copy, Network, ShieldCheck, SquareTerminal, ToggleLeft } from 'lucide-react';
 import IconPicker from '../IconPicker';
 import * as api from '../../services/api';
 import { PORTOS_APP_ID } from '../../services/apiCore';
@@ -28,12 +28,12 @@ import { useInstanceFeatures } from '../../hooks/useInstanceFeatures.js';
 // per-app feature visibility overrides; it never sends a `jira` key, so saving
 // an unrelated field cannot clobber the detail tab's configuration.
 const TABS = [
-  { id: 'general', label: 'General' },
-  { id: 'ports', label: 'Ports & TLS' },
-  { id: 'commands', label: 'Commands' },
-  { id: 'workflow', label: 'Workflow' },
-  { id: 'intelligence', label: 'Intelligence' },
-  { id: 'features', label: 'Features' }
+  { id: 'general', label: 'General', icon: Info },
+  { id: 'ports', label: 'Ports & TLS', icon: Network },
+  { id: 'commands', label: 'Commands', icon: SquareTerminal },
+  { id: 'workflow', label: 'Workflow', icon: GitBranch },
+  { id: 'intelligence', label: 'Intelligence', icon: Brain },
+  { id: 'features', label: 'Features', icon: ToggleLeft }
 ];
 const TAB_IDS = TABS.map(t => t.id);
 
@@ -70,6 +70,9 @@ export default function EditAppDrawer({ app, onClose, onSave }) {
     defaultUseWorktree: app.defaultUseWorktree || app.defaultOpenPR || false,
     // Unset means ON server-side, so an app that has never been saved shows checked.
     verifyRepoStateOnCompletion: app.verifyRepoStateOnCompletion !== false,
+    // Opt-in: publishing writes to the app's own repo, so an app that has never
+    // been saved must render unchecked.
+    publishQualitySnapshot: app.publishQualitySnapshot === true,
     featureOverrides: Object.fromEntries(
       APP_FEATURE_IDS.map(featureId => [featureId, getAppFeatureOverride(app, featureId)])
     ),
@@ -271,6 +274,7 @@ export default function EditAppDrawer({ app, onClose, onSave }) {
       defaultOpenPR: formData.defaultOpenPR,
       defaultPrCompletion: formData.defaultPrCompletion,
       verifyRepoStateOnCompletion: formData.verifyRepoStateOnCompletion,
+      publishQualitySnapshot: formData.publishQualitySnapshot,
     };
 
     // Do not stamp an all-null map during an unrelated edit. Leaving the map
@@ -703,6 +707,20 @@ export default function EditAppDrawer({ app, onClose, onSave }) {
               </label>
               <p className="ml-6 text-xs text-gray-500">
                 Audits git and the forge once an agent completes. A leftover worktree, an undeleted branch, or an unmerged PR files a recovery task instead of being silently left behind.
+              </p>
+              <label htmlFor="edit-app-publish-quality-snapshot" className="flex items-center gap-2 cursor-pointer">
+                <input
+                  id="edit-app-publish-quality-snapshot"
+                  type="checkbox"
+                  checked={formData.publishQualitySnapshot}
+                  onChange={e => setFormData(prev => ({ ...prev, publishQualitySnapshot: e.target.checked }))}
+                  className="rounded border-port-border bg-port-bg text-port-accent focus:ring-port-accent"
+                />
+                <BarChart3 size={14} className="text-emerald-400" />
+                <span className="text-sm text-white">Publish quality snapshot to repo</span>
+              </label>
+              <p className="ml-6 text-xs text-gray-500">
+                After each audit, PortOS writes the app’s numeric quality scores to .quality.json at the repo root and commits it, so other PortOS installs running this app start with the latest scores. Off by default; nothing is pushed.
               </p>
             </div>
           )}

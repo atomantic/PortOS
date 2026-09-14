@@ -154,3 +154,27 @@ describe('PostSessionResults daily routine actions', () => {
     expect(onSaved).toHaveBeenCalledWith(saved, { continueDaily: true });
   });
 });
+
+describe('PostSessionResults estimation grading band', () => {
+  // A live drill result carries its resolved `config`; a stored history task
+  // carries the same map as `difficulty`. Both have to reach the review, or a
+  // ✓ beside "600 / Expected 616" reads as a scoring bug.
+  const estimationResult = (overrides) => ({
+    type: 'estimation',
+    score: 80,
+    questions: [{ prompt: '925 - 309', expected: 616, answered: 600, correct: true, responseMs: 3000 }],
+    ...overrides,
+  });
+
+  it('names the band from a live result config', () => {
+    renderResults({ drillResults: [estimationResult({ config: { count: 5, tolerancePct: 20 } })] });
+    fireEvent.click(screen.getByText('Estimation'));
+    expect(screen.getByText('Within 20% counts — 2 significant figures is close enough')).toBeInTheDocument();
+  });
+
+  it('names it from a history task, whose config is stored as `difficulty`', () => {
+    renderResults({ drillResults: [estimationResult({ difficulty: { count: 5, tolerancePct: 3 } })] });
+    fireEvent.click(screen.getByText('Estimation'));
+    expect(screen.getByText('Within 3% counts — 3 significant figures is close enough')).toBeInTheDocument();
+  });
+});

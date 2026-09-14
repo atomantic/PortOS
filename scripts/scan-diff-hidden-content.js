@@ -6,8 +6,10 @@
  * pattern matching over the added lines, so it costs no provider call and
  * cannot be argued out of a verdict by the content it is reading. A finding is
  * a hard failure, because each shape it looks for (invisible Unicode, a
- * cluster of otherwise-ordinary invisible characters, an encoded or compressed
- * payload) means the diff a reviewer approves is not the change that lands.
+ * stealth filename, a cluster of otherwise-ordinary invisible characters, an
+ * encoded or compressed payload, a symlink out of the tree, a new submodule,
+ * a non-media binary, an inline script in markup) means the diff a reviewer
+ * approves is not the change that lands.
  *
  * Runs in the CI `impact` job before any dependency install, so it stays on
  * Node builtins plus pure `server/lib` modules (see
@@ -90,7 +92,9 @@ export async function runHiddenContentScan({
       };
     }
     // Three-dot: only what this branch added, not what the base moved on to.
-    diff = execFileSync('git', ['diff', '--unified=0', '--no-color', `${base}...HEAD`], {
+    // quotepath=false so a filename carrying invisible Unicode arrives as those
+    // code points rather than as octal escapes the detector would miss.
+    diff = execFileSync('git', ['-c', 'core.quotepath=false', 'diff', '--unified=0', '--no-color', `${base}...HEAD`], {
       encoding: 'utf8',
       maxBuffer: MAX_DIFF_BYTES,
     });

@@ -9,6 +9,7 @@ import { resolveInteractiveShell } from '../lib/interactiveShellResolver.js';
 import { buildRunThenExitCommand } from '../lib/shellExit.js';
 import { buildReadinessProbe } from '../lib/shellReadinessProbe.js';
 import { prepareCliSpawn } from '../lib/bufferedSpawn.js';
+import { stripTerminalQueries } from '../lib/terminalReplay.js';
 import { findCommandOnPath } from '../lib/processEnv.js';
 
 // Store active shell sessions (persist across socket reconnects)
@@ -635,7 +636,10 @@ export function attachSession(sessionId, socket, { claim = false } = {}) {
   broadcastSessionList();
   return {
     sessionId,
-    bufferedOutput: session.outputBuffer.join('')
+    // Queries stripped, not raw: a replayed `ESC[6n` is a question the attaching
+    // terminal answers as INPUT, and the TUI that asked it is long gone — the
+    // reply lands on the shell prompt. See lib/terminalReplay.js.
+    bufferedOutput: stripTerminalQueries(session.outputBuffer.join(''))
   };
 }
 

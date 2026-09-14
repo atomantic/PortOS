@@ -143,8 +143,7 @@ export default function LoomValidationPanel({
         variant="underline"
         size="xs"
         stretch
-        mobileDropdown
-        mobileSelectId="fableloom-workflow-section"
+        mobileCompact
         ariaLabel="Episode production sections"
       />
 

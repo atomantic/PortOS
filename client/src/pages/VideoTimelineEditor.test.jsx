@@ -235,6 +235,11 @@ describe('workspace layout — mobile library regression (#5424)', () => {
   });
 });
 
+// The Stills tab arrives with the GALLERY, which `renderEditor` does not wait
+// for — it only waits out the "Loading project…" text. A synchronous getByRole
+// therefore races the gallery render, and the heavier the fixture the likelier
+// it loses: the cap test below mounts 51 gallery entries and flaked on CI's
+// shared runners while passing locally every time. findByRole waits.
 describe('lane caps', () => {
   it('refuses an add past the overlay cap with a message naming the lane', async () => {
     // One entry over the cap 400s every later debounced save, with nothing
@@ -246,7 +251,7 @@ describe('lane caps', () => {
     api.gallery = [{ filename: 'plate.png' }, ...Array.from({ length: 50 }, (_, i) => ({ filename: `logo${i}.png` }))];
     await renderEditor();
 
-    fireEvent.click(screen.getByRole('tab', { name: /Stills/ }));
+    fireEvent.click(await screen.findByRole('tab', { name: /Stills/ }));
     fireEvent.click((await screen.findAllByRole('button', { name: 'Overlay' }))[0]);
 
     expect(toastError).toHaveBeenCalledWith(expect.stringContaining('Overlay lane limit reached (50)'));
@@ -256,7 +261,7 @@ describe('lane caps', () => {
     api.project = project({ segments: [clipSegment] });
     await renderEditor();
 
-    fireEvent.click(screen.getByRole('tab', { name: /Stills/ }));
+    fireEvent.click(await screen.findByRole('tab', { name: /Stills/ }));
     fireEvent.click((await screen.findAllByRole('button', { name: 'Overlay' }))[0]);
 
     expect(toastError).not.toHaveBeenCalled();

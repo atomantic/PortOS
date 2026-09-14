@@ -16,6 +16,7 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router';
 import { listAuthors } from '../../services/api';
+import { withUnlistedOption } from '../../lib/withUnlistedOption';
 
 export default function AuthorPicker({ id = 'series-author', value, byline, onChange, disabled = false }) {
   const [authors, setAuthors] = useState([]);
@@ -38,7 +39,11 @@ export default function AuthorPicker({ id = 'series-author', value, byline, onCh
 
   // An authorId that isn't in the fetched list (deleted persona) shouldn't make
   // the select silently snap to "none" — surface it so the link isn't lost.
-  const unknownLink = value && !authors.some((a) => a.id === value);
+  const authorOptions = withUnlistedOption(
+    authors,
+    value,
+    (authorId) => ({ id: authorId, name: byline || 'Linked author (unavailable)' }),
+  );
 
   return (
     <div>
@@ -50,10 +55,9 @@ export default function AuthorPicker({ id = 'series-author', value, byline, onCh
         className="w-full px-3 py-2 bg-port-bg border border-port-border rounded text-white disabled:opacity-50"
       >
         <option value="">— No author —</option>
-        {authors.map((a) => (
+        {authorOptions.map((a) => (
           <option key={a.id} value={a.id}>{a.name}</option>
         ))}
-        {unknownLink ? <option value={value}>{byline || 'Linked author (unavailable)'}</option> : null}
       </select>
       <p className="text-[11px] text-gray-500 mt-1">
         {authors.length === 0 && !loading ? (

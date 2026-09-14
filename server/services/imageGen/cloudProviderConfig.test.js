@@ -71,6 +71,7 @@ describe('resolveCloudProviderConfig', () => {
       mode: IMAGE_GEN_MODE.AGY,
       agyPath: '/bin/agy',
       model: 'gemini-image',
+      modelIsShippedDefault: false,
     });
 
     const fallback = resolveCloudProviderConfig(
@@ -82,6 +83,9 @@ describe('resolveCloudProviderConfig', () => {
     // a single generate_image relay (#3231).
     expect(fallback.modelId).toBe(AGY_IMAGEGEN_DEFAULT_MODEL);
     expect(fallback.providerParams.model).toBe(AGY_IMAGEGEN_DEFAULT_MODEL);
+    // Provenance for the agy provider's retired-pin re-point: only an id
+    // PortOS chose may be swapped out from under the render.
+    expect(fallback.providerParams.modelIsShippedDefault).toBe(true);
   });
 
   it('lets a per-render model override win over the saved default', () => {
@@ -96,6 +100,7 @@ describe('resolveCloudProviderConfig', () => {
       mode: IMAGE_GEN_MODE.AGY,
       agyPath: '/bin/agy',
       model: 'gemini-3.6-flash-high',
+      modelIsShippedDefault: false,
     });
 
     const codex = resolveCloudProviderConfig(

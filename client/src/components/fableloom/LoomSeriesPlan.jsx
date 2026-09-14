@@ -8,7 +8,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router';
 import TabPills from '../ui/TabPills';
 import useDrawerTab from '../../hooks/useDrawerTab';
-import { BrainCircuit, CheckCircle2, ChevronDown, ChevronUp, Loader2, Plus, Save, Sparkles, Trash2 } from 'lucide-react';
+import { BrainCircuit, CheckCircle2, ChevronDown, ChevronUp, Compass, Film, Loader2, Map as MapIcon, Plus, Save, Send, Sparkles, Swords, Trash2, Users } from 'lucide-react';
 import ConfirmButtonPair from '../ui/ConfirmButtonPair';
 import toast from '../ui/Toast';
 import { FormField } from '../ui/FormField.jsx';
@@ -34,13 +34,13 @@ import SeriesDesignEditor from '../pipeline/arcCanvas/SeriesDesignEditor.jsx';
 import { EVOLUTION_STAGES, isDeclaredEvolution } from '../../lib/characterEvolution.js';
 
 const PLAN_SECTIONS = [
-  { id: 'arc', label: 'Story arc' },
-  { id: 'challenges', label: 'Plot & challenges' },
-  { id: 'quests', label: 'Side quests' },
-  { id: 'cast', label: 'Cast evolution' },
-  { id: 'episodes', label: 'Episode outlines' },
-  { id: 'editorial', label: 'AI editor' },
-  { id: 'handoffs', label: 'Viewer handoffs' },
+  { id: 'arc', label: 'Story arc', icon: MapIcon },
+  { id: 'challenges', label: 'Plot & challenges', icon: Swords },
+  { id: 'quests', label: 'Side quests', icon: Compass },
+  { id: 'cast', label: 'Cast evolution', icon: Users },
+  { id: 'episodes', label: 'Episode outlines', icon: Film },
+  { id: 'editorial', label: 'AI editor', icon: BrainCircuit },
+  { id: 'handoffs', label: 'Viewer handoffs', icon: Send },
 ];
 
 const newItemId = (prefix) => `${prefix}-${uuidv4()}`;
@@ -204,7 +204,7 @@ export default function LoomSeriesPlan({ loom, universe, onLoomUpdate }) {
             {saving ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />}{saving ? 'Saving…' : 'Save plan'}
           </button>
         </div>
-        <TabPills tabs={PLAN_SECTIONS} activeTab={requestedSection} onChange={setSection} mobileDropdown ariaLabel="Series plan section" controlsIdPrefix="series-section" />
+        <TabPills tabs={PLAN_SECTIONS} activeTab={requestedSection} onChange={setSection} mobileCompact ariaLabel="Series plan section" controlsIdPrefix="series-section" />
       </div>
       <div ref={contentRef} className="min-h-0 flex-1 overflow-y-auto p-4 md:p-6">
         <div className="max-w-5xl mx-auto">

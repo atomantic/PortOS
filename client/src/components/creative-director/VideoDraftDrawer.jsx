@@ -11,8 +11,9 @@ import { listCatalogIngredients } from '../../services/apiCatalog.js';
 import { listMusicEngines } from '../../services/apiMusic.js';
 import { listTracks } from '../../services/apiTracks.js';
 import { listVideoModels } from '../../services/apiImageVideo.js';
+import { Clapperboard, FileText, Library } from 'lucide-react';
 
-const TABS = [{ id: 'brief', label: 'Brief' }, { id: 'production', label: 'Production' }, { id: 'sources', label: 'Sources' }];
+const TABS = [{ id: 'brief', label: 'Brief', icon: FileText }, { id: 'production', label: 'Production', icon: Clapperboard }, { id: 'sources', label: 'Sources', icon: Library }];
 const fieldClass = 'w-full mt-1 bg-port-bg border border-port-border rounded px-2 py-2 text-sm';
 
 export default function VideoDraftDrawer({ open, onClose, project, onSaved, catalogIngredientIds = [] }) {

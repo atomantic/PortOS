@@ -134,3 +134,49 @@ export async function listGalleryCollectionSummaries(diskReader) {
   });
   return summaries;
 }
+
+/**
+ * Resolve one image's original-vs-cleaned variant set: the group root plus
+ * every record whose `cleanedFrom` names it. One call answers the lightbox
+ * toggle from either end — pass a cleaned copy and it walks back to the root
+ * first — so no caller has to hold a list wide enough to contain both.
+ *
+ * An image with no copies yields just its own root; `[]` means the filename is
+ * not indexed at all.
+ *
+ * @param {string} filename - gallery basename of the image the user opened
+ * @param {Function} [diskReader] - listGallery override for the test/file escape hatch
+ * @returns {Promise<object[]>} gallery-shaped records: root first, then its copies
+ */
+export async function listImageVariants(filename, diskReader) {
+  if (typeof filename !== 'string' || !filename) return [];
+  // A variant's `cleanedFrom` is anchored at the ROOT original by every writer
+  // in imageGen/variants.js, so one hop always lands on the group root. An
+  // auto-cleaned image replaced its source in place and carries no
+  // `cleanedFrom`, so it IS the root — matching the client's grouping.
+  const rootOf = image => text(image.cleanedFrom) || image.filename;
+  const isRoot = image => image && !text(image.cleanedFrom);
+
+  if (escapeHatch()) {
+    // One snapshot for all three lookups: each read is a directory scan plus a
+    // sidecar read per image, so re-reading per lookup would cost 3N file reads
+    // to answer one toggle.
+    const images = await readImages(diskReader);
+    const self = images.find(image => image?.filename === filename);
+    if (!self) return [];
+    const root = rootOf(self);
+    const original = images.find(image => image?.filename === root && isRoot(image));
+    return [...(original ? [original] : []), ...images.filter(image => image?.cleanedFrom === root)];
+  }
+
+  const [self] = await listAssets({ kind: 'image', filename, limit: 1 });
+  if (!self) return [];
+  const root = rootOf(self);
+  // Independent once the root is known — serially they would cost an extra
+  // round trip on every cleaned-copy open.
+  const [[original], copies] = await Promise.all([
+    root === filename ? [self] : listAssets({ kind: 'image', filename: root, limit: 1 }),
+    listAssets({ kind: 'image', cleanedFrom: root }),
+  ]);
+  return [...(isRoot(original) ? [original] : []), ...copies];
+}

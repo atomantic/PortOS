@@ -1,6 +1,4 @@
 /** Read-through federation of numeric app audit evidence; never exports prose or relays peers. */
-import { readFile } from 'node:fs/promises';
-import { join } from 'node:path';
 import { PATHS } from '../lib/paths.js';
 import { createHash } from 'node:crypto';
 import { z } from 'zod';
@@ -30,11 +28,16 @@ const payloadSchema = z.object({
   measurements: z.array(measurementSchema).max(10000),
 }).strict();
 
+// PortOS's own app record always carries a repoPath; the bare `{ id: PORTOS_APP_ID }`
+// form used for self-directed calls resolves to this install's checkout.
+const appRepoPath = app => app.repoPath || (app.id === PORTOS_APP_ID ? PATHS.root : null);
+
 // Match repositories without sharing remote URLs, names, credentials or local paths.
 // Independent versions of the same repository intentionally contribute to one score.
 async function repositoryKey(deps, app = { id: PORTOS_APP_ID }) {
-  if (app.id !== PORTOS_APP_ID && !app.repoPath) return null;
-  const origin = await (deps.getOriginInfo || getOriginInfo)(app.repoPath);
+  const repoPath = appRepoPath(app);
+  if (!repoPath) return null;
+  const origin = await (deps.getOriginInfo || getOriginInfo)(repoPath);
   return origin.host && origin.fullName ? hash(`${origin.host}/${origin.fullName}`.toLowerCase()) : null;
 }
 
@@ -129,12 +132,22 @@ export async function collectAppQuality(app, days, deps = {}) {
       unavailable: results.filter(r => r.status === 'rejected').length } };
 }
 
+/**
+ * Every app — PortOS's own checkout included — reads the `.quality.json` at its
+ * repo root, under the same guards: repository match, no future dates, 4 MiB cap.
+ */
+async function releasePayload(deps, app) {
+  const repoPath = appRepoPath(app);
+  if (!repoPath) return null;
+  const { readAppQualitySnapshotFile } = await import('./appQualitySnapshotFile.js');
+  const parsed = payloadSchema.safeParse(await readAppQualitySnapshotFile(repoPath, deps));
+  return parsed.success ? parsed.data : null;
+}
+
 /** Shipped evidence is read-only and never re-exported as a local audit. */
-export async function readReleaseQuality(deps = {}) {
-  const body = await (deps.readSnapshot || (() => readFile(join(PATHS.root, 'quality-snapshot.json'), 'utf8')))().catch(() => null);
-  if (!body || Buffer.byteLength(body) > MAX_PAYLOAD_BYTES) return [];
-  const payload = await Promise.resolve().then(() => payloadSchema.parse(JSON.parse(body))).catch(() => null);
-  if (!payload || payload.repository !== await repositoryKey(deps)) return [];
+export async function readReleaseQuality(deps = {}, app = { id: PORTOS_APP_ID }) {
+  const payload = await releasePayload(deps, app);
+  if (!payload || payload.repository !== await repositoryKey(deps, app)) return [];
   return payload.measurements.filter(row => Date.parse(row.assessedAt) <= (deps.now ?? Date.now())).map(row => ({
     ...row, category: row.report.category, sourcePeerName: 'Release snapshot',
     report: { ...row.report, summary: 'Published release assessment; original assessment date and freshness rules apply.' },
