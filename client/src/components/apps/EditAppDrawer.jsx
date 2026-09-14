@@ -65,7 +65,10 @@ export default function EditAppDrawer({ app, onClose, onSave }) {
     nativeLaunchProcessName: app.nativeLaunch?.processName || '',
     editorCommand: app.editorCommand || 'code .',
     workTracker: app.workTracker || 'auto',
-    forgeAccount: app.forgeAccount || '',
+    // The registry is a hand-editable JSON file, so a non-string here is
+    // reachable; `.trim()` on the save path would throw and take the drawer with
+    // it. Mirrors the same type guard listForgePinnedApps applies server-side.
+    forgeAccount: typeof app.forgeAccount === 'string' ? app.forgeAccount : '',
     defaultOpenPR: app.defaultOpenPR || false,
     defaultPrCompletion: app.defaultPrCompletion || DEFAULT_PR_COMPLETION,
     defaultUseWorktree: app.defaultUseWorktree || app.defaultOpenPR || false,
