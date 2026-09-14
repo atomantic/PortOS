@@ -7,7 +7,7 @@
  */
 
 import { Cpu, Terminal, Cloud, Sparkles } from 'lucide-react';
-import { IMAGE_GEN_MODE, MODE_LABELS } from './imageGenModes.js';
+import { IMAGE_GEN_MODE, IMAGE_RUNTIME_READINESS, MODE_LABELS } from './imageGenModes.js';
 
 export * from './imageGenModes.js';
 
@@ -25,7 +25,7 @@ const metaFor = (mode) => ({ label: MODE_LABELS[mode], icon: MODE_ICONS[mode] })
 // three-way readiness result. Keep the compatibility read in one place so the
 // Image Gen page and Settings describe the same response identically.
 export const imageGenReadiness = (status) => {
-  if (['ready', 'unavailable', 'unknown'].includes(status?.readiness)) return status.readiness;
+  if (Object.values(IMAGE_RUNTIME_READINESS).includes(status?.readiness)) return status.readiness;
   return status?.connected ? 'ready' : 'unavailable';
 };
 

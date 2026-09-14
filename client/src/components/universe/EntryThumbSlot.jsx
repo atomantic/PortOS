@@ -49,9 +49,10 @@ export default function EntryThumbSlot({
   // expects a key re-keys its job map so the in-flight job is never cleared and
   // the slot spins forever. Terminal status goes to `onTerminalStatus` instead.
   onComplete = null,
-  // `('failed' | 'canceled')` when the job terminates without a filename, for
-  // callers that report a failed render. Separate from `onComplete` per the
-  // arity note above; fires after it, so the clear happens first either way.
+  // `(status, error)` — `'failed' | 'canceled'` plus the failure reason when
+  // the job terminates without a filename, for callers that report a failed
+  // render. Separate from `onComplete` per the arity note above; fires after
+  // it, so the clear happens first either way.
   onTerminalStatus = null,
   canRender = true,
   // The empty slot's affordance. Glyph and label travel together because a host
@@ -79,10 +80,10 @@ export default function EntryThumbSlot({
   // render instead of once when the job settles. (`onComplete` goes to
   // `onFilename` unwrapped, so its identity — and arity — stay the caller's.)
   const onStatus = useCallback(
-    (s) => {
+    (s, error) => {
       if (s !== 'failed' && s !== 'canceled') return;
       onComplete?.(null);
-      onTerminalStatus?.(s);
+      onTerminalStatus?.(s, error || null);
     },
     [onComplete, onTerminalStatus],
   );

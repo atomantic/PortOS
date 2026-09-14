@@ -559,7 +559,22 @@ describe('deferred imports stay deferred (#6156)', () => {
 // mode -> provider map stays in modelPinAudit.js rather than moving to a shared
 // leaf, which would have cost ~54 (one more file in the static closure of every
 // suite reaching routes/providers.js).
-const MAX_STATIC_INSTANTIATIONS = 104487;
+// Making the local image runtime describe itself the same way everywhere
+// measures +65, and every one of those is the module-catalog rule rather than a
+// heavy edge. The vocabulary the layers share — the status probe, the renderer's
+// pre-flight refusal, regen.js, and the client, which re-exports it through
+// imageGenModes.js so no component hand-copies a remedy kind — has to be a
+// leaf under lib/ (it imports only runners.js), and registering a new lib/ file
+// in index.js is mandatory (lib/index.test.js fails without it), which puts
+// imageRuntimeRemedies.js into the closure of the ~57 suites that reach the
+// barrel; the rest reach it through services/imageGen/local.js and regen.js,
+// which classify a model's runtime with the same helper, plus the new suite's
+// own closure. The diagnosis module itself (localRuntime.js, which pulls the
+// model registry and the setup-check cache) measured a further +111 from the
+// image-gen dispatcher and is NOT in this number: checkConnection reaches it
+// through a memoized call-site await import(), so the ~110 suites that never
+// probe a local runtime do not pay for it.
+const MAX_STATIC_INSTANTIATIONS = 104552;
 
 
 const SKIP_DIRS = new Set(['node_modules', 'coverage', 'dist', 'data']);

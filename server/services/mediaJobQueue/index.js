@@ -33,6 +33,7 @@ import { unlink } from 'fs/promises';
 import { join, resolve as pathResolve, sep as PATH_SEP } from 'path';
 import { PATHS, readJSONFileStrict, atomicWrite, ensureDir, sleep } from '../../lib/fileUtils.js';
 import { SSE_HEADERS } from '../../lib/sseHeaders.js';
+import { ServerError } from '../../lib/errorHandler.js';
 import { reapAndCleanDetachedDirs } from '../../lib/detachedSpawn.js';
 import {
   broadcastSse,
@@ -669,7 +670,14 @@ function startLaneJob(job, { lane }) {
       if (job.status === 'running') {
         job.status = job.cancelRequested ? 'canceled' : 'failed';
         videoHolds.captureFailure(job, err);
-        job.error = job.cancelRequested ? 'Canceled' : `runJob threw: ${err.message}`;
+        // A ServerError carries a message the gen module wrote FOR the user, so
+        // surface it verbatim — every media surface renders `job.error`, and the
+        // "runJob threw:" prefix turned an actionable refusal into developer
+        // noise. Anything else is an unexpected crash and keeps the prefix so
+        // the origin stays obvious.
+        job.error = job.cancelRequested
+          ? 'Canceled'
+          : err instanceof ServerError ? err.message : `runJob threw: ${err.message}`;
         job.completedAt = new Date().toISOString();
         broadcastSse(ensureSseEntry(job.id), job.cancelRequested
           ? { type: 'canceled', reason: job.error } : { type: 'error', error: job.error });

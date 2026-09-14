@@ -56,6 +56,10 @@ import {
   maxInputImages,
   supportsCloudModelOverride,
 } from '../../../server/lib/imageGenCapabilities.js';
+import {
+  IMAGE_RUNTIME_READINESS,
+  IMAGE_RUNTIME_REMEDY,
+} from '../../../server/lib/imageRuntimeRemedies.js';
 
 export {
   // Shipped per-backend defaults, so a UI that displays "the model/effort a job
@@ -76,6 +80,12 @@ export {
   // pickers filter through and what `pickI2iMode` walks.
   I2I_CAPABLE_MODES,
   IMAGE_GEN_MODE,
+  // The local image-runtime vocabulary the status probe, the renderer's
+  // pre-flight refusal and every blocked surface share. A component branches on
+  // `IMAGE_RUNTIME_REMEDY.X`, never on the literal string — a hand-copied
+  // remedy kind is a button that silently stops matching the server.
+  IMAGE_RUNTIME_READINESS,
+  IMAGE_RUNTIME_REMEDY,
   // The local model a blank `imageGen.local.modelId` resolves to, so the
   // Settings Local tab can name the install default instead of showing a blank
   // select whose meaning the user has to guess.

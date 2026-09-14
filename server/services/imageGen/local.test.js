@@ -6,8 +6,13 @@ import { tmpdir } from 'os';
 // FLUX.2 venv resolution mock — flip between "installed" and "missing" with
 // the .returnValue setter on each test.
 const mockResolveFlux2Python = vi.fn();
+// Health is a SEPARATE probe from resolution: a half-installed venv still has
+// its python binary, which is exactly the state generateImage now refuses.
+const mockIsFlux2VenvHealthy = vi.fn(async () => true);
 vi.mock('../../lib/pythonSetup.js', () => ({
   resolveFlux2Python: () => mockResolveFlux2Python(),
+  isFlux2VenvHealthy: () => mockIsFlux2VenvHealthy(),
+  invalidateFlux2Health: vi.fn(),
   FLUX2_VENV_DEFAULT: '/fake/home/.portos/venv-flux2/bin/python3',
 }));
 
@@ -21,6 +26,7 @@ vi.mock('../../lib/pythonSetup.js', () => ({
 let tmpRegistryDir;
 let priorRegistryEnv;
 let buildArgs;
+let generateImage;
 let buildSidecarMeta;
 let resolveOutputPlacement;
 let parseImageExecutionMarker;
@@ -31,7 +37,7 @@ beforeAll(async () => {
   priorRegistryEnv = process.env.PORTOS_MEDIA_MODELS_FILE;
   process.env.PORTOS_MEDIA_MODELS_FILE = join(tmpRegistryDir, 'media-models.json');
   vi.resetModules();
-  ({ buildArgs, buildSidecarMeta, resolveOutputPlacement, parseImageExecutionMarker } = await import('./local.js'));
+  ({ buildArgs, buildSidecarMeta, resolveOutputPlacement, parseImageExecutionMarker, generateImage } = await import('./local.js'));
   ({ PATHS } = await import('../../lib/fileUtils.js'));
 });
 
@@ -972,5 +978,28 @@ describe('imageGen local.resolveOutputPlacement (issue #2264 non-gallery render 
     expect(resolveOutputPlacement('nope').outputDir).toBe(PATHS.images);
     expect(resolveOutputPlacement({}).outputDir).toBe(PATHS.images);
     expect(resolveOutputPlacement({ dir: 123 }).outputDir).toBe(PATHS.images);
+  });
+});
+
+describe('imageGen local.generateImage runtime pre-flight', () => {
+  beforeEach(() => {
+    mockResolveFlux2Python.mockReset();
+    mockIsFlux2VenvHealthy.mockReset();
+  });
+
+  // The binary exists, so buildArgs would happily spawn it — and did, until the
+  // render died inside python with an ImportError the Decks page rendered as an
+  // unexplained "Failed". Refuse before spawning, with the reason and the
+  // one-button remedy the status probe reports for the same machine.
+  it('refuses a shared-torch-runtime render when the venv is present but unhealthy', async () => {
+    mockResolveFlux2Python.mockReturnValue('/fake/venv-flux2/bin/python3');
+    mockIsFlux2VenvHealthy.mockResolvedValue(false);
+
+    await expect(generateImage({ modelId: 'flux2-klein-4b', prompt: 'a fox' })).rejects.toMatchObject({
+      // Same code buildArgs throws when the venv's python is missing outright.
+      code: 'IMAGE_GEN_FLUX2_NOT_INSTALLED',
+      status: 400,
+      message: expect.stringContaining('not installed or healthy'),
+    });
   });
 });

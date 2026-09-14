@@ -29,6 +29,7 @@ import sharp from 'sharp';
 import { getSettings } from '../settings.js';
 import { getImageModels, isFlux2 } from '../../lib/mediaModels.js';
 import { usesDiffusersRunner } from '../../lib/runners.js';
+import { usesTorchVenv } from '../../lib/imageRuntimeRemedies.js';
 import { isFlux2VenvHealthy } from '../../lib/pythonSetup.js';
 import { IMAGE_GEN_MODE } from './modes.js';
 
@@ -151,7 +152,7 @@ export function clampRegenDimensions(srcWidth, srcHeight, maxMegapixels = DEFAUL
 
 // FLUX.2 + the diffusers-family runners (Z-Image / ERNIE / HiDream / Qwen) all
 // share the FLUX.2 venv and implement img2img via `--image-path`.
-export const modelUsesFluxVenv = (model) => isFlux2(model) || usesDiffusersRunner(model);
+export { usesTorchVenv as modelUsesFluxVenv };
 
 // Whether a model RELIABLY does the img2img round-trip regen needs — i.e. it
 // honors the init image rather than silently degrading to txt2img (which would
@@ -209,7 +210,7 @@ export async function resolveRegenBackend({ sourceModelId } = {}) {
   const mfluxReady = mfluxBinaryPresent(pythonPath);
   const candidates = orderRegenCandidates(models, sourceModelId).filter(modelSupportsRegen);
   for (const model of candidates) {
-    if (modelUsesFluxVenv(model)) {
+    if (usesTorchVenv(model)) {
       if (fluxVenvHealthy) return { available: true, model, pythonPath };
     } else if (mfluxReady) {
       return { available: true, model, pythonPath };

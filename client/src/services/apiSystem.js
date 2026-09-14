@@ -372,12 +372,16 @@ export const getTailnetInfo = () => request('/instances/tailnet-suffix');
 export const provisionTailnetCert = () => request('/instances/provision-cert', { method: 'POST' });
 
 // Image Generation
-export const getImageGenStatus = (mode, modelId) => {
+// `mode` is an explicit override, not the saved one, so a surface that is not
+// in local mode can still ask "what would a local render of X do?" — which is
+// what the runtime status card asks. `options` lets a background probe pass
+// `{ silent, signal }`; a foreground check omits them and keeps the toast.
+export const getImageGenStatus = (mode, modelId, options = {}) => {
   const params = new URLSearchParams();
   if (mode) params.set('mode', mode);
   if (modelId) params.set('modelId', modelId);
   const query = params.toString();
-  return request(`/image-gen/status${query ? `?${query}` : ''}`);
+  return request(`/image-gen/status${query ? `?${query}` : ''}`, options);
 };
 export const generateImage = (data, options = {}) => request('/image-gen/generate', {
   method: 'POST',

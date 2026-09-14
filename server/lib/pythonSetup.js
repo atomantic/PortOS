@@ -367,16 +367,31 @@ export function resolveFlux2Python() {
 const FLUX2_HEALTH_NEGATIVE_TTL_MS = 60_000;
 let cachedFlux2Healthy = null;
 let cachedFlux2HealthyAt = 0;
+// In-flight dedupe. The cache is only written AFTER the probe resolves, so N
+// callers arriving on a cold or just-invalidated cache each spawned their own
+// full torch+diffusers import — seconds of CPU and hundreds of MB apiece. That
+// is not hypothetical: opening Settings › Image Gen › Local fires the status
+// probe and the runtime card together, and finishing an install invalidates the
+// cache and then re-probes from both the card and its host. Collapsing them onto
+// one promise costs nothing when the cache is warm, since that path returns
+// before this is read.
+let flux2HealthInFlight = null;
 export async function isFlux2VenvHealthy() {
   if (cachedFlux2Healthy === true) return true;
   if (cachedFlux2Healthy === false && Date.now() - cachedFlux2HealthyAt < FLUX2_HEALTH_NEGATIVE_TTL_MS) {
     return false;
   }
+  if (flux2HealthInFlight) return flux2HealthInFlight;
+  flux2HealthInFlight = probeFlux2Venv().finally(() => { flux2HealthInFlight = null; });
+  return flux2HealthInFlight;
+}
+async function probeFlux2Venv() {
   const py = resolveFlux2Python();
-  if (!py) { cachedFlux2Healthy = false; cachedFlux2HealthyAt = Date.now(); return false; }
-  const ok = await execFileAsync(py, ['-c', 'from diffusers import Flux2KleinPipeline'], safeChildProcessOptions({ timeout: 30_000 }))
-    .then(() => true)
-    .catch(() => false);
+  const ok = py
+    ? await execFileAsync(py, ['-c', 'from diffusers import Flux2KleinPipeline'], safeChildProcessOptions({ timeout: 30_000 }))
+      .then(() => true)
+      .catch(() => false)
+    : false;
   cachedFlux2Healthy = ok;
   cachedFlux2HealthyAt = Date.now();
   return ok;
