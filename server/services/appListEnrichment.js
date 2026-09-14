@@ -8,8 +8,9 @@
  * derivation. The route just fetches the apps and responds — this module is
  * the single home for the enrichment logic.
  *
- * The pure port/status derivation helpers (`deriveUiPort`, `deriveAppPorts`,
- * `computeOverallStatus`) live here too and are re-exported from
+ * The pure port/status derivation helpers (`deriveAppPorts`,
+ * `computeOverallStatus`, and `deriveUiPort` re-exported from
+ * `lib/ecosystemProcessPorts.js`) live here too and are re-exported from
  * `routes/apps/shared.js` so the detail (`GET /:id`) and lifecycle routes keep
  * a single shared implementation without importing a service from a route.
  */
@@ -19,15 +20,12 @@ import { listProcessesStrict } from './pm2.js';
 import { hasDeployScript } from './appDeployer.js';
 import { checkScripts } from './xcodeScripts.js';
 import { pathExists } from '../lib/fileUtils.js';
+import { attributeProcessPorts, deriveUiPort } from '../lib/ecosystemProcessPorts.js';
 
-/**
- * Derive uiPort from apiPort when app has dev UI but no dedicated prod UI port
- * (prod UI is served by the API server in these cases).
- */
-export function deriveUiPort(uiPort, apiPort, devUiPort) {
-  if (!uiPort && apiPort && devUiPort) return apiPort;
-  return uiPort;
-}
+// The served-by-API derivation itself lives in the pure lib leaf beside the
+// port-attribution rules (its two halves are one decision); re-exported here so
+// routes/apps/shared.js and every existing deep import keep resolving it.
+export { deriveUiPort };
 
 /**
  * Derive uiPort/apiPort/devUiPort from an app's process list when not
@@ -38,18 +36,14 @@ export function deriveUiPort(uiPort, apiPort, devUiPort) {
 export function deriveAppPorts(app, processes) {
   let { uiPort, apiPort, devUiPort } = app;
   const procs = processes || [];
-  if (!uiPort && procs.length) {
-    const uiProc = procs.find(p => p.ports?.ui);
-    if (uiProc) uiPort = uiProc.ports.ui;
-  }
-  if (!apiPort && procs.length) {
-    const apiProc = procs.find(p => p.ports?.api);
-    if (apiProc) apiPort = apiProc.ports.api;
-  }
-  if (!devUiPort && procs.length) {
-    const devUiProc = procs.find(p => p.ports?.devUi);
-    if (devUiProc) devUiPort = devUiProc.ports.devUi;
-  }
+  // Attribute each label to a process that belongs to THIS app (#7357) — the
+  // same rule the write-back path uses, so a displayed port and a rewritten port
+  // can never disagree about whose it is. A sibling surface's `ports.ui` (e.g.
+  // `portos-autofixer-ui` in PortOS's own config) is not the app's UI port.
+  const { ports } = attributeProcessPorts(procs, app);
+  if (!uiPort) uiPort = ports.ui;
+  if (!apiPort) apiPort = ports.api;
+  if (!devUiPort) devUiPort = ports.devUi;
   uiPort = deriveUiPort(uiPort, apiPort, devUiPort);
   return { uiPort, apiPort, devUiPort };
 }

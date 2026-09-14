@@ -606,7 +606,18 @@ describe('deferred imports stay deferred (#6156)', () => {
 // `modelPinAudit.js` gaining `reviewerConfig.js` / `goalFidelity.js` cost
 // nothing — `routes/providers.js` already reaches both through
 // `lib/validation.js`.
-const MAX_STATIC_INSTANTIATIONS = 104668;
+// Fixing the sibling-process port mis-attribution (#7357) measures +37, all of
+// it a new boundary test file plus one dependency-free leaf. The attribution
+// rules live in `lib/ecosystemProcessPorts.js`, which imports nothing, so the
+// ~13 existing closures that reach the two services now sharing it each gain one
+// node. `services/appPortConfig.test.js` has to go through the real filesystem
+// (the regression is "the config file must come back byte-identical", which the
+// route suite's mocked writer cannot observe), so it pays its own closure. That
+// closure is 24 rather than 83 because the same change moved `deriveUiPort` —
+// three pure lines the write-back path was importing the whole 81-module
+// `services/appListEnrichment.js` for — down into that leaf, which
+// re-exports it for its existing callers.
+const MAX_STATIC_INSTANTIATIONS = 104705;
 
 
 const SKIP_DIRS = new Set(['node_modules', 'coverage', 'dist', 'data']);
