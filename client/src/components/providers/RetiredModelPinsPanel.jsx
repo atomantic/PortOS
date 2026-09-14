@@ -6,6 +6,9 @@ import * as api from '../../services/api';
 import Banner from '../ui/Banner';
 import { modeLabel, RENDER_TARGET_OPTIONS } from '../../lib/imageGenModes';
 import { pluralize } from '../../lib/textUtils';
+// The retired-pin notification card names a pin's provider records with this
+// too, so the two surfaces cannot describe the same pin differently.
+import { pinProviderNames } from '../../../../server/lib/modelPinReconcile.js';
 
 /**
  * The user-facing name for a pin, composed HERE rather than on the server.
@@ -93,13 +96,9 @@ export default function RetiredModelPinsPanel({ reloadKey = 0 }) {
         {pins.map((pin) => {
           // A reviewer pin is judged against EVERY record fronting its binary
           // (#7339), so "now offered" is their union — showing one record's
-          // catalog would hide tiers the reviewer can still be handed. Falls
-          // back to the single `providerId` for a payload predating the field.
-          const judged = Array.isArray(pin.providerIds) && pin.providerIds.length
-            ? pin.providerIds
-            : [pin.providerId];
+          // catalog would hide tiers the reviewer can still be handed.
           const offered = Array.from(new Set(
-            judged.flatMap((id) => (Array.isArray(providers[id]?.available) ? providers[id].available : []))
+            pin.providerIds.flatMap((id) => (Array.isArray(providers[id]?.available) ? providers[id].available : []))
           ));
           return (
             <li
@@ -111,7 +110,7 @@ export default function RetiredModelPinsPanel({ reloadKey = 0 }) {
                   {pinLabel(pin)}: <code className="text-port-warning">{pin.model}</code>
                 </div>
                 <div className="mt-0.5 text-xs text-gray-400">
-                  {pin.location} · {judged.map((id) => providers[id]?.name || id).join(' · ')}
+                  {pin.location} · {pinProviderNames(pin, providers)}
                 </div>
                 {offered.length > 0 && (
                   <div className="mt-1 break-words text-xs text-gray-500">

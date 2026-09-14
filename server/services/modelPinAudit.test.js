@@ -86,7 +86,7 @@ describe('auditModelPins', () => {
     expect(pins).toHaveLength(1);
     expect(pins[0]).toMatchObject({
       id: 'settings:imageGen.agy.model',
-      providerId: 'antigravity-cli',
+      providerIds: ['antigravity-cli'],
       model: 'gemini-3.5-flash-low',
       location: 'Settings → Media Gen → Image Gen',
     });
@@ -149,7 +149,7 @@ describe('auditModelPins', () => {
 
     const { pins } = await auditModelPins();
     expect(pins).toHaveLength(1);
-    expect(pins[0]).toMatchObject({ id: 'app:app-1:code-review', providerId: 'antigravity-cli' });
+    expect(pins[0]).toMatchObject({ id: 'app:app-1:code-review', providerIds: ['antigravity-cli'] });
   });
 
   it('leaves an app override alone when no provider can be resolved for it', async () => {
@@ -191,6 +191,17 @@ describe('clearModelPin', () => {
     expect('model' in next.imageGen.agy).toBe(false);
     expect(next.imageGen.agy).toEqual({ enabled: true, agyPath: '/bin/agy' });
     expect(next.other).toBe('kept');
+  });
+
+  it('writes nothing into settings for a path whose parent is not there', async () => {
+    // The shared settings writer copies every level above the key it removes —
+    // it must not MINT one. Building `{ codeReview: {} }` for a pin that is
+    // already gone is a settings change the user never asked for.
+    getSettings.mockResolvedValue(settingsWith({ codeReview: { codexModel: 'gpt-4o' } }));
+    await clearModelPin('settings:codeReview.codexModel');
+    const next = updateSettingsWith.mock.calls[0][0](settingsWith({}));
+    expect(next.imageGen).toEqual({});
+    expect('codeReview' in next).toBe(false);
   });
 
   it('clears a renderDefaults pin without disturbing its mode', async () => {
@@ -346,11 +357,9 @@ describe('reviewer model pins (#7339)', () => {
 
     expect(pins).toHaveLength(1);
     expect(pins[0]).toMatchObject({
-      id: 'codeReview:codexModel',
+      id: 'settings:codeReview.codexModel',
       kind: 'reviewerModel',
-      reviewer: 'codex',
       model: 'gpt-4o',
-      providerId: 'codex',
       providerIds: ['codex'],
       location: 'Code Review Defaults',
       href: '/models/code-reviewers',
@@ -375,8 +384,7 @@ describe('reviewer model pins (#7339)', () => {
     const { pins, providers } = await auditModelPins();
 
     expect(pins[0]).toMatchObject({
-      id: 'codeReview:claudeModel',
-      providerId: 'claude-code',
+      id: 'settings:codeReview.claudeModel',
       providerIds: ['claude-code', 'claude-code-tui'],
     });
     // Both catalogs ride along so the panel can union them — one record's list
@@ -411,14 +419,42 @@ describe('reviewer model pins (#7339)', () => {
     expect((await auditModelPins()).pins).toEqual([]);
   });
 
-  it('judges the goal-fidelity pin against the backend it names', async () => {
-    listProviders.mockResolvedValue([CODEX, OLLAMA]);
+  it('audits a provider:<id> reviewer pin against that record', async () => {
+    // `providerModels` is the other half of the pin vocabulary
+    // (`reviewerModelsFromDefaults` folds both), and a `provider:<id>` token
+    // names its record outright — no matcher union needed.
+    getSettings.mockResolvedValue(codeReview({ providerModels: { 'provider:codex': 'gpt-4o' } }));
+
+    const { pins } = await auditModelPins();
+
+    expect(pins[0]).toMatchObject({
+      id: 'settings:codeReview.providerModels.provider:codex',
+      providerIds: ['codex'],
+      model: 'gpt-4o',
+    });
+  });
+
+  it('clears a provider:<id> pin out of the providerModels map, leaving its siblings', async () => {
+    const stored = codeReview({ providerModels: { 'provider:codex': 'gpt-4o', 'provider:other': 'keep-me' } });
+    getSettings.mockResolvedValue(stored);
+
+    await clearModelPin('settings:codeReview.providerModels.provider:codex');
+
+    const next = updateSettingsWith.mock.calls[0][0](stored);
+    expect(next.codeReview.providerModels).toEqual({ 'provider:other': 'keep-me' });
+  });
+
+  it('ignores the goal-fidelity model while the gate is switched off', async () => {
+    // `resolveGoalFidelityConfig` owns when the gate runs at all; a pin no run
+    // would carry is not one to warn about — and its id must reach no writer.
+    listProviders.mockResolvedValue([CODEX]);
     getSettings.mockResolvedValue(codeReview({
-      goalFidelity: { enabled: true, backend: 'ollama', model: 'llama3.3:70b' },
+      goalFidelity: { enabled: false, backend: 'ollama', model: 'gpt-4o' },
     }));
-    // The local-daemon carve-out again: a backend PortOS probes live is never
-    // judged against the record's cached snapshot.
+
     expect((await auditModelPins()).pins).toEqual([]);
+    await expect(clearModelPin('settings:codeReview.goalFidelity.model'))
+      .resolves.toMatchObject({ cleared: false });
   });
 
   it('clears the reviewer scalar and nothing beside it', async () => {
@@ -430,8 +466,8 @@ describe('reviewer model pins (#7339)', () => {
     });
     getSettings.mockResolvedValue(stored);
 
-    await expect(clearModelPin('codeReview:codexModel')).resolves.toEqual({
-      cleared: true, id: 'codeReview:codexModel',
+    await expect(clearModelPin('settings:codeReview.codexModel')).resolves.toEqual({
+      cleared: true, id: 'settings:codeReview.codexModel',
     });
 
     const next = updateSettingsWith.mock.calls[0][0](stored);
@@ -444,13 +480,13 @@ describe('reviewer model pins (#7339)', () => {
   });
 
   it('clears the goal-fidelity model without disturbing its backend or effort', async () => {
-    listProviders.mockResolvedValue([{ ...CODEX, id: 'lmstudio', name: 'LM Studio' }]);
+    listProviders.mockResolvedValue([{ id: 'lmstudio', name: 'LM Studio' }]);
     const stored = codeReview({
       goalFidelity: { enabled: true, backend: 'lmstudio', model: 'gpt-4o', effort: 'high' },
     });
     getSettings.mockResolvedValue(stored);
 
-    await clearModelPin('codeReview:goalFidelity.model');
+    await clearModelPin('settings:codeReview.goalFidelity.model');
 
     const next = updateSettingsWith.mock.calls[0][0](stored);
     expect(next.codeReview.goalFidelity).toEqual({ enabled: true, backend: 'lmstudio', effort: 'high' });
@@ -476,7 +512,7 @@ describe('task template pins (#7339)', () => {
       id: 'template:user-abc',
       kind: 'taskTemplate',
       templateId: 'user-abc',
-      providerId: 'codex',
+      providerIds: ['codex'],
       model: 'gpt-4o',
       label: 'Nightly sweep · template model',
       location: 'Chief of Staff → Tasks → Quick Templates',

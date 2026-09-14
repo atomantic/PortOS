@@ -78,7 +78,6 @@ export const enabledApiProviderFilter = (provider) => Boolean(provider?.enabled)
  */
 export const enabledProcessProviderFilter = (provider) => Boolean(provider?.enabled) && isProcessProvider(provider);
 
-
 /**
  * Tailwind chip classes for the provider type badge ('cli' / 'tui' / 'api').
  * Lifted out of AIProviders.jsx so other components can render the same

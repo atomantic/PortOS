@@ -12,8 +12,8 @@
  * user's pin would render something different under their chosen model's name
  * and bury the vendor's own "unknown model" error, so such a pin can only be
  * SURFACED. This leaf is the membership half of that: given a pin and the
- * provider record — or records, for a reviewer pin whose binary several records
- * front (#7339) — that serve it, is the id still listed by ANY of them?
+ * provider record — or records, for a reviewer pin (#7339) — that serve it, is
+ * the id still listed by ANY of them?
  *
  * The comparison is deliberately STATE-BASED ("is this pin in today's
  * catalog?") rather than a diff of one refresh against the previous one. The
@@ -105,18 +105,25 @@ export function providerCatalogListsModel(provider, modelId) {
 }
 
 /**
- * The provider ids a pin is judged against, ALWAYS as a list.
+ * THE coercion from a pin's provider field(s) to the id list it is judged
+ * against — trimmed, blanks dropped.
  *
- * Most pins name exactly one record. A REVIEWER pin (#7339) names a binary, and
- * PortOS ships more than one record per binary — `claude` spans `claude-code`
- * and `claude-code-tui`, `grok` spans `grok-cli` and its TUI — so it carries
- * `providerIds`. Collapsing those to one record would produce a false
- * retirement for a model the OTHER record still lists, which is exactly the
- * failure this whole audit's posture exists to avoid.
+ * Most pins name exactly one record. A REVIEWER pin (#7339) names a binary that
+ * several records front, so it carries `providerIds` — see
+ * `reviewerProviderMatchers.js` for which records, and why collapsing them to
+ * one would produce a false retirement for a model another still lists.
+ *
+ * Exported because the audit's own descriptor builder normalizes with it too:
+ * one definition, applied at both layers, rather than two spellings that drift
+ * on whitespace the first time somebody touches one of them.
+ *
+ * @param {{providerId?: unknown, providerIds?: unknown}} pin
+ * @returns {string[]}
  */
-const pinProviderIds = (pin) =>
+export const pinProviderIds = (pin) =>
   (Array.isArray(pin?.providerIds) ? pin.providerIds : [pin?.providerId])
-    .filter((id) => typeof id === 'string' && id.trim() !== '');
+    .map((id) => (typeof id === 'string' ? id.trim() : ''))
+    .filter(Boolean);
 
 /**
  * Is `modelId` still served by ANY of `providerIds`?
@@ -140,6 +147,22 @@ const anyProviderListsModel = (providerIds, byId, modelId) =>
   providerIds.length === 0 || providerIds.some((id) => providerCatalogListsModel(byId[id], modelId));
 
 /**
+ * How a surface NAMES the records a pin was judged against.
+ *
+ * Shared so the panel and the notification card cannot describe one pin
+ * differently — naming only the first record would have the panel say
+ * "Claude Code · Claude Code TUI" while the card said "Claude Code", from the
+ * same descriptor. Falls back to the raw id for a record the catalog no longer
+ * carries, which is itself a thing the user needs to see.
+ *
+ * @param {{providerIds?: string[]}} pin
+ * @param {Record<string, {name?: string}>} providers
+ * @returns {string}
+ */
+export const pinProviderNames = (pin, providers) =>
+  pinProviderIds(pin).map((id) => providers?.[id]?.name || id).join(' · ');
+
+/**
  * Which of `pins` name a model their provider no longer lists.
  *
  * A pin descriptor is `{ id, providerId | providerIds, model, label, location, ... }`;
@@ -148,10 +171,9 @@ const anyProviderListsModel = (providerIds, byId, modelId) =>
  * knowing about it. Warnings are returned in the order the pins were given, so
  * a stable collector order yields a stable panel.
  *
- * Each warning is normalized to carry `providerIds` — the full judged list —
- * so the panel can union the catalogs it should offer instead of showing one
- * record's. `providerId` (the first, preferred record) rides through untouched
- * for the single-provider sources and is what a UI names the pin's provider by.
+ * Each warning carries `providerIds` — the full judged list, and the ONE field
+ * a surface reads — so the panel can union the catalogs it should offer instead
+ * of showing one record's, and `pinProviderNames` can name them all.
  *
  * `providers` is the provider records keyed by id. A pin naming a provider that
  * is not in the map is left alone — see `providerCatalogListsModel`.
@@ -162,8 +184,15 @@ const anyProviderListsModel = (providerIds, byId, modelId) =>
  */
 export function reconcileModelPins(pins, providers) {
   const byId = providers && typeof providers === 'object' ? providers : {};
-  return (Array.isArray(pins) ? pins : [])
-    .filter((pin) => pin && typeof pin.model === 'string' && pin.model.trim() !== '')
-    .map((pin) => ({ ...pin, model: pin.model.trim(), providerIds: pinProviderIds(pin) }))
-    .filter((pin) => !anyProviderListsModel(pin.providerIds, byId, pin.model));
+  // One pass, and the descriptor is built only for a pin that is actually
+  // stale. The healthy pins are the overwhelming majority — an install with a
+  // render pin on every universe, series, sprite, deck and music video reaches
+  // here with hundreds of them for a result that is normally empty — so a
+  // map-then-filter would spread every one of them just to drop it.
+  return (Array.isArray(pins) ? pins : []).flatMap((pin) => {
+    const model = typeof pin?.model === 'string' ? pin.model.trim() : '';
+    if (model === '') return [];
+    const providerIds = pinProviderIds(pin);
+    return anyProviderListsModel(providerIds, byId, model) ? [] : [{ ...pin, model, providerIds }];
+  });
 }

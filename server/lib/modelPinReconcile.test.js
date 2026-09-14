@@ -133,9 +133,7 @@ describe('reconcileModelPins', () => {
 
     it('reports it once no named record lists it, keeping the full judged list', () => {
       const pin = { id: 'r', providerIds: ['antigravity-cli', 'codex'], model: 'gpt-4o' };
-      expect(reconcileModelPins([pin], providers)).toEqual([
-        { ...pin, providerIds: ['antigravity-cli', 'codex'] },
-      ]);
+      expect(reconcileModelPins([pin], providers)).toEqual([pin]);
     });
 
     it('answers "still served" when one of the named records is unresolvable', () => {
@@ -143,6 +141,13 @@ describe('reconcileModelPins', () => {
       // a false retirement on a pin that works.
       const pin = { id: 'r', providerIds: ['codex', 'deleted-provider'], model: 'gpt-4o' };
       expect(reconcileModelPins([pin], providers)).toEqual([]);
+    });
+
+    it('normalizes a scalar providerId onto the same list shape, trimmed', () => {
+      // ONE coercion for both input shapes — `pinProviderIds` — so the audit's
+      // descriptor builder and this leaf cannot disagree about whitespace.
+      const pin = { id: 'a', providerId: '  codex  ', model: 'gpt-4o' };
+      expect(reconcileModelPins([pin], providers)).toEqual([{ ...pin, providerIds: ['codex'] }]);
     });
 
     it('leaves a pin with an EMPTY provider list alone rather than reporting all of them', () => {

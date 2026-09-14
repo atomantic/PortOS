@@ -218,6 +218,7 @@ export * from './publicReviewSpawnGate.js';
 // by validation.js), so a flat `export *` here would trip the barrel's
 // duplicate-identifier collision check.
 export * as reviewerConfig from './reviewerConfig.js';
+export * from './reviewerProviderMatchers.js';
 export * from './quotaBurnConfig.js';
 export * from './quotaBurnLegacyConversion.js';
 export * from './quotaBurnOrigin.js';
@@ -451,7 +452,6 @@ export * from './assetProvenance.js';
 export * from './migrationMarker.js';
 export * from './modelPinMembership.js';
 export * from './modelPinReconcile.js';
-export * from './reviewerProviderMatchers.js';
 export * from './modelPricing.js';
 export * from './navManifest.js';
 export * from './noReplaceMove.js';

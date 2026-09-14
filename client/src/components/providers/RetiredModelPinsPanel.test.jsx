@@ -18,7 +18,7 @@ const STALE = {
     id: 'settings:imageGen.agy.model',
     kind: 'imageGen',
     mode: 'agy',
-    providerId: 'antigravity-cli',
+    providerIds: ['antigravity-cli'],
     model: 'gemini-3.5-flash-low',
     label: 'Agy CLI image model',
     location: 'Settings → Media Gen → Image Gen',
@@ -56,7 +56,7 @@ describe('RetiredModelPinsPanel', () => {
         id: 'settings:renderDefaults.universe-bible.imageModel',
         kind: 'renderDefault',
         target: 'universe-bible',
-        providerId: 'antigravity-cli',
+        providerIds: ['antigravity-cli'],
         model: 'gemini-3.5-flash-low',
         label: 'universe-bible render model',
         location: 'Settings → Media Gen → Render Defaults',
@@ -79,7 +79,7 @@ describe('RetiredModelPinsPanel', () => {
         family: 'universe',
         recordId: 'u-1',
         mode: 'agy',
-        providerId: 'antigravity-cli',
+        providerIds: ['antigravity-cli'],
         model: 'gemini-3.5-flash-low',
         label: 'Example Universe · universe render model',
         location: 'Universes → Render',
@@ -156,7 +156,6 @@ describe('a reviewer pin judged against several provider records (#7339)', () =>
       id: 'codeReview:claudeModel',
       kind: 'reviewerModel',
       reviewer: 'claude',
-      providerId: 'claude-code',
       providerIds: ['claude-code', 'claude-code-tui'],
       model: 'claude-3-opus',
       label: 'claude reviewer model',
@@ -179,16 +178,5 @@ describe('a reviewer pin judged against several provider records (#7339)', () =>
     expect(offered.textContent).toContain('claude-sonnet-4-6');
     expect(offered.textContent).toContain('claude-sonnet-5');
     expect(screen.getByText(/Claude Code · Claude Code TUI/)).toBeTruthy();
-  });
-
-  it('falls back to the single providerId for a payload predating providerIds', async () => {
-    const { providerIds, ...legacyPin } = REVIEWER_PIN.pins[0];
-    expect(providerIds).toHaveLength(2);
-    api.getModelPinWarnings.mockResolvedValue({ ...REVIEWER_PIN, pins: [legacyPin] });
-    renderPanel();
-
-    const offered = await screen.findByText(/Now offered:/);
-    expect(offered.textContent).toContain('claude-sonnet-4-6');
-    expect(offered.textContent).not.toContain('claude-sonnet-5');
   });
 });

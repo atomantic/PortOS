@@ -30,8 +30,9 @@ import { ANTIGRAVITY_CLI_ID } from '../lib/antigravity.js';
 import { CODEX_CLI_ID } from '../lib/codex.js';
 import { IMAGE_GEN_MODE } from '../lib/generationModes.js';
 import { MODEL_OVERRIDE_CAPABLE_MODES } from '../lib/imageGenCapabilities.js';
-import { catalogOfferings, reconcileModelPins } from '../lib/modelPinReconcile.js';
-import { MODEL_SELECTABLE_REVIEWERS, normalizeReviewerModel } from '../lib/reviewerConfig.js';
+import { resolveGoalFidelityConfig } from '../lib/goalFidelity.js';
+import { catalogOfferings, pinProviderIds, reconcileModelPins } from '../lib/modelPinReconcile.js';
+import { isProviderReviewer, normalizeReviewerModel, reviewerModelsFromDefaults } from '../lib/reviewerConfig.js';
 import { reviewerProviderIds } from '../lib/reviewerProviderMatchers.js';
 import { normalizeRenderPinValue, RENDER_TARGETS } from '../lib/renderTargets.js';
 import { getSettings, updateSettingsWith } from './settings.js';
@@ -112,11 +113,12 @@ const trimmed = (value) => (typeof value === 'string' ? value.trim() : '');
 const pinIf = ({ model, providerId, providerIds, ...rest }) => {
   const id = trimmed(model);
   // A reviewer pin names a BINARY that several records front, so it hands in a
-  // LIST (#7339); every other source names exactly one record. Both normalize to
-  // the same descriptor — `providerIds` is what the membership rule judges, and
-  // `providerId` (the preferred record) is what the panel names the pin by.
-  const resolved = (providerIds ? [...providerIds] : [providerId]).map(trimmed).filter(Boolean);
-  return id && resolved.length ? [{ ...rest, model: id, providerId: resolved[0], providerIds: resolved }] : [];
+  // LIST (#7339); every other source names exactly one record. Both collapse to
+  // ONE output field, `providerIds` — what the membership rule judges and what
+  // every surface names the pin by, through `pinProviderNames`. Normalized by
+  // the leaf's own `pinProviderIds` rather than a second spelling of it here.
+  const resolved = pinProviderIds({ providerId, providerIds });
+  return id && resolved.length ? [{ ...rest, model: id, providerIds: resolved }] : [];
 };
 
 /** `settings.imageGen.<mode>.model` — the install-wide Image Gen pins. */
@@ -124,6 +126,7 @@ function collectImageGenPins({ settings }) {
   return Object.entries(PINNED_IMAGE_MODES).flatMap(([mode, { providerId, label }]) => pinIf({
     id: `settings:imageGen.${mode}.model`,
     mode,
+    settingsPath: ['imageGen', mode, 'model'],
     providerId,
     model: settings?.imageGen?.[mode]?.model,
     label: `${label} image model`,
@@ -148,6 +151,7 @@ function collectRenderDefaultPins({ settings }) {
     return pinIf({
       id: `settings:renderDefaults.${target}.imageModel`,
       target,
+      settingsPath: ['renderDefaults', target, 'imageModel'],
       providerId: pinnedModeProviderId(mode),
       model: normalizeRenderPinValue(entry?.imageModel),
       label: `${target} render model`,
@@ -203,8 +207,9 @@ async function collectAppOverridePins({ schedule }) {
 }
 
 /**
- * `settings.codeReview.<reviewer>Model` and `settings.codeReview.goalFidelity.model`
- * — the Code Review Defaults pins (#7339).
+ * `settings.codeReview`'s reviewer model pins (#7339) — the `<reviewer>Model`
+ * scalars, the `provider:<id>` entries in `providerModels`, and the
+ * goal-fidelity gate's own model.
  *
  * These rot exactly like every other pin, with a worse failure: the user pins
  * `codexModel: 'gpt-4o'`, the vendor retires it, and nobody learns until a
@@ -212,51 +217,66 @@ async function collectAppOverridePins({ schedule }) {
  * an unattended run, with the reviewer's verdict silently missing.
  *
  * **A reviewer is judged against SEVERAL provider records, not one.** The slug
- * names a BINARY, and PortOS ships more than one record per binary — `claude`
- * spans `claude-code` and `claude-code-tui`, `grok` spans `grok-cli` and its
- * TUI. The picker already unions their catalogs for exactly this reason
- * (sourcing from one record made it hostage to that record's staleness), so
- * judging a pin against a single record would report a model the OTHER record
- * still lists as retired. `reviewerProviderIds` resolves the whole set from the
- * shared matcher table the picker uses, and `reconcileModelPins` flags the pin
- * only when EVERY one of them fails to list it.
- *
- * A reviewer no record matches yields no ids, so `pinIf` drops the pin rather
- * than guessing — the same posture as an app override with no resolvable
- * provider. The `lmstudio`/`ollama`/`mtplx` reviewers DO match a record, whose
+ * names a BINARY that more than one record fronts — see
+ * `lib/reviewerProviderMatchers.js` for the table and why the union is the only
+ * safe answer. A reviewer no record matches yields no ids, so `pinIf` drops the
+ * pin rather than guessing, the same posture as an app override with no
+ * resolvable provider. A `provider:<id>` reviewer IS one record by construction.
+ * The `lmstudio`/`ollama`/`mtplx` reviewers DO match a record, whose
  * local-daemon carve-out in `modelPinMembership.js` passes any id through: the
  * daemon on this machine is the authority, not the record's cached snapshot.
  *
- * `goalFidelity` rides the same collector because it is the same kind of pin on
- * the same settings object — its `backend` names the record to judge against.
- * Today that backend is restricted to the local-LLM set, so it is silent by
- * construction; the row costs one settings read that already happened and keeps
- * the pin vocabulary complete if that restriction ever widens.
+ * The stored scalars are read through `reviewerModelsFromDefaults`, the one
+ * adapter between the persisted scalar encoding and the token-keyed map the
+ * resolvers speak — so a pin this audit judges is exactly a pin the token
+ * builders would emit, and the `provider:<id>` family cannot be missed.
+ * Resolving a reviewer's records is deferred until a token is known to carry a
+ * pin: `providersForReviewer` walks the catalog once per matcher, and a typical
+ * install pins one or two reviewers out of eleven.
  */
 function collectReviewerModelPins({ settings, providers }) {
   const codeReview = settings?.codeReview;
-  const scalarPins = MODEL_SELECTABLE_REVIEWERS.flatMap((reviewer) => pinIf({
-    id: `codeReview:${reviewer}Model`,
-    reviewer,
-    // Re-checked rather than trusted: settings.json is hand-editable, and a
-    // value the token builders would silently drop is not a pin the user has.
-    model: normalizeReviewerModel(codeReview?.[`${reviewer}Model`], reviewer),
-    providerIds: reviewerProviderIds(reviewer, providers),
-    label: `${reviewer} reviewer model`,
-    location: 'Code Review Defaults',
+  // `settingsPath` is how a pin says where it lives, so all three shapes — a
+  // scalar, a map entry, and the nested goal-fidelity key — share ONE writer
+  // instead of branching a clear on which kind of pin arrived.
+  const reviewerPin = ({ judgeAs, settingsPath, ...rest }) => pinIf({
+    ...rest,
+    settingsPath,
+    // Same `settings:<dotted path>` spelling the image-gen and render-default
+    // pins already use, so a pin id still says where it lives.
+    id: `settings:${settingsPath.join('.')}`,
+    providerIds: isProviderReviewer(judgeAs)
+      ? [judgeAs.slice('provider:'.length)]
+      : reviewerProviderIds(judgeAs, providers),
     href: '/models/code-reviewers',
+  });
+
+  const scalarPins = Object.entries(reviewerModelsFromDefaults(codeReview)).flatMap(([token, model]) => reviewerPin({
+    judgeAs: token,
+    model,
+    settingsPath: isProviderReviewer(token)
+      ? ['codeReview', 'providerModels', token]
+      : ['codeReview', `${token}Model`],
+    label: `${token} reviewer model`,
+    location: 'Code Review Defaults',
   }));
-  const backend = trimmed(codeReview?.goalFidelity?.backend);
-  return [...scalarPins, ...pinIf({
-    id: 'codeReview:goalFidelity.model',
-    model: normalizeReviewerModel(codeReview?.goalFidelity?.model, backend),
-    providerIds: reviewerProviderIds(backend, providers),
+
+  // The gate's BACKEND comes from `resolveGoalFidelityConfig`, which owns the
+  // rules for when the gate runs at all (disabled, or a hand-edited backend
+  // outside the local-LLM set it can actually call) — a pin no run would ever
+  // carry is not one to warn about. Its MODEL deliberately does not: that
+  // resolver falls back to `<backend>Model`, and auditing the fallback would
+  // report that scalar a second time, under a second id, with a clear that
+  // wrote somewhere else.
+  const gate = resolveGoalFidelityConfig(codeReview);
+  return [...scalarPins, ...reviewerPin({
+    judgeAs: gate?.backend,
+    model: normalizeReviewerModel(codeReview?.goalFidelity?.model, gate?.backend),
+    settingsPath: ['codeReview', 'goalFidelity', 'model'],
     label: 'goal-fidelity review model',
     location: 'Code Review Defaults → Goal fidelity',
-    href: '/models/code-reviewers',
   })];
 }
-
 /**
  * The `provider` + `model` pair a user-saved CoS task template pins.
  *
@@ -290,6 +310,44 @@ async function collectTaskTemplatePins() {
 }
 
 /**
+ * One parent object with `key` REMOVED — "back to inherit" is the absence of
+ * the field, not a blank string sitting where a model id used to be. `''` would
+ * also read as no-pin at every resolver, but it survives a settings round-trip
+ * and shows up in the file as a value the user never typed.
+ */
+const withoutKey = (parent, key) => {
+  const next = { ...(parent || {}) };
+  delete next[key];
+  return next;
+};
+
+/**
+ * `root` with the key at `path` removed, every level above it copied.
+ *
+ * Three pin sources are a model id stored somewhere under `settings`, at three
+ * different depths (`imageGen.<mode>.model`, `codeReview.<reviewer>Model`,
+ * `codeReview.goalFidelity.model`). Each used to hand-spread its own nesting,
+ * which is how the reviewer row ended up branching its clear on which SHAPE of
+ * reviewer pin had arrived. A pin carries its own `settingsPath` instead, and
+ * they share this one writer — so a new settings-backed pin source is a
+ * collector-only edit.
+ *
+ * A path whose parent holds no object is returned unchanged rather than having
+ * one built for it: there is nothing there to clear, and writing `{}` into
+ * settings for a pin that is already gone is a change the user did not ask for.
+ */
+const withoutSettingsPath = (root, [head, ...rest]) => {
+  if (!root || typeof root !== 'object') return root;
+  if (rest.length === 0) return withoutKey(root, head);
+  if (!root[head] || typeof root[head] !== 'object') return root;
+  return { ...root, [head]: withoutSettingsPath(root[head], rest) };
+};
+
+/** The `clear` every settings-backed pin source shares. */
+const clearSettingsPath = (pin) =>
+  updateSettingsWith((current) => withoutSettingsPath(current, pin.settingsPath));
+
+/**
  * The pin sources, in the order the panel reads them (install-wide first).
  *
  * ONE table, not a collector list beside a clearer map: the read half and the
@@ -304,24 +362,12 @@ const PIN_SOURCES = Object.freeze([
   {
     kind: 'imageGen',
     collect: collectImageGenPins,
-    clear: (pin) => updateSettingsWith((current) => ({
-      ...current,
-      imageGen: {
-        ...(current.imageGen || {}),
-        [pin.mode]: withoutKey(current.imageGen?.[pin.mode], 'model'),
-      },
-    })),
+    clear: clearSettingsPath,
   },
   {
     kind: 'renderDefault',
     collect: collectRenderDefaultPins,
-    clear: (pin) => updateSettingsWith((current) => ({
-      ...current,
-      renderDefaults: {
-        ...(current.renderDefaults || {}),
-        [pin.target]: withoutKey(current.renderDefaults?.[pin.target], 'imageModel'),
-      },
-    })),
+    clear: clearSettingsPath,
   },
   {
     kind: 'task',
@@ -345,19 +391,12 @@ const PIN_SOURCES = Object.freeze([
   {
     kind: 'reviewerModel',
     collect: collectReviewerModelPins,
-    // The reviewer's own scalar ONLY — never the sibling `<reviewer>Effort`, the
-    // `reviewers` list, or `goalFidelity`'s `backend`/`effort`. Each of those is
-    // a separate choice the user did not ask to undo, and dropping a reviewer
-    // out of the chain because its MODEL rotted would silently weaken the loop.
-    clear: (pin) => updateSettingsWith((current) => ({
-      ...current,
-      codeReview: pin.reviewer
-        ? withoutKey(current.codeReview, `${pin.reviewer}Model`)
-        : {
-          ...(current.codeReview || {}),
-          goalFidelity: withoutKey(current.codeReview?.goalFidelity, 'model'),
-        },
-    })),
+    // The pin's own `settingsPath` and nothing beside it — never the sibling
+    // `<reviewer>Effort`, the `reviewers` list, or `goalFidelity`'s
+    // `backend`/`effort`. Each is a separate choice the user did not ask to
+    // undo, and dropping a reviewer out of the chain because its MODEL rotted
+    // would silently weaken the loop.
+    clear: clearSettingsPath,
   },
   // User-saved CoS task-template pins (#7339).
   {
@@ -412,21 +451,20 @@ const PIN_SOURCES = Object.freeze([
  * A collector that throws must not take the whole audit down with it: one
  * unreadable store is a missing section, not a failed page.
  *
- * @param {Promise<Array<object>>|Array<object>} providerListPromise the caller's
- *   in-flight provider catalog read, shared rather than re-issued.
  * @returns {Promise<Array<object>>}
  */
-async function collectModelPins(providerListPromise) {
+async function collectModelPins() {
   const { loadSchedule } = await loadTaskScheduleModule();
+  const { listProviders } = await loadProvidersModule();
   const [settings, schedule, providers] = await Promise.all([
     getSettings().catch(() => ({})),
     loadSchedule().catch(() => null),
-    // The reviewer collector classifies provider RECORDS, so it needs the same
-    // catalog the reconciliation does. It takes the caller's in-flight promise
-    // rather than a second `listProviders()`: awaiting it here keeps the two
-    // reads independent for every other collector, while making one store read
-    // serve both halves.
-    Promise.resolve(providerListPromise).catch(() => []),
+    // The reviewer collector classifies provider RECORDS, so the catalog is one
+    // of this function's own inputs — read here, beside the others, rather than
+    // threaded in from both callers. `loadProviders` fronts a short TTL cache
+    // that coalesces in-flight reads, so the reconciliation's own read of the
+    // same catalog costs nothing extra.
+    listProviders().catch(() => []),
   ]);
   const context = { settings, schedule, providers };
   const collected = await Promise.all(PIN_SOURCES.map(async ({ kind, collect }) => {
@@ -451,12 +489,8 @@ async function collectModelPins(providerListPromise) {
  */
 export async function auditModelPins() {
   const { listProviders } = await loadProvidersModule();
-  // The pin stores and the provider catalog are independent reads. The catalog
-  // promise is handed to the collectors as well — a reviewer pin needs it to
-  // resolve WHICH records front its binary — so both halves share one read
-  // without either waiting on the other.
-  const providerListPromise = listProviders();
-  const [providerList, pins] = await Promise.all([providerListPromise, collectModelPins(providerListPromise)]);
+  // The pin stores and the provider catalog are independent reads.
+  const [providerList, pins] = await Promise.all([listProviders(), collectModelPins()]);
   const byId = Object.fromEntries(providerList.map((provider) => [provider.id, provider]));
   const stale = reconcileModelPins(pins, byId);
   const providers = Object.fromEntries(
@@ -468,18 +502,6 @@ export async function auditModelPins() {
   );
   return { pins: stale, providers };
 }
-
-/**
- * One parent object with `key` REMOVED — "back to inherit" is the absence of
- * the field, not a blank string sitting where a model id used to be. `''` would
- * also read as no-pin at every resolver, but it survives a settings round-trip
- * and shows up in the file as a value the user never typed.
- */
-const withoutKey = (parent, key) => {
-  const next = { ...(parent || {}) };
-  delete next[key];
-  return next;
-};
 
 /**
  * Clear ONE pin back to "inherit", by the `id` the audit reported.
@@ -499,12 +521,7 @@ const withoutKey = (parent, key) => {
  * @returns {Promise<{cleared: boolean, id: string}>}
  */
 export async function clearModelPin(pinId) {
-  // The SAME catalog read the audit makes, for the same reason: a reviewer pin
-  // resolves its provider records from it, and a collection that skipped it
-  // would silently drop every reviewer pin from the write-target allowlist —
-  // turning the Clear button on a reported pin into a no-op `cleared: false`.
-  const { listProviders } = await loadProvidersModule();
-  const pins = await collectModelPins(listProviders());
+  const pins = await collectModelPins();
   const pin = pins.find((candidate) => candidate.id === pinId);
   if (pin) await PIN_SOURCES.find((source) => source.kind === pin.kind).clear(pin);
   const { removeByMetadata } = await loadNotificationsModule();

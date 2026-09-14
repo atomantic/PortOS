@@ -58,6 +58,12 @@ export function resetModelPinReportState() {
   queued = false;
 }
 
+// The one exception to this module's no-static-imports posture: naming a pin's
+// provider records is a pure leaf (`modelPinReconcile.js`), and the panel calls
+// the same function — a private spelling here is how the card and the panel end
+// up describing one pin differently.
+import { pinProviderNames } from '../lib/modelPinReconcile.js';
+
 /**
  * Deferred so the audit's own import closure — and the pin stores behind it —
  * stays out of the boot closure `bootstrap.js` pays for. Memoizes the PROMISE
@@ -75,12 +81,15 @@ const loadNotificationsModule = () => (notificationsModule ||= import('./notific
  * retracted independently when that one pin is cleared. A single rolled-up card
  * could do neither.
  */
-async function announce(pin, provider) {
+async function announce(pin, providers) {
   const { addNotification, exists, NOTIFICATION_TYPES, PRIORITY_LEVELS } =
     await loadNotificationsModule();
   // The persisted card is the dedupe record: already announced, still true.
   if (await exists(NOTIFICATION_TYPES.AGENT_WARNING, 'pinId', pin.id)) return false;
-  const providerName = provider?.name || pin.providerId;
+  // Every record the pin was judged against, not just the first: a reviewer pin
+  // spans several (#7339), and naming one would have this card disagree with the
+  // panel about the same pin. `pinProviderNames` is what both call.
+  const providerName = pinProviderNames(pin, providers);
   await addNotification({
     type: NOTIFICATION_TYPES.AGENT_WARNING,
     title: 'Pinned model retired',
@@ -88,7 +97,7 @@ async function announce(pin, provider) {
       + ` — clear it in ${pin.location}.`,
     priority: PRIORITY_LEVELS.MEDIUM,
     link: pin.href || null,
-    metadata: { pinId: pin.id, kind: pin.kind, providerId: pin.providerId, model: pin.model },
+    metadata: { pinId: pin.id, kind: pin.kind, providerIds: pin.providerIds, model: pin.model },
   });
   return true;
 }
@@ -107,7 +116,7 @@ async function reportOnce() {
   // the next audit may be a whole burst away.
   let announced = 0;
   for (const pin of pins) {
-    const raised = await announce(pin, providers?.[pin.providerId]).catch((error) => {
+    const raised = await announce(pin, providers).catch((error) => {
       console.error(`❌ Announcing retired model pin ${pin.id} failed: ${error.message}`);
       return false;
     });

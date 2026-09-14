@@ -93,15 +93,11 @@ export default function useReviewerModelOptions() {
       .map((m) => m.id || m.name)
       .filter(Boolean);
 
-    // Every record fronting each reviewer's binary, in matcher-preference order
-    // (not `providers` array order) so `[0]` is the record whose default the
-    // picker shows. De-duped by identity: two matchers commonly overlap
-    // (`grok-cli` is also an `isGrokBuildCli`).
-    //
     // Resolved ONCE for the whole roster rather than per lookup — the option
     // list, the shown default, the agy raw catalog and `providerDisabled` all
     // ask the same question, and a per-call helper re-walked the provider array
-    // for every one of them.
+    // for every one of them. Ordering and de-duping are `providersForReviewer`'s
+    // own contract; see its JSDoc.
     const providersByReviewer = Object.fromEntries(
       Object.keys(REVIEWER_PROVIDER_MATCHERS).map((reviewer) => [reviewer, providersForReviewer(reviewer, providers)])
     );

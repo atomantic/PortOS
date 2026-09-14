@@ -55,6 +55,7 @@ import {
   isKimiProvider,
 } from './providerModels.js';
 import { isGrokBuildCli, isProcessProvider } from './providerTypes.js';
+import { dedupeByKey } from './arrayUtils.js';
 
 /** Reviewer slug → the provider-record predicates that front its binary, in preference order. */
 export const REVIEWER_PROVIDER_MATCHERS = Object.freeze({
@@ -90,13 +91,11 @@ export const REVIEWER_PROVIDER_MATCHERS = Object.freeze({
 export function providersForReviewer(reviewer, providers) {
   const matchers = REVIEWER_PROVIDER_MATCHERS[reviewer];
   if (!matchers) return [];
-  const matched = [];
-  for (const match of matchers) {
-    for (const provider of providers || []) {
-      if (provider && match(provider) && !matched.includes(provider)) matched.push(provider);
-    }
-  }
-  return matched;
+  const matched = matchers.flatMap((match) => (providers || []).filter((p) => p && match(p)));
+  // Keyed on the record itself, so identity is what de-dupes — two matchers
+  // commonly overlap (`grok-cli` is also an `isGrokBuildCli`) and the FIRST
+  // match is the one whose order a picker reads as the preference.
+  return dedupeByKey(matched, (provider) => provider, (held) => held);
 }
 
 /**

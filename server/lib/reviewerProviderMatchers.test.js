@@ -53,8 +53,11 @@ describe('providersForReviewer', () => {
 });
 
 describe('reviewerProviderIds', () => {
-  it('drops a record carrying no usable id', () => {
-    expect(reviewerProviderIds('codex', [{ type: 'cli', command: 'codex' }, cli('codex')]))
-      .toEqual(['codex']);
+  it('drops a record a predicate matched but that carries no usable id', () => {
+    // A COMMAND-matched reviewer is the one that can reach an id-less record —
+    // an id-equality matcher never does — so without the filter this yields
+    // `[undefined]`, and the pin gets judged against a catalog of nothing.
+    expect(reviewerProviderIds('grok', [{ type: 'cli', command: 'grok' }, cli('grok-cli', 'grok')]))
+      .toEqual(['grok-cli']);
   });
 });
