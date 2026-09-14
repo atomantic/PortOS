@@ -188,7 +188,7 @@ describe('SystemHealthPage remediation links', () => {
     });
     renderPage('/system-resources/storage');
 
-    expect(screen.getByRole('link', { name: /Storage/ })).toHaveAttribute('href', '/system-resources/storage');
+    expect(screen.getByRole('tab', { name: /Storage/ })).toHaveAttribute('aria-selected', 'true');
     expect(api.runSystemResourceReport).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole('button', { name: 'Run system report' }));
     await waitFor(() => expect(api.runSystemResourceReport).toHaveBeenCalledWith({ silent: true }));

@@ -1,6 +1,11 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { Link, useParams, useNavigate, useSearchParams } from 'react-router';
-import { ArrowLeft, Play, Square, RotateCcw, ExternalLink, Gamepad2, Hammer, RefreshCw, Pencil, AlertTriangle, Sparkles } from 'lucide-react';
+import {
+  ArrowLeft, Play, Square, RotateCcw, ExternalLink, Gamepad2, Hammer, RefreshCw,
+  Pencil, AlertTriangle, Sparkles, LayoutDashboard, Zap, Dog, FileText, GitBranch,
+  Compass, CircleDot, GitPullRequest, Ticket, Cpu, ShieldCheck, BookOpen, Boxes,
+  ListChecks,
+} from 'lucide-react';
 import DeployPanel from './DeployPanel';
 import EditAppDrawer from './EditAppDrawer';
 import toast from '../ui/Toast';
@@ -28,6 +33,27 @@ import ReferencesTab from './tabs/ReferencesTab';
 import SubmodulesTab from './tabs/SubmodulesTab';
 import DatadogTab from './tabs/DatadogTab';
 import UpdateTab from './tabs/UpdateTab';
+import TabPills from '../ui/TabPills';
+
+// Icons live here rather than on `APP_DETAIL_TABS` so `constants.js` stays
+// importable from node-env server tests (no lucide-react from `server/`).
+export const APP_DETAIL_TAB_ICONS = {
+  overview: LayoutDashboard,
+  automation: Zap,
+  datadog: Dog,
+  documents: FileText,
+  git: GitBranch,
+  gsd: Compass,
+  issues: CircleDot,
+  'pull-requests': GitPullRequest,
+  jira: Ticket,
+  processes: Cpu,
+  quality: ShieldCheck,
+  references: BookOpen,
+  submodules: Boxes,
+  tasks: ListChecks,
+  update: RefreshCw,
+};
 
 export default function AppDetailView() {
   const { appId } = useParams();
@@ -522,22 +548,14 @@ function AppDetail() {
           </div>
         )}
 
-        {/* Tab Bar */}
-        <div className="flex gap-1 mt-4 -mb-4 overflow-x-auto">
-          {visibleTabs.map(t => (
-            <button
-              key={t.id}
-              onClick={() => navigate(`/apps/${appId}/${t.id}`)}
-              className={`px-4 py-2 text-sm font-medium whitespace-nowrap border-b-2 transition-colors ${
-                effectiveTab === t.id
-                  ? 'border-port-accent text-port-accent'
-                  : 'border-transparent text-gray-400 hover:text-white hover:border-gray-600'
-              }`}
-            >
-              {t.label}
-            </button>
-          ))}
-        </div>
+        <TabPills
+          tabs={visibleTabs.map((t) => ({ ...t, icon: APP_DETAIL_TAB_ICONS[t.id] }))}
+          activeTab={effectiveTab}
+          onChange={(id) => navigate(`/apps/${appId}/${id}`)}
+          mobileCompact
+          ariaLabel="App sections"
+          className="mt-4 -mb-4"
+        />
       </div>
 
       {/* Tab Content */}
