@@ -32,6 +32,7 @@ const REFRESHED = { access_token: 'refreshed-access', expires_in: 3600, scope: '
 let server;
 let tokenUrl;
 let requestBodies;
+let tokenResponse;
 
 /** Files googleAuth.js reads by path; anything else is absent. */
 function stubFiles({ credentials = CREDENTIALS, tokens }) {
@@ -60,15 +61,21 @@ const lastTokenWrite = () => atomicWrite.mock.calls.filter(([file]) => file.ends
 
 beforeEach(async () => {
   requestBodies = [];
+  tokenResponse = { status: 200, body: REFRESHED };
   server = createServer((req, res) => {
     let body = '';
     req.on('data', (chunk) => { body += chunk; });
+    // A socket the client aborts mid-request would otherwise surface as an
+    // unhandled 'error' and take the worker down rather than failing a test.
+    req.on('error', () => {});
+    res.on('error', () => {});
     req.on('end', () => {
       requestBodies.push(body);
-      res.writeHead(200, { 'content-type': 'application/json' });
-      res.end(JSON.stringify(REFRESHED));
+      res.writeHead(tokenResponse.status, { 'content-type': 'application/json' });
+      res.end(JSON.stringify(tokenResponse.body));
     });
   });
+  server.on('clientError', (_err, socket) => socket.destroy());
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
   tokenUrl = `http://127.0.0.1:${server.address().port}/token`;
 
@@ -135,11 +142,10 @@ describe('googleAuth token refresh', () => {
     expect(requestBodies[0]).toContain('grant_type=refresh_token');
     expect(requestBodies[0]).toContain('refresh_token=durable-refresh');
 
-    await vi.waitFor(() => expect(lastTokenWrite()).toBeDefined());
-    expect(lastTokenWrite()).toMatchObject({
+    await vi.waitFor(() => expect(lastTokenWrite()).toMatchObject({
       access_token: REFRESHED.access_token,
       refresh_token: 'durable-refresh',
-    });
+    }));
   });
 
   it('keeps the stored refresh token when the refresh payload omits it', async () => {
@@ -153,11 +159,23 @@ describe('googleAuth token refresh', () => {
     // the next expiry.
     client.emit('tokens', { access_token: 'rotated-access', expiry_date: Date.now() + 3_600_000 });
 
-    await vi.waitFor(() => expect(lastTokenWrite()).toBeDefined());
-    expect(lastTokenWrite()).toMatchObject({
+    await vi.waitFor(() => expect(lastTokenWrite()).toMatchObject({
       access_token: 'rotated-access',
       refresh_token: 'durable-refresh',
-    });
+    }));
+  });
+
+  it('rejects and persists nothing when the token endpoint refuses the refresh', async () => {
+    stubFiles({ tokens: expiredTokens() });
+    tokenResponse = { status: 400, body: { error: 'invalid_grant', error_description: 'Token has been revoked.' } };
+    const client = await getAuthenticatedClient();
+    redirectTokenEndpoint(client);
+
+    // A revoked refresh token must surface as a rejection the caller can report,
+    // never as a silent success that overwrites good tokens with an error body.
+    await expect(client.getAccessToken()).rejects.toThrow();
+    expect(lastTokenWrite()).toBeUndefined();
+    expect(client.credentials.refresh_token).toBe('durable-refresh');
   });
 
   it('serves an unexpired token from the client without re-hitting the token endpoint', async () => {
