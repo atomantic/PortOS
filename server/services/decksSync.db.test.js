@@ -7,9 +7,11 @@ import { afterAll, describe, expect, it } from 'vitest';
 import { checkHealth, ensureSchema, query, close } from '../lib/db.js';
 import { requireDbOrSkip } from '../lib/dbTestGate.js';
 import { sanitizeRecordForWire } from '../lib/syncWire.js';
+import { contentHashForRecord } from '../lib/conflictJournal.js';
 import {
-  createDeck, getDeck, updateDeck, updateCard, deleteDeck,
+  DECK_KIND, createDeck, getDeck, updateDeck, updateCard, deleteDeck,
   getDeckForSync, listDecksForSync, listDeckIdsForSync,
+  markCardsRenderQueued, markCardRenderTerminal, attachCardRender,
   mergeDecksFromSync, pruneTombstonedDecks, restoreDeck,
 } from './decks.js';
 
@@ -197,5 +199,43 @@ describe.skipIf(!ready)('deck federation', () => {
 
   it('returns null when restoring a deck the sweep already hard-pruned', async () => {
     expect(await restoreDeck(crypto.randomUUID(), { name: 'ghost' })).toBeNull();
+  });
+
+  it('leaves the sync content hash untouched while a render queues and then fails', async () => {
+    // Which job a card is waiting on is machine-local bookkeeping the wire
+    // strips. If it moved the hash, every deck the user had rendered since the
+    // last sync would look locally edited and raise a conflict-journal entry
+    // against the next peer push — for changes that do not exist (#7364).
+    const deck = await make('Render Bookkeeping');
+    const card = deck.cards[0];
+    const before = contentHashForRecord(DECK_KIND, await getDeckForSync(deck.id));
+
+    await markCardsRenderQueued(deck.id, [{ cardId: card.id, render: { jobId: 'job-1', status: 'queued' } }]);
+    const queued = await getDeck(deck.id);
+    expect(queued.cards.find((c) => c.id === card.id).render.jobId).toBe('job-1');
+    expect(contentHashForRecord(DECK_KIND, await getDeckForSync(deck.id))).toBe(before);
+
+    await markCardRenderTerminal(deck.id, card.id, { jobId: 'job-1', status: 'failed', error: 'boom' });
+    expect((await getDeck(deck.id)).cards.find((c) => c.id === card.id).render.status).toBe('failed');
+    expect(contentHashForRecord(DECK_KIND, await getDeckForSync(deck.id))).toBe(before);
+
+    // Control: a real content edit MUST still move the hash, or this test would
+    // pass just as well against a hash that ignores the card roster entirely.
+    await updateCard(deck.id, card.id, { prompt: 'a king of coins, woodcut' });
+    expect(contentHashForRecord(DECK_KIND, await getDeckForSync(deck.id))).not.toBe(before);
+  });
+
+  it('does move the hash when a completed render attaches its gallery file', async () => {
+    // The mirror of the case above: `imageRefs` IS wire-visible (the push asset
+    // manifest ships the bytes), so a finished render is a genuine content
+    // change peers must receive — the #7364 narrowing must not swallow it.
+    const deck = await make('Completed Render');
+    const card = deck.cards[0];
+    const before = contentHashForRecord(DECK_KIND, await getDeckForSync(deck.id));
+
+    await markCardsRenderQueued(deck.id, [{ cardId: card.id, render: { jobId: 'job-2', status: 'queued' } }]);
+    await attachCardRender({ deckId: deck.id, cardId: card.id, filename: 'king.png', jobId: 'job-2' });
+
+    expect(contentHashForRecord(DECK_KIND, await getDeckForSync(deck.id))).not.toBe(before);
   });
 });
