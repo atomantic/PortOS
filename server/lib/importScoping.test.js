@@ -537,7 +537,13 @@ describe('deferred imports stay deferred (#6156)', () => {
 // heavy subtree, and the split REMOVES one for the browser, which is its point:
 // `localProviderRuntime` reaches `opencodeConfig.js` → `zod` to resolve
 // ENDPOINTS, a question no picker asks. Raise by exactly that delta.
-const MAX_STATIC_INSTANTIATIONS = 104398;
+// #7328 raised this by a further 2: the retired-pin notifier's new suite and the
+// module it statically imports, lib/mirrorParity.js (dependency-free), for the
+// bootstrap source contract. Both the notifier and the audit behind it are
+// reached through `await import()`, so neither is in that closure — and
+// bootstrap.js gaining a static import of the notifier cost nothing, because no
+// server test file statically reaches bootstrap.js.
+const MAX_STATIC_INSTANTIATIONS = 104400;
 
 
 const SKIP_DIRS = new Set(['node_modules', 'coverage', 'dist', 'data']);
