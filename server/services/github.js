@@ -656,7 +656,7 @@ export function ghRemedy(status) {
 // host-keying prWatcher's self-login cache already needs.
 const ghHealthCache = new Map();
 
-function probeGh(timeoutMs, hostname) {
+function probeGh(timeoutMs, hostname, env = null) {
   return new Promise((resolve) => {
     // `rate_limit` is authenticated, cheap, and — unlike every other endpoint —
     // does not itself consume quota, so polling this probe is free.
@@ -664,7 +664,7 @@ function probeGh(timeoutMs, hostname) {
     // targets github.com regardless of cwd, so an enterprise repo would be
     // gated on a host it never talks to.
     const args = hostname ? ['api', 'rate_limit', '--hostname', hostname] : ['api', 'rate_limit'];
-    const child = spawn('gh', args, { shell: false });
+    const child = spawn('gh', args, { shell: false, ...(env ? { env } : {}) });
     let stderr = '';
     let settled = false;
     const done = (result) => { if (!settled) { settled = true; clearTimeout(timer); resolve(result); } };
@@ -685,18 +685,19 @@ function probeGh(timeoutMs, hostname) {
  * Result is cached per host for a minute — /api/system/health/details is polled,
  * and the probe spawns a process. Pass `{ force: true }` to bypass the cache.
  *
- * @param {{ force?: boolean, timeoutMs?: number, hostname?: string|null }} [opts]
+ * @param {{ force?: boolean, timeoutMs?: number, hostname?: string|null, env?: object|null }} [opts]
  *   `hostname` targets a specific forge host (a GitHub Enterprise install);
  *   omitted means gh's default host.
  * @returns {Promise<{ status: string, ok: boolean, detail: string|null, remedy: string|null, checkedAt: string }>}
  */
-export async function checkGhHealth({ force = false, timeoutMs = GH_PROBE_TIMEOUT_MS, hostname = null } = {}) {
+export async function checkGhHealth({ force = false, timeoutMs = GH_PROBE_TIMEOUT_MS, hostname = null, env = null } = {}) {
   const now = Date.now();
-  const key = hostname || '';
+  const token = env?.GH_TOKEN || env?.GITHUB_TOKEN || '';
+  const key = `${hostname || ''}#${token}`;
   const cached = ghHealthCache.get(key);
   if (!force && cached && (now - cached.at) < GH_HEALTH_TTL_MS) return cached.health;
 
-  const { status, detail } = classifyGhProbe(await probeGh(timeoutMs, hostname));
+  const { status, detail } = classifyGhProbe(await probeGh(timeoutMs, hostname, env));
   const health = {
     status,
     ok: status === 'ok',
@@ -803,8 +804,8 @@ export function __resetGhHealthCache() {
  *   of a host it never contacts (and vice versa).
  * @returns {Promise<{ ok: boolean, status: string, detail: string|null, remedy: string|null }>}
  */
-export async function ensureForgeReachable(label, { hostname = null } = {}) {
-  const health = await checkGhHealth({ hostname }).catch(err => ({
+export async function ensureForgeReachable(label, { hostname = null, env = null } = {}) {
+  const health = await checkGhHealth({ hostname, env }).catch(err => ({
     status: 'error', ok: false, detail: err.message, remedy: ghRemedy('error')
   }));
   if (health.ok) return health;

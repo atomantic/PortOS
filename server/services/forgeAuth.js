@@ -156,7 +156,7 @@ async function getGhCommitIdentity(token, timeoutMs, signal) {
  * @returns {Promise<{cli: string, env: object, host: string|null, owner: string|null,
  *                    account: string|null, identity: {name: string, email: string}|null}>}
  */
-export async function resolveForgeForRepo(dir, { timeoutMs = DEFAULT_SPAWN_CLI_TIMEOUT_MS, signal } = {}) {
+export async function resolveForgeForRepo(dir, { timeoutMs = DEFAULT_SPAWN_CLI_TIMEOUT_MS, signal, forgeAccount = null } = {}) {
   const remote = await execGitSafe(['remote', 'get-url', 'origin'], dir);
   const parsed = parseGitRemote(remote.stdout?.trim());
   if (!parsed) {
@@ -169,7 +169,8 @@ export async function resolveForgeForRepo(dir, { timeoutMs = DEFAULT_SPAWN_CLI_T
 
   if (cli !== 'gh' || signal?.aborted) return ambient;
 
-  const pinned = await resolveConfiguredAccount(dir);
+  const explicitPin = (typeof forgeAccount === 'string' && forgeAccount.trim()) ? forgeAccount.trim() : null;
+  const pinned = explicitPin || await resolveConfiguredAccount(dir);
   if (signal?.aborted) return ambient;
 
   // A pinned account skips the `gh auth status` listing entirely: the user named
@@ -186,7 +187,11 @@ export async function resolveForgeForRepo(dir, { timeoutMs = DEFAULT_SPAWN_CLI_T
   const identity = pinned ? await getGhCommitIdentity(token, timeoutMs, signal) : null;
   if (signal?.aborted) return { ...base, account };
 
-  return { ...base, env: { ...process.env, GH_TOKEN: token }, account, identity };
+  const env = { ...process.env, GH_TOKEN: token };
+  delete env.GITHUB_TOKEN;
+  delete env.GH_ENTERPRISE_TOKEN;
+  delete env.GITHUB_ENTERPRISE_TOKEN;
+  return { ...base, env, account, identity };
 }
 
 /**
@@ -218,7 +223,7 @@ export async function resolveForgeForRepo(dir, { timeoutMs = DEFAULT_SPAWN_CLI_T
  * @returns {Promise<{ GH_TOKEN?: string, GIT_AUTHOR_NAME?: string, GIT_AUTHOR_EMAIL?: string,
  *                     GIT_COMMITTER_NAME?: string, GIT_COMMITTER_EMAIL?: string }>}
  */
-export async function resolveForgeTokenEnv(dir, { timeoutMs = 10000 } = {}) {
+export async function resolveForgeTokenEnv(dir, { timeoutMs = 10000, forgeAccount = null } = {}) {
   // Keep the whole lookup inside the agent-spawn budget. The shared abort signal
   // kills whichever gh subprocess is active when the outer budget expires and
   // prevents a slow git lookup from starting a stale follow-on auth probe. Each
@@ -226,7 +231,7 @@ export async function resolveForgeTokenEnv(dir, { timeoutMs = 10000 } = {}) {
   let timer;
   const controller = new AbortController();
   const resolved = await Promise.race([
-    resolveForgeForRepo(dir, { timeoutMs, signal: controller.signal }).catch(() => null),
+    resolveForgeForRepo(dir, { timeoutMs, signal: controller.signal, forgeAccount }).catch(() => null),
     new Promise((r) => {
       timer = setTimeout(() => {
         controller.abort();

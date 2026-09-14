@@ -4,6 +4,10 @@ vi.mock('./github.js', () => ({
   execGh: vi.fn(),
   ensureForgeReachable: vi.fn(),
 }));
+const resolveForgeForRepoMock = vi.fn(async () => ({ cli: 'gh', env: process.env, account: null }));
+vi.mock('./forgeAuth.js', () => ({
+  resolveForgeForRepo: (...args) => resolveForgeForRepoMock(...args),
+}));
 vi.mock('./gitlab.js', () => ({
   execGlabJson: vi.fn(),
 }));
@@ -20,6 +24,7 @@ const APP = { id: 'app-001', name: 'Widget', repoPath: '/repo', workTracker: 'au
 
 beforeEach(() => {
   vi.clearAllMocks();
+  resolveForgeForRepoMock.mockResolvedValue({ cli: 'gh', env: process.env, account: null });
   ensureForgeReachable.mockResolvedValue({ ok: true });
   resolveAppForgeTarget.mockResolvedValue({
     tracker: 'github',
@@ -52,9 +57,13 @@ describe('listAppPullRequests', () => {
     const result = await listAppPullRequests(APP);
 
     expect(ensureForgeReachable).toHaveBeenCalledWith('app-pull-requests', { hostname: 'github.com' });
-    expect(execGh).toHaveBeenCalledWith(expect.arrayContaining([
-      'pr', 'list', '--repo', 'github.com/acme/widget', '--state', 'open', '--limit', '200',
-    ]));
+    expect(execGh).toHaveBeenCalledWith(
+      expect.arrayContaining([
+        'pr', 'list', '--repo', 'github.com/acme/widget', '--state', 'open', '--limit', '200',
+      ]),
+      undefined,
+      expect.objectContaining({ cwd: '/repo', env: expect.anything() }),
+    );
     expect(result).toMatchObject({
       forge: 'github',
       tracker: 'github',
@@ -175,6 +184,30 @@ describe('listAppPullRequests', () => {
       transient: true,
       remedy: 'run gh auth login',
     });
+  });
+
+  it('passes the app-pinned forge account token and repo cwd to gh and reachability check', async () => {
+    resolveForgeForRepoMock.mockResolvedValue({
+      cli: 'gh',
+      env: { ...process.env, GH_TOKEN: 'other-user-token' },
+      account: 'other-user',
+    });
+    execGh.mockResolvedValue('[]');
+    await listAppPullRequests({ ...APP, forgeAccount: 'other-user' });
+
+    expect(resolveForgeForRepoMock).toHaveBeenCalledWith('/repo', { forgeAccount: 'other-user' });
+    expect(ensureForgeReachable).toHaveBeenCalledWith('app-pull-requests', {
+      hostname: 'github.com',
+      env: expect.objectContaining({ GH_TOKEN: 'other-user-token' }),
+    });
+    expect(execGh).toHaveBeenCalledWith(
+      expect.arrayContaining(['pr', 'list', '--repo', 'github.com/acme/widget']),
+      undefined,
+      expect.objectContaining({
+        cwd: '/repo',
+        env: expect.objectContaining({ GH_TOKEN: 'other-user-token' }),
+      }),
+    );
   });
 
   it('normalizes GitLab merge-request and pipeline state from the repo cwd', async () => {

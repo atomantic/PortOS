@@ -231,4 +231,19 @@ describe('per-app forge account pinning', () => {
     respond({ stdout: 'test-owner-token\n' });
     await expect(resolveForgeTokenEnv('/example/repo')).resolves.toEqual({ GH_TOKEN: 'test-owner-token' });
   });
+
+  it('honors explicit forgeAccount option directly and strips conflicting env tokens', async () => {
+    vi.stubEnv('GITHUB_TOKEN', 'ambient-github-token');
+    vi.stubEnv('GH_ENTERPRISE_TOKEN', 'ambient-enterprise-token');
+    respond({ stdout: 'git@github.com:example-owner/project.git\n' });
+    respond({ stdout: 'direct-account-token\n' });
+    respond({ stdout: '9999\tdirect-bot\tDirect Bot\n' });
+
+    const forge = await resolveForgeForRepo('/example/repo', { forgeAccount: 'direct-bot' });
+    expect(forge.account).toBe('direct-bot');
+    expect(forge.env.GH_TOKEN).toBe('direct-account-token');
+    expect(forge.env.GITHUB_TOKEN).toBeUndefined();
+    expect(forge.env.GH_ENTERPRISE_TOKEN).toBeUndefined();
+    expect(listForgePinnedApps).not.toHaveBeenCalled();
+  });
 });
