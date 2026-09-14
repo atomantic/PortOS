@@ -29,6 +29,7 @@ export { default as useFocusTrap } from './useFocusTrap.js';
 export { default as useGallerySidecars } from './useGallerySidecars.js';
 export { default as useNoteSave } from './useNoteSave.js';
 export { default as useHoverTooltip } from './useHoverTooltip.js';
+export { default as useHydratedPreviewRoute } from './useHydratedPreviewRoute.js';
 export { default as useImageGenQueue } from './useImageGenQueue.js';
 export { default as useDeckRenderTarget } from './useDeckRenderTarget.js';
 export { default as useImageRenderSettings } from './useImageRenderSettings.js';

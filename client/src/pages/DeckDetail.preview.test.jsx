@@ -6,9 +6,11 @@ import DeckDetail from './DeckDetail';
 // The deck page shows each card's SUBJECT prompt in its editor, but a render
 // was sent the composed prompt (deck style clause + layout + subject). The
 // lightbox must show what was actually sent, which only the image sidecar
-// records — hence the gallery hydration this suite pins.
+// records — hydrated lazily for the OPEN card, so a 78-card deck costs no
+// lookup at all until the user opens one.
 const getDeck = vi.fn();
 const getGalleryImages = vi.fn();
+const getVideoHistoryItem = vi.fn();
 let previewProps = null;
 
 vi.mock('../services/api', () => ({
@@ -22,7 +24,10 @@ vi.mock('../services/api', () => ({
   updateDeck: vi.fn(),
   updateDeckCard: vi.fn(),
 }));
-vi.mock('../services/apiImageVideo', () => ({ getGalleryImages: (...a) => getGalleryImages(...a) }));
+vi.mock('../services/apiImageVideo', () => ({
+  getGalleryImages: (...a) => getGalleryImages(...a),
+  getVideoHistoryItem: (...a) => getVideoHistoryItem(...a),
+}));
 vi.mock('../components/media/MediaPreview', () => ({
   default: (props) => { previewProps = props; return null; },
 }));
@@ -33,6 +38,8 @@ vi.mock('../components/decks/DeckCardGrid', () => ({ default: () => null }));
 vi.mock('../hooks/useDeckRenderTarget', () => ({
   default: () => ({ summary: 'Local · flux2 · 1096×1536', blocked: false, mode: 'local', options: [] }),
 }));
+
+const COMPOSED = 'copperplate engraving. Full tarot card, framed border. The Fool: a youth at a cliff edge';
 
 const deck = {
   id: 'd1',
@@ -50,8 +57,8 @@ const deck = {
   }],
 };
 
-const renderPage = () => render(
-  <MemoryRouter initialEntries={['/decks/d1']}>
+const renderPage = (search = '') => render(
+  <MemoryRouter initialEntries={[`/decks/d1${search}`]}>
     <Routes><Route path="/decks/:id" element={<DeckDetail />} /></Routes>
   </MemoryRouter>,
 );
@@ -61,24 +68,40 @@ describe('DeckDetail preview items', () => {
     previewProps = null;
     getDeck.mockReset().mockResolvedValue(deck);
     getGalleryImages.mockReset();
+    getVideoHistoryItem.mockReset();
+  });
+
+  it('reads no sidecars until a card is actually opened', async () => {
+    getGalleryImages.mockResolvedValue([]);
+    renderPage();
+    // The list itself is enough to render the grid — hydration is the
+    // lightbox's concern, so loading the deck must cost zero lookups.
+    await waitFor(() => expect(previewProps?.items?.length).toBe(1));
+    expect(getGalleryImages).not.toHaveBeenCalled();
   });
 
   it('shows the prompt the renderer was actually sent, not the card subject alone', async () => {
     getGalleryImages.mockResolvedValue([{
       filename: 'fool.png',
-      prompt: 'copperplate engraving. Full tarot card, framed border. The Fool: a youth at a cliff edge',
-      negativePrompt: 'blurry',
+      prompt: `${COMPOSED}, hand-inked`,
+      negativePrompt: 'blurry, extra fingers',
       modelId: 'flux2-klein-9b',
       seed: 42,
     }]);
-    renderPage();
+    renderPage('?preview=fool.png');
     await waitFor(() => expect(getGalleryImages).toHaveBeenCalledWith(['fool.png'], { silent: true }));
     await waitFor(() => {
-      const item = previewProps?.items?.find((i) => i.filename === 'fool.png');
-      expect(item?.prompt).toBe('copperplate engraving. Full tarot card, framed border. The Fool: a youth at a cliff edge');
-      expect(item?.negativePrompt).toBe('blurry');
-      expect(item?.seed).toBe(42);
+      expect(previewProps?.preview?.prompt).toBe(`${COMPOSED}, hand-inked`);
+      expect(previewProps?.preview?.negativePrompt).toBe('blurry, extra fingers');
+      expect(previewProps?.preview?.seed).toBe(42);
     });
+  });
+
+  it('keeps the open card addressable by its list key so prev/next still match', async () => {
+    getGalleryImages.mockResolvedValue([{ filename: 'fool.png', prompt: 'whatever was sent' }]);
+    renderPage('?preview=fool.png');
+    await waitFor(() => expect(previewProps?.preview?.prompt).toBe('whatever was sent'));
+    expect(previewProps.preview.key).toBe(previewProps.items[0].key);
   });
 
   it('composes the prompt locally when the render has no sidecar', async () => {
@@ -87,11 +110,11 @@ describe('DeckDetail preview items', () => {
     // back to the card's subject line would re-show the wording that was
     // never sent.
     getGalleryImages.mockResolvedValue([]);
-    renderPage();
+    renderPage('?preview=fool.png');
+    await waitFor(() => expect(getGalleryImages).toHaveBeenCalled());
     await waitFor(() => {
-      const item = previewProps?.items?.find((i) => i.filename === 'fool.png');
-      expect(item?.prompt).toBe('copperplate engraving. Full tarot card, framed border. The Fool: a youth at a cliff edge');
-      expect(item?.negativePrompt).toBe('blurry');
+      expect(previewProps?.preview?.prompt).toBe(COMPOSED);
+      expect(previewProps?.preview?.negativePrompt).toBe('blurry');
     });
   });
 });
