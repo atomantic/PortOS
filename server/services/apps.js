@@ -444,6 +444,9 @@ export async function createApp(appData) {
     // concrete tracker (PLAN.md / GitHub / GitLab / JIRA) from the git origin
     // host at dispatch time — see server/lib/workTracker.js.
     workTracker: appData.workTracker || 'auto',
+    // The gh account this app's repo is driven under. Absent (the default) means
+    // "infer from the repo owner" — see services/forgeAuth.js.
+    ...(appData.forgeAccount?.trim() ? { forgeAccount: appData.forgeAccount.trim() } : {}),
     // Only persisted when explicitly sent. Absent means ON (see
     // repoStateVerificationEnabled), so writing a default here would freeze the
     // app against a future change of that default — but an explicit `false` on

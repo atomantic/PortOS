@@ -169,6 +169,21 @@ describe('EditAppDrawer work tracker selector', () => {
     expect(payload.workTracker).toBe('gitlab');
   });
 
+  it('saves a trimmed GitHub account pin and defaults it to blank', async () => {
+    renderDrawer();
+    await openTab('Workflow');
+
+    const input = await screen.findByLabelText('GitHub Account');
+    // Blank is the documented "infer from the repo owner" default, so an app
+    // that never set one must not send a value that looks deliberate.
+    expect(input).toHaveValue('');
+    fireEvent.change(input, { target: { value: '  acme-bot  ' } });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save Changes' }));
+    await waitFor(() => expect(api.updateApp).toHaveBeenCalled());
+    expect(api.updateApp.mock.calls[0][1].forgeAccount).toBe('acme-bot');
+  });
+
   it('omits `jira` from the save payload so a drawer save cannot clobber the JIRA tab config', async () => {
     // The server shallow-merges the PUT, so an ABSENT `jira` key preserves the
     // stored config. Sending `{ enabled: false }` (what the removed drawer tab

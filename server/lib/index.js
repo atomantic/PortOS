@@ -285,6 +285,7 @@ export * from './pathSafety.js';
 export * from './uploads.js';
 export * from './icloudFile.js';
 export * from './spawnCwd.js';
+export * from './sshHostAlias.js';
 export * from './schemaVersions.js';
 export * from './secretText.js';
 export * from './imageClean.js';
