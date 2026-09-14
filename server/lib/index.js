@@ -67,6 +67,7 @@ export * from './socketEventInventory.js';
 export * as spriteValidation from './spriteValidation.js';
 export * as storyBuilderValidation from './storyBuilderValidation.js';
 export * as telegramValidation from './telegramValidation.js';
+export * from './terminalReplay.js';
 export * from './validation.js';
 // Cross-domain Zod fragments both `validation.js` and the per-domain files
 // import (leaf module, no cycle). Flat because `validation.js` re-exports the
