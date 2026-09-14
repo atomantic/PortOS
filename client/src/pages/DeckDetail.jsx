@@ -36,7 +36,8 @@ import useMounted from '../hooks/useMounted';
 import useUrlParams from '../hooks/useUrlParams';
 import usePreviewRoute from '../hooks/usePreviewRoute';
 import useFieldDraft from '../hooks/useFieldDraft';
-import { DECK_KIND_LABELS, cardInFlightJobId, deckCompletion } from '../lib/decks';
+import useGallerySidecars from '../hooks/useGallerySidecars';
+import { DECK_KIND_LABELS, cardInFlightJobId, composeCardRenderPrompt, deckCompletion } from '../lib/decks';
 import {
   deleteDeck, generateDeckPrompts, getDeck, listUniverseSummaries, removeDeckSample,
   renderDeckCard, renderDeckCards, updateDeck, updateDeckCard,
@@ -111,9 +112,32 @@ function DeckEditor({ id }) {
     () => (deck && cardParam ? deck.cards.find((c) => c.id === cardParam) || null : null),
     [deck, cardParam],
   );
+  const cardImageRefs = useMemo(
+    () => (deck ? deck.cards.flatMap((c) => c.imageRefs) : []),
+    [deck],
+  );
+  // The card's own `prompt` is only its subject line; the renderer was sent the
+  // composed prompt (deck style clause, layout, titled subject, merged
+  // negatives). The sidecar records what was actually sent, so hydrate from it
+  // — and when there is no sidecar (a legacy render, a peer-synced one, or the
+  // first paint before the lookup lands), compose it locally rather than
+  // falling back to the subject line, which is the wording that was never sent.
+  const { byFilename: sidecars } = useGallerySidecars(cardImageRefs);
   const previewItems = useMemo(() => (deck
-    ? deck.cards.flatMap((c) => c.imageRefs.map((filename) => normalizeImage({ filename, path: `/data/images/${filename}`, prompt: c.prompt })))
-    : []), [deck]);
+    ? deck.cards.flatMap((c) => {
+      if (!c.imageRefs.length) return [];
+      const composed = composeCardRenderPrompt(deck, c);
+      return c.imageRefs.map((filename) => {
+        const meta = sidecars.get(filename);
+        return normalizeImage({
+          ...meta,
+          filename,
+          prompt: meta?.prompt || composed.prompt,
+          negativePrompt: meta?.negativePrompt || composed.negativePrompt || null,
+        });
+      });
+    })
+    : []), [deck, sidecars]);
   const [preview, setPreview] = usePreviewRoute(previewItems);
   const previewFilename = (filename) => {
     const item = previewItems.find((i) => i.filename === filename);

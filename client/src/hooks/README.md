@@ -245,4 +245,5 @@ grep -i "what you want to do" client/src/hooks/README.md
 | Hook | Purpose | Use when |
 |---|---|---|
 | `useEidoverseFrame` | Per-load Eidoverse handshake with origin/window/session validation and browser-only label preferences. | Embedding the managed Eidoverse renderer. |
+| `useGallerySidecars` | Hydrates a known filename list into its image-metadata sidecars (the prompt actually sent, negative, model, seed, size), keyed on contents rather than array identity, with a `setSidecar` splice for a freshly written record. | Any page showing renders it owns the refs for (universe draft, deck cards) that must open the lightbox on the real render prompt. |
 | `useGalleryPage` | Bounded image or mixed-media browsing with debounced server search, scopes, totals, stale-response cancellation and retryable next pages. | Gallery grids and pickers; `getGalleryImages` hydrates known references separately. |
