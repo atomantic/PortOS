@@ -25,7 +25,10 @@ process.env.MEMORY_BACKEND ||= 'file';
 const args = process.argv.slice(2);
 const outIndex = args.indexOf('--out');
 const outPrefix = outIndex === -1 ? null : args[outIndex + 1];
-const [taskType = 'claim-issue', providerType = 'tui'] = args.filter((_, i) => i !== outIndex && i !== outIndex + 1);
+// Splice rather than filter on index arithmetic: with no --out, outIndex + 1 is 0
+// and an index filter would silently drop the first positional.
+if (outIndex !== -1) args.splice(outIndex, 2);
+const [taskType = 'claim-issue', providerType = 'tui'] = args;
 
 const { getTaskPrompt } = await import('../server/services/taskPromptService.js');
 const { buildImprovementTaskDescription } = await import('../server/services/cosTaskPreStepBlocks.js');
