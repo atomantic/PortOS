@@ -942,26 +942,46 @@ describe('unrepresentable status/priority never drops a task (#7239)', () => {
     expect(getAutoApprovedTasks(reread)).toEqual([]);
   });
 
-  it('withholds a recovered USER row from the dequeue without claiming approval', () => {
+  it("carries a recovered USER row hold through the write that heals the file", () => {
     // The payload survives, but the row is not handed to the spawn engine: the
     // recovery patterns cannot tell a genuine legacy row from a sentence inside a
-    // legacy description body (#7300). It claims no APPROVAL, because the user file
-    // writes no flags — that claim would only strand the row until the next write.
+    // legacy description body (#7300).
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const [recovered] = parseTasksMarkdown('# Tasks\n\n## Pending\n- [ ] #task-C | URGENT | plain user row\n  - prompt: payload\n');
     warn.mockRestore();
 
     expect(recovered.autoApproved).toBe(false);
-    expect(recovered.approvalRequired).toBe(false);
+    expect(recovered.approvalRequired).toBe(true);
     expect(getAutoApprovedTasks([recovered])).toEqual([]);
     expect(recovered.metadata.prompt).toBe('payload');
 
-    // The user file writes no approval flags, so the healed row is an ordinary
-    // strict row again — exactly what it was before the corruption.
-    const reread = parseTasksMarkdown(generateTasksMarkdown([recovered], false));
-    expect(reread[0].autoApproved).toBe(true);
-    expect(reread[0].approvalRequired).toBe(false);
+    // The reported defect (#7367): the healing write used to drop the row's
+    // priority to MEDIUM and emit no flag, so the row became an ordinary strict
+    // row and the NEXT read spawned an agent from it. The user file now writes
+    // the hold, so it survives the round trip.
+    const healed = generateTasksMarkdown([recovered], false);
+    expect(healed).toContain('- [ ] #task-C | MEDIUM | APPROVAL | plain user row');
+    const reread = parseTasksMarkdown(healed);
+    expect(reread[0].autoApproved).toBe(false);
+    expect(reread[0].approvalRequired).toBe(true);
     expect(reread[0].priority).toBe('MEDIUM');
+    // And it is STABLE — a second write does not re-derive a different answer.
+    expect(generateTasksMarkdown(reread, false)).toBe(healed);
+  });
+
+  it('leaves an ordinary user row flagless, so the hold cannot swallow the queue', () => {
+    // `buildQueuedTask` mints EVERY user task with `autoApproved: false` (only an
+    // internal task is ever auto-approved in memory), so the user file keys its
+    // flag on `approvalRequired` alone. Keying it on `autoApproved === false`
+    // instead would stamp APPROVAL on every user row on its first rewrite and
+    // stall the whole user queue.
+    const markdown = generateTasksMarkdown([{
+      id: 'task-1', status: 'pending', priority: 'HIGH', priorityValue: 3,
+      description: 'ordinary user row', metadata: {}, approvalRequired: false, autoApproved: false,
+    }], false);
+    expect(markdown).toContain('- [ ] #task-1 | HIGH | ordinary user row');
+    expect(markdown).not.toContain('APPROVAL');
+    expect(parseTasksMarkdown(markdown)[0].autoApproved).toBe(true);
   });
 
   it('does not mint a runnable task from a task-shaped line inside a description body', () => {

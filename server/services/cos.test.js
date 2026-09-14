@@ -37,6 +37,7 @@ import { dirname, join } from 'path';
 import { firstLine, isPerpetualRefillCandidate, perpetualRefillPlan } from './cos.js';
 import { canQueueImprovementTasks, DEFAULT_STATE } from './cosState.js';
 import { createDequeueCapacity, countRunningAgentsByLocalEndpoint, isIdleTierEligible, isUserTaskRunnableUnattended } from './cosDequeue.js';
+import { generateTasksMarkdown, parseTasksMarkdown } from '../lib/taskParser.js';
 import {
   createLocalEndpointSlotContext,
   cloudSwarmThreadCapacity,
@@ -1291,7 +1292,17 @@ describe('cos.js source — priority + capacity invariants', () => {
     expect(fnBody).toMatch(/if\s*\(\s*availableSlots\s*<=\s*0\s*\)/);
   });
 
-  it('user tier withholds a recovered row, in BOTH spawn engines (#7300)', () => {
+  // Parse a legacy row, write it back the way the USER queue writes it, and read
+  // the result — the approval flags a real row carries after one heal cycle.
+  const healedUserRow = (line) => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const parsed = parseTasksMarkdown(`# Tasks\n\n## Pending\n${line}\n`);
+    const [healed] = parseTasksMarkdown(generateTasksMarkdown(parsed, false));
+    warn.mockRestore();
+    return { approvalRequired: healed.approvalRequired, autoApproved: healed.autoApproved };
+  };
+
+  it('user tier withholds a recovered row, in BOTH spawn engines (#7300, #7367)', () => {
     // A user row parses auto-approved unless the parser took its RECOVERY path,
     // which cannot tell a genuine legacy row from a task-shaped sentence inside a
     // legacy multi-line description body. This tier otherwise spawns every pending
@@ -1303,6 +1314,12 @@ describe('cos.js source — priority + capacity invariants', () => {
       onDemand: [],
       user: [
         { ...task('task-note'), autoApproved: false },
+        // The same hold as it comes back OFF DISK. Round-tripped through the real
+        // writer and parser rather than hand-stamped, because the defect (#7367)
+        // was exactly there: the user file used to emit no flag, the recovered row
+        // healed into an ordinary strict row, and the next read spawned an agent
+        // from it. A hand-built fixture would have kept passing through all of it.
+        { ...task('task-healed'), ...healedUserRow('- [ ] #task-healed | URGENT | legacy user row') },
         { ...task('task-real'), autoApproved: true },
         task('task-fieldless'),
       ],

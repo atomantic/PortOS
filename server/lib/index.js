@@ -91,6 +91,7 @@ export * from './catalogTypes.js';
 export * as catalogUniverseTags from './catalogUniverseTags.js';
 export * from './canonPrompt.js';
 export * from './comicScriptParser.js';
+export * from './aspectRatio.js';
 export * from './composeStyledPrompt.js';
 export * from './scriptVideoCompiler.js';
 export * from './creativeDirectorPresets.js';

@@ -153,7 +153,11 @@ export default function TaskItem({ task, agent = null, liveOutput, isSystem, spa
   // registration ordering for why the two disagree.
   const displayStatus = spawning ? 'in_progress' : task.status;
   const idScope = isSystem ? 'sys' : 'user';
-  const requiresApproval = isSystem && task.approvalRequired;
+  // Either queue. A USER row can hold too: a row the parser had to RECOVER is
+  // withheld from the unattended spawn and persists that hold in TASKS.md
+  // (#7300, #7367). Gating the button on `isSystem` would leave it pending with
+  // no way for the human it is waiting on to release it.
+  const requiresApproval = Boolean(task.approvalRequired);
   // Name the hold's reason on the APPROVE button so "why is this one waiting on
   // me?" is answerable without opening the body (#3714). Undefined for producers
   // that stamp no reason, which leaves the button's plain label untouched.
