@@ -228,6 +228,31 @@ describe('PostLlmDrillRunner — training-mode scoring path', () => {
     expect(await screen.findByText('75')).toBeInTheDocument();
     expect(scorePostLlmDrill).toHaveBeenCalledTimes(2);
   });
+
+  it('does not let Enter advance past a scoring failure, which would discard the unscored answer', async () => {
+    scorePostLlmDrill.mockRejectedValueOnce(new Error('provider unavailable'));
+    const onComplete = vi.fn();
+
+    render(
+      <PostLlmDrillRunner
+        drill={{ type: 'word-association', questions: [{ prompt: 'ocean' }] }}
+        timeLimitSec={60}
+        drillIndex={0}
+        drillCount={1}
+        onComplete={onComplete}
+        isTraining
+      />
+    );
+
+    fireEvent.change(screen.getByPlaceholderText(/type your associations/i), { target: { value: 'wave' } });
+    fireEvent.click(screen.getByText('Next'));
+    expect(await screen.findByText(/Scoring failed: provider unavailable/)).toBeInTheDocument();
+
+    fireEvent.keyDown(window, { key: 'Enter' });
+
+    expect(onComplete).not.toHaveBeenCalled();
+    expect(screen.getByText('Retry scoring')).toBeInTheDocument();
+  });
 });
 
 describe('combineTrainingScoreResults', () => {

@@ -204,8 +204,12 @@ export default function PostLlmDrillRunner({ drill, timeLimitSec, drillIndex, dr
   // LLM round-trip that scores the answer means Enter is usually long released
   // by the time the verdict lands, so this is the latent form of the same bug,
   // but the shape is the shape.
+  // A scoring FAILURE is also `scoring: false`, but its screen offers only
+  // "Retry scoring" — the answer was never appended to `responses`, so
+  // advancing from there would discard it and score the drill one response
+  // short. Stay disarmed until there is a verdict to acknowledge.
   useEffect(() => {
-    if (!isTraining || !trainingFeedback || trainingFeedback.scoring) return undefined;
+    if (!isTraining || !trainingFeedback || trainingFeedback.scoring || trainingFeedback.error) return undefined;
     const onKey = (e) => {
       if (e.key !== 'Enter' || shouldIgnoreGlobalKey(e)) return;
       e.preventDefault();
