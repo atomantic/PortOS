@@ -11,7 +11,7 @@ const row = (category, score, assessed_at = '2026-09-10T10:00:00Z', extra = {}) 
   report: { version: 1, category, score, worstSeverity: 5, coverage: 'broad', confidence: 'high',
     summary: 'Private paths /Users/person/project and audit narrative', scannedFiles: 12, totalFiles: 12 }, ...extra,
 });
-const deps = rows => ({ now, getOriginInfo, readSnapshot: async () => null, getPeers: async () => [peer], query: vi.fn(async () => ({ rows })) });
+const deps = rows => ({ now, getOriginInfo, readFile: async () => null, getPeers: async () => [peer], query: vi.fn(async () => ({ rows })) });
 const response = payload => new Response(JSON.stringify(payload), { status: 200 });
 
 // Uniquely pins numeric-only privacy, peer consent and cross-install score convergence.
@@ -102,14 +102,19 @@ it('matches managed repositories with different local ids and excludes other ori
   expect(await exportPortosQuality(peer.instanceId, 30, source, '0'.repeat(64))).toBeNull();
 });
 
+// PortOS's own release evidence goes through the same `.quality.json` path as
+// every managed app: same filename, same reader, same guards.
 it('loads release evidence without peers and never re-exports it', async () => {
   const payload = await buildQualitySnapshot(undefined, 30, deps([row('security', 82)]));
-  const local = { ...deps([]), getPeers: async () => [], readSnapshot: async () => JSON.stringify(payload) };
+  const readPaths = [];
+  const local = { ...deps([]), getPeers: async () => [],
+    readFile: async path => { readPaths.push(path); return JSON.stringify(payload); } };
   expect((await enrichAppsWithQuality([{ id: 'portos-default' }], local))[0].quality.score).toBe(82);
+  expect(readPaths.every(path => path.endsWith('.quality.json'))).toBe(true);
   expect((await getAppQualityHistory({ id: 'portos-default' }, 30, local)).points.at(-1).score).toBe(82);
   expect((await buildQualitySnapshot(undefined, 30, local)).measurements).toEqual([]);
   expect(await readReleaseQuality({ ...local, getOriginInfo: async () => ({ host: 'github.com', fullName: 'fork/PortOS' }) })).toEqual([]);
-  expect(await readReleaseQuality({ ...local, readSnapshot: async () => 'broken' })).toEqual([]);
+  expect(await readReleaseQuality({ ...local, readFile: async () => 'broken' })).toEqual([]);
 });
 
 it('reads a managed app\'s committed .quality.json as release evidence and rejects a foreign or broken one', async () => {
@@ -125,13 +130,12 @@ it('reads a managed app\'s committed .quality.json as release evidence and rejec
   expect((await enrichAppsWithQuality([managed], local))[0].quality.score).toBe(76);
   expect((await getAppQualityHistory(managed, 30, local)).points.at(-1).score).toBe(76);
 
-  // PortOS's own root snapshot must not be read for a managed app, and vice versa.
+  // A different fork's snapshot is never mixed in.
   expect(await readReleaseQuality({ ...local, getOriginInfo: async () => ({ host: 'github.com', fullName: 'owner/other' }) }, managed)).toEqual([]);
   expect(await readReleaseQuality(file('not json'), managed)).toEqual([]);
   expect(await readReleaseQuality(file(JSON.stringify({ ...published, schemaVersion: 2 })), managed)).toEqual([]);
   expect(await readReleaseQuality(file(JSON.stringify({ quality: published })), managed)).toEqual([]);
   expect(await readReleaseQuality(local, { id: 'local-id' })).toEqual([]);
-  expect(await readReleaseQuality(local)).toEqual([]);
 });
 
 it('keeps one broken checkout from failing the whole list or its own history read', async () => {

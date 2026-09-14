@@ -107,3 +107,23 @@ and original dates still apply, a 4 MiB cap, and the records are labeled
 fork ignores the file. The content stays numeric-only — no summaries, paths, run
 ids or app names — so committing it to a public repository leaks nothing the
 federation wire contract would not already carry.
+
+## September 15: one snapshot file, one publisher
+
+The two sections above left PortOS publishing a root `quality-snapshot.json`
+through its own script and reading it through its own branch in `releasePayload`,
+beside every managed app's `.quality.json` — same bytes, same schema, same
+guards, two names and two code paths kept in step by hand.
+
+PortOS is a managed app with a `repoPath` like any other, so its release snapshot
+is now that same `.quality.json` at the checkout root, written by the same
+publisher and read by the same reader. The per-app `publishQualitySnapshot`
+toggle automates it for PortOS too, and stays **off by default there**: an audit
+that commits into the primary checkout on its own is opt-in, since that checkout
+is also where CoS worktrees and branches are managed. `npm run quality:snapshot`
+remains the explicit release trigger and now commits the file itself.
+
+The rename is a git rename of tracked, derived content — no migration, since
+`scripts/migrations/` governs `data/` paths and there is no install state to
+carry. A fork that published under the old name resolves one rename conflict;
+worst case it regenerates the file from its own database on the next publish.

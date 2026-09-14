@@ -1,6 +1,4 @@
 /** Read-through federation of numeric app audit evidence; never exports prose or relays peers. */
-import { readFile } from 'node:fs/promises';
-import { join } from 'node:path';
 import { PATHS } from '../lib/paths.js';
 import { createHash } from 'node:crypto';
 import { z } from 'zod';
@@ -30,11 +28,16 @@ const payloadSchema = z.object({
   measurements: z.array(measurementSchema).max(10000),
 }).strict();
 
+// PortOS's own app record always carries a repoPath; the bare `{ id: PORTOS_APP_ID }`
+// form used for self-directed calls resolves to this install's checkout.
+const appRepoPath = app => app.repoPath || (app.id === PORTOS_APP_ID ? PATHS.root : null);
+
 // Match repositories without sharing remote URLs, names, credentials or local paths.
 // Independent versions of the same repository intentionally contribute to one score.
 async function repositoryKey(deps, app = { id: PORTOS_APP_ID }) {
-  if (app.id !== PORTOS_APP_ID && !app.repoPath) return null;
-  const origin = await (deps.getOriginInfo || getOriginInfo)(app.repoPath);
+  const repoPath = appRepoPath(app);
+  if (!repoPath) return null;
+  const origin = await (deps.getOriginInfo || getOriginInfo)(repoPath);
   return origin.host && origin.fullName ? hash(`${origin.host}/${origin.fullName}`.toLowerCase()) : null;
 }
 
@@ -130,21 +133,14 @@ export async function collectAppQuality(app, days, deps = {}) {
 }
 
 /**
- * PortOS reads its own committed `quality-snapshot.json`; every other managed app
- * reads a `.quality.json` at its repo root. Both files are the same numeric
- * snapshot shape and get the same guards — repository match, no future dates, 4 MiB cap.
+ * Every app — PortOS's own checkout included — reads the `.quality.json` at its
+ * repo root, under the same guards: repository match, no future dates, 4 MiB cap.
  */
 async function releasePayload(deps, app) {
-  let raw = null;
-  if (app.id === PORTOS_APP_ID) {
-    const body = await (deps.readSnapshot || (() => readFile(join(PATHS.root, 'quality-snapshot.json'), 'utf8')))().catch(() => null);
-    // jsonIo stays out of this widely-reached module's static closure (import budget).
-    if (body && Buffer.byteLength(body) <= MAX_PAYLOAD_BYTES) raw = await Promise.resolve().then(() => JSON.parse(body)).catch(() => null);
-  } else if (app.repoPath) {
-    const { readAppQualitySnapshotFile } = await import('./appQualitySnapshotFile.js');
-    raw = await readAppQualitySnapshotFile(app.repoPath, deps);
-  }
-  const parsed = payloadSchema.safeParse(raw);
+  const repoPath = appRepoPath(app);
+  if (!repoPath) return null;
+  const { readAppQualitySnapshotFile } = await import('./appQualitySnapshotFile.js');
+  const parsed = payloadSchema.safeParse(await readAppQualitySnapshotFile(repoPath, deps));
   return parsed.success ? parsed.data : null;
 }
 
