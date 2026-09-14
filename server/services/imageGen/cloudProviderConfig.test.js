@@ -370,6 +370,68 @@ describe('resolveRenderTargetConfig (#3231)', () => {
     expect(cloud.modelId).toBe('record-model');
   });
 
+  // #7366 — the shipped-default flag is what lets the agy provider re-point a
+  // model the vendor retired. A record-tagged render resolves the ladder here,
+  // stamps the resolved id onto `data.cloudModel`, and the dispatch re-resolves
+  // from that id alone — at which point a materialized shipped default looked
+  // exactly like a deliberate choice and the flag never fired. Music Video and
+  // Universe Bible renders are unattended, so the symptom was a raw vendor
+  // error where the re-point should have kept the render alive.
+  describe('shipped-default provenance across the ladder round-trip', () => {
+    const agySettings = settingsWith({ agy: { enabled: true, agyPath: '/bin/agy' } });
+
+    // The ladder → stamp → dispatch round-trip prepareParams/routes perform.
+    const roundTrip = (settings, target, options = {}) => {
+      const resolved = resolveRenderTargetConfig(settings, target, options);
+      return resolveCloudProviderConfig(settings, resolved.mode, {
+        model: resolved.cloud.modelId,
+        modelIsShippedDefault: resolved.cloud.modelIsShippedDefault,
+      });
+    };
+
+    it('survives the round-trip when nothing anywhere pins a model', () => {
+      const resolved = resolveRenderTargetConfig(agySettings, 'universe-bible', {
+        mode: IMAGE_GEN_MODE.AGY,
+      });
+      expect(resolved.cloud.modelId).toBe(AGY_IMAGEGEN_DEFAULT_MODEL);
+      expect(resolved.cloud.modelIsShippedDefault).toBe(true);
+
+      const dispatched = roundTrip(agySettings, 'universe-bible', { mode: IMAGE_GEN_MODE.AGY });
+      expect(dispatched.providerParams.model).toBe(AGY_IMAGEGEN_DEFAULT_MODEL);
+      expect(dispatched.providerParams.modelIsShippedDefault).toBe(true);
+    });
+
+    it('stays false for a model the RECORD pinned, even when it equals the shipped one', () => {
+      // A user who typed the shipped id made a deliberate choice; re-pointing it
+      // would render something else under the model name they chose.
+      const dispatched = roundTrip(agySettings, 'universe-bible', {
+        recordMode: IMAGE_GEN_MODE.AGY,
+        recordModel: AGY_IMAGEGEN_DEFAULT_MODEL,
+      });
+      expect(dispatched.providerParams.model).toBe(AGY_IMAGEGEN_DEFAULT_MODEL);
+      expect(dispatched.providerParams.modelIsShippedDefault).toBe(false);
+    });
+
+    it('stays false for a saved install-wide default and a per-request override', () => {
+      const saved = settingsWith({ agy: { enabled: true, model: AGY_IMAGEGEN_DEFAULT_MODEL } });
+      expect(roundTrip(saved, 'universe-bible', { mode: IMAGE_GEN_MODE.AGY })
+        .providerParams.modelIsShippedDefault).toBe(false);
+      expect(roundTrip(agySettings, 'universe-bible', {
+        mode: IMAGE_GEN_MODE.AGY, model: 'gemini-3.6-flash-high',
+      }).providerParams.modelIsShippedDefault).toBe(false);
+    });
+
+    it('ignores the marker without an override, so it cannot invent provenance', () => {
+      // The field is a hint ABOUT an override. Alone it must change nothing, or
+      // a stray value would authorize re-pointing a user's saved pin.
+      const saved = settingsWith({ agy: { enabled: true, model: 'user-pinned' } });
+      const cloud = resolveCloudProviderConfig(saved, IMAGE_GEN_MODE.AGY, {
+        modelIsShippedDefault: true,
+      });
+      expect(cloud.providerParams.modelIsShippedDefault).toBe(false);
+    });
+  });
+
   it('recordRenderPin normalizes auto/blank/missing to null', () => {
     expect(recordRenderPin(null)).toEqual({ mode: null, modelId: null });
     expect(recordRenderPin({ imageMode: 'auto', imageModelId: '  ' })).toEqual({ mode: null, modelId: null });

@@ -689,6 +689,25 @@ describe('TaskItem investigation approval hint (#3714)', () => {
     expect(approve).toHaveAttribute('title', expect.stringContaining('last 24 hours'));
   });
 
+  it('offers the approval action on a held USER task too, not just a system one', async () => {
+    // A user row the parser had to RECOVER is withheld from the unattended spawn
+    // and persists that hold in TASKS.md (#7300, #7367). Gating the button on
+    // `isSystem` left it pending with nothing able to release it.
+    const heldUser = { ...task, id: 'task-recovered', approvalRequired: true, metadata: {} };
+    api.approveCosTask.mockResolvedValue({ ...heldUser, approvalRequired: false });
+    const onRefresh = vi.fn();
+    render(<TaskItem task={heldUser} onRefresh={onRefresh} providers={providers} />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Approve task task-recovered' }));
+    await waitFor(() => expect(api.approveCosTask).toHaveBeenCalledWith('task-recovered', { silent: true }));
+    expect(onRefresh).toHaveBeenCalled();
+  });
+
+  it('shows no approval action on an ordinary user task', () => {
+    render(<TaskItem task={{ ...task, id: 'task-plain', metadata: {} }} onRefresh={vi.fn()} providers={providers} />);
+    expect(screen.queryByRole('button', { name: /^Approve task/ })).not.toBeInTheDocument();
+  });
+
   it('leaves the plain approve label on an approval-required task that is not a failure loop', () => {
     const plain = { ...held, id: 'sys-approve-plain', metadata: {} };
     render(<TaskItem task={plain} isSystem onRefresh={vi.fn()} providers={providers} />);

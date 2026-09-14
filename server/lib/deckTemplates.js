@@ -12,6 +12,7 @@
  * `services/decks.js`.
  */
 
+import { aspectRatioPhrase } from './aspectRatio.js';
 import { composeStyledPrompt } from './composeStyledPrompt.js';
 import { buildVisualStyleClause, universeVisualStyleTokens } from './universeVisualStyle.js';
 
@@ -63,10 +64,29 @@ export const CARD_STATUS = Object.freeze({
 // Per-kind layout clause. Every card of a deck shares it (editable on the deck)
 // so the whole set reads as ONE physical object — same border, same index
 // treatment — while the card prompt carries only the subject.
-export const DEFAULT_LAYOUT_PROMPT = Object.freeze({
-  [DECK_KIND.PLAYING]: 'Complete playing-card face, 2:3 portrait, ornate decorative border, the rank and suit index drawn in the top-left and bottom-right corners, symmetrical composition',
-  [DECK_KIND.TAROT]: 'Complete tarot card, 2:3 portrait, decorative framed border, the card title lettered in a banner along the bottom edge, symbolic centered composition',
-});
+//
+// The framing phrase is DERIVED from the kind's canvas, never written beside
+// it: these clauses kept telling the model "2:3 portrait" after the per-kind
+// sizes moved to each card's true trim (5:7 and 11:19), so the prompt and the
+// canvas disagreed about the shape being drawn. Deriving means changing a
+// canvas changes the sentence, and the two cannot drift apart again.
+const layoutClauseFor = {
+  [DECK_KIND.PLAYING]: (framing) => `Complete playing-card face, ${framing}, ornate decorative border, the rank and suit index drawn in the top-left and bottom-right corners, symmetrical composition`,
+  [DECK_KIND.TAROT]: (framing) => `Complete tarot card, ${framing}, decorative framed border, the card title lettered in a banner along the bottom edge, symbolic centered composition`,
+};
+
+export const DEFAULT_LAYOUT_PROMPT = Object.freeze(Object.fromEntries(
+  DECK_KINDS.map((kind) => {
+    // Loud at import rather than silent at render: a kind with no clause used to
+    // resolve to `undefined` here and reach `services/decks.js`, whose
+    // `|| ''` fallback would mint every card of that deck with NO shared layout
+    // at all — a whole deck rendered wrong before anyone noticed the gap.
+    const clause = layoutClauseFor[kind];
+    if (!clause) throw new Error(`Deck kind ${kind} has no DEFAULT_LAYOUT_PROMPT clause`);
+    const size = DECK_CARD_SIZE_BY_KIND[kind] || DECK_CARD_SIZE;
+    return [kind, clause(aspectRatioPhrase(size.width, size.height))];
+  }),
+));
 
 const PLAYING_SUITS = Object.freeze([
   { key: 'spades', name: 'Spades', symbol: '♠' },

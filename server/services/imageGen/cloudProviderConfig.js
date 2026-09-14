@@ -93,16 +93,22 @@ export const CLOUD_PROVIDER_SPECS = Object.freeze({
     // sentinel, which resolves to "no --model" and lets agy pick a possibly
     // reasoning-heavy session default) — see AGY_IMAGEGEN_DEFAULT_MODEL.
     modelId: (a, override) => override || a.model || AGY_IMAGEGEN_DEFAULT_MODEL,
-    params: (a, override) => ({
+    params: (a, override, overrideIsShippedDefault) => ({
       agyPath: a.agyPath,
       model: override || a.model || AGY_IMAGEGEN_DEFAULT_MODEL,
-      // Provenance, which the resolved `model` above erases: this is the only
-      // place that still knows whether the id is PortOS's own shipped pin or
-      // something a human chose. The agy provider re-points a shipped pin that
-      // the vendor has retired from its catalog, and must never do that to a
-      // user's — an id typed into Settings (or sent as a per-render override)
-      // is a deliberate choice, even when it happens to equal the shipped one.
-      modelIsShippedDefault: !override && !a.model,
+      // Provenance, which the resolved `model` above erases: whether the id is
+      // PortOS's own shipped pin or something a human chose. The agy provider
+      // re-points a shipped pin that the vendor has retired from its catalog,
+      // and must never do that to a user's — an id typed into Settings (or sent
+      // as a per-render override) is a deliberate choice, even when it happens
+      // to equal the shipped one.
+      //
+      // The absence of a value is only HALF the answer. A caller that already
+      // walked the render-target ladder hands the resolved id back as an
+      // override, so by the time it reaches here every id looks chosen — which
+      // is exactly how the flag never fired for a record-tagged render (#7366).
+      // Such a caller says so with `overrideIsShippedDefault` instead.
+      modelIsShippedDefault: overrideIsShippedDefault || (!override && !a.model),
     }),
   }),
 });
@@ -120,11 +126,17 @@ export const CLOUD_PROVIDER_SPECS = Object.freeze({
  *                       which strip the dispatcher-only field).
  *  - `jobParams`      — `{ mode, ...providerParams }` for `enqueueJob`, where
  *                       `mode` is the queue's lane discriminator.
+ *  - `modelIsShippedDefault` — whether `modelId` is PortOS's own shipped pin
+ *                       rather than a choice, for the providers that re-point a
+ *                       retired shipped default (agy). Always false elsewhere.
  *  - `disabledError`  — a ready-to-throw ServerError (null when enabled).
  *  - `disabledReason` — `'<mode>-disabled'`, for callers that skip silently.
  *  - `connectionReason` — reason string for `checkConnection` responses.
  *
  * `overrides.model` is the per-render model id (the request's `cloudModel`).
+ * `overrides.modelIsShippedDefault` is its PROVENANCE, set only by a caller
+ * re-resolving a model id this resolver already produced from the shipped
+ * default (see `prepareParams.js`) — it is ignored without an override.
  * It only applies to providers whose spec sets `supportsModelOverride` — a
  * value passed for grok is ignored rather than silently changing nothing at
  * spawn time. Blank/whitespace is treated as "inherit the saved default", so
@@ -138,13 +150,22 @@ export function resolveCloudProviderConfig(settings, mode, overrides = {}) {
   const enabled = config.enabled === true;
   const requestedModel = typeof overrides.model === 'string' ? overrides.model.trim() : '';
   const modelOverride = spec.supportsModelOverride && requestedModel ? requestedModel : null;
-  const providerParams = spec.params(config, modelOverride);
+  // Only meaningful ALONGSIDE an override: it says the id the caller handed in
+  // is one this resolver itself produced from the shipped default a moment ago,
+  // not a choice. Without an override the spec answers from the config as it
+  // always did, so a stray marker can never invent provenance for a user's pin.
+  const overrideIsShippedDefault = Boolean(modelOverride) && overrides.modelIsShippedDefault === true;
+  const providerParams = spec.params(config, modelOverride, overrideIsShippedDefault);
   return {
     mode,
     config,
     enabled,
     supportsModelOverride: spec.supportsModelOverride === true,
     modelOverride,
+    // Re-surfaced at the top level so a caller threading this bundle's model
+    // onward can thread its provenance with it, without reaching into the
+    // per-provider `providerParams` bag (only agy carries the field there).
+    modelIsShippedDefault: providerParams.modelIsShippedDefault === true,
     modelId: spec.modelId(config, modelOverride),
     providerParams,
     jobParams: { mode, ...providerParams },

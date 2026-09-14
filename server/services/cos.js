@@ -1519,7 +1519,8 @@ export async function init() {
   // - 'added': fill open slots via dequeueNextTask, and (for user tasks) also
   //   fire tryImmediateSpawn so the just-added task starts instantly, bypassing
   //   the evaluation interval that's meant for system task generation.
-  // - 'approved': a newly approved internal task can now spawn — re-run dequeue.
+  // - 'approved': a newly approved task can now spawn — re-run dequeue. Either
+  //   queue: a user row withheld by the #7300 hold is released the same way.
   // - 'unblocked': a blocked task flipped back to pending (revive/retry, #2614)
   //   is newly spawnable exactly like an approval — re-run dequeue.
   // - 'requeued': an in_progress task flipped back to pending — a failed run's

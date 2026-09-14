@@ -136,8 +136,14 @@ export async function generateImage(params) {
   // Per-render cloud-CLI model override. Dispatcher-only too: it is folded
   // into the provider's own `model` param by resolveCloudProviderConfig below,
   // so providers never see the raw field.
+  // Its PROVENANCE rides beside it, for the same reason: a caller that already
+  // walked the render-target ladder hands back a model id the resolver itself
+  // produced, and without this marker a materialized shipped default would read
+  // as a deliberate choice (#7366). Dispatcher-only, so stripped like the id.
   const cloudModel = normalized.cloudModel;
+  const modelIsShippedDefault = normalized.cloudModelIsShippedDefault;
   delete normalized.cloudModel;
+  delete normalized.cloudModelIsShippedDefault;
   // Input images are supported by local (mflux/diffusers --image-path plus
   // FLUX.2 --reference-images), codex (image_gen.referenced_image_paths via the
   // CLI's -i flag), grok (image_edit.image) and agy (generate_image.ImagePaths).
@@ -164,7 +170,7 @@ export async function generateImage(params) {
   // knobs (codexPath/model/effort vs grokPath/aspectRatio) come from the
   // resolver's spec, so a saved override always wins over the provider's own
   // internal defaults.
-  const cloud = resolveCloudProviderConfig(s, mode, { model: cloudModel });
+  const cloud = resolveCloudProviderConfig(s, mode, { model: cloudModel, modelIsShippedDefault });
   if (cloud) {
     if (!cloud.enabled) throw cloud.disabledError;
     return guardResolvedFrame(await CLOUD_PROVIDERS[mode].generateImage({ ...cloud.providerParams, cleanC2PA, denoise, ...normalized }));
