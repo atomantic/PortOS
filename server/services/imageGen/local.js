@@ -25,7 +25,8 @@ import { autoCleanGeneratedImage } from '../../lib/imageClean.js';
 import { rejectDegenerateFrame } from './frameGuard.js';
 import { imageGenEvents } from '../imageGenEvents.js';
 import { broadcastSse, attachSseClient as attachSse, closeJobAfterDelay, PYTHON_NOISE_RE } from '../../lib/sseUtils.js';
-import { resolveFlux2Python, FLUX2_VENV_DEFAULT } from '../../lib/pythonSetup.js';
+import { resolveFlux2Python, FLUX2_VENV_DEFAULT, isFlux2VenvHealthy, invalidateFlux2Health } from '../../lib/pythonSetup.js';
+import { usesTorchVenv } from '../../lib/imageRuntimeRemedies.js';
 import { hfChildEnv } from '../hfToken.js';
 import { extractGatedRepo, isGatedRepoError } from '../../lib/hfErrors.js';
 import { killWithEscalation } from '../../lib/killWithEscalation.js';
@@ -579,8 +580,26 @@ export async function generateImage({ pythonPath, prompt = '', negativePrompt = 
   // Both flux2 and z-image runners resolve their own Python via the FLUX.2
   // venv — only the legacy mflux/imagine_win path needs the user-configured
   // Settings > Image Gen pythonPath.
-  if (!isFlux2(model) && !usesDiffusersRunner(model) && !pythonPath) {
+  if (!usesTorchVenv(model) && !pythonPath) {
     throw new ServerError('Python path not configured — set it in Settings > Image Gen', { status: 400, code: 'IMAGE_GEN_NOT_CONFIGURED' });
+  }
+  // Health, not mere presence. buildArgs below only checks that the shared
+  // torch venv's python BINARY exists, so a venv left half-installed (killed
+  // mid-download, a hand-run pip upgrade that broke diffusers) spawned anyway
+  // and died with an ImportError the caller saw as a bare "Exit code 1" — the
+  // Decks page rendered that as an unexplained "Failed" badge. Refuse up front
+  // with the same reason and one-button remedy the status probe reports.
+  if (usesTorchVenv(model)) {
+    const healthy = await isFlux2VenvHealthy().then((v) => v).catch(() => null);
+    if (healthy === false) {
+      throw new ServerError(
+        `The shared torch image runtime is not installed or healthy (expected at ${FLUX2_VENV_DEFAULT}). Install it from Settings › Image Gen › Local, then retry. FLUX.2, Z-Image, ERNIE, HiDream and Qwen all render through it.`,
+        // Same code buildArgs throws when the venv's python is missing outright:
+        // "the shared torch runtime is not usable" is one state to a caller,
+        // whether it is absent or broken.
+        { status: 400, code: 'IMAGE_GEN_FLUX2_NOT_INSTALLED' },
+      );
+    }
   }
   // FLUX.2 and Z-Image runners now load LoRAs via diffusers'
   // pipe.load_lora_weights — but only LoRAs trained against the matching
@@ -953,6 +972,18 @@ export async function generateImage({ pythonPath, prompt = '', negativePrompt = 
         if (mfluxBroken) {
           userKind = 'mflux_install_corrupted';
           userMessage = 'Your mflux install is corrupted (entry-point shim and package layout out of sync). Repair with: `pip uninstall -y mflux && pip install --user --force-reinstall --no-cache-dir --no-deps mflux`. If you use conda, run the same in your conda env\'s pip.';
+        }
+      }
+      // The precheck passed (or its memoized "healthy" answer is now stale) and
+      // the runtime still failed to import. Bust the health cache so the next
+      // status poll reports the truth instead of the cached pass, and name the
+      // same one-button remedy rather than leaving the caller with "Exit code 1".
+      if (!userMessage && usesTorchVenv(model)) {
+        const importBroken = lines.some((l) => /^(ModuleNotFoundError|ImportError)\b/.test(l) || /cannot import name /.test(l));
+        if (importBroken) {
+          invalidateFlux2Health();
+          userKind = 'torch_runtime_broken';
+          userMessage = `The shared torch image runtime at ${FLUX2_VENV_DEFAULT} could not import its packages. Reinstall it from Settings › Image Gen › Local, then retry this render.`;
         }
       }
       // Legacy mflux-generate is a pre-built binary, so it doesn't emit the

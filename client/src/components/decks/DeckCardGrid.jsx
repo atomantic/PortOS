@@ -72,7 +72,7 @@ export default function DeckCardGrid({ deck, onOpenCard, onRenderCard, onPreview
                     onRender={() => (needsPrompt ? onOpenCard(card) : onRenderCard(card))}
                     onPreview={() => onPreview(card)}
                     onComplete={(filename) => onRenderComplete(card.id, filename)}
-                    onTerminalStatus={(s) => onRenderTerminal(card.id, s)}
+                    onTerminalStatus={(s, error) => onRenderTerminal(card.id, s, error)}
                     emptyIcon={needsPrompt ? PencilLine : undefined}
                     emptyHint={needsPrompt ? `Write a prompt for ${card.name}` : `Render ${card.name}`}
                     alt={card.name}
@@ -91,6 +91,16 @@ export default function DeckCardGrid({ deck, onOpenCard, onRenderCard, onPreview
                     ) : null}
                   </button>
                   <Pill tone={meta.tone} size="xs" icon={meta.icon} className="mt-auto">{meta.label}</Pill>
+                  {/* Why it failed. The slot clears itself on a terminal
+                      failure (so the card stays re-renderable), taking the
+                      shared thumbnail's own message with it — this is the only
+                      place a deck can show it. The fix button for a broken
+                      runtime lives in the render bar above. */}
+                  {status === CARD_STATUS.FAILED && card.render?.error ? (
+                    <p className="w-full text-center text-[10px] leading-snug text-port-error line-clamp-3" title={card.render.error}>
+                      {card.render.error}
+                    </p>
+                  ) : null}
                 </li>
               );
             })}

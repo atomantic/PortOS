@@ -1,15 +1,17 @@
 import { useId } from 'react';
 import { Loader2, Play, RefreshCw, Sliders, Sparkles, WandSparkles } from 'lucide-react';
+import LocalRuntimeStatus from '../imageGen/LocalRuntimeStatus';
 import RecordRenderPinRow from '../imageGen/RecordRenderPinRow';
 import CollapsibleSection from '../ui/CollapsibleSection';
 import FormField from '../ui/FormField';
 import DeckLlmPinPicker from './DeckLlmPinPicker';
 import useFieldDraft from '../../hooks/useFieldDraft';
 import useImageRenderSettings from '../../hooks/useImageRenderSettings';
+import useLocalImageRuntime from '../../hooks/useLocalImageRuntime';
 import {
   DECK_CARD_SIZE, DECK_CARD_SIZE_BY_KIND, DECK_CARD_SIZE_MAX, DECK_CARD_SIZE_MIN,
 } from '../../lib/decks';
-import { RENDER_TARGET, modeLabel } from '../../lib/imageGenBackends';
+import { IMAGE_GEN_MODE, IMAGE_RUNTIME_READINESS, RENDER_TARGET, modeLabel } from '../../lib/imageGenBackends';
 import { clampImageEdge } from '../../lib/imageGenResolutions';
 import { pluralize } from '../../lib/textUtils';
 
@@ -50,6 +52,17 @@ export default function DeckRenderControls({
   const renderFacts = backends.length
     ? [modeLabel(imageCfg.mode), model, `${size.width}×${size.height}`].filter(Boolean)
     : [];
+  // `backends` is empty until the settings fetch lands, and until then imageCfg
+  // is the UNRESOLVED placeholder (local + the install default) — probing on
+  // that asks about the wrong model, and about a local runtime a cloud-pinned
+  // deck never touches. Wait for the real answer.
+  const rendersLocally = backends.length > 0 && imageCfg.mode === IMAGE_GEN_MODE.LOCAL;
+  const localRuntime = useLocalImageRuntime(rendersLocally ? (imageCfg.modelId || null) : null);
+  // Queueing 79 cards against a runtime the server will refuse is the reported
+  // complaint one step earlier than the error message, so the buttons stand down
+  // while it is unavailable. An unknown verdict does NOT block — a probe that
+  // could not answer must not be able to lock the deck out of rendering.
+  const runtimeBlocked = localRuntime.runtime?.readiness === IMAGE_RUNTIME_READINESS.UNAVAILABLE;
 
   return (
     <div className="bg-port-card border border-port-border rounded-md p-3 space-y-3">
@@ -92,6 +105,17 @@ export default function DeckRenderControls({
         />
       </div>
 
+      {/* A deck that renders locally is blocked by the same runtime state the
+          Image Gen page and Settings report — and a card whose render died on a
+          broken venv previously showed only a "Failed" badge. Show the verdict
+          and its one-button fix at the point of action, and stay silent while
+          the runtime is healthy. */}
+      <LocalRuntimeStatus
+        runtime={localRuntime.runtime}
+        onRefresh={localRuntime.refresh}
+        hideWhenReady
+      />
+
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
         <Step step="1" title="Prompts" note={promptNote({ generating, unprompted, total })}>
           {(noteId) => (<>
@@ -119,12 +143,12 @@ export default function DeckRenderControls({
           </>)}
         </Step>
 
-        <Step step="2" title="Render" note={renderNote({ prompted, rendering, missing, inFlight })}>
+        <Step step="2" title="Render" note={renderNote({ prompted, rendering, missing, inFlight, runtimeBlocked })}>
           {(noteId) => (<>
             <button
               type="button"
               onClick={onRenderMissing}
-              disabled={busy || missing === 0 || !prompted}
+              disabled={busy || missing === 0 || !prompted || runtimeBlocked}
               aria-describedby={noteId}
               className={promptsAreTheNextStep ? SECONDARY_BTN : PRIMARY_BTN}
             >
@@ -134,7 +158,7 @@ export default function DeckRenderControls({
             <button
               type="button"
               onClick={onRenderAll}
-              disabled={busy || !prompted}
+              disabled={busy || !prompted || runtimeBlocked}
               aria-describedby={noteId}
               title="Queues a fresh render for every card that has a prompt"
               className={SECONDARY_BTN}
@@ -205,7 +229,8 @@ const promptNote = ({ generating, unprompted, total }) => {
 // The same for step 2. The two counts compose into one sentence rather than
 // each owning a phrasing, so "some missing, some in flight" reads like the two
 // states it is instead of a third variant.
-const renderNote = ({ prompted, rendering, missing, inFlight }) => {
+const renderNote = ({ prompted, rendering, missing, inFlight, runtimeBlocked }) => {
+  if (runtimeBlocked) return 'The local image runtime is unavailable — fix it above, then render.';
   if (!prompted) return 'A card renders from its prompt. Write prompts first.';
   if (rendering) return 'Queueing renders…';
   const parts = [];

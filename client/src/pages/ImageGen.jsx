@@ -45,7 +45,7 @@ import {
 } from 'lucide-react';
 import { composeStyledPrompt } from '../lib/composeStyledPrompt';
 import { universeStylePreset } from '../lib/universeStylePreset';
-import { isCloudCliMode, deriveAvailableBackends, AGY_IMAGEGEN_DEFAULT_MODEL, IMAGE_GEN_MODE, cloudPromptRequired, imageGenReadiness, isI2iCapableMode, pickI2iMode, modeLabel, referenceSlotsFor, supportsReferenceStrength } from '../lib/imageGenBackends';
+import { IMAGE_RUNTIME_REMEDY, isCloudCliMode, deriveAvailableBackends, AGY_IMAGEGEN_DEFAULT_MODEL, IMAGE_GEN_MODE, cloudPromptRequired, imageGenReadiness, isI2iCapableMode, pickI2iMode, modeLabel, referenceSlotsFor, supportsReferenceStrength } from '../lib/imageGenBackends';
 import { clampImageDimensions, clampImageEdge } from '../lib/imageGenResolutions';
 import { peerModelRequiresInput } from '../lib/federatedMediaReadiness.js';
 import { DEFAULT_NEGATIVE_PROMPT } from '../lib/imageGenDefaults';
@@ -859,8 +859,12 @@ export default function ImageGen() {
   const handleFlux2ModalClose = useCallback(() => setFlux2InstallOpen(false), []);
   const handleFlux2InstallComplete = useCallback(() => {
     refreshFlux2Status();
+    // The status pill reads the same runtime health, so re-probe it too — the
+    // pill now offers the install button itself and would otherwise keep
+    // claiming "Unavailable" for a runtime that just finished installing.
+    refreshStatus(effectiveMode, modelId);
     toast.success('FLUX.2 runtime installed');
-  }, [refreshFlux2Status]);
+  }, [refreshFlux2Status, refreshStatus, effectiveMode, modelId]);
 
   useEffect(() => {
     if (!sharesFlux2Venv) { setFlux2Status(null); return; }
@@ -908,12 +912,12 @@ export default function ImageGen() {
   }, [generating, refreshRecent]);
   useAutoRefetch(pollQueue, 4000, { enabled: queueActive, pollOnly: true });
 
-  // The HF-gated-repo "token" issue only applies to actual FLUX.2 models —
+  // The HF-gated-repo token gate applies to actual FLUX.2 models only —
   // Z-Image/ERNIE/HiDream/Qwen share the venv but aren't gated repos, so a
-  // missing HF token must not block them.
-  const flux2Issue = sharesFlux2Venv && flux2Status
-    ? (!flux2Status.venvInstalled ? 'venv' : (isFlux2Model && !flux2Status.hfTokenPresent) ? 'token' : null)
-    : null;
+  // missing HF token must not block them. The venv's own health is NOT read
+  // here: it reaches the page through `status.remedy` on the shared diagnosis,
+  // which is what the readiness pill renders its install button from.
+  const needsFlux2Token = isFlux2Model && !!flux2Status && flux2Status.venvInstalled && !flux2Status.hfTokenPresent;
   // Favorites are filtered before LIMIT on the server, so old favorites remain
   // reachable even when none of the newest five images is starred.
   const visibleGallery = useMemo(() => gallery.filter(img => !img.hidden), [gallery]);
@@ -1356,7 +1360,18 @@ export default function ImageGen() {
                 <>
                   <AlertTriangle className="w-3 h-3" />
                   {statusUnknown ? 'Could not verify' : 'Unavailable'}: {status.reason || 'Not connected'} —
-                  <button type="button" onClick={openSettings} className="underline">Settings</button>
+                  {/* The probe names the ONE action that fixes this state
+                      (server/services/imageGen/localRuntime.js). Offer it here:
+                      sending the user to Settings for a broken shared torch venv
+                      landed them on a panel that probes a DIFFERENT interpreter
+                      and reports "All required packages installed". */}
+                  {status.remedy?.kind === IMAGE_RUNTIME_REMEDY.INSTALL_TORCH_VENV ? (
+                    <button type="button" onClick={() => setFlux2InstallOpen(true)} className="underline">
+                      {status.remedy.label}
+                    </button>
+                  ) : (
+                    <button type="button" onClick={openSettings} className="underline">Settings</button>
+                  )}
                 </>
               )}
             </span>
@@ -1510,25 +1525,7 @@ export default function ImageGen() {
             setNegativePrompt={setNegativePrompt}
           />
 
-          {flux2Issue === 'venv' && (
-            <div className="rounded-lg border border-port-warning/40 bg-port-warning/10 px-3 py-3 text-xs text-port-warning flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
-              <div>
-                {isFlux2Model
-                  ? "FLUX.2 runtime isn't installed yet."
-                  : `${currentModel?.name || 'This model'} shares the FLUX.2 torch runtime, which isn't installed yet.`}
-                {' '}PortOS can set it up automatically — torch + diffusers download, ~3-10 min on first run.
-              </div>
-              <button
-                type="button"
-                onClick={() => setFlux2InstallOpen(true)}
-                className="self-start sm:self-auto whitespace-nowrap inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-port-accent text-white text-xs font-medium hover:bg-port-accent/80 disabled:opacity-50"
-              >
-                <Sparkles size={14} />
-                Install FLUX.2
-              </button>
-            </div>
-          )}
-          {flux2Issue === 'token' && (
+          {needsFlux2Token && (
             <HfTokenBanner
               modelLabel={currentModel?.name || 'FLUX.2-klein'}
               licenseUrl={flux2Status.licenseUrl}

@@ -79,8 +79,10 @@ describe('EntryThumbSlot — three-state thumbnail', () => {
   // read as a job key: it would look up `renderingJobs['failed']`, find nothing,
   // never clear the real job, and leave the slot spinning after every render.
   // Terminal status therefore goes to its own prop, and `onComplete` stays
-  // strictly one-argument.
-  it('calls onComplete with exactly one argument, reporting status separately', () => {
+  // strictly one-argument. That prop takes the failure REASON in its second
+  // slot, which is how a caller that records a failed render can explain it
+  // without waiting for a reload to re-read the persisted record.
+  it('calls onComplete with exactly one argument, reporting status and reason separately', () => {
     jobStatus = 'failed';
     const onComplete = vi.fn();
     const onTerminalStatus = vi.fn();
@@ -93,14 +95,14 @@ describe('EntryThumbSlot — three-state thumbnail', () => {
       />,
     );
     expect(onComplete.mock.calls[0]).toHaveLength(1);
-    expect(onTerminalStatus).toHaveBeenCalledWith('failed');
+    expect(onTerminalStatus).toHaveBeenCalledWith('failed', 'boom');
   });
 
   it('reports a cancel distinctly so callers can stay silent on one', () => {
     jobStatus = 'canceled';
     const onTerminalStatus = vi.fn();
     render(<EntryThumbSlot inFlightJobId="job-v" onTerminalStatus={onTerminalStatus} canRender={false} />);
-    expect(onTerminalStatus).toHaveBeenCalledWith('canceled');
+    expect(onTerminalStatus).toHaveBeenCalledWith('canceled', null);
   });
 
   it('does NOT clear the in-flight job for non-terminal statuses', () => {

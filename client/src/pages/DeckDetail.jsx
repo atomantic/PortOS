@@ -179,8 +179,10 @@ function DeckEditor({ id }) {
     }));
   }, [patchLocalCard]);
 
-  const onRenderTerminal = useCallback((cardId, status) => {
-    patchLocalCard(cardId, (c) => ({ render: { ...(c.render || {}), status } }));
+  // Mirror what the server's own completion hook writes (`markCardRenderTerminal`)
+  // so the grid can explain a failure immediately instead of only after a reload.
+  const onRenderTerminal = useCallback((cardId, status, error = null) => {
+    patchLocalCard(cardId, (c) => ({ render: { ...(c.render || {}), status, error: error || null } }));
   }, [patchLocalCard]);
 
   const handleDelete = async () => {

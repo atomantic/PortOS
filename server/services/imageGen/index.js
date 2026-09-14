@@ -21,16 +21,14 @@ import * as codex from './codex.js';
 import * as grok from './grok.js';
 import * as agy from './agy.js';
 import {
-  IMAGE_GEN_MODE, IMAGE_GEN_MODES, CLOUD_IMAGE_GEN_MODES, LOCAL_IMAGEGEN_DEFAULT_MODEL, isEditCapableMode,
+  IMAGE_GEN_MODE, IMAGE_GEN_MODES, CLOUD_IMAGE_GEN_MODES, isEditCapableMode,
 } from './modes.js';
 import { DEFAULT_NEGATIVE_PROMPT } from './defaults.js';
 import { resolveCloudProviderConfig } from './cloudProviderConfig.js';
-import { getSetupCheck } from './setup.js';
 import { rejectDegenerateFrame } from './frameGuard.js';
 import { PATHS } from '../../lib/fileUtils.js';
 import { ServerError } from '../../lib/errorHandler.js';
-import { isFlux2, usesDiffusersRunner } from '../../lib/runners.js';
-import { isFlux2VenvHealthy } from '../../lib/pythonSetup.js';
+import { IMAGE_RUNTIME_READINESS } from '../../lib/imageRuntimeRemedies.js';
 
 // Cloud-CLI provider modules keyed by mode, so the shared gate in
 // checkConnection/generateImage dispatches without a per-provider branch.
@@ -47,110 +45,46 @@ const CLOUD_PROVIDERS = {
 // the provider modules above.
 export { IMAGE_GEN_MODE, IMAGE_GEN_MODES, CLOUD_IMAGE_GEN_MODES };
 const DEFAULT_MODE = IMAGE_GEN_MODE.EXTERNAL;
-const LOCAL_READINESS = Object.freeze({
-  READY: 'ready',
-  UNAVAILABLE: 'unavailable',
-  UNKNOWN: 'unknown',
-});
 
 const cfg = (s) => s?.imageGen || {};
 const sdapiUrl = (s) => cfg(s).external?.sdapiUrl || cfg(s).sdapiUrl || null;
 const pythonPath = (s) => cfg(s).local?.pythonPath || null;
 
-const localStatus = ({ model, modelId, readiness, reason }) => ({
-  connected: readiness === LOCAL_READINESS.READY,
-  mode: IMAGE_GEN_MODE.LOCAL,
-  model: model?.name || modelId,
-  modelId,
-  runner: model?.runner || 'mflux',
-  readiness,
-  ...(reason ? { reason } : {}),
-});
+// One shared load of the diagnosis module, deferred because this dispatcher is
+// reached by ~110 server suites that never probe a local runtime, while
+// `localRuntime.js` pulls the model registry and the setup-check cache
+// (server/AGENTS.md, "Import scoping"). Memoized so two concurrent status polls
+// cannot race two imports of one mocked specifier — under the test runner, one
+// of them escapes the mock. A rejected load is forgotten so a transient failure
+// does not poison every later probe.
+let localRuntimeModule = null;
+const localRuntime = () => (localRuntimeModule ||= import('./localRuntime.js').catch((err) => {
+  localRuntimeModule = null;
+  throw err;
+}));
 
+/**
+ * Wire shape for a local-mode status probe. The verdict itself comes from the
+ * shared diagnosis in `localRuntime.js` — this only projects it onto the
+ * `{ connected, mode, model, … }` envelope every backend answers with, and
+ * carries `remedy`/`runtime` through so the client can render the same
+ * one-button fix the Settings panel and the renderer describe.
+ */
 async function checkLocalConnection(settings, modelIdOverride) {
-  const modelId = modelIdOverride || cfg(settings).local?.modelId || LOCAL_IMAGEGEN_DEFAULT_MODEL;
-  const model = local.listImageModels().find((entry) => entry.id === modelId);
-  if (!model) {
-    return localStatus({
-      modelId,
-      readiness: LOCAL_READINESS.UNAVAILABLE,
-      reason: `Selected local model "${modelId}" is unavailable on this machine`,
-    });
-  }
-  if (model.hardwareCompatibility?.state === 'unavailable') {
-    return localStatus({
-      model,
-      modelId,
-      readiness: LOCAL_READINESS.UNAVAILABLE,
-      reason: model.hardwareCompatibility.reasons.join(' · ') || 'Selected model is incompatible with this machine',
-    });
-  }
-  if (model.hardwareCompatibility?.state === 'unknown') {
-    return localStatus({
-      model,
-      modelId,
-      readiness: LOCAL_READINESS.UNKNOWN,
-      reason: model.hardwareCompatibility.reasons.join(' · ') || 'Could not verify this machine supports the selected model',
-    });
-  }
-
-  // FLUX.2 and the Diffusers-family models use the dedicated torch venv, not
-  // the configurable mflux interpreter. Its health check is memoized by the
-  // setup flow, so ordinary status polls do not repeatedly import torch.
-  if (isFlux2(model) || usesDiffusersRunner(model)) {
-    const healthy = await isFlux2VenvHealthy().then((value) => value).catch(() => null);
-    if (healthy === true) return localStatus({ model, modelId, readiness: LOCAL_READINESS.READY });
-    if (healthy === false) {
-      return localStatus({
-        model,
-        modelId,
-        readiness: LOCAL_READINESS.UNAVAILABLE,
-        reason: 'The FLUX.2 image runtime is not installed or healthy',
-      });
-    }
-    return localStatus({
-      model,
-      modelId,
-      readiness: LOCAL_READINESS.UNKNOWN,
-      reason: 'Could not verify the FLUX.2 image runtime',
-    });
-  }
-
-  const py = pythonPath(settings);
-  if (!py) {
-    return localStatus({
-      model,
-      modelId,
-      readiness: LOCAL_READINESS.UNAVAILABLE,
-      reason: 'Python path not configured',
-    });
-  }
-  const setup = await getSetupCheck(py).then((result) => result).catch(() => null);
-  if (!setup) {
-    return localStatus({
-      model,
-      modelId,
-      readiness: LOCAL_READINESS.UNKNOWN,
-      reason: 'Could not verify the configured Python runtime',
-    });
-  }
-  if (setup.archMismatch) {
-    return localStatus({
-      model,
-      modelId,
-      readiness: LOCAL_READINESS.UNAVAILABLE,
-      reason: `Python architecture ${setup.interpreterArch || 'unknown'} is incompatible with this ${setup.hostArch || 'host'} runtime`,
-    });
-  }
-  if (setup.missing?.length) {
-    return localStatus({
-      model,
-      modelId,
-      readiness: LOCAL_READINESS.UNAVAILABLE,
-      reason: `Missing required packages: ${setup.missing.join(', ')}`,
-    });
-  }
-  return localStatus({ model, modelId, readiness: LOCAL_READINESS.READY });
+  const { diagnoseLocalRuntime } = await localRuntime();
+  const d = await diagnoseLocalRuntime({ modelId: modelIdOverride, settings });
+  return {
+    connected: d.readiness === IMAGE_RUNTIME_READINESS.READY,
+    mode: IMAGE_GEN_MODE.LOCAL,
+    model: d.model?.name || d.modelId,
+    modelId: d.modelId,
+    runner: d.runner,
+    runtime: d.runtime,
+    runtimeLabel: d.runtimeLabel,
+    readiness: d.readiness,
+    reason: d.reason,
+    remedy: d.remedy,
+  };
 }
 
 // Resolve the cleaner flags from body overrides + saved per-mode settings.

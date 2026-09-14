@@ -16,6 +16,8 @@ import FormField from '../ui/FormField';
 import TabPills from '../ui/TabPills';
 import BrailleSpinner from '../BrailleSpinner';
 import LocalSetupPanel from './LocalSetupPanel';
+import LocalRuntimeStatus from '../imageGen/LocalRuntimeStatus';
+import useLocalImageRuntime from '../../hooks/useLocalImageRuntime';
 import useDrawerTab from '../../hooks/useDrawerTab';
 import { isLoopbackHost } from '../../lib/loopbackHost.js';
 import { PORTS } from '../../lib/ports.js';
@@ -24,7 +26,7 @@ import {
   registerTool, updateTool, getToolsList,
   saveHfToken, clearHfToken,
 } from '../../services/api';
-import { deriveAvailableBackends, imageGenReadiness, isCloudCliMode, IMAGE_GEN_MODE, AGY_IMAGEGEN_DEFAULT_MODEL, AGY_IMAGEGEN_IMAGE_MODEL, CODEX_IMAGEGEN_DEFAULT_EFFORT, CODEX_IMAGEGEN_DEFAULT_MODEL, GROK_ASPECT_RATIOS, RENDER_TARGET_BACKEND_AUTO, RENDER_TARGET_OPTIONS, VIDEO_RENDER_MODES, localModelSelectOptions, modeLabel, normalizeRenderPinValue, supportsCloudModelOverride } from '../../lib/imageGenBackends';
+import { deriveAvailableBackends, imageGenReadiness, isCloudCliMode, IMAGE_GEN_MODE, LOCAL_IMAGEGEN_DEFAULT_MODEL, AGY_IMAGEGEN_DEFAULT_MODEL, AGY_IMAGEGEN_IMAGE_MODEL, CODEX_IMAGEGEN_DEFAULT_EFFORT, CODEX_IMAGEGEN_DEFAULT_MODEL, GROK_ASPECT_RATIOS, RENDER_TARGET_BACKEND_AUTO, RENDER_TARGET_OPTIONS, VIDEO_RENDER_MODES, localModelSelectOptions, modeLabel, normalizeRenderPinValue, supportsCloudModelOverride } from '../../lib/imageGenBackends';
 import { resolveCleanersFromConfig } from '../../lib/imageCleaners';
 import { withUnlistedOption } from '../../lib/withUnlistedOption';
 import { useMediaJobSse } from '../../hooks/useMediaJobSse';
@@ -398,6 +400,15 @@ export function ImageGenTab() {
   const statusReadiness = imageGenReadiness(status);
   const statusReady = statusReadiness === 'ready';
   const statusUnknown = statusReadiness === 'unknown';
+  // The Local tab's own verdict, for the model IT has pinned — independent of
+  // `status`, which follows whichever backend tab is active.
+  const localRuntime = useLocalImageRuntime(localModelId || LOCAL_IMAGEGEN_DEFAULT_MODEL);
+  // A pip install into the mflux interpreter flips the verdict for an mflux
+  // model, and neither probe can observe that on its own.
+  const onLocalPackagesChanged = useCallback(() => {
+    localRuntime.refresh();
+    checkStatus();
+  }, [localRuntime, checkStatus]);
 
   // Backends the Test Render picker may offer — derived from the SAVED slice,
   // not the live form, because a test render runs against what the server has
@@ -978,7 +989,20 @@ export function ImageGenTab() {
             missing packages directly. HF model weights stream into the standard <code>~/.cache/huggingface</code>
             and are surfaced in <a href="/models/media" className="text-port-accent hover:underline">Models → Media</a>.
           </p>
-          <LocalSetupPanel pythonPath={pythonPath} onPythonPathChange={setPythonPath} />
+          {/* The verdict first, then the interpreter detail below it. The
+              packages panel only ever probes the mflux interpreter, so on its
+              own it reported "All required packages installed" for a machine
+              whose pinned model renders through the SHARED torch venv and could
+              not run at all. This is the same diagnosis the Image Gen status
+              pill and the renderer's pre-flight refusal use — settingsLink is
+              off because this IS the settings form. */}
+          <LocalRuntimeStatus
+            runtime={localRuntime.runtime}
+            loading={localRuntime.loading}
+            onRefresh={localRuntime.refresh}
+            settingsLink={false}
+          />
+          <LocalSetupPanel pythonPath={pythonPath} onPythonPathChange={setPythonPath} onPackagesChanged={onLocalPackagesChanged} />
           <FormField
             label="Default model"
             labelClassName="block text-xs font-medium text-gray-400 mb-1"

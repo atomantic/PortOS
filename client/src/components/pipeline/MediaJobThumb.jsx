@@ -45,8 +45,11 @@ export default function MediaJobThumb({
 
   // Forward subscription state to the parent so callers (e.g. PageRow's
   // disable-while-rendering logic, lightbox nav builders) don't need a
-  // duplicate useMediaJobProgress subscription on the same jobId.
-  useEffect(() => { if (onStatus) onStatus(effectiveStatus); }, [effectiveStatus, onStatus]);
+  // duplicate useMediaJobProgress subscription on the same jobId. The failure
+  // reason rides the second argument so a caller that records a failed render
+  // can show WHY live, instead of only after a reload re-reads the persisted
+  // record; callers that only care about the status ignore it.
+  useEffect(() => { if (onStatus) onStatus(effectiveStatus, error); }, [effectiveStatus, error, onStatus]);
   useEffect(() => { if (onFilename && effectiveFilename) onFilename(effectiveFilename); }, [effectiveFilename, onFilename]);
 
   if (!jobId) return null;
@@ -149,10 +152,13 @@ export default function MediaJobThumb({
     return (
       <div
         title={error || 'Render failed'}
-        className={`${stateDims} bg-port-bg rounded border border-port-error/40 flex flex-col items-center justify-center gap-1 text-[10px] text-port-error`}
+        className={`${stateDims} bg-port-bg rounded border border-port-error/40 flex flex-col items-center justify-center gap-1 px-1 text-center text-[10px] text-port-error`}
       >
-        <AlertCircle size={14} />
-        <span>failed</span>
+        <AlertCircle size={14} aria-hidden="true" />
+        {/* The reason as page text, not only as a `title`: a tooltip on a
+            thumbnail reaches nobody on touch, which is how a render blocked by
+            an unhealthy local runtime read as an unexplained "failed". */}
+        <span className="line-clamp-3 leading-snug">{error || 'failed'}</span>
       </div>
     );
   }

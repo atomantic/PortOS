@@ -15,13 +15,18 @@ vi.mock('../../hooks/useImageRenderSettings', () => ({
 vi.mock('./DeckLlmPinPicker', () => ({ default: () => <div /> }));
 // The pin row probes the local catalog + the install's model pin itself, so the
 // deck page threads neither through.
+const localRuntime = vi.hoisted(() => ({ value: { readiness: 'ready', modelId: 'flux2-klein-9b', model: 'FLUX.2 Klein 9B', runtimeLabel: 'Shared torch runtime', reason: null, remedy: null } }));
 vi.mock('../../services/api', () => ({
   listImageModels: vi.fn().mockResolvedValue([
     { id: 'flux2-klein-9b', name: 'FLUX.2 Klein 9B' },
     { id: 'qwen-image', name: 'Qwen-Image' },
   ]),
   getSettings: vi.fn().mockResolvedValue({ imageGen: { local: { modelId: 'flux2-klein-9b' } } }),
+  getImageGenStatus: vi.fn(async () => localRuntime.value),
 }));
+// The install modal opens its own SSE stream; this suite is about whether the
+// render bar surfaces the runtime verdict and its fix, not about installing.
+vi.mock('../imageGen/Flux2InstallModal', () => ({ default: () => null }));
 
 const deck = {
   id: 'd1', kind: 'playing', imageMode: 'local', imageModelId: null, promptLlm: null,
@@ -129,5 +134,52 @@ describe('DeckRenderControls', () => {
     await renderControls({ completion: completion({ prompted: 79 }) });
     expect(btn(/^Generate prompts$/).className).not.toContain('bg-port-accent');
     expect(btn(/^Render missing \(79\)$/).className).toContain('bg-port-accent');
+  });
+});
+
+// A deck renders on the same local runtime the Image Gen page and Settings
+// report. Before the shared verdict reached here, a deck whose runtime was
+// broken offered "Render all" as though it would work, and the cards came back
+// as unexplained "Failed" badges.
+describe('DeckRenderControls local runtime', () => {
+  const broken = {
+    readiness: 'unavailable', modelId: 'flux2-klein-9b', model: 'FLUX.2 Klein 9B',
+    runtimeLabel: 'Shared torch runtime',
+    reason: 'The shared torch image runtime is not installed or healthy (expected at /home/u/.portos/venv-flux2/bin/python3)',
+    remedy: { kind: 'install-torch-venv', label: 'Install runtime', venvPath: '/home/u/.portos/venv-flux2/bin/python3' },
+  };
+
+  it('stays silent about a healthy runtime, and leaves the render buttons alone', async () => {
+    localRuntime.value = {
+      readiness: 'ready', modelId: 'flux2-klein-9b', model: 'FLUX.2 Klein 9B',
+      runtimeLabel: 'Shared torch runtime', reason: null, remedy: null,
+    };
+    await renderControls({ completion: completion({ prompted: 79 }) });
+    expect(screen.queryByRole('button', { name: /install runtime/i })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /^Render all/ })).toBeEnabled();
+  });
+
+  it('names the broken runtime and offers its one-button fix before any render is queued', async () => {
+    localRuntime.value = broken;
+    await renderControls();
+    expect(screen.getByText(/not installed or healthy/i)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /install runtime/i })).toBeInTheDocument();
+  });
+
+  // The reported complaint one step earlier than the error message: queueing a
+  // whole deck against a runtime the server is going to refuse.
+  it('stands the render buttons down while the runtime is unavailable, and says why', async () => {
+    localRuntime.value = broken;
+    await renderControls({ completion: completion({ prompted: 79 }) });
+    expect(screen.getByRole('button', { name: /^Render all/ })).toBeDisabled();
+    expect(screen.getByRole('button', { name: /^Render missing/ })).toBeDisabled();
+    expect(screen.getByText(/local image runtime is unavailable/i)).toBeInTheDocument();
+  });
+
+  // An unanswerable probe must not be able to lock a working deck out.
+  it('does not block rendering on an unknown verdict', async () => {
+    localRuntime.value = { readiness: 'unknown', modelId: 'flux2-klein-9b', model: 'FLUX.2 Klein 9B', reason: 'Could not verify', remedy: null };
+    await renderControls({ completion: completion({ prompted: 79 }) });
+    expect(screen.getByRole('button', { name: /^Render all/ })).toBeEnabled();
   });
 });

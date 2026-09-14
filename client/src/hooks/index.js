@@ -30,6 +30,7 @@ export { default as useNoteSave } from './useNoteSave.js';
 export { default as useHoverTooltip } from './useHoverTooltip.js';
 export { default as useImageGenQueue } from './useImageGenQueue.js';
 export { default as useImageRenderSettings } from './useImageRenderSettings.js';
+export { default as useLocalImageRuntime } from './useLocalImageRuntime.js';
 export { default as useUserTimezone } from './useUserTimezone.js';
 export { default as useSingleImageRender } from './useSingleImageRender.js';
 export { default as useSlotInFlight } from './useSlotInFlight.js';

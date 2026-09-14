@@ -28,6 +28,8 @@ vi.mock('../ui/Toast', () => ({
 vi.mock('./LocalSetupPanel', () => ({
   default: ({ pythonPath }) => <div data-testid="local-setup-panel">{pythonPath}</div>,
 }));
+// The runtime card's install modal opens its own SSE stream.
+vi.mock('../imageGen/Flux2InstallModal', () => ({ default: () => null }));
 vi.mock('../../hooks/useMediaJobSse', () => ({
   useMediaJobSse: () => ({ attach: vi.fn(), close: vi.fn() }),
 }));
@@ -61,6 +63,7 @@ beforeEach(() => {
     },
   });
   getToolsList.mockResolvedValue([]);
+  getImageGenStatus.mockResolvedValue({ connected: true, mode: 'local', readiness: 'ready', model: 'FLUX.1 Dev', modelId: 'dev' });
   useHfTokenStatus.mockReturnValue({ present: false, source: 'none', refresh: vi.fn() });
   updateSettings.mockResolvedValue({});
   listAgyImageModels.mockResolvedValue({ models: ['gemini-image', 'custom/image-v2'], error: null });
@@ -546,5 +549,36 @@ describe('ImageGenTab — Grok CLI section (#2859)', () => {
     const patch = updateSettings.mock.calls[0][0];
     expect(patch.imageGen.grok.enabled).toBe(false);
     expect(patch.imageGen.mode).toBe('local');
+  });
+});
+
+// The packages panel above the card only ever probes the mflux interpreter, so
+// on its own it told a machine whose selected default renders through the
+// shared torch venv that everything was installed — while the Image Gen page
+// two clicks away called the same machine unavailable.
+describe('ImageGenTab local runtime card', () => {
+  const brokenTorchRuntime = {
+    readiness: 'unavailable', modelId: 'flux2-klein-4b', model: 'FLUX.2 Klein',
+    runtimeLabel: 'Shared torch runtime (FLUX.2 · Z-Image · ERNIE · HiDream · Qwen)',
+    reason: 'The shared torch image runtime is not installed or healthy (expected at /home/u/.portos/venv-flux2/bin/python3)',
+    remedy: { kind: 'install-torch-venv', label: 'Install runtime', venvPath: '/home/u/.portos/venv-flux2/bin/python3' },
+  };
+
+  it('reports the shared torch runtime the pinned model actually needs', async () => {
+    getImageGenStatus.mockResolvedValue(brokenTorchRuntime);
+    await renderTab();
+    fireEvent.click(screen.getByRole('tab', { name: /^Local/i }));
+
+    expect(await screen.findByText(/not installed or healthy/i)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /install runtime/i })).toBeInTheDocument();
+  });
+
+  it('probes the runtime for the model the tab has pinned, not the install default', async () => {
+    await renderTab();
+    fireEvent.click(screen.getByRole('tab', { name: /^Local/i }));
+    await waitFor(() => expect(getImageGenStatus).toHaveBeenCalledWith('local', 'dev', expect.anything()));
+
+    fireEvent.change(screen.getByLabelText('Default model'), { target: { value: 'flux2-klein-4b' } });
+    await waitFor(() => expect(getImageGenStatus).toHaveBeenCalledWith('local', 'flux2-klein-4b', expect.anything()));
   });
 });
