@@ -110,7 +110,10 @@ describe('reconcileModelPins', () => {
     const pin = {
       id: 'a', providerId: 'codex', model: '  gpt-4o  ', label: 'L', location: 'Loc', href: '/x',
     };
-    expect(reconcileModelPins([pin], providers)).toEqual([{ ...pin, model: 'gpt-4o' }]);
+    // `providerIds` is normalized ON — the panel unions the catalogs it names,
+    // so a single-provider source must answer in the same shape as a reviewer.
+    expect(reconcileModelPins([pin], providers))
+      .toEqual([{ ...pin, model: 'gpt-4o', providerIds: ['codex'] }]);
   });
 
   it('leaves a pin alone when its provider is not in the map', () => {
@@ -118,6 +121,36 @@ describe('reconcileModelPins', () => {
     // the pin against.
     const pins = [{ id: 'a', providerId: 'deleted-provider', model: 'gpt-4o' }];
     expect(reconcileModelPins(pins, providers)).toEqual([]);
+  });
+
+  describe('a pin judged against SEVERAL providers (#7339)', () => {
+    // A reviewer slug names a BINARY, and PortOS ships more than one record per
+    // binary. The rule is "stale only when EVERY named record fails to list it".
+    it('stays silent while any one of them still lists the model', () => {
+      const pin = { id: 'r', providerIds: ['antigravity-cli', 'codex'], model: 'gpt-5-codex' };
+      expect(reconcileModelPins([pin], providers)).toEqual([]);
+    });
+
+    it('reports it once no named record lists it, keeping the full judged list', () => {
+      const pin = { id: 'r', providerIds: ['antigravity-cli', 'codex'], model: 'gpt-4o' };
+      expect(reconcileModelPins([pin], providers)).toEqual([
+        { ...pin, providerIds: ['antigravity-cli', 'codex'] },
+      ]);
+    });
+
+    it('answers "still served" when one of the named records is unresolvable', () => {
+      // An unknown record could be the one that lists it — warning here would be
+      // a false retirement on a pin that works.
+      const pin = { id: 'r', providerIds: ['codex', 'deleted-provider'], model: 'gpt-4o' };
+      expect(reconcileModelPins([pin], providers)).toEqual([]);
+    });
+
+    it('leaves a pin with an EMPTY provider list alone rather than reporting all of them', () => {
+      // `[].some()` is false, so without the explicit empty-list arm every
+      // unjudgeable pin would surface as retired.
+      const pin = { id: 'r', providerIds: [], model: 'gpt-4o' };
+      expect(reconcileModelPins([pin], providers)).toEqual([]);
+    });
   });
 
   it('tolerates absent/garbage inputs rather than throwing on a page load', () => {

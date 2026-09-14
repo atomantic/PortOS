@@ -31,6 +31,8 @@ import { CODEX_CLI_ID } from '../lib/codex.js';
 import { IMAGE_GEN_MODE } from '../lib/generationModes.js';
 import { MODEL_OVERRIDE_CAPABLE_MODES } from '../lib/imageGenCapabilities.js';
 import { catalogOfferings, reconcileModelPins } from '../lib/modelPinReconcile.js';
+import { MODEL_SELECTABLE_REVIEWERS, normalizeReviewerModel } from '../lib/reviewerConfig.js';
+import { reviewerProviderIds } from '../lib/reviewerProviderMatchers.js';
 import { normalizeRenderPinValue, RENDER_TARGETS } from '../lib/renderTargets.js';
 import { getSettings, updateSettingsWith } from './settings.js';
 
@@ -54,11 +56,13 @@ let notificationsModule = null;
 let providersModule = null;
 let taskScheduleModule = null;
 let recordPinsModule = null;
+let taskTemplatesModule = null;
 const loadAppsModule = () => (appsModule ||= import('./apps.js'));
 const loadNotificationsModule = () => (notificationsModule ||= import('./notifications.js'));
 const loadProvidersModule = () => (providersModule ||= import('./providers.js'));
 const loadTaskScheduleModule = () => (taskScheduleModule ||= import('./taskSchedule.js'));
 const loadRecordPinsModule = () => (recordPinsModule ||= import('./modelPinRecords.js'));
+const loadTaskTemplatesModule = () => (taskTemplatesModule ||= import('./taskTemplates.js'));
 
 /**
  * Which provider record serves each cloud image-gen mode that can carry a pin.
@@ -105,10 +109,14 @@ const trimmed = (value) => (typeof value === 'string' ? value.trim() : '');
  * compare it against, and a wrong guess is a false retirement. Returns an array
  * so every collector can stay a single `flatMap`.
  */
-const pinIf = ({ model, providerId, ...rest }) => {
+const pinIf = ({ model, providerId, providerIds, ...rest }) => {
   const id = trimmed(model);
-  const provider = trimmed(providerId);
-  return id && provider ? [{ ...rest, model: id, providerId: provider }] : [];
+  // A reviewer pin names a BINARY that several records front, so it hands in a
+  // LIST (#7339); every other source names exactly one record. Both normalize to
+  // the same descriptor — `providerIds` is what the membership rule judges, and
+  // `providerId` (the preferred record) is what the panel names the pin by.
+  const resolved = (providerIds ? [...providerIds] : [providerId]).map(trimmed).filter(Boolean);
+  return id && resolved.length ? [{ ...rest, model: id, providerId: resolved[0], providerIds: resolved }] : [];
 };
 
 /** `settings.imageGen.<mode>.model` — the install-wide Image Gen pins. */
@@ -195,6 +203,93 @@ async function collectAppOverridePins({ schedule }) {
 }
 
 /**
+ * `settings.codeReview.<reviewer>Model` and `settings.codeReview.goalFidelity.model`
+ * — the Code Review Defaults pins (#7339).
+ *
+ * These rot exactly like every other pin, with a worse failure: the user pins
+ * `codexModel: 'gpt-4o'`, the vendor retires it, and nobody learns until a
+ * review loop spawns `codex --model gpt-4o` and dies on a vendor error — inside
+ * an unattended run, with the reviewer's verdict silently missing.
+ *
+ * **A reviewer is judged against SEVERAL provider records, not one.** The slug
+ * names a BINARY, and PortOS ships more than one record per binary — `claude`
+ * spans `claude-code` and `claude-code-tui`, `grok` spans `grok-cli` and its
+ * TUI. The picker already unions their catalogs for exactly this reason
+ * (sourcing from one record made it hostage to that record's staleness), so
+ * judging a pin against a single record would report a model the OTHER record
+ * still lists as retired. `reviewerProviderIds` resolves the whole set from the
+ * shared matcher table the picker uses, and `reconcileModelPins` flags the pin
+ * only when EVERY one of them fails to list it.
+ *
+ * A reviewer no record matches yields no ids, so `pinIf` drops the pin rather
+ * than guessing — the same posture as an app override with no resolvable
+ * provider. The `lmstudio`/`ollama`/`mtplx` reviewers DO match a record, whose
+ * local-daemon carve-out in `modelPinMembership.js` passes any id through: the
+ * daemon on this machine is the authority, not the record's cached snapshot.
+ *
+ * `goalFidelity` rides the same collector because it is the same kind of pin on
+ * the same settings object — its `backend` names the record to judge against.
+ * Today that backend is restricted to the local-LLM set, so it is silent by
+ * construction; the row costs one settings read that already happened and keeps
+ * the pin vocabulary complete if that restriction ever widens.
+ */
+function collectReviewerModelPins({ settings, providers }) {
+  const codeReview = settings?.codeReview;
+  const scalarPins = MODEL_SELECTABLE_REVIEWERS.flatMap((reviewer) => pinIf({
+    id: `codeReview:${reviewer}Model`,
+    reviewer,
+    // Re-checked rather than trusted: settings.json is hand-editable, and a
+    // value the token builders would silently drop is not a pin the user has.
+    model: normalizeReviewerModel(codeReview?.[`${reviewer}Model`], reviewer),
+    providerIds: reviewerProviderIds(reviewer, providers),
+    label: `${reviewer} reviewer model`,
+    location: 'Code Review Defaults',
+    href: '/models/code-reviewers',
+  }));
+  const backend = trimmed(codeReview?.goalFidelity?.backend);
+  return [...scalarPins, ...pinIf({
+    id: 'codeReview:goalFidelity.model',
+    model: normalizeReviewerModel(codeReview?.goalFidelity?.model, backend),
+    providerIds: reviewerProviderIds(backend, providers),
+    label: 'goal-fidelity review model',
+    location: 'Code Review Defaults → Goal fidelity',
+    href: '/models/code-reviewers',
+  })];
+}
+
+/**
+ * The `provider` + `model` pair a user-saved CoS task template pins.
+ *
+ * A template is a durable "run it this way" the user saved once and picks from
+ * a menu for months, so its pin is among the likeliest to outlive the model it
+ * names — and unlike a scheduled task it fails at the moment the user is
+ * standing there launching work, with a vendor error for a model they picked so
+ * long ago they no longer remember it.
+ *
+ * `provider` is a provider RECORD id (the Quick Templates menu seeds it from
+ * `/api/providers`, and `applyTemplate` looks the record up by it), so one id —
+ * no reviewer-style union. A template pinning a model but no provider would run
+ * on whatever the form resolves at launch, which is not knowable here; `pinIf`
+ * drops it rather than guessing. Built-ins carry neither field, so they can
+ * never yield a pin.
+ */
+async function collectTaskTemplatePins() {
+  const { getAllTemplates } = await loadTaskTemplatesModule();
+  const templates = await getAllTemplates();
+  return (templates || []).flatMap((template) => pinIf({
+    id: `template:${template?.id}`,
+    templateId: template?.id,
+    providerId: template?.provider,
+    model: template?.model,
+    label: `${trimmed(template?.name) || template?.id} · template model`,
+    location: 'Chief of Staff → Tasks → Quick Templates',
+    // No per-template route exists — a template is edited from the Quick
+    // Templates row on the task form, so that page IS the destination.
+    href: '/cos/tasks',
+  }));
+}
+
+/**
  * The pin sources, in the order the panel reads them (install-wide first).
  *
  * ONE table, not a collector list beside a clearer map: the read half and the
@@ -244,6 +339,39 @@ const PIN_SOURCES = Object.freeze([
       return updateAppTaskTypeOverride(pin.appId, pin.taskType, { model: null });
     },
   },
+  // Reviewer model pins (#7339). Install-wide, so above the per-record row, and
+  // after the task/app rows because a reviewer pin only ever breaks the REVIEW
+  // half of a run — a broken task pin breaks the run itself.
+  {
+    kind: 'reviewerModel',
+    collect: collectReviewerModelPins,
+    // The reviewer's own scalar ONLY — never the sibling `<reviewer>Effort`, the
+    // `reviewers` list, or `goalFidelity`'s `backend`/`effort`. Each of those is
+    // a separate choice the user did not ask to undo, and dropping a reviewer
+    // out of the chain because its MODEL rotted would silently weaken the loop.
+    clear: (pin) => updateSettingsWith((current) => ({
+      ...current,
+      codeReview: pin.reviewer
+        ? withoutKey(current.codeReview, `${pin.reviewer}Model`)
+        : {
+          ...(current.codeReview || {}),
+          goalFidelity: withoutKey(current.codeReview?.goalFidelity, 'model'),
+        },
+    })),
+  },
+  // User-saved CoS task-template pins (#7339).
+  {
+    kind: 'taskTemplate',
+    collect: collectTaskTemplatePins,
+    // `''` rather than a deleted key: that is this store's OWN encoding for an
+    // unpinned template (`createTemplate` writes `model: ''`), and
+    // `updateTemplate` merges rather than replaces, so an absent key would leave
+    // the stale id in place. `provider` and `effort` are untouched.
+    clear: async (pin) => {
+      const { updateTemplate } = await loadTaskTemplatesModule();
+      return updateTemplate(pin.templateId, { model: '' });
+    },
+  },
   // Per-record `imageModelId` pins (#7326) — universes, series, sprite records,
   // decks and music-video projects. ONE row rather than five: they share a
   // storage shape, so `modelPinRecords.js` handles them with one query per
@@ -284,15 +412,23 @@ const PIN_SOURCES = Object.freeze([
  * A collector that throws must not take the whole audit down with it: one
  * unreadable store is a missing section, not a failed page.
  *
+ * @param {Promise<Array<object>>|Array<object>} providerListPromise the caller's
+ *   in-flight provider catalog read, shared rather than re-issued.
  * @returns {Promise<Array<object>>}
  */
-async function collectModelPins() {
+async function collectModelPins(providerListPromise) {
   const { loadSchedule } = await loadTaskScheduleModule();
-  const [settings, schedule] = await Promise.all([
+  const [settings, schedule, providers] = await Promise.all([
     getSettings().catch(() => ({})),
     loadSchedule().catch(() => null),
+    // The reviewer collector classifies provider RECORDS, so it needs the same
+    // catalog the reconciliation does. It takes the caller's in-flight promise
+    // rather than a second `listProviders()`: awaiting it here keeps the two
+    // reads independent for every other collector, while making one store read
+    // serve both halves.
+    Promise.resolve(providerListPromise).catch(() => []),
   ]);
-  const context = { settings, schedule };
+  const context = { settings, schedule, providers };
   const collected = await Promise.all(PIN_SOURCES.map(async ({ kind, collect }) => {
     const pins = await Promise.resolve(collect(context)).catch((error) => {
       console.error(`❌ Model pin collector ${kind} failed: ${error.message}`);
@@ -306,20 +442,25 @@ async function collectModelPins() {
 /**
  * The stale pins, plus the catalog each one's provider now offers.
  *
- * `providers` is keyed by provider id and carries only the providers a stale
- * pin actually names, so a 200-model Ollama catalog is not shipped to a page
- * with no Ollama pin on it.
+ * `providers` is keyed by provider id and carries only the records a stale pin
+ * actually names — every id in its `providerIds`, so a reviewer pin ships the
+ * catalog of each record fronting its binary and the panel can union them. A
+ * 200-model Ollama catalog is still not shipped to a page with no Ollama pin.
  *
  * @returns {Promise<{pins: Array<object>, providers: Record<string, object>}>}
  */
 export async function auditModelPins() {
   const { listProviders } = await loadProvidersModule();
-  // The pin stores and the provider catalog are independent reads.
-  const [providerList, pins] = await Promise.all([listProviders(), collectModelPins()]);
+  // The pin stores and the provider catalog are independent reads. The catalog
+  // promise is handed to the collectors as well — a reviewer pin needs it to
+  // resolve WHICH records front its binary — so both halves share one read
+  // without either waiting on the other.
+  const providerListPromise = listProviders();
+  const [providerList, pins] = await Promise.all([providerListPromise, collectModelPins(providerListPromise)]);
   const byId = Object.fromEntries(providerList.map((provider) => [provider.id, provider]));
   const stale = reconcileModelPins(pins, byId);
   const providers = Object.fromEntries(
-    [...new Set(stale.map((pin) => pin.providerId))].map((id) => [id, {
+    [...new Set(stale.flatMap((pin) => pin.providerIds))].map((id) => [id, {
       id,
       name: byId[id]?.name || id,
       available: catalogOfferings(byId[id]),
@@ -358,7 +499,12 @@ const withoutKey = (parent, key) => {
  * @returns {Promise<{cleared: boolean, id: string}>}
  */
 export async function clearModelPin(pinId) {
-  const pins = await collectModelPins();
+  // The SAME catalog read the audit makes, for the same reason: a reviewer pin
+  // resolves its provider records from it, and a collection that skipped it
+  // would silently drop every reviewer pin from the write-target allowlist —
+  // turning the Clear button on a reported pin into a no-op `cleared: false`.
+  const { listProviders } = await loadProvidersModule();
+  const pins = await collectModelPins(listProviders());
   const pin = pins.find((candidate) => candidate.id === pinId);
   if (pin) await PIN_SOURCES.find((source) => source.kind === pin.kind).clear(pin);
   const { removeByMetadata } = await loadNotificationsModule();

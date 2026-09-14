@@ -650,6 +650,7 @@ describe('providerTypes re-exports the server predicates', () => {
       'isCodexProvider',
       'isCodexSubscriptionProvider',
       'isCursorProvider',
+      'isGrokBuildCli',
       'isGrokProvider',
       'isKimiProvider',
       'isOllamaBackedProvider',

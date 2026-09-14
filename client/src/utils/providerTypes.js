@@ -17,7 +17,6 @@
 
 import { isTuiProvider, isApiProvider, isProcessProvider } from '../../../server/lib/providerTypes.js';
 import { PROVIDER_TYPES } from '../../../server/lib/aiToolkit/constants.js';
-import { isGrokProvider } from '../../../server/lib/providerModels.js';
 
 export { PROVIDER_TYPES } from '../../../server/lib/aiToolkit/constants.js';
 // The public `aiToolkit/providers.js` barrel reaches `fs` and `child_process`,
@@ -42,6 +41,10 @@ export {
   isProcessProvider,
   isClaudeHarnessProvider,
   isClaudeHarnessProvider as isClaudeCommandProvider,
+  // The Grok Build CLI/TUI predicate moved to the server leaf in #7339: the
+  // shared reviewer -> provider matcher table keys on it, and a browser-only
+  // copy is exactly the drift that table exists to remove.
+  isGrokBuildCli,
 } from '../../../server/lib/providerTypes.js';
 
 /**
@@ -75,14 +78,6 @@ export const enabledApiProviderFilter = (provider) => Boolean(provider?.enabled)
  */
 export const enabledProcessProviderFilter = (provider) => Boolean(provider?.enabled) && isProcessProvider(provider);
 
-/**
- * Check if a provider is the Grok Build CLI/TUI (the `grok` command harness):
- * a PROCESS provider `isGrokProvider` recognizes — the shipped `grok-cli` /
- * `grok-tui` samples or any process provider whose command basename is `grok`.
- * The plain Grok API provider is excluded on both counts. Reviewer-model
- * discovery uses this for custom Grok process providers too.
- */
-export const isGrokBuildCli = (provider) => isProcessProvider(provider) && isGrokProvider(provider);
 
 /**
  * Tailwind chip classes for the provider type badge ('cli' / 'tui' / 'api').

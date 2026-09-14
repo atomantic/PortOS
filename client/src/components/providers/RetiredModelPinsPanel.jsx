@@ -91,8 +91,16 @@ export default function RetiredModelPinsPanel({ reloadKey = 0 }) {
       </p>
       <ul className="mt-3 space-y-2">
         {pins.map((pin) => {
-          const provider = providers[pin.providerId];
-          const offered = Array.isArray(provider?.available) ? provider.available : [];
+          // A reviewer pin is judged against EVERY record fronting its binary
+          // (#7339), so "now offered" is their union — showing one record's
+          // catalog would hide tiers the reviewer can still be handed. Falls
+          // back to the single `providerId` for a payload predating the field.
+          const judged = Array.isArray(pin.providerIds) && pin.providerIds.length
+            ? pin.providerIds
+            : [pin.providerId];
+          const offered = Array.from(new Set(
+            judged.flatMap((id) => (Array.isArray(providers[id]?.available) ? providers[id].available : []))
+          ));
           return (
             <li
               key={pin.id}
@@ -103,7 +111,7 @@ export default function RetiredModelPinsPanel({ reloadKey = 0 }) {
                   {pinLabel(pin)}: <code className="text-port-warning">{pin.model}</code>
                 </div>
                 <div className="mt-0.5 text-xs text-gray-400">
-                  {pin.location} · {provider?.name || pin.providerId}
+                  {pin.location} · {judged.map((id) => providers[id]?.name || id).join(' · ')}
                 </div>
                 {offered.length > 0 && (
                   <div className="mt-1 break-words text-xs text-gray-500">

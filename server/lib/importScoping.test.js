@@ -589,7 +589,18 @@ describe('deferred imports stay deferred (#6156)', () => {
 // `lib/index.test.js` fails without it. The module is deliberately
 // dependency-free (a few regexes over a string), so it adds no edge into any
 // subtree — its only consumer, `services/shell.js`, deep-imports it directly.
-const MAX_STATIC_INSTANTIATIONS = 104627;
+// Auditing reviewer and task-template model pins (#7339) measures +19, and none
+// of it is a new edge into a heavy subtree. The shared reviewer -> provider-record
+// table is a pure leaf (`lib/reviewerProviderMatchers.js`) importing only
+// `providerModels.js` and `providerTypes.js`, which every module that can reach
+// it already instantiates; registering it in the `lib/` barrel is mandatory
+// (`lib/index.test.js`) and costs one node in each barrel reacher's closure,
+// and its own suite pulls the same two leaves plus `reviewerConfig.js`. The two
+// stores the new collectors read stay behind the audit's memoized call-site
+// `await import()` — `services/taskTemplates.js` is never in a static closure —
+// and `modelPinAudit.js` gaining `reviewerConfig.js` cost nothing, because
+// `routes/providers.js` already reaches it through `lib/validation.js`.
+const MAX_STATIC_INSTANTIATIONS = 104646;
 
 
 const SKIP_DIRS = new Set(['node_modules', 'coverage', 'dist', 'data']);

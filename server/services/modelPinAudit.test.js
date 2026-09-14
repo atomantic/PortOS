@@ -13,6 +13,7 @@ vi.mock('./apps.js', () => ({
 // so the registry wiring — reconciliation, ordering, clear dispatch — is what
 // these assertions are about.
 vi.mock('./modelPinRecords.js', () => ({ collectRecordPins: vi.fn(), clearRecordPin: vi.fn() }));
+vi.mock('./taskTemplates.js', () => ({ getAllTemplates: vi.fn(), updateTemplate: vi.fn() }));
 
 const { listProviders } = await import('./providers.js');
 const { removeByMetadata } = await import('./notifications.js');
@@ -20,6 +21,7 @@ const { getSettings, updateSettingsWith } = await import('./settings.js');
 const { loadSchedule, updateTaskInterval } = await import('./taskSchedule.js');
 const { getActiveApps, updateAppTaskTypeOverride } = await import('./apps.js');
 const { collectRecordPins, clearRecordPin } = await import('./modelPinRecords.js');
+const { getAllTemplates, updateTemplate } = await import('./taskTemplates.js');
 const {
   auditModelPins, clearModelPin, MODEL_OVERRIDE_CAPABLE_MODES, PINNED_IMAGE_MODE_IDS,
 } = await import('./modelPinAudit.js');
@@ -33,6 +35,11 @@ const AGY = {
   models: ['gemini-3.6-flash-low', 'gemini-3.6-flash-high'],
 };
 const CODEX = { id: 'codex', name: 'Codex', command: 'codex', models: ['gpt-5-codex'] };
+// The reviewer union's reason to exist (#7339): one record lags the other, so a
+// tier only the TUI lists is still a model the `claude` binary accepts.
+const CLAUDE_CLI = { id: 'claude-code', name: 'Claude Code', command: 'claude', models: ['claude-sonnet-4-6'] };
+const CLAUDE_TUI = { id: 'claude-code-tui', name: 'Claude Code TUI', command: 'claude', models: ['claude-sonnet-5'] };
+const OLLAMA = { id: 'ollama', name: 'Ollama', endpoint: 'http://localhost:11434', models: ['qwen2.5:7b'] };
 
 const settingsWith = (overrides) => ({ imageGen: {}, renderDefaults: {}, ...overrides });
 
@@ -44,6 +51,7 @@ beforeEach(() => {
   getActiveApps.mockResolvedValue([]);
   removeByMetadata.mockResolvedValue({ success: true, removed: 0 });
   collectRecordPins.mockResolvedValue([]);
+  getAllTemplates.mockResolvedValue([]);
 });
 
 // One record's stored render pin, as the record source reports it.
@@ -254,6 +262,7 @@ describe('clearModelPin', () => {
     expect(updateTaskInterval).not.toHaveBeenCalled();
     expect(updateAppTaskTypeOverride).not.toHaveBeenCalled();
     expect(clearRecordPin).not.toHaveBeenCalled();
+    expect(updateTemplate).not.toHaveBeenCalled();
   });
 });
 
@@ -324,5 +333,187 @@ describe('per-record pins (#7326)', () => {
     expect(clearRecordPin).toHaveBeenCalledWith(expect.objectContaining({ family: 'universe', recordId: 'u-1' }));
     // The model field alone — nothing here may write a mode or a provider.
     expect(updateSettingsWith).not.toHaveBeenCalled();
+  });
+});
+
+describe('reviewer model pins (#7339)', () => {
+  const codeReview = (overrides) => settingsWith({ codeReview: overrides });
+
+  it('reports a retired reviewer pin with its deep link and what the provider now offers', async () => {
+    getSettings.mockResolvedValue(codeReview({ codexModel: 'gpt-4o' }));
+
+    const { pins, providers } = await auditModelPins();
+
+    expect(pins).toHaveLength(1);
+    expect(pins[0]).toMatchObject({
+      id: 'codeReview:codexModel',
+      kind: 'reviewerModel',
+      reviewer: 'codex',
+      model: 'gpt-4o',
+      providerId: 'codex',
+      providerIds: ['codex'],
+      location: 'Code Review Defaults',
+      href: '/models/code-reviewers',
+    });
+    expect(providers.codex.available).toEqual(['gpt-5-codex']);
+  });
+
+  it('leaves a claude pin alone when only the TUI record lists it', async () => {
+    // THE regression the union exists for. `claude` names a BINARY; judging its
+    // pin against `claude-code` alone would call a tier retired that the TUI
+    // record still lists — and the picker would go on offering it.
+    listProviders.mockResolvedValue([CLAUDE_CLI, CLAUDE_TUI]);
+    getSettings.mockResolvedValue(codeReview({ claudeModel: 'claude-sonnet-5' }));
+
+    expect((await auditModelPins()).pins).toEqual([]);
+  });
+
+  it('reports a claude pin no record fronting the binary lists, naming both catalogs', async () => {
+    listProviders.mockResolvedValue([CLAUDE_CLI, CLAUDE_TUI]);
+    getSettings.mockResolvedValue(codeReview({ claudeModel: 'claude-3-opus' }));
+
+    const { pins, providers } = await auditModelPins();
+
+    expect(pins[0]).toMatchObject({
+      id: 'codeReview:claudeModel',
+      providerId: 'claude-code',
+      providerIds: ['claude-code', 'claude-code-tui'],
+    });
+    // Both catalogs ride along so the panel can union them — one record's list
+    // would hide half of what the reviewer can actually be handed.
+    expect(Object.keys(providers).sort()).toEqual(['claude-code', 'claude-code-tui']);
+  });
+
+  it('leaves a local-daemon reviewer pin alone — the daemon is the authority', async () => {
+    // `lmstudio`/`ollama` records carry a cached snapshot, not a catalog. The
+    // carve-out in modelPinMembership.js is what keeps a freshly pulled model
+    // from being reported as retired.
+    listProviders.mockResolvedValue([OLLAMA]);
+    getSettings.mockResolvedValue(codeReview({ ollamaModel: 'llama3.3:70b' }));
+
+    expect((await auditModelPins()).pins).toEqual([]);
+  });
+
+  it('leaves a reviewer pin alone when no record on this install fronts its binary', async () => {
+    // Nothing to judge it against — guessing a catalog is how a false
+    // retirement gets in front of the user.
+    listProviders.mockResolvedValue([CODEX]);
+    getSettings.mockResolvedValue(codeReview({ cursorModel: 'gpt-5-retired' }));
+
+    expect((await auditModelPins()).pins).toEqual([]);
+  });
+
+  it('ignores a hand-edited pin the token builders would drop anyway', async () => {
+    // `settings.json` is hand-editable; a `[`-bearing id never reaches a
+    // reviewer, so warning that it is retired points at the wrong problem.
+    getSettings.mockResolvedValue(codeReview({ codexModel: 'gpt-4o[bogus]' }));
+
+    expect((await auditModelPins()).pins).toEqual([]);
+  });
+
+  it('judges the goal-fidelity pin against the backend it names', async () => {
+    listProviders.mockResolvedValue([CODEX, OLLAMA]);
+    getSettings.mockResolvedValue(codeReview({
+      goalFidelity: { enabled: true, backend: 'ollama', model: 'llama3.3:70b' },
+    }));
+    // The local-daemon carve-out again: a backend PortOS probes live is never
+    // judged against the record's cached snapshot.
+    expect((await auditModelPins()).pins).toEqual([]);
+  });
+
+  it('clears the reviewer scalar and nothing beside it', async () => {
+    const stored = codeReview({
+      codexModel: 'gpt-4o',
+      codexEffort: 'high',
+      claudeModel: 'claude-sonnet-4-6',
+      reviewers: ['codex', 'claude'],
+    });
+    getSettings.mockResolvedValue(stored);
+
+    await expect(clearModelPin('codeReview:codexModel')).resolves.toEqual({
+      cleared: true, id: 'codeReview:codexModel',
+    });
+
+    const next = updateSettingsWith.mock.calls[0][0](stored);
+    expect('codexModel' in next.codeReview).toBe(false);
+    // Dropping the reviewer's effort, or the reviewer itself, would silently
+    // weaken the review loop over a model id the user asked to forget.
+    expect(next.codeReview.codexEffort).toBe('high');
+    expect(next.codeReview.claudeModel).toBe('claude-sonnet-4-6');
+    expect(next.codeReview.reviewers).toEqual(['codex', 'claude']);
+  });
+
+  it('clears the goal-fidelity model without disturbing its backend or effort', async () => {
+    listProviders.mockResolvedValue([{ ...CODEX, id: 'lmstudio', name: 'LM Studio' }]);
+    const stored = codeReview({
+      goalFidelity: { enabled: true, backend: 'lmstudio', model: 'gpt-4o', effort: 'high' },
+    });
+    getSettings.mockResolvedValue(stored);
+
+    await clearModelPin('codeReview:goalFidelity.model');
+
+    const next = updateSettingsWith.mock.calls[0][0](stored);
+    expect(next.codeReview.goalFidelity).toEqual({ enabled: true, backend: 'lmstudio', effort: 'high' });
+  });
+});
+
+describe('task template pins (#7339)', () => {
+  const template = (overrides = {}) => ({
+    id: 'user-abc',
+    name: 'Nightly sweep',
+    provider: 'codex',
+    model: 'gpt-4o',
+    ...overrides,
+  });
+
+  it('reports a retired template pin with its name and where it is picked', async () => {
+    getAllTemplates.mockResolvedValue([template()]);
+
+    const { pins } = await auditModelPins();
+
+    expect(pins).toHaveLength(1);
+    expect(pins[0]).toMatchObject({
+      id: 'template:user-abc',
+      kind: 'taskTemplate',
+      templateId: 'user-abc',
+      providerId: 'codex',
+      model: 'gpt-4o',
+      label: 'Nightly sweep · template model',
+      location: 'Chief of Staff → Tasks → Quick Templates',
+      href: '/cos/tasks',
+    });
+  });
+
+  it.each([
+    ['a template that pins no provider', { provider: '' }],
+    ['a built-in, which pins neither field', { provider: undefined, model: undefined }],
+    ['a template still on a listed model', { model: 'gpt-5-codex' }],
+  ])('leaves %s alone', async (_case, overrides) => {
+    getAllTemplates.mockResolvedValue([template(overrides)]);
+
+    expect((await auditModelPins()).pins).toEqual([]);
+  });
+
+  it('clears the template model through the templates writer, leaving its provider pinned', async () => {
+    getAllTemplates.mockResolvedValue([template()]);
+
+    await expect(clearModelPin('template:user-abc')).resolves.toEqual({
+      cleared: true, id: 'template:user-abc',
+    });
+    // `''` is this store's own unpinned encoding, and `updateTemplate` MERGES —
+    // an absent key would leave the retired id exactly where it was.
+    expect(updateTemplate).toHaveBeenCalledWith('user-abc', { model: '' });
+  });
+
+  it('keeps the rest of the audit when the templates store cannot be read', async () => {
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => {});
+    getSettings.mockResolvedValue(settingsWith({
+      imageGen: { agy: { model: 'gemini-3.5-flash-low' } },
+    }));
+    getAllTemplates.mockRejectedValue(new Error('task-templates.json unreadable'));
+
+    expect((await auditModelPins()).pins.map((pin) => pin.id)).toEqual(['settings:imageGen.agy.model']);
+    expect(logged).toHaveBeenCalledWith(expect.stringContaining('taskTemplate'));
+    logged.mockRestore();
   });
 });

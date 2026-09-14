@@ -149,3 +149,46 @@ describe('RetiredModelPinsPanel', () => {
     expect(await screen.findByText('Agy image model:')).toBeTruthy();
   });
 });
+
+describe('a reviewer pin judged against several provider records (#7339)', () => {
+  const REVIEWER_PIN = {
+    pins: [{
+      id: 'codeReview:claudeModel',
+      kind: 'reviewerModel',
+      reviewer: 'claude',
+      providerId: 'claude-code',
+      providerIds: ['claude-code', 'claude-code-tui'],
+      model: 'claude-3-opus',
+      label: 'claude reviewer model',
+      location: 'Code Review Defaults',
+      href: '/models/code-reviewers',
+    }],
+    providers: {
+      'claude-code': { id: 'claude-code', name: 'Claude Code', available: ['claude-sonnet-4-6'] },
+      'claude-code-tui': { id: 'claude-code-tui', name: 'Claude Code TUI', available: ['claude-sonnet-5'] },
+    },
+  };
+
+  it('offers the union of every judged record, not just the preferred one', async () => {
+    // Showing one record's catalog would hide tiers the reviewer's binary can
+    // still be handed — the same staleness the union exists to route around.
+    api.getModelPinWarnings.mockResolvedValue(REVIEWER_PIN);
+    renderPanel();
+
+    const offered = await screen.findByText(/Now offered:/);
+    expect(offered.textContent).toContain('claude-sonnet-4-6');
+    expect(offered.textContent).toContain('claude-sonnet-5');
+    expect(screen.getByText(/Claude Code · Claude Code TUI/)).toBeTruthy();
+  });
+
+  it('falls back to the single providerId for a payload predating providerIds', async () => {
+    const { providerIds, ...legacyPin } = REVIEWER_PIN.pins[0];
+    expect(providerIds).toHaveLength(2);
+    api.getModelPinWarnings.mockResolvedValue({ ...REVIEWER_PIN, pins: [legacyPin] });
+    renderPanel();
+
+    const offered = await screen.findByText(/Now offered:/);
+    expect(offered.textContent).toContain('claude-sonnet-4-6');
+    expect(offered.textContent).not.toContain('claude-sonnet-5');
+  });
+});

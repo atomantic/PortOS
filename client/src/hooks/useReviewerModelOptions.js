@@ -1,6 +1,11 @@
 import { useEffect, useMemo, useState } from 'react';
 import * as api from '../services/api';
-import { filterSelectableModels, selectableModelsForProvider, commandBasename, isAntigravityProvider, isCursorProvider, isGrokBuildCli, isKimiProvider, antigravityModelEffortLevels } from '../utils/providers';
+import { filterSelectableModels, selectableModelsForProvider, antigravityModelEffortLevels } from '../utils/providers';
+// THE reviewer -> provider-record table, shared with the retired-pin audit
+// (#7339). Taken from the server leaf rather than mirrored: the picker offering
+// a tier the audit calls retired — or the audit flagging a pin the picker just
+// handed the user — is exactly the drift a second copy would reintroduce.
+import { REVIEWER_PROVIDER_MATCHERS, providersForReviewer } from '../../../server/lib/reviewerProviderMatchers.js';
 import { MODEL_SELECTABLE_REVIEWERS } from '../components/cos/constants';
 import { reviewerEffortLevels, normalizeReviewerSlug } from '../lib/reviewerPins';
 import { LOCAL_LLM_BACKENDS } from '../lib/localLlmBackends';
@@ -10,56 +15,6 @@ import { LOCAL_LLM_BACKENDS } from '../lib/localLlmBackends';
 // reused so the two can't drift. `mtplx` is a local backend but is NOT in it: its
 // listing runs the `mtplx` wrapper, so it stays catalog-sourced and free-text.
 const PROBED_LOCAL_BACKENDS = LOCAL_LLM_BACKENDS.map((b) => b.id);
-
-/**
- * Every provider record that fronts a reviewer's binary, as predicates in
- * PREFERENCE ORDER. Two reductions run over each list and they answer different
- * questions:
- *
- * - the **option list** unions every matching record's catalog, because a
- *   reviewer runs one binary and any record fronting that binary lists ids that
- *   binary accepts. Sourcing from a single record made the picker hostage to
- *   that record's staleness — `claude-code` (CLI) listing `claude-sonnet-4-6`
- *   while `claude-code-tui` already listed `claude-sonnet-5` showed the reviewer
- *   the retired tier and hid the current one.
- * - the **shown default** takes the FIRST match, so a reviewer spawned
- *   non-interactively reports the CLI record's default rather than the TUI's.
- *
- * A predicate rather than a bare id wherever the app already recognizes a
- * provider by more than its shipped id (an `agy` configured by path), so this
- * classifies the same records the rest of the UI does.
- *
- * What is deliberately NOT matched matters as much as what is:
- * - **No Bedrock/Vertex record.** `claude-code-bedrock` lists
- *   `us.anthropic.*` ids that resolve only under that record's own environment.
- * - **No `opencode-<local-backend>` preset.** Those enumerate ids that resolve
- *   only under the `OPENCODE_CONFIG_CONTENT` a PortOS-spawned provider injects,
- *   and the reviewer runs a bare `opencode` against the user's OWN config. The
- *   Zen CLI/TUI records are the exception and ARE matched: their ids are the
- *   namespaced `opencode/*` spellings that bare `opencode models` prints, and
- *   the Harnesses page's model refresh fills them from exactly that probe (see
- *   `server/services/harnesses.js#usesHarnessCatalog`), so they are the live
- *   catalog for the account the reviewer will bill.
- * - **Not `opencode-zen` itself.** That is the HTTP-API record; its bare ids
- *   (`claude-opus-5`) are Zen's API model names, which `opencode -m` cannot
- *   resolve.
- */
-const REVIEWER_PROVIDER_MATCHERS = Object.freeze({
-  claude: [(p) => p.id === 'claude-code', (p) => p.id === 'claude-code-tui'],
-  codex: [(p) => p.id === 'codex', (p) => p.id === 'codex-tui'],
-  antigravity: [isAntigravityProvider],
-  // `grok` names one binary that ships as BOTH a `cli` and a `tui` provider, and
-  // the reviewer is spawned non-interactively, so the CLI's record wins the
-  // default — the broad predicate follows it for an install that only kept the TUI.
-  grok: [(p) => p.id === 'grok-cli', isGrokBuildCli],
-  cursor: [(p) => p.id === 'cursor-cli', isCursorProvider],
-  pi: [(p) => p.id === 'pi-cli', (p) => ['cli', 'tui'].includes(p.type) && commandBasename(p.command) === 'pi'],
-  kimi: [(p) => p.id === 'kimi-cli', isKimiProvider],
-  opencode: [(p) => p.id === 'opencode-zen-cli', (p) => p.id === 'opencode-zen-tui'],
-  mtplx: [(p) => p.id === 'mtplx'],
-  lmstudio: [(p) => p.id === 'lmstudio'],
-  ollama: [(p) => p.id === 'ollama'],
-});
 
 /**
  * Selectable model ids per model-taking reviewer, for `ReviewerPicker`'s Model
@@ -148,15 +103,7 @@ export default function useReviewerModelOptions() {
     // ask the same question, and a per-call helper re-walked the provider array
     // for every one of them.
     const providersByReviewer = Object.fromEntries(
-      Object.entries(REVIEWER_PROVIDER_MATCHERS).map(([reviewer, matchers]) => {
-        const matched = [];
-        for (const match of matchers) {
-          for (const provider of providers || []) {
-            if (match(provider) && !matched.includes(provider)) matched.push(provider);
-          }
-        }
-        return [reviewer, matched];
-      })
+      Object.keys(REVIEWER_PROVIDER_MATCHERS).map((reviewer) => [reviewer, providersForReviewer(reviewer, providers)])
     );
     for (const provider of providers || []) providersByReviewer[`provider:${provider.id}`] = [provider];
     const providerReviewers = (providers || []).map(provider => `provider:${provider.id}`);
