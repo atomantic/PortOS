@@ -4278,33 +4278,38 @@ describe('planner attribution', () => {
   });
 
   // The shipped claim-issue / issue-reconcile prompts open with the same
-  // contract. Rendering it again as a contract section made every such run
-  // read ~3KB twice; the attribution still has to come from PortOS because the
-  // task body cannot name the model it was dispatched with.
-  it('emits only the planner attribution when the task body already carries the contract verbatim', () => {
-    const task = makeTask({
-      description: `[Claim Issue] Ship the next issue\n\n${MANDATORY_DISPATCH_HINT_GUIDANCE}\n\n## Phase 1`,
-      metadata: { openPR: false },
-    });
-    const prompt = buildLightContextPrompt(task, '/repo', null, isTruthyMeta,
-      { providerId: 'claude-code-tui', providerCommand: 'claude', providerModel: 'claude-opus-5' });
-    expect(prompt.split(MANDATORY_DISPATCH_HINT_GUIDANCE).length - 1).toBe(1);
-    expect(prompt).not.toContain('## Issue Filing Labels');
-    expect(prompt).toMatch(/## Planner Attribution/);
-    expect(prompt).toMatch(/--label planner:opus-5/);
+  // contract, and the tracker-filing prompts carry it re-indented. Rendering it
+  // again as a contract section made every such run read ~3KB twice; the
+  // attribution still has to come from PortOS because the task body cannot
+  // name the model it was dispatched with.
+  const embedsContract = (guidance) => makeTask({
+    description: `[Claim Issue] Ship the next issue\n\n${guidance}\n\n## Phase 1`,
+    metadata: { openPR: false },
   });
-
-  it('dedupes the contract on the api path too', async () => {
-    const task = makeTask({
-      description: `[Claim Issue] Ship the next issue\n\n${MANDATORY_DISPATCH_HINT_GUIDANCE}\n\n## Phase 1`,
-      metadata: { openPR: false },
-    });
-    const prompt = await buildAgentPrompt(task, {}, '/repo', null, isTruthyMeta,
-      { providerType: 'api', providerId: 'lmstudio', providerModel: 'claude-opus-5' });
-    const text = typeof prompt === 'string' ? prompt : prompt.userPrompt;
-    expect(text.split(MANDATORY_DISPATCH_HINT_GUIDANCE).length - 1).toBe(1);
+  const expectDeduped = (text) => {
     expect(text).not.toContain('## Issue Filing Labels');
     expect(text).toMatch(/--label planner:opus-5/);
+  };
+
+  it.each([
+    ['light', (task) => buildLightContextPrompt(task, '/repo', null, isTruthyMeta,
+      { providerId: 'claude-code-tui', providerCommand: 'claude', providerModel: 'claude-opus-5' })],
+    ['api', async (task) => {
+      const prompt = await buildAgentPrompt(task, {}, '/repo', null, isTruthyMeta,
+        { providerType: 'api', providerId: 'lmstudio', providerModel: 'claude-opus-5' });
+      return typeof prompt === 'string' ? prompt : prompt.userPrompt;
+    }],
+  ])('%s path emits only the planner attribution when the task body already carries the contract', async (_label, render) => {
+    const text = await render(embedsContract(MANDATORY_DISPATCH_HINT_GUIDANCE));
+    expect(text.split(MANDATORY_DISPATCH_HINT_GUIDANCE).length - 1).toBe(1);
+    expectDeduped(text);
+  });
+
+  it('recognizes the contract when a template re-indented it', () => {
+    const indented = MANDATORY_DISPATCH_HINT_GUIDANCE.split('\n').join('\n     ');
+    const text = buildLightContextPrompt(embedsContract(indented), '/repo', null, isTruthyMeta,
+      { providerId: 'claude-code-tui', providerCommand: 'claude', providerModel: 'claude-opus-5' });
+    expectDeduped(text);
   });
 
   it('keeps the full contract for a task that paraphrased it', () => {

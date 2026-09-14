@@ -35,23 +35,25 @@ export function buildPlannerAttributionSection({ providerId = null, model = null
   return `## Planner Attribution\n\n${guidance}`;
 }
 
+const collapseWhitespace = (text) => String(text || '').replace(/\s+/g, ' ');
+const EMBEDDED_CONTRACT = collapseWhitespace(MANDATORY_DISPATCH_HINT_GUIDANCE);
+
 /**
  * Runtime contract reaches stored/custom tasks and follow-ups, even without a
- * planner identity.
- *
- * `taskText` is the task body the agent is about to read (description plus
- * context). The shipped claim-issue / issue-reconcile prompts embed the very
- * same contract at their top, so a run built from one of them would otherwise
- * read the ~3KB block twice — once in the task, once here. When the body
- * already carries it verbatim, only the planner attribution (which the task
- * cannot know about itself) is emitted; a customized prompt that dropped or
- * paraphrased the contract still gets the full section.
+ * planner identity. Skipped when the task body already carries the contract
+ * (the shipped claim-issue / issue-reconcile prompts embed it at the top, and
+ * the tracker-filing prompts carry it re-indented inside their tracker block);
+ * the attribution is always emitted because the task cannot name its own model.
+ * Templates keep their embed so the prompt editor shows a complete prompt — the
+ * runtime section defers to it rather than the other way round. Whitespace is
+ * collapsed on both sides so an indented copy still matches; a paraphrase
+ * does not.
  *
  * @param {object} [options]
- * @param {string} [options.taskText] - rendered task body to dedupe against
+ * @param {string[]} [options.taskBody] - rendered task parts (description, context)
  */
-export function buildIssueFilingSection({ taskText = '', ...options } = {}) {
+export function buildIssueFilingSection({ taskBody = [], ...options } = {}) {
   const attribution = buildPlannerAttributionSection(options);
-  if (taskText.includes(MANDATORY_DISPATCH_HINT_GUIDANCE)) return attribution;
+  if (taskBody.some((part) => collapseWhitespace(part).includes(EMBEDDED_CONTRACT))) return attribution;
   return `## Issue Filing Labels\n\n${MANDATORY_DISPATCH_HINT_GUIDANCE}${attribution ? `\n\n${attribution}` : ''}`;
 }
