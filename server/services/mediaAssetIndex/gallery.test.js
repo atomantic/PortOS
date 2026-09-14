@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { listGalleryPage, listGalleryFacets, listGalleryCollectionSummaries } from './gallery.js';
+import { listGalleryPage, listGalleryFacets, listGalleryCollectionSummaries, listImageVariants } from './gallery.js';
 import { imageToRow } from './logic.js';
 import { query } from '../../lib/db.js';
 
@@ -109,5 +109,45 @@ describe('scoped browsing compatibility', () => {
     const summaries = await listGalleryCollectionSummaries(disk);
     expect(summaries.find(s => s.id === 'col')).toMatchObject({ total: 2, cover: '/data/images/a.png' });
     expect(summaries.find(s => s.id === 'unsorted')).toMatchObject({ total: 1, counts: { image: 1, video: 0, all: 1 } });
+  });
+});
+
+// The route test (routes/imageGen.clean.test.js) owns the both-directions
+// contract end to end against a real clean. What only lives here: the SQL the
+// indexed path emits, and the disk path the route test cannot reach because
+// the test runner always takes the escape hatch.
+describe('image variant lookup', () => {
+  const original = { filename: 'fox.png', path: '/data/images/fox.png', prompt: 'a fox' };
+  const cleaned = { filename: 'fox_clean-resize-squeeze.png', path: '/data/images/fox_clean-resize-squeeze.png', cleanedFrom: 'fox.png', cleanLevel: 'resize-squeeze' };
+
+  it.each([
+    ['the original', 'fox.png'],
+    ['a cleaned copy', 'fox_clean-resize-squeeze.png'],
+  ])('reads the whole gallery once per call when opened from %s', async (_label, opened) => {
+    const disk = vi.fn(async () => [original, cleaned, { filename: 'unrelated.png' }]);
+    expect(await listImageVariants(opened, disk)).toEqual([original, cleaned]);
+    // Each read is a directory scan plus a sidecar read per image.
+    expect(disk).toHaveBeenCalledTimes(1);
+    expect(query).not.toHaveBeenCalled();
+  });
+
+  // An auto-cleaned image replaced its source in place and carries no
+  // `cleanedFrom`, so it IS the group root, never a sibling of itself.
+  it('returns just the group root for an auto-cleaned image', async () => {
+    const auto = { filename: 'owl.png', autoCleaned: true };
+    expect(await listImageVariants('owl.png', vi.fn(async () => [auto]))).toEqual([auto]);
+  });
+
+  it('binds the reverse lookup to the group root and scopes it to images', async () => {
+    vi.stubEnv('NODE_ENV', 'production');
+    vi.stubEnv('VITEST', undefined);
+    vi.stubEnv('MEMORY_BACKEND', 'db');
+    query.mockImplementation(async sql => sql.includes("data->>'cleanedFrom'")
+      ? { rows: [imageToRow(cleaned)] } : { rows: [imageToRow(original)] });
+    // Opened from the CLEANED copy, so the root is reached via its cleanedFrom.
+    expect(await listImageVariants(cleaned.filename, vi.fn())).toEqual([original, cleaned]);
+    const [sql, params] = query.mock.calls.find(([sql]) => sql.includes("data->>'cleanedFrom'"));
+    expect(sql).toContain('kind = $1');
+    expect(params).toEqual(['image', 'fox.png']);
   });
 });

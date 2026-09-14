@@ -14,14 +14,14 @@ import MediaCard from '../components/media/MediaCard';
 import MediaPreview from '../components/media/MediaPreview';
 import VideoUpscaleDrawer from '../components/media/VideoUpscaleDrawer';
 import FavoritesFilterChip from '../components/media/FavoritesFilterChip';
-import { normalizeImage, normalizeVideo } from '../components/media/normalize';
+import { normalizeImage, normalizeMediaRow, normalizeVideo } from '../components/media/normalize';
 import { useMediaCompletionRefresh } from '../hooks/useMediaCompletionRefresh';
 import { useMediaAnnotations } from '../hooks/useMediaAnnotations';
 import useMediaPreviewActions from '../hooks/useMediaPreviewActions';
 import usePreviewRoute from '../hooks/usePreviewRoute';
 import { useGalleryPage } from '../hooks/useGalleryPage';
 import {
-  listMediaGalleryPage, deleteVideoHistoryItem, stitchVideos, deleteImage,
+  deleteVideoHistoryItem, stitchVideos, deleteImage,
 } from '../services/api';
 
 const FILTERS = [
@@ -30,13 +30,6 @@ const FILTERS = [
   { id: 'video', label: 'Videos' },
 ];
 
-const normalizeRow = row => row.kind === 'image' ? normalizeImage(row.data) : normalizeVideo(row.data);
-const resolvePreview = async key => {
-  const kind = key.startsWith('video:') ? 'video' : key.startsWith('image:') ? 'image' : 'all';
-  const filename = key.replace(/^(image|video):/, '');
-  const page = await listMediaGalleryPage({ limit: 1, kind, filename }, { silent: true });
-  return page.items[0] ? normalizeRow(page.items[0]) : null;
-};
 
 export default function MediaHistory() {
   const navigate = useNavigate();
@@ -56,15 +49,15 @@ export default function MediaHistory() {
   const annotationRevision = favoritesOnly ? JSON.stringify(Object.entries(annotations).map(([key, value]) => [key, value.starred, value.updatedAt]).sort()) : '';
   const page = useGalleryPage({ kind: filter, q: query, starred: favoritesOnly, summary: true }, { media: true, revision: annotationRevision, paused: favoritesOnly && annotationSaves > 0 });
   const { loading, counts, refresh } = page;
-  const items = useMemo(() => page.items.map(normalizeRow), [page.items]);
+  const items = useMemo(() => page.items.map(normalizeMediaRow), [page.items]);
   const setItems = useCallback(updater => page.setItems(previous => {
-    const normalized = previous.map(normalizeRow);
+    const normalized = previous.map(normalizeMediaRow);
     const next = typeof updater === 'function' ? updater(normalized) : updater;
     return next.map(item => ({ kind: item.kind, data: { ...item.raw, prompt: item.prompt } }));
   }), [page.setItems]);
   const filtered = items;
   const visibleItems = items;
-  const [preview, setPreview] = usePreviewRoute(items, { resolveItem: resolvePreview });
+  const [preview, setPreview] = usePreviewRoute(items);
   useMediaCompletionRefresh({ onImageCompleted: refresh, onVideoCompleted: refresh });
 
   const toggleSelect = useCallback((videoId) => {

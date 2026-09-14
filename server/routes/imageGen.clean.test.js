@@ -259,3 +259,55 @@ describe('POST /api/image-gen/:filename/clean', () => {
     });
   });
 });
+
+// The lightbox's original-vs-cleaned toggle. Before this endpoint the client
+// reconstructed the group by scanning whatever item list its host page held —
+// which a deck, pipeline stage or music-video page cannot supply, because the
+// cleaned copy is auto-filed into the source's COLLECTIONS and never lands on
+// the card/scene ref that page actually lists. One call answers both directions
+// instead of hydrating that whole list.
+describe('GET /api/image-gen/:filename/variants', () => {
+  let app;
+
+  beforeEach(() => {
+    app = express();
+    app.use(express.json());
+    app.use('/api/image-gen', imageGenRoutes);
+    app.use(errorMiddleware);
+    listCollectionsMock.mockReset();
+    listCollectionsMock.mockResolvedValue([]);
+    addItemMock.mockReset();
+    addItemMock.mockResolvedValue({});
+  });
+
+  const variantsOf = async (filename) => {
+    const res = await request(app).get(`/api/image-gen/${filename}/variants`);
+    expect(res.status).toBe(200);
+    return res.body.items.map((item) => item.filename);
+  };
+
+  it('resolves the same pair from either end after a real clean', async () => {
+    await writeFile(join(sandbox, 'toggle-1.png'), pngFixture);
+    await writeFile(join(sandbox, 'toggle-1.metadata.json'), JSON.stringify({ prompt: 'a fox' }));
+    const cleaned = (await request(app).post('/api/image-gen/toggle-1.png/clean').send({})).body.filename;
+
+    // Opening the ORIGINAL is the direction a host-list scan could never
+    // answer: every sibling it holds reports `cleanedFrom: undefined`.
+    expect(await variantsOf('toggle-1.png')).toEqual(['toggle-1.png', cleaned]);
+    expect(await variantsOf(cleaned)).toEqual(['toggle-1.png', cleaned]);
+  });
+
+  it('returns the group root alone for an image with no copies', async () => {
+    await writeFile(join(sandbox, 'toggle-solo.png'), pngFixture);
+    expect(await variantsOf('toggle-solo.png')).toEqual(['toggle-solo.png']);
+  });
+
+  it('returns an empty set for a filename that is not in the gallery', async () => {
+    expect(await variantsOf('toggle-missing.png')).toEqual([]);
+  });
+
+  it('rejects a traversal filename rather than reading outside the gallery', async () => {
+    const res = await request(app).get('/api/image-gen/..%2F..%2Fetc%2Fpasswd/variants');
+    expect(res.status).toBe(400);
+  });
+});

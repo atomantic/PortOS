@@ -93,7 +93,7 @@ export async function removeAsset(mediaKey) {
 
 // Parameters stay bound, including literal substring search (percent and underscore
 // in a prompt are not SQL wildcards). Count and page share exactly one predicate.
-function assetFilter({ kind, q = '', hidden, filename, mediaKeys, excludeKeys, universeId, entryCategory, entryKind, cover } = {}) {
+function assetFilter({ kind, q = '', hidden, filename, cleanedFrom, mediaKeys, excludeKeys, universeId, entryCategory, entryKind, cover } = {}) {
   const params = [];
   const clauses = [];
   if (kind) { params.push(kind); clauses.push(`kind = $${params.length}`); }
@@ -112,7 +112,10 @@ function assetFilter({ kind, q = '', hidden, filename, mediaKeys, excludeKeys, u
     params.push(excludeKeys);
     clauses.push(`NOT (media_key = ANY($${params.length}::text[]))`);
   }
-  for (const [field, value] of Object.entries({ universeId, entryCategory, entryKind })) {
+  // `cleanedFrom` is the variant-lineage reverse lookup: given an original
+  // filename it returns every cleaned/regenerated/de-watermarked copy that
+  // points back at it. Same jsonb-scalar shape as the universe filters below.
+  for (const [field, value] of Object.entries({ cleanedFrom, universeId, entryCategory, entryKind })) {
     if (value !== undefined) {
       params.push(value);
       clauses.push(`data->>'${field}' = $${params.length}`);

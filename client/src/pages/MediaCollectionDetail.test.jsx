@@ -94,20 +94,25 @@ vi.mock('../components/sharing/ShareToButton', () => ({
   default: () => null,
 }));
 
-vi.mock('../components/media/normalize', () => ({
-  normalizeImage: (i) => ({
+vi.mock('../components/media/normalize', () => {
+  const normalizeImage = (i) => ({
     kind: 'image',
     key: `image:${i.filename}`,
     filename: i.filename,
     ref: i.filename,
-  }),
-  normalizeVideo: (v) => ({
+  });
+  const normalizeVideo = (v) => ({
     kind: 'video',
     key: `video:${v.id}`,
     id: v.id,
     ref: v.id,
-  }),
-}));
+  });
+  return {
+    normalizeImage,
+    normalizeVideo,
+    normalizeMediaRow: (row) => (row.kind === 'image' ? normalizeImage(row.data) : normalizeVideo(row.data)),
+  };
+});
 
 import toast from '../components/ui/Toast';
 import MediaCollectionDetail from './MediaCollectionDetail';

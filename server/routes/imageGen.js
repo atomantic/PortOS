@@ -908,6 +908,15 @@ router.delete('/:filename', asyncHandler(async (req, res) => {
   res.json({ ...result, canonRefsRemoved: universePurge.removed });
 }));
 
+// Variant set for ONE image, for the lightbox original-vs-cleaned toggle —
+// see listImageVariants for why no host list can answer it.
+router.get('/:filename/variants', asyncHandler(async (req, res) => {
+  const filename = req.params.filename;
+  local.assertGalleryFilename(filename);
+  const { listImageVariants } = await import('../services/mediaAssetIndex/gallery.js');
+  res.json({ items: await listImageVariants(filename, local.listGallery) });
+}));
+
 router.post('/:filename/visibility', asyncHandler(async (req, res) => {
   res.json(await local.setImageHidden(req.params.filename, !!req.body?.hidden));
 }));
