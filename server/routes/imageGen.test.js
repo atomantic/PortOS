@@ -57,9 +57,10 @@ const compileFableLoomVisualRequest = vi.hoisted(() => vi.fn(async ({ authoredPr
   loraScales: [],
   visualConditioning: compiledVisual,
 })));
+const fableLoomImageCapabilities = vi.hoisted(() => vi.fn(() => ({ version: 1, kind: 'image' })));
 vi.mock('../services/fableLoom/visualConditioning.js', () => ({
   compileFableLoomVisualRequest,
-  fableLoomImageCapabilities: vi.fn(() => ({ version: 1, kind: 'image' })),
+  fableLoomImageCapabilities,
 }));
 
 vi.mock('../services/imageGen/index.js', () => ({
@@ -364,6 +365,40 @@ describe('Image Gen Routes', () => {
       }));
       expect(compileFableLoomVisualRequest).toHaveBeenCalledWith(expect.objectContaining({
         tag: { loomId: 'loom-1', episodeId: 'ep-1', nodeId: 'node-1' }, kind: 'image',
+      }));
+    });
+
+    // The install pin used to be read only inside resolveLocalImageModel, so a
+    // FableLoom generate with no body modelId compiled capability from `dev`
+    // and then queued the pinned FLUX.2 model — stripping refs/LoRAs that the
+    // actual runner would have accepted (#7362).
+    it('threads the install-local pin through FableLoom capability compile and the queued job', async () => {
+      getSettings.mockResolvedValueOnce({
+        imageGen: { mode: 'local', local: { modelId: 'flux2-klein-9b' } },
+      });
+      getLoom.mockResolvedValueOnce({
+        id: 'loom-1',
+        renderSettings: { formatId: 'landscape-16-9' },
+        episodes: [{ id: 'ep-1', number: 1, startNodeId: 'node-1', nodes: [{ id: 'node-1', transitions: [] }] }],
+      });
+      mediaJobQueue.enqueueJob.mockReturnValueOnce({ jobId: 'queued-pin-001', position: 1, status: 'queued' });
+
+      const response = await request(app)
+        .post('/api/image-gen/generate')
+        .send({
+          prompt: 'an example scene',
+          fableLoom: { loomId: 'loom-1', episodeId: 'ep-1', nodeId: 'node-1' },
+        });
+
+      expect(response.status).toBe(200);
+      expect(response.body.model).toBe('flux2-klein-9b');
+      expect(fableLoomImageCapabilities).toHaveBeenCalledWith(expect.objectContaining({
+        mode: 'local',
+        model: expect.objectContaining({ id: 'flux2-klein-9b' }),
+      }));
+      expect(mediaJobQueue.enqueueJob).toHaveBeenCalledWith(expect.objectContaining({
+        kind: 'image',
+        params: expect.objectContaining({ modelId: 'flux2-klein-9b' }),
       }));
     });
 

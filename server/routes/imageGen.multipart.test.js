@@ -227,6 +227,23 @@ describe('POST /api/image-gen/generate — multipart reference-image packing', (
     expect(imagesDirContents.filter((f) => f.startsWith('ref-'))).toHaveLength(0);
   });
 
+  // Without an explicit body modelId, the FLUX.2 ref gate used to resolve the
+  // unpinned `dev` default and 400 even when Settings → Local pinned a
+  // FLUX.2 model that the later enqueue would have used (#7362).
+  it('honors the install-local pin when a generate omits modelId so FLUX.2 refs enqueue', async () => {
+    mockedSettings = { imageGen: { mode: 'local', local: { modelId: 'flux2-klein-9b' } } };
+    const res = await postMultipart(app, '/api/image-gen/generate', [
+      { name: 'prompt', value: 'pinned-model ref' },
+      { name: 'referenceImage1', filename: 'a.png', contentType: 'image/png', value: PNG_FIXTURE },
+    ]);
+
+    expect(res.status).toBe(200);
+    expect(res.body.status).toBe('queued');
+    expect(enqueueJob).toHaveBeenCalledWith(expect.objectContaining({
+      params: expect.objectContaining({ modelId: 'flux2-klein-9b' }),
+    }));
+  });
+
   it('resolves a gallery image as a reference for a new conditioned render, not an init edit', async () => {
     mockedSettings = { imageGen: { mode: 'codex', codex: { enabled: true } } };
     await writeFile(join(imagesSandbox, 'prior-shot.png'), PNG_FIXTURE);

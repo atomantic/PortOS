@@ -13,7 +13,7 @@ import { basename } from 'node:path';
 import { ServerError } from '../../lib/errorHandler.js';
 import { resolveImageInputPath } from '../../lib/fileUtils.js';
 import { getImageModels, isEditOnly } from '../../lib/mediaModels.js';
-import { selectLocalImageModel, resolveLocalImageModel } from '../imageGen/prepareParams.js';
+import { selectLocalImageModelFromSettings, resolveLocalImageModel } from '../imageGen/prepareParams.js';
 import { readImageSidecar } from '../imageGen/local.js';
 import {
   IMAGE_GEN_MODE,
@@ -499,7 +499,7 @@ async function prepareImageJob(run, asset) {
   const mode = resolveImageBackend(settings, run.render, recordedConditioning);
   const allModels = getImageModels();
   const requestedModel = requestedImageModel(settings, run.render, recordedConditioning);
-  const provisionalModel = selectLocalImageModel(requestedModel, allModels);
+  const provisionalModel = selectLocalImageModelFromSettings(settings, requestedModel, allModels);
   const cloud = mode === IMAGE_GEN_MODE.LOCAL
     ? null
     : resolveRenderTargetConfig(settings, RENDER_TARGET.FABLELOOM_PRODUCTION, {
