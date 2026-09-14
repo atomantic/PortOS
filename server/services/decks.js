@@ -172,8 +172,16 @@ async function patchDeck(id, mutate) {
  * returns false to skip the write. Resolves with the projected card, or null
  * when the card is gone / the write was skipped and `missingOk` is set (the
  * completion hook's contract: never throw on a card that vanished).
+ *
+ * `touch` bumps the DECK's `updatedAt` (the LWW clock the push compares on);
+ * `touchCard` bumps the CARD row's. Both default on, and both must be off for
+ * a write that only edits machine-local render bookkeeping: the card's
+ * `updatedAt` rides the wire and is hashed (only `id`, `deckId` and `render`
+ * are stripped — `syncWire.js`), so moving it on a purely local write shifts
+ * the deck's content hash and manufactures a phantom conflict on the next
+ * push from a peer.
  */
-async function patchCard(deckId, cardId, mutate, { missingOk = false, touch = true } = {}) {
+async function patchCard(deckId, cardId, mutate, { missingOk = false, touch = true, touchCard = true } = {}) {
   await ensureSchema();
   return queueRecordWrite(deckId, () => withTransaction(async (client) => {
     const { rows: deckRows } = await client.query('SELECT deleted FROM decks WHERE id = $1', [deckId]);
@@ -189,7 +197,8 @@ async function patchCard(deckId, cardId, mutate, { missingOk = false, touch = tr
     const d = { ...(rows[0].definition || {}) };
     if (mutate(d) === false) return null;
     const { rows: written } = await client.query(
-      'UPDATE deck_cards SET definition = $2, updated_at = NOW() WHERE id = $1 RETURNING *', [cardId, d],
+      `UPDATE deck_cards SET definition = $2${touchCard ? ', updated_at = NOW()' : ''} WHERE id = $1 RETURNING *`,
+      [cardId, d],
     );
     if (touch) await client.query('UPDATE decks SET updated_at = NOW() WHERE id = $1', [deckId]);
     return projectCard(written[0]);
@@ -355,6 +364,11 @@ export async function applyCardGenerations(deckId, entries = []) {
  * `entries` is `[{ cardId, render }]`. A card the completion hook already
  * filed for the SAME job (a backend that finished before the stamp landed)
  * keeps its completed record — the queued stamp must not regress it.
+ *
+ * Deliberately leaves `updated_at` alone on both tables: which job a card is
+ * waiting on is machine-local bookkeeping the wire strips, so bumping the
+ * card's clock would move the deck's sync content hash for a state that means
+ * nothing on a peer (#7364).
  */
 export async function markCardsRenderQueued(deckId, entries = []) {
   if (!entries.length) return;
@@ -362,7 +376,7 @@ export async function markCardsRenderQueued(deckId, entries = []) {
   const stampedAt = new Date().toISOString();
   await queueRecordWrite(deckId, () => query(
     `UPDATE deck_cards c
-       SET definition = c.definition || jsonb_build_object('render', v.render), updated_at = NOW()
+       SET definition = c.definition || jsonb_build_object('render', v.render)
        FROM unnest($2::uuid[], $3::jsonb[]) AS v(id, render)
        WHERE c.deck_id = $1 AND c.id = v.id
          AND COALESCE(c.definition->'render'->>'jobId', '') <> v.render->>'jobId'`,
@@ -373,13 +387,15 @@ export async function markCardsRenderQueued(deckId, entries = []) {
 /**
  * Terminal state for a render that never produced a file. Only the job the
  * card is currently waiting on may flip it — a stale failure event for a
- * superseded job must not mark a newer queued render as failed.
+ * superseded job must not mark a newer queued render as failed. Like the
+ * queued stamp above this edits only the wire-stripped `render` record, so
+ * neither clock moves (#7364).
  */
 export function markCardRenderTerminal(deckId, cardId, { jobId, status, error = null }) {
   return patchCard(deckId, cardId, (d) => {
     if (!d.render || d.render.jobId !== jobId) return false;
     d.render = { ...d.render, status, error: error || null, updatedAt: new Date().toISOString() };
-  }, { missingOk: true, touch: false });
+  }, { missingOk: true, touch: false, touchCard: false });
 }
 
 /**

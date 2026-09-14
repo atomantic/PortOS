@@ -19,12 +19,16 @@ vi.mock('./modelPinAudit.js', () => ({ auditModelPins: vi.fn() }));
 vi.mock('./notifications.js', () => ({
   addNotification: vi.fn(),
   exists: vi.fn(),
+  getNotifications: vi.fn(),
+  removeNotification: vi.fn(),
   NOTIFICATION_TYPES: { AGENT_WARNING: 'agent_warning' },
   PRIORITY_LEVELS: { LOW: 'low', MEDIUM: 'medium', HIGH: 'high' },
 }));
 
 const { auditModelPins } = await import('./modelPinAudit.js');
-const { addNotification, exists } = await import('./notifications.js');
+const {
+  addNotification, exists, getNotifications, removeNotification,
+} = await import('./notifications.js');
 const {
   reportRetiredModelPins, resetModelPinReportState,
 } = await import('./modelPinAuditNotifier.js');
@@ -46,15 +50,29 @@ const audited = (...pins) => ({
 });
 
 /**
- * The persisted notification store, as the module sees it: `exists` answers
- * from what `addNotification` has already written. Mocking the two independently
- * would let the dedupe pass while the real round-trip is broken.
+ * The persisted notification store, as the module sees it: every read answers
+ * from what the writes have already put there. Mocking them independently would
+ * let the dedupe and the retraction both pass while the real round-trip is
+ * broken — which is exactly how a card keyed on the pin's LOCATION looked
+ * correct for a release (#7366).
  */
 function backNotificationsWithAStore() {
   const cards = [];
+  let nextId = 1;
   exists.mockImplementation(async (type, field, value) =>
     cards.some((card) => card.type === type && card.metadata?.[field] === value));
-  addNotification.mockImplementation(async (card) => { cards.push(card); return card; });
+  addNotification.mockImplementation(async (card) => {
+    const stored = { id: `card-${nextId++}`, ...card };
+    cards.push(stored);
+    return stored;
+  });
+  getNotifications.mockImplementation(async ({ type } = {}) =>
+    cards.filter((card) => !type || card.type === type));
+  removeNotification.mockImplementation(async (id) => {
+    const at = cards.findIndex((card) => card.id === id);
+    if (at >= 0) cards.splice(at, 1);
+    return { success: true };
+  });
   return cards;
 }
 
@@ -121,6 +139,75 @@ describe('reportRetiredModelPins', () => {
 
     expect(addNotification).not.toHaveBeenCalled();
     expect(logged).not.toHaveBeenCalled();
+  });
+
+  // #7366 — the dedupe key was `pin.id`, which says where a pin LIVES, not what
+  // it holds. These three pin the value-keyed behavior that replaced it.
+  it('announces again when the pin is repointed to ANOTHER retired model', async () => {
+    const cards = backNotificationsWithAStore();
+    auditModelPins.mockResolvedValue(audited(pin('settings:imageGen.agy.model')));
+    await reportRetiredModelPins();
+    addNotification.mockClear();
+
+    // The user repoints the pin in Settings rather than clearing it from the
+    // panel, and the new id is retired too. Keying on the pin's location alone
+    // suppressed this card permanently — the exact case the feature exists for.
+    auditModelPins.mockResolvedValue(audited(
+      pin('settings:imageGen.agy.model', { model: 'retired-model-9' }),
+    ));
+    await reportRetiredModelPins();
+
+    expect(addNotification).toHaveBeenCalledTimes(1);
+    expect(addNotification.mock.calls[0][0].description).toContain('retired-model-9');
+    // And exactly ONE card stands: the one naming the model the pin holds now.
+    expect(cards.map((card) => card.metadata.model)).toEqual(['retired-model-9']);
+  });
+
+  it('retracts the card when the pin is repointed to a LIVE model', async () => {
+    const cards = backNotificationsWithAStore();
+    auditModelPins.mockResolvedValue(audited(pin('settings:imageGen.agy.model')));
+    await reportRetiredModelPins();
+    expect(cards).toHaveLength(1);
+
+    // Repointed in Settings, so `clearModelPin` — the only retraction path
+    // before #7366 — never ran. The pin drops out of the stale set, and a card
+    // naming a model the pin no longer holds is a loop the user cannot close.
+    auditModelPins.mockResolvedValue(audited());
+    await reportRetiredModelPins();
+
+    expect(cards).toHaveLength(0);
+    expect(removeNotification).toHaveBeenCalledTimes(1);
+  });
+
+  it('announces the new model even when retracting the old card FAILS', async () => {
+    // The two guards are deliberately independent: `reconcile` normally takes
+    // the superseded card down first, but it is non-fatal, so the dedupe key
+    // must carry the pin's VALUE on its own. Keyed on `pin.id` alone, a failed
+    // retraction silences the new retirement until someone clears the pin by
+    // hand — which is the #7366 failure mode surviving its own fix.
+    auditModelPins.mockResolvedValue(audited(pin('settings:imageGen.agy.model')));
+    await reportRetiredModelPins();
+    addNotification.mockClear();
+
+    removeNotification.mockRejectedValueOnce(new Error('notifications.json unwritable'));
+    auditModelPins.mockResolvedValue(audited(
+      pin('settings:imageGen.agy.model', { model: 'retired-model-9' }),
+    ));
+    await reportRetiredModelPins();
+
+    expect(addNotification).toHaveBeenCalledTimes(1);
+    expect(addNotification.mock.calls[0][0].metadata.model).toBe('retired-model-9');
+  });
+
+  it('leaves an AGENT_WARNING raised by another producer alone', async () => {
+    const cards = backNotificationsWithAStore();
+    cards.push({ id: 'other-1', type: 'agent_warning', metadata: { runId: 'abc' } });
+    auditModelPins.mockResolvedValue(audited());
+
+    await reportRetiredModelPins();
+
+    expect(cards).toHaveLength(1);
+    expect(removeNotification).not.toHaveBeenCalled();
   });
 
   it('stays silent across a RESTART, because the card is the dedupe record', async () => {

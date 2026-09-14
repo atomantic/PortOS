@@ -29,6 +29,8 @@ import {
 import { forgeIssueCreateArgs, forgeLabelCreateArgs, parseCreatedForgeIssue } from '../lib/forgeIssueCli.js';
 import { boundedByJsonChars } from '../lib/objects.js';
 import { boundedErrorMessage } from '../lib/errorHandler.js';
+import { scrubHomePath } from '../lib/homePath.js';
+import { scrubSecretTokens } from '../lib/secretText.js';
 import {
   PERSISTENT_MIND_ISSUE_EXTRA_LABEL_SPECS,
   PERSISTENT_MIND_ISSUE_CATEGORY_LABELS,
@@ -38,6 +40,28 @@ import {
 } from '../lib/persistentMindIssues.js';
 
 const MAX_CATALOG_PROMPT_CHARS = 2_000;
+
+/**
+ * The last thing that happens to a title/body before `gh`/`glab` sees it.
+ *
+ * The capability's Settings guardrail asserts that no repository paths or
+ * credentials ride along, and a filed issue is world-readable the moment it
+ * lands — so the assertion has to be ENFORCED here rather than trusted to the
+ * prompt above. Both halves are mechanically decidable and already have one
+ * definition in the tree: `scrubHomePath` collapses the running user's home
+ * prefix (which is what embeds the OS username in `/Users/<name>/…`), and
+ * `scrubSecretTokens` replaces credential-SHAPED substrings. Neither is a
+ * content filter — "no private records" stays a prompt instruction, because no
+ * regex can decide whether a sentence of the mind's own prose is one, and the
+ * guardrail text now says exactly that rather than promising more.
+ *
+ * Applied to the TITLE as well as the body: the title is what a duplicate check
+ * on any other machine reads back, and a leaked path there is just as public.
+ *
+ * Both helpers pass a non-string through untouched, so this adds no coercion of
+ * its own — the tool schema already requires both fields to be strings.
+ */
+const scrubForgeText = (value) => scrubSecretTokens(scrubHomePath(value));
 
 const labelSpec = (name) => dispatchLabelSpec(name)
   || (PERSISTENT_MIND_ISSUE_EXTRA_LABEL_SPECS[name]
@@ -74,6 +98,8 @@ Issue filing access is ON. Filing an issue is the PREFERRED way to queue concret
 Read before you write. Call issues.list for the target app first and skip anything already tracked; duplicates are refused on an exact title match, but a near-duplicate still wastes the backlog.
 
 File with issues.file. Write the body so someone can pick it up cold: what is wrong or missing, where in the repo, why it matters now, and the chosen fix. Do not file speculative or future-only refactors.
+
+A filed issue is world-readable. Write the title and body in your own prose and never paste in a secret, an absolute filesystem path, a hostname, network address, personal name, contact detail, or the contents of a private record — refer to a file by its repo-relative path instead. Home-directory prefixes and credential-shaped strings are stripped before filing, but that scrub cannot recognize a private record, so keeping one out is on you.
 
 Both dispatch axes are required and independent — never derive one from the other, and do not stamp medium on both by reflex:
 - model: ${DISPATCH_MODEL_TIERS.join(', ')} — the CAPABILITY the work needs, from mechanical (a rename, a config change, a well-specified single-file edit) through routine multi-file work and genuinely hard reasoning (concurrency, schema/compatibility design, redesign) to exceptional frontier reasoning.
@@ -191,9 +217,15 @@ export async function filePersistentMindIssue(args) {
   if (existing.transient) {
     return { ok: false, error: `Could not read the existing ${app.forge} issues to check for duplicates (${existing.reason}); nothing was filed` };
   }
+  // Scrubbed BEFORE the duplicate check, not just before the create: the title
+  // that dedupes has to be the title that gets filed, or an issue whose only
+  // leaked path was in its title would re-file itself on every wake.
+  const title = scrubForgeText(args.title);
+  const body = scrubForgeText(args.body);
+
   // An all-punctuation title normalizes to the empty string, which would match
   // every other such title — only a title with real content can dedupe.
-  const titleKey = normalizeIssueTitleKey(args.title);
+  const titleKey = normalizeIssueTitleKey(title);
   const duplicate = titleKey
     && existing.issues.find((issue) => normalizeIssueTitleKey(issue.title) === titleKey);
   if (duplicate) {
@@ -217,7 +249,7 @@ export async function filePersistentMindIssue(args) {
   ].filter((name, index, all) => all.indexOf(name) === index);
   await ensureLabels({ app, names: labels });
 
-  const created = await createIssue({ app, title: args.title, body: args.body, labels });
+  const created = await createIssue({ app, title, body, labels });
   if (!created.ok) return created;
   return {
     ok: true,

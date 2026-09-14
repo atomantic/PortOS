@@ -21,6 +21,7 @@ const getUniverseRenderPin = vi.fn(async () => null);
 vi.mock('../universeBuilder/crud.js', () => ({ getUniverseRenderPin: (...a) => getUniverseRenderPin(...a) }));
 
 const { prepareGenerateParams, selectLocalImageModel } = await import('./prepareParams.js');
+const { AGY_IMAGEGEN_DEFAULT_MODEL } = await import('./modes.js');
 
 const CODEX_ON = { codex: { enabled: true, codexPath: '/bin/codex' } };
 const run = (data) => prepareGenerateParams({ data, files: undefined, referenceImageFields: [] });
@@ -185,5 +186,31 @@ describe('universe render-target resolution', () => {
     expect(mode).toBe('codex');
     expect(data.cloudModel).toBe('mv-model');
     expect(getUniverseRenderPin).not.toHaveBeenCalled();
+  });
+
+  // #7366 — stamping the resolved id erases where it came from, and the route's
+  // dispatch re-resolves from that id alone. Without the provenance riding
+  // beside it, a shipped default materialized here reads as a deliberate choice
+  // downstream and the agy retired-default re-point never runs — on exactly the
+  // unattended surfaces (Music Video, Universe Bible) it exists to protect.
+  it('stamps the shipped-default provenance beside the model it materialized', async () => {
+    getSettings.mockResolvedValue({ imageGen: { mode: 'local', ...AGY_ON } });
+    getUniverseRenderPin.mockResolvedValue({ imageMode: 'agy', imageModelId: null });
+    const { data, mode } = await run({ prompt: 'p', universeRun: tag });
+    expect(mode).toBe('agy');
+    expect(data.cloudModel).toBe(AGY_IMAGEGEN_DEFAULT_MODEL);
+    expect(data.cloudModelIsShippedDefault).toBe(true);
+  });
+
+  it('stamps provenance FALSE for a model the record itself pinned', async () => {
+    getSettings.mockResolvedValue({ imageGen: { mode: 'local', ...AGY_ON } });
+    // The record pins the shipped id by hand — a choice, so it must never be
+    // re-pointed out from under the render.
+    getUniverseRenderPin.mockResolvedValue({
+      imageMode: 'agy', imageModelId: AGY_IMAGEGEN_DEFAULT_MODEL,
+    });
+    const { data } = await run({ prompt: 'p', universeRun: tag });
+    expect(data.cloudModel).toBe(AGY_IMAGEGEN_DEFAULT_MODEL);
+    expect(data.cloudModelIsShippedDefault).toBe(false);
   });
 });

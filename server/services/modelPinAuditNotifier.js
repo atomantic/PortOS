@@ -18,11 +18,20 @@
  * **The card IS the dedupe state.** `providers.json` is written by a refresh, a
  * legacy `PATCH /api/providers/:id`, a migration and a boot seed alike, so an
  * install carrying one rotted pin would narrate on every one of them forever.
- * `notifications.exists(type, 'pinId', id)` answers "has this pin already been
- * announced?" from the durable record itself — so a restart cannot re-announce,
- * which is exactly what an in-process transition set could not promise. The
- * card is retracted when the pin is cleared (`modelPinAudit.clearModelPin`), so
- * a pin that is re-created and rots again announces again.
+ * The card answers "has this pin already been announced?" from the durable
+ * record itself — so a restart cannot re-announce, which is exactly what an
+ * in-process transition set could not promise.
+ *
+ * **What is deduped is the pin's VALUE, not its location** (#7366). `pin.id`
+ * says where a pin lives; the retirement being announced is about the model it
+ * holds. Keying on the id alone meant a user who repointed the pin in Settings
+ * — rather than clearing it from the panel — kept a card naming the old model
+ * forever, AND had the card permanently suppressed for the next model retired
+ * at that same location, which is the case the feature exists for. So the
+ * dedupe key is `pinId` + `model`, and every announced card whose pin no longer
+ * names that model is retracted by `reconcile()` below on the next audit —
+ * whatever path moved it. `clearModelPin` still retracts by `pinId` alone, so a
+ * clear from the panel is immediate rather than waiting for the next refresh.
  *
  * `data/notifications.json` is machine-local — nothing in `server/` federates
  * it — so this raises no privacy or sync question.
@@ -77,6 +86,18 @@ const loadAuditModule = () => (auditModule ||= import('./modelPinAudit.js'));
 const loadNotificationsModule = () => (notificationsModule ||= import('./notifications.js'));
 
 /**
+ * The identity of what a card ANNOUNCES: this pin, holding this model.
+ *
+ * A NEWLINE rather than a printable separator — a pin id embeds dots, colons and
+ * slashes (`settings:codeReview.providerModels.provider:x`) and so does a model
+ * id, so any separator a user could type could be forged into a collision
+ * between two different pins. A newline can appear in neither — every pin id is
+ * built here from a settings path or a record id, and a model id is charset-
+ * bounded well before it is stored.
+ */
+const pinCardKey = (pin) => `${pin.id}\n${pin.model}`;
+
+/**
  * One card per pin, so each carries the pin's own `href`/`location` and can be
  * retracted independently when that one pin is cleared. A single rolled-up card
  * could do neither.
@@ -85,7 +106,9 @@ async function announce(pin, providers) {
   const { addNotification, exists, NOTIFICATION_TYPES, PRIORITY_LEVELS } =
     await loadNotificationsModule();
   // The persisted card is the dedupe record: already announced, still true.
-  if (await exists(NOTIFICATION_TYPES.AGENT_WARNING, 'pinId', pin.id)) return false;
+  // Keyed by the pin's VALUE, so a pin repointed to a DIFFERENT retired model
+  // announces the new one instead of being silenced by the old card.
+  if (await exists(NOTIFICATION_TYPES.AGENT_WARNING, 'pinKey', pinCardKey(pin))) return false;
   // Every record the pin was judged against, not just the first: a reviewer pin
   // spans several (#7339), and naming one would have this card disagree with the
   // panel about the same pin. `pinProviderNames` is what both call.
@@ -97,14 +120,66 @@ async function announce(pin, providers) {
       + ` — clear it in ${pin.location}.`,
     priority: PRIORITY_LEVELS.MEDIUM,
     link: pin.href || null,
-    metadata: { pinId: pin.id, kind: pin.kind, providerIds: pin.providerIds, model: pin.model },
+    // `pinId` stays beside `pinKey`: it is what `clearModelPin` retracts by,
+    // and what a surface linking back to the pin reads.
+    metadata: {
+      pinId: pin.id, pinKey: pinCardKey(pin),
+      kind: pin.kind, providerIds: pin.providerIds, model: pin.model,
+    },
   });
   return true;
+}
+
+/**
+ * Retract every announced card the current audit no longer earns.
+ *
+ * `clearModelPin` covers the ONE path that starts at the card, and covered only
+ * that: a pin repointed anywhere else — Settings, a record edit, a template
+ * save, a `PATCH` — left its card standing forever, naming a model the pin no
+ * longer holds (#7366). The audit already knows the complete set of pins that
+ * are stale right now, so every other announced card is stale BY DEFINITION,
+ * whatever moved it: the pin was repointed to a live model, repointed to a
+ * different retired one (announced again under its new key), or deleted
+ * outright. Retracting from the derived set needs no change-detection and no
+ * second source of truth, which is the same posture as the audit itself.
+ *
+ * Scoped to cards this module wrote — `AGENT_WARNING` carrying a `pinKey` — so
+ * a warning raised by any other producer is never touched. A card predating
+ * #7366 carries no `pinKey`; it is retracted here and re-announced under the
+ * new key on the same pass if the pin is still stale, so an upgrading install
+ * converges on the first audit rather than needing a migration. Should that one
+ * retraction fail, the re-announcement leaves two cards for one pin — the
+ * deliberate trade for keeping the two guards independent, and self-healing:
+ * the next audit retracts the legacy card, and a Clear from the panel takes
+ * both at once (`removeByMetadata` matches every card sharing the `pinId`).
+ */
+async function reconcile(stalePins) {
+  const { getNotifications, removeNotification, NOTIFICATION_TYPES } = await loadNotificationsModule();
+  const earned = new Set(stalePins.map(pinCardKey));
+  const cards = await getNotifications({ type: NOTIFICATION_TYPES.AGENT_WARNING });
+  // Sequential for the same reason the announcements are: these share one file.
+  for (const card of cards) {
+    if (!card.metadata?.pinId) continue;
+    if (card.metadata.pinKey && earned.has(card.metadata.pinKey)) continue;
+    await removeNotification(card.id).catch((error) => {
+      console.error(`❌ Retracting stale retired-pin card ${card.id} failed: ${error.message}`);
+    });
+  }
 }
 
 async function reportOnce() {
   const { auditModelPins } = await loadAuditModule();
   const { pins, providers } = await auditModelPins();
+  // BEFORE the early return below and before announcing: an install whose last
+  // stale pin was just repointed to a live model has an empty pin set and a
+  // card that must still come down.
+  //
+  // Non-fatal, like each individual announcement: a failed retraction must not
+  // swallow the announcements behind it. The next audit re-derives the same set
+  // and retries whatever is still standing.
+  await reconcile(pins).catch((error) => {
+    console.error(`❌ Reconciling retired-pin notifications failed: ${error.message}`);
+  });
   if (pins.length === 0) return;
   // Sequential, not Promise.all: `addNotification` and `exists` share one file,
   // and two concurrent announcements of the same pin would both miss the card

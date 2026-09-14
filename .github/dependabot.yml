@@ -15,6 +15,11 @@ updates:
     schedule:
       interval: weekly
     open-pull-requests-limit: 10
+    ignore:
+      # 2.11.0's ESM build throws ERR_IMPORT_ATTRIBUTE_MISSING under Node — see
+      # #7371 and https://github.com/cantoo-scribe/pdf-lib/issues/155. Remove
+      # once a release fixes the JSON import-attribute regression.
+      - dependency-name: "@cantoo/pdf-lib"
   - package-ecosystem: npm
     directory: /client
     schedule:

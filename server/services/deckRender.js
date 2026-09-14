@@ -67,8 +67,11 @@ export async function renderDeckCards(deckId, { cardIds, onlyMissing = false, mo
     );
   }
   if (cloud && !cloud.enabled) throw cloud.disabledError;
+  const localPinModel = (!pin.mode || pin.mode === IMAGE_GEN_MODE.LOCAL)
+    ? pin.modelId
+    : null;
   const localModel = mode === IMAGE_GEN_MODE.LOCAL
-    ? resolveLocalImageModel(settings, { modelId: model || pin.modelId || settings.imageGen?.local?.modelId || undefined })
+    ? resolveLocalImageModel(settings, { modelId: model || localPinModel || settings.imageGen?.local?.modelId || undefined })
     : null;
   const { cleanC2PA, denoise } = resolveImageCleaners(undefined, settings, mode);
 

@@ -179,7 +179,15 @@ export async function prepareGenerateParams({ data, files, referenceImageFields 
       fallbackMode: IMAGE_GEN_MODE.EXTERNAL,
     });
     mode = resolved.mode;
-    if (!data.cloudModel && resolved.cloud?.modelId) data.cloudModel = resolved.cloud.modelId;
+    // Stamping the id ERASES where it came from, and the dispatch below
+    // re-resolves from `data.cloudModel` alone — so a shipped default
+    // materialized here would arrive there looking like a deliberate choice and
+    // the retired-default re-point would never run for a record-tagged render
+    // (#7366). The provenance rides along as its own dispatcher-level field.
+    if (!data.cloudModel && resolved.cloud?.modelId) {
+      data.cloudModel = resolved.cloud.modelId;
+      data.cloudModelIsShippedDefault = resolved.cloud.modelIsShippedDefault === true;
+    }
   }
   // The render's input images, counted once: the init image (uploaded this
   // request or named by an earlier one) plus every reference slot. Every gate
