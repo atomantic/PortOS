@@ -62,6 +62,25 @@ export function doneSentinelName(agentId) {
 }
 
 /**
+ * The agent id encoded in a done-sentinel filename.
+ *
+ * The inverse of `doneSentinelName`, and the only place that reverses it:
+ * a sweep deciding whether a leftover `.agent-done-*` belongs to a run that is
+ * still alive has to get the SAME answer the producer got, or it deletes a live
+ * run's completion signal.
+ *
+ * Returns the id for a scoped sentinel, `''` for the bare unscoped
+ * `.agent-done` (a real sentinel, attributable to no run), and `null` when the
+ * name is not a sentinel at all.
+ */
+export function doneSentinelAgentId(name) {
+  if (typeof name !== 'string') return null;
+  if (name === DONE_SENTINEL_NAME) return '';
+  const prefix = `${DONE_SENTINEL_NAME}-`;
+  return name.startsWith(prefix) && name.length > prefix.length ? name.slice(prefix.length) : null;
+}
+
+/**
  * The one path this run's sentinel lives at — `null` without a workspace.
  *
  * Every producer and consumer resolves it here: the prompt the agent is given

@@ -543,7 +543,11 @@ describe('deferred imports stay deferred (#6156)', () => {
 // reached through `await import()`, so neither is in that closure — and
 // bootstrap.js gaining a static import of the notifier cost nothing, because no
 // server test file statically reaches bootstrap.js.
-const MAX_STATIC_INSTANTIATIONS = 104400;
+// +80 for services/agentSentinelSweep.test.js: a new leaf suite whose closure is
+// the sweep, lib/agentSentinel.js and the fileUtils chain those two already
+// share with the rest of the suite. No new edge into a heavy subtree — a new
+// test file simply costs its own closure once.
+const MAX_STATIC_INSTANTIATIONS = 104480;
 
 
 const SKIP_DIRS = new Set(['node_modules', 'coverage', 'dist', 'data']);
