@@ -15,6 +15,7 @@ import { checkAndPrompt as autobiographyCheckAndPrompt } from '../autobiography.
 import { runGoalCheckIn } from '../goalCheckIn.js'
 import { cleanupOrphanedWorktrees, reapMergedWorktrees } from '../worktreeManager.js'
 import { getActiveAgentIds } from '../agentState.js'
+import { sweepStaleDoneSentinels } from '../agentSentinelSweep.js'
 import { runSelfDiagnostics } from './selfDiagnostics.js'
 import { runBrainParitySweep } from './brainParitySweep.js'
 
@@ -90,11 +91,42 @@ async function agentDataCleanup() {
   // paused agent's worktree/transcript is never reaped or rm'd out from under a
   // later resume. (readJSONFile keeps this off the subAgentSpawner import path.)
   const cosState = await readJSONFile(join(PATHS.cos, 'state.json'), null)
+  // Every agent record that has not reached an outcome yet. A superset of
+  // `activeIds`: it re-adds the paused agents the in-memory maps drop, and —
+  // after a restart — the interrupted runs still recorded `running`, whose
+  // `.agent-done` sentinel is exactly the resume state the abandon path
+  // preserved on purpose (#3202). Only the sentinel sweep reads this; the
+  // worktree reaps below keep using `activeIds`, since an unfinished record left
+  // behind by a dead process is precisely what they exist to collect.
+  const unfinishedIds = new Set(activeIds)
   if (cosState?.agents && typeof cosState.agents === 'object') {
     for (const [id, agent] of Object.entries(cosState.agents)) {
       if (agent?.status === 'paused') activeIds.add(id)
+      if (agent?.status !== 'completed' && agent?.status !== 'failed') unfinishedIds.add(id)
     }
   }
+
+  // Worktree-less agents run in a REAL checkout — this repo, or a managed app's
+  // own repo — so a sentinel their cleanup never reached sits there as untracked
+  // dirt in the user's git status forever. Sweep every workspace they can land
+  // in; a worktree-backed sentinel is already carried off with its worktree.
+  // Lazy, like `eidoverseProjection` above: `apps.js` drags the PM2/status
+  // subtree into this registry's static graph, and this job only needs the list
+  // of repo paths (see the import-budget guard in lib/importScoping.test.js).
+  const apps = await import('../apps.js').then(m => m.getAllApps()).catch((err) => {
+    console.warn(`⚠️ Sentinel sweep could not list apps: ${err.message}`)
+    return []
+  })
+  // `null` when state.json could not be read: without it `unfinishedIds` is just
+  // the in-memory map, which is EMPTY after a restart — sweeping on that would
+  // delete the resume signal of every paused and interrupted run.
+  const sentinelsRemoved = await sweepStaleDoneSentinels(
+    [PATHS.root, ...apps.map(app => app?.repoPath)],
+    cosState?.agents ? unfinishedIds : null
+  ).catch((err) => {
+    console.warn(`⚠️ Stale sentinel sweep failed: ${err.message}`)
+    return 0
+  })
 
   const agentsDir = join(PATHS.cos, 'agents')
   let cleaned = 0
@@ -136,8 +168,8 @@ async function agentDataCleanup() {
   })
 
   const mergedCount = merged?.reaped?.length || 0
-  console.log(`🧹 Agent data cleanup: removed ${cleaned} dir(s) older than 7 days, reaped ${mergedCount} merged + ${worktreesReaped} orphaned worktree(s)`)
-  return { cleaned, mergedReaped: mergedCount, worktreesReaped }
+  console.log(`🧹 Agent data cleanup: removed ${cleaned} dir(s) older than 7 days, ${sentinelsRemoved} stale sentinel(s), reaped ${mergedCount} merged + ${worktreesReaped} orphaned worktree(s)`)
+  return { cleaned, sentinelsRemoved, mergedReaped: mergedCount, worktreesReaped }
 }
 
 /**

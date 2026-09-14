@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { join } from 'path';
-import { DONE_SENTINEL_NAME, doneSentinelName, doneSentinelPath, extractSentinelPayloadFromTranscript, parseSentinelPayload, salvageSentinelPayload } from './agentSentinel.js';
+import { DONE_SENTINEL_NAME, doneSentinelAgentId, doneSentinelName, doneSentinelPath, extractSentinelPayloadFromTranscript, parseSentinelPayload, salvageSentinelPayload } from './agentSentinel.js';
 
 describe('agentSentinel', () => {
   it('exposes the sentinel filename', () => {
@@ -45,6 +45,27 @@ describe('agentSentinel', () => {
 
     it('returns null without a workspace path', () => {
       expect(doneSentinelPath(null, 'agent-1')).toBeNull();
+    });
+  });
+
+  describe('doneSentinelAgentId', () => {
+    it('round-trips every id doneSentinelName produces', () => {
+      for (const id of ['agent-1a2b3c', 'agent-aaa', 'a-b.c_d']) {
+        expect(doneSentinelAgentId(doneSentinelName(id))).toBe(id);
+      }
+    });
+
+    it('reports the bare sentinel as belonging to no agent', () => {
+      expect(doneSentinelAgentId(DONE_SENTINEL_NAME)).toBe('');
+    });
+
+    it('rejects names that are not sentinels', () => {
+      // `.agent-done-` with nothing after it is a truncated name, not an id of ''
+      // — treating it as the bare sentinel would delete it on the wrong rule.
+      expect(doneSentinelAgentId('.agent-done-')).toBeNull();
+      expect(doneSentinelAgentId('.agent-doneish')).toBeNull();
+      expect(doneSentinelAgentId('README.md')).toBeNull();
+      expect(doneSentinelAgentId(null)).toBeNull();
     });
   });
 
