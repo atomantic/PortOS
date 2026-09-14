@@ -1,4 +1,5 @@
 import { useState, useMemo, useCallback } from 'react';
+import { normalizeImage } from '../components/media/normalize';
 import { descriptorForCanonEntry } from '../lib/canonPrompt';
 import { listSheetPointers } from '../lib/sheetPointers';
 import useGallerySidecars from './useGallerySidecars';
@@ -65,35 +66,17 @@ export default function useUniverseGallery({ draft, runsLength }) {
       // Pull the real prompt + render settings out of the gallery metadata
       // map when available so the lightbox shows the full prompt that was
       // sent to the renderer (with universe style influences, variation
-      // prompt fragment, etc.), not just the row's display label.
-      // Falls back to the label-only shape for filenames not in the gallery
-      // (legacy renders or pending re-fetch).
-      const meta = galleryByFilename.get(filename) || null;
-      out.push({
-        // Same `image:<filename>` key normalizeImage() stamps everywhere
-        // else — History, Collections, ImageGen — so a star/note added
-        // from this lightbox is the SAME annotation record those pages
-        // already read. A page-local key would silently fork the user's
-        // favorites by surface.
-        key: `image:${filename}`,
-        kind: 'image',
-        filename,
-        previewUrl: `/data/images/${filename}`,
-        downloadUrl: `/data/images/${filename}`,
-        prompt: meta?.prompt || label || filename,
-        negativePrompt: meta?.negativePrompt || null,
-        modelId: meta?.modelId || meta?.model || null,
-        width: meta?.width ?? null,
-        height: meta?.height ?? null,
-        seed: meta?.seed ?? null,
-        steps: meta?.steps ?? null,
-        guidance: meta?.guidance ?? null,
-        quantize: meta?.quantize ?? null,
-        // `raw` carries the original sidecar so MediaLightbox's "Refine
-        // Prompt" / clean / remix downstream handlers can pull any field
-        // the spec doesn't surface at the top level.
-        raw: meta,
-      });
+      // prompt fragment, etc.), not just the row's display label. The row's
+      // label is the fallback for filenames not in the gallery (legacy
+      // renders or a pending re-fetch).
+      //
+      // Same `image:<filename>` key normalizeImage() stamps everywhere else —
+      // History, Collections, ImageGen — so a star/note added from this
+      // lightbox is the SAME annotation record those pages already read, and
+      // the cleaning/regen lineage the lightbox's variant toggle keys on
+      // survives the hop (a hand-rolled item shape silently dropped it).
+      const meta = galleryByFilename.get(filename);
+      out.push(normalizeImage({ ...meta, filename, prompt: meta?.prompt || label || filename }));
     };
     const cats = draft?.categories && typeof draft.categories === 'object' ? draft.categories : {};
     for (const [bucketKey, bucket] of Object.entries(cats)) {

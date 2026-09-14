@@ -37,7 +37,7 @@ import useUrlParams from '../hooks/useUrlParams';
 import usePreviewRoute from '../hooks/usePreviewRoute';
 import useFieldDraft from '../hooks/useFieldDraft';
 import useGallerySidecars from '../hooks/useGallerySidecars';
-import { DECK_KIND_LABELS, cardInFlightJobId, deckCompletion } from '../lib/decks';
+import { DECK_KIND_LABELS, cardInFlightJobId, composeCardRenderPrompt, deckCompletion } from '../lib/decks';
 import {
   deleteDeck, generateDeckPrompts, getDeck, listUniverseSummaries, removeDeckSample,
   renderDeckCard, renderDeckCards, updateDeck, updateDeckCard,
@@ -116,25 +116,26 @@ function DeckEditor({ id }) {
     () => (deck ? deck.cards.flatMap((c) => c.imageRefs) : []),
     [deck],
   );
-  // The card's own `prompt` is only the subject line. What the renderer was
-  // actually sent is the composed prompt — deck style clause, layout clause,
-  // titled subject, merged negatives — and that is what the sidecar recorded,
-  // so hydrate from it and let the lightbox show the real thing. The card
-  // prompt stays the fallback for a render whose sidecar is missing (a legacy
-  // deck render, or a refetch that has not landed yet). A finished render
-  // appends its filename to the card, which re-keys the lookup on its own —
-  // the sidecar is on disk before the server hook attaches the image.
+  // The card's own `prompt` is only its subject line; the renderer was sent the
+  // composed prompt (deck style clause, layout, titled subject, merged
+  // negatives). The sidecar records what was actually sent, so hydrate from it
+  // — and when there is no sidecar (a legacy render, a peer-synced one, or the
+  // first paint before the lookup lands), compose it locally rather than
+  // falling back to the subject line, which is the wording that was never sent.
   const { byFilename: sidecars } = useGallerySidecars(cardImageRefs);
   const previewItems = useMemo(() => (deck
-    ? deck.cards.flatMap((c) => c.imageRefs.map((filename) => {
-      const meta = sidecars.get(filename) || null;
-      return normalizeImage({
-        ...(meta || {}),
-        filename,
-        path: `/data/images/${filename}`,
-        prompt: meta?.prompt || c.prompt,
+    ? deck.cards.flatMap((c) => {
+      const composed = c.imageRefs.length ? composeCardRenderPrompt(deck, c) : null;
+      return c.imageRefs.map((filename) => {
+        const meta = sidecars.get(filename);
+        return normalizeImage({
+          ...meta,
+          filename,
+          prompt: meta?.prompt || composed.prompt,
+          negativePrompt: meta?.negativePrompt || composed.negativePrompt || null,
+        });
       });
-    }))
+    })
     : []), [deck, sidecars]);
   const [preview, setPreview] = usePreviewRoute(previewItems);
   const previewFilename = (filename) => {

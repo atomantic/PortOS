@@ -212,10 +212,9 @@ export function composeCardRenderPrompt(deck, card) {
   const avoid = universeVisualStyleTokens(deck).avoid.join(', ');
   const layout = trimmed(deck?.layoutPrompt);
   const subject = [trimmed(card?.name), trimmed(card?.prompt)].filter(Boolean).join(': ');
-  const cardNegative = trimmed(card?.negativePrompt);
   const body = [layout, subject].filter(Boolean).join('. ');
-  const composed = composeStyledPrompt(body, cardNegative, { prompt: style, negativePrompt: avoid });
-  return { ...composed, parts: { style, layout, subject, cardNegative, styleNegative: avoid } };
+  const composed = composeStyledPrompt(body, trimmed(card?.negativePrompt), { prompt: style, negativePrompt: avoid });
+  return { ...composed, parts: { style, layout, subject } };
 }
 
 const IN_FLIGHT_RENDER = new Set(['queued', 'running']);

@@ -81,12 +81,17 @@ describe('DeckDetail preview items', () => {
     });
   });
 
-  it('falls back to the card prompt when the render has no sidecar', async () => {
+  it('composes the prompt locally when the render has no sidecar', async () => {
+    // A legacy or peer-synced render has no sidecar, and nothing does before
+    // the lookup lands. The composed prompt is derivable right here — falling
+    // back to the card's subject line would re-show the wording that was
+    // never sent.
     getGalleryImages.mockResolvedValue([]);
     renderPage();
     await waitFor(() => {
       const item = previewProps?.items?.find((i) => i.filename === 'fool.png');
-      expect(item?.prompt).toBe('a youth at a cliff edge');
+      expect(item?.prompt).toBe('copperplate engraving. Full tarot card, framed border. The Fool: a youth at a cliff edge');
+      expect(item?.negativePrompt).toBe('blurry');
     });
   });
 });

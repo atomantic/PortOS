@@ -43,7 +43,7 @@ describe('composeCardRenderPrompt', () => {
     const out = composeCardRenderPrompt({}, { name: 'Ace of Spades', prompt: 'one large ornate spade' });
     expect(out.prompt).toBe('Ace of Spades: one large ornate spade');
     expect(out.negativePrompt).toBe('');
-    expect(out.parts).toEqual({ style: '', layout: '', subject: 'Ace of Spades: one large ornate spade', cardNegative: '', styleNegative: '' });
+    expect(out.parts).toEqual({ style: '', layout: '', subject: 'Ace of Spades: one large ornate spade' });
   });
 
   it('reports each contribution unjoined so the editor can attribute it', () => {
@@ -52,8 +52,6 @@ describe('composeCardRenderPrompt', () => {
       style: 'copperplate engraving, aged paper',
       layout: 'Full tarot card, framed border',
       subject: 'XVII · The Star: a kneeling figure',
-      cardNegative: 'text',
-      styleNegative: 'blurry',
     });
   });
 });

@@ -26,8 +26,12 @@ describe('useGallerySidecars', () => {
     // keystroke on a 79-card deck.
     rerender({ names: ['a.png'] });
     expect(getGalleryImages).toHaveBeenCalledTimes(1);
+    // …and a longer list asks only for what is not already held: a finished
+    // render appends one filename, and re-requesting the other 78 to learn it
+    // is the difference between one lookup and a whole-deck sweep per card.
     rerender({ names: ['a.png', 'b.png'] });
     await waitFor(() => expect(getGalleryImages).toHaveBeenCalledTimes(2));
+    expect(getGalleryImages).toHaveBeenLastCalledWith(['b.png'], { silent: true });
   });
 
   it('splices one freshly written record in without a refetch', async () => {
