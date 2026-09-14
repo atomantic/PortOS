@@ -26,6 +26,7 @@ import {
   Quote,
 } from 'lucide-react';
 import toast from '../ui/Toast';
+import TabPills from '../ui/TabPills';
 import ProseEditor from '../ui/ProseEditor';
 import Drawer from '../Drawer';
 import UnsavedChangesConfirm from '../ui/UnsavedChangesConfirm';
@@ -69,6 +70,10 @@ import { modKey } from '../../utils/platform';
 const ANALYSIS_KIND = { SCRIPT: 'script', CHARACTERS: 'characters', PLACES: 'places', OBJECTS: 'objects', EVALUATE: 'evaluate', FORMAT: 'format' };
 const DRAWER = { VERSIONS: 'versions', HISTORY: 'history', POLISH: 'polish', VOICE: 'voice' };
 const MOBILE_TAB = { WRITING: 'writing', STORYBOARD: 'storyboard' };
+const MOBILE_TABS = [
+  { id: MOBILE_TAB.WRITING, label: 'Writing', icon: PenLine },
+  { id: MOBILE_TAB.STORYBOARD, label: 'Storyboard', icon: Clapperboard },
+];
 
 // The three prose surfaces the header toggles between. Declared once so the
 // toggle group stays a map instead of three hand-copied buttons.
@@ -892,10 +897,17 @@ export default function WorkEditor({ work, onChange, onToggleExercise, exerciseO
           Review mode is a full-width surface with no storyboard sidebar, so the
           toggle is irrelevant there. */}
       {viewMode !== 'review' && (
-        <div className="lg:hidden flex border-b border-port-border bg-port-bg/40 shrink-0">
-          <MobileTab active={mobileTab === MOBILE_TAB.WRITING} onClick={() => setMobileTab(MOBILE_TAB.WRITING)} icon={PenLine} label="Writing" />
-          <MobileTab active={mobileTab === MOBILE_TAB.STORYBOARD} onClick={() => setMobileTab(MOBILE_TAB.STORYBOARD)} icon={Clapperboard} label="Storyboard" />
-        </div>
+        <TabPills
+          tabs={MOBILE_TABS}
+          activeTab={mobileTab}
+          onChange={setMobileTab}
+          variant="underline"
+          stretch
+          size="sm"
+          mobileCompact
+          ariaLabel="Writing or storyboard"
+          className="lg:hidden shrink-0"
+        />
       )}
 
       {/*
@@ -1163,15 +1175,3 @@ function AnalysisRunBanner({ kind, label, startedAt }) {
   );
 }
 
-function MobileTab({ active, onClick, icon: Icon, label }) {
-  return (
-    <button
-      onClick={onClick}
-      className={`flex-1 flex items-center justify-center gap-1.5 py-2 min-h-[44px] text-[12px] border-b-2 ${
-        active ? 'border-port-accent text-white' : 'border-transparent text-gray-500 hover:text-gray-300'
-      }`}
-    >
-      <Icon size={13} /> {label}
-    </button>
-  );
-}

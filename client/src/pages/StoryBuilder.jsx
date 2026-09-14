@@ -15,7 +15,7 @@ import StyleProbeImage from '../components/universe/StyleProbeImage';
 import ProviderModelSelector from '../components/ProviderModelSelector';
 import {
   Sparkles, Lock, Unlock, Check, ChevronRight, ChevronLeft, AlertTriangle,
-  Plus, RefreshCw, Loader2, ExternalLink, Wand2, Cloud, CloudOff,
+  Plus, RefreshCw, Loader2, ExternalLink, Wand2, Cloud, CloudOff, Lightbulb, FileInput,
 } from 'lucide-react';
 import toast from '../components/ui/Toast';
 import Banner from '../components/ui/Banner';
@@ -37,6 +37,7 @@ import { getCatalogType, payloadSnippet } from '../lib/catalogTypes';
 import { useCatalogTypes } from '../hooks/useCatalogTypes.jsx';
 import useDrawerTab from '../hooks/useDrawerTab';
 import useStoryImportIntake from '../hooks/useStoryImportIntake';
+import TabPills from '../components/ui/TabPills';
 
 // Bible fields the embedded arc step flushes before an ArcCanvas generate/verify.
 // The Story Builder edits these on their own steps (not inside the arc step), so
@@ -47,6 +48,10 @@ const ARC_FLUSH_FIELDS = ['name', 'logline', 'premise', 'styleNotes', 'issueCoun
 // Intake tabs on the index view. The active one lives in `?intake=` (via
 // useDrawerTab) rather than local state so it's shareable and reload-safe.
 const INTAKE_TABS = ['seed', 'import'];
+const INTAKE_TAB_ITEMS = [
+  { id: 'seed', label: 'Start from an idea', icon: Lightbulb },
+  { id: 'import', label: 'Import a finished work', icon: FileInput },
+];
 
 const CONTENT_TYPE_LABELS = {
   'short-story': 'Short story', novel: 'Novel', screenplay: 'Screenplay', 'comic-script': 'Comic script',
@@ -240,10 +245,6 @@ function StoryBuilderIndex() {
   // away the pasted manuscript and the minute-long analysis preview (#3904).
   const intake = useStoryImportIntake(onCreated);
 
-  const tabClass = (id) => `px-4 py-2 text-sm rounded-t border-b-2 ${
-    mode === id ? 'border-port-accent text-white' : 'border-transparent text-gray-400 hover:text-gray-200'
-  }`;
-
   return (
     // Wide two-column shell above lg: create form left, "Continue a story" list
     // right (mirrors the POST launcher redesign, #1986). Below lg the grid
@@ -263,10 +264,14 @@ function StoryBuilderIndex() {
 
       <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_22rem] gap-6 items-start">
       <section className="bg-port-card border border-port-border rounded-lg">
-        <div className="flex gap-1 border-b border-port-border px-2 pt-2">
-          <button onClick={() => setMode('seed')} className={tabClass('seed')}>Start from an idea</button>
-          <button onClick={() => setMode('import')} className={tabClass('import')}>Import a finished work</button>
-        </div>
+        <TabPills
+          tabs={INTAKE_TAB_ITEMS}
+          activeTab={mode}
+          onChange={setMode}
+          mobileCompact
+          ariaLabel="How to start"
+          className="px-2 pt-2"
+        />
 
         {mode === 'seed' ? (
           <div className="p-4 space-y-3">

@@ -57,7 +57,8 @@ vi.mock('./tabs/DatadogTab', () => ({ default: () => <div data-testid="datadog-t
 vi.mock('./tabs/UpdateTab', () => ({ default: () => null }));
 
 import * as api from '../../services/api';
-import AppDetailView from './AppDetailView';
+import AppDetailView, { APP_DETAIL_TAB_ICONS } from './AppDetailView';
+import { APP_DETAIL_TABS } from './constants';
 
 const APP = {
   id: 'app-1',
@@ -163,9 +164,9 @@ describe('AppDetailView managed-app feature tabs', () => {
     renderDetail();
 
     await screen.findByRole('heading', { name: 'Example App' });
-    expect(screen.queryByRole('button', { name: 'DataDog' })).toBeNull();
-    expect(screen.queryByRole('button', { name: 'JIRA' })).toBeNull();
-    expect(screen.queryByRole('button', { name: 'GSD' })).toBeNull();
+    expect(screen.queryByRole('tab', { name: 'DataDog' })).toBeNull();
+    expect(screen.queryByRole('tab', { name: 'JIRA' })).toBeNull();
+    expect(screen.queryByRole('tab', { name: 'GSD' })).toBeNull();
   });
 
   it('lets app overrides show or hide tabs independently of global settings', async () => {
@@ -182,9 +183,9 @@ describe('AppDetailView managed-app feature tabs', () => {
     renderDetail();
 
     await screen.findByRole('heading', { name: 'Example App' });
-    expect(screen.getByRole('button', { name: 'DataDog' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'JIRA' })).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'GSD' })).toBeNull();
+    expect(screen.getByRole('tab', { name: 'DataDog' })).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: 'JIRA' })).toBeInTheDocument();
+    expect(screen.queryByRole('tab', { name: 'GSD' })).toBeNull();
   });
 
   it('keeps a disabled feature tab reachable from a direct URL', async () => {
@@ -197,8 +198,14 @@ describe('AppDetailView managed-app feature tabs', () => {
     renderDetail('/apps/app-1/datadog');
 
     await screen.findByRole('heading', { name: 'Example App' });
-    expect(screen.queryByRole('button', { name: 'DataDog' })).toBeNull();
+    expect(screen.queryByRole('tab', { name: 'DataDog' })).toBeNull();
     expect(screen.getByTestId('datadog-tab')).toBeInTheDocument();
+  });
+
+  it('assigns a unique icon to every app-detail tab', () => {
+    const icons = APP_DETAIL_TABS.map((tab) => APP_DETAIL_TAB_ICONS[tab.id]);
+    expect(icons.every(Boolean)).toBe(true);
+    expect(new Set(icons).size).toBe(APP_DETAIL_TABS.length);
   });
 });
 

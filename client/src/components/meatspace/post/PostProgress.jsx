@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
-import { ArrowLeft, Flame, Trophy, Clock, Gauge } from 'lucide-react';
+import { ArrowLeft, Flame, Trophy, Clock, Gauge, TrendingUp, History } from 'lucide-react';
 import {
   LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid
 } from 'recharts';
@@ -10,6 +10,7 @@ import { formatDurationMin } from '../../../utils/formatters';
 import { DRILL_LABELS, DRILL_TO_DOMAIN, domainLabel } from './constants';
 import { streakGlyph } from '../../../lib/streakGlyph.js';
 import PostHistory from './PostHistory';
+import TabPills from '../../ui/TabPills';
 
 const RANGES = [
   { label: '7d', days: 7 },
@@ -69,8 +70,14 @@ export const PROGRESS_SUBROUTES = [
   { id: 'sessions', label: 'Sessions' },
 ];
 
+const PROGRESS_TABS = [
+  { id: 'trends', label: 'Trends', icon: TrendingUp },
+  { id: 'sessions', label: 'Sessions', icon: History },
+];
+
 export default function PostProgress({ subtab, onBack }) {
   const navigate = useNavigate();
+  const goToProgress = (id) => navigate(id === 'sessions' ? '/post/progress/sessions' : '/post/progress');
   const chartColors = useChartColors();
   const [progress, setProgress] = useState(null);
   const [range, setRange] = useState(90);
@@ -143,7 +150,7 @@ export default function PostProgress({ subtab, onBack }) {
   if (subtab === 'sessions') {
     return (
       <div className="space-y-4">
-        <ProgressTabs subtab="sessions" navigate={navigate} />
+        <ProgressTabs subtab="sessions" onChange={goToProgress} />
         <PostHistory onBack={onBack} />
       </div>
     );
@@ -182,7 +189,7 @@ export default function PostProgress({ subtab, onBack }) {
         </div>
       </div>
 
-      <ProgressTabs subtab={undefined} navigate={navigate} />
+      <ProgressTabs subtab={undefined} onChange={goToProgress} />
 
       {loaded && !hasAny && (
         <div className="bg-port-card border border-port-border rounded-lg text-center text-gray-500 py-12 text-sm">
@@ -470,28 +477,15 @@ const RETENTION_STATE_LABEL = {
   permanent: 'mastered permanently',
 };
 
-function ProgressTabs({ subtab, navigate }) {
-  const tabs = [
-    // Trends is the bare `/post/progress`, so it has no sub-route id.
-    { id: undefined, label: 'Trends', to: '/post/progress' },
-    ...PROGRESS_SUBROUTES.map(t => ({ ...t, to: `/post/progress/${t.id}` })),
-  ];
+function ProgressTabs({ subtab, onChange }) {
   return (
-    <div className="flex gap-1 border-b border-port-border">
-      {tabs.map(t => (
-        <button
-          key={t.label}
-          onClick={() => navigate(t.to)}
-          className={`px-4 py-2 text-sm transition-colors border-b-2 -mb-px ${
-            subtab === t.id
-              ? 'border-port-accent text-white'
-              : 'border-transparent text-gray-500 hover:text-white'
-          }`}
-        >
-          {t.label}
-        </button>
-      ))}
-    </div>
+    <TabPills
+      tabs={PROGRESS_TABS}
+      activeTab={subtab === 'sessions' ? 'sessions' : 'trends'}
+      onChange={onChange}
+      mobileCompact
+      ariaLabel="Progress sections"
+    />
   );
 }
 

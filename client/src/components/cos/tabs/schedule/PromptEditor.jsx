@@ -1,5 +1,15 @@
 import { useState, useEffect } from 'react';
+import {
+  Shield, BadgeCheck, Hammer, Layers, GitBranch, FileText, Sparkles, Bot,
+  Cpu, Workflow, Boxes, ScanSearch, ListChecks, PenLine, Clapperboard, Rocket,
+} from 'lucide-react';
 import { pipelineStages } from './scheduleConstants';
+import TabPills from '../../../ui/TabPills';
+
+const STAGE_ICONS = [
+  Shield, BadgeCheck, Hammer, Layers, GitBranch, FileText, Sparkles, Bot,
+  Cpu, Workflow, Boxes, ScanSearch, ListChecks, PenLine, Clapperboard, Rocket,
+];
 
 export default function PromptEditor({ config, promptValue, setPromptValue, editingPrompt, setEditingPrompt, handleSavePrompt, updating, activeApps }) {
   const stages = pipelineStages(config);
@@ -94,23 +104,23 @@ export default function PromptEditor({ config, promptValue, setPromptValue, edit
     <div>
       <span className="text-sm text-gray-400 block mb-2">Stage Prompts</span>
       <div className="border border-port-border rounded-lg overflow-hidden">
-        <div className="flex border-b border-port-border bg-port-card">
-          {stages.map((stage, i) => (
-            <button
-              key={i}
-              onClick={() => setActiveTab(i)}
-              className={`flex-1 px-3 py-2 text-xs font-medium transition-colors ${
-                activeTab === i
-                  ? 'text-port-accent-2 bg-port-accent-2/10 border-b-2 border-port-accent-2'
-                  : 'text-gray-400 hover:text-gray-300 hover:bg-port-border/30'
-              }`}
-            >
-              <span className="text-[10px] text-gray-500 mr-1">Stage {i + 1}</span>
-              {stage.name}
-              {stage.readOnly && <span className="ml-1 text-[10px] text-gray-500">(read-only)</span>}
-            </button>
-          ))}
-        </div>
+        <TabPills
+          tabs={stages.map((stage, i) => ({
+            id: String(i),
+            label: stage.name,
+            icon: STAGE_ICONS[i],
+            trailing: stage.readOnly
+              ? <span className="text-[10px] text-gray-500">(read-only)</span>
+              : undefined,
+          }))}
+          activeTab={String(activeTab)}
+          onChange={(id) => setActiveTab(Number(id))}
+          variant="underline"
+          stretch
+          size="sm"
+          mobileCompact
+          ariaLabel="Stage prompts"
+        />
         <div className="bg-port-bg px-3 py-2 text-xs text-gray-400 font-mono max-h-64 overflow-y-auto">
           <pre className="whitespace-pre-wrap break-words">{stagePrompts[activeTab] || 'No prompt configured'}</pre>
         </div>
