@@ -452,7 +452,9 @@ router.post('/generate', imageGenUploads, asyncHandler(async (req, res) => {
       }
     }
     const selected = mode === IMAGE_GEN_MODE.LOCAL ? selectLocalImageModel(params.modelId) : null;
-    const cloud = selected ? null : resolveCloudProviderConfig(settings, mode, { model: params.cloudModel });
+    const cloud = selected ? null : resolveCloudProviderConfig(settings, mode, {
+      model: params.cloudModel, modelIsShippedDefault: params.cloudModelIsShippedDefault,
+    });
     const model = selected
       ? { ...selected, loraCompatKey: loraCompatKey(selected) }
       : (cloud ? { id: cloud.modelId } : null);
@@ -592,7 +594,8 @@ router.post('/generate', imageGenUploads, asyncHandler(async (req, res) => {
     // finished filename and work identically for a federated render.
     const {
       mediaProviderPeerId: _peerId, mediaProviderEngine: _engine,
-      mode: _mode, cloudModel: _cloudModel, ...jobParams
+      mode: _mode, cloudModel: _cloudModel, cloudModelIsShippedDefault: _cloudModelProvenance,
+      ...jobParams
     } = params;
     // The prompt and model ride only inside the versioned marker: enqueueJob
     // normalizes any job carrying one into the downgrade-safe shape, so this
@@ -610,12 +613,15 @@ router.post('/generate', imageGenUploads, asyncHandler(async (req, res) => {
     }));
   }
 
-  // `cloudModel` is a dispatcher-level knob, not a provider param — the
-  // resolver folds it into the provider's own `model`, so drop the raw field
-  // before it rides into the persisted job params.
+  // `cloudModel` and its provenance flag are dispatcher-level knobs, not
+  // provider params — the resolver folds them into the provider's own `model`
+  // and `modelIsShippedDefault`, so drop the raw fields before they ride into
+  // the persisted job params.
   const cloudModel = params.cloudModel;
+  const modelIsShippedDefault = params.cloudModelIsShippedDefault;
   delete params.cloudModel;
-  const cloud = resolveCloudProviderConfig(settings, mode, { model: cloudModel });
+  delete params.cloudModelIsShippedDefault;
+  const cloud = resolveCloudProviderConfig(settings, mode, { model: cloudModel, modelIsShippedDefault });
   if (cloud) {
     // Reject up-front rather than enqueueing a doomed job — the cloud CLIs are
     // gated behind an explicit toggle each (not every Codex account has access
