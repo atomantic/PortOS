@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react';
-import { Link2, Loader2, Sparkles, Star, Trash2 } from 'lucide-react';
+import { Copy, Link2, Loader2, Sparkles, Star, Trash2 } from 'lucide-react';
 import Drawer from '../Drawer';
 import { composeCardRenderPrompt } from '../../lib/decks';
+import { copyToClipboard } from '../../lib/clipboard';
 
 const INPUT_CLASS = 'w-full bg-port-bg border border-port-border rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-port-accent';
 
@@ -62,11 +63,27 @@ export default function DeckCardDrawer({ deck, card, open, inFlight, onClose, on
           </button>
         </div>
 
-        <details className="rounded border border-port-border bg-port-bg/40 p-2">
-          <summary className="text-xs text-gray-400 cursor-pointer">Composed render prompt</summary>
-          <p className="mt-2 text-xs text-gray-300 whitespace-pre-wrap">{composed.prompt}</p>
-          {composed.negativePrompt ? <p className="mt-2 text-xs text-port-error/80">Negative: {composed.negativePrompt}</p> : null}
-        </details>
+        <section className="rounded border border-port-border bg-port-bg/40 p-3 space-y-3">
+          <div className="flex items-center justify-between gap-2">
+            <h3 className="text-xs text-gray-400">What the renderer receives</h3>
+            <button
+              type="button"
+              onClick={() => copyToClipboard(composed.prompt, 'Render prompt')}
+              className="inline-flex min-h-[32px] items-center gap-1 rounded px-2 text-xs text-gray-400 hover:text-white"
+              title="Copy the whole composed prompt"
+            >
+              <Copy size={12} aria-hidden="true" /> Copy
+            </button>
+          </div>
+          <PromptPart label="Deck style" hint="from the style guide" value={composed.parts.style} />
+          <PromptPart label="Layout" hint="shared by every card" value={composed.parts.layout} />
+          <PromptPart label="Subject" hint="this card" value={composed.parts.subject} />
+          <PromptPart label="Negative" value={composed.negativePrompt} tone="error" />
+          <details>
+            <summary className="text-xs text-gray-400 cursor-pointer">Full composed prompt</summary>
+            <p className="mt-2 text-xs text-gray-300 whitespace-pre-wrap">{composed.prompt}</p>
+          </details>
+        </section>
 
         <section>
           <h3 className="text-xs text-gray-400 mb-2">Renders ({refs.length})</h3>
@@ -114,5 +131,23 @@ export default function DeckCardDrawer({ deck, card, open, inFlight, onClose, on
         ) : null}
       </div>
     </Drawer>
+  );
+}
+
+/**
+ * One read-only clause of the composed render prompt. Empty clauses still
+ * render their label — "Deck style: —" is the answer to "why does my card
+ * look nothing like the deck?", and hiding the row hides the answer.
+ */
+function PromptPart({ label, hint, value, tone }) {
+  return (
+    <div>
+      <p className="text-[11px] uppercase tracking-wide text-gray-500">
+        {label}{hint ? <span className="normal-case tracking-normal text-gray-600"> · {hint}</span> : null}
+      </p>
+      <p className={`text-xs whitespace-pre-wrap ${value ? (tone === 'error' ? 'text-port-error/80' : 'text-gray-300') : 'text-gray-600'}`}>
+        {value || '—'}
+      </p>
+    </div>
   );
 }

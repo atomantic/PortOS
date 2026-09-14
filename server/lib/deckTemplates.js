@@ -198,17 +198,24 @@ const trimmed = (v) => (typeof v === 'string' ? v.trim() : '');
  * embrace influences lead (diffusion models weight early tokens heaviest),
  * then the shared layout clause, then the card's own subject. The avoid list
  * becomes the negative prompt, after any per-card negative.
+ *
+ * `parts` carries the same clauses unjoined, so the card editor can show
+ * which contribution came from the deck (style, layout, avoid list) and which
+ * from the card itself — a composed blob alone leaves the user unable to tell
+ * why a render picked up wording they never typed.
  */
 export function composeCardRenderPrompt(deck, card) {
   // A deck carries the same `influences` shape a universe does, so the
   // universe's visual-style projection is the one definition of "what the
   // embrace/avoid lists contribute to an image prompt".
-  const embrace = buildVisualStyleClause(deck);
+  const style = buildVisualStyleClause(deck);
   const avoid = universeVisualStyleTokens(deck).avoid.join(', ');
   const layout = trimmed(deck?.layoutPrompt);
   const subject = [trimmed(card?.name), trimmed(card?.prompt)].filter(Boolean).join(': ');
+  const cardNegative = trimmed(card?.negativePrompt);
   const body = [layout, subject].filter(Boolean).join('. ');
-  return composeStyledPrompt(body, trimmed(card?.negativePrompt), { prompt: embrace, negativePrompt: avoid });
+  const composed = composeStyledPrompt(body, cardNegative, { prompt: style, negativePrompt: avoid });
+  return { ...composed, parts: { style, layout, subject, cardNegative, styleNegative: avoid } };
 }
 
 const IN_FLIGHT_RENDER = new Set(['queued', 'running']);

@@ -36,6 +36,7 @@ import useMounted from '../hooks/useMounted';
 import useUrlParams from '../hooks/useUrlParams';
 import usePreviewRoute from '../hooks/usePreviewRoute';
 import useFieldDraft from '../hooks/useFieldDraft';
+import useGallerySidecars from '../hooks/useGallerySidecars';
 import { DECK_KIND_LABELS, cardInFlightJobId, deckCompletion } from '../lib/decks';
 import {
   deleteDeck, generateDeckPrompts, getDeck, listUniverseSummaries, removeDeckSample,
@@ -111,9 +112,30 @@ function DeckEditor({ id }) {
     () => (deck && cardParam ? deck.cards.find((c) => c.id === cardParam) || null : null),
     [deck, cardParam],
   );
+  const cardImageRefs = useMemo(
+    () => (deck ? deck.cards.flatMap((c) => c.imageRefs) : []),
+    [deck],
+  );
+  // The card's own `prompt` is only the subject line. What the renderer was
+  // actually sent is the composed prompt — deck style clause, layout clause,
+  // titled subject, merged negatives — and that is what the sidecar recorded,
+  // so hydrate from it and let the lightbox show the real thing. The card
+  // prompt stays the fallback for a render whose sidecar is missing (a legacy
+  // deck render, or a refetch that has not landed yet). A finished render
+  // appends its filename to the card, which re-keys the lookup on its own —
+  // the sidecar is on disk before the server hook attaches the image.
+  const { byFilename: sidecars } = useGallerySidecars(cardImageRefs);
   const previewItems = useMemo(() => (deck
-    ? deck.cards.flatMap((c) => c.imageRefs.map((filename) => normalizeImage({ filename, path: `/data/images/${filename}`, prompt: c.prompt })))
-    : []), [deck]);
+    ? deck.cards.flatMap((c) => c.imageRefs.map((filename) => {
+      const meta = sidecars.get(filename) || null;
+      return normalizeImage({
+        ...(meta || {}),
+        filename,
+        path: `/data/images/${filename}`,
+        prompt: meta?.prompt || c.prompt,
+      });
+    }))
+    : []), [deck, sidecars]);
   const [preview, setPreview] = usePreviewRoute(previewItems);
   const previewFilename = (filename) => {
     const item = previewItems.find((i) => i.filename === filename);

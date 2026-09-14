@@ -1,7 +1,7 @@
-import { useState, useEffect, useMemo, useCallback } from 'react';
-import { getGalleryImages } from '../services/apiImageVideo';
+import { useState, useMemo, useCallback } from 'react';
 import { descriptorForCanonEntry } from '../lib/canonPrompt';
 import { listSheetPointers } from '../lib/sheetPointers';
+import useGallerySidecars from './useGallerySidecars';
 import usePreviewRoute from './usePreviewRoute';
 import useMediaPreviewActions from './useMediaPreviewActions';
 import { useMediaAnnotations } from './useMediaAnnotations';
@@ -29,16 +29,12 @@ export default function useUniverseGallery({ draft, runsLength }) {
   // modelId, width, height, seed, etc.). Hydrates `previewItems` with the
   // ACTUAL prompt that was used to render the image — without this the
   // modal would only see the variation's label, and Refine Prompt / Remix
-  // / Send to Video would all open with empty fields. Loaded once per
-  // mount via bounded lookup of only the draft's referenced filenames
-  // and refreshed whenever a render completes (universe `runs` advances).
-  const [galleryByFilename, setGalleryByFilename] = useState(() => new Map());
-  // Bumped on every job completion so the gallery-metadata fetch below
-  // re-runs once the new sidecar exists on disk. Keying the fetch only on
-  // `runs.length` was insufficient: that advances when a run is queued or
-  // loaded, NOT when one of its jobs completes — so a freshly rendered
-  // thumb would open the lightbox with label-only metadata until a full
-  // page reload.
+  // / Send to Video would all open with empty fields.
+  //
+  // The refresh key carries two signals: `runsLength` advances when a run is
+  // queued or loaded, and `galleryRefreshKey` is bumped on every job
+  // completion — keying on runs alone left a freshly rendered thumb opening
+  // with label-only metadata until a full page reload.
   const [galleryRefreshKey, setGalleryRefreshKey] = useState(0);
   const bumpGalleryRefresh = useCallback(() => setGalleryRefreshKey((k) => k + 1), []);
   const galleryFilenames = useMemo(() => {
@@ -49,22 +45,9 @@ export default function useUniverseGallery({ draft, runsLength }) {
     for (const entry of [...(draft?.compositeSheets || []), ...(draft?.characters || []), ...(draft?.places || []), ...(draft?.objects || [])]) {
       for (const filename of entry.imageRefs || []) refs.add(filename);
     }
-    return JSON.stringify([...refs].sort());
+    return [...refs];
   }, [draft]);
-  useEffect(() => {
-    let cancelled = false;
-    getGalleryImages(JSON.parse(galleryFilenames), { silent: true }).then((list) => {
-      if (cancelled) return;
-      const map = new Map();
-      for (const item of Array.isArray(list) ? list : []) {
-        if (item?.filename) map.set(item.filename, item);
-      }
-      setGalleryByFilename(map);
-    }).catch(() => { /* non-fatal; modal falls back to filename-only display */ });
-    return () => { cancelled = true; };
-    // `runsLength` covers initial-load and queue-time; `galleryRefreshKey`
-    // covers per-job completion (see bumpGalleryRefresh callers).
-  }, [runsLength, galleryRefreshKey, galleryFilenames]);
+  const { byFilename: galleryByFilename, setSidecar } = useGallerySidecars(galleryFilenames, `${runsLength}:${galleryRefreshKey}`);
   const { annotations, updateAnnotation } = useMediaAnnotations();
   const previewItems = useMemo(() => {
     const out = [];
@@ -173,16 +156,7 @@ export default function useUniverseGallery({ draft, runsLength }) {
   // as the History grid + Image Gen page. `onCleanComplete` splices the
   // cleaned image into the local gallery map so the next preview open
   // shows it immediately — no full refetch needed.
-  const previewActions = useMediaPreviewActions({
-    onCleanComplete: useCallback((cleaned) => {
-      if (!cleaned?.filename) return;
-      setGalleryByFilename((prev) => {
-        const next = new Map(prev);
-        next.set(cleaned.filename, cleaned);
-        return next;
-      });
-    }, []),
-  });
+  const previewActions = useMediaPreviewActions({ onCleanComplete: setSidecar });
   // Generic filename → preview opener used by every clickable thumb on the
   // page (variation grids, composite sheets, canon entries, character
   // reference sheets). `opts.isSheet` forces a key match against the
