@@ -12,6 +12,14 @@ vi.mock('fs/promises', async (importOriginal) => ({
   readFile: (...args) => readFileMock(...args),
 }));
 
+// execPm2's missing-binary guard is tested by faking existsSync rather than
+// actually deleting PM2_BIN, which would break every other test in this file.
+const existsSyncMock = vi.hoisted(() => vi.fn());
+vi.mock('fs', async (importOriginal) => {
+  const actual = await importOriginal();
+  return { ...actual, existsSync: (...args) => existsSyncMock(...args) };
+});
+
 // shared.js resolves the PM2 binary at import time, and Node walks node_modules
 // upward from `autofixer/` — so it needs the ROOT install. CI installs only
 // `server/node_modules` (`npm ci --prefix server`), which is never on that path,
@@ -29,6 +37,11 @@ const pm2Installed = (() => {
 const describeShared = pm2Installed ? describe : describe.skip;
 const shared = pm2Installed ? await import('./shared.js') : {};
 
+// Default existsSync to the real filesystem; individual tests override with
+// mockReturnValueOnce to simulate a missing PM2_BIN.
+const actualFs = await vi.importActual('fs');
+existsSyncMock.mockImplementation((...args) => actualFs.existsSync(...args));
+
 const AUTOFIXER_SRC_DIR = dirname(fileURLToPath(import.meta.url));
 
 describeShared('autofixer/shared — PM2 binary resolution', () => {
@@ -38,6 +51,19 @@ describeShared('autofixer/shared — PM2 binary resolution', () => {
   it('resolves the JS entry point (not pm2.cmd) and it exists on disk', () => {
     expect(shared.PM2_BIN.endsWith(join('bin', 'pm2'))).toBe(true);
     expect(existsSync(shared.PM2_BIN)).toBe(true);
+  });
+});
+
+describeShared('autofixer/shared — execPm2', () => {
+  // A dangling symlink (e.g. left by a reaped worktree install) makes PM2_BIN
+  // not exist on disk without require.resolve('pm2/package.json') ever
+  // noticing, since that only resolves the package dir. Simulating that with
+  // existsSync proves execPm2 rejects with a clean one-line message instead
+  // of spawning `node <missing-file>` and surfacing an opaque multi-line
+  // MODULE_NOT_FOUND dump.
+  it('rejects with a one-line message when PM2_BIN is missing, without spawning', async () => {
+    existsSyncMock.mockReturnValueOnce(false);
+    await expect(shared.execPm2(['jlist'])).rejects.toThrow(`PM2 binary not found at ${shared.PM2_BIN} — run "npm install" in the repo root`);
   });
 });
 
