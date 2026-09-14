@@ -15,14 +15,15 @@ import {
   persistentMindTaskRequestSchema,
 } from '../lib/persistentMindCapabilities.js';
 import { PERSISTENT_MIND_ID } from '../lib/persistentMindTrajectory.js';
-import { canonicalStringify } from '../lib/objects.js';
+import { boundedByJsonChars, canonicalStringify } from '../lib/objects.js';
 import { antigravityBaseModels, effortLevelsForProvider, filterSelectableModels } from '../lib/providerModels.js';
 import { PR_COMPLETIONS } from '../lib/prDisposition.js';
 import { sha256Text } from '../lib/fileUtils.js';
+import { boundedErrorMessage } from '../lib/errorHandler.js';
 import { MANAGED_ASSESSMENT_BACKENDS, localRuntimeKind } from '../lib/localProviderRuntime.js';
 import { PORTOS_APP_ID } from '../lib/appIdentity.js';
-import { resolveAppWorkTracker } from '../lib/workTracker.js';
 import { getActiveApps, getAppWorkTracker } from './apps.js';
+import { readPersistentMindManagedApps } from './persistentMindManagedApps.js';
 import { loadState } from './cosState.js';
 import { addTask, firstLine, getCosTasks, getTaskById } from './cosTaskStore.js';
 import { getProviderPrerequisiteReadinessMap } from './providerPrerequisites.js';
@@ -33,7 +34,6 @@ import {
   readPersistentMindWorkspacePreflight,
 } from './persistentMindWorkspacePreflight.js';
 
-const MAX_CATALOG_APPS = 50;
 const MAX_CATALOG_PROVIDERS = 50;
 const MAX_CATALOG_MODELS = 60;
 const MAX_CATALOG_PROMPT_CHARS = 16_000;
@@ -42,10 +42,10 @@ const MIND_TASK_ID_PREFIX = 'sys-mind-';
 const MAX_INVENTORY_TASKS = 25;
 const MAX_INVENTORY_PROMPT_CHARS = 4_000;
 const MAX_INVENTORY_DESCRIPTION_CHARS = 160;
-const APP_TRACKER_CACHE_TTL_MS = 30_000;
 const ISSUE_TRACKERS = new Set(['github', 'gitlab']);
-const appTrackerCache = new Map();
 
+// The queue path still walks raw app records; the catalog path gets its apps
+// pre-filtered from the shared managed-app roster.
 const isRunnableApp = (app) => typeof app?.repoPath === 'string' && app.repoPath.trim().length > 0;
 const isRunnableAgentProvider = (provider) => provider?.enabled !== false
   && isProcessProvider(provider);
@@ -146,46 +146,31 @@ const providerCatalogEntry = async (provider, capabilities) => {
   };
 };
 
-const catalogTrackerFor = (app) => {
-  const key = `${app.id}\0${app.repoPath}\0${app.workTracker || 'auto'}`;
-  const cached = appTrackerCache.get(key);
-  if (cached && cached.expiresAt > Date.now()) return cached.promise;
-  const promise = resolveAppWorkTracker(app);
-  appTrackerCache.set(key, { expiresAt: Date.now() + APP_TRACKER_CACHE_TTL_MS, promise });
-  return promise;
-};
-
-const appCatalogEntry = async (app) => {
-  const tracker = await catalogTrackerFor(app);
-  return {
-    id: app.id,
-    name: String(app.name || app.id).slice(0, 100),
-    planOnly: ISSUE_TRACKERS.has(tracker?.resolved),
-    // Only the baseline entry carries the flag, so the prompt catalog stays
-    // small and the mind has one unambiguous answer to "which repo is mine".
-    ...(app.id === PORTOS_APP_ID ? { self: true } : {}),
-  };
-};
+const appCatalogEntry = (app) => ({
+  id: app.id,
+  name: app.name,
+  planOnly: app.planOnly,
+  // Only the baseline entry carries the flag, so the prompt catalog stays
+  // small and the mind has one unambiguous answer to "which repo is mine".
+  ...(app.id === PORTOS_APP_ID ? { self: true } : {}),
+});
 
 export async function readPersistentMindTaskCatalog({ allowedAppIds, includeAllApps = false } = {}) {
-  const [apps, providers, root] = await Promise.all([getActiveApps(), listProviders(), loadState()]);
+  const [managedApps, providers, root] = await Promise.all([
+    readPersistentMindManagedApps({ allowedAppIds }),
+    listProviders(),
+    loadState(),
+  ]);
   const capabilities = normalizePersistentMindCapabilities(root.config?.persistentMindCapabilities);
-  const effectiveAllowedAppIds = Array.isArray(allowedAppIds) ? allowedAppIds : capabilities.allowedAppIds;
-  const runnableApps = apps
-    .filter((app) => isRunnableApp(app) && typeof app?.id === 'string' && app.id
-      && app.id.length <= PERSISTENT_MIND_TASK_LIMITS.appIdChars)
-    .slice(0, MAX_CATALOG_APPS);
   const candidates = boundedProviderCandidates(providers);
   const readiness = await getProviderPrerequisiteReadinessMap(providers, {
     candidates,
     deferCwdDependent: true,
   });
-  const appCatalog = await Promise.all(runnableApps.map(appCatalogEntry));
-  const allowed = Array.isArray(effectiveAllowedAppIds) ? new Set(effectiveAllowedAppIds) : null;
   return {
     // The tools settings page needs to see revoked apps so it can restore them;
     // the model-facing catalog remains narrowed to the granted set.
-    apps: includeAllApps || !allowed ? appCatalog : appCatalog.filter((app) => allowed.has(app.id)),
+    apps: (includeAllApps ? managedApps : managedApps.filter((app) => app.granted)).map(appCatalogEntry),
     providers: (await Promise.all(candidates
       .filter((provider) => readiness[provider.id]?.status === 'ready')
       .map((provider) => providerCatalogEntry(provider, capabilities))))
@@ -209,13 +194,7 @@ const boundedPromptCatalog = (catalog) => {
       unknownReasonCodes: boundedReadinessReasonCodes(catalog?.providerReadiness?.unknownReasonCodes),
     },
   };
-  for (const app of Array.isArray(catalog?.apps) ? catalog.apps : []) {
-    bounded.apps.push(app);
-    if (JSON.stringify({ apps: bounded.apps }).length > MAX_CATALOG_APP_PROMPT_CHARS) {
-      bounded.apps.pop();
-      break;
-    }
-  }
+  bounded.apps = boundedByJsonChars(catalog?.apps, MAX_CATALOG_APP_PROMPT_CHARS, (apps) => ({ apps }));
   for (const provider of Array.isArray(catalog?.providers) ? catalog.providers : []) {
     const kept = { ...provider, models: [] };
     bounded.providers.push(kept);
@@ -223,13 +202,12 @@ const boundedPromptCatalog = (catalog) => {
       bounded.providers.pop();
       break;
     }
-    for (const model of Array.isArray(provider.models) ? provider.models : []) {
-      kept.models.push(model);
-      if (JSON.stringify(bounded).length > MAX_CATALOG_PROMPT_CHARS) {
-        kept.models.pop();
-        break;
-      }
-    }
+    // Measured through `bounded`, so each model counts against the whole
+    // catalog's budget rather than its own provider's slice.
+    kept.models = boundedByJsonChars(provider.models, MAX_CATALOG_PROMPT_CHARS, (models) => {
+      kept.models = models;
+      return bounded;
+    });
   }
   return bounded;
 };
@@ -262,17 +240,7 @@ export async function readPersistentMindTaskInventory() {
     .filter((entry) => entry.id && entry.description);
 }
 
-const boundedPromptInventory = (inventory) => {
-  const bounded = [];
-  for (const entry of Array.isArray(inventory) ? inventory : []) {
-    bounded.push(entry);
-    if (JSON.stringify(bounded).length > MAX_INVENTORY_PROMPT_CHARS) {
-      bounded.pop();
-      break;
-    }
-  }
-  return bounded;
-};
+const boundedPromptInventory = (inventory) => boundedByJsonChars(inventory, MAX_INVENTORY_PROMPT_CHARS);
 
 export function buildPersistentMindTaskCapabilityPrompt({ enabled, catalog = { apps: [], providers: [] }, inventory = [] } = {}) {
   if (!enabled) {
@@ -325,7 +293,7 @@ const taskIdFor = (wakeId, fingerprint) => (
   `${MIND_TASK_ID_PREFIX}${sha256Text(`${PERSISTENT_MIND_ID}:${wakeId}:${fingerprint}`).slice(0, 24)}`
 );
 
-const boundedError = (error) => String(error?.message || error || 'Task creation failed').slice(0, 300);
+const boundedError = (error) => boundedErrorMessage(error, 'Task creation failed');
 
 const readinessError = (providerId, verdict) => {
   const reasonCodes = (verdict?.reasonCodes || []).slice(0, 5).join(', ') || 'prerequisites';

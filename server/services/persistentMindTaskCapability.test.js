@@ -12,7 +12,7 @@ const mocks = vi.hoisted(() => ({
   addTask: vi.fn(),
   getTaskById: vi.fn(),
   getAppWorkTracker: vi.fn(),
-  resolveAppWorkTracker: vi.fn(),
+  resolveAppForgeTarget: vi.fn(),
   getProviderPrerequisiteReadinessMap: vi.fn(),
   listManagedBackendModels: vi.fn(),
   workspacePreflight: vi.fn(),
@@ -38,7 +38,7 @@ vi.mock('./providerPrerequisites.js', () => ({
   getProviderPrerequisiteReadinessMap: (...args) => mocks.getProviderPrerequisiteReadinessMap(...args),
 }));
 vi.mock('../lib/workTracker.js', () => ({
-  resolveAppWorkTracker: (...args) => mocks.resolveAppWorkTracker(...args),
+  resolveAppForgeTarget: (...args) => mocks.resolveAppForgeTarget(...args),
 }));
 vi.mock('./persistentMindWorkspacePreflight.js', () => ({
   readPersistentMindWorkspacePreflight: (...args) => mocks.workspacePreflight(...args),
@@ -46,6 +46,7 @@ vi.mock('./persistentMindWorkspacePreflight.js', () => ({
 }));
 
 const { PORTOS_APP_ID } = await import('../lib/appIdentity.js');
+const managedApps = await import('./persistentMindManagedApps.js');
 
 const {
   buildPersistentMindTaskCapabilityPrompt,
@@ -77,7 +78,10 @@ beforeEach(() => {
   mocks.existing = null;
   mocks.cosTasks = [];
   mocks.getAppWorkTracker.mockResolvedValue({ resolved: 'plan' });
-  mocks.resolveAppWorkTracker.mockResolvedValue({ resolved: 'plan' });
+  mocks.resolveAppForgeTarget.mockResolvedValue({ tracker: 'plan', target: null });
+  // The roster caches its forge resolution for 30s, which would otherwise carry
+  // one test's tracker into the next.
+  managedApps.__testing.resolveCache.clear();
   mocks.getTaskById.mockImplementation(async () => mocks.existing);
   mocks.addTask.mockResolvedValue({ id: 'sys-mind-stable', status: 'pending', autoApproved: true });
   mocks.listManagedBackendModels.mockResolvedValue({ models: null, error: 'no daemon in tests' });
@@ -325,7 +329,7 @@ describe('persistent mind CoS-task capability', () => {
     await readPersistentMindTaskCatalog();
     await readPersistentMindTaskCatalog();
 
-    expect(mocks.resolveAppWorkTracker).toHaveBeenCalledTimes(1);
+    expect(mocks.resolveAppForgeTarget).toHaveBeenCalledTimes(1);
   });
 
   it('queues an auto-approved isolated task with the chosen run and PR policy', async () => {

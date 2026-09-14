@@ -18,8 +18,9 @@ The current source contains:
   for the lifetime of the server process.
 - A Socket.IO inventory derived from server and client call sites on first use,
   then cached the same way.
-- 22 provider-neutral semantic tools: one `cos.create-task` tool and 21
-  semantic adapters inherited from the voice registry.
+- 24 provider-neutral semantic tools: one `cos.create-task` tool, the
+  `issues.list` / `issues.file` forge pair, and 21 semantic adapters
+  inherited from the voice registry.
 - Five read-only context tools on the Agent Tools MCP transport. The MCP
   transport may additionally advertise the 21 semantic adapters and eligible
   machine-local saved read recipes when their independent grants are enabled.
@@ -151,10 +152,23 @@ is authoritative for descriptions and JSON Schema.
 | `catalog.search` | `catalog_lookup` | `query`; optional `type`, `limit` | read |
 
 All 21 entries are scope-eligible for `agent`, `ui`, and `voice`; the
-Persistent Mind `mind` scope additionally includes `cos.create-task`. The
-task tool is not in the Agent MCP catalog. It is a Persistent Mind-only
-capability and validates its app, provider, model, effort, mode, required
-checks, tracker, readiness, and landing policy before queueing.
+Persistent Mind `mind` scope additionally includes `cos.create-task`,
+`issues.list`, and `issues.file`. None of the three is in the Agent MCP
+catalog. The task tool validates its app, provider, model, effort, mode,
+required checks, tracker, readiness, and landing policy before queueing.
+
+### Forge issues
+
+`issues.list` and `issues.file` are gated on the separate default-off
+`fileIssues` grant and are the queueing lane for an install with no coding
+agent attached. Both re-check the grant after inference and accept only a
+managed app that is in the mind's shared `allowedAppIds` allowlist AND whose
+resolved work tracker is GitHub or GitLab. `issues.file` requires both
+dispatch axes (`model`, `effort`), applies the `persistent-mind` and
+`planner:<model>` attribution labels, accepts only a closed category-label
+vocabulary, and refuses to file when the tracker could not be read — an
+unreadable tracker never reads as an empty backlog. Editing, closing,
+commenting on, assigning, and relabeling an existing issue are out of scope.
 
 ### Saved read recipes
 
@@ -262,7 +276,7 @@ REST/OpenAPI route inventory ──> discovery only; raw routes are never tools
 
 | Caller | Server-derived authority | Default | Allowed mutation path |
 |---|---|---|---|
-| Persistent Mind | `scope: mind`, persisted capability grant | off | `cos.create-task`, semantic writes when separately granted |
+| Persistent Mind | `scope: mind`, persisted capability grant | off | `cos.create-task`, `issues.file`, semantic writes when separately granted |
 | Agent MCP | `scope: agent`, Agent Tools action and saved-recipe grants | off | semantic writes when separately granted; saved recipes can orchestrate only granted agent-scope reads |
 | HTTP registry | `scope: ui`, PortOS auth context | reads may be anonymous on a passwordless install | writes require an authenticated PortOS session |
 | Voice adapter | existing voice pipeline context | existing voice policy | existing voice-side confirmation/pipeline controls |
@@ -278,7 +292,8 @@ exposable merely because they appear in the internal OpenAPI inventory.
 1. **Resolved documentation drift.** The prior unified spec said 2,066 HTTP
    operations, 23 Persistent Mind tools, 22 semantic tools, and a `cursor`
    catalog query. The current generated inventory is 2,069 operations; the
-   runtime registry is 22 tools total (21 semantic plus `cos.create-task`),
+   runtime registry is 24 tools total (21 semantic plus `cos.create-task`,
+   `issues.list`, and `issues.file`),
    and the implemented catalog query is `scope`, `intent`, and `format`.
    The point-in-time spec's implemented-foundation text is corrected in this
    PR.

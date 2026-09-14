@@ -32,6 +32,7 @@ const response = (overrides = {}) => ({
   }],
   boundaries: ['No arbitrary shell or file-system access'],
   taskCatalog: null,
+  managedApps: null,
   ...overrides,
 });
 
@@ -57,7 +58,7 @@ describe('PersistentMindTools', () => {
     expect(screen.getByRole('button', { name: 'New recipe' })).toBeEnabled();
     await user.click(grant);
     await waitFor(() => expect(api.updateCosConfig).toHaveBeenCalledWith({
-      persistentMindCapabilities: expect.objectContaining({ schemaVersion: 9, manageToolRecipes: true, readPortos: false }),
+      persistentMindCapabilities: expect.objectContaining({ schemaVersion: 10, manageToolRecipes: true, readPortos: false }),
     }, { silent: true }));
     await user.click(screen.getByRole('checkbox', { name: 'Allow bounded PortOS reads' }));
     await waitFor(() => expect(api.updateCosConfig).toHaveBeenLastCalledWith({
@@ -82,7 +83,7 @@ describe('PersistentMindTools', () => {
     expect(toggle).not.toBeChecked();
     await userEvent.setup().click(toggle);
     await waitFor(() => expect(api.updateCosConfig).toHaveBeenCalledWith({
-      persistentMindCapabilities: expect.objectContaining({ schemaVersion: 9, visitEidoversePeers: true, manageEidoverse: false }),
+      persistentMindCapabilities: expect.objectContaining({ schemaVersion: 10, visitEidoversePeers: true, manageEidoverse: false }),
     }, { silent: true }));
   });
 
@@ -102,10 +103,8 @@ describe('PersistentMindTools', () => {
       .mockResolvedValueOnce(response({
         capabilities: { schemaVersion: 3, createTasks: true, manageMind: false, readPortos: false, writePortos: false },
         tools: [{ ...response().tools[0], granted: true }],
-        taskCatalog: {
-          apps: [{ id: 'example-app', name: 'Example App', planOnly: true }],
-          providers: [{ id: 'codex', name: 'Codex', type: 'cli', models: [{ id: 'gpt-5', efforts: ['low', 'high'] }] }],
-        },
+        taskCatalog: { providers: [{ id: 'codex', name: 'Codex', type: 'cli', models: [{ id: 'gpt-5', efforts: ['low', 'high'] }] }] },
+        managedApps: [{ id: 'example-app', name: 'Example App', planOnly: true, forge: 'github', granted: true }],
       }));
     renderPage();
 
@@ -113,7 +112,7 @@ describe('PersistentMindTools', () => {
     await user.click(toggle);
 
     await waitFor(() => expect(api.updateCosConfig).toHaveBeenCalledWith(
-      { persistentMindCapabilities: { schemaVersion: 9, createTasks: true, manageMind: false, manageToolRecipes: false, manageEidoverse: false, visitEidoversePeers: false, callUser: false, adjustLocalContext: false, readPortos: false, writePortos: false, taskModelAllowlist: [] } },
+      { persistentMindCapabilities: { schemaVersion: 10, createTasks: true, fileIssues: false, manageMind: false, manageToolRecipes: false, manageEidoverse: false, visitEidoversePeers: false, callUser: false, adjustLocalContext: false, readPortos: false, writePortos: false, taskModelAllowlist: [] } },
       { silent: true },
     ));
     expect(await screen.findByText(/persistent-mind capabilities granted/)).toHaveTextContent('1 of 1');
@@ -133,8 +132,9 @@ describe('PersistentMindTools', () => {
 
     await waitFor(() => expect(api.updateCosConfig).toHaveBeenCalledWith(
       { persistentMindCapabilities: {
-        schemaVersion: 9,
+        schemaVersion: 10,
         createTasks: false,
+        fileIssues: false,
         manageMind: true,
         manageToolRecipes: false,
         manageEidoverse: false,
@@ -155,13 +155,11 @@ describe('PersistentMindTools', () => {
     api.getPersistentMindTools.mockResolvedValueOnce(response({
       capabilities: { schemaVersion: 3, createTasks: true, manageMind: false, readPortos: false, writePortos: false },
       tools: [{ ...response().tools[0], granted: true }],
-      taskCatalog: {
-        apps: [
-          { id: 'example-app', name: 'Example App', planOnly: false, granted: true },
-          { id: 'second-app', name: 'Second App', planOnly: true, granted: true },
-        ],
-        providers: [],
-      },
+      taskCatalog: { providers: [] },
+      managedApps: [
+        { id: 'example-app', name: 'Example App', planOnly: false, forge: null, granted: true },
+        { id: 'second-app', name: 'Second App', planOnly: true, forge: 'github', granted: true },
+      ],
     }));
     renderPage();
 
@@ -171,8 +169,9 @@ describe('PersistentMindTools', () => {
 
     await waitFor(() => expect(api.updateCosConfig).toHaveBeenCalledWith(
       { persistentMindCapabilities: {
-        schemaVersion: 9,
+        schemaVersion: 10,
         createTasks: true,
+        fileIssues: false,
         manageMind: false,
         manageToolRecipes: false,
         manageEidoverse: false,
@@ -210,11 +209,45 @@ describe('PersistentMindTools', () => {
     resolveCatalog(response({
       capabilities: { schemaVersion: 3, createTasks: true, manageMind: false, readPortos: false, writePortos: false },
       tools: [{ ...response().tools[0], granted: true }],
-      taskCatalog: { apps: [{ id: 'stale-app', name: 'Stale App', planOnly: false }], providers: [] },
+      taskCatalog: { providers: [] },
+      managedApps: [{ id: 'stale-app', name: 'Stale App', planOnly: false, forge: null, granted: true }],
     }));
 
     await waitFor(() => expect(toggle).not.toBeChecked());
     expect(screen.queryByText('Available task filing choices')).not.toBeInTheDocument();
+  });
+
+  it('grants issue filing independently and scopes it with the shared managed-app roster', async () => {
+    const user = userEvent.setup();
+    api.getPersistentMindTools
+      .mockResolvedValueOnce(response())
+      .mockResolvedValueOnce(response({
+        capabilities: { schemaVersion: 10, createTasks: false, fileIssues: true },
+        // The roster carries the PLAN.md app too, so narrowing the allowlist
+        // here cannot silently revoke an app the task grant would need.
+        managedApps: [
+          { id: 'example-app', name: 'Example App', planOnly: true, forge: 'github', granted: true },
+          { id: 'plan-app', name: 'Plan App', planOnly: false, forge: null, granted: true },
+        ],
+      }));
+    renderPage();
+
+    const toggle = await screen.findByRole('checkbox', { name: /Allow mind to read and file GitHub\/GitLab issues/ });
+    expect(toggle).not.toBeChecked();
+    await user.click(toggle);
+
+    await waitFor(() => expect(api.updateCosConfig).toHaveBeenCalledWith(
+      { persistentMindCapabilities: expect.objectContaining({ schemaVersion: 10, fileIssues: true, createTasks: false }) },
+      { silent: true },
+    ));
+
+    const planApp = await screen.findByRole('checkbox', { name: 'Plan App' });
+    expect(screen.getByText(/No forge tracker/)).toBeInTheDocument();
+    await user.click(planApp);
+    await waitFor(() => expect(api.updateCosConfig).toHaveBeenLastCalledWith(
+      { persistentMindCapabilities: expect.objectContaining({ fileIssues: true, allowedAppIds: ['example-app'] }) },
+      { silent: true },
+    ));
   });
 
   it('keeps the failure visible instead of presenting an empty inventory', async () => {
@@ -238,8 +271,9 @@ describe('PersistentMindTools', () => {
     await user.click(callToggle);
     await waitFor(() => expect(api.updateCosConfig).toHaveBeenCalledWith(
       { persistentMindCapabilities: {
-        schemaVersion: 9,
+        schemaVersion: 10,
         createTasks: false,
+        fileIssues: false,
         manageMind: false,
         manageToolRecipes: false,
         manageEidoverse: false,

@@ -12,6 +12,7 @@ import { LI_LABEL, LI_BLOCKING_LABEL } from './constants.js';
 import { slugMarker, extractSlugFromBody } from './dedup.js';
 import { runCli } from './runCli.js';
 import { withGlabJson } from '../../lib/glabArgs.js';
+import { forgeIssueCreateArgs, forgeLabelCreateArgs, parseCreatedForgeIssue } from '../../lib/forgeIssueCli.js';
 
 export { normalizeIssueState };
 
@@ -230,11 +231,7 @@ export async function ensureForgeLabels({ cli, cwd, env, extraLabels = [], exec 
     }))
   ];
   for (const l of labels) {
-    if (cli === 'glab') {
-      await exec(cli, ['label', 'create', '--name', l.name, '--color', `#${l.color}`, '--description', l.desc], { cwd, env });
-    } else {
-      await exec(cli, ['label', 'create', l.name, '--color', l.color, '--description', l.desc, '--force'], { cwd, env });
-    }
+    await exec(cli, forgeLabelCreateArgs(cli, { name: l.name, color: l.color, description: l.desc }), { cwd, env });
   }
 }
 
@@ -257,16 +254,10 @@ export async function fileProposalToForge({
   const extras = forgeIssueLabels({ model, effort, goodFirstIssue, helpWanted, planner });
   await ensureForgeLabels({ cli, cwd, env, extraLabels: extras, exec });
   const fullBody = `${body}\n\n${slugMarker(slug)}`;
-  const labelArgs = [LI_LABEL, ...extras].flatMap((name) => ['--label', name]);
-  const args = cli === 'glab'
-    ? ['issue', 'create', '--title', title, '--description', fullBody, ...labelArgs]
-    : ['issue', 'create', '--title', title, '--body', fullBody, ...labelArgs];
+  const args = forgeIssueCreateArgs(cli, { title, body: fullBody, labels: [LI_LABEL, ...extras] });
   const { code, stdout, stderr } = await exec(cli, args, { cwd, env });
   if (code !== 0) return { success: false, error: stderr || `${cli} exited with code ${code}` };
-  const urlMatch = stdout.trim().match(/(https?:\/\/\S+)/);
-  const url = urlMatch ? urlMatch[1] : stdout.trim();
-  const numMatch = url.match(/(\d+)\s*$/);
-  return { success: true, number: numMatch ? Number(numMatch[1]) : null, url };
+  return { success: true, ...parseCreatedForgeIssue(stdout) };
 }
 
 /**

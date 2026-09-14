@@ -38,6 +38,7 @@ export default function PersistentMindTools({ onCapabilitiesChange, onSavingChan
 
   const tools = Array.isArray(data?.tools) ? data.tools : [];
   const taskCatalog = data?.taskCatalog;
+  const managedApps = data?.managedApps;
   const grantedCount = tools.filter((tool) => tool.granted === true).length;
   const handleCapabilitiesSavingChange = (saving) => {
     setCapabilitiesSaving(saving);
@@ -48,13 +49,13 @@ export default function PersistentMindTools({ onCapabilitiesChange, onSavingChan
     setData((current) => current ? {
       ...current,
       capabilities,
-      taskCatalog: capabilities.createTasks && current.taskCatalog ? {
-        ...current.taskCatalog,
-        apps: (current.taskCatalog.apps || []).map((app) => ({
+      taskCatalog: capabilities.createTasks ? current.taskCatalog : null,
+      managedApps: (capabilities.createTasks || capabilities.fileIssues) && current.managedApps
+        ? current.managedApps.map((app) => ({
           ...app,
           granted: Array.isArray(capabilities.allowedAppIds) ? capabilities.allowedAppIds.includes(app.id) : true,
-        })),
-      } : null,
+        }))
+        : null,
       semanticTools: (current.semanticTools || []).map((tool) => ({
         ...tool,
         granted: tool.recipe?.available !== false
@@ -66,8 +67,10 @@ export default function PersistentMindTools({ onCapabilitiesChange, onSavingChan
       })),
     } : current);
     onCapabilitiesChange?.(capabilities);
-    if (capabilities.createTasks && !data?.taskCatalog) load();
-    else if (!capabilities.createTasks) setLoading(false);
+    // A grant the page has no catalog for yet needs a real reload; turning both
+    // off leaves nothing to fetch.
+    if ((capabilities.createTasks && !data?.taskCatalog) || (capabilities.fileIssues && !data?.managedApps)) load();
+    else if (!capabilities.createTasks && !capabilities.fileIssues) setLoading(false);
   };
 
   return (
@@ -122,7 +125,7 @@ export default function PersistentMindTools({ onCapabilitiesChange, onSavingChan
                   <PersistentMindTaskAccessControls
                     capabilities={data.capabilities}
                     disabled={capabilitiesSaving}
-                    taskCatalog={taskCatalog}
+                    managedApps={managedApps}
                     onSaved={updateCapabilities}
                     onSavingChange={handleCapabilitiesSavingChange}
                   />
@@ -148,7 +151,7 @@ export default function PersistentMindTools({ onCapabilitiesChange, onSavingChan
                     <div>
                       <h3 className="text-xs font-semibold uppercase tracking-wide text-port-text-muted">Target apps</h3>
                       <ul className="mt-2 space-y-2 text-sm text-port-text">
-                        {(taskCatalog.apps || []).map((app) => (
+                        {(managedApps || []).map((app) => (
                           <li key={app.id} className="rounded border border-port-border px-3 py-2">
                             <Link to={`/apps/${encodeURIComponent(app.id)}/automation`} className="text-port-accent hover:underline">{app.name}</Link>
                             <span className={`ml-2 rounded-full border px-2 py-0.5 text-[11px] ${app.granted === false ? 'border-port-border text-port-text-muted' : 'border-port-success/40 text-port-success'}`}>{app.granted === false ? 'Not authorized' : 'Authorized'}</span>
