@@ -39,14 +39,38 @@ export const DECK_CARD_SIZE_MAX = 4096;
 // Per-kind default card size, at each kind's true physical trim ratio rather
 // than the generic 2:3 fallback above — poker cards are 2.5"×3.5" (5:7),
 // tarot cards are 2.75"×4.75" (11:19). Both hold the same 1536 long edge as
-// the generic default so render cost/detail stays comparable; `EntryThumbSlot`
-// renders with `object-cover`, so the modest difference from 2:3 crops fine
-// rather than distorting. A deck's own `cardSize` (persisted per-deck, see
-// `services/decks.js`) always wins — this is only the value new decks mint.
+// the generic default so render cost/detail stays comparable. Thumbnails size
+// their slot to this ratio and contain the image (`deckCardSize` /
+// `deckCardAspectStyle`) so the rank, index, title banner and decorative
+// border stay in frame — a 2:3 `object-cover` box crops playing cards on the
+// sides and tarot cards top/bottom. A deck's own `cardSize` (persisted
+// per-deck, see `services/decks.js`) always wins — this is only the value
+// new decks mint.
 export const DECK_CARD_SIZE_BY_KIND = Object.freeze({
   [DECK_KIND.PLAYING]: Object.freeze({ width: 1096, height: 1536 }),
   [DECK_KIND.TAROT]: Object.freeze({ width: 888, height: 1536 }),
 });
+
+const isPositiveEdge = (value) => Number.isFinite(value) && value > 0;
+
+/**
+ * The canvas a deck's cards actually render at: the persisted `cardSize` when
+ * both edges are positive, otherwise that kind's trim, otherwise the 2:3
+ * fallback. One read so the grid, drawer, sample thumbs and render-target
+ * summary cannot disagree about the box.
+ */
+export function deckCardSize(deck) {
+  const width = Number(deck?.cardSize?.width);
+  const height = Number(deck?.cardSize?.height);
+  if (isPositiveEdge(width) && isPositiveEdge(height)) return { width, height };
+  return { ...(DECK_CARD_SIZE_BY_KIND[deck?.kind] || DECK_CARD_SIZE) };
+}
+
+/** Inline `style.aspectRatio` for a card thumbnail, derived from `deckCardSize`. */
+export function deckCardAspectStyle(deck) {
+  const { width, height } = deckCardSize(deck);
+  return { aspectRatio: `${width} / ${height}` };
+}
 
 // The one card every deck has that is not a face: the shared back design.
 export const DECK_BACK_KEY = 'back';

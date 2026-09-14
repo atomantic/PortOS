@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Copy, Link2, Loader2, Sparkles, Star, Trash2 } from 'lucide-react';
 import Drawer from '../Drawer';
-import { composeCardRenderPrompt } from '../../lib/decks';
+import { composeCardRenderPrompt, deckCardAspectStyle } from '../../lib/decks';
 import { copyToClipboard } from '../../lib/clipboard';
 
 const INPUT_CLASS = 'w-full bg-port-bg border border-port-border rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-port-accent';
@@ -96,7 +96,12 @@ export default function DeckCardDrawer({ deck, card, open, inFlight, onClose, on
                 return (
                   <li key={filename} className="space-y-1">
                     <button type="button" onClick={() => onPreview(filename)} className="block w-full" title={`Open v${versionNum} preview`}>
-                      <img src={`/data/images/${encodeURIComponent(filename)}`} alt={`${card.name} v${versionNum} render`} className={`aspect-[2/3] w-full object-cover border ${isPrimary ? 'border-port-accent' : 'border-port-border'}`} />
+                      <img
+                        src={`/data/images/${encodeURIComponent(filename)}`}
+                        alt={`${card.name} v${versionNum} render`}
+                        style={deckCardAspectStyle(deck)}
+                        className={`w-full object-contain bg-port-bg border ${isPrimary ? 'border-port-accent' : 'border-port-border'}`}
+                      />
                     </button>
                     <div className="flex items-center justify-between gap-1 text-[11px]">
                       <span className="font-mono text-gray-400">v{versionNum}</span>

@@ -14,6 +14,8 @@ const card = (id, group, extra = {}) => ({
 });
 const deck = {
   id: 'd1',
+  kind: 'playing',
+  cardSize: { width: 1096, height: 1536 },
   cards: [
     card('a', 'major', { prompt: 'a fool' }),
     card('b', 'major', { prompt: 'a magician', imageRefs: ['b.png'], primaryImageRef: 'b.png', canonRef: { kind: 'character', id: 'c1', name: 'Alice' } }),
@@ -167,5 +169,28 @@ describe('DeckCardGrid', () => {
     const nextBtn = screen.getByRole('button', { name: 'Next render version for Card f' });
     fireEvent.click(nextBtn);
     expect(screen.getByText('v2/3')).toBeInTheDocument();
+  });
+
+  it('sizes a playing-card thumb to 5:7 and contains the art so the index is not cropped', () => {
+    renderGrid();
+    const img = screen.getByRole('img', { name: 'Card b' });
+    expect(img.className).toMatch(/\bobject-contain\b/);
+    expect(img.className).not.toMatch(/\bobject-cover\b/);
+    expect(img.closest('.overflow-hidden')?.style.aspectRatio).toBe('1096 / 1536');
+  });
+
+  it('sizes a tarot thumb to 11:19 so the title banner is not cropped', () => {
+    const tarotDeck = {
+      id: 'd1',
+      kind: 'tarot',
+      cardSize: { width: 888, height: 1536 },
+      cards: [
+        card('f', 'major', { prompt: 'the fool', imageRefs: ['fool.png'], primaryImageRef: 'fool.png' }),
+      ],
+    };
+    renderGrid({ deck: tarotDeck });
+    const img = screen.getByRole('img', { name: 'Card f' });
+    expect(img.className).toMatch(/\bobject-contain\b/);
+    expect(img.closest('.overflow-hidden')?.style.aspectRatio).toBe('888 / 1536');
   });
 });

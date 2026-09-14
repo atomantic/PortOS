@@ -15,5 +15,7 @@ export {
   cardInFlightJobId,
   cardStatus,
   composeCardRenderPrompt,
+  deckCardAspectStyle,
+  deckCardSize,
   deckCompletion,
 } from '../../../server/lib/deckTemplates.js';
