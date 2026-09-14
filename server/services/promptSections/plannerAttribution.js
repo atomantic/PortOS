@@ -35,8 +35,23 @@ export function buildPlannerAttributionSection({ providerId = null, model = null
   return `## Planner Attribution\n\n${guidance}`;
 }
 
-/** Runtime contract reaches stored/custom tasks and follow-ups, even without a planner identity. */
-export function buildIssueFilingSection(options = {}) {
+/**
+ * Runtime contract reaches stored/custom tasks and follow-ups, even without a
+ * planner identity.
+ *
+ * `taskText` is the task body the agent is about to read (description plus
+ * context). The shipped claim-issue / issue-reconcile prompts embed the very
+ * same contract at their top, so a run built from one of them would otherwise
+ * read the ~3KB block twice — once in the task, once here. When the body
+ * already carries it verbatim, only the planner attribution (which the task
+ * cannot know about itself) is emitted; a customized prompt that dropped or
+ * paraphrased the contract still gets the full section.
+ *
+ * @param {object} [options]
+ * @param {string} [options.taskText] - rendered task body to dedupe against
+ */
+export function buildIssueFilingSection({ taskText = '', ...options } = {}) {
   const attribution = buildPlannerAttributionSection(options);
+  if (taskText.includes(MANDATORY_DISPATCH_HINT_GUIDANCE)) return attribution;
   return `## Issue Filing Labels\n\n${MANDATORY_DISPATCH_HINT_GUIDANCE}${attribution ? `\n\n${attribution}` : ''}`;
 }

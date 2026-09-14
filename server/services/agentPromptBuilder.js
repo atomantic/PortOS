@@ -129,6 +129,14 @@ function resolveSentinelPath(worktreeInfo, workspaceDir, agentId) {
 
 const PREVIOUS_STAGE_OUTPUT_INLINE_CAP = 12_000;
 
+/**
+ * The task body as the agent reads it — description plus prompt/context block —
+ * so a contract section can skip text the task already carries verbatim.
+ */
+function renderedTaskText(task) {
+  return [task.description, taskContextBlock(task)].filter(Boolean).join('\n');
+}
+
 function pipelineContextLines(pipelineCtx) {
   if (!pipelineCtx || (!pipelineCtx.previousStageAgentId && !pipelineCtx.previousStageOutput)) return [];
 
@@ -414,7 +422,7 @@ export async function buildAgentPrompt(task, config, workspaceDir, worktreeInfo 
   // flag spelling, which the guidance spells out for whichever the agent has.
   const issueFilingSection = skipDevContext
     ? ''
-    : buildIssueFilingSection({ providerId, model: providerModel });
+    : buildIssueFilingSection({ providerId, model: providerModel, taskText: renderedTaskText(task) });
   // Architect doctrine for an orchestrated run (#5992). '' for every direct-mode
   // task, which is the default, so this is inert unless a profile is configured.
   const orchestrationSection = buildOrchestrationDoctrineSection(task);
@@ -1098,7 +1106,7 @@ function buildLightContextSections(task, workspaceDir, worktreeInfo, isTruthyMet
   // Unconditional filing rules, with planner attribution when resolvable:
   // whether a run ends up filing an issue is not knowable from its metadata,
   // and a model cannot name itself.
-  const lightFilingSection = buildIssueFilingSection({ providerId, model: providerModel, forgeCli: resolvedForgeCli });
+  const lightFilingSection = buildIssueFilingSection({ providerId, model: providerModel, forgeCli: resolvedForgeCli, taskText: renderedTaskText(task) });
   if (lightFilingSection) contractSections.push(lightFilingSection);
 
   // --- Orchestrated execution ---------------------------------------------
