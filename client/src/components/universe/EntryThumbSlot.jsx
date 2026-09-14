@@ -36,6 +36,7 @@ export default function EntryThumbSlot({
   inFlightJobId = null,
   imageRefs = null,
   primaryImageRef = null,
+  displayedImageRef = null,
   onRender = null,
   onPreview = null,
   // Fired with the rendered filename when an in-flight job completes (forwarded
@@ -74,6 +75,7 @@ export default function EntryThumbSlot({
   // variation + canon avatar rows — matched to the 2:3 aspect of typical
   // 1024x1536 universe renders so the slot doesn't crop the subject.
   size = 'sm',
+  rounded = true,
 }) {
   // MediaJobThumb fires this from an effect keyed on `[effectiveStatus, onStatus]`,
   // so it must not be a fresh arrow per render or it re-fires on every parent
@@ -110,6 +112,7 @@ export default function EntryThumbSlot({
           // would leave the slot stuck — clear it via the no-filename path so the
           // slot returns to an actionable state and the entity can be re-rendered.
           onStatus={onStatus}
+          rounded={rounded}
         />
       </div>
     );
@@ -117,9 +120,12 @@ export default function EntryThumbSlot({
   const refs = Array.isArray(imageRefs) ? imageRefs : [];
   const hasImage = refs.length > 0 || !!primaryImageRef;
   if (hasImage) {
-    const chosen = (primaryImageRef && refs.includes(primaryImageRef))
+    const defaultChosen = (primaryImageRef && refs.includes(primaryImageRef))
       ? primaryImageRef
       : refs[refs.length - 1];
+    const chosen = (displayedImageRef && refs.includes(displayedImageRef))
+      ? displayedImageRef
+      : defaultChosen;
     return (
       <WalkBackThumb
         filename={chosen}
@@ -128,6 +134,7 @@ export default function EntryThumbSlot({
         isPrimary={!!primaryImageRef && primaryImageRef === chosen}
         onClick={onPreview}
         size={size}
+        rounded={rounded}
       />
     );
   }
@@ -144,7 +151,7 @@ export default function EntryThumbSlot({
       onClick={() => onRender?.()}
       disabled={!onRender || !canRender}
       title={hint} aria-label={hint}
-      className={`${dim} shrink-0 flex items-center justify-center rounded border border-dashed border-port-border bg-port-bg/40 text-gray-500 hover:border-port-accent/50 hover:text-port-accent hover:bg-port-accent/5 disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:border-port-border disabled:hover:text-gray-500 disabled:hover:bg-port-bg/40 transition-colors`}
+      className={`${dim} shrink-0 flex items-center justify-center ${rounded ? 'rounded' : ''} border border-dashed border-port-border bg-port-bg/40 text-gray-500 hover:border-port-accent/50 hover:text-port-accent hover:bg-port-accent/5 disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:border-port-border disabled:hover:text-gray-500 disabled:hover:bg-port-bg/40 transition-colors`}
     >
       <EmptyIcon size={iconSize} />
     </button>
@@ -156,7 +163,7 @@ export default function EntryThumbSlot({
 // (stale gallery file → walk back through prior renders → collapse). Mirrors
 // `EntryCardThumbnail` in `EntryCard.jsx`; intentionally kept in sync — visual
 // drift would defeat the point of a shared slot.
-function WalkBackThumb({ filename, alt, onClick, isPrimary = false, fallbackRefs = null, size = 'sm' }) {
+function WalkBackThumb({ filename, alt, onClick, isPrimary = false, fallbackRefs = null, size = 'sm', rounded = true }) {
   const candidates = [];
   if (filename) candidates.push(filename);
   if (Array.isArray(fallbackRefs)) {
@@ -174,7 +181,7 @@ function WalkBackThumb({ filename, alt, onClick, isPrimary = false, fallbackRefs
   if (!candidates.length || idx >= candidates.length) {
     // All candidates failed to load — collapse to empty (no render button
     // here; the user can re-render from the action column).
-    return <div className={`${dim} shrink-0 rounded border border-port-border bg-port-bg/40`} />;
+    return <div className={`${dim} shrink-0 ${rounded ? 'rounded' : ''} border border-port-border bg-port-bg/40`} />;
   }
   const currentFilename = candidates[idx];
   const img = (
@@ -187,14 +194,14 @@ function WalkBackThumb({ filename, alt, onClick, isPrimary = false, fallbackRefs
     />
   );
   const frame = (
-    <div className={`relative ${dim} shrink-0 rounded overflow-hidden border ${
+    <div className={`relative ${dim} shrink-0 ${rounded ? 'rounded' : ''} overflow-hidden border ${
       isPrimary ? 'border-port-accent' : 'border-port-border'
     }`}>
       {img}
       {isPrimary ? (
         <span
           title="Primary reference image"
-          className="absolute top-0.5 right-0.5 p-0.5 rounded bg-port-accent text-white"
+          className={`absolute top-0.5 right-0.5 p-0.5 ${rounded ? 'rounded' : ''} bg-port-accent text-white`}
         >
           <Star size={8} fill="currentColor" />
         </span>

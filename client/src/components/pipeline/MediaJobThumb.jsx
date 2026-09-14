@@ -25,6 +25,7 @@ export default function MediaJobThumb({
   // by definition (the comic-pages filename hook only stamps on completion)
   // — skip the live media-job lookup and subscription entirely.
   fallbackFilename = null,
+  rounded = true,
 }) {
   // Short-circuit live progress when the parent has the final filename.
   // Re-renders clear `filename` server-side, so a truthy fallbackFilename
@@ -62,6 +63,7 @@ export default function MediaJobThumb({
   // universe render shows the full subject without aggressive center-crop.
   // The larger square sizes (`sm`/`md`/`lg`) are used by the pipeline
   // comic-pages / storyboard stages where 1:1 still reads best.
+  const rCls = rounded ? 'rounded' : '';
   const isFill = size === 'fill';
   const dims = isFill
     ? 'w-full'
@@ -75,7 +77,7 @@ export default function MediaJobThumb({
     return (
       <div
         title="Media file missing (deleted from disk)"
-        className={`${stateDims} bg-port-bg rounded border border-port-border flex flex-col items-center justify-center gap-1 text-[10px] text-port-text-muted`}
+        className={`${stateDims} bg-port-bg ${rCls} border border-port-border flex flex-col items-center justify-center gap-1 text-[10px] text-port-text-muted`}
       >
         <span>missing</span>
         <button
@@ -103,8 +105,8 @@ export default function MediaJobThumb({
         aria-label={label}
         onError={() => setMissing(true)}
         className={isFill
-          ? 'w-full h-auto max-h-[640px] bg-port-bg rounded border border-port-border'
-          : `${dims} object-cover bg-port-bg rounded border border-port-border`}
+          ? `w-full h-auto max-h-[640px] bg-port-bg ${rCls} border border-port-border`
+          : `${dims} object-cover bg-port-bg ${rCls} border border-port-border`}
       />
     );
   }
@@ -119,7 +121,7 @@ export default function MediaJobThumb({
         loading="lazy"
       />
     );
-    const wrapperClass = `block ${dims} bg-port-bg rounded overflow-hidden border border-port-border hover:border-port-accent/50 transition-colors`;
+    const wrapperClass = `block ${dims} bg-port-bg ${rCls} overflow-hidden border border-port-border hover:border-port-accent/50 transition-colors`;
     if (onPreview) {
       return (
         <button
@@ -152,7 +154,7 @@ export default function MediaJobThumb({
     return (
       <div
         title={error || 'Render failed'}
-        className={`${stateDims} bg-port-bg rounded border border-port-error/40 flex flex-col items-center justify-center gap-1 px-1 text-center text-[10px] text-port-error`}
+        className={`${stateDims} bg-port-bg ${rCls} border border-port-error/40 flex flex-col items-center justify-center gap-1 px-1 text-center text-[10px] text-port-error`}
       >
         <AlertCircle size={14} aria-hidden="true" />
         {/* The reason as page text, not only as a `title`: a tooltip on a
@@ -170,7 +172,7 @@ export default function MediaJobThumb({
     return (
       <div
         title="Render canceled"
-        className={`${stateDims} bg-port-bg rounded border border-port-border flex flex-col items-center justify-center gap-1 text-[10px] text-port-text-muted`}
+        className={`${stateDims} bg-port-bg ${rCls} border border-port-border flex flex-col items-center justify-center gap-1 text-[10px] text-port-text-muted`}
       >
         <Ban size={14} />
         <span>canceled</span>
@@ -190,7 +192,7 @@ export default function MediaJobThumb({
     ? Math.max(0, Math.round(etaMs * (1 - Math.min(1, Math.max(0, pct / 100)))))
     : null;
   return (
-    <div className={`relative ${isFill ? 'w-full min-h-[200px]' : dims} bg-port-bg rounded overflow-hidden border border-port-border`}>
+    <div className={`relative ${isFill ? 'w-full min-h-[200px]' : dims} bg-port-bg ${rCls} overflow-hidden border border-port-border`}>
       {currentImage ? (
         <img
           src={`data:image/png;base64,${currentImage}`}
