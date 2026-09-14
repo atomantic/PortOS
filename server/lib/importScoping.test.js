@@ -582,7 +582,14 @@ describe('deferred imports stay deferred (#6156)', () => {
 // dependency-free module account for the rest. The publisher itself reaches
 // git.js and appQualityFederation.js through `await import()`, and the audit
 // hook reaches the publisher the same way, so neither is in any closure.
-const MAX_STATIC_INSTANTIATIONS = 104590;
+// `lib/terminalReplay.js` raises this by a further 37 — one instantiation per
+// test file whose closure reaches the `lib/index.js` barrel, and nothing more.
+// It cannot be narrowed away: the catalog rule (root AGENTS.md) requires every
+// new `server/lib/` module to be re-exported from the barrel, and
+// `lib/index.test.js` fails without it. The module is deliberately
+// dependency-free (a few regexes over a string), so it adds no edge into any
+// subtree — its only consumer, `services/shell.js`, deep-imports it directly.
+const MAX_STATIC_INSTANTIATIONS = 104627;
 
 
 const SKIP_DIRS = new Set(['node_modules', 'coverage', 'dist', 'data']);
