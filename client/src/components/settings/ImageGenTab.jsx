@@ -9,7 +9,7 @@
 import { useState, useEffect, useCallback, useId, useRef } from 'react';
 import {
   Save, Image as ImageIcon, Zap, Wrench, Cloud, Cpu, Globe, AlertTriangle,
-  Sparkles, Terminal, Key, Check, Trash2, SlidersHorizontal
+  Sparkles, Terminal, Key, Check, Trash2, SlidersHorizontal, Bot, FlaskConical
 } from 'lucide-react';
 import toast from '../ui/Toast';
 import FormField from '../ui/FormField';
@@ -71,11 +71,11 @@ export const MEDIA_TABS = [
   { id: 'external', label: 'External', icon: Cloud, probeMode: IMAGE_GEN_MODE.EXTERNAL },
   { id: 'local', label: 'Local', icon: Cpu, probeMode: IMAGE_GEN_MODE.LOCAL },
   { id: 'codex', label: 'Codex CLI', icon: Terminal, probeMode: IMAGE_GEN_MODE.CODEX },
-  { id: 'grok', label: 'Grok CLI', icon: Sparkles, probeMode: IMAGE_GEN_MODE.GROK },
-  { id: 'agy', label: 'Agy CLI', icon: Terminal, probeMode: IMAGE_GEN_MODE.AGY },
+  { id: 'grok', label: 'Grok CLI', icon: Zap, probeMode: IMAGE_GEN_MODE.GROK },
+  { id: 'agy', label: 'Agy CLI', icon: Bot, probeMode: IMAGE_GEN_MODE.AGY },
   { id: 'tokens', label: 'Tokens', icon: Key },
   { id: 'expose', label: 'Expose', icon: Globe },
-  { id: 'test', label: 'Test', icon: Sparkles },
+  { id: 'test', label: 'Test', icon: FlaskConical },
 ];
 const MEDIA_TAB_IDS = MEDIA_TABS.map((t) => t.id);
 
@@ -716,8 +716,7 @@ export function ImageGenTab() {
         activeTab={mediaTab}
         onChange={setMediaTab}
         variant="pills"
-        mobileDropdown
-        mobileSelectId="media-settings-tab-select"
+        mobileCompact
         ariaLabel="Media generation settings sections"
         controlsIdPrefix="media-settings-tabpanel"
       />

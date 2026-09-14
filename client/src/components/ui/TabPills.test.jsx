@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { render, screen, within } from '@testing-library/react';
+import { render, screen, within, fireEvent, act } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { Users, MapPin, Package } from 'lucide-react';
 
@@ -132,14 +132,63 @@ describe('TabPills — underline variant (default)', () => {
   });
 });
 
-describe('TabPills — pills variant', () => {
-  it('renders a hidden mobile <select> with all labels when mobileDropdown is set', () => {
+// The preferred phone treatment: the same tab buttons, icons only. A `<select>`
+// reads as a form control rather than navigation, so it is reserved for the
+// bars that have no icons to show (#7283 made it universal; this reverses that).
+describe('TabPills — mobileCompact icon row', () => {
+  it('keeps one tablist and hides each label below `sm` without renaming the tab', () => {
+    render(<TabPills mobileCompact tabs={sampleTabs} activeTab="cast" onChange={() => {}} />);
+
+    expect(screen.queryByRole('combobox')).toBeNull();
+    expect(screen.getAllByRole('tab')).toHaveLength(3);
+    const castBtn = screen.getByRole('tab', { name: /Cast/ });
+    expect(castBtn).toHaveAccessibleName('Cast 3');
+    expect(within(castBtn).getByText('Cast')).toHaveClass('max-sm:sr-only');
+    expect(castBtn.querySelector('svg')).toBeTruthy();
+  });
+
+  it.each(['underline', 'pills'])('reveals a scrollable edge with a chevron in the %s variant', async (variant) => {
+    // happy-dom reports every box as 0x0 and ships no ResizeObserver, so both
+    // the overflow and the re-measure that publishes it have to be stated. The
+    // fake observer is also what proves the split: the scroll path alone never
+    // re-reads `scrollWidth`, so without a resize there is nothing to reveal.
+    const resize = [];
+    vi.stubGlobal('ResizeObserver', class {
+      constructor(cb) { resize.push(cb); }
+      observe() {}
+      disconnect() {}
+    });
+    const user = userEvent.setup();
+    const { container } = render(
+      <TabPills variant={variant} mobileCompact tabs={sampleTabs} activeTab="cast" onChange={() => {}} />
+    );
+    const strip = container.querySelector('[role="tablist"]');
+    Object.defineProperty(strip, 'scrollWidth', { configurable: true, value: 800 });
+    Object.defineProperty(strip, 'clientWidth', { configurable: true, value: 300 });
+    const scrollBy = vi.spyOn(strip, 'scrollBy').mockImplementation(() => {});
+
+    expect(screen.queryByRole('button', { name: 'Scroll tabs right' })).toBeNull();
+    act(() => { for (const cb of resize) cb(); });
+    expect(screen.queryByRole('button', { name: 'Scroll tabs left' })).toBeNull();
+
+    await user.click(screen.getByRole('button', { name: 'Scroll tabs right' }));
+    expect(scrollBy).toHaveBeenCalledWith({ left: 240, behavior: 'smooth' });
+
+    strip.scrollLeft = 200;
+    fireEvent.scroll(strip);
+    await user.click(screen.getByRole('button', { name: 'Scroll tabs left' }));
+    expect(scrollBy).toHaveBeenLastCalledWith({ left: -240, behavior: 'smooth' });
+    vi.unstubAllGlobals();
+  });
+
+  it('falls back to the labelled <select> when any tab has no icon to show', () => {
+    const tabs = [...sampleTabs.slice(0, 2), { id: 'objects', label: 'Objects' }];
     render(
       <TabPills
         variant="pills"
-        mobileDropdown
+        mobileCompact
         mobileSelectId="ub-tab-select"
-        tabs={sampleTabs}
+        tabs={tabs}
         activeTab="cast"
         onChange={() => {}}
       />
@@ -147,6 +196,7 @@ describe('TabPills — pills variant', () => {
     const select = screen.getByRole('combobox');
     expect(select).toHaveAttribute('id', 'ub-tab-select');
     expect(select.value).toBe('cast');
+    expect(screen.queryByRole('button', { name: 'Scroll tabs right' })).toBeNull();
     // Count appears in option text when present
     expect(within(select).getByRole('option', { name: /Cast \(3\)/i })).toBeInTheDocument();
     expect(within(select).getByRole('option', { name: 'Objects' })).toBeInTheDocument();
@@ -156,9 +206,9 @@ describe('TabPills — pills variant', () => {
     render(
       <TabPills
         variant="pills"
-        mobileDropdown
+        mobileCompact
         ariaLabel="Universe sections"
-        tabs={sampleTabs}
+        tabs={[{ id: 'cast', label: 'Cast' }, { id: 'places', label: 'Places' }]}
         activeTab="cast"
         onChange={() => {}}
       />

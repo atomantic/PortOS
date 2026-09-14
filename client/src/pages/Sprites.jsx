@@ -544,8 +544,7 @@ export default function Sprites() {
                 <TabPills
                   variant="pills"
                   size="sm"
-                  mobileDropdown
-                  mobileSelectId="sprite-workspace-tab"
+                  mobileCompact
                   ariaLabel="Sprite workspace"
                   tabs={[
                     { id: 'library', label: 'Assets', icon: Images },

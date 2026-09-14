@@ -410,8 +410,7 @@ export default function Game() {
         onChange={setActiveTab}
         ariaLabel="Game workspace sections"
         controlsIdPrefix="game-panel"
-        mobileDropdown
-        mobileSelectId="game-section"
+        mobileCompact
         className="px-4"
       />
 

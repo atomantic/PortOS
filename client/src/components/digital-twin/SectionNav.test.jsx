@@ -91,19 +91,18 @@ describe('SectionNav', () => {
     expect(onChange).toHaveBeenCalledWith('interview');
   });
 
-  it('collapses to one labelled, grouped select on mobile that reaches every section', () => {
-    const onChange = vi.fn();
-    render(<SectionNav activeSection="overview" onChange={onChange} />);
-    const select = screen.getByLabelText('Digital Twin section');
-    expect(select.tagName).toBe('SELECT');
-    expect(select.value).toBe('overview');
+  it('collapses both rows to icon links on mobile rather than a select', () => {
+    render(<SectionNav activeSection="overview" onChange={() => {}} />);
+    expect(screen.queryByRole('combobox')).toBeNull();
 
-    const optgroups = [...select.querySelectorAll('optgroup')];
-    expect(optgroups.map((g) => g.label)).toEqual(SECTION_GROUPS.map((g) => g.label));
-    expect([...select.querySelectorAll('option')].map((o) => o.value).sort())
-      .toEqual(TABS.map((t) => t.id).sort());
-
-    fireEvent.change(select, { target: { value: 'legacy' } });
-    expect(onChange).toHaveBeenCalledWith('legacy');
+    // Compact mode hides each label visually below `sm` but keeps it in the
+    // accessible name, so the icon row is still one tablist of named tabs.
+    for (const row of ['Digital Twin groups', 'Profile sections']) {
+      for (const tab of within(screen.getByRole('tablist', { name: row })).getAllByRole('tab')) {
+        expect(tab.querySelector('svg')).toBeTruthy();
+        expect(tab.querySelector('.max-sm\\:sr-only')).toBeTruthy();
+      }
+    }
+    expect(groupTab('Profile')).toHaveAccessibleName('Profile');
   });
 });

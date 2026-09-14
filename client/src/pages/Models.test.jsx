@@ -8,7 +8,7 @@
  */
 
 import { describe, it, expect, vi } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { render, screen, within } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router';
 import { TABS } from '../components/models/ModelsTabsHeader';
 
@@ -114,12 +114,15 @@ describe('Models', () => {
     }
   });
 
-  // The tab bar collapses to a `<select>` under `sm`, so every destination has to
-  // be reachable there too — this section is now too wide for a phone pill row.
-  it('mirrors every destination into the mobile select', () => {
+  // The tab bar collapses to an icon row under `sm` — this section is now too
+  // wide for a phone pill row — so every destination has to stay reachable and
+  // named there, with an icon of its own to be reachable BY.
+  it('keeps every destination in the phone icon row, named and drawn', () => {
     renderAt('/models/performance');
-    const select = screen.getByRole('combobox', { name: 'Models sections' });
-    expect([...select.options].map((o) => o.textContent)).toEqual(TABS.map((t) => t.label));
+    const bar = screen.getByRole('tablist', { name: 'Models sections' });
+    const tabs = within(bar).getAllByRole('tab');
+    expect(tabs.map((t) => t.textContent)).toEqual(TABS.map((t) => t.label));
+    expect(tabs.every((t) => t.querySelector('svg') && t.querySelector('.max-sm\\:sr-only'))).toBe(true);
   });
 
   // A tab listed in the header but missing from TAB_CONTENT falls through to the

@@ -446,8 +446,7 @@ export default function UniverseBuilder() {
         <TabPills
           variant="pills"
           size="sm"
-          mobileDropdown
-          mobileSelectId="ub-tab-select"
+          mobileCompact
           activeTab={activeTab}
           onChange={setTab}
           tabs={[

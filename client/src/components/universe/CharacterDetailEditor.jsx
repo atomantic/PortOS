@@ -1439,7 +1439,7 @@ export default function CharacterDetailEditor({ entry, universeId = null, onPatc
         </aside>
         <div className="min-w-0 space-y-3">
           <TabPills tabs={SHEET_PAGES} activeTab={activePage} onChange={setActivePage}
-            variant="pills" size="sm" mobileDropdown ariaLabel={`${entry.name} sheet page`} />
+            variant="pills" size="sm" mobileCompact ariaLabel={`${entry.name} sheet page`} />
           {SHEET_PAGES.map((page) => (
             <div key={page.id} role="tabpanel" aria-label={page.label} hidden={activePage !== page.id}>
               {activePage === page.id || visited[page.id] ? (

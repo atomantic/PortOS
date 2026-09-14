@@ -7,7 +7,8 @@ import {
   Database, Brain, CheckCircle2, AlertCircle, Clock,
   RefreshCcw, Timer,
   Target, Sword, Fingerprint, HeartPulse, ChevronDown, ChevronRight,
-  Lock, Globe, Sparkles, Film, Images, Library, BookOpen, FilePen, Music, Music2, Disc3, Clapperboard, Palette, BookText, FolderTree, Video, Waypoints, Gauge, Spade
+  Lock, Globe, Sparkles, Film, Images, Library, BookOpen, FilePen, Music, Music2, Disc3, Clapperboard, Palette, BookText, FolderTree, Video, Waypoints, Gauge, Spade,
+  RadioTower, Route
 } from 'lucide-react';
 import { useSearchParams } from 'react-router';
 import Drawer from '../components/Drawer';
@@ -1638,10 +1639,10 @@ function InstancesContent() {
             <Drawer open={drawer === 'settings'} onClose={() => openDrawer(null)}
               title="Connection settings" size="md"
               tabs={[
-                { id: 'instance', label: 'This instance' },
-                { id: 'network', label: 'Network' },
-                { id: 'relay', label: 'Tailcat' },
-                { id: 'routing', label: 'Render routes' },
+                { id: 'instance', label: 'This instance', icon: MonitorSmartphone },
+                { id: 'network', label: 'Network', icon: Network },
+                { id: 'relay', label: 'Tailcat', icon: RadioTower },
+                { id: 'routing', label: 'Render routes', icon: Route },
               ]}
               activeTab={settingsTab} onTabChange={setSettingsTab}>
               {settingsTab === 'instance' && (

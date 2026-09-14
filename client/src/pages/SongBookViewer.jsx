@@ -56,7 +56,7 @@ import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { useParams, useNavigate, Link } from 'react-router';
 import {
   ListMusic, ArrowLeft, Save, Trash2, Pencil, Eye, Play, Pause, Plus, Minus,
-  ExternalLink, Paperclip, Upload, FileX2, Timer,
+  ExternalLink, Paperclip, Upload, FileX2, Timer, Guitar, Music, Piano,
 } from 'lucide-react';
 import toast from '../components/ui/Toast';
 import FilePickerButton from '../components/ui/FilePickerButton';
@@ -134,7 +134,11 @@ const toDraft = (song) => ({
 });
 
 // Instrument-view toggle tabs (chord-diagram rendering — never mutates the record).
-const VIEW_TABS = VOICING_INSTRUMENTS.map((viewId) => ({ id: viewId, label: instrumentLabel(viewId) }));
+const VIEW_ICONS = { guitar: Guitar, ukulele: Music, piano: Piano };
+// Icons, not just labels: TabPills draws the icon row on a phone only when every
+// tab has one, and this bar sits beside the transport controls where the labels
+// are the first thing squeezed out.
+const VIEW_TABS = VOICING_INSTRUMENTS.map((viewId) => ({ id: viewId, label: instrumentLabel(viewId), icon: VIEW_ICONS[viewId] }));
 
 // Worked example in the editor's placeholder — the grid DSL is easier to copy
 // than to describe. Invented groove (privacy convention).
@@ -962,8 +966,7 @@ export default function SongBookViewer() {
                 activeTab={instrumentView}
                 onChange={setInstrumentView}
                 ariaLabel="Instrument view"
-                mobileDropdown
-                mobileSelectId="song-instrument-view"
+                mobileCompact
               />
             )}
 

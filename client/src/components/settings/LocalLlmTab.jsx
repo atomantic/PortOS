@@ -37,8 +37,7 @@ export function LocalLlmTab({ view }) {
           onChange={(nextView) => navigate(`/models/llms/${nextView}`)}
           variant="pills"
           size="sm"
-          mobileDropdown
-          mobileSelectId="llm-management-view"
+          mobileCompact
           ariaLabel="LLM management sections"
           controlsIdPrefix="llm-management-panel"
         />

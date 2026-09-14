@@ -6,17 +6,20 @@ import MediaGen, { TABS } from './MediaGen.jsx';
 import { expectPageNavTabs } from '../test/pageNavTabAssertions.js';
 
 describe('<MediaGen>', () => {
-  it('provides a labeled mobile section selector for the full tab set', () => {
+  it('keeps every tab on the phone as a named icon link rather than a select', () => {
     render(
       <MemoryRouter initialEntries={['/media/image']}>
         <MediaGen />
       </MemoryRouter>,
     );
 
-    const select = screen.getByRole('combobox', { name: 'Media Gen sections' });
-    expect(select).toHaveAttribute('id', 'media-gen-section-select');
-    expect(within(select).getAllByRole('option')).toHaveLength(TABS.length);
-    expect(select).toHaveValue('image');
+    expect(screen.queryByRole('combobox')).toBeNull();
+    const bar = screen.getByRole('tablist', { name: 'Media Gen sections' });
+    const tabs = within(bar).getAllByRole('tab');
+    expect(tabs).toHaveLength(TABS.length);
+    // Each tab still carries its icon and its name; only the visible label goes.
+    expect(tabs.every((tab) => tab.querySelector('svg') && tab.querySelector('.max-sm\\:sr-only'))).toBe(true);
+    expect(within(bar).getByRole('tab', { name: 'Image' })).toHaveAttribute('aria-selected', 'true');
   });
 
   it('marks the Video tab active on /video/generate', () => {
@@ -26,7 +29,7 @@ describe('<MediaGen>', () => {
       </MemoryRouter>,
     );
 
-    expect(screen.getByRole('combobox', { name: 'Media Gen sections' })).toHaveValue('video');
+    expect(screen.getByRole('tab', { name: 'Video' })).toHaveAttribute('aria-selected', 'true');
     expect(container.querySelector('.flex-1.overflow-auto')).toBeTruthy();
   });
 });
