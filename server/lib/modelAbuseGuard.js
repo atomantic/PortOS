@@ -510,6 +510,16 @@ const HIDDEN_COMMENT_RE = /<!--([\s\S]{0,4000}?)-->|^[ \t]*\[(?:\/\/|comment)\]:
 // shows up in the Files tab.
 const HIDDEN_HTML_OPEN_RE = /<([a-z][\w:-]*)\b([^>]{0,800})>/gi;
 const HIDING_ATTR_RE = /(?:^|\s)hidden(?:\s|=\s*(['"]?)(?:true|hidden)?\1|$)|aria-hidden\s*=\s*(['"]?)true\2|style\s*=\s*(['"])[^'"]*(?:display\s*:\s*none|visibility\s*:\s*hidden|opacity\s*:\s*0(?:\.0+)?|font-size\s*:\s*0)/i;
+// An element that cannot have children hides nothing, so it must not lend its
+// hiding attribute to whatever text happens to follow it. `<Icon aria-hidden />`
+// is the repo's own mandated a11y idiom (hundreds of call sites), and without
+// this the guard read the next 4000 characters of unrelated diff as that icon's
+// inner text — enough for an ordinary comment two functions later to satisfy the
+// abuse + model-target pair and fail the pr-reviewer preflight closed.
+const VOID_ELEMENTS = new Set([
+  'area', 'base', 'br', 'col', 'embed', 'hr', 'img', 'input',
+  'link', 'meta', 'param', 'source', 'track', 'wbr',
+]);
 
 const markupHidesInstruction = (body) => (
   HIDDEN_COMMENT_ABUSE_RE.test(body) && (MODEL_TARGET_RE.test(body) || SECOND_PERSON_RE.test(body))
@@ -521,9 +531,13 @@ function hasHiddenMarkupInstruction(value) {
   }
   for (const match of value.matchAll(HIDDEN_HTML_OPEN_RE)) {
     if (!HIDING_ATTR_RE.test(match[2] || '')) continue;
+    if (match[0].endsWith('/>') || VOID_ELEMENTS.has(match[1].toLowerCase())) continue;
     const rest = value.slice(match.index + match[0].length, match.index + match[0].length + 4000);
     const close = rest.match(new RegExp(`^([\\s\\S]*?)</${match[1]}\\s*>`, 'i'));
-    if (markupHidesInstruction(close ? close[1] : rest)) return true;
+    // No close tag in range: read only up to the next tag, since anything past
+    // it belongs to a sibling this element never wrapped. A real hider still
+    // gets caught — its instruction sits immediately inside the open tag.
+    if (markupHidesInstruction(close ? close[1] : rest.split('<')[0])) return true;
   }
   return false;
 }
