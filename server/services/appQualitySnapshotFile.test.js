@@ -1,4 +1,5 @@
 import { it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { join } from 'node:path';
 import { APP_QUALITY_SNAPSHOT_FILENAME, APP_QUALITY_SNAPSHOT_MAX_BYTES,
   readAppQualitySnapshotFile, publishAppQualitySnapshot } from './appQualitySnapshotFile.js';
 
@@ -41,7 +42,7 @@ it('publishes a changed snapshot as one scoped commit and skips without touching
   const deps = testDeps();
   expect(await publishAppQualitySnapshot(app, deps)).toEqual({ published: true, hash: 'abc1234', path: '.quality.json' });
   const [path, body] = deps.writeFile.mock.calls[0];
-  expect(path).toBe('/repo/example-app/.quality.json');
+  expect(path).toBe(join('/repo/example-app', '.quality.json'));  // join(): Windows CI joins with backslashes
   expect(JSON.parse(body)).toEqual(snapshot());
   expect(body.endsWith('\n')).toBe(true);
   // The published file carries numeric evidence only — no prose, paths or run ids.
