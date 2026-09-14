@@ -49,9 +49,24 @@ export default function MediaPreview({
   // drives prev/next nav — so if the cleaned copy was auto-filed into this
   // page's source collection, both variants are present and the toggle
   // appears. Returns null for non-image previews or single-variant items.
+  //
+  // `preview` is substituted for its own entry in that list first. A host that
+  // hydrates the OPEN item only (`useHydratedPreviewRoute`) learns `cleanedFrom`
+  // for the preview and not for the row it came from — and this scan matches
+  // cleaned copies by reading `cleanedFrom` off the LIST, so without the
+  // substitution the open cleaned image never finds its own original and the
+  // toggle stays inert on exactly the pages that hydrate lazily.
+  const variantItems = useMemo(() => {
+    if (!preview || !Array.isArray(items)) return items;
+    const index = items.findIndex((i) => i?.key === preview.key);
+    if (index === -1 || items[index] === preview) return items;
+    const next = items.slice();
+    next[index] = preview;
+    return next;
+  }, [items, preview]);
   const variantGroup = useMemo(
-    () => computeImageVariantGroup(preview, items),
-    [preview, items]
+    () => computeImageVariantGroup(preview, variantItems),
+    [preview, variantItems]
   );
   const onSelectVariant = useCallback((nextItem) => {
     if (!nextItem) return;

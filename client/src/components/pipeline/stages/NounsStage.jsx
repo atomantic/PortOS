@@ -37,9 +37,10 @@ import { buildUniverseSectionRenderTag } from '../../../lib/universeRunTag';
 import useMounted from '../../../hooks/useMounted';
 import useUniverse from '../../../hooks/useUniverse';
 import { useCanonPatch } from '../../../hooks/useCanonPatch';
-import usePreviewRoute from '../../../hooks/usePreviewRoute';
+import useHydratedPreviewRoute from '../../../hooks/useHydratedPreviewRoute';
 import CanonCard from '../CanonCard';
 import MediaPreview from '../../media/MediaPreview';
+import { normalizeImage } from '../../media/normalize';
 import Drawer from '../../Drawer';
 import ImageGenSettingsForm from '../../imageGen/ImageGenSettingsForm';
 import {
@@ -104,9 +105,10 @@ export default function NounsStage({ issue, series, onStageUpdate }) {
   const [renderingJobs, setRenderingJobs] = useState({});
   // Shared lightbox state — a flat items list across every kind's imageRefs
   // powers prev/next nav so the user can page through every reference image
-  // without closing/reopening. URL-driven via `usePreviewRoute(previewItems)`
-  // so the modal is deep-linkable (`?preview=<filename>`); the hook is
-  // declared just after the `previewItems` build below.
+  // without closing/reopening. URL-driven via
+  // `useHydratedPreviewRoute(previewItems)` so the modal is deep-linkable
+  // (`?preview=<filename>`); the hook is declared just after the
+  // `previewItems` build below.
 
   // Canon lives on the linked universe. An orphan series (no universeId)
   // renders the link-required gate instead of this body, so by the time
@@ -119,20 +121,20 @@ export default function NounsStage({ issue, series, onStageUpdate }) {
       for (const entry of list) {
         const refs = Array.isArray(entry.imageRefs) ? entry.imageRefs : [];
         for (const filename of refs) {
-          items.push({
-            key: `noun:${filename}`,
-            kind: 'image',
+          // The name + description is only a LABEL — the renderer was sent it
+          // under the universe style clause and any `series.stylePromptOverride`
+          // (see `handleRenderRef`), so `useHydratedPreviewRoute` hydrates the
+          // open item from its sidecar and this stands in until that lands.
+          items.push(normalizeImage({
             filename,
-            previewUrl: `/data/images/${filename}`,
-            downloadUrl: `/data/images/${filename}`,
             prompt: `${entry.name}: ${kind.descFor(entry) || ''}`.trim().replace(/:\s*$/, ''),
-          });
+          }));
         }
       }
     }
     return items;
   }, [universe]);
-  const [preview, setPreview] = usePreviewRoute(previewItems);
+  const [preview, setPreview] = useHydratedPreviewRoute(previewItems);
   const openPreview = useCallback((filename) => {
     if (!filename) return;
     const match = previewItems.find((i) => i.filename === filename);

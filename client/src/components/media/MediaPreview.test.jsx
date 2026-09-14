@@ -15,12 +15,17 @@ vi.mock('../../services/apiImageVideo', () => ({
 // its own interaction coverage; this stub exposes the item it receives and
 // invokes the same callback the real Save prompt button uses.
 vi.mock('./MediaLightbox', () => ({
-  default: ({ item, onPromptChange }) => item ? (
+  default: ({ item, onPromptChange, variantGroup }) => item ? (
     <div data-testid="lightbox">
       <span data-testid="lightbox-prompt">{item.prompt}</span>
       <button type="button" onClick={() => onPromptChange(item, 'a saved prompt')}>
         Save prompt
       </button>
+      {variantGroup && (
+        <ul data-testid="variant-group">
+          {variantGroup.group.map((v) => <li key={v.item.key}>{v.label}</li>)}
+        </ul>
+      )}
     </div>
   ) : null,
 }));
@@ -103,5 +108,32 @@ describe('MediaPreview prompt saving', () => {
     });
     expect(screen.getByTestId('lightbox')).toBeInTheDocument();
     expect(screen.getByTestId('location')).toHaveTextContent('preview=video%3Avideo-1');
+  });
+});
+
+describe('MediaPreview variant group', () => {
+  // A host that hydrates only the OPEN item (`useHydratedPreviewRoute`) hands
+  // us a `preview` carrying `cleanedFrom` while the row it came from — still in
+  // `items` — does not. The variant scan reads `cleanedFrom` off the list, so
+  // the preview has to stand in for its own row or the toggle never appears on
+  // exactly the pages that hydrate lazily.
+  const ORIGINAL = { kind: 'image', key: 'image:shot.png', filename: 'shot.png', prompt: 'a shot' };
+  const CLEANED_ROW = { kind: 'image', key: 'image:shot_clean.png', filename: 'shot_clean.png', prompt: 'a shot' };
+  const CLEANED_HYDRATED = { ...CLEANED_ROW, cleanedFrom: 'shot.png', cleanLevel: 'light' };
+
+  const renderWith = (preview) => render(
+    <MemoryRouter>
+      <MediaPreview preview={preview} setPreview={() => {}} items={[ORIGINAL, CLEANED_ROW]} />
+    </MemoryRouter>,
+  );
+
+  it('pairs a lazily hydrated cleaned image with its original', () => {
+    renderWith(CLEANED_HYDRATED);
+    expect(screen.getByTestId('variant-group').textContent).toBe('OriginalCleaned (light)');
+  });
+
+  it('renders no toggle when nothing in the set is a cleaned copy', () => {
+    renderWith(ORIGINAL);
+    expect(screen.queryByTestId('variant-group')).toBeNull();
   });
 });

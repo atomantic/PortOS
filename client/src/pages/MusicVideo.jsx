@@ -24,7 +24,8 @@ import useMusicVideoRenderJob from '../hooks/useMusicVideoRenderJob.js';
 import useMusicVideoModelSettings from '../hooks/useMusicVideoModelSettings.js';
 import useMusicVideoManualTempo from '../hooks/useMusicVideoManualTempo.js';
 import useMusicVideoSceneMedia from '../hooks/useMusicVideoSceneMedia.js';
-import usePreviewRoute from '../hooks/usePreviewRoute.js';
+import useHydratedPreviewRoute from '../hooks/useHydratedPreviewRoute.js';
+import { normalizeImage, normalizeVideo } from '../components/media/normalize.js';
 import { useVideoFileSrc } from '../hooks/useVideoFileSrc.js';
 import MediaPreview from '../components/media/MediaPreview.jsx';
 import MidiInstallModal from '../components/install/MidiInstallModal.jsx';
@@ -39,7 +40,7 @@ import AnalysisPanel from '../components/musicVideo/AnalysisPanel.jsx';
 import SceneCard from '../components/musicVideo/SceneCard.jsx';
 import { autoArrangeScenes } from '../lib/beatGrid.js';
 import { isLtx2FamilyRuntime } from '../lib/runnerFamilies';
-import { videoSrcForJob, videoPosterForJob } from '../lib/creativeDirectorPreview.js';
+import { videoPosterForJob } from '../lib/creativeDirectorPreview.js';
 
 const STATUS_COLORS = {
   draft: 'bg-port-border text-port-text',
@@ -366,46 +367,42 @@ export default function MusicVideo() {
   });
 
   // Shared lightbox: final render first (it sits above the board), then each
-  // scene's frame then clip in board order. Keys use the canonical
-  // `image:<filename>` / `video:<historyId>` shape from media/normalize so the
-  // lightbox's always-mounted Add-to-collection / Pin-to-moodboard menus get a
-  // real `id`/`filename` ref (same vocabulary as Media History's ?preview=).
+  // scene's frame then clip in board order. Built through media/normalize so
+  // keys use the canonical `image:<filename>` / `video:<historyId>` shape —
+  // the lightbox's always-mounted Add-to-collection / Pin-to-moodboard menus
+  // then get a real `id`/`filename` ref (same vocabulary as Media History's
+  // ?preview=), and the lineage fields survive.
+  //
+  // The prompts here are the board's LABELS: `useMusicVideoSceneMedia` suffixes
+  // `project.concept.style` onto both the frame and the shot prompt on the way
+  // out, and the final render has no prompt of its own at all. They stand in
+  // until `useHydratedPreviewRoute` reads the real one back on open.
   const previewItems = useMemo(() => {
     if (!selected) return [];
     const items = [];
+    // `generateThumbnail` always writes `<jobId>.jpg`, which the history record
+    // only names once hydrated — keep the job-scoped poster so the card has one
+    // on first paint.
+    const videoItem = (id, filename, prompt) => ({
+      ...normalizeVideo({ id, filename, prompt }),
+      previewUrl: videoPosterForJob(id),
+    });
     if (selected.renderHistoryId && finalVideo.src) {
-      items.push({
-        key: `video:${selected.renderHistoryId}`,
-        kind: 'video',
-        id: selected.renderHistoryId,
-        filename: finalVideo.src.split('/').pop() || selected.renderHistoryId,
-        downloadUrl: finalVideo.src,
-        previewUrl: videoPosterForJob(selected.renderHistoryId),
-        prompt: `Music Video: ${selected.name}`,
-      });
+      items.push(videoItem(
+        selected.renderHistoryId,
+        finalVideo.src.split('/').pop() || selected.renderHistoryId,
+        `Music Video: ${selected.name}`,
+      ));
     }
     for (const scene of selected.scenes || []) {
       if (scene.referenceImageId) {
-        const imgUrl = `/data/images/${scene.referenceImageId}`;
-        items.push({
-          key: `image:${scene.referenceImageId}`,
-          kind: 'image',
+        items.push(normalizeImage({
           filename: scene.referenceImageId,
-          previewUrl: imgUrl,
-          downloadUrl: imgUrl,
           prompt: scene.framePrompt || scene.prompt || '',
-        });
+        }));
       }
       if (scene.videoHistoryId) {
-        items.push({
-          key: `video:${scene.videoHistoryId}`,
-          kind: 'video',
-          id: scene.videoHistoryId,
-          filename: `${scene.videoHistoryId}.mp4`,
-          downloadUrl: videoSrcForJob(scene.videoHistoryId),
-          previewUrl: videoPosterForJob(scene.videoHistoryId),
-          prompt: scene.prompt || '',
-        });
+        items.push(videoItem(scene.videoHistoryId, `${scene.videoHistoryId}.mp4`, scene.prompt || ''));
       }
     }
     // Scenes can reuse the same frame/clip (ProjectToolbar surfaces a
@@ -414,7 +411,7 @@ export default function MusicVideo() {
     // several identical keys with different prompts.
     return [...new Map(items.map((i) => [i.key, i])).values()];
   }, [selected, finalVideo.src]);
-  const [preview, setPreview] = usePreviewRoute(previewItems);
+  const [preview, setPreview] = useHydratedPreviewRoute(previewItems);
   const openPreview = useCallback((key) => {
     if (!key) return;
     const match = previewItems.find((i) => i.key === key);

@@ -34,9 +34,8 @@ import DeckRenderControls from '../components/decks/DeckRenderControls';
 import useDeckRenderTarget from '../hooks/useDeckRenderTarget';
 import useMounted from '../hooks/useMounted';
 import useUrlParams from '../hooks/useUrlParams';
-import usePreviewRoute from '../hooks/usePreviewRoute';
+import useHydratedPreviewRoute from '../hooks/useHydratedPreviewRoute';
 import useFieldDraft from '../hooks/useFieldDraft';
-import useGallerySidecars from '../hooks/useGallerySidecars';
 import { DECK_KIND_LABELS, cardInFlightJobId, composeCardRenderPrompt, deckCompletion } from '../lib/decks';
 import {
   deleteDeck, generateDeckPrompts, getDeck, listUniverseSummaries, removeDeckSample,
@@ -112,33 +111,24 @@ function DeckEditor({ id }) {
     () => (deck && cardParam ? deck.cards.find((c) => c.id === cardParam) || null : null),
     [deck, cardParam],
   );
-  const cardImageRefs = useMemo(
-    () => (deck ? deck.cards.flatMap((c) => c.imageRefs) : []),
-    [deck],
-  );
   // The card's own `prompt` is only its subject line; the renderer was sent the
   // composed prompt (deck style clause, layout, titled subject, merged
-  // negatives). The sidecar records what was actually sent, so hydrate from it
-  // — and when there is no sidecar (a legacy render, a peer-synced one, or the
-  // first paint before the lookup lands), compose it locally rather than
-  // falling back to the subject line, which is the wording that was never sent.
-  const { byFilename: sidecars } = useGallerySidecars(cardImageRefs);
+  // negatives), which `useHydratedPreviewRoute` reads back from the sidecar of
+  // whichever card the user opens. Compose it locally as the stand-in — a
+  // legacy or peer-synced render has no sidecar at all, and falling back to the
+  // subject line would re-show the wording that was never sent.
   const previewItems = useMemo(() => (deck
     ? deck.cards.flatMap((c) => {
       if (!c.imageRefs.length) return [];
       const composed = composeCardRenderPrompt(deck, c);
-      return c.imageRefs.map((filename) => {
-        const meta = sidecars.get(filename);
-        return normalizeImage({
-          ...meta,
-          filename,
-          prompt: meta?.prompt || composed.prompt,
-          negativePrompt: meta?.negativePrompt || composed.negativePrompt || null,
-        });
-      });
+      return c.imageRefs.map((filename) => normalizeImage({
+        filename,
+        prompt: composed.prompt,
+        negativePrompt: composed.negativePrompt || null,
+      }));
     })
-    : []), [deck, sidecars]);
-  const [preview, setPreview] = usePreviewRoute(previewItems);
+    : []), [deck]);
+  const [preview, setPreview] = useHydratedPreviewRoute(previewItems);
   const previewFilename = (filename) => {
     const item = previewItems.find((i) => i.filename === filename);
     if (item) setPreview(item);
