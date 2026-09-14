@@ -38,10 +38,18 @@ export {
 };
 
 /**
- * Get git status for a directory
+ * Get git status for a directory.
+ *
+ * `paths` scopes the answer to a pathspec, for a caller whose follow-up write
+ * is itself scoped — a repo-wide "is anything dirty?" does not answer "did THIS
+ * file change?", and a partial `git commit -- <path>` exits 1 when that path
+ * carries no change.
  */
-export async function getStatus(dir) {
-  const result = await execGit(['status', '--porcelain'], dir);
+export async function getStatus(dir, { paths = [] } = {}) {
+  const result = await execGit(
+    ['status', '--porcelain', ...(paths.length ? ['--', ...paths] : [])],
+    dir,
+  );
   // trimEnd (not trim): porcelain status codes use leading spaces (e.g. ' M' = unstaged)
   const lines = result.stdout.trimEnd().split('\n').filter(Boolean);
 

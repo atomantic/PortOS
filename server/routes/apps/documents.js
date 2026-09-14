@@ -196,7 +196,10 @@ router.put('/:id/documents/*docPath', loadApp, asyncHandler(async (req, res) => 
   await atomicWrite(resolved, content);
   await git.stageFiles(app.repoPath, [filename]);
 
-  const status = await git.getStatus(app.repoPath);
+  // Scope the check to this document, because the commit below is scoped too:
+  // a repo-wide `clean` is false whenever the user has any unrelated dirty file,
+  // and the partial commit that follows then exits 1 on an unchanged document.
+  const status = await git.getStatus(app.repoPath, { paths: [filename] });
   if (status.clean) {
     return res.json({ success: true, noChanges: true });
   }

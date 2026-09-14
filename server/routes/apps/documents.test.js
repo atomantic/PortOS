@@ -126,6 +126,22 @@ describe('Apps Document Routes', () => {
     expect(await readFile(join(repoPath, 'docs', 'decisions', '2026-01-01-choice.md'), 'utf-8')).toBe('# Revised');
   });
 
+  it('asks git about this document only, so unrelated dirt cannot force a partial commit that exits 1', async () => {
+    // The commit is scoped to the document, so the "did anything change?" gate
+    // must be too. Repo-wide, any unrelated dirty file reads as not-clean, and
+    // `git commit -- <doc>` on an unchanged doc then exits 1 as a 500.
+    git.getStatus.mockResolvedValueOnce({ clean: true });
+
+    const res = await request(app)
+      .put('/api/apps/app-1/documents/docs/API.md')
+      .send({ content: '# API' });
+
+    expect(git.getStatus).toHaveBeenCalledWith(repoPath, { paths: ['docs/API.md'] });
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ success: true, noChanges: true });
+    expect(git.commit).not.toHaveBeenCalled();
+  });
+
   it('refuses to write outside the browsable set', async () => {
     const res = await request(app)
       .put('/api/apps/app-1/documents/server/index.js')
