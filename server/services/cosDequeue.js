@@ -187,10 +187,15 @@ export async function closeStolenIdleReviewCard(cardId, admittedTask) {
  * `undefined` is NOT that claim — a task built without the field (most user rows)
  * stays runnable, so this narrows nothing that was already running.
  *
+ * `approvalRequired` is the same hold said the way the FILE can hold it: the user
+ * `TASKS.md` writes `| APPROVAL |` on a withheld row (#7367), which reads back as
+ * `approvalRequired: true` + `autoApproved: false`. Both are checked so the hold
+ * survives whichever half a producer or a peer merge happens to carry.
+ *
  * Lives beside `isIdleTierEligible` for the same reason: both spawn engines run
  * their own copy of the user tier, and anything the two must agree on belongs in
  * ONE body rather than in a pair of blocks a grep test has to police.
  */
 export function isUserTaskRunnableUnattended(task) {
-  return task?.autoApproved !== false;
+  return task?.autoApproved !== false && task?.approvalRequired !== true;
 }

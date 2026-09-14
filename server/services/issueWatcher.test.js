@@ -1046,6 +1046,42 @@ describe('processTaskOutput', () => {
     }));
   });
 
+  // An approval persisted before the screened content gained the commit log
+  // (#7323) carries a fingerprint the current recipe cannot reproduce. Compared
+  // against the current recipe alone, every one of them mismatched on the first
+  // tick after the update and the approval was dropped with a console warning
+  // and no hand-back — silent for the cycle it took the next scan to re-approve.
+  it('merges an approval stamped by an older fingerprint recipe instead of dropping it', async () => {
+    // The stamp a pre-#7323 install wrote: the same hash over the commit-less
+    // content, stored without a recipe version.
+    const legacyFingerprint = screenedPullRequestFingerprint(pullRequest(), DIFF, []).split(':')[1];
+    apps.set(APP.id, {
+      ...APP,
+      issueWatcherState: {
+        approvedPullRequests: [{
+          number: 7,
+          headSha: 'a'.repeat(40),
+          contentFingerprint: legacyFingerprint,
+          url: 'https://github.com/o/r/pull/7',
+          ciPolicy: 'skippable',
+          noChecksObserved: true,
+          rebaseRequired: false,
+          ticks: 0,
+        }],
+      },
+    });
+    mergePrMock.mockResolvedValue({ success: true });
+    installDefaultGhMock({
+      pr: pullRequest({ statusCheckRollup: [] }),
+      reviews: [[{ user: { login: 'owner' }, commit_id: 'a'.repeat(40), state: 'APPROVED' }]],
+    });
+
+    await buildTaskInput({ app: apps.get(APP.id) });
+
+    expect(mergePrMock).toHaveBeenCalledWith(APP.repoPath, 7);
+    expect(apps.get(APP.id).issueWatcherState.approvedPullRequests).toEqual([]);
+  });
+
   it('bounds polling for an approved PR whose CI never settles', async () => {
     const approval = {
       number: 7,

@@ -31,7 +31,7 @@ import { mergePR, resolveForgeForRepo } from './git.js';
 import { addNotification, NOTIFICATION_TYPES, PRIORITY_LEVELS } from './notifications.js';
 import { normalizeEligibilityFacts } from './modelAbuseGuard.js';
 import { issuePrerequisiteWaived, linkedIssueIntentFingerprint } from '../lib/modelAbuseGuard.js';
-import { screenedPullRequestFingerprint } from '../lib/prReviewContent.js';
+import { screenedPullRequestFingerprintMatches } from '../lib/prReviewContent.js';
 import { trimTo } from '../lib/textUtils.js';
 
 const IN_PROGRESS_LABEL_SPEC = dispatchLabelSpec(IN_PROGRESS_LABEL);
@@ -574,9 +574,10 @@ async function readPullRequest(ctx, number) {
     // a fork's head branch actually lives, which is what lets the remediation
     // agent's worktree attach to it at all (#6064). `assignees` keeps that
     // assignment idempotent across scheduled sweeps. `commits` is part of the
-    // screened content, so `screenedPullRequestFingerprint` cannot verify a PR
-    // read without it — safe to ask for on a single PR, unlike the bulk listing
-    // the preflight has to keep it out of (GraphQL node budget).
+    // screened content, so `screenedPullRequestFingerprintMatches` cannot verify
+    // a current-recipe stamp on a PR read without it — safe to ask for on a
+    // single PR, unlike the bulk listing the preflight has to keep it out of
+    // (GraphQL node budget).
     '--json', 'id,number,title,body,url,state,isDraft,author,assignees,labels,commits,files,additions,deletions,baseRefName,baseRefOid,headRefName,headRefOid,isCrossRepository,maintainerCanModify,headRepository,headRepositoryOwner,mergeable,mergeStateStatus,statusCheckRollup',
   ], ctx);
 }
@@ -886,8 +887,7 @@ async function processPendingApprovals(app, ctx) {
     if (
       typeof approvedDiff !== 'string'
       || approvedDiff.length > MAX_DIFF_CHARS
-      || !approval.contentFingerprint
-      || screenedPullRequestFingerprint(pr, approvedDiff) !== approval.contentFingerprint
+      || !screenedPullRequestFingerprintMatches(approval.contentFingerprint, pr, approvedDiff)
     ) {
       // A maintainer can edit the title/body or a contributor can replace the
       // head after the review. An old approval is never enough to merge the
@@ -1271,7 +1271,7 @@ async function verifyScreenedPullRequest(ctx, raw, expectedPullRequests) {
   // A PR description can change without changing its head SHA. Require the
   // exact content screened before cognition, not merely the same revision,
   // before any review, rebase, or merge action.
-  if (!target.contentFingerprint || screenedPullRequestFingerprint(pr, diff) !== target.contentFingerprint) {
+  if (!screenedPullRequestFingerprintMatches(target.contentFingerprint, pr, diff)) {
     // `pr` rides along so the notification can still link to it.
     return { number, pr, reason: 'its content no longer matches what the security scan screened', notify: true };
   }
