@@ -34,7 +34,7 @@ describe.skipIf(!runDb)('app quality persistence', () => {
     const deps = { getPeers: async () => [], getAppById: async id => ({ id }) };
     const [app, other] = await enrichAppsWithQuality([{ id: appId }, { id: `${appId}-other` }], deps);
     expect(app.quality).toMatchObject({ score: 65, ratedCategories: 1 });
-    const history = await getAppQualityHistory(appId, 30, deps);
+    const history = await getAppQualityHistory({ id: appId }, 30, deps);
     expect(history.points.at(-1)).toMatchObject({ score: 65, ratedCategories: 1 });
     const retained = await query('SELECT report FROM app_quality_measurements WHERE app_id = $1 ORDER BY assessed_at', [appId]);
     expect(retained.rows.map(row => row.report.score)).toEqual([30, 65]);

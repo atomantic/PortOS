@@ -211,6 +211,29 @@ describe('EditAppDrawer work tracker selector', () => {
     await waitFor(() => expect(api.updateApp).toHaveBeenCalled());
     expect(api.updateApp.mock.calls[0][1].verifyRepoStateOnCompletion).toBe(false);
   });
+
+  // Publishing writes to the app's own repo, so the stored value must round-trip
+  // exactly: an app that opted in stays checked, and turning it back off has to
+  // reach the server as `false` rather than being dropped from the payload.
+  it('round-trips the opt-in repo quality snapshot toggle', async () => {
+    renderDrawer({ app: { ...APP, publishQualitySnapshot: true } });
+    await openTab('Workflow');
+
+    const toggle = await screen.findByLabelText(/Publish quality snapshot to repo/);
+    expect(toggle).toBeChecked();
+    fireEvent.click(toggle);
+    fireEvent.click(screen.getByRole('button', { name: 'Save Changes' }));
+
+    await waitFor(() => expect(api.updateApp).toHaveBeenCalled());
+    expect(api.updateApp.mock.calls[0][1].publishQualitySnapshot).toBe(false);
+  });
+
+  it('leaves repo snapshot publishing off for an app that never opted in', async () => {
+    renderDrawer();
+    await openTab('Workflow');
+
+    expect(await screen.findByLabelText(/Publish quality snapshot to repo/)).not.toBeChecked();
+  });
 });
 
 describe('EditAppDrawer native launch target', () => {

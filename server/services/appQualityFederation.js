@@ -129,12 +129,29 @@ export async function collectAppQuality(app, days, deps = {}) {
       unavailable: results.filter(r => r.status === 'rejected').length } };
 }
 
+/**
+ * PortOS reads its own committed `quality-snapshot.json`; every other managed app
+ * reads a `.quality.json` at its repo root. Both files are the same numeric
+ * snapshot shape and get the same guards — repository match, no future dates, 4 MiB cap.
+ */
+async function releasePayload(deps, app) {
+  let raw = null;
+  if (app.id === PORTOS_APP_ID) {
+    const body = await (deps.readSnapshot || (() => readFile(join(PATHS.root, 'quality-snapshot.json'), 'utf8')))().catch(() => null);
+    // jsonIo stays out of this widely-reached module's static closure (import budget).
+    if (body && Buffer.byteLength(body) <= MAX_PAYLOAD_BYTES) raw = await Promise.resolve().then(() => JSON.parse(body)).catch(() => null);
+  } else if (app.repoPath) {
+    const { readAppQualitySnapshotFile } = await import('./appQualitySnapshotFile.js');
+    raw = await readAppQualitySnapshotFile(app.repoPath, deps);
+  }
+  const parsed = payloadSchema.safeParse(raw);
+  return parsed.success ? parsed.data : null;
+}
+
 /** Shipped evidence is read-only and never re-exported as a local audit. */
-export async function readReleaseQuality(deps = {}) {
-  const body = await (deps.readSnapshot || (() => readFile(join(PATHS.root, 'quality-snapshot.json'), 'utf8')))().catch(() => null);
-  if (!body || Buffer.byteLength(body) > MAX_PAYLOAD_BYTES) return [];
-  const payload = await Promise.resolve().then(() => payloadSchema.parse(JSON.parse(body))).catch(() => null);
-  if (!payload || payload.repository !== await repositoryKey(deps)) return [];
+export async function readReleaseQuality(deps = {}, app = { id: PORTOS_APP_ID }) {
+  const payload = await releasePayload(deps, app);
+  if (!payload || payload.repository !== await repositoryKey(deps, app)) return [];
   return payload.measurements.filter(row => Date.parse(row.assessedAt) <= (deps.now ?? Date.now())).map(row => ({
     ...row, category: row.report.category, sourcePeerName: 'Release snapshot',
     report: { ...row.report, summary: 'Published release assessment; original assessment date and freshness rules apply.' },

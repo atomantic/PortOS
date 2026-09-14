@@ -1,9 +1,16 @@
-import { fireEvent, render, screen, within } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
-import { it, expect, vi } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import AppQuality from './AppQuality';
 vi.mock('./AppQualityRunner', () => ({ default: ({ children }) => children(<div>Runner</div>) }));
-vi.mock('../../services/apiApps', () => ({ getAppQualityHistory: vi.fn().mockResolvedValue({ points: [], totalCategories: 25 }) }));
+vi.mock('../../services/apiApps', () => ({
+  getAppQualityHistory: vi.fn().mockResolvedValue({ points: [], totalCategories: 25 }),
+  publishAppQualitySnapshot: vi.fn(),
+}));
+vi.mock('../ui/Toast', () => ({ default: Object.assign(vi.fn(), { success: vi.fn(), error: vi.fn() }) }));
+
+import { publishAppQualitySnapshot } from '../../services/apiApps';
+import toast from '../ui/Toast';
 
 it('shows zero as a real score and explains excluded categories in the breakdown', async () => {
   const app = { id: 'portos-default', quality: { score: 0, ratedCategories: 1, totalCategories: 25, categories: [
@@ -91,4 +98,39 @@ it('opens the shared runner beside unavailable category evidence while preservin
   expect(within(table).getByText('Runner')).toBeInTheDocument();
   expect(screen.getAllByText('Runner')).toHaveLength(1);
   expect(screen.getAllByText('unavailable')).toHaveLength(2);
+});
+
+describe('AppQuality snapshot publishing', () => {
+  const publishingApp = { id: 'example', publishQualitySnapshot: true, quality: { score: 80, categories: [] } };
+
+  it('offers the publish action only for an app that opted in', async () => {
+    const { rerender } = render(<MemoryRouter><AppQuality app={{ ...publishingApp, publishQualitySnapshot: false }} detail /></MemoryRouter>);
+    await screen.findByText(/No scored assessments/);
+    expect(screen.queryByRole('button', { name: 'Publish snapshot now' })).not.toBeInTheDocument();
+
+    rerender(<MemoryRouter><AppQuality app={publishingApp} detail /></MemoryRouter>);
+    expect(screen.getByRole('button', { name: 'Publish snapshot now' })).toBeInTheDocument();
+  });
+
+  it('reports the commit that carried the snapshot into the repo', async () => {
+    publishAppQualitySnapshot.mockResolvedValue({ success: true, published: true, hash: 'abc1234def', path: '.quality.json' });
+    render(<MemoryRouter><AppQuality app={publishingApp} detail /></MemoryRouter>);
+    await screen.findByText(/No scored assessments/);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Publish snapshot now' }));
+
+    await waitFor(() => expect(publishAppQualitySnapshot).toHaveBeenCalledWith('example'));
+    await waitFor(() => expect(toast.success).toHaveBeenCalledWith('Quality snapshot committed to .quality.json (abc1234)'));
+  });
+
+  it('explains a refusal instead of claiming a commit that never happened', async () => {
+    publishAppQualitySnapshot.mockResolvedValue({ success: true, published: false, reason: 'no-changes', path: '.quality.json' });
+    render(<MemoryRouter><AppQuality app={publishingApp} detail /></MemoryRouter>);
+    await screen.findByText(/No scored assessments/);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Publish snapshot now' }));
+
+    await waitFor(() => expect(toast).toHaveBeenCalledWith('Snapshot already up to date in .quality.json'));
+    expect(toast.success).not.toHaveBeenCalled();
+  });
 });

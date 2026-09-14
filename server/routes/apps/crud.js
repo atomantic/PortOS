@@ -1,16 +1,18 @@
 import { appListQuerySchema, appQualityQuerySchema, appQualityHistoryQuerySchema, appQualityFederationQuerySchema } from '../../lib/auditQuality.js';
 import { exportPortosQuality } from '../../services/appQualityFederation.js';
 import { enrichAppsWithQuality, getAppQualityHistory } from '../../services/appQuality.js';
+import { publishAppQualitySnapshot } from '../../services/appQualitySnapshotFile.js';
 /**
  * App CRUD + status enrichment + archive lifecycle.
  *
- *   GET    /                 → App[]  (PM2-status-enriched)
- *   GET    /:id              → App    (PM2-status-enriched, + appVersion)
- *   POST   /                 → App
- *   PUT    /:id              → App    (ports written back to ecosystem config)
- *   DELETE /:id              → 204  (removes the PortOS registry association only)
- *   POST   /:id/archive      → App
- *   POST   /:id/unarchive    → App
+ *   GET    /                     → App[]  (PM2-status-enriched)
+ *   GET    /:id                  → App    (PM2-status-enriched, + appVersion)
+ *   POST   /                     → App
+ *   PUT    /:id                  → App    (ports written back to ecosystem config)
+ *   DELETE /:id                  → 204  (removes the PortOS registry association only)
+ *   POST   /:id/archive          → App
+ *   POST   /:id/unarchive        → App
+ *   POST   /:id/quality-snapshot → commits the app's `.quality.json` snapshot
  */
 
 import { Router } from 'express';
@@ -69,7 +71,14 @@ router.get('/', asyncHandler(async (req, res) => {
 
 router.get('/:id/quality-history', loadApp, asyncHandler(async (req, res) => {
   const { days } = validateRequest(appQualityHistoryQuerySchema, req.query);
-  res.json(await getAppQualityHistory(req.loadedApp.id, days));
+  res.json(await getAppQualityHistory(req.loadedApp, days));
+}));
+
+// POST /api/apps/:id/quality-snapshot - Commit this app's numeric snapshot into its
+// repo as `.quality.json`. Deliberately NOT gated on publishQualitySnapshot: the
+// toggle automates the audit hook, a manual call here is explicit intent.
+router.post('/:id/quality-snapshot', loadApp, asyncHandler(async (req, res) => {
+  res.json({ success: true, ...await publishAppQualitySnapshot(req.loadedApp) });
 }));
 
 // GET /api/apps/:id - Get single app
