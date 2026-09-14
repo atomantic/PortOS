@@ -55,6 +55,25 @@ describe('parseSshHostAliases', () => {
     expect(aliases.get('dup')).toBe('first.example.com');
   });
 
+  it('does not chain one alias through another, matching ssh', () => {
+    // ssh applies `Host` matching to the name in the URL once; the resulting
+    // `HostName` is the final value and is never re-matched. Chaining here would
+    // send a remote to a host ssh itself would never dial.
+    const aliases = parseSshHostAliases([
+      'Host first',
+      '  HostName second',
+      'Host second',
+      '  HostName third.example.com',
+    ].join('\n'));
+    expect(aliases.get('first')).toBe('second');
+    expect(aliases.get('second')).toBe('third.example.com');
+  });
+
+  it('records a self-referential alias as the harmless no-op it is', () => {
+    const aliases = parseSshHostAliases('Host github.com\n  HostName github.com\n');
+    expect(aliases.get('github.com')).toBe('github.com');
+  });
+
   it('returns an empty map for missing or non-string input', () => {
     expect(parseSshHostAliases('').size).toBe(0);
     expect(parseSshHostAliases(null).size).toBe(0);
