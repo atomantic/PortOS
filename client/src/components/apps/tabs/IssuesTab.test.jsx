@@ -466,6 +466,48 @@ describe('IssuesTab', () => {
     expect(await screen.findByText('Crash on save')).toBeInTheDocument();
   });
 
+  it('filters issues by the selected filed-by author and restores all when cleared', async () => {
+    api.getAppIssues.mockResolvedValue(okPayload([
+      { ...ISSUE, number: 42, title: 'Crash on save', author: 'carol' },
+      { ...ISSUE, number: 43, title: 'Add CSV export', author: 'alice' },
+      { ...ISSUE, number: 44, title: 'Fix styling', author: 'bob' },
+    ]));
+    await renderTab();
+
+    await screen.findByText('Crash on save');
+    const filedBySelect = screen.getByLabelText('Filed by');
+    expect(filedBySelect).toHaveValue('');
+
+    // Authors are ordered alphabetically with 'All' first
+    const options = Array.from(filedBySelect.querySelectorAll('option')).map(o => ({ value: o.value, text: o.textContent }));
+    expect(options).toEqual([
+      { value: '', text: 'All' },
+      { value: 'alice', text: 'alice' },
+      { value: 'bob', text: 'bob' },
+      { value: 'carol', text: 'carol' },
+    ]);
+
+    // Select alice
+    fireEvent.change(filedBySelect, { target: { value: 'alice' } });
+    expect(await screen.findByText('Add CSV export')).toBeInTheDocument();
+    expect(screen.queryByText('Crash on save')).not.toBeInTheDocument();
+    expect(screen.queryByText('Fix styling')).not.toBeInTheDocument();
+    expect(screen.getByText('1 of 3 open')).toBeInTheDocument();
+
+    // Select bob
+    fireEvent.change(filedBySelect, { target: { value: 'bob' } });
+    expect(await screen.findByText('Fix styling')).toBeInTheDocument();
+    expect(screen.queryByText('Add CSV export')).not.toBeInTheDocument();
+    expect(screen.queryByText('Crash on save')).not.toBeInTheDocument();
+
+    // Reset back to All
+    fireEvent.change(filedBySelect, { target: { value: '' } });
+    expect(await screen.findByText('Crash on save')).toBeInTheDocument();
+    expect(screen.getByText('Add CSV export')).toBeInTheDocument();
+    expect(screen.getByText('Fix styling')).toBeInTheDocument();
+    expect(screen.getByText('3 open')).toBeInTheDocument();
+  });
+
   it('hides in-progress issues by default and lists them once the chip is toggled on', async () => {
     api.getAppIssues.mockResolvedValue(okPayload([
       ISSUE,
@@ -624,11 +666,12 @@ describe('IssuesTab', () => {
     expect(hidden.className).toContain('line-through');
   });
 
-  it('resets label and assignee filters when the app changes', async () => {
+  it('resets label, assignee, and filed-by filters when the app changes', async () => {
     const inProgress = {
       ...ISSUE,
       number: 43,
       title: 'Being worked right now',
+      author: 'alice',
       labels: [{ name: 'in-progress', color: '#0e8a16', description: '' }],
     };
     api.getAppIssues.mockResolvedValue(okPayload([ISSUE, inProgress]));
@@ -637,6 +680,8 @@ describe('IssuesTab', () => {
     fireEvent.click(await screen.findByRole('button', { name: /in-progress/ }));
     expect(await screen.findByText('Being worked right now')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Unassigned only' }));
+    fireEvent.change(screen.getByLabelText('Filed by'), { target: { value: 'alice' } });
+    expect(screen.getByLabelText('Filed by')).toHaveValue('alice');
 
     rerender(
       <MemoryRouter>
@@ -647,6 +692,7 @@ describe('IssuesTab', () => {
 
     await waitFor(() => expect(screen.queryByText('Being worked right now')).not.toBeInTheDocument());
     expect(screen.getByRole('button', { name: 'Unassigned only' })).toHaveAttribute('aria-pressed', 'false');
+    expect(screen.getByLabelText('Filed by')).toHaveValue('');
   });
 
   it('ignores a stale in-flight response when the app changes mid-request', async () => {
