@@ -32,7 +32,7 @@ const {
 const pin = (id, overrides = {}) => ({
   id,
   kind: 'imageGen',
-  providerId: 'antigravity-cli',
+  providerIds: ['antigravity-cli'],
   model: 'retired-model-1',
   label: 'Agy CLI image model',
   location: 'Settings → Media Gen → Image Gen',
@@ -42,7 +42,7 @@ const pin = (id, overrides = {}) => ({
 
 const audited = (...pins) => ({
   pins,
-  providers: Object.fromEntries(pins.map((p) => [p.providerId, { id: p.providerId, name: 'Agy CLI' }])),
+  providers: Object.fromEntries(pins.flatMap((p) => p.providerIds.map((id) => [id, { id, name: 'Agy CLI' }]))),
 });
 
 /**

@@ -589,7 +589,24 @@ describe('deferred imports stay deferred (#6156)', () => {
 // `lib/index.test.js` fails without it. The module is deliberately
 // dependency-free (a few regexes over a string), so it adds no edge into any
 // subtree — its only consumer, `services/shell.js`, deep-imports it directly.
-const MAX_STATIC_INSTANTIATIONS = 104627;
+// Auditing reviewer and task-template model pins (#7339) measures +41, and none
+// of it is a new edge into a heavy subtree. The shared reviewer -> provider-record
+// table is a pure leaf (`lib/reviewerProviderMatchers.js`) importing only
+// `providerModels.js`, `providerTypes.js` and `arrayUtils.js`, which every module
+// that can reach it already instantiates; registering it in the `lib/` barrel is
+// mandatory (`lib/index.test.js`) and costs one node in each barrel reacher's
+// closure, and its own suite pulls those leaves plus `reviewerConfig.js`. The
+// remaining ~22 is `services/modelPinAuditNotifier.js` taking its ONE static
+// import — `lib/modelPinReconcile.js`, so the card and the panel name a pin's
+// provider records with the same function — which lands in that module's own
+// suite and in `bootstrap.js`'s closure; no server test file statically reaches
+// `bootstrap.js`, so the production edge costs nothing. The two stores the new
+// collectors read stay behind the audit's memoized call-site `await import()`
+// (`services/taskTemplates.js` is never in a static closure), and
+// `modelPinAudit.js` gaining `reviewerConfig.js` / `goalFidelity.js` cost
+// nothing — `routes/providers.js` already reaches both through
+// `lib/validation.js`.
+const MAX_STATIC_INSTANTIATIONS = 104668;
 
 
 const SKIP_DIRS = new Set(['node_modules', 'coverage', 'dist', 'data']);
