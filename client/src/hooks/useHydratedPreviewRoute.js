@@ -24,12 +24,11 @@ import { normalizeImage, normalizeVideo } from '../components/media/normalize';
  * the lightbox (Universe Builder reads them for thumbs) still wants the eager
  * `useGallerySidecars` map.
  *
- * One item is the wrong unit for anything set-level, so lineage is only PARTLY
- * restored: `MediaPreview` substitutes the hydrated preview into the list it
- * scans, which is enough to pair an open CLEANED copy with its original, but
- * opening the original finds no cleaned sibling, because the siblings in the
- * list still carry no `cleanedFrom`. Hydrating the whole list is the only shape
- * that serves both directions — see #7346.
+ * One item is the wrong unit for anything set-level, so the variant toggle is
+ * no longer built from this at all: `MediaPreview` asks the server for the
+ * open image's lineage (`useImageVariants`), which answers both directions from
+ * either end. Substituting the hydrated preview into the scanned list remains
+ * the fallback while that lookup is in flight or after it fails (#7346).
  *
  * The record wins on every field it carries; the host's item is the fallback,
  * and its `key` is kept outright — prev/next nav (`getAdjacentMedia`) and the

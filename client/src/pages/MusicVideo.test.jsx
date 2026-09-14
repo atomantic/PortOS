@@ -91,6 +91,10 @@ vi.mock('../services/apiImageVideo.js', () => ({
   getVideoHistoryItem: vi.fn(async (id) => (id === 'rh-9'
     ? { id: 'rh-9', filename: 'final.mp4' }
     : Promise.reject(Object.assign(new Error('Not found'), { status: 404 })))),
+  // Scene refs are a projection, so the lightbox resolves variant lineage and
+  // any variant it opens through the gallery rather than this page's list.
+  listImageVariants: vi.fn(async () => ({ items: [] })),
+  listMediaGalleryPage: vi.fn(async () => ({ items: [] })),
 }));
 vi.mock('../services/apiTracks.js', () => ({
   listTracks: vi.fn(async () => []),

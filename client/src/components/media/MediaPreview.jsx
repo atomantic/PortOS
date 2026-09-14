@@ -2,6 +2,7 @@ import { useMemo, useCallback, useEffect, useState } from 'react';
 import MediaLightbox from './MediaLightbox';
 import { getMediaNavProps } from '../../lib/mediaNavigation';
 import { computeImageVariantGroup } from './variants';
+import useImageVariants from '../../hooks/useImageVariants';
 import { updateImagePrompt, updateVideoPrompt } from '../../services/apiImageVideo';
 
 // Thin wrapper around MediaLightbox that owns the consistent wiring every
@@ -45,28 +46,54 @@ export default function MediaPreview({
       raw: preview.raw ? { ...preview.raw, prompt: prompt === '(no prompt)' ? '' : prompt } : preview.raw,
     };
   }, [preview, promptOverride]);
-  // Original-vs-cleaned toggle. Computed from the same `items` list that
-  // drives prev/next nav — so if the cleaned copy was auto-filed into this
-  // page's source collection, both variants are present and the toggle
-  // appears. Returns null for non-image previews or single-variant items.
+  // Original-vs-cleaned toggle, computed over the UNION of the host's items
+  // and the image's fetched lineage — neither source alone is complete. The
+  // host list misses a copy it never held (see useImageVariants), while the
+  // fetched set misses one the user just made, because a Clean splices the new
+  // variant into the host's state (useMediaPreviewActions' onCleanComplete)
+  // after the server set was read. Returns null for a non-image preview or a
+  // lone variant.
   //
-  // `preview` is substituted for its own entry in that list first. A host that
-  // hydrates the OPEN item only (`useHydratedPreviewRoute`) learns `cleanedFrom`
-  // for the preview and not for the row it came from — and this scan matches
-  // cleaned copies by reading `cleanedFrom` off the LIST, so without the
-  // substitution the open cleaned image never finds its own original and the
-  // toggle stays inert on exactly the pages that hydrate lazily.
-  const variantItems = useMemo(() => {
-    if (!preview || !Array.isArray(items)) return items;
-    const index = items.findIndex((i) => i?.key === preview.key);
-    if (index === -1 || items[index] === preview) return items;
-    const next = items.slice();
-    next[index] = preview;
-    return next;
-  }, [items, preview]);
+  // `preview` is substituted for its own entry in the host list first, which
+  // is what the list scan needs while the lookup is in flight or after it
+  // failed: a host that hydrates the OPEN item only (`useHydratedPreviewRoute`)
+  // learns `cleanedFrom` for the preview and not for the row it came from, and
+  // the scan reads `cleanedFrom` off the LIST.
+  const fetchedVariants = useImageVariants(preview);
+  const variantCandidates = useMemo(() => {
+    let list = Array.isArray(items) ? items : [];
+    if (preview) {
+      const index = list.findIndex((i) => i?.key === preview.key);
+      if (index !== -1 && list[index] !== preview) {
+        list = list.slice();
+        list[index] = preview;
+      }
+    }
+    // A union with an empty set is the list itself — the short-circuit is an
+    // optimization, not a read of `[]` as "not fetched".
+    if (!fetchedVariants?.length) return list;
+    const hostByFilename = new Map(list
+      .filter((item) => item?.kind === 'image' && item.filename)
+      .map((item) => [item.filename, item]));
+    // The fetched record wins on LINEAGE — that is the whole point, since the
+    // host's own row is exactly what may not carry `cleanedFrom`. But the
+    // host's `key` wins outright wherever it lists the same file: picking a
+    // variant writes that key to the URL, and prev/next nav (getAdjacentMedia)
+    // and the annotation lookup both match on it, so a key that drifted from
+    // the list would silently disable both (same contract useHydratedPreviewRoute
+    // keeps when it merges a record over a host item).
+    const byFilename = new Map(fetchedVariants.map((variant) => {
+      const hosted = hostByFilename.get(variant.filename);
+      return [variant.filename, hosted ? { ...variant, key: hosted.key } : variant];
+    }));
+    for (const [filename, item] of hostByFilename) {
+      if (!byFilename.has(filename)) byFilename.set(filename, item);
+    }
+    return [...byFilename.values()];
+  }, [fetchedVariants, items, preview]);
   const variantGroup = useMemo(
-    () => computeImageVariantGroup(preview, variantItems),
-    [preview, variantItems]
+    () => computeImageVariantGroup(preview, variantCandidates),
+    [preview, variantCandidates]
   );
   const onSelectVariant = useCallback((nextItem) => {
     if (!nextItem) return;

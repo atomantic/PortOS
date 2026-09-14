@@ -66,6 +66,12 @@ export const setImageHidden = (filename, hidden, options = {}) => request(`/imag
 export const updateImagePrompt = (filename, prompt, options = {}) => request(`/image-gen/${encodeURIComponent(filename)}/prompt`, {
   method: 'PATCH', body: JSON.stringify({ prompt }), ...options,
 });
+// Original-vs-cleaned variant set for ONE image: the original record plus every
+// copy whose `cleanedFrom` names it. Lets a lightbox host whose item list is a
+// projection of its own refs (deck cards, pipeline/music-video scenes) render
+// the variant toggle without hydrating that whole list. Returns `{ items }`.
+export const listImageVariants = (filename, options = {}) =>
+  request(`/image-gen/${encodeURIComponent(filename)}/variants`, { silent: true, ...options });
 export const cleanGalleryImage = (filename, options = {}) => request(`/image-gen/${encodeURIComponent(filename)}/clean`, {
   method: 'POST',
   body: JSON.stringify({}),
