@@ -28,6 +28,15 @@ describe('aspectRatioTerms', () => {
     expect(aspectRatioTerms(4096, 64)).toEqual({ width: 64, height: 1 });
   });
 
+  it('returns null rather than 0:0 when a sub-pixel edge has no describable ratio', () => {
+    // The fallback rounds to whole pixels, so a canvas narrower than half a pixel
+    // rounded to zero on both edges and reported `0:0` — which aspectRatioPhrase
+    // then called a SQUARE. Wrong is worse than silent for a phrase that goes
+    // into a render prompt.
+    expect(aspectRatioTerms(0.3, 0.01)).toBeNull();
+    expect(aspectRatioPhrase(0.3, 0.01)).toBe('');
+  });
+
   it('returns null for a canvas that cannot be described', () => {
     expect(aspectRatioTerms(0, 1536)).toBeNull();
     expect(aspectRatioTerms(1024, 0)).toBeNull();

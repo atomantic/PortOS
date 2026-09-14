@@ -77,8 +77,14 @@ const layoutClauseFor = {
 
 export const DEFAULT_LAYOUT_PROMPT = Object.freeze(Object.fromEntries(
   DECK_KINDS.map((kind) => {
+    // Loud at import rather than silent at render: a kind with no clause used to
+    // resolve to `undefined` here and reach `services/decks.js`, whose
+    // `|| ''` fallback would mint every card of that deck with NO shared layout
+    // at all — a whole deck rendered wrong before anyone noticed the gap.
+    const clause = layoutClauseFor[kind];
+    if (!clause) throw new Error(`Deck kind ${kind} has no DEFAULT_LAYOUT_PROMPT clause`);
     const size = DECK_CARD_SIZE_BY_KIND[kind] || DECK_CARD_SIZE;
-    return [kind, layoutClauseFor[kind](aspectRatioPhrase(size.width, size.height))];
+    return [kind, clause(aspectRatioPhrase(size.width, size.height))];
   }),
 ));
 

@@ -64,8 +64,13 @@ export function aspectRatioTerms(width, height, { maxTerm = DEFAULT_MAX_TERM } =
   // extreme banner like 4096x64); fall back to the exact reduced ratio rather
   // than reporting nothing.
   if (best.width < 1 || best.height < 1) {
-    const divisor = greatestCommonDivisor(Math.round(width), Math.round(height));
-    return { width: Math.round(width) / divisor, height: Math.round(height) / divisor };
+    const roundedWidth = Math.round(width);
+    const roundedHeight = Math.round(height);
+    // A sub-pixel edge rounds to zero, and `0:0` would be reported as a SQUARE —
+    // a phrase that is not merely unhelpful but false. Nothing describable here.
+    if (roundedWidth < 1 || roundedHeight < 1) return null;
+    const divisor = greatestCommonDivisor(roundedWidth, roundedHeight);
+    return { width: roundedWidth / divisor, height: roundedHeight / divisor };
   }
   return best;
 }
