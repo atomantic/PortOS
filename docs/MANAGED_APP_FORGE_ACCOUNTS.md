@@ -55,12 +55,18 @@ gh auth login        # once per account; `gh auth status` should list them all
 ```
 
 When set, PortOS pins **both halves** of that identity for every agent it
-launches against the app's repo (and every worktree of it):
+launches against the app's repo (and every worktree of it), and for PortOS-owned
+`gh` probes against that repo (the claim-issue work detector and scheduled-task
+issue preloads):
 
 | | |
 |---|---|
-| `GH_TOKEN` | minted for that account, so `gh pr create` and `git push` act as it |
+| `GH_TOKEN` | minted for that account, so `gh pr create`, `git push`, and issue-list probes act as it |
 | `GIT_AUTHOR_*` / `GIT_COMMITTER_*` | `<id>+<login>@users.noreply.github.com`, the address GitHub attributes back to the account |
+
+Without the probe pin, those checks inherit the install's ambient `GH_TOKEN` or
+active `gh` user, so a private repo under another logged-in account fails the
+detector as a transient forge error and never dispatches an agent.
 
 The credential and the authorship move together on purpose: authenticating as
 another account while committing under the machine owner's name and email writes
