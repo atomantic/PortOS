@@ -3,8 +3,9 @@ import * as api from '../../services/api';
 import toast from '../ui/Toast';
 
 const normalizeCapabilities = (value) => ({
-  schemaVersion: 9,
+  schemaVersion: 10,
   createTasks: value?.createTasks === true,
+  fileIssues: value?.fileIssues === true,
   manageMind: value?.manageMind === true,
   manageToolRecipes: value?.manageToolRecipes === true,
   manageEidoverse: value?.manageEidoverse === true,
@@ -42,6 +43,11 @@ const OPTIONS = [
     hint: 'Queues typed tasks through isolated worktrees, capacity, budget, review, CI, and landing-policy gates.',
   },
   {
+    key: 'fileIssues',
+    label: 'Allow mind to read and file GitHub/GitLab issues',
+    hint: 'Lets the mind read an authorized app\'s open issues and file new ones with the required dispatch labels. This is the queueing lane that still works when no coding agent is attached to this machine — no editing, closing, or commenting on existing issues.',
+  },
+  {
     key: 'visitEidoversePeers',
     label: 'Allow guest travel and chat with federated worlds',
     hint: 'Lets the mind visit enabled registered peers and exchange live chat with their humans and agents. Messages cross instances; private records and secrets must stay local.',
@@ -68,9 +74,18 @@ const OPTIONS = [
   },
 ];
 
+/** What each grant can actually do with one managed app, for its row's sub-label. */
+const managedAppLanes = (app) => [
+  app.planOnly ? 'Implementation or Plan & File Issue' : 'Implementation delivery',
+  app.forge ? `Issue filing (${app.forge})` : 'No forge tracker — issues cannot be filed',
+].join(' · ');
+
 export default function PersistentMindTaskAccessControls({
   capabilities,
-  taskCatalog,
+  // The server's single roster: every runnable app, forge-tracked or not, so
+  // narrowing the shared allowlist here can never silently revoke an app one
+  // grant needs because the other grant could not see it.
+  managedApps,
   disabled = false,
   onSaved,
   onSavingChange,
@@ -78,12 +93,12 @@ export default function PersistentMindTaskAccessControls({
   const idPrefix = useId();
   const [draft, setDraft] = useState(() => normalizeCapabilities(capabilities));
   const [saving, setSaving] = useState(false);
-  const taskApps = Array.isArray(taskCatalog?.apps) ? taskCatalog.apps : [];
+  const apps = Array.isArray(managedApps) ? managedApps : [];
   const allowedAppIds = Array.isArray(draft.allowedAppIds) ? draft.allowedAppIds : null;
 
   useEffect(() => {
     if (!saving) setDraft(normalizeCapabilities(capabilities));
-  }, [capabilities?.schemaVersion, capabilities?.createTasks, capabilities?.manageMind, capabilities?.manageToolRecipes, capabilities?.manageEidoverse, capabilities?.visitEidoversePeers, capabilities?.callUser, capabilities?.adjustLocalContext, capabilities?.readPortos, capabilities?.writePortos, capabilities?.taskModelAllowlist, capabilities?.taskModelAllowlistInvalid, capabilities?.allowedAppIds?.join('\0'), saving]);
+  }, [capabilities?.schemaVersion, capabilities?.createTasks, capabilities?.fileIssues, capabilities?.manageMind, capabilities?.manageToolRecipes, capabilities?.manageEidoverse, capabilities?.visitEidoversePeers, capabilities?.callUser, capabilities?.adjustLocalContext, capabilities?.readPortos, capabilities?.writePortos, capabilities?.taskModelAllowlist, capabilities?.taskModelAllowlistInvalid, capabilities?.allowedAppIds?.join('\0'), saving]);
 
   const save = async (key, enabled) => {
     const previous = draft;
@@ -109,7 +124,7 @@ export default function PersistentMindTaskAccessControls({
   };
 
   const saveAllowedAppIds = async (appId, enabled) => {
-    const current = allowedAppIds || taskApps.map((app) => app.id);
+    const current = allowedAppIds || apps.map((app) => app.id);
     const next = enabled
       ? [...new Set([...current, appId])]
       : current.filter((id) => id !== appId);
@@ -123,7 +138,7 @@ export default function PersistentMindTaskAccessControls({
     try {
       await api.updateCosConfig({ persistentMindCapabilities: nextCapabilities }, { silent: true });
       onSaved?.(nextCapabilities);
-      toast.success(`${taskApps.find((app) => app.id === appId)?.name || 'Managed app'} task access ${enabled ? 'enabled' : 'disabled'}`);
+      toast.success(`${apps.find((app) => app.id === appId)?.name || 'Managed app'} access ${enabled ? 'enabled' : 'disabled'}`);
     } catch (error) {
       setDraft(previous);
       toast.error(error.message);
@@ -154,28 +169,28 @@ export default function PersistentMindTaskAccessControls({
           </div>
         );
       })}
-      {taskCatalog && (
+      {managedApps && (
         <div className="border-t border-port-border pt-4">
           <div>
             <p className="text-sm text-port-text">Managed app access</p>
-            <p className="mt-0.5 text-xs text-port-text-muted">Choose which configured apps the task grant may target. Existing installs start with every runnable app allowed.</p>
+            <p className="mt-0.5 text-xs text-port-text-muted">Choose which configured apps the task and issue grants may target. One list covers both. Existing installs start with every runnable app allowed.</p>
           </div>
-          {taskApps.length > 0 ? (
+          {apps.length > 0 ? (
             <div className="mt-3 space-y-3">
-              {taskApps.map((app) => {
+              {apps.map((app) => {
                 const id = `${idPrefix}-app-${app.id}`;
                 const checked = allowedAppIds ? allowedAppIds.includes(app.id) : app.granted !== false;
                 return (
                   <div key={app.id} className="flex items-start justify-between gap-4">
                     <div>
                       <label htmlFor={id} className="text-sm text-port-text">{app.name}</label>
-                      <p className="mt-0.5 text-xs text-port-text-muted">{app.planOnly ? 'Implementation or Plan & File Issue' : 'Implementation delivery'}</p>
+                      <p className="mt-0.5 text-xs text-port-text-muted">{managedAppLanes(app)}</p>
                     </div>
                     <input
                       id={id}
                       type="checkbox"
                       checked={checked}
-                      disabled={disabled || saving || !draft.createTasks}
+                      disabled={disabled || saving || (!draft.createTasks && !draft.fileIssues)}
                       onChange={(event) => saveAllowedAppIds(app.id, event.target.checked)}
                       className="mt-1 h-4 w-4 accent-port-accent disabled:opacity-50"
                     />
@@ -186,7 +201,7 @@ export default function PersistentMindTaskAccessControls({
           ) : (
             <p className="mt-3 rounded border border-dashed border-port-border p-3 text-xs text-port-text-muted">No runnable managed apps are currently configured.</p>
           )}
-          {!draft.createTasks && <p className="mt-3 text-xs text-port-text-muted">Enable the task capability above before selecting managed apps.</p>}
+          {!draft.createTasks && !draft.fileIssues && <p className="mt-3 text-xs text-port-text-muted">Enable the task or issue capability above before selecting managed apps.</p>}
         </div>
       )}
       <div className="rounded border border-port-border bg-port-bg/40 px-3 py-2 text-xs text-port-text-muted">

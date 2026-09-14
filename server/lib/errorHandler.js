@@ -80,6 +80,17 @@ export class ServerError extends Error {
  * ServerError shape that the rest of PortOS speaks. Pass the result of
  * `schema.safeParse(...)` after confirming `.success === false`.
  */
+/**
+ * A thrown value reduced to one bounded, model-safe sentence.
+ *
+ * Typed capability results carry the failure reason back into a prompt, so the
+ * string has to be short and has to exist even when what was thrown is not an
+ * Error. Shared rather than re-declared per capability: the cap and the
+ * fallback are the contract, not a local detail.
+ */
+export const boundedErrorMessage = (error, fallback = 'Request failed', maxChars = 300) =>
+  String(error?.message || error || fallback).slice(0, maxChars);
+
 export function failValidation(parsed) {
   throw new ServerError(
     `Validation failed: ${parsed.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join(', ')}`,

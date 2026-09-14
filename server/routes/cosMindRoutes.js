@@ -261,24 +261,31 @@ router.get('/mind/context', asyncHandler(async (_req, res) => {
 router.get('/mind/tools', asyncHandler(async (_req, res) => {
   const root = await loadState();
   const capabilities = normalizePersistentMindCapabilities(root.config?.persistentMindCapabilities);
-  const taskCatalog = capabilities.createTasks
-    ? await readPersistentMindTaskCatalog({ includeAllApps: true })
-    : null;
-  if (taskCatalog && Array.isArray(taskCatalog.apps)) {
-    const allowed = Array.isArray(capabilities.allowedAppIds) ? new Set(capabilities.allowedAppIds) : null;
-    taskCatalog.apps = taskCatalog.apps.map((app) => ({
-      ...app,
-      granted: !allowed || allowed.has(app.id),
-    }));
-  }
   const { getCosToolCatalog, readCosToolRecipeCatalog } = await import('../services/cosToolRegistry.js');
-  const recipes = await readCosToolRecipeCatalog({ scope: 'mind' });
+  // The allowlist is shared by the task and issue grants, so the page gets ONE
+  // roster carrying what each grant needs — `planOnly` for tasks, `forge` for
+  // issues, `granted` for both. Loading it per grant would let either editor
+  // narrow the list from a partial view and silently revoke the other's apps.
+  const managedApps = capabilities.createTasks || capabilities.fileIssues
+    ? import('../services/persistentMindManagedApps.js')
+      .then(({ readPersistentMindManagedApps }) => readPersistentMindManagedApps())
+    : null;
+  const [taskCatalog, recipes, roster] = await Promise.all([
+    capabilities.createTasks ? readPersistentMindTaskCatalog() : null,
+    readCosToolRecipeCatalog({ scope: 'mind' }),
+    managedApps,
+  ]);
   res.json({
     semanticTools: getCosToolCatalog({ scope: 'mind', capabilities, recipes }).tools,
     schemaVersion: PERSISTENT_MIND_CAPABILITIES_SCHEMA_VERSION,
     capabilities,
     boundaries: PERSISTENT_MIND_TOOL_BOUNDARIES,
-    taskCatalog,
+    // Providers and readiness only: the apps the mind may target come from the
+    // roster, so the page never shows two lists that could disagree.
+    taskCatalog: taskCatalog && { providers: taskCatalog.providers, providerReadiness: taskCatalog.providerReadiness },
+    managedApps: roster && roster.map(({ id, name, planOnly, forge, fullName, granted }) => ({
+      id, name, planOnly, forge, fullName, granted,
+    })),
     tools: PERSISTENT_MIND_TOOL_CATALOG.map((tool) => ({
       ...tool,
       granted: capabilities[tool.capability] === true,

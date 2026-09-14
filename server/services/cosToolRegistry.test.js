@@ -11,6 +11,8 @@ const mocks = vi.hoisted(() => ({
   worldAugment: vi.fn(),
   worldSay: vi.fn(),
   listUserActions: vi.fn(),
+  fileIssue: vi.fn(),
+  listIssues: vi.fn(),
 }));
 
 const specs = [
@@ -47,6 +49,10 @@ vi.mock('./voice/tools.js', () => ({
 }));
 vi.mock('./persistentMindTaskCapability.js', () => ({
   executePersistentMindTaskRequests: (...args) => mocks.executeTasks(...args),
+}));
+vi.mock('./persistentMindIssueCapability.js', () => ({
+  filePersistentMindIssue: (...args) => mocks.fileIssue(...args),
+  listPersistentMindIssues: (...args) => mocks.listIssues(...args),
 }));
 vi.mock('./persistentMindContext.js', () => ({ choosePersistentMindName: (...args) => mocks.chooseName(...args), protectPersistentMindMemory: (...args) => mocks.protectMemory(...args) }));
 vi.mock('./persistentMindMaintenance.js', () => ({
@@ -107,6 +113,23 @@ describe('cosToolRegistry', () => {
     expect(getCosToolCatalog({ scope: 'mind', capabilities: { chooseThinkingPreset: true } }).tools.filter((tool) => tool.granted).map((tool) => tool.name)).toEqual(['mind.thinking-presets', 'mind.request-thinking-preset']);
   });
 
+  it('gates the forge-issue tools on their own grant and routes them to the issue adapter', async () => {
+    const call = { requestId: 'issue-1', name: 'issues.file', arguments: { appId: 'demo-app', title: 'Add a retry', body: 'Why and where.', model: 'medium', effort: 'high' } };
+    // Task authority is NOT issue authority: a mind granted one must not
+    // inherit the other.
+    await expect(executeCosToolCall({ call, authority: { scope: 'mind', capabilities: { createTasks: true, writePortos: true } } }))
+      .rejects.toMatchObject({ code: 'TOOL_CAPABILITY_DENIED' });
+    await expect(executeCosToolCall({ call: { ...call, requestId: 'issue-2', arguments: { ...call.arguments, model: 'enormous' } }, authority: { scope: 'mind', capabilities: { fileIssues: true } } }))
+      .rejects.toMatchObject({ code: 'TOOL_VALIDATION_ERROR' });
+
+    mocks.fileIssue.mockResolvedValue({ ok: true, number: 42, url: 'https://example.com/example/demo/issues/42' });
+    const result = await executeCosToolCall({ call: { ...call, requestId: 'issue-3' }, authority: { scope: 'mind', capabilities: { fileIssues: true } } });
+    expect(result).toMatchObject({ name: 'issues.file', state: 'completed', result: { number: 42 } });
+    expect(mocks.fileIssue).toHaveBeenCalledWith(call.arguments);
+    expect(getCosToolCatalog({ scope: 'mind', capabilities: { fileIssues: true } }).tools.filter((tool) => tool.granted).map((tool) => tool.name))
+      .toEqual(['issues.list', 'issues.file']);
+  });
+
   it('exports a compact canonical catalog and provider translations', () => {
     const catalog = getCosToolCatalog({ scope: 'mind', capabilities: { readPortos: true } });
     expect(catalog.tools.map((tool) => tool.name)).toEqual([
@@ -116,6 +139,8 @@ describe('cosToolRegistry', () => {
       'mind.local-context',
       'mind.adjust-local-context',
       'cos.create-task',
+      'issues.list',
+      'issues.file',
       'mind.cleanup',
       'mind.protect-memory',
       'mind.choose-name',

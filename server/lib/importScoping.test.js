@@ -617,7 +617,17 @@ describe('deferred imports stay deferred (#6156)', () => {
 // three pure lines the write-back path was importing the whole 81-module
 // `services/appListEnrichment.js` for — down into that leaf, which
 // re-exports it for its existing callers.
-const MAX_STATIC_INSTANTIATIONS = 104705;
+//
+// Raised to 106,200 for the Persistent Mind forge-issue capability, and to
+// restore the documented ~1.5k of headroom. The capability's own net share is
+// +34, because the new suite's closure (~94) is most of the way offset by the
+// managed-app roster it shares with the task capability, which replaced a second
+// app/tracker reader. The headroom is the larger half of this raise: #7357 above
+// had already landed the number at EXACTLY the measured total, so any addition
+// at all failed it — the same zero-headroom state #6305 raised it out of, and
+// that is what makes this a budget rather than a high-water mark. Measured after
+// both changes: 104,739.
+const MAX_STATIC_INSTANTIATIONS = 106200;
 
 
 const SKIP_DIRS = new Set(['node_modules', 'coverage', 'dist', 'data']);

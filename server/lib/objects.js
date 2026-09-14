@@ -110,3 +110,27 @@ export const canonicalStringify = (value) => {
   }
   return JSON.stringify(value);
 };
+
+/**
+ * The longest prefix of `items` whose JSON encoding fits `maxChars`.
+ *
+ * The shape every prompt-catalog builder needs: fill until the serialized form
+ * would exceed a character budget, then stop. `wrap` lets a caller measure the
+ * envelope the items will actually be embedded in rather than the bare array,
+ * so a budget covering a whole catalog object stays accurate.
+ *
+ * Measured on the growing prefix, not estimated per item: an item's cost
+ * depends on the separators and escaping around it, and a prompt budget that
+ * under-counts is a truncated payload the model reads as complete.
+ */
+export const boundedByJsonChars = (items, maxChars, wrap = (kept) => kept) => {
+  const kept = [];
+  for (const item of Array.isArray(items) ? items : []) {
+    kept.push(item);
+    if (JSON.stringify(wrap(kept)).length > maxChars) {
+      kept.pop();
+      break;
+    }
+  }
+  return kept;
+};

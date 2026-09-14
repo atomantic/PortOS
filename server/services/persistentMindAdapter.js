@@ -39,6 +39,10 @@ import {
   readPersistentMindTaskInventory,
 } from './persistentMindTaskCapability.js';
 import {
+  buildPersistentMindIssueCapabilityPrompt,
+  readPersistentMindIssueCatalog,
+} from './persistentMindIssueCapability.js';
+import {
   buildPersistentMindCallCapabilityPrompt,
   executePersistentMindCallRequest,
 } from './persistentMindCallCapability.js';
@@ -237,7 +241,7 @@ const currentWakeText = (wake) => {
   return `This is a self-directed wake. There is NO human message and NO implied user request this turn — do not invent one (no workouts, weather, inbox triage, or phone calls unless tools/capabilities explicitly require them for the playbook). Continue the standing playbook: prefer eidoverse.status then one concrete Eidoverse/PortOS action, then a short working note.\nreason=${wake?.reason || 'scheduled reflection'}`;
 };
 
-export function buildPersistentMindTurnPrompt({ context, wake, taskCapabilityPrompt, toolCapabilityPrompt = '# PortOS semantic tools\nSemantic tool access is OFF.', visibilityPrompt = '# Persistent Mind environment visibility\nWorkspace and runtime visibility is unknown.', userActionsPrompt = '', callCapabilityPrompt = buildPersistentMindCallCapabilityPrompt({ enabled: false }) }) {
+export function buildPersistentMindTurnPrompt({ context, wake, taskCapabilityPrompt, issueCapabilityPrompt = buildPersistentMindIssueCapabilityPrompt({ enabled: false }), toolCapabilityPrompt = '# PortOS semantic tools\nSemantic tool access is OFF.', visibilityPrompt = '# Persistent Mind environment visibility\nWorkspace and runtime visibility is unknown.', userActionsPrompt = '', callCapabilityPrompt = buildPersistentMindCallCapabilityPrompt({ enabled: false }) }) {
   return `${context.text}
 
 ${visibilityPrompt}
@@ -246,6 +250,8 @@ ${userActionsPrompt ? `\n${userActionsPrompt}\n` : ''}
 ${currentWakeText(wake)}
 
 ${taskCapabilityPrompt}
+
+${issueCapabilityPrompt}
 
 ${toolCapabilityPrompt}
 
@@ -388,6 +394,12 @@ export function createPersistentMindTurnAdapter() {
         catalog: taskCatalog,
         inventory: taskInventory,
       });
+      const issueCapabilityPrompt = buildPersistentMindIssueCapabilityPrompt({
+        enabled: taskAccess.fileIssues,
+        catalog: taskAccess.fileIssues
+          ? await readPersistentMindIssueCatalog({ allowedAppIds: taskAccess.allowedAppIds })
+          : undefined,
+      });
       const visibilityPrompt = buildPersistentMindVisibilityPrompt(visibility);
       // Deterministic and always included (epic #5593 decision 14): bounded,
       // already redacted, no grant required. Deeper lookbacks use the
@@ -404,6 +416,7 @@ export function createPersistentMindTurnAdapter() {
         context,
         wake,
         taskCapabilityPrompt,
+        issueCapabilityPrompt,
         toolCapabilityPrompt,
         visibilityPrompt,
         userActionsPrompt,
@@ -545,7 +558,7 @@ export function createPersistentMindTurnAdapter() {
         });
         completedToolResults.push(...toolResults);
         const liveCapabilities = normalizePersistentMindCapabilities((await loadState()).config?.persistentMindCapabilities);
-        basePrompt = buildPersistentMindTurnPrompt({ context, wake, taskCapabilityPrompt, visibilityPrompt, userActionsPrompt, callCapabilityPrompt,
+        basePrompt = buildPersistentMindTurnPrompt({ context, wake, taskCapabilityPrompt, issueCapabilityPrompt, visibilityPrompt, userActionsPrompt, callCapabilityPrompt,
           toolCapabilityPrompt: buildPersistentMindToolPrompt(liveCapabilities, await readPersistentMindRecipeCatalog(liveCapabilities)),
         });
         const budgetExhausted = toolBudget.used >= COS_TOOL_CALL_LIMITS.maxCallsPerTurn || round === MAX_TOOL_PROVIDER_ROUNDS - 2;

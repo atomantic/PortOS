@@ -28,6 +28,7 @@ const mocks = vi.hoisted(() => ({
   inspectPersistentMindRuntime: vi.fn(),
   readPersistentMindVisibility: vi.fn(),
   readPersistentMindTaskCatalog: vi.fn(),
+  readPersistentMindManagedApps: vi.fn(),
   listMindToolRecipes: vi.fn(),
   resolveImageCapability: vi.fn(),
   cleanupPersistentMind: vi.fn(),
@@ -65,6 +66,9 @@ vi.mock('../services/persistentMindMaintenance.js', () => ({
 }));
 vi.mock('../services/persistentMindTaskCapability.js', () => ({
   readPersistentMindTaskCatalog: mocks.readPersistentMindTaskCatalog,
+}));
+vi.mock('../services/persistentMindManagedApps.js', () => ({
+  readPersistentMindManagedApps: mocks.readPersistentMindManagedApps,
 }));
 vi.mock('../services/mindToolRecipes.js', () => ({
   listRecipes: mocks.listMindToolRecipes,
@@ -194,6 +198,9 @@ describe('persistent mind routes', () => {
       providers: [{ id: 'codex', name: 'Codex', type: 'cli', models: [{ id: 'gpt-5', efforts: ['low', 'high'] }] }],
     });
     mocks.listMindToolRecipes.mockResolvedValue({ recipes: [] });
+    mocks.readPersistentMindManagedApps.mockResolvedValue([
+      { id: 'demo-app', name: 'Demo App', planOnly: true, forge: 'github', fullName: 'example/demo', granted: true, repoPath: '/repos/demo' },
+    ]);
   });
 
   it('requests an immediate manual wake', async () => {
@@ -218,7 +225,7 @@ describe('persistent mind routes', () => {
         thinkingInterface: 'text',
         wakeIntervalMinutes: 30,
       },
-      capabilities: { schemaVersion: 9, createTasks: true, manageMind: false, manageEidoverse: false, visitEidoversePeers: false, callUser: false, adjustLocalContext: false, readPortos: false, writePortos: false, taskModelAllowlist: [] },
+      capabilities: { schemaVersion: 10, createTasks: true, fileIssues: false, manageMind: false, manageEidoverse: false, visitEidoversePeers: false, callUser: false, adjustLocalContext: false, readPortos: false, writePortos: false, taskModelAllowlist: [] },
       harness: { type: 'api', recommendation: 'recommended' },
       imageCapability: { status: 'unknown' },
       autonomyMode: 'execute',
@@ -312,8 +319,8 @@ describe('persistent mind routes', () => {
         expect.objectContaining({ name: 'eidoverse.status', granted: false, input_schema: expect.any(Object) }),
         expect.objectContaining({ name: 'cos.create-task', granted: true }),
       ]),
-      schemaVersion: 9,
-      capabilities: { schemaVersion: 9, createTasks: true, manageMind: false, manageEidoverse: false, visitEidoversePeers: false, callUser: false, adjustLocalContext: false, readPortos: false, writePortos: false, taskModelAllowlist: [] },
+      schemaVersion: 10,
+      capabilities: { schemaVersion: 10, createTasks: true, fileIssues: false, manageMind: false, manageEidoverse: false, visitEidoversePeers: false, callUser: false, adjustLocalContext: false, readPortos: false, writePortos: false, taskModelAllowlist: [] },
       boundaries: expect.arrayContaining([expect.stringMatching(/arbitrary shell/i)]),
       tools: expect.arrayContaining([
         expect.objectContaining({ id: 'cos.create-task', capability: 'createTasks', granted: true, defaultEnabled: false }),
@@ -322,30 +329,52 @@ describe('persistent mind routes', () => {
         expect.objectContaining({ id: 'mind.cleanup', capability: 'manageMind', granted: false, defaultEnabled: false }),
         expect.objectContaining({ id: 'voice.call-user', capability: 'callUser', granted: false, defaultEnabled: false }),
       ]),
-      taskCatalog: {
-        apps: [{ id: 'demo-app', planOnly: true }],
-        providers: [{ id: 'codex' }],
-      },
+      // Providers only: the apps live on the one shared roster, so the page
+      // cannot render two managed-app lists that disagree.
+      taskCatalog: { providers: [{ id: 'codex' }] },
+      managedApps: [{ id: 'demo-app', name: 'Demo App', planOnly: true, forge: 'github', granted: true }],
     });
+    expect(res.body.taskCatalog.apps).toBeUndefined();
+    // The roster never leaks a filesystem path to the browser.
+    expect(res.body.managedApps[0].repoPath).toBeUndefined();
     expect(res.body.tools.find((tool) => tool.id === 'cos.create-task').guardrails).toEqual(expect.arrayContaining([
       expect.stringMatching(/isolated-worktree/i),
     ]));
   });
 
-  it('marks revoked managed apps without removing them from the settings inventory', async () => {
+  it('keeps revoked managed apps in the settings roster so they can be restored', async () => {
     mocks.loadState.mockResolvedValue({ config: {
       persistentMindCapabilities: { schemaVersion: 3, createTasks: true, allowedAppIds: [] },
     } });
-    mocks.readPersistentMindTaskCatalog.mockResolvedValue({
-      apps: [{ id: 'demo-app', name: 'Demo App', planOnly: true }],
-      providers: [],
-    });
+    mocks.readPersistentMindManagedApps.mockResolvedValue([
+      { id: 'demo-app', name: 'Demo App', planOnly: true, forge: 'github', fullName: 'example/demo', granted: false },
+    ]);
 
     const res = await get('/mind/tools');
 
     expect(res.status).toBe(200);
-    expect(res.body.taskCatalog.apps).toEqual([{ id: 'demo-app', name: 'Demo App', planOnly: true, granted: false }]);
-    expect(mocks.readPersistentMindTaskCatalog).toHaveBeenCalledWith({ includeAllApps: true });
+    expect(res.body.managedApps).toEqual([
+      { id: 'demo-app', name: 'Demo App', planOnly: true, forge: 'github', fullName: 'example/demo', granted: false },
+    ]);
+  });
+
+  it('loads the shared roster for the issue grant alone, so its allowlist edits see every app', async () => {
+    mocks.loadState.mockResolvedValue({ config: {
+      persistentMindCapabilities: { schemaVersion: 10, createTasks: false, fileIssues: true },
+    } });
+    mocks.readPersistentMindManagedApps.mockResolvedValue([
+      { id: 'demo-app', name: 'Demo App', planOnly: true, forge: 'github', fullName: 'example/demo', granted: true },
+      { id: 'plan-app', name: 'Plan App', planOnly: false, forge: null, fullName: null, granted: true },
+    ]);
+
+    const res = await get('/mind/tools');
+
+    expect(res.status).toBe(200);
+    expect(res.body.taskCatalog).toBeNull();
+    // The PLAN.md app is present even though it can never take an issue: the
+    // allowlist is shared, so a forge-only roster would silently revoke it.
+    expect(res.body.managedApps.map((app) => app.id)).toEqual(['demo-app', 'plan-app']);
+    expect(mocks.readPersistentMindTaskCatalog).not.toHaveBeenCalled();
   });
 
   it('exposes live context, system, inference, and model-residency telemetry', async () => {

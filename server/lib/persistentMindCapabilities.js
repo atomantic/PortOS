@@ -14,12 +14,12 @@ import {
   portosSemanticToolGrantsSchema,
 } from './cosToolContracts.js';
 
-export const PERSISTENT_MIND_CAPABILITIES_SCHEMA_VERSION = 9;
+export const PERSISTENT_MIND_CAPABILITIES_SCHEMA_VERSION = 10;
 // Every wire version this server still accepts on input. Installs upgrade on
 // their own schedule, so a browser bundle (or a route caller) pinned at an
 // older version must keep being able to toggle the grants it already knows
 // about; normalization always writes the current version forward.
-const ACCEPTED_CAPABILITIES_SCHEMA_VERSIONS = Object.freeze([2, 3, 4, 5, 6, 7, 8, 9]);
+const ACCEPTED_CAPABILITIES_SCHEMA_VERSIONS = Object.freeze([2, 3, 4, 5, 6, 7, 8, 9, 10]);
 
 export const PERSISTENT_MIND_TASK_MODEL_ALLOWLIST_LIMITS = Object.freeze({
   MAX_ENTRIES: 200,
@@ -79,6 +79,21 @@ export const PERSISTENT_MIND_TOOL_CATALOG = Object.freeze([
       'Configured app, provider, model, effort, mode, and completion policy are re-validated before queueing',
       'Implementation work runs through the normal isolated-worktree, autonomy, budget, review, CI, and PR gates',
       'Plan & File Issue requests use the existing issue-only planning contract',
+    ],
+  }),
+  Object.freeze({
+    id: 'forge.file-issue',
+    capability: 'fileIssues',
+    name: 'Read and file GitHub/GitLab issues',
+    description: 'Read a managed app\'s open issues and file new ones on its GitHub or GitLab tracker — the queueing lane that still works when no coding agent is attached to this machine.',
+    kind: 'typed-action',
+    defaultEnabled: false,
+    guardrails: [
+      'Only managed apps in the Managed app access list whose resolved work tracker is GitHub or GitLab',
+      'Read and create only — no editing, closing, commenting, assigning, or labeling existing issues',
+      'Every filed issue carries both required dispatch axes plus the persistent-mind and planner attribution labels',
+      'An unreadable tracker refuses the file instead of risking a duplicate, and an exact title match reuses the existing issue',
+      'Issue bodies are the mind\'s own prose; no repository paths, credentials, or private records are attached',
     ],
   }),
   Object.freeze({
@@ -212,6 +227,7 @@ export const persistentMindCapabilitiesSchema = portosSemanticToolGrantsSchema.e
     .refine((value) => ACCEPTED_CAPABILITIES_SCHEMA_VERSIONS.includes(value), 'unsupported persistent mind capabilities schema version')
     .optional(),
   createTasks: z.boolean().optional(),
+  fileIssues: z.boolean().optional(),
   manageMind: z.boolean().optional(),
   manageToolRecipes: z.boolean().optional(),
   callUser: z.boolean().optional(),
@@ -222,9 +238,11 @@ export const persistentMindCapabilitiesSchema = portosSemanticToolGrantsSchema.e
   // entries are configured, requests must name one of these exact pairs.
   taskModelAllowlist: z.array(persistentMindTaskModelAllowlistEntrySchema)
     .max(PERSISTENT_MIND_TASK_MODEL_ALLOWLIST_LIMITS.MAX_ENTRIES).optional(),
-  // Omitted preserves the legacy grant to every runnable managed app. An
-  // explicit list lets the user narrow that grant without changing the typed
-  // task capability itself.
+  // The mind's managed-app allowlist, honored by BOTH the task grant and the
+  // issue grant — one control over "which repositories is this mind allowed to
+  // touch at all", rather than a second list that could silently disagree.
+  // Omitted preserves the legacy grant to every runnable managed app, so an
+  // upgrading install keeps the task scope it already had.
   allowedAppIds: z.array(z.string().trim().min(1).max(PERSISTENT_MIND_TASK_LIMITS.appIdChars))
     .max(PERSISTENT_MIND_TASK_LIMITS.maxAllowedAppIds).optional(),
 });
@@ -282,6 +300,7 @@ export function createDefaultPersistentMindCapabilities() {
   return {
     schemaVersion: PERSISTENT_MIND_CAPABILITIES_SCHEMA_VERSION,
     createTasks: false,
+    fileIssues: false,
     manageMind: false,
     manageToolRecipes: false,
     manageEidoverse: false,
@@ -342,6 +361,7 @@ export function normalizePersistentMindCapabilities(raw) {
   return {
     schemaVersion: PERSISTENT_MIND_CAPABILITIES_SCHEMA_VERSION,
     createTasks: source.createTasks === true,
+    fileIssues: source.fileIssues === true,
     manageMind: source.manageMind === true,
     manageToolRecipes: source.manageToolRecipes === true,
     callUser: source.callUser === true,
