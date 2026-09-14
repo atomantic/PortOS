@@ -110,6 +110,7 @@ it('loads release evidence without peers and never re-exports it', async () => {
   const local = { ...deps([]), getPeers: async () => [],
     readFile: async path => { readPaths.push(path); return JSON.stringify(payload); } };
   expect((await enrichAppsWithQuality([{ id: 'portos-default' }], local))[0].quality.score).toBe(82);
+  expect(readPaths.length).toBeGreaterThan(0);
   expect(readPaths.every(path => path.endsWith('.quality.json'))).toBe(true);
   expect((await getAppQualityHistory({ id: 'portos-default' }, 30, local)).points.at(-1).score).toBe(82);
   expect((await buildQualitySnapshot(undefined, 30, local)).measurements).toEqual([]);
