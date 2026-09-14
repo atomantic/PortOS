@@ -25,6 +25,7 @@
 
 import { execGh, ensureForgeReachable } from './github.js';
 import { execGlab, execGlabJson } from './gitlab.js';
+import { resolveForgeForRepo } from './forgeAuth.js';
 import { resolveAppForgeTarget } from '../lib/workTracker.js';
 import { safeJSONParse } from '../lib/fileUtils.js';
 import { CONTRIBUTOR_LABELS } from '../lib/dispatchLabels.js';
@@ -120,8 +121,18 @@ function toIssueResult(rows, normalize) {
  * stays deterministic. The reachability probe runs first: without it an
  * unreachable `gh` returns an empty page that reads as "no open issues".
  */
-async function fetchGithubIssues(repoSpec, apiHost) {
-  const forge = await ensureForgeReachable('app-issues', { hostname: apiHost });
+async function fetchGithubIssues(repoSpec, apiHost, { repoPath = null, forgeAccount = null } = {}) {
+  const forgeAuth = repoPath
+    ? await resolveForgeForRepo(repoPath, { forgeAccount }).catch(() => null)
+    : null;
+  const customEnv = forgeAuth?.env && forgeAuth.env !== process.env ? forgeAuth.env : null;
+  const env = customEnv || process.env;
+  const cwd = repoPath || undefined;
+
+  const forge = await ensureForgeReachable('app-issues', {
+    hostname: apiHost,
+    ...(customEnv ? { env: customEnv } : {}),
+  });
   if (!forge.ok) {
     return { issues: [], reason: `gh-${forge.status}`, transient: true, remedy: forge.remedy || null };
   }
@@ -131,7 +142,7 @@ async function fetchGithubIssues(repoSpec, apiHost) {
     'issue', 'list', '--repo', repoSpec, '--state', 'open',
     '--limit', String(GH_LIST_LIMIT),
     '--json', 'number,title,body,labels,assignees,author,milestone,url,updatedAt,comments',
-  ]).catch((err) => {
+  ], undefined, { cwd, env }).catch((err) => {
     console.error(`❌ app-issues: gh issue list failed for ${repoSpec}: ${err.message}`);
     return null;
   });
@@ -216,7 +227,7 @@ export async function listAppIssues(app) {
   if (target.forge !== tracker) return { ...base, tracker, reason: 'tracker-forge-mismatch' };
 
   const result = tracker === 'github'
-    ? await fetchGithubIssues(target.repoSpec, target.apiHost)
+    ? await fetchGithubIssues(target.repoSpec, target.apiHost, { repoPath: app.repoPath, forgeAccount: app.forgeAccount })
     : await fetchGitlabIssues(app.repoPath);
 
   return {
@@ -240,9 +251,15 @@ export async function prepareAppIssueClaim(app, issueNumber, tracker) {
   if (!target || resolvedTracker !== tracker || target.forge !== tracker) {
     throw new ServerError('Could not resolve the issue tracker for this claim', { status: 400, code: 'CLAIM_TRACKER_MISMATCH' });
   }
+  const forgeAuth = (tracker === 'github' && app?.repoPath)
+    ? await resolveForgeForRepo(app.repoPath, { forgeAccount: app.forgeAccount }).catch(() => null)
+    : null;
+  const env = forgeAuth?.env || process.env;
+  const cwd = app?.repoPath || undefined;
+
   const readLabels = async () => {
     const raw = tracker === 'github'
-      ? await execGh(['issue', 'view', issueNumber, '--repo', target.repoSpec, '--json', 'labels'])
+      ? await execGh(['issue', 'view', issueNumber, '--repo', target.repoSpec, '--json', 'labels'], undefined, { cwd, env })
       : await execGlab(withGlabJson(['issue', 'view', issueNumber]), app.repoPath, undefined, { rejectOnError: true });
     const issue = safeJSONParse(raw, null);
     if (!Array.isArray(issue?.labels) || issue.labels.some(label => typeof label !== 'string' && typeof label?.name !== 'string')) {
@@ -255,7 +272,7 @@ export async function prepareAppIssueClaim(app, issueNumber, tracker) {
   if (!labels.length) return;
   if (tracker === 'github') {
     await execGh(['issue', 'edit', issueNumber, '--repo', target.repoSpec,
-      ...labels.flatMap(label => ['--remove-label', label])]);
+      ...labels.flatMap(label => ['--remove-label', label])], undefined, { cwd, env });
   } else {
     await execGlab(['issue', 'update', issueNumber, '--unlabel', labels.join(',')], app.repoPath, undefined, { rejectOnError: true });
   }

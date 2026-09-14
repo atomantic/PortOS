@@ -12,6 +12,7 @@
 
 import { execGh, ensureForgeReachable } from './github.js';
 import { execGlabJson } from './gitlab.js';
+import { resolveForgeForRepo } from './forgeAuth.js';
 import { resolveAppForgeTarget } from '../lib/workTracker.js';
 import { safeJSONParse } from '../lib/fileUtils.js';
 import { forkHeadFromGithubPr } from '../lib/forkHead.js';
@@ -151,8 +152,18 @@ function answeredResult(rows, normalize) {
   };
 }
 
-async function fetchGithubPullRequests(repoSpec, apiHost) {
-  const forge = await ensureForgeReachable('app-pull-requests', { hostname: apiHost });
+async function fetchGithubPullRequests(repoSpec, apiHost, { repoPath = null, forgeAccount = null } = {}) {
+  const forgeAuth = repoPath
+    ? await resolveForgeForRepo(repoPath, { forgeAccount }).catch(() => null)
+    : null;
+  const customEnv = forgeAuth?.env && forgeAuth.env !== process.env ? forgeAuth.env : null;
+  const env = customEnv || process.env;
+  const cwd = repoPath || undefined;
+
+  const forge = await ensureForgeReachable('app-pull-requests', {
+    hostname: apiHost,
+    ...(customEnv ? { env: customEnv } : {}),
+  });
   if (!forge.ok) {
     return {
       pullRequests: [],
@@ -165,7 +176,7 @@ async function fetchGithubPullRequests(repoSpec, apiHost) {
   const raw = await execGh([
     'pr', 'list', '--repo', repoSpec, '--state', 'open',
     '--limit', String(GH_LIST_LIMIT), '--json', GH_PR_FIELDS,
-  ]).catch(err => {
+  ], undefined, { cwd, env }).catch(err => {
     console.error(`❌ app-pull-requests: gh pr list failed for ${repoSpec}: ${err.message}`);
     return null;
   });
@@ -221,7 +232,7 @@ export async function listAppPullRequests(app) {
   if (!target) return { ...baseResult, tracker, reason: 'unsupported-forge' };
 
   const result = target.forge === 'github'
-    ? await fetchGithubPullRequests(target.repoSpec, target.apiHost)
+    ? await fetchGithubPullRequests(target.repoSpec, target.apiHost, { repoPath: app.repoPath, forgeAccount: app.forgeAccount })
     : await fetchGitlabPullRequests(app.repoPath);
 
   return {
