@@ -219,8 +219,9 @@ export async function listBlockingIssues({ cli, cwd, env, exec = runCli } = {}) 
 
 /**
  * Ensure the layered-intelligence labels exist before the first `issue create`
- * (gh/glab both fail creating an issue with a non-existent label). Idempotent —
- * `--force` (gh) / re-create (glab) is a no-op when the label already exists.
+ * (gh/glab both fail creating an issue with a non-existent label). An existing
+ * label is deliberately left unchanged: it belongs to the repository, so only
+ * that expected duplicate error is treated as success.
  */
 export async function ensureForgeLabels({ cli, cwd, env, extraLabels = [], exec = runCli } = {}) {
   const labels = [
@@ -231,7 +232,15 @@ export async function ensureForgeLabels({ cli, cwd, env, extraLabels = [], exec 
     }))
   ];
   for (const l of labels) {
-    await exec(cli, forgeLabelCreateArgs(cli, { name: l.name, color: l.color, description: l.desc }), { cwd, env });
+    const { code, stdout, stderr } = await exec(
+      cli,
+      forgeLabelCreateArgs(cli, { name: l.name, color: l.color, description: l.desc }),
+      { cwd, env }
+    );
+    const output = `${stderr || ''}\n${stdout || ''}`;
+    if (code !== 0 && !/label.*already exists|already exists.*label/i.test(output)) {
+      throw new Error(`${cli} label create failed for "${l.name}": ${stderr || `exited with code ${code}`}`);
+    }
   }
 }
 
@@ -268,8 +277,8 @@ export async function fileProposalToForge({
  * call with a 422 when the repo has never defined the named label, and this is
  * the only path that applies `LI_BLOCKING_LABEL` — so on any install where the
  * Layered Intelligence loop has not yet FILED an issue (the other caller of
- * `ensureForgeLabels`), the very first pause would fail. Creation is idempotent
- * and its failures are swallowed there.
+ * `ensureForgeLabels`), the very first pause would fail. Existing labels are
+ * accepted there, while other creation failures are surfaced.
  */
 export async function applyBlockingLabel({ cli, cwd, env, number, exec = runCli } = {}) {
   if (!Number.isInteger(number)) return { success: false, error: 'no issue number' };

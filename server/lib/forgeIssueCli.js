@@ -5,7 +5,7 @@
  * rediscovered that disagreement has re-encoded it: the body flag
  * (`--body` vs `--description`), how labels attach (repeated `--label` flags vs
  * one comma-joined value), and how a label is created (gh takes the name
- * positionally with a bare hex color and `--force`; glab needs `--name` and a
+ * positionally with a bare hex color; glab needs `--name` and a
  * `#`-prefixed color). Keeping those here means a new filer inherits the rules
  * instead of learning them from a failed 422.
  *
@@ -17,7 +17,7 @@
 export const forgeLabelCreateArgs = (cli, spec, { repo = null } = {}) => (cli === 'glab'
   ? ['label', 'create', '--name', spec.name, '--color', `#${spec.color}`, '--description', spec.description]
   : ['label', 'create', spec.name, ...(repo ? ['--repo', repo] : []),
-    '--color', spec.color, '--description', spec.description, '--force']);
+    '--color', spec.color, '--description', spec.description]);
 
 /** `issue create` arguments for one issue. */
 export const forgeIssueCreateArgs = (cli, { title, body, labels = [], repo = null } = {}) => (cli === 'glab'
