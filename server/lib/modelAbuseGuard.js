@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { escapeRegExp } from './textUtils.js';
 
 /**
  * Static contract for PortOS's model-abuse boundary.
@@ -544,7 +545,7 @@ function hasHiddenMarkupInstruction(value) {
     const rest = value.slice(match.index + match[0].length, match.index + match[0].length + 4000);
     // Escape the tag name: it reaches a regex, and a namespaced JSX name
     // (`item.icon`) carries a metacharacter.
-    const tagName = match[1].replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const tagName = escapeRegExp(match[1]);
     const close = rest.match(new RegExp(`^([\\s\\S]*?)</${tagName}\\s*>`, 'i'));
     // No close tag in range: scan the whole window. Stopping at the first `<`
     // would be a bypass of its own — `<div hidden><p>payload</p>` truncates to
