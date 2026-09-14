@@ -147,7 +147,11 @@ async function announce(pin, providers) {
  * a warning raised by any other producer is never touched. A card predating
  * #7366 carries no `pinKey`; it is retracted here and re-announced under the
  * new key on the same pass if the pin is still stale, so an upgrading install
- * converges on the first audit rather than needing a migration.
+ * converges on the first audit rather than needing a migration. Should that one
+ * retraction fail, the re-announcement leaves two cards for one pin — the
+ * deliberate trade for keeping the two guards independent, and self-healing:
+ * the next audit retracts the legacy card, and a Clear from the panel takes
+ * both at once (`removeByMetadata` matches every card sharing the `pinId`).
  */
 async function reconcile(stalePins) {
   const { getNotifications, removeNotification, NOTIFICATION_TYPES } = await loadNotificationsModule();
