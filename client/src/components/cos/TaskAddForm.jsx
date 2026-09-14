@@ -441,6 +441,14 @@ export default function TaskAddForm({ providers, providersLoaded = true, apps, o
     });
   }, [soleAvailableModel, selectedProvider]);
   const NO_ACCOUNT_MODELS_NOTE = 'Your signed-in ChatGPT account exposes no models.';
+  // The flag fires from two different lists, so the suffix has to name the right
+  // one: an account catalog that dropped the model, or the provider's own
+  // catalog retiring it (#7327). Both keep the option SELECTABLE — the point is
+  // to tell the user the pin is dead, here where they can change it, not to
+  // silently swap their model.
+  const unlistedNote = modelSource === MODEL_SOURCE.shipped
+    ? 'no longer offered by this provider'
+    : 'not in account catalog';
   const modelSourceNote = (() => {
     if (!isCodexSubscriptionProvider(selectedProvider)) return '';
     if (modelSource === MODEL_SOURCE.account) return 'Models your signed-in ChatGPT account can run.';
@@ -1149,7 +1157,7 @@ export default function TaskAddForm({ providers, providersLoaded = true, apps, o
                   {availableModels.map(m => (
                     <option key={m} value={m}>
                       {unlistedSelection && m === newTask.model
-                        ? `${m} (not in account catalog)`
+                        ? `${m} (${unlistedNote})`
                         : m.replace('claude-', '').replace(/-\d+$/, '')}
                     </option>
                   ))}

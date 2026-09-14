@@ -42,6 +42,13 @@ describe('providerCatalogListsModel', () => {
     expect(providerCatalogListsModel(opencode, 'qwen3:14b')).toBe(false);
   });
 
+  it('confines the namespace tolerance to OpenCode providers', () => {
+    // The bare-id reduction must not match a slash-bearing pin against another
+    // vendor's bare catalog: the same rule now gates SPAWNS, not just this
+    // audit, so an over-permissive answer hands a CLI a model it cannot serve.
+    expect(providerCatalogListsModel(CODEX, 'openrouter/gpt-5')).toBe(false);
+  });
+
   it('never reports a LOCAL-daemon pin as retired, even when the record omits it', () => {
     // A local-backed provider's `models` is a stale cached snapshot while the
     // daemon is the authority, so judging a pin against the record would report

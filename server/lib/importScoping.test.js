@@ -527,7 +527,17 @@ describe('deferred imports stay deferred (#6156)', () => {
 // that drift apart disable review, CI approval, and merge for every external PR.
 // Putting both halves in one pure leaf is what keeps the contract test out of the
 // coordinator's service subtree entirely.
-const MAX_STATIC_INSTANTIATIONS = 104101;
+// Splitting the model-pin membership rule out of `localProviderRuntime.js` into
+// the browser-safe leaf `modelPinMembership.js` (#7327) measures +297. Almost
+// all of it is one extra module NODE, not a new subtree: `localProviderRuntime`
+// is reached from a great many suites and now instantiates the leaf beside it,
+// so each of those closures grows by one. The rest is the leaf's own suite —
+// the leaf plus `providerModels.js`, `localEndpoint.js` and `ports.js`, all of
+// which that suite's predecessor already pulled. Nothing gained an edge into a
+// heavy subtree, and the split REMOVES one for the browser, which is its point:
+// `localProviderRuntime` reaches `opencodeConfig.js` → `zod` to resolve
+// ENDPOINTS, a question no picker asks. Raise by exactly that delta.
+const MAX_STATIC_INSTANTIATIONS = 104398;
 
 
 const SKIP_DIRS = new Set(['node_modules', 'coverage', 'dist', 'data']);
