@@ -114,4 +114,58 @@ describe('DeckCardGrid', () => {
     fireEvent.click(write);
     expect(props.onOpenCard).toHaveBeenCalledWith(expect.objectContaining({ id: 'e' }));
   });
+
+  it('displays v1 indicator for a card with one render', () => {
+    renderGrid();
+    expect(screen.getByText('v1')).toBeInTheDocument();
+  });
+
+  it('allows viewing different versions and toggling active version on a multi-render card', () => {
+    const multiDeck = {
+      id: 'd1',
+      cards: [
+        card('f', 'major', {
+          prompt: 'lovers',
+          imageRefs: ['f1.png', 'f2.png', 'f3.png'],
+          primaryImageRef: 'f3.png',
+        }),
+      ],
+    };
+    const onSetActiveVersion = vi.fn();
+    const onPreview = vi.fn();
+    renderGrid({ deck: multiDeck, onSetActiveVersion, onPreview });
+
+    // Starts at v3/3 which is active
+    expect(screen.getByText('v3/3')).toBeInTheDocument();
+    expect(screen.getByTitle('Active version for this card')).toBeInTheDocument();
+
+    // Click previous to view v2
+    const prevBtn = screen.getByRole('button', { name: 'Previous render version for Card f' });
+    fireEvent.click(prevBtn);
+
+    expect(screen.getByText('v2/3')).toBeInTheDocument();
+    // v2 is not active, so "Set active" button should appear
+    const setActiveBtn = screen.getByRole('button', { name: 'Set v2 as active version for Card f' });
+    expect(setActiveBtn).toBeInTheDocument();
+
+    // Clicking Set active fires onSetActiveVersion
+    fireEvent.click(setActiveBtn);
+    expect(onSetActiveVersion).toHaveBeenCalledWith('f', 'f2.png');
+
+    // Click preview on the thumbnail should open v2
+    const thumbImg = screen.getByRole('img', { name: 'Card f' });
+    expect(thumbImg).toHaveAttribute('src', '/data/images/f2.png');
+    fireEvent.click(thumbImg);
+    expect(onPreview).toHaveBeenCalledWith(expect.objectContaining({ id: 'f' }), 'f2.png');
+
+    // Click previous again to reach v1
+    fireEvent.click(prevBtn);
+    expect(screen.getByText('v1/3')).toBeInTheDocument();
+    expect(prevBtn).toBeDisabled();
+
+    // Next button moves back to v2
+    const nextBtn = screen.getByRole('button', { name: 'Next render version for Card f' });
+    fireEvent.click(nextBtn);
+    expect(screen.getByText('v2/3')).toBeInTheDocument();
+  });
 });

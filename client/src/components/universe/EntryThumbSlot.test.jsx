@@ -111,4 +111,30 @@ describe('EntryThumbSlot — three-state thumbnail', () => {
     render(<EntryThumbSlot inFlightJobId="job-z" onComplete={onComplete} canRender={false} />);
     expect(onComplete).not.toHaveBeenCalled();
   });
+
+  it('omits rounded class when rounded is false', () => {
+    const { container } = render(
+      <EntryThumbSlot
+        imageRefs={['test-unrounded.png']}
+        alt="Unrounded card"
+        rounded={false}
+      />,
+    );
+    const frame = container.querySelector('.overflow-hidden');
+    expect(frame).toBeInTheDocument();
+    expect(frame?.className).not.toMatch(/\brounded\b/);
+  });
+
+  it('renders displayedImageRef when specified among imageRefs', () => {
+    render(
+      <EntryThumbSlot
+        imageRefs={['v1.png', 'v2.png', 'v3.png']}
+        primaryImageRef="v3.png"
+        displayedImageRef="v1.png"
+        alt="Multi version card"
+      />,
+    );
+    const img = screen.getByRole('img', { name: 'Multi version card' });
+    expect(img).toHaveAttribute('src', '/data/images/v1.png');
+  });
 });

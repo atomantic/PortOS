@@ -45,4 +45,36 @@ describe('DeckCardDrawer render prompt', () => {
     expect(screen.getByText('Deck style')).toBeInTheDocument();
     expect(screen.getAllByText('—').length).toBeGreaterThan(0);
   });
+
+  it('renders each version with v{N}, active indicator, and unrounded thumbnail', () => {
+    const onSave = vi.fn();
+    renderDrawer({
+      card: {
+        ...card,
+        imageRefs: ['fool-v1.png', 'fool-v2.png'],
+        primaryImageRef: 'fool-v2.png',
+      },
+      onSave,
+    });
+
+    expect(screen.getByText('v1')).toBeInTheDocument();
+    expect(screen.getByText('v2')).toBeInTheDocument();
+
+    // v2 is active
+    expect(screen.getByRole('button', { name: 'v2 is active' })).toBeDisabled();
+
+    // v1 is not active, can be set as active
+    const setActiveBtn = screen.getByRole('button', { name: 'Set v1 as active' });
+    expect(setActiveBtn).toBeEnabled();
+    setActiveBtn.click();
+    expect(onSave).toHaveBeenCalledWith({ primaryImageRef: 'fool-v1.png' });
+
+    // Thumbnails should not have rounded corners cutting off card art
+    const imgs = screen.getAllByRole('img');
+    expect(imgs.length).toBe(2);
+    imgs.forEach((img) => {
+      expect(img.className).not.toMatch(/\brounded\b/);
+    });
+  });
 });
+
