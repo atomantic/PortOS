@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 vi.mock('./providers.js', () => ({ listProviders: vi.fn() }));
+vi.mock('./notifications.js', () => ({ removeByMetadata: vi.fn() }));
 vi.mock('./settings.js', () => ({ getSettings: vi.fn(), updateSettingsWith: vi.fn() }));
 vi.mock('./taskSchedule.js', () => ({ loadSchedule: vi.fn(), updateTaskInterval: vi.fn() }));
 vi.mock('./apps.js', () => ({
@@ -9,6 +10,7 @@ vi.mock('./apps.js', () => ({
 }));
 
 const { listProviders } = await import('./providers.js');
+const { removeByMetadata } = await import('./notifications.js');
 const { getSettings, updateSettingsWith } = await import('./settings.js');
 const { loadSchedule, updateTaskInterval } = await import('./taskSchedule.js');
 const { getActiveApps, updateAppTaskTypeOverride } = await import('./apps.js');
@@ -34,6 +36,7 @@ beforeEach(() => {
   getSettings.mockResolvedValue(settingsWith({}));
   loadSchedule.mockResolvedValue({ tasks: {} });
   getActiveApps.mockResolvedValue([]);
+  removeByMetadata.mockResolvedValue({ success: true, removed: 0 });
 });
 
 describe('image-gen pin coverage', () => {
@@ -187,6 +190,35 @@ describe('clearModelPin', () => {
     }]);
     await clearModelPin('app:app-1:audit');
     expect(updateAppTaskTypeOverride).toHaveBeenCalledWith('app-1', 'audit', { model: null });
+  });
+
+  it('retracts the pin\'s notification card (#7332)', async () => {
+    getSettings.mockResolvedValue(settingsWith({
+      imageGen: { agy: { enabled: true, model: 'gemini-3.5-flash-low' } },
+    }));
+    await clearModelPin('settings:imageGen.agy.model');
+    expect(removeByMetadata).toHaveBeenCalledWith('pinId', 'settings:imageGen.agy.model');
+  });
+
+  it('retracts the card even for an id that names no stored pin', async () => {
+    // The pin is already gone, so the card is a loop the user cannot close by
+    // any other means — leaving it up is the failure, not the retraction.
+    await clearModelPin('settings:imageGen.agy.model');
+    expect(removeByMetadata).toHaveBeenCalledWith('pinId', 'settings:imageGen.agy.model');
+  });
+
+  it('still reports the clear when retracting the card fails', async () => {
+    const errored = vi.spyOn(console, 'error').mockImplementation(() => {});
+    getSettings.mockResolvedValue(settingsWith({
+      imageGen: { agy: { enabled: true, model: 'gemini-3.5-flash-low' } },
+    }));
+    removeByMetadata.mockRejectedValueOnce(new Error('notifications.json unwritable'));
+
+    await expect(clearModelPin('settings:imageGen.agy.model')).resolves.toEqual({
+      cleared: true, id: 'settings:imageGen.agy.model',
+    });
+    expect(errored.mock.calls[0][0]).toContain('notifications.json unwritable');
+    errored.mockRestore();
   });
 
   it('reaches no writer for an id that names no collected pin', async () => {

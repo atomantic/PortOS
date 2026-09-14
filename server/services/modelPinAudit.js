@@ -50,9 +50,11 @@ import { getSettings, updateSettingsWith } from './settings.js';
  * mock unless they share a single in-flight promise.
  */
 let appsModule = null;
+let notificationsModule = null;
 let providersModule = null;
 let taskScheduleModule = null;
 const loadAppsModule = () => (appsModule ||= import('./apps.js'));
+const loadNotificationsModule = () => (notificationsModule ||= import('./notifications.js'));
 const loadProvidersModule = () => (providersModule ||= import('./providers.js'));
 const loadTaskScheduleModule = () => (taskScheduleModule ||= import('./taskSchedule.js'));
 
@@ -307,13 +309,21 @@ const withoutKey = (parent, key) => {
  * stored resolves to `{ cleared: false }` rather than throwing — the pin is
  * already gone, which is the outcome the caller wanted.
  *
+ * The retired-pin notification card (#7332) is retracted either way: a card
+ * naming a pin that is no longer stored is a loop the user cannot close, and
+ * `cleared: false` means the pin is already gone, not that the card is still
+ * earned. Retraction must never fail the clear the user actually asked for.
+ *
  * @param {string} pinId
  * @returns {Promise<{cleared: boolean, id: string}>}
  */
 export async function clearModelPin(pinId) {
   const pins = await collectModelPins();
   const pin = pins.find((candidate) => candidate.id === pinId);
-  if (!pin) return { cleared: false, id: pinId };
-  await PIN_SOURCES.find((source) => source.kind === pin.kind).clear(pin);
-  return { cleared: true, id: pinId };
+  if (pin) await PIN_SOURCES.find((source) => source.kind === pin.kind).clear(pin);
+  const { removeByMetadata } = await loadNotificationsModule();
+  await removeByMetadata('pinId', pinId).catch((error) => {
+    console.error(`❌ Retracting retired-pin notification for ${pinId} failed: ${error.message}`);
+  });
+  return { cleared: Boolean(pin), id: pinId };
 }
