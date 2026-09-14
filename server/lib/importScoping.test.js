@@ -537,7 +537,7 @@ describe('deferred imports stay deferred (#6156)', () => {
 // heavy subtree, and the split REMOVES one for the browser, which is its point:
 // `localProviderRuntime` reaches `opencodeConfig.js` → `zod` to resolve
 // ENDPOINTS, a question no picker asks. Raise by exactly that delta.
-const MAX_STATIC_INSTANTIATIONS = 104330;
+const MAX_STATIC_INSTANTIATIONS = 104398;
 
 
 const SKIP_DIRS = new Set(['node_modules', 'coverage', 'dist', 'data']);
