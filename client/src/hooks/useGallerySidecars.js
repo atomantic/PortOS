@@ -13,13 +13,17 @@ import { getGalleryImages } from '../services/apiImageVideo';
  * with the wrong prompt.
  *
  * `filenames` may be a fresh array each render — the lookup is keyed on the
- * sorted, de-duplicated contents, not on array identity. Only filenames not
- * already held are requested, and results merge into the map rather than
- * replacing it: a render completing appends ONE filename to its record, and
- * re-fetching the whole set each time turned rendering a 78-card deck into 78
- * lookups carrying 3,081 filenames between them. A filename that comes back
- * empty stays unresolved, so `refreshKey` (bumped once a render has landed)
- * retries just that one.
+ * sorted, de-duplicated contents, not on array identity. A changed list fetches
+ * only what is not already held and merges it in: a render completing appends
+ * ONE filename to its record, and re-fetching the whole set each time turned
+ * rendering a 78-card deck into 78 lookups carrying 3,081 filenames between
+ * them. A filename that comes back empty stays unresolved and is retried by the
+ * next lookup.
+ *
+ * A changed `refreshKey` means the sidecars themselves may have changed on
+ * disk, which a list comparison cannot see — so it re-reads every filename,
+ * including ones already held. Pass one only when that can happen; a caller
+ * whose renders always arrive under new filenames (a deck) needs none.
  *
  * Returns `{ byFilename, setSidecar }`; `setSidecar(record)` splices one
  * freshly written record in (e.g. after a clean) without a refetch.
@@ -33,7 +37,12 @@ export default function useGallerySidecars(filenames, refreshKey = 0) {
   // What the map already holds, readable from the effect without making the
   // map its own dependency (which would re-run the effect on its own result).
   const loadedRef = useRef(new Set());
+  const refreshedAtRef = useRef(refreshKey);
   useEffect(() => {
+    if (refreshedAtRef.current !== refreshKey) {
+      refreshedAtRef.current = refreshKey;
+      loadedRef.current = new Set();
+    }
     const missing = wanted.filter((f) => !loadedRef.current.has(f));
     if (!missing.length) return undefined;
     let cancelled = false;

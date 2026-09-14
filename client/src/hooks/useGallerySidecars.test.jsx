@@ -34,6 +34,16 @@ describe('useGallerySidecars', () => {
     expect(getGalleryImages).toHaveBeenLastCalledWith(['b.png'], { silent: true });
   });
 
+  it('re-reads everything when the refresh key moves, since a sidecar can change in place', async () => {
+    const { rerender } = renderHook(({ key }) => useGallerySidecars(['a.png'], key), {
+      initialProps: { key: 0 },
+    });
+    await waitFor(() => expect(getGalleryImages).toHaveBeenCalledTimes(1));
+    rerender({ key: 1 });
+    await waitFor(() => expect(getGalleryImages).toHaveBeenCalledTimes(2));
+    expect(getGalleryImages).toHaveBeenLastCalledWith(['a.png'], { silent: true });
+  });
+
   it('splices one freshly written record in without a refetch', async () => {
     const { result } = renderHook(() => useGallerySidecars(['a.png']));
     await waitFor(() => expect(result.current.byFilename.size).toBe(1));

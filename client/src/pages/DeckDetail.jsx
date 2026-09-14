@@ -125,7 +125,8 @@ function DeckEditor({ id }) {
   const { byFilename: sidecars } = useGallerySidecars(cardImageRefs);
   const previewItems = useMemo(() => (deck
     ? deck.cards.flatMap((c) => {
-      const composed = c.imageRefs.length ? composeCardRenderPrompt(deck, c) : null;
+      if (!c.imageRefs.length) return [];
+      const composed = composeCardRenderPrompt(deck, c);
       return c.imageRefs.map((filename) => {
         const meta = sidecars.get(filename);
         return normalizeImage({
