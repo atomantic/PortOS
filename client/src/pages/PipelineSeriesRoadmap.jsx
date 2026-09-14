@@ -327,8 +327,7 @@ export default function PipelineSeriesRoadmap() {
         onChange={setActiveTab}
         size="sm"
         ariaLabel="Reader Map view"
-        mobileDropdown
-        mobileSelectId="reader-map-tab"
+        mobileCompact
       />
 
       {activeTab === 'panel' ? (

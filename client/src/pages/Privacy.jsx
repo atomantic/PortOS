@@ -92,8 +92,7 @@ export default function Privacy() {
         tabs={TABS}
         activeTab={activeTab}
         onChange={goToTab}
-        mobileDropdown
-        mobileSelectId="privacy-tab-select"
+        mobileCompact
         ariaLabel="Privacy Center sections"
       />
       <div className="pt-4">

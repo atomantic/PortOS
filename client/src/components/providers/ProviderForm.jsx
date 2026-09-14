@@ -1,6 +1,6 @@
 import { hardwareUnavailableReason } from '../../utils/systemCapabilities';
 import { useState } from 'react';
-import { AlertTriangle } from 'lucide-react';
+import { AlertTriangle, Braces, Cpu, Plug, SlidersHorizontal } from 'lucide-react';
 import toast from '../ui/Toast';
 import * as api from '../../services/api';
 import { filterHardwareCompatibleProviderModels, filterGenerationModels, isEmbeddingModel, isProviderHardwareCompatible, isProviderModelHardwareCompatible, mergeModelLists, configuredDefaultIn, localBackendForProvider, modelOptionLabel, isProcessProvider, isLocalEndpoint, effectiveModelContextWindow, isRunnerAllowedCommand, effortLevelsForProvider, isOllamaBackedProvider, gatewayForProvider, isClaudeCommandProvider, generationControlsFor, isCodexProvider } from '../../utils/providers';
@@ -23,10 +23,10 @@ import { GatewayKeyHint } from './ProviderNotices';
 // /ai/edit/:providerId deep link opens on the identity/transport fields; the
 // others are reachable as /ai/edit/:providerId?providerTab=<id>.
 const PROVIDER_FORM_TABS = [
-  { id: 'connection', label: 'Connection' },
-  { id: 'models', label: 'Models' },
-  { id: 'generation', label: 'Generation' },
-  { id: 'environment', label: 'Environment' },
+  { id: 'connection', label: 'Connection', icon: Plug },
+  { id: 'models', label: 'Models', icon: Cpu },
+  { id: 'generation', label: 'Generation', icon: SlidersHorizontal },
+  { id: 'environment', label: 'Environment', icon: Braces },
 ];
 const PROVIDER_FORM_TAB_IDS = PROVIDER_FORM_TABS.map(t => t.id);
 

@@ -567,7 +567,8 @@ export default function FableLoomStory({ view = 'graph' }) {
             variant="pills"
             size="sm"
             ariaLabel="Series and episodes"
-            mobileDropdown
+            mobileCompact
+            mobileSelectId="fableloom-series-episode"
             mobileSelectClassName="sm:hidden min-w-0 flex-1"
             tabs={[
               { id: 'plan', label: 'Series plan' },

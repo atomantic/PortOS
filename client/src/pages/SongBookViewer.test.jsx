@@ -306,6 +306,11 @@ describe('SongBookViewer', () => {
   });
 
   describe('instrument-view toggle (#2656)', () => {
+    // The view picker is a TabPills bar (icon-only on a phone), so the selected
+    // view is the tab carrying aria-selected, not a select's value.
+    const activeInstrumentView = () => within(screen.getByRole('tablist', { name: 'Instrument view' }))
+      .getAllByRole('tab').find((tab) => tab.getAttribute('aria-selected') === 'true')?.textContent;
+
     // Sheet with a tab staff so the non-guitar collapse note is observable.
     // Six staff lines: identifiably GUITAR tab, so non-guitar views collapse
     // it under the guitar-specific label (a ≤4-line staff would stay visible
@@ -323,8 +328,7 @@ E|--3-----|`;
     it('defaults to the song instrument (guitar) and shows the chords-used strip', async () => {
       renderPage();
       expect(await screen.findByText('Chorus')).toBeTruthy();
-      const select = screen.getByRole('combobox', { name: 'Instrument view' });
-      expect(select.value).toBe('guitar');
+      expect(activeInstrumentView()).toBe('Guitar');
       expect(screen.getByRole('button', { name: /Chords used/ })).toBeTruthy();
     });
 
@@ -332,7 +336,7 @@ E|--3-----|`;
       api.getSong.mockResolvedValue(song({ instrument: 'piano', content: { format: 'tab', text: TAB_SHEET } }));
       renderPage();
       expect(await screen.findByText('Chorus')).toBeTruthy();
-      expect(screen.getByRole('combobox', { name: 'Instrument view' }).value).toBe('piano');
+      expect(activeInstrumentView()).toBe('Piano');
       expect(screen.getByText(/guitar tab — switch to Guitar view/)).toBeTruthy();
       expect(screen.queryByText('e|--3--2--|')).toBeNull();
     });
@@ -341,14 +345,14 @@ E|--3-----|`;
       api.getSong.mockResolvedValue(song({ instrument: 'bass' }));
       renderPage();
       expect(await screen.findByText('Chorus')).toBeTruthy();
-      expect(screen.getByRole('combobox', { name: 'Instrument view' }).value).toBe('guitar');
+      expect(activeInstrumentView()).toBe('Guitar');
     });
 
     it('honors a ?view= deep link over the song instrument', async () => {
       api.getSong.mockResolvedValue(song({ content: { format: 'tab', text: TAB_SHEET } }));
       renderPage('/songbook/abc?view=ukulele');
       expect(await screen.findByText('Chorus')).toBeTruthy();
-      expect(screen.getByRole('combobox', { name: 'Instrument view' }).value).toBe('ukulele');
+      expect(activeInstrumentView()).toBe('Ukulele');
       expect(screen.getByText(/guitar tab — switch to Guitar view/)).toBeTruthy();
     });
 
@@ -357,7 +361,7 @@ E|--3-----|`;
       renderPage();
       expect(await screen.findByText('Chorus')).toBeTruthy();
       expect(screen.getByText('e|--3--2--|')).toBeTruthy();
-      fireEvent.change(screen.getByRole('combobox', { name: 'Instrument view' }), { target: { value: 'piano' } });
+      fireEvent.click(screen.getByRole('tab', { name: 'Piano' }));
       // Tab staff collapses; a chord popover now shows piano chips.
       expect(screen.getByText(/guitar tab — switch to Guitar view/)).toBeTruthy();
       fireEvent.click(screen.getAllByRole('button', { name: 'Am' })[0]);
@@ -488,7 +492,7 @@ K:  o - - - - - o -`;
       expect(await screen.findByLabelText('Play along')).toBeTruthy();
       expect(screen.queryByLabelText('Transpose up')).toBeNull();
       expect(screen.queryByLabelText('Transpose down')).toBeNull();
-      expect(screen.queryByRole('combobox', { name: 'Instrument view' })).toBeNull();
+      expect(screen.queryByRole('tablist', { name: 'Instrument view' })).toBeNull();
       // The kit strip scrolls horizontally under its own playhead — a vertical
       // autoscroll play button beside it would be a second, conflicting "play".
       expect(screen.queryByLabelText('Autoscroll speed')).toBeNull();

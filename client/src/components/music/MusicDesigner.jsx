@@ -288,8 +288,7 @@ export default function MusicDesigner() {
         tabs={STEPS}
         activeTab={step}
         onChange={goTo}
-        mobileDropdown
-        mobileSelectId="music-designer-step"
+        mobileCompact
         ariaLabel="Music designer steps"
       />
 

@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { Link } from 'react-router';
-import { BarChart3, GitBranch, GitPullRequest, Lock, Copy, ShieldCheck } from 'lucide-react';
+import { BarChart3, Brain, GitBranch, GitPullRequest, Info, Lock, Copy, Network, ShieldCheck, SquareTerminal, ToggleLeft } from 'lucide-react';
 import IconPicker from '../IconPicker';
 import * as api from '../../services/api';
 import { PORTOS_APP_ID } from '../../services/apiCore';
@@ -28,12 +28,12 @@ import { useInstanceFeatures } from '../../hooks/useInstanceFeatures.js';
 // per-app feature visibility overrides; it never sends a `jira` key, so saving
 // an unrelated field cannot clobber the detail tab's configuration.
 const TABS = [
-  { id: 'general', label: 'General' },
-  { id: 'ports', label: 'Ports & TLS' },
-  { id: 'commands', label: 'Commands' },
-  { id: 'workflow', label: 'Workflow' },
-  { id: 'intelligence', label: 'Intelligence' },
-  { id: 'features', label: 'Features' }
+  { id: 'general', label: 'General', icon: Info },
+  { id: 'ports', label: 'Ports & TLS', icon: Network },
+  { id: 'commands', label: 'Commands', icon: SquareTerminal },
+  { id: 'workflow', label: 'Workflow', icon: GitBranch },
+  { id: 'intelligence', label: 'Intelligence', icon: Brain },
+  { id: 'features', label: 'Features', icon: ToggleLeft }
 ];
 const TAB_IDS = TABS.map(t => t.id);
 

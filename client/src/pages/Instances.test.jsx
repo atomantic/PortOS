@@ -342,8 +342,9 @@ describe('Instances page connection drawers', () => {
     const dialog = screen.getByRole('dialog');
     fireEvent.click(within(dialog).getByRole('button', { name: 'Edit', exact: true }));
     fireEvent.change(screen.getByLabelText('Instance name'), { target: { value: 'Draft name' } });
-    fireEvent.change(screen.getByRole('combobox', { name: 'Connection settings sections' }), { target: { value: 'relay' } });
-    fireEvent.change(screen.getByRole('combobox', { name: 'Connection settings sections' }), { target: { value: 'instance' } });
+    const sections = () => within(screen.getByRole('tablist', { name: 'Connection settings sections' }));
+    fireEvent.click(sections().getByRole('tab', { name: 'Tailcat' }));
+    fireEvent.click(sections().getByRole('tab', { name: 'This instance' }));
     expect(screen.getByLabelText('Instance name')).toHaveValue('Draft name');
     fireEvent.click(screen.getByRole('button', { name: 'Close settings' }));
     fireEvent.click(screen.getByRole('button', { name: 'Add peer' }));
