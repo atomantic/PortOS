@@ -37,6 +37,25 @@ module.exports = {
 };
 `;
 
+/**
+ * Same defect, one sibling process instead of a pair: `admin-ui` owns the only
+ * `ports.ui` and has no `admin` sibling to prove it is a separate surface.
+ */
+const SOLO_SIBLING_UI_CONFIG = `const PORTS = {
+  API: 6000,     // Example API server
+  UI: 6001,      // Vite dev server
+  ADMIN: 6004,   // Standalone admin console
+};
+
+module.exports = {
+  apps: [
+    { name: 'example-server', script: 'server/index.js', env: { PORT: PORTS.API } },
+    { name: 'example-ui', script: 'npm', args: 'run dev', env: { VITE_PORT: PORTS.UI } },
+    { name: 'admin-ui', script: 'admin/index.js', env: { PORT: PORTS.ADMIN } }
+  ]
+};
+`;
+
 /** Two-process app with unconventional names — neither shares a surface. */
 const UNCONVENTIONAL_CONFIG = `const PORTS = {
   API: 7000,
@@ -132,6 +151,45 @@ describe('applyEcosystemPortEdits', () => {
     // …and only the API port moved.
     expect(after).toContain('HELPER_UI: 6003,');
     expect(after).toContain('UI: 6001,');
+  });
+
+
+  it('picks the app\'s own surface even when the record lists sibling processes first', async () => {
+    // An app record claims every process it supervises, siblings included, and
+    // nothing guarantees the app's own process is listed first (a sorted list
+    // puts `example-helper` before `example-server`). The primary is resolved in
+    // CONFIG order for that reason — reading it from the record's order here
+    // would name the helper as primary and invert the whole attribution,
+    // recreating #7357.
+    const before = await writeConfig(SIBLING_UI_CONFIG);
+    const existing = {
+      id: 'example',
+      name: 'Example',
+      repoPath,
+      type: 'node',
+      pm2ProcessNames: ['example-helper', 'example-helper-ui', 'example-server', 'example-ui'],
+    };
+
+    const result = await applyEcosystemPortEdits(existing, { apiPort: 6000, uiPort: 6000, devUiPort: 6001 });
+
+    expect(await readConfig()).toBe(before);
+    expect(result.changedKeys).toEqual([]);
+    expect(result.uiPortOverride).toBe(6000);
+  });
+
+  it('ignores a single-process sibling whose name declares another surface\'s role', async () => {
+    // `admin-ui` is the only `ports.ui` in the file and has no sibling of its
+    // own, so a "is this surface multi-process?" test would read it as this
+    // app's UI and rewrite its literal. The name itself is the evidence: it
+    // declares a role on surface `admin`, which is not this app's.
+    const before = await writeConfig(SOLO_SIBLING_UI_CONFIG);
+    const existing = { id: 'example', name: 'Example', repoPath, type: 'node', processes: [{ name: 'example-server' }, { name: 'example-ui' }] };
+
+    const result = await applyEcosystemPortEdits(existing, { apiPort: 6000, uiPort: 6000, devUiPort: 6001 });
+
+    expect(await readConfig()).toBe(before);
+    expect(result.changedKeys).toEqual([]);
+    expect(result.uiPortOverride).toBe(6000);
   });
 
   it('still attributes a UI port to a process that shares no naming convention with the primary', async () => {

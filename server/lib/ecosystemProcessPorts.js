@@ -15,32 +15,31 @@
  *   1. Prefer a process on the app's own SURFACE — the process name with a
  *      trailing role suffix (`-server`, `-ui`, …) stripped. `portos-server` and
  *      `portos-ui` share surface `portos`; `portos-autofixer-ui` does not.
- *   2. Otherwise accept the first process carrying the label UNLESS it is
- *      provably a sibling surface — its surface differs from the app's AND at
- *      least one other process in the config shares that surface, which is what
- *      makes it a distinct multi-process product surface rather than an
- *      unconventionally-named process of this app.
+ *   2. Otherwise accept a carrier only when its name declares no role at all —
+ *      a suffixed name like `portos-autofixer-ui` names the surface it serves
+ *      and thereby says it is not this app's, while a bare `frontend` beside a
+ *      `backend` declares nothing and is still taken as this app's UI, exactly
+ *      as before.
  *
- * Step 2 is what keeps an app whose processes are named `backend`/`frontend`
- * working exactly as before: `frontend` is not on `backend`'s surface, but
- * nothing else in the config claims surface `frontend`, so its `ui` port is
- * still the app's. A label with no attributable process resolves to `undefined`,
- * which is the signal callers use to fall back to derivation (a served-by-API
- * app's `uiPort` = its `apiPort`).
+ * Where the two are genuinely indistinguishable, ignoring is the safe default:
+ * it costs a 422 the user can act on, whereas attributing costs a silent rewrite
+ * of a sibling's port literal. A label with no attributable process resolves to
+ * `undefined`, which is the signal callers use to fall back to derivation (a
+ * served-by-API app's `uiPort` = its `apiPort`).
  *
  * Pure and import-free: both the write-back path (`services/appPortConfig.js`)
  * and the read/derive path (`services/appListEnrichment.js`) share it so a
  * displayed port and a rewritten port can never disagree about whose it is.
  */
 
+/** A declared port value: a positive integer (0 / null / a string is not a port). */
+const isPort = (value) => Number.isInteger(value) && value > 0;
+
 /**
  * Role suffixes a process name carries to mark WHICH part of one surface it is.
  * Stripping them collapses `portos-server` and `portos-ui` onto surface
  * `portos` while leaving `portos-autofixer` (no role suffix) as its own.
  */
-/** A declared port value: a positive integer (0 / null / a string is not a port). */
-const isPort = (value) => Number.isInteger(value) && value > 0;
-
 const ROLE_SUFFIXES = ['server', 'api', 'backend', 'ui', 'client', 'web', 'frontend'];
 
 /**
@@ -58,34 +57,37 @@ export function processSurface(name) {
 }
 
 /**
- * The process whose surface defines the app. Prefers a name the app record
- * already claims as its own (`processes[]`/`pm2ProcessNames[]`, in order) and
- * that the config actually declares — the record is the only place that knows
- * which of several surfaces in one config is the app. Falls back to the first
- * process carrying an `api` port (the historical primary), then the first
- * process at all.
+ * The process whose surface defines the app: the first process in CONFIG order
+ * that the app record claims and that carries an `api` port, else the first
+ * claimed process, else the same walk over every process when the record claims
+ * none of them.
  *
- * The owned-name list is used for ORDER only, never as a membership filter: a
- * record lists every PM2 process it supervises, siblings included (PortOS's own
- * record claims `portos-autofixer-ui`), so filtering by it would re-admit the
- * very process this module exists to exclude.
+ * CONFIG order, never the record's order — an ecosystem file declares the app's
+ * own process first, while a record's `processes[]`/`pm2ProcessNames[]` is just
+ * the supervised set and may be sorted or reordered. Picking by record order
+ * would let an alphabetically-sorted list (`portos-autofixer` before
+ * `portos-server`) name a sibling as primary and invert the whole attribution.
+ *
+ * The record is consulted for MEMBERSHIP only, and it is a weak signal at that:
+ * it claims every process it supervises, siblings included, so it narrows the
+ * field without identifying the app's own surface on its own.
  */
 function resolvePrimaryProcess(processes, ownedNames) {
-  for (const name of ownedNames || []) {
-    const match = processes.find(proc => proc?.name === name);
-    if (match) return match;
-  }
-  return processes.find(proc => isPort(proc?.ports?.api)) || processes[0] || null;
+  const claimed = ownedNames.size > 0
+    ? processes.filter(proc => ownedNames.has(proc?.name))
+    : [];
+  const candidates = claimed.length > 0 ? claimed : processes;
+  return candidates.find(proc => isPort(proc?.ports?.api)) || candidates[0] || null;
 }
 
-/** Process names the app record claims, in declaration order. */
+/** Process names the app record claims. */
 function ownedProcessNames(app) {
-  const names = [];
+  const names = new Set();
   for (const proc of Array.isArray(app?.processes) ? app.processes : []) {
-    if (typeof proc?.name === 'string') names.push(proc.name);
+    if (typeof proc?.name === 'string') names.add(proc.name);
   }
   for (const name of Array.isArray(app?.pm2ProcessNames) ? app.pm2ProcessNames : []) {
-    if (typeof name === 'string') names.push(name);
+    if (typeof name === 'string') names.add(name);
   }
   return names;
 }
@@ -98,7 +100,7 @@ function ownedProcessNames(app) {
  * @param {Array<{name?: string, ports?: Record<string, number>}>} processes
  *   parsed ecosystem processes (or an app record's `processes[]` — same shape)
  * @param {object} [app] the app record, consulted only for which process names
- *   it owns; omit it and the primary falls back to the first `api` process
+ *   it claims; omit it and the primary is resolved over every process
  * @returns {{ ports: Record<string, number|undefined>, processNames: Record<string, string|undefined> }}
  *   `ports[label]` is undefined when no process can be attributed the label;
  *   `processNames[label]` names the process the value came from (what a targeted
@@ -113,22 +115,19 @@ export function attributeProcessPorts(processes, app) {
   const primary = resolvePrimaryProcess(procs, ownedProcessNames(app));
   const appSurface = processSurface(primary?.name);
 
-  // Surfaces with two or more processes of their own are distinct product
-  // surfaces in this config — that is the evidence needed to IGNORE one of their
-  // labels rather than mis-attribute it to the app.
-  const surfaceCounts = new Map();
-  for (const proc of procs) {
-    const surface = processSurface(proc.name);
-    surfaceCounts.set(surface, (surfaceCounts.get(surface) || 0) + 1);
-  }
-
   for (const label of ['api', 'ui', 'devUi']) {
     const carriers = procs.filter(proc => isPort(proc.ports?.[label]));
-    const owned = carriers.find(proc => processSurface(proc.name) === appSurface);
-    // No process on the app's own surface declares this label: accept the first
-    // carrier that is not provably a sibling surface (step 2 above).
-    const attributed = owned
-      || carriers.find(proc => (surfaceCounts.get(processSurface(proc.name)) || 0) < 2);
+    const attributed = carriers.find(proc => processSurface(proc.name) === appSurface)
+      // No process on the app's own surface declares this label. Accept a
+      // carrier only when its name does NOT declare a role on some other
+      // surface: `portos-autofixer-ui` names the surface it serves and says it
+      // is not this app's, so it is ignored (the label then resolves to
+      // undefined and the served-by-API derivation takes over), while a
+      // `frontend` beside a `backend` strips to no role at all and is still
+      // taken as this app's UI, exactly as before. Where the two are genuinely
+      // indistinguishable, ignoring costs a 422 the user can act on; attributing
+      // costs a silent rewrite of a sibling's port literal.
+      || carriers.find(proc => processSurface(proc.name) === proc.name);
     if (!attributed) continue;
     ports[label] = attributed.ports[label];
     processNames[label] = attributed.name;
@@ -160,12 +159,22 @@ export function findCrossProcessPortCollision(processes, edits) {
   // Post-edit view: an edited label vacates its old value, so an edit that moves
   // a port out of the way cannot collide with the value it just released.
   const claims = [];
+  const claimed = new Set();
   for (const proc of procs) {
     for (const [label, port] of Object.entries(proc.ports || {})) {
       if (!isPort(port)) continue;
       const edit = (edits || []).find(e => e?.processName === proc.name && e?.label === label);
       claims.push({ processName: proc.name, label, port: edit ? edit.newPort : port });
+      claimed.add(`${proc.name}\u0000${label}`);
     }
+  }
+  // An edit can also introduce a label the process does not declare yet. Seed
+  // those too, so two edits that would hand the same new port to two different
+  // processes still collide with each other.
+  for (const edit of edits || []) {
+    if (!edit || !isPort(edit.newPort)) continue;
+    if (claimed.has(`${edit.processName}\u0000${edit.label}`)) continue;
+    claims.push({ processName: edit.processName, label: edit.label, port: edit.newPort });
   }
 
   for (const edit of edits || []) {
