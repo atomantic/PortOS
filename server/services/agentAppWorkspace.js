@@ -71,3 +71,28 @@ export async function getAppDataForTask(task) {
 
   return apps[appName] || Object.values(apps).find(a => a.name === appName) || null;
 }
+
+/**
+ * Every managed app that pins an explicit `forgeAccount`, as
+ * `[{ repoPath, forgeAccount }]` — empty on the overwhelmingly common install
+ * where no app pins one.
+ *
+ * Forge auth resolves credentials from whatever cwd it was handed (an agent
+ * worktree included) and has no app name in scope, so it needs the inverse of
+ * `getAppWorkspace`: a path-keyed lookup. Returning only the PINNED apps is what
+ * lets that lookup stay free by default — an empty list means forge auth can
+ * skip the `git rev-parse` that maps a worktree back to its checkout, so an
+ * install that never uses the feature pays one registry read and no subprocess.
+ *
+ * @returns {Promise<Array<{repoPath: string, forgeAccount: string}>>}
+ */
+export async function listForgePinnedApps() {
+  const data = await readJSONFile(join(ROOT_DIR, 'data/apps.json'), null);
+  if (!data) return [];
+  const apps = data.apps || data;
+  // `Object.values` covers both registry shapes — the array format's values are
+  // its elements — so this needs no Array.isArray branch of its own.
+  return Object.values(apps)
+    .filter(app => app?.repoPath && typeof app.forgeAccount === 'string' && app.forgeAccount.trim())
+    .map(app => ({ repoPath: expandHome(app.repoPath), forgeAccount: app.forgeAccount.trim() }));
+}

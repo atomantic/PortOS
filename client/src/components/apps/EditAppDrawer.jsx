@@ -65,6 +65,7 @@ export default function EditAppDrawer({ app, onClose, onSave }) {
     nativeLaunchProcessName: app.nativeLaunch?.processName || '',
     editorCommand: app.editorCommand || 'code .',
     workTracker: app.workTracker || 'auto',
+    forgeAccount: app.forgeAccount || '',
     defaultOpenPR: app.defaultOpenPR || false,
     defaultPrCompletion: app.defaultPrCompletion || DEFAULT_PR_COMPLETION,
     defaultUseWorktree: app.defaultUseWorktree || app.defaultOpenPR || false,
@@ -270,6 +271,7 @@ export default function EditAppDrawer({ app, onClose, onSave }) {
       } : null,
       editorCommand: formData.editorCommand || undefined,
       workTracker: formData.workTracker || 'auto',
+      forgeAccount: formData.forgeAccount.trim(),
       defaultUseWorktree: formData.defaultUseWorktree || formData.defaultOpenPR,
       defaultOpenPR: formData.defaultOpenPR,
       defaultPrCompletion: formData.defaultPrCompletion,
@@ -650,6 +652,23 @@ export default function EditAppDrawer({ app, onClose, onSave }) {
                     )}
                   </p>
                 )}
+              </div>
+
+              <div>
+                <label htmlFor="edit-app-forge-account" className="block text-sm text-gray-400 mb-1">GitHub Account</label>
+                <input
+                  id="edit-app-forge-account"
+                  type="text"
+                  value={formData.forgeAccount}
+                  onChange={e => setFormData(prev => ({ ...prev, forgeAccount: e.target.value }))}
+                  placeholder="Detect from repo owner"
+                  className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white focus:border-port-accent focus:outline-hidden"
+                />
+                <p className="text-xs text-gray-500 mt-1">
+                  A logged-in <code>gh</code> login to run this app under. Agents authenticate and commit as
+                  that account, so a repo belonging to a different GitHub identity gets the right token and the
+                  right commit authorship. Leave blank to match the repo owner against your logged-in accounts.
+                </p>
               </div>
 
               <label className="flex items-center gap-2 cursor-pointer">

@@ -23,6 +23,7 @@ import {
   formatOptionalIssueLabelFlags,
 } from './dispatchLabels.js';
 import { getOriginInfo, readOriginRemoteUrl } from './gitRemote.js';
+import { resolveSshHostAlias } from './sshHostAlias.js';
 import { getAuditFilingPreset, isAuditTaskType, metricLabelFromSlugPrefix } from './auditCatalog.js';
 
 // Every selectable value (UI + Zod enum). `'auto'` is the default; the rest are
@@ -481,6 +482,10 @@ export function resolveWorkTracker({ configured, host } = {}) {
  * Embedded credentials are dropped inherently — the `user[:token]@` segment is
  * matched and discarded, never returned — so a PAT in an https remote can't
  * leak through `GET /api/apps/:id/work-tracker`. Ports are stripped too.
+ *
+ * A personal SSH `Host` alias is resolved to the host it connects to, so a repo
+ * cloned as `git@github-acme:acme/widget.git` classifies as GitHub rather than
+ * silently falling back to PLAN.md. See lib/sshHostAlias.js.
  */
 export function hostFromOriginUrl(url) {
   if (typeof url !== 'string') return null;
@@ -488,10 +493,10 @@ export function hostFromOriginUrl(url) {
   if (!trimmed) return null;
   // scheme://[userinfo@]host[:port]/...  — host is the run up to the next / : @
   const scheme = trimmed.match(/^[a-zA-Z][a-zA-Z0-9+.-]*:\/\/(?:[^/@]+@)?([^/:]+)/);
-  if (scheme) return scheme[1] || null;
+  if (scheme) return resolveSshHostAlias(scheme[1]) || null;
   // scp-style [user@]host:path
   const scp = trimmed.match(/^(?:[^@/]+@)?([^/:]+):/);
-  if (scp) return scp[1] || null;
+  if (scp) return resolveSshHostAlias(scp[1]) || null;
   return null;
 }
 

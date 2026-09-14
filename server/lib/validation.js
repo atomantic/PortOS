@@ -299,6 +299,13 @@ export const appSchema = z.object({
   // cosTaskGenerator.js. WORK_TRACKERS is the single source of truth for the
   // value set.
   workTracker: z.enum(WORK_TRACKERS).optional(),
+  // The `gh` account login PortOS authenticates AND commits as for this app's
+  // repo — how one install drives repos belonging to several GitHub accounts.
+  // Unset (the default) keeps the owner-match inference in services/forgeAuth.js
+  // and leaves commit authorship to the machine's ambient git config; setting it
+  // pins both the token and the GIT_AUTHOR/GIT_COMMITTER identity to that
+  // account. Empty string clears the pin.
+  forgeAccount: z.string().trim().max(120).optional(),
   // Layered Intelligence per-app config (the self-improvement loop). Full config
   // accepted on create/update; the dedicated updateAppLayeredIntelligence merge
   // (server/services/apps.js) preserves untouched fields on partial PATCHes.
