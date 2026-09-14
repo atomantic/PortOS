@@ -407,14 +407,6 @@ export async function buildAgentPrompt(task, config, workspaceDir, worktreeInfo 
   // CD plan already receives creative-tool specs via `getToolSpecs()` in its
   // own prompt, not this section.
   const skipDevContext = isCreativeDirectorTask;
-  // Issue filing and planner attribution. Skipped for Creative Director runs
-  // alongside the rest of the dev context — a scene evaluation files no issue.
-  // The forge is left at the default here rather than probed: this path is
-  // API-provider-only, and the two CLIs' `label create` idioms differ only in
-  // flag spelling, which the guidance spells out for whichever the agent has.
-  const issueFilingSection = skipDevContext
-    ? ''
-    : buildIssueFilingSection({ providerId, model: providerModel });
   // Architect doctrine for an orchestrated run (#5992). '' for every direct-mode
   // task, which is the default, so this is inert unless a profile is configured.
   const orchestrationSection = buildOrchestrationDoctrineSection(task);
@@ -645,6 +637,14 @@ ${buildResumeSection(task, worktreeInfo)}` : '';
   // custom template that wants to address it directly.
   const briefingSourceTask = taskVisibleToPipelineReviewer(task);
   const contextBlock = taskContextBlock(briefingSourceTask);
+  // Issue filing and planner attribution. Skipped for Creative Director runs
+  // alongside the rest of the dev context — a scene evaluation files no issue.
+  // The forge is left at the default here rather than probed: this path is
+  // API-provider-only, and the two CLIs' `label create` idioms differ only in
+  // flag spelling, which the guidance spells out for whichever the agent has.
+  const issueFilingSection = skipDevContext
+    ? ''
+    : buildIssueFilingSection({ providerId, model: providerModel, taskBody: [task.description, contextBlock] });
   const uiAuditRuntimeSection = isUiAuditTask(task) ? UI_AUDIT_RUNTIME_RULE : '';
   const briefingTask = contextBlock === (briefingSourceTask.metadata?.[TASK_CONTEXT_KEY] ?? null)
     ? briefingSourceTask
@@ -1098,7 +1098,7 @@ function buildLightContextSections(task, workspaceDir, worktreeInfo, isTruthyMet
   // Unconditional filing rules, with planner attribution when resolvable:
   // whether a run ends up filing an issue is not knowable from its metadata,
   // and a model cannot name itself.
-  const lightFilingSection = buildIssueFilingSection({ providerId, model: providerModel, forgeCli: resolvedForgeCli });
+  const lightFilingSection = buildIssueFilingSection({ providerId, model: providerModel, forgeCli: resolvedForgeCli, taskBody: [task.description, context] });
   if (lightFilingSection) contractSections.push(lightFilingSection);
 
   // --- Orchestrated execution ---------------------------------------------

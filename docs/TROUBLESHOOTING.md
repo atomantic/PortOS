@@ -196,6 +196,35 @@ pm2 logs portos-cos --lines 100
 which claude
 ```
 
+### Every Agent Spawn Fails with `posix_spawn failed: No such file or directory`
+
+**Cause**: `npm ci` or `npm install` was run inside a CoS worktree
+(`data/cos/worktrees/*`). A fresh `git worktree` has no `node_modules`, so agents
+symlink the primary checkout's `node_modules`, `client/node_modules` and
+`server/node_modules` into the worktree to make `vitest` runnable. npm does not
+treat that symlink as a boundary: it empties the **target** — the primary
+checkout's real `node_modules` — then replaces the symlink with a fresh real
+directory in the worktree and installs there. The primary is left with an EMPTY
+`node_modules`, and removing the worktree does nothing to restore it.
+
+This takes the whole CoS fleet down at once: `portos-cos` keeps running on its
+already-loaded node-pty binding, but node-pty execs its `spawn-helper` binary
+from disk on EVERY spawn, so every agent spawn fails with the opaque error above
+until someone reinstalls. The runner names this fault instead of retrying it —
+see `server/lib/ptySpawnDiagnostics.js`.
+
+**Recovery**:
+```bash
+# In the PRIMARY checkout, never in a worktree
+npm install --prefix server
+npm install --prefix client
+pm2 restart portos-cos
+```
+
+**Prevention**: if a worktree is missing dependencies, symlink them from the
+primary checkout and call the workspace binaries directly
+(`server/node_modules/.bin/vitest run <files>`) — never install.
+
 ### Tasks Not Being Picked Up
 
 **Symptom**: Added tasks to TASKS.md but CoS ignores them.
