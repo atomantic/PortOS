@@ -27,6 +27,22 @@
  * `undefined`, which is the signal callers use to fall back to derivation (a
  * served-by-API app's `uiPort` = its `apiPort`).
  *
+ * Two residual ambiguities are accepted deliberately, because every alternative
+ * trades them for a worse one:
+ *
+ *   - A BARE-named sibling carrying an explicit `ports: { ui: N }` is still
+ *     attributed, because a bare name is exactly the `frontend`-beside-`backend`
+ *     shape and carries no evidence either way. It is narrow: a bare env `PORT`
+ *     parses as `api`, never `ui` (`parseEcosystemConfig` routes it to `ui` only
+ *     for a `-ui`/`-client`-suffixed name, which rule 2 already excludes), so it
+ *     takes a hand-written `ports` object to reach. `findCrossProcessPortCollision`
+ *     is the backstop for the damaging case.
+ *   - Resolving the primary in config order assumes an ecosystem file declares
+ *     the app's own process before a sibling daemon's — the PM2 convention, what
+ *     PortOS's own config does, and an assumption `deriveAppPorts` has always
+ *     made for `apiPort` (first `api` carrier wins). An inverted config already
+ *     displays the wrong `apiPort` today, independent of this module.
+ *
  * Pure and import-free: both the write-back path (`services/appPortConfig.js`)
  * and the read/derive path (`services/appListEnrichment.js`) share it so a
  * displayed port and a rewritten port can never disagree about whose it is.
