@@ -1391,6 +1391,25 @@ async function recoverBareSentinelPayload(contents, taskType) {
 }
 
 /**
+ * Opt-in only: an app with `publishQualitySnapshot` gets its freshly recorded
+ * measurement committed into the repo's `.quality.json`. This is a completion
+ * boundary outside the Express request lifecycle, so a missing repo, a git
+ * failure, or a locked index must log and let finalization finish.
+ */
+async function publishAppSnapshotFileAfterAudit(appId) {
+  if (!appId) return;
+  try {
+    const { getAppById } = await import('./apps.js');
+    const app = await getAppById(appId);
+    if (app?.publishQualitySnapshot !== true) return;
+    const { publishAppQualitySnapshot } = await import('./appQualitySnapshotFile.js');
+    await publishAppQualitySnapshot(app);
+  } catch (err) {
+    emitLog('error', `❌ Quality snapshot publish failed for app ${appId}: ${err.message}`, { appId });
+  }
+}
+
+/**
  * Read the finished agent's `.agent-done` payload and run the task type's
  * `processTaskOutput` hook, if it registers one. No-op for the vast majority of
  * task types (no hook). The hook receives `{ appId, success, payload, ... }` and
@@ -1403,9 +1422,10 @@ async function dispatchTaskOutputHook({ agentId, task, success, workspacePath, a
   if (!taskType) return { ran: false };
   if (isAuditTaskType(taskType)) {
     const { recordAuditQuality } = await import('./appQuality.js');
-    await recordAuditQuality({ task, taskType, agentId, success, assessedAt,
+    const recorded = await recordAuditQuality({ task, taskType, agentId, success, assessedAt,
       workspacePath: readPayload ? (workspacePath || task?.metadata?.repoPath) : null })
       .catch(err => emitLog('warn', `⚠️ Audit quality was not saved for ${agentId}: ${err.message}`, { agentId }));
+    if (recorded === true) await publishAppSnapshotFileAfterAudit(task?.metadata?.app);
     // Assessment telemetry never waives commit/PR success criteria for fix mode.
     return { ran: false };
   }

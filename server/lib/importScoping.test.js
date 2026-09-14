@@ -574,7 +574,15 @@ describe('deferred imports stay deferred (#6156)', () => {
 // image-gen dispatcher and is NOT in this number: checkConnection reaches it
 // through a memoized call-site await import(), so the ~110 suites that never
 // probe a local runtime do not pay for it.
-const MAX_STATIC_INSTANTIATIONS = 104552;
+// The managed-app `.quality.json` publisher raises this by a further 38, all of
+// it in two new suites, none of it a new edge into a widely-reached module:
+// `services/git.commit.test.js` pays git.js's closure (~34) to pin that an
+// automated commit is scoped to literal pathspecs, and
+// `services/appQualitySnapshotFile.test.js` plus crud.js's static import of that
+// dependency-free module account for the rest. The publisher itself reaches
+// git.js and appQualityFederation.js through `await import()`, and the audit
+// hook reaches the publisher the same way, so neither is in any closure.
+const MAX_STATIC_INSTANTIATIONS = 104590;
 
 
 const SKIP_DIRS = new Set(['node_modules', 'coverage', 'dist', 'data']);

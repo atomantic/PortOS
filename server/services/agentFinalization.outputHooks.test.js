@@ -1,5 +1,11 @@
 vi.mock('./appQuality.js', () => ({ recordAuditQuality: vi.fn(async () => true) }));
 import { recordAuditQuality } from './appQuality.js';
+// Hoisted doubles rather than static imports: the audit path reaches both modules
+// lazily, and importing them here would drag their subtrees into this suite's closure.
+const appsRegistry = vi.hoisted(() => ({ getAppById: vi.fn(async () => null) }));
+vi.mock('./apps.js', () => appsRegistry);
+const snapshotFile = vi.hoisted(() => ({ publishAppQualitySnapshot: vi.fn(async () => ({ published: true, hash: 'abc1234' })) }));
+vi.mock('./appQualitySnapshotFile.js', () => snapshotFile);
 // The goal-fidelity gate (#5994) reaches a local model at completion. Pinned OFF
 // here so these tests exercise the path they are about without depending on the
 // developer's own reviewer settings — and so a machine that HAS a local reviewer
@@ -56,6 +62,7 @@ vi.mock('./agentErrorAnalysis.js', async importOriginal => {
 vi.mock('./agentRunTracking.js', () => ({ completeAgentRun: vi.fn(async () => null) }));
 vi.mock('./agentCompletion.js', () => ({ processAgentCompletion: vi.fn(async () => null) }));
 vi.mock('./cosEvents.js', () => ({ emitLog: vi.fn(), cosEvents: { emit: vi.fn(), on: vi.fn() } }));
+import { emitLog } from './cosEvents.js';
 vi.mock('./taskSchedule.js', () => ({
   recordTaskTypeFailure: vi.fn(async () => null),
   recordTaskTypeSuccess: vi.fn(async () => null),
@@ -108,6 +115,43 @@ describe('recovery output-hook dispatch (#3182)', () => {
     expect(recordAuditQuality).toHaveBeenCalledWith({ task, taskType: 'better-complexity', agentId: 'agent-audit', success: true, workspacePath: '/worktree', assessedAt: persistedAgent.startedAt });
     expect(hook).not.toHaveBeenCalled();
     expect(updateAgent).not.toHaveBeenCalled();
+  });
+
+  // Committing the app's `.quality.json` is opt-in and runs outside the request
+  // lifecycle, so it must never fire for an un-opted app nor fail a completion.
+  // Each dispatch needs its own agent id — dispatchTaskOutputHookOnce caches by id.
+  it('commits a repo snapshot only for an opted-in app that just recorded a measurement', async () => {
+    const task = { ...TASK, metadata: { ...TASK.metadata, analysisType: 'better-complexity' } };
+    let run = 0;
+    const dispatch = () => dispatchTaskOutputHookOnce({ agentId: `agent-snapshot-${run += 1}`, task, success: true, workspacePath: '/worktree' });
+    const optedIn = { id: 'app-example', repoPath: '/repo/example-app', publishQualitySnapshot: true };
+
+    appsRegistry.getAppById.mockResolvedValue(optedIn);
+    await expect(dispatch()).resolves.toEqual({ ran: false });
+    expect(snapshotFile.publishAppQualitySnapshot).toHaveBeenCalledWith(optedIn);
+
+    for (const app of [{ ...optedIn, publishQualitySnapshot: false }, { ...optedIn, publishQualitySnapshot: 'true' },
+      { id: 'app-example' }, null]) {
+      snapshotFile.publishAppQualitySnapshot.mockClear();
+      appsRegistry.getAppById.mockResolvedValue(app);
+      await dispatch();
+      expect(snapshotFile.publishAppQualitySnapshot).not.toHaveBeenCalled();
+    }
+
+    // A missing or invalid report records nothing, so there is nothing new to publish.
+    appsRegistry.getAppById.mockResolvedValue(optedIn);
+    recordAuditQuality.mockResolvedValueOnce(false);
+    await dispatch();
+    expect(snapshotFile.publishAppQualitySnapshot).not.toHaveBeenCalled();
+
+    // A locked index or an unreadable registry must not fail the completion.
+    snapshotFile.publishAppQualitySnapshot.mockRejectedValueOnce(new Error('index.lock exists'));
+    await expect(dispatch()).resolves.toEqual({ ran: false });
+    appsRegistry.getAppById.mockRejectedValueOnce(new Error('registry unreadable'));
+    await expect(dispatch()).resolves.toEqual({ ran: false });
+    for (const reason of ['index.lock exists', 'registry unreadable']) {
+      expect(emitLog).toHaveBeenCalledWith('error', `❌ Quality snapshot publish failed for app app-example: ${reason}`, { appId: 'app-example' });
+    }
   });
 
   it.each([

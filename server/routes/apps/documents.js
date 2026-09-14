@@ -202,7 +202,9 @@ router.put('/:id/documents/*docPath', loadApp, asyncHandler(async (req, res) => 
   }
 
   const message = commitMessage || `docs: update ${filename} via PortOS`;
-  const result = await git.commit(app.repoPath, message);
+  // Scope the commit to this document: the user may have staged unrelated work
+  // in their checkout, and a doc edit must never sweep it into this commit.
+  const result = await git.commit(app.repoPath, message, { paths: [filename] });
   console.log(`📝 ${created ? 'Created' : 'Updated'} ${filename} in ${app.name} (${result.hash})`);
 
   res.json({ success: true, hash: result.hash, created });

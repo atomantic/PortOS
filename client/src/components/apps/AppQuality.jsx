@@ -1,11 +1,35 @@
 import AppQualityRunner from './AppQualityRunner';
 import AppQualityHistory from './AppQualityHistory';
-import { Fragment } from 'react';
+import { Fragment, useState } from 'react';
 import { Link, useSearchParams } from 'react-router';
 import { formatDateShort } from '../../utils/formatters';
+import { publishAppQualitySnapshot } from '../../services/apiApps';
+import toast from '../ui/Toast';
+
+// The server refuses rather than fails when there is nothing to publish, so each
+// `published: false` reason gets its own plain-language explanation.
+const PUBLISH_SKIPPED = {
+  'no-changes': 'Snapshot already up to date in .quality.json',
+  'no-evidence': 'No quality evidence yet — run an audit first',
+  'no-repo-path': 'App repo path is not a git repository',
+  'not-a-repo': 'App repo path is not a git repository',
+};
 
 export default function AppQuality({ app, detail = false }) {
   const [params] = useSearchParams();
+  const [publishing, setPublishing] = useState(false);
+  // User-initiated, so every outcome toasts (the wrapper is silent).
+  const publishSnapshot = async () => {
+    setPublishing(true);
+    const result = await publishAppQualitySnapshot(app.id).catch(err => ({ failure: err }));
+    setPublishing(false);
+    if (result?.failure) return toast.error(result.failure.message || 'Could not publish the quality snapshot');
+    if (result?.published) {
+      const shortHash = result.hash ? ` (${result.hash.slice(0, 7)})` : '';
+      return toast.success(`Quality snapshot committed to .quality.json${shortHash}`);
+    }
+    toast(PUBLISH_SKIPPED[result?.reason] || 'Nothing to publish to .quality.json');
+  };
   const quality = app.quality;
   const selectedCategory = quality?.categories?.find(category => category.id === params.get('qualityCheck'));
   const runnerLink = categoryId => {
@@ -59,7 +83,11 @@ export default function AppQuality({ app, detail = false }) {
             : 'No audit assessment has been saved. Completed maintenance tasks only supply a score when they return a valid quality report. Earlier runs are not scored retroactively; run a scheduled audit to collect an assessment.'}
         </p>
       )}
-      <div className="flex flex-wrap gap-4 text-sm text-port-accent"><Link to="/cos/schedule" className="hover:underline">Scheduled audit runners</Link><Link to="/cos/agents" className="hover:underline">View agents</Link></div>
+      <div className="flex flex-wrap items-center gap-4 text-sm text-port-accent"><Link to="/cos/schedule" className="hover:underline">Scheduled audit runners</Link><Link to="/cos/agents" className="hover:underline">View agents</Link>{app.publishQualitySnapshot === true && (
+        <button type="button" onClick={publishSnapshot} disabled={publishing} className="hover:underline disabled:opacity-40 disabled:no-underline">
+          {publishing ? 'Publishing snapshot…' : 'Publish snapshot now'}
+        </button>
+      )}</div>
       <div className="grid grid-cols-1 xl:grid-cols-2 gap-5 items-start">
       <div className="min-w-0 space-y-4">
         {!selectedCategory && runner}

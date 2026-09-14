@@ -121,6 +121,8 @@ describe('Apps Document Routes', () => {
     expect(res.status).toBe(200);
     expect(res.body).toMatchObject({ success: true, hash: 'abc1234', created: false });
     expect(git.stageFiles).toHaveBeenCalledWith(repoPath, ['docs/decisions/2026-01-01-choice.md']);
+    // Scoped so a doc edit cannot sweep in whatever the user had staged.
+    expect(git.commit).toHaveBeenCalledWith(repoPath, expect.any(String), { paths: ['docs/decisions/2026-01-01-choice.md'] });
     expect(await readFile(join(repoPath, 'docs', 'decisions', '2026-01-01-choice.md'), 'utf-8')).toBe('# Revised');
   });
 

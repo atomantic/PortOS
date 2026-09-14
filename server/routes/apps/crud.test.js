@@ -1,12 +1,14 @@
 vi.mock('../../services/appQualityFederation.js', () => ({ exportPortosQuality: vi.fn() }));
 import { exportPortosQuality } from '../../services/appQualityFederation.js';
 vi.mock('../../services/appQuality.js', () => ({ getAppQualityHistory: vi.fn(async () => ({ points: [], days: 90 })), enrichAppsWithQuality: vi.fn(async apps => apps.map(app => ({ ...app, quality: { score: 75 } }))) }));
+vi.mock('../../services/appQualitySnapshotFile.js', () => ({ publishAppQualitySnapshot: vi.fn(async () => ({ published: true, hash: 'abc1234', path: '.quality.json' })) }));
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import express from 'express';
 import { request } from '../../lib/testHelper.js';
 import { errorEvents } from '../../lib/errorHandler.js';
 import crudRoutes from './crud.js';
 import { enrichAppsWithQuality, getAppQualityHistory } from '../../services/appQuality.js';
+import { publishAppQualitySnapshot } from '../../services/appQualitySnapshotFile.js';
 
 // Mock the services this router (and its port-config service) touch.
 vi.mock('../../services/apps.js', () => ({
@@ -96,6 +98,25 @@ describe('Apps CRUD Routes', () => {
     }
   });
 
+  // Uniquely pins the on-demand publish route: it commits for the loaded app
+  // regardless of the opt-in toggle, and 404s rather than publishing for a stranger.
+  it('publishes a managed app snapshot on demand and 404s for an unknown app', async () => {
+    appsService.getAppById.mockResolvedValue({ id: 'app-001', name: 'Example App', repoPath: '/repo/example-app' });
+    const published = await request(app).post('/api/apps/app-001/quality-snapshot');
+    expect(published.status).toBe(200);
+    expect(published.body).toEqual({ success: true, published: true, hash: 'abc1234', path: '.quality.json' });
+    expect(publishAppQualitySnapshot).toHaveBeenCalledWith({ id: 'app-001', name: 'Example App', repoPath: '/repo/example-app' });
+
+    publishAppQualitySnapshot.mockResolvedValueOnce({ published: false, reason: 'no-evidence', path: '.quality.json' });
+    expect((await request(app).post('/api/apps/app-001/quality-snapshot')).body)
+      .toEqual({ success: true, published: false, reason: 'no-evidence', path: '.quality.json' });
+
+    appsService.getAppById.mockResolvedValue(null);
+    const missing = await request(app).post('/api/apps/nope/quality-snapshot');
+    expect(missing.status).toBe(404);
+    expect(publishAppQualitySnapshot).toHaveBeenCalledTimes(2);
+  });
+
   describe('GET /api/apps', () => {
     it('should return list of apps with PM2 status', async () => {
       const mockApps = [
@@ -166,7 +187,7 @@ describe('Apps CRUD Routes', () => {
       expect(detail.body.quality).toEqual({ score: 75 });
       const history = await request(app).get('/api/apps/portos-default/quality-history?days=90');
       expect(history.status).toBe(200);
-      expect(getAppQualityHistory).toHaveBeenCalledWith('portos-default', 90);
+      expect(getAppQualityHistory).toHaveBeenCalledWith({ id: 'portos-default', name: 'PortOS', type: 'ios-native' }, 90);
       expect((await request(app).get('/api/apps/portos-default/quality-history?days=9999')).status).toBe(400);
     });
 
