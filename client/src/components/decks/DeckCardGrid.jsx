@@ -86,6 +86,13 @@ export default function DeckCardGrid({
                     onPreview={() => onPreview(card)}
                     onComplete={(filename) => onRenderComplete(card.id, filename)}
                     onTerminalStatus={(s, error) => onRenderTerminal(card.id, s, error)}
+                    // The slot is the bigger of the card's two render
+                    // affordances, so a dead runtime has to stand it down too
+                    // or the button below stands down alone and reads broken.
+                    // A promptless slot is exempt: it opens the editor, which
+                    // works whatever the runtime is doing.
+                    canRender={needsPrompt || !runtimeBlocked}
+                    disabledHint={reRenderHint}
                     emptyIcon={needsPrompt ? PencilLine : undefined}
                     emptyHint={needsPrompt ? `Write a prompt for ${card.name}` : `Render ${card.name}`}
                     alt={card.name}

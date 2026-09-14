@@ -28,7 +28,6 @@ const completion = (over) => ({ total: 79, prompted: 0, rendered: 0, inFlight: 0
 // the same object to the bar and the grid, so the bar takes it as a prop.
 const ready = { readiness: 'ready', modelId: 'flux2-klein-9b', model: 'FLUX.2 Klein 9B', runtimeLabel: 'Shared torch runtime', reason: null, remedy: null };
 const renderTarget = (runtime = ready, over = {}) => ({
-  imageCfg: { mode: 'local', modelId: 'flux2-klein-9b' },
   backends: [{ id: 'local', label: 'Local' }],
   size: deck.cardSize,
   summary: 'Local · flux2-klein-9b · 1096×1536',

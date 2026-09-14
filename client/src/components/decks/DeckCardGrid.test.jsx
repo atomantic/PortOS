@@ -99,12 +99,19 @@ describe('DeckCardGrid', () => {
     expect(screen.getByRole('button', { name: 'Card c is rendering' })).toBeDisabled();
   });
 
-  it('stands every card button down while the local runtime is unavailable', () => {
-    renderGrid({ renderTarget: renderTarget({ blocked: true }) });
+  it('stands every render affordance down while the local runtime is unavailable', () => {
+    const props = renderGrid({ renderTarget: renderTarget({ blocked: true }) });
     const blocked = screen.getAllByRole('button', { name: /the local image runtime is unavailable/ });
-    // Every card except the promptless one and the in-flight one, which each
-    // keep their own more specific reason.
-    expect(blocked).toHaveLength(3);
+    // The three renderable cards' buttons, plus the empty slot of each card
+    // that would otherwise offer a one-click render (a and d) — the bigger
+    // affordance of the two, so leaving it live would read as broken.
+    expect(blocked).toHaveLength(5);
     blocked.forEach((b) => expect(b).toBeDisabled());
+    // The promptless card keeps its way out: that slot opens the editor, which
+    // works whatever the runtime is doing.
+    const write = screen.getByRole('button', { name: 'Write a prompt for Card e' });
+    expect(write).toBeEnabled();
+    fireEvent.click(write);
+    expect(props.onOpenCard).toHaveBeenCalledWith(expect.objectContaining({ id: 'e' }));
   });
 });
