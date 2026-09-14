@@ -61,14 +61,18 @@ it('identifies federated evidence and incomplete scores without linking to a loc
   expect(screen.queryByRole('link', { name: 'Audit run' })).not.toBeInTheDocument();
 });
 
-it('makes the category actions look like distinct clickable controls', async () => {
-  const app = { id: 'example', quality: { categories: [
+it('makes the category actions and header navigation look like distinct clickable controls', async () => {
+  const app = { id: 'example', publishQualitySnapshot: true, quality: { categories: [
     { id: 'security', label: 'Security', score: 80, coverage: 'broad', confidence: 'high', agentId: 'run-1' },
   ] } };
   render(<MemoryRouter><AppQuality app={app} detail /></MemoryRouter>);
   await screen.findByText(/No scored assessments/);
+  expect(screen.getByRole('link', { name: 'Scheduled audit runners' })).toHaveClass('inline-flex', 'border', 'rounded');
+  expect(screen.getByRole('link', { name: 'View agents' })).toHaveClass('inline-flex', 'border', 'rounded');
+  expect(screen.getByRole('button', { name: 'Publish snapshot now' })).toHaveClass('inline-flex', 'border', 'rounded');
   expect(screen.getByRole('link', { name: 'Configure and run Security' })).toHaveClass('inline-flex', 'bg-port-accent/15', 'border', 'rounded');
   expect(screen.getByRole('link', { name: 'View audit run for Security' })).toHaveClass('inline-flex', 'border', 'bg-port-bg/40', 'rounded');
+  expect(screen.getByRole('rowheader', { name: /Security/ })).toHaveClass('px-3', 'py-2.5');
 });
 
 it('orders the category breakdown from lowest score to highest, with unscored categories last', async () => {
