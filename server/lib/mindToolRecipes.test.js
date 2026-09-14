@@ -6,10 +6,10 @@ const tool = (name, properties = {}, required = [], output = { type: 'object', a
   name, aliases: [`alias_${name}`], policy: { scopes: ['mind'], sideEffect: 'read' },
   input_schema: { type: 'object', properties, required, additionalProperties: false }, output_schema: output,
 });
-const catalog = [tool('brain.search', { query: { type: 'string' } }, ['query']), tool('goals.list', { limit: { type: 'integer' } })];
+const catalog = [tool('catalog.search', { query: { type: 'string' } }, ['query']), tool('goals.list', { limit: { type: 'integer' } })];
 const recipe = () => ({ schemaVersion: 1, name: 'recipe.checkin', purpose: 'Find project notes and goals',
   parameters: { type: 'object', properties: { query: { type: 'string' } }, required: ['query'], additionalProperties: false },
-  steps: [{ id: 'search', tool: 'brain.search', arguments: { query: { input: 'query' } } }, { id: 'goals', tool: 'goals.list', arguments: {} }],
+  steps: [{ id: 'search', tool: 'catalog.search', arguments: { query: { input: 'query' } } }, { id: 'goals', tool: 'goals.list', arguments: {} }],
   outputs: { notes: { step: 'search', path: ['entries'] }, goals: { step: 'goals', path: [] } },
 });
 
@@ -45,13 +45,13 @@ describe('closed, governed recipe definition boundary', () => {
     value.steps[1].arguments.limit = { input: 'query' };
     expect(() => validateMindToolRecipe(value, catalog)).toThrow('binding type');
     value.parameters.properties.query = { type: 'object', properties: { tag: { type: 'integer' } }, required: ['tag'], additionalProperties: false };
-    expect(() => validateMindToolRecipe(value, [tool('brain.search', { query: { type: 'object', properties: { tag: { type: 'string' } }, required: ['tag'], additionalProperties: false } }, ['query']), catalog[1]])).toThrow('binding type');
+    expect(() => validateMindToolRecipe(value, [tool('catalog.search', { query: { type: 'object', properties: { tag: { type: 'string' } }, required: ['tag'], additionalProperties: false } }, ['query']), catalog[1]])).toThrow('binding type');
     value.parameters.properties.query = { type: 'string' };
     value.steps[1].arguments = {};
     expect(() => validateMindToolRecipe(value, [catalog[0], { ...catalog[1], policy: { scopes: ['mind'], sideEffect: 'write' } }])).toThrow('read tool');
     expect(() => validateMindToolRecipe(value, [catalog[0], { ...catalog[1], policy: { scopes: ['voice'], sideEffect: 'read' } }])).toThrow('mind scope');
     expect(() => validateMindToolRecipe(value, [...catalog, { name: 'shipped', aliases: [value.name] }])).toThrow('collides');
-    expect(() => validateMindToolRecipe(value, [tool('brain.search', { query: { type: 'string' } }, ['query'], { type: 'object', properties: {}, additionalProperties: false }), catalog[1]])).toThrow('output field');
+    expect(() => validateMindToolRecipe(value, [tool('catalog.search', { query: { type: 'string' } }, ['query'], { type: 'object', properties: {}, additionalProperties: false }), catalog[1]])).toThrow('output field');
   });
 
   it('bounds recursive authored data before parsing and forbids prototype traversal', () => {

@@ -27,7 +27,7 @@ const put = (path, body) => request(app).put(`/recipes${path}`).send(body);
 const definition = () => ({
   schemaVersion: 1, name: `recipe.test-${randomUUID()}`, purpose: 'Project check-in',
   parameters: { type: 'object', properties: { query: { type: 'string' } }, required: ['query'], additionalProperties: false },
-  steps: [{ id: 'notes', tool: 'brain.search', arguments: { query: { input: 'query' } } }, { id: 'goals', tool: 'goals.list', arguments: {} }],
+  steps: [{ id: 'notes', tool: 'catalog.search', arguments: { query: { input: 'query' } } }, { id: 'goals', tool: 'goals.list', arguments: {} }],
   outputs: { notes: { step: 'notes', path: ['entries'] }, goals: { step: 'goals', path: [] } },
 });
 const create = async () => {
