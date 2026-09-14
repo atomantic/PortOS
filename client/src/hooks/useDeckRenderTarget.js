@@ -1,6 +1,6 @@
 import useImageRenderSettings from './useImageRenderSettings';
 import useLocalImageRuntime from './useLocalImageRuntime';
-import { DECK_CARD_SIZE } from '../lib/decks';
+import { deckCardSize } from '../lib/decks';
 import { IMAGE_GEN_MODE, IMAGE_RUNTIME_READINESS, RENDER_TARGET, modeLabel } from '../lib/imageGenBackends';
 
 /**
@@ -18,7 +18,7 @@ import { IMAGE_GEN_MODE, IMAGE_RUNTIME_READINESS, RENDER_TARGET, modeLabel } fro
  */
 export default function useDeckRenderTarget(deck) {
   const { imageCfg, backends } = useImageRenderSettings({ record: deck, target: RENDER_TARGET.DECK });
-  const size = deck?.cardSize || DECK_CARD_SIZE;
+  const size = deckCardSize(deck);
   // `backends` is empty until the settings fetch lands, and until then imageCfg
   // is the UNRESOLVED placeholder (local + the install default) — probing on
   // that asks about the wrong model, and about a local runtime a cloud-pinned

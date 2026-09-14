@@ -125,6 +125,39 @@ describe('EntryThumbSlot — three-state thumbnail', () => {
     expect(frame?.className).not.toMatch(/\brounded\b/);
   });
 
+  it('sizes the slot to a supplied canvas and contains the image instead of covering', () => {
+    const { container } = render(
+      <EntryThumbSlot
+        imageRefs={['two-of-spades.png']}
+        alt="Two of Spades"
+        size="xl"
+        fluid
+        aspectRatio={{ width: 1096, height: 1536 }}
+        rounded={false}
+      />,
+    );
+    const img = screen.getByRole('img', { name: 'Two of Spades' });
+    expect(img.className).toMatch(/\bobject-contain\b/);
+    expect(img.className).not.toMatch(/\bobject-cover\b/);
+    const frame = container.querySelector('.overflow-hidden');
+    expect(frame?.style.aspectRatio).toBe('1096 / 1536');
+    expect(frame?.className).toMatch(/\bw-full\b/);
+    expect(frame?.className).not.toMatch(/\bh-60\b/);
+  });
+
+  it('keeps the 2:3 cover box when no canvas is supplied', () => {
+    const { container } = render(
+      <EntryThumbSlot
+        imageRefs={['canon.png']}
+        alt="Canon"
+        size="xl"
+      />,
+    );
+    const img = screen.getByRole('img', { name: 'Canon' });
+    expect(img.className).toMatch(/\bobject-cover\b/);
+    expect(container.querySelector('.overflow-hidden')?.className).toMatch(/\bh-60\b/);
+  });
+
   it('renders displayedImageRef when specified among imageRefs', () => {
     render(
       <EntryThumbSlot

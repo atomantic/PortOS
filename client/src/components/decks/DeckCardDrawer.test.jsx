@@ -5,6 +5,7 @@ import DeckCardDrawer from './DeckCardDrawer';
 const deck = {
   id: 'd1',
   kind: 'tarot',
+  cardSize: { width: 888, height: 1536 },
   layoutPrompt: 'Full tarot card, framed border',
   influences: { embrace: ['copperplate engraving'], avoid: ['blurry'] },
 };
@@ -69,11 +70,17 @@ describe('DeckCardDrawer render prompt', () => {
     setActiveBtn.click();
     expect(onSave).toHaveBeenCalledWith({ primaryImageRef: 'fool-v1.png' });
 
-    // Thumbnails should not have rounded corners cutting off card art
+    // Thumbnails should not have rounded corners cutting off card art, and
+    // must use the deck's own trim (not a 2:3 cover box) so the banner stays
+    // in frame.
     const imgs = screen.getAllByRole('img');
     expect(imgs.length).toBe(2);
     imgs.forEach((img) => {
       expect(img.className).not.toMatch(/\brounded\b/);
+      expect(img.className).toMatch(/\bobject-contain\b/);
+      expect(img.className).not.toMatch(/\bobject-cover\b/);
+      expect(img.className).not.toMatch(/aspect-\[2\/3\]/);
+      expect(img.style.aspectRatio).toBe('888 / 1536');
     });
   });
 });

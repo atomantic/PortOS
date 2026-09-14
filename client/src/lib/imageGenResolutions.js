@@ -38,8 +38,8 @@ export const RESOLUTIONS = [
   { label: '1988×3056 (comic page — hi-res, full bleed)', w: 1988, h: 3056, compatible: ['codex'] },
   // Poker/tarot card trims at true physical ratio (2.5"×3.5" = 5:7 and
   // 2.75"×4.75" respectively), sized to a 300dpi print resolution and a 2x
-  // hi-res doubling. Distinct from the Decks feature's DECK_CARD_SIZE
-  // (deckTemplates.js, a rounded 2:3 render frame shared by both card kinds)
+  // hi-res doubling. Distinct from the Decks feature's per-kind DECK_CARD_SIZE_BY_KIND
+  // (deckTemplates.js, 5:7 poker / 11:19 tarot at a 1536 long edge)
   // — these are for a standalone card-shaped image outside the deck workflow.
   // Codex-only: the ratios are too specialty for the local runners' trained
   // aspect windows.

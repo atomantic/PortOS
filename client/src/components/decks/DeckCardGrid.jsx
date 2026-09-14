@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react';
 import { AlertTriangle, Check, ChevronLeft, ChevronRight, Hourglass, Link2, PencilLine, Play, RefreshCw, Star } from 'lucide-react';
 import EntryThumbSlot from '../universe/EntryThumbSlot';
 import Pill from '../ui/Pill';
-import { CARD_STATUS, cardInFlightJobId, cardStatus, deckCompletion } from '../../lib/decks';
+import { CARD_STATUS, cardInFlightJobId, cardStatus, deckCardSize, deckCompletion } from '../../lib/decks';
 
 // One badge per card state, named for what the user can DO next rather than for
 // the internal status word: "ready" alone did not answer "does this card have a
@@ -60,6 +60,7 @@ export default function DeckCardGrid({
       return { key, label: cards[0].groupLabel || key, cards, counts, needPrompt: counts.total - counts.prompted };
     });
   }, [deck.cards]);
+  const cardSize = deckCardSize(deck);
 
   return (
     <div className="space-y-6">
@@ -95,6 +96,8 @@ export default function DeckCardGrid({
                 <li key={card.id} className="flex h-full flex-col items-center gap-1.5 rounded-lg border border-port-border bg-port-card p-2">
                   <EntryThumbSlot
                     size="xl"
+                    fluid
+                    aspectRatio={cardSize}
                     rounded={false}
                     inFlightJobId={inFlight}
                     imageRefs={card.imageRefs}

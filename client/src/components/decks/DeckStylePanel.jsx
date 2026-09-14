@@ -3,7 +3,7 @@ import { ImagePlus, Trash2 } from 'lucide-react';
 import InfluenceChipsInput from '../universeBuilder/InfluenceChipsInput';
 import DeckSampleModal from './DeckSampleModal';
 import useFieldDraft from '../../hooks/useFieldDraft';
-import { DECK_KIND_LABELS } from '../../lib/decks';
+import { DECK_KIND_LABELS, deckCardAspectStyle } from '../../lib/decks';
 
 const INPUT_CLASS = 'w-full bg-port-bg border border-port-border rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-port-accent';
 
@@ -89,7 +89,8 @@ export default function DeckStylePanel({ deck, universes, onPatch, onDeckReplace
                 <img
                   src={`/data/images/${encodeURIComponent(sample.imageRef || '')}`}
                   alt={sample.title}
-                  className="h-24 w-16 shrink-0 rounded object-cover bg-port-bg"
+                  style={deckCardAspectStyle(deck)}
+                  className="w-16 shrink-0 rounded object-contain bg-port-bg"
                 />
                 <div className="min-w-0 flex-1">
                   <div className="flex items-start justify-between gap-2">
