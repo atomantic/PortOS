@@ -1,8 +1,11 @@
 /**
- * `.quality.json` — the numeric quality snapshot a managed app can carry at its
- * repo root. The file IS a `buildQualitySnapshot` result verbatim
- * (`{ schemaVersion, repository, measurements }`), byte-shaped exactly like the
- * root `quality-snapshot.json` PortOS publishes for itself.
+ * `.quality.json` — the numeric quality snapshot a repository carries at its
+ * root. The file IS a `buildQualitySnapshot` result verbatim
+ * (`{ schemaVersion, repository, measurements }`).
+ *
+ * PortOS's own checkout is not special: it is a managed app like any other, so
+ * its release snapshot is this same file, written by this same publisher, under
+ * this same per-app `publishQualitySnapshot` toggle.
  *
  * The filename is deliberately generic and PortOS-agnostic: it is generated
  * data any tool can read, not PortOS configuration. Publishing is opt-in per app
@@ -16,7 +19,7 @@ export const APP_QUALITY_SNAPSHOT_FILENAME = '.quality.json';
 export const APP_QUALITY_SNAPSHOT_MAX_BYTES = 4 * 1024 * 1024;
 
 const snapshotPath = repoPath => join(repoPath, APP_QUALITY_SNAPSHOT_FILENAME);
-// Byte-identical to scripts/publish-quality-snapshot.js so the two files stay comparable.
+// Byte-identical across every publisher so two files of the same snapshot compare equal.
 const serialize = snapshot => `${JSON.stringify(snapshot, null, 2)}\n`;
 
 /** Raw bytes, or null when absent/unreadable/oversize. The publish path needs the

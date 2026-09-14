@@ -100,7 +100,7 @@ legacy list for local Apps/Dashboard views.
 | GET | `/apps/:id/status` | Get PM2 status |
 | GET | `/apps/:id/logs` | Get recent logs |
 | POST | `/apps/:id/refresh-config` | Re-parse ecosystem config |
-| POST | `/apps/:id/quality-snapshot` | Rebuild the app's numeric quality snapshot and commit it to `.quality.json` at its repo root (staged and committed as that one path; never pushed). Answers `{ success, published, path }` plus the commit `hash`, or a `reason` of `no-repo-path` / `not-a-repo` / `no-evidence` / `no-changes` when nothing was written. Not gated on the app's `publishQualitySnapshot` toggle — that toggle only automates the same publish after each audit. Any managed app's committed `.quality.json` is read back as a "Release snapshot" quality source. |
+| POST | `/apps/:id/quality-snapshot` | Rebuild the app's numeric quality snapshot and commit it to `.quality.json` at its repo root (staged and committed as that one path; never pushed). Answers `{ success, published, path }` plus the commit `hash`, or a `reason` of `no-repo-path` / `not-a-repo` / `no-evidence` / `no-changes` when nothing was written. Not gated on the app's `publishQualitySnapshot` toggle — that toggle only automates the same publish after each audit. Any app's committed `.quality.json` is read back as a "Release snapshot" quality source, PortOS's own checkout included (`npm run quality:snapshot` is the same publish, run from the release step). |
 
 ### Processes & Logs
 
