@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { homedir } from 'os';
 
 const mocks = vi.hoisted(() => ({
   root: {},
@@ -194,6 +195,62 @@ describe('persistent mind issue capability', () => {
 
     expect(await listPersistentMindIssues({ appId: 'demo-app' }))
       .toMatchObject({ ok: false, error: expect.stringContaining('gh auth login') });
+  });
+
+  // #7366 — the Settings guardrail asserted that no repository paths or
+  // credentials ride along, while title and body reached `gh issue create`
+  // untouched. A filed issue is world-readable, so the assertion has to be
+  // ENFORCED, not merely stated. `homedir()` is read at runtime rather than
+  // written down: the value is the developer's own private data.
+  describe('scrubs what the Settings guardrail promises', () => {
+    const argValue = (args, flag) => args[args.indexOf(flag) + 1];
+
+    it('strips the home-directory prefix and credential-shaped tokens before filing', async () => {
+      const home = homedir();
+      const result = await filePersistentMindIssue(fileRequest({
+        title: `Sync fails under ${home}/work/demo`,
+        body: `The poller retries with ghp_${'A'.repeat(36)} and dies.\nSee ${home}/logs/sync.log.`,
+      }));
+      expect(result.ok).toBe(true);
+
+      const [args] = ghArgsFor('issue')[0] ? [ghArgsFor('issue')[0]] : [[]];
+      const title = argValue(args, '--title');
+      const body = argValue(args, '--body');
+      expect(title).toBe('Sync fails under ~/work/demo');
+      expect(title).not.toContain(home);
+      expect(body).toContain('[REDACTED]');
+      expect(body).not.toContain('ghp_');
+      expect(body).not.toContain(home);
+      expect(body).toContain('~/logs/sync.log');
+    });
+
+    it('dedupes on the SCRUBBED title, so a leaky title cannot re-file every wake', async () => {
+      const home = homedir();
+      mocks.listAppIssues.mockResolvedValue(okList([
+        openIssue({ number: 12, title: 'Sync fails under ~/work/demo' }),
+      ]));
+
+      expect(await filePersistentMindIssue(fileRequest({
+        title: `Sync fails under ${home}/work/demo`,
+      }))).toMatchObject({ ok: true, duplicate: true, number: 12 });
+      expect(ghArgsFor('issue')).toHaveLength(0);
+    });
+
+    it('leaves ordinary prose, repo-relative paths and short ids untouched', async () => {
+      const body = 'server/services/sync.js drops job 4f2a on retry — see PR #118.';
+      await filePersistentMindIssue(fileRequest({ title: 'Sync drops a job on retry', body }));
+      expect(argValue(ghArgsFor('issue')[0], '--body')).toBe(body);
+    });
+
+    it('tells the model to keep private records out, since no filter can', () => {
+      // The scrub is mechanical; "private record" is not decidable by regex, so
+      // that half has to reach the model as an instruction or it is untrue.
+      const prompt = buildPersistentMindIssueCapabilityPrompt({
+        enabled: true, catalog: { apps: [{ id: 'demo-app', forge: 'github' }] },
+      });
+      expect(prompt).toContain('world-readable');
+      expect(prompt).toContain('private record');
+    });
   });
 
   it('files through glab for a GitLab-tracked app', async () => {
