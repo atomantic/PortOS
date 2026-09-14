@@ -11,7 +11,12 @@ vi.mock('../lib/childProcess.js', async (importOriginal) => {
   return { ...actual, spawn: vi.fn() };
 });
 
+vi.mock('./forgeAuth.js', () => ({
+  resolveForgeTokenEnv: vi.fn(async () => ({}))
+}));
+
 import { spawn } from '../lib/childProcess.js';
+import { resolveForgeTokenEnv } from './forgeAuth.js';
 import {
   isActionableIssue,
   titleMarksEpic,
@@ -221,7 +226,11 @@ describe('perpetualWork', () => {
   });
 
   describe('detectGithubIssues (spawn-mocked)', () => {
-    beforeEach(() => { spawn.mockReset(); });
+    beforeEach(() => {
+      spawn.mockReset();
+      resolveForgeTokenEnv.mockReset();
+      resolveForgeTokenEnv.mockResolvedValue({});
+    });
     const app = { id: 'a', repoPath: '/repo' };
 
     it('counts actionable issues, excluding labelled/assigned/in-flight', async () => {
@@ -565,6 +574,7 @@ describe('perpetualWork', () => {
         expect(spawn.mock.calls.filter(([cmd]) => cmd === 'gh').every(([, , options]) =>
           options.env?.PATH === '/bin'
         )).toBe(true);
+        expect(resolveForgeTokenEnv).not.toHaveBeenCalled();
         expect(authorListCalls()).toEqual(['alice', 'bob', 'carol']);
       });
 
@@ -652,11 +662,63 @@ describe('perpetualWork', () => {
         expect(out).toMatchObject({ reason: 'gh-unavailable', transient: true });
       });
     });
+
+    it('runs every gh probe as the repo-pinned account, not the ambient credential', async () => {
+      // Ambient GH_TOKEN/GITHUB_TOKEN are the install's default account; a
+      // managed app under a different logged-in login must not inherit them.
+      vi.stubEnv('GH_TOKEN', 'ambient-owner-token');
+      vi.stubEnv('GITHUB_TOKEN', 'other-account-token');
+      vi.stubEnv('GH_ENTERPRISE_TOKEN', 'enterprise-token');
+      resolveForgeTokenEnv.mockResolvedValue({ GH_TOKEN: 'app-account-token' });
+      routeSpawn({
+        'gh issue': { stdout: '[]' },
+        'git branch': { stdout: 'main\n' },
+        'gh pr': { stdout: '' }
+      });
+      try {
+        await detectGithubIssues(app, { issueAuthorFilter: 'any' });
+        expect(resolveForgeTokenEnv).toHaveBeenCalledWith('/repo');
+        const ghCalls = spawn.mock.calls.filter(([cmd]) => cmd === 'gh');
+        expect(ghCalls.length).toBeGreaterThan(0);
+        for (const [, , options] of ghCalls) {
+          expect(options.env.GH_TOKEN).toBe('app-account-token');
+          expect(options.env).not.toHaveProperty('GITHUB_TOKEN');
+          expect(options.env).not.toHaveProperty('GH_ENTERPRISE_TOKEN');
+        }
+      } finally {
+        vi.unstubAllEnvs();
+      }
+    });
+
+    it('leaves gh on ambient auth when no account token can be minted', async () => {
+      routeSpawn({
+        'gh issue': { stdout: '[]' },
+        'git branch': { stdout: 'main\n' },
+        'gh pr': { stdout: '' }
+      });
+      await detectGithubIssues(app, { issueAuthorFilter: 'any' });
+      expect(resolveForgeTokenEnv).toHaveBeenCalledWith('/repo');
+      const ghCalls = spawn.mock.calls.filter(([cmd]) => cmd === 'gh');
+      expect(ghCalls.length).toBeGreaterThan(0);
+      expect(ghCalls.every(([, , options]) => !options.env)).toBe(true);
+    });
   });
 
   describe('detectGitlabIssues (spawn-mocked)', () => {
     beforeEach(() => { spawn.mockReset(); });
     const app = { id: 'a', repoPath: '/repo' };
+
+    it('does not overlay a GitHub token onto glab probes', async () => {
+      resolveForgeTokenEnv.mockResolvedValue({ GH_TOKEN: 'app-account-token' });
+      routeSpawn({
+        'glab issue': { stdout: '[]' },
+        'git branch': { stdout: 'main\n' },
+        'glab mr': { stdout: '[]' }
+      });
+      await detectGitlabIssues(app, { issueAuthorFilter: 'any' });
+      expect(resolveForgeTokenEnv).not.toHaveBeenCalled();
+      expect(spawn.mock.calls.filter(([cmd]) => cmd === 'glab').every(([, , options]) => !options.env)).toBe(true);
+    });
 
     it('normalizes iid + string labels and excludes MR-in-flight issues', async () => {
       routeSpawn({
