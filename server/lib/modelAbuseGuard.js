@@ -508,7 +508,7 @@ const HIDDEN_COMMENT_RE = /<!--([\s\S]{0,4000}?)-->|^[ \t]*\[(?:\/\/|comment)\]:
 // collapse the node. `type="hidden"` / Tailwind `className="hidden"` are
 // deliberately not this — those are ordinary UI, and the inner text still
 // shows up in the Files tab.
-const HIDDEN_HTML_OPEN_RE = /<([a-z][\w:-]*)\b([^>]{0,800})>/gi;
+const HIDDEN_HTML_OPEN_RE = /<([a-z][\w:.-]*)\b([^>]{0,800})>/gi;
 const HIDING_ATTR_RE = /(?:^|\s)hidden(?:\s|=\s*(['"]?)(?:true|hidden)?\1|$)|aria-hidden\s*=\s*(['"]?)true\2|style\s*=\s*(['"])[^'"]*(?:display\s*:\s*none|visibility\s*:\s*hidden|opacity\s*:\s*0(?:\.0+)?|font-size\s*:\s*0)/i;
 // An element that cannot have children hides nothing, so it must not lend its
 // hiding attribute to whatever text happens to follow it. `<Icon aria-hidden />`
@@ -520,6 +520,15 @@ const VOID_ELEMENTS = new Set([
   'area', 'base', 'br', 'col', 'embed', 'hr', 'img', 'input',
   'link', 'meta', 'param', 'source', 'track', 'wbr',
 ]);
+// A trailing `/>` only means "no children" where the syntax is real: a void
+// element, or a JSX component (capitalized, or namespaced like `motion.div`).
+// On an ordinary HTML tag both the HTML5 parser and GFM IGNORE the slash and
+// open the element anyway, so trusting `/>` there would hand an attacker a
+// one-character bypass — `<div hidden />payload</div>` renders hidden and would
+// never be scanned.
+const selfClosingIsReal = (name, tag) => (
+  tag.endsWith('/>') && (/^[A-Z]/.test(name) || name.includes('.'))
+);
 
 const markupHidesInstruction = (body) => (
   HIDDEN_COMMENT_ABUSE_RE.test(body) && (MODEL_TARGET_RE.test(body) || SECOND_PERSON_RE.test(body))
@@ -531,13 +540,17 @@ function hasHiddenMarkupInstruction(value) {
   }
   for (const match of value.matchAll(HIDDEN_HTML_OPEN_RE)) {
     if (!HIDING_ATTR_RE.test(match[2] || '')) continue;
-    if (match[0].endsWith('/>') || VOID_ELEMENTS.has(match[1].toLowerCase())) continue;
+    if (VOID_ELEMENTS.has(match[1].toLowerCase()) || selfClosingIsReal(match[1], match[0])) continue;
     const rest = value.slice(match.index + match[0].length, match.index + match[0].length + 4000);
-    const close = rest.match(new RegExp(`^([\\s\\S]*?)</${match[1]}\\s*>`, 'i'));
-    // No close tag in range: read only up to the next tag, since anything past
-    // it belongs to a sibling this element never wrapped. A real hider still
-    // gets caught — its instruction sits immediately inside the open tag.
-    if (markupHidesInstruction(close ? close[1] : rest.split('<')[0])) return true;
+    // Escape the tag name: it reaches a regex, and a namespaced JSX name
+    // (`item.icon`) carries a metacharacter.
+    const tagName = match[1].replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const close = rest.match(new RegExp(`^([\\s\\S]*?)</${tagName}\\s*>`, 'i'));
+    // No close tag in range: scan the whole window. Stopping at the first `<`
+    // would be a bypass of its own — `<div hidden><p>payload</p>` truncates to
+    // the empty string — and an element that really cannot hide anything was
+    // already skipped above.
+    if (markupHidesInstruction(close ? close[1] : rest)) return true;
   }
   return false;
 }
