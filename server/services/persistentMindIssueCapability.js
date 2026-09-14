@@ -191,8 +191,11 @@ export async function filePersistentMindIssue(args) {
   if (existing.transient) {
     return { ok: false, error: `Could not read the existing ${app.forge} issues to check for duplicates (${existing.reason}); nothing was filed` };
   }
+  // An all-punctuation title normalizes to the empty string, which would match
+  // every other such title — only a title with real content can dedupe.
   const titleKey = normalizeIssueTitleKey(args.title);
-  const duplicate = existing.issues.find((issue) => normalizeIssueTitleKey(issue.title) === titleKey);
+  const duplicate = titleKey
+    && existing.issues.find((issue) => normalizeIssueTitleKey(issue.title) === titleKey);
   if (duplicate) {
     return {
       ok: true, duplicate: true, number: duplicate.number, url: duplicate.url,
@@ -211,7 +214,7 @@ export async function filePersistentMindIssue(args) {
       planner: resolvePlannerId({ providerId: profile.providerId, model: profile.model }),
     }),
     ...(args.labels || []),
-  ];
+  ].filter((name, index, all) => all.indexOf(name) === index);
   await ensureLabels({ app, names: labels });
 
   const created = await createIssue({ app, title: args.title, body: args.body, labels });

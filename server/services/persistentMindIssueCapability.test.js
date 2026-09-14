@@ -140,6 +140,14 @@ describe('persistent mind issue capability', () => {
     expect(ghArgsFor('issue')).toEqual([]);
   });
 
+  it('does not let two punctuation-only titles read as the same issue', async () => {
+    // Both normalize to the empty title key, which must not count as a match.
+    mocks.listAppIssues.mockResolvedValue(okList([openIssue({ title: '???' })]));
+
+    expect(await filePersistentMindIssue(fileRequest({ title: '!!!' }))).toMatchObject({ ok: true, duplicate: false });
+    expect(ghArgsFor('issue')).toHaveLength(1);
+  });
+
   it('refuses to file when the tracker could not be read, rather than risking a duplicate', async () => {
     mocks.listAppIssues.mockResolvedValue({ issues: [], reason: 'fetch-failed', transient: true, remedy: 'check gh auth' });
 
