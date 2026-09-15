@@ -2,12 +2,13 @@ import { useState, useEffect, useCallback, useMemo, useId, useRef } from 'react'
 import { Link } from 'react-router';
 import {
   AlertTriangle, Bot, ChevronDown, ChevronRight, CircleDot, ClipboardCheck,
-  ExternalLink, Loader2, MessageSquare, RefreshCw, Rocket, Search, Tag, User
+  ExternalLink, GitPullRequest, Loader2, MessageSquare, RefreshCw, Rocket, Search, Tag, User
 } from 'lucide-react';
 import BrailleSpinner from '../../BrailleSpinner';
 import Banner from '../../ui/Banner';
 import Pill from '../../ui/Pill';
 import toast from '../../ui/Toast';
+import { DEFAULT_PR_COMPLETION, PR_COMPLETION_OPTIONS, prCompletionOption } from '../../cos/constants';
 import ProviderModelSelector from '../../ProviderModelSelector';
 import { useThemeContext } from '../../ThemeContext';
 import { useCosTaskUpdates } from '../../../hooks/useCosTaskUpdates';
@@ -230,6 +231,7 @@ export default function IssuesTab({ appId, appName }) {
   const searchId = useId();
   const filedById = useId();
   const overrideContextId = useId();
+  const prCompletionId = useId();
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -273,14 +275,24 @@ export default function IssuesTab({ appId, appName }) {
   // Models → Code Reviewers list, whenever a claim-work override is in play (see
   // `GET /apps/:id/claim-reviewers`). Untouched fields remain inherited.
   const claimReviewers = useClaimReviewers(appId);
+  const [prCompletion, setPrCompletion] = useState(DEFAULT_PR_COMPLETION);
+  const [prCompletionTouched, setPrCompletionTouched] = useState(false);
+  useEffect(() => {
+    if (!prCompletionTouched && claimReviewers?.prCompletion) {
+      setPrCompletion(claimReviewers.prCompletion);
+    }
+  }, [claimReviewers?.prCompletion, prCompletionTouched]);
   const [reviewOverrides, setReviewOverrides] = useState({});
   const reviewerModelOptions = useReviewerModelOptions();
-  const invalidReviewOverride = Array.isArray(reviewOverrides.reviewers)
+  const invalidReviewOverride = prCompletion === 'review-then-merge'
+    && Array.isArray(reviewOverrides.reviewers)
     && !reviewOverrides.reviewers.some(reviewer => reviewer !== 'copilot');
   const [showReviewOverride, setShowReviewOverride] = useState(false);
   useEffect(() => {
     setReviewOverrides({});
     setShowReviewOverride(false);
+    setPrCompletion(DEFAULT_PR_COMPLETION);
+    setPrCompletionTouched(false);
   }, [appId]);
 
   // Keep the event-driven path based on the latest runs without putting a
@@ -462,7 +474,10 @@ export default function IssuesTab({ appId, appName }) {
       provider: selectedProviderId || undefined,
       model: selectedModel || undefined,
       effort: effort || undefined,
-      ...(action === 'claim' ? reviewOverrides : {}),
+      ...(action === 'claim' ? {
+        prCompletion,
+        ...(prCompletion === 'review-then-merge' ? reviewOverrides : {}),
+      } : {}),
       ...(trimmedOverrideContext ? { overrideContext: trimmedOverrideContext } : {}),
     }, { silent: true })
       .catch(err => {
@@ -634,7 +649,28 @@ export default function IssuesTab({ appId, appName }) {
             />
           </div>
         </div>
-        {claimReviewers && !invalidReviewOverride && (
+        <div className="flex flex-col sm:flex-row sm:items-center gap-2">
+          <label htmlFor={prCompletionId} className="flex items-center gap-1.5 text-xs text-gray-500 uppercase tracking-wide shrink-0">
+            <GitPullRequest size={14} /> After opening PR
+          </label>
+          <div className="flex-1 flex flex-wrap items-center gap-2">
+            <select
+              id={prCompletionId}
+              aria-label="After opening PR"
+              value={prCompletion}
+              onChange={e => { setPrCompletion(e.target.value); setPrCompletionTouched(true); }}
+              className="px-2.5 py-1.5 bg-port-bg border border-port-border rounded-lg text-xs text-white focus:border-port-accent focus:outline-hidden"
+            >
+              {PR_COMPLETION_OPTIONS.map(opt => (
+                <option key={opt.value} value={opt.value}>{opt.label}</option>
+              ))}
+            </select>
+            <span className="text-xs text-gray-500">
+              {prCompletionOption(prCompletion)?.description}
+            </span>
+          </div>
+        </div>
+        {claimReviewers && prCompletion === 'review-then-merge' && !invalidReviewOverride && (
           <div className="flex flex-col sm:flex-row sm:items-center gap-2">
             <span className="flex items-center gap-1.5 text-xs text-gray-500 uppercase tracking-wide shrink-0">
               <ClipboardCheck size={14} /> Reviewed by
@@ -657,7 +693,7 @@ export default function IssuesTab({ appId, appName }) {
             </p>
           </div>
         )}
-        {claimReviewers && (
+        {claimReviewers && prCompletion === 'review-then-merge' && (
           <div className="space-y-2">
             <button
               type="button"

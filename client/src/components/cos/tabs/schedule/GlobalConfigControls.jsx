@@ -230,7 +230,7 @@ export default function GlobalConfigControls({ taskType, config, onUpdate, onTri
   // beside it — never render for claim-work, leaving a reviewer override that
   // every claim obeys with no control anywhere that can clear it.
   const reviewersApply = claimFlow
-    ? true
+    ? prCompletion !== 'merge-on-green'
     : config.taskMetadata?.openPR
       ? prCompletion === '' || prCompletion === 'review-then-merge'
       : !!config.taskMetadata?.reviewLoop;
@@ -657,12 +657,18 @@ export default function GlobalConfigControls({ taskType, config, onUpdate, onTri
               className="w-full bg-port-card border border-port-border rounded px-3 py-2 text-white text-sm"
             >
               <option value="">{claimFlow ? 'Automatic merge after reviews and CI (default)' : 'App default'}</option>
-              {PR_COMPLETION_OPTIONS.filter(option => !claimFlow || option.value !== 'merge-on-green').map(option => (
+              {PR_COMPLETION_OPTIONS.map(option => (
                 <option key={option.value} value={option.value}>{option.label}</option>
               ))}
             </select>
             <p className="text-xs text-gray-500 mt-1">
-              {claimFlow ? 'Configured reviews and CI still run. Leave open hands the PR to you for further review without merging or closing the issue.' : prCompletionOption(prCompletion)?.description || PR_COMPLETION_INHERIT_HINT}
+              {claimFlow
+                ? (prCompletion === 'merge-on-green'
+                    ? prCompletionOption(prCompletion)?.description
+                    : (prCompletion === 'leave-open'
+                        ? 'Configured reviews and CI still run. Leave open hands the PR to you for further review without merging or closing the issue.'
+                        : 'Configured reviews and CI still run. Automatic merge after reviews and CI pass.'))
+                : prCompletionOption(prCompletion)?.description || PR_COMPLETION_INHERIT_HINT}
             </p>
           </FormField>
         )}

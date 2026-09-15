@@ -14,6 +14,7 @@ import { isPlainObject } from './objects.js';
 import { EFFORT_LEVELS, effortLevelsForProvider, buildEffortArgs, foldCursorEffortIntoModel, splitAntigravityModel } from './providerModels.js';
 import { ANTIGRAVITY_COMMAND } from './antigravity.js';
 import { CURSOR_COMMAND } from './cursor.js';
+import { PR_COMPLETIONS } from './prDisposition.js';
 
 // Reviewer choices for the Review Loop. `copilot` requests a native GitHub
 // Copilot review; `claude`/`antigravity`/`codex`/`grok`/`cursor`/`opencode`/`kimi`
@@ -735,6 +736,17 @@ export function prioritizeToolFreeReviewers(reviewers) {
  * what makes `reviewerConfigMetadata`'s round-trip exact.
  */
 export function resolveClaimReviewerConfig(metadata, codeReviewDefaults, defaultReviewers) {
+  if (metadata?.prCompletion === PR_COMPLETIONS.MERGE_ON_GREEN) {
+    return {
+      reviewers: [],
+      usernames: [],
+      optionalReviewers: [],
+      reviewerMaxRounds: {},
+      reviewerModels: {},
+      reviewerEfforts: {},
+      csv: ''
+    };
+  }
   const config = resolveReviewerConfig(metadata, codeReviewDefaults, defaultReviewers);
   const reviewers = claimSafeReviewers(config.reviewers);
   return {

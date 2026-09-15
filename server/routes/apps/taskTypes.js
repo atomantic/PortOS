@@ -112,7 +112,7 @@ router.get('/:id/work-items', loadApp, asyncHandler(async (req, res) => {
 // Read-only: metadata + settings reads, no claim markers, no LLM call.
 router.get('/:id/claim-reviewers', loadApp, asyncHandler(async (req, res) => {
   const app = req.loadedApp;
-  const { overridden, reviewers, usernames, optionalReviewers, reviewerMaxRounds, reviewerModels, reviewerEfforts, csv } =
+  const { overridden, reviewers, usernames, optionalReviewers, reviewerMaxRounds, reviewerModels, reviewerEfforts, csv, prCompletion } =
     await resolveAppClaimReviewers(app);
   // Spelled out rather than spread: `resolveClaimReviewerConfig` also carries
   // `stopMode` / `reviewerApplies`, which a claim flow has no flag string to put
@@ -121,6 +121,7 @@ router.get('/:id/claim-reviewers', loadApp, asyncHandler(async (req, res) => {
     appId: app.id,
     appName: app.name,
     source: overridden ? 'task-override' : 'defaults',
+    prCompletion,
     reviewers,
     usernames,
     optionalReviewers,

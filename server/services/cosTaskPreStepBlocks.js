@@ -872,7 +872,7 @@ export async function buildImprovementTaskDescription({ promptTemplate, app, pro
     // `,`, and line breaks/tabs are forbidden), so a string replacement would
     // read a pin containing `$&`/`$1`/`` $` `` as a backreference token. See
     // the {referenceData}/{prData} comment below for why this form is needed.
-    .replace(/\{reviewers\}/g, () => reviewersCsv)
+    .replace(/\{reviewers\}/g, () => reviewersCsv || 'none')
     .replace(/\{issueAuthorFilter\}/g, () => issueAuthorFilterBlock)
     .replace(/\{issueCandidateList\}/g, () => resolveIssueCandidateListBlock(promptTaskType, metadata.issueAuthorFilter))
     .replace(/\{issueExcludeLabels\}/g, () => issueExcludeLabelsBlock)

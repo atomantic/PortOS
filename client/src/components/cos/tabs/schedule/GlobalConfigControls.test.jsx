@@ -357,3 +357,16 @@ it('persists leave-open for claim-issue while keeping configured reviews availab
    expect(onUpdate).toHaveBeenCalledWith('claim-issue', { taskMetadata: { ...taskMetadata, prCompletion: 'leave-open' } });
    expect(screen.getByTestId('reviewer-picker')).toBeInTheDocument();
 });
+
+it('persists merge-on-green for claim-issue and hides the reviewer picker', () => {
+   const taskMetadata = { useWorktree: false, openPR: false, claimFlow: true };
+   const onUpdate = renderControls({ taskType: 'claim-issue', taskMetadata });
+   expect(prSelect()).toHaveValue('');
+   fireEvent.change(prSelect(), { target: { value: 'merge-on-green' } });
+   expect(onUpdate).toHaveBeenCalledWith('claim-issue', { taskMetadata: { ...taskMetadata, prCompletion: 'merge-on-green' } });
+});
+
+it('hides the reviewer picker when claim-issue is configured with merge-on-green', () => {
+   renderControls({ taskType: 'claim-issue', taskMetadata: { useWorktree: false, openPR: false, claimFlow: true, prCompletion: 'merge-on-green' } });
+   expect(screen.queryByTestId('reviewer-picker')).not.toBeInTheDocument();
+});

@@ -453,8 +453,9 @@ export function claimReviewersCsv(task, codeReviewDefaults, defaultReviewers) {
  *   empty suppresses the block (`buildReviewerPinNote` returns '').
  * @param {boolean} [leavePrOpen] - keep reviews and CI, but hand off before merge.
  */
-export function buildClaimFlowCompletionSection({ isTui = false, sentinelPath = null, reviewersCsv = '', leavePrOpen = false } = {}) {
-  const pin = buildReviewerPinNote(reviewersCsv);
+export function buildClaimFlowCompletionSection({ isTui = false, sentinelPath = null, reviewersCsv = '', leavePrOpen = false, prCompletion = null } = {}) {
+  const isMergeOnGreen = prCompletion === PR_COMPLETIONS.MERGE_ON_GREEN;
+  const pin = isMergeOnGreen ? '' : buildReviewerPinNote(reviewersCsv);
   const lines = [
     ...(pin ? [pin, ''] : []),
     '## Claim Workflow Handoff',
@@ -462,11 +463,16 @@ export function buildClaimFlowCompletionSection({ isTui = false, sentinelPath = 
       'PR completion policy: LEAVE OPEN for further human review. This overrides any merge, auto-merge, issue-close, or merged-branch cleanup instruction in the claim prompt and delegated slashdo commands. Do not pass --merge, enable auto-merge, merge the PR/MR, or close the issue/ticket.',
       'Complete implementation, configured reviews, publication, and CI checks as usual. Once those gates pass, leave the PR/MR open, report its URL and review/CI results, and preserve the claim markers, issue state, branch, and worktree for the human handoff. This is a successful completion; do not wait for a human or require MERGED status. Apply this policy to every child claim in a swarm.',
       '',
+    ] : isMergeOnGreen ? [
+      'PR completion policy: MERGE ON GREEN (no code review). This overrides any code review or reviewer requirement in the claim prompt and delegated slashdo commands. Do not invoke external or local code reviewers. Complete implementation, publication, and CI checks as usual. Once CI checks pass, merge the PR/MR, close the issue/ticket, and clean up. Apply this policy to every child claim in a swarm.',
+      '',
     ] : []),
     'This is a self-managed claim flow. The claim prompt above owns its claim worktree, branch, PR/MR, review, merge or human-handoff, and cleanup. Follow its phase-specific exit conditions — do NOT stop after a code commit or hand the lifecycle back to PortOS.',
     '',
-    'Required-review publication rule: if a required local reviewer cannot return a verdict because of a missing CLI, quota/provider or transport failure, timeout, malformed/empty response, or no-verdict result, record the local phase as `review-blocked` rather than substituting a self-review. Still push and open the PR/MR, post a comment saying it is intentionally left open and will not be merged until the required review completes, preserve the claim markers and branch, and stop before merge. A substantive rejection, failed build/test, unpushed fix, or state/publication failure still blocks publication.',
-    '',
+    ...(!isMergeOnGreen ? [
+      'Required-review publication rule: if a required local reviewer cannot return a verdict because of a missing CLI, quota/provider or transport failure, timeout, malformed/empty response, or no-verdict result, record the local phase as `review-blocked` rather than substituting a self-review. Still push and open the PR/MR, post a comment saying it is intentionally left open and will not be merged until the required review completes, preserve the claim markers and branch, and stop before merge. A substantive rejection, failed build/test, unpushed fix, or state/publication failure still blocks publication.',
+      '',
+    ] : []),
     'For a successful claim, signal completion only after the prompt\'s prescribed PR/MR and cleanup steps are complete. For a clean no-work, blocked, or review-stuck exit, follow the prompt\'s prescribed leave-open/cleanup path first.'
   ];
   if (isTui && sentinelPath) {
