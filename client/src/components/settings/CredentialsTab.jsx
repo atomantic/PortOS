@@ -71,7 +71,7 @@ export function CredentialsTab() {
   const credentials = payload.credentials || [];
 
   return (
-    <div className="space-y-6 max-w-3xl">
+    <div className="space-y-6">
       <div>
         <h2 className="text-lg font-semibold text-white">Credentials</h2>
         <p className="text-sm text-gray-400 mt-1">
@@ -81,7 +81,7 @@ export function CredentialsTab() {
         </p>
       </div>
 
-      <div className="space-y-3">
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
         {credentials.map((credential) => {
           const configured = credential.configured === true;
           const verificationUnavailable = credential.verification === 'unavailable';
