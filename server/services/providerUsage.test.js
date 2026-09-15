@@ -559,8 +559,9 @@ describe('parseGrokUsage', () => {
       ██░░░░░░░░░░░░░░░░░░░░░░░░░░░░8%│
       Resets: August 1, 06:07│
     `;
-    const { limits } = parseGrokUsage(boxPanel, opts);
+    const { limits, plan } = parseGrokUsage(boxPanel, opts);
     expect(limits).toHaveLength(1);
+    expect(plan).toBe('SuperGrok');
     expect(limits[0]).toMatchObject({
       key: 'weekly',
       label: 'Weekly',
@@ -568,6 +569,10 @@ describe('parseGrokUsage', () => {
       percentRemaining: 92,
       resetsAt: '2026-08-01T06:07:00.000Z',
     });
+  });
+
+  it('leaves plan null when the window header names no tier', () => {
+    expect(parseGrokUsage('Weekly limit: 42%', opts).plan).toBeNull();
   });
 });
 
@@ -643,6 +648,14 @@ describe('TUI usage fetchers (via getProviderQuotas)', () => {
     scrapeTuiUsage.mockResolvedValueOnce(AGY_PANEL);
     await getProviderQuotas();
     expect(scrapeTuiUsage).toHaveBeenCalledTimes(2);
+  });
+
+  it('puts the Grok plan name on the quota card when the panel names a tier', async () => {
+    getAllProviders.mockResolvedValueOnce({ activeProvider: 'grok', providers: [{ id: 'grok-tui', enabled: true, type: 'tui', command: 'grok' }] });
+    scrapeTuiUsage.mockResolvedValueOnce('Weekly limit (SuperGrok)\n8%\nResets: August 1, 06:07');
+    const [card] = await getProviderQuotas();
+    expect(card).toMatchObject({ family: 'grok', supported: true, plan: 'SuperGrok' });
+    expect(card.limits).toHaveLength(1);
   });
 
   it('surfaces a supported-but-error card when a CLI provider scrape yields no parseable data', async () => {
