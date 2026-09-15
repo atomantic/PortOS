@@ -2293,6 +2293,9 @@ describe('a11y conventions', () => {
   });
 
   it('keyboard-activates every clickable non-interactive element', () => {
+    // Whole-tree scan (every tracked JSX file), so a contended full-suite
+    // worker can exceed the default 5s budget — runner budget, not product
+    // behavior. The assertion itself is unaffected by the timeout value.
     // A mouse-only `onClick` on a <div>/<li>/<tr> is the most common way an
     // otherwise-accessible view loses its keyboard users: the element never
     // enters the tab order, so there is no keystroke that reaches the handler
@@ -2308,7 +2311,7 @@ describe('a11y conventions', () => {
       }
     }
     expect(offenders, `Non-interactive element with a mouse-only onClick — spread {...clickableProps(handler)} from lib/a11yKeyboard.js (see IngredientPicker.jsx), or write role + tabIndex + onKeyDown in full:\n${offenders.join('\n')}`).toEqual([]);
-  });
+  }, 60_000);
 
   it('gives every <img> an alt attribute', () => {
     // An <img> with no `alt` is announced by its src — a hashed filename or a
