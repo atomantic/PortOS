@@ -10,6 +10,7 @@ import { useAsyncAction } from '../hooks/useAsyncAction';
 import { useAutoRefetch } from '../hooks/useAutoRefetch';
 import SubscriptionSavingsCard from '../components/usage/SubscriptionSavingsCard';
 import FleetUsageCard from '../components/usage/FleetUsageCard';
+import FreeTierUsageCard from '../components/usage/FreeTierUsageCard';
 import ModelsTabsHeader from '../components/models/ModelsTabsHeader';
 
 // How often to re-ask while a provider's quota reading is still being taken. A
@@ -866,10 +867,16 @@ function InternalUsageMetrics() {
           session transcript but no token fields, so its rows are sized from that transcript&rsquo;s text, and a run with no session
           file at all (local models) is approximated from the initial prompt only with no cache traffic counted — those rows
           understate real usage substantially.
-          Rates are as of {report?.pricingAsOf || 'the last update'} and exclude batch and long-context tiers.
+          {' '}OpenCode-backed runs (including zen) contribute the output tokens from the run&rsquo;s own event stream and stay
+          estimated on input. Rates are as of {report?.pricingAsOf || 'the last update'} and exclude batch and long-context tiers.
           {' '}Rows marked ~ use an approximated rate.
         </p>
       </div>
+
+      {/* Free-tier counterpart of the cost report above: ledger-tracked queries
+          and tokens on quotas with no usage API (e.g. opencode zen), plus the
+          observed limit blocks that stand in for a quota meter. */}
+      <FreeTierUsageCard freeTier={usage.freeTier} />
 
       {/* Same window, split by machine — renders only once a peer's usage has
           synced, so a single-machine install sees no change. */}

@@ -388,3 +388,63 @@ describe('UsagePage provider-quota loading state (#4147)', () => {
     expect(region.innerHTML).toContain('lg:grid-cols-2');
   });
 });
+
+describe('UsagePage free-tier section (#7408)', () => {
+  const freeTier = {
+    basis: 'ledger',
+    providers: [{
+      id: 'opencode-zen-cli',
+      name: 'OpenCode Zen CLI',
+      free: true,
+      sessions: 3,
+      messages: 5,
+      tokensIn: 1200,
+      tokensOut: 3400,
+      cacheReadTokens: 0,
+      cacheWriteTokens: 0,
+      source: 'mixed',
+      estimatedCost: 0,
+      rateMatch: 'free',
+      models: [{
+        model: 'opencode/big-pickle',
+        sessions: 3,
+        messages: 5,
+        tokensIn: 1200,
+        tokensOut: 3400,
+        cacheReadTokens: 0,
+        cacheWriteTokens: 0,
+        source: 'mixed',
+        estimatedCost: 0,
+        rateMatch: 'free'
+      }]
+    }],
+    blocks: [{
+      providerId: 'opencode-zen-cli',
+      model: null,
+      category: 'usage-limit',
+      message: 'hit your usage limit',
+      resetHint: '2 hours',
+      at: Date.now() - 60_000,
+      volumeSince: { sessions: 1, messages: 2, tokensIn: 100, tokensOut: 200 }
+    }]
+  };
+
+  it('renders free-tier queries, tokens, and the observed block from the report payload', async () => {
+    api.getUsage.mockResolvedValue({ ...usage, freeTier });
+    render(<MemoryRouter><UsagePage /></MemoryRouter>);
+
+    expect(await screen.findByText('Free-tier usage')).toBeInTheDocument();
+    expect(screen.getByText('OpenCode Zen CLI')).toBeInTheDocument();
+    expect(screen.getByText('opencode/big-pickle')).toBeInTheDocument();
+    // Observed block with its reset hint and since-volume.
+    expect(screen.getByText(/provider said: 2 hours/)).toBeInTheDocument();
+    expect(screen.getByText(/out since/)).toBeInTheDocument();
+  });
+
+  it('renders an empty state when no free-tier usage exists yet', async () => {
+    api.getUsage.mockResolvedValue({ ...usage, freeTier: { basis: 'ledger', providers: [], blocks: [] } });
+    render(<MemoryRouter><UsagePage /></MemoryRouter>);
+
+    expect(await screen.findByText('No free-tier usage recorded in this period.')).toBeInTheDocument();
+  });
+});

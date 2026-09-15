@@ -193,6 +193,19 @@ describe('isFreeProvider', () => {
     expect(isFreeProvider('codex')).toBe(false);
     expect(isFreeProvider(null)).toBe(false);
   });
+
+  it('classifies OpenCode Zen providers as free-tier (id, endpoint, and string forms)', () => {
+    expect(isFreeProvider('opencode-zen')).toBe(true);
+    expect(isFreeProvider('opencode-zen-cli')).toBe(true);
+    expect(isFreeProvider('opencode-zen-tui')).toBe(true);
+    expect(isFreeProvider({ id: 'opencode-zen', type: 'api', endpoint: 'https://opencode.ai/zen/v1' })).toBe(true);
+    expect(isFreeProvider({ id: 'my-zen', type: 'api', endpoint: 'https://opencode.ai/zen/v1' })).toBe(true);
+  });
+
+  it('does not classify an unrelated id containing "zen" as free', () => {
+    expect(isFreeProvider('zen-model-paid')).toBe(false);
+    expect(isFreeProvider({ id: 'kozen-api', type: 'api', endpoint: 'https://api.example.com/v1' })).toBe(false);
+  });
 });
 
 describe('estimateCostUsd', () => {
@@ -328,5 +341,26 @@ describe('isFreeModelId', () => {
     expect(isFreeModelId('qwen3.6:35b')).toBe(true);
     // The provider-level check can't catch this on its own — hence the model check.
     expect(isFreeProvider('claude-code')).toBe(false);
+  });
+
+  // Zen free-tier ids are provider-side free labels (#7408): the harness's own
+  // `opencode/*` namespace and an explicit `-free` suffix resolve to $0, while
+  // paid ids that merely contain those substrings as part of a longer name do
+  // not (the exact-rate guard still wins for a literally-priced id).
+  it('treats Zen free-tier model ids as free', () => {
+    for (const id of [
+      'opencode/big-pickle',
+      'opencode/mimo-v2.5-free',
+      'opencode/muse-spark-1.3-contributor-free',
+      'deepseek-v4-flash-free'
+    ]) {
+      expect(isFreeModelId(id)).toBe(true);
+    }
+  });
+
+  it('does NOT treat a paid id with a free-looking substring as free', () => {
+    expect(isFreeModelId('claude-opus-5')).toBe(false);
+    expect(isFreeModelId('gpt-5.3-codex')).toBe(false);
+    expect(isFreeModelId('unsloth/Qwen3-30B-free-quant')).toBe(false);
   });
 });

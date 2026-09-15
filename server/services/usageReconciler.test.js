@@ -11,6 +11,7 @@ vi.mock('./usage.js', () => ({
 const { markUsageRunReconciled, recordRunUsage } = await import('./usage.js');
 const {
   transcriptFamily,
+  isOpencodeRun,
   readMeasuredUsage,
   reconcileRunUsage,
   recordCompletedRunUsage,
@@ -155,6 +156,19 @@ describe('transcriptFamily', () => {
     for (const providerId of ['ollama', 'lmstudio', 'cursor', 'legacy', '', null]) {
       expect(transcriptFamily({ providerId })).toBeNull();
     }
+  });
+
+  it('returns null for opencode providers — their stream is reconciled separately, not via a transcript store', () => {
+    for (const run of [
+      { providerId: 'opencode-zen-cli' },
+      { providerId: 'opencode-zen-tui' },
+      { providerId: 'custom', command: '/usr/local/bin/opencode' }
+    ]) {
+      expect(transcriptFamily(run)).toBeNull();
+      expect(isOpencodeRun(run)).toBe(true);
+    }
+    expect(isOpencodeRun({ providerId: 'claude-code' })).toBe(false);
+    expect(isOpencodeRun({})).toBe(false);
   });
 });
 
@@ -518,6 +532,59 @@ describe('recordCompletedRunUsage', () => {
       startTime: '2026-07-01T10:00:00.000Z',
       endTime: '2026-07-01T10:10:00.000Z'
     }, 'out')).resolves.toBeUndefined();
+  });
+
+  // OpenCode writes no transcript store, so its output tokens come from the
+  // run's own captured event stream (#7408). Input stays a chars estimate, so
+  // a stream-upgraded run is `mixed`.
+  it('bills measured stream output tokens for an opencode run', async () => {
+    const stream = [
+      JSON.stringify({ type: 'text', part: { type: 'text', text: 'done', tokens: { output: 42 } } }),
+      JSON.stringify({ type: 'text', part: { type: 'text', text: 'more', tokens: { output: 8 } } })
+    ].join('\n');
+    await recordCompletedRunUsage({
+      providerId: 'opencode-zen-cli',
+      model: 'opencode/big-pickle',
+      workspacePath: WORKSPACE,
+      promptLength: 400,
+      startTime: '2026-07-01T10:00:00.000Z',
+      endTime: '2026-07-01T10:10:00.000Z'
+    }, stream, { home, providers: [] });
+
+    expect(recordRunUsage).toHaveBeenCalledTimes(1);
+    const record = recordRunUsage.mock.calls[0][0];
+    expect(record).toMatchObject({ source: 'mixed', tokensOut: 50 });
+    expect(record.tokensIn).toBeGreaterThan(0);
+  });
+
+  it('falls back to the chars estimate when an opencode stream carries no usage frames', async () => {
+    await recordCompletedRunUsage({
+      providerId: 'opencode-zen-cli',
+      model: 'opencode/big-pickle',
+      workspacePath: WORKSPACE,
+      promptLength: 400,
+      startTime: '2026-07-01T10:00:00.000Z',
+      endTime: '2026-07-01T10:10:00.000Z'
+    }, 'plain stdout with no event envelope', { home, providers: [] });
+
+    expect(recordRunUsage).toHaveBeenCalledTimes(1);
+    const record = recordRunUsage.mock.calls[0][0];
+    expect(record.source).toBe('estimate');
+    expect(record.tokensOut).toBeGreaterThan(0);
+  });
+
+  it('honors an explicit estimate source on the parent fallback record', async () => {
+    const run = {
+      providerId: 'opencode-zen-cli',
+      model: 'opencode/big-pickle',
+      workspacePath: WORKSPACE,
+      startTime: '2026-07-01T10:00:00.000Z',
+      endTime: '2026-07-01T10:10:00.000Z'
+    };
+    const record = await reconcileRunUsage(run, { tokensIn: 5, tokensOut: 7 }, { home, estimateSource: 'mixed' });
+    expect(record.source).toBe('mixed');
+    const fallback = await reconcileRunUsage(run, { tokensIn: 5, tokensOut: 7 }, { home });
+    expect(fallback.source).toBe('estimate');
   });
 });
 

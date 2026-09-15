@@ -67,6 +67,11 @@ function getEmptyUsage() {
     monthlyActivity: {},
     earliestActivityDay: null,
     hourlyActivity: Array(24).fill(0),
+    // Observed provider limit blocks (`recordLimitBlock`): timestamped
+    // `{ providerId, model, category, message, resetHint, at }` facts the
+    // Usage page's free-tier section reads as an estimated-quota signal.
+    // Additive: absent on installs that predate it, seeded on load.
+    blockEvents: [],
     lastUpdated: null
   };
 }
@@ -182,7 +187,14 @@ export async function loadUsage() {
   const earliestActivityDay = findEarliestActivityDay(usageData.dailyActivity, usageData.monthlyActivity);
   const earliestChanged = usageData.earliestActivityDay !== earliestActivityDay;
   usageData.earliestActivityDay = earliestActivityDay;
-  if (rolledUp || normalizedProviders || earliestChanged) {
+  // Additive: installs that predate limit-block tracking read as "no blocks
+  // observed" without a migration pass.
+  let normalizedBlocks = false;
+  if (!Array.isArray(usageData.blockEvents)) {
+    usageData.blockEvents = [];
+    normalizedBlocks = true;
+  }
+  if (rolledUp || normalizedProviders || earliestChanged || normalizedBlocks) {
     if (normalizedProviders) console.log('📊 Normalized undefined usage providers to unknown');
     if (rolledUp) console.log(`📊 Rolled up old daily usage into ${Object.keys(usageData.monthlyActivity).length} monthly buckets`);
     await saveUsage();
@@ -722,6 +734,100 @@ export async function recordTokens(inputTokens, outputTokens) {
 }
 
 /**
+ * Two reports of one incident, one minute apart, are the same block. The
+ * runner benches a failed provider AND the agent finalizer benches it again
+ * for the same failure, so without this every limit event would stack twice.
+ */
+export const LIMIT_BLOCK_DEDUPE_MS = 60_000;
+/** Oldest block events are dropped past this — the Usage page reads the tail. */
+export const LIMIT_BLOCK_CAP = 200;
+
+/**
+ * Record an observed provider limit block: a `usage-limit` bench the runner or
+ * the agent finalizer actually applied (provider-origin, structured marker —
+ * never a loose keyword sweep, never a transient 429 retry, which per
+ * docs/QUOTA-BURN.md is a retry rather than a spent window).
+ *
+ * Fire-and-forget safe: callers invoke it beside a bench mark from completion
+ * paths, so it owns its persistence and never rejects into them — chain a
+ * `.catch` like the mark itself, or await it inside an existing guarded block.
+ *
+ * @param {{ providerId: string, model?: string|null, category?: string,
+ *   message?: string|null, resetHint?: string|null, at?: number }} event
+ * @returns {Promise<object|null>} the stored entry, or null without a provider
+ */
+export async function recordLimitBlock({
+  providerId,
+  model = null,
+  category = 'usage-limit',
+  message = null,
+  resetHint = null,
+  at = Date.now()
+} = {}) {
+  if (!providerId) return null;
+  if (!usageData) await loadUsage();
+  if (!Array.isArray(usageData.blockEvents)) usageData.blockEvents = [];
+  const entry = {
+    providerId,
+    model: typeof model === 'string' && model.trim() ? model.trim() : null,
+    category,
+    message: typeof message === 'string' && message ? message.slice(0, 500) : null,
+    resetHint: typeof resetHint === 'string' && resetHint ? resetHint.slice(0, 120) : null,
+    at: Number.isFinite(at) ? at : Date.now()
+  };
+  const last = usageData.blockEvents[usageData.blockEvents.length - 1];
+  if (last && last.providerId === entry.providerId && last.category === entry.category
+    && (entry.at - last.at) < LIMIT_BLOCK_DEDUPE_MS) {
+    usageData.blockEvents[usageData.blockEvents.length - 1] = entry;
+  } else {
+    usageData.blockEvents.push(entry);
+  }
+  if (usageData.blockEvents.length > LIMIT_BLOCK_CAP) {
+    usageData.blockEvents.splice(0, usageData.blockEvents.length - LIMIT_BLOCK_CAP);
+  }
+  await saveUsage();
+  return entry;
+}
+
+/** Every recorded limit block, oldest-first. Pure read over the live ledger. */
+export function getLimitBlocks() {
+  const events = getUsage().blockEvents;
+  return Array.isArray(events) ? [...events] : [];
+}
+
+const blockDayOf = (at) => {
+  const ms = typeof at === 'number' ? at : Date.parse(at);
+  if (!Number.isFinite(ms)) return null;
+  return new Date(ms).toISOString().slice(0, 10);
+};
+
+/**
+ * Ledger volume for one provider since a block's day (inclusive): the
+ * heuristic half of the free-tier "estimated remaining" signal — how much has
+ * run since the provider last refused. Null when the block carries no usable
+ * timestamp (unknown, never zero-collapsed). Pure.
+ */
+export function providerVolumeSinceBlock(dailyActivity, monthlyActivity, providerId, day) {
+  if (!day || !providerId) return null;
+  const totals = { sessions: 0, messages: 0, tokensIn: 0, tokensOut: 0 };
+  const add = (bucket) => {
+    const p = bucket?.byProvider?.[providerId];
+    if (!p) return;
+    totals.sessions += p.sessions || 0;
+    totals.messages += p.messages || 0;
+    totals.tokensIn += p.tokensIn || 0;
+    totals.tokensOut += p.tokensOut || 0;
+  };
+  for (const [key, bucket] of Object.entries(monthlyActivity || {})) {
+    if (key > day.slice(0, 7)) add(bucket);
+  }
+  for (const [key, bucket] of Object.entries(dailyActivity || {})) {
+    if (DAY_KEY_RE.test(key) && key >= day) add(bucket);
+  }
+  return totals;
+}
+
+/**
  * Aggregate the per-day per-provider per-model buckets over a date range into
  * a cost report. `from`/`to` are inclusive `YYYY-MM-DD` strings (null = open
  * end). `providers` is the live provider config list (from
@@ -1016,7 +1122,8 @@ export function getUsageSummary({ from = null, to = null, providers = [] } = {})
       estimatedCost: 0,
       topProviders: [],
       topModels: [],
-      report: buildUsageReport({}, { from, to, providers, monthlyActivity: {} })
+      report: buildUsageReport({}, { from, to, providers, monthlyActivity: {} }),
+      freeTier: { providers: [], blocks: [], basis: 'ledger' }
     };
   }
 
@@ -1079,6 +1186,24 @@ export function getUsageSummary({ from = null, to = null, providers = [] } = {})
       .sort((a, b) => b.sessions - a.sessions)
       .slice(0, 5),
     report,
+    // Free-tier counterpart of the paid cost report: the report rows already
+    // free-classified (local inference, Zen quota), plus the observed limit
+    // blocks with ledger volume since each — the estimated-quota signal for
+    // providers that expose no usage API. `basis: 'ledger'` is the card's
+    // stated provenance (see UsagePage's free-tier section).
+    freeTier: {
+      providers: report.providers.filter((row) => row.free),
+      blocks: getLimitBlocks().slice(-20).map((event) => ({
+        ...event,
+        volumeSince: providerVolumeSinceBlock(
+          usageData.dailyActivity,
+          usageData.monthlyActivity,
+          event.providerId,
+          blockDayOf(event.at)
+        )
+      })),
+      basis: 'ledger'
+    },
     lastUpdated: usageData.lastUpdated
   };
   if (summaryCache.size >= SUMMARY_CACHE_LIMIT) {
