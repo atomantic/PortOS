@@ -5,6 +5,7 @@
  */
 // Aliased: `spawnCli`'s promise executor already binds `resolve` in its own scope.
 import { dirname, isAbsolute, resolve as resolvePath } from 'path';
+import { realpath } from 'fs/promises';
 import { spawn } from '../lib/childProcess.js';
 import { execGitSafe } from '../lib/execGit.js';
 import { parseGitRemote, detectForgeCli, pickGhAccountForOwner } from '../lib/gitForge.js';
@@ -101,8 +102,18 @@ async function resolveConfiguredAccount(dir) {
   if (!pinned.length) return null;
   const root = await resolveMainRepoRoot(dir).catch(() => null);
   if (!root) return null;
-  const target = resolvePath(root);
-  return pinned.find(app => resolvePath(app.repoPath) === target)?.forgeAccount || null;
+  // Both sides through `realpath`: comparing `resolvePath()` strings alone
+  // never matches a symlinked checkout against the registered repoPath, so the
+  // pin is silently missed and auth falls back to the wrong account. Best
+  // effort — an unreadable path falls back to the lexical resolution rather
+  // than failing the lookup.
+  const canonical = (p) => realpath(p).catch(() => resolvePath(p));
+  const target = await canonical(root);
+  for (const app of pinned) {
+    if (typeof app?.repoPath !== 'string') continue;
+    if ((await canonical(app.repoPath)) === target) return app.forgeAccount || null;
+  }
+  return null;
 }
 
 /**

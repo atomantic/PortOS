@@ -86,8 +86,12 @@ Set the field when it is not: an organization repo, a bot account, or any repo
 whose owner login differs from the account you push with.
 
 A pinned account is never second-guessed. If `gh` has no token for it, the run
-gets no forge credential rather than silently falling back to a different
-account's token.
+gets no pinned forge credential — `resolveForgeTokenEnv` overlays nothing, and
+`buildSafeEnv` strips the ambient `GH_TOKEN` from agent shells — rather than
+silently falling back to a different account's token. (PortOS's own
+`resolveForgeForRepo` probes still inherit the ambient environment when no
+token is minted; the no-fallback guarantee covers the credential handed to the
+run, not every ambient lookup PortOS performs itself.)
 
 ## Related
 

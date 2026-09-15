@@ -179,6 +179,25 @@ describe('reportRetiredModelPins', () => {
     expect(removeNotification).toHaveBeenCalledTimes(1);
   });
 
+  it('keeps announced cards when the audit is incomplete after a store-read error', async () => {
+    const cards = backNotificationsWithAStore();
+    auditModelPins.mockResolvedValue(audited(pin('settings:imageGen.agy.model')));
+    await reportRetiredModelPins();
+    expect(cards).toHaveLength(1);
+    addNotification.mockClear();
+
+    // A transient store-read error leaves the pin set unevaluated, so the empty
+    // set is "unknown", not "healthy": reconciling it would retract the card
+    // and the next audit would re-notify.
+    auditModelPins.mockResolvedValue({ pins: [], providers: {}, incomplete: true });
+    await reportRetiredModelPins();
+
+    expect(cards).toHaveLength(1);
+    expect(removeNotification).not.toHaveBeenCalled();
+    expect(addNotification).not.toHaveBeenCalled();
+    expect(errored.mock.calls[0][0]).toContain('incomplete');
+  });
+
   it('announces the new model even when retracting the old card FAILS', async () => {
     // The two guards are deliberately independent: `reconcile` normally takes
     // the superseded card down first, but it is non-fatal, so the dedupe key

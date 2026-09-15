@@ -169,7 +169,14 @@ async function reconcile(stalePins) {
 
 async function reportOnce() {
   const { auditModelPins } = await loadAuditModule();
-  const { pins, providers } = await auditModelPins();
+  const { pins, providers, incomplete } = await auditModelPins();
+  // A transient store-read error leaves collectors unevaluated, so an empty pin
+  // set is "unknown", not "healthy": reconciling would retract announced cards
+  // and the next audit would re-notify. Skip the pass; the next refresh retries.
+  if (incomplete) {
+    console.error('❌ Model pin audit incomplete — a pin store was unreadable; keeping announced cards');
+    return;
+  }
   // BEFORE the early return below and before announcing: an install whose last
   // stale pin was just repointed to a live model has an empty pin set and a
   // card that must still come down.

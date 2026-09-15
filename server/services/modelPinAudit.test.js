@@ -99,7 +99,21 @@ describe('auditModelPins', () => {
     getSettings.mockResolvedValue(settingsWith({
       imageGen: { agy: { model: 'gemini-3.6-flash-low' }, codex: { model: 'gpt-5-codex' } },
     }));
-    await expect(auditModelPins()).resolves.toEqual({ pins: [], providers: {} });
+    await expect(auditModelPins()).resolves.toEqual({ pins: [], providers: {}, incomplete: false });
+  });
+
+  it('marks the audit incomplete rather than healthy when a store read fails', async () => {
+    // An unevaluated pin set must not read as "nothing stale": the notifier
+    // retracts on empty, so a transient read error would withdraw announced
+    // cards and re-notify on the next audit.
+    loadSchedule.mockRejectedValueOnce(new Error('schedule unreadable'));
+    await expect(auditModelPins()).resolves.toEqual({ pins: [], providers: {}, incomplete: true });
+  });
+
+  it('marks the audit incomplete when a collector throws', async () => {
+    getActiveApps.mockRejectedValueOnce(new Error('apps store unreadable'));
+    const result = await auditModelPins();
+    expect(result.incomplete).toBe(true);
   });
 
   it('ships a catalog only for the providers a stale pin actually names', async () => {

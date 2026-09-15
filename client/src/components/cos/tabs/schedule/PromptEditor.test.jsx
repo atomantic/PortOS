@@ -30,6 +30,37 @@ describe('PromptEditor', () => {
   });
 });
 
+describe('PromptEditor — pipeline stages past the icon table', () => {
+  it('gives every stage an icon so the mobileCompact bar stays an icon row', () => {
+    // Stages are data-driven and unbounded against a 16-entry STAGE_ICONS
+    // table. One iconless tab drops the whole bar to the <select> fallback
+    // (TabPills' `iconRow` gate), so the 17th stage must still render a glyph.
+    const stages = Array.from({ length: 17 }, (_, i) => ({ name: `Stage ${i + 1}` }));
+    const { container } = render(
+      <PromptEditor
+        config={{
+          taskMetadata: { pipeline: { stages } },
+          stagePrompts: stages.map((stage) => `Prompt for ${stage.name}`),
+        }}
+        promptValue=""
+        setPromptValue={() => {}}
+        editingPrompt={false}
+        setEditingPrompt={() => {}}
+        handleSavePrompt={() => {}}
+        updating={false}
+        activeApps={[]}
+      />
+    );
+
+    expect(container.querySelector('select')).toBeNull();
+    const tabs = screen.getAllByRole('tab');
+    expect(tabs).toHaveLength(17);
+    for (const tab of tabs) {
+      expect(tab.querySelector('svg')).not.toBeNull();
+    }
+  });
+});
+
 describe('PromptEditor — programmatic tasks', () => {
   it('offers no prompt at all for work PortOS performs itself', () => {
     // Distinct from 'runtime-generated': there is no agent and no prompt, so

@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import {
   Shield, BadgeCheck, Hammer, Layers, GitBranch, FileText, Sparkles, Bot,
   Cpu, Workflow, Boxes, ScanSearch, ListChecks, PenLine, Clapperboard, Rocket,
+  Shapes,
 } from 'lucide-react';
 import { pipelineStages } from './scheduleConstants';
 import TabPills from '../../../ui/TabPills';
@@ -10,6 +11,12 @@ const STAGE_ICONS = [
   Shield, BadgeCheck, Hammer, Layers, GitBranch, FileText, Sparkles, Bot,
   Cpu, Workflow, Boxes, ScanSearch, ListChecks, PenLine, Clapperboard, Rocket,
 ];
+
+// Stages are data-driven and unbounded, so the fixed icon table cannot cover
+// them all. A stage past the end of STAGE_ICONS must still render a glyph:
+// one iconless tab drops the whole `mobileCompact` bar to the `<select>`
+// fallback (see TabPills' `iconRow` gate).
+const FALLBACK_STAGE_ICON = Shapes;
 
 export default function PromptEditor({ config, promptValue, setPromptValue, editingPrompt, setEditingPrompt, handleSavePrompt, updating, activeApps }) {
   const stages = pipelineStages(config);
@@ -108,7 +115,7 @@ export default function PromptEditor({ config, promptValue, setPromptValue, edit
           tabs={stages.map((stage, i) => ({
             id: String(i),
             label: stage.name,
-            icon: STAGE_ICONS[i],
+            icon: STAGE_ICONS[i] ?? FALLBACK_STAGE_ICON,
             trailing: stage.readOnly
               ? <span className="text-[10px] text-gray-500">(read-only)</span>
               : undefined,
