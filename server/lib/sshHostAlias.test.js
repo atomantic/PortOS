@@ -159,6 +159,19 @@ describe('remote-host parsers under a multi-account ssh alias', () => {
     expect(parseGitRemoteUrl('ssh://git@github-acme:22/acme/widget.git').host).toBe('github.com');
   });
 
+  it('never resolves an ssh alias on a URL-scheme host ssh config cannot apply to', () => {
+    // ssh config is consulted for SSH connections only. An `https://` remote
+    // colliding with an ssh alias must keep its literal host at every parser,
+    // or `gh --repo` + token overlay target the wrong API host — while the
+    // `ssh://` form of the same alias still resolves.
+    const https = 'https://github-acme/acme/widget.git';
+    expect(parseGitRemote(https)).toEqual({ host: 'github-acme', owner: 'acme' });
+    expect(parseGitRemoteUrl(https)).toEqual({ host: 'github-acme', owner: 'acme', repo: 'widget' });
+    expect(hostFromOriginUrl(https)).toBe('github-acme');
+    expect(parseGitRemoteUrl('ssh://git@github-acme/acme/widget.git').host).toBe('github.com');
+    expect(hostFromOriginUrl('ssh://git@github-acme/acme/widget.git')).toBe('github.com');
+  });
+
   it('leaves an alias the ssh config does not declare alone', () => {
     expect(parseGitRemote('git@github-other:acme/widget.git')).toEqual({ host: 'github-other', owner: 'acme' });
   });

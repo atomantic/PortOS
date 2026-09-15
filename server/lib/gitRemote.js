@@ -56,6 +56,11 @@ export function parseGitRemoteUrl(url) {
   // Port first, then alias: an alias is written bare in ssh config, so
   // `github-acme:22` must have its port removed before the lookup.
   const normalizeHost = (h) => resolveSshHostAlias(stripPort(h));
+  // URL-scheme hosts never consult ssh config — only the SSH branches
+  // (scp-style and `ssh://`) resolve aliases. An `https://` remote colliding
+  // with an ssh alias must keep its literal host, or downstream `gh --repo` +
+  // token overlay target the wrong API host.
+  const normalizeUrlHost = (scheme, h) => (scheme === 'ssh' ? normalizeHost(h) : stripPort(h));
 
   // SCP-style SSH: git@host:[port/]owner/repo(.git). repo segment cannot
   // contain '/'. The optional `(?:\d+\/)?` matches the GitHub-specific variant
@@ -68,9 +73,9 @@ export function parseGitRemoteUrl(url) {
 
   // URL-style: scheme://[user@]host(:port)/owner/repo(.git) — repo segment
   // cannot contain '/'.
-  const urlMatch = trimmed.match(/^[a-zA-Z]+:\/\/(?:[^@/]+@)?([^/]+)\/([^/]+)\/([^/]+)$/);
+  const urlMatch = trimmed.match(/^([a-zA-Z]+):\/\/(?:[^@/]+@)?([^/]+)\/([^/]+)\/([^/]+)$/);
   if (urlMatch) {
-    return { host: normalizeHost(urlMatch[1]), owner: urlMatch[2], repo: stripGit(urlMatch[3]) };
+    return { host: normalizeUrlHost(urlMatch[1].toLowerCase(), urlMatch[2]), owner: urlMatch[3], repo: stripGit(urlMatch[4]) };
   }
 
   return null;

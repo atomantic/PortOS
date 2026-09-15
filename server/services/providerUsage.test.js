@@ -574,6 +574,14 @@ describe('parseGrokUsage', () => {
   it('leaves plan null when the window header names no tier', () => {
     expect(parseGrokUsage('Weekly limit: 42%', opts).plan).toBeNull();
   });
+
+  it('ignores a parenthetical that is not shaped like a plan name', () => {
+    // Any parenthetical after the window header used to become the plan, so a
+    // note or timestamp in the panel ended up on the Usage card as the plan.
+    expect(parseGrokUsage('Weekly limit (as of Tuesday): 42%', opts).plan).toBeNull();
+    expect(parseGrokUsage('Weekly limit (8% used): 42%', opts).plan).toBeNull();
+    expect(parseGrokUsage('Weekly limit (SuperGrok): 42%', opts).plan).toBe('SuperGrok');
+  });
 });
 
 describe('TUI usage fetchers (via getProviderQuotas)', () => {

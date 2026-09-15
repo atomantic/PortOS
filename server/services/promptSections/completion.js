@@ -449,10 +449,13 @@ export function claimReviewersCsv(task, codeReviewDefaults, defaultReviewers) {
  * site, instead of three prose appends in `cosTaskGenerator.js` that a new claim
  * generator could forget.
  *
- * @param {string} [reviewersCsv] - the emitted `--review-with` token list to pin;
- *   empty suppresses the block (`buildReviewerPinNote` returns '').
- * @param {boolean} [leavePrOpen] - keep reviews and CI, but hand off before merge.
- */
+  * @param {string} [reviewersCsv] - the emitted `--review-with` token list to pin;
+  *   empty suppresses the block (`buildReviewerPinNote` returns '').
+  * @param {boolean} [leavePrOpen] - keep reviews and CI, but hand off before merge.
+  * @param {string|null} [prCompletion] - the claim's PR completion policy
+  *   (`PR_COMPLETIONS`): `MERGE_ON_GREEN` suppresses the reviewer pin and emits
+  *   the merge-on-green handoff instead; any other value keeps the pin.
+  */
 export function buildClaimFlowCompletionSection({ isTui = false, sentinelPath = null, reviewersCsv = '', leavePrOpen = false, prCompletion = null } = {}) {
   const isMergeOnGreen = prCompletion === PR_COMPLETIONS.MERGE_ON_GREEN;
   const pin = isMergeOnGreen ? '' : buildReviewerPinNote(reviewersCsv);
