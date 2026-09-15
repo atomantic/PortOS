@@ -121,6 +121,31 @@ usage-limit failure, `server/services/quotaBurnDenials.js` blocks that family in
 - **Bypassable by a forced run** (the ▶ on a step row), which is how a user
   retries a block they believe is stale.
 
+## Free-tier usage reporting (Usage page)
+
+Subscription families have scrapable quota panels; free-tier quotas (e.g.
+opencode zen) do not, so the Usage page (`/devtools/usage`) reports them from
+the PortOS ledger instead of from the provider:
+
+- **Queries and tokens** per free-tier provider/model come from the existing
+  usage report — the same `GET /api/usage` payload, filtered to rows
+  free-classified by `isFreeProvider`/`isFreeModelId` (Zen provider ids,
+  endpoint, and `-free`/`opencode/*` model ids resolve to $0). OpenCode-backed
+  runs bill their stream's own output-token counts (`mixed` provenance: output
+  measured, input still estimated); unreported counts render as —, never 0.
+- **Observed blocks** (`usage.blockEvents` via `recordLimitBlock`) stand in for
+  the missing quota meter: every applied `usage-limit` bench — from the runner
+  or the agent finalizer — records timestamp + provider/model + reset hint, and
+  the page shows ledger volume since each block as the estimated-remaining
+  signal. Transient 429 retries are not blocks (same rule as above) and are
+  never recorded. A repeat report of one incident coalesces rather than
+  stacking. This ledger is NOT the burn-denial ledger above it: burn denials
+  gate burn dispatch per family, while block events are a display signal for
+  every provider.
+- **No provider calls.** The section is ledger-derived behind the page's normal
+  fetch — never boot-time, never background — and Zen has no quota adapter
+  because it exposes no usage endpoint to adapt.
+
 ## Burn steps
 
 A family's plan is an **ordered list of steps**, and that ordering is the

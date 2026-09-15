@@ -1060,7 +1060,7 @@ function coalesceFallbackMarkAndPick(failed, firstError, requestCapabilities) {
   return _fallbackMarkAndPick.run(`${failed.id}:${capabilityKey}`, async () => {
     const picked = await pickFallbackProvider(failed, requestCapabilities);
     if (!picked) return null;
-    await markProviderUnavailableFromError(failed, firstError.message, firstError.errorAnalysis).catch(err => {
+    await markProviderUnavailableFromError(failed, firstError.message, firstError.errorAnalysis, firstError?.effectiveModel ?? null).catch(err => {
       console.error(`❌ markUnavailable failed for ${failed.id}: ${err.message}`);
     });
     return picked;
@@ -1108,11 +1108,10 @@ async function pickFallbackProvider(failed, requestCapabilities) {
  * USAGE_LIMIT before firing onComplete) — re-marking would double-
  * increment `failureCount` and re-write the status file for no gain.
  */
-async function markProviderUnavailableFromError(failed, errorMessage, runnerAnalysis) {
+async function markProviderUnavailableFromError(failed, errorMessage, runnerAnalysis, runModel = null) {
   const toolkit = getAIToolkitInstance();
   const providerStatus = toolkit?.services?.providerStatus;
   if (!providerStatus) return;
-  if (!providerStatus.isAvailable(failed.id)) return;
 
   const analysis = runnerAnalysis && typeof runnerAnalysis === 'object'
     ? runnerAnalysis
@@ -1125,6 +1124,22 @@ async function markProviderUnavailableFromError(failed, errorMessage, runnerAnal
   if (!bench) return;
 
   if (bench.marker === 'usage-limit') {
+    // Observed-block ledger for the Usage page's free-tier estimated-quota
+    // signal — recorded even when the provider is already benched (a repeated
+    // refusal refreshes "since last block"). Transient 429 retries never reach
+    // this branch: they classify as `rate-limit`, not `usage-limit`.
+    await import('./usage.js')
+      .then(({ recordLimitBlock }) => recordLimitBlock({
+        providerId: failed.id,
+        model: runModel,
+        category: 'usage-limit',
+        message: bench.message || errorMessage,
+        resetHint: bench.waitTime
+      }))
+      .catch((err) => {
+        console.error(`❌ Failed to record limit block for ${failed.id}: ${err.message}`);
+      });
+    if (!providerStatus.isAvailable(failed.id)) return;
     await providerStatus.markUsageLimit(failed.id, {
       message: bench.message || errorMessage,
       waitTime: bench.waitTime,
@@ -1132,6 +1147,7 @@ async function markProviderUnavailableFromError(failed, errorMessage, runnerAnal
     return;
   }
 
+  if (!providerStatus.isAvailable(failed.id)) return;
   await providerStatus.markUnavailable(failed.id, {
     reason: bench.category,
     message: bench.message || errorMessage || `Provider ${failed.name || failed.id} failed`,
