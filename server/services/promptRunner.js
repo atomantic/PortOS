@@ -45,6 +45,7 @@ import { extractJson } from '../lib/jsonExtract.js';
 import { isCreativeRunSource, withCreativeLatitude } from '../lib/creativeLatitude.js';
 import { DEFAULT_OUTPUT_RESERVE_TOKENS, estimateTokens } from '../lib/contextBudget.js';
 import { allowedModesFor, callerModeRejection } from '../lib/callerModePolicy.js';
+import { attachGatewaySiblingKey } from '../lib/providerGateways.js';
 
 // The fallback-lifecycle notifiers live in services/autoFixer.js, which
 // transitively pulls in services/cos.js (PM2 + fs + sockets). Importing it
@@ -1093,7 +1094,12 @@ async function pickFallbackProvider(failed, requestCapabilities) {
 
   const picked = providerStatus.getFallbackProvider(failed.id, providersMap, null, null, requestCapabilities);
   if (!picked?.provider) return null;
-  return { provider: picked.provider, model: picked.model ?? null };
+  // The pick comes from the RAW provider map (`getAllProviders`), which carries
+  // no gateway-inherited key — a gateway-backed wrapper picked here would execute
+  // without its sibling's apiKey and fail auth (NVIDIA NIM 401s "Header of type
+  // `authorization` was missing") despite a stored key. Attach it from the same
+  // map (synchronous — no re-read to go stale).
+  return { provider: attachGatewaySiblingKey(picked.provider, providersMap), model: picked.model ?? null };
 }
 
 /**
@@ -1425,6 +1431,19 @@ async function executeProviderRunOnce({
         ...(effort ? { effort } : {}),
       }
       : effectiveProvider;
+    // `withGatewayApiKey` attaches a gateway-backed wrapper's sibling key as a
+    // NON-ENUMERABLE property (so it never persists or leaks) — which the spread
+    // above drops. A model-pinned or effort-overridden CLI/TUI run would then go
+    // out with no Authorization header (NVIDIA NIM 401s "Header of type
+    // `authorization` was missing") despite a stored key. Re-carry it with the
+    // same enumerability so the clone executes with identical credentials.
+    if (providerForRun !== effectiveProvider && !providerForRun.apiKey && effectiveProvider?.apiKey) {
+      Object.defineProperty(providerForRun, 'apiKey', {
+        value: effectiveProvider.apiKey,
+        enumerable: false,
+        configurable: true,
+      });
+    }
 
     if (effectiveProvider.type === PROVIDER_TYPES.CLI) {
       executeCliRun({ runId, provider: providerForRun, prompt, workspacePath: effectiveCwd, screenshots, onData, onComplete, timeout: effectiveTimeout }).catch(safeReject);

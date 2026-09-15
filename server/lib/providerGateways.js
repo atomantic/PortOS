@@ -109,3 +109,35 @@ export const gatewayIdForProvider = (provider) => gatewayForProvider(provider)?.
 
 /** True when a provider is an OpenCode wrapper front-ending any hosted gateway. */
 export const isGatewayBackedProvider = (provider) => gatewayForProvider(provider) !== null;
+
+/**
+ * Attach a gateway-backed wrapper's sibling API key for execution, from an
+ * already-loaded provider collection.
+ *
+ * The synchronous twin of `withGatewayApiKey` in `lib/aiToolkit/providers.js`
+ * (which reads the live store): `getAllProviders` returns RAW records with no
+ * inherited key, and a fallback pick taken from such a map would otherwise
+ * execute with no Authorization header — NVIDIA NIM 401s "Header of type
+ * `authorization` was missing" despite a stored key. Same contract: the key
+ * lands as a NON-ENUMERABLE property so it never persists, leaks into
+ * responses, or survives a spread/JSON round-trip (callers that clone must
+ * re-carry it — see `providerForRun` in `services/promptRunner.js`).
+ *
+ * Pure: returns the input untouched when there is nothing to attach (not
+ * gateway-backed, own key already set, or sibling keyless/missing).
+ *
+ * @param {object|null|undefined} provider — the wrapper to arm for execution
+ * @param {Record<string, object>|Array<object>|null|undefined} providers — the sibling collection
+ * @returns {object|null|undefined} the key-carrying copy, or the input
+ */
+export function attachGatewaySiblingKey(provider, providers) {
+  if (!provider || typeof provider !== 'object' || provider.apiKey) return provider;
+  const gateway = gatewayForProvider(provider);
+  if (!gateway) return provider;
+  const siblings = Array.isArray(providers) ? providers : Object.values(providers || {});
+  const siblingKey = siblings.find((entry) => entry?.id === gateway.id)?.apiKey || null;
+  if (!siblingKey) return provider;
+  const armed = { ...provider };
+  Object.defineProperty(armed, 'apiKey', { value: siblingKey, enumerable: false, configurable: true });
+  return armed;
+}

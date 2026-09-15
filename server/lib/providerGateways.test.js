@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   PROVIDER_GATEWAYS,
   PROVIDER_GATEWAY_IDS,
+  attachGatewaySiblingKey,
   gatewayById,
   gatewayForProvider,
   gatewayIdForProvider,
@@ -53,6 +54,44 @@ describe('providerGateways', () => {
     expect(isGatewayNamespace('nvidia-nim')).toBe(true);
     expect(isGatewayNamespace('ollama')).toBe(false);
     expect(isGatewayNamespace(null)).toBe(false);
+  });
+
+  describe('attachGatewaySiblingKey', () => {
+    const sibling = { id: 'nvidia-nim', type: 'api', apiKey: 'nvapi-test-key' };
+    const wrapper = {
+      id: 'opencode-nvidia-nim',
+      type: 'cli',
+      command: 'opencode',
+      gatewayBacked: 'nvidia-nim',
+    };
+
+    it('attaches the sibling key as non-enumerable', () => {
+      const armed = attachGatewaySiblingKey(wrapper, [sibling, wrapper]);
+      expect(armed.apiKey).toBe('nvapi-test-key');
+      expect(Object.keys(armed)).not.toContain('apiKey');
+      expect(JSON.parse(JSON.stringify(armed)).apiKey).toBeUndefined();
+      // The stored record is untouched.
+      expect(wrapper.apiKey).toBeUndefined();
+    });
+
+    it('accepts a map keyed by id', () => {
+      const armed = attachGatewaySiblingKey(wrapper, { 'nvidia-nim': sibling });
+      expect(armed.apiKey).toBe('nvapi-test-key');
+    });
+
+    it('returns the input untouched when there is nothing to attach', () => {
+      // Not gateway-backed.
+      const local = { id: 'x', ollamaBacked: true };
+      expect(attachGatewaySiblingKey(local, [sibling])).toBe(local);
+      // Own key wins over the sibling.
+      const ownKey = { ...wrapper, apiKey: 'own-key' };
+      expect(attachGatewaySiblingKey(ownKey, [sibling])).toBe(ownKey);
+      // Sibling keyless or missing.
+      expect(attachGatewaySiblingKey(wrapper, [{ ...sibling, apiKey: '' }])).toBe(wrapper);
+      expect(attachGatewaySiblingKey(wrapper, [])).toBe(wrapper);
+      expect(attachGatewaySiblingKey(wrapper, null)).toBe(wrapper);
+      expect(attachGatewaySiblingKey(null, [sibling])).toBeNull();
+    });
   });
 });
 
