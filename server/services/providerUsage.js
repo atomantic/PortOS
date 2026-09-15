@@ -573,7 +573,7 @@ const GROK_WINDOWS = {
  * localize it. `timezone` is the zone the TUI rendered in — the fetcher forces
  * the machine's zone on the child, so it passes the same one back in.
  *
- * @returns {{ limits: Array }}
+ * @returns {{ limits: Array, plan: string|null }}
  */
 export function parseGrokUsage(text, { now = Date.now(), timezone } = {}) {
   const str = String(text || '');
@@ -581,11 +581,16 @@ export function parseGrokUsage(text, { now = Date.now(), timezone } = {}) {
   // of the newer one, so keep the LAST value seen per window (freshest frame) —
   // same repaint hazard as parseAgyUsage.
   const byWindow = new Map();
+  // Grok 1.0 names the subscription in the window header:
+  // `Weekly limit (SuperGrok)`. Last named frame wins on a repaint.
+  let plan = null;
 
-  const matches = [...str.matchAll(/(weekly|monthly)\s+limit(?:\s*\([^)]+\))?:?/gi)];
+  const matches = [...str.matchAll(/(weekly|monthly)\s+limit(?:\s*\(([^)]+)\))?:?/gi)];
   for (let idx = 0; idx < matches.length; idx++) {
     const m = matches[idx];
     const window = m[1].toLowerCase();
+    const named = m[2]?.trim();
+    if (named) plan = named.slice(0, 60);
     if (!GROK_WINDOWS[window]) continue;
 
     const startPos = m.index + m[0].length;
@@ -607,7 +612,7 @@ export function parseGrokUsage(text, { now = Date.now(), timezone } = {}) {
     }
   }
 
-  if (!byWindow.size) return { limits: [] };
+  if (!byWindow.size) return { limits: [], plan };
 
   const resets = [...str.matchAll(/(?:next reset|resets):\s*([A-Za-z0-9 ,:]+?)(?:\s{2,}|│|$|\n)/gi)];
   const resetsAt = resets.length ? parseHumanReset(resets[resets.length - 1][1], { now, timezone }) : null;
@@ -623,7 +628,7 @@ export function parseGrokUsage(text, { now = Date.now(), timezone } = {}) {
     resetsAt,
     timezone: null,
   }));
-  return { limits };
+  return { limits, plan };
 }
 
 /**
@@ -685,9 +690,10 @@ function makeTuiUsageFetcher({ id, binary, slashCommand, label, parse, name, rea
       const text = await scrapeTuiUsage({ command, args, slashCommand, env, readyMarker });
       // The panel's reset is relative (agy) or zone-less (grok) — both resolve
       // against the read's own clock and the zone the child rendered in.
-      const { limits } = parse(text, { now: Date.now(), timezone: tz });
+      const { limits, plan } = parse(text, { now: Date.now(), timezone: tz });
+      const namedPlan = typeof plan === 'string' && plan.trim() && plan !== 'unknown' ? plan.trim() : null;
       return limits.length
-        ? { ...base, supported: true, limits, note: `Scraped from the ${name} /usage panel — local, approximate.` }
+        ? { ...base, supported: true, limits, ...(namedPlan ? { plan: namedPlan } : {}), note: `Scraped from the ${name} /usage panel — local, approximate.` }
         : { ...base, supported: true, limits: [], error: `No quota data found in the ${name} /usage panel.` };
     }, { wait });
     return card === PENDING ? pendingCard(base, name) : card;

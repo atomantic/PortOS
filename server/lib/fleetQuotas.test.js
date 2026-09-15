@@ -127,6 +127,14 @@ describe('mergeQuotaCard', () => {
     expect(merged.note).toBe('Across 2 federated instances (this machine, Example Box) — meters show the freshest reading across them.');
   });
 
+  it('takes the freshest named plan when this machine has not labeled the tier', () => {
+    const merged = mergeFleetQuotaCards(
+      [localCard({ plan: null, limits: [], activity: [], pending: true })],
+      [peerEntry({ quotas: [{ ...peerEntry().quotas[0], family: 'claude', plan: 'Max 20x', fetchedAt: '2026-09-03T11:00:00.000Z' }] })],
+    )[0];
+    expect(merged.plan).toBe('Max 20x');
+  });
+
   it('collapses the name list past three instances', () => {
     const peers = ['a', 'b', 'c', 'd'].map((id) => peerEntry({ instanceId: id, name: id.toUpperCase() }));
     expect(mergeFleetQuotaCards([localCard()], peers)[0].note)
