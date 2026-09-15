@@ -348,10 +348,16 @@ describe('Eidoverse hosted page', () => {
         localVsOrigin: { ahead: 0, behind: 2, state: 'behind' },
       }],
     });
+    api.getInstanceFeatures.mockImplementation(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      return featureResponse();
+    });
     renderPage();
 
     await screen.findByTitle('Eidoverse Worlds');
-    expect(api.getAppRepositorySources).toHaveBeenCalledWith('app-eidoverse', { silent: true });
+    await waitFor(() =>
+      expect(api.getAppRepositorySources).toHaveBeenCalledWith('app-eidoverse', { silent: true })
+    );
     expect(await screen.findByText(/Eidoverse Worlds is 2 commits behind its origin/)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Update Eidoverse/ })).toBeInTheDocument();
   });
