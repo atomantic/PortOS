@@ -310,6 +310,9 @@ describe('Eidoverse private-world lifecycle', () => {
   });
 
   it('reconciles a migrated V1 world through the normal online boot path', async () => {
+    // Real-timer readiness polling through the boot path: wall-clock bound, so
+    // a contended full-suite worker can exceed 30s. Runner budget, not product
+    // behavior — the reconciliation assertions below are unaffected by it.
     mocks.persistedState = {
       schemaVersion: 1,
       world: 'portos',
@@ -333,7 +336,7 @@ describe('Eidoverse private-world lifecycle', () => {
       migrationReport: { status: 'applied' },
       reconciliation: { status: 'complete', checkpoint: 'projection-committed' },
     });
-  }, 30000);
+  }, 60_000);
 
   it('reads projection progress without runtime, app-registry, or library probes', async () => {
     await world.ensureEidoverseWorldConfig();
