@@ -19,7 +19,9 @@ const commitSnapshot = (result) => {
 const loadInstanceFeatures = () => {
   if (!inFlight) {
     const requested = generation;
-    const request = api.getInstanceFeatures({ silent: true })
+    let fetcher;
+    try { fetcher = api.getInstanceFeatures; } catch { fetcher = undefined; }
+    const request = (typeof fetcher === 'function' ? fetcher.call(api, { silent: true }) : Promise.reject(new Error('getInstanceFeatures unavailable')))
       .then((data) => ({
         features: Array.isArray(data?.features) ? data.features : [],
         // Feature GROUPS (#40) — Settings > Features is the only consumer that
