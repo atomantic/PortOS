@@ -157,6 +157,50 @@ describe('resolveAgentProviderAndModel', () => {
     expect(r.selectedModel).toBe('fb-model');
   });
 
+  it('attaches the sibling key when a fallback pick is a gateway wrapper', async () => {
+    // The fallback pick comes from the RAW provider map, which carries no
+    // gateway-inherited key. Without the attach the wrapper spawns with no
+    // Authorization header (NVIDIA NIM 401s "Header of type `authorization`
+    // was missing") despite a stored key.
+    const primary = { id: 'p1', type: 'cli' };
+    const sibling = { id: 'nvidia-nim', type: 'api', apiKey: 'nvapi-test-key' };
+    const rawWrapper = {
+      id: 'opencode-nvidia-nim',
+      type: 'cli',
+      command: 'opencode',
+      gatewayBacked: 'nvidia-nim',
+      models: ['poolside/laguna-xs-2.1'],
+      defaultModel: 'poolside/laguna-xs-2.1',
+    };
+    getActiveProvider.mockResolvedValue(primary);
+    isProviderAvailable.mockReturnValue(false);
+    getProviderStatus.mockReturnValue({ message: 'rate-limit', reason: 'rl' });
+    getAllProviders.mockResolvedValue({ providers: [primary, sibling, rawWrapper] });
+    getFallbackProvider.mockResolvedValue({ provider: rawWrapper, model: null, source: 'provider' });
+
+    const r = await resolveAgentProviderAndModel(TASK);
+    expect(r.ok).toBe(true);
+    expect(r.provider.id).toBe('opencode-nvidia-nim');
+    expect(r.provider.apiKey).toBe('nvapi-test-key');
+    // Execution-only: the key must not leak as an enumerable property.
+    expect(Object.keys(r.provider)).not.toContain('apiKey');
+  });
+
+  it('keeps the raw fallback pick when no sibling key exists', async () => {
+    const primary = { id: 'p1', type: 'cli' };
+    const fallback = { id: 'p2', type: 'cli', models: ['fb-model'] };
+    getActiveProvider.mockResolvedValue(primary);
+    isProviderAvailable.mockReturnValue(false);
+    getProviderStatus.mockReturnValue({ message: 'rate-limit', reason: 'rl' });
+    getAllProviders.mockResolvedValue({ providers: [primary, fallback] });
+    getFallbackProvider.mockResolvedValue({ provider: fallback, model: 'fb-model', source: 'provider' });
+
+    const r = await resolveAgentProviderAndModel(TASK);
+    expect(r.ok).toBe(true);
+    expect(r.provider).toBe(fallback);
+    expect(r.selectedModel).toBe('fb-model');
+  });
+
   it('falls back from an unavailable Ultra mapping to an offered Heavy model', async () => {
     getActiveProvider.mockResolvedValue({ id: 'p1', type: 'cli', models: ['heavy'], ultraModel: 'unavailable', heavyModel: 'heavy' });
     selectModelForTask.mockResolvedValue({ model: 'unavailable', tier: 'ultra', reason: 'user-preference' });

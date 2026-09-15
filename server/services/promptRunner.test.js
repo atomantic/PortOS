@@ -819,6 +819,110 @@ describe('promptRunner — TUI provider routing', () => {
 });
 
 // =============================================================================
+// Gateway-inherited credentials — a gateway-backed OpenCode wrapper (OrcaRouter,
+// OpenRouter, NVIDIA NIM) stores no key; `withGatewayApiKey` attaches the
+// sibling API record's key as a NON-ENUMERABLE property at read time. Anything
+// that clones or re-resolves the provider must carry that key along, or the
+// run goes out with no Authorization header (NVIDIA NIM 401s "Header of type
+// `authorization` was missing") despite a stored key.
+// =============================================================================
+
+describe('promptRunner — gateway sibling-key preservation', () => {
+  // Mirror of `withGatewayApiKey`: the key is readable but invisible to
+  // spread/JSON, which is exactly what made the clone below drop it.
+  const gatewayAttached = (record, apiKey) => {
+    const attached = { ...record };
+    Object.defineProperty(attached, 'apiKey', { value: apiKey, enumerable: false, configurable: true });
+    return attached;
+  };
+  const nimCli = () => gatewayAttached({
+    id: 'opencode-nvidia-nim',
+    type: 'cli',
+    command: 'opencode',
+    gatewayBacked: 'nvidia-nim',
+    models: ['google/gemma-4-31b-it', 'poolside/laguna-xs-2.1'],
+    defaultModel: 'poolside/laguna-xs-2.1',
+    timeout: 5000,
+  }, 'nvapi-test-key');
+  const nimTui = () => gatewayAttached({
+    id: 'opencode-nvidia-nim-tui',
+    type: 'tui',
+    command: 'opencode',
+    gatewayBacked: 'nvidia-nim',
+    models: ['google/gemma-4-31b-it', 'poolside/laguna-xs-2.1'],
+    defaultModel: 'poolside/laguna-xs-2.1',
+    timeout: 5000,
+  }, 'nvapi-test-key');
+
+  it('carries the sibling key onto the model-pinned CLI provider clone', async () => {
+    runner.executeCliRun.mockImplementation(async ({ provider, onComplete }) => {
+      expect(provider.apiKey).toBe('nvapi-test-key');
+      expect(provider.defaultModel).toBe('google/gemma-4-31b-it');
+      onComplete({ success: true });
+    });
+
+    const out = await runPromptThroughProvider({
+      provider: nimCli(),
+      model: 'google/gemma-4-31b-it',
+      prompt: 'p',
+      source: 'test',
+    });
+
+    expect(runner.executeCliRun).toHaveBeenCalledTimes(1);
+    expect(out.model).toBe('google/gemma-4-31b-it');
+  });
+
+  it('carries the sibling key onto the model-pinned TUI provider clone', async () => {
+    tuiRunner.executeTuiRun.mockImplementation(async ({ provider, onComplete }) => {
+      expect(provider.apiKey).toBe('nvapi-test-key');
+      expect(provider.defaultModel).toBe('google/gemma-4-31b-it');
+      onComplete({ success: true, text: 'done' });
+    });
+
+    await runPromptThroughProvider({
+      provider: nimTui(),
+      model: 'google/gemma-4-31b-it',
+      prompt: 'p',
+      source: 'test',
+    });
+
+    expect(tuiRunner.executeTuiRun).toHaveBeenCalledTimes(1);
+  });
+
+  it('carries the sibling key when only an effort override forces the clone', async () => {
+    runner.executeCliRun.mockImplementation(async ({ provider, onComplete }) => {
+      expect(provider.apiKey).toBe('nvapi-test-key');
+      onComplete({ success: true });
+    });
+
+    await runPromptThroughProvider({
+      provider: nimCli(),
+      prompt: 'p',
+      source: 'test',
+      effort: 'high',
+    });
+
+    expect(runner.executeCliRun).toHaveBeenCalledTimes(1);
+  });
+
+  it('leaves the provider untouched when no clone is needed', async () => {
+    const wrapper = nimCli();
+    runner.executeCliRun.mockImplementation(async ({ provider, onComplete }) => {
+      expect(provider).toBe(wrapper);
+      onComplete({ success: true });
+    });
+
+    await runPromptThroughProvider({
+      provider: wrapper,
+      prompt: 'p',
+      source: 'test',
+    });
+
+    expect(runner.executeCliRun).toHaveBeenCalledTimes(1);
+  });
+});
+
+// =============================================================================
 // API timeout enforcement — executeApiRun now owns the primary wall-clock
 // timeout (it aborts + finalizes as TIMEOUT and fires onComplete). promptRunner
 // keeps a SECONDARY backstop timer, delayed past the runner's deadline by
@@ -1353,6 +1457,52 @@ describe('promptRunner — retry-with-fallback', () => {
     // primary so provider-level fallbackProvider can be read from it.
     const mapPassed = status.getFallbackProvider.mock.calls[0][1];
     expect(mapPassed).toHaveProperty('primary-cli');
+  });
+
+  it('attaches the sibling key when a Tier-3 fallback pick is a gateway wrapper', async () => {
+    // The fallback pick comes from the RAW provider map, which carries no
+    // gateway-inherited key. Without the attach the wrapper executes with
+    // no Authorization header (NVIDIA NIM 401s "Header of type `authorization`
+    // was missing") despite a stored key.
+    const sibling = { id: 'nvidia-nim', type: 'api', apiKey: 'nvapi-test-key' };
+    const rawWrapper = {
+      id: 'opencode-nvidia-nim',
+      name: 'OpenCode NVIDIA NIM',
+      type: 'cli',
+      command: 'opencode',
+      gatewayBacked: 'nvidia-nim',
+      models: ['poolside/laguna-xs-2.1'],
+      defaultModel: 'poolside/laguna-xs-2.1',
+    };
+    const status = mockToolkitWithFallback(rawWrapper);
+    providers.getAllProviders.mockResolvedValue({
+      activeProvider: null,
+      providers: [primaryCli, primaryApi, sibling, rawWrapper],
+    });
+
+    const executedProviders = [];
+    runner.executeCliRun
+      .mockImplementationOnce(async ({ onComplete }) => {
+        onComplete({ success: false, error: 'primary boom' });
+      })
+      .mockImplementationOnce(async ({ provider, onData, onComplete }) => {
+        executedProviders.push(provider);
+        onData('recovered');
+        onComplete({ success: true });
+      });
+
+    const out = await runPromptThroughProvider({
+      provider: primaryCli,
+      prompt: 'p',
+      source: 'test',
+    });
+
+    expect(out.usedFallback).toBe(true);
+    expect(out.fallbackProvider).toMatchObject({ id: 'opencode-nvidia-nim' });
+    expect(out.fallbackProvider.apiKey).toBe('nvapi-test-key');
+    expect(executedProviders).toHaveLength(1);
+    expect(executedProviders[0].apiKey).toBe('nvapi-test-key');
+    expect(status.markUnavailable).toHaveBeenCalledWith('primary-cli', expect.any(Object));
   });
 
   it('does not turn a successful fallback into a failure when noteFallbackHandled itself throws (best-effort suppression)', async () => {
