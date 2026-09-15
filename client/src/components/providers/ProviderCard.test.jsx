@@ -176,6 +176,36 @@ describe('ProviderCard model refresh', () => {
 
 
 /**
+ * The NVIDIA NIM key link. What this uniquely catches: the card says the
+ * provider needs an API key but never says WHERE to get one.
+ */
+describe('ProviderCard gateway key link', () => {
+  const nim = {
+    id: 'nvidia-nim',
+    name: 'NVIDIA NIM',
+    type: 'api',
+    endpoint: 'https://integrate.api.nvidia.com/v1',
+    models: ['google/gemma-4-31b-it'],
+    enabled: true,
+  };
+
+  it('links a keyless NVIDIA NIM card to build.nvidia.com', () => {
+    renderCard(nim);
+    const link = screen.getByRole('link', { name: 'Get a NVIDIA NIM key' });
+    expect(link).toHaveAttribute('href', 'https://build.nvidia.com');
+  });
+
+  it('shows no key link for an API provider with no vendor key page', () => {
+    renderCard({ ...nim, id: 'some-api', name: 'Some API' });
+    expect(screen.queryByRole('link', { name: /Get a .* key/ })).toBeNull();
+  });
+
+  it('shows no key link once the NVIDIA NIM key is set', () => {
+    renderCard({ ...nim, hasApiKey: true });
+    expect(screen.queryByRole('link', { name: /Get a .* key/ })).toBeNull();
+  });
+});
+/**
  * The routing-override badge (#6304). What this uniquely catches: the card
  * silently presenting ChatGPT account quota for work that account never served,
  * and the inverse leak — the machine-local base URL reaching a card that has no
