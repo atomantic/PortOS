@@ -41,6 +41,9 @@
  * @property {string} label — human name for UI copy and prerequisite labels.
  * @property {string} baseURL — the OpenAI-compatible endpoint.
  * @property {string} apiKeyEnv — the env var the spawner exports for OpenCode.
+ * @property {string} [keyUrl] — where the user obtains an API key for this
+ *   gateway, rendered as a "get a key" link on the provider card while the key
+ *   is missing. Only gateways with a stable vendor key page carry one.
  * @property {string} [legacyMarker] — the pre-registry per-gateway boolean field
  *   (`orcarouterBacked`). Records written before `gatewayBacked` existed still
  *   carry it, and installs upgrade on their own schedule, so this is read
@@ -70,6 +73,7 @@ export const PROVIDER_GATEWAYS = Object.freeze([
     label: 'NVIDIA NIM',
     baseURL: 'https://integrate.api.nvidia.com/v1',
     apiKeyEnv: 'NVIDIA_API_KEY',
+    keyUrl: 'https://build.nvidia.com',
   }),
 ]);
 

@@ -29,6 +29,19 @@ describe('GatewayKeyHint', () => {
     expect(screen.getByText('OPENROUTER_API_KEY')).toBeTruthy();
   });
 
+  it('links to the vendor key page while the gateway key is missing', () => {
+    const nim = { id: 'nvidia-nim', label: 'NVIDIA NIM', baseURL: 'https://integrate.api.nvidia.com/v1', apiKeyEnv: 'NVIDIA_API_KEY', keyUrl: 'https://build.nvidia.com' };
+    render(<GatewayKeyHint gateway={nim} sibling={{ id: 'nvidia-nim', hasApiKey: false }} onEdit={vi.fn()} />);
+
+    expect(screen.getByRole('link', { name: 'Get a NVIDIA NIM key' })).toHaveAttribute('href', 'https://build.nvidia.com');
+  });
+
+  it('shows no key link for a gateway with no vendor key page', () => {
+    render(<GatewayKeyHint gateway={gateway} sibling={{ id: 'openrouter', hasApiKey: false }} onEdit={vi.fn()} />);
+
+    expect(screen.queryByRole('link', { name: /Get a .* key/ })).toBeNull();
+  });
+
   it('renders nothing for a provider that fronts no gateway', () => {
     const { container } = render(<GatewayKeyHint gateway={null} sibling={null} />);
     expect(container.textContent).toBe('');

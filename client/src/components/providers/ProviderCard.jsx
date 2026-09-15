@@ -21,6 +21,7 @@ import {
   isApiProvider,
   isCodexSubscriptionProvider,
   codexRoutingAdvisory,
+  gatewayById,
   gatewayForProvider,
   isPrivateNetworkEndpoint,
   isFleetProvider,
@@ -470,8 +471,26 @@ export default function ProviderCard({
               <p className="text-xs">API key: <span className="text-gray-500">none (private network endpoint)</span></p>
             ) : (
               /* Amber only while the provider is switched ON, where a missing
-                 key is what's stopping it — `optional` mutes it otherwise. */
-              <p className="text-xs">API key: <span className={optional ? 'text-gray-400' : 'text-port-warning'}>not set — Edit this provider to paste one</span></p>
+                 key is what's stopping it — `optional` mutes it otherwise.
+                 A gateway-backed API record (NVIDIA NIM) also names WHERE the
+                 key comes from, so the card answers that without a detour
+                 through the editor. */
+              <p className="text-xs">API key: <span className={optional ? 'text-gray-400' : 'text-port-warning'}>not set — Edit this provider to paste one</span>{(() => {
+                const keyGateway = gatewayById(provider.id) ?? gatewayForProvider(provider);
+                return keyGateway?.keyUrl ? (
+                  <>
+                    {' · '}
+                    <a
+                      className="text-port-accent hover:underline"
+                      href={keyGateway.keyUrl}
+                      target="_blank"
+                      rel="noreferrer"
+                    >
+                      Get a {keyGateway.label} key
+                    </a>
+                  </>
+                ) : null;
+              })()}</p>
             )
           )}
           {compatibleModels.length > 0 && (
