@@ -19,7 +19,8 @@
  * the spawn ladder and the gates around this one, never the scan itself.
  */
 
-import { MODEL_ABUSE_GUARD_ID, isSha256Hex, issuePrerequisiteWaived, normalizeEligibilityFacts } from '../lib/modelAbuseGuard.js';
+import { MODEL_ABUSE_GUARD_ID, issuePrerequisiteWaived, normalizeEligibilityFacts } from '../lib/modelAbuseGuard.js';
+import { isScreenedPullRequestFingerprint } from '../lib/prReviewContent.js';
 import { PUBLIC_REVIEW_GATE_EXECUTION_PROFILE } from '../lib/agentExecutionProfiles.js';
 import { PIPELINE_STAGE_BEHAVIOR_FLAGS } from '../lib/cosValidation.js';
 import { createPrReviewerDefaultStages } from './taskScheduleRegistry.js';
@@ -447,7 +448,7 @@ function normalizedExpectedPullRequests(task) {
   const pullRequests = [];
   for (const item of expected.pullRequests) {
     if (!Number.isInteger(item?.number) || item.number < 1 || seen.has(item.number)) return null;
-    if (!HEAD_SHA_RE.test(item.headSha) || !isSha256Hex(item.contentFingerprint)) return null;
+    if (!HEAD_SHA_RE.test(item.headSha) || !isScreenedPullRequestFingerprint(item.contentFingerprint)) return null;
     if (typeof item.authorLogin !== 'string' || !item.authorLogin.trim()) return null;
     seen.add(item.number);
     pullRequests.push({

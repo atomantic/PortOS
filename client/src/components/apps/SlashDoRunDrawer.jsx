@@ -1,8 +1,9 @@
-import { useState, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback, useMemo, useId } from 'react';
 import { Loader2, Terminal, Wand2 } from 'lucide-react';
 import Drawer from '../Drawer';
 import ProviderModelSelector from '../ProviderModelSelector';
 import ReviewerPicker from '../cos/ReviewerPicker';
+import { DEFAULT_PR_COMPLETION, PR_COMPLETION_OPTIONS, prCompletionOption } from '../cos/constants';
 import useProviderModels from '../../hooks/useProviderModels';
 import useReviewerModelOptions from '../../hooks/useReviewerModelOptions';
 import { reviewerModelsFromDefaults, reviewerEffortsFromDefaults } from '../../lib/reviewerModels';
@@ -68,6 +69,15 @@ function SlashDoRunDrawerBody({ open, command, label, appId, appName, onClose, o
   );
   const reviewValue = review ?? seededReview;
 
+  const prCompletionId = useId();
+  const [prCompletion, setPrCompletion] = useState(DEFAULT_PR_COMPLETION);
+  const [prCompletionTouched, setPrCompletionTouched] = useState(false);
+  useEffect(() => {
+    if (!prCompletionTouched && claimReviewers?.prCompletion) {
+      setPrCompletion(claimReviewers.prCompletion);
+    }
+  }, [claimReviewers?.prCompletion, prCompletionTouched]);
+
   const [work, setWork] = useState({ mode: 'auto', target: '', issueAuthorFilter: '' });
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState('');
@@ -95,13 +105,16 @@ function SlashDoRunDrawerBody({ open, command, label, appId, appName, onClose, o
       // `isNext &&` states the route's contract rather than leaning on the picker
       // being unrendered: only the `next` branch of POST /tasks/slashdo reads these,
       // so sending them for another command would be a silent no-op.
-      ...(isNext && review ? {
-        reviewers: review.reviewers,
-        usernames: review.usernames,
-        optionalReviewers: review.optionalReviewers,
-        reviewerMaxRounds: review.reviewerMaxRounds,
-        reviewerModels: review.reviewerModels,
-        reviewerEfforts: review.reviewerEfforts
+      ...(isNext ? {
+        prCompletion,
+        ...(prCompletion === 'review-then-merge' && review ? {
+          reviewers: review.reviewers,
+          usernames: review.usernames,
+          optionalReviewers: review.optionalReviewers,
+          reviewerMaxRounds: review.reviewerMaxRounds,
+          reviewerModels: review.reviewerModels,
+          reviewerEfforts: review.reviewerEfforts
+        } : {})
       } : {})
     }, { silent: true }).catch((err) => {
       setSubmitError(err.message || 'Failed to queue the task');
@@ -161,6 +174,27 @@ function SlashDoRunDrawerBody({ open, command, label, appId, appName, onClose, o
               nothing — the user would pick a reviewer and a model and the run would
               silently discard both. */}
           {isNext && (
+            <div>
+              <label htmlFor={prCompletionId} className="block text-xs text-gray-400 mb-1">
+                After opening PR
+              </label>
+              <select
+                id={prCompletionId}
+                aria-label="After opening PR"
+                value={prCompletion}
+                onChange={e => { setPrCompletion(e.target.value); setPrCompletionTouched(true); }}
+                className="w-full bg-port-bg border border-port-border rounded px-3 py-2 text-white text-sm focus:border-port-accent focus:outline-hidden"
+              >
+                {PR_COMPLETION_OPTIONS.map(option => (
+                  <option key={option.value} value={option.value}>{option.label}</option>
+                ))}
+              </select>
+              <p className="text-xs text-gray-500 mt-1">
+                {prCompletionOption(prCompletion)?.description}
+              </p>
+            </div>
+          )}
+          {isNext && prCompletion === 'review-then-merge' && (
             <>
               <ReviewerPicker
                 reviewers={reviewValue.reviewers}

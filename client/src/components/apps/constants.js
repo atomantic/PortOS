@@ -168,7 +168,9 @@ export const isAppFeatureEnabled = (app, featureId, globalEnabled) => {
 
 // Overview first, then alphabetical. Every id is a real route segment
 // (`/apps/:appId/:tab`) so each tab is linkable, bookmarkable, and reachable
-// from ⌘K — see the routing rules in client/src/AGENTS.md.
+// from ⌘K — see the routing rules in client/src/AGENTS.md. Icons live in
+// `APP_DETAIL_TAB_ICONS` (`AppDetailView.jsx`) so this module stays importable
+// from node-env server tests.
 //
 // `feature` gates a tab against the install-wide feature setting, with an
 // app-level `featureOverrides` choice taking precedence. `visibleWhen(app)` is

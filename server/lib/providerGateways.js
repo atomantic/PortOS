@@ -1,6 +1,6 @@
 /**
  * `PROVIDER_GATEWAYS` — one row per hosted OpenAI-compatible gateway an OpenCode
- * CLI/TUI wrapper can front-end (OrcaRouter, OpenRouter).
+ * CLI/TUI wrapper can front-end (OrcaRouter, OpenRouter, NVIDIA NIM).
  *
  * Before this file, OrcaRouter wasn't *a* gateway — it was *the* gateway: the
  * boolean `orcarouterBacked` and the literal id `'orcarouter'` were hand-copied
@@ -64,6 +64,12 @@ export const PROVIDER_GATEWAYS = Object.freeze([
     label: 'OpenRouter',
     baseURL: 'https://openrouter.ai/api/v1',
     apiKeyEnv: 'OPENROUTER_API_KEY',
+  }),
+  Object.freeze({
+    id: 'nvidia-nim',
+    label: 'NVIDIA NIM',
+    baseURL: 'https://integrate.api.nvidia.com/v1',
+    apiKeyEnv: 'NVIDIA_API_KEY',
   }),
 ]);
 

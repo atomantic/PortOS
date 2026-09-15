@@ -1,12 +1,13 @@
 /**
  * Shared string-literal scanner for the class-string convention guards.
  *
- * `src/responsiveGridConventions.test.js` and `src/popoverClampConventions.test.js`
- * both enforce a narrow-viewport rule by reading every quoted string in the client
- * tree and inspecting the Tailwind tokens inside it. They need the same two
- * primitives — blank out comments so a doc block quoting an example class isn't
- * scanned as markup, then walk the remaining string literals — so those live here
- * once rather than being copied into each guard.
+ * `src/responsiveGridConventions.test.js`, `src/popoverClampConventions.test.js`,
+ * and `src/subNavConventions.test.js` all enforce a class-string convention by
+ * reading every quoted string in the client tree and inspecting the Tailwind
+ * tokens inside it. They need the same two primitives — blank out comments so a
+ * doc block quoting an example class isn't scanned as markup, then walk the
+ * remaining string literals — so those live here once rather than being copied
+ * into each guard.
  *
  * Node-only consumers (test files) exclusively; kept in `src/test/` for the same
  * reason as `trackedFiles.js` — `lib/` carries the enforced barrel + README rule

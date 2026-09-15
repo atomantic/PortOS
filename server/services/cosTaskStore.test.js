@@ -1749,6 +1749,30 @@ describe('cosTaskStore.approveTask', () => {
   it('returns an error when the cos task file is missing', async () => {
     expect((await approveTask('sys-x')).error).toBe('CoS task file not found');
   });
+
+  it('releases a USER row the parser withheld, so the hold is not a zombie', async () => {
+    // A row the parser had to RECOVER is withheld from the unattended spawn and
+    // now persists that hold in TASKS.md (#7300, #7367). Nothing else in the
+    // product can clear it: `updateTask` carries the flags through untouched, so
+    // without this the row stays pending forever.
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    mock.files.set(USER_FILE, '# Tasks\n\n## Pending\n- [ ] #task-held | URGENT | legacy user row\n  - prompt: payload\n');
+    mock.mtimes.set(USER_FILE, 1);
+
+    const held = (await getUserTasks()).tasks[0];
+    expect(held.approvalRequired).toBe(true);
+
+    const approved = await approveTask('task-held');
+    warn.mockRestore();
+
+    expect(approved.approvalRequired).toBe(false);
+    expect(approved.autoApproved).toBe(true);
+    expect(approved.metadata.prompt).toBe('payload');
+    expect(mock.events.some(e => e.name === 'tasks:changed' && e.payload.action === 'approved' && e.payload.type === 'user')).toBe(true);
+    // And the release is persisted: the rewritten row carries no hold.
+    __resetTaskCache();
+    expect((await getUserTasks()).tasks[0].approvalRequired).toBe(false);
+  });
 });
 
 // ─── Source-level regression guards (moved from cos.test.js) ───────────────

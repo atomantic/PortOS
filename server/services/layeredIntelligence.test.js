@@ -2875,8 +2875,23 @@ describe('forge I/O (injected exec)', () => {
     const created = exec.mock.calls.map(c => c[1][2]); // gh: ['label','create',<name>,...]
     expect(created).toContain(LI_LABEL);
     expect(created).toContain(LI_BLOCKING_LABEL);
-    // gh uses --force for idempotency
-    expect(exec.mock.calls[0][1]).toContain('--force');
+    expect(exec.mock.calls[0][1]).not.toContain('--force');
+  });
+
+  it('ensureForgeLabels accepts an existing label without overwriting it', async () => {
+    const exec = vi.fn().mockResolvedValue({
+      code: 1,
+      stdout: '',
+      stderr: 'label with this name already exists'
+    });
+    await expect(ensureForgeLabels({ cli: 'gh', cwd: '/x', exec })).resolves.toBeUndefined();
+    expect(exec).toHaveBeenCalledTimes(2);
+    expect(exec.mock.calls[0][1]).not.toContain('--force');
+  });
+
+  it('ensureForgeLabels surfaces label-create failures other than duplicates', async () => {
+    const exec = vi.fn().mockResolvedValue({ code: 1, stdout: '', stderr: 'HTTP 403: Resource not accessible' });
+    await expect(ensureForgeLabels({ cli: 'gh', cwd: '/x', exec })).rejects.toThrow('HTTP 403');
   });
 
   it('fileProposalToForge embeds slug marker and returns issue number from URL', async () => {

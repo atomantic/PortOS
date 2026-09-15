@@ -141,14 +141,14 @@ async function resolveGitlabNamespace(repoPath) {
  * `forge` selects how open changes are listed: GitHub PR head refs
  * (`gh pr list`) vs GitLab MR source branches (`glab mr list`).
  */
-async function inFlightIssueNumbers(repoPath, forge = 'github') {
+async function inFlightIssueNumbers(repoPath, forge = 'github', env) {
   const nums = new Set();
   // The branch list and the PR/MR list are independent CLI calls — run concurrently.
   const prListCall = forge === 'gitlab'
-    ? runCli('glab', withGlabJson(['mr', 'list', '--per-page', '100']), repoPath)
-    : runCli('gh', ['pr', 'list', '--state', 'open', '--json', 'headRefName', '-q', '.[].headRefName'], repoPath);
+    ? runCli('glab', withGlabJson(['mr', 'list', '--per-page', '100']), repoPath, env)
+    : runCli('gh', ['pr', 'list', '--state', 'open', '--json', 'headRefName', '-q', '.[].headRefName'], repoPath, env);
   const [branchRes, prRes] = await Promise.all([
-    runCli('git', ['branch', '-a', '--no-color', '--format=%(refname:short)'], repoPath),
+    runCli('git', ['branch', '-a', '--no-color', '--format=%(refname:short)'], repoPath, env),
     prListCall
   ]);
   const refs = (branchRes.stdout || '').split('\n').map((s) => s.trim()).filter(Boolean);
@@ -344,6 +344,30 @@ const GLAB_SELF_LOGIN_ARGS = ['api', 'user'];
 // queried and the truncation is LOGGED — never dropped silently.
 const MAX_COLLABORATOR_AUTHOR_QUERIES = 25;
 
+/**
+ * Env for PortOS-owned `gh` probes against a managed app.
+ *
+ * Agents already get `resolveForgeTokenEnv` so `gh` authenticates as the app's
+ * pinned (or owner-matched) account. The claim-issue detector used to inherit
+ * the install's ambient `GH_TOKEN` / active `gh` user instead, so a private
+ * repo under a different logged-in account failed the list as a "transient
+ * forge" blip and never dispatched. A caller-supplied `env` wins (prompt
+ * preloads already resolve the same overlay); otherwise mint and merge here.
+ * `GITHUB_TOKEN` / enterprise aliases from another account are dropped so they
+ * cannot outrank the pin.
+ */
+async function resolveGithubDetectorEnv(repoPath, env) {
+  if (env) return env;
+  const { resolveForgeTokenEnv } = await import('./forgeAuth.js');
+  const overlay = await resolveForgeTokenEnv(repoPath).catch(() => ({}));
+  if (!overlay?.GH_TOKEN) return undefined;
+  const merged = { ...process.env, ...overlay };
+  delete merged.GITHUB_TOKEN;
+  delete merged.GH_ENTERPRISE_TOKEN;
+  delete merged.GITHUB_ENTERPRISE_TOKEN;
+  return merged;
+}
+
 // Per-forge config for the shared issue detector. Each entry captures only what
 // differs between GitHub (`gh`) and GitLab (`glab`): the CLI + issue-list args,
 // how owner/self/collaborators mode resolves the author filter, the transient
@@ -507,6 +531,7 @@ async function detectForgeIssues(forgeKey, app, { issueAuthorFilter = 'self', is
   const cfg = FORGE_ISSUE_CONFIG[forgeKey];
   const repoPath = app?.repoPath;
   if (!repoPath) return { actionable: false, count: 0, reason: 'no-repo-path' };
+  if (cfg.cli === 'gh') env = await resolveGithubDetectorEnv(repoPath, env);
 
   // Shared shape for a "parked" (no actionable work) result where only `reason`
   // and `total` (the open-issue denominator) vary. `count`/`inFlightCount`/
@@ -663,7 +688,7 @@ async function detectForgeIssues(forgeKey, app, { issueAuthorFilter = 'self', is
 
   const hasAssignedIssue = issues.some((issue) => Array.isArray(issue.assignees) && issue.assignees.length > 0);
   const [inFlight, currentLoginResult] = await Promise.all([
-    inFlightIssueNumbers(repoPath, cfg.inFlightForge),
+    inFlightIssueNumbers(repoPath, cfg.inFlightForge, env),
     hasAssignedIssue
       ? resolveAuthenticatedLogin(cfg.cli, cfg.selfLoginArgs, repoPath, env)
       : Promise.resolve({ login: null })

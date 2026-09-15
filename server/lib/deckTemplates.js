@@ -12,6 +12,7 @@
  * `services/decks.js`.
  */
 
+import { aspectRatioPhrase } from './aspectRatio.js';
 import { composeStyledPrompt } from './composeStyledPrompt.js';
 import { buildVisualStyleClause, universeVisualStyleTokens } from './universeVisualStyle.js';
 
@@ -38,14 +39,38 @@ export const DECK_CARD_SIZE_MAX = 4096;
 // Per-kind default card size, at each kind's true physical trim ratio rather
 // than the generic 2:3 fallback above — poker cards are 2.5"×3.5" (5:7),
 // tarot cards are 2.75"×4.75" (11:19). Both hold the same 1536 long edge as
-// the generic default so render cost/detail stays comparable; `EntryThumbSlot`
-// renders with `object-cover`, so the modest difference from 2:3 crops fine
-// rather than distorting. A deck's own `cardSize` (persisted per-deck, see
-// `services/decks.js`) always wins — this is only the value new decks mint.
+// the generic default so render cost/detail stays comparable. Thumbnails size
+// their slot to this ratio and contain the image (`deckCardSize` /
+// `deckCardAspectStyle`) so the rank, index, title banner and decorative
+// border stay in frame — a 2:3 `object-cover` box crops playing cards on the
+// sides and tarot cards top/bottom. A deck's own `cardSize` (persisted
+// per-deck, see `services/decks.js`) always wins — this is only the value
+// new decks mint.
 export const DECK_CARD_SIZE_BY_KIND = Object.freeze({
   [DECK_KIND.PLAYING]: Object.freeze({ width: 1096, height: 1536 }),
   [DECK_KIND.TAROT]: Object.freeze({ width: 888, height: 1536 }),
 });
+
+const isPositiveEdge = (value) => Number.isFinite(value) && value > 0;
+
+/**
+ * The canvas a deck's cards actually render at: the persisted `cardSize` when
+ * both edges are positive, otherwise that kind's trim, otherwise the 2:3
+ * fallback. One read so the grid, drawer, sample thumbs and render-target
+ * summary cannot disagree about the box.
+ */
+export function deckCardSize(deck) {
+  const width = Number(deck?.cardSize?.width);
+  const height = Number(deck?.cardSize?.height);
+  if (isPositiveEdge(width) && isPositiveEdge(height)) return { width, height };
+  return { ...(DECK_CARD_SIZE_BY_KIND[deck?.kind] || DECK_CARD_SIZE) };
+}
+
+/** Inline `style.aspectRatio` for a card thumbnail, derived from `deckCardSize`. */
+export function deckCardAspectStyle(deck) {
+  const { width, height } = deckCardSize(deck);
+  return { aspectRatio: `${width} / ${height}` };
+}
 
 // The one card every deck has that is not a face: the shared back design.
 export const DECK_BACK_KEY = 'back';
@@ -63,10 +88,29 @@ export const CARD_STATUS = Object.freeze({
 // Per-kind layout clause. Every card of a deck shares it (editable on the deck)
 // so the whole set reads as ONE physical object — same border, same index
 // treatment — while the card prompt carries only the subject.
-export const DEFAULT_LAYOUT_PROMPT = Object.freeze({
-  [DECK_KIND.PLAYING]: 'Complete playing-card face, 2:3 portrait, ornate decorative border, the rank and suit index drawn in the top-left and bottom-right corners, symmetrical composition',
-  [DECK_KIND.TAROT]: 'Complete tarot card, 2:3 portrait, decorative framed border, the card title lettered in a banner along the bottom edge, symbolic centered composition',
-});
+//
+// The framing phrase is DERIVED from the kind's canvas, never written beside
+// it: these clauses kept telling the model "2:3 portrait" after the per-kind
+// sizes moved to each card's true trim (5:7 and 11:19), so the prompt and the
+// canvas disagreed about the shape being drawn. Deriving means changing a
+// canvas changes the sentence, and the two cannot drift apart again.
+const layoutClauseFor = {
+  [DECK_KIND.PLAYING]: (framing) => `Complete playing-card face, ${framing}, ornate decorative border, the rank and suit index drawn in the top-left and bottom-right corners, symmetrical composition`,
+  [DECK_KIND.TAROT]: (framing) => `Complete tarot card, ${framing}, decorative framed border, the card title lettered in a banner along the bottom edge, symbolic centered composition`,
+};
+
+export const DEFAULT_LAYOUT_PROMPT = Object.freeze(Object.fromEntries(
+  DECK_KINDS.map((kind) => {
+    // Loud at import rather than silent at render: a kind with no clause used to
+    // resolve to `undefined` here and reach `services/decks.js`, whose
+    // `|| ''` fallback would mint every card of that deck with NO shared layout
+    // at all — a whole deck rendered wrong before anyone noticed the gap.
+    const clause = layoutClauseFor[kind];
+    if (!clause) throw new Error(`Deck kind ${kind} has no DEFAULT_LAYOUT_PROMPT clause`);
+    const size = DECK_CARD_SIZE_BY_KIND[kind] || DECK_CARD_SIZE;
+    return [kind, clause(aspectRatioPhrase(size.width, size.height))];
+  }),
+));
 
 const PLAYING_SUITS = Object.freeze([
   { key: 'spades', name: 'Spades', symbol: '♠' },

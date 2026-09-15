@@ -1,9 +1,13 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const ensureForgeReachableMock = vi.fn(async () => ({ ok: true, status: 'ok', detail: null, remedy: null }));
+const resolveForgeForRepoMock = vi.fn(async () => ({ cli: 'gh', env: process.env, account: null }));
 vi.mock('./github.js', () => ({
   execGh: vi.fn(async () => '[]'),
   ensureForgeReachable: (...args) => ensureForgeReachableMock(...args),
+}));
+vi.mock('./forgeAuth.js', () => ({
+  resolveForgeForRepo: (...args) => resolveForgeForRepoMock(...args),
 }));
 vi.mock('./gitlab.js', () => ({ execGlab: vi.fn(), execGlabJson: vi.fn(async () => ({ rows: [], reason: 'ok' })) }));
 // gitRemote is the only effectful dependency of the real forge classifier, so
@@ -35,6 +39,7 @@ function useGitlabOrigin() {
 beforeEach(() => {
   vi.clearAllMocks();
   ensureForgeReachableMock.mockResolvedValue({ ok: true, status: 'ok', detail: null, remedy: null });
+  resolveForgeForRepoMock.mockResolvedValue({ cli: 'gh', env: process.env, account: null });
   getOriginInfo.mockResolvedValue({ isGithub: true, host: 'github.com', fullName: 'acme/widget' });
   readOriginRemoteUrl.mockResolvedValue('git@github.com:acme/widget.git');
   execGh.mockResolvedValue('[]');
@@ -141,6 +146,30 @@ describe('listAppIssues — GitHub', () => {
     const result = await listAppIssues(APP);
     expect(result.issues[0].body.length).toBeLessThan(9000);
     expect(result.issues[0].body).toMatch(/truncated/);
+  });
+
+  it('passes the app-pinned forge account token and repo cwd to gh and reachability check', async () => {
+    resolveForgeForRepoMock.mockResolvedValue({
+      cli: 'gh',
+      env: { ...process.env, GH_TOKEN: 'other-user-token' },
+      account: 'other-user',
+    });
+    execGh.mockResolvedValue('[]');
+    await listAppIssues({ ...APP, forgeAccount: 'other-user' });
+
+    expect(resolveForgeForRepoMock).toHaveBeenCalledWith('/repo', { forgeAccount: 'other-user' });
+    expect(ensureForgeReachableMock).toHaveBeenCalledWith('app-issues', {
+      hostname: 'github.com',
+      env: expect.objectContaining({ GH_TOKEN: 'other-user-token' }),
+    });
+    expect(execGh).toHaveBeenCalledWith(
+      expect.arrayContaining(['issue', 'list', '--repo', 'github.com/acme/widget']),
+      undefined,
+      expect.objectContaining({
+        cwd: '/repo',
+        env: expect.objectContaining({ GH_TOKEN: 'other-user-token' }),
+      }),
+    );
   });
 });
 
@@ -344,5 +373,28 @@ describe('prepareAppIssueClaim', () => {
     await expect(prepareAppIssueClaim(APP, '42', 'github')).rejects.toThrow('offline');
     execGh.mockResolvedValue('{"labels":["help wanted"]}');
     await expect(prepareAppIssueClaim(APP, '42', 'github')).rejects.toThrow('Contributor labels remain');
+  });
+
+  it('passes cwd and repo forge auth env when claiming on GitHub', async () => {
+    resolveForgeForRepoMock.mockResolvedValue({
+      cli: 'gh',
+      env: { ...process.env, GH_TOKEN: 'other-user-token' },
+      account: 'other-user',
+    });
+    execGh.mockResolvedValueOnce(JSON.stringify({ labels: [{ name: 'Help Wanted' }] }))
+      .mockResolvedValueOnce('')
+      .mockResolvedValueOnce(JSON.stringify({ labels: [] }));
+
+    await prepareAppIssueClaim({ ...APP, forgeAccount: 'other-user' }, '42', 'github');
+
+    expect(resolveForgeForRepoMock).toHaveBeenCalledWith('/repo', { forgeAccount: 'other-user' });
+    expect(execGh).toHaveBeenCalledWith(
+      ['issue', 'view', '42', '--repo', 'github.com/acme/widget', '--json', 'labels'],
+      undefined,
+      expect.objectContaining({
+        cwd: '/repo',
+        env: expect.objectContaining({ GH_TOKEN: 'other-user-token' }),
+      }),
+    );
   });
 });

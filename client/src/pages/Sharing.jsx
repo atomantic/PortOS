@@ -8,7 +8,7 @@
  */
 
 import { useEffect, useState } from 'react';
-import { useParams, useNavigate, Link } from 'react-router';
+import { useParams, useNavigate } from 'react-router';
 import {
   Share2, Plus, Trash2, Folder, Inbox, History, Save, Loader2, Check, X, Users, AlertCircle, RefreshCw, Copy, GitMerge,
 } from 'lucide-react';
@@ -30,6 +30,8 @@ import {
 } from '../services/api';
 import { getPageNavTabs } from '../../../server/lib/navManifest.js';
 import { buildPageNavTabs } from '../lib/pageNavTabs.js';
+import RouteTabsHeader from '../components/ui/RouteTabsHeader';
+import TabPills from '../components/ui/TabPills';
 
 const emptyForm = () => ({ name: '', path: '', mode: 'inbox', displayNameOverride: '', bioOverride: '' });
 
@@ -65,6 +67,12 @@ export const SECTIONS = buildPageNavTabs(getPageNavTabs('sharing'), SECTION_PRES
 // browser back/forward — a stale/hand-edited value degrades to Inbox.
 export const BUCKET_TAB_IDS = ['inbox', 'activity', 'settings'];
 
+const BUCKET_TABS = [
+  { id: 'inbox', label: 'Inbox', icon: Inbox },
+  { id: 'activity', label: 'Activity', icon: History },
+  { id: 'settings', label: 'Settings', icon: Save },
+];
+
 function SharingHeader({ active }) {
   return (
     <>
@@ -72,21 +80,9 @@ function SharingHeader({ active }) {
         <Share2 className="w-6 h-6 text-port-accent" />
         <h1 className="text-2xl font-bold text-white">Sharing</h1>
       </div>
-      <nav className="flex items-center gap-1 mb-6 border-b border-port-border">
-        {SECTIONS.map(({ id, label, icon: Icon, to }) => (
-          <Link
-            key={id}
-            to={to}
-            className={`inline-flex items-center gap-2 px-3 py-2 text-sm border-b-2 -mb-px ${
-              active === id
-                ? 'border-port-accent text-white'
-                : 'border-transparent text-gray-400 hover:text-white'
-            }`}
-          >
-            <Icon size={14} /> {label}
-          </Link>
-        ))}
-      </nav>
+      <div className="mb-6">
+        <RouteTabsHeader tabs={SECTIONS} activeTab={active} ariaLabel="Sharing sections" />
+      </div>
     </>
   );
 }
@@ -508,12 +504,19 @@ function SharingBuckets({ selectedId }) {
             </div>
           ) : (
             <div>
-              {/* Tabs */}
-              <div className="flex gap-1 mb-3 border-b border-port-border">
-                <TabButton active={activeTab === 'inbox'} onClick={() => setActiveTab('inbox')} icon={Inbox} label="Inbox" count={(inboxByBucket[selected.id] || []).length} />
-                <TabButton active={activeTab === 'activity'} onClick={() => setActiveTab('activity')} icon={History} label="Activity" />
-                <TabButton active={activeTab === 'settings'} onClick={() => setActiveTab('settings')} icon={Save} label="Settings" />
-              </div>
+              <TabPills
+                tabs={BUCKET_TABS.map((tab) => (
+                  tab.id === 'inbox'
+                    ? { ...tab, count: (inboxByBucket[selected.id] || []).length }
+                    : tab
+                ))}
+                activeTab={activeTab}
+                onChange={setActiveTab}
+                size="sm"
+                mobileCompact
+                ariaLabel="Bucket views"
+                className="mb-3"
+              />
 
               {activeTab === 'inbox' && (
                 <Inboxlist
@@ -541,22 +544,6 @@ function SharingBuckets({ selectedId }) {
         </section>
       </div>
     </div>
-  );
-}
-
-function TabButton({ active, onClick, icon: Icon, label, count }) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-xs ${active ? 'border-b-2 border-port-accent text-white' : 'border-b-2 border-transparent text-gray-400 hover:text-white'}`}
-    >
-      <Icon size={12} />
-      {label}
-      {typeof count === 'number' && count > 0 ? (
-        <span className="inline-flex items-center justify-center min-w-[16px] px-1 py-0 rounded-full bg-port-accent text-[10px] text-white">{count}</span>
-      ) : null}
-    </button>
   );
 }
 

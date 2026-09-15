@@ -5,6 +5,7 @@ import DeckCardDrawer from './DeckCardDrawer';
 const deck = {
   id: 'd1',
   kind: 'tarot',
+  cardSize: { width: 888, height: 1536 },
   layoutPrompt: 'Full tarot card, framed border',
   influences: { embrace: ['copperplate engraving'], avoid: ['blurry'] },
 };
@@ -45,4 +46,42 @@ describe('DeckCardDrawer render prompt', () => {
     expect(screen.getByText('Deck style')).toBeInTheDocument();
     expect(screen.getAllByText('—').length).toBeGreaterThan(0);
   });
+
+  it('renders each version with v{N}, active indicator, and unrounded thumbnail', () => {
+    const onSave = vi.fn();
+    renderDrawer({
+      card: {
+        ...card,
+        imageRefs: ['fool-v1.png', 'fool-v2.png'],
+        primaryImageRef: 'fool-v2.png',
+      },
+      onSave,
+    });
+
+    expect(screen.getByText('v1')).toBeInTheDocument();
+    expect(screen.getByText('v2')).toBeInTheDocument();
+
+    // v2 is active
+    expect(screen.getByRole('button', { name: 'v2 is active' })).toBeDisabled();
+
+    // v1 is not active, can be set as active
+    const setActiveBtn = screen.getByRole('button', { name: 'Set v1 as active' });
+    expect(setActiveBtn).toBeEnabled();
+    setActiveBtn.click();
+    expect(onSave).toHaveBeenCalledWith({ primaryImageRef: 'fool-v1.png' });
+
+    // Thumbnails should not have rounded corners cutting off card art, and
+    // must use the deck's own trim (not a 2:3 cover box) so the banner stays
+    // in frame.
+    const imgs = screen.getAllByRole('img');
+    expect(imgs.length).toBe(2);
+    imgs.forEach((img) => {
+      expect(img.className).not.toMatch(/\brounded\b/);
+      expect(img.className).toMatch(/\bobject-contain\b/);
+      expect(img.className).not.toMatch(/\bobject-cover\b/);
+      expect(img.className).not.toMatch(/aspect-\[2\/3\]/);
+      expect(img.style.aspectRatio).toBe('888 / 1536');
+    });
+  });
 });
+

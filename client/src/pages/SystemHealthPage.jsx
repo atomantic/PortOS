@@ -1,5 +1,5 @@
 import { useEffect, useState, useRef } from 'react';
-import { Link, Navigate, NavLink, useParams } from 'react-router';
+import { Link, Navigate, useParams } from 'react-router';
 import { Activity, AlertTriangle, HardDrive, Cpu, Database, ListOrdered, RefreshCw, ServerCog, X, Zap } from 'lucide-react';
 import * as api from '../services/api';
 import toast from '../components/ui/Toast';
@@ -14,6 +14,7 @@ import MediaCapacityPanel from '../components/system-resources/MediaCapacityPane
 import BuildStampPanel from '../components/system-resources/BuildStampPanel.jsx';
 import { getPageNavTabs } from '../../../server/lib/navManifest.js';
 import { buildPageNavTabs } from '../lib/pageNavTabs.js';
+import RouteTabsHeader from '../components/ui/RouteTabsHeader';
 import { HEALTH_STYLE, pctTone, barTone, resolveHealthThresholds } from '../lib/healthStyle.js';
 
 // Every alert names its own next step. The server tags each warning with a
@@ -75,19 +76,9 @@ export default function SystemResourcesPage() {
             </p>
           </div>
         </div>
-        <nav aria-label="System resources sections" className="mt-5 grid grid-cols-3 border-b border-port-border sm:flex sm:gap-1">
-          {RESOURCE_TABS.map(({ id, label, icon: Icon }) => (
-            <NavLink
-              key={id}
-              to={`/system-resources/${id}`}
-              className={({ isActive }) => `flex min-h-[40px] items-center justify-center gap-1 border-b-2 px-1 py-2 text-xs transition-colors sm:shrink-0 sm:gap-1.5 sm:px-3 sm:text-sm ${
-                isActive ? 'border-port-accent text-white' : 'border-transparent text-gray-500 hover:text-gray-200'
-              }`}
-            >
-              <Icon size={14} /> {label}
-            </NavLink>
-          ))}
-        </nav>
+        <div className="mt-5">
+          <RouteTabsHeader tabs={RESOURCE_TABS} activeTab={tab} ariaLabel="System resources sections" />
+        </div>
       </header>
 
       {tab === 'overview' && <SystemHealthOverview />}

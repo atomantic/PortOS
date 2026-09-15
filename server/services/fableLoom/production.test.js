@@ -33,7 +33,7 @@ const mediaModelMocks = vi.hoisted(() => ({
   isEditOnly: vi.fn(),
 }));
 const imagePrepareMocks = vi.hoisted(() => ({
-  selectLocalImageModel: vi.fn(),
+  selectLocalImageModelFromSettings: vi.fn(),
   resolveLocalImageModel: vi.fn(),
 }));
 const imageSidecarMocks = vi.hoisted(() => ({
@@ -145,7 +145,7 @@ describe('fableLoom production service', () => {
     };
     mediaModelMocks.getImageModels.mockReturnValue([imageModel]);
     mediaModelMocks.isEditOnly.mockReturnValue(false);
-    imagePrepareMocks.selectLocalImageModel.mockReturnValue(imageModel);
+    imagePrepareMocks.selectLocalImageModelFromSettings.mockReturnValue(imageModel);
     imagePrepareMocks.resolveLocalImageModel.mockReturnValue({ pythonPath: null, selectedModel: imageModel });
     videoModelMocks.defaultVideoModelId.mockReturnValue('video-model');
     const videoModel = {

@@ -32,10 +32,38 @@ const THUMB_DIMENSIONS = {
   sheet: 'w-20 h-30 xl:w-40 xl:h-60',
 };
 
+// Width-only tokens used when the host supplies a canvas (`aspectRatio`) so
+// height comes from that ratio instead of the 2:3 `h-*` above. Playing cards
+// are 5:7 and tarot 11:19; a 2:3 `object-cover` box crops their edges.
+const THUMB_WIDTH = {
+  sm: 'w-12',
+  lg: 'w-16',
+  xl: 'w-40',
+  sheet: 'w-20 xl:w-40',
+};
+
+const isPositiveEdge = (value) => Number.isFinite(value) && value > 0;
+
+function thumbFrameProps(size, aspectRatio, { fluid = false } = {}) {
+  const valid = isPositiveEdge(aspectRatio?.width) && isPositiveEdge(aspectRatio?.height);
+  if (!valid) {
+    return {
+      className: `${THUMB_DIMENSIONS[size] || THUMB_DIMENSIONS.sm} shrink-0`,
+      style: undefined,
+    };
+  }
+  const widthClass = fluid ? 'w-full' : (THUMB_WIDTH[size] || THUMB_WIDTH.sm);
+  return {
+    className: `${widthClass} shrink-0`,
+    style: { aspectRatio: `${aspectRatio.width} / ${aspectRatio.height}` },
+  };
+}
+
 export default function EntryThumbSlot({
   inFlightJobId = null,
   imageRefs = null,
   primaryImageRef = null,
+  displayedImageRef = null,
   onRender = null,
   onPreview = null,
   // Fired with the rendered filename when an in-flight job completes (forwarded
@@ -74,6 +102,15 @@ export default function EntryThumbSlot({
   // variation + canon avatar rows — matched to the 2:3 aspect of typical
   // 1024x1536 universe renders so the slot doesn't crop the subject.
   size = 'sm',
+  rounded = true,
+  // Optional canvas `{ width, height }`. When set, the slot's box uses that
+  // ratio (instead of the size token's 2:3 height) and the image `object-contain`s
+  // so a playing-card or tarot trim is not cropped by the default portrait box.
+  aspectRatio = null,
+  // Stretch to the host's width. Only applies together with `aspectRatio` —
+  // without a ratio, a `w-full` box has no height. Used by the deck grid so
+  // each card fills its tile at the deck's own trim.
+  fluid = false,
 }) {
   // MediaJobThumb fires this from an effect keyed on `[effectiveStatus, onStatus]`,
   // so it must not be a fresh arrow per render or it re-fires on every parent
@@ -95,8 +132,9 @@ export default function EntryThumbSlot({
     // host would have to reserve the height itself to stop the row jumping when
     // a render starts and again when it finishes.
     const pendingSize = size === 'xl' ? 'lg' : size === 'lg' ? 'sm' : 'xs';
+    const pendingBox = thumbFrameProps(size, aspectRatio, { fluid });
     return (
-      <div className={`${THUMB_DIMENSIONS[size] || THUMB_DIMENSIONS.sm} shrink-0 flex items-center justify-center`}>
+      <div className={`${pendingBox.className} flex items-center justify-center`} style={pendingBox.style}>
         <MediaJobThumb
           jobId={inFlightJobId}
           label={alt}
@@ -110,6 +148,7 @@ export default function EntryThumbSlot({
           // would leave the slot stuck — clear it via the no-filename path so the
           // slot returns to an actionable state and the entity can be re-rendered.
           onStatus={onStatus}
+          rounded={rounded}
         />
       </div>
     );
@@ -117,9 +156,12 @@ export default function EntryThumbSlot({
   const refs = Array.isArray(imageRefs) ? imageRefs : [];
   const hasImage = refs.length > 0 || !!primaryImageRef;
   if (hasImage) {
-    const chosen = (primaryImageRef && refs.includes(primaryImageRef))
+    const defaultChosen = (primaryImageRef && refs.includes(primaryImageRef))
       ? primaryImageRef
       : refs[refs.length - 1];
+    const chosen = (displayedImageRef && refs.includes(displayedImageRef))
+      ? displayedImageRef
+      : defaultChosen;
     return (
       <WalkBackThumb
         filename={chosen}
@@ -128,6 +170,9 @@ export default function EntryThumbSlot({
         isPrimary={!!primaryImageRef && primaryImageRef === chosen}
         onClick={onPreview}
         size={size}
+        rounded={rounded}
+        aspectRatio={aspectRatio}
+        fluid={fluid}
       />
     );
   }
@@ -135,7 +180,7 @@ export default function EntryThumbSlot({
   // (48x80 / 64x96 / 160x240) matches the 2:3 aspect of typical universe
   // renders so the row reserves the same vertical space as WalkBackThumb's
   // completed image, eliminating row jitter across the three states.
-  const dim = THUMB_DIMENSIONS[size] || THUMB_DIMENSIONS.sm;
+  const emptyBox = thumbFrameProps(size, aspectRatio, { fluid });
   const iconSize = size === 'xl' ? 32 : size === 'lg' ? 18 : 14;
   const hint = canRender && onRender ? emptyHint : disabledHint;
   return (
@@ -144,7 +189,8 @@ export default function EntryThumbSlot({
       onClick={() => onRender?.()}
       disabled={!onRender || !canRender}
       title={hint} aria-label={hint}
-      className={`${dim} shrink-0 flex items-center justify-center rounded border border-dashed border-port-border bg-port-bg/40 text-gray-500 hover:border-port-accent/50 hover:text-port-accent hover:bg-port-accent/5 disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:border-port-border disabled:hover:text-gray-500 disabled:hover:bg-port-bg/40 transition-colors`}
+      style={emptyBox.style}
+      className={`${emptyBox.className} flex items-center justify-center ${rounded ? 'rounded' : ''} border border-dashed border-port-border bg-port-bg/40 text-gray-500 hover:border-port-accent/50 hover:text-port-accent hover:bg-port-accent/5 disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:border-port-border disabled:hover:text-gray-500 disabled:hover:bg-port-bg/40 transition-colors`}
     >
       <EmptyIcon size={iconSize} />
     </button>
@@ -156,7 +202,10 @@ export default function EntryThumbSlot({
 // (stale gallery file → walk back through prior renders → collapse). Mirrors
 // `EntryCardThumbnail` in `EntryCard.jsx`; intentionally kept in sync — visual
 // drift would defeat the point of a shared slot.
-function WalkBackThumb({ filename, alt, onClick, isPrimary = false, fallbackRefs = null, size = 'sm' }) {
+function WalkBackThumb({
+  filename, alt, onClick, isPrimary = false, fallbackRefs = null, size = 'sm', rounded = true,
+  aspectRatio = null, fluid = false,
+}) {
   const candidates = [];
   if (filename) candidates.push(filename);
   if (Array.isArray(fallbackRefs)) {
@@ -170,31 +219,40 @@ function WalkBackThumb({ filename, alt, onClick, isPrimary = false, fallbackRefs
   const candidateKey = candidates.join('|');
   const [idx, setIdx] = useState(0);
   useEffect(() => { setIdx(0); }, [candidateKey]);
-  const dim = THUMB_DIMENSIONS[size] || THUMB_DIMENSIONS.sm;
+  const box = thumbFrameProps(size, aspectRatio, { fluid });
   if (!candidates.length || idx >= candidates.length) {
     // All candidates failed to load — collapse to empty (no render button
     // here; the user can re-render from the action column).
-    return <div className={`${dim} shrink-0 rounded border border-port-border bg-port-bg/40`} />;
+    return (
+      <div
+        className={`${box.className} ${rounded ? 'rounded' : ''} border border-port-border bg-port-bg/40`}
+        style={box.style}
+      />
+    );
   }
   const currentFilename = candidates[idx];
+  const contain = isPositiveEdge(aspectRatio?.width) && isPositiveEdge(aspectRatio?.height);
   const img = (
     <img
       src={`/data/images/${currentFilename}`}
       alt={alt || currentFilename}
-      className="w-full h-full object-cover"
+      className={`w-full h-full ${contain ? 'object-contain' : 'object-cover'}`}
       loading="lazy"
       onError={() => setIdx((n) => n + 1)}
     />
   );
   const frame = (
-    <div className={`relative ${dim} shrink-0 rounded overflow-hidden border ${
-      isPrimary ? 'border-port-accent' : 'border-port-border'
-    }`}>
+    <div
+      className={`relative ${box.className} ${rounded ? 'rounded' : ''} overflow-hidden border bg-port-bg ${
+        isPrimary ? 'border-port-accent' : 'border-port-border'
+      }`}
+      style={box.style}
+    >
       {img}
       {isPrimary ? (
         <span
           title="Primary reference image"
-          className="absolute top-0.5 right-0.5 p-0.5 rounded bg-port-accent text-white"
+          className={`absolute top-0.5 right-0.5 p-0.5 ${rounded ? 'rounded' : ''} bg-port-accent text-white`}
         >
           <Star size={8} fill="currentColor" />
         </span>
@@ -208,7 +266,7 @@ function WalkBackThumb({ filename, alt, onClick, isPrimary = false, fallbackRefs
       onClick={() => onClick(currentFilename)}
       title={`Preview ${alt || currentFilename}`}
       aria-label={`Preview ${alt || currentFilename}`}
-      className="p-0 bg-transparent border-0 cursor-zoom-in"
+      className={`p-0 bg-transparent border-0 cursor-zoom-in ${fluid ? 'w-full' : ''}`}
     >
       {frame}
     </button>

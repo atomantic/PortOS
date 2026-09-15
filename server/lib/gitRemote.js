@@ -1,5 +1,6 @@
 import { execGit } from './execGit.js';
 import { PATHS } from './fileUtils.js';
+import { resolveSshHostAlias } from './sshHostAlias.js';
 
 export const UPSTREAM_OWNER = 'atomantic';
 export const UPSTREAM_REPO = 'PortOS';
@@ -31,8 +32,12 @@ export function redactRemoteUrlCredentials(url) {
  *   https://github.com/owner/repo
  *   git@github.enterprise.com:org/repo.git
  *
- * The returned `host` is always normalized (no trailing `:port`) so callers
- * comparing against e.g. `github.com` don't have to special-case ports.
+ * The returned `host` is always normalized: no trailing `:port`, and a personal
+ * SSH `Host` alias (`git@github-acme:acme/widget.git`, backed by a
+ * `HostName github.com` block in `~/.ssh/config`) is resolved to the host it
+ * actually connects to. Both normalizations exist for the same reason — callers
+ * compare against e.g. `github.com` to decide which forge a repo lives on, and
+ * neither a port nor an alias changes that answer. See lib/sshHostAlias.js.
  * Rejects URLs with extra path segments (e.g. `git@host:owner/repo/extra`)
  * since those would produce a `fullName` like `owner/repo/extra` that breaks
  * `gh repo sync` and fork classification.
@@ -48,6 +53,9 @@ export function parseGitRemoteUrl(url) {
   // Normalize host — strip an optional `:port` suffix so `github.com:443`
   // and `github.com` compare equal.
   const stripPort = (h) => h.replace(/:\d+$/, '');
+  // Port first, then alias: an alias is written bare in ssh config, so
+  // `github-acme:22` must have its port removed before the lookup.
+  const normalizeHost = (h) => resolveSshHostAlias(stripPort(h));
 
   // SCP-style SSH: git@host:[port/]owner/repo(.git). repo segment cannot
   // contain '/'. The optional `(?:\d+\/)?` matches the GitHub-specific variant
@@ -55,14 +63,14 @@ export function parseGitRemoteUrl(url) {
   // hop port.
   const scpMatch = trimmed.match(/^[a-zA-Z0-9._-]+@([^:]+):(?:\d+\/)?([^/]+)\/([^/]+)$/);
   if (scpMatch) {
-    return { host: stripPort(scpMatch[1]), owner: scpMatch[2], repo: stripGit(scpMatch[3]) };
+    return { host: normalizeHost(scpMatch[1]), owner: scpMatch[2], repo: stripGit(scpMatch[3]) };
   }
 
   // URL-style: scheme://[user@]host(:port)/owner/repo(.git) — repo segment
   // cannot contain '/'.
   const urlMatch = trimmed.match(/^[a-zA-Z]+:\/\/(?:[^@/]+@)?([^/]+)\/([^/]+)\/([^/]+)$/);
   if (urlMatch) {
-    return { host: stripPort(urlMatch[1]), owner: urlMatch[2], repo: stripGit(urlMatch[3]) };
+    return { host: normalizeHost(urlMatch[1]), owner: urlMatch[2], repo: stripGit(urlMatch[3]) };
   }
 
   return null;

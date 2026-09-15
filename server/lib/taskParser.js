@@ -189,19 +189,21 @@ function matchTaskLine(line) {
       // withheld from `getAutoApprovedTasks` regardless of its id. This is the same
       // hold the unknown-checkbox path takes, from the other side of the row.
       //
-      // An INTERNAL recovered row additionally lands in the approval queue, because
-      // its split is ambiguous in a second way — the priority field could itself have
+      // A recovered row of EITHER kind lands in the approval queue, because its
+      // split is ambiguous in a second way — the priority field could itself have
       // held a pipe ('UR|GENT', 'UR|AUTO' were both reachable), so which segment was
       // the approval flag is a guess, and that flag gates an agent spawn.
       //
-      // A user-prefixed row claims no approval: the user file writes no flags, so the
-      // claim would be erased by the next write and only strand the row in the
-      // meantime (`approveTask` reads the internal file, and TaskItem hides Approve
-      // for a user task). Its `autoApproved: false` is what the internal file's
-      // write turns into an APPROVAL flag, so the hold survives there and evaporates
-      // in the user file — which is exactly where it is not needed, since user tasks
-      // are never dequeued autonomously. A strict match on either kind is untouched.
-      approvalRequired: (recovery && isInternalTaskId(taskId)) || approvalFlag === 'APPROVAL',
+      // `approvalRequired` — not `autoApproved: false` alone — is what carries the
+      // hold, because it is the one signal BOTH files can write (`APPROVAL`). The
+      // hold used to be inferred on the user side and evaporate on the next write:
+      // the row healed into a strict row with no flag, and the read after that
+      // parsed it as auto-approved and spawned an agent from what #7300 established
+      // was prose. `autoApproved: false` cannot stand in for it there — every user
+      // task `buildQueuedTask` mints carries that value, so writing a flag for it
+      // would hold the entire user queue. A strict match on either kind is
+      // untouched.
+      approvalRequired: recovery || approvalFlag === 'APPROVAL',
       autoApproved: !recovery && (withFlag ? approvalFlag === 'AUTO' : true),
       description: description.trim(),
       metadata: {}
@@ -418,8 +420,39 @@ function flattenDescription(task) {
 }
 
 /**
+ * The `| AUTO |` / `| APPROVAL |` segment a task row carries, or `''`.
+ *
+ * The internal file uses the whole vocabulary: every task that carries an
+ * `autoApproved` at all states it, and a held one says APPROVAL.
+ *
+ * The user file carries ONLY the hold. `APPROVAL` when the row is withheld from
+ * the unattended spawn (#7300, #7367), nothing otherwise — so an ordinary user
+ * row keeps the flagless shape it has always had, and the hold stops being
+ * inferred from a recovery match that the very next write erases.
+ *
+ * Which is why the user side keys on `approvalRequired` and NOT on the
+ * internal side's wider `heldBack`: `buildQueuedTask` mints every user task
+ * with `autoApproved: false` (only an internal task is ever auto-approved in
+ * memory), so writing a flag for that value would hold the entire user queue on
+ * its first rewrite.
+ */
+function approvalFlagSegment(task, includeApprovalFlags) {
+  if (!includeApprovalFlags) return task.approvalRequired === true ? ' | APPROVAL' : '';
+  // `autoApproved === false` writes APPROVAL, not AUTO (#7300). A task that says
+  // it is not auto-approved must not be healed into a row the next read dequeues:
+  // APPROVAL is the only flag this format has that survives the round trip as a
+  // hold. An `undefined` autoApproved is NOT that claim — it stays on the old
+  // path so a task that never carried the field keeps its flagless row.
+  const heldBack = task.approvalRequired || task.autoApproved === false;
+  if (heldBack) return ' | APPROVAL';
+  return task.autoApproved !== undefined ? ' | AUTO' : '';
+}
+
+/**
  * Generate TASKS.md content from tasks array
- * @param {boolean} includeApprovalFlags - Whether to include AUTO/APPROVAL flags (for internal CoS tasks)
+ * @param {boolean} includeApprovalFlags - Whether to include the full AUTO/APPROVAL
+ *   vocabulary (for internal CoS tasks). The user file writes only the APPROVAL
+ *   hold — see `approvalFlagSegment`.
  */
 export function generateTasksMarkdown(tasks, includeApprovalFlags = false) {
   // Repair BEFORE grouping: groupTasksByStatus buckets only the five known
@@ -452,15 +485,7 @@ export function generateTasksMarkdown(tasks, includeApprovalFlags = false) {
 
     for (const task of sortByPriority(sectionTasks)) {
       const checkbox = statusToCheckbox[task.status];
-      // `autoApproved === false` writes APPROVAL, not AUTO (#7300). A task that says
-      // it is not auto-approved must not be healed into a row the next read dequeues:
-      // APPROVAL is the only flag this format has that survives the round trip as a
-      // hold. An `undefined` autoApproved is NOT that claim — it stays on the old
-      // path so a task that never carried the field keeps its flagless row.
-      const heldBack = task.approvalRequired || task.autoApproved === false;
-      const approvalFlag = includeApprovalFlags && (heldBack || task.autoApproved !== undefined)
-        ? ` | ${heldBack ? 'APPROVAL' : 'AUTO'}`
-        : '';
+      const approvalFlag = approvalFlagSegment(task, includeApprovalFlags);
       lines.push(`- ${checkbox} #${task.id} | ${task.priority}${approvalFlag} | ${flattenDescription(task)}`);
 
       // Add metadata (escape newlines in values for single-line storage).

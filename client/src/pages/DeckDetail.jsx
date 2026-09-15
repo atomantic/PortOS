@@ -192,6 +192,24 @@ function DeckEditor({ id }) {
     if (card) patchLocalCard(card.id, card);
   };
 
+  const handleSetActiveVersion = async (cardId, filename) => {
+    const prev = deck?.cards?.find((c) => c.id === cardId)?.primaryImageRef;
+    patchLocalCard(cardId, { primaryImageRef: filename });
+    const card = await updateDeckCard(id, cardId, { primaryImageRef: filename }, { silent: true }).catch((err) => {
+      toast.error(`Card save failed: ${err.message}`);
+      return null;
+    });
+    if (!mountedRef.current) return;
+    if (card) {
+      patchLocalCard(cardId, card);
+      toast.success('Active version updated');
+    } else if (prev !== undefined) {
+      // The save failed: roll back the optimistic patch so the grid never
+      // displays a version the server doesn't have as active.
+      patchLocalCard(cardId, { primaryImageRef: prev });
+    }
+  };
+
   // The slot settled with a file — the same merge the server hook performs.
   const onRenderComplete = useCallback((cardId, filename) => {
     if (!filename) return;
@@ -307,7 +325,8 @@ function DeckEditor({ id }) {
           renderTarget={renderTarget}
           onOpenCard={openCard}
           onRenderCard={renderCard}
-          onPreview={(card) => previewFilename(card.primaryImageRef || card.imageRefs.at(-1))}
+          onPreview={(card, filename) => previewFilename(filename || card.primaryImageRef || card.imageRefs.at(-1))}
+          onSetActiveVersion={handleSetActiveVersion}
           onRenderComplete={onRenderComplete}
           onRenderTerminal={onRenderTerminal}
         />

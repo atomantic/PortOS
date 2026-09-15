@@ -232,4 +232,32 @@ describe('SlashDoRunDrawer', () => {
     await waitFor(() => expect(screen.getByText('boom')).toBeInTheDocument());
     expect(api.getAppWorkItems).toHaveBeenCalledTimes(1);
   });
+
+  it('allows selecting merge-on-green, hides reviewer picker, and sends prCompletion', async () => {
+    const onQueued = vi.fn();
+    renderDrawer({ onQueued });
+
+    await waitFor(() => expect(screen.getByText('Reviewers (in order):')).toBeInTheDocument());
+    await userEvent.selectOptions(screen.getByLabelText('After opening PR'), 'merge-on-green');
+
+    expect(screen.queryByText('Reviewers (in order):')).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: /Queue \/do:next/ }));
+
+    await waitFor(() => expect(onQueued).toHaveBeenCalled());
+    const [, , settings] = api.createSlashdoTask.mock.calls.at(-1);
+    expect(settings.prCompletion).toBe('merge-on-green');
+    expect(settings.reviewers).toBeUndefined();
+  });
+
+  it('seeds prCompletion from claimReviewers when available', async () => {
+    api.getAppClaimReviewers.mockResolvedValue({
+      source: 'task-override', prCompletion: 'merge-on-green', reviewers: [], usernames: [], optionalReviewers: [],
+      reviewerMaxRounds: {}, reviewerModels: {}, reviewerEfforts: {}, csv: ''
+    });
+
+    renderDrawer();
+
+    await waitFor(() => expect(screen.getByLabelText('After opening PR')).toHaveValue('merge-on-green'));
+    expect(screen.queryByText('Reviewers (in order):')).not.toBeInTheDocument();
+  });
 });

@@ -2,12 +2,13 @@ import { useState, useEffect, useCallback, useMemo, useId, useRef } from 'react'
 import { Link } from 'react-router';
 import {
   AlertTriangle, Bot, ChevronDown, ChevronRight, CircleDot, ClipboardCheck,
-  ExternalLink, Loader2, MessageSquare, RefreshCw, Rocket, Search, Tag, User
+  ExternalLink, GitPullRequest, Loader2, MessageSquare, RefreshCw, Rocket, Search, Tag, User
 } from 'lucide-react';
 import BrailleSpinner from '../../BrailleSpinner';
 import Banner from '../../ui/Banner';
 import Pill from '../../ui/Pill';
 import toast from '../../ui/Toast';
+import { DEFAULT_PR_COMPLETION, PR_COMPLETION_OPTIONS, prCompletionOption } from '../../cos/constants';
 import ProviderModelSelector from '../../ProviderModelSelector';
 import { useThemeContext } from '../../ThemeContext';
 import { useCosTaskUpdates } from '../../../hooks/useCosTaskUpdates';
@@ -228,12 +229,15 @@ function LabelFilterChip({ facet, hidden, onToggle }) {
  */
 export default function IssuesTab({ appId, appName }) {
   const searchId = useId();
+  const filedById = useId();
   const overrideContextId = useId();
+  const prCompletionId = useId();
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [query, setQuery] = useState('');
   const [unassignedOnly, setUnassignedOnly] = useState(false);
+  const [filedBy, setFiledBy] = useState('');
   // Exclude mode tracks labels to hide (a later refresh's new label stays
   // visible). Include mode — entered by Hide all labels — tracks labels to
   // keep, so turning `critical` back on lists every issue that carries it,
@@ -271,14 +275,24 @@ export default function IssuesTab({ appId, appName }) {
   // Models → Code Reviewers list, whenever a claim-work override is in play (see
   // `GET /apps/:id/claim-reviewers`). Untouched fields remain inherited.
   const claimReviewers = useClaimReviewers(appId);
+  const [prCompletion, setPrCompletion] = useState(DEFAULT_PR_COMPLETION);
+  const [prCompletionTouched, setPrCompletionTouched] = useState(false);
+  useEffect(() => {
+    if (!prCompletionTouched && claimReviewers?.prCompletion) {
+      setPrCompletion(claimReviewers.prCompletion);
+    }
+  }, [claimReviewers?.prCompletion, prCompletionTouched]);
   const [reviewOverrides, setReviewOverrides] = useState({});
   const reviewerModelOptions = useReviewerModelOptions();
-  const invalidReviewOverride = Array.isArray(reviewOverrides.reviewers)
+  const invalidReviewOverride = prCompletion === 'review-then-merge'
+    && Array.isArray(reviewOverrides.reviewers)
     && !reviewOverrides.reviewers.some(reviewer => reviewer !== 'copilot');
   const [showReviewOverride, setShowReviewOverride] = useState(false);
   useEffect(() => {
     setReviewOverrides({});
     setShowReviewOverride(false);
+    setPrCompletion(DEFAULT_PR_COMPLETION);
+    setPrCompletionTouched(false);
   }, [appId]);
 
   // Keep the event-driven path based on the latest runs without putting a
@@ -296,6 +310,7 @@ export default function IssuesTab({ appId, appName }) {
     setOverrideContext('');
     setLabelFilter(defaultLabelFilter());
     setUnassignedOnly(false);
+    setFiledBy('');
   }, [appId]);
 
   const applyTaskUpdate = useCallback((task) => {
@@ -393,15 +408,24 @@ export default function IssuesTab({ appId, appName }) {
     return [...byName.values()].sort((a, b) => a.name.localeCompare(b.name));
   }, [data]);
 
+  const authorOptions = useMemo(() => {
+    const authors = new Set();
+    for (const issue of data?.issues || []) {
+      if (issue.author) authors.add(issue.author);
+    }
+    return [...authors].sort((a, b) => a.localeCompare(b));
+  }, [data]);
+
   const issues = useMemo(() => {
     const q = query.trim().toLowerCase();
     const rows = haystacks.filter(h =>
       issuePassesLabelFilter(h.issue, labelFilter)
       && (!unassignedOnly || h.issue.assignees.length === 0)
+      && (!filedBy || h.issue.author === filedBy)
       && (!q || h.hay.includes(q))
     );
     return rows.map(h => h.issue);
-  }, [haystacks, query, labelFilter, unassignedOnly]);
+  }, [haystacks, query, labelFilter, unassignedOnly, filedBy]);
 
   const total = data?.issues?.length ?? 0;
   // Only labels actually on this tracker count as "filtering something" — the
@@ -450,7 +474,10 @@ export default function IssuesTab({ appId, appName }) {
       provider: selectedProviderId || undefined,
       model: selectedModel || undefined,
       effort: effort || undefined,
-      ...(action === 'claim' ? reviewOverrides : {}),
+      ...(action === 'claim' ? {
+        prCompletion,
+        ...(prCompletion === 'review-then-merge' ? reviewOverrides : {}),
+      } : {}),
       ...(trimmedOverrideContext ? { overrideContext: trimmedOverrideContext } : {}),
     }, { silent: true })
       .catch(err => {
@@ -520,6 +547,23 @@ export default function IssuesTab({ appId, appName }) {
         >
           <User size={13} /> Unassigned only
         </button>
+        <div className="flex items-center gap-1.5">
+          <label htmlFor={filedById} className="text-xs text-gray-400 shrink-0">
+            Filed by
+          </label>
+          <select
+            id={filedById}
+            aria-label="Filed by"
+            value={filedBy}
+            onChange={e => setFiledBy(e.target.value)}
+            className="px-2.5 py-1.5 bg-port-bg border border-port-border rounded-lg text-xs text-white focus:border-port-accent focus:outline-hidden"
+          >
+            <option value="">All</option>
+            {authorOptions.map(author => (
+              <option key={author} value={author}>{author}</option>
+            ))}
+          </select>
+        </div>
         <div className="relative ml-auto">
           <label htmlFor={searchId} className="sr-only">Filter issues</label>
           <Search size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-500" />
@@ -605,7 +649,28 @@ export default function IssuesTab({ appId, appName }) {
             />
           </div>
         </div>
-        {claimReviewers && !invalidReviewOverride && (
+        <div className="flex flex-col sm:flex-row sm:items-center gap-2">
+          <label htmlFor={prCompletionId} className="flex items-center gap-1.5 text-xs text-gray-500 uppercase tracking-wide shrink-0">
+            <GitPullRequest size={14} /> After opening PR
+          </label>
+          <div className="flex-1 flex flex-wrap items-center gap-2">
+            <select
+              id={prCompletionId}
+              aria-label="After opening PR"
+              value={prCompletion}
+              onChange={e => { setPrCompletion(e.target.value); setPrCompletionTouched(true); }}
+              className="px-2.5 py-1.5 bg-port-bg border border-port-border rounded-lg text-xs text-white focus:border-port-accent focus:outline-hidden"
+            >
+              {PR_COMPLETION_OPTIONS.map(opt => (
+                <option key={opt.value} value={opt.value}>{opt.label}</option>
+              ))}
+            </select>
+            <span className="text-xs text-gray-500">
+              {prCompletionOption(prCompletion)?.description}
+            </span>
+          </div>
+        </div>
+        {claimReviewers && prCompletion === 'review-then-merge' && !invalidReviewOverride && (
           <div className="flex flex-col sm:flex-row sm:items-center gap-2">
             <span className="flex items-center gap-1.5 text-xs text-gray-500 uppercase tracking-wide shrink-0">
               <ClipboardCheck size={14} /> Reviewed by
@@ -628,7 +693,7 @@ export default function IssuesTab({ appId, appName }) {
             </p>
           </div>
         )}
-        {claimReviewers && (
+        {claimReviewers && prCompletion === 'review-then-merge' && (
           <div className="space-y-2">
             <button
               type="button"
@@ -697,9 +762,13 @@ export default function IssuesTab({ appId, appName }) {
         <div className="px-3 py-2 text-sm text-gray-500 bg-port-card border border-port-border rounded-lg">
           {query.trim()
             ? <>No open issues match &ldquo;{query}&rdquo;{hidingByLabel ? ' with the current label filters' : ''}.</>
-            : unassignedOnly
-              ? <>No unassigned open issues{hidingByLabel ? ' match the current label filters' : ''}.</>
-              : 'No open issues match the current label filters.'}
+            : unassignedOnly && filedBy
+              ? <>No unassigned open issues filed by {filedBy}{hidingByLabel ? ' match the current label filters' : ''}.</>
+              : unassignedOnly
+                ? <>No unassigned open issues{hidingByLabel ? ' match the current label filters' : ''}.</>
+                : filedBy
+                  ? <>No open issues filed by {filedBy}{hidingByLabel ? ' match the current label filters' : ''}.</>
+                  : 'No open issues match the current label filters.'}
         </div>
       )}
 

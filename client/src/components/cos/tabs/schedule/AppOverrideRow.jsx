@@ -239,7 +239,7 @@ const AppOverrideRow = memo(function AppOverrideRow({ app, taskType, globalInter
             className="bg-port-card border border-port-border rounded px-2 py-1.5 text-xs text-white min-w-[120px] min-h-[40px]"
           >
             <option value="">Inherit ({prCompletionOption(pinnedPrCompletion(globalTaskMetadata))?.label || (claimFlow ? 'Automatic merge after reviews and CI' : 'app default')})</option>
-            {PR_COMPLETION_OPTIONS.filter(opt => !claimFlow || opt.value !== 'merge-on-green').map(opt => (
+            {PR_COMPLETION_OPTIONS.map(opt => (
               <option key={opt.value} value={opt.value}>{opt.label}</option>
             ))}
           </select>

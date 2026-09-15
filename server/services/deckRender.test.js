@@ -4,12 +4,13 @@ const enqueueJob = vi.fn(() => ({ jobId: 'job-1', position: 1, status: 'queued' 
 const getSettings = vi.fn();
 const getDeck = vi.fn();
 const markCardsRenderQueued = vi.fn(async () => ({}));
+const resolveLocalImageModel = vi.fn(() => ({ pythonPath: '/py', selectedModel: { id: 'flux2-klein-4b' } }));
 vi.mock('./mediaJobQueue/index.js', () => ({ enqueueJob }));
 vi.mock('./settings.js', () => ({ getSettings }));
 vi.mock('./decks.js', () => ({ getDeck, markCardsRenderQueued }));
 vi.mock('./imageGen/index.js', () => ({ resolveImageCleaners: () => ({ cleanC2PA: false, denoise: false }) }));
 vi.mock('./imageGen/prepareParams.js', () => ({
-  resolveLocalImageModel: vi.fn(() => ({ pythonPath: '/py', selectedModel: { id: 'flux2-klein-4b' } })),
+  resolveLocalImageModel,
 }));
 const resolveRenderTargetConfig = vi.fn();
 vi.mock('./imageGen/cloudProviderConfig.js', () => ({ resolveRenderTargetConfig }));
@@ -78,5 +79,49 @@ describe('renderDeckCards', () => {
   it('400s when nothing is renderable instead of queueing an empty batch', async () => {
     resolveRenderTargetConfig.mockReturnValue({ mode: 'local', cloud: null });
     await expect(renderDeckCards('d1', { cardIds: ['c'] })).rejects.toMatchObject({ code: 'DECK_NO_RENDERABLE_CARDS' });
+  });
+
+  it('does not leak a cloud model pin into the local resolver when provider falls back to local (#7363)', async () => {
+    getDeck.mockResolvedValue({
+      ...deck,
+      imageMode: 'codex',
+      imageModelId: 'gemini-3-pro-image',
+    });
+    // Codex is disabled/benched: resolveRenderTargetConfig falls back to local
+    resolveRenderTargetConfig.mockReturnValue({ mode: 'local', cloud: null });
+
+    await renderDeckCards('d1', { cardIds: ['a'] });
+
+    expect(resolveRenderTargetConfig).toHaveBeenCalledWith(
+      expect.anything(),
+      'deck',
+      expect.objectContaining({ recordMode: 'codex', recordModel: 'gemini-3-pro-image' }),
+    );
+    expect(resolveLocalImageModel).toHaveBeenCalledWith(
+      expect.anything(),
+      { modelId: undefined },
+    );
+    const { params } = enqueueJob.mock.calls[0][0];
+    expect(params).toMatchObject({
+      mode: 'local',
+      modelId: 'flux2-klein-4b',
+    });
+    expect(params.modelId).not.toBe('gemini-3-pro-image');
+  });
+
+  it('preserves a local model pin when the deck is pinned to local mode', async () => {
+    getDeck.mockResolvedValue({
+      ...deck,
+      imageMode: 'local',
+      imageModelId: 'flux2-schnell',
+    });
+    resolveRenderTargetConfig.mockReturnValue({ mode: 'local', cloud: null });
+
+    await renderDeckCards('d1', { cardIds: ['a'] });
+
+    expect(resolveLocalImageModel).toHaveBeenCalledWith(
+      expect.anything(),
+      { modelId: 'flux2-schnell' },
+    );
   });
 });

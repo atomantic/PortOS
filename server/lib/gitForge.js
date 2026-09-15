@@ -1,8 +1,13 @@
-// Pure helpers for resolving forge (GitHub/GitLab) identity from git remote
-// and PR/MR URLs. No child-process or network access — these are string
-// parsers and selectors. The orchestration that shells out to `gh`/`glab`
-// lives in server/services/forgeAuth.js (account/token resolution) and
+// Helpers for resolving forge (GitHub/GitLab) identity from git remote and
+// PR/MR URLs. No child-process or network access — these are string parsers and
+// selectors. The one non-pure edge is `parseGitRemote`, which canonicalizes a
+// personal SSH `Host` alias through the user's `~/.ssh/config` (a cached,
+// guarded, synchronous read — see lib/sshHostAlias.js for why that has to happen
+// at parse time). The orchestration that shells out to `gh`/`glab` lives in
+// server/services/forgeAuth.js (account/token resolution) and
 // server/services/git.js (PR operations); both compose these helpers.
+
+import { resolveSshHostAlias } from './sshHostAlias.js';
 
 /**
  * Parse a git remote URL into `{ host, owner }`. Returns null for unparseable input.
@@ -10,16 +15,21 @@
  *   git@github.com:atomantic/PortOS.git    → { host: 'github.com', owner: 'atomantic' }
  *   https://gitlab.com/group/sub/proj.git  → { host: 'gitlab.com', owner: 'group' }
  *   git@gitlab.example.com:foo/bar.git     → { host: 'gitlab.example.com', owner: 'foo' }
+ *
+ * `host` is the host the remote actually connects to: a personal SSH alias
+ * (`git@github-acme:acme/widget.git` with `HostName github.com` in the user's ssh
+ * config) resolves to `github.com`, so every downstream forge/CLI/API decision
+ * keyed on this value matches what `git` and `gh` do with the same remote.
  */
 export function parseGitRemote(url) {
   if (!url) return null;
   // SSH: git@HOST:OWNER/REPO[.git]   (REPO can contain '/' for GitLab subgroups,
   //                                   but we only need the top-level owner here)
   const ssh = url.match(/^git@([^:]+):([^/]+)\/.+?(?:\.git)?$/);
-  if (ssh) return { host: ssh[1], owner: ssh[2] };
+  if (ssh) return { host: resolveSshHostAlias(ssh[1]), owner: ssh[2] };
   // HTTPS: https://HOST/OWNER/REPO[.git]
   const https = url.match(/^https?:\/\/([^/]+)\/([^/]+)\/.+?(?:\.git)?$/);
-  if (https) return { host: https[1], owner: https[2] };
+  if (https) return { host: resolveSshHostAlias(https[1]), owner: https[2] };
   return null;
 }
 

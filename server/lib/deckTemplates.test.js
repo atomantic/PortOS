@@ -1,7 +1,9 @@
 import { describe, it, expect } from 'vitest';
 import {
-  CARD_STATUS, DECK_BACK_KEY, DECK_KIND, cardStatus, composeCardRenderPrompt, deckCardRoster, deckCompletion,
+  CARD_STATUS, DECK_BACK_KEY, DECK_CARD_SIZE, DECK_CARD_SIZE_BY_KIND, DECK_KIND, DECK_KINDS, DEFAULT_LAYOUT_PROMPT,
+  cardStatus, composeCardRenderPrompt, deckCardAspectStyle, deckCardRoster, deckCardSize, deckCompletion,
 } from './deckTemplates.js';
+import { aspectRatioPhrase } from './aspectRatio.js';
 
 describe('deckCardRoster', () => {
   it('mints a full playing deck (52 faces + 2 jokers + back) with unique keys', () => {
@@ -76,5 +78,51 @@ describe('cardStatus + deckCompletion', () => {
     ]);
     expect(counts).toEqual({ total: 4, prompted: 3, rendered: 1, inFlight: 1, failed: 1, percent: 25 });
     expect(deckCompletion([]).percent).toBe(0);
+  });
+});
+
+describe('deckCardSize', () => {
+  it('prefers the persisted canvas over the kind default', () => {
+    expect(deckCardSize({ kind: DECK_KIND.PLAYING, cardSize: { width: 800, height: 1200 } }))
+      .toEqual({ width: 800, height: 1200 });
+  });
+
+  it('falls back to each kind\'s true trim, not the generic 2:3 box', () => {
+    expect(deckCardSize({ kind: DECK_KIND.PLAYING })).toEqual(DECK_CARD_SIZE_BY_KIND[DECK_KIND.PLAYING]);
+    expect(deckCardSize({ kind: DECK_KIND.TAROT })).toEqual(DECK_CARD_SIZE_BY_KIND[DECK_KIND.TAROT]);
+    expect(deckCardSize({})).toEqual(DECK_CARD_SIZE);
+  });
+
+  it('ignores a half-set or non-positive cardSize rather than inventing a ratio', () => {
+    expect(deckCardSize({ kind: DECK_KIND.TAROT, cardSize: { width: 800 } }))
+      .toEqual(DECK_CARD_SIZE_BY_KIND[DECK_KIND.TAROT]);
+    expect(deckCardSize({ kind: DECK_KIND.PLAYING, cardSize: { width: 0, height: 1536 } }))
+      .toEqual(DECK_CARD_SIZE_BY_KIND[DECK_KIND.PLAYING]);
+  });
+
+  it('exposes the CSS aspect-ratio the thumbnail box must use', () => {
+    expect(deckCardAspectStyle({ kind: DECK_KIND.PLAYING }).aspectRatio).toBe('1096 / 1536');
+    expect(deckCardAspectStyle({ kind: DECK_KIND.TAROT }).aspectRatio).toBe('888 / 1536');
+  });
+});
+
+describe('DEFAULT_LAYOUT_PROMPT', () => {
+  it('states the framing its own canvas actually renders at', () => {
+    // The defect this pins: both clauses said "2:3 portrait" while the per-kind
+    // canvases had moved to each card's true trim, so every deck asked the model
+    // for one shape and gave it another. Derived from DECK_CARD_SIZE_BY_KIND, a
+    // canvas change rewrites the sentence with it.
+    for (const kind of DECK_KINDS) {
+      const { width, height } = DECK_CARD_SIZE_BY_KIND[kind];
+      expect(DEFAULT_LAYOUT_PROMPT[kind]).toContain(aspectRatioPhrase(width, height));
+    }
+    expect(DEFAULT_LAYOUT_PROMPT[DECK_KIND.PLAYING]).toContain('5:7 portrait');
+    expect(DEFAULT_LAYOUT_PROMPT[DECK_KIND.TAROT]).toContain('11:19 portrait');
+  });
+
+  it('keeps a clause for every deck kind, with its kind-specific layout intact', () => {
+    expect(Object.keys(DEFAULT_LAYOUT_PROMPT).sort()).toEqual([...DECK_KINDS].sort());
+    expect(DEFAULT_LAYOUT_PROMPT[DECK_KIND.PLAYING]).toContain('rank and suit index');
+    expect(DEFAULT_LAYOUT_PROMPT[DECK_KIND.TAROT]).toContain('card title lettered in a banner');
   });
 });

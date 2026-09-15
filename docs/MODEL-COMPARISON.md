@@ -72,6 +72,8 @@ The September 6, 2026 snapshot ships eight exact Zen endpoint IDs (the CLI prefi
 
 Pricing-only rows appear alongside the selected benchmark as explicitly unbenchmarked evidence. Select input price versus output price to plot them, or use scenario cost with zero reasoning tokens to calculate their published input/output charge. A missing quality measurement cannot become a zero score. Migration 356 appends missing shipped Zen IDs to existing catalogs without overwriting locally researched rows; it validates the entire result before writing and refuses malformed/future-version data.
 
+The September 15, 2026 snapshot adds the two NVIDIA NIM free-endpoint IDs currently shipped on the `nvidia-nim` provider and its OpenCode wrappers: `google/gemma-4-31b-it` and `poolside/laguna-xs-2.1`, from the [Gemma 4 31B IT](https://build.nvidia.com/google/gemma-4-31b-it) and [Laguna XS 2.1](https://build.nvidia.com/poolside/laguna-xs-2.1) prototype pages. Each row carries zero published input/output rates, with unknown quota, reasoning-token billing, benchmark task cost, quality and throughput. The free NIM offer is a trial endpoint subject to NVIDIA credits, rate limits, and data-use terms. Name similarity does not prove that an AA-tested or locally served revision matches NIM's serving configuration. Migration 388 appends missing shipped NIM IDs the same way 356 does for Zen.
+
 ## Research: skill-specific comparisons
 
 Research checked September 6, 2026. These are candidate adapters and metrics, not newly imported scores. The current benchmark selector already separates named/versioned evaluations; a future skill selector should narrow that list, never mix unrelated score scales.

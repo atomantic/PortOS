@@ -14,6 +14,9 @@ const device = (overrides = {}) => ({
 });
 
 describe('FaceTime Audio control protocol', () => {
+  // swiftc compiles are runner-budgeted, not product behavior: a cold/contended
+  // full-suite worker can take >10s on the default testTimeout, so these two
+  // compile tests carry their own budget (same reasoning as vitest.config.js).
   it.runIf(process.platform === 'darwin')('compiles the native helper and preserves its strict JSON boundary', () => {
     const sourceDir = join(import.meta.dirname, '..', '..', 'native', 'facetime-ax');
     const tempDir = mkdtempSync(join(process.env.PORTOS_TEST_TMPDIR || tmpdir(), 'portos-facetime-ax-'));
@@ -29,7 +32,7 @@ describe('FaceTime Audio control protocol', () => {
     } finally {
       rmSync(tempDir, { recursive: true, force: true });
     }
-  });
+  }, 60_000);
 
   it.runIf(process.platform === 'darwin')('matches only the configured semantic identity', () => {
     const sourceDir = join(import.meta.dirname, '..', '..', 'native', 'facetime-ax');
@@ -51,7 +54,7 @@ guard !matcher.matches(["Incoming call from +44 1555 123 4567"]) else { exit(4) 
     } finally {
       rmSync(tempDir, { recursive: true, force: true });
     }
-  });
+  }, 60_000);
 
   it('accepts only the strict helper result contract', () => {
     const result = facetimeControlResultSchema.safeParse({

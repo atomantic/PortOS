@@ -217,6 +217,23 @@ describe('UsagePage federated quota readings', () => {
     },
   };
 
+  it('shows the subscription plan name on the quota card when the reading named a tier', async () => {
+    api.getProviderUsage.mockResolvedValue({
+      providers: [{
+        family: 'grok',
+        label: 'Grok',
+        supported: true,
+        plan: 'SuperGrok',
+        limits: [{ key: 'week', label: 'Weekly', percentUsed: 8, percentRemaining: 92 }],
+        activity: [],
+        approximate: true,
+        fetchedAt: '2026-09-03T11:00:00.000Z',
+      }],
+    });
+    render(<MemoryRouter><UsagePage /></MemoryRouter>);
+    expect(await screen.findByText('SuperGrok')).toBeInTheDocument();
+  });
+
   it('says the card spans instances and names which ones', async () => {
     api.getProviderUsage.mockResolvedValue({ providers: [fleetCard] });
     render(<MemoryRouter><UsagePage /></MemoryRouter>);

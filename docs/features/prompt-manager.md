@@ -57,6 +57,25 @@ Templates use Mustache-like syntax:
 - Live preview with test variables
 - Insert variable references
 
+## Measuring what an agent actually reads
+
+A scheduled task's prompt is assembled in layers — the shipped default, the
+pre-step block substitutions, then the operating contract `buildAgentPrompt`
+adds (worktree, completion workflow, issue-filing labels) — and the layers are
+where duplication hides. Render one end to end and rank its sections by size:
+
+```bash
+npm run measure:agent-prompt -- claim-issue tui        # light path: split user/system prompt
+npm run measure:agent-prompt -- claim-issue api        # full path: instruction files, memory, tools
+npm run measure:agent-prompt -- plan-task cli --out /tmp/plan   # also dump the rendered text
+```
+
+It uses placeholder app/reviewer values and no database, so the numbers are the
+prompt's own cost. Set `REPO=<checkout>` to point the api path's
+instruction-file walk at a real tree. On a Claude Code host the root
+`AGENTS.md` is loaded natively on top of this, so its size is part of every
+run's budget too.
+
 ## Related Features
 
 - [Chief of Staff](./chief-of-staff.md) - Uses prompts for agent briefings

@@ -188,6 +188,16 @@ export function mergeQuotaCard(local, peerCards = []) {
 
   const limits = unifyLimits(contributions);
   const activity = unifyActivity(contributions);
+  // Plan/tier is account-wide, same as the meters: take the freshest named
+  // reading so a card this machine could not label still shows SuperGrok/Pro
+  // when a peer's scrape (or a later local one) named it.
+  const planReadings = [
+    { plan: local.plan, fetchedAt: local.fetchedAt },
+    ...peerCards.map((c) => ({ plan: c.plan, fetchedAt: c.fetchedAt })),
+  ].filter((c) => isNonBlankStr(c.plan) && c.plan !== 'unknown');
+  const plan = planReadings.length
+    ? planReadings.reduce((best, c) => (compareNewerWins(c.fetchedAt, best.fetchedAt) ? c : best)).plan
+    : local.plan;
   const fleet = {
     instances: contributions.map(({ instanceId, name, self, fetchedAt }) => ({ instanceId, name, self, fetchedAt })),
     // Which machines are represented, for a UI that wants to age the reading
@@ -196,6 +206,7 @@ export function mergeQuotaCard(local, peerCards = []) {
   };
   return {
     ...local,
+    plan,
     limits,
     activity,
     fleet,

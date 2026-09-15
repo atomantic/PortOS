@@ -1057,18 +1057,36 @@ export async function reorderTasks(taskIds) {
 export async function approveTask(taskId, { now = Date.now() } = {}) {
   return withStateLock(async () => {
   const state = await loadState();
-  const filePath = join(ROOT_DIR, state.config.cosTasksFile);
 
-  if (!existsSync(filePath)) {
+  // Both queues, internal first. A USER row can hold too: a row the parser had
+  // to RECOVER is withheld from the unattended spawn and now persists that hold
+  // as `| APPROVAL |` (#7300, #7367). Without a release path here that row is a
+  // zombie — pending forever, with nothing in the product able to clear it —
+  // which is a worse outcome than the evaporating hold it replaced.
+  const queues = [
+    { taskType: 'internal', filePath: join(ROOT_DIR, state.config.cosTasksFile) },
+    { taskType: 'user', filePath: join(ROOT_DIR, state.config.userTasksFile) },
+  ].filter(({ filePath }) => existsSync(filePath));
+
+  if (queues.length === 0) {
     return { error: 'CoS task file not found' };
   }
 
-  let tasks = await readTaskFile(filePath);
+  let found = null;
+  for (const queue of queues) {
+    const tasks = await readTaskFile(queue.filePath);
+    const taskIndex = tasks.findIndex(t => t.id === taskId);
+    if (taskIndex !== -1) {
+      found = { ...queue, tasks, taskIndex };
+      break;
+    }
+  }
 
-  const taskIndex = tasks.findIndex(t => t.id === taskId);
-  if (taskIndex === -1) {
+  if (!found) {
     return { error: 'Task not found' };
   }
+
+  const { taskType, filePath, tasks, taskIndex } = found;
 
   if (!tasks[taskIndex].approvalRequired) {
     return { error: 'Task does not require approval' };
@@ -1086,10 +1104,10 @@ export async function approveTask(taskId, { now = Date.now() } = {}) {
   };
 
   // Write back to file
-  const markdown = generateTasksMarkdown(tasks, true);
+  const markdown = generateTasksMarkdown(tasks, taskType === 'internal');
   await writeTaskFile(filePath, markdown);
 
-  cosEvents.emit('tasks:changed', { type: 'internal', action: 'approved', task: tasks[taskIndex] });
+  cosEvents.emit('tasks:changed', { type: taskType, action: 'approved', task: tasks[taskIndex] });
 
   return tasks[taskIndex];
   });

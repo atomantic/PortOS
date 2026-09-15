@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Copy, Link2, Loader2, Sparkles, Star, Trash2 } from 'lucide-react';
 import Drawer from '../Drawer';
-import { composeCardRenderPrompt } from '../../lib/decks';
+import { composeCardRenderPrompt, deckCardAspectStyle } from '../../lib/decks';
 import { copyToClipboard } from '../../lib/clipboard';
 
 const INPUT_CLASS = 'w-full bg-port-bg border border-port-border rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-port-accent';
@@ -90,33 +90,43 @@ export default function DeckCardDrawer({ deck, card, open, inFlight, onClose, on
           {refs.length ? (
             <ul className="grid grid-cols-3 gap-2 sm:grid-cols-4">
               {[...refs].reverse().map((filename) => {
-                const isPrimary = filename === card.primaryImageRef;
+                const activeRef = (card.primaryImageRef && refs.includes(card.primaryImageRef)) ? card.primaryImageRef : refs.at(-1);
+                const isPrimary = filename === activeRef;
+                const versionNum = refs.indexOf(filename) + 1;
                 return (
                   <li key={filename} className="space-y-1">
-                    <button type="button" onClick={() => onPreview(filename)} className="block w-full" title="Open">
-                      <img src={`/data/images/${encodeURIComponent(filename)}`} alt={`${card.name} render`} className={`aspect-[2/3] w-full rounded object-cover border ${isPrimary ? 'border-port-accent' : 'border-port-border'}`} />
+                    <button type="button" onClick={() => onPreview(filename)} className="block w-full" title={`Open v${versionNum} preview`}>
+                      <img
+                        src={`/data/images/${encodeURIComponent(filename)}`}
+                        alt={`${card.name} v${versionNum} render`}
+                        style={deckCardAspectStyle(deck)}
+                        className={`w-full object-contain bg-port-bg border ${isPrimary ? 'border-port-accent' : 'border-port-border'}`}
+                      />
                     </button>
-                    <div className="flex items-center justify-between">
-                      <button
-                        type="button"
-                        onClick={() => onSave({ primaryImageRef: filename })}
-                        disabled={isPrimary || saving}
-                        className={`min-h-[32px] min-w-[32px] inline-flex items-center justify-center rounded ${isPrimary ? 'text-port-accent' : 'text-gray-500 hover:text-white'}`}
-                        aria-label={isPrimary ? 'Primary render' : 'Make primary'}
-                        title={isPrimary ? 'Primary render' : 'Make primary'}
-                      >
-                        <Star size={13} fill={isPrimary ? 'currentColor' : 'none'} aria-hidden="true" />
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => onSave({ imageRefs: refs.filter((f) => f !== filename) })}
-                        disabled={saving}
-                        className="min-h-[32px] min-w-[32px] inline-flex items-center justify-center rounded text-gray-500 hover:text-port-error"
-                        aria-label="Remove this render from the card"
-                        title="Remove from card (the gallery keeps the image)"
-                      >
-                        <Trash2 size={13} aria-hidden="true" />
-                      </button>
+                    <div className="flex items-center justify-between gap-1 text-[11px]">
+                      <span className="font-mono text-gray-400">v{versionNum}</span>
+                      <div className="flex items-center gap-1">
+                        <button
+                          type="button"
+                          onClick={() => onSave({ primaryImageRef: filename })}
+                          disabled={isPrimary || saving}
+                          className={`min-h-[32px] min-w-[32px] inline-flex items-center justify-center rounded ${isPrimary ? 'text-port-accent' : 'text-gray-500 hover:text-white'}`}
+                          aria-label={isPrimary ? `v${versionNum} is active` : `Set v${versionNum} as active`}
+                          title={isPrimary ? `v${versionNum} is active` : `Set v${versionNum} as active`}
+                        >
+                          <Star size={13} fill={isPrimary ? 'currentColor' : 'none'} aria-hidden="true" />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => onSave({ imageRefs: refs.filter((f) => f !== filename) })}
+                          disabled={saving}
+                          className="min-h-[32px] min-w-[32px] inline-flex items-center justify-center rounded text-gray-500 hover:text-port-error"
+                          aria-label={`Remove v${versionNum} from card`}
+                          title="Remove from card (the gallery keeps the image)"
+                        >
+                          <Trash2 size={13} aria-hidden="true" />
+                        </button>
+                      </div>
                     </div>
                   </li>
                 );

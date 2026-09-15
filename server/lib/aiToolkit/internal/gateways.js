@@ -1,6 +1,6 @@
 /**
  * Hosted OpenAI-compatible gateways an OpenCode CLI/TUI wrapper can front-end
- * (OrcaRouter, OpenRouter).
+ * (OrcaRouter, OpenRouter, NVIDIA NIM).
  *
  * A DELIBERATE MIRROR of `server/lib/providerGateways.js`. This directory is
  * vendored and stays self-contained — no imports out to other PortOS modules
@@ -34,6 +34,12 @@ export const PROVIDER_GATEWAYS = Object.freeze([
     label: 'OpenRouter',
     baseURL: 'https://openrouter.ai/api/v1',
     apiKeyEnv: 'OPENROUTER_API_KEY',
+  }),
+  Object.freeze({
+    id: 'nvidia-nim',
+    label: 'NVIDIA NIM',
+    baseURL: 'https://integrate.api.nvidia.com/v1',
+    apiKeyEnv: 'NVIDIA_API_KEY',
   }),
 ]);
 

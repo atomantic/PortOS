@@ -1419,6 +1419,35 @@ describe('CoS Routes', () => {
       expect(taskData.description).toContain('412');
     });
 
+    it('threads prCompletion into buildClaimWorkTask and onto the task metadata', async () => {
+      getAppById.mockResolvedValue({ id: 'my-app', name: 'MyApp', repoPath: '/repo' });
+      buildClaimWorkTask.mockResolvedValue({
+        tracker: 'github',
+        source: 'config',
+        promptTaskType: 'claim-issue',
+        prompt: 'CLAIM ISSUE PROMPT',
+        taskMetadata: { useWorktree: false, openPR: false, prCompletion: 'merge-on-green' },
+        target: '412'
+      });
+      cos.addTask.mockResolvedValue({ id: 'task-sd-mog', status: 'pending' });
+
+      const response = await request(app)
+        .post('/api/cos/tasks/slashdo')
+        .send({
+          command: 'next',
+          app: 'my-app',
+          prCompletion: 'merge-on-green'
+        });
+
+      expect(response.status).toBe(200);
+      expect(buildClaimWorkTask).toHaveBeenCalledWith(
+        expect.objectContaining({ id: 'my-app' }),
+        expect.objectContaining({ prCompletion: 'merge-on-green' })
+      );
+      const [taskData] = cos.addTask.mock.calls.at(-1);
+      expect(taskData.prCompletion).toBe('merge-on-green');
+    });
+
     it('rejects an out-of-vocabulary issueAuthorFilter', async () => {
       const response = await request(app)
         .post('/api/cos/tasks/slashdo')

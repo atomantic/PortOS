@@ -1,8 +1,8 @@
-import { useMemo } from 'react';
-import { AlertTriangle, Check, Hourglass, Link2, PencilLine, Play, RefreshCw } from 'lucide-react';
+import { useMemo, useState } from 'react';
+import { AlertTriangle, Check, ChevronLeft, ChevronRight, Hourglass, Link2, PencilLine, Play, RefreshCw, Star } from 'lucide-react';
 import EntryThumbSlot from '../universe/EntryThumbSlot';
 import Pill from '../ui/Pill';
-import { CARD_STATUS, cardInFlightJobId, cardStatus, deckCompletion } from '../../lib/decks';
+import { CARD_STATUS, cardInFlightJobId, cardStatus, deckCardSize, deckCompletion } from '../../lib/decks';
 
 // One badge per card state, named for what the user can DO next rather than for
 // the internal status word: "ready" alone did not answer "does this card have a
@@ -41,9 +41,18 @@ const STATUS_META = {
  * runtime that stops the batch actions above.
  */
 export default function DeckCardGrid({
-  deck, renderTarget, onOpenCard, onRenderCard, onPreview, onRenderComplete, onRenderTerminal,
+  deck, renderTarget, onOpenCard, onRenderCard, onPreview, onSetActiveVersion, onRenderComplete, onRenderTerminal,
 }) {
   const { summary: renderSummary, blocked: runtimeBlocked } = renderTarget;
+  const [viewedVersions, setViewedVersions] = useState({});
+
+  const handleRenderComplete = (cardId, filename) => {
+    if (filename) {
+      setViewedVersions((prev) => ({ ...prev, [cardId]: filename }));
+    }
+    onRenderComplete?.(cardId, filename);
+  };
+
   const groups = useMemo(() => {
     const byGroup = Map.groupBy(deck.cards, (card) => card.group);
     return [...byGroup].map(([key, cards]) => {
@@ -51,6 +60,7 @@ export default function DeckCardGrid({
       return { key, label: cards[0].groupLabel || key, cards, counts, needPrompt: counts.total - counts.prompted };
     });
   }, [deck.cards]);
+  const cardSize = deckCardSize(deck);
 
   return (
     <div className="space-y-6">
@@ -72,19 +82,33 @@ export default function DeckCardGrid({
               const meta = STATUS_META[status];
               const needsPrompt = !card.prompt;
               const reRenderHint = renderHint({ card, needsPrompt, inFlight, runtimeBlocked, renderSummary });
+              const refs = Array.isArray(card.imageRefs) ? card.imageRefs : [];
+              const activeFilename = (card.primaryImageRef && refs.includes(card.primaryImageRef))
+                ? card.primaryImageRef
+                : (refs.at(-1) || null);
+              const viewedFilename = (viewedVersions[card.id] && refs.includes(viewedVersions[card.id]))
+                ? viewedVersions[card.id]
+                : activeFilename;
+              const viewedIndex = refs.indexOf(viewedFilename);
+              const currentVersionNum = viewedIndex >= 0 ? viewedIndex + 1 : refs.length;
+              const isCurrentActive = Boolean(viewedFilename && viewedFilename === activeFilename);
               return (
                 <li key={card.id} className="flex h-full flex-col items-center gap-1.5 rounded-lg border border-port-border bg-port-card p-2">
                   <EntryThumbSlot
                     size="xl"
+                    fluid
+                    aspectRatio={cardSize}
+                    rounded={false}
                     inFlightJobId={inFlight}
                     imageRefs={card.imageRefs}
                     primaryImageRef={card.primaryImageRef}
+                    displayedImageRef={viewedFilename}
                     // A card with no prompt has nothing to render, so its
                     // empty slot opens the editor rather than sitting there
                     // greyed out — the one thing that unblocks it.
                     onRender={() => (needsPrompt ? onOpenCard(card) : onRenderCard(card))}
-                    onPreview={() => onPreview(card)}
-                    onComplete={(filename) => onRenderComplete(card.id, filename)}
+                    onPreview={() => onPreview(card, viewedFilename)}
+                    onComplete={(filename) => handleRenderComplete(card.id, filename)}
                     onTerminalStatus={(s, error) => onRenderTerminal(card.id, s, error)}
                     // The slot is the bigger of the card's two render
                     // affordances, so a dead runtime has to stand it down too
@@ -97,6 +121,68 @@ export default function DeckCardGrid({
                     emptyHint={needsPrompt ? `Write a prompt for ${card.name}` : `Render ${card.name}`}
                     alt={card.name}
                   />
+                  {refs.length > 1 ? (
+                    <div className="flex w-full items-center justify-between px-0.5 text-xs">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (viewedIndex > 0) {
+                            setViewedVersions((prev) => ({ ...prev, [card.id]: refs[viewedIndex - 1] }));
+                          }
+                        }}
+                        disabled={viewedIndex <= 0}
+                        className="min-h-[28px] min-w-[28px] inline-flex items-center justify-center rounded text-gray-400 hover:text-white disabled:opacity-30 disabled:cursor-not-allowed"
+                        title="Previous render version"
+                        aria-label={`Previous render version for ${card.name}`}
+                      >
+                        <ChevronLeft size={14} aria-hidden="true" />
+                      </button>
+                      <div className="flex items-center gap-1.5">
+                        <span className="text-[11px] font-mono text-gray-300">
+                          v{currentVersionNum}/{refs.length}
+                        </span>
+                        {isCurrentActive ? (
+                          <span
+                            className="inline-flex items-center gap-0.5 rounded bg-port-accent/15 px-1.5 py-0.5 text-[10px] font-medium text-port-accent"
+                            title="Active version for this card"
+                          >
+                            <Star size={10} fill="currentColor" aria-hidden="true" /> Active
+                          </span>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() => onSetActiveVersion?.(card.id, viewedFilename)}
+                            className="inline-flex items-center gap-0.5 rounded border border-port-border bg-port-bg/60 px-1.5 py-0.5 text-[10px] text-gray-300 hover:border-port-accent hover:text-port-accent transition-colors"
+                            title={`Set v${currentVersionNum} as active version for ${card.name}`}
+                            aria-label={`Set v${currentVersionNum} as active version for ${card.name}`}
+                          >
+                            <Star size={10} aria-hidden="true" /> Set active
+                          </button>
+                        )}
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (viewedIndex < refs.length - 1) {
+                            setViewedVersions((prev) => ({ ...prev, [card.id]: refs[viewedIndex + 1] }));
+                          }
+                        }}
+                        disabled={viewedIndex >= refs.length - 1}
+                        className="min-h-[28px] min-w-[28px] inline-flex items-center justify-center rounded text-gray-400 hover:text-white disabled:opacity-30 disabled:cursor-not-allowed"
+                        title="Next render version"
+                        aria-label={`Next render version for ${card.name}`}
+                      >
+                        <ChevronRight size={14} aria-hidden="true" />
+                      </button>
+                    </div>
+                  ) : refs.length === 1 ? (
+                    <div className="flex w-full items-center justify-center gap-1 text-[11px] text-gray-400 font-mono py-0.5">
+                      <span>v1</span>
+                      <span className="inline-flex items-center gap-0.5 text-[10px] text-port-accent" title="Active version">
+                        <Star size={9} fill="currentColor" aria-hidden="true" /> Active
+                      </span>
+                    </div>
+                  ) : null}
                   <button
                     type="button"
                     onClick={() => onOpenCard(card)}
