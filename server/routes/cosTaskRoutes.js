@@ -215,7 +215,7 @@ router.post('/tasks/enhance', asyncHandler(async (req, res) => {
 // source, so the two surfaces can't drift.
 router.post('/tasks/slashdo', asyncHandler(async (req, res) => {
   const {
-    command, app, provider, model, effort, simplify, issueTarget,
+    command, app, provider, model, effort, simplify, issueTarget, prCompletion,
     target, issueContext, overrideContext, issueAuthorFilter, reviewers, usernames, optionalReviewers,
     reviewerMaxRounds, reviewerModels, reviewerEfforts
   } = validateRequest(slashdoTaskSchema, req.body);
@@ -302,6 +302,7 @@ router.post('/tasks/slashdo', asyncHandler(async (req, res) => {
       issueContext,
       ...(overrideContext !== undefined ? { overrideContext } : {}),
       issueAuthorFilter,
+      prCompletion,
       reviewers,
       usernames,
       optionalReviewers,

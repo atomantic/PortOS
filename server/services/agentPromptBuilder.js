@@ -598,6 +598,7 @@ ${buildResumeSection(task, worktreeInfo)}` : '';
     [COMPLETION_MODES.CLAIM_FLOW]: () => buildClaimFlowCompletionSection({
       isTui, sentinelPath, reviewersCsv: claimReviewersCsv(task, codeReviewDefaults, defaultReviewers),
       leavePrOpen: resolvePrCompletion(task.metadata) === PR_COMPLETIONS.LEAVE_OPEN || leavesPrForHuman(task),
+      prCompletion: task.metadata?.prCompletion || null,
     }),
     [COMPLETION_MODES.AUDIT_FLOW]: () => buildAuditFlowCompletionSection({ isTui, sentinelPath }),
     [COMPLETION_MODES.RELEASE_FLOW]: () => buildReleaseFlowCompletionSection({ isTui, sentinelPath }),
@@ -1142,6 +1143,7 @@ function buildLightContextSections(task, workspaceDir, worktreeInfo, isTruthyMet
     [COMPLETION_MODES.CLAIM_FLOW]: () => contractSections.push(buildClaimFlowCompletionSection({
       isTui, sentinelPath: lightSentinelPath(), reviewersCsv: claimReviewersCsv(task, codeReviewDefaults, defaultReviewers),
       leavePrOpen: resolvePrCompletion(task.metadata) === PR_COMPLETIONS.LEAVE_OPEN || leavesPrForHuman(task),
+      prCompletion: task.metadata?.prCompletion || null,
     })),
     [COMPLETION_MODES.READ_ONLY]: () => contractSections.push(buildReadOnlyCompletionSection({ isTui, sentinelPath: lightSentinelPath() })),
     [COMPLETION_MODES.REVIEW_LOOP_FOLLOW_UP]: () => {

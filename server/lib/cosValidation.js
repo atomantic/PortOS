@@ -987,7 +987,7 @@ export const slashdoTaskSchema = createCosTaskSchema
   .pick({
     model: true, provider: true, effort: true, simplify: true,
     reviewers: true, usernames: true, optionalReviewers: true, reviewerMaxRounds: true,
-    reviewerModels: true, reviewerEfforts: true, issueTarget: true
+    reviewerModels: true, reviewerEfforts: true, issueTarget: true, prCompletion: true
   })
   .extend({
     command: z.string().min(1),

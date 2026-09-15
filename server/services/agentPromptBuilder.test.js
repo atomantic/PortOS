@@ -481,6 +481,29 @@ describe('claim-flow completion handoff', () => {
     expect(prompt).not.toMatch(/PortOS will merge it back after completion/);
   });
 
+  it('renders merge-on-green PR completion policy for claim flow on light and full prompt paths', async () => {
+    const lightPrompt = buildLightContextPrompt(
+      makeTask({ metadata: { claimFlow: true, useWorktree: false, openPR: false, prCompletion: 'merge-on-green' } }),
+      '/repo', null, isTruthyMeta,
+      { isTui: true, providerId: 'codex-tui', providerCommand: 'codex' },
+    );
+
+    expect(lightPrompt).toMatch(/## Claim Workflow Handoff/);
+    expect(lightPrompt).toContain('PR completion policy: MERGE ON GREEN (no code review)');
+    expect(lightPrompt).not.toContain('## Reviewer pin');
+    expect(lightPrompt).not.toContain('Required-review publication rule');
+
+    const apiPrompt = await buildAgentPrompt(
+      makeTask({ metadata: { claimFlow: true, useWorktree: false, openPR: false, prCompletion: 'merge-on-green' } }),
+      {}, '/repo', null, isTruthyMeta, { providerType: 'api' },
+    );
+
+    expect(apiPrompt).toMatch(/## Claim Workflow Handoff/);
+    expect(apiPrompt).toContain('PR completion policy: MERGE ON GREEN (no code review)');
+    expect(apiPrompt).not.toContain('## Reviewer pin');
+    expect(apiPrompt).not.toContain('Required-review publication rule');
+  });
+
   it('keeps the full API no-change prompt coupled to the normal change workflow', async () => {
     const prompt = await buildAgentPrompt(
       makeTask({ metadata: {

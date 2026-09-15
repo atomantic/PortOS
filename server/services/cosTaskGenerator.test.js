@@ -1919,6 +1919,15 @@ describe('buildClaimWorkTask reviewer pin', () => {
     expect(prompt).not.toContain('--swarm=6');
     expect(taskMetadata.swarmCount).toBeUndefined();
   });
+
+  it('persists prCompletion: merge-on-green, replaces reviewers with none, and clears reviewers list', async () => {
+    const { prompt, taskMetadata } = await buildClaimWorkTask(app, { prCompletion: 'merge-on-green' });
+    expect(prompt).toContain('Reviewers: none');
+    expect(prompt).not.toContain('Reviewers: codex');
+    expect(taskMetadata.prCompletion).toBe('merge-on-green');
+    expect(taskMetadata.reviewers).toBeUndefined();
+    expect(taskMetadata.usernames).toEqual([]);
+  });
 });
 
 // The read-only preview behind `GET /api/apps/:id/claim-reviewers`. It shares
@@ -1973,6 +1982,20 @@ describe('resolveAppClaimReviewers', () => {
     const result = await resolveAppClaimReviewers(APP);
 
     expect(result.reviewers).toEqual(['claude']);
+    expect(result.overridden).toBe(true);
+  });
+
+  it('returns prCompletion and flags overridden when claim-work metadata pins merge-on-green', async () => {
+    getTaskInterval.mockResolvedValueOnce({
+      prompt: null,
+      taskMetadata: { prCompletion: 'merge-on-green' }
+    });
+
+    const result = await resolveAppClaimReviewers(APP);
+
+    expect(result.prCompletion).toBe('merge-on-green');
+    expect(result.reviewers).toEqual([]);
+    expect(result.csv).toBe('');
     expect(result.overridden).toBe(true);
   });
 });

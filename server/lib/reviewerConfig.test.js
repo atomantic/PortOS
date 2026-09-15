@@ -687,6 +687,14 @@ describe('claim reviewer round-trip (prompt CSV ↔ persisted metadata)', () => 
     expect(resolveClaimReviewerConfig({ reviewer: 'grok' }, null, ['claude']).reviewers).toEqual(['grok']);
   });
 
+  it('resolveClaimReviewerConfig returns empty reviewers and empty CSV when prCompletion is merge-on-green', () => {
+    const config = resolveClaimReviewerConfig({ prCompletion: 'merge-on-green', reviewers: ['codex'] }, defaults, defaults.reviewers);
+    expect(config.reviewers).toEqual([]);
+    expect(config.usernames).toEqual([]);
+    expect(config.optionalReviewers).toEqual([]);
+    expect(config.csv).toBe('');
+  });
+
   it('resolveClaimReviewerConfig emits a CSV matching its own resolved bundle', () => {
     const config = resolveClaimReviewerConfig({ reviewers: ['codex', 'antigravity'] }, defaults, defaults.reviewers);
     expect(config.reviewers).toEqual(['codex', 'antigravity']);

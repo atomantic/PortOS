@@ -125,6 +125,7 @@ describe('Apps Task-Type Routes', () => {
     const RESOLVED = {
       reviewers: ['codex', 'claude'], usernames: [], optionalReviewers: [],
       reviewerMaxRounds: {}, reviewerModels: {}, reviewerEfforts: {}, csv: 'codex,claude',
+      prCompletion: 'review-then-merge',
       // resolveClaimReviewerConfig also carries these two, and a claim flow has no
       // slashdo flag string to put them in — the route must not publish them.
       stopMode: 'all', reviewerApplies: false
@@ -146,8 +147,17 @@ describe('Apps Task-Type Routes', () => {
       expect(response.status).toBe(200);
       expect(resolveAppClaimReviewers).toHaveBeenCalledWith({ id: 'app-001', name: 'App' });
       expect(response.body).toMatchObject({
-        appId: 'app-001', source: 'task-override', reviewers: ['codex', 'claude'], csv: 'codex,claude'
+        appId: 'app-001', source: 'task-override', reviewers: ['codex', 'claude'], csv: 'codex,claude', prCompletion: 'review-then-merge'
       });
+    });
+
+    it('publishes prCompletion alongside reviewer details', async () => {
+      resolveAppClaimReviewers.mockResolvedValue({ ...RESOLVED, prCompletion: 'merge-on-green', reviewers: [], csv: '' });
+
+      const response = await request(app).get('/api/apps/app-001/claim-reviewers');
+
+      expect(response.status).toBe(200);
+      expect(response.body.prCompletion).toBe('merge-on-green');
     });
 
     it('reports `defaults` when nothing overrode them', async () => {

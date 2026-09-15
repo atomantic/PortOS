@@ -181,7 +181,8 @@ describe('IssuesTab', () => {
           title: 'Crash on save',
           body: 'Repro: open the editor and hit save.',
           url: 'https://github.com/acme/widget/issues/42'
-        }
+        },
+        prCompletion: 'review-then-merge'
       }, { silent: true }
     ));
     expect(await screen.findByRole('link', { name: /Queued/ })).toBeInTheDocument();
@@ -356,7 +357,8 @@ describe('IssuesTab', () => {
         },
         provider: 'claude',
         model: 'claude-opus-5',
-        effort: undefined
+        effort: undefined,
+        prCompletion: 'review-then-merge'
       },
       { silent: true }
     ));
@@ -849,5 +851,41 @@ describe('IssuesTab replan', () => {
 
     fireEvent.click(await screen.findByRole('button', { name: /Replan/ }));
     await waitFor(() => expect(screen.getByRole('button', { name: /Replan/ })).toBeEnabled());
+  });
+
+  it('allows selecting merge-on-green, hides reviewer controls, and sends prCompletion', async () => {
+    await renderTab();
+
+    expect(await screen.findByText('Reviewed by')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Code-review override' })).toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText('After opening PR'), { target: { value: 'merge-on-green' } });
+
+    expect(screen.queryByText('Reviewed by')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Code-review override' })).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /Claim/ }));
+
+    await waitFor(() => expect(api.createSlashdoTask).toHaveBeenCalled());
+    const [, , payload] = api.createSlashdoTask.mock.calls.at(-1);
+    expect(payload.prCompletion).toBe('merge-on-green');
+    expect(payload.reviewers).toBeUndefined();
+  });
+
+  it('unblocks claim when switching to merge-on-green even after removing all reviewers', async () => {
+    await renderTab();
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Code-review override' }));
+    fireEvent.click(await screen.findByRole('button', { name: /Remove Antigravity/i }));
+    expect(screen.getByRole('button', { name: /Claim/ })).toBeDisabled();
+
+    fireEvent.change(screen.getByLabelText('After opening PR'), { target: { value: 'merge-on-green' } });
+    expect(screen.getByRole('button', { name: /Claim/ })).toBeEnabled();
+
+    fireEvent.click(screen.getByRole('button', { name: /Claim/ }));
+    await waitFor(() => expect(api.createSlashdoTask).toHaveBeenCalled());
+    const [, , payload] = api.createSlashdoTask.mock.calls.at(-1);
+    expect(payload.prCompletion).toBe('merge-on-green');
+    expect(payload.reviewers).toBeUndefined();
   });
 });
