@@ -18,7 +18,7 @@ const SHIPPED_REFRESHABLE = [
   'pi-cli', 'pi-tui',
   'antigravity-cli', 'antigravity-tui', 'cerebras', 'claude-code',
   'claude-code-bedrock', 'claude-ollama', 'claude-ollama-tui', 'cursor-cli',
-  'cursor-tui', 'grok', 'lmstudio', 'mtplx', 'nvidia-kimi', 'ollama',
+  'cursor-tui', 'grok', 'lmstudio', 'mtplx', 'nvidia-kimi', 'nvidia-nim', 'ollama',
   'slotstream',
   'opencode-llama-tui',
   'opencode-mtplx', 'opencode-mtplx-tui', 'opencode-ollama', 'opencode-ollama-tui',
@@ -26,6 +26,7 @@ const SHIPPED_REFRESHABLE = [
   // Every hosted gateway refreshes through the same sibling `/models` probe —
   // one MODEL_FETCHERS row covers all of them (internal/gateways.js).
   'opencode-openrouter', 'opencode-openrouter-tui', 'openrouter',
+  'opencode-nvidia-nim', 'opencode-nvidia-nim-tui',
   'codex', 'codex-tui',
   // The local-backed Codex wrapper resolves through the OLLAMA row, not codex's:
   // `ollamaBacked` sits in the first pass, and the tool-capable local catalog is

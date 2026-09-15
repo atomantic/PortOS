@@ -24,6 +24,7 @@ describe('providerGateways ↔ aiToolkit/internal/gateways parity', () => {
     const records = [
       { gatewayBacked: 'openrouter' },
       { gatewayBacked: 'orcarouter' },
+      { gatewayBacked: 'nvidia-nim' },
       { orcarouterBacked: true },
       { ollamaBacked: true },
       { gatewayBacked: 'not-a-gateway' },

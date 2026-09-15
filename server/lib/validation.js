@@ -535,7 +535,7 @@ export const providerSchema = z.object({
   // container (Qwen3.8-27B on a Hopper/Blackwell card).
   sglangBacked: z.boolean().optional(),
   // Marks an OpenCode CLI/TUI wrapper for a hosted OpenAI-compatible gateway
-  // ('orcarouter', 'openrouter' — see server/lib/providerGateways.js). The
+  // ('orcarouter', 'openrouter', 'nvidia-nim' — see server/lib/providerGateways.js). The
   // sibling API record whose id equals this value owns the key.
   gatewayBacked: z.string().optional(),
   // Legacy per-gateway marker, superseded by `gatewayBacked`. Still accepted and

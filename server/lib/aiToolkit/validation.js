@@ -173,7 +173,7 @@ export const providerSchema = z.object({
   // parser, and an API key that is optional rather than required.
   sglangBacked: z.boolean().optional(),
   // Marks an OpenCode CLI/TUI wrapper for a hosted OpenAI-compatible gateway
-  // ('orcarouter', 'openrouter' — see internal/gateways.js). Its API key is read
+  // ('orcarouter', 'openrouter', 'nvidia-nim' — see internal/gateways.js). Its API key is read
   // from the sibling API record of the SAME id at spawn/refresh time and is
   // never stored in this wrapper's config.
   gatewayBacked: z.string().optional(),

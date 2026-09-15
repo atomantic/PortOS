@@ -17,7 +17,7 @@ PortOS has two provider classes:
 - **`cli` / `tui`** (claude, codex, agy) — spawned as a child process in the agent
   worktree. The CLI owns the Read/Write/Edit/Bash **tool harness**, so it can write
   files. CoS agent tasks run only on these.
-- **`api`** (Ollama, LM Studio, nvidia-kimi) — an HTTP request that returns **plain
+- **`api`** (Ollama, LM Studio, nvidia-nim, nvidia-kimi) — an HTTP request that returns **plain
   text**. No harness, no file writes. Great for planning/vision/ask, but a task that
   needs to edit files produces a transcript and writes nothing.
 

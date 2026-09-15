@@ -115,7 +115,7 @@ export const MODEL_FETCHERS = [
   },
   {
     key: 'gateway',
-    // A gateway-backed OpenCode wrapper (OrcaRouter, OpenRouter — see
+    // A gateway-backed OpenCode wrapper (OrcaRouter, OpenRouter, NVIDIA NIM — see
     // ./gateways.js) probes its sibling API provider's OpenAI-compatible
     // `/models` endpoint, never `opencode models`. ONE row for every gateway:
     // they differ only in base URL and key, which the provider record carries.
