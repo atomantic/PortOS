@@ -358,6 +358,20 @@ export const LOCAL_LLM_CATALOG = [
     lmstudio: 'lmstudio-community/Ministral-3-14B-Instruct-2512-GGUF'
   },
   {
+    key: 'mistral-small-24b',
+    name: 'Mistral Small 3.2 24B',
+    category: 'general',
+    recommendedFor: ['general', 'coding', 'vision', 'multilingual'],
+    params: '24B',
+    size: '15 GB',
+    family: 'mistral',
+    description: 'Mistral AI\'s 24B instruct model with vision support, tools, and a 128K context window — strong for local agents, coding, and multi-file tasks.',
+    capabilities: ['chat', 'code', 'tools', 'vision', 'multilingual'],
+    context: 131072,
+    ollama: 'mistral-small:24b',
+    lmstudio: 'lmstudio-community/Mistral-Small-3.2-24B-Instruct-2506-GGUF'
+  },
+  {
     key: 'gpt-oss-20b',
     name: 'GPT-OSS 20B',
     category: 'reasoning',
@@ -643,7 +657,8 @@ export const LOCAL_LLM_CATALOG = [
     capabilities: ['chat', 'code', 'tools'],
     context: 262144,
     repository: 'Qwen/Qwen3-Coder-30B-A3B-Instruct',
-    ollama: 'qwen3-coder:30b'
+    ollama: 'qwen3-coder:30b',
+    lmstudio: 'lmstudio-community/Qwen3-Coder-30B-A3B-Instruct-GGUF'
   },
   {
     key: 'qwen2.5-coder-7b',
