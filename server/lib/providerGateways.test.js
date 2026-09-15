@@ -10,8 +10,8 @@ import {
 import { getOpencodeLocalProviderNamespace, prefixOpencodeModel } from './providerModels.js';
 
 describe('providerGateways', () => {
-  it('ships both gateways with a complete row', () => {
-    expect(PROVIDER_GATEWAY_IDS).toEqual(['orcarouter', 'openrouter']);
+  it('ships every gateway with a complete row', () => {
+    expect(PROVIDER_GATEWAY_IDS).toEqual(['orcarouter', 'openrouter', 'nvidia-nim']);
     for (const gateway of PROVIDER_GATEWAYS) {
       expect(gateway.label).toBeTruthy();
       expect(gateway.baseURL).toMatch(/^https:\/\//);
@@ -22,6 +22,7 @@ describe('providerGateways', () => {
   it('resolves the generic gatewayBacked marker', () => {
     expect(gatewayIdForProvider({ gatewayBacked: 'openrouter' })).toBe('openrouter');
     expect(gatewayIdForProvider({ gatewayBacked: 'orcarouter' })).toBe('orcarouter');
+    expect(gatewayIdForProvider({ gatewayBacked: 'nvidia-nim' })).toBe('nvidia-nim');
   });
 
   // Records written before the registry existed carry the per-gateway boolean.
@@ -49,6 +50,7 @@ describe('providerGateways', () => {
   it('classifies namespaces', () => {
     expect(isGatewayNamespace('openrouter')).toBe(true);
     expect(isGatewayNamespace('orcarouter')).toBe(true);
+    expect(isGatewayNamespace('nvidia-nim')).toBe(true);
     expect(isGatewayNamespace('ollama')).toBe(false);
     expect(isGatewayNamespace(null)).toBe(false);
   });
@@ -79,6 +81,18 @@ describe('prefixOpencodeModel — gateway namespacing', () => {
 
   it('preserves the OrcaRouter behavior it generalized', () => {
     expect(prefixOpencodeModel(orcarouter, 'orcarouter/auto')).toBe('orcarouter/orcarouter/auto');
+  });
+
+  // NVIDIA NIM ids are already `vendor/model`. OpenCode still splits on the
+  // first slash, so the stored id stays bare and spawn prefixes the gateway.
+  it('namespaces a vendor-qualified NVIDIA NIM id', () => {
+    const nim = { command: 'opencode', gatewayBacked: 'nvidia-nim' };
+    expect(prefixOpencodeModel(nim, 'google/gemma-4-31b-it'))
+      .toBe('nvidia-nim/google/gemma-4-31b-it');
+    expect(prefixOpencodeModel(nim, 'poolside/laguna-xs-2.1'))
+      .toBe('nvidia-nim/poolside/laguna-xs-2.1');
+    expect(prefixOpencodeModel(nim, 'nvidia-nim/nvidia-nim/google/gemma-4-31b-it'))
+      .toBe('nvidia-nim/nvidia-nim/google/gemma-4-31b-it');
   });
 
   // A local runtime keeps the single-prefix rule — its stored ids are bare.

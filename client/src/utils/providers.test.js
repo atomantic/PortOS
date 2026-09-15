@@ -240,6 +240,7 @@ describe('generationControlsFor', () => {
     ['OpenCode OrcaRouter', { id: 'opencode-orcarouter', type: 'tui', command: 'opencode', orcarouterBacked: true }, { temperature: true, topP: true, thinking: false }],
     // Same posture for every gateway: upstream models own their reasoning switch.
     ['OpenCode OpenRouter', { id: 'opencode-openrouter', type: 'tui', command: 'opencode', gatewayBacked: 'openrouter' }, { temperature: true, topP: true, thinking: false }],
+    ['OpenCode NVIDIA NIM', { id: 'opencode-nvidia-nim', type: 'tui', command: 'opencode', gatewayBacked: 'nvidia-nim' }, { temperature: true, topP: true, thinking: false }],
     ['cloud API provider', { id: 'anthropic', type: 'api', endpoint: 'https://api.anthropic.com/v1' }, null],
     ['vendor CLI', { id: 'claude-code', type: 'cli', command: 'claude' }, null],
   ])('%s', (_label, provider, expected) => {
@@ -749,11 +750,14 @@ describe('provider type predicates', () => {
     // The generic marker every new gateway wrapper ships with.
     expect(gatewayForProvider({ id: 'opencode-openrouter', gatewayBacked: 'openrouter' }).id).toBe('openrouter');
     expect(gatewayForProvider({ id: 'opencode-openrouter-tui', gatewayBacked: 'openrouter' }).label).toBe('OpenRouter');
+    expect(gatewayForProvider({ id: 'opencode-nvidia-nim', gatewayBacked: 'nvidia-nim' }).id).toBe('nvidia-nim');
+    expect(gatewayForProvider({ id: 'opencode-nvidia-nim-tui', gatewayBacked: 'nvidia-nim' }).label).toBe('NVIDIA NIM');
     // A renamed wrapper that keeps the marker still inherits the sibling key.
     expect(isGatewayBackedProvider({ id: 'my-orca', orcarouterBacked: true })).toBe(true);
     // The sibling API provider itself is NOT gateway-backed (it owns the key).
     expect(isGatewayBackedProvider({ id: 'orcarouter', type: 'api' })).toBe(false);
     expect(isGatewayBackedProvider({ id: 'openrouter', type: 'api' })).toBe(false);
+    expect(isGatewayBackedProvider({ id: 'nvidia-nim', type: 'api' })).toBe(false);
     // An ollama-backed OpenCode wrapper shares the form shape but not the marker.
     expect(isGatewayBackedProvider({ id: 'opencode-ollama', ollamaBacked: true })).toBe(false);
     expect(isGatewayBackedProvider({ id: 'x', gatewayBacked: 'not-a-gateway' })).toBe(false);
@@ -1339,10 +1343,12 @@ describe('supportsModelRefresh', () => {
       'claude-sglang', 'claude-sglang-tui', 'codex', 'codex-lmstudio',
       'codex-ollama', 'codex-tui',
       'cursor-cli',
-      'cursor-tui', 'grok', 'lmstudio', 'mtplx', 'nvidia-kimi', 'ollama',
+      'cursor-tui', 'grok', 'lmstudio', 'mtplx', 'nvidia-kimi', 'nvidia-nim', 'ollama',
       'opencode-llama-tui',
       'opencode-lmstudio', 'opencode-lmstudio-tui',
-      'opencode-mtplx', 'opencode-mtplx-tui', 'opencode-ollama',
+      'opencode-mtplx', 'opencode-mtplx-tui',
+      'opencode-nvidia-nim', 'opencode-nvidia-nim-tui',
+      'opencode-ollama',
       'opencode-ollama-tui', 'opencode-openrouter', 'opencode-openrouter-tui',
       'opencode-orcarouter', 'opencode-orcarouter-tui',
       'opencode-sglang', 'opencode-sglang-tui',
@@ -1711,6 +1717,8 @@ describe('credentialSource', () => {
       .toEqual({ kind: 'inherited', ref: 'orcarouter' });
     expect(credentialSource({ id: 'opencode-openrouter', type: 'cli', gatewayBacked: 'openrouter' }))
       .toEqual({ kind: 'inherited', ref: 'openrouter' });
+    expect(credentialSource({ id: 'opencode-nvidia-nim', type: 'cli', gatewayBacked: 'nvidia-nim' }))
+      .toEqual({ kind: 'inherited', ref: 'nvidia-nim' });
   });
 
   it('identifies env credentials from explicit metadata and conventional names', () => {

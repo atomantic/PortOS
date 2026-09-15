@@ -457,6 +457,59 @@
       "tuiPromptDelayMs": 2500,
       "tuiIdleTimeoutMs": 180000
     },
+    "nvidia-nim": {
+      "id": "nvidia-nim",
+      "name": "NVIDIA NIM",
+      "type": "api",
+      "endpoint": "https://integrate.api.nvidia.com/v1",
+      "apiKey": "",
+      "models": ["google/gemma-4-31b-it", "poolside/laguna-xs-2.1"],
+      "defaultModel": "poolside/laguna-xs-2.1",
+      "lightModel": "google/gemma-4-31b-it",
+      "mediumModel": "poolside/laguna-xs-2.1",
+      "heavyModel": "poolside/laguna-xs-2.1",
+      "timeout": 300000,
+      "enabled": false,
+      "envVars": {},
+      "secretEnvVars": []
+    },
+    "opencode-nvidia-nim": {
+      "id": "opencode-nvidia-nim",
+      "name": "OpenCode NVIDIA NIM",
+      "type": "cli",
+      "command": "opencode",
+      "args": ["run"],
+      "endpoint": "https://integrate.api.nvidia.com/v1",
+      "models": ["google/gemma-4-31b-it", "poolside/laguna-xs-2.1"],
+      "defaultModel": "poolside/laguna-xs-2.1",
+      "gatewayBacked": "nvidia-nim",
+      "timeout": 600000,
+      "enabled": false,
+      "envVars": {
+        "OPENCODE_CONFIG_CONTENT": "{\"permission\":\"allow\",\"provider\":{\"nvidia-nim\":{\"npm\":\"@ai-sdk/openai-compatible\",\"name\":\"NVIDIA NIM\",\"options\":{\"baseURL\":\"https://integrate.api.nvidia.com/v1\"}}}}"
+      },
+      "secretEnvVars": [],
+      "headlessArgs": []
+    },
+    "opencode-nvidia-nim-tui": {
+      "id": "opencode-nvidia-nim-tui",
+      "name": "OpenCode NVIDIA NIM TUI",
+      "type": "tui",
+      "command": "opencode",
+      "args": [],
+      "endpoint": "https://integrate.api.nvidia.com/v1",
+      "models": ["google/gemma-4-31b-it", "poolside/laguna-xs-2.1"],
+      "defaultModel": "poolside/laguna-xs-2.1",
+      "gatewayBacked": "nvidia-nim",
+      "timeout": 600000,
+      "enabled": false,
+      "envVars": {
+        "OPENCODE_CONFIG_CONTENT": "{\"permission\":\"allow\",\"provider\":{\"nvidia-nim\":{\"npm\":\"@ai-sdk/openai-compatible\",\"name\":\"NVIDIA NIM\",\"options\":{\"baseURL\":\"https://integrate.api.nvidia.com/v1\"}}}}"
+      },
+      "secretEnvVars": [],
+      "tuiPromptDelayMs": 2500,
+      "tuiIdleTimeoutMs": 180000
+    },
     "opencode-orcarouter-tui": {
       "id": "opencode-orcarouter-tui",
       "name": "OpenCode OrcaRouter TUI",

@@ -10,6 +10,8 @@ describe('catalogSlugForProviderModel', () => {
     expect(catalogSlugForProviderModel('us.anthropic.claude-sonnet-5')).toBe('claude-sonnet-5');
     expect(catalogSlugForProviderModel('global.anthropic.claude-opus-5[1m]')).toBe('claude-opus-5');
     expect(catalogSlugForProviderModel('moonshotai/kimi-k2.5')).toBe('kimi-k2.5');
+    expect(catalogSlugForProviderModel('google/gemma-4-31b-it')).toBe('gemma-4-31b-it');
+    expect(catalogSlugForProviderModel('nvidia-nim/poolside/laguna-xs-2.1')).toBe('laguna-xs-2.1');
     expect(catalogSlugForProviderModel('opencode/muse-spark-1.3-contributor-free')).toBe('muse-spark-1.3');
   });
 

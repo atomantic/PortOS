@@ -6176,6 +6176,70 @@
       "notes": "Nemotron 3.5 Lightning Free. Free endpoint listed on 2026-09-06. Pricing is temporary; usage limits and data-use terms apply (https://opencode.ai/docs/zen/). No verified quality or speed measurement for this exact endpoint/effort; do not transfer a similarly named model's scores."
     },
     {
+      "id": "nim-free-2026-09-google-gemma-4-31b-it",
+      "provider": "NVIDIA NIM",
+      "model": "google/gemma-4-31b-it",
+      "effort": "unspecified",
+      "configuration": "NVIDIA NIM free endpoint; provider default configuration",
+      "billing": "api",
+      "benchmark": "Unbenchmarked (pricing only)",
+      "quality": null,
+      "costPerTask": null,
+      "inputPerMillion": {
+        "value": 0,
+        "source": {
+          "url": "https://build.nvidia.com/google/gemma-4-31b-it",
+          "retrievedAt": "2026-09-15T00:00:00Z",
+          "methodology": "NVIDIA NIM hosted free endpoint google/gemma-4-31b-it at https://integrate.api.nvidia.com/v1. Prototype API listed as a free endpoint on build.nvidia.com; published USD per million input/output tokens is zero. Promotional endpoint pricing, not a measured benchmark task or an unlimited quota guarantee."
+        }
+      },
+      "outputPerMillion": {
+        "value": 0,
+        "source": {
+          "url": "https://build.nvidia.com/google/gemma-4-31b-it",
+          "retrievedAt": "2026-09-15T00:00:00Z",
+          "methodology": "NVIDIA NIM hosted free endpoint google/gemma-4-31b-it at https://integrate.api.nvidia.com/v1. Prototype API listed as a free endpoint on build.nvidia.com; published USD per million input/output tokens is zero. Promotional endpoint pricing, not a measured benchmark task or an unlimited quota guarantee."
+        }
+      },
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "Gemma 4 31B IT. Free NVIDIA NIM endpoint listed on 2026-09-15. Pricing is temporary; usage limits, trial credits, and NVIDIA data-use terms apply (https://build.nvidia.com/google/gemma-4-31b-it). No verified quality or speed measurement for this exact endpoint/effort; do not transfer a similarly named local or third-party hosting's scores."
+    },
+    {
+      "id": "nim-free-2026-09-poolside-laguna-xs-2.1",
+      "provider": "NVIDIA NIM",
+      "model": "poolside/laguna-xs-2.1",
+      "effort": "unspecified",
+      "configuration": "NVIDIA NIM free endpoint; provider default configuration",
+      "billing": "api",
+      "benchmark": "Unbenchmarked (pricing only)",
+      "quality": null,
+      "costPerTask": null,
+      "inputPerMillion": {
+        "value": 0,
+        "source": {
+          "url": "https://build.nvidia.com/poolside/laguna-xs-2.1",
+          "retrievedAt": "2026-09-15T00:00:00Z",
+          "methodology": "NVIDIA NIM hosted free endpoint poolside/laguna-xs-2.1 at https://integrate.api.nvidia.com/v1. Prototype API listed as a free endpoint on build.nvidia.com; published USD per million input/output tokens is zero. Promotional endpoint pricing, not a measured benchmark task or an unlimited quota guarantee."
+        }
+      },
+      "outputPerMillion": {
+        "value": 0,
+        "source": {
+          "url": "https://build.nvidia.com/poolside/laguna-xs-2.1",
+          "retrievedAt": "2026-09-15T00:00:00Z",
+          "methodology": "NVIDIA NIM hosted free endpoint poolside/laguna-xs-2.1 at https://integrate.api.nvidia.com/v1. Prototype API listed as a free endpoint on build.nvidia.com; published USD per million input/output tokens is zero. Promotional endpoint pricing, not a measured benchmark task or an unlimited quota guarantee."
+        }
+      },
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "Laguna XS 2.1. Free NVIDIA NIM endpoint listed on 2026-09-15. Pricing is temporary; usage limits, trial credits, and NVIDIA data-use terms apply (https://build.nvidia.com/poolside/laguna-xs-2.1). No verified quality or speed measurement for this exact endpoint/effort; do not transfer a similarly named OpenRouter or local serving's scores."
+    },
+    {
       "id": "aa-v4.3-google-gemini-3.5-flash-high",
       "provider": "Google",
       "model": "gemini-3.5-flash",

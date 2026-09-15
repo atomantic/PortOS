@@ -3,7 +3,7 @@
  *   data.reference/providers.json                        (PortOS's own install seed)
  *   server/lib/aiToolkit/defaults/providers.sample.json   (the toolkit's fallback seed)
  *
- * Both files describe the same 23 providers, and `loadProviders()` falls
+ * Both files describe the same providers, and `loadProviders()` falls
  * through to the toolkit sample when the install seed is absent — so a model
  * bump that updates one and not the other silently gives some fresh installs a
  * stale tier. That failure then compounds: the provider-bump migrations
