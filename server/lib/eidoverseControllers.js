@@ -63,9 +63,12 @@ export const EIDOVERSE_CONTROLLER_LIMITS = Object.freeze({
   recentEffects: 20,
   noteMax: 240,
   reasonMax: 400,
-  // Half a minute is already far faster than anything ambient needs, and a
-  // day is the longest cadence that still reads as "running".
-  minTickIntervalMs: 30_000,
+  // The floor MATCHES the supervisor's own wake interval
+  // (`SUPERVISOR_INTERVAL_MS` in `services/eidoverseControllerRuntime.js`): a
+  // cadence below the resolution at which "due" is noticed is a number the
+  // schema would accept and the supervisor could never honor. A day is the
+  // longest cadence that still reads as "running".
+  minTickIntervalMs: 60_000,
   maxTickIntervalMs: 86_400_000,
   defaultTickIntervalMs: 300_000,
   // A controller that fails this many ticks in a row is disarmed rather than

@@ -258,6 +258,21 @@ describe('the install store', () => {
     expect(reinstalled.install.installedAt).toBe(at(0));
   });
 
+  it('does not silently re-arm a controller somebody deliberately quieted', async () => {
+    await install();
+    await setEidoverseControllerArmed('plaza-beacon', false, { now: at(MINUTE) });
+
+    // `armed` defaults to true in the schema, so a re-install that never
+    // mentions it must not read as a request to turn the controller back on.
+    const quiet = await install({ config: { label: 'quay', pulseEveryTicks: 4 } }, { now: at(2 * MINUTE) });
+    expect(quiet.install.armed).toBe(false);
+    expect(isEidoverseControllerSupervisorRegistered()).toBe(false);
+
+    const loud = await install({ armed: true, config: { label: 'quay', pulseEveryTicks: 4 } }, { now: at(3 * MINUTE) });
+    expect(loud.install.armed).toBe(true);
+    expect(isEidoverseControllerSupervisorRegistered()).toBe(true);
+  });
+
   it('keeps accumulated state across a disarm and re-arm', async () => {
     await install();
     await runSupervisorPasses(10);

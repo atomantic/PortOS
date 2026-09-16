@@ -61,11 +61,15 @@ const SCHEDULER_EVENT_ID = 'eidoverse-controller-tick';
 
 /**
  * How often the supervisor wakes. This is NOT a controller's cadence — each
- * install carries its own `tickIntervalMs` and steps only when due — it is
- * the resolution at which "due" is noticed. One minute keeps a pass cheap
- * while staying under the 30s floor's own granularity by only one step.
+ * install carries its own `tickIntervalMs` and steps only when due — it is the
+ * resolution at which "due" is noticed.
+ *
+ * Derived from the cadence floor rather than written beside it, because the two
+ * numbers are one decision: a `tickIntervalMs` below the supervisor's wake
+ * interval is a cadence the schema would accept and the supervisor could never
+ * honor, and two independent constants would drift into exactly that.
  */
-const SUPERVISOR_INTERVAL_MS = 60_000;
+const SUPERVISOR_INTERVAL_MS = EIDOVERSE_CONTROLLER_LIMITS.minTickIntervalMs;
 
 const LOG_PREFIX = '🌀 Eidoverse controllers';
 
@@ -156,6 +160,13 @@ export async function installEidoverseController(input, {
   const config = definition.configSchema.safeParse(authored.config);
   if (!config.success) return refused(config.error.issues.map((issue) => `config.${issue.path.join('.') || '<root>'}: ${issue.message}`));
 
+  // `armed` DEFAULTS to true in the schema, so an absent flag is indistinguishable
+  // from `armed: true` by the time zod is done with it. On a re-install that
+  // difference decides whether a controller somebody deliberately quieted comes
+  // back on by itself, so the raw input is what answers it — the "absent vs
+  // intentionally empty" rule in AGENTS.md, applied to a boolean.
+  const armedRequested = typeof input?.armed === 'boolean' ? input.armed : null;
+
   const nowMs = Date.parse(now);
   return withStoreLock(async () => {
     const installs = await readInstalls();
@@ -164,8 +175,10 @@ export async function installEidoverseController(input, {
       return refused([`this install already holds ${EIDOVERSE_CONTROLLER_LIMITS.installs} controllers — retire one before installing another`]);
     }
 
+    const armed = armedRequested ?? (existing ? existing.armed : authored.armed);
     const record = {
       ...authored,
+      armed,
       config: config.data,
       installedBy: existing?.installedBy || installedBy,
       installedAt: existing?.installedAt || now,
@@ -177,7 +190,10 @@ export async function installEidoverseController(input, {
       lastOutcome: null,
       recentEffects: [],
       consecutiveFailures: 0,
-      disarmedReason: null,
+      // A re-install that leaves a controller disarmed keeps the reason it was
+      // disarmed for, so the author is not left looking at a stopped controller
+      // with no explanation. Re-arming answers the reason, so it clears it.
+      disarmedReason: armed ? null : (existing?.disarmedReason ?? null),
     };
     installs[authored.id] = record;
     await writeInstalls(installs);
@@ -285,15 +301,18 @@ function recordedEffects(existing, effects, { at, tick }) {
  * controller id that no longer resolves disarms immediately — retrying a
  * missing definition cannot start succeeding.
  */
-async function stepInstall(record, { nowMs, at, resolveDefinition, deliver, signal }) {
+async function stepInstall(record, { nowMs, at, resolveDefinition }) {
   const definition = await resolveDefinition(record.controllerId);
   const nextTickAt = nextControllerTickAt(record, nowMs);
   if (!definition) {
     const reason = `no controller is registered under "${record.controllerId}" any more — this install was authored by a version that shipped it`;
     console.error(`❌ ${LOG_PREFIX}: disarming "${record.id}" — ${reason}`);
     return {
-      ...record, armed: false, disarmedReason: reason, nextTickAt, lastTickAt: at,
-      lastOutcome: { at, tick: record.tick, ok: false, reason, effects: 0, delivered: 0, deliveryError: null },
+      record: {
+        ...record, armed: false, disarmedReason: reason, nextTickAt, lastTickAt: at,
+        lastOutcome: { at, tick: record.tick, ok: false, reason, effects: 0, delivered: 0, deliveryError: null },
+      },
+      effects: [],
     };
   }
 
@@ -304,53 +323,108 @@ async function stepInstall(record, { nowMs, at, resolveDefinition, deliver, sign
     const exhausted = consecutiveFailures >= EIDOVERSE_CONTROLLER_LIMITS.maxConsecutiveFailures;
     console.error(`❌ ${LOG_PREFIX}: "${record.id}" tick ${tick} failed (${consecutiveFailures}/${EIDOVERSE_CONTROLLER_LIMITS.maxConsecutiveFailures}): ${outcome.reason}`);
     return {
-      ...record,
-      // The tick ordinal advances on a failure too: it counts attempts the
-      // supervisor made, so a controller cannot look younger than it is by
-      // failing, and a step that reads `tick` sees time moving either way.
-      tick,
-      consecutiveFailures,
-      ...(exhausted ? { armed: false, disarmedReason: `disarmed after ${consecutiveFailures} consecutive failed ticks: ${outcome.reason}` } : {}),
-      nextTickAt,
-      lastTickAt: at,
-      lastOutcome: { at, tick, ok: false, reason: outcome.reason, effects: 0, delivered: 0, deliveryError: null },
+      record: {
+        ...record,
+        // The tick ordinal advances on a failure too: it counts attempts the
+        // supervisor made, so a controller cannot look younger than it is by
+        // failing, and a step that reads `tick` sees time moving either way.
+        tick,
+        consecutiveFailures,
+        ...(exhausted ? { armed: false, disarmedReason: `disarmed after ${consecutiveFailures} consecutive failed ticks: ${outcome.reason}` } : {}),
+        nextTickAt,
+        lastTickAt: at,
+        lastOutcome: { at, tick, ok: false, reason: outcome.reason, effects: 0, delivered: 0, deliveryError: null },
+      },
+      effects: [],
     };
   }
 
-  let delivery = { delivered: 0, error: null };
-  if (record.deliverEffects && outcome.effects.length > 0) {
-    // try/catch at a boundary OUTSIDE the Express request lifecycle, per the
-    // explicit exception in AGENTS.md "Code Conventions": the world may be
-    // unreachable, and a rejection here would surface from a timer callback.
-    // A failed delivery is recorded and the STEP still counts — the
-    // controller's own state advanced, and re-running it to retry a world
-    // write would double-count everything it did.
+  return {
+    record: {
+      ...record,
+      state: outcome.state,
+      tick,
+      consecutiveFailures: 0,
+      nextTickAt,
+      lastTickAt: at,
+      // Delivery has not run yet — it happens after the store lock is released.
+      // A reader between the two phases sees an honest "nothing delivered yet"
+      // rather than a number the pass has not earned.
+      lastOutcome: { at, tick, ok: true, reason: null, effects: outcome.effects.length, delivered: 0, deliveryError: null },
+      recentEffects: recordedEffects(record.recentEffects, outcome.effects, { at, tick }),
+    },
+    effects: record.deliverEffects ? outcome.effects : [],
+  };
+}
+
+/**
+ * Deliver one pass's effects, OUTSIDE the store lock.
+ *
+ * Stepping is synchronous and fast; reaching the world is neither. Holding the
+ * store lock across a world call would block a mind's install or retire for as
+ * long as an unreachable world takes to give up — so the pass steps and writes
+ * first, then delivers, then records what happened in a second short write.
+ *
+ * try/catch per install at a boundary OUTSIDE the Express request lifecycle,
+ * per the explicit exception in AGENTS.md "Code Conventions": the world may be
+ * unreachable, and a rejection here would surface from a timer callback. A
+ * failed delivery is recorded and the STEP still counts — the controller's own
+ * state already advanced, and re-running it to retry a world write would
+ * double-count everything it did.
+ */
+async function deliverPassEffects(stepped, { deliver, signal }) {
+  const deliveries = [];
+  for (const { record, effects } of stepped) {
+    if (effects.length === 0) continue;
     try {
-      delivery = await deliver(outcome.effects, { signal });
+      const { delivered, error } = await deliver(effects, { signal });
+      deliveries.push({ id: record.id, tick: record.tick, delivered, error });
     } catch (error) {
-      delivery = { delivered: 0, error: String(error.message).slice(0, EIDOVERSE_CONTROLLER_LIMITS.reasonMax) };
-      console.error(`❌ ${LOG_PREFIX}: "${record.id}" tick ${tick} stepped but could not reach the world: ${delivery.error}`);
+      const message = String(error.message).slice(0, EIDOVERSE_CONTROLLER_LIMITS.reasonMax);
+      console.error(`❌ ${LOG_PREFIX}: "${record.id}" tick ${record.tick} stepped but could not reach the world: ${message}`);
+      deliveries.push({ id: record.id, tick: record.tick, delivered: 0, error: message });
     }
   }
+  return deliveries;
+}
 
-  return {
-    ...record,
-    state: outcome.state,
-    tick,
-    consecutiveFailures: 0,
-    nextTickAt,
-    lastTickAt: at,
-    lastOutcome: { at, tick, ok: true, reason: null, effects: outcome.effects.length, delivered: delivery.delivered, deliveryError: delivery.error },
-    recentEffects: recordedEffects(record.recentEffects, outcome.effects, { at, tick }),
-  };
+/**
+ * Fold delivery outcomes back onto the records they belong to.
+ *
+ * Each patch is applied only while the record's `lastOutcome.tick` still
+ * matches the tick that produced those effects: an install or retire landing
+ * between the two phases has replaced what the delivery was about, and
+ * stamping a delivery count onto it would describe work that record never did.
+ */
+async function recordDeliveries(deliveries) {
+  if (deliveries.length === 0) return;
+  await withStoreLock(async () => {
+    const installs = await readInstalls();
+    let changed = false;
+    for (const { id, tick, delivered, error } of deliveries) {
+      const current = installs[id];
+      if (!current || current.lastOutcome?.tick !== tick) continue;
+      installs[id] = { ...current, lastOutcome: { ...current.lastOutcome, delivered, deliveryError: error } };
+      changed = true;
+    }
+    if (changed) await writeInstalls(installs);
+  });
 }
 
 /**
  * Run one supervisor pass: step every armed install that is due.
  *
- * Serialized against other passes, and the whole read-step-write is inside the
- * store lock so an install or retire landing mid-pass cannot be overwritten by
- * a record set this pass read before it.
+ * Three phases, and the split is the point. The step phase holds the store
+ * lock — read, step every due install, write — because stepping is synchronous
+ * and fast and nothing else may interleave a write with it. Delivery then runs
+ * with the lock RELEASED, because reaching the world is neither fast nor
+ * bounded by anything this module controls, and a mind's install call must not
+ * queue behind an unreachable world. A short third phase folds the delivery
+ * outcomes back on.
+ *
+ * Passes are serialized against each other on `passTail`, so the gap between
+ * phases can only be filled by an install/retire/arm — which the third phase's
+ * tick-match guard already refuses to stamp over.
  *
  * @returns {Promise<{ ticked: number, due: number, results: Array }>}
  */
@@ -368,29 +442,40 @@ async function tickOnce({
   signal,
 } = {}) {
   const nowMs = Date.parse(now);
-  return withStoreLock(async () => {
+  const pass = await withStoreLock(async () => {
     const installs = await readInstalls();
     const due = Object.values(installs).filter((record) => controllerTickDue(record, nowMs));
-    if (due.length === 0) return { ticked: 0, due: 0, results: [] };
+    if (due.length === 0) return { ticked: 0, due: 0, results: [], stepped: [], gateMoved: false };
 
-    const results = [];
-    let disarmedAny = false;
+    const stepped = [];
+    let gateMoved = false;
     for (const record of due) {
-      const next = await stepInstall(record, { nowMs, at: now, resolveDefinition, deliver, signal });
-      installs[next.id] = next;
-      disarmedAny = disarmedAny || next.armed !== record.armed;
-      results.push({ id: next.id, tick: next.tick, ok: next.lastOutcome?.ok === true, reason: next.lastOutcome?.reason ?? null });
+      const next = await stepInstall(record, { nowMs, at: now, resolveDefinition });
+      installs[next.record.id] = next.record;
+      gateMoved = gateMoved || next.record.armed !== record.armed;
+      stepped.push(next);
     }
     await writeInstalls(installs);
-    return { ticked: results.length, due: due.length, results, disarmedAny };
-  }).then(async (pass) => {
-    // A pass that disarmed the last armed install has moved the gate as surely
-    // as a retire did, so it reconciles too — otherwise the supervisor keeps
-    // waking every minute to find nothing to do until the next restart.
-    if (pass.disarmedAny) await reconcileEidoverseControllerTicks({ reason: 'supervisor-disarm' });
-    const { disarmedAny: _moved, ...result } = pass;
-    return result;
+    return {
+      ticked: stepped.length,
+      due: due.length,
+      results: stepped.map(({ record }) => ({ id: record.id, tick: record.tick, ok: record.lastOutcome?.ok === true, reason: record.lastOutcome?.reason ?? null })),
+      stepped,
+      gateMoved,
+    };
   });
+
+  await recordDeliveries(await deliverPassEffects(pass.stepped, { deliver, signal }));
+
+  // A pass that disarmed a controller has moved the arming gate, so it
+  // reconciles for the same reason install and retire do. The reconcile is
+  // idempotent and re-reads the gate itself, so it correctly does nothing when
+  // other installs are still armed and stands the supervisor down when the
+  // disarmed one was the last.
+  if (pass.gateMoved) await reconcileEidoverseControllerTicks({ reason: 'supervisor-disarm' });
+
+  const { stepped: _stepped, gateMoved: _gateMoved, ...result } = pass;
+  return result;
 }
 
 // ---------------------------------------------------------------------------
