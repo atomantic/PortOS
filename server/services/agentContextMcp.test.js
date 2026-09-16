@@ -42,6 +42,7 @@ vi.mock('./cosToolRegistry.js', () => ({
 }));
 
 import { AGENT_CONTEXT_LIMITS } from '../lib/agentContextValidation.js';
+import { PII_PATTERNS } from '../lib/piiRedactionPatterns.js';
 import {
   callAgentContextTool,
   getAgentContextManifest,
@@ -166,8 +167,11 @@ describe('agentContextMcp service', () => {
     }]);
     const result = await callAgentContextTool('list_context', { scope: 'brain' });
     const serialized = JSON.stringify(result);
-    expect(serialized).toContain('[REDACTED EMAIL]');
-    expect(serialized).toContain('[REDACTED IP]');
+    // Canonical redaction tokens moved to the shared table's placeholders
+    // (#7474) — the strings themselves are no longer this service's own,
+    // but the leak-proofing the assertions below check is unchanged.
+    expect(serialized).toContain('<email>');
+    expect(serialized).toContain('<ip>');
     expect(serialized).not.toContain('alice@example.com');
     expect(serialized).not.toContain('/Users/alice');
     expect(serialized).not.toContain('sk-12345678901234567890');
@@ -216,5 +220,19 @@ describe('agentContextMcp service', () => {
 
   it('keeps redacted summaries within the advertised cap', () => {
     expect(redactAgentContextText('x'.repeat(1_000))).toHaveLength(AGENT_CONTEXT_LIMITS.maxSummaryChars);
+  });
+
+  it('reaches codes this file never redacted before #7474 (Windows paths, .local hosts)', () => {
+    // redactAgentContextText's own regex chain (pre-#7474) had no Windows
+    // drive-path pattern and only matched `.ts.net`, not `.local` mDNS
+    // hosts — both reached an agent-context summary verbatim. It now
+    // composes lib/piiRedactionPatterns.js's full table via redactPii, so a
+    // later table addition reaches this consumer with no code change here —
+    // this pins that it does today for the codes gained by converging.
+    for (const code of ['windows-path', 'network-host']) {
+      expect(PII_PATTERNS.some((entry) => entry.code === code), `table still declares ${code}`).toBe(true);
+    }
+    expect(redactAgentContextText('checkout at C:\\Users\\exampleuser\\portos')).not.toContain('exampleuser');
+    expect(redactAgentContextText('short-host printer.local timed out')).not.toContain('printer');
   });
 });

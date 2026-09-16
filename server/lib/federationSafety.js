@@ -29,31 +29,13 @@
 
 import { scrubSecretTokens } from './secretText.js';
 import { isSecretKey } from './secretKeys.js';
+import { PII_PATTERNS } from './piiRedactionPatterns.js';
 
-// Derived from the two redaction tables already in the tree —
-// `services/agentContextMcp.js#redactAgentContextText` and
-// `services/agentErrorAnalysis.js#SNIPPET_REDACTIONS` — so this gate is not
-// weaker than what a log line already gets. Those two still own their own
-// REPLACEMENT strings; converging all three onto this list is #7474.
-const PRIVACY_PATTERNS = Object.freeze([
-  // `/Users/<name>/…`, `/home/<name>/…` — the OS username by another name.
-  ['home-path', /(?:^|[\s"'`(])(?:\/Users|\/home)\/[^/\s"'`]+/i],
-  // `C:\Users\<name>` and any other Windows drive-absolute path.
-  ['windows-path', /\b[A-Za-z]:[\\/](?:Users[\\/])?[^\s"'`]+/],
-  ['ip-literal', /\b(?:(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)\.){3}(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)\b/],
-  // IPv6, which also matches a MAC and a `14:25:30` clock time. Both are
-  // over-refusals this module accepts on purpose: the finding names the field,
-  // and a timestamp belongs in a typed date field rather than loose in a body.
-  ['ip-literal', /\b(?:[A-Fa-f0-9]{1,4}:){2,7}[A-Fa-f0-9]{0,4}\b/],
-  // Tailscale MagicDNS and mDNS names, all labels (not just the leading one).
-  ['network-host', /\b[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.(?:ts\.net|local)\b/i],
-  ['mac-address', /\b[0-9A-Fa-f]{2}(?::[0-9A-Fa-f]{2}){5}\b/],
-  ['email-address', /\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b/],
-  ['phone-number', /\b\+?\d[\d ().-]{8,}\d\b/],
-  // Only the LABELLED form: a bare decimal pair is indistinguishable from any
-  // other two numbers, and refusing every such pair would be noise.
-  ['gps-coordinate', /\b(?:latitude|longitude|lat|lon|lng)\s*[:=]\s*-?\d{1,3}(?:\.\d+)?/i],
-]);
+// The machine-identity / PII regex table itself now lives in the shared leaf
+// `piiRedactionPatterns.js` (#7474), which `services/agentContextMcp.js` and
+// `services/agentErrorAnalysis.js` also read — a correction here (a
+// multi-label host, a Windows path, IPv6) reaches every consumer instead of
+// drifting across three independently-maintained copies.
 
 /** `a.b.0.c`, or `<root>` for a bare string handed in with no path. */
 export const describeJsonPath = (path) => (path.length === 0 ? '<root>' : path.join('.'));
@@ -95,7 +77,7 @@ export function federationSafetyFindings(value, { limit = 40 } = {}) {
   const findings = [];
   walkJsonText(value, ({ text, path, kind }) => {
     const at = describeJsonPath(path);
-    for (const [code, pattern] of PRIVACY_PATTERNS) {
+    for (const { code, pattern } of PII_PATTERNS) {
       if (pattern.test(text)) findings.push({ code, path: at, detail: `a ${code.replace('-', ' ')} may not cross the federation layer` });
     }
     if (scrubSecretTokens(text) !== text) {

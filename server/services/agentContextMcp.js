@@ -4,6 +4,7 @@ import { BRAIN_SEARCH_TYPES, getBrainProjections } from './brainSearchIndex.js';
 import { listContexts } from './workspaceContext.js';
 import { previewLegacyExport, redactSecrets } from './legacyExport.js';
 import { NAV_COMMANDS, resolveNavCommand } from '../lib/navManifest.js';
+import { redactPii } from '../lib/piiRedactionPatterns.js';
 import {
   AGENT_CONTEXT_DEFAULT_SCOPES,
   AGENT_CONTEXT_DEFAULT_ACTIONS,
@@ -36,17 +37,7 @@ const normalizedText = (value) => String(value ?? '').replace(/\s+/g, ' ').trim(
 const searchableText = (value) => normalizedText(value).slice(0, 2_000);
 
 export function redactAgentContextText(value) {
-  return cap(redactSecrets(normalizedText(value))
-    .replace(/\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/gi, '[REDACTED EMAIL]')
-    .replace(/\b[A-Z0-9-]+(?:\.[A-Z0-9-]+)*\.ts\.net\b/gi, '[REDACTED HOST]')
-    .replace(/\b(?:\d{1,3}\.){3}\d{1,3}\b/g, '[REDACTED IP]')
-    .replace(/\b(?:[A-F0-9]{1,4}:){2,7}[A-F0-9]{0,4}\b/gi, '[REDACTED IP]')
-    .replace(/\b(?:[A-F0-9]{2}:){5}[A-F0-9]{2}\b/gi, '[REDACTED MAC]')
-    .replace(/(?:\/Users\/|\/home\/)[^/\s]+/g, '~')
-    .replace(/\b(?:\+?\d[\d ().-]{8,}\d)\b/g, '[REDACTED PHONE]')
-    .replace(/\b(?:latitude|lat)\s*[:=]\s*-?\d{1,3}(?:\.\d+)?/gi, 'latitude=[REDACTED]')
-    .replace(/\b(?:longitude|lon|lng)\s*[:=]\s*-?\d{1,3}(?:\.\d+)?/gi, 'longitude=[REDACTED]'),
-  AGENT_CONTEXT_LIMITS.maxSummaryChars);
+  return cap(redactPii(redactSecrets(normalizedText(value))), AGENT_CONTEXT_LIMITS.maxSummaryChars);
 }
 
 export function resolveAgentContextConfig(settings = {}) {

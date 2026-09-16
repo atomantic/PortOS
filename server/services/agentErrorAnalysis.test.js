@@ -29,6 +29,7 @@ import {
   INVESTIGATION_STORM_HOLD_THRESHOLD,
   resolveInvestigationApproval,
 } from '../lib/investigationTasks.js';
+import { PII_PATTERNS } from '../lib/piiRedactionPatterns.js';
 import { detectImmediateFallbackSignal } from '../lib/aiToolkit/errorDetection.js';
 import { API_ACCESS_ERROR_CATEGORIES } from './agentErrorAnalysis.js';
 import { ENVIRONMENTAL_ERROR_CATEGORIES } from './taskLearning/metrics.js';
@@ -1070,6 +1071,22 @@ describe('redactFailureSnippet', () => {
     const out = redactFailureSnippet('x'.repeat(500));
     expect(out.length).toBeLessThanOrEqual(241);
     expect(out.endsWith('…')).toBe(true);
+  });
+
+  it('reaches codes this file never redacted before #7474 (phone, MAC, GPS)', () => {
+    // agentErrorAnalysis's own SNIPPET_REDACTIONS table (pre-#7474) had no
+    // phone, MAC, or GPS entries, so a bare MAC address or lat/long pair
+    // reached the investigation body verbatim. redactFailureSnippet now
+    // reads lib/piiRedactionPatterns.js's full table via redactPii, so a
+    // later addition there reaches this consumer automatically — this pins
+    // that it does today, for the codes this file gained by converging.
+    const newlyCoveredCodes = ['mac-address', 'phone-number', 'gps-coordinate'];
+    for (const code of newlyCoveredCodes) {
+      expect(PII_PATTERNS.some((entry) => entry.code === code), `table still declares ${code}`).toBe(true);
+    }
+    expect(redactFailureSnippet('nic de:ad:be:ef:00:11 reset')).not.toContain('de:ad:be:ef:00:11');
+    expect(redactFailureSnippet('call +1 555 010 4477')).not.toContain('555 010 4477');
+    expect(redactFailureSnippet('recorded latitude: 37.4219')).not.toContain('37.4219');
   });
 });
 
