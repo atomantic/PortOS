@@ -40,13 +40,16 @@ describe('migration 391 — credential bootstrap on mode siblings', () => {
     expect(readJson(providersPath)).toEqual(out);
   });
 
-  it('leaves a pair alone when both modes name a bootstrap, and when they are not the same connection', async () => {
+  it('leaves a pair alone when the two modes CONTRADICT each other', async () => {
     const other = { command: 'other-cli' };
     const providers = {
       ...pair({ cli: { credentialBootstrap: BOOTSTRAP }, tui: { credentialBootstrap: other } }),
-      // Same harness, different backend: two connections, not one card.
-      split: { id: 'split', type: 'cli', command: 'split', models: [], envVars: { ANTHROPIC_BASE_URL: 'http://127.0.0.1:11434' }, credentialBootstrap: BOOTSTRAP },
-      'split-tui': { id: 'split-tui', type: 'tui', command: 'split', models: [], envVars: {} },
+      // Two backends named outright: two connections, not one card. The
+      // contradiction disqualifies the whole group, so the bootstrap only the
+      // CLI names must not reach the TUI either — a credential entered for one
+      // backend never follows the pair to another (#7500).
+      split: { id: 'split', type: 'cli', command: 'split', models: [], envVars: { EXAMPLE_BASE_URL: 'http://127.0.0.1:11434' }, credentialBootstrap: BOOTSTRAP },
+      'split-tui': { id: 'split-tui', type: 'tui', command: 'split', models: [], envVars: { EXAMPLE_BASE_URL: 'https://api.example.com' } },
     };
     writeJson(providersPath, { providers });
 
@@ -54,6 +57,24 @@ describe('migration 391 — credential bootstrap on mode siblings', () => {
     const out = readJson(providersPath).providers;
     expect(out['example-tui'].credentialBootstrap).toEqual(other);
     expect(out['split-tui']).not.toHaveProperty('credentialBootstrap');
+  });
+
+  it('converges a pair that carries the whole connection on only ONE mode', async () => {
+    // The reserved `<stem>` / `<stem>-tui` id pair IS the declaration that two
+    // records are one harness in two modes, so a sibling carrying nothing is an
+    // INCOMPLETE pair, not a second connection — a second connection gets its
+    // own id. Deciding that for endpoint/apiKey/envVars as well as the
+    // bootstrap is what #7500 settled; a contradiction still blocks the fill.
+    writeJson(providersPath, { providers: pair({ cli: {
+      endpoint: 'https://api.example.com', apiKey: 'k', envVars: { EXAMPLE_BASE_URL: 'https://api.example.com' },
+    } }) });
+
+    expect(await migration.up({ rootDir })).toMatchObject({ ok: true, updated: 1 });
+    const out = readJson(providersPath).providers;
+    expect(out['example-tui']).toMatchObject({
+      endpoint: 'https://api.example.com', apiKey: 'k', envVars: { EXAMPLE_BASE_URL: 'https://api.example.com' },
+    });
+    expect(out['example-tui'].args).toEqual([]);
   });
 
   it('skips an install with no providers file', async () => {
