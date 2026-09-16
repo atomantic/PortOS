@@ -22,6 +22,7 @@ import { mergeFamilyMap, normalizeFamilyMap } from '../lib/familySettingsMap.js'
  */
 
 const SETTINGS_KEY = 'subscriptionPlanTiers';
+const FAMILY_TOGGLE_STATE = 'subscriptionFamilyToggleState';
 
 /** Pure: normalize a whole tier map, dropping every cleared/invalid entry. */
 export const normalizePlanTiers = (raw) => normalizeFamilyMap(raw, normalizePlanTier);
@@ -137,15 +138,62 @@ export async function getSubscriptionOverview() {
  * A family with no providers configured is reported as `applied: false` rather
  * than treated as an error — the row exists because the plan is priced, and
  * there is simply nothing local to toggle. Its price stays stored either way.
+ *
+ * When turning a family OFF, we record which providers the toggle disabled
+ * (not those already disabled) so that turning it back ON restores only those,
+ * not providers the user had individually disabled.
  */
 export async function setSubscriptionEnabled(family, enabled) {
   const members = groupProvidersByFamily(await listProviders()).get(family) || [];
   const changed = [];
-  for (const provider of members) {
-    if ((provider.enabled === true) === enabled) continue;
-    await updateProvider(provider.id, { enabled });
-    changed.push(provider.id);
+  const settings = await getSettings();
+  const toggleState = settings?.[FAMILY_TOGGLE_STATE] || {};
+
+  if (enabled === false) {
+    // Toggling OFF: record which providers this toggle disables (not already-disabled ones)
+    const disabledByThisToggle = [];
+    for (const provider of members) {
+      if (provider.enabled === true) {
+        await updateProvider(provider.id, { enabled: false });
+        changed.push(provider.id);
+        disabledByThisToggle.push(provider.id);
+      }
+    }
+    // Store which providers this toggle disabled, so we can restore only those when toggling on
+    toggleState[family] = disabledByThisToggle;
+    await updateSettingsWith((current) => ({
+      ...current,
+      [FAMILY_TOGGLE_STATE]: toggleState,
+    }));
+  } else {
+    // Toggling ON: if toggle state exists, restore only providers disabled by that toggle.
+    // If no toggle state, enable all currently-disabled providers (backward compatibility).
+    const disabledByToggle = toggleState[family];
+    if (disabledByToggle) {
+      // We have toggle state: restore only providers that toggle disabled
+      for (const provider of members) {
+        if (disabledByToggle.includes(provider.id) && provider.enabled !== true) {
+          await updateProvider(provider.id, { enabled: true });
+          changed.push(provider.id);
+        }
+      }
+      // Clear the toggle state for this family
+      delete toggleState[family];
+      await updateSettingsWith((current) => ({
+        ...current,
+        [FAMILY_TOGGLE_STATE]: toggleState,
+      }));
+    } else {
+      // No toggle state: enable all currently-disabled providers (original behavior)
+      for (const provider of members) {
+        if (provider.enabled !== true) {
+          await updateProvider(provider.id, { enabled: true });
+          changed.push(provider.id);
+        }
+      }
+    }
   }
+
   return {
     family,
     enabled: members.length ? enabled : false,

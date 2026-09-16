@@ -143,4 +143,28 @@ describe('runResilienceAssay', () => {
     expect(result.pass).toBe(false);
     expect(result.reasons.some((reason) => reason.startsWith('[load-projection]'))).toBe(true);
   });
+
+  it('rejects an async invariant as a failure, same as an async controller.step()', () => {
+    const contribution = {
+      id: 'async-invariant',
+      createSandbox() {
+        return {
+          worldState: { counter: 0 },
+          controller: { step: (state) => ({ ...state, counter: state.counter + 1 }) },
+        };
+      },
+      invariants: [
+        async (worldState) => {
+          // Simulating an invariant that awaits something (network, disk, etc.)
+          await Promise.resolve();
+          return worldState.counter < 5;
+        },
+      ],
+    };
+
+    const result = runResilienceAssay(contribution, { warmupTicks: 2, recoveryTicks: 0 });
+
+    expect(result.pass).toBe(false);
+    expect(result.reasons.some((reason) => reason.includes('returned a Promise') && reason.includes('must be synchronous'))).toBe(true);
+  });
 });

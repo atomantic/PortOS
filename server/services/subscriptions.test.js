@@ -167,4 +167,73 @@ describe('setSubscriptionEnabled', () => {
     expect(result).toEqual({ family: 'grok', enabled: false, applied: false, changed: [] });
     expect(updateProvider).not.toHaveBeenCalled();
   });
+
+  it('remembers which providers the toggle disabled, restoring only those when re-enabled', async () => {
+    // Regression: family toggle off/on was re-enabling providers the user had individually disabled.
+    // User disables claude-code manually, then toggles Claude family off, then back on.
+    // claude-code should remain disabled because the user disabled it, not the toggle.
+    providerRecords = [
+      claudeCli,          // enabled
+      { ...claudeAlt },   // disabled by user manually
+    ];
+    updateProvider.mockClear();
+
+    // User individually disables claude-code
+    providerRecords[0].enabled = false;
+
+    // User toggles Claude family OFF
+    let result = await setSubscriptionEnabled('claude', false);
+    expect(result.changed).toEqual([]);  // Already disabled, no change needed
+    expect(updateProvider).not.toHaveBeenCalled();
+
+    // State is now: claude-code disabled (by user), claude-code-alt disabled (was already)
+    expect(providerRecords[0].enabled).toBe(false);
+    expect(providerRecords[1].enabled).toBe(false);
+
+    // User toggles Claude family back ON
+    result = await setSubscriptionEnabled('claude', true);
+    // Nothing should be re-enabled because both were already disabled
+    expect(result.changed).toEqual([]);
+    expect(providerRecords[0].enabled).toBe(false);
+    expect(providerRecords[1].enabled).toBe(false);
+  });
+
+  it('restores providers disabled by the toggle while keeping user-disabled ones off', async () => {
+    // Regression: when re-enabling a family, restore only providers the toggle disabled,
+    // not those the user had disabled before the toggle cycle.
+    providerRecords = [
+      claudeCli,          // enabled
+      { ...claudeAlt },   // disabled by user
+    ];
+    updateProvider.mockClear();
+
+    // User disables claude-code manually before toggling the family
+    providerRecords[0].enabled = false;
+    updateProvider.mockClear();
+
+    // User toggles family OFF (nothing changes since both are already disabled)
+    let result = await setSubscriptionEnabled('claude', false);
+    expect(updateProvider).not.toHaveBeenCalled();
+    expect(result.changed).toEqual([]);
+
+    // Now enable both, so only the toggle matters
+    providerRecords[0].enabled = true;
+    providerRecords[1].enabled = true;
+
+    // User manually disables claude-code-alt again
+    providerRecords[1].enabled = false;
+    updateProvider.mockClear();
+
+    // User toggles Claude family OFF
+    result = await setSubscriptionEnabled('claude', false);
+    expect(result.changed).toEqual(['claude-code']);
+    expect(updateProvider).toHaveBeenCalledWith('claude-code', { enabled: false });
+
+    // Now both are disabled. User toggles back ON
+    result = await setSubscriptionEnabled('claude', true);
+    // Should restore only claude-code (disabled by toggle), not claude-code-alt (user-disabled)
+    expect(result.changed).toEqual(['claude-code']);
+    expect(providerRecords[0].enabled).toBe(true);
+    expect(providerRecords[1].enabled).toBe(false);
+  });
 });

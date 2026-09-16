@@ -100,6 +100,10 @@ function runInvariants(worldState, tick, invariants) {
       return;
     }
     if (result === true || result == null) return;
+    if (isThenable(result)) {
+      failures.push(`tick ${tick}: invariant "${label}" returned a Promise — invariants must be synchronous`);
+      return;
+    }
     if (result === false) {
       failures.push(`tick ${tick}: invariant "${label}" failed`);
       return;

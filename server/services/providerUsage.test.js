@@ -582,6 +582,27 @@ describe('parseGrokUsage', () => {
     expect(parseGrokUsage('Weekly limit (8% used): 42%', opts).plan).toBeNull();
     expect(parseGrokUsage('Weekly limit (SuperGrok): 42%', opts).plan).toBe('SuperGrok');
   });
+
+  it('accepts multi-word vendor tier names with interior spaces', () => {
+    // Regression: plan names like "Claude Max 20x" and "SuperGrok Heavy" were
+    // dropped because the regex forbade spaces. They are valid vendor tiers.
+    expect(parseGrokUsage('Weekly limit (Claude Max 20x): 42%', opts).plan).toBe('Claude Max 20x');
+    expect(parseGrokUsage('Weekly limit (SuperGrok Heavy): 42%', opts).plan).toBe('SuperGrok Heavy');
+    expect(parseGrokUsage('Weekly limit (Max 20x): 42%', opts).plan).toBe('Max 20x');
+    // Still rejects leading/trailing spaces (the code trims these before testing)
+    expect(parseGrokUsage('Weekly limit (Claude Max 20x ): 42%', opts).plan).toBe('Claude Max 20x');
+    expect(parseGrokUsage('Weekly limit ( Claude Max 20x): 42%', opts).plan).toBe('Claude Max 20x');
+  });
+
+  it('still caps a tier-shaped name at 60 characters', () => {
+    // Allowing interior spaces must not drop the length cap the single-token
+    // form carried: a long scraped fragment shaped like a tier is still panel
+    // text, not a plan, and a wrong plan reads as fact.
+    const sixty = `Max ${'A'.repeat(56)}`;
+    expect(sixty).toHaveLength(60);
+    expect(parseGrokUsage(`Weekly limit (${sixty}): 42%`, opts).plan).toBe(sixty);
+    expect(parseGrokUsage(`Weekly limit (Max ${'A'.repeat(57)}): 42%`, opts).plan).toBeNull();
+  });
 });
 
 describe('TUI usage fetchers (via getProviderQuotas)', () => {
