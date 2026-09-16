@@ -225,6 +225,53 @@ Per-site idioms:
   label's text as its accessible name. Pair `htmlFor`/`id` and keep the button a
   sibling, which is the convention anyway.
 
+### Client suite time budgets
+
+Two numbers, derived from one another in `client/src/test/timeouts.js` rather
+than written side by side:
+
+| Budget | Value | Applied by |
+| --- | --- | --- |
+| Testing Library `asyncUtilTimeout` (`waitFor`, `findBy*`) | 5000 ms | `client/src/test/setup.js` |
+| Vitest `testTimeout` / `hookTimeout` | 15000 ms (3x) | `client/vitest.config.js` |
+
+**The ordering is the point, not the values.** An inner bound that reaches the
+budget enclosing it can never report its own failure: the test dies first with a
+bare "test timed out" naming nothing it was waiting on. That has shipped twice —
+`WordplayTrainer`'s 5 s drill bound against Vitest's 5 s default, and a
+`{ timeout: 15000 }` in `BeeperTab.test.jsx` that could never wait past 5 s and
+so never helped. `client/src/test/timeouts.test.js` fails CI on an inline
+`waitFor`/`findBy*` bound at or above the per-test budget — recognised by the
+option object's keys, so `{ timeout, interval }` counts and a fixture record
+that merely holds a `timeout` field does not. It asserts the EFFECTIVE runtime
+values rather than the module constants, so a `configure()` that stopped being
+applied is caught too. A file that raises its own budget with
+`vi.setConfig({ testTimeout })` is exempt.
+
+5000 ms because Testing Library's 1000 ms default, and the 3000 ms this suite
+ran at before #7448, both sat under what a 2-vCPU public runner needs: shard 1
+failed a different `await`-a-mock-call assertion on most runs while passing
+locally every time. A loaded runner should make a test slower, not red. The cost
+is that a genuinely hung assertion reports in 5 s instead of 3.
+
+**A budget is not a race fix.** It buys a slow runner room; it cannot rescue an
+assertion waiting on a call that already happened with the wrong argument. Those
+need a settled precondition — see `client/src/test/settledInput.js` (type-then-
+submit) and `client/src/test/pageLoadBarrier.js` (render-then-act, two-sided so
+a barrier naming a string the page never renders fails loudly instead of passing
+on its first poll).
+
+### Reusing the client install
+
+Four jobs install `client/` — the three client test shards and `lint`.
+`setup-node`'s `cache: npm` only preserves the tarball cache, so `npm ci` still
+wipes and repopulates a 393 MB `client/node_modules` on each. `Cache client
+node_modules` keys exactly on `client/package-lock.json`, `client/package.json`
+and `client/.npmrc`, with no restore-keys, and the install is skipped outright
+on a hit. Unlike the server, there is no rebuild half to verify: `client/.npmrc`
+pins `ignore-scripts=true` and `scripts/trusted-rebuilds.js` deliberately lists
+nothing for this workspace, so a restored tree is usable as-is.
+
 ### Reusing the server install
 
 Three jobs install the server workspace — `server`, `database`, and
@@ -353,9 +400,11 @@ suite, need no diff at all, and get no base.
 
 The `main` ruleset — which also covers `release` — requires exactly one
 context: **`CI Gate`**. The workflow used to carry two extra jobs solely to
-publish historical required-check names (`lint`, which echoed the client job's
-result, and `test (24.x)` on the server job); both are retired. If a required
-check is ever added, require `CI Gate`, never a job name.
+publish historical required-check names (a `lint` job that only echoed the
+client job's result, and `test (24.x)` on the server job); both are retired. A
+`lint` job exists again since #7448, but it is the real linter doing real work,
+not a name-publishing shim. If a required check is ever added, require
+`CI Gate`, never a job name.
 
 The selected work is split across parallel jobs:
 
@@ -370,9 +419,17 @@ The selected work is split across parallel jobs:
   install on every user's machine; without it a lockfile that stopped resolving
   shipped green and failed at setup time. (`browser/` gets no such step: zero
   dependencies, and its lockfile is deliberately gitignored.)
-- **Client tests and build** — affected client tests; production build whenever
-  client source changed; client lint on the same install so Biome does not pay a
-  second `npm ci`. Lint, build, and the Scalar-removal bundle pin run on shard 1 only.
+- **Client tests and build** — affected client tests, plus the production build
+  whenever client source changed. Build and the Scalar-removal bundle pin run on
+  shard 1 only.
+- **Lint client** — Biome over the changed client sources, in its own job. It used
+  to be a shard-1 step on the client job. Steps within a job run sequentially, so
+  that put ~31 s of Biome in front of the slowest shard's tests rather than beside
+  them, and it meant a lint-only diff started a whole client test job. It was
+  **not** what made shard 1 flaky — see "Client suite time budgets" below. It
+  cannot move to a later shard instead: a scoped plan emits `client_shards: [1]`,
+  so a second-shard pin would skip lint on every scoped pull request. It shares
+  `Cache client node_modules` with the client job, so on a hit it pays no install.
 - **DB tests** — provisions only the isolated `portos_test` database and runs
   the serial DB suite when database-sensitive files changed.
 - **Windows server tests** — the same server selection, but only on full CI
@@ -413,8 +470,9 @@ Vitest's `--shard`, which slices the file list by path hash — every shard is a
 fixed, disjoint subset, and their union is the complete suite. A scoped plan
 never shards (its handful of files would trip Vitest's shard-count guard) and
 passes no flag at all, so its invocation stays identical to a local
-`npm run test:ci`. Once-only steps — smoke boot, lint, the client build, the
-Scalar-removal bundle pin — pin themselves to shard 1. `CI Gate` sees a matrix job as one
+`npm run test:ci`. Once-only steps — smoke boot, the client build, the
+Scalar-removal bundle pin — pin themselves to shard 1; lint is not among them,
+because it has its own job (see above). `CI Gate` sees a matrix job as one
 `needs` result, so nothing downstream changes; public-repo runner minutes are
 free, so the fan-out costs only concurrency.
 
@@ -434,6 +492,12 @@ September 2026). A full run is **12 jobs / 28.7 runner-minutes**:
 | Server tests | 2 | 6.8 | 6.8 |
 | DB tests, impact, both gates | 4 | 1.7 | 1.7 |
 | **Total** | **12** | **28.7** | **40.4** |
+
+Measured before lint moved to its own job, so the client column still carries the
+~31 s of Biome that now runs beside it rather than inside it. The matrix is 13
+jobs rather than 12; the totals move less than that implies, because
+`Cache client node_modules` now skips the 393 MB `npm ci` on all four jobs that
+install this workspace.
 
 Windows is 41% of a full run's runner occupancy, and 58% once GitHub's 2x
 `windows-latest` multiplier is applied. **This repository is public, so those
@@ -549,7 +613,7 @@ Changes to CI/test configuration also force the full suite on their own PR.
 
 ### Fail-fast sibling cancellation
 
-Each selected leaf job (`server`, `client`, `database`, and
+Each selected leaf job (`server`, `client`, `lint`, `database`, and
 `windows-server`) ends with an `if: failure() && github.event_name ==
 'pull_request'` step that asks GitHub to cancel the current pull-request
 workflow run. The event guard is important because the same workflow is reused

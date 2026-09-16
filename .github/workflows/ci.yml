@@ -325,10 +325,11 @@ jobs:
         run: node scripts/cancel-current-ci-run.js
 
   client:
-    # Sharded like the server job; lint, build, and the bundle budget run on shard 1.
+    # Sharded like the server job; the build and the bundle budget run on shard 1.
+    # Lint is deliberately NOT here — it has its own job.
     name: Client tests and build (${{ matrix.shard }}/${{ strategy.job-total }})
     needs: impact
-    if: needs.impact.outputs.client_mode != 'skip' || needs.impact.outputs.build == 'true' || needs.impact.outputs.lint_mode != 'skip'
+    if: needs.impact.outputs.client_mode != 'skip' || needs.impact.outputs.build == 'true'
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -354,7 +355,30 @@ jobs:
           cache: npm
           cache-dependency-path: client/package-lock.json
 
+      # `setup-node`'s npm cache only preserves ~/.npm, the tarball cache, so
+      # `npm ci` still wipes and repopulates client/node_modules (393 MB, 21k
+      # files — MORE files than the server tree the sibling cache already
+      # serves) on every one of the four jobs that install this workspace.
+      # Same exact-key/no-restore-keys shape as `Cache server node_modules`, and
+      # for the same reason: a near-miss tree is not safe to reuse.
+      #
+      # No rebuild half, unlike the server: client/.npmrc pins
+      # ignore-scripts=true AND `scripts/trusted-rebuilds.js` deliberately lists
+      # nothing for this workspace, so a restored tree is usable as-is and the
+      # install can be skipped outright on a hit. That premise is HASHED, not
+      # assumed: `trusted-rebuilds.js` is in the key, so the day a client
+      # dependency does need a rebuild the key moves and no job can keep
+      # restoring a never-rebuilt tree on an exact hit — which neither job here
+      # has a stamp check to notice.
+      - name: Cache client node_modules
+        id: client-modules
+        uses: actions/cache@v6
+        with:
+          path: client/node_modules
+          key: client-modules-${{ runner.os }}-${{ runner.arch }}-node24-${{ hashFiles('client/package-lock.json', 'client/package.json', 'client/.npmrc', 'scripts/trusted-rebuilds.js') }}
+
       - name: Install client dependencies
+        if: steps.client-modules.outputs.cache-hit != 'true'
         run: npm ci --prefix client
 
       - name: Cache Vitest transform artifacts
@@ -367,13 +391,6 @@ jobs:
           restore-keys: |
             vitest-client-${{ runner.os }}-${{ hashFiles('client/package-lock.json') }}-
             vitest-client-${{ runner.os }}-
-
-      - name: Lint client
-        if: needs.impact.outputs.lint_mode != 'skip' && matrix.shard == 1
-        env:
-          CI_LINT_MODE: ${{ needs.impact.outputs.lint_mode }}
-          CI_LINT_FILES: ${{ needs.impact.outputs.lint_files }}
-        run: node scripts/run-ci-lint.js
 
       - name: Run client tests
         if: needs.impact.outputs.client_mode != 'skip'
@@ -394,6 +411,82 @@ jobs:
       - name: Check API Explorer bundle has no Scalar chunks
         if: needs.impact.outputs.build == 'true' && matrix.shard == 1
         run: npm run test --prefix client -- ApiExplorer.bundle
+
+      - name: Cancel sibling CI jobs after failure
+        if: failure() && github.event_name == 'pull_request'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: node scripts/cancel-current-ci-run.js
+
+  lint:
+    # Its own job rather than a step on client shard 1, for cost and latency —
+    # NOT as a flake fix. Steps within one job run sequentially, so the ~31s of
+    # Biome finished before `Run client tests` began and never contended with
+    # it; #7448's shard-1 failures came from the tests themselves, not from what
+    # else that job ran. What the split does buy: lint runs in parallel instead
+    # of in front of the slowest shard, and a lint-only diff no longer starts a
+    # client test job at all.
+    #
+    # It cannot instead move to a LATER shard: a scoped plan emits
+    # `client_shards: [1]`, so a pin to the second shard would silently skip lint
+    # on every impact-scoped pull request.
+    #
+    # It installs `client/` because Biome and its GritQL plugins are client
+    # devDependencies. That install is shared with the client job through
+    # `Cache client node_modules` below, so on a hit it is skipped entirely.
+    name: Lint client
+    needs: impact
+    if: needs.impact.outputs.lint_mode != 'skip'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: write
+    steps:
+      # No `fetch-depth` and no `Resolve the pull-request diff base`, unlike the
+      # test jobs: the linter's file list arrives from the impact plan, so this
+      # job never diffs and a single-commit checkout is everything it needs.
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Use Node.js 24.x
+        uses: actions/setup-node@v7
+        with:
+          node-version: 24.x
+          cache: npm
+          cache-dependency-path: client/package-lock.json
+
+      # `setup-node`'s npm cache only preserves ~/.npm, the tarball cache, so
+      # `npm ci` still wipes and repopulates client/node_modules (393 MB, 21k
+      # files — MORE files than the server tree the sibling cache already
+      # serves) on every one of the four jobs that install this workspace.
+      # Same exact-key/no-restore-keys shape as `Cache server node_modules`, and
+      # for the same reason: a near-miss tree is not safe to reuse.
+      #
+      # No rebuild half, unlike the server: client/.npmrc pins
+      # ignore-scripts=true AND `scripts/trusted-rebuilds.js` deliberately lists
+      # nothing for this workspace, so a restored tree is usable as-is and the
+      # install can be skipped outright on a hit. That premise is HASHED, not
+      # assumed: `trusted-rebuilds.js` is in the key, so the day a client
+      # dependency does need a rebuild the key moves and no job can keep
+      # restoring a never-rebuilt tree on an exact hit — which neither job here
+      # has a stamp check to notice.
+      - name: Cache client node_modules
+        id: client-modules
+        uses: actions/cache@v6
+        with:
+          path: client/node_modules
+          key: client-modules-${{ runner.os }}-${{ runner.arch }}-node24-${{ hashFiles('client/package-lock.json', 'client/package.json', 'client/.npmrc', 'scripts/trusted-rebuilds.js') }}
+
+      - name: Install client dependencies
+        if: steps.client-modules.outputs.cache-hit != 'true'
+        run: npm ci --prefix client
+
+      - name: Lint client
+        env:
+          CI_LINT_MODE: ${{ needs.impact.outputs.lint_mode }}
+          CI_LINT_FILES: ${{ needs.impact.outputs.lint_files }}
+        run: node scripts/run-ci-lint.js
 
       - name: Cancel sibling CI jobs after failure
         if: failure() && github.event_name == 'pull_request'
@@ -680,7 +773,7 @@ jobs:
   gate:
     name: CI Gate
     if: always()
-    needs: [impact, server, client, database, windows-server]
+    needs: [impact, server, client, lint, database, windows-server]
     runs-on: ubuntu-latest
     steps:
       # The gate needs the repo only for scripts/ci-gate-report.js, which
@@ -705,6 +798,7 @@ jobs:
           CI_GATE_RESULT_IMPACT: ${{ needs.impact.result }}
           CI_GATE_RESULT_SERVER: ${{ needs.server.result }}
           CI_GATE_RESULT_CLIENT: ${{ needs.client.result }}
+          CI_GATE_RESULT_LINT: ${{ needs.lint.result }}
           CI_GATE_RESULT_DATABASE: ${{ needs.database.result }}
           CI_GATE_RESULT_WINDOWS_SERVER: ${{ needs.windows-server.result }}
         run: node scripts/ci-gate-report.js

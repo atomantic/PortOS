@@ -427,6 +427,10 @@ const structuralTestsFor = (changedFiles, trackedSet) => {
     add('client/src/responsiveGridConventions.test.js');
     add('client/src/storageConventions.test.js');
     add('client/src/subNavConventions.test.js');
+    // Same trigger, different subject: this one scans the TEST files for an
+    // inline async bound the per-test budget would cut short, and a changed
+    // `*.test.jsx` matches the `.jsx?` pattern above.
+    add('client/src/test/timeouts.test.js');
   }
 
   return selected;

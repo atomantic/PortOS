@@ -1440,7 +1440,9 @@ describe('purging one conversation mirror', () => {
 
   it('names the conversation and the byte count, and demands the typed word first', async () => {
     await openThread();
-    expect(await screen.findByText('Purge this mirror', {}, { timeout: 15000 })).toBeInTheDocument();
+    // No inline bound — the suite-wide budget in src/test/timeouts.js governs this
+    // wait, and the guard beside it rejects an inline one the test budget outlives.
+    expect(await screen.findByText('Purge this mirror')).toBeInTheDocument();
     expect(screen.getByText(/4 MB of mirrored attachment bytes/)).toBeInTheDocument();
     expect(screen.getByText(/across 3 file\(s\)/)).toBeInTheDocument();
 

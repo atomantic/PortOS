@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
+import { awaitPageLoaded } from '../test/pageLoadBarrier';
 import { stubSequentialLayout, pressKey, dndAnnouncement } from '../test/dndKeyboardDrag';
 
 // Guards #7243. This lives in its own file rather than in VideoTimelineEditor.test.jsx
@@ -68,7 +69,7 @@ afterEach(() => restoreLayout());
 
 const renderEditor = async () => {
   render(<VideoTimelineEditor />);
-  await waitFor(() => expect(screen.queryByText('Loading project…')).not.toBeInTheDocument());
+  await awaitPageLoaded('Loading timeline project');
 };
 
 // The block is the drag handle, so it is reached through its own remove
