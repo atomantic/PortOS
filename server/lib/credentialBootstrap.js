@@ -29,7 +29,9 @@
  * `opencodeTask.js`), the agent spawners (`agentCliSpawning.js`,
  * `agentTuiSpawning.js`), the one-shot TUI runner (`tuiPromptRunner.js`), the
  * "Launch in Shell" line (`tuiShellLaunch.js`), the TUI usage scrape
- * (`providerUsage.js`), and the readiness probes (`providerPrerequisites.js`,
+ * (`providerUsage.js`), the model-catalog probes behind Refresh Models (the
+ * toolkit's `_execCliModelList` / `_fetchCodexModels`, which reach the shape
+ * through the leaf below), and the readiness probes (`providerPrerequisites.js`,
  * the toolkit's `testProvider`).
  *
  * A public-review posture (`isPublicReviewRestrictedProfile`) is NEVER
@@ -46,19 +48,23 @@
  * `signalDetachedGroups` / `processGroupKillable` below are that half of the
  * contract — see `needsProcessGroup` (#7496).
  *
- * Imports only `bufferedSpawn.js` and `agentExecutionProfiles.js` (both of
- * which `cliProviderRun.js` already depends on directly) so any spawn site —
- * including the standalone `portos-autofixer` process via `cliProviderRun.js`
- * — can import this module without dragging in the AI toolkit or data layer.
+ * The argv SHAPE is composed one layer down, by the dependency-free
+ * `aiToolkit/internal/credentialBootstrap.js` leaf (which documents why it sits
+ * there); this module adds the public-review skip, the Windows resolution, and
+ * the teardown half above.
+ *
+ * Imports only `bufferedSpawn.js`, `agentExecutionProfiles.js` (both of which
+ * `cliProviderRun.js` already depends on directly) and that leaf, so any spawn
+ * site — including the standalone `portos-autofixer` process via
+ * `cliProviderRun.js` — can import this module without dragging in the rest of
+ * the AI toolkit or the data layer.
  */
 
 import { IS_WIN32, resolveWindowsExecutable, prepareWindowsSafeSpawn, killProcessTree } from './bufferedSpawn.js';
 import { isPublicReviewRestrictedProfile } from './agentExecutionProfiles.js';
+import { composeBootstrapSpawn, hasCredentialBootstrap } from './aiToolkit/internal/credentialBootstrap.js';
 
-/** True when a provider names a bootstrap CLI to wrap its harness spawn. */
-export function hasCredentialBootstrap(provider) {
-  return typeof provider?.credentialBootstrap?.command === 'string' && provider.credentialBootstrap.command.length > 0;
-}
+export { hasCredentialBootstrap };
 
 /**
  * The command+args PortOS should actually spawn for this provider: the
@@ -67,18 +73,9 @@ export function hasCredentialBootstrap(provider) {
  * or PATH; Windows shim resolution still happens downstream, against whichever
  * command this returns.
  *
- * Shape: `<bootstrap.command> <bootstrap.args...> <harnessId> [<bootstrap.argsSeparator>] <args...>`.
- *
- * `argsSeparator` exists because a wrapper CLI commonly needs its own flags
- * kept apart from the harness's — e.g. `<bootstrap> run <harness> -- <harness
- * args>` — and without a configurable separator the harness's own flags would
- * be parsed as the bootstrap CLI's.
- *
- * `harnessId` exists because a bootstrap CLI's own name for a harness is not
- * always the binary PortOS spawns — e.g. a tool may want `claude-code` where
- * `provider.command` is the literal binary `claude`. Defaults to `command`
- * (the harness binary) when unset, which covers a bootstrap CLI that takes
- * the binary name directly.
+ * The shape it composes — and why `harnessId` and `argsSeparator` exist — is
+ * documented on `composeBootstrapSpawn`. What this adds is the safety skip: a
+ * public-review posture is returned UNWRAPPED.
  *
  * @param {{credentialBootstrap?: {command: string, args?: string[], harnessId?: string, argsSeparator?: string}}|null|undefined} provider
  * @param {string} command - the harness binary PortOS would otherwise spawn
@@ -96,19 +93,10 @@ export function hasCredentialBootstrap(provider) {
  * @returns {{command: string, args: string[], wrapped: boolean}}
  */
 export function applyCredentialBootstrap(provider, command, args, { safetyProfile = null } = {}) {
-  const bootstrap = provider?.credentialBootstrap;
-  const harnessArgs = Array.isArray(args) ? args : [];
-  if (!hasCredentialBootstrap(provider) || isPublicReviewRestrictedProfile(safetyProfile)) {
-    return { command, args: harnessArgs, wrapped: false };
-  }
-  const harnessId = (typeof bootstrap.harnessId === 'string' && bootstrap.harnessId) || command;
-  const separator = (typeof bootstrap.argsSeparator === 'string' && bootstrap.argsSeparator && harnessArgs.length > 0)
-    ? [bootstrap.argsSeparator] : [];
-  return {
-    command: bootstrap.command,
-    args: [...(Array.isArray(bootstrap.args) ? bootstrap.args : []), harnessId, ...separator, ...harnessArgs],
-    wrapped: true,
-  };
+  // A restricted posture composes against NO provider rather than short-circuiting,
+  // so argv normalization — and the `wrapped` flag teardown keys on — is stated
+  // in exactly one place.
+  return composeBootstrapSpawn(isPublicReviewRestrictedProfile(safetyProfile) ? null : provider, command, args);
 }
 
 /**

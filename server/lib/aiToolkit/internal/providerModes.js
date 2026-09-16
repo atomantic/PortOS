@@ -1,6 +1,7 @@
 // Keep execution IDs stable: saved tasks and older peers still select a mode.
 // Pair only conventional sibling IDs with the same harness and connection.
 import { isDeepStrictEqual } from 'node:util';
+import { hasCredentialBootstrap } from './credentialBootstrap.js';
 
 const MODE_KEY_DEFAULTS = { endpoint: '', apiKey: '', envVars: {}, credentialBootstrap: null };
 
@@ -24,7 +25,9 @@ export function providerModeGroups(providers) {
     const cli = [byId.get(stem), byId.get(`${stem}-cli`)].find(provider => provider?.type === 'cli');
     if (!cli || paired.has(cli.id) || !cli.command || cli.command !== tui.command) continue;
     // `credentialBootstrap` is the connection's auth when there is no apiKey,
-    // so siblings that disagree on it are two connections, not one.
+    // so siblings naming DIFFERENT ones are two connections, not one. A pair
+    // where only one names a bootstrap is the asymmetry `unifyProviderModes`
+    // converges, so it does not reach here as a lasting split.
     if (!MODE_GROUPED_KEYS.every(key =>
       isDeepStrictEqual(cli[key] || MODE_KEY_DEFAULTS[key], tui[key] || MODE_KEY_DEFAULTS[key]))) continue;
     groups.push([cli, tui]);
@@ -36,7 +39,15 @@ export function providerModeGroups(providers) {
 
 export function sharedModeUpdates(updates, sibling) {
   // Arguments, timeouts, routing consent and model pins remain mode-specific.
-  const shared = Object.fromEntries(['enabled', 'models', 'modelContextWindows'].filter(key => Object.hasOwn(updates, key)).map(key => [key, updates[key]]));
+  //
+  // `credentialBootstrap` is shared for the same reason the pairing test above
+  // keys on it: it is the connection's AUTH, not a mode's argv. The editor opens
+  // the group's representative (the CLI mode), so a bootstrap saved there and
+  // not fanned out leaves the TUI mode — the one "Launch in Shell" launches —
+  // spawning a bare harness that falls through to ambient vendor auth, and
+  // splits the one card in two. `unifyProviderModes` converges a pair that
+  // arrived asymmetric by some other route.
+  const shared = Object.fromEntries(['enabled', 'models', 'modelContextWindows', 'credentialBootstrap'].filter(key => Object.hasOwn(updates, key)).map(key => [key, updates[key]]));
   // A caller deliberately repicking a default with a new catalog (the editor
   // or harness discovery) must repair a removed sibling default too. Ordinary
   // catalog probes omit defaultModel and retain their existing pin semantics.
@@ -46,9 +57,41 @@ export function sharedModeUpdates(updates, sibling) {
   return shared;
 }
 
-export function unifyProviderModes(data) {
+/**
+ * Give a mode sibling the credential bootstrap its pair already carries.
+ *
+ * Grouped over a projection with `credentialBootstrap` ERASED, because an
+ * asymmetric pair is invisible to the real rule — the bootstrap is exactly the
+ * value it disagrees on. Only this fill uses the loose grouping; the
+ * enablement/model convergence below keeps the strict one.
+ *
+ * Exactly one named bootstrap is repaired. Two different ones are a deliberate
+ * configuration (two connections), and picking a winner between two credentials
+ * is nobody's call to make silently.
+ */
+function fillModeSiblingBootstrap(providers) {
+  const byId = new Map(providers.map(provider => [provider.id, provider]));
   let changed = false;
-  for (const group of providerModeGroups(Object.values(data.providers || {}))) {
+  for (const group of providerModeGroups(providers.map(provider => ({ ...provider, credentialBootstrap: undefined })))) {
+    if (group.length < 2) continue;
+    const modes = group.map(({ id }) => byId.get(id)).filter(Boolean);
+    const named = modes.filter(hasCredentialBootstrap);
+    if (named.length !== 1) continue;
+    for (const mode of modes) {
+      if (hasCredentialBootstrap(mode)) continue;
+      mode.credentialBootstrap = structuredClone(named[0].credentialBootstrap);
+      changed = true;
+    }
+  }
+  return changed;
+}
+
+export function unifyProviderModes(data) {
+  const providers = Object.values(data.providers || {});
+  // Bootstrap FIRST: a pair split only by an unfanned bootstrap is rejoined
+  // here, so the convergence below sees the one connection it actually is.
+  let changed = fillModeSiblingBootstrap(providers);
+  for (const group of providerModeGroups(providers)) {
     if (group.length < 2) continue;
     const enabled = group.some(provider => provider.enabled === true);
     const models = [...new Set(group.flatMap(provider => provider.models || []))];
