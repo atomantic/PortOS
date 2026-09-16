@@ -1449,9 +1449,27 @@ describe('effectiveModelContextWindow', () => {
     expect(modelOptionLabel('stealth/ox-alpha', { 'stealth/ox-alpha': 32768 }, provider)).toBe('stealth/ox-alpha (32K ctx)');
   });
 
-  it('uses explicit contextWindow and numCtx with server precedence', () => {
-    expect(effectiveModelContextWindow({ type: 'api', endpoint: 'http://localhost:11434/v1', contextWindow: 64_000, numCtx: 32_768 }, 'unknown')).toBe(64_000);
-    expect(effectiveModelContextWindow({ type: 'api', endpoint: 'http://localhost:11434/v1', numCtx: 32_768 }, 'unknown')).toBe(32_768);
+  it('bounds every wider rung by an Ollama daemon\'s launch numCtx', () => {
+    // #7466: `numCtx` is the window the daemon was LAUNCHED with, so it bounds
+    // every wider rung — a typed override included — exactly as the server's
+    // budgeter and its pre-dispatch gate do. A card promising 64K against a 32K
+    // daemon is a budget the run would then be refused for.
+    const ollama = { type: 'api', endpoint: 'http://localhost:11434/v1' };
+    expect(effectiveModelContextWindow({ ...ollama, contextWindow: 64_000, numCtx: 32_768 }, 'unknown')).toBe(32_768);
+    expect(effectiveModelContextWindow({ ...ollama, numCtx: 32_768 }, 'unknown')).toBe(32_768);
+    expect(effectiveModelContextWindow({ ...ollama, numCtx: 8_192, modelContextWindows: { 'qwen3:32b': 40_960 } }, 'qwen3:32b')).toBe(8_192);
+    // A clamped window is the daemon's own report, not the override it replaced.
+    expect(resolveModelContextWindow({ ...ollama, contextWindow: 64_000, numCtx: 32_768 }, 'unknown').source)
+      .toBe(CONTEXT_WINDOW_SOURCE.REPORTED);
+    // The picker has to agree with the meter beside it — one form must not
+    // offer "(40K ctx)" under a card that says the budget is 8K.
+    expect(modelOptionLabel('qwen3:32b', undefined, { ...ollama, numCtx: 8_192, modelContextWindows: { 'qwen3:32b': 40_960 } }))
+      .toBe('qwen3:32b (8K ctx)');
+  });
+
+  it('leaves a non-Ollama endpoint alone, since nothing there honors num_ctx', () => {
+    expect(effectiveModelContextWindow({ type: 'api', endpoint: 'http://localhost:1234/v1', contextWindow: 64_000, numCtx: 32_768 }, 'unknown')).toBe(64_000);
+    expect(effectiveModelContextWindow({ type: 'api', endpoint: 'http://localhost:1234/v1', numCtx: 32_768 }, 'unknown')).toBe(32_768);
   });
 });
 

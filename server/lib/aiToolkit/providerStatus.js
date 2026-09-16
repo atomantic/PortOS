@@ -10,7 +10,7 @@ import { readFile } from 'fs/promises';
 import { existsSync } from 'fs';
 import { join, dirname } from 'path';
 import { atomicWrite } from './internal/atomicWrite.js';
-import { isOllamaBackedProvider } from './internal/ollamaBacked.js';
+import { clampToRuntimeContextWindow } from './internal/ollamaBacked.js';
 
 /**
  * Gate a *configured* fallback-model pin against the fallback provider's own
@@ -102,17 +102,13 @@ function resolvedFallbackModel(provider, correctedModel) {
 export function knownContextWindow(provider, model) {
   const explicit = Number(provider?.contextWindow);
   const catalog = Number(model && provider?.modelContextWindows?.[model]);
-  const runtime = Number(provider?.numCtx);
   const planning = Number.isFinite(explicit) && explicit > 0
     ? explicit
     : (Number.isFinite(catalog) && catalog > 0 ? catalog : null);
-  // Only Ollama honors the runner's top-level num_ctx option. When configured,
-  // it is the real runtime ceiling and therefore constrains any wider planning
-  // or catalog window; other OpenAI-compatible endpoints ignore the field.
-  if (isOllamaBackedProvider(provider) && Number.isFinite(runtime) && runtime > 0) {
-    return planning ? Math.min(planning, runtime) : runtime;
-  }
-  return planning;
+  // The `num_ctx` ceiling goes through the shared clamp, never restated here:
+  // the budgeter that decides how big a prompt to BUILD reads the same module,
+  // so the two can no longer disagree about it (#7466).
+  return clampToRuntimeContextWindow(provider, planning);
 }
 
 /**
