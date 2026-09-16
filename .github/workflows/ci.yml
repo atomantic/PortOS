@@ -716,7 +716,17 @@ jobs:
     # It mirrors the aggregate gate rather than re-aggregating every job, so it
     # costs one comparison instead of a second fan-in.
     name: Full CI Gate
-    if: always() && needs.impact.outputs.full == 'true'
+    # Both conditions, not just `full`. scripts/verify-ci-status.js lets a
+    # release skip its own suite on the strength of this check, so it must mean
+    # "the complete suite passed on this tree" on EVERY platform. A full plan
+    # can now leave the Windows job at the WINDOWS_CONTRACT_TESTS baseline when
+    # the trigger was Windows-irrelevant (see the FULL_TRIGGER_RULES
+    # windowsEscalates flag in the impact planner) — publishing the gate for
+    # one of those would vouch for Windows coverage that did not run. Every
+    # force-full path — nightly, the main -> release PR, release, an explicit
+    # full-CI request — keeps windows_mode == 'full', so the release
+    # optimization is unaffected.
+    if: always() && needs.impact.outputs.full == 'true' && needs.impact.outputs.windows_mode == 'full'
     needs: [impact, gate]
     runs-on: ubuntu-latest
     steps:

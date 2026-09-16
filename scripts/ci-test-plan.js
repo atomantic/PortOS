@@ -46,31 +46,47 @@ export const shardIndexes = (mode, count) => (
   mode === 'full' ? Array.from({ length: count }, (_, index) => index + 1) : [1]
 );
 
+// `windowsEscalates` decides whether a trigger widens the WINDOWS job too, not
+// only the Linux ones. Three windows-server shards are 3 of a full run's 12
+// jobs and 41% of its runner-minutes (58% at GitHub's 2x windows-latest
+// multiplier, which this public repo does not pay but a privately-billed fork
+// does), so a trigger that widens CI for a reason windows-server cannot
+// observe — a client build/lint/test-setup file it never loads — spends that
+// on coverage which does not exist. Those run the WINDOWS_CONTRACT_TESTS
+// baseline instead, the depth a Windows-risk scoped PR already gets. `true` is
+// the fail-closed default for anything unlisted, and a diff touching
+// WINDOWS_RISK_RULES escalates regardless of this flag (issue #7440).
 const FULL_TRIGGER_RULES = [
-  { re: /^\.github\/workflows\//, reason: 'workflow definition changed' },
-  { re: /^(?:package|server\/package|client\/package|autofixer\/package)(?:-lock)?\.json$/, reason: 'dependency manifest changed' },
-  { re: /^(?:server|client)\/vitest\.config(?:\.db)?\.js$/, reason: 'test runner configuration changed' },
-  { re: /^scripts\/vitestCiPool(?:\.test)?\.js$/, reason: 'test runner pool configuration changed' },
-  { re: /^server\/vitest\.setup\.js$/, reason: 'server test setup changed' },
-  { re: /^client\/src\/test\/setup\.js$/, reason: 'client test setup changed' },
+  // Defines the windows-server job itself.
+  { re: /^\.github\/workflows\//, reason: 'workflow definition changed', windowsEscalates: true },
+  // Native rebuilds and platform-conditional resolution differ on Windows.
+  { re: /^(?:package|server\/package|client\/package|autofixer\/package)(?:-lock)?\.json$/, reason: 'dependency manifest changed', windowsEscalates: true },
+  { re: /^(?:server|client)\/vitest\.config(?:\.db)?\.js$/, reason: 'test runner configuration changed', windowsEscalates: true },
+  { re: /^scripts\/vitestCiPool(?:\.test)?\.js$/, reason: 'test runner pool configuration changed', windowsEscalates: true },
+  { re: /^server\/vitest\.setup\.js$/, reason: 'server test setup changed', windowsEscalates: true },
+  // Client-only: windows-server never loads the client setup file.
+  { re: /^client\/src\/test\/setup\.js$/, reason: 'client test setup changed', windowsEscalates: false },
   // Biome config + its GritQL plugins (the former client/eslint.config.js). The
   // .grit files carry real enforced rules — notably the crypto.randomUUID ban —
-  // so a change there is as load-bearing as a change to the config itself.
-  { re: /^client\/(?:biome\.jsonc|[^/]+\.grit)$/, reason: 'lint configuration changed' },
-  { re: /^client\/vite\.config\.js$/, reason: 'client build configuration changed' },
-  { re: /^server\/index\.js$/, reason: 'server composition root changed' },
-  { re: /^server\/lib\/(?:schemaVersions|validation)\.js$/, reason: 'shared server contract changed' },
+  // so a change there is as load-bearing as a change to the config itself. It
+  // is still a client-lint surface, and the Windows job runs no lint.
+  { re: /^client\/(?:biome\.jsonc|[^/]+\.grit)$/, reason: 'lint configuration changed', windowsEscalates: false },
+  // Client-only: the Windows job builds no client bundle.
+  { re: /^client\/vite\.config\.js$/, reason: 'client build configuration changed', windowsEscalates: false },
+  { re: /^server\/index\.js$/, reason: 'server composition root changed', windowsEscalates: true },
+  { re: /^server\/lib\/(?:schemaVersions|validation)\.js$/, reason: 'shared server contract changed', windowsEscalates: true },
   // The scripts that decide what CI runs, run it, and gate the release on it.
   // A bug in any of them can make a scoped plan silently test nothing, so they
-  // prove themselves against the complete suite rather than their own scope.
-  { re: /^scripts\/(?:lib\/githubOutput|ci-base-sha|ci-test-plan|run-ci-(?:lint|tests)|scan-diff-hidden-content|verify-ci-status)(?:\.test)?\.js$/, reason: 'CI pipeline script changed' },
+  // prove themselves against the complete suite rather than their own scope —
+  // including on Windows, whose shard matrix ci-test-plan.js itself emits.
+  { re: /^scripts\/(?:lib\/githubOutput|ci-base-sha|ci-test-plan|run-ci-(?:lint|tests)|scan-diff-hidden-content|verify-ci-status)(?:\.test)?\.js$/, reason: 'CI pipeline script changed', windowsEscalates: true },
 ];
 
 // Files whose Windows behavior is not faithfully exercised by pinPlatform()
 // stubs on Linux: real .cmd spawn, PowerShell BOM, PTY wrap, path.basename
 // on backslashes. A PR that does not touch these still gets a full Windows
 // run nightly, on the main -> release PR, and on release.
-const WINDOWS_RISK_RULES = [
+export const WINDOWS_RISK_RULES = [
   /\.(?:ps1|cmd|bat)$/i,
   /^scripts\/fix-windows-console(?:\.test)?\.js$/,
   /^scripts\/ps1-bom\.test\.js$/,
@@ -437,6 +453,18 @@ export const splitByRunner = (paths) => ({
 });
 const windowsContractTests = (trackedSet) => WINDOWS_CONTRACT_TESTS.filter((path) => trackedSet.has(path));
 
+/**
+ * Does this diff touch a surface only a real Windows runner can prove?
+ *
+ * Deliberately NOT restricted to isExecutable() paths: .ps1/.cmd/.bat are not
+ * in EXECUTABLE_RE, so a PowerShell change used to reach the Windows job only
+ * as a side effect of being an "unclassified changed file". This answers the
+ * question directly, and is what overrides a trigger's windowsEscalates:false.
+ */
+const hasWindowsRiskFile = (paths) => paths.some((path) => (
+  !isDocumentationOnly(path) && WINDOWS_RISK_RULES.some((rule) => rule.test(path))
+));
+
 const skippedRunner = () => ({ mode: 'skip', files: [], sources: [] });
 
 // Catalog barrels are validated by structural export guards. Feeding one to
@@ -487,7 +515,16 @@ const suiteReasonsFor = (plan, { appRouteOnly = false } = {}) => ({
   lint: plan.lint.mode === 'skip' ? 'skipped: no changed client source needs linting' : plan.full ? `full matrix: ${plan.reason}` : 'changed client source',
   build: plan.build ? (plan.full ? `full matrix: ${plan.reason}` : 'client-impacting source changed') : 'skipped: no client-impacting source changed',
   smoke: plan.smoke ? (plan.full ? `full matrix: ${plan.reason}` : 'server-impacting source changed') : 'skipped: no server-impacting source changed',
-  windows: plan.windows ? (plan.full ? `full matrix: ${plan.reason}` : 'Windows-sensitive surface changed') : 'skipped: no Windows-sensitive surface changed',
+  // A full plan whose Windows job stayed at the contract baseline says so
+  // explicitly, so the CI summary never reads "full matrix" beside a one-shard
+  // Windows run (issue #7440).
+  windows: !plan.windows
+    ? 'skipped: no Windows-sensitive surface changed'
+    : plan.full
+      ? (plan.windowsMode === 'full'
+        ? `full matrix: ${plan.reason}`
+        : `Windows contract baseline (full matrix elsewhere): ${plan.reason}`)
+      : 'Windows-sensitive surface changed',
 });
 
 /**
@@ -511,38 +548,48 @@ export function buildCiTestPlan(changedFiles, {
   const changed = uniqueSorted(changedFiles.filter(Boolean));
   const trackedSet = new Set(trackedFiles);
 
+  // Nightly, the main -> release PR, release, and an explicit "full CI"
+  // request keep the complete Windows matrix. ci.yml has no push trigger, so
+  // these ARE the discovery net for a Windows regression on a surface nobody
+  // has tagged — the same net every PR that touches no WINDOWS_RISK_RULES file
+  // already relies on. A downgrade below widens that existing population; it
+  // does not invent a new risk class.
   if (forceFull) {
-    const plan = {
-      full: true,
-      reason: forceFullReason,
-      changedFiles: changed,
-      server: { mode: 'full', files: [], sources: [] },
-      client: { mode: 'full', files: [], sources: [] },
-      db: true,
-      lint: { mode: 'full', files: [] },
-      build: true,
-      smoke: true,
-      windows: true,
-      windowsMode: 'full',
-      windowsFiles: [],
-      windowsSources: [],
-    };
-    return finishPlan(plan, { appRouteOnly });
+    return fullPlan(changed, forceFullReason, { appRouteOnly, trackedSet, windowsEscalates: true });
   }
+
+  // EVERY matching trigger, not just the reported one, and computed BEFORE the
+  // first full-plan branch. The reason line is the first match in sorted-path
+  // order, but the Windows decision is the OR over all of them, so a diff that
+  // trips two triggers must escalate if EITHER does. Two ways this goes wrong
+  // if the OR is skipped: an alphabetically earlier client-only trigger
+  // (client/vite.config.js) reported ahead of server/index.js, and the App.jsx
+  // branch below returning before the triggers are even looked at — which
+  // downgraded Windows for an App.jsx PR that also bumped a lockfile.
+  const fullTriggers = changed
+    .flatMap((path) => FULL_TRIGGER_RULES
+      .filter(({ re }) => re.test(path))
+      .map(({ reason, windowsEscalates }) => ({ path, reason, windowsEscalates })));
+  const fullTrigger = fullTriggers.at(0);
+  const triggersEscalateWindows = fullTriggers.some((trigger) => trigger.windowsEscalates);
 
   const appCompositionChanged = changed.includes('client/src/App.jsx');
   if (appCompositionChanged && !appRouteOnly) {
-    return fullPlan(changed, 'client composition root changed: client/src/App.jsx', { appRouteOnly });
+    // The composition root itself is client-only, but the rest of the diff may
+    // not be.
+    return fullPlan(changed, 'client composition root changed: client/src/App.jsx', {
+      appRouteOnly,
+      trackedSet,
+      windowsEscalates: triggersEscalateWindows,
+    });
   }
 
-  const fullTrigger = changed
-    .flatMap((path) => FULL_TRIGGER_RULES
-      .filter(({ re }) => re.test(path))
-      .map(({ reason }) => ({ path, reason })))
-    .at(0);
-
   if (fullTrigger) {
-    return fullPlan(changed, `${fullTrigger.reason}: ${fullTrigger.path}`, { appRouteOnly });
+    return fullPlan(changed, `${fullTrigger.reason}: ${fullTrigger.path}`, {
+      appRouteOnly,
+      trackedSet,
+      windowsEscalates: triggersEscalateWindows,
+    });
   }
 
   const alwaysRun = alwaysRunTests(trackedSet);
@@ -571,10 +618,10 @@ export function buildCiTestPlan(changedFiles, {
   const executable = relevant.filter(isExecutable);
   const unknown = relevant.filter((path) => !isExecutable(path));
   if (unknown.length > 0) {
-    return fullPlan(changed, `unclassified changed file: ${unknown[0]}`, { appRouteOnly });
+    return fullPlan(changed, `unclassified changed file: ${unknown[0]}`, { appRouteOnly, trackedSet });
   }
   if (executable.length > MAX_CHANGED_CODE_FILES) {
-    return fullPlan(changed, `wide change (${executable.length} executable files)`, { appRouteOnly });
+    return fullPlan(changed, `wide change (${executable.length} executable files)`, { appRouteOnly, trackedSet, windowsEscalates: false });
   }
 
   // `changed` includes deleted paths (diff-filter ACMRD), but a deleted test
@@ -586,14 +633,14 @@ export function buildCiTestPlan(changedFiles, {
     !isServerRunnerFile(path) && !path.startsWith('client/')
   ));
   if (unsupportedSources.length > 0) {
-    return fullPlan(changed, `unmapped executable surface: ${unsupportedSources[0]}`, { appRouteOnly });
+    return fullPlan(changed, `unmapped executable surface: ${unsupportedSources[0]}`, { appRouteOnly, trackedSet });
   }
   const deletedSources = sourceFiles.filter((path) => !trackedSet.has(path));
   if (deletedSources.length > 0) {
     // `vitest related` needs a real source path. A deleted module can still
     // affect importers, so widening is safer than silently dropping its side of
     // the graph.
-    return fullPlan(changed, `deleted executable source: ${deletedSources[0]}`, { appRouteOnly });
+    return fullPlan(changed, `deleted executable source: ${deletedSources[0]}`, { appRouteOnly, trackedSet });
   }
   // Python scripts never enter the import graph or a feature directory: their
   // only selector is the per-script contract list, so they leave the JS-only
@@ -612,7 +659,7 @@ export function buildCiTestPlan(changedFiles, {
     const pythonTests = (pathContractTests[script] || [])
       .filter((path) => trackedSet.has(path) && runnerForTest(path));
     if (pythonTests.length === 0) {
-      return fullPlan(changed, `python script with no parsing contract: ${script}`, { appRouteOnly });
+      return fullPlan(changed, `python script with no parsing contract: ${script}`, { appRouteOnly, trackedSet });
     }
     selectedTests.push(...pythonTests);
   }
@@ -637,7 +684,7 @@ export function buildCiTestPlan(changedFiles, {
   const clientFiles = uniqueSorted(selectedTests.filter((path) => runnerForTest(path) === 'client'));
 
   if (serverFiles.length > MAX_TARGETED_TEST_FILES || clientFiles.length > MAX_TARGETED_TEST_FILES) {
-    return fullPlan(changed, 'targeted test set exceeded safety cap', { appRouteOnly });
+    return fullPlan(changed, 'targeted test set exceeded safety cap', { appRouteOnly, trackedSet, windowsEscalates: false });
   }
 
   const hasServerSource = jsSources.some(isServerRunnerFile);
@@ -669,7 +716,7 @@ export function buildCiTestPlan(changedFiles, {
       ? { mode: clientSources.length > 0 ? 'related' : 'files', files: [], sources: clientSources }
       : skippedRunner();
 
-  const windows = executable.some((path) => WINDOWS_RISK_RULES.some((rule) => rule.test(path)));
+  const windows = hasWindowsRiskFile(changed);
   const windowsMode = windows
     ? (serverSources.length > 0 ? 'related' : 'files')
     : 'skip';
@@ -712,7 +759,32 @@ const finishPlan = (plan, options) => ({
   },
 });
 
-function fullPlan(changedFiles, reason, options) {
+/**
+ * A full plan for every Linux suite — with the Windows job at the depth the
+ * diff actually justifies.
+ *
+ * `windowsEscalates` (default true, so an unlisted caller fails closed) is
+ * false only for a trigger windows-server cannot observe: a client-only
+ * surface, or a CAPACITY escalation (the targeted-test cap, a wide diff) that
+ * says the planner ran out of scoping headroom, not that anything risky
+ * changed. A touched WINDOWS_RISK_RULES path overrides it back to full.
+ *
+ * Downgraded does not mean skipped: the job still runs WINDOWS_CONTRACT_TESTS,
+ * the curated cross-platform baseline a Windows-risk scoped PR already gets.
+ * The complete Windows matrix stays the discovery net for surfaces nobody has
+ * tagged yet — it just runs nightly, on the main -> release PR, and on
+ * release, instead of on every capacity-widened PR (issue #7440).
+ *
+ * `options` is also forwarded to finishPlan(), which reads only appRouteOnly.
+ */
+function fullPlan(changedFiles, reason, options = {}) {
+  const { trackedSet = new Set(), windowsEscalates = true } = options;
+  // An empty `files` list makes run-ci-tests.js print "No server tests
+  // selected" and exit 0 — a green Windows job that ran nothing. So the
+  // baseline is only a downgrade while it actually resolves to tracked tests;
+  // otherwise this falls back to the complete suite rather than to silence.
+  const baseline = windowsContractTests(trackedSet);
+  const windowsFull = windowsEscalates || hasWindowsRiskFile(changedFiles) || baseline.length === 0;
   return finishPlan({
     full: true,
     reason,
@@ -724,8 +796,8 @@ function fullPlan(changedFiles, reason, options) {
     build: true,
     smoke: true,
     windows: true,
-    windowsMode: 'full',
-    windowsFiles: [],
+    windowsMode: windowsFull ? 'full' : 'files',
+    windowsFiles: windowsFull ? [] : baseline,
     windowsSources: [],
   }, options);
 }

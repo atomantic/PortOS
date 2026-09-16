@@ -376,7 +376,8 @@ The selected work is split across parallel jobs:
   Windows-sensitive surface changed (`.ps1` / `.cmd` spawn, PowerShell BOM,
   `bufferedSpawn`, `cos-runner`, shell/PM2, etc.). Docs-only and ordinary
   Linux-faithful PRs skip this job. `pinPlatform('win32')` tests still run on
-  Linux.
+  Linux. A full plan does not automatically mean a full *Windows* run — see
+  "What a full plan costs the Windows job" below.
 - **CI Gate** — always reports one stable required-check result and fails if any
   selected job failed or was cancelled.
 - **Full CI Gate** — published only when the plan chose the complete suite, and
@@ -412,6 +413,91 @@ free, so the fan-out costs only concurrency.
 `scripts/run-ci-tests.test.js` pins the wiring: every runner job builds its
 matrix from the planner, hands `CI_SHARD` to the runner, and gates its
 once-only steps on shard 1.
+
+### What a full plan costs the Windows job
+
+Measured from 11 real full CI runs (`gh api repos/atomantic/PortOS/actions/runs/<id>/jobs`,
+September 2026). A full run is **12 jobs / 28.7 runner-minutes**:
+
+| Job | Jobs | Runner-min | At `windows-latest` 2x |
+| --- | --- | --- | --- |
+| Windows server tests | 3 | 11.8 | 23.5 |
+| Client tests and build | 3 | 8.3 | 8.3 |
+| Server tests | 2 | 6.8 | 6.8 |
+| DB tests, impact, both gates | 4 | 1.7 | 1.7 |
+| **Total** | **12** | **28.7** | **40.4** |
+
+Windows is 41% of a full run's runner occupancy, and 58% once GitHub's 2x
+`windows-latest` multiplier is applied. **This repository is public, so those
+minutes are not billed** — the cost that binds is runner occupancy and
+concurrent-job slots, which is what makes several simultaneous PR builds queue.
+The 2x column is kept because a fork on private billing does pay it.
+
+**Not every full plan needs a full Windows run.** Replaying 250 merge commits
+through `buildCiTestPlan`, 64 went full — and 24 of those (38%) went full for a
+reason `windows-server` cannot observe:
+
+| Full-plan reason | Runs | Windows-relevant? |
+| --- | --- | --- |
+| targeted test set exceeded safety cap | 17 | no — capacity, not risk |
+| wide change (>30 executable files) | 6 | no — capacity, not risk |
+| client composition root / build config / lint config / test setup | 1 | no — client-only |
+| dependency manifest, server contract, CI pipeline script, workflow, … | 40 | yes |
+
+So each full trigger in `FULL_TRIGGER_RULES` carries a `windowsEscalates` flag,
+and `fullPlan()` escalates Windows to the complete server suite only when **any**
+matching trigger is Windows-relevant, the diff touches `WINDOWS_RISK_RULES`, or
+the run is force-full. **Any** is load-bearing: the reason line reports only the
+first match in sorted-path order, and the `client/src/App.jsx` branch returns
+before the trigger loop, so both read the same OR over every match. A diff that
+edits `App.jsx` *and* bumps a lockfile escalates. Otherwise the job drops to **one shard running
+`WINDOWS_CONTRACT_TESTS`** — reduced, never skipped, and exactly the depth a
+Windows-risk scoped PR already gets.
+
+Three properties keep that safe, each pinned by `scripts/ci-test-plan.test.js`:
+
+- **Fail-closed by default.** `windowsEscalates` defaults to `true`, so a
+  `fullPlan()` call site added later over-tests rather than under-tests.
+- **Fail-closed on an empty baseline.** `run-ci-tests.js` prints "No server
+  tests selected" and exits 0 for an empty `files` list, so a downgrade that
+  resolved to no tracked contract tests would be a green job that ran nothing.
+  The planner falls back to the full suite instead.
+- **Force-full keeps the discovery net.** Nightly, the `main` → `release` PR,
+  release, and an explicit full-CI request still run the complete Windows
+  matrix. `ci.yml` has no push trigger, so those are the whole net for a Windows
+  regression on a surface nobody has tagged yet (`staticImportGraph` in #5909,
+  `voice/fineTuning` in #6268), and worst-case detection latency for a
+  downgraded PR is the next nightly — always before a release, because the
+  `main` → `release` PR is force-full. That is not a new exposure: it is the
+  same net every PR touching no `WINDOWS_RISK_RULES` file already relies on,
+  which is most of them. This change widens that population by 24 runs in 250.
+
+**Before / after**, on the same 250-merge sample:
+
+| | Jobs | Runner-min | 2x-equivalent |
+| --- | --- | --- | --- |
+| Full run, Windows-relevant (40 of 64) — unchanged | 12 | 28.7 | 40.4 |
+| Full run, downgraded (24 of 64) — before | 12 | 28.7 | 40.4 |
+| Full run, downgraded (24 of 64) — after | **10** | **18.4** | **19.9** |
+| Per merged PR, averaged over all 250 — before | — | 10.25 | 13.78 |
+| Per merged PR, averaged over all 250 — after | — | **9.26** | **11.81** |
+
+That is −36% runner-minutes on a downgraded full run (−51% at the 2x multiplier),
+and **−9.6% overall runner-minutes / −14.3% 2x-equivalent** across the whole sample.
+The one estimated input is the baseline Windows shard at ~1.5 min (~0.83 min
+measured fixed overhead plus the contract suite); every other figure is measured.
+
+There is **no wall-clock regression**: a downgraded run's Windows job goes from 4.15 min to
+~1.5 min, so the full path gets *shorter*, and no full-Windows run changes at all.
+
+**Why the matrix is still 3 shards.** Dropping Windows to 2 was measured and
+rejected. Per-shard step timings put fixed overhead (checkout, setup-node, cache
+restore) at only ~0.83 min of the 4.15-min shard; the rest is the test step. Going
+3 → 2 therefore removes one setup (~1.7 equivalent-minutes, 7%) while adding
+~1.65 min to the full path's critical chain. Tightening the selection above beat
+that at zero wall-clock cost, so `FULL_SUITE_SHARDS.windows` stays at 3.
+`max-parallel` is not an alternative — it lowers peak concurrency, not total
+occupancy.
 
 ### Python sidecar scripts
 
