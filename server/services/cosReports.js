@@ -11,6 +11,7 @@ import { join } from 'path';
 import { loadState, ensureDirectories, REPORTS_DIR, isDaemonRunning } from './cosState.js';
 import { getAgentIdsForDates, getAgentsByDate } from './cosAgentIndex.js';
 import { formatDuration, safeJSONParse, atomicWrite } from '../lib/fileUtils.js';
+import { isAgentHandoff } from '../lib/agentOutcome.js';
 
 // Completed-agent records for a set of UTC date buckets (YYYY-MM-DD), merged
 // from live in-memory state and the on-disk date-bucket archive. `accept(agent)`
@@ -24,9 +25,16 @@ import { formatDuration, safeJSONParse, atomicWrite } from '../lib/fileUtils.js'
 // swept out of state.json by `archiveStaleAgents` resolves from disk instead of
 // reading as empty (issue #3501: reports for past dates came back all-zero, and
 // every dashboard refresh linearly rescanned the whole agent history).
+//
+// HANDOFF records are dropped from both sources. Every caller here is building
+// outcome statistics — succeeded vs failed, accomplishments vs incidents — and a
+// record `resumeAgent` retired to requeue its own task has no outcome yet: the
+// continuation it handed the task to records that. Counting it booked one failed
+// task per provider swap in the daily report and the "While You Were Away"
+// briefing, which is the failure a user sees for pressing Relaunch.
 async function collectCompletedAgents(dates, state, accept) {
   const liveIds = new Set(Object.keys(state.agents));
-  const collected = Object.values(state.agents).filter(a => a.completedAt && accept(a));
+  const collected = Object.values(state.agents).filter(a => a.completedAt && !isAgentHandoff(a) && accept(a));
   const idsByDate = await getAgentIdsForDates(dates);
 
   // Iterating the Map (not `dates`) keeps a repeated date from reading its bucket twice.
@@ -35,7 +43,7 @@ async function collectCompletedAgents(dates, state, accept) {
     if (missing.size === 0) continue;
     for (const agent of await getAgentsByDate(date)) {
       if (!missing.has(agent.id)) continue; // live copy wins, and non-indexed strays stay out
-      if (!agent.completedAt || !accept(agent)) continue;
+      if (!agent.completedAt || isAgentHandoff(agent) || !accept(agent)) continue;
       collected.push(agent);
     }
   }

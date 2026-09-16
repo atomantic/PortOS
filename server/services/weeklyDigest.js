@@ -14,6 +14,7 @@ import { getAgents } from './cosAgentLifecycle.js';
 import { getAgentDates, getAgentsByDate } from './cosAgentIndex.js';
 import { atomicWrite, ensureDir, readJSONFile, formatDuration, PATHS } from '../lib/fileUtils.js';
 import { getWeekId, weekStartFromWeekId } from '../lib/isoWeek.js';
+import { isAgentHandoff } from '../lib/agentOutcome.js';
 
 const DIGESTS_DIR = PATHS.digests;
 
@@ -95,8 +96,13 @@ export async function generateWeeklyDigest(weekId = null) {
   const dedupedStateAgents = stateAgents.filter(a => !dateAgentIds.has(a.id));
   const allAgents = [...flatDateAgents, ...dedupedStateAgents];
 
+  // Handoffs are excluded once, here, so every stat derived below — totals,
+  // success rate, per-type breakdown, accomplishments, and the recurring-issue
+  // patterns keyed on `result.error` — sees the same set. Without it the digest's
+  // top "recurring issue" of a week with a few provider swaps is literally
+  // "Relaunched by user on <provider>".
   const weekAgents = allAgents.filter(a => {
-    if (!a.completedAt) return false;
+    if (!a.completedAt || isAgentHandoff(a)) return false;
     const completedWeek = getWeekId(new Date(a.completedAt));
     return completedWeek === targetWeekId;
   });
@@ -424,7 +430,7 @@ export async function getCurrentWeekProgress() {
 
   // Filter agents completed this week
   const weekAgents = agents.filter(a => {
-    if (!a.completedAt) return false;
+    if (!a.completedAt || isAgentHandoff(a)) return false;
     const completedWeek = getWeekId(new Date(a.completedAt));
     return completedWeek === weekId;
   });

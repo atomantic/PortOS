@@ -7,6 +7,7 @@ import FilePickerButton from '../../ui/FilePickerButton';
 import { FormField } from '../../ui/FormField';
 import EffortSelect from '../EffortSelect';
 import { effectiveModelFor, effortAwareModelOptions, effortSurvivingModel, seedModelEffort } from '../../../utils/providers';
+import { isAgentHandoff } from '../../../lib/agentOutcome';
 
 export default function ResumeAgentModal({ agent, taskType = 'user', providers, providersLoaded = true, apps, onSubmit, onClose }) {
   // A paused agent resumes IN PLACE: its own task is requeued on the worktree its
@@ -17,8 +18,17 @@ export default function ResumeAgentModal({ agent, taskType = 'user', providers, 
   const outputSummary = agent.output?.length > 0
     ? agent.output.slice(-20).map(o => o.line).join('\n')
     : '';
+  // A run retired by Resume/Relaunch never reached a verdict. This string is
+  // pasted into the NEW run's context, so calling it a failure would tell the
+  // agent its predecessor broke when the user simply moved it to another provider.
+  const handoff = isAgentHandoff(agent);
+  // `pauseReason` first, for the same reason as the card: on a Relaunch it names
+  // what the user changed, while `result.error` holds the resume summary.
+  const handoffReason = agent.metadata?.pauseReason || agent.result?.error || 'relaunched on a different provider';
   const resultInfo = agent.result
-    ? (agent.result.success ? 'Previous run: Completed successfully' : `Previous run: Failed - ${agent.result.error || 'Unknown error'}`)
+    ? (handoff
+      ? `Previous run: Handed off - ${handoffReason}`
+      : agent.result.success ? 'Previous run: Completed successfully' : `Previous run: Failed - ${agent.result.error || 'Unknown error'}`)
     : '';
   const pauseInfo = isPaused
     ? `Previous run: Paused${agent.metadata?.pauseReason ? ` - ${agent.metadata.pauseReason}` : ''}`
@@ -148,8 +158,12 @@ export default function ResumeAgentModal({ agent, taskType = 'user', providers, 
             </div>
           )}
           {agent.result && (
-            <div className={`text-sm mt-2 flex items-center gap-2 ${agent.result.success ? 'text-port-success' : 'text-port-error'}`}>
-              {agent.result.success ? (
+            <div className={`text-sm mt-2 flex items-center gap-2 ${
+              handoff ? 'text-port-accent' : agent.result.success ? 'text-port-success' : 'text-port-error'
+            }`}>
+              {handoff ? (
+                <><RotateCcw size={14} /> {handoffReason}</>
+              ) : agent.result.success ? (
                 <><CheckCircle size={14} /> Completed successfully</>
               ) : (
                 <><AlertCircle size={14} /> {agent.result.error || 'Failed'}</>

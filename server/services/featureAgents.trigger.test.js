@@ -84,6 +84,67 @@ describe('triggerFeatureAgent', () => {
     expect(saved.agents[0].currentAgentId).toBeNull();
   });
 
+  it('follows a relaunched run to its continuation instead of recording an error', async () => {
+    // Relaunch retires the CoS agent with `success: false` and requeues the same
+    // task on a new provider. Treating that as a completion flipped the feature
+    // agent to `error`, banked a run that had not finished, and — because the
+    // `agent:spawned` re-bind only matches a feature agent still pointing at the
+    // TASK — stranded currentAgentId on the dead agent, so the continuation's
+    // output never reached the feature-agent view.
+    const result = await triggerFeatureAgent(agent.id);
+    cosEvents.emit('agent:spawned', { taskId: result.taskId, id: 'agent-first' });
+    await vi.waitFor(async () => {
+      const saved = JSON.parse(await readFile(dataPath(), 'utf8'));
+      expect(saved.agents[0].currentAgentId).toBe('agent-first');
+    });
+
+    cosEvents.emit('agent:completed', {
+      id: 'agent-first',
+      taskId: result.taskId,
+      metadata: { featureAgentId: agent.id, featureAgentRun: true },
+      result: { success: false, resumed: true, resumedTaskId: result.taskId, error: 'Relaunched by user on codex' }
+    });
+
+    await vi.waitFor(async () => {
+      const saved = JSON.parse(await readFile(dataPath(), 'utf8'));
+      expect(saved.agents[0].currentAgentId).toBe(result.taskId);
+    });
+    const saved = JSON.parse(await readFile(dataPath(), 'utf8'));
+    expect(saved.agents[0].runCount ?? 0).toBe(0);
+    expect(saved.agents[0].status).toBe('active');
+
+    // And the pointer it handed back is the one the continuation's spawn re-binds.
+    cosEvents.emit('agent:spawned', { taskId: result.taskId, id: 'agent-second' });
+    await vi.waitFor(async () => {
+      const after = JSON.parse(await readFile(dataPath(), 'utf8'));
+      expect(after.agents[0].currentAgentId).toBe('agent-second');
+    });
+  });
+
+  it('points at the REPLACEMENT task when a resume could not reuse the paused one', async () => {
+    // `resumeAgent`'s new-task mode queues a fresh task (inheriting this feature
+    // agent's metadata) and reports it as `resumedTaskId`. Handing back the
+    // retired `taskId` would leave a pointer nothing will ever spawn.
+    const result = await triggerFeatureAgent(agent.id);
+    cosEvents.emit('agent:spawned', { taskId: result.taskId, id: 'agent-first' });
+    await vi.waitFor(async () => {
+      const saved = JSON.parse(await readFile(dataPath(), 'utf8'));
+      expect(saved.agents[0].currentAgentId).toBe('agent-first');
+    });
+
+    cosEvents.emit('agent:completed', {
+      id: 'agent-first',
+      taskId: result.taskId,
+      metadata: { featureAgentId: agent.id, featureAgentRun: true },
+      result: { success: false, resumed: true, resumedTaskId: 'task-replacement', error: 'Relaunched by user' }
+    });
+
+    await vi.waitFor(async () => {
+      const saved = JSON.parse(await readFile(dataPath(), 'utf8'));
+      expect(saved.agents[0].currentAgentId).toBe('task-replacement');
+    });
+  });
+
   it('clears the active pointer and records the run after CoS completion', async () => {
     const result = await triggerFeatureAgent(agent.id);
 

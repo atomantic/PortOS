@@ -102,6 +102,7 @@ export * from './buildStamp.js';
 export * from './chipContrast.js';
 export * from './clientErrorReporter.js';
 export * from './clinicianReport.js';
+export * from './agentOutcome.js';
 export * from './clipboard.js';
 export * from './effortCostEstimate.js';
 export * from './compareHelpers.js';

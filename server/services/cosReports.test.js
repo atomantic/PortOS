@@ -90,6 +90,19 @@ describe('getWhileAwayActivity', () => {
     expect(result.incidents.map(a => a.id)).toEqual(['bad1']);
   });
 
+  it('keeps a relaunched run out of the incidents list', async () => {
+    // The "While You Were Away" briefing is where a phantom failure is loudest:
+    // it presents the failed bucket as incidents the user should look at.
+    const relaunched = agentAt('swapped', { msAgo: 30 * 60000, success: false });
+    relaunched.result = { ...relaunched.result, resumed: true, error: 'Relaunched by user on codex' };
+    mock.state = stateWith([agentAt('ok', { msAgo: 10 * 60000, success: true }), relaunched]);
+
+    const result = await getWhileAwayActivity(new Date(Date.now() - 3600000).toISOString());
+
+    expect(result.stats).toMatchObject({ completed: 1, succeeded: 1, failed: 0, successRate: 100 });
+    expect(result.incidents).toHaveLength(0);
+  });
+
   it('merges archived agents from date buckets the window spans', async () => {
     const liveAgent = agentAt('live', { msAgo: 30 * 60000 });
     mock.state = stateWith([liveAgent]);
@@ -195,6 +208,14 @@ const agentOnDate = (id, dateStr, { success = true, desc = 'did a thing' } = {})
   metadata: { taskDescription: desc, taskType: 'review' }
 });
 
+// What Relaunch leaves behind: `resumeAgent` retires the running record with
+// `success: false` and requeues the SAME task on the new provider. It never
+// reached a verdict, so no report may count it as a failed task.
+const handoffOnDate = (id, dateStr) => ({
+  ...agentOnDate(id, dateStr, { success: false, desc: 'swapped providers mid-run' }),
+  result: { success: false, duration: 3600000, resumed: true, resumedTaskId: `task-${id}`, error: 'Relaunched by user on codex' }
+});
+
 const todayStr = () => new Date().toISOString().slice(0, 10);
 
 describe('generateReport (#3501 date-bucket sourcing)', () => {
@@ -233,6 +254,34 @@ describe('generateReport (#3501 date-bucket sourcing)', () => {
 
     expect(report.summary).toMatchObject({ tasksCompleted: 1, tasksFailed: 0, totalAgents: 1 });
     expect(getAgentsByDate).not.toHaveBeenCalled();
+  });
+
+  it('does not count a relaunched run as a failed task', async () => {
+    const date = '2026-01-19';
+    mock.state = stateWith([
+      agentOnDate('ok', date, { success: true }),
+      handoffOnDate('swapped', date),
+    ]);
+
+    const report = await generateReport(date);
+
+    // Not 1 failed + 3 total: the relaunch is neither, and it stays out of the
+    // per-agent list so nothing downstream re-derives a verdict from it.
+    expect(report.summary).toMatchObject({ tasksCompleted: 1, tasksFailed: 0, totalAgents: 1 });
+    expect(report.agents.map(a => a.id)).toEqual(['ok']);
+  });
+
+  it('excludes an ARCHIVED relaunch too, not just a live one', async () => {
+    // The archive is the half that outlives state.json, so a per-source filter
+    // that only covered live records would put every past swap back in the
+    // failure column as soon as retention swept it.
+    const date = '2026-01-20';
+    mock.agentsByDate[date] = [handoffOnDate('archived-swap', date), agentOnDate('archived-ok', date, { success: true })];
+
+    const report = await generateReport(date);
+
+    expect(report.summary).toMatchObject({ tasksCompleted: 1, tasksFailed: 0, totalAgents: 1 });
+    expect(report.agents.map(a => a.id)).toEqual(['archived-ok']);
   });
 
   it('ignores agents completed on other dates', async () => {

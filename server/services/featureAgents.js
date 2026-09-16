@@ -14,6 +14,7 @@ import { cosEvents } from './cosEvents.js';
 import { ensureDir, PATHS, readJSONFile, atomicWrite, rmGuarded } from '../lib/fileUtils.js';
 import { createMutex } from '../lib/asyncMutex.js';
 import { isPlainObject } from '../lib/objects.js';
+import { isAgentHandoff } from '../lib/agentOutcome.js';
 import { getAppById } from './apps.js';
 const DATA_DIR = PATHS.cos;
 const FA_FILE = join(DATA_DIR, 'feature-agents.json');
@@ -598,6 +599,26 @@ cosEvents.on('agent:spawned', async (agentData) => {
 cosEvents.on('agent:completed', async (agentData) => {
   const featureAgentId = agentData?.metadata?.featureAgentId;
   if (!agentData?.metadata?.featureAgentRun || !featureAgentId) return;
+  // A relaunch retires this record and requeues the SAME task on a new provider,
+  // so the run is still in flight. Recording it would flip the feature agent to
+  // `error`, bump its run count, and write a run-history entry reading
+  // "Relaunched by user" — for work that has not finished.
+  //
+  // Instead, follow the task. `currentAgentId` holds the retired agent's id,
+  // and the `agent:spawned` listener above re-binds it only for a feature agent
+  // still pointing at the TASK — so without this hand-back the pointer stays on a
+  // dead agent and the continuation's output never reaches the feature-agent view.
+  if (isAgentHandoff(agentData)) {
+    // `resumedTaskId` — not `taskId` — because a resume that could not reuse the
+    // paused task queues a REPLACEMENT (which inherits this feature agent's
+    // metadata), and pointing at the retired task id would never re-bind.
+    const continuationTaskId = agentData.result?.resumedTaskId || agentData.taskId;
+    if (!continuationTaskId) return;
+    await setCurrentAgent(featureAgentId, continuationTaskId).catch(err => {
+      console.log(`⚠️ Failed to hand feature agent ${featureAgentId} back to its relaunched task: ${err.message}`);
+    });
+    return;
+  }
   const success = agentData.result?.success === true;
   await recordRunCompletion(featureAgentId, {
     status: success ? 'working' : 'error',

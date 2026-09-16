@@ -50,6 +50,7 @@ import { getQuotaBurnDispatches, evaluateFamilies, PLAN_COMPLETE_SKIP_REASON, re
 import { reconcileQuotaBurnReservations, reserveQuotaBurnDispatch } from './quotaBurnAcceptance.js';
 import { getQuotaBurnCompletions, recordQuotaBurnJobCompletion } from './quotaBurnCompletions.js';
 import { getActiveQuotaBurnBlocks, recordBurnAgentCompletion } from './quotaBurnDenials.js';
+import { isAgentHandoff } from '../lib/agentOutcome.js';
 import { getQuotaBurnConfig, getQuotaBurnReservations, getQuotaBurnRuns, quotaBurnReservationKey, recordQuotaBurnRun } from './quotaBurnStore.js';
 import { countQuotaBurnStepPending, getQuotaBurnTaskCatalog, invokeQuotaBurnStep } from './quotaBurnInvoke.js';
 import { familyHasRunnableJobs, familyIsConfigured, jobIsSpent, quotaBurnJobKey } from '../lib/quotaBurnConfig.js';
@@ -679,6 +680,15 @@ async function lastScheduledRunAt() {
 function onBurnAgentCompleted(agent) {
   const familyId = agent?.metadata?.taskQuotaBurnFamily;
   if (!familyId) return null;
+  // A relaunch is not a completion, and both halves below would misread it as
+  // one. The denial ledger would file "Relaunched by user on <provider>" as an
+  // observed provider refusal and block the family on it — the exact opposite of
+  // what the user asked for, since swapping providers is usually how they get
+  // AROUND a limit. And the plan walk would dispatch the next job while the
+  // relaunched task is being re-spawned, breaking the one-agent-at-a-time pacing
+  // this chain depends on to stay closed. The continuation run emits its own
+  // `agent:completed`; that is the one that settles the family.
+  if (isAgentHandoff(agent)) return null;
   // Returned so tests can await the cycle. The emitter ignores it — this is a
   // fire-and-forget listener, and the `.catch` is what keeps a rejection from
   // reaching the emitter as an unhandled one.

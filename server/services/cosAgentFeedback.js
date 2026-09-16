@@ -16,6 +16,7 @@ import { atomicWrite, safeJSONParse, tryReadFile } from '../lib/fileUtils.js';
 import { loadAgentIndex, getAgentDir } from './cosAgentIndex.js';
 import { ServerError } from '../lib/errorHandler.js';
 import { recordUserAction } from './userActions.js';
+import { isAgentHandoff } from '../lib/agentOutcome.js';
 
 const isSystemAgent = (agent) =>
   agent.taskId?.startsWith('sys-') || agent.id?.startsWith('sys-');
@@ -71,6 +72,11 @@ export async function getPendingAgentFeedbackCount() {
       agent.status === 'completed' &&
       !isSystemAgent(agent) &&
       isManualUserAgent(agent) &&
+      // A record Resume/Relaunch retired has no result to rate — the continuation
+      // it handed the task to is the run that gets rated. Counting it banners a
+      // review item the Agents queue then refuses to show rating buttons for, so
+      // the banner never clears.
+      !isAgentHandoff(agent) &&
       !agent.feedback?.rating)
     .length;
 }

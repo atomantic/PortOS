@@ -4,6 +4,7 @@ import { ThumbsUp, ThumbsDown, Loader2, AlertTriangle } from 'lucide-react';
 import socket from '../services/socket';
 import * as api from '../services/api';
 import OutputBlocks from '../components/cos/OutputBlocks';
+import { isAgentHandoff } from '../lib/agentOutcome';
 
 const AUTO_DISMISS_MS = 15000;
 
@@ -170,7 +171,11 @@ export function useAgentFeedbackToast() {
       const agentId = data?.id || data?.agentId;
       const isSystem = data?.taskId?.startsWith('sys-') || agentId?.startsWith('sys-');
 
-      if (!agentId || isSystem || shownFeedbackFor.current.has(agentId)) {
+      // A record Resume/Relaunch retired is a handoff, not a completion: pressing
+      // Relaunch popped "✗ Agent completed — rate the result" in the corner for a
+      // run the user had just moved to another provider, and the run it handed the
+      // task to raises this toast itself when it actually finishes.
+      if (!agentId || isSystem || isAgentHandoff(data) || shownFeedbackFor.current.has(agentId)) {
         return;
       }
 
