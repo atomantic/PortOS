@@ -1,5 +1,5 @@
 import { providerModeGroups } from '../lib/aiToolkit/internal/providerModes.js';
-import { canAddTuiMode, tuiModeAddition } from '../lib/providerModePairing.js';
+import { tuiModeAddition } from '../lib/providerModePairing.js';
 import { buildProviderGraphPreview, toManagementPreviewDto } from '../lib/providerGraphPreview.js';
 import {
   createBinding,
@@ -273,10 +273,12 @@ export function createPortOSProviderRoutes(aiToolkit) {
         executionModes: modeGroups.get(provider.id),
         // Whether this record can be COMPLETED into a CLI/TUI pair. Derived
         // here rather than on the record alone because the verdict reads the
-        // whole list (the sibling id must be free), and decided server-side for
-        // the same reason `prerequisitesMet` is: the card offering the action
-        // and the endpoint performing it must not re-derive the rule apart.
-        canAddTuiMode: canAddTuiMode(provider, data.providers),
+        // whole list — this record's mode GROUP (a `<stem>-cli` record is
+        // already paired while its `<id>-tui` sits unclaimed) and the sibling
+        // id — and decided server-side for the same reason `prerequisitesMet`
+        // is: the card offering the action and the endpoint performing it must
+        // not re-derive the rule apart.
+        canAddTuiMode: tuiModeAddition(provider, data.providers, modeGroups.get(provider.id)).ok,
         prerequisitesMet: prerequisites[provider.id]?.met ?? true,
         missingPrerequisites: prerequisites[provider.id]?.missing ?? [],
         // NON-blocking notices — today only 'this install's own ~/.codex/config.toml

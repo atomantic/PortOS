@@ -1,5 +1,5 @@
 import { composeBootstrapSpawn } from './internal/credentialBootstrap.js';
-import { expandModePair, providerModeGroups, sharedModeUpdates, unifyProviderModes } from './internal/providerModes.js';
+import { expandModePair, modeSiblingPayload, providerModeGroups, sharedModeUpdates, unifyProviderModes } from './internal/providerModes.js';
 import { readFile, rename } from 'fs/promises';
 import { existsSync } from 'fs';
 import { join, dirname, delimiter, isAbsolute } from 'path';
@@ -834,11 +834,12 @@ export function createProviderService(config = {}) {
      * and leave two unrelated routes. Everything but the mode's own argv comes
      * across unchanged, which is what makes the result groupable.
      *
-     * Routed through {@link expandModePair} so the `<stem>` / `<stem>-tui` id
-     * and name convention has ONE writer whether a pair is born together or
-     * completed later. The CLI id is already fixed, so a taken sibling id is
-     * not a collision to suffix around — it is something else already standing
-     * there, and this throws rather than guessing.
+     * Routed through {@link modeSiblingPayload} — the same writer a dual-mode
+     * create goes through — so the `<stem>` / `<stem>-tui` id and name
+     * convention has ONE spelling whether a pair is born together or completed
+     * later. The CLI id is already fixed, so a taken sibling id is not a
+     * collision to suffix around — it is something else already standing there,
+     * and this throws rather than guessing.
      *
      * @param {string} id - the CLI record to derive from
      * @param {object} [tuiOverrides] - mode-specific fields, typically `args`
@@ -850,8 +851,7 @@ export function createProviderService(config = {}) {
       if (!stored) return null;
       if (stored.type !== 'cli') throw new Error('Only a CLI provider can gain a TUI mode');
 
-      const [, tuiData] = expandModePair({ ...stored, modes: { cli: {}, tui: tuiOverrides } });
-      const created = buildProviderRecord(data.providers, tuiData);
+      const created = buildProviderRecord(data.providers, modeSiblingPayload(stored, 'tui', tuiOverrides));
       storeProviderRecords(data, [created]);
       await saveProviders(data);
       return created;

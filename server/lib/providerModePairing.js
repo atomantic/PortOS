@@ -12,21 +12,24 @@
  */
 
 import { harnessForProvider, harnessRecipe, harnessSupportsMode } from './providerHarnesses.js';
-import { modeSiblingId } from './aiToolkit/internal/providerModes.js';
+import { modeSiblingId, providerModeGroups } from './aiToolkit/internal/providerModes.js';
 
 /**
  * Whether a TUI sibling can be minted for `provider`, and with which argv.
  *
- * A refusal carries the HTTP status the endpoint answers with, because the two
+ * A refusal carries the HTTP status the endpoint answers with, because the
  * refusals mean different things to a caller: a record that can never have a
- * TUI mode is a bad request, while a sibling id that is already taken is a
- * conflict with something standing in that slot.
+ * TUI mode is a bad request, while a harness that already HAS one — or a
+ * sibling id something else is standing in — is a conflict.
  *
  * @param {object|null|undefined} provider - the record to derive from
- * @param {object[]} providers - every stored provider, for the id-collision check
+ * @param {object[]} providers - every stored provider, for the pairing and id checks
+ * @param {{id:string,type:string}[]|null} [executionModes] - this record's mode
+ *   group when the caller already computed it (the provider list does, per
+ *   record); derived here otherwise
  * @returns {{ok:true, args:string[]}|{ok:false, status:number, code:string, message:string}}
  */
-export function tuiModeAddition(provider, providers = []) {
+export function tuiModeAddition(provider, providers = [], executionModes = null) {
   const refuse = (status, code, message) => ({ ok: false, status, code, message });
 
   if (provider?.type !== 'cli') {
@@ -47,6 +50,18 @@ export function tuiModeAddition(provider, providers = []) {
     return refuse(400, 'TUI_MODE_UNSUPPORTED', `${harness.label} has no interactive mode.`);
   }
 
+  // Ask whether this harness ALREADY has its interactive mode, not merely
+  // whether `<id>-tui` is free — `providerModeGroups` also pairs `<stem>-cli`
+  // with `<stem>-tui`, so the shipped `grok-cli` is already half of a pair
+  // while `grok-cli-tui` sits unclaimed. Checking only the id would flag it and
+  // then mint a pointless third record beside the pair that already exists.
+  const modes = executionModes
+    || providerModeGroups(providers).find(group => group.some(mode => mode.id === provider.id))
+    || [];
+  if (modes.some(mode => mode.type === 'tui')) {
+    return refuse(409, 'TUI_MODE_EXISTS', `${provider.name || provider.id} already has an interactive mode.`);
+  }
+
   const siblingId = modeSiblingId(provider.id, 'tui');
   if (providers.some(entry => entry?.id === siblingId)) {
     return refuse(409, 'TUI_MODE_EXISTS', `A provider with the ID “${siblingId}” already exists.`);
@@ -54,9 +69,6 @@ export function tuiModeAddition(provider, providers = []) {
 
   return { ok: true, args: tuiSiblingArgs(harness) };
 }
-
-/** Convenience for the list decoration — the verdict as the one boolean a card needs. */
-export const canAddTuiMode = (provider, providers = []) => tuiModeAddition(provider, providers).ok;
 
 /**
  * The argv a freshly minted TUI sibling starts with.

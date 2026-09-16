@@ -81,7 +81,6 @@ describe('Provider Service', () => {
         id: 'example', name: 'Example Agent', type: 'cli', command: 'example', enabled: true,
         args: ['--print'], headlessArgs: ['--quiet'], models: ['a'], defaultModel: 'a',
         endpoint: 'https://backend.example.com', apiKey: 'sk-test', envVars: { EXAMPLE_HOME: '/opt/example' },
-        textTransport: 'codex-app-server', textTransportEnabled: true,
       },
     } }));
 
@@ -97,12 +96,10 @@ describe('Provider Service', () => {
       envVars: { EXAMPLE_HOME: '/opt/example' },
       enabled: true,
     });
-    // CLI-only transport fields did NOT: a second record advertising the Codex
-    // app-server transport would let a text call be routed to a record whose
-    // whole contract is "a human drives this in a terminal".
+    // The CLI's non-interactive argv did NOT — it is a flag list for a program
+    // being driven without a terminal, and inheriting it would hand those flags
+    // to a PTY launch.
     expect(tui.headlessArgs).toEqual([]);
-    expect(tui).not.toHaveProperty('textTransport');
-    expect(tui).not.toHaveProperty('textTransportEnabled');
 
     // The grouping CONSEQUENCE, not just "two records exist": disabling one
     // mode disables the harness, which only happens for a real pair.

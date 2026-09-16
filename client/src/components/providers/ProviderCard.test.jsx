@@ -336,12 +336,13 @@ describe('ProviderCard "Add interactive mode"', () => {
     expect(onAddTuiMode).toHaveBeenCalledWith(provider);
   });
 
-  it('offers nothing on an already-unified card, a TUI record, or an api record', () => {
-    const expectNoAction = () => expect(screen.queryByRole('button', { name: /Add interactive mode/ })).toBeNull();
-
-    // Unified: the pair exists, so there is nothing to add. Flagged `true` on
-    // purpose — the server would never say so, and this pins that a card
-    // rendering a stale list still refuses rather than offering a second TUI.
+  it('offers nothing on an already-unified card, whatever the server flagged', () => {
+    // Flagged `true` on purpose: the card's own `!unified` guard is what this
+    // pins, so a stale list still refuses rather than offering a second TUI
+    // mode beside the one already on the card. (Which RECORDS qualify — a TUI
+    // record, an api record, a CLI-only harness — is the server's rule, pinned
+    // where it lives in routes/providers.tuiMode.test.js; the card reads only
+    // the flag and never looks at `type`.)
     const cli = cliRecord();
     const tui = wrapper({ id: 'opencode-tui', name: 'OpenCode TUI' });
     renderCard(
@@ -349,14 +350,12 @@ describe('ProviderCard "Add interactive mode"', () => {
       null,
       { providersById: { 'opencode-cli': cli, 'opencode-tui': tui } },
     );
-    expectNoAction();
+    expect(screen.queryByRole('button', { name: /Add interactive mode/ })).toBeNull();
+  });
 
-    // A TUI record: the CLI id is the stem, so minting it here is a rename.
-    renderCard(wrapper());
-    expectNoAction();
-
-    renderCard(wrapper({ id: 'openai', name: 'OpenAI', type: 'api' }));
-    expectNoAction();
+  it('offers nothing when the server did not flag the record', () => {
+    renderCard(cliRecord({ canAddTuiMode: false }));
+    expect(screen.queryByRole('button', { name: /Add interactive mode/ })).toBeNull();
   });
 
   it('shows the in-flight state rather than letting a second click mint twice', () => {

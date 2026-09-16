@@ -47,9 +47,15 @@ describe('POST /api/providers/:id/modes/tui', () => {
     expect(createProviderTuiMode).toHaveBeenCalledWith('claude-code', { args: ['--dangerously-skip-permissions'] });
   });
 
-  it('answers 409 and writes NOTHING when the sibling id is already taken', async () => {
+  it('answers 409 and writes NOTHING when the sibling id is taken by something unrelated', async () => {
+    // Distinct from the already-paired refusal below: this record runs a
+    // DIFFERENT command, so it does not group with `claude-code` — it is simply
+    // squatting the id. `mintRouteIds` suffixes a whole set on collision
+    // because it owns both halves; here the CLI id is fixed, so a
+    // `claude-code-tui-2` would be a record nothing ever groups.
+    const squatter = { ...CLAUDE_TUI, name: 'Something Else', command: 'other' };
     const createProviderTuiMode = vi.fn();
-    const app = appWith({ ...listing([CLAUDE_CLI, CLAUDE_TUI]), createProviderTuiMode });
+    const app = appWith({ ...listing([CLAUDE_CLI, squatter]), createProviderTuiMode });
 
     const res = await request(app).post('/api/providers/claude-code/modes/tui');
     expect(res.status).toBe(409);
@@ -70,6 +76,23 @@ describe('POST /api/providers/:id/modes/tui', () => {
     expect((await request(app).post('/api/providers/openchamber/modes/tui')).status).toBe(400);
     expect((await request(app).post('/api/providers/nope/modes/tui')).status).toBe(404);
     expect(createProviderTuiMode).not.toHaveBeenCalled();
+  });
+
+  it('refuses a harness that already HAS its interactive mode under a `-cli` id', async () => {
+    // The shipped Grok pair is `grok-cli` / `grok-tui`, which `providerModeGroups`
+    // groups — but `modeSiblingId('grok-cli')` is `grok-cli-tui`, an id nothing
+    // holds. Judging eligibility on the free id alone flags half of an existing
+    // pair and mints a pointless third record beside it.
+    const grokCli = { id: 'grok-cli', name: 'Grok CLI', type: 'cli', command: 'grok', envVars: {} };
+    const grokTui = { id: 'grok-tui', name: 'Grok TUI', type: 'tui', command: 'grok', envVars: {} };
+    const createProviderTuiMode = vi.fn();
+    const app = appWith({ ...listing([grokCli, grokTui]), createProviderTuiMode });
+
+    expect((await request(app).post('/api/providers/grok-cli/modes/tui')).status).toBe(409);
+    expect(createProviderTuiMode).not.toHaveBeenCalled();
+
+    const list = await request(app).get('/api/providers');
+    expect(list.body.providers.find(p => p.id === 'grok-cli').canAddTuiMode).toBe(false);
   });
 
   it('GET / flags exactly the records this endpoint would accept', async () => {
