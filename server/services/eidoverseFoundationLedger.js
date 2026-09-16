@@ -1,13 +1,17 @@
 /**
  * The install-local ledger of Eidoverse world foundations — which durable
- * artifacts this instance authored, which ownership layer each one sits in, and
- * the last promote candidate packaged from it (#7455, epic #7453).
+ * artifacts this instance authored or inherited, which ownership layer each
+ * one sits in, and the last promote candidate packaged from (or inheritance
+ * edge built for) it (#7455, #7461, epic #7453).
  *
  * `server/lib/eidoverseFoundations.js` owns the ownership model and the
  * packaging/validation gate; this module is the persistence, clock, and
- * assay-execution shell around it. Everything authored here lands at the
+ * assay-execution shell around it. Everything AUTHORED here lands at the
  * `vernacular` layer, so an artifact is local until somebody promotes it on
- * purpose.
+ * purpose. The one other way a record enters this ledger is as a local copy
+ * of a foundation a PEER promoted — `recordEidoverseFoundationInheritance()` —
+ * which lands directly at `baseline` and carries an `inherited-from` edge
+ * rather than this install's own authorship.
  *
  * **The promote gate runs the agent-free assay; it never accepts a verdict.**
  * `packageEidoverseFoundationCandidate()` resolves the foundation's declared
@@ -24,7 +28,7 @@
  * install is a packaged candidate envelope, and even that leaves only through
  * an explicit promote. There is no `data.reference/` seed — an absent file is
  * an empty ledger, which is the correct state for every install that has never
- * authored a foundation, so no migration is owed.
+ * authored or inherited a foundation, so no migration is owed.
  */
 
 import { join } from 'node:path';
@@ -35,6 +39,9 @@ import {
   DEFAULT_EIDOVERSE_FOUNDATION_LAYER,
   assayEvidenceFromVerdict,
   eidoverseFoundationInputSchema,
+  foundationFromInheritedCandidate,
+  foundationLineage,
+  inheritedFoundationStorageKey,
   packageFoundationCandidate,
 } from '../lib/eidoverseFoundations.js';
 import { RESILIENCE_DISTURBANCES, runResilienceAssay } from './eidoverseResilienceAssay.js';
@@ -67,7 +74,13 @@ async function writeFoundations(foundations) {
   await atomicWrite(ledgerFile(), { schemaVersion: LEDGER_SCHEMA_VERSION, foundations });
 }
 
-/** Every foundation this install knows about, most recently updated first. */
+/**
+ * Every foundation this install knows about, most recently updated first —
+ * both what this install authored and any local copy it holds of a peer's
+ * promoted foundation (#7461). Each entry carries its derived `lineage`
+ * (proposal → commit → promote/inherit), computed fresh on every read rather
+ * than stored, per `foundationLineage()`'s own header.
+ */
 export async function listEidoverseFoundations() {
   const foundations = Object.values(await readFoundations())
     .sort((a, b) => String(b.updatedAt || '').localeCompare(String(a.updatedAt || '')));
@@ -75,12 +88,20 @@ export async function listEidoverseFoundations() {
     vernacular: totals.vernacular + (entry.layer === 'vernacular' ? 1 : 0),
     baseline: totals.baseline + (entry.layer === 'baseline' ? 1 : 0),
     candidates: totals.candidates + (entry.candidate ? 1 : 0),
-  }), { vernacular: 0, baseline: 0, candidates: 0 });
-  return { schemaVersion: LEDGER_SCHEMA_VERSION, counts, foundations };
+    // A subset of `baseline`: this install pulled the copy from a peer rather
+    // than promoting its own work into it.
+    inherited: totals.inherited + (entry.inheritance ? 1 : 0),
+  }), { vernacular: 0, baseline: 0, candidates: 0, inherited: 0 });
+  return {
+    schemaVersion: LEDGER_SCHEMA_VERSION,
+    counts,
+    foundations: foundations.map((entry) => ({ ...entry, lineage: foundationLineage(entry) })),
+  };
 }
 
 export async function getEidoverseFoundation(id) {
-  return (await readFoundations())[id] || null;
+  const found = (await readFoundations())[id] || null;
+  return found ? { ...found, lineage: foundationLineage(found) } : null;
 }
 
 /**
@@ -123,6 +144,11 @@ export async function recordEidoverseFoundation(input, { originInstanceId, now =
       assay: null,
       candidate: null,
       promotedAt: null,
+      // Always `null` here: this path authors LOCAL work. A ledger key this
+      // function writes is always the plain id, never
+      // `inheritedFoundationStorageKey()`'s namespace, so it can never
+      // overwrite (or be confused with) a copy pulled from a peer.
+      inheritance: null,
       updatedAt: now,
     };
     foundations[authored.id] = record;
@@ -231,5 +257,51 @@ export async function promoteEidoverseFoundation(id, { now = new Date().toISOStr
     foundations[id] = foundation;
     await writeFoundations(foundations);
     return { ...packaged, outcome: 'promoted', promoted: true, foundation };
+  });
+}
+
+/**
+ * Accept a promote candidate this install pulled from a peer and store it as
+ * a local baseline copy, carrying an `inherited-from` edge back to its origin
+ * (#7461).
+ *
+ * This is the function a future transport calls — it is written now so the
+ * provenance model, storage and safety gate exist end to end, but nothing in
+ * this install invokes it yet: the peer pull/inherit wire protocol is the
+ * still-open remainder of #7455. A transport that has fetched and can vouch
+ * for `sourceInstanceId` (the peer it pulled FROM — see
+ * `foundationFromInheritedCandidate()` for why that can differ from the
+ * candidate's own `originInstanceId` on a re-shared foundation) is the only
+ * intended caller.
+ *
+ * `localInstanceId` is supplied by the caller rather than read here, matching
+ * `recordEidoverseFoundation()`'s own convention: this module stays a
+ * single-purpose store, and the future transport already has to resolve its
+ * own instance id to make the pull in the first place.
+ *
+ * Every gate `promoteEidoverseFoundation()` runs on the SENDING side —
+ * schema, content-addressed fingerprint, the assay evidence already recorded
+ * in the envelope, and federation safety (PII, credentials, machine identity)
+ * — runs again here on the RECEIVING side: a payload handed over by a peer is
+ * exactly the untrusted input `verifyFoundationCandidate()` exists for. A
+ * candidate that fails is refused outright and nothing is written — never
+ * stored redacted, and never allowed to shadow (or read as) a local
+ * vernacular foundation of the same id, because it is stored under
+ * `inheritedFoundationStorageKey()`'s disjoint namespace instead.
+ *
+ * @returns {Promise<{ outcome: 'inherited'|'refused', foundation: object|null, reasons: string[], findings: Array }>}
+ */
+export async function recordEidoverseFoundationInheritance(candidate, { sourceInstanceId, localInstanceId, now = new Date().toISOString() } = {}) {
+  const built = foundationFromInheritedCandidate({
+    candidate, requiredDisturbances: RESILIENCE_DISTURBANCES, sourceInstanceId, localInstanceId, now,
+  });
+  if (built.outcome !== 'inherited') return built;
+
+  return withLedgerLock(async () => {
+    const foundations = await readFoundations();
+    const key = inheritedFoundationStorageKey(built.foundation.provenance.originInstanceId, built.foundation.id);
+    foundations[key] = built.foundation;
+    await writeFoundations(foundations);
+    return { outcome: 'inherited', foundation: { ...built.foundation, lineage: foundationLineage(built.foundation) }, reasons: [], findings: [] };
   });
 }

@@ -366,7 +366,7 @@ const eidoverseTravelTools = [
 // is what makes the promote tool usable — a mind that cannot see which
 // foundations exist and why one is refused can only guess at ids.
 const eidoverseFoundationTools = [
-  ['foundations', 'List the world foundations this install authored — ownership layer (`vernacular` = local, `baseline` = promoted), the recorded agent-free assay outcome, and whether a gated promote candidate currently exists. Local style is never included.', z.object({}).strict(), ['manageEidoverse'], 'read'],
+  ['foundations', 'List the world foundations this install authored or inherited from a peer — ownership layer (`vernacular` = local, `baseline` = promoted or an inherited copy), the recorded agent-free assay outcome, whether a gated promote candidate currently exists, provenance (opaque instance id and author kind, never a display name), any `inheritance` edge back to the peer it was pulled from, and the derived `lineage` (authored/inherited → assayed → packaged → promoted). Local style is never included.', z.object({}).strict(), ['manageEidoverse'], 'read'],
   ['promote', 'Offer one local foundation to the shared PortOS baseline population. The server re-runs the agent-free resilience assay and every promote gate itself, so this is a REQUEST, not an assertion: the result is `outcome: "promoted"` only when it published. Any other outcome means nothing moved — read `reasons` and fix those before asking again, and never narrate a refused promote as done.', eidoverseFoundationIdParamSchema, ['manageEidoverse', 'promoteEidoverseFoundations'], 'write'],
 ].map(([operation, description, schema, requiredCapabilities, sideEffect]) => ({
   type: 'portos_tool', name: `eidoverse.${operation}`, version: COS_TOOL_SCHEMA_VERSION,

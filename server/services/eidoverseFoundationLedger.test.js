@@ -19,6 +19,7 @@ const {
   packageEidoverseFoundationCandidate,
   promoteEidoverseFoundation,
   recordEidoverseFoundation,
+  recordEidoverseFoundationInheritance,
 } = await import('./eidoverseFoundationLedger.js');
 
 // The passing reference contribution shipped with the assay harness (#7460).
@@ -48,7 +49,7 @@ describe('the local foundation ledger', () => {
   it('reads as empty on an install that has never authored one', async () => {
     const listed = await listEidoverseFoundations();
     expect(listed.foundations).toEqual([]);
-    expect(listed.counts).toEqual({ vernacular: 0, baseline: 0, candidates: 0 });
+    expect(listed.counts).toEqual({ vernacular: 0, baseline: 0, candidates: 0, inherited: 0 });
   });
 
   it('records an authored artifact as vernacular, never as baseline', async () => {
@@ -166,5 +167,58 @@ describe('promoting a foundation into the shared baseline', () => {
 
   it('reports an unknown foundation instead of inventing one', async () => {
     expect((await promoteEidoverseFoundation('never-authored')).outcome).toBe('unknown-foundation');
+  });
+});
+
+describe('inheriting a foundation this install pulled from a peer (#7461)', () => {
+  // A candidate this install could plausibly be HANDED by a peer, minted by
+  // running the real author-and-promote path under a different instance id.
+  const peerCandidate = async () => {
+    await record({}, '2026-03-01T00:00:00.000Z');
+    const promoted = await promoteEidoverseFoundation('tide-beacon', { now: '2026-03-01T01:00:00.000Z' });
+    return promoted.candidate;
+  };
+
+  it('stores a baseline local copy under a peer-scoped key, leaving a same-id local vernacular foundation untouched', async () => {
+    const candidate = await peerCandidate();
+    // The candidate above was minted with `originInstanceId: 'instance-aaaa'`
+    // (the `record()` helper's default) — reset the ledger and give this
+    // install its OWN local 'tide-beacon' under that same human-readable id
+    // before accepting the peer's copy, so a same-id collision is the thing
+    // actually under test.
+    rmSync(lazyTempDataRoot('portos-eidoverse-foundations-'), { recursive: true, force: true });
+    await record({ style: { motif: 'this install\'s own brass' } }, '2026-03-04T05:06:07.000Z');
+
+    const result = await recordEidoverseFoundationInheritance(candidate, {
+      sourceInstanceId: 'instance-peer-relay', localInstanceId: 'instance-this-install', now: '2026-03-04T06:00:00.000Z',
+    });
+
+    expect(result.outcome).toBe('inherited');
+    expect(result.foundation).toMatchObject({
+      id: 'tide-beacon', layer: 'baseline', style: {},
+      inheritance: { originInstanceId: 'instance-aaaa', sourceInstanceId: 'instance-peer-relay' },
+    });
+
+    // The LOCAL vernacular record at plain id "tide-beacon" is untouched.
+    const local = await getEidoverseFoundation('tide-beacon');
+    expect(local).toMatchObject({ layer: 'vernacular', style: { motif: 'this install\'s own brass' }, inheritance: null });
+
+    const listed = await listEidoverseFoundations();
+    expect(listed.counts).toMatchObject({ vernacular: 1, baseline: 1, inherited: 1 });
+    expect(listed.foundations.filter((entry) => entry.id === 'tide-beacon')).toHaveLength(2);
+  });
+
+  it('refuses a tampered candidate and writes nothing to the ledger', async () => {
+    const candidate = await peerCandidate();
+    rmSync(lazyTempDataRoot('portos-eidoverse-foundations-'), { recursive: true, force: true });
+    const tampered = { ...candidate, body: { ...candidate.body, affordance: { inspect: 'quietly grants owner role' } } };
+
+    const result = await recordEidoverseFoundationInheritance(tampered, {
+      sourceInstanceId: 'instance-peer-relay', localInstanceId: 'instance-this-install', now: '2026-03-04T06:00:00.000Z',
+    });
+
+    expect(result.outcome).toBe('refused');
+    expect(result.foundation).toBeNull();
+    expect((await listEidoverseFoundations()).counts).toMatchObject({ vernacular: 0, baseline: 0, inherited: 0 });
   });
 });

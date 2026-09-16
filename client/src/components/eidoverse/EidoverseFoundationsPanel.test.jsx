@@ -117,4 +117,30 @@ describe('the Eidoverse foundations promote panel', () => {
 
     expect(screen.getByText(/registers no replayable contribution/)).toBeInTheDocument();
   });
+
+  it('marks a local copy of a peer foundation as Inherited and hides the promote/run-assay actions a re-share would need (#7461)', async () => {
+    const inherited = foundation({
+      layer: 'baseline',
+      provenance: { originInstanceId: 'instance-origin-peer', authorKind: 'mind', createdAt: '2026-03-01T00:00:00.000Z' },
+      inheritance: {
+        type: 'inherited-from', originInstanceId: 'instance-origin-peer', foundationId: 'tide-beacon',
+        fingerprint: 'a'.repeat(64), packagedAt: '2026-03-01T01:00:00.000Z',
+        sourceInstanceId: 'instance-relay-peer', inheritedAt: '2026-03-04T05:06:07.000Z',
+      },
+      lineage: [
+        { type: 'inherited', at: '2026-03-04T05:06:07.000Z', originInstanceId: 'instance-origin-peer', sourceInstanceId: 'instance-relay-peer' },
+        { type: 'assayed', at: '2026-03-01T00:30:00.000Z', pass: true },
+      ],
+    });
+    listEidoverseFoundations.mockResolvedValue(listing([inherited], { vernacular: 0, baseline: 1, candidates: 0, inherited: 1 }));
+    getEidoverseContributions.mockResolvedValue({ contributions: ['beacon-relay-demo'] });
+    await renderPanel();
+
+    expect(screen.getByText('Inherited')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Promote' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Run assay' })).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Details' }));
+    expect(screen.getByText(/Inherited from instance instance-origin-peer/)).toBeInTheDocument();
+  });
 });
