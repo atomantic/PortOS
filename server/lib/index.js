@@ -248,6 +248,7 @@ export * from './vllmQwenProvision.js';
 export * from './sglangQwenProject.js';
 export * from './sglangQwenRecipe.js';
 export * from './openAiModelsProbe.js';
+export * from './openAiModelsProbeCache.js';
 export * from './openAiChatStream.js';
 // `runners.js` re-defines `isFlux2`/`isZImage`/`isErnie` that also live in
 // mediaModels.js — namespace it so the barrel surface is unambiguous.

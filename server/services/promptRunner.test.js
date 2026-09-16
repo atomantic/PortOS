@@ -15,6 +15,10 @@ vi.mock('./runner.js', () => ({
   // run record's providerId/model so /runs attribution matches what
   // actually ran. Mocked as a no-op resolve.
   patchRunMetadata: vi.fn().mockResolvedValue(undefined),
+  // Settles a run record a pre-execution refusal throws past (the TUI readiness
+  // check and the context gate), so the Runs page never shows an attempt that
+  // never ends.
+  finalizeRunRecord: vi.fn().mockResolvedValue(undefined),
 }));
 
 // TUI runner is in lib (different module from services/runner.js) — mock it
@@ -61,12 +65,22 @@ vi.mock('../lib/aiToolkitState.js', () => ({
   getAIToolkitInstance: vi.fn().mockReturnValue(null),
 }));
 
+// The pre-dispatch context gate reads the daemon's live `/v1/models` through
+// this module (lazily). Mocked so the suite can drive "the endpoint says 32K"
+// without a daemon; the default is the no-observation answer, which is what
+// every provider that is not daemon-backed (and every install whose daemon is
+// down) gets — so the whole rest of the suite routes untouched.
+vi.mock('./observedContextWindows.js', () => ({
+  withObservedContextWindows: vi.fn(async (provider) => provider),
+}));
+
 const runner = await import('./runner.js');
 const tuiRunner = await import('./tuiPromptRunner.js');
 const executionReadiness = await import('./providerExecutionReadiness.js');
 const providers = await import('./providers.js');
 const autoFixer = await import('./autoFixer.js');
 const toolkitState = await import('../lib/aiToolkitState.js');
+const observedWindows = await import('./observedContextWindows.js');
 const { ERROR_CATEGORIES } = await import('../lib/aiToolkit/errorDetection.js');
 const { CREATIVE_LATITUDE_HEADING, withCreativeLatitude } = await import('../lib/creativeLatitude.js');
 const { runPromptThroughProvider, resolveProviderAndModel, resolveEffectiveModel, pickConfigCorrectedModel, normalizeResponseSchema, coerceResponseToSchema, isSchemaTypeCategory, buildRequestCapabilities, assertVisionRunUsedImages } = await import('./promptRunner.js');
@@ -94,6 +108,7 @@ beforeEach(() => {
   // Defaults reset for fallback-path mocks too — same staleness concern.
   providers.getAllProviders.mockResolvedValue({ activeProvider: null, providers: [] });
   toolkitState.getAIToolkitInstance.mockReturnValue(null);
+  observedWindows.withObservedContextWindows.mockImplementation(async (provider) => provider);
 });
 
 describe('promptRunner — happy paths', () => {
@@ -2355,5 +2370,164 @@ describe('creative IP-latitude clause', () => {
       provider: apiProvider(), prompt: 'Score the loop.', source: 'chiptune-score',
     });
     expect(runner.createRun.mock.calls[0][0].prompt).toContain(CREATIVE_LATITUDE_HEADING);
+  });
+});
+
+// ── Pre-dispatch context gate (#7441) ────────────────────────────────────────
+// A local daemon accepts an oversized request, emits its banner, then produces
+// nothing until the wall-clock timeout fires. Refusing up front is only correct
+// if it fires ONLY on a known window, so both the refusal and the two
+// unknown-window regressions live here.
+describe('promptRunner — context gate on the requested provider', () => {
+  // ~13 tokens of prompt + the 8000-token default output reserve, against a
+  // daemon whose listing declared 4096 — a request that provably cannot fit.
+  const vllmCli = () => cliProvider({
+    id: 'opencode-vllm',
+    name: 'OpenCode vLLM',
+    defaultModel: 'qwen3.8-27b',
+    models: ['qwen3.8-27b'],
+    vllmBacked: true,
+    endpoint: 'http://127.0.0.1:18020/v1',
+  });
+  // ~5,000 prompt tokens on its own — over a 4096-token window with no
+  // reserve arithmetic needed.
+  const OVERSIZED_PROMPT = 'x'.repeat(20_000);
+  const servingWindow = (tokens) => async (provider) => ({
+    ...provider,
+    modelContextWindows: { 'qwen3.8-27b': tokens },
+  });
+
+  // Tier-3 harness: a wider fallback the cascade can route to.
+  function mockToolkitWithFallbackFor(primary) {
+    const fallback = apiProvider({ id: 'fallback-api', name: 'Fallback API', defaultModel: 'fb-model' });
+    const markUnavailable = vi.fn().mockResolvedValue(undefined);
+    toolkitState.getAIToolkitInstance.mockReturnValue({
+      services: {
+        providerStatus: {
+          isAvailable: vi.fn().mockReturnValue(true),
+          markUnavailable,
+          markUsageLimit: vi.fn().mockResolvedValue(undefined),
+          getFallbackProvider: vi.fn().mockReturnValue({ provider: fallback, source: 'provider' }),
+        },
+      },
+    });
+    providers.getAllProviders.mockResolvedValue({ activeProvider: null, providers: [primary, fallback] });
+    return { markUnavailable };
+  }
+
+  it('refuses before dispatch, naming both token counts, for a pinned caller', async () => {
+    const status = mockToolkitWithFallbackFor(vllmCli());
+    observedWindows.withObservedContextWindows.mockImplementation(servingWindow(4096));
+
+    const rejection = await runPromptThroughProvider({
+      provider: vllmCli(),
+      prompt: OVERSIZED_PROMPT,
+      source: 'test',
+      allowFallback: false,
+    }).catch((err) => err);
+
+    // A pin opts out of ROUTING, not of health reporting — but this failure is
+    // the REQUEST's, not the provider's, so the pinned path must not bench a
+    // daemon that still serves smaller prompts perfectly well.
+    expect(status.markUnavailable).not.toHaveBeenCalled();
+
+    // Both numbers, because the operator's next move depends on the gap:
+    // a smaller prompt, or a provider with a wider window.
+    expect(rejection.message).toMatch(/known 4096-token context is below the \d+-token request budget/);
+    expect(rejection.message).toContain('OpenCode vLLM (qwen3.8-27b)');
+    // The whole point: no run record, no spawn, no ten-minute stall.
+    expect(runner.createRun).not.toHaveBeenCalled();
+    expect(runner.executeCliRun).not.toHaveBeenCalled();
+  });
+
+  // The refusal must act on what is PROVABLE. `requiredContextTokens` adds an
+  // 8,000-token output reserve that most callers never asked for; refusing on
+  // it would kill a 26K-token prompt to a 32K endpoint that expects three
+  // sentences back and succeeds today.
+  it('does not refuse on an output reserve the caller never asked for', async () => {
+    observedWindows.withObservedContextWindows.mockImplementation(servingWindow(4096));
+    runner.executeCliRun.mockImplementation(async ({ onComplete }) => onComplete({ success: true }));
+
+    // ~2,000 prompt tokens: under the 4096 window on its own, over it once the
+    // default 8,000-token reserve is added.
+    await runPromptThroughProvider({ provider: vllmCli(), prompt: 'x'.repeat(8_000), source: 'test' });
+    expect(runner.executeCliRun).toHaveBeenCalledTimes(1);
+  });
+
+  it('honors a reserve the caller DID declare', async () => {
+    observedWindows.withObservedContextWindows.mockImplementation(servingWindow(4096));
+
+    // Same prompt, but now the caller says it needs 4,000 tokens of answer —
+    // that genuinely does not fit, and it said so itself.
+    const rejection = await runPromptThroughProvider({
+      provider: vllmCli(),
+      prompt: 'x'.repeat(8_000),
+      source: 'test',
+      outputReserveTokens: 4_000,
+      allowFallback: false,
+    }).catch((err) => err);
+
+    expect(rejection.message).toContain('known 4096-token context is below');
+    expect(runner.executeCliRun).not.toHaveBeenCalled();
+  });
+
+  // stageRunner and the loops create the run record themselves. Throwing past
+  // one leaves the Runs page showing an attempt that never ends, and every
+  // `success === null` reconciler seeing a phantom active run.
+  it('settles a caller-supplied run record instead of stranding it open', async () => {
+    observedWindows.withObservedContextWindows.mockImplementation(servingWindow(4096));
+
+    await runPromptThroughProvider({
+      provider: vllmCli(),
+      prompt: OVERSIZED_PROMPT,
+      source: 'test',
+      runId: 'caller-owned-run',
+      allowFallback: false,
+    }).catch(() => {});
+
+    expect(runner.finalizeRunRecord).toHaveBeenCalledWith(expect.objectContaining({
+      runId: 'caller-owned-run',
+      success: false,
+      exitCode: 1,
+      error: expect.stringContaining('4096-token context'),
+    }));
+  });
+
+  it('routes an oversized request to a fallback instead of benching a healthy daemon', async () => {
+    const status = mockToolkitWithFallbackFor(vllmCli());
+    observedWindows.withObservedContextWindows.mockImplementation(async (provider) => (
+      provider.id === 'opencode-vllm' ? (await servingWindow(4096)(provider)) : provider
+    ));
+    runner.executeApiRun.mockImplementation(async ({ onComplete }) => onComplete({ success: true }));
+
+    const out = await runPromptThroughProvider({
+      provider: vllmCli(),
+      prompt: OVERSIZED_PROMPT,
+      source: 'test',
+    });
+
+    expect(out.usedFallback).toBe(true);
+    expect(out.provider.id).toBe('fallback-api');
+    // The endpoint is healthy — a smaller prompt still works there — so this
+    // must not take it offline for every other caller.
+    expect(status.markUnavailable).not.toHaveBeenCalled();
+  });
+
+  it('dispatches unchanged when nothing declared a window', async () => {
+    // The default mock is the no-observation answer: a daemon that is down,
+    // silent about windows, or not daemon-backed at all. Unknown must keep
+    // meaning "no constraint", never "refuse".
+    runner.executeCliRun.mockImplementation(async ({ onComplete }) => onComplete({ success: true }));
+
+    await runPromptThroughProvider({ provider: vllmCli(), prompt: 'x'.repeat(200_000), source: 'test' });
+    expect(runner.executeCliRun).toHaveBeenCalledTimes(1);
+  });
+
+  it('dispatches when the known window is wide enough', async () => {
+    observedWindows.withObservedContextWindows.mockImplementation(servingWindow(131_072));
+    runner.executeCliRun.mockImplementation(async ({ onComplete }) => onComplete({ success: true }));
+
+    await runPromptThroughProvider({ provider: vllmCli(), prompt: 'small', source: 'test' });
+    expect(runner.executeCliRun).toHaveBeenCalledTimes(1);
   });
 });

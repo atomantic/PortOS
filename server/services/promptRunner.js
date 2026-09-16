@@ -39,6 +39,7 @@ import { PROVIDER_TYPES } from '../lib/aiToolkit/constants.js';
 import { analyzeError, ERROR_CATEGORIES, isRunCanceledError } from '../lib/aiToolkit/errorDetection.js';
 import { isSchemaTypeCategory, resolveProviderBench } from '../lib/providerCooldown.js';
 import { isGenerationModel, isVisionCapableCliProvider } from '../lib/localModelHeuristics.js';
+import { contextWindowRejection } from '../lib/aiToolkit/providerStatus.js';
 import { getAIToolkitInstance } from '../lib/aiToolkitState.js';
 import { createSingleFlight } from '../lib/singleFlight.js';
 import { extractJson } from '../lib/jsonExtract.js';
@@ -64,6 +65,31 @@ function loadAutoFixer() {
   }
   return autoFixerLoadPromise;
 }
+
+// Deferred for the same reason as loadAutoFixer above: `observedContextWindows.js`
+// reaches `lib/localProviderRuntime.js` and the endpoint probe, which
+// promptRunner.js itself never needs, and ~160 suites only build or classify a
+// run. A static edge instantiated that subtree in every one of them and pushed
+// the server suite past its import budget (see "Import scoping" in
+// server/AGENTS.md).
+let observedContextWindowsLoadPromise;
+function loadObservedContextWindows() {
+  if (!observedContextWindowsLoadPromise) {
+    observedContextWindowsLoadPromise = import('./observedContextWindows.js').catch((err) => {
+      observedContextWindowsLoadPromise = null;
+      throw err;
+    });
+  }
+  return observedContextWindowsLoadPromise;
+}
+
+// The category an oversized prompt already carries everywhere else in PortOS —
+// `agentErrorAnalysis.js` extracts it from a failed agent's output and
+// `codexTurn.js` maps Codex's `contextWindowExceeded` tag to it. It is a plain
+// string rather than an `ERROR_CATEGORIES` member on purpose: the toolkit's
+// enum is for provider-health categories, and this one is REQUEST-specific
+// (`providerCooldown.isSchemaTypeCategory` covers it, so it never benches).
+const CONTEXT_LENGTH_CATEGORY = 'context-length';
 
 export const DEFAULT_TIMEOUT_MS = 300000;
 // Grace window past the runner's own API timeout before promptRunner's backstop
@@ -1220,6 +1246,91 @@ function stripFallbackContext(err) {
 }
 
 /**
+ * The budget a pre-dispatch REFUSAL is allowed to act on.
+ *
+ * `requiredContextTokens` is the prompt plus an output reserve, and when the
+ * caller named no reserve that is `DEFAULT_OUTPUT_RESERVE_TOKENS` — 8,000
+ * tokens nobody asked for. Ranking fallback candidates on that optimistic
+ * budget is fine (it prefers a provider with room to answer), but REFUSING on
+ * it turns "provably cannot fit" into "probably cannot fit": a pinned caller
+ * sending a 26K-token prompt to a 32K endpoint and expecting three sentences
+ * back would be refused, though it succeeds today — these daemons size the
+ * answer from what the window has left.
+ *
+ * So a refusal uses the provable floor — the prompt alone — unless the caller
+ * declared its own `outputReserveTokens`, which is it telling us how much room
+ * the answer genuinely needs. Candidate ranking in `getFallbackProvider` keeps
+ * using the full budget, exactly as it did before this gate existed.
+ */
+function refusalCapabilities({ requestCapabilities, prompt, outputReserveTokens }) {
+  if (Number.isFinite(Number(outputReserveTokens))) return requestCapabilities;
+  return { ...requestCapabilities, requiredContextTokens: estimateTokens(prompt) };
+}
+
+/**
+ * Refuse a prompt that provably cannot fit the provider about to run it.
+ *
+ * Before #7441 the context check ran ONLY inside `getFallbackProvider`, so it
+ * judged the candidates a failure had already escalated to and never the
+ * provider on the happy path — see `services/observedContextWindows.js` for the
+ * stall that cost.
+ *
+ * Four rules, all deliberate:
+ *
+ *   - An UNKNOWN window is not a rejection. `contextWindowRejection` answers
+ *     `null` whenever nothing declared a window, and nothing infers one from a
+ *     model id — so a provider PortOS has no data about dispatches exactly as
+ *     it does today.
+ *   - What it compares is `refusalCapabilities`, not the raw routing budget:
+ *     a reserve the caller never asked for must not manufacture a refusal.
+ *   - The refusal is an ORDINARY failure, not a new category or exception class.
+ *     `context-length` is what `agentErrorAnalysis.js` and `codexTurn.js`
+ *     already tag an oversized prompt, and it is request-specific
+ *     (`providerCooldown.isSchemaTypeCategory`), so it never benches a server
+ *     that is perfectly healthy for smaller prompts, and `autoFixer` already
+ *     knows its tier. It carries `effectiveProvider`, so the cascade in
+ *     `runPromptThroughProvider` routes it to a fallback with a wider window
+ *     (Tier 3, which applies this same rule to every candidate). A pinned
+ *     (`allowFallback: false`) caller gets the message in milliseconds instead
+ *     of the ten-minute stall — which is the whole point.
+ *   - It judges the REQUESTED provider, ahead of `createRun`'s proactive swap.
+ *     A provider that swap lands on was already asked the same question by
+ *     `capabilityRejection`, so the only cost is a cached listing spent on a
+ *     primary that turns out to be benched.
+ */
+async function assertRequestFitsContext(provider, model, requestCapabilities, { runId = null, startTime = null } = {}) {
+  const required = Number(requestCapabilities?.requiredContextTokens);
+  if (!Number.isFinite(required) || required <= 0) return;
+
+  const { withObservedContextWindows } = await loadObservedContextWindows();
+  const observed = await withObservedContextWindows(provider);
+  // `reason` already names both numbers, which is what the operator needs to
+  // decide between a smaller prompt and a wider provider — so it IS the
+  // message rather than being re-worded beside it.
+  const reason = contextWindowRejection(observed, model, requestCapabilities);
+  if (!reason) return;
+
+  const message = `${provider.name || provider.id}${model ? ` (${model})` : ''}: ${reason}`;
+  // A caller that created its own run record (stageRunner, the loops) has one
+  // sitting at `success: null, endTime: null`. Throwing past it leaves the Runs
+  // page showing an attempt that never ends and every `success === null`
+  // reconciler seeing a phantom active run, so settle it here — the same thing
+  // the TUI readiness check below does for its own pre-execution refusal.
+  if (runId) {
+    await finalizeRunRecord({ runId, output: '', exitCode: 1, success: false, error: message, startTime });
+  }
+  const err = new Error(message);
+  // The cascade only retries a failure annotated with the provider that ran
+  // (see runPromptThroughProvider) — without these the refusal would be
+  // rethrown straight to the caller and a wider fallback would never be tried.
+  err.effectiveProvider = provider;
+  err.effectiveModel = model;
+  err.errorAnalysis = { category: CONTEXT_LENGTH_CATEGORY, message };
+  console.log(`📏 Refused before dispatch: ${message}`);
+  throw err;
+}
+
+/**
  * Inner helper: execute one attempt against `rawArgs.provider`. Returns
  * { text, runId, model } on success. On failure, throws an Error with
  * `effectiveProvider` and `effectiveModel` attached so the retry path
@@ -1275,6 +1386,18 @@ async function executeProviderRunOnce({
   // string-truthy gate so an empty override falls back to process.cwd().
   const effectiveCwd = (typeof cwdOverride === 'string' && cwdOverride) ? cwdOverride : process.cwd();
 
+  // Built here rather than inside the createRun branch below because the
+  // context gate needs it on EVERY attempt — a caller that supplies its own
+  // runId (stageRunner, the loops) skips that branch entirely and would
+  // otherwise dispatch ungated.
+  const requestCapabilities = buildRequestCapabilities({ prompt, screenshots, outputReserveTokens, callerPolicy });
+  await assertRequestFitsContext(
+    effectiveProvider,
+    effectiveModel,
+    refusalCapabilities({ requestCapabilities, prompt, outputReserveTokens }),
+    { runId: callerRunId, startTime: Date.now() },
+  );
+
   // Some call sites (stageRunner, loops) create the run themselves so
   // they can log the runId before the LLM call starts. When provided,
   // reuse it. Otherwise create one here so callers always get a runId
@@ -1298,7 +1421,7 @@ async function executeProviderRunOnce({
       source,
       workspacePath: effectiveCwd,
       effort,
-      requestCapabilities: buildRequestCapabilities({ prompt, screenshots, outputReserveTokens, callerPolicy }),
+      requestCapabilities,
       allowFallback,
     });
     runId = runResult.runId;
