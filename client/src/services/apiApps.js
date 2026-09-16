@@ -111,6 +111,18 @@ export const reviewAppPullRequest = (id, number, settings = {}, options = {}) =>
     silent: true,
     ...options,
   });
+// Run the bundled `/do:review` workflow against ONE open GitHub PR with the
+// install's Code Review Defaults, review-only. Unlike `reviewAppPullRequest`
+// this is offered on every open GitHub request whoever opened it — `pr-reviewer`
+// covers untrusted contributors alone. `settings` is the same provider/model/
+// effort pin as `resolveAppPullRequest`.
+export const doReviewAppPullRequest = (id, number, settings = {}, options = {}) =>
+  request(`/apps/${id}/pull-requests/${encodeURIComponent(number)}/do-review`, {
+    method: 'POST',
+    body: JSON.stringify(settings),
+    silent: true,
+    ...options,
+  });
 // Effective Layered Intelligence config (self-improvement loop) for an app —
 // stored partial merged over the shipped defaults. Read-only; saved through
 // updateApp (the `layeredIntelligence` key routes to the merge helper server-
