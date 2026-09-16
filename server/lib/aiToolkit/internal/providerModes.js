@@ -59,7 +59,7 @@ export function providerModeGroups(providers) {
 export function sharedModeUpdates(updates, sibling) {
   // Arguments, timeouts, routing consent and model pins remain mode-specific.
   //
-  // Every {@link MODE_GROUPED_KEYS} field is shared for the reason the pairing
+  // Every `MODE_GROUPED_KEYS` field is shared for the reason the pairing
   // test above keys on it: endpoint, API key, env vars and bootstrap describe
   // the CONNECTION, not a mode's argv. The editor opens the group's
   // representative (the CLI mode), so any of them saved there and not fanned
