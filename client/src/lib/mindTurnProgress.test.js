@@ -131,6 +131,25 @@ describe('describeMindTurnProgress', () => {
     expect(describeMindTurnProgress({ state: { status: 'waiting', started: true } }).phase).toBe('idle');
     expect(describeMindTurnProgress({}).phase).toBe('idle');
   });
+
+  it('treats a context-budget autopause as blocked with no invented retry time', () => {
+    const state = {
+      status: 'paused',
+      started: true,
+      activeTurnId: null,
+      usageLimited: false,
+      contextBudgetBlocked: true,
+      pauseReason: 'Local context window too small: known 12288-token context is below the 15104-token request budget. Raise provider numCtx (Settings → AI providers) or shrink mind context, then resume.',
+      nextEligibleWakeAt: null,
+    };
+    const progress = describeMindTurnProgress({
+      state,
+      runtime: { usageLimitRetryAt: '2026-09-01T09:00:00.000Z' },
+    });
+    expect(progress.phase).toBe('blocked');
+    expect(progress.retryAt).toBeNull();
+    expect(progress.reason).toMatch(/12288/);
+  });
 });
 
 describe('mindTurnStage', () => {
