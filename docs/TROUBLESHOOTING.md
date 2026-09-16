@@ -436,6 +436,83 @@ npm test -- lib/taskParser.test.js
 npm run test:watch
 ```
 
+### CI cancelled with no successor run
+
+**Symptom**: A pull request's `CI Gate` / `Full CI Gate` goes red while several
+PRs are building at once. Opening the run shows no failing assertion — jobs
+report `##[error]The operation was canceled.` mid-step, often inside
+`actions/checkout`, and the in-workflow `Cancel sibling CI jobs after failure`
+step is `skipped` in every job. Re-running is usually cancelled the same way
+until the queue empties; the identical SHA then passes on an idle queue.
+
+**What it is not**: this is *not* `cancel-in-progress` doing its job. The
+concurrency group is per-PR (`.github/workflows/ci.yml`), and a legitimate
+supersession always leaves a **newer run** for the same PR. An external cancel
+leaves none.
+
+**The likely cause is the Actions spending limit, not the concurrent-job cap.**
+Exceeding the job cap makes GitHub *queue* runs; cancelling in-flight runs is
+the spending-limit behaviour. So the billing reading below is the primary
+diagnostic, not a footnote. Full runs are expensive because the three Windows
+shards bill at a 2× minute multiplier.
+
+**Tell the two apart** — list the runs for the branch and look for a successor:
+
+```bash
+# Every run for one PR branch, newest first. A supersession has a run NEWER
+# than the cancelled one; an external cancel does not.
+gh run list --branch "<head-branch>" --workflow CI \
+  --json databaseId,headSha,status,conclusion,createdAt,attempt
+
+# Did any job actually fail, or were they all cancelled?
+gh run view <run-id> --json jobs \
+  --jq '.jobs[] | {name, conclusion, startedAt, completedAt}'
+```
+
+All jobs `cancelled` or `success`, none `failure`, and no newer run for the
+branch → external cancel. One job `failure` → a real red run that
+`scripts/cancel-current-ci-run.js` then stopped on purpose.
+
+**Account-level confirmation** (needs a scope the unattended agent cannot
+grant itself — run it yourself):
+
+```bash
+gh auth refresh -s user
+gh api /users/<your-login>/settings/billing/actions
+```
+
+**What PortOS already does about it**:
+
+- One automatic retry. `.github/workflows/ci-cancel-recovery.yml` watches for a
+  completed CI run and re-dispatches it exactly once when it was cancelled on a
+  pull request, **no job failed**, and **no newer run exists for the branch**.
+  The budget is the run attempt: `POST /rerun` produces attempt 2, and attempt
+  2 is never retried. A supersession and a self-cancel after a real failure are
+  both skipped, and the recovery run's own summary page states which of those
+  applied. This is the layer that explains a run-wide cancel, because it is the
+  only one that survives it.
+- The gate reports the difference **when the gate itself runs**.
+  `scripts/ci-gate-report.js` prints `this run was CANCELLED, not failed`,
+  names the cancelled jobs, and points back here — instead of the old
+  undifferentiated "did not pass". Note the limit: `if: always()` defeats an
+  upstream failure, not a run-wide cancellation, so in the full external-cancel
+  case the gate job is cancelled too and prints nothing. It covers a partial
+  cancel; the recovery run covers the rest.
+
+**A caveat worth knowing**: the retry re-runs the whole suite, Windows shards
+included, so if the cause really is the spending limit then recovery spends
+more of it. That is the same cost as the manual re-run it replaces, but it
+means recovery is not a substitute for reducing billable minutes — tracked in
+issue #7440.
+
+If a PR is still stuck after that one retry, the queue was busy for longer than
+one attempt — re-run it by hand once the other runs have drained.
+
+One deliberate rough edge: a run **you** cancel by hand looks identical to an
+external cancel from the API, so it gets the same single retry. Push a new
+commit (or close the PR) rather than cancelling if you want the run to stay
+stopped.
+
 ## Known Issues
 
 ### GPU watchdog kernel panic during LoRA training

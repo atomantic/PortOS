@@ -44,3 +44,21 @@ export function writeStepOutput(name, value) {
 export function writeStepEnv(name, value) {
   appendCommandFile('GITHUB_ENV', name, value);
 }
+
+/**
+ * Append a markdown block to $GITHUB_STEP_SUMMARY, or do nothing outside
+ * Actions.
+ *
+ * Unlike the `name=value` files above, the summary is free-form markdown:
+ * newlines are content, not a delimiter, so they are preserved rather than
+ * collapsed. That makes the caller responsible for what it renders — pass
+ * fixed prose and values you control, never raw event payload text.
+ *
+ * @param {string} markdown - block to append; a trailing newline is added
+ * @param {NodeJS.ProcessEnv} [env] - injectable for tests
+ */
+export function writeStepSummary(markdown, env = process.env) {
+  const path = env.GITHUB_STEP_SUMMARY;
+  if (!path) return;
+  appendFileSync(path, `${markdown}\n`);
+}

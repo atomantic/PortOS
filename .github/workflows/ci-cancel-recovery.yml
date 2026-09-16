@@ -1,0 +1,66 @@
+# Recovery for a CI run that was cancelled with no successor run (#7437).
+#
+# When several pull requests build at once, GitHub cancels in-flight runs that
+# nothing here asked it to cancel — no job failed, the in-workflow fail-fast
+# step never ran, and no newer run exists for the branch. The same SHA then
+# passes on the next attempt once the queue drains, so the fix is one automatic
+# re-dispatch rather than a human noticing and clicking "Re-run".
+#
+# SECURITY: `workflow_run` runs this workflow's DEFAULT-BRANCH copy with a
+# writable token, which is why it never checks out, builds, or executes the
+# pull request's head. The only PR-derived values it touches are the run
+# metadata passed as environment variables below, and the script uses them as
+# validated numbers and one encoded query parameter — never as a path, an
+# argument, or shell input.
+name: CI cancel recovery
+
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+
+permissions:
+  contents: read
+  actions: write
+
+# One recovery evaluation per run. Never `cancel-in-progress`: cancelling the
+# thing that recovers from cancellations is how this whole class of bug starts.
+concurrency:
+  group: ci-cancel-recovery-${{ github.event.workflow_run.id }}
+  cancel-in-progress: false
+
+jobs:
+  retry:
+    name: Re-dispatch a CI run cancelled with no successor
+    # The cheap guards run here so the common case (a run that concluded
+    # normally) costs no runner at all. The script re-checks all three, because
+    # it is also the unit under test and must not rely on the caller.
+    if: >-
+      github.event.workflow_run.conclusion == 'cancelled'
+      && github.event.workflow_run.event == 'pull_request'
+      && github.event.workflow_run.run_attempt == 1
+    runs-on: ubuntu-latest
+    steps:
+      # No `setup-node` and no `npm ci`: the script imports Node builtins
+      # only (enforced by scripts/pre-install-entrypoints.test.js) and every
+      # hosted runner already ships a Node new enough for it — the same
+      # pattern the `impact` job in ci.yml uses. Sparse, because the whole
+      # value of this workflow is how fast it re-dispatches.
+      - uses: actions/checkout@v7
+        with:
+          sparse-checkout: scripts
+          persist-credentials: false
+
+      - name: Re-dispatch the cancelled run
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CI_RUN_ID: ${{ github.event.workflow_run.id }}
+          CI_RUN_ATTEMPT: ${{ github.event.workflow_run.run_attempt }}
+          CI_RUN_NUMBER: ${{ github.event.workflow_run.run_number }}
+          CI_WORKFLOW_ID: ${{ github.event.workflow_run.workflow_id }}
+          CI_RUN_EVENT: ${{ github.event.workflow_run.event }}
+          CI_RUN_CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+          CI_RUN_HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
+          CI_RUN_HEAD_REPOSITORY_ID: ${{ github.event.workflow_run.head_repository.id }}
+          CI_RUN_HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: node scripts/ci-retry-cancelled-run.js

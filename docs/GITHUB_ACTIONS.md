@@ -330,8 +330,12 @@ own.
 
 ### Shallow checkouts
 
-No job clones full history. `actions/checkout` runs at `fetch-depth: 2`,
-which on a pull request is the merge ref plus both of its parents — and the
+No job clones full history. `actions/checkout` runs at `fetch-depth: 2`
+in every job that diffs against the base. The two gate jobs set no depth at all
+(the action's own default is 1) and pass `sparse-checkout: scripts` instead:
+they check out only to run `scripts/ci-gate-report.js`, never look at history,
+and sparse mode makes the action fetch with `--filter=blob:none`. Depth 2 on a
+pull request is the merge ref plus both of its parents — and the
 first parent *is* the base-branch commit the pull request is diffed against.
 `scripts/ci-base-sha.js` reads it (`HEAD^1`) and exports `CI_BASE_SHA` for the
 rest of the job, so the planner's `git diff <base>...HEAD` resolves without
@@ -379,7 +383,11 @@ The selected work is split across parallel jobs:
   Linux. A full plan does not automatically mean a full *Windows* run — see
   "What a full plan costs the Windows job" below.
 - **CI Gate** — always reports one stable required-check result and fails if any
-  selected job failed or was cancelled.
+  selected job failed or was cancelled. Both block, but the message distinguishes
+  them: `scripts/ci-gate-report.js` says *cancelled, not failed* and names the
+  cancelled jobs when nothing actually failed — as far as the gate job itself
+  runs, which a run-wide cancel prevents. See "External cancellation and one
+  automatic retry" below.
 - **Full CI Gate** — published only when the plan chose the complete suite, and
   mirrors `CI Gate`'s result. This is the check the release workflow looks for;
   see "Reusing the release PR's CI run" below.
@@ -585,7 +593,8 @@ ones:
   `cancelled` does not satisfy it, and a gate that never publishes leaves the
   required context unreported, which also blocks.
 - If the gate job does run, it accepts only `success` or `skipped` per job, so
-  the failed leaf (or its own `cancelled` result) fails the gate.
+  the failed leaf (or its own `cancelled` result) fails the gate. It reports a
+  cancel and a failure differently — see the next section — but neither passes.
 - `scripts/verify-ci-status.js` accepts a `Full CI Gate` only at
   `conclusion === 'success'`, so a canceled run can never let a release skip
   the full suite.
@@ -601,6 +610,62 @@ independently — the two are orthogonal, one canceling this run by id and the
 other canceling an older run when a newer commit arrives. Scheduled, manually
 dispatched, and release-called runs skip this sibling cancellation so their
 aggregate diagnostics and cache post-steps can complete normally.
+
+### External cancellation and one automatic retry
+
+Not every cancel comes from this repository. When several PRs build at once,
+GitHub itself cancels in-flight runs — no job fails, the fail-fast step above
+stays `skipped`, and **no successor run exists for the branch** (issue 7437).
+That last property is the whole diagnosis: a `cancel-in-progress` supersession
+always leaves a newer run for the same PR, and an external cancel leaves none.
+
+`.github/workflows/ci-cancel-recovery.yml` runs on `workflow_run` and
+re-dispatches such a run exactly once. `scripts/ci-retry-cancelled-run.js`
+retries only when every one of these holds:
+
+| Guard | Why |
+| --- | --- |
+| conclusion is `cancelled` | A failure is a failure. |
+| event is `pull_request` | Nightly, dispatch, and release-called runs are not ours to re-drive. |
+| `run_attempt == 1` | The retry budget. `POST /rerun` makes attempt 2, whose cancel sees attempt 2 and stops — one retry per run, and a PR run is one run per head SHA. |
+| no job concluded `failure`/`timed_out` | Fail-fast cancellation makes a genuinely red run *look* cancelled. Retrying it would re-run the suite on a broken tree. |
+| no newer run for the branch | That is a supersession; the newer run already covers this code. |
+
+Any API lookup that cannot be completed skips the retry rather than assuming a
+guard passed — a missed retry costs one manual re-run, a wrong one loops.
+
+**Why the failing-job guard reads the jobs' own conclusions** rather than a
+marker written by the fail-fast step: a marker fails OPEN. It would be written
+by a job that is already failing, on a run about to be cancelled out from under
+it, so a lost write makes a red run look externally cancelled — and get
+retried. Reading conclusions fails CLOSED: an unreadable listing is
+`jobs-unavailable` and skips the retry. Do not "simplify" this into a marker.
+The ambiguity itself is the price of cancelling the run on first failure rather
+than letting the remaining jobs fail naturally; that trade buys the 30-second
+fail-fast above and is not on the table.
+
+**This is also the only layer that can explain a run-wide cancel.** `if:
+always()` on the gate defeats an upstream failure, not a cancellation of the
+whole run — so in the external-cancel case the gate is cancelled too and never
+prints its verdict. The recovery run is a separate run, so it survives; its
+step summary records which guard applied. Publishing that back onto the pull
+request as a neutral check run is issue #7438.
+
+Two known limits, both filed: the retry fires immediately, which is while the
+queue that caused the cancel is still full (#7439), and a retry re-runs the
+whole suite — Windows shards included — so if the cause is the spending limit
+then recovery spends more of it. Reducing the billable minutes of a full run is
+the complementary root-cause lever (#7440).
+
+Because the trigger is `workflow_run`, the recovery workflow runs the
+**default branch's** copy of itself with a writable `actions` token and never
+checks out, installs, or executes the pull request's head. The only PR-derived
+values it touches are validated run ids and one URL-encoded branch name.
+
+Reader-facing symptoms, the `gh` commands that tell an external cancel from a
+supersession, and the account-billing check that confirms the upstream cause
+are in [TROUBLESHOOTING.md](TROUBLESHOOTING.md) under "CI cancelled with no
+successor run".
 
 ### Impact-planner safety rules
 
