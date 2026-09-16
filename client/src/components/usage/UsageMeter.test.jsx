@@ -46,4 +46,13 @@ describe('UsageMeter', () => {
     render(<UsageMeter limit={{ key: 'week', label: 'Weekly', percentUsed: 40, percentRemaining: null }} />);
     expect(screen.getByText('—')).toBeInTheDocument();
   });
+
+  // An unmeasured window is not an untouched one. Rendering `0% used` for a
+  // plan that may be fully spent is the same fabrication the remainder and the
+  // meter tone already refuse.
+  it('renders an unmeasured used share as unknown, never as 0%', () => {
+    render(<UsageMeter limit={{ key: 'week', label: 'Weekly', percentUsed: null, percentRemaining: null }} />);
+    expect(screen.queryByText('0% used')).not.toBeInTheDocument();
+    expect(screen.getAllByText('—')).toHaveLength(2);
+  });
 });

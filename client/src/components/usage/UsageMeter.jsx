@@ -54,7 +54,12 @@ export default function UsageMeter({ limit }) {
       </div>
       <ProgressBar percent={used} tone={meterTone(limit.percentUsed)} label={`${limit.label} quota used`} />
       <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-0.5 sm:gap-1 mt-0.5 sm:mt-1">
-        <span className="text-[9px] sm:text-xs text-gray-500">{used}% used</span>
+        {/* An unread percentage reads '—', never '0% used' — the same rule the
+            remainder beside it and meterTone already keep. A plan that may be
+            fully spent must not render as untouched. */}
+        <span className="text-[9px] sm:text-xs text-gray-500">
+          {limit.percentUsed == null ? '—' : `${used}% used`}
+        </span>
         {limit.resetsAt && (
           <span className="flex min-w-0 text-[9px] sm:text-xs text-gray-500 items-start sm:justify-end gap-1 sm:text-right leading-tight">
             <Clock size={11} className="shrink-0" /> resets {formatResetsAt(limit.resetsAt)}
