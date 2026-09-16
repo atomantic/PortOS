@@ -44,6 +44,11 @@ export const PERSISTENT_MIND_STATUSES = [
 export const PERSISTENT_MIND_WAKE_KINDS = ['message', 'self'];
 export const PERSISTENT_MIND_SELF_WAKE_SCHEDULE_KINDS = ['quiet', 'requested'];
 
+// How often a running turn pulses its heartbeat. Hoisted so the stale-warning
+// threshold below can be DERIVED from it rather than restating the number:
+// slowing the pulse would otherwise make every healthy turn read as stalled.
+const HEARTBEAT_INTERVAL_MS = 60_000;
+
 export const PERSISTENT_MIND_LIMITS = Object.freeze({
   MAX_QUEUED_MESSAGES: 100,
   MAX_RECENT_MESSAGE_IDS: 200,
@@ -63,10 +68,13 @@ export const PERSISTENT_MIND_LIMITS = Object.freeze({
   BACKOFF_BASE_MS: 5_000,
   BACKOFF_MAX_MS: 15 * 60_000,
   WATCHDOG_STALE_MS: 5 * 60_000,
-  // UI warning threshold: two missed 60s heartbeats, well before the watchdog
-  // kills the turn at WATCHDOG_STALE_MS, so "stalled" is visible while the turn
-  // can still recover on its own.
-  HEARTBEAT_STALE_WARNING_MS: 2 * 60_000,
+  // The adapter owns the pulse timer and imports this back, so one edit moves
+  // the cadence and the threshold derived from it together.
+  HEARTBEAT_INTERVAL_MS,
+  // UI warning threshold: two missed pulses, well before the watchdog kills the
+  // turn at WATCHDOG_STALE_MS, so "stalled" is visible while the turn can still
+  // recover on its own.
+  HEARTBEAT_STALE_WARNING_MS: 2 * HEARTBEAT_INTERVAL_MS,
   MAX_QUIET_MS: 30 * 60_000,
 });
 

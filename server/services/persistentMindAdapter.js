@@ -10,6 +10,7 @@
 
 import { persistentMindNamePrompt, persistentMindChosenNameSchema } from '../lib/persistentMindChosenName.js';
 import { persistentMindMemoryProtectionSchema } from '../lib/persistentMindMemory.js';
+import { PERSISTENT_MIND_LIMITS } from '../lib/persistentMind.js';
 import { z } from 'zod';
 import {
   PERSISTENT_MIND_TASK_LIMITS,
@@ -58,7 +59,7 @@ import {
   isCosTaskToolName,
 } from './cosToolRegistry.js';
 
-const HEARTBEAT_INTERVAL_MS = 60_000;
+const { HEARTBEAT_INTERVAL_MS } = PERSISTENT_MIND_LIMITS;
 const MAX_TOOL_PROVIDER_ROUNDS = 4;
 const MAX_TOOL_RESULT_CHARS = 4_000;
 const MAX_MEMORY_CANDIDATES_PER_TURN = 5;

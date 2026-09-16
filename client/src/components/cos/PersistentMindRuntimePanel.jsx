@@ -1,5 +1,5 @@
 import { AlertTriangle, Brain, Cpu, Gauge } from 'lucide-react';
-import { describeMindTurnProgress } from '../../lib/mindTurnProgress.js';
+import { describeMindTurnProgress, mindTurnHeadline } from '../../lib/mindTurnProgress.js';
 import { formatBytes, timeUntil } from '../../utils/formatters.js';
 
 const number = (value) => Number.isFinite(value) ? value.toLocaleString() : '—';
@@ -23,22 +23,25 @@ const residencyLabel = (runtime) => {
     : `Running now · ${state.toLowerCase()}`;
 };
 
+// Statuses whose headline is a plain lookup, kept beside RESIDENCY_STATES so
+// neither grows back into a ternary chain.
+const STATUS_HEADLINES = {
+  waiting: 'Waiting for the next wake',
+  paused: 'Mind paused',
+  idle: 'Mind idle',
+  disabled: 'Mind disabled',
+};
+
 export function PersistentMindThoughtStatus({ state, model, progress }) {
   // A caller with no /mind/runtime snapshot (the CoS Config tab) still gets the
   // state-only reading: the quota/retry phase resolves from the public state
   // alone, while elapsed and heartbeat freshness stay absent rather than guessed.
   const turn = progress || describeMindTurnProgress({ state });
   const scheduled = state?.started && state?.nextWakeAt && ['idle', 'waiting'].includes(state.status);
-  const headline = turn.phase === 'blocked'
-    ? `${turn.reason || 'Blocked'}${turn.retryAt ? ` · retry ${timeUntil(turn.retryAt)}` : ''}`
-    : turn.phase === 'stalled' ? 'Stalled, checking…'
-      : turn.phase === 'thinking' ? `Thinking${model ? ` with ${model}` : ''}`
-        : scheduled ? `Waiting · next wake ${timeUntil(state.nextWakeAt)}`
-          : state?.status === 'waiting' ? 'Waiting for the next wake'
-            : state?.status === 'paused' ? 'Mind paused'
-              : state?.status === 'idle' ? 'Mind idle'
-                : state?.status === 'disabled' ? 'Mind disabled'
-                  : 'Mind status unknown';
+  const headline = mindTurnHeadline(turn, timeUntil)
+    || (turn.phase === 'thinking' ? `Thinking${model ? ` with ${model}` : ''}`
+      : scheduled ? `Waiting · next wake ${timeUntil(state.nextWakeAt)}`
+        : STATUS_HEADLINES[state?.status] || 'Mind status unknown');
   // The stage answers "is it actually processing?", the durations answer "for
   // how long?" — a bare headline could not distinguish either from a hang.
   const label = [headline, turn.stage, turn.detail].filter(Boolean).join(' · ');

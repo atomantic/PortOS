@@ -44,7 +44,7 @@ export {
   deletePersistentMindAttachment,
 } from './persistentMindAttachments.js';
 import { cosEvents, emitLog } from './cosEvents.js';
-import { schedule, cancel } from './eventScheduler.js';
+import { schedule, cancel, getEvent } from './eventScheduler.js';
 import { getDomainBudgetStatus, recordDomainUsage } from './domainUsage.js';
 import { acquireLocalEndpointProviderSlot } from './cosLocalEndpointSlots.js';
 import { acquireCosActionReservation, acquireCosGlobalSlot } from './cosAdmissionReservations.js';
@@ -253,6 +253,21 @@ function scheduleUsageLimitProbe(attempt = 0) {
       attempt: usageLimitProbeAttempt,
     },
   });
+}
+
+/**
+ * When the next usage-limit readiness probe will run, or null when none is
+ * pending. READ-ONLY — it reports the schedule, it does not set or change it.
+ *
+ * A usage-limit autopause deliberately clears `nextEligibleWakeAt` (see
+ * `parkActiveTurn`: a hard quota gets no backoff gate and no failureCount
+ * climb), so recovery is owned by this probe alone. Without this accessor the
+ * page can say a quota block is retrying but never when — the one question the
+ * user actually has while waiting one out.
+ */
+export function persistentMindUsageLimitRetryAt() {
+  const nextRunAt = getEvent(PERSISTENT_MIND_USAGE_LIMIT_PROBE_EVENT_ID)?.nextRunAt;
+  return Number.isFinite(nextRunAt) ? new Date(nextRunAt).toISOString() : null;
 }
 
 /**

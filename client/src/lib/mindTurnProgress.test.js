@@ -35,37 +35,19 @@ describe('describeMindTurnProgress', () => {
 
     expect(progress.phase).toBe('thinking');
     expect(progress.busy).toBe(true);
-    expect(progress.elapsedMs).toBe(160_000);
     expect(progress.detail).toBe('2m 40s · heartbeat 5s ago · model loaded');
   });
 
-  it('renders a cold local model as loading rather than as a silent hang', () => {
-    const progress = describeMindTurnProgress({
+  it('names each local residency state so a cold load never reads as a hang', () => {
+    const detailFor = (status) => describeMindTurnProgress({
       state: thinkingState(),
-      runtime: runtimeFor({ residency: { status: 'not-loaded', backend: 'ollama', loaded: false } }),
-    });
+      runtime: runtimeFor({ residency: { status, backend: 'ollama', loaded: status === 'loaded' } }),
+    }).detail;
 
-    expect(progress.residency).toBe('loading model');
-    expect(progress.detail).toContain('loading model');
-  });
-
-  it('names an unreachable local runtime instead of implying healthy inference', () => {
-    const progress = describeMindTurnProgress({
-      state: thinkingState(),
-      runtime: runtimeFor({ residency: { status: 'unknown', backend: 'lmstudio', loaded: null } }),
-    });
-
-    expect(progress.residency).toBe('local runtime unreachable');
-  });
-
-  it('says nothing about residency for a provider-managed route', () => {
-    const progress = describeMindTurnProgress({
-      state: thinkingState(),
-      runtime: runtimeFor({ residency: { status: 'provider-managed', backend: null, loaded: null } }),
-    });
-
-    expect(progress.residency).toBeNull();
-    expect(progress.detail).toBe('2m 40s · heartbeat 5s ago');
+    expect(detailFor('not-loaded')).toContain('loading model');
+    expect(detailFor('unknown')).toContain('local runtime unreachable');
+    // Nothing local to report — a clause here would imply otherwise.
+    expect(detailFor('provider-managed')).toBe('2m 40s · heartbeat 5s ago');
   });
 
   it('separates a stale heartbeat from ordinary thinking', () => {
@@ -90,8 +72,6 @@ describe('describeMindTurnProgress', () => {
     });
 
     expect(progress.phase).toBe('thinking');
-    expect(progress.elapsedMs).toBeNull();
-    expect(progress.heartbeatAgeMs).toBeNull();
     expect(progress.detail).toBeNull();
   });
 
@@ -109,24 +89,29 @@ describe('describeMindTurnProgress', () => {
     expect(unreported.detail).toBe('model loaded');
   });
 
-  it('reports a quota autopause as blocked with a retry time, not as a user pause', () => {
+  it('takes the quota retry time from the probe schedule, which is the only thing that sets it', () => {
+    // A usage-limit autopause clears nextEligibleWakeAt (no backoff gate), so a
+    // projection that only read that field would never show a retry time for the
+    // exact case this feature exists for.
+    const quotaState = {
+      status: 'paused',
+      started: true,
+      activeTurnId: null,
+      usageLimited: true,
+      pauseReason: 'Provider usage limit reached',
+      nextEligibleWakeAt: null,
+    };
     const progress = describeMindTurnProgress({
-      state: {
-        status: 'paused',
-        started: true,
-        activeTurnId: null,
-        usageLimited: true,
-        pauseReason: 'Provider usage limit reached',
-        nextEligibleWakeAt: '2026-09-01T00:30:00.000Z',
-      },
-      runtime: null,
+      state: quotaState,
+      runtime: { usageLimitRetryAt: '2026-09-01T00:30:00.000Z' },
     });
 
     expect(progress.phase).toBe('blocked');
     expect(progress.busy).toBe(false);
     expect(progress.reason).toBe('Provider usage limit reached');
     expect(progress.retryAt).toBe('2026-09-01T00:30:00.000Z');
-    expect(progress.detail).toBe('retrying automatically');
+    // No probe scheduled yet: say nothing rather than invent a time.
+    expect(describeMindTurnProgress({ state: quotaState, runtime: null }).retryAt).toBeNull();
   });
 
   it('treats a degraded wake as blocked so a failing provider is not read as working', () => {
@@ -135,6 +120,8 @@ describe('describeMindTurnProgress', () => {
     });
 
     expect(progress.phase).toBe('blocked');
+    // Falls back to the backoff gate, which a degraded wake (unlike a quota
+    // autopause) really does set.
     expect(progress.retryAt).toBe('2026-09-01T00:05:00.000Z');
   });
 

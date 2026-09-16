@@ -156,25 +156,6 @@ describe('public persistent mind state', () => {
     expect(projected.queuedMessageCount).toBe(2);
     expect(projected.queuedTemporaryMessageCount).toBe(1);
   });
-it('publishes the freshness stamps of the active turn so the page can age it', () => {
-    const projected = publicPersistentMindState(stateWithActiveTemporaryTurn());
-
-    expect(projected.activeTurnStartedAt).toBe('2026-09-01T00:00:00.000Z');
-    expect(projected.activeTurnHeartbeatAt).toBe('2026-09-01T00:00:05.000Z');
-  });
-
-  it('leaves the freshness stamps null when no turn is claimed', () => {
-    const projected = publicPersistentMindState({
-      ...createDefaultPersistentMindState(),
-      enabled: true,
-      started: true,
-      status: 'waiting',
-    });
-
-    expect(projected.activeTurnStartedAt).toBeNull();
-    expect(projected.activeTurnHeartbeatAt).toBeNull();
-    expect(projected.usageLimited).toBe(false);
-  });
 
   it('distinguishes a quota autopause from a pause the user asked for', () => {
     const quota = publicPersistentMindState(normalizePersistentMindState({
@@ -198,6 +179,7 @@ it('publishes the freshness stamps of the active turn so the page can age it', (
     expect(quota.nextEligibleWakeAt).toBe('2026-09-01T00:30:00.000Z');
     expect(byUser.usageLimited).toBe(false);
     expect(byUser.pauseReason).toBe('Paused by user');
+    expect(publicPersistentMindState(createDefaultPersistentMindState()).usageLimited).toBe(false);
   });
 
   it('still reveals no raw pause text for a quota autopause', () => {

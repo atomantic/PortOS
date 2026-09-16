@@ -71,11 +71,6 @@ export function publicPersistentMindState(state = {}) {
     // work rather than only ordinary heartbeat messages.
     queuedTemporaryMessageCount: queuedMessages.filter((message) => Boolean(message?.thinkingPresetId)).length,
     activeTurnId: typeof activeTurn?.id === 'string' ? activeTurn.id : null,
-    // Turn freshness. Timestamps only — the derived age belongs to whoever has a
-    // clock to subtract with, and /mind/runtime already reports it against the
-    // server clock for the page that renders live progress.
-    activeTurnStartedAt: typeof activeTurn?.startedAt === 'string' ? activeTurn.startedAt : null,
-    activeTurnHeartbeatAt: typeof activeTurn?.heartbeatAt === 'string' ? activeTurn.heartbeatAt : null,
     activeRoute: publicActiveRoute(activeTurn),
     activeThinkingSession: publicActiveThinkingSession(activeTurn),
     lastCompletedTurnId: typeof state.lastCompletedTurnId === 'string' ? state.lastCompletedTurnId : null,

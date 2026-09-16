@@ -623,8 +623,9 @@ describe('MindTab', () => {
     expect(within(screen.getByTestId('mind-chat')).queryByText('Thinking…')).not.toBeInTheDocument();
   });
 
-const thinkingRuntime = (inference = {}) => ({
+  const thinkingRuntime = (inference = {}, usageLimitRetryAt = null) => ({
     observedAt: '2026-08-27T12:02:40.000Z',
+    usageLimitRetryAt,
     inference: {
       active: true,
       turnId: 'mind-turn-1',
@@ -673,23 +674,11 @@ const thinkingRuntime = (inference = {}) => ({
     api.getPersistentMindRuntime.mockResolvedValue(thinkingRuntime({ heartbeatAgeMs: 190_000, heartbeatStale: true }));
     renderTab();
 
-    const stalled = await screen.findByTestId('mind-stalled-indicator');
+    const stalled = await screen.findByTestId('mind-turn-indicator');
     expect(stalled).toHaveTextContent(/Stalled, checking…/);
     expect(stalled).toHaveTextContent(/no heartbeat for 3m 10s/);
     expect(screen.queryByTestId('mind-typing-indicator')).not.toBeInTheDocument();
     expect(await screen.findByTestId('mind-thought-status')).toHaveAttribute('data-phase', 'stalled');
-  });
-
-  it('shows a cold local model as loading instead of leaving it an indefinite wait', async () => {
-    api.getPersistentMind.mockResolvedValue(response({
-      state: { enabled: true, started: true, status: 'thinking', pauseReason: null, activeTurnId: 'mind-turn-1' },
-    }));
-    api.getPersistentMindRuntime.mockResolvedValue(thinkingRuntime({
-      residency: { status: 'not-loaded', backend: 'ollama', loaded: false, memoryBytes: null },
-    }));
-    renderTab();
-
-    expect(await screen.findByTestId('mind-turn-progress-detail')).toHaveTextContent('loading model');
   });
 
   it('renders a quota block with its retry time inline instead of an indefinite thinking state', async () => {
@@ -701,14 +690,18 @@ const thinkingRuntime = (inference = {}) => ({
         usageLimited: true,
         pauseReason: 'Provider usage limit reached',
         activeTurnId: null,
-        // +12m30s: `timeUntil` floors, so a flat 12m would race the test clock
-        // down to "11m" and flake.
-        nextEligibleWakeAt: new Date(Date.now() + 12 * 60_000 + 30_000).toISOString(),
+        nextEligibleWakeAt: null,
       },
     }));
+    api.getPersistentMindRuntime.mockResolvedValue(thinkingRuntime({
+      active: false,
+      turnId: null,
+      // +12m30s: `timeUntil` floors, so a flat 12m would race the test clock
+      // down to "11m" and flake.
+    }, new Date(Date.now() + 12 * 60_000 + 30_000).toISOString()));
     renderTab();
 
-    const blocked = await screen.findByTestId('mind-blocked-indicator');
+    const blocked = await screen.findByTestId('mind-turn-indicator');
     expect(blocked).toHaveTextContent(/Provider usage limit reached/);
     expect(blocked).toHaveTextContent(/retry in 12m/);
     expect(screen.queryByTestId('mind-typing-indicator')).not.toBeInTheDocument();

@@ -82,7 +82,7 @@ function turnFreshness(activeTurn, observedAtMs) {
   };
 }
 
-export async function inspectPersistentMindRuntime({ state, profile, prompt, provider } = {}) {
+export async function inspectPersistentMindRuntime({ state, profile, prompt, provider, usageLimitRetryAt = null } = {}) {
   const activeTurn = state?.activeTurn || null;
   const activeModel = activeTurn?.model || profile?.model;
   const [memories, memory, residency] = await Promise.all([
@@ -103,6 +103,10 @@ export async function inspectPersistentMindRuntime({ state, profile, prompt, pro
 
   return {
     observedAt: observedAt.toISOString(),
+    // When a blocked mind clears itself. A usage-limit autopause clears
+    // `nextEligibleWakeAt`, so its schedule lives only in the readiness probe;
+    // callers pass it in rather than this module reaching for the scheduler.
+    usageLimitRetryAt: typeof usageLimitRetryAt === 'string' ? usageLimitRetryAt : null,
     inference: {
       active: Boolean(activeTurn),
       turnId: activeTurn?.id || null,

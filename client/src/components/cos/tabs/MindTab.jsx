@@ -27,7 +27,7 @@ import PersistentMindThinkingPresets from '../PersistentMindThinkingPresets';
 import PersistentMindVisibilityPanel from '../PersistentMindVisibilityPanel';
 import PersistentMindTools from '../../../pages/PersistentMindTools';
 import { findMindThinkingPreset } from '../../../lib/mindThinkingPresets.js';
-import { describeMindTurnProgress } from '../../../lib/mindTurnProgress.js';
+import { describeMindTurnProgress, mindTurnHeadline, mindTurnRuntimeSnapshot } from '../../../lib/mindTurnProgress.js';
 import { readFileAsBase64, UPLOAD_IMAGE_ACCEPT, validateImageFile } from '../../../utils/fileUpload';
 
 const PAGE_LIMIT = 200;
@@ -118,14 +118,15 @@ const MindTurnIndicator = ({ progress }) => {
   const detail = [progress.stage, progress.detail].filter(Boolean).join(' · ');
 
   if (progress.phase === 'thinking') {
+    const typingLabel = detail ? `Chief of Staff is typing — ${detail}` : 'Chief of Staff is typing';
     return (
       <span
         data-testid="mind-typing-indicator"
+        data-phase={progress.phase}
         role="status"
-        aria-label={detail ? `Chief of Staff is typing — ${detail}` : 'Chief of Staff is typing'}
+        aria-label={typingLabel}
         className="inline-flex min-w-0 items-center gap-1.5 text-port-text-muted"
       >
-        <span className="sr-only">{detail ? `Chief of Staff is typing — ${detail}` : 'Chief of Staff is typing'}</span>
         <span className="inline-flex items-center gap-0.5 text-port-accent">
           {[0, 1, 2].map((index) => (
             <span
@@ -141,13 +142,13 @@ const MindTurnIndicator = ({ progress }) => {
     );
   }
 
-  const label = progress.phase === 'stalled'
-    ? ['Stalled, checking…', detail].filter(Boolean).join(' · ')
-    : [progress.reason || 'Blocked', progress.retryAt ? `retry ${timeUntil(progress.retryAt)}` : null].filter(Boolean).join(' · ');
+  const label = [mindTurnHeadline(progress, timeUntil), progress.phase === 'stalled' ? detail : null]
+    .filter(Boolean).join(' · ');
 
   return (
     <span
-      data-testid={progress.phase === 'stalled' ? 'mind-stalled-indicator' : 'mind-blocked-indicator'}
+      data-testid="mind-turn-indicator"
+      data-phase={progress.phase}
       role="status"
       className="inline-flex min-w-0 items-center gap-1.5 rounded-full border border-port-warning/60 bg-port-warning/10 px-2 py-0.5 text-[11px] font-normal text-port-warning"
     >
@@ -760,9 +761,7 @@ export default function MindTab() {
           <PersistentMindThoughtStatus
             state={state}
             progress={turnProgress}
-            model={state?.activeTurnId && state.activeTurnId === runtime?.inference?.turnId
-              ? runtime.inference.model
-              : mind?.profile?.model}
+            model={mindTurnRuntimeSnapshot(state, runtime)?.model || mind?.profile?.model}
           />
           {!state?.started && <ActionButton label={profileReady ? 'Start' : 'Configure'} icon={profileReady ? CirclePlay : Settings2} pending={profileReady && lifecyclePending === 'start'} disabled={loading || setupSaving} onClick={() => (profileReady ? runLifecycle('start') : openPanel('settings'))} />}
           <ActionButton label="Wake now" icon={CirclePlay} pending={lifecyclePending === 'wake'} disabled={loading || setupSaving || !profileReady || Boolean(lifecyclePending) || Boolean(state?.activeTurn)} onClick={() => runLifecycle('wake')} />
