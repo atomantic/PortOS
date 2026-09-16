@@ -7,13 +7,21 @@
  */
 
 import { Router } from 'express';
-import { asyncHandler } from '../lib/errorHandler.js';
+import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import {
   eidoverseWorldAugmentSchema,
   eidoverseWorldConfigPatchSchema,
   eidoverseWorldSaySchema,
   validateRequest,
 } from '../lib/validation.js';
+import { eidoverseFoundationIdParamSchema, eidoverseFoundationInputSchema } from '../lib/eidoverseFoundations.js';
+import {
+  getEidoverseFoundation,
+  listEidoverseFoundations,
+  packageEidoverseFoundationCandidate,
+  recordEidoverseFoundation,
+} from '../services/eidoverseFoundationLedger.js';
+import { getInstanceId } from '../services/instanceIdentity.js';
 import {
   augmentEidoverseWorld,
   ensureEidoverseWorldPresence,
@@ -71,6 +79,41 @@ router.post('/augment', asyncHandler(async (req, res) => {
 router.post('/say', asyncHandler(async (req, res) => {
   const { text } = validateRequest(eidoverseWorldSaySchema, req.body || {});
   res.json(await sayInEidoverseWorld(text));
+}));
+
+// --- Foundations: the local-vs-baseline ownership ledger (#7455) ---------
+
+// GET /api/eidoverse/world/foundations — every foundation this install has
+// authored, with its ownership layer and last packaged promote candidate.
+router.get('/foundations', asyncHandler(async (_req, res) => {
+  res.json(await listEidoverseFoundations());
+}));
+
+// POST /api/eidoverse/world/foundations — record (or re-author) a local
+// vernacular foundation. The ownership layer is not accepted from the caller:
+// anything authored here is this install's own until it is promoted.
+router.post('/foundations', asyncHandler(async (req, res) => {
+  const input = validateRequest(eidoverseFoundationInputSchema, req.body || {});
+  res.json({ success: true, foundation: await recordEidoverseFoundation(input, { originInstanceId: await getInstanceId() }) });
+}));
+
+// POST /api/eidoverse/world/foundations/:id/candidate — run the agent-free
+// resilience assay and, on a pass, package the promote candidate. A refusal is
+// a 200 carrying its reasons: "not ready to leave this install" is an expected
+// verdict, not a request error.
+router.post('/foundations/:id/candidate', asyncHandler(async (req, res) => {
+  const { id } = validateRequest(eidoverseFoundationIdParamSchema, req.params || {});
+  const result = await packageEidoverseFoundationCandidate(id);
+  if (result.outcome === 'unknown-foundation') throw new ServerError('Foundation not found', { status: 404 });
+  res.json({ success: result.outcome === 'packaged', ...result });
+}));
+
+// GET /api/eidoverse/world/foundations/:id — one foundation record.
+router.get('/foundations/:id', asyncHandler(async (req, res) => {
+  const { id } = validateRequest(eidoverseFoundationIdParamSchema, req.params || {});
+  const foundation = await getEidoverseFoundation(id);
+  if (!foundation) throw new ServerError('Foundation not found', { status: 404 });
+  res.json(foundation);
 }));
 
 export default router;

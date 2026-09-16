@@ -627,7 +627,19 @@ describe('deferred imports stay deferred (#6156)', () => {
 // at all failed it — the same zero-headroom state #6305 raised it out of, and
 // that is what makes this a budget rather than a high-water mark. Measured after
 // both changes: 104,739.
-const MAX_STATIC_INSTANTIATIONS = 106200;
+//
+// Raised to 107,700 for the Eidoverse foundation promote gate (#7455), and
+// again to restore the ~1.5k of headroom this is supposed to carry: the
+// previous number had drifted back to EXACTLY three above the measured total,
+// so this change's unavoidable +7 failed it. That +7 is the whole cost — the
+// two new suites are 4 and 2 (both pure leaves over zod/objects/secretText and
+// a mocked fileUtils), and the mandatory `lib/` barrel row adds one node to
+// `lib/index.test.js`. Nothing widely-reached gained an edge: the promote
+// path's heavy dependency (`services/eidoverseResilienceAssay.js` and the
+// projection planner under it) is reached only from the ledger service, which
+// only `routes/eidoverseWorldRoutes.js` imports. Measured after this change:
+// 106,204.
+const MAX_STATIC_INSTANTIATIONS = 107700;
 
 
 const SKIP_DIRS = new Set(['node_modules', 'coverage', 'dist', 'data']);

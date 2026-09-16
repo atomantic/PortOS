@@ -669,8 +669,68 @@ any failure. Two reference fixtures live beside the harness: a passing
 skips it; only `eidoverseResilienceAssay.test.js` exercises it, proving the
 harness catches the "author-mind-only" failure mode).
 
-This harness is standalone and does not yet gate anything — the actual
-promote-to-baseline pipeline is
-[#7455](https://github.com/atomantic/PortOS/issues/7455), not yet built. Once
-it exists, it is expected to call `runResilienceAssay()` (or shell out to this
-script) per candidate contribution and block promotion on a failing verdict.
+This harness is what the promote gate below runs:
+`services/eidoverseFoundationLedger.js` replays a foundation's declared
+contribution through `runResilienceAssay()` and refuses to package a promote
+candidate on a failing verdict ([#7455](https://github.com/atomantic/PortOS/issues/7455)).
+Both the CLI and that gate resolve contributions through the one registry in
+`server/services/eidoverseResilienceContributions.js`.
+
+### Local vernacular vs shared baseline, and the promote gate (#7455)
+
+Federated instances are meant to keep their own style and buildings while
+discoveries that help everyone find a path into a shared PortOS baseline. That
+boundary is a data model, not a convention. `server/lib/eidoverseFoundations.js`
+declares three ownership layers:
+
+- **`runtime`** — the shared Eidoverse/PortOS framework. Upstream's to change; an
+  instance never authors into it and never promotes it.
+- **`baseline`** — the shared promoted-foundation population a peer can inherit.
+- **`vernacular`** — this install's own artifacts. **The default for everything
+  authored locally**, so nothing is shared by omission; promoting is an explicit
+  act with a gate in front of it, never the absence of a "keep this private" flag.
+
+A foundation is `{ body, style }` **by construction** rather than one bag with a
+blocklist. `body` is the promotable substance (declared schema, affordance,
+optional controller spec); `style` is the cosmetics that make this Commons look
+like itself — palette, motif, asset paths, placement, district, display aliases.
+Packaging carries `body` and drops `style` outright, which is what makes "a peer
+inherits the foundation without the author's cosmetics overwriting its own style
+layer" a property of the payload rather than a merge rule a receiver has to get
+right. A style-only key found *inside* `body` **refuses** the package instead of
+being silently trimmed.
+
+`data/eidoverse/foundations.json` (`server/services/eidoverseFoundationLedger.js`)
+is the install-local ledger — machine-local like `portos-world.json` beside it,
+never federated, no seed file and no migration, since an absent file is the empty
+ledger every install starts from.
+
+**The promote gate runs the assay; it never accepts a verdict.**
+`POST /api/eidoverse/world/foundations/:id/candidate` resolves the foundation's
+declared `contributionId` through `server/services/eidoverseResilienceContributions.js`
+(by id against a fixed directory — never by a caller-supplied module path),
+replays it through the agent-free harness above, and packages against the verdict
+it just produced. A caller therefore cannot assert that its build survived its
+author's absence; it can only ask for the check — the same proposal-versus-
+consequence separation the construction tools got in #7454, applied to promotion.
+A foundation that is re-authored loses both its candidate and its verdict, because
+both described the previous body.
+
+Four refusals stand between a local artifact and the shared baseline, and every
+one returns a readable reason naming what to fix:
+
+1. **Ownership** — only a `vernacular` foundation is promotable.
+2. **Agent-free resilience** — the verdict must pass, cover the full disturbance
+   suite, and be bound to the contribution this foundation names (a passing
+   verdict borrowed from another build is refused explicitly).
+3. **Style leak** — a vernacular style key inside `body`.
+4. **Federation safety** — machine identity, PII, home/Windows paths, IP or MAC
+   literals, and credential-shaped values anywhere in the candidate. Nothing is
+   redacted and shipped: a redacted promote would leave the author believing they
+   published what they wrote.
+
+The candidate envelope carries a content-addressed `fingerprint` (sha256 over the
+canonicalized envelope), so `verifyFoundationCandidate()` is one gate seen from
+both sides — the packaging side and a receiving peer's. That receiving side (peer
+pull/inherit), the promote UI, and the capability-gated mind tool are still to
+come; the envelope's own `candidateVersion` is what they will gate on.

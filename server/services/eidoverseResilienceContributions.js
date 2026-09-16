@@ -1,0 +1,67 @@
+/**
+ * Where the agent-free resilience assay finds the contributions it replays.
+ *
+ * `eidoverseResilienceAssay.js` is deliberately I/O-free — it is handed a
+ * contribution and runs it. Something still has to turn "the foundation named
+ * `beacon-relay-demo`" into that object, and both the CLI
+ * (`scripts/eidoverse-resilience-assay.js`) and the promote path
+ * (`eidoverseFoundationLedger.js`) need the same answer. This module is that
+ * one resolver, so the two cannot drift into disagreeing about what a
+ * registered contribution is.
+ *
+ * Resolution is by CONTRIBUTION ID against a fixed directory, never by a
+ * caller-supplied path: the promote path reaches this from an HTTP body, and
+ * "import the module this request names" is arbitrary code execution wearing a
+ * feature's clothes. `loadContributionModule()` still takes a path because the
+ * CLI is a local developer tool being handed one on purpose.
+ *
+ * Today the directory holds the two reference fixtures shipped with #7460. When
+ * executable world controllers land (#7456) their registry becomes a second
+ * source here, and neither caller changes.
+ */
+
+import { readdir } from 'node:fs/promises';
+import { join } from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+
+const CONTRIBUTIONS_DIR = fileURLToPath(new URL('./eidoverseResilienceAssayFixtures/', import.meta.url));
+
+// The deliberately-failing fixture beside them is named `*.failing.fixture.js`
+// so it is exercised only by the assay's own test and never registers as a
+// promotable contribution.
+const CONTRIBUTION_SUFFIX = '.contribution.js';
+
+/** Absolute paths of every registered contribution module, in stable order. */
+export async function listContributionModulePaths() {
+  const files = await readdir(CONTRIBUTIONS_DIR);
+  return files.filter((file) => file.endsWith(CONTRIBUTION_SUFFIX)).sort().map((file) => join(CONTRIBUTIONS_DIR, file));
+}
+
+/**
+ * Import one contribution module and invoke its factory.
+ *
+ * A module must export a default (or a single named) zero-argument factory
+ * returning `{ id, createSandbox, invariants? }` — the shape
+ * `runResilienceAssay()` consumes.
+ */
+export async function loadContributionModule(modulePath) {
+  const mod = await import(pathToFileURL(modulePath).href);
+  const factory = mod.default || Object.values(mod).find((value) => typeof value === 'function');
+  if (typeof factory !== 'function') throw new Error(`${modulePath} does not export a contribution factory function`);
+  return factory();
+}
+
+/**
+ * The registered contribution with this id, or `null` when none matches.
+ *
+ * Returning null rather than throwing is what lets the promote path report
+ * "nothing is registered under that id" as one refusal reason beside the
+ * others instead of as a 500.
+ */
+export async function findContributionById(contributionId) {
+  for (const modulePath of await listContributionModulePaths()) {
+    const contribution = await loadContributionModule(modulePath);
+    if (contribution?.id === contributionId) return contribution;
+  }
+  return null;
+}

@@ -33,9 +33,10 @@
  *
  * This module makes no network, filesystem, or provider calls and depends
  * only on `buildProjectionPlan` (already pure) for the "load projections in
- * a clean sandbox" leg of the assay. The promote path (#7455, not yet built)
- * is expected to call `runResilienceAssay()` per candidate contribution and
- * block promotion on a failing verdict; `scripts/eidoverse-resilience-assay.js`
+ * a clean sandbox" leg of the assay. The promote path (#7455) calls
+ * `runResilienceAssay()` per candidate contribution and refuses to package a
+ * promote candidate on a failing verdict — see
+ * `services/eidoverseFoundationLedger.js`; `scripts/eidoverse-resilience-assay.js`
  * gives CI (or a human) the same verdict from the command line.
  *
  * try/catch here is deliberate, not the "errors bubble to middleware" default
