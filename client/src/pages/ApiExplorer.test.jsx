@@ -16,6 +16,7 @@ vi.mock('../services/api', () => api);
 vi.mock('../lib/clipboard', () => ({ copyToClipboard: vi.fn() }));
 
 import ApiExplorer from './ApiExplorer';
+import { expectNoDanglingAriaRefs } from '../test/ariaRefAssertions.js';
 
 const catalog = {
   stats: { operations: 2050, sourceFiles: 221, domains: 124, mounts: 145, modeled: 10, generated: 2040 },
@@ -172,5 +173,14 @@ describe('ApiExplorer', () => {
     expect(await screen.findByText('229')).toBeTruthy();
     expect(screen.getByText('cos:mind:event')).toBeTruthy();
     expect(screen.getByRole('link', { name: /Open AsyncAPI JSON/i })).toHaveAttribute('href', '/api/api-docs/asyncapi.json');
+  });
+
+  // #7420: RouteTabsHeader passes no `controlsIdPrefix`, so the panel names
+  // itself rather than borrowing an `aria-labelledby` from a tab id that
+  // doesn't exist.
+  it.each(['catalog', 'rest', 'events', 'tools'])('%s tab names the panel it points at, with no dangling refs', async (tab) => {
+    const { container } = renderPage(`/api-reference/${tab}`);
+    await waitFor(() => expect(screen.getByRole('tabpanel')).toBeInTheDocument());
+    expectNoDanglingAriaRefs(container);
   });
 });

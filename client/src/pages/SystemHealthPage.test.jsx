@@ -67,6 +67,7 @@ import * as api from '../services/api';
 import { dismissHealthWarning } from '../services/apiSystem.js';
 import SystemHealthPage, { RESOURCE_TABS } from './SystemHealthPage';
 import { expectPageNavTabs } from '../test/pageNavTabAssertions.js';
+import { expectNoDanglingAriaRefs } from '../test/ariaRefAssertions.js';
 
 const renderPage = (path = '/system-resources/overview') => render(
   <MemoryRouter initialEntries={[path]}>
@@ -255,5 +256,31 @@ describe('SystemHealthPage remediation links', () => {
 describe('RESOURCE_TABS ↔ nav manifest', () => {
   it('renders the system-resources tabGroup in page order with a presentation entry each', () => {
     expectPageNavTabs(RESOURCE_TABS, ['overview:Overview', 'storage:Storage', 'queues:Queues']);
+  });
+});
+
+// #7420: RouteTabsHeader passes no `controlsIdPrefix`, so the panel names
+// itself rather than borrowing an `aria-labelledby` from a tab id that
+// doesn't exist.
+describe('SystemHealthPage — no dangling aria-controls/aria-labelledby', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    api.getSystemHealth.mockResolvedValue(HEALTH);
+    api.runSystemResourceReport.mockResolvedValue({
+      generatedAt: '2026-08-16T00:00:00.000Z',
+      filesystem: { totalBytes: 1000, usedBytes: 750, freeBytes: 250, usagePercent: 75 },
+      summary: { managedReclaimableBytes: 0 },
+      storageAreas: [],
+      cleanupCandidates: [],
+      sourceErrors: [],
+      models: { downloaded: [], loaded: [], totals: { all: 0 } },
+      queues: { media: { queued: 0, running: 0 }, agents: null },
+    });
+  });
+
+  it.each(['overview', 'storage'])('%s tab names the panel it points at, with no dangling refs', async (tab) => {
+    const { container } = renderPage(`/system-resources/${tab}`);
+    await waitFor(() => expect(screen.getByRole('tabpanel')).toBeInTheDocument());
+    expectNoDanglingAriaRefs(container);
   });
 });
