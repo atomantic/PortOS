@@ -233,6 +233,7 @@ describe('cosToolRegistry', () => {
       'mind.protect-memory',
       'mind.choose-name',
       'user-actions.query',
+      'eidoverse.observe',
       'eidoverse.chat',
       'eidoverse.destinations',
       'eidoverse.visit',

@@ -380,6 +380,31 @@ const eidoverseFoundationTools = [
     idempotent: sideEffect === 'read', async: false, confirmation: 'capability-grant' },
   adapter: { kind: 'eidoverse-foundations', operation },
 }));
+// Observation-first discovery (#7457). The read a mind reaches for BEFORE it
+// speaks or travels: the playbook has told it to "move through the world and
+// map what already exists" since continuous play landed, and until now there
+// was no tool that answered that. It is mind-scoped and needs only
+// `manageEidoverse`, the same grant as the foundation and controller reads it
+// summarizes — seeing the world a mind may already build in adds no authority.
+const eidoverseObserveTool = Object.freeze({
+  type: 'portos_tool',
+  name: 'eidoverse.observe',
+  version: COS_TOOL_SCHEMA_VERSION,
+  providerName: providerToolName('eidoverse.observe'),
+  aliases: [providerToolName('eidoverse.observe')],
+  description: 'Tour this install\'s own Eidoverse and see what is already standing — start here, before eidoverse.say, eidoverse.chat, or a peer visit. Returns `places` (the eight districts: what feeds each, how many live PortOS signals it currently reports, and whether any want attention), `peers` (opaque travel ids usable with eidoverse.visit, each with how many foundations this install inherited through it), `foundations.inherited` (a peer\'s contributions, newest first, with the peer they arrived through and the instance that authored them), `controllers.needsAttention` (only installs that are disarmed or failing — a controller that has never ticked yet is not an alarm), and `changes` (what is new since you last observed). `signalCount` counts what a district\'s sources report, not placed entities: the world holds a capped sample of them. A null section means that source could not be read, which is NOT the same as empty. Observing STAMPS a visit marker, so it is not idempotent — the next call\'s `changes` is measured from this one, and your first ever observation reports `firstObservation: true` with no new items rather than calling a settled world new.',
+  input_schema: zodToOpenApiSchema(z.object({}).strict()),
+  output_schema: objectOutputSchema,
+  policy: {
+    scopes: ['mind'],
+    requiredCapabilities: ['manageEidoverse'],
+    sideEffect: 'read',
+    idempotent: false,
+    async: false,
+    confirmation: 'capability-grant',
+  },
+  adapter: { kind: 'eidoverse-observe', operation: 'observe' },
+});
 // The documented creative toolkit (#7459): named materials, motifs, and
 // generative placement layouts a mind reaches for instead of inventing
 // coordinates and colors from scratch. Purely a catalog read — deterministic,
@@ -424,7 +449,7 @@ const eidoverseControllerTools = [
     idempotent: sideEffect === 'read', async: false, confirmation: 'capability-grant' },
   adapter: { kind: 'eidoverse-controllers', operation },
 }));
-const eidoverseTools = [...eidoverseTravelTools, ...eidoverseFoundationTools, eidoverseCreativeCatalogTool, ...eidoverseControllerTools, eidoverseStatusTool, eidoverseProjectTool, eidoverseAugmentTool, eidoverseSayTool];
+const eidoverseTools = [eidoverseObserveTool, ...eidoverseTravelTools, ...eidoverseFoundationTools, eidoverseCreativeCatalogTool, ...eidoverseControllerTools, eidoverseStatusTool, eidoverseProjectTool, eidoverseAugmentTool, eidoverseSayTool];
 const thinkingTools = ['mind.thinking-presets', 'mind.request-thinking-preset'].map((name, index) => ({
   type: 'portos_tool', name, version: COS_TOOL_SCHEMA_VERSION,
   providerName: providerToolName(name), aliases: [],
@@ -730,6 +755,13 @@ const executeAdapter = async (tool, args, context, authority) => {
     // Summarized for the same reason the list is, and because the candidate
     // envelope on a success is a duplicate of the body the mind already wrote.
     return { ...result, candidate: null, foundation: result.foundation ? summarizeFoundation(result.foundation) : null };
+  }
+  if (tool.adapter.kind === 'eidoverse-observe') {
+    // Lazy for the same reason the foundations and controllers groups are: the
+    // observation shell reaches the world-source collector, the foundation
+    // ledger, and the controller runtime, and only this tool wants all three.
+    const { observeEidoverseWorld } = await import('./eidoverseObservationLedger.js');
+    return observeEidoverseWorld({ signal: context.signal });
   }
   if (tool.adapter.kind === 'eidoverse-creative') {
     return describeCreativeCatalog();
