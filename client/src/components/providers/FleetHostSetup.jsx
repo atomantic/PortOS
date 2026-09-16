@@ -8,6 +8,7 @@ import { useAutoRefetch } from '../../hooks/useAutoRefetch';
 import RuntimeInstallModal from '../install/RuntimeInstallModal';
 import Banner from '../ui/Banner';
 import { PORTS } from '../../lib/ports.js';
+import { LOCAL_RUNTIME_MANAGE_URLS } from '../../../../server/lib/modelPinMembership.js';
 
 // A self-host provider (the auto-created Direct API one from `configure()` in
 // server/services/fleetLlmHost.js, and the OpenCode one from `?selfHost=1`)
@@ -102,6 +103,17 @@ export default function FleetHostSetup({ compact = false, providers = [], onConf
       </section>
     );
   }
+  // The banner above names the page that manages the recommended runtime, so
+  // this button has to open that same page. It pointed at `/models/llms`
+  // because that page WAS the local-server surface; #7414 made it the weights
+  // catalog, which has no start/stop control at all — so on an Apple Silicon
+  // host the banner said "Models → Runtimes" and the button under it went
+  // somewhere with no MTPLX card. vLLM has no PortOS page and an unrecognized
+  // host has no recommendation, and both still belong on the runtimes tab:
+  // it is where every local server PortOS DOES manage lives.
+  const manageHref = LOCAL_RUNTIME_MANAGE_URLS[status?.recommendation?.runtime]
+    ?? LOCAL_RUNTIME_MANAGE_URLS.llama;
+
   return (
     <div className="space-y-4">
       <Banner tone={status?.serving ? 'success' : 'info'} icon={Server} title={title}>
@@ -111,7 +123,7 @@ export default function FleetHostSetup({ compact = false, providers = [], onConf
       {error && <Banner tone="error">{error}</Banner>}
       <div className="flex flex-wrap gap-2">
         <button type="button" onClick={load} className="min-h-[40px] px-3 rounded-lg bg-port-border text-sm">Refresh host status</button>
-        <Link to="/models/llms" className="min-h-[40px] px-3 py-2 text-sm text-port-accent">Manage loaded models</Link>
+        <Link to={manageHref} className="min-h-[40px] px-3 py-2 text-sm text-port-accent">Manage model servers</Link>
       </div>
       {status && (
         <>

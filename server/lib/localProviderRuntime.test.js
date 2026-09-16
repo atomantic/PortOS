@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import {
   LOCAL_RUNTIMES,
+  LOCAL_RUNTIME_MANAGE_URLS,
   isLocalInstanceEndpoint,
   localRuntimeForProvider,
   normalizeOpenAiBaseUrl,
@@ -64,7 +65,9 @@ describe('localRuntimeForProvider', () => {
     expect(runtime.label).toBe('llama.cpp');
     expect(runtime.command).toBe('llama-server');
     expect(runtime.endpoint).toBe('http://127.0.0.1:8090/v1');
-    expect(runtime.manageUrl).toBe('/models/llms');
+    // Models → Runtimes (#7414), not the LLMs catalog: llama-server's
+    // lifecycle is what an unmet check sends the user to.
+    expect(runtime.manageUrl).toBe('/models/llms-runtimes');
   });
 
   it('falls back to the provider endpoint when the stored OpenCode config is unparseable', () => {
@@ -176,5 +179,71 @@ describe('localRuntimeForProvider', () => {
     expect(runtime.kind).toBe('mtplx');
     expect(runtime.label).toBe('MTPLX');
     expect(runtime.endpoint).toBe('http://127.0.0.1:8000/v1');
+  });
+});
+
+// #7414 split the runtimes off the LLMs page, and the hand-sweep that followed
+// is what these guards exist to prevent repeating: a breadcrumb typed into a
+// runtime row goes stale the next time a page moves, and nothing fails.
+describe('LOCAL_RUNTIMES — user-facing copy names its page by route, never by literal', () => {
+  // Every user-readable string on a row. `setupStateDetail` is a nested
+  // state -> prose map, so walk it rather than listing its keys — a runtime that
+  // adds a state must inherit the guard, not dodge it.
+  const copyStrings = ([id, runtime]) => ['modelsHint', 'standbyDetail', 'setupStateDetail']
+    .flatMap((field) => {
+      const value = runtime[field];
+      if (typeof value === 'string') return [[`${id}.${field}`, value]];
+      if (value && typeof value === 'object') {
+        return Object.entries(value)
+          .filter(([, nested]) => typeof nested === 'string')
+          .map(([state, nested]) => [`${id}.${field}.${state}`, nested]);
+      }
+      return [];
+    });
+  const rows = Object.entries(LOCAL_RUNTIMES);
+  const allCopy = rows.flatMap(copyStrings);
+
+  it('writes no breadcrumb into a runtime row', () => {
+    expect(allCopy.filter(([, text]) => text.includes('→')).map(([name]) => name)).toEqual([]);
+  });
+
+  // The token only expands for a runtime that HAS a page; on one with
+  // `manageUrl: null` it would ship as a literal `{page}` or as filler prose.
+  it('uses the {page} token only where a manage route can name a page', () => {
+    const pageless = new Set(rows.filter(([, runtime]) => !runtime.manageUrl).map(([id]) => id));
+    const offenders = allCopy
+      .filter(([name, text]) => text.includes('{page}') && pageless.has(name.split('.')[0]))
+      .map(([name]) => name);
+    expect(offenders).toEqual([]);
+  });
+
+  // The guard above is only as good as its corpus: if `copyStrings` ever stopped
+  // finding the fields, both assertions would pass vacuously over an empty list.
+  it('actually reads the rows it claims to guard', () => {
+    expect(allCopy.length).toBeGreaterThanOrEqual(rows.length);
+    expect(allCopy.some(([, text]) => text.includes('{page}'))).toBe(true);
+    expect(allCopy.map(([name]) => name)).toContain('vllm.setupStateDetail.empty');
+  });
+
+  it('takes every manageUrl from the shared map the client reads', () => {
+    expect(Object.fromEntries(rows.map(([id, runtime]) => [id, runtime.manageUrl])))
+      .toEqual(LOCAL_RUNTIME_MANAGE_URLS);
+  });
+
+  it('points each runtime at the surface that actually manages it', () => {
+    // Server lifecycle is Models → Runtimes; the weights catalog is Models →
+    // LLMs. Pinned per runtime because getting ONE of these wrong is the whole
+    // bug — a checklist that links llama.cpp at the catalog is a dead end.
+    expect(LOCAL_RUNTIME_MANAGE_URLS).toEqual({
+      llama: '/models/llms-runtimes',
+      slotstream: '/models/llms-runtimes',
+      mtplx: '/models/llms-runtimes',
+      ollama: '/models/llms',
+      lmstudio: '/models/llms',
+      // Operator-owned compose projects: the readiness checklist is the only
+      // PortOS surface, so there is no page to link.
+      vllm: null,
+      sglang: null,
+    });
   });
 });

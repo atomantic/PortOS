@@ -76,7 +76,7 @@ describe('ProviderReadiness', () => {
     expect(container.querySelector('[class*="port-warning"]')).toBeNull();
   });
 
-  it('links to the Models → LLMs page as an in-app action — never to vendor setup docs', () => {
+  it('links to the manage page as an in-app action — never to vendor setup docs', () => {
     renderWithRouter(<ProviderReadiness readiness={readiness()} />);
     expect(screen.getByText('Open the LLMs page').closest('a').getAttribute('href')).toBe('/models/llms');
     expect(screen.queryByText(/setup docs/i)).toBeNull();
@@ -84,9 +84,18 @@ describe('ProviderReadiness', () => {
   });
 
   it('omits the manage link for a runtime PortOS does not install, and still never points at docs', () => {
-    renderWithRouter(<ProviderReadiness readiness={readiness({ label: 'MTPLX', manageUrl: null })} />);
-    expect(screen.queryByText('Open the LLMs page')).toBeNull();
+    renderWithRouter(<ProviderReadiness readiness={readiness({ label: 'vLLM', manageUrl: null })} />);
+    expect(screen.queryByText(/^Open the .* page$/)).toBeNull();
     expect(screen.queryByText(/setup docs/i)).toBeNull();
+  });
+
+  // The label is derived from the route, not hardcoded: #7414 split the runtimes
+  // off LLMs, so a fixed "Open the LLMs page" now names the wrong sibling for
+  // llama.cpp, Slotstream and MTPLX while still linking to the right one.
+  it('names the link after the page its route actually resolves to', () => {
+    renderWithRouter(<ProviderReadiness readiness={readiness({ label: 'llama.cpp', manageUrl: '/models/llms-runtimes' })} />);
+    expect(screen.getByText('Open the Runtimes page').closest('a').getAttribute('href')).toBe('/models/llms-runtimes');
+    expect(screen.queryByText('Open the LLMs page')).toBeNull();
   });
 
   it('offers the one-click setup instead of leaving a docs link as the only way forward', () => {
@@ -274,7 +283,7 @@ describe('ProviderReadiness', () => {
       <ProviderReadiness
         readiness={readiness({
           checks: [
-            { id: 'model', label: 'Model `dflash` available', ok: false, detail: 'no model loaded', fixHint: 'Start a preset from Models → LLMs.', servedModels: [] },
+            { id: 'model', label: 'Model `dflash` available', ok: false, detail: 'no model loaded', fixHint: 'Start a preset from Models → Runtimes.', servedModels: [] },
           ],
         })}
         onUseServedModel={vi.fn()}

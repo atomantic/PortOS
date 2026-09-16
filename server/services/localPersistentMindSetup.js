@@ -70,7 +70,7 @@ export async function describeLocalPersistentMindSetup(deps = {}) {
     steps.push(step(
       'recommendation',
       'skipped',
-      'This host has a curated GPU coding-agent path (or otherwise does not use the free local Persistent Mind default). Use Models → LLMs → Recommended coding-agent setup when applicable.',
+      'This host has a curated GPU coding-agent path (or otherwise does not use the free local Persistent Mind default). Use Models → Runtimes → Recommended coding-agent setup when applicable.',
     ));
     return {
       applicable: false,

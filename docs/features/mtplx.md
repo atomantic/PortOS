@@ -27,7 +27,7 @@ valid CoS coding-agent runner.
 
 ## Where it is managed
 
-**Models → LLMs** is the home for MTPLX's lifecycle, alongside every other local
+**Models → Runtimes** is the home for MTPLX's lifecycle, alongside every other local
 server PortOS can run:
 
 - **Local Runtime Servers** — one table covering Ollama, LM Studio, llama.cpp
@@ -53,7 +53,7 @@ from the checklist is the same managed process the LLMs page can stop and log.
 Two surfaces set MTPLX up, and they drive the same PM2 process — use whichever
 you are already on.
 
-**From Models → LLMs** (full control over the checkpoint and the port):
+**From Models → Runtimes** (full control over the checkpoint and the port):
 
 1. Install MTPLX from **Local Runtime Servers**. PortOS installs the package
    from upstream's Homebrew tap (`brew install youssofal/mtplx/mtplx`), falling
@@ -109,7 +109,7 @@ you are already on.
    verified checkpoint, a multi-gigabyte download) and then starts the server,
    with the download's progress streaming into the same modal. To use a
    different MTP checkpoint instead, search for and download it on the MTPLX
-   card in Models → LLMs, then **Save configuration** there.
+   card in Models → Runtimes, then **Save configuration** there.
 
 Then, either way:
 
@@ -142,7 +142,7 @@ not offer to stop a process it did not start.
   appears only when the cache listing proves there is nothing servable — an
   empty cache, or one holding only a half-finished pull — and runs `mtplx pull`
   with no repo id, so it can only ever fetch MTPLX's own default verified
-  checkpoint; nothing on that page picks what is downloaded. The Models → LLMs
+  checkpoint; nothing on that page picks what is downloaded. The Models → Runtimes
   card's checkpoint panel is the full-control counterpart: search, download a
   named repo id, remove one. Neither is ever reached implicitly by an Install or
   a Start.
@@ -172,7 +172,7 @@ only from an assessment you start.
 
 ## Tuning the launch line
 
-**Models → LLMs → measured assessments** can relaunch `mtplx serve` with
+**Models → Runtimes → measured assessments** can relaunch `mtplx serve` with
 different flags between runs, so "how fast is this checkpoint here?" can be
 answered per configuration rather than once. The knobs PortOS offers are the ones
 it can actually put on the launch line:
@@ -245,7 +245,7 @@ left alone, it just isn't in the list a reboot replays.
    prints. PortOS deliberately never runs this: it writes a launchd/systemd unit
    and is blocked in PortOS's PM2 command guard.
 2. With the servers you want running, click **Save PM2 list for reboot** on
-   Models → LLMs (a `pm2 save`, minus `portos-mtplx`). Each runtime the dump
+   Models → Runtimes (a `pm2 save`, minus `portos-mtplx`). Each runtime the dump
    holds then shows a **starts at boot** pill — MTPLX never will.
 
 Ollama and LM Studio are not PM2 processes — they manage their own

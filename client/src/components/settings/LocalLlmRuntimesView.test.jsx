@@ -84,7 +84,7 @@ const renderRuntimes = async () => {
       <LocalLlmRuntimesView />
     </MemoryRouter>,
   );
-  await waitFor(() => expect(screen.getByRole('tabpanel')).toHaveAttribute('id', 'llm-management-panel-runtimes'));
+  await waitFor(() => expect(screen.getByRole('tabpanel')).toHaveAttribute('id', 'llm-runtimes-panel'));
   await waitFor(() => expect(screen.getByTitle(/PortOS routes local-LLM runs here by default/)).toBeInTheDocument());
   // The MTPLX checkpoint panel only mounts once the MTPLX status resolves, and
   // it then fetches its default listing — two chained awaits, so flush twice so
@@ -131,7 +131,23 @@ beforeEach(() => {
 });
 
 describe('LocalLlmRuntimesView information architecture', () => {
-  it('defaults the legacy LLM URL to runtime controls without loading the model catalog', async () => {
+  // The panel used to borrow `tab-runtimes` from the LLMs pill bar. Once
+  // Runtimes became a section tab (#7414) that id stopped being rendered at all
+  // — `RouteTabsHeader` passes no `controlsIdPrefix` — so the labelledby
+  // pointed at nothing and screen readers announced an unnamed region. Assert
+  // the id RESOLVES rather than that it equals a literal: a dangling reference
+  // is exactly the failure a string comparison cannot see.
+  it('names its own tab panel with a heading that exists', async () => {
+    await renderRuntimes();
+
+    const panel = screen.getByRole('tabpanel');
+    const label = document.getElementById(panel.getAttribute('aria-labelledby'));
+    expect(label).not.toBeNull();
+    expect(label.tagName).toBe('H2');
+    expect(label).toHaveTextContent('Runtimes');
+  });
+
+  it('shows runtime controls without loading the model catalog', async () => {
     await renderRuntimes();
 
     expect(screen.getByRole('heading', { name: 'Local Runtime Servers' })).toBeInTheDocument();

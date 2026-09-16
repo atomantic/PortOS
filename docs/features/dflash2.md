@@ -21,7 +21,7 @@ PortOS integrates both through the **OpenCode llama TUI** provider preset and th
 2. **Model Refresh**:
    - Support for dynamic model discovery via the **Refresh Models** button on AI Providers, querying the local `llama-server` `/v1/models` endpoint.
 3. **Local LLMs & AI Providers Guidance**:
-   - UI instructions, command templates, and copyable run lines surfaced in **Models → LLMs** and **AI Providers**.
+   - UI instructions, command templates, and copyable run lines surfaced in **Models → Runtimes** and **AI Providers**.
 
 ---
 
@@ -29,7 +29,7 @@ PortOS integrates both through the **OpenCode llama TUI** provider preset and th
 
 ### 1. Download Base & Draft Models
 
-**From the UI (recommended).** **Models → LLMs → Speculative Decoding**
+**From the UI (recommended).** **Models → Runtimes → Speculative Decoding**
 lists each preset's two GGUFs with their on-disk state and a **Download** button
 per file — PortOS fetches the weights from Hugging Face straight into the path
 the launcher passes `llama.cpp`, so a missing file is visible (and fixable)
@@ -168,7 +168,7 @@ can't fight your choice:
 Vocabulary reference: llama.cpp `docs/speculative.md`.
 
 ### 3. Use in PortOS
-1. Navigate to **AI Providers** (`/ai`) or **Models → LLMs**.
+1. Navigate to **AI Providers** (`/ai`) or **Models → Runtimes**.
 2. Verify **OpenCode llama TUI** is enabled.
 3. Click **Refresh Models** to pull the live aliases from `llama-server`, or use the default `dflash` model.
 4. Select **OpenCode llama TUI** in the CoS task creator or terminal runner to execute coding and agent tasks with speculative acceleration.
@@ -213,7 +213,7 @@ every 20s:
    asking for `dspark` fails here rather than inside a dead agent run.
 
 Until all three pass, the card says what is missing and links to
-**Models → LLMs**. The same failure previously surfaced only as
+**Models → Runtimes**. The same failure previously surfaced only as
 `Cannot connect to API: Unable to connect` inside the agent transcript.
 
 ### "llama.cpp is serving `dflash`" — the model check is a NAME check

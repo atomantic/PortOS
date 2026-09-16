@@ -362,6 +362,11 @@ export default function App() {
           <Route path="api-reference" element={<Navigate to="/api-reference/catalog" replace />} />
           <Route path="api-reference/:tab" element={<ApiExplorer />} />
           <Route path="models" element={<Navigate to="/models/llms" replace />} />
+          {/* Runtimes was the LLMs page's default view until #7414 promoted it to
+              its own tab. A literal segment outranks `models/:tab/:recordId`, so
+              a bookmark on the old pill lands on the new page instead of LLMs
+              rendering an unknown sub-view. */}
+          <Route path="models/llms/runtimes" element={<Navigate to="/models/llms-runtimes" replace />} />
           {/* A tab's drill-down (today: the LoRA dataset workbench) renders through
               Models itself, so it keeps the section header and tab bar — see
               TAB_DETAIL there. */}

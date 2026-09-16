@@ -32,6 +32,23 @@ describe('dedicated model host setup', () => {
   fireEvent.click(screen.getByRole('button', { name: 'Reveal host API key' }));
   expect(await screen.findByText('example-private-token')).toBeInTheDocument();
  });
+ // The banner names the page that manages the recommended runtime — on Apple
+ // Silicon, "Use the managed MTPLX setup on Models → Runtimes" — so the button
+ // under it has to open that page. It pointed at /models/llms, which #7414 left
+ // holding the weights catalog and no server controls at all.
+ it.each([
+  ['mtplx', '/models/llms-runtimes'],
+  // vLLM has no PortOS page of its own; the runtimes tab is still where every
+  // local server this host CAN manage lives, so the button must not go dead.
+  ['vllm', '/models/llms-runtimes'],
+  [null, '/models/llms-runtimes'],
+ ])('sends "Manage model servers" to the runtime surface for %s', async (runtime, href) => {
+  api.getFleetLlmHost.mockResolvedValue({ ...state, recommendation: { ...state.recommendation, runtime } });
+  api.getFleetPeerHosts.mockResolvedValue({ hosts: [] });
+  render(<MemoryRouter><FleetHostSetup /></MemoryRouter>);
+  expect(await screen.findByRole('link', { name: 'Manage model servers' })).toHaveAttribute('href', href);
+ });
+
  it('keeps unsupported hardware on a connection path without offering the CUDA installer', async () => {
   api.getFleetLlmHost.mockResolvedValue({ ...state, recommendation: { supported: false, title: 'Connect to a model host' } });
   api.getFleetPeerHosts.mockResolvedValue({ hosts: [] });

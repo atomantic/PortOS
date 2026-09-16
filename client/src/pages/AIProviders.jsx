@@ -319,7 +319,7 @@ export default function AIProviders() {
   // Local-daemon readiness (is llama-server / Ollama actually up and serving the
   // model this provider names?). Off the critical path like the runtime probes,
   // and re-polled on the same cadence as the status map so starting a daemon
-  // from the Models → LLMs page clears the card's checklist on its own.
+  // from the Models → Runtimes page clears the card's checklist on its own.
   const loadReadiness = useCallback(async () => {
     const data = await api.getProviderReadiness({ silent: true }).catch(() => null);
     setReadiness(data?.readiness && typeof data.readiness === 'object' ? data.readiness : {});

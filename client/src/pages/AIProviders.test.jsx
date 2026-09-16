@@ -442,7 +442,7 @@ describe('local-daemon readiness on the provider card', () => {
           docsUrl: 'https://example.com/docs',
           ready: false,
           checks: [
-            { id: 'runtime', label: 'llama.cpp installed', ok: false, detail: 'not found', fixHint: 'Install llama.cpp from Models → LLMs.' },
+            { id: 'runtime', label: 'llama.cpp installed', ok: false, detail: 'not found', fixHint: 'Install llama.cpp from Models → Runtimes.' },
             { id: 'server', label: 'llama.cpp server responding', ok: false, detail: 'nothing answered', fixHint: 'Install llama.cpp first, then start it.' },
           ],
         },
