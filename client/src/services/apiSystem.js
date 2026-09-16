@@ -182,6 +182,25 @@ export const getUsageBackfillStatus = (options = {}) => request('/usage/backfill
 // the report (`getUsage().subscriptionSavings`), so there is no getter here.
 export const updateSubscriptionCosts = (costs, options = {}) =>
   request('/usage/subscriptions', { method: 'PUT', body: JSON.stringify({ costs }), ...options });
+// The Subscriptions page's own model: one row per manageable plan (enabled
+// state, plan tier, monthly price, the provider records a toggle fans out to).
+// Deliberately separate from `getUsage().subscriptionSavings`, which answers
+// what those plans SPENT over a report window — this answers what they are.
+export const getSubscriptions = (options = {}) => request('/usage/subscriptions', options);
+// Which tier of each plan the user is on ("Max 20x", "Pro"), same patch
+// semantics as the prices: an omitted family keeps its stored tier, `null` or
+// `''` clears it. Sent on its own key so a tier save never rewrites a price.
+export const updateSubscriptionPlanTiers = (tiers, options = {}) =>
+  request('/usage/subscriptions', { method: 'PUT', body: JSON.stringify({ tiers }), ...options });
+// Switch one subscription on or off — PortOS-side enablement only (it flips
+// `enabled` across that family's provider records). Never touches vendor
+// billing. A priced family with no providers answers `applied: false`.
+export const setSubscriptionEnabled = ({ family, enabled }, options = {}) =>
+  request('/usage/subscriptions/enabled', {
+    method: 'PUT',
+    body: JSON.stringify({ family, enabled }),
+    ...options,
+  });
 // Mark one federated instance as paying API rates (`usesSubscriptions: false`)
 // or riding this install's subscriptions (`true`). The Across Instances
 // combined total skips API-billed rows; the row itself stays listed.

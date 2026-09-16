@@ -4,6 +4,7 @@ import { z } from 'zod';
 import { getSettings, updateSettingsWith } from '../services/settings.js';
 import { getAiAssignments, updateAiAssignment } from '../services/aiAssignments.js';
 import { saveSubscriptionCosts } from '../services/subscriptionCosts.js';
+import { savePlanTiers } from '../services/subscriptions.js';
 import { saveApiBilledInstanceIds } from '../services/usageFleetBilling.js';
 import {
   setCodexParallelLimit,
@@ -23,7 +24,7 @@ import { resolveBackupConfig } from '../lib/backupConfig.js';
 import { DEFAULT_UNTRUSTED_CONTENT_POLICY, untrustedContentSettingsSchema } from '../lib/untrustedContent.js';
 import { agentContextSettingsSchema } from '../lib/agentContextValidation.js';
 import { EFFORT_LEVELS } from '../lib/providerModels.js';
-import { privateCredentialParamsSchema, privateCredentialInputSchema, backupConfigSchema, sharingSettingsPatchSchema, featureProviderConfigSchema, autofixerSettingsSchema, codeReviewSettingsSchema, locationSettingsSchema, hideFirstRunCardSchema, networkSetupPreferenceSchema, settingsEmbeddingsSchema, localLlmSettingsSchema, imessageConfigSchema, signalConfigSchema, beeperSettingsSchema, spotifyConfigSchema, youtubeConfigSchema, apiAccessSettingsSchema, instanceFeatureSettingsSchema, instanceFeatureIdSchema, instanceFeatureUpdateSchema, instanceFeatureGroupSettingsSchema, instanceFeatureGroupIdSchema, instanceFeatureGroupUpdateSchema, loraTrainingConfigSchema, pipelineEditorialChecksSettingsSchema, creativeDirectorSettingsSchema, musicSettingsSchema, federationSettingsSchema, privacySettingsSchema, seriesAutopilotSettingsSchema, layeredIntelligenceSettingsSchema, imageGenGrokSettingsSchema, imageGenAgySettingsSchema, renderDefaultsSettingsSchema, videoGenSettingsSchema, subscriptionCostsMapSchema, usageApiBilledInstanceIdsSchema, namedOrchestrationProfileSchema, orchestrationProfilesSettingsSchema, validateRequest } from '../lib/validation.js';
+import { privateCredentialParamsSchema, privateCredentialInputSchema, backupConfigSchema, sharingSettingsPatchSchema, featureProviderConfigSchema, autofixerSettingsSchema, codeReviewSettingsSchema, locationSettingsSchema, hideFirstRunCardSchema, networkSetupPreferenceSchema, settingsEmbeddingsSchema, localLlmSettingsSchema, imessageConfigSchema, signalConfigSchema, beeperSettingsSchema, spotifyConfigSchema, youtubeConfigSchema, apiAccessSettingsSchema, instanceFeatureSettingsSchema, instanceFeatureIdSchema, instanceFeatureUpdateSchema, instanceFeatureGroupSettingsSchema, instanceFeatureGroupIdSchema, instanceFeatureGroupUpdateSchema, loraTrainingConfigSchema, pipelineEditorialChecksSettingsSchema, creativeDirectorSettingsSchema, musicSettingsSchema, federationSettingsSchema, privacySettingsSchema, seriesAutopilotSettingsSchema, layeredIntelligenceSettingsSchema, imageGenGrokSettingsSchema, imageGenAgySettingsSchema, renderDefaultsSettingsSchema, videoGenSettingsSchema, subscriptionCostsMapSchema, subscriptionPlanTiersMapSchema, usageApiBilledInstanceIdsSchema, namedOrchestrationProfileSchema, orchestrationProfilesSettingsSchema, validateRequest } from '../lib/validation.js';
 
 const router = Router();
 
@@ -538,6 +539,12 @@ router.put('/', asyncHandler(async (req, res) => {
   if (req.body?.subscriptionCosts !== undefined) {
     validateRequest(subscriptionCostsMapSchema, req.body.subscriptionCosts);
   }
+  // Plan tiers ride the same rails as the prices beside them, for the same
+  // reason: an unvalidated key here would persist, read back as "no tier", and
+  // be dropped by the next save from the Subscriptions page.
+  if (req.body?.subscriptionPlanTiers !== undefined) {
+    validateRequest(subscriptionPlanTiersMapSchema, req.body.subscriptionPlanTiers);
+  }
   // Same schema PUT /api/usage/fleet-billing's store uses, so a restore dump
   // can't write an unbounded or non-string list through the generic endpoint.
   if (req.body?.usageApiBilledInstanceIds !== undefined) {
@@ -555,16 +562,17 @@ router.put('/', asyncHandler(async (req, res) => {
   // would bypass the current-password proof the /api/auth/password routes
   // require. Secrets are write-only through their dedicated routes
   // (/api/auth/password, /api/github/secrets, etc.).
-  // subscriptionCosts and usageApiBilledInstanceIds are excluded from the
-  // generic shallow spread below and routed through their dedicated savers —
-  // the same merge PUT /api/usage/subscriptions and PUT /api/usage/fleet-billing
-  // use — so a restore dump can't persist an unvalidated slice, and a shallow
-  // `{ ...current, ...settingsPatch }` can't replace a map by dropping keys
-  // the incoming patch didn't mention.
+  // subscriptionCosts, subscriptionPlanTiers and usageApiBilledInstanceIds are
+  // excluded from the generic shallow spread below and routed through their
+  // dedicated savers — the same merge PUT /api/usage/subscriptions and PUT
+  // /api/usage/fleet-billing use — so a restore dump cannot persist an
+  // unvalidated slice, and a shallow `{ ...current, ...settingsPatch }` cannot
+  // replace a map by dropping keys the incoming patch did not mention.
   const {
     secrets: _ignoredSecrets,
     catalogUserTypes: _ignoredTypes,
     subscriptionCosts: subscriptionCostsPatch,
+    subscriptionPlanTiers: subscriptionPlanTiersPatch,
     usageApiBilledInstanceIds: apiBilledPatch,
     ...settingsPatch
   } = req.body || {};
@@ -635,6 +643,10 @@ router.put('/', asyncHandler(async (req, res) => {
   if (subscriptionCostsPatch !== undefined) {
     const costs = await saveSubscriptionCosts(subscriptionCostsPatch, { actor: 'user' });
     merged = { ...merged, subscriptionCosts: costs };
+  }
+  if (subscriptionPlanTiersPatch !== undefined) {
+    const tiers = await savePlanTiers(subscriptionPlanTiersPatch, { actor: 'user' });
+    merged = { ...merged, subscriptionPlanTiers: tiers };
   }
   if (apiBilledPatch !== undefined) {
     const ids = await saveApiBilledInstanceIds(apiBilledPatch, { actor: 'user' });

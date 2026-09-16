@@ -462,6 +462,7 @@ export * from './noReplaceMove.js';
 export * from './instanceFeatureRegistry.js';
 export * from './credentialRegistry.js';
 export * from './usageRange.js';
+export * from './subscriptionPlanTiers.js';
 export * from './subscriptionSavings.js';
 export * from './providerFamilies.js';
 export * from './fleetQuotas.js';
