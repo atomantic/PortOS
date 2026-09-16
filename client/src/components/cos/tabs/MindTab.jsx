@@ -900,10 +900,29 @@ export default function MindTab() {
             </div>
             <p className="mt-3 text-sm text-port-text-muted">
               {turnProgress.phase === 'stalled' ? 'No heartbeat from the current turn — checking whether it is still alive.'
-                : turnProgress.phase === 'blocked' ? `${turnProgress.reason || 'Blocked'}${turnProgress.retryAt ? ' — the mind retries on its own; no action needed.' : '. No retry is scheduled.'}`
+                : turnProgress.phase === 'blocked' ? (state?.contextBudgetBlocked
+                  ? `${turnProgress.reason || 'Local context window is too small for this wake'}. Raise provider numCtx under Settings → AI providers (or shrink Context), then Resume.`
+                  : `${turnProgress.reason || 'Blocked'}${turnProgress.retryAt ? ' — the mind retries on its own; no action needed.' : '. No retry is scheduled.'}`)
                   : turnProgress.phase === 'thinking' ? `${turnProgress.stage || 'Working through the current turn'}.`
                     : state?.pauseReason || (state?.started ? 'Listening for messages and scheduled wakes.' : 'Configure the AI profile to begin.')}
             </p>
+            {state?.contextBudgetBlocked && (
+              <div data-testid="mind-context-budget-actions" className="mt-2 flex flex-wrap gap-2 text-xs">
+                <button
+                  type="button"
+                  onClick={() => openPanel('context')}
+                  className="rounded-lg border border-port-border px-2.5 py-1 font-medium text-port-text hover:border-port-accent hover:text-port-accent"
+                >
+                  Open Context
+                </button>
+                <a
+                  href="/settings?tab=providers"
+                  className="rounded-lg border border-port-border px-2.5 py-1 font-medium text-port-text hover:border-port-accent hover:text-port-accent"
+                >
+                  AI providers (numCtx)
+                </a>
+              </div>
+            )}
             {turnProgress.detail && (
               <p data-testid="mind-turn-progress-detail" className={`mt-1 text-xs ${turnProgress.phase === 'stalled' || turnProgress.phase === 'blocked' ? 'text-port-warning' : 'text-port-text-muted'}`}>
                 {turnProgress.detail}

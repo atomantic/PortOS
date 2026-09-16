@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createDefaultPersistentMindState, normalizePersistentMindState, PERSISTENT_MIND_LIMITS } from '../lib/persistentMind.js';
 import { PROVIDER_USAGE_LIMIT_PAUSE_REASON } from '../lib/persistentMindUsageLimit.js';
+import { contextBudgetPauseReasonFrom } from '../lib/persistentMindContextBudget.js';
 import {
   __resetCosAdmissionReservations,
   acquireCosActionReservation,
@@ -1525,7 +1526,7 @@ describe('persistent mind supervisor', () => {
       expect(mock.scheduled.has(supervisor.PERSISTENT_MIND_WAKE_EVENT_ID)).toBe(true);
     });
 
-    it('does not auto-resume pauses that are not usage-limit autopauses', async () => {
+it('does not auto-resume pauses that are not usage-limit autopauses', async () => {
       await supervisor.setPersistentMindEnabled(true);
       await supervisor.startPersistentMind();
       await supervisor.pausePersistentMind('Paused by user');
@@ -1546,6 +1547,51 @@ describe('persistent mind supervisor', () => {
       expect(mock.scheduled.has(supervisor.PERSISTENT_MIND_WAKE_EVENT_ID)).toBe(false);
     });
   });
+
+  describe('local context-budget autopause', () => {
+    const echoProfileAdapter = () => vi.fn(async ({ profile }) => ({ ok: true, provider: profile.provider }));
+
+    it('autopauses on a known-context-below-request-budget error instead of climbing failureCount', async () => {
+      const priorFailures = 2;
+      mock.root.persistentMind = {
+        ...createDefaultPersistentMindState(),
+        failureCount: priorFailures,
+      };
+      const budgetMessage = 'Ollama (qwen3:8b): known 12288-token context is below the 15104-token request budget';
+      const run = vi.fn(async () => {
+        throw Object.assign(new Error(budgetMessage), {
+          errorAnalysis: { category: 'context-length', message: budgetMessage },
+        });
+      });
+      await supervisor.registerPersistentMindTurnAdapter({
+        prepare: echoProfileAdapter(),
+        run,
+      });
+      await supervisor.setPersistentMindEnabled(true);
+      await supervisor.startPersistentMind();
+      await supervisor.enqueuePersistentMindMessage({ id: 'message-budget', text: 'Think.' });
+      await supervisor.drainPersistentMind();
+
+      expect(run).toHaveBeenCalledTimes(1);
+      const expectedReason = contextBudgetPauseReasonFrom(budgetMessage);
+      expect(mock.root.persistentMind).toMatchObject({
+        status: 'paused',
+        pauseReason: expectedReason,
+        lastError: expectedReason,
+        failureCount: priorFailures,
+        nextEligibleWakeAt: null,
+        activeTurn: null,
+      });
+      expect(mock.root.persistentMind.queuedMessages.map((item) => item.id)).toEqual(['message-budget']);
+      expect(mock.scheduled.has(supervisor.PERSISTENT_MIND_WAKE_EVENT_ID)).toBe(false);
+      // No usage-limit probe — recovery is an operator numCtx / context change.
+      expect(mock.scheduled.has(supervisor.PERSISTENT_MIND_USAGE_LIMIT_PROBE_EVENT_ID)).toBe(false);
+
+      await supervisor.drainPersistentMind();
+      expect(run).toHaveBeenCalledTimes(1);
+    });
+  });
+
 describe('usage-limit retry time', () => {
     const PROBE_ID = 'cos-persistent-mind-usage-limit-probe';
     beforeEach(() => mock.events.clear());

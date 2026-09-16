@@ -75,6 +75,10 @@ import {
   isUsageLimitPauseReason,
   usageLimitProbeDelayMs,
 } from '../lib/persistentMindUsageLimit.js';
+import {
+  contextBudgetPauseReasonFrom,
+  isContextBudgetFitnessError,
+} from '../lib/persistentMindContextBudget.js';
 import { isProviderAvailable, markProviderUsageLimit } from './providerStatus.js';
 
 export const PERSISTENT_MIND_WAKE_EVENT_ID = 'cos-persistent-mind-wake';
@@ -784,7 +788,16 @@ async function runClaimedPersistentMindTurn(turn, mind) {
     const adapterPrepared = await turnAdapter.prepare({ wake: turn.wake, signal: controller.signal, profile });
     if (!await turnCanContinue(turn.id, generation, controller.signal)) return;
     if (!adapterPrepared?.ok || !adapterPrepared.provider) {
-      await parkActiveTurn(turn.id, adapterPrepared?.error || 'Persistent mind provider is unavailable', 'degraded', { retryAt: adapterPrepared?.retryAt || null });
+      const prepareError = adapterPrepared?.error || 'Persistent mind provider is unavailable';
+      if (isContextBudgetFitnessError(prepareError)) {
+        await parkActiveTurn(
+          turn.id,
+          contextBudgetPauseReasonFrom(prepareError),
+          'paused',
+        );
+        return;
+      }
+      await parkActiveTurn(turn.id, prepareError, 'degraded', { retryAt: adapterPrepared?.retryAt || null });
       return;
     }
     // Existing adapters only named their transport provider; missing model or
@@ -969,13 +982,21 @@ async function runClaimedPersistentMindTurn(turn, mind) {
       // Transient rate-limits / network blips stay on the interrupted +
       // backoff path below.
       const usageLimit = !denied && !controller.signal.aborted && isHardProviderUsageLimitError(error);
+      // Local context-budget / known-window-below-request failures are not
+      // transient: retrying the same wake only climbs failureCount. Autopause
+      // with an actionable reason (token counts + numCtx hint) and wait for
+      // the operator to raise the window or shrink mind context.
+      const contextBudget = !denied && !controller.signal.aborted && !usageLimit
+        && isContextBudgetFitnessError(error);
       // A refusal already named its own cause and the status it belongs
       // under; only a revoked temporary route retires the wake, exactly as
       // the pre-turn resolution does.
       await parkActiveTurn(
         turn.id,
-        usageLimit ? PROVIDER_USAGE_LIMIT_PAUSE_REASON : message,
-        usageLimit ? 'paused' : ((denied && error.deniedStatus) || 'interrupted'),
+        usageLimit
+          ? PROVIDER_USAGE_LIMIT_PAUSE_REASON
+          : (contextBudget ? contextBudgetPauseReasonFrom(error) : message),
+        (usageLimit || contextBudget) ? 'paused' : ((denied && error.deniedStatus) || 'interrupted'),
         {
           consumedAttempt: runStartedAt != null,
           retireWake: denied && error.requiresResubmission === true,
@@ -995,7 +1016,9 @@ async function runClaimedPersistentMindTurn(turn, mind) {
         'warn',
         usageLimit
           ? `Persistent mind autopaused on provider usage limit: ${message}`
-          : `Persistent mind turn ${denied ? 'refused a further provider call' : 'interrupted'}: ${message}`,
+          : contextBudget
+            ? `Persistent mind autopaused on local context budget: ${message}`
+            : `Persistent mind turn ${denied ? 'refused a further provider call' : 'interrupted'}: ${message}`,
         { turnId: turn.id },
       );
     }

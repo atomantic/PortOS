@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { createDefaultPersistentMindState, normalizePersistentMindState } from './persistentMind.js';
 import { publicPersistentMindState } from './persistentMindPublic.js';
 import { PROVIDER_USAGE_LIMIT_PAUSE_REASON } from './persistentMindUsageLimit.js';
+import { contextBudgetPauseReasonFrom } from './persistentMindContextBudget.js';
 
 const selection = {
   id: 'deep-think',
@@ -192,5 +193,41 @@ describe('public persistent mind state', () => {
 
     expect(projected.lastError).toBe('The last wake did not complete; local diagnostics have details');
     expect(JSON.stringify(projected)).not.toContain('sk-EXAMPLE');
+  });
+
+  it('surfaces an actionable context-budget pauseReason with token counts instead of the vague provider copy', () => {
+    const raw = 'Ollama (qwen3:8b): known 12288-token context is below the 15104-token request budget';
+    const projected = publicPersistentMindState(normalizePersistentMindState({
+      ...createDefaultPersistentMindState(),
+      enabled: true,
+      started: true,
+      status: 'interrupted',
+      pauseReason: raw,
+      lastError: raw,
+      failureCount: 3,
+    }));
+
+    expect(projected.contextBudgetBlocked).toBe(true);
+    expect(projected.pauseReason).toMatch(/12288/);
+    expect(projected.pauseReason).toMatch(/15104/);
+    expect(projected.pauseReason).toMatch(/numCtx/i);
+    expect(projected.pauseReason).not.toBe('Provider unavailable or wake failed');
+    expect(projected.lastError).toBe(projected.pauseReason);
+    expect(projected.usageLimited).toBe(false);
+    expect(JSON.stringify(projected)).not.toContain('sk-');
+  });
+
+  it('does not blame the user when a context-budget failure was stored as a pause', () => {
+    const reason = contextBudgetPauseReasonFrom('known 8192-token context is below the 20000-token request budget');
+    const projected = publicPersistentMindState(normalizePersistentMindState({
+      ...createDefaultPersistentMindState(),
+      status: 'paused',
+      pauseReason: reason,
+      lastError: reason,
+    }));
+
+    expect(projected.contextBudgetBlocked).toBe(true);
+    expect(projected.pauseReason).toBe(reason);
+    expect(projected.pauseReason).not.toBe('Paused by user');
   });
 });
