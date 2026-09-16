@@ -398,7 +398,7 @@ export default function Loops() {
           </p>
         </div>
         <div className="flex items-center gap-3 text-xs text-gray-400">
-          {runningCount > 0 && <span className="text-port-success">{runningCount} active</span>}
+          {runningCount > 0 && <span className="text-port-success">{formatCount(runningCount)} active</span>}
           <span>{formatCount(loops.length)} total</span>
           <button onClick={fetchLoops} className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1 rounded hover:bg-port-border" title="Refresh" aria-label="Refresh">
             <RefreshCw size={14} />

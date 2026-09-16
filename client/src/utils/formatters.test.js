@@ -135,6 +135,14 @@ describe('formatUsd', () => {
     expect(formatUsd(-4610.09, { signed: true })).toBe('-$4,610.09');
     expect(formatUsd(12000, { trimWhole: true })).toBe('$12,000');
   });
+
+  // A saving that rounds to zero produces -0, which Intl signs but `toFixed`
+  // did not — it must not surface as a loss.
+  it('never renders a signed zero', () => {
+    expect(formatUsd(-0)).toBe('$0.00');
+    expect(formatUsd(-0, { trimWhole: true })).toBe('$0');
+    expect(formatUsd(-0, { signed: true })).toBe('$0.00');
+  });
 });
 
 describe('formatCount', () => {

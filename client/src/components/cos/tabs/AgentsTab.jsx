@@ -448,7 +448,7 @@ export default function AgentsTab({ agents, onRefresh, liveOutputs, providers, p
                 ) : (
                   <>
                     <ChevronDown size={14} />
-                    Load older agents ({remainingCount} remaining)
+                    Load older agents ({formatCount(remainingCount)} remaining)
                   </>
                 )}
               </button>

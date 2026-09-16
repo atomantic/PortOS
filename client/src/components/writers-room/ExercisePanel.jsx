@@ -92,7 +92,7 @@ export default function ExercisePanel({ activeWork, onClose, editorDirty = false
         return null;
       });
       if (!result) return;
-      toast.success(`Logged ${wordsAdded} words`);
+      toast.success(`Logged ${formatCount(wordsAdded)} words`);
     } else {
       const result = await discardWritersRoomExercise(active.id, { silent: true }).catch((err) => {
         toast.error(`Discard failed: ${err.message}`);

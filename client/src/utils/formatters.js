@@ -362,9 +362,10 @@ export function formatCompactCountOrDash(n) {
 // Grouping is pinned to en-US rather than the browser locale. The UI is
 // English-only, and `$` is a US currency mark — rendering "$4.610,09" next to
 // English copy reads as a typo, not as localization. Counts use the same
-// separator so a total and its cost line up. The DATE helpers above stay on the
-// browser locale on purpose: a date carries no currency anchor, so there is
-// nothing for its separators to contradict.
+// separator so a total and its cost line up — `formatAgeDays` above formats its
+// day count through the same instance for that reason. The date/time DISPLAY
+// helpers keep the browser locale on purpose: a rendered date carries no
+// currency anchor, so there is nothing for its separators to contradict.
 const GROUPED_INTEGER = new Intl.NumberFormat('en-US', { maximumFractionDigits: 0 });
 const USD_CENTS = new Intl.NumberFormat('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
@@ -454,7 +455,9 @@ export function formatPercent(value, { decimals = 1, fallback = '—' } = {}) {
 export function formatUsd(value, { signed = false, trimWhole = false, fallback = '—' } = {}) {
   const n = value === null || value === undefined ? 0 : Number(value);
   if (!Number.isFinite(n)) return fallback;
-  const magnitude = signed ? Math.abs(n) : n;
+  // `+ 0` normalizes -0, which Intl renders with a sign (`-0.00`) where the old
+  // `toFixed(2)` did not — a rounded-to-zero saving must not read as a loss.
+  const magnitude = (signed ? Math.abs(n) : n) + 0;
   const body = trimWhole && Number.isInteger(magnitude)
     ? GROUPED_INTEGER.format(magnitude)
     : USD_CENTS.format(magnitude);

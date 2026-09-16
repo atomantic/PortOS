@@ -1190,7 +1190,7 @@ function KindSection() {
       <div>
         <div className="flex flex-wrap items-center gap-1.5 mb-2">
           <span className="text-[10px] text-gray-500 mr-auto shrink-0">
-            {filtered ? `${all.length} / ${totalCount}` : all.length} {all.length === 1 ? kind.singular : kind.label.toLowerCase()}
+            {filtered ? `${formatCount(all.length)} / ${formatCount(totalCount)}` : formatCount(all.length)} {all.length === 1 ? kind.singular : kind.label.toLowerCase()}
           </span>
           {controls}
         </div>
@@ -1206,7 +1206,7 @@ function KindSection() {
         <Icon size={14} className="text-gray-400" />
         <h3 className="text-sm font-semibold text-white">{kind.label}</h3>
         <span className="text-[10px] text-gray-500">
-          {filtered ? `${all.length} / ${totalCount}` : all.length}
+          {filtered ? `${formatCount(all.length)} / ${formatCount(totalCount)}` : formatCount(all.length)}
         </span>
         <div className="ml-auto flex flex-wrap items-center gap-1.5">
           {controls}

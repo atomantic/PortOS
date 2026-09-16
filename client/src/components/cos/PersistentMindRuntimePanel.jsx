@@ -2,7 +2,6 @@ import { AlertTriangle, Brain, Cpu, Gauge } from 'lucide-react';
 import { describeMindTurnProgress, mindTurnHeadline } from '../../lib/mindTurnProgress.js';
 import { formatBytes, formatCount, timeUntil } from '../../utils/formatters.js';
 
-
 const RESIDENCY_STATES = {
   loaded: 'Loaded in memory',
   'not-loaded': 'Not loaded',

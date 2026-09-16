@@ -626,10 +626,10 @@ export default function IMessageTab() {
           {formatCount(stats?.eventCount, { fallback: '0' })} events
         </span>
         <span className="rounded border border-port-border bg-port-card px-2 py-1">
-          {stats?.conversationCount ?? 0} conversations
+          {formatCount(stats?.conversationCount, { fallback: '0' })} conversations
         </span>
         <span className="rounded border border-port-border bg-port-card px-2 py-1">
-          {stats?.blockedCount ?? 0} blocked
+          {formatCount(stats?.blockedCount, { fallback: '0' })} blocked
         </span>
         {stats?.earliestAt && (
           <span className="rounded border border-port-border bg-port-card px-2 py-1">

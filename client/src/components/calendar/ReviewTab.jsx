@@ -157,7 +157,7 @@ export default function ReviewTab({ accounts = [] }) {
           )}
           {review.progressEntries?.length > 0 && (
             <span className="text-port-accent">
-              {formatCount(review.progressEntries.reduce((sum, e) => sum + (e.durationMinutes || 0), 0))}min logged
+              {review.progressEntries.reduce((sum, e) => sum + (e.durationMinutes || 0), 0)}min logged
             </span>
           )}
         </div>

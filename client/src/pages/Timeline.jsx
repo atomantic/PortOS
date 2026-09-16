@@ -244,7 +244,7 @@ export default function Timeline() {
         <span className="rounded bg-port-card px-2 py-1 border border-port-border">{formatCount(counts.total)} events</span>
         {Object.entries(counts.bySource).map(([source, n]) => (
           <span key={source} className="rounded bg-port-card px-2 py-1 border border-port-border">
-            {source}: {n}
+            {source}: {formatCount(n)}
           </span>
         ))}
       </div>
