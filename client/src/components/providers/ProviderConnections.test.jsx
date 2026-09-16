@@ -145,7 +145,14 @@ describe('backend connection management', () => {
     api.updateProviderConnection.mockResolvedValue({ affectedRouteIds: ['claude-ollama', 'claude-ollama-tui'] });
     renderPanel();
 
-    fireEvent.change(await screen.findByLabelText('Name'), { target: { value: 'Renamed daemon' } });
+    // Wait for the SEEDED value, not just for the field to exist. The panel
+    // re-seeds its drafts from the loaded connection in an effect keyed on
+    // id + revision; typing before that effect has run lets it overwrite the
+    // edit, and the save then sends the original label. Green on a fast
+    // machine, red on a loaded CI runner.
+    const name = await screen.findByLabelText('Name');
+    await waitFor(() => expect(name).toHaveValue('Example local daemon'));
+    fireEvent.change(name, { target: { value: 'Renamed daemon' } });
     fireEvent.click(screen.getByRole('button', { name: 'Save backend' }));
 
     await waitFor(() => expect(api.updateProviderConnection).toHaveBeenCalled());
