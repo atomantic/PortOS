@@ -37,7 +37,7 @@ const CustomTooltip = ({ active, payload, label, colors }) => {
       <p style={{ color: colors.axis, marginBottom: 4 }}>{label}</p>
       {payload.map((entry) => (
         <p key={entry.dataKey} style={{ color: entry.color ?? entry.fill, margin: '2px 0' }}>
-          {entry.name}: {entry.value != null ? formatCount(entry.value) : '—'}
+          {entry.name}: {formatCount(entry.value)}
           {entry.dataKey === 'steps' ? ' steps/day' : ''}
         </p>
       ))}
