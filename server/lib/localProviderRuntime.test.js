@@ -186,23 +186,43 @@ describe('localRuntimeForProvider', () => {
 // is what these guards exist to prevent repeating: a breadcrumb typed into a
 // runtime row goes stale the next time a page moves, and nothing fails.
 describe('LOCAL_RUNTIMES — user-facing copy names its page by route, never by literal', () => {
-  const COPY_FIELDS = ['modelsHint', 'standbyDetail'];
+  // Every user-readable string on a row. `setupStateDetail` is a nested
+  // state -> prose map, so walk it rather than listing its keys — a runtime that
+  // adds a state must inherit the guard, not dodge it.
+  const copyStrings = ([id, runtime]) => ['modelsHint', 'standbyDetail', 'setupStateDetail']
+    .flatMap((field) => {
+      const value = runtime[field];
+      if (typeof value === 'string') return [[`${id}.${field}`, value]];
+      if (value && typeof value === 'object') {
+        return Object.entries(value)
+          .filter(([, nested]) => typeof nested === 'string')
+          .map(([state, nested]) => [`${id}.${field}.${state}`, nested]);
+      }
+      return [];
+    });
   const rows = Object.entries(LOCAL_RUNTIMES);
+  const allCopy = rows.flatMap(copyStrings);
 
   it('writes no breadcrumb into a runtime row', () => {
-    const offenders = rows.flatMap(([id, runtime]) => COPY_FIELDS
-      .filter((field) => typeof runtime[field] === 'string' && runtime[field].includes('→'))
-      .map((field) => `${id}.${field}`));
-    expect(offenders).toEqual([]);
+    expect(allCopy.filter(([, text]) => text.includes('→')).map(([name]) => name)).toEqual([]);
   });
 
   // The token only expands for a runtime that HAS a page; on one with
   // `manageUrl: null` it would ship as a literal `{page}` or as filler prose.
   it('uses the {page} token only where a manage route can name a page', () => {
-    const offenders = rows.flatMap(([id, runtime]) => COPY_FIELDS
-      .filter((field) => typeof runtime[field] === 'string' && runtime[field].includes('{page}') && !runtime.manageUrl)
-      .map((field) => `${id}.${field}`));
+    const pageless = new Set(rows.filter(([, runtime]) => !runtime.manageUrl).map(([id]) => id));
+    const offenders = allCopy
+      .filter(([name, text]) => text.includes('{page}') && pageless.has(name.split('.')[0]))
+      .map(([name]) => name);
     expect(offenders).toEqual([]);
+  });
+
+  // The guard above is only as good as its corpus: if `copyStrings` ever stopped
+  // finding the fields, both assertions would pass vacuously over an empty list.
+  it('actually reads the rows it claims to guard', () => {
+    expect(allCopy.length).toBeGreaterThanOrEqual(rows.length);
+    expect(allCopy.some(([, text]) => text.includes('{page}'))).toBe(true);
+    expect(allCopy.map(([name]) => name)).toContain('vllm.setupStateDetail.empty');
   });
 
   it('takes every manageUrl from the shared map the client reads', () => {

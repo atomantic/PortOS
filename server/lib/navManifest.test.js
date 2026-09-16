@@ -200,6 +200,20 @@ describe('nav contract — Models → Runtimes', () => {
   it.each(['llms', 'ollama', 'lm studio'])('leaves %j on the LLMs catalog page', (spoken) => {
     expect(resolveNavCommand(spoken)?.path).toBe('/models/llms');
   });
+
+  // Two pages in this section are about "runtimes". Before #7414 a bare
+  // "runtimes" landed on the image-to-3D page by suffix match, because nothing
+  // else claimed the word; the local model servers are what a user asking for
+  // runtimes means, so the exact alias wins it now. The 3D page keeps every
+  // qualified form — losing those WOULD be a regression, and the fuzzy matcher
+  // makes that a silent one.
+  it('gives a bare "runtimes" to the model servers', () => {
+    expect(resolveNavCommand('runtimes')?.path).toBe('/models/llms-runtimes');
+  });
+
+  it.each(['3d runtimes', 'image to 3d runtimes'])('keeps %j on the image-to-3D page', (spoken) => {
+    expect(resolveNavCommand(spoken)?.path).toBe('/models/3d');
+  });
 });
 
 // Readiness copy names the page it links to instead of repeating a breadcrumb,
