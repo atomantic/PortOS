@@ -1,5 +1,4 @@
 import {
-  CreditCard,
   Wrench,
   Home,
   Package,

@@ -381,7 +381,9 @@ const USD_CENTS = new Intl.NumberFormat('en-US', { minimumFractionDigits: 2, max
  */
 export function formatCount(n, { fallback = '—' } = {}) {
   const value = roundForDisplay(n, 0);
-  return value === null ? fallback : GROUPED_INTEGER.format(value);
+  // `+ 0` folds the -0 that a negative fraction rounds to (-0.4 → -0), which
+  // Intl would render as the nonsense "-0".
+  return value === null ? fallback : GROUPED_INTEGER.format(value + 0);
 }
 
 /**
@@ -455,13 +457,16 @@ export function formatPercent(value, { decimals = 1, fallback = '—' } = {}) {
 export function formatUsd(value, { signed = false, trimWhole = false, fallback = '—' } = {}) {
   const n = value === null || value === undefined ? 0 : Number(value);
   if (!Number.isFinite(n)) return fallback;
-  // `+ 0` normalizes -0, which Intl renders with a sign (`-0.00`) where the old
-  // `toFixed(2)` did not — a rounded-to-zero saving must not read as a loss.
-  const magnitude = (signed ? Math.abs(n) : n) + 0;
+  // Anything under half a cent renders as zero, and Intl signs it (`-$0.00`)
+  // where the old `toFixed(2)` did not. A saving that rounds away to nothing
+  // must not read as a loss, so snap it onto a true zero and drop the sign with
+  // it — `signed && n < 0` alone would still print the minus.
+  const raw = signed ? Math.abs(n) : n;
+  const magnitude = Math.abs(raw) < 0.005 ? 0 : raw;
   const body = trimWhole && Number.isInteger(magnitude)
     ? GROUPED_INTEGER.format(magnitude)
     : USD_CENTS.format(magnitude);
-  return `${signed && n < 0 ? '-' : ''}$${body}`;
+  return `${signed && n < 0 && magnitude !== 0 ? '-' : ''}$${body}`;
 }
 
 /**

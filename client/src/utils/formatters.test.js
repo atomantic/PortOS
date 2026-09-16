@@ -136,12 +136,16 @@ describe('formatUsd', () => {
     expect(formatUsd(12000, { trimWhole: true })).toBe('$12,000');
   });
 
-  // A saving that rounds to zero produces -0, which Intl signs but `toFixed`
-  // did not — it must not surface as a loss.
+  // A saving that rounds away to nothing must not read as a loss. Intl signs a
+  // negative zero where `toFixed` did not, and `signed` would print the minus
+  // from the ORIGINAL value even once the magnitude has rounded to zero.
   it('never renders a signed zero', () => {
     expect(formatUsd(-0)).toBe('$0.00');
     expect(formatUsd(-0, { trimWhole: true })).toBe('$0');
-    expect(formatUsd(-0, { signed: true })).toBe('$0.00');
+    expect(formatUsd(-0.004)).toBe('$0.00');
+    expect(formatUsd(-0.004, { signed: true })).toBe('$0.00');
+    // Still a loss once it survives rounding.
+    expect(formatUsd(-0.006, { signed: true })).toBe('-$0.01');
   });
 });
 
@@ -165,6 +169,17 @@ describe('formatCount', () => {
     expect(formatCount('')).toBe('—');
     expect(formatCount(NaN)).toBe('—');
     expect(formatCount(null, { fallback: '0' })).toBe('0');
+    expect(formatCount('   ')).toBe('—');
+    expect(formatCount(Infinity)).toBe('—');
+    expect(formatCount(-Infinity)).toBe('—');
+    // `Number(true)` is 1 — a boolean must not render as a count.
+    expect(formatCount(true)).toBe('—');
+  });
+
+  // A negative fraction rounds to -0, which Intl renders as "-0".
+  it('never renders a signed zero', () => {
+    expect(formatCount(-0)).toBe('0');
+    expect(formatCount(-0.4)).toBe('0');
   });
 });
 
