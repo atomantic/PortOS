@@ -89,6 +89,7 @@ import { startMaintenanceRunScheduler } from './maintenanceRun.js';
 import { startSeriesAutopilotScheduler } from './seriesAutopilotScheduler.js';
 import { startCommissionScheduler } from './creativeCommissions/scheduler.js';
 import { startBeeperScheduler } from './beeperScheduler.js';
+import { startEidoverseControllerSupervisor } from './eidoverseControllerRuntime.js';
 import { reconcileOutboxOnBoot } from './beeperOutbox.js';
 import { startBeeperSocket, stopBeeperSocket } from './beeperSocket.js';
 import { startImessageScheduler } from './imessageScheduler.js';
@@ -480,6 +481,13 @@ const startBackgroundServices = ({ spawnerReady, io }) => {
     backfillProjectCommissionIds,
     startCommissionScheduler
   });
+  // Executable Eidoverse world controllers (#7456) — arm the supervisor only
+  // when this install has at least one ARMED controller, so a world nobody has
+  // built in registers nothing and logs nothing. Boot arms a timer and nothing
+  // else: a controller step is synchronous by construction, so the tick path
+  // cannot reach an AI provider at all, and no install steps until its own
+  // cadence elapses.
+  startEidoverseControllerSupervisor().catch(err => logBootstrapFailure('❌ Eidoverse controller supervisor arming failed', err));
   // OpenWorld's historical snapshot scheduler is retired with its UI. The
   // legacy read/capture routes remain available for old clients, but Eidoverse
   // is now the only automatic world projection path.

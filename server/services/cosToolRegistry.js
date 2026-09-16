@@ -28,6 +28,7 @@ import {
   eidoverseChatReadSchema, eidoverseTravelVisitSchema, eidoverseVisitChatSchema, eidoverseVisitLeaveSchema,
 } from '../lib/validation.js';
 import { eidoverseFoundationIdParamSchema, summarizeFoundation } from '../lib/eidoverseFoundations.js';
+import { eidoverseControllerArmSchema, eidoverseControllerIdParamSchema, eidoverseControllerInstallSchema, summarizeControllerInstall } from '../lib/eidoverseControllers.js';
 import { persistentMindChooseNameSchema } from '../lib/persistentMindChosenName.js';
 import { persistentMindProtectMemorySchema } from '../lib/persistentMindMemory.js';
 import { persistentMindThinkingRequestSchema } from '../lib/persistentMindThinkingPresets.js';
@@ -376,7 +377,26 @@ const eidoverseFoundationTools = [
     idempotent: sideEffect === 'read', async: false, confirmation: 'capability-grant' },
   adapter: { kind: 'eidoverse-foundations', operation },
 }));
-const eidoverseTools = [...eidoverseTravelTools, ...eidoverseFoundationTools, eidoverseStatusTool, eidoverseProjectTool, eidoverseAugmentTool, eidoverseSayTool];
+// Installing a controller leaves something RUNNING in the world after the turn
+// ends, which is a different act from building in it during a turn — so it
+// carries its own default-off grant on top of `manageEidoverse`, the same way
+// promotion does. The read beside them needs only `manageEidoverse`: a mind
+// that can build in the world should be able to see what is already ticking in
+// it, and seeing is what makes the writes usable rather than guesswork.
+const eidoverseControllerTools = [
+  ['controllers', 'List the executable world controllers PortOS ships and the ones installed here — each install\'s cadence, whether it is armed, whether its effects reach the world, its tick count, and why the supervisor disarmed it if it did. Read this before installing: `controllerId` must be one of the registry ids it returns.', z.object({}).strict(), ['manageEidoverse'], 'read'],
+  ['install-controller', 'Attach a bounded controller to the private world so it keeps ticking between your wakes. `controllerId` names one of the ids eidoverse.controllers returns — a controller is never a path or code you supply. Every tick is synchronous and provider-free, and `deliverEffects` (default false) decides whether its effects reach the world at all. This is a REQUEST: the result is `outcome: "installed"` only when it landed, and any other outcome means nothing is running — read `reasons`. The first tick is one interval away, never immediate.', eidoverseControllerInstallSchema, ['manageEidoverse', 'installEidoverseControllers'], 'write'],
+  ['arm-controller', 'Pause or resume one installed controller without losing the state it has accumulated. Use this to resume a controller the supervisor disarmed after repeated failures, once you have fixed what it was failing on — re-installing would work too but starts its state over.', eidoverseControllerArmSchema, ['manageEidoverse', 'installEidoverseControllers'], 'write'],
+  ['retire-controller', 'Stop and remove one installed controller by its install id. Retiring deletes the install and its accumulated state; re-installing starts it fresh.', eidoverseControllerIdParamSchema, ['manageEidoverse', 'installEidoverseControllers'], 'write'],
+].map(([operation, description, schema, requiredCapabilities, sideEffect]) => ({
+  type: 'portos_tool', name: `eidoverse.${operation}`, version: COS_TOOL_SCHEMA_VERSION,
+  providerName: providerToolName(`eidoverse.${operation}`), aliases: [providerToolName(`eidoverse.${operation}`)],
+  description, input_schema: zodToOpenApiSchema(schema), output_schema: objectOutputSchema,
+  policy: { scopes: ['mind'], requiredCapabilities, sideEffect,
+    idempotent: sideEffect === 'read', async: false, confirmation: 'capability-grant' },
+  adapter: { kind: 'eidoverse-controllers', operation },
+}));
+const eidoverseTools = [...eidoverseTravelTools, ...eidoverseFoundationTools, ...eidoverseControllerTools, eidoverseStatusTool, eidoverseProjectTool, eidoverseAugmentTool, eidoverseSayTool];
 const thinkingTools = ['mind.thinking-presets', 'mind.request-thinking-preset'].map((name, index) => ({
   type: 'portos_tool', name, version: COS_TOOL_SCHEMA_VERSION,
   providerName: providerToolName(name), aliases: [],
@@ -426,6 +446,7 @@ const normalizeToolCapabilities = (raw) => ({
   chooseThinkingPreset: raw?.chooseThinkingPreset === true,
   adjustLocalContext: raw?.adjustLocalContext === true,
   promoteEidoverseFoundations: raw?.promoteEidoverseFoundations === true,
+  installEidoverseControllers: raw?.installEidoverseControllers === true,
   callToolRecipes: raw?.callToolRecipes === true,
 });
 
@@ -669,6 +690,36 @@ const executeAdapter = async (tool, args, context, authority) => {
     // Summarized for the same reason the list is, and because the candidate
     // envelope on a success is a duplicate of the body the mind already wrote.
     return { ...result, candidate: null, foundation: result.foundation ? summarizeFoundation(result.foundation) : null };
+  }
+  if (tool.adapter.kind === 'eidoverse-controllers') {
+    // Lazy for the same reason the foundations pair is: the runtime drags the
+    // controller registry, the file store and the event scheduler, and only
+    // this tool group reaches them.
+    const runtime = await import('./eidoverseControllerRuntime.js');
+    if (tool.adapter.operation === 'controllers') {
+      const [{ describeControllerDefinitions }, listed] = await Promise.all([
+        import('./eidoverseControllerRegistry.js'),
+        runtime.listEidoverseControllers(),
+      ]);
+      return {
+        available: await describeControllerDefinitions(),
+        counts: listed.counts,
+        installs: listed.installs.map((install) => summarizeControllerInstall(install)),
+      };
+    }
+    if (tool.adapter.operation === 'arm-controller') {
+      const armed = await runtime.setEidoverseControllerArmed(args.id, args.armed);
+      return { ...armed, install: armed.install ? summarizeControllerInstall(armed.install) : null };
+    }
+    if (tool.adapter.operation === 'install-controller') {
+      const result = await runtime.installEidoverseController(args, { installedBy: 'mind' });
+      // State included here and nowhere else: the mind just authored this
+      // config and the initial state is what tells it the controller
+      // understood it. The list projection stays state-free.
+      return { ...result, install: result.install ? summarizeControllerInstall(result.install, { includeState: true }) : null };
+    }
+    const result = await runtime.retireEidoverseController(args.id);
+    return { ...result, install: result.install ? summarizeControllerInstall(result.install) : null };
   }
   if (tool.adapter.kind === 'eidoverse-world') {
     const world = await import('./eidoverseWorld.js');
