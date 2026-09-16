@@ -30,7 +30,9 @@
  * path calls it (root AGENTS.md, AI Provider Usage Policy).
  */
 
+import { isDeepStrictEqual } from 'node:util';
 import { prepareCliSpawn } from '../lib/bufferedSpawn.js';
+import { hasCredentialBootstrap, resolveCliSpawn } from '../lib/credentialBootstrap.js';
 import { commandOutput } from '../lib/commandExists.js';
 import { compareHarnessVersions, parseHarnessModels, parseNpmLatestVersion } from '../lib/harnessOutput.js';
 import { findCommandOnPath } from '../lib/processEnv.js';
@@ -245,6 +247,21 @@ export async function listHarnesses({ fresh = false, run = commandOutput, ...pro
 }
 
 /**
+ * The ONE credential every record this refresh writes agrees on, or null.
+ *
+ * A single probe serves every target, so it can only run under a credential all
+ * of them share: one distinct bootstrap across all targets is unambiguous, and
+ * anything else — a mix of bootstrapped and not, or two different ones — cannot
+ * be served by one spawn and probes bare, exactly as it always did.
+ */
+const soleCredentialBootstrap = (targets) => {
+  const named = targets.filter(hasCredentialBootstrap);
+  if (named.length === 0 || named.length !== targets.length) return null;
+  return named.every((target) => isDeepStrictEqual(target.credentialBootstrap, named[0].credentialBootstrap))
+    ? named[0] : null;
+};
+
+/**
  * Ask a harness which models it knows about, and write the answer to every
  * provider that draws from its own catalog.
  *
@@ -268,15 +285,27 @@ export async function refreshHarnessModels(id, { run = commandOutput, ...probeDe
       updated: [],
     };
   }
+  const findCommand = probeDeps.findCommand || findCommandOnPath;
+
+  // The records this refresh will WRITE, resolved before the probe because the
+  // credential the probe must run under belongs to THEM — not to whichever
+  // card's button was clicked, and not to the ambient account.
+  const targets = providersForHarness(await providerService.listProviders(), runtime).filter(usesHarnessCatalog);
+  const credentialed = soleCredentialBootstrap(targets);
+
   // The SAME injected runner answers the availability probe, so a caller (and a
   // test) drives one child-process boundary rather than two. Cache-respecting:
   // the page rendered from a probe seconds ago, and re-spawning the binary for
   // a 15s worst case ahead of the 45s models probe would double the wait on a
   // user-facing button. A binary that broke since then still refuses below.
-  const findCommand = probeDeps.findCommand || findCommandOnPath;
-  const status = await getProviderRuntimeStatus(runtime.id, { ...probeDeps, probeCommand: run });
-  if (!status?.installed) {
-    return { ok: false, reason: `${runtime.label} is not installed on this host.`, models: [], updated: [] };
+  // Skipped entirely for a credentialed harness: it is reached through its
+  // bootstrap CLI and need not be on PATH, so the probe would spawn a binary to
+  // answer a question it would answer wrongly.
+  if (!credentialed) {
+    const status = await getProviderRuntimeStatus(runtime.id, { ...probeDeps, probeCommand: run });
+    if (!status?.installed) {
+      return { ok: false, reason: `${runtime.label} is not installed on this host.`, models: [], updated: [] };
+    }
   }
 
   // `opencode models` prints from an on-disk catalog OpenCode refreshes on its
@@ -290,24 +319,29 @@ export async function refreshHarnessModels(id, { run = commandOutput, ...probeDe
     console.log(`📚 ${runtime.label} catalog: ${catalog.primed ? 'refreshed' : 'left alone'} — ${catalog.reason}`);
   }
 
-  // Resolve and `prepareCliSpawn` exactly as the version probe does. An
-  // npm-installed harness is a `.cmd` shim on Windows, which `execFile` under
-  // `shell: false` refuses outright — the probe would answer nothing and the
-  // page would tell a signed-in user to go sign in.
-  const resolved = await findCommand(runtime.command);
-  const probe = prepareCliSpawn(resolved || runtime.command, [...runtime.modelsArgs]);
+  // Resolve exactly as the version probe does. An npm-installed harness is a
+  // `.cmd` shim on Windows, which `execFile` under `shell: false` refuses
+  // outright — the probe would answer nothing and the page would tell a
+  // signed-in user to go sign in. A credentialed harness skips the PATH walk
+  // (it need not be there); `resolveCliSpawn` resolves the bootstrap binary's
+  // own shim instead.
+  const resolved = credentialed ? null : await findCommand(runtime.command);
+  const probe = resolveCliSpawn(credentialed, resolved || runtime.command, [...runtime.modelsArgs], process.env);
   const stdout = await run(probe.command, probe.args, { timeoutMs: MODELS_PROBE_TIMEOUT_MS });
   const models = parseHarnessModels(runtime.id, stdout);
   if (models.length === 0) {
+    // Name what RAN, and only send the user to a terminal when a terminal could
+    // help: a credentialed harness mints its own auth and is not something they
+    // can sign in to by hand.
+    const ran = `\`${probe.command} ${probe.args.join(' ')}\` returned no models.`;
     return {
       ok: false,
-      reason: `\`${runtime.command} ${runtime.modelsArgs.join(' ')}\` returned no models. Sign in to ${runtime.label} in a terminal, then try again.`,
+      reason: credentialed ? ran : `${ran} Sign in to ${runtime.label} in a terminal, then try again.`,
       models: [],
       updated: [],
     };
   }
 
-  const targets = providersForHarness(await providerService.listProviders(), runtime).filter(usesHarnessCatalog);
   const updated = [];
   for (const provider of targets) {
     // Hold the record's namespace scope (see `storedNamespaces`). A filter that

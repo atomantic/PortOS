@@ -97,15 +97,49 @@ describe('Provider Service', () => {
     expect(await providerService.getProviderById(created.id)).not.toHaveProperty('credentialBootstrap');
   });
 
-  it('does not pair CLI/TUI modes as one connection when only one carries a credential bootstrap', async () => {
+  it('does not pair CLI/TUI modes as one connection when they name DIFFERENT credential bootstraps', async () => {
     await writeFile(join(TEST_DATA_DIR, 'providers.json'), JSON.stringify({ activeProvider: 'example-tui', providers: {
       example: { id: 'example', name: 'Example CLI', type: 'cli', command: 'example', enabled: false, models: ['a'], credentialBootstrap: { command: 'token-cli' } },
-      'example-tui': { id: 'example-tui', name: 'Example TUI', type: 'tui', command: 'example', enabled: true, models: ['b'] },
+      'example-tui': { id: 'example-tui', name: 'Example TUI', type: 'tui', command: 'example', enabled: true, models: ['b'], credentialBootstrap: { command: 'other-cli' } },
     } }));
-    // Unpaired: neither enablement nor models unify across the two.
+    // Two credentials are two connections: nothing converges, and neither
+    // enablement nor models unify across the two.
     expect((await providerService.getProviderById('example')).enabled).toBe(false);
+    expect((await providerService.getProviderById('example')).credentialBootstrap).toEqual({ command: 'token-cli' });
     await providerService.updateProvider('example-tui', { models: ['c'] });
     expect((await providerService.getProviderById('example')).models).toEqual(['a']);
+  });
+
+  it('converges a pair that carries the bootstrap on only ONE mode', async () => {
+    // The asymmetry the fan-out now prevents can still ARRIVE — a record
+    // written before it, a hand-edited file, a restored backup — and the TUI
+    // mode is what "Launch in Shell" spawns, so the load-time convergence
+    // repairs it rather than leaving the card split and the launch bare.
+    await writeFile(join(TEST_DATA_DIR, 'providers.json'), JSON.stringify({ activeProvider: 'example', providers: {
+      example: { id: 'example', name: 'Example CLI', type: 'cli', command: 'example', enabled: true, models: ['a'], credentialBootstrap: { command: 'token-cli', args: ['run'] } },
+      'example-tui': { id: 'example-tui', name: 'Example TUI', type: 'tui', command: 'example', enabled: true, models: ['a'] },
+    } }));
+    expect((await providerService.getProviderById('example-tui')).credentialBootstrap).toEqual({ command: 'token-cli', args: ['run'] });
+  });
+
+  it('fans a credential bootstrap out to the mode sibling, set and cleared', async () => {
+    // Why the connection's auth has to reach the sibling: see
+    // `sharedModeUpdates`. The TUI mode is what "Launch in Shell" spawns.
+    await writeFile(join(TEST_DATA_DIR, 'providers.json'), JSON.stringify({ activeProvider: 'example', providers: {
+      example: { id: 'example', name: 'Example CLI', type: 'cli', command: 'example', enabled: true, models: ['a'], args: ['--print'] },
+      'example-tui': { id: 'example-tui', name: 'Example TUI', type: 'tui', command: 'example', enabled: true, models: ['a'], args: [] },
+    } }));
+    const bootstrap = { command: 'token-cli', args: ['run'] };
+    await providerService.updateProvider('example', { credentialBootstrap: bootstrap });
+    expect((await providerService.getProviderById('example-tui')).credentialBootstrap).toEqual(bootstrap);
+    // Mode-specific argv still never crosses over.
+    expect((await providerService.getProviderById('example-tui')).args).toEqual([]);
+    // Cleared the same way it was set: the key is dropped on BOTH records, so
+    // neither reads as a stored `null` the pairing test would treat as a
+    // different value from the other's absent key.
+    await providerService.updateProvider('example', { credentialBootstrap: null });
+    expect(await providerService.getProviderById('example')).not.toHaveProperty('credentialBootstrap');
+    expect(await providerService.getProviderById('example-tui')).not.toHaveProperty('credentialBootstrap');
   });
 
   it.skipIf(process.platform === 'win32')('refreshes Pi models and distinguishes authentication from probe failure', async () => {
@@ -127,6 +161,28 @@ describe('Provider Service', () => {
     expect(await providerService._fetchPiModels({ command })).toEqual([]);
     await emit('No models available. Use /login to authenticate.', 1);
     expect(await providerService._fetchPiModels({ command })).toEqual([]);
+  });
+
+  it.skipIf(process.platform === 'win32')('probes the catalog through the credential bootstrap, not the bare harness', async () => {
+    // The harness itself is never on PATH here: it exists only behind the
+    // bootstrap CLI, which is the point — a probe that spawned the bare
+    // harness would fail outright rather than answer for the credential the
+    // bootstrap mints. The stub refuses any argv but the wrapped shape.
+    const bootstrap = join(TEST_DATA_DIR, 'token-cli');
+    await writeFile(bootstrap, [
+      '#!/usr/bin/env node',
+      "const argv = process.argv.slice(2).join(' ');",
+      "if (argv !== 'run pi-harness -- --list-models') { console.error('unexpected argv: ' + argv); process.exit(9); }",
+      "console.log('provider model context max-out thinking images');",
+      "console.log('example model-a 200K 32K yes yes');",
+    ].join('\n'));
+    await chmod(bootstrap, 0o755);
+
+    const provider = await providerService.createProvider({
+      name: 'Bootstrapped Pi', type: 'cli', command: join(TEST_DATA_DIR, 'pi'), models: [],
+      credentialBootstrap: { command: bootstrap, args: ['run'], harnessId: 'pi-harness', argsSeparator: '--' },
+    });
+    expect((await providerService.refreshProviderModels(provider.id)).models).toEqual(['example/model-a']);
   });
 
   it('should create a provider', async () => {

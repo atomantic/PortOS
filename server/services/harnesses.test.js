@@ -233,6 +233,38 @@ describe('refreshHarnessModels', () => {
     expect(opencodeCatalog.primeOpencodeCatalogCache).toHaveBeenCalledTimes(1);
   });
 
+  // The credential comes from the records the refresh will WRITE, so BOTH
+  // buttons (the provider card's and the Harnesses page's) probe under it. A
+  // bootstrapped harness reaches its binary through that CLI and need not be on
+  // PATH at all, which is why the "not installed" refusal steps aside.
+  it('probes under the credential its write targets share, even when the harness is not on PATH', async () => {
+    const run = vi.fn(async (command, args) => (args.includes('models') ? OPENCODE_MODELS : ''));
+    const bootstrap = { command: 'token-cli', args: ['run'], harnessId: 'opencode-harness', argsSeparator: '--' };
+    providerService.listProviders.mockResolvedValue([
+      { id: 'boot-cli', type: 'cli', command: 'opencode', models: [], credentialBootstrap: bootstrap },
+      { id: 'boot-tui', type: 'tui', command: 'opencode', models: [], credentialBootstrap: { ...bootstrap } },
+    ]);
+
+    const result = await refreshHarnessModels('opencode', { run, findCommand: async () => null });
+
+    expect(result.ok).toBe(true);
+    expect(run).toHaveBeenCalledWith('token-cli', ['run', 'opencode-harness', '--', 'models'], expect.anything());
+  });
+
+  // One probe cannot serve two credentials, so a mix runs bare rather than
+  // handing one record's token to another record's refresh.
+  it('probes bare when only some write targets carry a bootstrap', async () => {
+    const run = vi.fn(async (command, args) => (args[0] === 'models' ? OPENCODE_MODELS : '1.18.27'));
+    providerService.listProviders.mockResolvedValue([
+      { id: 'boot-cli', type: 'cli', command: 'opencode', models: [], credentialBootstrap: { command: 'token-cli' } },
+      { id: 'plain-cli', type: 'cli', command: 'opencode', models: [] },
+    ]);
+
+    await refreshHarnessModels('opencode', { run, ...found });
+
+    expect(run).toHaveBeenCalledWith('/example/opencode', ['models'], expect.anything());
+  });
+
   it('writes the harness catalog only to providers that draw from it', async () => {
     const run = vi.fn(async (command, args) => (args[0] === 'models' ? OPENCODE_MODELS : '1.18.27'));
 

@@ -1,3 +1,4 @@
+import { composeBootstrapSpawn } from './internal/credentialBootstrap.js';
 import { expandModePair, providerModeGroups, sharedModeUpdates, unifyProviderModes } from './internal/providerModes.js';
 import { readFile, rename } from 'fs/promises';
 import { existsSync } from 'fs';
@@ -129,6 +130,21 @@ function escapeCmdMetacharsIfUnquoted(value) {
   const str = String(value);
   if (NEEDS_NODE_QUOTING_RE.test(str)) return str;
   return str.replace(CMD_METACHAR_RE, '^$&');
+}
+
+/**
+ * What a model-catalog probe should actually spawn for a provider, and the
+ * label its failure messages must name.
+ *
+ * The bootstrap wrap belongs on EVERY probe (a bare harness runs with no
+ * credential and answers for the wrong account — see
+ * `internal/credentialBootstrap.js`), and every message has to name what really
+ * ran or a missing bootstrap binary reports itself as the harness failing.
+ * Stating both once keeps the next vendor fetcher from spawning bare.
+ */
+function resolveProbeSpawn(provider, defaultBin, args) {
+  const spawned = composeBootstrapSpawn(provider, provider?.command || defaultBin, args);
+  return { ...spawned, label: `'${spawned.command} ${spawned.args.join(' ')}'` };
 }
 
 // windowsHide is applied here rather than by importing server/lib/childProcess.js:
@@ -824,12 +840,23 @@ export function createProviderService(config = {}) {
       // "unchanged" on a PATCH). Drop the key rather than store the null, so
       // the record reads exactly like one that never had a bootstrap — the
       // invariant `createProvider` keeps by only writing the key when named.
-      if (provider.credentialBootstrap === null) delete provider.credentialBootstrap;
+      // Applied to the fanned-out siblings too: a cleared sibling that kept a
+      // stored `null` would no longer read as "never had one".
+      const dropClearedBootstrap = (record) => {
+        if (record.credentialBootstrap === null) delete record.credentialBootstrap;
+      };
+      dropClearedBootstrap(provider);
 
+      // Grouped BEFORE the edit lands: a bootstrap set on one mode is exactly
+      // the value `providerModeGroups` pairs on, so reading the group after
+      // would find the siblings already split and skip the fan-out that keeps
+      // them together.
       const group = providerModeGroups(Object.values(data.providers)).find(modes => modes.some(mode => mode.id === id));
       data.providers[id] = provider;
       for (const sibling of group || []) {
-        if (sibling.id !== id) Object.assign(sibling, sharedModeUpdates(updates, sibling));
+        if (sibling.id === id) continue;
+        Object.assign(sibling, sharedModeUpdates(updates, sibling));
+        dropClearedBootstrap(sibling);
       }
       await saveProviders(data);
       return provider;
@@ -899,9 +926,8 @@ export function createProviderService(config = {}) {
         const lookup = isWin32 ? 'where' : 'which';
         // Probe what PortOS actually spawns: the credential-bootstrap CLI in
         // front of the harness when one is named (the harness may then live
-        // behind it, off PATH), else the harness itself. Inline rather than
-        // imported — this directory stays self-contained.
-        const probeCommand = provider.credentialBootstrap?.command || provider.command;
+        // behind it, off PATH), else the harness itself.
+        const probeCommand = composeBootstrapSpawn(provider, provider.command, []).command;
         const { stdout } = await execFileAsync(lookup, [probeCommand], { windowsHide: true })
           .catch(() => ({ stdout: '', stderr: 'not found' }));
 
@@ -1544,8 +1570,9 @@ export function createProviderService(config = {}) {
      * @returns {Promise<string[]>} parsed ids; empty only when explicitly recognized
      */
     async _execCliModelList(provider, defaultBin, parse, listArgs = ['models'], isEmptyCatalog = () => false) {
-      const bin = provider?.command || defaultBin;
-      const { command, args } = prepareWindowsSafeSpawn(bin, listArgs);
+      const spawned = resolveProbeSpawn(provider, defaultBin, listArgs);
+      const probe = spawned.label;
+      const { command, args } = prepareWindowsSafeSpawn(spawned.command, spawned.args);
       const pending = execFileAsync(command, args, {
         timeout: 15000,
         env: { ...process.env, ...provider?.envVars },
@@ -1562,12 +1589,12 @@ export function createProviderService(config = {}) {
       const { stdout } = await pending.catch((err) => {
         const output = `${err.stdout || ''}\n${err.stderr || ''}`;
         if (!err.killed && isEmptyCatalog(output)) return { stdout: output };
-        throw new Error(`'${bin} ${listArgs.join(' ')}' failed: ${err?.message || 'could not run the binary'}`);
+        throw new Error(`${probe} failed: ${err?.message || 'could not run the binary'}`);
       });
 
       const listed = parse(stdout);
       if (listed.length === 0 && !isEmptyCatalog(stdout)) {
-        throw new Error(`'${bin} ${listArgs.join(' ')}' returned no model ids`);
+        throw new Error(`${probe} returned no model ids`);
       }
       return listed;
     },
@@ -1611,15 +1638,16 @@ export function createProviderService(config = {}) {
      * consistent with _execCliModelList and _fetchOllamaToolCapableModels.
      */
     async _fetchCodexModels(provider) {
-      const bin = provider?.command || 'codex';
+      const spawned = resolveProbeSpawn(provider, 'codex', ['app-server']);
+      const probe = spawned.label;
       // On Windows, npm places a POSIX `codex` stub beside its runnable
       // `codex.cmd` shim. `spawn('codex')` can select the former (or fail to
       // resolve it entirely), even though the provider passed its capability
       // check. Resolve the extension-bearing shim before the safe cmd.exe
       // wrapper below, matching the other CLI probes in this module.
       const childEnv = { ...process.env, ...provider?.envVars };
-      const resolvedBin = resolveWindowsExecutable(bin, process.platform === 'win32', childEnv) || bin;
-      const { command, args } = prepareWindowsSafeSpawn(resolvedBin, ['app-server']);
+      const resolvedBin = resolveWindowsExecutable(spawned.command, process.platform === 'win32', childEnv) || spawned.command;
+      const { command, args } = prepareWindowsSafeSpawn(resolvedBin, spawned.args);
       return new Promise((resolve, reject) => {
         let settled = false;
         let child;
@@ -1635,7 +1663,7 @@ export function createProviderService(config = {}) {
         };
 
         const timer = setTimeout(() => {
-          settle(new Error(`'${bin} app-server' timed out waiting for model catalog`));
+          settle(new Error(`${probe} timed out waiting for model catalog`));
         }, 15000);
         timer.unref?.();
 
@@ -1646,18 +1674,18 @@ export function createProviderService(config = {}) {
             windowsHide: true,
           });
         } catch (err) {
-          settle(new Error(`'${bin} app-server' failed to spawn: ${err?.message || err}`));
+          settle(new Error(`${probe} failed to spawn: ${err?.message || err}`));
           return;
         }
 
         child.on('error', (err) => {
-          settle(new Error(`'${bin} app-server' failed: ${err?.message || err}`));
+          settle(new Error(`${probe} failed: ${err?.message || err}`));
         });
 
         child.stdin?.on('error', () => {});
 
         child.on('exit', (code, signal) => {
-          settle(new Error(`'${bin} app-server' exited prematurely with code ${code ?? signal}`));
+          settle(new Error(`${probe} exited prematurely with code ${code ?? signal}`));
         });
 
         let buffer = '';
@@ -1675,7 +1703,7 @@ export function createProviderService(config = {}) {
                 child.stdin?.write(JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'model/list', params: {} }) + '\n');
               } else if (msg.id === 2) {
                 if (msg.error) {
-                  settle(new Error(`'${bin} app-server' model/list error: ${msg.error.message || JSON.stringify(msg.error)}`));
+                  settle(new Error(`${probe} model/list error: ${msg.error.message || JSON.stringify(msg.error)}`));
                   return;
                 }
                 const rawModels = msg.result?.data || msg.result?.models || [];
@@ -1684,7 +1712,7 @@ export function createProviderService(config = {}) {
                   .map((m) => (typeof m === 'string' ? m : m?.id || m?.model))
                   .filter(Boolean);
                 if (ids.length === 0) {
-                  settle(new Error(`'${bin} app-server' returned no model ids`));
+                  settle(new Error(`${probe} returned no model ids`));
                   return;
                 }
                 settle(null, [...new Set(ids)]);
