@@ -6,6 +6,7 @@ import { getClaudeCodeUsage, systemTimeZone } from './claudeCodeUsage.js';
 import { commandBasename } from '../lib/providerModels.js';
 import { PROVIDER_FAMILIES, familyForProvider } from '../lib/providerFamilies.js';
 import { scrapeTuiUsage } from '../lib/tuiUsageScrape.js';
+import { applyCredentialBootstrap } from '../lib/credentialBootstrap.js';
 import { createStaleWhileRevalidate, PENDING, WAIT } from '../lib/staleWhileRevalidate.js';
 import { parseHumanReset, normalizeResetAt } from '../lib/quotaReset.js';
 import { compareNewerWins, parseTsMs } from '../lib/lwwTimestamp.js';
@@ -698,7 +699,11 @@ function makeTuiUsageFetcher({ id, binary, slashCommand, label, parse, name, rea
     // doesn't serve the previous account's quota from a stale entry.
     const cacheKey = `${id}:${command}:${provider.type}:${JSON.stringify(env)}:${JSON.stringify(args)}`;
     const card = await scrapeCache.read(cacheKey, async () => {
-      const text = await scrapeTuiUsage({ command, args, slashCommand, env, readyMarker });
+      // The scrape spawns the provider like any other site: wrapped by its
+      // credential bootstrap when configured (credentialBootstrap.js), or the
+      // TUI comes up unauthenticated and never renders a usage panel.
+      const spawned = applyCredentialBootstrap(provider, command, args);
+      const text = await scrapeTuiUsage({ command: spawned.command, args: spawned.args, slashCommand, env, readyMarker });
       // The panel's reset is relative (agy) or zone-less (grok) — both resolve
       // against the read's own clock and the zone the child rendered in.
       const { limits, plan } = parse(text, { now: Date.now(), timezone: tz });

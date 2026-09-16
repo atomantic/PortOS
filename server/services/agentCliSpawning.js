@@ -234,8 +234,9 @@ export async function spawnDirectly({
   // A credential-bootstrap-configured provider spawns its bootstrap CLI in
   // front of the harness instead of the harness directly — see
   // credentialBootstrap.js. Applied AFTER prepareCliPrompt, which still keys
-  // prompt-delivery convention off the harness's own command.
-  const { command: bootstrappedCommand, args: bootstrappedArgs } = applyCredentialBootstrap(provider, cliConfig.command, deliveredArgs);
+  // prompt-delivery convention off the harness's own command — and never under
+  // a public-review `safetyProfile`, whose enforced recipe is the sandbox.
+  const { command: bootstrappedCommand, args: bootstrappedArgs } = applyCredentialBootstrap(provider, cliConfig.command, deliveredArgs, { safetyProfile });
   const preparedSpawn = prepareCliSpawn(bootstrappedCommand, bootstrappedArgs, childEnv);
   const isolatedSpawn = isPrivateSecurityTask(task)
     ? await import('../lib/privateSecuritySandbox.js')

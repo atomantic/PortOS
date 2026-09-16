@@ -162,8 +162,9 @@ export function runCliProviderPrompt(args = {}) {
     // `resolveCliSpawn` also applies a credential-bootstrap wrap
     // (credentialBootstrap.js) when configured — applied AFTER
     // prepareCliPrompt (above), which still keys prompt-delivery convention
-    // off the harness's own command, not the bootstrap CLI's.
-    const { command: spawnCommand, args: wrappedArgs } = resolveCliSpawn(provider, provider.command, spawnArgs, childEnv);
+    // off the harness's own command, not the bootstrap CLI's — and never under
+    // a public-review `safetyProfile`, whose enforced recipe is the sandbox.
+    const { command: spawnCommand, args: wrappedArgs } = resolveCliSpawn(provider, provider.command, spawnArgs, childEnv, { safetyProfile });
     const child = spawn(spawnCommand, wrappedArgs, {
       cwd: effectiveCwd,
       stdio: ['pipe', 'pipe', 'pipe'],

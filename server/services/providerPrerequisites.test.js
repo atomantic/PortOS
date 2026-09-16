@@ -186,6 +186,21 @@ describe('getProviderPrerequisiteReadinessMap', () => {
     expect(getProviderRuntimeStatuses).not.toHaveBeenCalled();
   });
 
+  // What gets spawned is the bootstrap binary; the harness may sit behind it,
+  // off PATH. Probing the harness would report green for a run that ENOENTs
+  // and red for one that works.
+  it('probes the credential-bootstrap binary instead of the harness when one is configured', async () => {
+    const present = basename(process.execPath);
+    const env = { PATH: dirname(process.execPath) };
+    await expect(getProviderPrerequisiteReadinessMap([
+      codex({ id: 'bootstrap-present', command: 'harness-not-on-path', envVars: env, credentialBootstrap: { command: present } }),
+      codex({ id: 'bootstrap-missing', command: present, envVars: env, credentialBootstrap: { command: 'token-cli-not-on-path' } }),
+    ])).resolves.toMatchObject({
+      'bootstrap-present': { status: 'ready', reasonCodes: [] },
+      'bootstrap-missing': { status: 'blocked', reasonCodes: ['runtime'] },
+    });
+  });
+
   it('defers app-relative commands in the catalog and resolves them from the selected workspace', async () => {
     const provider = codex({ id: 'app-local', command: `./${basename(process.execPath)}` });
 

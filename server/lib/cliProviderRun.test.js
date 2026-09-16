@@ -126,6 +126,23 @@ describe('runCliProviderPrompt', () => {
     expect(child.forgeToken).toBeNull();
   });
 
+  it.skipIf(process.platform === 'win32')('runs the enforced no-tool recipe on the harness itself, never through a configured credential bootstrap', async () => {
+    const { mkdtemp, writeFile, rm } = await import('node:fs/promises');
+    const { tmpdir } = await import('node:os');
+    const { join } = await import('node:path');
+    const dir = await mkdtemp(join(tmpdir(), 'review-cli-bootstrap-'));
+    const command = join(dir, 'claude');
+    await writeFile(command, '#!/usr/bin/env node\nprocess.stdin.resume(); process.stdin.on("end", () => process.stdout.write(JSON.stringify({ args: process.argv.slice(2) })));', { mode: 0o755 });
+    // The bootstrap binary does not exist: had the wrap applied, this spawn
+    // would ENOENT instead of reaching the harness script above.
+    const provider = { ...cli('example-claude'), command, credentialBootstrap: { command: join(dir, 'token-cli-missing'), args: ['run'] } };
+    const result = await runCliProviderPrompt({
+      provider, model: 'pinned-model', prompt: 'untrusted diff', cwd: dir, safetyProfile: 'public-review-gate',
+    }).finally(() => rm(dir, { recursive: true, force: true }));
+    expect(result.error).toBeUndefined();
+    expect(JSON.parse(result.text).args).toEqual(expect.arrayContaining(['--restricted', '--tools', '']));
+  });
+
   it('rejects a missing command without spawning', async () => {
     const result = await runCliProviderPrompt({ provider: { id: 'x' }, prompt: 'hi' });
     expect(result.error).toMatch(/no command/i);

@@ -769,6 +769,11 @@ export function createProviderService(config = {}) {
         ...updates,
         id
       };
+      // The editor clears a bootstrap with an explicit `null` (absent means
+      // "unchanged" on a PATCH). Drop the key rather than store the null, so
+      // the record reads exactly like one that never had a bootstrap — the
+      // invariant `createProvider` keeps by only writing the key when named.
+      if (provider.credentialBootstrap === null) delete provider.credentialBootstrap;
 
       const group = providerModeGroups(Object.values(data.providers)).find(modes => modes.some(mode => mode.id === id));
       data.providers[id] = provider;
@@ -841,7 +846,12 @@ export function createProviderService(config = {}) {
         // Use execFile (no shell) so user-configured `provider.command` cannot
         // inject extra shell commands via metacharacters.
         const lookup = isWin32 ? 'where' : 'which';
-        const { stdout } = await execFileAsync(lookup, [provider.command], { windowsHide: true })
+        // Probe what PortOS actually spawns: the credential-bootstrap CLI in
+        // front of the harness when one is named (the harness may then live
+        // behind it, off PATH), else the harness itself. Inline rather than
+        // imported — this directory stays self-contained.
+        const probeCommand = provider.credentialBootstrap?.command || provider.command;
+        const { stdout } = await execFileAsync(lookup, [probeCommand], { windowsHide: true })
           .catch(() => ({ stdout: '', stderr: 'not found' }));
 
         // `where` lists every match (one per line); `which` prints one. Take the
@@ -849,7 +859,7 @@ export function createProviderService(config = {}) {
         const commandPath = stdout.split(/\r?\n/).map(s => s.trim()).find(Boolean) || '';
 
         if (!commandPath) {
-          return { success: false, error: `Command '${provider.command}' not found in PATH` };
+          return { success: false, error: `Command '${probeCommand}' not found in PATH` };
         }
 
         // On Windows, `where` can return the wrong file: npm ships an
@@ -897,7 +907,7 @@ export function createProviderService(config = {}) {
         if (!everSpawned) {
           return {
             success: false,
-            error: `Resolved '${provider.command}' to ${invokePath} but it could not be executed (a Windows .cmd/.bat npm shim is not directly spawnable by the agent runner)`,
+            error: `Resolved '${probeCommand}' to ${invokePath} but it could not be executed (a Windows .cmd/.bat npm shim is not directly spawnable by the agent runner)`,
           };
         }
 

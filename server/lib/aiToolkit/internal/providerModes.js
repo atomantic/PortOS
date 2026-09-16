@@ -2,6 +2,8 @@
 // Pair only conventional sibling IDs with the same harness and connection.
 import { isDeepStrictEqual } from 'node:util';
 
+const MODE_KEY_DEFAULTS = { endpoint: '', apiKey: '', envVars: {}, credentialBootstrap: null };
+
 export function providerModeGroups(providers) {
   const byId = new Map(providers.map(provider => [provider.id, provider]));
   const paired = new Set();
@@ -10,8 +12,10 @@ export function providerModeGroups(providers) {
     const stem = tui.id.replace(/-tui(?=-|$)/, '');
     const cli = [byId.get(stem), byId.get(`${stem}-cli`)].find(provider => provider?.type === 'cli');
     if (!cli || paired.has(cli.id) || !cli.command || cli.command !== tui.command) continue;
-    if (!['endpoint', 'apiKey', 'envVars'].every(key =>
-      isDeepStrictEqual(cli[key] || (key === 'envVars' ? {} : ''), tui[key] || (key === 'envVars' ? {} : '')))) continue;
+    // `credentialBootstrap` is the connection's auth when there is no apiKey,
+    // so siblings that disagree on it are two connections, not one.
+    if (!['endpoint', 'apiKey', 'envVars', 'credentialBootstrap'].every(key =>
+      isDeepStrictEqual(cli[key] || MODE_KEY_DEFAULTS[key], tui[key] || MODE_KEY_DEFAULTS[key]))) continue;
     groups.push([cli, tui]);
     paired.add(cli.id);
     paired.add(tui.id);
