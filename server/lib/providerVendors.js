@@ -65,6 +65,7 @@ import {
   isCursorProvider,
   isClaudeCommand,
   hasModelFlag,
+  argvHasFlag,
   resolveInjectedTuiModel,
   resolveClaudeCliModel,
   buildCodexStartupArgs,
@@ -350,10 +351,35 @@ function appendOpencodeModel(args, provider, model) {
 
 const opencodeSpawnConfig = (provider, args) => ({ command: provider?.command || 'opencode', args, stdinMode: 'prompt' });
 
+/**
+ * Pin OpenCode's tool-enabled `build` agent unless the argv already selects one.
+ *
+ * Unlike every other vendor here, OpenCode's ROLE — not just its permissions —
+ * is argv state, and the seeded records ship `args: []` (TUI) / `args: ["run"]`
+ * (headless). A bare invocation therefore opens in whatever agent that install
+ * defaults to, which is how a completion run came up as a read-only specialist
+ * and refused to write its own sentinel (#7405 — the contract it could not
+ * reconcile is `SENTINEL_WRITE_PERMISSION_NOTE` in promptSections/completion.js).
+ * Argv, not `OPENCODE_CONFIG_CONTENT`: that env var is stripped for a
+ * gateway-backed wrapper (`cliChildEnv.js`), and a `data.reference` seed edit
+ * would never reach an install's already-stored record.
+ *
+ * Idempotent on `--agent`, which is what lets the public-review recipes keep
+ * their `--agent plan` while sharing these builders.
+ *
+ * @param {string[]} args
+ * @returns {string[]}
+ */
+const ensureOpencodeAgent = (args) =>
+  argvHasFlag(args, ['--agent']) ? args : [...args, '--agent', OPENCODE_BUILD_AGENT];
+
 function opencodeCliArgs(baseArgs, { model, provider }) {
   const args = baseArgs.includes('run') ? [...baseArgs] : ['run', ...baseArgs];
-  return appendOpencodeModel(args, provider, model);
+  return ensureOpencodeAgent(appendOpencodeModel(args, provider, model));
 }
+
+/** `applyCommandDefaults` arm — both TUI spawn paths share it, so they can't drift. */
+const ensureOpencodeTuiArgs = (args = []) => ensureOpencodeAgent([...args]);
 
 /**
  * An OpenCode wrapper this install can actually run the tool-free gate on.
@@ -434,6 +460,7 @@ const OPENCODE = {
   // No dedicated matchCliProvider — matches by command, same as matchCommand
   // (buildVendorCliArgs/buildVendorSpawnConfig fall back to matchCommand when
   // matchCliProvider is absent).
+  tuiArgs: ensureOpencodeTuiArgs,
   cliArgs: opencodeCliArgs,
   spawnArgs: defaultSpawnArgs(opencodeCliArgs, 'opencode'),
   publicReview: {

@@ -1518,9 +1518,12 @@ describe('buildLightContextPrompt', () => {
       expect(prompt).toMatch(/READ THAT FILE/);
       expect(prompt).toMatch(/\/data\/slashdo-resolved\/local-agent-review-loop\.md/);
       expect(prompt).not.toMatch(/RECIPE HEADER/);
-      // The fixed review-blocked publication/merge contract adds prose to the
-      // prompt, but the 40KB recipe itself must still stay in the staged file.
-      expect(prompt.replace(MANDATORY_DISPATCH_HINT_GUIDANCE, '').length).toBeLessThan(25_000);
+      // The fixed review-blocked publication/merge contract and the sentinel
+      // write-permission note (#7405) both add prose to the prompt, but the
+      // 40KB recipe itself must still stay in the staged file — which is the
+      // only thing this ceiling is measuring, so it carries growth headroom
+      // rather than pinning today's byte count.
+      expect(prompt.replace(MANDATORY_DISPATCH_HINT_GUIDANCE, '').length).toBeLessThan(27_000);
     });
 
     it('quotes a hostile branch ref inert in the PR-create command line', () => {
@@ -1788,6 +1791,54 @@ describe('buildLightContextPrompt', () => {
       // reference-watch runs never signaled completion).
       expect(prompt).toMatch(/\.agent-done/);
       expect(prompt).toMatch(/watches this sentinel/);
+    });
+
+    // #7405 — a run read its HOST's read-only role as covering the sentinel too
+    // ("the edits/sentinel can't happen here"), then hunted for the path in
+    // `runner-state.json` / `state.json` because a SIBLING run's agent id was
+    // visible in the shared checkout's branch state. It stalled on a question
+    // an unattended run has nobody to answer. The full account is on
+    // SENTINEL_WRITE_PERMISSION_NOTE in promptSections/completion.js.
+    describe('sentinel-write permission (#7405)', () => {
+      const SENTINEL_PATH = '/shared-checkout/.agent-done-agent-07ddbb85';
+
+      const completionPrompt = (metadata = {}) => buildLightContextPrompt(
+        makeTask({ metadata }),
+        '/shared-checkout', null, isTruthyMeta,
+        { isTui: true, agentId: 'agent-07ddbb85', providerId: 'opencode-mtplx-tui', providerCommand: 'opencode' });
+
+      it('gives a worktree-less TUI completion run one canonical sentinel path, no read-only banner, and permission to write it', () => {
+        const prompt = completionPrompt();
+        // The path is agent-scoped and derived from THIS run's cwd + id, so a
+        // sibling agent id elsewhere in the shared checkout cannot change it.
+        expect(prompt).toContain(SENTINEL_PATH);
+        // EXACTLY one — a second candidate is what sent the stalled run hunting
+        // through state files instead of writing the file it was handed.
+        expect([...new Set(prompt.match(/[\w/.-]*\.agent-done[\w.-]*/g))]).toEqual([SENTINEL_PATH]);
+        expect(prompt).not.toMatch(/## Read-Only Task/);
+        // No second place to look the path up.
+        expect(prompt).toMatch(/Do NOT look one up in `runner-state\.json`, `state\.json`, a branch name, or a worktree name/);
+      });
+
+      // The boundary contract, not the section helper: every TUI task shape
+      // that PRINTS a sentinel path must also say the write is permitted.
+      // `buildAuditOutputCompletionSection` proves the hazard is real — it
+      // interpolates a path and carries no note of its own, and is safe only
+      // because it is appended after a section that does.
+      it.each([
+        ['plain completion', {}],
+        ['read-only', { readOnly: true }],
+        ['no-code / API action', { noCodeOutput: true }],
+        ['reasoning-only worktree', { discardWorktree: true }],
+        ['self-managed claim flow', { claimFlow: true }],
+      ])('pairs the sentinel path with the write permission for a %s task', (_label, metadata) => {
+        const prompt = completionPrompt(metadata);
+        expect(prompt).toContain(SENTINEL_PATH);
+        expect(prompt).toMatch(/Writing that one file is ALWAYS permitted/);
+        // The carve-out has to name the rules it overrides, or a section whose
+        // own banner forbids edits still reads as a contradiction.
+        expect(prompt).toMatch(/no read-only, do-not-modify, or restricted-session rule applies to it/);
+      });
     });
 
     it('read-only on a non-TUI (CLI) provider gets the bare notice, no sentinel', () => {
