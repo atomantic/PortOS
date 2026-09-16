@@ -134,4 +134,19 @@ describe('ProviderForm planned context window', () => {
     renderForm({ provider: daemonProvider, daemonReadiness: { contextWindows: null } });
     expect(plannedContext()).toBe('Budgeter uses 128K ctx');
   });
+
+  it('never writes the observed window back to the record on Save', async () => {
+    // The hard constraint from #7441: the observation describes the process
+    // running right now, so relaunching the daemon at a different `-c` would
+    // make a persisted copy a lie. It reaches the display-only
+    // `capabilityProvider` and must not ride a Save from there.
+    renderForm({
+      provider: daemonProvider,
+      daemonReadiness: { contextWindows: { 'qwen3.8-27b': 32768 } },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(api.updateProvider).toHaveBeenCalled());
+    const [, payload] = api.updateProvider.mock.calls[0];
+    expect(payload).not.toHaveProperty('modelContextWindows');
+  });
 });
