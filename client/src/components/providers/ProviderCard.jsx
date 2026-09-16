@@ -11,6 +11,7 @@
  * and which section the page filed the card under can never disagree.
  */
 
+import { useState } from 'react';
 import { hardwareUnavailableReason } from '../../utils/systemCapabilities';
 import { Link } from 'react-router';
 import { ExternalLink, Network, Terminal } from 'lucide-react';
@@ -41,6 +42,7 @@ import { isHttpsUrl } from '../../utils/urlNormalize';
 import ProviderRuntimeStatus from './ProviderRuntimeStatus';
 import ProviderReadiness from './ProviderReadiness';
 import { CodexRoutingNotice, GatewayKeyHint } from './ProviderNotices';
+import InlineConfirmRow from '../ui/InlineConfirmRow';
 
 // One phrasing for "this command isn't on the CoS Agent Runner's allowlist".
 // The editor states the same thing in its own inline banner, in prose.
@@ -124,8 +126,15 @@ export default function ProviderCard({
   onCodexCopyCode,
   onCodexEnable,
 }) {
+  // Deleting a provider is not undoable and the button sits in the same row as
+  // Test/Edit, so it arms an inline confirm row rather than firing immediately.
+  // (Inline confirm, not a two-click-arm button — see client/src/AGENTS.md.)
+  // One card, one record: a plain boolean, not the id-keyed useConfirmDelete
+  // that a component owning several rows needs.
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
   const modes = (provider.executionModes || []).map(mode => providersById?.[mode.id]).filter(Boolean);
   const unified = modes.length > 1;
+  const displayName = unified ? provider.name.replace(/\b(CLI|TUI)\b\s*/i, '').trim() : provider.name;
   const shellProvider = unified ? modes.find(isTuiProvider) : provider;
   const style = CARD_STATE_STYLES[cardState.state];
   // Non-blocking: it never touches `cardState`, only what the card SAYS about
@@ -168,7 +177,7 @@ export default function ProviderCard({
           to split, and it is narrower than the viewport by the sidebar. */}
       <div className="flex flex-col @2xl:flex-row @2xl:items-start justify-between gap-3">
         <div className="flex flex-wrap items-center gap-2 min-w-0">
-          <h3 className="text-lg font-semibold text-white">{unified ? provider.name.replace(/\b(CLI|TUI)\b\s*/i, '').trim() : provider.name}</h3>
+          <h3 className="text-lg font-semibold text-white">{displayName}</h3>
           <span className={`text-xs px-2 py-0.5 rounded ${providerTypeClass(provider.type)}`}>
             {unified ? 'CLI / TUI' : provider.type.toUpperCase()}
           </span>
@@ -339,18 +348,37 @@ export default function ProviderCard({
             Edit
           </button>}
 
-          <button
-            onClick={() => onDelete(provider.id)}
-            className="px-3 py-1.5 text-sm bg-port-error/20 text-port-error hover:bg-port-error/30 rounded transition-colors"
-          >
-            Delete
-          </button>
+          {!confirmingDelete && (
+            <button
+              onClick={() => setConfirmingDelete(true)}
+              className="px-3 py-1.5 text-sm bg-port-error/20 text-port-error hover:bg-port-error/30 rounded transition-colors"
+            >
+              Delete
+            </button>
+          )}
         </div>
       </div>
 
       {/* Card body — full width, below the header row rather than beside the
           action buttons. */}
       <div className="mt-3 space-y-2">
+        {/* Full-width and directly under the action row so the question is
+            read where the click happened, whatever the buttons wrapped to.
+            A unified card owns BOTH modes: the server deletes the whole mode
+            group, so the question has to say so. */}
+        {confirmingDelete && (
+          <InlineConfirmRow
+            question={`Delete ${displayName}?${unified ? ' Both its CLI and TUI modes are removed.' : ''} Its saved settings and model defaults are gone for good.`}
+            confirmText="Delete provider"
+            autoFocus
+            aria-label={`Confirm deleting ${displayName}`}
+            onConfirm={() => {
+              setConfirmingDelete(false);
+              onDelete(provider.id);
+            }}
+            onCancel={() => setConfirmingDelete(false)}
+          />
+        )}
         {unified && (
           <div className="text-xs text-gray-400 space-y-1">
             <p>CLI and TUI share enablement and the model catalog. Edit a mode to configure its arguments and model defaults.</p>

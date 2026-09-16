@@ -7,6 +7,8 @@ import EmptyState from '../EmptyState';
 import ProviderConnectionForm from './ProviderConnectionForm';
 import ProviderHarnessForm from './ProviderHarnessForm';
 import ProviderRouteRow from './ProviderRouteRow';
+import InlineConfirmRow from '../ui/InlineConfirmRow';
+import useConfirmDelete from '../../hooks/useConfirmDelete';
 import * as api from '../../services/api';
 import { harnessLabel } from '../../utils/providerHarnesses';
 import {
@@ -53,6 +55,9 @@ import {
 const EMPTY_BACKEND_DRAFT = Object.freeze({
   label: '', kind: 'ollama', protocol: 'openai', baseUrl: '', credentialKey: '', credential: '',
 });
+
+/** What a backend is CALLED on screen — its label, or its id until one is typed. */
+const connectionName = (connection) => connection.label || connection.id;
 
 /** How each catalog state reads at a glance — the four are deliberately distinct. */
 const CATALOG_TONE_CLASS = {
@@ -102,6 +107,10 @@ export default function ProviderConnections({
   const [addingBackend, setAddingBackend] = useState(false);
   const [backendDraft, setBackendDraft] = useState(EMPTY_BACKEND_DRAFT);
   const [harnessDraft, setHarnessDraft] = useState({});
+  // Deleting a backend throws away its stored key as well as the row, and the
+  // button sits beside Save/Refresh — so it asks first. This component owns N
+  // backend rows, so the armed one is id-keyed rather than a boolean.
+  const { isConfirming, requestDelete, cancelDelete, confirmDelete } = useConfirmDelete();
 
   const loadGraph = useCallback(async () => {
     setLoading(true);
@@ -401,6 +410,7 @@ export default function ProviderConnections({
               || group.bindings.some((entry) => entry.binding.harnessId === harnessId))
             .map((group) => {
               const isOpen = group.connection.id === connectionId;
+              const confirmingDelete = isConfirming(group.connection.id);
               const summary = catalogSummary(group.connection.catalog);
               return (
                 <section key={group.connection.id} className="rounded-lg border border-port-border bg-port-card">
@@ -411,7 +421,7 @@ export default function ProviderConnections({
                     className="flex w-full flex-col gap-1 p-3 text-left sm:flex-row sm:items-center sm:justify-between"
                   >
                     <span className="min-w-0">
-                      <span className="block truncate font-medium">{group.connection.label || group.connection.id}</span>
+                      <span className="block truncate font-medium">{connectionName(group.connection)}</span>
                       <span className="block text-xs text-port-muted">
                         {group.connection.kind}
                         {' · '}
@@ -482,13 +492,24 @@ export default function ProviderConnections({
                             Clear key
                           </button>
                         )}
-                        {group.bindings.length === 0 && (
-                          <button type="button" disabled={busy} onClick={() => removeConnection(group.connection)}
+                        {group.bindings.length === 0 && !confirmingDelete && (
+                          <button type="button" disabled={busy} onClick={() => requestDelete(group.connection.id)}
                             className="flex items-center gap-1 rounded border border-port-error px-3 py-1 text-sm text-port-error disabled:opacity-50">
                             <Trash2 size={14} aria-hidden="true" /> Delete
                           </button>
                         )}
                       </div>
+
+                      {confirmingDelete && (
+                        <InlineConfirmRow
+                          question={`Delete the ${connectionName(group.connection)} backend? Its endpoint, catalog and saved key go with it.`}
+                          confirmText="Delete backend"
+                          autoFocus
+                          aria-label={`Confirm deleting the ${connectionName(group.connection)} backend`}
+                          onConfirm={() => confirmDelete(() => removeConnection(group.connection))}
+                          onCancel={cancelDelete}
+                        />
+                      )}
 
                       <ProviderHarnessForm
                         graph={graph}
@@ -582,7 +603,7 @@ export default function ProviderConnections({
                                   .filter((candidate) => candidate.connection.id !== group.connection.id)
                                   .map((candidate) => (
                                     <option key={candidate.connection.id} value={candidate.connection.id}>
-                                      {candidate.connection.label || candidate.connection.id}
+                                      {connectionName(candidate.connection)}
                                     </option>
                                   ))}
                               </select>
