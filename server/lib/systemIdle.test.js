@@ -6,8 +6,10 @@ const snapshot = (overrides = {}) => ({
   extras: { imageTo3d: [] },
   agents: { trusted: true, active: 0, queued: 0 },
   mind: { trusted: true, thinking: false, queued: 0, status: 'idle' },
+  llm: { trusted: true, active: 0 },
   appOperations: [],
   update: { inProgress: false },
+  backup: { inProgress: false },
   ...overrides,
 });
 
@@ -84,6 +86,31 @@ describe('system idle verdict', () => {
 
   it('counts an update already in flight as activity', () => {
     expect(summarizeSystemActivity(snapshot({ update: { inProgress: true } })).idle).toBe(false);
+  });
+
+  // The gap this module shipped without: a prompt/stage run holds a provider
+  // connection or a CLI/TUI child process the updater would kill mid-run.
+  it('counts an in-flight LLM/pipeline run as activity', () => {
+    const verdict = summarizeSystemActivity(snapshot({ llm: { trusted: true, active: 2 } }));
+    expect(verdict.idle).toBe(false);
+    expect(verdict.blockers).toEqual([{ kind: 'llm-running', label: '2 LLM runs running', count: 2 }]);
+    expect(verdict.activeCount).toBe(2);
+  });
+
+  // Bypass probe: a failed read of the run count must not read as "nothing
+  // running" — that zero is exactly the value that unlocks the restart.
+  it('refuses to read an unreadable LLM run count as an idle one', () => {
+    const verdict = summarizeSystemActivity(snapshot({ llm: { trusted: false } }));
+    expect(verdict.idle).toBe(false);
+    expect(verdict.blockers).toEqual([{ kind: 'llm-unreadable', label: 'In-flight LLM run state unreadable', count: 1 }]);
+  });
+
+  // Milder than the others (a wasted snapshot, not lost work), but a running
+  // backup still gets killed mid-rsync by an unattended restart.
+  it('counts a running backup snapshot as activity', () => {
+    const verdict = summarizeSystemActivity(snapshot({ backup: { inProgress: true } }));
+    expect(verdict.idle).toBe(false);
+    expect(verdict.blockers).toEqual([{ kind: 'backup-running', label: 'A backup snapshot is running', count: 1 }]);
   });
 
   // A degraded snapshot (a slice that failed to load) must still produce a

@@ -95,7 +95,7 @@ export default function AutoUpdatePanel() {
           </div>
           <div className="text-xs text-gray-400 mt-1">
             Runs the update for you — but only once the install is completely idle: no render running or queued,
-            no CoS agent, no Persistent Mind turn, no app operation.
+            no LLM or pipeline run, no CoS agent, no Persistent Mind turn, no app operation, no backup in progress.
           </div>
         </div>
         <label className="flex items-center gap-2 text-xs text-gray-300 shrink-0" htmlFor="auto-update-enabled">

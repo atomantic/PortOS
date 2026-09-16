@@ -689,3 +689,15 @@ export async function deleteFailedRuns() {
 export async function isRunActive(runId) {
   return requireToolkit().services.runner.isRunActive(runId);
 }
+
+/**
+ * Count of in-flight LLM/pipeline runs the toolkit is tracking right now —
+ * counts and lifecycle only, never a prompt or a response. Feeds the
+ * system-idle gate (`server/lib/systemIdle.js`) so a live run blocks the
+ * unattended updater the same way a CoS agent or a Persistent Mind turn does.
+ * `null` (not 0) when the toolkit isn't loaded to read from — a boot-race
+ * absence must not manufacture the zero that unlocks a restart.
+ */
+export async function getActiveRunCount() {
+  return getAIToolkitInstance()?.services?.runner?.getActiveRunCount?.() ?? null;
+}
