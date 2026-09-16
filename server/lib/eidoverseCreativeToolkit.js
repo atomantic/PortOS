@@ -175,7 +175,12 @@ function requireAnchor(anchor) {
  * @param {string} options.layoutId - one of `EIDOVERSE_CREATIVE_LAYOUTS`
  * @param {number[]} options.anchor - [x, y, z] world-space origin
  * @param {number} [options.propCount] - clamped to [1, 16]
- * @param {string} [options.seed] - any string; same seed replays the same placement
+ * @param {string} [options.seed] - any string; same seed replays the same placement.
+ *   The geometric layouts (`radial-ring`, `grid-plot`, `arc-row`) are fully
+ *   determined by anchor/count/facing and so are seed-invariant by design;
+ *   only `grove-cluster` consumes the seeded RNG for its jitter. The
+ *   reproducibility guarantee — same inputs, same output — holds for every
+ *   layout either way.
  * @param {number} [options.facing] - radians, the layout's orientation
  * @returns {Array<{ pos: number[], yaw: number }>}
  */
