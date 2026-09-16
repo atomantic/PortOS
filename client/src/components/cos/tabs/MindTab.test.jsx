@@ -407,7 +407,7 @@ describe('MindTab', () => {
     await user.click(taskAccess);
 
     await waitFor(() => expect(api.updateCosConfig).toHaveBeenCalledWith(
-      { persistentMindCapabilities: { schemaVersion: 10, createTasks: true, fileIssues: false, manageMind: false, manageToolRecipes: false, manageEidoverse: false, visitEidoversePeers: false, callUser: false, adjustLocalContext: false, readPortos: false, writePortos: false, taskModelAllowlist: [] } },
+      { persistentMindCapabilities: { schemaVersion: 11, createTasks: true, fileIssues: false, manageMind: false, manageToolRecipes: false, manageEidoverse: false, visitEidoversePeers: false, promoteEidoverseFoundations: false, callUser: false, adjustLocalContext: false, readPortos: false, writePortos: false, taskModelAllowlist: [] } },
       { silent: true },
     ));
     expect(screen.getAllByText(/code review then merge/i).length).toBeGreaterThan(0);

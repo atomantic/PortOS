@@ -14,12 +14,12 @@ import {
   portosSemanticToolGrantsSchema,
 } from './cosToolContracts.js';
 
-export const PERSISTENT_MIND_CAPABILITIES_SCHEMA_VERSION = 10;
+export const PERSISTENT_MIND_CAPABILITIES_SCHEMA_VERSION = 11;
 // Every wire version this server still accepts on input. Installs upgrade on
 // their own schedule, so a browser bundle (or a route caller) pinned at an
 // older version must keep being able to toggle the grants it already knows
 // about; normalization always writes the current version forward.
-const ACCEPTED_CAPABILITIES_SCHEMA_VERSIONS = Object.freeze([2, 3, 4, 5, 6, 7, 8, 9, 10]);
+const ACCEPTED_CAPABILITIES_SCHEMA_VERSIONS = Object.freeze([2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
 
 export const PERSISTENT_MIND_TASK_MODEL_ALLOWLIST_LIMITS = Object.freeze({
   MAX_ENTRIES: 200,
@@ -146,6 +146,21 @@ export const PERSISTENT_MIND_TOOL_CATALOG = Object.freeze([
     ],
   }),
   Object.freeze({
+    id: 'eidoverse.promote',
+    capability: 'promoteEidoverseFoundations',
+    name: 'Promote Eidoverse foundations to the shared baseline',
+    description: 'Offer a world foundation this install authored to the shared PortOS baseline population, so peers can inherit the substance without the local style layer.',
+    kind: 'semantic-tools',
+    defaultEnabled: false,
+    guardrails: [
+      'Separate from manageEidoverse on purpose: building in the local world never implies publishing beyond it',
+      'The server runs the agent-free resilience assay itself — the mind can ask for the check, never assert a passing verdict',
+      'The promote envelope carries the foundation\'s body and drops its style layer, so an inheriting peer keeps its own cosmetics',
+      'A candidate carrying machine identity, PII, or credential-shaped values is refused outright and never redacted and shipped',
+      'Promotion publishes only what this install authored; it cannot reach another install\'s foundations',
+    ],
+  }),
+  Object.freeze({
     id: 'mind.adjust-local-context',
     capability: 'adjustLocalContext',
     name: 'Adjust local model context',
@@ -230,6 +245,7 @@ export const persistentMindCapabilitiesSchema = portosSemanticToolGrantsSchema.e
   fileIssues: z.boolean().optional(),
   manageMind: z.boolean().optional(),
   manageToolRecipes: z.boolean().optional(),
+  promoteEidoverseFoundations: z.boolean().optional(),
   callUser: z.boolean().optional(),
   chooseThinkingPreset: z.boolean().optional(),
   adjustLocalContext: z.boolean().optional(),
@@ -305,6 +321,7 @@ export function createDefaultPersistentMindCapabilities() {
     manageToolRecipes: false,
     manageEidoverse: false,
     visitEidoversePeers: false,
+    promoteEidoverseFoundations: false,
     callUser: false,
     chooseThinkingPreset: false,
     adjustLocalContext: false,
@@ -364,6 +381,7 @@ export function normalizePersistentMindCapabilities(raw) {
     fileIssues: source.fileIssues === true,
     manageMind: source.manageMind === true,
     manageToolRecipes: source.manageToolRecipes === true,
+    promoteEidoverseFoundations: source.promoteEidoverseFoundations === true,
     callUser: source.callUser === true,
     chooseThinkingPreset: source.chooseThinkingPreset === true,
     adjustLocalContext: source.adjustLocalContext === true,

@@ -13,6 +13,8 @@ const mocks = vi.hoisted(() => ({
   listUserActions: vi.fn(),
   fileIssue: vi.fn(),
   listIssues: vi.fn(),
+  listFoundations: vi.fn(),
+  promoteFoundation: vi.fn(),
 }));
 
 const specs = [
@@ -64,6 +66,10 @@ vi.mock('./eidoverseWorld.js', () => ({
   augmentEidoverseWorld: (...args) => mocks.worldAugment(...args),
   sayInEidoverseWorld: (...args) => mocks.worldSay(...args),
 }));
+vi.mock('./eidoverseFoundationLedger.js', () => ({
+  listEidoverseFoundations: (...args) => mocks.listFoundations(...args),
+  promoteEidoverseFoundation: (...args) => mocks.promoteFoundation(...args),
+}));
 vi.mock('./userActions.js', () => ({
   listUserActions: (...args) => mocks.listUserActions(...args),
 }));
@@ -103,6 +109,34 @@ describe('cosToolRegistry', () => {
     expect(first).toMatchObject({ state: 'completed', result: { name: 'Example Star' } });
     await executeCosToolCall({ call, authority });
     expect(mocks.chooseName).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps promoting a foundation out of reach of the world-management grant alone', async () => {
+    const call = { requestId: 'promote-1', name: 'eidoverse.promote', arguments: { id: 'tide-beacon' } };
+    // Building in the local world is not permission to publish out of it, so
+    // the world grant on its own has to be refused.
+    await expect(executeCosToolCall({ call, authority: { scope: 'mind', capabilities: { manageEidoverse: true } } }))
+      .rejects.toMatchObject({ code: 'TOOL_CAPABILITY_DENIED' });
+    await expect(executeCosToolCall({ call, authority: { scope: 'mind', capabilities: { promoteEidoverseFoundations: true } } }))
+      .rejects.toMatchObject({ code: 'TOOL_CAPABILITY_DENIED' });
+    // Promotion reaches past this install, so it is never an agent-scope tool.
+    await expect(executeCosToolCall({ call, authority: { scope: 'agent', capabilities: { manageEidoverse: true, promoteEidoverseFoundations: true } } }))
+      .rejects.toMatchObject({ code: 'TOOL_SCOPE_DENIED' });
+
+    const granted = { scope: 'mind', capabilities: { manageEidoverse: true, promoteEidoverseFoundations: true } };
+    mocks.promoteFoundation.mockResolvedValue({
+      outcome: 'promoted', promoted: true, reasons: [], findings: [], assay: { pass: true },
+      candidate: { fingerprint: 'a'.repeat(64), body: { affordance: 'example' } },
+      foundation: { id: 'tide-beacon', layer: 'baseline', style: { motif: 'weathered brass' }, body: { affordance: 'example' }, updatedAt: '2026-03-04T06:00:00.000Z' },
+    });
+    const result = await executeCosToolCall({ call, authority: granted });
+
+    expect(result).toMatchObject({ state: 'completed', result: { outcome: 'promoted', promoted: true } });
+    expect(mocks.promoteFoundation).toHaveBeenCalledWith('tide-beacon');
+    // The install's cosmetics and the packaged envelope must not ride back
+    // into the prompt just because the mind asked to publish.
+    expect(JSON.stringify(result.result)).not.toContain('weathered brass');
+    expect(result.result.candidate).toBeNull();
   });
 
   it('keeps local thinking authority separate and refuses raw configuration arguments', async () => {
@@ -150,6 +184,8 @@ describe('cosToolRegistry', () => {
       'eidoverse.visit',
       'eidoverse.visit-chat',
       'eidoverse.leave',
+      'eidoverse.foundations',
+      'eidoverse.promote',
       'eidoverse.status',
       'eidoverse.project',
       'eidoverse.augment',

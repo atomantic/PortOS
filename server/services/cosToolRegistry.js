@@ -27,6 +27,7 @@ import {
   eidoverseWorldSaySchema,
   eidoverseChatReadSchema, eidoverseTravelVisitSchema, eidoverseVisitChatSchema, eidoverseVisitLeaveSchema,
 } from '../lib/validation.js';
+import { eidoverseFoundationIdParamSchema, summarizeFoundation } from '../lib/eidoverseFoundations.js';
 import { persistentMindChooseNameSchema } from '../lib/persistentMindChosenName.js';
 import { persistentMindProtectMemorySchema } from '../lib/persistentMindMemory.js';
 import { persistentMindThinkingRequestSchema } from '../lib/persistentMindThinkingPresets.js';
@@ -359,7 +360,23 @@ const eidoverseTravelTools = [
     idempotent: sideEffect === 'read', async: false, confirmation: 'capability-grant' },
   adapter: { kind: 'eidoverse-travel', operation },
 }));
-const eidoverseTools = [...eidoverseTravelTools, eidoverseStatusTool, eidoverseProjectTool, eidoverseAugmentTool, eidoverseSayTool];
+// Promotion is the one Eidoverse act that reaches past this install, so it is
+// mind-scoped and carries its own grant on top of `manageEidoverse`: authoring
+// in the local world must never imply publishing out of it. The read beside it
+// is what makes the promote tool usable — a mind that cannot see which
+// foundations exist and why one is refused can only guess at ids.
+const eidoverseFoundationTools = [
+  ['foundations', 'List the world foundations this install authored — ownership layer (`vernacular` = local, `baseline` = promoted), the recorded agent-free assay outcome, and whether a gated promote candidate currently exists. Local style is never included.', z.object({}).strict(), ['manageEidoverse'], 'read'],
+  ['promote', 'Offer one local foundation to the shared PortOS baseline population. The server re-runs the agent-free resilience assay and every promote gate itself, so this is a REQUEST, not an assertion: the result is `outcome: "promoted"` only when it published. Any other outcome means nothing moved — read `reasons` and fix those before asking again, and never narrate a refused promote as done.', eidoverseFoundationIdParamSchema, ['manageEidoverse', 'promoteEidoverseFoundations'], 'write'],
+].map(([operation, description, schema, requiredCapabilities, sideEffect]) => ({
+  type: 'portos_tool', name: `eidoverse.${operation}`, version: COS_TOOL_SCHEMA_VERSION,
+  providerName: providerToolName(`eidoverse.${operation}`), aliases: [providerToolName(`eidoverse.${operation}`)],
+  description, input_schema: zodToOpenApiSchema(schema), output_schema: objectOutputSchema,
+  policy: { scopes: ['mind'], requiredCapabilities, sideEffect,
+    idempotent: sideEffect === 'read', async: false, confirmation: 'capability-grant' },
+  adapter: { kind: 'eidoverse-foundations', operation },
+}));
+const eidoverseTools = [...eidoverseTravelTools, ...eidoverseFoundationTools, eidoverseStatusTool, eidoverseProjectTool, eidoverseAugmentTool, eidoverseSayTool];
 const thinkingTools = ['mind.thinking-presets', 'mind.request-thinking-preset'].map((name, index) => ({
   type: 'portos_tool', name, version: COS_TOOL_SCHEMA_VERSION,
   providerName: providerToolName(name), aliases: [],
@@ -408,6 +425,7 @@ const normalizeToolCapabilities = (raw) => ({
   manageMind: raw?.manageMind === true,
   chooseThinkingPreset: raw?.chooseThinkingPreset === true,
   adjustLocalContext: raw?.adjustLocalContext === true,
+  promoteEidoverseFoundations: raw?.promoteEidoverseFoundations === true,
   callToolRecipes: raw?.callToolRecipes === true,
 });
 
@@ -636,6 +654,21 @@ const executeAdapter = async (tool, args, context, authority) => {
     if (tool.adapter.operation === 'visit') return travel.visitEidoversePeer(args);
     if (tool.adapter.operation === 'visit-chat') return travel.eidoverseVisitChat(args);
     return travel.leaveEidoversePeer(args);
+  }
+  if (tool.adapter.kind === 'eidoverse-foundations') {
+    // Lazy: the ledger drags the resilience-assay harness and the file store,
+    // and only this one tool pair reaches them — a static import would put that
+    // subtree in every closure that touches the catalog. (The pure lib beside
+    // it is already static, for the tool's input schema.)
+    const ledger = await import('./eidoverseFoundationLedger.js');
+    if (tool.adapter.operation === 'foundations') {
+      const listed = await ledger.listEidoverseFoundations();
+      return { counts: listed.counts, foundations: listed.foundations.map(summarizeFoundation) };
+    }
+    const result = await ledger.promoteEidoverseFoundation(args.id);
+    // Summarized for the same reason the list is, and because the candidate
+    // envelope on a success is a duplicate of the body the mind already wrote.
+    return { ...result, candidate: null, foundation: result.foundation ? summarizeFoundation(result.foundation) : null };
   }
   if (tool.adapter.kind === 'eidoverse-world') {
     const world = await import('./eidoverseWorld.js');

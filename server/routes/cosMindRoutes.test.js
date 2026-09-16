@@ -227,7 +227,7 @@ describe('persistent mind routes', () => {
         thinkingInterface: 'text',
         wakeIntervalMinutes: 30,
       },
-      capabilities: { schemaVersion: 10, createTasks: true, fileIssues: false, manageMind: false, manageEidoverse: false, visitEidoversePeers: false, callUser: false, adjustLocalContext: false, readPortos: false, writePortos: false, taskModelAllowlist: [] },
+      capabilities: { schemaVersion: 11, createTasks: true, fileIssues: false, manageMind: false, manageEidoverse: false, visitEidoversePeers: false, promoteEidoverseFoundations: false, callUser: false, adjustLocalContext: false, readPortos: false, writePortos: false, taskModelAllowlist: [] },
       harness: { type: 'api', recommendation: 'recommended' },
       imageCapability: { status: 'unknown' },
       autonomyMode: 'execute',
@@ -321,8 +321,8 @@ describe('persistent mind routes', () => {
         expect.objectContaining({ name: 'eidoverse.status', granted: false, input_schema: expect.any(Object) }),
         expect.objectContaining({ name: 'cos.create-task', granted: true }),
       ]),
-      schemaVersion: 10,
-      capabilities: { schemaVersion: 10, createTasks: true, fileIssues: false, manageMind: false, manageEidoverse: false, visitEidoversePeers: false, callUser: false, adjustLocalContext: false, readPortos: false, writePortos: false, taskModelAllowlist: [] },
+      schemaVersion: 11,
+      capabilities: { schemaVersion: 11, createTasks: true, fileIssues: false, manageMind: false, manageEidoverse: false, visitEidoversePeers: false, promoteEidoverseFoundations: false, callUser: false, adjustLocalContext: false, readPortos: false, writePortos: false, taskModelAllowlist: [] },
       boundaries: expect.arrayContaining([expect.stringMatching(/arbitrary shell/i)]),
       tools: expect.arrayContaining([
         expect.objectContaining({ id: 'cos.create-task', capability: 'createTasks', granted: true, defaultEnabled: false }),
@@ -362,7 +362,7 @@ describe('persistent mind routes', () => {
 
   it('loads the shared roster for the issue grant alone, so its allowlist edits see every app', async () => {
     mocks.loadState.mockResolvedValue({ config: {
-      persistentMindCapabilities: { schemaVersion: 10, createTasks: false, fileIssues: true },
+      persistentMindCapabilities: { schemaVersion: 11, createTasks: false, fileIssues: true },
     } });
     mocks.readPersistentMindManagedApps.mockResolvedValue([
       { id: 'demo-app', name: 'Demo App', planOnly: true, forge: 'github', fullName: 'example/demo', granted: true },

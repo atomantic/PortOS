@@ -746,6 +746,39 @@ one returns a readable reason naming what to fix:
 
 The candidate envelope carries a content-addressed `fingerprint` (sha256 over the
 canonicalized envelope), so `verifyFoundationCandidate()` is one gate seen from
-both sides — the packaging side and a receiving peer's. That receiving side (peer
-pull/inherit), the promote UI, and the capability-gated mind tool are still to
-come; the envelope's own `candidateVersion` is what they will gate on.
+both sides — the packaging side and a receiving peer's.
+
+**Promoting publishes into this install's baseline population.**
+`POST /api/eidoverse/world/foundations/:id/promote` re-packages first and
+publishes the candidate it just produced, so promotion never rests on a stored
+verdict — every gate above is re-run against the body as it stands. On a pass the
+record moves to the `baseline` layer and takes a `promotedAt` stamp; its
+`style` stays behind, because only the envelope crosses and the envelope has no
+style layer at all. A refusal is a 200 with its reasons and moves nothing.
+Re-authoring a promoted foundation returns it to `vernacular` and clears
+`promotedAt`: the body that was published no longer exists on this install, and
+keeping the stamp would also be a dead end, since the gate refuses to package a
+`baseline` foundation.
+
+**Where the user does this.** Eidoverse > World controls > **Foundations**
+(`client/src/components/eidoverse/EidoverseFoundationsPanel.jsx`) lists every
+foundation with its ownership-layer badge, records or re-authors one, runs the
+assay, promotes, and renders each refusal reason verbatim beside the foundation
+it refused. The expanded foundation is a `?foundation=<id>` search param, so a
+refusal is linkable. `GET /api/eidoverse/world/contributions` backs the
+contribution picker — an install that registers none says so rather than offering
+an empty list.
+
+**The mind needs its own grant to promote.** `eidoverse.promote` (with the read
+beside it, `eidoverse.foundations`) is gated on `manageEidoverse` **and** the
+separate default-off `promoteEidoverseFoundations` grant, and is mind-scope only
+— building in the local world is never permission to publish out of it, and an
+ephemeral CoS task agent never gets the tool at all. The server runs the assay
+itself, so a mind can ask for the check but can never assert a passing verdict.
+Both tools return summaries (`summarizeFoundation`) rather than whole records:
+the local style layer and the packaged envelope have no business riding into a
+prompt.
+
+What is still to come is the receiving side — peer pull/inherit — and the
+envelope's own `candidateVersion` is what that will gate on. Until it lands,
+`baseline` means "this install offers this foundation"; nothing pulls it yet.

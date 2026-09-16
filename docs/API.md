@@ -359,6 +359,8 @@ federate world records.
 | POST | `/eidoverse/world/foundations` | Record (or re-author) a local vernacular foundation — the layer is never caller-supplied |
 | GET | `/eidoverse/world/foundations/:id` | One foundation record |
 | POST | `/eidoverse/world/foundations/:id/candidate` | Run the agent-free resilience assay and package a promote candidate; a refusal returns 200 with its reasons |
+| POST | `/eidoverse/world/foundations/:id/promote` | Re-package and publish a foundation into this install's shared baseline population; a refusal returns 200 with its reasons and moves nothing |
+| GET | `/eidoverse/world/contributions` | The resilience-assay contribution ids a foundation may bind itself to |
 
 ### Legacy OpenWorld / CyberCity
 

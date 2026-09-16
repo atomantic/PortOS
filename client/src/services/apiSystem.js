@@ -110,6 +110,26 @@ export const projectEidoverseWorld = (options = {}) => request('/eidoverse/world
   method: 'POST',
   ...options,
 });
+
+// Eidoverse world foundations — the local-vs-baseline ownership ledger and its
+// promote gate (#7455). Packaging and promoting both return a 200 carrying a
+// refusal verdict when a gate says no, so callers read `outcome` rather than
+// treating a rejection as the failure signal.
+export const listEidoverseFoundations = (options) => request('/eidoverse/world/foundations', options);
+export const getEidoverseContributions = (options) => request('/eidoverse/world/contributions', options);
+export const recordEidoverseFoundation = (payload, options = {}) => request('/eidoverse/world/foundations', {
+  method: 'POST',
+  body: JSON.stringify(payload),
+  ...options,
+});
+export const packageEidoverseFoundationCandidate = (id, options = {}) => request(`/eidoverse/world/foundations/${encodeURIComponent(id)}/candidate`, {
+  method: 'POST',
+  ...options,
+});
+export const promoteEidoverseFoundation = (id, options = {}) => request(`/eidoverse/world/foundations/${encodeURIComponent(id)}/promote`, {
+  method: 'POST',
+  ...options,
+});
 export const updateSettings = (data, options) => request('/settings', {
   method: 'PUT',
   body: JSON.stringify(data),
