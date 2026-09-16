@@ -7,26 +7,19 @@
  * nothing in this repository asked it to cancel: no job failed, the in-workflow
  * `Cancel sibling CI jobs after failure` step never ran, and no newer run
  * exists for the branch. The PR is then blocked behind a gate that reports a
- * cancel as if the tests were red (#7437). The same SHA passes on the next
+ * cancel as if the tests were red (issue 7437). The same SHA passes on the next
  * attempt once the queue drains, so one automatic re-dispatch clears it.
  *
- * Every guard below exists to keep that from becoming a retry loop or from
- * re-running work somebody deliberately stopped:
+ * Five guards keep that from becoming a retry loop or from re-running work
+ * somebody deliberately stopped — the reasoning for each is the table under
+ * "External cancellation and one automatic retry" in docs/GITHUB_ACTIONS.md.
+ * The two least obvious, stated here because the code alone does not show them:
  *
- *   1. `cancelled` conclusion only — a failure is a failure.
- *   2. `pull_request` runs only — schedules and dispatches retry on their own
- *      terms, and a `workflow_dispatch` re-run would re-enter this path.
- *   3. `run_attempt == 1` only. `POST /rerun` re-runs the SAME run id as
- *      attempt 2, so this is the retry budget: attempt 2's cancel sees
- *      attempt 2 and stops. One retry per run, and a PR run is one run per
- *      head SHA, so one retry per SHA.
- *   4. No job may have concluded `failure`/`timed_out`. This repository
- *      cancels its own run from a failing job (scripts/cancel-current-ci-run.js),
- *      which makes the RUN read `cancelled` while a job really did fail —
- *      retrying that would re-run the whole suite on a genuine red.
- *   5. No newer run may exist for the same branch. That is what a legitimate
- *      `cancel-in-progress` supersession looks like, and the newer run is
- *      already testing the code this one would have tested.
+ *   - `run_attempt === 1` IS the retry budget. `POST /rerun` re-runs the same
+ *     run id as attempt 2, so attempt 2's cancel sees attempt 2 and stops.
+ *   - No job may have concluded `failure`/`timed_out`. This repository cancels
+ *     its own run from a failing job (scripts/cancel-current-ci-run.js), which
+ *     makes the RUN read `cancelled` while a job really did fail.
  *
  * An API call that cannot be completed is NOT treated as "guard passed": every
  * lookup failure returns without re-dispatching, because the cost of missing a
@@ -35,39 +28,20 @@
  * The workflow that runs this is triggered by `workflow_run`, so it checks out
  * the DEFAULT branch — never the pull request's head. Nothing here executes,
  * imports, or interpolates repository content from the PR.
- *
- * Builtins only: the workflow runs it straight from a checkout with no
- * dependency install (scripts/pre-install-entrypoints.test.js enforces it).
  */
 
 import { isDirectlyInvoked } from './lib/directInvocation.js';
+import { githubRequest, isSuccess, repoApiPath } from './lib/githubActionsApi.js';
 import { writeStepSummary } from './lib/githubOutput.js';
 
-const GITHUB_API_VERSION = '2022-11-28';
-const GITHUB_API_BASE = 'https://api.github.com';
 const REQUEST_TIMEOUT_MS = 15_000;
 /** ~1500 jobs. A bound, not an expectation — CI runs about fifteen. */
 const MAX_JOB_PAGES = 15;
 const JOBS_PER_PAGE = 100;
-/** Newest-first; a successor, if one exists, is at the top of this list. */
-const SIBLING_RUNS_PER_PAGE = 100;
+/** Newest-first; a successor, if one exists, is within the first few. */
+const SIBLING_RUNS_PER_PAGE = 5;
 /** A job conclusion that means something really broke, not that it was stopped. */
 const FAILING_CONCLUSIONS = new Set(['failure', 'timed_out']);
-
-function apiBaseFrom(configuredApiUrl) {
-  if (!configuredApiUrl) return GITHUB_API_BASE;
-  let parsed;
-  try {
-    parsed = new URL(configuredApiUrl);
-  } catch {
-    return null;
-  }
-  if (parsed.protocol !== 'https:' || parsed.username || parsed.password
-    || parsed.search || parsed.hash) {
-    return null;
-  }
-  return configuredApiUrl.replace(/\/+$/, '');
-}
 
 /**
  * Validate and normalise the run this invocation may retry.
@@ -81,25 +55,20 @@ function apiBaseFrom(configuredApiUrl) {
  */
 export function retryTargetFromEnv(env) {
   const str = (key) => (typeof env[key] === 'string' ? env[key].trim() : '');
-  const repository = str('GITHUB_REPOSITORY');
   const token = str('GITHUB_TOKEN');
   const runId = str('CI_RUN_ID');
   const runAttempt = str('CI_RUN_ATTEMPT');
   const runNumber = str('CI_RUN_NUMBER');
   const workflowId = str('CI_WORKFLOW_ID');
   const headBranch = str('CI_RUN_HEAD_BRANCH');
+  const repoPath = repoApiPath(env);
 
-  if (!/^[^/\s]+\/[^/\s]+$/.test(repository) || !token) return null;
+  if (!repoPath || !token || !headBranch) return null;
   if (![runId, runAttempt, runNumber, workflowId].every((value) => /^\d+$/.test(value))) return null;
-  if (!headBranch) return null;
 
-  const apiBase = apiBaseFrom(str('GITHUB_API_URL'));
-  if (!apiBase) return null;
-
-  const [owner, repo] = repository.split('/');
   return {
     token,
-    repoPath: `${apiBase}/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`,
+    repoPath,
     runId,
     runAttempt: Number(runAttempt),
     runNumber: Number(runNumber),
@@ -111,23 +80,14 @@ export function retryTargetFromEnv(env) {
   };
 }
 
-function githubRequest(fetchImpl, url, token, init = {}) {
-  return fetchImpl(url, {
-    ...init,
-    headers: {
-      Accept: 'application/vnd.github+json',
-      Authorization: `Bearer ${token}`,
-      'X-GitHub-Api-Version': GITHUB_API_VERSION,
-    },
-    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
-  });
-}
+const request = (fetchImpl, url, token, init) =>
+  githubRequest(fetchImpl, url, token, { timeoutMs: REQUEST_TIMEOUT_MS, ...init });
 
 /** Parsed body, or null for any transport, status, or parse failure. */
 async function readJson(fetchImpl, url, token, logger) {
   try {
-    const response = await githubRequest(fetchImpl, url, token);
-    if (!response?.ok) return null;
+    const response = await request(fetchImpl, url, token);
+    if (!isSuccess(response)) return null;
     return await response.json();
   } catch (error) {
     logger?.error?.(`⚠️ GitHub API request failed: ${error?.message || 'network request failed'}`);
@@ -149,10 +109,10 @@ async function fetchAttemptJobs(fetchImpl, target, logger) {
     if (!body || !Array.isArray(body.jobs)) return null;
     jobs.push(...body.jobs);
     const total = Number(body.total_count);
-    // An absent/garbage total_count cannot certify completeness, so the only
-    // way to finish is to have reached a real one. A short or empty page with
-    // jobs still outstanding is a truncated listing, not the end.
-    if (Number.isFinite(total) && jobs.length >= total) return jobs;
+    // Only a real total can certify that the listing is complete.
+    if (!Number.isFinite(total)) return null;
+    if (jobs.length >= total) return jobs;
+    // Checked last, so `total: 0` still returns the legitimately empty list.
     if (body.jobs.length === 0) return null;
   }
   return null;
@@ -160,8 +120,9 @@ async function fetchAttemptJobs(fetchImpl, target, logger) {
 
 /**
  * The run number of the newest sibling run, or null when the listing failed.
- * `run_number` increases monotonically per workflow, so it orders runs without
- * trusting timestamps that can tie at second resolution.
+ * `run_number` increases monotonically per workflow, so taking the maximum
+ * orders runs without trusting either the page order or timestamps that can
+ * tie at second resolution.
  */
 async function fetchNewestSiblingRunNumber(fetchImpl, target, logger) {
   const url = `${target.repoPath}/actions/workflows/${encodeURIComponent(target.workflowId)}/runs`
@@ -181,6 +142,7 @@ async function fetchNewestSiblingRunNumber(fetchImpl, target, logger) {
  * @param {NodeJS.ProcessEnv} [options.env]
  * @param {typeof fetch} [options.fetchImpl]
  * @param {{log?: Function, error?: Function}} [options.logger]
+ * @param {Function} [options.writeSummary] - injectable step-summary writer
  * @returns {Promise<{outcome: 'requested'|'skipped'|'unavailable', reason?: string, status?: number}>}
  */
 export async function retryCancelledCiRun({
@@ -189,62 +151,67 @@ export async function retryCancelledCiRun({
   logger = console,
   writeSummary = writeStepSummary,
 } = {}) {
-  // Every return goes through here so "why was my run not retried?" is
+  const runLabel = /^\d+$/.test(String(env.CI_RUN_ID ?? '')) ? env.CI_RUN_ID : 'unidentified';
+  // Every exit goes through here, so "why was my run not retried?" is
   // answerable from the recovery run's summary page. Fixed reason codes and
   // the numeric run id only — never the branch name or any other payload text.
-  const finish = (result) => {
+  // `level` is a parameter rather than derived from `outcome`: an invalid
+  // environment is a `skipped` outcome that still deserves stderr.
+  const done = (level, message, result) => {
+    logger[level]?.(message);
     writeSummary(`### CI cancel recovery: ${result.outcome}\n\n`
-      + `- run: ${/^\d+$/.test(String(env.CI_RUN_ID ?? '')) ? env.CI_RUN_ID : 'unidentified'}\n`
+      + `- run: ${runLabel}\n`
       + `- reason: ${result.reason || 're-dispatched'}`, env);
     return result;
   };
+
   const target = retryTargetFromEnv(env);
   if (!target) {
-    logger.error?.('⚠️ CI retry skipped: the workflow_run environment is incomplete or malformed');
-    return finish({ outcome: 'skipped', reason: 'invalid-environment' });
+    return done('error', '⚠️ CI retry skipped: the workflow_run environment is incomplete or malformed',
+      { outcome: 'skipped', reason: 'invalid-environment' });
   }
   if (typeof fetchImpl !== 'function') {
-    logger.error?.('⚠️ CI retry unavailable: fetch is not available');
-    return finish({ outcome: 'unavailable', reason: 'fetch-unavailable' });
+    return done('error', '⚠️ CI retry unavailable: fetch is not available',
+      { outcome: 'unavailable', reason: 'fetch-unavailable' });
   }
 
   if (target.conclusion !== 'cancelled') {
-    logger.log?.(`ℹ️ CI retry skipped: run ${target.runId} concluded ${target.conclusion || 'unknown'}, not cancelled`);
-    return finish({ outcome: 'skipped', reason: 'not-cancelled' });
+    return done('log', `ℹ️ CI retry skipped: run ${target.runId} concluded ${target.conclusion || 'unknown'}, not cancelled`,
+      { outcome: 'skipped', reason: 'not-cancelled' });
   }
   if (target.event !== 'pull_request') {
-    logger.log?.(`ℹ️ CI retry skipped: run ${target.runId} was triggered by ${target.event || 'an unknown event'}, not a pull request`);
-    return finish({ outcome: 'skipped', reason: 'not-a-pull-request' });
+    return done('log', `ℹ️ CI retry skipped: run ${target.runId} was triggered by ${target.event || 'an unknown event'}, not a pull request`,
+      { outcome: 'skipped', reason: 'not-a-pull-request' });
   }
   if (target.runAttempt !== 1) {
-    logger.log?.(`ℹ️ CI retry skipped: run ${target.runId} is already attempt ${target.runAttempt} — one retry per run`);
-    return finish({ outcome: 'skipped', reason: 'retry-budget-exhausted' });
+    return done('log', `ℹ️ CI retry skipped: run ${target.runId} is already attempt ${target.runAttempt} — one retry per run`,
+      { outcome: 'skipped', reason: 'retry-budget-exhausted' });
   }
 
   const jobs = await fetchAttemptJobs(fetchImpl, target, logger);
   if (!jobs) {
-    logger.error?.(`⚠️ CI retry skipped: could not list the jobs of run ${target.runId}`);
-    return finish({ outcome: 'unavailable', reason: 'jobs-unavailable' });
+    return done('error', `⚠️ CI retry skipped: could not list the jobs of run ${target.runId}`,
+      { outcome: 'unavailable', reason: 'jobs-unavailable' });
   }
   const failedJobs = jobs
     .filter((job) => FAILING_CONCLUSIONS.has(job?.conclusion))
     .map((job) => job?.name || 'unnamed job');
   if (failedJobs.length) {
-    logger.log?.(`ℹ️ CI retry skipped: run ${target.runId} cancelled after a real failure (${failedJobs.join(', ')})`);
-    return finish({ outcome: 'skipped', reason: 'job-failed' });
+    return done('log', `ℹ️ CI retry skipped: run ${target.runId} cancelled after a real failure (${failedJobs.join(', ')})`,
+      { outcome: 'skipped', reason: 'job-failed' });
   }
 
   const newestSibling = await fetchNewestSiblingRunNumber(fetchImpl, target, logger);
   if (newestSibling === null) {
-    logger.error?.(`⚠️ CI retry skipped: could not list sibling runs for ${target.headBranch}`);
-    return finish({ outcome: 'unavailable', reason: 'sibling-runs-unavailable' });
+    return done('error', `⚠️ CI retry skipped: could not list sibling runs for run ${target.runId}`,
+      { outcome: 'unavailable', reason: 'sibling-runs-unavailable' });
   }
   if (newestSibling > target.runNumber) {
-    logger.log?.(`ℹ️ CI retry skipped: run ${target.runId} was superseded by run #${newestSibling} on the same pull request`);
-    return finish({ outcome: 'skipped', reason: 'superseded' });
+    return done('log', `ℹ️ CI retry skipped: run ${target.runId} was superseded by run #${newestSibling} on the same pull request`,
+      { outcome: 'skipped', reason: 'superseded' });
   }
 
-  const response = await githubRequest(
+  const response = await request(
     fetchImpl,
     `${target.repoPath}/actions/runs/${target.runId}/rerun`,
     target.token,
@@ -253,13 +220,13 @@ export async function retryCancelledCiRun({
     logger.error?.(`⚠️ CI retry request failed: ${error?.message || 'network request failed'}`);
     return null;
   });
-  const status = Number(response?.status) || 0;
-  if (response && ((status >= 200 && status < 300) || response.ok === true)) {
-    logger.log?.(`🔁 Re-dispatched CI run ${target.runId} (${target.headSha.slice(0, 7) || 'unknown sha'}): cancelled with no successor run and no failing job`);
-    return finish({ outcome: 'requested', status });
+  if (isSuccess(response)) {
+    return done('log', `🔁 Re-dispatched CI run ${target.runId} (${target.headSha.slice(0, 7) || 'unknown sha'}): cancelled with no successor run and no failing job`,
+      { outcome: 'requested', status: Number(response.status) || 0 });
   }
-  logger.error?.(`⚠️ Could not re-dispatch CI run ${target.runId}: GitHub API returned ${status || 'an unknown status'}`);
-  return finish({ outcome: 'unavailable', status, reason: 'rerun-rejected' });
+  const status = Number(response?.status) || 0;
+  return done('error', `⚠️ Could not re-dispatch CI run ${target.runId}: GitHub API returned ${status || 'an unknown status'}`,
+    { outcome: 'unavailable', status, reason: 'rerun-rejected' });
 }
 
 if (isDirectlyInvoked(import.meta.url)) {

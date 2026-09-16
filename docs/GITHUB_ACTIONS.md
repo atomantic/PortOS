@@ -384,8 +384,9 @@ The selected work is split across parallel jobs:
 - **CI Gate** — always reports one stable required-check result and fails if any
   selected job failed or was cancelled. Both block, but the message distinguishes
   them: `scripts/ci-gate-report.js` says *cancelled, not failed* and names the
-  cancelled jobs when nothing actually failed. See "External cancellation and
-  one automatic retry" below.
+  cancelled jobs when nothing actually failed — as far as the gate job itself
+  runs, which a run-wide cancel prevents. See "External cancellation and one
+  automatic retry" below.
 - **Full CI Gate** — published only when the plan chose the complete suite, and
   mirrors `CI Gate`'s result. This is the check the release workflow looks for;
   see "Reusing the release PR's CI run" below.
@@ -631,6 +632,29 @@ retries only when every one of these holds:
 
 Any API lookup that cannot be completed skips the retry rather than assuming a
 guard passed — a missed retry costs one manual re-run, a wrong one loops.
+
+**Why the failing-job guard reads the jobs' own conclusions** rather than a
+marker written by the fail-fast step: a marker fails OPEN. It would be written
+by a job that is already failing, on a run about to be cancelled out from under
+it, so a lost write makes a red run look externally cancelled — and get
+retried. Reading conclusions fails CLOSED: an unreadable listing is
+`jobs-unavailable` and skips the retry. Do not "simplify" this into a marker.
+The ambiguity itself is the price of cancelling the run on first failure rather
+than letting the remaining jobs fail naturally; that trade buys the 30-second
+fail-fast above and is not on the table.
+
+**This is also the only layer that can explain a run-wide cancel.** `if:
+always()` on the gate defeats an upstream failure, not a cancellation of the
+whole run — so in the external-cancel case the gate is cancelled too and never
+prints its verdict. The recovery run is a separate run, so it survives; its
+step summary records which guard applied. Publishing that back onto the pull
+request as a neutral check run is issue #7438.
+
+Two known limits, both filed: the retry fires immediately, which is while the
+queue that caused the cancel is still full (#7439), and a retry re-runs the
+whole suite — Windows shards included — so if the cause is the spending limit
+then recovery spends more of it. Reducing the billable minutes of a full run is
+the complementary root-cause lever (#7440).
 
 Because the trigger is `workflow_run`, the recovery workflow runs the
 **default branch's** copy of itself with a writable `actions` token and never

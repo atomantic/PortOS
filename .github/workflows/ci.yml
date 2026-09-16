@@ -685,9 +685,14 @@ jobs:
     steps:
       # The gate needs the repo only for scripts/ci-gate-report.js, which
       # imports Node builtins only — no dependency install, no setup-node.
+      # `sparse-checkout` switches the fetch to a blob:none partial clone, so
+      # this costs ~1.7 MB and ~1k files instead of ~20 MB and ~8.4k — and the
+      # gate is the fan-in job every required check waits on. Cone mode always
+      # includes the repo root, which is where package.json ("type": "module")
+      # has to come from for the script to load as ESM.
       - uses: actions/checkout@v7
         with:
-          fetch-depth: 1
+          sparse-checkout: scripts
           persist-credentials: false
 
       # A CANCELLED run and a FAILED one are different events with different
@@ -728,7 +733,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          fetch-depth: 1
+          sparse-checkout: scripts
           persist-credentials: false
 
       # Same reporter, one input: a cancelled aggregate gate must not read as a

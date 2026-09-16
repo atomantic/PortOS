@@ -41,17 +41,16 @@ jobs:
       && github.event.workflow_run.run_attempt == 1
     runs-on: ubuntu-latest
     steps:
+      # No `setup-node` and no `npm ci`: the script imports Node builtins
+      # only (enforced by scripts/pre-install-entrypoints.test.js) and every
+      # hosted runner already ships a Node new enough for it — the same
+      # pattern the `impact` job in ci.yml uses. Sparse, because the whole
+      # value of this workflow is how fast it re-dispatches.
       - uses: actions/checkout@v7
         with:
+          sparse-checkout: scripts
           persist-credentials: false
 
-      - name: Use Node.js 24.x
-        uses: actions/setup-node@v7
-        with:
-          node-version: 24.x
-
-      # No `npm ci`: the script imports Node builtins only, enforced by
-      # scripts/pre-install-entrypoints.test.js.
       - name: Re-dispatch the cancelled run
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

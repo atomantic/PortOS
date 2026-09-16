@@ -2,6 +2,9 @@
  * Every test here is about a guard that must NOT fire a retry. The retry
  * itself is one API call; the risk is re-running the suite on a genuine red,
  * looping forever, or fighting a legitimate `cancel-in-progress` supersession.
+ *
+ * The API-base and repository validation live in lib/githubActionsApi.test.js,
+ * shared with scripts/cancel-current-ci-run.js.
  */
 import { readFileSync } from 'fs';
 import { dirname, join } from 'path';
@@ -71,16 +74,6 @@ describe('retryTargetFromEnv', () => {
   ])('rejects %s', (_label, override) => {
     expect(retryTargetFromEnv({ ...BASE_ENV, ...override })).toBeNull();
   });
-
-  it('encodes the branch name into the query, never into a path', async () => {
-    // The head branch is attacker-controlled on a fork PR.
-    const fetchStub = stubFetch();
-    await run({ ...BASE_ENV, CI_RUN_HEAD_BRANCH: 'feat/../../evil?x=1' }, fetchStub);
-
-    const listing = fetchStub.calls.find((c) => c.url.includes('/runs?'));
-    expect(listing.url).toContain('branch=feat%2F..%2F..%2Fevil%3Fx%3D1');
-    expect(listing.url).not.toContain('/evil');
-  });
 });
 
 describe('retryCancelledCiRun guards', () => {
@@ -108,22 +101,19 @@ describe('retryCancelledCiRun guards', () => {
     expect(fetchStub.rerunRequested()).toBe(false);
   });
 
-  it('never retries a run this repo cancelled itself after a job failed', async () => {
-    // scripts/cancel-current-ci-run.js makes the RUN read `cancelled` while a
-    // job really failed. Retrying that re-runs the whole suite on a red tree.
-    const fetchStub = stubFetch({
-      jobs: [{ name: 'Server tests', conclusion: 'failure' }, { name: 'Client', conclusion: 'cancelled' }],
-    });
-    await expect(run(BASE_ENV, fetchStub))
-      .resolves.toMatchObject({ outcome: 'skipped', reason: 'job-failed' });
-    expect(fetchStub.rerunRequested()).toBe(false);
-  });
-
-  it('treats a timed-out job as a failure too', async () => {
-    const fetchStub = stubFetch({ jobs: [{ name: 'Windows', conclusion: 'timed_out' }] });
-    await expect(run(BASE_ENV, fetchStub))
-      .resolves.toMatchObject({ outcome: 'skipped', reason: 'job-failed' });
-  });
+  it.each(['failure', 'timed_out'])(
+    'never retries a run whose job concluded %s — this repo self-cancels on a real red',
+    async (conclusion) => {
+      // scripts/cancel-current-ci-run.js makes the RUN read `cancelled` while a
+      // job really failed. Retrying that re-runs the whole suite on a red tree.
+      const fetchStub = stubFetch({
+        jobs: [{ name: 'Server tests', conclusion }, { name: 'Client', conclusion: 'cancelled' }],
+      });
+      await expect(run(BASE_ENV, fetchStub))
+        .resolves.toMatchObject({ outcome: 'skipped', reason: 'job-failed' });
+      expect(fetchStub.rerunRequested()).toBe(false);
+    },
+  );
 
   it.each([
     ['a run that did not end cancelled', { CI_RUN_CONCLUSION: 'failure' }, 'not-cancelled'],
@@ -136,13 +126,24 @@ describe('retryCancelledCiRun guards', () => {
     expect(fetchStub.impl).not.toHaveBeenCalled();
   });
 
+  it('encodes the branch name into the query, never into a path', async () => {
+    // The head branch is attacker-controlled on a fork PR.
+    const fetchStub = stubFetch();
+    await run({ ...BASE_ENV, CI_RUN_HEAD_BRANCH: 'feat/../../evil?x=1' }, fetchStub);
+
+    const listing = fetchStub.calls.find((c) => c.url.includes('/runs?'));
+    expect(listing.url).toContain('branch=feat%2F..%2F..%2Fevil%3Fx%3D1');
+    expect(listing.url).not.toContain('/evil');
+  });
+
   it('does not retry when the job listing cannot be read', async () => {
     // "We could not see the jobs" must never read as "no job failed".
     const impl = vi.fn(async (url) => (url.includes('/jobs?')
       ? { ok: false, status: 502 }
       : json({ workflow_runs: [] })));
-    await expect(retryCancelledCiRun({ env: BASE_ENV, fetchImpl: impl, logger: silent, writeSummary: noSummary }))
-      .resolves.toMatchObject({ outcome: 'unavailable', reason: 'jobs-unavailable' });
+    await expect(retryCancelledCiRun({
+      env: BASE_ENV, fetchImpl: impl, logger: silent, writeSummary: noSummary,
+    })).resolves.toMatchObject({ outcome: 'unavailable', reason: 'jobs-unavailable' });
     expect(impl.mock.calls.some(([url]) => url.endsWith('/rerun'))).toBe(false);
   });
 
@@ -152,22 +153,31 @@ describe('retryCancelledCiRun guards', () => {
     const impl = vi.fn(async (url) => (url.includes('/jobs?')
       ? json({ total_count: 40, jobs: [] })
       : json({ workflow_runs: [] })));
-    await expect(retryCancelledCiRun({ env: BASE_ENV, fetchImpl: impl, logger: silent, writeSummary: noSummary }))
-      .resolves.toMatchObject({ outcome: 'unavailable', reason: 'jobs-unavailable' });
+    await expect(retryCancelledCiRun({
+      env: BASE_ENV, fetchImpl: impl, logger: silent, writeSummary: noSummary,
+    })).resolves.toMatchObject({ outcome: 'unavailable', reason: 'jobs-unavailable' });
   });
 
   it('does not retry when the sibling-run listing cannot be read', async () => {
     const impl = vi.fn(async (url) => (url.includes('/runs?')
       ? { ok: false, status: 403 }
       : json({ total_count: 0, jobs: [] })));
-    await expect(retryCancelledCiRun({ env: BASE_ENV, fetchImpl: impl, logger: silent, writeSummary: noSummary }))
-      .resolves.toMatchObject({ outcome: 'unavailable', reason: 'sibling-runs-unavailable' });
+    await expect(retryCancelledCiRun({
+      env: BASE_ENV, fetchImpl: impl, logger: silent, writeSummary: noSummary,
+    })).resolves.toMatchObject({ outcome: 'unavailable', reason: 'sibling-runs-unavailable' });
   });
 
   it('survives a network failure without throwing', async () => {
     const impl = vi.fn(async () => { throw new Error('socket hang up'); });
-    await expect(retryCancelledCiRun({ env: BASE_ENV, fetchImpl: impl, logger: silent, writeSummary: noSummary }))
-      .resolves.toMatchObject({ outcome: 'unavailable' });
+    await expect(retryCancelledCiRun({
+      env: BASE_ENV, fetchImpl: impl, logger: silent, writeSummary: noSummary,
+    })).resolves.toMatchObject({ outcome: 'unavailable' });
+  });
+
+  it('reports a rejected rerun rather than claiming success', async () => {
+    const fetchStub = stubFetch({ rerunStatus: 403 });
+    await expect(run(BASE_ENV, fetchStub))
+      .resolves.toMatchObject({ outcome: 'unavailable', reason: 'rerun-rejected', status: 403 });
   });
 
   it('records why it did not retry on the recovery run summary', async () => {
@@ -186,12 +196,6 @@ describe('retryCancelledCiRun guards', () => {
     expect(written[0]).toContain('reason: superseded');
     expect(written[0]).toContain('run: 4242');
     expect(written[0]).not.toContain('evil');
-  });
-
-  it('reports a rejected rerun rather than claiming success', async () => {
-    const fetchStub = stubFetch({ rerunStatus: 403 });
-    await expect(run(BASE_ENV, fetchStub))
-      .resolves.toMatchObject({ outcome: 'unavailable', reason: 'rerun-rejected', status: 403 });
   });
 });
 
@@ -219,7 +223,6 @@ describe('ci-cancel-recovery.yml wiring', () => {
       'CI_RUN_EVENT', 'CI_RUN_CONCLUSION', 'CI_RUN_HEAD_BRANCH', 'CI_RUN_HEAD_SHA']) {
       expect(jobs.retry, key).toContain(`${key}: \${{ github.event.workflow_run.`);
     }
-    expect(jobs.retry).toContain('run: node scripts/ci-retry-cancelled-run.js');
   });
 
   it('never checks out or builds the pull request head with its writable token', () => {
@@ -230,6 +233,14 @@ describe('ci-cancel-recovery.yml wiring', () => {
     // `run:` lines only — a prose comment may mention npm, a step may not.
     const commands = jobs.retry.split('\n').filter((line) => /^\s+run:/.test(line));
     expect(commands).toEqual(['        run: node scripts/ci-retry-cancelled-run.js']);
+  });
+
+  it('re-dispatches from a sparse checkout with no dependency install', () => {
+    // Latency is the whole point of this workflow: a full-tree checkout plus
+    // setup-node would roughly double its time-to-re-dispatch, and the script
+    // imports Node builtins only.
+    expect(jobs.retry).toContain('sparse-checkout: scripts');
+    expect(jobs.retry).not.toContain('actions/setup-node');
   });
 
   it('grants write only to actions, and never cancels its own recovery', () => {

@@ -13,47 +13,18 @@
  */
 
 import { isDirectlyInvoked } from './lib/directInvocation.js';
+import { githubRequest, isSuccess, repoApiPath } from './lib/githubActionsApi.js';
 
-const GITHUB_API_VERSION = '2022-11-28';
-const GITHUB_API_BASE = 'https://api.github.com';
 const CANCELLATION_TIMEOUT_MS = 10_000;
 
 function targetFromEnv(env) {
-  const repository = typeof env.GITHUB_REPOSITORY === 'string'
-    ? env.GITHUB_REPOSITORY.trim()
-    : '';
-  const runId = typeof env.GITHUB_RUN_ID === 'string'
-    ? env.GITHUB_RUN_ID.trim()
-    : '';
+  const runId = typeof env.GITHUB_RUN_ID === 'string' ? env.GITHUB_RUN_ID.trim() : '';
   const token = typeof env.GITHUB_TOKEN === 'string' ? env.GITHUB_TOKEN.trim() : '';
-  const configuredApiUrl = typeof env.GITHUB_API_URL === 'string'
-    ? env.GITHUB_API_URL.trim()
-    : '';
+  const repoPath = repoApiPath(env);
 
-  if (!/^[^/\s]+\/[^/\s]+$/.test(repository) || !/^\d+$/.test(runId) || !token) {
-    return null;
-  }
+  if (!repoPath || !/^\d+$/.test(runId) || !token) return null;
 
-  let apiBase = GITHUB_API_BASE;
-  if (configuredApiUrl) {
-    let parsedApiUrl;
-    try {
-      parsedApiUrl = new URL(configuredApiUrl);
-    } catch {
-      return null;
-    }
-    if (parsedApiUrl.protocol !== 'https:' || parsedApiUrl.username || parsedApiUrl.password
-      || parsedApiUrl.search || parsedApiUrl.hash) {
-      return null;
-    }
-    apiBase = configuredApiUrl.replace(/\/+$/, '');
-  }
-
-  const [owner, repo] = repository.split('/');
-  return {
-    token,
-    url: `${apiBase}/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/actions/runs/${runId}/cancel`,
-  };
+  return { token, url: `${repoPath}/actions/runs/${runId}/cancel` };
 }
 
 /**
@@ -82,18 +53,13 @@ export async function cancelCurrentCiRun({
   }
 
   try {
-    const response = await fetchImpl(target.url, {
+    const response = await githubRequest(fetchImpl, target.url, target.token, {
       method: 'POST',
-      headers: {
-        Accept: 'application/vnd.github+json',
-        Authorization: `Bearer ${target.token}`,
-        'X-GitHub-Api-Version': GITHUB_API_VERSION,
-      },
-      signal: AbortSignal.timeout(CANCELLATION_TIMEOUT_MS),
+      timeoutMs: CANCELLATION_TIMEOUT_MS,
     });
     const status = Number(response?.status) || 0;
 
-    if ((status >= 200 && status < 300) || response?.ok === true) {
+    if (isSuccess(response)) {
       logger.log?.('🛑 Requested cancellation of the current CI run');
       return { outcome: 'requested', status };
     }

@@ -448,9 +448,13 @@ until the queue empties; the identical SHA then passes on an idle queue.
 **What it is not**: this is *not* `cancel-in-progress` doing its job. The
 concurrency group is per-PR (`.github/workflows/ci.yml`), and a legitimate
 supersession always leaves a **newer run** for the same PR. An external cancel
-leaves none. The leading cause is GitHub-side account enforcement — a
-concurrent-job limit or an Actions spending limit — cancelling in-flight runs
-once several PRs fan out and the Windows shards make each run expensive.
+leaves none.
+
+**The likely cause is the Actions spending limit, not the concurrent-job cap.**
+Exceeding the job cap makes GitHub *queue* runs; cancelling in-flight runs is
+the spending-limit behaviour. So the billing reading below is the primary
+diagnostic, not a footnote. Full runs are expensive because the three Windows
+shards bill at a 2× minute multiplier.
 
 **Tell the two apart** — list the runs for the branch and look for a successor:
 
@@ -479,15 +483,27 @@ gh api /users/<your-login>/settings/billing/actions
 
 **What PortOS already does about it**:
 
-- The gate reports the difference. `scripts/ci-gate-report.js` prints
-  `this run was CANCELLED, not failed`, names the cancelled jobs, and points
-  back here — instead of the old undifferentiated "did not pass".
 - One automatic retry. `.github/workflows/ci-cancel-recovery.yml` watches for a
   completed CI run and re-dispatches it exactly once when it was cancelled on a
   pull request, **no job failed**, and **no newer run exists for the branch**.
   The budget is the run attempt: `POST /rerun` produces attempt 2, and attempt
   2 is never retried. A supersession and a self-cancel after a real failure are
-  both skipped.
+  both skipped, and the recovery run's own summary page states which of those
+  applied. This is the layer that explains a run-wide cancel, because it is the
+  only one that survives it.
+- The gate reports the difference **when the gate itself runs**.
+  `scripts/ci-gate-report.js` prints `this run was CANCELLED, not failed`,
+  names the cancelled jobs, and points back here — instead of the old
+  undifferentiated "did not pass". Note the limit: `if: always()` defeats an
+  upstream failure, not a run-wide cancellation, so in the full external-cancel
+  case the gate job is cancelled too and prints nothing. It covers a partial
+  cancel; the recovery run covers the rest.
+
+**A caveat worth knowing**: the retry re-runs the whole suite, Windows shards
+included, so if the cause really is the spending limit then recovery spends
+more of it. That is the same cost as the manual re-run it replaces, but it
+means recovery is not a substitute for reducing billable minutes — tracked in
+issue #7440.
 
 If a PR is still stuck after that one retry, the queue was busy for longer than
 one attempt — re-run it by hand once the other runs have drained.

@@ -1,11 +1,11 @@
 #!/usr/bin/env node
 
 import { spawnSync } from 'child_process';
-import { appendFileSync } from 'fs';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
 import { prepareCliSpawn } from '../server/lib/bufferedSpawn.js';
 import { isDirectlyInvoked } from './lib/directInvocation.js';
+import { writeStepSummary } from './lib/githubOutput.js';
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -41,9 +41,7 @@ export function recordVitestDuration(scope, label, startedAt) {
   const seconds = ((Date.now() - startedAt) / 1000).toFixed(1);
   const line = `⏱ ${scope} ${label}: ${seconds}s`;
   console.log(line);
-  if (process.env.GITHUB_STEP_SUMMARY) {
-    appendFileSync(process.env.GITHUB_STEP_SUMMARY, `${line}\n`);
-  }
+  writeStepSummary(line);
 }
 
 function spawnNpm(scope, script, extraArgs, label) {

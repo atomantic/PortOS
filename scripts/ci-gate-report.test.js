@@ -1,7 +1,7 @@
 /**
- * The gate's job is to say WHY the run is not mergeable. Before #7437 it said
- * "did not pass" for a cancel and for a red suite alike, so these tests are
- * about the distinction, not about the exit code: both still block.
+ * The gate's job is to say WHY the run is not mergeable. Before issue 7437 it
+ * said "did not pass" for a cancel and for a red suite alike, so these tests
+ * are about the distinction, not about the exit code: both still block.
  */
 import { readFileSync } from 'fs';
 import { dirname, join } from 'path';
@@ -55,11 +55,11 @@ describe('summarizeGateResults', () => {
     }));
 
     expect(summary.verdict).toBe('cancelled');
-    expect(summary.cancelled).toEqual(['server', 'client', 'windows-server']);
     const text = summary.lines.join('\n');
     expect(text).toContain('CANCELLED, not failed');
     expect(text).toContain('no job reported a failure');
-    expect(text).toContain('Cancelled jobs: server, client, windows-server');
+    expect(summary.lines).toContain('Cancelled jobs: server, client, windows-server');
+    expect(summary.lines).toContain('Jobs that finished: impact=success, database=success');
     // The reader needs somewhere to go next, and the doc is the only place the
     // external-vs-supersession distinction is written down.
     expect(text).toContain('docs/TROUBLESHOOTING.md');
@@ -75,17 +75,15 @@ describe('summarizeGateResults', () => {
     }));
 
     expect(summary.verdict).toBe('failure');
-    expect(summary.failed).toEqual(['server=failure']);
-    const text = summary.lines.join('\n');
-    expect(text).toContain('Failed jobs: server=failure');
-    expect(text).not.toContain('CANCELLED, not failed');
-    expect(text).toContain('client, windows-server');
+    expect(summary.lines).toContain('Failed jobs: server=failure');
+    expect(summary.lines.join('\n')).not.toContain('CANCELLED, not failed');
+    expect(summary.lines.join('\n')).toContain('client, windows-server');
   });
 
   it('treats an unrecognised result as a failure, not as collateral of a cancel', () => {
     const summary = summarizeGateResults(results({ server: 'unknown', client: 'cancelled' }));
     expect(summary.verdict).toBe('failure');
-    expect(summary.failed).toEqual(['server=unknown']);
+    expect(summary.lines).toContain('Failed jobs: server=unknown');
   });
 
   it('uses the supplied gate label so the two gates are distinguishable', () => {
@@ -95,44 +93,44 @@ describe('summarizeGateResults', () => {
 });
 
 describe('reportGate', () => {
-  const silentLogger = { log: () => {}, error: () => {} };
   const capture = () => {
     const logged = [];
     const errored = [];
-    return { logged, errored, logger: { log: (l) => logged.push(l), error: (l) => errored.push(l) } };
+    const summaries = [];
+    return {
+      logged,
+      errored,
+      summaries,
+      logger: { log: (l) => logged.push(l), error: (l) => errored.push(l) },
+      writeSummary: (markdown) => summaries.push(markdown),
+    };
   };
 
   it('writes a pass to stdout and reports ok', () => {
-    const { logged, errored, logger } = capture();
-    const outcome = reportGate({ env: { CI_GATE_RESULT_SERVER: 'success' }, logger, writeSummary: () => {} });
+    const { logged, errored, ...sinks } = capture();
+    const outcome = reportGate({ env: { CI_GATE_RESULT_SERVER: 'success' }, ...sinks });
 
     expect(outcome).toMatchObject({ verdict: 'pass', ok: true });
     expect(logged.join('\n')).toContain('CI Gate passed');
     expect(errored).toEqual([]);
   });
 
-  it('publishes the verdict to the run summary, not only the step log', () => {
-    // Nobody expands a step log before concluding "CI is red"; the summary page
-    // is where the cancelled-vs-failed distinction actually gets read.
-    const written = [];
-    reportGate({
+  it('writes a cancel to stderr AND to the run summary, and still blocks', () => {
+    // Nobody expands a step log before concluding "CI is red", so the summary
+    // page carries the same verdict.
+    const { logged, errored, summaries, ...sinks } = capture();
+    const outcome = reportGate({
       env: { CI_GATE_RESULT_SERVER: 'cancelled' },
-      logger: silentLogger,
-      writeSummary: (markdown) => written.push(markdown),
+      logger: sinks.logger,
+      writeSummary: sinks.writeSummary,
     });
-
-    expect(written).toHaveLength(1);
-    expect(written[0]).toContain('CI Gate');
-    expect(written[0]).toContain('CANCELLED, not failed');
-  });
-
-  it('writes a cancel to stderr and still blocks', () => {
-    const { logged, errored, logger } = capture();
-    const outcome = reportGate({ env: { CI_GATE_RESULT_SERVER: 'cancelled' }, logger, writeSummary: () => {} });
 
     expect(outcome).toMatchObject({ verdict: 'cancelled', ok: false });
     expect(errored.join('\n')).toContain('CANCELLED');
     expect(logged).toEqual([]);
+    expect(summaries).toHaveLength(1);
+    expect(summaries[0]).toContain('CI Gate');
+    expect(summaries[0]).toContain('CANCELLED, not failed');
   });
 });
 
@@ -141,11 +139,13 @@ describe('ci.yml gate wiring', () => {
 
   it.each(['gate', 'full-gate'])('%s runs the reporter instead of an inline script', (id) => {
     expect(jobs[id]).toContain('run: node scripts/ci-gate-report.js');
-    // The inline `node -e` the reporter replaced could not be tested at all.
-    expect(jobs[id]).not.toMatch(/node -e/);
     expect(jobs[id]).toMatch(/CI_GATE_LABEL:/);
     // Reachable only with a checkout, and the gate has no elevated-token work.
     expect(jobs[id]).toContain('persist-credentials: false');
+    // The reporter and its two imports all live under scripts/; a full-tree
+    // checkout on the fan-in job every required check waits on is ~12x the
+    // download for nothing.
+    expect(jobs[id]).toContain('sparse-checkout: scripts');
   });
 
   it('feeds the aggregate gate every job it waits on', () => {
