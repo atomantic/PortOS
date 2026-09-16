@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { buildEidoverseWorldSignals, eidoversePeerId } from './eidoverseWorldSignals.js';
 import {
   PERSISTENT_MIND_PLAYBOOK_PHASES,
   derivePersistentMindPlaybookPhaseSignals,
@@ -113,5 +114,45 @@ describe('derivePersistentMindPlaybookPhaseSignals', () => {
       ],
     });
     expect(signals.peersWithActivity).toBe(2);
+  });
+});
+
+describe('contract with buildEidoverseWorldSignals()', () => {
+  // Reads a real projection (not a hand-built fixture matching this module's
+  // own assumptions) so a future shape change to eidoverseWorldSignals.js
+  // that silently breaks phase derivation fails here rather than only in
+  // production. See server/lib/eidoverseWorldSignals.js.
+  it('derives a sane, non-null signal set from a representative world-signals projection', () => {
+    const peerId = eidoversePeerId({ instanceId: 'fixture-peer' });
+    const worldSignals = buildEidoverseWorldSignals({
+      apps: [{ overallStatus: 'online', managed: true }, { overallStatus: 'stopped', managed: false }],
+      agents: [{ id: 'agent-1', status: 'running' }],
+      taskState: { tasks: [{ id: 'task-1', status: 'pending' }] },
+      cosStatus: { running: true, activeAgents: 1, pausedAgents: 0 },
+      review: { total: 2, cos: 1, alert: 0 },
+      featuresState: { features: [{ id: 'feature-a', enabled: true }] },
+      peers: [{ instanceId: 'fixture-peer', enabled: true, status: 'active' }],
+      backupState: { status: 'success', filesChanged: 3 },
+      notifications: { total: 4, unread: 1 },
+      character: { level: 3 },
+      voiceConfig: { enabled: false },
+      memory: { total: 100, used: 10 },
+      diskPercent: 40,
+      todayActivity: { stats: { completed: 5, succeeded: 4, failed: 1, successRate: 80 }, isRunning: false, isPaused: false },
+      velocity: { today: 5, todaySuccesses: 4, todayFailures: 1, velocity: 1.2, avgPerDay: 3, historicalDays: 30 },
+      activityCalendar: { weeks: [], summary: {} },
+      goalsData: { goals: [{ id: 'goal-1', status: 'active', progress: 40, milestones: [], todos: [] }] },
+      memoryGraph: { nodes: [{ id: 'n1', category: 'fact', importance: 1 }], edges: [] },
+      inboxCounts: { total: 1, needs_review: 0, classifying: 0 },
+      introspection: { db: { tables: ['t1'] }, fs: { domains: ['d1'], totalBytes: 10, totalFiles: 2 } },
+      jira: [],
+      destinations: new Set([peerId]),
+    });
+
+    const signals = derivePersistentMindPlaybookPhaseSignals(worldSignals);
+    expect(signals.districtCount).toBeGreaterThan(0);
+    expect(signals.failureRate).not.toBeNull();
+    expect(signals.peersWithActivity).toBe(1);
+    expect(PERSISTENT_MIND_PLAYBOOK_PHASES).toContain(selectPersistentMindPlaybookPhase(signals).phase);
   });
 });
