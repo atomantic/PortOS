@@ -436,6 +436,67 @@ npm test -- lib/taskParser.test.js
 npm run test:watch
 ```
 
+### CI cancelled with no successor run
+
+**Symptom**: A pull request's `CI Gate` / `Full CI Gate` goes red while several
+PRs are building at once. Opening the run shows no failing assertion — jobs
+report `##[error]The operation was canceled.` mid-step, often inside
+`actions/checkout`, and the in-workflow `Cancel sibling CI jobs after failure`
+step is `skipped` in every job. Re-running is usually cancelled the same way
+until the queue empties; the identical SHA then passes on an idle queue.
+
+**What it is not**: this is *not* `cancel-in-progress` doing its job. The
+concurrency group is per-PR (`.github/workflows/ci.yml`), and a legitimate
+supersession always leaves a **newer run** for the same PR. An external cancel
+leaves none. The leading cause is GitHub-side account enforcement — a
+concurrent-job limit or an Actions spending limit — cancelling in-flight runs
+once several PRs fan out and the Windows shards make each run expensive.
+
+**Tell the two apart** — list the runs for the branch and look for a successor:
+
+```bash
+# Every run for one PR branch, newest first. A supersession has a run NEWER
+# than the cancelled one; an external cancel does not.
+gh run list --branch "<head-branch>" --workflow CI \
+  --json databaseId,headSha,status,conclusion,createdAt,attempt
+
+# Did any job actually fail, or were they all cancelled?
+gh run view <run-id> --json jobs \
+  --jq '.jobs[] | {name, conclusion, startedAt, completedAt}'
+```
+
+All jobs `cancelled` or `success`, none `failure`, and no newer run for the
+branch → external cancel. One job `failure` → a real red run that
+`scripts/cancel-current-ci-run.js` then stopped on purpose.
+
+**Account-level confirmation** (needs a scope the unattended agent cannot
+grant itself — run it yourself):
+
+```bash
+gh auth refresh -s user
+gh api /users/<your-login>/settings/billing/actions
+```
+
+**What PortOS already does about it**:
+
+- The gate reports the difference. `scripts/ci-gate-report.js` prints
+  `this run was CANCELLED, not failed`, names the cancelled jobs, and points
+  back here — instead of the old undifferentiated "did not pass".
+- One automatic retry. `.github/workflows/ci-cancel-recovery.yml` watches for a
+  completed CI run and re-dispatches it exactly once when it was cancelled on a
+  pull request, **no job failed**, and **no newer run exists for the branch**.
+  The budget is the run attempt: `POST /rerun` produces attempt 2, and attempt
+  2 is never retried. A supersession and a self-cancel after a real failure are
+  both skipped.
+
+If a PR is still stuck after that one retry, the queue was busy for longer than
+one attempt — re-run it by hand once the other runs have drained.
+
+One deliberate rough edge: a run **you** cancel by hand looks identical to an
+external cancel from the API, so it gets the same single retry. Push a new
+commit (or close the PR) rather than cancelling if you want the run to stay
+stopped.
+
 ## Known Issues
 
 ### GPU watchdog kernel panic during LoRA training

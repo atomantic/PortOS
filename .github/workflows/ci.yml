@@ -683,30 +683,26 @@ jobs:
     needs: [impact, server, client, database, windows-server]
     runs-on: ubuntu-latest
     steps:
+      # The gate needs the repo only for scripts/ci-gate-report.js, which
+      # imports Node builtins only — no dependency install, no setup-node.
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      # A CANCELLED run and a FAILED one are different events with different
+      # responses, and collapsing them sent readers hunting for a test failure
+      # that did not exist (#7437). Each CI_GATE_RESULT_<JOB> variable names one
+      # job; adding a job to the gate is one line here and no code change.
       - name: Require every selected job to pass
         env:
-          IMPACT_RESULT: ${{ needs.impact.result }}
-          SERVER_RESULT: ${{ needs.server.result }}
-          CLIENT_RESULT: ${{ needs.client.result }}
-          DATABASE_RESULT: ${{ needs.database.result }}
-          WINDOWS_SERVER_RESULT: ${{ needs.windows-server.result }}
-        run: |
-          node -e '
-            const results = {
-              impact: process.env.IMPACT_RESULT,
-              server: process.env.SERVER_RESULT,
-              client: process.env.CLIENT_RESULT,
-              database: process.env.DATABASE_RESULT,
-              windows_server: process.env.WINDOWS_SERVER_RESULT,
-            };
-            const failed = Object.entries(results)
-              .filter(([, result]) => !["success", "skipped"].includes(result));
-            if (failed.length) {
-              console.error("Selected CI jobs did not pass:", failed);
-              process.exit(1);
-            }
-            console.log("CI gate passed:", results);
-          '
+          CI_GATE_LABEL: CI Gate
+          CI_GATE_RESULT_IMPACT: ${{ needs.impact.result }}
+          CI_GATE_RESULT_SERVER: ${{ needs.server.result }}
+          CI_GATE_RESULT_CLIENT: ${{ needs.client.result }}
+          CI_GATE_RESULT_DATABASE: ${{ needs.database.result }}
+          CI_GATE_RESULT_WINDOWS_SERVER: ${{ needs.windows-server.result }}
+        run: node scripts/ci-gate-report.js
 
   full-gate:
     # A second check run published ONLY when the impact plan chose the complete
@@ -730,12 +726,15 @@ jobs:
     needs: [impact, gate]
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      # Same reporter, one input: a cancelled aggregate gate must not read as a
+      # red complete suite on the release path either.
       - name: Require the aggregate gate to have passed
         env:
-          GATE_RESULT: ${{ needs.gate.result }}
-        run: |
-          if [ "$GATE_RESULT" != "success" ]; then
-            echo "The complete suite ran but CI Gate did not pass ($GATE_RESULT)."
-            exit 1
-          fi
-          echo "Complete suite passed — this tree does not need re-testing on release."
+          CI_GATE_LABEL: Full CI Gate
+          CI_GATE_RESULT_GATE: ${{ needs.gate.result }}
+        run: node scripts/ci-gate-report.js

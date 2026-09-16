@@ -45,8 +45,19 @@ const PRE_INSTALL_ENTRYPOINTS = [
  *
  * `cancel-current-ci-run.js` is here because it runs from an `if: failure()`
  * workflow step that may fire before or during a failed dependency install.
+ *
+ * `ci-gate-report.js` runs on the two gate jobs, which check out the repo for
+ * this one script and deliberately install nothing; `ci-retry-cancelled-run.js`
+ * is the whole body of the `workflow_run` recovery workflow, which does the
+ * same. Both would otherwise be one careless import away from making the
+ * required check — or the thing that recovers a cancelled one — unloadable.
  */
-const BARE_CHECKOUT_SCRIPTS = ['scripts/cancel-current-ci-run.js', 'scripts/doctor.js'];
+const BARE_CHECKOUT_SCRIPTS = [
+  'scripts/cancel-current-ci-run.js',
+  'scripts/ci-gate-report.js',
+  'scripts/ci-retry-cancelled-run.js',
+  'scripts/doctor.js',
+];
 
 const BUILTINS = new Set(builtinModules);
 const isBuiltin = (specifier) => BUILTINS.has(specifier.replace(/^node:/, ''));

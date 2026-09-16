@@ -4,7 +4,7 @@ import { join } from 'path';
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { writeStepEnv, writeStepOutput } from './githubOutput.js';
+import { writeStepEnv, writeStepOutput, writeStepSummary } from './githubOutput.js';
 
 describe('writeStepOutput', () => {
   let outputPath;
@@ -88,5 +88,28 @@ describe('writeStepEnv', () => {
 
     expect(() => writeStepEnv('CI_BASE_SHA', 'abc123')).not.toThrow();
     expect(readFileSync(envPath, 'utf8')).toBe('');
+  });
+});
+
+describe('writeStepSummary', () => {
+  let summaryPath;
+
+  beforeEach(() => {
+    summaryPath = join(mkdtempSync(join(tmpdir(), 'gh-summary-')), 'summary.md');
+    writeFileSync(summaryPath, '');
+  });
+
+  it('appends the markdown block verbatim, newlines and all', () => {
+    // The key/value writers collapse newlines because a newline forges a second
+    // entry there. In markdown a newline is content, and collapsing it would
+    // run a multi-line verdict into one unreadable line.
+    writeStepSummary('### Verdict\n\n- one\n- two', { GITHUB_STEP_SUMMARY: summaryPath });
+
+    expect(readFileSync(summaryPath, 'utf8')).toBe('### Verdict\n\n- one\n- two\n');
+  });
+
+  it('does nothing outside GitHub Actions', () => {
+    expect(() => writeStepSummary('### Verdict', {})).not.toThrow();
+    expect(readFileSync(summaryPath, 'utf8')).toBe('');
   });
 });
