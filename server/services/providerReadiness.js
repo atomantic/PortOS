@@ -41,6 +41,7 @@ import { expandPageToken, getNavPageForPath } from '../lib/navManifest.js';
 import { bareLocalModelId } from '../lib/providerModels.js';
 import { probeOpenAiModelsCached, resetOpenAiModelsProbeCache } from '../lib/openAiModelsProbeCache.js';
 import { aliasServedContextWindows } from '../lib/providerContextWindows.js';
+import { managedOllamaContextLength } from '../lib/ollamaContext.js';
 import { findCommandOnPath } from '../lib/processEnv.js';
 import { actionCovers, describeRuntimeSetup, readRuntimeWeights, weightsBlockStart } from './localRuntimeSetup.js';
 import { isAppInstalled as isLmStudioAppInstalled } from './lmStudioManager.js';
@@ -444,6 +445,14 @@ export async function getProviderReadiness(provider, deps = {}) {
     // (#7441) — this is the channel the provider card budgets its meter from, so
     // the card shows the window the dispatch gate would actually enforce.
     contextWindows: aliasServedContextWindows(provider, runtime, result.contextWindows),
+    // The window PortOS holds this daemon at, resolved from BOTH rungs — the
+    // provider's `numCtx` and the ambient `OLLAMA_CONTEXT_LENGTH` this install
+    // launches Ollama with. It rides the same payload for the same reason the
+    // served windows do: it is runtime state, not configuration, and the card's
+    // meter must show the ceiling the dispatch gate enforces. The browser cannot
+    // read server env, so without this the card stayed on the `numCtx`-only rung
+    // and promised a window a run would then be refused for (#7472).
+    runtimeContextWindow: managedOllamaContextLength(provider),
     // What a one-click "set this up for me" button can do about the unmet
     // checks, or `null` when nothing here is auto-fixable (see
     // `localRuntimeSetup.js`). Carried on the readiness payload so the card

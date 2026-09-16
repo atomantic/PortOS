@@ -40,6 +40,7 @@ import { analyzeError, ERROR_CATEGORIES, isRunCanceledError } from '../lib/aiToo
 import { isSchemaTypeCategory, resolveProviderBench } from '../lib/providerCooldown.js';
 import { isGenerationModel, isVisionCapableCliProvider } from '../lib/localModelHeuristics.js';
 import { contextWindowRejection } from '../lib/aiToolkit/providerStatus.js';
+import { withOllamaRuntimeContextWindow } from '../lib/ollamaContext.js';
 import { getAIToolkitInstance } from '../lib/aiToolkitState.js';
 import { createSingleFlight } from '../lib/singleFlight.js';
 import { extractJson } from '../lib/jsonExtract.js';
@@ -1318,7 +1319,11 @@ async function assertRequestFitsContext(provider, model, requestCapabilities, { 
   const required = Number(requestCapabilities?.requiredContextTokens);
   if (!Number.isFinite(required) || required <= 0) return;
 
-  const observed = await withObservedContextWindowsLazy(provider);
+  // Two in-memory projections, both describing what the daemon is doing RIGHT
+  // NOW rather than what the record remembers: the windows it is serving, and
+  // the ceiling PortOS launched it at — including the ambient
+  // `OLLAMA_CONTEXT_LENGTH` rung the toolkit cannot reach for itself (#7472).
+  const observed = withOllamaRuntimeContextWindow(await withObservedContextWindowsLazy(provider));
   // `reason` already names both numbers, which is what the operator needs to
   // decide between a smaller prompt and a wider provider — so it IS the
   // message rather than being re-worded beside it.

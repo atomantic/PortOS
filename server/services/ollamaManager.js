@@ -34,7 +34,7 @@ import { buildHfAuthHeaders, buildHfResolveUrl, HF_API } from '../lib/huggingfac
 import { isEmbeddingModel } from '../lib/localModelHeuristics.js'
 import { commandExists } from '../lib/commandExists.js'
 import {
-  OLLAMA_AGENT_MIN_CONTEXT, OLLAMA_CONTEXT_ENV_VAR, resolveOllamaContextLength, withOllamaContextEnv
+  OLLAMA_AGENT_MIN_CONTEXT, OLLAMA_CONTEXT_ENV_VAR, managedOllamaBaseUrl, resolveOllamaContextLength, withOllamaContextEnv
 } from '../lib/ollamaContext.js'
 import { compareSemver } from '../lib/versionUtils.js'
 import { isSafeHfRepoRelativePath } from '../lib/hfCache.js'
@@ -76,7 +76,7 @@ const HF_IMPORT_METADATA_TIMEOUT_MS = 180_000
 const DEFAULT_CONFIG = {
   // Ollama uses OLLAMA_HOST (host:port, no scheme) by convention; also accept
   // an explicit OLLAMA_URL. Normalize to a scheme + no trailing slash + no /v1.
-  baseUrl: normalizeBaseUrl(process.env.OLLAMA_URL || process.env.OLLAMA_HOST || 'http://localhost:11434'),
+  baseUrl: normalizeBaseUrl(managedOllamaBaseUrl()),
   timeout: DEFAULT_REQUEST_TIMEOUT_MS
 }
 

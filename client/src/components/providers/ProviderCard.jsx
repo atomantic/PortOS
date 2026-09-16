@@ -34,6 +34,7 @@ import {
   providerTypeClass,
   resolveModelContextWindow,
   supportsModelRefresh,
+  withRuntimeContextWindow,
 } from '../../utils/providers';
 import { formatContextLength, formatDateTime } from '../../utils/formatters';
 import { isHttpsUrl } from '../../utils/urlNormalize';
@@ -513,9 +514,15 @@ export default function ProviderCard({
             // first, so the meter agrees with what the dispatch gate enforces —
             // a card reading 128K beside an endpoint serving 32K promised a
             // budget no run could ever spend. Down or silent → `null`, and the
-            // ladder resolves exactly as it did before.
+            // ladder resolves exactly as it did before. The window PortOS
+            // LAUNCHED that daemon at rides the same payload — it is resolved
+            // server-side because its second rung is the ambient
+            // `OLLAMA_CONTEXT_LENGTH` the browser cannot read (#7472).
             const { tokens, source } = resolveModelContextWindow(
-              mergeObservedContextWindows(provider, daemonReadiness?.contextWindows),
+              withRuntimeContextWindow(
+                mergeObservedContextWindows(provider, daemonReadiness?.contextWindows),
+                daemonReadiness?.runtimeContextWindow,
+              ),
               provider.defaultModel
             );
             const windowLabel = formatContextLength(tokens);
