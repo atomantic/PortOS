@@ -34,7 +34,7 @@ import { updateAgent } from './cosAgentLifecycle.js';
 import { updateTask, addTask, reviveBlockedTask, checkStagePrecondition } from './cos.js';
 import { PIPELINE_STAGE_BEHAVIOR_FLAGS, normalizeReviewers } from '../lib/validation.js';
 import { PATHS, rmGuarded, tryReadFile } from '../lib/fileUtils.js';
-import { doneSentinelPath as resolveDoneSentinelPath } from '../lib/agentSentinel.js';
+import { DONE_SENTINEL_NAME, doneSentinelName, doneSentinelPath as resolveDoneSentinelPath } from '../lib/agentSentinel.js';
 import * as jiraService from './jira.js';
 import * as git from './git.js';
 import { isTruthyMeta } from './agentState.js';
@@ -327,8 +327,20 @@ async function runCompletionCleanupSteps(context) {
   // Last, and never fatal: `runStep` RETHROWS on the runner path
   // (`continueOnError` is unset there), so a janitorial `rm` that hits EPERM
   // must not be able to abort the worktree cleanup and pipeline hand-off above.
-  await removeCompletionSentinel(context)
-    .catch(err => emitLog('warn', `Completion sentinel removal failed for ${context.agentId}: ${err.message}`, { agentId: context.agentId }));
+  //
+  // Gated on the record actually reaching an outcome. `finalizeAgent` runs
+  // `persistSimplifySummaries` and `resolveFailedTaskUpdate` BEFORE it
+  // dispatches the output hook and calls `completeAgent`; a throw in either
+  // leaves the record `running`, and the orphan sweep's recovery hook is then
+  // what salvages the run — for a programmatic-I/O type the sentinel IS the
+  // deliverable it reads (an LI proposal, an issue-filing payload). Both
+  // spawners run this from a `finally`, so they reach here on exactly that
+  // path. An unreadable record counts as not-over: leaving the file for the
+  // stale sweep is the recoverable direction, destroying a deliverable is not.
+  if (context.agentState?.status === 'completed') {
+    await removeCompletionSentinel(context)
+      .catch(err => emitLog('warn', `Completion sentinel removal failed for ${context.agentId}: ${err.message}`, { agentId: context.agentId }));
+  }
 }
 
 function resolveRunnerPrOwnership({ task, agent, agentState }) {
@@ -494,17 +506,18 @@ async function advanceCreativeDirectorIfNeeded({ agentId, task, effectiveSuccess
  * sentinel at all (`shouldAbandonForHostShutdown`) — so this never eats a
  * signal a resume still needs.
  *
- * `workspacePath` is the spawner's own cwd, authoritative for the run it is
- * finalizing; the runner-event path has none and falls back to the workspace
- * the agent record stamped at registration.
+ * The workspace comes from the agent record — the cwd stamped at registration,
+ * which is the directory the run wrote its sentinel into (a worktree run
+ * records its worktree here).
  */
-export async function removeCompletionSentinel({ agentId, agent, agentState, workspacePath }) {
-  // A missing id makes `doneSentinelName` fall back to the bare, unscoped
-  // `.agent-done` — which belongs to no run and may be a legacy agent's live
-  // signal. The sweep protects it with an age floor for exactly that reason, so
-  // never let a resolution failure here aim at it.
-  if (typeof agentId !== 'string' || !agentId.trim()) return;
-  const workspace = workspacePath || agentState?.metadata?.workspacePath || agent?.workspacePath || null;
+export async function removeCompletionSentinel({ agentId, agent, agentState }) {
+  // An id that yields no usable slug makes `doneSentinelName` fall back to the
+  // bare, unscoped `.agent-done` — which belongs to no run and may be a legacy
+  // agent's live signal (the sweep protects it with an age floor for exactly
+  // that reason). Ask the producer rather than re-deriving its rule: the
+  // fallback fires on a blank id AND on one whose sanitized slug is empty.
+  if (typeof agentId !== 'string' || doneSentinelName(agentId) === DONE_SENTINEL_NAME) return;
+  const workspace = agentState?.metadata?.workspacePath || agent?.workspacePath || null;
   if (!workspace) return;
   // `rmGuarded`, like the stale-sentinel sweep that deletes these same files.
   await rmGuarded(resolveDoneSentinelPath(workspace, agentId), { force: true });
@@ -557,22 +570,19 @@ async function reportWorktreeCleanupWarnings({ agentId, task, cleanupWarnings })
  * Retry-hold release remains in a `finally`: even a skipped JIRA worktree or
  * a failed hand-off must release the task with the resume pointer cleanup left.
  *
- * `workspacePath` is the spawner's own cwd, so sentinel removal still works
- * when the persisted record cannot be read.
- *
  * `prOwnership` is `resolvePrOwnership`'s answer for this run;
  * `prClaimVerified` / `noChangesToShip` are read off finalize's return.
  * `success` is the verdict finalize actually persisted — a PR-claim downgrade
  * must reach cleanup, or a run that opened no PR is cleaned up as a success and
  * loses its retry state (#3358).
  */
-export async function runSpawnerCompletionCleanup({ agentId, task, success, prOwnership, prClaimVerified = false, noChangesToShip = false, outputBuffer, workspacePath = null }) {
+export async function runSpawnerCompletionCleanup({ agentId, task, success, prOwnership, prClaimVerified = false, noChangesToShip = false, outputBuffer }) {
   try {
     const { getAgent } = await import('./cos.js');
     const agentState = await getAgent(agentId).catch(() => null);
     await runCompletionCleanupSteps({
       agentId, task, agentState, effectiveSuccess: success, prOwnership,
-      prClaimVerified, noChangesToShip, outputBuffer, workspacePath, continueOnError: true,
+      prClaimVerified, noChangesToShip, outputBuffer, continueOnError: true,
     });
   } finally {
     await releaseRetryHold({ agentId, task, success })

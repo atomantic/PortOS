@@ -1042,7 +1042,6 @@ export async function spawnTuiAgent({
     await runSpawnerCompletionCleanup({
       agentId,
       task,
-      workspacePath: cwd,
       success: cleanupSuccess,
       prOwnership,
       prClaimVerified,

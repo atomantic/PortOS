@@ -623,7 +623,7 @@ describe.each(['runner', 'spawner'])('%s completion side effects', (path) => {
 
   beforeEach(async () => {
     workspace = await mkdtemp(join(tmpdir(), 'completion-test-'));
-    getAgent.mockResolvedValue({ metadata: { workspacePath: workspace, sourceWorkspace: '/example/repo' }, result: { success: true } });
+    getAgent.mockResolvedValue({ status: 'completed', metadata: { workspacePath: workspace, sourceWorkspace: '/example/repo' }, result: { success: true } });
     git.push.mockResolvedValue({});
     git.getRepoBranches.mockResolvedValue({ baseBranch: 'main', devBranch: 'develop' });
     git.generatePRDescription.mockResolvedValue('Example changes');
@@ -699,34 +699,47 @@ describe.each(['runner', 'spawner'])('%s completion side effects', (path) => {
   });
 });
 
-// The spawner passes its own cwd, so a run whose persisted record cannot be read
-// still has its sentinel removed rather than leaking one into a real checkout.
-describe('spawner sentinel removal without a persisted record', () => {
-  it('falls back to the cwd the spawner ran in', async () => {
-    const workspace = await mkdtemp(join(tmpdir(), 'completion-sentinel-'));
-    getAgent.mockResolvedValue(null);
-    await writeFile(join(workspace, '.agent-done-a1'), '## Summary\nDone');
+// `finalizeAgent` runs persistSimplifySummaries and resolveFailedTaskUpdate
+// BEFORE it dispatches the output hook and calls completeAgent, and both
+// spawners run cleanup from a `finally` — so a throw in either lands here with
+// the record still `running`. The orphan sweep's recovery hook is what salvages
+// that run, and for a programmatic-I/O type the sentinel IS the deliverable it
+// reads, so retiring it here would destroy an LI proposal or filing payload.
+describe('completion sentinel survives a finalize that recorded no outcome', () => {
+  let workspace;
+  beforeEach(async () => { workspace = await mkdtemp(join(tmpdir(), 'completion-unfinalized-')); });
+  afterEach(async () => { await rm(workspace, { recursive: true, force: true }); });
 
-    await runSpawnerCompletionCleanup({
-      agentId: 'a1', task: { id: 't', metadata: {} }, success: true, outputBuffer: '',
+  const cleanupWithStatus = (status) => {
+    getAgent.mockResolvedValue({ status, metadata: { workspacePath: workspace } });
+    return runSpawnerCompletionCleanup({
+      agentId: 'a1', task: { id: 't', metadata: {} }, success: false, outputBuffer: '',
       prOwnership: { taskOpenPR: false, agentOpensOwnPr: false },
-      workspacePath: workspace,
     });
+  };
 
+  it('keeps the sentinel while the record is still running', async () => {
+    await writeFile(join(workspace, '.agent-done-a1'), '{"summary":"x","payload":{"title":"proposal"}}');
+    await cleanupWithStatus('running');
+    expect(await readFile(join(workspace, '.agent-done-a1'), 'utf8')).toContain('proposal');
+  });
+
+  it('removes it once the record reached an outcome', async () => {
+    await writeFile(join(workspace, '.agent-done-a1'), '{"summary":"x","payload":{"title":"proposal"}}');
+    await cleanupWithStatus('completed');
     await expect(readFile(join(workspace, '.agent-done-a1'))).rejects.toMatchObject({ code: 'ENOENT' });
-    await rm(workspace, { recursive: true, force: true });
   });
 });
 
-// `doneSentinelName` falls back to the bare, unscoped `.agent-done` for a
-// missing id — a file that belongs to no run and that the stale sweep protects
-// with an age floor precisely because it can never be matched to one.
+// `doneSentinelName` falls back to the bare, unscoped `.agent-done` whenever the
+// SANITIZED slug is empty — not only for a blank id. That file belongs to no run
+// and the stale sweep protects it with an age floor for exactly that reason.
 describe('completion sentinel removal never targets the unscoped sentinel', () => {
-  it('does nothing when the run has no agent id', async () => {
+  it.each([['  '], ['/'], ['...']])('does nothing for an id with no usable slug (%j)', async (agentId) => {
     const workspace = await mkdtemp(join(tmpdir(), 'completion-unscoped-'));
     await writeFile(join(workspace, '.agent-done'), '## Summary\nA legacy run still going');
 
-    await removeCompletionSentinel({ agentId: '  ', workspacePath: workspace });
+    await removeCompletionSentinel({ agentId, agentState: { metadata: { workspacePath: workspace } } });
 
     expect(await readFile(join(workspace, '.agent-done'), 'utf8')).toContain('still going');
     await rm(workspace, { recursive: true, force: true });
