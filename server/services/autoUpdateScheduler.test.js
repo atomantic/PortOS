@@ -34,7 +34,7 @@ vi.mock('./updateChecker.js', () => ({
   recordAutoUpdateRuntime: deps.recordRuntime,
 }));
 
-const { runAutoUpdateTick, syncAutoUpdateSchedule, updateBaselineAt, __resetAutoUpdateSchedulerForTests } =
+const { runAutoUpdateTick, syncAutoUpdateSchedule, updateBaselineAt, repairDispatchDue, __resetAutoUpdateSchedulerForTests } =
   await import('./autoUpdateScheduler.js');
 
 const HOUR = 60 * 60 * 1000;
@@ -226,8 +226,9 @@ describe('checkout readiness gate', () => {
   // fixing the tree must not be re-queued every 5-minute tick forever.
   // `addTask`'s dedup only holds while that task stays open, and
   // `agentFinalization` marks it `completed` regardless of whether the
-  // checkout ended up clean — so nothing but the cooldown baseline can bound
-  // the re-dispatch.
+  // checkout ended up clean — so nothing but the `repairQueuedAt` gate can
+  // bound the re-dispatch. Still `repo-not-ready`, not `cooldown` — the
+  // update-cooldown reason must not be reused here (see next test).
   it('does not queue a second repair agent on the tick after the first one completed', async () => {
     deps.readRepo.mockResolvedValue(notReady);
     deps.queueRepair.mockResolvedValue({ id: 'task-1' });
@@ -240,7 +241,8 @@ describe('checkout readiness gate', () => {
 
     // The repair task is done by the next tick (whether or not it fixed
     // anything, same as agentFinalization marking it `completed` either way),
-    // but the baseline stamped above is what the cooldown reads now.
+    // but the checkout is STILL not ready, so the repair-dispatch gate above
+    // is what has to hold, not the update cooldown.
     deps.queueRepair.mockClear();
     deps.gateState.mockResolvedValue({
       runtime: { armedAt: iso(Date.now() - 48 * HOUR), lastRunAt: null, repairQueuedAt },
@@ -249,8 +251,35 @@ describe('checkout readiness gate', () => {
     });
 
     const result = await runAutoUpdateTick({ io: {} });
-    expect(result).toMatchObject({ ran: false, reason: 'cooldown' });
+    expect(result).toMatchObject({ ran: false, reason: 'repo-not-ready' });
     expect(deps.queueRepair).not.toHaveBeenCalled();
+  });
+
+  // The bug the reviewer of the first draft of this fix caught: folding the
+  // repair-dispatch timestamp into the UPDATE cooldown would mean a checkout
+  // the repair agent fixes in minutes still can't update for the rest of the
+  // interval. It must update on the very next idle tick instead.
+  it('updates on the next tick once the repair agent actually fixed the checkout', async () => {
+    deps.gateState.mockResolvedValue({
+      runtime: { armedAt: iso(Date.now() - 48 * HOUR), lastRunAt: null, repairQueuedAt: iso(Date.now() - 60_000) },
+      lastUpdateResult: null,
+      updateInProgress: false,
+    });
+    deps.readRepo.mockResolvedValue(readyVerdict);
+
+    await expect(runAutoUpdateTick({ io: {} })).resolves.toMatchObject({ ran: true });
+    expect(deps.queueRepair).not.toHaveBeenCalled();
+  });
+
+  // A failed enqueue (`queueRepoRepairTask` returns null on its own caught
+  // error) must not stamp the gate — otherwise one failed dispatch locks out
+  // every retry for the whole cooldown window while nothing was queued.
+  it('does not stamp the repair gate when the enqueue itself failed', async () => {
+    deps.readRepo.mockResolvedValue(notReady);
+    deps.queueRepair.mockResolvedValue(null);
+
+    await runAutoUpdateTick({ io: {} });
+    expect(deps.recordRuntime).not.toHaveBeenCalledWith(expect.objectContaining({ repairQueuedAt: expect.any(String) }));
   });
 });
 
@@ -290,15 +319,43 @@ describe('interval baseline', () => {
     expect(updateBaselineAt({}, null, now)).toBe(now);
   });
 
-  // A repair-agent DISPATCH also resets the clock (#7468) — without this, a
-  // stand-down agent (no lastRunAt, since no update ever ran) would leave the
-  // baseline stuck at armedAt forever and every tick would re-queue.
-  it('also measures the interval from a repair-agent dispatch', () => {
+  // #7468: a repair-agent dispatch must NOT feed this baseline. A fixed
+  // checkout has to update on the very next tick, not wait out the same
+  // interval a second time — that throttling lives in `repairDispatchDue`.
+  it('ignores a repair-agent dispatch entirely', () => {
     const now = Date.parse('2026-01-02T00:00:00Z');
     expect(updateBaselineAt(
-      { repairQueuedAt: '2026-01-01T18:00:00Z', armedAt: '2025-12-01T00:00:00Z' },
+      { repairQueuedAt: '2026-01-01T23:59:00Z', armedAt: '2025-12-01T00:00:00Z' },
       null,
       now,
-    )).toBe(Date.parse('2026-01-01T18:00:00Z'));
+    )).toBe(Date.parse('2025-12-01T00:00:00Z'));
+  });
+});
+
+describe('repair-dispatch cooldown', () => {
+  const MIN_INTERVAL_MS = 6 * HOUR;
+
+  // The regression this whole fix targets: a repair agent that stands down
+  // must cost one dispatch per window, not one per 5-minute tick.
+  it('refuses a re-dispatch before the interval has elapsed', () => {
+    const now = Date.parse('2026-01-02T00:00:00Z');
+    expect(repairDispatchDue(
+      { repairQueuedAt: iso(now - HOUR) },
+      MIN_INTERVAL_MS,
+      now,
+    )).toBe(false);
+  });
+
+  it('allows a re-dispatch once the interval has elapsed', () => {
+    const now = Date.parse('2026-01-02T00:00:00Z');
+    expect(repairDispatchDue(
+      { repairQueuedAt: iso(now - 7 * HOUR) },
+      MIN_INTERVAL_MS,
+      now,
+    )).toBe(true);
+  });
+
+  it('allows the first dispatch when nothing has ever been queued', () => {
+    expect(repairDispatchDue({}, MIN_INTERVAL_MS, Date.now())).toBe(true);
   });
 });
