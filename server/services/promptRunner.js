@@ -1246,6 +1246,28 @@ function stripFallbackContext(err) {
 }
 
 /**
+ * The budget a pre-dispatch REFUSAL is allowed to act on.
+ *
+ * `requiredContextTokens` is the prompt plus an output reserve, and when the
+ * caller named no reserve that is `DEFAULT_OUTPUT_RESERVE_TOKENS` — 8,000
+ * tokens nobody asked for. Ranking fallback candidates on that optimistic
+ * budget is fine (it prefers a provider with room to answer), but REFUSING on
+ * it turns "provably cannot fit" into "probably cannot fit": a pinned caller
+ * sending a 26K-token prompt to a 32K endpoint and expecting three sentences
+ * back would be refused, though it succeeds today — these daemons size the
+ * answer from what the window has left.
+ *
+ * So a refusal uses the provable floor — the prompt alone — unless the caller
+ * declared its own `outputReserveTokens`, which is it telling us how much room
+ * the answer genuinely needs. Candidate ranking in `getFallbackProvider` keeps
+ * using the full budget, exactly as it did before this gate existed.
+ */
+function refusalCapabilities({ requestCapabilities, prompt, outputReserveTokens }) {
+  if (Number.isFinite(Number(outputReserveTokens))) return requestCapabilities;
+  return { ...requestCapabilities, requiredContextTokens: estimateTokens(prompt) };
+}
+
+/**
  * Refuse a prompt that provably cannot fit the provider about to run it.
  *
  * Before #7441 the context check ran ONLY inside `getFallbackProvider`, so it
@@ -1259,12 +1281,8 @@ function stripFallbackContext(err) {
  *     `null` whenever nothing declared a window, and nothing infers one from a
  *     model id — so a provider PortOS has no data about dispatches exactly as
  *     it does today.
- *   - The budget compared is `requiredContextTokens` — the prompt PLUS the
- *     caller's output reserve — because these daemons spend one window on input
- *     and output together. Comparing the prompt alone would have let the
- *     reported stall through: its ~14K-token prompt fit the window on its own,
- *     and only the reserve on top of it did not. A caller that knows its answer
- *     is short says so with `outputReserveTokens` rather than being guessed at.
+ *   - What it compares is `refusalCapabilities`, not the raw routing budget:
+ *     a reserve the caller never asked for must not manufacture a refusal.
  *   - The refusal is an ORDINARY failure, not a new category or exception class.
  *     `context-length` is what `agentErrorAnalysis.js` and `codexTurn.js`
  *     already tag an oversized prompt, and it is request-specific
@@ -1280,7 +1298,7 @@ function stripFallbackContext(err) {
  *     `capabilityRejection`, so the only cost is a cached listing spent on a
  *     primary that turns out to be benched.
  */
-async function assertRequestFitsContext(provider, model, requestCapabilities) {
+async function assertRequestFitsContext(provider, model, requestCapabilities, { runId = null, startTime = null } = {}) {
   const required = Number(requestCapabilities?.requiredContextTokens);
   if (!Number.isFinite(required) || required <= 0) return;
 
@@ -1292,14 +1310,23 @@ async function assertRequestFitsContext(provider, model, requestCapabilities) {
   const reason = contextWindowRejection(observed, model, requestCapabilities);
   if (!reason) return;
 
-  const err = new Error(`${provider.name || provider.id}${model ? ` (${model})` : ''}: ${reason}`);
+  const message = `${provider.name || provider.id}${model ? ` (${model})` : ''}: ${reason}`;
+  // A caller that created its own run record (stageRunner, the loops) has one
+  // sitting at `success: null, endTime: null`. Throwing past it leaves the Runs
+  // page showing an attempt that never ends and every `success === null`
+  // reconciler seeing a phantom active run, so settle it here — the same thing
+  // the TUI readiness check below does for its own pre-execution refusal.
+  if (runId) {
+    await finalizeRunRecord({ runId, output: '', exitCode: 1, success: false, error: message, startTime });
+  }
+  const err = new Error(message);
   // The cascade only retries a failure annotated with the provider that ran
   // (see runPromptThroughProvider) — without these the refusal would be
   // rethrown straight to the caller and a wider fallback would never be tried.
   err.effectiveProvider = provider;
   err.effectiveModel = model;
-  err.errorAnalysis = { category: CONTEXT_LENGTH_CATEGORY, message: err.message };
-  console.log(`📏 Refused before dispatch: ${err.message}`);
+  err.errorAnalysis = { category: CONTEXT_LENGTH_CATEGORY, message };
+  console.log(`📏 Refused before dispatch: ${message}`);
   throw err;
 }
 
@@ -1364,7 +1391,12 @@ async function executeProviderRunOnce({
   // runId (stageRunner, the loops) skips that branch entirely and would
   // otherwise dispatch ungated.
   const requestCapabilities = buildRequestCapabilities({ prompt, screenshots, outputReserveTokens, callerPolicy });
-  await assertRequestFitsContext(effectiveProvider, effectiveModel, requestCapabilities);
+  await assertRequestFitsContext(
+    effectiveProvider,
+    effectiveModel,
+    refusalCapabilities({ requestCapabilities, prompt, outputReserveTokens }),
+    { runId: callerRunId, startTime: Date.now() },
+  );
 
   // Some call sites (stageRunner, loops) create the run themselves so
   // they can log the runId before the LLM call starts. When provided,

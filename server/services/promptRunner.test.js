@@ -15,6 +15,10 @@ vi.mock('./runner.js', () => ({
   // run record's providerId/model so /runs attribution matches what
   // actually ran. Mocked as a no-op resolve.
   patchRunMetadata: vi.fn().mockResolvedValue(undefined),
+  // Settles a run record a pre-execution refusal throws past (the TUI readiness
+  // check and the context gate), so the Runs page never shows an attempt that
+  // never ends.
+  finalizeRunRecord: vi.fn().mockResolvedValue(undefined),
 }));
 
 // TUI runner is in lib (different module from services/runner.js) — mock it
@@ -2385,6 +2389,9 @@ describe('promptRunner — context gate on the requested provider', () => {
     vllmBacked: true,
     endpoint: 'http://127.0.0.1:18020/v1',
   });
+  // ~5,000 prompt tokens on its own — over a 4096-token window with no
+  // reserve arithmetic needed.
+  const OVERSIZED_PROMPT = 'x'.repeat(20_000);
   const servingWindow = (tokens) => async (provider) => ({
     ...provider,
     modelContextWindows: { 'qwen3.8-27b': tokens },
@@ -2414,7 +2421,7 @@ describe('promptRunner — context gate on the requested provider', () => {
 
     const rejection = await runPromptThroughProvider({
       provider: vllmCli(),
-      prompt: 'a prompt that does not fit',
+      prompt: OVERSIZED_PROMPT,
       source: 'test',
       allowFallback: false,
     }).catch((err) => err);
@@ -2426,11 +2433,64 @@ describe('promptRunner — context gate on the requested provider', () => {
 
     // Both numbers, because the operator's next move depends on the gap:
     // a smaller prompt, or a provider with a wider window.
-    expect(rejection.message).toMatch(/known 4096-token context is below the 8\d{3}-token request budget/);
+    expect(rejection.message).toMatch(/known 4096-token context is below the \d+-token request budget/);
     expect(rejection.message).toContain('OpenCode vLLM (qwen3.8-27b)');
     // The whole point: no run record, no spawn, no ten-minute stall.
     expect(runner.createRun).not.toHaveBeenCalled();
     expect(runner.executeCliRun).not.toHaveBeenCalled();
+  });
+
+  // The refusal must act on what is PROVABLE. `requiredContextTokens` adds an
+  // 8,000-token output reserve that most callers never asked for; refusing on
+  // it would kill a 26K-token prompt to a 32K endpoint that expects three
+  // sentences back and succeeds today.
+  it('does not refuse on an output reserve the caller never asked for', async () => {
+    observedWindows.withObservedContextWindows.mockImplementation(servingWindow(4096));
+    runner.executeCliRun.mockImplementation(async ({ onComplete }) => onComplete({ success: true }));
+
+    // ~2,000 prompt tokens: under the 4096 window on its own, over it once the
+    // default 8,000-token reserve is added.
+    await runPromptThroughProvider({ provider: vllmCli(), prompt: 'x'.repeat(8_000), source: 'test' });
+    expect(runner.executeCliRun).toHaveBeenCalledTimes(1);
+  });
+
+  it('honors a reserve the caller DID declare', async () => {
+    observedWindows.withObservedContextWindows.mockImplementation(servingWindow(4096));
+
+    // Same prompt, but now the caller says it needs 4,000 tokens of answer —
+    // that genuinely does not fit, and it said so itself.
+    const rejection = await runPromptThroughProvider({
+      provider: vllmCli(),
+      prompt: 'x'.repeat(8_000),
+      source: 'test',
+      outputReserveTokens: 4_000,
+      allowFallback: false,
+    }).catch((err) => err);
+
+    expect(rejection.message).toContain('known 4096-token context is below');
+    expect(runner.executeCliRun).not.toHaveBeenCalled();
+  });
+
+  // stageRunner and the loops create the run record themselves. Throwing past
+  // one leaves the Runs page showing an attempt that never ends, and every
+  // `success === null` reconciler seeing a phantom active run.
+  it('settles a caller-supplied run record instead of stranding it open', async () => {
+    observedWindows.withObservedContextWindows.mockImplementation(servingWindow(4096));
+
+    await runPromptThroughProvider({
+      provider: vllmCli(),
+      prompt: OVERSIZED_PROMPT,
+      source: 'test',
+      runId: 'caller-owned-run',
+      allowFallback: false,
+    }).catch(() => {});
+
+    expect(runner.finalizeRunRecord).toHaveBeenCalledWith(expect.objectContaining({
+      runId: 'caller-owned-run',
+      success: false,
+      exitCode: 1,
+      error: expect.stringContaining('4096-token context'),
+    }));
   });
 
   it('routes an oversized request to a fallback instead of benching a healthy daemon', async () => {
@@ -2442,7 +2502,7 @@ describe('promptRunner — context gate on the requested provider', () => {
 
     const out = await runPromptThroughProvider({
       provider: vllmCli(),
-      prompt: 'a prompt that does not fit',
+      prompt: OVERSIZED_PROMPT,
       source: 'test',
     });
 
