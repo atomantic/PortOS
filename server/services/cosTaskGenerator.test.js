@@ -1872,6 +1872,52 @@ describe('claim prompt author-filter scripts', () => {
   });
 });
 
+// `data/cos/worktrees/` is ONE directory shared by every managed app, so a claim
+// worktree named only after the work item collides the moment two apps carry the
+// same issue number, PLAN slug, or ticket key. That collision is worse than a
+// failed mkdir: every claim prompt reads a failing `git worktree add` as "a
+// concurrent run won this claim" and moves on, so the second app silently skips
+// work nobody had claimed. `{appSlug}` is the segment that separates them, and it
+// has to be expanded by EVERY renderer — a literal `{appSlug}` would put a brace
+// into a shell path instead.
+describe('claim worktree per-app namespacing', () => {
+  const app = { id: 'acme', name: 'Acme App', repoPath: '/repos/acme' };
+
+  it.each([
+    ['github', 'claim-issue', 'claim-acme-app-acme-issue-${NUM}'],
+    ['gitlab', 'claim-issue-gitlab', 'claim-acme-app-acme-issue-${NUM}'],
+    ['plan', 'plan-task', 'claim-acme-app-acme-${SLUG}'],
+  ])('scopes the %s claim worktree to the app in both the manual and scheduled renderer', async (tracker, taskType, expected) => {
+    const { DEFAULT_TASK_PROMPTS } = await import('./taskPromptDefaults.js');
+    const { getTaskPrompt } = await import('./taskPromptService.js');
+    const { resolveAppWorkTracker } = await import('../lib/workTracker.js');
+    resolveAppWorkTracker.mockResolvedValueOnce({ resolved: tracker, source: 'test' });
+    getTaskPrompt.mockResolvedValueOnce(DEFAULT_TASK_PROMPTS[taskType]);
+
+    const manual = await buildClaimWorkTask(app);
+    const scheduled = await cosTaskPreStepBlocks.buildImprovementTaskDescription({
+      promptTemplate: DEFAULT_TASK_PROMPTS[taskType], app, promptTaskType: taskType,
+      metadata: {}, blocks: {},
+    });
+
+    for (const prompt of [manual.prompt, scheduled]) {
+      expect(prompt).not.toContain('{appSlug}');
+      expect(prompt).toContain(`WORKTREE="{worktreesRoot}/${expected}"`);
+    }
+  });
+
+  // The JIRA board's per-card play button renders the body itself rather than
+  // through the claim-work router, so it needs its own coverage.
+  it('scopes the JIRA claim worktree the same way', async () => {
+    const { DEFAULT_TASK_PROMPTS } = await import('./taskPromptDefaults.js');
+    const { getTaskPrompt } = await import('./taskPromptService.js');
+    getTaskPrompt.mockResolvedValueOnce(DEFAULT_TASK_PROMPTS['claim-issue-jira']);
+    const { prompt } = await buildJiraTicketTask(app, 'ACME-42');
+    expect(prompt).not.toContain('{appSlug}');
+    expect(prompt).toContain('WORKTREE="{worktreesRoot}/claim-acme-app-acme-${KEY}"');
+  });
+});
+
 describe('buildClaimWorkTask reviewer pin', () => {
   const app = { id: 'acme', name: 'Acme App', repoPath: '/repos/acme' };
 

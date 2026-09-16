@@ -24,23 +24,13 @@
 
 import { execGit } from './execGit.js';
 import { stripMarkdownEmphasis } from './markdownText.js';
-import { kebabCase } from './textUtils.js';
+import { kebabCase, truncateOnBoundary } from './textUtils.js';
 import { spawn } from './childProcess.js';
 
 const SLUG_MAX_LEN = 50;
 const CHECKBOX_RE = /^(?<indent>\s*)-\s+\[(?<box>[ xX])\]\s+(?:\[(?<id>[a-z0-9][a-z0-9-]*)\]\s+)?(?<rest>.*)$/;
 const NEEDS_INPUT_RE = /<!--\s*NEEDS_INPUT\s*-->/;
 const DRIFT_LINE_RE = /^\s*>\s*⚠️\s*DRIFT:/;
-
-/**
- * Truncate a kebab string at the last `-` boundary at or before `max`.
- * Falls back to a hard cut if no boundary exists in range.
- */
-function truncateOnBoundary(slug, max) {
-  if (slug.length <= max) return slug;
-  const cut = slug.lastIndexOf('-', max);
-  return (cut > 0 ? slug.slice(0, cut) : slug.slice(0, max)).replace(/-+$/, '');
-}
 
 /**
  * Derive a unique slug for `title`, avoiding any string in `takenIds`.

@@ -30,6 +30,7 @@ import { join } from 'path';
 import { v4 as uuidv4 } from '../lib/uuid.js';
 import { ensureDir, expandHome, PATHS } from '../lib/fileUtils.js';
 import { ServerError } from '../lib/errorHandler.js';
+import { applyAppPlaceholders } from '../lib/appPromptPlaceholders.js';
 import { execGit } from '../lib/execGit.js';
 import {
   getAppById,
@@ -683,11 +684,10 @@ export async function triggerReferenceAnalysis(app, ref, snapshot) {
   // Use arrow replacers to avoid $& / $1 interpretation in replacement strings.
   // {trackerInstructions} is substituted FIRST so the {appName}/{repoPath}
   // placeholders inside the injected block are expanded by the later replacers.
-  const fullPrompt = promptTemplate
-    .replace(/\{trackerInstructions\}/g, () => trackerInstructionsBlock)
-    .replace(/\{appName\}/g, () => app.name)
-    .replace(/\{repoPath\}/g, () => app.repoPath)
-    .replace(/\{appId\}/g, () => app.id)
+  const fullPrompt = applyAppPlaceholders(
+    promptTemplate.replace(/\{trackerInstructions\}/g, () => trackerInstructionsBlock),
+    app,
+  )
     .replace(/\{reviewers\}/g, () => DEFAULT_REVIEWER)
     .replace(/\{referenceData\}/g, () => referenceDataBlock)
     .replace(/\{planConstraint\}/g, () => '');

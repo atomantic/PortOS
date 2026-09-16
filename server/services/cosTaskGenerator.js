@@ -30,6 +30,7 @@ import { existsSync } from 'fs';
 import { join } from 'path';
 import { sanitizeTaskMetadata, PIPELINE_STAGE_BEHAVIOR_FLAGS, MAX_TOTAL_SPAWNS, resolveClaimReviewerConfig, reviewerConfigMetadata, hasReviewerOverride } from '../lib/validation.js';
 import { PATHS } from '../lib/fileUtils.js';
+import { applyAppPlaceholders } from '../lib/appPromptPlaceholders.js';
 import { isPlainObject } from '../lib/objects.js';
 import { hasQuotaBurnProvenance, isManualOnDemandRequest } from '../lib/quotaBurnOrigin.js';
 import { isAutoApprovableInvestigation } from '../lib/investigationTasks.js';
@@ -494,10 +495,7 @@ export async function buildClaimWorkTask(app, {
   const targetRef = normalizeWorkItemRef(target);
   const swarmBlock = targetRef ? '' : resolveSwarmBlock(promptTaskType, metadata.swarmCount);
 
-  const prompt = `${swarmBlock}${template}`
-    .replace(/\{appName\}/g, app.name)
-    .replace(/\{repoPath\}/g, app.repoPath)
-    .replace(/\{appId\}/g, app.id)
+  const prompt = applyAppPlaceholders(`${swarmBlock}${template}`, app)
     // Function-form replacers so literal `$`/`$1` in the substituted text isn't
     // interpreted as a backreference (see the scheduler's same-pattern note).
     .replace(/\{reviewers\}/g, () => reviewersCsv || 'none')
@@ -595,10 +593,7 @@ export async function buildJiraTicketTask(app, ticketKey) {
     getTaskPrompt('claim-issue-jira'),
     resolveClaimReviewerPrompt(app),
   ]);
-  const prompt = template
-    .replace(/\{appName\}/g, app.name)
-    .replace(/\{repoPath\}/g, app.repoPath)
-    .replace(/\{appId\}/g, app.id)
+  const prompt = applyAppPlaceholders(template, app)
     // Function-form replacer so a literal `$` in the reviewers CSV isn't read as
     // a backreference.
     .replace(/\{reviewers\}/g, () => reviewersCsv || 'none')
