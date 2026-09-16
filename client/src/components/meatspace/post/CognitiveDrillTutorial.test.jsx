@@ -209,6 +209,10 @@ describe('n-back demo', () => {
   // runs after React commits the current one, so a single large advance would
   // only ever move it on by one letter.
   const advanceFrom = (step, last) => act(() => { vi.advanceTimersByTime(demoFrameDelay(step, last)); });
+  const setVisibility = (value) => {
+    Object.defineProperty(document, 'visibilityState', { value, configurable: true });
+    act(() => { document.dispatchEvent(new Event('visibilitychange')); });
+  };
   const playToHit = (last) => { for (let step = -1; step < last; step += 1) advanceFrom(step, last); };
 
   beforeEach(() => {
@@ -219,6 +223,9 @@ describe('n-back demo', () => {
 
   afterEach(() => {
     window.matchMedia = originalMatchMedia;
+    // Unconditional: the hidden-tab case below mutates `visibilityState`, and a
+    // failing assertion there would otherwise leave the whole file hidden.
+    setVisibility('visible');
     vi.useRealTimers();
   });
 
@@ -276,14 +283,21 @@ describe('n-back demo', () => {
     advanceFrom(-1, last);
     expect(stage()).toBe(sequence[0]);
 
-    Object.defineProperty(document, 'visibilityState', { value: 'hidden', configurable: true });
-    act(() => { document.dispatchEvent(new Event('visibilitychange')); });
+    setVisibility('hidden');
     expect(vi.getTimerCount()).toBe(0);
 
-    Object.defineProperty(document, 'visibilityState', { value: 'visible', configurable: true });
-    act(() => { document.dispatchEvent(new Event('visibilitychange')); });
+    setVisibility('visible');
     advanceFrom(0, last);
     expect(stage()).toBe(sequence[1]);
+  });
+
+  it('never starts when the card mounts into an already-hidden tab', () => {
+    // The subscription only fires on a CHANGE, so seeding `hidden` from the
+    // current state is the only thing standing between a backgrounded tab and a
+    // demo that animates until someone looks at it again.
+    setVisibility('hidden');
+    renderDemo(2);
+    expect(vi.getTimerCount()).toBe(0);
   });
 
   it('marks exactly one chip as the N-back comparison on every frame', () => {

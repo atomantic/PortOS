@@ -414,7 +414,11 @@ function NBackDemo({ example: { sequence, n } }) {
   // A backgrounded tab is the other reason to stop scheduling: PortOS is
   // routinely left open on a second tailnet machine, and an unseen animation
   // would otherwise re-render this subtree about once a second forever.
-  const [hidden, setHidden] = useState(false);
+  // Seeded from the CURRENT state, not `false`: a card mounted into an
+  // already-hidden tab would otherwise animate until the next visibilitychange.
+  const [hidden, setHidden] = useState(
+    () => (typeof document !== 'undefined' && document.visibilityState === 'hidden'),
+  );
   useVisibilityEvent(state => setHidden(state === 'hidden'));
 
   const step = reduced ? matchIndex : rawStep;
