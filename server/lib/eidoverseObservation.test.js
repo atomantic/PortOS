@@ -256,3 +256,59 @@ describe('the places a mind is told it is standing in', () => {
     expect(apps.status).toBe('unknown');
   });
 });
+
+describe('a section that could not be read', () => {
+  const withPeer = () => observe({
+    source: { peers: [peerSignal(PEER_ALPHA)] },
+    foundations: [inheritedFoundation('peer:alpha:one', PEER_ALPHA)],
+    controllerInstalls: [{ id: 'broken', controllerId: 'lanternKeeper', armed: false, lastTickOk: false, consecutiveFailures: 2, disarmedReason: 'repeated failures' }],
+  });
+
+  it('does not report every peer as departed when the peer source failed', () => {
+    const first = withPeer();
+    const { report } = observe({ source: { peers: null }, marker: first.marker });
+
+    // A transient collection failure is not the whole federation leaving.
+    expect(report.peers).toBeNull();
+    expect(report.changes.departedPeers).toEqual([]);
+    expect(report.changes.newPeers).toEqual([]);
+  });
+
+  it('carries the previous marker forward so the next observation does not re-report everything as new', () => {
+    const first = withPeer();
+    const blind = observe({ source: { peers: null }, foundations: null, controllerInstalls: null, marker: first.marker });
+
+    // The failure must not erase the trail...
+    expect(blind.marker.peerIds).toEqual(first.marker.peerIds);
+    expect(blind.marker.foundationIds).toEqual(first.marker.foundationIds);
+    expect(blind.marker.attentionControllerIds).toEqual(first.marker.attentionControllerIds);
+
+    // ...so when collection recovers, nothing flaps back to "new".
+    const recovered = observe({
+      source: { peers: [peerSignal(PEER_ALPHA)] },
+      foundations: [inheritedFoundation('peer:alpha:one', PEER_ALPHA)],
+      controllerInstalls: [{ id: 'broken', controllerId: 'lanternKeeper', armed: false, lastTickOk: false, consecutiveFailures: 2, disarmedReason: 'repeated failures' }],
+      marker: blind.marker,
+    });
+    expect(recovered.report.changes.newPeers).toEqual([]);
+    expect(recovered.report.changes.newFoundations).toEqual([]);
+    expect(recovered.report.changes.controllersNeedingAttention).toEqual([]);
+  });
+
+  it('separates an unavailable controller list from one that is genuinely empty', () => {
+    expect(observe({ controllerInstalls: null }).report.controllers.needsAttention).toBeNull();
+    expect(observe({ controllerInstalls: [] }).report.controllers.needsAttention).toEqual([]);
+  });
+
+  it('still counts a district whose other sources read cleanly', () => {
+    const { report } = observe({
+      districts: [{ id: 'mix', label: 'Mix', direction: 'North', landmark: 'x', sources: ['apps', 'health'] }],
+      includes: { apps: true, health: true },
+      source: { apps: null, health: { status: 'healthy' } },
+    });
+
+    // One unreadable source must not discard a sibling's real signal; the
+    // district says which source it could not read instead.
+    expect(report.places[0]).toMatchObject({ signalCount: 1, status: 'active', unreadableSources: ['apps'] });
+  });
+});

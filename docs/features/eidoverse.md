@@ -978,6 +978,12 @@ and no conversation with its author required.
 - **Never-observed is not nothing-new.** A first observation reports
   `firstObservation: true` with no new items rather than handing a mind waking
   into a months-old install its entire world as "new".
+- **A section that failed to collect is not an empty section.** It arrives as
+  `null`, contributes no changes, and **carries the previous marker's ids
+  forward**. Collapsing it to `[]` would report every peer as departed on a
+  transient read failure, rewrite the marker without them, and then report them
+  all as new on the next observation — a flap that repeats for as long as the
+  source keeps failing intermittently.
 
 ### The visit marker
 

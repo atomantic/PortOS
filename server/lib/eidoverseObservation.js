@@ -16,6 +16,13 @@
  * arguments, so the whole diff contract is testable without a world runtime,
  * a socket, or a file.
  *
+ * **Absent is never empty, here or in the trail.** A section that failed to
+ * collect arrives as `null` rather than `[]`, and an unavailable section
+ * contributes no changes and carries the previous marker's ids forward. A
+ * transient peer-read failure that presented as "no peers" would otherwise
+ * report every peer departed, rewrite the marker without them, and then report
+ * them all as new on the next observation.
+ *
  * **Three things it must not do.** It must not require a running world — a
  * mind that cannot start the runtime still needs to know what is in its
  * Commons, so occupancy is derived from the live PortOS signals a projection
@@ -201,7 +208,8 @@ function observePeers(source, byPeer) {
  * alarm.
  */
 function observeControllers(installs) {
-  return asArray(installs)
+  if (!Array.isArray(installs)) return null;
+  return installs
     .filter((install) => install?.disarmedReason
       || (install?.consecutiveFailures ?? 0) > 0
       || install?.lastTickOk === false)
@@ -239,27 +247,50 @@ const NO_CHANGES = Object.freeze({
  * diffing them would make `changes` noise instead of signal. The live count
  * stays in `places` for a mind that wants it.
  */
-function diffAgainstMarker({ marker, foundationIds, peerIds, placeStatus, attentionControllerIds }) {
+function diffAgainstMarker({ marker, foundations, peers, controllers, placeStatus }) {
   if (!marker) return { firstObservation: true, since: null, ...NO_CHANGES };
   const seenFoundations = new Set(asArray(marker.foundationIds));
   const seenPeers = new Set(asArray(marker.peerIds));
   const seenAttention = new Set(asArray(marker.attentionControllerIds));
   const previousPlaceStatus = marker.placeStatus && typeof marker.placeStatus === 'object' ? marker.placeStatus : {};
-  const currentPeers = new Set(peerIds);
+  const currentPeers = new Set(peers.ids);
   return {
     firstObservation: false,
     since: marker.observedAt ?? null,
-    newFoundations: foundationIds.filter((id) => !seenFoundations.has(id)).slice(0, MAX_CHANGE_ENTRIES),
-    newPeers: peerIds.filter((id) => !seenPeers.has(id)).slice(0, MAX_CHANGE_ENTRIES),
-    departedPeers: [...seenPeers].filter((id) => !currentPeers.has(id)).sort().slice(0, MAX_CHANGE_ENTRIES),
+    newFoundations: foundations.available
+      ? foundations.ids.filter((id) => !seenFoundations.has(id)).slice(0, MAX_CHANGE_ENTRIES)
+      : [],
+    newPeers: peers.available
+      ? peers.ids.filter((id) => !seenPeers.has(id)).slice(0, MAX_CHANGE_ENTRIES)
+      : [],
+    departedPeers: peers.available
+      ? [...seenPeers].filter((id) => !currentPeers.has(id)).sort().slice(0, MAX_CHANGE_ENTRIES)
+      : [],
     placesChanged: Object.entries(placeStatus)
       .filter(([id, status]) => previousPlaceStatus[id] !== undefined && previousPlaceStatus[id] !== status)
       .map(([id, status]) => ({ id, was: previousPlaceStatus[id], now: status }))
       .slice(0, MAX_CHANGE_ENTRIES),
     // Only controllers that were NOT already wanting attention last time, so a
     // long-broken controller stops re-alarming every single wake.
-    controllersNeedingAttention: attentionControllerIds.filter((id) => !seenAttention.has(id)).slice(0, MAX_CHANGE_ENTRIES),
+    controllersNeedingAttention: controllers.available
+      ? controllers.ids.filter((id) => !seenAttention.has(id)).slice(0, MAX_CHANGE_ENTRIES)
+      : [],
   };
+}
+
+/**
+ * An id list for one section, plus whether the section could be read at all.
+ *
+ * A section that FAILED to collect must not present as empty. Treating it as
+ * empty would report every peer as departed and every foundation as gone on a
+ * transient read failure, and — because the marker is rewritten from the same
+ * lists — would then report all of them as NEW again on the next observation.
+ * So an unavailable section contributes no changes and CARRIES FORWARD what
+ * the previous marker held, which is the absent-versus-empty rule applied to
+ * the trail itself.
+ */
+function section(ids, available, carriedForward) {
+  return available ? { ids, available: true } : { ids: asArray(carriedForward), available: false };
 }
 
 const GUIDANCE = 'Observation before conversation: what you see here is this install\'s own world. '
@@ -281,9 +312,9 @@ export function buildEidoverseObservation({
   source = {},
   districts = EIDOVERSE_WORLD_DESIGN_V3.districts,
   includes = EIDOVERSE_WORLD_DESIGN_V3.includes,
-  foundations = [],
+  foundations = null,
   foundationCounts = null,
-  controllerInstalls = [],
+  controllerInstalls = null,
   controllerCounts = null,
   marker = null,
   observedAt,
@@ -294,10 +325,25 @@ export function buildEidoverseObservation({
   const peers = observePeers(source, byPeer);
   const attentionControllers = observeControllers(controllerInstalls);
 
-  const foundationIds = sortedUnique(asArray(foundations).map((entry) => entry?.id));
-  const peerIds = sortedUnique(asArray(peers).map((entry) => entry.peerId));
+  // `null` means the section could not be read; `[]` means it read as empty.
+  // Collapsing the two here is what would make a transient failure flap — see
+  // `section()`.
+  const foundationSection = section(
+    sortedUnique(asArray(foundations).map((entry) => entry?.id)),
+    Array.isArray(foundations),
+    marker?.foundationIds,
+  );
+  const peerSection = section(
+    sortedUnique(asArray(peers).map((entry) => entry.peerId)),
+    peers !== null,
+    marker?.peerIds,
+  );
+  const controllerSection = section(
+    sortedUnique(asArray(attentionControllers).map((entry) => entry.id)),
+    attentionControllers !== null,
+    marker?.attentionControllerIds,
+  );
   const placeStatus = Object.fromEntries(places.map(({ id, status }) => [id, status]));
-  const attentionControllerIds = sortedUnique(attentionControllers.map((entry) => entry.id));
 
   return {
     report: {
@@ -314,16 +360,22 @@ export function buildEidoverseObservation({
         counts: controllerCounts,
         needsAttention: attentionControllers,
       },
-      changes: diffAgainstMarker({ marker, foundationIds, peerIds, placeStatus, attentionControllerIds }),
+      changes: diffAgainstMarker({
+        marker,
+        foundations: foundationSection,
+        peers: peerSection,
+        controllers: controllerSection,
+        placeStatus,
+      }),
       guidance: GUIDANCE,
     },
     marker: {
       schemaVersion: EIDOVERSE_OBSERVATION_SCHEMA_VERSION,
       observedAt,
-      foundationIds: foundationIds.slice(0, MAX_MARKER_FOUNDATION_IDS),
-      peerIds,
+      foundationIds: foundationSection.ids.slice(0, MAX_MARKER_FOUNDATION_IDS),
+      peerIds: peerSection.ids,
       placeStatus,
-      attentionControllerIds,
+      attentionControllerIds: controllerSection.ids,
     },
   };
 }

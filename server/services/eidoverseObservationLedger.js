@@ -125,13 +125,19 @@ export async function observeEidoverseWorld({ signal, commit = true, now = () =>
       source,
       districts: design.districts,
       includes: design.includes,
-      foundations: ledger?.foundations || [],
+      // `null`, NOT `[]`, when the collection failed: an empty list would report
+      // every foundation as gone and then as new again next time, because the
+      // marker is rewritten from the same list. The builder carries an
+      // unavailable section forward instead.
+      foundations: Array.isArray(ledger?.foundations) ? ledger.foundations : null,
       foundationCounts: ledger?.counts ?? null,
       // Summarized, never raw: the pure lib reads `lastTickOk`/`lastTickReason`,
       // which only exist on this projection — a raw record carries them inside
       // `lastOutcome`, so handing one over would silently report every
       // controller as never-ticked.
-      controllerInstalls: (controllers?.installs || []).map((install) => summarizeControllerInstall(install)),
+      controllerInstalls: Array.isArray(controllers?.installs)
+        ? controllers.installs.map((install) => summarizeControllerInstall(install))
+        : null,
       controllerCounts: controllers?.counts ?? null,
       marker,
       observedAt: now(),
