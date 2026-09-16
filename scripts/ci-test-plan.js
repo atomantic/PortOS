@@ -218,6 +218,9 @@ export const ALWAYS_RUN_TESTS = [
   // `.env.example` itself is not a scope the selector routes to a runner.
   'server/envExampleDrift.test.js',
   'server/lib/generatedManifests.test.js',
+  // Whole-tree scanner: any server/client file can add a hardcoded "Models →"
+  // breadcrumb, with no import edge back to this file.
+  'server/lib/localProviderRuntime.test.js',
   'server/lib/qwenAgentParsers.test.js',
   'server/lib/testDataIsolation.guards.test.js',
   'server/lib/testHelper.test.js',

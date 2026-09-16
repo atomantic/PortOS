@@ -19,7 +19,7 @@ import {
 import { normalizeReviewerSlug, REVIEWER_VALUES } from '../../lib/reviewerPins';
 import { AVATAR_STYLE_LABELS } from '../../lib/avatarStyles';
 import { inPlaceClipName } from '../../utils/animationClips';
-import { getPageNavTabs } from '../../../../server/lib/navManifest.js';
+import { getNavPageForPath, getPageNavTabs } from '../../../../server/lib/navManifest.js';
 import { buildPageNavTabs } from '../../lib/pageNavTabs.js';
 
 // Icon per tab id. The manifest (`tabGroup: 'cos'`) owns id/label/order — this
@@ -293,16 +293,17 @@ export function pinnedPrCompletion(metadata) {
 //
 // Copy only — the ROSTER is `REVIEWER_VALUES` in `client/src/lib/reviewerPins.js`,
 // which the server suite pins against the server's own enum.
+const CODE_REVIEWERS_PAGE = getNavPageForPath('/models/code-reviewers')?.breadcrumb || 'its management page';
 const REVIEWER_COPY = {
   pi: { label: 'Pi', description: 'Pi Coding Agent CLI reviews the supplied diff without tools' },
   copilot: { label: 'Copilot', description: 'GitHub Copilot (GitHub-only)' },
-  claude: { label: 'Claude', description: 'Claude CLI reviews the PR diff (optional model on Models → Code Reviewers; supports an Ollama-backed Claude for local-only setups)' },
+  claude: { label: 'Claude', description: `Claude CLI reviews the PR diff (optional model on ${CODE_REVIEWERS_PAGE}; supports an Ollama-backed Claude for local-only setups)` },
   antigravity: { label: 'Antigravity', description: 'Antigravity CLI (agy) reviews the PR diff' },
-  codex: { label: 'Codex', description: 'Codex CLI reviews the PR diff (optional model tier on Models → Code Reviewers)' },
+  codex: { label: 'Codex', description: `Codex CLI reviews the PR diff (optional model tier on ${CODE_REVIEWERS_PAGE})` },
   grok: { label: 'Grok', description: 'Grok Build CLI (grok) reviews the PR diff' },
   cursor: { label: 'Cursor Agent', description: 'Cursor Agent CLI (cursor-agent) reviews the PR diff' },
-  opencode: { label: 'OpenCode', description: 'OpenCode CLI reviews the PR diff (optional provider/model on Models → Code Reviewers)' },
-  kimi: { label: 'Kimi', description: 'Kimi CLI reviews the PR diff (optional model on Models → Code Reviewers)' },
+  opencode: { label: 'OpenCode', description: `OpenCode CLI reviews the PR diff (optional provider/model on ${CODE_REVIEWERS_PAGE})` },
+  kimi: { label: 'Kimi', description: `Kimi CLI reviews the PR diff (optional model on ${CODE_REVIEWERS_PAGE})` },
   lmstudio: { label: 'LM Studio', description: 'Local LM Studio model reviews the diff (set model on AI Providers)' },
   ollama: { label: 'Ollama', description: 'Local Ollama model reviews the diff (set model on AI Providers)' },
   mtplx: { label: 'MTPLX', description: 'Local MTPLX model reviews the diff (set model on AI Providers)' }

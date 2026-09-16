@@ -1,4 +1,8 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
+import { execFileSync } from 'node:child_process';
+import { readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import {
   LOCAL_RUNTIMES,
   LOCAL_RUNTIME_MANAGE_URLS,
@@ -8,6 +12,7 @@ import {
 } from './localProviderRuntime.js';
 import { opencodeLocalBaseUrl } from './opencodeConfig.js';
 import { PORTS } from './ports.js';
+import { NAV_COMMANDS } from './navManifest.js';
 
 afterEach(() => {
   vi.unstubAllEnvs();
@@ -245,5 +250,104 @@ describe('LOCAL_RUNTIMES — user-facing copy names its page by route, never by 
       vllm: null,
       sglang: null,
     });
+  });
+});
+
+// #7419 repeated the #7414 hand-sweep — a SECOND breadcrumb split into runtimes
+// no LOCAL_RUNTIMES row was in scope for (fleetLlmHost.js, the Persistent Mind
+// recommenders, llamaServerManager.js, the playground back-link). Each of those
+// now resolves its page from `getNavPageForPath`/`expandPageToken` instead of a
+// literal, so this scans the whole server+client tree for the next one typed by
+// hand — a net, not a proof: a lexer-assisted line scan, not an AST pass.
+describe('shipped copy names a Models page by route, never by literal (#7419)', () => {
+  const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
+
+  const MODELS_TAB_LABELS = [...new Set(
+    NAV_COMMANDS.filter((c) => c.section === 'Models' && c.label).map((c) => c.label),
+  )];
+
+  // Longest-first so "Abuse Guard" cannot be shadowed by a shorter overlapping
+  // label (none currently overlap, but a future label might).
+  const BREADCRUMB_PATTERN = new RegExp(
+    `Models\\s*→\\s*(${MODELS_TAB_LABELS.slice().sort((a, b) => b.length - a.length)
+      .map((label) => label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|')})`,
+    'g',
+  );
+
+  // A hardcoded "Models → LLMs → Abuse Guard" names a THIRD-level breadcrumb
+  // (Abuse Guard nests under the LLMs tab in the sidebar) that
+  // `getNavPageForPath` cannot produce — it returns one `section → label` hop,
+  // never a drill-down chain. Deliberate, not a regression; #7419 leaves it.
+  const ABUSE_GUARD_CONTINUATION = /^\s*→\s*Abuse Guard/;
+
+  // Deliberate weights-catalog references #7419 leaves alone: the LLMs page
+  // they name has not moved, and rewriting them buys nothing a literal
+  // "Models → LLMs" doesn't already say correctly.
+  const ALLOWLISTED_FILES = new Set([
+    'server/lib/navManifest.js',
+    'server/services/loraDatasetCaption.js',
+    'client/src/components/loraTraining/CaptionModelPicker.jsx',
+  ]);
+
+  /**
+   * Blank every comment — `//…`, `/* … *\/`, and the `{/* … *\/}` JSX form,
+   * which is the same block-comment syntax wrapped in a brace — while leaving
+   * string/template literals and JSX text untouched, so a hardcoded breadcrumb
+   * SHIPPED to a user still matches. Line-based and conservative: once a line
+   * opens a block comment it blanks every line through the one that closes it,
+   * so a rule merely DESCRIBED across a JSDoc block can't trip the guard.
+   */
+  function blankBlockComments(src) {
+    let inBlock = false;
+    return src.split('\n').map((line) => {
+      if (inBlock) {
+        if (line.includes('*/')) inBlock = false;
+        return '';
+      }
+      if (/^\s*\/\//.test(line)) return '';
+      if (/^\s*(\/\*|\{\/\*)/.test(line)) {
+        if (!line.includes('*/')) inBlock = true;
+        return '';
+      }
+      return line;
+    }).join('\n');
+  }
+
+  function breadcrumbOffenders(src) {
+    const code = blankBlockComments(src);
+    return [...code.matchAll(BREADCRUMB_PATTERN)]
+      .filter((match) => !ABUSE_GUARD_CONTINUATION.test(code.slice(match.index + match[0].length, match.index + match[0].length + 20)))
+      .map((match) => match[0]);
+  }
+
+  const trackedSources = () => [
+    ...execFileSync('git', ['ls-files', 'server/**/*.js'], { cwd: REPO_ROOT, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 }).split('\n'),
+    ...execFileSync('git', ['ls-files', 'client/src/**/*.js', 'client/src/**/*.jsx'], { cwd: REPO_ROOT, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 }).split('\n'),
+  ].filter((f) => f && !f.includes('.test.'));
+
+  it('scans the whole tree', () => {
+    // A broken `git ls-files` (wrong cwd, detached checkout) would otherwise let
+    // every assertion below pass by scanning nothing at all.
+    expect(trackedSources().length).toBeGreaterThan(800);
+  });
+
+  it('recognizes a real hardcoded breadcrumb as an offense', () => {
+    // Proves the extractor still catches a violation — without this the scan
+    // below could go vacuously green after a regex/comment-blanking regression.
+    expect(breadcrumbOffenders('const msg = "Start it from Models → Runtimes.";')).toEqual(['Models → Runtimes']);
+  });
+
+  it('still recognizes a deliberate breadcrumb it must NOT flag', () => {
+    // The guard's own negative case: `getNavPageForPath` cannot produce a
+    // third-level breadcrumb, so this must stay allowlisted rather than
+    // vacuously passing because nothing matched at all.
+    expect(breadcrumbOffenders('const msg = "Open Models → LLMs → Abuse Guard to repair it.";')).toEqual([]);
+  });
+
+  it('flags a hardcoded breadcrumb outside the allowlist', () => {
+    const offenders = trackedSources()
+      .filter((file) => !ALLOWLISTED_FILES.has(file))
+      .flatMap((file) => breadcrumbOffenders(readFileSync(join(REPO_ROOT, file), 'utf8')).map((text) => `${file}: ${text}`));
+    expect(offenders).toEqual([]);
   });
 });

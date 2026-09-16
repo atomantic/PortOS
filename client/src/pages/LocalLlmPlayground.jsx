@@ -13,6 +13,7 @@ import { localLlmTargetKey } from '../lib/localLlmTargetKey';
 import { formatBytes, recommendedRamGb, timeUntil } from '../utils/formatters';
 import { filterHardwareCompatibleModels } from '../utils/systemCapabilities';
 import { compareLocalLlmModels, getLoadedLlmModels, getLocalLlmCatalog, getLocalLlmStatus, streamLocalLlmTest } from '../services/api';
+import { getNavPageForPath } from '../../../server/lib/navManifest.js';
 
 const BACKEND_LABEL = { ollama: 'Ollama', lmstudio: 'LM Studio' };
 const DEFAULT_PROMPT = 'Write a short, vivid paragraph about a lighthouse computer waking up at dawn.';
@@ -511,7 +512,7 @@ export default function LocalLlmPlayground() {
     <div className="flex flex-col h-full">
       <div className="flex items-center justify-between gap-3 p-4 border-b border-port-border">
         <div className="flex items-center gap-3 min-w-0">
-          <Link to="/models/llms" className="p-2 rounded-lg bg-port-card border border-port-border text-gray-400 hover:text-white" title="Back to Models → LLMs">
+          <Link to="/models/llms" className="p-2 rounded-lg bg-port-card border border-port-border text-gray-400 hover:text-white" title={`Back to ${getNavPageForPath('/models/llms')?.breadcrumb || 'its management page'}`}>
             <ArrowLeft size={16} />
           </Link>
           <div className="min-w-0">

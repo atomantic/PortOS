@@ -16,6 +16,7 @@ import { imageTo3dStatusMeta } from '../components/media/imageTo3dStatus';
 import ImageTo3dRenderOptions from '../components/media/ImageTo3dRenderOptions';
 import { renderOptionsBody, SUBJECT_SCALE_DEFAULT } from '../lib/imageTo3dRenderOptions';
 import { isTargetReady, unavailableReasonLabel } from '../lib/imageTo3dReasons';
+import { getNavPageForPath } from '../../../server/lib/navManifest.js';
 
 // Poll cadence while a render is in flight (a real TRELLIS.2 render is multi-minute).
 const POLL_INTERVAL_MS = 2500;
@@ -164,7 +165,7 @@ export default function Media3D() {
     if (!selectedImage) return 'Pick a source image to continue.';
     if (!selectedTarget) return 'No image-to-3D model is registered.';
     if (!selectedTarget.available) return unavailableReasonLabel(selectedTarget.unavailableReason, 'This model can’t run on this host.');
-    if (selectedTarget.installed === false) return `Install ${selectedTarget.label} from Models → 3D before generating.`;
+    if (selectedTarget.installed === false) return `Install ${selectedTarget.label} from ${getNavPageForPath('/models/3d')?.breadcrumb || 'its management page'} before generating.`;
     return null;
   })();
 

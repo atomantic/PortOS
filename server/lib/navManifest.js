@@ -475,6 +475,18 @@ export const getNavPageForPath = (pathname) => {
   return { label: command.label, section: command.section, breadcrumb: `${command.section} → ${command.label}` };
 };
 
+// Expand the `{page}` token user-facing copy writes instead of a breadcrumb,
+// resolved from `runtime.manageUrl` (or any object carrying that field) via
+// `getNavPageForPath` above — same reason as that lookup: the sentence and the
+// link it describes must name one page, decided by the route, not typed twice.
+// A `manageUrl` with no page (or `null`, for a runtime PortOS has no page for)
+// falls back to generic prose rather than shipping a literal `{page}`.
+export const expandPageToken = (text, runtime) => (
+  typeof text === 'string' && text.includes('{page}')
+    ? text.replaceAll('{page}', getNavPageForPath(runtime?.manageUrl)?.breadcrumb || 'its management page')
+    : text
+);
+
 // Every feature id this manifest gates on, for the registry-drift guard.
 export const NAV_FEATURE_IDS = [...new Set(NAV_COMMANDS.map((c) => c.feature).filter(Boolean))].sort();
 

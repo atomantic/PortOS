@@ -55,6 +55,7 @@
  */
 
 import { LOCAL_RUNTIMES, localEndpointPort } from '../lib/localProviderRuntime.js';
+import { expandPageToken } from '../lib/navManifest.js';
 import { describeMtplxCache, listMtplxCachedModels } from '../lib/mtplxModels.js';
 import { describeMtplxRuntime } from '../lib/mtplxRuntime.js';
 import { listSlotstreamCachedModels } from '../lib/slotstreamModels.js';
@@ -112,11 +113,11 @@ const CONFIRM_TIMEOUT_MS = 5_000;
  * it names the button that does, plus the in-app card that searches for and
  * downloads a checkpoint other than MTPLX's own default.
  */
-const MTPLX_NO_MODEL_ERROR = 'no model weights are cached, so its server exits before it binds a port. Close this window — the checklist now offers “Download the default model & start MTPLX”, which fetches MTPLX\'s own verified checkpoint (a multi-gigabyte download) and then starts the server. To use a different MTP checkpoint instead, search for one on the MTPLX card in Models → Runtimes, download it there, then click Start MTPLX again.';
+const MTPLX_NO_MODEL_ERROR = expandPageToken('no model weights are cached, so its server exits before it binds a port. Close this window — the checklist now offers “Download the default model & start MTPLX”, which fetches MTPLX\'s own verified checkpoint (a multi-gigabyte download) and then starts the server. To use a different MTP checkpoint instead, search for one on the MTPLX card in {page}, download it there, then click Start MTPLX again.', LOCAL_RUNTIMES.mtplx);
 
 /** The same dead end, reached from a cache holding only interrupted pulls. */
 const mtplxPartialCacheError = (count) =>
-  `its cache holds ${count} model${count === 1 ? '' : 's'}, but none passed its own file check — an interrupted download leaves a partial pack behind. Use “Download the default model & start MTPLX” on the checklist to re-fetch it, or pick another checkpoint on the MTPLX card in Models → Runtimes.`;
+  expandPageToken(`its cache holds ${count} model${count === 1 ? '' : 's'}, but none passed its own file check — an interrupted download leaves a partial pack behind. Use “Download the default model & start MTPLX” on the checklist to re-fetch it, or pick another checkpoint on the MTPLX card in {page}.`, LOCAL_RUNTIMES.mtplx);
 
 /**
  * MTPLX's cache state, read WITHOUT invoking `mtplx`'s Homebrew wrapper before
@@ -473,7 +474,7 @@ const SETUP_ROWS = Object.freeze({
       const result = await installLlamaServer({ onProgress: (p) => { if (p?.message) emit(p.message); } })
         .catch((err) => ({ success: false, error: err.message }));
       return result.success
-        ? { success: true, note: 'Choose a GGUF model on Models → Runtimes to start llama-server — PortOS does not pick weights for you.' }
+        ? { success: true, note: expandPageToken('Choose a GGUF model on {page} to start llama-server — PortOS does not pick weights for you.', LOCAL_RUNTIMES.llama) }
         : result;
     },
     // llama-server takes a required model path, and the weights are a separate
@@ -653,7 +654,7 @@ export async function runLocalRuntimeSetup(kind, { endpoint, emit = () => {}, is
   }
 
   if (!row.start) {
-    return { success: true, message: `${runtime.label} is installed. Pick a model on Models → Runtimes to start it.` };
+    return { success: true, message: expandPageToken(`${runtime.label} is installed. Pick a model on {page} to start it.`, runtime) };
   }
   if (isCancelled()) return { success: false, error: 'Cancelled after the install — nothing was started.' };
 
