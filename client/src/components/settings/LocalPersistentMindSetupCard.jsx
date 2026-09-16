@@ -263,7 +263,7 @@ export default function LocalPersistentMindSetupCard({
           : <span className="text-gray-500">Complete install / start / pull, then enable the provider.</span>}
         <Link to="/ai" className="text-port-accent hover:underline">AI Providers</Link>
         <Link to="/cos/mind" className="text-port-accent hover:underline">Persistent Mind</Link>
-        <Link to="/models/llms" className="text-port-accent hover:underline">Models → LLMs</Link>
+        <Link to="/models/llms" className="text-port-accent hover:underline">Models → LLMs → Model Library</Link>
       </div>
     </section>
   );

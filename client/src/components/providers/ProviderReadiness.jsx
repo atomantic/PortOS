@@ -39,6 +39,7 @@ import { Link } from 'react-router';
 import { CheckCircle2, Download, HelpCircle, PauseCircle, RefreshCw, Wand2, Wrench, XCircle } from 'lucide-react';
 import Banner from '../ui/Banner';
 import Pill from '../ui/Pill';
+import { getNavPageForPath } from '../../../../server/lib/navManifest.js';
 
 
 const ICONS = {
@@ -51,6 +52,18 @@ const ICONS = {
 };
 
 const ACTION_CLASS = 'inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded bg-port-accent/20 text-port-accent hover:bg-port-accent/30 transition-colors font-medium';
+
+// The link's LABEL comes from the route it points at, never a literal. Every
+// runtime used to be managed on one page, so "Open the LLMs page" was correct
+// for all of them; since #7414 llama.cpp, Slotstream and MTPLX are managed on
+// Models → Runtimes while Ollama and LM Studio stay on Models → LLMs, and a
+// fixed label would name the wrong sibling on three of five cards. Falls back
+// to the neutral wording for a route the manifest does not know — the link
+// still works, it just cannot be named.
+const manageLinkLabel = (manageUrl) => {
+  const page = getNavPageForPath(manageUrl);
+  return page ? `Open the ${page.label} page` : 'Open the management page';
+};
 
 /**
  * Render `text` with `backtick`-quoted spans as inline code. The server writes
@@ -98,7 +111,7 @@ export default function ProviderReadiness({ readiness, onAutoSetup, onUseServedM
       >
         {standbyDetail && <p className="mt-1 text-gray-400"><CodeText text={standbyDetail} /></p>}
         {manageUrl && (
-          <Link to={manageUrl} className={`${ACTION_CLASS} mt-2`}>Open the LLMs page</Link>
+          <Link to={manageUrl} className={`${ACTION_CLASS} mt-2`}>{manageLinkLabel(manageUrl)}</Link>
         )}
       </Banner>
     );
@@ -185,7 +198,7 @@ export default function ProviderReadiness({ readiness, onAutoSetup, onUseServedM
           </button>
         )}
         {manageUrl && (
-          <Link to={manageUrl} className={ACTION_CLASS}>Open the LLMs page</Link>
+          <Link to={manageUrl} className={ACTION_CLASS}>{manageLinkLabel(manageUrl)}</Link>
         )}
       </div>
     </Banner>

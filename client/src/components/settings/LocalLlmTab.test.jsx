@@ -4,7 +4,9 @@ import { MemoryRouter, useLocation } from 'react-router';
 
 // The tab is a dispatcher: the assertion that matters is WHICH view mounts, so
 // the views themselves are stubbed. Their own behaviour is covered in
-// LocalLlmRuntimesView.test.jsx / LocalLlmLibraryView.test.jsx.
+// LocalLlmLibraryView.test.jsx (and, for the departed runtimes view, in
+// LocalLlmRuntimesView.test.jsx — it is a sibling Models tab since #7414, so
+// this dispatcher must no longer be able to mount it at all).
 vi.mock('./LocalLlmRuntimesView.jsx', () => ({
   default: () => <div data-testid="runtimes-view">runtimes</div>,
 }));
@@ -35,14 +37,15 @@ beforeEach(() => {
 
 describe('LocalLlmTab view dispatch', () => {
   // The `view` prop comes straight off the URL, so anything that is not a known
-  // view id — a legacy `/models/llms` with no segment, a typo, a stale bookmark —
-  // has to land on runtimes rather than rendering an empty tab body.
+  // view id — a bare `/models/llms`, a typo, a stale bookmark, or `runtimes`
+  // from before the split — has to land on Model Library rather than rendering
+  // an empty tab body.
   it.each([
-    [undefined, 'runtimes-view'],
-    ['runtimes', 'runtimes-view'],
+    [undefined, 'library-view'],
     ['library', 'library-view'],
     ['abuse', 'abuse-view'],
-    ['not-a-view', 'runtimes-view'],
+    ['not-a-view', 'library-view'],
+    ['runtimes', 'library-view'],
   ])('renders the %s panel', (view, testId) => {
     renderTab(view);
 
@@ -50,6 +53,16 @@ describe('LocalLlmTab view dispatch', () => {
     for (const other of ['runtimes-view', 'library-view', 'abuse-view'].filter((id) => id !== testId)) {
       expect(screen.queryByTestId(other)).not.toBeInTheDocument();
     }
+  });
+
+  // The pill bar is what a user reaches these views by, so a Runtimes pill left
+  // behind would navigate to `/models/llms/runtimes` — a path that now only
+  // redirects away — instead of the tab that owns the page.
+  it('no longer advertises Runtimes as one of its pills', () => {
+    renderTab();
+
+    expect(screen.queryByRole('tab', { name: 'Runtimes' })).not.toBeInTheDocument();
+    expect(screen.getAllByRole('tab').map((t) => t.textContent)).toEqual(['Model Library', 'Abuse Guard']);
   });
 
   it('navigates between the focused panels with a shareable URL', () => {

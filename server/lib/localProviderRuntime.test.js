@@ -64,7 +64,9 @@ describe('localRuntimeForProvider', () => {
     expect(runtime.label).toBe('llama.cpp');
     expect(runtime.command).toBe('llama-server');
     expect(runtime.endpoint).toBe('http://127.0.0.1:8090/v1');
-    expect(runtime.manageUrl).toBe('/models/llms');
+    // Models → Runtimes (#7414), not the LLMs catalog: llama-server's
+    // lifecycle is what an unmet check sends the user to.
+    expect(runtime.manageUrl).toBe('/models/llms-runtimes');
   });
 
   it('falls back to the provider endpoint when the stored OpenCode config is unparseable', () => {

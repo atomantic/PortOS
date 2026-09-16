@@ -1099,7 +1099,7 @@ export async function relaunchLlamaServerWithAlias(alias) {
   if (!managed || !config?.model) {
     return {
       applied: false,
-      reason: `llama-server is not running under PortOS, so its launch line is not PortOS's to change. Start it from Models → LLMs, or add \`--alias ${wanted}\` to your own launch line.`,
+      reason: `llama-server is not running under PortOS, so its launch line is not PortOS's to change. Start it from Models → Runtimes, or add \`--alias ${wanted}\` to your own launch line.`,
       config: null,
     };
   }

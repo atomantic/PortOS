@@ -171,7 +171,9 @@ describe('getProviderReadiness', () => {
     const model = checkById(readiness, 'model');
     expect(model.detail).toMatch(/no model loaded/);
     expect(model.servedModels).toEqual([]);
-    expect(model.fixHint).toMatch(/Models → LLMs/);
+    // llama.cpp's presets live on Models → Runtimes since #7414; the hint is
+    // derived from `manageUrl`, so it names that page rather than the catalog.
+    expect(model.fixHint).toMatch(/Models → Runtimes/);
     expect(model.fixHint).not.toMatch(/button below/);
   });
 
@@ -304,15 +306,17 @@ describe('getProviderReadiness', () => {
   });
 
   it('offers a one-click install+start for MTPLX instead of a setup-doc dead end', async () => {
-    // The whole point of the setup button: MTPLX has no Models → LLMs page entry,
-    // so before it existed the only answer here was "go read the vendor docs".
+    // The whole point of the setup button: before it existed the only answer
+    // here was "go read the vendor docs". MTPLX now also has a Models → Runtimes
+    // card (#7414) — the in-place setup is still the shorter path, so the
+    // checklist leads with it and the link is the fallback, never a doc URL.
     const restore = pinPlatform('darwin');
     const readiness = await getProviderReadiness(
       { id: 'opencode-mtplx', command: 'opencode', mtplxBacked: true, defaultModel: 'mtplx' },
       { findCommand: () => null, probe: unreachable() },
     );
     restore();
-    expect(readiness.manageUrl).toBeNull();
+    expect(readiness.manageUrl).toBe('/models/llms-runtimes');
     // Setup lives in the PortOS UI — the payload never points at a vendor doc.
     expect(readiness.docsUrl).toBeUndefined();
     expect(readiness.setup).toMatchObject({ runtime: 'mtplx', action: 'install-start', blockedReason: null });

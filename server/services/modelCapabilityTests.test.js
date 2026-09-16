@@ -500,7 +500,7 @@ describe('a runtime that is not running', () => {
     const report = await getCapabilityTestReport();
 
     expect(report.listErrors).toEqual([expect.objectContaining({
-      id: 'llama', label: 'llama.cpp', offline: true, recovered: 2, manageUrl: '/models/llms',
+      id: 'llama', label: 'llama.cpp', offline: true, recovered: 2, manageUrl: '/models/llms-runtimes',
     })]);
   });
 

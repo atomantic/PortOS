@@ -25,7 +25,7 @@ Silicon."** and offers no install button.
 
 ## Where it is managed
 
-**Models → LLMs** is the home for Slotstream's lifecycle, in the same **Local
+**Models → Runtimes** is the home for Slotstream's lifecycle, in the same **Local
 Runtime Servers** table as Ollama, LM Studio, llama.cpp and MTPLX
 (`client/src/components/settings/RuntimeServersCard.jsx`):
 

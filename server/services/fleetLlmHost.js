@@ -29,7 +29,7 @@ export function recommendFleetLlmHost(specs) {
     runtime: 'vllm', supported: true, title: 'Qwen3.8-27B · vLLM + DFlash 2',
     reason: 'Validated RTX 3090 recipe with structured tool calls and prefix caching. Recorded warm decode: 105 tokens/sec; actual speed depends on context and workload.',
   };
-  if (specs.appleSilicon) return { runtime: 'mtplx', supported: false, title: 'MTPLX on Apple Silicon', reason: 'Use the managed MTPLX setup on Models → LLMs. Automated dedicated hosting currently supports the validated RTX 3090 recipe.' };
+  if (specs.appleSilicon) return { runtime: 'mtplx', supported: false, title: 'MTPLX on Apple Silicon', reason: 'Use the managed MTPLX setup on Models → Runtimes. Automated dedicated hosting currently supports the validated RTX 3090 recipe.' };
   return { runtime: null, supported: false, title: specs.cuda?.status === 'unknown' ? 'Hardware detection needs attention' : 'Connect to a model host', reason: 'No validated automatic Qwen3.8-27B host recipe matches this machine. Connect to an existing host, or compare installed models on Models → Performance.' };
 }
 
@@ -185,7 +185,7 @@ async function configure({ emit, isCancelled }) {
   const probe = await probeOpenAiModels(`${upstream}/v1`, { apiKey, timeoutMs: 3000 });
   if (!probe.reachable) {
     const gpu = await getCudaUtilization({ refresh: true });
-    if (gpu.gpus?.some((item) => item.memoryUsedMib > 3000)) throw new Error('Another application is holding GPU memory. Unload its model on Models → LLMs, then retry.');
+    if (gpu.gpus?.some((item) => item.memoryUsedMib > 3000)) throw new Error('Another application is holding GPU memory. Unload its model on Models → Runtimes, then retry.');
   }
   let contents = await readFile(join(project.dir, '.env'), 'utf8');
   for (const [key, value] of [['SPEC', 'dflash2'], ['PREFIX_CACHE', '1'], ['MAX_SEQS', '1']]) contents = upsertEnvLine(contents, key, value);

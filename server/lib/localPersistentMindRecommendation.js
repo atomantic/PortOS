@@ -175,7 +175,7 @@ export function localPersistentMindRecommendation(capabilities) {
     codingHarnesses: 'Cursor Agent / OpenCode Zen (cloud CLIs) for coding tasks',
     topology: 'Local Ollama Persistent Mind + cloud coding CLIs',
     note: 'Default for Grok Bot boxes and other CPU-only / no-GPU installs: a free local Persistent Mind on Ollama, with Cursor / OpenCode Zen reserved for coding.',
-    alternatives: 'Do not enable vLLM or Qwen3.8-27B presets on this host. When you later add a GPU workstation, use Models → LLMs → Recommended coding-agent setup instead.',
+    alternatives: 'Do not enable vLLM or Qwen3.8-27B presets on this host. When you later add a GPU workstation, use Models → Runtimes → Recommended coding-agent setup instead.',
     warnings: Object.freeze(warnings),
     suppressHeavyLocalPresets: shouldSuppressHeavyLocalPresets(capabilities),
     cpuOnly,
