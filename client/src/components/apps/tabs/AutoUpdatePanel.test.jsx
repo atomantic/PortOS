@@ -60,7 +60,7 @@ describe('AutoUpdatePanel', () => {
     });
     render(<AutoUpdatePanel />);
     expect(screen.getByText(/the working tree has uncommitted changes/)).toBeInTheDocument();
-    expect(screen.getByText(/A CoS agent is queued to resolve it/)).toBeInTheDocument();
+    expect(screen.getByText(/A CoS agent will be queued to resolve it/)).toBeInTheDocument();
   });
 
   it('hides the configuration while the feature is off', () => {

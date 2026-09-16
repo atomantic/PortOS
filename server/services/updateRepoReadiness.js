@@ -42,6 +42,7 @@ const REASON_LABELS = {
   'git-unreadable': 'the checkout could not be inspected',
   'no-default-branch': 'the origin default branch could not be resolved',
   'merge-in-progress': 'a merge or rebase is in progress',
+  'operation-check-unreadable': 'whether a merge or rebase is in progress could not be established',
   'conflicted-files': 'the working tree has unresolved conflicts',
   'uncommitted-changes': 'the working tree has uncommitted changes',
   'unpushed-commits': 'the default branch has local commits that are not on origin',
@@ -147,7 +148,10 @@ export async function checkUpdateRepoReadiness({ repoPath, fetch = false } = {})
   if (activeAgentId === 'unknown') reasons.push('agent-check-unreadable');
   else if (activeAgentId) reasons.push('agent-at-work');
   if (!defaultBranch) reasons.push('no-default-branch');
-  if (interrupted) reasons.push('merge-in-progress');
+  // Same split as the agent check: a failed marker read must not be reported as
+  // an interrupted rebase the user would go looking for and not find.
+  if (interrupted === 'unknown') reasons.push('operation-check-unreadable');
+  else if (interrupted) reasons.push('merge-in-progress');
   if (conflicted) reasons.push('conflicted-files');
   if (dirt.hasRealChanges) reasons.push('uncommitted-changes');
   else if (!dirt.clean) repairable.push('restore-lockfiles');

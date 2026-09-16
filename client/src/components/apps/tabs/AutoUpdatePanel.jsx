@@ -183,7 +183,7 @@ export default function AutoUpdatePanel() {
                 <AlertTriangle size={13} className="mt-0.5 shrink-0" />
                 <span>
                   Checkout not ready — {repo.summary || `on ${repo.branch || 'an unknown branch'}, expected a clean ${repo.defaultBranch || 'default branch'}`}.
-                  {repo.needsAgent && draft.resolveBlockersWithAgent ? ' A CoS agent is queued to resolve it.' : ''}
+                  {repo.needsAgent && draft.resolveBlockersWithAgent ? ' A CoS agent will be queued to resolve it.' : ''}
                 </span>
               </div>
             ) : null}
