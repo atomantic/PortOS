@@ -28,7 +28,7 @@ The catalog contains comprehensive public configurations across major providers 
 
 Endpoints (relative to the configured PortOS API origin):
 
-- `GET /api/providers/comparison` → `{ schemaVersion: 1, observations, inventory }`. Inventory contains only provider IDs/names/types, discovery capability, model IDs and supported effort labels. No credentials or endpoints.
+- `GET /api/providers/comparison` → `{ schemaVersion: 1, observations, inventory }`. Inventory contains only provider IDs/names/types, discovery capability, model IDs, supported effort labels, and each model's `catalogModel` — the public benchmark-index name the endpoint ID normalizes to, or `null`. No credentials or endpoints. `catalogModel` is derived server-side by `catalogSlugForProviderModel`, so the coverage list and the chart's default scope cannot disagree about whether a model has evidence; never re-derive it in the client.
 - `POST /api/providers/comparison/discover` with `{ "providerId": "example-provider" }` → current `{ providerId, models: [{ model, efforts }] }`. Explicit discovery only; failures remain visible.
 - `POST /api/providers/comparison/import` accepts `{ schemaVersion: 1, observations: [...] }`. GET's `inventory` field is not an import field. The UI also accepts this JSON as a file.
 - `POST /api/providers/comparison/sync-aa` with optional `{ "apiKey": "..." }` → fetches model metadata directly from the Artificial Analysis API, normalizes observations, and imports them. The API-reported `intelligence_index_version` determines observation IDs, benchmark labels and metric methodology. Missing/invalid versions, malformed/empty pages, or a version change during pagination fail before import; new benchmark versions never overwrite older-version evidence.
@@ -73,6 +73,27 @@ The September 6, 2026 snapshot ships eight exact Zen endpoint IDs (the CLI prefi
 Pricing-only rows appear alongside the selected benchmark as explicitly unbenchmarked evidence. Select input price versus output price to plot them, or use scenario cost with zero reasoning tokens to calculate their published input/output charge. A missing quality measurement cannot become a zero score. Migration 356 appends missing shipped Zen IDs to existing catalogs without overwriting locally researched rows; it validates the entire result before writing and refuses malformed/future-version data.
 
 The September 15, 2026 snapshot adds the two NVIDIA NIM free-endpoint IDs currently shipped on the `nvidia-nim` provider and its OpenCode wrappers: `google/gemma-4-31b-it` and `poolside/laguna-xs-2.1`, from the [Gemma 4 31B IT](https://build.nvidia.com/google/gemma-4-31b-it) and [Laguna XS 2.1](https://build.nvidia.com/poolside/laguna-xs-2.1) prototype pages. Each row carries zero published input/output rates, with unknown quota, reasoning-token billing, benchmark task cost, quality and throughput. The free NIM offer is a trial endpoint subject to NVIDIA credits, rate limits, and data-use terms. Name similarity does not prove that an AA-tested or locally served revision matches NIM's serving configuration. Migration 388 appends missing shipped NIM IDs the same way 356 does for Zen.
+
+## Local coding agents and the install catalog
+
+The models PortOS can dispatch are not only the ones named in `data.reference/providers.json`. The shipped `ollama` and `lmstudio` provider records carry an **empty** model list — what a user can select is whatever they pulled — so the install catalog in `server/lib/localLlmCatalog.js` is the other half of scope. `scripts/prune-model-comparison-seed.js` derives both, and a coding model reaching the install picker without benchmark rows is a coverage gap, not a design choice.
+
+A local backend ID names a *build* of the weights, not the model the index benchmarked, and the difference is not decidable from the text — so a catalog entry **declares** its index name in a `benchmarkModel` field and `catalogSlugForProviderModel` looks it up instead of guessing. Both of an entry's backend IDs (and its retired aliases) resolve through the same declaration, so `ornith:35b` and `lmstudio-community/Ornith-1.0-35B-GGUF` are one model. **Omit `benchmarkModel` unless the evaluated configuration has been checked against the entry**; the model then carries no benchmark evidence, which is the honest state. Textual guessing was tried and rejected: stripping `-Reasoning` off Cisco's GGUF lands on the *different* `foundation-sec-8b`, and folding `qwen3.8:27b-mlx` onto `qwen3.8-27b` would plot a hosted API's price and throughput under a 4-bit local build.
+
+The September 16, 2026 snapshot adds ten agentic-coding rows for the catalog's coding tier. **The scaffold is part of the benchmark name**, because the chart separates series on `benchmark` alone and two harnesses disagree by more than most models do — a Cline result and an OpenHands result are not one axis:
+
+| Model | SWE-bench Verified | SWE-bench Pro | Benchmark group (scaffold) |
+| --- | ---: | ---: | --- |
+| [Ornith 1.0 35B](https://huggingface.co/ornith-ai/Ornith-1.0-35B) | 75.6 | 50.4 | OpenHands, temp=1.0, top_p=0.95 |
+| [Qwen3.6 35B-A3B](https://huggingface.co/Qwen/Qwen3.6-35B-A3B) | 73.4 | 49.5 | Qwen internal scaffold (bash + file-edit), 200K context |
+| [Ornith 1.0 9B](https://ornith.ai/ornith_1_0.html) | 69.4 | 42.9 | OpenHands, temp=1.0, top_p=0.95 |
+| [Devstral Small 2 24B](https://mistral.ai/news/devstral-2-vibe-cli/) | 68.0 | — | Cline |
+| [North Mini Code 1.0](https://sebastianraschka.com/blog/2026/north-mini-code-agentic-coding.html) | 67.6 | 40.2 | SWE-Agent v1.1.0 |
+| [Qwen3-Coder 30B](https://huggingface.co/Qwen/Qwen3-Coder-30B-A3B-Instruct/discussions/30) | 51.6 | — | OpenHands, 100 turns |
+
+So **Qwen3-Coder 30B and Ornith 1.0 35B compare directly** — both sit in `SWE-bench Verified (pass@1, OpenHands)` — while the Cline and SWE-Agent results stay on their own axes rather than joining a ranking they did not earn.
+
+Every row is quality only. A hosted price or throughput would describe someone else's endpoint, and none of these numbers describes the quantized GGUF build PortOS installs or this machine's hardware — a local measurement belongs in the per-model assessment, not here. Publisher self-reports are not independently reproduced: Qwen's Qwen3-Coder figure ships without the OpenHands commit, serving config or tool-call parser, and Cohere's table mixes its own runs with public reports and Artificial Analysis values. Codestral 22B and the Qwen2.5-Coder builds carry no rows because no current sourced evaluation covers them; an absent row stays absent rather than becoming an estimate. Migration 389 appends the shipped coding IDs the same way 388 does for NIM.
 
 ## Research: skill-specific comparisons
 

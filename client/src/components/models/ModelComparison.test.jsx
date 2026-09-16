@@ -390,3 +390,20 @@ it('keeps exact Zen IDs in available coverage and plots free prices without inve
   expect(screen.queryByTestId('scatter-example-free')).toBeNull();
   expect(screen.getAllByText('Unknown').length).toBeGreaterThan(0);
 });
+
+it('reads coverage through the normalized catalog name so a local backend id is not reported as unresearched', async () => {
+  api.getModelComparison.mockResolvedValue({
+    observations: [{ ...observation, model: 'qwen3-coder-30b-a3b' }],
+    availableModels: ['qwen3-coder-30b-a3b'],
+    inventory: [{ id: 'ollama', name: 'Ollama', models: [
+      { model: 'qwen3-coder:30b', efforts: [], catalogModel: 'qwen3-coder-30b-a3b' },
+      { model: 'mystery:7b', efforts: [], catalogModel: 'mystery-7b' },
+    ] }],
+  });
+  render(<MemoryRouter><ModelComparison /></MemoryRouter>);
+  fireEvent.click(await screen.findByText(/Configured provider coverage/));
+  // The endpoint id never equals the index name, so matching on it alone
+  // reported every Ollama pull as unresearched.
+  expect(screen.getByText(/qwen3-coder:30b/)).toHaveTextContent('Public model reference available as qwen3-coder-30b-a3b');
+  expect(screen.getByText(/mystery:7b/)).toHaveTextContent('Needs research');
+});

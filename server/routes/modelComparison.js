@@ -5,7 +5,17 @@ import { getModelComparison, importModelComparison } from '../services/modelComp
 import { hasArtificialAnalysisKey, syncArtificialAnalysisCatalog } from '../services/artificialAnalysis.js';
 import { canRefreshModels } from '../lib/aiToolkit/internal/modelFetchers.js';
 import { effortLevelsForProvider, filterSelectableModels } from '../lib/providerModels.js';
-import { providerCatalogSlugs } from '../lib/comparisonModelScope.js';
+import { catalogSlugForProviderModel } from '../lib/comparisonModelScope.js';
+
+// The endpoint id plus the benchmark-index name it normalizes to. Both travel,
+// because the page needs them for different things: the executable id labels
+// the row, and the slug is what a catalog observation is keyed by. Deriving the
+// slug client-side would be a second copy of the normalization rules, which is
+// how the coverage list came to report "Needs research" for models the chart
+// was already plotting.
+const inventoryModel = (provider, model) => ({
+  model, efforts: effortLevelsForProvider(provider, model) || [], catalogModel: catalogSlugForProviderModel(model) || null,
+});
 
 export function createModelComparisonRoutes(providerService) {
   const router = Router();
@@ -15,14 +25,13 @@ export function createModelComparisonRoutes(providerService) {
     ]);
     const inventory = providers.filter(p => p.enabled !== false).map(p => ({
       id: p.id, name: p.name, type: p.type, canDiscover: canRefreshModels(p),
-      models: filterSelectableModels(p.models).filter(m => typeof m === 'string' && m).map(model => ({
-        model, efforts: effortLevelsForProvider(p, model) || [],
-      })),
+      models: filterSelectableModels(p.models).filter(m => typeof m === 'string' && m).map(model => inventoryModel(p, model)),
     }));
     // Benchmark rows the user can act on: the chart defaults to the models their
     // own providers can dispatch, with the rest of the index one click away.
     res.json({
-      ...catalog, inventory, availableModels: [...providerCatalogSlugs(inventory)].sort(),
+      // Read back off the inventory rather than re-normalizing every id.
+      ...catalog, inventory, availableModels: [...new Set(inventory.flatMap(p => p.models.map(m => m.catalogModel).filter(Boolean)))].sort(),
       // Presence only, never the key — the page skips its key prompt when set.
       artificialAnalysisKeyConfigured,
     });
@@ -35,9 +44,8 @@ export function createModelComparisonRoutes(providerService) {
     if (!provider || !canRefreshModels(provider)) throw new ServerError('Provider is unavailable for model discovery', { status: 400 });
     const catalog = await providerService.fetchProviderModelCatalog(provider.id);
     if (!catalog) throw new ServerError('Provider model discovery returned no catalog', { status: 502 });
-    res.json({ providerId: provider.id, models: filterSelectableModels(catalog.models).map(model => ({
-      model, efforts: effortLevelsForProvider({ ...provider, models: catalog.models }, model) || [],
-    })) });
+    const discovered = { ...provider, models: catalog.models };
+    res.json({ providerId: provider.id, models: filterSelectableModels(catalog.models).map(model => inventoryModel(discovered, model)) });
   }));
   router.post('/import', asyncHandler(async (req, res) => {
     res.json(await importModelComparison(validateRequest(modelComparisonImportSchema, req.body)));

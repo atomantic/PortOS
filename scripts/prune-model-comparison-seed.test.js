@@ -2,6 +2,8 @@ import { describe, it, expect } from 'vitest';
 import { readFile } from 'fs/promises';
 import { join } from 'path';
 import { inScopeModels, prunedSeed } from './prune-model-comparison-seed.js';
+import { BACKENDS, LOCAL_LLM_CATALOG, entryIdsForBackend } from '../server/lib/localLlmCatalog.js';
+import { catalogSlugForProviderModel, localCatalogBenchmarkModels } from '../server/lib/comparisonModelScope.js';
 
 const root = join(import.meta.dirname, '..');
 const readSeed = async () => JSON.parse(await readFile(join(root, 'data.reference/model-comparison.json'), 'utf8'));
@@ -28,6 +30,59 @@ describe('model comparison seed scope', () => {
       const efforts = rows.filter(row => row.benchmark === benchmark).map(row => row.effort);
       expect(efforts.sort()).toEqual(['high', 'low', 'max', 'medium', 'xhigh']);
     }
+  });
+
+  it('scopes every benchmark name the local install catalog declares', async () => {
+    // `ollama` and `lmstudio` ship with `models: []`, so providers.json alone
+    // drops every model PortOS ships an installer for.
+    const scope = await inScopeModels();
+    const declared = localCatalogBenchmarkModels();
+    expect([...declared].filter(model => !scope.has(model))).toEqual([]);
+    for (const model of ['qwen3-coder-30b-a3b', 'ornith-1.0-35b']) expect(declared.has(model)).toBe(true);
+  });
+
+  it('declares a benchmark name only for a model the index actually carries', async () => {
+    // A declared equivalence is a claim about a real index row. A typo or a
+    // retired model would otherwise sit in the catalog looking authoritative
+    // while silently contributing nothing.
+    const known = new Set((await readSeed()).observations.map(row => row.model));
+    const dangling = [...localCatalogBenchmarkModels()].filter(model => !known.has(model));
+    expect(dangling).toEqual([]);
+  });
+
+  it('routes both backend ids of a declaring entry to the same benchmark name', async () => {
+    // Catalog-wide, not just the lane under edit: both backends install the same
+    // weights, so a split means one id silently contributes nothing.
+    const split = [];
+    for (const entry of LOCAL_LLM_CATALOG.filter(model => model.benchmarkModel)) {
+      for (const backend of BACKENDS) {
+        for (const id of entryIdsForBackend(entry, backend)) {
+          if (catalogSlugForProviderModel(id) !== entry.benchmarkModel) split.push([entry.key, id]);
+        }
+      }
+    }
+    expect(split).toEqual([]);
+  });
+
+  it('ships the coding agents the install picker asks the user to choose between, on one scaffold', async () => {
+    // The chart separates series on `benchmark` alone, so a shared axis is the
+    // only thing that makes two rows comparable.
+    const rows = (await readSeed()).observations.filter(row => row.benchmark === 'SWE-bench Verified (pass@1, OpenHands)');
+    const scored = Object.fromEntries(rows.map(row => [row.model, row.quality.value]));
+    expect(scored['qwen3-coder-30b-a3b']).toBeGreaterThan(0);
+    expect(scored['ornith-1.0-35b']).toBeGreaterThan(0);
+  });
+
+  it('never mixes two evaluation methodologies into one benchmark group', async () => {
+    // Guards the scaffold split above: a Cline result and an OpenHands result
+    // sharing a benchmark string would plot as one curve.
+    const byBenchmark = new Map();
+    for (const row of (await readSeed()).observations) {
+      if (!row.quality) continue;
+      if (!byBenchmark.has(row.benchmark)) byBenchmark.set(row.benchmark, new Set());
+      byBenchmark.get(row.benchmark).add(row.quality.source.methodology);
+    }
+    expect([...byBenchmark].filter(([, methodologies]) => methodologies.size > 1)).toEqual([]);
   });
 
   it('carries no retired generation the chart would never plot', async () => {

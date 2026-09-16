@@ -24,7 +24,7 @@
 import { readFile, writeFile } from 'fs/promises';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
-import { providerCatalogSlugs } from '../server/lib/comparisonModelScope.js';
+import { localCatalogBenchmarkModels, providerCatalogSlugs } from '../server/lib/comparisonModelScope.js';
 import { filterSelectableModels } from '../server/lib/providerModels.js';
 import { isDirectlyInvoked } from './lib/directInvocation.js';
 
@@ -45,6 +45,12 @@ export async function inScopeModels() {
     models: filterSelectableModels((provider.models || []).map(model => (typeof model === 'string' ? model : model?.id))),
   }));
   const scope = providerCatalogSlugs(inventory);
+  // The other half of "models PortOS can dispatch": the shipped `ollama` and
+  // `lmstudio` records carry an EMPTY model list — the real list is whatever the
+  // user pulled — so providers.json alone excludes every model PortOS ships an
+  // installer for. Only DECLARED equivalences widen the keep-set, so retaining a
+  // row stays a reviewed decision rather than a side effect of a similar name.
+  for (const model of localCatalogBenchmarkModels()) scope.add(model);
   // Endpoint pricing belongs to the exact serving tier, including stealth IDs
   // that deliberately cannot resolve to a public benchmark model.
   for (const { models } of inventory) {
