@@ -11,7 +11,8 @@
 # pull request's head. The only PR-derived values it touches are the run
 # metadata passed as environment variables below, and the script uses them as
 # validated numbers and one encoded query parameter — never as a path, an
-# argument, or shell input.
+# argument, or shell input. The check run it publishes (#7438) renders fixed
+# reason codes only, never the branch name or any other payload text.
 name: CI cancel recovery
 
 on:
@@ -22,6 +23,9 @@ on:
 permissions:
   contents: read
   actions: write
+  # Publishing the verdict back onto the pull request as a check run (#7438).
+  # The check is ALWAYS `neutral`, so this grant explains a gate, never adds one.
+  checks: write
 
 # One recovery evaluation per run. Never `cancel-in-progress`: cancelling the
 # thing that recovers from cancellations is how this whole class of bug starts.

@@ -685,8 +685,27 @@ fail-fast above and is not on the table.
 always()` on the gate defeats an upstream failure, not a cancellation of the
 whole run — so in the external-cancel case the gate is cancelled too and never
 prints its verdict. The recovery run is a separate run, so it survives; its
-step summary records which guard applied. Publishing that back onto the pull
-request as a neutral check run is issue #7438.
+step summary records which guard applied.
+
+That summary lives on the recovery run, which nobody finds from the pull
+request, so the workflow also **publishes the verdict back onto the cancelled
+head SHA as a check run** named `CI cancel recovery` (issue #7438). It carries
+the same fixed reason code the step summary renders — `superseded`,
+`job-failed`, `re-dispatched`, `retry-budget-exhausted`, `run-state-moved-on`,
+or one of the `*-unavailable` lookup failures — plus one sentence saying what
+to do about it.
+
+The check's conclusion is **always `neutral`, and that is load-bearing**.
+Branch protection requires `CI Gate` alone, so a `failure` here would block a
+merge the repository allows; and `success` would read as a passing gate —
+PortOS's own auto-merge watcher (`server/services/prWatcher.js`) counts
+`NEUTRAL` as green. Neutral is the only conclusion that stays informational to
+a human and to that watcher alike. Publishing is best-effort for the same
+reason the retry is: a recovery job must never turn red on top of an
+already-cancelled run, so a rejected or failed publish is logged and swallowed
+and the job still exits 0. The only extra grant this needs is `checks: write`;
+a `contents:`/`pull-requests: write` token on a `workflow_run` workflow is what
+would turn an informational job into a push surface.
 
 One known limit, filed: a retry re-runs the whole suite — Windows shards
 included — so if the cause is the spending limit then recovery spends more of
@@ -694,9 +713,10 @@ it. Reducing the billable minutes of a full run is the complementary root-cause
 lever (#7440).
 
 Because the trigger is `workflow_run`, the recovery workflow runs the
-**default branch's** copy of itself with a writable `actions` token and never
-checks out, installs, or executes the pull request's head. The only PR-derived
-values it touches are validated run ids and one URL-encoded branch name.
+**default branch's** copy of itself with writable `actions` and `checks`
+tokens, and never checks out, installs, or executes the pull request's head.
+The only PR-derived values it touches are validated run ids and one
+URL-encoded branch name.
 
 Reader-facing symptoms, the `gh` commands that tell an external cancel from a
 supersession, and the account-billing check that confirms the upstream cause
