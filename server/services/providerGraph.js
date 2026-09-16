@@ -25,6 +25,7 @@ import {
   modelAliasRevision,
 } from '../lib/providerModelAliases.js';
 import { harnessById } from '../lib/providerHarnesses.js';
+import { modeSiblingName } from '../lib/aiToolkit/internal/providerModes.js';
 import { effortLevelsForProvider } from '../lib/providerModels.js';
 import {
   bindingBlocker,
@@ -858,7 +859,7 @@ export function createBinding({ connectionId, harnessId, modes, label }) {
       harnessId,
       mode,
       providerId: ids[mode],
-      name: mode === 'tui' ? `${name} TUI` : name,
+      name: modeSiblingName(name, mode),
       connection,
     }));
     for (const record of records) {

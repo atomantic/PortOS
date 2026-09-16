@@ -223,6 +223,55 @@ export const providerSchema = z.object({
   tuiIdleTimeoutMs: z.number().int().min(1000).max(86400000).optional()
 });
 
+/**
+ * What ONE mode of a dual-mode create may set for itself.
+ *
+ * Every rule is taken from `providerSchema`'s own shape rather than restated,
+ * so a bound the single-mode create enforces cannot quietly differ from the one
+ * a pair create enforces. The set is deliberately small: anything NOT here is
+ * shared by both records, which is what keeps the pair groupable
+ * (`providerModeGroups` refuses siblings that disagree on command, endpoint,
+ * credentials or env — the disjointness test in `validation.test.js` pins that
+ * these keys stay clear of {@link MODE_GROUPED_KEYS}).
+ */
+const providerModeOverrideSchema = z.object({
+  args: providerSchema.shape.args,
+  headlessArgs: providerSchema.shape.headlessArgs,
+  tuiPromptDelayMs: providerSchema.shape.tuiPromptDelayMs,
+}).strict();
+
+/** The keys {@link providerModeOverrideSchema} lets a mode vary. */
+export const PROVIDER_MODE_OVERRIDE_KEYS = Object.freeze(Object.keys(providerModeOverrideSchema.shape));
+
+/**
+ * POST /api/providers — the create body, which may declare BOTH execution modes
+ * of one harness instead of forcing the user to add the CLI and the TUI
+ * separately and hope the two records happen to pair.
+ *
+ * Both keys are required: declaring a single mode is what `type` is for, so the
+ * map's presence IS the "make me a pair" request. An empty `cli: {}` is the
+ * normal case — the body's own `args` / `headlessArgs` already describe the CLI
+ * record, and the key is there so the pair is declared rather than inferred.
+ *
+ * This `modes` is a per-mode MAP, where `POST /api/providers/bindings` takes a
+ * plain array of mode names, because the two creates get their argv from
+ * different places: a binding mints from the harness's shipped command recipe,
+ * while a provider added here has no recipe at all — the user types each mode's
+ * arguments, and they need somewhere to land.
+ *
+ * Create-only, and deliberately absent from `providerSchema` itself: pairing
+ * describes two records being MINTED together, which a PATCH against one
+ * existing record cannot mean, so the PATCH route's `providerSchema.partial()`
+ * drops the key instead of half-acting on it.
+ */
+export const providerCreateSchema = providerSchema.extend({
+  modes: z.object({
+    cli: providerModeOverrideSchema,
+    tui: providerModeOverrideSchema,
+  }).strict().optional(),
+});
+
+
 // PUT /api/providers/active — set the active provider by id. Constrain to the
 // same slug shape createProvider assigns (`providerSchema.id`) so a reserved
 // key like `__proto__` can't reach the `data.providers[id]` lookup in

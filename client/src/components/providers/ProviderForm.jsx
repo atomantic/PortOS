@@ -45,6 +45,9 @@ const PROVIDER_FIELD_RANGES = {
   topP: { min: 0, max: 1 },
 };
 
+/** A space-separated argv input as the array the provider schema takes. */
+const argList = (text) => (text ? text.split(' ').filter(Boolean) : []);
+
 const rangeMessage = (label, { min, max }, unit = '') =>
   `${label} must be between ${formatCount(min)} and ${formatCount(max)}${unit ? ` ${unit}` : ''}`;
 
@@ -98,6 +101,23 @@ export default function ProviderForm({ provider, daemonReadiness = null, onClose
   const [newEnvKey, setNewEnvKey] = useState('');
   const [newEnvValue, setNewEnvValue] = useState('');
   const [newEnvSecret, setNewEnvSecret] = useState(false);
+
+  // A CLI create may declare that the same harness ALSO runs as a TUI, which
+  // mints both records at once (`modes` on POST /api/providers). Neither field
+  // is ever part of a provider record, so both stay out of `formData` — a
+  // scratch value that rode the `...formData` spread would have to be deleted
+  // back out of every payload.
+  //
+  // Editing never offers it: pairing describes two records being created
+  // together, which a save against one existing record cannot mean.
+  const canPairModes = !provider && formData.type === 'cli';
+  const [alsoTui, setAlsoTui] = useState(false);
+  const [tuiArgs, setTuiArgs] = useState('');
+
+  // The CLI record stays the one this form edits; the TUI sibling is minted
+  // from it, so `formData.type` remains a real type and every type-derived
+  // control below behaves exactly as it does for a plain CLI provider.
+  const createsModePair = canPairModes && alsoTui;
 
   // Live installed Ollama/LM Studio models, folded into the model pickers so a
   // local provider shows what's actually installed — not just the stale `models`
@@ -275,7 +295,7 @@ export default function ProviderForm({ provider, daemonReadiness = null, onClose
         return { tab: 'connection', message: 'Endpoint must be a full URL, e.g. http://localhost:1234/v1' };
       }
     }
-    if (formData.type === 'tui' && outOfRange(formData.tuiPromptDelayMs, PROVIDER_FIELD_RANGES.tuiPromptDelayMs)) {
+    if ((formData.type === 'tui' || createsModePair) && outOfRange(formData.tuiPromptDelayMs, PROVIDER_FIELD_RANGES.tuiPromptDelayMs)) {
       return { tab: 'connection', message: rangeMessage('Prompt Paste Delay', PROVIDER_FIELD_RANGES.tuiPromptDelayMs, 'ms') };
     }
     if (text(formData.timeout) !== '' && parseTimeoutMs(formData.timeout) == null) {
@@ -319,8 +339,8 @@ export default function ProviderForm({ provider, daemonReadiness = null, onClose
     const timeoutInput = String(formData.timeout ?? '').trim();
     const data = {
       ...formData,
-      args: formData.args ? formData.args.split(' ').filter(Boolean) : [],
-      headlessArgs: formData.headlessArgs ? formData.headlessArgs.split(' ').filter(Boolean) : [],
+      args: argList(formData.args),
+      headlessArgs: argList(formData.headlessArgs),
       contextWindow: parseOptionalIntField(formData.contextWindow),
       numCtx: showsNumCtx ? parseOptionalIntField(formData.numCtx) : null,
       // A blank generation field clears back to "let the backend pick" — `null`
@@ -368,6 +388,20 @@ export default function ProviderForm({ provider, daemonReadiness = null, onClose
     } else {
       delete data.tuiPromptDelayMs;
     }
+    // Both modes from one submit. Only what actually differs per mode is
+    // declared: everything else on the body is shared by both records, which is
+    // what lets the server pair them as one harness rather than two unrelated
+    // routes. `cli: {}` because the body's own `args` / `headlessArgs` already
+    // describe the CLI record — the key is there so the pair is declared.
+    if (createsModePair) {
+      data.modes = {
+        cli: {},
+        tui: {
+          args: argList(tuiArgs),
+          ...(Number.isFinite(tuiPromptDelay) ? { tuiPromptDelayMs: tuiPromptDelay } : {}),
+        },
+      };
+    }
     // These controls belong only to the advertised Codex subscription
     // transport. Do not stamp false capability fields onto unrelated provider
     // records when their editor saves an ordinary connection change.
@@ -393,7 +427,7 @@ export default function ProviderForm({ provider, daemonReadiness = null, onClose
         ? {
           ...(formData.credentialBootstrapSetupCommand.trim() ? { setupCommand: formData.credentialBootstrapSetupCommand.trim() } : {}),
           command: bootstrapCommand,
-          args: formData.credentialBootstrapArgs ? formData.credentialBootstrapArgs.split(' ').filter(Boolean) : [],
+          args: argList(formData.credentialBootstrapArgs),
           ...(formData.credentialBootstrapHarnessId.trim() ? { harnessId: formData.credentialBootstrapHarnessId.trim() } : {}),
           ...(formData.credentialBootstrapArgsSeparator.trim() ? { argsSeparator: formData.credentialBootstrapArgsSeparator.trim() } : {}),
         }
@@ -509,6 +543,44 @@ export default function ProviderForm({ provider, daemonReadiness = null, onClose
                       className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white focus:border-port-accent focus:outline-hidden"
                     />
                   </FormField>
+
+                  {/* Most coding harnesses run both headless and interactively.
+                      PortOS stores one execution mode per record, so configuring
+                      both used to mean adding the same command twice and hoping
+                      the two records matched closely enough to be treated as one
+                      harness. Checking this mints the pair from this one form. */}
+                  {canPairModes && (
+                    <div>
+                      <label htmlFor="provider-also-tui" className="flex items-start gap-2 text-sm text-gray-300 cursor-pointer">
+                        <input
+                          id="provider-also-tui"
+                          type="checkbox"
+                          checked={alsoTui}
+                          onChange={(e) => setAlsoTui(e.target.checked)}
+                          className="mt-1"
+                        />
+                        <span>
+                          This command also runs as a TUI
+                          <span className="block text-xs text-gray-500">
+                            Creates the interactive mode alongside this one, sharing the command, endpoint,
+                            credentials and models. Only the arguments differ.
+                          </span>
+                        </span>
+                      </label>
+                    </div>
+                  )}
+
+                  {createsModePair && (
+                    <FormField label="TUI Arguments (space-separated)">
+                      <input
+                        type="text"
+                        value={tuiArgs}
+                        onChange={(e) => setTuiArgs(e.target.value)}
+                        placeholder="--dangerously-skip-permissions"
+                        className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white focus:border-port-accent focus:outline-hidden"
+                      />
+                    </FormField>
+                  )}
 
                   {/* Generic support for a harness whose auth is provisioned by an
                       external CLI at spawn time — e.g. a company-internal tool that
@@ -649,7 +721,7 @@ export default function ProviderForm({ provider, daemonReadiness = null, onClose
                     </FormField>
                   )}
 
-                  {formData.type === 'tui' && (
+                  {(formData.type === 'tui' || createsModePair) && (
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                       <FormField label="Prompt Paste Delay (ms)">
                         <input

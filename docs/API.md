@@ -118,7 +118,7 @@ legacy list for local Apps/Dashboard views.
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | GET | `/providers` | List all AI providers. Also returns `runnerAllowedCommands` — the CoS Agent Runner's exec allowlist, read-only, so the editor can warn that a custom `command` won't spawn via `/spawn` / `/spawn-tui`. |
-| POST | `/providers` | Add new provider |
+| POST | `/providers` | Add new provider. A body carrying `modes` (`{ cli: {…}, tui: {…} }`) instead creates BOTH execution modes of one harness in one write — a program that runs headlessly and interactively is one program on one backend, but a record stores one `type`, so configuring both otherwise means adding the same command twice and hoping the two records satisfy the pairing rule. The pair is minted as `<id>` / `<id>-tui` with every grouped field (command, endpoint, credentials, env) shared, and answers `{ providers: [cli, tui] }`; a single-mode create still answers the bare provider object. A mode declares only `args` / `headlessArgs` / `tuiPromptDelayMs` for itself, and `cli: {}` is normal — the body's own fields already describe the CLI record, so the key is there to declare the pair. A per-mode MAP rather than the mode-name ARRAY `POST /providers/bindings` takes, because a binding mints argv from the harness's shipped recipe while a provider added here has none and the user types each mode's arguments. Create-only: `PUT /providers/:id` drops the key. |
 | PUT | `/providers/:id` | Update provider |
 | DELETE | `/providers/:id` | Delete provider |
 | POST | `/providers/:id/test` | Test provider connectivity |

@@ -1,4 +1,5 @@
 import { CONNECTION_CREDENTIAL_ENV_VARS, CONNECTION_PROTOCOLS } from './providerConnections.js';
+import { modeSiblingId } from './aiToolkit/internal/providerModes.js';
 import { PROVIDER_GATEWAYS } from './providerGateways.js';
 import { CREATABLE_HARNESS_IDS, harnessById, harnessRecipe } from './providerHarnesses.js';
 import { LOCAL_RUNTIMES } from './localProviderRuntime.js';
@@ -257,11 +258,11 @@ export function buildRouteRecord({ harnessId, mode, providerId, name, connection
 /**
  * Route ids for a new binding's modes: readable, stable and free.
  *
- * The TUI id is the CLI id plus `-tui` because that is the pairing
- * `providerModeGroups` recognizes — mint them any other way and the toolkit
- * stops treating the two modes as one harness on one backend. The whole set is
- * suffixed together for the same reason: uniquifying each id on its own would
- * break the stem relationship the moment one half collided.
+ * The sibling id comes from `modeSiblingId`, declared beside the
+ * `providerModeGroups` reader that pairs on it — mint one any other way and the
+ * toolkit stops treating the two modes as one harness on one backend. The whole
+ * set is suffixed together for the same reason: uniquifying each id on its own
+ * would break the stem relationship the moment one half collided.
  *
  * @param {{harnessId:string|null, kind:string, modes:string[], taken:Set<string>}} input
  * @returns {Record<string,string>} mode → provider id
@@ -269,7 +270,7 @@ export function buildRouteRecord({ harnessId, mode, providerId, name, connection
 export function mintRouteIds({ harnessId, kind, modes, taken }) {
   const slug = (value) => String(value).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
   const stem = [harnessId, kind].filter(Boolean).map(slug).join('-') || 'route';
-  const idsFor = (base) => Object.fromEntries(modes.map((mode) => [mode, mode === 'tui' ? `${base}-tui` : base]));
+  const idsFor = (base) => Object.fromEntries(modes.map((mode) => [mode, modeSiblingId(base, mode)]));
 
   for (let suffix = 0; suffix < 1000; suffix += 1) {
     const ids = idsFor(suffix === 0 ? stem : `${stem}-${suffix + 1}`);

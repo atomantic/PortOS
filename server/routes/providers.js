@@ -18,7 +18,7 @@ import { Router } from 'express';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { testVision, runVisionTestSuite, checkVisionHealth } from '../services/visionTest.js';
 import { auditModelPins, clearModelPin } from '../services/modelPinAudit.js';
-import { providerSchema, providerActiveSchema, validate } from '../lib/aiToolkit/validation.js';
+import { providerCreateSchema, providerSchema, providerActiveSchema, validate } from '../lib/aiToolkit/validation.js';
 import { withRefreshCapability } from '../lib/aiToolkit/internal/modelFetchers.js';
 import { ALLOWED_COMMANDS } from '../cos-runner/allowedCommands.js';
 import { onClientDisconnect, openSseStream } from '../lib/sseDownload.js';
@@ -930,15 +930,28 @@ export function createPortOSProviderRoutes(aiToolkit) {
     res.json(presentProvider(provider, await detectSystemCapabilities()));
   }));
 
-  // POST / — intercept to (a) validate the body against providerSchema so
+  // POST / — intercept to (a) validate the body against providerCreateSchema so
   // invalid fields like `timeout: "abc"` or non-object `envVars` don't
   // persist and later break runner behavior, and (b) sanitize the created
   // provider before responding so apiKey/secret envVar values don't echo
   // back to the client (the toolkit's POST returns the raw provider).
+  //
+  // A body declaring `modes` creates BOTH execution modes of one harness and
+  // responds with `{ providers: [cli, tui] }` — a distinct shape rather than a
+  // polymorphic one, so a caller reading `.id` off a single-mode create keeps
+  // working and a pair create cannot silently hide the id of the second record.
   router.post('/', asyncHandler(async (req, res) => {
-    const validation = validate(providerSchema, req.body);
+    const validation = validate(providerCreateSchema, req.body);
     if (!validation.success) {
       throw new ServerError('Invalid provider data', { status: 400, code: 'VALIDATION_ERROR', context: { details: validation.errors } });
+    }
+    if (validation.data.modes) {
+      const created = await providerService.createProviderModes(validation.data);
+      // One snapshot for the pair — the probe is per-host, not per-record, and
+      // it stays BEHIND the create so a refused one never pays for it.
+      const capabilities = await detectSystemCapabilities();
+      res.status(201).json({ providers: created.map(provider => presentProvider(provider, capabilities)) });
+      return;
     }
     const provider = await providerService.createProvider(validation.data);
     res.status(201).json(presentProvider(provider, await detectSystemCapabilities()));
