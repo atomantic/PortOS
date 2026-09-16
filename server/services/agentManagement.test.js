@@ -29,6 +29,8 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { ChildProcess } from '../lib/childProcess.js';
 import { readFileSync } from 'fs';
+import { mkdtemp, writeFile, readFile, rm } from 'fs/promises';
+import { tmpdir } from 'os';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 
@@ -245,6 +247,32 @@ describe('cleanupOrphanedAgents — startup recovery coordination', () => {
       success: false,
       orphaned: true,
     }));
+  });
+
+  // A hard kill (`pm2 restart`, SIGKILL, reboot) never reaches completion
+  // cleanup, so this sweep is the path that retires the run — and a
+  // worktree-less run executes in a REAL checkout (the PortOS repo or a managed
+  // app's own), where a skipped sentinel is untracked dirt in the user's repo.
+  it("removes the reaped run's completion sentinel from its workspace", async () => {
+    const workspace = await mkdtemp(join(tmpdir(), 'orphan-sentinel-'));
+    await writeFile(join(workspace, '.agent-done-agent-stale'), '## Summary\nDied mid-run');
+    getAgents.mockResolvedValueOnce([{
+      id: 'agent-stale',
+      status: 'running',
+      pid: 2147483646,
+      taskId: 'task-1',
+      metadata: { useRunner: true, executionMode: 'runner', workspacePath: workspace },
+    }]);
+    getActiveAgentsFromRunner.mockResolvedValueOnce([{
+      id: 'agent-stale', pid: 2147483646, kind: 'cli', processActive: false, liveness: 'pid',
+    }]);
+    getTaskById.mockResolvedValue({ id: 'task-1', taskType: 'user', status: 'in_progress', metadata: {} });
+
+    await cleanupOrphanedAgents();
+
+    await expect(readFile(join(workspace, '.agent-done-agent-stale')))
+      .rejects.toMatchObject({ code: 'ENOENT' });
+    await rm(workspace, { recursive: true, force: true });
   });
 
   it('does not reap a live runner-owned TUI advertised via onExit liveness', async () => {
