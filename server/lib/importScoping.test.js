@@ -627,7 +627,21 @@ describe('deferred imports stay deferred (#6156)', () => {
 // at all failed it — the same zero-headroom state #6305 raised it out of, and
 // that is what makes this a budget rather than a high-water mark. Measured after
 // both changes: 104,739.
-const MAX_STATIC_INSTANTIATIONS = 106200;
+//
+// Raised to 107,700 for the Eidoverse foundation promote gate (#7455).
+// Measured after the change: 106,329, so its own cost is +132. Most of that is
+// ONE node on each of the ~60 closures that reach `services/userActions.js`,
+// which now imports the extracted leaf `lib/secretKeys.js` instead of
+// declaring `isSecretKey` inline — the extraction is what lets the federation
+// gate ask the same question, and the leaf has no imports of its own, so the
+// alternative was a second copy of the table. The rest is four small new
+// suites and the mandatory `lib/` barrel rows. Nothing heavy gained an edge:
+// the promote path's assay dependency is reached only from the ledger service,
+// which only `routes/eidoverseWorldRoutes.js` imports. The remainder of the
+// raise restores the ~1.5k of headroom this is meant to carry — the previous
+// number had drifted back to three above the measured total, the same
+// zero-headroom state #6305 raised it out of, where any addition at all fails.
+const MAX_STATIC_INSTANTIATIONS = 107700;
 
 
 const SKIP_DIRS = new Set(['node_modules', 'coverage', 'dist', 'data']);

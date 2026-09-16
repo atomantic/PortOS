@@ -355,6 +355,10 @@ federate world records.
 | POST | `/eidoverse/world/project` | Project current PortOS resources into the world using the saved recipe |
 | POST | `/eidoverse/world/augment` | Apply bounded, allowlisted world construction/role operations |
 | POST | `/eidoverse/world/say` | Send a bounded message as the PortOS CoS presence |
+| GET | `/eidoverse/world/foundations` | Local foundation ledger: ownership layer, provenance, and packaged promote candidates |
+| POST | `/eidoverse/world/foundations` | Record (or re-author) a local vernacular foundation — the layer is never caller-supplied |
+| GET | `/eidoverse/world/foundations/:id` | One foundation record |
+| POST | `/eidoverse/world/foundations/:id/candidate` | Run the agent-free resilience assay and package a promote candidate; a refusal returns 200 with its reasons |
 
 ### Legacy OpenWorld / CyberCity
 

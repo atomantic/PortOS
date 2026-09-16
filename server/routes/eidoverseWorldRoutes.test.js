@@ -5,6 +5,10 @@ import { errorMiddleware } from '../lib/errorHandler.js';
 
 const mocks = vi.hoisted(() => ({
   augment: vi.fn(),
+  listFoundations: vi.fn(),
+  packageCandidate: vi.fn(),
+  recordFoundation: vi.fn(),
+  getFoundation: vi.fn(),
   ensurePresence: vi.fn(),
   getProjectionStatus: vi.fn(),
   getStatus: vi.fn(),
@@ -22,6 +26,15 @@ vi.mock('../services/eidoverseWorld.js', () => ({
   sayInEidoverseWorld: mocks.say,
   updateEidoverseWorldConfig: mocks.updateConfig,
 }));
+
+vi.mock('../services/eidoverseFoundationLedger.js', () => ({
+  getEidoverseFoundation: mocks.getFoundation,
+  listEidoverseFoundations: mocks.listFoundations,
+  packageEidoverseFoundationCandidate: mocks.packageCandidate,
+  recordEidoverseFoundation: mocks.recordFoundation,
+}));
+
+vi.mock('../services/instanceIdentity.js', () => ({ ensureInstanceId: () => Promise.resolve('instance-aaaa') }));
 
 const { default: eidoverseWorldRoutes } = await import('./eidoverseWorldRoutes.js');
 
@@ -147,5 +160,47 @@ describe('Eidoverse world routes', () => {
     expect(mocks.augment).toHaveBeenCalledWith(operations);
     expect(sayResponse.status).toBe(200);
     expect(mocks.say).toHaveBeenCalledWith('Example message');
+  });
+
+  // #7455 — the promote path's HTTP boundary. What matters here is that the
+  // ownership layer and the assay verdict are NOT things a caller can assert.
+  it('records a foundation without letting the caller name its ownership layer', async () => {
+    const authored = {
+      id: 'tide-beacon',
+      kind: 'controller',
+      title: 'Tide Beacon',
+      summary: 'A beacon that keeps pulsing between mind wakes.',
+      contributionId: 'beacon-relay-demo',
+      body: { affordance: { inspect: 'reads the pulse count' } },
+    };
+    mocks.recordFoundation.mockResolvedValue({ ...authored, layer: 'vernacular' });
+
+    const accepted = await request(makeApp()).post('/api/eidoverse/world/foundations').send(authored);
+    const claimed = await request(makeApp()).post('/api/eidoverse/world/foundations').send({ ...authored, layer: 'baseline' });
+
+    expect(accepted.status).toBe(200);
+    expect(mocks.recordFoundation).toHaveBeenCalledWith(expect.objectContaining({ id: 'tide-beacon' }), { originInstanceId: 'instance-aaaa' });
+    expect(claimed.status).toBe(400);
+    expect(mocks.recordFoundation).toHaveBeenCalledTimes(1);
+  });
+
+  it('returns a promote refusal as a verdict, not as a request error', async () => {
+    mocks.packageCandidate.mockResolvedValue({ outcome: 'refused', candidate: null, assay: { pass: false }, reasons: ['the agent-free resilience assay failed'], findings: [] });
+
+    const response = await request(makeApp()).post('/api/eidoverse/world/foundations/tide-beacon/candidate');
+
+    expect(response.status).toBe(200);
+    expect(response.body).toMatchObject({ outcome: 'refused' });
+    expect(response.body.reasons[0]).toContain('resilience assay failed');
+  });
+
+  it('404s a promote or read for a foundation this install never authored', async () => {
+    mocks.packageCandidate.mockResolvedValue({ outcome: 'unknown-foundation', candidate: null, assay: null, reasons: ['no foundation'], findings: [] });
+    mocks.getFoundation.mockResolvedValue(null);
+
+    expect((await request(makeApp()).post('/api/eidoverse/world/foundations/tide-beacon/candidate')).status).toBe(404);
+    expect((await request(makeApp()).get('/api/eidoverse/world/foundations/tide-beacon')).status).toBe(404);
+    // A path that could never be an id must not reach the service at all.
+    expect((await request(makeApp()).get('/api/eidoverse/world/foundations/Not An Id')).status).toBe(400);
   });
 });
