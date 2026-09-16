@@ -15,6 +15,9 @@ const mocks = vi.hoisted(() => ({
   listIssues: vi.fn(),
   listFoundations: vi.fn(),
   promoteFoundation: vi.fn(),
+  recordFoundation: vi.fn(),
+  listContributions: vi.fn(),
+  ensureInstanceId: vi.fn(),
 }));
 
 const specs = [
@@ -69,6 +72,13 @@ vi.mock('./eidoverseWorld.js', () => ({
 vi.mock('./eidoverseFoundationLedger.js', () => ({
   listEidoverseFoundations: (...args) => mocks.listFoundations(...args),
   promoteEidoverseFoundation: (...args) => mocks.promoteFoundation(...args),
+  recordEidoverseFoundation: (...args) => mocks.recordFoundation(...args),
+}));
+vi.mock('./eidoverseResilienceContributions.js', () => ({
+  listRegisteredContributionIds: (...args) => mocks.listContributions(...args),
+}));
+vi.mock('./instanceIdentity.js', () => ({
+  ensureInstanceId: (...args) => mocks.ensureInstanceId(...args),
 }));
 vi.mock('./userActions.js', () => ({
   listUserActions: (...args) => mocks.listUserActions(...args),
@@ -139,6 +149,50 @@ describe('cosToolRegistry', () => {
     expect(result.result.candidate).toBeNull();
   });
 
+  it('stamps a mind-authored foundation as vernacular with authorKind "mind", never the caller\'s claim', async () => {
+    const call = {
+      requestId: 'record-1',
+      name: 'eidoverse.record',
+      arguments: {
+        id: 'lantern-arcade', kind: 'district-template', title: 'Lantern Arcade', summary: 'A row of lanterns around the plaza.',
+        contributionId: 'beacon-relay', body: { layoutId: 'radial-ring' }, authorKind: 'user',
+      },
+    };
+    await expect(executeCosToolCall({ call, authority: { scope: 'mind', capabilities: { promoteEidoverseFoundations: true } } }))
+      .rejects.toMatchObject({ code: 'TOOL_CAPABILITY_DENIED' });
+    await expect(executeCosToolCall({ call, authority: { scope: 'agent', capabilities: { manageEidoverse: true } } }))
+      .rejects.toMatchObject({ code: 'TOOL_SCOPE_DENIED' });
+
+    mocks.ensureInstanceId.mockResolvedValue('instance-example');
+    mocks.recordFoundation.mockResolvedValue({
+      id: 'lantern-arcade', layer: 'vernacular', kind: 'district-template', title: 'Lantern Arcade', summary: 'A row of lanterns around the plaza.',
+      contributionId: 'beacon-relay', updatedAt: '2026-03-04T06:00:00.000Z', promotedAt: null, assay: null, candidate: null,
+    });
+    const result = await executeCosToolCall({ call, authority: { scope: 'mind', capabilities: { manageEidoverse: true } } });
+
+    expect(result).toMatchObject({ state: 'completed', result: { foundation: { id: 'lantern-arcade', layer: 'vernacular' } } });
+    expect(mocks.recordFoundation).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'lantern-arcade', authorKind: 'mind' }),
+      { originInstanceId: 'instance-example' },
+    );
+  });
+
+  it('lists registered resilience-assay contributions and the creative catalog', async () => {
+    mocks.listContributions.mockResolvedValue(['beacon-relay']);
+    const contributions = await executeCosToolCall({
+      call: { requestId: 'contrib-1', name: 'eidoverse.contributions', arguments: {} },
+      authority: { scope: 'mind', capabilities: { manageEidoverse: true } },
+    });
+    expect(contributions.result).toEqual({ contributions: ['beacon-relay'] });
+
+    const catalog = await executeCosToolCall({
+      call: { requestId: 'catalog-1', name: 'eidoverse.creative-catalog', arguments: {} },
+      authority: { scope: 'mind', capabilities: { manageEidoverse: true } },
+    });
+    expect(catalog.result.materials.length).toBeGreaterThan(0);
+    expect(catalog.result.layouts.map((layout) => layout.id)).toContain('radial-ring');
+  });
+
   it('keeps local thinking authority separate and refuses raw configuration arguments', async () => {
     const call = { requestId: 'thinking-1', name: 'mind.request-thinking-preset', arguments: { presetId: 'local', reason: 'Try a focused pass' } };
     await expect(executeCosToolCall({ call, authority: { scope: 'mind', capabilities: { writePortos: true, createTasks: true } } })).rejects.toMatchObject({ code: 'TOOL_CAPABILITY_DENIED' });
@@ -185,7 +239,10 @@ describe('cosToolRegistry', () => {
       'eidoverse.visit-chat',
       'eidoverse.leave',
       'eidoverse.foundations',
+      'eidoverse.contributions',
+      'eidoverse.record',
       'eidoverse.promote',
+      'eidoverse.creative-catalog',
       'eidoverse.controllers',
       'eidoverse.install-controller',
       'eidoverse.arm-controller',

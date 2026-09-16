@@ -37,6 +37,9 @@ it('loads only visitor metadata and the remote renderer, without private PortOS 
   expect(api.updateSettings).not.toHaveBeenCalled();
   expect(CatalogTypesProvider).not.toHaveBeenCalled();
   expect(screen.queryByText('Owner layout')).not.toBeInTheDocument();
+  // Vernacular labeling (#7459): a guest visit shows the host's own private
+  // style, never the shared PortOS baseline population.
+  expect(screen.getByText(/local vernacular/)).toBeInTheDocument();
 });
 it('keeps an expired invitation on the guest page instead of redirecting to owner login', async () => {
   vi.stubGlobal('fetch', vi.fn(async () => new Response('', { status: 401 })));
