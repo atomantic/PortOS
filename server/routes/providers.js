@@ -19,7 +19,7 @@ import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { testVision, runVisionTestSuite, checkVisionHealth } from '../services/visionTest.js';
 import { auditModelPins, clearModelPin } from '../services/modelPinAudit.js';
 import { providerCreateSchema, providerSchema, providerActiveSchema, validate } from '../lib/aiToolkit/validation.js';
-import { withRefreshCapability } from '../lib/aiToolkit/internal/modelFetchers.js';
+import { canRefreshModels, withRefreshCapability } from '../lib/aiToolkit/internal/modelFetchers.js';
 import { ALLOWED_COMMANDS } from '../cos-runner/allowedCommands.js';
 import { onClientDisconnect, openSseStream } from '../lib/sseDownload.js';
 import { createInstallLogger } from '../lib/installLogger.js';
@@ -43,8 +43,7 @@ import {
   getProviderRuntimeStatus,
   getProviderRuntimeStatuses,
 } from '../services/providerRuntimeInstaller.js';
-import { refreshHarnessModels, usesHarnessCatalog } from '../services/harnesses.js';
-import { providerRuntimeKey } from '../lib/providerPrerequisites.js';
+import { harnessCatalogRuntime, refreshHarnessModels } from '../services/harnesses.js';
 import { streamHarnessAction } from '../services/harnessActionStream.js';
 import { getProviderReadinessMap, resetProviderReadinessCache, servedModelId } from '../services/providerReadiness.js';
 import { getLlamaServerEndpoint, relaunchLlamaServerWithAlias } from '../services/llamaServerManager.js';
@@ -143,11 +142,6 @@ const withTuiLaunchCommand = (provider) => {
   return launch ? { ...provider, tuiCommandLine: launch.commandLine } : provider;
 };
 
-// Reuse the harness catalog only for wrappers the managed OpenCode refresh
-// can update; custom binaries and declared backends keep their own catalogs.
-const refreshesOpenCodeCatalog = (provider) =>
-  providerRuntimeKey(provider) === 'opencode' && usesHarnessCatalog(provider);
-
 /**
  * The shape a provider takes on its way OUT to the client: secrets stripped,
  * plus the derived `canRefreshModels` flag the AI Providers page reads to
@@ -182,7 +176,11 @@ const presentProvider = (provider, capabilities = captureSystemCapabilities()) =
   const publicReviewPostures = publicReviewPosturesForProvider(provider);
   return sanitizeProvider({
     ...decorated,
-    canRefreshModels: decorated.canRefreshModels || refreshesOpenCodeCatalog(provider),
+    // The UNION of the two refresh paths, because the button asks only
+    // whether SOME path can serve this record. Which one actually serves it is
+    // decided in `POST /:id/refresh-models`, and the two must stay in step or
+    // a card offers a button the route refuses.
+    canRefreshModels: decorated.canRefreshModels || Boolean(harnessCatalogRuntime(provider)),
     publicReviewPostures,
     publicReviewEnforcedPostures: enforcedPublicReviewPosturesForProvider(provider),
     publicReviewSupported: publicReviewPostures.includes(PUBLIC_REVIEW_NO_TOOL_POSTURE),
@@ -916,12 +914,19 @@ export function createPortOSProviderRoutes(aiToolkit) {
   router.post('/:id/refresh-models', asyncHandler(async (req, res) => {
     const stored = await providerService.getProviderById(req.params.id);
     if (!stored) throw new ServerError('Provider not found', { status: 404 });
+    // A record can match BOTH paths — `cursor-cli` and `antigravity-cli` do
+    // today — so the precedence is fixed here: the TOOLKIT FETCHER WINS, and
+    // the harness catalog serves only records no fetcher claims. The fetcher
+    // table keys on the launch command (and, failing that, the display name),
+    // which is a per-record answer; routing a record the table already claims
+    // to its harness instead would silently move where its catalog comes from.
+    const harness = canRefreshModels(stored) ? null : harnessCatalogRuntime(stored);
     let provider;
-    if (refreshesOpenCodeCatalog(stored)) {
+    if (harness) {
       // Scoped to THIS record: the harness is probed once per bootstrap
       // credential (services/harnesses.js), and a card's button must not spawn
       // another record's credential CLI to answer for its own.
-      const result = await refreshHarnessModels('opencode', { providerId: stored.id });
+      const result = await refreshHarnessModels(harness.id, { providerId: stored.id });
       if (!result.ok || !result.updated.includes(stored.id)) {
         throw new ServerError(result.reason || 'No models matched this provider’s namespace; its catalog was preserved.', { status: 502 });
       }
