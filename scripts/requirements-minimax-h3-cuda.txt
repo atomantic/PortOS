@@ -22,9 +22,11 @@ torchao==0.18.0
 
 # Qwen3VLForConditionalGeneration + the transformers-side TorchAoConfig.
 transformers==5.15.0
-# GHSA-4j2p-28q2-5m79 has no verified upstream fix (1.15.0 is still affected).
-# generate_minimax_h3_cuda.py validates checkpoint indexes before loading.
-# Keep the alert open until a verified patched release can replace this pin.
+# GHSA-4j2p-28q2-5m79 will NOT be fixed upstream: huggingface/accelerate#4067 was
+# closed with "not a real security threat", and both fix PRs were rejected, so
+# there is no patched version to move to (1.15.0 is still affected). Every runner
+# that hands accelerate a downloaded snapshot screens the checkpoint indexes
+# itself first — scripts/_checkpoint_index_guard.py. Do not un-pin expecting a fix.
 accelerate==1.14.0
 huggingface_hub==1.27.0
 
