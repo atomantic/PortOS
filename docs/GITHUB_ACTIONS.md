@@ -353,9 +353,11 @@ suite, need no diff at all, and get no base.
 
 The `main` ruleset — which also covers `release` — requires exactly one
 context: **`CI Gate`**. The workflow used to carry two extra jobs solely to
-publish historical required-check names (`lint`, which echoed the client job's
-result, and `test (24.x)` on the server job); both are retired. If a required
-check is ever added, require `CI Gate`, never a job name.
+publish historical required-check names (a `lint` job that only echoed the
+client job's result, and `test (24.x)` on the server job); both are retired. A
+`lint` job exists again since #7448, but it is the real linter doing real work,
+not a name-publishing shim. If a required check is ever added, require
+`CI Gate`, never a job name.
 
 The selected work is split across parallel jobs:
 
@@ -370,9 +372,18 @@ The selected work is split across parallel jobs:
   install on every user's machine; without it a lockfile that stopped resolving
   shipped green and failed at setup time. (`browser/` gets no such step: zero
   dependencies, and its lockfile is deliberately gitignored.)
-- **Client tests and build** — affected client tests; production build whenever
-  client source changed; client lint on the same install so Biome does not pay a
-  second `npm ci`. Lint, build, and the Scalar-removal bundle pin run on shard 1 only.
+- **Client tests and build** — affected client tests, plus the production build
+  whenever client source changed. Build and the Scalar-removal bundle pin run on
+  shard 1 only.
+- **Lint client** — Biome over the changed client sources, in its own job. It used
+  to be a shard-1 step here, sharing the client install so Biome did not pay a
+  second `npm ci` — but that made the largest client shard also the only one
+  paying for lint AND the production build, the heaviest job in the matrix and the
+  only shard that failed a timing-sensitive test (#7448). It cannot move to a later
+  shard instead: a scoped plan emits `client_shards: [1]`, so a second-shard pin
+  would skip lint on every scoped pull request. The second `npm ci --prefix client`
+  is a few seconds off the npm cache, and a lint-only diff no longer starts a
+  client test job at all.
 - **DB tests** — provisions only the isolated `portos_test` database and runs
   the serial DB suite when database-sensitive files changed.
 - **Windows server tests** — the same server selection, but only on full CI
@@ -413,8 +424,9 @@ Vitest's `--shard`, which slices the file list by path hash — every shard is a
 fixed, disjoint subset, and their union is the complete suite. A scoped plan
 never shards (its handful of files would trip Vitest's shard-count guard) and
 passes no flag at all, so its invocation stays identical to a local
-`npm run test:ci`. Once-only steps — smoke boot, lint, the client build, the
-Scalar-removal bundle pin — pin themselves to shard 1. `CI Gate` sees a matrix job as one
+`npm run test:ci`. Once-only steps — smoke boot, the client build, the
+Scalar-removal bundle pin — pin themselves to shard 1; lint is not among them,
+because it has its own job (see above). `CI Gate` sees a matrix job as one
 `needs` result, so nothing downstream changes; public-repo runner minutes are
 free, so the fan-out costs only concurrency.
 
@@ -434,6 +446,11 @@ September 2026). A full run is **12 jobs / 28.7 runner-minutes**:
 | Server tests | 2 | 6.8 | 6.8 |
 | DB tests, impact, both gates | 4 | 1.7 | 1.7 |
 | **Total** | **12** | **28.7** | **40.4** |
+
+Measured before lint moved to its own job (#7448), so the client column still
+carries the ~31 s of Biome that now runs beside it rather than inside it. The
+totals barely move — lint is the same work in a different slot — but shard 1 no
+longer runs it, and the matrix is 13 jobs rather than 12.
 
 Windows is 41% of a full run's runner occupancy, and 58% once GitHub's 2x
 `windows-latest` multiplier is applied. **This repository is public, so those
@@ -549,7 +566,7 @@ Changes to CI/test configuration also force the full suite on their own PR.
 
 ### Fail-fast sibling cancellation
 
-Each selected leaf job (`server`, `client`, `database`, and
+Each selected leaf job (`server`, `client`, `lint`, `database`, and
 `windows-server`) ends with an `if: failure() && github.event_name ==
 'pull_request'` step that asks GitHub to cancel the current pull-request
 workflow run. The event guard is important because the same workflow is reused

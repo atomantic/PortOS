@@ -1440,7 +1440,11 @@ describe('purging one conversation mirror', () => {
 
   it('names the conversation and the byte count, and demands the typed word first', async () => {
     await openThread();
-    expect(await screen.findByText('Purge this mirror', {}, { timeout: 15000 })).toBeInTheDocument();
+    // No inline timeout: an inline bound at or above the per-test budget can
+    // never be reached, so the 15000 that used to sit here read as a fix and was
+    // not one — the test died at vitest's 5s default naming nothing (#7448). The
+    // suite-wide async budget in src/test/timeouts.js is what governs this wait.
+    expect(await screen.findByText('Purge this mirror')).toBeInTheDocument();
     expect(screen.getByText(/4 MB of mirrored attachment bytes/)).toBeInTheDocument();
     expect(screen.getByText(/across 3 file\(s\)/)).toBeInTheDocument();
 

@@ -42,14 +42,35 @@ describe('ci.yml shard wiring', () => {
   });
 
   it('runs once-only steps on the first shard alone', () => {
-    // Smoke boot, lint, the production build, and the Scalar-removal pin are not
+    // Smoke boot, the production build, and the Scalar-removal pin are not
     // sharded work; on every shard they would triple the cost for no coverage.
-    for (const step of ['Smoke-boot server', 'Lint client', 'Build client', 'Check API Explorer bundle has no Scalar chunks']) {
+    for (const step of ['Smoke-boot server', 'Build client', 'Check API Explorer bundle has no Scalar chunks']) {
       const start = WORKFLOW.indexOf(`- name: ${step}\n`);
       expect(start, step).toBeGreaterThan(0);
       const condition = WORKFLOW.slice(start).match(/\n {8}if: (.*)\n/)[1];
       expect(condition, step).toMatch(/&& matrix\.shard == 1$/);
     }
+  });
+
+  it('keeps client lint out of the sharded test jobs entirely', () => {
+    // Lint used to be a shard-1 step on the client job, which made the largest
+    // client shard also the only one paying for Biome AND the production build —
+    // the heaviest job in the matrix, and the only shard that failed a
+    // timing-sensitive test (#7448). Its own job is the fix, so this pins BOTH
+    // halves: no runner job invokes the linter, and the lint job is not a matrix.
+    const jobs = workflowJobs(WORKFLOW);
+    for (const [id, body] of runners) expect(body, id).not.toContain('run-ci-lint.js');
+    expect(jobs.lint).toBeTruthy();
+    expect(jobs.lint).toContain('run: node scripts/run-ci-lint.js');
+    expect(jobs.lint).not.toContain('strategy:');
+    expect(jobs.lint).not.toContain('matrix.shard');
+    // A scoped plan emits `client_shards: [1]`, so a later-shard pin would skip
+    // lint on every impact-scoped pull request. Its gate is the plan's lint mode.
+    expect(jobs.lint).toContain("if: needs.impact.outputs.lint_mode != 'skip'");
+    // The aggregate gate is the single required check, so a job it does not
+    // observe can fail without blocking a merge.
+    expect(jobs.gate).toContain('CI_GATE_RESULT_LINT: ${{ needs.lint.result }}');
+    expect(jobs.gate).toMatch(/needs: \[[^\]]*\blint\b/);
   });
 });
 

@@ -325,10 +325,11 @@ jobs:
         run: node scripts/cancel-current-ci-run.js
 
   client:
-    # Sharded like the server job; lint, build, and the bundle budget run on shard 1.
+    # Sharded like the server job; the build and the bundle budget run on shard 1.
+    # Lint is deliberately NOT here — it has its own job (see #7448).
     name: Client tests and build (${{ matrix.shard }}/${{ strategy.job-total }})
     needs: impact
-    if: needs.impact.outputs.client_mode != 'skip' || needs.impact.outputs.build == 'true' || needs.impact.outputs.lint_mode != 'skip'
+    if: needs.impact.outputs.client_mode != 'skip' || needs.impact.outputs.build == 'true'
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -368,13 +369,6 @@ jobs:
             vitest-client-${{ runner.os }}-${{ hashFiles('client/package-lock.json') }}-
             vitest-client-${{ runner.os }}-
 
-      - name: Lint client
-        if: needs.impact.outputs.lint_mode != 'skip' && matrix.shard == 1
-        env:
-          CI_LINT_MODE: ${{ needs.impact.outputs.lint_mode }}
-          CI_LINT_FILES: ${{ needs.impact.outputs.lint_files }}
-        run: node scripts/run-ci-lint.js
-
       - name: Run client tests
         if: needs.impact.outputs.client_mode != 'skip'
         env:
@@ -394,6 +388,55 @@ jobs:
       - name: Check API Explorer bundle has no Scalar chunks
         if: needs.impact.outputs.build == 'true' && matrix.shard == 1
         run: npm run test --prefix client -- ApiExplorer.bundle
+
+      - name: Cancel sibling CI jobs after failure
+        if: failure() && github.event_name == 'pull_request'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: node scripts/cancel-current-ci-run.js
+
+  lint:
+    # Its own job rather than a step on client shard 1. Lint is unrelated to the
+    # tests, and pinning it there made the largest client shard the heaviest job
+    # in the matrix — it paid for lint before it even started testing, on the one
+    # shard that also builds (issue #7448). Splitting it also stops a lint-only
+    # diff from spinning up a whole client test job to run Biome.
+    #
+    # It cannot instead move to a LATER shard: a scoped plan emits
+    # `client_shards: [1]`, so a pin to the second shard would silently skip lint
+    # on every impact-scoped pull request.
+    #
+    # It installs `client/` because Biome and its GritQL plugins are client
+    # devDependencies; the npm cache makes that a few seconds.
+    name: Lint client
+    needs: impact
+    if: needs.impact.outputs.lint_mode != 'skip'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+          # Same as every other leaf job: depth 2 is the whole PR merge ref.
+          fetch-depth: 2
+
+      - name: Use Node.js 24.x
+        uses: actions/setup-node@v7
+        with:
+          node-version: 24.x
+          cache: npm
+          cache-dependency-path: client/package-lock.json
+
+      - name: Install client dependencies
+        run: npm ci --prefix client
+
+      - name: Lint client
+        env:
+          CI_LINT_MODE: ${{ needs.impact.outputs.lint_mode }}
+          CI_LINT_FILES: ${{ needs.impact.outputs.lint_files }}
+        run: node scripts/run-ci-lint.js
 
       - name: Cancel sibling CI jobs after failure
         if: failure() && github.event_name == 'pull_request'
@@ -680,7 +723,7 @@ jobs:
   gate:
     name: CI Gate
     if: always()
-    needs: [impact, server, client, database, windows-server]
+    needs: [impact, server, client, lint, database, windows-server]
     runs-on: ubuntu-latest
     steps:
       # The gate needs the repo only for scripts/ci-gate-report.js, which
@@ -705,6 +748,7 @@ jobs:
           CI_GATE_RESULT_IMPACT: ${{ needs.impact.result }}
           CI_GATE_RESULT_SERVER: ${{ needs.server.result }}
           CI_GATE_RESULT_CLIENT: ${{ needs.client.result }}
+          CI_GATE_RESULT_LINT: ${{ needs.lint.result }}
           CI_GATE_RESULT_DATABASE: ${{ needs.database.result }}
           CI_GATE_RESULT_WINDOWS_SERVER: ${{ needs.windows-server.result }}
         run: node scripts/ci-gate-report.js

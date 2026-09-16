@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { render, screen, waitFor, fireEvent } from '@testing-library/react';
+import { act, render, screen, waitFor, fireEvent } from '@testing-library/react';
 import { MemoryRouter, useLocation, useSearchParams } from 'react-router';
 
 vi.mock('../services/api', () => ({
@@ -283,6 +283,12 @@ describe('Tribe shared-identifier banner (#5908)', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /dismiss shared contact info/i }));
     expect(screen.queryByText(/shared contact info/i)).toBeNull();
+    // Nothing after the dismiss awaits, and the sibling OutreachQueue's mount
+    // fetch is still in flight: when it resolves between this line and cleanup,
+    // its setState lands outside act() and setup.js fails the run. Observed once
+    // in a full-suite pass while chasing #7448. Settling at the END is the idiom
+    // setup.js prescribes for a test that has no later await to ride on.
+    await act(async () => {});
   });
 });
 
