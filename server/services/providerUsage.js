@@ -584,11 +584,13 @@ export function parseGrokUsage(text, { now = Date.now(), timezone } = {}) {
   // Grok 1.0 names the subscription in the window header:
   // `Weekly limit (SuperGrok)`. Last named frame wins on a repaint.
   // Anything else in those parens — a note, a timestamp, a repaint fragment —
-  // is not a plan name, so only a single identifier-like token is accepted
-  // (starts alphanumeric, letters/digits plus a few separators, carries a
-  // letter) rather than echoing arbitrary panel text onto the Usage card. A
-  // missing plan reads as unknown; a wrong one reads as fact.
-  const PLAN_NAME = /^(?=.*[A-Za-z])[A-Za-z0-9][A-Za-z0-9.,_+-]{0,59}$/;
+  // is not a plan name, so only identifier-like tokens are accepted:
+  // alphanumeric start, then alphanumeric plus separators (dots, commas, underscores,
+  // plus, hyphen), with interior spaces allowed only before uppercase letters/digits
+  // (vendor names like "Claude Max 20x"). This rejects arbitrary English prose like
+  // "as of Tuesday" while keeping recognized tiers on the Usage card. A missing plan
+  // reads as unknown; a wrong one reads as fact.
+  const PLAN_NAME = /^(?=.*[A-Za-z])[A-Za-z0-9](?:[A-Za-z0-9.,_+-]*(?:[ ][A-Z0-9][A-Za-z0-9.,_+-]*)*)?$/;
   let plan = null;
 
   const matches = [...str.matchAll(/(weekly|monthly)\s+limit(?:\s*\(([^)]+)\))?:?/gi)];
