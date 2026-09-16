@@ -19,7 +19,7 @@
 import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'fs';
 import { builtinModules } from 'module';
-import { dirname, join, relative, resolve } from 'path';
+import { dirname, join, relative, resolve, sep } from 'path';
 import { fileURLToPath } from 'url';
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
@@ -75,6 +75,10 @@ function importSpecifiers(source) {
 function specifiersReachableFrom(entry) {
   const files = new Set();
   const bare = new Set();
+  // `relative()` yields backslashes on Windows, where every repo-relative
+  // comparison below ("does this start with scripts/?") would then be false
+  // and the cone assertion would fail on win32 CI only.
+  const posix = (path) => path.split(sep).join('/');
   const walk = (relativePath) => {
     if (files.has(relativePath)) return;
     files.add(relativePath);
@@ -83,7 +87,7 @@ function specifiersReachableFrom(entry) {
         bare.add(specifier);
         continue;
       }
-      walk(relative(REPO_ROOT, resolve(dirname(join(REPO_ROOT, relativePath)), specifier)));
+      walk(posix(relative(REPO_ROOT, resolve(dirname(join(REPO_ROOT, relativePath)), specifier))));
     }
   };
   walk(entry);
@@ -161,5 +165,15 @@ describe('scripts that run from a sparse checkout of scripts/', () => {
     // Negative control against the exact escape it exists to catch.
     expect(specifiersReachableFrom('scripts/run-ci-tests.js').files)
       .toContain('server/lib/bufferedSpawn.js');
+  });
+
+  it('reports posix paths, so the cone check holds on Windows', () => {
+    // `relative()` returns backslashes on win32. Without normalising, EVERY
+    // reached file reads as outside scripts/ and the suite fails on Windows
+    // CI alone — which is exactly how this was found.
+    const { files } = specifiersReachableFrom('scripts/ci-gate-report.js');
+    expect(files.length).toBeGreaterThan(1);
+    expect(files.filter((file) => file.includes('\\'))).toEqual([]);
+    expect(files).toContain('scripts/lib/directInvocation.js');
   });
 });
