@@ -30,7 +30,7 @@ vi.mock('../lib/fileUtils.js', async (importOriginal) => ({
 
 import { getAgentsByDate } from './cosAgentIndex.js';
 import { atomicWrite } from '../lib/fileUtils.js';
-import { generateReport, getTodayActivity, getWhileAwayActivity } from './cosReports.js';
+import { generateReport, getRecentTasks, getTodayActivity, getWhileAwayActivity } from './cosReports.js';
 
 // Build a completed agent record at a fixed completedAt offset (ms before now).
 const agentAt = (id, { msAgo, success = true, desc = 'did a thing', taskType = 'review', app = null } = {}) => {
@@ -330,5 +330,43 @@ describe('getTodayActivity (#3501 date-bucket sourcing)', () => {
 
     expect(activity.stats).toMatchObject({ completed: 1, running: 1, successRate: 100 });
     expect(getAgentsByDate).not.toHaveBeenCalled();
+  });
+});
+
+describe('getRecentTasks', () => {
+  beforeEach(() => {
+    mock.daemonRunning = true;
+    mock.agentsByDate = {};
+    mock.state = stateWith([]);
+  });
+
+  afterEach(() => vi.clearAllMocks());
+
+  it('leaves a relaunched run out of the recent-task success split', async () => {
+    // This reader has its own door into live state — it has no date window to
+    // gate on, so it does not go through `collectCompletedAgents`. That made it
+    // the last place still reporting a provider swap as a failed task after the
+    // rest of the file stopped, on the /api/cos/insights recent-tasks panel.
+    mock.state = stateWith([
+      agentAt('ok', { msAgo: 10 * 60000, success: true }),
+      { ...agentAt('swapped', { msAgo: 20 * 60000, success: false }),
+        result: { success: false, duration: 60000, resumed: true, error: 'Relaunched by user on codex' } },
+    ]);
+
+    const result = await getRecentTasks();
+
+    expect(result.tasks.map(t => t.id)).toEqual(['ok']);
+    expect(result.summary).toMatchObject({ total: 1, succeeded: 1, failed: 0, successRate: 100 });
+  });
+
+  it('still reports a genuine failure', async () => {
+    mock.state = stateWith([
+      agentAt('ok', { msAgo: 10 * 60000, success: true }),
+      agentAt('broke', { msAgo: 20 * 60000, success: false }),
+    ]);
+
+    const result = await getRecentTasks();
+
+    expect(result.summary).toMatchObject({ total: 2, succeeded: 1, failed: 1 });
   });
 });

@@ -18,6 +18,19 @@ import { isAgentHandoff } from '../lib/agentOutcome.js';
 
 const DIGESTS_DIR = PATHS.digests;
 
+// The agents one ISO week's stats are built from. Shared by the finished digest
+// and the in-progress "current week" view, which must agree on the set or the
+// week's numbers change the moment it closes.
+//
+// HANDOFFS are excluded here, once, so every stat derived downstream — totals,
+// success rate, per-type breakdown, accomplishments, and the recurring-issue
+// patterns keyed on `result.error` — sees the same set. A record `resumeAgent`
+// retired to requeue its own task reached no verdict; without this, the top
+// "recurring issue" of a week with a few provider swaps is literally
+// "Relaunched by user on <provider>".
+const agentsCompletedInWeek = (agents, weekId) => agents.filter(a =>
+  a.completedAt && !isAgentHandoff(a) && getWeekId(new Date(a.completedAt)) === weekId);
+
 /**
  * Get the start of a week (Monday) for a given date
  */
@@ -96,16 +109,7 @@ export async function generateWeeklyDigest(weekId = null) {
   const dedupedStateAgents = stateAgents.filter(a => !dateAgentIds.has(a.id));
   const allAgents = [...flatDateAgents, ...dedupedStateAgents];
 
-  // Handoffs are excluded once, here, so every stat derived below — totals,
-  // success rate, per-type breakdown, accomplishments, and the recurring-issue
-  // patterns keyed on `result.error` — sees the same set. Without it the digest's
-  // top "recurring issue" of a week with a few provider swaps is literally
-  // "Relaunched by user on <provider>".
-  const weekAgents = allAgents.filter(a => {
-    if (!a.completedAt || isAgentHandoff(a)) return false;
-    const completedWeek = getWeekId(new Date(a.completedAt));
-    return completedWeek === targetWeekId;
-  });
+  const weekAgents = agentsCompletedInWeek(allAgents, targetWeekId);
 
   // Calculate basic stats
   const totalTasks = weekAgents.length;
@@ -428,12 +432,7 @@ export async function getCurrentWeekProgress() {
   // Get all agents
   const agents = await getAgents();
 
-  // Filter agents completed this week
-  const weekAgents = agents.filter(a => {
-    if (!a.completedAt || isAgentHandoff(a)) return false;
-    const completedWeek = getWeekId(new Date(a.completedAt));
-    return completedWeek === weekId;
-  });
+  const weekAgents = agentsCompletedInWeek(agents, weekId);
 
   // Currently running agents
   const runningAgents = agents.filter(a => a.status === 'running');

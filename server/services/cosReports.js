@@ -33,8 +33,12 @@ import { isAgentHandoff } from '../lib/agentOutcome.js';
 // task per provider swap in the daily report and the "While You Were Away"
 // briefing, which is the failure a user sees for pressing Relaunch.
 async function collectCompletedAgents(dates, state, accept) {
+  // One predicate, both sources. The live and archived arms are the same
+  // question asked of two stores, and writing it twice (once negated) is how
+  // they drift — the handoff exclusion below had to be added to each.
+  const keep = (agent) => !!agent.completedAt && !isAgentHandoff(agent) && accept(agent);
   const liveIds = new Set(Object.keys(state.agents));
-  const collected = Object.values(state.agents).filter(a => a.completedAt && !isAgentHandoff(a) && accept(a));
+  const collected = Object.values(state.agents).filter(keep);
   const idsByDate = await getAgentIdsForDates(dates);
 
   // Iterating the Map (not `dates`) keeps a repeated date from reading its bucket twice.
@@ -43,7 +47,7 @@ async function collectCompletedAgents(dates, state, accept) {
     if (missing.size === 0) continue;
     for (const agent of await getAgentsByDate(date)) {
       if (!missing.has(agent.id)) continue; // live copy wins, and non-indexed strays stay out
-      if (!agent.completedAt || isAgentHandoff(agent) || !accept(agent)) continue;
+      if (!keep(agent)) continue;
       collected.push(agent);
     }
   }
@@ -318,7 +322,14 @@ export async function getRecentTasks(limit = 10) {
   const state = await loadState();
 
   const completedAgents = Object.values(state.agents)
-    .filter(a => a.status === 'completed' && a.completedAt)
+    // Same exclusion the date-bucket collector above applies, for the same
+    // reason: this returns a succeeded/failed split, and a record `resumeAgent`
+    // retired to requeue its own task reached no verdict. It reads live state
+    // directly rather than through that collector (no date window to gate on),
+    // so the rule has to be stated here too — which is why it is the one place
+    // that still showed a provider swap as a failed task after the rest of the
+    // file stopped.
+    .filter(a => a.status === 'completed' && a.completedAt && !isAgentHandoff(a))
     .sort((a, b) => new Date(b.completedAt) - new Date(a.completedAt))
     .slice(0, limit);
 

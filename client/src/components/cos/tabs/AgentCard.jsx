@@ -4,7 +4,6 @@ import {
   Cpu,
   Trash2,
   CheckCircle,
-  AlertCircle,
   AlertTriangle,
   RotateCcw,
   Loader2,
@@ -33,6 +32,7 @@ import toast from '../../ui/Toast';
 import { copyToClipboard } from '../../../lib/clipboard';
 import { extractCosTaskType } from '../../../lib/cosTaskType';
 import { isAgentHandoff } from '../../../lib/agentOutcome';
+import AgentResultLine from '../AgentResultLine';
 import { DEFAULT_REVIEWER, normalizeReviewers } from '../constants';
 import { formatBytes, formatDurationMs, formatDateTime, formatTimeOfDay } from '../../../utils/formatters';
 import { useAutoRefetch } from '../../../hooks/useAutoRefetch';
@@ -256,10 +256,6 @@ export default function AgentCard({ agent, onPause, onKill, onDelete, onResume, 
   // Retired by Resume/Relaunch: this run handed its task to a continuation
   // instead of reaching a verdict, so it is neither a success nor a failure.
   const handoff = isAgentHandoff(agent);
-  // `pauseReason` first: on a Relaunch it is the line the user is actually looking
-  // for ("Relaunched by user on codex / gpt-5"), while `result.error` holds the
-  // resume summary, which says where the TASK went rather than why this run stopped.
-  const handoffReason = agent.metadata?.pauseReason || agent.result?.error || 'Handed off to a new run';
   const inactive = completed || paused;
 
   // Handle feedback submission
@@ -925,22 +921,7 @@ export default function AgentCard({ agent, onPause, onKill, onDelete, onResume, 
 
         {agent.result && (
           <div className="flex items-center gap-4 flex-wrap">
-            {/* Three outcomes, not two. A run retired by Resume/Relaunch carries
-                `success: false` because it never reached a verdict — its task was
-                handed to a continuation, usually because the user swapped providers
-                after hitting a usage limit. Painting that red said the run failed,
-                for something the user did on purpose. */}
-            <div className={`text-sm flex items-center gap-2 ${
-              handoff ? 'text-port-accent' : agent.result.success ? 'text-port-success' : 'text-port-error'
-            }`}>
-              {handoff ? (
-                <><RotateCcw size={14} aria-hidden="true" /> {handoffReason}</>
-              ) : agent.result.success ? (
-                <><CheckCircle size={14} aria-hidden="true" /> Completed successfully</>
-              ) : (
-                <><AlertCircle size={14} aria-hidden="true" /> {agent.result.error || 'Failed'}</>
-              )}
-            </div>
+            <AgentResultLine agent={agent} />
             {/* Cleanup warnings */}
             {agent.result.warnings?.length > 0 && (
               <div className="text-sm text-port-warning flex items-start gap-2">

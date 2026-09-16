@@ -613,10 +613,11 @@ cosEvents.on('agent:completed', async (agentData) => {
     // paused task queues a REPLACEMENT (which inherits this feature agent's
     // metadata), and pointing at the retired task id would never re-bind.
     const continuationTaskId = agentData.result?.resumedTaskId || agentData.taskId;
-    if (!continuationTaskId) return;
-    await setCurrentAgent(featureAgentId, continuationTaskId).catch(err => {
-      console.log(`⚠️ Failed to hand feature agent ${featureAgentId} back to its relaunched task: ${err.message}`);
-    });
+    if (continuationTaskId) {
+      await setCurrentAgent(featureAgentId, continuationTaskId).catch(err => {
+        console.log(`⚠️ Failed to hand feature agent ${featureAgentId} back to its relaunched task: ${err.message}`);
+      });
+    }
     return;
   }
   const success = agentData.result?.success === true;

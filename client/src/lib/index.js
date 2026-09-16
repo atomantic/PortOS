@@ -89,6 +89,7 @@ export * from './goalFeatureMap.js';
 
 // === Generic UI / collection utilities ===
 export * from './a11yKeyboard.js';
+export * from './agentOutcome.js';
 export * from './agentResumeOutcome.js';
 export * from './appIdentity.js';
 export * from './applyManuscriptEdits.js';
@@ -102,7 +103,6 @@ export * from './buildStamp.js';
 export * from './chipContrast.js';
 export * from './clientErrorReporter.js';
 export * from './clinicianReport.js';
-export * from './agentOutcome.js';
 export * from './clipboard.js';
 export * from './effortCostEstimate.js';
 export * from './compareHelpers.js';
