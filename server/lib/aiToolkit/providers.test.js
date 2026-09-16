@@ -46,6 +46,45 @@ describe('Provider Service', () => {
     expect((await providerService.getActiveProvider()).id).toBe('remote');
   });
 
+  it('creates both execution modes of one harness as a pair the toolkit already groups', async () => {
+    // The point of a dual-mode create is not that two records exist — it is
+    // that they satisfy the pairing rule, which is what makes the two modes ONE
+    // provider for enablement, models and the mode pickers. Minting them with
+    // any other id shape, or letting a grouped field differ, silently produces
+    // two unrelated routes instead, and nothing would report it.
+    const [cli, tui] = await providerService.createProviderModes({
+      name: 'Example Agent',
+      type: 'cli',
+      command: 'example',
+      enabled: false,
+      modes: {
+        cli: { args: ['--print'], headlessArgs: ['--quiet'] },
+        tui: { args: ['--interactive'], tuiPromptDelayMs: 3000 },
+      },
+    });
+    expect([cli.id, tui.id]).toEqual(['example-agent', 'example-agent-tui']);
+    expect([cli.args, tui.args]).toEqual([['--print'], ['--interactive']]);
+    expect(tui.tuiPromptDelayMs).toBe(3000);
+
+    // Grouped: enabling either mode enables the harness.
+    await providerService.updateProvider('example-agent-tui', { enabled: true });
+    expect((await providerService.getProviderById('example-agent')).enabled).toBe(true);
+  });
+
+  it('lands no half-made pair when the second record collides with an existing id', async () => {
+    await providerService.createProvider({ name: 'Example Agent TUI', id: 'example-agent-tui', type: 'tui', command: 'example' });
+    await expect(providerService.createProviderModes({
+      name: 'Example Agent',
+      type: 'cli',
+      command: 'example',
+      modes: { cli: {}, tui: {} },
+    })).rejects.toThrow(/already exists/);
+    // `loadProviders` hands back the WARM CACHE object, so a CLI half
+    // materialized before the collision threw would stay visible to every
+    // reader in the process even though nothing reached disk.
+    expect(await providerService.getProviderById('example-agent')).toBeNull();
+  });
+
   it('persists a credential bootstrap only while one is named, and drops the key on an explicit clear', async () => {
     const created = await providerService.createProvider({ name: 'Bootstrap CLI', type: 'cli', command: 'claude' });
     expect(created).not.toHaveProperty('credentialBootstrap');

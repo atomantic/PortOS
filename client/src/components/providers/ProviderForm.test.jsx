@@ -124,6 +124,54 @@ describe('ProviderForm', () => {
     expect(payload).not.toHaveProperty('credentialBootstrapArgs');
   });
 
+  it('declares both execution modes from one create when the harness also runs as a TUI', async () => {
+    // The whole point: one submit, one pair. Only what genuinely differs per
+    // mode is declared — everything else on the body is shared, which is what
+    // lets the server pair the two records as one harness.
+    renderForm();
+    fireEvent.change(screen.getByLabelText('Name *'), { target: { value: 'Example Agent' } });
+    fireEvent.change(screen.getByLabelText('Command *'), { target: { value: 'example' } });
+    fireEvent.change(screen.getByLabelText('Arguments (space-separated)'), { target: { value: '--print' } });
+    fireEvent.click(screen.getByLabelText(/also runs as a TUI/));
+    fireEvent.change(screen.getByLabelText('TUI Arguments (space-separated)'), { target: { value: '--interactive' } });
+    // The interactive mode's paste delay is the form's ONE such control,
+    // revealed by the same checkbox rather than rendered a second time.
+    fireEvent.change(screen.getByLabelText('Prompt Paste Delay (ms)'), { target: { value: '3000' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Create' }));
+
+    await waitFor(() => expect(api.createProvider).toHaveBeenCalled());
+    const [payload] = api.createProvider.mock.calls[0];
+    expect(payload.modes).toEqual({
+      cli: {},
+      tui: { args: ['--interactive'], tuiPromptDelayMs: 3000 },
+    });
+    // The body still describes the CLI record itself — its own `args` are the
+    // CLI mode's, which is why `modes.cli` carries nothing — and the checkbox's
+    // scratch state is not a provider field.
+    expect(payload.type).toBe('cli');
+    expect(payload.args).toEqual(['--print']);
+    expect(payload).not.toHaveProperty('alsoTui');
+    expect(payload).not.toHaveProperty('tuiArgs');
+    expect(payload).not.toHaveProperty('tuiPromptDelayMs');
+  });
+
+  it('does not offer the pair control when editing an existing provider', () => {
+    // Pairing describes two records being MINTED together; an existing
+    // record's sibling is added from /ai/new like any other provider.
+    renderForm({ provider: { id: 'example', name: 'Example', type: 'cli', command: 'example' } });
+    expect(screen.queryByLabelText(/also runs as a TUI/)).not.toBeInTheDocument();
+  });
+
+  it('sends no modes on an ordinary single-mode create', async () => {
+    renderForm();
+    fireEvent.change(screen.getByLabelText('Name *'), { target: { value: 'Example Agent' } });
+    fireEvent.change(screen.getByLabelText('Command *'), { target: { value: 'example' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Create' }));
+
+    await waitFor(() => expect(api.createProvider).toHaveBeenCalled());
+    expect(api.createProvider.mock.calls[0][0]).not.toHaveProperty('modes');
+  });
+
   it('sends no credentialBootstrap key at all for an api-type provider', async () => {
     renderForm({
       provider: { id: 'example-api', name: 'Example API', type: 'api', endpoint: 'https://api.example.com/v1' },

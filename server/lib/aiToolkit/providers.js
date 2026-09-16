@@ -1,4 +1,4 @@
-import { providerModeGroups, sharedModeUpdates, unifyProviderModes } from './internal/providerModes.js';
+import { expandModePair, providerModeGroups, sharedModeUpdates, unifyProviderModes } from './internal/providerModes.js';
 import { readFile, rename } from 'fs/promises';
 import { existsSync } from 'fs';
 import { join, dirname, delimiter, isAbsolute } from 'path';
@@ -623,6 +623,121 @@ export function createProviderService(config = {}) {
     await notifyProvidersSaved(data);
   }
 
+  /**
+   * Build ONE record, refusing an id `existing` already holds.
+   *
+   * PURE — it returns the record rather than storing it, which is what makes a
+   * multi-record create atomic for free: a throw on the second record cannot
+   * leave the first one behind. That matters because `loadProviders` hands back
+   * the WARM CACHE object, so a record written into it and then abandoned would
+   * stay visible to every reader in the process despite never reaching disk.
+   *
+   * The explicit field list (rather than a spread of the body) is the
+   * create-side contract this directory keeps — see AGENTS.md — so a new
+   * provider field is added here deliberately.
+   */
+  function buildProviderRecord(existing, providerData) {
+    const id = providerData.id || providerData.name.toLowerCase().replace(/[^a-z0-9]/g, '-');
+
+    if (existing[id]) {
+      throw new Error('Provider with this ID already exists');
+    }
+
+    const provider = {
+      id,
+      name: providerData.name,
+      type: providerData.type || 'cli',
+      command: providerData.command || null,
+      args: providerData.args || [],
+      endpoint: providerData.endpoint || null,
+      apiKey: providerData.apiKey || '',
+      models: providerData.models || [],
+      ...(providerData.hardwareRequirements ? { hardwareRequirements: providerData.hardwareRequirements } : {}),
+      ...(providerData.modelHardwareRequirements
+        ? { modelHardwareRequirements: providerData.modelHardwareRequirements }
+        : {}),
+      defaultModel: providerData.defaultModel || null,
+      effort: providerData.effort || null,
+      lightModel: providerData.lightModel || null,
+      mediumModel: providerData.mediumModel || null,
+      heavyModel: providerData.heavyModel || null,
+      ultraModel: providerData.ultraModel || null,
+      fallbackProvider: providerData.fallbackProvider || null,
+      fallbackModel: providerData.fallbackModel || null,
+      numCtx: providerData.numCtx || null,
+      temperature: providerData.temperature,
+      topP: providerData.topP,
+      thinking: providerData.thinking,
+      contextWindow: providerData.contextWindow || null,
+      // Per-model windows learned from the provider's own /models catalog.
+      // Same non-empty rule the refresh path uses, from one implementation.
+      ...modelContextWindowPatch(providerData.modelContextWindows),
+      timeout: providerData.timeout || 300000,
+      enabled: providerData.enabled !== false,
+      // Subscription text-transport capability + its explicit opt-in. Only
+      // persisted when set, so every existing HTTP/CLI record stays byte-identical
+      // and an older install reading this file sees nothing new.
+      ...(typeof providerData.textTransport === 'string' && providerData.textTransport
+        ? { textTransport: providerData.textTransport } : {}),
+      ...(providerData.textTransportEnabled === true ? { textTransportEnabled: true } : {}),
+      ...(providerData.textTransportReadRiskAcknowledged === true
+        ? { textTransportReadRiskAcknowledged: true } : {}),
+      // Claude Ollama marker — preserve so adopting the sample via POST drives
+      // ollama-backed model refresh (see isOllamaBackedProvider).
+      ...(providerData.ollamaBacked === true ? { ollamaBacked: true } : {}),
+      // MTPLX's native MTP runtime is a separate local OpenAI-compatible
+      // backend. Preserve this marker so OpenCode receives the `mtplx/`
+      // namespace and model refresh probes its local endpoint.
+      // LM Studio is a local backend PortOS already manages; preserve the
+      // marker so OpenCode receives the `lmstudio/` namespace and model
+      // refresh probes the LM Studio server rather than the harness.
+      ...(providerData.lmstudioBacked === true ? { lmstudioBacked: true } : {}),
+      ...(providerData.mtplxBacked === true ? { mtplxBacked: true } : {}),
+      ...(providerData.llamaBacked === true ? { llamaBacked: true } : {}),
+      // The local vLLM container is a third distinct local backend: preserve
+      // the marker so OpenCode receives the `vllm/` namespace and model
+      // refresh probes the container rather than the OpenCode harness.
+      ...(providerData.vllmBacked === true ? { vllmBacked: true } : {}),
+      // The SGLang container is a fourth distinct local backend (Hopper/Blackwell,
+      // PortOS-owned launch line): preserve the marker so OpenCode receives the
+      // `sglang/` namespace and model refresh probes the container.
+      ...(providerData.sglangBacked === true ? { sglangBacked: true } : {}),
+      // Hosted gateway markers: the generic one plus the legacy per-gateway
+      // boolean, both preserved so a record written by any version keeps
+      // resolving through internal/gateways.js.
+      ...(typeof providerData.gatewayBacked === 'string' && providerData.gatewayBacked
+        ? { gatewayBacked: providerData.gatewayBacked } : {}),
+      ...(providerData.orcarouterBacked === true ? { orcarouterBacked: true } : {}),
+      // Explicit opt-in to send the API key to an arbitrary (non-local,
+      // non-allowlisted) endpoint — see endpointGuard.js. Only
+      // persisted when true so existing keyless/local providers stay clean.
+      ...(providerData.allowCustomEndpoint === true ? { allowCustomEndpoint: true } : {}),
+      // Codex 'ignore my ~/.codex/config.toml' pin. Only persisted when true so
+      // every existing record stays byte-identical and an older install
+      // reading this file sees nothing new.
+      ...(providerData.ignoreUserConfig === true ? { ignoreUserConfig: true } : {}),
+      // Generic credential-bootstrap wrapper — only persisted when a bootstrap
+      // command is actually named, so every existing record stays byte-identical.
+      ...(providerData.credentialBootstrap?.command ? { credentialBootstrap: providerData.credentialBootstrap } : {}),
+      envVars: providerData.envVars || {},
+      secretEnvVars: providerData.secretEnvVars || [],
+      headlessArgs: providerData.headlessArgs || [],
+      tuiPromptDelayMs: providerData.tuiPromptDelayMs || 2500,
+      ...(providerData.tuiIdleTimeoutMs != null ? { tuiIdleTimeoutMs: providerData.tuiIdleTimeoutMs } : {})
+    };
+
+    return provider;
+  }
+
+  /** Store freshly built records and adopt the first as active on an empty install. */
+  function storeProviderRecords(data, records) {
+    for (const record of records) {
+      data.providers[record.id] = record;
+      if (!data.activeProvider) data.activeProvider = record.id;
+    }
+    unifyProviderModes(data);
+  }
+
   return {
     async getAllProviders() {
       const data = await loadProviders();
@@ -657,104 +772,40 @@ export function createProviderService(config = {}) {
 
     async createProvider(providerData) {
       const data = await loadProviders();
-      const id = providerData.id || providerData.name.toLowerCase().replace(/[^a-z0-9]/g, '-');
-
-      if (data.providers[id]) {
-        throw new Error('Provider with this ID already exists');
-      }
-
-      const provider = {
-        id,
-        name: providerData.name,
-        type: providerData.type || 'cli',
-        command: providerData.command || null,
-        args: providerData.args || [],
-        endpoint: providerData.endpoint || null,
-        apiKey: providerData.apiKey || '',
-        models: providerData.models || [],
-        ...(providerData.hardwareRequirements ? { hardwareRequirements: providerData.hardwareRequirements } : {}),
-        ...(providerData.modelHardwareRequirements
-          ? { modelHardwareRequirements: providerData.modelHardwareRequirements }
-          : {}),
-        defaultModel: providerData.defaultModel || null,
-        effort: providerData.effort || null,
-        lightModel: providerData.lightModel || null,
-        mediumModel: providerData.mediumModel || null,
-        heavyModel: providerData.heavyModel || null,
-        ultraModel: providerData.ultraModel || null,
-        fallbackProvider: providerData.fallbackProvider || null,
-        fallbackModel: providerData.fallbackModel || null,
-        numCtx: providerData.numCtx || null,
-        temperature: providerData.temperature,
-        topP: providerData.topP,
-        thinking: providerData.thinking,
-        contextWindow: providerData.contextWindow || null,
-        // Per-model windows learned from the provider's own /models catalog.
-        // Same non-empty rule the refresh path uses, from one implementation.
-        ...modelContextWindowPatch(providerData.modelContextWindows),
-        timeout: providerData.timeout || 300000,
-        enabled: providerData.enabled !== false,
-        // Subscription text-transport capability + its explicit opt-in. Only
-        // persisted when set, so every existing HTTP/CLI record stays byte-identical
-        // and an older install reading this file sees nothing new.
-        ...(typeof providerData.textTransport === 'string' && providerData.textTransport
-          ? { textTransport: providerData.textTransport } : {}),
-        ...(providerData.textTransportEnabled === true ? { textTransportEnabled: true } : {}),
-        ...(providerData.textTransportReadRiskAcknowledged === true
-          ? { textTransportReadRiskAcknowledged: true } : {}),
-        // Claude Ollama marker — preserve so adopting the sample via POST drives
-        // ollama-backed model refresh (see isOllamaBackedProvider).
-        ...(providerData.ollamaBacked === true ? { ollamaBacked: true } : {}),
-        // MTPLX's native MTP runtime is a separate local OpenAI-compatible
-        // backend. Preserve this marker so OpenCode receives the `mtplx/`
-        // namespace and model refresh probes its local endpoint.
-        // LM Studio is a local backend PortOS already manages; preserve the
-        // marker so OpenCode receives the `lmstudio/` namespace and model
-        // refresh probes the LM Studio server rather than the harness.
-        ...(providerData.lmstudioBacked === true ? { lmstudioBacked: true } : {}),
-        ...(providerData.mtplxBacked === true ? { mtplxBacked: true } : {}),
-        ...(providerData.llamaBacked === true ? { llamaBacked: true } : {}),
-        // The local vLLM container is a third distinct local backend: preserve
-        // the marker so OpenCode receives the `vllm/` namespace and model
-        // refresh probes the container rather than the OpenCode harness.
-        ...(providerData.vllmBacked === true ? { vllmBacked: true } : {}),
-        // The SGLang container is a fourth distinct local backend (Hopper/Blackwell,
-        // PortOS-owned launch line): preserve the marker so OpenCode receives the
-        // `sglang/` namespace and model refresh probes the container.
-        ...(providerData.sglangBacked === true ? { sglangBacked: true } : {}),
-        // Hosted gateway markers: the generic one plus the legacy per-gateway
-        // boolean, both preserved so a record written by any version keeps
-        // resolving through internal/gateways.js.
-        ...(typeof providerData.gatewayBacked === 'string' && providerData.gatewayBacked
-          ? { gatewayBacked: providerData.gatewayBacked } : {}),
-        ...(providerData.orcarouterBacked === true ? { orcarouterBacked: true } : {}),
-        // Explicit opt-in to send the API key to an arbitrary (non-local,
-        // non-allowlisted) endpoint — see endpointGuard.js. Only
-        // persisted when true so existing keyless/local providers stay clean.
-        ...(providerData.allowCustomEndpoint === true ? { allowCustomEndpoint: true } : {}),
-        // Codex 'ignore my ~/.codex/config.toml' pin. Only persisted when true so
-        // every existing record stays byte-identical and an older install
-        // reading this file sees nothing new.
-        ...(providerData.ignoreUserConfig === true ? { ignoreUserConfig: true } : {}),
-        // Generic credential-bootstrap wrapper — only persisted when a bootstrap
-        // command is actually named, so every existing record stays byte-identical.
-        ...(providerData.credentialBootstrap?.command ? { credentialBootstrap: providerData.credentialBootstrap } : {}),
-        envVars: providerData.envVars || {},
-        secretEnvVars: providerData.secretEnvVars || [],
-        headlessArgs: providerData.headlessArgs || [],
-        tuiPromptDelayMs: providerData.tuiPromptDelayMs || 2500,
-        ...(providerData.tuiIdleTimeoutMs != null ? { tuiIdleTimeoutMs: providerData.tuiIdleTimeoutMs } : {})
-      };
-
-      data.providers[id] = provider;
-      unifyProviderModes(data);
-
-      if (!data.activeProvider) {
-        data.activeProvider = id;
-      }
-
+      const provider = buildProviderRecord(data.providers, providerData);
+      storeProviderRecords(data, [provider]);
       await saveProviders(data);
       return provider;
+    },
+
+    /**
+     * Create BOTH execution modes of one harness from a single body, in one
+     * `providers.json` write.
+     *
+     * A program that can be driven headlessly and interactively is one program
+     * on one backend, but a record stores exactly one `type` — so configuring
+     * both used to mean adding the provider twice and hoping the two records
+     * happened to satisfy the pairing rule. `expandModePair` mints them in the
+     * `<stem>` / `<stem>-tui` shape {@link providerModeGroups} recognizes with
+     * every grouped field shared, so the pair arrives already unified instead of
+     * as two unrelated routes.
+     *
+     * Either record colliding with an existing id aborts the whole create with
+     * nothing stored — see {@link buildProviderRecord} on why that has to hold
+     * against the warm cache and not just against the file.
+     *
+     * @param {object} providerData - a create body carrying `modes`
+     * @returns {Promise<object[]>} the created records, CLI first
+     */
+    async createProviderModes(providerData) {
+      const split = expandModePair(providerData);
+      if (!split) throw new Error('createProviderModes requires a modes declaration');
+
+      const data = await loadProviders();
+      const created = split.map((modeData) => buildProviderRecord(data.providers, modeData));
+      storeProviderRecords(data, created);
+      await saveProviders(data);
+      return created;
     },
 
     async updateProvider(id, updates) {
