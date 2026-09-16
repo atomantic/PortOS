@@ -63,6 +63,7 @@ import {
   startPersistentMind,
   stopPersistentMind,
   wakePersistentMind,
+  persistentMindUsageLimitRetryAt,
 } from '../services/persistentMindSupervisor.js';
 
 const router = Router();
@@ -299,7 +300,9 @@ router.get('/mind/runtime', asyncHandler(async (_req, res) => {
   const profile = normalizePersistentMindProfile(root.config?.persistentMindProfile);
   const providerId = state.activeTurn?.providerId || profile.providerId;
   const provider = providerId ? await getProviderById(providerId) : null;
-  res.json(await inspectPersistentMindRuntime({ state, profile, prompt, provider }));
+  res.json(await inspectPersistentMindRuntime({
+    state, profile, prompt, provider, usageLimitRetryAt: persistentMindUsageLimitRetryAt(),
+  }));
 }));
 
 router.get('/mind/visibility', asyncHandler(async (req, res) => {

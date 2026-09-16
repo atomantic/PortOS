@@ -14,8 +14,9 @@ import { TABS } from '../components/models/ModelsTabsHeader';
 
 vi.mock('../components/settings/LocalModelAssessments.jsx', () => ({ default: () => <div>assessments panel</div> }));
 vi.mock('../components/settings/LocalLlmTab', () => ({
-  LocalLlmTab: ({ view }) => <div data-testid="llms-view" data-view={view || 'runtimes'}>llms panel</div>,
+  LocalLlmTab: ({ view }) => <div data-testid="llms-view" data-view={view || 'none'}>llms panel</div>,
 }));
+vi.mock('../components/settings/LocalLlmRuntimesView.jsx', () => ({ default: () => <div>runtimes panel</div> }));
 vi.mock('../components/settings/EmbeddingsTab', () => ({ default: () => <div>embeddings panel</div> }));
 vi.mock('../components/models/Image3dRuntimes', () => ({ default: () => <div>3d runtimes panel</div> }));
 vi.mock('../components/models/ModelStatusTab', () => ({ default: () => <div>status panel</div> }));
@@ -41,6 +42,7 @@ const PANEL_MARKER = {
   embeddings: 'embeddings panel',
   harnesses: 'harnesses panel',
   llms: 'llms panel',
+  'llms-runtimes': 'runtimes panel',
   loras: 'loras panel',
   media: 'media models panel',
   performance: 'assessments panel',
@@ -141,6 +143,17 @@ describe('Models', () => {
 });
 
 describe('Models — tab drill-downs', () => {
+  // #7414 moved Runtimes out of the pill bar and onto its own tab. Which view
+  // the bare `/models/llms` route falls back to is LocalLlmTab's contract and is
+  // asserted there; what this page owes is that Runtimes no longer routes
+  // THROUGH the LLMs dispatcher at all.
+  it('serves Runtimes as its own tab rather than an LLMs sub-view', async () => {
+    renderAt('/models/llms-runtimes');
+    expect(await screen.findByText('runtimes panel')).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: 'Runtimes' })).toHaveAttribute('aria-selected', 'true');
+    expect(screen.queryByTestId('llms-view')).not.toBeInTheDocument();
+  });
+
   it.each(['library', 'abuse'])('passes the LLM %s sub-route through to the focused LLM view', async (view) => {
     renderAt(`/models/llms/${view}`);
     expect(await screen.findByTestId('llms-view')).toHaveAttribute('data-view', view);

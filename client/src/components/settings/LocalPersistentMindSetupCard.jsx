@@ -20,6 +20,8 @@ import {
   Sparkles,
   Wand2,
 } from 'lucide-react';
+import { LOCAL_RUNTIME_MANAGE_URLS } from '../../../../server/lib/modelPinMembership.js';
+import { getNavPageForPath } from '../../../../server/lib/navManifest.js';
 import Banner from '../ui/Banner';
 import BrailleSpinner from '../BrailleSpinner';
 import toast from '../ui/Toast';
@@ -36,6 +38,14 @@ const STEP_ICON = {
   todo: Cpu,
   blocked: AlertTriangle,
   skipped: CheckCircle2,
+};
+
+// The Ollama weights catalog, named by its own route rather than by a typed
+// breadcrumb — this card sits on Models → Runtimes now, so the two pages have
+// to stay distinguishable, and #7414 is the proof that a literal drifts.
+const CATALOG_PAGE = {
+  to: LOCAL_RUNTIME_MANAGE_URLS.ollama,
+  label: getNavPageForPath(LOCAL_RUNTIME_MANAGE_URLS.ollama)?.breadcrumb || 'Model catalog',
 };
 
 export default function LocalPersistentMindSetupCard({
@@ -263,7 +273,7 @@ export default function LocalPersistentMindSetupCard({
           : <span className="text-gray-500">Complete install / start / pull, then enable the provider.</span>}
         <Link to="/ai" className="text-port-accent hover:underline">AI Providers</Link>
         <Link to="/cos/mind" className="text-port-accent hover:underline">Persistent Mind</Link>
-        <Link to="/models/llms" className="text-port-accent hover:underline">Models → LLMs</Link>
+        <Link to={CATALOG_PAGE.to} className="text-port-accent hover:underline">{CATALOG_PAGE.label}</Link>
       </div>
     </section>
   );

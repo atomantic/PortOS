@@ -147,6 +147,27 @@ describe('manual maintenance run', () => {
     expect((await getMaintenanceRun(run.id)).active.stepId).toBe(run.steps[0].id);
   });
 
+  it('a relaunched step neither completes nor settles the run', async () => {
+    // Relaunch retires the step's agent with `success: false` and requeues the
+    // SAME task on another provider, so the step is still in flight. Evaluating
+    // here would report it as a hold the user must retry or dismiss, for work that
+    // is already on its way back out. The continuation's own completion advances
+    // the run; `retryMaintenanceRuns` is the backstop if it never lands.
+    const { run } = await start();
+    const relaunched = {
+      ...agentFor(run, 0, false),
+      result: { success: false, resumed: true, resumedTaskId: 'task-0', error: 'Relaunched by user on codex' },
+    };
+
+    expect(await __onMaintenanceAgentCompleted(relaunched)).toBeNull();
+
+    const after = await getMaintenanceRun(run.id);
+    expect(after.completed).toEqual({});
+    expect(after.active.stepId).toBe(run.steps[0].id);
+    // Nothing new dispatched — only the step that was already running.
+    expect(state.invoked).toHaveLength(1);
+  });
+
   it('stops without recalling work, resumes from its ledger, and refuses a second run for the same app', async () => {
     const { run } = await start();
     await expect(start()).rejects.toMatchObject({ status: 409, code: 'MAINTENANCE_RUN_ACTIVE' });

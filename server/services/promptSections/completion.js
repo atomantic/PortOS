@@ -25,6 +25,49 @@ const AUDIT_FLOW_GUIDANCE = 'Follow the bundled Better audit workflow through re
 
 const RELEASE_FLOW_GUIDANCE = 'Follow the bundled release workflow through its final verification and report. It owns release delivery; do not stop at a prepared commit or hand publication back to PortOS. If it cannot complete, report INCOMPLETE and the first unverified checkpoint instead of claiming a successful release.';
 
+/**
+ * Why a run told not to touch the repository may still write ONE file — the
+ * canonical account of #7405, which every other reference in the tree points at.
+ *
+ * A completion sentinel is PortOS's done-signal, not a repository edit, but
+ * every section that emits one also carries a "do not modify anything" rule,
+ * and the agent's HOST may hand it a restricted role on top of that. A small
+ * local model resolves the apparent conflict the safe way and writes nothing,
+ * then asks a human an unattended run does not have: an OpenCode MTPLX TUI run
+ * stalled exactly there, refusing the sentinel because "the current session is
+ * a read-only file-search specialist". (The role itself is pinned away at the
+ * spawn site now — `ensureOpencodeAgent` in lib/providerVendors.js — so this
+ * note is the belt, not the fix.) Stating the carve-out is what makes the write
+ * reachable when some future host does the same thing.
+ *
+ * The second sentence answers the other half of that stall: the same run went
+ * looking for its sentinel path in `runner-state.json` / `state.json` after
+ * noticing a SIBLING run's agent id in the shared checkout's branch state, and
+ * never wrote one. There is no such lookup — `doneSentinelPath(cwd, agentId)`
+ * resolves the single path for both the prompt and every watcher — and a
+ * worktree-less run legitimately shares its workspace with other live agents,
+ * so a foreign agent id in git or state is expected and means nothing here.
+ */
+export const SENTINEL_WRITE_PERMISSION_NOTE = 'Writing that one file is ALWAYS permitted, whatever the task shape or your host role says — it is PortOS\'s completion signal, not a repository edit, so no read-only, do-not-modify, or restricted-session rule applies to it. Use the sentinel path exactly as printed in this section: it is this run\'s only one. Do NOT look one up in `runner-state.json`, `state.json`, a branch name, or a worktree name, and do NOT treat another agent id in this workspace as a conflict — the filename already scopes the sentinel to you.';
+
+/**
+ * The closing sentence every sentinel-emitting section shares: PortOS is
+ * already watching, so the write IS the handoff and nothing follows it.
+ */
+const SENTINEL_WATCH_TAIL = 'PortOS watches this sentinel and finalizes the run shortly after it appears — do NOT run `/quit` and do NOT wait for anything after writing the sentinel.';
+
+/**
+ * One sentinel-emitting completion section: the mode's own notice, its write
+ * instruction, the shared watch tail, and the write-permission note.
+ *
+ * The three sections below used to assemble this shape by hand with the tail
+ * typed out three times — which is how the permission note would have become a
+ * per-section splice the next mode had to remember. Composing it here keeps
+ * "prints a sentinel path" and "says the write is permitted" one fact.
+ */
+const sentinelCompletionSection = (notice, writeInstruction) =>
+  [notice, '', `${writeInstruction} ${SENTINEL_WATCH_TAIL}`, '', SENTINEL_WRITE_PERMISSION_NOTE].join('\n');
+
 const REASONING_ONLY_BULLET = '**This is a reasoning-only task.** The worktree is discarded on exit — do NOT commit, push, merge, or open a PR. Write your result to the completion sentinel (see the Completion section) and stop.';
 const DISCARD_WORKTREE_HYGIENE = '- **Do NOT commit, push, or open a PR.** This worktree is discarded on exit — your only output is the completion sentinel (see the Completion section above).';
 
@@ -339,13 +382,11 @@ export function buildToolFreeReasoningCompletionSection() {
  * a markdown summary (breaking the hook's structured-JSON sentinel contract).
  */
 export function buildProgrammaticOutputCompletionSection(sentinelPath) {
-  return [
+  return sentinelCompletionSection(
     // Shared constant: a pre-spawn task-type hook's prompt points here BY NAME.
-    `## ${PROGRAMMATIC_OUTPUT_COMPLETION_HEADING}`,
-    'This is a reasoning task, not a code change. The worktree you are in is **discarded on exit** — any commits, pushes, or PRs are thrown away and have no effect. Do NOT run `/do:push`, `/do:pr`, `git commit`, `git push`, or open a pull request.',
-    '',
-    `When you have finished reasoning, write your result to \`${sentinelPath}\` in the exact payload format described in your task instructions, then stop. PortOS watches this sentinel and finalizes the run shortly after it appears — do NOT run \`/quit\` and do NOT wait for anything after writing the sentinel.`
-  ].join('\n');
+    `## ${PROGRAMMATIC_OUTPUT_COMPLETION_HEADING}\nThis is a reasoning task, not a code change. The worktree you are in is **discarded on exit** — any commits, pushes, or PRs are thrown away and have no effect. Do NOT run \`/do:push\`, \`/do:pr\`, \`git commit\`, \`git push\`, or open a pull request.`,
+    `When you have finished reasoning, write your result to \`${sentinelPath}\` in the exact payload format described in your task instructions, then stop.`
+  );
 }
 
 /**
@@ -361,13 +402,12 @@ export function buildProgrammaticOutputCompletionSection(sentinelPath) {
  * sentinel, so they get the bare notice only.
  */
 export function buildReadOnlyCompletionSection({ isTui = false, sentinelPath = null } = {}) {
-  const notice = '## Read-Only Task\nDo NOT commit, push, or modify any files. Read data and report findings only.';
+  const notice = '## Read-Only Task\nDo NOT commit, push, or modify any files in the repository. Read data and report findings only.';
   if (!isTui || !sentinelPath) return notice;
-  return [
+  return sentinelCompletionSection(
     notice,
-    '',
-    `When you have finished, write a short markdown summary of what you found (and where you recorded it) to \`${sentinelPath}\`, then stop. PortOS watches this sentinel and finalizes the run shortly after it appears — do NOT run \`/quit\` and do NOT wait for anything after writing the sentinel.`
-  ].join('\n');
+    `When you have finished, write a short markdown summary of what you found (and where you recorded it) to \`${sentinelPath}\`, then stop.`
+  );
 }
 
 /**
@@ -384,11 +424,10 @@ export function buildReadOnlyCompletionSection({ isTui = false, sentinelPath = n
 export function buildActionOutputCompletionSection({ isTui = false, sentinelPath = null } = {}) {
   const notice = '## Completion (No Code Output)\nThis task produces **no code change** — its result is delivered DURING the run by the API request or command your instructions describe (a PATCH to a PortOS endpoint, a filed tracker issue, …), not by a commit and not by this sentinel. Do NOT run `/do:push`, `/do:pr`, `/simplify`, `git commit`, `git push`, or open a pull request; there is nothing to push.';
   if (!isTui || !sentinelPath) return notice;
-  return [
+  return sentinelCompletionSection(
     notice,
-    '',
-    `Your task is complete once that request succeeds. Then write a short summary, including any structured report required by your task, to \`${sentinelPath}\` and stop — PortOS watches this sentinel and finalizes the run shortly after it appears. Do NOT run \`/quit\` and do NOT wait for anything after writing the sentinel.`
-  ].join('\n');
+    `Your task is complete once that request succeeds. Then write a short summary, including any structured report required by your task, to \`${sentinelPath}\` and stop.`
+  );
 }
 
 /** The release procedure is the deliverable; the sentinel only records its verified outcome. */
@@ -630,6 +669,8 @@ function resolveReviewInvocation({ willOpenPR, runsReviewLoop, reviewers, userna
 export function buildSentinelWriteSteps(stepNumber, sentinelPath, sentinelTail) {
   return [
     `${stepNumber}. Write a short markdown summary (~5–15 lines) to the completion sentinel, then stop — this sentinel is the done signal. PortOS watches it and finalizes the run shortly after it appears. Do NOT run \`/quit\` (it's a UI command, not something you can invoke) and do NOT wait for anything after writing the sentinel.`,
+    '',
+    `   ${SENTINEL_WRITE_PERMISSION_NOTE}`,
     '',
     '   ```bash',
     `   cat > "${sentinelPath}" <<'EOF'`,

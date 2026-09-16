@@ -81,7 +81,7 @@ export { isPrivateNetworkEndpoint };
  * Client mirror of `isLocalInstanceEndpoint` in
  * server/lib/localEndpoint.js, and the guard for anything that explains
  * a provider by inspecting the machine PortOS runs on — "is `lms` installed
- * here?", "start it from Models → LLMs". A provider named for LM Studio
+ * here?", "start it from Models → Runtimes". A provider named for LM Studio
  * but pointed at another box on the tailnet matches
  * {@link localBackendForProvider} by NAME, so without this it collected this
  * machine's install state and offered to start a server it does not own.

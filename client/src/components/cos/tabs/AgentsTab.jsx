@@ -9,6 +9,7 @@ import RelaunchAgentModal from './RelaunchAgentModal';
 import BrailleSpinner from '../../BrailleSpinner';
 import InlineConfirmRow from '../../ui/InlineConfirmRow';
 import { agentResumeMessage } from '../../../lib/agentResumeOutcome';
+import { isAgentHandoff } from '../../../lib/agentOutcome';
 
 // What each `resumeAgent` outcome actually did (server modes, agentManagement.js).
 // `already-active` and `superseded` deliberately queue NOTHING — the task is already
@@ -33,10 +34,14 @@ const RESUME_MESSAGES = {
 // Only agents from a manually-filled task form ask for a rating — scheduled/
 // autopilot runs (taskType 'internal') are already auto-evaluated by
 // task-learning's success/failure tracking. See cosAgentFeedback.js.
+// A run retired by Resume/Relaunch is excluded too — it has no result to rate,
+// and the continuation it handed the task to is the run that asks for the rating.
+// Without this, every provider swap left a permanent entry in the needs-feedback
+// count that nothing the user does can clear (AgentCard hides the buttons).
 const needsAgentFeedback = (agent) => {
   const isSystemAgent = agent.taskId?.startsWith('sys-') || agent.id?.startsWith('sys-');
   const isManualUserAgent = agent.metadata?.taskType === 'user';
-  return !isSystemAgent && isManualUserAgent && !agent.feedback?.rating;
+  return !isSystemAgent && isManualUserAgent && !isAgentHandoff(agent) && !agent.feedback?.rating;
 };
 
 export default function AgentsTab({ agents, onRefresh, liveOutputs, providers, providersLoaded, apps }) {

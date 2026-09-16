@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
   getMemoryStats: vi.fn(),
@@ -126,5 +126,74 @@ describe('persistent mind runtime telemetry', () => {
 
     expect(mocks.probeOpenAiModels).toHaveBeenCalledWith('http://localhost:5568/v1', { apiKey: '' });
     expect(runtime.inference.residency).toMatchObject({ status: 'loaded', backend: 'llama', loaded: true });
+  });
+describe('active-turn freshness', () => {
+    // Injected clock: the contract is "measured against the server clock at
+    // observedAt", so a real sleep would prove nothing a fake one does not.
+    const OBSERVED_AT = '2026-09-01T00:03:00.000Z';
+    beforeEach(() => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date(OBSERVED_AT));
+    });
+    afterEach(() => vi.useRealTimers());
+
+    const inspectTurn = (activeTurn) => inspectPersistentMindRuntime({
+      state: { activeTurn },
+      profile: { providerId: 'codex', model: 'example-model' },
+      prompt: {},
+      provider: null,
+    });
+
+    it('ages the claimed turn against the observation clock rather than a caller clock', async () => {
+      const runtime = await inspectTurn({
+        id: 'turn-1',
+        startedAt: '2026-09-01T00:00:00.000Z',
+        heartbeatAt: '2026-09-01T00:02:55.000Z',
+        model: 'example-model',
+      });
+
+      expect(runtime.observedAt).toBe(OBSERVED_AT);
+      expect(runtime.inference.heartbeatAt).toBe('2026-09-01T00:02:55.000Z');
+      expect(runtime.inference.elapsedMs).toBe(180_000);
+      expect(runtime.inference.heartbeatAgeMs).toBe(5_000);
+      expect(runtime.inference.heartbeatStale).toBe(false);
+    });
+
+    it('flags a heartbeat past the warning threshold while the watchdog has not fired', async () => {
+      const runtime = await inspectTurn({
+        id: 'turn-1',
+        startedAt: '2026-09-01T00:00:00.000Z',
+        heartbeatAt: '2026-09-01T00:00:30.000Z',
+        model: 'example-model',
+      });
+
+      expect(runtime.inference.heartbeatAgeMs).toBe(150_000);
+      expect(runtime.inference.heartbeatStale).toBe(true);
+    });
+
+    it('reports no measurement rather than a zero age for an unparseable stamp', async () => {
+      const runtime = await inspectTurn({
+        id: 'turn-1',
+        startedAt: 'not-a-date',
+        heartbeatAt: 'not-a-date',
+        model: 'example-model',
+      });
+
+      expect(runtime.inference.elapsedMs).toBeNull();
+      expect(runtime.inference.heartbeatAgeMs).toBeNull();
+      expect(runtime.inference.heartbeatStale).toBe(false);
+    });
+
+    it('leaves every freshness field empty when no turn is claimed', async () => {
+      const runtime = await inspectTurn(null);
+
+      expect(runtime.inference).toMatchObject({
+        active: false,
+        heartbeatAt: null,
+        elapsedMs: null,
+        heartbeatAgeMs: null,
+        heartbeatStale: false,
+      });
+    });
   });
 });

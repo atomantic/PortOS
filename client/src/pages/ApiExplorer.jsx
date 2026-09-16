@@ -503,6 +503,12 @@ export default function ApiExplorer() {
 
   if (!VALID_TABS.has(tab)) return <Navigate to="/api-reference/catalog" replace />;
 
+  // RouteTabsHeader passes no `controlsIdPrefix` (route tabs navigate, they
+  // don't reveal a sibling panel already in the DOM — see its own comment), so
+  // the panel names itself with its own heading rather than an `aria-labelledby`
+  // borrowed from a tab id that doesn't exist (#7420).
+  const activeTabLabel = TABS.find((t) => t.id === tab)?.label;
+
   return (
     <div className="h-full min-h-0 flex flex-col bg-port-bg">
       <PageHeader
@@ -512,7 +518,8 @@ export default function ApiExplorer() {
         actions={<button type="button" onClick={() => navigate('/settings/api-access')} className="text-xs text-port-accent hover:underline">API access settings</button>}
       />
       <RouteTabsHeader tabs={TABS} activeTab={tab} ariaLabel="API Explorer sections" />
-      <div role="tabpanel" className="min-h-0 flex-1 overflow-auto">
+      <div role="tabpanel" aria-labelledby="api-explorer-panel-heading" className="min-h-0 flex-1 overflow-auto">
+        <h2 id="api-explorer-panel-heading" className="sr-only">{activeTabLabel}</h2>
         {tab === 'catalog' && <CatalogView />}
         {tab === 'rest' && <RestReferenceView />}
         {tab === 'events' && <EventCatalogView />}

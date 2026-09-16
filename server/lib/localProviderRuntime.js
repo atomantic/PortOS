@@ -33,7 +33,7 @@
 
 import { isOpencodeCommand, parseOpencodeConfigContent } from './providerModels.js';
 import { opencodeLocalBaseUrl } from './opencodeConfig.js';
-import { localRuntimeKind } from './modelPinMembership.js';
+import { localRuntimeKind, LOCAL_RUNTIME_MANAGE_URLS } from './modelPinMembership.js';
 import { PORTS } from './ports.js';
 import { isLocalInstanceEndpoint } from './localEndpoint.js';
 
@@ -42,7 +42,7 @@ export { isLocalInstanceHost, isLocalInstanceEndpoint, localEndpointPort } from 
 // browser-safe leaf `modelPinMembership.js` so a picker can share them without
 // pulling this module's endpoint graph (`opencodeConfig.js` → `zod`, not a
 // client dependency). Re-exported so every existing importer is untouched.
-export { localBackendForProvider, localRuntimeKind, modelPinIsOffered } from './modelPinMembership.js';
+export { localBackendForProvider, localRuntimeKind, modelPinIsOffered, LOCAL_RUNTIME_MANAGE_URLS } from './modelPinMembership.js';
 
 /**
  * One row per local runtime PortOS knows how to check for.
@@ -52,9 +52,21 @@ export { localBackendForProvider, localRuntimeKind, modelPinIsOffered } from './
  * provider stores no config of its own, so a second copy here would eventually
  * probe a port nothing is on and call a working setup broken.
  *
- * `manageUrl` is the client route that installs/starts it — the Models → LLMs
- * page owns every one of these flows, so an unmet requirement links there
- * rather than duplicating the install UI on the Providers page.
+ * `manageUrl` is the client route that installs/starts it, so an unmet
+ * requirement links there rather than duplicating the install UI on the
+ * Providers page. It is NOT one page: since #7414, server lifecycle lives on
+ * Models → Runtimes and the weights catalog on Models → LLMs, and a runtime
+ * points at whichever of the two actually manages it. Read from
+ * `LOCAL_RUNTIME_MANAGE_URLS` (`modelPinMembership.js`) rather than typed here,
+ * because the client needs the same answer and must not import this module's
+ * endpoint graph to get it. `null` means PortOS has no page for that runtime.
+ *
+ * `modelsHint` and `standbyDetail` are read by a user, so they name that page —
+ * but they write it as the `{page}` token, which `providerReadiness.js` expands
+ * through `navManifest.getNavPageForPath`. A literal breadcrumb here is what
+ * #7414 had to hand-edit across a dozen files; a token re-words itself on the
+ * next move. Runtimes whose `manageUrl` is `null` must not use the token —
+ * there is no page to name.
  */
 export const LOCAL_RUNTIMES = Object.freeze({
   llama: Object.freeze({
@@ -64,7 +76,7 @@ export const LOCAL_RUNTIMES = Object.freeze({
     // `llamaServerManager` resolves and starts.
     command: 'llama-server',
     defaultBaseUrl: opencodeLocalBaseUrl('llama'),
-    manageUrl: '/models/llms',
+    manageUrl: LOCAL_RUNTIME_MANAGE_URLS.llama,
     docsUrl: 'https://github.com/ggml-org/llama.cpp',
     // Named so an unmet check can say what the user still has to fetch. GGUF
     // weights are a separate download from the binary — the single most common
@@ -89,23 +101,23 @@ export const LOCAL_RUNTIMES = Object.freeze({
     // standby without turning every enabled llama-backed provider into a setup
     // failure on the capability map.
     standbyWhenStopped: true,
-    standbyDetail: 'No model server is running, which is a valid idle state. Choose a GGUF preset in Models → LLMs when you want to start one; with idle release configured, llama.cpp unloads it in place and reloads it on the next request.',
+    standbyDetail: 'No model server is running, which is a valid idle state. Choose a GGUF preset on {page} when you want to start one; with idle release configured, llama.cpp unloads it in place and reloads it on the next request.',
   }),
   ollama: Object.freeze({
     id: 'ollama',
     label: 'Ollama',
     command: 'ollama',
     defaultBaseUrl: opencodeLocalBaseUrl('ollama'),
-    manageUrl: '/models/llms',
+    manageUrl: LOCAL_RUNTIME_MANAGE_URLS.ollama,
     docsUrl: 'https://ollama.com/download',
-    modelsHint: 'Pull a model from Models → LLMs before an agent can use this provider.',
+    modelsHint: 'Pull a model from {page} before an agent can use this provider.',
   }),
   lmstudio: Object.freeze({
     id: 'lmstudio',
     label: 'LM Studio',
     command: 'lms',
     defaultBaseUrl: opencodeLocalBaseUrl('lmstudio'),
-    manageUrl: '/models/llms',
+    manageUrl: LOCAL_RUNTIME_MANAGE_URLS.lmstudio,
     docsUrl: 'https://lmstudio.ai/download',
     modelsHint: 'Download a model in LM Studio and start its local server.',
     // No pre-spawn context preparation, unlike Ollama's
@@ -126,9 +138,10 @@ export const LOCAL_RUNTIMES = Object.freeze({
     // answer about it.
     command: 'docker',
     defaultBaseUrl: opencodeLocalBaseUrl('vllm'),
-    // No Models → LLMs entry — the weights and the compose project are an
-    // operator-owned ~20 GB prepare step, not something PortOS downloads.
-    manageUrl: null,
+    // No Models page at all — the weights and the compose project are an
+    // operator-owned ~20 GB prepare step, not something PortOS downloads, so
+    // the readiness checklist is the whole surface.
+    manageUrl: LOCAL_RUNTIME_MANAGE_URLS.vllm,
     docsUrl: 'https://github.com/atomantic/PortOS/blob/main/docs/features/qwen38-rtx3090.md',
     modelsHint: 'Clone syv-ai/qwen38-27b-rtx3090 and run its prepare step once — or let the checklist do it, which is the only path that spends the ~30 GB.',
     // What each local-setup state MEANS for this runtime, overriding
@@ -152,9 +165,9 @@ export const LOCAL_RUNTIMES = Object.freeze({
     // because SGLang publishes no compose project to inherit one from.
     command: 'docker',
     defaultBaseUrl: opencodeLocalBaseUrl('sglang'),
-    // No Models → LLMs entry — the weights are an operator-owned ~20 GB
+    // No Models page at all — the weights are an operator-owned ~20 GB
     // download, not something PortOS fetches.
-    manageUrl: null,
+    manageUrl: LOCAL_RUNTIME_MANAGE_URLS.sglang,
     docsUrl: 'https://github.com/atomantic/PortOS/blob/main/docs/features/sglang-qwen38.md',
     modelsHint: 'Save the compose file from docs/features/sglang-qwen38.md and download the weights once — PortOS never pulls the image or the ~20 GB of weights.',
     // One container, one checkpoint; the recipe picks the quantized repo from
@@ -167,23 +180,25 @@ export const LOCAL_RUNTIMES = Object.freeze({
     command: 'slotstream',
     // Dedicated loopback port — never 11434, which is a PortOS-managed Ollama.
     defaultBaseUrl: `http://127.0.0.1:${PORTS.SLOTSTREAM}/v1`,
-    manageUrl: '/models/llms',
+    manageUrl: LOCAL_RUNTIME_MANAGE_URLS.slotstream,
     docsUrl: 'https://github.com/atomantic/PortOS/blob/main/docs/features/slotstream.md',
-    modelsHint: 'A start never fetches weights — add a checkpoint on Models → LLMs, then start Slotstream there.',
+    modelsHint: 'A start never fetches weights — add a checkpoint on {page}, then start Slotstream there.',
     servesOneModel: true,
     standbyWhenStopped: true,
-    standbyDetail: 'No streaming runtime is running, which is a valid idle state. Start it from Models → LLMs when you want a model larger than this machine\'s RAM; with idle release configured, PortOS stops it and starts it again on the next request.',
+    standbyDetail: 'No streaming runtime is running, which is a valid idle state. Start it from {page} when you want a model larger than this machine\'s RAM; with idle release configured, PortOS stops it and starts it again on the next request.',
   }),
   mtplx: Object.freeze({
     id: 'mtplx',
     label: 'MTPLX',
     command: 'mtplx',
     defaultBaseUrl: opencodeLocalBaseUrl('mtplx'),
-    // No Models → LLMs entry — MTPLX has no model catalog inside PortOS. The
-    // one-click setup on the readiness checklist
-    // (`services/localRuntimeSetup.js`) is what installs it, downloads its
-    // default checkpoint when the cache is empty, and starts it.
-    manageUrl: null,
+    // MTPLX has no model CATALOG inside PortOS — it never had a Models → LLMs
+    // entry for that reason — but Models → Runtimes does own its server:
+    // install, checkpoint download, start and stop all live on that page, so
+    // that is where a readiness card should send someone (#7414). The one-click
+    // setup on the checklist itself (`services/localRuntimeSetup.js`) remains
+    // the shortest path and still runs in place.
+    manageUrl: LOCAL_RUNTIME_MANAGE_URLS.mtplx,
     docsUrl: 'https://github.com/atomantic/PortOS/blob/main/docs/features/mtplx.md',
     modelsHint: 'Point the server at the Qwen MTP checkpoint you want, or let the checklist fetch MTPLX\'s default one when nothing is cached.',
     // One process, one checkpoint — MTPLX names it after the checkpoint it

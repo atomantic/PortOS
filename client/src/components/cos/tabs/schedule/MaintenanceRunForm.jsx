@@ -10,8 +10,7 @@ import * as api from '../../../../services/api';
 import { useAutoRefetch } from '../../../../hooks/useAutoRefetch';
 import { buildQuotaBurnTaskCatalog, maintenancePrerequisites, taskSourceHref } from '../../../../lib/quotaBurnTasks';
 import { getAppName } from '../../../../utils/formatters';
-import { effortAwareModelOptions, isProcessProvider } from '../../../../utils/providers';
-import { familyForProvider } from '../../../../../../server/lib/providerFamilies';
+import { effortAwareModelOptions, enabledProcessProviderFilter } from '../../../../utils/providers';
 
 const RUNS_POLL_MS = 15_000;
 
@@ -31,7 +30,7 @@ export default function MaintenanceRunForm({ schedule, apps = [], providers = []
   // even when there is nothing to show.
   const [runs, setRuns] = useState(null);
   const revision = useRef(0);
-  const availableProviders = providers.filter(provider => provider.enabled && isProcessProvider(provider) && familyForProvider(provider));
+  const availableProviders = providers.filter(enabledProcessProviderFilter);
   const provider = availableProviders.find(entry => entry.id === providerId);
   const groups = buildQuotaBurnTaskCatalog({ schedule, apps });
   const prerequisites = maintenancePrerequisites(groups, appId, { mode, claimBetweenAudits });

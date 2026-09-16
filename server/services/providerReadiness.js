@@ -37,6 +37,7 @@
  */
 
 import { localRuntimeForProvider } from '../lib/localProviderRuntime.js';
+import { expandPageToken, getNavPageForPath } from '../lib/navManifest.js';
 import { isConfiguredDefaultModel } from '../lib/providerModels.js';
 import { probeOpenAiModels } from '../lib/openAiModelsProbe.js';
 import { findCommandOnPath } from '../lib/processEnv.js';
@@ -254,15 +255,31 @@ function weightsDetail(runtime, weights) {
   return null;
 }
 
+/**
+ * The page that manages this runtime, named the way the sidebar names it.
+ *
+ * Every hint below used to say "Models → LLMs" outright, which was true while
+ * that one page owned every local server. #7414 moved server lifecycle to
+ * Models → Runtimes and left the weights catalog on LLMs, so a fixed breadcrumb
+ * now sends half these runtimes to the wrong sibling. Resolving it from the
+ * route each runtime ALREADY links to keeps the prose and the link agreeing,
+ * per runtime, without this module knowing which pages exist.
+ *
+ * `null` for a runtime with no page (vLLM, SGLang) — callers drop the clause
+ * rather than inventing a destination.
+ */
+const managePage = (runtime) => getNavPageForPath(runtime.manageUrl)?.breadcrumb ?? null;
+
 /** The `runtime` check — is the daemon's software here at all? */
 function runtimeCheck(runtime, { onPath, appInstalled, installed, reachable, setup }) {
   const detail = onPath ? `\`${runtime.command}\` is on PortOS's PATH.`
     : appInstalled ? `${runtime.label} is installed as an app.`
       : reachable ? `Something is already serving ${runtime.endpoint}.`
         : `\`${runtime.command}\` was not found on PortOS's PATH.`;
+  const page = managePage(runtime);
   const fixHint = installed ? null
     : setupHint(setup, 'installs')
-      || (runtime.manageUrl ? `Install ${runtime.label} from Models → LLMs.`
+      || (page ? `Install ${runtime.label} from ${page}.`
         : `Use the setup button below to install ${runtime.label}.`);
   return { id: 'runtime', label: `${runtime.label} installed`, ok: installed, detail, fixHint };
 }
@@ -278,10 +295,12 @@ function serverCheck(runtime, { installed, result, setup, weights = 'unknown' })
       fixHint: null,
     };
   }
-  const start = `Start ${runtime.label}${runtime.manageUrl ? ' from Models → LLMs' : ''}.`;
+  const page = managePage(runtime);
+  const start = `Start ${runtime.label}${page ? ` from ${page}` : ''}.`;
+  const modelsHint = expandPageToken(runtime.modelsHint, runtime);
   const fallback = installed
-    ? `${start} ${runtime.modelsHint}`
-    : `Install ${runtime.label} first, then start it. ${runtime.modelsHint}`;
+    ? `${start} ${modelsHint}`
+    : `Install ${runtime.label} first, then start it. ${modelsHint}`;
   // Name the blocker in the SAME line that says nothing answered. Otherwise the
   // checklist reads "installed ✓ / not responding — just press Start", and
   // Start is the thing that cannot work until the weights land.
@@ -344,13 +363,14 @@ function modelCheck(runtime, wanted, served, probeError = null, { weights = 'unk
   // mismatch fixable from EITHER end, so the hint names both rather than
   // implying the provider is the only thing that may move.
   const renameTo = served.length > 0 && runtime.aliasFlag ? wanted : null;
+  const page = managePage(runtime);
   const fixHint = served.length === 0
-    ? (runtime.manageUrl
-      ? 'No model is loaded. Start a preset from Models → LLMs.'
+    ? (page
+      ? `No model is loaded. Start a preset from ${page}.`
       : 'No model is loaded. Use the setup controls on this card to load one.')
     : renameTo
       ? `Same server, two names for it — nothing needs downloading. Use the button below to point this provider at ${listed}, or “Serve as \`${wanted}\`” to relaunch ${runtime.label} on the weights it already has under that id.`
-      : `This provider will send \`${wanted}\`, but the running server only accepts ${listed}. Use the button below to match them${runtime.manageUrl ? ', or change the loaded weights on the Models → LLMs page' : ''}.`;
+      : `This provider will send \`${wanted}\`, but the running server only accepts ${listed}. Use the button below to match them${page ? ` (or change the loaded weights on ${page})` : ''}.`;
   return {
     id: 'model',
     label,
@@ -400,6 +420,7 @@ function catalogCheck(runtime, offered, served, probeError = null, { weights = '
   // either — otherwise the provider still runs, and only a stage that pinned one
   // of these ids dies.
   const nothingDispatchable = unserved.length === offered.length && !(pinned && served.includes(pinned));
+  const page = managePage(runtime);
   const detail = nothingDispatchable
     ? `${runtime.label} serves none of them (${listed}${more}), so every run dispatched onto this provider fails before producing output.`
     : `${runtime.label} does not serve ${listed}${more}, so a task or stage pinned to one of those fails at spawn.`;
@@ -408,7 +429,7 @@ function catalogCheck(runtime, offered, served, probeError = null, { weights = '
     label,
     ok: false,
     detail,
-    fixHint: `Refresh this provider's models so it only offers ids the server serves${runtime.manageUrl ? ', or pull the missing ones from Models → LLMs.' : `. ${runtime.modelsHint}`}`,
+    fixHint: `Refresh this provider's models so it only offers ids the server serves${page ? `, or pull the missing ones from ${page}.` : `. ${expandPageToken(runtime.modelsHint, runtime)}`}`,
     unservedModels: unserved,
   };
 }
@@ -486,7 +507,7 @@ export async function getProviderReadiness(provider, deps = {}) {
     // available, but an installed model-selecting runtime is not missing setup
     // merely because no model was chosen to occupy resources right now.
     standby,
-    standbyDetail: standby ? runtime.standbyDetail : null,
+    standbyDetail: standby ? expandPageToken(runtime.standbyDetail, runtime) : null,
     checks,
     // What a one-click "set this up for me" button can do about the unmet
     // checks, or `null` when nothing here is auto-fixable (see

@@ -17,10 +17,14 @@ vi.mock('../services/api', () => ({
   listShareActivity: vi.fn(),
   getSettings: vi.fn(),
   updateSettings: vi.fn(),
+  listUniverseDuplicates: vi.fn(),
+  listSeriesDuplicates: vi.fn(),
+  listConflicts: vi.fn(),
 }));
 
 import Sharing, { SECTIONS, isLiveSubscription } from './Sharing';
 import { expectPageNavTabs } from '../test/pageNavTabAssertions.js';
+import { expectNoDanglingAriaRefs } from '../test/ariaRefAssertions.js';
 import * as api from '../services/api';
 
 const NOW = Date.parse('2026-05-18T12:00:00Z');
@@ -132,5 +136,32 @@ describe('Sharing SECTIONS ↔ nav manifest', () => {
     expectPageNavTabs(SECTIONS, [
       'buckets:Buckets', 'duplicates:Duplicates', 'conflicts:Conflicts',
     ]);
+  });
+});
+
+// #7420: RouteTabsHeader passes no `controlsIdPrefix`, so each section names
+// its own panel rather than borrowing an `aria-labelledby` from a tab id that
+// doesn't exist. Covers all three sections this page's own tab bar can reach.
+describe('Sharing — no dangling aria-controls/aria-labelledby', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    api.listShareBuckets.mockResolvedValue({ buckets: [], localSchemaVersion: 1 });
+    api.getSettings.mockResolvedValue({});
+    api.listShareInbox.mockResolvedValue({ items: [] });
+    api.listShareActivity.mockResolvedValue({ manifests: [] });
+    api.listUniverseDuplicates.mockResolvedValue({ groups: [] });
+    api.listSeriesDuplicates.mockResolvedValue({ groups: [] });
+    api.listConflicts.mockResolvedValue({ conflicts: [] });
+  });
+
+  const routes = [{ path: '/sharing/:section', element: <Sharing /> }];
+  const renderAt = (entry) => render(
+    <RouterProvider router={createMemoryRouter(routes, { initialEntries: [entry] })} />,
+  );
+
+  it.each(['buckets', 'duplicates', 'conflicts'])('%s section names every panel it points at', async (section) => {
+    const { container } = renderAt(`/sharing/${section}`);
+    await waitFor(() => expect(screen.getByRole('tabpanel')).toBeInTheDocument());
+    expectNoDanglingAriaRefs(container);
   });
 });

@@ -32,7 +32,8 @@ import { useConfirmDelete } from '../../../hooks/useConfirmDelete';
 import useSlotInFlight from '../../../hooks/useSlotInFlight';
 import MediaJobThumb from '../MediaJobThumb';
 import MediaPreview from '../../media/MediaPreview';
-import usePreviewRoute from '../../../hooks/usePreviewRoute';
+import useHydratedPreviewRoute from '../../../hooks/useHydratedPreviewRoute';
+import { normalizeImage } from '../../media/normalize';
 import Drawer from '../../Drawer';
 import ImageGenSettingsForm from '../../imageGen/ImageGenSettingsForm';
 import ExtractCanonButton from './ExtractCanonButton';
@@ -197,7 +198,7 @@ export default function ComicScriptStage({ issue, series, onStageUpdate, actions
   // Shared lightbox state. PageRow reports its rendered filename up via
   // `onFilenameKnown` so the parent can build a navigable items list keyed by
   // page order — preview prev/next walks rendered pages in page order. URL-
-  // driven via `usePreviewRoute(previewItems)` below so the modal deep-links.
+  // driven via `useHydratedPreviewRoute(previewItems)` below so the modal deep-links.
   const [filenameByJobId, setFilenameByJobId] = useState({});
   const onFilenameKnown = useCallback((jobId, filename) => {
     if (!jobId || !filename) return;
@@ -207,12 +208,12 @@ export default function ComicScriptStage({ issue, series, onStageUpdate, actions
   // root — the server stamps the prompt it sent to the image-gen backend on
   // each slot as it's enqueued. Read from there so the lightbox surfaces the
   // actual generation prompt (and "Refine Prompt" has something to refine).
-  const buildPageItem = useCallback((pageIndex, slot, filename) => ({
-    key: `comic-page:${filename}`,
-    kind: 'image',
+  // Built through `normalizeImage` (canonical `image:<filename>` key) so the
+  // detail panel gets render lineage and mood-board pins dedupe against the
+  // same image pinned from Media History; `useHydratedPreviewRoute` below
+  // hydrates the rest of the lineage fields from the sidecar on open.
+  const buildPageItem = useCallback((pageIndex, slot, filename) => normalizeImage({
     filename,
-    previewUrl: `/data/images/${filename}`,
-    downloadUrl: `/data/images/${filename}`,
     prompt: slot?.prompt || `Page ${pageIndex + 1}`,
   }), []);
   const previewItems = useMemo(() => {
@@ -236,7 +237,7 @@ export default function ComicScriptStage({ issue, series, onStageUpdate, actions
     });
     return out;
   }, [comicPages.pages, filenameByJobId, buildPageItem]);
-  const [preview, setPreview] = usePreviewRoute(previewItems);
+  const [preview, setPreview] = useHydratedPreviewRoute(previewItems);
   const openPreview = useCallback((_pageIndex, filename) => {
     if (!filename) return;
     const match = previewItems.find((i) => i.filename === filename);

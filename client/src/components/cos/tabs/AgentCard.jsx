@@ -4,7 +4,6 @@ import {
   Cpu,
   Trash2,
   CheckCircle,
-  AlertCircle,
   AlertTriangle,
   RotateCcw,
   Loader2,
@@ -32,6 +31,8 @@ import CollapsibleText from '../../ui/CollapsibleText';
 import toast from '../../ui/Toast';
 import { copyToClipboard } from '../../../lib/clipboard';
 import { extractCosTaskType } from '../../../lib/cosTaskType';
+import { isAgentHandoff } from '../../../lib/agentOutcome';
+import AgentResultLine from '../AgentResultLine';
 import { DEFAULT_REVIEWER, normalizeReviewers } from '../constants';
 import { formatBytes, formatDurationMs, formatDateTime, formatTimeOfDay } from '../../../utils/formatters';
 import { useAutoRefetch } from '../../../hooks/useAutoRefetch';
@@ -252,6 +253,9 @@ export default function AgentCard({ agent, onPause, onKill, onDelete, onResume, 
   // Only agents from a manually-filled task form ask for a rating —
   // scheduled/autopilot runs are already auto-evaluated by task-learning.
   const isManualUserAgent = agent.metadata?.taskType === 'user';
+  // Retired by Resume/Relaunch: this run handed its task to a continuation
+  // instead of reaching a verdict, so it is neither a success nor a failure.
+  const handoff = isAgentHandoff(agent);
   const inactive = completed || paused;
 
   // Handle feedback submission
@@ -588,6 +592,19 @@ export default function AgentCard({ agent, onPause, onKill, onDelete, onResume, 
             {isSystemAgent && (
               <span className="px-1.5 py-0.5 text-xs bg-gray-500/20 text-gray-400 rounded shrink-0">SYS</span>
             )}
+            {/* This run took over a paused/relaunched one. The predecessor's card
+                says it handed off; this is the other half of that pair. */}
+            {agent.metadata?.resumedFromAgentId && (
+              <Link
+                to={`/cos/agents/${agent.metadata.resumedFromAgentId}`}
+                onClick={(event) => event.stopPropagation()}
+                className="px-1.5 py-0.5 text-xs bg-port-accent/20 text-port-accent rounded shrink-0 inline-flex items-center gap-1 hover:bg-port-accent/30 transition-colors"
+                title={`Continues agent ${agent.metadata.resumedFromAgentId}`}
+              >
+                <RotateCcw size={11} aria-hidden="true" />
+                Continues {agent.metadata.resumedFromAgentId.slice(0, 8)}
+              </Link>
+            )}
             {agent.metadata?.model && (
               <span className={`px-2 py-0.5 text-xs rounded min-w-0 max-w-full break-words ${
                 ['heavy', 'ultra'].includes(agent.metadata.modelTier) ? 'bg-purple-500/20 text-purple-400' :
@@ -904,13 +921,7 @@ export default function AgentCard({ agent, onPause, onKill, onDelete, onResume, 
 
         {agent.result && (
           <div className="flex items-center gap-4 flex-wrap">
-            <div className={`text-sm flex items-center gap-2 ${agent.result.success ? 'text-port-success' : 'text-port-error'}`}>
-              {agent.result.success ? (
-                <><CheckCircle size={14} aria-hidden="true" /> Completed successfully</>
-              ) : (
-                <><AlertCircle size={14} aria-hidden="true" /> {agent.result.error || 'Failed'}</>
-              )}
-            </div>
+            <AgentResultLine agent={agent} />
             {/* Cleanup warnings */}
             {agent.result.warnings?.length > 0 && (
               <div className="text-sm text-port-warning flex items-start gap-2">
@@ -965,8 +976,12 @@ export default function AgentCard({ agent, onPause, onKill, onDelete, onResume, 
           </div>
         )}
 
-        {/* Feedback section - shown for completed, manually-run, non-system local agents */}
-        {completed && !isSystemAgent && isManualUserAgent && !remote && (
+        {/* Feedback section - shown for completed, manually-run, non-system local
+            agents. A handoff has no result to rate — the continuation run asks for
+            the rating that covers this work — so it is excluded UNLESS a rating is
+            already on the record: pre-upgrade handoffs were ratable, and hiding the
+            block outright would swallow a verdict the user did give. */}
+        {completed && !isSystemAgent && isManualUserAgent && !remote && (!handoff || !!feedbackState) && (
           <div className="mt-2 pt-1 border-t border-port-border/50">
             <div className="flex items-center gap-3 flex-wrap">
               <span className="text-xs text-gray-500">Was this helpful?</span>

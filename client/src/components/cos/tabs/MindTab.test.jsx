@@ -623,6 +623,108 @@ describe('MindTab', () => {
     expect(within(screen.getByTestId('mind-chat')).queryByText('Thinking…')).not.toBeInTheDocument();
   });
 
+  const thinkingRuntime = (inference = {}, usageLimitRetryAt = null) => ({
+    observedAt: '2026-08-27T12:02:40.000Z',
+    usageLimitRetryAt,
+    inference: {
+      active: true,
+      turnId: 'mind-turn-1',
+      startedAt: '2026-08-27T12:00:00.000Z',
+      heartbeatAt: '2026-08-27T12:02:35.000Z',
+      elapsedMs: 160_000,
+      heartbeatAgeMs: 5_000,
+      heartbeatStale: false,
+      providerId: 'ollama',
+      model: 'demo-model',
+      residency: { status: 'loaded', backend: 'ollama', loaded: true, memoryBytes: 2 * 1024 ** 3 },
+      ...inference,
+    },
+    context: { chars: 12000, maxChars: 32000, approximateTokens: 3000, summaryState: 'ready', memoryCount: 4 },
+    system: {
+      memory: { total: 8 * 1024 ** 3, used: 4 * 1024 ** 3, free: 4 * 1024 ** 3, usagePercent: 50 },
+      process: { rss: 256 * 1024 ** 2, heapUsed: 64 * 1024 ** 2, heapTotal: 128 * 1024 ** 2 },
+      cpu: { cores: 8, loadAvg1m: 1.25 },
+    },
+  });
+
+  it('shows elapsed think time, heartbeat freshness, and the current stage while a turn runs', async () => {
+    api.getPersistentMind.mockResolvedValue(response({
+      state: { enabled: true, started: true, status: 'thinking', pauseReason: null, activeTurnId: 'mind-turn-1' },
+      events: [
+        event(),
+        { ...event({ eventId: 'mind-wake:1', kind: 'mind.wake', turnId: 'mind-turn-1', sequence: 2, data: {} }) },
+        { ...event({ eventId: 'mind-model-request:1', kind: 'mind.model.request', turnId: 'mind-turn-1', sequence: 3, data: {} }) },
+      ],
+    }));
+    api.getPersistentMindRuntime.mockResolvedValue(thinkingRuntime());
+    renderTab();
+
+    const indicator = await screen.findByTestId('mind-typing-indicator');
+    expect(indicator).toHaveTextContent('Waiting on the model · 2m 40s · heartbeat 5s ago · model loaded');
+    // The announced name is the stage alone: the durations re-render every 10s
+    // poll, and putting them in a live region re-reads the same state forever.
+    expect(indicator).toHaveAccessibleName('Chief of Staff is typing — Waiting on the model');
+    expect(await screen.findByTestId('mind-turn-progress-detail'))
+      .toHaveTextContent('2m 40s · heartbeat 5s ago · model loaded');
+  });
+
+  it('renders a stale heartbeat as a stalled state rather than the normal thinking dots', async () => {
+    api.getPersistentMind.mockResolvedValue(response({
+      state: { enabled: true, started: true, status: 'thinking', pauseReason: null, activeTurnId: 'mind-turn-1' },
+    }));
+    api.getPersistentMindRuntime.mockResolvedValue(thinkingRuntime({ heartbeatAgeMs: 190_000, heartbeatStale: true }));
+    renderTab();
+
+    const stalled = await screen.findByTestId('mind-turn-indicator');
+    expect(stalled).toHaveTextContent(/Stalled, checking…/);
+    expect(stalled).toHaveTextContent(/no heartbeat for 3m 10s/);
+    expect(screen.queryByTestId('mind-typing-indicator')).not.toBeInTheDocument();
+    expect(await screen.findByTestId('mind-thought-status')).toHaveAttribute('data-phase', 'stalled');
+  });
+
+  it('renders a quota block with its retry time inline instead of an indefinite thinking state', async () => {
+    api.getPersistentMind.mockResolvedValue(response({
+      state: {
+        enabled: true,
+        started: true,
+        status: 'paused',
+        usageLimited: true,
+        pauseReason: 'Provider usage limit reached',
+        activeTurnId: null,
+        nextEligibleWakeAt: null,
+      },
+    }));
+    api.getPersistentMindRuntime.mockResolvedValue(thinkingRuntime({
+      active: false,
+      turnId: null,
+      // +12m30s: `timeUntil` floors, so a flat 12m would race the test clock
+      // down to "11m" and flake.
+    }, new Date(Date.now() + 12 * 60_000 + 30_000).toISOString()));
+    renderTab();
+
+    const blocked = await screen.findByTestId('mind-turn-indicator');
+    expect(blocked).toHaveTextContent(/Provider usage limit reached/);
+    expect(blocked).toHaveTextContent(/retry in 12m/);
+    expect(screen.queryByTestId('mind-typing-indicator')).not.toBeInTheDocument();
+    expect(await screen.findByText(/the mind retries on its own/)).toBeInTheDocument();
+  });
+
+  it('never renders raw provider reasoning in the live progress readout', async () => {
+    api.getPersistentMind.mockResolvedValue(response({
+      state: { enabled: true, started: true, status: 'thinking', pauseReason: null, activeTurnId: 'mind-turn-1' },
+    }));
+    api.getPersistentMindRuntime.mockResolvedValue(thinkingRuntime({
+      // A payload a future runtime change might carry: the progress readout must
+      // stay a function of status enums and durations, never of model text.
+      reasoning: 'SECRET-CHAIN-OF-THOUGHT',
+      residency: { status: 'loaded', backend: 'ollama', loaded: true, memoryBytes: 2 * 1024 ** 3, note: 'SECRET-CHAIN-OF-THOUGHT' },
+    }));
+    renderTab();
+
+    await screen.findByTestId('mind-typing-indicator');
+    expect(screen.queryByText(/SECRET-CHAIN-OF-THOUGHT/)).not.toBeInTheDocument();
+  });
+
   it('animates active thought status and shows context, system, and loaded-model telemetry', async () => {
     const user = userEvent.setup();
     api.getPersistentMind.mockResolvedValue(response({
@@ -646,14 +748,16 @@ describe('MindTab', () => {
     });
     renderTab();
 
-    const thoughtStatus = (await screen.findByText('Thinking with demo-model')).closest('[role="status"]');
+    const thoughtStatus = await screen.findByTestId('mind-thought-status');
     expect(thoughtStatus).toHaveTextContent('Thinking with demo-model');
     expect(thoughtStatus).toHaveAttribute('aria-busy', 'true');
     expect(thoughtStatus.querySelector('.animate-pulse')).toBeInTheDocument();
     expect(screen.getByText('~3,000 tokens')).toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: /Context/i }));
     expect(screen.getByText('4 GB / 8 GB')).toBeInTheDocument();
-    expect(screen.getAllByText('Running now').length).toBeGreaterThan(0);
+    // The active turn no longer hides residency behind a bare "Running now" —
+    // a cold local model that has not finished loading must read differently.
+    expect(screen.getAllByText('Running now · loaded in memory').length).toBeGreaterThan(0);
     expect(screen.getByText(/ollama · 2 GB/)).toBeInTheDocument();
   });
 

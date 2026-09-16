@@ -50,6 +50,7 @@ import { createKeyCachedQueue } from '../lib/createKeyCachedQueue.js';
 import { buildMaintenanceSteps } from '../lib/maintenanceSequence.js';
 import { familyForProvider } from '../lib/providerFamilies.js';
 import { quotaBurnProvenance } from '../lib/quotaBurnOrigin.js';
+import { isAgentHandoff } from '../lib/agentOutcome.js';
 import { cosEvents } from './cosEvents.js';
 import { getQuotaBurnTaskCatalog, invokeQuotaBurnStep } from './quotaBurnInvoke.js';
 import { ACTIVE_TASK_STATUSES, probeSequenceDrain, sequenceStepShapeReason } from './quotaBurnSequence.js';
@@ -317,6 +318,11 @@ async function evaluate(id, { ignoreTaskId }) {
 function onMaintenanceAgentCompleted(agent) {
   const id = agent?.metadata?.taskQuotaBurnMaintenanceRunId;
   if (!id) return null;
+  // A relaunch hands this step's task to a continuation rather than ending it.
+  // Evaluating here would report the step as a hold the user has to retry or
+  // dismiss, for a run that is already on its way back out on a new provider.
+  // The continuation's own completion is the one that advances the run.
+  if (isAgentHandoff(agent)) return null;
   const stepId = agent.metadata?.taskQuotaBurnStepId;
   const success = agent.result?.success === true;
   return getMaintenanceRun(id)

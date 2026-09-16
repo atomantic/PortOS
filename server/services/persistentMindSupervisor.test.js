@@ -10,6 +10,7 @@ import {
 const mock = vi.hoisted(() => ({
   root: null,
   scheduled: new Map(),
+  events: new Map(),
   emitted: [],
   budget: { withinBudget: true, exceeded: null },
   budgetError: null,
@@ -51,6 +52,7 @@ vi.mock('./eventScheduler.js', () => ({
     return config;
   }),
   cancel: vi.fn((id) => mock.scheduled.delete(id)),
+  getEvent: vi.fn((id) => mock.events.get(id) || null),
 }));
 
 vi.mock('./domainUsage.js', () => ({
@@ -1542,6 +1544,33 @@ describe('persistent mind supervisor', () => {
         pauseReason: 'Paused by user',
       });
       expect(mock.scheduled.has(supervisor.PERSISTENT_MIND_WAKE_EVENT_ID)).toBe(false);
+    });
+  });
+describe('usage-limit retry time', () => {
+    const PROBE_ID = 'cos-persistent-mind-usage-limit-probe';
+    beforeEach(() => mock.events.clear());
+
+    it('reports the pending probe as the retry time', () => {
+      const nextRunAt = Date.now() + 15 * 60_000;
+      mock.events.set(PROBE_ID, { id: PROBE_ID, active: true, nextRunAt });
+
+      expect(supervisor.persistentMindUsageLimitRetryAt()).toBe(new Date(nextRunAt).toISOString());
+    });
+
+    it('reports nothing rather than a retry that is not coming', () => {
+      expect(supervisor.persistentMindUsageLimitRetryAt()).toBeNull();
+
+      // A fired one-shot: the scheduler nulls its own next run.
+      mock.events.set(PROBE_ID, { id: PROBE_ID, active: true, nextRunAt: null });
+      expect(supervisor.persistentMindUsageLimitRetryAt()).toBeNull();
+
+      // Paused: it keeps a future time it will never honour.
+      mock.events.set(PROBE_ID, { id: PROBE_ID, active: false, nextRunAt: Date.now() + 60_000 });
+      expect(supervisor.persistentMindUsageLimitRetryAt()).toBeNull();
+
+      // Stale: scheduled before a clock jump, so the time already passed.
+      mock.events.set(PROBE_ID, { id: PROBE_ID, active: true, nextRunAt: Date.now() - 60_000 });
+      expect(supervisor.persistentMindUsageLimitRetryAt()).toBeNull();
     });
   });
 });

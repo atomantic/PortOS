@@ -465,7 +465,8 @@ describe('agent TUI spawning', () => {
       id: 'opencode-ollama-tui', type: 'tui', command: 'opencode', args: [], ollamaBacked: true,
     }, 'qwen2.5:7b');
     expect(config.command).toBe('opencode');
-    expect(config.args).toEqual(['--model', 'ollama/qwen2.5:7b']);
+    // `--agent build` is the TUI arm's role pin (#7405) — see applyCommandDefaults.
+    expect(config.args).toEqual(['--agent', 'build', '--model', 'ollama/qwen2.5:7b']);
   });
 
   it('respects a user-baked --model pin on an OpenCode TUI and does not duplicate it', () => {
@@ -473,7 +474,7 @@ describe('agent TUI spawning', () => {
       id: 'opencode-ollama-tui', type: 'tui', command: 'opencode',
       args: ['--model', 'ollama/custom'], ollamaBacked: true,
     }, 'qwen2.5:7b');
-    expect(config.args).toEqual(['--model', 'ollama/custom']);
+    expect(config.args).toEqual(['--model', 'ollama/custom', '--agent', 'build']);
   });
 
   it('falls back to the default command via id heuristic when command is omitted', () => {

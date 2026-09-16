@@ -15,14 +15,17 @@
  * command PortOS has no installer for (and a card drawn before the fetch
  * resolves) shows no install UI at all.
  *
- * `manageUrl` means "PortOS installs this from another screen" — the Local LLM
- * tab owns Ollama/LM Studio, service start-up included — so that case links
- * there rather than duplicating the flow.
+ * `manageUrl` means "PortOS installs this from another screen" — Models → LLMs
+ * owns the Ollama/LM Studio catalog, Models → Runtimes owns the model servers
+ * and their lifecycle — so that case links there rather than duplicating the
+ * flow. The route decides the wording (`getNavPageForPath`); nothing here
+ * hardcodes a page name (#7414).
  */
 
 import { Link } from 'react-router';
 import { CheckCircle2, Download, ExternalLink } from 'lucide-react';
 import Pill from '../ui/Pill';
+import { getNavPageForPath } from '../../../../server/lib/navManifest.js';
 
 const ACTION_CLASS = 'inline-flex items-center gap-1 px-2 py-1 rounded bg-port-accent/20 text-port-accent hover:bg-port-accent/30 transition-colors';
 
@@ -45,7 +48,8 @@ export default function ProviderRuntimeStatus({ runtime, onInstall, optional = f
         {/* A card can say WHICH version is here, but not whether it is current or
             how to move it — that needs the registry read and the lifecycle
             actions the Harnesses page owns. Local-app runtimes keep their own
-            `manageUrl` (Models → LLMs). */}
+            `manageUrl` — Models → LLMs for the catalog apps, Models → Runtimes
+            for the servers. */}
         {!manageUrl && (
           <Link to="/models/harnesses" className="text-[11px] text-gray-500 hover:text-port-accent">
             Manage harness
@@ -69,7 +73,7 @@ export default function ProviderRuntimeStatus({ runtime, onInstall, optional = f
           Install {label}
         </button>
       ) : manageUrl ? (
-        <Link to={manageUrl} className={ACTION_CLASS} title={`Install ${label} from Models → LLMs`}>
+        <Link to={manageUrl} className={ACTION_CLASS} title={`Install ${label} from ${getNavPageForPath(manageUrl)?.breadcrumb || 'its management page'}`}>
           <Download size={12} />
           Install {label}
         </Link>

@@ -18,12 +18,12 @@ import {
 // `item` is the normalized MediaCard shape: `item.previewUrl` is a renderable
 // thumbnail URL (or null), and `item.key` is usually a `<kind>:<ref>` media-key
 // (e.g. `image:foo.png`, `video:job-123`) — but NOT always: the lightbox is
-// also used for synthetic items keyed `canon-sheet:…`, `comic-page:…`
-// that the server's media-key validator rejects. So we pin a real mediaKey only
-// when the key is a valid `image:`/`video:` media-key (for source linkage +
-// dedup), and fall back to an imageUrl-only pin otherwise — keying membership
-// on whichever identifier we sent. The button hides only when NEITHER a valid
-// media-key NOR a renderable thumbnail is available (nothing to pin).
+// also used for synthetic items keyed `canon-sheet:…` that the server's
+// media-key validator rejects. So we pin a real mediaKey only when the key is
+// a valid `image:`/`video:` media-key (for source linkage + dedup), and fall
+// back to an imageUrl-only pin otherwise — keying membership on whichever
+// identifier we sent. The button hides only when NEITHER a valid media-key
+// NOR a renderable thumbnail is available (nothing to pin).
 //
 // Pinning the same asset again removes it (toggle), matching the collection
 // menu's behavior.
@@ -66,8 +66,8 @@ export default function PinToMoodBoardMenu({ item, size = 'sm' }) {
   const [busyId, setBusyId] = useState(null);
   const triggerRef = useRef(null);
 
-  // A real media-key only when it matches the server vocabulary; synthetic keys
-  // (canon-sheet:/comic-page:) fall through to an imageUrl-only pin.
+  // A real media-key only when it matches the server vocabulary; a synthetic
+  // key (canon-sheet:) falls through to an imageUrl-only pin.
   const mediaKey = isValidMediaKey(item.key) ? item.key : null;
   // Only http(s) / absolute app paths are valid imageUrls (mirror the board
   // item schema, which rejects a protocol-relative `//host` path even though it

@@ -9,6 +9,7 @@ import { cosEvents } from './cosEvents.js';
 import { getAgents } from './cosAgentLifecycle.js';
 import { ensureDir, getDateString, PATHS, readJSONFile, atomicWrite } from '../lib/fileUtils.js';
 import { getWeekId } from '../lib/isoWeek.js';
+import { isAgentHandoff } from '../lib/agentOutcome.js';
 
 const DATA_DIR = PATHS.cos;
 const PRODUCTIVITY_FILE = join(DATA_DIR, 'productivity.json');
@@ -74,7 +75,11 @@ export async function recalculateProductivity() {
   console.log('📊 Productivity: Recalculating from agent history');
 
   const agents = await getAgents();
-  const completedAgents = agents.filter(a => a.completedAt && a.status === 'completed');
+  // A relaunch retires its record with `success: false` and requeues the same
+  // task, so counting it would score one failure per provider swap against the
+  // hour and weekday the user happened to press the button — and then score the
+  // continuation on top. The continuation is the run that did the work.
+  const completedAgents = agents.filter(a => a.completedAt && a.status === 'completed' && !isAgentHandoff(a));
 
   // Sort by completion date
   completedAgents.sort((a, b) => new Date(a.completedAt) - new Date(b.completedAt));
@@ -242,6 +247,9 @@ export async function getProductivityInsights() {
  */
 export async function onTaskCompleted(agent) {
   if (!agent?.completedAt) return;
+  // Same exclusion as the full recalculation — kept in step so an incremental
+  // update can never bank a run the rebuild would drop.
+  if (isAgentHandoff(agent)) return;
 
   const data = await loadProductivity();
   const completedAt = new Date(agent.completedAt);

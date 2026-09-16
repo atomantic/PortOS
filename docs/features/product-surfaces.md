@@ -195,8 +195,9 @@ Local AI model acceleration, multi-machine peer federation, storage classificati
 
 | Surface / Area | Route(s) | Key Capabilities & Workflows | Related Guides |
 |---|---|---|---|
-| **Local LLM Runtimes** | `/models/llms` | Management of local model servers: Ollama, LM Studio, vLLM, SGLang, llama.cpp / llama-server, MTPLX, and Slotstream (SSD-streaming MoE for checkpoints larger than RAM). | [Claude on Ollama](./claude-ollama.md), [MTPLX](./mtplx.md), [Slotstream](./slotstream.md) |
-| **Speculative Decoding** | `/models/llms` | Accelerated token generation using DSpark, DFlash 2, and MTPLX speculative drafting pairs. | [DFlash2 & DSpark](./dflash2.md), [MTPLX](./mtplx.md), [RTX 3090 vLLM](./qwen38-rtx3090.md), [SGLang Qwen](./sglang-qwen38.md) |
+| **Local LLM Runtimes** | `/models/llms-runtimes` | Management of local model servers: Ollama, LM Studio, llama.cpp / llama-server, MTPLX, and Slotstream (SSD-streaming MoE for checkpoints larger than RAM). vLLM and SGLang have no rows here — their setup and start controls live in the AI Providers readiness checklist. | [Claude on Ollama](./claude-ollama.md), [MTPLX](./mtplx.md), [Slotstream](./slotstream.md) |
+| **Model Library** | `/models/llms` | The Ollama / LM Studio weights catalog — find, install, compare, and remove models — plus the Abuse Guard classifier at `/models/llms/abuse`. | [Claude on Ollama](./claude-ollama.md) |
+| **Speculative Decoding** | `/models/llms-runtimes` | Accelerated token generation using DSpark, DFlash 2, and MTPLX speculative drafting pairs. | [DFlash2 & DSpark](./dflash2.md), [MTPLX](./mtplx.md), [RTX 3090 vLLM](./qwen38-rtx3090.md), [SGLang Qwen](./sglang-qwen38.md) |
 | **Embeddings Management** | `/models/embeddings` | Local text embedding models (Nomic, Ollama) and pgvector semantic index configuration. | [STORAGE.md](../STORAGE.md) |
 | **LoRAs & Model Training** | `/models/loras`, `/models/training` | LoRA adapter discovery, Civitai downloads, image captioning, and local FLUX LoRA training dataset management. | — |
 | **Media Models Storage** | `/models/media` | Hugging Face cache management and storage inspection for image/video diffusion models. | — |

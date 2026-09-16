@@ -55,6 +55,7 @@ vi.mock('./agentWorktreeCleanup.js', () => ({
 
 vi.mock('./agentCompletionCleanup.js', () => ({
   runAgentCompletionCleanup: vi.fn().mockResolvedValue(undefined),
+  removeCompletionSentinel: vi.fn().mockResolvedValue(undefined),
 }));
 
 import { handleAgentCompletion } from './agentLifecycle.js';

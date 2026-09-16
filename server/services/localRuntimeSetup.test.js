@@ -284,7 +284,7 @@ describe('runLocalRuntimeSetup', () => {
     const result = await runLocalRuntimeSetup('llama', { endpoint: 'http://127.0.0.1:8080/v1' });
 
     expect(llama.installLlamaServer).toHaveBeenCalled();
-    expect(result).toMatchObject({ success: true, message: expect.stringMatching(/Models → LLMs/) });
+    expect(result).toMatchObject({ success: true, message: expect.stringMatching(/Models → Runtimes/) });
   });
 
   it('stops after the install when the modal was closed', async () => {

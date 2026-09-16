@@ -638,6 +638,31 @@ describe('completion continuation', () => {
     expect(state.invoked.map((entry) => entry.familyId)).toEqual(['claude', 'agy']);
   });
 
+  it('neither files a denial nor walks the plan when a burn agent is RELAUNCHED', async () => {
+    // Relaunch retires the record with `success: false` and requeues the same
+    // task on another provider — usually because the user is routing AROUND a
+    // usage limit, not hitting one. Read as a completion, both halves misfire:
+    // the ledger files "Relaunched by user on <provider>" as an observed refusal
+    // and blocks the family on it, and the plan dispatches the next job while the
+    // relaunched task is still being re-spawned, putting two burn agents in
+    // flight against a chain whose whole safety argument is that it is serial.
+    state.invokePending = { first: { count: 1 } };
+    const relaunched = {
+      taskId: 'burn-1',
+      metadata: { taskQuotaBurnFamily: 'grok', taskQuotaBurnStepId: 'first' },
+      result: { success: false, resumed: true, resumedTaskId: 'burn-1', error: 'Relaunched by user on codex' },
+    };
+
+    // Synchronous null, like the other "not mine" early returns: nothing is
+    // even scheduled, so there is no promise to await.
+    expect(__onBurnAgentCompleted(relaunched)).toBeNull();
+
+    expect(state.settled).toEqual([]);
+    expect(state.invoked).toEqual([]);
+    expect(state.completed).toEqual([]);
+    expect(state.runs).toEqual([]);
+  });
+
   it('ignores an agent that was not a quota burn', async () => {
     state.invokePending = { first: { count: 1 } };
     await __onBurnAgentCompleted({ metadata: { taskType: 'user' } });

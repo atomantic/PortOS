@@ -3,7 +3,7 @@
 Date: 2026-08-22
 
 This is the point-in-time record of the local-model evaluation that drives the
-recommendations in **Models → LLMs**, **Models → Performance**, and **AI
+recommendations in **Models → Runtimes**, **Models → Performance**, and **AI
 Providers**. It is intentionally scoped to model behavior and runtime choices;
 it contains no machine identity, private network names, credentials, or user
 content.

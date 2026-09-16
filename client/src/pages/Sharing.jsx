@@ -90,10 +90,17 @@ function SharingHeader({ active }) {
 export default function Sharing() {
   const { section = 'buckets', bucketId } = useParams();
   if (section === 'duplicates' || section === 'conflicts') {
+    // RouteTabsHeader passes no `controlsIdPrefix`, so the panel names itself
+    // with its own heading rather than an `aria-labelledby` borrowed from a
+    // tab id that doesn't exist (#7420).
+    const activeTabLabel = SECTIONS.find((item) => item.id === section)?.label;
     return (
       <div>
         <SharingHeader active={section} />
-        {section === 'duplicates' ? <DuplicatesTab /> : <ConflictsTab />}
+        <div role="tabpanel" aria-labelledby="sharing-panel-heading">
+          <h2 id="sharing-panel-heading" className="sr-only">{activeTabLabel}</h2>
+          {section === 'duplicates' ? <DuplicatesTab /> : <ConflictsTab />}
+        </div>
       </div>
     );
   }
@@ -287,6 +294,11 @@ function SharingBuckets({ selectedId }) {
   return (
     <div>
       <SharingHeader active="buckets" />
+      {/* RouteTabsHeader passes no `controlsIdPrefix`, so the panel names
+          itself with its own heading rather than an `aria-labelledby`
+          borrowed from a tab id that doesn't exist (#7420). */}
+      <div role="tabpanel" aria-labelledby="sharing-panel-heading">
+      <h2 id="sharing-panel-heading" className="sr-only">Buckets</h2>
       <div className="flex justify-end mb-4">
         <button
           type="button"
@@ -542,6 +554,7 @@ function SharingBuckets({ selectedId }) {
             </div>
           )}
         </section>
+      </div>
       </div>
     </div>
   );

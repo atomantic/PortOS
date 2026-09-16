@@ -22,9 +22,48 @@
  * Everything here is textual normalization plus a small alias table for the
  * cases where the two namespaces genuinely disagree on a name. A provider id
  * that maps to no catalog slug simply contributes nothing to the scope.
+ *
+ * A LOCAL install id is the exception: it is resolved by lookup against the
+ * `benchmarkModel` its `localLlmCatalog.js` entry declares, never by the rules
+ * below, which were written for hosted ids and read a GGUF repo name wrong.
  */
 
 import { isConfiguredDefaultModel } from './providerModels.js';
+import { BACKENDS, LOCAL_LLM_CATALOG, entryIdsForBackend, normalizeBackendModelId } from './localLlmCatalog.js';
+
+/**
+ * Every install id the local-LLM catalog recognizes, mapped to the benchmark
+ * name that entry DECLARES. Local ids get a lookup rather than the textual
+ * normalization below because a local id names a *build* of the weights, and
+ * the difference between a build marker and model identity is not decidable
+ * from the text: stripping `-Reasoning` off Cisco's GGUF lands on a different
+ * Cisco model, and folding `qwen3.8:27b-mlx` onto `qwen3.8-27b` would plot the
+ * hosted API's price and throughput under a 4-bit local build. An entry with no
+ * `benchmarkModel` contributes nothing, which is the honest default.
+ *
+ * Keyed on the catalog's own id normalization, so a tag the user pulled under a
+ * retired alias still resolves.
+ */
+const LOCAL_INSTALL_IDS = new Map(
+  BACKENDS.flatMap(backend => LOCAL_LLM_CATALOG
+    .filter(entry => entry.benchmarkModel)
+    .flatMap(entry => entryIdsForBackend(entry, backend)
+      .map(id => [`${backend}:${normalizeBackendModelId(backend, id)}`, entry.benchmarkModel])))
+);
+
+/** The benchmark name a local install id declares, or '' if none does. */
+function catalogSlugForLocalModel(modelId) {
+  if (typeof modelId !== 'string' || !modelId) return '';
+  for (const backend of BACKENDS) {
+    const declared = LOCAL_INSTALL_IDS.get(`${backend}:${normalizeBackendModelId(backend, modelId)}`);
+    if (declared) return declared;
+  }
+  return '';
+}
+
+/** Benchmark names every catalog entry declares — the local half of seed scope. */
+export const localCatalogBenchmarkModels = () =>
+  new Set(LOCAL_LLM_CATALOG.map(entry => entry.benchmarkModel).filter(Boolean));
 
 // Effort and mode suffixes a harness appends to a model id, plus the
 // local-runtime quantization/packaging suffixes that name the same weights as
@@ -82,6 +121,10 @@ export function catalogSlugForProviderModel(modelId) {
   if (typeof modelId !== 'string' || !modelId) return '';
   let slug = modelId.trim().toLowerCase();
   if (isConfiguredDefaultModel(slug) || NOT_A_MODEL.test(slug)) return '';
+  // A declared local equivalence wins: it is reviewed, and the rules below were
+  // written for hosted ids and mis-strip a GGUF repo name.
+  const declared = catalogSlugForLocalModel(modelId);
+  if (declared) return declared;
 
   slug = slug.replace(/\[[^\]]*\]$/, ''); // context-window marker, e.g. [1m]
   const prefix = PREFIXES.find(candidate => slug.startsWith(candidate));

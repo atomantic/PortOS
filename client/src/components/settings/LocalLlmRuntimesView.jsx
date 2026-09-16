@@ -64,8 +64,8 @@ function summarizeMigrate(r) {
 }
 
 // Install, start, stop and configure the local servers that run language models.
-// Mounted only while the Runtimes pill is selected, so every socket subscription
-// and poll below belongs to a visible surface.
+// Its own Models tab since #7414 (`/models/llms-runtimes`), so every socket
+// subscription and poll below belongs to a page the user is actually looking at.
 export default function LocalLlmRuntimesView() {
   const [llamaStatus, setLlamaStatus] = useState(null);
   const [mtplxStatus, setMtplxStatus] = useState(null);
@@ -646,7 +646,14 @@ export default function LocalLlmRuntimesView() {
   };
 
   return (
-    <section id="llm-management-panel-runtimes" role="tabpanel" aria-labelledby="tab-runtimes" className="space-y-4">
+    <section id="llm-runtimes-panel" role="tabpanel" aria-labelledby="llm-runtimes-heading" className="space-y-4">
+      {/* The panel names itself. It used to borrow `tab-runtimes` from the LLMs
+          pill bar, but #7414 made Runtimes a section tab, and `RouteTabsHeader`
+          passes no `controlsIdPrefix` — so that id stopped existing and the
+          labelledby dangled, leaving the panel unnamed. A heading of its own
+          survives whatever tab bar happens to be above it. Visually hidden
+          because the section header already shows "Models → Runtimes". */}
+      <h2 id="llm-runtimes-heading" className="sr-only">Runtimes</h2>
       {/* One start/stop/install surface for every local server PortOS can run */}
       <RuntimeServersCard
         status={status}

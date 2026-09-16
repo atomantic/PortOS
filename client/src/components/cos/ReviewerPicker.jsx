@@ -18,6 +18,20 @@ import {
 import ProviderModelSelector from '../ProviderModelSelector';
 import { selectableModelsForProvider, effortLevelsForProvider, effectiveModelFor } from '../../utils/providers';
 import { isProviderReviewer, normalizeReviewerSlug } from '../../lib/reviewerPins';
+import { getNavPageForPath } from '../../../../server/lib/navManifest.js';
+// The SAME map the readiness cards link by (`LOCAL_RUNTIMES[*].manageUrl` reads
+// from it), taken from the server leaf rather than mirrored — the mirror is what
+// #7414 had to chase. Imported here because these hints must name the page that
+// actually manages each backend: Ollama and LM Studio are pulled and started
+// from the Model Library, while MTPLX's server and checkpoints are a Runtimes
+// card.
+import { LOCAL_RUNTIME_MANAGE_URLS } from '../../../../server/lib/modelPinMembership.js';
+
+// Resolved once at module load, not per render: the routes are constants, and
+// only the (usually absent) empty-state hint reads the result.
+const LOCAL_BACKEND_MANAGE_PAGES = Object.fromEntries(
+  Object.entries(LOCAL_RUNTIME_MANAGE_URLS).map(([id, path]) => [id, getNavPageForPath(path)?.breadcrumb]),
+);
 
 const normalizeReviewerValue = (value) => normalizeReviewerSlug(value);
 
@@ -543,6 +557,7 @@ export default function ReviewerPicker({
   // doesn't accuse a healthy backend of being empty.
   const renderModelCell = (token) => {
     if (!MODEL_SELECTABLE_REVIEWERS.includes(token) && !isProviderReviewer(token)) return renderNoPinCell(`${labelFor(token)} takes no model`);
+    const backendPage = LOCAL_BACKEND_MANAGE_PAGES[token];
     const subject = labelFor(token);
     const pinnedValue = models.get(token);
     const value = pinnedValue ?? '';
@@ -557,8 +572,8 @@ export default function ReviewerPicker({
     // probe settled — before that, an empty list is "not fetched yet", not a fact.
     const emptyHint = (options.length === 0 && modelOptions?.loaded)
       ? (modelOptions?.unavailable?.[token]
-          ? `${subject} isn't reachable — start it from Models → LLMs to list its models. You can still type an id.`
-          : `No ${subject} models listed — add one in Models → LLMs, or type an id.`)
+          ? `${subject} isn't reachable${backendPage ? ` — start it from ${backendPage}` : ''} to list its models. You can still type an id.`
+          : `No ${subject} models listed${backendPage ? ` — add one in ${backendPage}` : ''}, or type an id.`)
       : null;
     // A closed select over nothing would be a dead control, so a reviewer with no
     // resolved options falls back to free text whichever kind it is: better a

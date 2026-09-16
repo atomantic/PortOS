@@ -317,6 +317,13 @@ const RAW_NAV_COMMANDS = [
   { id: 'nav.settings.embeddings', path: '/models/embeddings', label: 'Embeddings', section: 'Models', tabId: 'embeddings', previousPaths: ['/settings/embeddings'], aliases: ['settings-embeddings', 'embeddings', 'embedding'], keywords: ['vector', 'pgvector', 'semantic search', 'nomic', 'ollama', 'lm studio'] },
   { id: 'nav.settings.local-llm', path: '/models/llms', label: 'LLMs', section: 'Models', tabId: 'llms', previousPaths: ['/settings/local-llm'], aliases: ['local-llm', 'local-llms', 'llms', 'models-llms', 'ollama', 'lm-studio', 'lmstudio'], keywords: ['ollama', 'lm studio', 'local model', 'local llm', 'gguf', 'pull model', 'install model', 'migrate', 'switch backend', 'llama.cpp'] },
   { id: 'nav.models.llms.abuse', path: '/models/llms/abuse', label: 'Abuse Guard', section: 'Models', aliases: ['abuse-guard', 'model-abuse', 'model-abuse-guard', 'prompt-guard', 'prompt guard'], keywords: ['classifier', 'prompt injection', 'security scan', 'llama prompt guard', 'install guard'] },
+  // Split out of the LLMs page (#7414): managing the SERVERS that run models is
+  // a different job from browsing the weights they serve, and it was the LLMs
+  // default view, not a drill-down — so it gets a sibling tab rather than a
+  // pill. Declared AFTER `nav.settings.local-llm` on purpose: alias collisions
+  // resolve first-declared-wins, so "ollama"/"llms" keep landing on the
+  // catalog page even though this page starts those servers too.
+  { id: 'nav.models.llms-runtimes', path: '/models/llms-runtimes', label: 'Runtimes', section: 'Models', tabId: 'llms-runtimes', previousPaths: ['/models/llms/runtimes'], aliases: ['runtimes', 'llm-runtimes', 'local-runtimes', 'model-runtimes', 'llama-server', 'llama-cpp', 'slotstream', 'mtplx'], keywords: ['llama.cpp', 'llama-server', 'mtplx', 'slotstream', 'start server', 'stop server', 'local server', 'model server', 'speculative decoding', 'draft model', 'checkpoint', 'idle release'] },
   { id: 'nav.media.loras', path: '/models/loras', label: 'LoRAs', section: 'Models', tabId: 'loras', previousPaths: ['/media/loras'], aliases: ['loras', 'lora', 'lora-manager', 'civitai'], keywords: ['lora', 'civitai', 'fine-tune', 'style adapter', 'realstagram', 'photoreal', 'flux lora'] },
   { id: 'nav.media.training', path: '/models/training', label: 'Training', section: 'Models', tabId: 'training', previousPaths: ['/media/training', '/media/training/:datasetId'], aliases: ['training', 'lora-training', 'train-lora', 'datasets', 'character-lora'], keywords: ['fine-tune', 'dataset', 'caption', 'dreambooth', 'character consistency', 'train', 'flux lora'] },
   { id: 'nav.media.models', path: '/models/media', label: 'Media', section: 'Models', tabId: 'media', previousPaths: ['/media/models', '/media-models'], aliases: ['media-models', 'image-models', 'video-models', 'huggingface'], keywords: ['hf cache', 'model storage', 'disk', 'add model', 'install model', 'custom model'] },
@@ -325,7 +332,7 @@ const RAW_NAV_COMMANDS = [
   // keywords live here — 'model resources' and 'downloaded models' must keep
   // resolving after the fold.
   { id: 'nav.models.status', path: '/models/status', label: 'Status', section: 'Models', tabId: 'status', previousPaths: ['/system-resources/models'], aliases: ['model-status', 'models-status', 'memory-management', 'resident-models', 'model-resources', 'loaded-models', 'downloaded-models', 'model-memory'], keywords: ['memory', 'resident', 'loaded', 'unload', 'ram', 'vram', 'free memory', 'what is loaded', 'ollama', 'lm studio', 'hugging face', 'lora', 'delete model', 'disk'] },
-  { id: 'nav.models.subscriptions', path: '/models/subscriptions', label: 'Subscriptions', section: 'Models', tabId: 'subscriptions', aliases: ['subscriptions', 'subscription', 'plans', 'ai-subscriptions', 'my-plans'], keywords: ['plan', 'price', 'spend', 'cost', 'billing', 'enable', 'disable', 'claude max', 'chatgpt plus', 'pro', 'tier', 'savings', 'quota'] },
+  { id: 'nav.models.subscriptions', path: '/models/subscriptions', label: 'Subscriptions', section: 'Models', tabId: 'subscriptions', aliases: ['subscriptions', 'subscription', 'plans', 'ai-subscriptions', 'my-plans', 'model-subscriptions', 'billing', 'ai-billing'], keywords: ['plan', 'price', 'spend', 'cost', 'billing', 'enable', 'disable', 'claude max', 'chatgpt plus', 'pro', 'tier', 'savings', 'quota', 'usage', 'quotas'] },
   { id: 'nav.settings.local-llm-playground', path: '/local-llm/playground', label: 'Playground', section: 'Models', tabId: 'playground', aliases: ['llm-playground', 'playground', 'model-playground', 'compare-models'], keywords: ['ollama', 'lm studio', 'compare', 'benchmark', 'chat', 'test model', 'ttft', 'tokens per second', 'local llm'] },
   { id: 'nav.settings.mortalloom', path: '/settings/mortalloom', label: 'MortalLoom', section: 'Settings', tabId: 'mortalloom', feature: 'health', aliases: ['settings-mortalloom', 'mortalloom'] },
   { id: 'nav.settings.openclaw', path: '/openclaw', label: 'OpenClaw', section: 'Settings', tabId: 'openclaw', feature: 'openclaw', aliases: ['openclaw', 'settings-openclaw'], keywords: ['operator', 'chat', 'agent', 'runtime', 'sessions', 'streaming'] },
@@ -421,18 +428,65 @@ const pathContainsNavRoute = (pathname, routePath) => (
   pathname === routePath || pathname.startsWith(`${routePath}/`)
 );
 
-// Find the section whose tab owns a routed page. Longest-match keeps nested
-// views (for example `/models/llms/abuse`) on their parent tab, and intentionally
-// ignores workflow commands such as `/ai/fleet` that do not carry a `tabId`.
-export const getNavSectionForPath = (pathname) => {
+// Every command with its path pre-normalized, longest path first — so a route
+// lookup is one `.find()` down a fixed list instead of a normalize-filter-sort
+// of the whole manifest per call. `NAV_COMMANDS` is frozen at module load and
+// never mutated, so this cannot go stale.
+//
+// Longest-first IS the match rule: it keeps a drill-down (`/models/llms/abuse`)
+// on itself rather than on the parent whose prefix it also shares.
+const NAV_COMMANDS_BY_SPECIFICITY = NAV_COMMANDS
+  .map((command) => ({ command, routePath: normalizedNavPath(command.path) }))
+  .sort((a, b) => b.routePath.length - a.routePath.length);
+
+// The most specific command that OWNS a routed path, or `undefined`. `predicate`
+// narrows the candidate set; both exports below are this walk plus a projection,
+// so the ranking rule lives in exactly one place.
+const navCommandForPath = (pathname, predicate) => {
   const normalizedPath = normalizedNavPath(pathname);
-  return NAV_COMMANDS
-    .filter((command) => command.tabId && !command.tabGroup && pathContainsNavRoute(
-      normalizedPath,
-      normalizedNavPath(command.path),
-    ))
-    .sort((a, b) => normalizedNavPath(b.path).length - normalizedNavPath(a.path).length)[0]?.section || null;
+  return NAV_COMMANDS_BY_SPECIFICITY
+    .find(({ command, routePath }) => predicate(command) && pathContainsNavRoute(normalizedPath, routePath))
+    ?.command;
 };
+
+// Find the section whose tab owns a routed page, intentionally ignoring workflow
+// commands such as `/ai/fleet` that do not carry a `tabId`.
+export const getNavSectionForPath = (pathname) => (
+  navCommandForPath(pathname, (command) => command.tabId && !command.tabGroup)?.section || null
+);
+
+// The page a route belongs to, as a user reads it in the UI: `label` is the tab
+// name ("Runtimes"), `breadcrumb` is how the sidebar path to it is spoken and
+// written ("Models → Runtimes").
+//
+// Readiness copy derives its wording from here rather than hardcoding a
+// breadcrumb beside each link, because the two drifted apart the moment a page
+// moved: every local runtime's "start it from Models → LLMs" hint kept naming
+// the LLMs page after its runtime controls became a sibling tab (#7414). A hint
+// that links to `manageUrl` now NAMES whatever page that route resolves to, so
+// the next move re-words all of them.
+//
+// Unlike the section lookup this considers drill-downs too, so a nested view
+// reports its own page. Returns `null` for a blank path or one no command
+// declares — callers drop the clause rather than inventing a page name.
+export const getNavPageForPath = (pathname) => {
+  if (normalizedNavPath(pathname) === '/') return null;
+  const command = navCommandForPath(pathname, () => true);
+  if (!command) return null;
+  return { label: command.label, section: command.section, breadcrumb: `${command.section} → ${command.label}` };
+};
+
+// Expand the `{page}` token user-facing copy writes instead of a breadcrumb,
+// resolved from `runtime.manageUrl` (or any object carrying that field) via
+// `getNavPageForPath` above — same reason as that lookup: the sentence and the
+// link it describes must name one page, decided by the route, not typed twice.
+// A `manageUrl` with no page (or `null`, for a runtime PortOS has no page for)
+// falls back to generic prose rather than shipping a literal `{page}`.
+export const expandPageToken = (text, runtime) => (
+  typeof text === 'string' && text.includes('{page}')
+    ? text.replaceAll('{page}', getNavPageForPath(runtime?.manageUrl)?.breadcrumb || 'its management page')
+    : text
+);
 
 // Every feature id this manifest gates on, for the registry-drift guard.
 export const NAV_FEATURE_IDS = [...new Set(NAV_COMMANDS.map((c) => c.feature).filter(Boolean))].sort();

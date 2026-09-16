@@ -10,6 +10,7 @@ import * as api from '../services/api';
 import { isRiggedAvatarStyle, riggedRecordForStyle, useAvatarCapabilities } from '../hooks/useAvatarCapabilities';
 import { coalesce } from '../utils/coalesce';
 import { sameJsonShape } from '../lib/sameJsonShape';
+import { isAgentHandoff } from '../lib/agentOutcome';
 import { WEBGL_AVATAR_STYLE_IDS } from '../lib/avatarStyles';
 import { Play, Pause, Square, Clock, CheckCircle, AlertCircle, Cpu, ChevronDown, ChevronUp, Brain, PanelLeftClose, PanelLeftOpen } from 'lucide-react';
 import toast from '../components/ui/Toast';
@@ -451,8 +452,14 @@ export default function ChiefOfStaff() {
 
     const handleAgentCompleted = (data) => {
       setAgentState('reviewing');
-      const success = data?.result?.success;
-      setStatusMessage(success ? "Task completed successfully" : "Task failed - checking errors...");
+      // Three outcomes, not two: a run retired by Resume/Relaunch never reached a
+      // verdict, so announcing "Task failed" for it tells the user their own
+      // provider swap broke something.
+      setStatusMessage(
+        isAgentHandoff(data) ? "Handed the task to a new run"
+          : data?.result?.success ? "Task completed successfully"
+            : "Task failed - checking errors..."
+      );
       setSpeaking(true);
       setTimeout(() => setSpeaking(false), SPEAKING_MS);
       // Clear active agent metadata so avatar reverts to default

@@ -39,6 +39,7 @@ import { completeAgentRun } from './agentRunTracking.js';
 import { appendRunEvent } from './agentRunEventLog.js';
 import { committedDuringRun, toEpochMs } from '../lib/gitCommitProbe.js';
 import { dispatchRecoveredTaskOutputHook } from './agentFinalization.js';
+import { removeCompletionSentinel } from './agentCompletionCleanup.js';
 import { fileInvestigationTask } from './investigationTaskProducer.js';
 import { buildInvestigationFingerprint } from '../lib/investigationTasks.js';
 import { PATHS, tryReadFile } from '../lib/fileUtils.js';
@@ -1285,6 +1286,12 @@ async function runCleanupOrphanedAgents() {
         success: false,
         workspacePath: agent.metadata?.workspacePath || null,
       });
+      // Same reason as the post-restart recovery in agentLifecycle.js: this
+      // sweep retires the run without reaching completion cleanup, and the hook
+      // above was the last sentinel read. A hard kill (`pm2 restart`, reboot)
+      // lands here, so this is the path that leaves dirt in a managed app repo.
+      await removeCompletionSentinel({ agentId: agent.id, agentState: agent })
+        .catch(err => emitLog('warn', `Completion sentinel removal failed for ${agent.id}: ${err.message}`, { agentId: agent.id }));
       if (agent.metadata?.runId) {
         const bufferedOutput = Array.isArray(agent.output)
           ? agent.output.map((entry) => typeof entry === 'string' ? entry : entry?.line).filter(Boolean).join('\n')
