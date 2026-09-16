@@ -647,6 +647,24 @@ describe('tuiHandshake.applyCommandDefaults', () => {
     // A user-pinned short posture is respected.
     expect(applyCommandDefaults('kimi', ['-y'])).toEqual(['-y']);
   });
+
+  // #7405: the seeded OpenCode TUI records ship `args: []`, so a bare
+  // `opencode` opened in whatever agent that install defaults to. A
+  // task-completion run came up as a read-only specialist and refused to write
+  // its own completion sentinel, stalling an unattended run on a question.
+  it('pins the tool-enabled OpenCode agent on an interactive session', () => {
+    expect(applyCommandDefaults('opencode', [])).toEqual(['--agent', 'build']);
+  });
+
+  it('respects an OpenCode agent the operator already pinned, in either flag form', () => {
+    expect(applyCommandDefaults('opencode', ['--agent', 'plan'])).toEqual(['--agent', 'plan']);
+    expect(applyCommandDefaults('opencode', ['--agent=plan'])).toEqual(['--agent=plan']);
+  });
+
+  it('pins the OpenCode agent for a path-configured binary too', () => {
+    expect(applyCommandDefaults('/opt/homebrew/bin/opencode', ['-m', 'mtplx/example-model']))
+      .toEqual(['-m', 'mtplx/example-model', '--agent', 'build']);
+  });
 });
 
 describe('tuiHandshake.buildTuiInvocation', () => {
@@ -813,7 +831,8 @@ describe('tuiHandshake.buildTuiInvocation', () => {
     const provider = { id: 'opencode-ollama-tui', command: 'opencode', args: [], ollamaBacked: true };
     const out = buildTuiInvocation(provider, 'qwen2.5:7b');
     expect(out.command).toBe('opencode');
-    expect(out.args).toEqual(['--model', 'ollama/qwen2.5:7b']);
+    // `--agent build` is the TUI arm's role pin (#7405) — see applyCommandDefaults.
+    expect(out.args).toEqual(['--agent', 'build', '--model', 'ollama/qwen2.5:7b']);
   });
 
   it('handles a provider with no args (treats as empty array)', () => {
@@ -887,7 +906,7 @@ describe('tuiHandshake.buildTuiInvocation', () => {
       { id: 'opencode-tui', command: 'opencode', args: [], effort: 'high' },
       'qwen3',
     );
-    expect(out.args).toEqual(['--model', 'qwen3']);
+    expect(out.args).toEqual(['--agent', 'build', '--model', 'qwen3']);
   });
 
   // agy serves its `claude-*` ids through Google's own gateway, so a Bedrock box
@@ -1522,8 +1541,11 @@ describe('tuiHandshake — parity with the shipped provider catalog', () => {
     // claude's `--dangerously-skip-permissions` rides in the seed `args`.
     ['claude', { channel: 'args', marker: '--dangerously-skip-permissions' }],
     // opencode has no argv approval/trust gate; its permission posture is
-    // configured through OPENCODE_CONFIG_CONTENT (see cliChildEnv.js).
-    ['opencode', { channel: 'envVars', marker: '"permission":"allow"' }],
+    // configured through OPENCODE_CONFIG_CONTENT (see cliChildEnv.js). Its
+    // builder arm injects a ROLE rather than a posture — `--agent build` pins
+    // the tool-enabled agent so a bare session cannot open as OpenCode's
+    // read-only one and refuse to write its own completion sentinel (#7405).
+    ['opencode', { channel: 'envVars', marker: '"permission":"allow"', builderInjects: ['--agent', 'build'] }],
   ]);
 
   it('parses the shipped catalog (guards against a silently empty walk)', () => {
@@ -1558,8 +1580,12 @@ describe('tuiHandshake — parity with the shipped provider catalog', () => {
     const exemption = POSTURE_NOT_FROM_BUILDER.get(command);
 
     if (exemption) {
-      it('injects nothing (its posture comes from another channel)', () => {
-        expect(applyCommandDefaults(command, [])).toEqual([]);
+      // An exempt vendor's POSTURE comes from another channel, but its arm may
+      // still inject something else (opencode's agent-role pin). Whatever that
+      // is must be declared here, so the assertion stays exact and a new,
+      // undeclared injection still fails.
+      it('injects only what its exemption declares (its posture comes from another channel)', () => {
+        expect(applyCommandDefaults(command, [])).toEqual(exemption.builderInjects || []);
       });
 
       if (exemption.channel) {

@@ -1174,6 +1174,18 @@ export async function spawnTuiAgent({
 
     const { finalSuccess, finalError, terminatedByUser } = finalizeOutcome;
 
+    // Name the path the run was supposed to write when it ends without one.
+    // The sentinel is the PRIMARY finalize path, so reaching here without it
+    // means the run either died or talked itself out of the write — and the
+    // second shape is silent today: a model that decided its session was not
+    // allowed to write the file (#7405) leaves an ordinary "TUI agent ended"
+    // line and nothing an operator can grep for. Placed after the shared
+    // finalize, so the paused / host-abandoned / user-terminated paths (which
+    // legitimately produce no sentinel) have already returned or are excluded.
+    if (doneSentinelPath && !terminatedByUser && !sentinelPresent()) {
+      emitLog('warn', `⚠️ ${agentId} finalized (${reason}) with no completion sentinel — expected ${doneSentinelPath}`, { agentId });
+    }
+
     // output.txt has already been incrementally appended via the spooler;
     // do NOT writeFile() it from the output buffer at finalize — the buffer is
     // capped at OUTPUT_BUFFER_CAP and would silently truncate the on-disk
