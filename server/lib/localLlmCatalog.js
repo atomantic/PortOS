@@ -46,7 +46,7 @@ export const LOCAL_LLM_CATEGORIES = [
 // Each entry: { key, name, category, recommendedFor?, featured?, params, size,
 //               family, description, note?, repository?, gated?, capabilities, context?, format?,
 //               appleSiliconOnly?, ollama?, lmstudio?, ollamaImport?, ollamaAliases?,
-//               lmstudioAliases? }
+//               lmstudioAliases?, benchmarkModel? }
 //
 // `category` is the one primary lane that groups a model in the unfiltered
 // picker. `recommendedFor` is its intentionally broader set of use-case lanes:
@@ -61,6 +61,16 @@ export const LOCAL_LLM_CATEGORIES = [
 // backend (the user can still free-text install one).
 // `ollamaAliases` / `lmstudioAliases` preserve recognized ids retired by an
 // upstream publisher without making them available as fresh install targets.
+// `benchmarkModel` is this entry's name in the public benchmark index behind
+// Models > Comparison, and it is the ONLY thing that puts a locally installed
+// model on that chart. Set it only where the evaluated configuration has been
+// checked against the entry — never because the names look alike. The textual
+// normalization in `comparisonModelScope.js` deliberately cannot derive it:
+// `ornith:35b` and `Ornith-1.0-35B-GGUF` are one model with two spellings PortOS
+// owns, and guessing from the id alone folds `Foundation-Sec-8B-Reasoning` onto
+// the different `foundation-sec-8b` and a 4-bit local build onto the hosted
+// API's price and throughput rows. Omit it when no equivalence is established;
+// the model simply carries no benchmark evidence, which is the honest state.
 // `context` is the model's native context window in tokens — set it only when
 // it's a documented spec for that build (the install-card badge shows it; live
 // Hugging Face results read the true value from GGUF metadata instead).
@@ -643,6 +653,7 @@ export const LOCAL_LLM_CATALOG = [
   // ── Coding / agentic tier ──
   {
     key: 'qwen3-coder-30b',
+    benchmarkModel: 'qwen3-coder-30b-a3b',
     name: 'Qwen3-Coder 30B',
     category: 'coding',
     recommendedFor: ['coding', 'general'],
@@ -704,6 +715,7 @@ export const LOCAL_LLM_CATALOG = [
   },
   {
     key: 'ornith-9b',
+    benchmarkModel: 'ornith-1.0-9b',
     name: 'Ornith 1.0 9B',
     category: 'coding',
     recommendedFor: ['coding'],
@@ -718,6 +730,7 @@ export const LOCAL_LLM_CATALOG = [
   },
   {
     key: 'devstral-small-2-24b',
+    benchmarkModel: 'devstral-small-2-24b',
     name: 'Devstral Small 2 24B',
     category: 'coding',
     recommendedFor: ['coding', 'vision'],
@@ -731,6 +744,7 @@ export const LOCAL_LLM_CATALOG = [
   },
   {
     key: 'north-mini-code-1.0',
+    benchmarkModel: 'north-mini-code-1.0',
     name: 'North Mini Code 1.0 30B-A3B',
     category: 'coding',
     recommendedFor: ['coding', 'reasoning'],
@@ -744,6 +758,7 @@ export const LOCAL_LLM_CATALOG = [
   },
   {
     key: 'ornith-35b',
+    benchmarkModel: 'ornith-1.0-35b',
     name: 'Ornith 1.0 35B',
     category: 'coding',
     recommendedFor: ['coding'],
@@ -758,6 +773,7 @@ export const LOCAL_LLM_CATALOG = [
   },
   {
     key: 'qwen3.6-35b-a3b',
+    benchmarkModel: 'qwen3.6-35b-a3b',
     name: 'Qwen3.6 35B-A3B',
     category: 'coding',
     recommendedFor: ['coding', 'vision'],
@@ -1016,10 +1032,25 @@ const normalizeLmStudioId = (id) => String(id || '')
   .toLowerCase()
   .replace(/[-.]gguf$/i, '');
 
-const normalizeFor = (backend, id) =>
+/**
+ * Reduce an install id to the stem this backend compares by. Exported because
+ * matching "is this pulled model that catalog entry?" must use the SAME
+ * normalization the catalog itself does; a second, looser copy is how a 7b
+ * build gets mistaken for a 20b entry.
+ */
+export const normalizeBackendModelId = (backend, id) =>
   backend === 'ollama' ? normalizeOllamaId(id) : normalizeLmStudioId(id);
 
-const entryIdsForBackend = (entry, backend) => [
+const normalizeFor = normalizeBackendModelId;
+
+/**
+ * Every install id one catalog entry is recognized by on `backend` — the
+ * current one plus the aliases a publisher retired. Callers that need to know
+ * "which ids name this model" (scope mapping, installed-state matching) must
+ * use this rather than reading `entry[backend]`, or an install that pulled the
+ * model under its old id goes unrecognized.
+ */
+export const entryIdsForBackend = (entry, backend) => [
   entry[backend],
   ...(Array.isArray(entry[`${backend}Aliases`]) ? entry[`${backend}Aliases`] : [])
 ].filter(Boolean);

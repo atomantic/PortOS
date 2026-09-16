@@ -12366,6 +12366,256 @@
       },
       "quota": null,
       "notes": "Sourced from Artificial Analysis (Grok 3 mini Reasoning (high))."
+    },
+    {
+      "id": "swe-bench-2026-09-16-qwen3-coder-30b-a3b-verified",
+      "provider": "Alibaba",
+      "model": "qwen3-coder-30b-a3b",
+      "effort": "unspecified",
+      "configuration": "Qwen-reported; OpenHands scaffold, 100 turns",
+      "billing": "unknown",
+      "benchmark": "SWE-bench Verified (pass@1, OpenHands)",
+      "quality": {
+        "value": 51.6,
+        "source": {
+          "url": "https://huggingface.co/Qwen/Qwen3-Coder-30B-A3B-Instruct/discussions/30",
+          "retrievedAt": "2026-09-16T00:00:00Z",
+          "methodology": "Resolved-instance percentage on SWE-bench Verified, single attempt (pass@1), OpenHands scaffold."
+        }
+      },
+      "costPerTask": null,
+      "inputPerMillion": null,
+      "outputPerMillion": null,
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "Publisher-reported agentic-coding evaluation of the released weights, not a measurement of the quantized GGUF build PortOS installs or of this machine. Scores are only comparable to another row whose scaffold, turn budget and sampling settings match — read the configuration field before ranking two models against each other. Qwen publishes the number without the OpenHands commit, serving config or tool-call parser, so it is not independently reproducible; the linked thread is an open request for those details."
+    },
+    {
+      "id": "swe-bench-2026-09-16-ornith-1.0-35b-verified",
+      "provider": "Ornith AI",
+      "model": "ornith-1.0-35b",
+      "effort": "unspecified",
+      "configuration": "Ornith-reported; OpenHands harness, temp=1.0, top_p=0.95",
+      "billing": "unknown",
+      "benchmark": "SWE-bench Verified (pass@1, OpenHands)",
+      "quality": {
+        "value": 75.6,
+        "source": {
+          "url": "https://huggingface.co/ornith-ai/Ornith-1.0-35B",
+          "retrievedAt": "2026-09-16T00:00:00Z",
+          "methodology": "Resolved-instance percentage on SWE-bench Verified, single attempt (pass@1), OpenHands scaffold."
+        }
+      },
+      "costPerTask": null,
+      "inputPerMillion": null,
+      "outputPerMillion": null,
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "Publisher-reported agentic-coding evaluation of the released weights, not a measurement of the quantized GGUF build PortOS installs or of this machine. Scores are only comparable to another row whose scaffold, turn budget and sampling settings match — read the configuration field before ranking two models against each other."
+    },
+    {
+      "id": "swe-bench-2026-09-16-ornith-1.0-9b-verified",
+      "provider": "Ornith AI",
+      "model": "ornith-1.0-9b",
+      "effort": "unspecified",
+      "configuration": "Ornith-reported; OpenHands harness, temp=1.0, top_p=0.95",
+      "billing": "unknown",
+      "benchmark": "SWE-bench Verified (pass@1, OpenHands)",
+      "quality": {
+        "value": 69.4,
+        "source": {
+          "url": "https://ornith.ai/ornith_1_0.html",
+          "retrievedAt": "2026-09-16T00:00:00Z",
+          "methodology": "Resolved-instance percentage on SWE-bench Verified, single attempt (pass@1), OpenHands scaffold."
+        }
+      },
+      "costPerTask": null,
+      "inputPerMillion": null,
+      "outputPerMillion": null,
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "Publisher-reported agentic-coding evaluation of the released weights, not a measurement of the quantized GGUF build PortOS installs or of this machine. Scores are only comparable to another row whose scaffold, turn budget and sampling settings match — read the configuration field before ranking two models against each other."
+    },
+    {
+      "id": "swe-bench-2026-09-16-qwen3.6-35b-a3b-verified",
+      "provider": "Alibaba",
+      "model": "qwen3.6-35b-a3b",
+      "effort": "unspecified",
+      "configuration": "Qwen-reported; internal agent scaffold (bash + file-edit tools), temp=1.0, top_p=0.95, 200K context",
+      "billing": "unknown",
+      "benchmark": "SWE-bench Verified (pass@1, Qwen internal scaffold)",
+      "quality": {
+        "value": 73.4,
+        "source": {
+          "url": "https://huggingface.co/Qwen/Qwen3.6-35B-A3B",
+          "retrievedAt": "2026-09-16T00:00:00Z",
+          "methodology": "Resolved-instance percentage on SWE-bench Verified, single attempt (pass@1), Qwen internal scaffold scaffold."
+        }
+      },
+      "costPerTask": null,
+      "inputPerMillion": null,
+      "outputPerMillion": null,
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "Publisher-reported agentic-coding evaluation of the released weights, not a measurement of the quantized GGUF build PortOS installs or of this machine. Scores are only comparable to another row whose scaffold, turn budget and sampling settings match — read the configuration field before ranking two models against each other."
+    },
+    {
+      "id": "swe-bench-2026-09-16-devstral-small-2-24b-verified",
+      "provider": "Mistral",
+      "model": "devstral-small-2-24b",
+      "effort": "unspecified",
+      "configuration": "Mistral-reported; tasks scaffolded through Cline",
+      "billing": "unknown",
+      "benchmark": "SWE-bench Verified (pass@1, Cline)",
+      "quality": {
+        "value": 68,
+        "source": {
+          "url": "https://mistral.ai/news/devstral-2-vibe-cli/",
+          "retrievedAt": "2026-09-16T00:00:00Z",
+          "methodology": "Resolved-instance percentage on SWE-bench Verified, single attempt (pass@1), Cline scaffold."
+        }
+      },
+      "costPerTask": null,
+      "inputPerMillion": null,
+      "outputPerMillion": null,
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "Publisher-reported agentic-coding evaluation of the released weights, not a measurement of the quantized GGUF build PortOS installs or of this machine. Scores are only comparable to another row whose scaffold, turn budget and sampling settings match — read the configuration field before ranking two models against each other."
+    },
+    {
+      "id": "swe-bench-2026-09-16-north-mini-code-1.0-verified",
+      "provider": "Cohere",
+      "model": "north-mini-code-1.0",
+      "effort": "unspecified",
+      "configuration": "Cohere release table (mixed provenance); SWE-Agent harness v1.1.0",
+      "billing": "unknown",
+      "benchmark": "SWE-bench Verified (pass@1, SWE-Agent v1.1.0)",
+      "quality": {
+        "value": 67.6,
+        "source": {
+          "url": "https://sebastianraschka.com/blog/2026/north-mini-code-agentic-coding.html",
+          "retrievedAt": "2026-09-16T00:00:00Z",
+          "methodology": "Resolved-instance percentage on SWE-bench Verified, single attempt (pass@1), SWE-Agent v1.1.0 scaffold."
+        }
+      },
+      "costPerTask": null,
+      "inputPerMillion": null,
+      "outputPerMillion": null,
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "Publisher-reported agentic-coding evaluation of the released weights, not a measurement of the quantized GGUF build PortOS installs or of this machine. Scores are only comparable to another row whose scaffold, turn budget and sampling settings match — read the configuration field before ranking two models against each other. Cohere's release table mixes its own runs with public reports and Artificial Analysis values and is not one uniform evaluation; Cohere separately headlines 80.2 pass@10 on an SFT checkpoint, which is a different measurement."
+    },
+    {
+      "id": "swe-bench-2026-09-16-ornith-1.0-35b-pro",
+      "provider": "Ornith AI",
+      "model": "ornith-1.0-35b",
+      "effort": "unspecified",
+      "configuration": "Ornith-reported; OpenHands harness, temp=1.0, top_p=0.95",
+      "billing": "unknown",
+      "benchmark": "SWE-bench Pro (pass@1, OpenHands)",
+      "quality": {
+        "value": 50.4,
+        "source": {
+          "url": "https://huggingface.co/ornith-ai/Ornith-1.0-35B",
+          "retrievedAt": "2026-09-16T00:00:00Z",
+          "methodology": "Resolved-instance percentage on SWE-bench Pro, single attempt (pass@1), OpenHands scaffold."
+        }
+      },
+      "costPerTask": null,
+      "inputPerMillion": null,
+      "outputPerMillion": null,
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "Publisher-reported agentic-coding evaluation of the released weights, not a measurement of the quantized GGUF build PortOS installs or of this machine. Scores are only comparable to another row whose scaffold, turn budget and sampling settings match — read the configuration field before ranking two models against each other."
+    },
+    {
+      "id": "swe-bench-2026-09-16-ornith-1.0-9b-pro",
+      "provider": "Ornith AI",
+      "model": "ornith-1.0-9b",
+      "effort": "unspecified",
+      "configuration": "Ornith-reported; OpenHands harness, temp=1.0, top_p=0.95",
+      "billing": "unknown",
+      "benchmark": "SWE-bench Pro (pass@1, OpenHands)",
+      "quality": {
+        "value": 42.9,
+        "source": {
+          "url": "https://ornith.ai/ornith_1_0.html",
+          "retrievedAt": "2026-09-16T00:00:00Z",
+          "methodology": "Resolved-instance percentage on SWE-bench Pro, single attempt (pass@1), OpenHands scaffold."
+        }
+      },
+      "costPerTask": null,
+      "inputPerMillion": null,
+      "outputPerMillion": null,
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "Publisher-reported agentic-coding evaluation of the released weights, not a measurement of the quantized GGUF build PortOS installs or of this machine. Scores are only comparable to another row whose scaffold, turn budget and sampling settings match — read the configuration field before ranking two models against each other."
+    },
+    {
+      "id": "swe-bench-2026-09-16-qwen3.6-35b-a3b-pro",
+      "provider": "Alibaba",
+      "model": "qwen3.6-35b-a3b",
+      "effort": "unspecified",
+      "configuration": "Qwen-reported; internal agent scaffold (bash + file-edit tools), temp=1.0, top_p=0.95, 200K context; corrected tasks in the public set",
+      "billing": "unknown",
+      "benchmark": "SWE-bench Pro (pass@1, Qwen internal scaffold)",
+      "quality": {
+        "value": 49.5,
+        "source": {
+          "url": "https://huggingface.co/Qwen/Qwen3.6-35B-A3B",
+          "retrievedAt": "2026-09-16T00:00:00Z",
+          "methodology": "Resolved-instance percentage on SWE-bench Pro, single attempt (pass@1), Qwen internal scaffold scaffold."
+        }
+      },
+      "costPerTask": null,
+      "inputPerMillion": null,
+      "outputPerMillion": null,
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "Publisher-reported agentic-coding evaluation of the released weights, not a measurement of the quantized GGUF build PortOS installs or of this machine. Scores are only comparable to another row whose scaffold, turn budget and sampling settings match — read the configuration field before ranking two models against each other."
+    },
+    {
+      "id": "swe-bench-2026-09-16-north-mini-code-1.0-pro",
+      "provider": "Cohere",
+      "model": "north-mini-code-1.0",
+      "effort": "unspecified",
+      "configuration": "Cohere release table (mixed provenance); SWE-Agent harness v1.1.0",
+      "billing": "unknown",
+      "benchmark": "SWE-bench Pro (pass@1, SWE-Agent v1.1.0)",
+      "quality": {
+        "value": 40.2,
+        "source": {
+          "url": "https://sebastianraschka.com/blog/2026/north-mini-code-agentic-coding.html",
+          "retrievedAt": "2026-09-16T00:00:00Z",
+          "methodology": "Resolved-instance percentage on SWE-bench Pro, single attempt (pass@1), SWE-Agent v1.1.0 scaffold."
+        }
+      },
+      "costPerTask": null,
+      "inputPerMillion": null,
+      "outputPerMillion": null,
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "Publisher-reported agentic-coding evaluation of the released weights, not a measurement of the quantized GGUF build PortOS installs or of this machine. Scores are only comparable to another row whose scaffold, turn budget and sampling settings match — read the configuration field before ranking two models against each other. Cohere's release table mixes its own runs with public reports and Artificial Analysis values and is not one uniform evaluation; Cohere separately headlines 80.2 pass@10 on an SFT checkpoint, which is a different measurement."
     }
   ]
 }
