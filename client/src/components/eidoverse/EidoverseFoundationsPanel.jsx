@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useId, useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router';
-import { Globe2, Home, ShieldCheck } from 'lucide-react';
+import { GitFork, Globe2, Home, ShieldCheck } from 'lucide-react';
 import {
   getEidoverseContributions,
   listEidoverseFoundations,
@@ -8,6 +8,7 @@ import {
   promoteEidoverseFoundation,
   recordEidoverseFoundation,
 } from '../../services/api';
+import { formatDateShort, timeAgo } from '../../utils/formatters';
 
 /**
  * The promote surface for Eidoverse world foundations (#7455).
@@ -87,6 +88,19 @@ const draftFromFoundation = (foundation) => ({
   notes: foundation.disclosure?.notes || '',
 });
 
+/**
+ * A list-rendering key that stays unique even when a local vernacular
+ * foundation and an inherited copy share the same human-readable `id` — the
+ * ledger stores them under disjoint keys precisely so that can happen (#7461).
+ * `openId` (the `?foundation=` URL param) stays plain-id on purpose: it is
+ * documented, deliberate scope that a deep link cannot yet disambiguate the
+ * two, matching the "run assay"/"promote" actions, which are never offered
+ * for an inherited entry in the first place.
+ */
+const foundationRowKey = (foundation) => (foundation.inheritance
+  ? `${foundation.inheritance.originInstanceId}:${foundation.id}`
+  : foundation.id);
+
 function LayerBadge({ layer }) {
   const meta = LAYERS[layer];
   if (!meta) return <span className="rounded-full border border-port-border px-2 py-0.5 text-xs text-gray-400">{layer || 'unknown layer'}</span>;
@@ -121,6 +135,46 @@ function Verdict({ verdict }) {
         </ul>
       )}
     </div>
+  );
+}
+
+/** A short, non-collapsible label for who's opaque instance/author identity a
+ * lineage event carries — never a display name (#7461: provenance is
+ * instance-id + coarse author kind only). */
+function InheritedFromBadge({ inheritance }) {
+  if (!inheritance) return null;
+  return (
+    <span
+      className="inline-flex items-center gap-1 rounded-full border border-port-border bg-port-bg px-2 py-0.5 text-xs text-gray-400"
+      title={`Pulled from instance ${inheritance.sourceInstanceId}, originally authored on ${inheritance.originInstanceId}`}
+    >
+      <GitFork size={12} aria-hidden="true" />
+      Inherited
+    </span>
+  );
+}
+
+const LINEAGE_COPY = Object.freeze({
+  authored: (event) => `Authored (${event.authorKind || 'unknown'})`,
+  inherited: (event) => `Inherited from instance ${event.originInstanceId}`,
+  assayed: (event) => (event.pass ? 'Agent-free assay passed' : 'Agent-free assay failed'),
+  packaged: () => 'Promote candidate packaged',
+  promoted: () => 'Promoted to the shared baseline',
+});
+
+/** Proposal → commit → promote(/inherit), oldest first — a read-only
+ * projection the server derives on every read; nothing here is stored. */
+function LineageTimeline({ lineage }) {
+  if (!lineage?.length) return null;
+  return (
+    <ol className="space-y-1 text-xs text-gray-400">
+      {lineage.map((event) => (
+        <li key={`${event.type}-${event.at}`} className="flex flex-wrap items-baseline gap-x-2">
+          <span className="text-gray-300">{(LINEAGE_COPY[event.type] || (() => event.type))(event)}</span>
+          <span className="text-gray-500" title={formatDateShort(event.at)}>{timeAgo(event.at)}</span>
+        </li>
+      ))}
+    </ol>
   );
 }
 
@@ -262,12 +316,13 @@ export default function EidoverseFoundationsPanel() {
           {foundations.map((foundation) => {
             const expanded = foundation.id === openId;
             return (
-              <li key={foundation.id} className="rounded-xl border border-port-border bg-port-card p-4">
+              <li key={foundationRowKey(foundation)} className="rounded-xl border border-port-border bg-port-card p-4">
                 <div className="flex flex-wrap items-start justify-between gap-3">
                   <div className="min-w-0">
                     <div className="flex flex-wrap items-center gap-2">
                       <h4 className="font-medium text-white">{foundation.title}</h4>
                       <LayerBadge layer={foundation.layer} />
+                      <InheritedFromBadge inheritance={foundation.inheritance} />
                       <span className="rounded-full border border-port-border px-2 py-0.5 text-xs text-gray-400">{foundation.kind}</span>
                     </div>
                     <p className="mt-1 text-sm text-gray-400">{foundation.summary}</p>
@@ -278,23 +333,31 @@ export default function EidoverseFoundationsPanel() {
                     </p>
                   </div>
                   <div className="flex flex-wrap gap-2">
-                    <button
-                      type="button"
-                      className={secondaryButton}
-                      disabled={busyId === foundation.id}
-                      onClick={() => runGate(foundation.id, packageEidoverseFoundationCandidate)}
-                    >
-                      {busyId === foundation.id ? 'Running assay…' : 'Run assay'}
-                    </button>
-                    <button
-                      type="button"
-                      className={primaryButton}
-                      disabled={busyId === foundation.id || foundation.layer === 'baseline'}
-                      title={foundation.layer === 'baseline' ? 'Already offered to the shared baseline' : 'Run every gate and publish to the shared baseline'}
-                      onClick={() => runGate(foundation.id, promoteEidoverseFoundation)}
-                    >
-                      Promote
-                    </button>
+                    {/* A local copy of a peer's foundation is never packaged or
+                        promoted from here — it is already the origin's candidate,
+                        and promoting it would re-share another install's work as
+                        this one's own (the server refuses it too). */}
+                    {!foundation.inheritance && (
+                      <>
+                        <button
+                          type="button"
+                          className={secondaryButton}
+                          disabled={busyId === foundation.id}
+                          onClick={() => runGate(foundation.id, packageEidoverseFoundationCandidate)}
+                        >
+                          {busyId === foundation.id ? 'Running assay…' : 'Run assay'}
+                        </button>
+                        <button
+                          type="button"
+                          className={primaryButton}
+                          disabled={busyId === foundation.id || foundation.layer === 'baseline'}
+                          title={foundation.layer === 'baseline' ? 'Already offered to the shared baseline' : 'Run every gate and publish to the shared baseline'}
+                          onClick={() => runGate(foundation.id, promoteEidoverseFoundation)}
+                        >
+                          Promote
+                        </button>
+                      </>
+                    )}
                     <button type="button" className={secondaryButton} onClick={() => openFoundation(expanded ? '' : foundation.id)}>
                       {expanded ? 'Hide' : 'Details'}
                     </button>
@@ -305,6 +368,14 @@ export default function EidoverseFoundationsPanel() {
 
                 {expanded && (
                   <div className="mt-3 space-y-2 border-t border-port-border pt-3 text-sm">
+                    <div>
+                      <p className="text-gray-400">
+                        Provenance
+                        {foundation.provenance?.authorKind && ` — authored by a ${foundation.provenance.authorKind}`}
+                        {foundation.provenance?.originInstanceId && ` on instance ${foundation.provenance.originInstanceId}`}:
+                      </p>
+                      <LineageTimeline lineage={foundation.lineage} />
+                    </div>
                     <p className="text-gray-400">
                       Promotable substance (<code>body</code>) — the only part a peer receives:
                     </p>

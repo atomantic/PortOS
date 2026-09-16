@@ -799,9 +799,53 @@ regardless of what the call arguments claim, the same reason `layer` is never
 caller-supplied. `eidoverse.contributions` (`manageEidoverse`, read) lists the
 `contributionId` values a new foundation may bind to before it is promotable.
 
-What is still to come is the receiving side — peer pull/inherit — and the
-envelope's own `candidateVersion` is what that will gate on. Until it lands,
-`baseline` means "this install offers this foundation"; nothing pulls it yet.
+### Provenance graph and inheritance edges (#7461)
+
+Every foundation carries queryable provenance: who authored it (an opaque
+instance id + coarse `authorKind` — `mind` / `cos` / `user`, never a display
+name) and its ordered lineage. `foundationLineage()`
+(`server/lib/eidoverseFoundations.js`) derives that lineage — `authored` →
+`assayed` → `packaged` → `promoted`, or `inherited` → `assayed` for a local
+copy of a peer's — from fields the record already persists, so it costs no
+extra storage and a ledger written before this existed still projects
+correctly. `GET /api/eidoverse/world/foundations` returns it on every entry,
+and the mind tools' `summarizeFoundation()` projection carries `provenance`,
+`inheritance`, and `lineage` too — the same identity fields a candidate
+envelope was already authorized to carry, now surfaced consistently
+everywhere a foundation is read. `GET /api/eidoverse/world/foundations/:id`
+only reaches a locally-authored (plain-id) record: an inherited copy lives
+under a separate ledger key precisely so it can share a human-readable id
+with a local vernacular foundation without colliding, which also means a
+single bare id cannot disambiguate the two — the list endpoint is the
+provenance query surface for an inherited entry.
+
+**`recordEidoverseFoundationInheritance()`** (`eidoverseFoundationLedger.js`)
+is the accept-side of a peer pull: given an already-verified candidate
+envelope, the peer this install pulled it FROM, and this install's own
+instance id, it re-runs the exact gate a peer runs on a candidate it was
+handed — schema, content-addressed fingerprint, the embedded assay evidence,
+and federation safety — and, on a pass, stores a `baseline` local copy
+carrying an `inherited-from` edge (origin instance, source instance, the
+envelope's fingerprint, and when it was pulled). It refuses a self-referential
+pull (a peer handing back a foundation this install itself originated) and
+never re-runs the resilience assay itself — replaying a peer's controller code
+on the receiving install is exactly what the assay harness exists to keep off
+every OTHER install.
+
+The inherited copy is stored under `peer:<originInstanceId>:<foundationId>` —
+deliberately disjoint from any id a local author could ever write — so it can
+never shadow, collide with, or erase a same-id local vernacular foundation;
+both simply coexist in the listing. An inherited foundation can never be
+re-promoted from this install (`packageFoundationCandidate` refuses it by
+name): promotion publishes only what this install itself authored, never a
+relay of another install's work.
+
+**What is still to come is the wire transport** — the peer pull/inherit
+protocol itself, tracked as the remainder of #7455. `recordEidoverseFoundationInheritance()`
+is written and tested as the function that transport will call once it
+exists; nothing in this install invokes it yet, so `baseline` in practice
+still means "this install offered this foundation" until a transport starts
+calling it.
 
 ### Creative toolkit for minds (#7459)
 
@@ -830,6 +874,7 @@ Two ways to use a chosen layout:
   the local `vernacular` layer, matching every other authored foundation;
   publishing it to the shared baseline remains the separate, explicit
   `eidoverse.promote` act above.
+
 ## Executable world controllers (#7456)
 
 SwarmWorld's strongest result is that technologies are *executable*: they keep

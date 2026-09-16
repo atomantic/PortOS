@@ -177,6 +177,36 @@ const foundationAssayEvidenceSchema = z.object({
   reasons: z.array(z.string().trim().min(1).max(400)).max(FOUNDATION_LIMITS.findingsMax).default([]),
 }).strict();
 
+/** Opaque PortOS federation instance id — never a hostname, never a tailnet name. */
+const instanceIdSchema = z.string().trim().min(1).max(64).regex(/^[A-Za-z0-9_-]+$/, 'must be an opaque instance id');
+
+/**
+ * The one provenance-graph edge PortOS records today: "this install's local
+ * copy of `foundationId` is a pull of the candidate a peer packaged, from
+ * origin `originInstanceId` by way of `sourceInstanceId`." (#7461)
+ *
+ * `sourceInstanceId` and `originInstanceId` are DELIBERATELY separate fields
+ * rather than one: a foundation can be re-shared through more than one hop, so
+ * the peer this install pulled FROM is not always the install that authored
+ * it. Both are opaque instance ids already authorized to travel with a promote
+ * envelope — nothing here widens what crosses the federation layer, it only
+ * remembers, locally, an edge between two envelopes this install already saw.
+ *
+ * `fingerprint` + `packagedAt` are copied from the candidate this edge was
+ * built from, so the edge stays meaningful even if the local copy's `candidate`
+ * field is ever dropped (the pattern the ledger already uses for a
+ * re-authored `baseline` foundation losing its packaged envelope).
+ */
+export const foundationInheritanceEdgeSchema = z.object({
+  type: z.literal('inherited-from'),
+  originInstanceId: instanceIdSchema,
+  foundationId: foundationIdSchema,
+  fingerprint: z.string().regex(/^[a-f0-9]{64}$/, 'must be a sha256 hex digest'),
+  packagedAt: isoDateSchema,
+  sourceInstanceId: instanceIdSchema,
+  inheritedAt: isoDateSchema,
+}).strict();
+
 /**
  * The fields a foundation carries in every one of its three shapes — the local
  * record, what a caller may author, and the promote envelope. Declared once so
@@ -211,6 +241,13 @@ export const eidoverseFoundationRecordSchema = z.object({
   // `promotedAt` to a timestamp yet, so a reader should not take a `baseline`
   // count of zero as evidence about anything.
   promotedAt: isoDateSchema.nullable().default(null),
+  // `null` for everything this install authored (the overwhelming majority of
+  // records). Set only on a LOCAL COPY of a peer's promoted foundation — see
+  // `foundationFromInheritedCandidate()`. Absent entirely on a record written
+  // before this field existed, which reads back as `null` through this same
+  // default — an additive nullable field on the machine-local ledger, so no
+  // migration is owed (`docs/STORAGE.md`'s entry for `foundations.json`).
+  inheritance: foundationInheritanceEdgeSchema.nullable().default(null),
   updatedAt: isoDateSchema,
 }).strict();
 
@@ -373,6 +410,13 @@ export function packageFoundationCandidate({ record, requiredDisturbances, porto
   // packaging side and the receiving side share one definition of valid.
   const reasons = [
     layerPromoteRefusal(foundation.layer),
+    // An inherited record is already `baseline`, so the layer check above
+    // does not catch it — and its own reason ("already part of the shared
+    // baseline") would be misleading here: this install never promoted it,
+    // it pulled a local copy of a foundation ANOTHER install promoted.
+    // Promotion publishes only what this install authored (#7461); it must
+    // never become a relay that re-shares a peer's foundation as its own.
+    foundation.inheritance ? `inherited from another install (${foundation.inheritance.originInstanceId}) — promotion re-shares only foundations this install authored` : null,
     assayEvidenceRefusal(foundation.assay, requiredDisturbances, foundation.contributionId),
   ].filter(Boolean);
   if (reasons.length > 0) return refused(reasons);
@@ -432,6 +476,169 @@ export function verifyFoundationCandidate(candidate, { requiredDisturbances }) {
 }
 
 // ---------------------------------------------------------------------------
+// Provenance graph (#7461)
+// ---------------------------------------------------------------------------
+
+/**
+ * The ledger key an inherited foundation is stored under — deliberately
+ * disjoint from any id `recordEidoverseFoundation()` can ever author, so
+ * pulling a peer's foundation never touches, shadows, or can collide with a
+ * local vernacular foundation that happens to share the same foundation id.
+ * Both `foundationIdSchema` (a plain lowercase slug) and `instanceIdSchema`
+ * (opaque alphanumeric/dash/underscore) forbid colons, which is what makes
+ * this `:`-delimited namespace collision-proof rather than merely unlikely.
+ */
+export function inheritedFoundationStorageKey(originInstanceId, foundationId) {
+  return `peer:${originInstanceId}:${foundationId}`;
+}
+
+/**
+ * Build a local ledger record for a foundation candidate this install pulled
+ * from a peer. This is the function a future peer pull/inherit TRANSPORT
+ * calls — that transport does not exist yet (it is the still-open remainder
+ * of #7455); `recordEidoverseFoundationInheritance()` in
+ * `services/eidoverseFoundationLedger.js` is the only caller today, and only
+ * from tests, until the transport lands.
+ *
+ * The candidate is re-verified through the EXACT gate a peer runs on one it
+ * was handed (`verifyFoundationCandidate`): schema, the content-addressed
+ * fingerprint, the assay evidence already embedded in the envelope, and
+ * federation safety (machine identity, PII, credentials). A payload handed
+ * over by a peer is untrusted input, so this never trusts "it was already
+ * promoted, so it must be clean" — a candidate that fails is refused outright,
+ * never stored redacted. Nothing here RE-RUNS the resilience assay or
+ * executes the contribution: that ran on the author's install, and replaying
+ * arbitrary controller code pulled from a peer here is exactly what the
+ * assay harness exists to keep off every OTHER install.
+ *
+ * `style` is never part of the envelope, so the local copy always starts with
+ * an empty one — it looks like this install's own Commons only once someone
+ * here deliberately re-styles it, same as any other baseline foundation.
+ *
+ * Refuses (never throws) a self-referential pull — a peer handing back a
+ * foundation this install itself originated: "inherited from myself" is not
+ * a provenance edge, it is a loop.
+ *
+ * @param {object} options
+ * @param {object} options.candidate - a promote envelope, as received from a peer
+ * @param {string[]} options.requiredDisturbances
+ * @param {string} options.sourceInstanceId - the peer this install pulled FROM
+ * @param {string} options.localInstanceId - this install's own federation id
+ * @param {string} options.now - ISO timestamp supplied by the caller
+ * @returns {{ outcome: 'inherited'|'refused', foundation: object|null, reasons: string[], findings: Array }}
+ */
+export function foundationFromInheritedCandidate({ candidate, requiredDisturbances, sourceInstanceId, localInstanceId, now }) {
+  const inheritanceRefused = (reasons, findings = []) => ({ outcome: 'refused', foundation: null, reasons, findings });
+
+  if (!localInstanceId) return inheritanceRefused(['this install has no federation identity yet — inheritance cannot check for a self-referential pull']);
+
+  const verified = verifyFoundationCandidate(candidate, { requiredDisturbances });
+  if (!verified.valid) return inheritanceRefused(verified.reasons, verified.findings);
+
+  const envelope = candidate;
+  if (envelope.provenance.originInstanceId === localInstanceId) {
+    return inheritanceRefused(['this candidate originated on this install — inheritance applies to another install\'s foundation, not a copy of your own']);
+  }
+  // A separate check from the one above: `sourceInstanceId` is the peer this
+  // install pulled FROM, which is not always who AUTHORED the candidate (a
+  // foundation can be re-shared through more than one hop). "Pulled from
+  // myself" is its own nonsensical edge even when the origin is genuinely
+  // someone else, and the schema validation below cannot catch it — it only
+  // checks that the field is a well-formed opaque id, not that it differs
+  // from `localInstanceId`.
+  if (sourceInstanceId === localInstanceId) {
+    return inheritanceRefused(['this install cannot be the peer it pulled the candidate from']);
+  }
+
+  const draft = {
+    id: envelope.foundationId,
+    layer: 'baseline',
+    kind: envelope.kind,
+    title: envelope.title,
+    summary: envelope.summary,
+    contributionId: envelope.contributionId,
+    body: envelope.body,
+    style: {},
+    provenance: {
+      originInstanceId: envelope.provenance.originInstanceId,
+      authorKind: envelope.provenance.authorKind,
+      createdAt: envelope.provenance.createdAt,
+    },
+    disclosure: envelope.disclosure,
+    assay: envelope.assay,
+    candidate: envelope,
+    promotedAt: null,
+    inheritance: {
+      type: 'inherited-from',
+      originInstanceId: envelope.provenance.originInstanceId,
+      foundationId: envelope.foundationId,
+      fingerprint: envelope.fingerprint,
+      packagedAt: envelope.provenance.packagedAt,
+      sourceInstanceId,
+      inheritedAt: now,
+    },
+    updatedAt: now,
+  };
+
+  const parsed = eidoverseFoundationRecordSchema.safeParse(draft);
+  if (!parsed.success) return { outcome: 'refused', foundation: null, reasons: issueReasons(parsed.error), findings: [] };
+
+  return { outcome: 'inherited', foundation: parsed.data, reasons: [], findings: [] };
+}
+
+/**
+ * Proposal → commit → promote — and, for a local copy of a peer's, → inherit
+ * — as an ORDERED, read-only projection over fields the record already
+ * persists. No new storage: a ledger written before this function existed
+ * still projects a correct lineage the instant it is read, which is what lets
+ * `docs/STORAGE.md`'s "no migration owed" hold for this change too.
+ *
+ * @param {object|null} record
+ * @returns {Array<{ type: string, at: string, [key: string]: unknown }>}
+ */
+export function foundationLineage(record) {
+  if (!record) return [];
+  const events = [];
+
+  if (record.inheritance) {
+    events.push({
+      type: 'inherited',
+      at: record.inheritance.inheritedAt,
+      originInstanceId: record.inheritance.originInstanceId,
+      foundationId: record.inheritance.foundationId,
+      sourceInstanceId: record.inheritance.sourceInstanceId,
+      fingerprint: record.inheritance.fingerprint,
+    });
+  } else if (record.provenance?.createdAt) {
+    events.push({
+      type: 'authored',
+      at: record.provenance.createdAt,
+      authorKind: record.provenance.authorKind ?? null,
+      originInstanceId: record.provenance.originInstanceId ?? null,
+    });
+  }
+
+  if (record.assay?.ranAt) {
+    events.push({ type: 'assayed', at: record.assay.ranAt, pass: record.assay.pass === true });
+  }
+
+  // Skipped on an inherited record: its `candidate` is the envelope it was
+  // BUILT from, so `packaged` would just restate the `inherited` event above
+  // under a different name.
+  if (!record.inheritance && record.candidate?.provenance?.packagedAt) {
+    events.push({ type: 'packaged', at: record.candidate.provenance.packagedAt, fingerprint: record.candidate.fingerprint ?? null });
+  }
+
+  // An inherited record's `promotedAt` is always `null` (see the schema
+  // comment) — this install never promoted it, it pulled a copy.
+  if (!record.inheritance && record.promotedAt) {
+    events.push({ type: 'promoted', at: record.promotedAt });
+  }
+
+  return events.sort((a, b) => String(a.at).localeCompare(String(b.at)));
+}
+
+// ---------------------------------------------------------------------------
 // Projection
 // ---------------------------------------------------------------------------
 
@@ -445,6 +652,15 @@ export function verifyFoundationCandidate(candidate, { requiredDisturbances }) {
  * candidate currently exists, which is exactly what "can I promote this, and if
  * not why" needs. `style` is omitted rather than trimmed: a mind that never
  * sees the cosmetics cannot narrate them into a promote body.
+ *
+ * `provenance`, `inheritance`, and `lineage` (#7461) are the provenance-graph
+ * projection: who authored this (an opaque instance id and coarse author
+ * kind — never a display name, per the provenance-privacy note on
+ * `foundationProvenanceSchema`), whether it is a local copy of a PEER's
+ * foundation, and the ordered proposal → commit → promote/inherit timeline.
+ * All three are already either stored on the record or cheaply derived from
+ * it, so surfacing them here costs a mind nothing it was not already paying
+ * for through the full-record GET routes.
  */
 export function summarizeFoundation(record) {
   return {
@@ -462,5 +678,10 @@ export function summarizeFoundation(record) {
     assayPass: record?.assay ? record.assay.pass === true : null,
     assayReasons: record?.assay?.reasons?.slice(0, 5) ?? [],
     promoteRefusal: layerPromoteRefusal(record?.layer),
+    provenance: record?.provenance
+      ? { originInstanceId: record.provenance.originInstanceId ?? null, authorKind: record.provenance.authorKind ?? null, createdAt: record.provenance.createdAt ?? null }
+      : null,
+    inheritance: record?.inheritance ?? null,
+    lineage: foundationLineage(record),
   };
 }

@@ -10,6 +10,9 @@ import {
   EIDOVERSE_FOUNDATION_CANDIDATE_VERSION,
   assayEvidenceFromVerdict,
   foundationCandidateFingerprint,
+  foundationFromInheritedCandidate,
+  foundationLineage,
+  inheritedFoundationStorageKey,
   layerPromoteRefusal,
   packageFoundationCandidate,
   styleLeakFindings,
@@ -113,6 +116,19 @@ describe('packaging a promote candidate', () => {
     expect(packageRecord({ assay: passingAssay('some-other-build') }).reasons[0])
       .toMatch(/ran against "some-other-build"/);
   });
+
+  it('refuses to re-promote an inherited foundation as though this install authored it', () => {
+    const result = packageRecord({
+      layer: 'baseline',
+      inheritance: {
+        type: 'inherited-from', originInstanceId: 'instance-peer-origin', foundationId: 'tide-beacon',
+        fingerprint: 'a'.repeat(64), packagedAt: NOW, sourceInstanceId: 'instance-peer-origin', inheritedAt: NOW,
+      },
+    });
+
+    expect(result.outcome).toBe('refused');
+    expect(result.reasons.join(' ')).toContain('inherited from another install');
+  });
 });
 
 describe('verifying a candidate a peer was handed', () => {
@@ -166,5 +182,144 @@ describe('style-leak scanning', () => {
   it('reports the nested path of every style key, not just the first', () => {
     const findings = styleLeakFindings({ controller: { motif: 'brass' }, affordance: { render: { palette: ['#fff'] } } });
     expect(findings.map((finding) => finding.path)).toEqual(['controller.motif', 'affordance.render.palette']);
+  });
+});
+
+describe('inheriting a foundation from a peer (#7461)', () => {
+  const LOCAL_INSTANCE_ID = 'instance-local-0001';
+  const SOURCE_INSTANCE_ID = 'instance-peer-relay';
+
+  it('builds a baseline local copy with an inherited-from edge, style dropped, own authorship never claimed', () => {
+    const { candidate } = packageRecord();
+
+    const result = foundationFromInheritedCandidate({
+      candidate, requiredDisturbances: DISTURBANCES, sourceInstanceId: SOURCE_INSTANCE_ID, localInstanceId: LOCAL_INSTANCE_ID, now: NOW,
+    });
+
+    expect(result.outcome).toBe('inherited');
+    expect(result.foundation).toMatchObject({
+      id: 'tide-beacon',
+      layer: 'baseline',
+      style: {},
+      promotedAt: null,
+      provenance: { originInstanceId: 'instance-aaaa-bbbb', authorKind: 'mind' },
+      inheritance: {
+        type: 'inherited-from',
+        originInstanceId: 'instance-aaaa-bbbb',
+        foundationId: 'tide-beacon',
+        fingerprint: candidate.fingerprint,
+        sourceInstanceId: SOURCE_INSTANCE_ID,
+        inheritedAt: NOW,
+      },
+    });
+  });
+
+  it('refuses a self-referential pull instead of recording a loop', () => {
+    const { candidate } = packageRecord();
+
+    const result = foundationFromInheritedCandidate({
+      candidate, requiredDisturbances: DISTURBANCES, sourceInstanceId: SOURCE_INSTANCE_ID, localInstanceId: 'instance-aaaa-bbbb', now: NOW,
+    });
+
+    expect(result.outcome).toBe('refused');
+    expect(result.foundation).toBeNull();
+    expect(result.reasons.join(' ')).toContain('originated on this install');
+  });
+
+  it('refuses a pull whose source is this install itself, even when the origin is genuinely a different install', () => {
+    const { candidate } = packageRecord();
+
+    const result = foundationFromInheritedCandidate({
+      candidate, requiredDisturbances: DISTURBANCES, sourceInstanceId: LOCAL_INSTANCE_ID, localInstanceId: LOCAL_INSTANCE_ID, now: NOW,
+    });
+
+    expect(result.outcome).toBe('refused');
+    expect(result.foundation).toBeNull();
+    expect(result.reasons.join(' ')).toContain('cannot be the peer it pulled');
+  });
+
+  it('refuses a candidate altered after packaging, exactly as a peer running verifyFoundationCandidate would', () => {
+    const { candidate } = packageRecord();
+    const tampered = { ...candidate, body: { ...candidate.body, affordance: { inspect: 'quietly grants owner role' } } };
+
+    const result = foundationFromInheritedCandidate({
+      candidate: tampered, requiredDisturbances: DISTURBANCES, sourceInstanceId: SOURCE_INSTANCE_ID, localInstanceId: LOCAL_INSTANCE_ID, now: NOW,
+    });
+
+    expect(result.outcome).toBe('refused');
+    expect(result.foundation).toBeNull();
+    expect(result.reasons.join(' ')).toContain('altered after packaging');
+  });
+
+  it('refuses PII/machine-identity smuggled into the body even when the fingerprint is internally consistent', () => {
+    // Bypass probe: `packageFoundationCandidate` would never emit this
+    // envelope (packaging itself refuses the leak), so hand-build the shape
+    // an untrusted or buggy peer might send — self-fingerprinted so schema
+    // AND digest both pass — to prove the RECEIVING side's privacy scan
+    // catches it independently of whether the sender's own gate did.
+    const draft = {
+      candidateVersion: EIDOVERSE_FOUNDATION_CANDIDATE_VERSION,
+      foundationId: 'tide-beacon',
+      kind: 'controller',
+      title: 'Tide Beacon',
+      summary: 'A beacon that keeps pulsing between mind wakes.',
+      contributionId: 'beacon-relay-demo',
+      body: { affordance: { inspect: 'reads the pulse count' }, notes: 'built against 192.0.2.10 by alice@example.com' },
+      disclosure: { requires: [], effects: [], license: null, notes: null },
+      provenance: { originInstanceId: 'instance-aaaa-bbbb', authorKind: 'mind', createdAt: NOW, packagedAt: NOW, portosVersion: '9.9.9' },
+      assay: passingAssay(),
+    };
+    const forged = { ...draft, fingerprint: foundationCandidateFingerprint(draft) };
+    expect(verifyFoundationCandidate(forged, { requiredDisturbances: DISTURBANCES }).valid).toBe(false); // sanity: a peer would refuse it too
+
+    const result = foundationFromInheritedCandidate({
+      candidate: forged, requiredDisturbances: DISTURBANCES, sourceInstanceId: SOURCE_INSTANCE_ID, localInstanceId: LOCAL_INSTANCE_ID, now: NOW,
+    });
+
+    expect(result.outcome).toBe('refused');
+    expect(result.foundation).toBeNull();
+    expect(result.findings.map((finding) => finding.code)).toEqual(expect.arrayContaining(['ip-literal', 'email-address']));
+  });
+
+  it('refuses when this install has no federation identity yet to check a pull against', () => {
+    const { candidate } = packageRecord();
+    const result = foundationFromInheritedCandidate({
+      candidate, requiredDisturbances: DISTURBANCES, sourceInstanceId: SOURCE_INSTANCE_ID, localInstanceId: '', now: NOW,
+    });
+    expect(result.outcome).toBe('refused');
+    expect(result.foundation).toBeNull();
+  });
+});
+
+describe('inherited foundation storage key', () => {
+  it('can never collide with an id a local author could write, so an inherited copy never shadows local vernacular work', () => {
+    const key = inheritedFoundationStorageKey('instance-aaaa-bbbb', 'tide-beacon');
+    expect(key).toBe('peer:instance-aaaa-bbbb:tide-beacon');
+    // A local id is a lowercase slug with no colon — this key can never equal one.
+    expect(key).not.toMatch(/^[a-z0-9][a-z0-9-]*$/);
+  });
+});
+
+describe('foundation lineage (#7461)', () => {
+  it('projects authored, assayed, packaged, and promoted in chronological order from fields the record already carries', () => {
+    const { candidate } = packageRecord();
+    const packagedLater = { ...candidate, provenance: { ...candidate.provenance, packagedAt: '2026-03-04T06:00:00.000Z' } };
+    const record = { ...makeRecord(), candidate: packagedLater, promotedAt: '2026-03-04T08:00:00.000Z' };
+
+    expect(foundationLineage(record).map((event) => event.type)).toEqual(['authored', 'assayed', 'packaged', 'promoted']);
+  });
+
+  it('collapses to inherited + assayed for a local copy of a peer foundation, never restating packaged or promoted', () => {
+    const { candidate } = packageRecord();
+    const { foundation } = foundationFromInheritedCandidate({
+      candidate, requiredDisturbances: DISTURBANCES, sourceInstanceId: 'instance-peer-relay', localInstanceId: 'instance-local-0001', now: NOW,
+    });
+
+    expect(foundationLineage(foundation).map((event) => event.type)).toEqual(['inherited', 'assayed']);
+  });
+
+  it('returns an empty lineage for a missing record rather than throwing', () => {
+    expect(foundationLineage(null)).toEqual([]);
+    expect(foundationLineage(undefined)).toEqual([]);
   });
 });
