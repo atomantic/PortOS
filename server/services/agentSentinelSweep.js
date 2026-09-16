@@ -1,19 +1,23 @@
 /**
  * Stale `.agent-done-*` sentinel sweep.
  *
- * A run that reaches an outcome deletes its own sentinel: every completion path
- * — the TUI spawner, the direct-CLI spawner, and the runner-event path — funnels
- * through `removeCompletionSentinel` in agentCompletionCleanup.js, and the
- * post-restart recovery in agentLifecycle.js removes it too. So in the happy
- * case nothing is left behind. What still can be:
+ * A run that reaches an outcome deletes its own sentinel, through
+ * `removeCompletionSentinel` in agentCompletionCleanup.js: the step list every
+ * live completion path shares (TUI spawner, direct-CLI spawner, runner event),
+ * plus the two recovery paths that retire a run without reaching it — the
+ * post-restart completion in agentLifecycle.js and the orphan sweep in
+ * agentManagement.js, which is where a hard kill (`pm2 restart`, SIGKILL,
+ * reboot) lands. So in the happy case nothing is left behind. What still can be:
  *
- *   - a hard kill (`pm2 restart`, SIGKILL, a machine reboot) never reaches any
- *     cleanup at all;
+ *   - a run whose record the orphan sweep never reaps (no durable record, or a
+ *     workspace the record does not name);
  *   - a host shutdown ABANDONS the run rather than finalizing it (#3202), so no
  *     completion cleanup runs — the abandon gate only fires when the run wrote
  *     NO sentinel, but a race can still strand one;
  *   - a completion whose sentinel removal failed (an unreadable agent record,
- *     a transient I/O error).
+ *     a transient I/O error);
+ *   - the bare unscoped `.agent-done`, which names no run, so no completion
+ *     path will ever claim it.
  *
  * Worktree-less agents share a real checkout — the PortOS repo, or a managed
  * app's own repo — so for them a skipped cleanup leaves an untracked file in the

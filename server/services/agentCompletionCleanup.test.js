@@ -38,7 +38,7 @@ vi.mock('./notifications.js', () => ({
 vi.mock('./creativeDirector/completionHook.js', () => ({ handleCreativeDirectorCompletion: vi.fn().mockResolvedValue({}) }));
 vi.mock('./taskPromptService.js', () => ({ getStagePrompt: vi.fn().mockResolvedValue('do stage work in {appName}') }));
 
-import { handlePipelineProgression, runAgentCompletionCleanup, runSpawnerCompletionCleanup } from './agentCompletionCleanup.js';
+import { handlePipelineProgression, runAgentCompletionCleanup, runSpawnerCompletionCleanup, removeCompletionSentinel } from './agentCompletionCleanup.js';
 import { updateTask, addTask, reviveBlockedTask, getAgent } from './cos.js';
 import { cleanupAgentWorktree, releaseRetryHold, spawnMergeRecoveryTask } from './agentWorktreeCleanup.js';
 import { resolveReviewLoopOptions } from './codeReview.js';
@@ -714,6 +714,21 @@ describe('spawner sentinel removal without a persisted record', () => {
     });
 
     await expect(readFile(join(workspace, '.agent-done-a1'))).rejects.toMatchObject({ code: 'ENOENT' });
+    await rm(workspace, { recursive: true, force: true });
+  });
+});
+
+// `doneSentinelName` falls back to the bare, unscoped `.agent-done` for a
+// missing id — a file that belongs to no run and that the stale sweep protects
+// with an age floor precisely because it can never be matched to one.
+describe('completion sentinel removal never targets the unscoped sentinel', () => {
+  it('does nothing when the run has no agent id', async () => {
+    const workspace = await mkdtemp(join(tmpdir(), 'completion-unscoped-'));
+    await writeFile(join(workspace, '.agent-done'), '## Summary\nA legacy run still going');
+
+    await removeCompletionSentinel({ agentId: '  ', workspacePath: workspace });
+
+    expect(await readFile(join(workspace, '.agent-done'), 'utf8')).toContain('still going');
     await rm(workspace, { recursive: true, force: true });
   });
 });

@@ -499,6 +499,11 @@ async function advanceCreativeDirectorIfNeeded({ agentId, task, effectiveSuccess
  * the agent record stamped at registration.
  */
 export async function removeCompletionSentinel({ agentId, agent, agentState, workspacePath }) {
+  // A missing id makes `doneSentinelName` fall back to the bare, unscoped
+  // `.agent-done` — which belongs to no run and may be a legacy agent's live
+  // signal. The sweep protects it with an age floor for exactly that reason, so
+  // never let a resolution failure here aim at it.
+  if (typeof agentId !== 'string' || !agentId.trim()) return;
   const workspace = workspacePath || agentState?.metadata?.workspacePath || agent?.workspacePath || null;
   if (!workspace) return;
   // `rmGuarded`, like the stale-sentinel sweep that deletes these same files.
