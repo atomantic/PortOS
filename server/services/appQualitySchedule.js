@@ -30,6 +30,7 @@ import {
 import {
   CLAIM_DRAIN_TASK_TYPES,
   buildBusySlots,
+  isPlannedClaimCron,
   planQualitySchedule,
   resolveQualityScheduleOptions,
 } from '../lib/qualitySchedulePlan.js';
@@ -78,7 +79,7 @@ async function listRepoFiles(repoPath) {
   const result = await execGit(['ls-files'], repoPath, { timeout: 20000, ignoreExitCode: true })
     .catch(() => null);
   if (result?.exitCode === 0 && result.stdout.trim()) {
-    return result.stdout.split('\n').map(line => line.trim()).filter(Boolean);
+    return { files: result.stdout.split('\n').map(line => line.trim()).filter(Boolean), complete: true };
   }
   const entries = await readdir(repoPath, { withFileTypes: true }).catch(() => []);
   const files = [];
@@ -89,7 +90,9 @@ async function listRepoFiles(repoPath) {
     files.push(entry.name + '/');
     for (const child of nested) files.push(`${entry.name}/${child.name}${child.isDirectory() ? '/' : ''}`);
   }
-  return files;
+  // `complete: false` on purpose — this listing stops at depth 2, so a miss is
+  // "not looked at", never "not there".
+  return { files, complete: false };
 }
 
 /**
@@ -103,23 +106,34 @@ async function listRepoFiles(repoPath) {
  * @returns {Promise<{ capabilities: Record<string, boolean>, scanned: number }>}
  */
 export async function detectRepoCapabilities(app) {
-  const capabilities = Object.fromEntries(AUDIT_REPO_CAPABILITIES.map(key => [key, false]));
-  if (!app?.repoPath) return { capabilities, scanned: 0 };
-  const cached = capabilityCache.get(app.repoPath);
-  if (cached && Date.now() - cached.at < CAPABILITY_TTL_MS) return cached.value;
+  const empty = Object.fromEntries(AUDIT_REPO_CAPABILITIES.map(key => [key, false]));
+  if (!app?.repoPath) return { capabilities: empty, scanned: 0, complete: false };
 
-  const files = (await listRepoFiles(app.repoPath)).filter(path => !VENDOR_SEGMENTS.test(path));
-  for (const path of files) {
+  const cached = capabilityCache.get(app.repoPath);
+  const scan = cached && Date.now() - cached.at < CAPABILITY_TTL_MS
+    ? cached.value
+    : await scanRepoCapabilities(app.repoPath);
+  if (scan !== cached?.value) capabilityCache.set(app.repoPath, { at: Date.now(), value: scan });
+
+  // `uiPort` is a property of the APP, not of the checkout, and two apps can
+  // share one repoPath — so it is OR'd in AFTER the (path-keyed) cache read.
+  // A compiled or templated front end leaves no .jsx behind, but a served UI
+  // port is direct evidence there is an interface to audit.
+  const capabilities = { ...scan.capabilities, ui: scan.capabilities.ui || Boolean(app.uiPort) };
+  return { capabilities, scanned: scan.scanned, complete: scan.complete || Boolean(app.uiPort) };
+}
+
+/** The file-derived half of the verdict — cacheable because it is per-checkout. */
+async function scanRepoCapabilities(repoPath) {
+  const capabilities = Object.fromEntries(AUDIT_REPO_CAPABILITIES.map(key => [key, false]));
+  const { files, complete } = await listRepoFiles(repoPath);
+  const scanned = files.filter(path => !VENDOR_SEGMENTS.test(path));
+  for (const path of scanned) {
     for (const [capability, patterns] of Object.entries(CAPABILITY_PATTERNS)) {
       if (!capabilities[capability] && patterns.some(pattern => pattern.test(path))) capabilities[capability] = true;
     }
   }
-  // A port the app serves a UI on is direct evidence, whatever the sources look
-  // like (a compiled or templated front end leaves no `.jsx` behind).
-  if (app.uiPort) capabilities.ui = true;
-  const value = { capabilities, scanned: files.length };
-  capabilityCache.set(app.repoPath, { at: Date.now(), value });
-  return value;
+  return { capabilities, scanned: scanned.length, complete: complete && scanned.length > 0 };
 }
 
 /**
@@ -149,13 +163,14 @@ async function loadNotApplicableCategories(appId) {
  * @returns {Promise<{ checks: object[], capabilities: object, scanned: number }>}
  */
 export async function resolveQualityChecks(app) {
-  const [{ capabilities, scanned }, notApplicable] = await Promise.all([
+  const [{ capabilities, scanned, complete }, notApplicable] = await Promise.all([
     detectRepoCapabilities(app),
     loadNotApplicableCategories(app.id),
   ]);
-  // With nothing scanned every capability reads false for want of evidence, so
-  // gating on them would deselect most of the catalog over an unreadable path.
-  const repoReadable = scanned > 0;
+  // Only a COMPLETE inventory licenses a negative. An unreadable path scans
+  // nothing, and the shallow fallback stops at depth 2 — in both cases a
+  // capability reads false for want of evidence, and gating on that would
+  // deselect most of the catalog over a repository nobody actually looked at.
 
   const checks = AUDIT_TASK_TYPE_LIST.map(taskType => {
     const requirement = auditCapabilityRequirement(taskType);
@@ -164,13 +179,13 @@ export async function resolveQualityChecks(app) {
     if (notApplicable.has(taskType)) {
       applicable = false;
       reason = 'a previous audit reported this category as not applicable here';
-    } else if (requirement && repoReadable && !capabilities[requirement]) {
+    } else if (requirement && complete && !capabilities[requirement]) {
       applicable = false;
       reason = AUDIT_CAPABILITY_MISSING_REASON[requirement];
     }
     return { taskType, label: AUDIT_DEFINITIONS[taskType].label, applicable, reason };
   });
-  return { checks, capabilities, scanned };
+  return { checks, capabilities, scanned, complete };
 }
 
 /**
@@ -233,7 +248,7 @@ export async function collectBusyOccupancies(app, { ignoreTaskTypes = [] } = {})
 export async function buildQualitySchedulePlan(app, options = {}) {
   const settings = resolveQualityScheduleOptions(options);
   // Independent: the repository scan and the schedule read share no input.
-  const [{ checks, capabilities, scanned }, sources] = await Promise.all([
+  const [{ checks, capabilities, scanned, complete }, sources] = await Promise.all([
     resolveQualityChecks(app),
     collectBusyOccupancies(app, { ignoreTaskTypes: [...AUDIT_TASK_TYPE_LIST, ...CLAIM_DRAIN_TASK_TYPES] }),
   ]);
@@ -254,6 +269,7 @@ export async function buildQualitySchedulePlan(app, options = {}) {
     checks,
     capabilities,
     scanned,
+    complete,
     // The drain types the form may choose between, so adding one here does not
     // also need a client edit.
     claimTaskTypes: CLAIM_DRAIN_TASK_TYPES,
@@ -293,10 +309,20 @@ export async function applyQualitySchedulePlan(app, options = {}) {
       : { enabled: false, interval: null };
   }
   if (plan.claim) patches[plan.claim.taskType] = { enabled: true, interval: plan.claim.cron };
+  // Retire a drain an earlier plan planted. Without this, switching the drain
+  // type leaves BOTH running daily, and "Do not run a claim job" leaves the old
+  // one firing forever — the form would offer no way to undo what it created.
+  // Only a cron of this planner's own shape is cleared (`isPlannedClaimCron`),
+  // so a claim cadence a human set by hand on the Schedule page survives.
+  for (const taskType of CLAIM_DRAIN_TASK_TYPES) {
+    if (taskType === plan.claim?.taskType) continue;
+    if (!isPlannedClaimCron(existing[taskType]?.interval)) continue;
+    patches[taskType] = { enabled: false, interval: null };
+  }
 
   await updateAppTaskTypeOverrides(app.id, patches);
-  const applied = plan.slots.length + (plan.claim ? 1 : 0);
-  const disabled = AUDIT_TASK_TYPE_LIST.length - plan.slots.length;
+  const applied = Object.values(patches).filter(patch => patch.enabled).length;
+  const disabled = Object.values(patches).length - applied;
   console.log(`📅 Planned ${applied} quality schedule entries for ${app.name} (${disabled} checks disabled)`);
   return { ...built, applied, disabled };
 }

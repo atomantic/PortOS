@@ -1,11 +1,13 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const execGit = vi.fn();
+const readdir = vi.fn();
 const query = vi.fn();
 const getAppTaskTypeOverrides = vi.fn();
 const updateAppTaskTypeOverrides = vi.fn();
 const loadSchedule = vi.fn();
 
+vi.mock('fs/promises', () => ({ readdir: (...args) => readdir(...args) }));
 vi.mock('../lib/execGit.js', () => ({ execGit: (...args) => execGit(...args) }));
 vi.mock('../lib/db.js', () => ({ query: (...args) => query(...args) }));
 vi.mock('./apps.js', () => ({
@@ -18,6 +20,7 @@ const {
   applyQualitySchedulePlan,
   buildQualitySchedulePlan,
   collectBusyOccupancies,
+  detectRepoCapabilities,
   resolveQualityChecks,
 } = await import('./appQualitySchedule.js');
 
@@ -38,6 +41,7 @@ beforeEach(() => {
   getAppTaskTypeOverrides.mockResolvedValue({});
   updateAppTaskTypeOverrides.mockResolvedValue({});
   loadSchedule.mockResolvedValue({ tasks: {} });
+  readdir.mockResolvedValue([]);
   vi.spyOn(console, 'log').mockImplementation(() => {});
 });
 
@@ -79,14 +83,30 @@ describe('resolveQualityChecks', () => {
     expect(security.reason).toMatch(/previous audit/);
   });
 
-  it('offers every check when the repository could not be scanned at all', async () => {
+  it('treats a repository it could only skim as unknown, not as empty', async () => {
+    // `git ls-files` unavailable (not a checkout, git missing, timeout) falls
+    // back to a two-level listing, which cannot see src/components/App.jsx.
+    // Reading that miss as "no UI" would deselect seven audits for an app that
+    // has one.
     execGit.mockResolvedValue({ exitCode: 128, stdout: '', stderr: 'not a git repository' });
-    const { checks, scanned } = await resolveQualityChecks({ id: 'ghost', name: 'Ghost', repoPath: '/repos/missing' });
-    expect(scanned).toBe(0);
-    // Absent evidence must not read as "this repo has no UI" — that would
-    // silently deselect most of the catalog over an unreadable path.
+    readdir.mockResolvedValue([]);
+    const { checks, complete } = await resolveQualityChecks({ id: 'skim', name: 'Skim', repoPath: '/repos/skim' });
+    expect(complete).toBe(false);
     expect(checks.every(check => check.applicable)).toBe(true);
   });
+
+  it('does not let one app’s uiPort decide a sibling app sharing the checkout', async () => {
+    // The capability cache is keyed by repoPath; uiPort is a property of the
+    // APP. Baking it into the cached value made a headless sibling read ui:true
+    // for a minute and pre-select seven audits that can only answer N/A.
+    execGit.mockResolvedValue({ exitCode: 0, stdout: NODE_SERVICE.join('\n'), stderr: '' });
+    const shared = '/repos/shared-monorepo';
+    const withUi = await detectRepoCapabilities({ id: 'a', repoPath: shared, uiPort: 5555 });
+    const headless = await detectRepoCapabilities({ id: 'b', repoPath: shared });
+    expect(withUi.capabilities.ui).toBe(true);
+    expect(headless.capabilities.ui).toBe(false);
+  });
+
 });
 
 describe('collectBusyOccupancies', () => {
@@ -157,9 +177,39 @@ describe('buildQualitySchedulePlan', () => {
 });
 
 describe('applyQualitySchedulePlan', () => {
+  it('retires a claim drain an earlier plan planted when the drain is switched off', async () => {
+    getAppTaskTypeOverrides.mockResolvedValue({ 'claim-work': { enabled: true, interval: '0 6,14 * * *' } });
+    const app = appWith(NODE_SERVICE);
+    await applyQualitySchedulePlan(app, { taskTypes: ['security'], claimBetween: false });
+    const [, patches] = updateAppTaskTypeOverrides.mock.calls[0];
+    // Without this the drain the form created keeps firing daily forever and
+    // the form offers no way to undo it.
+    expect(patches['claim-work']).toEqual({ enabled: false, interval: null });
+  });
+
+  it('retires the previous drain when the drain TYPE is switched', async () => {
+    getAppTaskTypeOverrides.mockResolvedValue({ 'claim-work': { enabled: true, interval: '0 6,14 * * *' } });
+    const app = appWith(NODE_SERVICE);
+    await applyQualitySchedulePlan(app, { taskTypes: ['security'], fileIssues: true, claimTaskType: 'claim-issue' });
+    const [, patches] = updateAppTaskTypeOverrides.mock.calls[0];
+    expect(patches['claim-issue'].enabled).toBe(true);
+    expect(patches['claim-work']).toEqual({ enabled: false, interval: null });
+  });
+
+  it('leaves a claim cadence a human set by hand alone', async () => {
+    // A weekly cron is not a shape this planner emits, so it was not ours to
+    // retire — clearing it would silently delete the user's own schedule.
+    getAppTaskTypeOverrides.mockResolvedValue({ 'claim-work': { enabled: true, interval: '0 9 * * 1' } });
+    const app = appWith(NODE_SERVICE);
+    await applyQualitySchedulePlan(app, { taskTypes: ['security'], claimBetween: false });
+    const [, patches] = updateAppTaskTypeOverrides.mock.calls[0];
+    expect(patches['claim-work']).toBeUndefined();
+  });
+
+
   it('writes the whole cadence in one patch: planned checks on, unplanned ones off', async () => {
     const app = appWith(NODE_SERVICE);
-    const result = await applyQualitySchedulePlan(app, { taskTypes: ['security'] });
+    const result = await applyQualitySchedulePlan(app, { taskTypes: ['security'], fileIssues: true });
 
     expect(updateAppTaskTypeOverrides).toHaveBeenCalledTimes(1);
     const [appId, patches] = updateAppTaskTypeOverrides.mock.calls[0];
@@ -170,6 +220,16 @@ describe('applyQualitySchedulePlan', () => {
     expect(patches.ux).toEqual({ enabled: false, interval: null });
     expect(patches['claim-work'].enabled).toBe(true);
     expect(result.applied).toBe(2);
+  });
+
+  it('writes each audit\u2019s catalog delivery default when the form states no preference', async () => {
+    const app = appWith(NODE_SERVICE);
+    await applyQualitySchedulePlan(app, { taskTypes: ['security', 'ux'] });
+    const [, patches] = updateAppTaskTypeOverrides.mock.calls[0];
+    // security ships defaultFileIssues:false, ux ships true — a form-wide
+    // default would have flattened both.
+    expect(patches.security.taskMetadata).toEqual({ fileIssues: false });
+    expect(patches.ux.taskMetadata).toEqual({ fileIssues: true });
   });
 
   it('keeps metadata the user set elsewhere and only overwrites the delivery mode', async () => {

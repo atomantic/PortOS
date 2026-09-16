@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { AUDIT_SUGGESTED_AFTER, AUDIT_TASK_TYPE_LIST } from './auditCatalog.js';
+import { AUDIT_SUGGESTED_AFTER, AUDIT_TASK_TYPE_LIST, defaultFileIssuesFor } from './auditCatalog.js';
 import { cronWeekdayHours } from './cronFields.js';
 import {
   buildBusySlots,
@@ -74,21 +74,90 @@ describe('planQualitySchedule', () => {
   });
 
   it('starts the claim drain after the check it follows, never before it', () => {
-    // With the natural offset hours occupied, an outward search would place the
-    // drain earlier in the day — working last night's backlog instead.
-    const plan = planAll({ busy: busyFrom(['30 3 * * *']), options: { checksPerDay: 2, claimOffsetHours: 3 } });
-    const auditHours = [...new Set(plan.slots.map(slot => slot.hour))].sort((a, b) => a - b);
+    // With the natural offset hours occupied, an outward or wrapping search
+    // would place the drain EARLIER in the day — the claim cron is daily, so
+    // "01:00" is not after a 22:00 audit, it is 21 hours before the next one.
+    const plan = planAll({ busy: busyFrom(['30 3 * * *']), options: { checksPerDay: 4, claimOffsetHours: 3 } });
+    const auditHours = [...new Set(plan.slots.map(slot => slot.hour))];
     expect(plan.claim.hours).toHaveLength(auditHours.length);
-    auditHours.forEach((auditHour, index) => {
-      const gap = (plan.claim.hours.slice().sort((a, b) => a - b)[index] - auditHour + 24) % 24;
-      expect(gap).toBeGreaterThan(0);
-      expect(gap).toBeLessThan(24);
-    });
+    // Every claim hour is strictly later in the SAME day than the audit it
+    // follows, and by at least the requested offset.
+    for (const claimHour of plan.claim.hours) {
+      const follows = auditHours.filter(hour => hour < claimHour);
+      expect(follows.length).toBeGreaterThan(0);
+      expect(claimHour - Math.max(...follows)).toBeGreaterThanOrEqual(3);
+    }
+    expect(Math.min(...plan.claim.gapHours)).toBeGreaterThanOrEqual(3);
   });
 
-  it('emits one daily cron for the claim drain covering every slot', () => {
-    const plan = planAll({ options: { checksPerDay: 2 } });
-    expect(plan.claim.cron).toBe(`0 ${plan.claim.hours.join(',')} * * *`);
+  it('places the audits in clock order within a day, so the suggested order holds', () => {
+    // Only three hours free all week, far enough apart that the outward search
+    // in `findFreeHour` resolves slot 2 BELOW slot 1 — which used to assign
+    // `performance` an hour before the `code-quality` it must follow.
+    const free = new Set([0, 4, 10]);
+    const busy = buildBusySlots(
+      [{ days: [0, 1, 2, 3, 4, 5, 6], hours: Array.from({ length: 24 }, (_, hour) => hour).filter(hour => !free.has(hour)) }],
+      { padBeforeHours: 0, padAfterHours: 0 },
+    );
+    const plan = planQualitySchedule({
+      taskTypes: ['performance', 'code-quality', 'security'],
+      busy,
+      options: { checksPerDay: 3, claimBetween: false },
+    });
+    const monday = plan.slots.filter(slot => slot.day === 1);
+    expect(monday.map(slot => slot.hour)).toEqual([0, 4, 10]);
+    const hourOf = taskType => monday.find(slot => slot.taskType === taskType).hour;
+    expect(hourOf('code-quality')).toBeLessThan(hourOf('performance'));
+  });
+
+  it('drops the claim slot rather than wrapping it past midnight', () => {
+    // A 23:00 audit has no room left in the day for a +3h drain. Wrapping to
+    // 02:00 on a DAILY cron would run it before every audit, not after.
+    const plan = planQualitySchedule({
+      taskTypes: ['security'],
+      options: { windowStartHour: 23, windowEndHour: 23, claimOffsetHours: 3 },
+    });
+    expect(plan.slots[0].hour).toBe(23);
+    expect(plan.claim).toBeNull();
+    expect(plan.warnings.join(' ')).toMatch(/No free hour left in the day/);
+  });
+
+  it('defers to each audit catalog default rather than forcing one delivery mode', () => {
+    // 11 audits ship `defaultFileIssues: false`. A form-wide `true` default
+    // would flip every one of them to issues-only on an untouched Apply.
+    const plan = planAll();
+    for (const slot of plan.slots) expect(slot.fileIssues).toBe(defaultFileIssuesFor(slot.taskType));
+    expect(plan.slots.some(slot => slot.fileIssues)).toBe(true);
+    expect(plan.slots.some(slot => !slot.fileIssues)).toBe(true);
+  });
+
+  it('reports a checks-per-day below the floor instead of silently raising it', () => {
+    const plan = planAll({ options: { checksPerDay: 1 } });
+    expect(plan.checksPerDay).toBe(Math.ceil(AUDIT_TASK_TYPE_LIST.length / 7));
+    expect(plan.warnings.join(' ')).toMatch(/1 a day was raised to 4/);
+  });
+
+  it('says so when an overnight window is collapsed rather than planning a window nobody chose', () => {
+    const plan = planAll({ options: { windowStartHour: 22, windowEndHour: 6 } });
+    expect(plan.warnings.join(' ')).toMatch(/cannot wrap past midnight/);
+    for (const slot of plan.slots) expect(slot.hour).toBe(22);
+  });
+
+  it('keeps a request field from riding back as a planning option', () => {
+    // The client seeds its form from `plan.options`; an echoed `taskTypes`
+    // there would override the user's live selection on the next request.
+    const plan = planQualitySchedule({ taskTypes: ['security'], options: { taskTypes: ['ux'], nonsense: 1 } });
+    expect(plan.options.taskTypes).toBeUndefined();
+    expect(plan.options.nonsense).toBeUndefined();
+    expect(plan.slots.map(slot => slot.taskType)).toEqual(['security']);
+  });
+
+  it('emits one daily cron covering every slot, not one per day', () => {
+    const plan = planAll();
+    // The literal, not the production expression restated: a planner that
+    // emitted one claim hour for four daily slots would pass that version.
+    expect(plan.claim.cron).toBe('0 3,9,15,21 * * *');
+    expect(plan.claim.hours).toHaveLength(plan.checksPerDay);
     expect(plan.claim.taskType).toBe('claim-work');
   });
 

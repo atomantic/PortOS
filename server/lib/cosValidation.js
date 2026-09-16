@@ -1301,5 +1301,7 @@ export const qualitySchedulePlanSchema = z.object({
   claimTaskType: z.enum(CLAIM_DRAIN_TASK_TYPES).optional(),
   padBeforeHours: z.number().int().min(0).max(12).optional(),
   padAfterHours: z.number().int().min(0).max(12).optional(),
-  fileIssues: z.boolean().optional(),
+  // null = let each audit's catalog default decide (the form's default),
+  // which is NOT the same as an absent key meaning the same thing by accident.
+  fileIssues: z.boolean().nullable().optional(),
 }).strict();

@@ -95,8 +95,8 @@ and category, including a 30-day lookback to seed the selected range.
 ## Weekly quality schedule
 
 The app's Quality tab carries a **Weekly quality schedule** form that configures
-every applicable audit for that app in one write, instead of hand-picking ~26
-cron expressions on the Schedule page. It writes ordinary per-app task-type
+every applicable audit for that app in one write, instead of hand-picking a
+cron expression per audit on the Schedule page. It writes ordinary per-app task-type
 overrides, so every entry it creates stays editable there afterwards.
 
 **Which checks.** Checks are pre-selected by applicability. A category an earlier
@@ -113,29 +113,42 @@ audit declares its own requirement as `requiresCapability` in
 and under the catalog's guard test; `server/services/appQualitySchedule.js` owns
 the detection, and throws at load if a declared capability has no way to be
 recognized. Everything is advisory: a skipped check
-is still listed with its reason and can be selected by hand, and a repository
-that cannot be scanned offers every check rather than deselecting the catalog
-for want of evidence.
+is still listed with its reason and can be selected by hand, and a repository that could not be
+fully inventoried offers every check rather than deselecting the catalog for want
+of evidence — a `git ls-files` that fails falls back to a two-level listing, which
+is explicitly not evidence of absence.
 
-**When.** The selection is spread across all seven days — 26 checks become four a
-day — ordered so each one follows the audits `AUDIT_SUGGESTED_AFTER` names as its
-predecessors. The hours are chosen, not entered: the planner collects the
-weekday/hour cells already occupied by this app's other cron-scheduled work (the
-install-wide CoS cadence for types enabled on this app, each perpetual drain's
-recheck cadence, and the app's own cron overrides), pads each by an hour before
+**When.** The selection is spread across the week — the 25 shipped checks become
+four a day — ordered so each one follows the audits `AUDIT_SUGGESTED_AFTER` names
+as its predecessors, and laid out in clock order within each day so that sequence
+survives. Asking for more checks per day uses fewer days; asking for fewer than
+the week needs is raised to the floor, with a warning saying so. The hours are
+chosen, not entered: the planner collects the weekday/hour cells already occupied
+by this app's other cron-scheduled work (the CoS cadence of every type enabled for
+this app plus every install-wide type whether or not it is, each perpetual drain's
+recheck cadence, and the app's own cron overrides — where a per-app cadence
+REPLACES the global one, as `shouldRunTask` reads it), pads each by an hour before
 and two after, and places slots in the free cells nearest an even spacing. That
 is what keeps an audit out of a 03:30 nightly release window. The types the plan
 is about to rewrite are excluded from that collection, so re-running the form
-does not treat last week's plan as an obstacle to this week's.
+does not treat last week's plan as an obstacle to this week's. A window cannot
+wrap past midnight; asking for one is reported rather than silently collapsed.
 
-**Delivery and the claim drain.** Each check either files issues or implements
-the fix (`taskMetadata.fileIssues`), set as a form-wide default with a per-check
-override. When at least one check files issues, one claim job — `claim-work` by
-default, which routes to whichever tracker the app resolves to — is scheduled a
-few hours after each check as a single daily cron (`0 8,16 * * *`), so the issues
-an audit files get worked before the next audit runs. Its placement only ever
-moves later than the check it follows; no claim drain is scheduled when every
-selected check implements its own fixes.
+**Delivery and the claim drain.** Each check either files issues or implements the
+fix (`taskMetadata.fileIssues`). The form defaults to **each check's own catalog
+default** — 11 audits ship `defaultFileIssues: false`, and a form-wide default
+would silently contradict every other dispatch path — with a form-wide override
+and a per-check override above it. When at least one check files issues, one claim
+job — `claim-work` by default, which routes to whichever tracker the app resolves
+to — is scheduled a few hours after each check as a single daily cron (with the
+shipped defaults, `0 3,9,15,21 * * *`), so the issues an audit files get worked
+before the next audit runs. Its placement only ever moves later **in the same
+day** than the check it follows — a daily cron that wrapped past midnight would
+run before every audit, not after — and the slot is dropped rather than wrapped
+when the day has no room left. No claim drain is scheduled when every selected
+check implements its own fixes, and Apply retires a drain an earlier plan planted
+when the drain is switched off or switched to another type (recognized by the
+cron shape this planner emits, so a claim cadence set by hand survives).
 
 Nothing is written until **Apply**, which is also the whole picture: the selected
 checks are enabled with their planned cron and delivery mode, and audit types

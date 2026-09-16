@@ -529,7 +529,7 @@ describe('Apps Task-Type Routes', () => {
       expect(buildQualitySchedulePlan).toHaveBeenCalledWith({ id: 'app-001', name: 'App' });
     });
 
-    it('previews an edited form without writing anything', async () => {
+    it('routes a preview to the planner, never to the writer', async () => {
       const response = await request(app)
         .post('/api/apps/app-001/quality-schedule/preview')
         .send({ taskTypes: ['security'], checksPerDay: 2, fileIssuesByType: { security: false } });
@@ -553,7 +553,12 @@ describe('Apps Task-Type Routes', () => {
       expect(response.status).toBe(200);
       expect(response.body).toMatchObject({ success: true, applied: 1, disabled: 25 });
       expect(applyQualitySchedulePlan.mock.calls[0][1]).toMatchObject({ taskTypes: ['security'], claimBetween: false });
-      expect(recordUserAction).toHaveBeenCalled();
+      // The ledger entry is the audit trail for a write that rewrote every
+      // audit cadence on the app — a bare "was called" would not notice the
+      // counts going missing.
+      expect(recordUserAction).toHaveBeenCalledWith(expect.objectContaining({
+        payload: expect.objectContaining({ qualityPlan: true, applied: 1, disabled: 25 }),
+      }));
     });
   });
 });

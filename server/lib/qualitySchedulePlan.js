@@ -34,8 +34,13 @@ export const DEFAULT_QUALITY_SCHEDULE_OPTIONS = Object.freeze({
   /** Hours around an already-scheduled job treated as occupied. */
   padBeforeHours: 1,
   padAfterHours: 2,
-  /** Default delivery mode for every check with no per-check answer. */
-  fileIssues: true,
+  /**
+   * Form-wide delivery mode. `null` means "ask the catalog per audit"
+   * (`defaultFileIssuesFor`), which is the default because 11 audits ship
+   * `defaultFileIssues: false` — a form-wide `true` here would silently flip
+   * every one of them to issues-only on an untouched Apply.
+   */
+  fileIssues: null,
 });
 
 const clampHour = (value, fallback) => {
@@ -82,7 +87,13 @@ export function orderQualityChecks(taskTypes) {
  * @returns {object} The resolved bag
  */
 export function resolveQualityScheduleOptions(options = {}) {
-  const settings = { ...DEFAULT_QUALITY_SCHEDULE_OPTIONS, ...options };
+  // Pick, never spread: the caller hands us the whole request body, and the
+  // client seeds its form from the returned bag — so an echoed `taskTypes`
+  // would come back as an option and override the user's live selection.
+  const picked = Object.fromEntries(Object.keys(DEFAULT_QUALITY_SCHEDULE_OPTIONS)
+    .filter(key => options[key] !== undefined)
+    .map(key => [key, options[key]]));
+  const settings = { ...DEFAULT_QUALITY_SCHEDULE_OPTIONS, ...picked };
   const windowStartHour = clampHour(settings.windowStartHour, DEFAULT_QUALITY_SCHEDULE_OPTIONS.windowStartHour);
   return {
     ...settings,
@@ -151,12 +162,24 @@ function findFreeHour(target, { busy, taken, low, high }) {
  * night's backlog.
  */
 function findFreeHourForward(target, { busy, taken }) {
-  for (let step = 0; step < 24; step += 1) {
-    const hour = (target + step) % 24;
+  // Bounded at 23, never wrapping: the drain runs on a DAILY cron, so an hour
+  // "after" midnight is not later than the audit — it is 21 hours earlier the
+  // same day, which is exactly the backlog-ordering bug the forward search
+  // exists to prevent. No free hour left in the day drops the slot instead.
+  for (let hour = target; hour <= 23; hour += 1) {
     if (!taken.has(hour) && freeAllWeek(busy, hour)) return hour;
   }
   return null;
 }
+
+/**
+ * The cron shape this planner emits for a claim drain: minute zero, an explicit
+ * hour list, every day. `applyQualitySchedulePlan` uses it to recognize a drain
+ * a previous plan wrote, so switching the drain type — or turning it off — can
+ * retire the old one without touching a claim cadence a human set by hand.
+ */
+export const PLANNED_CLAIM_CRON = /^0 \d{1,2}(?:,\d{1,2})* \* \* \*$/;
+export const isPlannedClaimCron = (interval) => typeof interval === 'string' && PLANNED_CLAIM_CRON.test(interval.trim());
 
 /**
  * Plan the week.
@@ -181,6 +204,13 @@ export function planQualitySchedule({ taskTypes = [], fileIssuesByType = {}, bus
   const warnings = [];
   const ordered = orderQualityChecks(taskTypes);
 
+  // An overnight window (22:00 → 06:00) is the natural way to ask for one, and
+  // the resolver collapses it to a single hour. Say so rather than reporting a
+  // "1-hour window" the user never chose.
+  if (Number.isInteger(options.windowEndHour) && options.windowEndHour < windowStartHour) {
+    warnings.push(`Latest hour ${String(options.windowEndHour).padStart(2, '0')}:00 is before the earliest hour, and a window cannot wrap past midnight — planning in ${String(windowStartHour).padStart(2, '0')}:00 only.`);
+  }
+
   if (!ordered.length) {
     return { checksPerDay: 0, slots: [], claim: null, warnings: ['No quality checks selected.'], options: settings };
   }
@@ -191,15 +221,17 @@ export function planQualitySchedule({ taskTypes = [], fileIssuesByType = {}, bus
   const requested = Number(settings.checksPerDay);
   const minimumPerDay = Math.ceil(ordered.length / 7);
   let checksPerDay = Math.max(minimumPerDay, Number.isInteger(requested) && requested > 0 ? requested : 0);
+  if (Number.isInteger(requested) && requested > 0 && requested < minimumPerDay) {
+    warnings.push(`${ordered.length} checks need at least ${minimumPerDay} a day to each get their own slot in a week, so ${requested} a day was raised to ${minimumPerDay}.`);
+  }
   if (checksPerDay > windowHours) {
     warnings.push(`${ordered.length} checks need ${checksPerDay} slots a day, which does not fit in a ${windowHours}-hour window — widen the window or deselect checks.`);
     checksPerDay = windowHours;
   }
 
-  // One audit hour per daily slot, plus its claim hour, all free every weekday.
+  // One audit hour per daily slot, plus the claim hour that follows it.
   const taken = new Set();
-  const auditHours = [];
-  const claimHours = [];
+  const placements = [];
   for (let slot = 0; slot < checksPerDay; slot += 1) {
     const target = windowStartHour + Math.round((slot * windowHours) / checksPerDay);
     const auditHour = findFreeHour(Math.min(target, windowEndHour), { busy, taken, low: windowStartHour, high: windowEndHour });
@@ -208,20 +240,27 @@ export function planQualitySchedule({ taskTypes = [], fileIssuesByType = {}, bus
       break;
     }
     taken.add(auditHour);
-    auditHours.push(auditHour);
+    const placement = { auditHour, claimHour: null };
+    placements.push(placement);
 
     if (!settings.claimBetween) continue;
     // The claim drain may sit outside the audit window — it is the follow-up
-    // work, not an audit — so it searches the whole day.
-    const claimTarget = (auditHour + Math.max(1, Number(settings.claimOffsetHours) || 1)) % 24;
-    const claimHour = findFreeHourForward(claimTarget, { busy, taken });
+    // work, not an audit — but never past midnight (see findFreeHourForward).
+    const claimTarget = auditHour + Math.max(1, Number(settings.claimOffsetHours) || 1);
+    const claimHour = claimTarget > 23 ? null : findFreeHourForward(claimTarget, { busy, taken });
     if (claimHour === null) {
-      warnings.push('No free hour for the claim drain after every check; it will run on fewer slots.');
+      warnings.push('No free hour left in the day for the claim drain after every check; it will run on fewer slots.');
       continue;
     }
     taken.add(claimHour);
-    claimHours.push(claimHour);
+    placement.claimHour = claimHour;
   }
+
+  // Audits run in clock order within a day: `findFreeHour` searches OUTWARD from
+  // each target, so slot 2 can resolve to an earlier hour than slot 1 — and
+  // assigning the ordered checks to unsorted hours would run an audit before the
+  // predecessor `orderQualityChecks` just placed ahead of it.
+  const auditHours = placements.map(placement => placement.auditHour).sort((a, b) => a - b);
 
   if (!auditHours.length) {
     return { checksPerDay: 0, slots: [], claim: null, warnings, options: settings };
@@ -250,12 +289,17 @@ export function planQualitySchedule({ taskTypes = [], fileIssuesByType = {}, bus
   }
 
   const filingSlots = slots.filter(slot => slot.fileIssues);
+  const claimPlacements = placements.filter(placement => placement.claimHour !== null);
   let claim = null;
-  if (settings.claimBetween && claimHours.length && filingSlots.length) {
-    const hours = [...new Set(claimHours)].sort((a, b) => a - b);
+  if (settings.claimBetween && claimPlacements.length && filingSlots.length) {
+    const hours = [...new Set(claimPlacements.map(placement => placement.claimHour))].sort((a, b) => a - b);
+    // The REALIZED gaps, not the requested offset: an occupied target hour
+    // pushes the drain later, and the preview has to say what it will do.
+    const gapHours = [...new Set(claimPlacements.map(placement => placement.claimHour - placement.auditHour))].sort((a, b) => a - b);
     claim = {
       taskType: settings.claimTaskType,
       hours,
+      gapHours,
       cron: `0 ${hours.join(',')} * * *`,
     };
   } else if (settings.claimBetween && !filingSlots.length) {

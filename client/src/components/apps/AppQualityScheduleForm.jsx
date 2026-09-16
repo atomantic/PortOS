@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useId, useRef, useState } from 'react';
 import { Link } from 'react-router';
 import { WEEKDAYS } from '../../utils/cronHelpers';
 import { applyAppQualitySchedule, getAppQualitySchedule, previewAppQualitySchedule } from '../../services/apiApps';
@@ -35,12 +35,20 @@ const selectClass = 'block w-full bg-port-bg border border-port-border rounded p
  * scheduled jobs already occupy. Nothing is written until Apply.
  */
 export default function AppQualityScheduleForm({ app }) {
+  // Scopes the per-check checkbox ids, which are otherwise page-global.
+  const fieldPrefix = useId();
   const [data, setData] = useState(null);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const [selected, setSelected] = useState(null);
   const [modes, setModes] = useState({});
   const [options, setOptions] = useState(null);
+  // Bumping this re-runs the load effect, which is how the failure state retries.
+  const [reloadToken, setReloadToken] = useState(0);
+  // True while the form describes something the rendered plan does not yet.
+  // Apply gates on it: the grid and the button label read the LAST plan, so
+  // applying mid-debounce would write a selection the user never saw previewed.
+  const [planStale, setPlanStale] = useState(false);
   // The initial GET already carries the plan for the untouched form, so the
   // first run of the preview effect has nothing to ask for.
   const untouched = useRef(true);
@@ -50,6 +58,18 @@ export default function AppQualityScheduleForm({ app }) {
 
   useEffect(() => {
     let live = true;
+    // Reset first: a different app must never render the previous app's plan,
+    // nor let Apply write the previous app's selection onto this one. The
+    // parent currently remounts us on `app.id`, but that invariant lives two
+    // files away — the guard belongs here (client/src/AGENTS.md).
+    setData(null);
+    setSelected(null);
+    setOptions(null);
+    setModes({});
+    setError('');
+    setPlanStale(false);
+    untouched.current = true;
+    revision.current += 1;
     getAppQualitySchedule(app.id)
       .then(response => {
         if (!live) return;
@@ -60,7 +80,7 @@ export default function AppQualityScheduleForm({ app }) {
       })
       .catch(err => live && setError(err.message || 'Could not load the quality schedule'));
     return () => { live = false; };
-  }, [app.id]);
+  }, [app.id, reloadToken]);
 
   // `options` always comes from the server's own resolved bag, so every field
   // the schema accepts is already present — no client-side default ladder.
@@ -73,10 +93,22 @@ export default function AppQualityScheduleForm({ app }) {
     if (!selected || !options) return undefined;
     if (untouched.current) { untouched.current = false; return undefined; }
     const mine = ++revision.current;
+    setPlanStale(true);
     const timer = setTimeout(() => {
       previewAppQualitySchedule(app.id, body())
-        .then(response => { if (mine === revision.current) { setData(response); setError(''); } })
-        .catch(err => { if (mine === revision.current) setError(err.message || 'Could not re-plan the schedule'); });
+        .then(response => {
+          if (mine !== revision.current) return;
+          setData(response);
+          setError('');
+          setPlanStale(false);
+        })
+        .catch(err => {
+          if (mine !== revision.current) return;
+          setError(err.message || 'Could not re-plan the schedule');
+          // Still stale — the shown plan does not describe the form, and Apply
+          // must stay shut rather than write something never previewed.
+          setPlanStale(true);
+        });
     }, PREVIEW_DEBOUNCE_MS);
     return () => clearTimeout(timer);
     // `data` is deliberately NOT a dependency — this effect writes it, so
@@ -96,26 +128,43 @@ export default function AppQualityScheduleForm({ app }) {
   if (error && !data) return <section aria-label="Weekly quality schedule" className="border-t border-port-border pt-3">
     <h4 className="font-medium">Weekly quality schedule</h4>
     <p role="alert" className="text-sm text-port-error">{error}</p>
+    <button type="button" onClick={() => { setError(''); setReloadToken(token => token + 1); }}
+      className="mt-2 text-xs text-port-accent hover:underline">Try again</button>
   </section>;
   if (!data || !selected || !options) return <p className="text-sm text-gray-400" role="status">Loading the weekly quality schedule…</p>;
 
-  const { plan, checks, capabilities, scanned, busySources, claimTaskTypes = [] } = data;
+  const { plan, checks, capabilities, scanned, complete, busySources, claimTaskTypes = [] } = data;
   const toggle = taskType => setSelected(previous => previous.includes(taskType)
     ? previous.filter(type => type !== taskType)
     : [...previous, taskType]);
   const setOption = (key, value) => setOptions(previous => ({ ...previous, [key]: value }));
   const setMode = (taskType, fileIssues) => setModes(previous => ({ ...previous, [taskType]: fileIssues }));
+  // The window cannot wrap past midnight, so moving one end past the other
+  // drags the other along — otherwise the server silently collapses the window
+  // and the two selects go on describing one it never planned against.
+  const setWindow = (key, hour) => setOptions(previous => ({
+    ...previous,
+    windowStartHour: key === 'windowStartHour' ? hour : Math.min(previous.windowStartHour, hour),
+    windowEndHour: key === 'windowEndHour' ? hour : Math.max(previous.windowEndHour, hour),
+  }));
   const applicable = checks.filter(check => check.applicable);
   const skipped = checks.filter(check => !check.applicable);
   const byDay = WEEK_ORDER.map(day => ({ day, slots: plan.slots.filter(slot => slot.day === day) })).filter(entry => entry.slots.length);
+  const daysUsed = byDay.length;
+  // The realized gap, which is not the requested offset whenever a busy hour
+  // pushed the drain later. Stating the request here would be a lie exactly
+  // when the planner did its job.
+  const claimGap = plan.claim?.gapHours?.length
+    ? (plan.claim.gapHours.length === 1 ? `${plan.claim.gapHours[0]}h` : `${plan.claim.gapHours[0]}–${plan.claim.gapHours.at(-1)}h`)
+    : null;
 
   return (
     <section aria-label="Weekly quality schedule" className="border-t border-port-border pt-3 space-y-3">
       <h4 className="font-medium">Weekly quality schedule</h4>
       <p className="text-xs text-gray-400">
-        Spreads the selected checks across all seven days and picks the hours itself, avoiding the windows this app’s other
+        Spreads the selected checks over {daysUsed === 7 ? 'all seven days' : `${daysUsed} day${daysUsed === 1 ? '' : 's'}`} and picks the hours itself, avoiding the windows this app’s other
         scheduled jobs already run in. {applicable.length} of {checks.length} checks apply to this repository
-        {scanned > 0 ? '' : ' (repository could not be scanned, so every check is offered)'}
+        {complete ? '' : ' (the repository could not be fully scanned, so every check is offered)'}
         {skipped.length > 0 && `; ${skipped.length} skipped`}. Nothing is saved until you press Apply.
       </p>
 
@@ -123,27 +172,38 @@ export default function AppQualityScheduleForm({ app }) {
         <FormField label="Checks per day">
           <select className={selectClass} value={options.checksPerDay ?? ''} disabled={busy}
             onChange={event => setOption('checksPerDay', event.target.value === '' ? null : Number(event.target.value))}>
-            <option value="">Spread evenly over the week</option>
-            {[1, 2, 3, 4, 5, 6].map(count => <option key={count} value={count}>{count} per day</option>)}
+            <option value="">Spread evenly over the week ({plan.checksPerDay} a day)</option>
+            {/* Below the floor the plan needs, the planner raises the number and
+                says so; offering those values as if they took effect would lie. */}
+            {[1, 2, 3, 4, 5, 6].filter(count => count >= plan.checksPerDay).map(count => (
+              <option key={count} value={count}>{count} per day</option>
+            ))}
           </select>
         </FormField>
         <FormField label="Earliest hour">
           <select className={selectClass} value={options.windowStartHour} disabled={busy}
-            onChange={event => setOption('windowStartHour', Number(event.target.value))}>
+            onChange={event => setWindow('windowStartHour', Number(event.target.value))}>
             {Array.from({ length: 24 }, (_, hour) => <option key={hour} value={hour}>{hourLabel(hour)}</option>)}
           </select>
         </FormField>
         <FormField label="Latest hour">
           <select className={selectClass} value={options.windowEndHour} disabled={busy}
-            onChange={event => setOption('windowEndHour', Number(event.target.value))}>
+            onChange={event => setWindow('windowEndHour', Number(event.target.value))}>
             {Array.from({ length: 24 }, (_, hour) => <option key={hour} value={hour}>{hourLabel(hour)}</option>)}
           </select>
         </FormField>
         <FormField label="Default delivery">
           {/* Changing the form-wide default clears the per-check overrides —
-              otherwise a row the user never touched would keep the old mode. */}
-          <select className={selectClass} value={options.fileIssues === false ? 'fix' : 'file'} disabled={busy}
-            onChange={event => { setModes({}); setOption('fileIssues', event.target.value === 'file'); }}>
+              otherwise a row the user never touched would keep the old mode.
+              "Each check's default" is the shipped answer: 11 audits declare
+              `defaultFileIssues: false` in the catalog, and forcing them all to
+              file issues would silently contradict every other dispatch path. */}
+          <select className={selectClass} value={options.fileIssues === null ? 'default' : options.fileIssues ? 'file' : 'fix'} disabled={busy}
+            onChange={event => {
+              setModes({});
+              setOption('fileIssues', event.target.value === 'default' ? null : event.target.value === 'file');
+            }}>
+            <option value="default">Each check’s default</option>
             <option value="file">Plan and file issues</option>
             <option value="fix">Implement the fix</option>
           </select>
@@ -176,14 +236,14 @@ export default function AppQualityScheduleForm({ app }) {
         <summary className="cursor-pointer text-port-accent">Checks ({selected.length} of {checks.length} selected)</summary>
         <ul className="mt-2 space-y-1">{checks.map(check => (
           <li key={check.taskType} className="flex flex-wrap items-baseline gap-x-2 gap-y-1">
-            <input type="checkbox" id={`quality-check-${check.taskType}`} className="accent-port-accent" disabled={busy}
+            <input type="checkbox" id={`${fieldPrefix}-${check.taskType}`} className="accent-port-accent" disabled={busy}
               checked={selected.includes(check.taskType)} onChange={() => toggle(check.taskType)} />
-            <label htmlFor={`quality-check-${check.taskType}`} className={check.applicable ? 'text-gray-200' : 'text-gray-500'}>
+            <label htmlFor={`${fieldPrefix}-${check.taskType}`} className={check.applicable ? 'text-gray-200' : 'text-gray-500'}>
               {check.label}
             </label>
             {selected.includes(check.taskType) && (
               <select aria-label={`${check.label} delivery`} className="bg-port-bg border border-port-border rounded px-1 py-0.5" disabled={busy}
-                value={(modes[check.taskType] ?? options.fileIssues !== false) ? 'file' : 'fix'}
+                value={(modes[check.taskType] ?? plan.slots.find(slot => slot.taskType === check.taskType)?.fileIssues ?? true) ? 'file' : 'fix'}
                 onChange={event => setMode(check.taskType, event.target.value === 'file')}>
                 <option value="file">file issues</option>
                 <option value="fix">implement</option>
@@ -192,7 +252,7 @@ export default function AppQualityScheduleForm({ app }) {
             {check.reason && <span className="text-gray-500">— {check.reason}</span>}
           </li>
         ))}</ul>
-        {scanned > 0 && <p className="mt-2">
+        {complete && <p className="mt-2">
           Detected in this repository: {Object.entries(capabilities).filter(([, present]) => present).map(([name]) => name).join(', ') || 'none'} ({scanned} tracked files scanned).
         </p>}
       </details>
@@ -223,13 +283,13 @@ export default function AppQualityScheduleForm({ app }) {
       </div>}
 
       {plan.claim && <p className="text-xs text-gray-400">
-        <code>{plan.claim.taskType}</code> drains the backlog daily at {plan.claim.hours.map(hourLabel).join(', ')} — {options.claimOffsetHours}h after each check, so the issues an audit files get worked before the next one runs.
+        <code>{plan.claim.taskType}</code> drains the backlog daily at {plan.claim.hours.map(hourLabel).join(', ')}{claimGap && ` — ${claimGap} after each check`}, so the issues an audit files get worked before the next one runs.
       </p>}
 
       <div className="flex flex-wrap items-center gap-3">
-        <button type="button" onClick={apply} disabled={busy || !plan.slots.length}
+        <button type="button" onClick={apply} disabled={busy || planStale || !plan.slots.length}
           className="px-3 py-2 rounded bg-port-accent text-port-bg text-sm font-medium disabled:opacity-50">
-          {busy ? 'Applying…' : `Apply schedule (${plan.slots.length} check${plan.slots.length === 1 ? '' : 's'}${plan.claim ? ' + claim job' : ''})`}
+          {busy ? 'Applying…' : planStale ? 'Re-planning…' : `Apply schedule (${plan.slots.length} check${plan.slots.length === 1 ? '' : 's'}${plan.claim ? ' + claim job' : ''})`}
         </button>
         <Link to="/cos/schedule" className="text-xs text-port-accent hover:underline">Review on the Schedule page</Link>
       </div>
