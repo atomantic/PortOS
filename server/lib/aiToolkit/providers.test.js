@@ -177,9 +177,17 @@ describe('Provider Service', () => {
       // endpoint, so the key one of them names must not be handed to the other.
       other: { id: 'other', name: 'Other CLI', type: 'cli', command: 'other', enabled: true, models: ['a'], endpoint: 'https://one.example.com', apiKey: 'secret' },
       'other-tui': { id: 'other-tui', name: 'Other TUI', type: 'tui', command: 'other', enabled: true, models: ['a'], endpoint: 'https://two.example.com' },
+      // DISJOINT halves contradict nowhere — no key is named twice — but each
+      // mode is the sole namer of a different one. Merging would mint a hybrid
+      // neither record described and hand the CLI's credential to a backend it
+      // was never entered for, so one donor mode is required.
+      halves: { id: 'halves', name: 'Halves CLI', type: 'cli', command: 'halves', enabled: true, models: ['a'], apiKey: 'sk-private' },
+      'halves-tui': { id: 'halves-tui', name: 'Halves TUI', type: 'tui', command: 'halves', enabled: true, models: ['a'], endpoint: 'https://elsewhere.example.com' },
     } }));
     expect(await providerService.getProviderById('example-tui')).toMatchObject({ endpoint: 'https://api.example.com', apiKey: 'k' });
     expect(await providerService.getProviderById('other-tui')).not.toHaveProperty('apiKey');
+    expect(await providerService.getProviderById('halves-tui')).not.toHaveProperty('apiKey');
+    expect(await providerService.getProviderById('halves')).not.toHaveProperty('endpoint');
   });
 
   it.skipIf(process.platform === 'win32')('refreshes Pi models and distinguishes authentication from probe failure', async () => {

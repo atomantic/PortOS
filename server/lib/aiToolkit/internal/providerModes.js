@@ -88,13 +88,21 @@ export function sharedModeUpdates(updates, sibling) {
  * once (an endpoint AND its API key) disagrees on two. Only this fill uses the
  * loose grouping; the enablement/model convergence below keeps the strict one.
  *
- * Only a pair that is INCOMPLETE is repaired, never one that CONTRADICTS: a key
- * two modes both name with different values is a deliberate configuration (two
- * connections that happen to share a command), and picking a winner between two
- * endpoints or two credentials is nobody's call to make silently. One
- * contradiction disqualifies the whole group rather than just that key —
- * filling an API key across a pair that already points at two different
- * backends would send the credential somewhere it was never entered for.
+ * Only a pair that is INCOMPLETE is repaired: ONE mode holds the connection and
+ * the other holds nothing of it. Two conditions enforce that, and either one
+ * failing disqualifies the whole group rather than just the offending key.
+ *
+ * It must not CONTRADICT — a key two modes both name with different values is a
+ * deliberate configuration (two connections that happen to share a command),
+ * and picking a winner between two endpoints or two credentials is nobody's
+ * call to make silently.
+ *
+ * And every fill must come from the SAME donor mode. Two modes naming DISJOINT
+ * halves of a connection contradict nowhere, so the check above waves them
+ * through — yet merging them mints a hybrid neither record described: a CLI
+ * mode holding only an API key beside a TUI mode holding only an endpoint would
+ * hand that credential to a backend it was never entered for. One donor is what
+ * "the editor wrote one mode and the sibling never got it" actually looks like.
  */
 function fillModeSiblingIdentity(providers) {
   const byId = new Map(providers.map(provider => [provider.id, provider]));
@@ -105,8 +113,9 @@ function fillModeSiblingIdentity(providers) {
     const modes = group.map(({ id }) => byId.get(id)).filter(Boolean);
     const namers = MODE_GROUPED_KEYS.map(key => [key, modes.filter(mode => namesModeValue(mode, key))]);
     if (namers.some(([key, named]) => named.some(mode => !isDeepStrictEqual(mode[key], named[0][key])))) continue;
-    for (const [key, named] of namers) {
-      if (named.length !== 1) continue;
+    const fills = namers.filter(([, named]) => named.length === 1);
+    if (new Set(fills.map(([, named]) => named[0].id)).size > 1) continue;
+    for (const [key, named] of fills) {
       for (const mode of modes) {
         if (namesModeValue(mode, key)) continue;
         mode[key] = detachModeValue(named[0][key]);
