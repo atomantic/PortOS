@@ -13,6 +13,7 @@ const mock = vi.hoisted(() => ({
   executeToolCall: vi.fn(),
   readVisibility: vi.fn(),
   executeCallRequest: vi.fn(),
+  resolvePlaybookPhase: vi.fn(),
   createPersistentMindMemoryFromCandidate: vi.fn(async ({ candidateId, ...candidate }) => ({
     success: true,
     duplicate: false,
@@ -52,6 +53,9 @@ vi.mock('./persistentMindCallCapability.js', () => ({
   buildPersistentMindCallCapabilityPrompt: ({ enabled }) => `Call access: ${enabled ? 'ON' : 'OFF'}`,
   executePersistentMindCallRequest: (...args) => mock.executeCallRequest(...args),
 }));
+vi.mock('./persistentMindPlaybookSignals.js', () => ({
+  resolvePersistentMindPlaybookPhase: (...args) => mock.resolvePlaybookPhase(...args),
+}));
 vi.mock('./cosToolRegistry.js', () => ({
   readPersistentMindRecipeCatalog: vi.fn(async () => []),
   buildPersistentMindToolPrompt: ({ readPortos, writePortos }) => `PortOS tools: read=${Boolean(readPortos)} write=${Boolean(writePortos)}`,
@@ -73,6 +77,7 @@ beforeEach(() => {
   mock.executeTaskRequests.mockResolvedValue([]);
   mock.executeCallRequest.mockResolvedValue(null);
   mock.executeToolCall.mockResolvedValue({ state: 'completed', result: { ok: true, count: 1 } });
+  mock.resolvePlaybookPhase.mockResolvedValue({ phase: 'construct', reason: 'test default', signals: {} });
   mock.assertVision.mockImplementation((result, provider) => result?.provider || provider);
   mock.runPrompt.mockResolvedValue({ text: JSON.stringify({
     thinkingSummary: 'I connected the new request to the durable fact.',
@@ -141,6 +146,18 @@ describe('persistent mind adapter', () => {
       memories: mock.memories,
     });
     expect(mock.runPrompt).not.toHaveBeenCalled();
+    expect(mock.resolvePlaybookPhase).not.toHaveBeenCalled();
+    expect(prepared.playbookPhase).toBeNull();
+  });
+
+  it('resolves a maturity-aware phase and wires it into instructions only for continuous-play (#7458)', async () => {
+    mock.root.config.persistentMindPlaybook = { mode: 'continuous-play' };
+    mock.resolvePlaybookPhase.mockResolvedValue({ phase: 'coordinate', reason: '2 peer(s) with new activity to visit', signals: { districtCount: 20, failureRate: 0, peersWithActivity: 2 } });
+    const prepared = await createPersistentMindTurnAdapter().prepare({ profile });
+    expect(mock.resolvePlaybookPhase).toHaveBeenCalledTimes(1);
+    expect(prepared.playbookPhase).toMatchObject({ phase: 'coordinate' });
+    expect(prepared.instructions).toContain('PLAYBOOK PHASE — Coordinate');
+    delete mock.root.config.persistentMindPlaybook;
   });
 
   it('runs the exact pinned non-interactive profile and returns visible trajectory events', async () => {

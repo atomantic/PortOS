@@ -1,0 +1,117 @@
+import { describe, expect, it } from 'vitest';
+import {
+  PERSISTENT_MIND_PLAYBOOK_PHASES,
+  derivePersistentMindPlaybookPhaseSignals,
+  selectPersistentMindPlaybookPhase,
+} from './persistentMindPlaybookPhase.js';
+
+describe('selectPersistentMindPlaybookPhase', () => {
+  it('explores when signals are entirely unavailable', () => {
+    expect(selectPersistentMindPlaybookPhase()).toMatchObject({ phase: 'explore', reason: expect.stringContaining('unavailable') });
+    expect(selectPersistentMindPlaybookPhase({ districtCount: null })).toMatchObject({ phase: 'explore' });
+  });
+
+  it('explores a Commons at and just below the sparse threshold', () => {
+    expect(selectPersistentMindPlaybookPhase({ districtCount: 0 }).phase).toBe('explore');
+    expect(selectPersistentMindPlaybookPhase({ districtCount: 3 }).phase).toBe('explore');
+  });
+
+  it('constructs once the Commons clears the sparse threshold with no failures or peer activity', () => {
+    const result = selectPersistentMindPlaybookPhase({ districtCount: 4, failureRate: 0, peersWithActivity: 0 });
+    expect(result).toMatchObject({ phase: 'construct' });
+  });
+
+  it('maintains when the recent failure rate crosses the threshold, even with peer activity waiting', () => {
+    const result = selectPersistentMindPlaybookPhase({ districtCount: 10, failureRate: 0.25, peersWithActivity: 3 });
+    expect(result).toMatchObject({ phase: 'maintain', reason: expect.stringContaining('25%') });
+  });
+
+  it('coordinates when a peer has new activity and failures are below threshold', () => {
+    const result = selectPersistentMindPlaybookPhase({ districtCount: 10, failureRate: 0.1, peersWithActivity: 1 });
+    expect(result).toMatchObject({ phase: 'coordinate' });
+  });
+
+  it('stays in construct just below the mature threshold once failures/peers are quiet', () => {
+    const result = selectPersistentMindPlaybookPhase({ districtCount: 15, failureRate: 0, peersWithActivity: 0 });
+    expect(result).toMatchObject({ phase: 'construct' });
+  });
+
+  it('falls back to maintain for a mature, healthy, peer-quiet Commons', () => {
+    const result = selectPersistentMindPlaybookPhase({ districtCount: 16, failureRate: 0, peersWithActivity: 0 });
+    expect(result).toMatchObject({ phase: 'maintain', reason: expect.stringContaining('mature') });
+  });
+
+  it('always resolves to a documented phase', () => {
+    const matrix = [
+      {},
+      { districtCount: -5, failureRate: -1, peersWithActivity: -2 },
+      { districtCount: Number.NaN, failureRate: Number.NaN },
+      { districtCount: 100, failureRate: 0.9, peersWithActivity: 5 },
+    ];
+    for (const signals of matrix) {
+      expect(PERSISTENT_MIND_PLAYBOOK_PHASES).toContain(selectPersistentMindPlaybookPhase(signals).phase);
+    }
+  });
+
+  it('treats a negative/NaN failure rate as absent rather than throwing', () => {
+    expect(() => selectPersistentMindPlaybookPhase({ districtCount: 10, failureRate: Number.NaN })).not.toThrow();
+    expect(selectPersistentMindPlaybookPhase({ districtCount: 10, failureRate: -1 }).phase).toBe('construct');
+  });
+});
+
+describe('derivePersistentMindPlaybookPhaseSignals', () => {
+  it('returns null signals for a missing or malformed world-signals projection', () => {
+    expect(derivePersistentMindPlaybookPhaseSignals(null)).toEqual({ districtCount: null, failureRate: null, peersWithActivity: null });
+    expect(derivePersistentMindPlaybookPhaseSignals('not-an-object')).toEqual({ districtCount: null, failureRate: null, peersWithActivity: null });
+  });
+
+  it('sums entities across every projected district array', () => {
+    const signals = derivePersistentMindPlaybookPhaseSignals({
+      apps: [{ id: 'a' }, { id: 'b' }],
+      agents: [{ id: 'c' }],
+      tasks: null,
+      features: [{ id: 'd' }],
+      peers: [],
+      activity: [{ id: 'e' }, { id: 'f' }, { id: 'g' }],
+      goals: undefined,
+      memory: [{ id: 'h' }],
+      storage: [{ id: 'i' }, { id: 'j' }],
+      jira: [],
+      operations: [{ id: 'k' }],
+    });
+    expect(signals.districtCount).toBe(2 + 1 + 0 + 1 + 0 + 3 + 0 + 1 + 2 + 0 + 1);
+  });
+
+  it('prefers today failed/succeeded counts over successRate when both are present', () => {
+    const signals = derivePersistentMindPlaybookPhaseSignals({
+      productivity: [{ succeededToday: 3, failedToday: 1, successRate: 99 }],
+    });
+    expect(signals.failureRate).toBeCloseTo(0.25);
+  });
+
+  it('falls back to successRate, then to health status, when today counts are unavailable', () => {
+    const viaSuccessRate = derivePersistentMindPlaybookPhaseSignals({ productivity: [{ successRate: 80 }] });
+    expect(viaSuccessRate.failureRate).toBeCloseTo(0.2);
+
+    const viaHealthError = derivePersistentMindPlaybookPhaseSignals({ health: { status: 'error' } });
+    expect(viaHealthError.failureRate).toBe(1);
+    const viaHealthAttention = derivePersistentMindPlaybookPhaseSignals({ health: { status: 'attention' } });
+    expect(viaHealthAttention.failureRate).toBe(0.5);
+    const viaHealthHealthy = derivePersistentMindPlaybookPhaseSignals({ health: { status: 'healthy' } });
+    expect(viaHealthHealthy.failureRate).toBe(0);
+
+    expect(derivePersistentMindPlaybookPhaseSignals({}).failureRate).toBeNull();
+  });
+
+  it('counts only travelable peers reporting non-steady status as active', () => {
+    const signals = derivePersistentMindPlaybookPhaseSignals({
+      peers: [
+        { travelAvailable: true, status: 'active' },
+        { travelAvailable: true, status: 'steady' },
+        { travelAvailable: false, status: 'attention' },
+        { travelAvailable: true, status: 'error' },
+      ],
+    });
+    expect(signals.peersWithActivity).toBe(2);
+  });
+});
