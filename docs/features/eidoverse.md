@@ -830,3 +830,72 @@ Two ways to use a chosen layout:
   the local `vernacular` layer, matching every other authored foundation;
   publishing it to the shared baseline remains the separate, explicit
   `eidoverse.promote` act above.
+## Executable world controllers (#7456)
+
+SwarmWorld's strongest result is that technologies are *executable*: they keep
+running once the agent that authored them is gone. PortOS minds wake
+intermittently, so a world that only changes during a mind turn is a world that
+is dead most of the time. A **controller** is the durable thing that keeps
+running between wakes — a resource tick, an ambient verb, a gentle NPC, a
+maintenance hook — supervised by PortOS rather than by whoever installed it.
+
+**Behavior is code PortOS ships; an install is data a mind authors.** The only
+thing an install may say about behavior is a `controllerId`, resolved by
+`server/services/eidoverseControllerRegistry.js` against a fixed directory of
+shipped modules. There is deliberately no path-taking export on that resolver at
+all: an install arrives from an HTTP body or a mind's tool call, and "import the
+module this request names" is arbitrary code execution wearing a feature's
+clothes. This is the same rule the resilience-assay contribution registry
+already applies, for the same reason.
+
+**A tick cannot reach an AI provider.** `runControllerStep`
+(`server/lib/eidoverseControllers.js`) refuses a step that returns a Promise, so
+there is no await for a network, disk, or provider call to hide behind. Root
+`AGENTS.md`'s "no cold-bootstrap LLM calls" rule is therefore a structural
+property of the tick path rather than a convention — boot arms a timer and
+nothing else. The same synchronous rule is why every shipped controller is
+replayable by the agent-free assay with no extra authoring: the controller
+registry is the assay's **second contribution source**, behind the same
+`findContributionById` resolver, so a `controller` foundation can name its
+controller's id as its `contributionId` and be gated for promotion on evidence
+it still runs with its author gone.
+
+**Effects are proposals, from a closed vocabulary.** A step returns effects, it
+does not perform them — the same proposal-versus-consequence separation the
+construction tools have. `note` never leaves the ledger; `say` and `augment`
+reach the world only for an install whose `deliverEffects` was explicitly turned
+on (it defaults to `false`), and `augment` reuses the existing world-verb
+operation schema rather than inventing a second one. A delivery that fails is
+recorded and the step still counts: the controller's own state advanced, and
+re-running it to retry a world write would double-count everything it did.
+
+**Supervision.** `server/services/eidoverseControllerRuntime.js` registers one
+`eidoverse-controller-tick` interval with the event scheduler and steps every
+install whose own cadence is due. Arming is reconciled at every gate move —
+install, retire, arm/disarm — and not only at boot, so a controller installed at
+16:00 is not waiting for a restart to start ticking. A pass never replays a
+backlog: a machine asleep for three days wakes to ONE tick, because a cadence is
+"about this often", never a ledger of owed executions. A controller that fails
+`maxConsecutiveFailures` ticks in a row is disarmed with a recorded reason rather
+than retried forever, and an install whose `controllerId` this version no longer
+ships is disarmed immediately.
+
+**Storage** is `data/eidoverse/controllers.json` — `file-primary` and machine
+local, never federated (`docs/STORAGE.md`). A controller crosses to a peer only
+as the *body* of a promoted foundation, which carries no install.
+
+**Shipped controllers.** `ambient-beacon` counts ticks and marks a pulse every
+Nth one (`announce` decides whether that pulse is spoken into the world or kept
+as a note). `lantern-keeper` re-issues the `light` verb for a fixed set of world
+entities every Nth tick, so lamps an author placed stay lit across host restarts
+while the author is away — re-lighting an already-lit lamp is a no-op, which is
+what makes running it on a schedule safe.
+
+**The mind needs its own grant to install.** `eidoverse.install-controller` and
+`eidoverse.retire-controller` are gated on `manageEidoverse` **and** the separate
+default-off `installEidoverseControllers` grant, and are mind-scope only:
+building in the world during a turn is a different act from leaving something
+running in it afterwards. The read beside them, `eidoverse.controllers`, needs
+only `manageEidoverse` — a mind that can build should be able to see what is
+already ticking, and seeing is what makes the writes usable rather than
+guesswork.

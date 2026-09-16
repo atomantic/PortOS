@@ -3,7 +3,7 @@ import * as api from '../../services/api';
 import toast from '../ui/Toast';
 
 const normalizeCapabilities = (value) => ({
-  schemaVersion: 11,
+  schemaVersion: 12,
   createTasks: value?.createTasks === true,
   fileIssues: value?.fileIssues === true,
   manageMind: value?.manageMind === true,
@@ -11,6 +11,7 @@ const normalizeCapabilities = (value) => ({
   manageEidoverse: value?.manageEidoverse === true,
   visitEidoversePeers: value?.visitEidoversePeers === true,
   promoteEidoverseFoundations: value?.promoteEidoverseFoundations === true,
+  installEidoverseControllers: value?.installEidoverseControllers === true,
   callUser: value?.callUser === true,
   adjustLocalContext: value?.adjustLocalContext === true,
   readPortos: value?.readPortos === true,
@@ -62,6 +63,11 @@ const OPTIONS = [
     key: 'promoteEidoverseFoundations',
     label: 'Allow promoting Eidoverse foundations to the shared baseline',
     hint: 'Lets the mind offer a world foundation this install authored to the shared PortOS baseline, so peers can inherit the substance without your style layer. Separate from world management on purpose: building locally never implies publishing. The server re-runs the agent-free resilience assay itself and refuses a payload carrying machine identity, PII, or credentials.',
+  },
+  {
+    key: 'installEidoverseControllers',
+    label: 'Allow installing executable world controllers',
+    hint: 'Lets the mind attach a bounded, PortOS-supervised controller to your private world so it keeps ticking between wakes, and retire one it no longer wants. Controllers are named by id against the fixed registry PortOS ships — a mind can never point one at code you did not install — and every tick is synchronous, so a controller cannot reach an AI provider or the network. A controller speaks or builds only when its install explicitly enables delivery.',
   },
   {
     key: 'manageMind',
