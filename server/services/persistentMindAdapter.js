@@ -31,6 +31,7 @@ import {
 } from './persistentMindContext.js';
 import { normalizePersistentMindPrompt } from '../lib/persistentMindPrompt.js';
 import { composePersistentMindInstructions, normalizePersistentMindPlaybook } from '../lib/persistentMindPlaybook.js';
+import { resolvePersistentMindPlaybookPhase } from './persistentMindPlaybookSignals.js';
 import { assertVisionRunUsedImages, runPromptThroughProvider } from './promptRunner.js';
 import { stopRun } from './runner.js';
 import {
@@ -342,21 +343,28 @@ async function runPinnedPrompt({ provider, model, effort, prompt, screenshots = 
 
 export function createPersistentMindTurnAdapter() {
   return {
-    async prepare({ profile }) {
+    async prepare({ profile, signal }) {
       const [root, memories] = await Promise.all([
         loadState(),
         readPersistentMindMemories(PERSISTENT_MIND_ID),
       ]);
       const prompt = normalizePersistentMindPrompt(root.config?.persistentMindPrompt);
       const playbook = normalizePersistentMindPlaybook(root.config?.persistentMindPlaybook);
+      // Maturity-aware phase (#7458): resolved fresh each wake from live world
+      // signals so an empty vs. dense Commons gets a different loop, never a
+      // fixed cron personality. Only continuous-play pays for the read.
+      const playbookPhase = playbook.mode === 'continuous-play'
+        ? await resolvePersistentMindPlaybookPhase({ signal })
+        : null;
       return {
         ok: true,
         provider: profile.provider,
         model: profile.model,
         effort: profile.effort,
         identity: prompt.identity,
-        instructions: composePersistentMindInstructions(prompt.instructions, playbook),
+        instructions: composePersistentMindInstructions(prompt.instructions, playbook, playbookPhase?.phase),
         playbook,
+        playbookPhase,
         memories,
       };
     },

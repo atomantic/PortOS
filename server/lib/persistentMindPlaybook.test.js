@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   CONTINUOUS_PLAY_PLAYBOOK_INSTRUCTIONS,
+  PERSISTENT_MIND_PLAYBOOK_PHASE_INSTRUCTIONS,
   composePersistentMindInstructions,
   createDefaultPersistentMindPlaybook,
   mergePersistentMindPlaybook,
@@ -31,5 +32,31 @@ describe('persistentMindPlaybook', () => {
     const composed = composePersistentMindInstructions('Be concise.', { mode: 'continuous-play' });
     expect(composed.startsWith('Be concise.')).toBe(true);
     expect(composed).toContain('Continuous play');
+  });
+
+  it('selects the maturity-aware phase template when a valid phase is supplied (#7458)', () => {
+    const construct = playbookInstructionBlock({ mode: 'continuous-play' }, 'construct');
+    expect(construct).toBe(PERSISTENT_MIND_PLAYBOOK_PHASE_INSTRUCTIONS.construct);
+    expect(construct).toContain('PLAYBOOK PHASE — Construct');
+    expect(construct).toContain('Phase: Construct');
+    expect(construct).not.toBe(CONTINUOUS_PLAY_PLAYBOOK_INSTRUCTIONS);
+
+    for (const phase of ['explore', 'construct', 'maintain', 'coordinate']) {
+      const block = playbookInstructionBlock({ mode: 'continuous-play' }, phase);
+      expect(block).toBe(PERSISTENT_MIND_PLAYBOOK_PHASE_INSTRUCTIONS[phase]);
+    }
+
+    // An unrecognized/omitted phase keeps the general loop rather than throwing.
+    expect(playbookInstructionBlock({ mode: 'continuous-play' }, 'not-a-real-phase')).toBe(CONTINUOUS_PLAY_PLAYBOOK_INSTRUCTIONS);
+
+    const composed = composePersistentMindInstructions('Be concise.', { mode: 'continuous-play' }, 'coordinate');
+    expect(composed).toContain('PLAYBOOK PHASE — Coordinate');
+    expect(composed.startsWith('Be concise.')).toBe(true);
+  });
+
+  it('appends custom instructions after the phase template, not instead of it', () => {
+    const block = playbookInstructionBlock({ mode: 'continuous-play', customInstructions: 'Prefer the northern district.' }, 'maintain');
+    expect(block).toContain('PLAYBOOK PHASE — Maintain');
+    expect(block.endsWith('Prefer the northern district.')).toBe(true);
   });
 });
