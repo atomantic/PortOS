@@ -71,16 +71,22 @@ export function repoApiPath(env) {
 /**
  * One authenticated Actions API call with the standard headers and a timeout.
  *
+ * A caller may add headers (a POST body needs its `Content-Type`), but they are
+ * spread FIRST so the three fixed ones always win: this helper decides which
+ * host the token is sent to, and a caller that could rewrite `Authorization`
+ * would take that decision back out of here.
+ *
  * @param {typeof fetch} fetchImpl
  * @param {string} url
  * @param {string} token
- * @param {{method?: string, timeoutMs?: number}} [options]
+ * @param {{method?: string, timeoutMs?: number, headers?: Record<string, string>}} [options]
  * @returns {Promise<Response>}
  */
-export function githubRequest(fetchImpl, url, token, { timeoutMs = DEFAULT_TIMEOUT_MS, ...init } = {}) {
+export function githubRequest(fetchImpl, url, token, { timeoutMs = DEFAULT_TIMEOUT_MS, headers, ...init } = {}) {
   return fetchImpl(url, {
     ...init,
     headers: {
+      ...headers,
       Accept: 'application/vnd.github+json',
       Authorization: `Bearer ${token}`,
       'X-GitHub-Api-Version': GITHUB_API_VERSION,

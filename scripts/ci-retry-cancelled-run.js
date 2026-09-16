@@ -90,6 +90,43 @@ export const MAX_RUNTIME_MS = RETRY_DELAY_MS
 const sleep = (ms) => new Promise((resolve) => { setTimeout(resolve, ms); });
 
 /**
+ * The check run's name — stable, so every cancelled run reports under one
+ * heading in the PR's Checks tab rather than a new name each time.
+ */
+const RECOVERY_CHECK_NAME = 'CI cancel recovery';
+/**
+ * ALWAYS `neutral`, never `failure`/`success`. This check EXPLAINS the gate; it
+ * must never become a second one. `failure` would block a merge that branch
+ * protection — which requires `CI Gate` alone — allows, and `success` would read
+ * as a passing gate. PortOS's own auto-merge watcher (server/services/prWatcher.js)
+ * already counts NEUTRAL as green, so neutral is the one conclusion that stays
+ * purely informational to a human reader and to that watcher alike.
+ */
+const RECOVERY_CHECK_CONCLUSION = 'neutral';
+/** A check run is created against a commit, so the sha has to be a real one. */
+const COMMIT_SHA_PATTERN = /^[0-9a-f]{40}$/i;
+
+/**
+ * One sentence per reason code, for the PR reader looking at a bare red gate.
+ *
+ * Keyed by the SAME fixed reason codes the step summary renders, so the two
+ * surfaces cannot drift. Fixed prose only — never the branch name or any other
+ * payload text, for the reason `safeJobName` exists.
+ */
+const CHECK_REASON_TEXT = {
+  're-dispatched': 'This run was cancelled with no successor run and no failing job, so CI was re-dispatched automatically — once. Watch the new run for the real result.',
+  superseded: 'This run was cancelled because a newer CI run started for the same pull request. That newer run carries the real result, so this one was deliberately not retried.',
+  'job-failed': 'This run was cancelled by CI itself after a job genuinely failed, which is why the run reads cancelled rather than failure. That is a real red, not queue contention, so it was not retried.',
+  'retry-budget-exhausted': 'This run is already a retry attempt, and recovery re-dispatches a run at most once. Re-run it manually if it was cancelled externally again.',
+  'run-state-moved-on': 'The run changed state after the cancellation event — it has already been re-run, or is no longer a completed cancellation — so the one-retry budget was left unspent.',
+  'jobs-unavailable': "Recovery could not list this run's jobs, so it could not rule out a real job failure and did not retry. Re-run CI manually if the cancellation was external.",
+  'run-state-unavailable': "Recovery could not read this run's current state, so it did not risk spending the one-retry budget on a stale reading. Re-run CI manually if the cancellation was external.",
+  'sibling-runs-unavailable': "Recovery could not list the pull request's other runs, so it could not tell an external cancel from a supersession and did not retry. Re-run CI manually if the cancellation was external.",
+  'rerun-rejected': 'Recovery tried to re-dispatch this run and GitHub rejected the request. Re-run CI manually.',
+};
+const CHECK_REASON_FALLBACK = 'Recovery evaluated this cancelled run and did not re-dispatch it. Re-run CI manually if the cancellation was external.';
+
+/**
  * True when this job carries a real failure.
  *
  * The job's own conclusion is not enough. `cancel-current-ci-run.js` cancels
@@ -302,6 +339,53 @@ async function evaluateApiGuards(fetchImpl, target, logger) {
 }
 
 /**
+ * Publish the verdict back onto the pull request as a NEUTRAL check run.
+ *
+ * This is the only layer that can explain a run-wide cancel (#7438). `if:
+ * always()` on the CI gate defeats an upstream job failure, not a cancellation
+ * of the whole run — when GitHub cancels the run externally the gate is
+ * cancelled with it and prints nothing, so the PR shows a bare red `CI Gate`
+ * and the explanation exists only on a separate workflow run nobody finds.
+ *
+ * BEST-EFFORT, always. A recovery job must never turn red on top of an already
+ * cancelled run, so every failure here is logged and swallowed — the step
+ * summary is still written and the process still exits 0.
+ */
+async function publishRecoveryCheck(fetchImpl, target, result, logger) {
+  if (!COMMIT_SHA_PATTERN.test(target.headSha)) {
+    logger?.error?.('⚠️ CI cancel recovery: no usable head sha, so no explanatory check run was published');
+    return;
+  }
+  const reason = result.reason || 're-dispatched';
+  const response = await request(fetchImpl, `${target.repoPath}/check-runs`, target.token, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      name: RECOVERY_CHECK_NAME,
+      head_sha: target.headSha,
+      status: 'completed',
+      conclusion: RECOVERY_CHECK_CONCLUSION,
+      output: {
+        title: `${result.outcome}: ${reason}`,
+        // The same fixed reason code the step summary renders, plus the
+        // sentence that makes it actionable without opening another run.
+        summary: `CI run ${target.runId} ended \`cancelled\`.\n\n`
+          + `- outcome: \`${result.outcome}\`\n`
+          + `- reason: \`${reason}\`\n\n`
+          + `${CHECK_REASON_TEXT[reason] || CHECK_REASON_FALLBACK}\n\n`
+          + 'This check is informational and always neutral — it never blocks a merge.',
+      },
+    }),
+  }).catch((error) => {
+    logger?.error?.(`⚠️ CI cancel recovery: could not publish the explanatory check run: ${error?.message || 'network request failed'}`);
+    return null;
+  });
+  // A thrown request already logged its own reason above.
+  if (!response || isSuccess(response)) return;
+  logger?.error?.(`⚠️ CI cancel recovery: GitHub rejected the explanatory check run with ${Number(response.status) || 'an unknown status'}`);
+}
+
+/**
  * Decide whether the cancelled run deserves one re-dispatch, and do it.
  *
  * @param {object} [options]
@@ -331,14 +415,21 @@ export async function retryCancelledCiRun({
   // they say whether an outcome was reached before or after the wait, and how
   // long that wait was, so a later tuning pass can read its own baseline
   // instead of guessing at summaries written under a since-changed constant.
+  //
+  // `checkTarget` stays null until the run is known to be a cancelled
+  // pull-request run, because those are the only PRs with a gate to explain: a
+  // run that concluded normally would get an unprompted check on a green PR,
+  // and a non-PR run has no pull request to annotate at all.
   let phase = 'before-wait';
-  const done = (level, message, result) => {
+  let checkTarget = null;
+  const done = async (level, message, result) => {
     logger[level]?.(message);
     writeSummary(`### CI cancel recovery: ${result.outcome}\n\n`
       + `- run: ${runLabel}\n`
       + `- reason: ${result.reason || 're-dispatched'}\n`
       + `- phase: ${phase}\n`
       + `- delay: ${Math.round(delayMs / 1000)}s`, env);
+    if (checkTarget) await publishRecoveryCheck(fetchImpl, checkTarget, result, logger);
     return { ...result, phase };
   };
 
@@ -360,6 +451,11 @@ export async function retryCancelledCiRun({
     return done('log', `ℹ️ CI retry skipped: run ${target.runId} was triggered by ${target.event || 'an unknown event'}, not a pull request`,
       { outcome: 'skipped', reason: 'not-a-pull-request' });
   }
+
+  // From here on the run IS a cancelled pull-request run, so every remaining
+  // exit — retried, skipped, or a lookup that failed, before or after the
+  // wait — is published back onto the PR by `done`.
+  checkTarget = target;
   if (target.runAttempt !== 1) {
     return done('log', `ℹ️ CI retry skipped: run ${target.runId} is already attempt ${target.runAttempt} — one retry per run`,
       { outcome: 'skipped', reason: 'retry-budget-exhausted' });

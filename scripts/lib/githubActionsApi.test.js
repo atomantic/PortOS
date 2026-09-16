@@ -70,6 +70,23 @@ describe('githubRequest', () => {
     // timeoutMs configures the signal; it must not leak into fetch's init.
     expect(fetchImpl.mock.calls[0][1]).not.toHaveProperty('timeoutMs');
   });
+
+  it('lets a caller add a header but never rewrite the three fixed ones', async () => {
+    // A POST body needs its Content-Type; `Authorization` decides which host
+    // the step-scoped token is sent to, so it must not be caller-settable.
+    const fetchImpl = vi.fn().mockResolvedValue({ ok: true, status: 201 });
+    await githubRequest(fetchImpl, 'https://api.github.com/x', 'token-value', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: 'Bearer stolen' },
+    });
+
+    expect(fetchImpl.mock.calls[0][1].headers).toEqual({
+      'Content-Type': 'application/json',
+      Accept: 'application/vnd.github+json',
+      Authorization: 'Bearer token-value',
+      'X-GitHub-Api-Version': '2022-11-28',
+    });
+  });
 });
 
 describe('isSuccess', () => {

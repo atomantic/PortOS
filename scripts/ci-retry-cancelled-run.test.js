@@ -46,13 +46,16 @@ const json = (body) => ({ ok: true, status: 200, json: async () => body });
  * A fetch stub routed by URL shape. `jobs`/`runs` default to the clean
  * external-cancel case so each test overrides only what it is about.
  */
-function stubFetch({ jobs = [], runs = [], rerunStatus = 201, live } = {}) {
+function stubFetch({ jobs = [], runs = [], rerunStatus = 201, checkStatus = 201, jobsStatus = 200, live } = {}) {
   const calls = [];
   const impl = vi.fn(async (url, init = {}) => {
-    calls.push({ url, method: init.method || 'GET' });
+    calls.push({ url, method: init.method || 'GET', body: init.body });
     // The ATTEMPT-scoped path, deliberately: /runs/{id}/jobs returns the
     // LATEST attempt's jobs, which is the wrong set after a human re-run.
-    if (url.includes('/attempts/1/jobs?')) return json({ total_count: jobs.length, jobs });
+    if (url.includes('/attempts/1/jobs?')) {
+      if (jobsStatus >= 300) return { ok: false, status: jobsStatus };
+      return json({ total_count: jobs.length, jobs });
+    }
     if (url.includes('/runs?')) {
       return json({
         total_count: runs.length,
@@ -60,12 +63,22 @@ function stubFetch({ jobs = [], runs = [], rerunStatus = 201, live } = {}) {
       });
     }
     if (url.endsWith('/rerun')) return { ok: rerunStatus < 300, status: rerunStatus };
+    if (url.endsWith('/check-runs')) return { ok: checkStatus < 300, status: checkStatus };
     if (/\/actions\/runs\/\d+$/.test(url)) {
       return json({ run_attempt: 1, status: 'completed', conclusion: 'cancelled', ...live });
     }
     throw new Error(`unexpected url ${url}`);
   });
-  return { impl, calls, rerunRequested: () => calls.some((c) => c.url.endsWith('/rerun')) };
+  return {
+    impl,
+    calls,
+    rerunRequested: () => calls.some((c) => c.url.endsWith('/rerun')),
+    /** The parsed check-run body, or null when none was published. */
+    publishedCheck: () => {
+      const call = calls.find((c) => c.url.endsWith('/check-runs'));
+      return call ? JSON.parse(call.body) : null;
+    },
+  };
 }
 
 const silent = { log: () => {}, error: () => {} };
@@ -115,7 +128,9 @@ describe('retryCancelledCiRun guards', () => {
     const fetchStub = stubFetch();
     await expect(run({ ...BASE_ENV, CI_RUN_ATTEMPT: '2' }, fetchStub))
       .resolves.toMatchObject({ outcome: 'skipped', reason: 'retry-budget-exhausted' });
-    expect(fetchStub.impl).not.toHaveBeenCalled();
+    // The budget guard short-circuits before every lookup. The only call it may
+    // make is the neutral check that explains the skip on the pull request.
+    expect(fetchStub.calls.map((c) => c.url).filter((url) => !url.endsWith('/check-runs'))).toEqual([]);
   });
 
   it('never retries a legitimate cancel-in-progress supersession', async () => {
@@ -460,6 +475,96 @@ describe('the wait before re-dispatching', () => {
   });
 });
 
+describe('the neutral check run published back onto the pull request', () => {
+  // `if: always()` on the CI gate defeats an upstream job failure, not a
+  // cancellation of the whole run, so an externally cancelled run leaves a bare
+  // red `CI Gate` with no message. This recovery run is a separate run and
+  // survives, which makes it the only layer that can explain one (#7438).
+
+  it('names the reason the cancelled run was not retried, on the cancelled head sha', async () => {
+    const fetchStub = stubFetch({ runs: [{ id: 5000, run_number: 901 }] });
+    await run(BASE_ENV, fetchStub);
+
+    const check = fetchStub.publishedCheck();
+    expect(check).toMatchObject({
+      name: 'CI cancel recovery',
+      head_sha: BASE_ENV.CI_RUN_HEAD_SHA,
+      status: 'completed',
+      conclusion: 'neutral',
+    });
+    // The same fixed reason code the step summary renders, so a reader of
+    // either surface sees the same verdict.
+    expect(check.output.summary).toContain('reason: `superseded`');
+    expect(check.output.summary).toContain('newer CI run started');
+  });
+
+  it.each([
+    ['a re-dispatch', {}, {}],
+    ['a supersession', { runs: [{ id: 5000, run_number: 901 }] }, {}],
+    ['a real job failure', { jobs: [{ name: 'Server tests', conclusion: 'failure' }] }, {}],
+    ['an exhausted retry budget', {}, { CI_RUN_ATTEMPT: '2' }],
+    ['a rejected re-dispatch', { rerunStatus: 403 }, {}],
+    ['an unreadable job listing', { jobsStatus: 502 }, {}],
+  ])('stays neutral for %s — it explains the gate, it never becomes a second one', async (_label, options, envOverride) => {
+    // `failure` would block a merge that branch protection (which requires
+    // `CI Gate` alone) allows; `success` would read as a passing gate, and
+    // server/services/prWatcher.js already counts NEUTRAL as green.
+    const fetchStub = stubFetch(options);
+    await run({ ...BASE_ENV, ...envOverride }, fetchStub);
+
+    expect(fetchStub.publishedCheck()?.conclusion).toBe('neutral');
+  });
+
+  it('never echoes the attacker-controlled branch name into the check', async () => {
+    // The check body is rendered from fixed reason codes only, for the same
+    // reason `safeJobName` exists — a fork PR names its own branch.
+    const fetchStub = stubFetch({ runs: [{ id: 5000, run_number: 901 }] });
+    await run({ ...BASE_ENV, CI_RUN_HEAD_BRANCH: 'evil <img src=x>' }, fetchStub);
+
+    expect(JSON.stringify(fetchStub.publishedCheck())).not.toContain('evil');
+  });
+
+  it.each([
+    ['a run that concluded normally', { CI_RUN_CONCLUSION: 'success' }],
+    ['a nightly or dispatched run', { CI_RUN_EVENT: 'schedule' }],
+  ])('publishes nothing for %s', async (_label, override) => {
+    // A green PR must not collect an unprompted check, and a non-PR run has no
+    // pull request to annotate at all.
+    const fetchStub = stubFetch();
+    await run({ ...BASE_ENV, ...override }, fetchStub);
+
+    expect(fetchStub.publishedCheck()).toBeNull();
+  });
+
+  it('publishes nothing when the head sha is not a commit sha', async () => {
+    const fetchStub = stubFetch({ runs: [{ id: 5000, run_number: 901 }] });
+    await run({ ...BASE_ENV, CI_RUN_HEAD_SHA: 'not-a-sha' }, fetchStub);
+
+    expect(fetchStub.publishedCheck()).toBeNull();
+  });
+
+  it.each([
+    ['GitHub rejects it', { checkStatus: 422 }],
+    ['the request never completes', { checkStatus: 'throw' }],
+  ])('swallows a publishing failure when %s — the verdict still stands', async (_label, options) => {
+    // Best-effort, always: the recovery job must never turn red on top of an
+    // already-cancelled run.
+    const fetchStub = options.checkStatus === 'throw'
+      ? {
+        impl: vi.fn(async (url) => {
+          if (url.endsWith('/check-runs')) throw new Error('socket hang up');
+          if (url.includes('/jobs?')) return json({ total_count: 0, jobs: [] });
+          if (url.includes('/runs?')) return json({ workflow_runs: [{ id: 5000, run_number: 901 }] });
+          return json({ run_attempt: 1, status: 'completed', conclusion: 'cancelled' });
+        }),
+      }
+      : stubFetch({ ...options, runs: [{ id: 5000, run_number: 901 }] });
+
+    await expect(invoke({ env: BASE_ENV, fetchImpl: fetchStub.impl }))
+      .resolves.toMatchObject({ outcome: 'skipped', reason: 'superseded' });
+  });
+});
+
 describe('ci-cancel-recovery.yml wiring', () => {
   const jobs = workflowJobs(RECOVERY_WORKFLOW);
 
@@ -527,8 +632,13 @@ describe('ci-cancel-recovery.yml wiring', () => {
     expect(jobs.retry).not.toContain('actions/setup-node');
   });
 
-  it('grants write only to actions, and never cancels its own recovery', () => {
+  it('grants write only to actions and checks, and never cancels its own recovery', () => {
     expect(RECOVERY_WORKFLOW).toMatch(/permissions:\n {2}contents: read\n {2}actions: write\n/);
+    // The check-run publisher needs this grant, and nothing wider: a
+    // `contents: write` or `pull-requests: write` token on a workflow_run
+    // workflow is what turns an informational job into a push surface.
+    expect(RECOVERY_WORKFLOW).toMatch(/^ {2}checks: write$/m);
+    expect(RECOVERY_WORKFLOW).not.toMatch(/^ {2}(contents|packages|id-token|pull-requests|issues|deployments): write$/m);
     expect(RECOVERY_WORKFLOW).toContain('cancel-in-progress: false');
   });
 });
