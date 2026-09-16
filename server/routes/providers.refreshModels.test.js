@@ -69,7 +69,7 @@ describe('OpenCode Zen card refresh', () => {
     const res = await request(app).post('/api/providers/' + zen.id + '/refresh-models');
     expect(res.status).toBe(200);
     expect(res.body.models).toEqual(['opencode/new']);
-    expect(refreshHarnessModels).toHaveBeenCalledWith('opencode');
+    expect(refreshHarnessModels).toHaveBeenCalledWith('opencode', { providerId: zen.id });
     expect(service.refreshProviderModels).not.toHaveBeenCalled();
   });
 

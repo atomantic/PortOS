@@ -236,8 +236,13 @@ export default function HarnessesTab() {
     });
     const result = await refreshHarnessModels(harness.id, { silent: true })
       .then((data) => ({
-        ok: true,
-        message: `${data.models.length} models from ${harness.command} → ${plural(data.updated.length, 'provider')} updated.`,
+        // A 200 carrying `reason` is a PARTIAL success — one credential's probe
+        // failed while another answered (see server/services/harnesses.js).
+        ok: !data.reason,
+        message: [
+          `${data.models.length} models from ${harness.command} → ${plural(data.updated.length, 'provider')} updated.`,
+          data.reason,
+        ].filter(Boolean).join(' '),
       }))
       .catch((err) => ({ ok: false, message: err?.message || 'Could not read the model list.' }));
     setRefreshResults((prev) => ({ ...prev, [harness.id]: result }));
