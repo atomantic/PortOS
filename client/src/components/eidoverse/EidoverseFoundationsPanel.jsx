@@ -182,7 +182,7 @@ export default function EidoverseFoundationsPanel() {
   const [searchParams, setSearchParams] = useSearchParams();
   const openId = searchParams.get('foundation');
   const [foundations, setFoundations] = useState([]);
-  const [counts, setCounts] = useState({ vernacular: 0, baseline: 0, candidates: 0 });
+  const [counts, setCounts] = useState({ vernacular: 0, baseline: 0, candidates: 0, inherited: 0 });
   const [contributions, setContributions] = useState(null);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState('');
@@ -195,7 +195,7 @@ export default function EidoverseFoundationsPanel() {
 
   const applyListing = useCallback((listing) => {
     setFoundations(listing.foundations || []);
-    setCounts(listing.counts || { vernacular: 0, baseline: 0, candidates: 0 });
+    setCounts(listing.counts || { vernacular: 0, baseline: 0, candidates: 0, inherited: 0 });
   }, []);
 
   useEffect(() => {
@@ -300,6 +300,7 @@ export default function EidoverseFoundationsPanel() {
         </p>
         <p className="mt-3 text-sm text-gray-400">
           {counts.vernacular} local · {counts.baseline} in the shared baseline · {counts.candidates} packaged
+          {counts.inherited > 0 && ` · ${counts.inherited} inherited from peers`}
         </p>
       </section>
 

@@ -25,8 +25,10 @@
  * Storage is `data/eidoverse/foundations.json` — `file-primary` and MACHINE
  * LOCAL, the same class as `portos-world.json` beside it (`docs/STORAGE.md`).
  * PortOS never federates this file: the only thing authorized to leave the
- * install is a packaged candidate envelope, and even that leaves only through
- * an explicit promote. There is no `data.reference/` seed — an absent file is
+ * install is a packaged candidate envelope, and even that leaves only once
+ * somebody promotes the foundation — `listPromotedFoundationCandidates()`
+ * below is the whole of what a peer can ever read
+ * (`services/sharing/peerEidoverseFoundationSync.js`). There is no `data.reference/` seed — an absent file is
  * an empty ledger, which is the correct state for every install that has never
  * authored or inherited a foundation, so no migration is owed.
  */
@@ -43,6 +45,7 @@ import {
   foundationLineage,
   inheritedFoundationStorageKey,
   packageFoundationCandidate,
+  verifyFoundationCandidate,
 } from '../lib/eidoverseFoundations.js';
 import { RESILIENCE_DISTURBANCES, runResilienceAssay } from './eidoverseResilienceAssay.js';
 import { findContributionById } from './eidoverseResilienceContributions.js';
@@ -97,6 +100,49 @@ export async function listEidoverseFoundations() {
     counts,
     foundations: foundations.map((entry) => ({ ...entry, lineage: foundationLineage(entry) })),
   };
+}
+
+/**
+ * The promote envelopes this install OFFERS to its federated peers (#7455) —
+ * the read behind `GET /api/peer-sync/eidoverse-foundations`.
+ *
+ * Three filters, each load-bearing:
+ *
+ *  - `layer === 'baseline'` — only what somebody deliberately promoted. A
+ *    `vernacular` record may carry a packaged candidate (packaging is the step
+ *    BEFORE promoting); packaging is "show me whether this would pass", not
+ *    "publish this", and serving those would turn a dry run into a broadcast.
+ *  - `!inheritance` — `baseline` covers BOTH what this install promoted and a
+ *    local copy of a peer's, so offering every `baseline` record would re-share
+ *    another install's work. That matches `packageEidoverseFoundationCandidate`,
+ *    which already refuses an inherited record ("promotion re-shares only
+ *    foundations this install authored"): a peer that wants a third install's
+ *    foundation pulls it from the install that authored it.
+ *  - the candidate still VERIFIES — the envelope was gated when it was
+ *    promoted, but `foundations.json` is a file a human can edit and a partial
+ *    hand-edit is exactly how a machine name or a local path would end up
+ *    inside a body that was clean when it was packaged. Refuse-never-redact
+ *    applies outbound as well as inbound, so a candidate that no longer passes
+ *    is dropped from the offering (and logged) rather than served.
+ *
+ * Returns the envelopes only — never the ledger records, which carry the
+ * `style` layer that is not authorized to leave this install.
+ */
+export async function listPromotedFoundationCandidates() {
+  const offerable = Object.values(await readFoundations())
+    .filter((entry) => entry?.layer === 'baseline' && !entry.inheritance && entry.candidate);
+  const candidates = [];
+  for (const entry of offerable) {
+    const verified = verifyFoundationCandidate(entry.candidate, { requiredDisturbances: RESILIENCE_DISTURBANCES });
+    if (!verified.valid) {
+      console.warn(`⚠️ Eidoverse foundation "${entry.id}" is promoted but its stored candidate no longer passes the promote gate — withholding it from the peer offering (${verified.reasons.length} reason(s))`);
+      continue;
+    }
+    candidates.push(entry.candidate);
+  }
+  // Fingerprint order: content-addressed, so the offering (and the listHash a
+  // receiver short-circuits on) is stable across ledger read order.
+  return candidates.sort((a, b) => String(a.fingerprint).localeCompare(String(b.fingerprint)));
 }
 
 export async function getEidoverseFoundation(id) {
@@ -233,11 +279,12 @@ export async function packageEidoverseFoundationCandidate(id, { now = new Date()
  * fingerprint — is re-run against the body as it stands right now. A refusal is
  * a RESULT with its reasons, exactly as packaging is; nothing moves layer.
  *
- * What `baseline` means today is "this install offers this foundation to the
- * shared population": the receiving side (a peer pulling and inheriting it) is
- * still to come, and when it lands this flag is the set it serves from. The
- * promoted record keeps its `style` locally — only the candidate envelope,
- * which has no style layer at all, is ever authorized to cross.
+ * `baseline` means "this install offers this foundation to the shared
+ * population", and it is literally the set served from:
+ * `listPromotedFoundationCandidates()` reads it for the peer-facing offering
+ * at `GET /api/peer-sync/eidoverse-foundations`. The promoted record keeps its
+ * `style` locally — only the candidate envelope, which has no style layer at
+ * all, is ever authorized to cross.
  *
  * @returns {Promise<{ outcome: 'promoted'|'refused'|'unknown-foundation', promoted: boolean, foundation: object|null, candidate: object|null, assay: object|null, reasons: string[], findings: Array }>}
  */
@@ -275,14 +322,12 @@ export async function promoteEidoverseFoundation(id, { now = new Date().toISOStr
  * a local baseline copy, carrying an `inherited-from` edge back to its origin
  * (#7461).
  *
- * This is the function a future transport calls — it is written now so the
- * provenance model, storage and safety gate exist end to end, but nothing in
- * this install invokes it yet: the peer pull/inherit wire protocol is the
- * still-open remainder of #7455. A transport that has fetched and can vouch
- * for `sourceInstanceId` (the peer it pulled FROM — see
- * `foundationFromInheritedCandidate()` for why that can differ from the
- * candidate's own `originInstanceId` on a re-shared foundation) is the only
- * intended caller.
+ * The caller is the pull/inherit transport in
+ * `services/sharing/peerEidoverseFoundationSync.js` (#7455), which has fetched
+ * the envelope from a full-sync peer and can vouch for `sourceInstanceId` —
+ * the peer it pulled FROM, which differs from the candidate's own
+ * `originInstanceId` on a foundation re-shared through more than one hop (see
+ * `foundationFromInheritedCandidate()`).
  *
  * `localInstanceId` is supplied by the caller rather than read here, matching
  * `recordEidoverseFoundation()`'s own convention: this module stays a

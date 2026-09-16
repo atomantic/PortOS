@@ -840,12 +840,58 @@ re-promoted from this install (`packageFoundationCandidate` refuses it by
 name): promotion publishes only what this install itself authored, never a
 relay of another install's work.
 
-**What is still to come is the wire transport** — the peer pull/inherit
-protocol itself, tracked as the remainder of #7455. `recordEidoverseFoundationInheritance()`
-is written and tested as the function that transport will call once it
-exists; nothing in this install invokes it yet, so `baseline` in practice
-still means "this install offered this foundation" until a transport starts
-calling it.
+### The peer pull/inherit transport (#7455)
+
+`server/services/sharing/peerEidoverseFoundationSync.js` is the wire between
+the two gates above. It owns no policy of its own — which foundations an
+install offers is `listPromotedFoundationCandidates()` in the ledger, and
+which it accepts is `recordEidoverseFoundationInheritance()`. It owns the
+payload wrapper, the version gate, the caps and the sweep.
+
+**Outbound.** `GET /api/peer-sync/eidoverse-foundations` advertises
+`{ schemaVersion, listHash, candidates: [...] }`. The offering is exactly the
+foundations this install PROMOTED and AUTHORED:
+
+- `layer === 'baseline'` — a merely *packaged* candidate is a dry run ("would
+  this pass?"), not a publication, and is never served.
+- `!inheritance` — `baseline` also covers a local copy of a peer's foundation,
+  so an inherited record is excluded rather than relayed. That matches the
+  ledger's existing refusal to re-package an inherited record: a peer that
+  wants a third install's foundation pulls it from the install that authored it.
+- the stored envelope must still pass `verifyFoundationCandidate()`.
+  `foundations.json` is a file a human can edit, and refuse-never-redact
+  applies outbound as well as inbound, so a candidate that no longer passes is
+  withheld from the offering and logged.
+
+Unlike the older peer-pull routes, this one does not ride the warn-first
+authorization ramp: it passes `alwaysEnforce`, so only a registered,
+outbound-enabled peer ever reads it. The ramp exists so a peer mid-upgrade
+does not lose sync it already had, and a brand-new endpoint has no such
+history to protect.
+
+**Inbound.** `syncEidoverseFoundationsFromPeer()` runs for peers the user
+flagged `fullSync`, on the same 60-second sweep as the media-library,
+CoS-history and CoS-task sweeps (`services/sharing/index.js`). It byte-caps
+the response, validates the wrapper, gently skips a sender whose
+`schemaVersion` is ahead of local (the ledger has no re-fetch path that would
+correct a mis-applied envelope later), short-circuits on an unchanged
+`listHash`, and hands every remaining candidate to
+`recordEidoverseFoundationInheritance()` — which re-runs the *entire*
+accept-side gate and writes nothing on a refusal. A candidate whose
+fingerprint this install already holds is skipped, so the periodic forced
+re-pull (there so a local deletion self-heals) never rewrites `inheritedAt`
+on an unchanged copy.
+
+Both directions are gated on the `eidoverse` instance feature: an install with
+Eidoverse turned off neither offers nor accumulates.
+
+**Compatibility.** `PORTOS_SCHEMA_VERSIONS.eidoverseFoundations` (v1) is the
+transport contract, registered in `NON_RECORD_SCHEMA_CATEGORIES` because this
+is a receiver-pull category with no push to gate — a foundation is not a
+peer-subscribable record kind. It is deliberately separate from the envelope's
+own `candidateVersion`, which pins one envelope's shape and is hashed into its
+fingerprint: a change to the envelope bumps both, a change to the wrapper or
+the caps bumps only the category.
 
 ### Creative toolkit for minds (#7459)
 

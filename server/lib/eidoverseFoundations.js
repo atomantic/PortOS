@@ -236,10 +236,10 @@ export const eidoverseFoundationRecordSchema = z.object({
   // a stored envelope from a newer install must not make the whole record
   // unreadable — the promote path re-verifies the envelope it actually uses.
   candidate: z.unknown().optional(),
-  // Forward-declared storage slots, written by the promote-to-baseline step
-  // that follows this slice: nothing here ever sets `layer` to `baseline` or
-  // `promotedAt` to a timestamp yet, so a reader should not take a `baseline`
-  // count of zero as evidence about anything.
+  // Set by `promoteEidoverseFoundation()` alongside `layer: 'baseline'`, and
+  // cleared when the body is re-authored. `null` on everything this install has
+  // only packaged (a dry run) and on every inherited copy, which carries the
+  // ORIGIN's `packagedAt` on its inheritance edge instead.
   promotedAt: isoDateSchema.nullable().default(null),
   // `null` for everything this install authored (the overwhelming majority of
   // records). Set only on a LOCAL COPY of a peer's promoted foundation — see
@@ -494,11 +494,10 @@ export function inheritedFoundationStorageKey(originInstanceId, foundationId) {
 
 /**
  * Build a local ledger record for a foundation candidate this install pulled
- * from a peer. This is the function a future peer pull/inherit TRANSPORT
- * calls — that transport does not exist yet (it is the still-open remainder
- * of #7455); `recordEidoverseFoundationInheritance()` in
- * `services/eidoverseFoundationLedger.js` is the only caller today, and only
- * from tests, until the transport lands.
+ * from a peer. `recordEidoverseFoundationInheritance()` in
+ * `services/eidoverseFoundationLedger.js` is the only caller; the peer
+ * pull/inherit transport that drives it is
+ * `services/sharing/peerEidoverseFoundationSync.js` (#7455).
  *
  * The candidate is re-verified through the EXACT gate a peer runs on one it
  * was handed (`verifyFoundationCandidate`): schema, the content-addressed

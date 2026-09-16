@@ -12,7 +12,7 @@ import { join } from 'path';
 import { attachAllWatchers, attachWatcher, detachWatcher, shutdownAllWatchers, listAttachedWatchers } from './watcher.js';
 import { sharingEvents } from './importer.js';
 import { installSubscriptionListener } from './subscriptions.js';
-import { installPeerSyncListener, uninstallPeerSyncListener, peerSyncEvents, syncMediaLibraryWithAllPeers, syncCosHistoryWithAllPeers, syncCosTasksWithAllPeers } from './peerSync.js';
+import { installPeerSyncListener, uninstallPeerSyncListener, peerSyncEvents, syncMediaLibraryWithAllPeers, syncCosHistoryWithAllPeers, syncCosTasksWithAllPeers, syncEidoverseFoundationsWithAllPeers } from './peerSync.js';
 import { hasSubscriptionAdapter } from './recordEvents.js';
 import { initAnnotationsSync } from './annotationsSync.js';
 
@@ -53,6 +53,13 @@ function startMediaLibrarySweep() {
       // claim gates spawns across machines. Separate catch keeps it isolated.
       syncCosTasksWithAllPeers().catch((err) => {
         console.error(`❌ sharing: cos-tasks sweep failed: ${err.message}`);
+      });
+      // Promoted Eidoverse foundations (#7455) — the pull/inherit half of the
+      // shared baseline. Same cadence; the receiver short-circuits on an
+      // unchanged content-addressed listHash, so the steady-state tick is one
+      // cheap fetch per full-sync peer. Separate catch keeps it isolated.
+      syncEidoverseFoundationsWithAllPeers().catch((err) => {
+        console.error(`❌ sharing: eidoverse-foundations sweep failed: ${err.message}`);
       });
     } catch (err) {
       console.error(`❌ sharing: full-sync sweep threw synchronously: ${err.message}`);

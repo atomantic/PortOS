@@ -688,6 +688,31 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // v9 = strict large-input PR review fallback pins and complete linked issue
   // evidence. Older peers may clip that evidence or substitute a smaller model.
   cosTasks: 9,
+  // v1 = the Eidoverse foundation promote-candidate envelope (#7455, epic
+  // #7453) — the ONE Eidoverse artifact the machine-local privacy ADR
+  // authorizes to cross the federation layer. A sender advertises its promoted
+  // `baseline` foundations at GET /api/peer-sync/eidoverse-foundations; a
+  // receiver pulls, re-runs the full accept-side gate per envelope
+  // (`verifyFoundationCandidate`), and stores each acceptance under a
+  // `peer:<originInstanceId>:<foundationId>` ledger key.
+  //
+  // Receiver-pull like `mediaLibrary`/`cosHistory`/`cosTasks`, so it rides
+  // NON_RECORD_SCHEMA_CATEGORIES below and has no RECORD_KIND_SCHEMA_CATEGORIES
+  // entry: there is no push to gate. The receiver GENTLY SKIPS a sender ahead of
+  // its local version rather than 409-ing, because the envelope carries a body
+  // whose vocabulary is still being written (#7456) — a v1 receiver that applied
+  // a v2 envelope would store a foundation it cannot interpret, and the ledger
+  // has no re-fetch path that would later correct it.
+  //
+  // The envelope ALSO carries its own `candidateVersion` literal
+  // (EIDOVERSE_FOUNDATION_CANDIDATE_VERSION in lib/eidoverseFoundations.js),
+  // which the two prior slices added before any transport existed. The two are
+  // deliberately separate: `candidateVersion` pins ONE envelope's shape and is
+  // hashed into its content-addressed fingerprint, while this category gates the
+  // TRANSPORT payload (its wrapper, its caps, and which foundations an install
+  // offers). A change to either must bump its own number; a change to the
+  // envelope shape bumps both, because the wrapper's contents changed too.
+  eidoverseFoundations: 1,
   // NOTE: `videoHistory` is intentionally NOT listed here. The version gate
   // rejects the ENTIRE snapshot/push payload on ANY ahead-mismatch (the
   // comparator walks the union of keys), so declaring a brand-new key would
@@ -764,6 +789,12 @@ export const RECORD_KIND_SCHEMA_CATEGORIES = Object.freeze({
  *   claim-aware per-task merge (see syncCosTasksFromPeer) — no push to gate, so
  *   no RECORD_KIND_SCHEMA_CATEGORIES entry.
  *
+ * - `eidoverseFoundations` (#7455): the promoted Eidoverse foundation candidates
+ *   an install advertises at GET /api/peer-sync/eidoverse-foundations. Same
+ *   receiver-pull shape as `cosTasks` (see syncEidoverseFoundationsFromPeer) —
+ *   no push to gate, so no RECORD_KIND_SCHEMA_CATEGORIES entry. A foundation is
+ *   not a peer-subscribable record kind and never rides the record pipeline.
+ *
  * `appQuality`: numeric-only local evidence at GET /api/apps/quality-federation,
  * validated against its exact wire version by collectAppQuality; never written or pushed.
  *
@@ -771,7 +802,7 @@ export const RECORD_KIND_SCHEMA_CATEGORIES = Object.freeze({
  * leave its push transfers ungated (silent cross-install corruption). Only
  * genuinely non-push categories belong.
  */
-export const NON_RECORD_SCHEMA_CATEGORIES = Object.freeze(new Set(['mediaLibrary', 'cosHistory', 'cosTasks', 'appQuality']));
+export const NON_RECORD_SCHEMA_CATEGORIES = Object.freeze(new Set(['mediaLibrary', 'cosHistory', 'cosTasks', 'appQuality', 'eidoverseFoundations']));
 
 /**
  * Lazy-read the current PortOS version from the ROOT package.json so a

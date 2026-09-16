@@ -416,6 +416,30 @@ export const peerCosTasksSchema = z.object({
   tasks: z.array(peerCosTaskEntrySchema).max(50_000),
 }).strict();
 
+/**
+ * The Eidoverse foundation offering a peer advertises (#7455).
+ *
+ * Deliberately shallow on `candidates`: the envelope's real shape lives in
+ * `eidoverseFoundationCandidateSchema` (lib/eidoverseFoundations.js), and the
+ * receiver runs that — with the content-addressed fingerprint check, the assay
+ * evidence gate and the federation-safety scan — on EVERY candidate before it
+ * stores one. Re-declaring the envelope here would be a second copy of a
+ * contract that must not drift, and would also drag the whole Eidoverse
+ * foundation module into `validation.js`'s import closure, which nearly every
+ * server suite reaches. This schema's job is only to bound the TRANSPORT: a
+ * well-formed wrapper, a capped candidate count, and objects rather than
+ * scalars, so one malformed entry can't take the whole sweep down before the
+ * real gate ever runs.
+ */
+export const peerEidoverseFoundationsSchema = z.object({
+  schemaVersion: z.number().int().min(0).max(1_000_000),
+  listHash: hex64,
+  // A foundation body caps at 16 KiB, so 500 envelopes stay well inside the
+  // byte cap the receiver enforces on the response. Far beyond any realistic
+  // promoted population — the sender logs and truncates at the same number.
+  candidates: z.array(z.record(z.string().min(1).max(64), z.unknown())).max(500),
+}).strict();
+
 export const peerPullMetadataSchema = z.object({
   // Backfill tries every online peer; no per-peer scoping field today.
   // .trim() so a stray-whitespace filename ('  a.png  ') normalizes to the real

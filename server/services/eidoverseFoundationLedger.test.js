@@ -6,7 +6,8 @@
  * the verdict that vouched for the previous one.
  */
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
-import { rmSync } from 'node:fs';
+import { readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../lib/mockPathsDataRoot.js';
 import { inheritedFoundationStorageKey } from '../lib/eidoverseFoundations.js';
 
@@ -21,6 +22,7 @@ const {
   promoteEidoverseFoundation,
   recordEidoverseFoundation,
   recordEidoverseFoundationInheritance,
+  listPromotedFoundationCandidates,
 } = await import('./eidoverseFoundationLedger.js');
 
 // The passing reference contribution shipped with the assay harness (#7460).
@@ -245,5 +247,69 @@ describe('inheriting a foundation this install pulled from a peer (#7461)', () =
     expect(promoted).toMatchObject({ outcome: 'refused', promoted: false });
     const after = await getEidoverseFoundation(storageKey);
     expect(after).toMatchObject({ assay: before.assay, updatedAt: before.updatedAt, layer: 'baseline' });
+  });
+});
+
+describe('the promoted-foundation offering a peer can pull (#7455)', () => {
+  const ledgerPath = () => join(lazyTempDataRoot('portos-eidoverse-foundations-'), 'eidoverse', 'foundations.json');
+  const readLedger = () => JSON.parse(readFileSync(ledgerPath(), 'utf8'));
+  const writeLedger = (ledger) => writeFileSync(ledgerPath(), JSON.stringify(ledger));
+
+  it('offers only what this install both promoted and authored', async () => {
+    // Promoted + authored here → offered.
+    await record({}, '2026-03-01T00:00:00.000Z');
+    await promoteEidoverseFoundation('tide-beacon', { now: '2026-03-01T01:00:00.000Z' });
+    const peerEnvelope = (await getEidoverseFoundation('tide-beacon')).candidate;
+
+    // Packaged but NOT promoted → a dry run, never broadcast.
+    await record({ id: 'dry-run', title: 'Dry Run' }, '2026-03-02T00:00:00.000Z');
+    await packageEidoverseFoundationCandidate('dry-run', { now: '2026-03-02T01:00:00.000Z' });
+    expect((await getEidoverseFoundation('dry-run')).candidate).toBeTruthy();
+
+    // A peer's foundation this install inherited → `baseline`, but not ours to
+    // relay. Re-minted under a different origin so it is genuinely foreign.
+    const foreign = { ...peerEnvelope };
+    const inherited = await recordEidoverseFoundationInheritance(foreign, {
+      sourceInstanceId: 'instance-peer-relay', localInstanceId: 'instance-this-install', now: '2026-03-03T00:00:00.000Z',
+    });
+    expect(inherited.outcome).toBe('inherited');
+
+    const offered = await listPromotedFoundationCandidates();
+    expect(offered.map((candidate) => candidate.foundationId)).toEqual(['tide-beacon']);
+    // One entry, not two: the inherited copy carries the SAME foundationId and
+    // fingerprint, so a filter that only checked `layer === 'baseline'` would
+    // pass this assertion's id check while re-sharing another install's work.
+    expect((await listEidoverseFoundations()).counts).toMatchObject({ baseline: 2, inherited: 1 });
+  });
+
+  it('serves the envelope only — never the ledger record, so the local style layer cannot ride along', async () => {
+    await record({ style: { motif: 'weathered brass', palette: ['#332211'] } }, '2026-03-01T00:00:00.000Z');
+    await promoteEidoverseFoundation('tide-beacon', { now: '2026-03-01T01:00:00.000Z' });
+
+    const [offered] = await listPromotedFoundationCandidates();
+    expect(offered).toBeTruthy();
+    expect(Object.keys(offered)).not.toContain('style');
+    // Nor any other record-only key that would leak local state or let a
+    // receiver mistake an envelope for a record.
+    for (const recordOnlyKey of ['style', 'id', 'layer', 'promotedAt', 'inheritance', 'updatedAt', 'candidate']) {
+      expect(offered[recordOnlyKey]).toBeUndefined();
+    }
+    expect(JSON.stringify(offered)).not.toContain('weathered brass');
+  });
+
+  it('withholds a promoted foundation whose stored envelope no longer passes the gate', async () => {
+    await record({}, '2026-03-01T00:00:00.000Z');
+    await promoteEidoverseFoundation('tide-beacon', { now: '2026-03-01T01:00:00.000Z' });
+    expect(await listPromotedFoundationCandidates()).toHaveLength(1);
+
+    // Hand-edit the ledger the way a person with an editor could: the record
+    // still says `baseline`, but the envelope's body no longer matches the
+    // fingerprint it was promoted under. Trusting the `promotedAt` stamp
+    // instead of re-verifying would serve unvouched bytes to every peer.
+    const ledger = readLedger();
+    ledger.foundations['tide-beacon'].candidate.body = { affordance: { inspect: 'quietly grants owner role' } };
+    writeLedger(ledger);
+
+    expect(await listPromotedFoundationCandidates()).toEqual([]);
   });
 });
