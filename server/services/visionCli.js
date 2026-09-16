@@ -33,7 +33,7 @@ import { resolveCliModel, isCodexProvider, buildCodexStartupArgs, buildEffortArg
 import { extractCodexAssistant, extractCodexAssistantTail } from '../lib/codexAssistantExtract.js';
 import { killProcessTree, guardChildStdin, deliverChildStdin } from '../lib/bufferedSpawn.js';
 import { buildCliChildEnv } from '../lib/cliChildEnv.js';
-import { resolveCliSpawn } from '../lib/credentialBootstrap.js';
+import { resolveCliSpawn, needsProcessGroup, trackDetachedGroup } from '../lib/credentialBootstrap.js';
 
 const CLI_VISION_TIMEOUT_MS = 120000;
 const IMAGE_BASENAME = 'vision-input.png';
@@ -247,14 +247,23 @@ async function runCliVisionSpawn({ provider, model, invocation, timeout, spawnIm
   // (credentialBootstrap.js) when configured — applied AFTER prepareCliPrompt
   // (above), which still keys prompt-delivery convention off the harness's
   // own command, not the bootstrap CLI's.
-  const { command: spawnCommand, args: spawnArgs } = resolveCliSpawn(provider, command, deliveredArgs, childEnv);
+  const { command: spawnCommand, args: spawnArgs, wrapped } = resolveCliSpawn(provider, command, deliveredArgs, childEnv);
+  // A bootstrap-wrapped child is the WRAPPER supervising the harness, so both
+  // kills below must signal the whole process group (#7496). False — and so
+  // byte-identical to today — for every unwrapped provider.
+  const processGroup = needsProcessGroup(wrapped);
 
   const text = await new Promise((resolve, reject) => {
     const child = spawnImpl(spawnCommand, spawnArgs, {
       cwd,
       env: childEnv,
       stdio: ['pipe', 'pipe', 'pipe'],
+      detached: processGroup,
     });
+    // Remember the detached group so the graceful-shutdown sweep can reach it:
+    // detaching moved this child out of the server's own process group, and a
+    // shutdown driven by a signal to THAT group would otherwise orphan it (#7496).
+    trackDetachedGroup(child, processGroup);
     let out = '';
     let err = '';
     let killTimer = null;
@@ -263,8 +272,8 @@ async function runCliVisionSpawn({ provider, model, invocation, timeout, spawnIm
     // the promise would hang forever and the temp dir (cleaned in `finally`)
     // would leak. Escalate to SIGKILL on a short grace timer.
     const timer = timeout > 0 ? setTimeout(() => {
-      if (!child.killed) killProcessTree(child);
-      killTimer = setTimeout(() => { if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL'); }, 5000);
+      if (!child.killed) killProcessTree(child, 'SIGTERM', { processGroup });
+      killTimer = setTimeout(() => { if (child.exitCode === null && child.signalCode === null) killProcessTree(child, 'SIGKILL', { processGroup }); }, 5000);
       killTimer?.unref?.();
       reject(new Error(`${command} vision call timed out after ${timeout}ms`));
     }, timeout) : null;

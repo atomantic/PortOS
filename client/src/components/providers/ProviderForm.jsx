@@ -580,7 +580,12 @@ export default function ProviderForm({ provider, daemonReadiness = null, onClose
                     <strong>Args Separator</strong> (e.g. <code>--</code>) is inserted before the harness's own
                     arguments when the bootstrap CLI needs its flags kept apart from the harness's.
                     Bootstrap Args are stored and shown in clear text (agent records, run transcripts, the shell
-                    line typed for a TUI session) — put a secret in Environment Variables marked secret, never here.
+                    line typed for a TUI session) — put a secret in Environment Variables marked secret, never here.{' '}
+                    <strong>Your bootstrap CLI should <code>exec</code> the harness, or forward the signals it
+                    receives to it.</strong> Stop, timeout and cancel signal the wrapped spawn's whole process
+                    group, so a wrapper that forks is still taken down with its harness — but a wrapper that
+                    re-parents the harness out of that group, or traps signals without passing them on, can leave
+                    it running after PortOS has finished the run.
                   </p>
 
                   {/* The CLI/TUI backends that can authenticate: the vLLM compose

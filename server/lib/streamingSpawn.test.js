@@ -105,3 +105,51 @@ describe('runStreamingCommand — stream separation', () => {
     expect(lines).toContain('ERR-two');
   });
 });
+
+// #7496. `opencodeTask` hands this helper a credential-bootstrap WRAPPER rather
+// than the harness, and a per-pid SIGKILL reaches only that wrapper — the
+// harness behind it keeps running past the task's timeout or the user's cancel.
+describe('runStreamingCommand — process-group teardown', () => {
+  const SH = '/bin/sh';
+  // A wrapper that outlives its own SIGKILL'd child: `sleep` is a separate
+  // process, so killing only the shell's pid leaves it running. Printing its
+  // pid is what lets the assertion probe the real outcome.
+  const FORKING_WRAPPER = ['-c', 'sleep 30 & echo $!; wait'];
+
+  const probeAlive = (pid) => {
+    // Signal 0 tests for existence without delivering anything.
+    try { process.kill(pid, 0); return true; } catch { return false; }
+  };
+
+  it.skipIf(process.platform === 'win32')('takes the grandchild down with the wrapper on timeout', async () => {
+    let grandchildPid = null;
+    const result = await runStreamingCommand(SH, FORKING_WRAPPER, (line) => {
+      if (grandchildPid === null && /^\d+$/.test(line)) grandchildPid = Number(line);
+    }, { timeoutMs: 300, processGroup: true });
+
+    expect(result.success).toBe(false);
+    expect(result.error).toMatch(/timed out/);
+    expect(Number.isInteger(grandchildPid)).toBe(true);
+
+    await new Promise(resolve => setTimeout(resolve, 200));
+    const alive = probeAlive(grandchildPid);
+    if (alive) process.kill(grandchildPid, 'SIGKILL');
+    expect(alive).toBe(false);
+  });
+
+  it.skipIf(process.platform === 'win32')('leaves an ordinary command on the per-pid kill', async () => {
+    // Without the flag the grandchild survives — which is correct for every
+    // ordinary caller (an npm install, a model download), whose direct child IS
+    // the process to kill. This is the baseline the test above is measured from.
+    let grandchildPid = null;
+    await runStreamingCommand(SH, FORKING_WRAPPER, (line) => {
+      if (grandchildPid === null && /^\d+$/.test(line)) grandchildPid = Number(line);
+    }, { timeoutMs: 300 });
+
+    await new Promise(resolve => setTimeout(resolve, 200));
+    const alive = probeAlive(grandchildPid);
+    // Clean up regardless — this test deliberately strands a `sleep`.
+    if (alive) process.kill(grandchildPid, 'SIGKILL');
+    expect(alive).toBe(true);
+  });
+});

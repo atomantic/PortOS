@@ -35,7 +35,12 @@ vi.mock('./providers.js', () => {
 });
 vi.mock('./ollamaManager.js', () => ({ getModelCapabilities: vi.fn(async () => null) }));
 vi.mock('./localLlm.js', () => ({ ollamaBadgeCapabilities: (raw) => raw }));
-vi.mock('../lib/bufferedSpawn.js', () => ({
+// Spread the real module and override only the two entry points this suite
+// drives. A hand-listed mock silently drops everything else — it dropped
+// `IS_WIN32`, which `credentialBootstrap.js` reads for its process-group
+// decision, and every opencode-task case threw on the missing export.
+vi.mock('../lib/bufferedSpawn.js', async (importOriginal) => ({
+  ...(await importOriginal()),
   bufferedSpawn: vi.fn(),
   prepareCliSpawn: vi.fn((command, args) => ({ command, args })),
 }));

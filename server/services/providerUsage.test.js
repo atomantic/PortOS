@@ -68,6 +68,12 @@ import { systemTimeZone } from './claudeCodeUsage.js';
 import { getSettings } from './settings.js';
 import { getImageGenQuota } from './imageGenQuota.js';
 
+// Windows takes killProcessTree's tree-wide `taskkill /T` branch instead, so
+// `needsProcessGroup` is false there and these sites spawn attached. The policy
+// itself is pinned with an injected platform in credentialBootstrap.test.js;
+// these assert only that each site plumbs the decision through.
+const EXPECT_GROUP = process.platform !== 'win32';
+
 // Synthetic Antigravity `/usage` panel — invented values, redacted account, in
 // the agy 1.1.x rendered shape (`… Limit Remaining`). The bar percentage is
 // percent REMAINING; a full bar with "Quota available" has no reset.
@@ -434,6 +440,45 @@ describe('getProviderQuotas', () => {
   it('returns nothing for a family that is no longer enabled', async () => {
     getAllProviders.mockResolvedValueOnce({ activeProvider: null, providers: [] });
     expect(await getProviderQuotas({ family: 'grok' })).toEqual([]);
+  });
+
+  // #7496. The scrape kills its PTY on every exit path, and with a credential
+  // bootstrap the PTY's direct child is the WRAPPER — node-pty's kill() signals
+  // that pid alone, so the harness would go on rendering into a PTY nobody
+  // reads. The flag has to travel from the wrap decision to the scrape.
+  it('asks for a process-group teardown when the scraped command is bootstrap-wrapped', async () => {
+    getAllProviders.mockResolvedValueOnce({
+      activeProvider: null,
+      providers: [{
+        id: 'grok', enabled: true, type: 'tui', command: 'grok',
+        credentialBootstrap: { command: 'token-cli', args: ['run'] },
+      }]
+    });
+    getSettings.mockResolvedValueOnce({});
+    scrapeTuiUsage.mockResolvedValue('Weekly limit: 5% Next reset: Jan 1, 00:00');
+
+    await getProviderQuotas({ family: 'grok' });
+
+    expect(scrapeTuiUsage).toHaveBeenCalledWith(expect.objectContaining({
+      command: 'token-cli',
+      processGroup: EXPECT_GROUP,
+    }));
+  });
+
+  it('leaves an unwrapped scrape on the plain node-pty kill', async () => {
+    getAllProviders.mockResolvedValueOnce({
+      activeProvider: null,
+      providers: [{ id: 'grok', enabled: true, type: 'tui', command: 'grok' }]
+    });
+    getSettings.mockResolvedValueOnce({});
+    scrapeTuiUsage.mockResolvedValue('Weekly limit: 5% Next reset: Jan 1, 00:00');
+
+    await getProviderQuotas({ family: 'grok' });
+
+    expect(scrapeTuiUsage).toHaveBeenCalledWith(expect.objectContaining({
+      command: 'grok',
+      processGroup: false,
+    }));
   });
 });
 

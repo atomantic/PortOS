@@ -41,7 +41,7 @@ import { resolveForgeTokenEnv } from './forgeAuth.js';
 import { resolveAgentCliCwd } from '../lib/spawnCwd.js';
 import { prepareCliSpawn, killProcessTree, guardChildStdin, deliverChildStdin } from '../lib/bufferedSpawn.js';
 import { buildCliChildEnv } from '../lib/cliChildEnv.js';
-import { applyCredentialBootstrap } from '../lib/credentialBootstrap.js';
+import { applyCredentialBootstrap, needsProcessGroup, trackDetachedGroup } from '../lib/credentialBootstrap.js';
 import { prClaimWasVerified } from '../lib/prDisposition.js';
 import { resolvePrOwnership } from '../lib/slashdoInvocation.js';
 import { doneSentinelPath } from '../lib/agentSentinel.js';
@@ -236,7 +236,13 @@ export async function spawnDirectly({
   // credentialBootstrap.js. Applied AFTER prepareCliPrompt, which still keys
   // prompt-delivery convention off the harness's own command — and never under
   // a public-review `safetyProfile`, whose enforced recipe is the sandbox.
-  const { command: bootstrappedCommand, args: bootstrappedArgs } = applyCredentialBootstrap(provider, cliConfig.command, deliveredArgs, { safetyProfile });
+  const { command: bootstrappedCommand, args: bootstrappedArgs, wrapped } = applyCredentialBootstrap(provider, cliConfig.command, deliveredArgs, { safetyProfile });
+  // A bootstrap-wrapped child is the WRAPPER supervising the harness, so every
+  // stop/timeout/cancel for this agent must signal the whole process group —
+  // here, and in agentManagement's pause/terminate/force-kill, which reads the
+  // flag back off the activeAgents entry below (#7496). The private-security
+  // sandbox wrap below is likewise a supervising parent, so it keeps the flag.
+  const processGroup = needsProcessGroup(wrapped);
   const preparedSpawn = prepareCliSpawn(bootstrappedCommand, bootstrappedArgs, childEnv);
   const isolatedSpawn = isPrivateSecurityTask(task)
     ? await import('../lib/privateSecuritySandbox.js')
@@ -265,8 +271,16 @@ export async function spawnDirectly({
     cwd,
     shell: false,
     stdio: ['pipe', 'pipe', 'pipe'],
-    env: isolatedSpawn.env
+    env: isolatedSpawn.env,
+    // Never `unref()`ed — this stays an ordinary awaited child, just one in
+    // its own signalable process group. See needsProcessGroup.
+    detached: processGroup
   });
+
+  // Remember the detached group so the graceful-shutdown sweep can reach it:
+  // detaching moved this child out of the server's own process group, and a
+  // shutdown driven by a signal to THAT group would otherwise orphan it (#7496).
+  trackDetachedGroup(claudeProcess, processGroup);
 
   // Every child listener is registered HERE, in the same tick as spawn(), into
   // forwarding shims that buffer until the real handler bodies exist further
@@ -326,6 +340,9 @@ export async function spawnDirectly({
 
     activeAgents.set(agentId, {
       process: claudeProcess,
+      // Read by agentManagement's pause/terminate/force-kill paths, which hold
+      // only this entry and cannot re-derive the bootstrap wrap (#7496).
+      processGroup,
       taskId: task.id,
       startedAt: Date.now(),
       runId,
@@ -450,7 +467,7 @@ export async function spawnDirectly({
       category: analysis.category
     });
     // killProcessTree so a Windows cmd.exe-wrapped shim's real child isn't orphaned (#2243).
-    killProcessTree(claudeProcess, 'SIGTERM');
+    killProcessTree(claudeProcess, 'SIGTERM', { processGroup });
   };
 
   // If no output after 3 seconds, transition from initializing to working to show progress

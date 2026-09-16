@@ -277,7 +277,17 @@ export function killProcessTree(child, signal = 'SIGTERM', { processGroup = fals
     return;
   }
   if (processGroup && child.pid) {
-    try { process.kill(-child.pid, signal); return; }
+    try {
+      process.kill(-child.pid, signal);
+      // Node sets `.killed` only from `child.kill()`, so a group signal would
+      // otherwise leave it false and defeat every `if (!child.killed)` re-entry
+      // guard that gates a second kill — exactly why the Windows branch above
+      // sets it by hand too. Only for a real ChildProcess: a node-pty IPty has
+      // no `killed` of its own, and inventing one would start short-circuiting
+      // PTY teardown paths that deliberately re-kill.
+      if (isChildProcess) child.killed = true;
+      return;
+    }
     catch { /* ESRCH — the group is already gone; fall through to the pid */ }
   }
   if (isPidOnly) {

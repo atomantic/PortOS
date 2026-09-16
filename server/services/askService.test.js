@@ -53,6 +53,12 @@ vi.mock('./catalogDB.js', () => ({
 }));
 
 const { spawn } = await import('../lib/childProcess.js');
+
+// Windows takes killProcessTree's tree-wide `taskkill /T` branch instead, so
+// `needsProcessGroup` is false there and these sites spawn attached. The policy
+// itself is pinned with an injected platform in credentialBootstrap.test.js;
+// these assert only that each site plumbs the decision through.
+const EXPECT_GROUP = process.platform !== 'win32';
 const catalogDB = await import('./catalogDB.js');
 const memoryBackend = await import('./memoryBackend.js');
 const memoryEmbeddings = await import('./memoryEmbeddings.js');
@@ -297,6 +303,67 @@ describe('runAsk', () => {
     expect(args.slice(0, 3)).toEqual(['run', 'claude-code', '--']);
     // The harness's own argv (Ask's model pin) follows the separator.
     expect(args.slice(3)).toEqual(expect.arrayContaining(['--model', 'sonnet']));
+    // #7496: the direct child is now the WRAPPER, so both stop paths below (the
+    // timeout and the user's abort) have to reach the harness behind it.
+    expect(spawn.mock.calls[0][2].detached).toBe(EXPECT_GROUP);
+  });
+
+  // #7496. Ask's abort IS the user pressing stop, and it carries private
+  // records — a harness left running past it keeps reading them. A per-pid
+  // SIGKILL reaches only the bootstrap wrapper.
+  it.skipIf(process.platform === 'win32')('SIGKILLs the whole process group when the user aborts a bootstrap-wrapped ask', async () => {
+    // Spy so the negative pid never reaches a real process group.
+    const killSpy = vi.spyOn(process, 'kill').mockImplementation(() => true);
+    providers.getActiveProvider.mockResolvedValue({
+      id: 'claude-code', type: 'cli', enabled: true, command: 'claude', args: [], defaultModel: 'sonnet',
+      credentialBootstrap: { command: 'token-cli', args: ['run'] },
+    });
+    const controller = new AbortController();
+    const kill = vi.fn();
+    spawn.mockImplementation(() => {
+      const child = Object.assign(new EventEmitter(), {
+        pid: 828282,
+        stdout: new EventEmitter(), stderr: new EventEmitter(),
+        stdin: Object.assign(new EventEmitter(), { end: vi.fn() }), kill,
+      });
+      setImmediate(() => controller.abort());
+      return child;
+    });
+
+    const events = [];
+    for await (const evt of askService.runAsk({ question: 'hi', signal: controller.signal })) events.push(evt);
+
+    expect(killSpy).toHaveBeenCalledWith(-828282, 'SIGKILL');
+    // The group signal landed, so killProcessTree never falls back to the
+    // wrapper's own pid — the harness behind it is covered by the same signal.
+    expect(kill).not.toHaveBeenCalled();
+    killSpy.mockRestore();
+  });
+
+  it.skipIf(process.platform === 'win32')('SIGKILLs only the child when an UNWRAPPED ask is aborted', async () => {
+    const killSpy = vi.spyOn(process, 'kill').mockImplementation(() => true);
+    providers.getActiveProvider.mockResolvedValue({
+      id: 'claude-code', type: 'cli', enabled: true, command: 'claude', args: [], defaultModel: 'sonnet',
+    });
+    const controller = new AbortController();
+    const kill = vi.fn();
+    spawn.mockImplementation(() => {
+      const child = Object.assign(new EventEmitter(), {
+        pid: 929292,
+        stdout: new EventEmitter(), stderr: new EventEmitter(),
+        stdin: Object.assign(new EventEmitter(), { end: vi.fn() }), kill,
+      });
+      setImmediate(() => controller.abort());
+      return child;
+    });
+
+    const events = [];
+    for await (const evt of askService.runAsk({ question: 'hi', signal: controller.signal })) events.push(evt);
+
+    expect(spawn.mock.calls[0][2].detached).toBe(false);
+    expect(killSpy).not.toHaveBeenCalledWith(-929292, expect.anything());
+    expect(kill).toHaveBeenCalledWith('SIGKILL');
+    killSpy.mockRestore();
   });
 
   it('keeps streamed content and emits an error when the canonical reader fails', async () => {
