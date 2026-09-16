@@ -44,6 +44,41 @@ router.get('/status', asyncHandler(async (req, res) => {
   res.json({ ...status, activeCosAgents, persistentMindImages });
 }));
 
+// GET /api/update/auto — everything the Update tab needs to explain what the
+// unattended updater is doing: the effective config, its own runtime record,
+// whether the checkout is in a state it may run against, and the live idle
+// verdict (the SAME `activity` object the dashboard's Live activity widget
+// renders, from lib/systemIdle.js).
+//
+// Its OWN route rather than a block on /status, and lazily imported, for one
+// reason each: /status is polled every few seconds while this tab is open and
+// must not drag a git status walk along at that cadence, and a static import
+// of the activity/readiness graph would pull the whole CoS + git subtree into
+// every suite that mounts this router (see "Import scoping" in server/AGENTS.md).
+router.get('/auto', asyncHandler(async (req, res) => {
+  const [{ getSettings }, { checkUpdateRepoReadiness }, { getActiveProcessing }, { resolveAutoUpdateConfig }] =
+    await Promise.all([
+      import('../services/settings.js'),
+      import('../services/updateRepoReadiness.js'),
+      import('../services/activeProcessing.js'),
+      import('../lib/sharedSchemas.js'),
+    ]);
+  const [settings, runtime, repo, processing] = await Promise.all([
+    getSettings().catch(() => null),
+    updateChecker.getAutoUpdateRuntime(),
+    // No fetch here: refreshing origin refs is the scheduler's own tick, not a
+    // network hop every viewer of this tab pays for.
+    checkUpdateRepoReadiness({ fetch: false }).catch(() => null),
+    getActiveProcessing().catch(() => null),
+  ]);
+  res.json({
+    config: resolveAutoUpdateConfig(settings?.autoUpdate),
+    runtime,
+    repo,
+    activity: processing?.activity ?? null,
+  });
+}));
+
 // POST /api/update/check — triggers manual check. `manual: true` bypasses the
 // unattended scheduler's gh backoff — a user who explicitly asked for a check
 // must get a real attempt, not a silent rejection from a cooldown the

@@ -1,6 +1,6 @@
 import { memo } from 'react';
 import { Link } from 'react-router';
-import { AudioLines, Bot, Cpu, ExternalLink, Film, Image as ImageIcon, Layers3, X } from 'lucide-react';
+import { AudioLines, Bot, Brain, Cpu, ExternalLink, Film, Image as ImageIcon, Layers3, Package, X } from 'lucide-react';
 import * as api from '../../services/api';
 import { useAutoRefetch } from '../../hooks/useAutoRefetch';
 
@@ -19,6 +19,10 @@ export const sameProcessingSnapshot = (a, b) => {
     && a.gpu?.status === b.gpu?.status
     && a.gpu?.laneBusy === b.gpu?.laneBusy
     && a.gpu?.gpus?.[0]?.utilizationPercent === b.gpu?.gpus?.[0]?.utilizationPercent
+    && a.mind?.thinking === b.mind?.thinking
+    && a.mind?.queued === b.mind?.queued
+    && a.mind?.status === b.mind?.status
+    && (a.appOperations || []).length === (b.appOperations || []).length
     && a.jobs?.length === b.jobs?.length
     && (a.extras?.imageTo3d || []).length === (b.extras?.imageTo3d || []).length
     && (a.jobs || []).every((job, index) => job?.id === b.jobs[index]?.id
@@ -57,6 +61,31 @@ function JobRow({ job, onCancel }) {
   );
 }
 
+/** A non-cancellable lane (mind, agents, app operations, 3D) as one linked row. */
+function LaneRow({ to, icon: Icon, label, detail }) {
+  return (
+    <Link to={to} className="mt-1.5 flex items-center gap-2 rounded-lg border border-port-border bg-port-bg/60 px-2.5 py-2 text-xs text-gray-300 hover:border-port-accent/50">
+      <Icon size={14} className="text-port-accent" />
+      <span className="min-w-0 flex-1 truncate">{label}</span>
+      {detail ? <span className="shrink-0 font-mono text-gray-500">{detail}</span> : null}
+      <ExternalLink size={13} className="shrink-0 text-gray-500" />
+    </Link>
+  );
+}
+
+// `activity` is derived server-side (server/lib/systemIdle.js) so the widget and
+// the unattended auto-updater cannot disagree about what "idle" means — one of
+// them renders the verdict, the other refuses to restart the install on it.
+// The local fallback covers a snapshot from a peer/older server that predates it.
+const localActivity = (data) => {
+  const jobs = data?.jobs || [];
+  const running = jobs.filter((job) => job.status !== 'queued').length + (data?.extras?.imageTo3d || []).length
+    + (data?.agents?.active || 0) + (data?.mind?.thinking ? 1 : 0) + (data?.appOperations || []).length;
+  const queued = jobs.length - jobs.filter((job) => job.status !== 'queued').length
+    + (data?.agents?.queued || 0) + (data?.mind?.queued || 0);
+  return { idle: running === 0 && queued === 0, activeCount: running, queuedCount: queued, blockers: [] };
+};
+
 function ActiveProcessingWidget() {
   const { data } = useAutoRefetch(() => api.getActiveProcessing({ silent: true }), 3000, {
     compare: sameProcessingSnapshot,
@@ -65,21 +94,44 @@ function ActiveProcessingWidget() {
   const jobs = data?.jobs || [];
   const gpu = data?.gpu;
   const imageTo3d = data?.extras?.imageTo3d || [];
+  const mind = data?.mind;
+  const appOperations = data?.appOperations || [];
   const activeAgents = data?.agents?.active || 0;
-  const activeCount = jobs.length + imageTo3d.length + activeAgents;
-  const idle = activeCount === 0;
+  const activity = data ? (data.activity || localActivity(data)) : null;
+  const idle = !activity || activity.idle;
+  const runningJobs = jobs.filter((job) => job.status !== 'queued').length;
   return (
-    <div className="h-full rounded-xl border border-port-border bg-port-card p-4">
+    // @container on the widget's OWN root: a dashboard cell is ~250px wide on a
+    // 2560px screen, so a viewport breakpoint here would pin the four-up metric
+    // row into the narrowest column. See the dashboard AGENTS.md.
+    <div className="@container h-full rounded-xl border border-port-border bg-port-card p-4">
       <div className="mb-3 flex items-start justify-between gap-3">
         <div><h3 className="flex items-center gap-2 text-sm font-semibold text-white"><span className={`relative flex h-6 w-6 items-center justify-center rounded-lg ${idle ? 'bg-port-border/60 text-gray-400' : 'bg-port-accent/15 text-port-accent'}`}><Cpu size={15} />{!idle ? <span className="absolute -right-0.5 -top-0.5 h-2 w-2 animate-ping rounded-full bg-port-accent" /> : null}</span> Live activity</h3><p className="mt-1 text-[11px] text-gray-500">What PortOS is working on right now</p></div>
-        <span className={`rounded-full px-2 py-1 text-[10px] font-medium uppercase tracking-wider ${idle ? 'bg-port-border/60 text-gray-500' : 'bg-port-accent/15 text-port-accent'}`}>{idle ? 'idle' : `${activeCount} active`}</span>
+        <span className={`rounded-full px-2 py-1 text-[10px] font-medium uppercase tracking-wider ${idle ? 'bg-port-border/60 text-gray-500' : 'bg-port-accent/15 text-port-accent'}`}>{idle ? 'idle' : `${activity.activeCount} active${activity.queuedCount ? ` · ${activity.queuedCount} queued` : ''}`}</span>
       </div>
       {!data ? <p className="text-xs text-gray-500">Checking render lanes…</p> : <>
-        {!idle ? <div className="mb-3 grid grid-cols-3 gap-1.5 text-center"><Metric icon={Bot} value={activeAgents} label="agents" /><Metric icon={Layers3} value={jobs.length} label="media" /><Metric icon={Cpu} value={gpu?.laneBusy ? 'busy' : 'ready'} label="GPU" /></div> : null}
+        {!idle ? <div className="mb-3 grid grid-cols-2 gap-1.5 text-center @xs:grid-cols-4"><Metric icon={Bot} value={activeAgents} label="agents" /><Metric icon={Layers3} value={runningJobs} label="rendering" /><Metric icon={Brain} value={mind?.thinking ? 'yes' : 'no'} label="thinking" /><Metric icon={Cpu} value={gpu?.laneBusy ? 'busy' : 'ready'} label="GPU" /></div> : null}
         {idle ? <Link to="/system-resources/overview" className="flex items-center justify-between rounded-lg border border-port-border bg-port-bg px-3 py-3 text-xs text-gray-400 transition-colors hover:border-port-accent/50 hover:text-gray-200"><span>Nothing is running</span><span>GPU {gpu?.status === 'available' ? 'ready' : gpu?.status || 'unknown'} →</span></Link> : null}
         <div className="space-y-1.5">{jobs.map((job) => <JobRow key={job.id} job={job} onCancel={cancel} />)}</div>
-        {imageTo3d.map((item) => <Link key={`3d-${item.id}`} to="/3d" className="mt-1.5 flex items-center gap-2 rounded-lg border border-port-border bg-port-bg/60 px-2.5 py-2 text-xs text-gray-300 hover:border-port-accent/50"><Layers3 size={14} className="text-port-accent" /><span className="min-w-0 flex-1 truncate">Image-to-3D · {item.name}</span><ExternalLink size={13} className="text-gray-500" /></Link>)}
-        {activeAgents ? <Link to="/cos/agents" className="mt-1.5 flex items-center gap-2 rounded-lg border border-port-border bg-port-bg/60 px-2.5 py-2 text-xs text-gray-300 hover:border-port-accent/50"><Bot size={14} className="text-port-accent" /><span className="min-w-0 flex-1">Chief of Staff agents</span><span className="font-mono text-gray-500">{activeAgents} active{data.agents.queued ? ` · ${data.agents.queued} queued` : ''}</span><ExternalLink size={13} className="text-gray-500" /></Link> : null}
+        {imageTo3d.map((item) => <LaneRow key={`3d-${item.id}`} to="/3d" icon={Layers3} label={`Image-to-3D · ${item.name}`} />)}
+        {/* Counts and lifecycle only — never what the mind is thinking ABOUT. */}
+        {mind?.thinking || mind?.queued ? (
+          <LaneRow
+            to="/cos/mind"
+            icon={Brain}
+            label={mind.thinking ? 'Persistent Mind is thinking' : 'Persistent Mind has queued work'}
+            detail={[mind.thinking ? elapsed(mind.thinkingSince) : null, mind.queued ? `${mind.queued} queued` : null].filter(Boolean).join(' · ')}
+          />
+        ) : null}
+        {activeAgents || data.agents?.queued ? (
+          <LaneRow
+            to="/cos/agents"
+            icon={Bot}
+            label="Chief of Staff agents"
+            detail={`${activeAgents} active${data.agents.queued ? ` · ${data.agents.queued} queued` : ''}`}
+          />
+        ) : null}
+        {appOperations.map((op) => <LaneRow key={`op-${op.appId}-${op.type}`} to="/apps" icon={Package} label={`${op.appName} · ${op.type}`} />)}
       {!idle && gpu?.status === 'available' && gpu.gpus?.length ? <div className="mt-3 text-[11px] text-gray-500">GPU {gpu.gpus[0]?.utilizationPercent == null ? 'utilization unknown' : `${Math.round(gpu.gpus[0]?.utilizationPercent)}% utilized`}</div> : null}
       </>}
     </div>

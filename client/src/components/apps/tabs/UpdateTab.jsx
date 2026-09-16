@@ -4,6 +4,7 @@ import toast from '../../ui/Toast';
 import BrailleSpinner from '../../BrailleSpinner';
 import MarkdownOutput from '../../cos/MarkdownOutput';
 import Banner from '../../ui/Banner';
+import AutoUpdatePanel from './AutoUpdatePanel';
 import * as api from '../../../services/api';
 import socket from '../../../services/socket';
 import { formatDateTime, formatDateNumeric, formatTimeOfDaySeconds } from '../../../utils/formatters';
@@ -498,6 +499,9 @@ export default function UpdateTab() {
       {updateError && (
         <Banner tone="error" size="md" icon={AlertTriangle}>{updateError}</Banner>
       )}
+
+      {/* Automatic updates — configuration plus what the scheduler is waiting on */}
+      <AutoUpdatePanel />
 
       {/* Last Update Result */}
       {status?.lastUpdateResult && (

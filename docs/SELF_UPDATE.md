@@ -2,7 +2,7 @@
 
 How PortOS notices a new release and updates itself. PortOS is distributed software — many people run it, and a large share run it from a **personal fork**, so every step here is fork-aware. Breaking that assumption produces silent no-op updates.
 
-Code: `server/services/updateChecker.js`, `server/services/portosSelfUpdate.js`, `server/services/updateExecutor.js`, `server/services/appUpdater.js`, `server/routes/update.js`, `server/lib/gitRemote.js`, `server/lib/detachedSpawn.js`, `update.sh` / `update.ps1`, `scripts/verify-server-health.js`, `client/src/components/apps/tabs/UpdateTab.jsx`, `client/src/hooks/usePortosRestartWatch.js`, `client/src/hooks/useAppOperation.js`.
+Code: `server/services/updateChecker.js`, `server/services/portosSelfUpdate.js`, `server/services/updateExecutor.js`, `server/services/appUpdater.js`, `server/routes/update.js`, `server/lib/gitRemote.js`, `server/lib/detachedSpawn.js`, `update.sh` / `update.ps1`, `scripts/verify-server-health.js`, `client/src/components/apps/tabs/UpdateTab.jsx`, `client/src/hooks/usePortosRestartWatch.js`, `client/src/hooks/useAppOperation.js`. The unattended, idle-gated variant is a section of its own below.
 
 ## Release polling always targets upstream
 
@@ -111,6 +111,76 @@ A PortOS record carrying a custom `updateCommand`, or a `repoPath` that is not t
 The probe tries the loopback HTTP mirror (`:5553`) first, then the API port over HTTP and HTTPS, because the listening scheme depends on whether a cert is provisioned; `/api/system/health` is in the always-public set, so it works with the optional instance password on. The recovery only fires when the probe fails, so it cannot make a healthy update worse.
 
 **When the probe still fails after the recovery, the scripts say so and exit non-zero** — the closing banner reads "Update applied, but PortOS is DOWN" instead of "Update Complete". The script outlives the server it restarts, so its exit status and the tail of `data/update.log` are the only signals a wrapper, a CI job, or an operator still has; printing a success banner over a confirmed-headless install is how the failure went unnoticed for hours in the first place.
+
+## Automatic updates (unattended, idle-gated)
+
+OFF by default. **Update tab → Automatic updates** turns it on; the config lives in
+`settings.autoUpdate` and resolves through `resolveAutoUpdateConfig` in
+`server/lib/sharedSchemas.js` (the schema, the scheduler, and the settings GET all read
+that one resolver, so a sparse slice cannot mean different things to different readers).
+
+Code: `server/services/autoUpdateScheduler.js`, `server/services/updateRepoReadiness.js`,
+`server/lib/systemIdle.js`, `server/services/appUpdateRunner.js`,
+`client/src/components/apps/tabs/AutoUpdatePanel.jsx`, `GET /api/update/auto`.
+
+**It runs the SAME action the matching button runs, through the same service.** There is no
+second update implementation, so every preflight refusal, the update lock, and the
+never-await-the-launcher rule apply unchanged:
+
+| Channel | Dispatches | Equivalent to |
+|---|---|---|
+| `release` | `startPortosSelfUpdate({ mode: 'release' })` | Update page → "Update Now" |
+| `main` | `runAppUpdate({ appId: PORTOS_APP_ID })` | App Management → Git tab → "Update app" |
+
+`runAppUpdate` is the extracted body of the `app:update` socket handler (claim → PortOS
+preflight → `appUpdater.updateApp` → ledger row → apps-changed broadcast); the socket
+handler now only routes the two refusals that belong to the person who clicked.
+
+### Every gate must pass on the same tick
+
+A 5-minute interval poll (`eventScheduler`, id `portos-auto-update`, registered only while
+the feature is on) checks, in order:
+
+1. **Cooldown** — `minIntervalHours` (default 6) since the last update. The baseline is the
+   most recent of the scheduler's own `lastRunAt`, the last recorded update result (so a
+   MANUAL update also resets the clock), and the `armedAt` stamped on the first tick after
+   the feature was switched on. `lastRunAt` is written at the LAUNCH, not at a completion
+   this process does not live to see — `update.sh` pm2-deletes the server partway through,
+   and without that stamp the restarted server would find the interval elapsed and fire a
+   second update.
+2. **Something to update to** — a newer release tag (`release`), or origin's default branch
+   ahead of this checkout / `installState.outOfSync` (`main`). Nothing to do is a no-op.
+3. **Checkout readiness** (`updateRepoReadiness.js`) — see below.
+4. **System idle** (`lib/systemIdle.js`) — no render running **or queued**, no CoS agent or
+   queued task, no Persistent Mind turn or queued message, no app operation, no update
+   already in flight. An unreadable Persistent Mind state counts as busy, matching the
+   update path's own `PERSISTENT_MIND_STATE_UNTRUSTED` refusal.
+
+`summarizeSystemActivity` is the ONE definition of idle: the dashboard's Live activity
+widget renders the verdict the updater refuses on, so the two cannot disagree about a
+window in which PortOS may restart itself. Every skip is recorded to
+`data/update.json` (`autoUpdate.lastSkip`) and rendered in the panel — an unattended
+updater that simply never runs is otherwise indistinguishable from a broken one.
+
+### Checkout readiness: repair mechanically, escalate judgement
+
+Both update paths MOVE the checkout (`update.sh` switches to `main` and stashes;
+`updateDefaultBranch` checks out, fast-forwards, then falls back to `pull --rebase
+--autostash`). Unattended, a stash nobody is told about reads as lost work. So the updater
+refuses until the checkout is on the default branch and clean.
+
+Two remedies run without asking, because neither can destroy work:
+
+- **switch to the default branch** from a CLEAN feature branch (the commits stay on the
+  branch ref), and
+- **restore modified auto-generated lockfiles** (`npm install` rewrites them; the update
+  reinstalls anyway). Restored by explicit path, never `-- .`.
+
+Everything else — uncommitted work, a local commit not on origin, an interrupted
+rebase/merge, conflict markers — queues ONE high-priority CoS task (deduped on a constant
+first line, `useWorktree: false`) and waits. That agent then counts as activity, so the
+update lands in the first idle window after it finishes. The escalation is switchable
+(`resolveBlockersWithAgent`), since it costs a provider call.
 
 ## Syncing a fork
 
