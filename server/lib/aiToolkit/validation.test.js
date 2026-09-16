@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { sanitizeScreenshotRefs, providerCreateSchema, providerSchema, providerActiveSchema, PROVIDER_MODE_OVERRIDE_KEYS, validate } from './validation.js';
-import { MODE_GROUPED_KEYS } from './internal/providerModes.js';
+import { CLI_ONLY_KEYS, MODE_GROUPED_KEYS } from './internal/providerModes.js';
 
 describe('sanitizeScreenshotRefs — POST /api/runs screenshot hardening (#1870)', () => {
   it('keeps an in-dir image basename unchanged', () => {
@@ -271,6 +271,11 @@ describe('providerCreateSchema — declaring both execution modes of one harness
     // two unrelated routes instead of one harness, with nothing to report it.
     expect(PROVIDER_MODE_OVERRIDE_KEYS.filter(key => MODE_GROUPED_KEYS.includes(key))).toEqual([]);
     expect(PROVIDER_MODE_OVERRIDE_KEYS).not.toContain('command');
+    // Same invariant from the other side: `expandModePair` DROPS these from the
+    // TUI half, so listing a grouped key here would split the pair just as
+    // surely as overriding one would.
+    expect(CLI_ONLY_KEYS.filter(key => MODE_GROUPED_KEYS.includes(key))).toEqual([]);
+    expect(CLI_ONLY_KEYS).not.toContain('command');
   });
 
   it('holds each mode to the same field rules as a single-mode create', () => {

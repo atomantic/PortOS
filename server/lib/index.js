@@ -483,6 +483,7 @@ export * from './providerConnections.js';
 export * from './providerGraphPreview.js';
 export * from './providerGraphRecords.js';
 export * from './providerModelAliases.js';
+export * from './providerModePairing.js';
 export * from './providerRouteRecipes.js';
 export * from './providerRouteSettings.js';
 export * from './personaTraitBlend.js';

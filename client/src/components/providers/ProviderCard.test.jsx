@@ -320,3 +320,50 @@ describe('ProviderCard delete confirmation', () => {
     expect(screen.getByText(/Both its CLI and TUI modes are removed/)).toBeTruthy();
   });
 });
+
+describe('ProviderCard "Add interactive mode"', () => {
+  const cliRecord = (overrides = {}) => wrapper({
+    id: 'opencode-cli', name: 'OpenCode CLI', type: 'cli', canAddTuiMode: true, ...overrides,
+  });
+
+  it('offers the action on an unpaired CLI record and hands the whole provider to the page', () => {
+    // The record already carries the command, endpoint, credentials and env the
+    // sibling needs — the click is the whole interaction, not a pre-filled form.
+    const onAddTuiMode = vi.fn();
+    const provider = cliRecord();
+    renderCard(provider, null, { onAddTuiMode });
+    fireEvent.click(screen.getByRole('button', { name: /Add interactive mode/ }));
+    expect(onAddTuiMode).toHaveBeenCalledWith(provider);
+  });
+
+  it('offers nothing on an already-unified card, whatever the server flagged', () => {
+    // Flagged `true` on purpose: the card's own `!unified` guard is what this
+    // pins, so a stale list still refuses rather than offering a second TUI
+    // mode beside the one already on the card. (Which RECORDS qualify — a TUI
+    // record, an api record, a CLI-only harness — is the server's rule, pinned
+    // where it lives in routes/providers.tuiMode.test.js; the card reads only
+    // the flag and never looks at `type`.)
+    const cli = cliRecord();
+    const tui = wrapper({ id: 'opencode-tui', name: 'OpenCode TUI' });
+    renderCard(
+      { ...cli, executionModes: [{ id: 'opencode-cli' }, { id: 'opencode-tui' }] },
+      null,
+      { providersById: { 'opencode-cli': cli, 'opencode-tui': tui } },
+    );
+    expect(screen.queryByRole('button', { name: /Add interactive mode/ })).toBeNull();
+  });
+
+  it('offers nothing when the server did not flag the record', () => {
+    renderCard(cliRecord({ canAddTuiMode: false }));
+    expect(screen.queryByRole('button', { name: /Add interactive mode/ })).toBeNull();
+  });
+
+  it('shows the in-flight state rather than letting a second click mint twice', () => {
+    const onAddTuiMode = vi.fn();
+    renderCard(cliRecord(), null, { onAddTuiMode, addingTuiMode: true });
+    const button = screen.getByRole('button', { name: /Adding/ });
+    expect(button.disabled).toBe(true);
+    fireEvent.click(button);
+    expect(onAddTuiMode).not.toHaveBeenCalled();
+  });
+});

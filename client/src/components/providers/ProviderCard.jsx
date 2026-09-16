@@ -108,6 +108,8 @@ export default function ProviderCard({
   onSetActive,
   onEdit,
   onDelete,
+  onAddTuiMode,
+  addingTuiMode = false,
   onRecover,
   onInstallRuntime,
   onAutoSetupRuntime,
@@ -347,6 +349,29 @@ export default function ProviderCard({
           >
             Edit
           </button>}
+
+          {/* A lone CLI record is half a harness: the same program usually also
+              runs interactively, and configuring that half used to mean adding
+              the provider a second time from /ai/new and retyping the command,
+              endpoint, credentials and env — which only pairs the two records
+              if every one of those matches exactly. The server mints the
+              sibling from the record already on disk instead.
+
+              `canAddTuiMode` is the SERVER's verdict (the provider list
+              decorates it), not a re-derivation here: it also answers whether
+              this harness has an interactive mode at all and whether the
+              sibling id is free, neither of which the card can see. */}
+          {!unified && provider.canAddTuiMode && (
+            <button
+              onClick={() => onAddTuiMode(provider)}
+              disabled={addingTuiMode}
+              title={`Add the interactive (TUI) mode of ${displayName}, using its existing command and connection`}
+              className="flex items-center gap-1.5 px-3 py-1.5 text-sm bg-port-border hover:bg-port-border/80 text-white rounded transition-colors disabled:opacity-50"
+            >
+              <Terminal size={14} />
+              {addingTuiMode ? 'Adding…' : 'Add interactive mode'}
+            </button>
+          )}
 
           {!confirmingDelete && (
             <button

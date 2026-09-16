@@ -71,6 +71,59 @@ describe('Provider Service', () => {
     expect((await providerService.getProviderById('example-agent')).enabled).toBe(true);
   });
 
+  it('completes an existing CLI record into a pair the toolkit groups, without re-entering its connection', async () => {
+    // The whole point of minting from the STORED record: an install that
+    // already has a lone CLI provider gets the sibling for free, and the two
+    // records satisfy the pairing rule by construction rather than because the
+    // user retyped the endpoint, key and env identically.
+    await writeFile(join(TEST_DATA_DIR, 'providers.json'), JSON.stringify({ activeProvider: 'example', providers: {
+      example: {
+        id: 'example', name: 'Example Agent', type: 'cli', command: 'example', enabled: true,
+        args: ['--print'], headlessArgs: ['--quiet'], models: ['a'], defaultModel: 'a',
+        endpoint: 'https://backend.example.com', apiKey: 'sk-test', envVars: { EXAMPLE_HOME: '/opt/example' },
+      },
+    } }));
+
+    const tui = await providerService.createProviderTuiMode('example', { args: ['--interactive'] });
+    expect(tui.id).toBe('example-tui');
+    expect(tui.name).toBe('Example Agent TUI');
+    expect(tui.args).toEqual(['--interactive']);
+    // Every grouped field came across unchanged — that is what makes it groupable.
+    expect(tui).toMatchObject({
+      command: 'example',
+      endpoint: 'https://backend.example.com',
+      apiKey: 'sk-test',
+      envVars: { EXAMPLE_HOME: '/opt/example' },
+      enabled: true,
+    });
+    // The CLI's non-interactive argv did NOT — it is a flag list for a program
+    // being driven without a terminal, and inheriting it would hand those flags
+    // to a PTY launch.
+    expect(tui.headlessArgs).toEqual([]);
+
+    // The grouping CONSEQUENCE, not just "two records exist": disabling one
+    // mode disables the harness, which only happens for a real pair.
+    await providerService.updateProvider('example-tui', { enabled: false });
+    expect((await providerService.getProviderById('example')).enabled).toBe(false);
+  });
+
+  it('refuses to derive a TUI mode from a record that is not a CLI, or from an id that does not exist', async () => {
+    await providerService.createProvider({ name: 'Example TUI', id: 'example-tui', type: 'tui', command: 'example' });
+    // The CLI id is the stem, so minting it from the TUI half is a rename.
+    await expect(providerService.createProviderTuiMode('example-tui')).rejects.toThrow(/Only a CLI provider/);
+    expect(await providerService.createProviderTuiMode('missing')).toBeNull();
+  });
+
+  it('refuses rather than suffixing when the sibling id is already taken', async () => {
+    // `mintRouteIds` suffixes a whole set on collision because it owns both
+    // halves; here the CLI id is fixed, so a taken sibling id means something
+    // else is standing there — and a `example-tui-2` would group with nothing.
+    await providerService.createProvider({ name: 'Example Agent', id: 'example', type: 'cli', command: 'example' });
+    await providerService.createProvider({ name: 'Unrelated', id: 'example-tui', type: 'tui', command: 'other' });
+    await expect(providerService.createProviderTuiMode('example')).rejects.toThrow(/already exists/);
+    expect((await providerService.getProviderById('example-tui')).command).toBe('other');
+  });
+
   it('lands no half-made pair when the second record collides with an existing id', async () => {
     await providerService.createProvider({ name: 'Example Agent TUI', id: 'example-agent-tui', type: 'tui', command: 'example' });
     await expect(providerService.createProviderModes({
