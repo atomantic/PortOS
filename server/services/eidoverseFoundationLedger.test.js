@@ -8,6 +8,7 @@
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { rmSync } from 'node:fs';
 import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../lib/mockPathsDataRoot.js';
+import { inheritedFoundationStorageKey } from '../lib/eidoverseFoundations.js';
 
 vi.mock('../lib/fileUtils.js', async (importOriginal) => makePathsProxy(await importOriginal(), {
   dataRoot: () => lazyTempDataRoot('portos-eidoverse-foundations-'),
@@ -220,5 +221,29 @@ describe('inheriting a foundation this install pulled from a peer (#7461)', () =
     expect(result.outcome).toBe('refused');
     expect(result.foundation).toBeNull();
     expect((await listEidoverseFoundations()).counts).toMatchObject({ vernacular: 0, baseline: 0, inherited: 0 });
+  });
+
+  it('refuses to package or promote an inherited record without touching the ledger, even though its contributionId is registered locally', async () => {
+    const candidate = await peerCandidate();
+    rmSync(lazyTempDataRoot('portos-eidoverse-foundations-'), { recursive: true, force: true });
+    const inherited = await recordEidoverseFoundationInheritance(candidate, {
+      sourceInstanceId: 'instance-peer-relay', localInstanceId: 'instance-this-install', now: '2026-03-04T06:00:00.000Z',
+    });
+    const storageKey = inheritedFoundationStorageKey(inherited.foundation.provenance.originInstanceId, inherited.foundation.id);
+    expect(inherited.outcome).toBe('inherited');
+
+    // The candidate's `contributionId` ('beacon-relay-demo') IS registered
+    // locally, so a guard that fired too late (after resolving the
+    // contribution) would run the assay and could package it instead of
+    // refusing. If the record is untouched afterward, nothing ran.
+    const before = await getEidoverseFoundation(storageKey);
+    const packaged = await packageEidoverseFoundationCandidate(storageKey, { now: '2026-03-04T07:00:00.000Z' });
+    const promoted = await promoteEidoverseFoundation(storageKey, { now: '2026-03-04T07:00:00.000Z' });
+
+    expect(packaged).toMatchObject({ outcome: 'refused' });
+    expect(packaged.reasons[0]).toContain('inherited from another install');
+    expect(promoted).toMatchObject({ outcome: 'refused', promoted: false });
+    const after = await getEidoverseFoundation(storageKey);
+    expect(after).toMatchObject({ assay: before.assay, updatedAt: before.updatedAt, layer: 'baseline' });
   });
 });

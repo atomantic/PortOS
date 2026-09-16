@@ -175,6 +175,16 @@ const unknownFoundation = (id) => verdict('unknown-foundation', [`no foundation 
 export async function packageEidoverseFoundationCandidate(id, { now = new Date().toISOString() } = {}) {
   const existing = await getEidoverseFoundation(id);
   if (!existing) return unknownFoundation(id);
+  // Refused before resolving or replaying ANYTHING: `packageFoundationCandidate`
+  // (the pure lib) refuses an inherited record too, but only after running the
+  // assay against whatever `contributionId` it names. This is a local copy of a
+  // PEER's declared contribution id — replaying it here would be exactly the
+  // "run arbitrary code pulled from a peer" this install's own assay harness
+  // exists to keep off every OTHER install, even though `findContributionById`
+  // only ever resolves this install's own fixed local registry.
+  if (existing.inheritance) {
+    return verdict('refused', [`inherited from another install (${existing.inheritance.originInstanceId}) — promotion re-shares only foundations this install authored`]);
+  }
 
   // Outside the ledger lock: replaying a contribution is the slow part, and it
   // reads nothing from the ledger. The lock below re-reads the record and

@@ -135,7 +135,13 @@ router.post('/foundations/:id/promote', asyncHandler(async (req, res) => {
   res.json(result);
 }));
 
-// GET /api/eidoverse/world/foundations/:id — one foundation record.
+// GET /api/eidoverse/world/foundations/:id — one foundation record, looked
+// up by its plain (locally-authored) id. An inherited local copy of a peer's
+// foundation lives under a separate `peer:<originInstanceId>:<foundationId>`
+// ledger key (#7461) and is reachable only through the LIST endpoint above —
+// deliberately: two records can legitimately share the same human-readable
+// `id` (a local vernacular one and an inherited one), and this route has no
+// way to disambiguate which one a bare id means.
 router.get('/foundations/:id', asyncHandler(async (req, res) => {
   const { id } = validateRequest(eidoverseFoundationIdParamSchema, req.params || {});
   const foundation = await getEidoverseFoundation(id);

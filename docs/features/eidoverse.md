@@ -788,11 +788,16 @@ name) and its ordered lineage. `foundationLineage()`
 `assayed` → `packaged` → `promoted`, or `inherited` → `assayed` for a local
 copy of a peer's — from fields the record already persists, so it costs no
 extra storage and a ledger written before this existed still projects
-correctly. `GET /api/eidoverse/world/foundations` and `.../foundations/:id`
-return it on every entry, and the mind tools' `summarizeFoundation()`
-projection carries `provenance`, `inheritance`, and `lineage` too — the same
-identity fields a candidate envelope was already authorized to carry, now
-surfaced consistently everywhere a foundation is read.
+correctly. `GET /api/eidoverse/world/foundations` returns it on every entry,
+and the mind tools' `summarizeFoundation()` projection carries `provenance`,
+`inheritance`, and `lineage` too — the same identity fields a candidate
+envelope was already authorized to carry, now surfaced consistently
+everywhere a foundation is read. `GET /api/eidoverse/world/foundations/:id`
+only reaches a locally-authored (plain-id) record: an inherited copy lives
+under a separate ledger key precisely so it can share a human-readable id
+with a local vernacular foundation without colliding, which also means a
+single bare id cannot disambiguate the two — the list endpoint is the
+provenance query surface for an inherited entry.
 
 **`recordEidoverseFoundationInheritance()`** (`eidoverseFoundationLedger.js`)
 is the accept-side of a peer pull: given an already-verified candidate

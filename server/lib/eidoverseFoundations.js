@@ -484,8 +484,9 @@ export function verifyFoundationCandidate(candidate, { requiredDisturbances }) {
  * disjoint from any id `recordEidoverseFoundation()` can ever author, so
  * pulling a peer's foundation never touches, shadows, or can collide with a
  * local vernacular foundation that happens to share the same foundation id.
- * `foundationIdSchema` is a plain lowercase slug with no colon, which is what
- * makes this namespace collision-proof rather than merely unlikely.
+ * Both `foundationIdSchema` (a plain lowercase slug) and `instanceIdSchema`
+ * (opaque alphanumeric/dash/underscore) forbid colons, which is what makes
+ * this `:`-delimited namespace collision-proof rather than merely unlikely.
  */
 export function inheritedFoundationStorageKey(originInstanceId, foundationId) {
   return `peer:${originInstanceId}:${foundationId}`;
@@ -537,6 +538,16 @@ export function foundationFromInheritedCandidate({ candidate, requiredDisturbanc
   const envelope = candidate;
   if (envelope.provenance.originInstanceId === localInstanceId) {
     return inheritanceRefused(['this candidate originated on this install — inheritance applies to another install\'s foundation, not a copy of your own']);
+  }
+  // A separate check from the one above: `sourceInstanceId` is the peer this
+  // install pulled FROM, which is not always who AUTHORED the candidate (a
+  // foundation can be re-shared through more than one hop). "Pulled from
+  // myself" is its own nonsensical edge even when the origin is genuinely
+  // someone else, and the schema validation below cannot catch it — it only
+  // checks that the field is a well-formed opaque id, not that it differs
+  // from `localInstanceId`.
+  if (sourceInstanceId === localInstanceId) {
+    return inheritanceRefused(['this install cannot be the peer it pulled the candidate from']);
   }
 
   const draft = {

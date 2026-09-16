@@ -88,6 +88,19 @@ const draftFromFoundation = (foundation) => ({
   notes: foundation.disclosure?.notes || '',
 });
 
+/**
+ * A list-rendering key that stays unique even when a local vernacular
+ * foundation and an inherited copy share the same human-readable `id` — the
+ * ledger stores them under disjoint keys precisely so that can happen (#7461).
+ * `openId` (the `?foundation=` URL param) stays plain-id on purpose: it is
+ * documented, deliberate scope that a deep link cannot yet disambiguate the
+ * two, matching the "run assay"/"promote" actions, which are never offered
+ * for an inherited entry in the first place.
+ */
+const foundationRowKey = (foundation) => (foundation.inheritance
+  ? `${foundation.inheritance.originInstanceId}:${foundation.id}`
+  : foundation.id);
+
 function LayerBadge({ layer }) {
   const meta = LAYERS[layer];
   if (!meta) return <span className="rounded-full border border-port-border px-2 py-0.5 text-xs text-gray-400">{layer || 'unknown layer'}</span>;
@@ -303,7 +316,7 @@ export default function EidoverseFoundationsPanel() {
           {foundations.map((foundation) => {
             const expanded = foundation.id === openId;
             return (
-              <li key={foundation.id} className="rounded-xl border border-port-border bg-port-card p-4">
+              <li key={foundationRowKey(foundation)} className="rounded-xl border border-port-border bg-port-card p-4">
                 <div className="flex flex-wrap items-start justify-between gap-3">
                   <div className="min-w-0">
                     <div className="flex flex-wrap items-center gap-2">
@@ -319,38 +332,36 @@ export default function EidoverseFoundationsPanel() {
                       {foundation.assay ? (foundation.assay.pass ? ' · assay passed' : ' · assay failed') : ' · assay not run'}
                     </p>
                   </div>
-                  {/* A local copy of a peer's foundation is never packaged or promoted
-                      from here — it is already the origin's candidate, and promoting
-                      it would re-share another install's work as this one's own. */}
-                  {!foundation.inheritance && (
-                    <div className="flex flex-wrap gap-2">
-                      <button
-                        type="button"
-                        className={secondaryButton}
-                        disabled={busyId === foundation.id}
-                        onClick={() => runGate(foundation.id, packageEidoverseFoundationCandidate)}
-                      >
-                        {busyId === foundation.id ? 'Running assay…' : 'Run assay'}
-                      </button>
-                      <button
-                        type="button"
-                        className={primaryButton}
-                        disabled={busyId === foundation.id || foundation.layer === 'baseline'}
-                        title={foundation.layer === 'baseline' ? 'Already offered to the shared baseline' : 'Run every gate and publish to the shared baseline'}
-                        onClick={() => runGate(foundation.id, promoteEidoverseFoundation)}
-                      >
-                        Promote
-                      </button>
-                      <button type="button" className={secondaryButton} onClick={() => openFoundation(expanded ? '' : foundation.id)}>
-                        {expanded ? 'Hide' : 'Details'}
-                      </button>
-                    </div>
-                  )}
-                  {foundation.inheritance && (
+                  <div className="flex flex-wrap gap-2">
+                    {/* A local copy of a peer's foundation is never packaged or
+                        promoted from here — it is already the origin's candidate,
+                        and promoting it would re-share another install's work as
+                        this one's own (the server refuses it too). */}
+                    {!foundation.inheritance && (
+                      <>
+                        <button
+                          type="button"
+                          className={secondaryButton}
+                          disabled={busyId === foundation.id}
+                          onClick={() => runGate(foundation.id, packageEidoverseFoundationCandidate)}
+                        >
+                          {busyId === foundation.id ? 'Running assay…' : 'Run assay'}
+                        </button>
+                        <button
+                          type="button"
+                          className={primaryButton}
+                          disabled={busyId === foundation.id || foundation.layer === 'baseline'}
+                          title={foundation.layer === 'baseline' ? 'Already offered to the shared baseline' : 'Run every gate and publish to the shared baseline'}
+                          onClick={() => runGate(foundation.id, promoteEidoverseFoundation)}
+                        >
+                          Promote
+                        </button>
+                      </>
+                    )}
                     <button type="button" className={secondaryButton} onClick={() => openFoundation(expanded ? '' : foundation.id)}>
                       {expanded ? 'Hide' : 'Details'}
                     </button>
-                  )}
+                  </div>
                 </div>
 
                 <Verdict verdict={verdicts[foundation.id]} />

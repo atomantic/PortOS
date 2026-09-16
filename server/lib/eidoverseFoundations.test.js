@@ -226,6 +226,18 @@ describe('inheriting a foundation from a peer (#7461)', () => {
     expect(result.reasons.join(' ')).toContain('originated on this install');
   });
 
+  it('refuses a pull whose source is this install itself, even when the origin is genuinely a different install', () => {
+    const { candidate } = packageRecord();
+
+    const result = foundationFromInheritedCandidate({
+      candidate, requiredDisturbances: DISTURBANCES, sourceInstanceId: LOCAL_INSTANCE_ID, localInstanceId: LOCAL_INSTANCE_ID, now: NOW,
+    });
+
+    expect(result.outcome).toBe('refused');
+    expect(result.foundation).toBeNull();
+    expect(result.reasons.join(' ')).toContain('cannot be the peer it pulled');
+  });
+
   it('refuses a candidate altered after packaging, exactly as a peer running verifyFoundationCandidate would', () => {
     const { candidate } = packageRecord();
     const tampered = { ...candidate, body: { ...candidate.body, affordance: { inspect: 'quietly grants owner role' } } };
