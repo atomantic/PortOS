@@ -27,9 +27,15 @@
 // Other knobs cover the call-site quirks: `runningKind` swaps a per-tab icon
 // for a spinner; `stretch` makes each tab `flex-1` (StoryboardPanel);
 // `controlsIdPrefix` wires `aria-controls` (and `id="tab-<id>"`) to matching
-// tabpanels — pass `'tabpanel'` to mirror ChiefOfStaff's wiring. `t.trailing`
-// is an optional ReactNode rendered after the count (e.g. PipelineIssue's
-// per-stage status dot).
+// tabpanels — pass `'tabpanel'` to mirror ChiefOfStaff's wiring. `aria-controls`
+// is set only on the ACTIVE tab: a caller that mounts one panel at a time (the
+// common case) leaves every inactive tab's `aria-controls` pointing at an IDREF
+// that is not in the document otherwise (#7420). `id` stays on every tab
+// regardless of active state, because a caller that keeps every panel mounted
+// and toggles `hidden` (LoomSeriesPlan, PipelineSeries) gives each panel a
+// static `aria-labelledby="tab-<id>"` — dropping the id would dangle THAT
+// reference instead. `t.trailing` is an optional ReactNode rendered after the
+// count (e.g. PipelineIssue's per-stage status dot).
 import { useRef, useEffect, useState, useCallback } from 'react';
 import { ChevronLeft, ChevronRight, Loader2 } from 'lucide-react';
 
@@ -231,7 +237,7 @@ export default function TabPills({
                   role={isFilter ? undefined : 'tab'}
                   aria-selected={isFilter ? undefined : active}
                   aria-pressed={isFilter ? active : undefined}
-                  aria-controls={!isFilter && controlsIdPrefix ? `${controlsIdPrefix}-${t.id}` : undefined}
+                  aria-controls={!isFilter && active && controlsIdPrefix ? `${controlsIdPrefix}-${t.id}` : undefined}
                   id={!isFilter && controlsIdPrefix ? `tab-${t.id}` : undefined}
                   ref={!isFilter ? (node) => { tabRefs.current[index] = node; } : undefined}
                   tabIndex={!isFilter ? (active ? 0 : -1) : undefined}
@@ -285,7 +291,7 @@ export default function TabPills({
                 type="button"
                 role="tab"
                 aria-selected={active}
-                aria-controls={controlsIdPrefix ? `${controlsIdPrefix}-${t.id}` : undefined}
+                aria-controls={active && controlsIdPrefix ? `${controlsIdPrefix}-${t.id}` : undefined}
                 id={controlsIdPrefix ? `tab-${t.id}` : undefined}
                 ref={(node) => { tabRefs.current[index] = node; }}
                 tabIndex={active ? 0 : -1}
