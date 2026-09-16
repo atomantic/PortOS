@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { existsSync, mkdirSync, utimesSync, writeFileSync } from 'fs';
+import { chmodSync, existsSync, mkdirSync, utimesSync, writeFileSync } from 'fs';
 import { mkdtemp, rm } from 'fs/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';
@@ -74,6 +74,16 @@ describe('isStaleGitLock', () => {
   it('refuses a lock that is already gone', () => {
     expect(isStaleGitLock(join(dir, '.git/index.lock'))).toBe(false);
   });
+
+  it('answers rather than throws when the lock cannot be stat-ed', () => {
+    // Callers run this while handling a git failure; an ENOENT/EACCES escaping
+    // here would replace the real git error with a confusing one. The ENOENT
+    // window is one this module creates itself — a concurrent retry can clear
+    // the lock between the caller's check and this stat.
+    const unreadable = join(dir, '.git/nonexistent-dir/index.lock');
+    expect(() => isStaleGitLock(unreadable)).not.toThrow();
+    expect(isStaleGitLock(unreadable)).toBe(false);
+  });
 });
 
 describe('clearStaleGitLock', () => {
@@ -124,6 +134,21 @@ describe('clearStaleGitLocksIn', () => {
 
   it('reports nothing for a repo with no git dir', () => {
     expect(clearStaleGitLocksIn(join(dir, 'nope'))).toEqual([]);
+  });
+
+  it('keeps sweeping when one subtree cannot be read', () => {
+    // git prunes its own temp dirs; a directory that disappears mid-walk must
+    // not abort a sweep that runs ahead of the self-update.
+    const reachable = writeLock('.git/modules/lib/dep/index.lock', ABANDONED);
+    const locked = join(dir, '.git/unreadable');
+    mkdirSync(locked, { recursive: true });
+    chmodSync(locked, 0o000);
+
+    try {
+      expect(clearStaleGitLocksIn(join(dir, '.git'))).toEqual([reachable]);
+    } finally {
+      chmodSync(locked, 0o755);
+    }
   });
 
   // Every CoS agent runs in a worktree, where `.git` is a FILE pointing at

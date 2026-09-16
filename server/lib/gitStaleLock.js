@@ -77,8 +77,23 @@ export function isStaleGitLock(lockPath) {
   // Accept both separators: a Windows git reports backslash paths, and a POSIX
   // path can reach a Windows Node through a checked-in fixture or a log.
   if (!lockPath.split(/[\\/]/).includes('.git')) return false;
-  if (!existsSync(lockPath)) return false;
-  return Date.now() - statSync(lockPath).mtimeMs >= STALE_GIT_LOCK_MIN_AGE_MS;
+  // One guarded stat rather than existsSync + statSync: the gap between those
+  // two is a race this module actively creates — a concurrent retry (or git
+  // itself) removing the lock in the window would throw ENOENT out of a
+  // predicate whose callers are handling a git failure, replacing the real
+  // error with a confusing one. An unreadable lock answers "not stale" too:
+  // this may not throw, and nothing can be proven about a lock it can't stat.
+  const mtimeMs = statMtimeMs(lockPath);
+  return mtimeMs !== null && Date.now() - mtimeMs >= STALE_GIT_LOCK_MIN_AGE_MS;
+}
+
+/** A path's mtime, or null when it is missing or cannot be read. */
+function statMtimeMs(path) {
+  try {
+    return statSync(path).mtimeMs;
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -137,7 +152,17 @@ export function clearStaleGitLocksIn(gitDir) {
   if (!root) return [];
   const cleared = [];
   const walk = (dir) => {
-    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    // A directory git removes mid-walk (gc pruning its temp dirs), or one this
+    // process cannot read, must not abort the whole sweep — this runs ahead of
+    // the self-update, where throwing would be a worse outcome than missing a
+    // lock. Skip the subtree and keep going.
+    let entries;
+    try {
+      entries = readdirSync(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
       const full = join(dir, entry.name);
       if (entry.isDirectory()) {
         if (!UNSWEPT_GIT_DIRS.has(entry.name)) walk(full);
