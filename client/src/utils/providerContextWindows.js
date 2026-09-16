@@ -4,7 +4,7 @@
  * card must label as assumed) — plus the "(32K ctx)" option label built on it.
  *
  * The rungs — the vendor constants, the known-model table, the per-provider
- * fallback and the catalog read — are re-exported from the pure leaf
+ * fallback, the catalog read and the live-daemon merge — are re-exported from the pure leaf
  * `server/lib/providerContextWindows.js`, the same ones the server's
  * `effectiveContextWindow` budgets with. `resolveModelContextWindow` is the
  * client's own walk over them, because the UI also needs to know WHERE the
@@ -34,6 +34,10 @@ export {
   knownModelContextWindow,
   knownProviderContextWindow,
   catalogModelContextWindow,
+  // Folds a daemon's live `/v1/models` windows (off the readiness payload) onto
+  // the catalog rung, exactly as the server's budgeter does — shared rather than
+  // re-walked so the card cannot rank the observation differently.
+  mergeObservedContextWindows,
 } from '../../../server/lib/providerContextWindows.js';
 
 export const isLikelyLargeContextProvider = (provider) => {

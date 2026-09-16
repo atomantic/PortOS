@@ -1117,6 +1117,7 @@ export default function AIProviders() {
         <ProviderForm
           key={editingProvider?.id || 'new'}
           provider={editingProvider}
+          daemonReadiness={editingProvider?.id ? readiness[editingProvider.id] : null}
           allProviders={providers}
           localModels={localModels}
           runnerAllowedCommands={runnerAllowedCommands}

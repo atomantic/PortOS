@@ -14,7 +14,7 @@ const llamaProvider = (overrides = {}) => ({
   ...overrides,
 });
 
-const reachable = (models) => async () => ({ reachable: true, models, error: null });
+const reachable = (models, contextWindows = null) => async () => ({ reachable: true, models, contextWindows, error: null });
 const unreachable = (error = 'connection refused') => async () => ({ reachable: false, models: null, error });
 
 const checkById = (readiness, id) => readiness.checks.find((check) => check.id === id);
@@ -553,5 +553,35 @@ describe('getProviderReadinessMap batching', () => {
     });
 
     expect(probes).toBe(1);
+  });
+});
+
+// #7447: the readiness payload is how the LIVE window reaches the provider
+// card, because observed runtime state must never touch `providers.json`.
+describe('getProviderReadiness — observed context windows', () => {
+  it('carries the served windows, keyed by every spelling the provider dispatches under', async () => {
+    // The daemon lists the bare id; the OpenCode wrapper offers `llama/dflash`.
+    // A map keyed on only one of the two answers "unknown" for every dispatch.
+    const readiness = await getProviderReadiness(
+      llamaProvider({ models: ['llama/dflash'], defaultModel: 'llama/dflash' }),
+      { findCommand: () => '/opt/homebrew/bin/llama-server', probe: reachable(['dflash'], { dflash: 32768 }) },
+    );
+    expect(readiness.contextWindows).toEqual({ dflash: 32768, 'llama/dflash': 32768 });
+  });
+
+  it('reports null when the daemon is down or silent about windows', async () => {
+    const down = await getProviderReadiness(
+      llamaProvider(),
+      { findCommand: () => '/opt/homebrew/bin/llama-server', probe: unreachable() },
+    );
+    expect(down.contextWindows).toBeNull();
+
+    // Reachable, listing readable, but no window declared: still unknown, never
+    // a zero or an invented number.
+    const silent = await getProviderReadiness(
+      llamaProvider(),
+      { findCommand: () => '/opt/homebrew/bin/llama-server', probe: reachable(['dflash']) },
+    );
+    expect(silent.contextWindows).toBeNull();
   });
 });

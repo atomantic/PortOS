@@ -40,6 +40,7 @@ import { localRuntimeForProvider } from '../lib/localProviderRuntime.js';
 import { expandPageToken, getNavPageForPath } from '../lib/navManifest.js';
 import { bareLocalModelId } from '../lib/providerModels.js';
 import { probeOpenAiModelsCached, resetOpenAiModelsProbeCache } from '../lib/openAiModelsProbeCache.js';
+import { aliasServedContextWindows } from '../lib/providerContextWindows.js';
 import { findCommandOnPath } from '../lib/processEnv.js';
 import { actionCovers, describeRuntimeSetup, readRuntimeWeights, weightsBlockStart } from './localRuntimeSetup.js';
 import { isAppInstalled as isLmStudioAppInstalled } from './lmStudioManager.js';
@@ -438,6 +439,11 @@ export async function getProviderReadiness(provider, deps = {}) {
     standby,
     standbyDetail: standby ? expandPageToken(runtime.standbyDetail, runtime) : null,
     checks,
+    // What this daemon is SERVING right now. It rides the readiness payload
+    // BECAUSE it is observed runtime state and must never reach `providers.json`
+    // (#7441) — this is the channel the provider card budgets its meter from, so
+    // the card shows the window the dispatch gate would actually enforce.
+    contextWindows: aliasServedContextWindows(provider, runtime, result.contextWindows),
     // What a one-click "set this up for me" button can do about the unmet
     // checks, or `null` when nothing here is auto-fixable (see
     // `localRuntimeSetup.js`). Carried on the readiness payload so the card

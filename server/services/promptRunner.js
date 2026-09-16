@@ -83,6 +83,22 @@ function loadObservedContextWindows() {
   return observedContextWindowsLoadPromise;
 }
 
+/**
+ * `withObservedContextWindows(provider)` behind that deferred load — the ONE
+ * operation both readers of the module want (the dispatch gate below, and
+ * `stageRunner.resolveStageContext` for the budgeter). Exported as the operation
+ * rather than the loader so neither caller hard-codes which named export to
+ * destructure, and both share one dynamic import and one settled promise.
+ *
+ * Rejects on a load or probe failure; error policy is the caller's, because the
+ * two differ deliberately — the gate lets it surface, the budgeter degrades to
+ * the provider as stored rather than turning planning into a new failure mode.
+ */
+export async function withObservedContextWindowsLazy(provider) {
+  const { withObservedContextWindows } = await loadObservedContextWindows();
+  return withObservedContextWindows(provider);
+}
+
 // The category an oversized prompt already carries everywhere else in PortOS —
 // `agentErrorAnalysis.js` extracts it from a failed agent's output and
 // `codexTurn.js` maps Codex's `contextWindowExceeded` tag to it. It is a plain
@@ -1302,8 +1318,7 @@ async function assertRequestFitsContext(provider, model, requestCapabilities, { 
   const required = Number(requestCapabilities?.requiredContextTokens);
   if (!Number.isFinite(required) || required <= 0) return;
 
-  const { withObservedContextWindows } = await loadObservedContextWindows();
-  const observed = await withObservedContextWindows(provider);
+  const observed = await withObservedContextWindowsLazy(provider);
   // `reason` already names both numbers, which is what the operator needs to
   // decide between a smaller prompt and a wider provider — so it IS the
   // message rather than being re-worded beside it.

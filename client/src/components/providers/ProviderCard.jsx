@@ -30,6 +30,7 @@ import {
   isProviderHardwareCompatible,
   isTuiProvider,
   isLaunchableTuiProvider,
+  mergeObservedContextWindows,
   providerTypeClass,
   resolveModelContextWindow,
   supportsModelRefresh,
@@ -507,7 +508,16 @@ export default function ProviderCard({
             // a blanket 128K guess, and printing that bare made a 1M-context
             // model look like PortOS had capped it. A reported window prints
             // plain; a guess says so and names the way to replace it.
-            const { tokens, source } = resolveModelContextWindow(provider, provider.defaultModel);
+            //
+            // A local daemon's LIVE window (off the readiness poll) is folded in
+            // first, so the meter agrees with what the dispatch gate enforces —
+            // a card reading 128K beside an endpoint serving 32K promised a
+            // budget no run could ever spend. Down or silent → `null`, and the
+            // ladder resolves exactly as it did before.
+            const { tokens, source } = resolveModelContextWindow(
+              mergeObservedContextWindows(provider, daemonReadiness?.contextWindows),
+              provider.defaultModel
+            );
             const windowLabel = formatContextLength(tokens);
             if (!windowLabel) return null;
             // Only offer Refresh Models when this card HAS that button —
