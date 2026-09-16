@@ -43,6 +43,30 @@ export function isAgentHandoff(agent) {
 }
 
 /**
+ * True only when a handoff record proves a continuation was actually QUEUED —
+ * `resumedTaskId` is the field `resumeAgent`/`relaunchAgent` stamp when they
+ * requeue the same task. `isAgentHandoff` alone is not proof: it also reads
+ * true for `retireStrandedPausedAgents` (`server/services/agentManagement.js`),
+ * which stamps `resumed: true` on a pause whose task is gone or moved on,
+ * with nothing requeued.
+ *
+ * Use this — not the bare predicate — anywhere the caller is about to SKIP its
+ * own completion handling because it believes a continuation run will fire the
+ * completion instead. Skipping on the bare predicate strands the chain when
+ * the retirement was actually terminal (#7469: a quota-burn family's
+ * continuation cycle, and a maintenance run's step evaluation, both stalled
+ * this way until the next scheduled tick).
+ *
+ * Consumers that only ask "was this a genuine success/failure" (reports,
+ * productivity stats, task learning) should keep using `isAgentHandoff` — a
+ * stranded retirement isn't a genuine outcome either, so folding it in there
+ * is correct.
+ */
+export function isQueuedContinuation(agent) {
+  return isAgentHandoff(agent) && !!agent?.result?.resumedTaskId;
+}
+
+/**
  * The one line a handoff card should show: WHAT THE USER CHANGED.
  *
  * When a continuation was actually queued (`resumedTaskId`), `metadata.pauseReason`

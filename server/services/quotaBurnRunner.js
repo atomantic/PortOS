@@ -50,7 +50,7 @@ import { getQuotaBurnDispatches, evaluateFamilies, PLAN_COMPLETE_SKIP_REASON, re
 import { reconcileQuotaBurnReservations, reserveQuotaBurnDispatch } from './quotaBurnAcceptance.js';
 import { getQuotaBurnCompletions, recordQuotaBurnJobCompletion } from './quotaBurnCompletions.js';
 import { getActiveQuotaBurnBlocks, recordBurnAgentCompletion } from './quotaBurnDenials.js';
-import { isAgentHandoff } from '../lib/agentOutcome.js';
+import { isQueuedContinuation } from '../lib/agentOutcome.js';
 import { getQuotaBurnConfig, getQuotaBurnReservations, getQuotaBurnRuns, quotaBurnReservationKey, recordQuotaBurnRun } from './quotaBurnStore.js';
 import { countQuotaBurnStepPending, getQuotaBurnTaskCatalog, invokeQuotaBurnStep } from './quotaBurnInvoke.js';
 import { familyHasRunnableJobs, familyIsConfigured, jobIsSpent, quotaBurnJobKey } from '../lib/quotaBurnConfig.js';
@@ -688,7 +688,13 @@ function onBurnAgentCompleted(agent) {
   // relaunched task is being re-spawned, breaking the one-agent-at-a-time pacing
   // this chain depends on to stay closed. The continuation run emits its own
   // `agent:completed`; that is the one that settles the family.
-  if (isAgentHandoff(agent)) return null;
+  //
+  // Gated on `isQueuedContinuation`, not the bare `isAgentHandoff`: a stranded
+  // pause retirement (`retireStrandedPausedAgents`) also stamps `resumed: true`
+  // but queues nothing, so there is no continuation run to emit that later
+  // `agent:completed` — returning `null` here stalled the family until the next
+  // `checkIntervalMinutes` tick (#7469).
+  if (isQueuedContinuation(agent)) return null;
   // Returned so tests can await the cycle. The emitter ignores it — this is a
   // fire-and-forget listener, and the `.catch` is what keeps a rejection from
   // reaching the emitter as an unhandled one.
