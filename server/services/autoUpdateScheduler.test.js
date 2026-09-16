@@ -6,9 +6,10 @@ const deps = vi.hoisted(() => ({
   selfUpdate: vi.fn(),
   appUpdate: vi.fn(),
   prepareRepo: vi.fn(),
+  readRepo: vi.fn(),
   queueRepair: vi.fn(),
   status: vi.fn(),
-  runtime: vi.fn(),
+  gateState: vi.fn(),
   recordRuntime: vi.fn(),
   schedule: vi.fn(),
   cancel: vi.fn(),
@@ -19,16 +20,17 @@ vi.mock('./settings.js', () => ({
   getSettings: deps.settings,
   settingsEvents: { on: vi.fn(), emit: vi.fn() },
 }));
-vi.mock('./activeProcessing.js', () => ({ getActiveProcessing: deps.processing }));
+vi.mock('./activeProcessing.js', () => ({ getSystemActivity: deps.processing }));
 vi.mock('./portosSelfUpdate.js', () => ({ startPortosSelfUpdate: deps.selfUpdate }));
 vi.mock('./appUpdateRunner.js', () => ({ runAppUpdate: deps.appUpdate }));
 vi.mock('./updateRepoReadiness.js', () => ({
+  checkUpdateRepoReadiness: deps.readRepo,
   prepareUpdateRepo: deps.prepareRepo,
   queueRepoRepairTask: deps.queueRepair,
 }));
 vi.mock('./updateChecker.js', () => ({
   getUpdateStatus: deps.status,
-  getAutoUpdateRuntime: deps.runtime,
+  getAutoUpdateGateState: deps.gateState,
   recordAutoUpdateRuntime: deps.recordRuntime,
 }));
 
@@ -39,22 +41,25 @@ const HOUR = 60 * 60 * 1000;
 const iso = (ms) => new Date(ms).toISOString();
 
 const idleSnapshot = { activity: { idle: true, blockers: [] } };
-const readyRepo = { verdict: { ready: true, behind: 3, defaultBranch: 'main', reasons: [], repairable: [] }, actions: [] };
+const readyVerdict = { ready: true, needsAgent: false, behind: 3, defaultBranch: 'main', reasons: [], repairable: [] };
 
 beforeEach(() => {
   Object.values(deps).forEach((mock) => mock.mockReset());
   __resetAutoUpdateSchedulerForTests();
   deps.settings.mockResolvedValue({ autoUpdate: { enabled: true, channel: 'release', minIntervalHours: 6 } });
-  deps.runtime.mockResolvedValue({ armedAt: iso(Date.now() - 48 * HOUR), lastRunAt: null, repairTaskId: null });
+  deps.gateState.mockResolvedValue({
+    runtime: { armedAt: iso(Date.now() - 48 * HOUR), lastRunAt: null, repairTaskId: null },
+    lastUpdateResult: null,
+    updateInProgress: false,
+  });
   deps.recordRuntime.mockResolvedValue({});
   deps.status.mockResolvedValue({
-    updateInProgress: false,
     updateAvailable: true,
     latestRelease: { version: '9.9.9' },
-    lastUpdateResult: null,
     installState: { outOfSync: false },
   });
-  deps.prepareRepo.mockResolvedValue(readyRepo);
+  deps.readRepo.mockResolvedValue(readyVerdict);
+  deps.prepareRepo.mockResolvedValue({ verdict: readyVerdict, actions: [] });
   deps.processing.mockResolvedValue(idleSnapshot);
   deps.selfUpdate.mockResolvedValue({ started: true, tag: 'v9.9.9' });
   deps.appUpdate.mockResolvedValue({ ok: true });
@@ -92,23 +97,32 @@ describe('automatic update gates', () => {
   it('does nothing while the feature is off', async () => {
     deps.settings.mockResolvedValue({ autoUpdate: { enabled: false } });
     await expect(runAutoUpdateTick({ io: {} })).resolves.toMatchObject({ ran: false, reason: 'disabled' });
-    expect(deps.status).not.toHaveBeenCalled();
+    expect(deps.gateState).not.toHaveBeenCalled();
   });
 
-  it('waits out the minimum interval before looking at all', async () => {
-    deps.runtime.mockResolvedValue({ armedAt: null, lastRunAt: iso(Date.now() - 2 * HOUR) });
+  // The cooldown rejects 71 of every 72 ticks at the default interval, and
+  // `getUpdateStatus()` walks every file under client/src — so it must not be
+  // paid before the gate that discards it.
+  it('waits out the minimum interval without reading the update status', async () => {
+    deps.gateState.mockResolvedValue({
+      runtime: { armedAt: null, lastRunAt: iso(Date.now() - 2 * HOUR) },
+      lastUpdateResult: null,
+      updateInProgress: false,
+    });
     const result = await runAutoUpdateTick({ io: {} });
     expect(result).toMatchObject({ ran: false, reason: 'cooldown' });
+    expect(deps.status).not.toHaveBeenCalled();
+    expect(deps.readRepo).not.toHaveBeenCalled();
     expect(deps.selfUpdate).not.toHaveBeenCalled();
   });
 
   // A user who updated manually an hour ago has reset the clock; an automatic
   // update queued behind that would restart the install for nothing.
   it('measures the interval from a manual update too', async () => {
-    deps.runtime.mockResolvedValue({ armedAt: iso(Date.now() - 48 * HOUR), lastRunAt: null });
-    deps.status.mockResolvedValue({
-      updateInProgress: false, updateAvailable: true, latestRelease: { version: '9.9.9' },
+    deps.gateState.mockResolvedValue({
+      runtime: { armedAt: iso(Date.now() - 48 * HOUR), lastRunAt: null },
       lastUpdateResult: { completedAt: iso(Date.now() - HOUR) },
+      updateInProgress: false,
     });
     await expect(runAutoUpdateTick({ io: {} })).resolves.toMatchObject({ ran: false, reason: 'cooldown' });
   });
@@ -132,8 +146,7 @@ describe('automatic update gates', () => {
 
   it('does not restart the install when there is nothing to update to', async () => {
     deps.status.mockResolvedValue({
-      updateInProgress: false, updateAvailable: false, latestRelease: { version: '1.0.0' },
-      lastUpdateResult: null, installState: { outOfSync: false },
+      updateAvailable: false, latestRelease: { version: '1.0.0' }, installState: { outOfSync: false },
     });
     await expect(runAutoUpdateTick({ io: {} })).resolves.toMatchObject({ ran: false, reason: 'up-to-date' });
     expect(deps.selfUpdate).not.toHaveBeenCalled();
@@ -141,10 +154,9 @@ describe('automatic update gates', () => {
 
   it('updates on the main channel only while origin is actually ahead', async () => {
     deps.settings.mockResolvedValue({ autoUpdate: { enabled: true, channel: 'main', minIntervalHours: 6 } });
-    deps.prepareRepo.mockResolvedValue({ verdict: { ready: true, behind: 0, defaultBranch: 'main' }, actions: [] });
+    deps.readRepo.mockResolvedValue({ ...readyVerdict, behind: 0 });
     deps.status.mockResolvedValue({
-      updateInProgress: false, updateAvailable: true, latestRelease: { version: '9.9.9' },
-      lastUpdateResult: null, installState: { outOfSync: false },
+      updateAvailable: true, latestRelease: { version: '9.9.9' }, installState: { outOfSync: false },
     });
     await expect(runAutoUpdateTick({ io: {} })).resolves.toMatchObject({ ran: false, reason: 'up-to-date' });
     expect(deps.appUpdate).not.toHaveBeenCalled();
@@ -153,35 +165,48 @@ describe('automatic update gates', () => {
 
 describe('checkout readiness gate', () => {
   const notReady = {
-    verdict: { ready: false, needsAgent: true, summary: 'the working tree has uncommitted changes', reasons: ['uncommitted-changes'], repairable: [] },
-    actions: [],
+    ready: false, needsAgent: true, behind: 3, defaultBranch: 'main',
+    summary: 'the working tree has uncommitted changes',
+    reasons: ['uncommitted-changes'], repairable: [],
   };
 
   it('refuses to update a checkout that is not clean on the default branch', async () => {
-    deps.prepareRepo.mockResolvedValue(notReady);
+    deps.readRepo.mockResolvedValue(notReady);
     deps.queueRepair.mockResolvedValue({ id: 'task-1' });
     const result = await runAutoUpdateTick({ io: {} });
     expect(result).toMatchObject({ ran: false, reason: 'repo-not-ready' });
     expect(deps.selfUpdate).not.toHaveBeenCalled();
   });
 
+  // The repairs run `git checkout` in the PRIMARY checkout. Doing that before
+  // the idle gate would branch-jack a live `useWorktree: false` CoS agent, so
+  // nothing may be written until the install is proven idle.
+  it('never writes to the checkout before the idle gate passes', async () => {
+    deps.processing.mockResolvedValue({ activity: { idle: false, blockers: [{ label: '1 CoS agent running' }] } });
+    deps.readRepo.mockResolvedValue({ ...readyVerdict, ready: false, needsAgent: false, repairable: ['checkout-default'] });
+    await expect(runAutoUpdateTick({ io: {} })).resolves.toMatchObject({ ran: false, reason: 'busy' });
+    expect(deps.prepareRepo).not.toHaveBeenCalled();
+  });
+
+  it('repairs a mechanically-fixable checkout after the idle gate, without an agent', async () => {
+    deps.readRepo.mockResolvedValue({ ...readyVerdict, ready: false, needsAgent: false, repairable: ['checkout-default'] });
+    deps.prepareRepo.mockResolvedValue({ verdict: readyVerdict, actions: ['switched to main'] });
+    await expect(runAutoUpdateTick({ io: {} })).resolves.toMatchObject({ ran: true });
+    expect(deps.queueRepair).not.toHaveBeenCalled();
+    expect(deps.prepareRepo).toHaveBeenCalledTimes(1);
+  });
+
   it('queues an agent only for what no script may safely repair', async () => {
-    deps.prepareRepo.mockResolvedValue(notReady);
+    deps.readRepo.mockResolvedValue(notReady);
     deps.queueRepair.mockResolvedValue({ id: 'task-1' });
     await runAutoUpdateTick({ io: {} });
     expect(deps.queueRepair).toHaveBeenCalledTimes(1);
-
-    // A checkout the mechanical repairs already fixed reaches `ready` and must
-    // never wake an agent — that is the entire repairable/blocking split.
-    deps.prepareRepo.mockResolvedValue({ verdict: { ready: true, behind: 1, defaultBranch: 'main' }, actions: ['switched to main'] });
-    deps.queueRepair.mockClear();
-    await runAutoUpdateTick({ io: {} });
-    expect(deps.queueRepair).not.toHaveBeenCalled();
+    expect(deps.prepareRepo).not.toHaveBeenCalled();
   });
 
   it('leaves the agent unqueued when the user switched that off', async () => {
     deps.settings.mockResolvedValue({ autoUpdate: { enabled: true, minIntervalHours: 6, resolveBlockersWithAgent: false } });
-    deps.prepareRepo.mockResolvedValue(notReady);
+    deps.readRepo.mockResolvedValue(notReady);
     await expect(runAutoUpdateTick({ io: {} })).resolves.toMatchObject({ reason: 'repo-not-ready' });
     expect(deps.queueRepair).not.toHaveBeenCalled();
   });

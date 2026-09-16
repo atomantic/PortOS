@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { AlertTriangle, Bot, Check, Clock, GitBranch, Loader, Tag } from 'lucide-react';
 import toast from '../../ui/Toast';
 import * as api from '../../../services/api';
@@ -41,14 +41,23 @@ export default function AutoUpdatePanel() {
   const runtime = status?.runtime;
   const repo = status?.repo;
   const activity = status?.activity;
+  // Clamp bounds come from the server (`storableAutoUpdateConfig`'s schema
+  // enforces the same pair), so the form can't drift into values the PUT 400s on.
+  const bounds = status?.bounds?.minIntervalHours || { min: 1, max: 720 };
   const [draft, setDraft] = useState(config || null);
   const [saving, setSaving] = useState(false);
 
-  // Re-seed from the server whenever it sends a different effective config, so
-  // a change made on another screen (or another device) is not overwritten by a
-  // stale draft the next time this one saves.
+  // Re-seed when the SERVER's value changes — compared against the last config
+  // it sent, not against the draft. Comparing against the draft would read the
+  // user's half-typed interval as staleness and overwrite it on the next 15s
+  // poll, which is the opposite of what this effect is for.
+  const lastServerConfig = useRef(null);
   useEffect(() => {
-    if (config) setDraft((prev) => (prev && JSON.stringify(prev) === JSON.stringify(config) ? prev : config));
+    if (!config) return;
+    const serialized = JSON.stringify(config);
+    if (serialized === lastServerConfig.current) return;
+    lastServerConfig.current = serialized;
+    setDraft(config);
   }, [config]);
 
   if (!draft) return null;
@@ -66,7 +75,7 @@ export default function AutoUpdatePanel() {
       setDraft(config);
       return;
     }
-    refetch?.();
+    refetch();
   };
 
   const blockers = activity?.blockers || [];
@@ -135,13 +144,13 @@ export default function AutoUpdatePanel() {
             <input
               id="auto-update-interval"
               type="number"
-              min={1}
-              max={720}
+              min={bounds.min}
+              max={bounds.max}
               value={draft.minIntervalHours}
               disabled={saving}
               onChange={(e) => setDraft({ ...draft, minIntervalHours: Number(e.target.value) })}
               onBlur={(e) => {
-                const hours = Math.min(720, Math.max(1, Number(e.target.value) || 1));
+                const hours = Math.min(bounds.max, Math.max(bounds.min, Number(e.target.value) || bounds.min));
                 if (hours !== config.minIntervalHours) save({ minIntervalHours: hours });
               }}
               className="w-24 px-2 py-1 bg-port-bg border border-port-border rounded text-sm text-white"

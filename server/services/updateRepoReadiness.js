@@ -26,11 +26,11 @@
  * managed-app pull.
  */
 
-import { existsSync } from 'fs';
-import { join, isAbsolute } from 'path';
+import { isAbsolute } from 'path';
 import { PATHS } from '../lib/fileUtils.js';
-import { execGit } from '../lib/execGit.js';
+import { execGitSafe } from '../lib/execGit.js';
 import * as gitService from './git.js';
+import { countAheadBehind, detectOperationInProgress } from './repoSync.js';
 import { classifyWorktreeDirt } from './worktreeManager.js';
 import { PORTOS_APP_ID } from '../lib/appIdentity.js';
 
@@ -45,6 +45,9 @@ const REASON_LABELS = {
   'conflicted-files': 'the working tree has unresolved conflicts',
   'uncommitted-changes': 'the working tree has uncommitted changes',
   'unpushed-commits': 'the default branch has local commits that are not on origin',
+  'divergence-unreadable': 'how far the checkout has diverged from origin could not be read',
+  'agent-at-work': 'a CoS agent is working in this checkout',
+  'agent-check-unreadable': 'whether a CoS agent is working in this checkout could not be established',
   'detached-head': 'HEAD is detached',
   'wrong-branch': 'the checkout is not on the default branch',
 };
@@ -54,41 +57,17 @@ const describe = (code) => REASON_LABELS[code] || code;
 /** Absolute paths only — a relative path would resolve against the server's cwd. */
 const resolveRepoPath = (repoPath) => (isAbsolute(repoPath || '') ? repoPath : PATHS.root);
 
-async function gitDirPath(repoPath) {
-  const result = await execGit(['rev-parse', '--absolute-git-dir'], repoPath, { ignoreExitCode: true });
-  return result.exitCode === 0 ? result.stdout.trim() : null;
-}
-
-/** An interrupted merge/rebase/cherry-pick leaves a marker in the git dir. */
-async function interruptedOperation(repoPath) {
-  const gitDir = await gitDirPath(repoPath);
-  if (!gitDir) return null;
-  const markers = [
-    ['MERGE_HEAD', 'merge'],
-    ['rebase-merge', 'rebase'],
-    ['rebase-apply', 'rebase'],
-    ['CHERRY_PICK_HEAD', 'cherry-pick'],
-    ['REVERT_HEAD', 'revert'],
-  ];
-  for (const [name, kind] of markers) {
-    if (existsSync(join(gitDir, name))) return kind;
-  }
-  return null;
-}
-
-/** How far HEAD and its origin counterpart have diverged. */
+/**
+ * How far HEAD and its origin counterpart have diverged, via `repoSync`'s
+ * counter so the left/right → ahead/behind mapping is decided in one place.
+ *
+ * `null` means the read FAILED — deliberately not 0. Every missing fact here
+ * would otherwise default to the value that looks safe, and "0 commits ahead"
+ * is precisely the value that unlocks the update. The caller refuses on a null.
+ */
 async function divergence(repoPath, branch) {
-  const counts = await execGit(
-    ['rev-list', '--left-right', '--count', `HEAD...refs/remotes/origin/${branch}`],
-    repoPath,
-    { ignoreExitCode: true },
-  );
-  if (counts.exitCode !== 0) return { ahead: null, behind: null };
-  const [ahead, behind] = counts.stdout.trim().split(/\s+/).map(Number);
-  return {
-    ahead: Number.isFinite(ahead) ? ahead : null,
-    behind: Number.isFinite(behind) ? behind : null,
-  };
+  const counts = await countAheadBehind(repoPath, 'HEAD', `refs/remotes/origin/${branch}`);
+  return counts || { ahead: null, behind: null };
 }
 
 /**
@@ -102,34 +81,71 @@ async function divergence(repoPath, branch) {
  *   the UI does not.
  * @returns {Promise<object>} the readiness verdict.
  */
-export async function checkUpdateRepoReadiness({ repoPath = PATHS.root, fetch = false } = {}) {
+export async function checkUpdateRepoReadiness({ repoPath, fetch = false } = {}) {
   const dir = resolveRepoPath(repoPath);
-  const base = {
-    repoPath: dir, branch: null, defaultBranch: null, clean: null, lockfilePaths: [], dirtyPaths: [],
-    ahead: null, behind: null, reasons: [], repairable: [], ready: false, needsAgent: false,
+  // ONE verdict shape on every path, including the failure ones — the scheduler
+  // and the UI both read `summary` and `repairable`, and an early return that
+  // omitted them forced a fallback message that named the wrong cause.
+  const verdict = (fields) => {
+    const reasons = fields.reasons || [];
+    const repairable = fields.repairable || [];
+    return {
+      repoPath: dir,
+      branch: null, defaultBranch: null, interrupted: null, ahead: null, behind: null,
+      lockfilePaths: [],
+      ...fields,
+      reasons,
+      repairable,
+      // Ready means: nothing to refuse AND nothing left to repair. A repairable
+      // checkout becomes ready only after `prepareUpdateRepo` actually repairs it.
+      ready: reasons.length === 0 && repairable.length === 0,
+      // A checkout that is merely repairable must NOT wake an agent — that is
+      // the whole point of the repairable/blocking split. Nor may an unreadable
+      // one: there is nothing for an agent to resolve if git itself is the
+      // problem.
+      needsAgent: reasons.length > 0 && !reasons.includes('git-unreadable'),
+      summary: reasons.length ? reasons.map(describe).join('; ') : null,
+    };
   };
 
   if (!(await gitService.isRepo(dir).catch(() => false))) {
-    return { ...base, reasons: ['git-unreadable'], needsAgent: false };
+    return verdict({ reasons: ['git-unreadable'] });
   }
   if (fetch) await gitService.fetchOrigin(dir).catch(() => undefined);
 
-  const defaultBranch = await gitService.getDefaultBranch(dir, { strict: true }).catch(() => null);
-  const branch = await gitService.getBranch(dir).catch(() => null);
-  const porcelain = await gitService.getStatusPorcelain(dir).catch(() => null);
+  // Five independent reads — nothing below depends on another's answer, and
+  // serializing them cost ~110ms of git spawns on a path the Update tab polls.
+  // `allowRemote` follows `fetch`: without it `getDefaultBranch` may run
+  // `git remote set-head --auto`, a 5s network call, on that same poll.
+  const [defaultBranch, branch, porcelain, interrupted, activeAgentId] = await Promise.all([
+    gitService.getDefaultBranch(dir, { strict: true, allowRemote: fetch }).catch(() => null),
+    gitService.getBranch(dir).catch(() => null),
+    gitService.getStatusPorcelain(dir).catch(() => null),
+    // `'unknown'` = the marker read itself failed, which is not "no operation".
+    detectOperationInProgress(dir).catch(() => 'unknown'),
+    // A CoS agent working in THIS checkout (a `useWorktree: false` task,
+    // including the repair task this module queues) owns the branch it is on.
+    // Moving it, or running update.sh's pm2 restart under it, is the branch-jack
+    // `repoSync` refuses on for the same reason — and the idle gate alone would
+    // not catch a paused agent that still holds the tree.
+    gitService.findActiveAgentInWorkspace(dir, { includePaused: true, failClosed: true }).catch(() => 'unknown'),
+  ]);
   if (branch === null || porcelain === null) {
-    return { ...base, defaultBranch, reasons: ['git-unreadable'] };
+    return verdict({ defaultBranch, reasons: ['git-unreadable'] });
   }
 
   const dirt = classifyWorktreeDirt(porcelain);
   const conflicted = porcelain.split('\n').some((line) => /^(DD|AU|UD|UA|DU|AA|UU) /.test(line));
-  const interrupted = await interruptedOperation(dir);
   const detached = branch === 'HEAD';
   const onDefaultBranch = Boolean(defaultBranch) && branch === defaultBranch;
   const { ahead, behind } = defaultBranch ? await divergence(dir, defaultBranch) : { ahead: null, behind: null };
 
   const reasons = [];
   const repairable = [];
+  // Distinct codes: "an agent holds this checkout" is a wait; "the registry
+  // could not be read" is a fault the user has to see named, not a phantom agent.
+  if (activeAgentId === 'unknown') reasons.push('agent-check-unreadable');
+  else if (activeAgentId) reasons.push('agent-at-work');
   if (!defaultBranch) reasons.push('no-default-branch');
   if (interrupted) reasons.push('merge-in-progress');
   if (conflicted) reasons.push('conflicted-files');
@@ -144,30 +160,27 @@ export async function checkUpdateRepoReadiness({ repoPath = PATHS.root, fetch = 
   }
   // Only meaningful ON the default branch: a feature branch is expected to be
   // ahead, and the checkout-default remedy leaves those commits where they are.
-  if (onDefaultBranch && ahead > 0) reasons.push('unpushed-commits');
+  // An UNREADABLE count refuses too — `null > 0` is false, so treating it as a
+  // number here would make "could not tell" indistinguishable from "nothing
+  // unpushed", in the one path whose whole premise is never losing work.
+  if (onDefaultBranch && (ahead === null || ahead > 0)) {
+    reasons.push(ahead === null ? 'divergence-unreadable' : 'unpushed-commits');
+  }
 
-  return {
-    repoPath: dir,
+  // The paths of the user's own uncommitted work are deliberately NOT returned:
+  // this verdict is served to the browser on the Update tab's poll, and the
+  // reason codes already say what is wrong. `lockfilePaths` is the exception —
+  // `prepareUpdateRepo` restores exactly those paths and nothing else.
+  return verdict({
     branch,
     defaultBranch,
-    onDefaultBranch,
-    clean: dirt.clean,
-    lockfileOnlyDirt: !dirt.clean && !dirt.hasRealChanges,
-    lockfilePaths: dirt.lockfilePaths,
-    dirtyPaths: dirt.realChangePaths,
     interrupted,
     ahead,
     behind,
+    lockfilePaths: dirt.lockfilePaths,
     reasons,
     repairable,
-    // Ready means: nothing to refuse AND nothing left to repair. A repairable
-    // checkout becomes ready only after `prepareUpdateRepo` actually repairs it.
-    ready: reasons.length === 0 && repairable.length === 0,
-    // A checkout that is merely repairable must NOT wake an agent — that is the
-    // whole point of the repairable/blocking split.
-    needsAgent: reasons.length > 0 && !reasons.includes('git-unreadable'),
-    summary: reasons.length ? reasons.map(describe).join('; ') : null,
-  };
+  });
 }
 
 /**
@@ -181,7 +194,9 @@ export async function checkUpdateRepoReadiness({ repoPath = PATHS.root, fetch = 
  */
 export async function prepareUpdateRepo({ repoPath = PATHS.root } = {}) {
   const dir = resolveRepoPath(repoPath);
-  const before = await checkUpdateRepoReadiness({ repoPath: dir, fetch: true });
+  // No fetch: the one caller reads with `fetch: true` before its idle gate and
+  // then calls this, so a second network hop would only re-answer that read.
+  const before = await checkUpdateRepoReadiness({ repoPath: dir, fetch: false });
   if (before.ready || before.repairable.length === 0) return { verdict: before, actions: [] };
 
   const actions = [];
@@ -190,11 +205,11 @@ export async function prepareUpdateRepo({ repoPath = PATHS.root } = {}) {
     // paths are auto-generated lockfiles, and a pathspec of `.` would discard
     // anything the classifier had not looked at (a file that appeared between
     // the two calls, say) along with them.
-    const restore = await execGit(['checkout', '--', ...before.lockfilePaths], dir, { ignoreExitCode: true });
+    const restore = await execGitSafe(['checkout', '--', ...before.lockfilePaths], dir, { ignoreExitCode: true });
     if (restore.exitCode === 0) actions.push(`restored ${before.lockfilePaths.length} auto-generated lockfile(s)`);
   }
   if (before.repairable.includes('checkout-default') && before.defaultBranch) {
-    const checkout = await execGit(['checkout', before.defaultBranch], dir, { ignoreExitCode: true });
+    const checkout = await execGitSafe(['checkout', before.defaultBranch], dir, { ignoreExitCode: true });
     if (checkout.exitCode === 0) actions.push(`switched to ${before.defaultBranch}`);
   }
 

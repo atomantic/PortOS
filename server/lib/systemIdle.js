@@ -25,6 +25,8 @@
  * the auto-update runtime record on disk.
  */
 
+import { pluralize } from './textUtils.js';
+
 /** Media kinds the queue runs, mapped to the noun a blocker line uses. */
 const MEDIA_NOUNS = {
   image: 'image render',
@@ -32,8 +34,6 @@ const MEDIA_NOUNS = {
   audio: 'audio render',
   training: 'training run',
 };
-
-const plural = (count, noun) => `${count} ${noun}${count === 1 ? '' : 's'}`;
 
 const mediaNoun = (kind) => MEDIA_NOUNS[kind] || 'media job';
 
@@ -67,19 +67,19 @@ export function summarizeSystemActivity(snapshot) {
 
   const jobs = Array.isArray(snapshot?.jobs) ? snapshot.jobs : [];
   for (const [kind, count] of countByKind(jobs, 'running')) {
-    add(`media-running:${kind}`, `${plural(count, mediaNoun(kind))} running`, count);
+    add(`media-running:${kind}`, `${pluralize(count, mediaNoun(kind))} running`, count);
   }
   for (const [kind, count] of countByKind(jobs, 'queued')) {
-    add(`media-queued:${kind}`, `${plural(count, mediaNoun(kind))} queued`, count);
+    add(`media-queued:${kind}`, `${pluralize(count, mediaNoun(kind))} queued`, count);
   }
 
   const imageTo3d = Array.isArray(snapshot?.extras?.imageTo3d) ? snapshot.extras.imageTo3d.length : 0;
-  if (imageTo3d > 0) add('image-to-3d', `${plural(imageTo3d, 'image-to-3D build')} running`, imageTo3d);
+  if (imageTo3d > 0) add('image-to-3d', `${pluralize(imageTo3d, 'image-to-3D build')} running`, imageTo3d);
 
   const activeAgents = Number(snapshot?.agents?.active) || 0;
-  if (activeAgents > 0) add('agents-running', `${plural(activeAgents, 'CoS agent')} running`, activeAgents);
+  if (activeAgents > 0) add('agents-running', `${pluralize(activeAgents, 'CoS agent')} running`, activeAgents);
   const queuedAgents = Number(snapshot?.agents?.queued) || 0;
-  if (queuedAgents > 0) add('agents-queued', `${plural(queuedAgents, 'CoS task')} queued`, queuedAgents);
+  if (queuedAgents > 0) add('agents-queued', `${pluralize(queuedAgents, 'CoS task')} queued`, queuedAgents);
 
   const mind = snapshot?.mind;
   // An unreadable Persistent Mind state is NOT an idle one: the update path
@@ -91,12 +91,12 @@ export function summarizeSystemActivity(snapshot) {
   } else if (mind) {
     if (mind.thinking) add('mind-thinking', 'Persistent Mind is thinking', 1);
     const queuedMessages = Number(mind.queued) || 0;
-    if (queuedMessages > 0) add('mind-queued', `${plural(queuedMessages, 'Persistent Mind message')} queued`, queuedMessages);
+    if (queuedMessages > 0) add('mind-queued', `${pluralize(queuedMessages, 'Persistent Mind message')} queued`, queuedMessages);
   }
 
   const appOperations = Array.isArray(snapshot?.appOperations) ? snapshot.appOperations : [];
   if (appOperations.length > 0) {
-    add('app-operations', `${plural(appOperations.length, 'app operation')} running`, appOperations.length);
+    add('app-operations', `${pluralize(appOperations.length, 'app operation')} running`, appOperations.length);
   }
 
   if (snapshot?.update?.inProgress) add('update-in-progress', 'An update is already running', 1);

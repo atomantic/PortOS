@@ -244,3 +244,18 @@ export function resolveAutoUpdateConfig(raw) {
     resolveBlockersWithAgent: source.resolveBlockersWithAgent !== false,
   };
 }
+
+/**
+ * The resolved config MINUS the derived `minIntervalMs`, i.e. exactly the keys
+ * `autoUpdateSettingsSchema` accepts.
+ *
+ * Every surface that shows the effective config also hands it back on the next
+ * save (the panel PUTs `{...draft, ...patch}`), and the schema is `.strict()` —
+ * so echoing a derived key turns every toggle into a 400. One projection, used
+ * by both the settings GET and `GET /api/update/auto`, is what keeps the two
+ * from having to remember that separately.
+ */
+export function storableAutoUpdateConfig(raw) {
+  const { minIntervalMs: _derived, ...storable } = resolveAutoUpdateConfig(raw);
+  return storable;
+}

@@ -331,6 +331,24 @@ export async function getAutoUpdateRuntime() {
   return normalizeAutoUpdateRuntime(state.autoUpdate);
 }
 
+/**
+ * Everything the auto-update tick's CHEAP gates need, from one file read.
+ *
+ * The cooldown rejects 71 of every 72 ticks at the default 6h interval, and it
+ * only needs the runtime record, the last update's completion, and whether an
+ * update is already running — none of which requires `getUpdateStatus()`, whose
+ * `getInstallState()` walks every file under `client/src`. Reading them together
+ * also collapses what used to be three separate loads of `update.json` per tick.
+ */
+export async function getAutoUpdateGateState() {
+  const state = await loadState();
+  return {
+    runtime: normalizeAutoUpdateRuntime(state.autoUpdate),
+    lastUpdateResult: state.lastUpdateResult,
+    updateInProgress: state.updateInProgress === true,
+  };
+}
+
 /** Merge a patch into the runtime record. Returns the merged result. */
 export async function recordAutoUpdateRuntime(patch) {
   return withLock(async () => {

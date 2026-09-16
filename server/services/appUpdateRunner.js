@@ -31,11 +31,11 @@ import { PORTOS_APP_ID } from '../lib/appIdentity.js';
  * @param {boolean} [params.acknowledgeFork]
  * @param {boolean} [params.acknowledgePersistentMindImageBackup]
  * @returns {Promise<
- *   | {ok: false, reason: 'not-found'}
- *   | {ok: false, reason: 'duplicate', inFlight: object}
- *   | {ok: false, reason: 'refused', appId: string, code: string|null, message: string}
- *   | {ok: true, appId: string, result: object|null, selfUpdateStarted: boolean, failure: Error|null}
+ *   | {ok: false, reason: 'not-found'|'duplicate'|'refused', appId: string|null, code: string|null, message: string}
+ *   | {ok: true}
  * >}
+ *   Every refusal carries a rendered `message`; a caller decides only WHERE it
+ *   goes (the dispatching socket, or a log line), never how it reads.
  */
 export async function runAppUpdate({
   io,
@@ -45,13 +45,21 @@ export async function runAppUpdate({
   acknowledgePersistentMindImageBackup = false,
 }) {
   const app = await appsService.getAppById(appId);
-  if (!app) return { ok: false, reason: 'not-found' };
+  if (!app) return { ok: false, reason: 'not-found', appId: null, code: null, message: 'App not found' };
 
   // Claimed here, immediately after the app record resolves and BEFORE the
   // preflight await below — the claim has to cover every await that precedes
   // the actual update, or two dispatches land inside the gap.
   const claim = claimAppOperation(io, app, 'update');
-  if (!claim.ok) return { ok: false, reason: 'duplicate', inFlight: claim.inFlight };
+  if (!claim.ok) {
+    return {
+      ok: false,
+      reason: 'duplicate',
+      appId: app.id,
+      code: null,
+      message: `An ${claim.inFlight.type} is already running for ${claim.inFlight.appName}`,
+    };
+  }
   const operation = claim.operation;
   let operatingAppId = app.id;
   let result = null;
@@ -114,7 +122,10 @@ export async function runAppUpdate({
       console.log(`✅ Update complete for ${app.name}`);
     }
 
-    return { ok: true, appId: app.id, result, selfUpdateStarted: result?.selfUpdateStarted === true, failure };
+    // The run's own outcome is already on the io bus (`app:update:complete` /
+    // `app:update:error`) and in the history ledger, which is where both callers
+    // read it from — so the return says only "this dispatch was accepted".
+    return { ok: true };
   } finally {
     if (operatingAppId && !result?.selfUpdateStarted) endAppOperation(io, operatingAppId);
   }

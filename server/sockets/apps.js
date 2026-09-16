@@ -84,19 +84,12 @@ export const registerAppHandlers = (socket, io) => {
         acknowledgePersistentMindImageBackup: data.acknowledgePersistentMindImageBackup === true,
       });
       if (outcome.ok) return;
-      if (outcome.reason === 'not-found') {
-        socket.emit('app:update:error', { message: 'App not found' });
-        return;
-      }
-      if (outcome.reason === 'duplicate') {
-        socket.emit('app:update:error', {
-          appId: data.appId,
-          duplicate: true,
-          message: `An ${outcome.inFlight.type} is already running for ${outcome.inFlight.appName}`
-        });
-        return;
-      }
-      socket.emit('app:update:error', { appId: outcome.appId, code: outcome.code, message: outcome.message });
+      socket.emit('app:update:error', {
+        appId: outcome.appId,
+        code: outcome.code,
+        message: outcome.message,
+        ...(outcome.reason === 'duplicate' ? { duplicate: true } : {}),
+      });
     } catch (err) {
       const message = err?.message ?? String(err);
       console.error(`❌ Socket handler error [app:update]: ${message}`);

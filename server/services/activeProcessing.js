@@ -38,38 +38,75 @@ function summarizeMind(snapshot) {
   };
 }
 
-export async function getActiveProcessing() {
-  const [capability, jobs, models, loadedModels, pendingTaskIds, agents, mindState] = await Promise.all([
-    getCudaCapability(),
+/**
+ * Active vs queued CoS agents, from ONE read of the agent list.
+ *
+ * A task stays 'pending' until spawnAgentForTask flips it to 'in_progress',
+ * which happens AFTER its agent is registered as running — so a snapshot taken
+ * in between would count one task as queued AND active, and the widget read
+ * 'N active, N queued' for a queue of N. A task a live agent holds is active.
+ *
+ * When the agent list is readable, BOTH counts come off that one read: taking
+ * `active` from `getStatus()` and `queued` from here would let the two skew
+ * against each other, which is the same defect one layer up. When it is NOT
+ * readable (`agents === null`), there is no claim set to subtract — fall back to
+ * `getStatus()`'s own tally rather than reporting zero active agents while still
+ * counting their tasks as queued, which would understate BOTH numbers at once.
+ */
+function agentCounts(agents, cosStatus, pendingTaskIds) {
+  const runningAgents = agents === null ? null : agents.filter((agent) => agent.status === 'running');
+  const claimedTaskIds = new Set((runningAgents || []).map((agent) => agent.taskId).filter(Boolean));
+  return {
+    active: runningAgents ? runningAgents.length : (cosStatus?.activeAgents || 0),
+    queued: pendingTaskIds.filter((id) => !claimedTaskIds.has(id)).length,
+  };
+}
+
+/**
+ * Just the slices `summarizeSystemActivity` reads, plus the verdict.
+ *
+ * Split out because two callers — `GET /api/update/auto` and the auto-update
+ * tick — want only `activity`, and the full snapshot also shells out to
+ * nvidia-smi and makes an HTTP request to Ollama, whose latency is unbounded
+ * when the daemon is wedged. Neither feeds the verdict.
+ */
+export async function getSystemActivity() {
+  const [jobs, models, pendingTaskIds, agents, mindState] = await Promise.all([
     Promise.resolve(listJobs()).then((items) => items.filter((job) => LIVE_STATUSES.has(job.status))),
     listGeneratingModelSummaries().catch(() => []),
-    getLoadedModels().catch(() => []),
     cos.getPendingTaskIds().catch(() => []),
     // `null` = the read FAILED, distinct from `[]` = read fine, no agents. The
-    // counts below degrade differently for the two, so they must stay separable.
+    // counts degrade differently for the two, so they must stay separable.
     cos.getAgents().catch(() => null),
     // Same contract one layer down: the reader reports `trusted: false` rather
     // than an empty mind, so an unreadable state cannot read as an idle one.
     readPersistentMindStateForSafetyCheck().catch(() => ({ trusted: false, persistentMind: null })),
   ]);
   const cosStatus = agents === null ? await cos.getStatus().catch(() => null) : null;
+  const slices = {
+    jobs: jobs.map(sanitizeJob),
+    extras: { imageTo3d: models.map((model) => ({ id: model.id, name: model.name || model.id })) },
+    agents: agentCounts(agents, cosStatus, pendingTaskIds),
+    mind: summarizeMind(mindState),
+    // An App Management update/standardize holds a checkout and restarts PM2
+    // processes — activity in exactly the sense that matters to a caller
+    // deciding whether it may restart the install.
+    appOperations: listActiveAppOperations(),
+    update: { inProgress: isUpdateInProgress() },
+  };
+  return { ...slices, activity: summarizeSystemActivity(slices) };
+}
+
+export async function getActiveProcessing() {
+  const [capability, activity, loadedModels] = await Promise.all([
+    getCudaCapability(),
+    getSystemActivity(),
+    getLoadedModels().catch(() => []),
+  ]);
   const utilization = capability.status === 'available' ? await getCudaUtilization() : { status: capability.status, gpus: [] };
-  // A task stays 'pending' until spawnAgentForTask flips it to 'in_progress',
-  // which happens AFTER its agent is registered as running — so a snapshot taken
-  // in between would count one task as queued AND active, and the widget read
-  // 'N active, N queued' for a queue of N. A task a live agent holds is active.
-  //
-  // When the agent list is readable, BOTH counts come off that one read: taking
-  // `active` from `getStatus()` and `queued` from here would let the two skew
-  // against each other, which is the same defect one layer up. When it is NOT
-  // readable, there is no claim set to subtract — fall back to `getStatus()`'s
-  // own tally rather than reporting zero active agents while still counting
-  // their tasks as queued, which would understate BOTH numbers at once.
-  const runningAgents = agents === null ? null : agents.filter((agent) => agent.status === 'running');
-  const claimedTaskIds = new Set((runningAgents || []).map((agent) => agent.taskId).filter(Boolean));
-  const pendingTasks = pendingTaskIds.filter((id) => !claimedTaskIds.has(id)).length;
   const gpuBusy = Boolean(getRunningJob());
-  const snapshot = {
+  return {
+    ...activity,
     updatedAt: new Date().toISOString(),
     gpu: {
       status: capability.status,
@@ -82,23 +119,6 @@ export async function getActiveProcessing() {
         memoryTotalMib: gpu.memoryTotalMib ?? gpu.vramMib ?? null,
       })),
     },
-    jobs: jobs.map(sanitizeJob),
-    extras: {
-      imageTo3d: models.map((model) => ({ id: model.id, name: model.name || model.id })),
-      ollama: loadedModels,
-    },
-    agents: {
-      active: runningAgents ? runningAgents.length : (cosStatus?.activeAgents || 0),
-      queued: pendingTasks,
-    },
-    mind: summarizeMind(mindState),
-    // An App Management update/standardize holds a checkout and restarts PM2
-    // processes — activity in exactly the sense that matters to a caller
-    // deciding whether it may restart the install.
-    appOperations: listActiveAppOperations(),
-    update: { inProgress: isUpdateInProgress() },
+    extras: { ...activity.extras, ollama: loadedModels },
   };
-  // Derived here, once, so the widget and the auto-updater cannot disagree
-  // about what "idle" means. See lib/systemIdle.js.
-  return { ...snapshot, activity: summarizeSystemActivity(snapshot) };
 }

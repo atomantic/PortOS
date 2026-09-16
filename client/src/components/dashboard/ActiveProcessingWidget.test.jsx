@@ -44,10 +44,13 @@ describe('ActiveProcessingWidget', () => {
       extras: { imageTo3d: [{ id: 'model-1', name: 'Example mesh' }] },
       agents: { active: 2, queued: 1 },
       mind: { trusted: true, thinking: false, queued: 0 },
+      // Sent by the server (lib/systemIdle.js) and rendered as-is — the widget
+      // deliberately has no second definition of "idle" to fall back on.
+      activity: { idle: false, activeCount: 4, queuedCount: 2, blockers: [] },
     });
     renderWidget();
-    // Running and queued are counted separately now: a queued render is real
-    // work waiting on the user, not part of the "active" tally.
+    // Running and queued are counted separately: a queued render is real work
+    // waiting on the user, not part of the "active" tally.
     expect(screen.getByText('4 active · 2 queued')).toBeInTheDocument();
     expect(screen.getByText('Example image')).toBeInTheDocument();
     expect(screen.getByText('Example track')).toBeInTheDocument();

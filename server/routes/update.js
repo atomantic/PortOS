@@ -6,6 +6,11 @@ import { UPSTREAM_FULL_NAME } from '../lib/gitRemote.js';
 import * as updateChecker from '../services/updateChecker.js';
 import { startPortosSelfUpdate } from '../services/portosSelfUpdate.js';
 import {
+  AUTO_UPDATE_MIN_INTERVAL_HOURS_MAX,
+  AUTO_UPDATE_MIN_INTERVAL_HOURS_MIN,
+  storableAutoUpdateConfig,
+} from '../lib/sharedSchemas.js';
+import {
   countActiveCosAgents,
   getPersistentMindImageWorkGuard,
 } from '../services/updatePreflight.js';
@@ -50,29 +55,42 @@ router.get('/status', asyncHandler(async (req, res) => {
 // verdict (the SAME `activity` object the dashboard's Live activity widget
 // renders, from lib/systemIdle.js).
 //
-// Its OWN route rather than a block on /status, and lazily imported, for one
-// reason each: /status is polled every few seconds while this tab is open and
-// must not drag a git status walk along at that cadence, and a static import
-// of the activity/readiness graph would pull the whole CoS + git subtree into
-// every suite that mounts this router (see "Import scoping" in server/AGENTS.md).
+// Its OWN route rather than a block on /status, and the three service imports
+// are deferred, for one reason each: /status is polled every few seconds while
+// this tab is open and must not drag a git status walk along at that cadence,
+// and a static import of the activity/readiness graph would pull the whole CoS
+// + git subtree into every suite that mounts this router (see "Import scoping"
+// in server/AGENTS.md). `sharedSchemas` is already in this module's static
+// closure through validation.js, so it stays a plain import.
 router.get('/auto', asyncHandler(async (req, res) => {
-  const [{ getSettings }, { checkUpdateRepoReadiness }, { getActiveProcessing }, { resolveAutoUpdateConfig }] =
-    await Promise.all([
-      import('../services/settings.js'),
-      import('../services/updateRepoReadiness.js'),
-      import('../services/activeProcessing.js'),
-      import('../lib/sharedSchemas.js'),
-    ]);
-  const [settings, runtime, repo, processing] = await Promise.all([
+  const [{ getSettings }, { checkUpdateRepoReadiness }, { getSystemActivity }] = await Promise.all([
+    import('../services/settings.js'),
+    import('../services/updateRepoReadiness.js'),
+    import('../services/activeProcessing.js'),
+  ]);
+  const [settings, runtime] = await Promise.all([
     getSettings().catch(() => null),
     updateChecker.getAutoUpdateRuntime(),
-    // No fetch here: refreshing origin refs is the scheduler's own tick, not a
-    // network hop every viewer of this tab pays for.
-    checkUpdateRepoReadiness({ fetch: false }).catch(() => null),
-    getActiveProcessing().catch(() => null),
   ]);
+  const config = storableAutoUpdateConfig(settings?.autoUpdate);
+  // The two expensive halves answer "what is the scheduler waiting for", which
+  // is not a question while the scheduler is off — and this route is polled
+  // every 15s by an open Update tab on an install where the feature ships OFF.
+  // No fetch either way: refreshing origin refs is the scheduler's own tick,
+  // not a network hop every viewer of this tab pays for.
+  const [repo, processing] = config.enabled
+    ? await Promise.all([
+      checkUpdateRepoReadiness({ fetch: false }).catch(() => null),
+      getSystemActivity().catch(() => null),
+    ])
+    : [null, null];
   res.json({
-    config: resolveAutoUpdateConfig(settings?.autoUpdate),
+    // Storable keys only — the panel hands this straight back on the next save,
+    // and the settings schema is strict.
+    config,
+    // Server-authoritative bounds so the form's clamp can't drift from what the
+    // schema enforces (the `parallelLimitBounds` pattern in routes/settings.js).
+    bounds: { minIntervalHours: { min: AUTO_UPDATE_MIN_INTERVAL_HOURS_MIN, max: AUTO_UPDATE_MIN_INTERVAL_HOURS_MAX } },
     runtime,
     repo,
     activity: processing?.activity ?? null,

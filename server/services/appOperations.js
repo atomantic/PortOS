@@ -13,18 +13,16 @@
 
 const activeAppOperations = new Map();
 
-// One operation occupies several keys, so collapse them back to one row.
-// repoPath stays server-side: the client only needs to name and render the run.
-export const activeOperationsPayload = () => ({
-  operations: [...new Set(activeAppOperations.values())].map(({ repoPath: _repoPath, ...op }) => op)
-});
-
 /**
- * The live operations as activity rows — id, name, type, age. Same projection
- * as the socket payload; named separately so the activity snapshot does not
- * read as if it were about to emit a socket frame.
+ * The live operations as rows — id, name, type, age. One operation occupies
+ * several keys, so they collapse back to one row; repoPath stays server-side,
+ * since the client only needs to name and render the run.
  */
-export const listActiveAppOperations = () => activeOperationsPayload().operations;
+export const listActiveAppOperations = () =>
+  [...new Set(activeAppOperations.values())].map(({ repoPath: _repoPath, ...op }) => op);
+
+/** The same rows in the shape the `app:operations:active` frame carries. */
+export const activeOperationsPayload = () => ({ operations: listActiveAppOperations() });
 
 // Two app records may point at the same checkout, so the app id alone doesn't
 // identify the resource being mutated — an operation is registered under every

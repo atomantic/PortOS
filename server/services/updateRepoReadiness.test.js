@@ -4,9 +4,15 @@ import { join } from 'path';
 import { execFileSync } from 'child_process';
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
-// Real git repositories, not a mocked porcelain string: this module decides
-// whether an UNATTENDED process may move a user's checkout, and the thing that
-// would make that wrong is git behaving differently from the fixture.
+// The CoS agent registry is the one collaborator these fixtures cannot supply:
+// the temp repos are not a PortOS install, so the live registry read fails
+// closed and every verdict would come back blocked on it. Doubled as "no agents
+// running" — the condition each case below is actually about.
+vi.mock('./cosAgentLifecycle.js', () => ({ getAgents: async () => [] }));
+
+// Otherwise real git repositories, not a mocked porcelain string: this module
+// decides whether an UNATTENDED process may move a user's checkout, and the
+// thing that would make that wrong is git behaving differently from the fixture.
 const { checkUpdateRepoReadiness, prepareUpdateRepo } = await import('./updateRepoReadiness.js');
 
 const repos = [];
@@ -35,7 +41,7 @@ afterAll(() => repos.forEach((dir) => rmSync(dir, { recursive: true, force: true
 describe('update repo readiness', () => {
   it('reports a clean checkout on the default branch as ready', async () => {
     const verdict = await checkUpdateRepoReadiness({ repoPath: makeRepo() });
-    expect(verdict).toMatchObject({ ready: true, needsAgent: false, branch: 'main', defaultBranch: 'main', clean: true });
+    expect(verdict).toMatchObject({ ready: true, needsAgent: false, branch: 'main', defaultBranch: 'main', reasons: [], repairable: [] });
   });
 
   // Uncommitted work is the case the whole gate exists for: update.sh would
@@ -88,11 +94,24 @@ describe('update repo readiness', () => {
     const repo = makeRepo();
     writeFileSync(join(repo, 'package-lock.json'), '{"lockfileVersion":3,"rewritten":true}\n');
     const before = await checkUpdateRepoReadiness({ repoPath: repo });
-    expect(before).toMatchObject({ ready: false, needsAgent: false, lockfileOnlyDirt: true });
+    expect(before).toMatchObject({ ready: false, needsAgent: false, reasons: [], repairable: ['restore-lockfiles'] });
 
     const { verdict, actions } = await prepareUpdateRepo({ repoPath: repo });
     expect(actions.join(' ')).toMatch(/lockfile/);
     expect(verdict.ready).toBe(true);
+  });
+
+  // The refusal a live agent in this very checkout earns: update.sh's pm2
+  // restart, and the branch move, would both land on top of its work.
+  it('refuses while a CoS agent is working in the checkout', async () => {
+    const repo = makeRepo();
+    const lifecycle = await import('./cosAgentLifecycle.js');
+    vi.spyOn(lifecycle, 'getAgents').mockResolvedValue([
+      { id: 'agent-1', status: 'running', metadata: { workspacePath: repo } },
+    ]);
+    const verdict = await checkUpdateRepoReadiness({ repoPath: repo });
+    expect(verdict).toMatchObject({ ready: false, needsAgent: true });
+    expect(verdict.reasons).toContain('agent-at-work');
   });
 
   // A dirty feature branch must NOT be silently moved — the checkout that would

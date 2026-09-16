@@ -73,19 +73,6 @@ function LaneRow({ to, icon: Icon, label, detail }) {
   );
 }
 
-// `activity` is derived server-side (server/lib/systemIdle.js) so the widget and
-// the unattended auto-updater cannot disagree about what "idle" means — one of
-// them renders the verdict, the other refuses to restart the install on it.
-// The local fallback covers a snapshot from a peer/older server that predates it.
-const localActivity = (data) => {
-  const jobs = data?.jobs || [];
-  const running = jobs.filter((job) => job.status !== 'queued').length + (data?.extras?.imageTo3d || []).length
-    + (data?.agents?.active || 0) + (data?.mind?.thinking ? 1 : 0) + (data?.appOperations || []).length;
-  const queued = jobs.length - jobs.filter((job) => job.status !== 'queued').length
-    + (data?.agents?.queued || 0) + (data?.mind?.queued || 0);
-  return { idle: running === 0 && queued === 0, activeCount: running, queuedCount: queued, blockers: [] };
-};
-
 function ActiveProcessingWidget() {
   const { data } = useAutoRefetch(() => api.getActiveProcessing({ silent: true }), 3000, {
     compare: sameProcessingSnapshot,
@@ -97,7 +84,10 @@ function ActiveProcessingWidget() {
   const mind = data?.mind;
   const appOperations = data?.appOperations || [];
   const activeAgents = data?.agents?.active || 0;
-  const activity = data ? (data.activity || localActivity(data)) : null;
+  // Derived server-side (server/lib/systemIdle.js) and rendered as sent: the
+  // unattended auto-updater refuses to restart the install on this same verdict,
+  // so a second definition here is exactly what that module exists to prevent.
+  const activity = data?.activity ?? null;
   const idle = !activity || activity.idle;
   const runningJobs = jobs.filter((job) => job.status !== 'queued').length;
   return (

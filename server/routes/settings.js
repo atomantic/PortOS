@@ -21,7 +21,7 @@ import { isGitHubRepoUrl } from '../lib/repoUrl.js';
 import { asyncHandler } from '../lib/errorHandler.js';
 import { isPlainObject } from '../lib/objects.js';
 import { resolveBackupConfig } from '../lib/backupConfig.js';
-import { resolveAutoUpdateConfig } from '../lib/sharedSchemas.js';
+import { storableAutoUpdateConfig } from '../lib/sharedSchemas.js';
 import { DEFAULT_UNTRUSTED_CONTENT_POLICY, untrustedContentSettingsSchema } from '../lib/untrustedContent.js';
 import { agentContextSettingsSchema } from '../lib/agentContextValidation.js';
 import { EFFORT_LEVELS } from '../lib/providerModels.js';
@@ -182,13 +182,10 @@ const projectEffectiveBackup = (safe) => {
 // checkbox stores `{ enabled: true }`, and the Update tab would otherwise have to
 // re-derive what an omitted channel/interval means — the mistake #6632 made for
 // the backup schedule. The resolver is the scheduler's own.
-// Only the STORABLE fields are projected: the resolver also derives
-// `minIntervalMs`, and echoing it here would come straight back on the next
-// save and be rejected by the strict schema.
-const projectEffectiveAutoUpdate = (safe) => {
-  const { minIntervalMs: _derived, ...effective } = resolveAutoUpdateConfig(safe.autoUpdate);
-  return { ...safe, autoUpdate: { ...safe.autoUpdate, ...effective } };
-};
+const projectEffectiveAutoUpdate = (safe) => ({
+  ...safe,
+  autoUpdate: { ...safe.autoUpdate, ...storableAutoUpdateConfig(safe.autoUpdate) },
+});
 
 // Single sanitizer every settings response (GET load + PUT save) runs through,
 // so a leak can't reappear on one path after being closed on the other: strip

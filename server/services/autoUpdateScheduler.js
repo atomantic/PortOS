@@ -10,13 +10,16 @@
  *   3. There is actually something to update to — a newer release tag on the
  *      `release` channel, or origin's default branch ahead of this checkout on
  *      the `main` channel. Nothing to do is a no-op, not a restart.
- *   4. The checkout is on the default branch and clean, after the mechanical
- *      repairs in `updateRepoReadiness.js`. What no script may safely fix
+ *   4. The checkout is on the default branch and clean, or is one mechanical
+ *      repair away (`updateRepoReadiness.js`). What no script may safely fix
  *      queues a CoS agent and waits.
  *   5. The system is idle — no render running or queued, no CoS agent, no
  *      Persistent Mind turn or queued message, no app operation
  *      (`lib/systemIdle.js`, the same verdict the dashboard's Live activity
  *      widget renders).
+ *
+ * Nothing on disk is WRITTEN until every one of those has passed: the checkout
+ * repairs run after the idle gate, never before it.
  *
  * Then it performs EXACTLY the action the matching button performs, through the
  * same service the button reaches. This is not a second update implementation:
@@ -33,10 +36,10 @@
 
 import { schedule, cancel } from './eventScheduler.js';
 import { getSettings, settingsEvents } from './settings.js';
-import { getActiveProcessing } from './activeProcessing.js';
+import { getSystemActivity } from './activeProcessing.js';
 import { startPortosSelfUpdate } from './portosSelfUpdate.js';
 import { runAppUpdate } from './appUpdateRunner.js';
-import { prepareUpdateRepo, queueRepoRepairTask } from './updateRepoReadiness.js';
+import { checkUpdateRepoReadiness, prepareUpdateRepo, queueRepoRepairTask } from './updateRepoReadiness.js';
 import * as updateChecker from './updateChecker.js';
 import { describeActivityBlockers } from '../lib/systemIdle.js';
 import { resolveAutoUpdateConfig } from '../lib/sharedSchemas.js';
@@ -73,6 +76,14 @@ export function updateBaselineAt(runtime, lastUpdateResult, now = Date.now()) {
   return candidates.length ? Math.max(...candidates) : now;
 }
 
+/**
+ * Is the only thing standing between this checkout and readiness something
+ * `prepareUpdateRepo` can mechanically fix? Those are not worth waking an agent
+ * for, and they are not a reason to stand down — they are handled after the
+ * idle gate.
+ */
+const isRepairableOnly = (verdict) => verdict.reasons.length === 0 && verdict.repairable.length > 0;
+
 /** Record the skip and log it once per distinct reason, not once per tick. */
 let lastLoggedSkip = null;
 async function standDown(reason, detail) {
@@ -90,9 +101,9 @@ async function standDown(reason, detail) {
 /**
  * Is there anything to update TO on this channel?
  *
- * @returns {Promise<{available: boolean, detail: string}>}
+ * @returns {{available: boolean, detail: string}}
  */
-async function updateAvailableFor(channel, status, verdict) {
+function updateAvailableFor(channel, status, verdict) {
   if (channel === 'release') {
     if (status.updateAvailable) return { available: true, detail: `release v${status.latestRelease?.version}` };
     return { available: false, detail: 'no newer release' };
@@ -121,7 +132,11 @@ export async function runAutoUpdateTick({ io = ioRef } = {}) {
   const config = resolveAutoUpdateConfig(settings?.autoUpdate);
   if (!config.enabled) return { ran: false, reason: 'disabled' };
 
-  const runtime = await updateChecker.getAutoUpdateRuntime();
+  // ONE read of update.json serves the cooldown and the already-running check.
+  // `getUpdateStatus()` is deliberately NOT called yet: its `getInstallState()`
+  // walks every file under client/src, and the cooldown discards the answer on
+  // 71 of every 72 ticks at the default interval.
+  const { runtime, lastUpdateResult, updateInProgress } = await updateChecker.getAutoUpdateGateState();
   // Stamp the arming point on the first tick after the feature goes on, so the
   // interval has something to measure from on an install that has never
   // updated. Written once — a re-stamp on every boot would move the deadline.
@@ -129,54 +144,62 @@ export async function runAutoUpdateTick({ io = ioRef } = {}) {
     await updateChecker.recordAutoUpdateRuntime({ armedAt: new Date().toISOString() }).catch(() => undefined);
   }
 
-  const status = await updateChecker.getUpdateStatus().catch(() => null);
-  if (!status) return standDown('status-unavailable', 'could not read the update status');
-  if (status.updateInProgress) return standDown('update-in-progress', 'an update is already running');
+  if (updateInProgress) return standDown('update-in-progress', 'an update is already running');
 
   const now = Date.now();
-  const baselineAt = updateBaselineAt(
-    { ...runtime, armedAt: runtime.armedAt || new Date(now).toISOString() },
-    status.lastUpdateResult,
-    now,
-  );
+  const baselineAt = updateBaselineAt(runtime, lastUpdateResult, now);
   const elapsedMs = now - baselineAt;
   if (elapsedMs < config.minIntervalMs) {
     const remainingMinutes = Math.ceil((config.minIntervalMs - elapsedMs) / 60000);
     return standDown('cooldown', `${remainingMinutes} minute(s) left of the ${config.minIntervalHours}h minimum interval`);
   }
 
-  // Repo readiness runs BEFORE the idle check and before the availability
-  // check, because it is the one gate whose remedy takes time: a repair agent
-  // queued now is work the idle gate will then wait on, and the next window
-  // after it finishes is the one that updates.
-  const { verdict, actions } = await prepareUpdateRepo().catch((err) => ({
-    verdict: { ready: false, needsAgent: false, reasons: ['git-unreadable'], summary: err.message, repairable: [] },
-    actions: [],
-  }));
-  if (!verdict.ready) {
-    if (verdict.needsAgent && config.resolveBlockersWithAgent) {
-      const task = await queueRepoRepairTask(verdict);
+  const status = await updateChecker.getUpdateStatus().catch(() => null);
+  if (!status) return standDown('status-unavailable', 'could not read the update status');
+
+  // READ the checkout — never write to it yet. The write half
+  // (`prepareUpdateRepo`) is deliberately held until after the idle gate
+  // below: `git checkout main` in the primary checkout under a live
+  // `useWorktree: false` CoS agent is a branch-jack, and the whole point of the
+  // idle gate is to prove nothing is running before this process touches
+  // anything. Reading early is still right, because the one remedy that takes
+  // TIME is the repair agent — queued now, it is work the idle gate then waits
+  // on, and the window after it finishes is the one that updates.
+  const read = await checkUpdateRepoReadiness({ fetch: true })
+    .catch((err) => ({ ready: false, needsAgent: false, reasons: ['git-unreadable'], summary: err.message, repairable: [] }));
+  if (!read.ready && !isRepairableOnly(read)) {
+    if (read.needsAgent && config.resolveBlockersWithAgent) {
+      const task = await queueRepoRepairTask(read);
       if (task?.id && task.id !== runtime.repairTaskId) {
         await updateChecker.recordAutoUpdateRuntime({ repairTaskId: task.id }).catch(() => undefined);
       }
     }
-    return standDown('repo-not-ready', verdict.summary || 'the checkout is not on a clean default branch');
+    return standDown('repo-not-ready', read.summary);
   }
-  if (actions.length) console.log(`🧹 Auto-update prepared the checkout: ${actions.join(', ')}`);
 
-  const availability = await updateAvailableFor(config.channel, status, verdict);
+  const availability = updateAvailableFor(config.channel, status, read);
   if (!availability.available) return standDown('up-to-date', availability.detail);
 
-  // Idle is checked LAST, immediately before the launch, so the window it
+  // Idle is checked immediately before anything is written, so the window it
   // reports is as close as this can get to the window the update runs in. The
   // update path's own preflight re-checks the agent and Persistent Mind halves
   // under the update lock — this gate is broader (renders, queued work), not a
   // replacement for it.
-  const processing = await getActiveProcessing().catch(() => null);
+  const processing = await getSystemActivity().catch(() => null);
   if (!processing) return standDown('activity-unknown', 'could not read the activity snapshot');
   if (!processing.activity.idle) {
     return standDown('busy', describeActivityBlockers(processing.activity.blockers));
   }
+
+  // Only NOW may the checkout be written to. `prepareUpdateRepo` re-reads before
+  // and after its remedies, so a checkout that went dirty since the read above
+  // is refused here rather than repaired blindly.
+  const { verdict, actions } = await prepareUpdateRepo().catch((err) => ({
+    verdict: { ready: false, reasons: ['git-unreadable'], summary: err.message },
+    actions: [],
+  }));
+  if (!verdict.ready) return standDown('repo-not-ready', verdict.summary);
+  if (actions.length) console.log(`🧹 Auto-update prepared the checkout: ${actions.join(', ')}`);
 
   lastLoggedSkip = null;
   console.log(`⬆️ Auto-update starting (${config.channel} channel) — ${availability.detail}`);
@@ -213,13 +236,7 @@ async function launchUpdateFor(channel, io) {
     return { ok: true };
   }
   const result = await runAppUpdate({ io, appId: PORTOS_APP_ID });
-  if (result.ok) return { ok: true };
-  const message = result.reason === 'refused'
-    ? result.message
-    : result.reason === 'duplicate'
-      ? `an ${result.inFlight.type} is already running for ${result.inFlight.appName}`
-      : `the ${PORTOS_APP_ID} app record was not found`;
-  return { ok: false, message };
+  return result.ok ? { ok: true } : { ok: false, message: result.message };
 }
 
 /**
