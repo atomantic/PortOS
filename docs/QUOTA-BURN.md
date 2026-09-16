@@ -636,8 +636,14 @@ in `server/lib/maintenanceSequence.js` and can be run two ways:
   NOT a burn: it needs no Quota Burn master switch, faces no reset-window /
   reserve / dispatch-cap gates, writes nothing into any family plan, and has
   nothing to re-arm — every "Run now" is a fresh run with its own completion
-  ledger. Pick the app, a subscription CLI/TUI provider, a model and an optional
-  effort; every step is pinned to them. Each audit is dispatched when the
+  ledger. Pick the app, any enabled CLI/TUI provider, a model and an optional
+  effort; every step is pinned to them. A provider that belongs to a
+  subscription family carries that family along, so a refusal is credited to the
+  window it actually spent; one that belongs to none — an OpenCode TUI, an
+  Ollama- or LM-Studio-backed wrapper — runs **unfamilied** and credits nothing,
+  because it spends no window. That relaxation is the manual run's alone: the
+  automatic sweep below still resolves strictly by family and will not spend a
+  provider outside its plan's named one. Each audit is dispatched when the
   previous step finishes and each drain repeats until the app's issue backlog
   is empty, so the run walks to the end on its own. A step that cannot go out
   (a task disabled since, a blocked task, a transient claim probe) HOLDS the run

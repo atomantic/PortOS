@@ -13,6 +13,21 @@ import { getAllProviders } from '../providers.js';
 import { commandBasename } from '../../lib/providerModels.js';
 
 /**
+ * Is this the "no subscription family" identity?
+ *
+ * A MANUAL maintenance run (`services/maintenanceRun.js`) may be pinned to a
+ * provider that belongs to no family at all — an OpenCode TUI, an Ollama- or
+ * LM-Studio-backed wrapper — because the run is a ladder of audits the user
+ * asked for, not an attempt to drain a window before it expires. That run
+ * constructs this identity explicitly; every other caller hands over a family
+ * record from a burn plan, which always names a real family. Recognizing the
+ * state HERE (rather than inferring it from a falsy `familyId`) is what keeps
+ * the automatic burn sweep out of it: a sweep whose family id somehow came
+ * through empty still resolves nothing, exactly as before.
+ */
+export const isUnfamiliedBurn = (family) => family?.unfamilied === true && !family.id;
+
+/**
  * An agent-capable provider in the burning family. A job's explicit
  * `providerId` wins; otherwise match the family id against the enabled
  * providers, PREFERRING the type named by `prefer` (default `tui`).
@@ -38,10 +53,21 @@ import { commandBasename } from '../../lib/providerModels.js';
  *   burning through one accomplishes nothing. `resolveEnabledFamilies` drops
  *   them from the quota cards for exactly this reason; a `claude-ollama-tui`
  *   would otherwise be a perfectly good match for the `claude` family.
+ *
+ * `unfamilied` lifts the SECOND exclusion, and only together with an explicit
+ * `providerId`. It says the caller is not burning a window at all — it is a
+ * manual maintenance run dispatching the ladder onto the one provider the user
+ * named — so "this model is local and free" stops being a disqualification and
+ * becomes the whole point. The API-type exclusion stays: `isProcessProvider`
+ * still has to hold, because the ladder spawns a CLI/TUI agent. A caller that
+ * sets the flag without naming a provider resolves nothing, since there is no
+ * family left to match against.
  */
-export function providerForFamily(providers, { familyId, providerId, prefer = 'tui' }) {
+export function providerForFamily(providers, { familyId, providerId, prefer = 'tui', unfamilied = false }) {
+  const localRuntimeAllowed = unfamilied === true && !familyId && Boolean(providerId);
   const available = (providers || []).filter((provider) =>
-    provider?.enabled && provider.ollamaBacked !== true && provider.lmstudioBacked !== true && provider.mtplxBacked !== true && provider.llamaBacked !== true && provider.vllmBacked !== true && provider.sglangBacked !== true
+    provider?.enabled
+    && (localRuntimeAllowed || (provider.ollamaBacked !== true && provider.lmstudioBacked !== true && provider.mtplxBacked !== true && provider.llamaBacked !== true && provider.vllmBacked !== true && provider.sglangBacked !== true))
     && isProcessProvider(provider));
   if (providerId) return available.find((provider) => provider.id === providerId) || null;
   const inFamily = available.filter((provider) => matchesFamily(provider, familyId));
@@ -74,8 +100,14 @@ export const matchesFamily = (provider, familyId) => {
     || String(provider.id || '').toLowerCase().includes(needle);
 };
 
-/** The reason a job reports when its family has nothing it is allowed to spend. */
-export const noProviderReason = (family) => `no enabled CLI/TUI provider in the ${family?.id} family`;
+/**
+ * The reason a job reports when its family has nothing it is allowed to spend.
+ * An unfamilied run has no family to name, and reaches here only when it was
+ * given no provider to pin — so it says that instead.
+ */
+export const noProviderReason = (family) => (isUnfamiliedBurn(family)
+  ? 'a run outside every subscription family must name the provider to use'
+  : `no enabled CLI/TUI provider in the ${family?.id} family`);
 
 /** `providerForFamily` against the live provider list. */
 export async function resolveBurnProvider({ job, family, prefer }) {
@@ -84,5 +116,6 @@ export async function resolveBurnProvider({ job, family, prefer }) {
     familyId: family?.id,
     providerId: job?.providerId || null,
     prefer,
+    unfamilied: isUnfamiliedBurn(family),
   });
 }

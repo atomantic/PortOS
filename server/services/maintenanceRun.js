@@ -19,11 +19,16 @@
  *
  * What it shares with a burn is the INVOCATION: every step is dispatched through
  * `quotaBurnInvoke.invokeQuotaBurnStep`. Manual runs bypass schedule switches;
- * master Improve, target scope and duplicate-request guards still apply, each handler is pinned to the family the user named, and the
- * task carries the family provenance that makes it cooldown-exempt and lets an
- * observed refusal be credited to the right window. The `maintenanceRunId`
- * provenance field is what tells the quota-burn loop to leave these agents
- * alone (`quotaBurnRunner.js#onBurnAgentCompleted`).
+ * master Improve, target scope and duplicate-request guards still apply, each
+ * handler is pinned to the provider the user named, and the task carries the
+ * provenance that makes it cooldown-exempt. When that provider belongs to a
+ * subscription family the family rides along too, so an observed refusal is
+ * credited to the window it actually spent; when it belongs to none — an
+ * OpenCode TUI, a local-model wrapper — the run dispatches UNFAMILIED and
+ * credits nothing, because it spent no window (`manualBurnFamily`). The
+ * `maintenanceRunId` provenance field is what tells the quota-burn loop to leave
+ * these agents alone (`quotaBurnRunner.js#onBurnAgentCompleted`), and on an
+ * unfamilied run it is also the only attribution the task carries.
  *
  * Pacing is by completion: `agent:completed` for one of the run's tasks
  * re-evaluates the run, and a slow interval re-evaluates every running run as
@@ -64,6 +69,36 @@ const RETRY_MS = 2 * 60_000;
 export const MAINTENANCE_RUN_STATUS = Object.freeze({ RUNNING: 'running', COMPLETED: 'completed', STOPPED: 'stopped' });
 
 const activeRunError = (appId, runId) => new ServerError(`a maintenance run is already in progress for "${appId}" (${runId})`, { status: 409, code: 'MAINTENANCE_RUN_ACTIVE' });
+
+/**
+ * The burn identity one step of THIS run dispatches under.
+ *
+ * A manual run is not a burn: it walks a ladder the user asked for, on the
+ * provider the user named. Most of the time that provider belongs to a
+ * subscription family and the family rides along, so a refusal is still credited
+ * to the window it actually spent. But the picker offers every enabled process
+ * provider (`enabledProcessProviderFilter`), and an OpenCode TUI or a
+ * local-model wrapper belongs to no family at all — there is no window, so there
+ * is nothing to credit. That is a legitimate state, not a failed resolution, and
+ * this is the ONLY place that says so: the automatic burn sweep hands
+ * `providerForFamily` a plan's family record and can never construct this.
+ */
+const manualBurnFamily = (familyId) => (familyId ? { id: familyId } : { id: null, unfamilied: true });
+
+/** One wording for the refusal, whichever of the three gates raised it. */
+const unavailableProvider = (providerId) => `provider "${providerId}" is not an enabled CLI/TUI provider`;
+
+/**
+ * A run/step's own family, read by PRESENCE rather than truthiness.
+ *
+ * `null` means "this one is pinned outside every family"; only an ABSENT key
+ * means "nothing recorded here, inherit". Collapsing the two with `||` would
+ * make a step edited onto a family-less provider silently inherit the run's real
+ * family — and then be refused for not belonging to it.
+ */
+const inherited = (record, key, fallback) => (record && Object.hasOwn(record, key) ? record[key] : fallback);
+const stepBurnFamily = (step, run) => manualBurnFamily(inherited(step, 'familyId',
+  step.drain ? inherited(run, 'claimFamilyId', run.familyId) : run.familyId));
 
 const writeQueue = createFileWriteQueue();
 // One operation at a time PER RUN — evaluations, the completion ledger, stop
@@ -129,10 +164,12 @@ async function assertNoRunningRun(appId) {
 
 /**
  * Start a run. Refused (with a thrown, coded error the route maps to a 4xx)
- * when the app is unknown or archived, the provider is not an enabled
- * subscription CLI/TUI provider in a known family — the SAME gate every dispatch
- * re-applies (`resolveBurnProvider`), so a run can never start on a provider
- * its steps would then refuse — or a full ladder targets an app with a running run.
+ * when the app is unknown or archived, the provider is not an enabled CLI/TUI
+ * provider — the SAME gate every dispatch re-applies (`resolveBurnProvider`), so
+ * a run can never start on a provider its steps would then refuse — or a full
+ * ladder targets an app with a running run. Belonging to a subscription family
+ * is NOT part of that gate: the picker offers every enabled process provider,
+ * and one outside every family runs unfamilied (see `manualBurnFamily`).
  * Explicit quality selections may run alongside other runs; they never claim backlog issues.
  *
  * The first evaluation runs before this returns, so the caller learns whether
@@ -145,15 +182,15 @@ export async function startMaintenanceRun({ appId, providerId, model = null, eff
   const [app, provider] = await Promise.all([getAppById(appId), getProviderById(providerId)]);
   if (!app || app.archived === true) throw new ServerError(`managed app "${appId}" is not available`, { status: 400, code: 'MAINTENANCE_RUN_APP_UNAVAILABLE' });
   const familyId = familyForProvider(provider);
-  const pinned = familyId ? await resolveBurnProvider({ job: { providerId }, family: { id: familyId } }) : null;
-  if (!pinned) throw new ServerError(`provider "${providerId}" is not an enabled subscription CLI/TUI provider`, { status: 400, code: 'MAINTENANCE_RUN_PROVIDER_UNAVAILABLE' });
+  const pinned = await resolveBurnProvider({ job: { providerId }, family: manualBurnFamily(familyId) });
+  if (!pinned) throw new ServerError(unavailableProvider(providerId), { status: 400, code: 'MAINTENANCE_RUN_PROVIDER_UNAVAILABLE' });
   // File-only runs never validate or retain a hidden claim selection.
   const effectiveClaimHandler = !taskTypes && (mode === 'fix' || claimBetweenAudits) ? claimHandler : null;
   let claimFamilyId = familyId;
   if (effectiveClaimHandler) {
     claimFamilyId = familyForProvider(await getProviderById(effectiveClaimHandler.providerId));
-    const claimProvider = claimFamilyId ? await resolveBurnProvider({ job: effectiveClaimHandler, family: { id: claimFamilyId } }) : null;
-    if (!claimProvider) throw new ServerError(`provider "${effectiveClaimHandler.providerId}" is not an enabled subscription CLI/TUI provider`, { status: 400, code: 'MAINTENANCE_RUN_PROVIDER_UNAVAILABLE' });
+    const claimProvider = await resolveBurnProvider({ job: effectiveClaimHandler, family: manualBurnFamily(claimFamilyId) });
+    if (!claimProvider) throw new ServerError(unavailableProvider(effectiveClaimHandler.providerId), { status: 400, code: 'MAINTENANCE_RUN_PROVIDER_UNAVAILABLE' });
   }
   if (!taskTypes) await assertNoRunningRun(appId);
 
@@ -215,8 +252,12 @@ export function updateMaintenanceStep(id, stepId, { providerId, model, effort = 
       import('./providers.js'), import('./scheduledHandlers/providerPick.js'),
     ]);
     const familyId = familyForProvider(await getProviderById(providerId));
-    const provider = familyId ? await resolveBurnProvider({ job: { providerId }, family: { id: familyId } }) : null;
-    if (!provider) throw new ServerError(`provider "${providerId}" is not an enabled subscription CLI/TUI provider`, { status: 400, code: 'MAINTENANCE_RUN_PROVIDER_UNAVAILABLE' });
+    const provider = await resolveBurnProvider({ job: { providerId }, family: manualBurnFamily(familyId) });
+    if (!provider) throw new ServerError(unavailableProvider(providerId), { status: 400, code: 'MAINTENANCE_RUN_PROVIDER_UNAVAILABLE' });
+    // `familyId` is written even when null (`familyForProvider` returns string
+    // or null, never undefined) — the step is now pinned OUTSIDE every family,
+    // and `stepBurnFamily` reads a present-but-null key as that decision rather
+    // than as "nothing recorded here, inherit the run's family".
     return patchRun(id, { steps: run.steps.map(entry => entry.id === stepId
       ? { ...entry, familyId, overrides: { ...entry.overrides, providerId, model, effort } }
       : entry) });
@@ -288,7 +329,7 @@ async function evaluate(id, { ignoreTaskId }) {
       }
       if (!probe.job) return hold(probe.reason);
     }
-    const result = await invokeQuotaBurnStep({ step, family: { id: step.familyId || (step.drain ? (run.claimFamilyId || run.familyId) : run.familyId) }, catalog, maintenanceRunId: id });
+    const result = await invokeQuotaBurnStep({ step, family: stepBurnFamily(step, run), catalog, maintenanceRunId: id });
     if (!result.dispatched) return hold(result.reason, { completed });
     const taskType = step.taskRef.taskType;
     await patchRun(id, {

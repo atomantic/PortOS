@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   QUOTA_BURN_PROVENANCE_FIELDS,
+  burnPlanOwnsTask,
   hasQuotaBurnProvenance,
   normalizeQuotaBurnProvenance,
   onDemandRequestMetadata,
@@ -43,12 +44,36 @@ describe('normalizeQuotaBurnProvenance', () => {
   });
 
   it('rejects a block that cannot attribute the burn', () => {
-    // Family AND step are both required: without the family nothing can credit a
-    // provider refusal, and without the step the run log cannot say what ran.
+    // The step is always required — without it the run log cannot say what ran —
+    // and so is an attribution: an AUTOMATIC burn has only its family, so a block
+    // with no family and no run id credits a provider refusal to nobody.
     expect(normalizeQuotaBurnProvenance({ stepId: 'step-1' })).toBeNull();
     expect(normalizeQuotaBurnProvenance({ family: 'grok' })).toBeNull();
+    expect(normalizeQuotaBurnProvenance({ maintenanceRunId: 'maint-1' })).toBeNull();
     expect(normalizeQuotaBurnProvenance(null)).toBeNull();
     expect(normalizeQuotaBurnProvenance('grok')).toBeNull();
+  });
+
+  // A manual maintenance run may be pinned to a provider outside every
+  // subscription family (an OpenCode TUI, a local-model wrapper). It spends no
+  // window, so it names no family — and the run id is what attributes it
+  // instead. Before this, the whole block failed to normalize, `triggerOnDemandTask`
+  // refused the request, and the run never paced because the maintenanceRunId
+  // its evaluation looks for never reached the task.
+  it('accepts a family-less MANUAL run, attributed by its run id alone', () => {
+    const block = normalizeQuotaBurnProvenance({ stepId: 'step-1', maintenanceRunId: 'maint-1' });
+    expect(block).toMatchObject({ stepId: 'step-1', maintenanceRunId: 'maint-1' });
+    // Omitted, never a placeholder: a synthetic family would send this run's
+    // refusals to the denial ledger of a subscription it never touched.
+    expect(block).not.toHaveProperty('family');
+    const metadata = onDemandRequestMetadata({ id: 'demand-9', origin: 'quota-burn', burn: block });
+    expect(metadata.quotaBurnMaintenanceRunId).toBe('maint-1');
+    expect(metadata).not.toHaveProperty('quotaBurnFamily');
+    // Still cooldown-exempt: the ladder's own steps must not queue behind the
+    // app cooldown every other CoS task on that app re-stamps.
+    expect(hasQuotaBurnProvenance(metadata)).toBe(true);
+    // And still not the burn PLAN's to walk or wait for.
+    expect(burnPlanOwnsTask(metadata)).toBe(false);
   });
 
   it('nulls an unreadable limiting reset rather than passing NaN downstream', () => {
