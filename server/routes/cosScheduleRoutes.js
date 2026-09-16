@@ -32,9 +32,12 @@ const scheduleLabelsSchema = z.array(z.string().trim().min(1).max(40)).max(20)
 // so the storage rules live with the field's own helper, not in the route.
 const suggestedAfterSchema = z.array(z.string()).max(SUGGESTED_AFTER_MAX);
 
-// A manual maintenance run names the app, the subscription provider and the
-// model up front (AGENTS.md AI-policy: the click IS the consent). Blank effort
-// inherits each scheduled task's saved effort.
+// A manual maintenance run names the app, the provider and the model up front
+// (AGENTS.md AI-policy: the click IS the consent). Any enabled CLI/TUI provider
+// is accepted — one outside every subscription family runs unfamilied, see
+// `maintenanceRun.js#manualBurnFamily` — so the family check belongs to the
+// service's live provider gate, not to this schema. Blank effort inherits each
+// scheduled task's saved effort.
 const maintenanceRunStartSchema = z.object({
   taskTypes: z.array(z.enum(Object.keys(AUDIT_DEFINITIONS))).min(1).max(Object.keys(AUDIT_DEFINITIONS).length).optional(),
   mode: z.enum(['file-issues', 'fix']).optional(),

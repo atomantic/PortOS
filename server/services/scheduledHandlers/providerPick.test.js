@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { noProviderReason, providerForFamily } from './providerPick.js';
+import { isUnfamiliedBurn, noProviderReason, providerForFamily } from './providerPick.js';
 
 const cliProviders = [
   { id: 'grok-cli', type: 'cli', enabled: true },
@@ -93,6 +93,52 @@ describe('providerForFamily', () => {
   });
 });
 
+
+// A MANUAL maintenance run is not burning a window — it walks the ladder the
+// user asked for, on the provider the user picked, and that picker offers every
+// enabled process provider. So a provider in no family at all (an OpenCode TUI,
+// a local-model wrapper) has to resolve, while the automatic sweep's guarantee
+// that a step only ever spends its own family's window stays exactly as it was.
+describe('an explicit pin outside every subscription family', () => {
+  const providers = [
+    { id: 'opencode-tui', type: 'tui', enabled: true, command: 'opencode' },
+    { id: 'claude-ollama-tui', type: 'tui', enabled: true, command: 'claude', ollamaBacked: true },
+    { id: 'opencode-lmstudio-tui', type: 'tui', enabled: false, command: 'opencode', lmstudioBacked: true },
+    { id: 'claude-code-tui', type: 'tui', enabled: true, command: 'claude' },
+    { id: 'grok-api', type: 'api', enabled: true },
+  ];
+  const pick = (providerId) => providerForFamily(providers, { familyId: null, providerId, unfamilied: true });
+
+  it('resolves a family-less provider, including a local-runtime wrapper', () => {
+    expect(pick('opencode-tui')?.id).toBe('opencode-tui');
+    // The whole point of the mode: a local model has no window, which is a
+    // disqualification for a burn and irrelevant to a maintenance ladder.
+    expect(pick('claude-ollama-tui')?.id).toBe('claude-ollama-tui');
+  });
+
+  it('still requires an ENABLED, process-capable provider', () => {
+    expect(pick('opencode-lmstudio-tui')).toBeNull();
+    expect(pick('grok-api')).toBeNull();
+    expect(pick('not-registered')).toBeNull();
+  });
+
+  it('resolves nothing without an explicit pin — there is no family left to match', () => {
+    expect(providerForFamily(providers, { familyId: null, unfamilied: true })).toBeNull();
+    expect(noProviderReason({ id: null, unfamilied: true })).toContain('must name the provider');
+  });
+
+  // The regression the mode must never become: the automatic sweep hands over a
+  // real family record and never sets the flag, so a local wrapper stays refused
+  // there however it is pinned.
+  it('does not relax anything for a familied caller', () => {
+    expect(providerForFamily(providers, { familyId: 'claude', providerId: 'claude-ollama-tui' })).toBeNull();
+    expect(providerForFamily(providers, { familyId: 'claude', providerId: 'claude-ollama-tui', unfamilied: true })).toBeNull();
+    expect(isUnfamiliedBurn({ id: 'claude' })).toBe(false);
+    expect(isUnfamiliedBurn({ id: 'claude', unfamilied: true })).toBe(false);
+    expect(isUnfamiliedBurn(undefined)).toBe(false);
+    expect(isUnfamiliedBurn({ id: null, unfamilied: true })).toBe(true);
+  });
+});
 
 describe('the cli preference for programmatic jobs', () => {
   it('flips the default without forking the helper', () => {
