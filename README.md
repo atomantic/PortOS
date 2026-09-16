@@ -94,7 +94,7 @@ An autonomous AI agent orchestrator that manages your development workflow. Subm
 - **Productivity Analytics** — Hourly/daily work patterns, task milestones, and AI-generated weekly digests
 - **Decision Transparency** — Every skip, switch, and routing decision is logged with reasons, surfaced on the dashboard
 - **Briefing + Health** — A daily briefing of what CoS did and what needs you, plus a health view of queue depth, failure storms, and circuit-breaker state
-- **Schedule Timeline** — Launch-order visualization of every scheduled task with an inline schedule editor, so overlapping cron runs are visible before they collide
+- **Schedule Timeline** — Launch-order visualization of every scheduled task with an inline schedule editor, so overlapping cron runs are visible before they collide. Per-app cron overrides get their own markers, so a task left on-demand globally still shows when it runs for the apps that schedule it
 - **GSD Scanner** — Reads `.planning/` directories in managed apps and tracks phase state and concerns per project
 
 ### Create Suite

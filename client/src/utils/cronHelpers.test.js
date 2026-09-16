@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   parseSimpleCron, buildWeeklyCron, describeCron, WEEKDAYS,
-  parseCronToRecurrence, buildCronFromRecurrence, describeRecurrence,
+  parseCronToRecurrence, buildCronFromRecurrence, describeRecurrence, summarizeAppSchedules,
 } from './cronHelpers.js';
 
 describe('parseSimpleCron', () => {
@@ -118,3 +118,41 @@ describe('calendar recurrence helpers', () => {
   });
 });
 // @vitest-environment node
+
+describe('summarizeAppSchedules', () => {
+  it('returns null when a task has no per-app cadences of its own', () => {
+    expect(summarizeAppSchedules(undefined)).toBeNull();
+    expect(summarizeAppSchedules([])).toBeNull();
+    expect(summarizeAppSchedules([{ appId: 'acme' }])).toBeNull();
+  });
+
+  it('names the shared cadence when every app runs the same expression', () => {
+    expect(summarizeAppSchedules([
+      { appId: 'acme', appName: 'Acme', cronExpression: '0 7 * * *', nextRunAt: '2026-01-02T07:00:00Z' },
+      { appId: 'beta', appName: 'Beta', cronExpression: '0 7 * * *', nextRunAt: '2026-01-01T07:00:00Z' },
+    ])).toMatchObject({
+      count: 2,
+      label: '2 apps · at 07:00',
+      // Soonest across the apps, not the first one listed.
+      nextRunAt: '2026-01-01T07:00:00Z',
+    });
+  });
+
+  it('counts the schedules rather than inventing one cadence when they differ', () => {
+    const summary = summarizeAppSchedules([
+      { appId: 'acme', appName: 'Acme', cronExpression: '0 7 * * *' },
+      { appId: 'beta', appName: 'Beta', cronExpression: '30 18 * * 1' },
+    ]);
+    expect(summary.label).toBe('2 apps · 2 schedules');
+    expect(summary.detail.split('\n')).toEqual([
+      'Acme — at 07:00 (0 7 * * *)',
+      'Beta — Mon at 18:30 (30 18 * * 1)',
+    ]);
+    expect(summary.nextRunAt).toBeNull();
+  });
+
+  it('falls back to the app id when the server sent no name', () => {
+    expect(summarizeAppSchedules([{ appId: 'acme', cronExpression: '0 7 * * *' }]).detail)
+      .toBe('acme — at 07:00 (0 7 * * *)');
+  });
+});
