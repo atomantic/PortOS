@@ -51,7 +51,7 @@ const DO_REVIEW_COMMAND = 'review';
  * `analysisType` there), not by using two vocabularies for one fact.
  */
 export const isDoReviewTask = (metadata) => metadata?.slashdoCommand === DO_REVIEW_COMMAND
-  && metadata?.targetPullRequest !== undefined;
+  && metadata?.targetPullRequest != null;
 
 /**
  * The task's agent-facing framing. Everything procedural lives in the
