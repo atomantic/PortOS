@@ -79,12 +79,18 @@ describe('the shipped records a harness refresh may rewrite', () => {
       .sort();
 
     expect(rewritable).toEqual([
-      // The four harnesses that can enumerate their own models, crossed with
-      // the wrappers that run those models natively. Every OpenCode wrapper
-      // pointed at a local daemon or a hosted gateway is correctly absent.
+      // The harnesses that can enumerate their own models, crossed with the
+      // wrappers that run those models natively. Every OpenCode wrapper pointed
+      // at a local daemon or a hosted gateway is correctly absent — and so is
+      // `openchamber-cli`, whose `models` subcommand prints its runtime's
+      // SETTINGS rather than a catalog, so its row declares no `modelsArgs`.
       'antigravity-cli', 'antigravity-tui',
       'cursor-cli', 'cursor-tui',
       'grok-cli', 'grok-tui',
+      // Kilo serves whatever the user's own `/connect` credentials reach, which
+      // is exactly what `kilo models` prints — no backend marker, so a refresh
+      // is correct here.
+      'kilo-cli', 'kilo-tui',
       'opencode-zen-cli', 'opencode-zen-tui',
       'pi-cli', 'pi-tui',
     ]);

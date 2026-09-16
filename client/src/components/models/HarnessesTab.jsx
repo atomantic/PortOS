@@ -19,8 +19,9 @@ import InlineConfirmRow from '../ui/InlineConfirmRow';
 /**
  * Models → Harnesses: the coding-agent CLIs/TUIs this install drives.
  *
- * A harness is one binary — `opencode`, `claude`, `codex`, `agy`, `grok`,
- * `kimi`, `cursor-agent` — that several provider records share. The Providers
+ * A harness is one binary — `opencode`, `kilo`, `openchamber`, `claude`,
+ * `codex`, `agy`, `grok`, `kimi`, `cursor-agent` — that several provider
+ * records share. The Providers
  * page could already install a MISSING one from its card, but nothing showed
  * which version was installed, whether it was stale, how to update it, or which
  * models this install of it actually knows about. So an OpenCode months behind

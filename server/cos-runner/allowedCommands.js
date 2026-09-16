@@ -20,9 +20,15 @@ import { PROVIDER_VENDORS, EXTRA_ALLOWED_COMMANDS } from '../lib/providerVendors
  * becomes spawnable here without a second hand-maintained list, plus
  * EXTRA_ALLOWED_COMMANDS for legacy/custom commands with no vendor row
  * (aider, copilot).
+ *
+ * `commandAliases` matters as much as `inferredCommand`: a vendor whose
+ * `matchCommand` accepts a second spelling (`kilocode` for `kilo`,
+ * `antigravity` for `agy`) classifies such a record everywhere else in PortOS,
+ * so omitting it here made the record spawnable nowhere — a 400 at /spawn-tui
+ * with the agent dead before it got a shell.
  */
 export const ALLOWED_COMMANDS = new Set([
-  ...PROVIDER_VENDORS.map((vendor) => vendor.inferredCommand),
+  ...PROVIDER_VENDORS.flatMap((vendor) => [vendor.inferredCommand, ...(vendor.commandAliases || [])]),
   ...EXTRA_ALLOWED_COMMANDS,
 ]);
 

@@ -192,6 +192,7 @@ describe('codeReview helpers', () => {
         piModel: 'example/model',
         cursorModel: null,
         opencodeModel: null,
+        kiloModel: null,
         kimiModel: null,
         mtplxModel: null,
         ...NO_EFFORTS,
@@ -238,8 +239,8 @@ describe('codeReview helpers', () => {
       const probed = []
       commandExistsMock.impl = async (binary) => { probed.push(binary); return binary !== 'agy' }
       const out = await getReviewerCliInstalled()
-      expect(out).toEqual({ claude: true, antigravity: false, codex: true, grok: true, cursor: true, opencode: true, kimi: true, pi: true })
-      expect(probed.sort()).toEqual(['agy', 'claude', 'codex', 'cursor-agent', 'grok', 'kimi', 'opencode', 'pi'])
+      expect(out).toEqual({ claude: true, antigravity: false, codex: true, grok: true, cursor: true, opencode: true, kilo: true, kimi: true, pi: true })
+      expect(probed.sort()).toEqual(['agy', 'claude', 'codex', 'cursor-agent', 'grok', 'kilo', 'kimi', 'opencode', 'pi'])
     })
 
     it('caches the result within the TTL — a second call does not re-probe', async () => {

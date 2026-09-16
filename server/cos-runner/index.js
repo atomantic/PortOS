@@ -449,7 +449,7 @@ app.post('/spawn', async (req, res) => {
   //     and the trailing --print marker swallows the next flag as its "prompt".
   //   - Grok on Windows: `/dev/stdin` rewritten to a temp file → useStdin=false.
   //   - Every other provider: unchanged, prompt over stdin → useStdin=true.
-  const { args: deliveredArgs, useStdin, cleanup: cleanupPromptFile } = prepareCliPrompt(command, spawnArgs, prompt);
+  const { args: deliveredArgs, useStdin, cleanup: cleanupPromptFile } = prepareCliPrompt(command, spawnArgs, prompt, { cwd });
   const { command: spawnCommand, args: finalSpawnArgs } = prepareCliSpawn(command, deliveredArgs, childEnv);
 
   // Spawn the CLI process

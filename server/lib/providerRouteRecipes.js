@@ -134,7 +134,12 @@ export function bindingBlocker({ harnessId, modes, connection }) {
   if (harnessId !== null && !CREATABLE_HARNESS_IDS.includes(harnessId)) {
     return {
       code: 'PROVIDER_HARNESS_NOT_CREATABLE',
-      message: `${harnessById(harnessId)?.label || harnessId} reaches only its own vendor service, so it cannot be pointed at a backend connection. Add it from the provider editor instead.`,
+      // The REASON is the row's (`noRecipe` in providerHarnesses.js), not this
+      // string's: three different things make a harness uncreatable, and a
+      // hardcoded clause here told two of them the wrong one — sending a user
+      // looking for a vendor service when the real remedy is their own config
+      // file or a runtime they have to start.
+      message: `${harnessById(harnessId)?.label || harnessId} ${harnessById(harnessId)?.noRecipe || 'has no command recipe'}, so it cannot be pointed at a backend connection. Add it from the provider editor instead.`,
     };
   }
   const harness = harnessId ? harnessById(harnessId) : null;

@@ -12,6 +12,7 @@ import {
   EFFORT_SELECTABLE_REVIEWERS,
   MODEL_CAPABLE_CLI_REVIEWERS,
   MODEL_SELECTABLE_REVIEWERS,
+  NON_REVIEWER_VENDORS,
   pairReviewerModelsAndEfforts,
   reviewerModelsFromDefaults,
   buildReviewWithArgs,
@@ -44,6 +45,7 @@ import {
   MAX_REVIEWER_MAX_ROUNDS,
   normalizeReviewUsernames,
 } from './reviewerConfig.js';
+import { PROVIDER_VENDORS } from './providerVendors.js';
 // The Zod half of the old cosValidation.js — these cases assert that a reviewer
 // pin survives the schema that persists it, so they need both modules.
 import { createCosTaskSchema, sanitizeTaskMetadata, codeReviewSettingsSchema, reviewerConfigMetadata } from './cosValidation.js';
@@ -82,6 +84,28 @@ describe('reviewerConfig reviewer CLI binaries', () => {
     }
     expect(reviewerCliBinary(undefined)).toBeNull();
     expect(describeReviewerCli(undefined)).toBe('');
+  });
+
+  // The roster's stated invariant — it covers every coding-agent vendor PortOS
+  // can spawn — was a sentence in a comment, and adding one vendor means editing
+  // ten hand-maintained lists. A vendor missed here ships a reviewer the server's
+  // own enum rejects, or hides one the install actually has. Excluding a vendor
+  // stays legal; it just has to be written down with its reason.
+  it('offers every spawnable vendor as a reviewer, or declares why not', () => {
+    const vendorIds = PROVIDER_VENDORS.map((vendor) => vendor.id);
+    expect(vendorIds.length).toBeGreaterThan(5);
+    for (const id of vendorIds) {
+      expect(
+        REVIEWER_VALUES.includes(id) || Object.hasOwn(NON_REVIEWER_VENDORS, id),
+        `vendor '${id}' is neither a reviewer nor listed in NON_REVIEWER_VENDORS`,
+      ).toBe(true);
+    }
+    // An exclusion for a vendor that no longer exists is stale prose again.
+    for (const id of Object.keys(NON_REVIEWER_VENDORS)) {
+      expect(vendorIds, `NON_REVIEWER_VENDORS names '${id}', which is not a vendor`).toContain(id);
+      expect(REVIEWER_VALUES, `'${id}' is both excluded and offered`).not.toContain(id);
+      expect(NON_REVIEWER_VENDORS[id].length, `'${id}' needs a real reason`).toBeGreaterThan(20);
+    }
   });
 
   // Guard the guard: a NEW CLI reviewer added to REVIEWER_VALUES without a
@@ -141,12 +165,12 @@ describe('reviewerConfig reviewer CLI binaries', () => {
   // ollama/@login. Anything else aborts the command, so PortOS's own reviewers
   // must never reach that flag.
   it('classifies every reviewer slashdo cannot parse as PortOS-only', () => {
-    expect([...PORTOS_ONLY_REVIEWERS].sort()).toEqual(['kimi', 'lmstudio', 'mtplx', 'opencode']);
+    expect([...PORTOS_ONLY_REVIEWERS].sort()).toEqual(['kilo', 'kimi', 'lmstudio', 'mtplx', 'opencode']);
     const { flagTokens, portosOnly } = splitSlashdoReviewerTokens([
-      'ollama[qwen2.5:7b]~max=1', 'opencode', '@octocat', 'mtplx~effort=high', 'codex',
+      'ollama[qwen2.5:7b]~max=1', 'opencode', '@octocat', 'mtplx~effort=high', 'codex', 'kilo',
     ]);
     expect(flagTokens).toEqual(['ollama[qwen2.5:7b]~max=1', '@octocat', 'codex']);
-    expect(portosOnly).toEqual(['opencode', 'mtplx']);
+    expect(portosOnly).toEqual(['opencode', 'mtplx', 'kilo']);
   });
 
   // slashdoInvocation keeps its own copy of the roster to decide which slashdo

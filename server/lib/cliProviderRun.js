@@ -132,7 +132,7 @@ export function runCliProviderPrompt(args = {}) {
   // past the trailing `--print` marker. prepareAntigravityPrompt relocates the
   // `--print <prompt>` pair to the very end to absorb that (#4110) — don't
   // "fix" it by re-ordering the concatenation above.
-  const { args: spawnArgs, useStdin, cleanup: cleanupPromptFile } = prepareCliPrompt(provider.command, builtArgs, prompt);
+  const { args: spawnArgs, useStdin, cleanup: cleanupPromptFile } = prepareCliPrompt(provider.command, builtArgs, prompt, { cwd });
 
   return new Promise((resolve) => {
     let stdout = '';

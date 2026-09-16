@@ -216,7 +216,7 @@ async function runCliVisionSpawn({ provider, model, invocation, timeout, spawnIm
   // Deliver the prompt per provider convention: antigravity as the --print
   // VALUE (agy doesn't read stdin); grok's --prompt-file /dev/stdin via stdin
   // (POSIX) / temp file (Windows); every other provider via stdin.
-  const { args: deliveredArgs, useStdin: writePromptToStdin, cleanup } = prepareCliPrompt(command, args, stdin);
+  const { args: deliveredArgs, useStdin: writePromptToStdin, cleanup } = prepareCliPrompt(command, args, stdin, { cwd });
   setCleanup?.(cleanup);
 
   // Shared composition (provider.envVars + OpenCode models map + PWD pin +

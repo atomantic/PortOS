@@ -61,7 +61,7 @@ export const SLASHDO_REVIEWER_INCLUDE_NAMES = Object.freeze(Object.values(SLASHD
 /**
  * Reviewer slugs that drive slashdo's shared local-agent (spawnable CLI) loop.
  *
- * PortOS-only CLI reviewers (`opencode`, `kimi`) are members too: slashdo has no
+ * PortOS-only CLI reviewers (`opencode`, `kilo`, `kimi`) are members too: slashdo has no
  * slug for them, but the include they'd need is the same generic spawn-a-CLI
  * review procedure, and pruning it would leave PortOS's own inlined CLI Reviewer
  * Procedure with nothing to point at. `lmstudio`/`mtplx` sit in
@@ -73,7 +73,7 @@ export const SLASHDO_REVIEWER_INCLUDE_NAMES = Object.freeze(Object.values(SLASHD
  * (whose keys are the same roster); a reviewer added to one and not the other
  * is a drift the test catches.
  */
-export const LOCAL_AGENT_REVIEWERS = new Set(['claude', 'codex', 'antigravity', 'grok', 'cursor', 'pi', 'opencode', 'kimi']);
+export const LOCAL_AGENT_REVIEWERS = new Set(['claude', 'codex', 'antigravity', 'grok', 'cursor', 'pi', 'opencode', 'kilo', 'kimi']);
 /** Reviewer slugs that drive slashdo's local-model (Ollama-style) loop. */
 const LOCAL_MODEL_REVIEWERS = new Set(['ollama', 'lmstudio', 'mtplx']);
 /**
@@ -87,7 +87,7 @@ const LOCAL_MODEL_REVIEWERS = new Set(['ollama', 'lmstudio', 'mtplx']);
  * imports THIS one, so the arrow can only point one way.
  *
  * Deliberately NOT the full `REVIEWER_VALUES` roster — a `PORTOS_ONLY_REVIEWERS`
- * slug (`lmstudio`/`mtplx`/`opencode`/`kimi`) has no slashdo counterpart and
+ * slug (`lmstudio`/`mtplx`/`opencode`/`kilo`/`kimi`) has no slashdo counterpart and
  * aborts the command, so seeing one in an explicit flag means the argument was
  * hand-written against a grammar we don't own. That falls through to the
  * unresolvable branch, which prunes nothing.
