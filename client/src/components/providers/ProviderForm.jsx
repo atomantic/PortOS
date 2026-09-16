@@ -379,20 +379,26 @@ export default function ProviderForm({ provider, daemonReadiness = null, onClose
     // running another vendor's binary, where it would be a stored lie.
     if (!isCodexProvider({ ...provider, ...data, id: provider?.id })) delete data.ignoreUserConfig;
 
-    // Fold the three flat scratch fields into the nested shape the server
-    // schema expects, omitting the object entirely when no bootstrap command
-    // is named — an empty `credentialBootstrap: { command: '' }` would fail
-    // the server's `min(1)` check on every unrelated save.
+    // Fold the five flat scratch fields into the nested shape the server
+    // schema expects. Only a CLI/TUI provider carries the field at all (the
+    // section above is gated the same way): an api-type save must not ship
+    // `credentialBootstrap: null` onto a record that never had one. A named
+    // bootstrap command becomes the object; an emptied one becomes an explicit
+    // `null` (absent means "unchanged" on a PATCH) — never
+    // `{ command: '' }`, which would fail the server's `min(1)` check on every
+    // unrelated save.
     const bootstrapCommand = formData.credentialBootstrapCommand.trim();
-    data.credentialBootstrap = bootstrapCommand
-      ? {
-        ...(formData.credentialBootstrapSetupCommand.trim() ? { setupCommand: formData.credentialBootstrapSetupCommand.trim() } : {}),
-        command: bootstrapCommand,
-        args: formData.credentialBootstrapArgs ? formData.credentialBootstrapArgs.split(' ').filter(Boolean) : [],
-        ...(formData.credentialBootstrapHarnessId.trim() ? { harnessId: formData.credentialBootstrapHarnessId.trim() } : {}),
-        ...(formData.credentialBootstrapArgsSeparator.trim() ? { argsSeparator: formData.credentialBootstrapArgsSeparator.trim() } : {}),
-      }
-      : null;
+    if (formData.type === 'cli' || formData.type === 'tui') {
+      data.credentialBootstrap = bootstrapCommand
+        ? {
+          ...(formData.credentialBootstrapSetupCommand.trim() ? { setupCommand: formData.credentialBootstrapSetupCommand.trim() } : {}),
+          command: bootstrapCommand,
+          args: formData.credentialBootstrapArgs ? formData.credentialBootstrapArgs.split(' ').filter(Boolean) : [],
+          ...(formData.credentialBootstrapHarnessId.trim() ? { harnessId: formData.credentialBootstrapHarnessId.trim() } : {}),
+          ...(formData.credentialBootstrapArgsSeparator.trim() ? { argsSeparator: formData.credentialBootstrapArgsSeparator.trim() } : {}),
+        }
+        : null;
+    }
     delete data.credentialBootstrapSetupCommand;
     delete data.credentialBootstrapCommand;
     delete data.credentialBootstrapArgs;
@@ -573,6 +579,8 @@ export default function ProviderForm({ provider, daemonReadiness = null, onClose
                     <code>claude-code</code> rather than <code>claude</code>).{' '}
                     <strong>Args Separator</strong> (e.g. <code>--</code>) is inserted before the harness's own
                     arguments when the bootstrap CLI needs its flags kept apart from the harness's.
+                    Bootstrap Args are stored and shown in clear text (agent records, run transcripts, the shell
+                    line typed for a TUI session) — put a secret in Environment Variables marked secret, never here.
                   </p>
 
                   {/* The CLI/TUI backends that can authenticate: the vLLM compose

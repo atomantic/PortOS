@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { hasCredentialBootstrap, applyCredentialBootstrap, resolveCliSpawn } from './credentialBootstrap.js';
+import { PUBLIC_REVIEW_GATE_EXECUTION_PROFILE, PUBLIC_REVIEW_ACTIONS_EXECUTION_PROFILE } from './agentExecutionProfiles.js';
 
 vi.mock('./bufferedSpawn.js', async (importOriginal) => ({
   ...(await importOriginal()),
@@ -75,6 +76,30 @@ describe('credentialBootstrap', () => {
         command: 'token-cli',
         args: ['claude'],
       });
+    });
+  });
+
+  // A public-review posture's enforced recipe IS the sandbox: handing it to a
+  // user-configured binary defeats both its argv and env allowlists. The skip is
+  // keyed on the profile here, at the one point every spawn site goes through.
+  describe('public-review postures', () => {
+    const provider = { credentialBootstrap: { command: 'token-cli', args: ['run'] } };
+
+    it.each([PUBLIC_REVIEW_GATE_EXECUTION_PROFILE, PUBLIC_REVIEW_ACTIONS_EXECUTION_PROFILE])(
+      'never wraps a %s spawn, even with a bootstrap configured', (safetyProfile) => {
+        expect(applyCredentialBootstrap(provider, 'claude', ['--restricted'], { safetyProfile })).toEqual({
+          command: 'claude',
+          args: ['--restricted'],
+        });
+        expect(resolveCliSpawn(provider, 'claude', ['--restricted'], process.env, { safetyProfile })).toEqual({
+          command: 'claude',
+          args: ['--restricted'],
+        });
+      });
+
+    it('still wraps an ordinary (profile-less or unknown-profile) spawn', () => {
+      expect(applyCredentialBootstrap(provider, 'claude', [], { safetyProfile: null }).command).toBe('token-cli');
+      expect(applyCredentialBootstrap(provider, 'claude', [], { safetyProfile: 'not-a-public-review-profile' }).command).toBe('token-cli');
     });
   });
 

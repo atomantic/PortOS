@@ -272,6 +272,33 @@ describe('runAsk', () => {
     expect(fullText).toBe('Hello, world.');
   });
 
+  // Ask carries private records: a bare harness spawn would fall through to the
+  // machine's ambient vendor auth and send the prompt to the wrong backend.
+  it('spawns a CLI provider through its credential bootstrap when one is configured', async () => {
+    providers.getActiveProvider.mockResolvedValue({
+      id: 'claude-code', type: 'cli', enabled: true, command: 'claude', args: [], defaultModel: 'sonnet',
+      credentialBootstrap: { command: 'token-cli', args: ['run'], harnessId: 'claude-code', argsSeparator: '--' },
+    });
+    spawn.mockImplementation(() => {
+      const child = Object.assign(new EventEmitter(), {
+        stdout: new EventEmitter(), stderr: new EventEmitter(),
+        stdin: Object.assign(new EventEmitter(), { end: vi.fn() }), kill: vi.fn(),
+      });
+      setImmediate(() => { child.stdout.emit('data', Buffer.from('answer')); child.emit('close', 0); });
+      return child;
+    });
+
+    const events = [];
+    for await (const evt of askService.runAsk({ question: 'hi' })) events.push(evt);
+
+    expect(events.at(-1).type).toBe('done');
+    const [command, args] = spawn.mock.calls[0];
+    expect(command).toBe('token-cli');
+    expect(args.slice(0, 3)).toEqual(['run', 'claude-code', '--']);
+    // The harness's own argv (Ask's model pin) follows the separator.
+    expect(args.slice(3)).toEqual(expect.arrayContaining(['--model', 'sonnet']));
+  });
+
   it('keeps streamed content and emits an error when the canonical reader fails', async () => {
     providers.getActiveProvider.mockResolvedValue(fakeStreamProvider());
     const encoded = new TextEncoder().encode('data: {"choices":[{"delta":{"content":"partial"}}]}\n');

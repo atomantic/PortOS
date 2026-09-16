@@ -46,6 +46,29 @@ describe('Provider Service', () => {
     expect((await providerService.getActiveProvider()).id).toBe('remote');
   });
 
+  it('persists a credential bootstrap only while one is named, and drops the key on an explicit clear', async () => {
+    const created = await providerService.createProvider({ name: 'Bootstrap CLI', type: 'cli', command: 'claude' });
+    expect(created).not.toHaveProperty('credentialBootstrap');
+    const bootstrap = { command: 'token-cli', args: ['run'] };
+    expect((await providerService.updateProvider(created.id, { credentialBootstrap: bootstrap })).credentialBootstrap).toEqual(bootstrap);
+    // The editor clears with an explicit `null` (absent = unchanged on a PATCH);
+    // the stored record must read like one that never had a bootstrap.
+    const cleared = await providerService.updateProvider(created.id, { credentialBootstrap: null });
+    expect(cleared).not.toHaveProperty('credentialBootstrap');
+    expect(await providerService.getProviderById(created.id)).not.toHaveProperty('credentialBootstrap');
+  });
+
+  it('does not pair CLI/TUI modes as one connection when only one carries a credential bootstrap', async () => {
+    await writeFile(join(TEST_DATA_DIR, 'providers.json'), JSON.stringify({ activeProvider: 'example-tui', providers: {
+      example: { id: 'example', name: 'Example CLI', type: 'cli', command: 'example', enabled: false, models: ['a'], credentialBootstrap: { command: 'token-cli' } },
+      'example-tui': { id: 'example-tui', name: 'Example TUI', type: 'tui', command: 'example', enabled: true, models: ['b'] },
+    } }));
+    // Unpaired: neither enablement nor models unify across the two.
+    expect((await providerService.getProviderById('example')).enabled).toBe(false);
+    await providerService.updateProvider('example-tui', { models: ['c'] });
+    expect((await providerService.getProviderById('example')).models).toEqual(['a']);
+  });
+
   it.skipIf(process.platform === 'win32')('refreshes Pi models and distinguishes authentication from probe failure', async () => {
     const command = join(TEST_DATA_DIR, 'pi');
     const emit = async (text, code = 0) => {

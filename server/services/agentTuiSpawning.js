@@ -310,15 +310,17 @@ export function buildTuiSpawnConfig(provider, model, {
       tui: true,
     });
     // Public-review postures never get credential-bootstrap-wrapped — the
-    // enforced recipe above IS the sandbox, and `spawnCommand`/`spawnArgs`
-    // exist here (identical to `command`/`args`) only so every branch of this
-    // function returns the same shape.
+    // enforced recipe above IS the sandbox. `applyCredentialBootstrap` owns
+    // that skip (keyed on `safetyProfile`), so `spawnCommand`/`spawnArgs` come
+    // back identical to `command`/`args` and every branch of this function
+    // returns the same shape.
+    const { command: spawnCommand, args: spawnArgs } = applyCredentialBootstrap(provider, recipe.command, recipe.args, { safetyProfile });
     return {
       command: recipe.command,
       args: recipe.args,
-      spawnCommand: recipe.command,
-      spawnArgs: recipe.args,
-      commandLine: formatShellCommandLine(recipe.command, recipe.args, shell),
+      spawnCommand,
+      spawnArgs,
+      commandLine: formatShellCommandLine(spawnCommand, spawnArgs, shell),
       promptDelayMs: provider?.tuiPromptDelayMs || DEFAULT_TUI_PROMPT_DELAY_MS,
     };
   }
@@ -751,7 +753,10 @@ export async function spawnTuiAgent({
     leaveOpen: leavesPrForHuman(task),
   });
   const promptPreview = prompt.replace(/\s+/g, ' ').slice(0, 100);
-  const commandName = tuiConfig.command.split('/').pop();
+  // The login shell prints "command not found" for the binary it was asked to
+  // run — the SPAWNED one, which for a credential-bootstrap provider is the
+  // bootstrap CLI, not the harness `tuiConfig.command` names.
+  const commandName = tuiConfig.spawnCommand.split('/').pop();
   /**
    * Where this session is in its lifecycle — the one value every path that
    * ends a run reads and writes.
@@ -1538,7 +1543,7 @@ export async function spawnTuiAgent({
           await finish({
             success: false,
             exitCode: 127,
-            error: `TUI command not found: ${tuiConfig.command}`,
+            error: `TUI command not found: ${tuiConfig.spawnCommand}`,
             reason: 'command-not-found'
           });
         }

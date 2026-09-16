@@ -2234,6 +2234,31 @@ describe('spawnTuiAgent runtime', () => {
     );
   });
 
+  // A credential-bootstrap provider types `token-cli run codex …` into the
+  // login shell, so the shell's "command not found" names the BOOTSTRAP binary.
+  // Keying the probe on the harness (`tuiConfig.command`) would miss it and the
+  // run would hang to the wall-clock backstop instead of exiting 127.
+  it('command-not-found: detects a missing credential-bootstrap binary by the spawned command, not the harness', async () => {
+    const spawnPromise = runSpawn({
+      tuiConfig: { ...defaultTuiConfig, spawnCommand: 'token-cli', spawnArgs: ['run', 'codex'], commandLine: 'token-cli run codex' },
+    });
+    await flushMicrotasks();
+
+    await capturedOnData(Buffer.from('zsh: command not found: token-cli\n'));
+    await flushMicrotasks();
+
+    await spawnPromise;
+
+    expect(agentLifecycle.finalizeAgent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        success: false,
+        exitCode: 127,
+        completionReason: 'command-not-found',
+        error: 'TUI command not found: token-cli',
+      })
+    );
+  });
+
   // ── 3. Shell-exit path with non-zero exit code ───────────────────────────────
   it('shell-exit: finalizeAgent called with success:false and exitCode 1 when shell exits non-zero', async () => {
     const spawnPromise = runSpawn();

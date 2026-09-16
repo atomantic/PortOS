@@ -704,10 +704,12 @@ describe('executeCliRun — credential-bootstrap wrapping', () => {
 
     const [command, args] = spawn.mock.calls.at(-1);
     expect(command).toBe('token-cli');
-    expect(args).toEqual(expect.arrayContaining(['run', 'claude-code', '--']));
-    // The harness's own prompt-delivery convention still applies (claude's
-    // `-p -`) — resolved against `provider.command`, not the bootstrap CLI.
-    expect(args).toEqual(expect.arrayContaining(['-p', '-']));
+    // Exact order: bootstrap args, then the harness by its bootstrap-side id,
+    // then the separator, then the harness's own argv — whose prompt-delivery
+    // convention (claude's `-p -`) is still resolved against `provider.command`,
+    // not the bootstrap CLI. `arrayContaining` would pass with the separator
+    // after the harness args, the exact mistake the wrap exists to prevent.
+    expect(args).toEqual(['run', 'claude-code', '--', '-p', '-']);
   });
 });
 

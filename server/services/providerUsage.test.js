@@ -611,6 +611,16 @@ describe('TUI usage fetchers (via getProviderQuotas)', () => {
     scrapeTuiUsage.mockReset();
   });
 
+  it('scrapes through the credential-bootstrap CLI when the provider names one', async () => {
+    getAllProviders.mockResolvedValueOnce({ activeProvider: 'agy', providers: [{
+      id: 'antigravity-cli', enabled: true, type: 'cli', command: 'agy',
+      credentialBootstrap: { command: 'token-cli', args: ['run'] },
+    }] });
+    scrapeTuiUsage.mockResolvedValueOnce(AGY_PANEL);
+    await getProviderQuotas();
+    expect(scrapeTuiUsage).toHaveBeenCalledWith(expect.objectContaining({ command: 'token-cli', args: ['run', 'agy'], slashCommand: '/usage' }));
+  });
+
   it('surfaces a supported Antigravity card with parsed limits', async () => {
     getAllProviders.mockResolvedValueOnce({ activeProvider: 'agy', providers: [{ id: 'antigravity-cli', enabled: true, type: 'cli', command: 'agy' }] });
     scrapeTuiUsage.mockResolvedValueOnce(AGY_PANEL);

@@ -124,6 +124,19 @@ describe('ProviderForm', () => {
     expect(payload).not.toHaveProperty('credentialBootstrapArgs');
   });
 
+  it('sends no credentialBootstrap key at all for an api-type provider', async () => {
+    renderForm({
+      provider: { id: 'example-api', name: 'Example API', type: 'api', endpoint: 'https://api.example.com/v1' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+
+    // The section is CLI/TUI-only, so an api save must not ship an explicit
+    // `null` (which the server would merge onto the record as a literal null).
+    await waitFor(() => expect(api.updateProvider).toHaveBeenCalled());
+    const [, payload] = api.updateProvider.mock.calls[0];
+    expect(payload).not.toHaveProperty('credentialBootstrap');
+  });
+
   it('clears a previously-set credential bootstrap when the Bootstrap Command is emptied', async () => {
     renderForm({
       provider: {

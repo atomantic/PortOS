@@ -11,19 +11,42 @@
  *
  * `provider.command`/`args` keep naming the actual harness (claude, opencode,
  * …) everywhere else in the codebase — vendor detection, prompt-delivery
- * convention, and TUI ready-text heuristics all key off it, and would silently
- * break if the harness's identity were replaced by the bootstrap binary's. So
- * every spawn site keeps resolving the harness's own command/args exactly as
- * it does today, and only asks this module for the pair to actually hand to
- * `spawn`/`pty.spawn`, right before that call.
+ * convention, and the TUI's own ready-text heuristics all key off it, and
+ * would silently break if the harness's identity were replaced by the
+ * bootstrap binary's. So every spawn site keeps resolving the harness's own
+ * command/args exactly as it does today, and only asks this module for the
+ * pair to actually hand to `spawn`/`pty.spawn`, right before that call. The
+ * one heuristic that must key on the SPAWNED pair instead is anything that
+ * observes the launching shell rather than the harness — a login shell's
+ * `command not found` names the bootstrap binary, so a PATH probe or a
+ * missing-binary detector reads `spawnCommand`, never `command`.
  *
- * Imports only `bufferedSpawn.js` (mirrors `cliProviderRun.js`, which already
- * depends on it directly) so any spawn site — including the standalone
- * `portos-autofixer` process via `cliProviderRun.js` — can import this module
- * without dragging in the AI toolkit or data layer.
+ * EVERY site that spawns a provider's `command` must go through here — a site
+ * that spawns the bare harness runs it with no credential, and the harness
+ * then falls through to whatever ambient vendor auth the machine has, sending
+ * the prompt to the wrong backend with no error. Wrapped sites: the headless
+ * runners (`runner.js`, `cliProviderRun.js`, `visionCli.js`, `askService.js`,
+ * `opencodeTask.js`), the agent spawners (`agentCliSpawning.js`,
+ * `agentTuiSpawning.js`), the one-shot TUI runner (`tuiPromptRunner.js`), the
+ * "Launch in Shell" line (`tuiShellLaunch.js`), the TUI usage scrape
+ * (`providerUsage.js`), and the readiness probes (`providerPrerequisites.js`,
+ * the toolkit's `testProvider`).
+ *
+ * A public-review posture (`isPublicReviewRestrictedProfile`) is NEVER
+ * wrapped, at any site: the vendor's enforced no-tool/sandboxed recipe IS the
+ * sandbox, and its argv and env allowlists are both defeated by handing the
+ * recipe to a user-configured binary that mints and re-injects a credential.
+ * The skip lives here rather than at each call site so a new spawn site can't
+ * forget it.
+ *
+ * Imports only `bufferedSpawn.js` and `agentExecutionProfiles.js` (both of
+ * which `cliProviderRun.js` already depends on directly) so any spawn site —
+ * including the standalone `portos-autofixer` process via `cliProviderRun.js`
+ * — can import this module without dragging in the AI toolkit or data layer.
  */
 
 import { resolveWindowsExecutable, prepareWindowsSafeSpawn } from './bufferedSpawn.js';
+import { isPublicReviewRestrictedProfile } from './agentExecutionProfiles.js';
 
 /** True when a provider names a bootstrap CLI to wrap its harness spawn. */
 export function hasCredentialBootstrap(provider) {
@@ -53,12 +76,14 @@ export function hasCredentialBootstrap(provider) {
  * @param {{credentialBootstrap?: {command: string, args?: string[], harnessId?: string, argsSeparator?: string}}|null|undefined} provider
  * @param {string} command - the harness binary PortOS would otherwise spawn
  * @param {string[]} [args] - the harness's own argv
+ * @param {{safetyProfile?: string|null}} [options] - the run's execution
+ *   profile; a public-review posture is returned unwrapped (see module doc)
  * @returns {{command: string, args: string[]}}
  */
-export function applyCredentialBootstrap(provider, command, args) {
+export function applyCredentialBootstrap(provider, command, args, { safetyProfile = null } = {}) {
   const bootstrap = provider?.credentialBootstrap;
   const harnessArgs = Array.isArray(args) ? args : [];
-  if (!hasCredentialBootstrap(provider)) return { command, args: harnessArgs };
+  if (!hasCredentialBootstrap(provider) || isPublicReviewRestrictedProfile(safetyProfile)) return { command, args: harnessArgs };
   const harnessId = (typeof bootstrap.harnessId === 'string' && bootstrap.harnessId) || command;
   const separator = (typeof bootstrap.argsSeparator === 'string' && bootstrap.argsSeparator && harnessArgs.length > 0)
     ? [bootstrap.argsSeparator] : [];
@@ -86,10 +111,11 @@ export function applyCredentialBootstrap(provider, command, args) {
  * @param {string[]} args - the harness's own argv
  * @param {NodeJS.ProcessEnv} childEnv - resolved against this so a
  *   provider-configured PATH override is honored
+ * @param {{safetyProfile?: string|null}} [options] - forwarded to `applyCredentialBootstrap`
  * @returns {{command: string, args: string[]}}
  */
-export function resolveCliSpawn(provider, command, args, childEnv) {
-  const bootstrapped = applyCredentialBootstrap(provider, command, args);
+export function resolveCliSpawn(provider, command, args, childEnv, options = {}) {
+  const bootstrapped = applyCredentialBootstrap(provider, command, args, options);
   const resolvedCommand = resolveWindowsExecutable(bootstrapped.command, undefined, childEnv) || bootstrapped.command;
   return prepareWindowsSafeSpawn(resolvedCommand, bootstrapped.args);
 }

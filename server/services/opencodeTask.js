@@ -20,6 +20,7 @@
 import { ServerError } from '../lib/errorHandler.js';
 import { runStreamingCommand } from '../lib/streamingSpawn.js';
 import { prepareCliSpawn } from '../lib/bufferedSpawn.js';
+import { applyCredentialBootstrap } from '../lib/credentialBootstrap.js';
 import { buildCliChildEnv } from '../lib/cliChildEnv.js';
 import { isOpencodeCommand, prefixOpencodeModel, getOpencodeLocalProviderNamespace } from '../lib/providerModels.js';
 import { parseAgentLine } from '../lib/opencodeStream.js';
@@ -82,7 +83,9 @@ export async function runOpencodeTask({ provider, modelId, cwd, prompt, timeoutM
   // Pins PWD to `cwd` (#3193) — OpenCode resolves its project root from PWD, so
   // an inherited one would silently run the task in the PortOS checkout.
   const env = buildCliChildEnv({ provider, model: modelId, cwd, guard: true });
-  const spawnTarget = prepareCliSpawn(provider.command, args, env);
+  // Credential-bootstrap wrap first (credentialBootstrap.js), then shim resolution.
+  const bootstrapped = applyCredentialBootstrap(provider, provider.command, args);
+  const spawnTarget = prepareCliSpawn(bootstrapped.command, bootstrapped.args, env);
 
   const result = await runStreamingCommand(spawnTarget.command, spawnTarget.args, (line) => {
     const event = parseAgentLine(line);

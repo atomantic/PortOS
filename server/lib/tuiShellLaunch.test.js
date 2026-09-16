@@ -26,6 +26,20 @@ describe('buildTuiShellLaunch', () => {
     expect(launch.env.ANTHROPIC_AUTH_TOKEN).toBe('local');
   });
 
+  // The typed line is what every agent spawn runs — a bare harness here would
+  // launch with no credential and fall through to ambient vendor auth.
+  it('types the credential-bootstrap CLI in front of the harness when one is configured', () => {
+    const launch = buildTuiShellLaunch({
+      ...OLLAMA_CLAUDE_TUI,
+      credentialBootstrap: { command: 'token-cli', args: ['run'], harnessId: 'claude-code', argsSeparator: '--' },
+    });
+    // Dialect-agnostic prefix check (PowerShell renders `& 'token-cli'`).
+    expect(launch.commandLine).toMatch(/^(?:& )?(['"])?token-cli\1?\s/);
+    expect(launch.commandLine).toContain('claude-code');
+    expect(launch.commandLine).toContain('qwen3:32b');
+    expect(launch.env.ANTHROPIC_BASE_URL).toBe('http://127.0.0.1:11434');
+  });
+
   it('returns null for a non-TUI provider, so callers have one not-launchable case', () => {
     expect(buildTuiShellLaunch({ ...OLLAMA_CLAUDE_TUI, type: 'cli' })).toBeNull();
     expect(buildTuiShellLaunch({ ...OLLAMA_CLAUDE_TUI, type: 'api' })).toBeNull();

@@ -38,6 +38,7 @@ import { ensureAntigravityPrintArgs, isAntigravityCliProvider } from '../lib/ant
 import { isGrokCommand, ensureGrokHeadlessArgs } from '../lib/grok.js';
 import { prepareCliPrompt } from '../lib/cliProviderArgs.js';
 import { prepareCliSpawn } from '../lib/bufferedSpawn.js';
+import { applyCredentialBootstrap } from '../lib/credentialBootstrap.js';
 import { buildCliChildEnv } from '../lib/cliChildEnv.js';
 import { ensureProviderReady as ensureOllamaProviderReady } from './ollamaManager.js';
 import { evaluateSecretEndpoint } from '../lib/aiToolkit/endpointGuard.js';
@@ -543,7 +544,11 @@ async function* streamCompletion(provider, model, prompt, signal) {
   // launch it — a bare shim name ENOENTs otherwise. No-op off Windows. Mirrors
   // the runner / agent / vision spawn paths. Resolved against childEnv so a
   // provider PATH override is honored.
-  const { command: spawnCommand, args: spawnArgs } = prepareCliSpawn(provider.command, deliveredArgs, childEnv);
+  // Credential-bootstrap wrap first (credentialBootstrap.js): Ask carries
+  // private records, and a bare harness would fall through to the machine's
+  // ambient vendor auth instead of the backend this provider is configured for.
+  const bootstrapped = applyCredentialBootstrap(provider, provider.command, deliveredArgs);
+  const { command: spawnCommand, args: spawnArgs } = prepareCliSpawn(bootstrapped.command, bootstrapped.args, childEnv);
   const out = await new Promise((resolve, reject) => {
     let buf = '';
     const child = spawn(spawnCommand, spawnArgs, {
