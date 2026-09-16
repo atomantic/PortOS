@@ -154,6 +154,14 @@ export function buildAgentRegistration({
     // recipe, so without this the card is indistinguishable from an agent
     // whose PTY failed to attach.
     publicReviewPosture,
+    // The run this one TOOK OVER, stamped on the task by `resolveTaskResumePatch`
+    // when a Resume or a provider Relaunch requeues a paused task in place. Same
+    // hand-picked-projection reason as the keys around it: the predecessor is
+    // retired as a HANDOFF rather than a failure (`lib/agentOutcome.js`), and
+    // without this the card that took over its worktree has no way to say what it
+    // is continuing — leaving the pair looking like two unrelated runs, one of
+    // which mysteriously stopped.
+    resumedFromAgentId: task.metadata?.resumedFromAgentId || null,
     // Preserve privacy after the task becomes an archived agent.
     machineLocal: isTruthyMetaFn(task.metadata?.machineLocal),
     taskAnalysisType: task.metadata?.analysisType || null,

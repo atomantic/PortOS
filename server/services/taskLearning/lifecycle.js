@@ -10,6 +10,7 @@
 import { cosEvents, emitLog } from './store.js';
 import { recordTaskCompletion, recalculateModelTierMetrics } from './metrics.js';
 import { declaresNoCommitCriterion } from '../taskTypeHooks.js';
+import { isAgentHandoff } from '../../lib/agentOutcome.js';
 
 // A pre-#2696 gh/git coordinator run (branch-reconcile/issue-reconcile/branch-cleanup/
 // jira-status-report) carries a FOSSIL `result.validationPassed` — a boolean the old
@@ -40,7 +41,7 @@ export function initTaskLearning() {
     // resumed run will record the real verdict. Learning from it would charge the
     // task type and model tier a phantom failure per pause, and double-count the
     // task once the continuation finishes.
-    if (agent?.result?.resumed) return;
+    if (isAgentHandoff(agent)) return;
     // Get task info from agent
     const task = {
       id: agent.taskId,
@@ -80,7 +81,11 @@ export async function backfillFromHistory() {
 
   let backfilled = 0;
   for (const agent of agents) {
-    if (agent.status === 'completed' && agent.result) {
+    // Same rule as the live listener above, and the reason it is repeated rather
+    // than assumed: the backfill re-reads the ARCHIVE, where every relaunch the
+    // live guard skipped is still sitting as a `success: false` record. Without
+    // this, one backfill re-imports every phantom failure the listener refused.
+    if (agent.status === 'completed' && agent.result && !isAgentHandoff(agent)) {
       const task = {
         id: agent.taskId,
         description: agent.metadata?.taskDescription,

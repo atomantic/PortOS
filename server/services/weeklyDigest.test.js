@@ -150,6 +150,29 @@ describe('generateWeeklyDigest — summary assembly', () => {
     expect(digest.generatedAt).toBe(NOW.toISOString());
   });
 
+  it('leaves a relaunched run out of every week stat, including the error patterns', async () => {
+    // A run retired by Resume/Relaunch carries `success: false` with the resume
+    // summary in `result.error`, so before the handoff exclusion it dented the
+    // success rate AND — because recurring issues are grouped by `result.error` —
+    // a week with three provider swaps reported its top recurring issue as
+    // "Relaunched by user on codex".
+    const swap = (id, day) => ({
+      ...agent(id, { day, success: false, duration: 600000, taskType: 'review' }),
+      result: { success: false, duration: 600000, resumed: true, resumedTaskId: `task-${id}`, error: 'Relaunched by user on codex' },
+    });
+    onDates([
+      agent('ok', { day: 16, duration: 3600000, taskType: 'review' }),
+      swap('s1', 17), swap('s2', 17), swap('s3', 18),
+    ]);
+
+    const digest = await digestService.generateWeeklyDigest();
+
+    expect(digest.summary).toMatchObject({ totalTasks: 1, succeededTasks: 1, failedTasks: 0, successRate: 100 });
+    // `issues` is the digest's recurring-issue list, grouped by `result.error`.
+    expect(digest.issues).toEqual([]);
+    expect(digest.accomplishments.map(a => a.id)).toEqual(['ok']);
+  });
+
   it('ranks task types by volume with per-type success rates', async () => {
     onDates([
       agent('a1', { day: 16, taskType: 'review' }),

@@ -21,6 +21,7 @@ import { runnerEntryShieldsRunningRecord } from '../lib/runnerAgentLiveness.js';
 import { recordDomainUsage } from './domainUsage.js';
 import { repairCodexTaskSummary } from './codexSummaryRepair.js';
 import { loadAgentIndex, saveAgentIndex, getAgentDir } from './cosAgentIndex.js';
+import { isAgentHandoff } from '../lib/agentOutcome.js';
 
 export async function registerAgent(agentId, taskId, metadata = {}) {
   return withStateLock(async () => {
@@ -186,11 +187,15 @@ export async function completeAgent(agentId, result = {}) {
 
     if (result.success) {
       state.stats.tasksCompleted++;
-    } else if (!result.resumed) {
+    } else if (!isAgentHandoff({ result })) {
       // `resumed` records are retired by `resumeAgent`, not failed: the user paused
       // the run and its task is already requeued, so the continuation will land in
       // one of these two counters itself. Counting it here reports an error the user
       // caused deliberately and never saw.
+      //
+      // Asked of the bare `result` because the record does not exist yet — this is
+      // the same predicate every downstream reader uses (`lib/agentOutcome.js`),
+      // not a second spelling of it.
       state.stats.errors = (state.stats.errors || 0) + 1;
     }
 
