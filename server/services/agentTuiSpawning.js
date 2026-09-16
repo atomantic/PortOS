@@ -1190,8 +1190,13 @@ export async function spawnTuiAgent({
     // and only a user kill — a legitimate no-sentinel exit — needs excluding.
     // A CLI run is out of scope: it signals completion by exiting, so the same
     // warn in `agentRunFinalize` would fire on every headless run.
+    // A merge-gate nudge DELETES the sentinel this run already wrote, so
+    // "never wrote one" would be a false reading of that path — and the
+    // remedy it points at is the opposite one (the nudge never landed).
     if (doneSentinelPath && !terminatedByUser && !wroteSentinel) {
-      emitLog('warn', `⚠️ ${agentId} finalized (${reason}) with no completion sentinel — expected ${doneSentinelPath}`, { agentId });
+      emitLog('warn', mergeGateReprompted
+        ? `⚠️ ${agentId} finalized (${reason}) without re-writing its sentinel after the merge-gate nudge — expected ${doneSentinelPath}`
+        : `⚠️ ${agentId} finalized (${reason}) with no completion sentinel — expected ${doneSentinelPath}`, { agentId });
     }
 
     // output.txt has already been incrementally appended via the spooler;
