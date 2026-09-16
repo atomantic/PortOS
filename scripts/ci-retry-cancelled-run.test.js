@@ -12,7 +12,12 @@ import { fileURLToPath } from 'url';
 
 import { describe, expect, it, vi } from 'vitest';
 
-import { retryCancelledCiRun, retryTargetFromEnv } from './ci-retry-cancelled-run.js';
+import {
+  MAX_RUNTIME_MS,
+  RETRY_DELAY_MS,
+  retryCancelledCiRun,
+  retryTargetFromEnv,
+} from './ci-retry-cancelled-run.js';
 import { workflowJobs } from './lib/workflowJobs.js';
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
@@ -65,9 +70,17 @@ function stubFetch({ jobs = [], runs = [], rerunStatus = 201, live } = {}) {
 
 const silent = { log: () => {}, error: () => {} };
 const noSummary = () => {};
-const run = (env, fetchStub) => retryCancelledCiRun({
-  env, fetchImpl: fetchStub.impl, logger: silent, writeSummary: noSummary,
+/** No suite ever sleeps — the production wait is always replaced. */
+const noWait = async () => {};
+/** ...and `waits` records what the delay WOULD have been. */
+const fakeClock = () => {
+  const waits = [];
+  return { waits, wait: async (ms) => { waits.push(ms); } };
+};
+const invoke = (options) => retryCancelledCiRun({
+  logger: silent, writeSummary: noSummary, wait: noWait, ...options,
 });
+const run = (env, fetchStub) => invoke({ env, fetchImpl: fetchStub.impl });
 
 describe('retryTargetFromEnv', () => {
   it('accepts a well-formed workflow_run environment', () => {
@@ -167,9 +180,8 @@ describe('retryCancelledCiRun guards', () => {
       if (url.includes('/jobs?')) return json(pages[new URL(url).searchParams.get('page')]);
       return json({ workflow_runs: [] });
     });
-    await expect(retryCancelledCiRun({
-      env: BASE_ENV, fetchImpl: impl, logger: silent, writeSummary: noSummary,
-    })).resolves.toMatchObject({ outcome: 'skipped', reason: 'job-failed' });
+    await expect(invoke({ env: BASE_ENV, fetchImpl: impl }))
+      .resolves.toMatchObject({ outcome: 'skipped', reason: 'job-failed' });
   });
 
   it('never lets a pull-request job name forge an Actions workflow command', async () => {
@@ -179,11 +191,10 @@ describe('retryCancelledCiRun guards', () => {
     const fetchStub = stubFetch({
       jobs: [{ name: 'Server\n::add-mask::secret', conclusion: 'failure' }],
     });
-    await retryCancelledCiRun({
+    await invoke({
       env: BASE_ENV,
       fetchImpl: fetchStub.impl,
       logger: { log: (l) => logged.push(l), error: (l) => logged.push(l) },
-      writeSummary: noSummary,
     });
 
     const text = logged.join('\n');
@@ -221,9 +232,8 @@ describe('retryCancelledCiRun guards', () => {
       if (url.includes('/runs?')) return json({ workflow_runs: [] });
       return { ok: false, status: 500 };
     });
-    await expect(retryCancelledCiRun({
-      env: BASE_ENV, fetchImpl: impl, logger: silent, writeSummary: noSummary,
-    })).resolves.toMatchObject({ outcome: 'unavailable', reason: 'run-state-unavailable' });
+    await expect(invoke({ env: BASE_ENV, fetchImpl: impl }))
+      .resolves.toMatchObject({ outcome: 'unavailable', reason: 'run-state-unavailable' });
     expect(impl.mock.calls.some(([url]) => url.endsWith('/rerun'))).toBe(false);
   });
 
@@ -242,9 +252,8 @@ describe('retryCancelledCiRun guards', () => {
     const impl = vi.fn(async (url) => (url.includes('/jobs?')
       ? { ok: false, status: 502 }
       : json({ workflow_runs: [] })));
-    await expect(retryCancelledCiRun({
-      env: BASE_ENV, fetchImpl: impl, logger: silent, writeSummary: noSummary,
-    })).resolves.toMatchObject({ outcome: 'unavailable', reason: 'jobs-unavailable' });
+    await expect(invoke({ env: BASE_ENV, fetchImpl: impl }))
+      .resolves.toMatchObject({ outcome: 'unavailable', reason: 'jobs-unavailable' });
     expect(impl.mock.calls.some(([url]) => url.endsWith('/rerun'))).toBe(false);
   });
 
@@ -254,9 +263,8 @@ describe('retryCancelledCiRun guards', () => {
     const impl = vi.fn(async (url) => (url.includes('/jobs?')
       ? json({ total_count: 40, jobs: [] })
       : json({ workflow_runs: [] })));
-    await expect(retryCancelledCiRun({
-      env: BASE_ENV, fetchImpl: impl, logger: silent, writeSummary: noSummary,
-    })).resolves.toMatchObject({ outcome: 'unavailable', reason: 'jobs-unavailable' });
+    await expect(invoke({ env: BASE_ENV, fetchImpl: impl }))
+      .resolves.toMatchObject({ outcome: 'unavailable', reason: 'jobs-unavailable' });
   });
 
   it('does not retry when the sibling-run listing cannot be read', async () => {
@@ -265,16 +273,14 @@ describe('retryCancelledCiRun guards', () => {
       if (url.includes('/jobs?')) return json({ total_count: 0, jobs: [] });
       return json({ run_attempt: 1, status: 'completed', conclusion: 'cancelled' });
     });
-    await expect(retryCancelledCiRun({
-      env: BASE_ENV, fetchImpl: impl, logger: silent, writeSummary: noSummary,
-    })).resolves.toMatchObject({ outcome: 'unavailable', reason: 'sibling-runs-unavailable' });
+    await expect(invoke({ env: BASE_ENV, fetchImpl: impl }))
+      .resolves.toMatchObject({ outcome: 'unavailable', reason: 'sibling-runs-unavailable' });
   });
 
   it('survives a network failure without throwing', async () => {
     const impl = vi.fn(async () => { throw new Error('socket hang up'); });
-    await expect(retryCancelledCiRun({
-      env: BASE_ENV, fetchImpl: impl, logger: silent, writeSummary: noSummary,
-    })).resolves.toMatchObject({ outcome: 'unavailable' });
+    await expect(invoke({ env: BASE_ENV, fetchImpl: impl }))
+      .resolves.toMatchObject({ outcome: 'unavailable' });
   });
 
   it('reports a rejected rerun rather than claiming success', async () => {
@@ -288,10 +294,9 @@ describe('retryCancelledCiRun guards', () => {
     // and the summary must never echo the attacker-controlled branch name.
     const written = [];
     const fetchStub = stubFetch({ runs: [{ id: 5000, run_number: 901 }] });
-    await retryCancelledCiRun({
+    await invoke({
       env: { ...BASE_ENV, CI_RUN_HEAD_BRANCH: 'evil <img src=x>' },
       fetchImpl: fetchStub.impl,
-      logger: silent,
       writeSummary: (markdown) => written.push(markdown),
     });
 
@@ -302,8 +307,172 @@ describe('retryCancelledCiRun guards', () => {
   });
 });
 
+describe('the wait before re-dispatching', () => {
+  // The cancel this recovers from is caused by a saturated queue, so the
+  // one-retry budget is worth least at the instant the event arrives (7439).
+  // Every test injects the clock — a real five-minute sleep in CI is not a
+  // test, it is an outage.
+
+  it('waits the full delay, and re-dispatches only afterwards', async () => {
+    const fetchStub = stubFetch({ runs: [{ id: 4242, run_number: 900 }] });
+    const seenBeforeWait = [];
+    const clock = fakeClock();
+
+    await expect(invoke({
+      env: BASE_ENV,
+      fetchImpl: fetchStub.impl,
+      wait: async (ms) => {
+        seenBeforeWait.push(...fetchStub.calls.map((call) => call.url));
+        await clock.wait(ms);
+      },
+    })).resolves.toMatchObject({ outcome: 'requested', phase: 'after-wait' });
+
+    expect(clock.waits).toEqual([RETRY_DELAY_MS]);
+    expect(seenBeforeWait.some((url) => url.endsWith('/rerun'))).toBe(false);
+  });
+
+  it('lets a supersession that lands DURING the wait win', async () => {
+    // This is the re-check the delay exists for: the pre-wait listing said
+    // there was no successor, and a push five minutes later must still
+    // cancel the retry rather than re-running code nobody is waiting on.
+    let pushedDuringWait = false;
+    const impl = vi.fn(async (url) => {
+      if (url.includes('/jobs?')) return json({ total_count: 0, jobs: [] });
+      if (url.includes('/runs?')) {
+        return json({
+          workflow_runs: pushedDuringWait
+            ? [{ id: 5000, run_number: 901, head_repository: { id: 555 } }]
+            : [],
+        });
+      }
+      return json({ run_attempt: 1, status: 'completed', conclusion: 'cancelled' });
+    });
+
+    await expect(invoke({
+      env: BASE_ENV,
+      fetchImpl: impl,
+      wait: async () => { pushedDuringWait = true; },
+    })).resolves.toMatchObject({ outcome: 'skipped', reason: 'superseded', phase: 'after-wait' });
+    expect(impl.mock.calls.some(([url]) => url.endsWith('/rerun'))).toBe(false);
+  });
+
+  it('lets a human re-run that lands DURING the wait keep the budget', async () => {
+    let rerunByHuman = false;
+    const impl = vi.fn(async (url) => {
+      if (url.includes('/jobs?')) return json({ total_count: 0, jobs: [] });
+      if (url.includes('/runs?')) return json({ workflow_runs: [] });
+      return json({
+        run_attempt: rerunByHuman ? 2 : 1, status: 'completed', conclusion: 'cancelled',
+      });
+    });
+
+    await expect(invoke({
+      env: BASE_ENV,
+      fetchImpl: impl,
+      wait: async () => { rerunByHuman = true; },
+    })).resolves.toMatchObject({ outcome: 'skipped', reason: 'run-state-moved-on', phase: 'after-wait' });
+    expect(impl.mock.calls.some(([url]) => url.endsWith('/rerun'))).toBe(false);
+  });
+
+  it('does not hold a runner idle for a run that is already ineligible', async () => {
+    // Skipping before the wait is what keeps the delay cheap: a genuinely red
+    // run costs one API call, not five minutes of occupancy.
+    const clock = fakeClock();
+    await expect(invoke({
+      env: BASE_ENV,
+      fetchImpl: stubFetch({ jobs: [{ name: 'Server tests', conclusion: 'failure' }] }).impl,
+      wait: clock.wait,
+    })).resolves.toMatchObject({ outcome: 'skipped', reason: 'job-failed', phase: 'before-wait' });
+    expect(clock.waits).toEqual([]);
+  });
+
+  it('does not forfeit the retry when a PRE-wait lookup merely fails', async () => {
+    // The pre-wait pass is an optimization, not a verdict: a 5xx there is not
+    // evidence of ineligibility, and a saturated GitHub — the exact condition
+    // this workflow exists for — is when one is likeliest. Skipping on it
+    // would lose the very case the delay was added to win.
+    let apiRecovered = false;
+    const impl = vi.fn(async (url) => {
+      if (!apiRecovered) return { ok: false, status: 502 };
+      if (url.includes('/jobs?')) return json({ total_count: 0, jobs: [] });
+      if (url.includes('/runs?')) return json({ workflow_runs: [] });
+      if (url.endsWith('/rerun')) return { ok: true, status: 201 };
+      return json({ run_attempt: 1, status: 'completed', conclusion: 'cancelled' });
+    });
+
+    await expect(invoke({
+      env: BASE_ENV,
+      fetchImpl: impl,
+      wait: async () => { apiRecovered = true; },
+    })).resolves.toMatchObject({ outcome: 'requested', phase: 'after-wait' });
+    expect(impl.mock.calls.some(([url]) => url.endsWith('/rerun'))).toBe(true);
+  });
+
+  it('still fails CLOSED when the POST-wait lookup cannot be read', async () => {
+    // The other half of the rule above: falling through a pre-wait failure may
+    // only ever cost time. The pass the dispatch is actually made on must
+    // still refuse to treat an unreadable listing as "no job failed".
+    const impl = vi.fn(async () => ({ ok: false, status: 502 }));
+    await expect(invoke({ env: BASE_ENV, fetchImpl: impl }))
+      .resolves.toMatchObject({ outcome: 'unavailable', reason: 'jobs-unavailable', phase: 'after-wait' });
+    expect(impl.mock.calls.some(([url]) => url.endsWith('/rerun'))).toBe(false);
+  });
+
+  it('catches a job whose failure only settles DURING the wait', async () => {
+    // The fail-fast self-cancel can land while the failing job is still in its
+    // post-steps, so the pre-wait listing can legitimately read clean. The
+    // post-wait re-read is the more reliable one, and must block the retry.
+    let stepsSettled = false;
+    const impl = vi.fn(async (url) => {
+      if (url.includes('/jobs?')) {
+        return json({
+          total_count: 1,
+          jobs: [{
+            name: 'Server tests',
+            conclusion: 'cancelled',
+            steps: stepsSettled ? [{ conclusion: 'failure' }] : [{ conclusion: 'success' }],
+          }],
+        });
+      }
+      if (url.includes('/runs?')) return json({ workflow_runs: [] });
+      return json({ run_attempt: 1, status: 'completed', conclusion: 'cancelled' });
+    });
+
+    await expect(invoke({
+      env: BASE_ENV,
+      fetchImpl: impl,
+      wait: async () => { stepsSettled = true; },
+    })).resolves.toMatchObject({ outcome: 'skipped', reason: 'job-failed', phase: 'after-wait' });
+    expect(impl.mock.calls.some(([url]) => url.endsWith('/rerun'))).toBe(false);
+  });
+
+  it('records the phase and the delay it used on the run summary', async () => {
+    // The tuning evidence this issue asks for: a summary written under a
+    // since-changed constant must still say which delay produced it.
+    const written = [];
+    await invoke({
+      env: BASE_ENV,
+      fetchImpl: stubFetch({ runs: [{ id: 4242, run_number: 900 }] }).impl,
+      writeSummary: (markdown) => written.push(markdown),
+    });
+    expect(written[0]).toContain('phase: after-wait');
+    expect(written[0]).toContain(`delay: ${RETRY_DELAY_MS / 1000}s`);
+  });
+});
+
 describe('ci-cancel-recovery.yml wiring', () => {
   const jobs = workflowJobs(RECOVERY_WORKFLOW);
+
+  it('gives the recovery job a timeout that outlives the wait AND both guard passes', () => {
+    // The job idles for RETRY_DELAY_MS and then re-reads every guard, so the
+    // bound that matters is MAX_RUNTIME_MS, not the delay alone — a timeout
+    // between the two would kill a slow run mid-wait and silently turn
+    // 'retried late' into 'never retried at all'. Asserting the derived bound
+    // is what makes raising the delay fail here instead of eating the margin.
+    const timeoutMinutes = Number(jobs.retry.match(/^\s+timeout-minutes:\s*(\d+)\s*$/m)?.[1]);
+    expect(Number.isFinite(timeoutMinutes)).toBe(true);
+    expect(timeoutMinutes * 60_000).toBeGreaterThan(MAX_RUNTIME_MS);
+  });
 
   it('triggers on a completed CI run and nothing else', () => {
     expect(RECOVERY_WORKFLOW).toMatch(/on:\n {2}workflow_run:\n {4}workflows: \[CI\]\n {4}types: \[completed\]/);
