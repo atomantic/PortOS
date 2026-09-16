@@ -141,4 +141,16 @@ describe('clearStaleGitLocksIn', () => {
     expect(clearStaleGitLocksIn(pointerFile)).toEqual([shared]);
     expect(existsSync(shared)).toBe(false);
   });
+
+  it('treats a .git file naming no gitdir as no repository at all', () => {
+    // Resolving this to the file's own directory would point the walk at the
+    // WORKING TREE and sweep the whole checkout.
+    const stray = writeLock('tree/.git-is-broken/x.lock', ABANDONED);
+    mkdirSync(join(dir, 'tree'), { recursive: true });
+    const pointerFile = join(dir, 'tree/.git');
+    writeFileSync(pointerFile, 'not a gitdir line\n');
+
+    expect(clearStaleGitLocksIn(pointerFile)).toEqual([]);
+    expect(existsSync(stray)).toBe(true);
+  });
 });

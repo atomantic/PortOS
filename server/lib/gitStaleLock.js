@@ -173,9 +173,15 @@ export function clearStaleGitLocksIn(gitDir) {
  */
 function resolveCommonGitDir(gitPath) {
   if (typeof gitPath !== 'string' || !existsSync(gitPath)) return null;
-  const pointer = statSync(gitPath).isDirectory()
-    ? gitPath
-    : resolve(dirname(gitPath), readFileSync(gitPath, 'utf8').match(/^gitdir:\s*(.+)$/m)?.[1].trim() ?? '');
+  let pointer = gitPath;
+  if (!statSync(gitPath).isDirectory()) {
+    // A `.git` file that names no gitdir is not a repository. Returning the
+    // file's own directory here would resolve to the WORKING TREE and walk the
+    // whole checkout looking for locks.
+    const target = readFileSync(gitPath, 'utf8').match(/^gitdir:\s*(\S.*)$/m)?.[1].trim();
+    if (!target) return null;
+    pointer = resolve(dirname(gitPath), target);
+  }
   if (!existsSync(pointer) || !statSync(pointer).isDirectory()) return null;
   const commondir = join(pointer, 'commondir');
   return existsSync(commondir)
