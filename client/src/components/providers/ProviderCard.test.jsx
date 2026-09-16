@@ -320,3 +320,51 @@ describe('ProviderCard delete confirmation', () => {
     expect(screen.getByText(/Both its CLI and TUI modes are removed/)).toBeTruthy();
   });
 });
+
+describe('ProviderCard "Add interactive mode"', () => {
+  const cliRecord = (overrides = {}) => wrapper({
+    id: 'opencode-cli', name: 'OpenCode CLI', type: 'cli', canAddTuiMode: true, ...overrides,
+  });
+
+  it('offers the action on an unpaired CLI record and hands the whole provider to the page', () => {
+    // The record already carries the command, endpoint, credentials and env the
+    // sibling needs — the click is the whole interaction, not a pre-filled form.
+    const onAddTuiMode = vi.fn();
+    const provider = cliRecord();
+    renderCard(provider, null, { onAddTuiMode });
+    fireEvent.click(screen.getByRole('button', { name: /Add interactive mode/ }));
+    expect(onAddTuiMode).toHaveBeenCalledWith(provider);
+  });
+
+  it('offers nothing on an already-unified card, a TUI record, or an api record', () => {
+    const expectNoAction = () => expect(screen.queryByRole('button', { name: /Add interactive mode/ })).toBeNull();
+
+    // Unified: the pair exists, so there is nothing to add. Flagged `true` on
+    // purpose — the server would never say so, and this pins that a card
+    // rendering a stale list still refuses rather than offering a second TUI.
+    const cli = cliRecord();
+    const tui = wrapper({ id: 'opencode-tui', name: 'OpenCode TUI' });
+    renderCard(
+      { ...cli, executionModes: [{ id: 'opencode-cli' }, { id: 'opencode-tui' }] },
+      null,
+      { providersById: { 'opencode-cli': cli, 'opencode-tui': tui } },
+    );
+    expectNoAction();
+
+    // A TUI record: the CLI id is the stem, so minting it here is a rename.
+    renderCard(wrapper());
+    expectNoAction();
+
+    renderCard(wrapper({ id: 'openai', name: 'OpenAI', type: 'api' }));
+    expectNoAction();
+  });
+
+  it('shows the in-flight state rather than letting a second click mint twice', () => {
+    const onAddTuiMode = vi.fn();
+    renderCard(cliRecord(), null, { onAddTuiMode, addingTuiMode: true });
+    const button = screen.getByRole('button', { name: /Adding/ });
+    expect(button.disabled).toBe(true);
+    fireEvent.click(button);
+    expect(onAddTuiMode).not.toHaveBeenCalled();
+  });
+});

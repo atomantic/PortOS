@@ -109,7 +109,10 @@ export default function ProviderForm({ provider, daemonReadiness = null, onClose
   // back out of every payload.
   //
   // Editing never offers it: pairing describes two records being created
-  // together, which a save against one existing record cannot mean.
+  // together, which a save against one existing record cannot mean. An existing
+  // CLI record gains its TUI sibling from the card's "Add interactive mode"
+  // instead (`POST /api/providers/:id/modes/tui`), which mints it from what is
+  // already stored rather than from a re-submitted form.
   const canPairModes = !provider && formData.type === 'cli';
   const [alsoTui, setAlsoTui] = useState(false);
   const [tuiArgs, setTuiArgs] = useState('');

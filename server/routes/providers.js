@@ -1,4 +1,5 @@
 import { providerModeGroups } from '../lib/aiToolkit/internal/providerModes.js';
+import { canAddTuiMode, tuiModeAddition } from '../lib/providerModePairing.js';
 import { buildProviderGraphPreview, toManagementPreviewDto } from '../lib/providerGraphPreview.js';
 import {
   createBinding,
@@ -270,6 +271,12 @@ export function createPortOSProviderRoutes(aiToolkit) {
       providers: data.providers.map((provider) => ({
         ...presentProvider(provider, capabilities),
         executionModes: modeGroups.get(provider.id),
+        // Whether this record can be COMPLETED into a CLI/TUI pair. Derived
+        // here rather than on the record alone because the verdict reads the
+        // whole list (the sibling id must be free), and decided server-side for
+        // the same reason `prerequisitesMet` is: the card offering the action
+        // and the endpoint performing it must not re-derive the rule apart.
+        canAddTuiMode: canAddTuiMode(provider, data.providers),
         prerequisitesMet: prerequisites[provider.id]?.met ?? true,
         missingPrerequisites: prerequisites[provider.id]?.missing ?? [],
         // NON-blocking notices — today only 'this install's own ~/.codex/config.toml
@@ -928,6 +935,35 @@ export function createPortOSProviderRoutes(aiToolkit) {
     }
     if (!provider) throw new ServerError('Provider not found', { status: 404 });
     res.json(presentProvider(provider, await detectSystemCapabilities()));
+  }));
+
+  /**
+   * POST /:id/modes/tui — give an existing CLI record the TUI half of its
+   * harness, minted from the record already on disk.
+   *
+   * A NEW endpoint rather than a flag on `PUT /:id`, because `modes` is
+   * deliberately create-only: a PATCH against one record cannot mean "make me
+   * two". `:id` names the record the sibling is DERIVED from, and the sibling
+   * is built from what is stored — the user does not retype the command,
+   * endpoint, credentials and env that `providerModeGroups` then has to find
+   * identical on both halves.
+   *
+   * There is no request body: every field either comes from the stored record
+   * or from the harness recipe. The new record is editable like any other
+   * afterwards.
+   */
+  router.post('/:id/modes/tui', asyncHandler(async (req, res) => {
+    const { providers } = await providerService.getAllProviders();
+    const stored = providers.find(provider => provider.id === req.params.id);
+    if (!stored) throw new ServerError('Provider not found', { status: 404 });
+
+    // The same verdict the list decorated this record with, so a card can only
+    // ever offer an action this endpoint accepts.
+    const verdict = tuiModeAddition(stored, providers);
+    if (!verdict.ok) throw new ServerError(verdict.message, { status: verdict.status, code: verdict.code });
+
+    const created = await providerService.createProviderTuiMode(stored.id, { args: verdict.args });
+    res.status(201).json(presentProvider(created, await detectSystemCapabilities()));
   }));
 
   // POST / — intercept to (a) validate the body against providerCreateSchema so

@@ -824,6 +824,39 @@ export function createProviderService(config = {}) {
       return created;
     },
 
+    /**
+     * Complete an existing CLI record's harness by minting its TUI sibling.
+     *
+     * The sibling is built from the STORED record, never from a re-submitted
+     * form: retyping the command, endpoint, credentials and env is exactly the
+     * friction a dual-mode create removed for a provider being added, and a
+     * second hand-entry is also a second chance for a grouped field to differ
+     * and leave two unrelated routes. Everything but the mode's own argv comes
+     * across unchanged, which is what makes the result groupable.
+     *
+     * Routed through {@link expandModePair} so the `<stem>` / `<stem>-tui` id
+     * and name convention has ONE writer whether a pair is born together or
+     * completed later. The CLI id is already fixed, so a taken sibling id is
+     * not a collision to suffix around — it is something else already standing
+     * there, and this throws rather than guessing.
+     *
+     * @param {string} id - the CLI record to derive from
+     * @param {object} [tuiOverrides] - mode-specific fields, typically `args`
+     * @returns {Promise<object|null>} the created TUI record, or `null` when `id` names no record
+     */
+    async createProviderTuiMode(id, tuiOverrides = {}) {
+      const data = await loadProviders();
+      const stored = data.providers[id];
+      if (!stored) return null;
+      if (stored.type !== 'cli') throw new Error('Only a CLI provider can gain a TUI mode');
+
+      const [, tuiData] = expandModePair({ ...stored, modes: { cli: {}, tui: tuiOverrides } });
+      const created = buildProviderRecord(data.providers, tuiData);
+      storeProviderRecords(data, [created]);
+      await saveProviders(data);
+      return created;
+    },
+
     async updateProvider(id, updates) {
       const data = await loadProviders();
 

@@ -16,6 +16,26 @@ const MODE_KEY_DEFAULTS = { endpoint: '', apiKey: '', envVars: {}, credentialBoo
  */
 export const MODE_GROUPED_KEYS = Object.freeze(['endpoint', 'apiKey', 'envVars', 'credentialBootstrap']);
 
+/**
+ * Fields that describe the CLI mode's own transport and must NOT ride along to
+ * the TUI sibling {@link expandModePair} mints beside it.
+ *
+ * `headlessArgs` is the non-interactive argv, meaningless to a PTY launch.
+ * `textTransport` and its two consents describe the Codex app-server path the
+ * CLI record speaks; copied onto the sibling they make a SECOND record answer
+ * `isCodexTextTransportEnabled`, so a text call could be routed to a record
+ * whose whole contract is "a human drives this in a terminal".
+ *
+ * Every key here must stay clear of {@link MODE_GROUPED_KEYS} — dropping one of
+ * those would mint a pair `providerModeGroups` then refuses to group.
+ */
+export const CLI_ONLY_KEYS = Object.freeze([
+  'headlessArgs',
+  'textTransport',
+  'textTransportEnabled',
+  'textTransportReadRiskAcknowledged',
+]);
+
 export function providerModeGroups(providers) {
   const byId = new Map(providers.map(provider => [provider.id, provider]));
   const paired = new Set();
@@ -129,8 +149,18 @@ export const modeSiblingName = (name, mode) => (mode === 'tui' ? `${name} TUI` :
  * mean adding the same command twice and hoping the two records happened to
  * satisfy the pairing rule above. This mints them in that shape by
  * construction: every {@link MODE_GROUPED_KEYS} field (and `command`) comes
- * from the shared body, and only `id`, `name`, `type` and the mode's own
+ * from the shared body, and only `id`, `name`, `type`, the
+ * {@link CLI_ONLY_KEYS} the TUI half must not inherit, and the mode's own
  * declared overrides differ.
+ *
+ * The shared body is the CLI mode's, so the drop is one-sided: a value declared
+ * explicitly under `modes.tui` still wins, because the per-mode overrides land
+ * after it.
+ *
+ * Also the minter for a TUI sibling added to an EXISTING CLI record — pass that
+ * record as the body with `modes: { cli: {}, tui: overrides }` and take the
+ * second payload. The id/name convention then has exactly one writer whether a
+ * pair is born together or completed later.
  *
  * @param {{modes?:Record<string,object>, id?:string, name:string}} providerData
  * @returns {object[]|null} one create payload per mode, CLI first
@@ -141,9 +171,10 @@ export function expandModePair(providerData) {
 
   const { modes: _modes, ...shared } = providerData;
   const stem = shared.id || String(shared.name).toLowerCase().replace(/[^a-z0-9]/g, '-');
+  const tuiShared = Object.fromEntries(Object.entries(shared).filter(([key]) => !CLI_ONLY_KEYS.includes(key)));
 
   return ['cli', 'tui'].map((mode) => ({
-    ...shared,
+    ...(mode === 'tui' ? tuiShared : shared),
     ...modes[mode],
     id: modeSiblingId(stem, mode),
     name: modeSiblingName(shared.name, mode),
