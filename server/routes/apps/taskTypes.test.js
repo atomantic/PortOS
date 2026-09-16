@@ -32,6 +32,14 @@ vi.mock('../../services/layeredIntelligenceOutcomes.js', () => ({
 vi.mock('../../services/workItems.js', () => ({
   listWorkItems: vi.fn()
 }));
+
+// The quality-schedule planner has its own suite (repo scanning, busy-window
+// collection, plan placement); here only the route's validation and wiring are
+// under test, so the service is a double.
+vi.mock('../../services/appQualitySchedule.js', () => ({
+  buildQualitySchedulePlan: vi.fn(),
+  applyQualitySchedulePlan: vi.fn()
+}));
 vi.mock('../../services/cosTaskGenerator.js', async (importActual) => ({
   ...(await importActual()),
   resolveClaimWorkMetadata: vi.fn(),
@@ -41,6 +49,7 @@ vi.mock('../../services/cosTaskGenerator.js', async (importActual) => ({
 import * as appsService from '../../services/apps.js';
 import { listOutcomesResult } from '../../services/layeredIntelligenceOutcomes.js';
 import { listWorkItems } from '../../services/workItems.js';
+import { buildQualitySchedulePlan, applyQualitySchedulePlan } from '../../services/appQualitySchedule.js';
 import { resolveClaimWorkMetadata, resolveAppClaimReviewers } from '../../services/cosTaskGenerator.js';
 
 describe('Apps Task-Type Routes', () => {
@@ -500,6 +509,56 @@ describe('Apps Task-Type Routes', () => {
         .send({ enabled: true });
 
       expect(response.status).toBe(404);
+    });
+  });
+
+  describe('quality schedule planning', () => {
+    const plan = { checksPerDay: 1, slots: [{ taskType: 'security', day: 1, hour: 9, cron: '0 9 * * 1', fileIssues: true }], claim: null, warnings: [], options: {} };
+    const payload = { appId: 'app-001', appName: 'App', plan, checks: [], capabilities: {}, scanned: 10, busySources: [], claimTaskTypes: ['claim-work'] };
+
+    beforeEach(() => {
+      appsService.getAppById.mockResolvedValue({ id: 'app-001', name: 'App' });
+      buildQualitySchedulePlan.mockResolvedValue(payload);
+      applyQualitySchedulePlan.mockResolvedValue({ ...payload, applied: 1, disabled: 25 });
+    });
+
+    it('serves the service payload verbatim, adding nothing of its own', async () => {
+      const response = await request(app).get('/api/apps/app-001/quality-schedule');
+      expect(response.status).toBe(200);
+      expect(response.body).toEqual(payload);
+      expect(buildQualitySchedulePlan).toHaveBeenCalledWith({ id: 'app-001', name: 'App' });
+    });
+
+    it('routes a preview to the planner, never to the writer', async () => {
+      const response = await request(app)
+        .post('/api/apps/app-001/quality-schedule/preview')
+        .send({ taskTypes: ['security'], checksPerDay: 2, fileIssuesByType: { security: false } });
+      expect(response.status).toBe(200);
+      expect(buildQualitySchedulePlan.mock.calls[0][1]).toMatchObject({ taskTypes: ['security'], checksPerDay: 2, fileIssuesByType: { security: false } });
+      expect(applyQualitySchedulePlan).not.toHaveBeenCalled();
+    });
+
+    it('refuses a task type that is not an audit, so a form cannot rewrite the release cadence', async () => {
+      const response = await request(app)
+        .post('/api/apps/app-001/quality-schedule/apply')
+        .send({ taskTypes: ['release-check'] });
+      expect(response.status).toBe(400);
+      expect(applyQualitySchedulePlan).not.toHaveBeenCalled();
+    });
+
+    it('applies the plan and records the schedule change in the operator ledger', async () => {
+      const response = await request(app)
+        .post('/api/apps/app-001/quality-schedule/apply')
+        .send({ taskTypes: ['security'], claimBetween: false });
+      expect(response.status).toBe(200);
+      expect(response.body).toMatchObject({ success: true, applied: 1, disabled: 25 });
+      expect(applyQualitySchedulePlan.mock.calls[0][1]).toMatchObject({ taskTypes: ['security'], claimBetween: false });
+      // The ledger entry is the audit trail for a write that rewrote every
+      // audit cadence on the app — a bare "was called" would not notice the
+      // counts going missing.
+      expect(recordUserAction).toHaveBeenCalledWith(expect.objectContaining({
+        payload: expect.objectContaining({ qualityPlan: true, applied: 1, disabled: 25 }),
+      }));
     });
   });
 });

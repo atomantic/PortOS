@@ -4,6 +4,10 @@ import { requireSlashdoSubmoduleInCi } from './testHelper.js';
 import {
   AUDIT_DEFINITIONS,
   AUDIT_TASK_TYPES,
+  AUDIT_TASK_TYPE_LIST,
+  AUDIT_REPO_CAPABILITIES,
+  AUDIT_CAPABILITY_MISSING_REASON,
+  auditCapabilityRequirement,
   FILE_ISSUES_MODE_CONTRACT,
   DO_WORK_MODE_CONTRACT,
   isAuditTaskType,
@@ -80,6 +84,26 @@ describe('AUDIT_DEFINITIONS', () => {
     expect(auditDoWorkRequiresWorktree('module-hygiene')).toBe(true);
     expect(auditDoWorkRequiresWorktree('simplify')).toBe(false);
     expect(auditDoWorkRequiresWorktree('unknown')).toBe(false);
+  });
+
+  it('names a known repository shape for every audit that requires one', () => {
+    for (const taskType of AUDIT_TASK_TYPE_LIST) {
+      const requirement = auditCapabilityRequirement(taskType);
+      if (requirement === null) continue;
+      expect(AUDIT_REPO_CAPABILITIES).toContain(requirement);
+      expect(AUDIT_CAPABILITY_MISSING_REASON[requirement]).toBeTruthy();
+    }
+    expect(auditCapabilityRequirement('accessibility')).toBe('ui');
+    expect(auditCapabilityRequirement('unknown')).toBeNull();
+    // Deliberately ungated: the repository with no tests is the one this audit
+    // has the most to say about. Its sibling assesses tests that exist.
+    expect(auditCapabilityRequirement('test-coverage')).toBeNull();
+    expect(auditCapabilityRequirement('better-test-quality')).toBe('tests');
+  });
+
+  it('enumerates the audits in catalog order without a second vocabulary', () => {
+    expect(AUDIT_TASK_TYPE_LIST).toEqual([...AUDIT_TASK_TYPES]);
+    expect(AUDIT_TASK_TYPE_LIST.every(isAuditTaskType)).toBe(true);
   });
 });
 

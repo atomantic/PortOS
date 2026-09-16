@@ -33,6 +33,7 @@ export * as characterEvolutionValidation from './characterEvolutionValidation.js
 export * as cosValidation from './cosValidation.js';
 // Flat: validation.js re-exports these same bindings, and the barrel's collision
 // check treats an identical identity as a re-export rather than a clash.
+export * from './cronFields.js';
 export * from './cronValidation.js';
 export * from './cosToolContracts.js';
 export * as creativeCommissionValidation from './creativeCommissionValidation.js';
@@ -221,6 +222,7 @@ export * from './publicReviewSpawnGate.js';
 // duplicate-identifier collision check.
 export * as reviewerConfig from './reviewerConfig.js';
 export * from './reviewerProviderMatchers.js';
+export * from './qualitySchedulePlan.js';
 export * from './quotaBurnConfig.js';
 export * from './quotaBurnLegacyConversion.js';
 export * from './quotaBurnOrigin.js';

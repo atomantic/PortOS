@@ -9,6 +9,9 @@
  *   GET  /:id/claim-reviewers        → { source, reviewers, csv, … }
  *   GET  /:id/layered-intelligence           → { config, isPortos }
  *   GET  /:id/layered-intelligence/outcomes  → { stats, execution, metrics, approvalFunnel, rejections, recent }
+ *   GET  /:id/quality-schedule                 → { checks, capabilities, plan, busySources }
+ *   POST /:id/quality-schedule/preview         → { checks, capabilities, plan, busySources }
+ *   POST /:id/quality-schedule/apply           → { success, plan, applied, disabled }
  *   PUT  /:id/task-types/all         → { success, taskTypeOverrides }
  *   PUT  /:id/task-types/:taskType   → { success, taskTypeOverrides }
  *
@@ -20,7 +23,8 @@ import { Router } from 'express';
 import { logCosScheduleUpdate } from '../../services/userActionScheduleLog.js';
 import * as appsService from '../../services/apps.js';
 import { PORTOS_APP_ID } from '../../services/apps.js';
-import { sanitizeTaskMetadata, ISSUE_AUTHOR_FILTERS } from '../../lib/validation.js';
+import { sanitizeTaskMetadata, ISSUE_AUTHOR_FILTERS, validateRequest, qualitySchedulePlanSchema } from '../../lib/validation.js';
+import { buildQualitySchedulePlan, applyQualitySchedulePlan } from '../../services/appQualitySchedule.js';
 import { listWorkItems } from '../../services/workItems.js';
 import { resolveClaimWorkMetadata, resolveClaimAuthorFilter, resolveAppClaimReviewers } from '../../services/cosTaskGenerator.js';
 import { INTERVAL_TYPES, decodeIntervalType, isCronExpression, isKnownIntervalType } from '../../services/taskScheduleConstants.js';
@@ -221,6 +225,39 @@ router.get('/:id/layered-intelligence/outcomes', loadApp, asyncHandler(async (re
     rejections,
     recent
   });
+}));
+
+// GET /api/apps/:id/quality-schedule - What the Quality tab's schedule form
+// renders from: every audit check with its applicability verdict and current
+// cadence, the repository shapes that verdict was derived from, the cron
+// expressions the planner has to work around, and the plan the shipped
+// defaults produce. Read-only — no LLM call, no schedule write.
+router.get('/:id/quality-schedule', loadApp, asyncHandler(async (req, res) => {
+  res.json(await buildQualitySchedulePlan(req.loadedApp));
+}));
+
+// POST /api/apps/:id/quality-schedule/preview - The same plan for a form the
+// user has edited. A POST rather than a query string because the option bag
+// carries a per-check delivery map; still a pure read, so it writes nothing.
+router.post('/:id/quality-schedule/preview', loadApp, asyncHandler(async (req, res) => {
+  const options = validateRequest(qualitySchedulePlanSchema, req.body || {});
+  res.json(await buildQualitySchedulePlan(req.loadedApp, options));
+}));
+
+// POST /api/apps/:id/quality-schedule/apply - Write the plan as ordinary
+// per-app task-type overrides. Every audit type is touched: the ones in the
+// plan get their cron and delivery mode, and the ones left out are DISABLED,
+// because the form is the whole picture of this app's quality cadence.
+router.post('/:id/quality-schedule/apply', loadApp, asyncHandler(async (req, res) => {
+  const options = validateRequest(qualitySchedulePlanSchema, req.body || {});
+  const result = await applyQualitySchedulePlan(req.loadedApp, options);
+  await logCosScheduleUpdate({
+    target: req.loadedApp.id,
+    patch: options,
+    source: { route: `${req.baseUrl}${req.route?.path ?? ''}`, method: req.method },
+    extra: { qualityPlan: true, applied: result.applied, disabled: result.disabled },
+  });
+  res.json({ success: true, ...result });
 }));
 
 // PUT /api/apps/:id/task-types/all - Toggle all task types for an app

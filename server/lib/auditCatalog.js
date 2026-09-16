@@ -83,6 +83,32 @@ This banner OVERRIDES any later instruction to file issues, leave source unchang
 If you find additional problems, mention them in the summary — do not expand scope. If nothing in the slice is worth changing, say so and stop without a drive-by refactor.`;
 
 /**
+ * Repository shapes an audit can REQUIRE to be worth running at all.
+ *
+ * An app that ships no user interface has nothing for an accessibility audit to
+ * look at, so scheduling one buys a weekly `coverage: not-applicable` report and
+ * a provider call. Each definition below may name one of these in
+ * `requiresCapability`; the DETECTION lives in
+ * `services/appQualitySchedule.js`, which is where the shapes are read off a
+ * checkout. The requirement lives here, beside the audit it describes, so a new
+ * audit cannot be added without the guard test asking the question.
+ *
+ * `test-coverage` is deliberately ungated: a repository with no tests is the
+ * one that audit has the most to say about. Its sibling `better-test-quality`
+ * IS gated, because it assesses tests that exist.
+ */
+export const AUDIT_REPO_CAPABILITIES = Object.freeze(['ui', 'typescript', 'tests', 'dependencies', 'api']);
+
+/** Why an app lacking the capability is not worth scheduling that audit for. */
+export const AUDIT_CAPABILITY_MISSING_REASON = Object.freeze({
+  ui: 'no user interface found in this repository',
+  typescript: 'no TypeScript sources found in this repository',
+  tests: 'no test files found in this repository',
+  dependencies: 'no dependency manifest found in this repository',
+  api: 'no HTTP route or API surface found in this repository',
+});
+
+/**
  * Scheduled audit types that support the file-issues vs do-work toggle.
  * `quotaBurnId` maps onto `QUOTA_BURN_PROMPT_PRESETS` so a new burn preset
  * cannot land without a scheduled counterpart (guarded in auditCatalog.test.js).
@@ -145,6 +171,7 @@ export const AUDIT_DEFINITIONS = Object.freeze({
     label: 'Accessibility',
     description: 'Accessibility audit — configurable: file issues or implement fixes',
     defaultFileIssues: false,
+    requiresCapability: 'ui',
     filing: filing({
       slugPrefix: 'a11y-',
       label: 'accessibility-audit',
@@ -171,6 +198,7 @@ export const AUDIT_DEFINITIONS = Object.freeze({
     label: 'UI bugs',
     description: 'Find UI bugs — configurable: file issues or implement fixes',
     defaultFileIssues: false,
+    requiresCapability: 'ui',
     filing: filing({
       slugPrefix: 'ui-bug-',
       label: 'ui-bug-audit',
@@ -184,6 +212,7 @@ export const AUDIT_DEFINITIONS = Object.freeze({
     label: 'Mobile & responsive',
     description: 'Mobile/responsive audit — configurable: file issues or implement fixes',
     defaultFileIssues: false,
+    requiresCapability: 'ui',
     filing: filing({
       slugPrefix: 'mobile-',
       label: 'mobile-audit',
@@ -210,6 +239,7 @@ export const AUDIT_DEFINITIONS = Object.freeze({
     label: 'Typing',
     description: 'TypeScript-types audit — configurable: file issues or implement fixes',
     defaultFileIssues: false,
+    requiresCapability: 'typescript',
     filing: filing({
       slugPrefix: 'typing-',
       label: 'typing-audit',
@@ -223,6 +253,7 @@ export const AUDIT_DEFINITIONS = Object.freeze({
     label: 'Console errors',
     description: 'Console-error audit — configurable: file issues or implement fixes',
     defaultFileIssues: false,
+    requiresCapability: 'ui',
     filing: filing({
       slugPrefix: 'console-',
       label: 'console-error-audit',
@@ -236,6 +267,7 @@ export const AUDIT_DEFINITIONS = Object.freeze({
     label: 'UX',
     description: 'UX/design audit — configurable: file issues (default) or implement fixes',
     defaultFileIssues: true,
+    requiresCapability: 'ui',
     filing: filing({
       slugPrefix: 'ux-',
       label: 'UX-audit',
@@ -289,6 +321,7 @@ export const AUDIT_DEFINITIONS = Object.freeze({
     label: 'API & route contracts',
     description: 'API contract audit — configurable: file issues (default) or implement fixes',
     defaultFileIssues: true,
+    requiresCapability: 'api',
     filing: filing({
       slugPrefix: 'api-contract-',
       label: 'api-contract-audit',
@@ -303,6 +336,7 @@ export const AUDIT_DEFINITIONS = Object.freeze({
     label: 'UI lifecycle & state',
     description: 'UI lifecycle audit — configurable: file issues (default) or implement fixes',
     defaultFileIssues: true,
+    requiresCapability: 'ui',
     filing: filing({
       slugPrefix: 'react-lifecycle-',
       label: 'react-lifecycle-audit',
@@ -332,6 +366,7 @@ export const AUDIT_DEFINITIONS = Object.freeze({
     label: 'Copy & text clarity',
     description: 'Copy-clarity audit — configurable: file issues (default) or implement rewrites',
     defaultFileIssues: true,
+    requiresCapability: 'ui',
     filing: filing({
       slugPrefix: 'copy-',
       label: 'copy-audit',
@@ -414,6 +449,7 @@ export const AUDIT_DEFINITIONS = Object.freeze({
     label: 'Dependency freedom',
     description: 'Dependency-necessity audit — configurable: file issues (default) or implement one removal',
     defaultFileIssues: true,
+    requiresCapability: 'dependencies',
     doWorkRequiresWorktree: true,
     filing: filing({
       slugPrefix: 'depfree-',
@@ -428,6 +464,7 @@ export const AUDIT_DEFINITIONS = Object.freeze({
     label: 'Test quality',
     description: 'Vacuous/weak/redundant-test audit — configurable: file issues (default) or implement one cleanup',
     defaultFileIssues: true,
+    requiresCapability: 'tests',
     filing: filing({
       slugPrefix: 'test-quality-',
       label: 'test-quality-audit',
@@ -439,6 +476,14 @@ export const AUDIT_DEFINITIONS = Object.freeze({
 });
 
 export const AUDIT_TASK_TYPES = new Set(Object.keys(AUDIT_DEFINITIONS));
+
+/**
+ * The same set as an ordered list, in catalog order. The Set answers
+ * membership; anything that has to ENUMERATE the audits — a request schema's
+ * enum, a schedule planner laying them out — reads this rather than re-deriving
+ * `Object.keys(AUDIT_DEFINITIONS)` and acquiring a second vocabulary.
+ */
+export const AUDIT_TASK_TYPE_LIST = Object.freeze([...AUDIT_TASK_TYPES]);
 
 /**
  * Check if a task type is an audit task registered in the catalog.
@@ -551,6 +596,18 @@ export const FILE_ISSUES_DELIVERY_SETTINGS = Object.freeze({
   openPR: false,
   simplify: false,
 });
+
+/**
+ * The repository shape this audit needs to be worth scheduling, or null when it
+ * applies to any repository. Catalog-owned like `doWorkRequiresWorktree`, so
+ * the schedule planner and the detection cannot drift from the audit itself.
+ *
+ * @param {string} taskType - Task type identifier
+ * @returns {string|null} A member of AUDIT_REPO_CAPABILITIES, or null
+ */
+export function auditCapabilityRequirement(taskType) {
+  return AUDIT_DEFINITIONS[taskType]?.requiresCapability || null;
+}
 
 /**
  * Retrieve filing preset configuration for an audit task type.

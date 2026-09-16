@@ -101,6 +101,9 @@ legacy list for local Apps/Dashboard views.
 | GET | `/apps/:id/logs` | Get recent logs |
 | POST | `/apps/:id/refresh-config` | Re-parse ecosystem config |
 | POST | `/apps/:id/quality-snapshot` | Rebuild the app's numeric quality snapshot and commit it to `.quality.json` at its repo root (staged and committed as that one path; never pushed). Answers `{ success, published, path }` plus the commit `hash`, or a `reason` of `no-repo-path` / `not-a-repo` / `no-evidence` / `no-changes` when nothing was written. Not gated on the app's `publishQualitySnapshot` toggle — that toggle only automates the same publish after each audit. Any app's committed `.quality.json` is read back as a "Release snapshot" quality source, PortOS's own checkout included (`npm run quality:snapshot` is the same publish, run from the release step). |
+| GET | `/apps/:id/quality-schedule` | The Quality tab's weekly-schedule form: every audit check with its applicability verdict and reason, the repository shapes that verdict came from, the cron expressions already occupied on this app, and the plan the shipped defaults produce. Read-only — no LLM call, no write. |
+| POST | `/apps/:id/quality-schedule/preview` | Re-plan for an edited form (selection, per-check delivery mode, checks per day, hour window, claim-drain task and offset). Still read-only; a POST only because the option bag carries a per-check map. |
+| POST | `/apps/:id/quality-schedule/apply` | Persist the plan as ordinary per-app task-type overrides: the selected checks enabled with their weekly cron and `fileIssues` mode, the audit types left out disabled with their interval cleared, and — when at least one selected check files issues — one daily cron for the issue-claim drain (one an earlier plan planted is retired when it is switched off or replaced). Other task types are untouched. |
 
 ### Processes & Logs
 

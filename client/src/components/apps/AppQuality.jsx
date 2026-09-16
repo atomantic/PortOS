@@ -1,5 +1,6 @@
 import AppQualityRunner from './AppQualityRunner';
 import AppQualityHistory from './AppQualityHistory';
+import AppQualityScheduleForm from './AppQualityScheduleForm';
 import { Fragment, useState } from 'react';
 import { Link, useSearchParams } from 'react-router';
 import { formatDateShort } from '../../utils/formatters';
@@ -110,6 +111,7 @@ export default function AppQuality({ app, detail = false }) {
       <div className="grid grid-cols-1 xl:grid-cols-2 gap-5 items-start">
       <div className="min-w-0 space-y-4">
         {!selectedCategory && runner}
+        <AppQualityScheduleForm app={app} />
         <AppQualityHistory appId={app.id} categories={quality?.categories} />
       </div>
       {!!quality?.categories?.length && (
