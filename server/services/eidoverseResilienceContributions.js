@@ -46,8 +46,12 @@ export async function listContributionModulePaths() {
  */
 export async function loadContributionModule(modulePath) {
   const mod = await import(pathToFileURL(modulePath).href);
-  const factory = mod.default || Object.values(mod).find((value) => typeof value === 'function');
-  if (typeof factory !== 'function') throw new Error(`${modulePath} does not export a contribution factory function`);
+  // A lone named export stands in for a default; SEVERAL do not. Picking "the
+  // first function" out of an ordinary multi-export module would silently call
+  // something that is not a factory at all and hand back its return value.
+  const named = Object.values(mod).filter((value) => typeof value === 'function');
+  const factory = typeof mod.default === 'function' ? mod.default : (named.length === 1 ? named[0] : null);
+  if (!factory) throw new Error(`${modulePath} must export a default contribution factory, or exactly one named function (found ${named.length})`);
   return factory();
 }
 

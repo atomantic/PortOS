@@ -697,8 +697,13 @@ like itself — palette, motif, asset paths, placement, district, display aliase
 Packaging carries `body` and drops `style` outright, which is what makes "a peer
 inherits the foundation without the author's cosmetics overwriting its own style
 layer" a property of the payload rather than a merge rule a receiver has to get
-right. A style-only key found *inside* `body` **refuses** the package instead of
-being silently trimmed.
+right. On top of that split there is an authoring check: an unambiguously
+cosmetic key found *inside* `body` (`palette`, `motif`, `accent`, `color`,
+`material`, `texture`, a label alias) **refuses** the package rather than being
+silently trimmed, so "I put the palette in `body` and expected peers to get it"
+gets named. Spatial and asset-binding keys (`pos`, `yaw`, `lib`, `districtId`)
+are deliberately *not* on that list — they are exactly the substance of a
+`district-template` foundation.
 
 `data/eidoverse/foundations.json` (`server/services/eidoverseFoundationLedger.js`)
 is the install-local ledger — machine-local like `portos-world.json` beside it,
@@ -714,7 +719,15 @@ it just produced. A caller therefore cannot assert that its build survived its
 author's absence; it can only ask for the check — the same proposal-versus-
 consequence separation the construction tools got in #7454, applied to promotion.
 A foundation that is re-authored loses both its candidate and its verdict, because
-both described the previous body.
+both described the previous body; a refused package likewise clears any candidate
+packaged earlier, since the verdict that vouched for it no longer holds.
+
+Contributions are resolved **by id against a fixed directory**, which today holds
+only the two reference fixtures shipped with the assay harness. So on a stock
+install the endpoint can package a candidate for the demo contribution and
+nothing else — a real author gets "no resilience-assay contribution is
+registered" until executable world controllers (#7456) add their registry as a
+second source behind the same resolver.
 
 Four refusals stand between a local artifact and the shared baseline, and every
 one returns a readable reason naming what to fix:
@@ -724,10 +737,12 @@ one returns a readable reason naming what to fix:
    suite, and be bound to the contribution this foundation names (a passing
    verdict borrowed from another build is refused explicitly).
 3. **Style leak** — a vernacular style key inside `body`.
-4. **Federation safety** — machine identity, PII, home/Windows paths, IP or MAC
-   literals, and credential-shaped values anywhere in the candidate. Nothing is
-   redacted and shipped: a redacted promote would leave the author believing they
-   published what they wrote.
+4. **Federation safety** — `server/lib/federationSafety.js` refuses the package
+   when the candidate carries machine identity, network info, PII,
+   credential-shaped values, or a credential-*named* field (`{ apiKey: … }`,
+   which no value-shape scan can see), anywhere in its values **or its keys**.
+   Nothing is redacted and shipped: a redacted promote would leave the author
+   believing they published what they wrote.
 
 The candidate envelope carries a content-addressed `fingerprint` (sha256 over the
 canonicalized envelope), so `verifyFoundationCandidate()` is one gate seen from

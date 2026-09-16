@@ -34,7 +34,7 @@ vi.mock('../services/eidoverseFoundationLedger.js', () => ({
   recordEidoverseFoundation: mocks.recordFoundation,
 }));
 
-vi.mock('../services/instanceIdentity.js', () => ({ getInstanceId: () => Promise.resolve('instance-aaaa') }));
+vi.mock('../services/instanceIdentity.js', () => ({ ensureInstanceId: () => Promise.resolve('instance-aaaa') }));
 
 const { default: eidoverseWorldRoutes } = await import('./eidoverseWorldRoutes.js');
 
@@ -190,7 +190,7 @@ describe('Eidoverse world routes', () => {
     const response = await request(makeApp()).post('/api/eidoverse/world/foundations/tide-beacon/candidate');
 
     expect(response.status).toBe(200);
-    expect(response.body).toMatchObject({ success: false, outcome: 'refused' });
+    expect(response.body).toMatchObject({ outcome: 'refused' });
     expect(response.body.reasons[0]).toContain('resilience assay failed');
   });
 

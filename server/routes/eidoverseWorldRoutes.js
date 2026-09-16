@@ -21,7 +21,7 @@ import {
   packageEidoverseFoundationCandidate,
   recordEidoverseFoundation,
 } from '../services/eidoverseFoundationLedger.js';
-import { getInstanceId } from '../services/instanceIdentity.js';
+import { ensureInstanceId } from '../services/instanceIdentity.js';
 import {
   augmentEidoverseWorld,
   ensureEidoverseWorldPresence,
@@ -82,6 +82,10 @@ router.post('/say', asyncHandler(async (req, res) => {
 }));
 
 // --- Foundations: the local-vs-baseline ownership ledger (#7455) ---------
+// These bodies validate against schemas in `lib/eidoverseFoundations.js`
+// rather than `lib/eidoverseValidation.js` (the rest of this router's home),
+// because the module that owns the ownership contract owns its shapes — the
+// same split `brainValidation.js` / `persistentMindCapabilities.js` already use.
 
 // GET /api/eidoverse/world/foundations — every foundation this install has
 // authored, with its ownership layer and last packaged promote candidate.
@@ -94,7 +98,10 @@ router.get('/foundations', asyncHandler(async (_req, res) => {
 // anything authored here is this install's own until it is promoted.
 router.post('/foundations', asyncHandler(async (req, res) => {
   const input = validateRequest(eidoverseFoundationInputSchema, req.body || {});
-  res.json({ success: true, foundation: await recordEidoverseFoundation(input, { originInstanceId: await getInstanceId() }) });
+  // `ensureInstanceId`, not `getInstanceId`: the id is stamped into durable
+  // provenance and hashed into the promote fingerprint, so the `unknown`
+  // sentinel a not-yet-initialized install returns must never be recorded.
+  res.json({ success: true, foundation: await recordEidoverseFoundation(input, { originInstanceId: await ensureInstanceId() }) });
 }));
 
 // POST /api/eidoverse/world/foundations/:id/candidate — run the agent-free
@@ -105,7 +112,7 @@ router.post('/foundations/:id/candidate', asyncHandler(async (req, res) => {
   const { id } = validateRequest(eidoverseFoundationIdParamSchema, req.params || {});
   const result = await packageEidoverseFoundationCandidate(id);
   if (result.outcome === 'unknown-foundation') throw new ServerError('Foundation not found', { status: 404 });
-  res.json({ success: result.outcome === 'packaged', ...result });
+  res.json(result);
 }));
 
 // GET /api/eidoverse/world/foundations/:id — one foundation record.

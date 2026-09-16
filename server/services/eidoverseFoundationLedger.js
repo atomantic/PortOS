@@ -28,12 +28,11 @@
  */
 
 import { join } from 'node:path';
-import { PATHS, atomicWrite, ensureDir, readJSONFile } from '../lib/fileUtils.js';
+import { PATHS, atomicWrite, readJSONFile } from '../lib/fileUtils.js';
 import { createMutex } from '../lib/asyncMutex.js';
 import { getPortosVersion } from '../lib/schemaVersions.js';
 import {
   DEFAULT_EIDOVERSE_FOUNDATION_LAYER,
-  EIDOVERSE_FOUNDATION_LEDGER_SCHEMA_VERSION,
   assayEvidenceFromVerdict,
   eidoverseFoundationInputSchema,
   packageFoundationCandidate,
@@ -41,11 +40,15 @@ import {
 import { RESILIENCE_DISTURBANCES, runResilienceAssay } from './eidoverseResilienceAssay.js';
 import { findContributionById } from './eidoverseResilienceContributions.js';
 
-// Resolved per call rather than captured at module load: `PATHS.data` is what
-// a suite re-roots to a temp directory, and a path frozen at import time would
-// point every test at the live install's own ledger.
-const ledgerDir = () => join(PATHS.data, 'eidoverse');
-const ledgerFile = () => join(ledgerDir(), 'foundations.json');
+/** Storage-layout version stamped on `data/eidoverse/foundations.json`. */
+const LEDGER_SCHEMA_VERSION = 1;
+
+// Read through `PATHS` per call, NOT `dataPath()`: a suite redirects the data
+// root by proxying this module's `fileUtils` import, and `dataPath()` resolves
+// against `paths.js`'s own `PATHS` binding, which that proxy never sees — so
+// the helper would send every test at the live install's ledger. Per call
+// rather than captured at module load for the same reason.
+const ledgerFile = () => join(PATHS.data, 'eidoverse', 'foundations.json');
 
 const withLedgerLock = createMutex();
 
@@ -55,36 +58,29 @@ const withLedgerLock = createMutex();
  * user's ledger with an empty one. `strict: true` throws on unreadable bytes,
  * while a genuinely ABSENT file still reads as the empty ledger it is.
  */
-async function readLedger() {
+async function readFoundations() {
   const raw = await readJSONFile(ledgerFile(), null, { allowArray: false, strict: true });
-  const foundations = raw && typeof raw === 'object' && raw.foundations && typeof raw.foundations === 'object' ? { ...raw.foundations } : {};
-  return { schemaVersion: EIDOVERSE_FOUNDATION_LEDGER_SCHEMA_VERSION, foundations };
+  return raw && typeof raw === 'object' && raw.foundations && typeof raw.foundations === 'object' ? { ...raw.foundations } : {};
 }
 
-async function writeLedger(ledger) {
-  await ensureDir(ledgerDir());
-  await atomicWrite(ledgerFile(), { ...ledger, schemaVersion: EIDOVERSE_FOUNDATION_LEDGER_SCHEMA_VERSION });
+async function writeFoundations(foundations) {
+  await atomicWrite(ledgerFile(), { schemaVersion: LEDGER_SCHEMA_VERSION, foundations });
 }
 
 /** Every foundation this install knows about, most recently updated first. */
 export async function listEidoverseFoundations() {
-  const ledger = await readLedger();
-  const foundations = Object.values(ledger.foundations)
+  const foundations = Object.values(await readFoundations())
     .sort((a, b) => String(b.updatedAt || '').localeCompare(String(a.updatedAt || '')));
-  return {
-    schemaVersion: EIDOVERSE_FOUNDATION_LEDGER_SCHEMA_VERSION,
-    counts: {
-      vernacular: foundations.filter((entry) => entry.layer === DEFAULT_EIDOVERSE_FOUNDATION_LAYER).length,
-      baseline: foundations.filter((entry) => entry.layer === 'baseline').length,
-      candidates: foundations.filter((entry) => Boolean(entry.candidate)).length,
-    },
-    foundations,
-  };
+  const counts = foundations.reduce((totals, entry) => ({
+    vernacular: totals.vernacular + (entry.layer === 'vernacular' ? 1 : 0),
+    baseline: totals.baseline + (entry.layer === 'baseline' ? 1 : 0),
+    candidates: totals.candidates + (entry.candidate ? 1 : 0),
+  }), { vernacular: 0, baseline: 0, candidates: 0 });
+  return { schemaVersion: LEDGER_SCHEMA_VERSION, counts, foundations };
 }
 
 export async function getEidoverseFoundation(id) {
-  const ledger = await readLedger();
-  return ledger.foundations[id] || null;
+  return (await readFoundations())[id] || null;
 }
 
 /**
@@ -103,8 +99,8 @@ export async function getEidoverseFoundation(id) {
 export async function recordEidoverseFoundation(input, { originInstanceId, now = new Date().toISOString() } = {}) {
   const authored = eidoverseFoundationInputSchema.parse(input);
   return withLedgerLock(async () => {
-    const ledger = await readLedger();
-    const existing = ledger.foundations[authored.id] || null;
+    const foundations = await readFoundations();
+    const existing = foundations[authored.id] || null;
     const record = {
       id: authored.id,
       layer: existing?.layer === 'baseline' ? 'baseline' : DEFAULT_EIDOVERSE_FOUNDATION_LAYER,
@@ -121,11 +117,14 @@ export async function recordEidoverseFoundation(input, { originInstanceId, now =
       promotedAt: existing?.promotedAt ?? null,
       updatedAt: now,
     };
-    ledger.foundations[authored.id] = record;
-    await writeLedger(ledger);
+    foundations[authored.id] = record;
+    await writeFoundations(foundations);
     return record;
   });
 }
+
+const verdict = (outcome, reasons) => ({ outcome, candidate: null, assay: null, reasons, findings: [] });
+const unknownFoundation = (id) => verdict('unknown-foundation', [`no foundation is recorded under "${id}"`]);
 
 /**
  * Run the agent-free assay against a recorded foundation and, if it and every
@@ -134,37 +133,34 @@ export async function recordEidoverseFoundation(input, { originInstanceId, now =
  * A refusal is a RESULT, not an exception: "this build is not ready to leave
  * the install" is ordinary, expected output the caller shows the author with
  * its reasons. The assay verdict is persisted either way — a failing verdict is
- * the diagnostic that says what to fix — while the candidate is written only on
- * a pass.
+ * the diagnostic that says what to fix — while a refusal clears any candidate
+ * packaged earlier, since the verdict that vouched for it no longer holds.
  *
  * @returns {Promise<{ outcome: 'packaged'|'refused'|'unknown-foundation', candidate: object|null, assay: object|null, reasons: string[], findings: Array }>}
  */
 export async function packageEidoverseFoundationCandidate(id, { now = new Date().toISOString() } = {}) {
-  const portosVersion = await getPortosVersion();
   const existing = await getEidoverseFoundation(id);
-  if (!existing) return { outcome: 'unknown-foundation', candidate: null, assay: null, reasons: [`no foundation is recorded under "${id}"`], findings: [] };
+  if (!existing) return unknownFoundation(id);
 
   // Outside the ledger lock: replaying a contribution is the slow part, and it
   // reads nothing from the ledger. The lock below re-reads the record and
   // re-checks that the body has not been re-authored underneath the verdict.
   const contribution = await findContributionById(existing.contributionId);
   if (!contribution) {
-    return {
-      outcome: 'refused',
-      candidate: null,
-      assay: null,
-      reasons: [`no resilience-assay contribution is registered under "${existing.contributionId}" — a foundation is promotable only once it can be replayed without its author`],
-      findings: [],
-    };
+    return verdict('refused', [`no resilience-assay contribution is registered under "${existing.contributionId}" — a foundation is promotable only once it can be replayed without its author`]);
   }
   const assay = assayEvidenceFromVerdict(runResilienceAssay(contribution), { ranAt: now });
+  // Read after the early returns: `getPortosVersion()` re-reads and re-parses
+  // package.json on every call, and a request naming an id this install never
+  // authored should not pay for it.
+  const portosVersion = await getPortosVersion();
 
   return withLedgerLock(async () => {
-    const ledger = await readLedger();
-    const current = ledger.foundations[id];
-    if (!current) return { outcome: 'unknown-foundation', candidate: null, assay: null, reasons: [`no foundation is recorded under "${id}"`], findings: [] };
+    const foundations = await readFoundations();
+    const current = foundations[id];
+    if (!current) return unknownFoundation(id);
     if (current.updatedAt !== existing.updatedAt) {
-      return { outcome: 'refused', candidate: null, assay: null, reasons: ['the foundation was re-authored while the assay was running — package it again'], findings: [] };
+      return verdict('refused', ['the foundation was re-authored while the assay was running — package it again']);
     }
 
     const result = packageFoundationCandidate({
@@ -173,8 +169,13 @@ export async function packageEidoverseFoundationCandidate(id, { now = new Date()
       portosVersion,
       now,
     });
-    ledger.foundations[id] = { ...current, assay, candidate: result.candidate, updatedAt: now };
-    await writeLedger(ledger);
+    // `updatedAt` tracks the BODY's authorship, not assay runs: bumping it here
+    // would reorder the list on a refusal and make the optimistic check above
+    // report a re-authoring that never happened. A refusal also clears any
+    // previously packaged candidate — the verdict that vouched for it no
+    // longer holds, even though the bytes are unchanged.
+    foundations[id] = { ...current, assay, candidate: result.candidate };
+    await writeFoundations(foundations);
     return { ...result, assay };
   });
 }

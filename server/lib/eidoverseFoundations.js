@@ -42,14 +42,15 @@
  *      place in the tree that runs untrusted controller code. The ledger runs
  *      the assay fresh on every package attempt, so evidence is never older
  *      than the body it vouches for.
- *   2. **Federation safety.** A promote payload is the one Eidoverse artifact
- *      authorized to cross the federation layer, so it fails closed: machine
- *      identity, PII, home/Windows paths, IP or MAC literals, and
- *      credential-shaped values anywhere in the candidate REFUSE the package
- *      with the offending JSON path named. Nothing is redacted and shipped —
- *      a redacted promote would leave the author believing they published what
- *      they wrote. See the "PII must not ride the federation layer" rule in
- *      root `AGENTS.md` and the machine-local privacy ADR.
+  *   2. **Federation safety.** A promote payload is the one Eidoverse artifact
+ *      authorized to cross the federation layer, so it fails closed:
+ *      `lib/federationSafety.js` refuses the package outright when the
+ *      candidate carries machine identity, PII, credential-shaped values or
+ *      credential-NAMED fields, naming the offending JSON path. Nothing is
+ *      redacted and shipped — a redacted promote would leave the author
+ *      believing they published what they wrote. See the "PII must not ride
+ *      the federation layer" rule in root `AGENTS.md` and the machine-local
+ *      privacy ADR.
  *
  * `fingerprint` is content-addressed (sha256 over the canonicalized envelope
  * minus the fingerprint itself), so a peer can verify a candidate it was handed
@@ -63,7 +64,7 @@
 import { createHash } from 'node:crypto';
 import { z } from 'zod';
 import { canonicalStringify } from './objects.js';
-import { scrubSecretTokens } from './secretText.js';
+import { describeJsonPath, federationSafetyFindings, walkJsonText } from './federationSafety.js';
 
 /** Ownership layers, widest-shared first. See the module header. */
 export const EIDOVERSE_FOUNDATION_LAYERS = Object.freeze(['runtime', 'baseline', 'vernacular']);
@@ -81,27 +82,33 @@ export const EIDOVERSE_FOUNDATION_KINDS = Object.freeze(['schema', 'affordance',
  * not ride. */
 export const EIDOVERSE_FOUNDATION_CANDIDATE_VERSION = 1;
 
-/** Storage-layout version stamped on `data/eidoverse/foundations.json`. */
-export const EIDOVERSE_FOUNDATION_LEDGER_SCHEMA_VERSION = 1;
-
 /**
- * Keys that belong to the vernacular style layer and must never appear inside a
- * foundation `body`. Found there, they refuse the package — see the header.
+ * Keys that are UNAMBIGUOUSLY cosmetic and so must never appear inside a
+ * foundation `body`. Found there, they refuse the package.
+ *
+ * This is an authoring check on top of the `{ body, style }` split, not the
+ * mechanism — the split already guarantees `style` never leaves the install.
+ * It exists because "I put the palette in `body` and expected peers to get it"
+ * is a mistake worth naming rather than silently dropping.
+ *
+ * Kept narrow on purpose. Spatial and asset-binding keys (`pos`, `yaw`,
+ * `lib`, `placement`, `districtId`) are NOT listed even though a vernacular
+ * layout uses them: they are exactly the substance of a `district-template`
+ * foundation, and blocking them would make one of the four declared kinds
+ * impossible to promote.
  */
-export const EIDOVERSE_STYLE_ONLY_KEYS = Object.freeze([
-  'accent', 'alias', 'aliases', 'asset', 'assets', 'avatar', 'color', 'colors',
-  'district', 'districtId', 'labelAliases', 'lib', 'material', 'materials',
-  'motif', 'palette', 'placement', 'pos', 'texture', 'textures', 'yaw',
+const STYLE_ONLY_KEYS = Object.freeze([
+  'accent', 'alias', 'aliases', 'avatar', 'color', 'colors', 'labelAliases',
+  'material', 'materials', 'motif', 'palette', 'texture', 'textures',
 ]);
 
-const STYLE_ONLY_KEY_SET = new Set(EIDOVERSE_STYLE_ONLY_KEYS);
+const STYLE_ONLY_KEY_SET = new Set(STYLE_ONLY_KEYS);
 
-export const FOUNDATION_LIMITS = Object.freeze({
+const FOUNDATION_LIMITS = Object.freeze({
   idMax: 64,
   titleMax: 80,
   summaryMax: 400,
-  bodyBytes: 16_384,
-  styleBytes: 16_384,
+  jsonBytes: 16_384,
   disclosureItems: 12,
   disclosureItemMax: 160,
   noteMax: 600,
@@ -116,10 +123,9 @@ const foundationIdSchema = z.string().trim().min(1).max(FOUNDATION_LIMITS.idMax)
  * its author's absence. Resolved by `services/eidoverseResilienceContributions.js`. */
 const contributionIdSchema = z.string().trim().min(1).max(120);
 
-const isoDateSchema = z.string().trim().min(1).max(40).refine(
-  (value) => !Number.isNaN(Date.parse(value)),
-  'must be an ISO-8601 timestamp',
-);
+// `.datetime()`, not a `Date.parse` refine: `Date.parse` accepts "March 4, 2026"
+// and "2026", and these timestamps are hashed into a payload a peer parses.
+const isoDateSchema = z.string().datetime();
 
 const boundedJsonObject = (maxBytes) => z.record(z.string().min(1).max(64), z.unknown())
   .refine((value) => JSON.stringify(value).length <= maxBytes, `must serialize to at most ${maxBytes} bytes`);
@@ -129,11 +135,11 @@ const boundedJsonObject = (maxBytes) => z.record(z.string().min(1).max(64), z.un
  * it here would make every vocabulary addition a schema migration. What IS
  * pinned is the size cap and the style/privacy scans below, which is what a
  * receiving peer actually needs to be safe. */
-const foundationBodySchema = boundedJsonObject(FOUNDATION_LIMITS.bodyBytes);
+const foundationBodySchema = boundedJsonObject(FOUNDATION_LIMITS.jsonBytes);
 
-const foundationStyleSchema = boundedJsonObject(FOUNDATION_LIMITS.styleBytes);
+const foundationStyleSchema = boundedJsonObject(FOUNDATION_LIMITS.jsonBytes);
 
-export const foundationDisclosureSchema = z.object({
+const foundationDisclosureSchema = z.object({
   requires: z.array(z.string().trim().min(1).max(FOUNDATION_LIMITS.disclosureItemMax)).max(FOUNDATION_LIMITS.disclosureItems).default([]),
   effects: z.array(z.string().trim().min(1).max(FOUNDATION_LIMITS.disclosureItemMax)).max(FOUNDATION_LIMITS.disclosureItems).default([]),
   license: z.string().trim().min(1).max(80).nullable().default(null),
@@ -147,13 +153,22 @@ export const foundationDisclosureSchema = z.object({
  * agent-artifact provenance graph is #7461's to design, and a name added here
  * "for now" is a privacy decision made by accident.
  */
-export const foundationProvenanceSchema = z.object({
-  originInstanceId: z.string().trim().min(1).max(64).regex(/^[A-Za-z0-9_-]+$/, 'must be an opaque instance id'),
-  authorKind: z.enum(['mind', 'cos', 'user']),
+const authorKindSchema = z.enum(['mind', 'cos', 'user']);
+
+const foundationProvenanceSchema = z.object({
+  // `UNKNOWN_INSTANCE_ID` is refused here rather than at each call site: this
+  // id is content-addressed into the candidate fingerprint and is what the
+  // provenance graph (#7461) hangs its edges off, so a candidate stamped
+  // "unknown" would be permanently misattributed and would collide with every
+  // other uninitialized install. Callers use `ensureInstanceId()`.
+  originInstanceId: z.string().trim().min(1).max(64)
+    .regex(/^[A-Za-z0-9_-]+$/, 'must be an opaque instance id')
+    .refine((id) => id !== 'unknown', 'this install has no federation identity yet'),
+  authorKind: authorKindSchema,
   createdAt: isoDateSchema,
 }).strict();
 
-export const foundationAssayEvidenceSchema = z.object({
+const foundationAssayEvidenceSchema = z.object({
   harness: z.literal('eidoverse-resilience-assay'),
   contributionId: contributionIdSchema,
   pass: z.boolean(),
@@ -162,56 +177,61 @@ export const foundationAssayEvidenceSchema = z.object({
   reasons: z.array(z.string().trim().min(1).max(400)).max(FOUNDATION_LIMITS.findingsMax).default([]),
 }).strict();
 
-/** The local ledger record. `style` stays here and never leaves the install. */
-export const eidoverseFoundationRecordSchema = z.object({
-  id: foundationIdSchema,
-  layer: z.enum(['vernacular', 'baseline']),
+/**
+ * The fields a foundation carries in every one of its three shapes — the local
+ * record, what a caller may author, and the promote envelope. Declared once so
+ * a cap change cannot land on two of the three and silently diverge them.
+ */
+const foundationCoreShape = {
   kind: z.enum(EIDOVERSE_FOUNDATION_KINDS),
   title: z.string().trim().min(1).max(FOUNDATION_LIMITS.titleMax),
   summary: z.string().trim().min(1).max(FOUNDATION_LIMITS.summaryMax),
   contributionId: contributionIdSchema,
   body: foundationBodySchema,
+  disclosure: foundationDisclosureSchema,
+};
+
+/** The local ledger record. `style` stays here and never leaves the install. */
+export const eidoverseFoundationRecordSchema = z.object({
+  ...foundationCoreShape,
+  id: foundationIdSchema,
+  // `runtime` is absent by construction: an install authors its own artifacts
+  // and may promote them, but the shared framework layer is never a record here.
+  layer: z.enum(['vernacular', 'baseline']),
   style: foundationStyleSchema,
   provenance: foundationProvenanceSchema,
-  disclosure: foundationDisclosureSchema,
   assay: foundationAssayEvidenceSchema.nullable().default(null),
   // The last packaged envelope, kept verbatim. Deliberately NOT re-validated
   // here: it was gated by `verifyFoundationCandidate` when it was written, and
   // a stored envelope from a newer install must not make the whole record
   // unreadable — the promote path re-verifies the envelope it actually uses.
   candidate: z.unknown().optional(),
+  // Forward-declared storage slots, written by the promote-to-baseline step
+  // that follows this slice: nothing here ever sets `layer` to `baseline` or
+  // `promotedAt` to a timestamp yet, so a reader should not take a `baseline`
+  // count of zero as evidence about anything.
   promotedAt: isoDateSchema.nullable().default(null),
   updatedAt: isoDateSchema,
 }).strict();
 
-/** The `:id` route parameter — the same slug contract as a record's own id. */
 export const eidoverseFoundationIdParamSchema = z.object({ id: foundationIdSchema }).strict();
 
 /** What a caller (route, mind tool, test) may author. Layer is NOT accepted:
  * a new local artifact is `vernacular` by construction, and moving to
  * `baseline` is what the promote path is for. */
 export const eidoverseFoundationInputSchema = z.object({
+  ...foundationCoreShape,
   id: foundationIdSchema,
-  kind: z.enum(EIDOVERSE_FOUNDATION_KINDS),
-  title: z.string().trim().min(1).max(FOUNDATION_LIMITS.titleMax),
-  summary: z.string().trim().min(1).max(FOUNDATION_LIMITS.summaryMax),
-  contributionId: contributionIdSchema,
-  body: foundationBodySchema,
   style: foundationStyleSchema.default({}),
   disclosure: foundationDisclosureSchema.default({}),
-  authorKind: z.enum(['mind', 'cos', 'user']).default('user'),
+  authorKind: authorKindSchema.default('user'),
 }).strict();
 
 /** The promote envelope — the only shape authorized to cross to a peer. */
 export const eidoverseFoundationCandidateSchema = z.object({
+  ...foundationCoreShape,
   candidateVersion: z.literal(EIDOVERSE_FOUNDATION_CANDIDATE_VERSION),
   foundationId: foundationIdSchema,
-  kind: z.enum(EIDOVERSE_FOUNDATION_KINDS),
-  title: z.string().trim().min(1).max(FOUNDATION_LIMITS.titleMax),
-  summary: z.string().trim().min(1).max(FOUNDATION_LIMITS.summaryMax),
-  contributionId: contributionIdSchema,
-  body: foundationBodySchema,
-  disclosure: foundationDisclosureSchema,
   provenance: foundationProvenanceSchema.extend({
     packagedAt: isoDateSchema,
     portosVersion: z.string().trim().min(1).max(40),
@@ -240,66 +260,6 @@ export function layerPromoteRefusal(layer) {
 // Safety scans
 // ---------------------------------------------------------------------------
 
-const PRIVACY_PATTERNS = Object.freeze([
-  // `/Users/<name>/…`, `/home/<name>/…` — the OS username by another name.
-  ['home-path', /(?:^|[\s"'`(])(?:\/Users|\/home)\/[^/\s"'`]+/i],
-  // `C:\Users\<name>` and any other Windows drive-absolute path.
-  ['windows-path', /\b[A-Za-z]:[\\/](?:Users[\\/])?[^\s"'`]+/],
-  // Dotted quads. A four-part version string is refused too, and deliberately:
-  // the payload leaves this machine, so "looks like an address" is the right
-  // side to fail on, and the finding names the exact JSON path to fix.
-  ['ip-literal', /\b(?:(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)\.){3}(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)\b/],
-  // Tailscale MagicDNS and mDNS names.
-  ['network-host', /\b[A-Za-z0-9-]+\.(?:ts\.net|local)\b/i],
-  ['mac-address', /\b[0-9A-Fa-f]{2}(?::[0-9A-Fa-f]{2}){5}\b/],
-  ['email-address', /\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b/],
-]);
-
-const describePath = (path) => (path.length === 0 ? '<root>' : path.join('.'));
-
-/**
- * Walk a JSON-shaped value once, reporting every string it contains AND every
- * object key it passes through. Keys matter as much as values here: a key named
- * for a host leaks the host, and a key is what the style-layer scan looks at.
- *
- * @param {unknown} value
- * @param {(entry: { text: string, path: string[], kind: 'key'|'value' }) => void} visit
- */
-function walkJsonText(value, visit, path = []) {
-  if (typeof value === 'string') {
-    visit({ text: value, path, kind: 'value' });
-    return;
-  }
-  if (Array.isArray(value)) {
-    value.forEach((child, index) => walkJsonText(child, visit, [...path, String(index)]));
-    return;
-  }
-  if (!value || typeof value !== 'object') return;
-  for (const [key, child] of Object.entries(value)) {
-    const childPath = [...path, key];
-    visit({ text: key, path: childPath, kind: 'key' });
-    walkJsonText(child, visit, childPath);
-  }
-}
-
-/**
- * Machine identity / PII / credential findings anywhere in a JSON-shaped value.
- *
- * @returns {Array<{ code: string, path: string, detail: string }>}
- */
-export function federationSafetyFindings(value) {
-  const findings = [];
-  walkJsonText(value, ({ text, path }) => {
-    for (const [code, pattern] of PRIVACY_PATTERNS) {
-      if (pattern.test(text)) findings.push({ code, path: describePath(path), detail: `a ${code.replace('-', ' ')} may not cross the federation layer` });
-    }
-    if (scrubSecretTokens(text) !== text) {
-      findings.push({ code: 'secret-token', path: describePath(path), detail: 'a credential-shaped value may not cross the federation layer' });
-    }
-  });
-  return findings.slice(0, FOUNDATION_LIMITS.findingsMax);
-}
-
 /**
  * Style-layer keys found inside a foundation `body`. These refuse the package:
  * the split is what keeps an inheriting peer's own cosmetics intact, so a
@@ -310,7 +270,7 @@ export function styleLeakFindings(body) {
   const findings = [];
   walkJsonText(body, ({ text, path, kind }) => {
     if (kind !== 'key' || !STYLE_ONLY_KEY_SET.has(text)) return;
-    findings.push({ code: 'style-in-body', path: describePath(path), detail: `"${text}" belongs to the vernacular style layer and is never promoted` });
+    findings.push({ code: 'style-in-body', path: describeJsonPath(path), detail: `"${text}" belongs to the vernacular style layer and is never promoted` });
   });
   return findings.slice(0, FOUNDATION_LIMITS.findingsMax);
 }
@@ -340,24 +300,24 @@ export function assayEvidenceFromVerdict(verdict, { ranAt }) {
 }
 
 /**
- * Why the recorded assay evidence does not clear the promote gate, or `null`.
+ * Why already-schema-parsed assay evidence does not clear the promote gate, or
+ * `null`. Both call sites validate the block first (through the record or the
+ * candidate schema), so this reads its fields directly.
  *
  * `requiredDisturbances` is passed in rather than imported so this pure module
  * never reaches into the service layer; callers hand it
  * `RESILIENCE_DISTURBANCES` from `services/eidoverseResilienceAssay.js`.
  */
-export function assayEvidenceRefusal(assay, requiredDisturbances, { contributionId } = {}) {
+function assayEvidenceRefusal(assay, requiredDisturbances, contributionId) {
   if (!assay) return 'no agent-free resilience assay has been recorded — run `npm run eidoverse:assay` against this contribution first';
-  const parsed = foundationAssayEvidenceSchema.safeParse(assay);
-  if (!parsed.success) return `recorded assay evidence is malformed: ${parsed.error.issues[0]?.message || 'unreadable'}`;
   // The evidence has to be about THIS foundation. Without the binding a passing
   // verdict from any other contribution would clear the gate, which is the
   // borrowed-credential version of the failure the assay exists to catch.
-  if (contributionId && parsed.data.contributionId !== contributionId) {
-    return `the recorded assay ran against "${parsed.data.contributionId}", not this foundation's contribution "${contributionId}"`;
+  if (assay.contributionId !== contributionId) {
+    return `the recorded assay ran against "${assay.contributionId}", not this foundation's contribution "${contributionId}"`;
   }
-  if (!parsed.data.pass) return `the agent-free resilience assay failed: ${parsed.data.reasons[0] || 'no reason recorded'}`;
-  const covered = new Set(parsed.data.disturbances);
+  if (!assay.pass) return `the agent-free resilience assay failed: ${assay.reasons[0] || 'no reason recorded'}`;
+  const covered = new Set(assay.disturbances);
   const missing = requiredDisturbances.filter((disturbance) => !covered.has(disturbance));
   if (missing.length > 0) return `the recorded assay did not cover every disturbance (missing: ${missing.join(', ')})`;
   return null;
@@ -366,6 +326,13 @@ export function assayEvidenceRefusal(assay, requiredDisturbances, { contribution
 // ---------------------------------------------------------------------------
 // Packaging
 // ---------------------------------------------------------------------------
+
+/** Zod issues as reader-facing reasons, capped like every other finding list. */
+const issueReasons = (error) => error.issues
+  .slice(0, FOUNDATION_LIMITS.findingsMax)
+  .map((issue) => `${describeJsonPath(issue.path.map(String))}: ${issue.message}`);
+
+const refused = (reasons, findings = []) => ({ outcome: 'refused', candidate: null, reasons, findings });
 
 /** sha256 over the canonicalized envelope, excluding the digest itself. */
 export function foundationCandidateFingerprint(candidate) {
@@ -395,14 +362,7 @@ function withoutFingerprint(candidate) {
  */
 export function packageFoundationCandidate({ record, requiredDisturbances, portosVersion, now }) {
   const parsed = eidoverseFoundationRecordSchema.safeParse(record);
-  if (!parsed.success) {
-    return {
-      outcome: 'refused',
-      candidate: null,
-      reasons: parsed.error.issues.slice(0, FOUNDATION_LIMITS.findingsMax).map((issue) => `${describePath(issue.path.map(String))}: ${issue.message}`),
-      findings: [],
-    };
-  }
+  if (!parsed.success) return refused(issueReasons(parsed.error));
   const foundation = parsed.data;
 
   // Two refusals the envelope gate below cannot phrase usefully: ownership
@@ -413,9 +373,9 @@ export function packageFoundationCandidate({ record, requiredDisturbances, porto
   // packaging side and the receiving side share one definition of valid.
   const reasons = [
     layerPromoteRefusal(foundation.layer),
-    assayEvidenceRefusal(foundation.assay, requiredDisturbances, { contributionId: foundation.contributionId }),
+    assayEvidenceRefusal(foundation.assay, requiredDisturbances, foundation.contributionId),
   ].filter(Boolean);
-  if (reasons.length > 0) return { outcome: 'refused', candidate: null, reasons, findings: [] };
+  if (reasons.length > 0) return refused(reasons);
 
   const draft = {
     candidateVersion: EIDOVERSE_FOUNDATION_CANDIDATE_VERSION,
@@ -435,7 +395,7 @@ export function packageFoundationCandidate({ record, requiredDisturbances, porto
   // the receiving path then share one definition of "valid candidate" rather
   // than two that can drift.
   const verified = verifyFoundationCandidate(candidate, { requiredDisturbances });
-  if (!verified.valid) return { outcome: 'refused', candidate: null, reasons: verified.reasons, findings: verified.findings };
+  if (!verified.valid) return refused(verified.reasons, verified.findings);
 
   return { outcome: 'packaged', candidate, reasons: [], findings: [] };
 }
@@ -450,21 +410,19 @@ export function packageFoundationCandidate({ record, requiredDisturbances, porto
  */
 export function verifyFoundationCandidate(candidate, { requiredDisturbances }) {
   const parsed = eidoverseFoundationCandidateSchema.safeParse(candidate);
-  if (!parsed.success) {
-    return {
-      valid: false,
-      reasons: parsed.error.issues.slice(0, FOUNDATION_LIMITS.findingsMax).map((issue) => `${describePath(issue.path.map(String))}: ${issue.message}`),
-      findings: [],
-    };
-  }
+  if (!parsed.success) return { valid: false, reasons: issueReasons(parsed.error), findings: [] };
   const envelope = parsed.data;
   const reasons = [];
 
-  if (foundationCandidateFingerprint(envelope) !== envelope.fingerprint) {
+  // Hash the candidate AS RECEIVED, not the zod-normalized copy: the digest has
+  // to cover the bytes the sender actually hashed. Re-hashing `parsed.data`
+  // would let a schema transform (a `.trim()` on a field that arrived padded)
+  // read as tampering, including on the packaging side's own self-check.
+  if (foundationCandidateFingerprint(candidate) !== envelope.fingerprint) {
     reasons.push('fingerprint does not match the candidate body — the payload was altered after packaging');
   }
 
-  const assayRefusal = assayEvidenceRefusal(envelope.assay, requiredDisturbances, { contributionId: envelope.contributionId });
+  const assayRefusal = assayEvidenceRefusal(envelope.assay, requiredDisturbances, envelope.contributionId);
   if (assayRefusal) reasons.push(assayRefusal);
 
   const findings = [...styleLeakFindings(envelope.body), ...federationSafetyFindings(withoutFingerprint(envelope))];

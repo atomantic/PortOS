@@ -9,13 +9,13 @@ import {
   DEFAULT_EIDOVERSE_FOUNDATION_LAYER,
   EIDOVERSE_FOUNDATION_CANDIDATE_VERSION,
   assayEvidenceFromVerdict,
-  federationSafetyFindings,
   foundationCandidateFingerprint,
   layerPromoteRefusal,
   packageFoundationCandidate,
   styleLeakFindings,
   verifyFoundationCandidate,
 } from './eidoverseFoundations.js';
+import { federationSafetyFindings } from './federationSafety.js';
 
 const DISTURBANCES = ['reconnect', 'restart-world-host', 'missing-optional-deps'];
 const NOW = '2026-03-04T05:06:07.000Z';
@@ -128,6 +128,17 @@ describe('verifying a candidate a peer was handed', () => {
     expect(verifyFoundationCandidate({ ...tampered, fingerprint: foundationCandidateFingerprint(tampered) }, { requiredDisturbances: DISTURBANCES }).valid).toBe(true);
   });
 
+  it('does not read schema normalization as tampering', () => {
+    // The digest covers the bytes as sent. Hashing the zod-normalized copy
+    // instead would make a field that arrived padded — which the envelope
+    // schema trims — verify as an altered payload.
+    const { candidate } = packageRecord();
+    const padded = { ...candidate, provenance: { ...candidate.provenance, portosVersion: ' 9.9.9 ' } };
+    const sent = { ...padded, fingerprint: foundationCandidateFingerprint(padded) };
+
+    expect(verifyFoundationCandidate(sent, { requiredDisturbances: DISTURBANCES }).valid).toBe(true);
+  });
+
   it('does not read its own sha256 fingerprint as a leaked credential', () => {
     const { candidate } = packageRecord();
     expect(candidate.fingerprint).toMatch(/^[a-f0-9]{64}$/);
@@ -153,7 +164,7 @@ describe('assay evidence', () => {
 
 describe('style-leak scanning', () => {
   it('reports the nested path of every style key, not just the first', () => {
-    const findings = styleLeakFindings({ controller: { placement: [1, 2, 3] }, affordance: { render: { palette: ['#fff'] } } });
-    expect(findings.map((finding) => finding.path)).toEqual(['controller.placement', 'affordance.render.palette']);
+    const findings = styleLeakFindings({ controller: { motif: 'brass' }, affordance: { render: { palette: ['#fff'] } } });
+    expect(findings.map((finding) => finding.path)).toEqual(['controller.motif', 'affordance.render.palette']);
   });
 });

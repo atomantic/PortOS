@@ -628,17 +628,19 @@ describe('deferred imports stay deferred (#6156)', () => {
 // that is what makes this a budget rather than a high-water mark. Measured after
 // both changes: 104,739.
 //
-// Raised to 107,700 for the Eidoverse foundation promote gate (#7455), and
-// again to restore the ~1.5k of headroom this is supposed to carry: the
-// previous number had drifted back to EXACTLY three above the measured total,
-// so this change's unavoidable +7 failed it. That +7 is the whole cost — the
-// two new suites are 4 and 2 (both pure leaves over zod/objects/secretText and
-// a mocked fileUtils), and the mandatory `lib/` barrel row adds one node to
-// `lib/index.test.js`. Nothing widely-reached gained an edge: the promote
-// path's heavy dependency (`services/eidoverseResilienceAssay.js` and the
-// projection planner under it) is reached only from the ledger service, which
-// only `routes/eidoverseWorldRoutes.js` imports. Measured after this change:
-// 106,204.
+// Raised to 107,700 for the Eidoverse foundation promote gate (#7455).
+// Measured after the change: 106,329, so its own cost is +132. Most of that is
+// ONE node on each of the ~60 closures that reach `services/userActions.js`,
+// which now imports the extracted leaf `lib/secretKeys.js` instead of
+// declaring `isSecretKey` inline — the extraction is what lets the federation
+// gate ask the same question, and the leaf has no imports of its own, so the
+// alternative was a second copy of the table. The rest is four small new
+// suites and the mandatory `lib/` barrel rows. Nothing heavy gained an edge:
+// the promote path's assay dependency is reached only from the ledger service,
+// which only `routes/eidoverseWorldRoutes.js` imports. The remainder of the
+// raise restores the ~1.5k of headroom this is meant to carry — the previous
+// number had drifted back to three above the measured total, the same
+// zero-headroom state #6305 raised it out of, where any addition at all fails.
 const MAX_STATIC_INSTANTIATIONS = 107700;
 
 
