@@ -43,8 +43,6 @@ const clampFractionOrNull = (value) => {
   return Math.max(0, Math.min(1, value));
 };
 
-const arrayLength = (value) => (Array.isArray(value) ? value.length : 0);
-
 /**
  * A failure rate only exists when work actually ran. `getTodayActivity()`
  * reports `successRate: 0` for a day with zero completed agents, so trusting
@@ -87,11 +85,18 @@ export function derivePersistentMindPlaybookPhaseSignals(worldSignals) {
     return { districtCount: null, failureRate: null, peersWithActivity: null };
   }
 
-  const districtCount = [
+  // A failed source read arrives as `null`, not `[]`. Counting those as zero
+  // would report a confidently empty Commons when the truth is that nothing
+  // could be read, so an all-null projection degrades to `null` ("unknown")
+  // and only genuinely-present districts contribute to the count.
+  const districtEntries = [
     worldSignals.apps, worldSignals.agents, worldSignals.tasks, worldSignals.features,
     worldSignals.peers, worldSignals.activity, worldSignals.goals, worldSignals.memory,
     worldSignals.storage, worldSignals.jira, worldSignals.operations,
-  ].reduce((total, entries) => total + arrayLength(entries), 0);
+  ].filter((entries) => Array.isArray(entries));
+  const districtCount = districtEntries.length > 0
+    ? districtEntries.reduce((total, entries) => total + entries.length, 0)
+    : null;
 
   const productivity = Array.isArray(worldSignals.productivity) ? worldSignals.productivity[0] : null;
   // `??` (not `||`) so a measured zero-failure day stays 0 rather than

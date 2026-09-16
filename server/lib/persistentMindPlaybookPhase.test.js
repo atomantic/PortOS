@@ -131,6 +131,24 @@ describe('derivePersistentMindPlaybookPhaseSignals', () => {
     expect(signals.failureRate).toBe(0);
   });
 
+  it('distinguishes every district read failing (null) from a genuinely empty Commons (0)', () => {
+    // buildEidoverseWorldSignals() returns null per district when that source
+    // read failed. Summing those as 0 would report a confidently empty world
+    // and hide the outage behind "sparse Commons (0 live signal(s))".
+    const allSourcesFailed = {
+      apps: null, agents: null, tasks: null, features: null, peers: null,
+      activity: null, goals: null, memory: null, storage: null, jira: null, operations: null,
+    };
+    expect(derivePersistentMindPlaybookPhaseSignals(allSourcesFailed).districtCount).toBeNull();
+    expect(selectPersistentMindPlaybookPhase(derivePersistentMindPlaybookPhaseSignals(allSourcesFailed)).reason)
+      .toContain('unavailable');
+
+    // A district that really is empty still reports a measured zero.
+    const measuredEmpty = derivePersistentMindPlaybookPhaseSignals({ ...allSourcesFailed, apps: [] });
+    expect(measuredEmpty.districtCount).toBe(0);
+    expect(selectPersistentMindPlaybookPhase(measuredEmpty).reason).toContain('sparse');
+  });
+
   it('counts only travelable peers reporting non-steady status as active', () => {
     const signals = derivePersistentMindPlaybookPhaseSignals({
       peers: [

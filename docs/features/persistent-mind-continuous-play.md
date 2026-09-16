@@ -26,6 +26,8 @@ Priority order when signals conflict: a still-sparse Commons always explores fir
 
 A failure rate only exists when work actually ran. `getTodayActivity()` reports `successRate: 0` for a day with zero completed agents, so the derivation requires a non-empty sample before trusting it: an idle day yields *no* failure signal (falling back to coarse health, then to `null`), never a fabricated 100%. Without that guard every wake before the day's first completed task would claim a 100% failure rate and force `maintain`, starving `construct` and `coordinate` entirely.
 
+The same absent-vs-empty rule governs density. A failed source read reaches the picker as `null`, not `[]`, so a projection whose district reads all failed derives `districtCount: null` ("world signals unavailable") rather than a confidently empty `0` — an outage and a genuinely empty Commons both explore, but only the latter claims to have measured anything.
+
 Each phase template ends by naming itself (e.g. `Phase: Construct`) so the mind states its current phase in the wake's user-visible working note — how Helm and other minds can see which phase produced a given wake. `GET /api/cos/mind/context` also resolves the phase for preview (best-effort; a signal-read failure there falls back to the general loop rather than failing the request).
 
 ## Mind-adjustable `numCtx`
