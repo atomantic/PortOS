@@ -21,6 +21,11 @@ vi.mock('fs/promises', () => ({
   // adoptWorktree ensures the worktrees root exists before moving a tree into it.
   mkdir: vi.fn().mockResolvedValue(undefined),
 }));
+// The retry path asks whether the lock it just hit was abandoned. Mocked here
+// (the `fs` stub above has no `statSync`, and real mtimes would make this a
+// clock test); `lib/gitStaleLock.test.js` owns which locks it agrees to remove.
+const clearStaleGitLockMock = vi.fn().mockReturnValue(null);
+vi.mock('../lib/gitStaleLock.js', () => ({ clearStaleGitLock: (...args) => clearStaleGitLockMock(...args) }));
 vi.mock('./instanceIdentity.js', () => ({ ensureInstanceId: vi.fn().mockResolvedValue('instance-1') }));
 const getDefaultBranchMock = vi.fn().mockResolvedValue('main');
 const hasBranchMergeEvidenceMock = vi.fn().mockResolvedValue(false);
@@ -43,6 +48,7 @@ const {
   createWorktree,
   createPersistentWorktree,
   listWorktrees,
+  WORKTREE_ADD_TIMEOUT_MS,
 } = await import('./worktreeManager.js');
 const { isPathInsideDir } = await import('../lib/fileUtils.js');
 const { worktreeOwnershipReason } = await import('../lib/worktreeOwnership.js');
@@ -648,6 +654,7 @@ describe('listWorktrees line endings', () => {
 describe('addWorktreeWithRetry (lock-contention retry, #2193)', () => {
   beforeEach(() => {
     execGitMock.mockReset();
+    clearStaleGitLockMock.mockClear();
     vi.useFakeTimers();
   });
   afterEach(() => {
@@ -685,6 +692,28 @@ describe('addWorktreeWithRetry (lock-contention retry, #2193)', () => {
     expect(execGitMock).toHaveBeenCalledTimes(2);
   });
 
+  // Retrying alone cannot clear an ABANDONED lock — nothing is coming to
+  // release it, so all four attempts would fail and block the task.
+  it('tries to clear an abandoned lock before backing off', async () => {
+    const lockError = new Error("Unable to create '/repo/.git/index.lock': File exists");
+    execGitMock
+      .mockRejectedValueOnce(lockError)
+      .mockResolvedValueOnce({ stdout: '', stderr: '', exitCode: 0 });
+    const p = addWorktreeWithRetry(['worktree', 'add', '/wt', 'main'], '/repo');
+    await vi.runAllTimersAsync();
+    await p;
+    expect(clearStaleGitLockMock).toHaveBeenCalledWith(lockError.message);
+  });
+
+  // `STALE_GIT_LOCK_MIN_AGE_MS`'s safety argument is "3x the longest git command
+  // PortOS can have in flight", and that ceiling is THIS constant — in another
+  // file, where raising it would silently erode the headroom and let the sweep
+  // unlink a live `git worktree add`'s lock mid-checkout.
+  it('keeps the stale-lock threshold clear of the longest git command in flight', async () => {
+    const { STALE_GIT_LOCK_MIN_AGE_MS } = await vi.importActual('../lib/gitStaleLock.js');
+    expect(STALE_GIT_LOCK_MIN_AGE_MS).toBeGreaterThanOrEqual(3 * WORKTREE_ADD_TIMEOUT_MS);
+  });
+
   it('gives up after the max attempts on persistent lock contention', async () => {
     execGitMock.mockRejectedValue(new Error('cannot lock ref'));
     const p = addWorktreeWithRetry(['worktree', 'add', '/wt', 'main'], '/repo');
@@ -700,6 +729,9 @@ describe('addWorktreeWithRetry (lock-contention retry, #2193)', () => {
     await expect(addWorktreeWithRetry(['worktree', 'add', '/wt', 'origin/nope'], '/repo'))
       .rejects.toThrow(/invalid reference/);
     expect(execGitMock).toHaveBeenCalledTimes(1);
+    // …and nothing reached for the unlink: a failure that named no lock must
+    // never put the stale-lock sweep in motion.
+    expect(clearStaleGitLockMock).not.toHaveBeenCalled();
   });
 
   it('does NOT retry an "already exists" precondition failure', async () => {
