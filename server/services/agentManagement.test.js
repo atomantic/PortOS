@@ -2284,7 +2284,7 @@ describe('credential-bootstrap process-group teardown', () => {
     Object.create(ChildProcess.prototype), { kill, pid: 909090 },
   );
 
-  it('terminateAgent signals the whole group for a wrapped agent', async () => {
+  it.skipIf(process.platform === 'win32')('terminateAgent signals the whole group for a wrapped agent', async () => {
     const kill = vi.fn();
     activeAgents.set('agent-1', {
       process: wrappedAgent(kill), processGroup: true, taskId: 'task-1', runId: 'run-1', pid: 909090,
@@ -2299,7 +2299,7 @@ describe('credential-bootstrap process-group teardown', () => {
     clearTimeout(activeAgents.get('agent-1')?.killTimer);
   });
 
-  it('terminateAgent signals only the child for an unwrapped agent', async () => {
+  it.skipIf(process.platform === 'win32')('terminateAgent signals only the child for an unwrapped agent', async () => {
     const kill = vi.fn();
     activeAgents.set('agent-1', {
       process: fakeChildProcess(kill), taskId: 'task-1', runId: 'run-1', pid: 123,
@@ -2312,7 +2312,7 @@ describe('credential-bootstrap process-group teardown', () => {
     clearTimeout(activeAgents.get('agent-1')?.killTimer);
   });
 
-  it('killAgent SIGKILLs the whole group for a wrapped agent', async () => {
+  it.skipIf(process.platform === 'win32')('killAgent SIGKILLs the whole group for a wrapped agent', async () => {
     const kill = vi.fn();
     activeAgents.set('agent-1', {
       process: wrappedAgent(kill), processGroup: true, taskId: 'task-1', runId: 'run-1', pid: 909090,
@@ -2324,7 +2324,7 @@ describe('credential-bootstrap process-group teardown', () => {
     expect(kill).not.toHaveBeenCalled();
   });
 
-  it('pauseAgent signals the whole group for a wrapped agent', async () => {
+  it.skipIf(process.platform === 'win32')('pauseAgent signals the whole group for a wrapped agent', async () => {
     const kill = vi.fn();
     activeAgents.set('agent-1', {
       process: wrappedAgent(kill), processGroup: true, taskId: 'task-1', runId: 'run-1', pid: 909090,

@@ -29,6 +29,12 @@ const {
 } = await import('./visionCli.js');
 const { resolveWindowsExecutable, prepareWindowsSafeSpawn } = await import('../lib/bufferedSpawn.js');
 
+// Windows takes killProcessTree's tree-wide `taskkill /T` branch instead, so
+// `needsProcessGroup` is false there and these sites spawn attached. The policy
+// itself is pinned with an injected platform in credentialBootstrap.test.js;
+// these assert only that each site plumbs the decision through.
+const EXPECT_GROUP = process.platform !== 'win32';
+
 const PNG_DATA_URL = `data:image/png;base64,${Buffer.from('fake-png').toString('base64')}`;
 
 describe('decodeImageDataUrl', () => {
@@ -340,7 +346,7 @@ describe('describeImageViaCli', () => {
         provider: bootstrapProvider, dataUrl: PNG_DATA_URL, prompt: 'p', spawnImpl: wrappedSpawn,
       });
       expect(wrappedSpawn.mock.calls[0][0]).toBe('token-cli');
-      expect(wrappedSpawn.mock.calls[0][2].detached).toBe(true);
+      expect(wrappedSpawn.mock.calls[0][2].detached).toBe(EXPECT_GROUP);
 
       const plainChild = makeFakeChild();
       const plainSpawn = spawnEmitting(plainChild, (c) => { c.emit('close', 0); });
@@ -351,7 +357,7 @@ describe('describeImageViaCli', () => {
       expect(plainSpawn.mock.calls[0][2].detached).toBe(false);
     });
 
-    it('signals the whole group on timeout for a wrapped provider', async () => {
+    it.skipIf(process.platform === 'win32')('signals the whole group on timeout for a wrapped provider', async () => {
       // Spy so the negative pid never reaches a real process group.
       const killSpy = vi.spyOn(process, 'kill').mockImplementation(() => true);
       const child = makeFakeChild();

@@ -205,7 +205,7 @@ describe('credentialBootstrap', () => {
     beforeEach(() => { resetDetachedGroupsForTests(); });
     afterEach(() => { resetDetachedGroupsForTests(); });
 
-    it('signals each tracked group and reports how many it reached', () => {
+    it.skipIf(process.platform === 'win32')('signals each tracked group and reports how many it reached', () => {
       // Spy so the negative pids never reach real process groups.
       const killSpy = vi.spyOn(process, 'kill').mockImplementation(() => true);
       trackDetachedGroup(fakeChild(101), true);
@@ -217,7 +217,7 @@ describe('credentialBootstrap', () => {
       killSpy.mockRestore();
     });
 
-    it('tracks nothing for an undetached spawn, and returns the child either way', () => {
+    it.skipIf(process.platform === 'win32')('tracks nothing for an undetached spawn, and returns the child either way', () => {
       const killSpy = vi.spyOn(process, 'kill').mockImplementation(() => true);
       const child = fakeChild(303);
 
@@ -245,7 +245,7 @@ describe('credentialBootstrap', () => {
     // 'close' waits for its stdio — which the harness is still holding in
     // exactly the case this registry exists for. Forgetting at 'exit' would drop
     // the group precisely when the orphaned harness is its only member.
-    it('keeps tracking a group whose wrapper exited while the harness holds its stdio', () => {
+    it.skipIf(process.platform === 'win32')('keeps tracking a group whose wrapper exited while the harness holds its stdio', () => {
       const killSpy = vi.spyOn(process, 'kill').mockImplementation(() => true);
       const child = fakeChild(515);
       trackDetachedGroup(child, true);

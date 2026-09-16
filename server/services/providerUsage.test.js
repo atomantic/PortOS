@@ -68,6 +68,12 @@ import { systemTimeZone } from './claudeCodeUsage.js';
 import { getSettings } from './settings.js';
 import { getImageGenQuota } from './imageGenQuota.js';
 
+// Windows takes killProcessTree's tree-wide `taskkill /T` branch instead, so
+// `needsProcessGroup` is false there and these sites spawn attached. The policy
+// itself is pinned with an injected platform in credentialBootstrap.test.js;
+// these assert only that each site plumbs the decision through.
+const EXPECT_GROUP = process.platform !== 'win32';
+
 // Synthetic Antigravity `/usage` panel — invented values, redacted account, in
 // the agy 1.1.x rendered shape (`… Limit Remaining`). The bar percentage is
 // percent REMAINING; a full bar with "Quota available" has no reset.
@@ -455,7 +461,7 @@ describe('getProviderQuotas', () => {
 
     expect(scrapeTuiUsage).toHaveBeenCalledWith(expect.objectContaining({
       command: 'token-cli',
-      processGroup: true,
+      processGroup: EXPECT_GROUP,
     }));
   });
 

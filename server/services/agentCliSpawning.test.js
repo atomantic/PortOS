@@ -135,6 +135,12 @@ import { existsSync } from 'fs';
 import { spawn } from '../lib/childProcess.js';
 import { prepareCliSpawn, killProcessTree } from '../lib/bufferedSpawn.js';
 
+// Windows takes killProcessTree's tree-wide `taskkill /T` branch instead, so
+// `needsProcessGroup` is false there and these sites spawn attached. The policy
+// itself is pinned with an injected platform in credentialBootstrap.test.js;
+// these assert only that each site plumbs the decision through.
+const EXPECT_GROUP = process.platform !== 'win32';
+
 describe('buildCliSpawnConfig', () => {
   it('omits --model for Codex configured-default sentinel but bypasses sandbox/approvals', () => {
     const config = buildCliSpawnConfig({ id: 'codex', command: 'codex' }, 'codex-configured-default');
@@ -1446,10 +1452,10 @@ describe('stream error containment', () => {
 
       const [command, , options] = spawn.mock.calls.at(-1);
       expect(command).toBe('token-cli');
-      expect(options.detached).toBe(true);
+      expect(options.detached).toBe(EXPECT_GROUP);
       // agentManagement's pause/terminate/force-kill hold only this entry and
       // cannot re-derive the wrap, so the flag has to travel with it.
-      expect(activeAgents.get(bootstrapArgs.agentId).processGroup).toBe(true);
+      expect(activeAgents.get(bootstrapArgs.agentId).processGroup).toBe(EXPECT_GROUP);
 
       activeAgents.delete(bootstrapArgs.agentId);
       fakeProcess.emit('close', 0);
@@ -1483,7 +1489,7 @@ describe('stream error containment', () => {
 
       expect(killProcessTree).toHaveBeenCalledTimes(1);
       expect(killProcessTree.mock.calls[0][1]).toBe('SIGTERM');
-      expect(killProcessTree.mock.calls[0][2]).toEqual({ processGroup: true });
+      expect(killProcessTree.mock.calls[0][2]).toEqual({ processGroup: EXPECT_GROUP });
 
       fakeProcess.killed = true;
       fakeProcess.emit('close', 143);

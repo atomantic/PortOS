@@ -1632,7 +1632,7 @@ describe('executeTuiRun', () => {
     });
     afterEach(() => { killSpy.mockRestore(); });
 
-    it('signals the whole group when finish() tears a wrapped PTY down', async () => {
+    it.skipIf(process.platform === 'win32')('signals the whole group when finish() tears a wrapped PTY down', async () => {
       const promise = executeTuiRun({
         runId: 'run-bootstrap-kill', provider: bootstrapProvider,
         prompt: 'a prompt long enough to clear the guard', workspacePath: TEST_WORKSPACE, timeout: 60000,
@@ -1653,7 +1653,7 @@ describe('executeTuiRun', () => {
       expect(pty.kill).not.toHaveBeenCalled();
     });
 
-    it('leaves an unwrapped PTY on the plain node-pty kill', async () => {
+    it.skipIf(process.platform === 'win32')('leaves an unwrapped PTY on the plain node-pty kill', async () => {
       const promise = executeTuiRun({
         runId: 'run-unwrapped-kill', provider: { id: 'claude', type: 'tui', command: 'echo' },
         prompt: 'a prompt long enough to clear the guard', workspacePath: TEST_WORKSPACE, timeout: 60000,
@@ -1671,7 +1671,7 @@ describe('executeTuiRun', () => {
       expect(pty.kill).toHaveBeenCalledWith('SIGHUP');
     });
 
-    it('registers a group-aware killable so /runs Stop reaches the harness, not just the wrapper', async () => {
+    it.skipIf(process.platform === 'win32')('registers a group-aware killable so /runs Stop reaches the harness, not just the wrapper', async () => {
       const promise = executeTuiRun({
         runId: 'run-bootstrap-stop', provider: bootstrapProvider,
         prompt: 'a prompt long enough to clear the guard', workspacePath: TEST_WORKSPACE, timeout: 60000,
