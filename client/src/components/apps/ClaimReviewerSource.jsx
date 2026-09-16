@@ -1,4 +1,5 @@
 import { Link } from 'react-router';
+import { getNavPageForPath } from '../../../../server/lib/navManifest.js';
 
 /**
  * Where a claim's reviewer list came from, in one sentence.
@@ -18,19 +19,20 @@ import { Link } from 'react-router';
  * them — naming it here would send the user to a screen with no such control.
  */
 export default function ClaimReviewerSource({ source }) {
+  const codeReviewersPage = getNavPageForPath('/models/code-reviewers')?.breadcrumb || 'its management page';
   if (source === 'task-override') {
     return (
       <>
         {' — from the '}<strong className="text-port-warning">claim-work</strong>{' reviewer override in '}
         <Link to="/cos/schedule" className="text-port-accent hover:underline">Chief of Staff → Schedule</Link>
-        {', not Models → Code Reviewers. Clear it there to follow the install default again.'}
+        {`, not ${codeReviewersPage}. Clear it there to follow the install default again.`}
       </>
     );
   }
   return (
     <>
       {' — from '}
-      <Link to="/models/code-reviewers" className="text-port-accent hover:underline">Models → Code Reviewers</Link>.
+      <Link to="/models/code-reviewers" className="text-port-accent hover:underline">{codeReviewersPage}</Link>.
     </>
   );
 }

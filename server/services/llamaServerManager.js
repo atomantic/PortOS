@@ -26,6 +26,8 @@ import {
   wingetLinkDirs,
 } from '../lib/llamaCppInstall.js';
 import { PORTS } from '../lib/ports.js';
+import { getNavPageForPath } from '../lib/navManifest.js';
+import { LOCAL_RUNTIME_MANAGE_URLS } from '../lib/localProviderRuntime.js';
 import { tuningSpecsFor } from '../lib/localModelTuning.js';
 import { ServerError } from '../lib/errorHandler.js';
 import { bufferedSpawn } from '../lib/bufferedSpawn.js';
@@ -1097,9 +1099,10 @@ export async function relaunchLlamaServerWithAlias(alias) {
     };
   }
   if (!managed || !config?.model) {
+    const page = getNavPageForPath(LOCAL_RUNTIME_MANAGE_URLS.llama)?.breadcrumb;
     return {
       applied: false,
-      reason: `llama-server is not running under PortOS, so its launch line is not PortOS's to change. Start it from Models → Runtimes, or add \`--alias ${wanted}\` to your own launch line.`,
+      reason: `llama-server is not running under PortOS, so its launch line is not PortOS's to change. ${page ? `Start it from ${page}` : 'Start it'}, or add \`--alias ${wanted}\` to your own launch line.`,
       config: null,
     };
   }

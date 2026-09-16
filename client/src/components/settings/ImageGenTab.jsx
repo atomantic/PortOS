@@ -21,6 +21,7 @@ import useLocalImageRuntime from '../../hooks/useLocalImageRuntime';
 import useDrawerTab from '../../hooks/useDrawerTab';
 import { isLoopbackHost } from '../../lib/loopbackHost.js';
 import { PORTS } from '../../lib/ports.js';
+import { getNavPageForPath } from '../../../../server/lib/navManifest.js';
 import {
   getSettings, updateSettings, getImageGenStatus, generateImage,
   registerTool, updateTool, getToolsList,
@@ -986,7 +987,7 @@ export function ImageGenTab() {
           <p className="text-xs text-gray-500">
             Pick a Python 3.10+ interpreter — PortOS auto-detects venvs and conda installs and can install
             missing packages directly. HF model weights stream into the standard <code>~/.cache/huggingface</code>
-            and are surfaced in <a href="/models/media" className="text-port-accent hover:underline">Models → Media</a>.
+            and are surfaced in <a href="/models/media" className="text-port-accent hover:underline">{getNavPageForPath('/models/media')?.breadcrumb || 'its management page'}</a>.
           </p>
           {/* The verdict first, then the interpreter detail below it. The
               packages panel only ever probes the mflux interpreter, so on its
@@ -1029,7 +1030,7 @@ export function ImageGenTab() {
             form, deck cards, sprite references, pipeline visuals, character sheets and
             FableLoom. A model picked on one of those surfaces still wins for that render.
             Weights download on first use; check what&apos;s already cached in{' '}
-            <a href="/models/media" className="text-port-accent hover:underline">Models → Media</a>.
+            <a href="/models/media" className="text-port-accent hover:underline">{getNavPageForPath('/models/media')?.breadcrumb || 'its management page'}</a>.
           </p>
           {localModels?.length === 0 && (
             <p role="status" className="text-xs text-port-warning">

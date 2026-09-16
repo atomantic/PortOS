@@ -37,7 +37,7 @@
  */
 
 import { localRuntimeForProvider } from '../lib/localProviderRuntime.js';
-import { getNavPageForPath } from '../lib/navManifest.js';
+import { expandPageToken, getNavPageForPath } from '../lib/navManifest.js';
 import { isConfiguredDefaultModel } from '../lib/providerModels.js';
 import { probeOpenAiModels } from '../lib/openAiModelsProbe.js';
 import { findCommandOnPath } from '../lib/processEnv.js';
@@ -269,21 +269,6 @@ function weightsDetail(runtime, weights) {
  * rather than inventing a destination.
  */
 const managePage = (runtime) => getNavPageForPath(runtime.manageUrl)?.breadcrumb ?? null;
-
-/**
- * Expand the `{page}` token a runtime's user-facing copy writes instead of a
- * breadcrumb (`localProviderRuntime.js`). Same reason as `managePage`: the
- * sentence and the link it describes must name one page, decided by the route.
- *
- * A runtime with no page never uses the token, but fall back rather than ship a
- * literal `{page}` if one ever slips in — `localProviderRuntime.test.js` is the
- * guard that keeps that from happening quietly.
- */
-const expandPageToken = (text, runtime) => (
-  typeof text === 'string' && text.includes('{page}')
-    ? text.replaceAll('{page}', managePage(runtime) || 'its management page')
-    : text
-);
 
 /** The `runtime` check — is the daemon's software here at all? */
 function runtimeCheck(runtime, { onPath, appInstalled, installed, reachable, setup }) {
