@@ -142,6 +142,46 @@ describe('Provider Service', () => {
     expect(await providerService.getProviderById('example-tui')).not.toHaveProperty('credentialBootstrap');
   });
 
+  it('fans the whole connection — endpoint, key and env — out to the mode sibling', async () => {
+    // The editor opens the group's REPRESENTATIVE (the CLI mode) and edits the
+    // connection there. Before the fan-out covered these three, the save left
+    // the TUI record — the one "Launch in Shell" resolves its command line and
+    // env from — on the old backend with the old key, and the disagreement
+    // split the one card in two on the next load.
+    await writeFile(join(TEST_DATA_DIR, 'providers.json'), JSON.stringify({ activeProvider: 'example', providers: {
+      example: { id: 'example', name: 'Example CLI', type: 'cli', command: 'example', enabled: true, models: ['a'], args: ['--print'], endpoint: 'https://old.example.com', apiKey: 'old-key', envVars: { BASE: 'old' } },
+      'example-tui': { id: 'example-tui', name: 'Example TUI', type: 'tui', command: 'example', enabled: true, models: ['a'], args: [], endpoint: 'https://old.example.com', apiKey: 'old-key', envVars: { BASE: 'old' } },
+    } }));
+    await providerService.updateProvider('example', {
+      endpoint: 'https://new.example.com', apiKey: 'new-key', envVars: { BASE: 'new' },
+    });
+    const sibling = await providerService.getProviderById('example-tui');
+    expect(sibling).toMatchObject({ endpoint: 'https://new.example.com', apiKey: 'new-key', envVars: { BASE: 'new' } });
+    // Mode-specific argv still never crosses over.
+    expect(sibling.args).toEqual([]);
+    // Still ONE card after the edit: a fan-out that missed a pairing key would
+    // leave the two disagreeing, and this catalog change would stop crossing.
+    await providerService.updateProvider('example-tui', { models: ['b'] });
+    expect((await providerService.getProviderById('example')).models).toEqual(['b']);
+  });
+
+  it('converges a pair whose connection landed on only ONE mode, and refuses when the two CONTRADICT', async () => {
+    // An install that edited a unified card before the fan-out covered these
+    // keys still carries the split; so does a hand-edited file or a restored
+    // backup. The load-time repair fills what only one mode names — including
+    // the two-key case a single-key projection could never see.
+    await writeFile(join(TEST_DATA_DIR, 'providers.json'), JSON.stringify({ activeProvider: 'example', providers: {
+      example: { id: 'example', name: 'Example CLI', type: 'cli', command: 'example', enabled: true, models: ['a'], endpoint: 'https://api.example.com', apiKey: 'k' },
+      'example-tui': { id: 'example-tui', name: 'Example TUI', type: 'tui', command: 'example', enabled: true, models: ['a'] },
+      // Two connections that happen to share a command: they CONTRADICT on the
+      // endpoint, so the key one of them names must not be handed to the other.
+      other: { id: 'other', name: 'Other CLI', type: 'cli', command: 'other', enabled: true, models: ['a'], endpoint: 'https://one.example.com', apiKey: 'secret' },
+      'other-tui': { id: 'other-tui', name: 'Other TUI', type: 'tui', command: 'other', enabled: true, models: ['a'], endpoint: 'https://two.example.com' },
+    } }));
+    expect(await providerService.getProviderById('example-tui')).toMatchObject({ endpoint: 'https://api.example.com', apiKey: 'k' });
+    expect(await providerService.getProviderById('other-tui')).not.toHaveProperty('apiKey');
+  });
+
   it.skipIf(process.platform === 'win32')('refreshes Pi models and distinguishes authentication from probe failure', async () => {
     const command = join(TEST_DATA_DIR, 'pi');
     const emit = async (text, code = 0) => {

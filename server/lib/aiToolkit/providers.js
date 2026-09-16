@@ -847,10 +847,11 @@ export function createProviderService(config = {}) {
       };
       dropClearedBootstrap(provider);
 
-      // Grouped BEFORE the edit lands: a bootstrap set on one mode is exactly
-      // the value `providerModeGroups` pairs on, so reading the group after
-      // would find the siblings already split and skip the fan-out that keeps
-      // them together.
+      // Grouped BEFORE the edit lands: every connection-identity value the
+      // fan-out shares (endpoint, API key, env vars, bootstrap) is exactly what
+      // `providerModeGroups` pairs on, so reading the group after would find
+      // the siblings already split and skip the fan-out that keeps them
+      // together.
       const group = providerModeGroups(Object.values(data.providers)).find(modes => modes.some(mode => mode.id === id));
       data.providers[id] = provider;
       for (const sibling of group || []) {
