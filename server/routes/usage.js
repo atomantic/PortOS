@@ -4,8 +4,9 @@ import { getClaudeCodeUsage } from '../services/claudeCodeUsage.js';
 import { getProviderQuotas } from '../services/providerUsage.js';
 import { getAllProviders } from '../services/providers.js';
 import { asyncHandler } from '../lib/errorHandler.js';
-import { validateRequest, usageQuerySchema, usageMessagesSchema, providerUsageQuerySchema, subscriptionCostsSchema, usageFleetBillingSchema } from '../lib/validation.js';
+import { validateRequest, usageQuerySchema, usageMessagesSchema, providerUsageQuerySchema, subscriptionsUpdateSchema, subscriptionEnabledSchema, usageFleetBillingSchema } from '../lib/validation.js';
 import { saveSubscriptionCosts, getSubscriptionSavings } from '../services/subscriptionCosts.js';
+import { getSubscriptionOverview, savePlanTiers, setSubscriptionEnabled } from '../services/subscriptions.js';
 import { getFleetUsage } from '../services/peerUsage.js';
 import { getApiBilledInstanceIds, setInstanceUsesSubscriptions } from '../services/usageFleetBilling.js';
 import { resolveUsageRange } from '../lib/usageRange.js';
@@ -54,11 +55,42 @@ router.get('/', asyncHandler(async (req, res) => {
   res.json({ ...summary, subscriptionSavings, fleet });
 }));
 
-// PUT /api/usage/subscriptions - Merge plan prices. An omitted family keeps its
-// stored price; one sent as null (or 0) is cleared.
+// GET /api/usage/subscriptions - The Subscriptions page's own model: one row
+// per manageable plan (enabled state, plan tier, monthly price, the provider
+// records the toggle fans out to). The savings/spend figures for those rows
+// come from GET /api/usage; the quota meters from GET /api/usage/providers.
+router.get('/subscriptions', asyncHandler(async (req, res) => {
+  res.json(await getSubscriptionOverview());
+}));
+
+// PUT /api/usage/subscriptions - Merge plan prices and/or plan tiers. Within
+// each map an omitted family keeps its stored value; one sent as null (or 0 /
+// "") is cleared. The two maps are independent, so a tier save never rewrites
+// a price and vice versa.
+//
+// Both slices land in ONE request, and the response is the refreshed row set —
+// so the editor applies a save without a follow-up GET, and a row where the
+// user changed both the price and the tier costs one round trip, not two.
 router.put('/subscriptions', asyncHandler(async (req, res) => {
-  const { costs } = validateRequest(subscriptionCostsSchema, req.body);
-  res.json({ costs: await saveSubscriptionCosts(costs, { actor: 'user' }) });
+  const { costs, tiers } = validateRequest(subscriptionsUpdateSchema, req.body);
+  if (costs !== undefined) await saveSubscriptionCosts(costs, { actor: 'user' });
+  if (tiers !== undefined) await savePlanTiers(tiers, { actor: 'user' });
+  res.json(await getSubscriptionOverview());
+}));
+
+// PUT /api/usage/subscriptions/enabled - Switch one subscription on or off by
+// flipping `enabled` across every provider record in that family — PortOS-side
+// enablement only. It never reaches the vendor's billing system: nothing here
+// purchases, cancels or changes a plan at Anthropic, OpenAI, Google or xAI.
+//
+// A priced family with no providers configured answers `applied: false` rather
+// than 404: the row legitimately exists so its price stays visible, there is
+// just nothing local to toggle. The refreshed rows ride along for the same
+// reason as above.
+router.put('/subscriptions/enabled', asyncHandler(async (req, res) => {
+  const { family, enabled } = validateRequest(subscriptionEnabledSchema, req.body);
+  const outcome = await setSubscriptionEnabled(family, enabled);
+  res.json({ ...outcome, ...(await getSubscriptionOverview()) });
 }));
 
 // PUT /api/usage/fleet-billing - Mark one federated instance as paying API

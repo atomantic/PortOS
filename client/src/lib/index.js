@@ -220,6 +220,7 @@ export * from './wrSceneCursor.js';
 export * from './writingGuide.js';
 export * from './qrCode.js';
 export * from './riggingReasons.js';
+export * from './usagePeriods.js';
 export * from './usdzExport.js';
 export * from './eidoverseFrame.js';
 export * from './songBookDraft.js';

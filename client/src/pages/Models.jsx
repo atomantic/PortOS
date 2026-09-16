@@ -6,6 +6,7 @@ import PageSkeleton from '../components/ui/PageSkeleton';
 import ModelsTabsHeader from '../components/models/ModelsTabsHeader';
 import Image3dRuntimes from '../components/models/Image3dRuntimes';
 import ModelStatusTab from '../components/models/ModelStatusTab';
+import SubscriptionsTab from '../components/models/SubscriptionsTab';
 import CodeReviewersTab from '../components/settings/CodeReviewersTab';
 import HarnessesTab from '../components/models/HarnessesTab';
 import EmbeddingsTab from '../components/settings/EmbeddingsTab';
@@ -40,6 +41,7 @@ const MediaModels = lazyWithReload(() => import('./MediaModels'));
  *   - **Performance** — measured assessments and launch-tuning comparison.
  *   - **Providers** — configured AI provider connections and model catalogs.
  *   - **Status** — residency plus the downloaded-model inventory.
+ *   - **Subscriptions** — which paid plans are on, their tier, price and spend.
  *   - **Training** — LoRA fine-tuning datasets and runs.
  *   - **Usage** — provider quota and PortOS AI usage accounting.
  *
@@ -64,6 +66,7 @@ const TAB_CONTENT = {
   media: MediaModels,
   performance: LocalModelAssessments,
   status: ModelStatusTab,
+  subscriptions: SubscriptionsTab,
   training: LoraTraining,
 };
 

@@ -20,6 +20,7 @@ vi.mock('../components/settings/LocalLlmRuntimesView.jsx', () => ({ default: () 
 vi.mock('../components/settings/EmbeddingsTab', () => ({ default: () => <div>embeddings panel</div> }));
 vi.mock('../components/models/Image3dRuntimes', () => ({ default: () => <div>3d runtimes panel</div> }));
 vi.mock('../components/models/ModelStatusTab', () => ({ default: () => <div>status panel</div> }));
+vi.mock('../components/models/SubscriptionsTab', () => ({ default: () => <div>subscriptions panel</div> }));
 vi.mock('../components/settings/CodeReviewersTab', () => ({ default: () => <div>code reviewers panel</div> }));
 vi.mock('../components/models/HarnessesTab', () => ({ default: () => <div>harnesses panel</div> }));
 vi.mock('../components/models/ModelComparison', () => ({ default: () => <div>comparison panel</div> }));
@@ -46,6 +47,7 @@ const PANEL_MARKER = {
   media: 'media models panel',
   performance: 'assessments panel',
   status: 'status panel',
+  subscriptions: 'subscriptions panel',
   training: 'training panel',
 };
 

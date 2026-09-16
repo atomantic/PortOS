@@ -8,7 +8,7 @@ import {
   roundCents,
   MAX_MONTHLY_COST
 } from '../lib/subscriptionSavings.js';
-import { isPlainObject } from '../lib/objects.js';
+import { mergeFamilyMap, normalizeFamilyMap } from '../lib/familySettingsMap.js';
 
 /**
  * What the user pays for each AI subscription, and what those plans saved
@@ -46,15 +46,7 @@ export function normalizeCost(value) {
 }
 
 /** Pure: normalize a whole cost map, dropping every cleared/invalid entry. */
-export function normalizeSubscriptionCosts(raw) {
-  if (!isPlainObject(raw)) return {};
-  const out = {};
-  for (const [family, value] of Object.entries(raw)) {
-    const cost = normalizeCost(value);
-    if (cost !== null) out[family] = cost;
-  }
-  return out;
-}
+export const normalizeSubscriptionCosts = (raw) => normalizeFamilyMap(raw, normalizeCost);
 
 /** Stored monthly plan prices, `{ [family]: monthlyUsd }`. */
 export async function getSubscriptionCosts() {
@@ -68,23 +60,17 @@ export async function getSubscriptionCosts() {
  * Absent key vs. present-but-empty are DIFFERENT (the LLM/merge convention in
  * AGENTS.md applies to user edits too): a family the patch omits keeps its
  * stored price, while a family sent as `null`/`0` is an intentional clear and
- * is deleted. Without that split, an editor that only submits changed rows
- * could never remove a plan the user cancelled.
+ * is deleted. `mergeFamilyMap` owns that rule for every per-family settings
+ * map, so the plan tiers beside these prices cannot drift from it.
  */
 // `options` is forwarded to `updateSettingsWith` so the operator-action actor
 // (#5594) survives: both callers — the Settings PUT and the usage page's price
 // editor — are a human, and would otherwise be logged as `system`.
 export async function saveSubscriptionCosts(patch, options) {
-  const incoming = isPlainObject(patch) ? patch : {};
-  const next = await updateSettingsWith((current) => {
-    const merged = { ...normalizeSubscriptionCosts(current?.[SETTINGS_KEY]) };
-    for (const [family, value] of Object.entries(incoming)) {
-      const cost = normalizeCost(value);
-      if (cost === null) delete merged[family];
-      else merged[family] = cost;
-    }
-    return { ...current, [SETTINGS_KEY]: merged };
-  }, options);
+  const next = await updateSettingsWith((current) => ({
+    ...current,
+    [SETTINGS_KEY]: mergeFamilyMap(current?.[SETTINGS_KEY], patch, normalizeCost),
+  }), options);
   return normalizeSubscriptionCosts(next?.[SETTINGS_KEY]);
 }
 

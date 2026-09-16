@@ -27,6 +27,12 @@ vi.mock('../services/subscriptionCosts.js', () => ({
   getSubscriptionSavings: vi.fn(async () => ({ configured: false, families: [] }))
 }));
 
+vi.mock('../services/subscriptions.js', () => ({
+  getSubscriptionOverview: vi.fn(async () => ({ families: [{ family: 'claude' }] })),
+  savePlanTiers: vi.fn(async (tiers) => tiers),
+  setSubscriptionEnabled: vi.fn(async (family, enabled) => ({ family, enabled, applied: true, changed: [] })),
+}));
+
 vi.mock('../services/providers.js', () => ({
   // getAllProviders returns the wrapped { activeProvider, providers } shape —
   // the route must unwrap `.providers` before passing to getUsageSummary.
@@ -51,6 +57,7 @@ import { getAllProviders } from '../services/providers.js';
 import { getProviderQuotas } from '../services/providerUsage.js';
 import { getHistoricalUsageBackfillStatus, startHistoricalUsageBackfill } from '../services/usageBackfill.js';
 import { getSubscriptionSavings, saveSubscriptionCosts } from '../services/subscriptionCosts.js';
+import { getSubscriptionOverview, savePlanTiers, setSubscriptionEnabled } from '../services/subscriptions.js';
 import { getFleetUsage } from '../services/peerUsage.js';
 import { getApiBilledInstanceIds, setInstanceUsesSubscriptions } from '../services/usageFleetBilling.js';
 import usageRoutes from './usage.js';
@@ -227,6 +234,73 @@ describe('usage routes', () => {
       .put('/api/usage/subscriptions')
       .send({ costs: { claude: 100001 } });
     expect(res.status).toBe(400);
+  });
+
+  it('PUT /api/usage/subscriptions saves a tier patch without disturbing the stored prices', async () => {
+    const res = await request(buildApp())
+      .put('/api/usage/subscriptions')
+      .send({ tiers: { claude: 'Max 20x' } });
+    expect(res.status).toBe(200);
+    expect(savePlanTiers).toHaveBeenCalledWith({ claude: 'Max 20x' }, { actor: 'user' });
+    // A tier save must never rewrite the price map beside it.
+    expect(saveSubscriptionCosts).not.toHaveBeenCalled();
+    // The refreshed rows come back with the write, so the editor needs no
+    // follow-up GET to apply what it just saved.
+    expect(res.body.families).toEqual([{ family: 'claude' }]);
+  });
+
+  it('PUT /api/usage/subscriptions saves both slices in one call', async () => {
+    const res = await request(buildApp())
+      .put('/api/usage/subscriptions')
+      .send({ costs: { claude: 200 }, tiers: { claude: null } });
+    expect(res.status).toBe(200);
+    expect(saveSubscriptionCosts).toHaveBeenCalledWith({ claude: 200 }, { actor: 'user' });
+    expect(savePlanTiers).toHaveBeenCalledWith({ claude: null }, { actor: 'user' });
+  });
+
+  it('PUT /api/usage/subscriptions rejects an over-long plan tier', async () => {
+    const res = await request(buildApp())
+      .put('/api/usage/subscriptions')
+      .send({ tiers: { claude: 'x'.repeat(61) } });
+    expect(res.status).toBe(400);
+    expect(savePlanTiers).not.toHaveBeenCalled();
+  });
+
+  it('PUT /api/usage/subscriptions rejects an unknown family key in the tier map', async () => {
+    const res = await request(buildApp())
+      .put('/api/usage/subscriptions')
+      .send({ tiers: { 'not-a-family': 'Pro' } });
+    expect(res.status).toBe(400);
+    expect(savePlanTiers).not.toHaveBeenCalled();
+  });
+
+  it('GET /api/usage/subscriptions returns the plan rows', async () => {
+    const res = await request(buildApp()).get('/api/usage/subscriptions');
+    expect(res.status).toBe(200);
+    expect(res.body.families).toEqual([{ family: 'claude' }]);
+  });
+
+  it('PUT /api/usage/subscriptions/enabled toggles one subscription', async () => {
+    setSubscriptionEnabled.mockResolvedValue({ family: 'codex', enabled: false, applied: true, changed: ['codex-cli'] });
+    const res = await request(buildApp())
+      .put('/api/usage/subscriptions/enabled')
+      .send({ family: 'codex', enabled: false });
+    expect(res.status).toBe(200);
+    expect(setSubscriptionEnabled).toHaveBeenCalledWith('codex', false);
+    expect(res.body).toEqual({
+      family: 'codex', enabled: false, applied: true, changed: ['codex-cli'],
+      families: [{ family: 'claude' }],
+    });
+  });
+
+  // The handler fans the flag across every provider record the family owns, so
+  // an unrecognized id must be refused at the edge rather than silently no-op.
+  it('PUT /api/usage/subscriptions/enabled rejects an unknown family', async () => {
+    const res = await request(buildApp())
+      .put('/api/usage/subscriptions/enabled')
+      .send({ family: 'not-a-family', enabled: true });
+    expect(res.status).toBe(400);
+    expect(setSubscriptionEnabled).not.toHaveBeenCalled();
   });
 
   it('PUT /api/usage/fleet-billing marks an instance as API-billed', async () => {
