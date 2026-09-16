@@ -122,12 +122,16 @@ export default function EidoverseControllersPanel() {
 
   useEffect(() => {
     let live = true;
-    refresh()
-      .then(() => { if (live) setLoadError(''); })
+    listEidoverseControllers(silent)
+      .then((listing) => {
+        if (!live) return;
+        applyListing(listing);
+        setLoadError('');
+      })
       .catch((reason) => { if (live) setLoadError(reason?.message || 'Could not load controllers.'); })
       .finally(() => { if (live) setLoading(false); });
     return () => { live = false; };
-  }, [refresh]);
+  }, [applyListing]);
 
   const openController = useCallback((id) => {
     setSearchParams((prev) => {
