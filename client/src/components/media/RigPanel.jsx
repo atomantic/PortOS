@@ -4,7 +4,7 @@ import { getRiggingReadiness, rigImageTo3dModel, listRiggingClips, retargetImage
 import { riggingReasonLabel } from '../../lib/riggingReasons.js';
 import useMounted from '../../hooks/useMounted';
 import { useInstanceFeatures } from '../../hooks/useInstanceFeatures';
-import { formatBytes } from '../../utils/formatters';
+import { formatBytes, formatCount } from '../../utils/formatters';
 import toast from '../ui/Toast';
 
 /**
@@ -152,7 +152,7 @@ export default function RigPanel({ record, onRecordChange }) {
         <div className="mt-2 space-y-1 text-xs text-gray-400">
           <p className="text-port-success">
             Rigged against {rig.summary?.bones ?? 0} bones
-            {rig.summary?.vertices ? ` · ${rig.summary.vertices.toLocaleString()} vertices` : ''}
+            {rig.summary?.vertices ? ` · ${formatCount(rig.summary.vertices)} vertices` : ''}
             {rig.bytes ? ` · ${formatBytes(rig.bytes)}` : ''}
           </p>
           <p>

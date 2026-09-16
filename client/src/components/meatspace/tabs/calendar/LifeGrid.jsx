@@ -7,6 +7,7 @@ import {
   EVENT_TYPE_STYLES, cellClasses, computeYearGrid, computeMonthGrid,
   computeMonthCalendars, computeEventWeeks,
 } from './lifeGridMath';
+import { formatCount } from '../../../../utils/formatters';
 
 // === Year Grid ===
 
@@ -377,8 +378,8 @@ export default function LifeGrid({ grid, stats, birthDate, deathDate, lifeEvents
   const unitLabel = {
     years: `Year ${Math.floor(stats.age.years)} of ${Math.ceil(stats.remaining.years + stats.age.years)}`,
     months: `Month ${Math.floor(stats.age.years * 12)} of ${Math.floor((stats.remaining.years + stats.age.years) * 12)}`,
-    weeks: `Week ${stats.age.weeks.toLocaleString()} of ${stats.total.weeks.toLocaleString()}`,
-    days: `Day ${stats.age.days.toLocaleString()} of ${Math.floor((stats.remaining.days || 0) + stats.age.days).toLocaleString()}`,
+    weeks: `Week ${formatCount(stats.age.weeks)} of ${formatCount(stats.total.weeks)}`,
+    days: `Day ${formatCount(stats.age.days)} of ${formatCount(Math.floor((stats.remaining.days || 0) + stats.age.days))}`,
   };
 
   return (

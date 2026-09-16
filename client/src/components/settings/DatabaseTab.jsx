@@ -2,7 +2,7 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import { Container, HardDrive, Download, ArrowRightLeft, Wrench, RefreshCw, Square, RotateCw, Play, Trash2 } from 'lucide-react';
 import toast from '../ui/Toast';
 import BrailleSpinner from '../BrailleSpinner';
-import { formatBytes } from '../../utils/formatters';
+import { formatBytes, formatCount } from '../../utils/formatters';
 import {
   getDatabaseStatus, switchDatabase, setupNativeDatabase, exportDatabase, fixDatabase,
   syncDatabase, startDatabase, stopDatabase, destroyDatabase
@@ -239,7 +239,7 @@ export function DatabaseTab() {
             <span className={`w-2 h-2 rounded-full ${dbStatus?.connected ? 'bg-port-success' : 'bg-port-error'}`} />
             <span className="text-sm text-gray-300">
               {dbStatus?.connected ? 'Connected' : dbStatus ? 'Disconnected' : ''}
-              {dbStatus?.memoryCount != null && ` \u2014 ${dbStatus.memoryCount.toLocaleString()} memories`}
+              {dbStatus?.memoryCount != null && ` \u2014 ${formatCount(dbStatus.memoryCount)} memories`}
               {dbStatus?.dbBytes != null && ` \u2014 ${formatBytes(dbStatus.dbBytes)}`}
               {dbStatus?.tableCount != null && ` (${dbStatus.tableCount} tables)`}
             </span>

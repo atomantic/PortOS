@@ -7,7 +7,7 @@ import DeathClockCountdown from '../../DeathClockCountdown';
 import ProvenanceChip from '../../ui/ProvenanceChip';
 import { useAutoRefetch } from '../../../hooks/useAutoRefetch';
 import { clickableProps } from '../../../lib/a11yKeyboard.js';
-import { formatWeight, formatPercent, formatDateShort } from '../../../utils/formatters';
+import { formatWeight, formatPercent, formatDateShort, formatCount } from '../../../utils/formatters';
 
 function HealthTile({ icon: Icon, iconColor, label, metrics, onClick }) {
   return (
@@ -329,9 +329,9 @@ export default function OverviewTab() {
             label="Life Calendar"
             onClick={() => navigate('/meatspace/calendar')}
             metrics={[
-              { label: 'Saturdays left', value: calendar.stats.remaining.saturdays.toLocaleString() },
-              { label: 'Weeks left', value: calendar.stats.remaining.weeks.toLocaleString() },
-              { label: 'Awake days', value: calendar.stats.remaining.awakeDays.toLocaleString() },
+              { label: 'Saturdays left', value: formatCount(calendar.stats.remaining.saturdays) },
+              { label: 'Weeks left', value: formatCount(calendar.stats.remaining.weeks) },
+              { label: 'Awake days', value: formatCount(calendar.stats.remaining.awakeDays) },
             ]}
           />
         )}

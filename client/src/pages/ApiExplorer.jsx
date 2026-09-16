@@ -8,6 +8,7 @@ import RouteTabsHeader from '../components/ui/RouteTabsHeader';
 import BrailleSpinner from '../components/BrailleSpinner';
 import { copyToClipboard } from '../lib/clipboard';
 import * as api from '../services/api';
+import { formatCount } from '../utils/formatters';
 
 const HTTP_METHODS = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS', 'HEAD', 'TRACE'];
 const HTTP_METHOD_SET = new Set(HTTP_METHODS);
@@ -131,7 +132,7 @@ function CatalogView() {
           </label>
         </div>
         <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-gray-500">
-          <span>{filtered.length.toLocaleString()} matching operations</span>
+          <span>{formatCount(filtered.length)} matching operations</span>
           <div className="flex items-center gap-3">
             <Link to="/settings/api-access" className="text-port-accent hover:underline">Configure external access</Link>
             <a href="/api/api-docs/internal/openapi.json" target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-port-accent hover:underline">
@@ -254,7 +255,7 @@ function RestReferenceView() {
                 </label>
               </div>
               <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-gray-500">
-                <span>{filtered.length.toLocaleString()} matching operations</span>
+                <span>{formatCount(filtered.length)} matching operations</span>
                 <a href={specPath} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-port-accent hover:underline">
                   Open JSON <ExternalLink size={11} />
                 </a>
@@ -365,7 +366,7 @@ function EventCatalogView() {
           </label>
         </div>
         <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-gray-500">
-          <span>{events.length.toLocaleString()} matching events</span>
+          <span>{formatCount(events.length)} matching events</span>
           <a href="/api/api-docs/asyncapi.json" target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-port-accent hover:underline">Open AsyncAPI JSON <ExternalLink size={11} /></a>
         </div>
       </div>

@@ -38,6 +38,7 @@ import { useCatalogTypes } from '../hooks/useCatalogTypes.jsx';
 import useDrawerTab from '../hooks/useDrawerTab';
 import useStoryImportIntake from '../hooks/useStoryImportIntake';
 import TabPills from '../components/ui/TabPills';
+import { formatCount } from '../utils/formatters';
 
 // Bible fields the embedded arc step flushes before an ArcCanvas generate/verify.
 // The Story Builder edits these on their own steps (not inside the arc step), so
@@ -420,7 +421,7 @@ function ImportPanel({ intake }) {
       </div>
       <div>
         <label htmlFor="imp-src" className="block text-sm text-gray-400 mb-1">
-          Source text <span className="text-gray-600">({source.length.toLocaleString()} chars)</span>
+          Source text <span className="text-gray-600">({formatCount(source.length)} chars)</span>
         </label>
         <textarea id="imp-src" value={source} onChange={(e) => patch({ source: e.target.value })} rows={8}
           placeholder="Paste the full script / manuscript here…"

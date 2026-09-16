@@ -1,4 +1,6 @@
-const value = (base, exponent) => Math.pow(base, exponent).toLocaleString('en-US');
+import { formatCount } from '../utils/formatters';
+
+const value = (base, exponent) => formatCount(Math.pow(base, exponent));
 
 const recalled = (base, exponent, technique, label) => ({
   technique,

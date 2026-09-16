@@ -13,6 +13,7 @@ import * as api from '../../../services/api';
 import toast from '../../ui/Toast';
 import { copyToClipboard } from '../../../lib/clipboard';
 import { downloadBlob } from '../../../lib/downloadBlob';
+import { formatCount } from '../../../utils/formatters';
 
 import { DOCUMENT_CATEGORIES } from '../constants';
 
@@ -258,7 +259,7 @@ export default function ExportTab({ onRefresh: _onRefresh }) {
           {exportResult && (
             <div className="flex items-center gap-2">
               <span className="text-sm text-gray-500 hidden sm:inline">
-                ~{exportResult.tokenEstimate?.toLocaleString()} tokens
+                ~{formatCount(exportResult.tokenEstimate)} tokens
               </span>
               <button
                 onClick={handleCopyExport}

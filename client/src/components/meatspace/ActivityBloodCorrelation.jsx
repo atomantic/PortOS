@@ -3,6 +3,7 @@ import {
 } from 'recharts';
 import useChartColors from '../../hooks/useChartColors.js';
 import { pluralize } from '../../lib/textUtils';
+import { formatCount } from '../../utils/formatters';
 
 // Blood markers to chart — prefer common ones if available in the test results
 const PREFERRED_MARKERS = ['cholesterol', 'glucose', 'ldl', 'hdl', 'triglycerides'];
@@ -36,7 +37,7 @@ const CustomTooltip = ({ active, payload, label, colors }) => {
       <p style={{ color: colors.axis, marginBottom: 4 }}>{label}</p>
       {payload.map((entry) => (
         <p key={entry.dataKey} style={{ color: entry.color ?? entry.fill, margin: '2px 0' }}>
-          {entry.name}: {entry.value != null ? Math.round(entry.value).toLocaleString() : '—'}
+          {entry.name}: {formatCount(entry.value)}
           {entry.dataKey === 'steps' ? ' steps/day' : ''}
         </p>
       ))}
@@ -90,7 +91,7 @@ export default function ActivityBloodCorrelation({ data, range }) {
   const summaries = bloodTests.map(test => {
     const avg = compute30DayRollingAvg(dailyData, test.date);
     if (avg == null) return null;
-    return `Average ${avg.toLocaleString()} steps/day in the 30 days before your ${test.date} blood test`;
+    return `Average ${formatCount(avg)} steps/day in the 30 days before your ${test.date} blood test`;
   }).filter(Boolean);
 
   return (
@@ -109,7 +110,7 @@ export default function ActivityBloodCorrelation({ data, range }) {
             orientation="left"
             tick={{ fill: chartColors.axis, fontSize: 11 }}
             width={60}
-            tickFormatter={v => v.toLocaleString()}
+            tickFormatter={v => formatCount(v)}
             label={{ value: 'Steps (30d avg)', angle: -90, position: 'insideLeft', fill: chartColors.axis, fontSize: 10 }}
           />
           {markers.length > 0 && (

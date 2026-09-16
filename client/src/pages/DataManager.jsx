@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { HardDrive, RefreshCw, Archive, Trash2, ChevronDown, ChevronRight, FolderOpen, File, Package } from 'lucide-react';
 import * as api from '../services/api';
-import { formatBytes, formatDateNumeric } from '../utils/formatters';
+import { formatBytes, formatCount, formatDateNumeric } from '../utils/formatters';
 import PageSkeleton from '../components/ui/PageSkeleton';
 import { SkeletonRegion, SkeletonRows } from '../components/ui/Skeleton';
 import toast from '../components/ui/Toast';
@@ -168,7 +168,7 @@ function CategoryRow({ cat, maxSize, onExpand, expanded, detail, onArchive, onPu
         </div>
         <div className="text-right shrink-0 ml-2">
           <div className="text-sm font-mono text-white">{formatBytes(cat.size)}</div>
-          <div className="text-xs text-gray-500">{cat.fileCount.toLocaleString()} files</div>
+          <div className="text-xs text-gray-500">{formatCount(cat.fileCount)} files</div>
         </div>
       </button>
 
@@ -178,7 +178,7 @@ function CategoryRow({ cat, maxSize, onExpand, expanded, detail, onArchive, onPu
           {confirmingPurge && !busy ? (
             <InlineConfirmRow
               variant="separator"
-              question={`Purge all ${cat.fileCount.toLocaleString()} files (${formatBytes(cat.size)}) in ${cat.label}? This permanently deletes the data and cannot be undone.`}
+              question={`Purge all ${formatCount(cat.fileCount)} files (${formatBytes(cat.size)}) in ${cat.label}? This permanently deletes the data and cannot be undone.`}
               confirmText="Purge"
               confirmTitle="Confirm purge"
               cancelTitle="Cancel purge"
@@ -247,7 +247,7 @@ function CategoryRow({ cat, maxSize, onExpand, expanded, detail, onArchive, onPu
                           <span className="truncate">{item.name}</span>
                         </td>
                         <td className="p-2 text-right text-gray-400 font-mono">{formatBytes(item.size)}</td>
-                        <td className="p-2 pr-3 text-right text-gray-500">{item.type === 'directory' ? item.fileCount?.toLocaleString() : '—'}</td>
+                        <td className="p-2 pr-3 text-right text-gray-500">{item.type === 'directory' ? formatCount(item.fileCount) : '—'}</td>
                         {itemScoped && (
                           <td className="p-2 pr-3 text-right">
                             {item.type === 'directory' ? (

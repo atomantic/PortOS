@@ -23,7 +23,7 @@ import ProgressBar from '../components/ui/ProgressBar';
 import { FormField } from '../components/ui/FormField';
 import { useConfirmDelete } from '../hooks/useConfirmDelete';
 import useDownloadPreflightConfirm from '../hooks/useDownloadPreflightConfirm';
-import { formatBytes } from '../utils/formatters';
+import { formatBytes, formatCount } from '../utils/formatters';
 import { RUNNER_FAMILIES, VIDEO_LORA_FAMILIES, isVideoLoraFamily } from '../lib/runnerFamilies';
 import { LORA_EFFECT_STATUSES, loraEffectDetail, loraEffectBadge } from '../lib/loraEffect';
 import {
@@ -1126,7 +1126,7 @@ function VideoSuggestionCard({ card, installedHfKeys, installingVideoKey, instal
         </div>
         {card.note && <p className="text-[11px] text-gray-400 italic break-words">{card.note}</p>}
         {typeof card.downloads === 'number' && (
-          <div className="text-[10px] text-gray-600">↓ {card.downloads.toLocaleString()}</div>
+          <div className="text-[10px] text-gray-600">↓ {formatCount(card.downloads)}</div>
         )}
         {card.description && (
           <details className="text-[11px] text-gray-500">
@@ -1372,7 +1372,7 @@ function SuggestionCard({ card, installedFilenames, installingSuggestionKey, onI
         )}
         <div className="text-[10px] text-gray-600 flex items-center gap-3 mt-auto">
           {card.creator && <span className="truncate" title={card.creator}>by {card.creator}</span>}
-          {typeof card.downloads === 'number' && <span>↓ {card.downloads.toLocaleString()}</span>}
+          {typeof card.downloads === 'number' && <span>↓ {formatCount(card.downloads)}</span>}
         </div>
         {installs ? (
           <div className="flex flex-col gap-1">
