@@ -91,7 +91,8 @@ describe('derivePersistentMindPlaybookPhaseSignals', () => {
   });
 
   it('falls back to successRate, then to health status, when today counts are unavailable', () => {
-    const viaSuccessRate = derivePersistentMindPlaybookPhaseSignals({ productivity: [{ successRate: 80 }] });
+    // successRate is only trustworthy alongside evidence that work ran.
+    const viaSuccessRate = derivePersistentMindPlaybookPhaseSignals({ productivity: [{ completedToday: 5, successRate: 80 }] });
     expect(viaSuccessRate.failureRate).toBeCloseTo(0.2);
 
     const viaHealthError = derivePersistentMindPlaybookPhaseSignals({ health: { status: 'error' } });
@@ -102,6 +103,32 @@ describe('derivePersistentMindPlaybookPhaseSignals', () => {
     expect(viaHealthHealthy.failureRate).toBe(0);
 
     expect(derivePersistentMindPlaybookPhaseSignals({}).failureRate).toBeNull();
+  });
+
+  it('reads an idle day as "no failure signal", never as a 100% failure rate', () => {
+    // getTodayActivity() reports successRate: 0 when zero agents ran today.
+    // Trusting that unguarded made every pre-first-task wake claim a 100%
+    // failure rate and forced `maintain`, starving construct/coordinate.
+    const idleDay = { completedToday: 0, succeededToday: 0, failedToday: 0, successRate: 0 };
+
+    expect(derivePersistentMindPlaybookPhaseSignals({ productivity: [idleDay] }).failureRate).toBeNull();
+    expect(derivePersistentMindPlaybookPhaseSignals({ productivity: [idleDay], health: { status: 'healthy' } }).failureRate).toBe(0);
+
+    // End to end: a mid-density Commons on an idle, healthy morning builds.
+    const signals = derivePersistentMindPlaybookPhaseSignals({
+      apps: [{ id: 'a' }, { id: 'b' }, { id: 'c' }, { id: 'd' }, { id: 'e' }],
+      productivity: [idleDay],
+      health: { status: 'healthy' },
+    });
+    expect(selectPersistentMindPlaybookPhase(signals).phase).toBe('construct');
+  });
+
+  it('keeps a measured zero-failure day at 0 rather than falling through to health', () => {
+    const signals = derivePersistentMindPlaybookPhaseSignals({
+      productivity: [{ completedToday: 8, succeededToday: 8, failedToday: 0, successRate: 100 }],
+      health: { status: 'attention' },
+    });
+    expect(signals.failureRate).toBe(0);
   });
 
   it('counts only travelable peers reporting non-steady status as active', () => {

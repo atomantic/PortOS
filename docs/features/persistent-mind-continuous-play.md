@@ -24,6 +24,8 @@ Saving a playbook never starts inference. The Mind Context panel exposes the mod
 
 Priority order when signals conflict: a still-sparse Commons always explores first; a high failure rate outranks a peer visit (fix what is broken before going visiting); an active peer outranks routine construction. The picker never reads a wall clock — it degrades to `explore` (the safe default) whenever a signal is unavailable rather than guessing.
 
+A failure rate only exists when work actually ran. `getTodayActivity()` reports `successRate: 0` for a day with zero completed agents, so the derivation requires a non-empty sample before trusting it: an idle day yields *no* failure signal (falling back to coarse health, then to `null`), never a fabricated 100%. Without that guard every wake before the day's first completed task would claim a 100% failure rate and force `maintain`, starving `construct` and `coordinate` entirely.
+
 Each phase template ends by naming itself (e.g. `Phase: Construct`) so the mind states its current phase in the wake's user-visible working note — how Helm and other minds can see which phase produced a given wake. `GET /api/cos/mind/context` also resolves the phase for preview (best-effort; a signal-read failure there falls back to the general loop rather than failing the request).
 
 ## Mind-adjustable `numCtx`

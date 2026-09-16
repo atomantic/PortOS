@@ -45,6 +45,27 @@ const clampFractionOrNull = (value) => {
 
 const arrayLength = (value) => (Array.isArray(value) ? value.length : 0);
 
+/**
+ * A failure rate only exists when work actually ran. `getTodayActivity()`
+ * reports `successRate: 0` for a day with zero completed agents, so trusting
+ * that number unguarded reads an idle morning as a 100% failure rate and jams
+ * every wake into `maintain`. A measured-but-empty sample yields `null`
+ * ("no signal"), never a fabricated rate; a measured zero-failure sample still
+ * correctly yields `0`.
+ */
+const measuredFailureRate = (productivity) => {
+  const succeeded = nonNegativeIntOrNull(productivity?.succeededToday);
+  const failed = nonNegativeIntOrNull(productivity?.failedToday);
+  if (succeeded !== null && failed !== null) {
+    return succeeded + failed > 0 ? failed / (succeeded + failed) : null;
+  }
+  const completed = nonNegativeIntOrNull(productivity?.completedToday);
+  if (completed !== null && completed > 0 && typeof productivity?.successRate === 'number') {
+    return clampFractionOrNull(1 - productivity.successRate / 100);
+  }
+  return null;
+};
+
 const healthFailureRate = (health) => {
   if (!health || typeof health.status !== 'string') return null;
   if (health.status === 'error') return 1;
@@ -73,14 +94,9 @@ export function derivePersistentMindPlaybookPhaseSignals(worldSignals) {
   ].reduce((total, entries) => total + arrayLength(entries), 0);
 
   const productivity = Array.isArray(worldSignals.productivity) ? worldSignals.productivity[0] : null;
-  const succeeded = nonNegativeIntOrNull(productivity?.succeededToday);
-  const failed = nonNegativeIntOrNull(productivity?.failedToday);
-  const totalToday = succeeded !== null && failed !== null ? succeeded + failed : null;
-  const failureRate = totalToday !== null && totalToday > 0
-    ? failed / totalToday
-    : (typeof productivity?.successRate === 'number'
-      ? clampFractionOrNull(1 - productivity.successRate / 100)
-      : healthFailureRate(worldSignals.health));
+  // `??` (not `||`) so a measured zero-failure day stays 0 rather than
+  // falling through to the coarse health signal.
+  const failureRate = measuredFailureRate(productivity) ?? healthFailureRate(worldSignals.health);
 
   // "Unread peer contributions" approximated as federated peers currently
   // reporting non-steady status (active/attention/error — something changed
