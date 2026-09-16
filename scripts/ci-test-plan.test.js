@@ -870,6 +870,19 @@ describe('Windows escalation on a full plan (#7440)', () => {
     expect(mixed.shards.windows).toEqual(shardIndexes('full', FULL_SUITE_SHARDS.windows));
   });
 
+  it('consults the trigger list from the App.jsx branch too', () => {
+    // client/src/App.jsx returns before the trigger loop, so its branch has to
+    // read the same OR — otherwise an App.jsx PR that also bumps a lockfile or
+    // touches server/index.js downgrades Windows on a diff that must escalate.
+    expect(plan(['client/src/App.jsx']).windowsMode).toBe('files');
+
+    for (const escalating of ['server/index.js', 'package-lock.json', 'server/lib/validation.js']) {
+      const combined = plan(['client/src/App.jsx', escalating]);
+      expect(combined.reason, escalating).toContain('client composition root changed');
+      expect(combined.windowsMode, escalating).toBe('full');
+    }
+  });
+
   it('escalates when a Windows-risk file rides along with a client-only trigger', () => {
     // .ps1 is not in EXECUTABLE_RE, so risk detection must read every changed
     // path, not only the executable ones.
@@ -889,9 +902,10 @@ describe('Windows escalation on a full plan (#7440)', () => {
     expect(forced.shards.windows).toEqual(shardIndexes('full', FULL_SUITE_SHARDS.windows));
   });
 
-  it('fails closed for a trigger nobody classified', () => {
-    // fullPlan defaults windowsEscalates to true, so a call site added later
-    // without the flag over-tests rather than under-tests.
+  it('fails closed for a call site that passes no windowsEscalates flag', () => {
+    // The unclassified-file branch deliberately omits the flag, so this pins
+    // fullPlan's `windowsEscalates = true` default through a real call site: a
+    // branch added later without the flag over-tests rather than under-tests.
     const unclassified = plan(['data.reference/bootstrap.bin']);
 
     expect(unclassified.full).toBe(true);
@@ -948,14 +962,23 @@ describe('Windows escalation on a full plan (#7440)', () => {
       expect(uncovered).toEqual([]);
     });
 
-    it.each(RISK_SAMPLES)('routes %s to the Windows job', (path) => {
-      expect(plan([path]).windows).toBe(true);
+    it.each(RISK_SAMPLES)('gives %s the complete Windows suite, never the baseline', (path) => {
+      // Differential, so it stays load-bearing for every sample. Asserting
+      // `windows === true` on `plan([path])` alone would be vacuous for
+      // .ps1/.cmd/.bat: those are not in EXECUTABLE_RE, so they force a full
+      // plan as an "unclassified changed file", and EVERY full plan sets
+      // `windows: true` whatever the risk rules say. Pairing the sample with a
+      // client-only trigger makes the plan go full for a reason that WOULD
+      // downgrade, so only the risk rule can produce `full` here.
+      expect(plan(['client/vite.config.js']).windowsMode).toBe('files');
+      expect(plan(['client/vite.config.js', path]).windowsMode).toBe('full');
     });
 
-    it.each(RISK_SAMPLES)('never downgrades a full plan that touches %s', (path) => {
-      // Paired with a client-only trigger so the plan goes full for a reason
-      // that WOULD otherwise downgrade — the risk file has to override it.
-      expect(plan(['client/vite.config.js', path]).windowsMode).toBe('full');
+    it('routes a scoped Windows-risk change to the Windows job', () => {
+      // The scoped side of the same predicate: no full trigger in sight, so
+      // `windows: true` here is a direct consequence of WINDOWS_RISK_RULES.
+      expect(plan(['server/services/auth.js']).windows).toBe(false);
+      expect(plan(['server/lib/bufferedSpawn.js']).windows).toBe(true);
     });
   });
 });

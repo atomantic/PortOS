@@ -723,9 +723,9 @@ jobs:
     # the trigger was Windows-irrelevant (see the FULL_TRIGGER_RULES
     # windowsEscalates flag in the impact planner) — publishing the gate for
     # one of those would vouch for Windows coverage that did not run. Every
-    # force-full path
-    # (nightly, push-to-main, the main -> release PR, release) keeps
-    # windows_mode == 'full', so the release optimization is unaffected.
+    # force-full path — nightly, the main -> release PR, release, an explicit
+    # full-CI request — keeps windows_mode == 'full', so the release
+    # optimization is unaffected.
     if: always() && needs.impact.outputs.full == 'true' && needs.impact.outputs.windows_mode == 'full'
     needs: [impact, gate]
     runs-on: ubuntu-latest

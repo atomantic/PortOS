@@ -434,20 +434,23 @@ concurrent-job slots, which is what makes several simultaneous PR builds queue.
 The 2x column is kept because a fork on private billing does pay it.
 
 **Not every full plan needs a full Windows run.** Replaying 250 merge commits
-through `buildCiTestPlan`, 64 went full — and 25 of those (39%) went full for a
+through `buildCiTestPlan`, 64 went full — and 24 of those (38%) went full for a
 reason `windows-server` cannot observe:
 
 | Full-plan reason | Runs | Windows-relevant? |
 | --- | --- | --- |
 | targeted test set exceeded safety cap | 17 | no — capacity, not risk |
 | wide change (>30 executable files) | 6 | no — capacity, not risk |
-| client composition root / build config / lint config / test setup | 2 | no — client-only |
-| dependency manifest, server contract, CI pipeline script, workflow, … | 39 | yes |
+| client composition root / build config / lint config / test setup | 1 | no — client-only |
+| dependency manifest, server contract, CI pipeline script, workflow, … | 40 | yes |
 
 So each full trigger in `FULL_TRIGGER_RULES` carries a `windowsEscalates` flag,
 and `fullPlan()` escalates Windows to the complete server suite only when **any**
 matching trigger is Windows-relevant, the diff touches `WINDOWS_RISK_RULES`, or
-the run is force-full. Otherwise the job drops to **one shard running
+the run is force-full. **Any** is load-bearing: the reason line reports only the
+first match in sorted-path order, and the `client/src/App.jsx` branch returns
+before the trigger loop, so both read the same OR over every match. A diff that
+edits `App.jsx` *and* bumps a lockfile escalates. Otherwise the job drops to **one shard running
 `WINDOWS_CONTRACT_TESTS`** — reduced, never skipped, and exactly the depth a
 Windows-risk scoped PR already gets.
 
@@ -467,20 +470,20 @@ Three properties keep that safe, each pinned by `scripts/ci-test-plan.test.js`:
   downgraded PR is the next nightly — always before a release, because the
   `main` → `release` PR is force-full. That is not a new exposure: it is the
   same net every PR touching no `WINDOWS_RISK_RULES` file already relies on,
-  which is most of them. This change widens that population by 25 runs in 250.
+  which is most of them. This change widens that population by 24 runs in 250.
 
 **Before / after**, on the same 250-merge sample:
 
 | | Jobs | Runner-min | 2x-equivalent |
 | --- | --- | --- | --- |
-| Full run, Windows-relevant (39 of 64) — unchanged | 12 | 28.7 | 40.4 |
-| Full run, downgraded (25 of 64) — before | 12 | 28.7 | 40.4 |
-| Full run, downgraded (25 of 64) — after | **10** | **18.4** | **19.9** |
+| Full run, Windows-relevant (40 of 64) — unchanged | 12 | 28.7 | 40.4 |
+| Full run, downgraded (24 of 64) — before | 12 | 28.7 | 40.4 |
+| Full run, downgraded (24 of 64) — after | **10** | **18.4** | **19.9** |
 | Per merged PR, averaged over all 250 — before | — | 10.25 | 13.78 |
-| Per merged PR, averaged over all 250 — after | — | **9.22** | **11.73** |
+| Per merged PR, averaged over all 250 — after | — | **9.26** | **11.81** |
 
 That is −36% runner-minutes on a downgraded full run (−51% at the 2x multiplier),
-and **−10% overall runner-minutes / −15% 2x-equivalent** across the whole sample.
+and **−9.6% overall runner-minutes / −14.3% 2x-equivalent** across the whole sample.
 The one estimated input is the baseline Windows shard at ~1.5 min (~0.83 min
 measured fixed overhead plus the contract suite); every other figure is measured.
 

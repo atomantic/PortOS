@@ -558,27 +558,37 @@ export function buildCiTestPlan(changedFiles, {
     return fullPlan(changed, forceFullReason, { appRouteOnly, trackedSet, windowsEscalates: true });
   }
 
-  const appCompositionChanged = changed.includes('client/src/App.jsx');
-  if (appCompositionChanged && !appRouteOnly) {
-    return fullPlan(changed, 'client composition root changed: client/src/App.jsx', { appRouteOnly, trackedSet, windowsEscalates: false });
-  }
-
-  // EVERY matching trigger, not just the reported one: the reason line is the
-  // first match in sorted-path order, but the Windows decision is the OR over
-  // all of them. Reporting alone would let an alphabetically earlier
-  // client-only trigger (client/vite.config.js) silently downgrade the Windows
-  // job on a diff that also changed server/index.js.
+  // EVERY matching trigger, not just the reported one, and computed BEFORE the
+  // first full-plan branch. The reason line is the first match in sorted-path
+  // order, but the Windows decision is the OR over all of them, so a diff that
+  // trips two triggers must escalate if EITHER does. Two ways this goes wrong
+  // if the OR is skipped: an alphabetically earlier client-only trigger
+  // (client/vite.config.js) reported ahead of server/index.js, and the App.jsx
+  // branch below returning before the triggers are even looked at — which
+  // downgraded Windows for an App.jsx PR that also bumped a lockfile.
   const fullTriggers = changed
     .flatMap((path) => FULL_TRIGGER_RULES
       .filter(({ re }) => re.test(path))
       .map(({ reason, windowsEscalates }) => ({ path, reason, windowsEscalates })));
   const fullTrigger = fullTriggers.at(0);
+  const triggersEscalateWindows = fullTriggers.some((trigger) => trigger.windowsEscalates);
+
+  const appCompositionChanged = changed.includes('client/src/App.jsx');
+  if (appCompositionChanged && !appRouteOnly) {
+    // The composition root itself is client-only, but the rest of the diff may
+    // not be.
+    return fullPlan(changed, 'client composition root changed: client/src/App.jsx', {
+      appRouteOnly,
+      trackedSet,
+      windowsEscalates: triggersEscalateWindows,
+    });
+  }
 
   if (fullTrigger) {
     return fullPlan(changed, `${fullTrigger.reason}: ${fullTrigger.path}`, {
       appRouteOnly,
       trackedSet,
-      windowsEscalates: fullTriggers.some((trigger) => trigger.windowsEscalates),
+      windowsEscalates: triggersEscalateWindows,
     });
   }
 
