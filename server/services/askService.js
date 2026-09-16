@@ -37,8 +37,8 @@ import { isOpenchamberCommand, ensureOpenchamberHeadlessArgs } from '../lib/open
 import { ensureAntigravityPrintArgs, isAntigravityCliProvider } from '../lib/antigravity.js';
 import { isGrokCommand, ensureGrokHeadlessArgs } from '../lib/grok.js';
 import { prepareCliPrompt } from '../lib/cliProviderArgs.js';
-import { prepareCliSpawn } from '../lib/bufferedSpawn.js';
-import { applyCredentialBootstrap } from '../lib/credentialBootstrap.js';
+import { prepareCliSpawn, killProcessTree } from '../lib/bufferedSpawn.js';
+import { applyCredentialBootstrap, needsProcessGroup, trackDetachedGroup } from '../lib/credentialBootstrap.js';
 import { buildCliChildEnv } from '../lib/cliChildEnv.js';
 import { ensureProviderReady as ensureOllamaProviderReady } from './ollamaManager.js';
 import { evaluateSecretEndpoint } from '../lib/aiToolkit/endpointGuard.js';
@@ -548,6 +548,11 @@ async function* streamCompletion(provider, model, prompt, signal) {
   // private records, and a bare harness would fall through to the machine's
   // ambient vendor auth instead of the backend this provider is configured for.
   const bootstrapped = applyCredentialBootstrap(provider, provider.command, deliveredArgs);
+  // A bootstrap-wrapped child is the WRAPPER supervising the harness, so both
+  // stop paths below — the timeout and the user's abort — must signal the whole
+  // process group or the harness keeps running (and keeps reading the private
+  // records this call handed it) past the rejection (#7496).
+  const processGroup = needsProcessGroup(bootstrapped.wrapped);
   const { command: spawnCommand, args: spawnArgs } = prepareCliSpawn(bootstrapped.command, bootstrapped.args, childEnv);
   const out = await new Promise((resolve, reject) => {
     let buf = '';
@@ -555,7 +560,12 @@ async function* streamCompletion(provider, model, prompt, signal) {
       env: childEnv,
       stdio: ['pipe', 'pipe', 'pipe'],
       shell: false,
+      detached: processGroup,
     });
+    // Remember the detached group so the graceful-shutdown sweep can reach it:
+    // detaching moved this child out of the server's own process group, and a
+    // shutdown driven by a signal to THAT group would otherwise orphan it (#7496).
+    trackDetachedGroup(child, processGroup);
 
     // Single settlement gate — the timer, the abort listener, and the close
     // handler are all racing each other. Without a settled flag, SIGKILL on a
@@ -579,12 +589,12 @@ async function* streamCompletion(provider, model, prompt, signal) {
     child.stderr.on('data', (d) => { buf += d.toString(); });
 
     timer = setTimeout(() => {
-      child.kill('SIGKILL');
+      killProcessTree(child, 'SIGKILL', { processGroup });
       settle(reject, new Error('CLI timed out'));
     }, provider.timeout || 300000);
 
     function onAbort() {
-      child.kill('SIGKILL');
+      killProcessTree(child, 'SIGKILL', { processGroup });
       settle(reject, new Error('aborted'));
     }
     if (signal) {

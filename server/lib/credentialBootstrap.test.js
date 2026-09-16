@@ -95,14 +95,23 @@ describe('credentialBootstrap', () => {
 
     it.each([PUBLIC_REVIEW_GATE_EXECUTION_PROFILE, PUBLIC_REVIEW_ACTIONS_EXECUTION_PROFILE])(
       'never wraps a %s spawn, even with a bootstrap configured', (safetyProfile) => {
+        // `wrapped: false` matters as much as the argv here: an unwrapped
+        // posture must also keep the unwrapped TEARDOWN, so the enforced recipe
+        // is never spawned detached into a process group of its own (#7496).
         expect(applyCredentialBootstrap(provider, 'claude', ['--restricted'], { safetyProfile })).toEqual({
           command: 'claude',
           args: ['--restricted'],
+          wrapped: false,
         });
         expect(resolveCliSpawn(provider, 'claude', ['--restricted'], process.env, { safetyProfile })).toEqual({
           command: 'claude',
           args: ['--restricted'],
+          wrapped: false,
         });
+        expect(needsProcessGroup(
+          applyCredentialBootstrap(provider, 'claude', ['--restricted'], { safetyProfile }).wrapped,
+          false,
+        )).toBe(false);
       });
 
     it('still wraps an ordinary (profile-less or unknown-profile) spawn', () => {

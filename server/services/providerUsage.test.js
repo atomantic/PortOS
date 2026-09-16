@@ -435,6 +435,45 @@ describe('getProviderQuotas', () => {
     getAllProviders.mockResolvedValueOnce({ activeProvider: null, providers: [] });
     expect(await getProviderQuotas({ family: 'grok' })).toEqual([]);
   });
+
+  // #7496. The scrape kills its PTY on every exit path, and with a credential
+  // bootstrap the PTY's direct child is the WRAPPER — node-pty's kill() signals
+  // that pid alone, so the harness would go on rendering into a PTY nobody
+  // reads. The flag has to travel from the wrap decision to the scrape.
+  it('asks for a process-group teardown when the scraped command is bootstrap-wrapped', async () => {
+    getAllProviders.mockResolvedValueOnce({
+      activeProvider: null,
+      providers: [{
+        id: 'grok', enabled: true, type: 'tui', command: 'grok',
+        credentialBootstrap: { command: 'token-cli', args: ['run'] },
+      }]
+    });
+    getSettings.mockResolvedValueOnce({});
+    scrapeTuiUsage.mockResolvedValue('Weekly limit: 5% Next reset: Jan 1, 00:00');
+
+    await getProviderQuotas({ family: 'grok' });
+
+    expect(scrapeTuiUsage).toHaveBeenCalledWith(expect.objectContaining({
+      command: 'token-cli',
+      processGroup: true,
+    }));
+  });
+
+  it('leaves an unwrapped scrape on the plain node-pty kill', async () => {
+    getAllProviders.mockResolvedValueOnce({
+      activeProvider: null,
+      providers: [{ id: 'grok', enabled: true, type: 'tui', command: 'grok' }]
+    });
+    getSettings.mockResolvedValueOnce({});
+    scrapeTuiUsage.mockResolvedValue('Weekly limit: 5% Next reset: Jan 1, 00:00');
+
+    await getProviderQuotas({ family: 'grok' });
+
+    expect(scrapeTuiUsage).toHaveBeenCalledWith(expect.objectContaining({
+      command: 'grok',
+      processGroup: false,
+    }));
+  });
 });
 
 describe('agyRefreshToIso', () => {

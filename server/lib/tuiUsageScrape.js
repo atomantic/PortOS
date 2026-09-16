@@ -6,6 +6,7 @@ import { stripAnsi } from './ansiStrip.js';
 import { sleep } from './fileUtils.js';
 import { buildCliChildEnv } from './cliChildEnv.js';
 import { SUBMIT_KEY } from './tuiHandshake.js';
+import { killProcessTree } from './bufferedSpawn.js';
 
 /**
  * Drive an interactive coding-agent TUI (Antigravity `agy`, Grok Build `grok`)
@@ -91,6 +92,13 @@ export async function scrapeTuiUsage({
   idleMs = DEFAULT_IDLE_MS,
   renderCapMs = DEFAULT_RENDER_CAP_MS,
   timeoutMs = DEFAULT_HARD_TIMEOUT_MS,
+  // True when `command` is a credential-bootstrap WRAPPER rather than the
+  // harness itself. node-pty's `kill()` signals its direct child's pid alone,
+  // so a wrapper that forks would leave the harness rendering into a PTY nobody
+  // reads any more — and this scrape's every exit runs through killPty (#7496).
+  // forkpty already makes the PTY child a session leader whose descendants share
+  // its group, so the group signal is exact.
+  processGroup = false,
 } = {}) {
   if (!command || typeof command !== 'string') throw new Error('scrapeTuiUsage: command is required');
   if (!slashCommand || typeof slashCommand !== 'string') throw new Error('scrapeTuiUsage: slashCommand is required');
@@ -132,7 +140,9 @@ export async function scrapeTuiUsage({
   });
   pty.onExit(() => { exited = true; });
 
-  const killPty = () => { try { if (!exited) pty.kill(); } catch { /* already gone */ } };
+  // 'SIGHUP' is node-pty's own POSIX default for `kill()`; naming it keeps the
+  // signal identical while letting killProcessTree take the group path.
+  const killPty = () => { try { if (!exited) killProcessTree(pty, 'SIGHUP', { processGroup }); } catch { /* already gone */ } };
 
   // Absolute backstop so a wedged TUI can't hang the request forever.
   let hardTimer = null;
