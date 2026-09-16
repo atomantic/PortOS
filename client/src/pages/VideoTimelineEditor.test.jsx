@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { render, screen, waitFor, waitForElementToBeRemoved, fireEvent, within, act } from '@testing-library/react';
+import { render, screen, waitFor, fireEvent, within, act } from '@testing-library/react';
+import { awaitPageLoaded } from '../test/pageLoadBarrier';
 
 // The editor's pure rules live in lib/videoTimelineModel.js and its blocks in
 // components/media/VideoTimelineLanes.jsx, both tested there. What only exists
@@ -87,15 +88,7 @@ beforeEach(() => {
 
 const renderEditor = async () => {
   render(<VideoTimelineEditor />);
-  // Two-sided, and deliberately so. This used to wait for the ABSENCE of
-  // 'Loading project…' — a string this page never renders — so the `waitFor`
-  // passed on its very first poll and every test below ran against the loading
-  // skeleton whenever the mocked fetches had not resolved yet. On a fast machine
-  // they always had; on a loaded CI runner they had not, which is how one
-  // timing-sensitive test went red per run (#7448). Pinning the skeleton's
-  // PRESENCE first is what stops the absence from meaning nothing:
-  // `waitForElementToBeRemoved` throws outright if it was never there.
-  await waitForElementToBeRemoved(screen.getByLabelText('Loading timeline project'));
+  await awaitPageLoaded('Loading timeline project');
 };
 
 describe('lane visibility', () => {

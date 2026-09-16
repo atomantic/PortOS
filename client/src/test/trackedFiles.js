@@ -48,5 +48,5 @@ export function trackedSourceFiles(clientRoot) {
  * one definition.
  */
 export function trackedTestFiles(clientRoot) {
-  return gitTracked(clientRoot).filter((f) => /\.test\.[jt]sx?$/.test(f));
+  return gitTracked(clientRoot).filter(isTest);
 }

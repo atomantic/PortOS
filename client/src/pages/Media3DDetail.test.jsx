@@ -92,18 +92,6 @@ function renderWithSwitcher(id = 'image3d-1') {
   );
 }
 
-// `findByText` resolves on the DOM mutation, not on effects settling — and the
-// page seeds its option fields from the record in an effect that commits AFTER
-// the name renders. Proof: a record whose latest run carries `steps: 48` still
-// reads back an EMPTY quality field the moment `findByText('Example Beacon')`
-// resolves, which is why the seeding tests below wait for the value explicitly.
-//
-// A field touched inside that window is overwritten when the seed lands, so the
-// re-render body carries the default instead of the choice (#7448). A record with
-// no runs seeds to the same values the form starts at, so there is nothing in the
-// DOM to wait for — flush the pending effect instead of waiting on its output.
-const settleOptionSeed = () => act(async () => {});
-
 function deferred() {
   let resolve;
   let reject;
@@ -233,7 +221,15 @@ describe('Media3DDetail', () => {
     generateImageTo3dModel.mockResolvedValue(record({ status: 'generating' }));
     renderAt();
     await screen.findByText('Example Beacon');
-    await settleOptionSeed();
+    // `findByText` resolves on the DOM mutation, not on effects settling, and the
+    // page seeds its option fields from the record in an effect that has NOT run
+    // at that point — probed directly: a run carrying `steps: 48` still reads back
+    // an empty quality field there, which is why the seeding tests below wait for
+    // the value explicitly. A field changed inside that window is overwritten when
+    // the seed lands. Sub-paint, so no user can hit it; it is a test-ordering
+    // hazard only (#7448). A record with no runs seeds to the values the form
+    // already holds, so there is nothing in the DOM to wait for.
+    await act(async () => {});
 
     fireEvent.change(screen.getByLabelText(/quality/i), { target: { value: '24' } });
     fireEvent.click(screen.getByRole('button', { name: /re-render/i }));

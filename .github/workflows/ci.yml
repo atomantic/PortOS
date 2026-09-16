@@ -326,7 +326,7 @@ jobs:
 
   client:
     # Sharded like the server job; the build and the bundle budget run on shard 1.
-    # Lint is deliberately NOT here — it has its own job (see #7448).
+    # Lint is deliberately NOT here — it has its own job.
     name: Client tests and build (${{ matrix.shard }}/${{ strategy.job-total }})
     needs: impact
     if: needs.impact.outputs.client_mode != 'skip' || needs.impact.outputs.build == 'true'
@@ -355,7 +355,26 @@ jobs:
           cache: npm
           cache-dependency-path: client/package-lock.json
 
+      # `setup-node`'s npm cache only preserves ~/.npm, the tarball cache, so
+      # `npm ci` still wipes and repopulates client/node_modules (393 MB, 21k
+      # files — MORE files than the server tree the sibling cache already
+      # serves) on every one of the four jobs that install this workspace.
+      # Same exact-key/no-restore-keys shape as `Cache server node_modules`, and
+      # for the same reason: a near-miss tree is not safe to reuse.
+      #
+      # No rebuild half, unlike the server: client/.npmrc pins
+      # ignore-scripts=true AND `scripts/trusted-rebuilds.js` deliberately lists
+      # nothing for this workspace, so a restored tree is usable as-is and the
+      # install can be skipped outright on a hit.
+      - name: Cache client node_modules
+        id: client-modules
+        uses: actions/cache@v6
+        with:
+          path: client/node_modules
+          key: client-modules-${{ runner.os }}-${{ runner.arch }}-node24-${{ hashFiles('client/package-lock.json', 'client/package.json', 'client/.npmrc') }}
+
       - name: Install client dependencies
+        if: steps.client-modules.outputs.cache-hit != 'true'
         run: npm ci --prefix client
 
       - name: Cache Vitest transform artifacts
@@ -396,18 +415,21 @@ jobs:
         run: node scripts/cancel-current-ci-run.js
 
   lint:
-    # Its own job rather than a step on client shard 1. Lint is unrelated to the
-    # tests, and pinning it there made the largest client shard the heaviest job
-    # in the matrix — it paid for lint before it even started testing, on the one
-    # shard that also builds (issue #7448). Splitting it also stops a lint-only
-    # diff from spinning up a whole client test job to run Biome.
+    # Its own job rather than a step on client shard 1, for cost and latency —
+    # NOT as a flake fix. Steps within one job run sequentially, so the ~31s of
+    # Biome finished before `Run client tests` began and never contended with
+    # it; #7448's shard-1 failures came from the tests themselves, not from what
+    # else that job ran. What the split does buy: lint runs in parallel instead
+    # of in front of the slowest shard, and a lint-only diff no longer starts a
+    # client test job at all.
     #
     # It cannot instead move to a LATER shard: a scoped plan emits
     # `client_shards: [1]`, so a pin to the second shard would silently skip lint
     # on every impact-scoped pull request.
     #
     # It installs `client/` because Biome and its GritQL plugins are client
-    # devDependencies; the npm cache makes that a few seconds.
+    # devDependencies. That install is shared with the client job through
+    # `Cache client node_modules` below, so on a hit it is skipped entirely.
     name: Lint client
     needs: impact
     if: needs.impact.outputs.lint_mode != 'skip'
@@ -416,11 +438,12 @@ jobs:
       contents: read
       actions: write
     steps:
+      # No `fetch-depth` and no `Resolve the pull-request diff base`, unlike the
+      # test jobs: the linter's file list arrives from the impact plan, so this
+      # job never diffs and a single-commit checkout is everything it needs.
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
-          # Same as every other leaf job: depth 2 is the whole PR merge ref.
-          fetch-depth: 2
 
       - name: Use Node.js 24.x
         uses: actions/setup-node@v7
@@ -429,7 +452,26 @@ jobs:
           cache: npm
           cache-dependency-path: client/package-lock.json
 
+      # `setup-node`'s npm cache only preserves ~/.npm, the tarball cache, so
+      # `npm ci` still wipes and repopulates client/node_modules (393 MB, 21k
+      # files — MORE files than the server tree the sibling cache already
+      # serves) on every one of the four jobs that install this workspace.
+      # Same exact-key/no-restore-keys shape as `Cache server node_modules`, and
+      # for the same reason: a near-miss tree is not safe to reuse.
+      #
+      # No rebuild half, unlike the server: client/.npmrc pins
+      # ignore-scripts=true AND `scripts/trusted-rebuilds.js` deliberately lists
+      # nothing for this workspace, so a restored tree is usable as-is and the
+      # install can be skipped outright on a hit.
+      - name: Cache client node_modules
+        id: client-modules
+        uses: actions/cache@v6
+        with:
+          path: client/node_modules
+          key: client-modules-${{ runner.os }}-${{ runner.arch }}-node24-${{ hashFiles('client/package-lock.json', 'client/package.json', 'client/.npmrc') }}
+
       - name: Install client dependencies
+        if: steps.client-modules.outputs.cache-hit != 'true'
         run: npm ci --prefix client
 
       - name: Lint client

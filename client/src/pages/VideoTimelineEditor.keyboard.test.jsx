@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { render, screen, waitFor, waitForElementToBeRemoved } from '@testing-library/react';
+import { render, screen, waitFor } from '@testing-library/react';
+import { awaitPageLoaded } from '../test/pageLoadBarrier';
 import { stubSequentialLayout, pressKey, dndAnnouncement } from '../test/dndKeyboardDrag';
 
 // Guards #7243. This lives in its own file rather than in VideoTimelineEditor.test.jsx
@@ -68,15 +69,7 @@ afterEach(() => restoreLayout());
 
 const renderEditor = async () => {
   render(<VideoTimelineEditor />);
-  // Two-sided, and deliberately so. This used to wait for the ABSENCE of
-  // 'Loading project…' — a string this page never renders — so the `waitFor`
-  // passed on its very first poll and every test below ran against the loading
-  // skeleton whenever the mocked fetches had not resolved yet. On a fast machine
-  // they always had; on a loaded CI runner they had not, which is how one
-  // timing-sensitive test went red per run (#7448). Pinning the skeleton's
-  // PRESENCE first is what stops the absence from meaning nothing:
-  // `waitForElementToBeRemoved` throws outright if it was never there.
-  await waitForElementToBeRemoved(screen.getByLabelText('Loading timeline project'));
+  await awaitPageLoaded('Loading timeline project');
 };
 
 // The block is the drag handle, so it is reached through its own remove

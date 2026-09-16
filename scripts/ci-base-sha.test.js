@@ -91,14 +91,13 @@ describe('ci.yml required checks', () => {
     expect(jobs['full-gate']).toMatch(/needs\.impact\.outputs\.windows_mode == 'full'/);
   });
 
-  it('no longer carries the retired legacy check-name jobs', () => {
+  it('publishes no job whose only purpose is a retired check name', () => {
     // The RETIRED `lint` job was a shim: a whole runner whose only step echoed
     // the client job's result, so a required check named `lint` kept reporting.
-    // A `lint` job exists again, but it is the real linter in its own job
-    // (#7448) — so this asserts the SHIM's shape is gone, not the name. The
-    // server job likewise no longer wears `test (24.x)`; the ruleset requires
-    // neither name, only `CI Gate`.
-    expect(jobs.lint).toContain('run: node scripts/run-ci-lint.js');
+    // A `lint` job exists again and is the real linter — its wiring is pinned in
+    // run-ci-tests.test.js — so what this owns is the shim's shape. The server
+    // job likewise no longer wears `test (24.x)`; the ruleset requires neither
+    // name, only `CI Gate`.
     expect(jobs.lint).not.toContain('CLIENT_RESULT');
     expect(WORKFLOW).not.toMatch(/name: test \(24\.x\)/);
   });

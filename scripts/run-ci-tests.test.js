@@ -53,11 +53,11 @@ describe('ci.yml shard wiring', () => {
   });
 
   it('keeps client lint out of the sharded test jobs entirely', () => {
-    // Lint used to be a shard-1 step on the client job, which made the largest
-    // client shard also the only one paying for Biome AND the production build —
-    // the heaviest job in the matrix, and the only shard that failed a
-    // timing-sensitive test (#7448). Its own job is the fix, so this pins BOTH
-    // halves: no runner job invokes the linter, and the lint job is not a matrix.
+    // Lint used to be a shard-1 step on the client job, running in front of the
+    // slowest shard's tests. Its own job runs it in parallel and keeps a
+    // lint-only diff from starting a test job; the `lint` job's own comment
+    // says why it cannot simply move to a different shard. Both halves are
+    // pinned here: no runner job invokes the linter, and lint is not a matrix.
     const jobs = workflowJobs(WORKFLOW);
     for (const [id, body] of runners) expect(body, id).not.toContain('run-ci-lint.js');
     expect(jobs.lint).toBeTruthy();
