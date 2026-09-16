@@ -68,13 +68,16 @@ function importSpecifiers(source) {
   return [...code.matchAll(/(?:from|import)\s*['"]([^'"]+)['"]/g)].map(([, s]) => s);
 }
 
-/** Every bare (non-relative) specifier reachable from `entry`, transitively. */
-function bareSpecifiersReachableFrom(entry) {
-  const seen = new Set();
+/**
+ * Every specifier reachable from `entry`, transitively, split into the bare
+ * ones and the repo-relative FILES the walk visited (`entry` included).
+ */
+function specifiersReachableFrom(entry) {
+  const files = new Set();
   const bare = new Set();
   const walk = (relativePath) => {
-    if (seen.has(relativePath)) return;
-    seen.add(relativePath);
+    if (files.has(relativePath)) return;
+    files.add(relativePath);
     for (const specifier of importSpecifiers(readFileSync(join(REPO_ROOT, relativePath), 'utf8'))) {
       if (!specifier.startsWith('.')) {
         bare.add(specifier);
@@ -84,8 +87,10 @@ function bareSpecifiersReachableFrom(entry) {
     }
   };
   walk(entry);
-  return [...bare];
+  return { bare: [...bare], files: [...files] };
 }
+
+const bareSpecifiersReachableFrom = (entry) => specifiersReachableFrom(entry).bare;
 
 describe('scripts that must load from a bare checkout', () => {
   // The walker decides whether the assertions below mean anything, so it is
@@ -111,4 +116,48 @@ describe('scripts that must load from a bare checkout', () => {
       expect(nonBuiltins).toEqual([]);
     },
   );
+});
+
+/**
+ * Builtin-only is NOT the same contract as fits-in-a-sparse-checkout, and the
+ * difference is invisible until CI breaks: `scripts/run-ci-tests.js` reaches
+ * `../server/lib/bufferedSpawn.js` today, which is builtin-only and would be
+ * ABSENT under `sparse-checkout: scripts`. One such import added to a gate
+ * script blocks every pull request with a module-not-found error, or leaves
+ * the cancel-recovery workflow erroring instead of recovering.
+ */
+describe('scripts that run from a sparse checkout of scripts/', () => {
+  /** Jobs that pass `sparse-checkout: scripts` → the script each one runs. */
+  const SPARSE_CHECKOUT_SCRIPTS = [
+    'scripts/ci-gate-report.js',
+    'scripts/ci-retry-cancelled-run.js',
+  ];
+
+  it('the sparse jobs are exactly the ones claiming a sparse checkout', () => {
+    // Discovery floor: a THIRD sparse job added without a row above would
+    // never be held to the cone contract below.
+    const workflows = ['.github/workflows/ci.yml', '.github/workflows/ci-cancel-recovery.yml']
+      .map((rel) => readFileSync(join(REPO_ROOT, rel), 'utf8'))
+      .join('\n');
+    const sparseJobs = workflows.split('sparse-checkout: scripts').length - 1;
+    // ci.yml's two gate jobs both run ci-gate-report.js; the recovery workflow
+    // runs the other one.
+    expect(sparseJobs).toBe(3);
+    for (const entry of SPARSE_CHECKOUT_SCRIPTS) {
+      expect(workflows, entry).toContain(`node ${entry}`);
+    }
+  });
+
+  it.each(SPARSE_CHECKOUT_SCRIPTS)('%s reaches no file outside scripts/', (entry) => {
+    const outside = specifiersReachableFrom(entry).files
+      .filter((file) => !file.startsWith('scripts/'));
+
+    expect(outside).toEqual([]);
+  });
+
+  it('the cone assertion can fail', () => {
+    // Negative control against the exact escape it exists to catch.
+    expect(specifiersReachableFrom('scripts/run-ci-tests.js').files)
+      .toContain('server/lib/bufferedSpawn.js');
+  });
 });

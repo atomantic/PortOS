@@ -111,9 +111,11 @@ export function summarizeGateResults(results, label = DEFAULT_LABEL, requireSucc
         `🚫 ${label}: this run was CANCELLED, not failed — no job reported a failure.`,
         `Cancelled jobs: ${cancelled.join(', ')}`,
         finished(),
-        'Do not go looking for a broken test. Either a newer push superseded this run'
-          + ' (cancel-in-progress), or GitHub cancelled it externally while several runs'
-          + ' were in flight.',
+        'No test failed, so start with why the job STOPPED. A job that hits the'
+          + ' 6-hour limit is recorded as `cancelled`, not `timed_out` — check the'
+          + ' cancelled jobs for a hang first. Otherwise a newer push superseded this'
+          + ' run (cancel-in-progress), or GitHub cancelled it externally while several'
+          + ' runs were in flight.',
         `Telling those apart, and what to do about each: ${TROUBLESHOOTING_ANCHOR}`,
       ],
     };

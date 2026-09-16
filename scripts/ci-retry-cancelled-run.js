@@ -17,6 +17,10 @@
  *
  *   - `run_attempt === 1` IS the retry budget. `POST /rerun` re-runs the same
  *     run id as attempt 2, so attempt 2's cancel sees attempt 2 and stops.
+ *     The budget is confirmed against the run's LIVE state, not only the
+ *     event payload, because the payload is a snapshot: a human can re-run
+ *     the same run, or the event can be redelivered, while this job is
+ *     still queued behind the very backlog it exists to survive.
  *   - No job may have concluded `failure`/`timed_out`. This repository cancels
  *     its own run from a failing job (scripts/cancel-current-ci-run.js), which
  *     makes the RUN read `cancelled` while a job really did fail.
@@ -145,6 +149,26 @@ async function fetchAttemptJobs(fetchImpl, target, logger) {
 }
 
 /**
+ * The run's state as GitHub holds it NOW, or null when it cannot be read.
+ *
+ * Everything else here comes from the `workflow_run` payload, which is a
+ * snapshot taken when the run completed. This job can start long after that —
+ * it queues behind the same backlog that caused the cancel — so the payload
+ * can say "attempt 1, cancelled" while a human has already re-run it. Spending
+ * the one-retry budget on that stale reading is how one retry becomes three.
+ */
+async function fetchLiveRunState(fetchImpl, target, logger) {
+  const url = `${target.repoPath}/actions/runs/${target.runId}`;
+  const body = await readJson(fetchImpl, url, target.token, logger);
+  if (!body) return null;
+  return {
+    runAttempt: Number(body.run_attempt),
+    status: typeof body.status === 'string' ? body.status : '',
+    conclusion: typeof body.conclusion === 'string' ? body.conclusion : '',
+  };
+}
+
+/**
  * The run number of the newest sibling run, or null when the listing failed.
  * `run_number` increases monotonically per workflow, so taking the maximum
  * orders runs without trusting either the page order or timestamps that can
@@ -230,6 +254,18 @@ export async function retryCancelledCiRun({
       { outcome: 'skipped', reason: 'job-failed' });
   }
 
+  const live = await fetchLiveRunState(fetchImpl, target, logger);
+  if (!live) {
+    return done('error', `⚠️ CI retry skipped: could not read the current state of run ${target.runId}`,
+      { outcome: 'unavailable', reason: 'run-state-unavailable' });
+  }
+  if (live.runAttempt !== 1 || live.status !== 'completed' || live.conclusion !== 'cancelled') {
+    return done('log', `ℹ️ CI retry skipped: run ${target.runId} has moved on since the event (attempt ${live.runAttempt}, ${live.status}/${live.conclusion || 'no conclusion'})`,
+      { outcome: 'skipped', reason: 'run-state-moved-on' });
+  }
+
+  // Listed LAST, immediately before the POST, so the window in which a fresh
+  // push could create a successor we do not see is as small as it can be.
   const newestSibling = await fetchNewestSiblingRunNumber(fetchImpl, target, logger);
   if (newestSibling === null) {
     return done('error', `⚠️ CI retry skipped: could not list sibling runs for run ${target.runId}`,

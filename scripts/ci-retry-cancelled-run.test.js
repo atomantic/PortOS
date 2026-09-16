@@ -41,11 +41,13 @@ const json = (body) => ({ ok: true, status: 200, json: async () => body });
  * A fetch stub routed by URL shape. `jobs`/`runs` default to the clean
  * external-cancel case so each test overrides only what it is about.
  */
-function stubFetch({ jobs = [], runs = [], rerunStatus = 201 } = {}) {
+function stubFetch({ jobs = [], runs = [], rerunStatus = 201, live } = {}) {
   const calls = [];
   const impl = vi.fn(async (url, init = {}) => {
     calls.push({ url, method: init.method || 'GET' });
-    if (url.includes('/jobs?')) return json({ total_count: jobs.length, jobs });
+    // The ATTEMPT-scoped path, deliberately: /runs/{id}/jobs returns the
+    // LATEST attempt's jobs, which is the wrong set after a human re-run.
+    if (url.includes('/attempts/1/jobs?')) return json({ total_count: jobs.length, jobs });
     if (url.includes('/runs?')) {
       return json({
         total_count: runs.length,
@@ -53,6 +55,9 @@ function stubFetch({ jobs = [], runs = [], rerunStatus = 201 } = {}) {
       });
     }
     if (url.endsWith('/rerun')) return { ok: rerunStatus < 300, status: rerunStatus };
+    if (/\/actions\/runs\/\d+$/.test(url)) {
+      return json({ run_attempt: 1, status: 'completed', conclusion: 'cancelled', ...live });
+    }
     throw new Error(`unexpected url ${url}`);
   });
   return { impl, calls, rerunRequested: () => calls.some((c) => c.url.endsWith('/rerun')) };
@@ -198,6 +203,30 @@ describe('retryCancelledCiRun guards', () => {
     expect(fetchStub.impl).not.toHaveBeenCalled();
   });
 
+  it.each([
+    ['a human already re-ran it', { run_attempt: 2 }],
+    ['it is running again', { status: 'in_progress', conclusion: '' }],
+    ['the re-run has since succeeded', { conclusion: 'success' }],
+  ])('never spends the budget when the live run says %s', async (_label, live) => {
+    // The workflow_run payload is a snapshot; this job can start long after it.
+    const fetchStub = stubFetch({ live });
+    await expect(run(BASE_ENV, fetchStub))
+      .resolves.toMatchObject({ outcome: 'skipped', reason: 'run-state-moved-on' });
+    expect(fetchStub.rerunRequested()).toBe(false);
+  });
+
+  it('does not retry when the live run state cannot be read', async () => {
+    const impl = vi.fn(async (url) => {
+      if (url.includes('/jobs?')) return json({ total_count: 0, jobs: [] });
+      if (url.includes('/runs?')) return json({ workflow_runs: [] });
+      return { ok: false, status: 500 };
+    });
+    await expect(retryCancelledCiRun({
+      env: BASE_ENV, fetchImpl: impl, logger: silent, writeSummary: noSummary,
+    })).resolves.toMatchObject({ outcome: 'unavailable', reason: 'run-state-unavailable' });
+    expect(impl.mock.calls.some(([url]) => url.endsWith('/rerun'))).toBe(false);
+  });
+
   it('encodes the branch name into the query, never into a path', async () => {
     // The head branch is attacker-controlled on a fork PR.
     const fetchStub = stubFetch();
@@ -231,9 +260,11 @@ describe('retryCancelledCiRun guards', () => {
   });
 
   it('does not retry when the sibling-run listing cannot be read', async () => {
-    const impl = vi.fn(async (url) => (url.includes('/runs?')
-      ? { ok: false, status: 403 }
-      : json({ total_count: 0, jobs: [] })));
+    const impl = vi.fn(async (url) => {
+      if (url.includes('/runs?')) return { ok: false, status: 403 };
+      if (url.includes('/jobs?')) return json({ total_count: 0, jobs: [] });
+      return json({ run_attempt: 1, status: 'completed', conclusion: 'cancelled' });
+    });
     await expect(retryCancelledCiRun({
       env: BASE_ENV, fetchImpl: impl, logger: silent, writeSummary: noSummary,
     })).resolves.toMatchObject({ outcome: 'unavailable', reason: 'sibling-runs-unavailable' });
@@ -290,11 +321,22 @@ describe('ci-cancel-recovery.yml wiring', () => {
     }
   });
 
-  it('passes the run identity the script validates', () => {
-    for (const key of ['CI_RUN_ID', 'CI_RUN_ATTEMPT', 'CI_RUN_NUMBER', 'CI_WORKFLOW_ID',
-      'CI_RUN_EVENT', 'CI_RUN_CONCLUSION', 'CI_RUN_HEAD_BRANCH', 'CI_RUN_HEAD_REPOSITORY_ID',
-      'CI_RUN_HEAD_SHA']) {
-      expect(jobs.retry, key).toContain(`${key}: \${{ github.event.workflow_run.`);
+  it('passes the run identity the script validates, each from the right field', () => {
+    // The exact expression, not just the prefix: mapping CI_RUN_NUMBER to
+    // `.id` would be a silently wrong supersession comparison.
+    const FIELDS = {
+      CI_RUN_ID: 'id',
+      CI_RUN_ATTEMPT: 'run_attempt',
+      CI_RUN_NUMBER: 'run_number',
+      CI_WORKFLOW_ID: 'workflow_id',
+      CI_RUN_EVENT: 'event',
+      CI_RUN_CONCLUSION: 'conclusion',
+      CI_RUN_HEAD_BRANCH: 'head_branch',
+      CI_RUN_HEAD_REPOSITORY_ID: 'head_repository.id',
+      CI_RUN_HEAD_SHA: 'head_sha',
+    };
+    for (const [key, field] of Object.entries(FIELDS)) {
+      expect(jobs.retry, key).toContain(`${key}: \${{ github.event.workflow_run.${field} }}`);
     }
   });
 
