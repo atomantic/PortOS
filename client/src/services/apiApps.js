@@ -19,6 +19,17 @@ export const getAppQualityHistory = (id, days, options) => request(`/apps/${id}/
 // Response: { success, published, reason?, hash?, path }.
 export const publishAppQualitySnapshot = (id, options = {}) =>
   request(`/apps/${id}/quality-snapshot`, { method: 'POST', silent: true, ...options });
+// The Quality tab's weekly-schedule form. `get` returns the applicable checks,
+// the repo shapes that verdict came from, the cron expressions already spoken
+// for, and the plan the shipped defaults produce; `preview` re-plans an edited
+// form without writing; `apply` persists the plan as per-app task overrides.
+// All three are silent — the form renders its own errors and warnings inline.
+export const getAppQualitySchedule = (id, options = {}) =>
+  request(`/apps/${id}/quality-schedule`, { silent: true, ...options });
+export const previewAppQualitySchedule = (id, body, options = {}) =>
+  request(`/apps/${id}/quality-schedule/preview`, { method: 'POST', body: JSON.stringify(body), silent: true, ...options });
+export const applyAppQualitySchedule = (id, body, options = {}) =>
+  request(`/apps/${id}/quality-schedule/apply`, { method: 'POST', body: JSON.stringify(body), silent: true, ...options });
 // Managed checkout topology: returns sanitized local/fork/upstream revision
 // state without exposing machine-local repo paths.
 export const getAppRepositorySources = (id, options = {}) =>

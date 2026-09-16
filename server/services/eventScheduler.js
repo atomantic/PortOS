@@ -12,6 +12,9 @@ import { recurrenceRuleSchema } from '../lib/recurrenceValidation.js'
 // cron editor, so an expression the routes accept is exactly the set this
 // walker can search (#6634).
 import { isValidCronField, CRON_FIELD_BOUNDS, CRON_FIELD_NAMES } from '../lib/cronValidation.js'
+// Field MATCHING is shared with the quality-schedule planner, so an hour the
+// planner reads as free is exactly an hour this walker will not fire in.
+import { matchesCronField } from '../lib/cronFields.js'
 
 // Maximum safe setTimeout value (2^31 - 1 ms, ~24.8 days)
 const MAX_TIMEOUT = 2147483647
@@ -314,47 +317,6 @@ function parseRecurrenceToNextRun(rule, from = new Date(), timezone = 'UTC', unt
   return findNextRecurrenceCandidate(normalized, anchor, from, timezone, maxDate)
 }
 
-/**
- * Check if a value matches a cron field expression
- * @param {number} value - Current value
- * @param {string} expr - Cron field expression
- * @returns {boolean} - True if matches
- */
-function matchesCronField(value, expr, fieldMin = 0) {
-  if (expr === '*') return true
-
-  // Handle comma-separated values
-  if (expr.includes(',')) {
-    return expr.split(',').some(part => matchesCronField(value, part.trim(), fieldMin))
-  }
-
-  // Handle step values first (e.g., */5, 0/10, 1-5/2)
-  if (expr.includes('/')) {
-    const [rangeExpr, step] = expr.split('/')
-    const stepNum = Number(step)
-    let startNum = fieldMin
-    let endNum = Infinity
-    if (rangeExpr === '*') {
-      startNum = fieldMin
-    } else if (rangeExpr.includes('-')) {
-      const [s, e] = rangeExpr.split('-').map(Number)
-      startNum = s
-      endNum = e
-    } else {
-      startNum = Number(rangeExpr)
-    }
-    return value >= startNum && value <= endNum && (value - startNum) % stepNum === 0
-  }
-
-  // Handle ranges (e.g., 1-5)
-  if (expr.includes('-')) {
-    const [start, end] = expr.split('-').map(Number)
-    return value >= start && value <= end
-  }
-
-  // Direct value match
-  return Number(expr) === value
-}
 
 /**
  * Create a timeout-safe timer

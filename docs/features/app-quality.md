@@ -91,3 +91,55 @@ History begins with newly reported assessments; no scores are invented for old
 runs. The local detail endpoint `/api/apps/:id/quality-history?days=90` reads only
 that app's measurements and bounds results to the last measurement per UTC day
 and category, including a 30-day lookback to seed the selected range.
+
+## Weekly quality schedule
+
+The app's Quality tab carries a **Weekly quality schedule** form that configures
+every applicable audit for that app in one write, instead of hand-picking ~26
+cron expressions on the Schedule page. It writes ordinary per-app task-type
+overrides, so every entry it creates stays editable there afterwards.
+
+**Which checks.** Checks are pre-selected by applicability. A category an earlier
+audit reported as `coverage: not-applicable` is skipped — the auditing agent read
+the repository, so its ruling wins. Otherwise applicability comes from the shapes
+present in the tracked files (`git ls-files`): the UI lenses (UX, accessibility,
+mobile/responsive, UI bugs, console errors, UI lifecycle, copy) need a user
+interface or a configured UI port, typing needs TypeScript sources, dependency
+freedom needs a dependency manifest, test quality needs existing tests, and API
+contracts need a route/API surface. Test **coverage** is deliberately never gated
+on tests — a repository with none is the one it has the most to say about. Each
+audit declares its own requirement as `requiresCapability` in
+`AUDIT_DEFINITIONS` (`server/lib/auditCatalog.js`), beside its other metadata
+and under the catalog's guard test; `server/services/appQualitySchedule.js` owns
+the detection, and throws at load if a declared capability has no way to be
+recognized. Everything is advisory: a skipped check
+is still listed with its reason and can be selected by hand, and a repository
+that cannot be scanned offers every check rather than deselecting the catalog
+for want of evidence.
+
+**When.** The selection is spread across all seven days — 26 checks become four a
+day — ordered so each one follows the audits `AUDIT_SUGGESTED_AFTER` names as its
+predecessors. The hours are chosen, not entered: the planner collects the
+weekday/hour cells already occupied by this app's other cron-scheduled work (the
+install-wide CoS cadence for types enabled on this app, each perpetual drain's
+recheck cadence, and the app's own cron overrides), pads each by an hour before
+and two after, and places slots in the free cells nearest an even spacing. That
+is what keeps an audit out of a 03:30 nightly release window. The types the plan
+is about to rewrite are excluded from that collection, so re-running the form
+does not treat last week's plan as an obstacle to this week's.
+
+**Delivery and the claim drain.** Each check either files issues or implements
+the fix (`taskMetadata.fileIssues`), set as a form-wide default with a per-check
+override. When at least one check files issues, one claim job — `claim-work` by
+default, which routes to whichever tracker the app resolves to — is scheduled a
+few hours after each check as a single daily cron (`0 8,16 * * *`), so the issues
+an audit files get worked before the next audit runs. Its placement only ever
+moves later than the check it follows; no claim drain is scheduled when every
+selected check implements its own fixes.
+
+Nothing is written until **Apply**, which is also the whole picture: the selected
+checks are enabled with their planned cron and delivery mode, and audit types
+left out are disabled with their stale cron cleared. Other task types are
+untouched. Endpoints: `GET /api/apps/:id/quality-schedule`,
+`POST /api/apps/:id/quality-schedule/preview` (read-only re-plan), and
+`POST /api/apps/:id/quality-schedule/apply`.

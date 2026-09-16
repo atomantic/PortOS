@@ -20,6 +20,8 @@ import { ORCHESTRATION_MODES, ORCHESTRATION_ROLES } from './orchestrationProfile
 import { AGENT_RUN_EVENT_KINDS, RUN_EVENT_READ_LIMITS } from './agentRunEvents.js';
 import { TASK_STATUS_VALUES, TASK_PRIORITY_VALUES } from './taskParser.js';
 import { recurrenceRuleSchema } from './recurrenceValidation.js';
+import { AUDIT_TASK_TYPE_LIST } from './auditCatalog.js';
+import { CLAIM_DRAIN_TASK_TYPES } from './qualitySchedulePlan.js';
 import { JOB_INTERVAL_VALUES } from './autonomousJobIntervals.js';
 import { TASK_DATA_INPUT_DEFINITIONS, TASK_DATA_INPUT_IDS } from './taskDataInputCatalog.js';
 import {
@@ -1274,4 +1276,30 @@ export const runEventProjectionIdSchema = z.object({
 export const runEventReconcileSchema = z.object({
   runId: z.string().min(1).max(128).optional(),
   limit: z.coerce.number().int().min(1).max(RUN_EVENT_READ_LIMITS.max).optional()
+}).strict();
+
+// The Quality tab's "schedule every applicable check" form. Every
+// field is optional: an untouched form is a valid "plan the applicable checks
+// with the shipped defaults", which is the whole point of the feature.
+//
+// `taskTypes` is bounded by the audit catalog rather than by
+// SELF_IMPROVEMENT_TASK_TYPES: the planner lays out AUDITS, and a request
+// naming `release-check` would otherwise have its cadence rewritten by a form
+// that never showed it. `fileIssuesByType` is keyed the same way and read only
+// for the types actually scheduled.
+export const qualitySchedulePlanSchema = z.object({
+  taskTypes: z.array(z.enum(AUDIT_TASK_TYPE_LIST)).max(AUDIT_TASK_TYPE_LIST.length).optional(),
+  // partialRecord, not record: a Zod 4 enum-keyed record demands EVERY key, and
+  // the form only sends the checks whose mode the user actually changed.
+  fileIssuesByType: z.partialRecord(z.enum(AUDIT_TASK_TYPE_LIST), z.boolean()).optional(),
+  // null = spread the selection evenly over the week.
+  checksPerDay: z.number().int().min(1).max(24).nullable().optional(),
+  windowStartHour: z.number().int().min(0).max(23).optional(),
+  windowEndHour: z.number().int().min(0).max(23).optional(),
+  claimBetween: z.boolean().optional(),
+  claimOffsetHours: z.number().int().min(1).max(23).optional(),
+  claimTaskType: z.enum(CLAIM_DRAIN_TASK_TYPES).optional(),
+  padBeforeHours: z.number().int().min(0).max(12).optional(),
+  padAfterHours: z.number().int().min(0).max(12).optional(),
+  fileIssues: z.boolean().optional(),
 }).strict();
