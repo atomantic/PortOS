@@ -29,6 +29,7 @@ import { readdirSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { runResilienceAssay } from '../server/services/eidoverseResilienceAssay.js';
+import { isDirectlyInvoked } from './lib/directInvocation.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const DEFAULT_FIXTURES_DIR = join(__dirname, '..', 'server', 'services', 'eidoverseResilienceAssayFixtures');
@@ -77,7 +78,7 @@ export async function runAssayCli(args) {
   return allPassed ? 0 : 1;
 }
 
-if (import.meta.url === pathToFileURL(process.argv[1] || '').href) {
+if (isDirectlyInvoked(import.meta.url)) {
   runAssayCli(process.argv.slice(2))
     .then((code) => process.exit(code))
     .catch((error) => {
