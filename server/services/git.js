@@ -700,7 +700,20 @@ export async function getBranches(dir, { strict = false } = {}) {
  * Pull changes from remote for current branch
  */
 export async function pull(dir) {
-  const result = await execGit(['pull', '--rebase', '--autostash'], dir);
+  const result = await execGit(['pull', '--rebase', '--autostash'], dir).catch((err) => {
+    // A rebase killed mid-flight can leave the repo in a rebase-in-progress
+    // state, so a lock found here is cleared but NOT retried — blindly
+    // re-running `pull --rebase` could stack onto that abandoned state instead
+    // of starting clean. Surface it so the next explicit pull starts fresh.
+    const clearedLock = clearStaleGitLock(err.message);
+    if (clearedLock) {
+      throw new Error(
+        `Cleared an abandoned git lock (${clearedLock}) left by a killed git process. `
+        + `The pull did not run — retry it now that the lock is clear.`
+      );
+    }
+    throw err;
+  });
   return { success: true, output: result.stdout + result.stderr };
 }
 
@@ -740,7 +753,14 @@ export async function updateDefaultBranch(dir) {
     .filter(Boolean)
     .join('\n') || fallback;
 
-  await execGit(['fetch', 'origin'], dir);
+  // A killed `fetch` can leave a shared ref lock (`refs/remotes/origin/*.lock`,
+  // `packed-refs.lock`) that every worktree of this repo shares. `fetch` is
+  // idempotent, so this uses the same clear-and-retry-once shape as
+  // `updateSubmodule` rather than surfacing a permanent, confusing failure.
+  await execGit(['fetch', 'origin'], dir).catch(async (err) => {
+    if (!clearStaleGitLock(err.message)) throw err;
+    await execGit(['fetch', 'origin'], dir);
+  });
   const runtimeBranch = await execGit(['config', '--get', 'portos.runtimeBranch'], dir, { ignoreExitCode: true });
   const branch = runtimeBranch.stdout.trim() || await getDefaultBranch(dir, { strict: true });
   if (!branch) throw new ServerError('could not determine origin default branch', { status: 400, code: 'NO_DEFAULT_BRANCH' });
@@ -754,12 +774,18 @@ export async function updateDefaultBranch(dir) {
     const checkout = await execGit(['checkout', branch], dir, { ignoreExitCode: true });
     output += checkout.stdout + checkout.stderr;
     if (checkout.exitCode !== 0) {
+      // Checkout can leave a partially-written index, so a lock found here is
+      // cleared but NOT retried — the next explicit attempt starts from a
+      // lock-free repo instead of racing this one.
+      const clearedLock = clearStaleGitLock(checkout.stderr);
       return {
         success: false,
         branch,
         output,
         conflict: true,
-        error: bothStreams(checkout, `could not check out ${branch}`)
+        error: clearedLock
+          ? `Cleared an abandoned git lock (${clearedLock}) left by a killed git process. The checkout onto ${branch} did not run — retry the update now that the lock is clear.`
+          : bothStreams(checkout, `could not check out ${branch}`)
       };
     }
   }
@@ -767,6 +793,17 @@ export async function updateDefaultBranch(dir) {
   const fastForward = await execGit(['pull', '--ff-only', 'origin', branch], dir, { ignoreExitCode: true });
   output += fastForward.stdout + fastForward.stderr;
   if (fastForward.exitCode === 0) return { success: true, branch, output, conflict: false };
+
+  const fastForwardLock = clearStaleGitLock(fastForward.stderr);
+  if (fastForwardLock) {
+    return {
+      success: false,
+      branch,
+      output,
+      conflict: true,
+      error: `Cleared an abandoned git lock (${fastForwardLock}) left by a killed git process. The fast-forward pull did not run — retry the update now that the lock is clear.`
+    };
+  }
 
   const rebase = await execGit(['pull', '--rebase', '--autostash', 'origin', branch], dir, { ignoreExitCode: true });
   output += rebase.stdout + rebase.stderr;
@@ -783,7 +820,21 @@ export async function updateDefaultBranch(dir) {
     };
   }
 
+  const rebaseLock = clearStaleGitLock(rebase.stderr);
+  // A rebase killed mid-flight can leave `.git/rebase-merge`/`rebase-apply`
+  // behind alongside the lock, so abort it here too — otherwise the next
+  // attempt fails immediately on "rebase already in progress" instead of the
+  // clean retry this error promises.
   await execGit(['rebase', '--abort'], dir, { ignoreExitCode: true });
+  if (rebaseLock) {
+    return {
+      success: false,
+      branch,
+      output,
+      conflict: true,
+      error: `Cleared an abandoned git lock (${rebaseLock}) left by a killed git process. The rebase onto origin/${branch} did not complete — retry the update now that the lock is clear.`
+    };
+  }
   return {
     success: false,
     branch,
@@ -804,9 +855,15 @@ export async function syncBranch(dir, branch = null) {
   const pullSuccess = !pullResult.stderr?.includes('fatal') && !pullResult.stderr?.includes('CONFLICT');
 
   if (!pullSuccess) {
+    // A rebase killed mid-flight can leave the repo in a rebase-in-progress
+    // state, so a lock found here is cleared but NOT retried automatically —
+    // surface it so the next explicit sync starts from a lock-free repo.
+    const clearedLock = clearStaleGitLock(pullResult.stderr);
     return {
       success: false,
-      error: pullResult.stderr || 'Pull failed',
+      error: clearedLock
+        ? `Cleared an abandoned git lock (${clearedLock}) left by a killed git process. The pull did not complete — retry the sync now that the lock is clear.`
+        : (pullResult.stderr || 'Pull failed'),
       pulled: false,
       pushed: false
     };
@@ -853,8 +910,13 @@ export async function ensureLatest(dir) {
   const remote = await getRemote(dir).catch(() => null);
   if (!remote?.origin) return { success: true, branch: currentBranch, conflict: false, error: null, skipped: 'no-remote' };
 
-  // Fetch latest refs from origin
-  const fetchResult = await execGit(['fetch', 'origin'], dir, { ignoreExitCode: true });
+  // Fetch latest refs from origin. Idempotent, so an abandoned lock (left by a
+  // killed git process, shared by every worktree of this repo) is cleared and
+  // retried once rather than reported as a permanent failure.
+  let fetchResult = await execGit(['fetch', 'origin'], dir, { ignoreExitCode: true });
+  if (fetchResult.stderr?.includes('fatal') && clearStaleGitLock(fetchResult.stderr)) {
+    fetchResult = await execGit(['fetch', 'origin'], dir, { ignoreExitCode: true });
+  }
   if (fetchResult.stderr?.includes('fatal')) {
     return { success: false, branch: currentBranch, conflict: false, error: `fetch failed: ${fetchResult.stderr}` };
   }
@@ -887,13 +949,42 @@ export async function ensureLatest(dir) {
     return { success: true, branch: currentBranch, conflict: false, error: null };
   }
 
+  // A lock found here is cleared but NOT retried — a blind retry could race a
+  // still-write-in-progress index. Surface it so the next explicit attempt
+  // starts from a lock-free repo.
+  const mergeLock = clearStaleGitLock(mergeResult.stderr);
+  if (mergeLock) {
+    return {
+      success: false,
+      branch: currentBranch,
+      conflict: true,
+      error: `Cleared an abandoned git lock (${mergeLock}) left by a killed git process. The fast-forward merge did not complete — retry now that the lock is clear.`
+    };
+  }
+
   // Fast-forward failed — local branch has diverged. Try rebase.
   const rebaseResult = await execGit(['rebase', `origin/${currentBranch}`], dir, { ignoreExitCode: true });
-  const rebaseOk = !rebaseResult.stderr?.includes('CONFLICT') && !rebaseResult.stderr?.includes('error:');
+  // `fatal:` (git's prefix for an abandoned-lock failure, matching `mergeOk`
+  // above) alongside the existing conflict/error markers — without it a lock
+  // failure here read as a silent success.
+  const rebaseOk = !rebaseResult.stderr?.includes('fatal')
+    && !rebaseResult.stderr?.includes('CONFLICT')
+    && !rebaseResult.stderr?.includes('error:');
 
   if (!rebaseOk) {
-    // Rebase failed — abort and report conflict
+    // A rebase killed mid-flight can leave `.git/rebase-merge`/`rebase-apply`
+    // behind alongside a lock, so abort it regardless of the cause before
+    // deciding how to report the failure.
+    const rebaseLock = clearStaleGitLock(rebaseResult.stderr);
     await execGit(['rebase', '--abort'], dir, { ignoreExitCode: true });
+    if (rebaseLock) {
+      return {
+        success: false,
+        branch: currentBranch,
+        conflict: true,
+        error: `Cleared an abandoned git lock (${rebaseLock}) left by a killed git process. The rebase onto origin/${currentBranch} did not complete — retry now that the lock is clear.`
+      };
+    }
     return {
       success: false,
       branch: currentBranch,
