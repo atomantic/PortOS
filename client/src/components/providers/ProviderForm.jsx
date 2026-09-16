@@ -3,7 +3,7 @@ import { useState } from 'react';
 import { AlertTriangle, Braces, Cpu, Plug, SlidersHorizontal } from 'lucide-react';
 import toast from '../ui/Toast';
 import * as api from '../../services/api';
-import { filterHardwareCompatibleProviderModels, filterGenerationModels, isEmbeddingModel, isProviderHardwareCompatible, isProviderModelHardwareCompatible, mergeModelLists, configuredDefaultIn, localBackendForProvider, mergeObservedContextWindows, modelOptionLabel, isProcessProvider, isLocalEndpoint, effectiveModelContextWindow, isRunnerAllowedCommand, effortLevelsForProvider, isOllamaBackedProvider, gatewayForProvider, isClaudeCommandProvider, generationControlsFor, isCodexProvider } from '../../utils/providers';
+import { filterHardwareCompatibleProviderModels, filterGenerationModels, isEmbeddingModel, isProviderHardwareCompatible, isProviderModelHardwareCompatible, mergeModelLists, configuredDefaultIn, localBackendForProvider, mergeObservedContextWindows, withRuntimeContextWindow, modelOptionLabel, isProcessProvider, isLocalEndpoint, effectiveModelContextWindow, isRunnerAllowedCommand, effortLevelsForProvider, isOllamaBackedProvider, gatewayForProvider, isClaudeCommandProvider, generationControlsFor, isCodexProvider } from '../../utils/providers';
 import Banner from '../ui/Banner';
 import {
   formatDurationMs,
@@ -120,7 +120,11 @@ export default function ProviderForm({ provider, daemonReadiness = null, onClose
   // never saved — `modelContextWindows` is not a form field, so an observation
   // can reach "Budgeter uses …" and the model-option labels without any risk of
   // a Save writing a running process's window into the record (#7441).
-  const capabilityProvider = mergeObservedContextWindows({
+  // The daemon's LAUNCH ceiling folds in the same way and for the same reason
+  // (#7472): it is resolved server-side from the ambient `OLLAMA_CONTEXT_LENGTH`
+  // the browser cannot read, and a typed-but-unsaved `numCtx` still outranks it
+  // — the clamp reads the record's own rung first.
+  const capabilityProvider = withRuntimeContextWindow(mergeObservedContextWindows({
     ...provider,
     ...formData,
     id: provider?.id,
@@ -129,7 +133,7 @@ export default function ProviderForm({ provider, daemonReadiness = null, onClose
       ...provider?.modelHardwareCompatibility,
       ...liveHardwareFor(formData),
     },
-  }, daemonReadiness?.contextWindows);
+  }, daemonReadiness?.contextWindows), daemonReadiness?.runtimeContextWindow);
   const availableModels = filterHardwareCompatibleProviderModels(
     filterGenerationModels(mergedModels),
     capabilityProvider,

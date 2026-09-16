@@ -53,6 +53,11 @@ const { CODEX_CONTEXT_WINDOW, DEFAULT_LARGE_CONTEXT_WINDOW } = await import('../
 // `fs`/`child_process`-reaching barrel: the contract test below asserts the
 // budgeter and the gate agree, so it has to ask the real gate.
 const { contextWindowRejection, knownContextWindow } = await import('../lib/aiToolkit/providerStatus.js');
+// The host's projection of a provider for a context question, and the resolver
+// the DAEMON LAUNCHER reads. The contract test below pins the budget against
+// what the launcher actually holds Ollama at — budgeter/gate agreement alone
+// cannot catch a rung they are both blind to (#7472).
+const { withOllamaRuntimeContextWindow, resolveOllamaContextLength } = await import('../lib/ollamaContext.js');
 
 const apiProvider = (extra = {}) => ({
   id: 'mock-api', name: 'Mock', type: 'api', enabled: true, defaultModel: 'm-default', ...extra,
@@ -353,9 +358,18 @@ describe('stageRunner — the budget never exceeds what the dispatch gate allows
       { ...ollama, modelContextWindows: undefined, contextWindow: 64_000 },
       { id: 'ollama', type: 'api', enabled: true, numCtx: 16_000, contextWindow: 128_000 },
       { type: 'tui', command: 'opencode', modelContextWindows: { 'qwen3:32b': 40_960 } },
+      // The env rung: no `numCtx`, so the ceiling exists only in the window
+      // PortOS launched the daemon at. Before #7472 this shape was COMPARED and
+      // still passed — budgeter and gate agreed on 40,960, the wrong answer —
+      // which is why the assertion below it is what proves the fix.
+      { ...ollama, numCtx: undefined, runtimeContextWindow: 16_384 },
     ];
     const compared = shapes.filter((provider) => {
-      const admitted = knownContextWindow(provider, 'qwen3:32b');
+      // Projected exactly as the host projects it before asking the gate
+      // (`promptRunner.js#assertRequestFitsContext`): the toolkit cannot resolve
+      // the ambient rung itself, so a gate asked about the RAW record is not the
+      // gate any request meets.
+      const admitted = knownContextWindow(withOllamaRuntimeContextWindow(provider), 'qwen3:32b');
       expect(admitted, `the gate declares no window for ${JSON.stringify(provider)}`).toBeGreaterThan(0);
       expect(effectiveContextWindow(provider, 'qwen3:32b'),
         `budgeted wider than the gate admits for ${JSON.stringify(provider)}`)
@@ -363,6 +377,54 @@ describe('stageRunner — the budget never exceeds what the dispatch gate allows
       return true;
     });
     expect(compared).toHaveLength(shapes.length);
+  });
+
+  // #7472 — the rung #7466 left open. Budgeter/gate agreement cannot catch this
+  // one: with no `numCtx` both ends read no ceiling and agree on the model's
+  // catalog window, while the daemon is running at the env-configured one and
+  // rejects the prompt with `exceed_context_size_error`. So this pins the budget
+  // against what the LAUNCHER holds the daemon at, not against the gate.
+  describe('an env-configured daemon (OLLAMA_CONTEXT_LENGTH, no numCtx)', () => {
+    const envOllama = { ...ollama, numCtx: undefined };
+
+    beforeEach(() => {
+      // Pinned rather than inherited: this machine may have either set already,
+      // and `OLLAMA_HOST` decides whether the provider counts as the daemon
+      // PortOS manages at all.
+      vi.stubEnv('OLLAMA_CONTEXT_LENGTH', '16384');
+      vi.stubEnv('OLLAMA_HOST', '');
+      vi.stubEnv('OLLAMA_URL', '');
+    });
+
+    afterEach(() => { vi.unstubAllEnvs(); });
+
+    it('budgets to the window the daemon was launched at, not the catalog window', async () => {
+      providers.getActiveProvider.mockResolvedValue(envOllama);
+      serving({ 'qwen3:32b': 40_960 });
+
+      const { contextWindow, model } = await resolveStageContext('any-stage');
+      // The daemon's ACTUAL window — the same number `ollamaAgentContext.js`
+      // hands `ensureContextWindow` and `withOllamaContextEnv` puts on
+      // `ollama serve`. Asserting against the resolver rather than the literal
+      // is the point: budget and launch must not be able to diverge.
+      expect(contextWindow).toBe(resolveOllamaContextLength(envOllama));
+      expect(contextWindow).toBe(16_384);
+      // …and the gate the host actually asks agrees, in both directions.
+      const gated = withOllamaRuntimeContextWindow(envOllama);
+      expect(contextWindowRejection(gated, model, { requiredContextTokens: contextWindow })).toBeNull();
+      expect(contextWindowRejection(gated, model, { requiredContextTokens: 40_960 })).toMatch(/16384/);
+    });
+
+    it('lets an explicit numCtx outrank it, and leaves a REMOTE daemon alone', async () => {
+      // `numCtx` first, exactly as `resolveOllamaContextLength` ranks the two —
+      // so a provider form's unsaved edit is not overruled by the ambient value.
+      expect(effectiveContextWindow({ ...envOllama, numCtx: 8_192 }, 'qwen3:32b')).toBe(8_192);
+      // The env var only ever reaches the daemon THIS install launches. Applied
+      // to a provider pointed at another host it would budget someone else's
+      // daemon down to this machine's VRAM headroom.
+      const remote = { ...envOllama, endpoint: 'http://192.0.2.10:11434/v1' };
+      expect(effectiveContextWindow(remote, 'qwen3:32b')).toBe(40_960);
+    });
   });
 });
 

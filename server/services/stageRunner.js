@@ -34,6 +34,9 @@ import {
 // dependency-free `internal/` leaf, not the toolkit barrel: that reaches `fs`
 // and `child_process`, and this module is inside the server suite's import budget.
 import { clampToRuntimeContextWindow } from '../lib/aiToolkit/internal/ollamaBacked.js';
+// …and the rung of that ceiling the toolkit cannot resolve for itself: the
+// ambient `OLLAMA_CONTEXT_LENGTH` PortOS launches the daemon with (#7472).
+import { withOllamaRuntimeContextWindow } from '../lib/ollamaContext.js';
 import { createRun, patchRunMetadata } from './runner.js';
 import { resolveProviderModelTier, MIN_TIMEOUT as STAGE_TIMEOUT_MIN_MS, MAX_TIMEOUT as STAGE_TIMEOUT_MAX_MS } from '../lib/aiToolkit/constants.js';
 
@@ -233,9 +236,18 @@ function claimedContextWindow(provider, model) {
  * actually serve. The ceiling bounds every rung, an explicit override included
  * (a user preference the daemon cannot honor past its launch window). See
  * {@link clampToRuntimeContextWindow} for the rule and why it is shared.
+ *
+ * The provider is projected through `withOllamaRuntimeContextWindow` first so
+ * the ceiling sees BOTH rungs the daemon was launched from — `numCtx` and the
+ * ambient `OLLAMA_CONTEXT_LENGTH`. Without it an install that configures the
+ * window through the env var alone budgeted at the model's catalog window and
+ * the call died at dispatch (#7472). The projection is in-memory and never
+ * persisted; `resolveStageContext` deliberately does NOT do it for us, because
+ * both of its branches (probe and no-probe) must get the same ceiling.
  */
 export function effectiveContextWindow(provider, model) {
-  return clampToRuntimeContextWindow(provider, claimedContextWindow(provider, model));
+  const runtime = withOllamaRuntimeContextWindow(provider);
+  return clampToRuntimeContextWindow(runtime, claimedContextWindow(runtime, model));
 }
 
 /**

@@ -14,6 +14,10 @@
  *
  * The Ollama `num_ctx` ceiling is shared with the SERVER's dispatch gate too,
  * so the meter cannot promise a window a run would then be refused for (#7466).
+ * Its second rung — the ambient `OLLAMA_CONTEXT_LENGTH` the server launched the
+ * daemon with — is server env the browser cannot read, so it arrives as
+ * `runtimeContextWindow` on the readiness payload and is folded in with
+ * `withRuntimeContextWindow` at the two call sites that budget (#7472).
  *
  * Re-exported by `./providers.js` for existing `utils/providers` imports.
  */
@@ -32,6 +36,15 @@ import {
 // dependency-free `internal/` leaf for the same reason `providerTypes.js`
 // already takes `isOllamaBackedProvider` from there.
 import { clampToRuntimeContextWindow } from '../../../server/lib/aiToolkit/internal/ollamaBacked.js';
+
+export {
+  // Stamps the window PortOS holds a local Ollama daemon at onto a provider
+  // projection, so the clamp above sees the rung the browser cannot resolve for
+  // itself: the ambient `OLLAMA_CONTEXT_LENGTH` this install launched the daemon
+  // with. The number arrives as `runtimeContextWindow` on the readiness payload,
+  // beside the served windows `mergeObservedContextWindows` folds in (#7472).
+  withRuntimeContextWindow,
+} from '../../../server/lib/aiToolkit/internal/ollamaBacked.js';
 
 export {
   DEFAULT_LARGE_CONTEXT_WINDOW,
