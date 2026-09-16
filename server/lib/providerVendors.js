@@ -351,38 +351,35 @@ function appendOpencodeModel(args, provider, model) {
 
 const opencodeSpawnConfig = (provider, args) => ({ command: provider?.command || 'opencode', args, stdinMode: 'prompt' });
 
-function opencodeCliArgs(baseArgs, { model, provider }) {
-  const args = baseArgs.includes('run') ? [...baseArgs] : ['run', ...baseArgs];
-  return appendOpencodeModel(args, provider, model);
-}
-
 /**
- * Pin OpenCode's tool-enabled `build` agent on an ordinary interactive TUI
- * session, unless the argv already selects one.
+ * Pin OpenCode's tool-enabled `build` agent unless the argv already selects one.
  *
  * Unlike every other vendor here, OpenCode's ROLE — not just its permissions —
- * is argv/config state, and the seeded TUI provider records ship `args: []`.
- * A bare `opencode` therefore opens in whatever agent that install defaults to
- * (or last used), which is how a task-completion run came up as a read-only
- * specialist and refused to write its own completion sentinel, asking a human
- * that an unattended run has none of (#7405). The prompt cannot fix that: the
- * host role outranks prompt text for a small local model, so the flag is the
- * fix and the prompt's sentinel-write permission line is the belt.
+ * is argv state, and the seeded records ship `args: []` (TUI) / `args: ["run"]`
+ * (headless). A bare invocation therefore opens in whatever agent that install
+ * defaults to, which is how a completion run came up as a read-only specialist
+ * and refused to write its own sentinel (#7405 — the contract it could not
+ * reconcile is `SENTINEL_WRITE_PERMISSION_NOTE` in promptSections/completion.js).
+ * Argv, not `OPENCODE_CONFIG_CONTENT`: that env var is stripped for a
+ * gateway-backed wrapper (`cliChildEnv.js`), and a `data.reference` seed edit
+ * would never reach an install's already-stored record.
  *
- * Idempotent, and scoped to the interactive path only: `applyCommandDefaults`
- * is never reached by a public-review posture (its argv comes from
- * `buildVendorSpawnConfig`), so pinning the tool-enabled agent here cannot
- * widen the `--agent plan` recipe that hardens a public-content review.
+ * Idempotent on `--agent`, which is what lets the public-review recipes keep
+ * their `--agent plan` while sharing these builders.
  *
  * @param {string[]} args
  * @returns {string[]}
  */
-function ensureOpencodeTuiArgs(args = []) {
-  const out = [...args];
-  // `--agent` is spelled the same on the bare TUI binary and on `opencode run`.
-  if (!argvHasFlag(out, ['--agent'])) out.push('--agent', OPENCODE_BUILD_AGENT);
-  return out;
+const ensureOpencodeAgent = (args) =>
+  argvHasFlag(args, ['--agent']) ? args : [...args, '--agent', OPENCODE_BUILD_AGENT];
+
+function opencodeCliArgs(baseArgs, { model, provider }) {
+  const args = baseArgs.includes('run') ? [...baseArgs] : ['run', ...baseArgs];
+  return ensureOpencodeAgent(appendOpencodeModel(args, provider, model));
 }
+
+/** `applyCommandDefaults` arm — both TUI spawn paths share it, so they can't drift. */
+const ensureOpencodeTuiArgs = (args = []) => ensureOpencodeAgent([...args]);
 
 /**
  * An OpenCode wrapper this install can actually run the tool-free gate on.

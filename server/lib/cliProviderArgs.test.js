@@ -73,13 +73,16 @@ describe('cliProviderArgs', () => {
     });
   });
 
+  // Every OpenCode argv below ends in `--agent build`: OpenCode's role is argv
+  // state, so an un-pinned invocation opens in whatever agent the install
+  // defaults to (#7405). See ensureOpencodeAgent in providerVendors.js.
   describe('buildCliArgs — OpenCode Ollama', () => {
     it('runs `opencode run -m ollama/<model>` (prompt rides stdin)', () => {
       const args = buildCliArgs({
         id: 'opencode-ollama', command: 'opencode', args: ['run'],
         ollamaBacked: true, defaultModel: 'qwen2.5:7b',
       });
-      expect(args).toEqual(['run', '-m', 'ollama/qwen2.5:7b']);
+      expect(args).toEqual(['run', '-m', 'ollama/qwen2.5:7b', '--agent', 'build']);
     });
 
     it('prepends the run subcommand when the saved args dropped it', () => {
@@ -87,12 +90,12 @@ describe('cliProviderArgs', () => {
         id: 'opencode-ollama', command: 'opencode', args: [], ollamaBacked: true,
         defaultModel: 'qwen2.5:7b',
       });
-      expect(args).toEqual(['run', '-m', 'ollama/qwen2.5:7b']);
+      expect(args).toEqual(['run', '-m', 'ollama/qwen2.5:7b', '--agent', 'build']);
     });
 
     it('omits -m when no model is configured (opencode falls back to its own default)', () => {
       const args = buildCliArgs({ id: 'opencode-ollama', command: 'opencode', args: ['run'], ollamaBacked: true, defaultModel: null });
-      expect(args).toEqual(['run']);
+      expect(args).toEqual(['run', '--agent', 'build']);
     });
 
     it('respects a user-baked -m pin and skips injection', () => {
@@ -100,7 +103,7 @@ describe('cliProviderArgs', () => {
         id: 'opencode-ollama', command: 'opencode', args: ['run', '-m', 'ollama/custom'], ollamaBacked: true,
         defaultModel: 'qwen2.5:7b',
       });
-      expect(args).toEqual(['run', '-m', 'ollama/custom']);
+      expect(args).toEqual(['run', '-m', 'ollama/custom', '--agent', 'build']);
     });
 
     it('takes the opencode path for a path-configured binary (not the Claude fallback)', () => {
@@ -108,7 +111,15 @@ describe('cliProviderArgs', () => {
         id: 'opencode-ollama', command: '/opt/homebrew/bin/opencode', args: ['run'], ollamaBacked: true,
         defaultModel: 'qwen2.5:7b',
       });
-      expect(args).toEqual(['run', '-m', 'ollama/qwen2.5:7b']);
+      expect(args).toEqual(['run', '-m', 'ollama/qwen2.5:7b', '--agent', 'build']);
+    });
+
+    it('respects an agent the operator already pinned', () => {
+      const args = buildCliArgs({
+        id: 'opencode-ollama', command: 'opencode', args: ['run', '--agent', 'plan'],
+        ollamaBacked: true, defaultModel: 'qwen2.5:7b',
+      });
+      expect(args).toEqual(['run', '--agent', 'plan', '-m', 'ollama/qwen2.5:7b']);
     });
   });
 
@@ -329,7 +340,7 @@ describe('cliProviderArgs', () => {
 
     it('is a no-op for providers with no effort control', () => {
       expect(buildCliArgs({ id: 'opencode', command: 'opencode', defaultModel: 'qwen3', effort: 'high' }))
-        .toEqual(['run', '-m', 'qwen3']);
+        .toEqual(['run', '-m', 'qwen3', '--agent', 'build']);
       expect(buildCliArgs({ id: 'grok-cli', command: 'grok', defaultModel: 'grok-4', effort: 'high' }))
         .not.toContain('--effort');
     });

@@ -1793,12 +1793,12 @@ describe('buildLightContextPrompt', () => {
       expect(prompt).toMatch(/watches this sentinel/);
     });
 
-    // #7405 — an OpenCode MTPLX TUI task-completion run read its host's
-    // read-only role as covering the sentinel too ("the edits/sentinel can't
-    // happen here"), then went looking for the path in `runner-state.json` /
-    // `state.json` because a SIBLING run's agent id was visible in the shared
-    // checkout's branch state. It asked a human how to proceed and stalled: an
-    // unattended run has nobody to answer. Both halves are prompt contract.
+    // #7405 — a run read its HOST's read-only role as covering the sentinel too
+    // ("the edits/sentinel can't happen here"), then hunted for the path in
+    // `runner-state.json` / `state.json` because a SIBLING run's agent id was
+    // visible in the shared checkout's branch state. It stalled on a question
+    // an unattended run has nobody to answer. The full account is on
+    // SENTINEL_WRITE_PERMISSION_NOTE in promptSections/completion.js.
     describe('sentinel-write permission (#7405)', () => {
       const SENTINEL_PATH = '/shared-checkout/.agent-done-agent-07ddbb85';
 
@@ -1816,16 +1816,27 @@ describe('buildLightContextPrompt', () => {
         // through state files instead of writing the file it was handed.
         expect([...new Set(prompt.match(/[\w/.-]*\.agent-done[\w.-]*/g))]).toEqual([SENTINEL_PATH]);
         expect(prompt).not.toMatch(/## Read-Only Task/);
-        expect(prompt).toMatch(/Writing that one file is ALWAYS permitted/);
         // No second place to look the path up.
         expect(prompt).toMatch(/Do NOT look one up in `runner-state\.json`, `state\.json`, a branch name, or a worktree name/);
       });
 
-      it('carves the sentinel out of the read-only do-not-modify rule', () => {
-        const prompt = completionPrompt({ readOnly: true });
-        expect(prompt).toMatch(/## Read-Only Task/);
-        // The banner and the sentinel instruction sit in the same section; a
-        // small local model read them as a contradiction and wrote nothing.
+      // The boundary contract, not the section helper: every TUI task shape
+      // that PRINTS a sentinel path must also say the write is permitted.
+      // `buildAuditOutputCompletionSection` proves the hazard is real — it
+      // interpolates a path and carries no note of its own, and is safe only
+      // because it is appended after a section that does.
+      it.each([
+        ['plain completion', {}],
+        ['read-only', { readOnly: true }],
+        ['no-code / API action', { noCodeOutput: true }],
+        ['reasoning-only worktree', { discardWorktree: true }],
+        ['self-managed claim flow', { claimFlow: true }],
+      ])('pairs the sentinel path with the write permission for a %s task', (_label, metadata) => {
+        const prompt = completionPrompt(metadata);
+        expect(prompt).toContain(SENTINEL_PATH);
+        expect(prompt).toMatch(/Writing that one file is ALWAYS permitted/);
+        // The carve-out has to name the rules it overrides, or a section whose
+        // own banner forbids edits still reads as a contradiction.
         expect(prompt).toMatch(/no read-only, do-not-modify, or restricted-session rule applies to it/);
       });
     });

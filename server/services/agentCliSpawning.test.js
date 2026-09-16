@@ -200,6 +200,10 @@ describe('buildCliSpawnConfig', () => {
     expect(config.args[config.args.length - 1]).toBe('--print');
   });
 
+  // The trailing `--agent build` on every OpenCode argv below pins the
+  // tool-enabled agent: OpenCode's role is argv state, so an un-pinned
+  // invocation opens in whatever agent the install defaults to (#7405). See
+  // ensureOpencodeAgent in lib/providerVendors.js.
   it('runs `opencode run -m ollama/<model>` for a headless OpenCode Ollama agent', () => {
     const config = buildCliSpawnConfig(
       { id: 'opencode-ollama', command: 'opencode', args: ['run'], ollamaBacked: true },
@@ -207,7 +211,7 @@ describe('buildCliSpawnConfig', () => {
     );
 
     expect(config.command).toBe('opencode');
-    expect(config.args).toEqual(['run', '-m', 'ollama/qwen2.5:7b']);
+    expect(config.args).toEqual(['run', '-m', 'ollama/qwen2.5:7b', '--agent', 'build']);
     expect(config.stdinMode).toBe('prompt');
     // OpenCode emits plain text, so no stream-json format is requested.
     expect(config.streamFormat).toBeUndefined();
@@ -220,14 +224,14 @@ describe('buildCliSpawnConfig', () => {
     );
 
     expect(config.command).toBe('opencode');
-    expect(config.args).toEqual(['run', '-m', 'mtplx/mtplx']);
+    expect(config.args).toEqual(['run', '-m', 'mtplx/mtplx', '--agent', 'build']);
     expect(config.stdinMode).toBe('prompt');
   });
 
   it('prepends the run subcommand for OpenCode even if saved args dropped it', () => {
     const config = buildCliSpawnConfig({ id: 'opencode-ollama', command: 'opencode', args: [], ollamaBacked: true }, 'qwen2.5:7b');
 
-    expect(config.args).toEqual(['run', '-m', 'ollama/qwen2.5:7b']);
+    expect(config.args).toEqual(['run', '-m', 'ollama/qwen2.5:7b', '--agent', 'build']);
   });
 
   it('respects a user-baked -m pin on an OpenCode provider and does not duplicate it', () => {
@@ -236,7 +240,7 @@ describe('buildCliSpawnConfig', () => {
       'qwen2.5:7b',
     );
 
-    expect(config.args).toEqual(['run', '-m', 'ollama/custom']);
+    expect(config.args).toEqual(['run', '-m', 'ollama/custom', '--agent', 'build']);
   });
 
   it('runs `grok` headless with plain output, permission bypass, and stdin prompt file (no --model for configured-default)', () => {

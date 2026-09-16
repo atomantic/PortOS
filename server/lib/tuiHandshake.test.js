@@ -648,14 +648,9 @@ describe('tuiHandshake.applyCommandDefaults', () => {
     expect(applyCommandDefaults('kimi', ['-y'])).toEqual(['-y']);
   });
 
-  // #7405: the seeded OpenCode TUI records ship `args: []`, so a bare
-  // `opencode` opened in whatever agent that install defaults to. A
-  // task-completion run came up as a read-only specialist and refused to write
-  // its own completion sentinel, stalling an unattended run on a question.
-  it('pins the tool-enabled OpenCode agent on an interactive session', () => {
-    expect(applyCommandDefaults('opencode', [])).toEqual(['--agent', 'build']);
-  });
-
+  // The bare-argv case is asserted by the catalog-derived parity guard below
+  // (BUILDER_POSTURE_EXEMPTIONS); these two cover what it does not. Why the
+  // pin exists at all: ensureOpencodeAgent in providerVendors.js (#7405).
   it('respects an OpenCode agent the operator already pinned, in either flag form', () => {
     expect(applyCommandDefaults('opencode', ['--agent', 'plan'])).toEqual(['--agent', 'plan']);
     expect(applyCommandDefaults('opencode', ['--agent=plan'])).toEqual(['--agent=plan']);
@@ -1526,10 +1521,12 @@ describe('tuiHandshake — parity with the shipped provider catalog', () => {
   const PROCESS_TYPES = new Set(['tui', 'cli']);
   const withDeclaredCommand = seedProviders.filter((p) => PROCESS_TYPES.has(p.type) && Boolean(p.command));
 
-  // Commands `applyCommandDefaults` deliberately has NO arm for, and where the
-  // unattended-run posture actually comes from. Both are asserted below, so an
-  // exemption can't rot into "we just forgot this vendor":
-  //   - the builder must still inject nothing for it, and
+  // Commands whose unattended-run POSTURE does not come from
+  // `applyCommandDefaults`, and where it comes from instead. Both are asserted
+  // below, so an exemption can't rot into "we just forgot this vendor":
+  //   - the builder must inject exactly what the entry declares (`builderInjects`,
+  //     default nothing — an arm may still inject something that is not a
+  //     posture, which is why this is a declaration rather than "injects nothing"), and
   //   - the recorded alternate channel must still carry the posture in the seed.
   // A vendor absent from BOTH this map and `applyCommandDefaults` fails.
   //
@@ -1537,14 +1534,12 @@ describe('tuiHandshake — parity with the shipped provider catalog', () => {
   // unattended posture at all — it must carry a `reason`, so the next vendor
   // resolves this by making a documented call rather than inventing a marker
   // string to satisfy the assertion.
-  const POSTURE_NOT_FROM_BUILDER = new Map([
+  const BUILDER_POSTURE_EXEMPTIONS = new Map([
     // claude's `--dangerously-skip-permissions` rides in the seed `args`.
     ['claude', { channel: 'args', marker: '--dangerously-skip-permissions' }],
     // opencode has no argv approval/trust gate; its permission posture is
-    // configured through OPENCODE_CONFIG_CONTENT (see cliChildEnv.js). Its
-    // builder arm injects a ROLE rather than a posture — `--agent build` pins
-    // the tool-enabled agent so a bare session cannot open as OpenCode's
-    // read-only one and refuse to write its own completion sentinel (#7405).
+    // configured through OPENCODE_CONFIG_CONTENT (see cliChildEnv.js). Its arm
+    // injects a ROLE, not a posture — see ensureOpencodeAgent (#7405).
     ['opencode', { channel: 'envVars', marker: '"permission":"allow"', builderInjects: ['--agent', 'build'] }],
   ]);
 
@@ -1577,13 +1572,9 @@ describe('tuiHandshake — parity with the shipped provider catalog', () => {
   // with no arm falls through `return args` unchanged and launches interactive,
   // then stalls on its first tool-approval prompt with nobody at the keyboard.
   describe.each(tuiCommands)('applyCommandDefaults("%s")', (command) => {
-    const exemption = POSTURE_NOT_FROM_BUILDER.get(command);
+    const exemption = BUILDER_POSTURE_EXEMPTIONS.get(command);
 
     if (exemption) {
-      // An exempt vendor's POSTURE comes from another channel, but its arm may
-      // still inject something else (opencode's agent-role pin). Whatever that
-      // is must be declared here, so the assertion stays exact and a new,
-      // undeclared injection still fails.
       it('injects only what its exemption declares (its posture comes from another channel)', () => {
         expect(applyCommandDefaults(command, [])).toEqual(exemption.builderInjects || []);
       });
@@ -1615,7 +1606,7 @@ describe('tuiHandshake — parity with the shipped provider catalog', () => {
         expect(
           applyCommandDefaults(command, []),
           `No applyCommandDefaults arm for "${command}". Add one (see ensureCursorTuiArgs), `
-          + 'or record why its posture arrives another way in POSTURE_NOT_FROM_BUILDER.'
+          + 'or record why its posture arrives another way in BUILDER_POSTURE_EXEMPTIONS.'
         ).not.toEqual([]);
       });
     }

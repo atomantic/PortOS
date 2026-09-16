@@ -1152,6 +1152,10 @@ export async function spawnTuiAgent({
     // which can take seconds, and a host restart that begins in that window is
     // still an interruption rather than an outcome (#3202).
     const duration = Date.now() - (agentData?.startedAt || Date.now());
+    // Read ONCE: the shared finalize decides the run's outcome from it and the
+    // diagnostic below reports on it, and two reads could disagree about the
+    // same run.
+    const wroteSentinel = sentinelPresent();
     const finalizeOutcome = finalizeAgentRunCommon({
       agentId,
       agentData,
@@ -1161,7 +1165,7 @@ export async function spawnTuiAgent({
       duration,
       executionId,
       laneName,
-      sentinelPresent: sentinelPresent(),
+      sentinelPresent: wroteSentinel,
       errorExecutionFallback: `TUI agent ended: ${reason}`,
     });
 
@@ -1175,14 +1179,18 @@ export async function spawnTuiAgent({
     const { finalSuccess, finalError, terminatedByUser } = finalizeOutcome;
 
     // Name the path the run was supposed to write when it ends without one.
-    // The sentinel is the PRIMARY finalize path, so reaching here without it
-    // means the run either died or talked itself out of the write — and the
-    // second shape is silent today: a model that decided its session was not
-    // allowed to write the file (#7405) leaves an ordinary "TUI agent ended"
-    // line and nothing an operator can grep for. Placed after the shared
-    // finalize, so the paused / host-abandoned / user-terminated paths (which
-    // legitimately produce no sentinel) have already returned or are excluded.
-    if (doneSentinelPath && !terminatedByUser && !sentinelPresent()) {
+    // The sentinel is the PRIMARY finalize path for a TUI, so reaching here
+    // without it means the run either died or talked itself out of the write —
+    // and the second shape is otherwise silent, leaving an ordinary "TUI agent
+    // ended" line and nothing an operator can grep for (#7405; the prompt-side
+    // contract is SENTINEL_WRITE_PERMISSION_NOTE). Deliberately NOT gated on
+    // `finalSuccess`: a run that stalls on a question is reaped as a failure,
+    // which is exactly the case this exists to name. Placed after the shared
+    // finalize, so the paused and host-abandoned paths have already returned
+    // and only a user kill — a legitimate no-sentinel exit — needs excluding.
+    // A CLI run is out of scope: it signals completion by exiting, so the same
+    // warn in `agentRunFinalize` would fire on every headless run.
+    if (doneSentinelPath && !terminatedByUser && !wroteSentinel) {
       emitLog('warn', `⚠️ ${agentId} finalized (${reason}) with no completion sentinel — expected ${doneSentinelPath}`, { agentId });
     }
 
