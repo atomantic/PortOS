@@ -152,7 +152,7 @@ describe('persistent mind adapter', () => {
 
   it('resolves a maturity-aware phase and wires it into instructions only for continuous-play (#7458)', async () => {
     mock.root.config.persistentMindPlaybook = { mode: 'continuous-play' };
-    mock.resolvePlaybookPhase.mockResolvedValue({ phase: 'coordinate', reason: '2 peer(s) with new activity to visit', signals: { districtCount: 20, failureRate: 0, peersWithActivity: 2 } });
+    mock.resolvePlaybookPhase.mockResolvedValue({ phase: 'coordinate', reason: '2 reachable peer(s) to visit', signals: { districtCount: 20, failureRate: 0, peersReachable: 2 } });
     const prepared = await createPersistentMindTurnAdapter().prepare({ profile });
     expect(mock.resolvePlaybookPhase).toHaveBeenCalledTimes(1);
     expect(prepared.playbookPhase).toMatchObject({ phase: 'coordinate' });

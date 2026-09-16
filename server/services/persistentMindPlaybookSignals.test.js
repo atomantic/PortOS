@@ -23,15 +23,17 @@ describe('resolvePersistentMindPlaybookPhase', () => {
     });
     const result = await resolvePersistentMindPlaybookPhase();
     expect(mock.collectEidoverseWorldSources).toHaveBeenCalledTimes(1);
-    expect(result.phase).toBe('coordinate');
-    expect(result.signals).toMatchObject({ districtCount: 5, failureRate: 0, peersWithActivity: 1 });
+    // 5 live signals is below the maturity threshold, so a reachable peer does
+    // not preempt construction — see selectPersistentMindPlaybookPhase.
+    expect(result.phase).toBe('construct');
+    expect(result.signals).toMatchObject({ districtCount: 5, failureRate: 0, peersReachable: 1 });
   });
 
   it('degrades to the safe explore default when the signal read fails', async () => {
     mock.collectEidoverseWorldSources.mockRejectedValue(new Error('world source unavailable'));
     const result = await resolvePersistentMindPlaybookPhase();
     expect(result.phase).toBe('explore');
-    expect(result.signals).toEqual({ districtCount: null, failureRate: null, peersWithActivity: null });
+    expect(result.signals).toEqual({ districtCount: null, failureRate: null, failureRateMeasured: false, peersReachable: null });
   });
 
   it('propagates an abort rather than swallowing it as a signal failure', async () => {

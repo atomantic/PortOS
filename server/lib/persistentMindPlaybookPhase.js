@@ -64,6 +64,15 @@ const measuredFailureRate = (productivity) => {
   return null;
 };
 
+/**
+ * The coarse health enum is a STAND-IN for a failure rate, not a measurement
+ * of one — `attention` is set by a stopped managed app, an open review alert,
+ * or 85% disk, none of which is a failed unit of work. It still belongs in the
+ * ladder (a mind whose install is unhealthy should maintain), but it must
+ * never be rendered as "N% recent failure rate": a day on which nothing ran
+ * would print a measurement that was never taken. The caller keeps the two
+ * apart via the `failureRateMeasured` flag.
+ */
 const healthFailureRate = (health) => {
   if (!health || typeof health.status !== 'string') return null;
   if (health.status === 'error') return 1;
@@ -82,7 +91,7 @@ const healthFailureRate = (health) => {
  */
 export function derivePersistentMindPlaybookPhaseSignals(worldSignals) {
   if (!worldSignals || typeof worldSignals !== 'object') {
-    return { districtCount: null, failureRate: null, peersWithActivity: null };
+    return { districtCount: null, failureRate: null, failureRateMeasured: false, peersReachable: null };
   }
 
   // A failed source read arrives as `null`, not `[]`. Counting those as zero
@@ -101,16 +110,21 @@ export function derivePersistentMindPlaybookPhaseSignals(worldSignals) {
   const productivity = Array.isArray(worldSignals.productivity) ? worldSignals.productivity[0] : null;
   // `??` (not `||`) so a measured zero-failure day stays 0 rather than
   // falling through to the coarse health signal.
-  const failureRate = measuredFailureRate(productivity) ?? healthFailureRate(worldSignals.health);
+  const measured = measuredFailureRate(productivity);
+  const failureRate = measured ?? healthFailureRate(worldSignals.health);
 
-  // "Unread peer contributions" approximated as federated peers currently
-  // reporting non-steady status (active/attention/error — something changed
-  // since the last look) that this mind can actually travel to.
-  const peersWithActivity = Array.isArray(worldSignals.peers)
-    ? worldSignals.peers.filter((peer) => peer?.travelAvailable === true && peer?.status && peer.status !== 'steady').length
+  // Peers this mind can actually travel to. This is NOT "peers with unread
+  // contributions": a peer is only a travel destination when `listEidoverse
+  // Destinations()` saw it `status === 'online'`, which `coarseStatus` maps to
+  // `active` — so filtering the projection for a non-`steady` status was true
+  // for every travelable peer and measured nothing. Count reachability, say
+  // reachability, and let it rank below construction so one permanently-online
+  // peer cannot pin every wake to `coordinate`.
+  const peersReachable = Array.isArray(worldSignals.peers)
+    ? worldSignals.peers.filter((peer) => peer?.travelAvailable === true).length
     : null;
 
-  return { districtCount, failureRate, peersWithActivity };
+  return { districtCount, failureRate, failureRateMeasured: measured !== null, peersReachable };
 }
 
 /**
@@ -120,15 +134,20 @@ export function derivePersistentMindPlaybookPhaseSignals(worldSignals) {
  * construct/maintain/coordinate in.
  *
  * Priority, highest first: a still-sparse Commons always explores first; a
- * high recent failure rate outranks a peer visit (fix what is broken before
- * going visiting); an active peer outranks routine construction; a Commons
- * short of the maturity threshold keeps building; a mature, healthy,
- * peer-quiet Commons falls back to steady-state maintenance.
+ * high recent failure rate (or an unhealthy install) outranks everything else,
+ * because fixing what is broken comes before building or visiting; a Commons
+ * short of the maturity threshold keeps building; a mature Commons with a
+ * reachable peer goes visiting; an otherwise mature, peer-less Commons falls
+ * back to steady-state maintenance.
+ *
+ * `coordinate` deliberately ranks BELOW `construct`. The peer signal measures
+ * reachability, not unread activity, so a single always-online peer would
+ * otherwise satisfy it on every wake and `construct` would never run.
  */
 export function selectPersistentMindPlaybookPhase(signals = {}) {
   const districtCount = nonNegativeIntOrNull(signals.districtCount);
   const failureRate = clampFractionOrNull(signals.failureRate);
-  const peersWithActivity = nonNegativeIntOrNull(signals.peersWithActivity);
+  const peersReachable = nonNegativeIntOrNull(signals.peersReachable);
 
   if (districtCount === null || districtCount < THRESHOLDS.sparseDistrictCount) {
     return {
@@ -137,13 +156,21 @@ export function selectPersistentMindPlaybookPhase(signals = {}) {
     };
   }
   if (failureRate !== null && failureRate >= THRESHOLDS.highFailureRate) {
-    return { phase: 'maintain', reason: `${Math.round(failureRate * 100)}% recent failure rate` };
-  }
-  if (peersWithActivity !== null && peersWithActivity > 0) {
-    return { phase: 'coordinate', reason: `${peersWithActivity} peer(s) with new activity to visit` };
+    // Only a MEASURED rate is reported as one. The health-derived fallback is
+    // a coarse enum standing in for a rate nobody took, and printing it as a
+    // percentage claims a measurement that was never made.
+    return {
+      phase: 'maintain',
+      reason: signals.failureRateMeasured === true
+        ? `${Math.round(failureRate * 100)}% recent failure rate`
+        : 'install health needs attention',
+    };
   }
   if (districtCount < THRESHOLDS.matureDistrictCount) {
     return { phase: 'construct', reason: `${districtCount} live signal(s), room to densify before ${THRESHOLDS.matureDistrictCount}` };
+  }
+  if (peersReachable !== null && peersReachable > 0) {
+    return { phase: 'coordinate', reason: `${peersReachable} reachable peer(s) to visit` };
   }
   return { phase: 'maintain', reason: `mature Commons (${districtCount} live signal(s)), steady-state upkeep` };
 }

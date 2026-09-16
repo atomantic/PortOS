@@ -18,36 +18,58 @@ describe('selectPersistentMindPlaybookPhase', () => {
   });
 
   it('constructs once the Commons clears the sparse threshold with no failures or peer activity', () => {
-    const result = selectPersistentMindPlaybookPhase({ districtCount: 4, failureRate: 0, peersWithActivity: 0 });
+    const result = selectPersistentMindPlaybookPhase({ districtCount: 4, failureRate: 0, peersReachable: 0 });
     expect(result).toMatchObject({ phase: 'construct' });
   });
 
-  it('maintains when the recent failure rate crosses the threshold, even with peer activity waiting', () => {
-    const result = selectPersistentMindPlaybookPhase({ districtCount: 10, failureRate: 0.25, peersWithActivity: 3 });
+  it('maintains when the recent failure rate crosses the threshold, even with peers reachable', () => {
+    const result = selectPersistentMindPlaybookPhase({
+      districtCount: 10, failureRate: 0.25, failureRateMeasured: true, peersReachable: 3,
+    });
     expect(result).toMatchObject({ phase: 'maintain', reason: expect.stringContaining('25%') });
   });
 
-  it('coordinates when a peer has new activity and failures are below threshold', () => {
-    const result = selectPersistentMindPlaybookPhase({ districtCount: 10, failureRate: 0.1, peersWithActivity: 1 });
-    expect(result).toMatchObject({ phase: 'coordinate' });
+  // The health-derived rate is a coarse enum standing in for a measurement
+  // nobody took. It still routes to `maintain`, but printing it as "50% recent
+  // failure rate" would claim a rate on a day when zero work ran.
+  it('never reports an unmeasured, health-derived rate as a percentage', () => {
+    const result = selectPersistentMindPlaybookPhase({
+      districtCount: 10, failureRate: 0.5, failureRateMeasured: false, peersReachable: 0,
+    });
+    expect(result.phase).toBe('maintain');
+    expect(result.reason).not.toMatch(/%/);
+    expect(result.reason).toContain('health');
+  });
+
+  // A reachable peer must not outrank construction: the peer signal measures
+  // reachability, so one always-online peer would otherwise pin every wake to
+  // `coordinate` and `construct` would never run.
+  it('keeps building below the mature threshold even with a reachable peer', () => {
+    const result = selectPersistentMindPlaybookPhase({ districtCount: 10, failureRate: 0.1, peersReachable: 1 });
+    expect(result).toMatchObject({ phase: 'construct' });
+  });
+
+  it('coordinates once the Commons is mature and a peer is reachable', () => {
+    const result = selectPersistentMindPlaybookPhase({ districtCount: 16, failureRate: 0.1, peersReachable: 1 });
+    expect(result).toMatchObject({ phase: 'coordinate', reason: expect.stringContaining('reachable peer') });
   });
 
   it('stays in construct just below the mature threshold once failures/peers are quiet', () => {
-    const result = selectPersistentMindPlaybookPhase({ districtCount: 15, failureRate: 0, peersWithActivity: 0 });
+    const result = selectPersistentMindPlaybookPhase({ districtCount: 15, failureRate: 0, peersReachable: 0 });
     expect(result).toMatchObject({ phase: 'construct' });
   });
 
   it('falls back to maintain for a mature, healthy, peer-quiet Commons', () => {
-    const result = selectPersistentMindPlaybookPhase({ districtCount: 16, failureRate: 0, peersWithActivity: 0 });
+    const result = selectPersistentMindPlaybookPhase({ districtCount: 16, failureRate: 0, peersReachable: 0 });
     expect(result).toMatchObject({ phase: 'maintain', reason: expect.stringContaining('mature') });
   });
 
   it('always resolves to a documented phase', () => {
     const matrix = [
       {},
-      { districtCount: -5, failureRate: -1, peersWithActivity: -2 },
+      { districtCount: -5, failureRate: -1, peersReachable: -2 },
       { districtCount: Number.NaN, failureRate: Number.NaN },
-      { districtCount: 100, failureRate: 0.9, peersWithActivity: 5 },
+      { districtCount: 100, failureRate: 0.9, peersReachable: 5 },
     ];
     for (const signals of matrix) {
       expect(PERSISTENT_MIND_PLAYBOOK_PHASES).toContain(selectPersistentMindPlaybookPhase(signals).phase);
@@ -62,8 +84,9 @@ describe('selectPersistentMindPlaybookPhase', () => {
 
 describe('derivePersistentMindPlaybookPhaseSignals', () => {
   it('returns null signals for a missing or malformed world-signals projection', () => {
-    expect(derivePersistentMindPlaybookPhaseSignals(null)).toEqual({ districtCount: null, failureRate: null, peersWithActivity: null });
-    expect(derivePersistentMindPlaybookPhaseSignals('not-an-object')).toEqual({ districtCount: null, failureRate: null, peersWithActivity: null });
+    const empty = { districtCount: null, failureRate: null, failureRateMeasured: false, peersReachable: null };
+    expect(derivePersistentMindPlaybookPhaseSignals(null)).toEqual(empty);
+    expect(derivePersistentMindPlaybookPhaseSignals('not-an-object')).toEqual(empty);
   });
 
   it('sums entities across every projected district array', () => {
@@ -149,7 +172,11 @@ describe('derivePersistentMindPlaybookPhaseSignals', () => {
     expect(selectPersistentMindPlaybookPhase(measuredEmpty).reason).toContain('sparse');
   });
 
-  it('counts only travelable peers reporting non-steady status as active', () => {
+  // Reachability is the whole signal. A travel destination is only ever built
+  // from a peer `listEidoverseDestinations()` saw as `online`, which
+  // `coarseStatus` maps to `active` — so a status filter on top of
+  // `travelAvailable` matched every travelable peer and measured nothing.
+  it('counts travelable peers regardless of their coarse status', () => {
     const signals = derivePersistentMindPlaybookPhaseSignals({
       peers: [
         { travelAvailable: true, status: 'active' },
@@ -158,7 +185,7 @@ describe('derivePersistentMindPlaybookPhaseSignals', () => {
         { travelAvailable: true, status: 'error' },
       ],
     });
-    expect(signals.peersWithActivity).toBe(2);
+    expect(signals.peersReachable).toBe(3);
   });
 });
 
@@ -197,7 +224,7 @@ describe('contract with buildEidoverseWorldSignals()', () => {
     const signals = derivePersistentMindPlaybookPhaseSignals(worldSignals);
     expect(signals.districtCount).toBeGreaterThan(0);
     expect(signals.failureRate).not.toBeNull();
-    expect(signals.peersWithActivity).toBe(1);
+    expect(signals.peersReachable).toBe(1);
     expect(PERSISTENT_MIND_PLAYBOOK_PHASES).toContain(selectPersistentMindPlaybookPhase(signals).phase);
   });
 });
