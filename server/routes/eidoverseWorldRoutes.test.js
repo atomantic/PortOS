@@ -17,6 +17,11 @@ const mocks = vi.hoisted(() => ({
   project: vi.fn(),
   say: vi.fn(),
   updateConfig: vi.fn(),
+  describeControllerDefinitions: vi.fn(),
+  listControllers: vi.fn(),
+  installController: vi.fn(),
+  retireController: vi.fn(),
+  armController: vi.fn(),
 }));
 
 vi.mock('../services/eidoverseWorld.js', () => ({
@@ -42,6 +47,25 @@ vi.mock('../services/eidoverseResilienceContributions.js', () => ({
 }));
 
 vi.mock('../services/instanceIdentity.js', () => ({ ensureInstanceId: () => Promise.resolve('instance-aaaa') }));
+
+vi.mock('../services/eidoverseControllerRegistry.js', () => ({
+  describeControllerDefinitions: mocks.describeControllerDefinitions,
+}));
+
+// `summarizeControllerInstall` stays the REAL, pure projection from
+// `lib/eidoverseControllers.js` — it is the one thing #7488 requires the route
+// not re-implement, so doubling it here would hide the exact drift the issue
+// is guarding against.
+vi.mock('../services/eidoverseControllerRuntime.js', async (importOriginal) => {
+  const actual = await importOriginal();
+  return {
+    ...actual,
+    listEidoverseControllers: mocks.listControllers,
+    installEidoverseController: mocks.installController,
+    retireEidoverseController: mocks.retireController,
+    setEidoverseControllerArmed: mocks.armController,
+  };
+});
 
 const { default: eidoverseWorldRoutes } = await import('./eidoverseWorldRoutes.js');
 
@@ -236,5 +260,111 @@ it('reports a promote refusal as a verdict and never moves the layer itself', as
     expect(response.status).toBe(200);
     expect(response.body).toEqual({ contributions: ['beacon-relay-demo'] });
     expect(mocks.getFoundation).not.toHaveBeenCalled();
+  });
+
+  // --- Controllers: the install surface beside the mind tool (#7488) -------
+  describe('controllers', () => {
+    const install = (overrides = {}) => ({
+      id: 'tide-beacon',
+      controllerId: 'resource-tick',
+      tickIntervalMs: 300000,
+      placement: { districtId: null, anchorEntityId: null },
+      config: {},
+      deliverEffects: false,
+      armed: true,
+      note: null,
+      installedBy: 'user',
+      installedAt: '2026-03-04T05:06:07.000Z',
+      updatedAt: '2026-03-04T05:06:07.000Z',
+      state: { count: 0 },
+      tick: 0,
+      nextTickAt: '2026-03-04T05:11:07.000Z',
+      lastTickAt: null,
+      lastOutcome: null,
+      recentEffects: [],
+      consecutiveFailures: 0,
+      disarmedReason: null,
+      ...overrides,
+    });
+
+    it('reads the shipped registry and the install list from the same projection the mind tool uses', async () => {
+      mocks.describeControllerDefinitions.mockResolvedValue([{ id: 'resource-tick', title: 'Resource tick', summary: 'Ticks a counter.', exampleConfig: {} }]);
+      mocks.listControllers.mockResolvedValue({ counts: { total: 1, armed: 1, delivering: 0 }, installs: [install()] });
+
+      const response = await request(makeApp()).get('/api/eidoverse/world/controllers');
+
+      expect(response.status).toBe(200);
+      expect(response.body.available).toEqual([{ id: 'resource-tick', title: 'Resource tick', summary: 'Ticks a counter.', exampleConfig: {} }]);
+      expect(response.body.counts).toEqual({ total: 1, armed: 1, delivering: 0 });
+      expect(response.body.installs).toEqual([expect.objectContaining({ id: 'tide-beacon', armed: true })]);
+      // The list projection is state-free — only an install just authored gets it.
+      expect(response.body.installs[0].state).toBeUndefined();
+    });
+
+    it('refuses an install naming a controller id this version does not ship, with the reason beside the request', async () => {
+      mocks.installController.mockResolvedValue({ outcome: 'refused', install: null, reasons: ['no controller is registered under "ghost-controller"'] });
+
+      const response = await request(makeApp()).post('/api/eidoverse/world/controllers').send({ id: 'tide-beacon', controllerId: 'ghost-controller' });
+
+      expect(response.status).toBe(200);
+      expect(response.body).toMatchObject({ outcome: 'refused', install: null });
+      expect(response.body.reasons[0]).toContain('ghost-controller');
+      expect(mocks.installController).toHaveBeenCalledWith(
+        expect.objectContaining({ id: 'tide-beacon', controllerId: 'ghost-controller' }),
+        { installedBy: 'user' },
+      );
+    });
+
+    it('refuses a bad config with its field-level reason before the service is asked to resolve a definition', async () => {
+      const response = await request(makeApp()).post('/api/eidoverse/world/controllers').send({ id: 'tide-beacon', controllerId: 'resource-tick', config: 'not-an-object' });
+
+      expect(response.status).toBe(400);
+      expect(mocks.installController).not.toHaveBeenCalled();
+    });
+
+    it('installs and returns state only on a successful install, through the shared projection', async () => {
+      mocks.installController.mockResolvedValue({ outcome: 'installed', install: install(), reasons: [] });
+
+      const response = await request(makeApp()).post('/api/eidoverse/world/controllers').send({ id: 'tide-beacon', controllerId: 'resource-tick' });
+
+      expect(response.status).toBe(200);
+      expect(response.body.outcome).toBe('installed');
+      expect(response.body.install).toMatchObject({ id: 'tide-beacon', controllerId: 'resource-tick' });
+      expect(response.body.install.state).toEqual({ count: 0 });
+    });
+
+    it('arms and disarms an install by id, and 404s an unknown install id', async () => {
+      mocks.armController.mockResolvedValueOnce({ outcome: 'updated', install: install({ armed: false }), reasons: [] });
+      mocks.armController.mockResolvedValueOnce({ outcome: 'unknown-install', install: null, reasons: ['no controller is installed under "ghost-install"'] });
+
+      const armed = await request(makeApp()).patch('/api/eidoverse/world/controllers/tide-beacon').send({ armed: false });
+      const unknown = await request(makeApp()).patch('/api/eidoverse/world/controllers/ghost-install').send({ armed: true });
+
+      expect(armed.status).toBe(200);
+      expect(armed.body.install).toMatchObject({ armed: false });
+      expect(mocks.armController).toHaveBeenCalledWith('tide-beacon', false);
+      expect(unknown.status).toBe(404);
+    });
+
+    it('renders a supervisor-disarmed reason verbatim through the arm response', async () => {
+      mocks.armController.mockResolvedValue({ outcome: 'updated', install: install({ armed: false, disarmedReason: 'failed 3 consecutive ticks: step() threw' }), reasons: [] });
+
+      const response = await request(makeApp()).patch('/api/eidoverse/world/controllers/tide-beacon').send({ armed: false });
+
+      expect(response.body.install.disarmedReason).toBe('failed 3 consecutive ticks: step() threw');
+    });
+
+    it('retires an install by id and 404s an unknown install id', async () => {
+      mocks.retireController.mockResolvedValueOnce({ outcome: 'retired', install: install(), reasons: [] });
+      mocks.retireController.mockResolvedValueOnce({ outcome: 'unknown-install', install: null, reasons: ['no controller is installed under "ghost-install"'] });
+
+      const retired = await request(makeApp()).delete('/api/eidoverse/world/controllers/tide-beacon');
+      const unknown = await request(makeApp()).delete('/api/eidoverse/world/controllers/ghost-install');
+
+      expect(retired.status).toBe(200);
+      expect(retired.body.outcome).toBe('retired');
+      expect(mocks.retireController).toHaveBeenCalledWith('tide-beacon');
+      expect(unknown.status).toBe(404);
+    });
   });
 });

@@ -1,11 +1,12 @@
 import { useState } from 'react';
-import { Compass, Database, Globe2, Palette, RefreshCw } from 'lucide-react';
+import { Compass, Database, Globe2, Palette, RefreshCw, Zap } from 'lucide-react';
 import { Link } from 'react-router';
 import Drawer from '../Drawer';
 import useDrawerTab from '../../hooks/useDrawerTab';
 import { EIDOVERSE_SOURCE_ROUTES as SOURCE_ROUTES } from '../../lib/eidoverseFrame';
 import EidoverseObjectLegend from './EidoverseObjectLegend';
 import EidoverseFoundationsPanel from './EidoverseFoundationsPanel';
+import EidoverseControllersPanel from './EidoverseControllersPanel';
 import { formatBytes } from '../../utils/formatters';
 
 const TABS = [
@@ -13,6 +14,7 @@ const TABS = [
   { id: 'districts', label: 'Districts & Data', icon: Database },
   { id: 'appearance', label: 'Appearance & Assets', icon: Palette },
   { id: 'foundations', label: 'Foundations', icon: Globe2 },
+  { id: 'controllers', label: 'Controllers', icon: Zap },
   { id: 'updates', label: 'Updates & Advanced', icon: RefreshCw },
 ];
 const TAB_IDS = TABS.map(({ id }) => id);
@@ -584,10 +586,11 @@ export default function EidoverseWorldDrawer({
       activeTab={activeTab}
       onTabChange={setActiveTab}
     >
-      {/* Foundations owns its own form (recording a foundation is not a world-config
-          save), and a nested <form> is invalid HTML — so it renders beside the
+      {/* Foundations and Controllers each own their own form (recording a
+          foundation, or installing a controller, is not a world-config save),
+          and a nested <form> is invalid HTML — so they render beside the
           config form rather than inside it. */}
-      {activeTab === 'foundations' ? <EidoverseFoundationsPanel /> : (
+      {activeTab === 'foundations' ? <EidoverseFoundationsPanel /> : activeTab === 'controllers' ? <EidoverseControllersPanel /> : (
       <form className="space-y-5" onSubmit={(event) => { event.preventDefault(); onSave(); }}>
         {panel}
         {(activeTab !== 'updates' || dirty) && (

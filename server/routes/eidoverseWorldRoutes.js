@@ -16,6 +16,11 @@ import {
 } from '../lib/validation.js';
 import { eidoverseFoundationIdParamSchema, eidoverseFoundationInputSchema } from '../lib/eidoverseFoundations.js';
 import {
+  eidoverseControllerArmSchema,
+  eidoverseControllerIdParamSchema,
+  eidoverseControllerInstallSchema,
+} from '../lib/eidoverseControllers.js';
+import {
   getEidoverseFoundation,
   listEidoverseFoundations,
   packageEidoverseFoundationCandidate,
@@ -23,6 +28,14 @@ import {
   recordEidoverseFoundation,
 } from '../services/eidoverseFoundationLedger.js';
 import { listRegisteredContributionIds } from '../services/eidoverseResilienceContributions.js';
+import { describeControllerDefinitions } from '../services/eidoverseControllerRegistry.js';
+import {
+  installEidoverseController,
+  listEidoverseControllers,
+  retireEidoverseController,
+  setEidoverseControllerArmed,
+  summarizeControllerInstall,
+} from '../services/eidoverseControllerRuntime.js';
 import { ensureInstanceId } from '../services/instanceIdentity.js';
 import {
   augmentEidoverseWorld,
@@ -147,6 +160,59 @@ router.get('/foundations/:id', asyncHandler(async (req, res) => {
   const foundation = await getEidoverseFoundation(id);
   if (!foundation) throw new ServerError('Foundation not found', { status: 404 });
   res.json(foundation);
+}));
+
+// --- Controllers: the executable world-controller install surface (#7456,
+// #7488) --------------------------------------------------------------------
+// Everything here is the same projection the `eidoverse.controllers` mind-tool
+// group in `services/cosToolRegistry.js` already exposes, reached this time
+// from the UI rather than a mind: `describeControllerDefinitions()` and
+// `summarizeControllerInstall()` stay the ONE projection either caller reads,
+// so a UI/tool drift is impossible by construction rather than by discipline.
+
+// GET /api/eidoverse/world/controllers — the shipped registry plus every
+// installed controller on this install.
+router.get('/controllers', asyncHandler(async (_req, res) => {
+  const [available, listed] = await Promise.all([describeControllerDefinitions(), listEidoverseControllers()]);
+  res.json({
+    available,
+    counts: listed.counts,
+    installs: listed.installs.map((install) => summarizeControllerInstall(install)),
+  });
+}));
+
+// POST /api/eidoverse/world/controllers — install (or re-install) a
+// controller. `installedBy: 'user'` — this route is the human's own surface,
+// never a mind's, which stays gated on `installEidoverseControllers`
+// separately in the tool catalog. A refusal (unknown `controllerId`, a config
+// its schema rejects) is a 200 carrying its reasons, the same shape the
+// foundations promote gate already uses: it is the useful output, not a
+// request error.
+router.post('/controllers', asyncHandler(async (req, res) => {
+  const input = validateRequest(eidoverseControllerInstallSchema, req.body || {});
+  const result = await installEidoverseController(input, { installedBy: 'user' });
+  res.json({ ...result, install: result.install ? summarizeControllerInstall(result.install, { includeState: true }) : null });
+}));
+
+// PATCH /api/eidoverse/world/controllers/:id — arm or disarm an installed
+// controller without losing its accumulated state. The id travels in the URL;
+// merging it with the body's `armed` lets this route validate against the
+// exact same `eidoverseControllerArmSchema` the mind tool uses, rather than a
+// second param/body split of the same two fields.
+router.patch('/controllers/:id', asyncHandler(async (req, res) => {
+  const { id, armed } = validateRequest(eidoverseControllerArmSchema, { ...(req.body || {}), id: req.params.id });
+  const result = await setEidoverseControllerArmed(id, armed);
+  if (result.outcome === 'unknown-install') throw new ServerError('Controller install not found', { status: 404 });
+  res.json({ ...result, install: result.install ? summarizeControllerInstall(result.install) : null });
+}));
+
+// DELETE /api/eidoverse/world/controllers/:id — retire an installed
+// controller, deleting it and its accumulated state.
+router.delete('/controllers/:id', asyncHandler(async (req, res) => {
+  const { id } = validateRequest(eidoverseControllerIdParamSchema, req.params || {});
+  const result = await retireEidoverseController(id);
+  if (result.outcome === 'unknown-install') throw new ServerError('Controller install not found', { status: 404 });
+  res.json({ ...result, install: result.install ? summarizeControllerInstall(result.install) : null });
 }));
 
 export default router;
