@@ -588,9 +588,12 @@ export function parseGrokUsage(text, { now = Date.now(), timezone } = {}) {
   // alphanumeric start, then alphanumeric plus separators (dots, commas, underscores,
   // plus, hyphen), with interior spaces allowed only before uppercase letters/digits
   // (vendor names like "Claude Max 20x"). This rejects arbitrary English prose like
-  // "as of Tuesday" while keeping recognized tiers on the Usage card. A missing plan
-  // reads as unknown; a wrong one reads as fact.
-  const PLAN_NAME = /^(?=.*[A-Za-z])[A-Za-z0-9](?:[A-Za-z0-9.,_+-]*(?:[ ][A-Z0-9][A-Za-z0-9.,_+-]*)*)?$/;
+  // "as of Tuesday" while keeping recognized tiers on the Usage card. The 60-char
+  // cap is unchanged from the single-token form: a scraped fragment that happens to
+  // be shaped like a tier is still not one. A missing plan reads as unknown; a wrong
+  // one reads as fact.
+  const PLAN_NAME =
+    /^(?=.*[A-Za-z])(?=.{1,60}$)[A-Za-z0-9](?:[A-Za-z0-9.,_+-]*(?:[ ][A-Z0-9][A-Za-z0-9.,_+-]*)*)?$/;
   let plan = null;
 
   const matches = [...str.matchAll(/(weekly|monthly)\s+limit(?:\s*\(([^)]+)\))?:?/gi)];

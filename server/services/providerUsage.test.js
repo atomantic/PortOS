@@ -593,6 +593,16 @@ describe('parseGrokUsage', () => {
     expect(parseGrokUsage('Weekly limit (Claude Max 20x ): 42%', opts).plan).toBe('Claude Max 20x');
     expect(parseGrokUsage('Weekly limit ( Claude Max 20x): 42%', opts).plan).toBe('Claude Max 20x');
   });
+
+  it('still caps a tier-shaped name at 60 characters', () => {
+    // Allowing interior spaces must not drop the length cap the single-token
+    // form carried: a long scraped fragment shaped like a tier is still panel
+    // text, not a plan, and a wrong plan reads as fact.
+    const sixty = `Max ${'A'.repeat(56)}`;
+    expect(sixty).toHaveLength(60);
+    expect(parseGrokUsage(`Weekly limit (${sixty}): 42%`, opts).plan).toBe(sixty);
+    expect(parseGrokUsage(`Weekly limit (Max ${'A'.repeat(57)}): 42%`, opts).plan).toBeNull();
+  });
 });
 
 describe('TUI usage fetchers (via getProviderQuotas)', () => {
