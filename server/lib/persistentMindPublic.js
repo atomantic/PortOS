@@ -2,9 +2,14 @@
 
 import { nextPersistentMindWakeAt } from './persistentMind.js';
 import { normalizePersistentMindThinkingSelection } from './persistentMindThinkingPresets.js';
+import { isUsageLimitPauseReason } from './persistentMindUsageLimit.js';
 
 const publicReason = (state) => {
   if (!state.pauseReason) return null;
+  // A quota autopause is NOT a user action. Saying "Paused by user" there is the
+  // exact confusion this projection exists to prevent: the page would blame the
+  // human for a provider limit it will retry out of on its own.
+  if (isUsageLimitPauseReason(state.pauseReason)) return 'Provider usage limit reached';
   if (state.status === 'paused') return 'Paused by user';
   if (state.status === 'degraded' || state.status === 'interrupted') return 'Provider unavailable or wake failed';
   return 'Waiting for the next eligible wake';
@@ -56,6 +61,10 @@ export function publicPersistentMindState(state = {}) {
     started: state.started === true,
     status: typeof state.status === 'string' ? state.status : 'unknown',
     pauseReason: publicReason(state),
+    // The one pause the mind clears by itself. The page needs it separated from
+    // an ordinary user pause so it can say "blocked, retrying at X" rather than
+    // leaving a quota stall indistinguishable from a deliberate stop.
+    usageLimited: isUsageLimitPauseReason(state.pauseReason),
     queuedMessageCount: queuedMessages.length,
     // How many of those queued messages will spend a borrowed (possibly
     // account-backed) route, so the page can say that a pause is holding paid
