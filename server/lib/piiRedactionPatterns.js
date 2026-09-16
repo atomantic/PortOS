@@ -57,17 +57,57 @@ export const PII_PATTERNS = Object.freeze([
   Object.freeze({ code: 'gps-coordinate', pattern: /\b(latitude|longitude|lat|lon|lng)\s*[:=]\s*-?\d{1,3}(?:\.\d+)?/i, replacement: '$1=[REDACTED]' }),
 ]);
 
+/**
+ * Replacement vocabularies, keyed by pattern `code`.
+ *
+ * The two redaction consumers converge on the PATTERNS above — that is the
+ * drift #7474 exists to kill — but they deliberately keep DIFFERENT output
+ * text, because each one is an observable contract something already depends
+ * on. `agentContextMcp` emits bracketed `[REDACTED X]` markers that the
+ * critical `search-redacts-and-omits-fields` case in
+ * `test/fixtures/agent-context-eval.json` pins by value, and it collapses a
+ * home path to `~` rather than naming the OS convention. `agentErrorAnalysis`
+ * emits terse `<x>` placeholders that read well inside a one-line log
+ * snippet. Folding those onto one vocabulary silently rewrote every marker the
+ * MCP tool emits — a behaviour change well outside "share the pattern list",
+ * and one a critical privacy eval is there to catch.
+ *
+ * A code omitted from a vocabulary falls back to the table's own
+ * `replacement`, so adding a pattern never silently un-redacts a consumer.
+ */
+export const PII_REPLACEMENTS = Object.freeze({
+  // `agentContextMcp.js#redactAgentContextText` — MCP search/summary payloads.
+  bracketed: Object.freeze({
+    'home-path': '~',
+    'windows-path': '~',
+    'ip-literal': '[REDACTED IP]',
+    'network-host': '[REDACTED HOST]',
+    'mac-address': '[REDACTED MAC]',
+    'email-address': '[REDACTED EMAIL]',
+    'phone-number': '[REDACTED PHONE]',
+  }),
+  // `agentErrorAnalysis.js#redactFailureSnippet` — one-line failure snippets.
+  // Every code takes the table default, so this is deliberately empty rather
+  // than a second copy of the defaults that could drift from them.
+  terse: Object.freeze({}),
+});
+
 /** A global-flagged copy of `pattern`, safe for a `.replace()` caller to reuse. */
 export function globalPattern(pattern) {
   return new RegExp(pattern.source, pattern.flags.includes('g') ? pattern.flags : `${pattern.flags}g`);
 }
 
 /**
- * Apply every `{ pattern, replacement }` entry in `PII_PATTERNS` to `text`, in
- * table order. Shared by both redaction consumers so a correction to the
- * table (or the order patterns apply in) reaches both without a second copy
- * of this loop.
+ * Apply every entry in `PII_PATTERNS` to `text`, in table order. Shared by
+ * both redaction consumers so a correction to the table (or the order
+ * patterns apply in) reaches both without a second copy of this loop.
+ *
+ * `vocabulary` picks the output text (see `PII_REPLACEMENTS`); a code it does
+ * not name falls back to that entry's own `replacement`.
  */
-export function redactPii(text) {
-  return PII_PATTERNS.reduce((out, { pattern, replacement }) => out.replace(globalPattern(pattern), replacement), text);
+export function redactPii(text, vocabulary = PII_REPLACEMENTS.terse) {
+  return PII_PATTERNS.reduce(
+    (out, { code, pattern, replacement }) => out.replace(globalPattern(pattern), vocabulary[code] ?? replacement),
+    text,
+  );
 }

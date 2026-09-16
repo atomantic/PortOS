@@ -4,7 +4,7 @@ import { BRAIN_SEARCH_TYPES, getBrainProjections } from './brainSearchIndex.js';
 import { listContexts } from './workspaceContext.js';
 import { previewLegacyExport, redactSecrets } from './legacyExport.js';
 import { NAV_COMMANDS, resolveNavCommand } from '../lib/navManifest.js';
-import { redactPii } from '../lib/piiRedactionPatterns.js';
+import { PII_REPLACEMENTS, redactPii } from '../lib/piiRedactionPatterns.js';
 import {
   AGENT_CONTEXT_DEFAULT_SCOPES,
   AGENT_CONTEXT_DEFAULT_ACTIONS,
@@ -37,7 +37,10 @@ const normalizedText = (value) => String(value ?? '').replace(/\s+/g, ' ').trim(
 const searchableText = (value) => normalizedText(value).slice(0, 2_000);
 
 export function redactAgentContextText(value) {
-  return cap(redactPii(redactSecrets(normalizedText(value))), AGENT_CONTEXT_LIMITS.maxSummaryChars);
+  return cap(
+    redactPii(redactSecrets(normalizedText(value)), PII_REPLACEMENTS.bracketed),
+    AGENT_CONTEXT_LIMITS.maxSummaryChars,
+  );
 }
 
 export function resolveAgentContextConfig(settings = {}) {

@@ -167,11 +167,12 @@ describe('agentContextMcp service', () => {
     }]);
     const result = await callAgentContextTool('list_context', { scope: 'brain' });
     const serialized = JSON.stringify(result);
-    // Canonical redaction tokens moved to the shared table's placeholders
-    // (#7474) — the strings themselves are no longer this service's own,
-    // but the leak-proofing the assertions below check is unchanged.
-    expect(serialized).toContain('<email>');
-    expect(serialized).toContain('<ip>');
+    // The bracketed vocabulary is this tool's OWN observable contract, not an
+    // incidental spelling: the critical `search-redacts-and-omits-fields` case
+    // in test/fixtures/agent-context-eval.json pins these exact markers. #7474
+    // shares the PATTERNS with agentErrorAnalysis, never the output text.
+    expect(serialized).toContain('[REDACTED EMAIL]');
+    expect(serialized).toContain('[REDACTED IP]');
     expect(serialized).not.toContain('alice@example.com');
     expect(serialized).not.toContain('/Users/alice');
     expect(serialized).not.toContain('sk-12345678901234567890');

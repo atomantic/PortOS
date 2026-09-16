@@ -9,7 +9,7 @@
  * `.test()` calls without a stateful `lastIndex` bug.
  */
 import { describe, expect, it } from 'vitest';
-import { PII_PATTERNS, globalPattern, redactPii } from './piiRedactionPatterns.js';
+import { PII_PATTERNS, PII_REPLACEMENTS, globalPattern, redactPii } from './piiRedactionPatterns.js';
 
 // One sample per CODE the table declares (not per pattern — `ip-literal`
 // covers both an IPv4 and an IPv6 entry, exercised separately below). If a
@@ -64,6 +64,44 @@ describe('PII_PATTERNS / redactPii', () => {
     const emailPattern = PII_PATTERNS.find((entry) => entry.code === 'email-address').pattern;
     expect(emailPattern.test('first@example.com')).toBe(true);
     expect(emailPattern.test('second@example.com')).toBe(true);
+  });
+
+  it('keeps each consumer output vocabulary intact while sharing one pattern list', () => {
+    // The first cut of #7474 shared the patterns AND the replacement text,
+    // which silently rewrote every marker agentContextMcp emits — caught only
+    // by the critical `search-redacts-and-omits-fields` eval case. Sharing
+    // patterns is the goal; sharing output text is a behaviour change.
+    const sample = 'mail alice@example.com from /Users/alice/notes on 192.0.2.10 via node.tailnet.ts.net';
+
+    const bracketed = redactPii(sample, PII_REPLACEMENTS.bracketed);
+    expect(bracketed).toContain('[REDACTED EMAIL]');
+    expect(bracketed).toContain('[REDACTED IP]');
+    expect(bracketed).toContain('[REDACTED HOST]');
+    expect(bracketed).toContain('~');
+    expect(bracketed).not.toContain('<email>');
+
+    const terse = redactPii(sample);
+    expect(terse).toContain('<email>');
+    expect(terse).toContain('<ip>');
+    expect(terse).toContain('<host>');
+    expect(terse).not.toContain('[REDACTED EMAIL]');
+
+    // Whichever vocabulary is in play, nothing sensitive survives either one.
+    for (const out of [bracketed, terse]) {
+      expect(out).not.toContain('alice@example.com');
+      expect(out).not.toContain('/Users/alice');
+      expect(out).not.toContain('192.0.2.10');
+      expect(out).not.toContain('node.tailnet.ts.net');
+    }
+  });
+
+  it('falls back to the table replacement for a code a vocabulary does not name, so a new pattern is never silently un-redacted', () => {
+    // The bypass probe for the fallback: a vocabulary that names nothing must
+    // still redact every shape, or adding a pattern to the table would leave
+    // a consumer emitting the raw value.
+    const out = redactPii('reach alice@example.com at 192.0.2.10', {});
+    expect(out).not.toContain('alice@example.com');
+    expect(out).not.toContain('192.0.2.10');
   });
 
   it('globalPattern derives a replace-safe copy without mutating the shared regex object', () => {
