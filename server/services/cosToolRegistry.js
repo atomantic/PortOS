@@ -311,7 +311,7 @@ const eidoverseAugmentTool = Object.freeze({
   version: COS_TOOL_SCHEMA_VERSION,
   providerName: 'eidoverse_augment',
   aliases: ['eidoverse_augment'],
-  description: 'Apply bounded construction operations to the private Eidoverse world. Each operation is {verb,args}. spawn requires args {id,lib,pos:[x,y,z],yaw,scale}; use a lib path returned by eidoverse.status. place takes {id,pos:[x,y,z]} and/or yaw/scale; light takes {id,pos:[x,y,z],color:16767136,intensity:16,range:10}; remove takes {id}. Use your own new entity IDs and preserve existing projected content. No code execution or paid generation.',
+  description: 'Propose bounded construction operations to the private Eidoverse world. Each operation is {verb,args}. spawn requires args {id,lib,pos:[x,y,z],yaw,scale}; use a lib path returned by eidoverse.status. place takes {id,pos:[x,y,z]} and/or yaw/scale; light takes {id,pos:[x,y,z],color:16767136,intensity:16,range:10}; remove takes {id}. Use your own new entity IDs and preserve existing projected content. No code execution or paid generation. These are proposals, not guarantees: the response\'s `operations` array reports one outcome per operation — `accepted` (landed as proposed), `rewritten` (the world accepted it with different committed args than proposed), or `refused` (nothing landed, with a reason). Only narrate a build as done for operations whose outcome is accepted or rewritten; a refused operation never happened in the world even though you asked for it.',
   input_schema: zodToOpenApiSchema(eidoverseWorldAugmentSchema),
   output_schema: objectOutputSchema,
   policy: {
@@ -331,7 +331,7 @@ const eidoverseSayTool = Object.freeze({
   version: COS_TOOL_SCHEMA_VERSION,
   providerName: 'eidoverse_say',
   aliases: ['eidoverse_say'],
-  description: 'Send a message into the private Eidoverse world as the persistent PortOS CoS presence.',
+  description: 'Send a message into the private Eidoverse world as the persistent PortOS CoS presence. Resolves only once the world acknowledges it (`committed: true`); if the world does not ack, the call fails instead of returning a false success — do not narrate the message as sent until this call resolves.',
   input_schema: zodToOpenApiSchema(eidoverseWorldSaySchema),
   output_schema: objectOutputSchema,
   policy: {

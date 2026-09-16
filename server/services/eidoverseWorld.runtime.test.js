@@ -16,6 +16,8 @@ const mocks = vi.hoisted(() => ({
   deferVerbAcks: 0,
   rejectVerb: null,
   rejectedVerb: false,
+  rewriteVerb: null,
+  rewriteArgs: null,
   appStatuses: [],
   appStatusReads: 0,
   featureEnabled: true,
@@ -162,7 +164,11 @@ vi.mock('ws', () => {
         }
         const acknowledge = () => {
           if (this.readyState !== FakeWebSocket.OPEN) return;
-          const log = JSON.stringify({ type: 'log', entry: { seq: mocks.nextSeq++, actor: this.identity, verb: message.verb, args: message.args } });
+          // Simulates the world accepting a verb but landing it with
+          // different args than proposed (e.g. a server-side clamp).
+          const ackArgs = message.verb === mocks.rewriteVerb
+            ? { ...message.args, ...mocks.rewriteArgs } : message.args;
+          const log = JSON.stringify({ type: 'log', entry: { seq: mocks.nextSeq++, actor: this.identity, verb: message.verb, args: ackArgs } });
           if (message.verb === 'say') {
             for (const socket of mocks.sockets) {
               if (socket.world === this.world && socket.readyState === FakeWebSocket.OPEN) socket.emit('message', log);
@@ -231,6 +237,8 @@ beforeEach(async () => {
   mocks.deferVerbAcks = 0;
   mocks.rejectVerb = null;
   mocks.rejectedVerb = false;
+  mocks.rewriteVerb = null;
+  mocks.rewriteArgs = null;
   mocks.appStatuses = [];
   mocks.appStatusReads = 0;
   mocks.featureEnabled = true;
@@ -713,6 +721,70 @@ describe('Eidoverse private-world lifecycle', () => {
 
     mocks.deferredVerbAcks[1]();
     await expect(retry).resolves.toMatchObject({ success: true, applied: 1 });
+  });
+
+  // #7454 — proposal vs consequence: each augment operation reports what was
+  // proposed alongside what the world actually committed, so a mind cannot
+  // narrate a side effect that did not land.
+  it('reports an augment operation as accepted when the world commits it unchanged', async () => {
+    await world.ensureEidoverseWorldPresence();
+    const result = await world.augmentEidoverseWorld([
+      { verb: 'spawn', args: { id: 'example-one', lib: 'eidoverse/assets/models/example.glb', pos: [1, 0, 2] } },
+    ]);
+    expect(result).toMatchObject({ success: true, applied: 1 });
+    expect(result.operations).toHaveLength(1);
+    expect(result.operations[0]).toMatchObject({ verb: 'spawn', id: 'example-one', outcome: 'accepted' });
+    expect(result.operations[0].committed).toEqual(result.operations[0].proposed);
+  });
+
+  it('reports a rewritten outcome when the world commits an operation with different args than proposed', async () => {
+    await world.ensureEidoverseWorldPresence();
+    mocks.rewriteVerb = 'spawn';
+    mocks.rewriteArgs = { pos: [0, 0, 0] };
+    const result = await world.augmentEidoverseWorld([
+      { verb: 'spawn', args: { id: 'example-one', lib: 'eidoverse/assets/models/example.glb', pos: [5, 0, 5] } },
+    ]);
+    expect(result.success).toBe(true);
+    expect(result.operations[0].outcome).toBe('rewritten');
+    expect(result.operations[0].proposed.pos).toEqual([5, 0, 5]);
+    expect(result.operations[0].committed.pos).toEqual([0, 0, 0]);
+  });
+
+  it('refuses a locally invalid proposal without blocking a valid operation earlier in the batch', async () => {
+    await world.ensureEidoverseWorldPresence();
+    const result = await world.augmentEidoverseWorld([
+      { verb: 'spawn', args: { id: 'example-one', lib: 'eidoverse/assets/models/example.glb' } },
+      { verb: 'place', args: { id: 'example-one' } },
+    ]);
+    expect(result.success).toBe(false);
+    expect(result.applied).toBe(1);
+    expect(result.operations[0]).toMatchObject({ outcome: 'accepted' });
+    expect(result.operations[1]).toMatchObject({ verb: 'place', outcome: 'refused', committed: null });
+    expect(result.operations[1].reason).toMatch(/pos, yaw, or scale/);
+  });
+
+  it('stops the rest of a batch once the world refuses one operation, leaving the remainder unattempted', async () => {
+    await world.ensureEidoverseWorldPresence();
+    mocks.rejectVerb = 'place';
+    const result = await world.augmentEidoverseWorld([
+      { verb: 'spawn', args: { id: 'example-one', lib: 'eidoverse/assets/models/example.glb' } },
+      { verb: 'place', args: { id: 'example-one', pos: [1, 0, 1] } },
+      { verb: 'light', args: { id: 'example-one-light' } },
+    ]);
+    expect(result.success).toBe(false);
+    expect(result.applied).toBe(1);
+    expect(result.operations[0].outcome).toBe('accepted');
+    expect(result.operations[1]).toMatchObject({ outcome: 'refused', reason: expect.stringContaining('synthetic projection rejection') });
+    expect(result.operations[2]).toMatchObject({ outcome: 'refused', reason: expect.stringMatching(/not attempted/i) });
+  });
+
+  it('reports eidoverse.say as committed only once the world acknowledges the message', async () => {
+    await world.ensureEidoverseWorldPresence();
+    await expect(world.sayInEidoverseWorld('Example message.')).resolves.toMatchObject({
+      success: true,
+      committed: true,
+      proposed: { text: 'Example message.' },
+    });
   });
 
   it('releases a canceled projection without waiting for a slow source read', async () => {

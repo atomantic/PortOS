@@ -348,6 +348,20 @@ source. Status requires bounded PortOS read access. Projection, augmentation,
 and world chat retain the dedicated Eidoverse-management grant without widening
 generic PortOS record-write authority.
 
+**Proposal vs consequence.** `eidoverse.augment` is a two-phase contract, not a
+direct write: a mind's call is a *proposal* (structured verb+args intent), and
+only the world's own ack determines the *consequence*. The result's
+`operations` array carries one outcome per submitted operation — `accepted`
+(landed exactly as proposed), `rewritten` (the world acknowledged it with
+different committed args than proposed, e.g. a clamped value), or `refused`
+(PortOS's own bounds check or the world itself rejected it, and nothing
+landed) — each with `proposed`/`committed` payloads so a mind cannot narrate a
+build that never happened. A world-level refusal stops the rest of that batch
+from being sent, since later operations often reference an id an earlier one
+was meant to create. `eidoverse.say` is simpler — it either resolves with
+`committed: true` once the world acks the message, or the tool call fails
+outright, so a failed send can never be mistaken for a sent one.
+
 ## Growth and automation
 
 The world-design recipe and per-install asset lock are intentionally separate
