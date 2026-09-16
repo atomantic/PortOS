@@ -4,11 +4,9 @@ import ProviderModelSelector from '../ProviderModelSelector';
 import MaintenanceRunStatus from '../cos/tabs/schedule/MaintenanceRunStatus';
 import useProviderModels from '../../hooks/useProviderModels';
 import { useAutoRefetch } from '../../hooks/useAutoRefetch';
-import { isProcessProvider } from '../../utils/providers';
-import { familyForProvider } from '../../../../server/lib/providerFamilies';
+import { enabledProcessProviderFilter } from '../../utils/providers';
 import { getMaintenanceRuns, startMaintenanceRun, stopMaintenanceRun } from '../../services/apiAgents';
 
-const eligibleProvider = provider => provider.enabled && isProcessProvider(provider) && familyForProvider(provider);
 const needsCheck = category => {
   if (category.coverage === 'not-applicable' || (category.coverage === 'unavailable' && category.assessedAt)) return false;
   return category.score == null || category.stale || category.coverage !== 'broad' || category.confidence === 'low';
@@ -31,7 +29,7 @@ export default function AppQualityRunner({ app, children }) {
   const [runs, setRuns] = useState([]);
   const [loaded, setLoaded] = useState(false);
   const revision = useRef(0);
-  const picker = useProviderModels({ filter: eligibleProvider, withEffort: true });
+  const picker = useProviderModels({ filter: enabledProcessProviderFilter, withEffort: true });
   const taskTypes = categories.filter(category => selection === 'all' || (selection === 'missing' ? needsCheck(category) : category.id === selection)).map(category => category.id);
   const loadRuns = useCallback(async () => {
     const requestedRevision = revision.current;
