@@ -549,6 +549,18 @@ export const providerSchema = z.object({
   // non-allowlisted) endpoint — mirrors the aiToolkit providerSchema. Guards
   // SSRF / key exfiltration (server/lib/aiToolkit/endpointGuard.js).
   allowCustomEndpoint: z.boolean().optional(),
+  // Kept in schema parity with aiToolkit's provider schema. Marks a CLI/TUI
+  // provider whose harness auth is provisioned by an external CLI at spawn
+  // time (a short-lived token for a proxy) rather than a static apiKey.
+  // `setupCommand` is advisory only — PortOS never executes it. Nullable so
+  // the editor can explicitly clear a previously-set bootstrap.
+  credentialBootstrap: z.object({
+    setupCommand: z.string().trim().max(500).optional(),
+    command: z.string().trim().min(1).max(200),
+    args: z.array(z.string().max(200)).max(20).optional(),
+    harnessId: z.string().trim().min(1).max(100).optional(),
+    argsSeparator: z.string().trim().max(20).optional(),
+  }).strict().nullable().optional(),
   envVars: z.record(z.string()).optional(),
   headlessArgs: z.array(z.string()).optional(),
   tuiPromptDelayMs: z.number().int().min(250).max(60000).optional(),

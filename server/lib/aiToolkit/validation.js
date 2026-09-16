@@ -193,6 +193,29 @@ export const providerSchema = z.object({
   // one an existing install already relies on, and an override that silently
   // turned itself on would be its own surprise.
   ignoreUserConfig: z.boolean().optional(),
+  // A CLI/TUI provider whose harness auth is provisioned by an external CLI at
+  // spawn time (e.g. a short-lived token for a proxy) rather than a static
+  // `apiKey` PortOS stores. PortOS spawns `command`(+`args`) in front of the
+  // harness invocation instead of the harness directly — the generic
+  // `<bootstrap> run <harness> ...` shape. `setupCommand` is advisory only
+  // (shown to the user as a one-time step, e.g. installing the bootstrap CLI's
+  // package) — PortOS never executes it. Nullable so the editor can explicitly
+  // clear a previously-set bootstrap back to "none" (absent means "unchanged"
+  // on a PATCH, which is not the same as clearing it).
+  credentialBootstrap: z.object({
+    setupCommand: z.string().trim().max(500).optional(),
+    command: z.string().trim().min(1).max(200),
+    args: z.array(z.string().max(200)).max(20).optional(),
+    // What PortOS names the harness AS, when calling the bootstrap CLI — some
+    // wrapper CLIs use their own identifier for a harness rather than its
+    // binary name (e.g. `claude-code` where `command` is the binary `claude`).
+    // Defaults to `command` when unset.
+    harnessId: z.string().trim().min(1).max(100).optional(),
+    // Inserted between the harness identifier and the harness's OWN args —
+    // some wrapper CLIs need their own flags kept apart from the wrapped
+    // program's (e.g. `<bootstrap> run <harness> -- <harness args>`).
+    argsSeparator: z.string().trim().max(20).optional(),
+  }).strict().nullable().optional(),
   envVars: z.record(z.string()).optional(),
   secretEnvVars: z.array(z.string()).optional(),
   headlessArgs: z.array(z.string()).optional(),

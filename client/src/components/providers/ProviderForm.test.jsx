@@ -98,6 +98,48 @@ describe('ProviderForm', () => {
     expect(screen.queryByText(/It rides both the spawned OpenCode provider/)).not.toBeInTheDocument();
   });
 
+  it('folds the credential-bootstrap fields into the nested shape the server expects', async () => {
+    renderForm();
+    fireEvent.change(screen.getByLabelText('Name *'), { target: { value: 'Example Provider' } });
+    fireEvent.change(screen.getByLabelText('Command *'), { target: { value: 'claude' } });
+    fireEvent.change(screen.getByLabelText('Setup Command'), { target: { value: 'npm install -g @your-org/token-cli' } });
+    fireEvent.change(screen.getByLabelText('Bootstrap Command'), { target: { value: 'token-cli' } });
+    fireEvent.change(screen.getByLabelText('Bootstrap Args'), { target: { value: 'run' } });
+    fireEvent.change(screen.getByLabelText('Harness ID (optional)'), { target: { value: 'claude-code' } });
+    fireEvent.change(screen.getByLabelText('Args Separator (optional)'), { target: { value: '--' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Create' }));
+
+    await waitFor(() => expect(api.createProvider).toHaveBeenCalledWith(expect.objectContaining({
+      credentialBootstrap: {
+        setupCommand: 'npm install -g @your-org/token-cli',
+        command: 'token-cli',
+        args: ['run'],
+        harnessId: 'claude-code',
+        argsSeparator: '--',
+      },
+    })));
+    // No flat scratch fields leak into the payload the server never declared.
+    const [payload] = api.createProvider.mock.calls[0];
+    expect(payload).not.toHaveProperty('credentialBootstrapCommand');
+    expect(payload).not.toHaveProperty('credentialBootstrapArgs');
+  });
+
+  it('clears a previously-set credential bootstrap when the Bootstrap Command is emptied', async () => {
+    renderForm({
+      provider: {
+        id: 'example-bootstrap', name: 'Example Bootstrap', type: 'cli', command: 'claude',
+        credentialBootstrap: { command: 'token-cli', args: ['run'] },
+      },
+    });
+    fireEvent.change(screen.getByLabelText('Bootstrap Command'), { target: { value: '' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+
+    // `null`, not omitted — an absent key means "unchanged" on a PATCH, which
+    // would leave the stored bootstrap config in place after the user cleared it.
+    await waitFor(() => expect(api.updateProvider).toHaveBeenCalledWith('example-bootstrap', expect.objectContaining({
+      credentialBootstrap: null,
+    })));
+  });
 });
 
 // #7447: this editor is the surface that literally names the budgeter

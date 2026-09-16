@@ -207,6 +207,7 @@ export * from './promptFencing.js';
 export * from './promptPartials.js';
 export * from './promptSystemStages.js';
 export * from './promptTemplate.js';
+export * from './credentialBootstrap.js';
 export * from './providerCooldown.js';
 export * from './providerModels.js';
 export * from './providerPrerequisites.js';

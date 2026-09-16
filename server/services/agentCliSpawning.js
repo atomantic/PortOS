@@ -41,6 +41,7 @@ import { resolveForgeTokenEnv } from './forgeAuth.js';
 import { resolveAgentCliCwd } from '../lib/spawnCwd.js';
 import { prepareCliSpawn, killProcessTree, guardChildStdin, deliverChildStdin } from '../lib/bufferedSpawn.js';
 import { buildCliChildEnv } from '../lib/cliChildEnv.js';
+import { applyCredentialBootstrap } from '../lib/credentialBootstrap.js';
 import { prClaimWasVerified } from '../lib/prDisposition.js';
 import { resolvePrOwnership } from '../lib/slashdoInvocation.js';
 import { doneSentinelPath } from '../lib/agentSentinel.js';
@@ -230,7 +231,12 @@ export async function spawnDirectly({
   // /dev/stdin` via stdin (POSIX) / temp file (Windows); every other provider via
   // stdin (writePromptToStdin=true).
   const { args: deliveredArgs, useStdin: writePromptToStdin, cleanup: cleanupPromptFile } = prepareCliPrompt(cliConfig.command, cliConfig.args, prompt, { cwd });
-  const preparedSpawn = prepareCliSpawn(cliConfig.command, deliveredArgs, childEnv);
+  // A credential-bootstrap-configured provider spawns its bootstrap CLI in
+  // front of the harness instead of the harness directly — see
+  // credentialBootstrap.js. Applied AFTER prepareCliPrompt, which still keys
+  // prompt-delivery convention off the harness's own command.
+  const { command: bootstrappedCommand, args: bootstrappedArgs } = applyCredentialBootstrap(provider, cliConfig.command, deliveredArgs);
+  const preparedSpawn = prepareCliSpawn(bootstrappedCommand, bootstrappedArgs, childEnv);
   const isolatedSpawn = isPrivateSecurityTask(task)
     ? await import('../lib/privateSecuritySandbox.js')
       .then(({ preparePrivateSecuritySpawn }) => preparePrivateSecuritySpawn({ ...preparedSpawn, env: childEnv, cwd, provider }))
