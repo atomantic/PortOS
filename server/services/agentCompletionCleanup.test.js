@@ -672,6 +672,19 @@ describe.each(['runner', 'spawner'])('%s completion side effects', (path) => {
     expect(spawnMergeRecoveryTask).toHaveBeenCalledWith(warnings, 'a1', expect.objectContaining({ id: 't' }), 'Example App', '/example/repo');
   });
 
+  // Only the TUI spawner used to delete it, so every direct-CLI and
+  // runner-owned run left one untracked file behind — in a REAL checkout, for a
+  // worktree-less run (issue-filing, reasoning, read-only audits).
+  it("removes this run's completion sentinel and leaves a concurrent sibling's alone", async () => {
+    await writeFile(join(workspace, '.agent-done-a1'), '## Summary\nDid the example work');
+    await writeFile(join(workspace, '.agent-done-a2'), '## Summary\nStill working');
+
+    await complete({});
+
+    await expect(readFile(join(workspace, '.agent-done-a1'))).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(await readFile(join(workspace, '.agent-done-a2'), 'utf8')).toContain('Still working');
+  });
+
   it('turns the plan-question marker into a notification and consumes it before cleanup', async () => {
     const marker = '# Plan Question: Choose the example scope\nPlease clarify the example.';
     await writeFile(join(workspace, '.plan-questions.md'), marker);
@@ -683,5 +696,24 @@ describe.each(['runner', 'spawner'])('%s completion side effects', (path) => {
     });
     await expect(readFile(join(workspace, '.plan-questions.md'))).rejects.toMatchObject({ code: 'ENOENT' });
     expect(addNotification.mock.invocationCallOrder[0]).toBeLessThan(cleanupAgentWorktree.mock.invocationCallOrder[0]);
+  });
+});
+
+// The spawner passes its own cwd, so a run whose persisted record cannot be read
+// still has its sentinel removed rather than leaking one into a real checkout.
+describe('spawner sentinel removal without a persisted record', () => {
+  it('falls back to the cwd the spawner ran in', async () => {
+    const workspace = await mkdtemp(join(tmpdir(), 'completion-sentinel-'));
+    getAgent.mockResolvedValue(null);
+    await writeFile(join(workspace, '.agent-done-a1'), '## Summary\nDone');
+
+    await runSpawnerCompletionCleanup({
+      agentId: 'a1', task: { id: 't', metadata: {} }, success: true, outputBuffer: '',
+      prOwnership: { taskOpenPR: false, agentOpensOwnPr: false },
+      workspacePath: workspace,
+    });
+
+    await expect(readFile(join(workspace, '.agent-done-a1'))).rejects.toMatchObject({ code: 'ENOENT' });
+    await rm(workspace, { recursive: true, force: true });
   });
 });

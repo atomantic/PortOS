@@ -750,6 +750,11 @@ export function dispatchTaskOutputHookOnce({
  * Recovery paths try the agent's persisted workspace when it still exists.
  * When it does not, only hooks whose registry contract says they are
  * payload-independent may run with null output.
+ *
+ * Returns the deduped dispatch promise ITSELF — concurrent normal/recovery
+ * completions must share one, and a timed-out hook stays recoverable until that
+ * original settles — so this stays a pass-through with no side effects of its
+ * own. Sentinel retirement lives at the two recovery call sites, after the read.
  */
 export function dispatchRecoveredTaskOutputHook({ agentId, task, success, workspacePath = null }) {
   return dispatchTaskOutputHookOnce({

@@ -792,6 +792,7 @@ export async function spawnDirectly({
       await runSpawnerCompletionCleanup({
         agentId,
         task,
+        workspacePath: cwd,
         success: cleanupSuccess,
         prOwnership,
         prClaimVerified,

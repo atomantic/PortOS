@@ -33,7 +33,8 @@ import { emitLog } from './cosEvents.js';
 import { updateAgent } from './cosAgentLifecycle.js';
 import { updateTask, addTask, reviveBlockedTask, checkStagePrecondition } from './cos.js';
 import { PIPELINE_STAGE_BEHAVIOR_FLAGS, normalizeReviewers } from '../lib/validation.js';
-import { PATHS, tryReadFile } from '../lib/fileUtils.js';
+import { PATHS, rmGuarded, tryReadFile } from '../lib/fileUtils.js';
+import { doneSentinelPath as resolveDoneSentinelPath } from '../lib/agentSentinel.js';
 import * as jiraService from './jira.js';
 import * as git from './git.js';
 import { isTruthyMeta } from './agentState.js';
@@ -323,6 +324,11 @@ async function runCompletionCleanupSteps(context) {
   await runStep('Creative Director completion', () => advanceCreativeDirectorIfNeeded(context));
   const cleanupWarnings = await runStep('Worktree cleanup', () => completeWorktreeCleanup(context));
   await runStep('Cleanup warning reporting', () => reportWorktreeCleanupWarnings({ ...context, cleanupWarnings }));
+  // Last, and never fatal: `runStep` RETHROWS on the runner path
+  // (`continueOnError` is unset there), so a janitorial `rm` that hits EPERM
+  // must not be able to abort the worktree cleanup and pipeline hand-off above.
+  await removeCompletionSentinel(context)
+    .catch(err => emitLog('warn', `Completion sentinel removal failed for ${context.agentId}: ${err.message}`, { agentId: context.agentId }));
 }
 
 function resolveRunnerPrOwnership({ task, agent, agentState }) {
@@ -474,6 +480,31 @@ async function advanceCreativeDirectorIfNeeded({ agentId, task, effectiveSuccess
   }
 }
 
+/**
+ * Delete the run's own `.agent-done-<agentId>` completion sentinel.
+ *
+ * The sentinel is a runtime signal, not a work product: once a run has an
+ * outcome nothing reads it again, and a worktree-LESS run (the issue-filing,
+ * reasoning and read-only audit task types) executes in a real checkout — this
+ * repo, or a managed app's own — where it would otherwise sit in the user's
+ * `git status` as untracked dirt, one file per run, forever.
+ *
+ * Pause and host-shutdown abandon both return before any completion cleanup
+ * runs (`finalizeAgentRunCommon`), and a run is abandoned only when it wrote no
+ * sentinel at all (`shouldAbandonForHostShutdown`) — so this never eats a
+ * signal a resume still needs.
+ *
+ * `workspacePath` is the spawner's own cwd, authoritative for the run it is
+ * finalizing; the runner-event path has none and falls back to the workspace
+ * the agent record stamped at registration.
+ */
+export async function removeCompletionSentinel({ agentId, agent, agentState, workspacePath }) {
+  const workspace = workspacePath || agentState?.metadata?.workspacePath || agent?.workspacePath || null;
+  if (!workspace) return;
+  // `rmGuarded`, like the stale-sentinel sweep that deletes these same files.
+  await rmGuarded(resolveDoneSentinelPath(workspace, agentId), { force: true });
+}
+
 async function completeWorktreeCleanup({ agentId, task, agent, agentState, effectiveSuccess, prOwnership, outputBuffer, prClaimVerified, noChangesToShip }) {
   if (task?.metadata?.jiraBranch) return;
   const ownership = prOwnership ?? resolveRunnerPrOwnership({ task, agent, agentState });
@@ -521,19 +552,22 @@ async function reportWorktreeCleanupWarnings({ agentId, task, cleanupWarnings })
  * Retry-hold release remains in a `finally`: even a skipped JIRA worktree or
  * a failed hand-off must release the task with the resume pointer cleanup left.
  *
+ * `workspacePath` is the spawner's own cwd, so sentinel removal still works
+ * when the persisted record cannot be read.
+ *
  * `prOwnership` is `resolvePrOwnership`'s answer for this run;
  * `prClaimVerified` / `noChangesToShip` are read off finalize's return.
  * `success` is the verdict finalize actually persisted — a PR-claim downgrade
  * must reach cleanup, or a run that opened no PR is cleaned up as a success and
  * loses its retry state (#3358).
  */
-export async function runSpawnerCompletionCleanup({ agentId, task, success, prOwnership, prClaimVerified = false, noChangesToShip = false, outputBuffer }) {
+export async function runSpawnerCompletionCleanup({ agentId, task, success, prOwnership, prClaimVerified = false, noChangesToShip = false, outputBuffer, workspacePath = null }) {
   try {
     const { getAgent } = await import('./cos.js');
     const agentState = await getAgent(agentId).catch(() => null);
     await runCompletionCleanupSteps({
       agentId, task, agentState, effectiveSuccess: success, prOwnership,
-      prClaimVerified, noChangesToShip, outputBuffer, continueOnError: true,
+      prClaimVerified, noChangesToShip, outputBuffer, workspacePath, continueOnError: true,
     });
   } finally {
     await releaseRetryHold({ agentId, task, success })

@@ -1035,17 +1035,14 @@ export async function spawnTuiAgent({
    * the shell session on disk.
    */
   const releaseRunResources = async ({ agentData, cleanupSuccess, prOwnership, prClaimVerified, noChangesToShip }) => {
-    // This run's sentinel only — a sibling agent sharing this workspace owns
-    // its own file and may still be running.
-    if (doneSentinelPath) await rm(doneSentinelPath).catch(() => {});
-
     // Pipeline progression → worktree cleanup with the PR disposition →
-    // retry-hold release, in the one owner both in-process spawners share.
-    // Caught so a throw there cannot skip the in-memory teardown below — this
-    // runs off a PTY exit, outside any request lifecycle.
+    // sentinel removal → retry-hold release, in the one owner every completion
+    // path shares. Caught so a throw there cannot skip the in-memory teardown
+    // below — this runs off a PTY exit, outside any request lifecycle.
     await runSpawnerCompletionCleanup({
       agentId,
       task,
+      workspacePath: cwd,
       success: cleanupSuccess,
       prOwnership,
       prClaimVerified,
