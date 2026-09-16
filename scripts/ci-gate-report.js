@@ -121,9 +121,22 @@ export function summarizeGateResults(results, label = DEFAULT_LABEL, requireSucc
     };
   }
 
+  if (!results.length) {
+    // Fail closed. A green required check that examined nothing is worse
+    // than a red one: it is indistinguishable from a real pass.
+    return {
+      verdict: 'failure',
+      lines: [
+        `❌ ${label}: no job results were supplied, so nothing was checked.`,
+        "Every job in the gate's `needs:` list needs a CI_GATE_RESULT_<JOB>"
+          + " environment entry in .github/workflows/ci.yml.",
+      ],
+    };
+  }
+
   return {
     verdict: 'pass',
-    lines: [`✅ ${label} passed: ${results.map(pair).join(', ') || 'no jobs selected'}`],
+    lines: [`✅ ${label} passed: ${results.map(pair).join(', ')}`],
   };
 }
 

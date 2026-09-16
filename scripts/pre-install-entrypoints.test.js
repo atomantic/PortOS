@@ -139,7 +139,9 @@ describe('scripts that run from a sparse checkout of scripts/', () => {
     const workflows = ['.github/workflows/ci.yml', '.github/workflows/ci-cancel-recovery.yml']
       .map((rel) => readFileSync(join(REPO_ROOT, rel), 'utf8'))
       .join('\n');
-    const sparseJobs = workflows.split('sparse-checkout: scripts').length - 1;
+    // The `with:` key at the start of a line, not the literal anywhere: a
+    // comment mentioning it must neither inflate the count nor evade it.
+    const sparseJobs = (workflows.match(/^ +sparse-checkout: scripts$/gm) || []).length;
     // ci.yml's two gate jobs both run ci-gate-report.js; the recovery workflow
     // runs the other one.
     expect(sparseJobs).toBe(3);

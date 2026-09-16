@@ -97,6 +97,14 @@ describe('summarizeGateResults', () => {
     expect(strict.lines).toContain('Failed jobs: gate=skipped');
   });
 
+  it('fails when no job results were supplied at all', () => {
+    // A green required check that examined nothing is indistinguishable from
+    // a real pass, so an empty set must fail rather than pass vacuously.
+    const summary = summarizeGateResults([]);
+    expect(summary.verdict).toBe('failure');
+    expect(summary.lines.join('\n')).toContain('nothing was checked');
+  });
+
   it('uses the supplied gate label so the two gates are distinguishable', () => {
     const summary = summarizeGateResults(results({ gate: 'cancelled' }), 'Full CI Gate');
     expect(summary.lines[0]).toContain('Full CI Gate');
