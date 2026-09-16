@@ -241,3 +241,15 @@ it('selects an independent claim handler and omits it in file-only mode', async 
   await user.selectOptions(screen.getByLabelText('Audit mode'), 'fix');
   expect(screen.getByRole('group', { name: 'Claim-issue handler' })).toBeInTheDocument();
 });
+
+it('offers an enabled process provider with no subscription family, and hides a disabled one', async () => {
+  show({ providers: [
+    ...props.providers,
+    { id: 'opencode-tui', name: 'OpenCode TUI', type: 'tui', command: 'opencode', enabled: true, models: ['gpt-5'] },
+    { id: 'disabled-cli', name: 'Disabled CLI', type: 'cli', command: 'disabled', enabled: false, models: ['x'] },
+  ] });
+  await screen.findByRole('button', { name: 'Run now' });
+  const options = within(screen.getByRole('combobox', { name: 'Provider' })).getAllByRole('option').map(option => option.textContent);
+  expect(options).toContain('OpenCode TUI');
+  expect(options).not.toContain('Disabled CLI');
+});

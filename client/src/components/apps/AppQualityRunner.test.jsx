@@ -5,8 +5,9 @@ import AppQualityRunner from './AppQualityRunner';
 import AppQuality from './AppQuality';
 vi.mock('./AppQualityHistory', () => ({ default: () => null }));
 import { getMaintenanceRuns, startMaintenanceRun, stopMaintenanceRun } from '../../services/apiAgents';
+import useProviderModels from '../../hooks/useProviderModels';
 vi.mock('../../services/apiAgents', () => ({ getMaintenanceRuns: vi.fn(), startMaintenanceRun: vi.fn(), stopMaintenanceRun: vi.fn() }));
-vi.mock('../../hooks/useProviderModels', () => ({ default: () => ({ providers: [], selectedProviderId: 'codex', selectedModel: 'gpt-5', availableModels: [], loading: false }) }));
+vi.mock('../../hooks/useProviderModels', () => ({ default: vi.fn(() => ({ providers: [], selectedProviderId: 'codex', selectedModel: 'gpt-5', availableModels: [], loading: false })) }));
 vi.mock('../ProviderModelSelector', () => ({ default: ({ onEffortChange }) => <button onClick={() => onEffortChange('high')}>Use high effort</button> }));
 const app = { id: 'app-1', quality: { categories: [
   { id: 'security', label: 'Security', score: null },
@@ -95,4 +96,13 @@ it('excludes known unavailable and N/A assessments from suggestions while allowi
   fireEvent.change(screen.getByLabelText('Checks'), { target: { value: 'all' } });
   fireEvent.click(screen.getByRole('button', { name: 'Run 3 checks now' }));
   await waitFor(() => expect(startMaintenanceRun).toHaveBeenLastCalledWith(expect.objectContaining({ taskTypes: ['typing', 'console-errors', 'security'] }), { silent: true }));
+});
+
+it('offers every enabled process provider regardless of subscription family, and hides disabled ones', async () => {
+  render(<MemoryRouter><AppQualityRunner app={app} /></MemoryRouter>);
+  await waitFor(() => expect(useProviderModels).toHaveBeenCalled());
+  const { filter } = useProviderModels.mock.calls[0][0];
+  expect(filter({ id: 'opencode-tui', enabled: true, type: 'tui' })).toBe(true);
+  expect(filter({ id: 'codex', enabled: true, type: 'cli' })).toBe(true);
+  expect(filter({ id: 'opencode-tui', enabled: false, type: 'tui' })).toBe(false);
 });
