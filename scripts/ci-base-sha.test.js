@@ -82,6 +82,15 @@ describe('ci.yml required checks', () => {
     expect(jobs['full-gate']).toMatch(/name: Full CI Gate/);
   });
 
+  it('withholds the full gate when the Windows job ran only the contract baseline', () => {
+    // verify-ci-status.js lets a release skip its own suite on this check, so
+    // `full: true` alone is not enough: a full plan may now leave Windows at
+    // the WINDOWS_CONTRACT_TESTS baseline (#7440). Publishing the gate then
+    // would vouch for Windows coverage that never ran.
+    expect(jobs['full-gate']).toMatch(/needs\.impact\.outputs\.full == 'true'/);
+    expect(jobs['full-gate']).toMatch(/needs\.impact\.outputs\.windows_mode == 'full'/);
+  });
+
   it('no longer carries the retired legacy check-name jobs', () => {
     // `lint` was a whole runner that echoed the client job's result, and the
     // server job wore `test (24.x)`; the ruleset requires neither.
