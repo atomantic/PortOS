@@ -8,7 +8,7 @@ import socket from '../services/socket';
 import toast from '../components/ui/Toast';
 import { FormField } from '../components/ui/FormField';
 import { timeAgo } from '../components/feature-agents/constants';
-import { formatDurationMs } from '../utils/formatters';
+import { formatCount, formatDurationMs } from '../utils/formatters';
 import BrailleSpinner from '../components/BrailleSpinner';
 import { useAutoRefetch } from '../hooks/useAutoRefetch';
 import { clickableProps } from '../lib/a11yKeyboard.js';
@@ -398,8 +398,8 @@ export default function Loops() {
           </p>
         </div>
         <div className="flex items-center gap-3 text-xs text-gray-400">
-          {runningCount > 0 && <span className="text-port-success">{runningCount} active</span>}
-          <span>{loops.length} total</span>
+          {runningCount > 0 && <span className="text-port-success">{formatCount(runningCount)} active</span>}
+          <span>{formatCount(loops.length)} total</span>
           <button onClick={fetchLoops} className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1 rounded hover:bg-port-border" title="Refresh" aria-label="Refresh">
             <RefreshCw size={14} />
           </button>

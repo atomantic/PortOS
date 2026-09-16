@@ -7,6 +7,7 @@ import {
   NAV_FEATURE_IDS,
   SECTION_FEATURE,
   getNavAliasMap,
+  getNavPageForPath,
   getNavSectionForPath,
   getSectionNavTabs,
   resolveNavCommand,
@@ -168,6 +169,7 @@ describe('nav contract — generated section child navigation', () => {
     ['/ai/fleet', 'Models'],
     ['/devtools/usage', 'Models'],
     ['/models/llms/abuse', 'Models'],
+    ['/models/llms-runtimes', 'Models'],
     ['/settings/general', 'Settings'],
     ['/prompts', 'Settings'],
   ])('resolves %s to the %s section', (pathname, section) => {
@@ -178,6 +180,62 @@ describe('nav contract — generated section child navigation', () => {
 // Feature gating hides a page from the ⌘K palette and the sidebar. A typo in a
 // `feature` tag would silently gate on a flag nothing can ever turn on, hiding
 // the page on every install with no other symptom.
+// Runtimes (#7414) was the LLMs page's default VIEW before it became a sibling
+// tab. Every way a user reaches it — the tab bar, ⌘K, voice, and the bookmark
+// they still hold on the old pill — has to keep landing on the same page.
+describe('nav contract — Models → Runtimes', () => {
+  it('is a Models section tab at its canonical path', () => {
+    expect(getSectionNavTabs('Models')).toContainEqual({ id: 'llms-runtimes', label: 'Runtimes', to: '/models/llms-runtimes' });
+  });
+
+  it.each(['runtimes', 'llm runtimes', 'local runtimes', 'llama server'])(
+    'resolves the spoken name %j to the Runtimes page',
+    (spoken) => {
+      expect(resolveNavCommand(spoken)?.path).toBe('/models/llms-runtimes');
+    },
+  );
+
+  // Splitting the page must not steal the catalog's own names: both surfaces
+  // start Ollama, so "ollama" staying on LLMs is a decision, not an accident.
+  it.each(['llms', 'ollama', 'lm studio'])('leaves %j on the LLMs catalog page', (spoken) => {
+    expect(resolveNavCommand(spoken)?.path).toBe('/models/llms');
+  });
+
+  // Two pages in this section are about "runtimes". Before #7414 a bare
+  // "runtimes" landed on the image-to-3D page by suffix match, because nothing
+  // else claimed the word; the local model servers are what a user asking for
+  // runtimes means, so the exact alias wins it now. The 3D page keeps every
+  // qualified form — losing those WOULD be a regression, and the fuzzy matcher
+  // makes that a silent one.
+  it('gives a bare "runtimes" to the model servers', () => {
+    expect(resolveNavCommand('runtimes')?.path).toBe('/models/llms-runtimes');
+  });
+
+  it.each(['3d runtimes', 'image to 3d runtimes'])('keeps %j on the image-to-3D page', (spoken) => {
+    expect(resolveNavCommand(spoken)?.path).toBe('/models/3d');
+  });
+});
+
+// Readiness copy names the page it links to instead of repeating a breadcrumb,
+// so a page move re-words every hint. A helper that silently returned null (or
+// the parent's name) would put the neutral fallback wording on every card.
+describe('getNavPageForPath', () => {
+  it.each([
+    ['/models/llms', 'Models → LLMs', 'LLMs'],
+    ['/models/llms-runtimes', 'Models → Runtimes', 'Runtimes'],
+    // Longest-match: a drill-down names itself, not the tab that hosts it.
+    ['/models/llms/abuse', 'Models → Abuse Guard', 'Abuse Guard'],
+  ])('names %s as %s', (pathname, breadcrumb, label) => {
+    expect(getNavPageForPath(pathname)).toMatchObject({ breadcrumb, label, section: 'Models' });
+  });
+
+  it('returns null for a path no command declares, so callers can drop the clause', () => {
+    expect(getNavPageForPath('/not-a-nav-path')).toBeNull();
+    expect(getNavPageForPath(null)).toBeNull();
+    expect(getNavPageForPath('/')).toBeNull();
+  });
+});
+
 describe('nav contract — instance-feature gating', () => {
   it('every gated entry names a registered instance feature', () => {
     const unknown = NAV_FEATURE_IDS.filter((id) => !INSTANCE_FEATURE_IDS.includes(id));
@@ -694,6 +752,7 @@ describe('nav coverage — every navigable App.jsx route has a manifest entry', 
     const declared = new Set(NAV_COMMANDS.flatMap((c) => c.previousPaths || []));
     const missing = [
       '/settings/local-llm',   // #4736 — Local LLM management left Settings
+      '/models/llms/runtimes', // #7414 — Runtimes left the LLMs pill bar for its own tab
       '/media/models',         // #4728 — the rest of model management left Create/Settings/Dev Tools
       '/media/loras',
       '/media/training',

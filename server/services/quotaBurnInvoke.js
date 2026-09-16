@@ -64,6 +64,8 @@ import { ON_DEMAND_ORIGINS } from './taskScheduleConstants.js';
 const UNATTENDED_AUTONOMY_LEVEL = 'yolo';
 
 const declined = (reason) => ({ dispatched: false, reason });
+/** What a log line calls the thing being spent — a family, or nothing at all. */
+const burnLabel = (family) => family?.id || 'no subscription family';
 const noWork = (detail) => ({ count: 0, detail });
 // `Object.hasOwn`, not a truthiness check, so a reference naming an inherited
 // key like `constructor` cannot resolve to anything.
@@ -304,9 +306,17 @@ export async function countQuotaBurnStepPending({ step, family, catalog = null }
  * Programmatic handlers do NOT come through here — each resolves its own
  * backend from the `family` it is handed (`prefer: 'cli'`, and the render
  * backend is not always a provider at all).
+ *
+ * An UNFAMILIED run is the one case with no family to check against, and it is
+ * not an exception to the rule above so much as the absence of its premise: a
+ * manual maintenance run pinned to a provider outside every subscription family
+ * spends no window, so there is no wrong window for it to spend. Only
+ * `maintenanceRun.js` can construct that identity, and `providerForFamily`
+ * still requires the pin to name an ENABLED, process-capable provider — so the
+ * resolved provider is always exactly the one the user picked.
  */
 async function resolveStepProvider(effective, family) {
-  const { noProviderReason, matchesFamily, resolveBurnProvider } = await import('./scheduledHandlers/providerPick.js');
+  const { noProviderReason, matchesFamily, isUnfamiliedBurn, resolveBurnProvider } = await import('./scheduledHandlers/providerPick.js');
   const provider = await resolveBurnProvider({ job: { providerId: effective.providerId }, family });
   if (!provider) {
     return {
@@ -315,7 +325,7 @@ async function resolveStepProvider(effective, family) {
         : noProviderReason(family),
     };
   }
-  if (!matchesFamily(provider, family.id)) {
+  if (!isUnfamiliedBurn(family) && !matchesFamily(provider, family.id)) {
     return { error: `pinned provider "${provider.id}" does not belong to the ${family.id} family` };
   }
   return { provider };
@@ -447,7 +457,11 @@ async function runBuiltinTaskStep({ resolved, step, family, candidate, maintenan
   const request = await triggerOnDemandTask(resolved.ref.taskType, resolved.ref.appId, {
     origin: ON_DEMAND_ORIGINS.QUOTA_BURN,
     burn: {
-      family: family.id,
+      // Omitted, not null, when the run spends no subscription window at all —
+      // `normalizeQuotaBurnProvenance` accepts `maintenanceRunId` as the
+      // attribution instead, and a placeholder here would credit this run's
+      // refusals to a family it never touched.
+      ...(family.id ? { family: family.id } : {}),
       stepId: step.id,
       limitingResetAt: candidate?.limitingResetAt ?? null,
       // Set only by a MANUAL maintenance run (`maintenanceRun.js`): the mark
@@ -475,7 +489,7 @@ async function runBuiltinTaskStep({ resolved, step, family, candidate, maintenan
   });
   if (request?.error) return declined(request.error);
 
-  console.log(`🔥 Quota-burn requested scheduled task ${resolved.ref.taskType} for ${family.id} (${request.id})`);
+  console.log(`🔥 Quota-burn requested scheduled task ${resolved.ref.taskType} for ${burnLabel(family)} (${request.id})`);
   return {
     dispatched: true,
     // The ONLY lane whose acceptance is asynchronous: the request is recorded
@@ -528,7 +542,7 @@ async function runCustomJobStep({ resolved, step, family, candidate, maintenance
     // other. Everything below OVERRIDES it — that is where the two legitimately
     // differ.
     ...generatedJobTaskFields(generated),
-    context: `Quota burn (${family.id}): ${resolved.job.name}`,
+    context: `Quota burn (${burnLabel(family)}): ${resolved.job.name}`,
     approvalRequired: !generated.autoApprove,
     // The step's overrides win over the job's saved pins (see effectiveSettings),
     // and an unpinned step still lands on THIS family's provider.
@@ -541,7 +555,8 @@ async function runCustomJobStep({ resolved, step, family, candidate, maintenance
     // `quotaBurnRequestId`: this lane queues the task synchronously, so no
     // request ever exists to name — that key records the ASYNC hop, and minting
     // a fake one would make a join over it silently wrong.
-    quotaBurnFamily: family.id,
+    // Same "omit, never placeholder" rule as the built-in lane's burn block.
+    ...(family.id ? { quotaBurnFamily: family.id } : {}),
     quotaBurnLimitingResetAt: candidate?.limitingResetAt ?? null,
     quotaBurnStepId: step.id,
     ...(maintenanceRunId ? { quotaBurnMaintenanceRunId: maintenanceRunId } : {}),
@@ -552,7 +567,7 @@ async function runCustomJobStep({ resolved, step, family, candidate, maintenance
   // retry, and an unattended burn has no such intent to express.
   if (persisted.duplicate) return declined(`an identical "${resolved.job.name}" task is already ${persisted.status}`);
 
-  console.log(`🔥 Quota-burn queued custom job ${resolved.job.id} as task ${persisted.id} for ${family.id}`);
+  console.log(`🔥 Quota-burn queued custom job ${resolved.job.id} as task ${persisted.id} for ${burnLabel(family)}`);
   return {
     dispatched: true,
     summary: `Queued "${resolved.job.name}" via ${picked.provider.id}`,

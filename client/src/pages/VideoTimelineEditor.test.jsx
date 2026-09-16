@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { render, screen, waitFor, fireEvent, within, act } from '@testing-library/react';
+import { awaitPageLoaded } from '../test/pageLoadBarrier';
 
 // The editor's pure rules live in lib/videoTimelineModel.js and its blocks in
 // components/media/VideoTimelineLanes.jsx, both tested there. What only exists
@@ -87,7 +88,7 @@ beforeEach(() => {
 
 const renderEditor = async () => {
   render(<VideoTimelineEditor />);
-  await waitFor(() => expect(screen.queryByText('Loading project…')).not.toBeInTheDocument());
+  await awaitPageLoaded('Loading timeline project');
 };
 
 describe('lane visibility', () => {

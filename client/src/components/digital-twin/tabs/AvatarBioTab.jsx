@@ -13,6 +13,7 @@ import {
 } from 'lucide-react';
 import * as api from '../../../services/api';
 import toast from '../../ui/Toast';
+import { formatCount } from '../../../utils/formatters';
 import BrailleSpinner from '../../BrailleSpinner';
 import useProviderModels from '../../../hooks/useProviderModels';
 import ProviderModelSelector from '../../ProviderModelSelector';
@@ -160,7 +161,7 @@ export default function AvatarBioTab() {
             </button>
           ))}
           {bio && (
-            <span className="text-xs text-gray-500 ml-auto">~{bio.tokenEstimate?.toLocaleString()} tokens</span>
+            <span className="text-xs text-gray-500 ml-auto">~{formatCount(bio.tokenEstimate)} tokens</span>
           )}
         </div>
       </div>
@@ -259,7 +260,7 @@ export default function AvatarBioTab() {
             <div className="flex items-center justify-between">
               <h4 className="text-sm font-semibold text-port-success">Refined bio</h4>
               <div className="flex items-center gap-3">
-                <span className="text-xs text-gray-500">~{polished.tokenEstimate?.toLocaleString()} tokens</span>
+                <span className="text-xs text-gray-500">~{formatCount(polished.tokenEstimate)} tokens</span>
                 <CopyButton getText={() => polished.content} />
               </div>
             </div>

@@ -24,6 +24,7 @@ import { isProviderAvailable, getFallbackProvider, getProviderStatus } from './p
 import { selectModelForRole, selectModelForTask } from './agentModelSelection.js';
 import { modelPinIsOffered } from '../lib/localProviderRuntime.js';
 import { allowedModesFor, callerModeRejection } from '../lib/callerModePolicy.js';
+import { attachGatewaySiblingKey } from '../lib/providerGateways.js';
 import { PRIMARY_ORCHESTRATION_ROLE, roleAssignment } from '../lib/orchestrationProfile.js';
 import { publicReviewPostureForTask, resolvePublicReviewProvider } from './publicReviewProviderSelection.js';
 
@@ -235,7 +236,12 @@ async function resolveOrdinaryProviderAndModel(task) {
         fallbackProvider: fallbackResult.provider.id,
         fallbackSource: fallbackResult.source
       });
-      provider = fallbackResult.provider;
+      // The fallback comes from the RAW provider map (`getAllProviders`), which
+      // carries no gateway-inherited key — a gateway-backed wrapper picked here
+      // would spawn without its sibling's apiKey and fail auth (NVIDIA NIM 401s
+      // "Header of type `authorization` was missing") despite a stored key.
+      // Attach it from the same map (synchronous — no re-read to go stale).
+      provider = attachGatewaySiblingKey(fallbackResult.provider, providersMap);
       fallbackModelPin = fallbackResult.model || null;
     } else {
       const errorMsg = `Provider ${provider.id} unavailable (${status.message}) and no fallback available`;

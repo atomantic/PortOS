@@ -88,6 +88,21 @@ export async function markProviderUnavailable(providerId, options = {}) {
 export async function markProviderUsageLimit(providerId, errorInfo) {
   const status = await getProviderStatusService().markUsageLimit(providerId, errorInfo);
   console.log(`⚠️ Provider ${providerId} marked unavailable: usage limit (retry after ${errorInfo?.waitTime || '24h'})`);
+  // Observed-block ledger for the Usage page's free-tier estimated-quota
+  // signal. This marker fires only for provider-origin structured usage-limit
+  // signals — never a transient 429 retry (see `recordLimitBlock`). Lazy
+  // import keeps this shim off the usage-service graph for the import budget.
+  await import('./usage.js')
+    .then(({ recordLimitBlock }) => recordLimitBlock({
+      providerId,
+      model: errorInfo?.model ?? null,
+      category: 'usage-limit',
+      message: errorInfo?.message ?? null,
+      resetHint: errorInfo?.waitTime ?? null
+    }))
+    .catch((err) => {
+      console.error(`❌ Failed to record limit block for ${providerId}: ${err.message}`);
+    });
   return status;
 }
 

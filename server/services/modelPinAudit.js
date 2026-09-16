@@ -191,7 +191,9 @@ function collectTaskSchedulePins({ schedule }) {
  */
 async function collectAppOverridePins({ schedule }) {
   const { getActiveApps } = await loadAppsModule();
-  const apps = await getActiveApps().catch(() => []);
+  // No local catch: an unreadable apps store must reach the collector-level
+  // catch (counted toward `incomplete`), not silently read as "no overrides".
+  const apps = await getActiveApps();
   return (apps || []).flatMap((app) =>
     Object.entries(app?.taskTypeOverrides || {}).flatMap(([taskType, override]) => pinIf({
       id: `app:${app.id}:${taskType}`,
@@ -451,30 +453,36 @@ const PIN_SOURCES = Object.freeze([
  * A collector that throws must not take the whole audit down with it: one
  * unreadable store is a missing section, not a failed page.
  *
- * @returns {Promise<Array<object>>}
+ * Each failure is counted, so callers can tell "evaluated and healthy" apart
+ * from "unevaluated after a store-read error" — the notifier must not retract
+ * announced cards on the latter, or the next audit re-notifies.
+ *
+ * @returns {Promise<{pins: Array<object>, errors: number}>}
  */
 async function collectModelPins() {
   const { loadSchedule } = await loadTaskScheduleModule();
   const { listProviders } = await loadProvidersModule();
+  let errors = 0;
   const [settings, schedule, providers] = await Promise.all([
-    getSettings().catch(() => ({})),
-    loadSchedule().catch(() => null),
+    getSettings().catch(() => { errors += 1; return {}; }),
+    loadSchedule().catch(() => { errors += 1; return null; }),
     // The reviewer collector classifies provider RECORDS, so the catalog is one
     // of this function's own inputs — read here, beside the others, rather than
     // threaded in from both callers. `loadProviders` fronts a short TTL cache
     // that coalesces in-flight reads, so the reconciliation's own read of the
     // same catalog costs nothing extra.
-    listProviders().catch(() => []),
+    listProviders().catch(() => { errors += 1; return []; }),
   ]);
   const context = { settings, schedule, providers };
   const collected = await Promise.all(PIN_SOURCES.map(async ({ kind, collect }) => {
     const pins = await Promise.resolve(collect(context)).catch((error) => {
       console.error(`❌ Model pin collector ${kind} failed: ${error.message}`);
+      errors += 1;
       return [];
     });
     return pins.map((pin) => ({ ...pin, kind }));
   }));
-  return collected.flat();
+  return { pins: collected.flat(), errors };
 }
 
 /**
@@ -485,12 +493,17 @@ async function collectModelPins() {
  * catalog of each record fronting its binary and the panel can union them. A
  * 200-model Ollama catalog is still not shipped to a page with no Ollama pin.
  *
- * @returns {Promise<{pins: Array<object>, providers: Record<string, object>}>}
+ * `incomplete` is true when any backing store or collector failed: the pin set
+ * is then unevaluated, not healthy, and callers that retract on empty (the
+ * retired-pin notifier) must skip the pass rather than withdraw announcements
+ * the next audit would re-raise.
+ *
+ * @returns {Promise<{pins: Array<object>, providers: Record<string, object>, incomplete: boolean}>}
  */
 export async function auditModelPins() {
   const { listProviders } = await loadProvidersModule();
   // The pin stores and the provider catalog are independent reads.
-  const [providerList, pins] = await Promise.all([listProviders(), collectModelPins()]);
+  const [providerList, { pins, errors }] = await Promise.all([listProviders(), collectModelPins()]);
   const byId = Object.fromEntries(providerList.map((provider) => [provider.id, provider]));
   const stale = reconcileModelPins(pins, byId);
   const providers = Object.fromEntries(
@@ -500,7 +513,7 @@ export async function auditModelPins() {
       available: catalogOfferings(byId[id]),
     }]),
   );
-  return { pins: stale, providers };
+  return { pins: stale, providers, incomplete: errors > 0 };
 }
 
 /**
@@ -521,7 +534,7 @@ export async function auditModelPins() {
  * @returns {Promise<{cleared: boolean, id: string}>}
  */
 export async function clearModelPin(pinId) {
-  const pins = await collectModelPins();
+  const { pins } = await collectModelPins();
   const pin = pins.find((candidate) => candidate.id === pinId);
   if (pin) await PIN_SOURCES.find((source) => source.kind === pin.kind).clear(pin);
   const { removeByMetadata } = await loadNotificationsModule();

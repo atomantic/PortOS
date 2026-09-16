@@ -1,39 +1,63 @@
-import { Brain, Cpu, Gauge } from 'lucide-react';
-import { formatBytes, timeUntil } from '../../utils/formatters.js';
+import { AlertTriangle, Brain, Cpu, Gauge } from 'lucide-react';
+import { describeMindTurnProgress, mindTurnHeadline } from '../../lib/mindTurnProgress.js';
+import { formatBytes, formatCount, timeUntil } from '../../utils/formatters.js';
 
-const number = (value) => Number.isFinite(value) ? value.toLocaleString() : '—';
-
-const residencyLabel = (runtime) => {
-  if (runtime?.inference?.active) return 'Running now';
-  const status = runtime?.inference?.residency?.status;
-  if (status === 'loaded') return 'Loaded in memory';
-  if (status === 'not-loaded') return 'Not loaded';
-  if (status === 'provider-managed') return 'Provider-managed';
-  if (status === 'unconfigured') return 'Not configured';
-  return 'Status unknown';
+const RESIDENCY_STATES = {
+  loaded: 'Loaded in memory',
+  'not-loaded': 'Not loaded',
+  'provider-managed': 'Provider-managed',
+  unconfigured: 'Not configured',
 };
 
-export function PersistentMindThoughtStatus({ state, model }) {
-  const thinking = state?.status === 'thinking' && Boolean(state.activeTurnId);
+// "Running now" alone answered the wrong question during a turn: a cold local
+// model that has not finished loading looks exactly like one mid-inference, and
+// that ambiguity is what made a slow start indistinguishable from a hang.
+const residencyLabel = (runtime) => {
+  const status = runtime?.inference?.residency?.status;
+  const state = RESIDENCY_STATES[status] || 'Status unknown';
+  if (!runtime?.inference?.active) return state;
+  return status === 'provider-managed' || status === 'unconfigured'
+    ? 'Running now'
+    : `Running now · ${state.toLowerCase()}`;
+};
+
+// Statuses whose headline is a plain lookup, kept beside RESIDENCY_STATES so
+// neither grows back into a ternary chain.
+const STATUS_HEADLINES = {
+  waiting: 'Waiting for the next wake',
+  paused: 'Mind paused',
+  idle: 'Mind idle',
+  disabled: 'Mind disabled',
+};
+
+export function PersistentMindThoughtStatus({ state, model, progress }) {
+  // A caller with no /mind/runtime snapshot (the CoS Config tab) still gets the
+  // state-only reading: the quota/retry phase resolves from the public state
+  // alone, while elapsed and heartbeat freshness stay absent rather than guessed.
+  const turn = progress || describeMindTurnProgress({ state });
   const scheduled = state?.started && state?.nextWakeAt && ['idle', 'waiting'].includes(state.status);
-  const label = thinking
-    ? `Thinking${model ? ` with ${model}` : ''}`
-    : scheduled ? `Waiting · next wake ${timeUntil(state.nextWakeAt)}`
-      : state?.status === 'waiting' ? 'Waiting for the next wake'
-      : state?.status === 'paused' ? 'Mind paused'
-        : state?.status === 'idle' ? 'Mind idle'
-          : state?.status === 'disabled' ? 'Mind disabled'
-            : 'Mind status unknown';
+  const headline = mindTurnHeadline(turn, timeUntil)
+    || (turn.phase === 'thinking' ? `Thinking${model ? ` with ${model}` : ''}`
+      : scheduled ? `Waiting · next wake ${timeUntil(state.nextWakeAt)}`
+        : STATUS_HEADLINES[state?.status] || 'Mind status unknown');
+  // The stage answers "is it actually processing?", the durations answer "for
+  // how long?" — a bare headline could not distinguish either from a hang.
+  const label = [headline, turn.stage, turn.detail].filter(Boolean).join(' · ');
+  const attention = turn.phase === 'stalled' || turn.phase === 'blocked';
 
   return (
     <span
+      data-testid="mind-thought-status"
+      data-phase={turn.phase}
       role="status"
-      aria-busy={thinking}
-      className={`inline-flex min-w-0 max-w-full items-center gap-2 rounded-full border px-3 py-1.5 text-xs font-medium ${thinking ? 'border-port-accent/60 bg-port-accent/10 text-port-accent' : 'border-port-border text-port-text-muted'}`}
+      aria-busy={turn.busy}
+      className={`inline-flex min-w-0 max-w-full items-center gap-2 rounded-full border px-3 py-1.5 text-xs font-medium ${attention ? 'border-port-warning/60 bg-port-warning/10 text-port-warning' : turn.busy ? 'border-port-accent/60 bg-port-accent/10 text-port-accent' : 'border-port-border text-port-text-muted'}`}
     >
-      <Brain size={14} className={thinking ? 'shrink-0 animate-pulse motion-reduce:animate-none' : 'shrink-0'} aria-hidden="true" />
+      {attention
+        ? <AlertTriangle size={14} className="shrink-0" aria-hidden="true" />
+        : <Brain size={14} className={turn.busy ? 'shrink-0 animate-pulse motion-reduce:animate-none' : 'shrink-0'} aria-hidden="true" />}
       <span className="truncate" title={label}>{label}</span>
-      {thinking && (
+      {turn.phase === 'thinking' && (
         <span className="inline-flex shrink-0 gap-0.5" aria-hidden="true">
           {[0, 1, 2].map((index) => (
             <span
@@ -60,9 +84,9 @@ export default function PersistentMindRuntimePanel({ runtime, error, loading, on
     <section aria-label="Persistent mind runtime" className="grid gap-3 md:grid-cols-3">
       <ContextSurface {...(onOpenContext ? { type: 'button', onClick: onOpenContext } : {})} className={`rounded border border-port-border bg-port-card p-3 text-left ${onOpenContext ? 'hover:bg-port-border/20' : ''}`}>
         <span className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-port-accent"><Brain size={15} aria-hidden="true" /> Effective context</span>
-        <span className="mt-2 block text-lg font-semibold text-port-text">~{number(context?.approximateTokens)} tokens</span>
+        <span className="mt-2 block text-lg font-semibold text-port-text">~{formatCount(context?.approximateTokens)} tokens</span>
         <span className="mt-1 block text-xs text-port-text-muted">
-          {number(context?.chars)} / {number(context?.maxChars)} characters · {number(context?.memoryCount)} curated memories · summary {context?.summaryState || 'unknown'}
+          {formatCount(context?.chars)} / {formatCount(context?.maxChars)} characters · {formatCount(context?.memoryCount)} curated memories · summary {context?.summaryState || 'unknown'}
         </span>
       </ContextSurface>
 

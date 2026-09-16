@@ -121,6 +121,31 @@ usage-limit failure, `server/services/quotaBurnDenials.js` blocks that family in
 - **Bypassable by a forced run** (the ▶ on a step row), which is how a user
   retries a block they believe is stale.
 
+## Free-tier usage reporting (Usage page)
+
+Subscription families have scrapable quota panels; free-tier quotas (e.g.
+opencode zen) do not, so the Usage page (`/devtools/usage`) reports them from
+the PortOS ledger instead of from the provider:
+
+- **Queries and tokens** per free-tier provider/model come from the existing
+  usage report — the same `GET /api/usage` payload, filtered to rows
+  free-classified by `isFreeProvider`/`isFreeModelId` (Zen provider ids,
+  endpoint, and `-free`/`opencode/*` model ids resolve to $0). OpenCode-backed
+  runs bill their stream's own output-token counts (`mixed` provenance: output
+  measured, input still estimated); unreported counts render as —, never 0.
+- **Observed blocks** (`usage.blockEvents` via `recordLimitBlock`) stand in for
+  the missing quota meter: every applied `usage-limit` bench — from the runner
+  or the agent finalizer — records timestamp + provider/model + reset hint, and
+  the page shows ledger volume since each block as the estimated-remaining
+  signal. Transient 429 retries are not blocks (same rule as above) and are
+  never recorded. A repeat report of one incident coalesces rather than
+  stacking. This ledger is NOT the burn-denial ledger above it: burn denials
+  gate burn dispatch per family, while block events are a display signal for
+  every provider.
+- **No provider calls.** The section is ledger-derived behind the page's normal
+  fetch — never boot-time, never background — and Zen has no quota adapter
+  because it exposes no usage endpoint to adapt.
+
 ## Burn steps
 
 A family's plan is an **ordered list of steps**, and that ordering is the
@@ -611,8 +636,14 @@ in `server/lib/maintenanceSequence.js` and can be run two ways:
   NOT a burn: it needs no Quota Burn master switch, faces no reset-window /
   reserve / dispatch-cap gates, writes nothing into any family plan, and has
   nothing to re-arm — every "Run now" is a fresh run with its own completion
-  ledger. Pick the app, a subscription CLI/TUI provider, a model and an optional
-  effort; every step is pinned to them. Each audit is dispatched when the
+  ledger. Pick the app, any enabled CLI/TUI provider, a model and an optional
+  effort; every step is pinned to them. A provider that belongs to a
+  subscription family carries that family along, so a refusal is credited to the
+  window it actually spent; one that belongs to none — an OpenCode TUI, an
+  Ollama- or LM-Studio-backed wrapper — runs **unfamilied** and credits nothing,
+  because it spends no window. That relaxation is the manual run's alone: the
+  automatic sweep below still resolves strictly by family and will not spend a
+  provider outside its plan's named one. Each audit is dispatched when the
   previous step finishes and each drain repeats until the app's issue backlog
   is empty, so the run walks to the end on its own. A step that cannot go out
   (a task disabled since, a blocked task, a transient claim probe) HOLDS the run

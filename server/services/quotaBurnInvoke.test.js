@@ -285,6 +285,56 @@ describe('refusal paths', () => {
     dispatchedNothing();
   });
 
+  // #7416. The Quality-page runner and the Schedule tab's maintenance-run form
+  // offer every enabled process provider, but a manual run pinned to one outside
+  // every subscription family used to die here with
+  // MAINTENANCE_RUN_PROVIDER_UNAVAILABLE. Only `maintenanceRun.js` constructs
+  // this identity; the automatic sweep hands over a plan's family record.
+  describe('a manual run pinned outside every subscription family', () => {
+    const unfamilied = { id: null, unfamilied: true };
+    const uxStep = (providerId) => step({ taskRef: { kind: 'builtin', taskType: 'ux', appId: 'app-1' }, overrides: { providerId } });
+
+    beforeEach(() => {
+      state.providers.push(
+        { id: 'opencode-tui', command: '/usr/local/bin/opencode', type: 'tui', enabled: true },
+        { id: 'claude-ollama-tui', command: '/usr/local/bin/claude', type: 'tui', enabled: true, ollamaBacked: true },
+      );
+    });
+
+    it.each(['opencode-tui', 'claude-ollama-tui'])('dispatches on the pinned %s and attributes the run, not a window', async (providerId) => {
+      const result = await invokeQuotaBurnStep({ step: uxStep(providerId), family: unfamilied, catalog: null, maintenanceRunId: 'maint-1' });
+      expect(result.dispatched).toBe(true);
+      expect(state.triggered[0].options.burn.overrides.providerId).toBe(providerId);
+      expect(state.triggered[0].options.burn.maintenanceRunId).toBe('maint-1');
+      // No placeholder family: the denial ledger and the plan walk both key on
+      // it, and a synthetic value would send this run's refusals to a real
+      // subscription's bookkeeping.
+      expect(state.triggered[0].options.burn).not.toHaveProperty('family');
+    });
+
+    it('still refuses a provider that is disabled, absent, or not a process provider', async () => {
+      state.providers.push({ id: 'opencode-api', type: 'api', enabled: true }, { id: 'off-tui', command: 'opencode', type: 'tui', enabled: false });
+      for (const providerId of ['opencode-api', 'off-tui', 'not-registered']) {
+        expect(await invokeQuotaBurnStep({ step: uxStep(providerId), family: unfamilied, maintenanceRunId: 'maint-1' }))
+          .toMatchObject({ dispatched: false, reason: expect.stringContaining('is not an enabled CLI/TUI provider') });
+      }
+      // With nothing pinned there is no family left to resolve against either.
+      expect(await invokeQuotaBurnStep({ step: uxStep(null), family: unfamilied, maintenanceRunId: 'maint-1' }))
+        .toMatchObject({ dispatched: false, reason: expect.stringContaining('must name the provider') });
+      expect(state.triggered).toEqual([]);
+    });
+
+    // The guarantee the relaxation must not weaken: an AUTOMATIC burn carries a
+    // real family and can only ever spend that family's window.
+    it('leaves the automatic sweep refusing an out-of-family and a local-runtime pin', async () => {
+      expect(await invokeQuotaBurnStep({ step: uxStep('opencode-tui'), family: grok, candidate }))
+        .toMatchObject({ dispatched: false, reason: expect.stringContaining('does not belong to the grok family') });
+      expect(await invokeQuotaBurnStep({ step: uxStep('claude-ollama-tui'), family: grok, candidate }))
+        .toMatchObject({ dispatched: false, reason: expect.stringContaining('is not an enabled CLI/TUI provider') });
+      expect(state.triggered).toEqual([]);
+    });
+  });
+
   it('still refuses an ineligible or unapproved task under force', async () => {
     // `force` means "past the QUOTA gates" (window / reserve / cap / denial) and
     // nothing more — eligibility and approval are facts about whether the work

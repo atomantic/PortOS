@@ -16,7 +16,7 @@ import GoalCheckIns from './GoalCheckIns';
 import GoalProgressLog from './GoalProgressLog';
 import GoalLinkedActivities from './GoalLinkedActivities';
 import GoalLinkedCalendars from './GoalLinkedCalendars';
-import { formatDateNumeric } from '../../utils/formatters';
+import { formatCount, formatDateNumeric } from '../../utils/formatters';
 
 // Re-exported for backward compatibility — GoalsListView/GoalsTreeView/GoalProgressWidget
 // import these from GoalDetailPanel. Source of truth is ./goalConstants.
@@ -155,11 +155,11 @@ export default function GoalDetailPanel({ goal, allGoals, onClose, onRefresh }) 
                 </div>
                 {goal.feasibility.links.map(l => (
                   <div key={l.activityName} className="text-gray-500">
-                    {l.activityName}: {l.perWeek}/wk ({l.totalOverHorizon.toLocaleString()} total)
+                    {l.activityName}: {l.perWeek}/wk ({formatCount(l.totalOverHorizon)} total)
                   </div>
                 ))}
                 <div className="text-gray-500">
-                  {goal.feasibility.weeksAvailable.toLocaleString()} weeks available
+                  {formatCount(goal.feasibility.weeksAvailable)} weeks available
                 </div>
               </div>
             </div>

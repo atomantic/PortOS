@@ -14,7 +14,7 @@ import * as api from '../../../services/api';
 import toast from '../../ui/Toast';
 import Banner from '../../ui/Banner';
 import BrailleSpinner from '../../BrailleSpinner';
-import { formatBytes, formatDateShort } from '../../../utils/formatters';
+import { formatBytes, formatCount, formatDateShort } from '../../../utils/formatters';
 import FilePickerButton from '../../ui/FilePickerButton';
 
 // Sources we plan to support. Only `available` ones are clickable.
@@ -465,9 +465,9 @@ function StepReview({ preview, isZip, fileMeta, tagsInput, setTagsInput, skipEmp
               </p>
 
               <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
-                <Stat label="Conversations" value={summary.totalConversations.toLocaleString()} />
-                <Stat label="Messages" value={summary.totalMessages.toLocaleString()} />
-                <Stat label="Total chars" value={summary.totalChars.toLocaleString()} />
+                <Stat label="Conversations" value={formatCount(summary.totalConversations)} />
+                <Stat label="Messages" value={formatCount(summary.totalMessages)} />
+                <Stat label="Total chars" value={formatCount(summary.totalChars)} />
                 <Stat label="Custom GPTs" value={summary.gizmoCount.toString()} />
                 <Stat label="Earliest" value={formatDateShort(summary.earliest)} />
                 <Stat label="Latest" value={formatDateShort(summary.latest)} />
@@ -488,7 +488,7 @@ function StepReview({ preview, isZip, fileMeta, tagsInput, setTagsInput, skipEmp
                   ))}
                   {remaining > 0 && (
                     <li className="px-3 py-2 text-xs text-gray-500">
-                      …and {remaining.toLocaleString()} more
+                      …and {formatCount(remaining)} more
                     </li>
                   )}
                 </ul>

@@ -1,89 +1,23 @@
 import { useCallback, useState, useEffect, useRef } from 'react';
 import { useSearchParams } from 'react-router';
-import { RefreshCw, Clock, AlertTriangle, DatabaseZap, Network } from 'lucide-react';
+import { RefreshCw, AlertTriangle, DatabaseZap, Network } from 'lucide-react';
 import * as api from '../services/api';
 import BrailleSpinner from '../components/BrailleSpinner';
 import PageSkeleton from '../components/ui/PageSkeleton';
 import Pill from '../components/ui/Pill';
-import { formatCompactCount, formatCompactCountOrDash as formatNumber, formatUsd, timeAgo, timeUntil } from '../utils/formatters';
+import { formatCompactCountOrDash as formatNumber, formatCount, formatUsd, timeAgo } from '../utils/formatters';
 import { useAsyncAction } from '../hooks/useAsyncAction';
 import { useAutoRefetch } from '../hooks/useAutoRefetch';
 import SubscriptionSavingsCard from '../components/usage/SubscriptionSavingsCard';
 import FleetUsageCard from '../components/usage/FleetUsageCard';
+import FreeTierUsageCard from '../components/usage/FreeTierUsageCard';
+import ProviderQuotaBody from '../components/usage/ProviderQuotaBody';
 import ModelsTabsHeader from '../components/models/ModelsTabsHeader';
+import { USAGE_PERIOD_OPTIONS, DEFAULT_USAGE_PERIOD } from '../lib/usagePeriods';
 
 // How often to re-ask while a provider's quota reading is still being taken. A
 // CLI/TUI scrape is a 10-20s spawn, so this is a handful of polls, not a loop.
 const PENDING_POLL_MS = 4000;
-
-const PERIOD_OPTIONS = [
-  { id: '7d', label: '7 days' },
-  { id: '30d', label: '30 days' },
-  { id: '90d', label: '90 days' },
-  { id: 'all', label: 'All time' }
-];
-
-// Every provider adapter normalizes its reset to ISO before it reaches here, so
-// this localizes and adds the relative "in 3h" that makes a reset time useful at
-// a glance. The raw-text fallback stays for a reading off an older peer that
-// still emits its CLI's own wording.
-const formatResetsAt = (resetsAt) => {
-  if (!resetsAt || !/^\d{4}-\d{2}-\d{2}T/.test(resetsAt)) return resetsAt;
-  const d = new Date(resetsAt);
-  if (Number.isNaN(d.getTime())) return resetsAt;
-  const local = d.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
-  const relative = timeUntil(d, '');
-  return relative ? `${local} (${relative})` : local;
-};
-
-// Color a usage meter by how much is consumed: comfortable → warning → critical.
-function meterColor(percentUsed) {
-  if (percentUsed == null) return 'bg-gray-500';
-  if (percentUsed >= 90) return 'bg-port-error';
-  if (percentUsed >= 70) return 'bg-port-warning';
-  return 'bg-port-success';
-}
-
-function UsageMeter({ limit }) {
-  const used = limit.percentUsed ?? 0;
-  const remaining = limit.percentRemaining;
-  return (
-    <div className="py-1 sm:py-2 border-b border-port-border last:border-0">
-      <div className="flex items-baseline justify-between gap-2 mb-0.5 sm:mb-1">
-        <span className="text-white text-xs sm:text-base truncate" title={limit.label}>{limit.label}</span>
-        <span className="shrink-0 text-gray-400 text-[10px] sm:text-sm">
-          {remaining == null ? '—' : `${remaining}% left`}
-        </span>
-      </div>
-      <div className="h-1.5 sm:h-2 rounded-full bg-port-bg overflow-hidden">
-        <div
-          className={`h-full rounded-full ${meterColor(limit.percentUsed)}`}
-          style={{ width: `${Math.min(100, Math.max(0, used))}%` }}
-        />
-      </div>
-      <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-0.5 sm:gap-1 mt-0.5 sm:mt-1">
-        <span className="text-[9px] sm:text-xs text-gray-500">{used}% used</span>
-        {limit.resetsAt && (
-          <span className="flex min-w-0 text-[9px] sm:text-xs text-gray-500 items-start sm:justify-end gap-1 sm:text-right leading-tight">
-            <Clock size={11} className="shrink-0" /> resets {formatResetsAt(limit.resetsAt)}
-          </span>
-        )}
-      </div>
-    </div>
-  );
-}
-
-// Small labelled stat, used for both the per-period activity counts and the
-// `metrics[]` a backend returns when its quota can't be queried at all.
-function StatTile({ label, value, detail }) {
-  return (
-    <div className="bg-port-bg border border-port-border rounded-lg p-1.5 sm:p-2.5">
-      <div className="text-[10px] sm:text-xs text-gray-400 mb-0.5">{label}</div>
-      <div className="text-xs sm:text-sm text-white">{value}</div>
-      {detail && <div className="text-[9px] sm:text-xs text-gray-500 mt-0.5">{detail}</div>}
-    </div>
-  );
-}
 
 // A subscription is one account across every federated instance, but each
 // instance can only read its own CLI's panel. When peers have contributed a
@@ -133,84 +67,7 @@ function ProviderQuotaCard({ quota, onRefresh, refreshing, disabled }) {
         </div>
       </div>
 
-      {!quota.supported && (
-        <p className="text-xs sm:text-sm text-gray-500">{quota.note || 'Usage reporting is not available for this provider.'}</p>
-      )}
-
-      {/* The reading is still being taken. It comes BEFORE the error and empty
-          branches because a pending card has no limits — rendering it through
-          those says "No rate-limit data reported", which is a verdict about the
-          provider rather than a statement about a scrape still in flight. */}
-      {quota.supported && quota.pending && (
-        <div className="flex items-center gap-1.5 sm:gap-2 text-xs sm:text-sm text-gray-400 py-1">
-          <BrailleSpinner />
-          <span>{quota.note || 'Reading quota…'}</span>
-        </div>
-      )}
-
-      {/* `error` is also how a card that read fine says it has nothing to
-          meter, so the note rides along — otherwise the one state where the
-          reading's age matters most is the one state that hides it. */}
-      {quota.supported && !quota.pending && quota.error && (
-        <div role="status" className="flex items-start gap-1.5 sm:gap-2 text-xs sm:text-sm text-gray-400 py-1">
-          <AlertTriangle size={15} className="text-port-warning mt-0.5 shrink-0" />
-            <span>
-              {quota.error}
-            {quota.note && <span className="block text-xs text-gray-500 mt-1">{quota.note}</span>}
-          </span>
-        </div>
-      )}
-
-      {quota.supported && !quota.pending && !quota.error && (
-        <div className="space-y-1 sm:space-y-2">
-          {quota.limits?.length > 0 && (
-            <div>
-              {quota.limits.map((limit) => (
-                <UsageMeter key={limit.key} limit={limit} />
-              ))}
-            </div>
-          )}
-
-          {!quota.limits?.length && !quota.metrics?.length && (
-            <div className="text-xs sm:text-sm text-gray-500">No rate-limit data reported</div>
-          )}
-
-          {/* Backends with no queryable quota report observed counts instead of
-              a meter — a percentage we cannot measure must not be invented. */}
-          {quota.metrics?.length > 0 && (
-            // One tile per row on a phone: these cells sit inside an already
-            // half-width mobile card, and two columns of it wrapped a tile's
-            // label and detail onto four lines apiece.
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-              {quota.metrics.map((m) => (
-                <StatTile key={m.key} label={m.label} value={m.value} detail={m.detail} />
-              ))}
-            </div>
-          )}
-
-          {quota.activity?.length > 0 && (
-            <div className="hidden sm:grid sm:grid-cols-2 gap-2 pt-1">
-              {quota.activity.map((a) => (
-                <StatTile
-                  key={a.period}
-                  label={a.period}
-                  value={(
-                    <>
-                      {formatCompactCount(a.requests)} requests
-                      <span className="mx-2 text-gray-600">•</span>
-                      {formatCompactCount(a.sessions)} sessions
-                    </>
-                  )}
-                />
-              ))}
-            </div>
-          )}
-
-          {quota.note && (
-            <p className="hidden sm:block text-xs text-gray-500">{quota.note}</p>
-          )}
-        </div>
-      )}
+      <ProviderQuotaBody quota={quota} />
     </div>
   );
 }
@@ -495,7 +352,7 @@ function CostReportTable({ report }) {
 // Cache token counts, with the hidden-on-mobile columns' values folded into a
 // title so the numbers stay reachable when the columns collapse.
 const cacheTitle = (row) =>
-  `Cache read ${(row.cacheReadTokens ?? 0).toLocaleString()} · cache write ${(row.cacheWriteTokens ?? 0).toLocaleString()} tokens`;
+  `Cache read ${formatCount(row.cacheReadTokens, { fallback: '0' })} · cache write ${formatCount(row.cacheWriteTokens, { fallback: '0' })} tokens`;
 
 function ProviderCostRows({ provider }) {
   return (
@@ -549,7 +406,7 @@ function ProviderCostRows({ provider }) {
 function CostReportFilters({ period, from, to, isCustom, onPeriod, onRange }) {
   return (
     <div className="flex flex-wrap items-center gap-2">
-      {PERIOD_OPTIONS.map((opt) => (
+      {USAGE_PERIOD_OPTIONS.map((opt) => (
         <button
           key={opt.id}
           onClick={() => onPeriod(opt.id)}
@@ -673,7 +530,7 @@ function getPeriodTopModels(usage) {
 
 function InternalUsageMetrics() {
   const [searchParams, setSearchParams] = useSearchParams();
-  const period = searchParams.get('period') || '7d';
+  const period = searchParams.get('period') || DEFAULT_USAGE_PERIOD;
   const from = searchParams.get('from') || '';
   const to = searchParams.get('to') || '';
   const isCustom = Boolean(from || to);
@@ -747,7 +604,7 @@ function InternalUsageMetrics() {
       const next = new URLSearchParams(prev);
       next.delete('from');
       next.delete('to');
-      if (id === '7d') next.delete('period'); else next.set('period', id);
+      if (id === DEFAULT_USAGE_PERIOD) next.delete('period'); else next.set('period', id);
       return next;
     }, { replace: true });
   };
@@ -866,10 +723,16 @@ function InternalUsageMetrics() {
           session transcript but no token fields, so its rows are sized from that transcript&rsquo;s text, and a run with no session
           file at all (local models) is approximated from the initial prompt only with no cache traffic counted — those rows
           understate real usage substantially.
-          Rates are as of {report?.pricingAsOf || 'the last update'} and exclude batch and long-context tiers.
+          {' '}OpenCode-backed runs (including zen) contribute the output tokens from the run&rsquo;s own event stream and stay
+          estimated on input. Rates are as of {report?.pricingAsOf || 'the last update'} and exclude batch and long-context tiers.
           {' '}Rows marked ~ use an approximated rate.
         </p>
       </div>
+
+      {/* Free-tier counterpart of the cost report above: ledger-tracked queries
+          and tokens on quotas with no usage API (e.g. opencode zen), plus the
+          observed limit blocks that stand in for a quota meter. */}
+      <FreeTierUsageCard freeTier={usage.freeTier} />
 
       {/* Same window, split by machine — renders only once a peer's usage has
           synced, so a single-machine install sees no change. */}

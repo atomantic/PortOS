@@ -4,6 +4,7 @@ import { z } from 'zod';
 import { getSettings, updateSettingsWith } from '../services/settings.js';
 import { getAiAssignments, updateAiAssignment } from '../services/aiAssignments.js';
 import { saveSubscriptionCosts } from '../services/subscriptionCosts.js';
+import { savePlanTiers } from '../services/subscriptions.js';
 import { saveApiBilledInstanceIds } from '../services/usageFleetBilling.js';
 import {
   setCodexParallelLimit,
@@ -20,10 +21,11 @@ import { isGitHubRepoUrl } from '../lib/repoUrl.js';
 import { asyncHandler } from '../lib/errorHandler.js';
 import { isPlainObject } from '../lib/objects.js';
 import { resolveBackupConfig } from '../lib/backupConfig.js';
+import { storableAutoUpdateConfig } from '../lib/sharedSchemas.js';
 import { DEFAULT_UNTRUSTED_CONTENT_POLICY, untrustedContentSettingsSchema } from '../lib/untrustedContent.js';
 import { agentContextSettingsSchema } from '../lib/agentContextValidation.js';
 import { EFFORT_LEVELS } from '../lib/providerModels.js';
-import { privateCredentialParamsSchema, privateCredentialInputSchema, backupConfigSchema, sharingSettingsPatchSchema, featureProviderConfigSchema, autofixerSettingsSchema, codeReviewSettingsSchema, locationSettingsSchema, hideFirstRunCardSchema, networkSetupPreferenceSchema, settingsEmbeddingsSchema, localLlmSettingsSchema, imessageConfigSchema, signalConfigSchema, beeperSettingsSchema, spotifyConfigSchema, youtubeConfigSchema, apiAccessSettingsSchema, instanceFeatureSettingsSchema, instanceFeatureIdSchema, instanceFeatureUpdateSchema, instanceFeatureGroupSettingsSchema, instanceFeatureGroupIdSchema, instanceFeatureGroupUpdateSchema, loraTrainingConfigSchema, pipelineEditorialChecksSettingsSchema, creativeDirectorSettingsSchema, musicSettingsSchema, federationSettingsSchema, privacySettingsSchema, seriesAutopilotSettingsSchema, layeredIntelligenceSettingsSchema, imageGenGrokSettingsSchema, imageGenAgySettingsSchema, renderDefaultsSettingsSchema, videoGenSettingsSchema, subscriptionCostsMapSchema, usageApiBilledInstanceIdsSchema, namedOrchestrationProfileSchema, orchestrationProfilesSettingsSchema, validateRequest } from '../lib/validation.js';
+import { privateCredentialParamsSchema, privateCredentialInputSchema, backupConfigSchema, autoUpdateSettingsSchema, sharingSettingsPatchSchema, featureProviderConfigSchema, autofixerSettingsSchema, codeReviewSettingsSchema, locationSettingsSchema, hideFirstRunCardSchema, networkSetupPreferenceSchema, settingsEmbeddingsSchema, localLlmSettingsSchema, imessageConfigSchema, signalConfigSchema, beeperSettingsSchema, spotifyConfigSchema, youtubeConfigSchema, apiAccessSettingsSchema, instanceFeatureSettingsSchema, instanceFeatureIdSchema, instanceFeatureUpdateSchema, instanceFeatureGroupSettingsSchema, instanceFeatureGroupIdSchema, instanceFeatureGroupUpdateSchema, loraTrainingConfigSchema, pipelineEditorialChecksSettingsSchema, creativeDirectorSettingsSchema, musicSettingsSchema, federationSettingsSchema, privacySettingsSchema, seriesAutopilotSettingsSchema, layeredIntelligenceSettingsSchema, imageGenGrokSettingsSchema, imageGenAgySettingsSchema, renderDefaultsSettingsSchema, videoGenSettingsSchema, subscriptionCostsMapSchema, subscriptionPlanTiersMapSchema, usageApiBilledInstanceIdsSchema, namedOrchestrationProfileSchema, orchestrationProfilesSettingsSchema, validateRequest } from '../lib/validation.js';
 
 const router = Router();
 
@@ -176,13 +178,22 @@ const projectEffectiveBackup = (safe) => {
   };
 };
 
+// Same reasoning for the auto-update slice: an install that only ticked the
+// checkbox stores `{ enabled: true }`, and the Update tab would otherwise have to
+// re-derive what an omitted channel/interval means — the mistake #6632 made for
+// the backup schedule. The resolver is the scheduler's own.
+const projectEffectiveAutoUpdate = (safe) => ({
+  ...safe,
+  autoUpdate: { ...safe.autoUpdate, ...storableAutoUpdateConfig(safe.autoUpdate) },
+});
+
 // Single sanitizer every settings response (GET load + PUT save) runs through,
 // so a leak can't reappear on one path after being closed on the other: strip
 // the top-level `secrets` hierarchy, redact external tokens (#1821), decorate
 // server-authoritative bounds, then resolve the sparse backup schedule.
 const sanitizeSettingsForResponse = (settings) => {
   const { secrets, ...safe } = settings;
-  return projectEffectiveBackup(decorateBounds(redactExternalTokens(safe)));
+  return projectEffectiveAutoUpdate(projectEffectiveBackup(decorateBounds(redactExternalTokens(safe))));
 };
 
 // GET /api/settings
@@ -368,6 +379,9 @@ router.put('/', asyncHandler(async (req, res) => {
   if (req.body?.backup !== undefined) {
     validateRequest(backupConfigSchema.partial(), req.body.backup);
   }
+  if (req.body?.autoUpdate !== undefined) {
+    validateRequest(autoUpdateSettingsSchema, req.body.autoUpdate);
+  }
   if (req.body?.sharingDisplayName !== undefined || req.body?.sharingBio !== undefined) {
     validateRequest(sharingSettingsPatchSchema.partial(), {
       sharingDisplayName: req.body.sharingDisplayName,
@@ -538,6 +552,12 @@ router.put('/', asyncHandler(async (req, res) => {
   if (req.body?.subscriptionCosts !== undefined) {
     validateRequest(subscriptionCostsMapSchema, req.body.subscriptionCosts);
   }
+  // Plan tiers ride the same rails as the prices beside them, for the same
+  // reason: an unvalidated key here would persist, read back as "no tier", and
+  // be dropped by the next save from the Subscriptions page.
+  if (req.body?.subscriptionPlanTiers !== undefined) {
+    validateRequest(subscriptionPlanTiersMapSchema, req.body.subscriptionPlanTiers);
+  }
   // Same schema PUT /api/usage/fleet-billing's store uses, so a restore dump
   // can't write an unbounded or non-string list through the generic endpoint.
   if (req.body?.usageApiBilledInstanceIds !== undefined) {
@@ -555,16 +575,17 @@ router.put('/', asyncHandler(async (req, res) => {
   // would bypass the current-password proof the /api/auth/password routes
   // require. Secrets are write-only through their dedicated routes
   // (/api/auth/password, /api/github/secrets, etc.).
-  // subscriptionCosts and usageApiBilledInstanceIds are excluded from the
-  // generic shallow spread below and routed through their dedicated savers —
-  // the same merge PUT /api/usage/subscriptions and PUT /api/usage/fleet-billing
-  // use — so a restore dump can't persist an unvalidated slice, and a shallow
-  // `{ ...current, ...settingsPatch }` can't replace a map by dropping keys
-  // the incoming patch didn't mention.
+  // subscriptionCosts, subscriptionPlanTiers and usageApiBilledInstanceIds are
+  // excluded from the generic shallow spread below and routed through their
+  // dedicated savers — the same merge PUT /api/usage/subscriptions and PUT
+  // /api/usage/fleet-billing use — so a restore dump cannot persist an
+  // unvalidated slice, and a shallow `{ ...current, ...settingsPatch }` cannot
+  // replace a map by dropping keys the incoming patch did not mention.
   const {
     secrets: _ignoredSecrets,
     catalogUserTypes: _ignoredTypes,
     subscriptionCosts: subscriptionCostsPatch,
+    subscriptionPlanTiers: subscriptionPlanTiersPatch,
     usageApiBilledInstanceIds: apiBilledPatch,
     ...settingsPatch
   } = req.body || {};
@@ -635,6 +656,10 @@ router.put('/', asyncHandler(async (req, res) => {
   if (subscriptionCostsPatch !== undefined) {
     const costs = await saveSubscriptionCosts(subscriptionCostsPatch, { actor: 'user' });
     merged = { ...merged, subscriptionCosts: costs };
+  }
+  if (subscriptionPlanTiersPatch !== undefined) {
+    const tiers = await savePlanTiers(subscriptionPlanTiersPatch, { actor: 'user' });
+    merged = { ...merged, subscriptionPlanTiers: tiers };
   }
   if (apiBilledPatch !== undefined) {
     const ids = await saveApiBilledInstanceIds(apiBilledPatch, { actor: 'user' });

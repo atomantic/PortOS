@@ -3,14 +3,12 @@ import { afterEach } from 'vitest';
 import { cleanup, configure } from '@testing-library/react';
 import { installTestStorage } from './storagePolyfill.js';
 import { installFormValidityFix } from './formValidityPolyfill.js';
+import { ASYNC_UTIL_TIMEOUT_MS } from './timeouts.js';
 
-// testing-library defaults asyncUtilTimeout to 1000ms. Several views debounce at
-// 500ms and a couple wait on a debounce plus a retry, so under parallel-worker CPU
-// contention that budget produces phantom failures unrelated to the component
-// under test (#3474; settledInput.js hit this first for `user.type()`/`user.clear()`
-// + re-render settling). Raising it suite-wide beats patching one call site per
-// flake — the cost is that a genuinely hung assertion takes 3s instead of 1s.
-configure({ asyncUtilTimeout: 3000 });
+// The suite-wide Testing Library async budget. The value, and why the per-test
+// and hook budgets in vitest.config.js are derived from it rather than written
+// alongside it, live in timeouts.js — read that before changing this.
+configure({ asyncUtilTimeout: ASYNC_UTIL_TIMEOUT_MS });
 
 // Guarantee a working localStorage/sessionStorage before any test runs, regardless
 // of how the environment exposes Storage. See storagePolyfill.js / #1438.

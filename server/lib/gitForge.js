@@ -28,8 +28,12 @@ export function parseGitRemote(url) {
   const ssh = url.match(/^git@([^:]+):([^/]+)\/.+?(?:\.git)?$/);
   if (ssh) return { host: resolveSshHostAlias(ssh[1]), owner: ssh[2] };
   // HTTPS: https://HOST/OWNER/REPO[.git]
+  // No alias resolution here: ssh config applies to SSH connections only, so
+  // an `https://` remote colliding with an ssh alias must keep its literal
+  // host — resolving it would point downstream `gh --repo` + token overlay at
+  // the wrong API host.
   const https = url.match(/^https?:\/\/([^/]+)\/([^/]+)\/.+?(?:\.git)?$/);
-  if (https) return { host: resolveSshHostAlias(https[1]), owner: https[2] };
+  if (https) return { host: https[1], owner: https[2] };
   return null;
 }
 

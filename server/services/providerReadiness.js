@@ -37,28 +37,13 @@
  */
 
 import { localRuntimeForProvider } from '../lib/localProviderRuntime.js';
-import { isConfiguredDefaultModel } from '../lib/providerModels.js';
-import { probeOpenAiModels } from '../lib/openAiModelsProbe.js';
+import { expandPageToken, getNavPageForPath } from '../lib/navManifest.js';
+import { bareLocalModelId } from '../lib/providerModels.js';
+import { probeOpenAiModelsCached, resetOpenAiModelsProbeCache } from '../lib/openAiModelsProbeCache.js';
+import { aliasServedContextWindows } from '../lib/providerContextWindows.js';
 import { findCommandOnPath } from '../lib/processEnv.js';
 import { actionCovers, describeRuntimeSetup, readRuntimeWeights, weightsBlockStart } from './localRuntimeSetup.js';
 import { isAppInstalled as isLmStudioAppInstalled } from './lmStudioManager.js';
-
-/**
- * Loopback daemons answer (or refuse the connection) in single-digit
- * milliseconds, so a short bound keeps a page poll snappy. A host that needs
- * longer than this to answer a model listing is not going to serve an agent run
- * either, and reporting it as unreachable points at the right fix.
- */
-const PROBE_TIMEOUT_MS = 2_000;
-
-/**
- * Sized just under the Providers page's 20s poll so consecutive polls each get
- * a fresh answer (a daemon the user just started must show up on the next tick,
- * not two ticks later) while a reload landing on top of a poll still reuses it.
- * Within ONE request the promise cache below is what collapses providers that
- * share an endpoint.
- */
-const PROBE_TTL_MS = 15_000;
 
 /**
  * Same 60s TTL and reasoning as `providerRuntimeInstaller.js`'s status cache:
@@ -76,52 +61,11 @@ const BINARY_TTL_MS = 60_000;
  */
 const WEIGHTS_TTL_MS = 60_000;
 
-// endpoint + key → { at, promise } — the PROMISE, not the settled value, so N
-// providers sharing one endpoint in the same batch share one socket instead of
-// all missing a not-yet-written cache entry at once. The key is part of the
-// cache key because two providers can point at one authenticated endpoint with
-// different credentials, and one of them getting the other's 401 would be a
-// false "not running".
-const probeCache = new Map();
 // command → { at, path }
 const binaryCache = new Map();
 // runtime kind → { at, promise } — the local model cache behind a daemon that
 // is NOT running, which is the only time PortOS cannot ask `/v1/models`.
 const weightsCache = new Map();
-
-/**
- * Ask an OpenAI-compatible endpoint what it serves. `llamaServerManager` runs the
- * same probe against the same daemons, so the request shape lives in one lib.
- * @returns {Promise<{reachable:boolean, models:string[]|null, error:string|null}>}
- *   `models: null` means reachable but the listing could not be read — distinct
- *   from `[]`, a server that is up with nothing loaded.
- */
-const probeEndpoint = (endpoint, apiKey = '') =>
-  probeOpenAiModels(endpoint, { timeoutMs: PROBE_TIMEOUT_MS, apiKey });
-
-/** TTL-cached endpoint probe, shared across requests — see PROBE_TTL_MS. */
-function probeEndpointCached(endpoint, apiKey = '') {
-  const now = Date.now();
-  const cacheKey = `${endpoint}
-${apiKey}`;
-  const cached = probeCache.get(cacheKey);
-  if (cached && now - cached.at < PROBE_TTL_MS) return cached.promise;
-  // Sweep while we are here: entries are keyed by endpoint, and an edited or
-  // deleted provider would otherwise leave its old endpoint behind forever.
-  for (const [key, entry] of probeCache) {
-    if (now - entry.at >= PROBE_TTL_MS) probeCache.delete(key);
-  }
-  // Written BEFORE the await so concurrent callers join this probe. A rejected
-  // probe would poison the entry for its TTL, so drop it on failure —
-  // `probeEndpoint` resolves for every expected failure, making this the
-  // unexpected-throw path only.
-  const promise = probeEndpoint(endpoint, apiKey).catch((err) => {
-    probeCache.delete(cacheKey);
-    throw err;
-  });
-  probeCache.set(cacheKey, { at: now, promise });
-  return promise;
-}
 
 /**
  * What a runtime's own model cache holds, for the runtimes that have one PortOS
@@ -167,24 +111,11 @@ function findCommandCached(command) {
 }
 
 /**
- * One model id as the daemon's own listing spells it: trimmed, with any OpenCode
- * `<namespace>/` prefix stripped, since that prefix addresses the OpenCode
- * provider entry and never reaches the daemon's model list. `null` for anything
- * that does not name a model (blank, non-string, or a "use the CLI's own
- * default" sentinel).
- */
-function bareModelId(model, kind) {
-  if (typeof model !== 'string' || model.trim() === '' || isConfiguredDefaultModel(model)) return null;
-  const trimmed = model.trim();
-  return trimmed.startsWith(`${kind}/`) ? trimmed.slice(kind.length + 1) : trimmed;
-}
-
-/**
  * The model id the endpoint would be asked for — the provider's default.
  * Returns null when the provider selects no specific model.
  */
 export function servedModelId(provider, kind) {
-  return bareModelId(provider?.defaultModel, kind);
+  return bareLocalModelId(provider?.defaultModel, kind);
 }
 
 /**
@@ -201,7 +132,7 @@ export function servedModelId(provider, kind) {
 function offeredModelIds(provider, kind) {
   const pinned = servedModelId(provider, kind);
   const ids = (Array.isArray(provider?.models) ? provider.models : [])
-    .map((model) => bareModelId(model, kind))
+    .map((model) => bareLocalModelId(model, kind))
     .filter((id) => id !== null && id !== pinned);
   return [...new Set(ids)];
 }
@@ -254,15 +185,31 @@ function weightsDetail(runtime, weights) {
   return null;
 }
 
+/**
+ * The page that manages this runtime, named the way the sidebar names it.
+ *
+ * Every hint below used to say "Models → LLMs" outright, which was true while
+ * that one page owned every local server. #7414 moved server lifecycle to
+ * Models → Runtimes and left the weights catalog on LLMs, so a fixed breadcrumb
+ * now sends half these runtimes to the wrong sibling. Resolving it from the
+ * route each runtime ALREADY links to keeps the prose and the link agreeing,
+ * per runtime, without this module knowing which pages exist.
+ *
+ * `null` for a runtime with no page (vLLM, SGLang) — callers drop the clause
+ * rather than inventing a destination.
+ */
+const managePage = (runtime) => getNavPageForPath(runtime.manageUrl)?.breadcrumb ?? null;
+
 /** The `runtime` check — is the daemon's software here at all? */
 function runtimeCheck(runtime, { onPath, appInstalled, installed, reachable, setup }) {
   const detail = onPath ? `\`${runtime.command}\` is on PortOS's PATH.`
     : appInstalled ? `${runtime.label} is installed as an app.`
       : reachable ? `Something is already serving ${runtime.endpoint}.`
         : `\`${runtime.command}\` was not found on PortOS's PATH.`;
+  const page = managePage(runtime);
   const fixHint = installed ? null
     : setupHint(setup, 'installs')
-      || (runtime.manageUrl ? `Install ${runtime.label} from Models → LLMs.`
+      || (page ? `Install ${runtime.label} from ${page}.`
         : `Use the setup button below to install ${runtime.label}.`);
   return { id: 'runtime', label: `${runtime.label} installed`, ok: installed, detail, fixHint };
 }
@@ -278,10 +225,12 @@ function serverCheck(runtime, { installed, result, setup, weights = 'unknown' })
       fixHint: null,
     };
   }
-  const start = `Start ${runtime.label}${runtime.manageUrl ? ' from Models → LLMs' : ''}.`;
+  const page = managePage(runtime);
+  const start = `Start ${runtime.label}${page ? ` from ${page}` : ''}.`;
+  const modelsHint = expandPageToken(runtime.modelsHint, runtime);
   const fallback = installed
-    ? `${start} ${runtime.modelsHint}`
-    : `Install ${runtime.label} first, then start it. ${runtime.modelsHint}`;
+    ? `${start} ${modelsHint}`
+    : `Install ${runtime.label} first, then start it. ${modelsHint}`;
   // Name the blocker in the SAME line that says nothing answered. Otherwise the
   // checklist reads "installed ✓ / not responding — just press Start", and
   // Start is the thing that cannot work until the weights land.
@@ -344,13 +293,14 @@ function modelCheck(runtime, wanted, served, probeError = null, { weights = 'unk
   // mismatch fixable from EITHER end, so the hint names both rather than
   // implying the provider is the only thing that may move.
   const renameTo = served.length > 0 && runtime.aliasFlag ? wanted : null;
+  const page = managePage(runtime);
   const fixHint = served.length === 0
-    ? (runtime.manageUrl
-      ? 'No model is loaded. Start a preset from Models → LLMs.'
+    ? (page
+      ? `No model is loaded. Start a preset from ${page}.`
       : 'No model is loaded. Use the setup controls on this card to load one.')
     : renameTo
       ? `Same server, two names for it — nothing needs downloading. Use the button below to point this provider at ${listed}, or “Serve as \`${wanted}\`” to relaunch ${runtime.label} on the weights it already has under that id.`
-      : `This provider will send \`${wanted}\`, but the running server only accepts ${listed}. Use the button below to match them${runtime.manageUrl ? ', or change the loaded weights on the Models → LLMs page' : ''}.`;
+      : `This provider will send \`${wanted}\`, but the running server only accepts ${listed}. Use the button below to match them${page ? ` (or change the loaded weights on ${page})` : ''}.`;
   return {
     id: 'model',
     label,
@@ -400,6 +350,7 @@ function catalogCheck(runtime, offered, served, probeError = null, { weights = '
   // either — otherwise the provider still runs, and only a stage that pinned one
   // of these ids dies.
   const nothingDispatchable = unserved.length === offered.length && !(pinned && served.includes(pinned));
+  const page = managePage(runtime);
   const detail = nothingDispatchable
     ? `${runtime.label} serves none of them (${listed}${more}), so every run dispatched onto this provider fails before producing output.`
     : `${runtime.label} does not serve ${listed}${more}, so a task or stage pinned to one of those fails at spawn.`;
@@ -408,7 +359,7 @@ function catalogCheck(runtime, offered, served, probeError = null, { weights = '
     label,
     ok: false,
     detail,
-    fixHint: `Refresh this provider's models so it only offers ids the server serves${runtime.manageUrl ? ', or pull the missing ones from Models → LLMs.' : `. ${runtime.modelsHint}`}`,
+    fixHint: `Refresh this provider's models so it only offers ids the server serves${page ? `, or pull the missing ones from ${page}.` : `. ${expandPageToken(runtime.modelsHint, runtime)}`}`,
     unservedModels: unserved,
   };
 }
@@ -430,7 +381,7 @@ export async function getProviderReadiness(provider, deps = {}) {
   if (!runtime) return null;
 
   const findCommand = deps.findCommand || findCommandCached;
-  const probe = deps.probe || probeEndpointCached;
+  const probe = deps.probe || probeOpenAiModelsCached;
 
   // The wrapper's own key: a vLLM container is started behind `VLLM_API_KEY`
   // and 401s an unauthenticated `/v1/models`, which would leave the model check
@@ -468,7 +419,7 @@ export async function getProviderReadiness(provider, deps = {}) {
     serverCheck(runtime, { installed, result, setup, weights }),
   ];
   const wanted = servedModelId(provider, runtime.kind);
-  // `probeEndpoint` returns `models: null` on every unreachable path, so this
+  // The probe returns `models: null` on every unreachable path, so this
   // needs no second reachability test.
   if (wanted) checks.push(modelCheck(runtime, wanted, result.models, result.error, { weights, setup }));
   const offered = offeredModelIds(provider, runtime.kind);
@@ -486,8 +437,13 @@ export async function getProviderReadiness(provider, deps = {}) {
     // available, but an installed model-selecting runtime is not missing setup
     // merely because no model was chosen to occupy resources right now.
     standby,
-    standbyDetail: standby ? runtime.standbyDetail : null,
+    standbyDetail: standby ? expandPageToken(runtime.standbyDetail, runtime) : null,
     checks,
+    // What this daemon is SERVING right now. It rides the readiness payload
+    // BECAUSE it is observed runtime state and must never reach `providers.json`
+    // (#7441) — this is the channel the provider card budgets its meter from, so
+    // the card shows the window the dispatch gate would actually enforce.
+    contextWindows: aliasServedContextWindows(provider, runtime, result.contextWindows),
     // What a one-click "set this up for me" button can do about the unmet
     // checks, or `null` when nothing here is auto-fixable (see
     // `localRuntimeSetup.js`). Carried on the readiness payload so the card
@@ -515,7 +471,7 @@ export async function getProviderReadinessMap(providers, deps = {}) {
   // the whole batch — including when the caller injects its own probe, which
   // would otherwise bypass the module-level caches that normally collapse them.
   const findCommand = memoize(deps.findCommand || findCommandCached);
-  const probe = memoize(deps.probe || probeEndpointCached);
+  const probe = memoize(deps.probe || probeOpenAiModelsCached);
   // Same reasoning as the two above: one `mtplx models` subprocess per batch,
   // not one per provider pointed at the same runtime.
   const readWeights = memoize(deps.readWeights || readWeightsStateCached);
@@ -551,7 +507,11 @@ function memoize(fn) {
  * which change exactly what these caches remember.
  */
 export function resetProviderReadinessCache() {
-  probeCache.clear();
+  // The endpoint listing cache lives in `lib/openAiModelsProbeCache.js` — the
+  // dispatch path's context gate shares it, and a daemon relaunched at a
+  // different context size must invalidate BOTH readers or a run is gated on
+  // the old window.
+  resetOpenAiModelsProbeCache();
   binaryCache.clear();
   weightsCache.clear();
 }

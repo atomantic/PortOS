@@ -3,7 +3,7 @@
  *
  * `providerReadiness.js` answers WHAT is missing (the daemon isn't installed,
  * isn't running, isn't serving the right model). Until this module existed, the
- * answer to "so fix it" was a link — to the Models → LLMs page for the two
+ * answer to "so fix it" was a link — to the Models → Runtimes page for the two
  * backends PortOS manages, and to the vendor's README for MTPLX, which is a
  * dead end inside PortOS: the user leaves the app, reads a setup doc, runs two
  * commands in a terminal, comes back and reloads. This module makes the
@@ -22,7 +22,7 @@
  *   - **Weights are never downloaded behind a start.** llama.cpp cannot be
  *     started without a GGUF path the user chooses, and no runtime's *model*
  *     check is auto-fixed by a start — a multi-gigabyte download is a decision,
- *     and the Models → LLMs page already owns that flow with a picker. `start`
+ *     and the Models → Runtimes page already owns that flow with a picker. `start`
  *     runs MTPLX on a checkpoint ALREADY in its cache (`lib/mtplxModels.js`).
  *     A cache that is empty (or holds only a half-finished pull) is a SEPARATE
  *     action the user clicks by name — `pull-start`, "Download the default
@@ -36,7 +36,7 @@
  *     helper stays an explicit operator action outside PortOS, exactly as
  *     `docs/features/mtplx.md` promised before this button existed. Both of
  *     those steps are delegated to `mtplxServerManager.js`, so a server started
- *     here is the same PM2 process (`portos-mtplx`) the Models → LLMs page can
+ *     here is the same PM2 process (`portos-mtplx`) the Models → Runtimes page can
  *     stop, log, and persist across a reboot — the two surfaces cannot drift
  *     onto different install commands or a daemon only one of them can see.
  *   - **Neither CUDA container is ever provisioned by a Start.** Both start rows
@@ -55,6 +55,7 @@
  */
 
 import { LOCAL_RUNTIMES, localEndpointPort } from '../lib/localProviderRuntime.js';
+import { expandPageToken } from '../lib/navManifest.js';
 import { describeMtplxCache, listMtplxCachedModels } from '../lib/mtplxModels.js';
 import { describeMtplxRuntime } from '../lib/mtplxRuntime.js';
 import { listSlotstreamCachedModels } from '../lib/slotstreamModels.js';
@@ -112,11 +113,11 @@ const CONFIRM_TIMEOUT_MS = 5_000;
  * it names the button that does, plus the in-app card that searches for and
  * downloads a checkpoint other than MTPLX's own default.
  */
-const MTPLX_NO_MODEL_ERROR = 'no model weights are cached, so its server exits before it binds a port. Close this window — the checklist now offers “Download the default model & start MTPLX”, which fetches MTPLX\'s own verified checkpoint (a multi-gigabyte download) and then starts the server. To use a different MTP checkpoint instead, search for one on the MTPLX card in Models → LLMs, download it there, then click Start MTPLX again.';
+const MTPLX_NO_MODEL_ERROR = expandPageToken('no model weights are cached, so its server exits before it binds a port. Close this window — the checklist now offers “Download the default model & start MTPLX”, which fetches MTPLX\'s own verified checkpoint (a multi-gigabyte download) and then starts the server. To use a different MTP checkpoint instead, search for one on the MTPLX card in {page}, download it there, then click Start MTPLX again.', LOCAL_RUNTIMES.mtplx);
 
 /** The same dead end, reached from a cache holding only interrupted pulls. */
 const mtplxPartialCacheError = (count) =>
-  `its cache holds ${count} model${count === 1 ? '' : 's'}, but none passed its own file check — an interrupted download leaves a partial pack behind. Use “Download the default model & start MTPLX” on the checklist to re-fetch it, or pick another checkpoint on the MTPLX card in Models → LLMs.`;
+  expandPageToken(`its cache holds ${count} model${count === 1 ? '' : 's'}, but none passed its own file check — an interrupted download leaves a partial pack behind. Use “Download the default model & start MTPLX” on the checklist to re-fetch it, or pick another checkpoint on the MTPLX card in {page}.`, LOCAL_RUNTIMES.mtplx);
 
 /**
  * MTPLX's cache state, read WITHOUT invoking `mtplx`'s Homebrew wrapper before
@@ -235,7 +236,7 @@ const rowProvisionAction = (row) => row?.provision?.action || null;
 async function pullMtplxDefaultCheckpoint({ emit, isCancelled }) {
   const binary = findCommandOnPath('mtplx');
   if (!binary) return { success: false, error: '`mtplx` was not found on PortOS\'s PATH. Restart PortOS so it picks up the new bin directory, then try again.' };
-  // Same disk-space guard the Models → LLMs MTPLX card runs before its own
+  // Same disk-space guard the Models → Runtimes MTPLX card runs before its own
   // pull — this readiness-checklist button reaches the same `mtplx pull`
   // with no repo id, so it shares previewMtplxPull's cache path and its
   // (unknown-size, so effectively best-effort) preflight. A refusal throws;
@@ -270,7 +271,7 @@ const SETUP_ROWS = Object.freeze({
     platforms: ['darwin'],
     unsupportedReason: MTPLX_UNSUPPORTED_REASON,
     async install({ emit }) {
-      // Same install `mtplxServerManager` runs from the Models → LLMs card:
+      // Same install `mtplxServerManager` runs from the Models → Runtimes card:
       // upstream's Homebrew tap, with pip as the documented fallback for a host
       // without Homebrew. Neither runs the optional privileged fan-control helper.
       const result = await installMtplx({ onProgress: (p) => { if (p?.message) emit(p.message); } })
@@ -299,7 +300,7 @@ const SETUP_ROWS = Object.freeze({
       // cache first and name what is actually there. Read HERE rather than
       // leaving it to the manager because the refusals differ by surface: this
       // checklist can offer the `pull-start` download button, and the messages
-      // above say so; the Models → LLMs launcher has no such button and names
+      // above say so; the Models → Runtimes launcher has no such button and names
       // `mtplx pull` instead.
       const cache = await readMtplxCacheState();
       if (cache.state === 'unknown') {
@@ -473,12 +474,12 @@ const SETUP_ROWS = Object.freeze({
       const result = await installLlamaServer({ onProgress: (p) => { if (p?.message) emit(p.message); } })
         .catch((err) => ({ success: false, error: err.message }));
       return result.success
-        ? { success: true, note: 'Choose a GGUF model on Models → LLMs to start llama-server — PortOS does not pick weights for you.' }
+        ? { success: true, note: expandPageToken('Choose a GGUF model on {page} to start llama-server — PortOS does not pick weights for you.', LOCAL_RUNTIMES.llama) }
         : result;
     },
     // llama-server takes a required model path, and the weights are a separate
     // multi-gigabyte download. Starting it unattended would mean guessing which
-    // checkpoint the user meant, so the Models → LLMs page keeps that step.
+    // checkpoint the user meant, so the Models → Runtimes page keeps that step.
     start: null,
   }),
 });
@@ -653,7 +654,7 @@ export async function runLocalRuntimeSetup(kind, { endpoint, emit = () => {}, is
   }
 
   if (!row.start) {
-    return { success: true, message: `${runtime.label} is installed. Pick a model on Models → LLMs to start it.` };
+    return { success: true, message: expandPageToken(`${runtime.label} is installed. Pick a model on {page} to start it.`, runtime) };
   }
   if (isCancelled()) return { success: false, error: 'Cancelled after the install — nothing was started.' };
 

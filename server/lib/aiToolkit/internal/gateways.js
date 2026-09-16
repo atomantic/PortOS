@@ -19,7 +19,7 @@
  * gateway id owns it (`withGatewayApiKey` in `providers.js`).
  */
 
-/** @type {readonly {id:string,label:string,baseURL:string,apiKeyEnv:string,legacyMarker?:string,legacyApiKeyField?:string}[]} */
+/** @type {readonly {id:string,label:string,baseURL:string,apiKeyEnv:string,keyUrl?:string,legacyMarker?:string,legacyApiKeyField?:string}[]} */
 export const PROVIDER_GATEWAYS = Object.freeze([
   Object.freeze({
     id: 'orcarouter',
@@ -40,6 +40,7 @@ export const PROVIDER_GATEWAYS = Object.freeze([
     label: 'NVIDIA NIM',
     baseURL: 'https://integrate.api.nvidia.com/v1',
     apiKeyEnv: 'NVIDIA_API_KEY',
+    keyUrl: 'https://build.nvidia.com',
   }),
 ]);
 

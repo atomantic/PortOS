@@ -74,6 +74,41 @@ describe('resolveProviderBench', () => {
     });
   });
 
+  // A timeout states its own cost. Benching for the 60s floor after a run burned
+  // 600s made the provider eligible again nine minutes before the stalled work
+  // could have finished, so the next caller repeated the whole stall — ten
+  // consecutive 600s timeouts on one local backend in a little over two hours.
+  it('benches a timeout for at least the budget the run burned', () => {
+    expect(resolveProviderBench({ category: ERROR_CATEGORIES.TIMEOUT, message: 'CLI run timed out after 600000ms' })).toMatchObject({
+      marker: 'unavailable',
+      waitTimeMs: 600_000,
+    });
+  });
+
+  it('keeps the category floor when the timeout budget is shorter than it', () => {
+    expect(resolveProviderBench({ category: ERROR_CATEGORIES.TIMEOUT, message: 'API execution timed out after 30000ms' })).toMatchObject({
+      waitTimeMs: COOLDOWN_MS_BY_CATEGORY[ERROR_CATEGORIES.TIMEOUT],
+    });
+  });
+
+  // The TUI runner reports retry exhaustion with no number in the message.
+  it('keeps the category floor when the timeout message names no budget', () => {
+    expect(resolveProviderBench({ category: ERROR_CATEGORIES.TIMEOUT, message: 'Provider request timed out after exhausting TUI retries' })).toMatchObject({
+      waitTimeMs: COOLDOWN_MS_BY_CATEGORY[ERROR_CATEGORIES.TIMEOUT],
+    });
+    expect(resolveProviderBench({ category: ERROR_CATEGORIES.TIMEOUT })).toMatchObject({
+      waitTimeMs: COOLDOWN_MS_BY_CATEGORY[ERROR_CATEGORIES.TIMEOUT],
+    });
+  });
+
+  // provider.timeout is user-configurable, so the parsed budget is not trusted
+  // to take a provider offline for longer than any bench may ever last.
+  it('clamps an absurd timeout budget to the maximum bench', () => {
+    expect(resolveProviderBench({ category: ERROR_CATEGORIES.TIMEOUT, message: 'timed out after 999999999999ms' })).toMatchObject({
+      waitTimeMs: MAX_BENCH_MS,
+    });
+  });
+
   it('treats a missing category as unknown rather than skipping the bench', () => {
     expect(resolveProviderBench(null)).toMatchObject({
       marker: 'unavailable',

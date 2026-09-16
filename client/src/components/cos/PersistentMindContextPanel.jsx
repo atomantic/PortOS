@@ -3,6 +3,7 @@ import { Brain, Database, Eye, Plus, RefreshCw, Save } from 'lucide-react';
 import * as api from '../../services/api';
 import BrailleSpinner from '../BrailleSpinner';
 import Banner from '../ui/Banner';
+import { formatCount } from '../../utils/formatters';
 
 const EMPTY_MEMORY = {
   content: '', summary: '', type: 'observation', category: 'other', tags: [], importance: 0.5, protection: 'standard',
@@ -193,7 +194,7 @@ export default function PersistentMindContextPanel({ view = 'all', refreshKey = 
       {view !== 'memories' && <section className="rounded border border-port-border bg-port-card p-4" aria-labelledby="mind-preview-heading">
         <h3 id="mind-preview-heading" className="flex items-center gap-2 text-sm font-semibold text-port-text"><Eye size={16} aria-hidden="true" /> Effective context preview</h3>
         <p className="mt-1 text-xs text-port-text-muted">
-          This is the actual bounded text projection used on the next wake: {data?.preview?.chars || 0} characters, about {data?.preview?.approximateTokens || 0} tokens, summary cache {data?.preview?.summaryState || 'unknown'}.
+          This is the actual bounded text projection used on the next wake: {formatCount(data?.preview?.chars)} characters, about {formatCount(data?.preview?.approximateTokens)} tokens, summary cache {data?.preview?.summaryState || 'unknown'}.
         </p>
         <pre className="mt-3 max-h-[34rem] overflow-auto whitespace-pre-wrap break-words rounded border border-port-border bg-port-bg p-3 text-xs text-port-text">{data?.preview?.text || 'No context available.'}</pre>
         <details className="mt-3 rounded border border-port-border p-3">

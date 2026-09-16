@@ -64,6 +64,12 @@ export default function SystemResourcesPage() {
   const validTab = RESOURCE_TABS.some((item) => item.id === tab);
   if (!validTab) return <Navigate to="/system-resources/overview" replace />;
 
+  // RouteTabsHeader passes no `controlsIdPrefix` (route tabs navigate, they
+  // don't reveal a sibling panel already in the DOM), so the panel names
+  // itself with its own heading rather than an `aria-labelledby` borrowed
+  // from a tab id that doesn't exist (#7420).
+  const activeTabLabel = RESOURCE_TABS.find((item) => item.id === tab)?.label;
+
   return (
     <div className="mx-auto max-w-7xl space-y-4">
       <header className="overflow-hidden rounded-2xl border border-port-border bg-gradient-to-r from-port-card via-port-card to-port-accent/10 p-4 sm:p-5">
@@ -81,17 +87,20 @@ export default function SystemResourcesPage() {
         </div>
       </header>
 
-      {tab === 'overview' && <SystemHealthOverview />}
-      {tab === 'storage' && (
-        <StoragePanel
-          report={report}
-          loading={reportLoading}
-          onRunReport={runReport}
-          onReport={setReport}
-          cleanup={cleanup}
-        />
-      )}
-      {tab === 'queues' && <QueuesPanel />}
+      <div role="tabpanel" aria-labelledby="system-resources-panel-heading">
+        <h2 id="system-resources-panel-heading" className="sr-only">{activeTabLabel}</h2>
+        {tab === 'overview' && <SystemHealthOverview />}
+        {tab === 'storage' && (
+          <StoragePanel
+            report={report}
+            loading={reportLoading}
+            onRunReport={runReport}
+            onReport={setReport}
+            cleanup={cleanup}
+          />
+        )}
+        {tab === 'queues' && <QueuesPanel />}
+      </div>
     </div>
   );
 }

@@ -3,11 +3,12 @@ import { useState } from 'react';
 import { AlertTriangle, Braces, Cpu, Plug, SlidersHorizontal } from 'lucide-react';
 import toast from '../ui/Toast';
 import * as api from '../../services/api';
-import { filterHardwareCompatibleProviderModels, filterGenerationModels, isEmbeddingModel, isProviderHardwareCompatible, isProviderModelHardwareCompatible, mergeModelLists, configuredDefaultIn, localBackendForProvider, modelOptionLabel, isProcessProvider, isLocalEndpoint, effectiveModelContextWindow, isRunnerAllowedCommand, effortLevelsForProvider, isOllamaBackedProvider, gatewayForProvider, isClaudeCommandProvider, generationControlsFor, isCodexProvider } from '../../utils/providers';
+import { filterHardwareCompatibleProviderModels, filterGenerationModels, isEmbeddingModel, isProviderHardwareCompatible, isProviderModelHardwareCompatible, mergeModelLists, configuredDefaultIn, localBackendForProvider, mergeObservedContextWindows, modelOptionLabel, isProcessProvider, isLocalEndpoint, effectiveModelContextWindow, isRunnerAllowedCommand, effortLevelsForProvider, isOllamaBackedProvider, gatewayForProvider, isClaudeCommandProvider, generationControlsFor, isCodexProvider } from '../../utils/providers';
 import Banner from '../ui/Banner';
 import {
   formatDurationMs,
   formatContextLength,
+  formatCount,
   parseTimeoutMs,
   TIMEOUT_INPUT_MIN_MS,
   TIMEOUT_INPUT_MAX_MS,
@@ -45,9 +46,9 @@ const PROVIDER_FIELD_RANGES = {
 };
 
 const rangeMessage = (label, { min, max }, unit = '') =>
-  `${label} must be between ${min.toLocaleString()} and ${max.toLocaleString()}${unit ? ` ${unit}` : ''}`;
+  `${label} must be between ${formatCount(min)} and ${formatCount(max)}${unit ? ` ${unit}` : ''}`;
 
-export default function ProviderForm({ provider, onClose, onSave, onEditProvider, allProviders = [], localModels = { ollama: [], lmstudio: [], ctxById: {}, hardwareCompatibilityByBackend: {} }, runnerAllowedCommands = null }) {
+export default function ProviderForm({ provider, daemonReadiness = null, onClose, onSave, onEditProvider, allProviders = [], localModels = { ollama: [], lmstudio: [], ctxById: {}, hardwareCompatibilityByBackend: {} }, runnerAllowedCommands = null }) {
   const [formData, setFormData] = useState({
     name: provider?.name || '',
     type: provider?.type || 'cli',
@@ -114,7 +115,12 @@ export default function ProviderForm({ provider, onClose, onSave, onEditProvider
   // The server publishes compatibility for both the provider runtime and any
   // explicitly annotated model. Unknown probe results stay in the list; only a
   // definitive mismatch is hidden.
-  const capabilityProvider = {
+  // The live windows a local daemon is SERVING (off the readiness poll) fold in
+  // here rather than onto `provider`, because this object is derived and shown,
+  // never saved — `modelContextWindows` is not a form field, so an observation
+  // can reach "Budgeter uses …" and the model-option labels without any risk of
+  // a Save writing a running process's window into the record (#7441).
+  const capabilityProvider = mergeObservedContextWindows({
     ...provider,
     ...formData,
     id: provider?.id,
@@ -123,7 +129,7 @@ export default function ProviderForm({ provider, onClose, onSave, onEditProvider
       ...provider?.modelHardwareCompatibility,
       ...liveHardwareFor(formData),
     },
-  };
+  }, daemonReadiness?.contextWindows);
   const availableModels = filterHardwareCompatibleProviderModels(
     filterGenerationModels(mergedModels),
     capabilityProvider,
@@ -266,7 +272,7 @@ export default function ProviderForm({ provider, onClose, onSave, onEditProvider
     if (text(formData.timeout) !== '' && parseTimeoutMs(formData.timeout) == null) {
       return {
         tab: 'generation',
-        message: `Timeout must be a whole number of ms between ${TIMEOUT_INPUT_MIN_MS.toLocaleString()} and ${TIMEOUT_INPUT_MAX_MS.toLocaleString()}`,
+        message: `Timeout must be a whole number of ms between ${formatCount(TIMEOUT_INPUT_MIN_MS)} and ${formatCount(TIMEOUT_INPUT_MAX_MS)}`,
       };
     }
     if (outOfRange(formData.contextWindow, PROVIDER_FIELD_RANGES.contextWindow)) {
@@ -934,7 +940,7 @@ export default function ProviderForm({ provider, onClose, onSave, onEditProvider
                     const ms = parseTimeoutMs(formData.timeout);
                     return ms != null
                       ? `≈ ${formatDurationMs(ms)} per run`
-                      : `Per-call cap. Server max: ${TIMEOUT_INPUT_MAX_MS.toLocaleString()} ms (${formatDurationMs(TIMEOUT_INPUT_MAX_MS)}).`;
+                      : `Per-call cap. Server max: ${formatCount(TIMEOUT_INPUT_MAX_MS)} ms (${formatDurationMs(TIMEOUT_INPUT_MAX_MS)}).`;
                   })()}
                 </p>
               </FormField>

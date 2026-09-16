@@ -89,6 +89,7 @@ export * from './goalFeatureMap.js';
 
 // === Generic UI / collection utilities ===
 export * from './a11yKeyboard.js';
+export * from './agentOutcome.js';
 export * from './agentResumeOutcome.js';
 export * from './appIdentity.js';
 export * from './applyManuscriptEdits.js';
@@ -164,6 +165,7 @@ export * from './lossSparkline.js';
 export * from './managedAppSources.js';
 export * from './metronome.js';
 export * from './mindThinkingPresets.js';
+export * from './mindTurnProgress.js';
 export * from './navFeatures.js';
 export * from './pageNavTabs.js';
 export * from './midiChords.js';
@@ -218,6 +220,7 @@ export * from './wrSceneCursor.js';
 export * from './writingGuide.js';
 export * from './qrCode.js';
 export * from './riggingReasons.js';
+export * from './usagePeriods.js';
 export * from './usdzExport.js';
 export * from './eidoverseFrame.js';
 export * from './songBookDraft.js';

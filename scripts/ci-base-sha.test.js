@@ -82,12 +82,24 @@ describe('ci.yml required checks', () => {
     expect(jobs['full-gate']).toMatch(/name: Full CI Gate/);
   });
 
-  it('no longer carries the retired legacy check-name jobs', () => {
-    // `lint` was a whole runner that echoed the client job's result, and the
-    // server job wore `test (24.x)`; the ruleset requires neither.
-    expect(jobs.lint).toBeUndefined();
+  it('withholds the full gate when the Windows job ran only the contract baseline', () => {
+    // verify-ci-status.js lets a release skip its own suite on this check, so
+    // `full: true` alone is not enough: a full plan may now leave Windows at
+    // the WINDOWS_CONTRACT_TESTS baseline (#7440). Publishing the gate then
+    // would vouch for Windows coverage that never ran.
+    expect(jobs['full-gate']).toMatch(/needs\.impact\.outputs\.full == 'true'/);
+    expect(jobs['full-gate']).toMatch(/needs\.impact\.outputs\.windows_mode == 'full'/);
+  });
+
+  it('publishes no job whose only purpose is a retired check name', () => {
+    // The RETIRED `lint` job was a shim: a whole runner whose only step echoed
+    // the client job's result, so a required check named `lint` kept reporting.
+    // A `lint` job exists again and is the real linter — its wiring is pinned in
+    // run-ci-tests.test.js — so what this owns is the shim's shape. The server
+    // job likewise no longer wears `test (24.x)`; the ruleset requires neither
+    // name, only `CI Gate`.
+    expect(jobs.lint).not.toContain('CLIENT_RESULT');
     expect(WORKFLOW).not.toMatch(/name: test \(24\.x\)/);
-    expect(jobs.gate).not.toMatch(/needs\.lint\b/);
   });
 });
 

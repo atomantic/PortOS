@@ -16,10 +16,11 @@ const wrapper = (overrides = {}) => ({
   ...overrides,
 });
 
-const renderCard = (provider) => render(
+const renderCard = (provider, daemonReadiness = null) => render(
   <MemoryRouter>
     <ProviderCard
       provider={provider}
+      daemonReadiness={daemonReadiness}
       // `providerCardState` returns `missing` on every path, so the fixture
       // carries it too — the card reads it without a defensive guard.
       cardState={{ state: PROVIDER_CARD_STATE.READY, missing: [] }}
@@ -62,6 +63,36 @@ describe('ProviderCard context window', () => {
     expect(screen.getByText('250K ctx')).toBeTruthy();
     expect(screen.getByText('override')).toBeTruthy();
     expect(screen.queryByText(/assumed/)).toBeNull();
+  });
+
+  // #7447: the meter must show the number the DISPATCH GATE would enforce. A
+  // card reading 128K beside an endpoint serving 32K promised a budget no run
+  // could ever spend — the chunker built the oversized prompt and the gate
+  // refused it.
+  it('shows the window the daemon is serving right now, over a stale catalog entry', () => {
+    renderCard(
+      wrapper({ modelContextWindows: { 'stealth/ox-alpha': 128_000 } }),
+      { contextWindows: { 'stealth/ox-alpha': 32_768 } },
+    );
+    expect(screen.getByText('32K ctx')).toBeTruthy();
+    expect(screen.queryByText('128K ctx')).toBeNull();
+    expect(screen.queryByText(/assumed/)).toBeNull();
+  });
+
+  it('still lets a hand-entered window beat the live observation', () => {
+    renderCard(
+      wrapper({ contextWindow: 250_000 }),
+      { contextWindows: { 'stealth/ox-alpha': 32_768 } },
+    );
+    expect(screen.getByText('250K ctx')).toBeTruthy();
+    expect(screen.getByText('override')).toBeTruthy();
+  });
+
+  it('renders exactly as before when the daemon reported no window', () => {
+    // Down, silent, or not daemon-backed at all — unknown stays unknown.
+    renderCard(wrapper({ canRefreshModels: true }), { contextWindows: null });
+    expect(screen.getByText('128K ctx')).toBeTruthy();
+    expect(screen.getByText(/assumed — Refresh Models to read the real one/)).toBeTruthy();
   });
 });
 
@@ -175,6 +206,36 @@ describe('ProviderCard model refresh', () => {
 });
 
 
+/**
+ * The NVIDIA NIM key link. What this uniquely catches: the card says the
+ * provider needs an API key but never says WHERE to get one.
+ */
+describe('ProviderCard gateway key link', () => {
+  const nim = {
+    id: 'nvidia-nim',
+    name: 'NVIDIA NIM',
+    type: 'api',
+    endpoint: 'https://integrate.api.nvidia.com/v1',
+    models: ['google/gemma-4-31b-it'],
+    enabled: true,
+  };
+
+  it('links a keyless NVIDIA NIM card to build.nvidia.com', () => {
+    renderCard(nim);
+    const link = screen.getByRole('link', { name: 'Get a NVIDIA NIM key' });
+    expect(link).toHaveAttribute('href', 'https://build.nvidia.com');
+  });
+
+  it('shows no key link for an API provider with no vendor key page', () => {
+    renderCard({ ...nim, id: 'some-api', name: 'Some API' });
+    expect(screen.queryByRole('link', { name: /Get a .* key/ })).toBeNull();
+  });
+
+  it('shows no key link once the NVIDIA NIM key is set', () => {
+    renderCard({ ...nim, hasApiKey: true });
+    expect(screen.queryByRole('link', { name: /Get a .* key/ })).toBeNull();
+  });
+});
 /**
  * The routing-override badge (#6304). What this uniquely catches: the card
  * silently presenting ChatGPT account quota for work that account never served,

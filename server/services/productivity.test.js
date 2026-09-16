@@ -59,6 +59,14 @@ const agentOn = (id, { month = 3, day, hour = 10, minute = 0, success = true, du
   result: { success, duration },
 });
 
+// What Relaunch leaves behind: `success: false` with `resumed: true`, requeued on
+// a new provider. It reached no verdict, so it must not score a failure against
+// the hour and weekday the user happened to press the button.
+const handoffOn = (id, opts) => {
+  const base = agentOn(id, { ...opts, success: false });
+  return { ...base, result: { ...base.result, resumed: true, resumedTaskId: `task-${id}`, error: 'Relaunched by user on codex' } };
+};
+
 const seed = (data) => {
   mkdirSync(COS_DIR, { recursive: true });
   writeFileSync(PRODUCTIVITY_FILE, JSON.stringify(data));
@@ -105,6 +113,18 @@ describe('recalculateProductivity — activity totals', () => {
 
     expect(result).not.toHaveProperty('streaks');
     expect(result.totals).toMatchObject({ totalTasks: 3, activeDays: 3, activeWeeks: 1 });
+  });
+
+  it('ignores a relaunched run, which reached no verdict', async () => {
+    mock.agents = [
+      agentOn('good', { day: 18, hour: 9 }),
+      handoffOn('swapped', { day: 18, hour: 9 }),
+    ];
+
+    const result = await productivity.recalculateProductivity();
+
+    expect(result.totals).toMatchObject({ totalTasks: 1, successfulTasks: 1, successRate: 100 });
+    expect(result.hourlyPatterns[9]).toMatchObject({ tasks: 1, successes: 1, failures: 0 });
   });
 
   it('ignores agents that are not completed or carry no completion stamp', async () => {
@@ -198,6 +218,19 @@ describe('onTaskCompleted — incremental productivity updates', () => {
     expect(stored.hourlyPatterns[9]).toMatchObject({ tasks: 1, successes: 1, avgDuration: 4000 });
     expect(emitted).toEqual(['productivity:updated']);
     cosEvents.off('productivity:updated', listener);
+  });
+
+  it('banks nothing for a relaunched run, keeping the incremental path in step with the rebuild', async () => {
+    // The two paths must agree: if the rebuild drops handoffs but the
+    // incremental update banks them, the store drifts until the next recalc
+    // silently "loses" tasks the user watched it count.
+    seed({ hourlyPatterns: {}, dailyPatterns: {}, dailyHistory: {}, milestones: [] });
+
+    await productivity.onTaskCompleted(handoffOn('swapped', { day: 18, hour: 9 }));
+
+    const stored = readStore();
+    expect(stored.dailyHistory['2026-03-18']).toBeUndefined();
+    expect(stored.hourlyPatterns[9]).toBeUndefined();
   });
 
   it('prunes daily history older than 90 days', async () => {

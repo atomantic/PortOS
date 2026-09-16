@@ -58,12 +58,16 @@ const STRUCTURALLY_SELECTED = new Map([
   ['client/src/globalShadowConventions.test.js', 'structuralTestsFor: client/src/**.js(x)'],
   ['client/src/headingTruncationConventions.test.js', 'structuralTestsFor: client/src/**.js(x)'],
   ['client/src/hooks/mountedRefConventions.test.js', 'structuralTestsFor: client/src/**.js(x)'],
+  ['client/src/numberFormattingConventions.test.js', 'structuralTestsFor: client/src/**.js(x)'],
   ['client/src/pollingConventions.test.js', 'structuralTestsFor: client/src/**.js(x)'],
   ['client/src/popoverClampConventions.test.js', 'structuralTestsFor: client/src/**.js(x)'],
   ['client/src/preWrapClasses.test.js', 'structuralTestsFor: client/src/**.js(x)'],
   ['client/src/responsiveGridConventions.test.js', 'structuralTestsFor: client/src/**.js(x)'],
   ['client/src/storageConventions.test.js', 'structuralTestsFor: client/src/**.js(x)'],
   ['client/src/subNavConventions.test.js', 'structuralTestsFor: client/src/**.js(x)'],
+  // Its subject is the TEST files, and `client/src/**.js(x)` matches those too
+  // (`*.test.jsx` ends in `.jsx`), so the same selector reaches it.
+  ['client/src/test/timeouts.test.js', 'structuralTestsFor: client/src/**.js(x)'],
   // `.ps1` is not in EXECUTABLE_RE, so touching one is an "unclassified changed
   // file" and forces the complete suite. The guard also rides the Windows
   // contract list.
@@ -74,8 +78,13 @@ const STRUCTURALLY_SELECTED = new Map([
 const GIT_CALL = /execFileSync\(\s*['"]git['"]/;
 /** …carrying a tree-enumerating subcommand. */
 const GIT_ENUMERATION = /['"](?:ls-files|grep)['"]/;
-/** The client's shared enumerator, which shells out to `git ls-files` for them. */
-const TRACKED_HELPER = /from\s+['"][^'"]*test\/trackedFiles\.js['"]/;
+/**
+ * The client's shared enumerator, which shells out to `git ls-files` for them.
+ * The `test/` segment is optional because a guard living INSIDE client/src/test/
+ * imports it as './trackedFiles.js' — a scanner the narrower pattern missed
+ * entirely, so it registered as a non-scanner and this whole file passed on it.
+ */
+const TRACKED_HELPER = /from\s+['"](?:[^'"]*\/)?trackedFiles\.js['"]/;
 
 /** True when `source` asserts over the tracked tree instead of over its imports. */
 export const scansTrackedTree = (source) => (

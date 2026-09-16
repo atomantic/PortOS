@@ -9,6 +9,8 @@ import RelaunchAgentModal from './RelaunchAgentModal';
 import BrailleSpinner from '../../BrailleSpinner';
 import InlineConfirmRow from '../../ui/InlineConfirmRow';
 import { agentResumeMessage } from '../../../lib/agentResumeOutcome';
+import { isAgentHandoff } from '../../../lib/agentOutcome';
+import { formatCount } from '../../../utils/formatters';
 
 // What each `resumeAgent` outcome actually did (server modes, agentManagement.js).
 // `already-active` and `superseded` deliberately queue NOTHING — the task is already
@@ -33,10 +35,14 @@ const RESUME_MESSAGES = {
 // Only agents from a manually-filled task form ask for a rating — scheduled/
 // autopilot runs (taskType 'internal') are already auto-evaluated by
 // task-learning's success/failure tracking. See cosAgentFeedback.js.
+// A run retired by Resume/Relaunch is excluded too — it has no result to rate,
+// and the continuation it handed the task to is the run that asks for the rating.
+// Without this, every provider swap left a permanent entry in the needs-feedback
+// count that nothing the user does can clear (AgentCard hides the buttons).
 const needsAgentFeedback = (agent) => {
   const isSystemAgent = agent.taskId?.startsWith('sys-') || agent.id?.startsWith('sys-');
   const isManualUserAgent = agent.metadata?.taskType === 'user';
-  return !isSystemAgent && isManualUserAgent && !agent.feedback?.rating;
+  return !isSystemAgent && isManualUserAgent && !isAgentHandoff(agent) && !agent.feedback?.rating;
 };
 
 export default function AgentsTab({ agents, onRefresh, liveOutputs, providers, providersLoaded, apps }) {
@@ -329,7 +335,7 @@ export default function AgentsTab({ agents, onRefresh, liveOutputs, providers, p
             <h3 className="text-lg font-semibold text-white">
               Completed Agents
               <span className="text-sm text-gray-500 font-normal ml-2">
-                ({totalCount} total)
+                ({formatCount(totalCount)} total)
               </span>
             </h3>
             <button
@@ -345,7 +351,7 @@ export default function AgentsTab({ agents, onRefresh, liveOutputs, providers, p
             <InlineConfirmRow
               className="mb-3"
               question={totalCount > 0
-                ? `Clear ALL completed agents? This removes ${totalCount} agent record${totalCount === 1 ? '' : 's'} and cannot be undone.`
+                ? `Clear ALL completed agents? This removes ${formatCount(totalCount)} agent record${totalCount === 1 ? '' : 's'} and cannot be undone.`
                 : 'Clear ALL completed agents? This cannot be undone.'}
               confirmText="Clear all"
               confirmTitle="Confirm clear all completed agents"
@@ -426,7 +432,7 @@ export default function AgentsTab({ agents, onRefresh, liveOutputs, providers, p
                   : `No loaded agents match "${searchQuery}"`}
                 {hasMoreDates && (
                   <div className="mt-2 text-xs">
-                    {remainingCount} agents in older dates not yet loaded
+                    {formatCount(remainingCount)} agents in older dates not yet loaded
                   </div>
                 )}
               </div>
@@ -442,7 +448,7 @@ export default function AgentsTab({ agents, onRefresh, liveOutputs, providers, p
                 ) : (
                   <>
                     <ChevronDown size={14} />
-                    Load older agents ({remainingCount} remaining)
+                    Load older agents ({formatCount(remainingCount)} remaining)
                   </>
                 )}
               </button>

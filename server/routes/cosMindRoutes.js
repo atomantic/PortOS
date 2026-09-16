@@ -29,6 +29,7 @@ import {
 } from '../lib/persistentMindThinkingPresets.js';
 import { normalizePersistentMindPrompt } from '../lib/persistentMindPrompt.js';
 import { composePersistentMindInstructions, normalizePersistentMindPlaybook, PERSISTENT_MIND_PLAYBOOK_CATALOG } from '../lib/persistentMindPlaybook.js';
+import { resolvePersistentMindPlaybookPhase } from '../services/persistentMindPlaybookSignals.js';
 import { publicPersistentMindState } from '../lib/persistentMindPublic.js';
 import { publicPersistentMindTurnExecutions } from '../lib/persistentMindTrajectory.js';
 import { validateRequest } from '../lib/validation.js';
@@ -63,6 +64,7 @@ import {
   startPersistentMind,
   stopPersistentMind,
   wakePersistentMind,
+  persistentMindUsageLimitRetryAt,
 } from '../services/persistentMindSupervisor.js';
 
 const router = Router();
@@ -233,20 +235,25 @@ router.get('/mind/context', asyncHandler(async (_req, res) => {
   const prompt = normalizePersistentMindPrompt(root.config?.persistentMindPrompt);
   const playbook = normalizePersistentMindPlaybook(root.config?.persistentMindPlaybook);
   const profile = normalizePersistentMindProfile(root.config?.persistentMindProfile);
-  const [memories, rollups, provider] = await Promise.all([
+  const [memories, rollups, provider, playbookPhase] = await Promise.all([
     readPersistentMindMemories(PERSISTENT_MIND_ID),
     readPersistentMindRollups(PERSISTENT_MIND_ID),
     profile.providerId ? getProviderById(profile.providerId) : null,
+    // Preview only: the next real wake resolves this itself. Computed here
+    // too so the Mind Context panel can show the phase a continuous-play
+    // wake would currently pick (#7458).
+    playbook.mode === 'continuous-play' ? resolvePersistentMindPlaybookPhase() : null,
   ]);
   const preview = await preparePersistentMindContext({
     mindId: PERSISTENT_MIND_ID,
     identity: prompt.identity,
-    instructions: composePersistentMindInstructions(prompt.instructions, playbook),
+    instructions: composePersistentMindInstructions(prompt.instructions, playbook, playbookPhase?.phase),
     memories,
   });
   res.json({
     prompt,
     playbook,
+    playbookPhase,
     playbookCatalog: PERSISTENT_MIND_PLAYBOOK_CATALOG,
     preview,
     memories,
@@ -299,7 +306,9 @@ router.get('/mind/runtime', asyncHandler(async (_req, res) => {
   const profile = normalizePersistentMindProfile(root.config?.persistentMindProfile);
   const providerId = state.activeTurn?.providerId || profile.providerId;
   const provider = providerId ? await getProviderById(providerId) : null;
-  res.json(await inspectPersistentMindRuntime({ state, profile, prompt, provider }));
+  res.json(await inspectPersistentMindRuntime({
+    state, profile, prompt, provider, usageLimitRetryAt: persistentMindUsageLimitRetryAt(),
+  }));
 }));
 
 router.get('/mind/visibility', asyncHandler(async (req, res) => {

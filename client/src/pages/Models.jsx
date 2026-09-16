@@ -6,11 +6,13 @@ import PageSkeleton from '../components/ui/PageSkeleton';
 import ModelsTabsHeader from '../components/models/ModelsTabsHeader';
 import Image3dRuntimes from '../components/models/Image3dRuntimes';
 import ModelStatusTab from '../components/models/ModelStatusTab';
+import SubscriptionsTab from '../components/models/SubscriptionsTab';
 import CodeReviewersTab from '../components/settings/CodeReviewersTab';
 import HarnessesTab from '../components/models/HarnessesTab';
 import EmbeddingsTab from '../components/settings/EmbeddingsTab';
 import LocalModelAssessments from '../components/settings/LocalModelAssessments.jsx';
 import { LocalLlmTab } from '../components/settings/LocalLlmTab';
+import LocalLlmRuntimesView from '../components/settings/LocalLlmRuntimesView.jsx';
 import { lazyWithReload } from '../utils/lazyWithReload';
 
 // The three panels moved in from the Media Gen tabs were each their own route
@@ -32,12 +34,14 @@ const MediaModels = lazyWithReload(() => import('./MediaModels'));
  *   - **Code Reviewers** — the review-loop chain and its model/effort pins.
  *   - **Embeddings** — the embedding model backing pgvector search.
  *   - **Harnesses** — the coding-agent CLIs/TUIs, their versions and model lists.
- *   - **LLMs** — focused runtime, model-library, and abuse-guard sub-routes.
+ *   - **LLMs** — the model-library and abuse-guard sub-routes (the weights).
+ *   - **Runtimes** — the local model servers, their lifecycle and downloads.
  *   - **LoRAs** — installed image/video adapters.
  *   - **Media** — image/video checkpoints and the Hugging Face cache.
  *   - **Performance** — measured assessments and launch-tuning comparison.
  *   - **Providers** — configured AI provider connections and model catalogs.
  *   - **Status** — residency plus the downloaded-model inventory.
+ *   - **Subscriptions** — which paid plans are on, their tier, price and spend.
  *   - **Training** — LoRA fine-tuning datasets and runs.
  *   - **Usage** — provider quota and PortOS AI usage accounting.
  *
@@ -57,10 +61,12 @@ const TAB_CONTENT = {
   embeddings: EmbeddingsTab,
   harnesses: HarnessesTab,
   llms: LocalLlmTab,
+  'llms-runtimes': LocalLlmRuntimesView,
   loras: Loras,
   media: MediaModels,
   performance: LocalModelAssessments,
   status: ModelStatusTab,
+  subscriptions: SubscriptionsTab,
   training: LoraTraining,
 };
 
@@ -92,7 +98,7 @@ export default function Models() {
 
   // A record id in the URL selects the tab's drill-down, when it has one. Tabs
   // without a detail component receive it as a focused sub-view id (LLMs uses
-  // `runtimes`, `library`, and `abuse`); tabs that do not recognize it render their index.
+  // `library` and `abuse`); tabs that do not recognize it render their index.
   const DetailContent = recordId && Object.hasOwn(TAB_DETAIL, activeTab) ? TAB_DETAIL[activeTab] : null;
   const TabContent = TAB_CONTENT[activeTab];
 

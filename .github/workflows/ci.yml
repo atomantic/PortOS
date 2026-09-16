@@ -325,10 +325,11 @@ jobs:
         run: node scripts/cancel-current-ci-run.js
 
   client:
-    # Sharded like the server job; lint, build, and the bundle budget run on shard 1.
+    # Sharded like the server job; the build and the bundle budget run on shard 1.
+    # Lint is deliberately NOT here — it has its own job.
     name: Client tests and build (${{ matrix.shard }}/${{ strategy.job-total }})
     needs: impact
-    if: needs.impact.outputs.client_mode != 'skip' || needs.impact.outputs.build == 'true' || needs.impact.outputs.lint_mode != 'skip'
+    if: needs.impact.outputs.client_mode != 'skip' || needs.impact.outputs.build == 'true'
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -354,7 +355,30 @@ jobs:
           cache: npm
           cache-dependency-path: client/package-lock.json
 
+      # `setup-node`'s npm cache only preserves ~/.npm, the tarball cache, so
+      # `npm ci` still wipes and repopulates client/node_modules (393 MB, 21k
+      # files — MORE files than the server tree the sibling cache already
+      # serves) on every one of the four jobs that install this workspace.
+      # Same exact-key/no-restore-keys shape as `Cache server node_modules`, and
+      # for the same reason: a near-miss tree is not safe to reuse.
+      #
+      # No rebuild half, unlike the server: client/.npmrc pins
+      # ignore-scripts=true AND `scripts/trusted-rebuilds.js` deliberately lists
+      # nothing for this workspace, so a restored tree is usable as-is and the
+      # install can be skipped outright on a hit. That premise is HASHED, not
+      # assumed: `trusted-rebuilds.js` is in the key, so the day a client
+      # dependency does need a rebuild the key moves and no job can keep
+      # restoring a never-rebuilt tree on an exact hit — which neither job here
+      # has a stamp check to notice.
+      - name: Cache client node_modules
+        id: client-modules
+        uses: actions/cache@v6
+        with:
+          path: client/node_modules
+          key: client-modules-${{ runner.os }}-${{ runner.arch }}-node24-${{ hashFiles('client/package-lock.json', 'client/package.json', 'client/.npmrc', 'scripts/trusted-rebuilds.js') }}
+
       - name: Install client dependencies
+        if: steps.client-modules.outputs.cache-hit != 'true'
         run: npm ci --prefix client
 
       - name: Cache Vitest transform artifacts
@@ -367,13 +391,6 @@ jobs:
           restore-keys: |
             vitest-client-${{ runner.os }}-${{ hashFiles('client/package-lock.json') }}-
             vitest-client-${{ runner.os }}-
-
-      - name: Lint client
-        if: needs.impact.outputs.lint_mode != 'skip' && matrix.shard == 1
-        env:
-          CI_LINT_MODE: ${{ needs.impact.outputs.lint_mode }}
-          CI_LINT_FILES: ${{ needs.impact.outputs.lint_files }}
-        run: node scripts/run-ci-lint.js
 
       - name: Run client tests
         if: needs.impact.outputs.client_mode != 'skip'
@@ -394,6 +411,82 @@ jobs:
       - name: Check API Explorer bundle has no Scalar chunks
         if: needs.impact.outputs.build == 'true' && matrix.shard == 1
         run: npm run test --prefix client -- ApiExplorer.bundle
+
+      - name: Cancel sibling CI jobs after failure
+        if: failure() && github.event_name == 'pull_request'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: node scripts/cancel-current-ci-run.js
+
+  lint:
+    # Its own job rather than a step on client shard 1, for cost and latency —
+    # NOT as a flake fix. Steps within one job run sequentially, so the ~31s of
+    # Biome finished before `Run client tests` began and never contended with
+    # it; #7448's shard-1 failures came from the tests themselves, not from what
+    # else that job ran. What the split does buy: lint runs in parallel instead
+    # of in front of the slowest shard, and a lint-only diff no longer starts a
+    # client test job at all.
+    #
+    # It cannot instead move to a LATER shard: a scoped plan emits
+    # `client_shards: [1]`, so a pin to the second shard would silently skip lint
+    # on every impact-scoped pull request.
+    #
+    # It installs `client/` because Biome and its GritQL plugins are client
+    # devDependencies. That install is shared with the client job through
+    # `Cache client node_modules` below, so on a hit it is skipped entirely.
+    name: Lint client
+    needs: impact
+    if: needs.impact.outputs.lint_mode != 'skip'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: write
+    steps:
+      # No `fetch-depth` and no `Resolve the pull-request diff base`, unlike the
+      # test jobs: the linter's file list arrives from the impact plan, so this
+      # job never diffs and a single-commit checkout is everything it needs.
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Use Node.js 24.x
+        uses: actions/setup-node@v7
+        with:
+          node-version: 24.x
+          cache: npm
+          cache-dependency-path: client/package-lock.json
+
+      # `setup-node`'s npm cache only preserves ~/.npm, the tarball cache, so
+      # `npm ci` still wipes and repopulates client/node_modules (393 MB, 21k
+      # files — MORE files than the server tree the sibling cache already
+      # serves) on every one of the four jobs that install this workspace.
+      # Same exact-key/no-restore-keys shape as `Cache server node_modules`, and
+      # for the same reason: a near-miss tree is not safe to reuse.
+      #
+      # No rebuild half, unlike the server: client/.npmrc pins
+      # ignore-scripts=true AND `scripts/trusted-rebuilds.js` deliberately lists
+      # nothing for this workspace, so a restored tree is usable as-is and the
+      # install can be skipped outright on a hit. That premise is HASHED, not
+      # assumed: `trusted-rebuilds.js` is in the key, so the day a client
+      # dependency does need a rebuild the key moves and no job can keep
+      # restoring a never-rebuilt tree on an exact hit — which neither job here
+      # has a stamp check to notice.
+      - name: Cache client node_modules
+        id: client-modules
+        uses: actions/cache@v6
+        with:
+          path: client/node_modules
+          key: client-modules-${{ runner.os }}-${{ runner.arch }}-node24-${{ hashFiles('client/package-lock.json', 'client/package.json', 'client/.npmrc', 'scripts/trusted-rebuilds.js') }}
+
+      - name: Install client dependencies
+        if: steps.client-modules.outputs.cache-hit != 'true'
+        run: npm ci --prefix client
+
+      - name: Lint client
+        env:
+          CI_LINT_MODE: ${{ needs.impact.outputs.lint_mode }}
+          CI_LINT_FILES: ${{ needs.impact.outputs.lint_files }}
+        run: node scripts/run-ci-lint.js
 
       - name: Cancel sibling CI jobs after failure
         if: failure() && github.event_name == 'pull_request'
@@ -680,33 +773,35 @@ jobs:
   gate:
     name: CI Gate
     if: always()
-    needs: [impact, server, client, database, windows-server]
+    needs: [impact, server, client, lint, database, windows-server]
     runs-on: ubuntu-latest
     steps:
+      # The gate needs the repo only for scripts/ci-gate-report.js, which
+      # imports Node builtins only — no dependency install, no setup-node.
+      # `sparse-checkout` switches the fetch to a blob:none partial clone, so
+      # this costs ~1.7 MB and ~1k files instead of ~20 MB and ~8.4k — and the
+      # gate is the fan-in job every required check waits on. Cone mode always
+      # includes the repo root, which is where package.json ("type": "module")
+      # has to come from for the script to load as ESM.
+      - uses: actions/checkout@v7
+        with:
+          sparse-checkout: scripts
+          persist-credentials: false
+
+      # A CANCELLED run and a FAILED one are different events with different
+      # responses, and collapsing them sent readers hunting for a test failure
+      # that did not exist (#7437). Each CI_GATE_RESULT_<JOB> variable names one
+      # job; adding a job to the gate is one line here and no code change.
       - name: Require every selected job to pass
         env:
-          IMPACT_RESULT: ${{ needs.impact.result }}
-          SERVER_RESULT: ${{ needs.server.result }}
-          CLIENT_RESULT: ${{ needs.client.result }}
-          DATABASE_RESULT: ${{ needs.database.result }}
-          WINDOWS_SERVER_RESULT: ${{ needs.windows-server.result }}
-        run: |
-          node -e '
-            const results = {
-              impact: process.env.IMPACT_RESULT,
-              server: process.env.SERVER_RESULT,
-              client: process.env.CLIENT_RESULT,
-              database: process.env.DATABASE_RESULT,
-              windows_server: process.env.WINDOWS_SERVER_RESULT,
-            };
-            const failed = Object.entries(results)
-              .filter(([, result]) => !["success", "skipped"].includes(result));
-            if (failed.length) {
-              console.error("Selected CI jobs did not pass:", failed);
-              process.exit(1);
-            }
-            console.log("CI gate passed:", results);
-          '
+          CI_GATE_LABEL: CI Gate
+          CI_GATE_RESULT_IMPACT: ${{ needs.impact.result }}
+          CI_GATE_RESULT_SERVER: ${{ needs.server.result }}
+          CI_GATE_RESULT_CLIENT: ${{ needs.client.result }}
+          CI_GATE_RESULT_LINT: ${{ needs.lint.result }}
+          CI_GATE_RESULT_DATABASE: ${{ needs.database.result }}
+          CI_GATE_RESULT_WINDOWS_SERVER: ${{ needs.windows-server.result }}
+        run: node scripts/ci-gate-report.js
 
   full-gate:
     # A second check run published ONLY when the impact plan chose the complete
@@ -716,16 +811,34 @@ jobs:
     # It mirrors the aggregate gate rather than re-aggregating every job, so it
     # costs one comparison instead of a second fan-in.
     name: Full CI Gate
-    if: always() && needs.impact.outputs.full == 'true'
+    # Both conditions, not just `full`. scripts/verify-ci-status.js lets a
+    # release skip its own suite on the strength of this check, so it must mean
+    # "the complete suite passed on this tree" on EVERY platform. A full plan
+    # can now leave the Windows job at the WINDOWS_CONTRACT_TESTS baseline when
+    # the trigger was Windows-irrelevant (see the FULL_TRIGGER_RULES
+    # windowsEscalates flag in the impact planner) — publishing the gate for
+    # one of those would vouch for Windows coverage that did not run. Every
+    # force-full path — nightly, the main -> release PR, release, an explicit
+    # full-CI request — keeps windows_mode == 'full', so the release
+    # optimization is unaffected.
+    if: always() && needs.impact.outputs.full == 'true' && needs.impact.outputs.windows_mode == 'full'
     needs: [impact, gate]
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v7
+        with:
+          sparse-checkout: scripts
+          persist-credentials: false
+
+      # Same reporter, one input: a cancelled aggregate gate must not read as a
+      # red complete suite on the release path either.
       - name: Require the aggregate gate to have passed
         env:
-          GATE_RESULT: ${{ needs.gate.result }}
-        run: |
-          if [ "$GATE_RESULT" != "success" ]; then
-            echo "The complete suite ran but CI Gate did not pass ($GATE_RESULT)."
-            exit 1
-          fi
-          echo "Complete suite passed — this tree does not need re-testing on release."
+          CI_GATE_LABEL: Full CI Gate
+          # Strict: a `skipped` gate must not satisfy this one. Unlike the
+          # aggregate gate, whose per-job `skipped` is the impact plan doing
+          # its job, this check is what lets release.yml skip re-running the
+          # complete suite (scripts/verify-ci-status.js).
+          CI_GATE_REQUIRE_SUCCESS: 'true'
+          CI_GATE_RESULT_GATE: ${{ needs.gate.result }}
+        run: node scripts/ci-gate-report.js

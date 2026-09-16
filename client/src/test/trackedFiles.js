@@ -39,3 +39,14 @@ export function trackedJsxFiles(clientRoot) {
 export function trackedSourceFiles(clientRoot) {
   return gitTracked(clientRoot).filter((f) => /\.jsx?$/.test(f) && !isTest(f));
 }
+
+/**
+ * Git-tracked TEST files under `client/src` — the inverse of the filters above,
+ * for a guard whose subject is the tests themselves rather than the app code
+ * (`src/test/timeouts.test.js` polices inline async bounds that the per-test
+ * budget would cut short). Kept here so "which files count" still has exactly
+ * one definition.
+ */
+export function trackedTestFiles(clientRoot) {
+  return gitTracked(clientRoot).filter(isTest);
+}

@@ -59,6 +59,7 @@ import {
 } from '../lib/providerTranscriptUsage.js';
 import { familyForProvider } from '../lib/providerFamilies.js';
 import { commandBasename } from '../lib/providerModels.js';
+import { summarizeOpenCodeEvents } from '../lib/opencodeStream.js';
 import { markUsageRunReconciled, recordRunUsage } from './usage.js';
 
 // Widen the correlation window past the recorded run bounds: the CLI writes its
@@ -253,6 +254,24 @@ export function transcriptFamily({ providerId = null, command = null } = {}) {
 
 /** Every family whose CLI writes a readable session store. */
 export const TRANSCRIPT_FAMILIES = ['claude', 'codex', 'grok', 'agy', 'kimi'];
+
+// OpenCode writes no transcript store — but its `--format json` event stream
+// (captured stdout) already carries the provider's own output-token counts
+// (`lib/opencodeStream.summarizeOpenCodeEvents`). An opencode run is therefore
+// reconciled from its stream, not from a session file: matched the same way
+// `transcriptFamily` matches (id or command), kept separate from it so the
+// sibling scan (which keys off TRANSCRIPT_FAMILIES) never tries to open a
+// nonexistent store for it.
+const OPENCODE_ID = /opencode/i;
+
+/**
+ * Whether this run drove the OpenCode harness (Zen CLI/TUI wrappers included).
+ * @param {{ providerId?: string|null, command?: string|null }} run
+ * @returns {boolean}
+ */
+export function isOpencodeRun({ providerId = null, command = null } = {}) {
+  return OPENCODE_ID.test(`${providerId || ''} ${command || ''}`);
+}
 
 /** `reconcileRunUsage` returns one record or several — normalize to a list. */
 const asRecordList = (records) => (Array.isArray(records) ? records : [records]);
@@ -737,9 +756,13 @@ export function resolveFamilyProvider(providers, family, measured = null) {
  * @param {{ home?: string, providers?: Array<object>|null }} [opts] `providers`
  *   enables the sibling scan; omitting it reconciles the parent family only
  *   (which is what a caller with no access to the provider list should do).
+ * @param {string} [opts.estimateSource] provenance for the parent fallback
+ *   record when no transcript matched (`estimate` by default). An OpenCode run
+ *   whose stream carried measured output tokens passes `mixed` — its output is
+ *   the provider's own count, its input still a chars estimate.
  * @returns {Promise<object|Array<object>>}
  */
-export async function reconcileRunUsage(run, estimate, { home = homedir(), providers = null } = {}) {
+export async function reconcileRunUsage(run, estimate, { home = homedir(), providers = null, estimateSource = null } = {}) {
   const workspacePath = run?.workspacePath;
   const startTime = run?.startTime;
   const endTime = run?.endTime;
@@ -765,7 +788,7 @@ export async function reconcileRunUsage(run, estimate, { home = homedir(), provi
       tokensOut: Math.max(0, estimate?.tokensOut || 0),
       cacheReadTokens: 0,
       cacheWriteTokens: 0,
-      source: 'estimate'
+      source: estimateSource ?? 'estimate'
     };
 
   const siblings = [];
@@ -812,8 +835,23 @@ export async function reconcileRunUsage(run, estimate, { home = homedir(), provi
 export async function recordCompletedRunUsage(metadata, output, { home = homedir(), providers = null } = {}) {
   if (!metadata?.providerId) return;
 
+  // OpenCode runs have no transcript store, but their captured stdout IS the
+  // provider's own event stream: when it carries output-token counts, bill
+  // those instead of the chars estimate. The `null` sentinel is preserved —
+  // a stream with no usage frames falls back to the estimate rather than
+  // recording a measured zero. Input stays a chars estimate either way, so a
+  // stream-upgraded run is `mixed`, never `measured`.
+  let estimateSource = null;
+  let measuredOutputTokens = null;
+  if (isOpencodeRun({ providerId: metadata.providerId, command: metadata.command })) {
+    const summary = summarizeOpenCodeEvents(output);
+    if (typeof summary?.outputTokens === 'number') {
+      measuredOutputTokens = summary.outputTokens;
+      estimateSource = 'mixed';
+    }
+  }
   const estimate = {
-    tokensOut: estimateTokens(output),
+    tokensOut: measuredOutputTokens ?? estimateTokens(output),
     tokensIn: estimateTokensFromChars(metadata.promptLength)
   };
   // The provider list enables the sibling-family scan (a nested `--review-with`
@@ -827,7 +865,7 @@ export async function recordCompletedRunUsage(metadata, output, { home = homedir
     .catch(() => null);
   // One catch for the whole chain: whatever fails — reading a transcript or
   // persisting the record — usage accounting must not surface as a run failure.
-  await reconcileRunUsage(metadata, estimate, { home, providers: resolved })
+  await reconcileRunUsage(metadata, estimate, { home, providers: resolved, estimateSource })
     .then(recordRunUsage)
     .then(async () => {
       if (!metadata?.id) return;

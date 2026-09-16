@@ -3,7 +3,7 @@
 The AI provider/runner/prompt toolkit is vendored in-tree here. (It was previously the `portos-ai-toolkit` npm package.) Keep the directory self-contained — no imports out to other PortOS modules — so future upstream syncs don't fight local edits.
 
 **Key points:**
-- `index.js` exports `createAIToolkit`, `createProviderStatusService`, and the four Router factories (providers / runs / prompts / providerStatus)
+- `index.js` exports `createAIToolkit`, `createProviderStatusService`, the four Router factories (providers / runs / prompts / providerStatus), and the context-fit pair `knownContextWindow` / `contextWindowRejection` — the host applies the same rule to the EXPLICITLY requested provider, which `getFallbackProvider` never sees. Both answer `null` for an unknown window, which every caller must keep reading as "no constraint"; nothing infers a window from a model id.
 - Provider configuration (models, tiers, fallbacks) lives in `providers.js`
 - `loadProviders()` auto-migrates legacy codex configs to the `codex-configured-default` sentinel; `server/index.js` warms it at startup so the rewrite happens before any request
 - PortOS extends toolkit routes in `server/routes/providers.js` for vision testing and provider status (status routes live in PortOS, not the toolkit, because they call PortOS-side socket helpers)

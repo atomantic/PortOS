@@ -167,6 +167,101 @@ describe('AgentCard runtime presentation', () => {
   });
 });
 
+describe('AgentCard relaunch handoff', () => {
+  // What Relaunch leaves behind. The pause/requeue path reuses the completion
+  // shape, so the retired record carries `success: false` with the swap summary
+  // in `error` — which the card used to paint red as a failed run, for something
+  // the user did deliberately when a provider hit its usage limit.
+  const handoffAgent = {
+    ...agent,
+    result: {
+      success: false,
+      duration: 3600000,
+      resumed: true,
+      resumedTaskId: 'task-example',
+      error: 'Relaunched by user on codex / gpt-5',
+    },
+  };
+
+  it('presents a relaunched run as a handoff rather than a failure', () => {
+    render(
+      <MemoryRouter>
+        <AgentCard agent={handoffAgent} completed />
+      </MemoryRouter>
+    );
+
+    const summary = screen.getByText('Relaunched by user on codex / gpt-5');
+    expect(summary).toBeInTheDocument();
+    // The color is the message here: red says the run broke.
+    expect(summary.closest('div').className).toContain('text-port-accent');
+    expect(summary.closest('div').className).not.toContain('text-port-error');
+  });
+
+  it('names what the user changed, not where the task went', () => {
+    // `result.error` on these records is the RESUME summary ("task … requeued on
+    // <branch>"), which answers a question nobody asked while looking at the run
+    // they just relaunched. The pause reason is the one that says "on codex".
+    render(
+      <MemoryRouter>
+        <AgentCard
+          agent={{
+            ...handoffAgent,
+            metadata: { ...handoffAgent.metadata, pauseReason: 'Relaunched by user on codex / gpt-5' },
+            result: { ...handoffAgent.result, error: 'Resumed agent agent-example — task task-example requeued on cos/task-example/agent-example' },
+          }}
+          completed
+        />
+      </MemoryRouter>
+    );
+
+    expect(screen.getByText('Relaunched by user on codex / gpt-5')).toBeInTheDocument();
+  });
+
+  it('does not ask for a rating on a run that never reached a result', () => {
+    render(
+      <MemoryRouter>
+        <AgentCard agent={handoffAgent} completed />
+      </MemoryRouter>
+    );
+
+    expect(screen.queryByText('Was this helpful?')).not.toBeInTheDocument();
+  });
+
+  it('still shows a genuine failure in red, with its rating buttons', () => {
+    // The bypass probe: a card that softened EVERY unsuccessful run would pass
+    // both assertions above while hiding real failures.
+    const failed = { ...agent, result: { success: false, duration: 3600000, error: 'exit code 1' } };
+
+    render(
+      <MemoryRouter>
+        <AgentCard agent={failed} completed />
+      </MemoryRouter>
+    );
+
+    expect(screen.getByText('exit code 1').closest('div').className).toContain('text-port-error');
+    expect(screen.getByText('Was this helpful?')).toBeInTheDocument();
+  });
+
+  it('links a continuation back to the run it took over', () => {
+    // The other half of the pair. Without it the two cards read as one run that
+    // mysteriously stopped and a second that appeared from nowhere.
+    const continuation = {
+      ...agent,
+      id: 'agent-continuation',
+      metadata: { ...agent.metadata, resumedFromAgentId: 'agent-example' },
+    };
+
+    render(
+      <MemoryRouter>
+        <AgentCard agent={continuation} completed />
+      </MemoryRouter>
+    );
+
+    const link = screen.getByTitle('Continues agent agent-example');
+    expect(link).toHaveAttribute('href', '/cos/agents/agent-example');
+  });
+});
+
 describe('AgentCard feedback', () => {
   it('hides the rating UI for a completed scheduled/autopilot agent (taskType internal)', () => {
     const internalAgent = {

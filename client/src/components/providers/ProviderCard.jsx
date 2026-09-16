@@ -21,6 +21,7 @@ import {
   isApiProvider,
   isCodexSubscriptionProvider,
   codexRoutingAdvisory,
+  gatewayById,
   gatewayForProvider,
   isPrivateNetworkEndpoint,
   isFleetProvider,
@@ -29,11 +30,12 @@ import {
   isProviderHardwareCompatible,
   isTuiProvider,
   isLaunchableTuiProvider,
+  mergeObservedContextWindows,
   providerTypeClass,
   resolveModelContextWindow,
   supportsModelRefresh,
 } from '../../utils/providers';
-import { formatContextLength } from '../../utils/formatters';
+import { formatContextLength, formatDateTime } from '../../utils/formatters';
 import { isHttpsUrl } from '../../utils/urlNormalize';
 import ProviderRuntimeStatus from './ProviderRuntimeStatus';
 import ProviderReadiness from './ProviderReadiness';
@@ -470,8 +472,26 @@ export default function ProviderCard({
               <p className="text-xs">API key: <span className="text-gray-500">none (private network endpoint)</span></p>
             ) : (
               /* Amber only while the provider is switched ON, where a missing
-                 key is what's stopping it — `optional` mutes it otherwise. */
-              <p className="text-xs">API key: <span className={optional ? 'text-gray-400' : 'text-port-warning'}>not set — Edit this provider to paste one</span></p>
+                 key is what's stopping it — `optional` mutes it otherwise.
+                 A gateway-backed API record (NVIDIA NIM) also names WHERE the
+                 key comes from, so the card answers that without a detour
+                 through the editor. */
+              <p className="text-xs">API key: <span className={optional ? 'text-gray-400' : 'text-port-warning'}>not set — Edit this provider to paste one</span>{(() => {
+                const keyGateway = gatewayById(provider.id) ?? gatewayForProvider(provider);
+                return keyGateway?.keyUrl ? (
+                  <>
+                    {' · '}
+                    <a
+                      className="text-port-accent hover:underline"
+                      href={keyGateway.keyUrl}
+                      target="_blank"
+                      rel="noreferrer"
+                    >
+                      Get a {keyGateway.label} key
+                    </a>
+                  </>
+                ) : null;
+              })()}</p>
             )
           )}
           {compatibleModels.length > 0 && (
@@ -488,7 +508,16 @@ export default function ProviderCard({
             // a blanket 128K guess, and printing that bare made a 1M-context
             // model look like PortOS had capped it. A reported window prints
             // plain; a guess says so and names the way to replace it.
-            const { tokens, source } = resolveModelContextWindow(provider, provider.defaultModel);
+            //
+            // A local daemon's LIVE window (off the readiness poll) is folded in
+            // first, so the meter agrees with what the dispatch gate enforces —
+            // a card reading 128K beside an endpoint serving 32K promised a
+            // budget no run could ever spend. Down or silent → `null`, and the
+            // ladder resolves exactly as it did before.
+            const { tokens, source } = resolveModelContextWindow(
+              mergeObservedContextWindows(provider, daemonReadiness?.contextWindows),
+              provider.defaultModel
+            );
             const windowLabel = formatContextLength(tokens);
             if (!windowLabel) return null;
             // Only offer Refresh Models when this card HAS that button —
@@ -634,7 +663,7 @@ function CodexSubscriptionPanel({
           runs on this provider may not be counted here.
         </p>
       )}
-      {typeof account?.checkedAt === 'number' && <p className="text-gray-500">Last usage refresh: {new Date(account.checkedAt).toLocaleString()}</p>}
+      {typeof account?.checkedAt === 'number' && <p className="text-gray-500">Last usage refresh: {formatDateTime(account.checkedAt)}</p>}
       {catalogCount !== null && <p className="text-gray-500">Subscription catalog: {catalogCount} model{catalogCount === 1 ? '' : 's'} available.</p>}
       {modelError && <p role="status" className="text-port-warning">Using the last known model catalog while a refresh is unavailable.</p>}
       {verificationUrl && (

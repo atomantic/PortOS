@@ -4,7 +4,7 @@ import { join } from 'path';
 import { getAllProviders } from './providers.js';
 import { getClaudeCodeUsage, systemTimeZone } from './claudeCodeUsage.js';
 import { commandBasename } from '../lib/providerModels.js';
-import { PROVIDER_FAMILIES } from '../lib/providerFamilies.js';
+import { PROVIDER_FAMILIES, familyForProvider } from '../lib/providerFamilies.js';
 import { scrapeTuiUsage } from '../lib/tuiUsageScrape.js';
 import { createStaleWhileRevalidate, PENDING, WAIT } from '../lib/staleWhileRevalidate.js';
 import { parseHumanReset, normalizeResetAt } from '../lib/quotaReset.js';
@@ -583,6 +583,12 @@ export function parseGrokUsage(text, { now = Date.now(), timezone } = {}) {
   const byWindow = new Map();
   // Grok 1.0 names the subscription in the window header:
   // `Weekly limit (SuperGrok)`. Last named frame wins on a repaint.
+  // Anything else in those parens — a note, a timestamp, a repaint fragment —
+  // is not a plan name, so only a single identifier-like token is accepted
+  // (starts alphanumeric, letters/digits plus a few separators, carries a
+  // letter) rather than echoing arbitrary panel text onto the Usage card. A
+  // missing plan reads as unknown; a wrong one reads as fact.
+  const PLAN_NAME = /^(?=.*[A-Za-z])[A-Za-z0-9][A-Za-z0-9.,_+-]{0,59}$/;
   let plan = null;
 
   const matches = [...str.matchAll(/(weekly|monthly)\s+limit(?:\s*\(([^)]+)\))?:?/gi)];
@@ -590,7 +596,7 @@ export function parseGrokUsage(text, { now = Date.now(), timezone } = {}) {
     const m = matches[idx];
     const window = m[1].toLowerCase();
     const named = m[2]?.trim();
-    if (named) plan = named.slice(0, 60);
+    if (named && PLAN_NAME.test(named)) plan = named;
     if (!GROK_WINDOWS[window]) continue;
 
     const startPos = m.index + m[0].length;
@@ -759,14 +765,27 @@ const FAMILIES = PROVIDER_FAMILIES.map((family) => ({ ...family, fetch: FAMILY_F
 
 /**
  * Distinct quota families among the enabled providers, in registry order.
- * Local-runtime wrappers are excluded up front regardless of which CLI binary
- * they launch — a local model has no subscription quota, so e.g. an enabled
+ * Local-runtime wrappers are excluded regardless of which CLI binary they
+ * launch — a local model has no subscription quota, so e.g. an enabled
  * `claude-ollama` must not surface a Claude Code card (nor a codex/agy/grok
  * wrapper its family's card).
+ *
+ * Membership comes from `familyForProvider` rather than a second copy of the
+ * matcher + local-runtime exclusion list. That predicate is ALREADY what cost
+ * attribution and the Subscriptions page's enabled state use, and this function
+ * is what the savings card uses — one definition is what makes "the two can
+ * never disagree" structural instead of a promise two predicates have to keep.
+ * (It also settles a provider config that matched two families: it now belongs
+ * to the first, here as everywhere else, rather than lighting up both.)
  */
 export function resolveEnabledFamilies(providers) {
-  const enabled = (providers || []).filter((p) => p?.enabled && p.ollamaBacked !== true && p.lmstudioBacked !== true && p.mtplxBacked !== true && p.llamaBacked !== true && p.vllmBacked !== true && p.sglangBacked !== true);
-  return FAMILIES.filter((family) => enabled.some((p) => family.matches(p)));
+  const enabledIds = new Set(
+    (providers || [])
+      .filter((p) => p?.enabled)
+      .map((p) => familyForProvider(p))
+      .filter(Boolean)
+  );
+  return FAMILIES.filter((family) => enabledIds.has(family.id));
 }
 
 const fetchFamilyQuota = (family, { wait, providers }) =>

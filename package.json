@@ -1,6 +1,6 @@
 {
   "name": "portos",
-  "version": "2.67.0",
+  "version": "2.68.0",
   "private": true,
   "description": "Local dev machine App OS portal",
   "author": "Adam Eivy (@antic|@atomantic)",
@@ -46,6 +46,7 @@
     "test": "npm test --prefix server && npm test --prefix client",
     "quality:snapshot": "node scripts/publish-quality-snapshot.js",
     "scan:hidden-content": "node scripts/scan-diff-hidden-content.js",
+    "eidoverse:assay": "node scripts/eidoverse-resilience-assay.js",
     "theme:check": "node scripts/check-themes.js",
     "smoke": "node scripts/smoke-boot.js"
   },

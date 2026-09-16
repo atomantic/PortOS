@@ -2,7 +2,7 @@ import { useState, useCallback, Fragment } from 'react';
 import { RefreshCw, Activity, XCircle, Cpu, MemoryStick, Terminal } from 'lucide-react';
 import * as api from '../services/api';
 import { useAutoRefetch } from '../hooks/useAutoRefetch';
-import { formatDateTime } from '../utils/formatters';
+import { formatCount, formatDateTime } from '../utils/formatters';
 import PageSkeleton from '../components/ui/PageSkeleton';
 
 export function AgentsPage() {
@@ -251,7 +251,7 @@ export function AgentsPage() {
                             </div>
                             <div>
                               <div className="text-xs text-gray-500 uppercase tracking-wide mb-1">Runtime (ms)</div>
-                              <div className="text-sm text-gray-300 font-mono">{agent.runtime?.toLocaleString()}</div>
+                              <div className="text-sm text-gray-300 font-mono">{formatCount(agent.runtime)}</div>
                             </div>
                             {agent.model && (
                               <div>

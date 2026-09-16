@@ -11,9 +11,12 @@
 //      `release` has the same tree as the `main` tip it merged (release is
 //      strictly behind main), and that tip is the SHA the release PR gated.
 //   2. FULLNESS. The gate must be `Full CI Gate`, which ci.yml publishes only
-//      when the impact plan chose the complete suite. The aggregate `CI Gate`
-//      check is green on impact-scoped PR runs too, so it cannot distinguish
-//      "the full suite passed on this tree" from "some subset of it did".
+//      when the impact plan chose the complete suite AND ran the Windows job
+//      at full depth — a full plan can leave Windows at the contract baseline
+//      when the trigger was Windows-irrelevant (#7440), and that must not
+//      vouch for a platform it did not test. The aggregate `CI Gate` check is
+//      green on impact-scoped PR runs too, so it cannot distinguish "the full
+//      suite passed on this tree" from "some subset of it did".
 //
 // Anything else — a direct push to `release`, a merge that changed the tree, a
 // missing/failed/scoped gate, an unreachable checks API — reports

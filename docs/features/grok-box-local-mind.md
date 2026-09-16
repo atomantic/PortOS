@@ -22,7 +22,7 @@ Keep the mind free and local. Do **not** point coding agents at a CPU-bound 27B/
 PortOS surfaces a **Free local Persistent Mind** card when the host fits this path (CPU-only / no usable NVIDIA GPU, or low RAM / modest Apple Silicon without a curated 48 GB+ coding preset):
 
 - **AI Providers** (`/ai`)
-- **Models → LLMs → Runtimes** (`/models/llms`)
+- **Models → Runtimes** (`/models/llms-runtimes`)
 - **Chief of Staff → Persistent Mind → Settings** (AI profile drawer)
 
 The card:

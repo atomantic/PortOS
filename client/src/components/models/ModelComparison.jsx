@@ -177,6 +177,11 @@ export default function ModelComparison() {
     // Keep executable endpoint IDs as well as normalized public model references.
     ...(catalog?.inventory || []).flatMap(provider => provider.models.flatMap(({ model }) => model.startsWith('opencode/') ? [model, model.slice('opencode/'.length)] : [model])),
   ]), [catalog]);
+  // Models the index has evidence for, for the coverage list far below. Same
+  // reason as `estimatedRows`: the model filter input re-renders this component
+  // on every keystroke, and `<details>` renders its children whether or not the
+  // section is open.
+  const observedModels = useMemo(() => new Set((catalog?.observations || []).map(row => row.model)), [catalog]);
 
   useEffect(() => {
     let active = true;
@@ -1581,14 +1586,21 @@ export default function ModelComparison() {
               </button>
             )}
             <ul>
-              {provider.models.map(({ model, efforts: supported }) => (
-                <li key={model}>
-                  {model} {supported.length ? `(${supported.join(', ')})` : ''} —{' '}
-                  {catalog.observations.some(row => row.model === model)
-                    ? 'Public model reference available; endpoint equivalence unverified'
-                    : 'Needs research'}
-                </li>
-              ))}
+              {provider.models.map(({ model, efforts: supported, catalogModel }) => {
+                // `catalogModel` is the server's public-index name for this
+                // endpoint id (`qwen3-coder:30b` → `qwen3-coder-30b-a3b`). Try
+                // the raw id first: a Zen endpoint keeps its own exact pricing
+                // row, which is more specific than the model it normalizes to.
+                const reference = [model, catalogModel].find(name => name && observedModels.has(name));
+                return (
+                  <li key={model}>
+                    {model} {supported.length ? `(${supported.join(', ')})` : ''} —{' '}
+                    {reference
+                      ? `Public model reference available as ${reference}; endpoint equivalence unverified`
+                      : 'Needs research'}
+                  </li>
+                );
+              })}
             </ul>
           </div>
         ))}

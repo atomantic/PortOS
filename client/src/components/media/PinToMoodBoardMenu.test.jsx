@@ -142,7 +142,7 @@ describe('PinToMoodBoardMenu', () => {
 
   it('renders nothing when there is no valid media-key and no renderable thumbnail', () => {
     const { container } = render(
-      <PinToMoodBoardMenu item={{ kind: 'image', key: 'comic-page:x.png', previewUrl: 'blob:abc' }} />,
+      <PinToMoodBoardMenu item={{ kind: 'image', key: 'canon-sheet:x.png', previewUrl: 'blob:abc' }} />,
     );
     expect(container).toBeEmptyDOMElement();
     expect(screen.queryByTitle('Pin to mood board')).toBeNull();

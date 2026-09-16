@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { ArrowLeft, Reply, Sparkles, Send, RefreshCw, Archive, Trash2, User } from 'lucide-react';
 import toast from '../ui/Toast';
-import { formatDateTime } from '../../utils/formatters';
+import { formatCount, formatDateTime } from '../../utils/formatters';
 import * as api from '../../services/api';
 
 /**
@@ -187,7 +187,7 @@ export default function MessageDetail({ message, accounts, onBack }) {
         <div className="flex-1 min-w-0">
           <h2 className="text-sm font-medium text-white truncate">{displayedMessage.subject || '(no subject)'}</h2>
           {hasThread && (
-            <span className="text-xs text-gray-500">{threadMessages.length} messages</span>
+            <span className="text-xs text-gray-500">{formatCount(threadMessages.length)} messages</span>
           )}
         </div>
         <div className="flex flex-wrap items-center justify-end gap-1">

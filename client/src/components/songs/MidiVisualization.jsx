@@ -5,7 +5,7 @@ import useMidiPlayer from '../../hooks/useMidiPlayer';
 import { detectChordWindows } from '../../lib/midiChords';
 import { midiNoteName } from '../../lib/pianoKeyboard';
 import { layerColor, ROLL_BG } from '../../lib/canvasRoll.js';
-import { formatTimecode } from '../../utils/formatters';
+import { formatCount, formatTimecode } from '../../utils/formatters';
 import MidiPianoRoll, { MIN_ZOOM, ZOOM_STEP, clampZoom } from './MidiPianoRoll.jsx';
 
 // Chrome around <MidiPianoRoll>: loads + parses the .mid (useMidiNotes),
@@ -155,12 +155,12 @@ export default function MidiVisualization({ url, filename, model }) {
                 onTogglePlay={toggle}
               />
               <p className="sr-only">
-                MIDI transcription: {data.notes.length} notes across {data.tracks.length} track{data.tracks.length === 1 ? '' : 's'},
+                MIDI transcription: {formatCount(data.notes.length)} notes across {formatCount(data.tracks.length)} track{data.tracks.length === 1 ? '' : 's'},
                 pitch range {midiNoteName(data.minMidi)} to {midiNoteName(data.maxMidi)}, duration {formatTimecode(data.durationSec)}.
                 {chords.length > 0 && ` Detected chords include ${chords.slice(0, 8).map((c) => c.label).join(', ')}.`}
               </p>
               <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[10px] text-port-text-muted">
-                <span>{`${data.notes.length} notes · ${densityLabel}`}</span>
+                <span>{`${formatCount(data.notes.length)} notes · ${densityLabel}`}</span>
                 <span>{`${midiNoteName(data.minMidi)}–${midiNoteName(data.maxMidi)}`}</span>
                 <span>{formatTimecode(data.durationSec)}</span>
                 {data.tempos.length > 0 && <span>{`${data.tempos[0].bpm} BPM`}</span>}

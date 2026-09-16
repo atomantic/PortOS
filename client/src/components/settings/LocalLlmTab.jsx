@@ -1,19 +1,19 @@
 import { useNavigate } from 'react-router';
-import { Download, Server, ShieldCheck } from 'lucide-react';
+import { Download, ShieldCheck } from 'lucide-react';
 import TabPills from '../ui/TabPills.jsx';
 import ModelAbuseGuardPanel from '../models/ModelAbuseGuardPanel.jsx';
-import LocalLlmRuntimesView from './LocalLlmRuntimesView.jsx';
 import LocalLlmLibraryView from './LocalLlmLibraryView.jsx';
 
 export const LLM_VIEWS = [
-  { id: 'runtimes', label: 'Runtimes', icon: Server },
   { id: 'library', label: 'Model Library', icon: Download },
   { id: 'abuse', label: 'Abuse Guard', icon: ShieldCheck },
 ];
 
-// Palettable LLM drill-downs. Runtimes and Model Library stay focused views of
+// Palettable LLM drill-downs. Model Library stays a focused view of
 // `/models/llms` (the Models → LLMs landing). Abuse Guard is a managed
 // classifier lifecycle of its own, so ⌘K and voice need a dedicated path.
+// Runtimes is deliberately absent: it is a SIBLING TAB now (#7414,
+// `/models/llms-runtimes`), covered by `getSectionNavTabs('Models')`.
 // Scraped by server/lib/navManifest.test.js.
 export const LLM_NAV_SUBROUTES = [
   { id: 'abuse' },
@@ -26,7 +26,7 @@ export const LLM_NAV_SUBROUTES = [
 // subscribes to) exactly what it renders, leaving one subscriber per event.
 export function LocalLlmTab({ view }) {
   const navigate = useNavigate();
-  const activeView = LLM_VIEWS.some(({ id }) => id === view) ? view : 'runtimes';
+  const activeView = LLM_VIEWS.some(({ id }) => id === view) ? view : 'library';
 
   return (
     <div className="space-y-4">
@@ -42,14 +42,11 @@ export function LocalLlmTab({ view }) {
           controlsIdPrefix="llm-management-panel"
         />
         <p className="text-xs text-gray-500">
-          {activeView === 'runtimes'
-            ? 'Install, start, stop, and configure the local servers that run language models.'
-            : activeView === 'abuse'
-              ? 'Install and verify each stage of the pinned Prompt Guard classifier used to screen external content.'
-              : 'Find, install, compare, and remove the model weights available to Ollama and LM Studio.'}
+          {activeView === 'abuse'
+            ? 'Install and verify each stage of the pinned Prompt Guard classifier used to screen external content.'
+            : 'Find, install, compare, and remove the model weights available to Ollama and LM Studio.'}
         </p>
       </div>
-      {activeView === 'runtimes' && <LocalLlmRuntimesView />}
       {activeView === 'abuse' && <ModelAbuseGuardPanel />}
       {activeView === 'library' && <LocalLlmLibraryView />}
     </div>

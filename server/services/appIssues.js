@@ -46,6 +46,14 @@ const truncateBody = (body) => {
 };
 
 /**
+ * Forge label colors arrive bare (`d73a4a`) or `#`-prefixed (`#d73a4a`);
+ * the UI needs the `#rrggbb` form `chipColors`/`parseColor` accepts.
+ */
+const normalizeLabelColor = (color) => (
+  color ? `#${String(color).replace(/^#/, '')}` : null
+);
+
+/**
  * Normalize a raw `gh issue list --json` row into the common issue shape.
  * GitHub labels carry a hex `color` with no `#`; the UI needs it prefixed.
  *
@@ -62,7 +70,7 @@ function normalizeGithubIssue(issue) {
     labels: Array.isArray(issue.labels)
       ? issue.labels.filter(Boolean).map((l) => ({
         name: l.name || '',
-        color: l.color ? `#${String(l.color).replace(/^#/, '')}` : null,
+        color: normalizeLabelColor(l.color),
         description: l.description || '',
       })).filter((l) => l.name)
       : [],
@@ -83,8 +91,13 @@ function normalizeGithubIssue(issue) {
  * across glab versions, and a silently-dropped label list is worse than an
  * unused branch. GitLab counts discussion in `user_notes_count` (system notes
  * excluded), which is already the scalar the UI wants.
+ *
+ * String labels carry no color of their own — they are joined against the
+ * name-keyed map built from `glab label list` (see `buildGitlabLabelMap`), so
+ * the tab renders forge colors instead of the neutral fallback. A label absent
+ * from the map keeps `color: null` and renders neutral, exactly as before.
  */
-function normalizeGitlabIssue(issue) {
+function normalizeGitlabIssue(issue, labelMap = null) {
   return {
     number: issue.iid,
     title: issue.title || '',
@@ -92,8 +105,13 @@ function normalizeGitlabIssue(issue) {
     url: issue.web_url || '',
     labels: Array.isArray(issue.labels)
       ? issue.labels
-        .map((l) => (typeof l === 'string' ? { name: l, color: null, description: '' }
-          : { name: l?.name || '', color: l?.color || null, description: l?.description || '' }))
+        .map((l) => {
+          if (typeof l === 'string') {
+            const known = labelMap?.get(l);
+            return known ? { name: l, ...known } : { name: l, color: null, description: '' };
+          }
+          return { name: l?.name || '', color: normalizeLabelColor(l?.color), description: l?.description || '' };
+        })
         .filter((l) => l.name)
       : [],
     assignees: Array.isArray(issue.assignees)
@@ -104,6 +122,22 @@ function normalizeGitlabIssue(issue) {
     updatedAt: issue.updated_at || null,
     commentCount: Number.isFinite(issue.user_notes_count) ? issue.user_notes_count : 0,
   };
+}
+
+/**
+ * Build the name-keyed `{ color, description }` map `normalizeGitlabIssue`
+ * joins string labels against, from a `glab label list` row list. GitLab
+ * colors use the same `#rrggbb` form GitHub normalizes to, so they go through
+ * the same prefixing. First row wins on duplicate names.
+ */
+function buildGitlabLabelMap(labelRows) {
+  const map = new Map();
+  for (const row of labelRows) {
+    const name = row?.name;
+    if (!name || map.has(name)) continue;
+    map.set(name, { color: normalizeLabelColor(row?.color), description: row?.description || '' });
+  }
+  return map;
 }
 
 /**
@@ -170,19 +204,27 @@ async function fetchGithubIssues(repoSpec, apiHost, { repoPath = null, forgeAcco
 async function fetchGitlabIssues(repoPath) {
   // `glab issue list` defaults to OPEN issues.
   const { rows, reason } = await execGlabJson(['issue', 'list', '--per-page', String(GL_PER_PAGE)], repoPath);
-  if (rows) return toIssueResult(rows, normalizeGitlabIssue);
-  if (reason === 'not-json') {
+  if (!rows) {
+    if (reason === 'not-json') {
+      return {
+        issues: [], reason: 'glab-output-not-json', transient: true,
+        headline: "Reached GitLab, but couldn't read its answer",
+        remedy: 'update `glab` — its JSON output flag moved (check `glab issue list --help`)',
+      };
+    }
     return {
-      issues: [], reason: 'glab-output-not-json', transient: true,
-      headline: "Reached GitLab, but couldn't read its answer",
-      remedy: 'update `glab` — its JSON output flag moved (check `glab issue list --help`)',
+      issues: [], reason: 'fetch-failed', transient: true,
+      headline: "Couldn't reach GitLab",
+      remedy: 'check `glab auth status` and that `glab` is installed and can reach the host',
     };
   }
-  return {
-    issues: [], reason: 'fetch-failed', transient: true,
-    headline: "Couldn't reach GitLab",
-    remedy: 'check `glab auth status` and that `glab` is installed and can reach the host',
-  };
+  // Best-effort color enrichment, same cwd the issue list resolved its project
+  // from (so enterprise/custom-host repos get it too — no hostname gating).
+  // A failed lookup must never become a whole-tab failure: unknown labels keep
+  // `color: null` and the issue list is returned untouched.
+  const labelLookup = await execGlabJson(['label', 'list', '--per-page', String(GL_PER_PAGE)], repoPath);
+  const labelMap = labelLookup.rows ? buildGitlabLabelMap(labelLookup.rows) : null;
+  return toIssueResult(rows, (issue) => normalizeGitlabIssue(issue, labelMap));
 }
 
 /**

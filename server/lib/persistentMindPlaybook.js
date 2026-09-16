@@ -9,6 +9,7 @@
  */
 
 import { z } from 'zod';
+import { PERSISTENT_MIND_PLAYBOOK_PHASES } from './persistentMindPlaybookPhase.js';
 
 export const PERSISTENT_MIND_PLAYBOOK_SCHEMA_VERSION = 1;
 
@@ -35,6 +36,56 @@ Each wake, prefer this loop over idle chatter:
 4) INVENT / IMPROVE — Propose or start the smallest safe improvement via eidoverse tools, a typed CoS task, a Create-suite idea, or a precise product note. File-changing / consequential work only via typed CoS tasks; never claim side effects that did not happen.
 
 Self-directed wakes must produce a concrete observation, question, or next step — not filler.`;
+
+/**
+ * Maturity-aware phase templates (issue #7458). Chosen each wake from world
+ * signals by `resolvePersistentMindPlaybookPhase()` (see
+ * `server/services/persistentMindPlaybookSignals.js`) rather than a fixed
+ * cron personality — an empty Commons and a dense one need different wakes.
+ * Each block ends by naming its own phase so the mind states it in the
+ * working note, making the current phase visible to Helm and other minds.
+ */
+export const PERSISTENT_MIND_PLAYBOOK_PHASE_INSTRUCTIONS = Object.freeze({
+  explore: `PLAYBOOK PHASE — Explore (sparse Commons)
+
+The Commons is still mostly empty. Each wake, prefer this loop:
+
+1) Check eidoverse.status; reconnect presence if disconnected.
+2) Move through the world and map what already exists — places, peers, projections, affordances.
+3) Prefer many small concrete interactions (eidoverse.say, eidoverse.augment) over one abstract plan.
+
+End with a short user-visible working note starting "Phase: Explore" — what you found, and 1–3 smallest-first ideas for what to build next.`,
+
+  construct: `PLAYBOOK PHASE — Construct (Commons taking shape)
+
+The Commons has some structure but is not yet dense. Each wake, prefer this loop:
+
+1) Check eidoverse.status, then densify: add places, labels, structures, resource projection, and gentle affordances where the world is thin.
+2) Favor PortOS-side work; do not fork the Eidoverse runtime.
+3) File a typed CoS task for anything file-changing or consequential; never claim side effects that did not happen.
+
+End with a short user-visible working note starting "Phase: Construct" — what you built, what is still thin, and 1–3 smallest-first next steps.`,
+
+  maintain: `PLAYBOOK PHASE — Maintain (Commons needs upkeep)
+
+The Commons is established but something is broken, stale, or aging. Each wake, prefer this loop:
+
+1) Check eidoverse.status, then look for what is broken, stale, or orphaned — failed projections, dead affordances, stalled tasks.
+2) Repair or retire what no longer serves the world before adding anything new; re-test what you already built.
+3) File a typed CoS task for anything file-changing or consequential.
+
+End with a short user-visible working note starting "Phase: Maintain" — what you repaired or retired, and what still needs attention.`,
+
+  coordinate: `PLAYBOOK PHASE — Coordinate (peers waiting)
+
+Federated peers have activity worth your attention. Each wake, prefer this loop:
+
+1) Check eidoverse.status; when visitEidoversePeers is granted, review eidoverse.destinations and visit a peer with new activity (eidoverse.visit, eidoverse.visit-chat, then eidoverse.leave).
+2) Favor stewarding the shared baseline over solo construction this wake — read what a peer contributed, respond, and note anything worth bringing home.
+3) Package the smallest safe follow-up as a typed CoS task rather than acting outside your granted tools.
+
+End with a short user-visible working note starting "Phase: Coordinate" — who or what you coordinated with, and 1–3 smallest-first follow-ups.`,
+});
 
 export const persistentMindPlaybookSchema = z.object({
   schemaVersion: z.literal(PERSISTENT_MIND_PLAYBOOK_SCHEMA_VERSION).optional(),
@@ -79,12 +130,20 @@ export function mergePersistentMindPlaybook(previous, update) {
 /**
  * Resolve the instruction block for the active playbook mode.
  * `default` contributes nothing (operator prompt alone drives the mind).
+ *
+ * `phase` (one of `PERSISTENT_MIND_PLAYBOOK_PHASES`, e.g. from
+ * `resolvePersistentMindPlaybookPhase()`) selects the maturity-aware
+ * template for `continuous-play`. Omitting it (a preview with no live world
+ * signals, or an unrecognized value) falls back to the general
+ * explore→interact→reflect→invent loop.
  */
-export function playbookInstructionBlock(playbook) {
+export function playbookInstructionBlock(playbook, phase) {
   const normalized = normalizePersistentMindPlaybook(playbook);
   const parts = [];
   if (normalized.mode === 'continuous-play') {
-    parts.push(CONTINUOUS_PLAY_PLAYBOOK_INSTRUCTIONS);
+    parts.push(PERSISTENT_MIND_PLAYBOOK_PHASES.includes(phase)
+      ? PERSISTENT_MIND_PLAYBOOK_PHASE_INSTRUCTIONS[phase]
+      : CONTINUOUS_PLAY_PLAYBOOK_INSTRUCTIONS);
   }
   if (normalized.customInstructions) {
     parts.push(normalized.customInstructions);
@@ -96,9 +155,9 @@ export function playbookInstructionBlock(playbook) {
  * Merge operator instructions with the active playbook template.
  * Playbook text is appended so the operator prompt remains primary voice.
  */
-export function composePersistentMindInstructions(operatorInstructions, playbook) {
+export function composePersistentMindInstructions(operatorInstructions, playbook, phase) {
   const base = typeof operatorInstructions === 'string' ? operatorInstructions.trim() : '';
-  const block = playbookInstructionBlock(playbook);
+  const block = playbookInstructionBlock(playbook, phase);
   if (!block) return base;
   if (!base) return block;
   return `${base}\n\n${block}`;

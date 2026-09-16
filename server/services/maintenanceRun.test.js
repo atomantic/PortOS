@@ -12,8 +12,23 @@ vi.mock('./cosState.js', () => ({ loadState: vi.fn(async () => ({ agents: {} }))
 vi.mock('./cosTaskStore.js', () => ({ getAllTasks: vi.fn(async () => ({ cos: { tasks: state.tasks }, user: { tasks: [] } })) }));
 vi.mock('./taskSchedule.js', () => ({ getOnDemandRequests: vi.fn(async () => state.requests) }));
 vi.mock('./apps.js', () => ({ getAppById: vi.fn(async (id) => (id === 'app-1' ? { id, name: 'Example App' } : null)) }));
-vi.mock('./providers.js', () => ({ getProviderById: vi.fn(async (id) => (id === 'codex' ? { id, type: 'cli', command: 'codex', enabled: true } : null)) }));
-vi.mock('./scheduledHandlers/providerPick.js', () => ({ resolveBurnProvider: vi.fn(async ({ job, family }) => (job.providerId === 'codex' && family.id === 'codex' ? { id: 'codex' } : null)) }));
+// The registry a run's provider gate resolves against. `opencode-tui` belongs to
+// no subscription family — the case #7416 is about — and `off-tui` is the
+// registered-but-disabled control.
+const PROVIDERS = [
+  { id: 'codex', type: 'cli', command: 'codex', enabled: true },
+  { id: 'claude', type: 'cli', command: 'claude', enabled: true },
+  { id: 'opencode-tui', type: 'tui', command: 'opencode', enabled: true },
+  { id: 'off-tui', type: 'tui', command: 'opencode', enabled: false },
+];
+vi.mock('./providers.js', () => ({
+  getProviderById: vi.fn(async (id) => PROVIDERS.find((provider) => provider.id === id) || null),
+  getAllProviders: vi.fn(async () => PROVIDERS),
+}));
+// The REAL resolver over that registry, not a hand-rolled stand-in: the whole
+// point of these cases is which pins the shared gate accepts, and a double would
+// only assert what the double was told.
+vi.mock('./scheduledHandlers/providerPick.js', async (importActual) => await importActual());
 vi.mock('./quotaBurnInvoke.js', () => ({
   getQuotaBurnTaskCatalog: vi.fn(async () => ({ builtin: {}, custom: {} })),
   invokeQuotaBurnStep: vi.fn(async (call) => {
@@ -67,10 +82,6 @@ describe('manual maintenance run', () => {
 
   it('dispatches an edited stage through its own provider family', async () => {
     const { run } = await start();
-    const { getProviderById } = await import('./providers.js');
-    const { resolveBurnProvider } = await import('./scheduledHandlers/providerPick.js');
-    getProviderById.mockResolvedValueOnce({ id: 'claude', command: 'claude', type: 'cli', enabled: true });
-    resolveBurnProvider.mockResolvedValueOnce({ id: 'claude' });
     await updateMaintenanceStep(run.id, run.steps[1].id, { providerId: 'claude', model: 'example-model', effort: 'low' });
     await __onMaintenanceAgentCompleted(agentFor(run, 0));
     expect(state.invoked.at(-1)).toMatchObject({ family: { id: 'claude' }, step: { overrides: { providerId: 'claude', effort: 'low' } } });
@@ -147,6 +158,27 @@ describe('manual maintenance run', () => {
     expect((await getMaintenanceRun(run.id)).active.stepId).toBe(run.steps[0].id);
   });
 
+  it('a relaunched step neither completes nor settles the run', async () => {
+    // Relaunch retires the step's agent with `success: false` and requeues the
+    // SAME task on another provider, so the step is still in flight. Evaluating
+    // here would report it as a hold the user must retry or dismiss, for work that
+    // is already on its way back out. The continuation's own completion advances
+    // the run; `retryMaintenanceRuns` is the backstop if it never lands.
+    const { run } = await start();
+    const relaunched = {
+      ...agentFor(run, 0, false),
+      result: { success: false, resumed: true, resumedTaskId: 'task-0', error: 'Relaunched by user on codex' },
+    };
+
+    expect(await __onMaintenanceAgentCompleted(relaunched)).toBeNull();
+
+    const after = await getMaintenanceRun(run.id);
+    expect(after.completed).toEqual({});
+    expect(after.active.stepId).toBe(run.steps[0].id);
+    // Nothing new dispatched — only the step that was already running.
+    expect(state.invoked).toHaveLength(1);
+  });
+
   it('stops without recalling work, resumes from its ledger, and refuses a second run for the same app', async () => {
     const { run } = await start();
     await expect(start()).rejects.toMatchObject({ status: 409, code: 'MAINTENANCE_RUN_ACTIVE' });
@@ -198,11 +230,53 @@ describe('manual maintenance run', () => {
     expect(run).toMatchObject({ status: 'running', reason: 'schedule unreadable' });
   });
 
-  it('refuses an unknown app or a provider outside every subscription family before writing anything', async () => {
+  it('refuses an unknown app, and an unregistered or disabled provider, before writing anything', async () => {
     await expect(startMaintenanceRun({ appId: 'nope', providerId: 'codex', model: 'gpt-5' })).rejects.toMatchObject({ status: 400, code: 'MAINTENANCE_RUN_APP_UNAVAILABLE' });
-    await expect(startMaintenanceRun({ appId: 'app-1', providerId: 'ollama', model: 'llama' })).rejects.toMatchObject({ status: 400, code: 'MAINTENANCE_RUN_PROVIDER_UNAVAILABLE' });
+    for (const providerId of ['not-registered', 'off-tui']) {
+      await expect(startMaintenanceRun({ appId: 'app-1', providerId, model: 'llama' })).rejects.toMatchObject({ status: 400, code: 'MAINTENANCE_RUN_PROVIDER_UNAVAILABLE' });
+    }
     expect(await listMaintenanceRuns()).toEqual([]);
     expect(state.invoked).toEqual([]);
+  });
+
+  // #7416. The picker offers every enabled process provider, but the dispatch
+  // path required a subscription family end to end, so "Run now" on an OpenCode
+  // TUI or a local-model wrapper failed with MAINTENANCE_RUN_PROVIDER_UNAVAILABLE.
+  describe('a provider outside every subscription family', () => {
+    it('starts a run and dispatches it unfamilied, crediting no window', async () => {
+      const { run, result } = await startMaintenanceRun({ appId: 'app-1', providerId: 'opencode-tui', model: 'local-model' });
+      expect(result).toMatchObject({ dispatched: true, taskType: 'better-structural-drift' });
+      expect(run).toMatchObject({ status: 'running', familyId: null, claimFamilyId: null });
+      expect(state.invoked.at(-1)).toMatchObject({
+        maintenanceRunId: run.id,
+        family: { id: null, unfamilied: true },
+        step: expect.objectContaining({ overrides: expect.objectContaining({ providerId: 'opencode-tui' }) }),
+      });
+    });
+
+    it('accepts a per-step edit onto one, without the step inheriting the run\'s family', async () => {
+      // The regression a truthiness fallback reintroduces: a step whose own
+      // family is legitimately null would read as "nothing recorded, inherit",
+      // pick up `codex`, and then be refused for not belonging to it.
+      const { run } = await start();
+      await updateMaintenanceStep(run.id, run.steps[1].id, { providerId: 'opencode-tui', model: 'local-model', effort: null });
+      await __onMaintenanceAgentCompleted(agentFor(run, 0));
+      expect(state.invoked.at(-1)).toMatchObject({
+        family: { id: null, unfamilied: true },
+        step: { overrides: { providerId: 'opencode-tui' } },
+      });
+    });
+
+    it('accepts it as the claim handler while the audits stay on their own family', async () => {
+      const { run } = await startMaintenanceRun({ appId: 'app-1', providerId: 'codex', model: 'gpt-5', claimHandler: { providerId: 'opencode-tui', model: 'local-model', effort: null } });
+      expect(run).toMatchObject({ familyId: 'codex', claimFamilyId: null });
+      expect(state.invoked.at(-1).family).toEqual({ id: 'codex' });
+      await __onMaintenanceAgentCompleted(agentFor(run, 0));
+      expect(state.invoked.at(-1)).toMatchObject({
+        family: { id: null, unfamilied: true },
+        step: { drain: true, overrides: expect.objectContaining({ providerId: 'opencode-tui' }) },
+      });
+    });
   });
 });
 
@@ -254,12 +328,6 @@ it('files findings consecutively and finishes without claiming when claims are d
 // A different subscription family must survive storage and dispatch, including
 // repeated claim passes, without changing the audit pins.
 it('dispatches claims with their own provider family, model and effort', async () => {
-  const { getProviderById } = await import('./providers.js');
-  const { resolveBurnProvider } = await import('./scheduledHandlers/providerPick.js');
-  getProviderById.mockImplementationOnce(async id => ({ id, type: 'cli', command: id, enabled: true }));
-  getProviderById.mockImplementationOnce(async id => ({ id, type: 'cli', command: id, enabled: true }));
-  resolveBurnProvider.mockResolvedValueOnce({ id: 'codex' });
-  resolveBurnProvider.mockImplementationOnce(async ({ job, family }) => job.providerId === family.id ? { id: job.providerId } : null);
   const claimHandler = { providerId: 'claude', model: 'sonnet', effort: 'low' };
   const { run } = await startMaintenanceRun({ appId: 'app-1', providerId: 'codex', model: 'gpt-5', effort: 'high', claimHandler });
   expect((await getMaintenanceRun(run.id)).steps[1].overrides).toEqual({ ...claimHandler, params: {} });

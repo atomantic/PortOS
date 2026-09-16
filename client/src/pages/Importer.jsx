@@ -22,6 +22,7 @@ import {
   IMPORTER_SOURCE_CHAR_LIMIT_FALLBACK,
   CLASSIFY_SOURCE_HEAD_CHARS,
 } from '../services/apiImporter';
+import { formatCount } from '../utils/formatters';
 
 const CONTENT_TYPE_LABELS = {
   'short-story': 'Short Story',
@@ -680,7 +681,7 @@ function IntakeForm({
             Source Text
           </label>
           <span className={`text-xs ${sourceOver ? 'text-port-error' : 'text-port-text-muted'}`}>
-            {sourceLen.toLocaleString()} / {sourceCharLimit.toLocaleString()} chars
+            {formatCount(sourceLen)} / {formatCount(sourceCharLimit)} chars
           </span>
         </div>
         <textarea
@@ -693,7 +694,7 @@ function IntakeForm({
         {sourceOver && (
           <p className="text-xs text-port-error mt-1 flex items-center gap-1">
             <AlertTriangle className="w-3 h-3" />
-            Source exceeds the {sourceCharLimit.toLocaleString()}-char ceiling. Trim it or wait for chunked-extraction support.
+            Source exceeds the {formatCount(sourceCharLimit)}-char ceiling. Trim it or wait for chunked-extraction support.
           </p>
         )}
       </div>
@@ -1241,7 +1242,7 @@ const IssueCard = memo(function IssueCard({ idx, issue, onPatch, arcRoles, seaso
           aria-controls={`iss-${idx}-prose`}
         >
           {proseExpanded ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
-          {excerptLabel}: {proseLen.toLocaleString()} chars
+          {excerptLabel}: {formatCount(proseLen)} chars
           <span className="text-port-text-muted/70">— {proseExpanded ? 'click to collapse' : 'click to edit (verbatim from source)'}</span>
         </button>
         {proseExpanded && (

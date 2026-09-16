@@ -13,4 +13,4 @@
  * Re-exported by `./providers.js` for existing `utils/providers` imports.
  */
 
-export { PROVIDER_GATEWAYS, gatewayForProvider, isGatewayBackedProvider } from '../../../server/lib/providerGateways.js';
+export { PROVIDER_GATEWAYS, gatewayById, gatewayForProvider, isGatewayBackedProvider } from '../../../server/lib/providerGateways.js';

@@ -1,11 +1,9 @@
 import { streamDetection } from '../services/streamingDetect.js';
 import * as pm2Standardizer from '../services/pm2Standardizer.js';
 import * as appsService from '../services/apps.js';
-import { logAction } from '../services/history.js';
-import * as appUpdater from '../services/appUpdater.js';
 import * as appDeployer from '../services/appDeployer.js';
-import { checkPortosUpdatePreflight } from '../services/updatePreflight.js';
-import { PORTOS_APP_ID } from '../lib/appIdentity.js';
+import { runAppUpdate } from '../services/appUpdateRunner.js';
+import { activeOperationsPayload, claimAppOperation, endAppOperation, recordOperationStep } from '../services/appOperations.js';
 import {
   appDeploySchema,
   appStandardizeSchema,
@@ -15,70 +13,11 @@ import {
   validateSocketData
 } from '../lib/socketValidation.js';
 
-// In-flight app update/standardize operations, keyed by app id. These run for
-// minutes and outlive the page that dispatched them, so the server owns both
-// the re-entrancy guard and the resumable progress buffer.
-const activeAppOperations = new Map();
-
-// One operation occupies several keys, so collapse them back to one row.
-// repoPath stays server-side: the client only needs to name and render the run.
-const activeOperationsPayload = () => ({
-  operations: [...new Set(activeAppOperations.values())].map(({ repoPath: _repoPath, ...op }) => op)
-});
-
-// Two app records may point at the same checkout, so the app id alone doesn't
-// identify the resource being mutated — an operation is registered under every
-// key that names the resource it is mutating.
-const operationKeys = (app) => (app.repoPath && app.repoPath !== app.id ? [app.id, app.repoPath] : [app.id]);
-
-const findConflictingOperation = (app) => operationKeys(app)
-  .map(key => activeAppOperations.get(key))
-  .find(Boolean);
-
-// Refuse rather than overwrite: a caller that reaches the registry without
-// going through claimAppOperation must not be able to silently clobber a live
-// run out of the map and orphan its step buffer.
-const setOperationKey = (key, operation) => {
-  if (activeAppOperations.has(key)) throw new Error(`App operation already in flight for ${key}`);
-  activeAppOperations.set(key, operation);
-};
-
-// Claim the resource for this run. The conflict check and the registry write
-// are one synchronous step — an await between them is what let two overlapping
-// dispatches both pass the check, both run, and then delete each other's
-// record (#6638). Callers must claim BEFORE any further await.
-const claimAppOperation = (io, app, type) => {
-  const inFlight = findConflictingOperation(app);
-  if (inFlight) return { ok: false, inFlight };
-  const operation = { appId: app.id, appName: app.name, type, steps: [], startedAt: Date.now(), repoPath: app.repoPath };
-  for (const key of operationKeys(app)) setOperationKey(key, operation);
-  io.emit('app:operations:active', activeOperationsPayload());
-  return { ok: true, operation };
-};
-
-// A PortOS self-update deliberately leaves its operation registered: the
-// process is about to be replaced, so the map dies with it. A test driving that
-// path has no process boundary, so it needs a way back to an empty set.
-export const __resetAppOperations = () => activeAppOperations.clear();
-
-// Clear every key this operation holds, and only the keys pointing at THIS
-// operation — a run that already finished must not evict a live sibling.
-const endAppOperation = (io, appId) => {
-  const operation = activeAppOperations.get(appId);
-  if (!operation) return;
-  for (const [key, op] of activeAppOperations) {
-    if (op === operation) activeAppOperations.delete(key);
-  }
-  io.emit('app:operations:active', activeOperationsPayload());
-};
-
-// Record a step into the operation's buffer using the same last-write-wins
-// per-step semantics the client renders with.
-const recordOperationStep = (operation, frame) => {
-  const existing = operation.steps.findIndex(s => s.step === frame.step);
-  if (existing >= 0) operation.steps[existing] = frame;
-  else operation.steps.push(frame);
-};
+// The in-flight operation registry lives in services/appOperations.js — the
+// unattended auto-updater claims the same resource through it, and the Live
+// activity snapshot reads it. Re-exported here because the socket suite drives
+// the reset through this module.
+export { __resetAppOperations } from '../services/appOperations.js';
 
 export const registerAppHandlers = (socket, io) => {
   socket.on('detect:start', async (rawData) => {
@@ -121,102 +60,45 @@ export const registerAppHandlers = (socket, io) => {
     }
   });
 
+  // The update itself — the claim, the PortOS preflight refusals, the run, the
+  // ledger row — lives in services/appUpdateRunner.js, because the unattended
+  // auto-updater dispatches the identical action without a socket. This handler
+  // owns only what is socket-shaped: validation, and routing the two refusals
+  // that belong to the person who clicked back to THEIR socket rather than the
+  // io bus. They are emitted directly (not thrown) so only that error event
+  // fires — falling to the catch below would also fire app:update:complete with
+  // success:false, which overwrites the message client-side
+  // (useAppOperation's onDone patch).
   socket.on('app:update', async (rawData) => {
-    let operatingAppId = null;
-    let result = null;
+    let appId = null;
     try {
       const data = validateSocketData(appUpdateSchema, rawData, socket, 'app:update');
       if (!data) return;
+      appId = data.appId;
 
-      const app = await appsService.getAppById(data.appId);
-      if (!app) {
-        socket.emit('app:update:error', { message: 'App not found' });
-        return;
-      }
-
-      // Claimed here, immediately after the app record resolves and BEFORE the
-      // preflight await below — the claim has to cover every await that
-      // precedes the actual update, or two dispatches land inside the gap.
-      const claim = claimAppOperation(io, app, 'update');
-      if (!claim.ok) {
-        socket.emit('app:update:error', {
-          appId: app.id,
-          duplicate: true,
-          message: `An ${claim.inFlight.type} is already running for ${claim.inFlight.appName}`
-        });
-        return;
-      }
-      const operation = claim.operation;
-      operatingAppId = app.id;
-
-      // PortOS is itself a managed app, and updating it restarts the whole
-      // install — apply the same refusals POST /api/update/execute enforces
-      // (a live CoS agent, in-flight Persistent Mind image work, an
-      // unacknowledged fork) so App Management can't restart out from under
-      // them just because it dispatches through this socket instead (#5984).
-      // Emitted directly (not thrown) so only this error event fires — letting
-      // it fall to the outer catch below would also fire app:update:complete
-      // with success:false, which overwrites this message with a generic one
-      // client-side (useAppOperation's onDone patch).
-      if (app.id === PORTOS_APP_ID) {
-        const refusal = await checkPortosUpdatePreflight({
-          acknowledgeFork: data.acknowledgeFork === true,
-          acknowledgePersistentMindImageBackup: data.acknowledgePersistentMindImageBackup === true,
-        }).then(() => null, (err) => err);
-        if (refusal) {
-          endAppOperation(io, app.id);
-          operatingAppId = null;
-          socket.emit('app:update:error', { appId: app.id, code: refusal.code, message: refusal.message });
-          return;
-        }
-      }
-
-      console.log(`⬇️ Socket update started for ${app.name}`);
-      const emit = (step, status, message) => {
-        const frame = { appId: app.id, step, status, message, timestamp: Date.now() };
-        recordOperationStep(operation, frame);
-        io.emit('app:update:step', frame);
-      };
-
-      let failure = null;
-      result = await appUpdater.updateApp(app, emit, {
+      const outcome = await runAppUpdate({
+        io,
+        appId: data.appId,
         syncFork: data.syncFork === true,
         acknowledgeFork: data.acknowledgeFork === true,
         acknowledgePersistentMindImageBackup: data.acknowledgePersistentMindImageBackup === true,
-      }).catch(err => {
-        failure = err;
-        // Refusals raised inside the update (the PortOS launcher's post-lock
-        // re-check, say) carry the same acknowledgement codes the pre-check
-        // emits above — the panel's retry buttons key on `code`, so dropping it
-        // here would leave a refusal the user could have acted on inert.
-        io.emit('app:update:error', { appId: app.id, code: err.code || null, message: err.message });
-        return null;
       });
-
-      // The ledger and the apps-changed broadcast are the socket path's job now
-      // that it is the only way to update an app — a thrown update still gets a
-      // row, with success:false, rather than vanishing from the history.
-      await logAction('update', app.id, app.name, { steps: result?.steps ?? [] }, result?.success === true, failure?.message ?? null);
-      appsService.notifyAppsChanged('update', app.id);
-
-      if (result?.selfUpdateStarted) {
-        // update.sh will `pm2 delete` THIS process partway through, so there is
-        // no completion to report and nothing after the restart to clear the
-        // operation. Leaving it registered (the map dies with the process) is
-        // what keeps the row rendering the script's STEP: frames right up to
-        // the moment the server goes down.
-        console.log(`♻️ PortOS self-update handed off — update.sh will restart this process`);
-      } else if (result) {
-        io.emit('app:update:complete', { appId: app.id, success: result.success, steps: result.steps });
-        console.log(`✅ Socket update complete for ${app.name}`);
-      }
+      if (outcome.ok) return;
+      // A 'failed' outcome already went out on the io bus as app:update:error /
+      // app:update:complete from inside the runner; re-emitting it here would
+      // overwrite that message with a second, less specific one.
+      if (outcome.reason === 'failed') return;
+      socket.emit('app:update:error', {
+        appId: outcome.appId,
+        code: outcome.code,
+        message: outcome.message,
+        ...(outcome.reason === 'duplicate' ? { duplicate: true } : {}),
+      });
     } catch (err) {
       const message = err?.message ?? String(err);
       console.error(`❌ Socket handler error [app:update]: ${message}`);
-      io.emit('app:update:error', { appId: operatingAppId, code: err?.code || null, message });
-      io.emit('app:update:complete', { appId: operatingAppId, success: false, steps: [] });
-    } finally {
-      if (operatingAppId && !result?.selfUpdateStarted) endAppOperation(io, operatingAppId);
+      io.emit('app:update:error', { appId, code: err?.code || null, message });
+      io.emit('app:update:complete', { appId, success: false, steps: [] });
     }
   });
 

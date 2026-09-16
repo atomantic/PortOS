@@ -1,5 +1,5 @@
 import { useState, useRef } from 'react';
-import { X, CheckCircle, AlertCircle, RotateCcw, Image, Loader2 } from 'lucide-react';
+import { X, RotateCcw, Image, Loader2 } from 'lucide-react';
 import { processScreenshotUploads } from '../../../services/apiMedia';
 import toast from '../../ui/Toast';
 import Modal from '../../ui/Modal';
@@ -7,6 +7,8 @@ import FilePickerButton from '../../ui/FilePickerButton';
 import { FormField } from '../../ui/FormField';
 import EffortSelect from '../EffortSelect';
 import { effectiveModelFor, effortAwareModelOptions, effortSurvivingModel, seedModelEffort } from '../../../utils/providers';
+import { isAgentHandoff, agentHandoffReason } from '../../../lib/agentOutcome';
+import AgentResultLine from '../AgentResultLine';
 
 export default function ResumeAgentModal({ agent, taskType = 'user', providers, providersLoaded = true, apps, onSubmit, onClose }) {
   // A paused agent resumes IN PLACE: its own task is requeued on the worktree its
@@ -17,8 +19,13 @@ export default function ResumeAgentModal({ agent, taskType = 'user', providers, 
   const outputSummary = agent.output?.length > 0
     ? agent.output.slice(-20).map(o => o.line).join('\n')
     : '';
+  // A run retired by Resume/Relaunch never reached a verdict. This string is
+  // pasted into the NEW run's context, so calling it a failure would tell the
+  // agent its predecessor broke when the user simply moved it to another provider.
   const resultInfo = agent.result
-    ? (agent.result.success ? 'Previous run: Completed successfully' : `Previous run: Failed - ${agent.result.error || 'Unknown error'}`)
+    ? (isAgentHandoff(agent)
+      ? `Previous run: Handed off - ${agentHandoffReason(agent)}`
+      : agent.result.success ? 'Previous run: Completed successfully' : `Previous run: Failed - ${agent.result.error || 'Unknown error'}`)
     : '';
   const pauseInfo = isPaused
     ? `Previous run: Paused${agent.metadata?.pauseReason ? ` - ${agent.metadata.pauseReason}` : ''}`
@@ -147,15 +154,7 @@ export default function ResumeAgentModal({ agent, taskType = 'user', providers, 
               This requeues the same task on the worktree the paused run left behind — no second agent, and nothing to clean up afterward.
             </div>
           )}
-          {agent.result && (
-            <div className={`text-sm mt-2 flex items-center gap-2 ${agent.result.success ? 'text-port-success' : 'text-port-error'}`}>
-              {agent.result.success ? (
-                <><CheckCircle size={14} /> Completed successfully</>
-              ) : (
-                <><AlertCircle size={14} /> {agent.result.error || 'Failed'}</>
-              )}
-            </div>
-          )}
+          <AgentResultLine agent={agent} className="mt-2" />
         </div>
 
         <form onSubmit={handleSubmit} className="space-y-4">

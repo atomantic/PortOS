@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router';
-import { ArrowUp, Brain, Check, CirclePause, CirclePlay, Cpu, Database, Eraser, ImagePlus, MessageCircle, PhoneCall, PhoneOff, RefreshCw, Settings2, Square, StickyNote, Upload, Wrench, X } from 'lucide-react';
+import { AlertTriangle, ArrowUp, Brain, Check, CirclePause, CirclePlay, Cpu, Database, Eraser, ImagePlus, MessageCircle, PhoneCall, PhoneOff, RefreshCw, Settings2, Square, StickyNote, Upload, Wrench, X } from 'lucide-react';
 import { Link } from 'react-router';
 import { useAutoRefetch } from '../../../hooks/useAutoRefetch.js';
 import useMounted from '../../../hooks/useMounted';
@@ -8,7 +8,7 @@ import useProviderModels from '../../../hooks/useProviderModels';
 import { useSocket } from '../../../hooks/useSocket';
 import { uuidv4 } from '../../../lib/uuid.js';
 import * as api from '../../../services/api';
-import { formatDateTime, timeUntil } from '../../../utils/formatters';
+import { formatCount, formatDateTime, timeUntil } from '../../../utils/formatters';
 import BrailleSpinner from '../../BrailleSpinner';
 import Drawer from '../../Drawer';
 import AutoSizeTextarea from '../../ui/AutoSizeTextarea';
@@ -27,6 +27,7 @@ import PersistentMindThinkingPresets from '../PersistentMindThinkingPresets';
 import PersistentMindVisibilityPanel from '../PersistentMindVisibilityPanel';
 import PersistentMindTools from '../../../pages/PersistentMindTools';
 import { findMindThinkingPreset } from '../../../lib/mindThinkingPresets.js';
+import { describeMindTurnProgress, mindTurnHeadline, mindTurnRuntimeSnapshot } from '../../../lib/mindTurnProgress.js';
 import { readFileAsBase64, UPLOAD_IMAGE_ACCEPT, validateImageFile } from '../../../utils/fileUpload';
 
 const PAGE_LIMIT = 200;
@@ -108,24 +109,57 @@ const imageCapability = (mind) => {
   return { status, guidance: typeof capability?.guidance === 'string' ? capability.guidance : null };
 };
 
-const MindTypingIndicator = () => (
-  <span
-    data-testid="mind-typing-indicator"
-    role="status"
-    aria-label="Chief of Staff is typing"
-    className="inline-flex items-center gap-0.5"
-  >
-    <span className="sr-only">Chief of Staff is typing</span>
-    {[0, 1, 2].map((index) => (
+// The chat header's live turn readout. Three bouncing dots alone said only
+// "not idle", so a cold model load, a wedged turn, and a quota autopause were
+// indistinguishable from healthy inference; the phase decides which of those
+// the user is looking at, and the stage/elapsed text says how far in it is.
+const MindTurnIndicator = ({ progress }) => {
+  if (progress.phase === 'idle') return null;
+  const detail = [progress.stage, progress.detail].filter(Boolean).join(' · ');
+
+  if (progress.phase === 'thinking') {
+    // Stage only: it changes when the turn genuinely moves on, while the
+    // elapsed/heartbeat text re-renders on every 10s poll and would otherwise
+    // re-announce the same state endlessly.
+    const typingLabel = progress.stage ? `Chief of Staff is typing — ${progress.stage}` : 'Chief of Staff is typing';
+    return (
       <span
-        key={index}
-        aria-hidden="true"
-        className="h-1.5 w-1.5 animate-bounce rounded-full bg-current motion-reduce:animate-none"
-        style={{ animationDelay: `${index * 120}ms` }}
-      />
-    ))}
-  </span>
-);
+        data-testid="mind-typing-indicator"
+        data-phase={progress.phase}
+        role="status"
+        aria-label={typingLabel}
+        className="inline-flex min-w-0 items-center gap-1.5 text-port-text-muted"
+      >
+        <span className="inline-flex items-center gap-0.5 text-port-accent">
+          {[0, 1, 2].map((index) => (
+            <span
+              key={index}
+              aria-hidden="true"
+              className="h-1.5 w-1.5 animate-bounce rounded-full bg-current motion-reduce:animate-none"
+              style={{ animationDelay: `${index * 120}ms` }}
+            />
+          ))}
+        </span>
+        {detail && <span aria-hidden="true" className="truncate text-[11px] font-normal">{detail}</span>}
+      </span>
+    );
+  }
+
+  const label = [mindTurnHeadline(progress, timeUntil), progress.phase === 'stalled' ? detail : null]
+    .filter(Boolean).join(' · ');
+
+  return (
+    <span
+      data-testid="mind-turn-indicator"
+      data-phase={progress.phase}
+      role="status"
+      className="inline-flex min-w-0 items-center gap-1.5 rounded-full border border-port-warning/60 bg-port-warning/10 px-2 py-0.5 text-[11px] font-normal text-port-warning"
+    >
+      <AlertTriangle size={12} aria-hidden="true" className="shrink-0" />
+      <span className="truncate" title={label}>{label}</span>
+    </span>
+  );
+};
 
 const mergeEvents = (previous, incoming) => {
   const byId = new Map(previous.map((event) => [event.eventId, event]));
@@ -628,6 +662,11 @@ export default function MindTab() {
   };
 
   const state = mind?.state;
+  // Derived from the runtime snapshot, whose freshness numbers are measured
+  // against the SERVER clock — so elapsed/heartbeat never subtract a browser
+  // clock from a server timestamp, and both refresh on the existing 10s
+  // runtime poll plus every socket-driven reload.
+  const turnProgress = describeMindTurnProgress({ state, runtime, events });
   const selectedEvent = events?.find((event) => event.eventId === selectedEventId) || null;
   const isPaused = state?.status === 'paused';
   const profileReady = Boolean(mind?.profile?.enabled && mind.profile.providerId && mind.profile.model);
@@ -724,9 +763,8 @@ export default function MindTab() {
         <div className="flex min-w-0 max-w-full flex-wrap items-center gap-2" role="group" aria-label="Persistent mind lifecycle">
           <PersistentMindThoughtStatus
             state={state}
-            model={state?.activeTurnId && state.activeTurnId === runtime?.inference?.turnId
-              ? runtime.inference.model
-              : mind?.profile?.model}
+            progress={turnProgress}
+            model={mindTurnRuntimeSnapshot(state, runtime)?.model || mind?.profile?.model}
           />
           {!state?.started && <ActionButton label={profileReady ? 'Start' : 'Configure'} icon={profileReady ? CirclePlay : Settings2} pending={profileReady && lifecyclePending === 'start'} disabled={loading || setupSaving} onClick={() => (profileReady ? runLifecycle('start') : openPanel('settings'))} />}
           <ActionButton label="Wake now" icon={CirclePlay} pending={lifecyclePending === 'wake'} disabled={loading || setupSaving || !profileReady || Boolean(lifecyclePending) || Boolean(state?.activeTurn)} onClick={() => runLifecycle('wake')} />
@@ -770,7 +808,7 @@ export default function MindTab() {
       <div className="grid min-h-0 flex-1 items-stretch gap-4 xl:grid-cols-[minmax(0,1fr)_19rem]">
         <section data-testid="mind-chat" aria-label="Persistent mind chat" className="flex h-[68dvh] min-h-[30rem] flex-col overflow-hidden rounded-[1.5rem] border border-port-border bg-port-card shadow-lg shadow-black/10 sm:min-h-[34rem] xl:h-full xl:min-h-0">
           <header className="flex shrink-0 items-center justify-between gap-3 border-b border-port-border bg-port-card/95 px-3 py-2.5 sm:px-4">
-            <h3 className="flex items-center gap-2 text-sm font-medium text-port-text">Conversation {state?.status === 'thinking' && <MindTypingIndicator />}</h3>
+            <h3 className="flex min-w-0 items-center gap-2 text-sm font-medium text-port-text"><span className="shrink-0">Conversation</span> <MindTurnIndicator progress={turnProgress} /></h3>
             <label htmlFor="mind-show-activity" className="flex shrink-0 items-center gap-2 rounded-full border border-port-border px-2.5 py-1.5 text-[11px] text-port-text-muted">
               <input id="mind-show-activity" type="checkbox" checked={showActivity} onChange={(event) => setShowActivity(event.target.checked)} className="accent-port-accent" /> Activity
             </label>
@@ -858,11 +896,24 @@ export default function MindTab() {
                 <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-port-text-muted">Live workspace</p>
                 <h3 id="mind-state-heading" className="mt-1 text-base font-semibold text-port-text">Mind state</h3>
               </div>
-              <span className={`h-2.5 w-2.5 rounded-full ${state?.status === 'thinking' ? 'animate-pulse bg-port-accent' : state?.started && !isPaused ? 'bg-port-success' : 'bg-port-text-muted'}`} aria-hidden="true" />
+              <span className={`h-2.5 w-2.5 rounded-full ${turnProgress.phase === 'stalled' || turnProgress.phase === 'blocked' ? 'bg-port-warning' : turnProgress.phase === 'thinking' ? 'animate-pulse bg-port-accent' : state?.started && !isPaused ? 'bg-port-success' : 'bg-port-text-muted'}`} aria-hidden="true" />
             </div>
             <p className="mt-3 text-sm text-port-text-muted">
-              {state?.status === 'thinking' ? 'Working through the current turn.' : state?.pauseReason || (state?.started ? 'Listening for messages and scheduled wakes.' : 'Configure the AI profile to begin.')}
+              {turnProgress.phase === 'stalled' ? 'No heartbeat from the current turn — checking whether it is still alive.'
+                : turnProgress.phase === 'blocked' ? `${turnProgress.reason || 'Blocked'}${turnProgress.retryAt ? ' — the mind retries on its own; no action needed.' : '. No retry is scheduled.'}`
+                  : turnProgress.phase === 'thinking' ? `${turnProgress.stage || 'Working through the current turn'}.`
+                    : state?.pauseReason || (state?.started ? 'Listening for messages and scheduled wakes.' : 'Configure the AI profile to begin.')}
             </p>
+            {turnProgress.detail && (
+              <p data-testid="mind-turn-progress-detail" className={`mt-1 text-xs ${turnProgress.phase === 'stalled' || turnProgress.phase === 'blocked' ? 'text-port-warning' : 'text-port-text-muted'}`}>
+                {turnProgress.detail}
+              </p>
+            )}
+            {turnProgress.retryAt && (
+              <p className="mt-1 text-xs text-port-warning">
+                Next retry <time dateTime={turnProgress.retryAt} className="font-medium">{formatDateTime(turnProgress.retryAt)}</time> · {timeUntil(turnProgress.retryAt)}
+              </p>
+            )}
             {state?.queuedMessageCount > 0 && <p className="mt-2 text-xs font-medium text-port-accent">{state.queuedMessageCount} queued message{state.queuedMessageCount === 1 ? '' : 's'}</p>}
             {state?.started && state?.nextWakeAt && (
               <button
@@ -890,8 +941,8 @@ export default function MindTab() {
           />
 
           <div className="grid grid-cols-2 gap-2">
-            <MindStateButton icon={Brain} label="Context" value={runtime?.context?.approximateTokens == null ? 'Unavailable' : `~${runtime.context.approximateTokens.toLocaleString()} tokens`} detail={`${runtime?.context?.chars?.toLocaleString() || '—'} characters`} onClick={() => openPanel('context')} />
-            <MindStateButton icon={Database} label="Memories" value={runtime?.context?.memoryCount == null ? 'Unavailable' : `${runtime.context.memoryCount} accessible`} detail="Created and curated" onClick={() => openPanel('memories')} />
+            <MindStateButton icon={Brain} label="Context" value={runtime?.context?.approximateTokens == null ? 'Unavailable' : `~${formatCount(runtime.context.approximateTokens)} tokens`} detail={`${formatCount(runtime?.context?.chars)} characters`} onClick={() => openPanel('context')} />
+            <MindStateButton icon={Database} label="Memories" value={runtime?.context?.memoryCount == null ? 'Unavailable' : `${formatCount(runtime.context.memoryCount)} accessible`} detail="Created and curated" onClick={() => openPanel('memories')} />
             <MindStateButton icon={Eraser} label="Cleanup" value={mind?.capabilities?.manageMind ? 'Self-maintenance on' : 'User controlled'} detail="Memories, history, and context" onClick={() => openPanel('maintenance')} />
             <MindStateButton icon={Wrench} label="Tools" value={grantedCapabilityCount > 0 ? `${grantedCapabilityCount} grant${grantedCapabilityCount === 1 ? '' : 's'} enabled` : 'No grants'} detail="Narrow, typed authority" onClick={() => openPanel('tools')} />
 

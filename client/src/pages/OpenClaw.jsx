@@ -38,7 +38,7 @@ import SettingsTabsHeader from '../components/settings/SettingsTabsHeader';
 import PageHeader from '../components/PageHeader';
 import * as api from '../services/apiOpenClaw';
 import * as coreApi from '../services/api';
-import { formatDateTime } from '../utils/formatters';
+import { formatCount, formatDateTime } from '../utils/formatters';
 import { useOpenClawAttachments, OPENCLAW_ATTACHMENT_ACCEPT } from '../hooks/useOpenClawAttachments';
 import { useOpenClawStream } from '../hooks/useOpenClawStream';
 import { modKey } from '../utils/platform';
@@ -444,7 +444,7 @@ export default function OpenClaw() {
                         <div className="truncate text-sm font-medium">{session.title || session.label || session.id}</div>
                         <div className="mt-1 flex items-center justify-between gap-3 text-xs text-gray-500">
                           <span className="truncate">{session.id}</span>
-                          <span>{session.messageCount ?? 0} msgs</span>
+                          <span>{formatCount(session.messageCount, { fallback: '0' })} msgs</span>
                         </div>
                       </button>
                     );
@@ -476,7 +476,7 @@ export default function OpenClaw() {
                             <div className="truncate text-sm font-medium">{session.title || session.label || session.id}</div>
                             <div className="mt-1 flex items-center justify-between gap-3 text-xs text-gray-500">
                               <span className="truncate">{session.id}</span>
-                              <span>{session.messageCount ?? 0} msgs</span>
+                              <span>{formatCount(session.messageCount, { fallback: '0' })} msgs</span>
                             </div>
                           </button>
                         );

@@ -492,8 +492,12 @@ export function hostFromOriginUrl(url) {
   const trimmed = url.trim();
   if (!trimmed) return null;
   // scheme://[userinfo@]host[:port]/...  — host is the run up to the next / : @
-  const scheme = trimmed.match(/^[a-zA-Z][a-zA-Z0-9+.-]*:\/\/(?:[^/@]+@)?([^/:]+)/);
-  if (scheme) return resolveSshHostAlias(scheme[1]) || null;
+  // ssh config applies to SSH connections only: an `https://` remote whose host
+  // collides with an ssh alias keeps its literal host, so only `ssh://` URLs
+  // resolve aliases here. Otherwise downstream `gh --repo` + token overlay
+  // target the wrong API host.
+  const scheme = trimmed.match(/^([a-zA-Z][a-zA-Z0-9+.-]*):\/\/(?:[^/@]+@)?([^/:]+)/);
+  if (scheme) return (scheme[1].toLowerCase() === 'ssh' ? resolveSshHostAlias(scheme[2]) : scheme[2]) || null;
   // scp-style [user@]host:path
   const scp = trimmed.match(/^(?:[^@/]+@)?([^/:]+):/);
   if (scp) return resolveSshHostAlias(scp[1]) || null;

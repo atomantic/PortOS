@@ -2,7 +2,7 @@
  * Route → Zod → service → store round trip for the cast-integrity endpoints (#6415).
  *
  * Only the PROVIDER boundary is stubbed (`runPromptRefineRaw` /
- * `resolveStageContext`) — everything else is the real router, the real
+ * `resolveStageRoute`) — everything else is the real router, the real
  * schemas, the real merge and the real contract. `updateUniverse` is a faithful
  * stand-in that actually applies the mutator against a mutable universe, so the
  * inside-the-write-queue lock / staleness re-checks are genuinely exercised
@@ -37,14 +37,13 @@ vi.mock('../../services/pipeline/refineHelpers.js', async (importOriginal) => ({
   runPromptRefineRaw: (...args) => refineRawMock(...args),
 }));
 
-const resolveStageContextMock = vi.fn(async () => ({
+const resolveStageRouteMock = vi.fn(async () => ({
   provider: { id: 'prov-1', name: 'Local Llama' },
   model: 'llama-3.3',
-  contextWindow: 32000,
 }));
 vi.mock('../../services/stageRunner.js', async (importOriginal) => ({
   ...(await importOriginal()),
-  resolveStageContext: (...args) => resolveStageContextMock(...args),
+  resolveStageRoute: (...args) => resolveStageRouteMock(...args),
 }));
 
 const { default: universeBuilderRoutes } = await import('./index.js');
@@ -86,8 +85,8 @@ const lead = () => ({
 
 beforeEach(() => {
   vi.clearAllMocks();
-  resolveStageContextMock.mockResolvedValue({
-    provider: { id: 'prov-1', name: 'Local Llama' }, model: 'llama-3.3', contextWindow: 32000,
+  resolveStageRouteMock.mockResolvedValue({
+    provider: { id: 'prov-1', name: 'Local Llama' }, model: 'llama-3.3',
   });
   universe = {
     id: 'u-1',
@@ -116,7 +115,7 @@ describe('GET /:id/characters/integrity — the deterministic pass', () => {
   });
 
   it('still renders the report when no provider can be resolved', async () => {
-    resolveStageContextMock.mockRejectedValue(new Error('no provider configured'));
+    resolveStageRouteMock.mockRejectedValue(new Error('no provider configured'));
     const res = await request(makeApp()).get('/api/universe-builder/u-1/characters/integrity');
     expect(res.status).toBe(200);
     expect(res.body.reviewScope.providerId).toBeNull();

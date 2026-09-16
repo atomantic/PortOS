@@ -9,7 +9,7 @@ import PageHeader from '../components/PageHeader';
 import TimelineImportPanels, { IMPORT_SOURCE_COUNT } from '../components/timeline/TimelineImportPanels';
 import * as api from '../services/api';
 import toast from '../components/ui/Toast';
-import { formatClockTime, formatDurationSec, formatWeekdayDate, localDateKey, shiftISODate } from '../utils/formatters';
+import { formatClockTime, formatCount, formatDurationSec, formatWeekdayDate, localDateKey, shiftISODate } from '../utils/formatters';
 
 const SOURCE_ICON = {
   gmail: Mail,
@@ -241,10 +241,10 @@ export default function Timeline() {
       <Histogram histogram={histogram} />
 
       <div className="flex flex-wrap gap-2 text-xs text-gray-400">
-        <span className="rounded bg-port-card px-2 py-1 border border-port-border">{counts.total} events</span>
+        <span className="rounded bg-port-card px-2 py-1 border border-port-border">{formatCount(counts.total)} events</span>
         {Object.entries(counts.bySource).map(([source, n]) => (
           <span key={source} className="rounded bg-port-card px-2 py-1 border border-port-border">
-            {source}: {n}
+            {source}: {formatCount(n)}
           </span>
         ))}
       </div>

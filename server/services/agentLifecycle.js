@@ -91,7 +91,7 @@ import { cloudSwarmThreadCapacity, localEndpointOfProvider, providerBaseUrl } fr
 import { describeLocalPromptBudget, planLocalPromptBudget } from '../lib/localPromptBudget.js';
 import { prepareAgentWorkspace } from './agentWorkspacePrep.js';
 import { releaseRetryHold } from './agentWorktreeCleanup.js';
-import { runAgentCompletionCleanup } from './agentCompletionCleanup.js';
+import { runAgentCompletionCleanup, removeCompletionSentinel } from './agentCompletionCleanup.js';
 import { dispatchRecoveredTaskOutputHook, finalizeAgent, releaseAgentLane, stampLiExecutionVerdict } from './agentFinalization.js';
 import { extractFinalSummary } from './agentSummaryExtraction.js';
 import { handleOrphanedTask } from './agentManagement.js';
@@ -1204,6 +1204,11 @@ async function completeUntrackedAgentFromCosState(agentId, exitCode, success, du
     success,
     workspacePath: cosAgent.metadata?.workspacePath || null,
   });
+  // Recovery retires the run without reaching finalizeAgent's completion
+  // cleanup, so the sentinel has no other owner — and the hook above was the
+  // last thing to read it. Mirrored in agentManagement's orphan sweep.
+  await removeCompletionSentinel({ agentId, agentState: cosAgent })
+    .catch(err => emitLog('warn', `Completion sentinel removal failed for ${agentId}: ${err.message}`, { agentId }));
   await completeAgent(agentId, {
     success,
     exitCode,

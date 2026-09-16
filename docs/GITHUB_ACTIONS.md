@@ -225,6 +225,53 @@ Per-site idioms:
   label's text as its accessible name. Pair `htmlFor`/`id` and keep the button a
   sibling, which is the convention anyway.
 
+### Client suite time budgets
+
+Two numbers, derived from one another in `client/src/test/timeouts.js` rather
+than written side by side:
+
+| Budget | Value | Applied by |
+| --- | --- | --- |
+| Testing Library `asyncUtilTimeout` (`waitFor`, `findBy*`) | 5000 ms | `client/src/test/setup.js` |
+| Vitest `testTimeout` / `hookTimeout` | 15000 ms (3x) | `client/vitest.config.js` |
+
+**The ordering is the point, not the values.** An inner bound that reaches the
+budget enclosing it can never report its own failure: the test dies first with a
+bare "test timed out" naming nothing it was waiting on. That has shipped twice —
+`WordplayTrainer`'s 5 s drill bound against Vitest's 5 s default, and a
+`{ timeout: 15000 }` in `BeeperTab.test.jsx` that could never wait past 5 s and
+so never helped. `client/src/test/timeouts.test.js` fails CI on an inline
+`waitFor`/`findBy*` bound at or above the per-test budget — recognised by the
+option object's keys, so `{ timeout, interval }` counts and a fixture record
+that merely holds a `timeout` field does not. It asserts the EFFECTIVE runtime
+values rather than the module constants, so a `configure()` that stopped being
+applied is caught too. A file that raises its own budget with
+`vi.setConfig({ testTimeout })` is exempt.
+
+5000 ms because Testing Library's 1000 ms default, and the 3000 ms this suite
+ran at before #7448, both sat under what a 2-vCPU public runner needs: shard 1
+failed a different `await`-a-mock-call assertion on most runs while passing
+locally every time. A loaded runner should make a test slower, not red. The cost
+is that a genuinely hung assertion reports in 5 s instead of 3.
+
+**A budget is not a race fix.** It buys a slow runner room; it cannot rescue an
+assertion waiting on a call that already happened with the wrong argument. Those
+need a settled precondition — see `client/src/test/settledInput.js` (type-then-
+submit) and `client/src/test/pageLoadBarrier.js` (render-then-act, two-sided so
+a barrier naming a string the page never renders fails loudly instead of passing
+on its first poll).
+
+### Reusing the client install
+
+Four jobs install `client/` — the three client test shards and `lint`.
+`setup-node`'s `cache: npm` only preserves the tarball cache, so `npm ci` still
+wipes and repopulates a 393 MB `client/node_modules` on each. `Cache client
+node_modules` keys exactly on `client/package-lock.json`, `client/package.json`
+and `client/.npmrc`, with no restore-keys, and the install is skipped outright
+on a hit. Unlike the server, there is no rebuild half to verify: `client/.npmrc`
+pins `ignore-scripts=true` and `scripts/trusted-rebuilds.js` deliberately lists
+nothing for this workspace, so a restored tree is usable as-is.
+
 ### Reusing the server install
 
 Three jobs install the server workspace — `server`, `database`, and
@@ -330,8 +377,12 @@ own.
 
 ### Shallow checkouts
 
-No job clones full history. `actions/checkout` runs at `fetch-depth: 2`,
-which on a pull request is the merge ref plus both of its parents — and the
+No job clones full history. `actions/checkout` runs at `fetch-depth: 2`
+in every job that diffs against the base. The two gate jobs set no depth at all
+(the action's own default is 1) and pass `sparse-checkout: scripts` instead:
+they check out only to run `scripts/ci-gate-report.js`, never look at history,
+and sparse mode makes the action fetch with `--filter=blob:none`. Depth 2 on a
+pull request is the merge ref plus both of its parents — and the
 first parent *is* the base-branch commit the pull request is diffed against.
 `scripts/ci-base-sha.js` reads it (`HEAD^1`) and exports `CI_BASE_SHA` for the
 rest of the job, so the planner's `git diff <base>...HEAD` resolves without
@@ -349,9 +400,11 @@ suite, need no diff at all, and get no base.
 
 The `main` ruleset — which also covers `release` — requires exactly one
 context: **`CI Gate`**. The workflow used to carry two extra jobs solely to
-publish historical required-check names (`lint`, which echoed the client job's
-result, and `test (24.x)` on the server job); both are retired. If a required
-check is ever added, require `CI Gate`, never a job name.
+publish historical required-check names (a `lint` job that only echoed the
+client job's result, and `test (24.x)` on the server job); both are retired. A
+`lint` job exists again since #7448, but it is the real linter doing real work,
+not a name-publishing shim. If a required check is ever added, require
+`CI Gate`, never a job name.
 
 The selected work is split across parallel jobs:
 
@@ -366,9 +419,17 @@ The selected work is split across parallel jobs:
   install on every user's machine; without it a lockfile that stopped resolving
   shipped green and failed at setup time. (`browser/` gets no such step: zero
   dependencies, and its lockfile is deliberately gitignored.)
-- **Client tests and build** — affected client tests; production build whenever
-  client source changed; client lint on the same install so Biome does not pay a
-  second `npm ci`. Lint, build, and the Scalar-removal bundle pin run on shard 1 only.
+- **Client tests and build** — affected client tests, plus the production build
+  whenever client source changed. Build and the Scalar-removal bundle pin run on
+  shard 1 only.
+- **Lint client** — Biome over the changed client sources, in its own job. It used
+  to be a shard-1 step on the client job. Steps within a job run sequentially, so
+  that put ~31 s of Biome in front of the slowest shard's tests rather than beside
+  them, and it meant a lint-only diff started a whole client test job. It was
+  **not** what made shard 1 flaky — see "Client suite time budgets" below. It
+  cannot move to a later shard instead: a scoped plan emits `client_shards: [1]`,
+  so a second-shard pin would skip lint on every scoped pull request. It shares
+  `Cache client node_modules` with the client job, so on a hit it pays no install.
 - **DB tests** — provisions only the isolated `portos_test` database and runs
   the serial DB suite when database-sensitive files changed.
 - **Windows server tests** — the same server selection, but only on full CI
@@ -376,9 +437,14 @@ The selected work is split across parallel jobs:
   Windows-sensitive surface changed (`.ps1` / `.cmd` spawn, PowerShell BOM,
   `bufferedSpawn`, `cos-runner`, shell/PM2, etc.). Docs-only and ordinary
   Linux-faithful PRs skip this job. `pinPlatform('win32')` tests still run on
-  Linux.
+  Linux. A full plan does not automatically mean a full *Windows* run — see
+  "What a full plan costs the Windows job" below.
 - **CI Gate** — always reports one stable required-check result and fails if any
-  selected job failed or was cancelled.
+  selected job failed or was cancelled. Both block, but the message distinguishes
+  them: `scripts/ci-gate-report.js` says *cancelled, not failed* and names the
+  cancelled jobs when nothing actually failed — as far as the gate job itself
+  runs, which a run-wide cancel prevents. See "External cancellation and one
+  automatic retry" below.
 - **Full CI Gate** — published only when the plan chose the complete suite, and
   mirrors `CI Gate`'s result. This is the check the release workflow looks for;
   see "Reusing the release PR's CI run" below.
@@ -404,14 +470,106 @@ Vitest's `--shard`, which slices the file list by path hash — every shard is a
 fixed, disjoint subset, and their union is the complete suite. A scoped plan
 never shards (its handful of files would trip Vitest's shard-count guard) and
 passes no flag at all, so its invocation stays identical to a local
-`npm run test:ci`. Once-only steps — smoke boot, lint, the client build, the
-Scalar-removal bundle pin — pin themselves to shard 1. `CI Gate` sees a matrix job as one
+`npm run test:ci`. Once-only steps — smoke boot, the client build, the
+Scalar-removal bundle pin — pin themselves to shard 1; lint is not among them,
+because it has its own job (see above). `CI Gate` sees a matrix job as one
 `needs` result, so nothing downstream changes; public-repo runner minutes are
 free, so the fan-out costs only concurrency.
 
 `scripts/run-ci-tests.test.js` pins the wiring: every runner job builds its
 matrix from the planner, hands `CI_SHARD` to the runner, and gates its
 once-only steps on shard 1.
+
+### What a full plan costs the Windows job
+
+Measured from 11 real full CI runs (`gh api repos/atomantic/PortOS/actions/runs/<id>/jobs`,
+September 2026). A full run is **12 jobs / 28.7 runner-minutes**:
+
+| Job | Jobs | Runner-min | At `windows-latest` 2x |
+| --- | --- | --- | --- |
+| Windows server tests | 3 | 11.8 | 23.5 |
+| Client tests and build | 3 | 8.3 | 8.3 |
+| Server tests | 2 | 6.8 | 6.8 |
+| DB tests, impact, both gates | 4 | 1.7 | 1.7 |
+| **Total** | **12** | **28.7** | **40.4** |
+
+Measured before lint moved to its own job, so the client column still carries the
+~31 s of Biome that now runs beside it rather than inside it. The matrix is 13
+jobs rather than 12; the totals move less than that implies, because
+`Cache client node_modules` now skips the 393 MB `npm ci` on all four jobs that
+install this workspace.
+
+Windows is 41% of a full run's runner occupancy, and 58% once GitHub's 2x
+`windows-latest` multiplier is applied. **This repository is public, so those
+minutes are not billed** — the cost that binds is runner occupancy and
+concurrent-job slots, which is what makes several simultaneous PR builds queue.
+The 2x column is kept because a fork on private billing does pay it.
+
+**Not every full plan needs a full Windows run.** Replaying 250 merge commits
+through `buildCiTestPlan`, 64 went full — and 24 of those (38%) went full for a
+reason `windows-server` cannot observe:
+
+| Full-plan reason | Runs | Windows-relevant? |
+| --- | --- | --- |
+| targeted test set exceeded safety cap | 17 | no — capacity, not risk |
+| wide change (>30 executable files) | 6 | no — capacity, not risk |
+| client composition root / build config / lint config / test setup | 1 | no — client-only |
+| dependency manifest, server contract, CI pipeline script, workflow, … | 40 | yes |
+
+So each full trigger in `FULL_TRIGGER_RULES` carries a `windowsEscalates` flag,
+and `fullPlan()` escalates Windows to the complete server suite only when **any**
+matching trigger is Windows-relevant, the diff touches `WINDOWS_RISK_RULES`, or
+the run is force-full. **Any** is load-bearing: the reason line reports only the
+first match in sorted-path order, and the `client/src/App.jsx` branch returns
+before the trigger loop, so both read the same OR over every match. A diff that
+edits `App.jsx` *and* bumps a lockfile escalates. Otherwise the job drops to **one shard running
+`WINDOWS_CONTRACT_TESTS`** — reduced, never skipped, and exactly the depth a
+Windows-risk scoped PR already gets.
+
+Three properties keep that safe, each pinned by `scripts/ci-test-plan.test.js`:
+
+- **Fail-closed by default.** `windowsEscalates` defaults to `true`, so a
+  `fullPlan()` call site added later over-tests rather than under-tests.
+- **Fail-closed on an empty baseline.** `run-ci-tests.js` prints "No server
+  tests selected" and exits 0 for an empty `files` list, so a downgrade that
+  resolved to no tracked contract tests would be a green job that ran nothing.
+  The planner falls back to the full suite instead.
+- **Force-full keeps the discovery net.** Nightly, the `main` → `release` PR,
+  release, and an explicit full-CI request still run the complete Windows
+  matrix. `ci.yml` has no push trigger, so those are the whole net for a Windows
+  regression on a surface nobody has tagged yet (`staticImportGraph` in #5909,
+  `voice/fineTuning` in #6268), and worst-case detection latency for a
+  downgraded PR is the next nightly — always before a release, because the
+  `main` → `release` PR is force-full. That is not a new exposure: it is the
+  same net every PR touching no `WINDOWS_RISK_RULES` file already relies on,
+  which is most of them. This change widens that population by 24 runs in 250.
+
+**Before / after**, on the same 250-merge sample:
+
+| | Jobs | Runner-min | 2x-equivalent |
+| --- | --- | --- | --- |
+| Full run, Windows-relevant (40 of 64) — unchanged | 12 | 28.7 | 40.4 |
+| Full run, downgraded (24 of 64) — before | 12 | 28.7 | 40.4 |
+| Full run, downgraded (24 of 64) — after | **10** | **18.4** | **19.9** |
+| Per merged PR, averaged over all 250 — before | — | 10.25 | 13.78 |
+| Per merged PR, averaged over all 250 — after | — | **9.26** | **11.81** |
+
+That is −36% runner-minutes on a downgraded full run (−51% at the 2x multiplier),
+and **−9.6% overall runner-minutes / −14.3% 2x-equivalent** across the whole sample.
+The one estimated input is the baseline Windows shard at ~1.5 min (~0.83 min
+measured fixed overhead plus the contract suite); every other figure is measured.
+
+There is **no wall-clock regression**: a downgraded run's Windows job goes from 4.15 min to
+~1.5 min, so the full path gets *shorter*, and no full-Windows run changes at all.
+
+**Why the matrix is still 3 shards.** Dropping Windows to 2 was measured and
+rejected. Per-shard step timings put fixed overhead (checkout, setup-node, cache
+restore) at only ~0.83 min of the 4.15-min shard; the rest is the test step. Going
+3 → 2 therefore removes one setup (~1.7 equivalent-minutes, 7%) while adding
+~1.65 min to the full path's critical chain. Tightening the selection above beat
+that at zero wall-clock cost, so `FULL_SUITE_SHARDS.windows` stays at 3.
+`max-parallel` is not an alternative — it lowers peak concurrency, not total
+occupancy.
 
 ### Python sidecar scripts
 
@@ -455,7 +613,7 @@ Changes to CI/test configuration also force the full suite on their own PR.
 
 ### Fail-fast sibling cancellation
 
-Each selected leaf job (`server`, `client`, `database`, and
+Each selected leaf job (`server`, `client`, `lint`, `database`, and
 `windows-server`) ends with an `if: failure() && github.event_name ==
 'pull_request'` step that asks GitHub to cancel the current pull-request
 workflow run. The event guard is important because the same workflow is reused
@@ -499,7 +657,8 @@ ones:
   `cancelled` does not satisfy it, and a gate that never publishes leaves the
   required context unreported, which also blocks.
 - If the gate job does run, it accepts only `success` or `skipped` per job, so
-  the failed leaf (or its own `cancelled` result) fails the gate.
+  the failed leaf (or its own `cancelled` result) fails the gate. It reports a
+  cancel and a failure differently — see the next section — but neither passes.
 - `scripts/verify-ci-status.js` accepts a `Full CI Gate` only at
   `conclusion === 'success'`, so a canceled run can never let a release skip
   the full suite.
@@ -515,6 +674,118 @@ independently — the two are orthogonal, one canceling this run by id and the
 other canceling an older run when a newer commit arrives. Scheduled, manually
 dispatched, and release-called runs skip this sibling cancellation so their
 aggregate diagnostics and cache post-steps can complete normally.
+
+### External cancellation and one automatic retry
+
+Not every cancel comes from this repository. When several PRs build at once,
+GitHub itself cancels in-flight runs — no job fails, the fail-fast step above
+stays `skipped`, and **no successor run exists for the branch** (issue 7437).
+That last property is the whole diagnosis: a `cancel-in-progress` supersession
+always leaves a newer run for the same PR, and an external cancel leaves none.
+
+`.github/workflows/ci-cancel-recovery.yml` runs on `workflow_run` and
+re-dispatches such a run exactly once. `scripts/ci-retry-cancelled-run.js`
+retries only when every one of these holds:
+
+| Guard | Why |
+| --- | --- |
+| conclusion is `cancelled` | A failure is a failure. |
+| event is `pull_request` | Nightly, dispatch, and release-called runs are not ours to re-drive. |
+| `run_attempt == 1` | The retry budget. `POST /rerun` makes attempt 2, whose cancel sees attempt 2 and stops — one retry per run, and a PR run is one run per head SHA. |
+| no job concluded `failure`/`timed_out` | Fail-fast cancellation makes a genuinely red run *look* cancelled. Retrying it would re-run the suite on a broken tree. |
+| no newer run for the branch | That is a supersession; the newer run already covers this code. |
+
+Any API lookup that cannot be completed skips the retry rather than assuming a
+guard passed — a missed retry costs one manual re-run, a wrong one loops.
+
+**The re-dispatch waits five minutes first** (`RETRY_DELAY_MS`, issue 7439).
+The cancel it recovers from is caused by a saturated queue, so firing the
+one-retry budget the instant the `workflow_run` event arrives spends it at the
+moment it is least likely to survive: on PR 7434 three re-runs of the identical
+SHA were each cancelled again while other runs were in flight, and that same SHA
+passed on the first attempt made against an idle queue. One job idling — not
+computing — for five minutes is the cheap side of that trade against re-running
+twelve jobs straight into another cancel. The recovery job pins
+`timeout-minutes` above `MAX_RUNTIME_MS` — the delay *plus* two worst-case
+guard passes — so a slow GitHub can never get it killed mid-wait; that bound is
+derived from the constants, and the workflow test asserts the inequality, so
+raising the delay fails the build rather than quietly eating the margin.
+
+Every API-backed guard in the table is evaluated **twice**: once before the wait
+and once after it. A push or a human re-run that lands during the delay
+therefore still wins, and the post-wait job listing is the more reliable one —
+a failing job's step records can still be settling when the run's own fail-fast
+cancel lands.
+
+The two passes are **not** equal in authority. The post-wait pass is the reading
+the re-dispatch is made on, and it fails CLOSED as before. The pre-wait pass is
+only an optimization — it exists so an obviously ineligible run skips without
+holding a runner idle — so **only a definitive `skipped` verdict short-circuits
+there.** An `unavailable` reading before the wait is not evidence of
+ineligibility, and a saturated GitHub is exactly when a transient 5xx is
+likeliest, so it falls through to the wait and lets the post-wait pass decide.
+Forfeiting the retry on a blip would lose the very case the delay was added to
+win.
+
+The step summary records `phase: before-wait | after-wait` and the `delay` it
+used, so the Actions history can be read back as evidence when the constant is
+tuned — under the delay that actually produced each outcome, not today's value.
+
+Deliberately **not** chosen: polling `GET /actions/runs?status=in_progress` and
+retrying only once the repository is quiet. On a busy repo that can mean never
+retrying, which is worse than retrying into a cancel.
+
+**Why the failing-job guard reads the jobs' own conclusions** rather than a
+marker written by the fail-fast step: a marker fails OPEN. It would be written
+by a job that is already failing, on a run about to be cancelled out from under
+it, so a lost write makes a red run look externally cancelled — and get
+retried. Reading conclusions fails CLOSED: an unreadable listing is
+`jobs-unavailable` and skips the retry. Do not "simplify" this into a marker.
+The ambiguity itself is the price of cancelling the run on first failure rather
+than letting the remaining jobs fail naturally; that trade buys the 30-second
+fail-fast above and is not on the table.
+
+**This is also the only layer that can explain a run-wide cancel.** `if:
+always()` on the gate defeats an upstream failure, not a cancellation of the
+whole run — so in the external-cancel case the gate is cancelled too and never
+prints its verdict. The recovery run is a separate run, so it survives; its
+step summary records which guard applied.
+
+That summary lives on the recovery run, which nobody finds from the pull
+request, so the workflow also **publishes the verdict back onto the cancelled
+head SHA as a check run** named `CI cancel recovery` (issue #7438). It carries
+the same fixed reason code the step summary renders — `superseded`,
+`job-failed`, `re-dispatched`, `retry-budget-exhausted`, `run-state-moved-on`,
+or one of the `*-unavailable` lookup failures — plus one sentence saying what
+to do about it.
+
+The check's conclusion is **always `neutral`, and that is load-bearing**.
+Branch protection requires `CI Gate` alone, so a `failure` here would block a
+merge the repository allows; and `success` would read as a passing gate —
+PortOS's own auto-merge watcher (`server/services/prWatcher.js`) counts
+`NEUTRAL` as green. Neutral is the only conclusion that stays informational to
+a human and to that watcher alike. Publishing is best-effort for the same
+reason the retry is: a recovery job must never turn red on top of an
+already-cancelled run, so a rejected or failed publish is logged and swallowed
+and the job still exits 0. The only extra grant this needs is `checks: write`;
+a `contents:`/`pull-requests: write` token on a `workflow_run` workflow is what
+would turn an informational job into a push surface.
+
+One known limit, filed: a retry re-runs the whole suite — Windows shards
+included — so if the cause is the spending limit then recovery spends more of
+it. Reducing the billable minutes of a full run is the complementary root-cause
+lever (#7440).
+
+Because the trigger is `workflow_run`, the recovery workflow runs the
+**default branch's** copy of itself with writable `actions` and `checks`
+tokens, and never checks out, installs, or executes the pull request's head.
+The only PR-derived values it touches are validated run ids and one
+URL-encoded branch name.
+
+Reader-facing symptoms, the `gh` commands that tell an external cancel from a
+supersession, and the account-billing check that confirms the upstream cause
+are in [TROUBLESHOOTING.md](TROUBLESHOOTING.md) under "CI cancelled with no
+successor run".
 
 ### Impact-planner safety rules
 

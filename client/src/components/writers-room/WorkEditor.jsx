@@ -47,7 +47,7 @@ import {
 } from '../../services/apiWritersRoom';
 import { safeReadStorage, safeWriteStorage } from '../../lib/safeStorage';
 import { STATUS_LABELS } from './labels';
-import { formatDurationSec } from '../../utils/formatters';
+import { formatCount, formatDurationSec } from '../../utils/formatters';
 import { countWords } from '../../lib/textUtils';
 import StoryboardPanel, { STORYBOARD_TAB, STORYBOARD_TAB_VALUES } from './StoryboardPanel';
 import LiveContinuationPanel from './LiveContinuationPanel';
@@ -959,7 +959,7 @@ export default function WorkEditor({ work, onChange, onToggleExercise, exerciseO
                 readingTheme === 'light' ? 'text-gray-700 bg-[var(--wr-reading-paper)]/85' : 'text-gray-500 bg-port-bg/80'
               }`}
             >
-              <span>{wordCount.toLocaleString()} words</span>
+              <span>{formatCount(wordCount)} words</span>
               {dirty && <span className="text-port-warning">● unsaved</span>}
             </div>
           )}

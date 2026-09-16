@@ -27,7 +27,7 @@
 
 import { getUniverse, updateUniverse } from './universeBuilder.js';
 import { runPromptRefineRaw } from './pipeline/refineHelpers.js';
-import { resolveStageContext } from './stageRunner.js';
+import { resolveStageRoute } from './stageRunner.js';
 import { ServerError } from '../lib/errorHandler.js';
 import { shortId } from '../lib/fileUtils.js';
 import {
@@ -75,7 +75,7 @@ const resolveScopeIds = (cast, characterIds) => {
 
 /**
  * The deterministic report plus the cost of the semantic review that would
- * follow. Makes NO provider call: `resolveStageContext` only resolves which
+ * follow. Makes NO provider call and no network call: `resolveStageRoute` only resolves which
  * provider/model the stage would use.
  */
 export async function getUniverseCastIntegrity(universeId, { characterIds = null } = {}) {
@@ -87,7 +87,7 @@ export async function getUniverseCastIntegrity(universeId, { characterIds = null
   // Best-effort: a universe with no provider configured yet must still be able
   // to render its deterministic report, so a resolution failure degrades to an
   // unnamed scope rather than failing the whole request.
-  const resolved = await resolveStageContext(REVIEW_STAGE).catch(() => null);
+  const resolved = await resolveStageRoute(REVIEW_STAGE).catch(() => null);
 
   return {
     ...report,

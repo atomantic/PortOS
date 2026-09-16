@@ -6,14 +6,14 @@ import BrailleSpinner from '../BrailleSpinner';
 import { formatUsd } from '../../utils/formatters';
 import { useAsyncAction } from '../../hooks/useAsyncAction';
 
-const savingsTone = (savings) => (savings >= 0 ? 'text-port-success' : 'text-port-error');
+export const savingsTone = (savings) => (savings >= 0 ? 'text-port-success' : 'text-port-error');
 
 const NO_FAMILIES = [];
 
-// The three derived figures per plan, defined ONCE so the mobile cards and the
-// desktop table can't drift into showing different things (they already had:
-// mobile was missing the totals row entirely).
-const rowCells = (row) => [
+// The three derived figures per plan, defined ONCE so the mobile cards, the
+// desktop table and the Subscriptions page can't drift into showing different
+// things (the first two already had: mobile was missing the totals row).
+export const rowCells = (row) => [
   { key: 'period', label: 'This period', value: row.configured ? formatUsd(row.periodCost) : null },
   { key: 'api', label: 'Est. API cost', value: formatUsd(row.apiCost) },
   {
@@ -74,7 +74,7 @@ export function buildCostPatch(drafts, families) {
   return patch;
 }
 
-function CostInput({ row, value, onChange, idPrefix }) {
+export function CostInput({ row, value, onChange, idPrefix }) {
   return (
     <div className="flex items-center gap-1">
       <span className="text-gray-500 text-xs">$</span>
@@ -95,9 +95,9 @@ function CostInput({ row, value, onChange, idPrefix }) {
   );
 }
 
-const NotPriced = () => <span className="text-gray-600">not priced</span>;
+export const NotPriced = () => <span className="text-gray-600">not priced</span>;
 
-function CellValue({ cell }) {
+export function CellValue({ cell }) {
   return (
     <>
       <span className={cell.tone}>{cell.value ?? <NotPriced />}</span>

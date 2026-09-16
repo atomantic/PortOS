@@ -24,9 +24,12 @@ import {
   applyHistoricalUsageCorrections,
   buildUsageReport,
   getFirstActivityDay,
+  getLimitBlocks,
   getUsage,
   getUsageSummary,
   loadUsage,
+  providerVolumeSinceBlock,
+  recordLimitBlock,
   recordMessages,
   recordRunUsage,
   recordSession,
@@ -1290,5 +1293,121 @@ describe('buildUsageReport — local models under a paid provider', () => {
     const report = buildUsageReport(daily, { providers: paidClaudeProvider });
     // 1M output on claude-opus-5 = $25; the local million is free.
     expect(report.totals.estimatedCost).toBeCloseTo(25, 2);
+  });
+});
+
+describe('usage.js — limit-block ledger (#7408)', () => {
+  beforeEach(async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(FIXED_DATE);
+    vi.clearAllMocks();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  const loadEmpty = async (extras = {}) => {
+    readJSONFile.mockResolvedValueOnce(makeUsage({}, extras));
+    await loadUsage();
+  };
+
+  it('records a block with timestamp, provider, and reset hint', async () => {
+    await loadEmpty();
+    const entry = await recordLimitBlock({
+      providerId: 'opencode-zen-cli',
+      model: 'opencode/big-pickle',
+      category: 'usage-limit',
+      message: 'hit your usage limit',
+      resetHint: '2 hours',
+      at: new Date('2025-06-11T10:00:00.000Z').getTime()
+    });
+    expect(entry.providerId).toBe('opencode-zen-cli');
+    expect(entry.model).toBe('opencode/big-pickle');
+    expect(entry.resetHint).toBe('2 hours');
+    expect(getLimitBlocks()).toHaveLength(1);
+  });
+
+  it('ignores a block without a provider id', async () => {
+    await loadEmpty();
+    expect(await recordLimitBlock({})).toBeNull();
+    expect(getLimitBlocks()).toHaveLength(0);
+  });
+
+  it('coalesces a repeated report of the same incident instead of stacking', async () => {
+    await loadEmpty();
+    const at = Date.now();
+    await recordLimitBlock({ providerId: 'opencode-zen', at });
+    await recordLimitBlock({ providerId: 'opencode-zen', at: at + 30_000 });
+    expect(getLimitBlocks()).toHaveLength(1);
+    // A genuinely later block (past the dedupe window) is a new row.
+    await recordLimitBlock({ providerId: 'opencode-zen', at: at + 120_000 });
+    expect(getLimitBlocks()).toHaveLength(2);
+  });
+
+  it('seeds blockEvents on installs that predate the ledger', async () => {
+    const legacy = makeUsage({});
+    delete legacy.blockEvents;
+    readJSONFile.mockResolvedValueOnce(legacy);
+    await loadUsage();
+    expect(getLimitBlocks()).toEqual([]);
+    const entry = await recordLimitBlock({ providerId: 'opencode-zen' });
+    expect(entry).not.toBeNull();
+  });
+
+  it('sums ledger volume since a block day, and nulls an undateable block', () => {
+    const daily = {
+      '2025-06-10': {
+        sessions: 1, messages: 1,
+        byProvider: { 'opencode-zen': { name: 'Zen', sessions: 1, messages: 2, tokensIn: 100, tokensOut: 200 } }
+      },
+      '2025-06-11': {
+        sessions: 1, messages: 1,
+        byProvider: { 'opencode-zen': { name: 'Zen', sessions: 2, messages: 3, tokensIn: 400, tokensOut: 800 } }
+      }
+    };
+    const volume = providerVolumeSinceBlock(daily, {}, 'opencode-zen', '2025-06-11');
+    expect(volume).toMatchObject({ sessions: 2, messages: 3, tokensIn: 400, tokensOut: 800 });
+    expect(providerVolumeSinceBlock(daily, {}, 'opencode-zen', null)).toBeNull();
+    expect(providerVolumeSinceBlock(daily, {}, 'other-provider', '2025-06-11'))
+      .toMatchObject({ sessions: 0, messages: 0, tokensIn: 0, tokensOut: 0 });
+  });
+
+  it('exposes free-tier rows and block signals on the summary', async () => {
+    const day = daysAgo(0);
+    readJSONFile.mockResolvedValueOnce(makeUsage({
+      [day]: {
+        sessions: 1, messages: 1,
+        byProvider: {
+          'opencode-zen-cli': {
+            name: 'OpenCode Zen CLI', sessions: 1, messages: 1,
+            tokensIn: 100, tokensOut: 500, cacheReadTokens: 0, cacheWriteTokens: 0,
+            source: 'mixed',
+            byModel: {
+              'opencode/big-pickle': {
+                sessions: 1, messages: 1, tokensIn: 100, tokensOut: 500,
+                cacheReadTokens: 0, cacheWriteTokens: 0, source: 'mixed'
+              }
+            }
+          }
+        }
+      }
+    }, {
+      blockEvents: [{
+        providerId: 'opencode-zen-cli', model: null, category: 'usage-limit',
+        message: 'hit your usage limit', resetHint: '2 hours',
+        at: new Date(`${day}T10:00:00.000Z`).getTime()
+      }]
+    }));
+    await loadUsage();
+    const summary = getUsageSummary();
+    expect(summary.freeTier.basis).toBe('ledger');
+    expect(summary.freeTier.providers.map((row) => row.id)).toContain('opencode-zen-cli');
+    const zen = summary.freeTier.providers.find((row) => row.id === 'opencode-zen-cli');
+    expect(zen.free).toBe(true);
+    expect(zen.estimatedCost).toBe(0);
+    expect(zen.source).toBe('mixed');
+    expect(summary.freeTier.blocks).toHaveLength(1);
+    expect(summary.freeTier.blocks[0].volumeSince).toMatchObject({ sessions: 1, messages: 1 });
   });
 });

@@ -4,7 +4,7 @@ import Modal from './ui/Modal';
 import useKeyCapture from '../hooks/useKeyCapture';
 import { noPointerFocusSurfaceProps } from '../lib/a11yKeyboard';
 import { rapidReaderWords } from '../lib/rapidReaderPosition';
-import { formatCountdown } from '../utils/formatters';
+import { formatCount, formatCountdown } from '../utils/formatters';
 
 // Optimal Recognition Point — the focal letter the eye lands on. Spritz-style:
 // shorter words use a left-shifted ORP, longer words shift right. Punctuation
@@ -321,7 +321,7 @@ export default function RapidReader({
             </button>
           </div>
           <span className="font-mono text-gray-500">
-            {Math.min(wordIndex + 1, totalWords)}{current.wordCount > 1 ? `–${Math.min(wordIndex + current.wordCount, totalWords)}` : ''}/{totalWords} words · {formatCountdown(remainingSec)} left
+            {formatCount(Math.min(wordIndex + 1, totalWords))}{current.wordCount > 1 ? `–${formatCount(Math.min(wordIndex + current.wordCount, totalWords))}` : ''}/{formatCount(totalWords)} words · {formatCountdown(remainingSec)} left
           </span>
         </div>
       </div>

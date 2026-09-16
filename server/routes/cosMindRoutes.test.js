@@ -25,6 +25,7 @@ const mocks = vi.hoisted(() => ({
   pausePersistentMind: vi.fn(),
   resumePersistentMind: vi.fn(),
   stopPersistentMind: vi.fn(),
+  persistentMindUsageLimitRetryAt: vi.fn(() => null),
   inspectPersistentMindRuntime: vi.fn(),
   readPersistentMindVisibility: vi.fn(),
   readPersistentMindTaskCatalog: vi.fn(),
@@ -87,6 +88,7 @@ vi.mock('../services/persistentMindSupervisor.js', () => ({
   pausePersistentMind: mocks.pausePersistentMind,
   resumePersistentMind: mocks.resumePersistentMind,
   stopPersistentMind: mocks.stopPersistentMind,
+  persistentMindUsageLimitRetryAt: mocks.persistentMindUsageLimitRetryAt,
 }));
 vi.mock('../services/persistentMindRuntime.js', () => ({
   inspectPersistentMindRuntime: mocks.inspectPersistentMindRuntime,
@@ -399,6 +401,19 @@ describe('persistent mind routes', () => {
       provider: expect.objectContaining({ id: 'ollama' }),
     }));
     expect(mocks.getProviderById).toHaveBeenCalledWith('ollama');
+  });
+
+  it('hands the usage-limit probe schedule to the runtime inspector', async () => {
+    // A usage-limit autopause clears nextEligibleWakeAt, so the readiness probe
+    // is the only thing that knows when a quota block clears. The route is
+    // where that read happens — the inspector never reaches for the scheduler.
+    mocks.persistentMindUsageLimitRetryAt.mockReturnValue('2026-09-01T00:30:00.000Z');
+    const res = await get('/mind/runtime');
+
+    expect(res.status).toBe(200);
+    expect(mocks.inspectPersistentMindRuntime).toHaveBeenCalledWith(expect.objectContaining({
+      usageLimitRetryAt: '2026-09-01T00:30:00.000Z',
+    }));
   });
 
   it('serves the shared environment visibility projection and accepts an explicit refresh', async () => {

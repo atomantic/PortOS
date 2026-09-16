@@ -96,6 +96,22 @@ describe('backfillFromHistory — stale coordinator verdict (#2696)', () => {
     expect(recordTaskCompletion.mock.calls[0][0].result.validationPassed).toBe(false);
   });
 
+  it('skips a record retired by a resume — the live listener already refused it', async () => {
+    // The listener below skips these as they happen, but the backfill re-reads the
+    // ARCHIVE, where every relaunch it skipped is still sitting as a
+    // `success: false` record. One backfill would re-import the whole set of
+    // phantom failures the listener spent the install's lifetime refusing.
+    agentsStore.list = [
+      { status: 'completed', taskId: 't-relaunched',
+        result: { success: false, duration: 100, resumed: true, resumedTaskId: 't-relaunched', error: 'Relaunched by user on codex' },
+        metadata: { taskType: 'user', taskDescription: 'swapped providers mid-run' } },
+      completed('t-real', 'accessibility', true),
+    ];
+    await backfillFromHistory();
+    expect(recordTaskCompletion).toHaveBeenCalledTimes(1);
+    expect(recordTaskCompletion.mock.calls[0][0].taskId).toBe('t-real');
+  });
+
   it('passes a committing type through UNTOUCHED — its commit verdict is real', async () => {
     // accessibility genuinely commits; a persisted false is a real miss, not a fossil.
     agentsStore.list = [completed('t1', 'accessibility', false)];

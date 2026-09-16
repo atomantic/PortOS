@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useMemo } from 'react';
 import { Plus, RefreshCw } from 'lucide-react';
 import toast from '../../ui/Toast';
 import * as api from '../../../services/api';
-import { formatDateTime } from '../../../utils/formatters';
+import { formatCount, formatDateTime } from '../../../utils/formatters';
 import AgentJobProviderFields, { hasRunnableAgentProvider } from '../AgentJobProviderFields';
 import { filterRunnableProviders } from '../../../utils/providers';
 import FormField from '../../ui/FormField';
@@ -203,8 +203,8 @@ export default function JobsTab() {
 
       {stats && (
         <div className="flex gap-4 text-xs text-gray-500">
-          <span>{stats.enabled} enabled / {stats.total} total</span>
-          <span>{stats.totalRuns} total runs</span>
+          <span>{formatCount(stats.enabled)} enabled / {formatCount(stats.total)} total</span>
+          <span>{formatCount(stats.totalRuns)} total runs</span>
           {stats.nextDue && (
             <span className={stats.nextDue.isDue ? 'text-port-warning' : ''}>
               Next: {stats.nextDue.jobName} ({stats.nextDue.isDue ? 'due now' : formatDateTime(stats.nextDue.nextDueAt)})

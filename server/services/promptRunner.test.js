@@ -15,6 +15,10 @@ vi.mock('./runner.js', () => ({
   // run record's providerId/model so /runs attribution matches what
   // actually ran. Mocked as a no-op resolve.
   patchRunMetadata: vi.fn().mockResolvedValue(undefined),
+  // Settles a run record a pre-execution refusal throws past (the TUI readiness
+  // check and the context gate), so the Runs page never shows an attempt that
+  // never ends.
+  finalizeRunRecord: vi.fn().mockResolvedValue(undefined),
 }));
 
 // TUI runner is in lib (different module from services/runner.js) — mock it
@@ -61,12 +65,22 @@ vi.mock('../lib/aiToolkitState.js', () => ({
   getAIToolkitInstance: vi.fn().mockReturnValue(null),
 }));
 
+// The pre-dispatch context gate reads the daemon's live `/v1/models` through
+// this module (lazily). Mocked so the suite can drive "the endpoint says 32K"
+// without a daemon; the default is the no-observation answer, which is what
+// every provider that is not daemon-backed (and every install whose daemon is
+// down) gets — so the whole rest of the suite routes untouched.
+vi.mock('./observedContextWindows.js', () => ({
+  withObservedContextWindows: vi.fn(async (provider) => provider),
+}));
+
 const runner = await import('./runner.js');
 const tuiRunner = await import('./tuiPromptRunner.js');
 const executionReadiness = await import('./providerExecutionReadiness.js');
 const providers = await import('./providers.js');
 const autoFixer = await import('./autoFixer.js');
 const toolkitState = await import('../lib/aiToolkitState.js');
+const observedWindows = await import('./observedContextWindows.js');
 const { ERROR_CATEGORIES } = await import('../lib/aiToolkit/errorDetection.js');
 const { CREATIVE_LATITUDE_HEADING, withCreativeLatitude } = await import('../lib/creativeLatitude.js');
 const { runPromptThroughProvider, resolveProviderAndModel, resolveEffectiveModel, pickConfigCorrectedModel, normalizeResponseSchema, coerceResponseToSchema, isSchemaTypeCategory, buildRequestCapabilities, assertVisionRunUsedImages } = await import('./promptRunner.js');
@@ -94,6 +108,7 @@ beforeEach(() => {
   // Defaults reset for fallback-path mocks too — same staleness concern.
   providers.getAllProviders.mockResolvedValue({ activeProvider: null, providers: [] });
   toolkitState.getAIToolkitInstance.mockReturnValue(null);
+  observedWindows.withObservedContextWindows.mockImplementation(async (provider) => provider);
 });
 
 describe('promptRunner — happy paths', () => {
@@ -819,6 +834,110 @@ describe('promptRunner — TUI provider routing', () => {
 });
 
 // =============================================================================
+// Gateway-inherited credentials — a gateway-backed OpenCode wrapper (OrcaRouter,
+// OpenRouter, NVIDIA NIM) stores no key; `withGatewayApiKey` attaches the
+// sibling API record's key as a NON-ENUMERABLE property at read time. Anything
+// that clones or re-resolves the provider must carry that key along, or the
+// run goes out with no Authorization header (NVIDIA NIM 401s "Header of type
+// `authorization` was missing") despite a stored key.
+// =============================================================================
+
+describe('promptRunner — gateway sibling-key preservation', () => {
+  // Mirror of `withGatewayApiKey`: the key is readable but invisible to
+  // spread/JSON, which is exactly what made the clone below drop it.
+  const gatewayAttached = (record, apiKey) => {
+    const attached = { ...record };
+    Object.defineProperty(attached, 'apiKey', { value: apiKey, enumerable: false, configurable: true });
+    return attached;
+  };
+  const nimCli = () => gatewayAttached({
+    id: 'opencode-nvidia-nim',
+    type: 'cli',
+    command: 'opencode',
+    gatewayBacked: 'nvidia-nim',
+    models: ['google/gemma-4-31b-it', 'poolside/laguna-xs-2.1'],
+    defaultModel: 'poolside/laguna-xs-2.1',
+    timeout: 5000,
+  }, 'nvapi-test-key');
+  const nimTui = () => gatewayAttached({
+    id: 'opencode-nvidia-nim-tui',
+    type: 'tui',
+    command: 'opencode',
+    gatewayBacked: 'nvidia-nim',
+    models: ['google/gemma-4-31b-it', 'poolside/laguna-xs-2.1'],
+    defaultModel: 'poolside/laguna-xs-2.1',
+    timeout: 5000,
+  }, 'nvapi-test-key');
+
+  it('carries the sibling key onto the model-pinned CLI provider clone', async () => {
+    runner.executeCliRun.mockImplementation(async ({ provider, onComplete }) => {
+      expect(provider.apiKey).toBe('nvapi-test-key');
+      expect(provider.defaultModel).toBe('google/gemma-4-31b-it');
+      onComplete({ success: true });
+    });
+
+    const out = await runPromptThroughProvider({
+      provider: nimCli(),
+      model: 'google/gemma-4-31b-it',
+      prompt: 'p',
+      source: 'test',
+    });
+
+    expect(runner.executeCliRun).toHaveBeenCalledTimes(1);
+    expect(out.model).toBe('google/gemma-4-31b-it');
+  });
+
+  it('carries the sibling key onto the model-pinned TUI provider clone', async () => {
+    tuiRunner.executeTuiRun.mockImplementation(async ({ provider, onComplete }) => {
+      expect(provider.apiKey).toBe('nvapi-test-key');
+      expect(provider.defaultModel).toBe('google/gemma-4-31b-it');
+      onComplete({ success: true, text: 'done' });
+    });
+
+    await runPromptThroughProvider({
+      provider: nimTui(),
+      model: 'google/gemma-4-31b-it',
+      prompt: 'p',
+      source: 'test',
+    });
+
+    expect(tuiRunner.executeTuiRun).toHaveBeenCalledTimes(1);
+  });
+
+  it('carries the sibling key when only an effort override forces the clone', async () => {
+    runner.executeCliRun.mockImplementation(async ({ provider, onComplete }) => {
+      expect(provider.apiKey).toBe('nvapi-test-key');
+      onComplete({ success: true });
+    });
+
+    await runPromptThroughProvider({
+      provider: nimCli(),
+      prompt: 'p',
+      source: 'test',
+      effort: 'high',
+    });
+
+    expect(runner.executeCliRun).toHaveBeenCalledTimes(1);
+  });
+
+  it('leaves the provider untouched when no clone is needed', async () => {
+    const wrapper = nimCli();
+    runner.executeCliRun.mockImplementation(async ({ provider, onComplete }) => {
+      expect(provider).toBe(wrapper);
+      onComplete({ success: true });
+    });
+
+    await runPromptThroughProvider({
+      provider: wrapper,
+      prompt: 'p',
+      source: 'test',
+    });
+
+    expect(runner.executeCliRun).toHaveBeenCalledTimes(1);
+  });
+});
+
+// =============================================================================
 // API timeout enforcement — executeApiRun now owns the primary wall-clock
 // timeout (it aborts + finalizes as TIMEOUT and fires onComplete). promptRunner
 // keeps a SECONDARY backstop timer, delayed past the runner's deadline by
@@ -928,9 +1047,71 @@ describe('promptRunner — retry-with-fallback', () => {
     })).rejects.toThrow('Pinned provider failed');
 
     expect(runner.createRun).toHaveBeenCalledWith(expect.objectContaining({ allowFallback: false }));
-    expect(status.markUnavailable).not.toHaveBeenCalled();
     expect(status.getFallbackProvider).not.toHaveBeenCalled();
     expect(autoFixer.escalateProviderFailure).not.toHaveBeenCalled();
+  });
+
+  // A pin opts out of ROUTING, not out of health reporting. Leaving the mark to
+  // the fallback cascade let a provider fail every pinned call for hours while
+  // the Providers page stayed green and unpinned callers kept choosing it.
+  it('still benches the provider a pinned run failed on', async () => {
+    const status = mockToolkitWithFallback();
+    runner.executeCliRun.mockImplementation(async ({ onComplete }) => {
+      onComplete({ success: false, error: 'CLI run timed out after 600000ms' });
+    });
+
+    await expect(runPromptThroughProvider({
+      provider: primaryCli,
+      prompt: 'p',
+      source: 'test',
+      allowFallback: false,
+    })).rejects.toThrow('CLI run timed out after 600000ms');
+
+    expect(status.markUnavailable).toHaveBeenCalledWith(primaryCli.id, expect.objectContaining({
+      reason: 'timeout',
+      // The bench covers the budget the run actually burned, so the next pinned
+      // wake is refused cheaply instead of stalling for another ten minutes.
+      waitTimeMs: 600000,
+    }));
+  });
+
+  // A usage limit is the one marker a pinned run leaves alone: the caller that
+  // cares (persistentMindSupervisor) calls markProviderUsageLimit for this same
+  // failure, and its observed-block ledger write is deliberately not deduped, so
+  // marking here too would record one block twice.
+  it('leaves a pinned usage-limit failure to the caller that owns the marker', async () => {
+    const status = mockToolkitWithFallback();
+    runner.executeCliRun.mockImplementation(async ({ onComplete }) => {
+      onComplete({ success: false, error: "You've hit your usage limit. Try again in 5 hours" });
+    });
+
+    await expect(runPromptThroughProvider({
+      provider: primaryCli,
+      prompt: 'p',
+      source: 'test',
+      allowFallback: false,
+    })).rejects.toThrow(/usage limit/);
+
+    expect(status.markUsageLimit).not.toHaveBeenCalled();
+    expect(status.markUnavailable).not.toHaveBeenCalled();
+  });
+
+  // Request-specific categories resolve to "don't bench" in providerCooldown, so
+  // a pinned caller's bad prompt can't take a healthy provider offline.
+  it('does not bench a pinned run that failed for a request-specific reason', async () => {
+    const status = mockToolkitWithFallback();
+    runner.executeCliRun.mockImplementation(async ({ onComplete }) => {
+      onComplete({ success: false, error: 'model not found: bogus-model' });
+    });
+
+    await expect(runPromptThroughProvider({
+      provider: primaryCli,
+      prompt: 'p',
+      source: 'test',
+      allowFallback: false,
+    })).rejects.toThrow(/model not found/);
+
+    expect(status.markUnavailable).not.toHaveBeenCalled();
   });
 
   it('does not retry, bench, or escalate a canceled TUI run', async () => {
@@ -1353,6 +1534,52 @@ describe('promptRunner — retry-with-fallback', () => {
     // primary so provider-level fallbackProvider can be read from it.
     const mapPassed = status.getFallbackProvider.mock.calls[0][1];
     expect(mapPassed).toHaveProperty('primary-cli');
+  });
+
+  it('attaches the sibling key when a Tier-3 fallback pick is a gateway wrapper', async () => {
+    // The fallback pick comes from the RAW provider map, which carries no
+    // gateway-inherited key. Without the attach the wrapper executes with
+    // no Authorization header (NVIDIA NIM 401s "Header of type `authorization`
+    // was missing") despite a stored key.
+    const sibling = { id: 'nvidia-nim', type: 'api', apiKey: 'nvapi-test-key' };
+    const rawWrapper = {
+      id: 'opencode-nvidia-nim',
+      name: 'OpenCode NVIDIA NIM',
+      type: 'cli',
+      command: 'opencode',
+      gatewayBacked: 'nvidia-nim',
+      models: ['poolside/laguna-xs-2.1'],
+      defaultModel: 'poolside/laguna-xs-2.1',
+    };
+    const status = mockToolkitWithFallback(rawWrapper);
+    providers.getAllProviders.mockResolvedValue({
+      activeProvider: null,
+      providers: [primaryCli, primaryApi, sibling, rawWrapper],
+    });
+
+    const executedProviders = [];
+    runner.executeCliRun
+      .mockImplementationOnce(async ({ onComplete }) => {
+        onComplete({ success: false, error: 'primary boom' });
+      })
+      .mockImplementationOnce(async ({ provider, onData, onComplete }) => {
+        executedProviders.push(provider);
+        onData('recovered');
+        onComplete({ success: true });
+      });
+
+    const out = await runPromptThroughProvider({
+      provider: primaryCli,
+      prompt: 'p',
+      source: 'test',
+    });
+
+    expect(out.usedFallback).toBe(true);
+    expect(out.fallbackProvider).toMatchObject({ id: 'opencode-nvidia-nim' });
+    expect(out.fallbackProvider.apiKey).toBe('nvapi-test-key');
+    expect(executedProviders).toHaveLength(1);
+    expect(executedProviders[0].apiKey).toBe('nvapi-test-key');
+    expect(status.markUnavailable).toHaveBeenCalledWith('primary-cli', expect.any(Object));
   });
 
   it('does not turn a successful fallback into a failure when noteFallbackHandled itself throws (best-effort suppression)', async () => {
@@ -2143,5 +2370,164 @@ describe('creative IP-latitude clause', () => {
       provider: apiProvider(), prompt: 'Score the loop.', source: 'chiptune-score',
     });
     expect(runner.createRun.mock.calls[0][0].prompt).toContain(CREATIVE_LATITUDE_HEADING);
+  });
+});
+
+// ── Pre-dispatch context gate (#7441) ────────────────────────────────────────
+// A local daemon accepts an oversized request, emits its banner, then produces
+// nothing until the wall-clock timeout fires. Refusing up front is only correct
+// if it fires ONLY on a known window, so both the refusal and the two
+// unknown-window regressions live here.
+describe('promptRunner — context gate on the requested provider', () => {
+  // ~13 tokens of prompt + the 8000-token default output reserve, against a
+  // daemon whose listing declared 4096 — a request that provably cannot fit.
+  const vllmCli = () => cliProvider({
+    id: 'opencode-vllm',
+    name: 'OpenCode vLLM',
+    defaultModel: 'qwen3.8-27b',
+    models: ['qwen3.8-27b'],
+    vllmBacked: true,
+    endpoint: 'http://127.0.0.1:18020/v1',
+  });
+  // ~5,000 prompt tokens on its own — over a 4096-token window with no
+  // reserve arithmetic needed.
+  const OVERSIZED_PROMPT = 'x'.repeat(20_000);
+  const servingWindow = (tokens) => async (provider) => ({
+    ...provider,
+    modelContextWindows: { 'qwen3.8-27b': tokens },
+  });
+
+  // Tier-3 harness: a wider fallback the cascade can route to.
+  function mockToolkitWithFallbackFor(primary) {
+    const fallback = apiProvider({ id: 'fallback-api', name: 'Fallback API', defaultModel: 'fb-model' });
+    const markUnavailable = vi.fn().mockResolvedValue(undefined);
+    toolkitState.getAIToolkitInstance.mockReturnValue({
+      services: {
+        providerStatus: {
+          isAvailable: vi.fn().mockReturnValue(true),
+          markUnavailable,
+          markUsageLimit: vi.fn().mockResolvedValue(undefined),
+          getFallbackProvider: vi.fn().mockReturnValue({ provider: fallback, source: 'provider' }),
+        },
+      },
+    });
+    providers.getAllProviders.mockResolvedValue({ activeProvider: null, providers: [primary, fallback] });
+    return { markUnavailable };
+  }
+
+  it('refuses before dispatch, naming both token counts, for a pinned caller', async () => {
+    const status = mockToolkitWithFallbackFor(vllmCli());
+    observedWindows.withObservedContextWindows.mockImplementation(servingWindow(4096));
+
+    const rejection = await runPromptThroughProvider({
+      provider: vllmCli(),
+      prompt: OVERSIZED_PROMPT,
+      source: 'test',
+      allowFallback: false,
+    }).catch((err) => err);
+
+    // A pin opts out of ROUTING, not of health reporting — but this failure is
+    // the REQUEST's, not the provider's, so the pinned path must not bench a
+    // daemon that still serves smaller prompts perfectly well.
+    expect(status.markUnavailable).not.toHaveBeenCalled();
+
+    // Both numbers, because the operator's next move depends on the gap:
+    // a smaller prompt, or a provider with a wider window.
+    expect(rejection.message).toMatch(/known 4096-token context is below the \d+-token request budget/);
+    expect(rejection.message).toContain('OpenCode vLLM (qwen3.8-27b)');
+    // The whole point: no run record, no spawn, no ten-minute stall.
+    expect(runner.createRun).not.toHaveBeenCalled();
+    expect(runner.executeCliRun).not.toHaveBeenCalled();
+  });
+
+  // The refusal must act on what is PROVABLE. `requiredContextTokens` adds an
+  // 8,000-token output reserve that most callers never asked for; refusing on
+  // it would kill a 26K-token prompt to a 32K endpoint that expects three
+  // sentences back and succeeds today.
+  it('does not refuse on an output reserve the caller never asked for', async () => {
+    observedWindows.withObservedContextWindows.mockImplementation(servingWindow(4096));
+    runner.executeCliRun.mockImplementation(async ({ onComplete }) => onComplete({ success: true }));
+
+    // ~2,000 prompt tokens: under the 4096 window on its own, over it once the
+    // default 8,000-token reserve is added.
+    await runPromptThroughProvider({ provider: vllmCli(), prompt: 'x'.repeat(8_000), source: 'test' });
+    expect(runner.executeCliRun).toHaveBeenCalledTimes(1);
+  });
+
+  it('honors a reserve the caller DID declare', async () => {
+    observedWindows.withObservedContextWindows.mockImplementation(servingWindow(4096));
+
+    // Same prompt, but now the caller says it needs 4,000 tokens of answer —
+    // that genuinely does not fit, and it said so itself.
+    const rejection = await runPromptThroughProvider({
+      provider: vllmCli(),
+      prompt: 'x'.repeat(8_000),
+      source: 'test',
+      outputReserveTokens: 4_000,
+      allowFallback: false,
+    }).catch((err) => err);
+
+    expect(rejection.message).toContain('known 4096-token context is below');
+    expect(runner.executeCliRun).not.toHaveBeenCalled();
+  });
+
+  // stageRunner and the loops create the run record themselves. Throwing past
+  // one leaves the Runs page showing an attempt that never ends, and every
+  // `success === null` reconciler seeing a phantom active run.
+  it('settles a caller-supplied run record instead of stranding it open', async () => {
+    observedWindows.withObservedContextWindows.mockImplementation(servingWindow(4096));
+
+    await runPromptThroughProvider({
+      provider: vllmCli(),
+      prompt: OVERSIZED_PROMPT,
+      source: 'test',
+      runId: 'caller-owned-run',
+      allowFallback: false,
+    }).catch(() => {});
+
+    expect(runner.finalizeRunRecord).toHaveBeenCalledWith(expect.objectContaining({
+      runId: 'caller-owned-run',
+      success: false,
+      exitCode: 1,
+      error: expect.stringContaining('4096-token context'),
+    }));
+  });
+
+  it('routes an oversized request to a fallback instead of benching a healthy daemon', async () => {
+    const status = mockToolkitWithFallbackFor(vllmCli());
+    observedWindows.withObservedContextWindows.mockImplementation(async (provider) => (
+      provider.id === 'opencode-vllm' ? (await servingWindow(4096)(provider)) : provider
+    ));
+    runner.executeApiRun.mockImplementation(async ({ onComplete }) => onComplete({ success: true }));
+
+    const out = await runPromptThroughProvider({
+      provider: vllmCli(),
+      prompt: OVERSIZED_PROMPT,
+      source: 'test',
+    });
+
+    expect(out.usedFallback).toBe(true);
+    expect(out.provider.id).toBe('fallback-api');
+    // The endpoint is healthy — a smaller prompt still works there — so this
+    // must not take it offline for every other caller.
+    expect(status.markUnavailable).not.toHaveBeenCalled();
+  });
+
+  it('dispatches unchanged when nothing declared a window', async () => {
+    // The default mock is the no-observation answer: a daemon that is down,
+    // silent about windows, or not daemon-backed at all. Unknown must keep
+    // meaning "no constraint", never "refuse".
+    runner.executeCliRun.mockImplementation(async ({ onComplete }) => onComplete({ success: true }));
+
+    await runPromptThroughProvider({ provider: vllmCli(), prompt: 'x'.repeat(200_000), source: 'test' });
+    expect(runner.executeCliRun).toHaveBeenCalledTimes(1);
+  });
+
+  it('dispatches when the known window is wide enough', async () => {
+    observedWindows.withObservedContextWindows.mockImplementation(servingWindow(131_072));
+    runner.executeCliRun.mockImplementation(async ({ onComplete }) => onComplete({ success: true }));
+
+    await runPromptThroughProvider({ provider: vllmCli(), prompt: 'small', source: 'test' });
+    expect(runner.executeCliRun).toHaveBeenCalledTimes(1);
   });
 });

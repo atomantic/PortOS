@@ -54,6 +54,16 @@ export function GatewayKeyHint({ gateway, sibling, className = '', onEdit }) {
       </p>
       <div className="mt-2 flex flex-wrap items-center gap-2">
         <span className="text-port-warning">{gateway.label} key: not set</span>
+        {gateway.keyUrl ? (
+          <a
+            className="text-port-accent hover:text-port-accent/80 underline underline-offset-2"
+            href={gateway.keyUrl}
+            target="_blank"
+            rel="noreferrer"
+          >
+            Get a {gateway.label} key
+          </a>
+        ) : null}
         {editLink}
       </div>
     </div>

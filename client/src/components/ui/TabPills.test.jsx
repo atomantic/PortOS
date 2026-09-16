@@ -130,6 +130,30 @@ describe('TabPills — underline variant (default)', () => {
     expect(castBtn).toHaveAttribute('id', 'tab-cast');
     expect(castBtn).toHaveAttribute('aria-controls', 'tabpanel-cast');
   });
+
+  // #7420: a bar that mounts one panel at a time only ever has ONE panel in the
+  // document, so every OTHER tab's `aria-controls` pointed at an id that did
+  // not exist. Only the active tab may claim to control something real.
+  it('omits aria-controls from every inactive tab (nothing to control in a one-panel-at-a-time bar)', () => {
+    render(<TabPills tabs={sampleTabs} activeTab="cast" onChange={() => {}} controlsIdPrefix="tabpanel" />);
+    for (const name of [/Places/i, /Objects/i]) {
+      expect(screen.getByRole('tab', { name })).not.toHaveAttribute('aria-controls');
+    }
+    // `id` stays on every tab: a caller that keeps every panel mounted and
+    // toggles `hidden` (rather than conditionally rendering) gives each panel
+    // a static `aria-labelledby="tab-<id>"`, which would dangle without it.
+    expect(screen.getByRole('tab', { name: /Places/i })).toHaveAttribute('id', 'tab-places');
+  });
+
+  it('same contract in the pills variant', () => {
+    render(<TabPills variant="pills" tabs={sampleTabs} activeTab="cast" onChange={() => {}} controlsIdPrefix="tabpanel" />);
+    const castBtn = screen.getByRole('tab', { name: /Cast/i });
+    expect(castBtn).toHaveAttribute('id', 'tab-cast');
+    expect(castBtn).toHaveAttribute('aria-controls', 'tabpanel-cast');
+    const placesBtn = screen.getByRole('tab', { name: /Places/i });
+    expect(placesBtn).not.toHaveAttribute('aria-controls');
+    expect(placesBtn).toHaveAttribute('id', 'tab-places');
+  });
 });
 
 // The preferred phone treatment: the same tab buttons, icons only. A `<select>`

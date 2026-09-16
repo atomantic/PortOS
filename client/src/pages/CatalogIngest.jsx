@@ -8,6 +8,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { useNavigate, useLocation } from 'react-router';
 import { Sparkles, Loader2, CheckCircle2, AlertCircle, ArrowLeft, RotateCcw, Circle, Upload, Link2, FileText, Mic, Square } from 'lucide-react';
+import { formatCount } from '../utils/formatters';
 import useProviderModels from '../hooks/useProviderModels';
 import ProviderModelSelector from '../components/ProviderModelSelector';
 import toast from '../components/ui/Toast';
@@ -523,7 +524,7 @@ export default function CatalogIngest() {
                     ? '[\n  { "type": "character", "name": "Alice", "description": "A curious sleuth", "tags": ["noir"] }\n]'
                     : '## Character: Alice\nA curious sleuth.\ntags: noir, gritty\n\n## Place: The Hollow\nAbandoned subway tunnel.\n'}
                 className="w-full px-3 py-2 bg-port-bg border border-port-border rounded text-white text-sm font-mono focus:outline-none focus:border-port-accent" />
-              <p className="text-xs text-gray-500 mt-1">{bulkText.length.toLocaleString()} {bulkText.length === 1 ? 'character' : 'characters'}</p>
+              <p className="text-xs text-gray-500 mt-1">{formatCount(bulkText.length)} {bulkText.length === 1 ? 'character' : 'characters'}</p>
             </div>
             <div className="flex items-center justify-end gap-2">
               <button type="button" onClick={() => setBulkOpen(false)} disabled={bulkSubmitting}
@@ -605,7 +606,7 @@ export default function CatalogIngest() {
                   <textarea id="ingest-text" maxLength={babble ? 30000 : undefined} rows={12} value={rawText} onChange={(e) => setRawText(e.target.value)}
                     placeholder="Paste prose, scene notes, character sketches — anything you want catalogued."
                     className="w-full px-3 py-2 bg-port-bg border border-port-border rounded text-white text-sm font-mono focus:outline-none focus:border-port-accent" />
-                  <p className="text-xs text-gray-500 mt-1">{rawText.length.toLocaleString()}{babble ? ' / 30,000 chars' : ' chars'}</p>
+                  <p className="text-xs text-gray-500 mt-1">{formatCount(rawText.length)}{babble ? ' / 30,000 chars' : ' chars'}</p>
                 </div>
                 {babble && <>
                   <p className="text-sm text-gray-400">One AI pass refines your brainstorm into distinct suggestions: story ideas, character journeys, alternate realities, scenes, dialogue, and concepts. Review and edit before saving. Your original text is preserved as a scrap.</p>

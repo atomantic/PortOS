@@ -13,6 +13,7 @@ import { filterResolutions, MAX_IMAGE_EDGE, MAX_IMAGE_PIXELS } from '../../lib/i
 import { randomSeed } from '../../lib/genUtils';
 import { RUNNER_FAMILIES } from '../../lib/runnerFamilies';
 import { IMAGE_GEN_MODE, isCloudCliMode } from '../../lib/imageGenBackends';
+import { formatCount } from '../../utils/formatters';
 import ModelDownloadBadge, { deriveSizeEstimate } from '../media/ModelDownloadBadge';
 import ResolutionField from '../media/ResolutionField';
 import { FormField } from '../ui/FormField';
@@ -140,7 +141,7 @@ export default function ImageGenControls({
         maxPixels={MAX_IMAGE_PIXELS}
         disabled={disabled}
         inputClassName={inputCls}
-        note={`Each edge 64–${MAX_IMAGE_EDGE}px, total ≤ ${MAX_IMAGE_PIXELS.toLocaleString()} px. Multiples of 8 render best on local models.`}
+        note={`Each edge 64–${MAX_IMAGE_EDGE}px, total ≤ ${formatCount(MAX_IMAGE_PIXELS)} px. Multiples of 8 render best on local models.`}
       />
 
       {/* Codex's image_gen tool ignores seed/steps/guidance — only resolution

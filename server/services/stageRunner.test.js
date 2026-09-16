@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 vi.mock('./providers.js', () => ({
   getActiveProvider: vi.fn(),
@@ -8,6 +8,14 @@ vi.mock('./providers.js', () => ({
 vi.mock('./promptService.js', () => ({
   buildPrompt: vi.fn().mockResolvedValue('rendered-prompt'),
   getStage: vi.fn(),
+}));
+
+// The live `/v1/models` listing `resolveStageContext` budgets against (#7447).
+// Mocked rather than spied so no test in this file can reach a real socket; the
+// registry covers the dynamic import `resolveStageContext` reaches it through.
+vi.mock('../lib/openAiModelsProbeCache.js', () => ({
+  probeOpenAiModelsCached: vi.fn(),
+  resetOpenAiModelsProbeCache: vi.fn(),
 }));
 
 vi.mock('./runner.js', () => ({
@@ -22,6 +30,7 @@ vi.mock('./runner.js', () => ({
 const providers = await import('./providers.js');
 const prompts = await import('./promptService.js');
 const runner = await import('./runner.js');
+const probeCache = await import('../lib/openAiModelsProbeCache.js');
 const { buildEffortArgs } = await import('../lib/providerModels.js');
 const { CREATIVE_LATITUDE_HEADING } = await import('../lib/creativeLatitude.js');
 const {
@@ -31,6 +40,7 @@ const {
   extractJson,
   effectiveContextWindow,
   resolveStageContext,
+  resolveStageRoute,
   resolveJudgeForStage,
   resolveEffortHint,
   effectiveStage,
@@ -160,6 +170,110 @@ describe('stageRunner — context windows', () => {
     const context = await resolveStageContext('any-stage');
     expect(context.model).toBe('claude-opus-4-8');
     expect(context.contextWindow).toBe(1_000_000);
+  });
+});
+
+// #7447 — see `resolveStageContext`'s docblock for why the live window matters.
+describe('stageRunner — resolveStageContext reads the live daemon window', () => {
+  // The shipped vLLM wrapper: seeded with no `contextWindow` and no
+  // `modelContextWindows`, so every rung below it used to answer 128K.
+  const daemonProvider = (extra = {}) => ({
+    id: 'opencode-vllm',
+    name: 'OpenCode vLLM',
+    type: 'cli',
+    enabled: true,
+    command: 'opencode',
+    endpoint: 'http://127.0.0.1:18020/v1',
+    defaultModel: 'qwen3.8-27b',
+    models: ['qwen3.8-27b'],
+    vllmBacked: true,
+    ...extra,
+  });
+
+  beforeEach(() => {
+    prompts.getStage.mockReturnValue(null);
+  });
+
+  // `vi.clearAllMocks()` clears calls but keeps implementations, so the probe
+  // stub has to be torn down explicitly or it leaks into later describes.
+  afterEach(() => {
+    probeCache.probeOpenAiModelsCached.mockReset();
+  });
+
+  const serving = (contextWindows) => probeCache.probeOpenAiModelsCached.mockResolvedValue({
+    reachable: true,
+    models: Object.keys(contextWindows),
+    contextWindows,
+    error: null,
+  });
+
+  it('budgets to the 32K the daemon is serving, not the 128K assumption', async () => {
+    providers.getActiveProvider.mockResolvedValue(daemonProvider());
+    serving({ 'qwen3.8-27b': 32_768 });
+
+    const context = await resolveStageContext('any-stage');
+    expect(context.contextWindow).toBe(32_768);
+  });
+
+  it('lets the observation outrank a stale catalog entry, but not a typed override', async () => {
+    // Both rungs at once: the record remembers 128K from whenever the user last
+    // pressed Refresh Models, and the daemon has since been relaunched at 32K.
+    providers.getActiveProvider.mockResolvedValue(daemonProvider({
+      modelContextWindows: { 'qwen3.8-27b': 128_000 },
+    }));
+    serving({ 'qwen3.8-27b': 32_768 });
+    await expect(resolveStageContext('any-stage')).resolves.toMatchObject({ contextWindow: 32_768 });
+
+    // A number the user typed is a deliberate override, not a stale guess.
+    providers.getActiveProvider.mockResolvedValue(daemonProvider({ contextWindow: 8_192 }));
+    await expect(resolveStageContext('any-stage')).resolves.toMatchObject({ contextWindow: 8_192 });
+  });
+
+  it('spends no probe at all when an explicit window already decides the answer', async () => {
+    // The override short-circuits the ladder's first rung, so observing could
+    // not change the result — and a chunked run would otherwise pay a round trip
+    // per stage (up to the probe timeout on a black-holed endpoint) for it.
+    providers.getActiveProvider.mockResolvedValue(daemonProvider({ contextWindow: 8_192 }));
+    serving({ 'qwen3.8-27b': 32_768 });
+
+    await expect(resolveStageContext('any-stage')).resolves.toMatchObject({ contextWindow: 8_192 });
+    expect(probeCache.probeOpenAiModelsCached).not.toHaveBeenCalled();
+  });
+
+  it('resolveStageRoute answers provider/model without touching the network', async () => {
+    // `universeCastIntegrity` renders a deterministic report and reads only the
+    // provider's identity; budgeting enrichment must not put a daemon probe on
+    // that read path.
+    providers.getActiveProvider.mockResolvedValue(daemonProvider());
+    serving({ 'qwen3.8-27b': 32_768 });
+
+    const route = await resolveStageRoute('any-stage');
+    expect(route).toEqual({ provider: expect.objectContaining({ id: 'opencode-vllm' }), model: 'qwen3.8-27b' });
+    expect(route.contextWindow).toBeUndefined();
+    expect(probeCache.probeOpenAiModelsCached).not.toHaveBeenCalled();
+  });
+
+  it('budgets exactly as before when the daemon is unreachable or silent about windows', async () => {
+    // The regression guard for "unknown stays unknown": a down daemon must not
+    // become a NEW answer, and must not become a new failure mode either.
+    providers.getActiveProvider.mockResolvedValue(daemonProvider());
+    probeCache.probeOpenAiModelsCached.mockRejectedValue(new Error('ECONNREFUSED'));
+    await expect(resolveStageContext('any-stage')).resolves.toMatchObject({
+      contextWindow: DEFAULT_LARGE_CONTEXT_WINDOW,
+    });
+
+    serving({});
+    await expect(resolveStageContext('any-stage')).resolves.toMatchObject({
+      contextWindow: DEFAULT_LARGE_CONTEXT_WINDOW,
+    });
+  });
+
+  it('returns the provider record UNMERGED, so observed runtime state rides nothing persistable', async () => {
+    providers.getActiveProvider.mockResolvedValue(daemonProvider());
+    serving({ 'qwen3.8-27b': 32_768 });
+
+    const context = await resolveStageContext('any-stage');
+    expect(context.provider.modelContextWindows).toBeUndefined();
   });
 });
 

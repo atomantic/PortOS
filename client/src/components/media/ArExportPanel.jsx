@@ -9,7 +9,7 @@ import {
 } from '../../lib/usdzExport.js';
 import { generateQrCodeSvg } from '../../lib/qrCode';
 import useMounted from '../../hooks/useMounted';
-import { formatBytes } from '../../utils/formatters';
+import { formatBytes, formatCount } from '../../utils/formatters';
 import toast from '../ui/Toast';
 
 /**
@@ -61,8 +61,8 @@ export default function ArExportPanel({ record, scene, onRecordChange }) {
       // refusal — the export still runs — but the count and the remedy are named,
       // because the only real fix is a lighter render, not a lighter export.
       toast(
-        `This mesh is ${triangles.toLocaleString()} triangles — above the `
-        + `${AR_TRIANGLE_BUDGET.toLocaleString()} that opens comfortably in AR. `
+        `This mesh is ${formatCount(triangles)} triangles — above the `
+        + `${formatCount(AR_TRIANGLE_BUDGET)} that opens comfortably in AR. `
         + 'Re-render at a lower Quality tier for a lighter AR file.',
         { icon: '⚠️' },
       );

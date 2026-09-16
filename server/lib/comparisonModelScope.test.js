@@ -22,6 +22,39 @@ describe('catalogSlugForProviderModel', () => {
     expect(catalogSlugForProviderModel('gpt-oss-120b-mxfp4')).toBe('gpt-oss-120b');
   });
 
+  it('resolves a local install id from the catalog entry that declares one, on either backend', () => {
+    // An Ollama tag and its LM Studio GGUF repo are one model with two
+    // spellings PortOS owns, so both reach the declared benchmark name.
+    for (const id of ['ornith:35b', 'lmstudio-community/Ornith-1.0-35B-GGUF', 'ORNITH:35B']) {
+      expect(catalogSlugForProviderModel(id)).toBe('ornith-1.0-35b');
+    }
+    expect(catalogSlugForProviderModel('qwen3-coder:30b')).toBe('qwen3-coder-30b-a3b');
+    expect(catalogSlugForProviderModel('unsloth/Devstral-Small-2-24B-Instruct-2512-GGUF')).toBe('devstral-small-2-24b');
+  });
+
+  it('gives a local build no benchmark identity unless its entry declares one', () => {
+    // These are all real catalog entries — the mappings a textual rule would
+    // invent are simply wrong: `-Reasoning` is model identity, not an effort
+    // suffix, so stripping it lands on a DIFFERENT Cisco model; a 4-bit MLX
+    // build is not the hosted endpoint whose price and throughput
+    // `qwen3.8-27b` carries; and `-Thinking` in a GGUF repo name is identity,
+    // not a reasoning-mode suffix, so stripping it lands on that model's
+    // non-thinking sibling. None of these entries declares a `benchmarkModel`,
+    // so silence — not a wrong guess — is the correct answer.
+    expect(catalogSlugForProviderModel('hf.co/fdtn-ai/Foundation-Sec-8B-Reasoning-Q8_0-GGUF:Q8_0')).toBe('');
+    expect(catalogSlugForProviderModel('qwen3.8:27b-mlx')).toBe('');
+    expect(catalogSlugForProviderModel('qwen2.5-coder:32b')).toBe('');
+    expect(catalogSlugForProviderModel('lmstudio-community/LFM2.5-1.2B-Thinking-GGUF')).toBe('');
+  });
+
+  it('leaves a name the index really spells that way alone', () => {
+    // `-it` is Google's own name for the model, and a trailing build date is
+    // part of the slug rather than a version to dot.
+    expect(catalogSlugForProviderModel('google/gemma-4-31b-it')).toBe('gemma-4-31b-it');
+    expect(catalogSlugForProviderModel('qwen3-235b-a22b-2507')).toBe('qwen3-235b-a22b-2507');
+    expect(catalogSlugForProviderModel('deepseek-r1-0528')).toBe('deepseek-r1-0528');
+  });
+
   it('reads a dashed trailing version as the catalog dotted version', () => {
     expect(catalogSlugForProviderModel('claude-sonnet-4-6')).toBe('claude-sonnet-4.6');
     expect(catalogSlugForProviderModel('claude-opus-4-6-thinking')).toBe('claude-opus-4.6');

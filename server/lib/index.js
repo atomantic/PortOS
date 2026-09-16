@@ -100,6 +100,7 @@ export * from './creativeLatitude.js';
 // subdir with its own barrel — surface it under `editorial.*` so the root
 // discovery surface reaches EDITORIAL_CHECKS + the lookup helpers.
 export * as editorial from './editorial/index.js';
+export * from './familySettingsMap.js';
 export * from './fableLoomGraph.js';
 export * from './fableLoomCameraMovements.js';
 export * from './fableLoomPlayback.js';
@@ -247,6 +248,7 @@ export * from './vllmQwenProvision.js';
 export * from './sglangQwenProject.js';
 export * from './sglangQwenRecipe.js';
 export * from './openAiModelsProbe.js';
+export * from './openAiModelsProbeCache.js';
 export * from './openAiChatStream.js';
 // `runners.js` re-defines `isFlux2`/`isZImage`/`isErnie` that also live in
 // mediaModels.js — namespace it so the barrel surface is unambiguous.
@@ -304,6 +306,7 @@ export * from './zipWriter.js';
 
 // === Process execution ===
 export * from './agentGuard/index.js';
+export * from './agentOutcome.js';
 export * from './agentOutputMarkers.js';
 export * from './agentRunEvents.js';
 export * from './agentRunReconcile.js';
@@ -316,6 +319,7 @@ export * from './persistentMindProfile.js';
 export * from './persistentMindMemory.js';
 export * from './persistentMindPrompt.js';
 export * from './persistentMindPlaybook.js';
+export * from './persistentMindPlaybookPhase.js';
 export * from './mindLocalContextClamp.js';
 export * from './persistentMindPublic.js';
 export * from './persistentMindThinkingPresets.js';
@@ -462,6 +466,7 @@ export * from './noReplaceMove.js';
 export * from './instanceFeatureRegistry.js';
 export * from './credentialRegistry.js';
 export * from './usageRange.js';
+export * from './subscriptionPlanTiers.js';
 export * from './subscriptionSavings.js';
 export * from './providerFamilies.js';
 export * from './fleetQuotas.js';
@@ -513,6 +518,7 @@ export * from './vaultCrypto.js';
 
 // === Model & config ===
 export * from './backupConfig.js';
+export * from './systemIdle.js';
 export * from './browserConfig.js';
 export * from './buildId.js';
 export * from './buildIdentity.js';

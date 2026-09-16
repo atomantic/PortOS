@@ -82,6 +82,7 @@ import { getVoiceConfig } from './voice/config.js';
 import { reconcile as reconcileVoice } from './voice/bootstrap.js';
 import { initVoiceTimers } from './voice/timers.js';
 import { startBackupScheduler } from './backupScheduler.js';
+import { startAutoUpdateScheduler } from './autoUpdateScheduler.js';
 import { startPrivacyRecheckScheduler } from './privacyRecheckScheduler.js';
 import { startQuotaBurnScheduler } from './quotaBurnRunner.js';
 import { startMaintenanceRunScheduler } from './maintenanceRun.js';
@@ -442,6 +443,11 @@ const startBackgroundServices = ({ spawnerReady, io }) => {
   registerPostReminderSchedule({ catchUpMissedSlot: true }).catch(err => logBootstrapFailure('❌ POST reminder init failed', err));
   // Initialize backup scheduler for daily data backups
   startBackupScheduler().catch(err => logBootstrapFailure('❌ Backup scheduler init failed', err));
+  // Automatic PortOS self-update — OFF by default. When the user turns it on
+  // (Update tab), it polls for a window in which the install is completely idle
+  // and then runs the SAME update the matching button runs. Registering the
+  // poll launches nothing by itself.
+  startAutoUpdateScheduler(io).catch(err => logBootstrapFailure('❌ Auto-update scheduler init failed', err));
   // Initialize Privacy Center opt-out recheck scheduler — OFF by default; only
   // re-runs the broker scan + opt-out pass when the user opts in via
   // Settings → Privacy (sanctioned scheduled-automation exception) (#2145).

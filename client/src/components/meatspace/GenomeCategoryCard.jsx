@@ -3,6 +3,7 @@ import { ChevronDown, ChevronRight } from 'lucide-react';
 import InlineConfirmRow from '../ui/InlineConfirmRow';
 import { FormField } from '../ui/FormField';
 import { useConfirmDelete } from '../../hooks/useConfirmDelete';
+import { formatCount } from '../../utils/formatters';
 
 const STATUS_DOT = {
   beneficial: 'bg-port-success',
@@ -167,7 +168,7 @@ export default function GenomeCategoryCard({ category: _category, label, emoji, 
                       {/* Location */}
                       <div className="flex gap-4 text-xs text-gray-500">
                         {marker.chromosome && <span>Chr {marker.chromosome}</span>}
-                        {marker.position && <span>Pos {marker.position?.toLocaleString()}</span>}
+                        {marker.position && <span>Pos {formatCount(marker.position)}</span>}
                       </div>
 
                       {/* Notes */}

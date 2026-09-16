@@ -1035,14 +1035,10 @@ export async function spawnTuiAgent({
    * the shell session on disk.
    */
   const releaseRunResources = async ({ agentData, cleanupSuccess, prOwnership, prClaimVerified, noChangesToShip }) => {
-    // This run's sentinel only — a sibling agent sharing this workspace owns
-    // its own file and may still be running.
-    if (doneSentinelPath) await rm(doneSentinelPath).catch(() => {});
-
     // Pipeline progression → worktree cleanup with the PR disposition →
-    // retry-hold release, in the one owner both in-process spawners share.
-    // Caught so a throw there cannot skip the in-memory teardown below — this
-    // runs off a PTY exit, outside any request lifecycle.
+    // sentinel removal → retry-hold release, in the one owner every completion
+    // path shares. Caught so a throw there cannot skip the in-memory teardown
+    // below — this runs off a PTY exit, outside any request lifecycle.
     await runSpawnerCompletionCleanup({
       agentId,
       task,
@@ -1152,6 +1148,10 @@ export async function spawnTuiAgent({
     // which can take seconds, and a host restart that begins in that window is
     // still an interruption rather than an outcome (#3202).
     const duration = Date.now() - (agentData?.startedAt || Date.now());
+    // Read ONCE: the shared finalize decides the run's outcome from it and the
+    // diagnostic below reports on it, and two reads could disagree about the
+    // same run.
+    const wroteSentinel = sentinelPresent();
     const finalizeOutcome = finalizeAgentRunCommon({
       agentId,
       agentData,
@@ -1161,7 +1161,7 @@ export async function spawnTuiAgent({
       duration,
       executionId,
       laneName,
-      sentinelPresent: sentinelPresent(),
+      sentinelPresent: wroteSentinel,
       errorExecutionFallback: `TUI agent ended: ${reason}`,
     });
 
@@ -1173,6 +1173,27 @@ export async function spawnTuiAgent({
     }
 
     const { finalSuccess, finalError, terminatedByUser } = finalizeOutcome;
+
+    // Name the path the run was supposed to write when it ends without one.
+    // The sentinel is the PRIMARY finalize path for a TUI, so reaching here
+    // without it means the run either died or talked itself out of the write —
+    // and the second shape is otherwise silent, leaving an ordinary "TUI agent
+    // ended" line and nothing an operator can grep for (#7405; the prompt-side
+    // contract is SENTINEL_WRITE_PERMISSION_NOTE). Deliberately NOT gated on
+    // `finalSuccess`: a run that stalls on a question is reaped as a failure,
+    // which is exactly the case this exists to name. Placed after the shared
+    // finalize, so the paused and host-abandoned paths have already returned
+    // and only a user kill — a legitimate no-sentinel exit — needs excluding.
+    // A CLI run is out of scope: it signals completion by exiting, so the same
+    // warn in `agentRunFinalize` would fire on every headless run.
+    // A merge-gate nudge DELETES the sentinel this run already wrote, so
+    // "never wrote one" would be a false reading of that path — and the
+    // remedy it points at is the opposite one (the nudge never landed).
+    if (doneSentinelPath && !terminatedByUser && !wroteSentinel) {
+      emitLog('warn', mergeGateReprompted
+        ? `⚠️ ${agentId} finalized (${reason}) without re-writing its sentinel after the merge-gate nudge — expected ${doneSentinelPath}`
+        : `⚠️ ${agentId} finalized (${reason}) with no completion sentinel — expected ${doneSentinelPath}`, { agentId });
+    }
 
     // output.txt has already been incrementally appended via the spooler;
     // do NOT writeFile() it from the output buffer at finalize — the buffer is

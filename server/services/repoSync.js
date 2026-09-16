@@ -142,7 +142,7 @@ const STASH_CLASSIFY_CONCURRENCY = 6;
  * @param {string} repoPath
  * @returns {Promise<string|null>}
  */
-async function detectOperationInProgress(repoPath) {
+export async function detectOperationInProgress(repoPath) {
   const out = await execGitSafe(['rev-parse', '--git-dir'], repoPath, { ignoreExitCode: true });
   if (out.exitCode !== 0) {
     throw new Error(out.stderr || `could not inspect git operation state (exit code ${out.exitCode})`);
@@ -450,7 +450,7 @@ async function collectRepoState(repoPath) {
  * @param {string} base
  * @returns {Promise<{ahead:number, behind:number}|null>}
  */
-async function countAheadBehind(repoPath, ref, base) {
+export async function countAheadBehind(repoPath, ref, base) {
   const out = await execGitSafe(['rev-list', '--left-right', '--count', `${base}...${ref}`], repoPath, { ignoreExitCode: true });
   if (out.exitCode !== 0) return null;
   const [behind, ahead] = (out.stdout || '').trim().split(/\s+/).map((n) => Number.parseInt(n, 10));

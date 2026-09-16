@@ -8,6 +8,7 @@ import RouteTabsHeader from '../components/ui/RouteTabsHeader';
 import BrailleSpinner from '../components/BrailleSpinner';
 import { copyToClipboard } from '../lib/clipboard';
 import * as api from '../services/api';
+import { formatCount } from '../utils/formatters';
 
 const HTTP_METHODS = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS', 'HEAD', 'TRACE'];
 const HTTP_METHOD_SET = new Set(HTTP_METHODS);
@@ -131,7 +132,7 @@ function CatalogView() {
           </label>
         </div>
         <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-gray-500">
-          <span>{filtered.length.toLocaleString()} matching operations</span>
+          <span>{formatCount(filtered.length)} matching operations</span>
           <div className="flex items-center gap-3">
             <Link to="/settings/api-access" className="text-port-accent hover:underline">Configure external access</Link>
             <a href="/api/api-docs/internal/openapi.json" target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-port-accent hover:underline">
@@ -254,7 +255,7 @@ function RestReferenceView() {
                 </label>
               </div>
               <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-gray-500">
-                <span>{filtered.length.toLocaleString()} matching operations</span>
+                <span>{formatCount(filtered.length)} matching operations</span>
                 <a href={specPath} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-port-accent hover:underline">
                   Open JSON <ExternalLink size={11} />
                 </a>
@@ -365,7 +366,7 @@ function EventCatalogView() {
           </label>
         </div>
         <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-gray-500">
-          <span>{events.length.toLocaleString()} matching events</span>
+          <span>{formatCount(events.length)} matching events</span>
           <a href="/api/api-docs/asyncapi.json" target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-port-accent hover:underline">Open AsyncAPI JSON <ExternalLink size={11} /></a>
         </div>
       </div>
@@ -503,6 +504,12 @@ export default function ApiExplorer() {
 
   if (!VALID_TABS.has(tab)) return <Navigate to="/api-reference/catalog" replace />;
 
+  // RouteTabsHeader passes no `controlsIdPrefix` (route tabs navigate, they
+  // don't reveal a sibling panel already in the DOM — see its own comment), so
+  // the panel names itself with its own heading rather than an `aria-labelledby`
+  // borrowed from a tab id that doesn't exist (#7420).
+  const activeTabLabel = TABS.find((t) => t.id === tab)?.label;
+
   return (
     <div className="h-full min-h-0 flex flex-col bg-port-bg">
       <PageHeader
@@ -512,7 +519,8 @@ export default function ApiExplorer() {
         actions={<button type="button" onClick={() => navigate('/settings/api-access')} className="text-xs text-port-accent hover:underline">API access settings</button>}
       />
       <RouteTabsHeader tabs={TABS} activeTab={tab} ariaLabel="API Explorer sections" />
-      <div role="tabpanel" className="min-h-0 flex-1 overflow-auto">
+      <div role="tabpanel" aria-labelledby="api-explorer-panel-heading" className="min-h-0 flex-1 overflow-auto">
+        <h2 id="api-explorer-panel-heading" className="sr-only">{activeTabLabel}</h2>
         {tab === 'catalog' && <CatalogView />}
         {tab === 'rest' && <RestReferenceView />}
         {tab === 'events' && <EventCatalogView />}

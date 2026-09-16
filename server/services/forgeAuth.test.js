@@ -1,5 +1,8 @@
 import { EventEmitter } from 'node:events';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync } from 'fs';
+import { tmpdir } from 'os';
+import { join } from 'path';
 
 vi.mock('../lib/childProcess.js', () => ({ spawn: vi.fn() }));
 // The managed-app registry read is the only thing forge auth needs from the app
@@ -214,6 +217,26 @@ describe('per-app forge account pinning', () => {
     // A null `.name` falls back to the login rather than committing as "".
     expect(env.GIT_AUTHOR_NAME).toBe('acme-bot');
     expect(env.GH_TOKEN).toBe('acme-bot-token');
+  });
+
+  it('matches a pin registered against the real path when the checkout is reached through a symlink', async () => {
+    // A lexical compare never matches the symlinked side, so the pin was
+    // silently missed and auth fell back to the wrong account.
+    const home = mkdtempSync(join(tmpdir(), 'portos-forge-'));
+    const real = join(home, 'repo');
+    const link = join(home, 'link');
+    mkdirSync(real);
+    symlinkSync(real, link);
+    try {
+      listForgePinnedApps.mockResolvedValue([{ repoPath: real, forgeAccount: 'acme-bot' }]);
+      respond({ stdout: 'git@github.com:acme/widget.git\n' });
+      respond({ stdout: `${link}/.git\n` });
+      respond({ stdout: 'acme-bot-token\n' });
+      respond({ stdout: '4242\tacme-bot\tAcme Bot\n' });
+      await expect(resolveForgeTokenEnv(link)).resolves.toMatchObject({ GH_TOKEN: 'acme-bot-token' });
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
   });
 
   it('leaves an unpinned app on the inferred account with ambient commit identity', async () => {

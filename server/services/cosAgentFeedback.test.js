@@ -82,6 +82,22 @@ describe('getPendingAgentFeedbackCount', () => {
     await expect(getPendingAgentFeedbackCount()).resolves.toBe(1);
   });
 
+  it('excludes a run retired by Relaunch, which has no result to rate', async () => {
+    // A permanent banner otherwise: the count included the record Relaunch
+    // retires, but AgentCard shows no rating buttons for it, so nothing the user
+    // could do would ever clear "1 completed run needs feedback".
+    mockCosState.state.agents = {
+      'agent-relaunched': {
+        id: 'agent-relaunched', status: 'completed', completedAt: '2026-08-01T10:00:00.000Z',
+        metadata: { taskType: 'user' },
+        result: { success: false, resumed: true, error: 'Relaunched by user on codex' }
+      },
+      'agent-manual': { id: 'agent-manual', status: 'completed', metadata: { taskType: 'user' }, result: { success: true } }
+    };
+
+    await expect(getPendingAgentFeedbackCount()).resolves.toBe(1);
+  });
+
   it('returns 0 when nothing is awaiting a rating', async () => {
     await expect(getPendingAgentFeedbackCount()).resolves.toBe(0);
   });

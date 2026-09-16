@@ -10,6 +10,7 @@
 
 import { persistentMindNamePrompt, persistentMindChosenNameSchema } from '../lib/persistentMindChosenName.js';
 import { persistentMindMemoryProtectionSchema } from '../lib/persistentMindMemory.js';
+import { PERSISTENT_MIND_LIMITS } from '../lib/persistentMind.js';
 import { z } from 'zod';
 import {
   PERSISTENT_MIND_TASK_LIMITS,
@@ -30,6 +31,7 @@ import {
 } from './persistentMindContext.js';
 import { normalizePersistentMindPrompt } from '../lib/persistentMindPrompt.js';
 import { composePersistentMindInstructions, normalizePersistentMindPlaybook } from '../lib/persistentMindPlaybook.js';
+import { resolvePersistentMindPlaybookPhase } from './persistentMindPlaybookSignals.js';
 import { assertVisionRunUsedImages, runPromptThroughProvider } from './promptRunner.js';
 import { stopRun } from './runner.js';
 import {
@@ -58,7 +60,7 @@ import {
   isCosTaskToolName,
 } from './cosToolRegistry.js';
 
-const HEARTBEAT_INTERVAL_MS = 60_000;
+const { HEARTBEAT_INTERVAL_MS } = PERSISTENT_MIND_LIMITS;
 const MAX_TOOL_PROVIDER_ROUNDS = 4;
 const MAX_TOOL_RESULT_CHARS = 4_000;
 const MAX_MEMORY_CANDIDATES_PER_TURN = 5;
@@ -341,21 +343,28 @@ async function runPinnedPrompt({ provider, model, effort, prompt, screenshots = 
 
 export function createPersistentMindTurnAdapter() {
   return {
-    async prepare({ profile }) {
+    async prepare({ profile, signal }) {
       const [root, memories] = await Promise.all([
         loadState(),
         readPersistentMindMemories(PERSISTENT_MIND_ID),
       ]);
       const prompt = normalizePersistentMindPrompt(root.config?.persistentMindPrompt);
       const playbook = normalizePersistentMindPlaybook(root.config?.persistentMindPlaybook);
+      // Maturity-aware phase (#7458): resolved fresh each wake from live world
+      // signals so an empty vs. dense Commons gets a different loop, never a
+      // fixed cron personality. Only continuous-play pays for the read.
+      const playbookPhase = playbook.mode === 'continuous-play'
+        ? await resolvePersistentMindPlaybookPhase({ signal })
+        : null;
       return {
         ok: true,
         provider: profile.provider,
         model: profile.model,
         effort: profile.effort,
         identity: prompt.identity,
-        instructions: composePersistentMindInstructions(prompt.instructions, playbook),
+        instructions: composePersistentMindInstructions(prompt.instructions, playbook, playbookPhase?.phase),
         playbook,
+        playbookPhase,
         memories,
       };
     },

@@ -64,6 +64,19 @@ describe('CredentialsTab', () => {
     expect(JSON.stringify(PAYLOAD)).not.toMatch(/hf_this/);
   });
 
+  it('lays credential cards out in a responsive two-column grid without a width clamp', async () => {
+    const { container } = render(
+      <MemoryRouter>
+        <CredentialsTab />
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByText('Hugging Face')).toBeTruthy();
+    const grid = container.querySelector('.grid.grid-cols-1.lg\\:grid-cols-2');
+    expect(grid).toBeTruthy();
+    expect(container.querySelector('.max-w-3xl')).toBeNull();
+  });
+
   it('renders verification failures as unknown instead of not configured', async () => {
     mock.getCredentialInventory.mockResolvedValue({
       headline: 'Credential status',

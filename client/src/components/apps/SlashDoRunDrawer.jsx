@@ -23,6 +23,9 @@ import * as api from '../../services/api';
  * bare button used to. Reviewer fields are sent ONLY when the user edits them, so
  * an untouched drawer still resolves the app's configured claim-work reviewers
  * server-side rather than pinning whatever this form happened to display.
+ * `prCompletion` is the exception: it is always sent for `/do:next` (seeded
+ * from the claim-work default when untouched), because the prompt's completion
+ * policy needs an explicit value.
  *
  * Mount only while open (the parent conditionally renders it): the provider fetch
  * runs on mount unless the overview supplies its shared agent picker. Task

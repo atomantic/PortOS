@@ -17,6 +17,7 @@ import {
   sourceReferencePattern,
   splitByRunner,
   WINDOWS_CONTRACT_TESTS,
+  WINDOWS_RISK_RULES,
 } from './ci-test-plan.js';
 
 const TRACKED = [
@@ -813,5 +814,171 @@ describe('needsSlashdoSubmodule', () => {
       ...basePlan,
       server: { files: [], sources: ['server/lib/slashdoInvocation.js'] },
     })).toBe(true);
+  });
+});
+
+// windows-latest bills at GitHub's 2x minute multiplier, and three Windows
+// shards were ~58% of a full run's billable minutes (24.9 of 40.4, measured
+// over 11 real runs). These pin the rule that bought that back: a full plan
+// escalates the Windows job to the complete server suite only when the diff
+// gives windows-server something to prove. Everything else still runs the
+// WINDOWS_CONTRACT_TESTS baseline — reduced, never skipped (issue #7440).
+describe('Windows escalation on a full plan (#7440)', () => {
+  // The contract baseline resolves against tracked files, so a downgrade is
+  // only observable when the contract tests exist in the tree.
+  const TRACKED_WITH_CONTRACTS = [...TRACKED, ...WINDOWS_CONTRACT_TESTS];
+  const plan = (files, options = {}) => buildCiTestPlan(files, {
+    trackedFiles: TRACKED_WITH_CONTRACTS,
+    ...options,
+  });
+
+  it('runs the contract baseline for a full trigger windows-server cannot observe', () => {
+    const downgraded = plan(['client/vite.config.js']);
+
+    // Still a full plan for every Linux suite — only the 2x job narrows.
+    expect(downgraded.full).toBe(true);
+    expect(downgraded.server.mode).toBe('full');
+    expect(downgraded.client.mode).toBe('full');
+    expect(downgraded.shards.server).toEqual(shardIndexes('full', FULL_SUITE_SHARDS.server));
+
+    // Reduced, not skipped: the job runs, on one shard, over the baseline.
+    expect(downgraded.windows).toBe(true);
+    expect(downgraded.windowsMode).toBe('files');
+    expect(downgraded.shards.windows).toEqual([1]);
+    expect(downgraded.windowsFiles).toEqual(WINDOWS_CONTRACT_TESTS);
+    expect(downgraded.suiteReasons.windows).toContain('Windows contract baseline');
+  });
+
+  it('treats a capacity escalation as a scoping limit, not a Windows risk signal', () => {
+    // A diff wide enough to blow MAX_CHANGED_CODE_FILES says the planner ran
+    // out of scoping headroom. Nothing about it implicates Windows.
+    const wide = plan(Array.from({ length: 31 }, (_, i) => `server/services/wide${i}.js`));
+
+    expect(wide.full).toBe(true);
+    expect(wide.reason).toContain('wide change');
+    expect(wide.windowsMode).toBe('files');
+    expect(wide.shards.windows).toEqual([1]);
+  });
+
+  it('escalates when ANY matching trigger is Windows-relevant, not just the reported one', () => {
+    // The reason line reports the first match in sorted-path order, which here
+    // is the client-only one. The Windows decision must still see server/index.js.
+    const mixed = plan(['client/vite.config.js', 'server/index.js']);
+
+    expect(mixed.reason).toContain('client/vite.config.js');
+    expect(mixed.windowsMode).toBe('full');
+    expect(mixed.shards.windows).toEqual(shardIndexes('full', FULL_SUITE_SHARDS.windows));
+  });
+
+  it('consults the trigger list from the App.jsx branch too', () => {
+    // client/src/App.jsx returns before the trigger loop, so its branch has to
+    // read the same OR — otherwise an App.jsx PR that also bumps a lockfile or
+    // touches server/index.js downgrades Windows on a diff that must escalate.
+    expect(plan(['client/src/App.jsx']).windowsMode).toBe('files');
+
+    for (const escalating of ['server/index.js', 'package-lock.json', 'server/lib/validation.js']) {
+      const combined = plan(['client/src/App.jsx', escalating]);
+      expect(combined.reason, escalating).toContain('client composition root changed');
+      expect(combined.windowsMode, escalating).toBe('full');
+    }
+  });
+
+  it('escalates when a Windows-risk file rides along with a client-only trigger', () => {
+    // .ps1 is not in EXECUTABLE_RE, so risk detection must read every changed
+    // path, not only the executable ones.
+    const withPowerShell = plan(['client/vite.config.js', 'scripts/deploy.ps1']);
+
+    expect(withPowerShell.windowsMode).toBe('full');
+    expect(withPowerShell.windowsFiles).toEqual([]);
+  });
+
+  it('keeps the complete matrix on the runs that carry the discovery net', () => {
+    // Nightly, the main -> release PR, release, explicit full request. ci.yml
+    // has no push trigger, so these are the whole discovery net for an
+    // untagged Windows regression.
+    const forced = plan([], { forceFull: true, forceFullReason: 'full CI requested' });
+
+    expect(forced.windowsMode).toBe('full');
+    expect(forced.shards.windows).toEqual(shardIndexes('full', FULL_SUITE_SHARDS.windows));
+  });
+
+  it('fails closed for a call site that passes no windowsEscalates flag', () => {
+    // The unclassified-file branch deliberately omits the flag, so this pins
+    // fullPlan's `windowsEscalates = true` default through a real call site: a
+    // branch added later without the flag over-tests rather than under-tests.
+    const unclassified = plan(['data.reference/bootstrap.bin']);
+
+    expect(unclassified.full).toBe(true);
+    expect(unclassified.windowsMode).toBe('full');
+  });
+
+  it('fails closed to the full suite rather than selecting zero Windows tests', () => {
+    // run-ci-tests.js prints "No server tests selected" and exits 0 on an empty
+    // files list. A downgrade that resolved to [] would be a green job that ran
+    // nothing, so the baseline has to actually exist first.
+    const noContracts = buildCiTestPlan(['client/vite.config.js'], { trackedFiles: [] });
+
+    expect(noContracts.windowsMode).toBe('full');
+    expect(noContracts.shards.windows).toEqual(shardIndexes('full', FULL_SUITE_SHARDS.windows));
+
+    // The downgrade is still reachable — this is a fail-closed fallback, not a
+    // rule that disabled it outright.
+    const withContracts = buildCiTestPlan(['client/vite.config.js'], {
+      trackedFiles: WINDOWS_CONTRACT_TESTS,
+    });
+    expect(withContracts.windowsMode).toBe('files');
+  });
+
+  describe('no Windows-sensitive surface loses coverage', () => {
+    // One representative path per WINDOWS_RISK_RULES entry. The coverage
+    // assertion below fails when a rule is added without a sample here, so a
+    // new Windows-sensitive surface cannot land untested.
+    const RISK_SAMPLES = [
+      'scripts/deploy.ps1',
+      'scripts/launch.cmd',
+      'scripts/fix-windows-console.js',
+      'scripts/ps1-bom.test.js',
+      'server/lib/bufferedSpawn.js',
+      'server/lib/pathSafety.js',
+      'server/lib/staticImportGraph.js',
+      'server/services/agentImportCycles.test.js',
+      'server/services/worktreeManager.js',
+      'server/lib/shellCd.js',
+      'server/lib/agentGuard/index.js',
+      'server/cos-runner/index.js',
+      'server/services/shell.js',
+      'server/services/agentTuiSpawning.js',
+      'server/services/autonomousJobs/execution.shellSpawn.js',
+      'server/services/voice/fineTuning.js',
+      'server/routes/apps/index.js',
+      'server/routes/scaffoldVite.js',
+    ];
+
+    it('covers every risk rule with a sample', () => {
+      const uncovered = WINDOWS_RISK_RULES
+        .filter((rule) => !RISK_SAMPLES.some((path) => rule.test(path)))
+        .map((rule) => String(rule));
+
+      expect(uncovered).toEqual([]);
+    });
+
+    it.each(RISK_SAMPLES)('gives %s the complete Windows suite, never the baseline', (path) => {
+      // Differential, so it stays load-bearing for every sample. Asserting
+      // `windows === true` on `plan([path])` alone would be vacuous for
+      // .ps1/.cmd/.bat: those are not in EXECUTABLE_RE, so they force a full
+      // plan as an "unclassified changed file", and EVERY full plan sets
+      // `windows: true` whatever the risk rules say. Pairing the sample with a
+      // client-only trigger makes the plan go full for a reason that WOULD
+      // downgrade, so only the risk rule can produce `full` here.
+      expect(plan(['client/vite.config.js']).windowsMode).toBe('files');
+      expect(plan(['client/vite.config.js', path]).windowsMode).toBe('full');
+    });
+
+    it('routes a scoped Windows-risk change to the Windows job', () => {
+      // The scoped side of the same predicate: no full trigger in sight, so
+      // `windows: true` here is a direct consequence of WINDOWS_RISK_RULES.
+      expect(plan(['server/services/auth.js']).windows).toBe(false);
+      expect(plan(['server/lib/bufferedSpawn.js']).windows).toBe(true);
+    });
   });
 });

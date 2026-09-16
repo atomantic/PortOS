@@ -174,22 +174,30 @@ describe('listAppIssues — GitHub', () => {
 });
 
 describe('listAppIssues — GitLab', () => {
-  it('normalizes iid / description / string labels / username assignees', async () => {
+  it('normalizes iid / description / string labels / username assignees, joined to label-list colors', async () => {
     useGitlabOrigin();
-    execGlabJson.mockResolvedValue({ reason: 'ok', rows: [{
-      iid: 7,
-      title: 'Add export',
-      description: 'We need CSV',
-      web_url: 'https://gitlab.com/group/proj/-/issues/7',
-      state: 'opened',
-      labels: ['feature', 'p2'],
-      assignees: [{ username: 'dana' }],
-      author: { username: 'erin' },
-      milestone: { title: 'Sprint 3' },
-      created_at: '2026-02-01T00:00:00Z',
-      updated_at: '2026-02-02T00:00:00Z',
-      user_notes_count: 4,
-    }] });
+    execGlabJson.mockImplementation(async (args) => {
+      if (args[0] === 'label') {
+        return { reason: 'ok', rows: [
+          { name: 'feature', color: '#5843AD', description: 'New functionality' },
+          { name: 'p2', color: 'D4C5F9', description: '' },
+        ] };
+      }
+      return { reason: 'ok', rows: [{
+        iid: 7,
+        title: 'Add export',
+        description: 'We need CSV',
+        web_url: 'https://gitlab.com/group/proj/-/issues/7',
+        state: 'opened',
+        labels: ['feature', 'p2'],
+        assignees: [{ username: 'dana' }],
+        author: { username: 'erin' },
+        milestone: { title: 'Sprint 3' },
+        created_at: '2026-02-01T00:00:00Z',
+        updated_at: '2026-02-02T00:00:00Z',
+        user_notes_count: 4,
+      }] };
+    });
 
     const result = await listAppIssues(APP);
 
@@ -204,13 +212,63 @@ describe('listAppIssues — GitLab', () => {
       commentCount: 4,
     });
     expect(result.issues[0].labels).toEqual([
-      { name: 'feature', color: null, description: '' },
-      { name: 'p2', color: null, description: '' },
+      { name: 'feature', color: '#5843AD', description: 'New functionality' },
+      // Bare-hex label colors get the same `#` prefixing the GitHub path applies.
+      { name: 'p2', color: '#D4C5F9', description: '' },
     ]);
-    // glab resolves the project from its cwd, so the repo path is load-bearing.
+    // glab resolves the project from its cwd, so the repo path is load-bearing
+    // on BOTH calls — issue list and label list alike.
     expect(execGlabJson.mock.calls[0][1]).toBe('/repo');
     // execGlabJson owns the output flag (lib/glabArgs.js); callers pass none.
     expect(execGlabJson.mock.calls[0][0]).toEqual(['issue', 'list', '--per-page', '100']);
+    expect(execGlabJson.mock.calls[1][0]).toEqual(['label', 'list', '--per-page', '100']);
+    expect(execGlabJson.mock.calls[1][1]).toBe('/repo');
+  });
+
+  it('a label absent from label list still renders neutral; the issue list is unaffected', async () => {
+    useGitlabOrigin();
+    execGlabJson.mockImplementation(async (args) => {
+      if (args[0] === 'label') return { reason: 'ok', rows: [{ name: 'feature', color: '#5843AD', description: '' }] };
+      return { reason: 'ok', rows: [{ iid: 7, title: 'Add export', labels: ['feature', 'unlisted'], assignees: [] }] };
+    });
+    const result = await listAppIssues(APP);
+    expect(result).toMatchObject({ reason: 'ok', transient: false });
+    expect(result.issues[0].labels).toEqual([
+      { name: 'feature', color: '#5843AD', description: '' },
+      { name: 'unlisted', color: null, description: '' },
+    ]);
+  });
+
+  it('a failed label list is non-fatal — issues still return with neutral labels', async () => {
+    useGitlabOrigin();
+    execGlabJson.mockImplementation(async (args) => {
+      if (args[0] === 'label') return { rows: null, reason: 'cli-failed' };
+      return { reason: 'ok', rows: [{ iid: 7, title: 'Add export', labels: ['feature'], assignees: [] }] };
+    });
+    const result = await listAppIssues(APP);
+    expect(result).toMatchObject({ reason: 'ok', transient: false });
+    expect(result.issues[0].labels).toEqual([{ name: 'feature', color: null, description: '' }]);
+  });
+
+  it('a non-JSON label list is non-fatal — issues still return with neutral labels', async () => {
+    useGitlabOrigin();
+    execGlabJson.mockImplementation(async (args) => {
+      if (args[0] === 'label') return { rows: null, reason: 'not-json' };
+      return { reason: 'ok', rows: [{ iid: 7, title: 'Add export', labels: ['feature'], assignees: [] }] };
+    });
+    const result = await listAppIssues(APP);
+    expect(result).toMatchObject({ reason: 'ok', transient: false });
+    expect(result.issues[0].labels).toEqual([{ name: 'feature', color: null, description: '' }]);
+  });
+
+  it('tolerates the object label form, normalizing its color the same way', async () => {
+    useGitlabOrigin();
+    execGlabJson.mockImplementation(async (args) => {
+      if (args[0] === 'label') return { reason: 'ok', rows: [] };
+      return { reason: 'ok', rows: [{ iid: 7, title: 'Add export', labels: [{ name: 'bug', color: 'd73a4a', description: 'x' }], assignees: [] }] };
+    });
+    const result = await listAppIssues(APP);
+    expect(result.issues[0].labels).toEqual([{ name: 'bug', color: '#d73a4a', description: 'x' }]);
   });
 
   it('an older glab that omits user_notes_count reports 0 comments, never NaN', async () => {
@@ -298,10 +356,18 @@ describe('listAppIssues — non-forge apps', () => {
   it('lists issues for a gitlab tracker explicitly pinned on a custom-hostname self-hosted origin', async () => {
     getOriginInfo.mockResolvedValue({ isGithub: false, host: 'git.example-corp.com', fullName: 'acme/widget' });
     readOriginRemoteUrl.mockResolvedValue('git@git.example-corp.com:acme/widget.git');
-    execGlabJson.mockResolvedValue({ reason: 'ok', rows: [{ iid: 3, title: 'Custom host works', labels: [], assignees: [] }] });
+    execGlabJson.mockImplementation(async (args) => {
+      if (args[0] === 'label') return { reason: 'ok', rows: [{ name: 'bug', color: '#d73a4a', description: '' }] };
+      return { reason: 'ok', rows: [{ iid: 3, title: 'Custom host works', labels: ['bug'], assignees: [] }] };
+    });
     const result = await listAppIssues({ ...APP, workTracker: 'gitlab' });
     expect(result).toMatchObject({ forge: 'gitlab', tracker: 'gitlab', reason: 'ok' });
     expect(execGlabJson.mock.calls[0][1]).toBe('/repo');
+    // The color enrichment runs in the same cwd with no hostname gate, so a
+    // self-hosted repo gets forge colors through the identical path.
+    expect(execGlabJson.mock.calls[1][0]).toEqual(['label', 'list', '--per-page', '100']);
+    expect(execGlabJson.mock.calls[1][1]).toBe('/repo');
+    expect(result.issues[0].labels).toEqual([{ name: 'bug', color: '#d73a4a', description: '' }]);
   });
 });
 

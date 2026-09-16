@@ -50,6 +50,10 @@ export const undismissHealthWarning = (type, options = {}) => request(`/system/h
 // Update
 export const getUpdateStatus = () => request('/update/status');
 export const checkForUpdate = () => request('/update/check', { method: 'POST' });
+// Automatic-update config + what the scheduler is currently waiting on. Its own
+// route because it walks git status, which /update/status must not do on the
+// Update tab's poll interval.
+export const getAutoUpdateStatus = (options) => request('/update/auto', options);
 export const ignoreUpdateVersion = (version) => request('/update/ignore', {
   method: 'POST',
   body: JSON.stringify({ version })
@@ -182,6 +186,31 @@ export const getUsageBackfillStatus = (options = {}) => request('/usage/backfill
 // the report (`getUsage().subscriptionSavings`), so there is no getter here.
 export const updateSubscriptionCosts = (costs, options = {}) =>
   request('/usage/subscriptions', { method: 'PUT', body: JSON.stringify({ costs }), ...options });
+// The Subscriptions page's own model: one row per manageable plan (enabled
+// state, plan tier, monthly price, the provider records a toggle fans out to).
+// Deliberately separate from `getUsage().subscriptionSavings`, which answers
+// what those plans SPENT over a report window — this answers what they are.
+export const getSubscriptions = (options = {}) => request('/usage/subscriptions', options);
+// Save plan prices and/or plan tiers in ONE request, and get the refreshed rows
+// back — so an editor applies a save without a follow-up GET. Both maps are
+// patches: an omitted family keeps its stored value, `null` (or `0` / `''`)
+// clears it.
+export const updateSubscriptions = ({ costs, tiers } = {}, options = {}) =>
+  request('/usage/subscriptions', {
+    method: 'PUT',
+    body: JSON.stringify({ ...(costs ? { costs } : {}), ...(tiers ? { tiers } : {}) }),
+    ...options,
+  });
+// Switch one subscription on or off — PortOS-side enablement only (it flips
+// `enabled` across that family's provider records). Never touches vendor
+// billing. A priced family with no providers answers `applied: false`. The
+// refreshed rows come back with the outcome.
+export const setSubscriptionEnabled = ({ family, enabled }, options = {}) =>
+  request('/usage/subscriptions/enabled', {
+    method: 'PUT',
+    body: JSON.stringify({ family, enabled }),
+    ...options,
+  });
 // Mark one federated instance as paying API rates (`usesSubscriptions: false`)
 // or riding this install's subscriptions (`true`). The Across Instances
 // combined total skips API-billed rows; the row itself stays listed.

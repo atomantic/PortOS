@@ -41,12 +41,25 @@ it('loads seeded public evidence without discovery or exposing credentials, and 
   const result = await request(app).get('/comparison');
   expect(result.status).toBe(200);
   expect(result.body.observations.length).toBeGreaterThan(0);
-  expect(result.body.inventory).toEqual([{ id: 'example-api', name: 'Example API', type: 'api', canDiscover: true, models: [{ model: 'example-model', efforts: [] }] }]);
+  expect(result.body.inventory).toEqual([{ id: 'example-api', name: 'Example API', type: 'api', canDiscover: true, models: [{ model: 'example-model', efforts: [], catalogModel: 'example-model' }] }]);
   expect(providerService.fetchProviderModelCatalog).not.toHaveBeenCalled();
   const discovery = await request(app).post('/comparison/discover').send({ providerId: 'example-api' });
   expect(discovery.status).toBe(200);
-  expect(discovery.body.models).toEqual([{ model: 'new-example-model', efforts: [] }]);
+  expect(discovery.body.models).toEqual([{ model: 'new-example-model', efforts: [], catalogModel: 'new-example-model' }]);
   expect((await request(app).post('/comparison/discover').send({ providerId: 'disabled' })).status).toBe(400);
+});
+
+it('normalizes a local backend id onto its benchmarked model so the page can match it to an observation', async () => {
+  providerService.getAllProviders.mockResolvedValue({
+    providers: [{ id: 'ollama', name: 'Ollama', type: 'api', enabled: true, models: ['qwen3-coder:30b', 'ornith:35b', 'auto'] }],
+  });
+  const { body } = await request(app).get('/comparison');
+  expect(body.inventory[0].models).toEqual([
+    { model: 'qwen3-coder:30b', efforts: [], catalogModel: 'qwen3-coder-30b-a3b' },
+    { model: 'ornith:35b', efforts: [], catalogModel: 'ornith-1.0-35b' },
+    { model: 'auto', efforts: [], catalogModel: null },
+  ]);
+  expect(body.availableModels).toEqual(['ornith-1.0-35b', 'qwen3-coder-30b-a3b']);
 });
 
 it('imports sourced observations durably, retains unrelated and newer metrics, and serializes concurrent imports', async () => {

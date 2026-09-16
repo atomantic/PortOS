@@ -14,7 +14,7 @@ const llamaProvider = (overrides = {}) => ({
   ...overrides,
 });
 
-const reachable = (models) => async () => ({ reachable: true, models, error: null });
+const reachable = (models, contextWindows = null) => async () => ({ reachable: true, models, contextWindows, error: null });
 const unreachable = (error = 'connection refused') => async () => ({ reachable: false, models: null, error });
 
 const checkById = (readiness, id) => readiness.checks.find((check) => check.id === id);
@@ -87,6 +87,10 @@ describe('getProviderReadiness', () => {
     expect(stopped.ready).toBe(false);
     expect(stopped.standby).toBe(true);
     expect(stopped.standbyDetail).toMatch(/valid idle state/);
+    // The runtime row writes "{page}"; the page name is resolved from its own
+    // manageUrl here, so a page move re-words this without touching the row.
+    expect(stopped.standbyDetail).toMatch(/Models → Runtimes/);
+    expect(stopped.standbyDetail).not.toMatch(/\{page\}/);
 
     const missingWeights = await getProviderReadiness(llamaProvider(), {
       findCommand: () => '/opt/homebrew/bin/llama-server',
@@ -163,6 +167,19 @@ describe('getProviderReadiness', () => {
     expect(model.fixHint).toMatch(/only accepts/);
   });
 
+  // The whole point of deriving the page: two runtimes managed on two different
+  // pages must not be handed the same breadcrumb. llama.cpp resolves to
+  // Runtimes above; Ollama's catalog stayed on LLMs.
+  it('names a different page for a runtime whose catalog did not move', async () => {
+    const readiness = await getProviderReadiness(
+      { id: 'ollama', type: 'api', endpoint: 'http://127.0.0.1:11434/v1', defaultModel: 'qwen3:8b' },
+      { findCommand: () => '/opt/homebrew/bin/ollama', probe: reachable([]) },
+    );
+    const model = checkById(readiness, 'model');
+    expect(model.fixHint).toMatch(/Models → LLMs/);
+    expect(model.fixHint).not.toMatch(/Models → Runtimes/);
+  });
+
   it('calls out a running server with nothing loaded', async () => {
     const readiness = await getProviderReadiness(llamaProvider(), {
       findCommand: () => '/opt/homebrew/bin/llama-server',
@@ -171,7 +188,9 @@ describe('getProviderReadiness', () => {
     const model = checkById(readiness, 'model');
     expect(model.detail).toMatch(/no model loaded/);
     expect(model.servedModels).toEqual([]);
-    expect(model.fixHint).toMatch(/Models → LLMs/);
+    // llama.cpp's presets live on Models → Runtimes since #7414; the hint is
+    // derived from `manageUrl`, so it names that page rather than the catalog.
+    expect(model.fixHint).toMatch(/Models → Runtimes/);
     expect(model.fixHint).not.toMatch(/button below/);
   });
 
@@ -304,15 +323,17 @@ describe('getProviderReadiness', () => {
   });
 
   it('offers a one-click install+start for MTPLX instead of a setup-doc dead end', async () => {
-    // The whole point of the setup button: MTPLX has no Models → LLMs page entry,
-    // so before it existed the only answer here was "go read the vendor docs".
+    // The whole point of the setup button: before it existed the only answer
+    // here was "go read the vendor docs". MTPLX now also has a Models → Runtimes
+    // card (#7414) — the in-place setup is still the shorter path, so the
+    // checklist leads with it and the link is the fallback, never a doc URL.
     const restore = pinPlatform('darwin');
     const readiness = await getProviderReadiness(
       { id: 'opencode-mtplx', command: 'opencode', mtplxBacked: true, defaultModel: 'mtplx' },
       { findCommand: () => null, probe: unreachable() },
     );
     restore();
-    expect(readiness.manageUrl).toBeNull();
+    expect(readiness.manageUrl).toBe('/models/llms-runtimes');
     // Setup lives in the PortOS UI — the payload never points at a vendor doc.
     expect(readiness.docsUrl).toBeUndefined();
     expect(readiness.setup).toMatchObject({ runtime: 'mtplx', action: 'install-start', blockedReason: null });
@@ -532,5 +553,35 @@ describe('getProviderReadinessMap batching', () => {
     });
 
     expect(probes).toBe(1);
+  });
+});
+
+// #7447: the readiness payload is how the LIVE window reaches the provider
+// card, because observed runtime state must never touch `providers.json`.
+describe('getProviderReadiness — observed context windows', () => {
+  it('carries the served windows, keyed by every spelling the provider dispatches under', async () => {
+    // The daemon lists the bare id; the OpenCode wrapper offers `llama/dflash`.
+    // A map keyed on only one of the two answers "unknown" for every dispatch.
+    const readiness = await getProviderReadiness(
+      llamaProvider({ models: ['llama/dflash'], defaultModel: 'llama/dflash' }),
+      { findCommand: () => '/opt/homebrew/bin/llama-server', probe: reachable(['dflash'], { dflash: 32768 }) },
+    );
+    expect(readiness.contextWindows).toEqual({ dflash: 32768, 'llama/dflash': 32768 });
+  });
+
+  it('reports null when the daemon is down or silent about windows', async () => {
+    const down = await getProviderReadiness(
+      llamaProvider(),
+      { findCommand: () => '/opt/homebrew/bin/llama-server', probe: unreachable() },
+    );
+    expect(down.contextWindows).toBeNull();
+
+    // Reachable, listing readable, but no window declared: still unknown, never
+    // a zero or an invented number.
+    const silent = await getProviderReadiness(
+      llamaProvider(),
+      { findCommand: () => '/opt/homebrew/bin/llama-server', probe: reachable(['dflash']) },
+    );
+    expect(silent.contextWindows).toBeNull();
   });
 });

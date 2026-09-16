@@ -4,10 +4,13 @@ import { useSocket } from '../hooks/useSocket';
 import { useLocalStorageBool } from '../hooks/useLocalStorageBool';
 import { useAutoRefetch } from '../hooks/useAutoRefetch';
 import { useValidTab } from '../hooks/useValidTab';
+import { useInstanceFeatures } from '../hooks/useInstanceFeatures.js';
+import { filterNavByFeatures } from '../lib/navFeatures.js';
 import * as api from '../services/api';
 import { isRiggedAvatarStyle, riggedRecordForStyle, useAvatarCapabilities } from '../hooks/useAvatarCapabilities';
 import { coalesce } from '../utils/coalesce';
 import { sameJsonShape } from '../lib/sameJsonShape';
+import { isAgentHandoff } from '../lib/agentOutcome';
 import { WEBGL_AVATAR_STYLE_IDS } from '../lib/avatarStyles';
 import { Play, Pause, Square, Clock, CheckCircle, AlertCircle, Cpu, ChevronDown, ChevronUp, Brain, PanelLeftClose, PanelLeftOpen } from 'lucide-react';
 import toast from '../components/ui/Toast';
@@ -107,6 +110,8 @@ export default function ChiefOfStaff() {
   const { tab } = useParams();
   const navigate = useNavigate();
   const activeTab = useValidTab(TABS, 'tasks');
+  const { isFeatureEnabled } = useInstanceFeatures();
+  const visibleTabs = filterNavByFeatures(TABS, isFeatureEnabled);
 
   const [status, setStatus] = useState(null);
   const [tasks, setTasks] = useState({ user: null, cos: null });
@@ -447,8 +452,14 @@ export default function ChiefOfStaff() {
 
     const handleAgentCompleted = (data) => {
       setAgentState('reviewing');
-      const success = data?.result?.success;
-      setStatusMessage(success ? "Task completed successfully" : "Task failed - checking errors...");
+      // Three outcomes, not two: a run retired by Resume/Relaunch never reached a
+      // verdict, so announcing "Task failed" for it tells the user their own
+      // provider swap broke something.
+      setStatusMessage(
+        isAgentHandoff(data) ? "Handed the task to a new run"
+          : data?.result?.success ? "Task completed successfully"
+            : "Task failed - checking errors..."
+      );
       setSpeaking(true);
       setTimeout(() => setSpeaking(false), SPEAKING_MS);
       // Clear active agent metadata so avatar reverts to default
@@ -880,7 +891,7 @@ export default function ChiefOfStaff() {
         sideHero
         sideBlocks={4}
         sideBlockColsClass="grid-cols-2"
-        tabs={TABS.length}
+        tabs={visibleTabs.length}
       />
     );
   }
@@ -1147,7 +1158,7 @@ export default function ChiefOfStaff() {
         {/* Tabs */}
         <div className="relative mb-4 shrink-0 lg:mb-6">
           <TabPills
-            tabs={TABS}
+            tabs={visibleTabs}
             activeTab={activeTab}
             onChange={(id) => navigate(`/cos/${id}`)}
             mobileCompact

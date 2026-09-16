@@ -22,7 +22,7 @@ import { copyToClipboard } from '../../../lib/clipboard';
 import { countWords } from '../../../lib/textUtils';
 import toast from '../../ui/Toast';
 import { useConfirmDelete } from '../../../hooks/useConfirmDelete';
-import { formatDateTime, formatDateNumeric } from '../../../utils/formatters';
+import { formatCount, formatDateTime, formatDateNumeric } from '../../../utils/formatters';
 
 export default function AutobiographyTab({ onRefresh }) {
   const [searchParams, setSearchParams] = useSearchParams();
@@ -242,7 +242,7 @@ export default function AutobiographyTab({ onRefresh }) {
         {stats && (
           <div className="flex flex-wrap gap-3 text-sm text-gray-400">
             <span>{stats.totalStories} stories</span>
-            <span>{(stats.totalWords ?? 0).toLocaleString()} words</span>
+            <span>{formatCount(stats.totalWords, { fallback: '0' })} words</span>
             <span>{stats.promptsRemaining} prompts remaining</span>
           </div>
         )}
@@ -392,7 +392,7 @@ export default function AutobiographyTab({ onRefresh }) {
 
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-3 text-sm text-gray-400">
-              <span>{wordCount} words</span>
+              <span>{formatCount(wordCount)} words</span>
               <Clock size={14} />
               <span>~{Math.max(1, Math.round(wordCount / 150))} min read</span>
             </div>
@@ -479,7 +479,7 @@ export default function AutobiographyTab({ onRefresh }) {
                       follow-up
                     </span>
                   )}
-                  <span className="text-xs text-gray-500">{story.wordCount} words</span>
+                  <span className="text-xs text-gray-500">{formatCount(story.wordCount)} words</span>
                   <span className="text-xs text-gray-600">
                     {formatDateNumeric(story.createdAt)}
                   </span>

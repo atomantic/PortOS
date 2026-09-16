@@ -9,14 +9,26 @@ PortOS minds can opt into a first-class **operating playbook** stored on CoS con
 | `mode` | `default` (operator prompt only) or `continuous-play` |
 | `customInstructions` | Optional extra notes appended after the mode template |
 
-When `mode` is `continuous-play`, every wake merges the product template into operating instructions:
+Saving a playbook never starts inference. The Mind Context panel exposes the mode selector; `PUT /api/cos/config` accepts `persistentMindPlaybook`. `GET /api/cos/mind/context` returns `playbook` + `playbookCatalog` + `playbookPhase` and previews composed instructions.
 
-1. **Explore** the Eidoverse / Commons with many small interactions
-2. **Interact** (say / augment / project / peers / PortOS tools)
-3. **Reflect** with concrete improvement ideas
-4. **Invent / improve** via the smallest safe PortOS-side step or typed CoS task
+### Maturity-aware phases (#7458)
 
-Saving a playbook never starts inference. The Mind Context panel exposes the mode selector; `PUT /api/cos/config` accepts `persistentMindPlaybook`. `GET /api/cos/mind/context` returns `playbook` + `playbookCatalog` and previews composed instructions.
+`continuous-play` no longer runs one fixed loop forever. Every wake, `resolvePersistentMindPlaybookPhase()` (`server/services/persistentMindPlaybookSignals.js`) reads the same bounded Eidoverse world-signal projection the World Design V2 recipe renders into districts (`buildEidoverseWorldSignals()`, `server/lib/eidoverseWorldSignals.js`), reduces it to three numbers, and the pure picker in `server/lib/persistentMindPlaybookPhase.js` (`selectPersistentMindPlaybookPhase`) chooses one of four phases:
+
+| Phase | When | Loop emphasis |
+|-------|------|----------------|
+| **Explore** | Commons is sparse (fewer than 4 live world-signal entities, or signals unavailable) | Map affordances, reconnect presence, many small interactions |
+| **Construct** | Commons has some shape (4–15 live signals) and nothing is broken or waiting | Densify districts — places, labels, structures, affordances |
+| **Maintain** | Recent failure rate ≥ 25%, or the Commons is mature (16+ signals) with no peer activity | Repair broken projections, retire dead affordances, re-test foundations |
+| **Coordinate** | A federated peer is reporting new (non-steady) activity and failures are below threshold | Visit peers, read/respond to their contributions, steward the shared baseline |
+
+Priority order when signals conflict: a still-sparse Commons always explores first; a high failure rate outranks a peer visit (fix what is broken before going visiting); an active peer outranks routine construction. The picker never reads a wall clock — it degrades to `explore` (the safe default) whenever a signal is unavailable rather than guessing.
+
+A failure rate only exists when work actually ran. `getTodayActivity()` reports `successRate: 0` for a day with zero completed agents, so the derivation requires a non-empty sample before trusting it: an idle day yields *no* failure signal (falling back to coarse health, then to `null`), never a fabricated 100%. Without that guard every wake before the day's first completed task would claim a 100% failure rate and force `maintain`, starving `construct` and `coordinate` entirely.
+
+The same absent-vs-empty rule governs density. A failed source read reaches the picker as `null`, not `[]`, so a projection whose district reads all failed derives `districtCount: null` ("world signals unavailable") rather than a confidently empty `0` — an outage and a genuinely empty Commons both explore, but only the latter claims to have measured anything.
+
+Each phase template ends by naming itself (e.g. `Phase: Construct`) so the mind states its current phase in the wake's user-visible working note — how Helm and other minds can see which phase produced a given wake. `GET /api/cos/mind/context` also resolves the phase for preview (best-effort; a signal-read failure there falls back to the general loop rather than failing the request).
 
 ## Mind-adjustable `numCtx`
 

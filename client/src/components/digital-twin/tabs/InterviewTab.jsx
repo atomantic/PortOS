@@ -15,6 +15,7 @@ import useProviderModels from '../../../hooks/useProviderModels';
 import ProviderModelSelector from '../../ProviderModelSelector';
 import InterviewAnalysisCard from '../InterviewAnalysisCard';
 import { ENRICHMENT_CATEGORIES } from '../constants';
+import { formatCount } from '../../../utils/formatters';
 
 export default function InterviewTab({ onRefresh }) {
   const navigate = useNavigate();
@@ -122,7 +123,7 @@ export default function InterviewTab({ onRefresh }) {
 
           <div className="flex items-center justify-between">
             <span className="text-xs text-gray-500">
-              {content.length} characters {content.length > 0 && content.length < 50 && '(need 50+)'}
+              {formatCount(content.length)} characters {content.length > 0 && content.length < 50 && '(need 50+)'}
             </span>
             <button
               onClick={handleAnalyze}

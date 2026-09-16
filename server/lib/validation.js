@@ -7,11 +7,13 @@ import { WORK_TRACKERS } from './workTracker.js';
 import { PROVIDER_FAMILY_IDS } from './providerFamilies.js';
 import { APP_FEATURE_IDS, INSTANCE_FEATURE_IDS, INSTANCE_FEATURE_GROUP_IDS } from './instanceFeatureRegistry.js';
 import { MAX_MONTHLY_COST } from './subscriptionSavings.js';
+import { MAX_PLAN_TIER_LENGTH } from './subscriptionPlanTiers.js';
 import { QUEUEABLE_IMAGE_MODES, VIDEO_GEN_MODES } from './generationModes.js';
 import { RENDER_TARGETS, RENDER_TARGET_BACKEND_AUTO } from './renderTargets.js';
 import {
   grokVideoDurationSchema, cloudModelIdString, recordRenderPinFields, isSafeSnapshotSource, isSafeSubdirFilter, csvIdsParam,
   EXCLUDE_PATTERN_MAX_LENGTH, isSafeExcludePattern,
+  AUTO_UPDATE_CHANNELS, AUTO_UPDATE_MIN_INTERVAL_HOURS_MIN, AUTO_UPDATE_MIN_INTERVAL_HOURS_MAX,
 } from './sharedSchemas.js';
 import { PR_COMPLETION_VALUES } from './prDisposition.js';
 import { EFFORT_LEVELS } from './providerModels.js';
@@ -921,6 +923,21 @@ export const backupConfigSchema = z.object({
   disabledDefaultExcludes: z.array(z.string()).optional().default([])
 });
 
+// Automatic PortOS self-update (Update tab). Stored under the top-level
+// `autoUpdate` key and OFF by default — an install must never start restarting
+// itself merely because it upgraded into this code. The accepted interpretation
+// of a sparse slice (omitted channel, omitted interval) is `sharedSchemas.js`'s
+// `resolveAutoUpdateConfig`, which the scheduler and the settings GET both read
+// through, so this boundary schema cannot drift away from it.
+export const autoUpdateSettingsSchema = z.object({
+  enabled: z.boolean().optional(),
+  channel: z.enum(AUTO_UPDATE_CHANNELS).optional(),
+  // Hours to wait after the last update before looking for an idle window.
+  minIntervalHours: z.number().min(AUTO_UPDATE_MIN_INTERVAL_HOURS_MIN).max(AUTO_UPDATE_MIN_INTERVAL_HOURS_MAX).optional(),
+  // Whether a checkout no script may safely repair queues a CoS agent.
+  resolveBlockersWithAgent: z.boolean().optional(),
+}).strict();
+
 // Scheduled Series Autopilot (#2174). Machine-local per-series cron schedules
 // that fire `startSeriesAutopilot` unattended — the AI Provider Usage Policy's
 // sanctioned "scheduled automation" exception. Stored under the top-level
@@ -1425,8 +1442,42 @@ export const subscriptionCostsMapSchema = z.partialRecord(
   z.number().min(0).max(MAX_MONTHLY_COST).nullable()
 );
 
-/** Body for PUT /api/usage/subscriptions. */
-export const subscriptionCostsSchema = z.object({ costs: subscriptionCostsMapSchema });
+/**
+ * Which TIER of each family's plan the user is on, keyed by family id. Same
+ * key rule and same patch semantics as the price map above — an omitted family
+ * keeps its stored tier, `null` (or an empty string, which normalizes to null)
+ * CLEARS it. Free text rather than an enum because these are vendor marketing
+ * names ("Max 20x", "Pro") that change on the vendor's schedule, not on the
+ * PortOS release cycle; the length cap is what keeps settings.json from
+ * collecting notes.
+ *
+ * Used by BOTH write paths — `PUT /api/usage/subscriptions` and the
+ * `subscriptionPlanTiers` slice of `PUT /api/settings`.
+ */
+export const subscriptionPlanTiersMapSchema = z.partialRecord(
+  z.enum(PROVIDER_FAMILY_IDS),
+  z.string().max(MAX_PLAN_TIER_LENGTH).nullable()
+);
+
+/**
+ * Body for PUT /api/usage/subscriptions. Both slices are OPTIONAL and
+ * independent: the price editor sends only `costs`, the plan editor only
+ * `tiers`, and neither save may disturb the other's stored map.
+ */
+export const subscriptionsUpdateSchema = z.object({
+  costs: subscriptionCostsMapSchema.optional(),
+  tiers: subscriptionPlanTiersMapSchema.optional(),
+});
+
+/**
+ * Body for PUT /api/usage/subscriptions/enabled — switch one subscription on or
+ * off. `family` is enumerated, not free text, because the handler fans the flag
+ * out across every provider record that family owns.
+ */
+export const subscriptionEnabledSchema = z.object({
+  family: z.enum(PROVIDER_FAMILY_IDS),
+  enabled: z.boolean(),
+});
 
 /**
  * Instances that pay API rates rather than the viewer's subscriptions, so the

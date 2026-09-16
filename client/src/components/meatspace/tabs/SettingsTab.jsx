@@ -5,6 +5,7 @@ import socket from '../../../services/socket';
 import BrailleSpinner from '../../BrailleSpinner';
 import Banner from '../../ui/Banner';
 import FilePickerButton from '../../ui/FilePickerButton';
+import { formatCount } from '../../../utils/formatters';
 
 export default function SettingsTab({ onRefresh }) {
   // JSON import state
@@ -177,19 +178,19 @@ export default function SettingsTab({ onRefresh }) {
             <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm mt-2">
               <div>
                 <span className="text-gray-500">Metrics processed</span>
-                <p className="text-white font-semibold">{jsonResult.metricsProcessed?.toLocaleString()}</p>
+                <p className="text-white font-semibold">{formatCount(jsonResult.metricsProcessed)}</p>
               </div>
               <div>
                 <span className="text-gray-500">Records ingested</span>
-                <p className="text-white font-semibold">{jsonResult.recordsIngested?.toLocaleString()}</p>
+                <p className="text-white font-semibold">{formatCount(jsonResult.recordsIngested)}</p>
               </div>
               <div>
                 <span className="text-gray-500">Records skipped</span>
-                <p className="text-white font-semibold">{jsonResult.recordsSkipped?.toLocaleString()}</p>
+                <p className="text-white font-semibold">{formatCount(jsonResult.recordsSkipped)}</p>
               </div>
               <div>
                 <span className="text-gray-500">Days affected</span>
-                <p className="text-white font-semibold">{jsonResult.daysAffected?.toLocaleString()}</p>
+                <p className="text-white font-semibold">{formatCount(jsonResult.daysAffected)}</p>
               </div>
             </div>
           </Banner>
@@ -248,7 +249,7 @@ export default function SettingsTab({ onRefresh }) {
           <div className="mt-4">
             <div className="flex items-center justify-between text-xs text-gray-400 mb-1">
               <span>Processing records...</span>
-              <span>{xmlProgress.toLocaleString()} records processed</span>
+              <span>{formatCount(xmlProgress)} records processed</span>
             </div>
             <div className="h-2 bg-port-border rounded-full overflow-hidden">
               <div className="h-full bg-port-accent rounded-full animate-pulse w-full" />
@@ -262,11 +263,11 @@ export default function SettingsTab({ onRefresh }) {
             <div className="grid grid-cols-2 gap-3 text-sm mt-2">
               <div>
                 <span className="text-gray-500">Records imported</span>
-                <p className="text-white font-semibold">{xmlResult.records?.toLocaleString()}</p>
+                <p className="text-white font-semibold">{formatCount(xmlResult.records)}</p>
               </div>
               <div>
                 <span className="text-gray-500">Days affected</span>
-                <p className="text-white font-semibold">{xmlResult.days?.toLocaleString()}</p>
+                <p className="text-white font-semibold">{formatCount(xmlResult.days)}</p>
               </div>
             </div>
           </Banner>

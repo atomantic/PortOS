@@ -77,9 +77,11 @@ const asEpochMs = (value) => {
 };
 
 export const QUOTA_BURN_PROVENANCE_FIELDS = Object.freeze([
-  // Which provider family's window this run is spending. The one field a burn
-  // cannot be attributed without — `isCooldownExemptTask` and the denial ledger
-  // both key on it.
+  // Which provider family's window this run is spending, and the key the denial
+  // ledger and the plan walk attribute a finished run by. ABSENT — never a
+  // placeholder — on a manual maintenance run pinned to a provider outside every
+  // subscription family, which spends no window at all; `maintenanceRunId` below
+  // is that run's attribution instead (see `normalizeQuotaBurnProvenance`).
   { field: 'family', taskKey: 'quotaBurnFamily', agentKey: 'taskQuotaBurnFamily', read: asId },
   // The reset of the SHORT rolling window that will refuse first, so a refused
   // run blocks the family until that window rolls rather than re-dispatching
@@ -96,6 +98,8 @@ export const QUOTA_BURN_PROVENANCE_FIELDS = Object.freeze([
   // run's agents alone — the run walks its own ladder, outside the family's
   // plan, its completion ledger and its window gates — while the family
   // attribution above still credits a refusal to the window it actually spent.
+  // It is also the ONLY attribution a family-less manual run has, which is why
+  // `hasQuotaBurnProvenance` accepts either key.
   { field: 'maintenanceRunId', taskKey: 'quotaBurnMaintenanceRunId', agentKey: 'taskQuotaBurnMaintenanceRunId', read: asId },
 ].map(Object.freeze));
 
@@ -142,8 +146,20 @@ export function quotaBurnAgentMetadata(taskMetadata) {
   );
 }
 
-/** Whether a task carries attributable burn provenance at all. */
-export const hasQuotaBurnProvenance = (taskMetadata) => Boolean(quotaBurnProvenance(taskMetadata).family);
+/**
+ * Whether a task carries attributable burn provenance at all.
+ *
+ * EITHER attribution key is enough. A family says which subscription window the
+ * run spends; a `maintenanceRunId` says which manual ladder asked. A manual run
+ * pinned to a provider that belongs to no subscription family (an OpenCode TUI,
+ * a local-model wrapper) carries only the second — it is fully attributable,
+ * just not to a window — and it must still be cooldown-exempt, or the ladder's
+ * own steps queue behind the app cooldown every other CoS task re-stamps.
+ */
+export const hasQuotaBurnProvenance = (taskMetadata) => {
+  const block = quotaBurnProvenance(taskMetadata);
+  return Boolean(block.family || block.maintenanceRunId);
+};
 
 /**
  * Whether the family's burn PLAN owns this task: burn-provenanced, and not a
@@ -174,11 +190,21 @@ const scalarParams = (raw) => {
 
 /**
  * Normalize the `burn` block of an on-demand request. Returns `null` unless it
- * names BOTH the family whose window is being spent and the burn step that asked
- * — without either, nothing downstream can attribute the run, and an
- * unattributable burn is worse than no burn: `isCooldownExemptTask` would treat
- * an ordinary task as burn-exempt, and the denial ledger would credit a refusal
- * to the wrong family.
+ * names the burn step that asked AND an attribution for the run — without both,
+ * nothing downstream can attribute it, and an unattributable burn is worse than
+ * no burn: `isCooldownExemptTask` would treat an ordinary task as burn-exempt,
+ * and the denial ledger would credit a refusal to the wrong family.
+ *
+ * Attribution is the family whose window is being spent OR the manual
+ * maintenance run that asked. An AUTOMATIC burn never carries a run id, so for
+ * it the family stays strictly required, exactly as before — it exists to draw
+ * down one named window and a family-less automatic burn would spend whatever
+ * the daemon picked. A MANUAL run pinned to a provider outside every
+ * subscription family (`services/maintenanceRun.js`) has no window to name and
+ * says so by omitting `family` rather than borrowing a real one: `null` here is
+ * "this run spends no subscription", not "we could not work it out". That is
+ * what keeps `recordBurnAgentCompletion` and the quota-burn plan walk from
+ * crediting its refusals and completions to a subscription it never touched.
  *
  * `overrides` carries the three per-invocation settings the generated task can
  * absorb AFTER generation — the provider, model and reasoning effort the spawner
@@ -205,14 +231,15 @@ export function normalizeQuotaBurnProvenance(raw) {
   if (!isPlainObject(raw)) return null;
   const family = trimTo(raw.family, MAX_FIELD);
   const stepId = trimTo(raw.stepId, MAX_FIELD);
-  if (!family || !stepId) return null;
+  const maintenanceRunId = nullable(raw.maintenanceRunId);
+  if (!stepId || (!family && !maintenanceRunId)) return null;
   const limitingResetAt = Number(raw.limitingResetAt);
   const overrides = isPlainObject(raw.overrides) ? raw.overrides : {};
   return {
-    family,
+    ...(family ? { family } : {}),
     stepId,
     limitingResetAt: Number.isFinite(limitingResetAt) ? limitingResetAt : null,
-    ...(nullable(raw.maintenanceRunId) ? { maintenanceRunId: nullable(raw.maintenanceRunId) } : {}),
+    ...(maintenanceRunId ? { maintenanceRunId } : {}),
     overrides: {
       providerId: nullable(overrides.providerId),
       model: nullable(overrides.model),

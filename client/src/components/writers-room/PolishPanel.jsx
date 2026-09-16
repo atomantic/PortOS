@@ -3,7 +3,7 @@ import { Sparkles, StopCircle, RotateCcw, Check, X, ArrowRight, Loader2 } from '
 import toast from '../ui/Toast';
 import useMounted from '../../hooks/useMounted';
 import { useSseProgress, isTerminalSseFrame } from '../../hooks/useSseProgress';
-import { timeAgo } from '../../utils/formatters';
+import { timeAgo, formatCount } from '../../utils/formatters';
 import {
   startWritersRoomPolish,
   cancelWritersRoomPolish,
@@ -190,7 +190,7 @@ export default function PolishPanel({ work, dirty, onBodyChanged }) {
           </div>
           {baseline && (
             <div className="text-[12px] text-gray-400">
-              Baseline score <ScoreBadge value={baseline.score} /> · {baseline.wordCount?.toLocaleString()} words
+              Baseline score <ScoreBadge value={baseline.score} /> · {formatCount(baseline.wordCount)} words
             </div>
           )}
           <ul className="space-y-1.5">
@@ -206,7 +206,7 @@ export default function PolishPanel({ work, dirty, onBodyChanged }) {
                   <span className="flex items-center gap-1 text-gray-500 text-[11px]"><X size={11} /> reverted</span>
                 )}
                 <span className="text-gray-600 text-[10px] tabular-nums ml-auto">
-                  {f.wordCountBefore?.toLocaleString()}→{f.wordCountAfter?.toLocaleString()}w · {f.cutsApplied} cut{f.cutsApplied === 1 ? '' : 's'}
+                  {formatCount(f.wordCountBefore)}→{formatCount(f.wordCountAfter)}w · {f.cutsApplied} cut{f.cutsApplied === 1 ? '' : 's'}
                 </span>
               </li>
             ))}
@@ -232,7 +232,7 @@ export default function PolishPanel({ work, dirty, onBodyChanged }) {
                 {s.label || `Cycle ${s.cycle}`}
                 {typeof s.qualityScore === 'number' && <span className="text-gray-500"> · <ScoreBadge value={s.qualityScore} inline /></span>}
               </span>
-              <span className="text-gray-600 text-[10px] shrink-0">{s.wordCount?.toLocaleString()}w · {timeAgo(s.createdAt, '')}</span>
+              <span className="text-gray-600 text-[10px] shrink-0">{formatCount(s.wordCount)}w · {timeAgo(s.createdAt, '')}</span>
               {/* 44px tap target; -my-1.5/-mr-2 bleed into the row's own
                   padding so the snapshot list keeps its density. */}
               <button

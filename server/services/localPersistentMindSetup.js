@@ -18,6 +18,7 @@ import {
 } from '../lib/localPersistentMindRecommendation.js';
 import { normalizePersistentMindProfile } from '../lib/persistentMindProfile.js';
 import { findCommandOnPath } from '../lib/processEnv.js';
+import { getNavPageForPath } from '../lib/navManifest.js';
 import { getProviderById, updateProvider } from './providers.js';
 import { listModels } from './localLlm.js';
 import * as ollamaManager from './ollamaManager.js';
@@ -70,7 +71,7 @@ export async function describeLocalPersistentMindSetup(deps = {}) {
     steps.push(step(
       'recommendation',
       'skipped',
-      'This host has a curated GPU coding-agent path (or otherwise does not use the free local Persistent Mind default). Use Models → LLMs → Recommended coding-agent setup when applicable.',
+      `This host has a curated GPU coding-agent path (or otherwise does not use the free local Persistent Mind default). Use ${getNavPageForPath('/models/llms-runtimes')?.breadcrumb ?? 'Runtimes'} → Recommended coding-agent setup when applicable.`,
     ));
     return {
       applicable: false,

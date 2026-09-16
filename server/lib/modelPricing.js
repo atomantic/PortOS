@@ -263,6 +263,15 @@ export function resolveModelRates(providerId, model) {
 const LOCALHOST_ENDPOINT = /^(https?:\/\/)?(localhost|127\.0\.0\.1|0\.0\.0\.0|\[?::1\]?)(:|\/|$)/i;
 const FREE_ID = /ollama|lmstudio|lm-studio/i;
 
+// OpenCode Zen is a free-tier quota, not API billing: the seeded `opencode-zen`
+// providers (API + CLI/TUI wrappers, see scripts/migrations/336-*) spend a
+// weekly/monthly allowance, so their rows resolve to $0 on the cost report and
+// surface on the Usage page's free-tier section instead. Narrow on purpose — a
+// bare `zen` substring would also match an unrelated paid id, so only the
+// harness's own provider id and endpoint shapes count.
+const ZEN_PROVIDER_ID = /opencode-zen/i;
+const ZEN_ENDPOINT = /opencode\.ai\/zen/i;
+
 // Ollama/LM Studio name their models `family:tag` — `qwen3.6:35b`,
 // `llama3.1:8b-instruct-q8_0` — or `org/repo` for a pulled GGUF.
 //
@@ -282,6 +291,16 @@ const LOCAL_TAGGED_MODEL = /^[\w.-]+:[\w.-]*[a-z][\w.-]*$/i;
 // Only the tagged form above is self-evidently an Ollama/LM Studio id, so a
 // slash-form id needs corroborating evidence from the PROVIDER — which is what
 // `isFreeProvider` already supplies — rather than being inferred from syntax.
+// The `opencode/` namespace is the one exception: it is the harness's own
+// built-in provider (the Zen free tier), not a generic hosted catalog shape.
+
+// The harness's own `opencode/*` namespace (exactly what `opencode models`
+// prints — `opencode/big-pickle`, `opencode/mimo-v2.5-free`) is the Zen free
+// tier, and a bare `-free` suffix is an explicit free-tier marker
+// (`deepseek-v4-flash-free`). Both are provider-side labels, so they win over
+// the family-guess rules below — unlike the slash form, which stays paid
+// without corroboration (see the `org/repo` note above).
+const FREE_TIER_MODEL = /^opencode\/.+|[^/]*-free$/i;
 
 /**
  * True when a MODEL id is local-inference (free), independent of which provider
@@ -300,6 +319,10 @@ export function isFreeModelId(model) {
   if (!id) return false;
   // A hosted id we have a real rate for is never local, whatever its shape.
   if (EXACT_RATES[id]) return false;
+  // An explicit free-tier label wins over the family guesses below: the
+  // provider named this id free (`*-free`, the harness's own `opencode/*`
+  // namespace), which is stronger evidence than a substring rate rule.
+  if (FREE_TIER_MODEL.test(id)) return true;
   // Nor is one that resolves to a known hosted family (covers Bedrock-prefixed
   // and suffixed variants of every id in the table).
   if (resolveModelRates(null, id).matched !== 'fallback') return false;
@@ -309,19 +332,21 @@ export function isFreeModelId(model) {
 
 /**
  * True when a provider's usage is free — local inference (Ollama, LM Studio,
- * any Ollama-/MTPLX-/llama-/vLLM-backed CLI wrapper, or an API provider pointed at localhost).
- * Accepts a provider config object or a bare provider-id string (usage records
- * can outlive their provider config).
+ * any Ollama-/MTPLX-/llama-/vLLM-backed CLI wrapper, or an API provider pointed at localhost),
+ * or a free-tier quota (OpenCode Zen: the `opencode-zen*` provider ids or the
+ * `opencode.ai/zen` endpoint). Accepts a provider config object or a bare provider-id string
+ * (usage records can outlive their provider config).
  * @param {object|string|null|undefined} providerOrId
  * @returns {boolean}
  */
 export function isFreeProvider(providerOrId) {
   if (providerOrId == null) return false;
-  if (typeof providerOrId === 'string') return FREE_ID.test(providerOrId);
+  if (typeof providerOrId === 'string') return FREE_ID.test(providerOrId) || ZEN_PROVIDER_ID.test(providerOrId);
   const p = providerOrId;
   if (p.ollamaBacked === true || p.lmstudioBacked === true || p.mtplxBacked === true || p.llamaBacked === true || p.vllmBacked === true || p.sglangBacked === true) return true;
   if (FREE_ID.test(p.id || '') || FREE_ID.test(p.command || '')) return true;
-  if (typeof p.endpoint === 'string' && LOCALHOST_ENDPOINT.test(p.endpoint.trim())) return true;
+  if (ZEN_PROVIDER_ID.test(p.id || '')) return true;
+  if (typeof p.endpoint === 'string' && (LOCALHOST_ENDPOINT.test(p.endpoint.trim()) || ZEN_ENDPOINT.test(p.endpoint.trim()))) return true;
   return false;
 }
 

@@ -9,7 +9,7 @@ import BrailleSpinner from '../components/BrailleSpinner';
 import PageSkeleton from '../components/ui/PageSkeleton';
 import GoalsCard from '../components/character/GoalsCard';
 import toast from '../components/ui/Toast';
-import { timeAgo, formatCompactCount } from '../utils/formatters';
+import { timeAgo, formatCompactCount, formatCount } from '../utils/formatters';
 import api, { generateAvatar } from '../services/api';
 import socket from '../services/socket';
 import { clickableProps } from '../lib/a11yKeyboard.js';
@@ -846,7 +846,7 @@ export default function CharacterSheet() {
                 <div className="flex items-center gap-2 px-4 py-3 border-b border-port-border">
                   <ScrollText className="w-4 h-4 text-gray-400" />
                   <h3 className="text-sm font-medium text-gray-300">Event Log</h3>
-                  <span className="text-xs text-gray-500">({char.events?.length || 0} entries)</span>
+                  <span className="text-xs text-gray-500">({formatCount(char.events?.length, { fallback: '0' })} entries)</span>
                 </div>
           <div className="overflow-y-auto max-h-[400px] divide-y divide-port-border/50">
             {(!char.events || char.events.length === 0) ? (
