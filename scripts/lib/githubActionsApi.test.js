@@ -77,7 +77,15 @@ describe('githubRequest', () => {
     const fetchImpl = vi.fn().mockResolvedValue({ ok: true, status: 201 });
     await githubRequest(fetchImpl, 'https://api.github.com/x', 'token-value', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: 'Bearer stolen' },
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: 'Bearer stolen',
+        // Mixed case matters: fetch folds every spelling into ONE header, and
+        // these survive both a case-sensitive filter AND the fixed-key overwrite,
+        // so they would be APPENDED to Authorization/Accept rather than dropped.
+        AUTHORIZATION: 'Bearer stolen-upper',
+        ACCEPT: 'text/html',
+      },
     });
 
     expect(fetchImpl.mock.calls[0][1].headers).toEqual({

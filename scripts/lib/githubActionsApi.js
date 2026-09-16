@@ -15,6 +15,8 @@ const PUBLIC_API_BASE = 'https://api.github.com';
 /** `owner/repo`, rejecting anything with a slash or whitespace in a segment. */
 const REPOSITORY_PATTERN = /^[^/\s]+\/[^/\s]+$/;
 const DEFAULT_TIMEOUT_MS = 10_000;
+/** Lowercased: HTTP header names are case-insensitive and `fetch` folds them. */
+const FIXED_HEADER_NAMES = new Set(['accept', 'authorization', 'x-github-api-version']);
 
 /** `String#trim` that tolerates a missing or non-string env value. */
 export const trimmed = (value) => (typeof value === 'string' ? value.trim() : '');
@@ -71,10 +73,12 @@ export function repoApiPath(env) {
 /**
  * One authenticated Actions API call with the standard headers and a timeout.
  *
- * A caller may add headers (a POST body needs its `Content-Type`), but they are
- * spread FIRST so the three fixed ones always win: this helper decides which
- * host the token is sent to, and a caller that could rewrite `Authorization`
- * would take that decision back out of here.
+ * A caller may add headers (a POST body needs its `Content-Type`), but never one
+ * of the three fixed ones: this helper decides which host the token is sent to,
+ * and a caller that could rewrite `Authorization` would take that decision back
+ * out of here. Dropping them is case-INSENSITIVE, because `fetch` folds
+ * `authorization` and `Authorization` into one comma-joined value — filtering
+ * only the exact spelling would let a caller append to the header instead.
  *
  * @param {typeof fetch} fetchImpl
  * @param {string} url
@@ -83,10 +87,13 @@ export function repoApiPath(env) {
  * @returns {Promise<Response>}
  */
 export function githubRequest(fetchImpl, url, token, { timeoutMs = DEFAULT_TIMEOUT_MS, headers, ...init } = {}) {
+  const callerHeaders = Object.fromEntries(
+    Object.entries(headers || {}).filter(([name]) => !FIXED_HEADER_NAMES.has(name.toLowerCase())),
+  );
   return fetchImpl(url, {
     ...init,
     headers: {
-      ...headers,
+      ...callerHeaders,
       Accept: 'application/vnd.github+json',
       Authorization: `Bearer ${token}`,
       'X-GitHub-Api-Version': GITHUB_API_VERSION,
