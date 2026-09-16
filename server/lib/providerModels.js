@@ -804,6 +804,33 @@ export function prefixOpencodeModel(provider, model) {
 }
 
 /**
+ * The inverse of {@link prefixOpencodeModel} for a KNOWN runtime kind: one model
+ * id as the daemon's own listing spells it, with the `<kind>/` namespace
+ * stripped. That namespace addresses the OpenCode provider entry and never
+ * reaches the daemon, so a provider offering `llama/dflash` and a server serving
+ * `dflash` are naming one model — and anything keyed on only one of the two
+ * spellings answers "unknown" for half the providers.
+ *
+ * `null` for anything that does not name a model: blank, non-string, or a "use
+ * the CLI's own default" sentinel. Callers that must keep the sentinel should
+ * test it themselves before calling.
+ *
+ * Takes the kind rather than the provider because both callers
+ * (`services/providerReadiness.js`'s checklist and
+ * `services/observedContextWindows.js`'s dispatch gate) have already resolved
+ * the runtime and would otherwise re-derive it per model id.
+ *
+ * @param {string|null|undefined} model
+ * @param {string} kind - the local runtime kind (`llama`, `vllm`, `ollama`, …)
+ * @returns {string|null}
+ */
+export function bareLocalModelId(model, kind) {
+  if (typeof model !== 'string' || model.trim() === '' || isConfiguredDefaultModel(model)) return null;
+  const trimmed = model.trim();
+  return trimmed.startsWith(`${kind}/`) ? trimmed.slice(kind.length + 1) : trimmed;
+}
+
+/**
  * OpenCode's local OpenAI-compatible provider namespace, if this provider has
  * opted into one. Structural markers avoid deriving a backend from an editable
  * display name or endpoint and preserve the legacy Ollama outcome if a malformed

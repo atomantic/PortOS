@@ -14,6 +14,13 @@
  *   - `reachable: true, models: null`— it answered, but the listing was unreadable
  *   - `reachable: true, models: []`  — it is up and genuinely serving nothing
  *
+ * The listing also carries each model's SERVED context window (vLLM spells it
+ * `max_model_len`, llama-server `n_ctx`, LM Studio `loaded_context_length`), and
+ * `contextWindows` keeps it. Dropping it was how a prompt that provably could
+ * not fit still got dispatched: nothing upstream could tell a 50K-char prompt
+ * from a 15K one against a 32K endpoint, so the only backstop was the
+ * provider's wall-clock timeout (#7441).
+ *
  * A daemon started behind an API key (vLLM's compose stack sets `VLLM_API_KEY`)
  * answers 401/403 to an unauthenticated probe. That is a REACHABLE server whose
  * listing we cannot read — reporting it as unreachable would tell the user to
@@ -21,6 +28,13 @@
  * too.
  */
 
+// The toolkit's model refresh already reads a window off a listing row, and a
+// second table here would let refresh-time and probe-time disagree about the
+// same daemon. Reaching INTO `aiToolkit/internal/` is the established direction
+// (`openAiChatStream.js`, `harnessOutput.js`, `providerGraphPreview.js` all do
+// it) — the self-containment rule in its AGENTS.md forbids the toolkit
+// importing OUT, not the host importing in.
+import { catalogContextWindow } from './aiToolkit/internal/modelCatalog.js';
 import { fetchWithTimeout } from './fetchWithTimeout.js';
 import { describeFetchError } from './fetchErrorChain.js';
 import { readResponseJson } from './readResponseJson.js';
@@ -44,7 +58,12 @@ function shortFailureReason(err) {
 /**
  * @param {string} baseUrl - an OpenAI-compatible base (…/v1); trailing slashes tolerated
  * @param {{timeoutMs?: number, apiKey?: string}} [opts]
- * @returns {Promise<{reachable:boolean, models:string[]|null, error:string|null}>}
+ * @returns {Promise<{reachable:boolean, models:string[]|null, contextWindows:Record<string,number>|null, error:string|null}>}
+ *   `contextWindows` carries an entry only for a model whose window the listing
+ *   actually declared, so `{}` means "nothing declared one" — never "these
+ *   models have no window". It is `null` exactly when `models` is. Per-row
+ *   parsing (which key, and smallest-wins when a row declares several) is
+ *   `catalogContextWindow`'s rule, shared with model refresh.
  */
 export async function probeOpenAiModels(baseUrl, { timeoutMs = 2_000, apiKey = '' } = {}) {
   const url = `${String(baseUrl || '').replace(/\/+$/, '')}/models`;
@@ -56,7 +75,7 @@ export async function probeOpenAiModels(baseUrl, { timeoutMs = 2_000, apiKey = '
     // cause chain.
     .catch((err) => ({ transportError: shortFailureReason(err) }));
 
-  if (res.transportError) return { reachable: false, models: null, error: res.transportError };
+  if (res.transportError) return { reachable: false, models: null, contextWindows: null, error: res.transportError };
   if (!res.ok) {
     // Undici holds the socket until an unread body is consumed; an endpoint
     // answering 404 on every poll would otherwise leak one each time.
@@ -65,9 +84,9 @@ export async function probeOpenAiModels(baseUrl, { timeoutMs = 2_000, apiKey = '
     // read the request and refused it. Collapsing that into "nothing answered"
     // sends the user off to start a server that is already serving.
     if (res.status === 401 || res.status === 403) {
-      return { reachable: true, models: null, error: 'authentication required' };
+      return { reachable: true, models: null, contextWindows: null, error: 'authentication required' };
     }
-    return { reachable: false, models: null, error: `HTTP ${res.status}` };
+    return { reachable: false, models: null, contextWindows: null, error: `HTTP ${res.status}` };
   }
 
   // The body read is its own failure path: a daemon that accepts the connection
@@ -78,12 +97,15 @@ export async function probeOpenAiModels(baseUrl, { timeoutMs = 2_000, apiKey = '
   // reachable-but-unreadable sentinel as a non-JSON body.
   const body = await readResponseJson(res, { fallback: null, emptyValue: null }).catch(() => null);
   const rows = Array.isArray(body?.data) ? body.data : Array.isArray(body?.models) ? body.models : null;
-  if (!rows) return { reachable: true, models: null, error: 'model listing was not readable' };
-  return {
-    reachable: true,
-    models: rows
-      .map((row) => (typeof row === 'string' ? row : row?.id || row?.name))
-      .filter((id) => typeof id === 'string' && id !== ''),
-    error: null,
-  };
+  if (!rows) return { reachable: true, models: null, contextWindows: null, error: 'model listing was not readable' };
+  const models = [];
+  const contextWindows = {};
+  for (const row of rows) {
+    const id = typeof row === 'string' ? row : (row?.id || row?.name);
+    if (typeof id !== 'string' || id === '') continue;
+    models.push(id);
+    const tokens = catalogContextWindow(row);
+    if (tokens) contextWindows[id] = tokens;
+  }
+  return { reachable: true, models, contextWindows, error: null };
 }

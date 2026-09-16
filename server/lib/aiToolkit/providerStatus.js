@@ -86,7 +86,20 @@ function resolvedFallbackModel(provider, correctedModel) {
     || null;
 }
 
-function knownContextWindow(provider, model) {
+/**
+ * The context window PortOS actually KNOWS this provider serves for this model,
+ * or `null` for "no data".
+ *
+ * `null` is load-bearing and must never collapse into a number: every caller
+ * reads it as "no constraint", so inventing a window here would refuse requests
+ * that work today. Nothing infers a window from the model id — a name is not a
+ * declaration, and the daemons that matter here rename freely
+ * (`llama-server --alias`).
+ *
+ * Exported because the host applies the same rule to the EXPLICITLY REQUESTED
+ * provider, which never passes through `getFallbackProvider` below.
+ */
+export function knownContextWindow(provider, model) {
   const explicit = Number(provider?.contextWindow);
   const catalog = Number(model && provider?.modelContextWindows?.[model]);
   const runtime = Number(provider?.numCtx);
@@ -126,18 +139,33 @@ function modeRejection(provider, requestCapabilities) {
   return null;
 }
 
-function capabilityRejection(provider, model, requestCapabilities) {
-  if (!requestCapabilities || typeof requestCapabilities !== 'object') return null;
-  if (requestCapabilities.hasImages === true && provider?.type !== 'api') {
-    return 'cannot transmit image input';
-  }
-
-  const required = Number(requestCapabilities.requiredContextTokens);
+/**
+ * Why this prompt cannot fit this provider/model, or `null`.
+ *
+ * An UNKNOWN window is never a rejection — `knownContextWindow` returning
+ * `null` means "no constraint", which is how every provider routed before any
+ * window was recorded and how a provider whose daemon is down must keep
+ * routing.
+ *
+ * Exported alongside `knownContextWindow` because the host applies this same
+ * rule to the EXPLICITLY REQUESTED provider before dispatch. Until #7441 the
+ * check ran only inside `getFallbackProvider` below, so the provider that
+ * actually serves the happy path was never asked whether the prompt fit.
+ */
+export function contextWindowRejection(provider, model, requestCapabilities) {
+  const required = Number(requestCapabilities?.requiredContextTokens);
   const available = knownContextWindow(provider, model);
   if (Number.isFinite(required) && required > 0 && available && required > available) {
     return `known ${available}-token context is below the ${required}-token request budget`;
   }
   return null;
+}
+
+function capabilityRejection(provider, model, requestCapabilities) {
+  if (requestCapabilities?.hasImages === true && provider?.type !== 'api') {
+    return 'cannot transmit image input';
+  }
+  return contextWindowRejection(provider, model, requestCapabilities);
 }
 
 function noEligibleFallbackError(rejections) {

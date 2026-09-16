@@ -34,6 +34,45 @@ describe('probeOpenAiModels', () => {
     await expect(probeOpenAiModels('http://x/v1')).resolves.toMatchObject({ reachable: true, models: ['a'] });
   });
 
+  it('keeps each served model\'s declared context window, whatever the daemon calls it', async () => {
+    // vLLM says `max_model_len`, llama-server `n_ctx`, LM Studio
+    // `loaded_context_length`. Throwing these away is what let an oversized
+    // prompt reach an endpoint that could never serve it (#7441).
+    mockFetch(async () => jsonResponse({
+      data: [
+        { id: 'qwen3.8-27b', max_model_len: 32768 },
+        { id: 'dflash', n_ctx: 8192 },
+        { id: 'lmstudio-model', loaded_context_length: 16384 },
+        { id: 'silent' },
+      ],
+    }));
+
+    await expect(probeOpenAiModels('http://x/v1')).resolves.toMatchObject({
+      reachable: true,
+      models: ['qwen3.8-27b', 'dflash', 'lmstudio-model', 'silent'],
+      // `silent` is ABSENT, not zero: a row that declares no window says
+      // nothing about that model, and a caller must read it as unknown.
+      contextWindows: { 'qwen3.8-27b': 32768, dflash: 8192, 'lmstudio-model': 16384 },
+    });
+  });
+
+  it('takes the SMALLEST window a row declares', async () => {
+    // A row that reports both a trained maximum and the narrower window the
+    // process was actually loaded at means the loaded one. Budgeting to the
+    // wider number builds a prompt the running server rejects.
+    mockFetch(async () => jsonResponse({
+      data: [
+        { id: 'loaded-small', max_model_len: 131072, n_ctx: 8192 },
+        { id: 'routed', context_length: 1_000_000, top_provider: { context_length: 128_000 } },
+        { id: 'nonsense', max_model_len: 0, n_ctx: 'lots' },
+      ],
+    }));
+
+    await expect(probeOpenAiModels('http://x/v1')).resolves.toMatchObject({
+      contextWindows: { 'loaded-small': 8192, routed: 128_000 },
+    });
+  });
+
   it('tells a server with nothing loaded from one whose listing is unreadable', async () => {
     mockFetch(async () => jsonResponse({ data: [] }));
     // Up and serving nothing — an actionable "load a model", not a connection problem.
@@ -62,6 +101,7 @@ describe('probeOpenAiModels', () => {
     await expect(probeOpenAiModels('http://127.0.0.1:8080/v1')).resolves.toEqual({
       reachable: false,
       models: null,
+      contextWindows: null,
       error: 'ECONNREFUSED',
     });
   });
@@ -78,6 +118,7 @@ describe('probeOpenAiModels', () => {
     await expect(probeOpenAiModels('http://x/v1')).resolves.toEqual({
       reachable: false,
       models: null,
+      contextWindows: null,
       error: 'HTTP 404',
     });
     // Undici holds the socket until an unread body is consumed; this path runs
@@ -109,6 +150,7 @@ it('attaches a Bearer header only when a key is supplied', async () => {
       await expect(probeOpenAiModels('http://x/v1')).resolves.toEqual({
         reachable: true,
         models: null,
+        contextWindows: null,
         error: 'authentication required',
       });
       expect(cancel).toHaveBeenCalled();

@@ -14,7 +14,7 @@ import {
 } from './providers.js';
 import { createRunnerService } from './runner.js';
 import { createPromptsService } from './prompts.js';
-import { createProviderStatusService } from './providerStatus.js';
+import { contextWindowRejection, createProviderStatusService, knownContextWindow } from './providerStatus.js';
 import { createProvidersRoutes } from './routes/providers.js';
 import { createRunsRoutes } from './routes/runs.js';
 import { createPromptsRoutes } from './routes/prompts.js';
@@ -31,6 +31,9 @@ export * from './errorDetection.js';
 export * from './endpointGuard.js';
 export * from './constants.js';
 export { createProviderService, createRunnerService, createPromptsService, createProviderStatusService };
+// The context-fit rule, for the host's pre-dispatch gate on the EXPLICITLY
+// requested provider — the one candidate `getFallbackProvider` never sees.
+export { contextWindowRejection, knownContextWindow };
 export { isOllamaBackedProvider, canRefreshModels, ollamaRefreshGroupKey };
 export { createProvidersRoutes, createRunsRoutes, createPromptsRoutes, createProviderStatusRoutes };
 
