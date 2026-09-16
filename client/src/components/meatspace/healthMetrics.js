@@ -6,6 +6,8 @@
  * Each category contains metrics with their label, unit, color, and aggregation type.
  */
 
+import { formatCount } from '../../utils/formatters';
+
 export const SUM_METRICS = new Set([
   'step_count', 'active_energy', 'basal_energy_burned', 'flights_climbed',
   'apple_exercise_time', 'apple_stand_time', 'walking_running_distance',
@@ -32,15 +34,15 @@ export const METRIC_CATEGORIES = [
     id: 'activity',
     label: 'Activity',
     metrics: [
-      { key: 'step_count', label: 'Steps', unit: 'steps', color: '#3b82f6', aggregation: 'sum', formatValue: v => Math.round(v).toLocaleString() },
-      { key: 'active_energy', label: 'Active Energy', unit: 'Cal', color: '#f59e0b', aggregation: 'sum', formatValue: v => Math.round(v).toLocaleString() },
-      { key: 'basal_energy_burned', label: 'Basal Energy', unit: 'Cal', color: '#d97706', aggregation: 'sum', formatValue: v => Math.round(v).toLocaleString() },
+      { key: 'step_count', label: 'Steps', unit: 'steps', color: '#3b82f6', aggregation: 'sum', formatValue: v => formatCount(v) },
+      { key: 'active_energy', label: 'Active Energy', unit: 'Cal', color: '#f59e0b', aggregation: 'sum', formatValue: v => formatCount(v) },
+      { key: 'basal_energy_burned', label: 'Basal Energy', unit: 'Cal', color: '#d97706', aggregation: 'sum', formatValue: v => formatCount(v) },
       { key: 'walking_running_distance', label: 'Walk/Run Distance', unit: 'mi', color: '#10b981', aggregation: 'sum', formatValue: v => v.toFixed(2) },
-      { key: 'apple_exercise_time', label: 'Exercise Time', unit: 'min', color: '#22c55e', aggregation: 'sum', formatValue: v => Math.round(v).toLocaleString() },
+      { key: 'apple_exercise_time', label: 'Exercise Time', unit: 'min', color: '#22c55e', aggregation: 'sum', formatValue: v => formatCount(v) },
       { key: 'flights_climbed', label: 'Flights Climbed', unit: 'flights', color: '#6366f1', aggregation: 'sum' },
       { key: 'physical_effort', label: 'Physical Effort', unit: 'kJ/hr/kg', color: '#ec4899', aggregation: 'avg' },
-      { key: 'time_in_daylight', label: 'Time in Daylight', unit: 'min', color: '#fbbf24', aggregation: 'sum', formatValue: v => Math.round(v).toLocaleString() },
-      { key: 'apple_stand_time', label: 'Stand Time', unit: 'min', color: '#14b8a6', aggregation: 'sum', formatValue: v => Math.round(v).toLocaleString() },
+      { key: 'time_in_daylight', label: 'Time in Daylight', unit: 'min', color: '#fbbf24', aggregation: 'sum', formatValue: v => formatCount(v) },
+      { key: 'apple_stand_time', label: 'Stand Time', unit: 'min', color: '#14b8a6', aggregation: 'sum', formatValue: v => formatCount(v) },
     ]
   },
   {
@@ -72,7 +74,7 @@ export const METRIC_CATEGORIES = [
       { key: 'walking_steadiness', label: 'Steadiness', unit: '%', color: '#22c55e', aggregation: 'avg', formatValue: v => (v * 100).toFixed(0) },
       { key: 'stair_speed_up', label: 'Stair Speed (Up)', unit: 'ft/s', color: '#8b5cf6', aggregation: 'avg', formatValue: v => v.toFixed(2) },
       { key: 'stair_speed_down', label: 'Stair Speed (Down)', unit: 'ft/s', color: '#6366f1', aggregation: 'avg', formatValue: v => v.toFixed(2) },
-      { key: 'six_minute_walk_test', label: '6-Min Walk Test', unit: 'm', color: '#10b981', aggregation: 'avg', formatValue: v => Math.round(v).toLocaleString() },
+      { key: 'six_minute_walk_test', label: '6-Min Walk Test', unit: 'm', color: '#10b981', aggregation: 'avg', formatValue: v => formatCount(v) },
       { key: 'walking_heart_rate_average', label: 'Walking Heart Rate', unit: 'bpm', color: '#ef4444', aggregation: 'avg' },
     ]
   },
@@ -82,9 +84,9 @@ export const METRIC_CATEGORIES = [
     metrics: [
       { key: 'distance_cycling', label: 'Cycling Distance', unit: 'mi', color: '#3b82f6', aggregation: 'sum', formatValue: v => v.toFixed(2) },
       { key: 'cycling_speed', label: 'Cycling Speed', unit: 'mi/hr', color: '#06b6d4', aggregation: 'avg', formatValue: v => v.toFixed(1) },
-      { key: 'cycling_cadence', label: 'Cadence', unit: 'rpm', color: '#f59e0b', aggregation: 'avg', formatValue: v => Math.round(v).toLocaleString() },
-      { key: 'cycling_power', label: 'Power', unit: 'W', color: '#ef4444', aggregation: 'avg', formatValue: v => Math.round(v).toLocaleString() },
-      { key: 'cycling_ftp', label: 'FTP', unit: 'W', color: '#8b5cf6', aggregation: 'avg', formatValue: v => Math.round(v).toLocaleString() },
+      { key: 'cycling_cadence', label: 'Cadence', unit: 'rpm', color: '#f59e0b', aggregation: 'avg', formatValue: v => formatCount(v) },
+      { key: 'cycling_power', label: 'Power', unit: 'W', color: '#ef4444', aggregation: 'avg', formatValue: v => formatCount(v) },
+      { key: 'cycling_ftp', label: 'FTP', unit: 'W', color: '#8b5cf6', aggregation: 'avg', formatValue: v => formatCount(v) },
     ]
   },
   {
@@ -92,10 +94,10 @@ export const METRIC_CATEGORIES = [
     label: 'Running',
     metrics: [
       { key: 'running_speed', label: 'Running Speed', unit: 'mi/hr', color: '#3b82f6', aggregation: 'avg', formatValue: v => v.toFixed(1) },
-      { key: 'running_power', label: 'Running Power', unit: 'W', color: '#ef4444', aggregation: 'avg', formatValue: v => Math.round(v).toLocaleString() },
+      { key: 'running_power', label: 'Running Power', unit: 'W', color: '#ef4444', aggregation: 'avg', formatValue: v => formatCount(v) },
       { key: 'running_stride_length', label: 'Stride Length', unit: 'm', color: '#06b6d4', aggregation: 'avg', formatValue: v => v.toFixed(2) },
       { key: 'running_vertical_oscillation', label: 'Vertical Oscillation', unit: 'cm', color: '#f59e0b', aggregation: 'avg', formatValue: v => v.toFixed(1) },
-      { key: 'running_ground_contact_time', label: 'Ground Contact', unit: 'ms', color: '#8b5cf6', aggregation: 'avg', formatValue: v => Math.round(v).toLocaleString() },
+      { key: 'running_ground_contact_time', label: 'Ground Contact', unit: 'ms', color: '#8b5cf6', aggregation: 'avg', formatValue: v => formatCount(v) },
     ]
   },
   {

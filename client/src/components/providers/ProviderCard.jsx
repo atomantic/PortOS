@@ -34,7 +34,7 @@ import {
   resolveModelContextWindow,
   supportsModelRefresh,
 } from '../../utils/providers';
-import { formatContextLength } from '../../utils/formatters';
+import { formatContextLength, formatDateTime } from '../../utils/formatters';
 import { isHttpsUrl } from '../../utils/urlNormalize';
 import ProviderRuntimeStatus from './ProviderRuntimeStatus';
 import ProviderReadiness from './ProviderReadiness';
@@ -653,7 +653,7 @@ function CodexSubscriptionPanel({
           runs on this provider may not be counted here.
         </p>
       )}
-      {typeof account?.checkedAt === 'number' && <p className="text-gray-500">Last usage refresh: {new Date(account.checkedAt).toLocaleString()}</p>}
+      {typeof account?.checkedAt === 'number' && <p className="text-gray-500">Last usage refresh: {formatDateTime(account.checkedAt)}</p>}
       {catalogCount !== null && <p className="text-gray-500">Subscription catalog: {catalogCount} model{catalogCount === 1 ? '' : 's'} available.</p>}
       {modelError && <p role="status" className="text-port-warning">Using the last known model catalog while a refresh is unavailable.</p>}
       {verificationUrl && (

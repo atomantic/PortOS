@@ -21,7 +21,7 @@ import {
 } from '../../../services/api';
 import { useAsyncAction } from '../../../hooks/useAsyncAction';
 import { useSseProgress, isTerminalSseFrame } from '../../../hooks/useSseProgress';
-import { formatDurationMs } from '../../../utils/formatters';
+import { formatCount, formatDurationMs } from '../../../utils/formatters';
 import StageHistoryModal from './StageHistoryModal';
 
 const stageHasContent = (stage) => Boolean(stage?.input?.trim() || stage?.output?.trim());
@@ -433,7 +433,7 @@ export default function TextStagePanel({
                       )
                     ) : null}
                     <span className="text-gray-600 text-[10px] tabular-nums ml-auto">
-                      {Number.isFinite(f.outputLength) ? `${f.outputLength.toLocaleString()} chars · ` : ''}
+                      {Number.isFinite(f.outputLength) ? `${formatCount(f.outputLength)} chars · ` : ''}
                       {formatDurationMs(f.ms)}
                     </span>
                   </li>

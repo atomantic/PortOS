@@ -4,7 +4,7 @@ import BrailleSpinner from '../BrailleSpinner';
 import ConfirmButtonPair from '../ui/ConfirmButtonPair';
 import ProgressBar from '../ui/ProgressBar';
 import { useConfirmDelete } from '../../hooks/useConfirmDelete';
-import { formatAgeDays, formatBytes, formatDateNumeric } from '../../utils/formatters';
+import { formatAgeDays, formatBytes, formatCount, formatDateNumeric } from '../../utils/formatters';
 
 /**
  * MTPLX checkpoint manager — search, download, and remove MTP model weights.
@@ -222,7 +222,7 @@ export default function MtplxCheckpoints({
                     <p className="text-xs text-white truncate">{row.name}</p>
                     <p className="text-[11px] text-gray-500 truncate">
                       {row.repo}
-                      {Number.isFinite(row.downloads) ? ` · ${row.downloads.toLocaleString()} downloads` : ''}
+                      {Number.isFinite(row.downloads) ? ` · ${formatCount(row.downloads)} downloads` : ''}
                       {/* Age in days, not a "3mo ago" bucket: a checkpoint's release
                           date is what says whether it is worth a multi-gigabyte pull. */}
                       {age && <span title={`Published ${formatDateNumeric(row.publishedAt)}`}>{` · published ${age}`}</span>}

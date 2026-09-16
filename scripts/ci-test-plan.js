@@ -404,6 +404,7 @@ const structuralTestsFor = (changedFiles, trackedSet) => {
     add('client/src/globalShadowConventions.test.js');
     add('client/src/headingTruncationConventions.test.js');
     add('client/src/hooks/mountedRefConventions.test.js');
+    add('client/src/numberFormattingConventions.test.js');
     add('client/src/pollingConventions.test.js');
     add('client/src/popoverClampConventions.test.js');
     add('client/src/preWrapClasses.test.js');

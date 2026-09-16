@@ -3,6 +3,7 @@ import {
 } from 'recharts';
 import BrailleSpinner from '../BrailleSpinner';
 import useChartColors from '../../hooks/useChartColors.js';
+import { formatCount } from '../../utils/formatters';
 
 export default function MetricCard({ data = [], loading = false, config, latestValue }) {
   const { label, unit, color, aggregation, formatValue } = config;
@@ -16,7 +17,7 @@ export default function MetricCard({ data = [], loading = false, config, latestV
     : null;
 
   const displayValue = summary != null
-    ? (formatValue ? formatValue(summary) : (Number.isInteger(summary) ? summary.toLocaleString() : summary))
+    ? (formatValue ? formatValue(summary) : (Number.isInteger(summary) ? formatCount(summary) : summary))
     : null;
 
   const chartData = data.map(d => ({
@@ -56,11 +57,11 @@ export default function MetricCard({ data = [], loading = false, config, latestV
               <CartesianGrid strokeDasharray="3 3" stroke={chartColors.grid} />
               <XAxis dataKey="date" tick={{ fill: chartColors.axis, fontSize: 11 }} interval="preserveStartEnd" />
               <YAxis tick={{ fill: chartColors.axis, fontSize: 11 }} width={55} domain={['auto', 'auto']}
-                tickFormatter={v => typeof v === 'number' && v >= 1000 ? v.toLocaleString() : v} />
+                tickFormatter={v => typeof v === 'number' && v >= 1000 ? formatCount(v) : v} />
               <Tooltip content={({ active, payload, label: tipLabel }) => {
                 if (!active || !payload?.length) return null;
                 const val = payload[0].value;
-                const formatted = formatValue ? formatValue(val) : (typeof val === 'number' && val >= 1000 ? val.toLocaleString() : Math.round(val * 100) / 100);
+                const formatted = formatValue ? formatValue(val) : (typeof val === 'number' && val >= 1000 ? formatCount(val) : Math.round(val * 100) / 100);
                 return (
                   <div style={{ background: chartColors.tooltipBg, border: `1px solid ${chartColors.tooltipBorder}`, color: chartColors.text, padding: '8px', borderRadius: '6px', fontSize: '12px' }}>
                     <p style={{ color: chartColors.axis, marginBottom: 2 }}>{tipLabel}</p>

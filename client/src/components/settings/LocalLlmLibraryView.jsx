@@ -4,7 +4,7 @@ import { Download, RefreshCw, Search, Plus, ExternalLink, Star, Play, AlertTrian
 import toast from '../ui/Toast';
 import FormField from '../ui/FormField';
 import BrailleSpinner from '../BrailleSpinner';
-import { formatAgeDays, formatContextLength, timeAgo, recommendedRamGb, formatDateNumeric } from '../../utils/formatters';
+import { formatAgeDays, formatContextLength, formatCount, timeAgo, recommendedRamGb, formatDateNumeric } from '../../utils/formatters';
 import { localLlmTargetKey } from '../../lib/localLlmTargetKey';
 import { useConfirmDelete } from '../../hooks/useConfirmDelete';
 import useDownloadPreflightConfirm from '../../hooks/useDownloadPreflightConfirm';
@@ -634,7 +634,7 @@ export default function LocalLlmLibraryView() {
                       )}
                       {m.provenance && (
                         <p className="text-[11px] text-gray-400 mt-1">
-                          Reviewed {m.provenance.checkedAt}: {m.provenance.likes.toLocaleString()} likes · {m.provenance.downloads.toLocaleString()} monthly downloads · {m.provenance.followers.toLocaleString()} publisher followers.{' '}
+                          Reviewed {m.provenance.checkedAt}: {formatCount(m.provenance.likes)} likes · {formatCount(m.provenance.downloads)} monthly downloads · {formatCount(m.provenance.followers)} publisher followers.{' '}
                           <a className="text-port-accent hover:underline" href={`https://huggingface.co/${m.provenance.repository}/tree/${m.provenance.revision}`} target="_blank" rel="noopener noreferrer">Reviewed revision</a>
                           {' · Installer uses the publisher’s current release; this is a dated review, not an immutable install pin.'}
                         </p>

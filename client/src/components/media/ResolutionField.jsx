@@ -18,6 +18,7 @@ import { FormField } from '../ui/FormField';
 import {
   resolveResolutionLabel, clampImageEdge, CUSTOM_RESOLUTION_VALUE, MAX_IMAGE_EDGE,
 } from '../../lib/imageGenResolutions';
+import { formatCount } from '../../utils/formatters';
 
 const DEFAULT_INPUT_CLS = 'w-full bg-port-bg border border-port-border rounded-lg px-2 py-2 text-sm text-white focus:outline-none focus:border-port-accent disabled:opacity-50';
 
@@ -79,7 +80,7 @@ export default function ResolutionField({
   const pixelCount = (width || 0) * (height || 0);
   const overPixelCap = maxPixels != null && pixelCount > maxPixels;
   const stepClause = step > 1 ? ` Multiples of ${step} render best on local models.` : '';
-  const defaultNote = `Each edge ${min}–${max}px${maxPixels != null ? `, total ≤ ${maxPixels.toLocaleString()} px` : ''}.${stepClause}`;
+  const defaultNote = `Each edge ${min}–${max}px${maxPixels != null ? `, total ≤ ${formatCount(maxPixels)} px` : ''}.${stepClause}`;
 
   return (
     <>
@@ -119,7 +120,7 @@ export default function ResolutionField({
           </FormField>
           <p className={`col-span-full text-[10px] -mt-1 ${overPixelCap ? 'text-port-error' : 'text-gray-500'}`}>
             {overPixelCap
-              ? `Too large — ${pixelCount.toLocaleString()} px exceeds the ${maxPixels.toLocaleString()} px cap. Reduce width or height.`
+              ? `Too large — ${formatCount(pixelCount)} px exceeds the ${formatCount(maxPixels)} px cap. Reduce width or height.`
               : (note || defaultNote)}
           </p>
         </>

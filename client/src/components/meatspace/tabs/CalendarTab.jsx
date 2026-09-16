@@ -10,6 +10,7 @@ import LifeGrid from './calendar/LifeGrid';
 import TimeStats from './calendar/TimeStats';
 import AddActivityForm from './calendar/AddActivityForm';
 import LifeEventsPanel from './calendar/LifeEventsPanel';
+import { formatCount } from '../../../utils/formatters';
 
 export default function CalendarTab() {
   const [data, setData] = useState(null);
@@ -136,15 +137,15 @@ export default function CalendarTab() {
               <div className="text-[10px] text-gray-500">years left</div>
             </div>
             <div className="text-center">
-              <div className="font-bold text-port-success">{stats.remaining.months.toLocaleString()}</div>
+              <div className="font-bold text-port-success">{formatCount(stats.remaining.months)}</div>
               <div className="text-[10px] text-gray-500">months</div>
             </div>
             <div className="text-center">
-              <div className="font-bold text-port-success">{stats.remaining.weeks.toLocaleString()}</div>
+              <div className="font-bold text-port-success">{formatCount(stats.remaining.weeks)}</div>
               <div className="text-[10px] text-gray-500">weeks</div>
             </div>
             <div className="text-center">
-              <div className="font-bold text-port-success">{stats.remaining.days.toLocaleString()}</div>
+              <div className="font-bold text-port-success">{formatCount(stats.remaining.days)}</div>
               <div className="text-[10px] text-gray-500">days</div>
             </div>
           </div>
@@ -193,7 +194,7 @@ export default function CalendarTab() {
                 <div className="text-[10px] text-gray-500">{b.frequency}{CADENCE_LABELS[b.cadence]}</div>
               </div>
               <div className="text-right shrink-0">
-                <div className="text-base font-bold text-white">{b.remaining.toLocaleString()}</div>
+                <div className="text-base font-bold text-white">{formatCount(b.remaining)}</div>
               </div>
               <button
                 onClick={() => handleRemoveActivity(i)}

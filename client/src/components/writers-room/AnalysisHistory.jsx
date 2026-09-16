@@ -3,7 +3,7 @@ import { AlertTriangle, Check, Clapperboard, FileSignature, MapPin, RotateCcw, S
 import BrailleSpinner from '../BrailleSpinner';
 import toast from '../ui/Toast';
 import { listWritersRoomAnalyses, getWritersRoomAnalysis } from '../../services/apiWritersRoom';
-import { timeAgo } from '../../utils/formatters';
+import { timeAgo, formatCount } from '../../utils/formatters';
 import useMounted from '../../hooks/useMounted';
 
 // Icon + label maps must include every kind from `ANALYSIS_KINDS`. Adding a
@@ -188,7 +188,7 @@ function FormatResult({ result, onApply }) {
   return (
     <div className="space-y-2 text-[11px]">
       <div className="flex items-center justify-between">
-        <span className="uppercase text-[9px] text-gray-500">Cleaned prose ({text.length.toLocaleString()} chars)</span>
+        <span className="uppercase text-[9px] text-gray-500">Cleaned prose ({formatCount(text.length)} chars)</span>
         {onApply && (
           <button
             onClick={() => onApply(text)}
