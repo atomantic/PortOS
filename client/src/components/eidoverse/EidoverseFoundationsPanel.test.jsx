@@ -73,7 +73,7 @@ describe('the Eidoverse foundations promote panel', () => {
 
     await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Promote' })); });
 
-    expect(screen.getByRole('status')).toHaveTextContent('Not promoted — nothing moved.');
+    expect(screen.getByRole('status')).toHaveTextContent('Refused — nothing moved.');
     expect(screen.getByText(/the controller threw on restart-world-host/)).toBeInTheDocument();
     expect(screen.getByTitle(/Nothing leaves until you promote it/)).toHaveTextContent('Local');
   });

@@ -99,16 +99,27 @@ function LayerBadge({ layer }) {
   );
 }
 
-/** The reasons a gate gave, rendered verbatim. */
-function Refusal({ verdict }) {
-  if (!verdict || !verdict.reasons?.length) return null;
-  const promoted = verdict.outcome === 'promoted';
+/**
+ * What a gate just decided, with its reasons rendered verbatim. A pass gets a
+ * line too: "run the assay" with no visible answer reads as a no-op, and the
+ * row's own state changes too quietly to serve as the confirmation.
+ */
+const VERDICT_HEADLINES = Object.freeze({
+  promoted: 'Promoted to the shared baseline.',
+  packaged: 'Every gate passed — promote candidate packaged.',
+});
+
+function Verdict({ verdict }) {
+  if (!verdict) return null;
+  const headline = VERDICT_HEADLINES[verdict.outcome];
   return (
-    <div className={`mt-3 rounded-lg border p-3 text-sm ${promoted ? 'border-port-success/40 text-port-success' : 'border-port-error/40 text-port-error'}`} role="status">
-      <p className="font-medium">{promoted ? 'Promoted.' : 'Not promoted — nothing moved.'}</p>
-      <ul className="mt-1 list-disc space-y-1 pl-5">
-        {verdict.reasons.map((reason) => <li key={reason}>{reason}</li>)}
-      </ul>
+    <div className={`mt-3 rounded-lg border p-3 text-sm ${headline ? 'border-port-success/40 text-port-success' : 'border-port-error/40 text-port-error'}`} role="status">
+      <p className="font-medium">{headline || 'Refused — nothing moved.'}</p>
+      {verdict.reasons?.length > 0 && (
+        <ul className="mt-1 list-disc space-y-1 pl-5">
+          {verdict.reasons.map((reason) => <li key={reason}>{reason}</li>)}
+        </ul>
+      )}
     </div>
   );
 }
@@ -183,8 +194,12 @@ export default function EidoverseFoundationsPanel() {
     if (problem) { setFormError(problem); return; }
     setFormError('');
     setSaving(true);
+    // The id we authored, not one read back off the response: the route cannot
+    // rename it (the schema pins it), and reaching into the response shape here
+    // would turn a server-side change into a thrown handler.
+    const authoredId = draft.id.trim();
     const saved = await recordEidoverseFoundation({
-      id: draft.id.trim(),
+      id: authoredId,
       kind: draft.kind,
       title: draft.title.trim(),
       summary: draft.summary.trim(),
@@ -202,10 +217,10 @@ export default function EidoverseFoundationsPanel() {
     if (!saved) return;
     setDraft(EMPTY_DRAFT);
     // Re-authoring clears the candidate and the verdict server-side; a stale
-    // "Promoted." banner beside the new body would be a lie.
-    setVerdicts((current) => ({ ...current, [saved.foundation.id]: null }));
+    // "Promoted" banner beside the new body would be a lie.
+    setVerdicts((current) => ({ ...current, [authoredId]: null }));
     await listEidoverseFoundations(silent).then(applyListing).catch(() => {});
-    openFoundation(saved.foundation.id);
+    openFoundation(authoredId);
   }, [applyListing, draft, openFoundation]);
 
   const mutateDraft = (key) => (event) => setDraft((current) => ({ ...current, [key]: event.target.value }));
@@ -286,7 +301,7 @@ export default function EidoverseFoundationsPanel() {
                   </div>
                 </div>
 
-                <Refusal verdict={verdicts[foundation.id]} />
+                <Verdict verdict={verdicts[foundation.id]} />
 
                 {expanded && (
                   <div className="mt-3 space-y-2 border-t border-port-border pt-3 text-sm">
