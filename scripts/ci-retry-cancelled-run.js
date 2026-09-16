@@ -29,6 +29,10 @@
  * lookup failure returns without re-dispatching, because the cost of missing a
  * retry is one manual re-run and the cost of a wrong retry is a runaway loop.
  *
+ * The re-dispatch is DELAYED — see RETRY_DELAY_MS — and every API-backed guard
+ * is evaluated again after the wait, so a supersession or a human re-run that
+ * lands during it still wins (issue 7439).
+ *
  * The workflow that runs this is triggered by `workflow_run`, so it checks out
  * the DEFAULT branch — never the pull request's head. Nothing here executes,
  * imports, or interpolates repository content from the PR.
@@ -46,6 +50,30 @@ const JOBS_PER_PAGE = 100;
 const SIBLING_RUNS_PER_PAGE = 5;
 /** A conclusion that means something really broke, not that it was stopped. */
 const FAILING_CONCLUSIONS = new Set(['failure', 'timed_out']);
+
+/**
+ * How long to idle before re-dispatching (issue 7439).
+ *
+ * The cancel this recovers from is caused by a saturated queue, so firing the
+ * one-retry budget the instant the event arrives spends it at the moment it is
+ * least likely to survive: on PR 7434 three re-runs of the IDENTICAL SHA were
+ * each cancelled again while other runs were in flight, and that same SHA
+ * passed on the first attempt made against an idle queue.
+ *
+ * Five minutes, because it is the smallest wait that plausibly outlives a
+ * burst and the trade is lopsided: one job idling — not computing — for five
+ * minutes against re-running twelve jobs straight into another cancel. It is
+ * deliberately NOT "poll until the repository is quiet": on a busy repo that
+ * can mean never retrying, which is worse than retrying into a cancel.
+ *
+ * Tune it from evidence, not intuition. Every recovery run's step summary
+ * records the delay it used and whether the skip happened before or after the
+ * wait, so the Actions history answers whether re-dispatched runs complete.
+ */
+export const RETRY_DELAY_MS = 5 * 60_000;
+
+/** Real elapsed time. Injected in tests so no suite ever sleeps. */
+const sleep = (ms) => new Promise((resolve) => { setTimeout(resolve, ms); });
 
 /**
  * True when this job carries a real failure.
@@ -191,6 +219,75 @@ async function fetchNewestSiblingRunNumber(fetchImpl, target, logger) {
 }
 
 /**
+ * Every guard that needs the API, in one pass.
+ *
+ * Extracted because it runs TWICE — once before the wait, so an obviously
+ * ineligible run skips without occupying a runner for five minutes, and once
+ * after it, because that is the reading the re-dispatch is actually made on.
+ * Re-reading is not merely defensive: a supersession or a human re-run can
+ * land during the wait, and the post-wait job listing is also the more
+ * reliable one, since a failing job's step records can still be settling when
+ * the run's own cancel lands (see `jobFailed`).
+ *
+ * @returns {Promise<{level: string, message: string, result: object}|null>}
+ *   null when every guard passes, otherwise the reason not to re-dispatch.
+ */
+async function evaluateApiGuards(fetchImpl, target, logger) {
+  const jobs = await fetchAttemptJobs(fetchImpl, target, logger);
+  if (!jobs) {
+    return {
+      level: 'error',
+      message: `⚠️ CI retry skipped: could not list the jobs of run ${target.runId}`,
+      result: { outcome: 'unavailable', reason: 'jobs-unavailable' },
+    };
+  }
+  const failedJobs = jobs.filter(jobFailed).map(safeJobName);
+  if (failedJobs.length) {
+    return {
+      level: 'log',
+      message: `ℹ️ CI retry skipped: run ${target.runId} cancelled after a real failure (${failedJobs.join(', ')})`,
+      result: { outcome: 'skipped', reason: 'job-failed' },
+    };
+  }
+
+  const live = await fetchLiveRunState(fetchImpl, target, logger);
+  if (!live) {
+    return {
+      level: 'error',
+      message: `⚠️ CI retry skipped: could not read the current state of run ${target.runId}`,
+      result: { outcome: 'unavailable', reason: 'run-state-unavailable' },
+    };
+  }
+  if (live.runAttempt !== 1 || live.status !== 'completed' || live.conclusion !== 'cancelled') {
+    return {
+      level: 'log',
+      message: `ℹ️ CI retry skipped: run ${target.runId} has moved on since the event (attempt ${live.runAttempt}, ${live.status}/${live.conclusion || 'no conclusion'})`,
+      result: { outcome: 'skipped', reason: 'run-state-moved-on' },
+    };
+  }
+
+  // Listed LAST, immediately before the POST, so the window in which a fresh
+  // push could create a successor we do not see is as small as it can be.
+  const newestSibling = await fetchNewestSiblingRunNumber(fetchImpl, target, logger);
+  if (newestSibling === null) {
+    return {
+      level: 'error',
+      message: `⚠️ CI retry skipped: could not list sibling runs for run ${target.runId}`,
+      result: { outcome: 'unavailable', reason: 'sibling-runs-unavailable' },
+    };
+  }
+  if (newestSibling > target.runNumber) {
+    return {
+      level: 'log',
+      message: `ℹ️ CI retry skipped: run ${target.runId} was superseded by run #${newestSibling} on the same pull request`,
+      result: { outcome: 'skipped', reason: 'superseded' },
+    };
+  }
+
+  return null;
+}
+
+/**
  * Decide whether the cancelled run deserves one re-dispatch, and do it.
  *
  * @param {object} [options]
@@ -198,13 +295,17 @@ async function fetchNewestSiblingRunNumber(fetchImpl, target, logger) {
  * @param {typeof fetch} [options.fetchImpl]
  * @param {{log?: Function, error?: Function}} [options.logger]
  * @param {Function} [options.writeSummary] - injectable step-summary writer
- * @returns {Promise<{outcome: 'requested'|'skipped'|'unavailable', reason?: string, status?: number}>}
+ * @param {number} [options.delayMs] - wait before re-dispatching
+ * @param {(ms: number) => Promise<void>} [options.wait] - injectable clock; tests never sleep
+ * @returns {Promise<{outcome: 'requested'|'skipped'|'unavailable', reason?: string, status?: number, phase?: string}>}
  */
 export async function retryCancelledCiRun({
   env = process.env,
   fetchImpl = globalThis.fetch,
   logger = console,
   writeSummary = writeStepSummary,
+  delayMs = RETRY_DELAY_MS,
+  wait = sleep,
 } = {}) {
   const runLabel = /^\d+$/.test(String(env.CI_RUN_ID ?? '')) ? env.CI_RUN_ID : 'unidentified';
   // Every exit goes through here, so "why was my run not retried?" is
@@ -212,12 +313,19 @@ export async function retryCancelledCiRun({
   // the numeric run id only — never the branch name or any other payload text.
   // `level` is a parameter rather than derived from `outcome`: an invalid
   // environment is a `skipped` outcome that still deserves stderr.
+  // `phase` and `delay` are what make the Actions history measurable (7439):
+  // they say whether an outcome was reached before or after the wait, and how
+  // long that wait was, so a later tuning pass can read its own baseline
+  // instead of guessing at summaries written under a since-changed constant.
+  let phase = 'before-wait';
   const done = (level, message, result) => {
     logger[level]?.(message);
     writeSummary(`### CI cancel recovery: ${result.outcome}\n\n`
       + `- run: ${runLabel}\n`
-      + `- reason: ${result.reason || 're-dispatched'}`, env);
-    return result;
+      + `- reason: ${result.reason || 're-dispatched'}\n`
+      + `- phase: ${phase}\n`
+      + `- delay: ${Math.round(delayMs / 1000)}s`, env);
+    return { ...result, phase };
   };
 
   const target = retryTargetFromEnv(env);
@@ -243,38 +351,19 @@ export async function retryCancelledCiRun({
       { outcome: 'skipped', reason: 'retry-budget-exhausted' });
   }
 
-  const jobs = await fetchAttemptJobs(fetchImpl, target, logger);
-  if (!jobs) {
-    return done('error', `⚠️ CI retry skipped: could not list the jobs of run ${target.runId}`,
-      { outcome: 'unavailable', reason: 'jobs-unavailable' });
-  }
-  const failedJobs = jobs.filter(jobFailed).map(safeJobName);
-  if (failedJobs.length) {
-    return done('log', `ℹ️ CI retry skipped: run ${target.runId} cancelled after a real failure (${failedJobs.join(', ')})`,
-      { outcome: 'skipped', reason: 'job-failed' });
-  }
+  // Before the wait: a run that is already ineligible skips now rather than
+  // holding a runner for the full delay.
+  const early = await evaluateApiGuards(fetchImpl, target, logger);
+  if (early) return done(early.level, early.message, early.result);
 
-  const live = await fetchLiveRunState(fetchImpl, target, logger);
-  if (!live) {
-    return done('error', `⚠️ CI retry skipped: could not read the current state of run ${target.runId}`,
-      { outcome: 'unavailable', reason: 'run-state-unavailable' });
-  }
-  if (live.runAttempt !== 1 || live.status !== 'completed' || live.conclusion !== 'cancelled') {
-    return done('log', `ℹ️ CI retry skipped: run ${target.runId} has moved on since the event (attempt ${live.runAttempt}, ${live.status}/${live.conclusion || 'no conclusion'})`,
-      { outcome: 'skipped', reason: 'run-state-moved-on' });
-  }
+  logger.log?.(`⏳ Waiting ${Math.round(delayMs / 1000)}s before re-dispatching CI run ${target.runId}: the queue that cancelled it is likely still full`);
+  await wait(delayMs);
+  phase = 'after-wait';
 
-  // Listed LAST, immediately before the POST, so the window in which a fresh
-  // push could create a successor we do not see is as small as it can be.
-  const newestSibling = await fetchNewestSiblingRunNumber(fetchImpl, target, logger);
-  if (newestSibling === null) {
-    return done('error', `⚠️ CI retry skipped: could not list sibling runs for run ${target.runId}`,
-      { outcome: 'unavailable', reason: 'sibling-runs-unavailable' });
-  }
-  if (newestSibling > target.runNumber) {
-    return done('log', `ℹ️ CI retry skipped: run ${target.runId} was superseded by run #${newestSibling} on the same pull request`,
-      { outcome: 'skipped', reason: 'superseded' });
-  }
+  // After the wait: the reading the re-dispatch is actually made on. A newer
+  // run for the branch, or a human re-run, may have landed during the delay.
+  const late = await evaluateApiGuards(fetchImpl, target, logger);
+  if (late) return done(late.level, late.message, late.result);
 
   const response = await request(
     fetchImpl,

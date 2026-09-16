@@ -634,6 +634,29 @@ retries only when every one of these holds:
 Any API lookup that cannot be completed skips the retry rather than assuming a
 guard passed — a missed retry costs one manual re-run, a wrong one loops.
 
+**The re-dispatch waits five minutes first** (`RETRY_DELAY_MS`, issue 7439).
+The cancel it recovers from is caused by a saturated queue, so firing the
+one-retry budget the instant the `workflow_run` event arrives spends it at the
+moment it is least likely to survive: on PR 7434 three re-runs of the identical
+SHA were each cancelled again while other runs were in flight, and that same SHA
+passed on the first attempt made against an idle queue. One job idling — not
+computing — for five minutes is the cheap side of that trade against re-running
+twelve jobs straight into another cancel. The recovery job pins
+`timeout-minutes` above the delay so it is never killed mid-wait, and a test
+asserts that inequality.
+
+Every API-backed guard in the table is evaluated **twice**: once before the wait,
+so a run that is already ineligible skips without occupying a runner, and once
+after it, because that is the reading the re-dispatch is actually made on. A push
+or a human re-run that lands during the delay therefore still wins. The step
+summary records `phase: before-wait | after-wait` and the `delay` it used, so
+the Actions history can be read back as evidence when the constant is tuned —
+under the delay that actually produced each outcome, not today's value.
+
+Deliberately **not** chosen: polling `GET /actions/runs?status=in_progress` and
+retrying only once the repository is quiet. On a busy repo that can mean never
+retrying, which is worse than retrying into a cancel.
+
 **Why the failing-job guard reads the jobs' own conclusions** rather than a
 marker written by the fail-fast step: a marker fails OPEN. It would be written
 by a job that is already failing, on a run about to be cancelled out from under
@@ -651,11 +674,10 @@ prints its verdict. The recovery run is a separate run, so it survives; its
 step summary records which guard applied. Publishing that back onto the pull
 request as a neutral check run is issue #7438.
 
-Two known limits, both filed: the retry fires immediately, which is while the
-queue that caused the cancel is still full (#7439), and a retry re-runs the
-whole suite — Windows shards included — so if the cause is the spending limit
-then recovery spends more of it. Reducing the billable minutes of a full run is
-the complementary root-cause lever (#7440).
+One known limit, filed: a retry re-runs the whole suite — Windows shards
+included — so if the cause is the spending limit then recovery spends more of
+it. Reducing the billable minutes of a full run is the complementary root-cause
+lever (#7440).
 
 Because the trigger is `workflow_run`, the recovery workflow runs the
 **default branch's** copy of itself with a writable `actions` token and never
