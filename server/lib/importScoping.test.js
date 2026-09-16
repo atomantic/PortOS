@@ -658,7 +658,15 @@ describe('deferred imports stay deferred (#6156)', () => {
 // The remainder of the raise restores the ~1.5k of headroom this is meant to
 // carry: the previous number had drifted to ONE above the measured total, the
 // zero-headroom state #6305 raised it out of, where any addition at all fails.
-const MAX_STATIC_INSTANTIATIONS = 109200;
+//
+// Raised to 110700 for the stale git lock fix (#7513). Measured after the
+// change: 109,282, so its own cost is +82 — one new test file
+// (`services/git.staleLock.test.js`) reaching `services/git.js`'s existing
+// closure to cover `pull`/`syncBranch`/`ensureLatest`'s lock-clearing paths.
+// No new heavy edge: `git.js` was already reached by a dozen other server
+// test files. The remainder restores headroom the previous number had worn
+// down to zero.
+const MAX_STATIC_INSTANTIATIONS = 110700;
 
 
 const SKIP_DIRS = new Set(['node_modules', 'coverage', 'dist', 'data']);
