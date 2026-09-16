@@ -372,7 +372,14 @@ function normalizeAutoUpdateRuntime(raw) {
     lastRunAt: typeof source.lastRunAt === 'string' ? source.lastRunAt : null,
     lastOutcome: typeof source.lastOutcome === 'string' ? source.lastOutcome : null,
     lastSkip: isPlainObject(source.lastSkip) ? source.lastSkip : null,
-    repairTaskId: typeof source.repairTaskId === 'string' ? source.repairTaskId : null,
+    // When a repo-repair agent was last DISPATCHED (queued), not when it
+    // finished — `autoUpdateScheduler.repairDispatchDue` reads this to bound
+    // a stand-down repair agent to one dispatch per cooldown window instead
+    // of one per 5-minute tick. Kept OUT of `updateBaselineAt` on purpose: a
+    // checkout the repair agent fixes must still update on the very next
+    // idle tick, not wait out the same interval a second time. See root
+    // AGENTS.md "AI Provider Usage Policy".
+    repairQueuedAt: typeof source.repairQueuedAt === 'string' ? source.repairQueuedAt : null,
   };
 }
 

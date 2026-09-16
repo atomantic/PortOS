@@ -68,12 +68,34 @@ let ioRef = null;
  * `armedAt` is the fallback for an install that has never updated: without it
  * the interval would be measured from the epoch and the first tick after
  * enabling would fire immediately.
+ *
+ * Deliberately does NOT fold in a repair-agent dispatch (`repairQueuedAt`,
+ * see `repairDispatchDue` below): this baseline gates the WHOLE tick,
+ * including the update itself, before the checkout is even read. Blending
+ * the two would mean a checkout the repair agent fixed in five minutes still
+ * could not update for the rest of the interval — breaking the documented
+ * promise that PortOS resumes automatically once the checkout is clean.
  */
 export function updateBaselineAt(runtime, lastUpdateResult, now = Date.now()) {
   const candidates = [runtime?.lastRunAt, lastUpdateResult?.completedAt, runtime?.armedAt]
     .map((value) => (typeof value === 'string' ? Date.parse(value) : NaN))
     .filter((value) => Number.isFinite(value));
   return candidates.length ? Math.max(...candidates) : now;
+}
+
+/**
+ * Whether enough time has passed since the last repair-agent DISPATCH to
+ * queue another one. A separate gate from `updateBaselineAt` on purpose
+ * (#7468): this one only throttles re-queueing a repair agent for a checkout
+ * it could not fix, so it must never hold back the update tick itself once
+ * the checkout is actually clean. Reuses the same `minIntervalMs` the update
+ * cooldown uses — there is no separate configured interval for this, and
+ * reusing it keeps "one dispatch per cooldown window" in one place.
+ */
+export function repairDispatchDue(runtime, minIntervalMs, now = Date.now()) {
+  const queuedAt = typeof runtime?.repairQueuedAt === 'string' ? Date.parse(runtime.repairQueuedAt) : NaN;
+  if (!Number.isFinite(queuedAt)) return true;
+  return now - queuedAt >= minIntervalMs;
 }
 
 /**
@@ -168,10 +190,19 @@ export async function runAutoUpdateTick({ io = ioRef } = {}) {
   const read = await checkUpdateRepoReadiness({ fetch: true })
     .catch((err) => ({ ready: false, needsAgent: false, reasons: ['git-unreadable'], summary: err.message, repairable: [] }));
   if (!read.ready && !isRepairableOnly(read)) {
-    if (read.needsAgent && config.resolveBlockersWithAgent) {
+    if (read.needsAgent && config.resolveBlockersWithAgent && repairDispatchDue(runtime, config.minIntervalMs, now)) {
       const task = await queueRepoRepairTask(read);
-      if (task?.id && task.id !== runtime.repairTaskId) {
-        await updateChecker.recordAutoUpdateRuntime({ repairTaskId: task.id }).catch(() => undefined);
+      // Stamp only on a REAL dispatch. `addTask`'s dedup (cosTaskStore.js)
+      // only collapses repeat ticks onto one task while that task stays open
+      // — once the agent completes (fixed or not), the task flips to
+      // `completed` and the very next tick would queue a fresh one with
+      // nothing else to stop it. `repairDispatchDue` above makes a stand-down
+      // cost one dispatch per cooldown window instead of one per 5-minute
+      // tick; stamping unconditionally here (including on a failed enqueue,
+      // where `task` is null) would lock out every retry for the same
+      // window while nothing was actually queued.
+      if (task?.id) {
+        await updateChecker.recordAutoUpdateRuntime({ repairQueuedAt: new Date().toISOString() }).catch(() => undefined);
       }
     }
     return standDown('repo-not-ready', read.summary);
