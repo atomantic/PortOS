@@ -31,7 +31,11 @@ import { ERROR_CATEGORIES } from './aiToolkit/errorDetection.js';
 //                     work to drain before it can serve the same context again;
 //                     the endpoint itself is healthy, so this is a short bench
 //   TIMEOUT/UNKNOWN — 1m: short enough to retry, long enough to skip
-//                     while the immediate workload retries via fallback
+//                     while the immediate workload retries via fallback. For a
+//                     TIMEOUT this is only the FLOOR — see benchMsForTimeout:
+//                     a run that burned its whole budget benches for at least
+//                     that budget, because a shorter bench guarantees the next
+//                     caller repeats the same full-length stall.
 export const COOLDOWN_MS_BY_CATEGORY = {
   [ERROR_CATEGORIES.RATE_LIMIT]: 5 * 60 * 1000,
   [ERROR_CATEGORIES.AUTH_ERROR]: 15 * 60 * 1000,
@@ -63,6 +67,10 @@ const SCHEMA_TYPE_CATEGORIES = new Set([
 ]);
 export const isSchemaTypeCategory = (category) => SCHEMA_TYPE_CATEGORIES.has(category);
 
+// Every runner prints the budget it blew the same way: "CLI run timed out
+// after 600000ms". Captured so `benchMsForTimeout` can bench for at least that.
+const TIMEOUT_BUDGET_RE = /timed out after +([0-9]+) *ms/i;
+
 /**
  * True when a failure is specific to the REQUEST or RESPONSE rather than the
  * provider, so benching the provider would take a healthy service offline for
@@ -87,6 +95,34 @@ export function isRequestSpecificCategory(category) {
 }
 
 /**
+ * How long to bench a run that died on its own wall-clock timeout.
+ *
+ * A timeout is the one category whose cost is stated in its own message: the
+ * run consumed the provider’s entire configured budget before failing.
+ * Benching it for less than that budget is self-defeating — the provider
+ * becomes eligible again long before the workload that just stalled could have
+ * finished, so the next caller pays the same full-length stall. Observed on a
+ * pinned local backend whose prompt had outgrown what it could serve: ten
+ * consecutive 600s timeouts, each followed by a 60s bench.
+ *
+ * So take the larger of the category floor and the timeout the failure names,
+ * clamped to {@link MAX_BENCH_MS}. Every runner spells the budget the same way
+ * ("… timed out after 600000ms" — services/runner.js, aiToolkit/runner.js,
+ * lib/cliProviderRun.js); a timeout message with no parsable budget (the TUI
+ * retry-exhaustion form) keeps the plain category floor.
+ *
+ * @param {string|null} message — the failure message
+ * @param {number} floorMs — the category’s table value
+ * @returns {number} milliseconds
+ */
+function benchMsForTimeout(message, floorMs) {
+  const match = typeof message === 'string' ? message.match(TIMEOUT_BUDGET_RE) : null;
+  const budgetMs = match ? Number(match[1]) : NaN;
+  if (!Number.isFinite(budgetMs) || budgetMs <= 0) return floorMs;
+  return Math.min(Math.max(floorMs, budgetMs), MAX_BENCH_MS);
+}
+
+/**
  * Decide how a failed provider should be benched.
  *
  * @param {object|null} analysis — an errorDetection / agentErrorAnalysis payload
@@ -104,11 +140,12 @@ export function resolveProviderBench(analysis) {
   if (category === ERROR_CATEGORIES.USAGE_LIMIT) {
     return { marker: 'usage-limit', category, message, waitTime: analysis?.waitTime ?? null };
   }
+  const floorMs = COOLDOWN_MS_BY_CATEGORY[category] ?? DEFAULT_COOLDOWN_MS;
   return {
     marker: 'unavailable',
     category,
     message,
-    waitTimeMs: COOLDOWN_MS_BY_CATEGORY[category] ?? DEFAULT_COOLDOWN_MS,
+    waitTimeMs: category === ERROR_CATEGORIES.TIMEOUT ? benchMsForTimeout(message, floorMs) : floorMs,
   };
 }
 

@@ -1032,9 +1032,71 @@ describe('promptRunner — retry-with-fallback', () => {
     })).rejects.toThrow('Pinned provider failed');
 
     expect(runner.createRun).toHaveBeenCalledWith(expect.objectContaining({ allowFallback: false }));
-    expect(status.markUnavailable).not.toHaveBeenCalled();
     expect(status.getFallbackProvider).not.toHaveBeenCalled();
     expect(autoFixer.escalateProviderFailure).not.toHaveBeenCalled();
+  });
+
+  // A pin opts out of ROUTING, not out of health reporting. Leaving the mark to
+  // the fallback cascade let a provider fail every pinned call for hours while
+  // the Providers page stayed green and unpinned callers kept choosing it.
+  it('still benches the provider a pinned run failed on', async () => {
+    const status = mockToolkitWithFallback();
+    runner.executeCliRun.mockImplementation(async ({ onComplete }) => {
+      onComplete({ success: false, error: 'CLI run timed out after 600000ms' });
+    });
+
+    await expect(runPromptThroughProvider({
+      provider: primaryCli,
+      prompt: 'p',
+      source: 'test',
+      allowFallback: false,
+    })).rejects.toThrow('CLI run timed out after 600000ms');
+
+    expect(status.markUnavailable).toHaveBeenCalledWith(primaryCli.id, expect.objectContaining({
+      reason: 'timeout',
+      // The bench covers the budget the run actually burned, so the next pinned
+      // wake is refused cheaply instead of stalling for another ten minutes.
+      waitTimeMs: 600000,
+    }));
+  });
+
+  // A usage limit is the one marker a pinned run leaves alone: the caller that
+  // cares (persistentMindSupervisor) calls markProviderUsageLimit for this same
+  // failure, and its observed-block ledger write is deliberately not deduped, so
+  // marking here too would record one block twice.
+  it('leaves a pinned usage-limit failure to the caller that owns the marker', async () => {
+    const status = mockToolkitWithFallback();
+    runner.executeCliRun.mockImplementation(async ({ onComplete }) => {
+      onComplete({ success: false, error: "You've hit your usage limit. Try again in 5 hours" });
+    });
+
+    await expect(runPromptThroughProvider({
+      provider: primaryCli,
+      prompt: 'p',
+      source: 'test',
+      allowFallback: false,
+    })).rejects.toThrow(/usage limit/);
+
+    expect(status.markUsageLimit).not.toHaveBeenCalled();
+    expect(status.markUnavailable).not.toHaveBeenCalled();
+  });
+
+  // Request-specific categories resolve to "don't bench" in providerCooldown, so
+  // a pinned caller's bad prompt can't take a healthy provider offline.
+  it('does not bench a pinned run that failed for a request-specific reason', async () => {
+    const status = mockToolkitWithFallback();
+    runner.executeCliRun.mockImplementation(async ({ onComplete }) => {
+      onComplete({ success: false, error: 'model not found: bogus-model' });
+    });
+
+    await expect(runPromptThroughProvider({
+      provider: primaryCli,
+      prompt: 'p',
+      source: 'test',
+      allowFallback: false,
+    })).rejects.toThrow(/model not found/);
+
+    expect(status.markUnavailable).not.toHaveBeenCalled();
   });
 
   it('does not retry, bench, or escalate a canceled TUI run', async () => {
