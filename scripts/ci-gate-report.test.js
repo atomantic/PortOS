@@ -86,6 +86,17 @@ describe('summarizeGateResults', () => {
     expect(summary.lines).toContain('Failed jobs: server=unknown');
   });
 
+  it('accepts a skipped job by default, but never under requireSuccess', () => {
+    // A per-job `skipped` is the impact plan working as designed, so the
+    // aggregate gate passes on it. `Full CI Gate` must not: a release skips
+    // the complete suite on the strength of that check.
+    expect(summarizeGateResults(results({ gate: 'skipped' })).verdict).toBe('pass');
+
+    const strict = summarizeGateResults(results({ gate: 'skipped' }), 'Full CI Gate', true);
+    expect(strict.verdict).toBe('failure');
+    expect(strict.lines).toContain('Failed jobs: gate=skipped');
+  });
+
   it('uses the supplied gate label so the two gates are distinguishable', () => {
     const summary = summarizeGateResults(results({ gate: 'cancelled' }), 'Full CI Gate');
     expect(summary.lines[0]).toContain('Full CI Gate');
@@ -105,6 +116,15 @@ describe('reportGate', () => {
       writeSummary: (markdown) => summaries.push(markdown),
     };
   };
+
+  it('turns CI_GATE_REQUIRE_SUCCESS on for the strict gate', () => {
+    const { ...sinks } = capture();
+    expect(reportGate({
+      env: { CI_GATE_RESULT_GATE: 'skipped', CI_GATE_REQUIRE_SUCCESS: 'true' }, ...sinks,
+    })).toMatchObject({ verdict: 'failure', ok: false });
+    expect(reportGate({ env: { CI_GATE_RESULT_GATE: 'skipped' }, ...sinks }))
+      .toMatchObject({ verdict: 'pass', ok: true });
+  });
 
   it('writes a pass to stdout and reports ok', () => {
     const { logged, errored, ...sinks } = capture();
@@ -146,6 +166,11 @@ describe('ci.yml gate wiring', () => {
     // checkout on the fan-in job every required check waits on is ~12x the
     // download for nothing.
     expect(jobs[id]).toContain('sparse-checkout: scripts');
+  });
+
+  it('runs the full gate in strict mode and the aggregate gate not', () => {
+    expect(jobs['full-gate']).toContain("CI_GATE_REQUIRE_SUCCESS: 'true'");
+    expect(jobs.gate).not.toContain('CI_GATE_REQUIRE_SUCCESS');
   });
 
   it('feeds the aggregate gate every job it waits on', () => {

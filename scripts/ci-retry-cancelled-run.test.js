@@ -31,6 +31,7 @@ const BASE_ENV = {
   CI_RUN_EVENT: 'pull_request',
   CI_RUN_CONCLUSION: 'cancelled',
   CI_RUN_HEAD_BRANCH: 'claim/issue-1',
+  CI_RUN_HEAD_REPOSITORY_ID: '555',
   CI_RUN_HEAD_SHA: 'c'.repeat(40),
 };
 
@@ -45,7 +46,12 @@ function stubFetch({ jobs = [], runs = [], rerunStatus = 201 } = {}) {
   const impl = vi.fn(async (url, init = {}) => {
     calls.push({ url, method: init.method || 'GET' });
     if (url.includes('/jobs?')) return json({ total_count: jobs.length, jobs });
-    if (url.includes('/runs?')) return json({ total_count: runs.length, workflow_runs: runs });
+    if (url.includes('/runs?')) {
+      return json({
+        total_count: runs.length,
+        workflow_runs: runs.map((r) => ({ head_repository: { id: 555 }, ...r })),
+      });
+    }
     if (url.endsWith('/rerun')) return { ok: rerunStatus < 300, status: rerunStatus };
     throw new Error(`unexpected url ${url}`);
   });
@@ -114,6 +120,72 @@ describe('retryCancelledCiRun guards', () => {
       expect(fetchStub.rerunRequested()).toBe(false);
     },
   );
+
+  it('retries a job whose STEP failed but whose conclusion reads cancelled', async () => {
+    // The fail-fast self-cancel can land while the failing job is still in its
+    // post-steps, and GitHub then records that job as `cancelled`. Trusting the
+    // job conclusion alone would re-run a genuinely red tree.
+    const fetchStub = stubFetch({
+      jobs: [{
+        name: 'Server tests',
+        conclusion: 'cancelled',
+        steps: [{ conclusion: 'success' }, { conclusion: 'failure' }],
+      }],
+    });
+    await expect(run(BASE_ENV, fetchStub))
+      .resolves.toMatchObject({ outcome: 'skipped', reason: 'job-failed' });
+    expect(fetchStub.rerunRequested()).toBe(false);
+  });
+
+  it('is not suppressed by an OLDER sibling run', async () => {
+    // The supersession guard must compare, not merely detect a sibling.
+    const fetchStub = stubFetch({ runs: [{ id: 4000, run_number: 899 }, { id: 4242, run_number: 900 }] });
+    await expect(run(BASE_ENV, fetchStub)).resolves.toMatchObject({ outcome: 'requested' });
+  });
+
+  it('is not suppressed by a same-named branch on a different fork', async () => {
+    // `?branch=` matches head_branch alone, so two forks pushing `patch-1`
+    // share a listing. Only a missed retry, but it is avoidable.
+    const fetchStub = stubFetch({
+      runs: [{ id: 9001, run_number: 950, head_repository: { id: 999 } }],
+    });
+    await expect(run(BASE_ENV, fetchStub)).resolves.toMatchObject({ outcome: 'requested' });
+  });
+
+  it('reads a job listing that spans two pages before deciding', async () => {
+    // A failing job on page 2 must still block the retry.
+    const pages = {
+      1: { total_count: 2, jobs: [{ name: 'Client', conclusion: 'cancelled' }] },
+      2: { total_count: 2, jobs: [{ name: 'Server tests', conclusion: 'failure' }] },
+    };
+    const impl = vi.fn(async (url) => {
+      if (url.includes('/jobs?')) return json(pages[new URL(url).searchParams.get('page')]);
+      return json({ workflow_runs: [] });
+    });
+    await expect(retryCancelledCiRun({
+      env: BASE_ENV, fetchImpl: impl, logger: silent, writeSummary: noSummary,
+    })).resolves.toMatchObject({ outcome: 'skipped', reason: 'job-failed' });
+  });
+
+  it('never lets a pull-request job name forge an Actions workflow command', async () => {
+    // `job.name` comes from the PR's own workflow file, and Actions parses a
+    // line starting with `::` as a command.
+    const logged = [];
+    const fetchStub = stubFetch({
+      jobs: [{ name: 'Server\n::add-mask::secret', conclusion: 'failure' }],
+    });
+    await retryCancelledCiRun({
+      env: BASE_ENV,
+      fetchImpl: fetchStub.impl,
+      logger: { log: (l) => logged.push(l), error: (l) => logged.push(l) },
+      writeSummary: noSummary,
+    });
+
+    const text = logged.join('\n');
+    expect(text).toContain('Server');
+    expect(text).not.toContain('::add-mask::');
+    expect(text.split('\n').some((line) => line.startsWith('::'))).toBe(false);
+  });
 
   it.each([
     ['a run that did not end cancelled', { CI_RUN_CONCLUSION: 'failure' }, 'not-cancelled'],
@@ -220,7 +292,8 @@ describe('ci-cancel-recovery.yml wiring', () => {
 
   it('passes the run identity the script validates', () => {
     for (const key of ['CI_RUN_ID', 'CI_RUN_ATTEMPT', 'CI_RUN_NUMBER', 'CI_WORKFLOW_ID',
-      'CI_RUN_EVENT', 'CI_RUN_CONCLUSION', 'CI_RUN_HEAD_BRANCH', 'CI_RUN_HEAD_SHA']) {
+      'CI_RUN_EVENT', 'CI_RUN_CONCLUSION', 'CI_RUN_HEAD_BRANCH', 'CI_RUN_HEAD_REPOSITORY_ID',
+      'CI_RUN_HEAD_SHA']) {
       expect(jobs.retry, key).toContain(`${key}: \${{ github.event.workflow_run.`);
     }
   });

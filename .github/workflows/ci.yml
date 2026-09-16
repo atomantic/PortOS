@@ -741,5 +741,10 @@ jobs:
       - name: Require the aggregate gate to have passed
         env:
           CI_GATE_LABEL: Full CI Gate
+          # Strict: a `skipped` gate must not satisfy this one. Unlike the
+          # aggregate gate, whose per-job `skipped` is the impact plan doing
+          # its job, this check is what lets release.yml skip re-running the
+          # complete suite (scripts/verify-ci-status.js).
+          CI_GATE_REQUIRE_SUCCESS: 'true'
           CI_GATE_RESULT_GATE: ${{ needs.gate.result }}
         run: node scripts/ci-gate-report.js

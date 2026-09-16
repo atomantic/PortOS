@@ -31,7 +31,7 @@
  */
 
 import { isDirectlyInvoked } from './lib/directInvocation.js';
-import { githubRequest, isSuccess, repoApiPath } from './lib/githubActionsApi.js';
+import { githubRequest, isSuccess, repoApiPath, trimmed } from './lib/githubActionsApi.js';
 import { writeStepSummary } from './lib/githubOutput.js';
 
 const REQUEST_TIMEOUT_MS = 15_000;
@@ -40,8 +40,30 @@ const MAX_JOB_PAGES = 15;
 const JOBS_PER_PAGE = 100;
 /** Newest-first; a successor, if one exists, is within the first few. */
 const SIBLING_RUNS_PER_PAGE = 5;
-/** A job conclusion that means something really broke, not that it was stopped. */
+/** A conclusion that means something really broke, not that it was stopped. */
 const FAILING_CONCLUSIONS = new Set(['failure', 'timed_out']);
+
+/**
+ * True when this job carries a real failure.
+ *
+ * The job's own conclusion is not enough. `cancel-current-ci-run.js` cancels
+ * the RUN from inside the failing job, and the cancel can land while that job
+ * is still finishing its post-steps — GitHub then records the job as
+ * `cancelled` even though one of its steps failed. Reading the steps too is
+ * what keeps this guard failing CLOSED, which is the whole point of it.
+ */
+const jobFailed = (job) => FAILING_CONCLUSIONS.has(job?.conclusion)
+  || (Array.isArray(job?.steps) && job.steps.some((step) => FAILING_CONCLUSIONS.has(step?.conclusion)));
+
+/**
+ * A job name for a log line. The name comes from the pull request's own
+ * workflow file, and Actions parses `::` at the start of a line as a workflow
+ * command — so newlines and `::` never reach stdout verbatim.
+ */
+const safeJobName = (job) => String(job?.name || 'unnamed job')
+  .replace(/[\r\n]+/g, ' ')
+  .replace(/::/g, ':')
+  .slice(0, 80);
 
 /**
  * Validate and normalise the run this invocation may retry.
@@ -54,13 +76,16 @@ const FAILING_CONCLUSIONS = new Set(['failure', 'timed_out']);
  * @returns {object|null}
  */
 export function retryTargetFromEnv(env) {
-  const str = (key) => (typeof env[key] === 'string' ? env[key].trim() : '');
+  const str = (key) => trimmed(env[key]);
   const token = str('GITHUB_TOKEN');
   const runId = str('CI_RUN_ID');
   const runAttempt = str('CI_RUN_ATTEMPT');
   const runNumber = str('CI_RUN_NUMBER');
   const workflowId = str('CI_WORKFLOW_ID');
   const headBranch = str('CI_RUN_HEAD_BRANCH');
+  // Optional: absent on an older payload, so it narrows the sibling lookup
+  // when present rather than invalidating the target when it is not.
+  const headRepositoryId = str('CI_RUN_HEAD_REPOSITORY_ID');
   const repoPath = repoApiPath(env);
 
   if (!repoPath || !token || !headBranch) return null;
@@ -74,6 +99,7 @@ export function retryTargetFromEnv(env) {
     runNumber: Number(runNumber),
     workflowId,
     headBranch,
+    headRepositoryId: /^\d+$/.test(headRepositoryId) ? headRepositoryId : '',
     headSha: str('CI_RUN_HEAD_SHA'),
     conclusion: str('CI_RUN_CONCLUSION'),
     event: str('CI_RUN_EVENT'),
@@ -132,6 +158,11 @@ async function fetchNewestSiblingRunNumber(fetchImpl, target, logger) {
   if (!body || !Array.isArray(body.workflow_runs)) return null;
   return body.workflow_runs
     .filter((run) => String(run?.id) !== target.runId)
+    // `branch=` matches head_branch alone, so two forks pushing `patch-1`
+    // land in the same listing and one would read as the other's successor.
+    // Only a missed retry, but the numeric repository id rules it out.
+    .filter((run) => !target.headRepositoryId
+      || String(run?.head_repository?.id ?? target.headRepositoryId) === target.headRepositoryId)
     .reduce((newest, run) => Math.max(newest, Number(run?.run_number) || 0), 0);
 }
 
@@ -193,9 +224,7 @@ export async function retryCancelledCiRun({
     return done('error', `⚠️ CI retry skipped: could not list the jobs of run ${target.runId}`,
       { outcome: 'unavailable', reason: 'jobs-unavailable' });
   }
-  const failedJobs = jobs
-    .filter((job) => FAILING_CONCLUSIONS.has(job?.conclusion))
-    .map((job) => job?.name || 'unnamed job');
+  const failedJobs = jobs.filter(jobFailed).map(safeJobName);
   if (failedJobs.length) {
     return done('log', `ℹ️ CI retry skipped: run ${target.runId} cancelled after a real failure (${failedJobs.join(', ')})`,
       { outcome: 'skipped', reason: 'job-failed' });

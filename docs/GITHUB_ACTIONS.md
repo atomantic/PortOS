@@ -331,10 +331,11 @@ own.
 ### Shallow checkouts
 
 No job clones full history. `actions/checkout` runs at `fetch-depth: 2`
-in every job that diffs against the base — the two gate jobs use `fetch-depth:
-1`, because they check out only to run `scripts/ci-gate-report.js` and never
-look at history. Depth 2 on a pull request is the merge ref plus both of its
-parents — and the
+in every job that diffs against the base. The two gate jobs set no depth at all
+(the action's own default is 1) and pass `sparse-checkout: scripts` instead:
+they check out only to run `scripts/ci-gate-report.js`, never look at history,
+and sparse mode makes the action fetch with `--filter=blob:none`. Depth 2 on a
+pull request is the merge ref plus both of its parents — and the
 first parent *is* the base-branch commit the pull request is diffed against.
 `scripts/ci-base-sha.js` reads it (`HEAD^1`) and exports `CI_BASE_SHA` for the
 rest of the job, so the planner's `git diff <base>...HEAD` resolves without

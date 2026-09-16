@@ -16,7 +16,8 @@ const PUBLIC_API_BASE = 'https://api.github.com';
 const REPOSITORY_PATTERN = /^[^/\s]+\/[^/\s]+$/;
 const DEFAULT_TIMEOUT_MS = 10_000;
 
-const trimmed = (value) => (typeof value === 'string' ? value.trim() : '');
+/** `String#trim` that tolerates a missing or non-string env value. */
+export const trimmed = (value) => (typeof value === 'string' ? value.trim() : '');
 
 /**
  * The API origin to send the token to, or null to send it nowhere.
@@ -32,8 +33,17 @@ const trimmed = (value) => (typeof value === 'string' ? value.trim() : '');
 export function resolveApiBase(configuredApiUrl) {
   const raw = trimmed(configuredApiUrl);
   if (!raw) return PUBLIC_API_BASE;
-  const parsed = URL.parse(raw);
-  if (!parsed || parsed.protocol !== 'https:' || parsed.username || parsed.password
+  // `new URL` in try/catch rather than the tidier `URL.parse`: that landed in
+  // Node 22.1, and the recovery workflow deliberately runs on the runner image's
+  // DEFAULT node with no setup-node. A TypeError here would take out every
+  // recovery run on an older image instead of returning null.
+  let parsed;
+  try {
+    parsed = new URL(raw);
+  } catch {
+    return null;
+  }
+  if (parsed.protocol !== 'https:' || parsed.username || parsed.password
     || parsed.search || parsed.hash) {
     return null;
   }

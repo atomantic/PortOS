@@ -34,6 +34,13 @@ import { writeStepSummary } from './lib/githubOutput.js';
 const RESULT_ENV_PREFIX = 'CI_GATE_RESULT_';
 /** GitHub's `needs.<job>.result` values that do not block the gate. */
 const PASSING_RESULTS = new Set(['success', 'skipped']);
+/**
+ * `Full CI Gate` sets `CI_GATE_REQUIRE_SUCCESS`, because a `skipped` input
+ * must NOT satisfy it. `scripts/verify-ci-status.js` lets a release skip the
+ * complete suite on the strength of that check, so accepting anything short of
+ * `success` there would ship an untested tree.
+ */
+const STRICT_PASSING_RESULTS = new Set(['success']);
 const DEFAULT_LABEL = 'CI Gate';
 const TROUBLESHOOTING_ANCHOR = '"CI cancelled with no successor run" in docs/TROUBLESHOOTING.md';
 
@@ -65,17 +72,19 @@ export function collectGateResults(env = process.env) {
  *
  * @param {Array<{job: string, result: string}>} results
  * @param {string} [label] - The gate's display name, for the message.
+ * @param {boolean} [requireSuccess] - when true, `skipped` does not pass
  * @returns {{verdict: 'pass'|'cancelled'|'failure', lines: string[]}}
  */
-export function summarizeGateResults(results, label = DEFAULT_LABEL) {
-  const passed = results.filter(({ result }) => PASSING_RESULTS.has(result));
+export function summarizeGateResults(results, label = DEFAULT_LABEL, requireSuccess = false) {
+  const passing = requireSuccess ? STRICT_PASSING_RESULTS : PASSING_RESULTS;
+  const passed = results.filter(({ result }) => passing.has(result));
   const cancelled = results.filter(({ result }) => result === 'cancelled').map(({ job }) => job);
   // Anything neither passing nor cancelled is a failure — `failure`, and also
   // the `unknown` above. Defaulting an unrecognised result to "failed" is the
   // safe direction: it blocks with a loud message instead of being waved
   // through as collateral of a cancel.
   const failed = results
-    .filter(({ result }) => !PASSING_RESULTS.has(result) && result !== 'cancelled')
+    .filter(({ result }) => !passing.has(result) && result !== 'cancelled')
     .map(pair);
   const finished = () => (passed.length
     ? `Jobs that finished: ${passed.map(pair).join(', ')}`
@@ -132,7 +141,11 @@ export function reportGate({
   writeSummary = writeStepSummary,
 } = {}) {
   const label = env.CI_GATE_LABEL?.trim() || DEFAULT_LABEL;
-  const { verdict, lines } = summarizeGateResults(collectGateResults(env), label);
+  const { verdict, lines } = summarizeGateResults(
+    collectGateResults(env),
+    label,
+    env.CI_GATE_REQUIRE_SUCCESS === 'true',
+  );
   const ok = verdict === 'pass';
 
   for (const line of lines) (ok ? logger.log : logger.error)?.call(logger, line);

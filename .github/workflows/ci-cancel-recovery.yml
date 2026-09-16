@@ -61,5 +61,6 @@ jobs:
           CI_RUN_EVENT: ${{ github.event.workflow_run.event }}
           CI_RUN_CONCLUSION: ${{ github.event.workflow_run.conclusion }}
           CI_RUN_HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
+          CI_RUN_HEAD_REPOSITORY_ID: ${{ github.event.workflow_run.head_repository.id }}
           CI_RUN_HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
         run: node scripts/ci-retry-cancelled-run.js
