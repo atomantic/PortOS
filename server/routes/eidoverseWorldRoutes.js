@@ -19,8 +19,10 @@ import {
   getEidoverseFoundation,
   listEidoverseFoundations,
   packageEidoverseFoundationCandidate,
+  promoteEidoverseFoundation,
   recordEidoverseFoundation,
 } from '../services/eidoverseFoundationLedger.js';
+import { listRegisteredContributionIds } from '../services/eidoverseResilienceContributions.js';
 import { ensureInstanceId } from '../services/instanceIdentity.js';
 import {
   augmentEidoverseWorld,
@@ -93,6 +95,13 @@ router.get('/foundations', asyncHandler(async (_req, res) => {
   res.json(await listEidoverseFoundations());
 }));
 
+// GET /api/eidoverse/world/contributions — the resilience-assay contributions
+// a foundation may bind itself to. Its own path rather than a
+// `/foundations/<something>` one, so no foundation id can ever shadow it.
+router.get('/contributions', asyncHandler(async (_req, res) => {
+  res.json({ contributions: await listRegisteredContributionIds() });
+}));
+
 // POST /api/eidoverse/world/foundations — record (or re-author) a local
 // vernacular foundation. The ownership layer is not accepted from the caller:
 // anything authored here is this install's own until it is promoted.
@@ -111,6 +120,17 @@ router.post('/foundations', asyncHandler(async (req, res) => {
 router.post('/foundations/:id/candidate', asyncHandler(async (req, res) => {
   const { id } = validateRequest(eidoverseFoundationIdParamSchema, req.params || {});
   const result = await packageEidoverseFoundationCandidate(id);
+  if (result.outcome === 'unknown-foundation') throw new ServerError('Foundation not found', { status: 404 });
+  res.json(result);
+}));
+
+// POST /api/eidoverse/world/foundations/:id/promote — publish the foundation
+// into this install's shared baseline population. Packages first and promotes
+// the candidate it just produced, so promotion never rests on a stored verdict.
+// Like the candidate endpoint, a refusal is a 200 carrying its reasons.
+router.post('/foundations/:id/promote', asyncHandler(async (req, res) => {
+  const { id } = validateRequest(eidoverseFoundationIdParamSchema, req.params || {});
+  const result = await promoteEidoverseFoundation(id);
   if (result.outcome === 'unknown-foundation') throw new ServerError('Foundation not found', { status: 404 });
   res.json(result);
 }));

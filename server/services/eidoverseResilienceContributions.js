@@ -69,3 +69,22 @@ export async function findContributionById(contributionId) {
   }
   return null;
 }
+
+/**
+ * The id of every registered contribution, in stable order.
+ *
+ * A foundation is promotable only once it names a contribution the assay can
+ * replay, so the authoring surfaces (the Eidoverse promote panel, a mind
+ * deciding what to package) need the real list rather than a free-text field
+ * that only reports its mistake at the promote gate. Ids only — module paths
+ * stay behind this resolver, both because a caller must never hand one back as
+ * a path and because a filesystem path is not something a UI or a prompt needs.
+ */
+export async function listRegisteredContributionIds() {
+  const ids = [];
+  for (const modulePath of await listContributionModulePaths()) {
+    const contribution = await loadContributionModule(modulePath);
+    if (typeof contribution?.id === 'string' && contribution.id) ids.push(contribution.id);
+  }
+  return ids;
+}

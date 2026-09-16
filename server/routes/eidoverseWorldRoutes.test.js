@@ -7,6 +7,8 @@ const mocks = vi.hoisted(() => ({
   augment: vi.fn(),
   listFoundations: vi.fn(),
   packageCandidate: vi.fn(),
+  promoteFoundation: vi.fn(),
+  listContributions: vi.fn(),
   recordFoundation: vi.fn(),
   getFoundation: vi.fn(),
   ensurePresence: vi.fn(),
@@ -31,7 +33,12 @@ vi.mock('../services/eidoverseFoundationLedger.js', () => ({
   getEidoverseFoundation: mocks.getFoundation,
   listEidoverseFoundations: mocks.listFoundations,
   packageEidoverseFoundationCandidate: mocks.packageCandidate,
+  promoteEidoverseFoundation: mocks.promoteFoundation,
   recordEidoverseFoundation: mocks.recordFoundation,
+}));
+
+vi.mock('../services/eidoverseResilienceContributions.js', () => ({
+  listRegisteredContributionIds: mocks.listContributions,
 }));
 
 vi.mock('../services/instanceIdentity.js', () => ({ ensureInstanceId: () => Promise.resolve('instance-aaaa') }));
@@ -196,11 +203,38 @@ describe('Eidoverse world routes', () => {
 
   it('404s a promote or read for a foundation this install never authored', async () => {
     mocks.packageCandidate.mockResolvedValue({ outcome: 'unknown-foundation', candidate: null, assay: null, reasons: ['no foundation'], findings: [] });
+    mocks.promoteFoundation.mockResolvedValue({ outcome: 'unknown-foundation', promoted: false, foundation: null, candidate: null, assay: null, reasons: ['no foundation'], findings: [] });
     mocks.getFoundation.mockResolvedValue(null);
 
     expect((await request(makeApp()).post('/api/eidoverse/world/foundations/tide-beacon/candidate')).status).toBe(404);
+    expect((await request(makeApp()).post('/api/eidoverse/world/foundations/tide-beacon/promote')).status).toBe(404);
     expect((await request(makeApp()).get('/api/eidoverse/world/foundations/tide-beacon')).status).toBe(404);
     // A path that could never be an id must not reach the service at all.
     expect((await request(makeApp()).get('/api/eidoverse/world/foundations/Not An Id')).status).toBe(400);
+  });
+it('reports a promote refusal as a verdict and never moves the layer itself', async () => {
+    mocks.promoteFoundation.mockResolvedValue({
+      outcome: 'refused', promoted: false, foundation: null, candidate: null, assay: { pass: true },
+      reasons: ['already part of the shared baseline'], findings: [],
+    });
+
+    const response = await request(makeApp()).post('/api/eidoverse/world/foundations/tide-beacon/promote');
+
+    expect(response.status).toBe(200);
+    expect(response.body).toMatchObject({ outcome: 'refused', promoted: false });
+    // The route delegates the decision whole — it must not read the id and
+    // flip a layer of its own, which would bypass every gate in the service.
+    expect(mocks.promoteFoundation).toHaveBeenCalledWith('tide-beacon');
+  });
+
+  it('serves the registered assay contributions on their own path, where no foundation id can shadow them', async () => {
+    mocks.listContributions.mockResolvedValue(['beacon-relay-demo']);
+    mocks.getFoundation.mockResolvedValue(null);
+
+    const response = await request(makeApp()).get('/api/eidoverse/world/contributions');
+
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual({ contributions: ['beacon-relay-demo'] });
+    expect(mocks.getFoundation).not.toHaveBeenCalled();
   });
 });

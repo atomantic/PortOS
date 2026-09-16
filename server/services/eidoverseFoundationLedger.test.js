@@ -17,6 +17,7 @@ const {
   getEidoverseFoundation,
   listEidoverseFoundations,
   packageEidoverseFoundationCandidate,
+  promoteEidoverseFoundation,
   recordEidoverseFoundation,
 } = await import('./eidoverseFoundationLedger.js');
 
@@ -107,5 +108,63 @@ describe('packaging a promote candidate', () => {
 
   it('reports an unknown foundation instead of inventing one', async () => {
     expect((await packageEidoverseFoundationCandidate('never-authored')).outcome).toBe('unknown-foundation');
+  });
+});
+
+describe('promoting a foundation into the shared baseline', () => {
+  it('publishes a foundation that clears every gate and counts it as baseline', async () => {
+    await record({}, '2026-03-04T05:06:07.000Z');
+
+    const result = await promoteEidoverseFoundation('tide-beacon', { now: '2026-03-04T06:00:00.000Z' });
+
+    expect(result).toMatchObject({ outcome: 'promoted', promoted: true });
+    expect(result.foundation).toMatchObject({ layer: 'baseline', promotedAt: '2026-03-04T06:00:00.000Z' });
+    // The style layer stays on the LOCAL record; only the envelope crosses, and
+    // it has no style at all.
+    expect(result.foundation.style).toEqual({ motif: 'weathered brass' });
+    expect(JSON.stringify(result.candidate)).not.toContain('weathered brass');
+
+    const listed = await listEidoverseFoundations();
+    expect(listed.counts).toMatchObject({ vernacular: 0, baseline: 1 });
+  });
+
+  it('refuses to promote a foundation whose assay cannot be run, and moves nothing', async () => {
+    await record({ contributionId: 'not-registered-anywhere' });
+
+    const result = await promoteEidoverseFoundation('tide-beacon');
+
+    expect(result).toMatchObject({ outcome: 'refused', promoted: false, foundation: null });
+    expect(result.reasons[0]).toContain('not-registered-anywhere');
+    expect((await getEidoverseFoundation('tide-beacon')).layer).toBe('vernacular');
+  });
+
+  it('refuses a second promote instead of re-publishing what is already shared', async () => {
+    await record({}, '2026-03-04T05:06:07.000Z');
+    await promoteEidoverseFoundation('tide-beacon', { now: '2026-03-04T06:00:00.000Z' });
+
+    const again = await promoteEidoverseFoundation('tide-beacon', { now: '2026-03-04T07:00:00.000Z' });
+
+    expect(again.outcome).toBe('refused');
+    expect(again.reasons[0]).toContain('already part of the shared baseline');
+    // The refusal must not roll back what was published, or a double-click
+    // would silently unshare a foundation.
+    expect((await getEidoverseFoundation('tide-beacon'))).toMatchObject({ layer: 'baseline', promotedAt: '2026-03-04T06:00:00.000Z' });
+  });
+
+  it('returns a re-authored baseline foundation to local work so the new body can be promoted', async () => {
+    await record({}, '2026-03-04T05:06:07.000Z');
+    await promoteEidoverseFoundation('tide-beacon', { now: '2026-03-04T06:00:00.000Z' });
+
+    await record({ summary: 'Now it also rings a bell.' }, '2026-03-04T07:00:00.000Z');
+
+    // Still claiming `baseline` would describe bytes this install no longer
+    // has, AND would be a dead end: the promote gate refuses to package a
+    // baseline foundation, so the edit could never be published.
+    expect(await getEidoverseFoundation('tide-beacon')).toMatchObject({ layer: 'vernacular', promotedAt: null });
+    expect((await promoteEidoverseFoundation('tide-beacon', { now: '2026-03-04T08:00:00.000Z' })).outcome).toBe('promoted');
+  });
+
+  it('reports an unknown foundation instead of inventing one', async () => {
+    expect((await promoteEidoverseFoundation('never-authored')).outcome).toBe('unknown-foundation');
   });
 });

@@ -38,7 +38,7 @@ const githubTarget = { forge: 'github', repoSpec: 'github.com/example/demo', api
 const setCapabilities = (capabilities) => {
   mocks.root = {
     config: {
-      persistentMindCapabilities: { schemaVersion: 10, ...capabilities },
+      persistentMindCapabilities: { schemaVersion: 11, ...capabilities },
       persistentMindProfile: { enabled: true, providerId: 'ollama', model: 'claude-opus-5' },
     },
   };

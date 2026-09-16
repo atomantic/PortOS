@@ -95,6 +95,14 @@ export async function getEidoverseFoundation(id) {
  * candidate and the recorded assay, because both described the previous body.
  * Carrying a passing verdict across an edit is exactly the "it worked when I
  * narrated it" claim the agent-free harness exists to refuse.
+ *
+ * For the same reason a re-authored `baseline` foundation drops back to
+ * `vernacular` with `promotedAt` cleared: the body that was promoted no longer
+ * exists on this install, so a record still claiming to be part of the shared
+ * baseline would be describing bytes nobody has. It is local work again until
+ * somebody promotes the new body. (Keeping the `baseline` stamp instead would
+ * also be a dead end — `layerPromoteRefusal` refuses to package a `baseline`
+ * foundation, so the edit could never be published.)
  */
 export async function recordEidoverseFoundation(input, { originInstanceId, now = new Date().toISOString() } = {}) {
   const authored = eidoverseFoundationInputSchema.parse(input);
@@ -103,7 +111,7 @@ export async function recordEidoverseFoundation(input, { originInstanceId, now =
     const existing = foundations[authored.id] || null;
     const record = {
       id: authored.id,
-      layer: existing?.layer === 'baseline' ? 'baseline' : DEFAULT_EIDOVERSE_FOUNDATION_LAYER,
+      layer: DEFAULT_EIDOVERSE_FOUNDATION_LAYER,
       kind: authored.kind,
       title: authored.title,
       summary: authored.summary,
@@ -114,7 +122,7 @@ export async function recordEidoverseFoundation(input, { originInstanceId, now =
       disclosure: authored.disclosure,
       assay: null,
       candidate: null,
-      promotedAt: existing?.promotedAt ?? null,
+      promotedAt: null,
       updatedAt: now,
     };
     foundations[authored.id] = record;
@@ -177,5 +185,51 @@ export async function packageEidoverseFoundationCandidate(id, { now = new Date()
     foundations[id] = { ...current, assay, candidate: result.candidate };
     await writeFoundations(foundations);
     return { ...result, assay };
+  });
+}
+
+/**
+ * Promote a packaged foundation into this install's shared baseline population.
+ *
+ * Promotion re-packages first and publishes the candidate it just produced, so
+ * it can never rest on a stored verdict: every gate — ownership, the agent-free
+ * assay, the style-leak scan, federation safety, the content-addressed
+ * fingerprint — is re-run against the body as it stands right now. A refusal is
+ * a RESULT with its reasons, exactly as packaging is; nothing moves layer.
+ *
+ * What `baseline` means today is "this install offers this foundation to the
+ * shared population": the receiving side (a peer pulling and inheriting it) is
+ * still to come, and when it lands this flag is the set it serves from. The
+ * promoted record keeps its `style` locally — only the candidate envelope,
+ * which has no style layer at all, is ever authorized to cross.
+ *
+ * @returns {Promise<{ outcome: 'promoted'|'refused'|'unknown-foundation', promoted: boolean, foundation: object|null, candidate: object|null, assay: object|null, reasons: string[], findings: Array }>}
+ */
+export async function promoteEidoverseFoundation(id, { now = new Date().toISOString() } = {}) {
+  const packaged = await packageEidoverseFoundationCandidate(id, { now });
+  if (packaged.outcome !== 'packaged') return { ...packaged, promoted: false, foundation: null };
+
+  return withLedgerLock(async () => {
+    const foundations = await readFoundations();
+    const current = foundations[id];
+    if (!current) return { ...unknownFoundation(id), promoted: false, foundation: null };
+    // Packaging released the ledger lock before this one was taken, so an
+    // author (or a mind) could have re-authored the body in the gap — which
+    // clears the candidate. Publishing then would ship bytes nobody gated.
+    if (current.candidate?.fingerprint !== packaged.candidate.fingerprint) {
+      return {
+        outcome: 'refused',
+        promoted: false,
+        foundation: null,
+        candidate: null,
+        assay: packaged.assay,
+        reasons: ['the foundation was re-authored while it was being packaged — promote it again'],
+        findings: [],
+      };
+    }
+    const foundation = { ...current, layer: 'baseline', promotedAt: now };
+    foundations[id] = foundation;
+    await writeFoundations(foundations);
+    return { ...packaged, outcome: 'promoted', promoted: true, foundation };
   });
 }

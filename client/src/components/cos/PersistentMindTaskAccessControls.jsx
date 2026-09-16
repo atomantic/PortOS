@@ -3,13 +3,14 @@ import * as api from '../../services/api';
 import toast from '../ui/Toast';
 
 const normalizeCapabilities = (value) => ({
-  schemaVersion: 10,
+  schemaVersion: 11,
   createTasks: value?.createTasks === true,
   fileIssues: value?.fileIssues === true,
   manageMind: value?.manageMind === true,
   manageToolRecipes: value?.manageToolRecipes === true,
   manageEidoverse: value?.manageEidoverse === true,
   visitEidoversePeers: value?.visitEidoversePeers === true,
+  promoteEidoverseFoundations: value?.promoteEidoverseFoundations === true,
   callUser: value?.callUser === true,
   adjustLocalContext: value?.adjustLocalContext === true,
   readPortos: value?.readPortos === true,
@@ -56,6 +57,11 @@ const OPTIONS = [
     key: 'manageEidoverse',
     label: 'Allow private Eidoverse world management',
     hint: 'Lets the mind project PortOS resources, apply bounded world-building and role operations, and speak as the persistent CoS identity. This does not grant generic PortOS record writes.',
+  },
+  {
+    key: 'promoteEidoverseFoundations',
+    label: 'Allow promoting Eidoverse foundations to the shared baseline',
+    hint: 'Lets the mind offer a world foundation this install authored to the shared PortOS baseline, so peers can inherit the substance without your style layer. Separate from world management on purpose: building locally never implies publishing. The server re-runs the agent-free resilience assay itself and refuses a payload carrying machine identity, PII, or credentials.',
   },
   {
     key: 'manageMind',

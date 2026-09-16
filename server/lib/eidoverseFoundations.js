@@ -430,3 +430,37 @@ export function verifyFoundationCandidate(candidate, { requiredDisturbances }) {
 
   return { valid: reasons.length === 0, reasons, findings };
 }
+
+// ---------------------------------------------------------------------------
+// Projection
+// ---------------------------------------------------------------------------
+
+/**
+ * A ledger record reduced to what a MODEL needs to reason about promotion.
+ *
+ * The full record carries `style`, the whole `body`, and the last candidate
+ * envelope — kilobytes of install-local cosmetics and duplicated substance that
+ * would ride into every prompt turn for no decision value. This keeps the
+ * ownership layer, the identity, the assay outcome and whether a gated
+ * candidate currently exists, which is exactly what "can I promote this, and if
+ * not why" needs. `style` is omitted rather than trimmed: a mind that never
+ * sees the cosmetics cannot narrate them into a promote body.
+ */
+export function summarizeFoundation(record) {
+  return {
+    id: record?.id ?? null,
+    layer: record?.layer ?? null,
+    kind: record?.kind ?? null,
+    title: record?.title ?? null,
+    summary: record?.summary ?? null,
+    contributionId: record?.contributionId ?? null,
+    promotedAt: record?.promotedAt ?? null,
+    updatedAt: record?.updatedAt ?? null,
+    hasCandidate: Boolean(record?.candidate),
+    // `null` is "no assay has been run", which is a different state from a
+    // recorded failing verdict — never collapse the two into `false`.
+    assayPass: record?.assay ? record.assay.pass === true : null,
+    assayReasons: record?.assay?.reasons?.slice(0, 5) ?? [],
+    promoteRefusal: layerPromoteRefusal(record?.layer),
+  };
+}
