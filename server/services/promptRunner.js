@@ -570,6 +570,10 @@ export function assertVisionRunUsedImages(result, requestedProvider) {
  * @param {boolean} [args.allowFallback=true] — set false when provider/model
  *   identity is part of the feature contract. Disables proactive provider
  *   substitution and every model/provider retry tier after the first attempt.
+ *   It does NOT disable provider-health bookkeeping: a failure that benches the
+ *   provider still benches it, so the Providers page and every unpinned caller
+ *   learn that this provider is sick. The one exception is a usage limit, whose
+ *   observed-block ledger a pinned caller records itself.
  * @param {*} [args.responseSchema] — the caller's declared response schema
  *   (issue #2350). A Zod-style schema (`.safeParse`/`.parse`) or a bare
  *   predicate `(parsedValue) => boolean`. When set, the runner enables Tier-2
@@ -682,6 +686,39 @@ export async function runPromptThroughProvider(rawArgs) {
   }
 
   if (rawArgs.allowFallback === false) {
+    // A pinned caller takes no retry tier — but provider HEALTH is not routing.
+    // Skipping the mark here left a provider that had failed every call for
+    // hours still reading green on the Providers page, and every *other*
+    // (unpinned) caller still routing to it, because the only code path that
+    // benches lived inside the fallback cascade this caller opts out of.
+    //
+    // It also kept the pinned caller itself in a burn loop: the persistent mind
+    // is pinned, so ten consecutive runs each spent the provider's full
+    // configured timeout before failing. With the mark in place the next pinned
+    // call is refused by createRun in milliseconds ("unavailable … and fallback
+    // is disabled") until the cooldown expires, so a sick local backend costs
+    // one timeout per cooldown window instead of one per wake.
+    //
+    // `resolveProviderBench` still declines request-specific categories (a
+    // content refusal, a bad model id, an off-schema response), so a pinned
+    // caller's prompt-specific failure never benches a healthy provider.
+    //
+    // Only the `unavailable` markers. A usage limit is left exactly as it is
+    // today: `markProviderUsageLimit` writes the Usage page's observed-block
+    // ledger, and the pinned caller that cares already calls it for this same
+    // failure (persistentMindSupervisor autopauses and probes for recovery), so
+    // benching it here would record the one block twice.
+    if (firstError?.effectiveProvider) {
+      await markProviderUnavailableFromError(
+        firstError.effectiveProvider,
+        firstError.message,
+        firstError.errorAnalysis,
+        firstError.effectiveModel ?? null,
+        { skipUsageLimit: true },
+      ).catch((err) => {
+        console.error(`❌ markUnavailable failed for ${firstError.effectiveProvider.id}: ${err.message}`);
+      });
+    }
     throw stripFallbackContext(firstError);
   }
 
@@ -1113,8 +1150,11 @@ async function pickFallbackProvider(failed, requestCapabilities) {
  * the provider unavailable inline (it does this for RATE_LIMIT and
  * USAGE_LIMIT before firing onComplete) — re-marking would double-
  * increment `failureCount` and re-write the status file for no gain.
+ *
+ * `skipUsageLimit` declines the usage-limit marker entirely (bench AND ledger),
+ * for a caller that records that marker itself. Everything else still benches.
  */
-async function markProviderUnavailableFromError(failed, errorMessage, runnerAnalysis, runModel = null) {
+async function markProviderUnavailableFromError(failed, errorMessage, runnerAnalysis, runModel = null, { skipUsageLimit = false } = {}) {
   const toolkit = getAIToolkitInstance();
   const providerStatus = toolkit?.services?.providerStatus;
   if (!providerStatus) return;
@@ -1130,6 +1170,12 @@ async function markProviderUnavailableFromError(failed, errorMessage, runnerAnal
   if (!bench) return;
 
   if (bench.marker === 'usage-limit') {
+    // `skipUsageLimit` callers own this marker themselves — see the pinned
+    // branch in runPromptThroughProvider. Returning before the ledger write is
+    // the point: recordLimitBlock is deliberately NOT deduped (a repeated
+    // refusal refreshes "since last block"), so a second call for the same
+    // failure would show up as a second observed block.
+    if (skipUsageLimit) return;
     // Observed-block ledger for the Usage page's free-tier estimated-quota
     // signal — recorded even when the provider is already benched (a repeated
     // refusal refreshes "since last block"). Transient 429 retries never reach
