@@ -63,6 +63,10 @@ export const PERSISTENT_MIND_LIMITS = Object.freeze({
   BACKOFF_BASE_MS: 5_000,
   BACKOFF_MAX_MS: 15 * 60_000,
   WATCHDOG_STALE_MS: 5 * 60_000,
+  // UI warning threshold: two missed 60s heartbeats, well before the watchdog
+  // kills the turn at WATCHDOG_STALE_MS, so "stalled" is visible while the turn
+  // can still recover on its own.
+  HEARTBEAT_STALE_WARNING_MS: 2 * 60_000,
   MAX_QUIET_MS: 30 * 60_000,
 });
 

@@ -164,6 +164,7 @@ export * from './lossSparkline.js';
 export * from './managedAppSources.js';
 export * from './metronome.js';
 export * from './mindThinkingPresets.js';
+export * from './mindTurnProgress.js';
 export * from './navFeatures.js';
 export * from './pageNavTabs.js';
 export * from './midiChords.js';

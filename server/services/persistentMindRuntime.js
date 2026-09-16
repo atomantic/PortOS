@@ -4,6 +4,7 @@ import os from 'os';
 import { localRuntimeForProvider } from '../lib/localProviderRuntime.js';
 import { getMemoryStats } from '../lib/memoryStats.js';
 import { probeOpenAiModels } from '../lib/openAiModelsProbe.js';
+import { PERSISTENT_MIND_LIMITS } from '../lib/persistentMind.js';
 import { PERSISTENT_MIND_TRAJECTORY_LIMITS } from '../lib/persistentMindTrajectory.js';
 import { getLoadedModelsAt as getLoadedOllamaModelsAt } from './ollamaManager.js';
 import {
@@ -61,6 +62,26 @@ async function inspectModelResidency(provider, model) {
   };
 }
 
+// Turn freshness measured against the SERVER clock at `observedAt`, so the page
+// never subtracts a browser clock from a server timestamp. A missing or
+// unparseable stamp stays `null` — "not reported" and "zero elapsed" are
+// different answers, and a UI that collapses them reads a fresh turn as stalled.
+function turnFreshness(activeTurn, observedAtMs) {
+  const since = (value) => {
+    const at = Date.parse(value);
+    if (!Number.isFinite(at)) return null;
+    return Math.max(0, observedAtMs - at);
+  };
+  if (!activeTurn) return { elapsedMs: null, heartbeatAgeMs: null, heartbeatStale: false };
+  const heartbeatAgeMs = since(activeTurn.heartbeatAt);
+  return {
+    elapsedMs: since(activeTurn.startedAt),
+    heartbeatAgeMs,
+    heartbeatStale: heartbeatAgeMs !== null
+      && heartbeatAgeMs >= PERSISTENT_MIND_LIMITS.HEARTBEAT_STALE_WARNING_MS,
+  };
+}
+
 export async function inspectPersistentMindRuntime({ state, profile, prompt, provider } = {}) {
   const activeTurn = state?.activeTurn || null;
   const activeModel = activeTurn?.model || profile?.model;
@@ -75,15 +96,19 @@ export async function inspectPersistentMindRuntime({ state, profile, prompt, pro
     memories,
   });
   const processMemory = process.memoryUsage();
+  const observedAt = new Date();
+  const freshness = turnFreshness(activeTurn, observedAt.getTime());
   const totalMemory = Number(memory.total) || 0;
   const usedMemory = Number(memory.used) || 0;
 
   return {
-    observedAt: new Date().toISOString(),
+    observedAt: observedAt.toISOString(),
     inference: {
       active: Boolean(activeTurn),
       turnId: activeTurn?.id || null,
       startedAt: activeTurn?.startedAt || null,
+      heartbeatAt: activeTurn?.heartbeatAt || null,
+      ...freshness,
       providerId: activeTurn?.providerId || profile?.providerId || null,
       model: activeTurn?.model || profile?.model || null,
       residency,

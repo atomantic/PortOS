@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { createDefaultPersistentMindState, normalizePersistentMindState } from './persistentMind.js';
 import { publicPersistentMindState } from './persistentMindPublic.js';
+import { PROVIDER_USAGE_LIMIT_PAUSE_REASON } from './persistentMindUsageLimit.js';
 
 const selection = {
   id: 'deep-think',
@@ -154,5 +155,60 @@ describe('public persistent mind state', () => {
 
     expect(projected.queuedMessageCount).toBe(2);
     expect(projected.queuedTemporaryMessageCount).toBe(1);
+  });
+it('publishes the freshness stamps of the active turn so the page can age it', () => {
+    const projected = publicPersistentMindState(stateWithActiveTemporaryTurn());
+
+    expect(projected.activeTurnStartedAt).toBe('2026-09-01T00:00:00.000Z');
+    expect(projected.activeTurnHeartbeatAt).toBe('2026-09-01T00:00:05.000Z');
+  });
+
+  it('leaves the freshness stamps null when no turn is claimed', () => {
+    const projected = publicPersistentMindState({
+      ...createDefaultPersistentMindState(),
+      enabled: true,
+      started: true,
+      status: 'waiting',
+    });
+
+    expect(projected.activeTurnStartedAt).toBeNull();
+    expect(projected.activeTurnHeartbeatAt).toBeNull();
+    expect(projected.usageLimited).toBe(false);
+  });
+
+  it('distinguishes a quota autopause from a pause the user asked for', () => {
+    const quota = publicPersistentMindState(normalizePersistentMindState({
+      ...createDefaultPersistentMindState(),
+      enabled: true,
+      started: true,
+      status: 'paused',
+      pauseReason: PROVIDER_USAGE_LIMIT_PAUSE_REASON,
+      nextEligibleWakeAt: '2026-09-01T00:30:00.000Z',
+    }));
+    const byUser = publicPersistentMindState(normalizePersistentMindState({
+      ...createDefaultPersistentMindState(),
+      enabled: true,
+      started: true,
+      status: 'paused',
+      pauseReason: 'Paused from the Mind page',
+    }));
+
+    expect(quota.usageLimited).toBe(true);
+    expect(quota.pauseReason).toBe('Provider usage limit reached');
+    expect(quota.nextEligibleWakeAt).toBe('2026-09-01T00:30:00.000Z');
+    expect(byUser.usageLimited).toBe(false);
+    expect(byUser.pauseReason).toBe('Paused by user');
+  });
+
+  it('still reveals no raw pause text for a quota autopause', () => {
+    const projected = publicPersistentMindState(normalizePersistentMindState({
+      ...createDefaultPersistentMindState(),
+      status: 'paused',
+      pauseReason: PROVIDER_USAGE_LIMIT_PAUSE_REASON,
+      lastError: 'provider said: key sk-EXAMPLE exceeded your current quota',
+    }));
+
+    expect(projected.lastError).toBe('The last wake did not complete; local diagnostics have details');
+    expect(JSON.stringify(projected)).not.toContain('sk-EXAMPLE');
   });
 });
