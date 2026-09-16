@@ -1,7 +1,7 @@
 /**
  * Pure prose helpers, from the module that owns them on both sides.
  *
- * `escapeRegExp`, `countWords`, `isStr` and `isNonBlankStr` are named
+ * `escapeRegExp`, `countWords`, `isStr`, `isNonBlankStr` and `pluralize` are named
  * re-exports of `server/lib/textUtils.js` — imported rather than copied so the
  * two runtimes cannot drift: the word count the Writers Room and autobiography
  * editors show beside a draft is the same `\S+` rule the server stores for it,
@@ -11,11 +11,5 @@
  * caller for; the file itself stays so every `lib/textUtils` import path in the
  * client is unchanged.
  */
-export { countWords, escapeRegExp, isStr, isNonBlankStr } from '../../../server/lib/textUtils.js';
+export { countWords, escapeRegExp, isStr, isNonBlankStr, pluralize } from '../../../server/lib/textUtils.js';
 
-/**
- * `pluralize(1, 'item')` → "1 item"; `pluralize(2, 'item')` → "2 items".
- * Pass a third arg for an irregular plural: `pluralize(1, 'person', 'people')`.
- */
-export const pluralize = (count, singular, pluralForm = `${singular}s`) =>
-  `${count} ${count === 1 ? singular : pluralForm}`;

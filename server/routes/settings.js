@@ -21,10 +21,11 @@ import { isGitHubRepoUrl } from '../lib/repoUrl.js';
 import { asyncHandler } from '../lib/errorHandler.js';
 import { isPlainObject } from '../lib/objects.js';
 import { resolveBackupConfig } from '../lib/backupConfig.js';
+import { storableAutoUpdateConfig } from '../lib/sharedSchemas.js';
 import { DEFAULT_UNTRUSTED_CONTENT_POLICY, untrustedContentSettingsSchema } from '../lib/untrustedContent.js';
 import { agentContextSettingsSchema } from '../lib/agentContextValidation.js';
 import { EFFORT_LEVELS } from '../lib/providerModels.js';
-import { privateCredentialParamsSchema, privateCredentialInputSchema, backupConfigSchema, sharingSettingsPatchSchema, featureProviderConfigSchema, autofixerSettingsSchema, codeReviewSettingsSchema, locationSettingsSchema, hideFirstRunCardSchema, networkSetupPreferenceSchema, settingsEmbeddingsSchema, localLlmSettingsSchema, imessageConfigSchema, signalConfigSchema, beeperSettingsSchema, spotifyConfigSchema, youtubeConfigSchema, apiAccessSettingsSchema, instanceFeatureSettingsSchema, instanceFeatureIdSchema, instanceFeatureUpdateSchema, instanceFeatureGroupSettingsSchema, instanceFeatureGroupIdSchema, instanceFeatureGroupUpdateSchema, loraTrainingConfigSchema, pipelineEditorialChecksSettingsSchema, creativeDirectorSettingsSchema, musicSettingsSchema, federationSettingsSchema, privacySettingsSchema, seriesAutopilotSettingsSchema, layeredIntelligenceSettingsSchema, imageGenGrokSettingsSchema, imageGenAgySettingsSchema, renderDefaultsSettingsSchema, videoGenSettingsSchema, subscriptionCostsMapSchema, subscriptionPlanTiersMapSchema, usageApiBilledInstanceIdsSchema, namedOrchestrationProfileSchema, orchestrationProfilesSettingsSchema, validateRequest } from '../lib/validation.js';
+import { privateCredentialParamsSchema, privateCredentialInputSchema, backupConfigSchema, autoUpdateSettingsSchema, sharingSettingsPatchSchema, featureProviderConfigSchema, autofixerSettingsSchema, codeReviewSettingsSchema, locationSettingsSchema, hideFirstRunCardSchema, networkSetupPreferenceSchema, settingsEmbeddingsSchema, localLlmSettingsSchema, imessageConfigSchema, signalConfigSchema, beeperSettingsSchema, spotifyConfigSchema, youtubeConfigSchema, apiAccessSettingsSchema, instanceFeatureSettingsSchema, instanceFeatureIdSchema, instanceFeatureUpdateSchema, instanceFeatureGroupSettingsSchema, instanceFeatureGroupIdSchema, instanceFeatureGroupUpdateSchema, loraTrainingConfigSchema, pipelineEditorialChecksSettingsSchema, creativeDirectorSettingsSchema, musicSettingsSchema, federationSettingsSchema, privacySettingsSchema, seriesAutopilotSettingsSchema, layeredIntelligenceSettingsSchema, imageGenGrokSettingsSchema, imageGenAgySettingsSchema, renderDefaultsSettingsSchema, videoGenSettingsSchema, subscriptionCostsMapSchema, subscriptionPlanTiersMapSchema, usageApiBilledInstanceIdsSchema, namedOrchestrationProfileSchema, orchestrationProfilesSettingsSchema, validateRequest } from '../lib/validation.js';
 
 const router = Router();
 
@@ -177,13 +178,22 @@ const projectEffectiveBackup = (safe) => {
   };
 };
 
+// Same reasoning for the auto-update slice: an install that only ticked the
+// checkbox stores `{ enabled: true }`, and the Update tab would otherwise have to
+// re-derive what an omitted channel/interval means — the mistake #6632 made for
+// the backup schedule. The resolver is the scheduler's own.
+const projectEffectiveAutoUpdate = (safe) => ({
+  ...safe,
+  autoUpdate: { ...safe.autoUpdate, ...storableAutoUpdateConfig(safe.autoUpdate) },
+});
+
 // Single sanitizer every settings response (GET load + PUT save) runs through,
 // so a leak can't reappear on one path after being closed on the other: strip
 // the top-level `secrets` hierarchy, redact external tokens (#1821), decorate
 // server-authoritative bounds, then resolve the sparse backup schedule.
 const sanitizeSettingsForResponse = (settings) => {
   const { secrets, ...safe } = settings;
-  return projectEffectiveBackup(decorateBounds(redactExternalTokens(safe)));
+  return projectEffectiveAutoUpdate(projectEffectiveBackup(decorateBounds(redactExternalTokens(safe))));
 };
 
 // GET /api/settings
@@ -368,6 +378,9 @@ router.put('/', asyncHandler(async (req, res) => {
   }
   if (req.body?.backup !== undefined) {
     validateRequest(backupConfigSchema.partial(), req.body.backup);
+  }
+  if (req.body?.autoUpdate !== undefined) {
+    validateRequest(autoUpdateSettingsSchema, req.body.autoUpdate);
   }
   if (req.body?.sharingDisplayName !== undefined || req.body?.sharingBio !== undefined) {
     validateRequest(sharingSettingsPatchSchema.partial(), {

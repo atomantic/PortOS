@@ -198,3 +198,13 @@ export function kebabCase(text) {
     .replace(/[^a-z0-9]+/g, '-')
     .replace(/^-+|-+$/g, '');
 }
+
+/**
+ * `pluralize(1, 'item')` → "1 item"; `pluralize(2, 'item')` → "2 items".
+ * Pass a third arg for an irregular plural: `pluralize(1, 'person', 'people')`.
+ *
+ * Lives here rather than in the client mirror because the server builds
+ * user-facing count prose too (`lib/systemIdle.js`'s activity blockers).
+ */
+export const pluralize = (count, singular, pluralForm = `${singular}s`) =>
+  `${count} ${count === 1 ? singular : pluralForm}`;

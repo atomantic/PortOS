@@ -188,3 +188,74 @@ export function anchorUserExcludes(patterns) {
   const list = Array.isArray(patterns) ? patterns : [];
   return [...new Set(list.map(anchorUserExclude).filter(Boolean))];
 }
+
+// ── Automatic PortOS self-update (Update tab) ───────────────────────────────
+//
+// The EFFECTIVE configuration, resolved from the sparse `settings.autoUpdate`
+// slice. Sparse because the settings store keeps what the user actually set: an
+// install that only ever ticked the checkbox stores `{ enabled: true }`, and
+// every reader has to agree on what the omitted fields mean. One resolver, read
+// by `autoUpdateSettingsSchema` at the PUT boundary, by
+// `services/autoUpdateScheduler.js`, and by the settings GET projection — so an
+// omitted `channel` can never mean `release` in one and `main` in another. Same
+// rule, and the same home, as the backup-exclude anchoring above (#6632 is the
+// lesson from getting it wrong for the backup schedule).
+
+/**
+ * Which update action the scheduler performs. Each is EXACTLY the action a
+ * button already performs, dispatched through the same service:
+ *
+ *   - `release` — the Update page's "Update Now": `startPortosSelfUpdate` in
+ *     `release` mode, gated on a newer GitHub release tag.
+ *   - `main`    — App Management's Git tab "Update app" for the PortOS record:
+ *     `runAppUpdate`, which advances the checkout onto origin's default branch
+ *     and then runs the same update script. Gated on origin actually being
+ *     ahead, so it does not reinstall the same revision every interval.
+ */
+export const AUTO_UPDATE_CHANNELS = ['release', 'main'];
+export const DEFAULT_AUTO_UPDATE_CHANNEL = 'release';
+/** Hours to wait after the last update before starting to look for a window. */
+export const DEFAULT_AUTO_UPDATE_MIN_INTERVAL_HOURS = 6;
+export const AUTO_UPDATE_MIN_INTERVAL_HOURS_MIN = 1;
+export const AUTO_UPDATE_MIN_INTERVAL_HOURS_MAX = 24 * 30;
+
+/**
+ * @param {object} [raw] - the stored `settings.autoUpdate` slice.
+ * @returns {{enabled: boolean, channel: 'release'|'main', minIntervalHours: number, minIntervalMs: number, resolveBlockersWithAgent: boolean}}
+ */
+export function resolveAutoUpdateConfig(raw) {
+  const source = raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : {};
+  const channel = AUTO_UPDATE_CHANNELS.includes(source.channel) ? source.channel : DEFAULT_AUTO_UPDATE_CHANNEL;
+  const requested = Number(source.minIntervalHours);
+  const minIntervalHours = Number.isFinite(requested)
+    ? Math.min(AUTO_UPDATE_MIN_INTERVAL_HOURS_MAX, Math.max(AUTO_UPDATE_MIN_INTERVAL_HOURS_MIN, requested))
+    : DEFAULT_AUTO_UPDATE_MIN_INTERVAL_HOURS;
+  return {
+    // OFF unless explicitly on. An install that has never seen this feature must
+    // not start restarting itself because it upgraded into the code.
+    enabled: source.enabled === true,
+    channel,
+    minIntervalHours,
+    minIntervalMs: minIntervalHours * 60 * 60 * 1000,
+    // Whether a checkout that no script may safely repair (uncommitted work, an
+    // interrupted rebase) queues a CoS agent to resolve it. Defaults ON because
+    // an unattended updater that silently stops forever is worse than one that
+    // asks for help — but it is a switch, since that help costs a provider call.
+    resolveBlockersWithAgent: source.resolveBlockersWithAgent !== false,
+  };
+}
+
+/**
+ * The resolved config MINUS the derived `minIntervalMs`, i.e. exactly the keys
+ * `autoUpdateSettingsSchema` accepts.
+ *
+ * Every surface that shows the effective config also hands it back on the next
+ * save (the panel PUTs `{...draft, ...patch}`), and the schema is `.strict()` —
+ * so echoing a derived key turns every toggle into a 400. One projection, used
+ * by both the settings GET and `GET /api/update/auto`, is what keeps the two
+ * from having to remember that separately.
+ */
+export function storableAutoUpdateConfig(raw) {
+  const { minIntervalMs: _derived, ...storable } = resolveAutoUpdateConfig(raw);
+  return storable;
+}

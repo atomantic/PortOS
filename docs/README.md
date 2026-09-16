@@ -27,7 +27,7 @@ Index of everything under `docs/`. Start with the [root README](../README.md) fo
 | [CONTRIBUTING.md](./CONTRIBUTING.md) | Dev setup (PostgreSQL required), code conventions |
 | [GITHUB_ACTIONS.md](./GITHUB_ACTIONS.md) | CI and release workflows |
 | [VERSIONING.md](./VERSIONING.md) | SemVer + release process (`/do:release`) |
-| [SELF_UPDATE.md](./SELF_UPDATE.md) | Fork-aware self-update flow — release polling, `FORK_SYNC_REQUIRED`, fork sync, running a customized fork |
+| [SELF_UPDATE.md](./SELF_UPDATE.md) | Fork-aware self-update flow — release polling, `FORK_SYNC_REQUIRED`, fork sync, running a customized fork, and the unattended idle-gated automatic update |
 | [MANAGED_APP_UPDATES.md](./MANAGED_APP_UPDATES.md) | Safe managed-app update default and the opt-in app lifecycle contract |
 | [MANAGED_APP_FORGE_ACCOUNTS.md](./MANAGED_APP_FORGE_ACCOUNTS.md) | Running managed apps under a second GitHub account — ssh `Host` aliases and the per-app `forgeAccount` pin |
 | [DEPS.md](./DEPS.md) | Dependency audit — every third-party package and its verdict |

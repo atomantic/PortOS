@@ -50,6 +50,10 @@ export const undismissHealthWarning = (type, options = {}) => request(`/system/h
 // Update
 export const getUpdateStatus = () => request('/update/status');
 export const checkForUpdate = () => request('/update/check', { method: 'POST' });
+// Automatic-update config + what the scheduler is currently waiting on. Its own
+// route because it walks git status, which /update/status must not do on the
+// Update tab's poll interval.
+export const getAutoUpdateStatus = (options) => request('/update/auto', options);
 export const ignoreUpdateVersion = (version) => request('/update/ignore', {
   method: 'POST',
   body: JSON.stringify({ version })

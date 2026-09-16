@@ -13,6 +13,7 @@ import { RENDER_TARGETS, RENDER_TARGET_BACKEND_AUTO } from './renderTargets.js';
 import {
   grokVideoDurationSchema, cloudModelIdString, recordRenderPinFields, isSafeSnapshotSource, isSafeSubdirFilter, csvIdsParam,
   EXCLUDE_PATTERN_MAX_LENGTH, isSafeExcludePattern,
+  AUTO_UPDATE_CHANNELS, AUTO_UPDATE_MIN_INTERVAL_HOURS_MIN, AUTO_UPDATE_MIN_INTERVAL_HOURS_MAX,
 } from './sharedSchemas.js';
 import { PR_COMPLETION_VALUES } from './prDisposition.js';
 import { EFFORT_LEVELS } from './providerModels.js';
@@ -921,6 +922,21 @@ export const backupConfigSchema = z.object({
   ).optional().default([]),
   disabledDefaultExcludes: z.array(z.string()).optional().default([])
 });
+
+// Automatic PortOS self-update (Update tab). Stored under the top-level
+// `autoUpdate` key and OFF by default — an install must never start restarting
+// itself merely because it upgraded into this code. The accepted interpretation
+// of a sparse slice (omitted channel, omitted interval) is `sharedSchemas.js`'s
+// `resolveAutoUpdateConfig`, which the scheduler and the settings GET both read
+// through, so this boundary schema cannot drift away from it.
+export const autoUpdateSettingsSchema = z.object({
+  enabled: z.boolean().optional(),
+  channel: z.enum(AUTO_UPDATE_CHANNELS).optional(),
+  // Hours to wait after the last update before looking for an idle window.
+  minIntervalHours: z.number().min(AUTO_UPDATE_MIN_INTERVAL_HOURS_MIN).max(AUTO_UPDATE_MIN_INTERVAL_HOURS_MAX).optional(),
+  // Whether a checkout no script may safely repair queues a CoS agent.
+  resolveBlockersWithAgent: z.boolean().optional(),
+}).strict();
 
 // Scheduled Series Autopilot (#2174). Machine-local per-series cron schedules
 // that fire `startSeriesAutopilot` unattended — the AI Provider Usage Policy's

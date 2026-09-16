@@ -76,7 +76,8 @@ const defaultState = () => ({
   updateInProgress: false,
   updateStartedAt: null,
   lastUpdateResult: null,
-  lastForkSync: null
+  lastForkSync: null,
+  autoUpdate: null
 });
 
 /**
@@ -313,6 +314,65 @@ export async function getUpdateStatus() {
     forkSyncFresh,
     forkSyncWindowMs: FORK_SYNC_FRESHNESS_MS,
     installState
+  };
+}
+
+/**
+ * The unattended auto-updater's own durable record — what it last did, when,
+ * and why it last stood down. Stored beside the rest of the update state
+ * because it is read with it (one file read serves `GET /api/update/status`)
+ * and because it must survive the restart the update itself causes.
+ *
+ * Runtime, NOT configuration: the enabled flag, the channel, and the minimum
+ * interval live in `settings.autoUpdate`, which is where a user edits them.
+ */
+export async function getAutoUpdateRuntime() {
+  const state = await loadState();
+  return normalizeAutoUpdateRuntime(state.autoUpdate);
+}
+
+/**
+ * Everything the auto-update tick's CHEAP gates need, from one file read.
+ *
+ * The cooldown rejects 71 of every 72 ticks at the default 6h interval, and it
+ * only needs the runtime record, the last update's completion, and whether an
+ * update is already running — none of which requires `getUpdateStatus()`, whose
+ * `getInstallState()` walks every file under `client/src`. Reading them together
+ * also collapses what used to be three separate loads of `update.json` per tick.
+ */
+export async function getAutoUpdateGateState() {
+  const state = await loadState();
+  return {
+    runtime: normalizeAutoUpdateRuntime(state.autoUpdate),
+    lastUpdateResult: state.lastUpdateResult,
+    updateInProgress: state.updateInProgress === true,
+  };
+}
+
+/** Merge a patch into the runtime record. Returns the merged result. */
+export async function recordAutoUpdateRuntime(patch) {
+  return withLock(async () => {
+    const state = await loadState();
+    const next = { ...normalizeAutoUpdateRuntime(state.autoUpdate), ...patch };
+    state.autoUpdate = next;
+    await saveState(state);
+    return next;
+  });
+}
+
+function normalizeAutoUpdateRuntime(raw) {
+  const source = isPlainObject(raw) ? raw : {};
+  return {
+    // When the feature was switched on with no prior update to measure from.
+    // Persisted once and never re-stamped, so an install that reboots often
+    // still reaches its first automatic update — re-arming on every boot would
+    // push the deadline forever out of reach.
+    armedAt: typeof source.armedAt === 'string' ? source.armedAt : null,
+    lastAttemptAt: typeof source.lastAttemptAt === 'string' ? source.lastAttemptAt : null,
+    lastRunAt: typeof source.lastRunAt === 'string' ? source.lastRunAt : null,
+    lastOutcome: typeof source.lastOutcome === 'string' ? source.lastOutcome : null,
+    lastSkip: isPlainObject(source.lastSkip) ? source.lastSkip : null,
+    repairTaskId: typeof source.repairTaskId === 'string' ? source.repairTaskId : null,
   };
 }
 
