@@ -136,6 +136,7 @@ If a close match exists, **extend it or use it**. Only add a new module when non
 - `useLockToggle` (`client/src/hooks/useLockToggle.js`) — optimistic-PATCH lock toggle for any new lock button.
 - `useSseProgress` (`client/src/hooks/useSseProgress.js`) — generic JSON-frame EventSource subscriber; build new progress hooks on it.
 - `formatBytes` / `formatTimecode` / `formatDateShort` / `formatDurationMs` / `timeAgo` (`client/src/utils/formatters.js`) — never re-define formatters inside components.
+- `formatCount` / `formatUsd` (`client/src/utils/formatters.js`) — thousands-grouped, en-US-pinned (`2,762`, `$4,610.09`). **Never render a raw integer or a bare `.toLocaleString()` for a user-facing count or amount** — an unseparated `4610` is read at the wrong order of magnitude, and the browser locale disagrees with the `$` beside it. `formatCount` gives `—` for a count that was never measured; pass `{ fallback: '0' }` where a measured zero is meant.
 
 ### Maintenance rule (WHEN adding a public module)
 

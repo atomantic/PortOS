@@ -5,7 +5,7 @@ import * as api from '../services/api';
 import BrailleSpinner from '../components/BrailleSpinner';
 import PageSkeleton from '../components/ui/PageSkeleton';
 import Pill from '../components/ui/Pill';
-import { formatCompactCountOrDash as formatNumber, formatUsd, timeAgo } from '../utils/formatters';
+import { formatCompactCountOrDash as formatNumber, formatCount, formatUsd, timeAgo } from '../utils/formatters';
 import { useAsyncAction } from '../hooks/useAsyncAction';
 import { useAutoRefetch } from '../hooks/useAutoRefetch';
 import SubscriptionSavingsCard from '../components/usage/SubscriptionSavingsCard';
@@ -352,7 +352,7 @@ function CostReportTable({ report }) {
 // Cache token counts, with the hidden-on-mobile columns' values folded into a
 // title so the numbers stay reachable when the columns collapse.
 const cacheTitle = (row) =>
-  `Cache read ${(row.cacheReadTokens ?? 0).toLocaleString()} · cache write ${(row.cacheWriteTokens ?? 0).toLocaleString()} tokens`;
+  `Cache read ${formatCount(row.cacheReadTokens, { fallback: '0' })} · cache write ${formatCount(row.cacheWriteTokens, { fallback: '0' })} tokens`;
 
 function ProviderCostRows({ provider }) {
   return (

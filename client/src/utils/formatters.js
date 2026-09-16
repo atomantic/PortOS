@@ -306,7 +306,7 @@ export function formatAgeDays(value, fallback = '') {
   const days = Math.floor((Date.now() - time) / 86400000);
   // <= 0 covers a clock skew ahead of the publish date — never "-1 days ago".
   if (days <= 0) return 'today';
-  return `${days.toLocaleString()} day${days === 1 ? '' : 's'} ago`;
+  return `${GROUPED_INTEGER.format(days)} day${days === 1 ? '' : 's'} ago`;
 }
 
 /**
@@ -357,6 +357,30 @@ export function formatCompactCount(n) {
  */
 export function formatCompactCountOrDash(n) {
   return n == null ? '—' : formatCompactCount(n);
+}
+
+// Grouping is pinned to en-US rather than the browser locale. The UI is
+// English-only, and `$` is a US currency mark — rendering "$4.610,09" next to
+// English copy reads as a typo, not as localization. Counts use the same
+// separator so a total and its cost line up. The DATE helpers above stay on the
+// browser locale on purpose: a date carries no currency anchor, so there is
+// nothing for its separators to contradict.
+const GROUPED_INTEGER = new Intl.NumberFormat('en-US', { maximumFractionDigits: 0 });
+const USD_CENTS = new Intl.NumberFormat('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+/**
+ * Thousands-separated count for a number the user is meant to read exactly:
+ * 2762 → "2,762". Use this for a total, a record count, or a token count —
+ * anywhere `formatCompactCount`'s "2.8K" would lose the precision that is the
+ * point of showing the number at all.
+ * @param {number|string|null|undefined} n
+ * @param {object} [options]
+ * @param {string} [options.fallback='—'] - Rendered when the value is missing/unparseable
+ * @returns {string} e.g. "2,762"
+ */
+export function formatCount(n, { fallback = '—' } = {}) {
+  const value = roundForDisplay(n, 0);
+  return value === null ? fallback : GROUPED_INTEGER.format(value);
 }
 
 /**
@@ -412,12 +436,14 @@ export function formatPercent(value, { decimals = 1, fallback = '—' } = {}) {
 }
 
 /**
- * Format a USD amount for display: `$12.34`.
+ * Format a USD amount for display: `$12.34`, `$4,610.09`.
  *
  * `signed` keeps the minus sign OUTSIDE the dollar sign (`-$5.00`), so a
  * negative saving reads as a loss rather than as a strange currency string.
  * `trimWhole` drops the `.00` on a round figure — for a price the user typed
  * ($200/mo), not for a computed total, where aligned cents are the point.
+ * Amounts past a thousand are grouped (`$4,610.09`) — an unseparated `$4610.09`
+ * is read as the wrong order of magnitude at a glance.
  *
  * @param {number} value - Dollar amount (nullish renders as $0.00; a non-nullish
  *   value that fails to parse as a finite number — NaN, a broken calc — renders
@@ -429,7 +455,9 @@ export function formatUsd(value, { signed = false, trimWhole = false, fallback =
   const n = value === null || value === undefined ? 0 : Number(value);
   if (!Number.isFinite(n)) return fallback;
   const magnitude = signed ? Math.abs(n) : n;
-  const body = trimWhole && Number.isInteger(magnitude) ? String(magnitude) : magnitude.toFixed(2);
+  const body = trimWhole && Number.isInteger(magnitude)
+    ? GROUPED_INTEGER.format(magnitude)
+    : USD_CENTS.format(magnitude);
   return `${signed && n < 0 ? '-' : ''}$${body}`;
 }
 

@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { useSearchParams } from 'react-router';
 import { RefreshCw, ScrollText, Wrench } from 'lucide-react';
 import * as api from '../../../services/api';
-import { formatDateTime, formatRuntime, formatBytes, timeAgo } from '../../../utils/formatters';
+import { formatCount, formatDateTime, formatRuntime, formatBytes, timeAgo } from '../../../utils/formatters';
 import BrailleSpinner from '../../BrailleSpinner';
 import Banner from '../../ui/Banner';
 import ConfirmButtonPair from '../../ui/ConfirmButtonPair';
@@ -210,9 +210,9 @@ export default function RunEventsTab() {
 
       {stats && (
         <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
-          <LedgerStat label="Active generation" value={`${stats.activeEvents} / ${stats.maxActiveEvents}`} />
-          <LedgerStat label="Archived" value={String(stats.archivedEvents)} />
-          <LedgerStat label="Retention" value={`${stats.maxRetainedEvents} events · ${stats.maxEventAgeDays}d`} />
+          <LedgerStat label="Active generation" value={`${formatCount(stats.activeEvents)} / ${formatCount(stats.maxActiveEvents)}`} />
+          <LedgerStat label="Archived" value={formatCount(stats.archivedEvents)} />
+          <LedgerStat label="Retention" value={`${formatCount(stats.maxRetainedEvents)} events · ${stats.maxEventAgeDays}d`} />
           <LedgerStat label="Oldest event" value={stats.oldestEventAt ? timeAgo(stats.oldestEventAt) : '—'} />
         </div>
       )}
@@ -253,7 +253,7 @@ export default function RunEventsTab() {
                     </span>
                   </div>
                   <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-port-text-muted">
-                    <span>{projection.eventCount} events</span>
+                    <span>{formatCount(projection.eventCount)} events</span>
                     <span>{timeAgo(projection.lastEventAt)}</span>
                     {projectionAnnotations(projection).map((note) => (
                       <span key={note} className="rounded bg-port-border/40 px-1.5 py-0.5">{note}</span>

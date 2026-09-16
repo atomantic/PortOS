@@ -10,6 +10,7 @@ import * as api from '../../../services/api';
 import toast from '../../ui/Toast';
 import useProviderModels from '../../../hooks/useProviderModels';
 import ProviderModelSelector from '../../ProviderModelSelector';
+import { formatCount } from '../../../utils/formatters';
 
 const MIN_TRANSCRIPT = 100;
 
@@ -176,7 +177,7 @@ export default function VoiceStyleTab({ onRefresh }) {
               disabled={comparing}
             />
             <span className="text-xs text-gray-500">
-              {transcript.length} characters {transcript.length > 0 && transcript.length < MIN_TRANSCRIPT && `(need ${MIN_TRANSCRIPT}+)`}
+              {formatCount(transcript.length)} characters {transcript.length > 0 && transcript.length < MIN_TRANSCRIPT && `(need ${MIN_TRANSCRIPT}+)`}
             </span>
           </div>
 

@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   clamp, formatContextLength, formatDurationMin, formatDurationMs, formatEventDateTime, timeAgo, formatAgeDays,
   formatCooldown, formatCountdown, recommendedRamGb, parseTimeoutMs, formatDurationSec, middleTruncate,
-  formatWeight, formatPercent, formatUsd, formatBytes,
+  formatWeight, formatPercent, formatUsd, formatBytes, formatCount,
   formatDateNumeric, formatTimeOfDaySeconds, formatClockTime, formatHourOfDay, formatWeekdayDate,
   formatMonthDay, formatMonthYear, formatWeekdayShort, formatWeekdayTime, formatDateFull, formatDateShort, formatDateTime,
   localDateKey, shiftISODate,
@@ -125,6 +125,38 @@ describe('formatUsd', () => {
     expect(formatUsd(200, { trimWhole: true })).toBe('$200');
     expect(formatUsd(19.99, { trimWhole: true })).toBe('$19.99');
     expect(formatUsd(200)).toBe('$200.00');
+  });
+
+  // $4610.09 is read as the wrong order of magnitude at a glance; the separator
+  // is what makes a four-figure spend legible.
+  it('groups thousands', () => {
+    expect(formatUsd(4610.09)).toBe('$4,610.09');
+    expect(formatUsd(1234567.5)).toBe('$1,234,567.50');
+    expect(formatUsd(-4610.09, { signed: true })).toBe('-$4,610.09');
+    expect(formatUsd(12000, { trimWhole: true })).toBe('$12,000');
+  });
+});
+
+describe('formatCount', () => {
+  it('groups thousands so a total reads at its true magnitude', () => {
+    expect(formatCount(2762)).toBe('2,762');
+    expect(formatCount(999)).toBe('999');
+    expect(formatCount(1234567)).toBe('1,234,567');
+    expect(formatCount(0)).toBe('0');
+  });
+
+  it('accepts a numeric string and rounds a stray fraction away', () => {
+    expect(formatCount('4610')).toBe('4,610');
+    expect(formatCount(1500.6)).toBe('1,501');
+  });
+
+  // A count that was never measured must not render as a confident 0.
+  it('renders the fallback for a missing or unparseable count', () => {
+    expect(formatCount(null)).toBe('—');
+    expect(formatCount(undefined)).toBe('—');
+    expect(formatCount('')).toBe('—');
+    expect(formatCount(NaN)).toBe('—');
+    expect(formatCount(null, { fallback: '0' })).toBe('0');
   });
 });
 

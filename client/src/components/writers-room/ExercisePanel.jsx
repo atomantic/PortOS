@@ -8,7 +8,7 @@ import {
   discardWritersRoomExercise,
   promoteWritersRoomExercise,
 } from '../../services/apiWritersRoom';
-import { formatCountdown } from '../../utils/formatters';
+import { formatCount, formatCountdown } from '../../utils/formatters';
 import { countWords } from '../../lib/textUtils';
 import { FormField } from '../ui/FormField';
 import useMounted from '../../hooks/useMounted';
@@ -185,7 +185,7 @@ export default function ExercisePanel({ activeWork, onClose, editorDirty = false
               {formatCountdown(remaining)}
             </div>
             <div className="flex-1 text-xs text-gray-400">
-              <div>{wordsAdded} words this session</div>
+              <div>{formatCount(wordsAdded)} words this session</div>
               {prompt && <div className="text-gray-500 italic truncate">{prompt}</div>}
             </div>
             <button onClick={() => finishSession({ keep: true })}
@@ -225,7 +225,7 @@ export default function ExercisePanel({ activeWork, onClose, editorDirty = false
                 'bg-port-warning animate-pulse'
               }`} />
               <span className="text-gray-300">
-                {ex.status === 'finished' ? `${ex.wordsAdded ?? 0} words` : ex.status}
+                {ex.status === 'finished' ? `${formatCount(ex.wordsAdded, { fallback: '0' })} words` : ex.status}
               </span>
               <span className="text-gray-600 truncate flex-1">{ex.prompt || '(free-write)'}</span>
               <span className="text-gray-600">{Math.round((ex.durationSeconds || 0) / 60)}m</span>

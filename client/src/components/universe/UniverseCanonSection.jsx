@@ -48,6 +48,7 @@ import { universeStylePreset } from '../../lib/universeStylePreset';
 import { descriptorForCanonEntry } from '../../lib/canonPrompt';
 import { applySheetPointer } from '../../lib/sheetPointers';
 import { BIBLE_LIMITS, capImageRefs } from '../../lib/bibleLimits';
+import { formatCount } from '../../utils/formatters';
 
 // A universe's canon list for a kind is sometimes absent on a freshly-created
 // record; normalize to [] so callers can spread/map without a guard each time.
@@ -1138,7 +1139,7 @@ function KindSection() {
 
   const list = all.length === 0 ? (
     filtered && totalCount > 0
-      ? <p className="text-xs text-gray-500 italic">No {kind.label.toLowerCase()} in the selected series. {totalCount} total in this universe — clear the filter to see them all.</p>
+      ? <p className="text-xs text-gray-500 italic">No {kind.label.toLowerCase()} in the selected series. {formatCount(totalCount)} total in this universe — clear the filter to see them all.</p>
       : <p className="text-xs text-gray-500 italic">No {kind.label.toLowerCase()} yet. Use <em>Add</em> or <em>Extract from prose</em> above to populate this list.</p>
   ) : (
     <ul className="space-y-2">

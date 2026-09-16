@@ -7,6 +7,7 @@ import socket from '../services/socket';
 import FeatureAgentCard from '../components/feature-agents/FeatureAgentCard';
 import PageSkeleton from '../components/ui/PageSkeleton';
 import PageHeader from '../components/PageHeader';
+import { formatCount } from '../utils/formatters';
 
 export default function FeatureAgents() {
   const [agents, setAgents] = useState([]);
@@ -84,7 +85,7 @@ export default function FeatureAgents() {
       <PageHeader
         icon={Wand2}
         title="Feature Agents"
-        subtitle={`${agents.length} agent${agents.length !== 1 ? 's' : ''} · ${activeCount} active · ${totalRuns} total runs`}
+        subtitle={`${formatCount(agents.length)} agent${agents.length !== 1 ? 's' : ''} · ${formatCount(activeCount)} active · ${formatCount(totalRuns)} total runs`}
         actions={
           <>
             <button

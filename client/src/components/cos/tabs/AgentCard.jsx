@@ -34,7 +34,7 @@ import { extractCosTaskType } from '../../../lib/cosTaskType';
 import { isAgentHandoff } from '../../../lib/agentOutcome';
 import AgentResultLine from '../AgentResultLine';
 import { DEFAULT_REVIEWER, normalizeReviewers } from '../constants';
-import { formatBytes, formatDurationMs, formatDateTime, formatTimeOfDay } from '../../../utils/formatters';
+import { formatBytes, formatCount, formatDurationMs, formatDateTime, formatTimeOfDay } from '../../../utils/formatters';
 import { useAutoRefetch } from '../../../hooks/useAutoRefetch';
 import ConfirmButtonPair from '../../ui/ConfirmButtonPair';
 import { useConfirmDelete } from '../../../hooks/useConfirmDelete';
@@ -111,7 +111,7 @@ function TranscriptTruncationNotice({ transcript }) {
       <AlertTriangle size={12} aria-hidden="true" className="shrink-0" />
       <span>
         {count > 0
-          ? `Showing the last ${count.toLocaleString()} ${count === 1 ? 'line' : 'lines'} — the full transcript${size} is on disk in the agent's output.txt.`
+          ? `Showing the last ${formatCount(count)} ${count === 1 ? 'line' : 'lines'} — the full transcript${size} is on disk in the agent's output.txt.`
           : `The tail of this transcript held no readable lines — the full transcript${size} is on disk in the agent's output.txt.`}
       </span>
     </div>
@@ -481,7 +481,7 @@ export default function AgentCard({ agent, onPause, onKill, onDelete, onResume, 
     : null;
   const prefillLabel = prefillBudget ? formatDurationMs(prefillBudget.prefillMs) : null;
   const prefillReason = prefillBudget
-    ? `Large prompt (~${(prefillBudget.promptTokens ?? 0).toLocaleString()} tokens) on a local model server — expect roughly ${prefillLabel} of silent prefill before the first line of output. The run is working, not wedged.${
+    ? `Large prompt (~${formatCount(prefillBudget.promptTokens, { fallback: '0' })} tokens) on a local model server — expect roughly ${prefillLabel} of silent prefill before the first line of output. The run is working, not wedged.${
       prefillBudget.expectedDurationMs
         ? ` Its duration estimate was raised to ~${formatDurationMs(prefillBudget.expectedDurationMs)} to cover it.`
         : ''}`
@@ -1183,7 +1183,7 @@ export default function AgentCard({ agent, onPause, onKill, onDelete, onResume, 
             <span className="text-sm text-gray-300">Agent prompt</span>
             {promptContent && (
               <span className="text-xs text-gray-500 font-mono">
-                {promptContent.length.toLocaleString()} chars · {promptContent.split('\n').length} lines
+                {formatCount(promptContent.length)} chars · {formatCount(promptContent.split('\n').length)} lines
               </span>
             )}
           </div>

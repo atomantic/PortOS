@@ -1,4 +1,4 @@
-import { formatHourOfDay } from '../../../utils/formatters';
+import { formatCount, formatHourOfDay } from '../../../utils/formatters';
 
 export default function HourlyActivityWidget({ dashboardState }) {
   const hourlyActivity = dashboardState.usage?.hourlyActivity;
@@ -35,7 +35,7 @@ export default function HourlyActivityWidget({ dashboardState }) {
           <div className="text-2xl" aria-hidden="true">⏰</div>
           <div>
             <h3 className="text-lg font-semibold text-white">Activity by Hour</h3>
-            <p className="text-sm text-gray-500">{totalSessions} total sessions tracked</p>
+            <p className="text-sm text-gray-500">{formatCount(totalSessions)} total sessions tracked</p>
           </div>
         </div>
         {peakDescription && <div className="text-sm text-port-success">{peakDescription}</div>}

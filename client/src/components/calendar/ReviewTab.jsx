@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import {Check, X, ChevronLeft, ChevronRight, Clock, Target, AlertTriangle, CalendarDays} from 'lucide-react';
 import toast from '../ui/Toast';
 import * as api from '../../services/api';
-import { formatDurationMin, formatTimeOfDay } from '../../utils/formatters';
+import { formatCount, formatDurationMin, formatTimeOfDay } from '../../utils/formatters';
 import BrailleSpinner from '../BrailleSpinner';
 import EmptyState from '../EmptyState';
 import { localDateStr } from '../meatspace/constants';
@@ -145,19 +145,19 @@ export default function ReviewTab({ accounts = [] }) {
       {/* Summary */}
       {review && (
         <div className="flex gap-4 text-xs">
-          <span className="text-gray-500">{review.summary.totalEvents} events</span>
+          <span className="text-gray-500">{formatCount(review.summary.totalEvents)} events</span>
           {review.summary.confirmed > 0 && (
-            <span className="text-port-success">{review.summary.confirmed} confirmed</span>
+            <span className="text-port-success">{formatCount(review.summary.confirmed)} confirmed</span>
           )}
           {review.summary.skipped > 0 && (
-            <span className="text-gray-500">{review.summary.skipped} skipped</span>
+            <span className="text-gray-500">{formatCount(review.summary.skipped)} skipped</span>
           )}
           {review.summary.unreviewed > 0 && (
-            <span className="text-port-accent">{review.summary.unreviewed} to review</span>
+            <span className="text-port-accent">{formatCount(review.summary.unreviewed)} to review</span>
           )}
           {review.progressEntries?.length > 0 && (
             <span className="text-port-accent">
-              {review.progressEntries.reduce((sum, e) => sum + (e.durationMinutes || 0), 0)}min logged
+              {formatCount(review.progressEntries.reduce((sum, e) => sum + (e.durationMinutes || 0), 0))}min logged
             </span>
           )}
         </div>

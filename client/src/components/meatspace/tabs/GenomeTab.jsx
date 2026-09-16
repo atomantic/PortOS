@@ -56,7 +56,7 @@ async function parseZipText(arrayBuffer, ext = '.txt') {
 }
 import * as api from '../../../services/api';
 import { ATTACHMENT_MAX_FILE_SIZE } from '../../../utils/fileUpload';
-import { formatBytes, formatDateNumeric } from '../../../utils/formatters';
+import { formatBytes, formatCount, formatDateNumeric } from '../../../utils/formatters';
 import GenomeCategoryCard from '../GenomeCategoryCard';
 import EpigeneticTracker from '../EpigeneticTracker';
 import ProvenanceChip from '../../ui/ProvenanceChip';
@@ -215,7 +215,7 @@ export default function GenomeTab() {
         }
         const result = await api.uploadGenomeFile(parsed.content, parsed.filename).catch(() => null);
         if (result) {
-          toast.success(`Genome uploaded: ${result.snpCount.toLocaleString()} SNPs found`);
+          toast.success(`Genome uploaded: ${formatCount(result.snpCount)} SNPs found`);
           await fetchSummary();
         }
         setUploading(false);
@@ -228,7 +228,7 @@ export default function GenomeTab() {
         const content = e.target.result;
         const result = await api.uploadGenomeFile(content, file.name).catch(() => null);
         if (result) {
-          toast.success(`Genome uploaded: ${result.snpCount.toLocaleString()} SNPs found`);
+          toast.success(`Genome uploaded: ${formatCount(result.snpCount)} SNPs found`);
           await fetchSummary();
         }
         setUploading(false);
@@ -325,7 +325,7 @@ export default function GenomeTab() {
       return null;
     });
     if (result) {
-      toast.success(`ClinVar synced: ${result.variantCount?.toLocaleString()} variants indexed`);
+      toast.success(`ClinVar synced: ${formatCount(result.variantCount)} variants indexed`);
       setClinvarStatus(result);
     }
     setClinvarSyncing(false);
@@ -454,7 +454,7 @@ export default function GenomeTab() {
 
       {/* Summary Dashboard */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-        <StatCard label="SNPs Loaded" value={summary.snpCount?.toLocaleString()} />
+        <StatCard label="SNPs Loaded" value={formatCount(summary.snpCount)} />
         <StatCard label="Markers Found" value={markers.length} />
         <StatCard label="Categories" value={Object.keys(grouped).length} />
         <StatCard label="Build" value={summary.build} />
@@ -687,7 +687,7 @@ export default function GenomeTab() {
           ) : (
             <>
               <span className="text-xs text-gray-500">
-                {clinvarStatus.variantCount?.toLocaleString()} variants indexed
+                {formatCount(clinvarStatus.variantCount)} variants indexed
                 {clinvarStatus.syncedAt && ` (synced ${formatDateNumeric(clinvarStatus.syncedAt)})`}
               </span>
               <button
@@ -723,7 +723,7 @@ export default function GenomeTab() {
             {/* Summary badges */}
             <div className="flex flex-wrap gap-2 text-sm">
               <span className="px-2 py-1 rounded bg-port-card border border-port-border text-gray-300">
-                {clinvarResults.totalMatched} total matches
+                {formatCount(clinvarResults.totalMatched)} total matches
               </span>
               {clinvarResults.bySeverity.pathogenic > 0 && (
                 <span className="px-2 py-1 rounded bg-red-500/10 text-red-400 border border-red-500/20">

@@ -6,7 +6,7 @@ import {
 } from 'lucide-react';
 import toast from '../ui/Toast';
 import BrailleSpinner from '../BrailleSpinner';
-import { formatDateTime } from '../../utils/formatters';
+import { formatCount, formatDateTime } from '../../utils/formatters';
 import {
   getContactsStatus,
   checkContactsSetup,
@@ -261,7 +261,7 @@ export default function ContactsTab() {
                   <div className="min-w-0">
                     <div className="font-medium text-gray-100 truncate">{s.displayName}</div>
                     <div className="text-xs text-gray-500 truncate">
-                      {[s.organization, s.phones?.[0], s.emails?.[0], s.eventCount ? `${s.eventCount} msgs` : null]
+                      {[s.organization, s.phones?.[0], s.emails?.[0], s.eventCount ? `${formatCount(s.eventCount)} msgs` : null]
                         .filter(Boolean)
                         .join(' · ')}
                     </div>

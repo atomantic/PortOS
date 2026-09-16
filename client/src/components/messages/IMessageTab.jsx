@@ -8,7 +8,7 @@ import BrailleSpinner from '../BrailleSpinner';
 import Drawer from '../Drawer';
 import toast from '../ui/Toast';
 import * as api from '../../services/api';
-import { formatClockTime, timeAgo, formatDateNumeric } from '../../utils/formatters';
+import { formatClockTime, formatCount, timeAgo, formatDateNumeric } from '../../utils/formatters';
 import useDrawerTab from '../../hooks/useDrawerTab';
 import { IMessageSettingsPanel } from './IMessageSettingsPanel';
 
@@ -623,7 +623,7 @@ export default function IMessageTab() {
 
       <div className="flex flex-wrap gap-2 text-xs text-gray-400 shrink-0">
         <span className="rounded border border-port-border bg-port-card px-2 py-1">
-          {stats?.eventCount ?? 0} events
+          {formatCount(stats?.eventCount, { fallback: '0' })} events
         </span>
         <span className="rounded border border-port-border bg-port-card px-2 py-1">
           {stats?.conversationCount ?? 0} conversations

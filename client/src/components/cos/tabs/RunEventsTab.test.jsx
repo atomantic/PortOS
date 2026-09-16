@@ -94,8 +94,8 @@ describe('RunEventsTab', () => {
 
   it('renders the ledger bound so "why is this run missing" has an answer', async () => {
     renderTab();
-    expect(await screen.findByText('12 / 5000')).toBeInTheDocument();
-    expect(screen.getByText('10000 events · 30d')).toBeInTheDocument();
+    expect(await screen.findByText('12 / 5,000')).toBeInTheDocument();
+    expect(screen.getByText('10,000 events · 30d')).toBeInTheDocument();
   });
 
   it('replays the run named by ?run= without the user clicking anything', async () => {
