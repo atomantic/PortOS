@@ -642,16 +642,30 @@ SHA were each cancelled again while other runs were in flight, and that same SHA
 passed on the first attempt made against an idle queue. One job idling — not
 computing — for five minutes is the cheap side of that trade against re-running
 twelve jobs straight into another cancel. The recovery job pins
-`timeout-minutes` above the delay so it is never killed mid-wait, and a test
-asserts that inequality.
+`timeout-minutes` above `MAX_RUNTIME_MS` — the delay *plus* two worst-case
+guard passes — so a slow GitHub can never get it killed mid-wait; that bound is
+derived from the constants, and the workflow test asserts the inequality, so
+raising the delay fails the build rather than quietly eating the margin.
 
-Every API-backed guard in the table is evaluated **twice**: once before the wait,
-so a run that is already ineligible skips without occupying a runner, and once
-after it, because that is the reading the re-dispatch is actually made on. A push
-or a human re-run that lands during the delay therefore still wins. The step
-summary records `phase: before-wait | after-wait` and the `delay` it used, so
-the Actions history can be read back as evidence when the constant is tuned —
-under the delay that actually produced each outcome, not today's value.
+Every API-backed guard in the table is evaluated **twice**: once before the wait
+and once after it. A push or a human re-run that lands during the delay
+therefore still wins, and the post-wait job listing is the more reliable one —
+a failing job's step records can still be settling when the run's own fail-fast
+cancel lands.
+
+The two passes are **not** equal in authority. The post-wait pass is the reading
+the re-dispatch is made on, and it fails CLOSED as before. The pre-wait pass is
+only an optimization — it exists so an obviously ineligible run skips without
+holding a runner idle — so **only a definitive `skipped` verdict short-circuits
+there.** An `unavailable` reading before the wait is not evidence of
+ineligibility, and a saturated GitHub is exactly when a transient 5xx is
+likeliest, so it falls through to the wait and lets the post-wait pass decide.
+Forfeiting the retry on a blip would lose the very case the delay was added to
+win.
+
+The step summary records `phase: before-wait | after-wait` and the `delay` it
+used, so the Actions history can be read back as evidence when the constant is
+tuned — under the delay that actually produced each outcome, not today's value.
 
 Deliberately **not** chosen: polling `GET /actions/runs?status=in_progress` and
 retrying only once the repository is quiet. On a busy repo that can mean never

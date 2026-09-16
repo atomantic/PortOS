@@ -12,7 +12,12 @@ import { fileURLToPath } from 'url';
 
 import { describe, expect, it, vi } from 'vitest';
 
-import { RETRY_DELAY_MS, retryCancelledCiRun, retryTargetFromEnv } from './ci-retry-cancelled-run.js';
+import {
+  MAX_RUNTIME_MS,
+  RETRY_DELAY_MS,
+  retryCancelledCiRun,
+  retryTargetFromEnv,
+} from './ci-retry-cancelled-run.js';
 import { workflowJobs } from './lib/workflowJobs.js';
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
@@ -381,6 +386,66 @@ describe('the wait before re-dispatching', () => {
     expect(clock.waits).toEqual([]);
   });
 
+  it('does not forfeit the retry when a PRE-wait lookup merely fails', async () => {
+    // The pre-wait pass is an optimization, not a verdict: a 5xx there is not
+    // evidence of ineligibility, and a saturated GitHub — the exact condition
+    // this workflow exists for — is when one is likeliest. Skipping on it
+    // would lose the very case the delay was added to win.
+    let apiRecovered = false;
+    const impl = vi.fn(async (url) => {
+      if (!apiRecovered) return { ok: false, status: 502 };
+      if (url.includes('/jobs?')) return json({ total_count: 0, jobs: [] });
+      if (url.includes('/runs?')) return json({ workflow_runs: [] });
+      if (url.endsWith('/rerun')) return { ok: true, status: 201 };
+      return json({ run_attempt: 1, status: 'completed', conclusion: 'cancelled' });
+    });
+
+    await expect(invoke({
+      env: BASE_ENV,
+      fetchImpl: impl,
+      wait: async () => { apiRecovered = true; },
+    })).resolves.toMatchObject({ outcome: 'requested', phase: 'after-wait' });
+    expect(impl.mock.calls.some(([url]) => url.endsWith('/rerun'))).toBe(true);
+  });
+
+  it('still fails CLOSED when the POST-wait lookup cannot be read', async () => {
+    // The other half of the rule above: falling through a pre-wait failure may
+    // only ever cost time. The pass the dispatch is actually made on must
+    // still refuse to treat an unreadable listing as "no job failed".
+    const impl = vi.fn(async () => ({ ok: false, status: 502 }));
+    await expect(invoke({ env: BASE_ENV, fetchImpl: impl }))
+      .resolves.toMatchObject({ outcome: 'unavailable', reason: 'jobs-unavailable', phase: 'after-wait' });
+    expect(impl.mock.calls.some(([url]) => url.endsWith('/rerun'))).toBe(false);
+  });
+
+  it('catches a job whose failure only settles DURING the wait', async () => {
+    // The fail-fast self-cancel can land while the failing job is still in its
+    // post-steps, so the pre-wait listing can legitimately read clean. The
+    // post-wait re-read is the more reliable one, and must block the retry.
+    let stepsSettled = false;
+    const impl = vi.fn(async (url) => {
+      if (url.includes('/jobs?')) {
+        return json({
+          total_count: 1,
+          jobs: [{
+            name: 'Server tests',
+            conclusion: 'cancelled',
+            steps: stepsSettled ? [{ conclusion: 'failure' }] : [{ conclusion: 'success' }],
+          }],
+        });
+      }
+      if (url.includes('/runs?')) return json({ workflow_runs: [] });
+      return json({ run_attempt: 1, status: 'completed', conclusion: 'cancelled' });
+    });
+
+    await expect(invoke({
+      env: BASE_ENV,
+      fetchImpl: impl,
+      wait: async () => { stepsSettled = true; },
+    })).resolves.toMatchObject({ outcome: 'skipped', reason: 'job-failed', phase: 'after-wait' });
+    expect(impl.mock.calls.some(([url]) => url.endsWith('/rerun'))).toBe(false);
+  });
+
   it('records the phase and the delay it used on the run summary', async () => {
     // The tuning evidence this issue asks for: a summary written under a
     // since-changed constant must still say which delay produced it.
@@ -398,13 +463,15 @@ describe('the wait before re-dispatching', () => {
 describe('ci-cancel-recovery.yml wiring', () => {
   const jobs = workflowJobs(RECOVERY_WORKFLOW);
 
-  it('gives the recovery job a timeout that outlives the wait', () => {
-    // The job now idles for RETRY_DELAY_MS before re-dispatching. A timeout
-    // shorter than that would kill it mid-wait and silently turn 'retried
-    // late' into 'never retried at all'.
+  it('gives the recovery job a timeout that outlives the wait AND both guard passes', () => {
+    // The job idles for RETRY_DELAY_MS and then re-reads every guard, so the
+    // bound that matters is MAX_RUNTIME_MS, not the delay alone — a timeout
+    // between the two would kill a slow run mid-wait and silently turn
+    // 'retried late' into 'never retried at all'. Asserting the derived bound
+    // is what makes raising the delay fail here instead of eating the margin.
     const timeoutMinutes = Number(jobs.retry.match(/^\s+timeout-minutes:\s*(\d+)\s*$/m)?.[1]);
     expect(Number.isFinite(timeoutMinutes)).toBe(true);
-    expect(timeoutMinutes * 60_000).toBeGreaterThan(RETRY_DELAY_MS);
+    expect(timeoutMinutes * 60_000).toBeGreaterThan(MAX_RUNTIME_MS);
   });
 
   it('triggers on a completed CI run and nothing else', () => {

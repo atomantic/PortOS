@@ -40,13 +40,15 @@ jobs:
       && github.event.workflow_run.event == 'pull_request'
       && github.event.workflow_run.run_attempt == 1
     runs-on: ubuntu-latest
-    # Must exceed RETRY_DELAY_MS in scripts/ci-retry-cancelled-run.js: the job
-    # deliberately idles for that long before re-dispatching (#7439), and a
-    # timeout shorter than the wait would kill it mid-wait — silently
-    # converting "retried late" into "never retried at all". Pinned rather
-    # than left at the 360-minute default so the relationship is visible to
-    # whoever tunes the delay; the guard test asserts the inequality.
-    timeout-minutes: 15
+    # Must exceed MAX_RUNTIME_MS in scripts/ci-retry-cancelled-run.js — the
+    # deliberate pre-dispatch idle (#7439) PLUS two worst-case guard passes,
+    # ~13.5 minutes in total. A shorter timeout kills the job mid-wait and
+    # silently converts "retried late" into "never retried at all". Pinned
+    # rather than left at the 360-minute default so the relationship is visible
+    # to whoever tunes the delay; the guard test asserts the inequality against
+    # that derived bound, so raising the delay fails the build rather than
+    # quietly eating the margin.
+    timeout-minutes: 20
     steps:
       # No `setup-node` and no `npm ci`: the script imports Node builtins
       # only (enforced by scripts/pre-install-entrypoints.test.js) and every

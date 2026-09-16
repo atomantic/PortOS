@@ -72,6 +72,20 @@ const FAILING_CONCLUSIONS = new Set(['failure', 'timed_out']);
  */
 export const RETRY_DELAY_MS = 5 * 60_000;
 
+/**
+ * The longest one invocation can take: the wait, plus TWO full guard passes at
+ * their worst case — every job page and both run lookups each spending the
+ * whole request timeout.
+ *
+ * The recovery job's `timeout-minutes` must exceed this, or a slow GitHub gets
+ * the job killed mid-wait and silently turns "retried late" into "never
+ * retried at all". Derived from the constants above rather than written down,
+ * so raising MAX_JOB_PAGES or RETRY_DELAY_MS fails the workflow test instead of
+ * quietly eating the margin.
+ */
+export const MAX_RUNTIME_MS = RETRY_DELAY_MS
+  + 2 * (MAX_JOB_PAGES + 2) * REQUEST_TIMEOUT_MS;
+
 /** Real elapsed time. Injected in tests so no suite ever sleeps. */
 const sleep = (ms) => new Promise((resolve) => { setTimeout(resolve, ms); });
 
@@ -351,10 +365,18 @@ export async function retryCancelledCiRun({
       { outcome: 'skipped', reason: 'retry-budget-exhausted' });
   }
 
-  // Before the wait: a run that is already ineligible skips now rather than
-  // holding a runner for the full delay.
+  // Before the wait: a run that is DEFINITIVELY ineligible skips now rather
+  // than holding a runner idle for the full delay.
+  //
+  // Only a `skipped` verdict short-circuits. An `unavailable` one is not
+  // evidence of ineligibility, and a saturated GitHub — precisely the condition
+  // this workflow exists for — is when a transient 5xx here is likeliest, so
+  // forfeiting the retry on it would lose the very case the delay was added to
+  // win. A failed lookup falls through to the wait and lets the post-wait pass
+  // decide; that pass still fails CLOSED. This one is only an optimization, so
+  // it may save time but must never spend the budget.
   const early = await evaluateApiGuards(fetchImpl, target, logger);
-  if (early) return done(early.level, early.message, early.result);
+  if (early?.result.outcome === 'skipped') return done(early.level, early.message, early.result);
 
   logger.log?.(`⏳ Waiting ${Math.round(delayMs / 1000)}s before re-dispatching CI run ${target.runId}: the queue that cancelled it is likely still full`);
   await wait(delayMs);
