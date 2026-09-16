@@ -75,7 +75,7 @@ export async function runUntrustedContentAnalysis({ provider, model, content, pr
   // that must stay conservative, not a budgeting nicety. Preserved verbatim
   // from the pre-#7473 behavior; it only ever LOWERS the shared ladder's
   // answer, so it never re-opens the catalog-window blind spot #7472 closed.
-  const contextWindow = local && !(Number(selected.numCtx) > 0) ? Math.min(claimedWindow, 4096) : claimedWindow;
+  const contextWindow = local && !(Number(runtimeProvider.numCtx) > 0) ? Math.min(claimedWindow, 4096) : claimedWindow;
   const maxTokens = Math.min(8192, config.maxOutputChars, Math.floor(contextWindow / 4));
   // UTF-8 bytes are a conservative upper bound for byte-fallback text tokens.
   // Never clip evidence to make an undersized context appear successful.
