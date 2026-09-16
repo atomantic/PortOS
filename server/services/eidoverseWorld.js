@@ -344,6 +344,17 @@ async function loadState() {
   return normalizeState(await readJSONFile(STATE_FILE, clone(DEFAULT_STATE), { strict: true }));
 }
 
+/**
+ * The install's stored design recipe, read WITHOUT a runtime, presence, or an
+ * install check — `loadState()` is a plain file read, and observation-first
+ * discovery (#7457) needs the world's shape even when its runtime is stopped.
+ * `normalizeState` has already migrated an older stored recipe forward, so a
+ * caller resolves this the same way the projection does.
+ */
+export async function readEidoverseWorldRecipe() {
+  return (await loadState()).recipe;
+}
+
 async function mutateState(mutator) {
   return stateLock(async () => {
     const state = await loadState();

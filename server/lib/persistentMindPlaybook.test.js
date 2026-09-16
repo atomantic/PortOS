@@ -26,7 +26,10 @@ describe('persistentMindPlaybook', () => {
   it('composes continuous-play instructions after the operator prompt', () => {
     expect(playbookInstructionBlock({ mode: 'default' })).toBe('');
     const block = playbookInstructionBlock({ mode: 'continuous-play' });
-    expect(block).toContain('EXPLORE');
+    // Observation leads the loop (#7457): a mind looks at the world before
+    // it speaks in it, so OBSERVE is the step name the template opens with.
+    expect(block).toContain('OBSERVE');
+    expect(block).toContain('eidoverse.observe');
     expect(block).toContain('INVENT');
     expect(block).toBe(CONTINUOUS_PLAY_PLAYBOOK_INSTRUCTIONS);
     const composed = composePersistentMindInstructions('Be concise.', { mode: 'continuous-play' });

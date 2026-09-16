@@ -10,6 +10,7 @@ import { createHash } from 'node:crypto';
 import { canonicalStringify } from '../lib/objects.js';
 import {
   EIDOVERSE_DISTRICTS_V2,
+  EIDOVERSE_SCALAR_SOURCE_KEYS,
   EIDOVERSE_MANAGED_PREFIX,
   EIDOVERSE_MAX_LIVE_ENTITIES,
   EIDOVERSE_META_ENTITY_ID,
@@ -100,7 +101,7 @@ export const EIDOVERSE_PROJECTION_KINDS = Object.freeze([
 ]);
 
 function sourceAvailable(source, key) {
-  if (key === 'health') return source.health !== null && source.health !== undefined;
+  if (EIDOVERSE_SCALAR_SOURCE_KEYS.includes(key)) return source[key] !== null && source[key] !== undefined;
   return Array.isArray(source[key]);
 }
 

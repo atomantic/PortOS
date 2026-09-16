@@ -921,6 +921,121 @@ Two ways to use a chosen layout:
   publishing it to the shared baseline remains the separate, explicit
   `eidoverse.promote` act above.
 
+## Observation-first discovery (#7457)
+
+SwarmWorld's finding is that reuse between agents starts by **looking at the
+world**, not by asking its author about it. PortOS's mind tools grew the other
+way round: a mind could speak (`eidoverse.say`), travel (`eidoverse.visit`) and
+chat (`eidoverse.chat`, `eidoverse.visit-chat`) long before it could see what
+was already standing in its own Commons. The continuous-play playbook has told
+it to "move through the world and map what already exists" since that loop
+landed — naming places, projections and affordances it had no tool to read.
+
+`eidoverse.observe` is that missing read, and the playbook now leads with it.
+
+### What it answers
+
+One mind-scoped call (`manageEidoverse`, the same grant as the foundation and
+controller reads it summarizes) returns:
+
+- **`places`** — the eight districts as somewhere a mind can stand and
+  describe: label, direction, landmark, which signal sources feed it, how many
+  live signals those sources currently report, and whether any of them want
+  attention. Districts come from the install's **resolved design recipe**, not
+  from a constant, so a mind never names a district a later design version
+  renamed (V3 calls it the Federation Terminal, not the V2 Harbor) or one the
+  user's own overrides moved. A source the recipe has switched off reports as
+  `disabled` rather than counted — the projection places nothing for it.
+- **`peers`** — the opaque travel ids `eidoverse.destinations` also returns, so
+  one carries straight into `eidoverse.visit` — each with **how many
+  foundations this install inherited through it**.
+- **`foundations.inherited`** — a peer's contributions, newest first, with the
+  peer they arrived through and the instance that authored them (distinct on
+  purpose: a multi-hop re-share is only legible when they are).
+- **`controllers.needsAttention`** — only installs that are disarmed or
+  failing. A controller that has never ticked yet is one interval away from its
+  first tick, which is normal, not an alarm.
+- **`changes`** — what is new since this mind last observed.
+
+That third bullet is the epic's acceptance criterion: **a peer contribution is
+discoverable by touring the Commons**, because the Federation Terminal chamber
+carries the count and the inherited list names the build — no repository read
+and no conversation with its author required.
+
+### Three distinctions the report refuses to collapse
+
+- **Unavailable is not empty.** A district whose source failed to read reports
+  `signalCount: null` and `status: 'unknown'`, never `0`/`quiet`. Reporting an
+  unreadable app list as "the terraces are empty" is the same misreport #7458
+  fixed for district density, and it would be worse here, where the mind acts
+  on it.
+- **`signalCount` counts signals, not placed entities.** The projection
+  allocates a capped, round-robin sample of live signals into the world, so the
+  world may hold fewer. Counting sources keeps the tour readable **without a
+  running world runtime** — a mind that cannot start the runtime still needs to
+  know what is in its Commons — and the field name says "signals" so the
+  difference is never implied away.
+- **Never-observed is not nothing-new.** A first observation reports
+  `firstObservation: true` with no new items rather than handing a mind waking
+  into a months-old install its entire world as "new".
+- **A section that failed to collect is not an empty section.** It arrives as
+  `null`, contributes no changes, and **carries the previous marker's ids
+  forward**. Collapsing it to `[]` would report every peer as departed on a
+  transient read failure, rewrite the marker without them, and then report them
+  all as new on the next observation — a flap that repeats for as long as the
+  source keeps failing intermittently.
+
+### The visit marker
+
+"What is new since I last looked" has to cross a **wake boundary**: a mind
+wakes, observes, acts, and ends its turn, and the next wake is a different
+process. Nothing in-memory survives that. The world chat cursor lives in a
+100-entry ring buffer a restart empties; the peer sync's `lastOfferingListHash`
+is per-peer content-change detection for a background sweep, also in memory.
+
+So observing **stamps a marker** — `data/eidoverse/observation.json`, covered
+in [STORAGE.md](../STORAGE.md). That is the stigmergic half of the slice: the
+trail a mind leaves is what makes the next observation's `changes` mean
+anything. It also means `eidoverse.observe` is **not idempotent**, and that it
+is declared `sideEffect: 'write'` even though a mind reads it like a read.
+That is not a label: `mindToolRecipes.js` only lets a saved recipe compose
+`'read'` tools, and the MCP bridge exports `readOnlyHint: sideEffect ===
+'read'`. Calling a marker-stamping tool a read would let a replayable recipe
+silently consume the `changes` delta the playbook depends on, and would tell an
+external MCP client the tool touches nothing.
+`observeEidoverseWorld({ commit: false })` is the internal look-without-stamping
+form.
+
+The marker holds ids, per-district status, and a timestamp — no body, no style,
+no record content — and is machine-local like the ledger and the controller
+store beside it. A marker written by a newer PortOS degrades to one honest
+`firstObservation` rather than being diffed against fields this build does not
+understand, and an *unreadable* marker file throws rather than reading as
+never-observed, because the next write would otherwise replace a real marker
+and re-report a settled world.
+
+### Signal, not noise
+
+Two filters keep `changes` worth reading on a busy install:
+
+- **Places diff on a status flip, never on a count change.** Signal counts move
+  every wake as agents and tasks come and go; diffing them would make `changes`
+  pure churn. The live count stays in `places` for a mind that wants it.
+- **A controller already wanting attention last visit is not re-reported.** A
+  long-broken controller would otherwise re-alarm every wake and drown the one
+  that just broke.
+
+### Where it lives
+
+`server/lib/eidoverseObservation.js` is pure: `buildEidoverseObservation()`
+takes already-collected snapshots plus the previous marker and returns
+`{ report, marker }`, so the whole diff contract is testable without a world
+runtime, a socket or a file. `server/services/eidoverseObservationLedger.js` is
+the I/O, clock and marker shell around it — and every collection failure
+degrades that section to `null` rather than failing the tour, because a mind
+that cannot read its controllers should still get to see its districts.
+
+
 ## Executable world controllers (#7456)
 
 SwarmWorld's strongest result is that technologies are *executable*: they keep
