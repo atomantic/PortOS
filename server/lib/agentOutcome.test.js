@@ -1,21 +1,15 @@
 /**
- * The handoff predicate, and cross-package parity for its client mirror.
+ * The handoff predicate and the line a handoff card shows.
  *
- * `server/lib/agentOutcome.js` is the source of truth; `client/src/lib/agentOutcome.js`
- * is a hand-maintained copy, because the client must not import out of the server
- * tree. Both are pure, so ONE table runs against BOTH and a copy that drifts fails
- * here instead of quietly letting the run card disagree with the daily report about
- * whether a provider swap was a failure.
- *
- * It lives server-side, like the repo's other parity suites, because the server
- * runner can load the pure client module but not the reverse.
+ * No parity suite: `client/src/lib/agentOutcome.js` re-exports this module rather
+ * than copying it (the one-way client→`server/lib` edge the repo allows for a pure
+ * leaf), so there is only ever one implementation to test. A server test may not
+ * import client source — `scripts/server-imports-no-client.test.js` freezes the
+ * legacy cross-imports and refuses new ones.
  */
 
 import { describe, it, expect } from 'vitest';
-import { isAgentHandoff as serverIsAgentHandoff } from './agentOutcome.js';
-import { isAgentHandoff as clientIsAgentHandoff, agentHandoffReason } from '../../client/src/lib/agentOutcome.js';
-
-const IMPLEMENTATIONS = [['server', serverIsAgentHandoff], ['client', clientIsAgentHandoff]];
+import { isAgentHandoff, agentHandoffReason } from './agentOutcome.js';
 
 // The record `resumeAgent` retires when Relaunch swaps providers mid-run: it
 // carries `success: false` and a summary in `error`, because the pause/requeue
@@ -47,13 +41,13 @@ const CASES = [
   ['undefined', undefined, false],
 ];
 
-describe.each(IMPLEMENTATIONS)('isAgentHandoff (%s)', (_side, isAgentHandoff) => {
+describe('isAgentHandoff', () => {
   it.each(CASES)('reads %s as %s', (_label, record, expected) => {
     expect(isAgentHandoff(record)).toBe(expected);
   });
 });
 
-describe('agentHandoffReason (client-only)', () => {
+describe('agentHandoffReason', () => {
   it('prefers the pause reason when a continuation was actually queued', () => {
     // `result.error` there is `resumeAgent`'s summary — "task … requeued on
     // <branch>" — which answers a question nobody asked while looking at the run

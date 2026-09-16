@@ -41,3 +41,28 @@
 export function isAgentHandoff(agent) {
   return agent?.result?.resumed === true;
 }
+
+/**
+ * The one line a handoff card should show: WHAT THE USER CHANGED.
+ *
+ * When a continuation was actually queued (`resumedTaskId`), `metadata.pauseReason`
+ * wins: on a Relaunch that is the sentence the user is looking for ("Relaunched by
+ * user on codex / gpt-5"), while `result.error` holds `resumeAgent`'s summary,
+ * which says where the TASK went rather than why this run stopped.
+ *
+ * With no continuation the order flips. `retireStrandedPausedAgents` also stamps
+ * `resumed: true` — on a pause whose task was deleted or moved on — and there the
+ * pause reason is the ORIGINAL one ("Paused by user"), which would read as a
+ * deliberate provider swap for a run that was simply abandoned. `result.error`
+ * ("Pause retired — its task … no longer exists") is the honest line.
+ *
+ * Lives here beside the predicate even though only the client renders it: this is
+ * the file the client re-exports, and splitting the pair would put half the
+ * contract back in a copy.
+ */
+export function agentHandoffReason(agent) {
+  const error = agent?.result?.error;
+  const pauseReason = agent?.metadata?.pauseReason;
+  const handedOn = !!agent?.result?.resumedTaskId;
+  return (handedOn ? pauseReason || error : error || pauseReason) || 'Handed off to a new run';
+}
