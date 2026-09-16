@@ -1181,6 +1181,13 @@ describe('dataSync — per-category schema gate (cross-key isolation)', () => {
       // gated by syncCosTasksFromPeer's gentle skip-if-ahead; declared non-record
       // in NON_RECORD_SCHEMA_CATEGORIES.
       'cosTasks',
+      // Promoted Eidoverse foundations (#7455) → its own receiver-pull endpoint
+      // (GET /api/peer-sync/eidoverse-foundations), NOT the file-snapshot
+      // transfer — the ledger is machine-local and only the promote envelope
+      // ever crosses. Versioned for that envelope's transport wrapper and gated
+      // by syncEidoverseFoundationsFromPeer's gentle skip-if-ahead; declared
+      // non-record in NON_RECORD_SCHEMA_CATEGORIES.
+      'eidoverseFoundations',
     ]);
     const covered = new Set(Object.values(dataSync.getSnapshotCategorySchemaKeys()).flat());
     for (const key of Object.keys(PORTOS_SCHEMA_VERSIONS)) {

@@ -11,6 +11,7 @@
  *   - `peerSyncReceive.js`  — receiver-side push handler
  *   - `peerMediaLibrarySync.js` — standalone media-library sync
  *   - `peerCosSync.js`      — CoS history + tasks sync
+ *   - `peerEidoverseFoundationSync.js` — Eidoverse foundation pull/inherit (#7455)
  *
  * Their public surface is re-exported below so existing importers
  * (routes/peerSync.js, sharing/index.js, dataSync, the test suite, …) keep
@@ -111,6 +112,12 @@ export {
   syncCosTasksFromPeer,
   syncCosTasksWithAllPeers,
 } from './peerCosSync.js';
+export {
+  buildEidoverseFoundationOffering,
+  syncEidoverseFoundationsFromPeer,
+  syncEidoverseFoundationsWithAllPeers,
+  __resetEidoverseFoundationSweepForTests,
+} from './peerEidoverseFoundationSync.js';
 
 
 /**

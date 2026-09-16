@@ -53,6 +53,7 @@ import {
   buildMediaLibraryManifest,
   buildCosHistoryManifest,
   buildCosTasksPayload,
+  buildEidoverseFoundationOffering,
   ERR_NOT_FOUND,
   ERR_VALIDATION,
   ERR_SCHEMA_VERSION_AHEAD,
@@ -204,6 +205,27 @@ router.get('/cos-history-manifest', asyncHandler(async (req, res) => {
 router.get('/cos-tasks', asyncHandler(async (req, res) => {
   await authorizePeerPull(req, { route: 'cos-tasks' });
   res.json(await buildCosTasksPayload());
+}));
+
+// --- GET /eidoverse-foundations --- advertise the Eidoverse foundations this
+// instance has PROMOTED (#7455) so a full-sync peer can pull and inherit them.
+//
+// Returns `{ schemaVersion, listHash, candidates: [<promote envelope>, …] }`.
+// The envelope is the one Eidoverse artifact the machine-local privacy ADR
+// authorizes to cross, and it has no `style` layer by construction, so an
+// inheriting peer gets the substance and keeps its own cosmetics. The receiver
+// re-runs the whole accept-side gate on every envelope before it stores one.
+//
+// `alwaysEnforce` — unlike the older pull routes, this one does NOT ride the
+// warn-first authorization ramp. That ramp exists so a peer mid-upgrade doesn't
+// lose creative-work sync it already had; a brand-new endpoint has no such
+// history to protect, so only a registered, outbound-enabled peer ever gets
+// this install's promoted bodies. The manifests aren't scoped to one record
+// kind (a foundation is not a peer-subscribable record), so like them it gates
+// on `peerAllowsOutbound` alone — see peerPullAuthorization.js.
+router.get('/eidoverse-foundations', asyncHandler(async (req, res) => {
+  await authorizePeerPull(req, { route: 'eidoverse-foundations', alwaysEnforce: true });
+  res.json(await buildEidoverseFoundationOffering());
 }));
 
 // --- GET /cos-agent-archive --- stream ONE completed-agent archive file so a

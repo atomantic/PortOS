@@ -15,6 +15,7 @@ vi.mock('../services/sharing/peerSync.js', () => ({
   buildMediaLibraryManifest: vi.fn(),
   buildCosHistoryManifest: vi.fn(),
   buildCosTasksPayload: vi.fn(),
+  buildEidoverseFoundationOffering: vi.fn(),
   ERR_NOT_FOUND: 'PEER_SYNC_SUBSCRIPTION_NOT_FOUND',
   ERR_VALIDATION: 'PEER_SYNC_SUBSCRIPTION_VALIDATION',
   ERR_SCHEMA_VERSION_AHEAD: 'PEER_SYNC_SCHEMA_VERSION_AHEAD',
@@ -648,6 +649,34 @@ describe('peer-sync routes', () => {
     });
   });
 
+  describe('GET /api/peer-sync/eidoverse-foundations (#7455)', () => {
+    const offering = {
+      schemaVersion: 1,
+      listHash: 'a'.repeat(64),
+      candidates: [{ candidateVersion: 1, foundationId: 'tide-beacon', fingerprint: 'b'.repeat(64) }],
+    };
+
+    it('200 with the promoted-foundation offering', async () => {
+      svc.buildEidoverseFoundationOffering.mockResolvedValue(offering);
+      const res = await request(buildApp()).get('/api/peer-sync/eidoverse-foundations');
+      expect(res.status).toBe(200);
+      expect(res.body).toEqual(offering);
+    });
+
+    it('does NOT ride the warn-first authorization ramp — a new endpoint has no upgrade history to protect', async () => {
+      svc.buildEidoverseFoundationOffering.mockResolvedValue(offering);
+      await request(buildApp()).get('/api/peer-sync/eidoverse-foundations');
+      // Without `alwaysEnforce`, an unregistered caller on the tailnet would be
+      // SERVED this install's promoted bodies until the user found and flipped
+      // `federation.strictPullAuthorization` — which defaults off.
+      expect(authorizePeerPull).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ route: 'eidoverse-foundations', alwaysEnforce: true }),
+      );
+      expect(vi.mocked(authorizePeerPull).mock.calls[0][1].recordKind).toBeUndefined();
+    });
+  });
+
   describe('GET /api/peer-sync/cos-agent-archive (#1650)', () => {
     let tmp;
     let originalCos;
@@ -871,6 +900,7 @@ describe('peer-sync routes', () => {
       ['/api/peer-sync/library-manifest', 'buildMediaLibraryManifest'],
       ['/api/peer-sync/cos-history-manifest', 'buildCosHistoryManifest'],
       ['/api/peer-sync/cos-tasks', 'buildCosTasksPayload'],
+      ['/api/peer-sync/eidoverse-foundations', 'buildEidoverseFoundationOffering'],
     ])('403s %s without building the payload when the gate rejects', async (path, fn) => {
       vi.mocked(authorizePeerPull).mockRejectedValue(
         Object.assign(new Error('peer not authorized for this record'), { status: 403, code: 'PEER_PULL_FORBIDDEN' })
