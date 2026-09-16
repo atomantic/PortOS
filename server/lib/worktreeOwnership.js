@@ -17,6 +17,7 @@
 
 import { win32 } from 'path';
 import { isPathInsideDir } from './fileUtils.js';
+import { kebabCase, truncateOnBoundary } from './textUtils.js';
 
 /** Directory basename from either POSIX or Windows git worktree output. */
 export function worktreeAgentId(worktreePath) {
@@ -26,6 +27,36 @@ export function worktreeAgentId(worktreePath) {
 /** True for a worktree owned by the human `/claim` lifecycle. */
 export function isHumanClaimWorktree(agentId) {
   return typeof agentId === 'string' && agentId.startsWith('claim-');
+}
+
+/**
+ * The per-app namespace segment for a worktree directory inside PortOS's SHARED
+ * `data/cos/worktrees/` root. Every managed app's claim flow checks out there, so
+ * a directory named only after the work item (`claim-issue-10`, `claim-<plan-slug>`)
+ * collides as soon as two apps carry the same issue number or PLAN slug — the
+ * second agent's `git worktree add` then fails on a tree the first one owns, and
+ * the reapers cannot tell whose it was.
+ *
+ * The app NAME alone does not isolate them (two managed apps may share a name),
+ * so the app ID is what actually disambiguates; the name rides in front only so
+ * a human listing `data/cos/worktrees/` can tell whose tree a directory is — it
+ * is decoration, and only the id is load-bearing.
+ * Eight id characters is ample against one install's app list and keeps the path
+ * short enough to stay readable in agent logs and `git worktree list` output.
+ *
+ * Callers render this INSIDE the `claim-`-prefixed name (`claim-<slug>-issue-10`),
+ * never in front of it — `isHumanClaimWorktree` above keys on that prefix. Pure.
+ *
+ * @param {{id?: string, name?: string}} app - the managed-app record
+ * @returns {string}
+ */
+export function appWorktreeSlug(app) {
+  const name = truncateOnBoundary(kebabCase(app?.name), 24);
+  // Sliced inline rather than through fileUtils' `shortId`: this module is pure
+  // and reached by suites that partially mock that barrel, so borrowing one more
+  // name from it makes them fail on a missing export for no saving over a slice.
+  const id = String(app?.id ?? '').replace(/[^a-zA-Z0-9]/g, '').toLowerCase().slice(0, 8);
+  return [name, id].filter(Boolean).join('-') || 'app';
 }
 
 /** True for the directory naming convention exclusively owned by CoS agents. */

@@ -200,6 +200,24 @@ export function kebabCase(text) {
 }
 
 /**
+ * Bound a kebab slug to `max` characters WITHOUT cutting mid-word: back off to
+ * the last `-` at or before `max`, hard-cut only when no boundary sits in range,
+ * and never leave a trailing separator.
+ *
+ * Lives here beside `kebabCase` because both of its callers are slug builders a
+ * human then reads — a PLAN.md `[slug]` id and the app segment of a CoS worktree
+ * directory name (`appWorktreeSlug`, lib/worktreeOwnership.js), which somebody
+ * scanning `git worktree list` uses to decide whether a tree is safe to reap.
+ * NOT `trimTo`: that one trims whitespace and hard-slices, so it reintroduces
+ * both the mid-word cut and the trailing hyphen.
+ */
+export function truncateOnBoundary(slug, max) {
+  if (slug.length <= max) return slug;
+  const cut = slug.lastIndexOf('-', max);
+  return (cut > 0 ? slug.slice(0, cut) : slug.slice(0, max)).replace(/-+$/, '');
+}
+
+/**
  * `pluralize(1, 'item')` → "1 item"; `pluralize(2, 'item')` → "2 items".
  * Pass a third arg for an irregular plural: `pluralize(1, 'person', 'people')`.
  *

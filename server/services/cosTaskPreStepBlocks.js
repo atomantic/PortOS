@@ -30,6 +30,7 @@ import { getActiveApps } from './apps.js';
 import { getCodeReviewDefaults } from './codeReview.js';
 import { NON_ACTIONABLE_ISSUE_LABELS } from './perpetualWork.js';
 import { DISPATCH_HINT_FANOUT_GUIDANCE } from '../lib/dispatchLabels.js';
+import { applyAppPlaceholders } from '../lib/appPromptPlaceholders.js';
 import {
   appendReviewerEffortBlock,
   buildLocalReviewerInstructions,
@@ -857,16 +858,15 @@ export async function buildImprovementTaskDescription({ promptTemplate, app, pro
   // from the completion section, for every claim task type (#4770).
   if (rendersReviewers) Object.assign(metadata, reviewerConfigMetadata(claimReviewers));
 
-  return `${swarmBlock}${promptTemplate}`
-    // {modeInstructions} before {trackerInstructions}: the file-issues mode
-    // contract itself carries {trackerInstructions}. Then tracker before
-    // {appName}/{repoPath} — the injected block carries those too. This
-    // ordering is load-bearing (mirrors triggerReferenceAnalysis).
+  // {modeInstructions} before {trackerInstructions}: the file-issues mode
+  // contract itself carries {trackerInstructions}. Then tracker before the app
+  // placeholders — the injected block carries those too. This ordering is
+  // load-bearing (mirrors triggerReferenceAnalysis).
+  const withBlocks = `${swarmBlock}${promptTemplate}`
     .replace(/\{modeInstructions\}/g, () => blocks.modeInstructions || '')
-    .replace(/\{trackerInstructions\}/g, () => blocks.trackerInstructions)
-    .replace(/\{appName\}/g, app.name)
-    .replace(/\{repoPath\}/g, app.repoPath)
-    .replace(/\{appId\}/g, app.id)
+    .replace(/\{trackerInstructions\}/g, () => blocks.trackerInstructions);
+
+  return applyAppPlaceholders(withBlocks, app)
     // Function form — reviewersCsv can carry a user-set reviewerModels pin,
     // and normalizeReviewerModel allows `$` in that free text (only `[`, `]`,
     // `,`, and line breaks/tabs are forbidden), so a string replacement would
