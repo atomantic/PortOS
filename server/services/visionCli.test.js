@@ -321,6 +321,55 @@ describe('describeImageViaCli', () => {
     expect(child.kill).toHaveBeenCalledWith('SIGTERM');
   });
 
+  // #7496. With a credentialBootstrap provider the direct child is the user's
+  // bootstrap CLI supervising the harness, not the harness itself, so the
+  // timeout has to signal the whole process group or a wedged vision call
+  // leaves a harness running past the rejection.
+  describe('credential-bootstrap process-group teardown', () => {
+    const bootstrapProvider = {
+      id: 'codex',
+      command: 'codex',
+      args: [],
+      credentialBootstrap: { command: 'token-cli', args: ['run'], argsSeparator: '--' },
+    };
+
+    it('spawns a bootstrap-wrapped child detached, and an unwrapped one attached', async () => {
+      const wrappedChild = makeFakeChild();
+      const wrappedSpawn = spawnEmitting(wrappedChild, (c) => { c.emit('close', 0); });
+      await describeImageViaCli({
+        provider: bootstrapProvider, dataUrl: PNG_DATA_URL, prompt: 'p', spawnImpl: wrappedSpawn,
+      });
+      expect(wrappedSpawn.mock.calls[0][0]).toBe('token-cli');
+      expect(wrappedSpawn.mock.calls[0][2].detached).toBe(true);
+
+      const plainChild = makeFakeChild();
+      const plainSpawn = spawnEmitting(plainChild, (c) => { c.emit('close', 0); });
+      await describeImageViaCli({
+        provider: { id: 'codex', command: 'codex', args: [] },
+        dataUrl: PNG_DATA_URL, prompt: 'p', spawnImpl: plainSpawn,
+      });
+      expect(plainSpawn.mock.calls[0][2].detached).toBe(false);
+    });
+
+    it('signals the whole group on timeout for a wrapped provider', async () => {
+      // Spy so the negative pid never reaches a real process group.
+      const killSpy = vi.spyOn(process, 'kill').mockImplementation(() => true);
+      const child = makeFakeChild();
+      child.pid = 818181;
+      const promise = describeImageViaCli({
+        provider: bootstrapProvider, dataUrl: PNG_DATA_URL, prompt: 'p', timeout: 20,
+        spawnImpl: vi.fn(() => child),
+      });
+
+      await expect(promise).rejects.toThrow(/timed out after 20ms/);
+      expect(killSpy).toHaveBeenCalledWith(-818181, 'SIGTERM');
+      // The group signal landed, so the per-pid fallback never runs — the
+      // harness behind the wrapper is covered by the same signal.
+      expect(child.kill).not.toHaveBeenCalled();
+      killSpy.mockRestore();
+    });
+  });
+
   it('contains an EPIPE on stdin from a vision CLI that died before reading the prompt (#5655)', async () => {
     // describeImageViaCli runs outside the Express request lifecycle, so an
     // unlistened 'error' on the stdin stream would kill the server process

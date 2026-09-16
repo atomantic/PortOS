@@ -2255,3 +2255,85 @@ describe('lifecycle ledger — pause and interruption', () => {
     expect(ledgerCalls('run.interrupted')).toHaveLength(0);
   });
 });
+
+// #7496. A credential-bootstrap provider's agent child is the user's bootstrap
+// CLI supervising the harness, spawned into its own process group by
+// `agentCliSpawning` and flagged `processGroup: true` on its activeAgents entry.
+// These stop paths hold only that entry — they cannot re-derive the wrap — so
+// the flag has to be honored here or a terminate/force-kill leaves the harness
+// running (possibly with `--dangerously-skip-permissions` in a worktree,
+// holding a freshly minted credential) after the run is finalized.
+describe('credential-bootstrap process-group teardown', () => {
+  let killSpy;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    activeAgents.clear();
+    pausedAgents.clear();
+    // Spy so a negative pid never reaches a real process group; returning
+    // truthy makes killProcessTree treat the group signal as delivered.
+    killSpy = vi.spyOn(process, 'kill').mockImplementation(() => true);
+    getTaskById.mockResolvedValue({ id: 'task-1', taskType: 'user', description: 'Do work', metadata: {} });
+  });
+
+  afterEach(() => {
+    killSpy.mockRestore();
+  });
+
+  const wrappedAgent = (kill = vi.fn()) => Object.assign(
+    Object.create(ChildProcess.prototype), { kill, pid: 909090 },
+  );
+
+  it('terminateAgent signals the whole group for a wrapped agent', async () => {
+    const kill = vi.fn();
+    activeAgents.set('agent-1', {
+      process: wrappedAgent(kill), processGroup: true, taskId: 'task-1', runId: 'run-1', pid: 909090,
+    });
+
+    await terminateAgent('agent-1');
+
+    expect(killSpy).toHaveBeenCalledWith(-909090, 'SIGTERM');
+    // The group signal landed, so killProcessTree never falls back to the
+    // wrapper's own pid — the harness behind it is covered.
+    expect(kill).not.toHaveBeenCalled();
+    clearTimeout(activeAgents.get('agent-1')?.killTimer);
+  });
+
+  it('terminateAgent signals only the child for an unwrapped agent', async () => {
+    const kill = vi.fn();
+    activeAgents.set('agent-1', {
+      process: fakeChildProcess(kill), taskId: 'task-1', runId: 'run-1', pid: 123,
+    });
+
+    await terminateAgent('agent-1');
+
+    expect(killSpy).not.toHaveBeenCalledWith(-123, expect.anything());
+    expect(kill).toHaveBeenCalledWith('SIGTERM');
+    clearTimeout(activeAgents.get('agent-1')?.killTimer);
+  });
+
+  it('killAgent SIGKILLs the whole group for a wrapped agent', async () => {
+    const kill = vi.fn();
+    activeAgents.set('agent-1', {
+      process: wrappedAgent(kill), processGroup: true, taskId: 'task-1', runId: 'run-1', pid: 909090,
+    });
+
+    await killAgent('agent-1');
+
+    expect(killSpy).toHaveBeenCalledWith(-909090, 'SIGKILL');
+    expect(kill).not.toHaveBeenCalled();
+  });
+
+  it('pauseAgent signals the whole group for a wrapped agent', async () => {
+    const kill = vi.fn();
+    activeAgents.set('agent-1', {
+      process: wrappedAgent(kill), processGroup: true, taskId: 'task-1', runId: 'run-1', pid: 909090,
+    });
+
+    await pauseAgent('agent-1', 'billing window');
+
+    expect(killSpy).toHaveBeenCalledWith(-909090, 'SIGTERM');
+    expect(kill).not.toHaveBeenCalled();
+    clearTimeout(activeAgents.get('agent-1')?.killTimer);
+  });
+});

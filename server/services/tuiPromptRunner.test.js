@@ -1608,4 +1608,88 @@ describe('executeTuiRun', () => {
       }));
     });
   });
+
+  // #7496. tuiPromptRunner spawns its OWN PTY directly — no hosting login shell —
+  // so with a credentialBootstrap provider the PTY's direct child is the bootstrap
+  // WRAPPER, and node-pty's `kill()` signals `this.pid` alone. A wrapper that
+  // forks and does not forward the signal keeps the harness alive; node-pty then
+  // never observes an exit, so the pty master never closes and the kernel's
+  // terminal-hangup backstop never fires either. forkpty already makes the PTY
+  // child a session leader whose descendants share its process group, so the group
+  // signal is the exact reach this path needs.
+  describe('executeTuiRun — credential-bootstrap process-group teardown', () => {
+    const bootstrapProvider = {
+      id: 'claude',
+      type: 'tui',
+      command: 'echo',
+      credentialBootstrap: { command: 'token-cli', args: ['run'], argsSeparator: '--' },
+    };
+
+    let killSpy;
+    beforeEach(() => {
+      // Spy so the negative pid never reaches a real process group.
+      killSpy = vi.spyOn(process, 'kill').mockImplementation(() => true);
+    });
+    afterEach(() => { killSpy.mockRestore(); });
+
+    it('signals the whole group when finish() tears a wrapped PTY down', async () => {
+      const promise = executeTuiRun({
+        runId: 'run-bootstrap-kill', provider: bootstrapProvider,
+        prompt: 'a prompt long enough to clear the guard', workspacePath: TEST_WORKSPACE, timeout: 60000,
+      });
+      await flushAsync();
+
+      const pty = ptyInstances[0];
+      pty.pid = 212121;
+      expect(ptySpawnMock.mock.calls[0][0]).toBe('token-cli');
+
+      // A non-zero exit drives finish(), whose cleanup kills the PTY.
+      pty.emitExit({ exitCode: 2 });
+      await promise;
+
+      expect(killSpy).toHaveBeenCalledWith(-212121, 'SIGHUP');
+      // The group signal landed, so killProcessTree never falls back to the
+      // handle's own kill — the harness behind the wrapper is covered.
+      expect(pty.kill).not.toHaveBeenCalled();
+    });
+
+    it('leaves an unwrapped PTY on the plain node-pty kill', async () => {
+      const promise = executeTuiRun({
+        runId: 'run-unwrapped-kill', provider: { id: 'claude', type: 'tui', command: 'echo' },
+        prompt: 'a prompt long enough to clear the guard', workspacePath: TEST_WORKSPACE, timeout: 60000,
+      });
+      await flushAsync();
+
+      const pty = ptyInstances[0];
+      pty.pid = 232323;
+      pty.emitExit({ exitCode: 2 });
+      await promise;
+
+      expect(killSpy).not.toHaveBeenCalledWith(-232323, expect.anything());
+      // SIGHUP is node-pty's own POSIX default for a bare kill(), so naming it
+      // keeps this path byte-identical to the previous `ptyProcess.kill()`.
+      expect(pty.kill).toHaveBeenCalledWith('SIGHUP');
+    });
+
+    it('registers a group-aware killable so /runs Stop reaches the harness, not just the wrapper', async () => {
+      const promise = executeTuiRun({
+        runId: 'run-bootstrap-stop', provider: bootstrapProvider,
+        prompt: 'a prompt long enough to clear the guard', workspacePath: TEST_WORKSPACE, timeout: 60000,
+      });
+      await flushAsync();
+
+      const pty = ptyInstances[0];
+      pty.pid = 252525;
+      const [, registered] = runnerMocks.registerActiveRun.mock.calls.at(-1);
+      // The toolkit's vendored killProcessTree has no processGroup option and
+      // reaches a non-ChildProcess killable through its own .kill().
+      expect(registered).not.toBe(pty);
+      expect(registered.pid).toBe(252525);
+      registered.kill('SIGTERM');
+      expect(killSpy).toHaveBeenCalledWith(-252525, 'SIGTERM');
+
+      pty.emitExit({ exitCode: 0 });
+      await promise;
+    });
+  });
 });

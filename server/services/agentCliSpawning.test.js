@@ -1419,4 +1419,90 @@ describe('stream error containment', () => {
       expect(finalizeAgent).not.toHaveBeenCalled();
     });
   });
+
+  // #7496. With a credentialBootstrap provider the direct child is the user's
+  // bootstrap CLI, not the harness — and `<bootstrap> run <harness> -- <args>`
+  // is the shape of a supervising PARENT, not an exec-replacement. A per-pid
+  // SIGTERM would leave the harness running (possibly with
+  // `--dangerously-skip-permissions` in a worktree, holding a freshly minted
+  // credential) after the agent is finalized and its lane released.
+  describe('credential-bootstrap process-group teardown', () => {
+    const bootstrapArgs = {
+      ...minimalArgs,
+      provider: {
+        ...minimalArgs.provider,
+        credentialBootstrap: { command: 'token-cli', args: ['run'], argsSeparator: '--' },
+      },
+    };
+
+    it('spawns a bootstrap-wrapped child detached and records the flag for the stop paths', async () => {
+      const { spawn } = await import('../lib/childProcess.js');
+      const { activeAgents } = await import('./agentState.js');
+      activeAgents.clear();
+      spawn.mockClear();
+
+      const spawnPromise = spawnDirectly(bootstrapArgs);
+      await vi.waitFor(() => expect(activeAgents.has(bootstrapArgs.agentId)).toBe(true), { interval: 5 });
+
+      const [command, , options] = spawn.mock.calls.at(-1);
+      expect(command).toBe('token-cli');
+      expect(options.detached).toBe(true);
+      // agentManagement's pause/terminate/force-kill hold only this entry and
+      // cannot re-derive the wrap, so the flag has to travel with it.
+      expect(activeAgents.get(bootstrapArgs.agentId).processGroup).toBe(true);
+
+      activeAgents.delete(bootstrapArgs.agentId);
+      fakeProcess.emit('close', 0);
+      await spawnPromise.catch(() => {});
+    });
+
+    it('leaves an unwrapped provider attached with no group flag', async () => {
+      const { spawn } = await import('../lib/childProcess.js');
+      const { activeAgents } = await import('./agentState.js');
+      activeAgents.clear();
+      spawn.mockClear();
+
+      const spawnPromise = spawnDirectly(minimalArgs);
+      await vi.waitFor(() => expect(activeAgents.has(minimalArgs.agentId)).toBe(true), { interval: 5 });
+
+      const [, , options] = spawn.mock.calls.at(-1);
+      expect(options.detached).toBe(false);
+      expect(activeAgents.get(minimalArgs.agentId).processGroup).toBe(false);
+
+      activeAgents.delete(minimalArgs.agentId);
+      fakeProcess.emit('close', 0);
+      await spawnPromise.catch(() => {});
+    });
+
+    it('kills by process group when a provider-fallback signal stops a wrapped run', async () => {
+      killProcessTree.mockClear();
+      const spawnPromise = spawnDirectly(bootstrapArgs);
+      await new Promise((r) => setTimeout(r, 10));
+
+      fakeProcess.stdout.emit('data', Buffer.from('Now using extra usage\n'));
+
+      expect(killProcessTree).toHaveBeenCalledTimes(1);
+      expect(killProcessTree.mock.calls[0][1]).toBe('SIGTERM');
+      expect(killProcessTree.mock.calls[0][2]).toEqual({ processGroup: true });
+
+      fakeProcess.killed = true;
+      fakeProcess.emit('close', 143);
+      await spawnPromise.catch(() => {});
+    });
+
+    it('kills by pid alone when the same signal stops an UNWRAPPED run', async () => {
+      killProcessTree.mockClear();
+      const spawnPromise = spawnDirectly(minimalArgs);
+      await new Promise((r) => setTimeout(r, 10));
+
+      fakeProcess.stdout.emit('data', Buffer.from('Now using extra usage\n'));
+
+      expect(killProcessTree).toHaveBeenCalledTimes(1);
+      expect(killProcessTree.mock.calls[0][2]).toEqual({ processGroup: false });
+
+      fakeProcess.killed = true;
+      fakeProcess.emit('close', 143);
+      await spawnPromise.catch(() => {});
+    });
+  });
 });

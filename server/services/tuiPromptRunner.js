@@ -75,7 +75,8 @@ import {
 import { buildCliChildEnv } from '../lib/cliChildEnv.js';
 import { isCodexCommand } from '../lib/codex.js';
 import { isClaudeCommand } from '../lib/providerModels.js';
-import { applyCredentialBootstrap } from '../lib/credentialBootstrap.js';
+import { applyCredentialBootstrap, needsProcessGroup, processGroupKillable } from '../lib/credentialBootstrap.js';
+import { killProcessTree } from '../lib/bufferedSpawn.js';
 
 // One-shot defaults that don't apply to the long-running agent path:
 //   - hard run cap (5 min vs unbounded for agents)
@@ -176,7 +177,23 @@ export async function executeTuiRun({ runId, provider, prompt, screenshots = [],
   // bootstrap CLI in front of the harness invocation for a credential-
   // bootstrap-configured provider (see credentialBootstrap.js), or an
   // identical copy otherwise.
-  const { command: spawnCommand, args: spawnArgs } = applyCredentialBootstrap(provider, command, args);
+  const { command: spawnCommand, args: spawnArgs, wrapped } = applyCredentialBootstrap(provider, command, args);
+  // When the wrap applied, the PTY's direct child is the bootstrap WRAPPER and
+  // node-pty's `kill()` signals that pid alone, so a cancel/timeout would leave
+  // the harness running (#7496). forkpty already makes the PTY child a session
+  // leader whose descendants share its process group, so signalling the group is
+  // exact. False — and byte-identical to today — for every unwrapped provider.
+  const processGroup = needsProcessGroup(wrapped);
+  // 'SIGHUP' is node-pty's own POSIX default for `kill()`; naming it explicitly
+  // keeps the signal identical while letting killProcessTree take the group path.
+  const killPty = (target) => killProcessTree(target, 'SIGHUP', { processGroup });
+  // Deliberately NOT `trackDetachedGroup`ed, unlike the headless spawn sites.
+  // That registry exists because `detached: true` moves a child OUT of the
+  // server's process group; forkpty already put this PTY in its own session for
+  // every provider, wrapped or not, so nothing was lost here to restore. Adding
+  // it would instead start killing TUI runs on a host restart that pm2 already
+  // tree-kills — and that `hostShutdown.js` deliberately preserves as
+  // INTERRUPTED for the next boot's recovery rather than terminating (#3202).
   const promptDelayMs = provider.tuiPromptDelayMs ?? DEFAULT_TUI_PROMPT_DELAY_MS;
   const idleThresholdMs = idleMs ?? provider.tuiOneShotIdleMs ?? DEFAULT_ONE_SHOT_IDLE_MS;
   const totalTimeoutMs = timeout ?? provider.timeout ?? DEFAULT_TIMEOUT_MS;
@@ -315,7 +332,10 @@ ${prompt}`;
   // tokens with no way to cancel from the UI. Mirrors executeCliRun's
   // registration of its ChildProcess; node-pty's IPty exposes the same
   // .kill(signal?) interface so the patched stopRun works unchanged.
-  registerActiveRun(runId, ptyProcess);
+  // A group-aware killable for a wrapped PTY: the toolkit's own self-contained
+  // killProcessTree has no processGroup option, so /runs Stop would otherwise
+  // signal the wrapper alone. Unwrapped runs register the raw IPty as before.
+  registerActiveRun(runId, processGroupKillable(ptyProcess, processGroup));
 
   // Fire the toolkit's `onRunStarted` hook now that the PTY is alive — the
   // CLI/API paths fire it inside the toolkit's executeCliRun/executeApiRun,
@@ -477,7 +497,7 @@ ${prompt}`;
 
         // Kill the PTY if still alive — one-shot runs don't leave a session
         // behind for the user to interact with.
-        try { if (ptyProcess && !ptyProcess.killed) ptyProcess.kill(); } catch { /* already gone */ }
+        try { if (ptyProcess && !ptyProcess.killed) killPty(ptyProcess); } catch { /* already gone */ }
 
         // Prefer the response file the TUI was directed to write; fall back
         // to the ANSI-stripped screen scrape when the file is missing/empty
@@ -519,7 +539,7 @@ ${prompt}`;
         // failure we report below rejects executeProviderRunOnce and spins up a
         // fallback provider while the original PTY keeps running — two live runs
         // for one request. Idempotent: no-op if the kill above already fired.
-        try { if (ptyProcess && !ptyProcess.killed) ptyProcess.kill(); } catch { /* already gone */ }
+        try { if (ptyProcess && !ptyProcess.killed) killPty(ptyProcess); } catch { /* already gone */ }
         // A step BEFORE onComplete threw, so the caller's onComplete-driven
         // settle never fired. executeProviderRunOnce (promptRunner.js) settles
         // its OUTER Promise only via onComplete (→ safeReject) or the returned

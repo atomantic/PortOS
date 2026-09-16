@@ -125,6 +125,12 @@ describe('killProcessTree', () => {
     killProcessTree(child, undefined, { processGroup: true });
     expect(killSpy).toHaveBeenCalledWith(-555, 'SIGTERM');
     expect(child.kill).not.toHaveBeenCalled();
+    // Node sets `.killed` only from `child.kill()`, so the group path must set
+    // it by hand — for the same reason the Windows taskkill branch does. Every
+    // re-entrant guard gated on `!child.killed` (the runner's timeout, the
+    // fallback-signal detector, cliProviderRun, visionCli) would otherwise
+    // never engage for a group-killed child and fire a redundant second kill.
+    expect(child.killed).toBe(true);
     killSpy.mockRestore();
   });
 
@@ -134,6 +140,21 @@ describe('killProcessTree', () => {
     const killSpy = vi.spyOn(process, 'kill').mockImplementation(() => { throw new Error('ESRCH'); });
     killProcessTree(child, 'SIGKILL', { processGroup: true });
     expect(child.kill).toHaveBeenCalledWith('SIGKILL');
+    // The group signal did NOT land, so `.killed` is left to the real
+    // `child.kill()` the fallback just made — never stamped on a failed group.
+    killSpy.mockRestore();
+  });
+
+  it('on non-Windows leaves a node-pty handle\'s killed state alone on the group path', () => {
+    if (IS_WIN32) return; // platform-gated behavior
+    // An IPty has no `killed` of its own; inventing one would start
+    // short-circuiting PTY teardown paths that deliberately re-kill.
+    const pty = { pid: 556, kill: vi.fn() };
+    const killSpy = vi.spyOn(process, 'kill').mockImplementation(() => true);
+    killProcessTree(pty, 'SIGHUP', { processGroup: true });
+    expect(killSpy).toHaveBeenCalledWith(-556, 'SIGHUP');
+    expect(pty.kill).not.toHaveBeenCalled();
+    expect(pty.killed).toBeUndefined();
     killSpy.mockRestore();
   });
 

@@ -292,11 +292,14 @@ export async function pauseAgent(agentId, reason = null) {
     }, 250);
   } else {
     // killProcessTree so a Windows cmd.exe-wrapped CLI shim's real child is
-    // taken down, not orphaned (#2243). No behavior change on POSIX.
-    killProcessTree(agent.process, 'SIGTERM');
+    // taken down, not orphaned (#2243). `processGroup` (set at spawn time by
+    // agentCliSpawning) additionally reaches the harness behind a credential-
+    // bootstrap wrapper on POSIX; it is false for every other agent, so their
+    // teardown is unchanged (#7496).
+    killProcessTree(agent.process, 'SIGTERM', { processGroup: agent.processGroup });
     const killTimer = setTimeout(() => {
       if (activeAgents.has(agentId)) {
-        killProcessTree(agent.process, 'SIGKILL');
+        killProcessTree(agent.process, 'SIGKILL', { processGroup: agent.processGroup });
       }
     }, 5000);
     const agentEntry = activeAgents.get(agentId);
@@ -761,13 +764,15 @@ export async function terminateAgent(agentId) {
   }
 
   // Kill the process — killProcessTree so a Windows cmd.exe-wrapped shim's
-  // real child isn't orphaned (#2243). POSIX behavior unchanged.
-  killProcessTree(agent.process, 'SIGTERM');
+  // real child isn't orphaned (#2243), and `processGroup` so a credential-
+  // bootstrap wrapper's harness goes down with it rather than outliving the
+  // terminated run (#7496).
+  killProcessTree(agent.process, 'SIGTERM', { processGroup: agent.processGroup });
 
   // Give it a moment, then force kill if still running
   const killTimer = setTimeout(() => {
     if (activeAgents.has(agentId)) {
-      killProcessTree(agent.process, 'SIGKILL');
+      killProcessTree(agent.process, 'SIGKILL', { processGroup: agent.processGroup });
       unregisterSpawnedAgent(agent.pid);
       activeAgents.delete(agentId);
     }
@@ -864,8 +869,9 @@ export async function killAgent(agentId) {
   }
 
   // Kill the process immediately with SIGKILL — killProcessTree so a Windows
-  // cmd.exe-wrapped shim's real child isn't orphaned (#2243). POSIX unchanged.
-  killProcessTree(agent.process, 'SIGKILL');
+  // cmd.exe-wrapped shim's real child isn't orphaned (#2243), and
+  // `processGroup` so a credential-bootstrap wrapper's harness dies too (#7496).
+  killProcessTree(agent.process, 'SIGKILL', { processGroup: agent.processGroup });
 
   unregisterSpawnedAgent(agent.pid);
   activeAgents.delete(agentId);

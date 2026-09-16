@@ -10,7 +10,7 @@ import { resolveSpawnCwd } from '../lib/spawnCwd.js';
 import { hasModelFlag, extractBakedModel, isCodexProvider } from '../lib/providerModels.js';
 import { buildCliArgs, prepareCliPrompt } from '../lib/cliProviderArgs.js';
 import { buildCliChildEnv } from '../lib/cliChildEnv.js';
-import { resolveCliSpawn } from '../lib/credentialBootstrap.js';
+import { resolveCliSpawn, needsProcessGroup, processGroupKillable, trackDetachedGroup } from '../lib/credentialBootstrap.js';
 import { createImmediateFallbackSignalDetector, ERROR_CATEGORIES } from '../lib/aiToolkit/errorDetection.js';
 import { killProcessTree, guardChildStdin, deliverChildStdin } from '../lib/bufferedSpawn.js';
 import { isHostShuttingDown } from '../lib/hostShutdown.js';
@@ -335,6 +335,11 @@ export async function executeCliRun({ runId, provider, prompt, workspacePath, sc
   const stdoutIsResponse = isCodexProvider(provider);
   let immediateFallbackAnalysis = null;
   let childProcess = null;
+  // True when the child is a credential-bootstrap WRAPPER supervising the real
+  // harness, so every stop/timeout/cancel below must signal the whole process
+  // group rather than the wrapper's pid alone (#7496). Set at spawn time; false
+  // for every unwrapped provider, which keeps their teardown byte-identical.
+  let processGroup = false;
   // Set by the wall-clock timeout below so the close handler can classify the
   // kill as a timeout instead of scanning the model's output for a category.
   let timeoutError = null;
@@ -346,7 +351,7 @@ export async function executeCliRun({ runId, provider, prompt, workspacePath, sc
     if (!analysis) return;
     immediateFallbackAnalysis = analysis;
     console.log(`⚡ Run ${runId} detected fallback signal (${analysis.category}); stopping ${provider.name || provider.id || provider.command}`);
-    killProcessTree(childProcess);
+    killProcessTree(childProcess, 'SIGTERM', { processGroup });
   };
 
   // Resolve (and log) the working directory before spawning, so a supplied-but-
@@ -417,12 +422,22 @@ export async function executeCliRun({ runId, provider, prompt, workspacePath, sc
   // still keys off the harness's own command, not the bootstrap CLI's.
   const runCommand = vision?.invocation.command || provider.command;
   const runCwd = vision?.invocation.cwd || effectiveCwd;
-  const { command: spawnCommand, args: spawnArgs } = resolveCliSpawn(provider, runCommand, args, childEnv);
+  const { command: spawnCommand, args: spawnArgs, wrapped } = resolveCliSpawn(provider, runCommand, args, childEnv);
+  processGroup = needsProcessGroup(wrapped);
 
   childProcess = spawn(spawnCommand, spawnArgs, {
     cwd: runCwd,
-    env: childEnv
+    env: childEnv,
+    // Own process group ONLY for a bootstrap-wrapped spawn — see
+    // needsProcessGroup. Never `unref()`ed: the child must still keep this
+    // run's lifecycle observable exactly as a non-detached one does.
+    detached: processGroup,
   });
+
+  // Remember the detached group so the graceful-shutdown sweep can reach it:
+  // detaching moved this child out of the server's own process group, and a
+  // shutdown driven by a signal to THAT group would otherwise orphan it (#7496).
+  trackDetachedGroup(childProcess, processGroup);
 
   // Claim the child's 'error' event in the SAME tick as spawn(). Everything
   // between here and the terminal handlers below — stdin delivery, the
@@ -450,7 +465,11 @@ export async function executeCliRun({ runId, provider, prompt, workspacePath, sc
 
   // Track active run via the toolkit's declared external-run registry so its
   // stopRun/isRunActive/deleteRun account for this host-spawned child process.
-  toolkit.services.runner.registerExternalRun(runId, childProcess);
+  // Register a group-aware killable for a wrapped child: the toolkit's own
+  // self-contained killProcessTree has no processGroup option, so /runs Stop
+  // would otherwise signal the wrapper alone (#7496). Unwrapped runs register
+  // the raw ChildProcess exactly as before.
+  toolkit.services.runner.registerExternalRun(runId, processGroupKillable(childProcess, processGroup));
 
   // Call hooks — isolated like every other hook invocation here: a throw would
   // otherwise reject executeCliRun with the child already spawned and
@@ -470,7 +489,7 @@ export async function executeCliRun({ runId, provider, prompt, workspacePath, sc
       // leaves `exitCode: null` — not the 124 the TUI runner synthesizes for
       // the same condition.
       timeoutError = `CLI run timed out after ${effectiveTimeout}ms`;
-      killProcessTree(childProcess);
+      killProcessTree(childProcess, 'SIGTERM', { processGroup });
     }
   }, effectiveTimeout) : null;
 

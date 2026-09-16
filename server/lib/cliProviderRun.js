@@ -26,7 +26,7 @@ import { filterCallerModeEligible } from './callerModePolicy.js';
 import { buildVendorSpawnConfig, supportsPublicReviewProvider } from './providerVendors.js';
 import { isPublicReviewNoToolProfile } from './agentExecutionProfiles.js';
 import { resolveCliModel } from './providerModels.js';
-import { resolveCliSpawn } from './credentialBootstrap.js';
+import { resolveCliSpawn, needsProcessGroup, trackDetachedGroup } from './credentialBootstrap.js';
 
 // How much stderr to hand back to callers. Enough to carry a rate-limit banner
 // or a stack's first frames, short enough to embed in an error message or a
@@ -164,12 +164,22 @@ export function runCliProviderPrompt(args = {}) {
     // prepareCliPrompt (above), which still keys prompt-delivery convention
     // off the harness's own command, not the bootstrap CLI's — and never under
     // a public-review `safetyProfile`, whose enforced recipe is the sandbox.
-    const { command: spawnCommand, args: wrappedArgs } = resolveCliSpawn(provider, provider.command, spawnArgs, childEnv, { safetyProfile });
+    const { command: spawnCommand, args: wrappedArgs, wrapped } = resolveCliSpawn(provider, provider.command, spawnArgs, childEnv, { safetyProfile });
+    // A bootstrap-wrapped child is a supervising WRAPPER, not the harness, so
+    // the timeout kill below has to signal the whole process group or it leaves
+    // the harness running past the run (#7496). False for every unwrapped
+    // spawn — including a public-review posture, which is never wrapped.
+    const processGroup = needsProcessGroup(wrapped);
     const child = spawn(spawnCommand, wrappedArgs, {
       cwd: effectiveCwd,
       stdio: ['pipe', 'pipe', 'pipe'],
       env: childEnv,
+      detached: processGroup,
     });
+    // Remember the detached group so the graceful-shutdown sweep can reach it:
+    // detaching moved this child out of the server's own process group, and a
+    // shutdown driven by a signal to THAT group would otherwise orphan it (#7496).
+    trackDetachedGroup(child, processGroup);
 
     // Single settlement gate — the timer, spawn error, and close handler all
     // race. Without it a SIGKILL that doesn't kill synchronously lets the
@@ -183,7 +193,7 @@ export function runCliProviderPrompt(args = {}) {
     };
 
     const timer = setTimeout(() => {
-      if (!child.killed) killProcessTree(child);
+      if (!child.killed) killProcessTree(child, 'SIGTERM', { processGroup });
       done({ error: `Provider call timed out after ${timeoutMs}ms`, text: stdout.trim(), stderr, stderrTail: stderrTailOf(stderr) });
     }, timeoutMs);
 
