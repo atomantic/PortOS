@@ -52,11 +52,20 @@ function summarizeMind(snapshot) {
  * readable (`agents === null`), there is no claim set to subtract — fall back to
  * `getStatus()`'s own tally rather than reporting zero active agents while still
  * counting their tasks as queued, which would understate BOTH numbers at once.
+ *
+ * And when BOTH reads failed, `active` is 0 because nothing could be counted —
+ * not because nothing is running. `trusted: false` says which, so the idle
+ * verdict can refuse instead of reading that zero as an empty install and
+ * restarting out from under a live agent (the contract the Persistent Mind
+ * slice already keeps). The queued count is unaffected: the pending-task list
+ * is a separate read, and with no claim set to subtract it over-reports rather
+ * than under-reports, which is the safe direction for a gate.
  */
 function agentCounts(agents, cosStatus, pendingTaskIds) {
   const runningAgents = agents === null ? null : agents.filter((agent) => agent.status === 'running');
   const claimedTaskIds = new Set((runningAgents || []).map((agent) => agent.taskId).filter(Boolean));
   return {
+    trusted: agents !== null || Boolean(cosStatus),
     active: runningAgents ? runningAgents.length : (cosStatus?.activeAgents || 0),
     queued: pendingTaskIds.filter((id) => !claimedTaskIds.has(id)).length,
   };

@@ -76,9 +76,13 @@ export function summarizeSystemActivity(snapshot) {
   const imageTo3d = Array.isArray(snapshot?.extras?.imageTo3d) ? snapshot.extras.imageTo3d.length : 0;
   if (imageTo3d > 0) add('image-to-3d', `${pluralize(imageTo3d, 'image-to-3D build')} running`, imageTo3d);
 
-  const activeAgents = Number(snapshot?.agents?.active) || 0;
+  // Same contract as the mind slice below: an unreadable agent state is not an
+  // empty one, and zero agents is exactly the value that unlocks a restart.
+  const agentState = snapshot?.agents;
+  if (agentState?.trusted === false) add('agents-unreadable', 'CoS agent state unreadable', 1);
+  const activeAgents = Number(agentState?.active) || 0;
   if (activeAgents > 0) add('agents-running', `${pluralize(activeAgents, 'CoS agent')} running`, activeAgents);
-  const queuedAgents = Number(snapshot?.agents?.queued) || 0;
+  const queuedAgents = Number(agentState?.queued) || 0;
   if (queuedAgents > 0) add('agents-queued', `${pluralize(queuedAgents, 'CoS task')} queued`, queuedAgents);
 
   const mind = snapshot?.mind;

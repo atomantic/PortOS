@@ -43,7 +43,7 @@ describe('active processing snapshot', () => {
     expect(snapshot.gpu.gpus[0]).toMatchObject({ utilizationPercent: 44, memoryUsedMib: 1000 });
     expect(snapshot.extras.imageTo3d).toEqual([{ id: 'mesh-1', name: 'Fake mesh' }, { id: 'mesh-2', name: 'mesh-2' }]);
     expect(snapshot.extras.ollama).toEqual([{ id: 'model-1', name: 'Fake model' }]);
-    expect(snapshot.agents).toEqual({ active: 2, queued: 1 });
+    expect(snapshot.agents).toEqual({ trusted: true, active: 2, queued: 1 });
     expect(deps.status).not.toHaveBeenCalled();
   });
 
@@ -147,14 +147,14 @@ describe('queued agent count', () => {
     deps.tasks.mockResolvedValue(['task-spawning', 'task-waiting']);
     deps.agents.mockResolvedValue([{ id: 'agent-1', status: 'running', taskId: 'task-spawning' }]);
     const snapshot = await getActiveProcessing();
-    expect(snapshot.agents).toEqual({ active: 1, queued: 1 });
+    expect(snapshot.agents).toEqual({ trusted: true, active: 1, queued: 1 });
   });
 
   it('still counts a pending task whose agent already completed', async () => {
     deps.tasks.mockResolvedValue(['cos-task-1']);
     deps.agents.mockResolvedValue([{ id: 'agent-1', status: 'completed', taskId: 'cos-task-1' }]);
     const snapshot = await getActiveProcessing();
-    expect(snapshot.agents).toEqual({ active: 0, queued: 1 });
+    expect(snapshot.agents).toEqual({ trusted: true, active: 0, queued: 1 });
   });
 
   // A failed agent read is not an empty one. Collapsing the two would report
@@ -165,7 +165,7 @@ describe('queued agent count', () => {
     deps.tasks.mockResolvedValue(['task-1']);
     deps.agents.mockRejectedValue(new Error('state unreadable'));
     const snapshot = await getActiveProcessing();
-    expect(snapshot.agents).toEqual({ active: 3, queued: 1 });
+    expect(snapshot.agents).toEqual({ trusted: true, active: 3, queued: 1 });
     expect(deps.status).toHaveBeenCalledTimes(1);
   });
 
@@ -175,16 +175,21 @@ describe('queued agent count', () => {
     deps.tasks.mockResolvedValue(['task-1']);
     deps.agents.mockResolvedValue([]);
     const snapshot = await getActiveProcessing();
-    expect(snapshot.agents).toEqual({ active: 0, queued: 1 });
+    expect(snapshot.agents).toEqual({ trusted: true, active: 0, queued: 1 });
     expect(deps.status).not.toHaveBeenCalled();
   });
 
-  it('preserves pending tasks when both agent and fallback status reads fail', async () => {
+  // Both reads failing means "could not count", not "nothing is running" — and
+  // zero active agents is exactly the value that unlocks an unattended restart.
+  // The pending-task list is a separate read, so its count survives.
+  it('marks the slice untrusted when both agent reads fail, and still blocks idle', async () => {
     deps.tasks.mockResolvedValue(['task-1']);
     deps.agents.mockRejectedValue(new Error('state unreadable'));
     deps.status.mockRejectedValue(new Error('status unavailable'));
     const snapshot = await getActiveProcessing();
-    expect(snapshot.agents).toEqual({ active: 0, queued: 1 });
+    expect(snapshot.agents).toEqual({ trusted: false, active: 0, queued: 1 });
     expect(deps.status).toHaveBeenCalledTimes(1);
+    expect(snapshot.activity.idle).toBe(false);
+    expect(snapshot.activity.blockers.map(b => b.kind)).toContain('agents-unreadable');
   });
 });

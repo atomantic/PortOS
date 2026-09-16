@@ -63,7 +63,12 @@ export default function AutoUpdatePanel() {
   if (!draft) return null;
 
   const save = async (patch) => {
+    // Clamp before sending, not just on blur: `onChange` writes whatever is in
+    // the number input to the draft, so an empty or out-of-range field the user
+    // never blurred rides along on the NEXT save (a channel click, a checkbox)
+    // and the strict schema 400s the whole thing.
     const next = { ...draft, ...patch };
+    next.minIntervalHours = Math.min(bounds.max, Math.max(bounds.min, Number(next.minIntervalHours) || bounds.min));
     setDraft(next);
     setSaving(true);
     const saved = await api.patchSettingsSlice('autoUpdate', next).catch((err) => {

@@ -91,6 +91,17 @@ describe('automatic update dispatch', () => {
     await runAutoUpdateTick({ io: {} });
     expect(deps.recordRuntime).toHaveBeenCalledWith(expect.objectContaining({ lastRunAt: expect.any(String) }));
   });
+
+  // The cooldown is stamped off this answer, so an update that did not run must
+  // not report one — otherwise one failed dispatch suppresses every retry for
+  // the whole interval while nothing has happened.
+  it('does not start the cooldown when the update failed to run', async () => {
+    deps.settings.mockResolvedValue({ autoUpdate: { enabled: true, channel: 'main', minIntervalHours: 6 } });
+    deps.appUpdate.mockResolvedValue({ ok: false, reason: 'failed', message: 'the update did not complete' });
+    const result = await runAutoUpdateTick({ io: {} });
+    expect(result).toMatchObject({ ran: false, reason: 'launch-failed' });
+    expect(deps.recordRuntime).not.toHaveBeenCalledWith(expect.objectContaining({ lastRunAt: expect.any(String) }));
+  });
 });
 
 describe('automatic update gates', () => {

@@ -31,11 +31,12 @@ import { PORTOS_APP_ID } from '../lib/appIdentity.js';
  * @param {boolean} [params.acknowledgeFork]
  * @param {boolean} [params.acknowledgePersistentMindImageBackup]
  * @returns {Promise<
- *   | {ok: false, reason: 'not-found'|'duplicate'|'refused', appId: string|null, code: string|null, message: string}
+ *   | {ok: false, reason: 'not-found'|'duplicate'|'refused'|'failed', appId: string|null, code: string|null, message: string}
  *   | {ok: true}
  * >}
- *   Every refusal carries a rendered `message`; a caller decides only WHERE it
- *   goes (the dispatching socket, or a log line), never how it reads.
+ *   Every failure carries a rendered `message`; a caller decides only WHERE it
+ *   goes (the dispatching socket, or a log line), never how it reads. `failed`
+ *   is the one the io bus has ALREADY reported — the socket stays quiet for it.
  */
 export async function runAppUpdate({
   io,
@@ -122,9 +123,20 @@ export async function runAppUpdate({
       console.log(`✅ Update complete for ${app.name}`);
     }
 
-    // The run's own outcome is already on the io bus (`app:update:complete` /
-    // `app:update:error`) and in the history ledger, which is where both callers
-    // read it from — so the return says only "this dispatch was accepted".
+    // `ok` must mean the update actually RAN, not merely that it was dispatched.
+    // An unattended caller stamps its cooldown off this answer, so reporting a
+    // thrown or failed update as `ok` would suppress every retry for the whole
+    // interval while nothing had happened. `updateApp` returns
+    // `success: true` on the self-update hand-off too, so one check covers both.
+    if (failure || !result?.success) {
+      return {
+        ok: false,
+        reason: 'failed',
+        appId: app.id,
+        code: failure?.code || null,
+        message: failure?.message || 'The update did not complete',
+      };
+    }
     return { ok: true };
   } finally {
     if (operatingAppId && !result?.selfUpdateStarted) endAppOperation(io, operatingAppId);

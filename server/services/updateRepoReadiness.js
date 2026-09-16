@@ -53,7 +53,13 @@ const REASON_LABELS = {
   'wrong-branch': 'the checkout is not on the default branch',
 };
 
-const describe = (code) => REASON_LABELS[code] || code;
+/** What each mechanical remedy will do, for a verdict that has no blocking reason. */
+const REPAIRABLE_LABELS = {
+  'restore-lockfiles': 'auto-generated lockfiles need restoring',
+  'checkout-default': 'the checkout needs switching back to the default branch',
+};
+
+const describe = (code) => REASON_LABELS[code] || REPAIRABLE_LABELS[code] || code;
 
 /** Absolute paths only — a relative path would resolve against the server's cwd. */
 const resolveRepoPath = (repoPath) => (isAbsolute(repoPath || '') ? repoPath : PATHS.root);
@@ -105,7 +111,12 @@ export async function checkUpdateRepoReadiness({ repoPath, fetch = false } = {})
       // one: there is nothing for an agent to resolve if git itself is the
       // problem.
       needsAgent: reasons.length > 0 && !reasons.includes('git-unreadable'),
-      summary: reasons.length ? reasons.map(describe).join('; ') : null,
+      // A repairable-only verdict is still `ready: false`, and the panel renders
+      // `summary` for anything not ready — leaving it null there made the UI fall
+      // back to a generic "wrong branch" line that named the wrong cause.
+      summary: reasons.length
+        ? reasons.map(describe).join('; ')
+        : repairable.length ? repairable.map(describe).join('; ') : null,
     };
   };
 

@@ -84,6 +84,10 @@ export const registerAppHandlers = (socket, io) => {
         acknowledgePersistentMindImageBackup: data.acknowledgePersistentMindImageBackup === true,
       });
       if (outcome.ok) return;
+      // A 'failed' outcome already went out on the io bus as app:update:error /
+      // app:update:complete from inside the runner; re-emitting it here would
+      // overwrite that message with a second, less specific one.
+      if (outcome.reason === 'failed') return;
       socket.emit('app:update:error', {
         appId: outcome.appId,
         code: outcome.code,

@@ -4,7 +4,7 @@ import { describeActivityBlockers, summarizeSystemActivity } from './systemIdle.
 const snapshot = (overrides = {}) => ({
   jobs: [],
   extras: { imageTo3d: [] },
-  agents: { active: 0, queued: 0 },
+  agents: { trusted: true, active: 0, queued: 0 },
   mind: { trusted: true, thinking: false, queued: 0, status: 'idle' },
   appOperations: [],
   update: { inProgress: false },
@@ -62,6 +62,14 @@ describe('system idle verdict', () => {
     const verdict = summarizeSystemActivity(snapshot({ mind: { trusted: false } }));
     expect(verdict.idle).toBe(false);
     expect(verdict.blockers).toEqual([{ kind: 'mind-unreadable', label: 'Persistent Mind state unreadable', count: 1 }]);
+  });
+
+  // Zero agents is what unlocks the unattended restart, so "could not read the
+  // agent state" must never reach the verdict as "no agents".
+  it('refuses to read an unreadable agent state as an idle one', () => {
+    const verdict = summarizeSystemActivity(snapshot({ agents: { trusted: false, active: 0, queued: 0 } }));
+    expect(verdict.idle).toBe(false);
+    expect(verdict.blockers).toEqual([{ kind: 'agents-unreadable', label: 'CoS agent state unreadable', count: 1 }]);
   });
 
   it('counts an update already in flight as activity', () => {
