@@ -1546,8 +1546,12 @@ async function sendPacedVerb(connection, verb, args, {
     const wait = verbIntervalMs - (Date.now() - pacing.lastVerbSentAt);
     if (wait > 0) await abortableDelay(wait, signal);
   }
-  await connection.sendVerb(verb, args, { signal });
+  // The resolved log entry is the world's ack for this verb — callers that
+  // need to know what actually landed (as opposed to what was sent) read it
+  // off the return value; existing fire-and-forget callers keep ignoring it.
+  const entry = await connection.sendVerb(verb, args, { signal });
   pacing.lastVerbSentAt = Date.now();
+  return entry;
 }
 
 async function sendOperations(connection, operations, {
@@ -1848,13 +1852,19 @@ export async function projectEidoverseWorld({ signal, compact = false, verbInter
     const projection = await recordProjection({ success: true, summary });
     // Persist the complete legend for the drawer before selecting the compact
     // result used by tools, scheduled jobs, and boot reconciliation.
+    // `projectEidoverseWorld` is already atomic — `applyProjectionPlan` above
+    // rolls a failed run all the way back to the prior authoritative design —
+    // so a resolved promise here always means the whole plan committed. This
+    // flag exists purely so callers can read the same accept/refuse contract
+    // (#7454) as `eidoverse.augment` without special-casing this tool.
     if (compact) {
       const { objects, ...counts } = summary;
-      return { success: true, summary: { ...counts, objectCount: objects.length }, presence: presenceSummary(presence) };
+      return { success: true, committed: true, summary: { ...counts, objectCount: objects.length }, presence: presenceSummary(presence) };
     }
     const appliedConfig = configFromState(await loadState());
     return {
       success: true,
+      committed: true,
       summary,
       projection,
       presence: presenceSummary(presence),
@@ -2018,21 +2028,82 @@ function normalizeAugmentOperation(operation) {
   }
 }
 
+// SwarmWorld's core lesson, applied to Eidoverse construction tools: a mind
+// PROPOSES structured intent, and only the world's own ack determines the
+// CONSEQUENCE. `proposeAugmentOperation` never throws — an operation that
+// fails PortOS's own bounds check becomes a `refused` outcome the batch can
+// report, exactly like a refusal from the world itself, so one malformed
+// operation in a batch cannot make an unrelated valid one silently disappear
+// into a thrown error.
+function proposeAugmentOperation(operation) {
+  const id = typeof operation?.args?.id === 'string' ? operation.args.id.slice(0, 64) : null;
+  try {
+    const normalized = normalizeAugmentOperation(operation);
+    return { ok: true, verb: normalized.verb, id: typeof normalized.args.id === 'string' ? normalized.args.id : id, args: normalized.args };
+  } catch (error) {
+    return { ok: false, verb: operation?.verb ?? null, id, reason: safeText(error?.message, 'Eidoverse refused this proposal.', 300) };
+  }
+}
+
+function refusedAugmentOutcome(proposal, { proposed = null, reason }) {
+  return { verb: proposal.verb, id: proposal.id, outcome: 'refused', proposed, committed: null, reason };
+}
+
+// A world ack is the only authority on whether — and how — a proposal landed.
+// The world may accept it verbatim, silently rewrite it (e.g. clamp a
+// position), or refuse it outright (`type: 'error'`, surfaced by
+// connection.sendVerb as a rejection). Comparing the ack's args back against
+// what was proposed is what lets a `rewritten` outcome exist at all.
+async function commitAugmentProposal(connection, proposal, { signal, pacing, verbIntervalMs }) {
+  const entry = await sendPacedVerb(connection, proposal.verb, proposal.args, { signal, pacing, verbIntervalMs });
+  const committed = entry?.args ?? proposal.args;
+  const rewritten = canonicalStringify(committed) !== canonicalStringify(proposal.args);
+  return { verb: proposal.verb, id: proposal.id, outcome: rewritten ? 'rewritten' : 'accepted', proposed: proposal.args, committed };
+}
+
 export async function augmentEidoverseWorld(operations, { signal, verbIntervalMs } = {}) {
   return worldLock(async () => {
     throwIfAborted(signal);
     await assertInstalled();
     const presence = await ensureCosPresenceInternal({ signal, verbIntervalMs });
-    const normalized = operations.map(normalizeAugmentOperation);
-    await sendOperations(presence.connection, normalized, {
-      signal,
-      pacing: presence.pacing,
-      verbIntervalMs,
-    });
+    const proposals = operations.map(proposeAugmentOperation);
+    const results = [];
+    // A refusal from the world (as opposed to a local validation refusal)
+    // halts the rest of the batch: later operations often reference an id an
+    // earlier one was supposed to create, so continuing to send them past a
+    // world-level refusal would just compound an already-refused proposal.
+    let worldRefused = false;
+    for (const proposal of proposals) {
+      if (worldRefused) {
+        results.push(refusedAugmentOutcome(proposal, {
+          proposed: proposal.ok ? proposal.args : null,
+          reason: 'Not attempted: an earlier operation in this batch was refused by the world.',
+        }));
+        continue;
+      }
+      if (!proposal.ok) {
+        results.push(refusedAugmentOutcome(proposal, { reason: proposal.reason }));
+        continue;
+      }
+      throwIfAborted(signal);
+      // Verbs apply in submitted order over one paced connection; the world
+      // protocol has no batch form, so this await is intentionally serial.
+      const outcome = await commitAugmentProposal(presence.connection, proposal, { signal, pacing: presence.pacing, verbIntervalMs })
+        .catch((error) => {
+          if (error?.name === 'AbortError') throw error;
+          worldRefused = true;
+          return refusedAugmentOutcome(proposal, { proposed: proposal.args, reason: safeText(error?.message, 'Eidoverse refused this operation.', 300) });
+        });
+      results.push(outcome);
+    }
+    const committedCount = results.filter((result) => result.outcome !== 'refused').length;
     return {
-      success: true,
+      success: committedCount === results.length,
       world: presence.connection.world,
-      applied: normalized.length,
+      // `applied` is the pre-existing committed-count field; `operations`
+      // carries the full proposed/committed breakdown per #7454.
+      applied: committedCount,
+      operations: results,
       presence: presenceSummary(presence),
     };
   });
@@ -2050,12 +2121,22 @@ export async function sayInEidoverseWorld(text, { signal, verbIntervalMs } = {})
         code: 'EIDOVERSE_ARGUMENT_INVALID',
       });
     }
+    // `say` has no PortOS-side rewrite dimension (it is opaque text), so its
+    // only two consequences are "the world acked it" (this resolves) or "it
+    // didn't" (sendPacedVerb rejects and the mind sees a real tool error,
+    // never a false success).
     await sendPacedVerb(presence.connection, 'say', { text: message }, {
       signal,
       pacing: presence.pacing,
       verbIntervalMs,
     });
-    return { success: true, world: presence.connection.world, id: presence.connection.id };
+    return {
+      success: true,
+      world: presence.connection.world,
+      id: presence.connection.id,
+      proposed: { text: message },
+      committed: true,
+    };
   });
 }
 
