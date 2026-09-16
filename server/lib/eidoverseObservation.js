@@ -16,16 +16,23 @@
  * arguments, so the whole diff contract is testable without a world runtime,
  * a socket, or a file.
  *
- * **Two things it must not do.** It must not require a running world — a mind
- * that cannot start the runtime still needs to know what is in its Commons,
- * so occupancy is derived from the live PortOS signals a projection would
- * place rather than from a live entity dump. And it must not widen what a mind
- * can see: every identity that reaches the report is already one the existing
- * mind tools return (`summarizeFoundation`'s opaque `originInstanceId`,
- * `eidoversePeerId`'s digest), and nothing here reads a record body.
+ * **Three things it must not do.** It must not require a running world — a
+ * mind that cannot start the runtime still needs to know what is in its
+ * Commons, so occupancy is derived from the live PortOS signals a projection
+ * would place rather than from a live entity dump. It must not invent its own
+ * idea of the world's shape: places come from the install's RESOLVED design
+ * recipe, so a mind never names a district the world renamed (V3 calls it the
+ * Federation Terminal, not the V2 Harbor) or one the user's overrides moved.
+ * And it must not widen what a mind can see: every identity that reaches the
+ * report is already one the existing mind tools return
+ * (`summarizeFoundation`'s opaque `originInstanceId`, `eidoversePeerId`'s
+ * digest), and nothing here reads a record body.
  */
 
-import { EIDOVERSE_DISTRICTS_V2 } from './eidoverseWorldDesign.js';
+import {
+  EIDOVERSE_SCALAR_SOURCE_KEYS,
+  EIDOVERSE_WORLD_DESIGN_V3,
+} from './eidoverseWorldDesign.js';
 import { eidoversePeerId } from './eidoverseWorldSignals.js';
 
 /** Storage-layout version stamped on the persisted visit marker. */
@@ -40,135 +47,165 @@ const MAX_PEERS = 32;
 const MAX_INHERITED = 20;
 const MAX_ATTENTION_CONTROLLERS = 10;
 const MAX_CHANGE_ENTRIES = 20;
-// The marker is rewritten on every observation, so it is capped well above the
-// report's own limits but still bounded — an install that somehow accumulates
-// more foundations than this simply stops distinguishing the oldest ones as
-// "seen", which degrades to reporting them as new once, not to a broken file.
-const MAX_MARKER_IDS = 2000;
+// Only `foundationIds` needs this: the other two marker lists are derived from
+// report sections that are already capped far below it. An install that
+// somehow exceeds it simply stops distinguishing the oldest ids as "seen",
+// which degrades to reporting them as new once, not to a broken file.
+const MAX_MARKER_FOUNDATION_IDS = 2000;
 
 const asArray = (value) => (Array.isArray(value) ? value : []);
-const capped = (values, limit) => asArray(values).slice(0, limit);
+const sortedUnique = (values) => [...new Set(asArray(values).filter(Boolean))].sort();
 
 /**
- * How many live signals a source currently reports. `null` means the source
- * could not be read at all, which is NOT the same as an empty source and must
- * never collapse into `0` — an unreadable app list would otherwise read as
- * "the App Terraces are empty", exactly the misreport #7458 fixed for district
- * density. `health` is a single object rather than a list, mirroring
- * `sourceAvailable()` in the projection.
+ * Read one signal source for a district in a single pass.
+ *
+ * `count: null` means the source could not be read at all, which is NOT the
+ * same as an empty source and must never collapse into `0` — an unreadable app
+ * list would otherwise read as "the App Arcade is empty", exactly the
+ * misreport #7458 fixed for district density. Which sources are a single
+ * object rather than a list is `EIDOVERSE_SCALAR_SOURCE_KEYS`, the same
+ * constant the projection's `sourceAvailable()` keys on, so the two cannot
+ * drift into disagreeing about what an empty district looks like.
+ *
+ * A source the install's recipe has switched OFF is reported as disabled
+ * rather than counted: the projection places nothing for it, so counting it
+ * would show a mind density that does not exist in the world.
  */
-function sourceSignalCount(source, key) {
+function readSource(source, key, includes) {
+  if (includes?.[key] !== true) return { count: null, disabled: true, attention: false };
   const value = source?.[key];
-  if (key === 'health') return value === null || value === undefined ? null : 1;
-  return Array.isArray(value) ? value.length : null;
+  if (EIDOVERSE_SCALAR_SOURCE_KEYS.includes(key)) {
+    if (value === null || value === undefined) return { count: null, disabled: false, attention: false };
+    return { count: 1, disabled: false, attention: value.status === 'error' || value.status === 'attention' };
+  }
+  if (!Array.isArray(value)) return { count: null, disabled: false, attention: false };
+  return {
+    count: value.length,
+    disabled: false,
+    attention: value.some((item) => item?.status === 'error' || item?.status === 'attention'),
+  };
 }
 
 /**
  * One district as something a mind can stand in and describe: what feeds it,
  * how much is currently there, and whether any of it wants attention.
  *
- * `signalCount` is what the district's sources REPORT, not a count of placed
- * entities. The projection allocates a capped, round-robin sample of those
- * signals into the world (`buildProjectionPlan`), so the world may hold fewer.
- * Reporting the source count keeps this readable without a live runtime; the
- * field name and the tool description both say "signals" rather than
- * "entities" so the difference is never implied away.
+ * `signalCount` is what the district's enabled sources REPORT, not a count of
+ * placed entities. The projection allocates a capped, round-robin sample of
+ * those signals into the world (`buildProjectionPlan`), so the world may hold
+ * fewer. Reporting the source count keeps this readable without a live
+ * runtime; the field name and the tool description both say "signals" rather
+ * than "entities" so the difference is never implied away.
  */
-function observePlace(district, source) {
-  const counts = district.sources.map((key) => ({ key, count: sourceSignalCount(source, key) }));
-  const readable = counts.filter(({ count }) => count !== null);
-  const unreadable = counts.filter(({ count }) => count === null).map(({ key }) => key);
-  const signalCount = readable.length ? readable.reduce((total, { count }) => total + count, 0) : null;
-  const severities = district.sources.flatMap((key) => {
-    const value = source?.[key];
-    if (key === 'health') return value?.status ? [value.status] : [];
-    return asArray(value).map((item) => item?.status).filter(Boolean);
-  });
-  // A district is `quiet` only when every source read cleanly and reported
-  // nothing. When a source failed we say `unknown`, never `quiet`.
-  const status = severities.some((value) => value === 'error' || value === 'attention')
-    ? 'attention'
-    : (signalCount === null ? 'unknown' : (signalCount > 0 ? 'active' : 'quiet'));
+function observePlace(district, source, includes) {
+  let signalCount = null;
+  let attention = false;
+  const unreadableSources = [];
+  const disabledSources = [];
+  for (const key of district.sources) {
+    const { count, disabled, attention: wantsAttention } = readSource(source, key, includes);
+    if (disabled) disabledSources.push(key);
+    else if (count === null) unreadableSources.push(key);
+    else signalCount = (signalCount ?? 0) + count;
+    if (wantsAttention) attention = true;
+  }
+  // Priority order, and `quiet` only when every enabled source read cleanly:
+  // an unreadable source must never render as an empty district.
+  const status = attention ? 'attention'
+    : signalCount === null ? 'unknown'
+      : signalCount > 0 ? 'active' : 'quiet';
   return {
     id: district.id,
     label: district.label,
     direction: district.direction,
     landmark: district.landmark,
-    sources: [...district.sources],
-    unreadableSources: unreadable,
+    sources: district.sources,
+    unreadableSources,
+    disabledSources,
     signalCount,
     status,
   };
 }
 
 /**
- * The federated neighbours, as the world shows them. `peerId` is the same
- * opaque digest `eidoverse.destinations` returns, so a mind can carry one
- * straight into `eidoverse.visit` — and so nothing here is a hostname.
- *
- * `inheritedFoundations` is the observation-first payoff: it links a peer in
- * the Federation Harbor to the foundations this install actually pulled from
- * it, which is how a peer's contribution becomes discoverable by touring the
- * Commons instead of by reading a repository.
- */
-function observePeers(source, destinations, inheritedByPeer) {
-  if (!Array.isArray(source?.peers)) return null;
-  const travelable = new Set(asArray(destinations).map((entry) => entry?.peerId).filter(Boolean));
-  return capped(source.peers, MAX_PEERS).map((peer) => ({
-    peerId: peer.id,
-    status: peer.status,
-    enabled: peer.enabled === true,
-    fullSync: peer.fullSync === true,
-    travelAvailable: peer.travelAvailable === true || travelable.has(peer.id),
-    inheritedFoundations: inheritedByPeer.get(peer.id) || 0,
-  }));
-}
-
-/**
  * Inherited foundations, keyed back to the peer chamber they arrived through.
  *
  * `sourceInstanceId` (pulled-FROM) is hashed with `eidoversePeerId` so it lines
- * up with the opaque ids in `peers` above; `originInstanceId` (authored-BY)
- * stays as-is because that is exactly what `summarizeFoundation` already hands
- * the mind, and a multi-hop re-share is only legible when the two are distinct.
+ * up with the opaque ids in `peers`; `originInstanceId` (authored-BY) stays as
+ * it is because that is exactly what `summarizeFoundation` already hands the
+ * mind, and a multi-hop re-share is only legible when the two are distinct.
  */
-function observeInherited(foundations) {
-  const inherited = asArray(foundations).filter((entry) => entry?.inheritance);
+function observeInherited(inherited) {
+  const peerIdByInstance = new Map();
+  const peerIdFor = (instanceId) => {
+    if (!instanceId) return null;
+    if (!peerIdByInstance.has(instanceId)) peerIdByInstance.set(instanceId, eidoversePeerId({ instanceId }));
+    return peerIdByInstance.get(instanceId);
+  };
   const byPeer = new Map();
   for (const entry of inherited) {
-    const sourceInstanceId = entry.inheritance?.sourceInstanceId;
-    if (!sourceInstanceId) continue;
-    const peerId = eidoversePeerId({ instanceId: sourceInstanceId });
-    byPeer.set(peerId, (byPeer.get(peerId) || 0) + 1);
+    const peerId = peerIdFor(entry.inheritance?.sourceInstanceId);
+    if (peerId) byPeer.set(peerId, (byPeer.get(peerId) || 0) + 1);
   }
-  const rows = [...inherited]
-    .sort((left, right) => String(right.inheritance?.inheritedAt || '').localeCompare(String(left.inheritance?.inheritedAt || '')))
+  // ISO-8601 timestamps sort correctly as plain strings; `localeCompare` would
+  // run full ICU collation over every inherited foundation to keep 20.
+  const rows = inherited
+    .map((entry) => ({ entry, at: entry.inheritance?.inheritedAt || '' }))
+    .sort((left, right) => (left.at < right.at ? 1 : left.at > right.at ? -1 : 0))
     .slice(0, MAX_INHERITED)
-    .map((entry) => ({
+    .map(({ entry }) => ({
       id: entry.id,
       kind: entry.kind,
       title: entry.title,
       originInstanceId: entry.inheritance?.originInstanceId ?? null,
-      fromPeerId: entry.inheritance?.sourceInstanceId
-        ? eidoversePeerId({ instanceId: entry.inheritance.sourceInstanceId })
-        : null,
+      fromPeerId: peerIdFor(entry.inheritance?.sourceInstanceId),
       inheritedAt: entry.inheritance?.inheritedAt ?? null,
     }));
   return { rows, byPeer };
 }
 
 /**
- * Controller health, filtered to what a maintenance wake would act on. A
- * controller is worth surfacing when the supervisor disarmed it, when it is
- * failing, or when its last tick failed — `lastTickOk === null` means it has
- * never stepped yet, which is the normal state one interval after an install
- * and deliberately NOT an alarm.
+ * The federated neighbours, as the world shows them. `peerId` is the same
+ * opaque digest `eidoverse.destinations` returns, so a mind can carry one
+ * straight into `eidoverse.visit` — and so nothing here is a hostname.
+ * `travelAvailable` is read from the signal rather than re-probed: the source
+ * collector already resolved it against the live destination list.
+ *
+ * `inheritedFoundations` is the observation-first payoff — it links a peer to
+ * the foundations this install actually pulled from it, which is how a peer's
+ * contribution becomes discoverable by touring the Commons instead of by
+ * reading a repository.
+ */
+function observePeers(source, byPeer) {
+  if (!Array.isArray(source?.peers)) return null;
+  return source.peers.slice(0, MAX_PEERS).map((peer) => ({
+    peerId: peer.id,
+    status: peer.status,
+    enabled: peer.enabled === true,
+    fullSync: peer.fullSync === true,
+    travelAvailable: peer.travelAvailable === true,
+    inheritedFoundations: byPeer.get(peer.id) || 0,
+  }));
+}
+
+/**
+ * Controller health, filtered to what a maintenance wake would act on.
+ *
+ * Takes the SUMMARY projection (`summarizeControllerInstall`), never a raw
+ * ledger record: the raw record carries `lastOutcome: { ok, reason }`, and
+ * reading `lastTickOk` off one silently yields `undefined` for every install,
+ * which would quietly disable the failed-tick clause below.
+ *
+ * `lastTickOk === null` means the controller has never stepped yet, which is
+ * the normal state one interval after an install and deliberately NOT an
+ * alarm.
  */
 function observeControllers(installs) {
-  return capped(asArray(installs)
+  return asArray(installs)
     .filter((install) => install?.disarmedReason
       || (install?.consecutiveFailures ?? 0) > 0
       || install?.lastTickOk === false)
+    .slice(0, MAX_ATTENTION_CONTROLLERS)
     .map((install) => ({
       id: install.id,
       controllerId: install.controllerId,
@@ -177,10 +214,16 @@ function observeControllers(installs) {
       lastTickReason: install.lastTickReason ?? null,
       consecutiveFailures: install.consecutiveFailures ?? 0,
       disarmedReason: install.disarmedReason ?? null,
-    })), MAX_ATTENTION_CONTROLLERS);
+    }));
 }
 
-const sortedUnique = (values) => [...new Set(asArray(values).filter(Boolean))].sort();
+const NO_CHANGES = Object.freeze({
+  newFoundations: [],
+  newPeers: [],
+  departedPeers: [],
+  placesChanged: [],
+  controllersNeedingAttention: [],
+});
 
 /**
  * What changed since the marker this mind left last time.
@@ -197,17 +240,7 @@ const sortedUnique = (values) => [...new Set(asArray(values).filter(Boolean))].s
  * stays in `places` for a mind that wants it.
  */
 function diffAgainstMarker({ marker, foundationIds, peerIds, placeStatus, attentionControllerIds }) {
-  if (!marker) {
-    return {
-      firstObservation: true,
-      since: null,
-      newFoundations: [],
-      newPeers: [],
-      departedPeers: [],
-      placesChanged: [],
-      controllersNeedingAttention: [],
-    };
-  }
+  if (!marker) return { firstObservation: true, since: null, ...NO_CHANGES };
   const seenFoundations = new Set(asArray(marker.foundationIds));
   const seenPeers = new Set(asArray(marker.peerIds));
   const seenAttention = new Set(asArray(marker.attentionControllerIds));
@@ -237,33 +270,34 @@ const GUIDANCE = 'Observation before conversation: what you see here is this ins
 /**
  * Build one observation report plus the marker to persist for the next one.
  *
- * Every argument is an already-read snapshot, and `marker` is the previously
- * persisted marker (`null` on a first observation). Returns
- * `{ report, marker }`: the caller decides whether to commit the new marker,
- * which keeps the diff contract testable without a write.
+ * Every argument is an already-read snapshot: `districts`/`includes` come from
+ * the install's RESOLVED design recipe (the service resolves it the same way
+ * the projection does), `controllerInstalls` is the summarized projection, and
+ * `marker` is the previously persisted marker (`null` on a first observation).
+ * Returns `{ report, marker }`: the caller decides whether to commit the new
+ * marker, which keeps the diff contract testable without a write.
  */
 export function buildEidoverseObservation({
   source = {},
-  districts = EIDOVERSE_DISTRICTS_V2,
+  districts = EIDOVERSE_WORLD_DESIGN_V3.districts,
+  includes = EIDOVERSE_WORLD_DESIGN_V3.includes,
   foundations = [],
   foundationCounts = null,
   controllerInstalls = [],
   controllerCounts = null,
-  destinations = [],
   marker = null,
   observedAt,
 } = {}) {
-  const places = asArray(districts.length ? districts : EIDOVERSE_DISTRICTS_V2).map((district) => observePlace(district, source));
-  const { rows: inheritedRows, byPeer } = observeInherited(foundations);
-  const peers = observePeers(source, destinations, byPeer);
+  const places = districts.map((district) => observePlace(district, source, includes));
+  const inherited = asArray(foundations).filter((entry) => entry?.inheritance);
+  const { rows: inheritedRows, byPeer } = observeInherited(inherited);
+  const peers = observePeers(source, byPeer);
   const attentionControllers = observeControllers(controllerInstalls);
 
   const foundationIds = sortedUnique(asArray(foundations).map((entry) => entry?.id));
   const peerIds = sortedUnique(asArray(peers).map((entry) => entry.peerId));
   const placeStatus = Object.fromEntries(places.map(({ id, status }) => [id, status]));
   const attentionControllerIds = sortedUnique(attentionControllers.map((entry) => entry.id));
-
-  const changes = diffAgainstMarker({ marker, foundationIds, peerIds, placeStatus, attentionControllerIds });
 
   return {
     report: {
@@ -274,22 +308,22 @@ export function buildEidoverseObservation({
       foundations: {
         counts: foundationCounts,
         inherited: inheritedRows,
-        inheritedTruncated: asArray(foundations).filter((entry) => entry?.inheritance).length > inheritedRows.length,
+        inheritedTruncated: inherited.length > inheritedRows.length,
       },
       controllers: {
         counts: controllerCounts,
         needsAttention: attentionControllers,
       },
-      changes,
+      changes: diffAgainstMarker({ marker, foundationIds, peerIds, placeStatus, attentionControllerIds }),
       guidance: GUIDANCE,
     },
     marker: {
       schemaVersion: EIDOVERSE_OBSERVATION_SCHEMA_VERSION,
       observedAt,
-      foundationIds: foundationIds.slice(0, MAX_MARKER_IDS),
-      peerIds: peerIds.slice(0, MAX_MARKER_IDS),
+      foundationIds: foundationIds.slice(0, MAX_MARKER_FOUNDATION_IDS),
+      peerIds,
       placeStatus,
-      attentionControllerIds: attentionControllerIds.slice(0, MAX_MARKER_IDS),
+      attentionControllerIds,
     },
   };
 }

@@ -26,6 +26,8 @@
 import { join } from 'node:path';
 import { PATHS, atomicWrite, readJSONFile } from '../lib/fileUtils.js';
 import { createMutex } from '../lib/asyncMutex.js';
+import { extractEidoverseDesignOverrides, resolveEidoverseDesign } from '../lib/eidoverseWorldDesign.js';
+import { summarizeControllerInstall } from '../lib/eidoverseControllers.js';
 import {
   EIDOVERSE_OBSERVATION_SCHEMA_VERSION,
   buildEidoverseObservation,
@@ -37,6 +39,11 @@ import {
 // own binding, which that proxy never sees.
 const markerFile = () => join(PATHS.data, 'eidoverse', 'observation.json');
 
+// A re-entrancy guard, NOT a defense against competing actors (AGENTS.md's
+// trust model rules those out): one turn can call `eidoverse.observe` more
+// than once, and read-marker → diff → write-marker is a read-modify-write that
+// must not interleave with itself or the second call would diff against a
+// marker the first already replaced.
 const withMarkerLock = createMutex();
 
 /**
@@ -61,28 +68,45 @@ async function writeMarker(marker) {
   await atomicWrite(markerFile(), { schemaVersion: EIDOVERSE_OBSERVATION_SCHEMA_VERSION, marker });
 }
 
-/** The visit marker this install last committed, or `null` if it never has. */
-export async function readEidoverseObservationMarker() {
-  return withMarkerLock(() => readMarker());
+/**
+ * The install's resolved design, so the report names the districts the world
+ * actually renders. Resolving the stored recipe (rather than reaching for the
+ * shipped constant) is what keeps a mind from describing a V2 "Federation
+ * Harbor" that V3 renamed to the Federation Terminal, or a district a user's
+ * overrides moved. A recipe that cannot be read falls back to the shipped
+ * default design, never to an older one.
+ */
+async function resolveDesign() {
+  const recipe = await import('./eidoverseWorld.js')
+    .then((module) => module.readEidoverseWorldRecipe())
+    .catch(() => null);
+  const design = resolveEidoverseDesign(extractEidoverseDesignOverrides(recipe), recipe?.assets || {});
+  return { districts: design.districts, includes: design.includes };
 }
 
 /**
  * Observe the world: collect the live PortOS signals a projection would place,
- * the foundation ledger, the installed controllers, and the reachable travel
- * destinations; diff them against the last visit marker; and commit a new one.
+ * the foundation ledger, the installed controllers, and the install's resolved
+ * design; diff them against the last visit marker; and commit a new one.
  *
  * **Observing advances the marker**, which is the whole point — the trail a
  * mind leaves is what makes the NEXT observation's `changes` mean anything. So
- * this is not idempotent, and the tool description says so rather than
- * implying a free read. Pass `{ commit: false }` to look without stamping.
+ * this is not idempotent, and the tool is declared a `write` rather than a
+ * read. Pass `{ commit: false }` to look without stamping.
+ *
+ * Travel destinations are deliberately NOT collected here:
+ * `collectEidoverseWorldSources()` already resolves them and folds the result
+ * into `source.peers[].travelAvailable`, and `listEidoverseDestinations()`
+ * probes `/capabilities` on every online peer — asking again would double that
+ * outbound fan-out to recompute a field already in hand.
  *
  * Every collection failure degrades to an unavailable section rather than
  * failing the observation: a mind that cannot read its controller list should
- * still get to see its districts and its peers. `null` sections are reported
- * as unavailable, never as empty (`sourceSignalCount` in the pure lib).
+ * still get to see its districts. `null` sections are reported as unavailable,
+ * never as empty (`readSource` in the pure lib).
  */
 export async function observeEidoverseWorld({ signal, commit = true, now = () => new Date().toISOString() } = {}) {
-  const [source, ledger, controllers, travel] = await Promise.all([
+  const [source, ledger, controllers, design] = await Promise.all([
     import('./eidoverseWorldSources.js')
       .then((module) => module.collectEidoverseWorldSources({ signal }))
       .catch(() => ({})),
@@ -92,24 +116,27 @@ export async function observeEidoverseWorld({ signal, commit = true, now = () =>
     import('./eidoverseControllerRuntime.js')
       .then((module) => module.listEidoverseControllers())
       .catch(() => null),
-    import('./eidoverseTravel.js')
-      .then((module) => module.listEidoverseDestinations())
-      .catch(() => ({ destinations: [] })),
+    resolveDesign(),
   ]);
 
   return withMarkerLock(async () => {
     const marker = await readMarker();
     const { report, marker: nextMarker } = buildEidoverseObservation({
       source,
+      districts: design.districts,
+      includes: design.includes,
       foundations: ledger?.foundations || [],
       foundationCounts: ledger?.counts ?? null,
-      controllerInstalls: controllers?.installs || [],
+      // Summarized, never raw: the pure lib reads `lastTickOk`/`lastTickReason`,
+      // which only exist on this projection — a raw record carries them inside
+      // `lastOutcome`, so handing one over would silently report every
+      // controller as never-ticked.
+      controllerInstalls: (controllers?.installs || []).map((install) => summarizeControllerInstall(install)),
       controllerCounts: controllers?.counts ?? null,
-      destinations: travel?.destinations || [],
       marker,
       observedAt: now(),
     });
     if (commit) await writeMarker(nextMarker);
-    return { ...report, markerCommitted: commit };
+    return report;
   });
 }

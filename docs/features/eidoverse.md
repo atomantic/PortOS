@@ -941,7 +941,11 @@ controller reads it summarizes) returns:
 - **`places`** — the eight districts as somewhere a mind can stand and
   describe: label, direction, landmark, which signal sources feed it, how many
   live signals those sources currently report, and whether any of them want
-  attention.
+  attention. Districts come from the install's **resolved design recipe**, not
+  from a constant, so a mind never names a district a later design version
+  renamed (V3 calls it the Federation Terminal, not the V2 Harbor) or one the
+  user's own overrides moved. A source the recipe has switched off reports as
+  `disabled` rather than counted — the projection places nothing for it.
 - **`peers`** — the opaque travel ids `eidoverse.destinations` also returns, so
   one carries straight into `eidoverse.visit` — each with **how many
   foundations this install inherited through it**.
@@ -954,7 +958,7 @@ controller reads it summarizes) returns:
 - **`changes`** — what is new since this mind last observed.
 
 That third bullet is the epic's acceptance criterion: **a peer contribution is
-discoverable by touring the Commons**, because the Federation Harbour chamber
+discoverable by touring the Commons**, because the Federation Terminal chamber
 carries the count and the inherited list names the build — no repository read
 and no conversation with its author required.
 
@@ -986,9 +990,15 @@ is per-peer content-change detection for a background sweep, also in memory.
 So observing **stamps a marker** — `data/eidoverse/observation.json`, covered
 in [STORAGE.md](../STORAGE.md). That is the stigmergic half of the slice: the
 trail a mind leaves is what makes the next observation's `changes` mean
-anything. It also means `eidoverse.observe` is **not idempotent**, and its tool
-description says so rather than implying a free read. `observeEidoverseWorld({
-commit: false })` looks without stamping.
+anything. It also means `eidoverse.observe` is **not idempotent**, and that it
+is declared `sideEffect: 'write'` even though a mind reads it like a read.
+That is not a label: `mindToolRecipes.js` only lets a saved recipe compose
+`'read'` tools, and the MCP bridge exports `readOnlyHint: sideEffect ===
+'read'`. Calling a marker-stamping tool a read would let a replayable recipe
+silently consume the `changes` delta the playbook depends on, and would tell an
+external MCP client the tool touches nothing.
+`observeEidoverseWorld({ commit: false })` is the internal look-without-stamping
+form.
 
 The marker holds ids, per-district status, and a timestamp — no body, no style,
 no record content — and is machine-local like the ledger and the controller

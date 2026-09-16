@@ -398,7 +398,14 @@ const eidoverseObserveTool = Object.freeze({
   policy: {
     scopes: ['mind'],
     requiredCapabilities: ['manageEidoverse'],
-    sideEffect: 'read',
+    // Declared a WRITE even though a mind reads it like a read, because
+    // observing stamps the visit marker. `sideEffect: 'read'` is not a label
+    // here — `mindToolRecipes.js` only lets a saved recipe compose 'read'
+    // tools, and the MCP bridge exports `readOnlyHint: sideEffect === 'read'`.
+    // Calling this a read would let a replayable recipe silently consume the
+    // `changes` delta the mind's own playbook depends on, and would tell an
+    // external MCP client it touches nothing.
+    sideEffect: 'write',
     idempotent: false,
     async: false,
     confirmation: 'capability-grant',

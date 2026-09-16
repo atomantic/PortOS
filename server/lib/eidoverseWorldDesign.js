@@ -162,6 +162,15 @@ export const EIDOVERSE_ASSET_RECIPE_V2 = Object.freeze({
   },
 });
 
+/**
+ * The signal sources that are a single object rather than a list. Everything
+ * else in `buildEidoverseWorldSignals()`'s output is an array (or `null` when
+ * it could not be read). Shared so the projection's availability check and the
+ * observation report's density count cannot drift into disagreeing about what
+ * an empty district looks like — the #7458 misreport, from either side.
+ */
+export const EIDOVERSE_SCALAR_SOURCE_KEYS = Object.freeze(['health']);
+
 export const EIDOVERSE_DISTRICTS_V2 = Object.freeze([
   { id: 'nexus', label: 'PortOS Nexus', direction: 'Center', landmark: 'status spire', anchor: [0, 0, 0], sources: ['health', 'operations', 'features'], accent: '#ffb86b' },
   { id: 'apps', label: 'App Terraces', direction: 'Northwest', landmark: 'service pylons', anchor: [-30, 0, -18], sources: ['apps'], accent: '#65d9ff' },

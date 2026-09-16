@@ -99,7 +99,7 @@ describe('buildEidoverseObservation', () => {
     });
 
     // This is the acceptance criterion: a peer's contribution is discoverable
-    // by touring the Commons, so the harbour chamber has to carry the count.
+    // by touring the Commons, so the peer chamber has to carry the count.
     const alpha = report.peers.find((peer) => peer.peerId === eidoversePeerId({ instanceId: PEER_ALPHA }));
     const beta = report.peers.find((peer) => peer.peerId === eidoversePeerId({ instanceId: PEER_BETA }));
     expect(alpha.inheritedFoundations).toBe(2);
@@ -124,8 +124,8 @@ describe('buildEidoverseObservation', () => {
 
     const apps = report.places.find((place) => place.id === 'apps');
     const agents = report.places.find((place) => place.id === 'agents');
-    // An app list that failed to read must never render as "the terraces are
-    // empty" — that is the #7458 misreport, in a new surface.
+    // An app list that failed to read must never render as an empty district —
+    // that is the #7458 misreport, in a new surface.
     expect(apps.signalCount).toBeNull();
     expect(apps.status).toBe('unknown');
     expect(apps.unreadableSources).toEqual(['apps']);
@@ -197,7 +197,7 @@ describe('buildEidoverseObservation', () => {
   });
 
   it('ignores a locally authored foundation when counting what a peer contributed', () => {
-    const { report } = observe({
+    const { report, marker } = observe({
       source: { peers: [peerSignal(PEER_ALPHA)] },
       foundations: [
         inheritedFoundation('peer:alpha:one', PEER_ALPHA),
@@ -207,7 +207,52 @@ describe('buildEidoverseObservation', () => {
 
     expect(report.foundations.inherited.map((entry) => entry.id)).toEqual(['peer:alpha:one']);
     expect(report.peers[0].inheritedFoundations).toBe(1);
-    // The marker still tracks the local one, so authoring it counts as seen.
-    expect(report.changes.firstObservation).toBe(true);
+    // The marker still tracks the locally authored one, so it is not reported
+    // as a peer contribution but IS counted as already seen.
+    expect(marker.foundationIds).toEqual(['local-one', 'peer:alpha:one']);
+  });
+});
+
+describe('the places a mind is told it is standing in', () => {
+  it('names the districts the SHIPPED design renders, not a retired version', () => {
+    const { report } = buildEidoverseObservation({ observedAt: OBSERVED_AT, source: {} });
+
+    // V3 renamed five districts. A mind that reports "Federation Harbor" is
+    // describing a sign the world stopped rendering two design versions ago.
+    const labels = Object.fromEntries(report.places.map((place) => [place.id, place.label]));
+    expect(labels).toMatchObject({
+      apps: 'App Arcade',
+      memory: 'Memory Library',
+      data: 'Data Depot',
+      federation: 'Federation Terminal',
+      activity: 'Activity Exchange',
+    });
+  });
+
+  it('honors the install\'s own district set over the shipped one', () => {
+    const { report } = buildEidoverseObservation({
+      observedAt: OBSERVED_AT,
+      districts: [{ id: 'yard', label: 'The Yard', direction: 'North', landmark: 'gate', sources: ['apps'] }],
+      includes: { apps: true },
+      source: { apps: [{ id: 'a', status: 'active' }] },
+    });
+
+    expect(report.places).toHaveLength(1);
+    expect(report.places[0]).toMatchObject({ id: 'yard', label: 'The Yard', signalCount: 1, status: 'active' });
+  });
+
+  it('reports a source the recipe disabled as disabled, never as an empty district', () => {
+    const { report } = buildEidoverseObservation({
+      observedAt: OBSERVED_AT,
+      includes: { apps: false, agents: true, tasks: true },
+      source: { apps: [{ id: 'a', status: 'active' }], agents: [], tasks: [] },
+    });
+
+    const apps = report.places.find((place) => place.id === 'apps');
+    // The projection places nothing for a disabled source, so counting its
+    // signals would show the mind density the world does not have.
+    expect(apps.disabledSources).toEqual(['apps']);
+    expect(apps.signalCount).toBeNull();
+    expect(apps.status).toBe('unknown');
   });
 });
