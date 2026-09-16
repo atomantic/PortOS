@@ -27,7 +27,9 @@ import {
   eidoverseWorldSaySchema,
   eidoverseChatReadSchema, eidoverseTravelVisitSchema, eidoverseVisitChatSchema, eidoverseVisitLeaveSchema,
 } from '../lib/validation.js';
-import { eidoverseFoundationIdParamSchema, summarizeFoundation } from '../lib/eidoverseFoundations.js';
+import { eidoverseFoundationIdParamSchema, eidoverseFoundationInputSchema, summarizeFoundation } from '../lib/eidoverseFoundations.js';
+import { eidoverseControllerArmSchema, eidoverseControllerIdParamSchema, eidoverseControllerInstallSchema, summarizeControllerInstall } from '../lib/eidoverseControllers.js';
+import { describeCreativeCatalog } from '../lib/eidoverseCreativeToolkit.js';
 import { persistentMindChooseNameSchema } from '../lib/persistentMindChosenName.js';
 import { persistentMindProtectMemorySchema } from '../lib/persistentMindMemory.js';
 import { persistentMindThinkingRequestSchema } from '../lib/persistentMindThinkingPresets.js';
@@ -367,6 +369,8 @@ const eidoverseTravelTools = [
 // foundations exist and why one is refused can only guess at ids.
 const eidoverseFoundationTools = [
   ['foundations', 'List the world foundations this install authored or inherited from a peer — ownership layer (`vernacular` = local, `baseline` = promoted or an inherited copy), the recorded agent-free assay outcome, whether a gated promote candidate currently exists, provenance (opaque instance id and author kind, never a display name), any `inheritance` edge back to the peer it was pulled from, and the derived `lineage` (authored/inherited → assayed → packaged → promoted). Local style is never included.', z.object({}).strict(), ['manageEidoverse'], 'read'],
+  ['contributions', 'List the resilience-assay contributions registered on this install — the ids a foundation\'s `contributionId` may bind to before it is promotable.', z.object({}).strict(), ['manageEidoverse'], 'read'],
+  ['record', 'Record (or re-author) a local vernacular foundation — a durable, promotable creative build (a `schema`, `affordance`, `controller`, or `district-template`). It always lands on this install\'s local `vernacular` layer; the layer is not accepted from you and nothing crosses to a peer until eidoverse.promote is called separately. Use eidoverse.creative-catalog for material/motif/layout ids and eidoverse.contributions for a valid `contributionId` first. `style` (palette, motif, aliases) stays local forever; a cosmetic key found inside `body` refuses the write instead of being silently dropped.', eidoverseFoundationInputSchema, ['manageEidoverse'], 'write'],
   ['promote', 'Offer one local foundation to the shared PortOS baseline population. The server re-runs the agent-free resilience assay and every promote gate itself, so this is a REQUEST, not an assertion: the result is `outcome: "promoted"` only when it published. Any other outcome means nothing moved — read `reasons` and fix those before asking again, and never narrate a refused promote as done.', eidoverseFoundationIdParamSchema, ['manageEidoverse', 'promoteEidoverseFoundations'], 'write'],
 ].map(([operation, description, schema, requiredCapabilities, sideEffect]) => ({
   type: 'portos_tool', name: `eidoverse.${operation}`, version: COS_TOOL_SCHEMA_VERSION,
@@ -376,7 +380,51 @@ const eidoverseFoundationTools = [
     idempotent: sideEffect === 'read', async: false, confirmation: 'capability-grant' },
   adapter: { kind: 'eidoverse-foundations', operation },
 }));
-const eidoverseTools = [...eidoverseTravelTools, ...eidoverseFoundationTools, eidoverseStatusTool, eidoverseProjectTool, eidoverseAugmentTool, eidoverseSayTool];
+// The documented creative toolkit (#7459): named materials, motifs, and
+// generative placement layouts a mind reaches for instead of inventing
+// coordinates and colors from scratch. Purely a catalog read — deterministic,
+// seeded, no AI provider call (`lib/eidoverseCreativeToolkit.js`). Feed a
+// chosen layout into eidoverse.record (a district-template) or
+// into eidoverse.augment (live spawn operations).
+const eidoverseCreativeCatalogTool = Object.freeze({
+  type: 'portos_tool',
+  name: 'eidoverse.creative-catalog',
+  version: COS_TOOL_SCHEMA_VERSION,
+  providerName: providerToolName('eidoverse.creative-catalog'),
+  aliases: [providerToolName('eidoverse.creative-catalog')],
+  description: 'List the documented creative toolkit for Eidoverse vernacular building: named materials and motifs (cosmetics for a foundation\'s `style`) and named generative district-template placement layouts (structure for a foundation\'s `body`). Deterministic and seeded — no AI provider call.',
+  input_schema: zodToOpenApiSchema(z.object({}).strict()),
+  output_schema: objectOutputSchema,
+  policy: {
+    scopes: ['mind'],
+    requiredCapabilities: ['manageEidoverse'],
+    sideEffect: 'read',
+    idempotent: true,
+    async: false,
+    confirmation: 'capability-grant',
+  },
+  adapter: { kind: 'eidoverse-creative', operation: 'catalog' },
+});
+// Installing a controller leaves something RUNNING in the world after the turn
+// ends, which is a different act from building in it during a turn — so it
+// carries its own default-off grant on top of `manageEidoverse`, the same way
+// promotion does. The read beside them needs only `manageEidoverse`: a mind
+// that can build in the world should be able to see what is already ticking in
+// it, and seeing is what makes the writes usable rather than guesswork.
+const eidoverseControllerTools = [
+  ['controllers', 'List the executable world controllers PortOS ships and the ones installed here — each install\'s cadence, whether it is armed, whether its effects reach the world, its tick count, and why the supervisor disarmed it if it did. Read this before installing: `controllerId` must be one of the registry ids it returns.', z.object({}).strict(), ['manageEidoverse'], 'read'],
+  ['install-controller', 'Attach a bounded controller to the private world so it keeps ticking between your wakes. `controllerId` names one of the ids eidoverse.controllers returns — a controller is never a path or code you supply. Every tick is synchronous and provider-free, and `deliverEffects` (default false) decides whether its effects reach the world at all. This is a REQUEST: the result is `outcome: "installed"` only when it landed, and any other outcome means nothing is running — read `reasons`. The first tick is one interval away, never immediate.', eidoverseControllerInstallSchema, ['manageEidoverse', 'installEidoverseControllers'], 'write'],
+  ['arm-controller', 'Pause or resume one installed controller without losing the state it has accumulated. Use this to resume a controller the supervisor disarmed after repeated failures, once you have fixed what it was failing on — re-installing would work too but starts its state over.', eidoverseControllerArmSchema, ['manageEidoverse', 'installEidoverseControllers'], 'write'],
+  ['retire-controller', 'Stop and remove one installed controller by its install id. Retiring deletes the install and its accumulated state; re-installing starts it fresh.', eidoverseControllerIdParamSchema, ['manageEidoverse', 'installEidoverseControllers'], 'write'],
+].map(([operation, description, schema, requiredCapabilities, sideEffect]) => ({
+  type: 'portos_tool', name: `eidoverse.${operation}`, version: COS_TOOL_SCHEMA_VERSION,
+  providerName: providerToolName(`eidoverse.${operation}`), aliases: [providerToolName(`eidoverse.${operation}`)],
+  description, input_schema: zodToOpenApiSchema(schema), output_schema: objectOutputSchema,
+  policy: { scopes: ['mind'], requiredCapabilities, sideEffect,
+    idempotent: sideEffect === 'read', async: false, confirmation: 'capability-grant' },
+  adapter: { kind: 'eidoverse-controllers', operation },
+}));
+const eidoverseTools = [...eidoverseTravelTools, ...eidoverseFoundationTools, eidoverseCreativeCatalogTool, ...eidoverseControllerTools, eidoverseStatusTool, eidoverseProjectTool, eidoverseAugmentTool, eidoverseSayTool];
 const thinkingTools = ['mind.thinking-presets', 'mind.request-thinking-preset'].map((name, index) => ({
   type: 'portos_tool', name, version: COS_TOOL_SCHEMA_VERSION,
   providerName: providerToolName(name), aliases: [],
@@ -426,6 +474,7 @@ const normalizeToolCapabilities = (raw) => ({
   chooseThinkingPreset: raw?.chooseThinkingPreset === true,
   adjustLocalContext: raw?.adjustLocalContext === true,
   promoteEidoverseFoundations: raw?.promoteEidoverseFoundations === true,
+  installEidoverseControllers: raw?.installEidoverseControllers === true,
   callToolRecipes: raw?.callToolRecipes === true,
 });
 
@@ -665,10 +714,55 @@ const executeAdapter = async (tool, args, context, authority) => {
       const listed = await ledger.listEidoverseFoundations();
       return { counts: listed.counts, foundations: listed.foundations.map(summarizeFoundation) };
     }
+    if (tool.adapter.operation === 'contributions') {
+      const { listRegisteredContributionIds } = await import('./eidoverseResilienceContributions.js');
+      return { contributions: await listRegisteredContributionIds() };
+    }
+    if (tool.adapter.operation === 'record') {
+      const { ensureInstanceId } = await import('./instanceIdentity.js');
+      // `authorKind` is stamped 'mind' server-side rather than trusted from
+      // the call, the same reason `layer` is never caller-supplied: a mind's
+      // own authoring tool must not be able to claim a human's byline.
+      const record = await ledger.recordEidoverseFoundation({ ...args, authorKind: 'mind' }, { originInstanceId: await ensureInstanceId() });
+      return { foundation: summarizeFoundation(record) };
+    }
     const result = await ledger.promoteEidoverseFoundation(args.id);
     // Summarized for the same reason the list is, and because the candidate
     // envelope on a success is a duplicate of the body the mind already wrote.
     return { ...result, candidate: null, foundation: result.foundation ? summarizeFoundation(result.foundation) : null };
+  }
+  if (tool.adapter.kind === 'eidoverse-creative') {
+    return describeCreativeCatalog();
+  }
+  if (tool.adapter.kind === 'eidoverse-controllers') {
+    // Lazy for the same reason the foundations pair is: the runtime drags the
+    // controller registry, the file store and the event scheduler, and only
+    // this tool group reaches them.
+    const runtime = await import('./eidoverseControllerRuntime.js');
+    if (tool.adapter.operation === 'controllers') {
+      const [{ describeControllerDefinitions }, listed] = await Promise.all([
+        import('./eidoverseControllerRegistry.js'),
+        runtime.listEidoverseControllers(),
+      ]);
+      return {
+        available: await describeControllerDefinitions(),
+        counts: listed.counts,
+        installs: listed.installs.map((install) => summarizeControllerInstall(install)),
+      };
+    }
+    if (tool.adapter.operation === 'arm-controller') {
+      const armed = await runtime.setEidoverseControllerArmed(args.id, args.armed);
+      return { ...armed, install: armed.install ? summarizeControllerInstall(armed.install) : null };
+    }
+    if (tool.adapter.operation === 'install-controller') {
+      const result = await runtime.installEidoverseController(args, { installedBy: 'mind' });
+      // State included here and nowhere else: the mind just authored this
+      // config and the initial state is what tells it the controller
+      // understood it. The list projection stays state-free.
+      return { ...result, install: result.install ? summarizeControllerInstall(result.install, { includeState: true }) : null };
+    }
+    const result = await runtime.retireEidoverseController(args.id);
+    return { ...result, install: result.install ? summarizeControllerInstall(result.install) : null };
   }
   if (tool.adapter.kind === 'eidoverse-world') {
     const world = await import('./eidoverseWorld.js');

@@ -63,6 +63,10 @@ describe('registered-peer Eidoverse guest workflow over HTTP', () => {
     expect(await listEidoverseDestinations()).toEqual({ destinations: [{ peerId, label: 'Example destination' }] });
     const visit = await visitEidoversePeer({ peerId });
     expect(mocks.admission).toHaveBeenCalledWith({ agent: true, name: 'Example Mind' });
+    // A visiting mind must be told, in the same response, that what it sees is
+    // the host's own local vernacular — never the shared PortOS baseline (#7459).
+    expect(visit.guidance).toMatch(/local vernacular/);
+    expect(visit.guidance).toMatch(/never the shared PortOS baseline population/);
     const sent = await eidoverseVisitChat({ visitId: visit.visitId, text: 'Hello from the example visitor.' });
     expect(sent.messages).toEqual([{ seq: 0, actor: 'guest-example', text: 'Hello from the example visitor.' }]);
     const connection = mocks.connections.at(-1);
