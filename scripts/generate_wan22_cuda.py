@@ -9,6 +9,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _checkpoint_index_guard import validate_checkpoint_indexes  # noqa: E402
 from _runner_common import emit_runtime_fingerprint, establish_process_group, heartbeat  # noqa: E402
 
 
@@ -53,6 +54,10 @@ def main() -> None:
         snapshot = snapshot_download(repo_id=args.model_repo, revision=args.model_revision, local_files_only=True)
     except Exception as exc:
         raise RuntimeError("The pinned Wan 2.2 snapshot is incomplete. Use Download or Repair in Video Gen.") from exc
+    # accelerate trusts shard names from a sharded checkpoint index, and has no
+    # fixed release (GHSA-4j2p-28q2-5m79) — screen the snapshot before diffusers
+    # hands it over.
+    validate_checkpoint_indexes(Path(snapshot))
     import torch
     from diffusers import AutoencoderKLWan, WanPipeline
     from diffusers.utils import export_to_video
