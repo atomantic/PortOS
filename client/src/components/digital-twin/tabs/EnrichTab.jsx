@@ -18,7 +18,7 @@ import { FormField } from '../../ui/FormField';
 import { ENRICHMENT_CATEGORIES } from '../constants';
 import ListEnrichment from '../ListEnrichment';
 import ScaleInput from '../ScaleInput';
-import { formatDateNumeric } from '../../../utils/formatters';
+import { formatCount, formatDateNumeric } from '../../../utils/formatters';
 
 export default function EnrichTab({ onRefresh }) {
   const [searchParams, setSearchParams] = useSearchParams();
@@ -589,7 +589,7 @@ export default function EnrichTab({ onRefresh }) {
                     </button>
                   )}
                   <div className="text-xs text-gray-500 mt-1">
-                    {sample.value.length} characters {sample.value.length < 50 && sample.value.length > 0 && '(need 50+)'}
+                    {formatCount(sample.value.length)} characters {sample.value.length < 50 && sample.value.length > 0 && '(need 50+)'}
                   </div>
                 </div>
               ))}

@@ -8,7 +8,7 @@ import useProviderModels from '../../../hooks/useProviderModels';
 import { useSocket } from '../../../hooks/useSocket';
 import { uuidv4 } from '../../../lib/uuid.js';
 import * as api from '../../../services/api';
-import { formatDateTime, timeUntil } from '../../../utils/formatters';
+import { formatCount, formatDateTime, timeUntil } from '../../../utils/formatters';
 import BrailleSpinner from '../../BrailleSpinner';
 import Drawer from '../../Drawer';
 import AutoSizeTextarea from '../../ui/AutoSizeTextarea';
@@ -941,8 +941,8 @@ export default function MindTab() {
           />
 
           <div className="grid grid-cols-2 gap-2">
-            <MindStateButton icon={Brain} label="Context" value={runtime?.context?.approximateTokens == null ? 'Unavailable' : `~${runtime.context.approximateTokens.toLocaleString()} tokens`} detail={`${runtime?.context?.chars?.toLocaleString() || '—'} characters`} onClick={() => openPanel('context')} />
-            <MindStateButton icon={Database} label="Memories" value={runtime?.context?.memoryCount == null ? 'Unavailable' : `${runtime.context.memoryCount} accessible`} detail="Created and curated" onClick={() => openPanel('memories')} />
+            <MindStateButton icon={Brain} label="Context" value={runtime?.context?.approximateTokens == null ? 'Unavailable' : `~${formatCount(runtime.context.approximateTokens)} tokens`} detail={`${formatCount(runtime?.context?.chars)} characters`} onClick={() => openPanel('context')} />
+            <MindStateButton icon={Database} label="Memories" value={runtime?.context?.memoryCount == null ? 'Unavailable' : `${formatCount(runtime.context.memoryCount)} accessible`} detail="Created and curated" onClick={() => openPanel('memories')} />
             <MindStateButton icon={Eraser} label="Cleanup" value={mind?.capabilities?.manageMind ? 'Self-maintenance on' : 'User controlled'} detail="Memories, history, and context" onClick={() => openPanel('maintenance')} />
             <MindStateButton icon={Wrench} label="Tools" value={grantedCapabilityCount > 0 ? `${grantedCapabilityCount} grant${grantedCapabilityCount === 1 ? '' : 's'} enabled` : 'No grants'} detail="Narrow, typed authority" onClick={() => openPanel('tools')} />
 

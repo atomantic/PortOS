@@ -22,7 +22,10 @@ vi.mock('../../../lib/clipboard', () => ({ copyToClipboard: vi.fn() }));
 vi.mock('../../BrailleSpinner', () => ({ default: () => null }));
 vi.mock('../../ui/FormField', () => ({ FormField: ({ children }) => children }));
 vi.mock('../../ui/ProcessLogLines', () => ({ default: () => null }));
-vi.mock('../../../utils/formatters', () => ({
+// `formatCount` is deliberately NOT stubbed — a stub that returns the raw
+// number would make the "N lines" assertions blind to a grouping regression.
+vi.mock('../../../utils/formatters', async (importOriginal) => ({
+  ...(await importOriginal()),
   formatBytes: vi.fn(() => '0 B'),
   formatDurationMs: vi.fn(),
   formatTimeOfDaySeconds: vi.fn((timestamp) => `time-${timestamp}`),

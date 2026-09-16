@@ -38,6 +38,7 @@ import LengthProfilePicker from '../components/pipeline/LengthProfilePicker';
 import ArcRolePicker from '../components/pipeline/ArcRolePicker';
 import CatalogCastPanel from '../components/CatalogCastPanel';
 import { VisualGenSettingsPanel } from '../components/pipeline/stages/VisualGenSettings';
+import { formatCount } from '../utils/formatters';
 
 // Stages that surface a header-level settings gear. The Comic editor
 // (`comicScript`) owns its own image-gen drawer inside ComicScriptStage,
@@ -438,7 +439,7 @@ export default function PipelineIssue() {
           <div className="text-xs text-gray-400">
             {latest.type === 'stage:start' && <>Generating <span className="text-white">{PIPELINE_STAGE_LABELS[latest.stage]}</span>…</>}
             {latest.type === 'stage:complete' && latest.stage === 'episodeVideo' && <>{PIPELINE_STAGE_LABELS[latest.stage]} kicked off — {latest.scenes} scene{latest.scenes === 1 ? '' : 's'} queued in Creative Director</>}
-            {latest.type === 'stage:complete' && latest.stage !== 'episodeVideo' && <>{PIPELINE_STAGE_LABELS[latest.stage]} ready ({latest.length} chars)</>}
+            {latest.type === 'stage:complete' && latest.stage !== 'episodeVideo' && <>{PIPELINE_STAGE_LABELS[latest.stage]} ready ({formatCount(latest.length)} chars)</>}
             {latest.type === 'stage:error' && <>{PIPELINE_STAGE_LABELS[latest.stage]} error — {latest.error}</>}
             {latest.type === 'skip' && <>{PIPELINE_STAGE_LABELS[latest.stage]} skipped — {latest.reason}</>}
             {latest.type === 'start' && <>Starting auto-run…</>}

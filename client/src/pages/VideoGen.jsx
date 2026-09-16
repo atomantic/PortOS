@@ -100,7 +100,7 @@ import { GROK_VIDEO_DURATIONS } from '../lib/grokVideoClip.js';
 import { REACTOR_MAX_PROMPT_LENGTH } from '../lib/reactorVideoClip.js';
 import { styledVideoPrompt } from '../lib/videoGenSubmission.js';
 import ReactorPanel from '../components/videoGen/ReactorPanel';
-import { timeAgo } from '../utils/formatters';
+import { formatCount, timeAgo } from '../utils/formatters';
 import ResolutionField from '../components/media/ResolutionField';
 import { VIDEO_EDGE_BOUNDS, videoEdgeBoundsForModel, IC_LORA_MODES } from '../lib/videoGenParams.js';
 import { finishTargetForRecord, isDeliveryVideoModel } from '../lib/videoFinish.js';
@@ -1310,8 +1310,8 @@ export default function VideoGen() {
                 here instead of surfacing as a 400 after Generate. */}
             <p className={`mt-1 text-[11px] leading-snug ${promptOverLimit ? 'text-port-error' : 'text-gray-500'}`}>
               {isReactor
-                ? `${submittedPromptLength} / ${REACTOR_MAX_PROMPT_LENGTH} characters`
-                : `${submittedPromptLength} characters`}
+                ? `${formatCount(submittedPromptLength)} / ${formatCount(REACTOR_MAX_PROMPT_LENGTH)} characters`
+                : `${formatCount(submittedPromptLength)} characters`}
             </p>
             {/* Only crossing the cap is worth announcing; the count itself
                 changes on every keystroke and would be pure noise. */}

@@ -48,6 +48,7 @@ import { universeStylePreset } from '../../lib/universeStylePreset';
 import { descriptorForCanonEntry } from '../../lib/canonPrompt';
 import { applySheetPointer } from '../../lib/sheetPointers';
 import { BIBLE_LIMITS, capImageRefs } from '../../lib/bibleLimits';
+import { formatCount } from '../../utils/formatters';
 
 // A universe's canon list for a kind is sometimes absent on a freshly-created
 // record; normalize to [] so callers can spread/map without a guard each time.
@@ -1138,7 +1139,7 @@ function KindSection() {
 
   const list = all.length === 0 ? (
     filtered && totalCount > 0
-      ? <p className="text-xs text-gray-500 italic">No {kind.label.toLowerCase()} in the selected series. {totalCount} total in this universe — clear the filter to see them all.</p>
+      ? <p className="text-xs text-gray-500 italic">No {kind.label.toLowerCase()} in the selected series. {formatCount(totalCount)} total in this universe — clear the filter to see them all.</p>
       : <p className="text-xs text-gray-500 italic">No {kind.label.toLowerCase()} yet. Use <em>Add</em> or <em>Extract from prose</em> above to populate this list.</p>
   ) : (
     <ul className="space-y-2">
@@ -1189,7 +1190,7 @@ function KindSection() {
       <div>
         <div className="flex flex-wrap items-center gap-1.5 mb-2">
           <span className="text-[10px] text-gray-500 mr-auto shrink-0">
-            {filtered ? `${all.length} / ${totalCount}` : all.length} {all.length === 1 ? kind.singular : kind.label.toLowerCase()}
+            {filtered ? `${formatCount(all.length)} / ${formatCount(totalCount)}` : formatCount(all.length)} {all.length === 1 ? kind.singular : kind.label.toLowerCase()}
           </span>
           {controls}
         </div>
@@ -1205,7 +1206,7 @@ function KindSection() {
         <Icon size={14} className="text-gray-400" />
         <h3 className="text-sm font-semibold text-white">{kind.label}</h3>
         <span className="text-[10px] text-gray-500">
-          {filtered ? `${all.length} / ${totalCount}` : all.length}
+          {filtered ? `${formatCount(all.length)} / ${formatCount(totalCount)}` : formatCount(all.length)}
         </span>
         <div className="ml-auto flex flex-wrap items-center gap-1.5">
           {controls}

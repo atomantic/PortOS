@@ -9,7 +9,7 @@ import ProcessLogLines from '../../ui/ProcessLogLines';
 import { useAutoRefetch } from '../../../hooks/useAutoRefetch';
 import { useProcessLogs } from '../../../hooks/useProcessLogs';
 import { copyToClipboard } from '../../../lib/clipboard';
-import { formatBytes, formatDurationMs, formatTimeOfDaySeconds } from '../../../utils/formatters';
+import { formatBytes, formatCount, formatDurationMs, formatTimeOfDaySeconds } from '../../../utils/formatters';
 
 const getStatusClasses = (status) => {
   switch (status) {
@@ -196,7 +196,7 @@ export default function ProcessesTab({ appId, pm2ProcessNames, filterFn }) {
                                   <option value={2000}>2000</option>
                                 </select>
                               </FormField>
-                              <span className="text-xs text-gray-600">{logs.length} lines</span>
+                              <span className="text-xs text-gray-600">{formatCount(logs.length)} lines</span>
                               <button
                                 onClick={clearLogs}
                                 className="min-h-[44px] min-w-[44px] px-1 text-xs text-gray-500 hover:text-white"
@@ -279,7 +279,7 @@ export default function ProcessesTab({ appId, pm2ProcessNames, filterFn }) {
                   <option value={2000}>2000</option>
                 </select>
               </FormField>
-              <span className="text-sm text-gray-600">{logs.length} lines</span>
+              <span className="text-sm text-gray-600">{formatCount(logs.length)} lines</span>
               <button
                 onClick={clearLogs}
                 className="min-h-[44px] min-w-[44px] px-1 text-sm text-gray-500 hover:text-white"

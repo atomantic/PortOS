@@ -22,7 +22,7 @@ import BrailleSpinner from '../../BrailleSpinner';
 import toast from '../../ui/Toast';
 import InlineConfirmRow from '../../ui/InlineConfirmRow';
 import FolderPicker from '../../FolderPicker';
-import { timeAgo, formatBytes } from '../../../utils/formatters';
+import { timeAgo, formatBytes, formatCount } from '../../../utils/formatters';
 import { useConfirmDelete } from '../../../hooks/useConfirmDelete';
 import { useNoteSave } from '../../../hooks/useNoteSave.js';
 import { clickableProps } from '../../../lib/a11yKeyboard.js';
@@ -424,7 +424,7 @@ export default function NotesTab() {
 
         {/* Stats bar */}
         <div className="px-3 py-1.5 border-b border-port-border flex items-center gap-3 text-xs text-gray-500">
-          <span>{totalNotes} notes</span>
+          <span>{formatCount(totalNotes)} notes</span>
           {folderFilter && (
             <button
               onClick={() => setFolderFilter('')}
@@ -435,7 +435,7 @@ export default function NotesTab() {
             </button>
           )}
           {searchResults && (
-            <span className="text-port-accent">{searchResults.total} results</span>
+            <span className="text-port-accent">{formatCount(searchResults.total)} results</span>
           )}
           <button
             onClick={() => { loadTags(); setShowTags(!showTags); }}
@@ -871,7 +871,7 @@ function FolderItem({ folder, notes, expanded, onToggle, onSelectNote, onFilterF
               onClick={onFilterFolder}
               className="w-full px-3 py-1 text-xs text-port-accent hover:text-white"
             >
-              Show all {notes.length} notes...
+              Show all {formatCount(notes.length)} notes...
             </button>
           )}
         </div>

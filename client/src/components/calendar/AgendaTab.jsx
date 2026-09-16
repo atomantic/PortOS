@@ -4,7 +4,7 @@ import toast from '../ui/Toast';
 import * as api from '../../services/api';
 import socket from '../../services/socket';
 import EventDetail from './EventDetail';
-import { formatTimeOfDay as formatTime, formatWeekdayDate, localDateKey } from '../../utils/formatters';
+import { formatCount, formatTimeOfDay as formatTime, formatWeekdayDate, localDateKey } from '../../utils/formatters';
 import BrailleSpinner from '../BrailleSpinner';
 import EmptyState from '../EmptyState';
 import useUrlParams from '../../hooks/useUrlParams';
@@ -282,7 +282,7 @@ export default function AgendaTab({ accounts }) {
 
       {!loading && events.length > 0 && (
         <div className="flex flex-wrap items-center justify-center gap-3">
-          <p role="status" className="text-sm text-gray-400">{events.length} of {total} events loaded</p>
+          <p role="status" className="text-sm text-gray-400">{formatCount(events.length)} of {formatCount(total)} events loaded</p>
           {nextOffset.current < total && (
             <button
               onClick={() => fetchEvents(true)}

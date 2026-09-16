@@ -10,7 +10,7 @@ import {
   updateGoalScorecardSettings,
   getProviders,
 } from '../../services/api';
-import { timeAgo } from '../../utils/formatters';
+import { formatCount, timeAgo } from '../../utils/formatters';
 
 const fmtHours = (h) => `${Number(h ?? 0).toFixed(1)}h`;
 
@@ -243,7 +243,7 @@ export default function GoalScorecardTab() {
         <div className="bg-port-card border border-port-border rounded-lg p-4">
           <div className="text-xs text-gray-500 mb-1">Unaligned time</div>
           <div className="text-2xl font-bold text-port-warning">{fmtHours(totals?.unalignedHours)}</div>
-          <div className="text-xs text-gray-600 mt-1">{totals?.eventCount ?? 0} events tracked</div>
+          <div className="text-xs text-gray-600 mt-1">{formatCount(totals?.eventCount, { fallback: '0' })} events tracked</div>
         </div>
         <div className="bg-port-card border border-port-border rounded-lg p-4">
           <div className="flex items-center justify-between mb-1">
