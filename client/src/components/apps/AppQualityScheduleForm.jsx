@@ -173,9 +173,12 @@ export default function AppQualityScheduleForm({ app }) {
           <select className={selectClass} value={options.checksPerDay ?? ''} disabled={busy}
             onChange={event => setOption('checksPerDay', event.target.value === '' ? null : Number(event.target.value))}>
             <option value="">Spread evenly over the week ({plan.checksPerDay} a day)</option>
-            {/* Below the floor the plan needs, the planner raises the number and
-                says so; offering those values as if they took effect would lie. */}
-            {[1, 2, 3, 4, 5, 6].filter(count => count >= plan.checksPerDay).map(count => (
+            {/* Below the floor the SELECTION needs, the planner raises the number
+                and says so, so offering those values as if they took effect would
+                lie. Keyed on the live selection rather than the realized
+                plan.checksPerDay, which a narrow window can clamp BELOW the floor
+                — and so the list re-opens as checks are unticked. */}
+            {[1, 2, 3, 4, 5, 6].filter(count => count >= Math.ceil(selected.length / 7)).map(count => (
               <option key={count} value={count}>{count} per day</option>
             ))}
           </select>
