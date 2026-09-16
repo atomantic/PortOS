@@ -33,13 +33,18 @@ describe('catalogSlugForProviderModel', () => {
   });
 
   it('gives a local build no benchmark identity unless its entry declares one', () => {
-    // These are the mappings a textual rule would invent. `-Reasoning` is model
-    // identity, not an effort suffix, so stripping it lands on a DIFFERENT Cisco
-    // model; and a 4-bit MLX build is not the hosted endpoint whose price and
-    // throughput `qwen3.8-27b` carries. Silence is the correct answer.
-    expect(catalogSlugForProviderModel('hf.co/fdtn-ai/Foundation-Sec-8B-Reasoning-Q8_0-GGUF:Q8_0')).not.toBe('foundation-sec-8b');
-    expect(catalogSlugForProviderModel('qwen3.8:27b-mlx')).not.toBe('qwen3.8-27b');
-    expect(catalogSlugForProviderModel('qwen2.5-coder:32b')).not.toBe('qwen2.5-coder-32b');
+    // These are all real catalog entries — the mappings a textual rule would
+    // invent are simply wrong: `-Reasoning` is model identity, not an effort
+    // suffix, so stripping it lands on a DIFFERENT Cisco model; a 4-bit MLX
+    // build is not the hosted endpoint whose price and throughput
+    // `qwen3.8-27b` carries; and `-Thinking` in a GGUF repo name is identity,
+    // not a reasoning-mode suffix, so stripping it lands on that model's
+    // non-thinking sibling. None of these entries declares a `benchmarkModel`,
+    // so silence — not a wrong guess — is the correct answer.
+    expect(catalogSlugForProviderModel('hf.co/fdtn-ai/Foundation-Sec-8B-Reasoning-Q8_0-GGUF:Q8_0')).toBe('');
+    expect(catalogSlugForProviderModel('qwen3.8:27b-mlx')).toBe('');
+    expect(catalogSlugForProviderModel('qwen2.5-coder:32b')).toBe('');
+    expect(catalogSlugForProviderModel('lmstudio-community/LFM2.5-1.2B-Thinking-GGUF')).toBe('');
   });
 
   it('leaves a name the index really spells that way alone', () => {

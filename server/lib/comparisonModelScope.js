@@ -23,8 +23,9 @@
  * cases where the two namespaces genuinely disagree on a name. A provider id
  * that maps to no catalog slug simply contributes nothing to the scope.
  *
- * A LOCAL install id is the exception: it is resolved by lookup against the
- * `benchmarkModel` its `localLlmCatalog.js` entry declares, never by the rules
+ * A LOCAL install id is the exception: any id the `localLlmCatalog.js` catalog
+ * recognizes at all is resolved by lookup against the `benchmarkModel` its
+ * entry declares — or to no slug, when it declares none — never by the rules
  * below, which were written for hosted ids and read a GGUF repo name wrong.
  */
 
@@ -49,6 +50,17 @@ const LOCAL_INSTALL_IDS = new Map(
     .filter(entry => entry.benchmarkModel)
     .flatMap(entry => entryIdsForBackend(entry, backend)
       .map(id => [`${backend}:${normalizeBackendModelId(backend, id)}`, entry.benchmarkModel])))
+);
+
+// Every install id the local-LLM catalog recognizes at all, declared or not.
+// A local-shaped id must never reach the hosted-id textual rules below even
+// when its entry declares no `benchmarkModel` — those rules read a GGUF repo
+// name wrong (see file header), which is exactly the case an undeclared entry
+// is asking to be routed around.
+const LOCAL_CATALOG_IDS = new Set(
+  BACKENDS.flatMap(backend => LOCAL_LLM_CATALOG
+    .flatMap(entry => entryIdsForBackend(entry, backend)
+      .map(id => `${backend}:${normalizeBackendModelId(backend, id)}`)))
 );
 
 /** The benchmark name a local install id declares, or '' if none does. */
@@ -99,6 +111,24 @@ const ALIASES = new Map([
 // The "use the CLI's own default" sentinels are owned by providerModels.js.
 const NOT_A_MODEL = /^(auto|.*\/auto|composer-.*|big-pickle|stealth\/.*|mtplx-.*|dflash|.*-dflash2)$/i;
 
+// normalizeBackendModelId's LM Studio path reduces an id to its last path
+// segment (vendor stripped) and drops a trailing `-gguf` — the same shape as
+// a namespaced hosted id (`vendor/model-name`), so a bare match against
+// LOCAL_CATALOG_IDS alone would misclassify a hosted id that happens to share
+// a model name with an installed GGUF/MLX build (e.g. `google/gemma-4-31b-it`
+// vs. the catalog's `lmstudio-community/gemma-4-31B-it-GGUF`). Every real
+// local LM Studio id in the catalog carries one of these packaging markers,
+// so requiring one here is a genuine local-shape signal, not a coincidence.
+const LOCAL_LMSTUDIO_MARKER = new RegExp(`(?:${['mlx', ...QUANTIZATIONS].join('|')})`, 'i');
+
+/** Whether the catalog recognizes `modelId` as SOME install, on either backend. */
+function isLocalCatalogId(modelId) {
+  if (typeof modelId !== 'string' || !modelId) return false;
+  if (LOCAL_CATALOG_IDS.has(`ollama:${normalizeBackendModelId('ollama', modelId)}`)) return true;
+  return LOCAL_LMSTUDIO_MARKER.test(modelId) &&
+    LOCAL_CATALOG_IDS.has(`lmstudio:${normalizeBackendModelId('lmstudio', modelId)}`);
+}
+
 /**
  * The catalog's own spelling of a model slug.
  *
@@ -121,10 +151,10 @@ export function catalogSlugForProviderModel(modelId) {
   if (typeof modelId !== 'string' || !modelId) return '';
   let slug = modelId.trim().toLowerCase();
   if (isConfiguredDefaultModel(slug) || NOT_A_MODEL.test(slug)) return '';
-  // A declared local equivalence wins: it is reviewed, and the rules below were
-  // written for hosted ids and mis-strip a GGUF repo name.
-  const declared = catalogSlugForLocalModel(modelId);
-  if (declared) return declared;
+  // A local-shaped id never reaches the rules below, declared or not: they were
+  // written for hosted ids and mis-strip a GGUF repo name. A declared entry
+  // resolves to its reviewed benchmark name; an undeclared one resolves to ''.
+  if (isLocalCatalogId(modelId)) return catalogSlugForLocalModel(modelId);
 
   slug = slug.replace(/\[[^\]]*\]$/, ''); // context-window marker, e.g. [1m]
   const prefix = PREFIXES.find(candidate => slug.startsWith(candidate));
