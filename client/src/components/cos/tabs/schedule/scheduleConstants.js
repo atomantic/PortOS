@@ -4,7 +4,7 @@ import {
   PUBLIC_REVIEW_NO_TOOL_POSTURE,
 } from '../../../../utils/providers';
 import { timeUntil } from '../../../../utils/formatters';
-import { describeCron } from '../../../../utils/cronHelpers';
+import { describeCron, summarizeAppSchedules } from '../../../../utils/cronHelpers';
 
 // The cadence model is two variants; `perpetual` is an orthogonal flag that
 // renders as its own badge alongside whichever one is selected.
@@ -139,22 +139,44 @@ export const STATUS_GROUPS = {
   disabled: { label: 'Disabled', dot: 'bg-gray-600', order: 3 },
 };
 
+/**
+ * Whether nothing but a human pressing Run ever starts this task.
+ *
+ * Three things can start it without one: a cron of its own, a perpetual drain
+ * that auto-starts, or an APP pinning its own cron on a task that is otherwise
+ * on-demand. The Schedule card's status group and the Timeline's "unpinned"
+ * bucket are the same question asked twice, so they ask it here — they used to
+ * carry separate copies that already disagreed about `autoStart`.
+ *
+ * Takes the cadence fields rather than a whole task config, because the two
+ * callers hold them at different depths (a Schedule config spreads them at the
+ * top level; a Timeline node keeps them under `schedule`).
+ */
+export function isManualOnlyCadence({ type, perpetual, autoStart, appSchedules } = {}) {
+  if (appSchedules?.length > 0) return false;
+  return type === 'on-demand' && (!perpetual || autoStart === false);
+}
+
 // Classify a task config into one status group (mutually exclusive).
-// Disabled wins over everything; then dependency-wait; then on-demand type — a
-// perpetual on-demand task is "active" because its drain runs unattended.
+// Disabled wins over everything; then dependency-wait; then cadence — a
+// perpetual on-demand task is "active" because its drain runs unattended, and
+// so is one whose apps pin their own cron: something launches it on a clock
+// without anybody pressing Run, which is what this group means.
 export function getTaskStatusGroup(config) {
   if (!config?.enabled) return 'disabled';
   if (config.status?.reason === 'waiting-on-dependencies') return 'waiting';
-  if (config.type === 'on-demand' && (!config.perpetual || config.autoStart === false)) return 'on-demand';
-  return 'active';
+  return isManualOnlyCadence(config) ? 'on-demand' : 'active';
 }
 
 export const statusDot = (group) => STATUS_GROUPS[group]?.dot || STATUS_GROUPS.disabled.dot;
 
 // Sort key for the card grid: group order first, then soonest next run, then name.
+// A task with no global cadence still has a next run when one of its apps pins
+// a cron, so fall back to that rather than sorting it last among Active.
 export function taskSortKey(taskType, config) {
   const group = getTaskStatusGroup(config);
-  const next = config?.status?.nextRunAt ? new Date(config.status.nextRunAt).getTime() : Infinity;
+  const nextIso = config?.status?.nextRunAt || summarizeAppSchedules(config?.appSchedules)?.nextRunAt;
+  const next = nextIso ? new Date(nextIso).getTime() : Infinity;
   return { order: STATUS_GROUPS[group]?.order ?? 9, next: Number.isFinite(next) ? next : Infinity, taskType };
 }
 
@@ -273,8 +295,22 @@ export function describeNextRun(config) {
     }
     return { text: 'draining — runs back-to-back until done', tone: 'text-port-success' };
   }
+  const perApp = summarizeAppSchedules(config.appSchedules);
+  // An app that pins its own cron runs on a different clock from this row, so
+  // the tooltip always names both rather than letting the row imply one.
+  const appSuffix = perApp ? `\nScheduled per app:\n${perApp.detail}` : '';
   const next = config.status?.nextRunAt;
   const cronDesc = config.type === 'cron' && config.cronExpression ? describeCron(config.cronExpression) : null;
+  // A task with no cadence of its own but a cron on one of its apps has a real
+  // next run — it just belongs to the app, not to this row. Saying "Manual
+  // trigger only" (what the on-demand group used to say) is simply wrong.
+  if (perApp && !cronDesc) {
+    return {
+      text: perApp.nextRunAt ? `${timeUntil(perApp.nextRunAt, 'soon')} · ${perApp.label}` : perApp.label,
+      tone: 'text-gray-300',
+      title: `On demand globally;${appSuffix}`,
+    };
+  }
   const cronTitle = config.type === 'cron' && config.cronExpression
     ? (cronDesc ? `${cronDesc} (${config.cronExpression})` : config.cronExpression)
     : undefined;
@@ -283,7 +319,7 @@ export function describeNextRun(config) {
       ? (cronDesc ? `${timeUntil(next, 'soon')} · ${cronDesc}` : timeUntil(next, 'soon'))
       : `${cronDesc || INTERVAL_LABELS[config.type] || config.type} — pending`,
     tone: 'text-gray-300',
-    title: cronTitle,
+    title: `${cronTitle || ''}${appSuffix}`.trim() || undefined,
   };
 }
 

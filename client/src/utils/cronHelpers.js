@@ -285,6 +285,41 @@ export function describeCron(expr) {
   return segments.join(' ');
 }
 
+/**
+ * Summarize a task's `appSchedules` — the cron cadences that live on an APP
+ * rather than on the task's global row (see `resolveHiddenAppSchedules` in
+ * server/services/taskSchedule.js). A task can read "On Demand" globally while
+ * one app runs it every morning, so every surface that describes a cadence has
+ * to say so rather than calling the task manual-only.
+ *
+ * Returns `null` when there are none, else:
+ *   count    how many apps carry a schedule of their own
+ *   label    the short line for a cadence slot ("2 apps · at 07:00") — naming
+ *            the shared cadence, or just counting them when they differ
+ *   detail   one "<app> — <cadence> (<expr>)" line per app, for a title/tooltip
+ *   nextRunAt  soonest upcoming slot across those apps, or null
+ */
+export function summarizeAppSchedules(appSchedules) {
+  const entries = (appSchedules || []).filter(entry => entry?.cronExpression);
+  if (entries.length === 0) return null;
+  const expressions = [...new Set(entries.map(entry => entry.cronExpression))];
+  const cadence = expressions.length === 1
+    ? (describeCron(expressions[0]) || expressions[0])
+    : `${expressions.length} schedules`;
+  const apps = `${entries.length} app${entries.length === 1 ? '' : 's'}`;
+  // Sorted as ISO strings: lexical order IS chronological order for the
+  // Z-suffixed instants the server sends, so no Date churn per entry.
+  const nextRunAt = entries.map(entry => entry.nextRunAt).filter(Boolean).sort()[0] || null;
+  return {
+    count: entries.length,
+    label: `${apps} · ${cadence}`,
+    detail: entries
+      .map(entry => `${entry.appName || entry.appId} — ${describeCron(entry.cronExpression) || entry.cronExpression} (${entry.cronExpression})`)
+      .join('\n'),
+    nextRunAt
+  };
+}
+
 // Both autonomous-job pickers use the same vocabulary as server validation and
 // duration resolution. Keep the client projection's existing value/label shape.
 export const JOB_INTERVAL_OPTIONS = INTERVAL_OPTIONS.map(({ value, label }) => ({ value, label }));

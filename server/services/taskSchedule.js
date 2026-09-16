@@ -34,9 +34,9 @@ import {
   DEFAULT_PERPETUAL_RECHECK_MS,
   INTERVAL_TYPES,
   ON_DEMAND_ORIGINS,
-  decodeIntervalType,
   isCronExpression,
-  isUserOriginRequest
+  isUserOriginRequest,
+  resolveAppOverrideCadence
 } from './taskScheduleConstants.js';
 import {
   DEFAULT_TASK_INTERVALS,
@@ -174,7 +174,6 @@ async function getPerformanceAdjustedInterval(taskType, baseIntervalMs) {
 // ============================================================
 // Unified getters/setters (replace split self/app functions)
 // ============================================================
-
 export async function getTaskInterval(taskType) {
   const schedule = await loadSchedule();
   return schedule.tasks[taskType] || {
@@ -772,8 +771,11 @@ async function checkRunAfterDeps(schedule, taskType, appId = null, featureEnable
     if (!depConfig || !depConfig.enabled) continue;
     if (!(await featureEnabled(depConfig))) continue;
     if (appId && !(await isTaskTypeEnabledForApp(appId, dep))) continue;
-    const depPerAppInterval = appId ? await getAppTaskTypeInterval(appId, dep) : null;
-    if ((depPerAppInterval || depConfig.type) === INTERVAL_TYPES.ON_DEMAND) continue;
+    // Same resolver the readiness check uses, so a dependency an app pins to
+    // its own cadence is judged on THAT cadence — an app-level cron on a
+    // globally on-demand dep is a real gate, not a skippable manual task.
+    const depInterval = appId ? await getAppTaskTypeInterval(appId, dep) : null;
+    if (resolveAppOverrideCadence({ interval: depInterval }, depConfig).type === INTERVAL_TYPES.ON_DEMAND) continue;
 
     const depKey = `task:${dep}`;
     const depExec = schedule.executions[depKey] || { lastRun: null, perApp: {} };
@@ -788,11 +790,16 @@ async function checkRunAfterDeps(schedule, taskType, appId = null, featureEnable
   return { satisfied: pending.length === 0, pending };
 }
 
-async function evaluateTaskReadiness(taskType, appId, { featureEnabled, continuingPerpetualDrain }) {
+async function evaluateTaskReadiness(taskType, appId, { featureEnabled, continuingPerpetualDrain, schedule: injected = null }) {
   if (appId && requiresInstallWideTarget(taskType)) {
     return { shouldRun: false, reason: 'requires-install-wide-target' };
   }
-  const schedule = await loadSchedule();
+  // `loadSchedule` is an uncached disk read plus a merge over every shipped
+  // task default, and a caller building ONE status payload asks this question
+  // dozens of times against the snapshot it already holds. Reading it again per
+  // question would be both slower and less coherent — a mid-loop write would
+  // make the payload describe two different schedules.
+  const schedule = injected || await loadSchedule();
   const interval = schedule.tasks[taskType];
 
   if (!interval || !interval.enabled) {
@@ -820,22 +827,21 @@ async function evaluateTaskReadiness(taskType, appId, { featureEnabled, continui
     }
   }
 
-  // Determine effective interval type: per-app override takes precedence
-  const perAppInterval = appId ? await getAppTaskTypeInterval(appId, taskType) : null;
-  // A per-app numeric intervalMs override (used by handler-backed tasks like
-  // layered-intelligence, whose Intelligence-tab UI offers sub-daily cadences a
-  // named cadence never expressed). A legacy `interval: 'custom'` override
-  // decodes THIS value into the per-app cron expression below.
-  const perAppIntervalMs = appId ? await getAppTaskTypeIntervalMs(appId, taskType) : null;
-  // A per-app override may be a raw cron expression or a retired named cadence
-  // written by an older install; decode both onto the two-variant model.
-  const perAppDecoded = perAppInterval
-    ? decodeIntervalType(perAppInterval, { intervalMs: perAppIntervalMs })
+  // Determine the effective cadence: the app's own override outranks the task's
+  // global one. `resolveAppOverrideCadence` owns the decode (a raw cron
+  // expression, a retired named cadence written by an older install, or the
+  // numeric `intervalMs` handler-backed tasks like layered-intelligence use for
+  // sub-daily slots), so every surface that has to PREDICT an app's cadence —
+  // getScheduleStatus, the Schedule Timeline — resolves it exactly the way this
+  // dispatch gate does.
+  const [appInterval, appIntervalMs] = appId
+    ? await Promise.all([getAppTaskTypeInterval(appId, taskType), getAppTaskTypeIntervalMs(appId, taskType)])
+    : [null, null];
+  const appCadence = appId
+    ? resolveAppOverrideCadence({ interval: appInterval, intervalMs: appIntervalMs }, interval)
     : null;
-  const effectiveType = perAppDecoded ? perAppDecoded.type : interval.type;
-  const effectiveCron = perAppDecoded
-    ? perAppDecoded.cronExpression
-    : (interval.cronExpression || null);
+  const effectiveType = appCadence ? appCadence.type : interval.type;
+  const effectiveCron = appCadence ? appCadence.cronExpression : (interval.cronExpression || null);
   // `perpetual` is a task-level global property — per-app rows override the
   // cadence only (see the issue's Out of Scope), so the global flag always wins.
   const isPerpetual = interval.perpetual === true;
@@ -984,8 +990,8 @@ async function evaluateTaskReadiness(taskType, appId, { featureEnabled, continui
 /**
  * Check whether a task should initiate a scheduled run for an app or globally.
  */
-export async function shouldRunTask(taskType, appId = null, { featureEnabled = createFeatureGate() } = {}) {
-  return evaluateTaskReadiness(taskType, appId, { featureEnabled, continuingPerpetualDrain: false });
+export async function shouldRunTask(taskType, appId = null, { featureEnabled = createFeatureGate(), schedule = null } = {}) {
+  return evaluateTaskReadiness(taskType, appId, { featureEnabled, continuingPerpetualDrain: false, schedule });
 }
 
 /**
@@ -1218,6 +1224,73 @@ export async function clearOnDemandRequest(requestId) {
 // Schedule Status
 // ============================================================
 
+
+/**
+ * The apps that run `taskType` on a cron of their OWN — enabled for the task,
+ * and stating a cadence rather than inheriting the task's.
+ *
+ * Both callers that have to reason about an app-level clock start here:
+ * `getUpcomingTasks` (which app boundary should wake the daemon) and
+ * `resolveHiddenAppSchedules` (which schedules the UI cannot see on the global
+ * row). They differ only in what they do with the result, so the override →
+ * cadence walk lives here once.
+ *
+ * `allOverrides[i]` is the override map for `activeApps[i]`, in the caller's
+ * own order; entries come back as `{ app, cronExpression }` in that order.
+ */
+function appsWithOwnCron(taskType, interval, activeApps, allOverrides) {
+  const matched = [];
+  for (let i = 0; i < activeApps.length; i++) {
+    const override = allOverrides[i]?.[taskType];
+    if (override?.enabled !== true) continue;
+    const cadence = resolveAppOverrideCadence(override, interval);
+    // An inheriting app rides the task's own cadence; only an app stating its
+    // own cron adds a clock the global row does not already carry.
+    if (cadence.inherited || cadence.type !== INTERVAL_TYPES.CRON) continue;
+    if (!isCronExpression(cadence.cronExpression)) continue;
+    matched.push({ app: activeApps[i], cronExpression: cadence.cronExpression.trim() });
+  }
+  return matched;
+}
+
+/**
+ * The per-app cron cadences a task's GLOBAL row cannot express.
+ *
+ * Returns one entry per enabled app whose own override resolves to a valid cron
+ * expression that differs from whatever the task runs on globally — the state
+ * where a task left on-demand globally carries an app-level cron and therefore
+ * read as "manual only" on every surface. Apps that inherit the global cadence, or that
+ * restate the same expression, are omitted: they already sit on the global
+ * track, and listing them would make "3 apps scheduled" mean two different
+ * things depending on the task.
+ *
+ * `shouldRunTask` supplies each entry's next slot rather than a local cron
+ * parse, so the time shown is the one dispatch would actually honor (per-app
+ * last run, failure backoff, dependency gates and all).
+ */
+async function resolveHiddenAppSchedules(taskType, interval, activeApps, allOverrides, featureEnabled, schedule) {
+  const globalCron = interval.type === INTERVAL_TYPES.CRON && isCronExpression(interval.cronExpression)
+    ? interval.cronExpression.trim()
+    : null;
+  // An app restating the task's own expression sits on the global track
+  // already; counting it would make "N apps scheduled" mean something
+  // different per task.
+  const candidates = appsWithOwnCron(taskType, interval, activeApps, allOverrides)
+    .filter(candidate => candidate.cronExpression !== globalCron);
+  if (candidates.length === 0) return [];
+
+  const checks = await mapWithConcurrency(candidates, 8, ({ app }) =>
+    shouldRunTask(taskType, app.id, { featureEnabled, schedule }).catch(() => null));
+  return candidates.map(({ app, cronExpression }, i) => ({
+    appId: app.id,
+    appName: app.name || app.id,
+    cronExpression,
+    nextRunAt: checks[i]?.nextRunAt || null,
+    shouldRun: checks[i]?.shouldRun === true,
+    reason: checks[i]?.reason || null,
+    missedSlot: checks[i]?.missedSlot || null
+  }));
+}
 export async function getScheduleStatus() {
   // Surface the master Improve toggle so the UI can disable Run Now affordances
   const [schedule, state] = await Promise.all([loadSchedule(), loadState()]);
@@ -1251,7 +1324,7 @@ export async function getScheduleStatus() {
     const learningInfo = await getPerformanceAdjustedInterval(taskType, baseInterval);
 
     // Check global shouldRun status
-    const check = await shouldRunTask(taskType, null, { featureEnabled });
+    const check = await shouldRunTask(taskType, null, { featureEnabled, schedule });
 
     const isEnabledForApp = (override) => override?.enabled === true;
     const appOverrides = {};
@@ -1277,6 +1350,16 @@ export async function getScheduleStatus() {
       }
     }
 
+    // Cadences that are INVISIBLE from the global row: an enabled app pinning a
+    // cron expression the task itself does not carry. The reported case is a
+    // task left 'on-demand' globally while one app schedules it — the app is
+    // genuinely clock-driven, so a Schedule card reading "Manual trigger only"
+    // and a Timeline filing it under "no clock time" are both wrong.
+    // An app that inherits, or that restates the global expression, adds
+    // nothing to show and is left out so the count answers "how many apps run
+    // this on a schedule you can't see here".
+    const appSchedules = await resolveHiddenAppSchedules(taskType, interval, activeApps, allOverrides, featureEnabled, schedule);
+
     const taskStatus = {
       ...interval,
       ...getAuditScheduleMetadata(taskType),
@@ -1301,6 +1384,7 @@ export async function getScheduleStatus() {
       appOverrides,
       enabledAppCount,
       totalAppCount,
+      appSchedules,
       status: check,
       learningAdjusted: learningInfo.adjusted,
       learningMultiplier: learningInfo.multiplier,
@@ -1473,12 +1557,10 @@ export async function getUpcomingTasks(limit = 10) {
     // run. A due app makes the task ready; otherwise the soonest app boundary
     // is the wake-up deadline. This also handles a globally on-demand task that
     // has no global candidate but is cron-scheduled for one managed app.
-    const scheduledApps = activeApps.filter((app, index) => {
-      const override = activeAppOverrides[index]?.[taskType];
-      if (override?.enabled !== true) return false;
-      const decoded = decodeIntervalType(override.interval, { intervalMs: override.intervalMs });
-      return decoded.type === INTERVAL_TYPES.CRON && isCronExpression(decoded.cronExpression);
-    });
+    // An inheriting app rides the global `check` above; only an app stating its
+    // OWN cron adds a boundary the global cadence cannot see.
+    const scheduledApps = appsWithOwnCron(taskType, interval, activeApps, activeAppOverrides)
+      .map(candidate => candidate.app);
     const appChecks = scheduledApps.length > 0
       ? await mapWithConcurrency(scheduledApps, 8, (app) =>
         shouldRunTask(taskType, app.id, { featureEnabled }).catch(() => null))

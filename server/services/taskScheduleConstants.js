@@ -160,3 +160,26 @@ export function normalizeIntervalConfig(config) {
   }
   return changed;
 }
+
+/**
+ * Resolve the cadence ONE app actually runs a task on.
+ *
+ * An app's `taskTypeOverrides[taskType].interval` outranks the task's global
+ * cadence — including the case that reads as a contradiction: a task left
+ * `on-demand` globally while one app pins a cron expression. That app IS
+ * clock-scheduled, and anything reading only the global row (the Schedule
+ * card, the Schedule Timeline) would otherwise call it "manual trigger only".
+ *
+ * `inherited: true` means the app stated no cadence of its own and simply runs
+ * the global one, so callers surfacing "schedules you cannot see from the
+ * global row" skip it. Enablement is NOT checked here — a disabled app is the
+ * caller's own rung (`shouldRunTask` answers 'disabled-for-app').
+ */
+export function resolveAppOverrideCadence(override, interval = {}) {
+  const decoded = override?.interval
+    ? decodeIntervalType(override.interval, { intervalMs: override.intervalMs ?? null })
+    : null;
+  return decoded
+    ? { type: decoded.type, cronExpression: decoded.cronExpression, inherited: false }
+    : { type: interval.type, cronExpression: interval.cronExpression || null, inherited: true };
+}

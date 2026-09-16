@@ -3,9 +3,10 @@ import { useSearchParams } from 'react-router';
 import { AlertTriangle, ArrowRight, Bot, CalendarDays, ChevronRight, Clock3, GitBranch, Infinity as InfinityIcon, RefreshCw, RotateCcw, TimerReset, Workflow } from 'lucide-react';
 import * as api from '../../../services/api';
 import { useAppOverrideActions } from '../../../hooks/useAppOverrideActions';
-import { describeCron, describeRecurrence } from '../../../utils/cronHelpers';
+import { describeCron, describeRecurrence, summarizeAppSchedules } from '../../../utils/cronHelpers';
 import ScheduleEditor from './workflow/ScheduleEditor';
 import PerAppOverrideList from './schedule/PerAppOverrideList';
+import { isManualOnlyCadence } from './schedule/scheduleConstants';
 import { formatWeekdayShort, formatWeekdayTime, formatTimeOfDay } from '../../../utils/formatters';
 
 const TRACK_COLORS = {
@@ -21,7 +22,8 @@ function trackPalette(node) {
   return TRACK_COLORS[node.kind] || TRACK_COLORS.task;
 }
 
-function describeSchedule(node) {
+// The cadence the node's OWN row states, ignoring anything its apps pin.
+function describeGlobalSchedule(node) {
   const schedule = node.schedule || {};
   // A perpetual task's cadence line names its recheck: a scheduled one rechecks
   // on its own cron expression, an on-demand one on `recheckCron`.
@@ -33,6 +35,26 @@ function describeSchedule(node) {
   if (schedule.cronExpression) return describeCron(schedule.cronExpression) || schedule.cronExpression;
   if (node.kind === 'job' && schedule.scheduledTime) return `${schedule.type} at ${schedule.scheduledTime}`;
   return schedule.type?.replaceAll('-', ' ') || 'flexible';
+}
+
+/**
+ * The one cadence line a task track shows, plus its tooltip.
+ *
+ * A task whose only clock cadences live on its apps has none of its own to
+ * describe — "on demand" would be the literal truth of the global row and the
+ * opposite of what the track actually shows. The line is one 10px row, so the
+ * full story (which app runs on which expression) goes in the tooltip.
+ */
+function scheduleCadence(node) {
+  const schedule = node.schedule || {};
+  const perApp = node.kind === 'task' ? summarizeAppSchedules(node.appSchedules) : null;
+  const ownCadence = !!(schedule.perpetual || schedule.cronSchedule || schedule.cronExpression);
+  const global = describeGlobalSchedule(node);
+  if (!perApp) return { text: global, title: undefined };
+  return {
+    text: ownCadence ? global : perApp.label,
+    title: `${ownCadence ? `Globally: ${global}.` : 'On demand globally — no clock cadence of its own.'}\nScheduled per app:\n${perApp.detail}`
+  };
 }
 
 function formatPoint(iso, hours, timezone) {
@@ -65,6 +87,17 @@ function dueNowMeta(occurrence, node, timezone) {
     return { badge: 'first run', detail: 'First run — has never run before' };
   }
   return { badge: 'overdue', detail: 'Overdue — the interval elapsed since the last run' };
+}
+
+// An occurrence the server tagged with `apps` comes from those apps' own cron
+// overrides, not from the task's global cadence. `appNameLookup` is built once
+// per node — every occurrence of that node resolves against the same map.
+const appNameLookup = node =>
+  new Map((node?.appSchedules || []).map(entry => [entry.appId, entry.appName || entry.appId]));
+
+function occurrenceAppNames(occurrence, names) {
+  if (!occurrence?.apps?.length) return null;
+  return occurrence.apps.map(appId => names.get(appId) || appId).join(', ');
 }
 
 function timelinePercent(iso, timeline) {
@@ -123,6 +156,8 @@ function AppOverridePanel({ node, apps, providers, providersLoaded, onUpdateOver
 
 function TimelineRow({ node, occurrences, windows, timeline, hours, timezone, selected, apps, providers, providersLoaded, expanded, onSelect, onToggleExpand, onUpdateOverride, onBulkToggleOverride }) {
   const palette = trackPalette(node);
+  const cadence = scheduleCadence(node);
+  const appNames = appNameLookup(node);
   const Icon = node.kind === 'job' ? Bot : GitBranch;
   const divisions = hours === 168 ? 7 : 8;
   const dependencyWarning = node.pendingDeps?.length > 0;
@@ -156,7 +191,7 @@ function TimelineRow({ node, occurrences, windows, timeline, hours, timezone, se
             <span className={`flex h-7 w-7 shrink-0 items-center justify-center rounded ${palette.wash} ${palette.text}`}><Icon className="h-3.5 w-3.5" /></span>
             <span className="min-w-0 flex-1">
               <span className="block truncate text-xs font-medium text-gray-200" title={node.label}>{node.label}</span>
-              <span className="mt-0.5 block truncate text-[10px] text-gray-500">{describeSchedule(node)}</span>
+              <span className="mt-0.5 block truncate text-[10px] text-gray-500" title={cadence.title}>{cadence.text}</span>
             </span>
           </button>
           {canExpand && (
@@ -196,18 +231,23 @@ function TimelineRow({ node, occurrences, windows, timeline, hours, timezone, se
           })}
           {occurrences.map(occurrence => {
             const meta = dueNowMeta(occurrence, node, timezone);
+            // A launch only some apps take is a circle, not a square — a free
+            // visual channel that leaves the collision ring and the due-now
+            // fill intact, so a marker can show all three states at once.
+            const scopedApps = occurrenceAppNames(occurrence, appNames);
             // Due-now is an amber FILL, collision a warning RING — kept on separate
             // channels so a launch that is BOTH (the common catch-up scenario, where
             // several tasks are due at Now and therefore also collide) shows both
             // states at once. A shared ring channel would let collision mask due-now.
             const fill = occurrence.kind === 'recheck' ? 'rotate-45 bg-amber-300' : meta ? 'bg-amber-400' : palette.marker;
             const ring = occurrence.collision ? 'ring-2 ring-port-warning ring-offset-1 ring-offset-port-bg' : '';
+            const shape = scopedApps ? 'rounded-full' : 'rounded-sm';
             return (
               <span
                 key={occurrence.id}
-                className={`absolute top-1/2 z-20 h-4 w-4 -translate-x-1/2 -translate-y-1/2 rounded-sm border-2 border-port-bg shadow ${fill} ${ring}`}
+                className={`absolute top-1/2 z-20 h-4 w-4 -translate-x-1/2 -translate-y-1/2 border-2 border-port-bg shadow ${shape} ${fill} ${ring}`}
                 style={{ left: `${timelinePercent(occurrence.at, timeline)}%` }}
-                title={`${occurrence.kind === 'recheck' ? 'Reset/recheck' : 'Launch'} ${formatPoint(occurrence.at, hours, timezone)}${meta ? ` · ${meta.detail}` : ''}${occurrence.collision ? ' · another task launches within 15 minutes' : ''}`}
+                title={`${occurrence.kind === 'recheck' ? 'Reset/recheck' : 'Launch'} ${formatPoint(occurrence.at, hours, timezone)}${scopedApps ? ` · for ${scopedApps}` : ''}${meta ? ` · ${meta.detail}` : ''}${occurrence.collision ? ' · another task launches within 15 minutes' : ''}`}
               />
             );
           })}
@@ -235,14 +275,17 @@ function NextUp({ occurrences, nodeMap, hours, timezone, onSelect }) {
           const node = nodeMap.get(occurrence.nodeId);
           if (!node) return null;
           const meta = dueNowMeta(occurrence, node, timezone);
+          const scopedApps = occurrenceAppNames(occurrence, appNameLookup(node));
+          const chipTitle = [scopedApps && `Launches for ${scopedApps}`, meta?.detail].filter(Boolean).join(' · ') || undefined;
           return (
             <div key={occurrence.id} className="flex shrink-0 items-center gap-2">
-              <button type="button" onClick={() => onSelect(node.id)} title={meta?.detail || undefined} className={`min-w-36 rounded border px-3 py-2 text-left hover:border-port-accent/50 ${occurrence.collision ? 'border-port-warning/50 bg-port-warning/5' : meta ? 'border-amber-400/50 bg-amber-500/5' : 'border-port-border bg-port-bg/50'}`}>
+              <button type="button" onClick={() => onSelect(node.id)} title={chipTitle} className={`min-w-36 rounded border px-3 py-2 text-left hover:border-port-accent/50 ${occurrence.collision ? 'border-port-warning/50 bg-port-warning/5' : meta ? 'border-amber-400/50 bg-amber-500/5' : 'border-port-border bg-port-bg/50'}`}>
                 <span className="flex items-center gap-1.5 text-[10px] font-medium uppercase tracking-wide text-gray-500">
                   <span>{formatPoint(occurrence.at, hours, timezone)} · {relativeTime(occurrence.at)}</span>
                   {meta && <span className="rounded-sm bg-amber-500/15 px-1 py-px text-[9px] text-amber-300">{meta.badge}</span>}
                 </span>
                 <span className="mt-0.5 block max-w-44 truncate text-xs text-gray-200">{occurrence.kind === 'recheck' ? '↻ ' : ''}{node.label}</span>
+                {scopedApps && <span className="mt-0.5 block max-w-44 truncate text-[10px] text-gray-500">for {scopedApps}</span>}
               </button>
               {index < next.length - 1 && <ArrowRight className="h-3.5 w-3.5 text-gray-700" />}
             </div>
@@ -332,7 +375,13 @@ export default function WorkflowTab({ apps, providers, providersLoaded }) {
       if (!windowsByNode.has(window.nodeId)) windowsByNode.set(window.nodeId, []);
       windowsByNode.get(window.nodeId).push(window);
     }
-    const isFlexible = node => node.kind === 'task' && node.schedule?.type === 'on-demand' && !node.schedule?.perpetual;
+    // A globally on-demand task that an app puts on a cron DOES promise a
+    // clock time — for that app — so it belongs on a track, not in the
+    // "no clock time" bucket. That mismatch is what hid app-scheduled tasks
+    // from this page entirely. Shares the Schedule card's predicate so the two
+    // pages cannot disagree about what "manual only" means.
+    const isFlexible = node => node.kind === 'task'
+      && isManualOnlyCadence({ ...node.schedule, appSchedules: node.appSchedules });
     const scheduled = graph.nodes
       .filter(node => node.enabled && !isFlexible(node))
       .sort((a, b) => {
@@ -403,6 +452,7 @@ export default function WorkflowTab({ apps, providers, providersLoaded }) {
                     <span className="inline-flex items-center gap-1"><span className="h-2.5 w-2.5 rounded-sm bg-cyan-400" /> interval job</span>
                     <span className="inline-flex items-center gap-1"><span className="h-2.5 w-2.5 rotate-45 rounded-sm bg-amber-300" /> reset/recheck</span>
                     <span className="inline-flex items-center gap-1"><span className="h-2.5 w-2.5 rounded-sm bg-amber-400" /> due now (catch-up)</span>
+                    <span className="inline-flex items-center gap-1"><span className="h-2.5 w-2.5 rounded-full bg-emerald-400" /> round = per-app schedule</span>
                     <span className="inline-flex items-center gap-1"><span className="h-2.5 w-4 rounded-sm border border-dashed border-amber-400/50 bg-amber-500/15" /> perpetual drain (~1h)</span>
                   </div>
                   <span className="inline-flex items-center gap-1"><CalendarDays className="h-3 w-3" />{graph.timezone}</span>
@@ -480,6 +530,7 @@ export default function WorkflowTab({ apps, providers, providersLoaded }) {
               <div className="flex flex-wrap gap-x-4 gap-y-1 text-[10px] text-gray-600">
                 <span><AlertTriangle className="mr-1 inline h-3 w-3 text-port-warning" />A ring means another launch is within 15 minutes; actual overlap depends on runtime.</span>
                 <span><Clock3 className="mr-1 inline h-3 w-3 text-amber-300" />An amber marker at Now means the task is already due (catch-up, first run, or overdue) — it launches on the next check rather than waiting for its next cadence slot.</span>
+                <span><CalendarDays className="mr-1 inline h-3 w-3" />A round marker launches only for the apps that pin their own cron for this task — the task&apos;s global row may still read &ldquo;on demand&rdquo;. Hover the cadence under the task name to see which app runs when.</span>
                 <span><TimerReset className="mr-1 inline h-3 w-3" />A perpetual task gets one bar per recurrence showing a nominal hour of runtime — the drain keeps going while backlog remains, so a run can outlast its bar. A filled bar at Now means it is draining already.</span>
               </div>
             </div>

@@ -383,6 +383,73 @@ describe('projectWorkflowTimeline', () => {
     ]);
   });
 
+  // A task left on-demand globally while one managed app pins a cron is the
+  // shape that fell off this page entirely: the global row promises no clock
+  // time, so the projection skipped it and the UI filed it under "unpinned".
+  it('projects the cron an app pins on a task that is on-demand globally', () => {
+    const timeline = projectWorkflowTimeline([{
+      id: 'task:audit', kind: 'task', enabled: true,
+      schedule: { type: 'on-demand' },
+      appSchedules: [{ appId: 'acme', appName: 'Acme', cronExpression: '30 9 * * *' }]
+    }], range);
+
+    expect(timeline.occurrences).toEqual([
+      expect.objectContaining({ nodeId: 'task:audit', at: '2026-07-09T16:30:00.000Z', kind: 'launch', apps: ['acme'] })
+    ]);
+  });
+
+  it('draws one marker for several apps sharing an expression, and keeps a differing one separate', () => {
+    const timeline = projectWorkflowTimeline([{
+      id: 'task:audit', kind: 'task', enabled: true,
+      schedule: { type: 'on-demand' },
+      appSchedules: [
+        { appId: 'acme', cronExpression: '30 9 * * *' },
+        { appId: 'beta', cronExpression: '30 9 * * *' },
+        { appId: 'gamma', cronExpression: '0 13 * * *' }
+      ]
+    }], range);
+
+    expect(timeline.occurrences.map(item => [item.at, item.apps])).toEqual([
+      ['2026-07-09T16:30:00.000Z', ['acme', 'beta']],
+      ['2026-07-09T20:00:00.000Z', ['gamma']]
+    ]);
+  });
+
+  // The global cadence covers every app that has not opted out, so a launch it
+  // already draws must not be narrowed to the one app that restated the slot.
+  it('merges an app slot that coincides with the global cadence into one app-agnostic launch', () => {
+    const timeline = projectWorkflowTimeline([{
+      id: 'task:audit', kind: 'task', enabled: true,
+      schedule: { type: 'cron', cronExpression: '30 9 * * *' },
+      appSchedules: [{ appId: 'acme', cronExpression: '30 9,17 * * *' }]
+    }], range);
+
+    // 17:30 local is the app-only slot; 09:30 local is the shared one.
+    expect(timeline.occurrences).toHaveLength(2);
+    expect(timeline.occurrences[0]).toMatchObject({ at: '2026-07-09T00:30:00.000Z', apps: ['acme'] });
+    expect(timeline.occurrences[1]).toMatchObject({ at: '2026-07-09T16:30:00.000Z' });
+    expect(timeline.occurrences[1].apps).toBeUndefined();
+  });
+
+  it('marks an app whose own schedule is already due at Now, using that app\'s reason', () => {
+    const timeline = projectWorkflowTimeline([{
+      id: 'task:audit', kind: 'task', enabled: true,
+      // The GLOBAL row is not due — only the app is, which is exactly the
+      // state a node-level dueNow flag would have gotten wrong.
+      shouldRun: false, runReason: null,
+      schedule: { type: 'on-demand' },
+      appSchedules: [{ appId: 'acme', cronExpression: '30 9 * * *', shouldRun: true, reason: 'cron-catch-up', missedSlot: '2026-07-08T16:30:00.000Z' }]
+    }], range);
+
+    expect(timeline.occurrences[0]).toMatchObject({
+      at: '2026-07-09T00:00:00.000Z',
+      dueNow: true,
+      reason: 'cron-catch-up',
+      missedSlot: '2026-07-08T16:30:00.000Z',
+      apps: ['acme']
+    });
+  });
+
   it('does not double up a recurrence that lands inside the in-progress drain bar', () => {
     const timeline = projectWorkflowTimeline([{
       id: 'task:drain', kind: 'task', enabled: true, shouldRun: true,

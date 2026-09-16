@@ -2713,6 +2713,87 @@ describe('taskSchedule', () => {
       })
     })
 
+    describe('getScheduleStatus — appSchedules', () => {
+      // vi.clearAllMocks() keeps a mockResolvedValue, so these cases restore the
+      // apps.js factory defaults rather than leaking an app roster into the
+      // suites that follow.
+      afterEach(() => {
+        vi.useRealTimers()
+        isTaskTypeEnabledForApp.mockResolvedValue(true)
+        getAppTaskTypeInterval.mockResolvedValue(null)
+        getActiveApps.mockResolvedValue([])
+        getAppTaskTypeOverrides.mockResolvedValue({})
+      })
+
+      const withRealCron = async () => {
+        vi.useFakeTimers()
+        vi.setSystemTime(new Date('2026-01-01T16:00:00Z')) // 08:00 in the mocked America/Los_Angeles zone
+        const actual = await vi.importActual('./eventScheduler.js')
+        const actualTimezone = await vi.importActual('../lib/timezone.js')
+        parseCronToNextRun.mockImplementation(actual.parseCronToNextRun)
+        getLocalParts.mockImplementation(actualTimezone.getLocalParts)
+      }
+
+      // The reported bug: a task left on-demand globally while one app puts it
+      // on a cron read as "manual trigger only" everywhere, and the Schedule
+      // Timeline dropped it into the unpinned bucket.
+      it('lists an app cron on a task that is on-demand globally, with that app\'s next slot', async () => {
+        await withRealCron()
+        getActiveApps.mockResolvedValue([{ id: 'app-1', name: 'Acme' }])
+        isTaskTypeEnabledForApp.mockResolvedValue(true)
+        getAppTaskTypeInterval.mockResolvedValue('15 9 * * *')
+        getAppTaskTypeOverrides.mockResolvedValue({ 'release-check': { enabled: true, interval: '15 9 * * *' } })
+        mockSchedule({ tasks: { 'release-check': { type: 'on-demand', enabled: true, runAfter: [] } } })
+
+        const status = await getScheduleStatus()
+        expect(status.tasks['release-check'].appSchedules).toEqual([{
+          appId: 'app-1',
+          appName: 'Acme',
+          cronExpression: '15 9 * * *',
+          nextRunAt: '2026-01-01T17:15:00.000Z',
+          shouldRun: false,
+          reason: 'cron-cooldown',
+          missedSlot: null
+        }])
+      })
+
+      it('omits an app that merely inherits the global cadence', async () => {
+        await withRealCron()
+        getActiveApps.mockResolvedValue([{ id: 'app-1', name: 'Acme' }])
+        isTaskTypeEnabledForApp.mockResolvedValue(true)
+        getAppTaskTypeInterval.mockResolvedValue(null)
+        getAppTaskTypeOverrides.mockResolvedValue({ 'release-check': { enabled: true } })
+        mockSchedule({ tasks: { 'release-check': { type: 'cron', cronExpression: '15 9 * * *', enabled: true, runAfter: [] } } })
+
+        expect((await getScheduleStatus()).tasks['release-check'].appSchedules).toEqual([])
+      })
+
+      // An app restating the task's own expression adds no schedule the global
+      // row cannot already show, so counting it would make "N apps scheduled"
+      // mean something different per task.
+      it('omits an app that restates the global expression', async () => {
+        await withRealCron()
+        getActiveApps.mockResolvedValue([{ id: 'app-1', name: 'Acme' }])
+        isTaskTypeEnabledForApp.mockResolvedValue(true)
+        getAppTaskTypeInterval.mockResolvedValue('15 9 * * *')
+        getAppTaskTypeOverrides.mockResolvedValue({ 'release-check': { enabled: true, interval: '15 9 * * *' } })
+        mockSchedule({ tasks: { 'release-check': { type: 'cron', cronExpression: '15 9 * * *', enabled: true, runAfter: [] } } })
+
+        expect((await getScheduleStatus()).tasks['release-check'].appSchedules).toEqual([])
+      })
+
+      it('omits an app that is disabled for the task', async () => {
+        await withRealCron()
+        getActiveApps.mockResolvedValue([{ id: 'app-1', name: 'Acme' }])
+        isTaskTypeEnabledForApp.mockResolvedValue(false)
+        getAppTaskTypeInterval.mockResolvedValue('15 9 * * *')
+        getAppTaskTypeOverrides.mockResolvedValue({ 'release-check': { enabled: false, interval: '15 9 * * *' } })
+        mockSchedule({ tasks: { 'release-check': { type: 'on-demand', enabled: true, runAfter: [] } } })
+
+        expect((await getScheduleStatus()).tasks['release-check'].appSchedules).toEqual([])
+      })
+    })
+
     describe('parkPerpetual / perpetual park state', () => {
       it('parkPerpetual stamps parkedUntil + reason on the per-app record', async () => {
         mockSchedule({ tasks: { 'claim-issue': { type: 'on-demand', perpetual: true, enabled: true, recheckIntervalMs: 3600000 } } })
