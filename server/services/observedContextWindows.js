@@ -29,7 +29,7 @@
  */
 
 import { localRuntimeForProvider } from '../lib/localProviderRuntime.js';
-import { bareLocalModelId } from '../lib/providerModels.js';
+import { aliasServedContextWindows, mergeObservedContextWindows } from '../lib/providerContextWindows.js';
 import { probeOpenAiModelsCached } from '../lib/openAiModelsProbeCache.js';
 
 /**
@@ -55,20 +55,7 @@ export async function observedContextWindows(provider, deps = {}) {
 
   const probe = deps.probe || probeOpenAiModelsCached;
   const result = await probe(runtime.endpoint, provider?.apiKey || '').catch(() => null);
-  // The probe already rejects anything that is not a positive integer, so what
-  // arrives is either usable or absent.
-  const served = result?.contextWindows;
-  if (!served || Object.keys(served).length === 0) return null;
-
-  const windows = { ...served };
-  // Alias each provider-listed spelling onto the window its bare form resolves.
-  const offered = [provider?.defaultModel, ...(Array.isArray(provider?.models) ? provider.models : [])];
-  for (const model of offered) {
-    if (typeof model !== 'string' || windows[model]) continue;
-    const bare = bareLocalModelId(model, runtime.kind);
-    if (bare && windows[bare]) windows[model] = windows[bare];
-  }
-  return windows;
+  return aliasServedContextWindows(provider, runtime, result?.contextWindows);
 }
 
 /**
@@ -79,19 +66,15 @@ export async function observedContextWindows(provider, deps = {}) {
  * daemon-down paths allocate nothing and compare identically. The copy is
  * in-memory only — see this module's header for why it is never persisted.
  *
- * Observation WINS over a stored catalog entry for the same id: the stored
- * number is whatever a refresh recorded whenever the user last pressed it,
- * while the probe describes the process that will serve this very request. An
- * explicit `provider.contextWindow` still outranks both, because
- * `knownContextWindow` prefers it — a number the user typed is a deliberate
- * override, not a stale guess.
+ * Where the observation RANKS is stated once, with the merge itself in
+ * `lib/providerContextWindows.js` — the provider card folds the same map in off
+ * the readiness payload, so the card and this gate cannot rank it differently.
+ * What this wrapper adds is the probe that supplies it.
  *
  * @param {object} provider
  * @param {{probe?: Function}} [deps]
  * @returns {Promise<object>}
  */
 export async function withObservedContextWindows(provider, deps = {}) {
-  const observed = await observedContextWindows(provider, deps);
-  if (!observed) return provider;
-  return { ...provider, modelContextWindows: { ...provider?.modelContextWindows, ...observed } };
+  return mergeObservedContextWindows(provider, await observedContextWindows(provider, deps));
 }

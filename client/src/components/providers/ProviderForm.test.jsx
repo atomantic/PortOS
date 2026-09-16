@@ -99,3 +99,39 @@ describe('ProviderForm', () => {
   });
 
 });
+
+// #7447: this editor is the surface that literally names the budgeter
+// ("Budgeter uses N"), so it must not contradict the card beside it — or the
+// server that will enforce the number.
+describe('ProviderForm planned context window', () => {
+  const daemonProvider = {
+    id: 'opencode-vllm',
+    name: 'OpenCode vLLM',
+    type: 'cli',
+    command: 'opencode',
+    endpoint: 'http://127.0.0.1:18020/v1',
+    models: ['qwen3.8-27b'],
+    defaultModel: 'qwen3.8-27b',
+    // What a model refresh recorded whenever the user last pressed it.
+    modelContextWindows: { 'qwen3.8-27b': 128000 },
+    enabled: true,
+  };
+
+  const plannedContext = () => {
+    switchTab('Generation');
+    return screen.getByText(/Budgeter uses/).textContent;
+  };
+
+  it('names the window the daemon is serving now, not the stale catalog one', () => {
+    renderForm({
+      provider: daemonProvider,
+      daemonReadiness: { contextWindows: { 'qwen3.8-27b': 32768 } },
+    });
+    expect(plannedContext()).toBe('Budgeter uses 32K ctx');
+  });
+
+  it('falls back to the recorded catalog window when the daemon says nothing', () => {
+    renderForm({ provider: daemonProvider, daemonReadiness: { contextWindows: null } });
+    expect(plannedContext()).toBe('Budgeter uses 128K ctx');
+  });
+});

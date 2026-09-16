@@ -17,7 +17,7 @@
 import { isProcessProvider } from '../lib/providerTypes.js';
 import { ServerError } from '../lib/errorHandler.js';
 import { findBalancedBlocks, tryParseWithRepair } from '../lib/jsonExtract.js';
-import { resolveEffectiveModel, runPromptThroughProvider, DEFAULT_TIMEOUT_MS, isLocalEndpoint } from './promptRunner.js';
+import { resolveEffectiveModel, runPromptThroughProvider, DEFAULT_TIMEOUT_MS, isLocalEndpoint, withObservedContextWindowsLazy } from './promptRunner.js';
 import { stripCodeFences } from '../lib/llmText.js';
 import { extractCodexAssistant } from '../lib/codexAssistantExtract.js';
 import { getActiveProvider, getProviderById } from './providers.js';
@@ -225,13 +225,46 @@ export function effectiveContextWindow(provider, model) {
  *
  * Best-effort planning: this resolves the PRIMARY provider; a runtime fallback
  * to a different (possibly smaller-window) provider is not reflected here.
+ *
+ * WHICH provider/model a stage would use is {@link resolveStageRoute}, and it
+ * makes no network call. Use that when the window is not what you came for.
  */
-export async function resolveStageContext(stageName, options = {}) {
+export async function resolveStageRoute(stageName, options = {}) {
   const stage = effectiveStage(getStage(stageName));
   const provider = await resolveProviderForStage(stage, options);
   const requestedModel = resolveModel(provider, resolveModelHint(stage, options));
-  const model = resolveEffectiveModel(provider, requestedModel);
-  return { provider, model, contextWindow: effectiveContextWindow(provider, model) };
+  return { provider, model: resolveEffectiveModel(provider, requestedModel) };
+}
+
+/**
+ * {@link resolveStageRoute} plus the window to budget the prompt against.
+ *
+ * That window is measured against what a local daemon is SERVING right now, not
+ * only against what the provider record remembers. Without it the chunker
+ * planned to the blanket 128K assumption for a seeded local wrapper, built the
+ * oversized prompt, and the pre-dispatch gate (#7441, which already reads the
+ * live listing) refused it — a run lost to a limit the budgeter could have
+ * respected. The listing is TTL-cached and shared with that gate, so a chunked
+ * run spends at most one `/v1/models` per endpoint per 15s rather than one per
+ * stage; a daemon that is down or silent contributes nothing, and the ladder
+ * resolves exactly as it did before.
+ *
+ * `provider` is returned UNMERGED — callers read it for the record's identity,
+ * and observed runtime state has no business riding a provider record around.
+ */
+export async function resolveStageContext(stageName, options = {}) {
+  const { provider, model } = await resolveStageRoute(stageName, options);
+  // An explicit `contextWindow` already short-circuits the ladder's first rung,
+  // so observing one could not change the answer — skip the probe rather than
+  // spend a round trip (up to the probe timeout on a black-holed endpoint) on a
+  // result that is provably discarded.
+  if (Number(provider?.contextWindow) > 0) {
+    return { provider, model, contextWindow: effectiveContextWindow(provider, model) };
+  }
+  // Budget-only enrichment, so a probe or module-load failure must never turn
+  // planning into a new failure mode — fall back to the provider as stored.
+  const observed = await withObservedContextWindowsLazy(provider).catch(() => provider);
+  return { provider, model, contextWindow: effectiveContextWindow(observed, model) };
 }
 
 // Provider resolution precedence, strongest first:
