@@ -48,7 +48,7 @@ beforeEach(() => {
   __resetAutoUpdateSchedulerForTests();
   deps.settings.mockResolvedValue({ autoUpdate: { enabled: true, channel: 'release', minIntervalHours: 6 } });
   deps.gateState.mockResolvedValue({
-    runtime: { armedAt: iso(Date.now() - 48 * HOUR), lastRunAt: null, repairTaskId: null },
+    runtime: { armedAt: iso(Date.now() - 48 * HOUR), lastRunAt: null, repairQueuedAt: null },
     lastUpdateResult: null,
     updateInProgress: false,
   });
@@ -221,6 +221,37 @@ describe('checkout readiness gate', () => {
     await expect(runAutoUpdateTick({ io: {} })).resolves.toMatchObject({ reason: 'repo-not-ready' });
     expect(deps.queueRepair).not.toHaveBeenCalled();
   });
+
+  // The core regression (#7468): a repair agent that stands down without
+  // fixing the tree must not be re-queued every 5-minute tick forever.
+  // `addTask`'s dedup only holds while that task stays open, and
+  // `agentFinalization` marks it `completed` regardless of whether the
+  // checkout ended up clean — so nothing but the cooldown baseline can bound
+  // the re-dispatch.
+  it('does not queue a second repair agent on the tick after the first one completed', async () => {
+    deps.readRepo.mockResolvedValue(notReady);
+    deps.queueRepair.mockResolvedValue({ id: 'task-1' });
+
+    await runAutoUpdateTick({ io: {} });
+    expect(deps.queueRepair).toHaveBeenCalledTimes(1);
+    const stampCalls = deps.recordRuntime.mock.calls.filter(([patch]) => typeof patch.repairQueuedAt === 'string');
+    expect(stampCalls).toHaveLength(1);
+    const [[{ repairQueuedAt }]] = stampCalls;
+
+    // The repair task is done by the next tick (whether or not it fixed
+    // anything, same as agentFinalization marking it `completed` either way),
+    // but the baseline stamped above is what the cooldown reads now.
+    deps.queueRepair.mockClear();
+    deps.gateState.mockResolvedValue({
+      runtime: { armedAt: iso(Date.now() - 48 * HOUR), lastRunAt: null, repairQueuedAt },
+      lastUpdateResult: null,
+      updateInProgress: false,
+    });
+
+    const result = await runAutoUpdateTick({ io: {} });
+    expect(result).toMatchObject({ ran: false, reason: 'cooldown' });
+    expect(deps.queueRepair).not.toHaveBeenCalled();
+  });
 });
 
 describe('poll registration', () => {
@@ -257,5 +288,17 @@ describe('interval baseline', () => {
   it('falls back to now when nothing has ever been recorded', () => {
     const now = 1_000_000;
     expect(updateBaselineAt({}, null, now)).toBe(now);
+  });
+
+  // A repair-agent DISPATCH also resets the clock (#7468) — without this, a
+  // stand-down agent (no lastRunAt, since no update ever ran) would leave the
+  // baseline stuck at armedAt forever and every tick would re-queue.
+  it('also measures the interval from a repair-agent dispatch', () => {
+    const now = Date.parse('2026-01-02T00:00:00Z');
+    expect(updateBaselineAt(
+      { repairQueuedAt: '2026-01-01T18:00:00Z', armedAt: '2025-12-01T00:00:00Z' },
+      null,
+      now,
+    )).toBe(Date.parse('2026-01-01T18:00:00Z'));
   });
 });

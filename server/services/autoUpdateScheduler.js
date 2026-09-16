@@ -65,12 +65,16 @@ let ioRef = null;
  * `lastRunAt` first (this scheduler's own last launch), then the last recorded
  * update result — which covers an update the USER ran, so a manual update also
  * resets the interval rather than leaving an automatic one queued behind it.
- * `armedAt` is the fallback for an install that has never updated: without it
- * the interval would be measured from the epoch and the first tick after
- * enabling would fire immediately.
+ * `repairQueuedAt` covers the OTHER thing this scheduler dispatches: a repo
+ * repair agent that stands down without fixing anything never produces a
+ * `lastRunAt`, so without this the cooldown would never re-arm and the next
+ * tick would queue a second agent immediately — repeating every 5 minutes
+ * forever (#7468). `armedAt` is the fallback for an install that has never
+ * updated: without it the interval would be measured from the epoch and the
+ * first tick after enabling would fire immediately.
  */
 export function updateBaselineAt(runtime, lastUpdateResult, now = Date.now()) {
-  const candidates = [runtime?.lastRunAt, lastUpdateResult?.completedAt, runtime?.armedAt]
+  const candidates = [runtime?.lastRunAt, runtime?.repairQueuedAt, lastUpdateResult?.completedAt, runtime?.armedAt]
     .map((value) => (typeof value === 'string' ? Date.parse(value) : NaN))
     .filter((value) => Number.isFinite(value));
   return candidates.length ? Math.max(...candidates) : now;
@@ -169,10 +173,15 @@ export async function runAutoUpdateTick({ io = ioRef } = {}) {
     .catch((err) => ({ ready: false, needsAgent: false, reasons: ['git-unreadable'], summary: err.message, repairable: [] }));
   if (!read.ready && !isRepairableOnly(read)) {
     if (read.needsAgent && config.resolveBlockersWithAgent) {
-      const task = await queueRepoRepairTask(read);
-      if (task?.id && task.id !== runtime.repairTaskId) {
-        await updateChecker.recordAutoUpdateRuntime({ repairTaskId: task.id }).catch(() => undefined);
-      }
+      await queueRepoRepairTask(read);
+      // Stamp the cooldown baseline at DISPATCH, not only when an update
+      // itself runs. `addTask`'s dedup (cosTaskStore.js) only collapses
+      // repeat ticks onto one task while that task stays open — once the
+      // agent completes (fixed or not), the task flips to `completed` and the
+      // very next tick would queue a fresh one with nothing else to stop it.
+      // This makes a stand-down cost one dispatch per cooldown window instead
+      // of one per 5-minute tick.
+      await updateChecker.recordAutoUpdateRuntime({ repairQueuedAt: new Date().toISOString() }).catch(() => undefined);
     }
     return standDown('repo-not-ready', read.summary);
   }

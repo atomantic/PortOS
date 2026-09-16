@@ -372,7 +372,12 @@ function normalizeAutoUpdateRuntime(raw) {
     lastRunAt: typeof source.lastRunAt === 'string' ? source.lastRunAt : null,
     lastOutcome: typeof source.lastOutcome === 'string' ? source.lastOutcome : null,
     lastSkip: isPlainObject(source.lastSkip) ? source.lastSkip : null,
-    repairTaskId: typeof source.repairTaskId === 'string' ? source.repairTaskId : null,
+    // When a repo-repair agent was last DISPATCHED (queued), not when it
+    // finished — `autoUpdateScheduler.updateBaselineAt` folds this into the
+    // cooldown baseline so a repair agent that stands down without fixing
+    // anything costs one dispatch per cooldown window, not one per 5-minute
+    // tick. See root AGENTS.md "AI Provider Usage Policy".
+    repairQueuedAt: typeof source.repairQueuedAt === 'string' ? source.repairQueuedAt : null,
   };
 }
 
