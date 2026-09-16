@@ -83,6 +83,7 @@ import { ensureOllamaAgentContext } from './ollamaAgentContext.js';
 import { isOllamaBackedProvider } from './providers.js';
 import { shellHasLiveChild } from '../lib/shellLivenessProbe.js';
 import { appendRunEvent } from './agentRunEventLog.js';
+import { applyCredentialBootstrap } from '../lib/credentialBootstrap.js';
 
 // Agent-specific timing/lifecycle constants (not shared with the one-shot
 // runner — agents stay alive much longer and write a sentinel file when done).
@@ -197,8 +198,8 @@ export async function createAgentTuiSession({
     const session = await spawnTuiSessionViaRunner({
       agentId,
       taskId,
-      command: tuiConfig.command,
-      args: tuiConfig.args,
+      command: tuiConfig.spawnCommand,
+      args: tuiConfig.spawnArgs,
       workspacePath: cwd,
       envVars: env,
       providerAuth: cliProviderAuthDescriptor(provider),
@@ -227,7 +228,7 @@ export async function createAgentTuiSession({
     // paste gate before the spawn — exactly as the runner branch above does —
     // or the TUI's first bracketed-paste/input-ready bytes are discarded.
     onInitialCommandSent?.();
-    sessionId = shellService.spawnCommandSession(tuiConfig.command, tuiConfig.args, {
+    sessionId = shellService.spawnCommandSession(tuiConfig.spawnCommand, tuiConfig.spawnArgs, {
       ...sessionOptions,
       env,
       onData,
@@ -308,9 +309,15 @@ export function buildTuiSpawnConfig(provider, model, {
       safetyProfile,
       tui: true,
     });
+    // Public-review postures never get credential-bootstrap-wrapped — the
+    // enforced recipe above IS the sandbox, and `spawnCommand`/`spawnArgs`
+    // exist here (identical to `command`/`args`) only so every branch of this
+    // function returns the same shape.
     return {
       command: recipe.command,
       args: recipe.args,
+      spawnCommand: recipe.command,
+      spawnArgs: recipe.args,
       commandLine: formatShellCommandLine(recipe.command, recipe.args, shell),
       promptDelayMs: provider?.tuiPromptDelayMs || DEFAULT_TUI_PROMPT_DELAY_MS,
     };
@@ -332,11 +339,22 @@ export function buildTuiSpawnConfig(provider, model, {
   if (systemPromptFile && isClaudeCommand(command)) {
     args = [...args, '--append-system-prompt-file', systemPromptFile];
   }
-  const commandLine = formatShellCommandLine(command, args, shell);
+  // `command`/`args` keep naming the harness itself — every consumer of this
+  // config (ready-text detection, permission-dialog handling, error messages)
+  // keys off them by identity. `spawnCommand`/`spawnArgs` are what actually
+  // gets launched: the bootstrap CLI in front of the harness invocation for a
+  // credential-bootstrap-configured provider (see credentialBootstrap.js), or
+  // an identical copy otherwise. `commandLine` (used both to type the harness
+  // into a login shell and to display "what's running") is built from the
+  // SPAWNED pair so it always matches the real process.
+  const { command: spawnCommand, args: spawnArgs } = applyCredentialBootstrap(provider, command, args);
+  const commandLine = formatShellCommandLine(spawnCommand, spawnArgs, shell);
 
   return {
     command,
     args,
+    spawnCommand,
+    spawnArgs,
     commandLine,
     promptDelayMs: provider?.tuiPromptDelayMs || DEFAULT_TUI_PROMPT_DELAY_MS
   };

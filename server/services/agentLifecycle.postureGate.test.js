@@ -498,6 +498,42 @@ describe('public-review dispatch — direct-only, never the CoS runner (#6105)',
 });
 
 /**
+ * A credential-bootstrap-configured provider is ALSO direct-only, for a
+ * different reason than public review: the CoS runner is a separate process
+ * that validates the command it's asked to spawn against a static allowlist
+ * of known harness binaries (cos-runner/allowedCommands.js), which has no way
+ * to recognize a user's arbitrary bootstrap CLI. Routing it there would 400 at
+ * spawn time instead of running.
+ */
+describe('credential-bootstrap dispatch — direct-only, never the CoS runner', () => {
+  it('sends a credential-bootstrap-configured provider to the direct spawner even with runner mode on', async () => {
+    setUseRunner(true);
+    // A non-TUI record, same reasoning as the public-review control above: an
+    // ordinary TUI task is spawned as a PTY session, and the runner arm sits
+    // on the headless side of that branch.
+    vi.mocked(isTuiProvider).mockReturnValue(false);
+    vi.mocked(resolveAgentProviderAndModel).mockResolvedValue({
+      ok: true,
+      provider: { ...CLAUDE_TUI, credentialBootstrap: { command: 'token-cli', args: ['run'] } },
+      selectedModel: 'sonnet',
+      modelSelection: {},
+    });
+    reachDispatch();
+
+    await spawnAgentForTask({ id: 'task-credential-bootstrap-runner', metadata: {} });
+
+    expect(spawnAgentViaRunner).not.toHaveBeenCalled();
+    expect(spawnDirectly).toHaveBeenCalledTimes(1);
+  });
+
+  // The control that proves the assertion above isn't vacuous — an ordinary,
+  // non-credential-bootstrap provider still reaches the runner with the exact
+  // same `isTuiProvider`/`reachDispatch` setup — is the public-review describe
+  // block's own control above ('still sends an ordinary task to the runner
+  // when runner mode is on'), which uses an identical mock shape.
+});
+
+/**
  * The branch posture the agent card badges.
  *
  * A claim run works inside the `claim/<item>` worktree the claim command cuts

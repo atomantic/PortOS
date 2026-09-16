@@ -736,6 +736,9 @@ export function createProviderService(config = {}) {
         // every existing record stays byte-identical and an older install
         // reading this file sees nothing new.
         ...(providerData.ignoreUserConfig === true ? { ignoreUserConfig: true } : {}),
+        // Generic credential-bootstrap wrapper — only persisted when a bootstrap
+        // command is actually named, so every existing record stays byte-identical.
+        ...(providerData.credentialBootstrap?.command ? { credentialBootstrap: providerData.credentialBootstrap } : {}),
         envVars: providerData.envVars || {},
         secretEnvVars: providerData.secretEnvVars || [],
         headlessArgs: providerData.headlessArgs || [],

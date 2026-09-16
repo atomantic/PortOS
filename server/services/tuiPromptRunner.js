@@ -75,6 +75,7 @@ import {
 import { buildCliChildEnv } from '../lib/cliChildEnv.js';
 import { isCodexCommand } from '../lib/codex.js';
 import { isClaudeCommand } from '../lib/providerModels.js';
+import { applyCredentialBootstrap } from '../lib/credentialBootstrap.js';
 
 // One-shot defaults that don't apply to the long-running agent path:
 //   - hard run cap (5 min vs unbounded for agents)
@@ -169,6 +170,13 @@ export async function executeTuiRun({ runId, provider, prompt, screenshots = [],
       args.push('--image', imagePath);
     }
   }
+  // `command`/`args` keep naming the harness itself — every heuristic below
+  // (isCodexCommand, isClaudeCommand, ready-text detection) keys off them by
+  // identity. `spawnCommand`/`spawnArgs` are what actually gets launched: the
+  // bootstrap CLI in front of the harness invocation for a credential-
+  // bootstrap-configured provider (see credentialBootstrap.js), or an
+  // identical copy otherwise.
+  const { command: spawnCommand, args: spawnArgs } = applyCredentialBootstrap(provider, command, args);
   const promptDelayMs = provider.tuiPromptDelayMs ?? DEFAULT_TUI_PROMPT_DELAY_MS;
   const idleThresholdMs = idleMs ?? provider.tuiOneShotIdleMs ?? DEFAULT_ONE_SHOT_IDLE_MS;
   const totalTimeoutMs = timeout ?? provider.timeout ?? DEFAULT_TIMEOUT_MS;
@@ -257,10 +265,10 @@ ${prompt}`;
   // provider, no cause, nothing to act on. Resolve against the CHILD's PATH
   // (`childEnv`, since a provider may override PATH with only its own bin dir)
   // and report the real reason with the 127 that probe already uses.
-  if (!findCommandOnPath(command, { env: childEnv, cwd: workingDir })) {
+  if (!findCommandOnPath(spawnCommand, { env: childEnv, cwd: workingDir })) {
     return failRunRecord({
       runId,
-      error: `TUI command not found: ${command}`,
+      error: `TUI command not found: ${spawnCommand}`,
       exitCode: 127,
       startTime: Date.now(),
       onData,
@@ -272,7 +280,7 @@ ${prompt}`;
 
   let ptyProcess;
   try {
-    ptyProcess = ptySpawn(command, args, {
+    ptyProcess = ptySpawn(spawnCommand, spawnArgs, {
       name: 'xterm-256color',
       cols: PTY_COLS,
       rows: PTY_ROWS,
@@ -280,7 +288,7 @@ ${prompt}`;
       env: childEnv,
     });
   } catch (err) {
-    throw new Error(`Failed to spawn TUI '${command}': ${err.message}`);
+    throw new Error(`Failed to spawn TUI '${spawnCommand}': ${err.message}`);
   }
 
   // Subscribe to exit IMMEDIATELY after spawn. A CLI can fail before its first

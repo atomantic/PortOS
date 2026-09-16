@@ -19,13 +19,14 @@
 
 import { spawn } from './childProcess.js';
 import { buildCliArgs, prepareCliPrompt } from './cliProviderArgs.js';
-import { killProcessTree, resolveWindowsExecutable, prepareWindowsSafeSpawn, guardChildStdin } from './bufferedSpawn.js';
+import { killProcessTree, guardChildStdin } from './bufferedSpawn.js';
 import { buildCliChildEnv } from './cliChildEnv.js';
 import { modelPinIsOffered } from './localProviderRuntime.js';
 import { filterCallerModeEligible } from './callerModePolicy.js';
 import { buildVendorSpawnConfig, supportsPublicReviewProvider } from './providerVendors.js';
 import { isPublicReviewNoToolProfile } from './agentExecutionProfiles.js';
 import { resolveCliModel } from './providerModels.js';
+import { resolveCliSpawn } from './credentialBootstrap.js';
 
 // How much stderr to hand back to callers. Enough to carry a rate-limit banner
 // or a stack's first frames, short enough to embed in an error message or a
@@ -157,11 +158,12 @@ export function runCliProviderPrompt(args = {}) {
     // (cmd.exe /c) instead of enabling a shell — shell:true + an args array
     // does NOT escape arguments (DEP0190), so a prompt/path containing a
     // space would silently corrupt or be shell-injectable. Resolved against
-    // `childEnv` so a provider-configured PATH override is honored. See
-    // resolveWindowsExecutable/prepareWindowsSafeSpawn in
-    // server/lib/bufferedSpawn.js.
-    const resolvedCommand = resolveWindowsExecutable(provider.command, undefined, childEnv) || provider.command;
-    const { command: spawnCommand, args: wrappedArgs } = prepareWindowsSafeSpawn(resolvedCommand, spawnArgs);
+    // `childEnv` so a provider-configured PATH override is honored.
+    // `resolveCliSpawn` also applies a credential-bootstrap wrap
+    // (credentialBootstrap.js) when configured — applied AFTER
+    // prepareCliPrompt (above), which still keys prompt-delivery convention
+    // off the harness's own command, not the bootstrap CLI's.
+    const { command: spawnCommand, args: wrappedArgs } = resolveCliSpawn(provider, provider.command, spawnArgs, childEnv);
     const child = spawn(spawnCommand, wrappedArgs, {
       cwd: effectiveCwd,
       stdio: ['pipe', 'pipe', 'pipe'],
@@ -188,7 +190,7 @@ export function runCliProviderPrompt(args = {}) {
     // a dead-stdin EPIPE is caught rather than thrown. A child that exits
     // before reading stdin would otherwise emit an unhandled 'error' on the
     // stdin stream — fatal in this non-request context (crashes the process).
-    child.on('error', (err) => done({ error: `Failed to spawn ${provider.command}: ${err.message}` }));
+    child.on('error', (err) => done({ error: `Failed to spawn ${spawnCommand}: ${err.message}` }));
     child.stdout?.on('data', (d) => { const t = d.toString(); stdout += t; onData?.(t, 'stdout'); });
     child.stderr?.on('data', (d) => { const t = d.toString(); stderr += t; onData?.(t, 'stderr'); });
 

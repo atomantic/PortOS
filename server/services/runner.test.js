@@ -679,6 +679,38 @@ describe('executeCliRun — Windows .cmd/.bat shim spawning (#1865)', () => {
   });
 });
 
+describe('executeCliRun — credential-bootstrap wrapping', () => {
+  it('spawns the bootstrap CLI in front of the harness when credentialBootstrap is configured', async () => {
+    const { resolveWindowsExecutable } = await import('../lib/bufferedSpawn.js');
+    vi.mocked(resolveWindowsExecutable).mockReturnValueOnce(null);
+
+    const child = makeChild();
+    spawn.mockReturnValue(child);
+
+    const provider = {
+      id: 'claude',
+      command: 'claude',
+      args: [],
+      timeout: 5000,
+      credentialBootstrap: { command: 'token-cli', args: ['run'], harnessId: 'claude-code', argsSeparator: '--' },
+    };
+
+    setImmediate(() => {
+      child.stdout.emit('data', Buffer.from('output'));
+      child.emit('close', 0);
+    });
+
+    await executeCliRun({ runId: 'run-credential-bootstrap', provider, prompt: 'test prompt', workspacePath: TEST_WORKSPACE });
+
+    const [command, args] = spawn.mock.calls.at(-1);
+    expect(command).toBe('token-cli');
+    expect(args).toEqual(expect.arrayContaining(['run', 'claude-code', '--']));
+    // The harness's own prompt-delivery convention still applies (claude's
+    // `-p -`) — resolved against `provider.command`, not the bootstrap CLI.
+    expect(args).toEqual(expect.arrayContaining(['-p', '-']));
+  });
+});
+
 describe('executeCliRun — stdin pipe containment (#5655)', () => {
   const provider = {
     id: 'codex', command: 'codex', args: [],

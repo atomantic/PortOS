@@ -31,8 +31,9 @@ import { extname, join } from 'path';
 import { buildCliArgs, prepareCliPrompt } from '../lib/cliProviderArgs.js';
 import { resolveCliModel, isCodexProvider, buildCodexStartupArgs, buildEffortArgs } from '../lib/providerModels.js';
 import { extractCodexAssistant, extractCodexAssistantTail } from '../lib/codexAssistantExtract.js';
-import { killProcessTree, resolveWindowsExecutable, prepareWindowsSafeSpawn, guardChildStdin, deliverChildStdin } from '../lib/bufferedSpawn.js';
+import { killProcessTree, guardChildStdin, deliverChildStdin } from '../lib/bufferedSpawn.js';
 import { buildCliChildEnv } from '../lib/cliChildEnv.js';
+import { resolveCliSpawn } from '../lib/credentialBootstrap.js';
 
 const CLI_VISION_TIMEOUT_MS = 120000;
 const IMAGE_BASENAME = 'vision-input.png';
@@ -242,10 +243,11 @@ async function runCliVisionSpawn({ provider, model, invocation, timeout, spawnIm
   // wrapper instead relies on Node's own correct non-shell argv escaping,
   // which DOES preserve spaces within each arg as a single token. Resolved
   // against `childEnv` so a provider-configured PATH override is honored.
-  // See resolveWindowsExecutable/prepareWindowsSafeSpawn in
-  // server/lib/bufferedSpawn.js.
-  const resolvedCommand = resolveWindowsExecutable(command, undefined, childEnv) || command;
-  const { command: spawnCommand, args: spawnArgs } = prepareWindowsSafeSpawn(resolvedCommand, deliveredArgs);
+  // `resolveCliSpawn` also applies a credential-bootstrap wrap
+  // (credentialBootstrap.js) when configured — applied AFTER prepareCliPrompt
+  // (above), which still keys prompt-delivery convention off the harness's
+  // own command, not the bootstrap CLI's.
+  const { command: spawnCommand, args: spawnArgs } = resolveCliSpawn(provider, command, deliveredArgs, childEnv);
 
   const text = await new Promise((resolve, reject) => {
     const child = spawnImpl(spawnCommand, spawnArgs, {

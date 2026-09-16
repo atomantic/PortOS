@@ -10,8 +10,9 @@ import { resolveSpawnCwd } from '../lib/spawnCwd.js';
 import { hasModelFlag, extractBakedModel, isCodexProvider } from '../lib/providerModels.js';
 import { buildCliArgs, prepareCliPrompt } from '../lib/cliProviderArgs.js';
 import { buildCliChildEnv } from '../lib/cliChildEnv.js';
+import { resolveCliSpawn } from '../lib/credentialBootstrap.js';
 import { createImmediateFallbackSignalDetector, ERROR_CATEGORIES } from '../lib/aiToolkit/errorDetection.js';
-import { killProcessTree, resolveWindowsExecutable, prepareWindowsSafeSpawn, guardChildStdin, deliverChildStdin } from '../lib/bufferedSpawn.js';
+import { killProcessTree, guardChildStdin, deliverChildStdin } from '../lib/bufferedSpawn.js';
 import { isHostShuttingDown } from '../lib/hostShutdown.js';
 // `./ollamaAgentContext.js` (and the ollama daemon manager behind it) is imported
 // lazily inside the predicate-gated branch below, NOT here — see that call site.
@@ -410,11 +411,13 @@ export async function executeCliRun({ runId, provider, prompt, workspacePath, sc
 
   // See the executeCliRun docblock above for why this is a resolve+wrap, not
   // a shell:true. Resolved against `childEnv` (not bare process.env) so a
-  // provider-configured PATH override is honored.
+  // provider-configured PATH override is honored. `resolveCliSpawn` also
+  // applies a credential-bootstrap wrap (credentialBootstrap.js) when
+  // configured — applied AFTER prompt delivery is resolved (above), which
+  // still keys off the harness's own command, not the bootstrap CLI's.
   const runCommand = vision?.invocation.command || provider.command;
   const runCwd = vision?.invocation.cwd || effectiveCwd;
-  const resolvedCommand = resolveWindowsExecutable(runCommand, undefined, childEnv) || runCommand;
-  const { command: spawnCommand, args: spawnArgs } = prepareWindowsSafeSpawn(resolvedCommand, args);
+  const { command: spawnCommand, args: spawnArgs } = resolveCliSpawn(provider, runCommand, args, childEnv);
 
   childProcess = spawn(spawnCommand, spawnArgs, {
     cwd: runCwd,
@@ -538,7 +541,10 @@ export async function executeCliRun({ runId, provider, prompt, workspacePath, sc
       metadata.outputSize = Buffer.byteLength(output);
 
       if (spawnError) {
-        metadata.error = describeSpawnFailure(spawnError, provider.command);
+        // Name whatever was ACTUALLY spawned — for a credential-bootstrap
+        // provider that's the bootstrap CLI, not the harness `provider.command`
+        // names, and an ENOENT there means the bootstrap binary is missing.
+        metadata.error = describeSpawnFailure(spawnError, spawnCommand);
         metadata.errorCategory = 'spawn_error';
       } else if (canceled) {
         metadata.canceled = true;

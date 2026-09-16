@@ -85,7 +85,12 @@ export default function ProviderForm({ provider, daemonReadiness = null, onClose
     envVars: provider?.envVars || {},
     secretEnvVars: provider?.secretEnvVars || [],
     headlessArgs: provider?.headlessArgs?.join(' ') || '',
-    tuiPromptDelayMs: provider?.tuiPromptDelayMs || 2500
+    tuiPromptDelayMs: provider?.tuiPromptDelayMs || 2500,
+    credentialBootstrapSetupCommand: provider?.credentialBootstrap?.setupCommand || '',
+    credentialBootstrapCommand: provider?.credentialBootstrap?.command || '',
+    credentialBootstrapArgs: provider?.credentialBootstrap?.args?.join(' ') || '',
+    credentialBootstrapHarnessId: provider?.credentialBootstrap?.harnessId || '',
+    credentialBootstrapArgsSeparator: provider?.credentialBootstrap?.argsSeparator || '',
   });
 
   const [activeTab, setActiveTab] = useDrawerTab('providerTab', 'connection', PROVIDER_FORM_TAB_IDS);
@@ -374,6 +379,26 @@ export default function ProviderForm({ provider, daemonReadiness = null, onClose
     // running another vendor's binary, where it would be a stored lie.
     if (!isCodexProvider({ ...provider, ...data, id: provider?.id })) delete data.ignoreUserConfig;
 
+    // Fold the three flat scratch fields into the nested shape the server
+    // schema expects, omitting the object entirely when no bootstrap command
+    // is named — an empty `credentialBootstrap: { command: '' }` would fail
+    // the server's `min(1)` check on every unrelated save.
+    const bootstrapCommand = formData.credentialBootstrapCommand.trim();
+    data.credentialBootstrap = bootstrapCommand
+      ? {
+        ...(formData.credentialBootstrapSetupCommand.trim() ? { setupCommand: formData.credentialBootstrapSetupCommand.trim() } : {}),
+        command: bootstrapCommand,
+        args: formData.credentialBootstrapArgs ? formData.credentialBootstrapArgs.split(' ').filter(Boolean) : [],
+        ...(formData.credentialBootstrapHarnessId.trim() ? { harnessId: formData.credentialBootstrapHarnessId.trim() } : {}),
+        ...(formData.credentialBootstrapArgsSeparator.trim() ? { argsSeparator: formData.credentialBootstrapArgsSeparator.trim() } : {}),
+      }
+      : null;
+    delete data.credentialBootstrapSetupCommand;
+    delete data.credentialBootstrapCommand;
+    delete data.credentialBootstrapArgs;
+    delete data.credentialBootstrapHarnessId;
+    delete data.credentialBootstrapArgsSeparator;
+
     // Only send apiKey if user entered a new value (avoid overwriting existing key with empty string)
     if (!data.apiKey && provider) {
       delete data.apiKey;
@@ -478,6 +503,77 @@ export default function ProviderForm({ provider, daemonReadiness = null, onClose
                       className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white focus:border-port-accent focus:outline-hidden"
                     />
                   </FormField>
+
+                  {/* Generic support for a harness whose auth is provisioned by an
+                      external CLI at spawn time — e.g. a company-internal tool that
+                      mints a short-lived token for a proxy and execs the harness
+                      itself — instead of a static API key PortOS stores. When set,
+                      PortOS spawns the bootstrap command in front of the harness
+                      invocation above, exactly as typing `<bootstrap> run <harness>
+                      ...` would. Setup Command is shown for the user to run
+                      themselves; PortOS never executes it. */}
+                  <p className="text-sm text-gray-400 -mb-1">Credential Bootstrap (optional)</p>
+                  <FormField label="Setup Command" compact>
+                    <input
+                      type="text"
+                      value={formData.credentialBootstrapSetupCommand}
+                      onChange={(e) => setFormData(prev => ({ ...prev, credentialBootstrapSetupCommand: e.target.value }))}
+                      placeholder="One-time step shown to you, e.g. npm install -g @your-org/token-cli"
+                      className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white focus:border-port-accent focus:outline-hidden"
+                    />
+                  </FormField>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <FormField label="Bootstrap Command" compact>
+                      <input
+                        type="text"
+                        value={formData.credentialBootstrapCommand}
+                        onChange={(e) => setFormData(prev => ({ ...prev, credentialBootstrapCommand: e.target.value }))}
+                        placeholder="e.g. token-cli"
+                        className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white focus:border-port-accent focus:outline-hidden"
+                      />
+                    </FormField>
+                    <FormField label="Bootstrap Args" compact>
+                      <input
+                        type="text"
+                        value={formData.credentialBootstrapArgs}
+                        onChange={(e) => setFormData(prev => ({ ...prev, credentialBootstrapArgs: e.target.value }))}
+                        placeholder="e.g. run"
+                        className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white focus:border-port-accent focus:outline-hidden"
+                      />
+                    </FormField>
+                    <FormField label="Harness ID (optional)" compact>
+                      <input
+                        type="text"
+                        value={formData.credentialBootstrapHarnessId}
+                        onChange={(e) => setFormData(prev => ({ ...prev, credentialBootstrapHarnessId: e.target.value }))}
+                        placeholder={`Defaults to Command above (${formData.command || 'e.g. claude'})`}
+                        className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white focus:border-port-accent focus:outline-hidden"
+                      />
+                    </FormField>
+                    <FormField label="Args Separator (optional)" compact>
+                      <input
+                        type="text"
+                        value={formData.credentialBootstrapArgsSeparator}
+                        onChange={(e) => setFormData(prev => ({ ...prev, credentialBootstrapArgsSeparator: e.target.value }))}
+                        placeholder="e.g. --"
+                        className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white focus:border-port-accent focus:outline-hidden"
+                      />
+                    </FormField>
+                  </div>
+                  <p className="text-xs text-gray-500">
+                    For a CLI that provisions its own short-lived credential (e.g. a token for a proxy) and then
+                    runs the harness itself. <strong>Setup Command</strong> is a one-time step shown to you —
+                    PortOS never runs it. When a Bootstrap Command is set, PortOS spawns it in front of the harness
+                    (<code>{formData.credentialBootstrapCommand || '<bootstrap>'} {formData.credentialBootstrapArgs}{' '}
+                    {formData.credentialBootstrapHarnessId || formData.command || '<harness>'}{' '}
+                    {formData.credentialBootstrapArgsSeparator} …</code>) instead of the harness directly, and never
+                    routes this provider through the CoS Agent Runner (its fixed list of known harness binaries has
+                    no way to recognize a custom bootstrap binary). <strong>Harness ID</strong> overrides what PortOS calls the harness
+                    when the bootstrap CLI uses its own name for it instead of the binary above (e.g.{' '}
+                    <code>claude-code</code> rather than <code>claude</code>).{' '}
+                    <strong>Args Separator</strong> (e.g. <code>--</code>) is inserted before the harness's own
+                    arguments when the bootstrap CLI needs its flags kept apart from the harness's.
+                  </p>
 
                   {/* The CLI/TUI backends that can authenticate: the vLLM compose
                       stack is started with VLLM_API_KEY, so without this field

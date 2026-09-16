@@ -68,6 +68,7 @@ import { buildTuiSpawnConfig, spawnTuiAgent } from './agentTuiSpawning.js';
 import { publicReviewPostureForProfile, supportsTuiPublicReviewActionsProvider, PUBLIC_REVIEW_NO_TOOL_POSTURE } from '../lib/providerVendors.js';
 import { checkPublicReviewSpawnPreconditions } from '../lib/publicReviewSpawnGate.js';
 import { buildAgentRegistration, resolveExecutionMode } from '../lib/agentRegistrationRecord.js';
+import { hasCredentialBootstrap } from '../lib/credentialBootstrap.js';
 import { applyTaskGenerationOverrides } from '../lib/taskGenerationOverrides.js';
 import { PUBLIC_REVIEW_ACTIONS_EXECUTION_PROFILE } from '../lib/agentExecutionProfiles.js';
 import { formatPublicReviewInputPrompt } from '../lib/modelAbuseGuard.js';
@@ -481,7 +482,13 @@ async function runAgentSpawn(task) {
     // process and may inherit ambient tool configuration; the final stage's
     // provider-specific direct CLI recipe is what enforces its sandbox.
     // GitHub mutations still belong to the deterministic output hook.
-    const dispatchUseRunner = publicReview ? false : useRunner;
+    //
+    // A credential-bootstrap-configured provider is ALSO direct-only: the
+    // runner is a separate process that validates the command it's asked to
+    // spawn against a static allowlist of known harness binaries
+    // (cos-runner/allowedCommands.js) and has no way to know about a user's
+    // arbitrary bootstrap CLI, so routing it there would 400 at spawn time.
+    const dispatchUseRunner = (publicReview || hasCredentialBootstrap(provider)) ? false : useRunner;
     let publicReviewPromptData = null;
 
     // Resolve the workspace and provision any worktree / JIRA branch the task
