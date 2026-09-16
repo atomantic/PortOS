@@ -630,3 +630,47 @@ repeat, chat focus, overlays, distance, and occlusion suppress accidental use.
 The renderer implementation and a toggle-lamp example live in the separate
 Worlds repository. Controller support is tracked in
 [Worlds #11](https://github.com/atomantic/eidoverse-worlds/issues/11).
+
+### Agent-free resilience assay (promote-path pre-check)
+
+Part of the [SwarmWorld-inspired stigmergic Eidoverse epic](https://github.com/atomantic/PortOS/issues/7453):
+a world foundation should not promote from an instance's local vernacular into
+the shared PortOS baseline just because it "worked" while its author mind was
+still narrating it live. `server/services/eidoverseResilienceAssay.js` runs a
+candidate contribution through a clean, agent-free sandbox before that
+decision is made:
+
+- `createSandbox()` is called fresh per scenario, so no state can leak in from
+  a previous run or a live process handle.
+- `buildProjectionPlan()` (`eidoverseWorldProjection.js`, already pure) loads
+  once against the sandbox's initial state, standing in for "replay in a
+  clean sandbox instance."
+- The controller then replays through the fixed disturbance suite —
+  `reconnect`, `restart-world-host`, `missing-optional-deps` — each with a
+  warm-up run, the disturbance, and required recovery ticks.
+- A controller `step()` (or `applyDisturbance()`) that returns a Promise is
+  itself a failure: the assay is synchronous by contract, so an "agent-free"
+  contribution cannot reach for a live network, disk, or provider call during
+  replay.
+- Every tick is checked against a built-in JSON-serializability invariant
+  (a promoted foundation has to be loadable by a peer that never saw the
+  authoring session) plus any contribution-supplied invariants.
+
+`runResilienceAssay(contribution)` returns `{ contributionId, pass, scenarios,
+projection, reasons }` with a readable reason per failure, naming the
+disturbance and tick. `scripts/eidoverse-resilience-assay.js`
+(`npm run eidoverse:assay`) is the CLI/CI entry point — with no arguments it
+runs every reference contribution under
+`server/services/eidoverseResilienceAssayFixtures/*.contribution.js`; given
+module paths, it runs the assay against those instead and exits non-zero on
+any failure. Two reference fixtures live beside the harness: a passing
+`beaconRelay.contribution.js` and a deliberately-failing
+`narratedOnly.failing.fixture.js` (named so the CLI's default fixture glob
+skips it; only `eidoverseResilienceAssay.test.js` exercises it, proving the
+harness catches the "author-mind-only" failure mode).
+
+This harness is standalone and does not yet gate anything — the actual
+promote-to-baseline pipeline is
+[#7455](https://github.com/atomantic/PortOS/issues/7455), not yet built. Once
+it exists, it is expected to call `runResilienceAssay()` (or shell out to this
+script) per candidate contribution and block promotion on a failing verdict.
