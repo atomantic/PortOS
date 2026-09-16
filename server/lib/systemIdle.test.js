@@ -72,6 +72,16 @@ describe('system idle verdict', () => {
     expect(verdict.blockers).toEqual([{ kind: 'agents-unreadable', label: 'CoS agent state unreadable', count: 1 }]);
   });
 
+  // Same rule for the image-to-3D slice: `null` is "the list could not be
+  // read", and an unreadable list must not unlock a restart that would kill a
+  // running build. An ABSENT key still reads as "nothing there".
+  it('refuses to read an unreadable image-to-3D build list as an idle one', () => {
+    const verdict = summarizeSystemActivity(snapshot({ extras: { imageTo3d: null } }));
+    expect(verdict.idle).toBe(false);
+    expect(verdict.blockers).toEqual([{ kind: 'image-to-3d-unreadable', label: 'Image-to-3D build state unreadable', count: 1 }]);
+    expect(summarizeSystemActivity(snapshot({ extras: {} })).idle).toBe(true);
+  });
+
   it('counts an update already in flight as activity', () => {
     expect(summarizeSystemActivity(snapshot({ update: { inProgress: true } })).idle).toBe(false);
   });

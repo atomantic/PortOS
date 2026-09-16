@@ -59,8 +59,15 @@ describe('active processing snapshot', () => {
     const snapshot = await getActiveProcessing();
     expect(snapshot.gpu).toMatchObject({ status: 'absent', laneBusy: false, laneKind: null, gpus: [] });
     expect(snapshot.extras.imageTo3d).toEqual([]);
+    expect(snapshot.activity.idle).toBe(true);
+    // A FAILED read is not an empty one: it degrades to `null`, and the idle
+    // verdict refuses on it rather than letting an unreadable build list read
+    // as an install with nothing running.
     deps.models.mockRejectedValueOnce(new Error('store unavailable'));
-    expect((await getActiveProcessing()).extras.imageTo3d).toEqual([]);
+    const degraded = await getActiveProcessing();
+    expect(degraded.extras.imageTo3d).toBeNull();
+    expect(degraded.activity.idle).toBe(false);
+    expect(degraded.activity.blockers).toContainEqual(expect.objectContaining({ kind: 'image-to-3d-unreadable' }));
     expect(deps.utilization).not.toHaveBeenCalled();
   });
 });
@@ -189,6 +196,18 @@ describe('queued agent count', () => {
     const snapshot = await getActiveProcessing();
     expect(snapshot.agents).toEqual({ trusted: false, active: 0, queued: 1 });
     expect(deps.status).toHaveBeenCalledTimes(1);
+    expect(snapshot.activity.idle).toBe(false);
+    expect(snapshot.activity.blockers.map(b => b.kind)).toContain('agents-unreadable');
+  });
+
+  // The pending-task list is its own read. An unreadable one yields zero queued
+  // tasks, and zero queued is the other value that unlocks the restart — so it
+  // carries the same untrusted sentinel a failed agent read does.
+  it('marks the slice untrusted when the pending-task read fails, even with a readable agent list', async () => {
+    deps.tasks.mockRejectedValue(new Error('task store unavailable'));
+    deps.agents.mockResolvedValue([]);
+    const snapshot = await getActiveProcessing();
+    expect(snapshot.agents).toEqual({ trusted: false, active: 0, queued: 0 });
     expect(snapshot.activity.idle).toBe(false);
     expect(snapshot.activity.blockers.map(b => b.kind)).toContain('agents-unreadable');
   });

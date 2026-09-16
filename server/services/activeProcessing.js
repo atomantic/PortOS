@@ -65,9 +65,12 @@ function agentCounts(agents, cosStatus, pendingTaskIds) {
   const runningAgents = agents === null ? null : agents.filter((agent) => agent.status === 'running');
   const claimedTaskIds = new Set((runningAgents || []).map((agent) => agent.taskId).filter(Boolean));
   return {
-    trusted: agents !== null || Boolean(cosStatus),
+    // An unreadable pending-task list is its own untrusted reading: zero queued
+    // tasks is the value that unlocks a restart, so it may not come from a
+    // failed read any more than a zero agent count may.
+    trusted: (agents !== null || Boolean(cosStatus)) && pendingTaskIds !== null,
     active: runningAgents ? runningAgents.length : (cosStatus?.activeAgents || 0),
-    queued: pendingTaskIds.filter((id) => !claimedTaskIds.has(id)).length,
+    queued: pendingTaskIds ? pendingTaskIds.filter((id) => !claimedTaskIds.has(id)).length : 0,
   };
 }
 
@@ -82,8 +85,11 @@ function agentCounts(agents, cosStatus, pendingTaskIds) {
 export async function getSystemActivity() {
   const [jobs, models, pendingTaskIds, agents, mindState] = await Promise.all([
     Promise.resolve(listJobs()).then((items) => items.filter((job) => LIVE_STATUSES.has(job.status))),
-    listGeneratingModelSummaries().catch(() => []),
-    cos.getPendingTaskIds().catch(() => []),
+    // `null` = the read FAILED, distinct from `[]` = read fine, nothing
+    // building. Both of these degrade to the value that unlocks a restart, so
+    // neither may be manufactured from a failed read.
+    listGeneratingModelSummaries().catch(() => null),
+    cos.getPendingTaskIds().catch(() => null),
     // `null` = the read FAILED, distinct from `[]` = read fine, no agents. The
     // counts degrade differently for the two, so they must stay separable.
     cos.getAgents().catch(() => null),
@@ -94,7 +100,9 @@ export async function getSystemActivity() {
   const cosStatus = agents === null ? await cos.getStatus().catch(() => null) : null;
   const slices = {
     jobs: jobs.map(sanitizeJob),
-    extras: { imageTo3d: models.map((model) => ({ id: model.id, name: model.name || model.id })) },
+    // `null` survives to the verdict as a blocker; the widget's own
+    // `extras?.imageTo3d || []` already reads it as an empty list.
+    extras: { imageTo3d: models === null ? null : models.map((model) => ({ id: model.id, name: model.name || model.id })) },
     agents: agentCounts(agents, cosStatus, pendingTaskIds),
     mind: summarizeMind(mindState),
     // An App Management update/standardize holds a checkout and restarts PM2

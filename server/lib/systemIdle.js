@@ -73,6 +73,11 @@ export function summarizeSystemActivity(snapshot) {
     add(`media-queued:${kind}`, `${pluralize(count, mediaNoun(kind))} queued`, count);
   }
 
+  // An explicit `null` means the build list could not be read — not that
+  // nothing is building. Same contract as the agent and mind slices: the value
+  // that unlocks a restart may never be manufactured from a failed read. An
+  // ABSENT key stays "nothing there", per this function's partial-snapshot rule.
+  if (snapshot?.extras?.imageTo3d === null) add('image-to-3d-unreadable', 'Image-to-3D build state unreadable', 1);
   const imageTo3d = Array.isArray(snapshot?.extras?.imageTo3d) ? snapshot.extras.imageTo3d.length : 0;
   if (imageTo3d > 0) add('image-to-3d', `${pluralize(imageTo3d, 'image-to-3D build')} running`, imageTo3d);
 
