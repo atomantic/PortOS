@@ -1224,7 +1224,6 @@ export async function clearOnDemandRequest(requestId) {
 // Schedule Status
 // ============================================================
 
-
 /**
  * The apps that run `taskType` on a cron of their OWN — enabled for the task,
  * and stating a cadence rather than inheriting the task's.
@@ -1291,6 +1290,7 @@ async function resolveHiddenAppSchedules(taskType, interval, activeApps, allOver
     missedSlot: checks[i]?.missedSlot || null
   }));
 }
+
 export async function getScheduleStatus() {
   // Surface the master Improve toggle so the UI can disable Run Now affordances
   const [schedule, state] = await Promise.all([loadSchedule(), loadState()]);
@@ -1549,7 +1549,7 @@ export async function getUpcomingTasks(limit = 10) {
     if (!(await featureEnabled(interval))) continue;
     if (getTaskTypeInvocation(taskType).visibility === 'hidden') continue;
 
-    const check = await shouldRunTask(taskType, null, { featureEnabled });
+    const check = await shouldRunTask(taskType, null, { featureEnabled, schedule });
     const execution = schedule.executions[`task:${taskType}`] || { lastRun: null, count: 0 };
 
     // `shouldRunTask(taskType, appId)` resolves the same effective cadence used
@@ -1563,7 +1563,7 @@ export async function getUpcomingTasks(limit = 10) {
       .map(candidate => candidate.app);
     const appChecks = scheduledApps.length > 0
       ? await mapWithConcurrency(scheduledApps, 8, (app) =>
-        shouldRunTask(taskType, app.id, { featureEnabled }).catch(() => null))
+        shouldRunTask(taskType, app.id, { featureEnabled, schedule }).catch(() => null))
       : [];
     const appReady = appChecks.some(appCheck => appCheck?.shouldRun);
     const futureAppTimes = appChecks.map(appCheck => Date.parse(appCheck?.nextRunAt))
