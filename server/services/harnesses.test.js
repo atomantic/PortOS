@@ -26,12 +26,12 @@ import { prepareCliSpawn } from '../lib/bufferedSpawn.js';
 import {
   __resetLatestVersionCache,
   getLatestPublishedVersion,
+  harnessCatalogRuntime,
   listHarnesses,
   refreshHarnessModels,
   usesHarnessCatalog,
 } from './harnesses.js';
-import { __resetRuntimeStatusCache, PROVIDER_RUNTIMES } from './providerRuntimeInstaller.js';
-import { providerRuntimeKey } from '../lib/providerPrerequisites.js';
+import { __resetRuntimeStatusCache } from './providerRuntimeInstaller.js';
 
 const OPENCODE_MODELS = 'opencode/big-pickle\nopencode/mimo-v2.5-free\n';
 
@@ -70,11 +70,11 @@ describe('the shipped records a harness refresh may rewrite', () => {
         new URL('../../data.reference/providers.json', import.meta.url), 'utf8',
       )),
     );
+    // The PRODUCTION predicate, not a transcription of it: this list is the
+    // set a refresh may rewrite, so a widening of `harnessCatalogRuntime` has
+    // to move it here on purpose (#7505 widened it from an `opencode` literal).
     const rewritable = Object.values(seed.providers)
-      .filter((provider) => {
-        const runtime = PROVIDER_RUNTIMES.find((row) => [row.id, ...row.aliases].includes(providerRuntimeKey(provider)));
-        return Boolean(runtime?.modelsArgs) && usesHarnessCatalog(provider);
-      })
+      .filter((provider) => harnessCatalogRuntime(provider))
       .map((provider) => provider.id)
       .sort();
 

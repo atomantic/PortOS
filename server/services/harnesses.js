@@ -131,6 +131,30 @@ export const usesHarnessCatalog = (provider) =>
   !getOpencodeLocalProviderNamespace(provider) && !declaresOwnOpencodeProvider(provider);
 
 /**
+ * The harness runtime whose OWN catalog feeds this provider's models, or
+ * `null` for a record that keeps a catalog of its own.
+ *
+ * The full precondition for {@link refreshHarnessModels} in one place: the
+ * binary this record launches must know how to enumerate its models
+ * (`modelsArgs`), and the record must be a plain wrapper rather than one
+ * pointed at a local daemon or a hosted gateway ({@link usesHarnessCatalog}).
+ * A custom binary resolves to no runtime row at all and answers `null` on the
+ * first question.
+ *
+ * Lives here rather than beside its caller because the answer is exactly the
+ * set this refresh may rewrite, and TWO places ask it: the provider card's
+ * Refresh Models button (`server/routes/providers.js`) and the seed pin in
+ * this module's tests. Those used to be separate transcriptions, and the route's
+ * copy asked a third, narrower question — `providerRuntimeKey(provider) ===
+ * 'opencode'` — so Kilo and Grok cards offered no button for a catalog their
+ * harness could already print (#7505).
+ */
+export const harnessCatalogRuntime = (provider) => {
+  const runtime = getProviderRuntime(providerRuntimeKey(provider));
+  return runtime?.modelsArgs && usesHarnessCatalog(provider) ? runtime : null;
+};
+
+/**
  * Does this record hand-declare its own OpenCode provider entries?
  *
  * The `*Backed` / `gatewayBacked` markers above are only ever written by
