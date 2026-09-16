@@ -566,6 +566,20 @@ export async function setCurrentAgent(id, taskId) {
   });
 }
 
+// Move a feature agent's pointer from the run that just handed off to the task its
+// continuation will spawn from — but ONLY while it still names that retired run.
+// See the `agent:completed` handler for the race this guards.
+async function handOffCurrentAgent(id, retiredAgentId, continuationTaskId) {
+  return withLock(async () => {
+    const data = await readData();
+    const idx = data.agents.findIndex(a => a.id === id);
+    if (idx === -1 || data.agents[idx].currentAgentId !== retiredAgentId) return;
+    data.agents[idx].currentAgentId = continuationTaskId;
+    data.agents[idx].updatedAt = new Date().toISOString();
+    await writeData(data);
+  });
+}
+
 async function clearPendingAgentTask(id, taskId) {
   return withLock(async () => {
     const data = await readData();
@@ -602,22 +616,34 @@ cosEvents.on('agent:completed', async (agentData) => {
   // A relaunch retires this record and requeues the SAME task on a new provider,
   // so the run is still in flight. Recording it would flip the feature agent to
   // `error`, bump its run count, and write a run-history entry reading
-  // "Relaunched by user" — for work that has not finished.
+  // "Relaunched by user" — for work that has not finished. Instead, follow the
+  // task: `currentAgentId` holds the RETIRED agent's id, and the `agent:spawned`
+  // listener above re-binds only a feature agent still pointing at the TASK, so
+  // without this hand-back the pointer stays on a dead agent and the
+  // continuation's output never reaches the feature-agent view.
   //
-  // Instead, follow the task. `currentAgentId` holds the retired agent's id,
-  // and the `agent:spawned` listener above re-binds it only for a feature agent
-  // still pointing at the TASK — so without this hand-back the pointer stays on a
-  // dead agent and the continuation's output never reaches the feature-agent view.
-  if (isAgentHandoff(agentData)) {
-    // `resumedTaskId` — not `taskId` — because a resume that could not reuse the
-    // paused task queues a REPLACEMENT (which inherits this feature agent's
-    // metadata), and pointing at the retired task id would never re-bind.
-    const continuationTaskId = agentData.result?.resumedTaskId || agentData.taskId;
-    if (continuationTaskId) {
-      await setCurrentAgent(featureAgentId, continuationTaskId).catch(err => {
-        console.log(`⚠️ Failed to hand feature agent ${featureAgentId} back to its relaunched task: ${err.message}`);
-      });
-    }
+  // Gated on `resumedTaskId`, which is what proves a continuation was actually
+  // QUEUED. `resumed: true` alone does not: `retireStrandedPausedAgents` stamps
+  // it on a pause whose task is gone or has moved on, with no `resumedTaskId` and
+  // nothing requeued. Handing back there — to `agentData.taskId`, a task that no
+  // longer exists — parks a pointer no `agent:spawned` can ever clear, and both
+  // `triggerFeatureAgent` and `getDueFeatureAgents` refuse to run a feature agent
+  // that holds one. The agent would never run again, by schedule or by hand,
+  // recoverable only by Stop and re-activate. Those retirements fall through to
+  // `recordRunCompletion` below, which clears the pointer as it always did.
+  const continuationTaskId = isAgentHandoff(agentData) ? agentData.result?.resumedTaskId : null;
+  if (continuationTaskId) {
+    // Compare-and-set against the retired agent's id, because this races the
+    // spawn of the very continuation it points at: `requeuePausedTask` runs
+    // BEFORE `completeAgent`, and the `tasks:changed` it emits schedules the
+    // dequeue on a `setImmediate` while `completeAgent` is still writing state and
+    // archiving. If that spawn won and `agent:spawned` already bound the live
+    // agent, overwriting it with the task id would blank the output view for the
+    // whole run; losing the race merely leaves the pointer on the task until the
+    // continuation completes and clears it.
+    await handOffCurrentAgent(featureAgentId, agentData.id, continuationTaskId).catch(err => {
+      console.log(`⚠️ Failed to hand feature agent ${featureAgentId} back to its relaunched task: ${err.message}`);
+    });
     return;
   }
   const success = agentData.result?.success === true;

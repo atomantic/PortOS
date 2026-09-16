@@ -977,9 +977,11 @@ export default function AgentCard({ agent, onPause, onKill, onDelete, onResume, 
         )}
 
         {/* Feedback section - shown for completed, manually-run, non-system local
-            agents. A handoff is excluded: there is no result to rate, and the
-            continuation run asks for the rating that covers this work. */}
-        {completed && !isSystemAgent && isManualUserAgent && !remote && !handoff && (
+            agents. A handoff has no result to rate — the continuation run asks for
+            the rating that covers this work — so it is excluded UNLESS a rating is
+            already on the record: pre-upgrade handoffs were ratable, and hiding the
+            block outright would swallow a verdict the user did give. */}
+        {completed && !isSystemAgent && isManualUserAgent && !remote && (!handoff || !!feedbackState) && (
           <div className="mt-2 pt-1 border-t border-port-border/50">
             <div className="flex items-center gap-3 flex-wrap">
               <span className="text-xs text-gray-500">Was this helpful?</span>

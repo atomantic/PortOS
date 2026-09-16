@@ -54,18 +54,28 @@ describe.each(IMPLEMENTATIONS)('isAgentHandoff (%s)', (_side, isAgentHandoff) =>
 });
 
 describe('agentHandoffReason (client-only)', () => {
-  it('prefers the pause reason, which names what the USER changed', () => {
-    // `result.error` is `resumeAgent`'s summary — "task … requeued on <branch>" —
-    // which answers a question nobody asked while looking at the run they just
-    // relaunched.
+  it('prefers the pause reason when a continuation was actually queued', () => {
+    // `result.error` there is `resumeAgent`'s summary — "task … requeued on
+    // <branch>" — which answers a question nobody asked while looking at the run
+    // they just relaunched.
     expect(agentHandoffReason({
       metadata: { pauseReason: 'Relaunched by user on codex / gpt-5' },
-      result: { error: 'Resumed agent agent-1 — task task-1 requeued on cos/task-1/agent-1' },
+      result: { resumed: true, resumedTaskId: 'task-1', error: 'Resumed agent agent-1 — task task-1 requeued on cos/task-1/agent-1' },
     })).toBe('Relaunched by user on codex / gpt-5');
   });
 
-  it('falls back to the resume summary, then to a generic line', () => {
-    expect(agentHandoffReason({ result: { error: 'Resumed agent agent-1' } })).toBe('Resumed agent agent-1');
+  it('prefers the retirement reason when NOTHING was queued', () => {
+    // `retireStrandedPausedAgents` stamps `resumed: true` with no `resumedTaskId`
+    // on a pause whose task is gone. Its `pauseReason` is the ORIGINAL one, so
+    // preferring it would caption an abandoned run as a deliberate provider swap.
+    expect(agentHandoffReason({
+      metadata: { pauseReason: 'Paused by user' },
+      result: { resumed: true, error: 'Pause retired — its task task-9 no longer exists' },
+    })).toBe('Pause retired — its task task-9 no longer exists');
+  });
+
+  it('falls back through to a generic line', () => {
+    expect(agentHandoffReason({ result: { resumed: true, resumedTaskId: 't1' }, metadata: {} })).toBe('Handed off to a new run');
     expect(agentHandoffReason({ result: { resumed: true } })).toBe('Handed off to a new run');
   });
 });
