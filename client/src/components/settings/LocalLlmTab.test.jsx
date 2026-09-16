@@ -61,7 +61,6 @@ describe('LocalLlmTab view dispatch', () => {
   it('no longer advertises Runtimes as one of its pills', () => {
     renderTab();
 
-    expect(screen.queryByRole('tab', { name: 'Runtimes' })).not.toBeInTheDocument();
     expect(screen.getAllByRole('tab').map((t) => t.textContent)).toEqual(['Model Library', 'Abuse Guard']);
   });
 

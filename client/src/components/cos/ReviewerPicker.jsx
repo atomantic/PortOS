@@ -19,18 +19,19 @@ import ProviderModelSelector from '../ProviderModelSelector';
 import { selectableModelsForProvider, effortLevelsForProvider, effectiveModelFor } from '../../utils/providers';
 import { isProviderReviewer, normalizeReviewerSlug } from '../../lib/reviewerPins';
 import { getNavPageForPath } from '../../../../server/lib/navManifest.js';
+// The SAME map the readiness cards link by (`LOCAL_RUNTIMES[*].manageUrl` reads
+// from it), taken from the server leaf rather than mirrored — the mirror is what
+// #7414 had to chase. Imported here because these hints must name the page that
+// actually manages each backend: Ollama and LM Studio are pulled and started
+// from the Model Library, while MTPLX's server and checkpoints are a Runtimes
+// card.
+import { LOCAL_RUNTIME_MANAGE_URLS } from '../../../../server/lib/modelPinMembership.js';
 
-// Where each local-LLM reviewer's backend is actually managed. #7414 split the
-// model SERVERS (Models → Runtimes) from the weights catalog (Models → LLMs),
-// and these three land on either side of it: Ollama and LM Studio are pulled
-// and started from the Model Library, while MTPLX's server and its checkpoints
-// are a Runtimes card. The empty-state hints below name the page by resolving
-// the route, so a future move re-words them instead of stranding a breadcrumb.
-const LOCAL_BACKEND_MANAGE_PATHS = {
-  ollama: '/models/llms',
-  lmstudio: '/models/llms',
-  mtplx: '/models/llms-runtimes',
-};
+// Resolved once at module load, not per render: the routes are constants, and
+// only the (usually absent) empty-state hint reads the result.
+const LOCAL_BACKEND_MANAGE_PAGES = Object.fromEntries(
+  Object.entries(LOCAL_RUNTIME_MANAGE_URLS).map(([id, path]) => [id, getNavPageForPath(path)?.breadcrumb]),
+);
 
 const normalizeReviewerValue = (value) => normalizeReviewerSlug(value);
 
@@ -556,7 +557,7 @@ export default function ReviewerPicker({
   // doesn't accuse a healthy backend of being empty.
   const renderModelCell = (token) => {
     if (!MODEL_SELECTABLE_REVIEWERS.includes(token) && !isProviderReviewer(token)) return renderNoPinCell(`${labelFor(token)} takes no model`);
-    const backendPage = getNavPageForPath(LOCAL_BACKEND_MANAGE_PATHS[token])?.breadcrumb;
+    const backendPage = LOCAL_BACKEND_MANAGE_PAGES[token];
     const subject = labelFor(token);
     const pinnedValue = models.get(token);
     const value = pinnedValue ?? '';

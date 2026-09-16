@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import {
   LOCAL_RUNTIMES,
+  LOCAL_RUNTIME_MANAGE_URLS,
   isLocalInstanceEndpoint,
   localRuntimeForProvider,
   normalizeOpenAiBaseUrl,
@@ -178,5 +179,51 @@ describe('localRuntimeForProvider', () => {
     expect(runtime.kind).toBe('mtplx');
     expect(runtime.label).toBe('MTPLX');
     expect(runtime.endpoint).toBe('http://127.0.0.1:8000/v1');
+  });
+});
+
+// #7414 split the runtimes off the LLMs page, and the hand-sweep that followed
+// is what these guards exist to prevent repeating: a breadcrumb typed into a
+// runtime row goes stale the next time a page moves, and nothing fails.
+describe('LOCAL_RUNTIMES — user-facing copy names its page by route, never by literal', () => {
+  const COPY_FIELDS = ['modelsHint', 'standbyDetail'];
+  const rows = Object.entries(LOCAL_RUNTIMES);
+
+  it('writes no breadcrumb into a runtime row', () => {
+    const offenders = rows.flatMap(([id, runtime]) => COPY_FIELDS
+      .filter((field) => typeof runtime[field] === 'string' && runtime[field].includes('→'))
+      .map((field) => `${id}.${field}`));
+    expect(offenders).toEqual([]);
+  });
+
+  // The token only expands for a runtime that HAS a page; on one with
+  // `manageUrl: null` it would ship as a literal `{page}` or as filler prose.
+  it('uses the {page} token only where a manage route can name a page', () => {
+    const offenders = rows.flatMap(([id, runtime]) => COPY_FIELDS
+      .filter((field) => typeof runtime[field] === 'string' && runtime[field].includes('{page}') && !runtime.manageUrl)
+      .map((field) => `${id}.${field}`));
+    expect(offenders).toEqual([]);
+  });
+
+  it('takes every manageUrl from the shared map the client reads', () => {
+    expect(Object.fromEntries(rows.map(([id, runtime]) => [id, runtime.manageUrl])))
+      .toEqual(LOCAL_RUNTIME_MANAGE_URLS);
+  });
+
+  it('points each runtime at the surface that actually manages it', () => {
+    // Server lifecycle is Models → Runtimes; the weights catalog is Models →
+    // LLMs. Pinned per runtime because getting ONE of these wrong is the whole
+    // bug — a checklist that links llama.cpp at the catalog is a dead end.
+    expect(LOCAL_RUNTIME_MANAGE_URLS).toEqual({
+      llama: '/models/llms-runtimes',
+      slotstream: '/models/llms-runtimes',
+      mtplx: '/models/llms-runtimes',
+      ollama: '/models/llms',
+      lmstudio: '/models/llms',
+      // Operator-owned compose projects: the readiness checklist is the only
+      // PortOS surface, so there is no page to link.
+      vllm: null,
+      sglang: null,
+    });
   });
 });

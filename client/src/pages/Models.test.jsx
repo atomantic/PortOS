@@ -14,7 +14,7 @@ import { TABS } from '../components/models/ModelsTabsHeader';
 
 vi.mock('../components/settings/LocalModelAssessments.jsx', () => ({ default: () => <div>assessments panel</div> }));
 vi.mock('../components/settings/LocalLlmTab', () => ({
-  LocalLlmTab: ({ view }) => <div data-testid="llms-view" data-view={view || 'library'}>llms panel</div>,
+  LocalLlmTab: ({ view }) => <div data-testid="llms-view" data-view={view || 'none'}>llms panel</div>,
 }));
 vi.mock('../components/settings/LocalLlmRuntimesView.jsx', () => ({ default: () => <div>runtimes panel</div> }));
 vi.mock('../components/settings/EmbeddingsTab', () => ({ default: () => <div>embeddings panel</div> }));
@@ -141,14 +141,10 @@ describe('Models', () => {
 });
 
 describe('Models — tab drill-downs', () => {
-  // #7414 moved Runtimes out of the pill bar. The bare LLMs route now lands on
-  // Model Library — the runtimes default would otherwise render a view the tab
-  // no longer serves — and Runtimes has its own tab, not a sub-route.
-  it('defaults the bare LLMs route to Model Library, not the departed runtimes view', async () => {
-    renderAt('/models/llms');
-    expect(await screen.findByTestId('llms-view')).toHaveAttribute('data-view', 'library');
-  });
-
+  // #7414 moved Runtimes out of the pill bar and onto its own tab. Which view
+  // the bare `/models/llms` route falls back to is LocalLlmTab's contract and is
+  // asserted there; what this page owes is that Runtimes no longer routes
+  // THROUGH the LLMs dispatcher at all.
   it('serves Runtimes as its own tab rather than an LLMs sub-view', async () => {
     renderAt('/models/llms-runtimes');
     expect(await screen.findByText('runtimes panel')).toBeInTheDocument();

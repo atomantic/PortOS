@@ -19,6 +19,35 @@ import { localRuntimeNamespace, isAntigravityProvider, isOpencodeProvider, antig
 import { PORTS } from './ports.js';
 import { isLocalInstanceHost, localEndpointPort } from './localEndpoint.js';
 
+/**
+ * Which PortOS page manages each local runtime — the single source for
+ * `LOCAL_RUNTIMES[*].manageUrl`, which reads from here.
+ *
+ * It lives in this leaf rather than in `localProviderRuntime.js` because the
+ * CLIENT needs it too: a reviewer picker that says "start it from …" has to
+ * name the same page the readiness card links to, and it cannot import the
+ * endpoint half (`opencodeConfig.js` → `zod`) to get one static string. Before
+ * #7414 every runtime shared one page, so a second copy was invisible; splitting
+ * Models → Runtimes off Models → LLMs made a stale copy name the wrong sibling.
+ *
+ * Server LIFECYCLE (install, start, stop, checkpoints) is Models → Runtimes;
+ * the Ollama / LM Studio WEIGHTS catalog is Models → LLMs. `null` means PortOS
+ * has no page for that runtime — vLLM and SGLang are operator-owned compose
+ * projects whose only PortOS surface is the readiness checklist.
+ *
+ * Callers turn a route into prose with `navManifest.getNavPageForPath`; never
+ * write the breadcrumb out by hand beside one of these.
+ */
+export const LOCAL_RUNTIME_MANAGE_URLS = Object.freeze({
+  llama: '/models/llms-runtimes',
+  ollama: '/models/llms',
+  lmstudio: '/models/llms',
+  vllm: null,
+  sglang: null,
+  slotstream: '/models/llms-runtimes',
+  mtplx: '/models/llms-runtimes',
+});
+
 // Default OpenAI-compatible ports for the two local backends PortOS manages. An
 // endpoint-only provider (no id/name) pointed at one of these on the local
 // instance maps to that backend.

@@ -66,7 +66,7 @@ import {
 } from '../../services/api';
 import socket from '../../services/socket';
 import { clickStartDownload } from '../../test/downloadPreflightConfirm.js';
-import LocalLlmRuntimesView, { RUNTIMES_HEADING_ID } from './LocalLlmRuntimesView.jsx';
+import LocalLlmRuntimesView from './LocalLlmRuntimesView.jsx';
 import {
   appleGpuBudgetGib,
   hardwareLlmRecommendation,
@@ -141,7 +141,6 @@ describe('LocalLlmRuntimesView information architecture', () => {
     await renderRuntimes();
 
     const panel = screen.getByRole('tabpanel');
-    expect(panel).toHaveAttribute('aria-labelledby', RUNTIMES_HEADING_ID);
     const label = document.getElementById(panel.getAttribute('aria-labelledby'));
     expect(label).not.toBeNull();
     expect(label.tagName).toBe('H2');

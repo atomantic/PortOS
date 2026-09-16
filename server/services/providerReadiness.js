@@ -268,8 +268,21 @@ function weightsDetail(runtime, weights) {
  * `null` for a runtime with no page (vLLM, SGLang) — callers drop the clause
  * rather than inventing a destination.
  */
-const managePage = (runtime) => (
-  runtime.manageUrl ? getNavPageForPath(runtime.manageUrl)?.breadcrumb || null : null
+const managePage = (runtime) => getNavPageForPath(runtime.manageUrl)?.breadcrumb ?? null;
+
+/**
+ * Expand the `{page}` token a runtime's user-facing copy writes instead of a
+ * breadcrumb (`localProviderRuntime.js`). Same reason as `managePage`: the
+ * sentence and the link it describes must name one page, decided by the route.
+ *
+ * A runtime with no page never uses the token, but fall back rather than ship a
+ * literal `{page}` if one ever slips in — `localProviderRuntime.test.js` is the
+ * guard that keeps that from happening quietly.
+ */
+const expandPageToken = (text, runtime) => (
+  typeof text === 'string' && text.includes('{page}')
+    ? text.replaceAll('{page}', managePage(runtime) || 'its management page')
+    : text
 );
 
 /** The `runtime` check — is the daemon's software here at all? */
@@ -299,9 +312,10 @@ function serverCheck(runtime, { installed, result, setup, weights = 'unknown' })
   }
   const page = managePage(runtime);
   const start = `Start ${runtime.label}${page ? ` from ${page}` : ''}.`;
+  const modelsHint = expandPageToken(runtime.modelsHint, runtime);
   const fallback = installed
-    ? `${start} ${runtime.modelsHint}`
-    : `Install ${runtime.label} first, then start it. ${runtime.modelsHint}`;
+    ? `${start} ${modelsHint}`
+    : `Install ${runtime.label} first, then start it. ${modelsHint}`;
   // Name the blocker in the SAME line that says nothing answered. Otherwise the
   // checklist reads "installed ✓ / not responding — just press Start", and
   // Start is the thing that cannot work until the weights land.
@@ -421,6 +435,7 @@ function catalogCheck(runtime, offered, served, probeError = null, { weights = '
   // either — otherwise the provider still runs, and only a stage that pinned one
   // of these ids dies.
   const nothingDispatchable = unserved.length === offered.length && !(pinned && served.includes(pinned));
+  const page = managePage(runtime);
   const detail = nothingDispatchable
     ? `${runtime.label} serves none of them (${listed}${more}), so every run dispatched onto this provider fails before producing output.`
     : `${runtime.label} does not serve ${listed}${more}, so a task or stage pinned to one of those fails at spawn.`;
@@ -429,7 +444,7 @@ function catalogCheck(runtime, offered, served, probeError = null, { weights = '
     label,
     ok: false,
     detail,
-    fixHint: `Refresh this provider's models so it only offers ids the server serves${managePage(runtime) ? `, or pull the missing ones from ${managePage(runtime)}.` : `. ${runtime.modelsHint}`}`,
+    fixHint: `Refresh this provider's models so it only offers ids the server serves${page ? `, or pull the missing ones from ${page}.` : `. ${expandPageToken(runtime.modelsHint, runtime)}`}`,
     unservedModels: unserved,
   };
 }
@@ -507,7 +522,7 @@ export async function getProviderReadiness(provider, deps = {}) {
     // available, but an installed model-selecting runtime is not missing setup
     // merely because no model was chosen to occupy resources right now.
     standby,
-    standbyDetail: standby ? runtime.standbyDetail : null,
+    standbyDetail: standby ? expandPageToken(runtime.standbyDetail, runtime) : null,
     checks,
     // What a one-click "set this up for me" button can do about the unmet
     // checks, or `null` when nothing here is auto-fixable (see

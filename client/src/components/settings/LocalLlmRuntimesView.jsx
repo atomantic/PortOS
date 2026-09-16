@@ -26,9 +26,6 @@ import { LOCAL_LLM_BACKENDS as BACKENDS, localLlmBackendLabel as labelFor } from
 // is already on disk, and how to fetch it. A client-side copy would inevitably
 // list a path the Download button had no source for.
 const DEFAULT_SPEC_PRESET_ID = 'qwen3.8-27b-dspark';
-// Exported so a test can assert the panel's `aria-labelledby` resolves to a real
-// element rather than re-typing the literal on both sides of the assertion.
-export const RUNTIMES_HEADING_ID = 'llm-runtimes-heading';
 const downloadKey = (presetId, role) => `${presetId}:${role}`;
 // Each entry carries its own `role`, so the rows come straight off the preset
 // rather than from a second copy of the role list.
@@ -67,8 +64,8 @@ function summarizeMigrate(r) {
 }
 
 // Install, start, stop and configure the local servers that run language models.
-// Mounted only while the Runtimes pill is selected, so every socket subscription
-// and poll below belongs to a visible surface.
+// Its own Models tab since #7414 (`/models/llms-runtimes`), so every socket
+// subscription and poll below belongs to a page the user is actually looking at.
 export default function LocalLlmRuntimesView() {
   const [llamaStatus, setLlamaStatus] = useState(null);
   const [mtplxStatus, setMtplxStatus] = useState(null);
@@ -649,14 +646,14 @@ export default function LocalLlmRuntimesView() {
   };
 
   return (
-    <section id="llm-runtimes-panel" role="tabpanel" aria-labelledby={RUNTIMES_HEADING_ID} className="space-y-4">
+    <section id="llm-runtimes-panel" role="tabpanel" aria-labelledby="llm-runtimes-heading" className="space-y-4">
       {/* The panel names itself. It used to borrow `tab-runtimes` from the LLMs
           pill bar, but #7414 made Runtimes a section tab, and `RouteTabsHeader`
           passes no `controlsIdPrefix` — so that id stopped existing and the
           labelledby dangled, leaving the panel unnamed. A heading of its own
           survives whatever tab bar happens to be above it. Visually hidden
           because the section header already shows "Models → Runtimes". */}
-      <h2 id={RUNTIMES_HEADING_ID} className="sr-only">Runtimes</h2>
+      <h2 id="llm-runtimes-heading" className="sr-only">Runtimes</h2>
       {/* One start/stop/install surface for every local server PortOS can run */}
       <RuntimeServersCard
         status={status}

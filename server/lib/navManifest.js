@@ -427,18 +427,32 @@ const pathContainsNavRoute = (pathname, routePath) => (
   pathname === routePath || pathname.startsWith(`${routePath}/`)
 );
 
-// Find the section whose tab owns a routed page. Longest-match keeps nested
-// views (for example `/models/llms/abuse`) on their parent tab, and intentionally
-// ignores workflow commands such as `/ai/fleet` that do not carry a `tabId`.
-export const getNavSectionForPath = (pathname) => {
+// Every command with its path pre-normalized, longest path first — so a route
+// lookup is one `.find()` down a fixed list instead of a normalize-filter-sort
+// of the whole manifest per call. `NAV_COMMANDS` is frozen at module load and
+// never mutated, so this cannot go stale.
+//
+// Longest-first IS the match rule: it keeps a drill-down (`/models/llms/abuse`)
+// on itself rather than on the parent whose prefix it also shares.
+const NAV_COMMANDS_BY_SPECIFICITY = NAV_COMMANDS
+  .map((command) => ({ command, routePath: normalizedNavPath(command.path) }))
+  .sort((a, b) => b.routePath.length - a.routePath.length);
+
+// The most specific command that OWNS a routed path, or `undefined`. `predicate`
+// narrows the candidate set; both exports below are this walk plus a projection,
+// so the ranking rule lives in exactly one place.
+const navCommandForPath = (pathname, predicate) => {
   const normalizedPath = normalizedNavPath(pathname);
-  return NAV_COMMANDS
-    .filter((command) => command.tabId && !command.tabGroup && pathContainsNavRoute(
-      normalizedPath,
-      normalizedNavPath(command.path),
-    ))
-    .sort((a, b) => normalizedNavPath(b.path).length - normalizedNavPath(a.path).length)[0]?.section || null;
+  return NAV_COMMANDS_BY_SPECIFICITY
+    .find(({ command, routePath }) => predicate(command) && pathContainsNavRoute(normalizedPath, routePath))
+    ?.command;
 };
+
+// Find the section whose tab owns a routed page, intentionally ignoring workflow
+// commands such as `/ai/fleet` that do not carry a `tabId`.
+export const getNavSectionForPath = (pathname) => (
+  navCommandForPath(pathname, (command) => command.tabId && !command.tabGroup)?.section || null
+);
 
 // The page a route belongs to, as a user reads it in the UI: `label` is the tab
 // name ("Runtimes"), `breadcrumb` is how the sidebar path to it is spoken and
@@ -451,15 +465,12 @@ export const getNavSectionForPath = (pathname) => {
 // that links to `manageUrl` now NAMES whatever page that route resolves to, so
 // the next move re-words all of them.
 //
-// Longest-match, so a drill-down (`/models/llms/abuse`) reports its own page
-// rather than its parent's. Returns `null` for a path no command declares —
-// callers fall back to route-free wording rather than inventing a page name.
+// Unlike the section lookup this considers drill-downs too, so a nested view
+// reports its own page. Returns `null` for a blank path or one no command
+// declares — callers drop the clause rather than inventing a page name.
 export const getNavPageForPath = (pathname) => {
-  const normalizedPath = normalizedNavPath(pathname);
-  if (normalizedPath === '/') return null;
-  const command = NAV_COMMANDS
-    .filter((c) => pathContainsNavRoute(normalizedPath, normalizedNavPath(c.path)))
-    .sort((a, b) => normalizedNavPath(b.path).length - normalizedNavPath(a.path).length)[0];
+  if (normalizedNavPath(pathname) === '/') return null;
+  const command = navCommandForPath(pathname, () => true);
   if (!command) return null;
   return { label: command.label, section: command.section, breadcrumb: `${command.section} → ${command.label}` };
 };

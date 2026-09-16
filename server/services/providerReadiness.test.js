@@ -87,6 +87,10 @@ describe('getProviderReadiness', () => {
     expect(stopped.ready).toBe(false);
     expect(stopped.standby).toBe(true);
     expect(stopped.standbyDetail).toMatch(/valid idle state/);
+    // The runtime row writes "{page}"; the page name is resolved from its own
+    // manageUrl here, so a page move re-words this without touching the row.
+    expect(stopped.standbyDetail).toMatch(/Models → Runtimes/);
+    expect(stopped.standbyDetail).not.toMatch(/\{page\}/);
 
     const missingWeights = await getProviderReadiness(llamaProvider(), {
       findCommand: () => '/opt/homebrew/bin/llama-server',
@@ -161,6 +165,19 @@ describe('getProviderReadiness', () => {
     expect(model.renameTo).toBeNull();
     expect(model.detail).not.toMatch(/serves one model per process/);
     expect(model.fixHint).toMatch(/only accepts/);
+  });
+
+  // The whole point of deriving the page: two runtimes managed on two different
+  // pages must not be handed the same breadcrumb. llama.cpp resolves to
+  // Runtimes above; Ollama's catalog stayed on LLMs.
+  it('names a different page for a runtime whose catalog did not move', async () => {
+    const readiness = await getProviderReadiness(
+      { id: 'ollama', type: 'api', endpoint: 'http://127.0.0.1:11434/v1', defaultModel: 'qwen3:8b' },
+      { findCommand: () => '/opt/homebrew/bin/ollama', probe: reachable([]) },
+    );
+    const model = checkById(readiness, 'model');
+    expect(model.fixHint).toMatch(/Models → LLMs/);
+    expect(model.fixHint).not.toMatch(/Models → Runtimes/);
   });
 
   it('calls out a running server with nothing loaded', async () => {
