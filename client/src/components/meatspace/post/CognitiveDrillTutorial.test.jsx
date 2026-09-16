@@ -1,18 +1,21 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, fireEvent, within } from '@testing-library/react';
+import { act, render, screen, fireEvent, within } from '@testing-library/react';
 import {
   getDrillTutorial,
   hasDrillTutorial,
   hasSeenDrillTutorial,
   buildNBackExample,
+  demoFrameDelay,
+  nBackDemoCaption,
   CognitiveDrillTutorialPreview,
   CONFIG_DEPENDENT_TUTORIAL_TYPES,
 } from './CognitiveDrillTutorial';
 import { COGNITIVE_DRILL_TYPES } from './constants';
 
-// The static how-to material, exercised with NO drill runner mounted — that is
-// the point of the split: this module is help text, so nothing here needs a
-// timer, a fake clock or a scoring path to assert.
+// The how-to material, exercised with NO drill runner mounted — that is the
+// point of the split: this module is help text, so nothing here needs a scoring
+// path or a stimulus generator to assert. The one clock in play belongs to the
+// n-back demo loop, which animates an explanation and records nothing.
 //
 // The tutorial assertions that DO mount a runner stay in
 // PostCognitiveDrillRunner.test.jsx ('first-run tutorial gate' and 'n-back
@@ -178,5 +181,187 @@ describe('CognitiveDrillTutorialPreview', () => {
     );
     expect(screen.queryByText(/then type them in reverse/i)).not.toBeInTheDocument();
     expect(screen.getByText(/then type them back in order/i)).toBeInTheDocument();
+  });
+});
+
+// The animated worked example (the n-back demo). The rule a first-timer misreads
+// is a TIMING rule — "press Match when this letter repeats the one N back" — and
+// the stream is transient, so the two letters being compared are never on screen
+// together during a real run. These assert the demo actually teaches that: the
+// letters arrive one at a time, the N-back marker slides with them, and the
+// simulated press fires on the hit frame and on no other frame.
+describe('n-back demo', () => {
+  const originalMatchMedia = window.matchMedia;
+  let mediaQuery;
+
+  const renderDemo = (n) => {
+    const { sequence } = buildNBackExample(n);
+    const result = render(
+      <CognitiveDrillTutorialPreview type="n-back" drillConfig={{ n, progressive: false }} onClose={vi.fn()} />,
+    );
+    return { ...result, sequence, last: sequence.length - 1 };
+  };
+  const stage = () => screen.getByTestId('nback-demo-stage').textContent;
+  const press = () => screen.getByTestId('nback-demo-press').textContent;
+  // Advance by exactly what the component says the CURRENT frame lasts, so
+  // retuning its pacing can never leave these green against a dead timeline.
+  // One advance per frame: the demo arms the next timeout from the effect that
+  // runs after React commits the current one, so a single large advance would
+  // only ever move it on by one letter.
+  const advanceFrom = (step, last) => act(() => { vi.advanceTimersByTime(demoFrameDelay(step, last)); });
+  const playToHit = (last) => { for (let step = -1; step < last; step += 1) advanceFrom(step, last); };
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    mediaQuery = { matches: false, addEventListener: vi.fn(), removeEventListener: vi.fn() };
+    window.matchMedia = vi.fn(() => mediaQuery);
+  });
+
+  afterEach(() => {
+    window.matchMedia = originalMatchMedia;
+    vi.useRealTimers();
+  });
+
+  it('plays the stream one letter at a time and fires the press only on the hit', () => {
+    const { sequence, last } = renderDemo(2);
+
+    expect(stage()).toMatch(/get ready/i);
+    expect(press()).toBe('Match');
+
+    // Every non-match frame shows its letter with the press button still dark —
+    // "do nothing" is the answer on all of them.
+    advanceFrom(-1, last);
+    for (let i = 0; i < last; i += 1) {
+      expect(stage()).toBe(sequence[i]);
+      expect(press()).toBe('Match');
+      advanceFrom(i, last);
+    }
+
+    // Final letter: the repeat. This is the one frame the press belongs on.
+    expect(stage()).toBe(sequence[last]);
+    expect(press()).toBe('Match — pressed!');
+    expect(screen.getByText(/press Match now/i)).toBeInTheDocument();
+  });
+
+  it('loops back to the pre-roll so a reader who looked away still catches it', () => {
+    const { last } = renderDemo(2);
+    playToHit(last);
+    expect(press()).toBe('Match — pressed!');
+    advanceFrom(last, last);
+    expect(stage()).toMatch(/get ready/i);
+    expect(press()).toBe('Match');
+  });
+
+  it('parks on the hit frame after a few passes instead of animating forever', () => {
+    // An open help card would otherwise re-render this subtree for as long as it
+    // is mounted. Replay is the way back.
+    const { sequence, last } = renderDemo(2);
+    for (let pass = 0; pass < 3; pass += 1) {
+      playToHit(last);
+      advanceFrom(last, last);
+    }
+    expect(stage()).toBe(sequence[last]);
+    expect(vi.getTimerCount()).toBe(0);
+
+    fireEvent.click(screen.getByRole('button', { name: /replay example/i }));
+    expect(stage()).toMatch(/get ready/i);
+    advanceFrom(-1, last);
+    expect(stage()).toBe(sequence[0]);
+  });
+
+  it('stops scheduling frames while the tab is hidden', () => {
+    // PortOS is routinely left open on a second tailnet machine; an unseen
+    // animation must not keep re-rendering there.
+    const { sequence, last } = renderDemo(2);
+    advanceFrom(-1, last);
+    expect(stage()).toBe(sequence[0]);
+
+    Object.defineProperty(document, 'visibilityState', { value: 'hidden', configurable: true });
+    act(() => { document.dispatchEvent(new Event('visibilitychange')); });
+    expect(vi.getTimerCount()).toBe(0);
+
+    Object.defineProperty(document, 'visibilityState', { value: 'visible', configurable: true });
+    act(() => { document.dispatchEvent(new Event('visibilitychange')); });
+    advanceFrom(0, last);
+    expect(stage()).toBe(sequence[1]);
+  });
+
+  it('marks exactly one chip as the N-back comparison on every frame', () => {
+    // The sliding window IS the lesson, so a frame with two markers (or none)
+    // would point the reader at the wrong pair of letters.
+    const { last } = renderDemo(3);
+    for (let step = -1; step <= last; step += 1) {
+      const strip = within(screen.getByRole('list', { name: /example letter stream/i }));
+      expect(strip.getAllByText('3 steps back')).toHaveLength(1);
+      advanceFrom(step, last);
+    }
+  });
+
+  it('holds the frame while paused and resumes from it', () => {
+    const { sequence, last } = renderDemo(2);
+    advanceFrom(-1, last);
+    advanceFrom(0, last);
+    expect(stage()).toBe(sequence[1]);
+
+    fireEvent.click(screen.getByRole('button', { name: /pause example/i }));
+    for (let i = 0; i < 10; i += 1) advanceFrom(1, last);
+    expect(stage()).toBe(sequence[1]);
+    expect(vi.getTimerCount()).toBe(0);
+
+    fireEvent.click(screen.getByRole('button', { name: /play example/i }));
+    advanceFrom(1, last);
+    expect(stage()).toBe(sequence[2]);
+  });
+
+  it('stops scheduling frames once unmounted', () => {
+    const { last, unmount } = renderDemo(2);
+    advanceFrom(-1, last);
+    unmount();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('shows the finished example, and no clock at all, under prefers-reduced-motion', () => {
+    mediaQuery.matches = true;
+    const { sequence, last } = renderDemo(2);
+    // The last frame is the one that explains the rule, so stillness costs the
+    // reader nothing — and there is no play control to imply motion is coming.
+    expect(stage()).toBe(sequence[last]);
+    expect(press()).toBe('Match — pressed!');
+    expect(vi.getTimerCount()).toBe(0);
+    expect(screen.queryByRole('button', { name: /pause example|play example|replay example/i })).not.toBeInTheDocument();
+  });
+});
+
+// The frame schedule, pinned as a shape rather than as three magic numbers: the
+// pre-roll and the hit both have to differ from an ordinary letter, and the hit
+// has to be the longest or the press is gone before it registers.
+describe('demoFrameDelay', () => {
+  it('gives the pre-roll and the hit their own, longer dwell', () => {
+    const last = 4;
+    const ordinary = demoFrameDelay(1, last);
+    expect(demoFrameDelay(-1, last)).not.toBe(ordinary);
+    expect(demoFrameDelay(last, last)).toBeGreaterThan(ordinary);
+    expect(demoFrameDelay(last, last)).toBeGreaterThan(demoFrameDelay(-1, last));
+  });
+});
+
+// The caption is the demo's running commentary. Asserting it directly keeps the
+// two cases the rendered test can't reach — the warm-up letters and a non-match
+// — pinned without driving the clock for each one.
+describe('nBackDemoCaption', () => {
+  // A 2-back stream whose last letter repeats the one two back: index 3 is the
+  // hit, index 2 the non-match, indexes 0-1 the warm-up.
+  const sequence = ['K', 'R', 'T', 'R'];
+
+  it('says there is nothing to answer yet during the warm-up letters', () => {
+    expect(nBackDemoCaption({ sequence, n: 2, step: 0 })).toMatch(/nothing is 2 back yet/i);
+    expect(nBackDemoCaption({ sequence, n: 2, step: 1 })).toMatch(/nothing is 2 back yet/i);
+  });
+
+  it('names both compared letters on a non-match and tells the reader to do nothing', () => {
+    const caption = nBackDemoCaption({ sequence, n: 2, step: 2 });
+    expect(caption).toContain('T');
+    expect(caption).toContain('K');
+    expect(caption).toMatch(/do nothing/i);
   });
 });
