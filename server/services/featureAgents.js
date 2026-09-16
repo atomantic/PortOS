@@ -14,7 +14,7 @@ import { cosEvents } from './cosEvents.js';
 import { ensureDir, PATHS, readJSONFile, atomicWrite, rmGuarded } from '../lib/fileUtils.js';
 import { createMutex } from '../lib/asyncMutex.js';
 import { isPlainObject } from '../lib/objects.js';
-import { isAgentHandoff } from '../lib/agentOutcome.js';
+import { isQueuedContinuation } from '../lib/agentOutcome.js';
 import { getAppById } from './apps.js';
 const DATA_DIR = PATHS.cos;
 const FA_FILE = join(DATA_DIR, 'feature-agents.json');
@@ -622,16 +622,17 @@ cosEvents.on('agent:completed', async (agentData) => {
   // without this hand-back the pointer stays on a dead agent and the
   // continuation's output never reaches the feature-agent view.
   //
-  // Gated on `resumedTaskId`, which is what proves a continuation was actually
-  // QUEUED. `resumed: true` alone does not: `retireStrandedPausedAgents` stamps
-  // it on a pause whose task is gone or has moved on, with no `resumedTaskId` and
-  // nothing requeued. Handing back there — to `agentData.taskId`, a task that no
-  // longer exists — parks a pointer no `agent:spawned` can ever clear, and both
-  // `triggerFeatureAgent` and `getDueFeatureAgents` refuse to run a feature agent
-  // that holds one. The agent would never run again, by schedule or by hand,
-  // recoverable only by Stop and re-activate. Those retirements fall through to
+  // Gated on `isQueuedContinuation`, which is what proves a continuation was
+  // actually QUEUED. The bare `isAgentHandoff` (`resumed: true`) alone does not:
+  // `retireStrandedPausedAgents` stamps it on a pause whose task is gone or has
+  // moved on, with no `resumedTaskId` and nothing requeued. Handing back there
+  // — to `agentData.taskId`, a task that no longer exists — parks a pointer no
+  // `agent:spawned` can ever clear, and both `triggerFeatureAgent` and
+  // `getDueFeatureAgents` refuse to run a feature agent that holds one. The
+  // agent would never run again, by schedule or by hand, recoverable only by
+  // Stop and re-activate. Those retirements fall through to
   // `recordRunCompletion` below, which clears the pointer as it always did.
-  const continuationTaskId = isAgentHandoff(agentData) ? agentData.result?.resumedTaskId : null;
+  const continuationTaskId = isQueuedContinuation(agentData) ? agentData.result.resumedTaskId : null;
   if (continuationTaskId) {
     // Compare-and-set against the retired agent's id, because this races the
     // spawn of the very continuation it points at: `requeuePausedTask` runs

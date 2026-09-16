@@ -179,6 +179,26 @@ describe('manual maintenance run', () => {
     expect(state.invoked).toHaveLength(1);
   });
 
+  it('re-evaluates the run immediately when a stranded pause is retired with no continuation queued (#7469)', async () => {
+    // `retireStrandedPausedAgents` (server/services/agentManagement.js) also
+    // stamps `resumed: true` — on a pause whose task is gone or moved on — but
+    // with NO `resumedTaskId`, because nothing was requeued. Reading that as a
+    // handoff the same way a relaunch is read made this listener return `null`
+    // and wait forever for a continuation that will never complete; the run
+    // advanced only once the `retryMaintenanceRuns` backstop eventually swept
+    // it. The step's underlying task is gone (not merely blocked), so a correct
+    // fix re-evaluates now and re-dispatches the step immediately.
+    const { run } = await start();
+    const stranded = {
+      ...agentFor(run, 0, false),
+      result: { success: false, resumed: true, error: 'Pause retired — its task task-0 no longer exists' },
+    };
+
+    await __onMaintenanceAgentCompleted(stranded);
+
+    expect(state.invoked).toHaveLength(2);
+  });
+
   it('stops without recalling work, resumes from its ledger, and refuses a second run for the same app', async () => {
     const { run } = await start();
     await expect(start()).rejects.toMatchObject({ status: 409, code: 'MAINTENANCE_RUN_ACTIVE' });
