@@ -41,14 +41,17 @@ function wordplayScore(score, feedback, response = {}) {
   };
 }
 
-// Vitest's default per-test timeout is also 5s, so a `waitFor` bounded at
+// Vitest's default per-test timeout was also 5s, so a `waitFor` bounded at
 // GENERATED_DRILL_TIMEOUT was allowed to consume the entire test budget: the
 // inner bound could never actually report its own failure, and a test with work
 // left after that wait had nothing left to spend on it. The premature-submit
 // test has eight awaited transitions after its drill wait and died on CI at
 // 5011ms with a bare "Test timed out" pointing at the `it(` line rather than the
 // step that stalled. Derive the per-test budget from the inner bound so the two
-// can't drift back into equality.
+// can't drift back into equality. The suite-wide budget in src/test/timeouts.js
+// now clears 5s by the same 3x rule, so this happens to agree with it today —
+// it is kept because this file's bound is its OWN constant, and pinning it here
+// is what keeps the two independent of each other.
 vi.setConfig({ testTimeout: GENERATED_DRILL_TIMEOUT * 3 });
 
 // The selected mode now lives in the URL (`/post/wordplay/:mode`) — PostTab

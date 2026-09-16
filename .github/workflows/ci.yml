@@ -365,13 +365,17 @@ jobs:
       # No rebuild half, unlike the server: client/.npmrc pins
       # ignore-scripts=true AND `scripts/trusted-rebuilds.js` deliberately lists
       # nothing for this workspace, so a restored tree is usable as-is and the
-      # install can be skipped outright on a hit.
+      # install can be skipped outright on a hit. That premise is HASHED, not
+      # assumed: `trusted-rebuilds.js` is in the key, so the day a client
+      # dependency does need a rebuild the key moves and no job can keep
+      # restoring a never-rebuilt tree on an exact hit — which neither job here
+      # has a stamp check to notice.
       - name: Cache client node_modules
         id: client-modules
         uses: actions/cache@v6
         with:
           path: client/node_modules
-          key: client-modules-${{ runner.os }}-${{ runner.arch }}-node24-${{ hashFiles('client/package-lock.json', 'client/package.json', 'client/.npmrc') }}
+          key: client-modules-${{ runner.os }}-${{ runner.arch }}-node24-${{ hashFiles('client/package-lock.json', 'client/package.json', 'client/.npmrc', 'scripts/trusted-rebuilds.js') }}
 
       - name: Install client dependencies
         if: steps.client-modules.outputs.cache-hit != 'true'
@@ -462,13 +466,17 @@ jobs:
       # No rebuild half, unlike the server: client/.npmrc pins
       # ignore-scripts=true AND `scripts/trusted-rebuilds.js` deliberately lists
       # nothing for this workspace, so a restored tree is usable as-is and the
-      # install can be skipped outright on a hit.
+      # install can be skipped outright on a hit. That premise is HASHED, not
+      # assumed: `trusted-rebuilds.js` is in the key, so the day a client
+      # dependency does need a rebuild the key moves and no job can keep
+      # restoring a never-rebuilt tree on an exact hit — which neither job here
+      # has a stamp check to notice.
       - name: Cache client node_modules
         id: client-modules
         uses: actions/cache@v6
         with:
           path: client/node_modules
-          key: client-modules-${{ runner.os }}-${{ runner.arch }}-node24-${{ hashFiles('client/package-lock.json', 'client/package.json', 'client/.npmrc') }}
+          key: client-modules-${{ runner.os }}-${{ runner.arch }}-node24-${{ hashFiles('client/package-lock.json', 'client/package.json', 'client/.npmrc', 'scripts/trusted-rebuilds.js') }}
 
       - name: Install client dependencies
         if: steps.client-modules.outputs.cache-hit != 'true'

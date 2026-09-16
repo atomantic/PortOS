@@ -240,10 +240,13 @@ budget enclosing it can never report its own failure: the test dies first with a
 bare "test timed out" naming nothing it was waiting on. That has shipped twice —
 `WordplayTrainer`'s 5 s drill bound against Vitest's 5 s default, and a
 `{ timeout: 15000 }` in `BeeperTab.test.jsx` that could never wait past 5 s and
-so never helped. `client/src/test/timeouts.test.js` fails CI on any inline
-`{ timeout: N }` at or above the per-test budget, and asserts the EFFECTIVE
-runtime values rather than the constants, so a `configure()` that stopped being
-applied is caught too.
+so never helped. `client/src/test/timeouts.test.js` fails CI on an inline
+`waitFor`/`findBy*` bound at or above the per-test budget — recognised by the
+option object's keys, so `{ timeout, interval }` counts and a fixture record
+that merely holds a `timeout` field does not. It asserts the EFFECTIVE runtime
+values rather than the module constants, so a `configure()` that stopped being
+applied is caught too. A file that raises its own budget with
+`vi.setConfig({ testTimeout })` is exempt.
 
 5000 ms because Testing Library's 1000 ms default, and the 3000 ms this suite
 ran at before #7448, both sat under what a 2-vCPU public runner needs: shard 1
