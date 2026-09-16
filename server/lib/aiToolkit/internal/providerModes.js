@@ -88,9 +88,9 @@ export function sharedModeUpdates(updates, sibling) {
  * once (an endpoint AND its API key) disagrees on two. Only this fill uses the
  * loose grouping; the enablement/model convergence below keeps the strict one.
  *
- * Only a pair that is INCOMPLETE is repaired: ONE mode holds the connection and
- * the other holds nothing of it. Two conditions enforce that, and either one
- * failing disqualifies the whole group rather than just the offending key.
+ * Only a pair that is INCOMPLETE is repaired, under two conditions that
+ * together mean the result is one mode's connection rather than a blend of two.
+ * Either failing disqualifies the whole group, not just the offending key.
  *
  * It must not CONTRADICT — a key two modes both name with different values is a
  * deliberate configuration (two connections that happen to share a command),
@@ -101,8 +101,10 @@ export function sharedModeUpdates(updates, sibling) {
  * halves of a connection contradict nowhere, so the check above waves them
  * through — yet merging them mints a hybrid neither record described: a CLI
  * mode holding only an API key beside a TUI mode holding only an endpoint would
- * hand that credential to a backend it was never entered for. One donor is what
- * "the editor wrote one mode and the sibling never got it" actually looks like.
+ * hand that credential to a backend it was never entered for. With one donor,
+ * every key the recipient does name already equals the donor's, so the repaired
+ * pair is exactly the donor's connection — which is what "the editor wrote one
+ * mode and the sibling never got it" actually looks like.
  */
 function fillModeSiblingIdentity(providers) {
   const byId = new Map(providers.map(provider => [provider.id, provider]));
