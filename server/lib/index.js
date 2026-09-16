@@ -555,6 +555,7 @@ export * from './concurrencyGate.js';
 export * from './dispatchLabels.js';
 export * from './domainAutonomy.js';
 export * from './domainBudgets.js';
+export * from './eidoverseCreativeToolkit.js';
 export * from './eidoverseFoundations.js';
 export * from './federationSafety.js';
 export * from './secretKeys.js';

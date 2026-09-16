@@ -607,6 +607,18 @@ Incoming chat makes no AI call and is never an instruction or permission grant.
 The [guest-conversation ADR](../decisions/2026-09-05-eidoverse-guest-chat.md)
 documents this narrowly scoped exception to the machine-local record policy.
 
+**Vernacular labeling on a visit (#7459).** A guest visit reaches only what the
+destination install chose to build in its own private world — its local
+vernacular style and buildings — never the shared PortOS baseline population,
+which has no visit surface of its own. Both entry points say so explicitly
+rather than leaving a visitor to infer it: `eidoverse.visit`'s response
+`guidance` tells a visiting Mind in the same turn it receives a `visitId`, and
+the human guest shell (`client/src/pages/EidoverseGuest.jsx`) carries the same
+line in its header. This is a labeling change only — nothing about what
+crosses the federation layer changes: the vernacular/baseline ownership model
+(below) already keeps a foundation's `style` and its whole local ledger out of
+every peer exchange, and a guest visit was never a foundation-ledger read.
+
 ### Object controls
 
 The Commons island extends into an irregular grassy shoreline, a sandy beach,
@@ -779,6 +791,42 @@ Both tools return summaries (`summarizeFoundation`) rather than whole records:
 the local style layer and the packaged envelope have no business riding into a
 prompt.
 
+A mind can also author, not just list and promote. `eidoverse.record` wraps the
+same `recordEidoverseFoundation()` the HTTP route above uses, gated on
+`manageEidoverse` alone (no promote grant needed — authoring stays local by
+construction) and mind-scope only. `authorKind` is stamped `'mind'` server-side
+regardless of what the call arguments claim, the same reason `layer` is never
+caller-supplied. `eidoverse.contributions` (`manageEidoverse`, read) lists the
+`contributionId` values a new foundation may bind to before it is promotable.
+
 What is still to come is the receiving side — peer pull/inherit — and the
 envelope's own `candidateVersion` is what that will gate on. Until it lands,
 `baseline` means "this install offers this foundation"; nothing pulls it yet.
+
+### Creative toolkit for minds (#7459)
+
+Authoring a foundation from a blank `body`/`style` is a lot to invent from
+scratch every time. `server/lib/eidoverseCreativeToolkit.js` is a small,
+documented, closed vocabulary a mind reaches for instead: named **materials**
+and **motifs** (cosmetics — install-local `style`, the same class of value
+`styleLeakFindings` refuses inside a `body`) and named **generative placement
+layouts** (`radial-ring`, `grid-plot`, `arc-row`, `grove-cluster` — structure,
+safe as `body`). `eidoverse.creative-catalog` (`manageEidoverse`, read) lists
+all three; nothing here calls an AI provider — every layout is deterministic
+and seeded (`generateDistrictTemplatePlacement`), so the same
+`{layoutId, anchor, seed}` reproduces the same geometry on replay or on a peer
+that later inherits the promoted foundation.
+
+Two ways to use a chosen layout:
+
+- `buildDistrictTemplateAugmentOperations()` turns a placement into
+  ready-to-submit `eidoverse.augment` `spawn` operations for the *live* scene
+  (asset-path validity is still checked where `eidoverse.augment` lands them).
+- `buildDistrictTemplateFoundationDraft()` composes a placement plus a
+  material/motif choice into an `eidoverseFoundationInputSchema`-shaped
+  `district-template` input — the generative substance (layout id, anchor,
+  seed, resulting positions) in `body`, the material/motif cosmetics in
+  `style` — ready to pass straight to `eidoverse.record`. It always lands on
+  the local `vernacular` layer, matching every other authored foundation;
+  publishing it to the shared baseline remains the separate, explicit
+  `eidoverse.promote` act above.

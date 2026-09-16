@@ -27,7 +27,8 @@ import {
   eidoverseWorldSaySchema,
   eidoverseChatReadSchema, eidoverseTravelVisitSchema, eidoverseVisitChatSchema, eidoverseVisitLeaveSchema,
 } from '../lib/validation.js';
-import { eidoverseFoundationIdParamSchema, summarizeFoundation } from '../lib/eidoverseFoundations.js';
+import { eidoverseFoundationIdParamSchema, eidoverseFoundationInputSchema, summarizeFoundation } from '../lib/eidoverseFoundations.js';
+import { describeCreativeCatalog } from '../lib/eidoverseCreativeToolkit.js';
 import { persistentMindChooseNameSchema } from '../lib/persistentMindChosenName.js';
 import { persistentMindProtectMemorySchema } from '../lib/persistentMindMemory.js';
 import { persistentMindThinkingRequestSchema } from '../lib/persistentMindThinkingPresets.js';
@@ -367,6 +368,8 @@ const eidoverseTravelTools = [
 // foundations exist and why one is refused can only guess at ids.
 const eidoverseFoundationTools = [
   ['foundations', 'List the world foundations this install authored — ownership layer (`vernacular` = local, `baseline` = promoted), the recorded agent-free assay outcome, and whether a gated promote candidate currently exists. Local style is never included.', z.object({}).strict(), ['manageEidoverse'], 'read'],
+  ['contributions', 'List the resilience-assay contributions registered on this install — the ids a foundation\'s `contributionId` may bind to before it is promotable.', z.object({}).strict(), ['manageEidoverse'], 'read'],
+  ['record', 'Record (or re-author) a local vernacular foundation — a durable, promotable creative build (a `schema`, `affordance`, `controller`, or `district-template`). It always lands on this install\'s local `vernacular` layer; the layer is not accepted from you and nothing crosses to a peer until eidoverse.promote is called separately. Use eidoverse.creative-catalog for material/motif/layout ids and eidoverse.contributions for a valid `contributionId` first. `style` (palette, motif, aliases) stays local forever; a cosmetic key found inside `body` refuses the write instead of being silently dropped.', eidoverseFoundationInputSchema, ['manageEidoverse'], 'write'],
   ['promote', 'Offer one local foundation to the shared PortOS baseline population. The server re-runs the agent-free resilience assay and every promote gate itself, so this is a REQUEST, not an assertion: the result is `outcome: "promoted"` only when it published. Any other outcome means nothing moved — read `reasons` and fix those before asking again, and never narrate a refused promote as done.', eidoverseFoundationIdParamSchema, ['manageEidoverse', 'promoteEidoverseFoundations'], 'write'],
 ].map(([operation, description, schema, requiredCapabilities, sideEffect]) => ({
   type: 'portos_tool', name: `eidoverse.${operation}`, version: COS_TOOL_SCHEMA_VERSION,
@@ -376,7 +379,32 @@ const eidoverseFoundationTools = [
     idempotent: sideEffect === 'read', async: false, confirmation: 'capability-grant' },
   adapter: { kind: 'eidoverse-foundations', operation },
 }));
-const eidoverseTools = [...eidoverseTravelTools, ...eidoverseFoundationTools, eidoverseStatusTool, eidoverseProjectTool, eidoverseAugmentTool, eidoverseSayTool];
+// The documented creative toolkit (#7459): named materials, motifs, and
+// generative placement layouts a mind reaches for instead of inventing
+// coordinates and colors from scratch. Purely a catalog read — deterministic,
+// seeded, no AI provider call (`lib/eidoverseCreativeToolkit.js`). Feed a
+// chosen layout into eidoverse.record (a district-template) or
+// into eidoverse.augment (live spawn operations).
+const eidoverseCreativeCatalogTool = Object.freeze({
+  type: 'portos_tool',
+  name: 'eidoverse.creative-catalog',
+  version: COS_TOOL_SCHEMA_VERSION,
+  providerName: providerToolName('eidoverse.creative-catalog'),
+  aliases: [providerToolName('eidoverse.creative-catalog')],
+  description: 'List the documented creative toolkit for Eidoverse vernacular building: named materials and motifs (cosmetics for a foundation\'s `style`) and named generative district-template placement layouts (structure for a foundation\'s `body`). Deterministic and seeded — no AI provider call.',
+  input_schema: zodToOpenApiSchema(z.object({}).strict()),
+  output_schema: objectOutputSchema,
+  policy: {
+    scopes: ['mind'],
+    requiredCapabilities: ['manageEidoverse'],
+    sideEffect: 'read',
+    idempotent: true,
+    async: false,
+    confirmation: 'capability-grant',
+  },
+  adapter: { kind: 'eidoverse-creative', operation: 'catalog' },
+});
+const eidoverseTools = [...eidoverseTravelTools, ...eidoverseFoundationTools, eidoverseCreativeCatalogTool, eidoverseStatusTool, eidoverseProjectTool, eidoverseAugmentTool, eidoverseSayTool];
 const thinkingTools = ['mind.thinking-presets', 'mind.request-thinking-preset'].map((name, index) => ({
   type: 'portos_tool', name, version: COS_TOOL_SCHEMA_VERSION,
   providerName: providerToolName(name), aliases: [],
@@ -665,10 +693,25 @@ const executeAdapter = async (tool, args, context, authority) => {
       const listed = await ledger.listEidoverseFoundations();
       return { counts: listed.counts, foundations: listed.foundations.map(summarizeFoundation) };
     }
+    if (tool.adapter.operation === 'contributions') {
+      const { listRegisteredContributionIds } = await import('./eidoverseResilienceContributions.js');
+      return { contributions: await listRegisteredContributionIds() };
+    }
+    if (tool.adapter.operation === 'record') {
+      const { ensureInstanceId } = await import('./instanceIdentity.js');
+      // `authorKind` is stamped 'mind' server-side rather than trusted from
+      // the call, the same reason `layer` is never caller-supplied: a mind's
+      // own authoring tool must not be able to claim a human's byline.
+      const record = await ledger.recordEidoverseFoundation({ ...args, authorKind: 'mind' }, { originInstanceId: await ensureInstanceId() });
+      return { foundation: summarizeFoundation(record) };
+    }
     const result = await ledger.promoteEidoverseFoundation(args.id);
     // Summarized for the same reason the list is, and because the candidate
     // envelope on a success is a duplicate of the body the mind already wrote.
     return { ...result, candidate: null, foundation: result.foundation ? summarizeFoundation(result.foundation) : null };
+  }
+  if (tool.adapter.kind === 'eidoverse-creative') {
+    return describeCreativeCatalog();
   }
   if (tool.adapter.kind === 'eidoverse-world') {
     const world = await import('./eidoverseWorld.js');
