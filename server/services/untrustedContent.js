@@ -6,6 +6,14 @@ import { evaluateSecretEndpoint } from '../lib/aiToolkit/endpointGuard.js';
 import { getAllProviders } from './providers.js';
 import { modelAbuseContentFingerprint } from '../lib/modelAbuseGuard.js';
 import { formatUntrustedContent, isUntrustedContentProvider, resolveUntrustedContentPolicy, UNTRUSTED_CONTENT_INSTRUCTIONS } from '../lib/untrustedContent.js';
+// Deep imports on purpose (#7473): both leaves are cheap (`ollamaContext.js`
+// is zero-dependency, `providerStatus.js` reaches only the `num_ctx` clamp it
+// already shares), unlike `services/stageRunner.js#effectiveContextWindow`,
+// which would drag this request-path module across the ~44-module prompt
+// budgeter closure that `server/lib/importScoping.test.js` has little
+// headroom for.
+import { withOllamaRuntimeContextWindow } from '../lib/ollamaContext.js';
+import { knownContextWindow } from '../lib/aiToolkit/providerStatus.js';
 
 const failure = (code, message) => ({ ok: false, safe: false, code, message });
 
@@ -48,8 +56,26 @@ export async function runUntrustedContentAnalysis({ provider, model, content, pr
   const taskPrompt = `${UNTRUSTED_CONTENT_INSTRUCTIONS}\n\nTRUSTED TASK:\n${prompt}`;
   const evidence = formatUntrustedContent(content);
   const local = isUntrustedContentProvider(selected, 'messages');
-  const contextWindow = Math.min(Number(selected.contextWindow) || Number(selected.numCtx) || 4096,
-    Number(selected.numCtx) || (local ? 4096 : Number(selected.contextWindow) || 4096));
+  // The runtime projection folds in the ambient `OLLAMA_CONTEXT_LENGTH`
+  // ceiling before the shared ladder resolves anything, so an Ollama daemon
+  // configured through the env var alone (numCtx unset) still budgets at
+  // what it actually serves rather than an unenforced catalog window (#7472).
+  // `knownContextWindow` then resolves through the one shared `num_ctx`
+  // clamp (`aiToolkit/internal/ollamaBacked.js#clampToRuntimeContextWindow`)
+  // instead of this guard's own Math.min pair, so it picks up the provider's
+  // own `/models` catalog window and only clamps on `numCtx` for an
+  // Ollama-backed provider — every other OpenAI-compatible local endpoint
+  // (LM Studio, vLLM, …) ignores `num_ctx` entirely and must not be shrunk
+  // by it.
+  const runtimeProvider = withOllamaRuntimeContextWindow(selected);
+  const claimedWindow = knownContextWindow(runtimeProvider, effectiveModel) ?? 4096;
+  // A local endpoint with no explicit `numCtx` keeps this guard's own harder
+  // floor rather than trusting a declared/catalog window an unconfigured
+  // local endpoint has no confirmed way to honor — this is a security guard
+  // that must stay conservative, not a budgeting nicety. Preserved verbatim
+  // from the pre-#7473 behavior; it only ever LOWERS the shared ladder's
+  // answer, so it never re-opens the catalog-window blind spot #7472 closed.
+  const contextWindow = local && !(Number(selected.numCtx) > 0) ? Math.min(claimedWindow, 4096) : claimedWindow;
   const maxTokens = Math.min(8192, config.maxOutputChars, Math.floor(contextWindow / 4));
   // UTF-8 bytes are a conservative upper bound for byte-fallback text tokens.
   // Never clip evidence to make an undersized context appear successful.

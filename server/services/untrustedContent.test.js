@@ -63,6 +63,24 @@ describe('shared external-content boundary', () => {
     }
     expect(mocks.fetch).not.toHaveBeenCalled();
   });
+  it('resolves the context window through the shared num_ctx clamp rather than a hand-rolled pair', async () => {
+    // A non-Ollama local endpoint (LM Studio/vLLM-style) with `numCtx` set
+    // must NOT be shrunk by it — that endpoint ignores `num_ctx` entirely,
+    // unlike an Ollama-backed one (#7473).
+    const lmStudio = { ...local, id: 'lm-studio', endpoint: 'http://127.0.0.1:1234/v1', contextWindow: 32_768, numCtx: 2048 };
+    const wideContent = 'a'.repeat(2000);
+    expect(await runUntrustedContentAnalysis({ ...args, provider: lmStudio, content: wideContent })).toMatchObject({ ok: true });
+    // The provider's own `/models` catalog window (`modelContextWindows`)
+    // outranks the hardcoded 4096 default the old expression always fell
+    // back to. A cloud (non-loopback) provider is only eligible for a
+    // non-private source, so this exercises the guard's other ingress path.
+    const catalogProvider = { ...cloud, id: 'catalog', modelContextWindows: { 'example-text': 50_000 } };
+    expect(await runUntrustedContentAnalysis({ ...args, source: 'github-issue', provider: catalogProvider, content: wideContent })).toMatchObject({ ok: true });
+    // A genuinely undersized window still refuses rather than clipping
+    // evidence to make it look like it fit.
+    const tinyCloud = { ...cloud, id: 'tiny-cloud', contextWindow: 500 };
+    expect(await runUntrustedContentAnalysis({ ...args, source: 'github-issue', provider: tinyCloud, content: 'x'.repeat(400) })).toMatchObject({ code: 'untrusted-content-context-too-small' });
+  });
   it('honors source policies and explicit caller pins without inheriting another provider model', async () => {
     mocks.read.mockResolvedValue({ corrupt: false, settings: { untrustedContent: { defaults: { providerId: 'local', model: 'local-only' }, sources: { 'github-issue': { providerId: 'cloud', classifierMode: 'optional' } } } } });
     expect(await runUntrustedContentAnalysis({ ...args, source: 'github-issue' })).toMatchObject({ ok: true, providerId: 'cloud' });
