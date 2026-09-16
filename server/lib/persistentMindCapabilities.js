@@ -14,12 +14,12 @@ import {
   portosSemanticToolGrantsSchema,
 } from './cosToolContracts.js';
 
-export const PERSISTENT_MIND_CAPABILITIES_SCHEMA_VERSION = 11;
+export const PERSISTENT_MIND_CAPABILITIES_SCHEMA_VERSION = 12;
 // Every wire version this server still accepts on input. Installs upgrade on
 // their own schedule, so a browser bundle (or a route caller) pinned at an
 // older version must keep being able to toggle the grants it already knows
 // about; normalization always writes the current version forward.
-const ACCEPTED_CAPABILITIES_SCHEMA_VERSIONS = Object.freeze([2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
+const ACCEPTED_CAPABILITIES_SCHEMA_VERSIONS = Object.freeze([2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]);
 
 export const PERSISTENT_MIND_TASK_MODEL_ALLOWLIST_LIMITS = Object.freeze({
   MAX_ENTRIES: 200,
@@ -161,6 +161,21 @@ export const PERSISTENT_MIND_TOOL_CATALOG = Object.freeze([
     ],
   }),
   Object.freeze({
+    id: 'eidoverse.controllers',
+    capability: 'installEidoverseControllers',
+    name: 'Install executable world controllers',
+    description: 'Attach a bounded, PortOS-supervised controller to the private Eidoverse world so it keeps ticking between this mind\'s wakes, and retire one it no longer wants running.',
+    kind: 'semantic-tools',
+    defaultEnabled: false,
+    guardrails: [
+      'Separate from manageEidoverse on purpose: building in the world never implies leaving something running in it unattended',
+      'A controller is named by id against the fixed registry PortOS ships — a mind can never turn a string into executed code',
+      'Every tick is synchronous and provider-free by construction, so a controller cannot reach an AI provider or the network',
+      'Effects stay in the ledger unless the install explicitly enables delivery, and then only through the bounded world verbs',
+      'A controller that fails repeatedly is disarmed by the supervisor with a recorded reason rather than retried forever',
+    ],
+  }),
+  Object.freeze({
     id: 'mind.adjust-local-context',
     capability: 'adjustLocalContext',
     name: 'Adjust local model context',
@@ -246,6 +261,7 @@ export const persistentMindCapabilitiesSchema = portosSemanticToolGrantsSchema.e
   manageMind: z.boolean().optional(),
   manageToolRecipes: z.boolean().optional(),
   promoteEidoverseFoundations: z.boolean().optional(),
+  installEidoverseControllers: z.boolean().optional(),
   callUser: z.boolean().optional(),
   chooseThinkingPreset: z.boolean().optional(),
   adjustLocalContext: z.boolean().optional(),
@@ -322,6 +338,7 @@ export function createDefaultPersistentMindCapabilities() {
     manageEidoverse: false,
     visitEidoversePeers: false,
     promoteEidoverseFoundations: false,
+    installEidoverseControllers: false,
     callUser: false,
     chooseThinkingPreset: false,
     adjustLocalContext: false,
@@ -382,6 +399,7 @@ export function normalizePersistentMindCapabilities(raw) {
     manageMind: source.manageMind === true,
     manageToolRecipes: source.manageToolRecipes === true,
     promoteEidoverseFoundations: source.promoteEidoverseFoundations === true,
+    installEidoverseControllers: source.installEidoverseControllers === true,
     callUser: source.callUser === true,
     chooseThinkingPreset: source.chooseThinkingPreset === true,
     adjustLocalContext: source.adjustLocalContext === true,

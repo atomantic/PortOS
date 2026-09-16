@@ -15,9 +15,14 @@
  * feature's clothes. `loadContributionModule()` still takes a path because the
  * CLI is a local developer tool being handed one on purpose.
  *
- * Today the directory holds the two reference fixtures shipped with #7460. When
- * executable world controllers land (#7456) their registry becomes a second
- * source here, and neither caller changes.
+ * There are TWO sources behind that resolver, and they are read the same way:
+ * the fixture directory shipped with #7460, and — since #7456 — the fixed
+ * registry of executable world controllers, each of which is replayable as a
+ * contribution with no extra authoring. Neither caller changed to gain the
+ * second source, which is what "a second source behind the same resolver" was
+ * supposed to mean. A `controller` foundation can therefore name its
+ * controller's id as its `contributionId` and be gated for promotion on
+ * evidence that the controller still runs with its author gone.
  */
 
 import { readdir } from 'node:fs/promises';
@@ -56,6 +61,28 @@ export async function loadContributionModule(modulePath) {
 }
 
 /**
+ * Every registered contribution, from both sources, in stable order —
+ * fixtures first, then the executable world controllers.
+ *
+ * Each entry carries a `label` for readable CLI output (a module path for a
+ * fixture, `controller:<id>` for a controller) rather than the caller being
+ * handed a path it might be tempted to pass back in. The controller registry
+ * is reached through a dynamic import so the STATIC graph stays one-way: the
+ * registry shapes its controllers as contributions, and nothing about that
+ * should put this resolver in its own closure.
+ */
+export async function listRegisteredContributions() {
+  const fixtures = [];
+  for (const modulePath of await listContributionModulePaths()) {
+    fixtures.push({ label: modulePath, contribution: await loadContributionModule(modulePath) });
+  }
+  const { controllerAssayContributions } = await import('./eidoverseControllerRegistry.js');
+  const controllers = (await controllerAssayContributions())
+    .map((contribution) => ({ label: `controller:${contribution.id}`, contribution }));
+  return [...fixtures, ...controllers];
+}
+
+/**
  * The registered contribution with this id, or `null` when none matches.
  *
  * Returning null rather than throwing is what lets the promote path report
@@ -63,8 +90,7 @@ export async function loadContributionModule(modulePath) {
  * others instead of as a 500.
  */
 export async function findContributionById(contributionId) {
-  for (const modulePath of await listContributionModulePaths()) {
-    const contribution = await loadContributionModule(modulePath);
+  for (const { contribution } of await listRegisteredContributions()) {
     if (contribution?.id === contributionId) return contribution;
   }
   return null;
@@ -81,10 +107,7 @@ export async function findContributionById(contributionId) {
  * a path and because a filesystem path is not something a UI or a prompt needs.
  */
 export async function listRegisteredContributionIds() {
-  const ids = [];
-  for (const modulePath of await listContributionModulePaths()) {
-    const contribution = await loadContributionModule(modulePath);
-    if (typeof contribution?.id === 'string' && contribution.id) ids.push(contribution.id);
-  }
-  return ids;
+  return (await listRegisteredContributions())
+    .map(({ contribution }) => contribution?.id)
+    .filter((id) => typeof id === 'string' && id.length > 0);
 }

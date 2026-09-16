@@ -58,7 +58,7 @@ describe('PersistentMindTools', () => {
     expect(screen.getByRole('button', { name: 'New recipe' })).toBeEnabled();
     await user.click(grant);
     await waitFor(() => expect(api.updateCosConfig).toHaveBeenCalledWith({
-      persistentMindCapabilities: expect.objectContaining({ schemaVersion: 11, manageToolRecipes: true, readPortos: false }),
+      persistentMindCapabilities: expect.objectContaining({ schemaVersion: 12, manageToolRecipes: true, readPortos: false }),
     }, { silent: true }));
     await user.click(screen.getByRole('checkbox', { name: 'Allow bounded PortOS reads' }));
     await waitFor(() => expect(api.updateCosConfig).toHaveBeenLastCalledWith({
@@ -83,7 +83,7 @@ describe('PersistentMindTools', () => {
     expect(toggle).not.toBeChecked();
     await userEvent.setup().click(toggle);
     await waitFor(() => expect(api.updateCosConfig).toHaveBeenCalledWith({
-      persistentMindCapabilities: expect.objectContaining({ schemaVersion: 11, visitEidoversePeers: true, manageEidoverse: false }),
+      persistentMindCapabilities: expect.objectContaining({ schemaVersion: 12, visitEidoversePeers: true, manageEidoverse: false }),
     }, { silent: true }));
   });
 
@@ -112,7 +112,7 @@ describe('PersistentMindTools', () => {
     await user.click(toggle);
 
     await waitFor(() => expect(api.updateCosConfig).toHaveBeenCalledWith(
-      { persistentMindCapabilities: { schemaVersion: 11, createTasks: true, fileIssues: false, manageMind: false, manageToolRecipes: false, manageEidoverse: false, visitEidoversePeers: false, promoteEidoverseFoundations: false, callUser: false, adjustLocalContext: false, readPortos: false, writePortos: false, taskModelAllowlist: [] } },
+      { persistentMindCapabilities: { schemaVersion: 12, createTasks: true, fileIssues: false, manageMind: false, manageToolRecipes: false, manageEidoverse: false, visitEidoversePeers: false, promoteEidoverseFoundations: false, installEidoverseControllers: false, callUser: false, adjustLocalContext: false, readPortos: false, writePortos: false, taskModelAllowlist: [] } },
       { silent: true },
     ));
     expect(await screen.findByText(/persistent-mind capabilities granted/)).toHaveTextContent('1 of 1');
@@ -132,7 +132,7 @@ describe('PersistentMindTools', () => {
 
     await waitFor(() => expect(api.updateCosConfig).toHaveBeenCalledWith(
       { persistentMindCapabilities: {
-        schemaVersion: 11,
+        schemaVersion: 12,
         createTasks: false,
         fileIssues: false,
         manageMind: true,
@@ -140,6 +140,7 @@ describe('PersistentMindTools', () => {
         manageEidoverse: false,
         visitEidoversePeers: false,
         promoteEidoverseFoundations: false,
+        installEidoverseControllers: false,
         callUser: false,
         adjustLocalContext: false,
         readPortos: false,
@@ -170,7 +171,7 @@ describe('PersistentMindTools', () => {
 
     await waitFor(() => expect(api.updateCosConfig).toHaveBeenCalledWith(
       { persistentMindCapabilities: {
-        schemaVersion: 11,
+        schemaVersion: 12,
         createTasks: true,
         fileIssues: false,
         manageMind: false,
@@ -178,6 +179,7 @@ describe('PersistentMindTools', () => {
         manageEidoverse: false,
         visitEidoversePeers: false,
         promoteEidoverseFoundations: false,
+        installEidoverseControllers: false,
         callUser: false,
         adjustLocalContext: false,
         readPortos: false,
@@ -224,7 +226,7 @@ describe('PersistentMindTools', () => {
     api.getPersistentMindTools
       .mockResolvedValueOnce(response())
       .mockResolvedValueOnce(response({
-        capabilities: { schemaVersion: 11, createTasks: false, fileIssues: true },
+        capabilities: { schemaVersion: 12, createTasks: false, fileIssues: true },
         // The roster carries the PLAN.md app too, so narrowing the allowlist
         // here cannot silently revoke an app the task grant would need.
         managedApps: [
@@ -239,7 +241,7 @@ describe('PersistentMindTools', () => {
     await user.click(toggle);
 
     await waitFor(() => expect(api.updateCosConfig).toHaveBeenCalledWith(
-      { persistentMindCapabilities: expect.objectContaining({ schemaVersion: 11, fileIssues: true, createTasks: false }) },
+      { persistentMindCapabilities: expect.objectContaining({ schemaVersion: 12, fileIssues: true, createTasks: false }) },
       { silent: true },
     ));
 
@@ -273,7 +275,7 @@ describe('PersistentMindTools', () => {
     await user.click(callToggle);
     await waitFor(() => expect(api.updateCosConfig).toHaveBeenCalledWith(
       { persistentMindCapabilities: {
-        schemaVersion: 11,
+        schemaVersion: 12,
         createTasks: false,
         fileIssues: false,
         manageMind: false,
@@ -281,6 +283,7 @@ describe('PersistentMindTools', () => {
         manageEidoverse: false,
         visitEidoversePeers: false,
         promoteEidoverseFoundations: false,
+        installEidoverseControllers: false,
         callUser: true,
         adjustLocalContext: false,
         readPortos: false,

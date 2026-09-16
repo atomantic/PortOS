@@ -7,10 +7,11 @@
  *
  * Usage:
  *   node scripts/eidoverse-resilience-assay.js
- *     Runs every registered contribution module (see
+ *     Runs every registered contribution — the shipped fixtures AND every
+ *     executable world controller (#7456), both resolved through
  *     server/services/eidoverseResilienceContributions.js, which the promote
  *     path in eidoverseFoundationLedger.js resolves through as well, by
- *     contribution id rather than by path).
+ *     contribution id rather than by path.
  *
  *   node scripts/eidoverse-resilience-assay.js <module-path> [...more]
  *     Runs the assay against specific contribution modules instead. Each
@@ -23,32 +24,34 @@
  */
 import { resolve } from 'node:path';
 import { runResilienceAssay } from '../server/services/eidoverseResilienceAssay.js';
-import { listContributionModulePaths, loadContributionModule } from '../server/services/eidoverseResilienceContributions.js';
+import { listRegisteredContributions, loadContributionModule } from '../server/services/eidoverseResilienceContributions.js';
 import { isDirectlyInvoked } from './lib/directInvocation.js';
 
-function printResult(modulePath, result) {
+function printResult(label, result) {
   const icon = result.pass ? '✅' : '❌';
-  console.log(`${icon} ${result.contributionId} (${modulePath})`);
+  console.log(`${icon} ${result.contributionId} (${label})`);
   for (const reason of result.reasons) {
     console.log(`   - ${reason}`);
   }
 }
 
 export async function runAssayCli(args) {
-  const modulePaths = args.length > 0
-    ? args.map((path) => resolve(process.cwd(), path))
-    : await listContributionModulePaths();
+  const entries = args.length > 0
+    ? await Promise.all(args.map(async (path) => {
+      const modulePath = resolve(process.cwd(), path);
+      return { label: modulePath, contribution: await loadContributionModule(modulePath) };
+    }))
+    : await listRegisteredContributions();
 
-  if (modulePaths.length === 0) {
+  if (entries.length === 0) {
     console.log('ℹ️ No resilience-assay contributions to run.');
     return 0;
   }
 
   let allPassed = true;
-  for (const modulePath of modulePaths) {
-    const contribution = await loadContributionModule(modulePath);
+  for (const { label, contribution } of entries) {
     const result = runResilienceAssay(contribution);
-    printResult(modulePath, result);
+    printResult(label, result);
     if (!result.pass) allPassed = false;
   }
   return allPassed ? 0 : 1;
