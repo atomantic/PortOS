@@ -1,4 +1,5 @@
 import { Clock } from 'lucide-react';
+import ProgressBar from '../ui/ProgressBar';
 import { timeUntil } from '../../utils/formatters';
 
 /**
@@ -9,6 +10,10 @@ import { timeUntil } from '../../utils/formatters';
  * same meter beside each plan's price and toggle. Two copies would have drifted
  * on the part that matters most: the colour thresholds that tell the user a
  * plan is nearly spent.
+ *
+ * The bar itself is `ui/ProgressBar`, which owns the clamp and the
+ * `role="progressbar"` + `aria-valuenow` trio this markup was missing — the
+ * seventh hand-rolled track was not the place to re-learn that lesson.
  */
 
 // Every provider adapter normalizes its reset to ISO before it reaches here, so
@@ -24,12 +29,16 @@ export const formatResetsAt = (resetsAt) => {
   return relative ? `${local} (${relative})` : local;
 };
 
-// Color a usage meter by how much is consumed: comfortable → warning → critical.
-export function meterColor(percentUsed) {
-  if (percentUsed == null) return 'bg-gray-500';
-  if (percentUsed >= 90) return 'bg-port-error';
-  if (percentUsed >= 70) return 'bg-port-warning';
-  return 'bg-port-success';
+/**
+ * Color a meter by how much of the window is consumed: comfortable → warning →
+ * critical, as ProgressBar's semantic tones. An unread percentage is `muted`,
+ * never `success` — "we didn't measure it" must not read as "plenty left".
+ */
+export function meterTone(percentUsed) {
+  if (percentUsed == null) return 'muted';
+  if (percentUsed >= 90) return 'error';
+  if (percentUsed >= 70) return 'warning';
+  return 'success';
 }
 
 export default function UsageMeter({ limit }) {
@@ -43,12 +52,7 @@ export default function UsageMeter({ limit }) {
           {remaining == null ? '—' : `${remaining}% left`}
         </span>
       </div>
-      <div className="h-1.5 sm:h-2 rounded-full bg-port-bg overflow-hidden">
-        <div
-          className={`h-full rounded-full ${meterColor(limit.percentUsed)}`}
-          style={{ width: `${Math.min(100, Math.max(0, used))}%` }}
-        />
-      </div>
+      <ProgressBar percent={used} tone={meterTone(limit.percentUsed)} label={`${limit.label} quota used`} />
       <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-0.5 sm:gap-1 mt-0.5 sm:mt-1">
         <span className="text-[9px] sm:text-xs text-gray-500">{used}% used</span>
         {limit.resetsAt && (

@@ -4,9 +4,9 @@ import { getClaudeCodeUsage } from '../services/claudeCodeUsage.js';
 import { getProviderQuotas } from '../services/providerUsage.js';
 import { getAllProviders } from '../services/providers.js';
 import { asyncHandler } from '../lib/errorHandler.js';
-import { validateRequest, usageQuerySchema, usageMessagesSchema, providerUsageQuerySchema, subscriptionCostsSchema, subscriptionEnabledSchema, usageFleetBillingSchema } from '../lib/validation.js';
-import { saveSubscriptionCosts, getSubscriptionCosts, getSubscriptionSavings } from '../services/subscriptionCosts.js';
-import { getSubscriptionOverview, getPlanTiers, savePlanTiers, setSubscriptionEnabled } from '../services/subscriptions.js';
+import { validateRequest, usageQuerySchema, usageMessagesSchema, providerUsageQuerySchema, subscriptionsUpdateSchema, subscriptionEnabledSchema, usageFleetBillingSchema } from '../lib/validation.js';
+import { saveSubscriptionCosts, getSubscriptionSavings } from '../services/subscriptionCosts.js';
+import { getSubscriptionOverview, savePlanTiers, setSubscriptionEnabled } from '../services/subscriptions.js';
 import { getFleetUsage } from '../services/peerUsage.js';
 import { getApiBilledInstanceIds, setInstanceUsesSubscriptions } from '../services/usageFleetBilling.js';
 import { resolveUsageRange } from '../lib/usageRange.js';
@@ -66,14 +66,16 @@ router.get('/subscriptions', asyncHandler(async (req, res) => {
 // PUT /api/usage/subscriptions - Merge plan prices and/or plan tiers. Within
 // each map an omitted family keeps its stored value; one sent as null (or 0 /
 // "") is cleared. The two maps are independent, so a tier save never rewrites
-// a price and vice versa, and a body carrying neither is a no-op read-back.
+// a price and vice versa.
+//
+// Both slices land in ONE request, and the response is the refreshed row set —
+// so the editor applies a save without a follow-up GET, and a row where the
+// user changed both the price and the tier costs one round trip, not two.
 router.put('/subscriptions', asyncHandler(async (req, res) => {
-  const { costs, tiers } = validateRequest(subscriptionCostsSchema, req.body);
-  const [nextCosts, nextTiers] = await Promise.all([
-    costs === undefined ? getSubscriptionCosts() : saveSubscriptionCosts(costs, { actor: 'user' }),
-    tiers === undefined ? getPlanTiers() : savePlanTiers(tiers, { actor: 'user' }),
-  ]);
-  res.json({ costs: nextCosts, tiers: nextTiers });
+  const { costs, tiers } = validateRequest(subscriptionsUpdateSchema, req.body);
+  if (costs !== undefined) await saveSubscriptionCosts(costs, { actor: 'user' });
+  if (tiers !== undefined) await savePlanTiers(tiers, { actor: 'user' });
+  res.json(await getSubscriptionOverview());
 }));
 
 // PUT /api/usage/subscriptions/enabled - Switch one subscription on or off by
@@ -83,10 +85,12 @@ router.put('/subscriptions', asyncHandler(async (req, res) => {
 //
 // A priced family with no providers configured answers `applied: false` rather
 // than 404: the row legitimately exists so its price stays visible, there is
-// just nothing local to toggle.
+// just nothing local to toggle. The refreshed rows ride along for the same
+// reason as above.
 router.put('/subscriptions/enabled', asyncHandler(async (req, res) => {
   const { family, enabled } = validateRequest(subscriptionEnabledSchema, req.body);
-  res.json(await setSubscriptionEnabled(family, enabled));
+  const outcome = await setSubscriptionEnabled(family, enabled);
+  res.json({ ...outcome, ...(await getSubscriptionOverview()) });
 }));
 
 // PUT /api/usage/fleet-billing - Mark one federated instance as paying API

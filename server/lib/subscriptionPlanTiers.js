@@ -1,4 +1,4 @@
-import { isPlainObject } from './objects.js';
+import { trimTo } from './textUtils.js';
 
 /**
  * Which TIER of a subscription the user is on — "Max 5x" vs "Max 20x", "Pro"
@@ -38,21 +38,10 @@ export const MAX_PLAN_TIER_LENGTH = 60;
  * mean different things depending on which side of the store you read it from
  * (the same contract `normalizeCost` holds for prices). Empty, whitespace-only
  * and non-string all collapse to null — a CLEARED tier, never an empty-string
- * tier that renders as a blank pill the user cannot remove.
+ * tier that renders as a blank pill the user cannot remove. `trimTo` is the
+ * tree's sole string bounder and already maps a non-string to `''`.
  */
 export function normalizePlanTier(value) {
-  if (typeof value !== 'string') return null;
-  const tier = value.trim().slice(0, MAX_PLAN_TIER_LENGTH);
+  const tier = trimTo(value, MAX_PLAN_TIER_LENGTH);
   return tier === '' ? null : tier;
-}
-
-/** Pure: normalize a whole tier map, dropping every cleared/invalid entry. */
-export function normalizePlanTiers(raw) {
-  if (!isPlainObject(raw)) return {};
-  const out = {};
-  for (const [family, value] of Object.entries(raw)) {
-    const tier = normalizePlanTier(value);
-    if (tier !== null) out[family] = tier;
-  }
-  return out;
 }

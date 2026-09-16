@@ -100,6 +100,7 @@ export * from './creativeLatitude.js';
 // subdir with its own barrel — surface it under `editorial.*` so the root
 // discovery surface reaches EDITORIAL_CHECKS + the lookup helpers.
 export * as editorial from './editorial/index.js';
+export * from './familySettingsMap.js';
 export * from './fableLoomGraph.js';
 export * from './fableLoomCameraMovements.js';
 export * from './fableLoomPlayback.js';

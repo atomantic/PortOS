@@ -1,9 +1,9 @@
 import { getSettings, updateSettingsWith } from './settings.js';
-import { getAllProviders, updateProvider } from './providers.js';
-import { getSubscriptionCosts } from './subscriptionCosts.js';
+import { listProviders, updateProvider } from './providers.js';
+import { normalizeSubscriptionCosts } from './subscriptionCosts.js';
 import { PROVIDER_FAMILIES, familyForProvider, familyLabel } from '../lib/providerFamilies.js';
-import { normalizePlanTier, normalizePlanTiers } from '../lib/subscriptionPlanTiers.js';
-import { isPlainObject } from '../lib/objects.js';
+import { normalizePlanTier } from '../lib/subscriptionPlanTiers.js';
+import { mergeFamilyMap, normalizeFamilyMap } from '../lib/familySettingsMap.js';
 
 /**
  * The subscription plans this install pays for: which ones are switched on,
@@ -17,12 +17,14 @@ import { isPlainObject } from '../lib/objects.js';
  *
  * Prices live in `subscriptionCosts.js` (settings `subscriptionCosts`) because
  * the savings math is their only consumer. Tiers live here (settings
- * `subscriptionPlanTiers`) with the same patch semantics, and this module is
- * what joins price + tier + enablement + provider membership into the one row
- * the Subscriptions page renders.
+ * `subscriptionPlanTiers`), both maps merging through `lib/familySettingsMap.js`
+ * so their absent-vs-cleared contract is one rule rather than two copies.
  */
 
 const SETTINGS_KEY = 'subscriptionPlanTiers';
+
+/** Pure: normalize a whole tier map, dropping every cleared/invalid entry. */
+export const normalizePlanTiers = (raw) => normalizeFamilyMap(raw, normalizePlanTier);
 
 /** Stored plan tiers, `{ [family]: label }`. */
 export async function getPlanTiers() {
@@ -32,23 +34,14 @@ export async function getPlanTiers() {
 
 /**
  * Merge a patch of plan tiers into settings and return the normalized map.
- *
- * Absent vs. present-but-empty are DIFFERENT, exactly as for prices: a family
- * the patch omits keeps its stored tier, while one sent as `null`/`""` is an
- * intentional clear and is deleted. Without that split an editor submitting
- * only changed rows could never remove a tier the user stopped being on.
+ * Omitted keeps, empty clears — see `mergeFamilyMap` for why that split is
+ * load-bearing. `options` carries the operator actor, as the price saver's does.
  */
 export async function savePlanTiers(patch, options) {
-  const incoming = isPlainObject(patch) ? patch : {};
-  const next = await updateSettingsWith((current) => {
-    const merged = { ...normalizePlanTiers(current?.[SETTINGS_KEY]) };
-    for (const [family, value] of Object.entries(incoming)) {
-      const tier = normalizePlanTier(value);
-      if (tier === null) delete merged[family];
-      else merged[family] = tier;
-    }
-    return { ...current, [SETTINGS_KEY]: merged };
-  }, options);
+  const next = await updateSettingsWith((current) => ({
+    ...current,
+    [SETTINGS_KEY]: mergeFamilyMap(current?.[SETTINGS_KEY], patch, normalizePlanTier),
+  }), options);
   return normalizePlanTiers(next?.[SETTINGS_KEY]);
 }
 
@@ -79,42 +72,58 @@ const providerSummary = (provider) => ({
 
 /**
  * Pure: one row per manageable subscription — every family with at least one
- * provider configured, plus every family the user has priced or tiered.
+ * provider CONFIGURED (enabled or not), plus every family the user has priced
+ * or tiered.
  *
- * That second half is the same rule `resolveSubscriptionFamilies` follows and
- * for the same reason: a priced family whose providers were all deleted must
- * keep a row, or its stored price becomes invisible and unclearable. A family
- * id that no longer exists in `PROVIDER_FAMILIES` (an older install's leftover)
- * still gets a row for exactly that reason, labelled by its raw id.
+ * Deliberately NOT `resolveSubscriptionFamilies` (subscriptionCosts.js), which
+ * answers a different question for the savings card: it starts from the
+ * ENABLED families, because a plan that did no work in the window has no
+ * figures to show. This page has to list a configured-but-switched-off plan —
+ * that row is the only way to switch it back on — so it starts from configured
+ * instead, and has no use for that function's spend-in-window extras.
+ *
+ * What the two DO share is the data-preservation rule: a priced or tiered
+ * family with no providers left still gets a row, or its stored value becomes
+ * invisible and unclearable. That covers a family id an older install stored
+ * and this registry no longer knows, which `familyLabel` renders by its raw id.
  *
  * `enabled` mirrors `resolveEnabledFamilies`: a plan is on when ANY of its
- * providers is enabled, so the toggle and the savings block's `enabled` flag
- * can never disagree.
+ * providers is enabled. Both now derive membership from `familyForProvider`,
+ * so the toggle and the savings block's `enabled` flag cannot disagree.
  */
 export function buildSubscriptionFamilies({ providers = [], costs = {}, tiers = {} } = {}) {
   const byFamily = groupProvidersByFamily(providers);
-  const known = PROVIDER_FAMILIES
-    .map((family) => ({ id: family.id, label: family.label, members: byFamily.get(family.id) || [] }))
-    .filter((row) => row.members.length > 0 || costs[row.id] != null || tiers[row.id] != null);
-  const knownIds = new Set(PROVIDER_FAMILIES.map((family) => family.id));
-  const orphans = [...new Set([...Object.keys(costs), ...Object.keys(tiers)])]
-    .filter((id) => !knownIds.has(id))
-    .map((id) => ({ id, label: familyLabel(id), members: [] }));
-  return [...known, ...orphans].map((row) => ({
-    family: row.id,
-    label: row.label,
-    enabled: row.members.some((provider) => provider.enabled === true),
-    monthlyCost: costs[row.id] ?? 0,
-    planTier: tiers[row.id] ?? null,
-    providers: row.members.map(providerSummary),
-  }));
+  // Registry order first, then any stored-only id, so the rows are stable.
+  const ids = [...new Set([...PROVIDER_FAMILIES.map((f) => f.id), ...Object.keys(costs), ...Object.keys(tiers)])];
+  return ids
+    .map((id) => ({ id, members: byFamily.get(id) || [] }))
+    .filter(({ id, members }) => members.length > 0 || costs[id] != null || tiers[id] != null)
+    .map(({ id, members }) => ({
+      family: id,
+      label: familyLabel(id),
+      enabled: members.some((provider) => provider.enabled === true),
+      monthlyCost: costs[id] ?? 0,
+      planTier: tiers[id] ?? null,
+      providers: members.map(providerSummary),
+    }));
 }
 
-/** The whole Subscriptions page model: rows plus the raw stored maps. */
+/**
+ * The Subscriptions page's row set.
+ *
+ * ONE `getSettings()` for both stored maps rather than `getSubscriptionCosts()`
+ * + `getPlanTiers()`: each of those deep-clones the whole settings tree, and
+ * the two keys sit in the same snapshot.
+ */
 export async function getSubscriptionOverview() {
-  const [result, costs, tiers] = await Promise.all([getAllProviders(), getSubscriptionCosts(), getPlanTiers()]);
-  const providers = Array.isArray(result) ? result : (result?.providers || []);
-  return { families: buildSubscriptionFamilies({ providers, costs, tiers }), costs, tiers };
+  const [providers, settings] = await Promise.all([listProviders(), getSettings()]);
+  return {
+    families: buildSubscriptionFamilies({
+      providers,
+      costs: normalizeSubscriptionCosts(settings?.subscriptionCosts),
+      tiers: normalizePlanTiers(settings?.[SETTINGS_KEY]),
+    }),
+  };
 }
 
 /**
@@ -130,9 +139,7 @@ export async function getSubscriptionOverview() {
  * there is simply nothing local to toggle. Its price stays stored either way.
  */
 export async function setSubscriptionEnabled(family, enabled) {
-  const result = await getAllProviders();
-  const providers = Array.isArray(result) ? result : (result?.providers || []);
-  const members = groupProvidersByFamily(providers).get(family) || [];
+  const members = groupProvidersByFamily(await listProviders()).get(family) || [];
   const changed = [];
   for (const provider of members) {
     if ((provider.enabled === true) === enabled) continue;

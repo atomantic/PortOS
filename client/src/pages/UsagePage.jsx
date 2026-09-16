@@ -5,37 +5,19 @@ import * as api from '../services/api';
 import BrailleSpinner from '../components/BrailleSpinner';
 import PageSkeleton from '../components/ui/PageSkeleton';
 import Pill from '../components/ui/Pill';
-import { formatCompactCount, formatCompactCountOrDash as formatNumber, formatUsd, timeAgo } from '../utils/formatters';
+import { formatCompactCountOrDash as formatNumber, formatUsd, timeAgo } from '../utils/formatters';
 import { useAsyncAction } from '../hooks/useAsyncAction';
 import { useAutoRefetch } from '../hooks/useAutoRefetch';
 import SubscriptionSavingsCard from '../components/usage/SubscriptionSavingsCard';
 import FleetUsageCard from '../components/usage/FleetUsageCard';
 import FreeTierUsageCard from '../components/usage/FreeTierUsageCard';
-import UsageMeter from '../components/usage/UsageMeter';
+import ProviderQuotaBody from '../components/usage/ProviderQuotaBody';
 import ModelsTabsHeader from '../components/models/ModelsTabsHeader';
+import { USAGE_PERIOD_OPTIONS, DEFAULT_USAGE_PERIOD } from '../lib/usagePeriods';
 
 // How often to re-ask while a provider's quota reading is still being taken. A
 // CLI/TUI scrape is a 10-20s spawn, so this is a handful of polls, not a loop.
 const PENDING_POLL_MS = 4000;
-
-const PERIOD_OPTIONS = [
-  { id: '7d', label: '7 days' },
-  { id: '30d', label: '30 days' },
-  { id: '90d', label: '90 days' },
-  { id: 'all', label: 'All time' }
-];
-
-// Small labelled stat, used for both the per-period activity counts and the
-// `metrics[]` a backend returns when its quota can't be queried at all.
-function StatTile({ label, value, detail }) {
-  return (
-    <div className="bg-port-bg border border-port-border rounded-lg p-1.5 sm:p-2.5">
-      <div className="text-[10px] sm:text-xs text-gray-400 mb-0.5">{label}</div>
-      <div className="text-xs sm:text-sm text-white">{value}</div>
-      {detail && <div className="text-[9px] sm:text-xs text-gray-500 mt-0.5">{detail}</div>}
-    </div>
-  );
-}
 
 // A subscription is one account across every federated instance, but each
 // instance can only read its own CLI's panel. When peers have contributed a
@@ -85,84 +67,7 @@ function ProviderQuotaCard({ quota, onRefresh, refreshing, disabled }) {
         </div>
       </div>
 
-      {!quota.supported && (
-        <p className="text-xs sm:text-sm text-gray-500">{quota.note || 'Usage reporting is not available for this provider.'}</p>
-      )}
-
-      {/* The reading is still being taken. It comes BEFORE the error and empty
-          branches because a pending card has no limits — rendering it through
-          those says "No rate-limit data reported", which is a verdict about the
-          provider rather than a statement about a scrape still in flight. */}
-      {quota.supported && quota.pending && (
-        <div className="flex items-center gap-1.5 sm:gap-2 text-xs sm:text-sm text-gray-400 py-1">
-          <BrailleSpinner />
-          <span>{quota.note || 'Reading quota…'}</span>
-        </div>
-      )}
-
-      {/* `error` is also how a card that read fine says it has nothing to
-          meter, so the note rides along — otherwise the one state where the
-          reading's age matters most is the one state that hides it. */}
-      {quota.supported && !quota.pending && quota.error && (
-        <div role="status" className="flex items-start gap-1.5 sm:gap-2 text-xs sm:text-sm text-gray-400 py-1">
-          <AlertTriangle size={15} className="text-port-warning mt-0.5 shrink-0" />
-            <span>
-              {quota.error}
-            {quota.note && <span className="block text-xs text-gray-500 mt-1">{quota.note}</span>}
-          </span>
-        </div>
-      )}
-
-      {quota.supported && !quota.pending && !quota.error && (
-        <div className="space-y-1 sm:space-y-2">
-          {quota.limits?.length > 0 && (
-            <div>
-              {quota.limits.map((limit) => (
-                <UsageMeter key={limit.key} limit={limit} />
-              ))}
-            </div>
-          )}
-
-          {!quota.limits?.length && !quota.metrics?.length && (
-            <div className="text-xs sm:text-sm text-gray-500">No rate-limit data reported</div>
-          )}
-
-          {/* Backends with no queryable quota report observed counts instead of
-              a meter — a percentage we cannot measure must not be invented. */}
-          {quota.metrics?.length > 0 && (
-            // One tile per row on a phone: these cells sit inside an already
-            // half-width mobile card, and two columns of it wrapped a tile's
-            // label and detail onto four lines apiece.
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-              {quota.metrics.map((m) => (
-                <StatTile key={m.key} label={m.label} value={m.value} detail={m.detail} />
-              ))}
-            </div>
-          )}
-
-          {quota.activity?.length > 0 && (
-            <div className="hidden sm:grid sm:grid-cols-2 gap-2 pt-1">
-              {quota.activity.map((a) => (
-                <StatTile
-                  key={a.period}
-                  label={a.period}
-                  value={(
-                    <>
-                      {formatCompactCount(a.requests)} requests
-                      <span className="mx-2 text-gray-600">•</span>
-                      {formatCompactCount(a.sessions)} sessions
-                    </>
-                  )}
-                />
-              ))}
-            </div>
-          )}
-
-          {quota.note && (
-            <p className="hidden sm:block text-xs text-gray-500">{quota.note}</p>
-          )}
-        </div>
-      )}
+      <ProviderQuotaBody quota={quota} />
     </div>
   );
 }
@@ -501,7 +406,7 @@ function ProviderCostRows({ provider }) {
 function CostReportFilters({ period, from, to, isCustom, onPeriod, onRange }) {
   return (
     <div className="flex flex-wrap items-center gap-2">
-      {PERIOD_OPTIONS.map((opt) => (
+      {USAGE_PERIOD_OPTIONS.map((opt) => (
         <button
           key={opt.id}
           onClick={() => onPeriod(opt.id)}
@@ -625,7 +530,7 @@ function getPeriodTopModels(usage) {
 
 function InternalUsageMetrics() {
   const [searchParams, setSearchParams] = useSearchParams();
-  const period = searchParams.get('period') || '7d';
+  const period = searchParams.get('period') || DEFAULT_USAGE_PERIOD;
   const from = searchParams.get('from') || '';
   const to = searchParams.get('to') || '';
   const isCustom = Boolean(from || to);
@@ -699,7 +604,7 @@ function InternalUsageMetrics() {
       const next = new URLSearchParams(prev);
       next.delete('from');
       next.delete('to');
-      if (id === '7d') next.delete('period'); else next.set('period', id);
+      if (id === DEFAULT_USAGE_PERIOD) next.delete('period'); else next.set('period', id);
       return next;
     }, { replace: true });
   };

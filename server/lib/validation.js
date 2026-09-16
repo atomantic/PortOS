@@ -1448,7 +1448,7 @@ export const subscriptionPlanTiersMapSchema = z.partialRecord(
  * independent: the price editor sends only `costs`, the plan editor only
  * `tiers`, and neither save may disturb the other's stored map.
  */
-export const subscriptionCostsSchema = z.object({
+export const subscriptionsUpdateSchema = z.object({
   costs: subscriptionCostsMapSchema.optional(),
   tiers: subscriptionPlanTiersMapSchema.optional(),
 });

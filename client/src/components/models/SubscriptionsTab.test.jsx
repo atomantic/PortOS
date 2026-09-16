@@ -6,13 +6,12 @@ const api = vi.hoisted(() => ({
   getSubscriptions: vi.fn(),
   getUsage: vi.fn(),
   getProviderUsage: vi.fn(),
-  updateSubscriptionCosts: vi.fn(),
-  updateSubscriptionPlanTiers: vi.fn(),
+  updateSubscriptions: vi.fn(),
   setSubscriptionEnabled: vi.fn(),
 }));
 vi.mock('../../services/api', () => api);
 
-const { default: SubscriptionsTab, buildRowPatch, parseTierInput } = await import('./SubscriptionsTab');
+const { default: SubscriptionsTab, buildRowPatch, resolvePlanTier } = await import('./SubscriptionsTab');
 
 const claudeRow = {
   family: 'claude',
@@ -47,22 +46,33 @@ beforeEach(() => {
   });
   api.getProviderUsage.mockResolvedValue({
     providers: [{
-      family: 'claude', label: 'Claude Code', supported: true, pending: false,
+      family: 'claude', label: 'Claude Code', supported: true, pending: false, plan: 'max_5x',
       limits: [{ key: 'week', label: 'Weekly', percentUsed: 40, percentRemaining: 60 }],
     }],
   });
-  api.updateSubscriptionCosts.mockResolvedValue({ costs: {} });
-  api.updateSubscriptionPlanTiers.mockResolvedValue({ tiers: {} });
-  api.setSubscriptionEnabled.mockResolvedValue({ family: 'codex', enabled: true, applied: true, changed: ['codex-cli'] });
+  api.updateSubscriptions.mockResolvedValue({ families: [claudeRow, codexRow] });
+  api.setSubscriptionEnabled.mockResolvedValue({
+    family: 'codex', enabled: true, applied: true, changed: ['codex-cli'],
+    families: [claudeRow, { ...codexRow, enabled: true }],
+  });
 });
 
-describe('parseTierInput', () => {
-  it('trims a label and maps an emptied field to an explicit clear', () => {
-    expect(parseTierInput('  Max 20x ')).toBe('Max 20x');
-    // Empty must be SENT as null, not omitted — omitting it would leave the
-    // old tier on a plan the user is no longer on.
-    expect(parseTierInput('')).toBeNull();
-    expect(parseTierInput('   ')).toBeNull();
+describe('resolvePlanTier', () => {
+  it('prefers what the user recorded over what the CLI scraped', () => {
+    expect(resolvePlanTier(claudeRow, { plan: 'max_20x' })).toBe('Max 5x');
+  });
+
+  // Without this fallback the user would be asked to type a plan name PortOS
+  // already reports, and the two pages could pill different answers for it.
+  it('falls back to the scraped plan name when nothing was recorded', () => {
+    expect(resolvePlanTier(codexRow, { plan: 'pro' })).toBe('pro');
+  });
+
+  // 'unknown' is the scrape saying it could not read a plan — which is exactly
+  // the case the manual field exists for, so it must not be pilled as one.
+  it('shows nothing when neither side knows the plan', () => {
+    expect(resolvePlanTier(codexRow, { plan: 'unknown' })).toBeNull();
+    expect(resolvePlanTier(codexRow, undefined)).toBeNull();
   });
 });
 
@@ -113,9 +123,10 @@ describe('SubscriptionsTab', () => {
       { family: 'codex', enabled: true },
       expect.anything(),
     ));
-    // Enablement is derived from the provider records, so the server's answer
-    // is re-read rather than patched into local state.
-    await waitFor(() => expect(api.getSubscriptions).toHaveBeenCalledTimes(2));
+    // The handler's own rows are applied, so no follow-up GET is needed to
+    // learn the state it just computed.
+    await waitFor(() => expect(screen.getByLabelText('Disable the Codex subscription')).toBeInTheDocument());
+    expect(api.getSubscriptions).toHaveBeenCalledTimes(1);
   });
 
   // A disabled plan keeps its price: the row and its stored cost must survive a
@@ -132,17 +143,41 @@ describe('SubscriptionsTab', () => {
     expect(screen.getByLabelText('Enable the Claude Code subscription')).toHaveAttribute('aria-checked', 'false');
   });
 
-  it('saves a changed tier and price through their own endpoints', async () => {
+  it('saves a changed tier and price in one request', async () => {
     renderTab();
     await screen.findByText('Claude Code');
     fireEvent.change(screen.getByLabelText('Plan tier for Claude Code'), { target: { value: 'Max 20x' } });
     fireEvent.change(screen.getByLabelText('Monthly cost for Claude Code'), { target: { value: '100' } });
     fireEvent.click(screen.getByRole('button', { name: 'Save the Claude Code plan' }));
-    await waitFor(() => expect(api.updateSubscriptionPlanTiers).toHaveBeenCalledWith(
-      { claude: 'Max 20x' },
+    await waitFor(() => expect(api.updateSubscriptions).toHaveBeenCalledWith(
+      { costs: { claude: 100 }, tiers: { claude: 'Max 20x' } },
       expect.anything(),
     ));
-    expect(api.updateSubscriptionCosts).toHaveBeenCalledWith({ claude: 100 }, expect.anything());
+    expect(api.updateSubscriptions).toHaveBeenCalledTimes(1);
+  });
+
+  // Only a PRICE moves the savings figures, so a tier edit must not trigger a
+  // full cost-report + fleet rebuild.
+  it('does not rebuild the usage report for a tier-only edit', async () => {
+    renderTab();
+    await screen.findByText('Claude Code');
+    await waitFor(() => expect(api.getUsage).toHaveBeenCalledTimes(1));
+    fireEvent.change(screen.getByLabelText('Plan tier for Claude Code'), { target: { value: 'Max 20x' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save the Claude Code plan' }));
+    await waitFor(() => expect(api.updateSubscriptions).toHaveBeenCalled());
+    expect(api.getUsage).toHaveBeenCalledTimes(1);
+  });
+
+  // A quota read is a multi-second CLI scrape per family; the window it is
+  // being compared against has nothing to do with it.
+  it('refetches only the spend figures when the period changes', async () => {
+    renderTab();
+    await screen.findByText('Claude Code');
+    await waitFor(() => expect(api.getProviderUsage).toHaveBeenCalledTimes(1));
+    fireEvent.click(screen.getByRole('button', { name: '90 days' }));
+    await waitFor(() => expect(api.getUsage).toHaveBeenCalledTimes(2));
+    expect(api.getProviderUsage).toHaveBeenCalledTimes(1);
+    expect(api.getSubscriptions).toHaveBeenCalledTimes(1);
   });
 
   it('offers no toggle for a priced plan with no provider configured', async () => {

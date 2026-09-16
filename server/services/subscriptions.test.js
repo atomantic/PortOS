@@ -20,14 +20,18 @@ const updateProvider = vi.fn(async (id, patch) => {
   return providerRecords.find((p) => p.id === id);
 });
 vi.mock('./providers.js', () => ({
-  getAllProviders: vi.fn(async () => ({ providers: structuredClone(providerRecords) })),
+  listProviders: vi.fn(async () => structuredClone(providerRecords)),
   updateProvider: (...args) => updateProvider(...args),
 }));
 
-// subscriptionCosts pulls providerUsage's PTY-scrape graph in transitively.
-// Only the stored-price read is needed here.
+// subscriptionCosts still imports providerUsage (for the savings card's own
+// family resolver), which drags the TUI-scrape/PTY graph in. Only the pure
+// price normalizer is needed here, and it is exercised for real by that
+// module's own suite.
 vi.mock('./subscriptionCosts.js', () => ({
-  getSubscriptionCosts: vi.fn(async () => structuredClone(stored.subscriptionCosts || {})),
+  normalizeSubscriptionCosts: (raw) => Object.fromEntries(
+    Object.entries(raw || {}).filter(([, value]) => Number(value) > 0),
+  ),
 }));
 
 import {
@@ -75,17 +79,6 @@ describe('plan tier persistence', () => {
   });
 });
 
-describe('groupProvidersByFamily', () => {
-  it('maps each provider to its family and skips local-runtime wrappers', () => {
-    const grouped = groupProvidersByFamily([claudeCli, claudeAlt, codexCli, claudeOnOllama]);
-    expect(grouped.get('claude').map((p) => p.id)).toEqual(['claude-code', 'claude-code-alt']);
-    expect(grouped.get('codex').map((p) => p.id)).toEqual(['codex-cli']);
-    // An Ollama-backed `claude` wrapper runs a local model — no subscription to
-    // manage, so it must not make the Claude plan look enabled.
-    expect(grouped.get('claude')).not.toContainEqual(expect.objectContaining({ id: 'claude-ollama' }));
-  });
-});
-
 describe('buildSubscriptionFamilies', () => {
   it('reports a plan as enabled when ANY of its providers is on', () => {
     const [claude] = buildSubscriptionFamilies({ providers: [claudeCli, claudeAlt] });
@@ -125,8 +118,6 @@ describe('getSubscriptionOverview', () => {
     providerRecords = [claudeCli, codexCli];
     stored = { subscriptionCosts: { claude: 100 }, subscriptionPlanTiers: { claude: 'Max 5x' } };
     const overview = await getSubscriptionOverview();
-    expect(overview.costs).toEqual({ claude: 100 });
-    expect(overview.tiers).toEqual({ claude: 'Max 5x' });
     expect(overview.families).toEqual([
       expect.objectContaining({ family: 'claude', enabled: true, monthlyCost: 100, planTier: 'Max 5x' }),
       expect.objectContaining({ family: 'codex', enabled: false, monthlyCost: 0, planTier: null }),
@@ -165,7 +156,6 @@ describe('setSubscriptionEnabled', () => {
     stored = { subscriptionCosts: { codex: 20 } };
     await setSubscriptionEnabled('codex', false);
     const overview = await getSubscriptionOverview();
-    expect(overview.costs).toEqual({ codex: 20 });
     expect(overview.families).toEqual([
       expect.objectContaining({ family: 'codex', enabled: false, monthlyCost: 20 }),
     ]);

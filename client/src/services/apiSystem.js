@@ -187,14 +187,20 @@ export const updateSubscriptionCosts = (costs, options = {}) =>
 // Deliberately separate from `getUsage().subscriptionSavings`, which answers
 // what those plans SPENT over a report window — this answers what they are.
 export const getSubscriptions = (options = {}) => request('/usage/subscriptions', options);
-// Which tier of each plan the user is on ("Max 20x", "Pro"), same patch
-// semantics as the prices: an omitted family keeps its stored tier, `null` or
-// `''` clears it. Sent on its own key so a tier save never rewrites a price.
-export const updateSubscriptionPlanTiers = (tiers, options = {}) =>
-  request('/usage/subscriptions', { method: 'PUT', body: JSON.stringify({ tiers }), ...options });
+// Save plan prices and/or plan tiers in ONE request, and get the refreshed rows
+// back — so an editor applies a save without a follow-up GET. Both maps are
+// patches: an omitted family keeps its stored value, `null` (or `0` / `''`)
+// clears it.
+export const updateSubscriptions = ({ costs, tiers } = {}, options = {}) =>
+  request('/usage/subscriptions', {
+    method: 'PUT',
+    body: JSON.stringify({ ...(costs ? { costs } : {}), ...(tiers ? { tiers } : {}) }),
+    ...options,
+  });
 // Switch one subscription on or off — PortOS-side enablement only (it flips
 // `enabled` across that family's provider records). Never touches vendor
-// billing. A priced family with no providers answers `applied: false`.
+// billing. A priced family with no providers answers `applied: false`. The
+// refreshed rows come back with the outcome.
 export const setSubscriptionEnabled = ({ family, enabled }, options = {}) =>
   request('/usage/subscriptions/enabled', {
     method: 'PUT',

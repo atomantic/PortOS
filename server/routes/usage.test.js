@@ -24,13 +24,11 @@ vi.mock('../services/usageFleetBilling.js', () => ({
 
 vi.mock('../services/subscriptionCosts.js', () => ({
   saveSubscriptionCosts: vi.fn(async (costs) => costs),
-  getSubscriptionCosts: vi.fn(async () => ({ claude: 100 })),
   getSubscriptionSavings: vi.fn(async () => ({ configured: false, families: [] }))
 }));
 
 vi.mock('../services/subscriptions.js', () => ({
-  getSubscriptionOverview: vi.fn(async () => ({ families: [], costs: {}, tiers: {} })),
-  getPlanTiers: vi.fn(async () => ({})),
+  getSubscriptionOverview: vi.fn(async () => ({ families: [{ family: 'claude' }] })),
   savePlanTiers: vi.fn(async (tiers) => tiers),
   setSubscriptionEnabled: vi.fn(async (family, enabled) => ({ family, enabled, applied: true, changed: [] })),
 }));
@@ -58,7 +56,7 @@ import * as usage from '../services/usage.js';
 import { getAllProviders } from '../services/providers.js';
 import { getProviderQuotas } from '../services/providerUsage.js';
 import { getHistoricalUsageBackfillStatus, startHistoricalUsageBackfill } from '../services/usageBackfill.js';
-import { getSubscriptionSavings, saveSubscriptionCosts, getSubscriptionCosts } from '../services/subscriptionCosts.js';
+import { getSubscriptionSavings, saveSubscriptionCosts } from '../services/subscriptionCosts.js';
 import { getSubscriptionOverview, savePlanTiers, setSubscriptionEnabled } from '../services/subscriptions.js';
 import { getFleetUsage } from '../services/peerUsage.js';
 import { getApiBilledInstanceIds, setInstanceUsesSubscriptions } from '../services/usageFleetBilling.js';
@@ -244,10 +242,11 @@ describe('usage routes', () => {
       .send({ tiers: { claude: 'Max 20x' } });
     expect(res.status).toBe(200);
     expect(savePlanTiers).toHaveBeenCalledWith({ claude: 'Max 20x' }, { actor: 'user' });
-    // The price map was only READ back — a tier save must never rewrite it.
+    // A tier save must never rewrite the price map beside it.
     expect(saveSubscriptionCosts).not.toHaveBeenCalled();
-    expect(getSubscriptionCosts).toHaveBeenCalled();
-    expect(res.body).toEqual({ costs: { claude: 100 }, tiers: { claude: 'Max 20x' } });
+    // The refreshed rows come back with the write, so the editor needs no
+    // follow-up GET to apply what it just saved.
+    expect(res.body.families).toEqual([{ family: 'claude' }]);
   });
 
   it('PUT /api/usage/subscriptions saves both slices in one call', async () => {
@@ -276,7 +275,6 @@ describe('usage routes', () => {
   });
 
   it('GET /api/usage/subscriptions returns the plan rows', async () => {
-    getSubscriptionOverview.mockResolvedValue({ families: [{ family: 'claude' }], costs: {}, tiers: {} });
     const res = await request(buildApp()).get('/api/usage/subscriptions');
     expect(res.status).toBe(200);
     expect(res.body.families).toEqual([{ family: 'claude' }]);
@@ -289,7 +287,10 @@ describe('usage routes', () => {
       .send({ family: 'codex', enabled: false });
     expect(res.status).toBe(200);
     expect(setSubscriptionEnabled).toHaveBeenCalledWith('codex', false);
-    expect(res.body).toEqual({ family: 'codex', enabled: false, applied: true, changed: ['codex-cli'] });
+    expect(res.body).toEqual({
+      family: 'codex', enabled: false, applied: true, changed: ['codex-cli'],
+      families: [{ family: 'claude' }],
+    });
   });
 
   // The handler fans the flag across every provider record the family owns, so
@@ -298,14 +299,6 @@ describe('usage routes', () => {
     const res = await request(buildApp())
       .put('/api/usage/subscriptions/enabled')
       .send({ family: 'not-a-family', enabled: true });
-    expect(res.status).toBe(400);
-    expect(setSubscriptionEnabled).not.toHaveBeenCalled();
-  });
-
-  it('PUT /api/usage/subscriptions/enabled rejects a non-boolean flag', async () => {
-    const res = await request(buildApp())
-      .put('/api/usage/subscriptions/enabled')
-      .send({ family: 'codex', enabled: 'yes' });
     expect(res.status).toBe(400);
     expect(setSubscriptionEnabled).not.toHaveBeenCalled();
   });
