@@ -28,6 +28,7 @@ vi.mock('../../../services/api', () => ({
   getAppPullRequests: vi.fn(),
   resolveAppPullRequest: vi.fn(),
   reviewAppPullRequest: vi.fn(),
+  doReviewAppPullRequest: vi.fn(),
   getProviders: vi.fn(),
 }));
 
@@ -50,6 +51,7 @@ const PULL_REQUEST = {
   mergeable: 'CONFLICTING',
   labels: ['bug'],
   reviewEligible: true,
+  doReviewEligible: true,
   checks: [
     { name: 'unit', status: 'SUCCESS', url: null },
     { name: 'lint', status: 'SUCCESS', url: null },
@@ -92,6 +94,13 @@ beforeEach(() => {
     requestId: 'demand-abc',
     reviewAction: { taskId: null, status: 'pending' },
     duplicate: false,
+  });
+  api.doReviewAppPullRequest.mockResolvedValue({
+    number: 17,
+    doReviewAction: { taskId: 'task-doreview-1', status: 'pending' },
+    duplicate: false,
+    started: true,
+    queueReason: null,
   });
   api.getProviders.mockResolvedValue({ activeProvider: '', providers: [] });
 });
@@ -383,6 +392,53 @@ describe('PullRequestsTab', () => {
       .toHaveAttribute('href', '/cos/tasks?task=app-improve-17&source=internal');
   });
 
+  it('offers Do:Review on a row pr-reviewer will not touch, and queues it', async () => {
+    // The screenshot case: a code contributor's PR, ineligible for the
+    // pr-reviewer sweep, previously left with Resolve & merge as its only action.
+    api.getAppPullRequests.mockResolvedValue(okPayload([{ ...PULL_REQUEST, reviewEligible: false }]));
+    await renderTab();
+
+    expect(await screen.findByText('Fix the save path')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'PR review' })).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Do:Review' }));
+
+    await waitFor(() => expect(api.doReviewAppPullRequest).toHaveBeenCalledWith(
+      'app-1', 17, { provider: undefined, model: undefined, effort: undefined },
+    ));
+    expect(await screen.findByRole('link', { name: /Do:Review: Queued/ })).toBeInTheDocument();
+    expect(toastMock.success).toHaveBeenCalledWith('Started an agent to run /do:review against GitHub #17');
+  });
+
+  it('hides Do:Review on a GitLab forge, where slashdo PR mode cannot run', async () => {
+    api.getAppPullRequests.mockResolvedValue({
+      ...okPayload([{ ...PULL_REQUEST, reviewEligible: false, doReviewEligible: false }]),
+      forge: 'gitlab',
+    });
+    await renderTab();
+
+    expect(await screen.findByText('Fix the save path')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Do:Review' })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Resolve & merge' })).toBeInTheDocument();
+  });
+
+  it('binds a /do:review socket update to the row that queued it', async () => {
+    await renderTab();
+    await screen.findByText('Fix the save path');
+    fireEvent.click(screen.getByRole('button', { name: 'Do:Review' }));
+    await screen.findByRole('link', { name: /Do:Review: Queued/ });
+
+    act(() => socketHandlers.get('cos:tasks:changed')({ task: {
+      id: 'task-doreview-1', status: 'in_progress',
+      metadata: { app: 'app-1', slashdoCommand: 'review', targetPullRequest: 17 },
+    } }));
+
+    expect(await screen.findByRole('link', { name: /Do:Review: Active/ }))
+      .toHaveAttribute('href', '/cos/tasks?task=task-doreview-1&source=internal');
+    // The resolve row is backed by a different task and must not follow along.
+    expect(screen.getByRole('button', { name: 'Resolve & merge' })).toBeInTheDocument();
+  });
+
   it('names a failed resolve retry as a merge action and retries that same action', async () => {
     api.getAppPullRequests.mockResolvedValue(okPayload([{
       ...PULL_REQUEST,
@@ -393,7 +449,7 @@ describe('PullRequestsTab', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent('Resolve & merge failed');
     expect(screen.queryByRole('link', { name: 'Abuse Guard setup' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Retry PR review' })).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: 'Retry resolve & merge' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Retry Resolve & merge' }));
     await waitFor(() => expect(api.resolveAppPullRequest).toHaveBeenCalledWith(
       'app-1', 17, { provider: undefined, model: undefined, effort: undefined },
     ));

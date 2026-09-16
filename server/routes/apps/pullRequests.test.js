@@ -23,6 +23,10 @@ vi.mock('../../services/prReviewerSecurity.js', async (importOriginal) => ({
   listExternalOpenPullRequests: vi.fn(),
   resolvePrReviewerTargetScope: vi.fn(),
 }));
+vi.mock('../../services/prDoReviewTask.js', async (importOriginal) => ({
+  ...(await importOriginal()),
+  spawnPrDoReviewTask: vi.fn(),
+}));
 vi.mock('../../services/taskSchedule.js', () => ({
   getOnDemandRequests: vi.fn(),
   triggerOnDemandTask: vi.fn(),
@@ -35,6 +39,7 @@ import { resolveReviewLoopOptions } from '../../services/codeReview.js';
 import { spawnReviewLoopFollowUp } from '../../services/agentWorktreeCleanup.js';
 import { listExternalOpenPullRequests, resolvePrReviewerTargetScope } from '../../services/prReviewerSecurity.js';
 import { getOnDemandRequests, triggerOnDemandTask } from '../../services/taskSchedule.js';
+import { spawnPrDoReviewTask } from '../../services/prDoReviewTask.js';
 
 const APP = { id: 'app-001', name: 'Widget', repoPath: '/repo', workTracker: 'auto' };
 const PULL_REQUEST = {
@@ -100,6 +105,11 @@ describe('app pull-request routes', () => {
     });
     getOnDemandRequests.mockResolvedValue([]);
     triggerOnDemandTask.mockResolvedValue({ id: 'demand-abc', taskType: 'pr-reviewer', appId: 'app-001', targetPullRequest: 17 });
+    spawnPrDoReviewTask.mockResolvedValue({
+      task: { id: 'task-doreview-1', status: 'pending' },
+      duplicate: false,
+      dispatch: { started: true, reason: null },
+    });
   });
 
   it('lists open requests and annotates an active resolve task', async () => {
@@ -505,6 +515,109 @@ describe('app pull-request routes', () => {
 
     expect(response.status).toBe(409);
     expect(response.body.error).toContain('disabled');
+  });
+
+  it('queues /do:review for a request pr-reviewer refuses, so a code contributor PR still gets a review', async () => {
+    // The same row the pr-reviewer route answers with 409: PortOS's own login
+    // opened it, so the untrusted-contributor sweep skips it entirely.
+    listExternalOpenPullRequests.mockResolvedValue({ ok: true, repoFullName: 'acme/widget', defaultBranch: 'main', prs: [] });
+
+    const response = await request(app).post('/api/apps/app-001/pull-requests/17/do-review');
+
+    expect(response.status).toBe(202);
+    expect(response.body).toMatchObject({
+      number: 17,
+      duplicate: false,
+      started: true,
+      doReviewAction: { taskId: 'task-doreview-1', status: 'pending' },
+    });
+    expect(spawnPrDoReviewTask).toHaveBeenCalledWith({
+      app: APP,
+      pullRequest: expect.objectContaining({ number: 17, url: PULL_REQUEST.url }),
+      repoFullName: 'acme/widget',
+      provider: undefined,
+      model: undefined,
+      effort: undefined,
+    });
+  });
+
+  it('threads the Run with pin into the /do:review task', async () => {
+    const response = await request(app)
+      .post('/api/apps/app-001/pull-requests/17/do-review')
+      .send({ provider: 'claude-code', model: 'claude-opus-5', effort: 'high' });
+
+    expect(response.status).toBe(202);
+    expect(spawnPrDoReviewTask).toHaveBeenCalledWith(expect.objectContaining({
+      provider: 'claude-code', model: 'claude-opus-5', effort: 'high',
+    }));
+  });
+
+  it('refuses /do:review on a GitLab forge instead of burning a run on slashdo aborting', async () => {
+    listAppPullRequests.mockResolvedValue({ ...listResult(), forge: 'gitlab', tracker: 'gitlab' });
+
+    const response = await request(app).post('/api/apps/app-001/pull-requests/17/do-review');
+
+    expect(response.status).toBe(409);
+    expect(response.body.code).toBe('PULL_REQUEST_NOT_REVIEWABLE');
+    expect(spawnPrDoReviewTask).not.toHaveBeenCalled();
+  });
+
+  it('returns the in-flight /do:review run instead of queueing a second roster', async () => {
+    getAllTasks.mockResolvedValue({
+      user: { tasks: [{
+        id: 'task-doreview-live',
+        status: 'in_progress',
+        description: 'Review PR #17 for Widget',
+        metadata: { app: 'app-001', slashdoCommand: 'review', targetPullRequest: '17' },
+      }] },
+      cos: { tasks: [] },
+    });
+
+    const response = await request(app).post('/api/apps/app-001/pull-requests/17/do-review');
+
+    expect(response.status).toBe(200);
+    expect(response.body).toMatchObject({
+      duplicate: true,
+      doReviewAction: { taskId: 'task-doreview-live', status: 'in_progress' },
+    });
+    expect(spawnPrDoReviewTask).not.toHaveBeenCalled();
+  });
+
+  it('queues /do:review without paying the pr-reviewer eligibility fan-out', async () => {
+    // `reviewEligible` costs a gh repo view, a gh api user, and one
+    // collaborator-permission call per PR author — and this route never reads it.
+    const response = await request(app).post('/api/apps/app-001/pull-requests/17/do-review');
+
+    expect(response.status).toBe(202);
+    expect(resolvePrReviewerTargetScope).not.toHaveBeenCalled();
+    expect(getOnDemandRequests).not.toHaveBeenCalled();
+  });
+
+  it('fails closed when CoS task state cannot be read before queueing /do:review', async () => {
+    getAllTasks.mockRejectedValue(new Error('task store unavailable'));
+
+    const response = await request(app).post('/api/apps/app-001/pull-requests/17/do-review');
+
+    expect(response.status).toBe(503);
+    expect(response.body.code).toBe('AGENT_ACTION_UNAVAILABLE');
+    expect(spawnPrDoReviewTask).not.toHaveBeenCalled();
+  });
+
+  it('annotates a listed request with its in-flight /do:review run', async () => {
+    getAllTasks.mockResolvedValue({
+      user: { tasks: [{
+        id: 'task-doreview-live',
+        status: 'pending',
+        description: 'Review PR #17 for Widget',
+        metadata: { app: 'app-001', slashdoCommand: 'review', targetPullRequest: '17' },
+      }] },
+      cos: { tasks: [] },
+    });
+
+    const response = await request(app).get('/api/apps/app-001/pull-requests');
+
+    expect(response.status).toBe(200);
+    expect(response.body.pullRequests[0].doReviewAction).toEqual({ taskId: 'task-doreview-live', status: 'pending' });
   });
 
   it('returns 404 for an unknown app', async () => {
