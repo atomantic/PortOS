@@ -1471,3 +1471,20 @@ export function getNextRunTime() {
   const event = getEvent('backup-daily');
   return event?.nextRunAt ? new Date(event.nextRunAt).toISOString() : null;
 }
+
+/**
+ * Whether THIS process has a backup snapshot in flight right now, for the
+ * system-idle gate. Deliberately reads the in-process `isRunning` flag rather
+ * than scanning for an on-disk `.in-progress` marker: that marker is designed
+ * to OUTLIVE a crash/PM2 restart so a restore never mistakes a partial
+ * snapshot for a complete one, but nothing ever clears an orphaned one on its
+ * own (the next run writes a fresh snapshot id) — gating the updater on its
+ * mere existence would block it forever after a single interrupted backup on
+ * a drive that might not even be mounted. The gate only needs to know whether
+ * restarting would kill a live rsync/pg_dump in this server instance, and
+ * `isRunning` answers exactly that, with no I/O and nothing that can fail to
+ * read.
+ */
+export function isBackupInProgress() {
+  return isRunning;
+}

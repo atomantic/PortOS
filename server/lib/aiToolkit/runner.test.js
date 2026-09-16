@@ -727,6 +727,20 @@ describe('AI Toolkit runner — declared extension points', () => {
     expect(await runner.stopRun('x')).toBe(false);
   });
 
+  // getActiveRunCount is the surface the host's system-idle gate reads — it
+  // must count BOTH tracking maps (API runs and host-spawned CLI/TUI runs),
+  // since a host runner never populates the other one for the same run.
+  it('getActiveRunCount sums external and internally-tracked runs', async () => {
+    const runner = createRunnerService({ dataDir: './data' });
+    expect(await runner.getActiveRunCount()).toBe(0);
+
+    runner.registerExternalRun('external-1', externalChild());
+    expect(await runner.getActiveRunCount()).toBe(1);
+
+    await runner.stopRun('external-1');
+    expect(await runner.getActiveRunCount()).toBe(0);
+  });
+
   // registerExternalRun also holds node-pty sessions (the host's TUI runs). On
   // Windows node-pty throws "Signals not supported on windows." for any signal,
   // so a signalled kill there stopped nothing and threw past stopRun, leaving

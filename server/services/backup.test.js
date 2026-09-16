@@ -2326,6 +2326,7 @@ describe('runBackup lifecycle', () => {
   let destRoot;
   let prevMemoryBackend;
   let runBackup;
+  let isBackupInProgress;
   let dataRoot;
 
   // Real fs bound once, bypassing the module-level fs/promises mock, so the
@@ -2377,7 +2378,7 @@ describe('runBackup lifecycle', () => {
     // Fresh module per test: `isRunning` is module-level state, so the lock
     // tests must not inherit a previous test's value.
     vi.resetModules();
-    ({ runBackup } = await import('./backup.js'));
+    ({ runBackup, isBackupInProgress } = await import('./backup.js'));
     ({ PATHS: { data: dataRoot } } = await import('../lib/fileUtils.js'));
   });
 
@@ -2594,6 +2595,25 @@ describe('runBackup lifecycle', () => {
 
     proc.emit('close', 0);
     await first;
+  });
+
+  // Feeds the system-idle gate (server/lib/systemIdle.js): a live snapshot
+  // must not read as an idle install, or the unattended updater would kill
+  // rsync mid-write. `isBackupInProgress` is the signal that gate reads.
+  it('isBackupInProgress reflects the in-process run, false before and after', async () => {
+    expect(isBackupInProgress()).toBe(false);
+
+    const io = { emit: vi.fn() };
+    const proc = fakeProc();
+    spawn.mockReturnValue(proc);
+
+    const pending = runBackup(destRoot, io);
+    await waitFor(() => spawn.mock.calls.length === 1, 'rsync spawn');
+    expect(isBackupInProgress()).toBe(true);
+
+    proc.emit('close', 0);
+    await pending;
+    expect(isBackupInProgress()).toBe(false);
   });
 
   // A snapshot mid-assembly would tar/rsync as a truncated tree that looks like

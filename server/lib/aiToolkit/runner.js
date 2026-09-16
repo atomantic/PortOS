@@ -1022,6 +1022,17 @@ export function createRunnerService(config = {}) {
 
     async isRunActive(runId) {
       return externalRuns.has(runId) || activeRuns.has(runId);
+    },
+
+    /**
+     * How many runs this instance is tracking right now — API-based
+     * (`activeRuns`) and host-spawned CLI/TUI (`externalRuns`) alike. A count
+     * only: no run's prompt or output crosses this surface, so a host can
+     * safely fold it into an activity/idle gate (PortOS's `systemIdle.js`
+     * does exactly that) without leaking record content.
+     */
+    async getActiveRunCount() {
+      return activeRuns.size + externalRuns.size;
     }
   };
 

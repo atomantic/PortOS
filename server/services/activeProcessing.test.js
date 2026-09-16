@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const deps = vi.hoisted(() => ({
   capability: vi.fn(), utilization: vi.fn(), jobs: vi.fn(), running: vi.fn(), models: vi.fn(), loaded: vi.fn(), tasks: vi.fn(), status: vi.fn(), agents: vi.fn(),
-  mind: vi.fn(), operations: vi.fn(), updating: vi.fn(),
+  mind: vi.fn(), operations: vi.fn(), updating: vi.fn(), runCount: vi.fn(), backupRunning: vi.fn(),
 }));
 vi.mock('../lib/cudaCapability.js', () => ({ getCudaCapability: deps.capability, getCudaUtilization: deps.utilization }));
 vi.mock('./mediaJobQueue/index.js', () => ({ listJobs: deps.jobs, getRunningJob: deps.running }));
@@ -13,6 +13,8 @@ vi.mock('./cos.js', () => ({ getPendingTaskIds: deps.tasks, getStatus: deps.stat
 vi.mock('./cosState.js', () => ({ readPersistentMindStateForSafetyCheck: deps.mind }));
 vi.mock('./appOperations.js', () => ({ listActiveAppOperations: deps.operations }));
 vi.mock('./updateChecker.js', () => ({ isUpdateInProgress: deps.updating }));
+vi.mock('./runner.js', () => ({ getActiveRunCount: deps.runCount }));
+vi.mock('./backup.js', () => ({ isBackupInProgress: deps.backupRunning }));
 
 const { getActiveProcessing } = await import('./activeProcessing.js');
 
@@ -22,6 +24,8 @@ describe('active processing snapshot', () => {
     deps.mind.mockResolvedValue({ trusted: true, persistentMind: { enabled: true, started: true, status: 'idle', queuedMessages: [], activeTurn: null } });
     deps.operations.mockReturnValue([]);
     deps.updating.mockReturnValue(false);
+    deps.runCount.mockResolvedValue(0);
+    deps.backupRunning.mockReturnValue(false);
   });
 
   it('reports sanitized audio work, GPU utilization, and non-media extras', async () => {
@@ -88,6 +92,8 @@ describe('persistent mind and idle verdict', () => {
     deps.tasks.mockResolvedValue([]);
     deps.agents.mockResolvedValue([]);
     deps.status.mockResolvedValue({ activeAgents: 0 });
+    deps.runCount.mockResolvedValue(0);
+    deps.backupRunning.mockReturnValue(false);
   });
 
   it('reports an active turn as thinking, carrying counts but no message content', async () => {
@@ -148,6 +154,8 @@ describe('queued agent count', () => {
     deps.models.mockResolvedValue([]);
     deps.loaded.mockResolvedValue([]);
     deps.status.mockResolvedValue({ activeAgents: 0 });
+    deps.runCount.mockResolvedValue(0);
+    deps.backupRunning.mockReturnValue(false);
   });
 
   it('does not count a pending task a running agent already holds', async () => {
@@ -210,5 +218,66 @@ describe('queued agent count', () => {
     expect(snapshot.agents).toEqual({ trusted: false, active: 0, queued: 0 });
     expect(snapshot.activity.idle).toBe(false);
     expect(snapshot.activity.blockers.map(b => b.kind)).toContain('agents-unreadable');
+  });
+});
+
+// The gap this module shipped without: a promptRunner/stageRunner run holds a
+// provider connection or a CLI/TUI child process — the most common form of
+// live work on this install, and none of the other slices ever saw it.
+describe('LLM run and backup snapshot activity', () => {
+  beforeEach(() => {
+    Object.values(deps).forEach((mock) => mock.mockReset());
+    deps.mind.mockResolvedValue({ trusted: true, persistentMind: { enabled: true, started: true, status: 'idle', queuedMessages: [], activeTurn: null } });
+    deps.operations.mockReturnValue([]);
+    deps.updating.mockReturnValue(false);
+    deps.capability.mockResolvedValue({ status: 'absent', gpus: [] });
+    deps.jobs.mockReturnValue([]);
+    deps.running.mockReturnValue(null);
+    deps.models.mockResolvedValue([]);
+    deps.loaded.mockResolvedValue([]);
+    deps.tasks.mockResolvedValue([]);
+    deps.agents.mockResolvedValue([]);
+    deps.status.mockResolvedValue({ activeAgents: 0 });
+  });
+
+  // Contract test: a live run blocks the gate.
+  it('blocks idle while an LLM/pipeline run is in flight', async () => {
+    deps.runCount.mockResolvedValue(1);
+    deps.backupRunning.mockReturnValue(false);
+    const snapshot = await getActiveProcessing();
+    expect(snapshot.llm).toEqual({ trusted: true, active: 1 });
+    expect(snapshot.activity.idle).toBe(false);
+    expect(snapshot.activity.blockers.map(b => b.kind)).toContain('llm-running');
+  });
+
+  // Bypass probe: a FAILED read of the run count must not collapse into "zero
+  // running" — that is exactly the value that would unlock the restart. This
+  // guard is worthless unless it also fails without the fix in place.
+  it('refuses to read a failed run-count read as an idle one', async () => {
+    deps.runCount.mockRejectedValue(new Error('toolkit unavailable'));
+    deps.backupRunning.mockReturnValue(false);
+    const snapshot = await getActiveProcessing();
+    expect(snapshot.llm).toEqual({ trusted: false, active: 0 });
+    expect(snapshot.activity.idle).toBe(false);
+    expect(snapshot.activity.blockers.map(b => b.kind)).toContain('llm-unreadable');
+  });
+
+  it('reports zero active runs and idle when nothing is tracked', async () => {
+    deps.runCount.mockResolvedValue(0);
+    deps.backupRunning.mockReturnValue(false);
+    const snapshot = await getActiveProcessing();
+    expect(snapshot.llm).toEqual({ trusted: true, active: 0 });
+    expect(snapshot.activity.idle).toBe(true);
+  });
+
+  // Milder than the others: a killed backup wastes a snapshot rather than
+  // losing work, but it still belongs in the same gate.
+  it('blocks idle while a backup snapshot is running', async () => {
+    deps.runCount.mockResolvedValue(0);
+    deps.backupRunning.mockReturnValue(true);
+    const snapshot = await getActiveProcessing();
+    expect(snapshot.backup).toEqual({ inProgress: true });
+    expect(snapshot.activity.idle).toBe(false);
+    expect(snapshot.activity.blockers.map(b => b.kind)).toContain('backup-running');
   });
 });
