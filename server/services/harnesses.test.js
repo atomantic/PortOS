@@ -251,18 +251,100 @@ describe('refreshHarnessModels', () => {
     expect(run).toHaveBeenCalledWith('token-cli', ['run', 'opencode-harness', '--', 'models'], expect.anything());
   });
 
-  // One probe cannot serve two credentials, so a mix runs bare rather than
-  // handing one record's token to another record's refresh.
-  it('probes bare when only some write targets carry a bootstrap', async () => {
-    const run = vi.fn(async (command, args) => (args[0] === 'models' ? OPENCODE_MODELS : '1.18.27'));
+  // Catches the AMBIENT account's catalog being written onto a credentialed
+  // record — what a single bare probe did whenever the targets disagreed, which
+  // on a stock install is always (the shipped OpenCode Zen pair carries none).
+  it('probes once per credential and keeps each bucket’s catalog to its own records', async () => {
+    const run = vi.fn(async (command, args) => {
+      if (!args.includes('models')) return '1.18.27';
+      return command === 'token-cli' ? 'opencode/private-a\n' : OPENCODE_MODELS;
+    });
     providerService.listProviders.mockResolvedValue([
       { id: 'boot-cli', type: 'cli', command: 'opencode', models: [], credentialBootstrap: { command: 'token-cli' } },
       { id: 'plain-cli', type: 'cli', command: 'opencode', models: [] },
     ]);
 
-    await refreshHarnessModels('opencode', { run, ...found });
+    const result = await refreshHarnessModels('opencode', { run, ...found });
 
+    expect(run).toHaveBeenCalledWith('token-cli', ['opencode', 'models'], expect.anything());
     expect(run).toHaveBeenCalledWith('/example/opencode', ['models'], expect.anything());
+    expect(result.updated.sort()).toEqual(['boot-cli', 'plain-cli']);
+    // The credentialed record gets ONLY what its own credential listed.
+    expect(providerService.updateProvider).toHaveBeenCalledWith('boot-cli',
+      expect.objectContaining({ models: ['opencode/private-a'] }));
+    expect(providerService.updateProvider).toHaveBeenCalledWith('plain-cli',
+      expect.objectContaining({ models: ['opencode/big-pickle', 'opencode/mimo-v2.5-free'] }));
+  });
+
+  // Catches a card's button spawning an unrelated record's bootstrap CLI —
+  // minting a credential and hitting its proxy on a click not about it.
+  it('probes only the clicked record’s bucket when scoped by providerId', async () => {
+    const run = vi.fn(async (command, args) => (args.includes('models') ? `opencode/from-${command}\n` : '1.18.27'));
+    providerService.listProviders.mockResolvedValue([
+      { id: 'boot-cli', type: 'cli', command: 'opencode', models: [], credentialBootstrap: { command: 'token-cli' } },
+      { id: 'plain-cli', type: 'cli', command: 'opencode', models: [] },
+    ]);
+
+    const result = await refreshHarnessModels('opencode', { run, providerId: 'plain-cli', ...found });
+
+    expect(result.updated).toEqual(['plain-cli']);
+    expect(run).not.toHaveBeenCalledWith('token-cli', expect.anything(), expect.anything());
+  });
+
+  // Two accounts: neither may be refreshed from the other's catalog.
+  it('probes each distinct bootstrap separately', async () => {
+    const run = vi.fn(async (command, args) => (args.includes('models') ? `opencode/from-${command}\n` : '1.18.27'));
+    providerService.listProviders.mockResolvedValue([
+      { id: 'a-cli', type: 'cli', command: 'opencode', models: [], credentialBootstrap: { command: 'token-a' } },
+      { id: 'b-cli', type: 'cli', command: 'opencode', models: [], credentialBootstrap: { command: 'token-b' } },
+    ]);
+
+    await refreshHarnessModels('opencode', { run, findCommand: async () => null });
+
+    expect(providerService.updateProvider).toHaveBeenCalledWith('a-cli',
+      expect.objectContaining({ models: ['opencode/from-token-a'] }));
+    expect(providerService.updateProvider).toHaveBeenCalledWith('b-cli',
+      expect.objectContaining({ models: ['opencode/from-token-b'] }));
+  });
+
+  // Catches a bucket that answered nothing reading as a clean success for the
+  // records it was supposed to write.
+  it('reports the failing bucket’s reason on a partial success', async () => {
+    const run = vi.fn(async (command, args) => {
+      if (!args.includes('models')) return '1.18.27';
+      return command === 'token-cli' ? '' : OPENCODE_MODELS;
+    });
+    providerService.listProviders.mockResolvedValue([
+      { id: 'boot-cli', type: 'cli', command: 'opencode', models: [], credentialBootstrap: { command: 'token-cli' } },
+      { id: 'plain-cli', type: 'cli', command: 'opencode', models: [] },
+    ]);
+
+    const result = await refreshHarnessModels('opencode', { run, ...found });
+
+    expect(result.ok).toBe(true);
+    expect(result.updated).toEqual(['plain-cli']);
+    expect(result.reason).toContain('token-cli opencode models');
+    // Nothing to sign into by hand — a bootstrap CLI mints its own credential.
+    expect(result.reason).not.toContain('Sign in');
+  });
+
+  // The credentialed records reach their harness through the bootstrap CLI, so
+  // a missing binary is the bare bucket's refusal alone.
+  it('keeps a missing binary from failing the credentialed bucket', async () => {
+    const run = vi.fn(async (command, args) => {
+      if (!args.includes('models')) return null; // version probe: not installed
+      return 'opencode/private-a\n';
+    });
+    providerService.listProviders.mockResolvedValue([
+      { id: 'boot-cli', type: 'cli', command: 'opencode', models: [], credentialBootstrap: { command: 'token-cli' } },
+      { id: 'plain-cli', type: 'cli', command: 'opencode', models: [] },
+    ]);
+
+    const result = await refreshHarnessModels('opencode', { run, findCommand: async () => null });
+
+    expect(result.updated).toEqual(['boot-cli']);
+    expect(result.reason).toContain('is not installed on this host');
+    expect(run).not.toHaveBeenCalledWith('opencode', ['models'], expect.anything());
   });
 
   it('writes the harness catalog only to providers that draw from it', async () => {

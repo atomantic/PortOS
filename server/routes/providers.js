@@ -918,7 +918,10 @@ export function createPortOSProviderRoutes(aiToolkit) {
     if (!stored) throw new ServerError('Provider not found', { status: 404 });
     let provider;
     if (refreshesOpenCodeCatalog(stored)) {
-      const result = await refreshHarnessModels('opencode');
+      // Scoped to THIS record: the harness is probed once per bootstrap
+      // credential (services/harnesses.js), and a card's button must not spawn
+      // another record's credential CLI to answer for its own.
+      const result = await refreshHarnessModels('opencode', { providerId: stored.id });
       if (!result.ok || !result.updated.includes(stored.id)) {
         throw new ServerError(result.reason || 'No models matched this provider’s namespace; its catalog was preserved.', { status: 502 });
       }

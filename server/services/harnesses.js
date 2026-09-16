@@ -247,101 +247,41 @@ export async function listHarnesses({ fresh = false, run = commandOutput, ...pro
 }
 
 /**
- * The ONE credential every record this refresh writes agrees on, or null.
+ * The target records bucketed by the credential their probe must run under.
  *
- * A single probe serves every target, so it can only run under a credential all
- * of them share: one distinct bootstrap across all targets is unambiguous, and
- * anything else — a mix of bootstrapped and not, or two different ones — cannot
- * be served by one spawn and probes bare, exactly as it always did.
+ * A bootstrap CLI mints auth for ONE account, and `<harness> models` under it
+ * prints THAT account's catalog — so a probe answers only for the records that
+ * share its credential. One bucket per distinct `credentialBootstrap`, plus one
+ * for the records that name none (`probeAs: null`, probed bare).
+ *
+ * A target's own credential is the only thing that decides which probe answers
+ * for it: there is deliberately no rule that degrades a mixed set to one bare
+ * probe, because "bare" is another account's answer, not a safe default.
+ *
+ * Deep equality rather than a serialized key: two records carrying the same
+ * bootstrap by different key order are one account, not two probes.
  */
-const soleCredentialBootstrap = (targets) => {
-  const named = targets.filter(hasCredentialBootstrap);
-  if (named.length === 0 || named.length !== targets.length) return null;
-  return named.every((target) => isDeepStrictEqual(target.credentialBootstrap, named[0].credentialBootstrap))
-    ? named[0] : null;
+const credentialProbeGroups = (targets) => {
+  const groups = [];
+  for (const target of targets) {
+    // The RECORD to probe as, not the bootstrap itself — `resolveCliSpawn`
+    // takes a provider, and null means "spawn the harness bare".
+    const probeAs = hasCredentialBootstrap(target) ? target : null;
+    const bucket = groups.find((group) => isDeepStrictEqual(
+      group.probeAs?.credentialBootstrap ?? null,
+      probeAs?.credentialBootstrap ?? null,
+    ));
+    if (bucket) bucket.targets.push(target);
+    else groups.push({ probeAs, targets: [target] });
+  }
+  return groups;
 };
 
 /**
- * Ask a harness which models it knows about, and write the answer to every
- * provider that draws from its own catalog.
- *
- * Refuses rather than guesses in three cases, each with its own reason string:
- * an id not in the table, a harness with no `models` subcommand, and a harness
- * that is not installed. A probe that RUNS but parses to nothing also refuses —
- * an empty catalog is far more likely to be a vendor output change or a
- * signed-out CLI than a real "this harness has zero models", and blanking every
- * picker on that guess is worse than reporting the probe as failed.
- *
- * @returns {Promise<{ok:boolean, reason?:string, models:string[], updated:string[]}>}
+ * Write one probe's catalog to the records that probe answers for, and return
+ * the ids actually rewritten.
  */
-export async function refreshHarnessModels(id, { run = commandOutput, ...probeDeps } = {}) {
-  const runtime = getProviderRuntime(id);
-  if (!runtime) return { ok: false, reason: 'Unknown harness.', models: [], updated: [] };
-  if (!runtime.modelsArgs) {
-    return {
-      ok: false,
-      reason: `${runtime.label} has no command for listing its models, so PortOS cannot refresh them from here.`,
-      models: [],
-      updated: [],
-    };
-  }
-  const findCommand = probeDeps.findCommand || findCommandOnPath;
-
-  // The records this refresh will WRITE, resolved before the probe because the
-  // credential the probe must run under belongs to THEM — not to whichever
-  // card's button was clicked, and not to the ambient account.
-  const targets = providersForHarness(await providerService.listProviders(), runtime).filter(usesHarnessCatalog);
-  const credentialed = soleCredentialBootstrap(targets);
-
-  // The SAME injected runner answers the availability probe, so a caller (and a
-  // test) drives one child-process boundary rather than two. Cache-respecting:
-  // the page rendered from a probe seconds ago, and re-spawning the binary for
-  // a 15s worst case ahead of the 45s models probe would double the wait on a
-  // user-facing button. A binary that broke since then still refuses below.
-  // Skipped entirely for a credentialed harness: it is reached through its
-  // bootstrap CLI and need not be on PATH, so the probe would spawn a binary to
-  // answer a question it would answer wrongly.
-  if (!credentialed) {
-    const status = await getProviderRuntimeStatus(runtime.id, { ...probeDeps, probeCommand: run });
-    if (!status?.installed) {
-      return { ok: false, reason: `${runtime.label} is not installed on this host.`, models: [], updated: [] };
-    }
-  }
-
-  // `opencode models` prints from an on-disk catalog OpenCode refreshes on its
-  // own — silently, and not at all on a host where its fetch fails (see
-  // `lib/opencodeCatalogCache.js`). Without this the button faithfully re-reads
-  // a catalog frozen weeks ago and reports success, while the same account on
-  // another machine lists models this one has never heard of. Best-effort by
-  // design: a refusal or a failed fetch leaves the probe below unchanged.
-  if (runtime.id === 'opencode') {
-    const catalog = await primeOpencodeCatalogCache();
-    console.log(`📚 ${runtime.label} catalog: ${catalog.primed ? 'refreshed' : 'left alone'} — ${catalog.reason}`);
-  }
-
-  // Resolve exactly as the version probe does. An npm-installed harness is a
-  // `.cmd` shim on Windows, which `execFile` under `shell: false` refuses
-  // outright — the probe would answer nothing and the page would tell a
-  // signed-in user to go sign in. A credentialed harness skips the PATH walk
-  // (it need not be there); `resolveCliSpawn` resolves the bootstrap binary's
-  // own shim instead.
-  const resolved = credentialed ? null : await findCommand(runtime.command);
-  const probe = resolveCliSpawn(credentialed, resolved || runtime.command, [...runtime.modelsArgs], process.env);
-  const stdout = await run(probe.command, probe.args, { timeoutMs: MODELS_PROBE_TIMEOUT_MS });
-  const models = parseHarnessModels(runtime.id, stdout);
-  if (models.length === 0) {
-    // Name what RAN, and only send the user to a terminal when a terminal could
-    // help: a credentialed harness mints its own auth and is not something they
-    // can sign in to by hand.
-    const ran = `\`${probe.command} ${probe.args.join(' ')}\` returned no models.`;
-    return {
-      ok: false,
-      reason: credentialed ? ran : `${ran} Sign in to ${runtime.label} in a terminal, then try again.`,
-      models: [],
-      updated: [],
-    };
-  }
-
+async function applyHarnessCatalog(runtime, models, targets) {
   const updated = [];
   for (const provider of targets) {
     // Hold the record's namespace scope (see `storedNamespaces`). A filter that
@@ -372,6 +312,129 @@ export async function refreshHarnessModels(id, { run = commandOutput, ...probeDe
     await providerService.updateProvider(provider.id, { models: next, defaultModel });
     updated.push(provider.id);
   }
+  return updated;
+}
+
+/**
+ * Ask a harness which models it knows about, and write the answer to every
+ * provider that draws from its own catalog.
+ *
+ * One probe per credential, not one per harness — see {@link credentialProbeGroups}:
+ * the catalog a harness prints is the catalog of the account it ran as, so a
+ * record whose auth comes from a bootstrap CLI is answered by a probe run
+ * THROUGH that CLI and never by the ambient one.
+ *
+ * Refuses rather than guesses in three cases, each with its own reason string:
+ * an id not in the table, a harness with no `models` subcommand, and a harness
+ * that is not installed. A probe that RUNS but parses to nothing also refuses —
+ * an empty catalog is far more likely to be a vendor output change or a
+ * signed-out CLI than a real "this harness has zero models", and blanking every
+ * picker on that guess is worse than reporting the probe as failed. With
+ * several credentials in play those refusals are per-bucket, so `reason` is
+ * present on a partial success as well as on `ok: false`.
+ *
+ * `providerId` narrows the run to the ONE bucket that record belongs to — what
+ * a single provider card's button means. Without it a click on a plain wrapper
+ * would also spawn an unrelated record's bootstrap CLI, minting a credential
+ * nobody asked for. The Harnesses page button omits it and refreshes them all.
+ *
+ * @returns {Promise<{ok:boolean, reason?:string, models:string[], updated:string[]}>}
+ */
+export async function refreshHarnessModels(id, { run = commandOutput, providerId = null, ...probeDeps } = {}) {
+  const runtime = getProviderRuntime(id);
+  if (!runtime) return { ok: false, reason: 'Unknown harness.', models: [], updated: [] };
+  if (!runtime.modelsArgs) {
+    return {
+      ok: false,
+      reason: `${runtime.label} has no command for listing its models, so PortOS cannot refresh them from here.`,
+      models: [],
+      updated: [],
+    };
+  }
+  const findCommand = probeDeps.findCommand || findCommandOnPath;
+
+  // The records this refresh will WRITE, resolved before the probe because the
+  // credential each probe must run under belongs to THEM — not to whichever
+  // card's button was clicked, and not to the ambient account.
+  const targets = providersForHarness(await providerService.listProviders(), runtime).filter(usesHarnessCatalog);
+  const buckets = credentialProbeGroups(targets);
+  const scoped = providerId ? buckets.filter((b) => b.targets.some((t) => t.id === providerId)) : buckets;
+  if (providerId && scoped.length === 0) {
+    return { ok: false, reason: `${providerId} does not draw its models from ${runtime.label}.`, models: [], updated: [] };
+  }
+  // No targets at all still runs one bare probe, so the Harnesses page can
+  // report what the harness lists even with nothing to write it to.
+  const groups = scoped.length ? scoped : [{ probeAs: null, targets: [] }];
+
+  // The SAME injected runner answers the availability probe, so a caller (and a
+  // test) drives one child-process boundary rather than two. Cache-respecting:
+  // the page rendered from a probe seconds ago, and re-spawning the binary for
+  // a 15s worst case ahead of the 45s models probe would double the wait on a
+  // user-facing button. A binary that broke since then still refuses below.
+  // Asked only when a BARE probe will run: a credentialed harness is reached
+  // through its bootstrap CLI and need not be on PATH, so a missing binary is
+  // that bucket's refusal alone and never the credentialed buckets'.
+  const notInstalled = `${runtime.label} is not installed on this host.`;
+  const probesBare = groups.some((group) => !group.probeAs);
+  const installed = probesBare
+    ? Boolean((await getProviderRuntimeStatus(runtime.id, { ...probeDeps, probeCommand: run }))?.installed)
+    : false;
+
+  // `opencode models` prints from an on-disk catalog OpenCode refreshes on its
+  // own — silently, and not at all on a host where its fetch fails (see
+  // `lib/opencodeCatalogCache.js`). Without this the button faithfully re-reads
+  // a catalog frozen weeks ago and reports success, while the same account on
+  // another machine lists models this one has never heard of. Best-effort by
+  // design: a refusal or a failed fetch leaves the probes below unchanged.
+  // Gated on a probe actually being able to run, so the refusal below doesn't
+  // first pay for a catalog nothing is going to read.
+  if (runtime.id === 'opencode' && (installed || groups.some((group) => group.probeAs))) {
+    const catalog = await primeOpencodeCatalogCache();
+    console.log(`📚 ${runtime.label} catalog: ${catalog.primed ? 'refreshed' : 'left alone'} — ${catalog.reason}`);
+  }
+
+  // Probe every bucket CONCURRENTLY: each is a distinct child with its own 45s
+  // cap, so running them in series would make the Harnesses page button cost
+  // one timeout per credential. Only the WRITES have to be serialized, and they
+  // stay so in the apply pass below.
+  const probed = await Promise.all(groups.map(async (group) => {
+    if (!group.probeAs && !installed) return { group, failure: notInstalled };
+    // Resolve exactly as the version probe does. An npm-installed harness is a
+    // `.cmd` shim on Windows, which `execFile` under `shell: false` refuses
+    // outright — the probe would answer nothing and the page would tell a
+    // signed-in user to go sign in. A credentialed bucket skips the PATH walk
+    // (its harness need not be there); `resolveCliSpawn` resolves the bootstrap
+    // binary's own shim instead.
+    const resolved = group.probeAs ? null : await findCommand(runtime.command);
+    const probe = resolveCliSpawn(group.probeAs, resolved || runtime.command, [...runtime.modelsArgs], process.env);
+    const listed = parseHarnessModels(runtime.id, await run(probe.command, probe.args, { timeoutMs: MODELS_PROBE_TIMEOUT_MS }));
+    if (listed.length > 0) return { group, listed };
+    // Name what RAN, and only send the user to a terminal when a terminal could
+    // help: a credentialed harness mints its own auth and is not something they
+    // can sign in to by hand.
+    const ran = `\`${probe.command} ${probe.args.join(' ')}\` returned no models.`;
+    return { group, failure: group.probeAs ? ran : `${ran} Sign in to ${runtime.label} in a terminal, then try again.` };
+  }));
+
+  const seen = new Set();
+  const updated = [];
+  const failures = [];
+  for (const { group, listed, failure } of probed) {
+    if (failure) {
+      failures.push(failure);
+      continue;
+    }
+    for (const model of listed) seen.add(model);
+    updated.push(...await applyHarnessCatalog(runtime, listed, group.targets));
+  }
+
+  // `reason` rides along on a PARTIAL success too: with one bucket probed per
+  // credential, the caller that asked on behalf of ONE record (the provider
+  // card's button, which checks `updated` for its own id) needs the message
+  // from the bucket that failed, not silence because another bucket answered.
+  const reason = failures.length ? failures.join(' ') : undefined;
+  const models = [...seen];
+  if (models.length === 0) return { ok: false, reason, models: [], updated: [] };
   console.log(`🔄 ${runtime.label}: ${models.length} models → ${updated.length} provider(s)`);
-  return { ok: true, models, updated };
+  return { ok: true, reason, models, updated };
 }
