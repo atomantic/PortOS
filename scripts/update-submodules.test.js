@@ -41,4 +41,14 @@ describe.each(SCRIPT_COMMANDS)('$path submodule update contract', ({ path, pull,
   it('does not advance submodules past the commits reviewed by PortOS', () => {
     expect(source).not.toMatch(/git submodule update[^\n]*--remote/);
   });
+
+  // This script is the most likely producer of an abandoned lock (PM2 tree-kills
+  // it mid-run), and without the sweep every later self-update fails identically
+  // on a file under `.git/` only a human would find. Both platforms call the one
+  // Node helper rather than each reimplementing "is this lock abandoned?".
+  it('clears locks a previously killed update left behind, before it takes any', () => {
+    const sweepIndex = source.indexOf('clearStaleGitLocksIn');
+    expect(sweepIndex).toBeGreaterThanOrEqual(0);
+    expect(sweepIndex).toBeLessThan(source.indexOf(pull));
+  });
 });

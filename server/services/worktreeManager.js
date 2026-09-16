@@ -16,6 +16,7 @@ import { ensureDir, isPathInsideDir, PATHS, sleep, tryReadFile } from '../lib/fi
 import { DONE_SENTINEL_NAME, doneSentinelName } from '../lib/agentSentinel.js';
 import { AGENT_SCRATCH_PATHS, matchesScratchRoot } from '../lib/agentScratchPaths.js';
 import { execGit } from '../lib/execGit.js';
+import { clearStaleGitLock } from '../lib/gitStaleLock.js';
 import { createKeyCachedQueue } from '../lib/createKeyCachedQueue.js';
 import { enforceSafeBranchUpstream } from '../lib/branchUpstreamGuard.js';
 import { forkRemoteName, normalizeForkHead } from '../lib/forkHead.js';
@@ -59,7 +60,12 @@ const WORKTREE_ADD_RETRY_DELAY_MS = 250;
 // defeats the orphan-branch cleanup ("Cannot delete branch … checked out at …").
 // Ten minutes is far above any healthy add and still bounded. Applies to
 // `worktree move` too — it routes through this same wrapper.
-const WORKTREE_ADD_TIMEOUT_MS = 10 * 60 * 1000;
+//
+// EXPORTED because it is the ceiling `STALE_GIT_LOCK_MIN_AGE_MS` is sized
+// against: the longest a git command PortOS launches can legitimately still be
+// holding its lock. Raising this without raising that one would let the
+// stale-lock sweep delete a live checkout's lock — the test below pins it.
+export const WORKTREE_ADD_TIMEOUT_MS = 10 * 60 * 1000;
 
 /**
  * True when a git error message indicates lock/contention on the worktree or
@@ -128,6 +134,13 @@ export function addWorktreeWithRetry(args, repo, attempt = 1, firstError = null)
       err.firstAttemptError = originalError;
       throw err;
     }
+    // The retry budget above assumes CONTENTION — a live competitor that will
+    // release the lock within a second. An ABANDONED lock (a killed git process
+    // never removed it) releases never, so all four attempts fail and the task
+    // blocks with `worktree-failed` on a repo nothing is actually using. Clear
+    // it before backing off; `clearStaleGitLock` refuses anything young enough
+    // to still belong to a running command, so a real competitor is untouched.
+    clearStaleGitLock(err.message);
     console.log(`🌳 Worktree ${args[1] || 'add'} lock contention (attempt ${attempt}/${WORKTREE_ADD_MAX_ATTEMPTS}), retrying in ${WORKTREE_ADD_RETRY_DELAY_MS}ms: ${err.message}`);
     return sleep(WORKTREE_ADD_RETRY_DELAY_MS)
       .then(() => addWorktreeWithRetry(args, repo, attempt + 1, originalError));

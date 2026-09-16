@@ -3,6 +3,7 @@ import { join, resolve } from 'path';
 import { safeJSONParse, PATHS, sleep } from '../lib/fileUtils.js';
 import { isGitLockError, listWorktrees, reapMergedWorktrees } from './worktreeManager.js';
 import { execGit, execGitSafe } from '../lib/execGit.js';
+import { clearStaleGitLock } from '../lib/gitStaleLock.js';
 import { resolveForgeForRepo } from './forgeAuth.js';
 export { resolveForgeForRepo, resolveForgeTokenEnv } from './forgeAuth.js';
 import {
@@ -1719,7 +1720,17 @@ export async function updateSubmodule(subPath, { repoPath, commit: shouldCommit 
     throw new ServerError(`Unknown submodule path: ${subPath}`, { status: 400, code: 'VALIDATION_ERROR' });
   }
   console.log(`📦 Updating submodule ${subPath}...`);
-  await execGit(['submodule', 'update', '--init', '--recursive', '--remote', subPath], root, { timeout: 60000 });
+  const updateArgs = ['submodule', 'update', '--init', '--recursive', '--remote', subPath];
+  // A submodule's lock lives in `.git/modules/<subPath>/`, which every worktree
+  // of the parent repo shares, so one killed git process wedges this button
+  // permanently — each press re-reports a concurrent git process that exited
+  // long ago. Clear the abandoned lock and retry ONCE; a lock too young to call
+  // stale, or a failure that names no lock, rethrows untouched so a genuinely
+  // concurrent update still reports contention rather than racing it.
+  await execGit(updateArgs, root, { timeout: 60000 }).catch(async (err) => {
+    if (!clearStaleGitLock(err.message)) throw err;
+    await execGit(updateArgs, root, { timeout: 60000 });
+  });
   console.log(`✅ Submodule ${subPath} updated`);
   const statusResult = await execGit(['submodule', 'status', subPath], root);
   const parsed = parseSubmoduleStatusLine(statusResult.stdout);
