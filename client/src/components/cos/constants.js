@@ -285,7 +285,7 @@ export function pinnedPrCompletion(metadata) {
 
 // UI copy for each reviewer in the Review Loop picker. `copilot` requests a
 // GitHub Copilot review via the native reviewer API; CLI reviewers
-// (claude/antigravity/codex/grok/cursor/opencode/kimi) instruct the follow-up agent
+// (claude/antigravity/codex/grok/cursor/opencode/kilo/kimi) instruct the follow-up agent
 // to invoke the named CLI; local-LLM reviewers (lmstudio/ollama/mtplx) route the
 // diff through
 // PortOS's `POST /api/code-review/local` endpoint, which runs the model
@@ -296,6 +296,7 @@ export function pinnedPrCompletion(metadata) {
 const CODE_REVIEWERS_PAGE = getNavPageForPath('/models/code-reviewers')?.breadcrumb || 'its management page';
 const REVIEWER_COPY = {
   pi: { label: 'Pi', description: 'Pi Coding Agent CLI reviews the supplied diff without tools' },
+  kilo: { label: 'Kilo Code', description: `Kilo Code CLI (an OpenCode fork) reviews the PR diff (optional provider/model on ${CODE_REVIEWERS_PAGE})` },
   copilot: { label: 'Copilot', description: 'GitHub Copilot (GitHub-only)' },
   claude: { label: 'Claude', description: `Claude CLI reviews the PR diff (optional model on ${CODE_REVIEWERS_PAGE}; supports an Ollama-backed Claude for local-only setups)` },
   antigravity: { label: 'Antigravity', description: 'Antigravity CLI (agy) reviews the PR diff' },

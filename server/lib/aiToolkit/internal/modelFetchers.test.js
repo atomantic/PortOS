@@ -55,6 +55,14 @@ const SHIPPED_NOT_REFRESHABLE = [
   'claude-code-tui', 'claude-code-tui-bedrock',
   'grok-cli', 'grok-tui', 'kimi-cli', 'kimi-tui',
   'opencode-zen-cli', 'opencode-zen-tui',
+  // Kilo is an OpenCode fork and follows the same split as the Zen wrappers
+  // above: its catalog comes from the binary's own `kilo models`, which is the
+  // Models → Harnesses "Refresh models" path, not a card-side endpoint probe.
+  'kilo-cli', 'kilo-tui',
+  // OpenChamber's catalog belongs to the runtime the user signed in to, and its
+  // `models` subcommand prints that runtime's SETTINGS, not a catalog — nothing
+  // here or on the Harnesses page can enumerate it.
+  'openchamber-cli',
 ];
 
 describe('MODEL_FETCHERS — shipped catalog visibility is unchanged', () => {

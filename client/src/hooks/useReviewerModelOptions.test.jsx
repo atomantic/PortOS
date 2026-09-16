@@ -40,6 +40,9 @@ const providers = [
   // the config PortOS injects, so the reviewer (a BARE `opencode`) must not
   // offer them.
   { id: 'opencode-ollama', type: 'cli', command: 'opencode', ollamaBacked: true, models: ['qwen3-coder:30b'] },
+  // Kilo forks OpenCode's `provider/model` ids; its shipped records carry no
+  // backend marker, so the Harnesses refresh fills them from `kilo models`.
+  { id: 'kilo-cli', type: 'cli', command: 'kilo', models: ['anthropic/claude-opus-5'], defaultModel: 'anthropic/claude-opus-5' },
 ];
 
 describe('useReviewerModelOptions', () => {
@@ -53,6 +56,10 @@ describe('useReviewerModelOptions', () => {
     const { result } = renderHook(() => useReviewerModelOptions());
     await waitFor(() => expect(result.current.loaded).toBe(true));
     expect(result.current.optionsByReviewer.pi).toEqual(['example/model-a']);
+    expect(result.current.optionsByReviewer.kilo).toEqual(['anthropic/claude-opus-5']);
+    // A bare `kilo` falls back to the user's own configured model, so naming a
+    // default here would claim one the run will not use.
+    expect(result.current.defaultModels.kilo).toBeNull();
     for (const reviewer of MODEL_SELECTABLE_REVIEWERS) {
       expect(Array.isArray(result.current.optionsByReviewer[reviewer])).toBe(true);
     }

@@ -165,6 +165,10 @@ export default function useReviewerModelOptions() {
       // text input it used to be. Still free-text underneath: `opencode -m` takes
       // any `provider/model` the user's own config resolves.
       opencode: providerTiers('opencode'),
+      // Kilo forks OpenCode's `provider/model` ids and its `models` subcommand,
+      // so this is whatever the Harnesses page last refreshed onto the shipped
+      // records — empty until then, with free-text keeping the cell usable.
+      kilo: providerTiers('kilo'),
       mtplx: providerTiers('mtplx'),
     };
 
@@ -185,6 +189,9 @@ export default function useReviewerModelOptions() {
       // config names — not to the PortOS record's default. Naming a model here
       // would claim a default the run won't use.
       opencode: null,
+      // Same reasoning as `opencode`: the reviewer spawns a bare `kilo`, which
+      // falls back to the model the user's own Kilo config names.
+      kilo: null,
       mtplx: providerDefault('mtplx'),
     };
 

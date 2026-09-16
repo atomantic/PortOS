@@ -72,6 +72,7 @@ import {
   buildCodexAgentThreadArgs,
   buildEffortArgs,
   isOpencodeCommand,
+  ensureLeadingSubcommand,
   prefixOpencodeModel,
   localRuntimeNamespace,
   opencodeProviderIsLocalOnly,
@@ -109,6 +110,13 @@ import {
   ensureCursorHeadlessArgs,
 } from './cursor.js';
 import { PI_COMMAND, isPiCommand, ensurePiTuiArgs, ensurePiHeadlessArgs, preparePiPrompt } from './pi.js';
+import { KILO_COMMAND, KILO_COMMAND_ALIASES, isKiloCommand, ensureKiloTuiArgs, ensureKiloHeadlessArgs } from './kilo.js';
+import {
+  OPENCHAMBER_COMMAND,
+  isOpenchamberCommand,
+  ensureOpenchamberHeadlessArgs,
+  prepareOpenchamberPrompt,
+} from './openchamber.js';
 import { PROVIDER_TYPES } from './aiToolkit/constants.js';
 import {
   publicReviewPostureForProfile,
@@ -321,6 +329,9 @@ function antigravityCliArgs(baseArgs, { model, effort, provider }) {
 
 const ANTIGRAVITY = {
   id: 'antigravity',
+  // `isAntigravityCommand` has always accepted this spelling beside `agy`; the
+  // allowlist did not, so such a record 400'd at /spawn-tui.
+  commandAliases: ['antigravity'],
   idFragment: 'antigravity',
   inferredCommand: ANTIGRAVITY_COMMAND,
   matchCommand: isAntigravityCommand,
@@ -374,7 +385,7 @@ const ensureOpencodeAgent = (args) =>
   argvHasFlag(args, ['--agent']) ? args : [...args, '--agent', OPENCODE_BUILD_AGENT];
 
 function opencodeCliArgs(baseArgs, { model, provider }) {
-  const args = baseArgs.includes('run') ? [...baseArgs] : ['run', ...baseArgs];
+  const args = ensureLeadingSubcommand(baseArgs, 'run');
   return ensureOpencodeAgent(appendOpencodeModel(args, provider, model));
 }
 
@@ -477,6 +488,51 @@ const OPENCODE = {
       matchProvider: matchOpencodeBinary,
     },
   },
+};
+
+// ─── kilo ───────────────────────────────────────────────────────────────────
+
+function kiloCliArgs(baseArgs, { model }) {
+  return ensureKiloHeadlessArgs(baseArgs, model);
+}
+
+const KILO = {
+  id: 'kilo',
+  idFragment: 'kilo',
+  inferredCommand: KILO_COMMAND,
+  // `@kilocode/cli` installs two bin names for one program, and `isKiloCommand`
+  // accepts both — so the runner's allowlist has to as well, or a provider
+  // configured as `kilocode` is classified everywhere and spawnable nowhere.
+  commandAliases: KILO_COMMAND_ALIASES,
+  matchCommand: isKiloCommand,
+  // No dedicated matchCliProvider — matches by command, same as matchCommand.
+  tuiArgs: ensureKiloTuiArgs,
+  cliArgs: kiloCliArgs,
+  spawnArgs: defaultSpawnArgs(kiloCliArgs, KILO_COMMAND),
+  // No publicReview recipe: Kilo is an OpenCode fork whose tool posture lives in
+  // its config rather than argv, and PortOS writes no Kilo config (see
+  // providerHarnesses.js) — so there is nothing here that could ENFORCE a
+  // tool-free stage, and declaring one would make the gate decorative.
+};
+
+// ─── openchamber ────────────────────────────────────────────────────────────
+
+function openchamberCliArgs(baseArgs, { model }) {
+  return ensureOpenchamberHeadlessArgs(baseArgs, model);
+}
+
+const OPENCHAMBER = {
+  id: 'openchamber',
+  idFragment: 'openchamber',
+  inferredCommand: OPENCHAMBER_COMMAND,
+  matchCommand: isOpenchamberCommand,
+  // No dedicated matchCliProvider — matches by command, same as matchCommand.
+  // No `tuiArgs`: OpenChamber's interactive surface is a web app, and the bare
+  // binary starts its SERVER — there is nothing for a PTY to attach to, and an
+  // argv builder here would exist only to be misused (see openchamber.js).
+  cliArgs: openchamberCliArgs,
+  preparePrompt: prepareOpenchamberPrompt,
+  spawnArgs: defaultSpawnArgs(openchamberCliArgs, OPENCHAMBER_COMMAND),
 };
 
 // ─── grok ───────────────────────────────────────────────────────────────────
@@ -799,7 +855,7 @@ const CLAUDE = {
  * exclusive by construction (distinct binary basenames, or a provider-id
  * check that doesn't overlap with a command-basename check).
  */
-export const PROVIDER_VENDORS = [CODEX, ANTIGRAVITY, CURSOR, GEMINI_LEGACY, KIMI, GROK, OPENCODE, PI, CLAUDE];
+export const PROVIDER_VENDORS = [CODEX, ANTIGRAVITY, CURSOR, GEMINI_LEGACY, KIMI, GROK, OPENCODE, KILO, OPENCHAMBER, PI, CLAUDE];
 
 /**
  * A row's `matchCliProvider` may be absent when it's identical to
@@ -877,10 +933,15 @@ export function applyCommandDefaults(command, args, provider = null) {
  * own doc comment — it's a no-op for any argv that isn't its own /dev/stdin
  * sentinel, so calling it unconditionally as the fallback is safe and matches
  * the original `prepareCliPrompt` body exactly).
+ *
+ * `options` carries the spawn facts an argv BUILDER cannot know because they
+ * are decided per run rather than per provider — today just `cwd`, which
+ * OpenChamber needs as the `--dir` its control plane cannot infer (see
+ * openchamber.js). Every other vendor ignores it.
  */
-export function prepareCliPrompt(command, args, prompt) {
+export function prepareCliPrompt(command, args, prompt, options = {}) {
   const vendor = PROVIDER_VENDORS.find((v) => v.preparePrompt && v.matchCommand(command));
-  return vendor ? vendor.preparePrompt(args, prompt) : prepareGrokPromptFile(args, prompt);
+  return vendor ? vendor.preparePrompt(args, prompt, options) : prepareGrokPromptFile(args, prompt);
 }
 
 /** `buildCliArgs` (cliProviderArgs.js): headless one-shot argv per vendor. */

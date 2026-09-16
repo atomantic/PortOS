@@ -381,7 +381,7 @@ export async function executeCliRun({ runId, provider, prompt, workspacePath, sc
   const promptInput = vision ? vision.invocation.stdin : prompt;
   const { args, useStdin, cleanup: cleanupPromptFile } = vision
     ? { args: builtArgs, useStdin: promptInput != null, cleanup: () => {} }
-    : prepareCliPrompt(provider.command, builtArgs, promptInput);
+    : prepareCliPrompt(provider.command, builtArgs, promptInput, { cwd: effectiveCwd });
   console.log(`🚀 Executing CLI: ${provider.command} (${prompt.length} chars via ${useStdin ? 'stdin' : 'argv'}${vision ? `, ${screenshots.length} images` : ''})`);
 
   // Ollama-backed CLIs (claude-ollama, opencode-ollama) reach the daemon

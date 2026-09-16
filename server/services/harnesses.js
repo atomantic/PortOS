@@ -2,8 +2,9 @@
  * Harnesses — the coding-agent CLIs/TUIs PortOS drives, seen as things you
  * MANAGE rather than as a footnote on a provider card.
  *
- * A harness is one binary (`opencode`, `claude`, `codex`, `agy`, `grok`,
- * `kimi`, `cursor-agent`) that several provider records share. Availability and
+ * A harness is one binary (`opencode`, `kilo`, `openchamber`, `claude`,
+ * `codex`, `agy`, `grok`, `kimi`, `cursor-agent`) that several provider
+ * records share. Availability and
  * the fixed install/update/remove invocations live in
  * `providerRuntimeInstaller.js`; this module answers the two questions that
  * need the provider records too:
@@ -208,7 +209,15 @@ export async function listHarnesses({ fresh = false, run = commandOutput, ...pro
   return Promise.all(PROVIDER_RUNTIMES.map(async (runtime) => {
     const status = statuses[runtime.id] || {};
     const linked = providersForHarness(providers, runtime);
-    const latestVersion = runtime.npmPackage
+    // Gated on `installed`, not just on the row being npm-backed: for a harness
+    // that is not here, the registry answer cannot change anything. Nothing
+    // renders `latestVersion` for an uninstalled row, and `updateAvailable`
+    // needs a definite "installed < latest", so a `null` installed version
+    // already makes it false. Ungated, every shipped-but-uninstalled harness
+    // cost an `npm view` child plus a registry round trip on each cache-cold
+    // page load — and the Kilo and OpenChamber rows, which ship disabled on
+    // every existing install, would have made that the common case.
+    const latestVersion = runtime.npmPackage && status.installed
       ? await getLatestPublishedVersion(runtime.npmPackage, { fresh, run })
       : null;
     return {

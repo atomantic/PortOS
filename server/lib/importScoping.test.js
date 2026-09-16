@@ -641,7 +641,24 @@ describe('deferred imports stay deferred (#6156)', () => {
 // raise restores the ~1.5k of headroom this is meant to carry — the previous
 // number had drifted back to three above the measured total, the same
 // zero-headroom state #6305 raised it out of, where any addition at all fails.
-const MAX_STATIC_INSTANTIATIONS = 107700;
+//
+// Raised to 109,200 for the Kilo Code and OpenChamber harnesses. Measured after
+// the change: 107,699, so their own cost is +816 against the 106,883 this stood
+// at beforehand. There is no new edge into a heavy subtree: `lib/kilo.js` and
+// `lib/openchamber.js` are browser-safe leaves whose whole closure is
+// `providerModels.js`, and almost all of the cost is those two nodes appearing
+// on each of the ~375 closures that already reach `lib/providerVendors.js` —
+// adding a vendor to that registry is what makes it one row instead of N call
+// sites, and this is the price of the row. The rest is three new suites
+// (`lib/kilo.test.js`, `lib/openchamber.test.js`, `lib/providerHarnesses.test.js`)
+// and the mandatory `lib/` barrel rows. Two leaves rather than one is
+// deliberate: OpenChamber is not a fork of Kilo or of OpenCode's argv — it is a
+// control plane with a different prompt-delivery contract — and the "one file
+// per vendor" split is what has kept each of these readable.
+// The remainder of the raise restores the ~1.5k of headroom this is meant to
+// carry: the previous number had drifted to ONE above the measured total, the
+// zero-headroom state #6305 raised it out of, where any addition at all fails.
+const MAX_STATIC_INSTANTIATIONS = 109200;
 
 
 const SKIP_DIRS = new Set(['node_modules', 'coverage', 'dist', 'data']);

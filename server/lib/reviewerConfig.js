@@ -23,19 +23,40 @@ import { PR_COMPLETIONS } from './prDisposition.js';
 // code-review endpoint (`POST /api/code-review/local`) which runs the configured
 // local LLM model.
 //
-// The roster deliberately covers EVERY coding-agent vendor PortOS can already
+// The roster deliberately covers every coding-agent vendor PortOS can already
 // spawn (`PROVIDER_VENDORS` in providerVendors.js) plus every OpenAI-compatible
 // local backend it manages, so the provider a user is told is their best local
 // coding agent is also selectable as their reviewer. `opencode` is the one CLI
 // whose model flag is `-m` rather than `--model` (see REVIEWER_MODEL_FLAGS), and
-// `opencode`/`kimi`/`mtplx` — like `lmstudio` — have no slashdo counterpart, so
-// they are PORTOS_ONLY_REVIEWERS.
+// `opencode`/`kilo`/`kimi`/`mtplx` — like `lmstudio` — have no slashdo
+// counterpart, so they are PORTOS_ONLY_REVIEWERS.
+//
+// A vendor left OUT of the roster is declared in NON_REVIEWER_VENDORS below, so
+// "covers every vendor" is an invariant a test can check rather than a sentence
+// that quietly stops being true.
 // Mirrored in client/src/components/cos/constants.js → REVIEWER_OPTIONS.
-export const REVIEWER_VALUES = ['copilot', 'claude', 'antigravity', 'codex', 'grok', 'cursor', 'pi', 'opencode', 'kimi', 'lmstudio', 'ollama', 'mtplx'];
+export const REVIEWER_VALUES = ['copilot', 'claude', 'antigravity', 'codex', 'grok', 'cursor', 'pi', 'opencode', 'kilo', 'kimi', 'lmstudio', 'ollama', 'mtplx'];
 // Provider records retain their own identity instead of collapsing to a harness.
 export const isProviderReviewer = (value) => typeof value === 'string' && /^provider:[a-z0-9][a-z0-9-]{0,79}$/.test(value);
 export const isReviewer = (value) => REVIEWER_VALUES.includes(value) || isProviderReviewer(value);
 export const isToolFreeReviewer = (value) => LOCAL_LLM_REVIEWERS.includes(value) || isProviderReviewer(value);
+
+/**
+ * Vendors PortOS can spawn that are deliberately NOT reviewers, each mapped to
+ * the reason. The roster above claims to cover every spawnable vendor; this is
+ * the other half of that claim, and `reviewerConfig.test.js` fails on a
+ * `PROVIDER_VENDORS` id that appears in neither — so a future vendor is either
+ * offered as a reviewer or has its exclusion written down, instead of being
+ * silently missing from ten hand-maintained lists.
+ *
+ * Kept as data here rather than imported from `providerVendors.js`: this module
+ * is pure reviewer vocabulary reached by ~280 suites, and the cross-registry
+ * comparison belongs in the test, not in this file's import closure.
+ */
+export const NON_REVIEWER_VENDORS = Object.freeze({
+  'gemini-legacy': 'a retired row kept only so an old stored config still resolves — Gemini CLI was migrated to Antigravity and ships no binary of its own',
+  openchamber: "a reviewer is a one-shot critique of a diff, and OpenChamber's only prompt path creates a persistent session inside a running workspace runtime the user owns — a review round would leave a session behind per reviewer per PR, and cannot run at all when that runtime is down",
+});
 
 export const REVIEWER_ALIASES = { gemini: 'antigravity', 'cursor-agent': 'cursor' };
 export const DEFAULT_REVIEWER = 'copilot';
@@ -53,7 +74,7 @@ export const LOCAL_LLM_REVIEWERS = ['lmstudio', 'ollama', 'mtplx'];
 // command). One constant so a future addition can't be fixed in one of those two
 // places and missed in the other — `splitSlashdoReviewerTokens` is the shared
 // partition every emitter goes through.
-export const PORTOS_ONLY_REVIEWERS = ['lmstudio', 'mtplx', 'opencode', 'kimi'];
+export const PORTOS_ONLY_REVIEWERS = ['lmstudio', 'mtplx', 'opencode', 'kilo', 'kimi'];
 // CLI reviewers whose binary accepts a `--model <id>` tier the user can pin on
 // the Code Review Defaults panel (stored as a `<reviewer>Model` settings scalar,
 // e.g. `codexModel` / `claudeModel` / `antigravityModel`). The review-loop
@@ -69,15 +90,16 @@ export const PORTOS_ONLY_REVIEWERS = ['lmstudio', 'mtplx', 'opencode', 'kimi'];
 // for one list. `cursor` runs `cursor-agent --model <id>` and DOES take an
 // effort — but as a parameter of the model id (`gpt-5[effort=max]`), not a flag,
 // so its pin rides this roster's `--model` rather than an `--effort` argv.
-// `opencode` runs `opencode run -m <provider/model>` and `kimi` runs
-// `kimi --model <id>`; neither offers a pickable effort, so they widen this roster
-// past EFFORT_SELECTABLE_REVIEWERS the same way `grok` does. `reviewerModelFlag`
+// `opencode` runs `opencode run -m <provider/model>`, `kilo` (its fork) runs
+// `kilo run --model <provider/model>`, and `kimi` runs `kimi --model <id>`; none
+// offers a pickable effort, so they widen this roster past
+// EFFORT_SELECTABLE_REVIEWERS the same way `grok` does. `reviewerModelFlag`
 // owns which of `--model`/`-m` each one spells.
 // Copilot/local-LLM reviewers are excluded — the former has no CLI, the latter
 // get their model injected server-side by `POST /api/code-review/local`. Add a
 // reviewer here when its CLI gains model selection; the `<reviewer>Model`
 // settings scalar is generated from this roster (codeReviewSettingsSchema).
-export const MODEL_CAPABLE_CLI_REVIEWERS = ['codex', 'claude', 'antigravity', 'grok', 'cursor', 'pi', 'opencode', 'kimi'];
+export const MODEL_CAPABLE_CLI_REVIEWERS = ['codex', 'claude', 'antigravity', 'grok', 'cursor', 'pi', 'opencode', 'kilo', 'kimi'];
 // Every reviewer whose model the user can PICK in the UI: the model-capable CLIs
 // above (threaded into the follow-up prompt as `<reviewer> --model <id>`) plus the
 // local-LLM backends (whose id is injected server-side by
@@ -104,6 +126,7 @@ export const REVIEWER_CLI_BINARIES = {
   cursor: CURSOR_COMMAND,
   pi: 'pi',
   opencode: 'opencode',
+  kilo: 'kilo',
   kimi: 'kimi',
 };
 

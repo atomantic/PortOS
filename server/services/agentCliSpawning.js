@@ -229,7 +229,7 @@ export async function spawnDirectly({
   // VALUE and kimi as the --prompt VALUE (no stdin); grok's `--prompt-file
   // /dev/stdin` via stdin (POSIX) / temp file (Windows); every other provider via
   // stdin (writePromptToStdin=true).
-  const { args: deliveredArgs, useStdin: writePromptToStdin, cleanup: cleanupPromptFile } = prepareCliPrompt(cliConfig.command, cliConfig.args, prompt);
+  const { args: deliveredArgs, useStdin: writePromptToStdin, cleanup: cleanupPromptFile } = prepareCliPrompt(cliConfig.command, cliConfig.args, prompt, { cwd });
   const preparedSpawn = prepareCliSpawn(cliConfig.command, deliveredArgs, childEnv);
   const isolatedSpawn = isPrivateSecurityTask(task)
     ? await import('../lib/privateSecuritySandbox.js')

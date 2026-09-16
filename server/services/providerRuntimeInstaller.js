@@ -121,6 +121,26 @@ const RUNTIME_ROWS = [
     docsUrl: 'https://opencode.ai/docs',
   },
   {
+    vendor: 'kilo',
+    label: 'Kilo Code CLI',
+    install: { kind: 'npm', package: '@kilocode/cli@latest' },
+    // An OpenCode fork, down to the updater subcommand.
+    selfUpdate: ['upgrade'],
+    modelsArgs: ['models'],
+    docsUrl: 'https://kilo.ai/docs/code-with-ai/platforms/cli',
+  },
+  {
+    vendor: 'openchamber',
+    label: 'OpenChamber',
+    install: { kind: 'npm', package: '@openchamber/web@latest' },
+    selfUpdate: ['update'],
+    // No `modelsArgs`: `openchamber models` prints the runtime's default,
+    // favorite and recent model SETTINGS, not the catalog a picker needs — so
+    // this row must not claim it can enumerate models (a claim with no parser
+    // in harnessOutput.js would report an empty catalog and refuse forever).
+    docsUrl: 'https://openchamber.dev/',
+  },
+  {
     vendor: 'grok',
     label: 'Grok Build CLI',
     install: { kind: 'npm', package: '@xai-official/grok@latest' },
@@ -138,10 +158,6 @@ const RUNTIME_ROWS = [
   {
     vendor: 'antigravity',
     label: 'Antigravity CLI',
-    // `agy` is the canonical binary, but `isAntigravityCommand` also accepts a
-    // provider configured as `antigravity` — publish that spelling too so such a
-    // card still finds its runtime. Pinned by the alias test.
-    aliases: ['antigravity'],
     // Antigravity ships a single compiled binary, not an npm package.
     install: { kind: 'script', url: 'https://antigravity.google/cli/install.sh' },
     selfUpdate: ['update'],
@@ -161,12 +177,12 @@ const RUNTIME_ROWS = [
   },
 ];
 
-const vendorCommand = (vendorId) => {
-  const command = PROVIDER_VENDORS.find((vendor) => vendor.id === vendorId)?.inferredCommand;
+const vendorRow = (vendorId) => {
+  const vendor = PROVIDER_VENDORS.find((row) => row.id === vendorId);
   // A renamed vendor row must fail loudly at boot, not silently drop a card's
   // install button.
-  if (!command) throw new Error(`providerRuntimeInstaller: no PROVIDER_VENDORS row for "${vendorId}"`);
-  return command;
+  if (!vendor?.inferredCommand) throw new Error(`providerRuntimeInstaller: no PROVIDER_VENDORS row for "${vendorId}"`);
+  return vendor;
 };
 
 /**
@@ -183,15 +199,19 @@ const vendorCommand = (vendorId) => {
  * script-installed binary has no vendor-published uninstall PortOS can run.
  */
 export const PROVIDER_RUNTIMES = Object.freeze(RUNTIME_ROWS.map((row) => Object.freeze({
-  aliases: [],
   selfUpdate: null,
   modelsArgs: null,
   ...row,
+  // The accepted binary spellings come from the VENDOR row, the same list
+  // `matchCommand` and the runner's allowlist read — a card looks its runtime up
+  // by the command the provider is configured with, which may be an alias, and
+  // a second hand-typed copy here is how that silently stops matching.
+  aliases: [...(vendorRow(row.vendor).commandAliases || [])],
   // `@latest` is an install-time tag, not part of the package identity, and
   // `npm view`/`npm uninstall` both want it gone.
   npmPackage: row.install.kind === 'npm' ? row.install.package.replace(/@latest$/, '') : null,
-  id: vendorCommand(row.vendor),
-  command: vendorCommand(row.vendor),
+  id: vendorRow(row.vendor).inferredCommand,
+  command: vendorRow(row.vendor).inferredCommand,
 })));
 
 // Keyed by the canonical id AND by every accepted alias spelling of the same

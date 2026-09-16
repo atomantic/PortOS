@@ -71,6 +71,29 @@ export function argvHasFlag(args = [], flags = []) {
 }
 
 /**
+ * Put a POSITIONAL subcommand at the head of an argv unless it is already
+ * there. Several vendors select headless mode with a bare word rather than a
+ * flag — `opencode run`, `kilo run`, `openchamber session create` — and every
+ * one of them has the same failure when it is missing: the bare binary opens an
+ * interactive session that never consumes the piped prompt and hangs until the
+ * provider timeout fires (issue #2190's shape for OpenCode).
+ *
+ * Presence is tested on the FIRST token only, so a record that pinned
+ * `session send` keeps the subcommand the user chose instead of being rewritten
+ * to `session create`. The check is `includes` rather than `args[0] ===` to
+ * match what the three hand-written copies of this did before it became a rule:
+ * a legacy record may carry a leading global flag ahead of the subcommand.
+ *
+ * @param {unknown[]} args
+ * @param {string|string[]} subcommand - one word, or the words of a nested one
+ * @returns {string[]} a new array; `args` is never mutated
+ */
+export function ensureLeadingSubcommand(args = [], subcommand) {
+  const words = Array.isArray(subcommand) ? subcommand : [subcommand];
+  return args.includes(words[0]) ? [...args] : [...words, ...args];
+}
+
+/**
  * Returns the model string to pass to a CLI's --model flag, or null if the
  * caller should omit --model entirely (configured-default sentinels — the CLI
  * uses its own default: Codex via ~/.codex/config.toml, Antigravity/Grok Build

@@ -10,6 +10,8 @@ import {
   isOpencodeProvider,
   prefixOpencodeModel,
 } from './providerModels.js';
+import { isKiloProvider } from './kilo.js';
+import { isOpenchamberProvider } from './openchamber.js';
 
 /**
  * The HARNESS half of the provider-connection graph proposed in
@@ -39,6 +41,33 @@ export const ROUTE_MODES = Object.freeze(['cli', 'tui', 'api']);
 const CLI_TUI_MODES = Object.freeze(['cli', 'tui']);
 
 /**
+ * Headless only. A harness whose interactive surface is not a terminal — today
+ * OpenChamber, whose UI is a web app and whose bare binary starts a server —
+ * has no TUI to attach a PTY to, so it must not be offered one.
+ */
+const CLI_ONLY_MODES = Object.freeze(['cli']);
+
+/**
+ * Why a harness carries no command recipe, as the clause the create endpoint
+ * refuses with (`bindingBlocker` in `providerRouteRecipes.js`).
+ *
+ * This is DATA on the row rather than prose in a comment because the refusal
+ * quotes it. Until three reasons existed, `bindingBlocker` hardcoded the first
+ * one — so adding a `recipe: null` row for either of the others would have told
+ * the user their harness "reaches only its own vendor service", which is both
+ * wrong and points at the wrong remedy. `noRecipe` is set on exactly the rows
+ * whose `recipe` is `null`, an invariant `providerHarnesses.test.js` pins.
+ */
+const NO_RECIPE = Object.freeze({
+  /** A `native`-protocol program: there is no user-supplied backend to name. */
+  VENDOR_SERVICE: 'reaches only its own vendor service',
+  /** The backend lives in a config file PortOS does not write (Kilo). */
+  UNWRITTEN_CONFIG: 'resolves its backend from its own config file, which PortOS does not write',
+  /** The backend belongs to a separate runtime the user configures (OpenChamber). */
+  EXTERNAL_RUNTIME: 'runs against a workspace runtime you sign in to separately',
+});
+
+/**
  * The COMMAND RECIPE half of a harness row (#6369).
  *
  * Everything above classifies a provider record that already exists. A recipe
@@ -65,9 +94,9 @@ const CLI_TUI_MODES = Object.freeze(['cli', 'tui']);
  *     Anthropic auth token even to a local daemon that ignores it), which is why
  *     the create endpoint refuses rather than minting a route that cannot run.
  *
- * A harness with **no** recipe is not an oversight: `native`-protocol programs
- * talk only to their own vendor service, so there is no user-supplied backend to
- * point one at. Adding one of those stays `/ai/new`.
+ * A harness with **no** recipe is not an oversight — it means this program has
+ * no backend PortOS can point at from a connection, and its row says WHICH of
+ * the {@link NO_RECIPE} reasons applies. Adding one of those stays `/ai/new`.
  */
 
 /** Claude Code's headless argv, shared by every Claude recipe mode. */
@@ -122,6 +151,34 @@ export const PROVIDER_HARNESSES = Object.freeze([
     matches: isOpencodeProvider,
   }),
   Object.freeze({
+    id: 'kilo',
+    label: 'Kilo Code',
+    modes: CLI_TUI_MODES,
+    protocol: 'openai',
+    // Kilo is an OpenCode fork, so its backend is declared in a config file
+    // rather than an environment variable — and PortOS has not verified which
+    // config surface this fork reads (OpenCode's own `OPENCODE_CONFIG_CONTENT`
+    // is the one PortOS writes, and Kilo renames its environment under
+    // `KILO_*`). Minting a route on a guess would produce one that points at
+    // nothing while reporting a backend, so Kilo stays classifiable and
+    // installable but not creatable from a connection.
+    recipe: null,
+    noRecipe: NO_RECIPE.UNWRITTEN_CONFIG,
+    matches: isKiloProvider,
+  }),
+  Object.freeze({
+    id: 'openchamber',
+    label: 'OpenChamber',
+    modes: CLI_ONLY_MODES,
+    protocol: 'openai',
+    // OpenChamber is a control plane in front of a runtime the USER starts and
+    // configures (its providers are signed in through its own web UI), so there
+    // is no PortOS-supplied backend for a minted route to carry.
+    recipe: null,
+    noRecipe: NO_RECIPE.EXTERNAL_RUNTIME,
+    matches: isOpenchamberProvider,
+  }),
+  Object.freeze({
     id: 'codex',
     label: 'Codex',
     modes: CLI_TUI_MODES,
@@ -143,9 +200,10 @@ export const PROVIDER_HARNESSES = Object.freeze([
     label: 'Antigravity',
     modes: CLI_TUI_MODES,
     protocol: 'native',
-    // No recipe: this program reaches only its own vendor service, so
-    // there is no connection to point a freshly minted route at.
+    // This program reaches only its own vendor service, so there is no
+    // connection to point a freshly minted route at.
     recipe: null,
+    noRecipe: NO_RECIPE.VENDOR_SERVICE,
     matches: isAntigravityProvider,
   }),
   Object.freeze({
@@ -153,9 +211,10 @@ export const PROVIDER_HARNESSES = Object.freeze([
     label: 'Cursor Agent',
     modes: CLI_TUI_MODES,
     protocol: 'native',
-    // No recipe: this program reaches only its own vendor service, so
-    // there is no connection to point a freshly minted route at.
+    // This program reaches only its own vendor service, so there is no
+    // connection to point a freshly minted route at.
     recipe: null,
+    noRecipe: NO_RECIPE.VENDOR_SERVICE,
     matches: isCursorProvider,
   }),
   Object.freeze({
@@ -163,9 +222,10 @@ export const PROVIDER_HARNESSES = Object.freeze([
     label: 'Grok',
     modes: CLI_TUI_MODES,
     protocol: 'native',
-    // No recipe: this program reaches only its own vendor service, so
-    // there is no connection to point a freshly minted route at.
+    // This program reaches only its own vendor service, so there is no
+    // connection to point a freshly minted route at.
     recipe: null,
+    noRecipe: NO_RECIPE.VENDOR_SERVICE,
     matches: isGrokProvider,
   }),
   Object.freeze({
@@ -173,9 +233,10 @@ export const PROVIDER_HARNESSES = Object.freeze([
     label: 'Kimi Code',
     modes: CLI_TUI_MODES,
     protocol: 'native',
-    // No recipe: this program reaches only its own vendor service, so
-    // there is no connection to point a freshly minted route at.
+    // This program reaches only its own vendor service, so there is no
+    // connection to point a freshly minted route at.
     recipe: null,
+    noRecipe: NO_RECIPE.VENDOR_SERVICE,
     matches: isKimiProvider,
   }),
   Object.freeze({
@@ -183,9 +244,10 @@ export const PROVIDER_HARNESSES = Object.freeze([
     label: 'Pi',
     modes: CLI_TUI_MODES,
     protocol: 'native',
-    // No recipe: this program reaches only its own vendor service, so
-    // there is no connection to point a freshly minted route at.
+    // This program reaches only its own vendor service, so there is no
+    // connection to point a freshly minted route at.
     recipe: null,
+    noRecipe: NO_RECIPE.VENDOR_SERVICE,
     // No `isPiProvider` predicate exists — `pi` has no vendor module of its own
     // beyond `aiToolkit/internal/pi.js`, so match its binary basename directly.
     matches: (provider) => commandBasename(provider?.command) === 'pi',
