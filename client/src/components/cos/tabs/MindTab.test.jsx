@@ -660,9 +660,10 @@ describe('MindTab', () => {
     renderTab();
 
     const indicator = await screen.findByTestId('mind-typing-indicator');
-    expect(indicator).toHaveAccessibleName(/Waiting on the model/);
-    expect(indicator).toHaveAccessibleName(/2m 40s/);
-    expect(indicator).toHaveAccessibleName(/heartbeat 5s ago/);
+    expect(indicator).toHaveTextContent('Waiting on the model · 2m 40s · heartbeat 5s ago · model loaded');
+    // The announced name is the stage alone: the durations re-render every 10s
+    // poll, and putting them in a live region re-reads the same state forever.
+    expect(indicator).toHaveAccessibleName('Chief of Staff is typing — Waiting on the model');
     expect(await screen.findByTestId('mind-turn-progress-detail'))
       .toHaveTextContent('2m 40s · heartbeat 5s ago · model loaded');
   });

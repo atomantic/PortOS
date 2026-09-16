@@ -118,7 +118,10 @@ const MindTurnIndicator = ({ progress }) => {
   const detail = [progress.stage, progress.detail].filter(Boolean).join(' · ');
 
   if (progress.phase === 'thinking') {
-    const typingLabel = detail ? `Chief of Staff is typing — ${detail}` : 'Chief of Staff is typing';
+    // Stage only: it changes when the turn genuinely moves on, while the
+    // elapsed/heartbeat text re-renders on every 10s poll and would otherwise
+    // re-announce the same state endlessly.
+    const typingLabel = progress.stage ? `Chief of Staff is typing — ${progress.stage}` : 'Chief of Staff is typing';
     return (
       <span
         data-testid="mind-typing-indicator"
@@ -897,7 +900,7 @@ export default function MindTab() {
             </div>
             <p className="mt-3 text-sm text-port-text-muted">
               {turnProgress.phase === 'stalled' ? 'No heartbeat from the current turn — checking whether it is still alive.'
-                : turnProgress.phase === 'blocked' ? `${turnProgress.reason || 'Blocked'} — the mind retries on its own; no action needed.`
+                : turnProgress.phase === 'blocked' ? `${turnProgress.reason || 'Blocked'}${turnProgress.retryAt ? ' — the mind retries on its own; no action needed.' : '. No retry is scheduled.'}`
                   : turnProgress.phase === 'thinking' ? `${turnProgress.stage || 'Working through the current turn'}.`
                     : state?.pauseReason || (state?.started ? 'Listening for messages and scheduled wakes.' : 'Configure the AI profile to begin.')}
             </p>

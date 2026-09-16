@@ -126,13 +126,15 @@ export function describeMindTurnProgress({ state, runtime, events } = {}) {
     phase,
     busy,
     stage: busy ? mindTurnStage(state, events) : null,
-    // A usage-limit autopause clears `nextEligibleWakeAt` (no backoff gate, no
-    // failureCount climb), so its schedule lives only in the readiness probe
-    // the runtime endpoint reports. Read the probe first and fall back to the
-    // ordinary backoff gate, which is what a degraded wake uses instead.
-    retryAt: phase === 'blocked'
-      ? trimmed(runtime?.usageLimitRetryAt) || trimmed(state?.nextEligibleWakeAt)
-      : null,
+    // Each block reads its OWN retry axis. A usage-limit autopause clears
+    // `nextEligibleWakeAt` (no backoff gate, no failureCount climb), so its
+    // schedule lives only in the readiness probe; a degraded wake sets the
+    // backoff gate and has no probe. Reading the probe for both would let a
+    // leftover quota schedule stand in for a degraded wake's real retry.
+    retryAt: phase !== 'blocked' ? null
+      : state?.usageLimited === true
+        ? trimmed(runtime?.usageLimitRetryAt)
+        : trimmed(state?.nextEligibleWakeAt),
     reason: phase === 'blocked' ? trimmed(state?.pauseReason) : null,
     detail: parts.length > 0 ? parts.join(' · ') : null,
   };

@@ -266,8 +266,13 @@ function scheduleUsageLimitProbe(attempt = 0) {
  * user actually has while waiting one out.
  */
 export function persistentMindUsageLimitRetryAt() {
-  const nextRunAt = getEvent(PERSISTENT_MIND_USAGE_LIMIT_PROBE_EVENT_ID)?.nextRunAt;
-  return Number.isFinite(nextRunAt) ? new Date(nextRunAt).toISOString() : null;
+  const event = getEvent(PERSISTENT_MIND_USAGE_LIMIT_PROBE_EVENT_ID);
+  // A fired one-shot nulls its own nextRunAt, but a PAUSED event keeps a future
+  // one it will never honour, and a probe scheduled before a clock jump can sit
+  // in the past. Both would advertise a retry that is not coming, which is worse
+  // than saying nothing: the whole point is to stop the user guessing.
+  if (!event?.active || !Number.isFinite(event.nextRunAt) || event.nextRunAt <= Date.now()) return null;
+  return new Date(event.nextRunAt).toISOString();
 }
 
 /**

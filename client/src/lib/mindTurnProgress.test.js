@@ -115,13 +115,14 @@ describe('describeMindTurnProgress', () => {
   });
 
   it('treats a degraded wake as blocked so a failing provider is not read as working', () => {
+    const degradedState = { status: 'degraded', started: true, activeTurnId: null, usageLimited: false, pauseReason: 'Provider unavailable or wake failed', nextEligibleWakeAt: '2026-09-01T00:05:00.000Z' };
     const progress = describeMindTurnProgress({
-      state: { status: 'degraded', started: true, activeTurnId: null, usageLimited: false, pauseReason: 'Provider unavailable or wake failed', nextEligibleWakeAt: '2026-09-01T00:05:00.000Z' },
+      state: degradedState,
+      // A leftover quota probe time must NOT stand in for this wake's own gate.
+      runtime: { usageLimitRetryAt: '2026-09-01T09:00:00.000Z' },
     });
 
     expect(progress.phase).toBe('blocked');
-    // Falls back to the backoff gate, which a degraded wake (unlike a quota
-    // autopause) really does set.
     expect(progress.retryAt).toBe('2026-09-01T00:05:00.000Z');
   });
 
