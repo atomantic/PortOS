@@ -12,9 +12,16 @@
 //
 //   • The ALTERNATE screen buffer that a TUI takes (a watched `claude`/`codex` run,
 //     `vim`, `less`, `htop`) has no scrollback by construction: `ybase` stays 0, so
-//     `scrollLines()` and friends clamp to a no-op there. OpenCode's TUI also does
-//     not use terminal mouse-wheel reports for its message viewport; its supported
-//     path is the terminal's PageUp/PageDown key bindings.
+//     `scrollLines()` and friends clamp to a no-op there. A TUI that never asked for
+//     mouse tracking gets no wheel reports either, so its only scroll input is a
+//     keybinding — PageUp/PageDown, which is what OpenCode binds its message-page
+//     commands to.
+//
+// Both branches read the terminal's mode state, so both depend on that state being
+// correct for a session the client did not watch from the start: the server leads a
+// re-attach replay with a preamble re-announcing the modes the 50KB ring buffer
+// evicted (`server/lib/terminalReplay.js`). Without it every long-running TUI looks
+// like a plain scrollback shell here and nothing below can reach the app.
 //
 // Normal-buffer scroll stays inside xterm through `scrollLines()`. In an alternate
 // buffer, wheel events are captured before xterm's mouse protocol listener and

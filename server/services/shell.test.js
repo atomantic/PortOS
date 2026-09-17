@@ -884,6 +884,25 @@ describe('registerExternalSession / unregisterExternalSession', () => {
     expect(viewer.emit).toHaveBeenCalledWith('shell:output', { sessionId: id, data: 'live' });
   });
 
+  it('re-announces the TUI modes the ring buffer evicted, so the viewer can scroll it', () => {
+    const pty = makeFakePty();
+    const id = shell.registerExternalSession('run-long', pty, { label: 'OpenCode TUI' });
+    // What a full-screen TUI announces once, at startup, and never repeats.
+    pty.emitData('\x1b[?1049h\x1b[?2004h\x1b[?1000;1002;1003h\x1b[?1006h');
+    // A watched agent run then streams far more than the 50KB the buffer keeps.
+    pty.emitData('rendered frame '.repeat(8 * 1024));
+
+    const preamble = '\x1b[?1049h\x1b[?1000h\x1b[?1002h\x1b[?1003h\x1b[?1006h\x1b[?2004h';
+    const { bufferedOutput } = shell.attachSession(id, makeSocket('viewer'));
+    // The preamble leads, so the attaching terminal lands in the alternate buffer
+    // with mouse tracking on — which is what the client's scroll path
+    // (client/src/lib/terminalScroll.js) branches on.
+    expect(bufferedOutput.startsWith(preamble)).toBe(true);
+    // And it is the ONLY place those modes still appear: the ring buffer dropped
+    // the startup chunk, which is why the preamble has to exist at all.
+    expect(bufferedOutput.slice(preamble.length)).not.toContain('\x1b[?');
+  });
+
   it('is fully interactive — input writes through and resize works', () => {
     const pty = makeFakePty();
     const id = shell.registerExternalSession('run-rw', pty, {});

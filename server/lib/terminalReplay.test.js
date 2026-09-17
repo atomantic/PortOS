@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { stripTerminalQueries } from './terminalReplay.js';
+import { createTerminalModeTracker, stripTerminalQueries } from './terminalReplay.js';
 
 // The exact replies @xterm/xterm sends for each query, captured from a real
 // terminal. These are what used to reach the PTY — and land on the shell prompt.
@@ -62,5 +62,83 @@ describe('stripTerminalQueries', () => {
     // No ST, so the pattern must not match and eat everything after it.
     const text = 'head\x1bP$qm tail that must survive';
     expect(stripTerminalQueries(text)).toBe(text);
+  });
+});
+
+// Captured from a real `opencode` PTY at startup: it takes the alternate screen,
+// asks for every X11 mouse tracking level plus SGR encoding, and turns on
+// bracketed paste. All of it in the first few hundred bytes, never repeated.
+const OPENCODE_STARTUP = '\x1b[?2031h\x1b[?25l\x1b[?1049h\x1b[?2027h\x1b[?2004h\x1b[?1000h\x1b[?1002h\x1b[?1003h\x1b[?1006h';
+
+describe('createTerminalModeTracker', () => {
+  it('re-announces the modes a TUI set before the ring buffer evicted them', () => {
+    const tracker = createTerminalModeTracker();
+    tracker.observe(OPENCODE_STARTUP);
+    // Whatever else streams past, the announcement is not repeated.
+    tracker.observe('rendered output '.repeat(10_000));
+    expect(tracker.preamble()).toBe(
+      '\x1b[?1049h\x1b[?25l\x1b[?1000h\x1b[?1002h\x1b[?1003h\x1b[?1006h\x1b[?2004h'
+    );
+  });
+
+  it('puts the alternate screen first, so replayed frames paint where they were drawn', () => {
+    const tracker = createTerminalModeTracker();
+    tracker.observe('\x1b[?1006h\x1b[?2004h\x1b[?1049h');
+    expect(tracker.preamble().indexOf('\x1b[?1049h')).toBe(0);
+  });
+
+  it('splits a multi-parameter set into its individual modes', () => {
+    const tracker = createTerminalModeTracker();
+    tracker.observe('\x1b[?1000;1002;1003;1006h');
+    expect(tracker.preamble()).toBe('\x1b[?1000h\x1b[?1002h\x1b[?1003h\x1b[?1006h');
+  });
+
+  it('follows a mode that was turned back off', () => {
+    const tracker = createTerminalModeTracker();
+    tracker.observe(OPENCODE_STARTUP);
+    // The TUI exited: alternate screen released, mouse and paste handed back.
+    tracker.observe('\x1b[?1000;1002;1003l\x1b[?2004l\x1b[?1049l\x1b[?25h');
+    expect(tracker.preamble()).toBe('\x1b[?1006h');
+  });
+
+  it('says nothing about a terminal that is still at its defaults', () => {
+    const tracker = createTerminalModeTracker();
+    tracker.observe('$ ls\r\nfile-a  file-b\r\n\x1b[32m$\x1b[0m ');
+    expect(tracker.preamble()).toBe('');
+  });
+
+  it('matches a sequence split across two PTY chunks', () => {
+    // node-pty hands over whatever the read returned; a 9-byte escape sequence
+    // straddling that boundary is ordinary, not pathological.
+    const seq = '\x1b[?1049h';
+    for (let split = 1; split < seq.length; split++) {
+      const tracker = createTerminalModeTracker();
+      tracker.observe(`tail${seq.slice(0, split)}`);
+      tracker.observe(`${seq.slice(split)}head`);
+      expect(tracker.preamble(), `split at ${split}`).toBe(seq);
+    }
+  });
+
+  it('does not carry a partial across unrelated bytes that end the fragment', () => {
+    const tracker = createTerminalModeTracker();
+    tracker.observe('\x1b[?1049');
+    tracker.observe('  not a terminator');
+    expect(tracker.preamble()).toBe('');
+  });
+
+  it('ignores transient and untracked private modes', () => {
+    const tracker = createTerminalModeTracker();
+    // ?2026 is a synchronized-update BEGIN; re-announcing a dangling one would
+    // freeze the attaching terminal's rendering. ?2031/?2027 are negotiation.
+    tracker.observe('\x1b[?2026h\x1b[?2031h\x1b[?2027h\x1b[?7h');
+    expect(tracker.preamble()).toBe('');
+  });
+
+  it('shrugs off non-string and empty chunks', () => {
+    const tracker = createTerminalModeTracker();
+    tracker.observe(null);
+    tracker.observe('');
+    tracker.observe(undefined);
+    expect(tracker.preamble()).toBe('');
   });
 });

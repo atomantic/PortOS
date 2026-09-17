@@ -9,7 +9,7 @@ import { resolveInteractiveShell } from '../lib/interactiveShellResolver.js';
 import { buildRunThenExitCommand } from '../lib/shellExit.js';
 import { buildReadinessProbe } from '../lib/shellReadinessProbe.js';
 import { prepareCliSpawn } from '../lib/bufferedSpawn.js';
-import { stripTerminalQueries } from '../lib/terminalReplay.js';
+import { createTerminalModeTracker, stripTerminalQueries } from '../lib/terminalReplay.js';
 import { findCommandOnPath } from '../lib/processEnv.js';
 
 // Store active shell sessions (persist across socket reconnects)
@@ -193,6 +193,11 @@ function adoptPtySession(sessionId, ptyProcess, options = {}) {
   const outputBuffer = [];
   let bufferSize = 0;
   const MAX_BUFFER = 50 * 1024;
+  // A full-screen TUI announces alternate screen and mouse tracking once, in its
+  // first few hundred bytes — which the ring buffer drops on any run long enough
+  // to overflow it. Following the WHOLE stream lets attachSession re-announce the
+  // modes still in force. See lib/terminalReplay.js.
+  const modeTracker = createTerminalModeTracker();
 
   // Store session info
   shellSessions.set(sessionId, {
@@ -216,11 +221,14 @@ function adoptPtySession(sessionId, ptyProcess, options = {}) {
     // auto-attach — you opt into watching a run by clicking its tab.
     ...(options.external ? { external: true } : {}),
     outputBuffer,
+    modeTracker,
     bufferSize: () => bufferSize
   });
 
   // Handle pty output
   ptyProcess.onData((data) => {
+    // Before the ring buffer can evict it: mode state is stream-wide, not recent.
+    modeTracker.observe(data);
     // Buffer output for re-attach
     outputBuffer.push(data);
     bufferSize += data.length;
@@ -636,10 +644,18 @@ export function attachSession(sessionId, socket, { claim = false } = {}) {
   broadcastSessionList();
   return {
     sessionId,
-    // Queries stripped, not raw: a replayed `ESC[6n` is a question the attaching
-    // terminal answers as INPUT, and the TUI that asked it is long gone — the
-    // reply lands on the shell prompt. See lib/terminalReplay.js.
-    bufferedOutput: stripTerminalQueries(session.outputBuffer.join(''))
+    // Two corrections to the raw ring buffer, both in lib/terminalReplay.js:
+    //
+    //  - the mode preamble LEADS, because a long-running TUI's `ESC[?1049h` /
+    //    `ESC[?1003h` announcements scrolled out of the 50KB window hours ago, and
+    //    the attaching terminal is reset() before this is painted — without it the
+    //    client thinks a watched OpenCode run is a plain scrollback shell and
+    //    cannot scroll it at all;
+    //  - queries stripped, not raw: a replayed `ESC[6n` is a question the attaching
+    //    terminal answers as INPUT, and the TUI that asked it is long gone — the
+    //    reply lands on the shell prompt.
+    bufferedOutput: session.modeTracker.preamble()
+      + stripTerminalQueries(session.outputBuffer.join(''))
   };
 }
 

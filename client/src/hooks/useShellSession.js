@@ -293,8 +293,8 @@ export function useShellSession({ isFullscreen } = {}) {
 
     // xterm binds no touch handlers of its own, so without this a swipe over the
     // terminal does nothing. Alternate-screen TUIs need the matching wheel capture so
-    // OpenCode's supported PageUp/PageDown bindings receive scroll gestures instead
-    // of unsupported mouse reports. See lib/terminalScroll.js. Attached here rather
+    // one that never asked for mouse tracking gets its supported PageUp/PageDown
+    // bindings instead of a cursor key. See lib/terminalScroll.js. Attached here rather
     // than in its own effect: neither handler has reactive deps, so both lifetimes are
     // exactly the terminal instance's (unlike the dictation bridge, which needs
     // emitShellInput).
@@ -728,7 +728,12 @@ export function useShellSession({ isFullscreen } = {}) {
         // before repainting this one's buffer, so a previously-viewed full-screen
         // TUI's lingering mouse/focus tracking can't inject garbage here. The
         // freshly-painted bufferedOutput re-establishes whatever modes THIS
-        // session legitimately uses. See startSession for the full rationale.
+        // session legitimately uses — the server leads it with a mode preamble
+        // precisely so that holds for a run whose startup announcements have long
+        // since scrolled out of the replay window (server/lib/terminalReplay.js).
+        // Without it a watched OpenCode run repaints as a normal-buffer terminal
+        // and lib/terminalScroll.js can't route a scroll to the app at all.
+        // See startSession for the full rationale.
         resetTerminalWheelScroll(termInstanceRef.current);
         termInstanceRef.current.reset();
         if (bufferedOutput) {

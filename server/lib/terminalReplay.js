@@ -78,3 +78,115 @@ export const stripTerminalQueries = (text) => {
   if (!text.includes('\x1b')) return text;
   return QUERY_PATTERNS.reduce((out, pattern) => out.replace(pattern, ''), text);
 };
+
+/**
+ * ── The second replay bug: modes that scrolled out of the ring buffer ──────────
+ *
+ * A full-screen TUI announces its terminal state ONCE, in its first few hundred
+ * bytes: alternate screen (`ESC[?1049h`), mouse tracking (`ESC[?1000;1002;1003h`
+ * plus an encoding like `ESC[?1006h`), bracketed paste, cursor visibility. The
+ * replay buffer keeps only the LAST 50KB, so on any run long enough to overflow
+ * it — which is every watched TUI-agent run — those announcements are gone by the
+ * time someone attaches. The attaching xterm is `reset()` first, so it repaints a
+ * long-running OpenCode session as a NORMAL-buffer, mouse-less terminal.
+ *
+ * Everything that reads the terminal's mode state then reads the wrong answer:
+ *
+ *   - `lib/terminalScroll.js` (client) decides how to scroll from
+ *     `buffer.active.type` and `modes.mouseTrackingMode`. Believing it is in the
+ *     normal buffer, it scrolls local scrollback — frames of a redrawing TUI —
+ *     instead of routing the gesture to the app, and xterm never forwards a wheel
+ *     as a mouse report because no app asked for mouse events. OpenCode's message
+ *     viewport therefore cannot be scrolled at all from the Shell page.
+ *   - `useShellSession`'s arrow-key buttons pick CSI vs SS3 from
+ *     `applicationCursorKeysMode`, and send the wrong one.
+ *
+ * Fixed here rather than by growing the ring buffer, which only moves the
+ * threshold: the tracker watches the WHOLE stream and `preamble()` re-announces
+ * the modes still in force, prepended to the replay so the attaching terminal
+ * starts in the state the live PTY is actually in.
+ */
+
+// The DEC private modes a re-attaching terminal has to inherit, mapped to the
+// value a freshly-`reset()` terminal already holds — only a departure from that
+// default is worth re-announcing. Alternate-screen modes lead the list so the
+// replayed frames paint into the buffer they were drawn for.
+//
+// Deliberately NOT tracked: transient modes that are a begin/end pair rather than
+// a state (`?2026` synchronized update — replaying a dangling "begin" would freeze
+// the view) and modes no PortOS code reads.
+const REPLAYED_PRIVATE_MODES = [
+  [1049, 'l'], // alternate screen + save cursor (xterm)
+  [1047, 'l'], // alternate screen (xterm, no cursor save)
+  [47, 'l'],   // alternate screen (DEC)
+  [1, 'l'],    // DECCKM — application cursor keys
+  [25, 'h'],   // DECTCEM — cursor visible
+  [1000, 'l'], // X11 mouse — button press/release
+  [1002, 'l'], // X11 mouse — button + drag motion
+  [1003, 'l'], // X11 mouse — any motion
+  [1004, 'l'], // focus in/out reporting
+  [1005, 'l'], // UTF-8 mouse encoding
+  [1006, 'l'], // SGR mouse encoding
+  [1015, 'l'], // urxvt mouse encoding
+  [1016, 'l'], // SGR pixel mouse encoding
+  [2004, 'l'], // bracketed paste
+];
+
+const MODE_DEFAULTS = new Map(REPLAYED_PRIVATE_MODES);
+
+// `ESC[?1000;1002;1003h` sets three modes in one sequence, so the parameter list
+// is split rather than matched as a single number.
+const PRIVATE_MODE_SEQUENCE = /\x1b\[\?([\d;]*)([hl])/g;
+
+// A mode sequence can straddle two PTY chunks. Carry only a trailing fragment that
+// could still become one — `ESC`, `ESC[`, `ESC[?`, `ESC[?1000;1002` — and cap it so
+// a lone `ESC` in a data stream can't grow an unbounded carry.
+const PARTIAL_SEQUENCE = /\x1b(?:\[\??[\d;]*)?$/;
+const MAX_PARTIAL_LENGTH = 64;
+
+const trailingPartialSequence = (text) => {
+  const tail = text.slice(-MAX_PARTIAL_LENGTH);
+  return tail.match(PARTIAL_SEQUENCE)?.[0] ?? '';
+};
+
+/**
+ * Follow the private-mode state of a PTY stream so a later attach can be handed
+ * the modes still in force, whatever the ring buffer has since dropped.
+ *
+ * @returns {{ observe: (chunk: string) => void, preamble: () => string }}
+ */
+export const createTerminalModeTracker = () => {
+  const observed = new Map();
+  let partial = '';
+
+  return {
+    /** Feed one chunk of raw PTY output, in stream order. */
+    observe(chunk) {
+      if (typeof chunk !== 'string' || !chunk) return;
+      const text = partial + chunk;
+      partial = trailingPartialSequence(text);
+      if (!text.includes('\x1b[?')) return;
+      PRIVATE_MODE_SEQUENCE.lastIndex = 0;
+      let match;
+      while ((match = PRIVATE_MODE_SEQUENCE.exec(text)) !== null) {
+        for (const param of match[1].split(';')) {
+          const mode = Number(param);
+          if (MODE_DEFAULTS.has(mode)) observed.set(mode, match[2]);
+        }
+      }
+    },
+
+    /**
+     * The sequences that put a freshly-reset terminal into the session's current
+     * mode state — empty when every tracked mode is still at its default.
+     */
+    preamble() {
+      let out = '';
+      for (const [mode, fallback] of REPLAYED_PRIVATE_MODES) {
+        const value = observed.get(mode);
+        if (value && value !== fallback) out += `\x1b[?${mode}${value}`;
+      }
+      return out;
+    }
+  };
+};
