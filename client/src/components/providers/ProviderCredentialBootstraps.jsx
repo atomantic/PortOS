@@ -5,10 +5,13 @@ import Banner from '../ui/Banner';
 import CollapsibleSection from '../ui/CollapsibleSection';
 import InlineConfirmRow from '../ui/InlineConfirmRow';
 import { FormField } from '../ui/FormField';
+import { INPUT_CLASS } from '../apps/constants';
 import useConfirmDelete from '../../hooks/useConfirmDelete';
 import * as api from '../../services/api';
 import { invalidateProviderCatalog } from '../../hooks/useProviderCatalog';
+import { pluralize } from '../../lib/textUtils';
 import { formatCount } from '../../utils/formatters';
+import { SERVICE_SLUG_RE } from '../../../../server/lib/serviceDefinitions.js';
 
 /**
  * Credential-bootstrap apps (#7564 → #7567): the launch wrappers a composite
@@ -22,8 +25,8 @@ import { formatCount } from '../../utils/formatters';
  * the harness cards.
  */
 
-const SLUG_RE = /^[a-z0-9][a-z0-9-]*$/;
-const INPUT_CLASS = 'w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm focus:border-port-accent focus:outline-hidden';
+// The same rule the server validates the table with (`credentialBootstrapsSettingsSchema`).
+const SLUG_PATTERN = SERVICE_SLUG_RE.source.slice(1, -1);
 
 const EMPTY_DRAFT = Object.freeze({
   slug: '', label: '', command: '', args: '', argsSeparator: '', setupCommand: '', harnessNames: {},
@@ -67,7 +70,7 @@ function BootstrapForm({ draft, editing, harnesses, busy, onChange, onSubmit, on
     >
       <div className="grid gap-3 grid-cols-[repeat(auto-fit,minmax(min(100%,14rem),1fr))]">
         <FormField label="Slug *" hint="Lowercase letters, digits, dashes — the `+<slug>` a composite id carries" compact>
-          <input id="bootstrap-slug" type="text" value={draft.slug} onChange={set('slug')} disabled={editing} required pattern="[a-z0-9][a-z0-9-]*" className={INPUT_CLASS} placeholder="corp-auth" />
+          <input id="bootstrap-slug" type="text" value={draft.slug} onChange={set('slug')} disabled={editing} required pattern={SLUG_PATTERN} className={INPUT_CLASS} placeholder="corp-auth" />
         </FormField>
         <FormField label="Label *" compact>
           <input id="bootstrap-label" type="text" value={draft.label} onChange={set('label')} required className={INPUT_CLASS} placeholder="Corp auth wrapper" />
@@ -88,7 +91,7 @@ function BootstrapForm({ draft, editing, harnesses, busy, onChange, onSubmit, on
       <fieldset>
         <legend className="text-xs text-gray-400 mb-1">Harness names the wrapper knows (only where they differ from the binary)</legend>
         <div className="grid gap-2 grid-cols-[repeat(auto-fit,minmax(min(100%,12rem),1fr))]">
-          {harnesses.filter((harness) => harness.id !== 'direct').map((harness) => (
+          {harnesses.filter((harness) => harness.source !== 'always').map((harness) => (
             <label key={harness.id} htmlFor={`bootstrap-harness-${harness.id}`} className="text-xs text-gray-400">
               <span className="block mb-0.5">{harness.label}</span>
               <input
@@ -174,7 +177,7 @@ export default function ProviderCredentialBootstraps({ harnesses = [], presets =
   const submit = async () => {
     if (!draft) return;
     const slug = draft.slug.trim();
-    if (!SLUG_RE.test(slug)) {
+    if (!SERVICE_SLUG_RE.test(slug)) {
       toast.error('A bootstrap slug is lowercase letters, digits and dashes, starting with a letter or digit');
       return;
     }
@@ -221,7 +224,7 @@ export default function ProviderCredentialBootstraps({ harnesses = [], presets =
                   </p>
                   {app.setupCommand && <p className="text-xs text-gray-500">Setup: <code className="font-mono">{app.setupCommand}</code></p>}
                   <p className="text-xs text-gray-500">
-                    Used by {formatCount(usedBy[slug] || 0, { fallback: '0' })} preset{(usedBy[slug] || 0) === 1 ? '' : 's'}
+                    Used by {pluralize(usedBy[slug] || 0, 'preset')}
                     {app.harnessNames && Object.keys(app.harnessNames).length > 0
                       ? ` · names: ${Object.entries(app.harnessNames).map(([id, name]) => `${id}→${name}`).join(', ')}`
                       : ''}

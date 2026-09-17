@@ -18,12 +18,10 @@ export const PROVIDER_PAGE_TABS = Object.freeze([
   { id: 'services', label: 'Services', to: '/ai/services' },
 ]);
 
-/** Which view a pathname under `/ai` opens. The index and every overlay off it are presets. */
+/** Which view a pathname under `/ai` opens: the tab whose route prefixes it, else presets (the index and every overlay off it). */
 export const providerPageTabForPath = (pathname) => {
   const bare = String(pathname || '').replace(/\/+$/, '');
-  if (/^\/ai\/harnesses(\/|$)/.test(bare)) return 'harnesses';
-  if (/^\/ai\/services(\/|$)/.test(bare)) return 'services';
-  return 'presets';
+  return PROVIDER_PAGE_TABS.find((tab) => bare === tab.to || bare.startsWith(`${tab.to}/`))?.id ?? 'presets';
 };
 
 export default function ProviderPageTabs({ activeTab }) {

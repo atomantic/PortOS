@@ -6,7 +6,7 @@ import * as api from '../services/api';
 import socket from '../services/socket';
 import ProviderModelSelector from '../components/ProviderModelSelector';
 import { filterSelectableModels, isProviderHardwareCompatible, mergeModelLists, localBackendForProvider, providerTypeClass, isTuiProvider, isApiProvider, isProcessProvider, isCodexSubscriptionProvider, isLocalEndpoint, isLocalInstanceProvider, providerRuntimeKey, providerCardState, PROVIDER_CARD_STATE } from '../utils/providers';
-import { groupProvidersByHarness, presetEditPath } from '../utils/providerHarnesses';
+import { OTHER_HARNESS_GROUP, groupProvidersByHarness, presetEditPath } from '../utils/providerHarnesses';
 import useProviderCatalog from '../hooks/useProviderCatalog';
 import { copyToClipboard } from '../lib/clipboard';
 import { formatCount } from '../utils/formatters';
@@ -57,10 +57,16 @@ export const PRESET_STATE_ORDER = Object.freeze([
   PROVIDER_CARD_STATE.DISABLED,
 ]);
 
+/** The two states a card can run in: what a section's "N of M can run" counts. */
+const RUNNABLE_STATES = new Set([PROVIDER_CARD_STATE.READY, PROVIDER_CARD_STATE.BENCHED]);
+
 const UNAVAILABLE_SECTION = Object.freeze({
   key: 'incompatible',
   title: 'Unavailable on this machine',
   hint: 'This hardware cannot run them — kept for your other machines',
+  dot: 'bg-port-error',
+  link: null,
+  defaultOpen: false,
 });
 
 export default function AIProviders() {
@@ -195,7 +201,6 @@ export default function AIProviders() {
   const { presetId, providerId, harnessId, serviceSlug } = useParams();
   const editingProviderId = presetId ?? providerId;
   const barePath = location.pathname.replace(/\/+$/, '');
-  // The three views (#7567) are route prefixes, so the open one is the URL's.
   const activeTab = providerPageTabForPath(barePath);
   const creatingProvider = barePath.endsWith('/ai/presets/new');
   const creatingService = barePath.endsWith('/ai/services/new');
@@ -321,7 +326,8 @@ export default function AIProviders() {
     loadReadiness(),
     hasCodexSubscriptionProvider ? loadCodexAccount() : Promise.resolve(),
   ]), [refreshStatuses, loadReadiness, hasCodexSubscriptionProvider, loadCodexAccount]);
-  useAutoRefetch(pollCards, 20000, { pollOnly: true });
+  // The Harnesses view renders none of what the poll refreshes, so it pauses there.
+  useAutoRefetch(pollCards, 20000, { pollOnly: true, enabled: activeTab !== 'harnesses' });
 
   // Clear a provider's bench (runtime unavailability) so the next call retries it.
   // Note: if the underlying cause persists (e.g. an invalid model id), the very
@@ -661,7 +667,7 @@ export default function AIProviders() {
   // section), and the id lookup the cards use for fallback/sibling references.
   // Memoized because this page re-renders on the 20s status poll and on every
   // keystroke in the ad-hoc runner's prompt box.
-  const { providersById, runtimeByProviderId, cardStateByProviderId, presetGroups, unavailablePresets } = useMemo(() => {
+  const { providersById, runtimeByProviderId, cardStateByProviderId, presetSections } = useMemo(() => {
     const byId = Object.fromEntries(providers.map(p => [p.id, p]));
     const runtimeById = Object.fromEntries(providers.map(p => [p.id, runtimeForProvider(p)]));
     const readinessById = Object.fromEntries(providers.map((provider) => [provider.id, providerCardState(provider, {
@@ -693,12 +699,27 @@ export default function AIProviders() {
     });
     const runnable = cards.filter(isProviderHardwareCompatible);
     const unrunnable = cards.filter(p => !isProviderHardwareCompatible(p));
+    // One section per harness group, then the parked hardware-unavailable
+    // records; `ready` is what the header's "N of M can run" reports.
+    const section = (base, list) => {
+      const sectionProviders = ordered(list);
+      return { ...base, providers: sectionProviders, ready: sectionProviders.filter((p) => RUNNABLE_STATES.has(readinessById[p.id].state)).length };
+    };
+    const sections = [
+      ...groupProvidersByHarness(runnable).map((group) => section({
+        key: group.harnessId,
+        title: group.label,
+        hint: null,
+        link: group.harnessId === OTHER_HARNESS_GROUP ? null : `/ai/harnesses/${encodeURIComponent(group.harnessId)}`,
+        defaultOpen: true,
+      }, group.providers)),
+      section(UNAVAILABLE_SECTION, unrunnable),
+    ].filter((entry) => entry.providers.length > 0);
     return {
       providersById: byId,
       runtimeByProviderId: runtimeById,
       cardStateByProviderId: readinessById,
-      presetGroups: groupProvidersByHarness(runnable).map((group) => ({ ...group, providers: ordered(group.providers) })),
-      unavailablePresets: ordered(unrunnable),
+      presetSections: sections.map((entry) => ({ ...entry, dot: entry.dot || (entry.ready > 0 ? 'bg-port-success' : 'bg-gray-500') })),
     };
   }, [providers, statuses, activeProviderId, runtimeForProvider, codexAccount]);
 
@@ -790,37 +811,31 @@ export default function AIProviders() {
         <ProviderPageTabs activeTab={activeTab} />
       </div>
 
+      <div className={`flex-1 overflow-auto p-4 ${activeTab === 'presets' ? 'space-y-6' : ''}`}>
       {activeTab === 'harnesses' && (
-        <div className="flex-1 overflow-auto p-4">
-          <ProviderHarnessesTab
-            selectedHarnessId={harnessId || null}
-            runtimes={runtimes}
-            onInstallRuntime={setInstallingRuntime}
-            codexAccount={codexAccount}
-          />
-        </div>
+        <ProviderHarnessesTab
+          selectedHarnessId={harnessId || null}
+          runtimes={runtimes}
+          onInstallRuntime={setInstallingRuntime}
+        />
       )}
 
       {activeTab === 'services' && (
-        <div className="flex-1 overflow-auto p-4">
-          <ProviderServicesTab
-            selectedServiceSlug={serviceSlug || null}
-            creating={creatingService}
-            presets={providers}
-            readiness={readiness}
-            readinessActions={{
-              onAutoSetup: setSettingUpRuntime,
-              onUseServedModel: handleUseServedModel,
-              onServeWantedModel: handleServeWantedModel,
-              servingModel,
-            }}
-            onChanged={loadData}
-          />
-        </div>
+        <ProviderServicesTab
+          selectedServiceSlug={serviceSlug || null}
+          creating={creatingService}
+          presets={providers}
+          readiness={readiness}
+          onAutoSetup={setSettingUpRuntime}
+          onUseServedModel={handleUseServedModel}
+          onServeWantedModel={handleServeWantedModel}
+          servingModel={servingModel}
+          onChanged={loadData}
+        />
       )}
 
       {activeTab === 'presets' && (
-      <div className="flex-1 overflow-auto p-4 space-y-6">
+      <>
 
       {/* A retirement only becomes observable when a catalog refresh lands, so
           the panel re-reads on every refresh — see RetiredModelPinsPanel. */}
@@ -1093,19 +1108,8 @@ export default function AIProviders() {
           </Banner>
         ) : (
           <>
-            {[
-              ...presetGroups.map((group) => ({
-                key: group.harnessId,
-                title: group.label,
-                link: group.harnessId === 'other' ? null : `/ai/harnesses/${encodeURIComponent(group.harnessId)}`,
-                providers: group.providers,
-                defaultOpen: true,
-              })),
-              { ...UNAVAILABLE_SECTION, link: null, providers: unavailablePresets, defaultOpen: false },
-            ].map(section => {
+            {presetSections.map(section => {
               const sectionProviders = section.providers;
-              if (sectionProviders.length === 0) return null;
-              const ready = sectionProviders.filter((p) => cardStateByProviderId[p.id].state === PROVIDER_CARD_STATE.READY || cardStateByProviderId[p.id].state === PROVIDER_CARD_STATE.BENCHED).length;
               return (
                 <CollapsibleSection
                   key={section.key}
@@ -1115,11 +1119,11 @@ export default function AIProviders() {
                   bodyClassName="grid gap-4 pt-3"
                   label={(
                     <span className="flex flex-wrap items-center gap-2">
-                      <span className={`w-2 h-2 rounded-full shrink-0 ${section.key === UNAVAILABLE_SECTION.key ? 'bg-port-error' : ready > 0 ? 'bg-port-success' : 'bg-gray-500'}`} aria-hidden="true" />
+                      <span className={`w-2 h-2 rounded-full shrink-0 ${section.dot}`} aria-hidden="true" />
                       <span className="text-sm font-semibold uppercase tracking-wide text-white">{section.title}</span>
                       <span className="text-xs px-1.5 py-0.5 rounded bg-port-bg text-gray-400">{sectionProviders.length}</span>
                       <span className="text-xs text-gray-500">
-                        {section.hint || `${formatCount(ready, { fallback: '0' })} of ${formatCount(sectionProviders.length)} can run`}
+                        {section.hint || `${formatCount(section.ready)} of ${formatCount(sectionProviders.length)} can run`}
                       </span>
                       {section.link && (
                         <Link to={section.link} onClick={(e) => e.stopPropagation()} className="text-xs text-port-accent hover:underline">
@@ -1228,7 +1232,6 @@ export default function AIProviders() {
         useOnce={false}
         title="Compose a new preset"
         onClose={() => setComposeInitial(null)}
-        onCompose={() => {}}
         onPresetSaved={(preset) => {
           toast.success(`${preset.name} saved as a preset`);
           loadData();
@@ -1264,8 +1267,9 @@ export default function AIProviders() {
           ? `${settingUpRuntime.actionLabel} — model weights are a multi-gigabyte download, so this can run for a long time.`
           : `${settingUpRuntime?.actionLabel || 'Setting up'} — this can take several minutes on a first install.`}
       />
-      </div>
+      </>
       )}
+      </div>
     </div>
   );
 }

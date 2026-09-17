@@ -248,14 +248,16 @@ const definitionDtoSchema = z.object({
   // under — what a Services card's "get a key" link and env hint read (#7567).
   keyUrl: z.string().nullable(),
   envVars: z.array(z.string()),
+  // The transports a definition speaks with their default base URLs, so an
+  // "Add service" form can pre-fill an endpoint or demand one where the
+  // definition declares none.
+  transports: z.record(z.string(), z.object({ defaultBaseUrl: z.string().nullable() }).strict()),
 }).strict();
 
 /**
- * The definition half of the service DTO, and each row of
- * `GET /api/providers/service-definitions` — what an "Add service" flow
- * chooses from. Code-only data (no instance, no credential): the transports a
- * definition speaks with their default base URLs, so a form can pre-fill an
- * endpoint or demand one where the definition declares none.
+ * One definition as the wire publishes it — the `definition` half of the
+ * service DTO and each row of `GET /api/providers/service-definitions`.
+ * Code-only data: no instance, no credential.
  */
 export const presentServiceDefinition = (definition) => ({
   id: definition.id,
@@ -266,11 +268,6 @@ export const presentServiceDefinition = (definition) => ({
   harnessOnly: definition.harnessOnly ?? null,
   keyUrl: definition.credential.keyUrl ?? null,
   envVars: [...definition.credential.envVars],
-});
-
-/** `presentServiceDefinition` plus the transport defaults an instance form pre-fills. */
-export const presentServiceDefinitionForCreate = (definition) => ({
-  ...presentServiceDefinition(definition),
   transports: Object.fromEntries(Object.entries(definition.transports)
     .map(([protocol, transport]) => [protocol, { defaultBaseUrl: transport.defaultBaseUrl ?? null }])),
 });

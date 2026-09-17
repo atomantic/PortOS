@@ -4,7 +4,10 @@ import toast from '../ui/Toast';
 import Drawer from '../Drawer';
 import Banner from '../ui/Banner';
 import { FormField } from '../ui/FormField';
+import { INPUT_CLASS } from '../apps/constants';
 import * as api from '../../services/api';
+import { SERVICE_SLUG_RE } from '../../../../server/lib/serviceDefinitions.js';
+import { transportsFromDraft } from '../../lib/providerManagement';
 
 /**
  * "Add service" (#7567): definition → plan → credential / endpoint, in that
@@ -30,7 +33,8 @@ const FAMILY_LABEL = {
   fleet: 'Fleet hosts',
 };
 const PLAN_LABEL = { free: 'Free tier', paid: 'Paid / metered', subscription: 'Subscription', local: 'Local (no billing)' };
-const INPUT_CLASS = 'w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm focus:border-port-accent focus:outline-hidden';
+// The static `/ai/services/new` route would shadow a card addressed by this slug.
+const RESERVED_SLUGS = new Set(['new']);
 
 const EMPTY_DRAFT = Object.freeze({ definitionId: '', plan: '', label: '', slug: '', transports: {}, apiKey: '', credentialVia: 'stored' });
 
@@ -43,6 +47,7 @@ export default function ProviderServiceForm({ onClose, onCreated }) {
   const [definitions, setDefinitions] = useState(null); // null = not fetched yet
   const [draft, setDraft] = useState(EMPTY_DRAFT);
   const [busy, setBusy] = useState(false);
+  const set = (key) => (e) => setDraft((prev) => ({ ...prev, [key]: e.target.value }));
 
   useEffect(() => {
     let active = true;
@@ -79,9 +84,11 @@ export default function ProviderServiceForm({ onClose, onCreated }) {
       toast.error('This service declares no default endpoint — enter the one this install reaches it at');
       return;
     }
-    const transports = Object.fromEntries(declaredTransports
-      .filter(([, baseUrl]) => baseUrl.trim())
-      .map(([protocol, baseUrl]) => [protocol, { baseUrl: baseUrl.trim() }]));
+    if (RESERVED_SLUGS.has(draft.slug.trim())) {
+      toast.error(`"${draft.slug.trim()}" is reserved by the page's own routes — pick another slug`);
+      return;
+    }
+    const transports = transportsFromDraft(draft.transports);
     const body = {
       definitionId: definition.id,
       plan: draft.plan || undefined,
@@ -128,7 +135,7 @@ export default function ProviderServiceForm({ onClose, onCreated }) {
         {definition && (
           <>
             <FormField label="Plan *" hint="What you are entitled to on it — decides which models the catalog keeps and how cost is attributed">
-              <select id="service-plan" value={draft.plan} onChange={(e) => setDraft((prev) => ({ ...prev, plan: e.target.value }))} className={INPUT_CLASS}>
+              <select id="service-plan" value={draft.plan} onChange={set('plan')} className={INPUT_CLASS}>
                 {definition.plans.map((plan) => <option key={plan} value={plan}>{PLAN_LABEL[plan] || plan}</option>)}
               </select>
             </FormField>
@@ -165,7 +172,7 @@ export default function ProviderServiceForm({ onClose, onCreated }) {
                       type="password"
                       autoComplete="off"
                       value={draft.apiKey}
-                      onChange={(e) => setDraft((prev) => ({ ...prev, apiKey: e.target.value }))}
+                      onChange={set('apiKey')}
                       className={INPUT_CLASS}
                       placeholder="Paste the key, or leave blank to add it later"
                     />
@@ -199,10 +206,10 @@ export default function ProviderServiceForm({ onClose, onCreated }) {
 
             <div className="grid gap-3 sm:grid-cols-2">
               <FormField label="Label" hint={`Defaults to "${definition.label}"`} compact>
-                <input id="service-label" type="text" value={draft.label} onChange={(e) => setDraft((prev) => ({ ...prev, label: e.target.value }))} className={INPUT_CLASS} />
+                <input id="service-label" type="text" value={draft.label} onChange={set('label')} className={INPUT_CLASS} />
               </FormField>
               <FormField label="Slug" hint={`The address a composite id names; defaults to "${definition.id}"`} compact>
-                <input id="service-slug" type="text" value={draft.slug} pattern="[a-z0-9][a-z0-9-]*" onChange={(e) => setDraft((prev) => ({ ...prev, slug: e.target.value }))} className={INPUT_CLASS} placeholder={definition.id} />
+                <input id="service-slug" type="text" value={draft.slug} pattern={SERVICE_SLUG_RE.source.slice(1, -1)} onChange={set('slug')} className={INPUT_CLASS} placeholder={definition.id} />
               </FormField>
             </div>
           </>

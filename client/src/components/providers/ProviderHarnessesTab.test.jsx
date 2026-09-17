@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router';
 import { __resetProviderCatalogCache } from '../../hooks/useProviderCatalog';
 
@@ -34,9 +34,10 @@ const CATALOG = {
   services: [
     { slug: 'nvidia-nim', label: 'NVIDIA NIM', plan: 'free', enabled: true, readiness: 'ready', catalog: { models: [] } },
     { slug: 'ollama', label: 'Ollama', plan: 'local', enabled: true, readiness: 'ready', catalog: { models: [] } },
+    { slug: 'claude-subscription', label: 'Claude subscription', plan: 'subscription', enabled: true, readiness: 'ready', catalog: { models: [] }, definition: { id: 'claude-subscription', family: 'subscription', harnessOnly: 'claude' } },
   ],
   bootstraps: [],
-  compatibility: { claude: ['ollama'], pi: ['nvidia-nim', 'ollama'], direct: ['nvidia-nim', 'ollama'] },
+  compatibility: { claude: ['ollama', 'claude-subscription'], pi: ['nvidia-nim', 'ollama'], direct: ['nvidia-nim', 'ollama'] },
   effortLevels: {},
   effortLevelsByModel: {},
   presets: [
@@ -83,9 +84,12 @@ describe('ProviderHarnessesTab', () => {
     renderTab();
     expect(await screen.findByRole('heading', { name: /Claude Code/ })).toBeInTheDocument();
     const claude = screen.getByRole('article', { name: /Claude Code/ });
-    expect(claude).toHaveTextContent('1 compatible service');
+    expect(claude).toHaveTextContent('2 compatible services');
     expect(claude).toHaveTextContent('1 preset');
     expect(claude).toHaveTextContent('Installed · 2.1.0');
+    // The subscription only this program reaches is named with its state and linked.
+    expect(within(claude).getByRole('link', { name: 'Claude subscription' })).toHaveAttribute('href', '/ai/services/claude-subscription');
+    expect(claude).toHaveTextContent('ready to run');
     const pi = screen.getByRole('article', { name: /^Pi/ });
     expect(pi).toHaveTextContent('2 compatible services');
     expect(pi).toHaveTextContent('Binary not found');
@@ -106,8 +110,8 @@ describe('ProviderHarnessesTab', () => {
     const enabled = { ...CATALOG, harnesses: CATALOG.harnesses.map((h) => (h.id === 'pi' ? { ...h, enabled: true } : h)) };
     renderTab();
     const pi = await screen.findByRole('article', { name: /^Pi/ });
-    const toggle = pi.querySelector('input[role="switch"]');
-    expect(toggle.checked).toBe(false);
+    const toggle = within(pi).getByRole('switch');
+    expect(toggle).toHaveAttribute('aria-checked', 'false');
 
     api.getProviderCatalog.mockResolvedValue(enabled);
     fireEvent.click(toggle);
@@ -115,7 +119,7 @@ describe('ProviderHarnessesTab', () => {
     await waitFor(() => expect(api.setProviderHarnessEnabled).toHaveBeenCalledWith('pi', true, { silent: true }));
     // Second catalog fetch = the invalidation reached the shared hook.
     await waitFor(() => expect(api.getProviderCatalog).toHaveBeenCalledTimes(2));
-    await waitFor(() => expect(pi.querySelector('input[role="switch"]').checked).toBe(true));
+    await waitFor(() => expect(within(pi).getByRole('switch')).toHaveAttribute('aria-checked', 'true'));
     expect(toast.success).toHaveBeenCalledWith(expect.stringMatching(/Pi enabled/));
   });
 
@@ -123,10 +127,10 @@ describe('ProviderHarnessesTab', () => {
     api.setProviderHarnessEnabled.mockRejectedValue(new Error('boom'));
     renderTab();
     const pi = await screen.findByRole('article', { name: /^Pi/ });
-    fireEvent.click(pi.querySelector('input[role="switch"]'));
+    fireEvent.click(within(pi).getByRole('switch'));
     await waitFor(() => expect(toast.error).toHaveBeenCalledWith(expect.stringMatching(/Could not enable Pi/)));
     expect(api.getProviderCatalog).toHaveBeenCalledTimes(1);
-    expect(pi.querySelector('input[role="switch"]').checked).toBe(false);
+    expect(within(pi).getByRole('switch')).toHaveAttribute('aria-checked', 'false');
   });
 
   it('offers the install for a missing binary whose runtime row allows it', async () => {
@@ -160,7 +164,8 @@ describe('credential bootstraps section', () => {
     api.saveProviderBootstraps.mockImplementation(async (bootstraps) => ({ bootstraps }));
     renderTab();
     const header = await screen.findByRole('button', { name: /Credential bootstraps/ });
-    expect(header).toHaveAttribute('aria-expanded', 'true');
+    // The table arrives after mount; the section opens once it holds a row.
+    await waitFor(() => expect(header).toHaveAttribute('aria-expanded', 'true'));
     expect(screen.getByText('Corp auth').closest('li')).toHaveTextContent('Used by 1 preset');
 
     fireEvent.click(screen.getByRole('button', { name: 'Add bootstrap' }));

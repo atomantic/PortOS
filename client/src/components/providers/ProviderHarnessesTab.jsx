@@ -4,9 +4,12 @@ import { CheckCircle2, Download, ExternalLink, Gauge, PowerOff, TerminalSquare }
 import toast from '../ui/Toast';
 import Pill from '../ui/Pill';
 import Banner from '../ui/Banner';
+import ToggleSwitch from '../ToggleSwitch';
 import * as api from '../../services/api';
 import useProviderCatalog, { invalidateProviderCatalog } from '../../hooks/useProviderCatalog';
-import { formatCount } from '../../utils/formatters';
+import { pluralize } from '../../lib/textUtils';
+import { serviceReadinessCopy } from '../../lib/providerManagement';
+import { providerHarnessId } from '../../utils/providerHarnesses';
 import ProviderCredentialBootstraps from './ProviderCredentialBootstraps';
 
 /**
@@ -36,26 +39,16 @@ const METHOD_LABEL = { cli: 'CLI', tui: 'TUI', api: 'API' };
 /** Every harness whose vendor bills a subscription quota the Quota Burn page tracks. */
 const QUOTA_TRACKED = new Set(['claude', 'codex', 'grok', 'antigravity']);
 
-/** How a ChatGPT / Codex sign-in state reads on the harness card. */
-const CODEX_STATUS_COPY = {
-  ready: 'ChatGPT subscription signed in',
-  'signed-out': 'ChatGPT subscription signed out',
-  'login-pending': 'ChatGPT sign-in in progress',
-  'quota-exhausted': 'ChatGPT usage limit reached',
-  'runtime-missing': 'Codex CLI not installed',
-};
-
 function HarnessCard({
-  harness, runtime, compatibleCount, presetCount, selected, busy,
-  codexAccount, onToggle, onInstallRuntime,
+  harness, runtime, compatibleCount, presetCount, subscription, selected, busy, onToggle, onInstallRuntime,
 }) {
   const ref = useRef(null);
   useEffect(() => {
     if (selected) ref.current?.scrollIntoView?.({ block: 'nearest' });
   }, [selected]);
-  const isDirect = harness.id === 'direct';
-  const switchId = `harness-enabled-${harness.id}`;
-  const codexStatus = harness.id === 'codex' && codexAccount ? codexAccount.status : null;
+  // `always` is the catalog's word for a harness with nothing to switch off or
+  // install — PortOS's own runner — so no id is special-cased here.
+  const alwaysOn = harness.source === 'always';
 
   return (
     <article
@@ -72,22 +65,19 @@ function HarnessCard({
           </h3>
           <p className="mt-1 text-xs text-gray-500">{SOURCE_COPY[harness.source] || ''}</p>
         </div>
-        {isDirect ? (
+        {alwaysOn ? (
           <Pill tone="success" size="xs" icon={CheckCircle2}>Always on</Pill>
         ) : (
-          <label htmlFor={switchId} className="flex items-center gap-2 text-sm text-gray-300 cursor-pointer">
-            <input
-              id={switchId}
-              type="checkbox"
-              role="switch"
-              aria-checked={harness.enabled}
-              checked={harness.enabled}
+          <span className="flex items-center gap-2 text-sm text-gray-300">
+            <ToggleSwitch
+              size="sm"
+              enabled={harness.enabled}
               disabled={busy}
-              onChange={(e) => onToggle(harness, e.target.checked)}
-              className="h-4 w-4 accent-port-accent"
+              ariaLabel={`${harness.enabled ? 'Disable' : 'Enable'} ${harness.label}`}
+              onChange={() => onToggle(harness, !harness.enabled)}
             />
             {harness.enabled ? 'Enabled' : 'Disabled'}
-          </label>
+          </span>
         )}
       </div>
 
@@ -95,16 +85,12 @@ function HarnessCard({
         {harness.modes.map((mode) => (
           <Pill key={mode} tone="muted" size="xs" mono>{METHOD_LABEL[mode] || mode}</Pill>
         ))}
-        <span className="text-gray-400">
-          {formatCount(compatibleCount, { fallback: '0' })} compatible service{compatibleCount === 1 ? '' : 's'}
-        </span>
+        <span className="text-gray-400">{pluralize(compatibleCount, 'compatible service')}</span>
         <span className="text-gray-500">·</span>
-        <span className="text-gray-400">
-          {formatCount(presetCount, { fallback: '0' })} preset{presetCount === 1 ? '' : 's'}
-        </span>
+        <span className="text-gray-400">{pluralize(presetCount, 'preset')}</span>
       </div>
 
-      {!isDirect && (
+      {!alwaysOn && (
         <div className="flex flex-wrap items-center gap-2 text-xs">
           {harness.detected === true && (
             <Pill tone="success" size="xs" icon={CheckCircle2}>
@@ -136,12 +122,17 @@ function HarnessCard({
         </div>
       )}
 
-      {codexStatus && (
+      {/* The subscription service only this program can reach: its sign-in
+          lives inside the harness, so the card says how that service stands
+          and where to manage it. Vendor-agnostic — any definition declaring
+          `harnessOnly` for this harness lands here. */}
+      {subscription && (
         <p className="text-xs text-gray-400">
-          {CODEX_STATUS_COPY[codexStatus] || `ChatGPT subscription: ${codexStatus}`}
-          {codexAccount.planType ? ` (${codexAccount.planType})` : ''}
-          {' — '}
-          <Link to="/ai/presets" className="text-port-accent hover:underline">sign in from the Codex preset card</Link>
+          Subscription:{' '}
+          <Link to={`/ai/services/${encodeURIComponent(subscription.slug)}`} className="text-port-accent hover:underline">
+            {subscription.label}
+          </Link>
+          {' — '}{serviceReadinessCopy(subscription.readiness).reason}
         </p>
       )}
     </article>
@@ -153,9 +144,8 @@ function HarnessCard({
  * @param {string|null} props.selectedHarnessId - from `/ai/harnesses/:harnessId`; highlighted and scrolled to.
  * @param {object} props.runtimes - the `GET /providers/runtimes` map (by binary id).
  * @param {function} props.onInstallRuntime - opens the page's install modal for one runtime row.
- * @param {object} [props.codexAccount] - the ChatGPT account readiness the page already polls.
  */
-export default function ProviderHarnessesTab({ selectedHarnessId = null, runtimes = {}, onInstallRuntime, codexAccount }) {
+export default function ProviderHarnessesTab({ selectedHarnessId = null, runtimes = {}, onInstallRuntime }) {
   const navigate = useNavigate();
   const catalog = useProviderCatalog(true);
   const [pending, setPending] = useState({});
@@ -165,14 +155,19 @@ export default function ProviderHarnessesTab({ selectedHarnessId = null, runtime
     Object.values(runtimes).filter((row) => row?.vendor).map((row) => [row.vendor, row]),
   ), [runtimes]);
 
+  // The same classification the Presets view groups by, so the two counts agree
+  // on a legacy record the backfill has not stamped.
   const presetCountByHarness = useMemo(() => {
     const counts = {};
     for (const preset of catalog.presets || []) {
-      const id = preset.harnessId || (preset.type === 'api' ? 'direct' : null);
+      const id = providerHarnessId(preset);
       if (id) counts[id] = (counts[id] || 0) + 1;
     }
     return counts;
   }, [catalog.presets]);
+  const subscriptionByHarness = useMemo(() => Object.fromEntries(
+    (catalog.services || []).filter((service) => service.definition?.harnessOnly).map((service) => [service.definition.harnessOnly, service]),
+  ), [catalog.services]);
 
   const known = catalog.harnesses.some((harness) => harness.id === selectedHarnessId);
   useEffect(() => {
@@ -212,9 +207,9 @@ export default function ProviderHarnessesTab({ selectedHarnessId = null, runtime
             runtime={runtimeByHarness[harness.id] || null}
             compatibleCount={catalog.compatiblePairs(harness.id).length}
             presetCount={presetCountByHarness[harness.id] || 0}
+            subscription={subscriptionByHarness[harness.id] || null}
             selected={harness.id === selectedHarnessId}
             busy={Boolean(pending[harness.id])}
-            codexAccount={codexAccount}
             onToggle={handleToggle}
             onInstallRuntime={onInstallRuntime}
           />

@@ -56,10 +56,10 @@ export const testProvider = (id) => request(`/providers/${id}/test`, { method: '
 // --- the composed axes the AI Providers page manages (#7567, epic #7561) -----
 // Harness enablement (the read rides the composition catalog above), services
 // (instances of a definition: plan + credential + catalog), and
-// credential-bootstrap apps. Every response
-// is credential-free: a service reports `hasCredentials` / `credentialSource`,
-// never a value. Nothing here contacts a provider except the explicit catalog
-// refresh — listing, creating and toggling are local reads and writes.
+// credential-bootstrap apps. Every response is credential-free: a service
+// reports `hasCredentials` / `credentialSource`, never a value. Nothing here
+// contacts a provider except the explicit catalog refresh — listing, creating
+// and toggling are local reads and writes.
 
 /** The user's word on one harness. `direct` cannot be switched off; the server refuses it. */
 export const setProviderHarnessEnabled = (harnessId, enabled, options) => request(

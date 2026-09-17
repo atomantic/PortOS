@@ -1,14 +1,17 @@
 import { useMemo } from 'react';
 import { Grid3x3 } from 'lucide-react';
 import CollapsibleSection from '../ui/CollapsibleSection';
+import { serviceReadinessCopy } from '../../lib/providerManagement';
+import { pluralize } from '../../lib/textUtils';
 
 /**
- * The compatibility matrix (#7567): harness rows × service columns, each cell
- * the server's own verdict on that pair. Rendered from `GET /api/providers/catalog`
- * — `compatibility[harnessId]` is `isCompatible` evaluated server-side, and
- * the two `enabled` flags plus the service's `readiness` are its rows — so the
- * browser recomputes nothing: a cell can only disagree with what compose
- * offers by the catalog being stale, never by a second predicate.
+ * The compatibility matrix (#7567): harness rows × service columns. Rendered
+ * from `GET /api/providers/catalog`: whether a pair is REACHABLE is
+ * `compatibility[harnessId]`, the server's own `isCompatible`, never
+ * re-derived here; whether a reachable pair is OFFERED reads the same three
+ * server fields the compose popover reads (`harness.enabled`,
+ * `service.enabled`, `service.readiness`), so a cell can only disagree with
+ * compose by the catalog being stale.
  *
  * Three cell states:
  *   - **offered** — compatible, both sides on, service ready: a click opens
@@ -19,20 +22,13 @@ import CollapsibleSection from '../ui/CollapsibleSection';
  *   - **incompatible** — the harness cannot reach that service at all.
  */
 
-const READINESS_REASON = {
-  'needs-credential': 'needs a credential',
-  'needs-endpoint': 'needs an endpoint',
-  disabled: 'is switched off',
-  'unknown-definition': 'has no definition',
-};
-
 /** The pure verdict per cell, exported so the page test can pin it without rendering. */
 export function matrixCellState(harness, service, compatibility) {
   if (!(compatibility?.[harness.id] || []).includes(service.slug)) return { state: 'incompatible', reason: null };
   if (harness.enabled === false) return { state: 'blocked', reason: `${harness.label} is switched off` };
   if (service.enabled === false) return { state: 'blocked', reason: `${service.label} is switched off` };
   if (service.readiness && service.readiness !== 'ready') {
-    return { state: 'blocked', reason: `${service.label} ${READINESS_REASON[service.readiness] || service.readiness}` };
+    return { state: 'blocked', reason: `${service.label} ${serviceReadinessCopy(service.readiness).reason}` };
   }
   return { state: 'offered', reason: null };
 }
@@ -53,15 +49,20 @@ const CELL_GLYPH = { offered: '●', blocked: '◐', incompatible: '—' };
  * @param {function} props.onCompose - `({ harnessId, method, serviceSlug }) => void` for an offered cell.
  */
 export default function ProviderCompatibilityMatrix({ harnesses = [], services = [], compatibility = {}, loading = false, onCompose }) {
-  const offered = useMemo(() => harnesses.reduce((count, harness) => count
-    + services.filter((service) => matrixCellState(harness, service, compatibility).state === 'offered').length, 0), [harnesses, services, compatibility]);
+  // One pass over the product per catalog: the rows render from it and the
+  // summary counts it, on a page that re-renders on a 20s poll.
+  const rows = useMemo(() => harnesses.map((harness) => ({
+    harness,
+    cells: services.map((service) => ({ service, ...matrixCellState(harness, service, compatibility) })),
+  })), [harnesses, services, compatibility]);
+  const offered = useMemo(() => rows.reduce((count, row) => count + row.cells.filter((cell) => cell.state === 'offered').length, 0), [rows]);
 
   return (
     <CollapsibleSection
       id="compatibility-matrix"
       icon={Grid3x3}
       label="Compatibility matrix"
-      summary={loading ? 'Loading…' : `${offered} combination${offered === 1 ? '' : 's'} offered`}
+      summary={loading ? 'Loading…' : `${pluralize(offered, 'combination')} offered`}
       defaultOpen={false}
       size="md"
       className="bg-port-card border border-port-border rounded-xl px-4 py-2"
@@ -83,13 +84,12 @@ export default function ProviderCompatibilityMatrix({ harnesses = [], services =
               </tr>
             </thead>
             <tbody>
-              {harnesses.map((harness) => (
+              {rows.map(({ harness, cells }) => (
                 <tr key={harness.id}>
                   <th scope="row" className="sticky left-0 bg-port-card text-left text-gray-300 font-medium pr-3 py-1 whitespace-nowrap">
                     {harness.label}{harness.enabled === false ? <span className="text-gray-600"> (off)</span> : null}
                   </th>
-                  {services.map((service) => {
-                    const { state, reason } = matrixCellState(harness, service, compatibility);
+                  {cells.map(({ service, state, reason }) => {
                     const name = state === 'offered'
                       ? `New preset: ${harness.label} on ${service.label}`
                       : state === 'blocked' ? `${harness.label} on ${service.label}: ${reason}` : `${harness.label} cannot reach ${service.label}`;

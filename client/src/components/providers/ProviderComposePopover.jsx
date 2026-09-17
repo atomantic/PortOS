@@ -15,9 +15,10 @@
  * @param {object} props
  * @param {boolean} props.open
  * @param {function} props.onClose
- * @param {function} props.onCompose - `(compositeId, { model, effort }) => void`.
+ * @param {function} [props.onCompose] - `(compositeId, { model, effort }) => void`.
  *   Called for "Use once" — the caller stores the composite id in its existing
  *   `{ providerId, model, effort }` field; nothing is persisted server-side.
+ *   Omit it with `useOnce={false}`.
  * @param {function} [props.onPresetSaved] - `(presetRecord) => void`. Called
  *   after "Save as preset" succeeds, so the caller can select the new preset
  *   id in place of the composite.
@@ -39,17 +40,9 @@ import { FormField } from '../ui/FormField.jsx';
 import EffortSelect from '../cos/EffortSelect.jsx';
 import useProviderCatalog from '../../hooks/useProviderCatalog.js';
 import { useAsyncAction } from '../../hooks/useAsyncAction.js';
+import { serviceReadinessCopy } from '../../lib/providerManagement.js';
 
 const SELECT_CLASS = 'w-full px-3 py-1.5 min-h-[36px] bg-port-bg border border-port-border rounded-lg text-white text-sm';
-
-/** The readiness line under the service select: harness detection + service credential/daemon state. */
-const READINESS_LABEL = {
-  ready: 'ready to run',
-  'needs-credential': 'needs a credential',
-  'needs-endpoint': 'needs an endpoint',
-  disabled: 'switched off',
-  'unknown-definition': 'unknown service definition',
-};
 
 export default function ProviderComposePopover({
   open,
@@ -214,7 +207,7 @@ export default function ProviderComposePopover({
             {selectedService && (
               <p className="text-xs text-gray-500 mt-1">
                 {selectedHarness?.detected === false ? `${selectedHarness.label} not detected on this machine — ` : ''}
-                {READINESS_LABEL[selectedService.readiness] || selectedService.readiness}
+                {serviceReadinessCopy(selectedService.readiness).reason}
               </p>
             )}
           </FormField>
@@ -285,7 +278,7 @@ export default function ProviderComposePopover({
               type="button"
               className="flex-1 px-3 py-1.5 rounded-lg bg-port-bg border border-port-border text-white text-sm hover:bg-port-border disabled:opacity-50"
               disabled={!canCompose}
-              onClick={() => { onCompose(compositeId, { model, effort }); onClose(); }}
+              onClick={() => { onCompose?.(compositeId, { model, effort }); onClose(); }}
             >
               Use once
             </button>

@@ -22,7 +22,7 @@ import {
   refreshServiceCatalog,
   updateService,
 } from '../services/providerServices.js';
-import { presentServiceDefinitionForCreate } from '../lib/providerServiceInstances.js';
+import { presentServiceDefinition } from '../lib/providerServiceInstances.js';
 import { SERVICE_DEFINITIONS } from '../lib/serviceDefinitions.js';
 import { Router } from 'express';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
@@ -521,7 +521,7 @@ export function createPortOSProviderRoutes(aiToolkit) {
    * name rather than position: its own segment can never be read as a slug.
    */
   router.get('/service-definitions', (_req, res) => {
-    res.json({ definitions: SERVICE_DEFINITIONS.map(presentServiceDefinitionForCreate) });
+    res.json({ definitions: SERVICE_DEFINITIONS.map(presentServiceDefinition) });
   });
 
   // Create an instance from a definition. Nothing is probed and no route is

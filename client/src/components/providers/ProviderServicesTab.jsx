@@ -7,9 +7,12 @@ import Pill from '../ui/Pill';
 import EmptyState from '../EmptyState';
 import InlineConfirmRow from '../ui/InlineConfirmRow';
 import { FormField } from '../ui/FormField';
+import ToggleSwitch from '../ToggleSwitch';
+import { INPUT_CLASS } from '../apps/constants';
 import * as api from '../../services/api';
 import { invalidateProviderCatalog } from '../../hooks/useProviderCatalog';
-import { catalogSummary } from '../../lib/providerManagement';
+import { catalogSummary, draftFromTransports, serviceReadinessCopy, transportsFromDraft } from '../../lib/providerManagement';
+import { pluralize } from '../../lib/textUtils';
 import { formatCount } from '../../utils/formatters';
 import ProviderReadiness from './ProviderReadiness';
 import ProviderServiceForm from './ProviderServiceForm';
@@ -31,13 +34,6 @@ import { presetEditPath } from '../../utils/providerHarnesses';
  */
 
 const PLAN_TONE = { free: 'success', paid: 'warning', subscription: 'accent', local: 'muted' };
-const READINESS_COPY = {
-  ready: { tone: 'success', text: 'Ready' },
-  disabled: { tone: 'muted', text: 'Switched off' },
-  'needs-endpoint': { tone: 'warning', text: 'Needs an endpoint' },
-  'needs-credential': { tone: 'warning', text: 'Needs a credential' },
-  'unknown-definition': { tone: 'muted', text: 'No definition' },
-};
 const CREDENTIAL_SOURCE_COPY = {
   settings: 'Key stored on this service',
   env: 'Key read from the environment',
@@ -47,19 +43,15 @@ const CREDENTIAL_SOURCE_COPY = {
   none: 'No key',
 };
 const CATALOG_TONE_CLASS = { error: 'text-port-error', ok: 'text-port-success', warn: 'text-port-warning', muted: 'text-gray-500' };
-const INPUT_CLASS = 'w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm focus:border-port-accent focus:outline-hidden';
 
 const serviceName = (service) => service.label || service.slug || service.id;
 const serviceRef = (service) => service.slug || service.id;
 
-const draftFrom = (service) => ({
-  label: service.label || '',
-  transports: Object.fromEntries(Object.entries(service.transports || {}).map(([protocol, value]) => [protocol, value?.baseUrl || ''])),
-  apiKey: '',
-});
+const draftFrom = (service) => ({ label: service.label || '', transports: draftFromTransports(service.transports), apiKey: '' });
 
 function ServiceCard({
-  service, open, busy, presets, readiness, readinessActions, onSelect, onToggle, onRefresh, onSave, onClearKey, onDelete,
+  service, open, busy, presets, subject, readiness, servingModel, onAutoSetup, onUseServedModel, onServeWantedModel,
+  onSelect, onToggle, onRefresh, onSave, onClearKey, onDelete,
 }) {
   const ref = useRef(null);
   useEffect(() => {
@@ -70,10 +62,11 @@ function ServiceCard({
   const [draft, setDraft] = useState(() => draftFrom(service));
   useEffect(() => { setDraft(draftFrom(service)); }, [service.id, service.revision]); // eslint-disable-line react-hooks/exhaustive-deps
   const [confirmingDelete, setConfirmingDelete] = useState(false);
+  const set = (key) => (e) => setDraft((prev) => ({ ...prev, [key]: e.target.value }));
+  const setTransport = (protocol) => (e) => setDraft((prev) => ({ ...prev, transports: { ...prev.transports, [protocol]: e.target.value } }));
 
   const summary = catalogSummary(service.catalog);
-  const readinessCopy = READINESS_COPY[service.readiness] || READINESS_COPY['unknown-definition'];
-  const switchId = `service-enabled-${service.id}`;
+  const readinessCopy = serviceReadinessCopy(service.readiness);
   const slug = serviceRef(service);
   const definition = service.definition;
 
@@ -98,23 +91,20 @@ function ServiceCard({
           <p className="mt-1 text-xs text-gray-400 flex flex-wrap items-center gap-2">
             <span>{definition?.label || service.kind}</span>
             <Pill tone={PLAN_TONE[service.plan] || 'muted'} size="xs">{service.plan}</Pill>
-            <Pill tone={readinessCopy.tone} size="xs">{readinessCopy.text}</Pill>
+            <Pill tone={readinessCopy.tone} size="xs">{readinessCopy.label}</Pill>
             <span className={CATALOG_TONE_CLASS[summary.tone]}>{summary.text}</span>
           </p>
         </button>
-        <label htmlFor={switchId} className="flex items-center gap-2 text-sm text-gray-300 cursor-pointer shrink-0">
-          <input
-            id={switchId}
-            type="checkbox"
-            role="switch"
-            aria-checked={service.enabled}
-            checked={service.enabled}
+        <span className="flex items-center gap-2 text-sm text-gray-300 shrink-0">
+          <ToggleSwitch
+            size="sm"
+            enabled={service.enabled}
             disabled={busy}
-            onChange={(e) => onToggle(service, e.target.checked)}
-            className="h-4 w-4 accent-port-accent"
+            ariaLabel={`${service.enabled ? 'Disable' : 'Enable'} ${serviceName(service)}`}
+            onChange={() => onToggle(service, !service.enabled)}
           />
           {service.enabled ? 'Enabled' : 'Disabled'}
-        </label>
+        </span>
       </div>
 
       {open && (
@@ -135,7 +125,7 @@ function ServiceCard({
 
           <div className="grid gap-3 grid-cols-[repeat(auto-fit,minmax(min(100%,16rem),1fr))]">
             <FormField label="Name" compact>
-              <input id={`service-label-${service.id}`} type="text" value={draft.label} onChange={(e) => setDraft((prev) => ({ ...prev, label: e.target.value }))} className={INPUT_CLASS} />
+              <input id={`service-label-${service.id}`} type="text" value={draft.label} onChange={set('label')} className={INPUT_CLASS} />
             </FormField>
             {Object.entries(draft.transports).map(([protocol, baseUrl]) => (
               <FormField key={protocol} label={`${protocol} endpoint`} compact>
@@ -143,7 +133,7 @@ function ServiceCard({
                   id={`service-${service.id}-${protocol}`}
                   type="text"
                   value={baseUrl}
-                  onChange={(e) => setDraft((prev) => ({ ...prev, transports: { ...prev.transports, [protocol]: e.target.value } }))}
+                  onChange={setTransport(protocol)}
                   className={INPUT_CLASS}
                 />
               </FormField>
@@ -155,7 +145,7 @@ function ServiceCard({
                   type="password"
                   autoComplete="off"
                   value={draft.apiKey}
-                  onChange={(e) => setDraft((prev) => ({ ...prev, apiKey: e.target.value }))}
+                  onChange={set('apiKey')}
                   placeholder={service.hasCredentials ? 'Unchanged' : 'Not set'}
                   className={INPUT_CLASS}
                 />
@@ -194,13 +184,16 @@ function ServiceCard({
             />
           )}
 
-          {readiness && (
+          {/* Local-daemon readiness is computed per PRESET; `subject` is the
+              first derived preset on this instance, standing for the daemon
+              they all share. Same wiring as the preset card. */}
+          {subject && readiness && (
             <ProviderReadiness
               readiness={readiness}
-              onAutoSetup={readinessActions.onAutoSetup}
-              onUseServedModel={readinessActions.onUseServedModel}
-              onServeWantedModel={readinessActions.onServeWantedModel}
-              serving={readinessActions.serving}
+              onAutoSetup={(setup) => onAutoSetup?.({ ...setup, providerId: subject.id })}
+              onUseServedModel={(modelId) => onUseServedModel?.(subject, modelId)}
+              onServeWantedModel={onServeWantedModel ? () => onServeWantedModel(subject) : undefined}
+              serving={Boolean(servingModel?.[subject.id])}
               optional={!service.enabled}
             />
           )}
@@ -214,7 +207,7 @@ function ServiceCard({
 
           <div>
             <h4 className="text-xs uppercase tracking-wide text-gray-500 mb-1">
-              Presets on this service ({formatCount(presets.length, { fallback: '0' })})
+              Presets on this service ({formatCount(presets.length)})
             </h4>
             {presets.length === 0 ? (
               <p className="text-xs text-gray-500">
@@ -245,11 +238,15 @@ function ServiceCard({
  * @param {boolean} props.creating - `/ai/services/new`: the add drawer is open.
  * @param {object[]} props.presets - the page's provider list, for "presets on this service" and the readiness subject.
  * @param {object} props.readiness - the page's local-daemon readiness map, keyed by preset id.
- * @param {object} props.readinessActions - `{ onAutoSetup, onUseServedModel, onServeWantedModel, servingModel }` from the page.
+ * @param {function} [props.onAutoSetup] - the page's readiness handlers, as the preset card takes them.
+ * @param {function} [props.onUseServedModel]
+ * @param {function} [props.onServeWantedModel]
+ * @param {object} [props.servingModel] - preset id → relaunch in flight.
  * @param {function} props.onChanged - a service write may re-materialize derived presets; the page reloads them.
  */
 export default function ProviderServicesTab({
-  selectedServiceSlug = null, creating = false, presets = [], readiness = {}, readinessActions = {}, onChanged,
+  selectedServiceSlug = null, creating = false, presets = [], readiness = {},
+  onAutoSetup, onUseServedModel, onServeWantedModel, servingModel = {}, onChanged,
 }) {
   const navigate = useNavigate();
   const [services, setServices] = useState(null); // null = not loaded
@@ -314,13 +311,11 @@ export default function ProviderServicesTab({
     if (!result?.service) return;
     const { catalog } = result.service;
     if (catalog.state === 'failed') toast.error(catalog.error || 'The catalog refresh failed — the previous catalog was kept.');
-    else toast.success(`${formatCount(catalog.models.length)} model${catalog.models.length === 1 ? '' : 's'} listed for ${serviceName(service)}`);
+    else toast.success(`${pluralize(catalog.models.length, 'model')} listed for ${serviceName(service)}`);
   };
 
   const handleSave = async (service, draft) => {
-    const transports = Object.fromEntries(Object.entries(draft.transports)
-      .filter(([, baseUrl]) => baseUrl.trim())
-      .map(([protocol, baseUrl]) => [protocol, { baseUrl: baseUrl.trim() }]));
+    const transports = transportsFromDraft(draft.transports);
     const result = await write(service, 'Saving the service', () => api.updateProviderService(serviceRef(service), {
       expectedRevision: service.revision,
       label: draft.label,
@@ -373,8 +368,6 @@ export default function ProviderServicesTab({
         <div className="grid gap-4">
           {services.map((service) => {
             const servicePresets = presetsByService[service.slug] || [];
-            // Local-daemon readiness is computed per PRESET; the first derived
-            // preset on this instance stands for the daemon they all share.
             const subject = servicePresets.find((preset) => readiness[preset.id]) || null;
             return (
               <ServiceCard
@@ -383,13 +376,12 @@ export default function ProviderServicesTab({
                 open={selected?.id === service.id}
                 busy={Boolean(busy[service.id])}
                 presets={servicePresets}
+                subject={subject}
                 readiness={subject ? readiness[subject.id] : null}
-                readinessActions={{
-                  onAutoSetup: subject ? (setup) => readinessActions.onAutoSetup?.({ ...setup, providerId: subject.id }) : undefined,
-                  onUseServedModel: subject ? (modelId) => readinessActions.onUseServedModel?.(subject, modelId) : undefined,
-                  onServeWantedModel: subject ? () => readinessActions.onServeWantedModel?.(subject) : undefined,
-                  serving: subject ? Boolean(readinessActions.servingModel?.[subject.id]) : false,
-                }}
+                servingModel={servingModel}
+                onAutoSetup={onAutoSetup}
+                onUseServedModel={onUseServedModel}
+                onServeWantedModel={onServeWantedModel}
                 onSelect={select}
                 onToggle={handleToggle}
                 onRefresh={handleRefresh}
