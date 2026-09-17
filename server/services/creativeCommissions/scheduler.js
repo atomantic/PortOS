@@ -5,8 +5,12 @@
  * the user's cadence. Modeled directly on `seriesAutopilotScheduler.js`:
  *   - one eventScheduler cron per enabled commission (id namespace below),
  *   - a `registered` set + `lastSignature` guard so re-syncs are cheap no-ops,
- *   - a fire handler that runs OUTSIDE the Express request lifecycle (whole body
- *     in try/catch — a throw here would crash the process),
+ *   - a fire handler that runs OUTSIDE the Express request lifecycle: the fire
+ *     core (`fireCommission`) never throws (whole body in try/catch), and the
+ *     one deliberate exception — a pre-fire read failure in
+ *     `runScheduledCommission` — is re-thrown to eventScheduler's own
+ *     contained `runEvent` boundary so the outage lands on that tick's run
+ *     history instead of reading as a silent no-op,
  *   - re-reads the commission + autonomy config on every fire (only the cron is
  *     captured at registration).
  *
@@ -28,7 +32,7 @@ import { getSettings, settingsEvents } from '../settings.js';
 import { RENDER_TARGET } from '../../lib/renderTargets.js';
 import { renderTargetDefaults } from '../imageGen/cloudProviderConfig.js';
 import { resolveVideoMode, VIDEO_GEN_MODE } from '../videoGen/modes.js';
-import { listCommissions, getCommission, recordCommissionRun, commissionEvents } from './store.js';
+import { listCommissions, getCommission, recordCommissionRun, commissionEvents, ERR_NOT_FOUND } from './store.js';
 import { commissionToCron, commissionToRecurrence } from './directive.js';
 import { buildCommissionDirective, getAbilityAdapter } from './abilityAdapters.js';
 import { buildMusicTasteRecipe } from './musicTasteRecipe.js';
@@ -203,16 +207,53 @@ export function stopCommissionScheduler() {
   clearReconcileRetry();
 }
 
+// Sentinel + validate (AGENTS.md): a pre-fire read failure must never persist
+// with the same shape as a legitimately-empty one. Never store the raw error
+// message — it can originate from a DB driver and, per this fix's acceptance
+// criteria, run history must exclude record contents, prompts and private
+// feedback. A short, bounded classification (an error `code` when the failure
+// supplies one, else its constructor name) is enough to distinguish outage
+// types on the commission's run history without repeating this file's log.
+function classifyPrefireReadError(err) {
+  if (typeof err?.code === 'string' && err.code) return `read-failed:${err.code}`;
+  if (typeof err?.name === 'string' && err.name) return `read-failed:${err.name}`;
+  return 'read-failed';
+}
+
 /**
- * A scheduled cron tick. Runs outside the Express request lifecycle — every
- * throwable path is contained (getCommission is caught here, everything else
- * inside fireCommission), so a fire can't crash Node. Skips silently when the
- * commission vanished, was paused, or its schedule became invalid since
- * registration.
+ * A scheduled cron tick. Runs outside the Express request lifecycle. A
+ * confirmed deletion (ERR_NOT_FOUND), a paused commission, or a schedule that
+ * became invalid since registration are honest no-ops and skip silently.
+ *
+ * Any OTHER pre-fire read failure — a storage timeout on the commission row
+ * itself, or on its federated feedback (store.js's getCommission deliberately
+ * lets that propagate rather than substitute "no feedback", so generation
+ * never ignores ratings) — must not read as a quiet success. It is recorded
+ * as a failed run against the commission (id + a safe classification only),
+ * then RE-THROWN: eventScheduler's own contained boundary (`runEvent`) is
+ * where this fire is caught, marked failed on the schedule's own history, and
+ * the recurring event is rearmed for the next tick either way.
  */
 export async function runScheduledCommission(commissionId) {
-  const commission = await getCommission(commissionId).catch(() => null);
-  if (!commission || commission.enabled === false) return;
+  let commission;
+  try {
+    commission = await getCommission(commissionId);
+  } catch (err) {
+    if (err?.code === ERR_NOT_FOUND) return; // confirmed deletion — quiet no-op
+    console.error(`❌ Creative commission ${commissionId} pre-fire read failed: ${err?.message || err}`);
+    await recordCommissionRun(commissionId, {
+      status: 'failed',
+      trigger: 'schedule',
+      error: classifyPrefireReadError(err),
+    }).catch((ledgerErr) => {
+      // The failed-run write above ITSELF failed — nothing landed on the
+      // commission's history, so this is the only surviving record of the
+      // outage. Its own diagnostic, per this fix's acceptance criteria.
+      console.error(`❌ Creative commission ${commissionId} pre-fire read failed AND its failure could not be recorded: ${ledgerErr?.message || ledgerErr}`);
+    });
+    throw err; // propagate to eventScheduler's runEvent, which contains it
+  }
+  if (commission.enabled === false) return; // paused — quiet no-op
 
   const recurrence = commissionToRecurrence(commission.schedule);
   const cron = commissionToCron(commission.schedule);
