@@ -9,13 +9,13 @@ import { processScreenshotUploads, processAttachmentUploads } from '../../servic
 import { ATTACHMENT_ACCEPT } from '../../utils/fileUpload';
 import FilePickerButton from '../ui/FilePickerButton';
 import { formatBytes } from '../../utils/formatters';
-import { effectiveModelFor, effortAwareModelOptions, effortSurvivingModel, isTuiProvider, isCliProvider, isProcessProvider, isCodexProvider, isCodexSubscriptionProvider, isOpencodeLocalProvider, generationControlsFor, seedModelEffort, resolveProviderModelOptions, MODEL_SOURCE } from '../../utils/providers';
+import { effortAwareModelOptions, effortSurvivingModel, isTuiProvider, isCliProvider, isProcessProvider, isCodexProvider, isCodexSubscriptionProvider, isOpencodeLocalProvider, generationControlsFor, providerModeSelectionPolicy, seedModelEffort, resolveProviderModelOptions, MODEL_SOURCE } from '../../utils/providers';
+import { isCompositeProviderId } from '../../utils/providerRef';
 import { DEFAULT_PR_COMPLETION, DEFAULT_REVIEWERS, DEFAULT_REVIEW_STOP_MODE, PR_COMPLETION_OPTIONS, prCompletionOption } from './constants';
 import { clickableProps } from '../../lib/a11yKeyboard';
 import { slashdoLabel } from '../../lib/slashdoCatalog';
 import ReviewerPicker from './ReviewerPicker';
 import InstancePicker from './InstancePicker';
-import EffortSelect from './EffortSelect';
 import useReviewerModelOptions from '../../hooks/useReviewerModelOptions';
 import useAssignableInstances from '../../hooks/useAssignableInstances';
 import { reviewerModelsFromDefaults, reviewerEffortsFromDefaults } from '../../lib/reviewerModels';
@@ -51,6 +51,11 @@ const reviewOverridePayload = (reviewOverrides) => Object.fromEntries(
     .filter(([pickerKey]) => reviewOverrides[pickerKey] !== undefined)
     .map(([pickerKey, payloadKey]) => [payloadKey, reviewOverrides[pickerKey]])
 );
+
+// A CoS task needs a harness that can read/write files and run commands, so
+// both the preset list and the "Custom combination…" compose flow stay on the
+// cli/tui execution modes. Module-level so the selector sees one stable object.
+const AGENT_HARNESS_POLICY = providerModeSelectionPolicy('agent-harness');
 
 // A picker whose only real choice is one model (Grok listing grok-4.6, a
 // sentinel-stripped catalog of one) should pin that model rather than leave
@@ -294,6 +299,10 @@ export default function TaskAddForm({ providers, providersLoaded = true, apps, o
   // restored before the list has arrived) before it ever gets a chance to match.
   useEffect(() => {
     if (!providersLoaded) return;
+    // A composite (`harness.method@service`) is a route the server materializes
+    // on demand, so it is NEVER in the preset list — exempt it or the compose
+    // flow's own selection would be wiped the render after the user made it.
+    if (isCompositeProviderId(newTask.provider)) return;
     if (newTask.provider && !enabledProviders.some(p => p.id === newTask.provider)) {
       setNewTask(t => ({ ...t, provider: '', model: '', effort: '', temperature: '', thinking: '' }));
     }
@@ -441,6 +450,15 @@ export default function TaskAddForm({ providers, providersLoaded = true, apps, o
       };
     });
   }, [soleAvailableModel, selectedProvider]);
+  // Picking a provider pins its sole model (if it has one) and drops the
+  // per-invocation generation overrides, which are provider-specific. The
+  // effort is simply cleared: there is no previous level to carry across a
+  // provider change, and the selector owns the survival rule from here on.
+  const handleProviderChange = (provider) => {
+    const model = soleSelectableModel(providers?.find(p => p.id === provider));
+    setNewTask(t => ({ ...t, provider, model, effort: '', temperature: '', thinking: '' }));
+  };
+
   const NO_ACCOUNT_MODELS_NOTE = 'Your signed-in ChatGPT account exposes no models.';
   // The flag fires from two different lists, so the suffix has to name the right
   // one: an account catalog that dropped the model, or the provider's own
@@ -450,6 +468,17 @@ export default function TaskAddForm({ providers, providersLoaded = true, apps, o
   const unlistedNote = modelSource === MODEL_SOURCE.shipped
     ? 'no longer offered by this provider'
     : 'not in account catalog';
+  // `{ id, name }` rather than bare strings so the shared selector keeps this
+  // form's own option wording: family-prefixed ids read shorter without their
+  // vendor prefix, and a pin neither catalog still lists says so in the option
+  // itself rather than disappearing.
+  const modelOptions = useMemo(() => availableModels.map(id => ({
+    id,
+    name: unlistedSelection && id === newTask.model
+      ? `${id} (${unlistedNote})`
+      : id.replace('claude-', '').replace(/-\d+$/, ''),
+  })), [availableModels, unlistedSelection, unlistedNote, newTask.model]);
+
   const modelSourceNote = (() => {
     if (!isCodexSubscriptionProvider(selectedProvider)) return '';
     if (modelSource === MODEL_SOURCE.account) return 'Models your signed-in ChatGPT account can run.';
@@ -1106,76 +1135,35 @@ export default function TaskAddForm({ providers, providersLoaded = true, apps, o
             </div>
           </div>
         ) : (
-          <div className="flex flex-col @lg:flex-row gap-3">
-            <div className="@lg:w-40">
-              <label htmlFor="task-provider" className="sr-only">AI provider</label>
-              <select
-                id="task-provider"
-                value={newTask.provider}
-                onChange={e => {
-                  const provider = e.target.value;
-                  const prov = providers?.find(p => p.id === provider);
-                  const model = soleSelectableModel(prov);
-                  setNewTask(t => ({
-                    ...t,
-                    provider,
-                    model,
-                    effort: model ? effortSurvivingModel(prov, model, '') : '',
-                    temperature: '',
-                    thinking: '',
-                  }));
-                }}
-                className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm min-h-[44px]"
-                disabled={!providersLoaded}
-              >
-                {providersLoaded
-                  ? <option value="">Auto (default)</option>
-                  : <option value="">Loading providers…</option>}
-                {providersLoaded && enabledProviders.map(p => (
-                  <option key={p.id} value={p.id}>{p.name}</option>
-                ))}
-              </select>
-            </div>
-            {availableModels.length > 0 ? (
-              <div className="flex-1 min-w-0">
-                <label htmlFor="task-model" className="sr-only">AI model</label>
-                <select
-                  id="task-model"
-                  value={selectedModelOrSole}
-                  onChange={e => setNewTask(t => ({
-                    ...t,
-                    model: e.target.value,
-                    // A model with no effort tiers hides the select below — clear the
-                    // value with it rather than submitting a level the UI stopped showing.
-                    effort: effortSurvivingModel(selectedProvider, e.target.value, t.effort),
-                  }))}
-                  className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm min-h-[44px]"
-                >
-                  {availableModels.length !== 1 && <option value="">Select model...</option>}
-                  {availableModels.map(m => (
-                    <option key={m} value={m}>
-                      {unlistedSelection && m === newTask.model
-                        ? `${m} (${unlistedNote})`
-                        : m.replace('claude-', '').replace(/-\d+$/, '')}
-                    </option>
-                  ))}
-                </select>
-                {modelSourceNote && (
-                  <p className="mt-1 text-xs text-gray-400">{modelSourceNote}</p>
-                )}
-              </div>
-            ) : selectedProvider ? (
-              <div className="flex-1 min-w-0 px-3 py-2 min-h-[44px] bg-port-bg border border-port-border rounded-lg text-xs text-gray-400 flex items-center">
-                {providerModelNote}
-              </div>
-            ) : null}
-            <EffortSelect
-              provider={selectedProvider}
-              model={effectiveModelFor(selectedProvider, selectedModelOrSole)}
-              value={newTask.effort}
-              onChange={effort => setNewTask(t => ({ ...t, effort }))}
-              className="@lg:w-40 w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm min-h-[44px]"
+          <div className="space-y-1">
+            <ProviderModelSelector
+              compact
+              id="task-provider"
+              label="AI provider"
+              modelLabel="AI model"
+              providers={enabledProviders}
+              selectedProviderId={newTask.provider}
+              selectedModel={selectedModelOrSole}
+              availableModels={modelOptions}
+              onProviderChange={handleProviderChange}
+              onModelChange={model => setNewTask(t => ({ ...t, model }))}
+              effort={newTask.effort}
+              onEffortChange={effort => setNewTask(t => ({ ...t, effort }))}
+              emptyProviderOption="Auto (default)"
+              // One listed model is a pin, not a choice: offering "Select
+              // model..." beside it would be a required extra click to reach
+              // the only answer (see `soleSelectableModel`).
+              emptyModelOption={availableModels.length === 1 ? undefined : 'Select model...'}
+              loading={!providersLoaded}
+              // A CoS task runs a file-writing harness, so both the preset list
+              // and the compose flow stay on cli/tui — `enabledProviders` already
+              // filters the presets, and this is what stops the user composing
+              // the `api` route the server would refuse.
+              selectionPolicy={AGENT_HARNESS_POLICY}
             />
+            {availableModels.length > 0
+              ? modelSourceNote && <p className="text-xs text-gray-400">{modelSourceNote}</p>
+              : selectedProvider && <p className="text-xs text-gray-400">{providerModelNote}</p>}
           </div>
         )}
         {isOpencodeLocalProvider(selectedProvider) && (

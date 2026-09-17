@@ -3,6 +3,7 @@ import { Link } from 'react-router';
 import { ArrowRight, Bot, RefreshCw, Save, Search } from 'lucide-react';
 import toast from '../ui/Toast';
 import FormField from '../ui/FormField';
+import ProviderModelSelector from '../ProviderModelSelector.jsx';
 import EffortSelect from '../cos/EffortSelect.jsx';
 import ToolUseWarning from '../ui/ToolUseWarning.jsx';
 import TabPills from '../ui/TabPills.jsx';
@@ -274,17 +275,23 @@ export default function AiAssignmentsTab() {
         <div className="w-full min-w-0 max-w-full shrink-0 bg-port-card border border-port-border rounded-lg p-3 space-y-2 xl:w-[720px]">
           <div className="text-xs font-medium uppercase tracking-wide text-gray-500">Replace assignments</div>
           <div className="grid grid-cols-1 gap-2 sm:grid-cols-[1fr_1fr_auto_1fr_1fr]">
-            <FormField label="Replace from provider" labelClassName="sr-only" className="min-w-0 flex-1">
-              <select
-                value={fromProvider}
-                onChange={(e) => { setFromProvider(e.target.value); setFromModel(''); }}
-                aria-label="Replace from provider"
-                className="w-full min-w-0 bg-port-bg border border-port-border rounded px-2 py-2 text-sm text-white"
-              >
-                <option value="">From provider</option>
-                {sourceProviders.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
-              </select>
-            </FormField>
+            <div className="min-w-0 flex-1">
+              {/* No compose on either half. "From" names a provider some
+                  assignment is ALREADY pinned to, which a route built here by
+                  definition is not; "to" is matched against
+                  `assignmentProviderOptions`, which lists presets only — a
+                  composite would match no row and leave Replace disabled with
+                  nothing on screen to explain it. */}
+              <ProviderModelSelector
+                compact
+                label="Replace from provider"
+                providers={sourceProviders}
+                selectedProviderId={fromProvider}
+                onProviderChange={(id) => { setFromProvider(id); setFromModel(''); }}
+                emptyProviderOption="From provider"
+                compose={false}
+              />
+            </div>
             <FormField label="Replace from model" labelClassName="sr-only" className="min-w-0">
               <select
                 value={fromModel}
@@ -300,17 +307,17 @@ export default function AiAssignmentsTab() {
             <div className="hidden sm:flex items-center justify-center text-gray-500">
               <ArrowRight size={16} />
             </div>
-            <FormField label="Replace with provider" labelClassName="sr-only" className="min-w-0 flex-1">
-              <select
-                value={toProvider}
-                onChange={(e) => { setToProvider(e.target.value); setToModel(''); setToEffort(''); }}
-                aria-label="Replace with provider"
-                className="w-full min-w-0 bg-port-bg border border-port-border rounded px-2 py-2 text-sm text-white"
-              >
-                <option value="">To provider</option>
-                {data.providers.filter((p) => p.enabled !== false).map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
-              </select>
-            </FormField>
+            <div className="min-w-0 flex-1">
+              <ProviderModelSelector
+                compact
+                label="Replace with provider"
+                providers={data.providers}
+                selectedProviderId={toProvider}
+                onProviderChange={(id) => { setToProvider(id); setToModel(''); setToEffort(''); }}
+                emptyProviderOption="To provider"
+                compose={false}
+              />
+            </div>
             <FormField label="Replace with model" labelClassName="sr-only" className="min-w-0">
               <select
                 value={toModel}
@@ -425,24 +432,30 @@ export default function AiAssignmentsTab() {
                     {entry.providerEditable === false ? (
                       <div className="text-sm text-gray-300 py-2">{providerName(data.providers, draft.providerId)}</div>
                     ) : (
-                      <FormField label={`Provider for ${entry.label}`} labelClassName="sr-only">
-                        <select
-                          value={draft.providerId}
-                          onChange={(e) => {
-                            const nextProviderId = e.target.value;
-                            // Vision-filtered rows (e.g. Scene evaluation) seed the
-                            // first eligible VLM when the provider default is text-only.
-                            const nextDefault = assignmentDefaultModel(entry, data.providers, nextProviderId, visionIdsByProvider);
-                            setDraft(entry.id, { providerId: nextProviderId, model: entry.modelEditable === false ? draft.model : nextDefault, effort: '' });
-                          }}
-                          aria-label={`Provider for ${entry.label}`}
-                          disabled={visionUnknown}
-                          className="w-full bg-port-card border border-port-border rounded px-2 py-2 text-sm text-white disabled:opacity-50"
-                        >
-                          <option value="">Default / unset</option>
-                          {providerOptions.map((p) => <option key={p.id} value={p.id} disabled={p.enabled === false}>{p.name}</option>)}
-                        </select>
-                      </FormField>
+                      // Provider-only: this row's model cell is a select OR a
+                      // free-text pin depending on what the entry's filter left
+                      // to offer, and its effort lives in a third cell.
+                      <ProviderModelSelector
+                        compact
+                        label={`Provider for ${entry.label}`}
+                        providers={providerOptions}
+                        selectedProviderId={draft.providerId}
+                        disabled={visionUnknown}
+                        onProviderChange={(nextProviderId) => {
+                          // Vision-filtered rows (e.g. Scene evaluation) seed the
+                          // first eligible VLM when the provider default is text-only.
+                          const nextDefault = assignmentDefaultModel(entry, data.providers, nextProviderId, visionIdsByProvider);
+                          setDraft(entry.id, { providerId: nextProviderId, model: entry.modelEditable === false ? draft.model : nextDefault, effort: '' });
+                        }}
+                        emptyProviderOption="Default / unset"
+                        // A composed route is not in `providerOptions`, so the
+                        // seeding above resolves to a blank model and the row runs
+                        // the service's own default. On a vision row that default
+                        // may be text-only, so composing is offered only where a
+                        // blank model pin is safe.
+                        compose={entry.modelFilter !== 'vision' && entry.modelEditable !== false}
+                        composeMethods={entry.providerTypes}
+                      />
                     )}
                   </td>
                   <td className="px-3 py-3">
