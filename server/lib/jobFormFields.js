@@ -18,6 +18,7 @@
  * `cosValidation.js` can validate against it without a lib → services inversion.
  */
 
+import { createHash } from 'node:crypto';
 import { z } from 'zod';
 
 /**
@@ -184,15 +185,37 @@ export function describeReaimedValues(fields, savedValues, runValues) {
     && comparableValue(field, runValues?.[field.key]) !== comparableValue(field, savedValues?.[field.key]));
   if (changed.length === 0) return '';
 
+  // Whether the readable form below dropped anything — a clipped value, a
+  // collapsed newline, or a field past the cap. It decides the digest at the end.
+  let lossy = changed.length > REAIM_MAX_FIELDS;
+
   const parts = changed.slice(0, REAIM_MAX_FIELDS).map((field) => {
     const label = String(field.label || field.key).trim();
+    const raw = comparableValue(field, runValues?.[field.key]).trim();
     // Collapse newlines: this rides on the description's FIRST line, and a
     // multi-line value would push the rest out of the dedupe key entirely.
-    const text = comparableValue(field, runValues?.[field.key]).replace(/\s+/g, ' ').trim();
+    const text = raw.replace(/\s+/g, ' ');
+    if (text !== raw) lossy = true;
     if (!text) return `${label}: (cleared)`;
-    return `${label}: ${text.length > REAIM_VALUE_CHARS ? `${text.slice(0, REAIM_VALUE_CHARS)}…` : text}`;
+    if (text.length > REAIM_VALUE_CHARS) {
+      lossy = true;
+      return `${label}: ${text.slice(0, REAIM_VALUE_CHARS)}…`;
+    }
+    return `${label}: ${text}`;
   });
   if (changed.length > REAIM_MAX_FIELDS) parts.push(`+${changed.length - REAIM_MAX_FIELDS} more`);
+
+  // A clipped or truncated tag can render two genuinely different aims
+  // identically — and an identical first line is precisely what gets deduped
+  // away, which is the silent drop this whole function exists to prevent. When
+  // the readable form lost information, carry a digest of the FULL changed set
+  // so the identity stays distinct even though the label no longer shows why.
+  if (lossy) {
+    // JSON rather than a joined string: any separator character can itself occur
+    // inside a value, which would let two different changed sets encode alike.
+    const full = JSON.stringify(changed.map((field) => [field.key, comparableValue(field, runValues?.[field.key])]));
+    parts.push(createHash('sha1').update(full).digest('hex').slice(0, 8));
+  }
   return parts.join(', ');
 }
 

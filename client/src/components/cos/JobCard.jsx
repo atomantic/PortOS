@@ -323,13 +323,17 @@ export default function JobCard({
       toast.error(`Fill in ${missing.map(field => field.label || field.key).join(', ')}`);
       return;
     }
-    // Always an options object, so a caller can forward it to the API wrapper
-    // unconditionally. Send a configuration ONLY when the dial was actually
-    // turned: an untouched card would otherwise transmit its own copy of the
-    // saved values, which the server merges over the job it just read — so a
-    // value changed from another surface since this card rendered would be
-    // silently reverted for that run. Sending nothing means "run as saved".
-    onTrigger(job.id, runValuesDirty ? { formValues: runFormValues } : {});
+    // Send ONLY the fields this card actually changed, and let the server's
+    // merge supply the rest from the job it just read. Transmitting the whole
+    // snapshot instead would push this card's copy of the UNTOUCHED fields over
+    // the stored ones, silently reverting — for that run — anything edited from
+    // another surface since this card rendered. An empty projection means "run
+    // as saved". Always an options object, so a caller can forward it to the API
+    // wrapper unconditionally.
+    const changedRunValues = Object.fromEntries(
+      Object.keys(runValues || {}).filter(key => runValues[key] !== savedFormValues[key]).map(key => [key, runValues[key]])
+    );
+    onTrigger(job.id, Object.keys(changedRunValues).length ? { formValues: changedRunValues } : {});
   };
 
   const startEditing = () => {
