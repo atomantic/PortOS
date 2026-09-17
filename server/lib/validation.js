@@ -19,6 +19,7 @@ import { PR_COMPLETION_VALUES } from './prDisposition.js';
 import { EFFORT_LEVELS } from './providerModels.js';
 import { MODEL_ALIAS_LIMITS } from './providerModelAliases.js';
 import { PROVIDER_HARNESS_IDS, ROUTE_MODES } from './providerHarnesses.js';
+import { parseProviderRef } from './providerRef.js';
 import { SERVICE_CREDENTIAL_VIAS, SERVICE_PLANS, SERVICE_SLUG_RE } from './serviceDefinitions.js';
 import { MAX_TIMEOUT as AI_RUN_TIMEOUT_MAX_MS, MIN_TIMEOUT as AI_RUN_TIMEOUT_MIN_MS } from './aiToolkit/constants.js';
 import {
@@ -511,6 +512,9 @@ const providerHardwareRequirementsSchema = z.object({
   minCudaComputeCapability: z.number().positive().max(20).optional(),
 }).strict();
 
+/** A service or bootstrap slug on a preset (#7565), clearable with `null`. */
+const presetSlugField = z.string().trim().min(1).max(64).regex(SERVICE_SLUG_RE).nullable().optional();
+
 export const providerSchema = z.object({
   name: z.string().min(1).max(100),
   type: z.enum(['cli', 'api', 'tui']),
@@ -568,7 +572,15 @@ export const providerSchema = z.object({
   envVars: z.record(z.string()).optional(),
   headlessArgs: z.array(z.string()).optional(),
   tuiPromptDelayMs: z.number().int().min(250).max(60000).optional(),
-  tuiIdleTimeoutMs: z.number().int().min(1000).max(86400000).optional()
+  tuiIdleTimeoutMs: z.number().int().min(1000).max(86400000).optional(),
+  // Preset structure (#7565), in parity with the toolkit schema: the harness,
+  // method and service slug a DERIVED preset is materialized from, the
+  // optional catalog narrowing, and the bootstrap app it spawns through.
+  harnessId: z.enum(PROVIDER_HARNESS_IDS).nullable().optional(),
+  method: z.enum(ROUTE_MODES).nullable().optional(),
+  serviceId: presetSlugField,
+  catalogNarrowing: z.array(z.string().trim().min(1).max(512)).max(1000).nullable().optional(),
+  credentialBootstrapId: presetSlugField,
 });
 
 // POST /api/providers/:id/test-vision.
@@ -2279,6 +2291,24 @@ export const credentialBootstrapsSettingsSchema = z.record(
   z.string().regex(SERVICE_SLUG_RE, 'bootstrap slug must be lowercase alphanumeric with hyphens').max(64),
   credentialBootstrapSchema,
 );
+
+/**
+ * `POST /api/providers/presets` (#7565) — "Save as preset": a composite id
+ * becomes a stored, derived preset. The composite's own grammar is checked
+ * here; whether it is RUNNABLE (harness enabled, service known, compatible) is
+ * the resolver's verdict, published as a 400 with its code. `effort` is
+ * validated against the harness's ladder in the service, not against a flat
+ * enum: which rungs exist is a per-harness (and per-model) fact.
+ */
+export const providerPresetCreateSchema = z.object({
+  compositeId: providerRefSchema.refine((value) => parseProviderRef(value)?.kind === 'composite', {
+    message: 'compositeId must be a composite <harness>.<cli|tui|api>@<service-slug>[+<bootstrap-slug>]',
+  }),
+  id: presetProviderIdSchema.optional(),
+  name: z.string().trim().min(1).max(100).optional(),
+  model: z.string().trim().min(1).max(512).nullable().optional(),
+  effort: z.string().trim().min(1).max(20).nullable().optional(),
+}).strict();
 
 /** `PUT /api/providers/harnesses/:id` — flip one harness's enablement. */
 export const harnessEnablementUpdateSchema = z.object({ enabled: z.boolean() }).strict();

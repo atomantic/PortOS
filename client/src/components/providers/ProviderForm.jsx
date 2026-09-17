@@ -1,6 +1,6 @@
 import { hardwareUnavailableReason } from '../../utils/systemCapabilities';
 import { useMemo, useState } from 'react';
-import { AlertTriangle, Braces, Cpu, Plug, SlidersHorizontal } from 'lucide-react';
+import { AlertTriangle, Braces, Cpu, Link2, Plug, SlidersHorizontal } from 'lucide-react';
 import toast from '../ui/Toast';
 import * as api from '../../services/api';
 import { filterHardwareCompatibleProviderModels, filterGenerationModels, isEmbeddingModel, isProviderHardwareCompatible, isProviderModelHardwareCompatible, mergeModelLists, configuredDefaultIn, localBackendForProvider, mergeObservedContextWindows, withRuntimeContextWindow, modelOptionLabel, isProcessProvider, isLocalEndpoint, effectiveModelContextWindow, isRunnerAllowedCommand, effortLevelsForProvider, isOllamaBackedProvider, gatewayForProvider, isClaudeCommandProvider, generationControlsFor, isCodexProvider } from '../../utils/providers';
@@ -107,6 +107,21 @@ export default function ProviderForm({ provider, daemonReadiness = null, onClose
   });
 
   const [activeTab, setActiveTab] = useDrawerTab('providerTab', 'connection', PROVIDER_FORM_TAB_IDS);
+  // Preset structure (#7565). A DERIVED preset takes its program, endpoint,
+  // credential, environment and catalog from the service it names on every
+  // save; the server refuses a direct edit to one of those with a pointer at
+  // the service, so the banner says so up front. A legacy record the server
+  // reports convertible gets the one-click conversion here.
+  const isDerived = provider?.presetKind === 'derived';
+  const [converting, setConverting] = useState(false);
+  const convertToDerived = async () => {
+    setConverting(true);
+    const derived = await api.deriveProviderPreset(provider.id).catch(() => null);
+    setConverting(false);
+    if (!derived) return;
+    toast.success(`Now derived from service "${derived.serviceId}"`);
+    onSave();
+  };
 
   const [newEnvKey, setNewEnvKey] = useState('');
   const [newEnvValue, setNewEnvValue] = useState('');
@@ -509,6 +524,33 @@ export default function ProviderForm({ provider, daemonReadiness = null, onClose
           )}
           {activeTab === 'connection' && (
             <div className="space-y-4">
+              {isDerived && (
+                <Banner tone="info" icon={Link2}>
+                  <p>
+                    Derived from service <code className="font-mono">{provider.serviceId}</code> via{' '}
+                    <code className="font-mono">{provider.harnessId}</code> ({provider.method}). The command, endpoint,
+                    credential, backend environment and model catalog come from that service and are refreshed on every
+                    save — edit them on the service, not here. Name, arguments, timeouts, model pins, effort and
+                    generation settings are this preset's own.
+                  </p>
+                </Banner>
+              )}
+              {provider && !isDerived && provider.presetDerivable && (
+                <Banner tone="info" icon={Link2}>
+                  <p>
+                    This preset holds its own copy of a service's endpoint and credentials. Converting it derives those
+                    from the service it already runs on, so a change to the service reaches it automatically.
+                  </p>
+                  <button
+                    type="button"
+                    onClick={convertToDerived}
+                    disabled={converting}
+                    className="mt-2 px-3 py-1.5 text-sm rounded-lg border border-port-accent/50 text-port-accent hover:bg-port-accent/10 disabled:opacity-50"
+                  >
+                    {converting ? 'Converting…' : 'Convert to derived preset'}
+                  </button>
+                </Banner>
+              )}
               <FormField label="Name *">
                 <input
                   type="text"

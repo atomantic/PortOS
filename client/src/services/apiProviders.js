@@ -28,6 +28,14 @@ export const addProviderTuiMode = (id, options = {}) => request(`/providers/${id
   ...options,
 });
 export const getSampleProviders = () => request('/providers/samples');
+// Presets (#7565): "Convert to derived preset" stamps a legacy record with the
+// service it already runs on — refused (409) when re-deriving it would change
+// how it runs. ("Save as preset", `POST /providers/presets`, gets its wrapper
+// with the compose popover that calls it, #7566.)
+export const deriveProviderPreset = (id, options = {}) => request(`/providers/${encodeURIComponent(id)}/derive`, {
+  method: 'POST',
+  ...options,
+});
 export const testProvider = (id) => request(`/providers/${id}/test`, { method: 'POST' });
 export const refreshProviderModels = (id, options) => request(`/providers/${id}/refresh-models`, { method: 'POST', ...options });
 // Stored model pins naming a model their provider no longer lists (#7315).

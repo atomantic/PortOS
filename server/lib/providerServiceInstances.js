@@ -8,6 +8,7 @@ import {
   SERVICE_FAMILIES,
   SERVICE_PLANS,
   SERVICE_SLUG_RE,
+  resolveServiceInstance,
   serviceDefinitionById,
   serviceDefinitionForLocalRuntime,
 } from './serviceDefinitions.js';
@@ -103,6 +104,38 @@ export function instanceApiKeyFor(connection, definition, env) {
   // variable the profile reads is a place the key may sit, after the
   // definition's own.
   return firstNamed(stored, [...definition.credential.envVars, ...CONNECTION_CREDENTIAL_ENV_VARS]);
+}
+
+/**
+ * The pure instance shape behind a connection row: its definition, slug, plan,
+ * endpoints and the key it runs under. `null` when the row names no definition
+ * this build has (nothing composes onto it).
+ *
+ * A stored row OUTLIVES the definition it names: installs upgrade on their own
+ * schedule, so a release that drops or renames a plan leaves existing rows on
+ * the old one. `resolveServiceInstance` THROWS on a plan the definition no
+ * longer sells (and on a slug that predates `SERVICE_SLUG_RE`), and the
+ * composition catalog maps this over EVERY connection — so one stale row would
+ * take down the whole surface instead of dropping the single service it
+ * describes. Answer `null` for it, exactly as for an unknown definition.
+ *
+ * @param {object} connection - a store row
+ * @param {Record<string, string|undefined>} [env]
+ */
+export function instanceForConnection(connection, env = process.env) {
+  const definition = connection?.definitionId ? serviceDefinitionById(connection.definitionId) : null;
+  if (!definition || !connection.slug) return null;
+  const plan = connection.plan ?? definition.plans[0];
+  if (!definition.plans.includes(plan) || !SERVICE_SLUG_RE.test(connection.slug)) return null;
+  const apiKey = instanceApiKeyFor(connection, definition, env);
+  return resolveServiceInstance({
+    definition,
+    slug: connection.slug,
+    plan: connection.plan,
+    transports: connection.transports,
+    credentials: apiKey ? { apiKey } : {},
+    credentialVia: connection.credentialVia,
+  });
 }
 
 /** The slugs a graph already uses — what every allocation must avoid. */

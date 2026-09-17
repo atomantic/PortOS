@@ -51,18 +51,6 @@ export function normalizeCredentialBootstraps(raw) {
   }));
 }
 
-/**
- * The bootstrap input `materializeRoute` takes for an app: its slug as `id`
- * (so the composite id it stamps carries `+<slug>`) plus the spawn columns.
- */
-export const bootstrapInputFor = (slug, app) => ({
-  id: slug,
-  command: app.command,
-  ...(Array.isArray(app.args) ? { args: [...app.args] } : {}),
-  ...(app.argsSeparator ? { argsSeparator: app.argsSeparator } : {}),
-  ...(app.harnessNames ? { harnessNames: { ...app.harnessNames } } : {}),
-});
-
 /** The catalog's sanitized view of the table: never a command line, only what a picker names. */
 export const presentCredentialBootstraps = (apps) => Object.entries(apps).map(([slug, app]) => ({
   slug,

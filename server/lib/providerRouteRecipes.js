@@ -54,6 +54,18 @@ const LOCAL_RUNTIME_MARKERS = Object.freeze({
   sglang: 'sglangBacked',
 });
 
+/**
+ * Every record key a backend marker can sit under: the local-runtime booleans,
+ * the generic gateway marker, and each gateway's legacy per-gateway boolean —
+ * so a writer that has to CLEAR a stale marker (a preset re-derived from a
+ * different service, #7565) names the same set this module writes.
+ */
+export const BACKEND_MARKER_KEYS = Object.freeze([
+  ...Object.values(LOCAL_RUNTIME_MARKERS),
+  'gatewayBacked',
+  ...PROVIDER_GATEWAYS.flatMap((gateway) => (gateway.legacyMarker ? [gateway.legacyMarker] : [])),
+]);
+
 /** Every `kind` `POST /api/providers/connections` accepts. */
 export const CREATABLE_CONNECTION_KINDS = Object.freeze([
   ...Object.keys(LOCAL_RUNTIME_MARKERS),

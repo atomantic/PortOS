@@ -8,6 +8,7 @@ import {
 } from '../lib/providerConnections.js';
 import {
   connectionOwnedSnapshot,
+  isDerivedPreset,
   mergeConnectionCredentials,
   nextConnectionCatalog,
   planGraphReconciliation,
@@ -26,6 +27,12 @@ import {
 } from '../lib/providerModelAliases.js';
 import { harnessById } from '../lib/providerHarnesses.js';
 import { modeSiblingName } from '../lib/aiToolkit/internal/providerModes.js';
+import {
+  bootstrapInputFor,
+  derivedPresetPatch,
+  materializeDerivedPreset,
+  planPresetBackfill,
+} from '../lib/providerPresets.js';
 import { effortLevelsForProvider } from '../lib/providerModels.js';
 import {
   bindingBlocker,
@@ -42,6 +49,7 @@ import {
 import { buildTuiShellLaunch } from '../lib/tuiShellLaunch.js';
 import {
   allocateServiceSlug,
+  instanceForConnection,
   planServiceColumnBackfill,
   serviceColumnsForConnection,
   takenServiceSlugs,
@@ -118,6 +126,11 @@ export function resetProviderGraphState() {
 
 const providerService = () => requireToolkit().services.providers;
 
+// Deferred: the bootstrap-app table is read only when a preset is derived, and
+// its module reaches `lib/validation.js` — a closure nothing on the graph's
+// boot path otherwise pays for (server/AGENTS.md "Import scoping").
+const bootstrapApps = async () => (await import('./credentialBootstrapApps.js')).listCredentialBootstraps();
+
 /**
  * A connection addressed by UUID or by service slug (#7563). Every
  * `/connections/:id` route accepts either, so a client that learned the slug
@@ -186,19 +199,103 @@ async function reconcilePass(reason) {
     console.log(`🔗 Provider graph: named ${backfill.length} service instance(s) (${backfill.map((row) => row.slug).join(', ')})`);
   }
 
+  // Derived presets (#7565): every legacy record the graph now routes onto a
+  // named instance is stamped with its structural keys — when re-deriving it
+  // from that service is a fixpoint. Row-derived like the slugs above, so it
+  // rides every pass; the latch this pass holds keeps the file write from
+  // re-entering. The view it reads is the graph AS APPLIED, composed from the
+  // plan rather than re-read (one read per pass is the recursion guard the
+  // save hook relies on): the rows this pass imported and the slugs it named
+  // are eligible now, a clone or split waits for the next pass.
+  const named = new Map(backfill.map((row) => [row.id, row]));
+  const removed = new Set(plan.removals);
+  const presets = await backfillPresets({
+    connections: [...graph.connections.map((connection) => ({ ...connection, ...(named.get(connection.id) || {}) })), ...plan.imports.connections],
+    bindings: [...graph.bindings, ...plan.imports.bindings],
+    routes: [...graph.routes.filter((route) => !removed.has(route.providerId)), ...plan.imports.routes],
+  }, providers);
+
   const detached = plan.regroups.filter((regroup) => regroup.connectionAction === 'clone').length;
   const split = plan.regroups.filter((regroup) => !regroup.bindingId).length;
-  if (!noop || plan.conflicts.length > 0) {
+  if (!noop || plan.conflicts.length > 0 || presets.stamped.length > 0) {
     console.log(`🔗 Provider graph reconciled (${reason}): ${plan.imports.routes.length} imported, `
       + `${detached} detached, ${split} split, ${plan.removals.length} removed, `
-      + `${plan.acknowledgements.length} acknowledged, ${plan.conflicts.length} conflicted`);
+      + `${plan.acknowledgements.length} acknowledged, ${plan.conflicts.length} conflicted, ${presets.stamped.length} presets derived`);
   }
   for (const conflict of plan.conflicts) {
     console.error(`⚠️ Provider route ${conflict.providerId} changed outside the graph mid-projection; `
       + 'leaving it untouched and blocking its binding until repaired');
   }
-  return { activeProvider, plan, noop };
+  return { activeProvider, plan, noop, presets };
 }
+
+/**
+ * The preset backfill half of a pass (#7565). Writes through the toolkit
+ * directly: the caller already holds the `reconciling` latch for the whole
+ * pass, so the save hook this write fires returns immediately.
+ *
+ * @returns {Promise<{stamped: string[], skipped: {id: string, reason: string}[]}>}
+ */
+async function backfillPresets(graph, providers) {
+  // The bootstrap table is read only when a legacy record is routed at all.
+  const routed = new Set(graph.routes.map((route) => route.providerId));
+  if (!providers.some((record) => routed.has(record?.id) && !isDerivedPreset(record))) return { stamped: [], skipped: [] };
+  const { patches, skipped } = planPresetBackfill({ graph, providers, bootstraps: await bootstrapApps(), env: process.env });
+  const stamped = Object.keys(patches).length > 0 ? await providerService().applyProviderPatches(patches) : [];
+  if (stamped.length > 0) console.log(`🔗 Provider graph: derived ${stamped.length} preset(s) from their services (${stamped.join(', ')})`);
+  // Aggregate only: a reason names a record, never a value off it.
+  const legacy = skipped.filter(({ reason }) => reason !== 'unmapped').length;
+  if (legacy > 0) console.log(`🔗 Provider graph: ${legacy} routed record(s) stay legacy presets`);
+  return { stamped, skipped };
+}
+
+/**
+ * Re-derive every DERIVED preset on `connection` from the row as it now is,
+ * and write what changed (#7565). The complement of `projectRoutes`: that one
+ * carries the endpoint and credential through the pending/projected snapshot
+ * protocol, this one re-runs the whole materialization — the inline OpenCode
+ * config, the plan-filtered catalog, the bootstrap app — none of which the
+ * connection profile owns. Called from inside a serialized pass, after the row
+ * is saved; a preset whose derivation is refused (the service lost its
+ * endpoint, its bootstrap app was deleted) is left exactly as it was.
+ *
+ * @param {object} connection - the row as saved
+ * @param {{providerIds?: string[]|null}} [options] - the derived presets to re-derive
+ *   ONTO this row (a binding that just moved here), instead of the ones already naming it
+ * @returns {Promise<string[]>} the preset ids rewritten
+ */
+export async function rematerializeDerivedPresets(connection, { providerIds = null } = {}) {
+  const instance = instanceForConnection(connection);
+  if (!instance) return [];
+  const [{ providers }, bootstraps] = await Promise.all([providerService().getAllProviders(), bootstrapApps()]);
+  const onRow = (record) => (providerIds ? providerIds.includes(record.id) : record.serviceId === connection.slug);
+  const patches = {};
+  for (const record of providers) {
+    if (!isDerivedPreset(record) || !onRow(record)) continue;
+    const harness = harnessById(record.harnessId);
+    if (!harness) continue;
+    const app = record.credentialBootstrapId ? bootstraps[record.credentialBootstrapId] : null;
+    if (record.credentialBootstrapId && !app) continue;
+    const { record: derived } = materializeDerivedPreset({
+      record, harness, instance, catalog: connection.catalog, bootstrap: app ? bootstrapInputFor(record.credentialBootstrapId, app) : null,
+    });
+    if (!derived) continue;
+    const patch = derivedPresetPatch(record, derived);
+    if (Object.keys(patch).length > 0) patches[record.id] = patch;
+  }
+  if (Object.keys(patches).length === 0) return [];
+  const written = await writeProviderPatches(patches);
+  if (written.length > 0) console.log(`🔗 Re-derived ${written.length} preset(s) from service ${connection.slug}`);
+  return written;
+}
+
+/**
+ * A binding moved between instances (link, unlink): the derived presets on its
+ * routes now sit on `connection` and must say so. One re-derivation from the
+ * row they landed on writes the new `serviceId` with everything else.
+ */
+const repointDerivedPresets = (providerIds, connection) =>
+  (connection?.slug ? rematerializeDerivedPresets(connection, { providerIds }) : Promise.resolve([]));
 
 /**
  * Reconcile the graph against providers.json.
@@ -397,6 +494,7 @@ export function linkBinding(input) {
     const routes = graph.routes.filter((route) => route.bindingId === binding.id);
     await relinkBinding({ bindingId: binding.id, connectionId: target.id });
     const applied = await projectRoutes(routes.map((route) => route.providerId), target);
+    await repointDerivedPresets(routes.map((route) => route.providerId), target);
     console.log(`🔗 Linked binding ${binding.id} to connection ${target.id} (${applied.length} routes projected)`);
     return { bindingId: binding.id, connectionId: target.id, affectedRouteIds: applied };
   });
@@ -423,6 +521,8 @@ export function unlinkBinding(input) {
       slug: allocateServiceSlug(source.slug ?? source.definitionId ?? source.kind, taken),
     };
     await detachBindingToConnection({ bindingId: binding.id, connection });
+    // A derived preset names its instance by slug, and the clone has a new one.
+    await repointDerivedPresets(graph.routes.filter((route) => route.bindingId === binding.id).map((route) => route.providerId), connection);
     console.log(`🔗 Unlinked binding ${binding.id} onto its own connection ${connection.id}`);
     return { bindingId: binding.id, connectionId: connection.id };
   });
@@ -596,8 +696,11 @@ export function updateConnectionSettings({
     };
     const revision = await saveConnectionSettings(next);
     const applied = await projectRoutes(routes.map((route) => route.providerId), next);
-    console.log(`🔗 Updated connection ${connection.id} (${applied.length} routes projected)`);
-    return { connectionId: connection.id, revision, affectedRouteIds: applied };
+    // The derived presets on this instance follow the whole row, not only the
+    // profile-owned half the projection carried (#7565).
+    const rederived = await rematerializeDerivedPresets({ ...next, revision: revision ?? next.revision });
+    console.log(`🔗 Updated connection ${connection.id} (${applied.length} routes projected, ${rederived.length} presets re-derived)`);
+    return { connectionId: connection.id, revision, affectedRouteIds: [...new Set([...applied, ...rederived])] };
   });
 }
 

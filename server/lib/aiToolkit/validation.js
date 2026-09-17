@@ -78,6 +78,9 @@ export function sanitizeScreenshotRefs(screenshots) {
   return { safe, rejected };
 }
 
+/** A service or bootstrap slug on a preset (#7565): the same alphabet as a record id, clearable with `null`. */
+const presetSlugField = z.string().regex(PRESET_ID_RE, 'must be a slug (lowercase alphanumeric with hyphens)').max(64).nullable().optional();
+
 export const providerSchema = z.object({
   // Sample providers post a stable id (e.g. 'codex') so the server can adopt
   // them verbatim rather than slugifying the display name (which would turn
@@ -248,7 +251,24 @@ export const providerSchema = z.object({
   secretEnvVars: z.array(z.string()).optional(),
   headlessArgs: z.array(z.string()).optional(),
   tuiPromptDelayMs: z.number().int().min(250).max(60000).optional(),
-  tuiIdleTimeoutMs: z.number().int().min(1000).max(86400000).optional()
+  tuiIdleTimeoutMs: z.number().int().min(1000).max(86400000).optional(),
+  // PRESET structure (#7565): a record carrying all three of `harnessId`,
+  // `method` and `serviceId` is a DERIVED preset — its connection-owned values
+  // are re-materialized from the named service instance on every save by the
+  // host (`server/lib/providerPresets.js`). A record without them is a legacy
+  // preset, executed exactly as before. Additive and nullable so an editor can
+  // clear them; `method` must equal `type` (the host enforces it, since a
+  // refinement here would not survive `.partial()` / `.extend()`). The ids are
+  // slugs rather than enums because this directory stays self-contained.
+  harnessId: z.string().regex(/^[a-z0-9-]+$/, 'harnessId must be a harness id').max(64).nullable().optional(),
+  method: z.enum(['cli', 'tui', 'api']).nullable().optional(),
+  serviceId: presetSlugField,
+  // The subset of the service catalog this preset offers; `null` = the whole catalog.
+  catalogNarrowing: z.array(z.string().trim().min(1).max(512)).max(1000).nullable().optional(),
+  // The configured credential-bootstrap app (`settings.credentialBootstraps`
+  // slug) a derived cli/tui preset spawns through; materialization writes the
+  // inline `credentialBootstrap` object from it.
+  credentialBootstrapId: presetSlugField,
 });
 
 /**

@@ -47,6 +47,7 @@ vi.mock('./providerRuntimeInstaller.js', async (importOriginal) => ({
 vi.mock('./providerServices.js', () => ({ listServices: vi.fn(async () => ({ services: [{ slug: 'nvidia-nim' }] })) }));
 
 const composite = await import('./compositeProviders.js');
+const { instanceForConnection } = await import('../lib/providerServiceInstances.js');
 const { buildCliArgs } = await import('../lib/cliProviderArgs.js');
 const { buildTuiInvocation } = await import('../lib/tuiHandshake.js');
 const { buildTuiShellLaunch } = await import('../lib/tuiShellLaunch.js');
@@ -238,7 +239,7 @@ describe('materializeComposite — refusals carry a reason and never substitute'
     // written with. That must drop the one service, not throw out of the whole
     // composition surface (the catalog resolves EVERY row in one pass).
     const stale = { ...GRAPH, connections: GRAPH.connections.map((row) => (row.slug === 'nvidia-nim' ? { ...row, plan: 'retired-tier' } : row)) };
-    expect(composite.instanceForConnection(stale.connections.find((row) => row.slug === 'nvidia-nim'))).toBeNull();
+    expect(instanceForConnection(stale.connections.find((row) => row.slug === 'nvidia-nim'))).toBeNull();
     expect(resolve('pi.tui@nvidia-nim', { graph: stale })).toMatchObject({ record: null, code: 'service-undefined' });
     // A sibling row on a plan that still exists is unaffected.
     expect(resolve('pi.tui@openrouter', { graph: stale }).record).not.toBeNull();

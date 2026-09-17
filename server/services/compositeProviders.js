@@ -1,10 +1,10 @@
 import { parseProviderRef } from '../lib/providerRef.js';
 import { PROVIDER_HARNESSES, harnessById, isCompatible } from '../lib/providerHarnesses.js';
 import { materializeRouteOutcome } from '../lib/providerRouteRecipes.js';
-import { applyServicePlanFilter, instanceApiKeyFor } from '../lib/providerServiceInstances.js';
+import { bootstrapInputFor } from '../lib/providerPresets.js';
+import { applyServicePlanFilter, instanceForConnection } from '../lib/providerServiceInstances.js';
 import { effortLevelsForProvider } from '../lib/providerModels.js';
-import { SERVICE_SLUG_RE, resolveServiceInstance, serviceDefinitionById } from '../lib/serviceDefinitions.js';
-import { bootstrapInputFor, listCredentialBootstraps, presentCredentialBootstraps } from './credentialBootstrapApps.js';
+import { listCredentialBootstraps, presentCredentialBootstraps } from './credentialBootstrapApps.js';
 import { harnessEnablementFrom, harnessSettingsRevision, listHarnessEnablement } from './harnessEnablement.js';
 import { findConnectionByRef, providerGraphEnabled } from './providerGraph.js';
 import { readGraph } from './providerGraphStore.js';
@@ -78,31 +78,31 @@ async function graphWithinTtl() {
 }
 
 /**
- * The pure instance shape behind a connection row: its definition, slug, plan,
- * endpoints and the key it runs under. `null` when the row names no definition
- * this build has (nothing composes onto it).
+ * The parts a (harness, method, service, bootstrap) tuple names, or the reason
+ * one of them does not resolve — shared by the composite resolver and the
+ * preset save (#7565), so both refuse the same input with the same code.
+ * Enablement is NOT checked here: a stored preset on a switched-off harness is
+ * still editable, while a composite on one is not runnable.
+ *
+ * @returns {{harness: object, connection: object, instance: object, bootstrap: object|null, code: null, reason: null}
+ *   | {harness: null, connection: null, instance: null, bootstrap: null, code: string, reason: string}}
  */
-export function instanceForConnection(connection, env = process.env) {
-  const definition = connection?.definitionId ? serviceDefinitionById(connection.definitionId) : null;
-  if (!definition || !connection.slug) return null;
-  // A stored row OUTLIVES the definition it names: installs upgrade on their own
-  // schedule, so a release that drops or renames a plan leaves existing rows on
-  // the old one. `resolveServiceInstance` THROWS on a plan the definition no
-  // longer sells (and on a slug that predates SERVICE_SLUG_RE), and the catalog
-  // maps this over EVERY connection — so one stale row would take down the whole
-  // composition surface instead of dropping the single service it describes.
-  // Answer `null` for it, exactly as for a definition this build does not have.
-  const plan = connection.plan ?? definition.plans[0];
-  if (!definition.plans.includes(plan) || !SERVICE_SLUG_RE.test(connection.slug)) return null;
-  const apiKey = instanceApiKeyFor(connection, definition, env);
-  return resolveServiceInstance({
-    definition,
-    slug: connection.slug,
-    plan: connection.plan,
-    transports: connection.transports,
-    credentials: apiKey ? { apiKey } : {},
-    credentialVia: connection.credentialVia,
-  });
+export function resolveCompositeParts({ harnessId, method, serviceSlug, bootstrapSlug = null }, { graph, bootstraps, env = process.env }) {
+  const refuse = (code, reason) => ({ harness: null, connection: null, instance: null, bootstrap: null, code, reason });
+  const harness = harnessById(harnessId);
+  if (!harness) return refuse('harness-unknown', `No harness "${harnessId}"`);
+  if (!harness.modes.includes(method)) return refuse('method-unsupported', `${harness.label} has no ${method} mode`);
+  const connection = findConnectionByRef(graph, serviceSlug);
+  if (!connection || connection.slug !== serviceSlug) return refuse('service-unknown', `No service is addressed as "${serviceSlug}"`);
+  const instance = instanceForConnection(connection, env);
+  if (!instance) return refuse('service-undefined', `Service "${serviceSlug}" has no definition this build composes onto`);
+  let bootstrap = null;
+  if (bootstrapSlug) {
+    const app = bootstraps?.[bootstrapSlug];
+    if (!app) return refuse('bootstrap-unknown', `No credential bootstrap app is addressed as "${bootstrapSlug}"`);
+    bootstrap = bootstrapInputFor(bootstrapSlug, app);
+  }
+  return { harness, connection, instance, bootstrap, code: null, reason: null };
 }
 
 /**
@@ -126,21 +126,11 @@ export function materializeComposite(id, { graph, settings, bootstraps, runtimes
   if (!enablement?.enabled) {
     return refuse('harness-disabled', `${harness.label} is ${enablement?.source === 'setting' ? 'switched off' : 'not detected on this machine'}`);
   }
-  if (!harness.modes.includes(ref.method)) return refuse('method-unsupported', `${harness.label} has no ${ref.method} mode`);
-
-  const connection = findConnectionByRef(graph, ref.serviceSlug);
-  if (!connection || connection.slug !== ref.serviceSlug) return refuse('service-unknown', `No service is addressed as "${ref.serviceSlug}"`);
+  const resolved = resolveCompositeParts(parts, { graph, bootstraps, env });
+  if (resolved.code) return refuse(resolved.code, resolved.reason);
+  const { connection, instance, bootstrap } = resolved;
   if (connection.enabled === false) return refuse('service-disabled', `Service "${ref.serviceSlug}" is switched off`);
-  const instance = instanceForConnection(connection, env);
-  if (!instance) return refuse('service-undefined', `Service "${ref.serviceSlug}" has no definition this build composes onto`);
   if (!isCompatible(harness, instance)) return refuse('incompatible', `${harness.label} cannot be pointed at ${instance.definition.label}`);
-
-  let bootstrap = null;
-  if (ref.bootstrapSlug) {
-    const app = bootstraps?.[ref.bootstrapSlug];
-    if (!app) return refuse('bootstrap-unknown', `No credential bootstrap app is addressed as "${ref.bootstrapSlug}"`);
-    bootstrap = bootstrapInputFor(ref.bootstrapSlug, app);
-  }
 
   const models = applyServicePlanFilter(instance.definition, instance.plan, connection.catalog?.models || []);
   const { record, error } = materializeRouteOutcome({

@@ -491,6 +491,7 @@ export * from './providerGraphRecords.js';
 export * from './providerServiceInstances.js';
 export * from './providerModelAliases.js';
 export * from './providerModePairing.js';
+export * from './providerPresets.js';
 export * from './providerRef.js';
 export * from './providerRouteRecipes.js';
 export * from './serviceDefinitions.js';
