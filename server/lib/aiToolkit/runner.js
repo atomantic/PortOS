@@ -188,6 +188,20 @@ export function createRunnerService(config = {}) {
   // was initiated through stopRun so it can distinguish a user cancellation
   // from an unexpected provider crash and avoid fallback/bench telemetry.
   const externalStopRequests = new Set();
+  // The same one-shot marker for the toolkit's OWN in-flight runs (`activeRuns`
+  // — an API fetch's AbortController). `controller.abort()` with no reason
+  // surfaces to the reader as Node's bare `AbortError: This operation was
+  // aborted`, which no error pattern matches and which is indistinguishable
+  // from a provider transport fault. Without this marker every Stop of an API
+  // run finalized as an UNKNOWN provider failure, fired `onRunFailed`, and was
+  // escalated to a tier-4 investigation task — a post-mortem over a human
+  // pressing Stop. CLI/TUI runs already avoid that via `externalStopRequests`.
+  const activeStopRequests = new Set();
+  const consumeActiveStop = (runId) => {
+    const requested = activeStopRequests.has(runId);
+    activeStopRequests.delete(runId);
+    return requested;
+  };
 
   async function ensureRunsDir() {
     if (!existsSync(RUNS_PATH)) {
@@ -596,6 +610,10 @@ export function createRunnerService(config = {}) {
       }
 
       const controller = new AbortController();
+      // Clear any stale marker a previous run of this id left behind, matching
+      // registerExternalRun's contract — a stop only ever describes the run
+      // that was in flight when it was requested.
+      activeStopRequests.delete(runId);
       activeRuns.set(runId, controller);
 
       // Wall-clock timeout with a single-settlement gate. Without a ceiling a
@@ -620,9 +638,38 @@ export function createRunnerService(config = {}) {
         }
         return true;
       };
+      // A Stop is a lifecycle outcome, not a failed AI attempt. Finalize it as
+      // ERROR_CATEGORIES.CANCELED and fire NO `onRunFailed` hook, so the host
+      // neither benches the provider nor escalates a tier-4 investigation task
+      // over a human pressing Stop. This writes the same terminal shape the
+      // CLI/TUI path already does (`canceled` + `completionReason`), which is
+      // what promptRunner reads to stamp `code: 'RUN_CANCELED'` on its
+      // rejection so `isRunCanceledError` callers skip the fallback cascade.
+      // Every persistence step is best-effort: `onComplete` must settle the
+      // caller even if a write fails, or a canceled run hangs its awaiter.
+      const finalizeCanceled = async () => {
+        activeRuns.delete(runId);
+        if (output) await atomicWrite(outputPath, output).catch(() => {});
+        const metadata = safeJsonParse(await readFile(metadataPath, 'utf-8').catch(() => '{}'));
+        metadata.endTime = new Date().toISOString();
+        metadata.duration = Date.now() - startTime;
+        metadata.success = false;
+        metadata.canceled = true;
+        metadata.completionReason = 'canceled';
+        metadata.error = 'API run canceled';
+        metadata.errorCategory = ERROR_CATEGORIES.CANCELED;
+        metadata.outputSize = Buffer.byteLength(output);
+        await atomicWrite(metadataPath, metadata).catch((err) => {
+          console.error(`❌ API run ${runId} cancel finalize error: ${err.message}`);
+        });
+        safeSettle(() => onComplete?.(metadata), `Run ${runId} onComplete`);
+      };
       const finalizeTimeout = async () => {
         if (!markSettled()) return;
         activeRuns.delete(runId);
+        // The timer's own abort caused this, so TIMEOUT stays authoritative
+        // even if a Stop raced it — just drop the marker so it can't leak.
+        consumeActiveStop(runId);
         const error = `API execution timed out after ${effectiveTimeout}ms`;
         try {
           if (output) await atomicWrite(outputPath, output).catch(() => {});
@@ -729,6 +776,14 @@ export function createRunnerService(config = {}) {
         // a rejected fetch, or the read above was aborted) — if so it has
         // finalized as a TIMEOUT; don't double-complete or reclassify.
         if (!markSettled()) return runId;
+
+        // A Stop that lands before the response headers arrives here as the
+        // fetch's AbortError, not as a provider status.
+        if (consumeActiveStop(runId)) {
+          await finalizeCanceled();
+          return runId;
+        }
+
         activeRuns.delete(runId);
         const metadata = safeJsonParse(await readFile(metadataPath, 'utf-8').catch(() => '{}'));
         metadata.endTime = new Date().toISOString();
@@ -810,6 +865,9 @@ export function createRunnerService(config = {}) {
         // disk, rename failure) — otherwise the caller would hang forever.
         if (!markSettled()) return;
         activeRuns.delete(runId);
+        // A Stop that lost the race to the last chunk leaves a marker no
+        // failure path will consume; drop it so it can't outlive the run.
+        consumeActiveStop(runId);
         try {
           await atomicWrite(outputPath, output);
 
@@ -857,6 +915,15 @@ export function createRunnerService(config = {}) {
           // If the timeout won the race (this catch is the aborted reader
           // rejecting), it already finalized as a TIMEOUT — bail out.
           if (!markSettled()) return;
+
+          // A Stop mid-stream rejects the reader with Node's bare
+          // `AbortError: This operation was aborted` — no pattern matches it,
+          // so without this check it is classified UNKNOWN and escalated.
+          if (consumeActiveStop(runId)) {
+            await finalizeCanceled();
+            return;
+          }
+
           activeRuns.delete(runId);
 
           if (output) {
@@ -925,6 +992,13 @@ export function createRunnerService(config = {}) {
       if (active.kill) {
         killProcessTree(active);
       } else if (active.abort) {
+        // Mark BEFORE aborting: the abort rejects the in-flight reader
+        // synchronously enough that the finalizer can already be running by
+        // the time this returns, and it must see an intentional stop. Only the
+        // AbortController (API) branch marks — the built-in CLI executor's
+        // exit-code classification is unchanged by this, so a marker there
+        // would never be consumed.
+        activeStopRequests.add(runId);
         active.abort();
       }
 
