@@ -1538,10 +1538,16 @@ export async function getUpcomingTasks(limit = 10) {
   // include app-scoped cadence overrides. In particular, an app can opt into a
   // cron expression while the global task remains on-demand; omitting that
   // boundary leaves the hourly fallback as the only chance to notice the slot.
-  const activeApps = await getActiveApps().catch(() => []);
+  //
+  // Strict on purpose (#7527): a rejected inventory/override read used to be
+  // swallowed into [] / {}, which looked like "no apps configured" rather than
+  // "the calculation is unavailable" — cosJobScheduler.scheduleNextImprovementCheck
+  // would then arm its 1h fallback and could sleep through a cron minute a
+  // healthy read would have caught. Let the rejection propagate; the caller
+  // owns the retry.
+  const activeApps = await getActiveApps();
   const activeAppOverrides = activeApps.length > 0
-    ? await mapWithConcurrency(activeApps, 8, (app) =>
-      getAppTaskTypeOverrides(app.id).catch(() => ({})))
+    ? await mapWithConcurrency(activeApps, 8, (app) => getAppTaskTypeOverrides(app.id))
     : [];
 
   for (const [taskType, interval] of Object.entries(schedule.tasks)) {
@@ -1563,7 +1569,7 @@ export async function getUpcomingTasks(limit = 10) {
       .map(candidate => candidate.app);
     const appChecks = scheduledApps.length > 0
       ? await mapWithConcurrency(scheduledApps, 8, (app) =>
-        shouldRunTask(taskType, app.id, { featureEnabled, schedule }).catch(() => null))
+        shouldRunTask(taskType, app.id, { featureEnabled, schedule }))
       : [];
     const appReady = appChecks.some(appCheck => appCheck?.shouldRun);
     const futureAppTimes = appChecks.map(appCheck => Date.parse(appCheck?.nextRunAt))

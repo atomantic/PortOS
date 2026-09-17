@@ -17,13 +17,34 @@ import { useAutoRefetch } from '../hooks/useAutoRefetch';
  * Helps users understand what the CoS will work on next
  */
 const UpcomingTasksWidget = memo(function UpcomingTasksWidget() {
-  const { data: upcoming, loading } = useAutoRefetch(
+  const { data: upcoming, loading, error } = useAutoRefetch(
     () => api.getCosUpcomingTasks(6, { silent: true }),
     60000
   );
 
-  // Don't render while loading or if no upcoming tasks
-  if (loading || !upcoming?.length) {
+  // Don't render during the initial load.
+  if (loading) {
+    return null;
+  }
+
+  if (!upcoming?.length) {
+    // A genuine calculation failure (#7527 — the server now rejects rather
+    // than returning a misleadingly "complete" empty array) with no prior
+    // good result to fall back to. Say so instead of silently disappearing,
+    // which used to be indistinguishable from "nothing is scheduled".
+    if (error) {
+      return (
+        <div className="bg-port-card border border-port-border rounded-xl p-4 sm:p-6">
+          <div className="flex items-center gap-3">
+            <Clock className="w-6 h-6 text-gray-500" aria-hidden="true" />
+            <div>
+              <h3 className="text-lg font-semibold text-white">Upcoming Tasks</h3>
+              <p className="text-sm text-port-warning">Schedule unavailable — retrying…</p>
+            </div>
+          </div>
+        </div>
+      );
+    }
     return null;
   }
 
@@ -206,6 +227,14 @@ const UpcomingTasksWidget = memo(function UpcomingTasksWidget() {
         <div className="mt-3 pt-3 border-t border-port-border flex items-center gap-2 text-xs text-purple-400">
           <Sparkles size={12} />
           <span>Schedule adjusted based on task performance</span>
+        </div>
+      )}
+
+      {/* A later fetch failed but a prior good result is still on screen —
+          say so rather than silently going stale (#7527). */}
+      {error && (
+        <div className="mt-3 pt-3 border-t border-port-border text-xs text-port-warning text-center">
+          Showing last known schedule — live data unavailable
         </div>
       )}
     </div>

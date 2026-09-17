@@ -214,7 +214,15 @@ router.get('/schedule', asyncHandler(async (req, res) => {
 // GET /api/cos/upcoming - Get upcoming tasks preview
 router.get('/upcoming', asyncHandler(async (req, res) => {
   const { limit } = parsePagination(req.query, { defaultLimit: 10, maxLimit: 500 });
-  const upcoming = await taskSchedule.getUpcomingTasks(limit);
+  // getUpcomingTasks now rejects (rather than returning a partial []) when an
+  // app inventory/override/readiness read fails (#7527) — surface that as a
+  // real failure instead of a misleading 200 with incomplete deadlines.
+  const upcoming = await taskSchedule.getUpcomingTasks(limit).catch((err) => {
+    throw new ServerError(`Upcoming tasks unavailable: ${err?.message || err}`, {
+      status: 503,
+      code: 'UPCOMING_TASKS_UNAVAILABLE'
+    });
+  });
   res.json(upcoming);
 }));
 

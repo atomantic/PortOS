@@ -2713,6 +2713,37 @@ describe('taskSchedule', () => {
       })
     })
 
+    // #7527: a rejected app inventory/override/readiness read used to be
+    // swallowed into [] / {} / null, which read as "no apps configured" or
+    // "not ready" rather than "the calculation is unavailable" — hiding the
+    // failure from cosJobScheduler.scheduleNextImprovementCheck (which then
+    // armed its 1h fallback and could sleep through a cron minute). Assert
+    // the rejection now propagates out of getUpcomingTasks instead.
+    describe('getUpcomingTasks — propagates input failures instead of swallowing them (#7527)', () => {
+      it('propagates a rejected active-apps read instead of treating it as no apps', async () => {
+        getActiveApps.mockRejectedValueOnce(new Error('app inventory unavailable'))
+        mockSchedule({ tasks: { 'release-check': { type: 'on-demand', enabled: true, runAfter: [] } } })
+        await expect(getUpcomingTasks(50)).rejects.toThrow('app inventory unavailable')
+      })
+
+      it('propagates a rejected app-override read instead of treating it as no overrides', async () => {
+        getActiveApps.mockResolvedValueOnce([{ id: 'app-1', name: 'Acme' }])
+        getAppTaskTypeOverrides.mockRejectedValueOnce(new Error('app overrides unavailable'))
+        mockSchedule({ tasks: { 'release-check': { type: 'on-demand', enabled: true, runAfter: [] } } })
+        await expect(getUpcomingTasks(50)).rejects.toThrow('app overrides unavailable')
+      })
+
+      it('propagates a rejected per-app readiness read instead of treating the app as not-ready', async () => {
+        getActiveApps.mockResolvedValueOnce([{ id: 'app-1', name: 'Acme' }])
+        getAppTaskTypeOverrides.mockResolvedValueOnce({
+          'release-check': { enabled: true, interval: '15 9 * * *' }
+        })
+        isTaskTypeEnabledForApp.mockRejectedValueOnce(new Error('app readiness unavailable'))
+        mockSchedule({ tasks: { 'release-check': { type: 'on-demand', enabled: true, runAfter: [] } } })
+        await expect(getUpcomingTasks(50)).rejects.toThrow('app readiness unavailable')
+      })
+    })
+
     describe('getScheduleStatus — appSchedules', () => {
       // vi.clearAllMocks() keeps a mockResolvedValue, so these cases restore the
       // apps.js factory defaults rather than leaking an app roster into the

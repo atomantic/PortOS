@@ -39,13 +39,19 @@ import { useVisibilityEvent } from './useVisibilityEvent.js';
  *   no `applyResult` / setState calls run, and the return is `{ refetch }`
  *   only. Use when the caller owns its own state via `fetchFn`'s side
  *   effects and would otherwise `return null` and ignore `data` / `loading`.
- * @returns {{ refetch: Function, data?: any, loading?: boolean }}
- *   `data` and `loading` are omitted when `pollOnly` is true.
+ * @returns {{ refetch: Function, data?: any, loading?: boolean, error?: Error|null }}
+ *   `data` / `loading` / `error` are omitted when `pollOnly` is true. `error`
+ *   holds the most recent fetch failure (cleared on the next success) — the
+ *   `data` it accompanies is still the last GOOD result, per the note above,
+ *   so a caller that wants to show a "showing stale data" indicator without
+ *   erasing the last good render checks `error` alongside `data` rather than
+ *   inferring staleness from an empty/falsy `data`.
  */
 export function useAutoRefetch(fetchFn, intervalMs, options = {}) {
   const { enabled = true, immediate = true, compare, pollOnly = false } = options;
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(!pollOnly);
+  const [error, setError] = useState(null);
   const fetchRef = useRef(fetchFn);
   const compareRef = useRef(compare);
 
@@ -61,6 +67,7 @@ export function useAutoRefetch(fetchFn, intervalMs, options = {}) {
 
   const applyResult = useCallback((result) => {
     if (pollOnly) return;
+    setError(null);
     setData((prev) => {
       const cmp = compareRef.current;
       if (cmp && prev != null && result != null && cmp(prev, result)) return prev;
@@ -80,7 +87,10 @@ export function useAutoRefetch(fetchFn, intervalMs, options = {}) {
       return result;
     } catch (err) {
       console.warn(`⚠️ Auto-refetch failed: ${err?.message ?? String(err)}`);
-      if (!pollOnly) setLoading(false);
+      if (!pollOnly) {
+        setLoading(false);
+        setError(err instanceof Error ? err : new Error(String(err ?? 'Auto-refetch failed')));
+      }
       return undefined;
     }
   }, [applyResult, pollOnly]);
@@ -104,7 +114,10 @@ export function useAutoRefetch(fetchFn, intervalMs, options = {}) {
         if (!pollOnly) setLoading(false);
       } catch (err) {
         console.warn(`⚠️ Auto-refetch failed: ${err?.message ?? String(err)}`);
-        if (!cancelled && !pollOnly) setLoading(false);
+        if (!cancelled && !pollOnly) {
+          setLoading(false);
+          setError(err instanceof Error ? err : new Error(String(err ?? 'Auto-refetch failed')));
+        }
       }
     };
 
@@ -124,5 +137,5 @@ export function useAutoRefetch(fetchFn, intervalMs, options = {}) {
   });
 
   if (pollOnly) return { refetch };
-  return { data, loading, refetch };
+  return { data, loading, error, refetch };
 }
