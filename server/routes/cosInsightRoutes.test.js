@@ -76,6 +76,20 @@ describe('CoS Insight Routes', () => {
       expect(response.status).toBe(200);
       expect(getActivityCalendar).toHaveBeenCalledWith(4);
     });
+
+    // The grid materializes one object per day, so an unbounded week count
+    // would build millions of them and exhaust memory.
+    it.each([
+      ['?weeks=999999', 260],
+      ['?weeks=-5', 1],
+    ])('clamps %s to %i weeks', async (query, expected) => {
+      getActivityCalendar.mockResolvedValue({ weeks: [], maxTasks: 1, summary: {} });
+
+      const response = await request(app).get(`/api/cos/activity-calendar${query}`);
+
+      expect(response.status).toBe(200);
+      expect(getActivityCalendar).toHaveBeenCalledWith(expected);
+    });
   });
 
   describe('GET /api/cos/actionable-insights', () => {

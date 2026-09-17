@@ -16,8 +16,11 @@ const router = Router();
 
 // GET /api/cos/activity-calendar - Runs-per-day heatmap for the dashboard widget
 router.get('/activity-calendar', asyncHandler(async (req, res) => {
-  const weeks = parseInt(req.query.weeks, 10) || 12;
-  res.json(await getActivityCalendar(weeks));
+  // Clamped: the grid materializes one object per day, so an unbounded `weeks`
+  // (a typo, or a stale client) would build millions of them. 260 weeks is five
+  // years, past any window the heatmap renders legibly.
+  const requested = parseInt(req.query.weeks, 10) || 12;
+  res.json(await getActivityCalendar(Math.min(Math.max(requested, 1), 260)));
 }));
 
 // GET /api/cos/actionable-insights - Get prioritized action items requiring user attention
