@@ -133,11 +133,28 @@ function globMatches(text, pattern) {
   return p === pattern.length;
 }
 
+/**
+ * The pattern list folded to the case the matcher compares in.
+ *
+ * Hoisted out of {@link modelMatchesAccessPatterns} so a scope over a catalog
+ * lowercases the list once rather than once per model: the per-model form was
+ * M×P transient strings, which at the 500-pattern ceiling is 50,000 allocations
+ * per provider per read — and the same module runs in the browser on every
+ * keystroke in the policy editor.
+ */
+const loweredPatterns = (patterns) =>
+  (patterns || []).map(pattern => String(pattern).toLowerCase());
+
 /** True when `modelId` matches any of `patterns`. */
 export function modelMatchesAccessPatterns(modelId, patterns) {
+  return matchesLowered(modelId, loweredPatterns(patterns));
+}
+
+/** {@link modelMatchesAccessPatterns} over an already-lowered pattern list. */
+function matchesLowered(modelId, lowered) {
   if (typeof modelId !== 'string' || !modelId) return false;
   const id = modelId.toLowerCase();
-  return (patterns || []).some(pattern => globMatches(id, String(pattern).toLowerCase()));
+  return lowered.some(pattern => globMatches(id, pattern));
 }
 
 /**
@@ -157,10 +174,11 @@ export function scopeModelsByAccess(models, policy, { keep = [] } = {}) {
   const catalog = (models || []).filter(model => typeof model === 'string' && model);
   if (!modelAccessConstrains(policy)) return catalog;
   const kept = new Set(keep.filter(model => typeof model === 'string' && model));
+  const lowered = loweredPatterns(policy.patterns);
+  const allow = policy.mode === 'allow';
   return catalog.filter(model => {
     if (kept.has(model)) return true;
-    const matched = modelMatchesAccessPatterns(model, policy.patterns);
-    return policy.mode === 'allow' ? matched : !matched;
+    return matchesLowered(model, lowered) === allow;
   });
 }
 
@@ -186,7 +204,10 @@ export const providerConfiguredModels = (provider) =>
  * field until someone needs it.
  */
 export const effectiveModelAccess = (provider) =>
-  normalizeModelAccess(provider?.modelAccess) || normalizeModelAccess(provider?.modelAccessEffective);
+  // The stamped field is normalized by construction (`withGatewayModelAccess`
+  // only ever writes a `normalizeModelAccess` result), so it is taken as-is —
+  // re-normalizing it allocated four arrays and a Set per provider per read.
+  normalizeModelAccess(provider?.modelAccess) || provider?.modelAccessEffective || null;
 
 /**
  * The shape a provider takes on its way out to a reader that SELECTS models:

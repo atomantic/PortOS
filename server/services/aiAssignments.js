@@ -1,5 +1,5 @@
 import { getSettings, updateSettings } from './settings.js';
-import { getAllProviders, getProviderById, isOllamaBackedProvider, setActiveProvider, updateProvider } from './providers.js';
+import { getProviderById, getSelectableProviders, isOllamaBackedProvider, setActiveProvider, updateProvider } from './providers.js';
 import * as brainService from './brain.js';
 import * as universeService from './universeBuilder.js';
 import * as storyBuilderService from './storyBuilder.js';
@@ -474,7 +474,10 @@ const addRecordEntries = async (entries) => {
 };
 
 export async function getAiAssignments() {
-  const providersData = await getAllProviders();
+  // The assignment page is a PICKER, so it takes the entitlement-scoped list:
+  // offering a model the account cannot run is the failure this whole payload
+  // exists to prevent (docs/MODEL_ACCESS.md).
+  const providersData = await getSelectableProviders();
   const entries = [];
   await addSettingsEntries(entries);
   await addRecordEntries(entries);

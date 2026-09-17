@@ -21,9 +21,15 @@ PortOS cannot detect it. It is declared instead, per provider, in
 | `deny` | Everything except models matching the pattern list. |
 
 Once set, the scope applies to **every model picker in PortOS** — provider cards,
-CoS agent and task pickers, pipeline stage pickers, reviewer model selection —
-and to the **model comparison chart**, whose default pills and coverage list are
-built from the models your providers can dispatch.
+the Settings > AI assignment page, the Backend Connections model menus, CoS agent
+and task pickers, pipeline stage pickers, reviewer model selection — and to the
+**model comparison chart**, whose default pills and coverage list are built from
+the models your providers can dispatch.
+
+One provider is deliberately out of scope: the Codex ChatGPT-subscription
+catalog (`GET /api/providers/codex/models`) asks the Codex app-server what the
+signed-in account may actually run, so it already answers with the account's real
+entitlement. A policy on a codex record does not narrow it further.
 
 ## Patterns
 
@@ -58,6 +64,10 @@ nvidia/llama-3.1-nemotron-70b-instruct     # an exact pin
   when the policy would exclude it — a picker whose stored value is missing from
   its options renders blank and re-points the provider on the next save. The
   policy governs what can be chosen *next*, not what the record already says.
+- **Execution, accounting and refresh are never scoped.** Quota burn, usage
+  reconciliation, the runner and every harness catalog refresh read the
+  unscoped list. The policy is about what a human may pick next, not about what
+  already ran or what the upstream advertises.
 - **A half-finished policy hides nothing.** Selecting `allow` before typing any
   pattern means "not configured yet", not "hide everything", so model pickers
   stay populated while you work. The editor says so explicitly rather than
@@ -82,6 +92,7 @@ program on one backend.
 | Policy rules (normalize, match, scope) | `server/lib/aiToolkit/internal/modelAccess.js` |
 | Storage + gateway inheritance | `server/lib/aiToolkit/providers.js` (`withGatewayModelAccess`) |
 | Schema | `server/lib/aiToolkit/validation.js` (`providerSchema.modelAccess`) |
+| The selecting-vs-executing seam | `server/services/providers.js` (`getSelectableProviders` / `listSelectableProviders`) |
 | Applied to provider payloads | `server/routes/providers.js` (`presentProvider`) and `server/lib/aiToolkit/routes/providers.js` |
 | Applied to the comparison chart | `server/routes/modelComparison.js` |
 | Editor | `client/src/components/providers/ProviderModelAccess.jsx` |

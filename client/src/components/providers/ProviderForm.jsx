@@ -1,5 +1,5 @@
 import { hardwareUnavailableReason } from '../../utils/systemCapabilities';
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { AlertTriangle, Braces, Cpu, Plug, SlidersHorizontal } from 'lucide-react';
 import toast from '../ui/Toast';
 import * as api from '../../services/api';
@@ -20,7 +20,7 @@ import useDrawerTab from '../../hooks/useDrawerTab';
 import { FormField } from '../ui/FormField';
 import { GatewayKeyHint } from './ProviderNotices';
 import ProviderModelAccess from './ProviderModelAccess';
-import { normalizeModelAccess, providerModelCatalog } from '../../utils/providerModelAccess';
+import { CONFIGURED_MODEL_KEYS, configuredModelsOf, normalizeModelAccess, providerModelCatalog } from '../../utils/providerModelAccess';
 
 // The provider editor's Drawer tabs. `connection` is the default, so a bare
 // /ai/edit/:providerId deep link opens on the identity/transport fields; the
@@ -150,6 +150,15 @@ export default function ProviderForm({ provider, daemonReadiness = null, onClose
   // models (and internal sentinels) so an embedding can't be chosen as a model
   // that runs prompts, consistent with the fallback picker below.
   const mergedModels = mergeModelLists(formData.models, liveModelsFor(formData));
+  // The tier models the access policy must never scope out. Memoized on the six
+  // fields themselves rather than on `formData`, so typing in any other field
+  // cannot re-scope the whole catalog in the policy editor's preview.
+  const modelAccessKeeps = useMemo(
+    () => configuredModelsOf(formData),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [formData.defaultModel, formData.lightModel, formData.mediumModel,
+      formData.heavyModel, formData.ultraModel, formData.fallbackModel],
+  );
   // The server publishes compatibility for both the provider runtime and any
   // explicitly annotated model. Unknown probe results stay in the list; only a
   // definitive mismatch is hidden.
@@ -378,7 +387,7 @@ export default function ProviderForm({ provider, daemonReadiness = null, onClose
     // still spread into `data` and silently persisted on an unrelated edit.
     // Clear any embedding value that slipped through so the saved record matches
     // what the picker allows.
-    for (const field of ['defaultModel', 'lightModel', 'mediumModel', 'heavyModel', 'ultraModel', 'fallbackModel']) {
+    for (const field of CONFIGURED_MODEL_KEYS) {
       if (isEmbeddingModel(data[field])) data[field] = '';
     }
     // An explicit `null` rather than `undefined` when the policy says nothing:
@@ -928,7 +937,7 @@ export default function ProviderForm({ provider, daemonReadiness = null, onClose
               <ProviderModelAccess
                 catalog={formData.models || []}
                 value={formData.modelAccess}
-                provider={{ ...provider, ...formData, id: provider?.id }}
+                configuredModels={modelAccessKeeps}
                 onChange={(modelAccess) => setFormData(prev => ({ ...prev, modelAccess }))}
               />
 

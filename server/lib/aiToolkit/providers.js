@@ -91,6 +91,16 @@ function withGatewayApiKey(provider, providers) {
  * attaches the sibling key as a NON-ENUMERABLE property, which a spread here
  * would silently drop. This runs first and the key attach stays outermost.
  */
+/**
+ * One provider as a READ sees it: the gateway's model-access policy resolved,
+ * then the gateway's API key attached. In that order — the key rides as a
+ * NON-enumerable property, so a spread after it would silently drop the
+ * credential and every wrapper run would lose it.
+ */
+const readProvider = (provider, providers) => (provider
+  ? withGatewayApiKey(withGatewayModelAccess(provider, providers), providers)
+  : null);
+
 function withGatewayModelAccess(provider, providers) {
   if (!provider || typeof provider !== 'object') return provider;
   const own = normalizeModelAccess(provider.modelAccess);
@@ -696,6 +706,8 @@ export function createProviderService(config = {}) {
       throw new Error('Provider with this ID already exists');
     }
 
+    const modelAccess = normalizeModelAccess(providerData.modelAccess);
+
     const provider = {
       id,
       name: providerData.name,
@@ -765,8 +777,7 @@ export function createProviderService(config = {}) {
       // (internal/modelAccess.js). Normalized on the way in so a stored record
       // never holds a mode this build does not know, and only persisted when it
       // says something — an unconfigured provider stays byte-identical.
-      ...(normalizeModelAccess(providerData.modelAccess)
-        ? { modelAccess: normalizeModelAccess(providerData.modelAccess) } : {}),
+      ...(modelAccess ? { modelAccess } : {}),
       // Explicit opt-in to send the API key to an arbitrary (non-local,
       // non-allowlisted) endpoint — see endpointGuard.js. Only
       // persisted when true so existing keyless/local providers stay clean.
@@ -811,15 +822,13 @@ export function createProviderService(config = {}) {
 
     async getProviderById(id) {
       const data = await loadProviders();
-      const provider = data.providers[id];
-      return provider ? withGatewayApiKey(withGatewayModelAccess(provider, data.providers), data.providers) : null;
+      return readProvider(data.providers[id], data.providers);
     },
 
     async getActiveProvider() {
       const data = await loadProviders();
       if (!data.activeProvider) return null;
-      const provider = data.providers[data.activeProvider];
-      return provider ? withGatewayApiKey(withGatewayModelAccess(provider, data.providers), data.providers) : null;
+      return readProvider(data.providers[data.activeProvider], data.providers);
     },
 
     async setActiveProvider(id) {
@@ -921,7 +930,10 @@ export function createProviderService(config = {}) {
       // invariant `createProvider` keeps by only writing the key when named.
       // Applied to the fanned-out siblings too: a cleared sibling that kept a
       // stored `null` would no longer read as "never had one".
-      const dropClearedBootstrap = (record) => {
+      // Fields whose CLEARED form has to be normalized away rather than stored:
+      // a record that was reset must read exactly like one that never had the
+      // field, or the next reader has to know two spellings of "none".
+      const normalizeClearedFields = (record) => {
         if (record.credentialBootstrap === null) delete record.credentialBootstrap;
         // Same convention for the model-access policy: an explicit `null` is
         // "clear it", and a policy that normalizes to nothing (mode `all` with
@@ -933,7 +945,7 @@ export function createProviderService(config = {}) {
           else delete record.modelAccess;
         }
       };
-      dropClearedBootstrap(provider);
+      normalizeClearedFields(provider);
 
       // Grouped BEFORE the edit lands: every connection-identity value the
       // fan-out shares (endpoint, API key, env vars, bootstrap) is exactly what
@@ -945,7 +957,7 @@ export function createProviderService(config = {}) {
       for (const sibling of group || []) {
         if (sibling.id === id) continue;
         Object.assign(sibling, sharedModeUpdates(updates, sibling));
-        dropClearedBootstrap(sibling);
+        normalizeClearedFields(sibling);
       }
       await saveProviders(data);
       return provider;

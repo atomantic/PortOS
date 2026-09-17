@@ -30,7 +30,7 @@ vi.mock('./cosTaskStore.js', () => ({
   getCosTasks: vi.fn(async () => ({ tasks: mocks.cosTasks })),
   getTaskById: (...args) => mocks.getTaskById(...args),
 }));
-vi.mock('./providers.js', () => ({ listProviders: vi.fn(async () => mocks.providers) }));
+vi.mock('./providers.js', () => ({ listSelectableProviders: vi.fn(async () => mocks.providers) }));
 vi.mock('./localLlm.js', () => ({
   listManagedBackendModels: (...args) => mocks.listManagedBackendModels(...args),
 }));

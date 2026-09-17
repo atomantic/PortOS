@@ -21,7 +21,7 @@ import { testVision, runVisionTestSuite, checkVisionHealth } from '../services/v
 import { auditModelPins, clearModelPin } from '../services/modelPinAudit.js';
 import { providerCreateSchema, providerSchema, providerActiveSchema, validate } from '../lib/aiToolkit/validation.js';
 import { canRefreshModels, withRefreshCapability } from '../lib/aiToolkit/internal/modelFetchers.js';
-import { applyModelAccess } from '../lib/aiToolkit/internal/modelAccess.js';
+import { applyModelAccess, applyModelAccessList } from '../lib/aiToolkit/internal/modelAccess.js';
 import { ALLOWED_COMMANDS } from '../cos-runner/allowedCommands.js';
 import { onClientDisconnect, openSseStream } from '../lib/sseDownload.js';
 import { createInstallLogger } from '../lib/installLogger.js';
@@ -357,7 +357,12 @@ export function createPortOSProviderRoutes(aiToolkit) {
    */
   router.get('/management/preview', asyncHandler(async (_req, res) => {
     const data = await providerService.getAllProviders();
-    res.set('Cache-Control', 'no-store').json(toManagementPreviewDto(buildProviderGraphPreview(data)));
+    // Scoped like every other picker payload: the preview's connection catalogs
+    // and binding model menus are what the Backend Connections page offers, so
+    // an unscoped read here would contradict the model-access policy four
+    // handlers below (docs/MODEL_ACCESS.md).
+    const scoped = { ...data, providers: applyModelAccessList(data.providers) };
+    res.set('Cache-Control', 'no-store').json(toManagementPreviewDto(buildProviderGraphPreview(scoped)));
   }));
 
   /**

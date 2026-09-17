@@ -28,15 +28,20 @@ export function createProvidersRoutes(providerService, options = {}) {
   // `{ error, code, timestamp, context? }` and route to errorMiddleware).
   // Standalone, the toolkit's own defaults serialize the same envelope.
   const { asyncHandler = defaultAsyncHandler, ServerError = ToolkitHttpError } = options;
+  // ONE spelling of the on-the-way-out derivations, so the next one added does
+  // not have to be threaded through every handler — and a handler that missed it
+  // cannot ship a payload shaped differently from its neighbours.
+  const present = (provider) => applyModelAccess(withRefreshCapability(provider));
+  const presentList = (providers) => applyModelAccessList(withRefreshCapabilityList(providers));
 
   router.get('/', asyncHandler(async (req, res) => {
     const data = await providerService.getAllProviders();
-    res.json({ ...data, providers: applyModelAccessList(withRefreshCapabilityList(data.providers)) });
+    res.json({ ...data, providers: presentList(data.providers) });
   }));
 
   router.get('/active', asyncHandler(async (req, res) => {
     const provider = await providerService.getActiveProvider();
-    res.json(applyModelAccess(withRefreshCapability(provider)));
+    res.json(present(provider));
   }));
 
   router.put('/active', asyncHandler(async (req, res) => {
@@ -52,7 +57,7 @@ export function createProvidersRoutes(providerService, options = {}) {
       throw new ServerError('Provider not found', { status: 404 });
     }
 
-    res.json(applyModelAccess(withRefreshCapability(provider)));
+    res.json(present(provider));
   }));
 
   router.get('/samples', asyncHandler(async (req, res) => {
@@ -60,7 +65,7 @@ export function createProvidersRoutes(providerService, options = {}) {
     // Samples are provider-shaped and the flag is derived purely from that
     // shape, so decorate them too — a sample's answer is what the provider it
     // becomes will report. PortOS's shadowing `/samples` handler does the same.
-    res.json({ providers: applyModelAccessList(withRefreshCapabilityList(providers)) });
+    res.json({ providers: presentList(providers) });
   }));
 
   router.get('/:id', asyncHandler(async (req, res) => {
@@ -70,7 +75,7 @@ export function createProvidersRoutes(providerService, options = {}) {
       throw new ServerError('Provider not found', { status: 404 });
     }
 
-    res.json(applyModelAccess(withRefreshCapability(provider)));
+    res.json(present(provider));
   }));
 
   router.post('/', asyncHandler(async (req, res) => {
@@ -80,7 +85,7 @@ export function createProvidersRoutes(providerService, options = {}) {
     }
 
     const provider = await providerService.createProvider(result.data);
-    res.status(201).json(applyModelAccess(withRefreshCapability(provider)));
+    res.status(201).json(present(provider));
   }));
 
   router.put('/:id', asyncHandler(async (req, res) => {
@@ -97,7 +102,7 @@ export function createProvidersRoutes(providerService, options = {}) {
       throw new ServerError('Provider not found', { status: 404 });
     }
 
-    res.json(applyModelAccess(withRefreshCapability(provider)));
+    res.json(present(provider));
   }));
 
   router.delete('/:id', asyncHandler(async (req, res) => {
@@ -128,7 +133,7 @@ export function createProvidersRoutes(providerService, options = {}) {
       throw new ServerError('Provider not found', { status: 404 });
     }
 
-    res.json(applyModelAccess(withRefreshCapability(provider)));
+    res.json(present(provider));
   }));
 
   return router;

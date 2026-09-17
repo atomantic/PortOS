@@ -6,6 +6,7 @@ import {
   MODEL_ACCESS_MODES,
   MODEL_ACCESS_MODE_LABELS,
   MAX_MODEL_ACCESS_PATTERNS,
+  NO_MODEL_ACCESS,
   modelMatchesAccessPatterns,
   previewModelAccess,
 } from '../../utils/providerModelAccess';
@@ -26,32 +27,40 @@ import {
  * The two inputs are ONE list. A ticked checkbox writes the model's exact id as
  * a pattern, so a user can start from globs and refine by hand — and so the
  * saved policy always reads as exactly what it does.
+ *
+ * `configuredModels` is passed rather than a provider record so the memos below
+ * can key on values that actually change; a record rebuilt each render would
+ * make every keystroke in any other form field re-scope the whole catalog.
  */
-export default function ProviderModelAccess({ catalog, value, onChange, provider }) {
+export default function ProviderModelAccess({ catalog, value, onChange, configuredModels }) {
   const [patternDraft, setPatternDraft] = useState(null);
 
-  const policy = value || { mode: 'all', patterns: [] };
-  const patterns = policy.patterns || [];
+  const policy = value || NO_MODEL_ACCESS;
+  const patterns = policy.patterns || NO_MODEL_ACCESS.patterns;
   const preview = useMemo(
-    () => previewModelAccess(catalog, policy, provider),
-    [catalog, policy, provider],
+    () => previewModelAccess(catalog, policy, configuredModels),
+    [catalog, policy, configuredModels],
   );
+
+  // One pass over the catalog for the row markers, so a row is O(1) rather than
+  // two linear `includes` scans plus a glob sweep each. At the 500-pattern cap
+  // the per-row form was ~500k comparisons on every keystroke in the textarea.
+  const { listed, globCovered } = useMemo(() => {
+    const selected = new Set(patterns);
+    return {
+      listed: selected,
+      globCovered: new Set(catalog.filter(
+        model => !selected.has(model) && modelMatchesAccessPatterns(model, patterns),
+      )),
+    };
+  }, [catalog, patterns]);
 
   const setPolicy = (next) => onChange({ mode: next.mode, patterns: next.patterns });
   const setPatterns = (next) => setPolicy({ ...policy, patterns: [...new Set(next)].slice(0, MAX_MODEL_ACCESS_PATTERNS) });
 
   const togglePattern = (model) => setPatterns(
-    patterns.includes(model) ? patterns.filter(p => p !== model) : [...patterns, model],
+    listed.has(model) ? patterns.filter(p => p !== model) : [...patterns, model],
   );
-
-  // A checkbox means "this exact id is in the list", never "the policy admits
-  // this model" — the two differ whenever a glob is in play, and conflating them
-  // would make a `deny` list render inverted. A model a glob already covers gets
-  // its own marker instead. Clicking such a row adds the exact id, which is
-  // additive and harmless; rewriting the user's glob for them would silently
-  // destroy the shorthand they typed.
-  const coveredByGlob = (model) =>
-    !patterns.includes(model) && modelMatchesAccessPatterns(model, patterns);
 
   return (
     <div className="space-y-4 border-t border-port-border pt-4">
@@ -78,7 +87,7 @@ export default function ProviderModelAccess({ catalog, value, onChange, provider
           <p className={`text-xs ${preview.inert ? 'text-amber-400' : 'text-gray-400'}`}>
             {preview.inert
               ? 'No patterns yet — nothing is scoped until you tick a model or add a pattern below.'
-              : `Showing ${formatCount(preview.visible.length)} of ${formatCount(preview.total)} models (${formatCount(preview.hidden)} hidden).`}
+              : `Showing ${formatCount(preview.visibleCount)} of ${formatCount(preview.total)} models (${formatCount(preview.hidden)} hidden).`}
           </p>
 
           <FormField label="Patterns">
@@ -121,14 +130,18 @@ export default function ProviderModelAccess({ catalog, value, onChange, provider
                   <button
                     key={model}
                     type="button"
+                    // The row IS a checkbox; without this a screen reader hears
+                    // "<model id>, button" with no indication of whether it is in
+                    // the list, which is the whole state this control carries.
+                    aria-pressed={listed.has(model)}
                     onClick={() => togglePattern(model)}
                     className="w-full flex items-center gap-2 px-3 py-1.5 text-left text-xs text-gray-300 hover:bg-port-bg"
                   >
-                    {patterns.includes(model)
+                    {listed.has(model)
                       ? <CheckSquare className="w-3.5 h-3.5 shrink-0 text-port-accent" />
                       : <Square className="w-3.5 h-3.5 shrink-0 text-gray-600" />}
                     <span className="font-mono truncate">{model}</span>
-                    {coveredByGlob(model) && (
+                    {globCovered.has(model) && (
                       <Check className="w-3.5 h-3.5 shrink-0 text-port-accent ml-auto" aria-label="matched by a pattern" />
                     )}
                   </button>
