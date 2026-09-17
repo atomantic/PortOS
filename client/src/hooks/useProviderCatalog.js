@@ -125,6 +125,12 @@ export default function useProviderCatalog(enabled = true) {
     const service = (catalog.services || []).find((s) => s.slug === ref.serviceSlug);
     if (!service) return null;
     const label = `${harnessLabel(ref.harnessId)} · ${ref.method.toUpperCase()} · ${service.label}${service.plan === 'free' ? ' (free)' : ''}`;
+    // A saved composite whose harness or service has since been switched off
+    // must stay VISIBLE with its reason and never be auto-replaced (#6368) —
+    // so the record carries the verdict rather than vanishing from the lookup.
+    const unavailableReason = harness.enabled === false
+      ? `${harnessLabel(ref.harnessId)} is switched off`
+      : service.enabled === false ? `${service.label} is switched off` : null;
     return {
       id,
       name: label,
@@ -134,7 +140,13 @@ export default function useProviderCatalog(enabled = true) {
       serviceSlug: ref.serviceSlug,
       bootstrapId: ref.bootstrapSlug,
       models: service.catalog?.models || [],
-      enabled: true,
+      // The published ladders ride on the record, so `effortLevelsForProvider`'s
+      // sanitized-record rung answers for a harness the client predicates
+      // don't recognize — the server's catalog is the authority either way.
+      effortLevels: catalog.effortLevels?.[ref.harnessId] || null,
+      effortLevelsByModel: catalog.effortLevelsByModel?.[ref.harnessId] || null,
+      enabled: !unavailableReason,
+      unavailableReason,
       composite: true,
     };
   }, [catalog]);

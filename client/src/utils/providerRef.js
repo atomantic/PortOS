@@ -10,4 +10,4 @@
  * recognizes exactly the same strings the server does — see
  * `server/lib/providerRef.js` for the full grammar rationale.
  */
-export { parseProviderRef, PRESET_ID_RE, COMPOSITE_ID_RE } from '../../../server/lib/providerRef.js';
+export { parseProviderRef, isCompositeProviderId, isPresetProviderId, formatCompositeId, PRESET_ID_RE, COMPOSITE_ID_RE } from '../../../server/lib/providerRef.js';

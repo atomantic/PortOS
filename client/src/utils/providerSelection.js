@@ -211,5 +211,22 @@ export const callerModeList = (policy) =>
  */
 export const providerModeSelectionPolicy = (policy) => {
   const allowed = callerModeList(policy);
-  return { provider: (provider) => allowed.includes(provider?.type) };
+  return {
+    provider: (provider) => allowed.includes(provider?.type),
+    // The same list, exposed so the preset-first selector restricts the
+    // "Custom combination…" compose flow to the modes this caller may run
+    // (#7566) — a policy that filters presets but not compose would let the
+    // user build exactly the route the server refuses.
+    modes: allowed,
+  };
 };
+
+/**
+ * The value of the "Custom combination…" option in the preset-first
+ * `ProviderModelSelector` (#7566). Deliberately outside BOTH provider
+ * reference grammars (`_` is not in the preset alphabet and there is no
+ * `.`/`@`), so it can never collide with a stored id, and a caller that
+ * somehow received it would fail `providerRefSchema` loudly rather than
+ * persist it.
+ */
+export const COMPOSE_OPTION_VALUE = '__compose__';
