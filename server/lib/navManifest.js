@@ -134,7 +134,6 @@ const RAW_NAV_COMMANDS = [
   { id: 'nav.cos.workflow', path: '/cos/workflow', label: 'Timeline', section: 'Chief of Staff', tabGroup: 'cos', tabId: 'workflow', aliases: ['workflow', 'cos-workflow', 'cos-timeline', 'schedule-timeline'], keywords: ['timeline', 'schedule', 'launch order', 'run order', 'gantt', 'upcoming runs', 'overlap', 'dependencies'] },
   { id: 'nav.cos.digest', path: '/cos/digest', label: 'Digest', section: 'Chief of Staff', tabGroup: 'cos', tabId: 'digest', aliases: ['cos-digest'] },
   { id: 'nav.cos.gsd', path: '/cos/gsd', label: 'GSD', section: 'Chief of Staff', tabGroup: 'cos', tabId: 'gsd', feature: 'gsd', aliases: ['gsd', 'cos-gsd'] },
-  { id: 'nav.cos.productivity', path: '/cos/productivity', label: 'Productivity', section: 'Chief of Staff', tabGroup: 'cos', tabId: 'productivity', aliases: ['cos-productivity', 'work-patterns', 'streaks'] },
   { id: 'nav.cos.learning', path: '/cos/learning', label: 'Learning', section: 'Chief of Staff', tabGroup: 'cos', tabId: 'learning', aliases: ['cos-learning'] },
   { id: 'nav.cos.memory', path: '/cos/memory', label: 'Memory', section: 'Chief of Staff', tabGroup: 'cos', tabId: 'memory', aliases: ['cos-memory'] },
   { id: 'nav.cos.mind', path: '/cos/mind', label: 'Mind', section: 'Chief of Staff', tabGroup: 'cos', tabId: 'mind', aliases: ['cos-mind', 'persistent-mind', 'mind-chat'], keywords: ['persistent mind', 'chat', 'annotation', 'resident mind', 'conversation'] },

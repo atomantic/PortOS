@@ -16,7 +16,6 @@ export { default as StatCard } from './StatCard';
 export { default as StatusBubble } from './StatusBubble';
 export { default as EventLog } from './EventLog';
 export { default as ActionableInsightsBanner } from './ActionableInsightsBanner';
-export { default as DailyTrendsChart } from './DailyTrendsChart';
 
 // Tab Components
 export { default as TasksTab } from './tabs/TasksTab';
@@ -30,5 +29,4 @@ export { default as HealthTab } from './tabs/HealthTab';
 export { default as ConfigTab } from './tabs/ConfigTab';
 export { default as DigestTab } from './tabs/DigestTab';
 export { default as GsdTab } from './tabs/GsdTab';
-export { default as ProductivityTab } from './tabs/ProductivityTab';
 export { default as BriefingTab } from './tabs/BriefingTab';

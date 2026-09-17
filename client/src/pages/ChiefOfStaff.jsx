@@ -55,7 +55,6 @@ const ScheduleTab = lazy(() => import('../components/cos/tabs/ScheduleTab'));
 const WorkflowTab = lazy(() => import('../components/cos/tabs/WorkflowTab'));
 const DigestTab = lazy(() => import('../components/cos/tabs/DigestTab'));
 const GsdTab = lazy(() => import('../components/cos/tabs/GsdTab'));
-const ProductivityTab = lazy(() => import('../components/cos/tabs/ProductivityTab'));
 const LearningTab = lazy(() => import('../components/cos/tabs/LearningTab'));
 const MemoryTab = lazy(() => import('../components/cos/tabs/MemoryTab'));
 const HealthTab = lazy(() => import('../components/cos/tabs/HealthTab'));
@@ -1240,13 +1239,6 @@ export default function ChiefOfStaff() {
           <div role="tabpanel" id="tabpanel-gsd" aria-labelledby="tab-gsd">
             <Suspense fallback={<TabLoadFallback label="GSD" />}>
               <GsdTab />
-            </Suspense>
-          </div>
-        )}
-        {activeTab === 'productivity' && (
-          <div role="tabpanel" id="tabpanel-productivity" aria-labelledby="tab-productivity">
-            <Suspense fallback={<TabLoadFallback label="productivity" />}>
-              <ProductivityTab />
             </Suspense>
           </div>
         )}

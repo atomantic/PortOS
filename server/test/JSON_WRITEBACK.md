@@ -121,7 +121,6 @@ allowlist of modules. Future service pairs are discovered directly at test time.
 | pipeline/reverseOutline.js | <code>outlinePath ( seriesId )</code> | Strict read | [#6983](https://github.com/atomantic/PortOS/pull/6983) |
 | postRunStore.js | <code>SESSIONS_FILE</code> | Reviewed exception (see registry) | [#6981](https://github.com/atomantic/PortOS/pull/6981) |
 | postRunStore.js | <code>TRAINING_FILE</code> | Reviewed exception (see registry) | [#6981](https://github.com/atomantic/PortOS/pull/6981) |
-| productivity.js | <code>PRODUCTIVITY_FILE</code> | Strict read | [#6981](https://github.com/atomantic/PortOS/pull/6981) |
 | projectFileStore.js | <code>file</code> | Strict read | [#6983](https://github.com/atomantic/PortOS/pull/6983) |
 | providerQuotaShare.js | <code>PROVIDER_QUOTAS_FILE</code> | Reviewed exception (see registry) | [#6982](https://github.com/atomantic/PortOS/pull/6982) |
 | rounds.js | <code>STATE_PATH</code> | Strict read | [#6980](https://github.com/atomantic/PortOS/pull/6980) |

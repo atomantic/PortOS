@@ -106,8 +106,8 @@ function projectedApps(apps) {
     }));
 }
 
-function projectedProductivity(todayActivity, velocity, taskState) {
-  if (!todayActivity && !velocity) return null;
+function projectedProductivity(todayActivity, taskState) {
+  if (!todayActivity) return null;
   const stats = todayActivity?.stats || {};
   const queue = {
     pendingApprovals: Array.isArray(taskState?.awaitingApproval) ? taskState.awaitingApproval.length : null,
@@ -121,13 +121,10 @@ function projectedProductivity(todayActivity, velocity, taskState) {
   return [{
     id: 'summary',
     label: 'Productivity',
-    completedToday: nonNegativeOrNull(stats.completed ?? velocity?.today),
-    succeededToday: nonNegativeOrNull(stats.succeeded ?? velocity?.todaySuccesses),
-    failedToday: nonNegativeOrNull(stats.failed ?? velocity?.todayFailures),
+    completedToday: nonNegativeOrNull(stats.completed),
+    succeededToday: nonNegativeOrNull(stats.succeeded),
+    failedToday: nonNegativeOrNull(stats.failed),
     successRate: percentageOrNull(stats.successRate),
-    velocity: finiteOrNull(velocity?.velocity),
-    averagePerDay: nonNegativeOrNull(velocity?.avgPerDay),
-    historicalDays: nonNegativeOrNull(velocity?.historicalDays),
     queue,
     running: todayActivity?.isRunning === true,
     paused: todayActivity?.isPaused === true,
@@ -153,8 +150,6 @@ function projectedActivity(calendar) {
       weeks: calendar.weeks.length,
       activeDays: nonNegativeOrNull(summary.activeDays),
       totalTasks: nonNegativeOrNull(summary.totalTasks),
-      totalSuccesses: nonNegativeOrNull(summary.totalSuccesses),
-      successRate: percentageOrNull(summary.successRate),
       maxTasks: nonNegativeOrNull(calendar.maxTasks),
       todayTasks: nonNegativeOrNull(today?.tasks),
     },
@@ -162,9 +157,6 @@ function projectedActivity(calendar) {
       id: opaqueId('activity-day', day.date, `day-${index}`),
       label: 'Activity day',
       tasks: nonNegativeOrNull(day.tasks) ?? 0,
-      successes: nonNegativeOrNull(day.successes) ?? 0,
-      failures: nonNegativeOrNull(day.failures) ?? 0,
-      successRate: percentageOrNull(day.successRate),
       isToday: day.isToday === true,
     })),
   ];
@@ -382,7 +374,7 @@ function healthSnapshot({ apps, cosStatus, review, backupState, notifications, c
 export function buildEidoverseWorldSignals({
   apps, agents, taskState, cosStatus, review, featuresState, peers,
   backupState, notifications, character, voiceConfig, memory, diskPercent,
-  todayActivity, velocity, activityCalendar, goalsData, memoryGraph,
+  todayActivity, activityCalendar, goalsData, memoryGraph,
   inboxCounts, introspection, jira, destinations,
 }) {
   const projectedAgents = Array.isArray(agents)
@@ -421,7 +413,7 @@ export function buildEidoverseWorldSignals({
     features: projectedFeatures,
     peers: projectedPeers,
     health,
-    productivity: projectedProductivity(todayActivity, velocity, taskState),
+    productivity: projectedProductivity(todayActivity, taskState),
     activity: projectedActivity(activityCalendar),
     goals: projectedGoals(goalsData),
     memory: projectedMemory(memoryGraph),

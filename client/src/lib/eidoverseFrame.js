@@ -5,8 +5,8 @@ export const EIDOVERSE_FRAME_VERSION = 1;
 export const EIDOVERSE_LABEL_PREFERENCES = ['nearby', 'all-nearby', 'off'];
 export const EIDOVERSE_SOURCE_ROUTES = Object.freeze({
   apps: '/apps', agents: '/cos/agents', tasks: '/cos/tasks', features: '/settings/features',
-  peers: '/instances', health: '/cos/health', productivity: '/cos/productivity',
-  activity: '/cos/productivity', goals: '/goals/list', memory: '/brain/memory',
+  peers: '/instances', health: '/cos/health', productivity: '/cos/agents',
+  activity: '/cos/agents', goals: '/goals/list', memory: '/brain/memory',
   storage: '/settings/database', jira: '/goals/list', operations: '/cos/health',
 });
 const ROUTES = new Set([...Object.values(EIDOVERSE_SOURCE_ROUTES), '/eidoverse']);

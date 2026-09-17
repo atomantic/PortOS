@@ -91,7 +91,7 @@ An autonomous AI agent orchestrator that manages your development workflow. Subm
 - **Scheduled Automation** — Cron-based self-improvement and app-improvement jobs with per-app interval overrides
 - **Error Recovery** — 6 strategies (retry, escalate, fallback, decompose, defer, investigate) for automatic diagnosis and retry ([CoS Enhancement docs](./docs/features/cos-enhancement.md))
 - **Hybrid Memory Search** — BM25 + vector search with Reciprocal Rank Fusion for semantic retrieval across agent history
-- **Productivity Analytics** — Hourly/daily work patterns, task milestones, and AI-generated weekly digests
+- **Activity & Digests** — A runs-per-day activity heatmap on the dashboard, plus AI-generated weekly digests
 - **Decision Transparency** — Every skip, switch, and routing decision is logged with reasons, surfaced on the dashboard
 - **Briefing + Health** — A daily briefing of what CoS did and what needs you, plus a health view of queue depth, failure storms, and circuit-breaker state
 - **Schedule Timeline** — Launch-order visualization of every scheduled task with an inline schedule editor, so overlapping cron runs are visible before they collide. Per-app cron overrides get their own markers, so a task left on-demand globally still shows when it runs for the apps that schedule it

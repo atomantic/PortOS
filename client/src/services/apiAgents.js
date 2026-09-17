@@ -329,11 +329,8 @@ export const generateCosDigest = (weekId = null) => request('/cos/digest/generat
   body: JSON.stringify({ weekId })
 });
 
-// Productivity
-export const getCosProductivity = () => request('/cos/productivity');
-export const recalculateCosProductivity = () => request('/cos/productivity/recalculate', { method: 'POST' });
-export const getCosProductivityTrends = (days = 30) => request(`/cos/productivity/trends?days=${days}`);
-export const getCosActivityCalendar = (weeks = 12, options) => request(`/cos/productivity/calendar?weeks=${weeks}`, options);
+// Activity
+export const getCosActivityCalendar = (weeks = 12, options) => request(`/cos/activity-calendar?weeks=${weeks}`, options);
 export const getCosQuickSummary = (options) => request('/cos/quick-summary', options);
 export const getCosRecentTasks = (limit = 10, options) => request(`/cos/recent-tasks?limit=${limit}`, options);
 export const getCosActionableInsights = (options) => request('/cos/actionable-insights', options);

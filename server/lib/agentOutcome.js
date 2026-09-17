@@ -58,7 +58,7 @@ export function isAgentHandoff(agent) {
  * this way until the next scheduled tick).
  *
  * Consumers that only ask "was this a genuine success/failure" (reports,
- * productivity stats, task learning) should keep using `isAgentHandoff` — a
+ * the activity calendar, task learning) should keep using `isAgentHandoff` — a
  * stranded retirement isn't a genuine outcome either, so folding it in there
  * is correct.
  */
