@@ -58,33 +58,27 @@ const API_ONLY_MODES = Object.freeze(['api']);
 const CLI_ONLY_MODES = Object.freeze(['cli']);
 
 /**
- * Why a harness carries no command recipe, as the clause the create endpoint
- * refuses with (`bindingBlocker` in `providerRouteRecipes.js`).
+ * Why a harness cannot be minted from a bare CONNECTION (an arbitrary
+ * endpoint), as the clause the create endpoint refuses with (`bindingBlocker`
+ * in `providerRouteRecipes.js`). `connectionBlocker` on the row.
  *
  * This is DATA on the row rather than prose in a comment because the refusal
  * quotes it. Until three reasons existed, `bindingBlocker` hardcoded the first
- * one — so adding a `recipe: null` row for either of the others would have told
- * the user their harness "reaches only its own vendor service", which is both
- * wrong and points at the wrong remedy. `noRecipe` is set on exactly the rows
- * with no `bindings` — the ones no service can be composed onto — an invariant
- * `providerHarnesses.test.js` pins. (`direct` has no recipe either, but it is
- * not a program; it binds, so it carries no reason.)
+ * one — so adding a row for a different reason told the user their harness
+ * "reaches only its own vendor service", which is both wrong and points at the
+ * wrong remedy.
+ *
+ * Two of these rows have no recipe at all (Kilo, OpenChamber: nothing can be
+ * composed onto them, so they carry no `bindings` either). The others DO carry
+ * a recipe and compose onto the services their bindings name through
+ * `materializeRoute`; they just cannot be pointed at an endpoint they were
+ * not built to know.
  */
-const NO_RECIPE = Object.freeze({
+const CONNECTION_BLOCKER = Object.freeze({
   /** The backend lives in a config file PortOS does not write (Kilo). */
   UNWRITTEN_CONFIG: 'resolves its backend from its own config file, which PortOS does not write',
   /** The backend belongs to a separate runtime the user configures (OpenChamber). */
   EXTERNAL_RUNTIME: 'runs against a workspace runtime you sign in to separately',
-});
-
-/**
- * Why a harness that DOES carry a recipe still cannot be minted from a bare
- * connection (`connectionLimit` on the row). Such a row is composable onto the
- * services its bindings name — `materializeRoute` runs it — but a connection
- * is an arbitrary endpoint, and these programs cannot be pointed at one.
- * Quoted by the create endpoint's refusal, like {@link NO_RECIPE}.
- */
-const CONNECTION_LIMIT = Object.freeze({
   /** A subscription program: it signs into its own vendor service and nothing else. */
   VENDOR_SERVICE: 'reaches only its own vendor service',
   /**
@@ -97,22 +91,6 @@ const CONNECTION_LIMIT = Object.freeze({
    * not for an arbitrary local daemon or endpoint.
    */
   PI_BUILTIN_PROVIDERS: 'reaches only the services Pi ships a provider name for (a custom endpoint lives in Pi\'s own models.json, which PortOS does not write)',
-});
-
-/**
- * A recipe for a program that only ever talks to the service it signs into:
- * its argv is real (lifted from the shipped samples like every other recipe)
- * but it has no endpoint or credential column to materialize.
- */
-const subscriptionRecipe = (command, { cli, tui }) => Object.freeze({
-  command,
-  timeout: HARNESS_TIMEOUT_MS,
-  baseUrl: null,
-  credential: null,
-  modes: {
-    cli: { args: cli, headlessArgs: [] },
-    tui: { args: tui, tuiPromptDelayMs: TUI_PROMPT_DELAY_MS },
-  },
 });
 
 /**
@@ -144,7 +122,7 @@ const subscriptionRecipe = (command, { cli, tui }) => Object.freeze({
  *
  * A harness with **no** recipe is not an oversight — it means this program has
  * no backend PortOS can point at from a connection, and its row says WHICH of
- * the {@link NO_RECIPE} reasons applies. Adding one of those stays `/ai/new`.
+ * the {@link CONNECTION_BLOCKER} reasons applies. Adding one of those stays `/ai/new`.
  */
 
 /** Claude Code's headless argv, shared by every Claude recipe mode. */
@@ -157,46 +135,59 @@ const TUI_PROMPT_DELAY_MS = 2500;
 const HARNESS_TIMEOUT_MS = 600000;
 
 /**
+ * One recipe shape for every program: the binary, its per-mode argv (lifted
+ * from the shipped samples), and — for a program the legacy connection path
+ * can point at an endpoint — where that endpoint and its credential land.
+ * A subscription program or Pi has no such columns (`baseUrl`/`credential`
+ * stay `null`); their bindings say how they reach a service.
+ */
+const recipe = ({ command, cli, tui, headlessArgs = [], tuiPromptDelayMs = TUI_PROMPT_DELAY_MS, baseUrl = null, credential = null }) => Object.freeze({
+  command,
+  timeout: HARNESS_TIMEOUT_MS,
+  baseUrl,
+  credential,
+  modes: {
+    cli: { args: cli, headlessArgs },
+    // Pi's shipped TUI sample declares no prompt delay; `null` keeps it that way.
+    tui: { args: tui, ...(tuiPromptDelayMs === null ? {} : { tuiPromptDelayMs }) },
+  },
+});
+
+/**
  * The CAPABILITY BINDINGS of a harness row (#7562): one entry per way the
  * program can be pointed at a service definition (`serviceDefinitions.js`).
  * `compatibleBindings` matches them against a resolved service instance, and
  * `materializeRoute` (`providerRouteRecipes.js`) writes the record each one
- * describes. Shapes (frozen; a new shape is a new writer arm, not a new field):
+ * describes.
  *
- *   - `{ via: 'subscription', service }` — the harness signs in itself; the
- *     record carries no endpoint and no key.
- *   - `{ protocol, baseUrl, credential }` — any service declaring `protocol`
- *     as a transport. `baseUrl.via` is `env` (`name`), `field` (the record's
- *     own `endpoint`) or `opencodeConfig` (the inline provider JSON OpenCode
- *     reads). `credential.via` is `env` (`name`, `required`), `field` (the
- *     record's `apiKey`) or `gatewayEnv` (the gateway's own key var).
- *   - `{ service, env, credential }` — a named service reached through a static
- *     env switch (Bedrock: `CLAUDE_CODE_USE_BEDROCK=1`).
- *   - `{ service, baseUrl: { via: 'opencodeConfig', builtin: true }, credential }`
- *     — a service OpenCode already knows; only permissions are declared.
- *   - `{ via: 'codexOss', localRuntime: [...], protocol, baseUrl, credential }`
- *     — Codex's `--oss --local-provider` (≥ `CODEX_OSS_MIN_VERSION`), emitted
- *     at spawn from the runtime marker the record carries; the endpoint lands
- *     on the record like any protocol binding's.
- *   - `{ via: 'piProvider', credential }` — any service carrying `piProvider`,
- *     selected with `--provider <name>` and keyed from the service's own env var.
+ * A binding is a set of CONSTRAINTS on the service (every one present must
+ * hold) plus WRITER columns saying where the service's values land:
  *
- * A row with NO bindings is exactly a row with `noRecipe`: the program cannot
- * be pointed at anything from data. `providerHarnesses.test.js` pins that.
+ *   Constraints — `service` (this definition id), `localRuntime` (one of these
+ *   `LOCAL_RUNTIMES` ids), `piProvider: true` (the definition carries a name Pi
+ *   ships), `protocol` (the instance declares that transport).
+ *
+ *   Writers — `baseUrl` is the ONE endpoint axis: `{via:'env', name}`,
+ *   `{via:'field'}` (the record's own `endpoint`), `{via:'opencodeConfig',
+ *   builtin?}` (the inline provider JSON OpenCode reads; `builtin` declares
+ *   permissions only, for a provider OpenCode ships), `{via:'piProvider', flag}`
+ *   (`--provider <name>` on the argv), or absent (nothing to write — the
+ *   program signs in itself, or a static `env` switch selects the service, as
+ *   Bedrock's `CLAUDE_CODE_USE_BEDROCK=1` does). `credential` is `{via:'env',
+ *   name?, required}` (`name` defaults to the service's own key var),
+ *   `{via:'field', required}` (the record's `apiKey`) or `{via:'gatewayEnv'}`
+ *   (the gateway's own key var). `env` is static.
+ *
+ * Codex's local-runtime binding writes nothing Codex-specific: `--oss
+ * --local-provider <x>` is emitted at spawn from the runtime marker the record
+ * carries (`buildCodexOssArgs`), so the binding only constrains WHICH runtimes.
+ *
+ * A row with NO bindings is exactly a row nothing composes onto, and it says
+ * why in `connectionBlocker`. `providerHarnesses.test.js` pins that.
  */
-
-/** The one direct-API binding: PortOS's HTTP client on any OpenAI-compatible service. */
-const DIRECT_API_BINDING = Object.freeze({
-  protocol: 'openai',
-  baseUrl: Object.freeze({ via: 'field' }),
-  credential: Object.freeze({ via: 'field', required: false }),
-});
 
 /** The credential Claude Code sends: required even to a daemon that ignores it. */
 const CLAUDE_AUTH_TOKEN = Object.freeze({ via: 'env', name: 'ANTHROPIC_AUTH_TOKEN', required: true });
-
-/** Pi's argv for the two modes, lifted from the shipped `pi-cli` / `pi-tui` samples. */
-const PI_TUI_ARGS = Object.freeze(['--approve']);
 
 /**
  * @type {readonly {id:string,label:string,modes:readonly string[],protocol:string,recipe:object|null,bindings:readonly object[],matches:(p:object)=>boolean}[]}
@@ -207,20 +198,18 @@ export const PROVIDER_HARNESSES = Object.freeze([
     label: 'Claude Code',
     modes: CLI_TUI_MODES,
     protocol: 'anthropic',
-    recipe: Object.freeze({
+    recipe: recipe({
       command: 'claude',
-      timeout: HARNESS_TIMEOUT_MS,
+      cli: ['--print'],
+      headlessArgs: CLAUDE_HEADLESS_ARGS,
+      tui: ['--dangerously-skip-permissions'],
       baseUrl: { via: 'env', name: 'ANTHROPIC_BASE_URL' },
       // Claude Code will not start without a token, even against a local daemon
       // that ignores it — so a backend carrying none cannot mint a Claude route.
       credential: CLAUDE_AUTH_TOKEN,
-      modes: {
-        cli: { args: ['--print'], headlessArgs: CLAUDE_HEADLESS_ARGS },
-        tui: { args: ['--dangerously-skip-permissions'], tuiPromptDelayMs: TUI_PROMPT_DELAY_MS },
-      },
     }),
     bindings: Object.freeze([
-      Object.freeze({ via: 'subscription', service: 'claude-subscription' }),
+      Object.freeze({ service: 'claude-subscription' }),
       Object.freeze({ protocol: 'anthropic', baseUrl: Object.freeze({ via: 'env', name: 'ANTHROPIC_BASE_URL' }), credential: CLAUDE_AUTH_TOKEN }),
       Object.freeze({
         service: 'bedrock',
@@ -235,17 +224,14 @@ export const PROVIDER_HARNESSES = Object.freeze([
     label: 'OpenCode',
     modes: CLI_TUI_MODES,
     protocol: 'openai',
-    recipe: Object.freeze({
+    recipe: recipe({
       command: 'opencode',
-      timeout: HARNESS_TIMEOUT_MS,
+      cli: ['run'],
+      tui: [],
       // OpenCode reads its backend out of an inline provider JSON rather than an
       // environment variable, which is also why that string stays route-owned.
       baseUrl: { via: 'opencodeConfig' },
       credential: { via: 'field', required: false },
-      modes: {
-        cli: { args: ['run'], headlessArgs: [] },
-        tui: { args: [], tuiPromptDelayMs: TUI_PROMPT_DELAY_MS },
-      },
     }),
     bindings: Object.freeze([
       // OpenCode's own hosted service is a provider it ships; only permissions
@@ -274,7 +260,7 @@ export const PROVIDER_HARNESSES = Object.freeze([
     // nothing while reporting a backend, so Kilo stays classifiable and
     // installable but not creatable from a connection.
     recipe: null,
-    noRecipe: NO_RECIPE.UNWRITTEN_CONFIG,
+    connectionBlocker: CONNECTION_BLOCKER.UNWRITTEN_CONFIG,
     bindings: Object.freeze([]),
     matches: isKiloProvider,
   }),
@@ -287,7 +273,7 @@ export const PROVIDER_HARNESSES = Object.freeze([
     // configures (its providers are signed in through its own web UI), so there
     // is no PortOS-supplied backend for a minted route to carry.
     recipe: null,
-    noRecipe: NO_RECIPE.EXTERNAL_RUNTIME,
+    connectionBlocker: CONNECTION_BLOCKER.EXTERNAL_RUNTIME,
     bindings: Object.freeze([]),
     matches: isOpenchamberProvider,
   }),
@@ -296,24 +282,18 @@ export const PROVIDER_HARNESSES = Object.freeze([
     label: 'Codex',
     modes: CLI_TUI_MODES,
     protocol: 'openai',
-    recipe: Object.freeze({
+    recipe: recipe({
       command: 'codex',
-      timeout: HARNESS_TIMEOUT_MS,
+      cli: [],
+      tui: [],
       baseUrl: { via: 'field' },
       credential: { via: 'field', required: false },
-      modes: {
-        cli: { args: [], headlessArgs: [] },
-        tui: { args: [], tuiPromptDelayMs: TUI_PROMPT_DELAY_MS },
-      },
     }),
     bindings: Object.freeze([
-      Object.freeze({ via: 'subscription', service: 'codex-subscription' }),
-      // `--oss --local-provider <ollama|lmstudio>` is emitted at spawn from the
-      // record's runtime marker (`buildCodexOssArgs`), so the binding only has
-      // to name the runtimes Codex can serve — the same pair as
-      // `CODEX_OSS_LOCAL_PROVIDERS`, pinned by providerHarnesses.test.js.
+      Object.freeze({ service: 'codex-subscription' }),
+      // The runtimes Codex's `--oss --local-provider` can serve — the same
+      // pair as `CODEX_OSS_LOCAL_PROVIDERS`, pinned by providerHarnesses.test.js.
       Object.freeze({
-        via: 'codexOss',
         localRuntime: Object.freeze(['ollama', 'lmstudio']),
         protocol: 'openai',
         baseUrl: Object.freeze({ via: 'field' }),
@@ -328,9 +308,9 @@ export const PROVIDER_HARNESSES = Object.freeze([
     label: 'Antigravity',
     modes: CLI_TUI_MODES,
     protocol: 'native',
-    recipe: subscriptionRecipe('agy', { cli: ['--print', '--dangerously-skip-permissions'], tui: ['--dangerously-skip-permissions'] }),
-    connectionLimit: CONNECTION_LIMIT.VENDOR_SERVICE,
-    bindings: Object.freeze([Object.freeze({ via: 'subscription', service: 'antigravity' })]),
+    recipe: recipe({ command: 'agy', cli: ['--print', '--dangerously-skip-permissions'], tui: ['--dangerously-skip-permissions'] }),
+    connectionBlocker: CONNECTION_BLOCKER.VENDOR_SERVICE,
+    bindings: Object.freeze([Object.freeze({ service: 'antigravity' })]),
     matches: isAntigravityProvider,
   }),
   Object.freeze({
@@ -338,9 +318,9 @@ export const PROVIDER_HARNESSES = Object.freeze([
     label: 'Cursor Agent',
     modes: CLI_TUI_MODES,
     protocol: 'native',
-    recipe: subscriptionRecipe('cursor-agent', { cli: ['--print', '--force'], tui: ['--force'] }),
-    connectionLimit: CONNECTION_LIMIT.VENDOR_SERVICE,
-    bindings: Object.freeze([Object.freeze({ via: 'subscription', service: 'cursor' })]),
+    recipe: recipe({ command: 'cursor-agent', cli: ['--print', '--force'], tui: ['--force'] }),
+    connectionBlocker: CONNECTION_BLOCKER.VENDOR_SERVICE,
+    bindings: Object.freeze([Object.freeze({ service: 'cursor' })]),
     matches: isCursorProvider,
   }),
   Object.freeze({
@@ -348,9 +328,9 @@ export const PROVIDER_HARNESSES = Object.freeze([
     label: 'Grok',
     modes: CLI_TUI_MODES,
     protocol: 'native',
-    recipe: subscriptionRecipe('grok', { cli: [], tui: [] }),
-    connectionLimit: CONNECTION_LIMIT.VENDOR_SERVICE,
-    bindings: Object.freeze([Object.freeze({ via: 'subscription', service: 'grok-build' })]),
+    recipe: recipe({ command: 'grok', cli: [], tui: [] }),
+    connectionBlocker: CONNECTION_BLOCKER.VENDOR_SERVICE,
+    bindings: Object.freeze([Object.freeze({ service: 'grok-build' })]),
     matches: isGrokProvider,
   }),
   Object.freeze({
@@ -358,9 +338,9 @@ export const PROVIDER_HARNESSES = Object.freeze([
     label: 'Kimi Code',
     modes: CLI_TUI_MODES,
     protocol: 'native',
-    recipe: subscriptionRecipe('kimi', { cli: [], tui: ['--yolo'] }),
-    connectionLimit: CONNECTION_LIMIT.VENDOR_SERVICE,
-    bindings: Object.freeze([Object.freeze({ via: 'subscription', service: 'kimi' })]),
+    recipe: recipe({ command: 'kimi', cli: [], tui: ['--yolo'] }),
+    connectionBlocker: CONNECTION_BLOCKER.VENDOR_SERVICE,
+    bindings: Object.freeze([Object.freeze({ service: 'kimi' })]),
     matches: isKimiProvider,
   }),
   Object.freeze({
@@ -370,22 +350,17 @@ export const PROVIDER_HARNESSES = Object.freeze([
     // Pi speaks both wires; `openai` is what a bare record classifies as, and
     // the binding below is what says which one a given service gets.
     protocol: 'openai',
-    recipe: Object.freeze({
-      command: 'pi',
-      timeout: HARNESS_TIMEOUT_MS,
-      // Pi selects its backend by provider NAME, not by URL — see
-      // CONNECTION_LIMIT.PI_BUILTIN_PROVIDERS. The flag is appended to the mode
-      // argv by the writer, so the shipped sample argv stays the prefix.
-      baseUrl: { via: 'piProvider', flag: '--provider' },
-      credential: { via: 'env', required: true },
-      modes: {
-        cli: { args: ['--print', ...PI_TUI_ARGS], headlessArgs: [] },
-        tui: { args: [...PI_TUI_ARGS] },
-      },
-    }),
-    connectionLimit: CONNECTION_LIMIT.PI_BUILTIN_PROVIDERS,
+    recipe: recipe({ command: 'pi', cli: ['--print', '--approve'], tui: ['--approve'], tuiPromptDelayMs: null }),
+    connectionBlocker: CONNECTION_BLOCKER.PI_BUILTIN_PROVIDERS,
     bindings: Object.freeze([
-      Object.freeze({ via: 'piProvider', credential: Object.freeze({ via: 'env', required: true }) }),
+      // Pi selects its backend by provider NAME, not by URL — see
+      // CONNECTION_BLOCKER.PI_BUILTIN_PROVIDERS. The flag pair is appended to
+      // the mode argv, so the shipped sample argv stays the prefix.
+      Object.freeze({
+        piProvider: true,
+        baseUrl: Object.freeze({ via: 'piProvider', flag: '--provider' }),
+        credential: Object.freeze({ via: 'env', required: true }),
+      }),
     ]),
     // No `isPiProvider` predicate exists — `pi` has no vendor module of its own
     // beyond `aiToolkit/internal/pi.js`, so match its binary basename directly.
@@ -397,12 +372,17 @@ export const PROVIDER_HARNESSES = Object.freeze([
     modes: API_ONLY_MODES,
     protocol: 'openai',
     // Not a program: nothing to spawn, so no command recipe — and no
-    // `noRecipe` either, because it CAN be pointed at a service.
+    // `connectionBlocker` either, because it CAN be pointed at a service.
     recipe: null,
-    bindings: Object.freeze([DIRECT_API_BINDING]),
+    bindings: Object.freeze([
+      Object.freeze({ protocol: 'openai', baseUrl: Object.freeze({ via: 'field' }), credential: Object.freeze({ via: 'field', required: false }) }),
+    ]),
     matches: (provider) => provider?.type === 'api',
   }),
 ]);
+
+/** The `direct` row, resolved once: every `api` record is driven by it. */
+const DIRECT_HARNESS = PROVIDER_HARNESSES.find((h) => h.id === 'direct');
 
 /** The harness id a direct API record resolves to. */
 export const DIRECT_HARNESS_ID = 'direct';
@@ -427,18 +407,11 @@ export const harnessById = (id) => PROVIDER_HARNESSES.find((h) => h.id === id) |
  * property of the program, not a gap in this table.
  */
 export const CREATABLE_HARNESS_IDS = Object.freeze(
-  PROVIDER_HARNESSES.filter((h) => h.recipe && !h.connectionLimit).map((h) => h.id),
+  PROVIDER_HARNESSES.filter((h) => h.recipe && !h.connectionBlocker).map((h) => h.id),
 );
 
-/**
- * Why `harnessId` cannot be minted from a bare connection, or `null` when it
- * can. A row with no recipe says so through `noRecipe`; Pi has a recipe but a
- * backend it can only name, not address (`connectionLimit`).
- */
-export const harnessConnectionBlocker = (harnessId) => {
-  const harness = harnessById(harnessId);
-  return harness?.noRecipe || harness?.connectionLimit || null;
-};
+/** Why `harnessId` cannot be minted from a bare connection, or `null` when it can. */
+export const harnessConnectionBlocker = (harnessId) => harnessById(harnessId)?.connectionBlocker ?? null;
 
 /** The command recipe for a harness id, or `null` when it has none. */
 export const harnessRecipe = (id) => harnessById(id)?.recipe || null;
@@ -457,40 +430,50 @@ export const harnessRecipe = (id) => harnessById(id)?.recipe || null;
  */
 export function harnessForProvider(provider) {
   if (!provider || typeof provider !== 'object') return null;
+  if (provider.type === 'api') return DIRECT_HARNESS;
   return PROVIDER_HARNESSES.find((h) => h.matches(provider)) || null;
 }
 
 /**
- * The bindings of `harness` that can reach `serviceInstance` (a resolved
- * instance from `resolveServiceInstance`), in row order — the first is the one
- * `materializeRoute` writes. Empty when the pair cannot be composed.
- *
- * Matching rules, one per binding shape: a `subscription` / `service` binding
- * matches by definition id; a `protocol` binding matches when the instance
- * declares that transport; a `codexOss` binding matches the instance's local
- * runtime; a `piProvider` binding matches a definition Pi ships a name for. A
- * definition that is `harnessOnly` matches nothing but that harness.
- *
- * @param {object|string} harness - a registry row or its id
- * @param {{definition: object, transports: object}} serviceInstance
- * @returns {readonly object[]}
+ * Whether one binding's constraints all hold for a resolved service instance.
+ * Every constraint present must hold; a binding with none would match
+ * everything, so at least one is always declared.
  */
-export function compatibleBindings(harness, serviceInstance) {
+const bindingMatches = (binding, { definition, transports }) => (
+  (binding.service === undefined || binding.service === definition.id)
+  && (binding.localRuntime === undefined || binding.localRuntime.includes(definition.localRuntime))
+  && (binding.piProvider === undefined || typeof definition.piProvider === 'string')
+  && (binding.protocol === undefined || Boolean(transports?.[binding.protocol]))
+);
+
+/**
+ * The bindings a harness may use to reach a resolved service instance (from
+ * `resolveServiceInstance`), in row order — the first is the one
+ * `materializeRoute` writes. Empty when the pair cannot be composed. A
+ * definition that is `harnessOnly` composes onto nothing but that harness.
+ */
+const bindingsFor = (harness, serviceInstance) => {
   const row = typeof harness === 'string' ? harnessById(harness) : harness;
   const definition = serviceInstance?.definition;
   if (!row || !definition) return [];
   if (definition.harnessOnly && definition.harnessOnly !== row.id) return [];
-  const declares = (protocol) => Boolean(serviceInstance.transports?.[protocol]);
-  return row.bindings.filter((binding) => {
-    if (binding.service) return binding.service === definition.id;
-    if (binding.via === 'codexOss') return binding.localRuntime.includes(definition.localRuntime) && declares(binding.protocol);
-    if (binding.via === 'piProvider') return typeof definition.piProvider === 'string';
-    return Boolean(binding.protocol) && declares(binding.protocol);
-  });
-}
+  return row.bindings;
+};
+
+/**
+ * @param {object|string} harness - a registry row or its id
+ * @param {{definition: object, transports: object}} serviceInstance
+ * @returns {readonly object[]}
+ */
+export const compatibleBindings = (harness, serviceInstance) =>
+  bindingsFor(harness, serviceInstance).filter((binding) => bindingMatches(binding, serviceInstance));
+
+/** The binding `materializeRoute` writes for this pair, or `null`. */
+export const firstCompatibleBinding = (harness, serviceInstance) =>
+  bindingsFor(harness, serviceInstance).find((binding) => bindingMatches(binding, serviceInstance)) ?? null;
 
 /** Whether `harness` can be pointed at `serviceInstance` at all. */
-export const isCompatible = (harness, serviceInstance) => compatibleBindings(harness, serviceInstance).length > 0;
+export const isCompatible = (harness, serviceInstance) => firstCompatibleBinding(harness, serviceInstance) !== null;
 
 /** Whether `harnessId` can be driven in `mode`. Unknown harness → false. */
 export const harnessSupportsMode = (harnessId, mode) =>

@@ -1,10 +1,9 @@
 /**
  * The harness identity table exists in two places by architecture — the
  * vendored `aiToolkit/` may not import out of its own directory, so it carries
- * its own copy of the ids and the `direct` ↔ `null` translation. This pins the
- * two together, as `providerGateways.parity.test.js` does for gateways, so a
- * harness added to the registry can never be one the toolkit refuses to
- * resolve a composite id for.
+ * its own copy of the `direct` ↔ `null` translation. This pins the two
+ * together, as `providerGateways.parity.test.js` does for gateways, so the
+ * toolkit can never spell a direct binding differently from the host.
  */
 import { describe, expect, it } from 'vitest';
 import {
@@ -15,17 +14,14 @@ import {
 } from './providerHarnesses.js';
 import {
   DIRECT_HARNESS_ID as TOOLKIT_DIRECT,
-  HARNESS_IDS,
   graphHarnessId as toolkitGraphId,
-  isHarnessId,
   normalizeHarnessId as toolkitNormalize,
 } from './aiToolkit/internal/harnesses.js';
 
 describe('providerHarnesses ↔ aiToolkit/internal/harnesses parity', () => {
-  it('declares the same ids, in the same order', () => {
-    expect(HARNESS_IDS).toEqual(PROVIDER_HARNESS_IDS);
+  it('names the direct harness the same, and it is a registry row', () => {
     expect(TOOLKIT_DIRECT).toBe(SERVER_DIRECT);
-    for (const id of PROVIDER_HARNESS_IDS) expect(isHarnessId(id)).toBe(true);
+    expect(PROVIDER_HARNESS_IDS).toContain(TOOLKIT_DIRECT);
   });
 
   it('translates the direct binding the same way in both directions', () => {

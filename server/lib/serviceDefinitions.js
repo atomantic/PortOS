@@ -60,14 +60,13 @@ const METERED = Object.freeze(['free', 'paid']);
 const PAID = Object.freeze(['paid']);
 const SUBSCRIPTION = Object.freeze(['subscription']);
 const LOCAL = Object.freeze(['local']);
-const NO_CREDENTIAL = Object.freeze({ envVars: Object.freeze([]) });
 
 /** A model-id suffix filter for the one plan a vendor marks in the id itself. */
 const suffixPlanFilter = (suffix) => (plan, models) => (
   plan === 'free' ? models.filter((model) => String(model).endsWith(suffix)) : models
 );
 
-const definition = ({ transports = {}, credential = NO_CREDENTIAL, catalog, ...row }) => Object.freeze({
+const definition = ({ transports = {}, credential = {}, catalog, ...row }) => Object.freeze({
   ...row,
   transports: Object.freeze(Object.fromEntries(
     Object.entries(transports).map(([protocol, transport]) => [protocol, Object.freeze({ defaultBaseUrl: null, ...transport })]),
@@ -303,8 +302,9 @@ export const SERVICE_SLUG_RE = /^[a-z0-9][a-z0-9-]*$/;
  * the slug it is addressed by, the plan the user declared, the endpoints it is
  * actually reached at, and its credential material.
  *
- * Accepts either a definition id or an already-resolved instance (returned as
- * is), so every consumer can take both. A transport the instance does not
+ * Accepts a definition id, an instance input, or an already-resolved instance
+ * (resolution is idempotent), so every consumer can take any of them. A
+ * transport the instance does not
  * override falls back to the definition's default base URL; a transport with
  * neither is still DECLARED (the service speaks it) but has no endpoint, which
  * `materializeRoute` refuses rather than guessing — a local daemon's port is an
@@ -315,14 +315,13 @@ export const SERVICE_SLUG_RE = /^[a-z0-9][a-z0-9-]*$/;
  *
  * @param {{definitionId?: string, definition?: ServiceDefinition, slug?: string, plan?: string,
  *          transports?: Record<string, {baseUrl?: string|null}>, credentials?: {apiKey?: string},
- *          credential?: {via?: 'bootstrap'|'stored'}}|string} input
+ *          credential?: {via?: 'bootstrap'|'stored'}, credentialVia?: 'bootstrap'|'stored'}|string} input
  * @returns {{definition: ServiceDefinition, slug: string, plan: string,
  *            transports: Record<string, {baseUrl: string|null}>, credentials: {apiKey?: string},
  *            credentialVia: 'stored'|'bootstrap'}}
  */
 export function resolveServiceInstance(input) {
   const raw = typeof input === 'string' ? { definitionId: input } : (input || {});
-  if (raw.definition && raw.slug && raw.transports && raw.credentials && raw.credentialVia) return raw;
   const definition = raw.definition || serviceDefinitionById(raw.definitionId);
   if (!definition) throw serviceError('SERVICE_DEFINITION_UNKNOWN', `No service definition "${raw.definitionId ?? ''}"`);
 
@@ -344,7 +343,7 @@ export function resolveServiceInstance(input) {
     plan,
     transports,
     credentials: { ...(raw.credentials || {}) },
-    credentialVia: raw.credential?.via === 'bootstrap' ? 'bootstrap' : 'stored',
+    credentialVia: raw.credentialVia === 'bootstrap' || raw.credential?.via === 'bootstrap' ? 'bootstrap' : 'stored',
   };
 }
 

@@ -110,7 +110,7 @@ describe('resolveServiceInstance', () => {
 
     const paid = resolveServiceInstance({ definitionId: 'nvidia-nim', slug: 'nvidia-paid', plan: 'paid', credentials: { apiKey: 'k' } });
     expect(paid).toMatchObject({ slug: 'nvidia-paid', plan: 'paid', credentials: { apiKey: 'k' } });
-    expect(resolveServiceInstance(paid)).toBe(paid);
+    expect(resolveServiceInstance(paid)).toEqual(paid);
   });
 
   // A local daemon's port is an install fact: the row declares the wire, and

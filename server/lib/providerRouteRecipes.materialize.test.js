@@ -203,7 +203,7 @@ function serviceForSample(sample, profile, harness) {
   if (sample.secretEnvVars?.includes('OPENCODE_API_KEY')) return serviceDefinitionById('opencode-zen');
   const endpoint = profile.transports.openai?.baseUrl;
   if (endpoint) return SERVICE_DEFINITIONS.find((row) => row.transports.openai?.defaultBaseUrl === endpoint) || null;
-  const subscription = harness.bindings.find((binding) => binding.via === 'subscription');
+  const subscription = harness.bindings.find((binding) => binding.service && !binding.env);
   return subscription ? serviceDefinitionById(subscription.service) : null;
 }
 

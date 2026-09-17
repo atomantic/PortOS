@@ -3,7 +3,7 @@ import { modeSiblingId } from './aiToolkit/internal/providerModes.js';
 import { PROVIDER_GATEWAYS } from './providerGateways.js';
 import {
   CREATABLE_HARNESS_IDS,
-  compatibleBindings,
+  firstCompatibleBinding,
   graphHarnessId,
   harnessById,
   harnessConnectionBlocker,
@@ -172,7 +172,7 @@ export function bindingBlocker({ harnessId: requestedHarnessId, modes, connectio
     };
   }
 
-  const credential = harnessId ? harnessRecipe(harnessId)?.credential ?? null : null;
+  const credential = harnessId ? harnessRecipe(harnessId)?.credential : null;
   const key = credential?.via === 'env' ? credential.name : 'apiKey';
   if (credential?.required && !connection.credentials?.[key]) {
     return {
@@ -264,15 +264,32 @@ export function buildRouteRecord({ harnessId, mode, providerId, name, connection
     // carry one. The record then simply has no marker, and the caller's identity
     // check is what decides whether it still describes this backend.
     ...(connectionKindMarkers(connection.kind) || {}),
-    ...(recipe ? { command: recipe.command, timeout: recipe.timeout } : { timeout: 300000 }),
-    ...(recipe ? recipe.modes[mode] : {}),
+    ...executableRecordTail({ recipe, mode, enabled: false, envVars, secretEnvVars }),
+  };
+}
+
+/** Default wall clock for a record no recipe times — every shipped `api` sample. */
+const API_ROUTE_TIMEOUT_MS = 300000;
+
+/**
+ * The half of an executable record that every writer here assembles the same
+ * way: the program and its per-mode argv (or the API wall clock when there is
+ * no program), an empty catalog, and the env maps. Stated once so a new marker
+ * or env rule lands in {@link buildRouteRecord} and {@link materializeRoute}
+ * together.
+ */
+const executableRecordTail = ({ recipe, mode, args, enabled, envVars, secretEnvVars }) => {
+  const modeRecipe = recipe?.modes?.[mode] ?? null;
+  return {
+    ...(recipe ? { command: recipe.command, timeout: recipe.timeout } : { timeout: API_ROUTE_TIMEOUT_MS }),
+    ...(modeRecipe ? { ...modeRecipe, ...(args ? { args } : {}) } : {}),
     models: [],
     defaultModel: null,
-    enabled: false,
+    enabled,
     envVars,
     secretEnvVars,
   };
-}
+};
 
 /**
  * Route ids for a new binding's modes: readable, stable and free.
@@ -306,21 +323,22 @@ export function mintRouteIds({ harnessId, kind, modes, taken }) {
  * the runtime's `*Backed` boolean, or `gatewayBacked: '<id>'`. Slotstream and
  * a plain API endpoint carry none, exactly as {@link connectionKindMarkers}.
  */
-const serviceMarkers = (harness, definition) => {
+const serviceMarkers = (definition, { wrapper }) => {
   if (definition.localRuntime) return connectionKindMarkers(definition.localRuntime) || {};
-  // `gatewayBacked` marks a WRAPPER fronting a gateway (the sibling api record
-  // owns the key); a direct API record IS the gateway, so it carries none —
-  // exactly as every shipped `api` sample.
-  if (definition.gateway && harness.id !== 'direct') return { gatewayBacked: definition.id };
+  // `gatewayBacked` marks a WRAPPER — a program spawned in front of a gateway
+  // (the sibling api record owns the key). A record that IS the client carries
+  // none, exactly as every shipped `api` sample.
+  if (definition.gateway && wrapper) return { gatewayBacked: definition.id };
   return {};
 };
 
-/** The OpenCode namespace a service instance is declared under: the marker's, or the slug's. */
-const serviceOpencodeNamespace = (instance) =>
-  instance.definition.localRuntime || (instance.definition.gateway ? instance.definition.id : instance.slug);
-
-/** Default wall clock for a record no recipe times — every shipped `api` sample. */
-const API_ROUTE_TIMEOUT_MS = 300000;
+/**
+ * The connection kind a service instance reads back as — the same key space
+ * {@link connectionKindMarkers} and {@link opencodeNamespace} are keyed on, so
+ * a materialized OpenCode config names the namespace its marker resolves to.
+ */
+const serviceConnectionKind = ({ definition, slug }) =>
+  definition.localRuntime || (definition.gateway ? `gateway:${definition.id}` : slug);
 
 /**
  * The executable record for a (harness, method, service) composition (#7562) —
@@ -364,7 +382,7 @@ export function materializeRoute({
   }
   const instance = resolveServiceInstance(serviceInstance);
   const { definition } = instance;
-  const [binding] = compatibleBindings(harness, instance);
+  const binding = firstCompatibleBinding(harness, instance);
   if (!binding) {
     throw serviceError('HARNESS_SERVICE_INCOMPATIBLE', `${harness.label} cannot be pointed at ${definition.label}.`);
   }
@@ -386,21 +404,24 @@ export function materializeRoute({
   if (protocol && !baseUrl) {
     throw serviceError('SERVICE_ENDPOINT_REQUIRED', `${definition.label} declares no ${protocol} endpoint; set its base URL first.`);
   }
-  const baseUrlVia = binding.baseUrl?.via ?? null;
-  if (baseUrlVia === 'env') envVars[binding.baseUrl.name] = baseUrl;
-  if (baseUrlVia === 'field') fields.endpoint = baseUrl;
-  if (baseUrlVia === 'opencodeConfig') {
-    envVars.OPENCODE_CONFIG_CONTENT = opencodeProviderConfig({
-      namespace: serviceOpencodeNamespace(instance), label: definition.label, baseUrl, builtin: binding.baseUrl.builtin === true,
-    });
+  switch (binding.baseUrl?.via) {
+    case 'env': envVars[binding.baseUrl.name] = baseUrl; break;
+    case 'opencodeConfig':
+      envVars.OPENCODE_CONFIG_CONTENT = opencodeProviderConfig({
+        namespace: opencodeNamespace(serviceConnectionKind(instance)), label: definition.label, baseUrl, builtin: binding.baseUrl.builtin === true,
+      });
+      break;
+    case 'piProvider': args.push(binding.baseUrl.flag, definition.piProvider); break;
+    default: break;
   }
-  if (binding.via === 'piProvider') args.push(recipe.baseUrl.flag, definition.piProvider);
-  // A service the program addresses through an env var, inline config or a
-  // provider name still records where it is, as every shipped wrapper sample
-  // does — the readiness probe and the catalog refresh read `endpoint` off the
-  // record.
-  const recordedEndpoint = instance.transports.openai?.baseUrl ?? baseUrl ?? null;
-  if (baseUrlVia !== 'field' && binding.via !== 'subscription' && recordedEndpoint) fields.endpoint = recordedEndpoint;
+  // A binding that writes an endpoint also records it on the record: as
+  // `endpoint` for a program that reads that field, and beside an env var,
+  // inline config or provider name as every shipped wrapper sample does — the
+  // readiness probe and the catalog refresh read it off the record. A binding
+  // that writes none (the program signs in itself) records none.
+  const endpoint = !binding.baseUrl ? null
+    : binding.baseUrl.via === 'field' ? baseUrl : instance.transports.openai?.baseUrl ?? baseUrl;
+  if (endpoint) fields.endpoint = endpoint;
 
   // --- credential ------------------------------------------------------------
   const credential = binding.credential || null;
@@ -421,7 +442,6 @@ export function materializeRoute({
 
   // --- assembly --------------------------------------------------------------
   const tiers = selection.tiers && typeof selection.tiers === 'object' ? selection.tiers : {};
-  const modeFields = recipe ? { ...recipe.modes[method], args } : {};
   const record = {
     id: providerId ?? `${harness.id}.${method}@${instance.slug}${bootstrap ? `+${bootstrap.id ?? bootstrap.command}` : ''}`,
     name: name ?? `${harness.label} · ${definition.label}`,
@@ -431,16 +451,11 @@ export function materializeRoute({
     serviceId: instance.slug,
     servicePlan: instance.plan,
     ...fields,
-    ...serviceMarkers(harness, definition),
-    ...(recipe ? { command: recipe.command, timeout: recipe.timeout } : { timeout: API_ROUTE_TIMEOUT_MS }),
-    ...modeFields,
-    models: [],
+    ...serviceMarkers(definition, { wrapper: Boolean(recipe) }),
+    ...executableRecordTail({ recipe, mode: method, args, enabled: true, envVars, secretEnvVars }),
     defaultModel: selection.model ?? null,
     ...(selection.effort ? { effort: selection.effort } : {}),
     ...tiers,
-    enabled: true,
-    envVars,
-    secretEnvVars,
     ...overrides,
   };
   if (bootstrap && method !== 'api') {
