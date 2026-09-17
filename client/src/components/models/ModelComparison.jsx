@@ -1258,11 +1258,7 @@ export default function ModelComparison() {
             )}
             <div
               ref={pan.surfaceRef}
-              onPointerDown={pan.panProps.onPointerDown}
-              onPointerMove={pan.panProps.onPointerMove}
-              onPointerUp={pan.panProps.onPointerUp}
-              onPointerCancel={pan.panProps.onPointerCancel}
-              onClickCapture={pan.panProps.onClickCapture}
+              {...pan.panProps}
               style={{ height: `${chartHeight}px` }}
               className={`overflow-x-auto px-1 sm:px-4 pt-4 scrollbar-thin ${
                 stretch > 1 ? (pan.isPanning ? 'cursor-grabbing select-none' : 'cursor-grab') : ''

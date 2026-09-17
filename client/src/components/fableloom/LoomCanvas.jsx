@@ -178,10 +178,8 @@ export default function LoomCanvas({
         className={`overflow-auto h-full w-full overscroll-contain cursor-grab active:cursor-grabbing ${showStrip ? 'pb-28' : ''}`}
         data-testid="loom-canvas"
         data-orientation={orientation}
+        {...pan.panProps}
         onPointerDown={handleSurfacePointerDown}
-        onPointerMove={pan.panProps.onPointerMove}
-        onPointerUp={pan.panProps.onPointerUp}
-        onPointerCancel={pan.panProps.onPointerCancel}
         onClickCapture={handleSurfaceClickCapture}
       >
         <svg

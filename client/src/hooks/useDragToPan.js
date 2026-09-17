@@ -29,6 +29,11 @@ export default function useDragToPan({
   const [isPanning, setIsPanning] = useState(false);
 
   const onPointerDown = useCallback((event) => {
+    // Cleared at the START of every gesture: a drag released (or cancelled)
+    // without a following click — the pointer left the window, a browser
+    // gesture interrupted it — must not leave the flag armed to swallow the
+    // next, unrelated click on this surface.
+    pannedRef.current = false;
     if (!enabled || event.pointerType !== 'mouse' || event.button !== 0) return;
     if (canStart && !canStart(event)) return;
     const surface = surfaceRef.current;

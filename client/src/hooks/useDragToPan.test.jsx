@@ -77,6 +77,25 @@ it('never claims a gesture canStart rejects, so its click still reaches the cont
   expect(onClick).toHaveBeenCalledTimes(1);
 });
 
+it('never carries a swallowed-click flag into the next unrelated click', () => {
+  const onClick = vi.fn();
+  render(<Harness slop={4} onButtonClick={onClick} />);
+  const surface = screen.getByTestId('surface');
+  const button = screen.getByRole('button', { name: 'Control' });
+
+  // A drag that ends without ever producing a click (pointercancel, no click
+  // event follows) must not leave the next, unrelated click swallowed.
+  fireEvent.pointerDown(surface, { pointerId: 1, pointerType: 'mouse', button: 0, clientX: 200, clientY: 200 });
+  fireEvent.pointerMove(surface, { pointerId: 1, pointerType: 'mouse', clientX: 150, clientY: 200 });
+  fireEvent.pointerCancel(surface, { pointerId: 1, pointerType: 'mouse' });
+
+  // The next real click is always preceded by its own pointerdown.
+  fireEvent.pointerDown(button, { pointerId: 2, pointerType: 'mouse', button: 0, clientX: 10, clientY: 10 });
+  fireEvent.pointerUp(button, { pointerId: 2, pointerType: 'mouse' });
+  fireEvent.click(button);
+  expect(onClick).toHaveBeenCalledTimes(1);
+});
+
 it('ignores non-mouse pointers so touch scrolling is left to the browser', () => {
   render(<Harness slop={4} onButtonClick={vi.fn()} />);
   const surface = screen.getByTestId('surface');
