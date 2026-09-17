@@ -61,6 +61,19 @@ const renderAt = (path) => render(
   </MemoryRouter>,
 );
 
+// Every step's field is on screen from the first paint but sits `disabled`
+// until the draft create/get resolves, and the step's action buttons are gated
+// on that same `draftReady`. A bare `findByLabelText` therefore resolves on the
+// FIRST poll, before any of it — the interaction that follows lands on a
+// disabled control, silently does nothing, and the next wait burns the whole
+// async budget (#7592, the #7448 wrong-barrier shape). Wait for the field to be
+// usable, which is exactly the state "the draft has loaded and hydrated".
+const awaitDraftLoaded = async (label) => {
+  const field = await screen.findByLabelText(label);
+  await waitFor(() => expect(field).not.toBeDisabled());
+  return field;
+};
+
 describe('<MusicDesigner>', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -114,11 +127,14 @@ describe('<MusicDesigner>', () => {
 
     it('reopens the active unnamed draft after leaving the Music section', async () => {
       renderAt('/music/generate/concept');
-      await screen.findByLabelText(/what do you want to hear/i);
+      // The resume hint is written by the hydrate that ends the draft load, so
+      // unmounting on the weaker barrier would leave storage empty and the
+      // second visit with nothing to reopen.
+      await awaitDraftLoaded(/what do you want to hear/i);
       cleanup();
 
       renderAt('/music/generate/lyrics');
-      await screen.findByLabelText('Lyrics');
+      await awaitDraftLoaded('Lyrics');
       expect(api.getTrack).toHaveBeenCalledWith('track-draft', { silent: true });
     });
 
@@ -129,8 +145,7 @@ describe('<MusicDesigner>', () => {
       });
       renderAt('/music/generate/lyrics?trackId=track-saved');
 
-      expect(await screen.findByLabelText('Lyrics')).toHaveValue('[verse]\nKeep moving');
-      expect(screen.getByLabelText('Lyrics')).toHaveValue('[verse]\nKeep moving');
+      expect(await awaitDraftLoaded('Lyrics')).toHaveValue('[verse]\nKeep moving');
       expect(api.getTrack).toHaveBeenCalledWith('track-saved', { silent: true });
       expect(api.createTrack).not.toHaveBeenCalled();
     });
@@ -142,7 +157,9 @@ describe('<MusicDesigner>', () => {
       });
       renderAt('/music/generate/concept?trackId=track-saved');
 
-      await screen.findByLabelText(/what do you want to hear/i);
+      // Hydration is what could clobber the unrelated `activeDraft` key, so the
+      // assertion below only means something once it has actually run.
+      await awaitDraftLoaded(/what do you want to hear/i);
       expect(window.localStorage.getItem('portos.musicDesigner.activeDraft')).toBe('track-draft');
     });
 
@@ -153,7 +170,7 @@ describe('<MusicDesigner>', () => {
       });
       renderAt('/music/generate/render?trackId=track-saved');
 
-      const prompt = await screen.findByLabelText(/prompt for this render/i);
+      const prompt = await awaitDraftLoaded(/prompt for this render/i);
       expect(prompt).toHaveValue('Warm synths and a patient beat.');
       fireEvent.change(prompt, { target: { value: 'A brighter pulse with hand percussion.' } });
       expect(screen.getByTestId('gen-panel')).toHaveAttribute('data-prompt', 'A brighter pulse with hand percussion.');
@@ -167,7 +184,7 @@ describe('<MusicDesigner>', () => {
     it('lets a direct render visit supply the prompt before generating', async () => {
       renderAt('/music/generate/render?trackId=track-draft');
 
-      const prompt = await screen.findByLabelText(/prompt for this render/i);
+      const prompt = await awaitDraftLoaded(/prompt for this render/i);
       expect(prompt).toHaveValue('');
       fireEvent.change(prompt, { target: { value: 'A quiet piano loop with tape hiss.' } });
 
@@ -188,7 +205,7 @@ describe('<MusicDesigner>', () => {
       api.describeMusic.mockResolvedValue({ description: 'Lush pads over a broken beat.', llm: { provider: 'provider-a', model: 'model-a' } });
       renderAt('/music/generate/concept');
 
-      fireEvent.change(await screen.findByLabelText(/what do you want to hear/i), { target: { value: 'a rainy downtempo loop' } });
+      fireEvent.change(await awaitDraftLoaded(/what do you want to hear/i), { target: { value: 'a rainy downtempo loop' } });
       fireEvent.change(screen.getByLabelText(/extra guidance/i), { target: { value: 'under 100 BPM' } });
       fireEvent.click(screen.getByRole('button', { name: /describe it/i }));
 
@@ -217,7 +234,7 @@ describe('<MusicDesigner>', () => {
     it('persists the provider pin after a successful describe', async () => {
       api.describeMusic.mockResolvedValue({ description: 'Lush pads.', llm: {} });
       renderAt('/music/generate/concept');
-      fireEvent.change(await screen.findByLabelText(/what do you want to hear/i), { target: { value: 'x' } });
+      fireEvent.change(await awaitDraftLoaded(/what do you want to hear/i), { target: { value: 'x' } });
       fireEvent.click(screen.getByRole('button', { name: /describe it/i }));
 
       await waitFor(() => expect(api.updateSettings).toHaveBeenCalledWith(
@@ -229,7 +246,7 @@ describe('<MusicDesigner>', () => {
     it('keeps the user on the concept step when the call fails', async () => {
       api.describeMusic.mockRejectedValue(new Error('no provider'));
       renderAt('/music/generate/concept');
-      fireEvent.change(await screen.findByLabelText(/what do you want to hear/i), { target: { value: 'x' } });
+      fireEvent.change(await awaitDraftLoaded(/what do you want to hear/i), { target: { value: 'x' } });
       fireEvent.click(screen.getByRole('button', { name: /describe it/i }));
 
       await waitFor(() => expect(api.describeMusic).toHaveBeenCalled());
@@ -243,7 +260,7 @@ describe('<MusicDesigner>', () => {
       api.generateLyrics.mockResolvedValue({ lyrics: '[verse]\nrain on the window', llm: {} });
       renderAt('/music/generate/concept');
 
-      fireEvent.change(await screen.findByLabelText(/what do you want to hear/i), { target: { value: 'a rainy downtempo loop' } });
+      fireEvent.change(await awaitDraftLoaded(/what do you want to hear/i), { target: { value: 'a rainy downtempo loop' } });
       fireEvent.click(screen.getByRole('button', { name: /describe it/i }));
       await waitFor(() => expect(screen.getByTestId('location')).toHaveTextContent('/music/generate/description'));
       fireEvent.click(screen.getByRole('button', { name: /next: lyrics/i }));
@@ -274,7 +291,7 @@ describe('<MusicDesigner>', () => {
       api.describeMusic.mockResolvedValue({ description: 'Lush pads over a broken beat.', llm: {} });
       renderAt('/music/generate/concept');
 
-      fireEvent.change(await screen.findByLabelText(/what do you want to hear/i), { target: { value: 'a rainy downtempo loop' } });
+      fireEvent.change(await awaitDraftLoaded(/what do you want to hear/i), { target: { value: 'a rainy downtempo loop' } });
       fireEvent.click(screen.getByRole('button', { name: /describe it/i }));
       await waitFor(() => expect(screen.getByTestId('location')).toHaveTextContent('/music/generate/description'));
       fireEvent.click(screen.getByRole('button', { name: /next: lyrics/i }));
@@ -352,7 +369,7 @@ describe('<MusicDesigner>', () => {
       api.describeMusic.mockResolvedValue({ description: 'Terse.', llm: {} });
       renderAt('/music/generate/concept');
 
-      fireEvent.change(await screen.findByLabelText(/what do you want to hear/i), { target: { value: 'x' } });
+      fireEvent.change(await awaitDraftLoaded(/what do you want to hear/i), { target: { value: 'x' } });
       fireEvent.click(screen.getByRole('button', { name: /advanced — meta-prompts/i }));
       await waitFor(() => expect(screen.getByLabelText(/description instruction/i)).toHaveValue('Be terse.'));
 
@@ -361,6 +378,10 @@ describe('<MusicDesigner>', () => {
         expect.objectContaining({ template: 'Be terse.' }),
         { silent: true },
       ));
+      // The CALL landing is not the end of the round-trip: its result advances the
+      // wizard to the description step. Stepping back before that lands means the
+      // late navigation overwrites the step and the concept controls disappear.
+      await waitFor(() => expect(screen.getByTestId('location')).toHaveTextContent('/music/generate/description'));
 
       // Reset clears the override so the server falls back to the shipped default.
       fireEvent.click(screen.getByRole('tab', { name: /concept/i }));
