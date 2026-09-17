@@ -257,6 +257,9 @@ import {
   OOM_NUDGE_COOLDOWN_MS,
   OOM_NUDGE_MAX_ATTEMPTS,
   OOM_NUDGE_TEXT,
+  STALL_NUDGE_IDLE_MS,
+  STALL_NUDGE_MAX_ATTEMPTS,
+  STALL_NUDGE_TEXT,
   RETRY_STALL_MS,
   TOOL_PERMISSION_NUDGE_TEXT,
 } from '../lib/tuiHandshake.js';
@@ -1929,6 +1932,73 @@ describe('spawnTuiAgent runtime', () => {
     );
     expect(shellService.pasteToSession).toHaveBeenCalledTimes(1);
     expect(agentLifecycle.finalizeAgent).not.toHaveBeenCalled();
+  });
+
+  // The spawner acts on every gate from one 5s poll (PROVIDER_SIGNAL_POLL_MS,
+  // module-private), so each nudge lands within a tick of its threshold.
+  const SIGNAL_POLL_MS = 5000;
+
+  // ── Stalled session: the turn just ended, with the task unfinished ─────────
+  // agent-bb3061af (2026-09-17): the run finished its /simplify pass, printed
+  // "Next: /do:pr", ended its turn and sat at an idle composer. Nothing was on
+  // screen for a detector to match and — since the wall-clock ceiling was
+  // removed — nothing would ever have touched it again. A human opened the Shell
+  // tab and typed "continue", and it finished.
+  it("nudges a session that went quiet with the task unfinished", async () => {
+    await driveAgyToSubmittedPrompt();
+    vi.mocked(shellService.pasteToSession).mockClear();
+
+    // A short lull is ordinary: a slow tool call paints nothing.
+    await vi.advanceTimersByTimeAsync(STALL_NUDGE_IDLE_MS - 60_000);
+    await flushMicrotasks();
+    expect(shellService.pasteToSession).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(60_000 + SIGNAL_POLL_MS);
+    await flushMicrotasks();
+    expect(shellService.pasteToSession).toHaveBeenCalledWith(
+      SESSION_ID,
+      STALL_NUDGE_TEXT,
+      expect.objectContaining({ label: expect.stringContaining("stalled") }),
+    );
+    // A nudge, never a verdict: the run carries on.
+    expect(shellService.pasteToSession).toHaveBeenCalledTimes(1);
+    expect(agentLifecycle.finalizeAgent).not.toHaveBeenCalled();
+  });
+
+  it("leaves a working session alone however long the run lasts", async () => {
+    await driveAgyToSubmittedPrompt();
+    vi.mocked(shellService.pasteToSession).mockClear();
+
+    // Claude Code repaints its working counter about once a second for as long
+    // as any call is in flight. A run that keeps printing is never nudged.
+    for (let elapsed = 0; elapsed < STALL_NUDGE_IDLE_MS + 60_000; elapsed += 60_000) {
+      await capturedOnData(Buffer.from("· Thinking… (42s · esc to interrupt)\n"));
+      await flushMicrotasks();
+      await vi.advanceTimersByTimeAsync(60_000);
+      await flushMicrotasks();
+    }
+    expect(shellService.pasteToSession).not.toHaveBeenCalled();
+  });
+
+  it("badges a session that ignored every nudge instead of giving up silently", async () => {
+    await driveAgyToSubmittedPrompt();
+    vi.mocked(shellService.pasteToSession).mockClear();
+
+    // A session wedged below its composer never echoes the paste, so nothing
+    // rewinds the idle clock — the budget is the only thing that stops it.
+    // One window per nudge, plus one for the exhaustion verdict — and a spare,
+    // because each nudge lands on the first 5s tick AFTER its threshold, so the
+    // windows drift later as they stack.
+    await vi.advanceTimersByTimeAsync(STALL_NUDGE_IDLE_MS * (STALL_NUDGE_MAX_ATTEMPTS + 2));
+    await flushMicrotasks();
+    expect(shellService.pasteToSession).toHaveBeenCalledTimes(STALL_NUDGE_MAX_ATTEMPTS);
+    // There is no runtime ceiling left to reap it, so the run keeps its lane —
+    // which is only tolerable because the card now says it needs a human.
+    expect(agentLifecycle.finalizeAgent).not.toHaveBeenCalled();
+    expect(cosAgentLifecycle.updateAgent).toHaveBeenCalledWith(
+      'agent-1',
+      { metadata: { phase: 'stalled' } },
+    );
   });
 
   // ── 1b. Submit-Enter retries ─────────────────────────────────────────────────

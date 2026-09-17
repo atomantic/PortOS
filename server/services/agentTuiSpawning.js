@@ -51,6 +51,9 @@ import {
   TOOL_PERMISSION_NUDGE_TEXT,
   OOM_NUDGE_MAX_ATTEMPTS,
   OOM_NUDGE_TEXT,
+  createStallNudgeGate,
+  STALL_NUDGE_MAX_ATTEMPTS,
+  STALL_NUDGE_TEXT,
   createMcpBootTracker,
   MCP_BOOT_PASTE_DEADLINE_MS,
   MCP_BOOT_PASTE_RETRY_DELAY_MS,
@@ -814,6 +817,9 @@ export async function spawnTuiAgent({
   // the launch posture already decided the run's scope — then nudged along
   // once the session goes quiet. See createToolPermissionGate.
   const toolPermissionGate = createToolPermissionGate();
+  // The stall no detector can see, because nothing is on screen: a turn that
+  // ended with the task unfinished. Reads pure silence. See createStallNudgeGate.
+  const stallNudgeGate = createStallNudgeGate();
   // Guards ingestDoneSentinel to a single read. finish() is its only caller and
   // is itself guarded by `sessionPhase`, so this is defensive — it pins the
   // read-at-most-once invariant at the helper.
@@ -1960,7 +1966,10 @@ export async function spawnTuiAgent({
   // a CoS TUI may remain silent for as long as the provider needs.
   const providerSignalTimer = setInterval(() => {
     if (isTerminal()) return;
-    const expired = selfClearingGate.takeExpired(Date.now());
+    // One clock for every gate on this tick. They all measure the same silence,
+    // so reading the wall four times only invites them to disagree about it.
+    const now = Date.now();
+    const expired = selfClearingGate.takeExpired(now);
     if (expired) {
       // setInterval can't await, and an unhandled rejection here would crash the
       // process (the callback-boundary hazard AGENTS.md calls out).
@@ -1980,7 +1989,7 @@ export async function spawnTuiAgent({
     }
     // A declined permission dialog ends the turn; once the session is quiet,
     // tell it why and send it back to work.
-    const declined = toolPermissionGate.takeNudge(Date.now(), lastOutputAt);
+    const declined = toolPermissionGate.takeNudge(now, lastOutputAt);
     if (declined) {
       if (pasteController?.resubmit({ text: TOOL_PERMISSION_NUDGE_TEXT, label: 'declined-permission nudge' })) {
         appendLine(`🔁 Nudged the session to continue after declined permission prompt ${declined}`);
@@ -1990,10 +1999,46 @@ export async function spawnTuiAgent({
     // Nudge a session a local-GPU OOM parked. Rides this timer rather than one
     // of its own so the nudge cadence and the fail-over verdict stay on the same
     // clock — and so there is one fewer interval to leak past finish().
-    const nudge = oomNudgeGate.takeNudge(Date.now(), lastOutputAt);
-    if (!nudge) return;
-    if (pasteController?.resubmit({ text: OOM_NUDGE_TEXT, label: 'local-runtime OOM nudge' })) {
-      appendLine(`🔁 Local runtime OOM — nudged the session to continue (attempt ${nudge}/${OOM_NUDGE_MAX_ATTEMPTS})`);
+    const nudge = oomNudgeGate.takeNudge(now, lastOutputAt);
+    if (nudge) {
+      if (pasteController?.resubmit({ text: OOM_NUDGE_TEXT, label: 'local-runtime OOM nudge' })) {
+        appendLine(`🔁 Local runtime OOM — nudged the session to continue (attempt ${nudge}/${OOM_NUDGE_MAX_ATTEMPTS})`);
+      }
+      return;
+    }
+    // Last, and only once no gate above has a say: every one of them describes a
+    // session stalled for a KNOWN reason, and their own silence tests would be
+    // pre-empted by a nudge sent on plain quiet.
+    //
+    // `sessionPhase`, not `isTerminal()`: a finish() parked on the merge-gate
+    // contract check (a `gh` PR probe) sits in 'finishing' for as long as that
+    // network call takes, non-terminal the whole time, and it may yet paste a
+    // nudge of its own. And `promptSubmittedAt`, because before the prompt is
+    // in the promptTimer owns delivery — silence there is startup, not a stall.
+    if (sessionPhase !== 'running' || !promptSubmittedAt) return;
+    const stalled = stallNudgeGate.takeNudge(now, lastOutputAt);
+    if (!stalled) return;
+    // Read the sentinel here rather than on every tick: its watcher polls on its
+    // own clock, so a run can be done-but-not-yet-finalized at this instant, and
+    // this is the only moment the answer is acted on.
+    if (sentinelPresent()) return;
+    if (stalled === 'exhausted') {
+      // Every nudge was ignored, so the session is wedged below its composer
+      // rather than merely stopped. There is no ceiling left to reap it, so say
+      // so loudly and badge the card — an agent nobody can see is stuck is the
+      // condition this gate exists to end, and only a human can end this one.
+      appendLine(`🛑 Session still idle after ${STALL_NUDGE_MAX_ATTEMPTS} nudges — it is not responding; open the Shell tab to take it over`);
+      emitLog('warn', `🛑 TUI agent ${agentId} is wedged — ${STALL_NUDGE_MAX_ATTEMPTS} stall nudges went unanswered`, { agentId });
+      updateAgent(agentId, { metadata: { phase: 'stalled' } }).catch((err) =>
+        emitLog('error', `TUI agent ${agentId} stalled-phase update failed: ${err?.message || err}`, { agentId }));
+      // Re-arm the onData handler's one-shot "phase: working" write, so a
+      // session that wakes up later (a provider call that finally returned)
+      // clears the badge on its next chunk instead of wearing it to the end.
+      hasStartedWorking = false;
+      return;
+    }
+    if (pasteController?.resubmit({ text: STALL_NUDGE_TEXT, label: 'stalled-session nudge' })) {
+      appendLine(`🔁 Session idle with the task unfinished — nudged it to continue (attempt ${stalled}/${STALL_NUDGE_MAX_ATTEMPTS})`);
     }
   }, PROVIDER_SIGNAL_POLL_MS);
 
