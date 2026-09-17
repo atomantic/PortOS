@@ -45,6 +45,8 @@
  * @param {string} [props.id] - Id for the provider `<select>`, when the caller
  *   owns the `<label htmlFor>` (`FormField` injects one onto its first child).
  *   Defaults to a generated id.
+ * @param {string} [props.aria-describedby] - Forwarded to the provider
+ *   `<select>` (`FormField` injects its hint's id the same way).
  * @param {string} [props.label] - Label text (default: "Provider")
  * @param {boolean} [props.disabled] - Disable both selectors
  * @param {boolean} [props.loading] - The caller's provider list hasn't settled
@@ -100,7 +102,7 @@
  *   flow may offer (`['tui']` for a shell launcher, `['api']` for a streaming
  *   caller). Defaults to `selectionPolicy.modes`; omit both for no restriction.
  */
-import { useId, useState } from 'react';
+import { useEffect, useId, useRef, useState } from 'react';
 import {
   COMPOSE_OPTION_VALUE,
   effectiveModelFor,
@@ -144,6 +146,7 @@ export default function ProviderModelSelector({
   onProviderChange,
   onModelChange,
   id: idProp,
+  'aria-describedby': describedBy,
   label = 'Provider',
   disabled = false,
   loading = false,
@@ -171,6 +174,11 @@ export default function ProviderModelSelector({
   // the caller refetches — otherwise the freshly selected id would render as
   // an unknown value the moment the popover closed.
   const [savedPresets, setSavedPresets] = useState([]);
+  // A composed/minted route's model and effort, waiting for the caller to
+  // reflect its provider id (see `selectRoute`).
+  const [pendingRoute, setPendingRoute] = useState(null);
+  const callbacksRef = useRef({ onModelChange, onEffortChange });
+  callbacksRef.current = { onModelChange, onEffortChange };
   const providerAllowed = selectionPolicy?.provider;
   const modelAllowed = selectionPolicy?.model;
   const effortAllowed = selectionPolicy?.effort;
@@ -300,18 +308,30 @@ export default function ProviderModelSelector({
     }
     onProviderChange(value);
   };
-  // A composed route lands in the caller's existing provider field; the
-  // model/effort follow through the same callbacks a pick in the sibling
-  // selects would use, so the caller's own clearing rules (a provider change
-  // resetting the model) run first and are then overridden by the explicit
-  // choice. "Use once" passes the composite id; "Save as preset" passes the
-  // minted preset (whose defaults are the composed model and effort) after
-  // carrying it locally until the caller's list catches up.
+  // A composed route lands in the caller's existing provider field through
+  // `onProviderChange`; its model and effort follow through the same
+  // callbacks a pick in the sibling selects would use — but only AFTER the
+  // caller reflects the new id. Firing all three in one tick would hand
+  // `onModelChange` to a handler that merges over the caller's CURRENT
+  // provider (`onChange({ ...draft, model })`, `persist(providerId, m)`),
+  // which is still the old one until it re-renders, silently putting the
+  // previous provider back. Waiting for `selectedProviderId` to catch up also
+  // lets the caller's own clearing rule (a provider change resetting the
+  // model) run first and then be overridden by the explicit choice. A caller
+  // that never reflects the id simply never gets the model/effort.
   const selectRoute = (id, model, routeEffort) => {
+    setPendingRoute({ id, model: model || '', effort: routeEffort || '' });
     onProviderChange(id);
-    onModelChange?.(model || '');
-    onEffortChange?.(routeEffort || '');
   };
+  useEffect(() => {
+    if (!pendingRoute || pendingRoute.id !== selectedProviderId) return;
+    callbacksRef.current.onModelChange?.(pendingRoute.model);
+    callbacksRef.current.onEffortChange?.(pendingRoute.effort);
+    setPendingRoute(null);
+  }, [pendingRoute, selectedProviderId]);
+  // "Use once" passes the composite id; "Save as preset" passes the minted
+  // preset (whose defaults are the composed model and effort) after carrying
+  // it locally until the caller's list catches up.
   const handleCompose = (compositeId, { model, effort: composedEffort }) => selectRoute(compositeId, model, composedEffort);
   const handlePresetSaved = (preset) => {
     setSavedPresets((prev) => [...prev.filter((p) => p.id !== preset.id), preset]);
@@ -348,6 +368,7 @@ export default function ProviderModelSelector({
           disabled={disabled || loading}
           title={compact ? label : undefined}
           aria-label={compact ? label : undefined}
+          aria-describedby={describedBy}
           className={SELECT_CLASS}
         >
           {/* Rendered even when the caller forces a selection: mid-fetch there

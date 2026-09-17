@@ -90,13 +90,19 @@ describe('ProviderModelSelector — preset-first', () => {
   });
 
   it('opens the compose popover from the compose entry without emitting the sentinel, and emits the composed selection on "Use once"', async () => {
-    const handlers = renderSelector();
+    const { rerender, ...handlers } = renderSelector();
     await composeVia({ harness: 'pi', method: 'tui', service: 'nvidia-nim-free', model: 'nvidia/other', effort: 'high' });
     expect(handlers.onProviderChange).not.toHaveBeenCalled();
     expect(providerSelect().value).toBe('claude-code');
     fireEvent.click(screen.getByRole('button', { name: 'Use once' }));
     expect(handlers.onProviderChange).toHaveBeenCalledWith('pi.tui@nvidia-nim-free');
-    expect(handlers.onModelChange).toHaveBeenCalledWith('nvidia/other');
+    // The model/effort wait for the caller to reflect the new id — a handler
+    // that merges over the caller's current provider would otherwise put the
+    // old provider back (regression: a composed route reverting to the preset).
+    expect(handlers.onModelChange).not.toHaveBeenCalled();
+    expect(handlers.onEffortChange).not.toHaveBeenCalled();
+    rerender({ selectedProviderId: 'pi.tui@nvidia-nim-free' });
+    await waitFor(() => expect(handlers.onModelChange).toHaveBeenCalledWith('nvidia/other'));
     expect(handlers.onEffortChange).toHaveBeenCalledWith('high');
     await waitFor(() => expect(screen.queryByRole('combobox', { name: 'Harness' })).toBeNull());
   });
@@ -135,14 +141,15 @@ describe('ProviderModelSelector — preset-first', () => {
       id: 'pi-nim', name: 'Pi on NIM', type: 'tui', harnessId: 'pi', enabled: true,
       defaultModel: 'nvidia/other', effort: 'high', models: ['nvidia/example', 'nvidia/other'],
     });
-    const handlers = renderSelector();
+    const { rerender, ...handlers } = renderSelector();
     await composeVia({ harness: 'pi', method: 'tui', service: 'nvidia-nim-free', model: 'nvidia/other', effort: 'high' });
     fireEvent.click(screen.getByRole('button', { name: 'Save as preset…' }));
     fireEvent.change(screen.getByRole('textbox', { name: 'Preset name' }), { target: { value: 'Pi on NIM' } });
     fireEvent.click(screen.getByRole('button', { name: 'Confirm save' }));
     await waitFor(() => expect(handlers.onProviderChange).toHaveBeenCalledWith('pi-nim'));
     expect(api.createProviderPreset).toHaveBeenCalledWith({ compositeId: 'pi.tui@nvidia-nim-free', name: 'Pi on NIM', model: 'nvidia/other', effort: 'high' });
-    expect(handlers.onModelChange).toHaveBeenCalledWith('nvidia/other');
+    rerender({ selectedProviderId: 'pi-nim' });
+    await waitFor(() => expect(handlers.onModelChange).toHaveBeenCalledWith('nvidia/other'));
     expect(handlers.onEffortChange).toHaveBeenCalledWith('high');
   });
 
