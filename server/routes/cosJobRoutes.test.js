@@ -590,7 +590,7 @@ describe('CoS Job Routes', () => {
       // reaches it — so without the changed value named here, aiming this job
       // somewhere else while the first run is still queued is silently dropped.
       expect(cos.addTask).toHaveBeenCalledWith(
-        expect.objectContaining({ description: 'Review — Subject: One-off subject' }),
+        expect.objectContaining({ description: expect.stringContaining('Review — Subject: One-off subject') }),
         'internal',
         expect.anything()
       );

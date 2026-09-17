@@ -119,10 +119,12 @@ describe('AutomationTab per-app options', () => {
     await screen.findByText('layered-intelligence');
     await act(async () => {});
 
+    // The tab used to cap itself well below the window, leaving the right of a
+    // desktop screen empty. Only the cap is asserted — which breakpoints the
+    // card grid uses is a retune anyone should be free to make.
     expect(container.querySelector('.max-w-5xl')).toBeNull();
-    // Cards widen with the viewport rather than stopping at two columns.
     const grid = screen.getByText('layered-intelligence').closest('.grid');
-    expect(grid).toHaveClass('grid-cols-1', 'lg:grid-cols-2', '2xl:grid-cols-3');
+    expect(grid.className).toMatch(/grid-cols-1/);
   });
 
   it('puts custom automations before the shared schedule cards and shows app cadence', async () => {

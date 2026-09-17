@@ -312,7 +312,19 @@ export default function JobCard({
   const savedFormValuesKey = JSON.stringify(savedFormValues);
   useEffect(() => { setRunValues(null); }, [savedFormValuesKey]);
   const runFormValues = runValues ?? savedFormValues;
-  const runValuesDirty = runValues !== null && JSON.stringify(runValues) !== savedFormValuesKey;
+  // Compare the way the server's `isSupplied` does: absent, null and blank are
+  // the same answer, and a checkbox is its truthiness. An input the job has no
+  // stored value for is seeded with a blank, so a raw `!==` would read toggling
+  // one on and back off as a real change — shipping a value that adds a prompt
+  // line the run-as-saved prompt does not have, for an edit the user undid.
+  const sameAsSaved = (a, b) => a === b
+    || (typeof a === 'boolean' || typeof b === 'boolean'
+      ? Boolean(a) === Boolean(b)
+      : String(a ?? '').trim() === String(b ?? '').trim());
+  const changedRunKeys = runValues === null
+    ? []
+    : Object.keys(runValues).filter(key => !sameAsSaved(runValues[key], savedFormValues[key]));
+  const runValuesDirty = changedRunKeys.length > 0;
 
   const handleTrigger = () => {
     // The API accepts a half-filled configuration on purpose (a job is saved
@@ -330,10 +342,9 @@ export default function JobCard({
     // another surface since this card rendered. An empty projection means "run
     // as saved". Always an options object, so a caller can forward it to the API
     // wrapper unconditionally.
-    const changedRunValues = Object.fromEntries(
-      Object.keys(runValues || {}).filter(key => runValues[key] !== savedFormValues[key]).map(key => [key, runValues[key]])
-    );
-    onTrigger(job.id, Object.keys(changedRunValues).length ? { formValues: changedRunValues } : {});
+    onTrigger(job.id, runValuesDirty
+      ? { formValues: Object.fromEntries(changedRunKeys.map(key => [key, runValues[key]])) }
+      : {});
   };
 
   const startEditing = () => {

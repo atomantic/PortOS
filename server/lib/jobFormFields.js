@@ -185,37 +185,32 @@ export function describeReaimedValues(fields, savedValues, runValues) {
     && comparableValue(field, runValues?.[field.key]) !== comparableValue(field, savedValues?.[field.key]));
   if (changed.length === 0) return '';
 
-  // Whether the readable form below dropped anything — a clipped value, a
-  // collapsed newline, or a field past the cap. It decides the digest at the end.
-  let lossy = changed.length > REAIM_MAX_FIELDS;
-
   const parts = changed.slice(0, REAIM_MAX_FIELDS).map((field) => {
     const label = String(field.label || field.key).trim();
     const raw = comparableValue(field, runValues?.[field.key]).trim();
     // Collapse newlines: this rides on the description's FIRST line, and a
     // multi-line value would push the rest out of the dedupe key entirely.
     const text = raw.replace(/\s+/g, ' ');
-    if (text !== raw) lossy = true;
     if (!text) return `${label}: (cleared)`;
-    if (text.length > REAIM_VALUE_CHARS) {
-      lossy = true;
-      return `${label}: ${text.slice(0, REAIM_VALUE_CHARS)}…`;
-    }
+    if (text.length > REAIM_VALUE_CHARS) return `${label}: ${text.slice(0, REAIM_VALUE_CHARS)}…`;
     return `${label}: ${text}`;
   });
   if (changed.length > REAIM_MAX_FIELDS) parts.push(`+${changed.length - REAIM_MAX_FIELDS} more`);
 
-  // A clipped or truncated tag can render two genuinely different aims
-  // identically — and an identical first line is precisely what gets deduped
-  // away, which is the silent drop this whole function exists to prevent. When
-  // the readable form lost information, carry a digest of the FULL changed set
-  // so the identity stays distinct even though the label no longer shows why.
-  if (lossy) {
-    // JSON rather than a joined string: any separator character can itself occur
-    // inside a value, which would let two different changed sets encode alike.
-    const full = JSON.stringify(changed.map((field) => [field.key, comparableValue(field, runValues?.[field.key])]));
-    parts.push(createHash('sha1').update(full).digest('hex').slice(0, 8));
-  }
+  // ALWAYS carry a digest of the full changed set — the readable part above is
+  // for the human, this is the identity. The dedupe key is
+  // `firstLine(description).toLowerCase()`, and the readable form is a
+  // case-folded, separator-ambiguous, clipped encoding: `Subject: acme` and
+  // `Subject: Acme` collide, as do one value containing `, ` and two fields that
+  // reassemble the same string, as do two long values sharing a clipped prefix.
+  // Any of those is a run silently rejected as a duplicate while the caller is
+  // told it was queued — the exact failure this function exists to prevent — so
+  // the digest is unconditional rather than gated on a guess about which
+  // renderings happened to lose information.
+  // JSON rather than a joined string: any separator character can itself occur
+  // inside a value, which would let two different changed sets encode alike.
+  const full = JSON.stringify(changed.map((field) => [field.key, comparableValue(field, runValues?.[field.key])]));
+  parts.push(createHash('sha1').update(full).digest('hex').slice(0, 8));
   return parts.join(', ');
 }
 

@@ -128,12 +128,12 @@ describe('describeReaimedValues', () => {
   });
 
   it('names a changed value by its label, and a cleared one as cleared', () => {
-    expect(describeReaimedValues([subject], { subject: 'old' }, { subject: 'new' })).toBe('Subject: new');
-    expect(describeReaimedValues([subject], { subject: 'old' }, { subject: '' })).toBe('Subject: (cleared)');
+    expect(describeReaimedValues([subject], { subject: 'old' }, { subject: 'new' })).toContain('Subject: new');
+    expect(describeReaimedValues([subject], { subject: 'old' }, { subject: '' })).toContain('Subject: (cleared)');
   });
 
   it('renders a select by its option label, not its stored value', () => {
-    expect(describeReaimedValues([depth], { depth: '' }, { depth: 'deep' })).toBe('Depth: Deep dive');
+    expect(describeReaimedValues([depth], { depth: '' }, { depth: 'deep' })).toContain('Depth: Deep dive');
   });
 
   it('never emits a newline, so the whole tag stays inside the deduped first line', () => {
@@ -150,6 +150,21 @@ describe('describeReaimedValues', () => {
 
   // The point of the tag: two different aims must never render identically, or
   // the second is rejected as a duplicate and silently never runs.
+  // The dedupe key is lowercased, so a tag that differs only by case is not a
+  // difference at all by the time addTask compares it.
+  it('stays distinct when two aims differ only in letter case', () => {
+    const first = describeReaimedValues([subject], { subject: 'x' }, { subject: 'ACME' });
+    const second = describeReaimedValues([subject], { subject: 'x' }, { subject: 'acme' });
+    expect(first.toLowerCase()).not.toBe(second.toLowerCase());
+  });
+
+  it('stays distinct when one value reassembles the separator of two fields', () => {
+    const two = [subject, { key: 'note', label: 'C', type: 'text' }];
+    const first = describeReaimedValues(two, {}, { subject: 'B', note: 'D' });
+    const second = describeReaimedValues(two, {}, { subject: 'B, C: D' });
+    expect(first.toLowerCase()).not.toBe(second.toLowerCase());
+  });
+
   it('stays distinct when the readable form clips a long value', () => {
     const shared = 'x'.repeat(60);
     const first = describeReaimedValues([brief], { brief: '' }, { brief: `${shared}AAA` });

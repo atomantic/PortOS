@@ -109,6 +109,21 @@ describe('JobCard on-demand cadence', () => {
     expect(screen.getByText('On Demand')).toBeTruthy();
   });
 
+  it('hands the configuration form to the editor while editing, never showing two copies', () => {
+    renderCard({
+      ...ON_DEMAND_JOB,
+      formFields: [{ key: 'subject', label: 'Subject', type: 'text' }],
+      formValues: { subject: 'Saved subject' }
+    });
+
+    // The card's ad-hoc panel edits THIS RUN; the editor's copy edits what the
+    // task is saved with. Two live copies of one form is a merge nobody wins, so
+    // exactly one is on screen at a time.
+    expect(screen.getAllByLabelText('Subject')).toHaveLength(1);
+    fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
+    expect(screen.getAllByLabelText('Subject')).toHaveLength(1);
+  });
+
   it('offers the cadence and hides the time input once it is selected', () => {
     renderCard({ ...ON_DEMAND_JOB, interval: 'daily', intervalMs: 86400000, scheduledTime: '09:00' });
     fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
