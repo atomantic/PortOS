@@ -90,7 +90,7 @@ function TaskForm({ form, setForm, onSave, onCancel, saveLabel, timezone, provid
   const update = (key, val) => setForm(f => ({ ...f, [key]: val }));
 
   return (
-    <div className="space-y-3 bg-port-card border border-port-accent/50 rounded-lg p-4">
+    <div className="space-y-3 bg-port-card border border-port-accent/50 rounded-lg p-4 max-w-4xl">
       <FormField label="Task name *">
         <input
           type="text"
@@ -256,11 +256,13 @@ export default function CustomTasksSection({ appId, appName, providerCatalog, ac
     setTasks(prev => prev.map(t => t.id === jobId ? { ...t, enabled: result.job.enabled } : t));
   };
 
-  const handleTrigger = async (jobId) => {
+  // `runOptions` carries the card's ad-hoc run configuration, when the task
+  // declares one — the values apply to this run only and are not saved.
+  const handleTrigger = async (jobId, runOptions) => {
     const job = tasks.find(task => task.id === jobId);
     if (!job) return;
     setTriggering(jobId);
-    const result = await api.triggerCosJob(jobId).catch(() => null);
+    const result = await api.triggerCosJob(jobId, runOptions).catch(() => null);
     setTriggering(null);
     if (!result) return; // HTTP/network error already toasted by the api helper
     if (result.status === 'skipped') {
@@ -316,7 +318,7 @@ export default function CustomTasksSection({ appId, appName, providerCatalog, ac
           </div>
         )
       ) : (
-        <div className="space-y-2">
+        <div className="grid grid-cols-1 xl:grid-cols-2 gap-3 items-start">
           {tasks.map(job => (
             <JobCard
               key={job.id}

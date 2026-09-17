@@ -108,6 +108,23 @@ describe('AutomationTab per-app options', () => {
     expect(within(row).getByRole('button', { name: 'Run Now' })).toBeEnabled();
   });
 
+  it('lets the task cards use the full desktop width instead of a narrow column', async () => {
+    api.getAppTaskTypes.mockResolvedValue({ taskTypeOverrides: {} });
+    api.getCosSchedule.mockResolvedValue(SCHEDULE);
+    api.getCosStatus.mockResolvedValue({ paused: false });
+    api.getProviders.mockResolvedValue(PROVIDERS);
+    api.getCosJobs.mockResolvedValue({ jobs: [] });
+    api.getSettings.mockResolvedValue({ timezone: 'UTC' });
+    const { container } = render(<AutomationTab appId="app-1" appName="MyApp" />);
+    await screen.findByText('layered-intelligence');
+    await act(async () => {});
+
+    expect(container.querySelector('.max-w-5xl')).toBeNull();
+    // Cards widen with the viewport rather than stopping at two columns.
+    const grid = screen.getByText('layered-intelligence').closest('.grid');
+    expect(grid).toHaveClass('grid-cols-1', 'lg:grid-cols-2', '2xl:grid-cols-3');
+  });
+
   it('puts custom automations before the shared schedule cards and shows app cadence', async () => {
     await renderTab({ security: { enabled: true, interval: 'on-demand' } });
     const custom = screen.getByText('Custom Tasks');

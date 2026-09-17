@@ -10,7 +10,7 @@ import { computeNextJobRun } from '../services/autonomousJobs/scheduler.js';
 import { parseCronToNextRun, isValidRecurrence } from '../services/eventScheduler.js';
 import { getUserTimezone } from '../services/userTimezone.js';
 import { asyncHandler, ServerError, failValidation } from '../lib/errorHandler.js';
-import { createCosJobSchema, updateCosJobSchema } from '../lib/validation.js';
+import { createCosJobSchema, updateCosJobSchema, triggerCosJobSchema } from '../lib/validation.js';
 import { getTaskDataInputCatalog } from '../lib/taskDataInputCatalog.js';
 import { generatedJobTaskFields } from '../lib/autonomousJobTask.js';
 
@@ -175,6 +175,10 @@ router.post('/jobs/:id/trigger', asyncHandler(async (req, res) => {
     throw new ServerError('Job not found', { status: 404, code: 'NOT_FOUND' });
   }
 
+  const parsedTrigger = triggerCosJobSchema.safeParse(req.body || {});
+  if (!parsedTrigger.success) failValidation(parsedTrigger);
+  const { formValues: runFormValues } = parsedTrigger.data;
+
   // Shell jobs execute the command directly
   if (autonomousJobs.isShellJob(job)) {
     const result = await autonomousJobs.executeShellJob(job);
@@ -193,7 +197,14 @@ router.post('/jobs/:id/trigger', asyncHandler(async (req, res) => {
   // Generate task and add to CoS internal task queue
   // Job execution is recorded via the job:spawned event when the agent actually starts
   // Manual triggers always bypass approval — the user explicitly requested execution
-  const task = await autonomousJobs.generateTaskFromJob(job);
+  // A one-off run configuration re-aims THIS run only: the values are merged
+  // over the stored ones for prompt assembly and the job on disk is left alone,
+  // so the card's inputs are an ad-hoc dial rather than a silent edit. Merged
+  // (not replaced) so a field the caller didn't render keeps its saved value.
+  const jobForRun = runFormValues
+    ? { ...job, formValues: { ...job.formValues, ...runFormValues } }
+    : job;
+  const task = await autonomousJobs.generateTaskFromJob(jobForRun);
   // Forward the app scope + git-workflow options from the generated task's
   // metadata. addTask maps these top-level keys back onto metadata; without
   // them an app-scoped job triggered manually would run in the PortOS root

@@ -62,7 +62,7 @@ describe('JobCard machine output', () => {
       lastExitCode: 1,
       lastOutput
     });
-    fireEvent.click(screen.getByRole('button', { name: 'Expand' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Details' }));
 
     const pre = screen.getByText(lastOutput);
     expect(pre.tagName).toBe('PRE');

@@ -134,9 +134,11 @@ export default function JobsTab() {
     }
   };
 
-  const handleTrigger = async (jobId) => {
+  // `runOptions` carries the card's ad-hoc run configuration, when the job
+  // declares one — the values apply to this run only and are not saved.
+  const handleTrigger = async (jobId, runOptions) => {
     toast.loading('Triggering job...', { id: 'job-trigger' });
-    const result = await api.triggerCosJob(jobId, { silent: true }).catch(err => {
+    const result = await api.triggerCosJob(jobId, { ...runOptions, silent: true }).catch(err => {
       toast.error(err.message, { id: 'job-trigger' });
       return null;
     });

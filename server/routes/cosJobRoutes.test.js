@@ -533,6 +533,51 @@ describe('CoS Job Routes', () => {
       expect(cos.forceSpawnTask).toHaveBeenCalledWith('task-1');
     });
 
+    it('re-aims one run with the request body values without touching the stored job', async () => {
+      const storedJob = {
+        id: 'j1',
+        type: 'agent',
+        name: 'Review',
+        formFields: [
+          { key: 'subject', label: 'Subject', type: 'text' },
+          { key: 'depth', label: 'Depth', type: 'text' }
+        ],
+        formValues: { subject: 'Saved subject', depth: 'shallow' }
+      };
+      autonomousJobs.getJob.mockResolvedValue(storedJob);
+      autonomousJobs.isShellJob.mockReturnValue(false);
+      autonomousJobs.isScriptJob.mockReturnValue(false);
+      autonomousJobs.generateTaskFromJob.mockResolvedValue({ description: 'Review', priority: 'MEDIUM' });
+      cos.addTask.mockResolvedValue({ id: 'task-1' });
+      cos.forceSpawnTask.mockResolvedValue({ success: true, taskId: 'task-1' });
+
+      const response = await request(app)
+        .post('/api/cos/jobs/j1/trigger')
+        .send({ formValues: { subject: 'One-off subject' } });
+
+      expect(response.status).toBe(200);
+      // Merged over the stored values for THIS run: the untouched field keeps
+      // its saved value, and nothing is written back to the job.
+      expect(autonomousJobs.generateTaskFromJob).toHaveBeenCalledWith(expect.objectContaining({
+        formValues: { subject: 'One-off subject', depth: 'shallow' }
+      }));
+      expect(storedJob.formValues).toEqual({ subject: 'Saved subject', depth: 'shallow' });
+      expect(autonomousJobs.updateJob).not.toHaveBeenCalled();
+    });
+
+    it('rejects a malformed one-off run configuration', async () => {
+      autonomousJobs.getJob.mockResolvedValue({ id: 'j1', type: 'agent', name: 'Review' });
+      autonomousJobs.isShellJob.mockReturnValue(false);
+      autonomousJobs.isScriptJob.mockReturnValue(false);
+
+      const response = await request(app)
+        .post('/api/cos/jobs/j1/trigger')
+        .send({ formValues: { subject: { nested: true } } });
+
+      expect(response.status).toBe(400);
+      expect(autonomousJobs.generateTaskFromJob).not.toHaveBeenCalled();
+    });
+
     it('should forward app scope + git options into addTask for an app-scoped agent job', async () => {
       autonomousJobs.getJob.mockResolvedValue({ id: 'j1', type: 'agent', name: 'App Review' });
       autonomousJobs.isShellJob.mockReturnValue(false);

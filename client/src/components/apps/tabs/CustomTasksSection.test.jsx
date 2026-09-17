@@ -263,6 +263,52 @@ describe('CustomTasksSection trigger outcomes', () => {
     expect(toast.error).not.toHaveBeenCalled();
   });
 
+  it('runs a task with values typed into the card, without saving them to the task', async () => {
+    api.getCosJobs.mockResolvedValue({
+      jobs: [{
+        ...task,
+        formFields: [{ key: 'subject', label: 'Subject', type: 'text' }],
+        formValues: { subject: 'Saved subject' }
+      }],
+      dataInputCatalog: []
+    });
+    api.triggerCosJob.mockResolvedValue({ success: true, status: 'queued', started: true });
+
+    render(<CustomTasksSection appId="app-1" appName="Example App" />);
+    await screen.findByText('Example Task');
+
+    // The card exposes the field itself — no Edit round-trip to re-aim a run.
+    const subject = screen.getByLabelText('Subject');
+    expect(subject).toHaveValue('Saved subject');
+    fireEvent.change(subject, { target: { value: 'One-off subject' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Run now' }));
+
+    await waitFor(() => expect(api.triggerCosJob).toHaveBeenCalledWith('job-1', {
+      formValues: { subject: 'One-off subject' }
+    }));
+    expect(api.updateCosJob).not.toHaveBeenCalled();
+  });
+
+  it('blocks an ad-hoc run that leaves a required card field blank', async () => {
+    api.getCosJobs.mockResolvedValue({
+      jobs: [{
+        ...task,
+        formFields: [{ key: 'subject', label: 'Subject', type: 'text', required: true }],
+        formValues: { subject: 'Saved subject' }
+      }],
+      dataInputCatalog: []
+    });
+
+    render(<CustomTasksSection appId="app-1" appName="Example App" />);
+    await screen.findByText('Example Task');
+
+    fireEvent.change(screen.getByLabelText('Subject *'), { target: { value: '   ' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Run now' }));
+
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith('Fill in Subject'));
+    expect(api.triggerCosJob).not.toHaveBeenCalled();
+  });
+
   it('keeps Run now available for a disabled recurring schedule', async () => {
     api.getCosJobs.mockResolvedValue({ jobs: [{ ...task, enabled: false }] });
     api.triggerCosJob.mockResolvedValue({ success: true, status: 'queued' });
@@ -274,7 +320,7 @@ describe('CustomTasksSection trigger outcomes', () => {
     expect(runNow).not.toBeDisabled();
     fireEvent.click(runNow);
 
-    await waitFor(() => expect(api.triggerCosJob).toHaveBeenCalledWith('job-1'));
+    await waitFor(() => expect(api.triggerCosJob).toHaveBeenCalledWith('job-1', {}));
     expect(api.toggleCosJob).not.toHaveBeenCalled();
   });
 });

@@ -4,7 +4,7 @@ import FormField from '../ui/FormField';
 import ToggleSwitch from '../ToggleSwitch';
 
 /**
- * A job's own configuration form — the two halves of it, plus the read-only view.
+ * A job's own configuration form — the two halves of it.
  *
  * `JobFormFieldsEditor` edits the DEFINITIONS (what inputs this job has);
  * `JobFormValueInputs` renders those definitions as real inputs and edits the
@@ -160,13 +160,13 @@ export function JobFormFieldsEditor({ fields = [], onChange }) {
                   />
                 </FormField>
               </div>
-              <div className="flex flex-col gap-1 pt-5">
+              <div className="flex flex-col pt-5">
                 <button
                   type="button"
                   aria-label={`Move ${field.label || field.key || 'field'} up`}
                   onClick={() => move(index, -1)}
                   disabled={index === 0}
-                  className="p-1 text-gray-500 hover:text-white disabled:opacity-30 disabled:hover:text-gray-500"
+                  className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1 text-gray-500 hover:text-white disabled:opacity-30 disabled:hover:text-gray-500"
                 >
                   <ChevronUp size={14} />
                 </button>
@@ -175,7 +175,7 @@ export function JobFormFieldsEditor({ fields = [], onChange }) {
                   aria-label={`Move ${field.label || field.key || 'field'} down`}
                   onClick={() => move(index, 1)}
                   disabled={index === fields.length - 1}
-                  className="p-1 text-gray-500 hover:text-white disabled:opacity-30 disabled:hover:text-gray-500"
+                  className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1 text-gray-500 hover:text-white disabled:opacity-30 disabled:hover:text-gray-500"
                 >
                   <ChevronDown size={14} />
                 </button>
@@ -256,7 +256,11 @@ export function JobFormFieldsEditor({ fields = [], onChange }) {
   );
 }
 
-/** Fill in the declared fields. Renders nothing when the job declares none. */
+/**
+ * Fill in the declared fields. Renders nothing when the job declares none.
+ * `title` may be null for a host that labels the section itself (the card's
+ * inline ad-hoc run panel).
+ */
 export function JobFormValueInputs({ fields = [], values = {}, onChange, title = 'Run configuration' }) {
   if (!fields.length) return null;
 
@@ -264,7 +268,7 @@ export function JobFormValueInputs({ fields = [], values = {}, onChange, title =
 
   return (
     <div>
-      <span className="text-sm text-gray-400 block mb-2">{title}</span>
+      {title && <span className="text-sm text-gray-400 block mb-2">{title}</span>}
       <div className="space-y-2">
         {fields.map((field, index) => {
           // `??` rather than `||`: a stored `false` or `0` is a real value and
@@ -321,36 +325,6 @@ export function JobFormValueInputs({ fields = [], values = {}, onChange, title =
           );
         })}
       </div>
-    </div>
-  );
-}
-
-/** Read-only summary of what a job is currently aimed at. */
-export function JobFormValuesSummary({ fields = [], values = {} }) {
-  const filled = fields
-    .map((field) => {
-      const value = values?.[field.key];
-      if (value == null) return null;
-      if (typeof value === 'boolean') return { key: field.key, label: field.label || field.key, text: value ? 'Yes' : 'No' };
-      const text = String(value).trim();
-      if (!text) return null;
-      const option = field.options?.find((candidate) => candidate.value === text);
-      return { key: field.key, label: field.label || field.key, text: option?.label || text };
-    })
-    .filter(Boolean);
-  if (!filled.length) return null;
-
-  return (
-    <div>
-      <span className="text-xs text-gray-500 uppercase tracking-wider">Run configuration</span>
-      <dl className="mt-1 space-y-1">
-        {filled.map(({ key, label, text }) => (
-          <div key={key} className="flex gap-2 text-xs">
-            <dt className="text-gray-500 shrink-0">{label}:</dt>
-            <dd className="text-gray-300 whitespace-pre-wrap break-words min-w-0">{text}</dd>
-          </div>
-        ))}
-      </dl>
     </div>
   );
 }

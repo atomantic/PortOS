@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Play, Trash2, ChevronDown, ChevronUp, Clock, ToggleLeft, ToggleRight, Edit3, Save, X, Terminal } from 'lucide-react';
 import toast from '../ui/Toast';
 import * as api from '../../services/api';
@@ -7,11 +7,15 @@ import { DEFAULT_CRON, describeCron, describeRecurrence, parseCronToRecurrence, 
 import CronSchedulePicker from '../CronSchedulePicker';
 import AgentJobProviderFields, { hasRunnableAgentProvider } from './AgentJobProviderFields';
 import { AGENT_OPTIONS, agentOptionButtonClass } from './constants';
+import { triggerButtonClass } from './tabs/schedule/scheduleConstants';
 import InlineConfirmRow from '../ui/InlineConfirmRow';
 import FormField from '../ui/FormField';
 import { useConfirmDelete } from '../../hooks/useConfirmDelete';
 import TaskDataInputs from './TaskDataInputs';
-import { JobFormFieldsEditor, JobFormValueInputs, JobFormValuesSummary, missingRequiredJobFormFields } from './JobFormFields';
+import { JobFormFieldsEditor, JobFormValueInputs, missingRequiredJobFormFields } from './JobFormFields';
+
+// Footer actions beside Run now — same shape, quieter than the accent trigger.
+const SECONDARY_ACTION_CLASS = 'flex items-center gap-1.5 px-3 py-1.5 text-sm rounded text-gray-300 hover:text-white hover:bg-port-border/50 transition-colors';
 
 const SCHEDULE_MODE_OPTIONS = [
   { value: 'interval', label: 'Interval' },
@@ -286,11 +290,43 @@ export default function JobCard({
   const [expanded, setExpanded] = useState(false);
   const [editing, setEditing] = useState(false);
   const [editData, setEditData] = useState({});
+  // The ad-hoc dial for the next Run now. `null` = "whatever the job is saved
+  // with", which is why this is a nullable override rather than a copy: a value
+  // the user never touched must keep tracking the saved one, so an edit made in
+  // the drawer (or another surface) is picked up instead of pinned to whatever
+  // the card happened to mount with.
+  const [runValues, setRunValues] = useState(null);
   const { isConfirming, requestDelete, cancelDelete, confirmDelete } = useConfirmDelete();
   const hasFixedApp = typeof fixedAppId === 'string' && fixedAppId.length > 0;
   const isShell = job.type === 'shell';
   const isScript = job.type === 'script';
   const appName = job.appId ? (apps.find(a => a.id === job.appId)?.name || job.appId) : null;
+
+  // The job's own configuration form, rendered inline on the card so a one-off
+  // run can be re-aimed without opening the editor. Shell/script jobs have no
+  // prompt for the values to reach, so they never declare any.
+  const runFormFields = isAgentJobType(job.type) ? (job.formFields || []) : [];
+  const savedFormValues = job.formValues || {};
+  // A stable signature, not the object identity: every refetch hands back a new
+  // object, which would clear the dial the user is filling in on every poll.
+  const savedFormValuesKey = JSON.stringify(savedFormValues);
+  useEffect(() => { setRunValues(null); }, [savedFormValuesKey]);
+  const runFormValues = runValues ?? savedFormValues;
+  const runValuesDirty = runValues !== null && JSON.stringify(runValues) !== savedFormValuesKey;
+
+  const handleTrigger = () => {
+    // The API accepts a half-filled configuration on purpose (a job is saved
+    // before it is aimed), so "required" is only real where it is collected —
+    // here, the same gate the save path applies.
+    const missing = missingRequiredJobFormFields(runFormFields, runFormValues);
+    if (missing.length) {
+      toast.error(`Fill in ${missing.map(field => field.label || field.key).join(', ')}`);
+      return;
+    }
+    // Always an options object, so a caller can forward it to the API wrapper
+    // unconditionally; a job with no declared fields sends no configuration.
+    onTrigger(job.id, runFormFields.length ? { formValues: runFormValues } : {});
+  };
 
   const startEditing = () => {
     const base = {
@@ -364,10 +400,10 @@ export default function JobCard({
     : (!job.lastRun || (Date.now() - new Date(job.lastRun).getTime() >= job.intervalMs)));
 
   return (
-    <div className={`bg-port-card border rounded-lg transition-colors ${
+    <div className={`flex flex-col bg-port-card border rounded-lg transition-colors ${
       job.enabled ? 'border-port-border' : 'border-port-border/50 opacity-60'
     }`}>
-      <div className="flex items-center gap-3 p-4">
+      <div className="flex items-start gap-3 p-4">
         <button
           onClick={() => onToggle(job.id)}
           className={`shrink-0 transition-colors ${job.enabled ? 'text-port-success' : 'text-gray-600'}`}
@@ -417,35 +453,39 @@ export default function JobCard({
             )}
           </div>
         </div>
-
-        <div className="flex items-center gap-2">
-          <button
-            onClick={() => onTrigger(job.id)}
-            disabled={editing || triggering}
-            className={`min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1.5 transition-colors text-gray-500 ${editing || triggering ? 'opacity-50 cursor-not-allowed' : 'hover:text-port-accent'}`}
-            title={editing ? 'Save changes before running job' : triggering ? 'Triggering job' : 'Run now'}
-            aria-label={editing ? 'Save changes before running job' : triggering ? 'Triggering job' : 'Run now'}
-          >
-            <Play size={14} />
-          </button>
-          <button
-            onClick={startEditing}
-            className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1.5 text-gray-500 hover:text-white transition-colors"
-            title="Edit"
-            aria-label="Edit"
-          >
-            <Edit3 size={14} />
-          </button>
-          <button
-            onClick={() => setExpanded(!expanded)}
-            className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1.5 text-gray-500 hover:text-white transition-colors"
-            title={expanded ? 'Collapse' : 'Expand'}
-            aria-label={expanded ? 'Collapse' : 'Expand'}
-          >
-            {expanded ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
-          </button>
-        </div>
       </div>
+
+      {/* Ad-hoc run configuration — the inputs the job declares, right on the
+          card, so an on-demand run can be re-aimed without opening the editor.
+          Hidden while editing: the edit form renders the same fields as the
+          SAVED values, and two live copies of one form is a merge nobody wins. */}
+      {runFormFields.length > 0 && !editing && (
+        <div className="border-t border-port-border px-4 py-3 space-y-2">
+          <div className="flex items-center justify-between gap-2">
+            <span className="text-xs text-gray-500 uppercase tracking-wider">Run configuration</span>
+            {runValuesDirty && (
+              <button
+                type="button"
+                onClick={() => setRunValues(null)}
+                className="text-xs text-gray-500 hover:text-white transition-colors"
+              >
+                Reset to saved
+              </button>
+            )}
+          </div>
+          <JobFormValueInputs
+            fields={runFormFields}
+            values={runFormValues}
+            onChange={setRunValues}
+            title={null}
+          />
+          <p className="text-xs text-gray-500">
+            {runValuesDirty
+              ? 'These values apply to the next Run now only — the saved task is unchanged.'
+              : 'Change these and press Run now for a one-off run; Edit changes what the task is saved with.'}
+          </p>
+        </div>
+      )}
 
       {expanded && (
         <div className="border-t border-port-border p-4 space-y-3">
@@ -635,7 +675,6 @@ export default function JobCard({
                   <pre className="mt-2 p-3 bg-port-bg border border-port-border rounded-lg text-xs text-gray-400 font-mono whitespace-pre-wrap break-all max-h-48 overflow-y-auto">{job.lastOutput}</pre>
                 </details>
               )}
-              {!isShell && !isScript && <JobFormValuesSummary fields={job.formFields || []} values={job.formValues || {}} />}
               {!isShell && !isScript && (
                 <details className="group">
                   <summary className="text-xs text-gray-500 cursor-pointer hover:text-gray-300 transition-colors">View prompt template</summary>
@@ -664,6 +703,45 @@ export default function JobCard({
           )}
         </div>
       )}
+
+      {/* Footer actions — labeled, on their own row, so a job card reads like
+          the scheduled-task cards it sits beside rather than a list row with
+          three unlabeled glyphs. `mt-auto` keeps the row on the bottom edge
+          when cards of unequal height share a grid row. */}
+      <div className="flex items-center gap-2 mt-auto px-4 py-2.5 border-t border-port-border">
+        <button
+          type="button"
+          onClick={handleTrigger}
+          disabled={editing || triggering}
+          className={triggerButtonClass(editing || triggering)}
+          title={editing ? 'Save changes before running job' : triggering ? 'Triggering job' : 'Run now'}
+          aria-label={editing ? 'Save changes before running job' : triggering ? 'Triggering job' : 'Run now'}
+        >
+          <Play size={14} />
+          {triggering ? 'Sending…' : 'Run now'}
+        </button>
+        <button
+          type="button"
+          onClick={startEditing}
+          className={SECONDARY_ACTION_CLASS}
+          title="Edit"
+          aria-label="Edit"
+        >
+          <Edit3 size={14} />
+          Edit
+        </button>
+        <button
+          type="button"
+          onClick={() => setExpanded(!expanded)}
+          aria-expanded={expanded}
+          className={`ml-auto ${SECONDARY_ACTION_CLASS}`}
+          title={expanded ? 'Hide details' : 'Details'}
+          aria-label={expanded ? 'Hide details' : 'Details'}
+        >
+          {expanded ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+          {expanded ? 'Hide details' : 'Details'}
+        </button>
+      </div>
     </div>
   );
 }
