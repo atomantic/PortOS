@@ -33,7 +33,7 @@ export function emitLog(level, message, data = {}, prefix = '') {
     const prefixStr = prefix ? ` ${prefix}` : '';
     const logFn = level === 'error' ? console.error : level === 'warn' ? console.warn : console.log;
     const consoleArgs = [`${emoji}${prefixStr} ${message}`];
-    if (data.stack) consoleArgs.push(data.stack);
+    if (data?.stack) consoleArgs.push(data.stack);
     logFn(...consoleArgs);
   }
   cosEvents.emit('log', logEntry);
