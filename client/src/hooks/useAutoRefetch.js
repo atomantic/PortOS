@@ -47,6 +47,11 @@ import { useVisibilityEvent } from './useVisibilityEvent.js';
  *   erasing the last good render checks `error` alongside `data` rather than
  *   inferring staleness from an empty/falsy `data`.
  */
+// Normalize whatever a rejected fetchFn threw (an Error, or any other value —
+// a caller can reject with a plain string/object) into a real Error so
+// `error.message` is always safe to read.
+const toFetchError = (err) => (err instanceof Error ? err : new Error(String(err ?? 'Auto-refetch failed')));
+
 export function useAutoRefetch(fetchFn, intervalMs, options = {}) {
   const { enabled = true, immediate = true, compare, pollOnly = false } = options;
   const [data, setData] = useState(null);
@@ -89,7 +94,7 @@ export function useAutoRefetch(fetchFn, intervalMs, options = {}) {
       console.warn(`⚠️ Auto-refetch failed: ${err?.message ?? String(err)}`);
       if (!pollOnly) {
         setLoading(false);
-        setError(err instanceof Error ? err : new Error(String(err ?? 'Auto-refetch failed')));
+        setError(toFetchError(err));
       }
       return undefined;
     }
@@ -116,7 +121,7 @@ export function useAutoRefetch(fetchFn, intervalMs, options = {}) {
         console.warn(`⚠️ Auto-refetch failed: ${err?.message ?? String(err)}`);
         if (!cancelled && !pollOnly) {
           setLoading(false);
-          setError(err instanceof Error ? err : new Error(String(err ?? 'Auto-refetch failed')));
+          setError(toFetchError(err));
         }
       }
     };
