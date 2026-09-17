@@ -751,17 +751,23 @@ export default function JobCard({
           <Edit3 size={14} />
           Edit
         </button>
-        <button
-          type="button"
-          onClick={() => setExpanded(!expanded)}
-          aria-expanded={expanded}
-          className={`ml-auto ${SECONDARY_ACTION_CLASS}`}
-          title={expanded ? 'Hide details' : 'Details'}
-          aria-label={expanded ? 'Hide details' : 'Details'}
-        >
-          {expanded ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
-          {expanded ? 'Hide details' : 'Details'}
-        </button>
+        {/* Hidden while editing: collapsing the card would take the edit form's
+            own Cancel/Save away without leaving edit mode, stranding the card
+            with its run panel hidden and Run now dead for a reason only a hover
+            tooltip explains — which a touch user never sees. */}
+        {!editing && (
+          <button
+            type="button"
+            onClick={() => setExpanded(!expanded)}
+            aria-expanded={expanded}
+            className={`ml-auto ${SECONDARY_ACTION_CLASS}`}
+            title={expanded ? 'Hide details' : 'Details'}
+            aria-label={expanded ? 'Hide details' : 'Details'}
+          >
+            {expanded ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+            {expanded ? 'Hide details' : 'Details'}
+          </button>
+        )}
       </div>
     </div>
   );

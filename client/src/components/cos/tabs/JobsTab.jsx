@@ -148,7 +148,10 @@ export default function JobsTab() {
       toast.error(err.message, { id: 'job-trigger' });
       return null;
     });
-    setTriggering(null);
+    // Only if this job is still the one held: triggering a second job while the
+    // first is in flight would otherwise have the first's completion re-enable
+    // the second's button, which is the double-click this state exists to stop.
+    setTriggering(prev => (prev === jobId ? null : prev));
     if (result) {
       if (result.status === 'skipped') {
         const notify = result.duplicate ? toast.success : toast.error;

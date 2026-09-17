@@ -123,8 +123,6 @@ describe('AutomationTab per-app options', () => {
     // desktop screen empty. Only the cap is asserted — which breakpoints the
     // card grid uses is a retune anyone should be free to make.
     expect(container.querySelector('.max-w-5xl')).toBeNull();
-    const grid = screen.getByText('layered-intelligence').closest('.grid');
-    expect(grid.className).toMatch(/grid-cols-1/);
   });
 
   it('puts custom automations before the shared schedule cards and shows app cadence', async () => {

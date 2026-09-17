@@ -124,6 +124,30 @@ describe('JobCard on-demand cadence', () => {
     expect(screen.getAllByLabelText('Subject')).toHaveLength(1);
   });
 
+  it('keeps in-progress run values across a refetch, but follows a real saved change', () => {
+    const withValues = (formValues) => (
+      <JobCard
+        job={{ ...ON_DEMAND_JOB, formFields: [{ key: 'subject', label: 'Subject', type: 'text' }], formValues }}
+        onToggle={noop}
+        onTrigger={noop}
+        onDelete={noop}
+        onUpdate={noop}
+      />
+    );
+    const { rerender } = render(withValues({ subject: 'Saved' }));
+    fireEvent.change(screen.getByLabelText('Subject'), { target: { value: 'One-off' } });
+
+    // A poll hands back an equal-but-new object every time. Keying the reset on
+    // object identity instead of the value signature would wipe what the user
+    // is still typing on each one.
+    rerender(withValues({ subject: 'Saved' }));
+    expect(screen.getByLabelText('Subject')).toHaveValue('One-off');
+
+    // A genuine change to the saved value does reset the dial onto it.
+    rerender(withValues({ subject: 'Edited elsewhere' }));
+    expect(screen.getByLabelText('Subject')).toHaveValue('Edited elsewhere');
+  });
+
   it('offers the cadence and hides the time input once it is selected', () => {
     renderCard({ ...ON_DEMAND_JOB, interval: 'daily', intervalMs: 86400000, scheduledTime: '09:00' });
     fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
