@@ -31,6 +31,39 @@ const coarseStatus = (value) => {
   return 'steady';
 };
 
+/**
+ * CoS task status -> world signal, mapped EXPLICITLY rather than through
+ * `coarseStatus`'s word matcher.
+ *
+ * The generic matcher reads a work queue backwards. `pending` contains the
+ * word "pending", so it lands on `attention`; `challenged` (#2441 — a
+ * sub-agent disputing a reviewer rejection, which is stuck until a human rules
+ * on it) matches nothing at all and lands on `steady`. Because `observePlace`
+ * ORs its sources' attention flags, ONE queued task — the resting state of any
+ * work queue — flipped the Agent Foundry to `attention`, while a genuinely
+ * stuck one stayed silent. The district then read `active` only in the narrow
+ * window where every open task happened to be in flight, so it flapped on
+ * ordinary queue churn and its alarm carried no information.
+ *
+ * Task status is a CLOSED vocabulary (`TASK_STATUS_VALUES` in `taskParser.js`),
+ * so it is decided by name rather than by word-matching. The line it draws:
+ * waiting on a WORKER is ordinary, waiting on a HUMAN is attention.
+ *
+ * Attention is the DEFAULT rather than a listed case, so a status added to the
+ * vocabulary later — or a hand-edited marker `parseTasksMarkdown` could not
+ * represent, which it returns as its raw token — surfaces instead of going
+ * quiet. That matches how the parser itself treats an unrepresentable status:
+ * `toRepresentableTask` parks it as `blocked` with an `unknown-status`
+ * category, i.e. as something a human has to look at.
+ */
+const taskSignalStatus = (task) => {
+  const status = String(task?.status || 'pending').toLowerCase();
+  if (status === 'blocked') return 'error';
+  if (status === 'in_progress') return 'active';
+  if (status === 'pending') return task?.approvalRequired === true ? 'attention' : 'steady';
+  return 'attention';
+};
+
 const finiteOrNull = (value) => typeof value === 'number' && Number.isFinite(value) ? value : null;
 const nonNegativeOrNull = (value) => {
   const number = finiteOrNull(value);
@@ -361,7 +394,7 @@ export function buildEidoverseWorldSignals({
     ? taskState.tasks
       .filter((task) => !['completed', 'done', 'archived'].includes(String(task?.status || '').toLowerCase()))
       .map((task, index) => ({
-        id: opaqueId('task', task.id, `task-${index}`), label: 'Active task', status: coarseStatus(task.status || 'pending'),
+        id: opaqueId('task', task.id, `task-${index}`), label: 'Active task', status: taskSignalStatus(task),
       }))
     : null;
   const projectedFeatures = Array.isArray(featuresState?.features)
