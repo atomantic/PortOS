@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
+import { awaitEnabled } from '../test/enabledBarrier.js';
 
 vi.mock('../hooks/useAutoRefetch', () => ({
   useAutoRefetch: () => ({
@@ -80,6 +81,6 @@ it('saves Tailcat and not-desired choices and retains the saved choice on failur
   expect(api.updateSettings).toHaveBeenLastCalledWith({ networkSetupPreference: 'none' }, { silent: true });
   api.updateSettings.mockRejectedValueOnce(new Error('Save failed'));
   fireEvent.change(select, { target: { value: 'tailscale' } });
-  await waitFor(() => expect(select).not.toBeDisabled());
+  await awaitEnabled(select);
   expect(select).toHaveValue('none');
 });

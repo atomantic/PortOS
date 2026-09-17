@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { act, fireEvent, screen, waitFor } from '@testing-library/react';
+import { findEnabledByRole } from '../test/enabledBarrier.js';
 
 import {
   loadVideoGenPage,
@@ -44,7 +45,7 @@ const selectReactor = async () => {
 };
 
 const submit = async () => {
-  await waitFor(() => expect(screen.getByRole('button', { name: /Add to queue/ })).toBeEnabled());
+  await findEnabledByRole('button', { name: /Add to queue/ });
   fireEvent.click(screen.getByRole('button', { name: /Add to queue/ }));
   await waitFor(() => expect(state.generateVideo).toHaveBeenCalled());
   return state.generateVideo.mock.calls[0][0];
@@ -77,7 +78,7 @@ describe('VideoGen reactor.inc lane', () => {
     expect(screen.getByRole('button', { name: /Add to queue/ })).toBeDisabled();
 
     fireEvent.change(promptField, { target: { value: 'x'.repeat(REACTOR_MAX_PROMPT_LENGTH) } });
-    await waitFor(() => expect(screen.getByRole('button', { name: /Add to queue/ })).toBeEnabled());
+    await findEnabledByRole('button', { name: /Add to queue/ });
   });
 
   // Enhancing to exactly 800 characters still gets rejected once the style

@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { act, fireEvent, screen, waitFor } from '@testing-library/react';
+import { awaitEnabled } from '../test/enabledBarrier.js';
 
 import {
   loadVideoGenPage,
@@ -49,7 +50,7 @@ describe('VideoGen MiniMax H3 orchestration', () => {
     expect(screen.queryByText(/eligibility and terms/i)).toBeNull();
     fireEvent.change(prompt(), { target: { value: 'a fox watches the rain' } });
 
-    await waitFor(() => expect(enqueue()).toBeEnabled());
+    await awaitEnabled(enqueue);
     fireEvent.click(enqueue());
     await waitFor(() => expect(state.generateVideo).toHaveBeenCalledWith(expect.objectContaining({
       modelId: H3_ONE.id,

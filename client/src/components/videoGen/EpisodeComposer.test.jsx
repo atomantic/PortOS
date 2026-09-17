@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
 import EpisodeComposer from './EpisodeComposer';
 import { MockEventSource, lastEventSource } from '../../test/mockEventSource';
+import { awaitEnabled } from '../../test/enabledBarrier.js';
 
 vi.mock('../../services/api', () => ({
   lintContinuousVideoEpisode: vi.fn(),
@@ -69,7 +70,7 @@ describe('EpisodeComposer', () => {
     await waitFor(() => expect(lintContinuousVideoEpisode).toHaveBeenCalled(), { timeout: 2000 });
 
     const queueButton = await screen.findByRole('button', { name: /Queue episode/i });
-    await waitFor(() => expect(queueButton).not.toBeDisabled());
+    await awaitEnabled(queueButton);
     fireEvent.click(queueButton);
 
     await waitFor(() => expect(generateContinuousVideoEpisode).toHaveBeenCalled());

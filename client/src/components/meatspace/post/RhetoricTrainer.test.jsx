@@ -1,6 +1,7 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import RhetoricTrainer from './RhetoricTrainer';
+import { findEnabledByRole } from '../../../test/enabledBarrier.js';
 import { evaluateRhetoricAttempt, getLoadedLlmModels, getProviders, submitTrainingEntry } from '../../../services/api';
 
 vi.mock('../../../services/api', () => ({
@@ -245,6 +246,6 @@ describe('RhetoricTrainer', () => {
     expect(saved.scorerProvenance).toBe('post-rhetoric-self+ai');
     expect(saved.questions).toHaveLength(5);
     expect(saved.questions.every((question) => question.evaluation?.overallScore === 82)).toBe(true);
-    await waitFor(() => expect(screen.getByRole('button', { name: 'Continue POST' })).not.toBeDisabled());
+    await findEnabledByRole('button', { name: 'Continue POST' });
   });
 });

@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { act, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router';
+import { findEnabledByRole } from '../test/enabledBarrier.js';
 
 const APPS = [
   {
@@ -216,7 +217,7 @@ describe('Apps row action hierarchy', () => {
     expect(screen.getByText('Building…')).toBeTruthy();
 
     await act(async () => { resolveBuild({ success: true }); });
-    await waitFor(() => expect(screen.getByRole('button', { name: 'Build production UI: npm run build' })).toBeEnabled());
+    await findEnabledByRole('button', { name: 'Build production UI: npm run build' });
   });
 
   it('opens a plain-HTTP managed app without inheriting PortOS HTTPS', async () => {

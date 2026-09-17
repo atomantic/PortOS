@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { act, render, screen, waitFor } from '@testing-library/react';
+import { findEnabledByLabelText, findEnabledByRole } from '../test/enabledBarrier.js';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Route, Routes } from 'react-router';
 import QuotaBurn, { PENDING_POLL_MS, SAVE_DEBOUNCE_MS } from './QuotaBurn';
@@ -458,7 +459,7 @@ describe('QuotaBurn page', () => {
     expect(screen.getByLabelText('Run step 1 now')).toBeDisabled();
     expect(screen.getByRole('button', { name: 'Evaluate now' })).toBeDisabled();
     await flushSave();
-    await waitFor(() => expect(screen.getByLabelText('Run step 1 now')).toBeEnabled());
+    await findEnabledByLabelText('Run step 1 now');
   });
 
   it('removes a burn step without deleting the scheduled task it referenced', async () => {
@@ -655,7 +656,7 @@ describe('QuotaBurn save debounce', () => {
     await flushSave();
     expect(api.saveQuotaBurn).toHaveBeenCalledTimes(1);
     expect(api.saveQuotaBurn.mock.calls[0][0].families.grok.jobs[0].label).toBe('Bible imagesabc');
-    await waitFor(() => expect(screen.getByRole('button', { name: /Evaluate now/ })).not.toBeDisabled());
+    await findEnabledByRole('button', { name: /Evaluate now/ });
   });
 });
 

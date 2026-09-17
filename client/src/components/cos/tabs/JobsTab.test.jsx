@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import JobsTab from './JobsTab';
+import { findEnabledByRole } from '../../../test/enabledBarrier.js';
 
 const api = vi.hoisted(() => ({
   getCosJobs: vi.fn(),
@@ -93,7 +94,7 @@ describe('JobsTab / JobCard Run Now disable behavior (#4036)', () => {
     const saveButton = screen.getByRole('button', { name: 'Save' });
     fireEvent.click(saveButton);
 
-    await waitFor(() => expect(screen.getByRole('button', { name: 'Run now' })).not.toBeDisabled());
+    await findEnabledByRole('button', { name: 'Run now' });
   });
 
   it('re-enables the Run now button when exiting edit mode via Cancel', async () => {

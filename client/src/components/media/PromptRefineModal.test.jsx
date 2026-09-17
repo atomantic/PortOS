@@ -3,6 +3,7 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import PromptRefineModal from './PromptRefineModal';
 import { normalizeVideo } from './normalize';
 import * as api from '../../services/api';
+import { findEnabledByRole } from '../../test/enabledBarrier.js';
 
 vi.mock('../../hooks/useProviderModels', () => ({
   default: () => ({
@@ -45,7 +46,7 @@ describe('PromptRefineModal video queue payload', () => {
     render(<PromptRefineModal item={item} open onClose={vi.fn()} />);
     fireEvent.change(screen.getByLabelText('Feedback'), { target: { value: 'Add motion' } });
     fireEvent.click(screen.getByRole('button', { name: 'Refine Prompt' }));
-    await waitFor(() => expect(screen.getByRole('button', { name: 'Queue Render' })).toBeEnabled());
+    await findEnabledByRole('button', { name: 'Queue Render' });
     fireEvent.click(screen.getByRole('button', { name: 'Queue Render' }));
     await waitFor(() => expect(api.generateVideo).toHaveBeenCalled());
   }

@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 import SyncTab from './SyncTab';
+import { awaitEnabled } from '../../test/enabledBarrier.js';
 
 const api = vi.hoisted(() => ({
   getCalendarTokenStatus: vi.fn(),
@@ -69,7 +70,7 @@ describe('Calendar sync lifecycle', () => {
     api.syncCalendarAccount.mockResolvedValue({ status: 'skipped' });
     render(<SyncTab accounts={[account]} onRefresh={vi.fn()} />);
     fireEvent.click(syncButton());
-    await waitFor(() => expect(syncButton()).toBeEnabled());
+    await awaitEnabled(syncButton);
     emit('started'); // The socket can deliver its start after HTTP settled.
     expect(syncButton()).toBeEnabled();
     expect(toast.warning).toHaveBeenCalledWith(expect.stringContaining('no usable token'));

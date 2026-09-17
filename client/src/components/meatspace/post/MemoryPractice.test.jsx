@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { awaitEnabled } from '../../../test/enabledBarrier.js';
 import MemoryPractice, {
   fuzzyMatch,
   generateHint,
@@ -304,7 +305,7 @@ describe('MemoryPractice daily routine actions', () => {
 
     await waitFor(() => expect(submitMemoryPractice).toHaveBeenCalledTimes(1));
     expect(onContinue).not.toHaveBeenCalled();
-    await waitFor(() => expect(screen.getByText("Continue Today's Routine")).toBeEnabled());
+    await awaitEnabled(() => screen.getByText("Continue Today's Routine"));
 
     submitMemoryPractice.mockResolvedValueOnce({ mastery: {} });
     fireEvent.click(screen.getByText("Continue Today's Routine"));

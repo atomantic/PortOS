@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import ShellImageDrop from './ShellImageDrop';
+import { findEnabledByRole } from '../../test/enabledBarrier.js';
 
 const toastMock = vi.hoisted(() => ({ error: vi.fn(), success: vi.fn() }));
 vi.mock('../ui/Toast', () => ({ default: toastMock }));
@@ -75,7 +76,7 @@ describe('ShellImageDrop', () => {
     fireEvent.change(screen.getByLabelText('Message'), { target: { value: 'retry me' } });
     fireEvent.click(screen.getByRole('button', { name: 'Send' }));
 
-    await waitFor(() => expect(screen.getByRole('button', { name: 'Send' })).toBeEnabled());
+    await findEnabledByRole('button', { name: 'Send' });
     expect(screen.getByLabelText('Message').value).toBe('retry me');
     expect(screen.getByAltText('photo.jpg')).toBeTruthy();
   });
@@ -161,7 +162,7 @@ describe('ShellImageDrop', () => {
     fireEvent.change(screen.getByLabelText('Message'), { target: { value: 'second ask' } });
 
     settle(true);
-    await waitFor(() => expect(screen.getByRole('button', { name: 'Send' })).toBeEnabled());
+    await findEnabledByRole('button', { name: 'Send' });
     expect(screen.getByLabelText('Message').value).toBe('second ask');
     expect(screen.getByAltText('second.jpg')).toBeTruthy();
   });

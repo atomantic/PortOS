@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { fireEvent, screen, waitFor, within } from '@testing-library/react';
+import { awaitEnabled } from '../test/enabledBarrier.js';
 import {
   loadVideoGenPage, renderVideoGenPage, resetVideoGenMockState, state,
   videoGenModel, videoGenModelContext, videoGenStatus,
@@ -99,7 +100,7 @@ describe('VideoGen downloadable asset integrity', () => {
     await renderVideoGenPage();
     refreshRender();
     fireEvent.click(await screen.findByRole('button', { name: 'Grok', exact: true }));
-    await waitFor(() => expect(generate()).toBeEnabled());
+    await awaitEnabled(generate);
     const banner = screen.getByRole('group', { name: 'Repair encoder', exact: true });
     expect(banner).toHaveTextContent('shared text encoder');
     expect(banner).not.toHaveTextContent('undefined');

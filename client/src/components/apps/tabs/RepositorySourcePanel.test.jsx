@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { awaitEnabled } from '../../../test/enabledBarrier.js';
 
 vi.mock('../../../services/api', () => ({
   PORTOS_APP_ID: 'portos-default',
@@ -429,7 +430,7 @@ describe('PortOS self-update restart handoff', () => {
   expect(screen.queryByRole('button', { name: 'Update app' })).not.toBeInTheDocument();
   expect(api.addCosTask).not.toHaveBeenCalled();
   const start = screen.getByRole('button', { name: 'Start recovery agent' });
-  await waitFor(() => expect(start).toBeEnabled());
+  await awaitEnabled(start);
   fireEvent.change(screen.getByLabelText('Model'), { target: { value: 'example-model' } });
   fireEvent.click(start);
   await screen.findByRole('link', { name: 'Recovery queued · View agents' });

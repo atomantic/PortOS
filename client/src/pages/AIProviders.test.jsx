@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router';
+import { findEnabledByRole } from '../test/enabledBarrier.js';
 
 const api = vi.hoisted(() => ({
   getProviders: vi.fn(),
@@ -176,7 +177,7 @@ describe('AIProviders page load error handling', () => {
       { id: 'codex-tui', name: 'Codex TUI', type: 'tui', command: 'codex', enabled: true, textTransportEnabled: false, executionModes },
     ] });
     renderPage();
-    await waitFor(() => expect(screen.getByRole('button', { name: 'Set CLI default' })).toBeEnabled());
+    await findEnabledByRole('button', { name: 'Set CLI default' });
     expect(screen.getByRole('button', { name: 'Set TUI default' })).toBeEnabled();
     fireEvent.click(screen.getByRole('button', { name: 'Set TUI default' }));
     await waitFor(() => expect(api.setActiveProvider).toHaveBeenCalledWith('codex-tui'));

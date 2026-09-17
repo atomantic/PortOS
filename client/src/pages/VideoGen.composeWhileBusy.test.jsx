@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, screen, waitFor } from '@testing-library/react';
+import { findEnabledByRole } from '../test/enabledBarrier.js';
 
 import {
   loadVideoGenPage,
@@ -43,7 +44,7 @@ describe('VideoGen compose-while-busy', () => {
 
     const prompt = await screen.findByLabelText('Prompt');
     fireEvent.change(prompt, { target: { value: 'a fox watches the rain' } });
-    await waitFor(() => expect(screen.getByRole('button', { name: /^Generate$/ })).toBeEnabled());
+    await findEnabledByRole('button', { name: /^Generate$/ });
 
     fireEvent.click(screen.getByRole('button', { name: /^Generate$/ }));
     await waitFor(() => expect(screen.getByRole('button', { name: /Cancel/i })).toBeInTheDocument());
@@ -69,7 +70,7 @@ describe('VideoGen compose-while-busy', () => {
 
     const prompt = await screen.findByLabelText('Prompt');
     fireEvent.change(prompt, { target: { value: 'a fox watches the rain' } });
-    await waitFor(() => expect(screen.getByRole('button', { name: /^Generate$/ })).toBeEnabled());
+    await findEnabledByRole('button', { name: /^Generate$/ });
 
     fireEvent.click(screen.getByRole('button', { name: /^Generate$/ }));
     await waitFor(() => expect(screen.getByRole('button', { name: /Cancel/i })).toBeInTheDocument());

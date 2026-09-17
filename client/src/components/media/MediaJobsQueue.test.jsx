@@ -2,6 +2,7 @@ import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest';
 import { act, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { retypeSettled } from '../../test/settledInput';
+import { findEnabledByRole } from '../../test/enabledBarrier.js';
 
 // Mock the media-jobs API so the queue renders a controlled job list without
 // the network. useAutoRefetch calls the fetcher on mount.
@@ -739,7 +740,7 @@ describe('MediaJobsQueue — local video holds', () => {
     expect(await screen.findByText('2 video jobs held')).toBeInTheDocument();
     expect(screen.getByText('Shader compilation failed')).toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: 'Resume' }));
-    await waitFor(() => expect(screen.getByRole('button', { name: 'Resume' })).toBeEnabled());
+    await findEnabledByRole('button', { name: 'Resume' });
     expect(screen.getByText('2 video jobs held')).toBeInTheDocument();
     let finishResume;
     resumeMediaVideoHold.mockImplementationOnce(() => new Promise((resolve) => { finishResume = resolve; }));
