@@ -1,5 +1,5 @@
 import { afterEach, expect, it, vi } from 'vitest';
-import { startMaintenanceRun, getCosAgentDates, hydrateCosAgentDescription } from './apiAgents';
+import { startMaintenanceRun, getCosAgentDates, hydrateCosAgentDescription, triggerCosJob } from './apiAgents';
 
 // Exercise the real API wrapper through HTTP serialization: mocking the wrapper
 // in the form test cannot catch a selected mode being dropped before POST.
@@ -65,4 +65,23 @@ it('asks for the newest bucket alongside the bucket list when hydrating', async 
 
   await getCosAgentDates();
   expect(fetchMock.mock.calls[1][0]).not.toContain('hydrate');
+});
+
+// The one place a card's ad-hoc values become a request body. Every component
+// suite mocks this module, so a regression that let `formValues` fall through
+// into the fetch init instead of the body would leave all of those green while
+// no run was ever actually re-aimed.
+it('puts a one-off run configuration in the trigger body, and sends none without one', async () => {
+  const fetchMock = okJson({ success: true });
+  vi.stubGlobal('fetch', fetchMock);
+
+  await triggerCosJob('job-1', { formValues: { subject: 'x' } });
+  const [url, withValues] = fetchMock.mock.calls[0];
+  expect(url).toContain('/cos/jobs/job-1/trigger');
+  expect(withValues.method).toBe('POST');
+  expect(JSON.parse(withValues.body)).toEqual({ formValues: { subject: 'x' } });
+
+  await triggerCosJob('job-1', { silent: true });
+  const [, asSaved] = fetchMock.mock.calls[1];
+  expect(asSaved.body).toBeUndefined();
 });

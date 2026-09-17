@@ -165,6 +165,20 @@ describe('describeReaimedValues', () => {
     expect(first.toLowerCase()).not.toBe(second.toLowerCase());
   });
 
+  it('stays distinct when the same delta sits on a different saved baseline', () => {
+    const two = [subject, { key: 'depth', label: 'Depth', type: 'text' }];
+    // Same changed field, same new value — but the run genuinely differs,
+    // because the value it inherits for the other field has moved.
+    const first = describeReaimedValues(two, { subject: 'x', depth: 'shallow' }, { subject: 'A', depth: 'shallow' });
+    const second = describeReaimedValues(two, { subject: 'x', depth: 'deep' }, { subject: 'A', depth: 'deep' });
+    expect(first.toLowerCase()).not.toBe(second.toLowerCase());
+  });
+
+  it('keeps the tag on one line even when a label contains a newline', () => {
+    const odd = { key: 'subject', label: 'Sub\nject', type: 'text' };
+    expect(describeReaimedValues([odd], { subject: 'x' }, { subject: 'A' })).not.toContain('\n');
+  });
+
   it('stays distinct when the readable form clips a long value', () => {
     const shared = 'x'.repeat(60);
     const first = describeReaimedValues([brief], { brief: '' }, { brief: `${shared}AAA` });

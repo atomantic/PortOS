@@ -186,7 +186,10 @@ export function describeReaimedValues(fields, savedValues, runValues) {
   if (changed.length === 0) return '';
 
   const parts = changed.slice(0, REAIM_MAX_FIELDS).map((field) => {
-    const label = String(field.label || field.key).trim();
+    // Collapsed like the value below: a label may legitimately contain a newline
+    // (the schema only bounds its length), and one newline anywhere in the tag
+    // pushes the digest onto line 2, where firstLine() drops it.
+    const label = String(field.label || field.key).replace(/\s+/g, ' ').trim();
     const raw = comparableValue(field, runValues?.[field.key]).trim();
     // Collapse newlines: this rides on the description's FIRST line, and a
     // multi-line value would push the rest out of the dedupe key entirely.
@@ -197,8 +200,12 @@ export function describeReaimedValues(fields, savedValues, runValues) {
   });
   if (changed.length > REAIM_MAX_FIELDS) parts.push(`+${changed.length - REAIM_MAX_FIELDS} more`);
 
-  // ALWAYS carry a digest of the full changed set — the readable part above is
-  // for the human, this is the identity. The dedupe key is
+  // ALWAYS carry a digest of the WHOLE effective configuration — the readable
+  // part above is for the human, this is the identity. The whole configuration
+  // rather than just the delta, because the delta is relative to a baseline that
+  // itself moves: re-aiming one field, then editing the job's saved value for a
+  // DIFFERENT field and re-aiming the first the same way, yields an identical
+  // changed set for two materially different runs. The dedupe key is
   // `firstLine(description).toLowerCase()`, and the readable form is a
   // case-folded, separator-ambiguous, clipped encoding: `Subject: acme` and
   // `Subject: Acme` collide, as do one value containing `, ` and two fields that
@@ -209,7 +216,7 @@ export function describeReaimedValues(fields, savedValues, runValues) {
   // renderings happened to lose information.
   // JSON rather than a joined string: any separator character can itself occur
   // inside a value, which would let two different changed sets encode alike.
-  const full = JSON.stringify(changed.map((field) => [field.key, comparableValue(field, runValues?.[field.key])]));
+  const full = JSON.stringify(fields.filter((field) => field?.key).map((field) => [field.key, comparableValue(field, runValues?.[field.key])]));
   parts.push(createHash('sha1').update(full).digest('hex').slice(0, 8));
   return parts.join(', ');
 }

@@ -728,13 +728,15 @@ export default function JobCard({
           three unlabeled glyphs. `mt-auto` keeps the row on the bottom edge
           when cards of unequal height share a grid row. */}
       <div className="flex items-center gap-2 mt-auto px-4 py-2.5 border-t border-port-border">
+        {/* No aria-label on this one: it has visible text, and an aria-label would
+            override it — leaving a speech-input user unable to activate "Run now"
+            by saying what is written on it. Why it's disabled stays in the title. */}
         <button
           type="button"
           onClick={handleTrigger}
           disabled={editing || triggering}
           className={triggerButtonClass(editing || triggering)}
           title={editing ? 'Save changes before running job' : triggering ? 'Triggering job' : 'Run now'}
-          aria-label={editing ? 'Save changes before running job' : triggering ? 'Triggering job' : 'Run now'}
         >
           <Play size={14} />
           {triggering ? 'Sending…' : 'Run now'}
