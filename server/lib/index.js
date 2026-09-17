@@ -275,6 +275,7 @@ export * from './createNewestWinsGuard.js';
 export * from './dataRoot.js';
 export * from './downloadPreflight.js';
 export * from './agentInstructionsFile.js';
+export * from './failureLogging.js';
 export * from './fileCore.js';
 export * as fileUtils from './fileUtils.js';
 export * from './fileWriteQueue.js';

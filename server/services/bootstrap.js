@@ -165,16 +165,7 @@ import * as fableLoomStore from './fableLoom/store.js';
 import { prerequisitesMetForRouting } from './providerPrerequisites.js';
 import { localCachedModelIds } from './localCachedModels.js';
 import { stopCodexAppServer } from './codexAppServer.js';
-
-/**
- * Keep boot failures actionable when a service rejects during fire-and-forget
- * initialization. The message is useful for a quick scan; the stack identifies
- * the source location when boot is the only time the failure is reproducible.
- */
-const logBootstrapFailure = (prefix, error, logger = console.error) => {
-  const message = error?.message ?? String(error);
-  logger(`${prefix}: ${message}`, error?.stack || '');
-};
+import { logFailureWithStack as logBootstrapFailure } from '../lib/failureLogging.js';
 
 /**
  * Pre-route boot. Everything a route handler may depend on being ready the

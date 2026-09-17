@@ -25,6 +25,7 @@ import { dirname, join } from 'path';
 // anchor" version silently slices the wrong region the moment a signature grows
 // a destructured or defaulted parameter.
 import { extractDeclaration, stripCommentsAndNormalize } from '../lib/mirrorParity.js';
+import { logFailureWithStack } from '../lib/failureLogging.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const SRC = readFileSync(join(__dirname, 'bootstrap.js'), 'utf-8').replace(/\r\n/g, '\n');
@@ -82,11 +83,10 @@ describe('bounded server shutdown', () => {
     const log = vi.fn();
     const error = vi.fn();
     const closeServer = runInNewContext(`
-      ${extractDeclaration(SRC, 'logBootstrapFailure')}
       ${extractDeclaration(SRC, 'withGrace')}
       ${extractDeclaration(SRC, 'closeServer')}
       closeServer;
-    `, { console: { log, error }, setTimeout });
+    `, { console: { log, error }, setTimeout, logBootstrapFailure: logFailureWithStack });
     return { closeServer, log, error };
   };
 

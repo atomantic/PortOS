@@ -5,7 +5,7 @@
  * Replaces setInterval with more robust scheduling.
  */
 
-import { cosEvents } from './cosEvents.js'
+import { cosEvents, emitLog } from './cosEvents.js'
 import { getLocalParts } from '../lib/timezone.js'
 import { recurrenceRuleSchema } from '../lib/recurrenceValidation.js'
 // Syntax/range validation is shared with every save boundary and the browser
@@ -391,7 +391,10 @@ function schedule(config) {
     nextRunAt: null,
     lastRunAt: null,
     runCount: 0,
-    active: true
+    active: true,
+    lastRunSucceeded: null,
+    lastError: null,
+    consecutiveFailures: 0
   }
 
   // Calculate next run time
@@ -511,13 +514,13 @@ function rearm(event) {
   try {
     updateNextRunTime(event)
   } catch (err) {
-    console.error(`❌ Event ${event.id} could not compute its next run (${err.message}) - schedule stopped`)
+    emitLog('error', `Event ${event.id} could not compute its next run (${err.message}) - schedule stopped`, { eventId: event.id, type: event.type })
     deactivate(event)
     return
   }
 
   if (!event.nextRunAt) {
-    console.error(`❌ Event ${event.id} has no next run time - schedule stopped`)
+    emitLog('error', `Event ${event.id} has no next run time - schedule stopped`, { eventId: event.id, type: event.type })
     deactivate(event)
     return
   }
@@ -567,8 +570,18 @@ async function runEvent(event) {
   } catch (err) {
     success = false
     error = err.message
-    console.error(`⚠️ Event ${event.id} failed: ${err.message}`)
+    emitLog('error', `Event ${event.id} failed: ${err.message}`, {
+      eventId: event.id,
+      type: event.type,
+      source: event.metadata?.source,
+      durationMs: Date.now() - startTime,
+      stack: err.stack
+    })
   } finally {
+    event.lastRunSucceeded = success
+    event.lastError = error
+    event.consecutiveFailures = success ? 0 : event.consecutiveFailures + 1
+
     recordEventHistory(event, { startTime, success, error })
 
     // A synchronous listener that throws must not cost the schedule its re-arm
@@ -697,6 +710,9 @@ function getEvent(id) {
     nextRunAt: event.nextRunAt,
     lastRunAt: event.lastRunAt,
     runCount: event.runCount,
+    lastRunSucceeded: event.lastRunSucceeded,
+    lastError: event.lastError,
+    consecutiveFailures: event.consecutiveFailures,
     metadata: event.metadata
   }
 }
@@ -741,7 +757,7 @@ function getStats() {
     totalRuns: eventHistory.length,
     recentSuccessRate: recent.length > 0
       ? ((recent.filter(h => h.success).length / recent.length) * 100).toFixed(1) + '%'
-      : '100%'
+      : null
   }
 }
 

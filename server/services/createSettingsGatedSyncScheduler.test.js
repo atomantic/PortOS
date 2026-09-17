@@ -89,4 +89,22 @@ describe('createSyncScheduler', () => {
     expect(scheduleMock.mock.calls[0][0].intervalMs).toBe(25 * 60 * 1000);
     expect(runSync).toHaveBeenCalledTimes(1);
   });
+
+  it('throws when runSync reports a detected failure via { ok: false }, so the run is recorded failed (#7549)', async () => {
+    const runSync = vi.fn(async () => ({ ok: false, error: 'Full Disk Access required' }));
+    const { start } = build(vi.fn(async () => ({ enabled: true, intervalMinutes: 25 })), runSync);
+
+    await start();
+
+    await expect(scheduleMock.mock.calls[0][0].handler()).rejects.toThrow('Full Disk Access required');
+  });
+
+  it('does not throw when runSync succeeds with { ok: true }', async () => {
+    const runSync = vi.fn(async () => ({ ok: true }));
+    const { start } = build(vi.fn(async () => ({ enabled: true, intervalMinutes: 25 })), runSync);
+
+    await start();
+
+    await expect(scheduleMock.mock.calls[0][0].handler()).resolves.toBeUndefined();
+  });
 });

@@ -53,7 +53,14 @@ export function createSyncScheduler({ id, label, icon, source, getConfig, runSyn
           console.log(`${icon} ${label} sync scheduler: disabled since registration — skipping run`);
           return;
         }
-        await runSync();
+        const result = await runSync();
+        // `runSync()` reports a detected failure by returning `{ ok: false, error }`
+        // rather than throwing (#7549) — surface it as a failed scheduler run so
+        // the event's lastError/consecutiveFailures reflect reality instead of a
+        // permanently "successful" run.
+        if (result?.ok === false) {
+          throw new Error(result.error || `${label} sync reported failure`);
+        }
       },
       metadata: { source },
     });
