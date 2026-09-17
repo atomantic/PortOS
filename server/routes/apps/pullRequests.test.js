@@ -9,6 +9,10 @@ vi.mock('../../services/apps.js', () => ({
 vi.mock('../../services/appPullRequests.js', () => ({
   listAppPullRequests: vi.fn(),
 }));
+vi.mock('../../services/appPullRequestMerge.js', async (importOriginal) => ({
+  ...(await importOriginal()),
+  mergeAppPullRequest: vi.fn(),
+}));
 vi.mock('../../services/cos.js', () => ({
   getAllTasks: vi.fn(),
 }));
@@ -34,6 +38,7 @@ vi.mock('../../services/taskSchedule.js', () => ({
 
 import * as appsService from '../../services/apps.js';
 import { listAppPullRequests } from '../../services/appPullRequests.js';
+import { mergeAppPullRequest } from '../../services/appPullRequestMerge.js';
 import { getAllTasks } from '../../services/cos.js';
 import { resolveReviewLoopOptions } from '../../services/codeReview.js';
 import { spawnReviewLoopFollowUp } from '../../services/agentWorktreeCleanup.js';
@@ -110,6 +115,7 @@ describe('app pull-request routes', () => {
       duplicate: false,
       dispatch: { started: true, reason: null },
     });
+    mergeAppPullRequest.mockResolvedValue({ ok: true, method: 'merge', deletedBranch: false });
   });
 
   it('lists open requests and annotates an active resolve task', async () => {
@@ -618,6 +624,89 @@ describe('app pull-request routes', () => {
 
     expect(response.status).toBe(200);
     expect(response.body.pullRequests[0].doReviewAction).toEqual({ taskId: 'task-doreview-live', status: 'pending' });
+  });
+
+  it('merges a request directly, with no agent queued', async () => {
+    mergeAppPullRequest.mockResolvedValue({ ok: true, method: 'squash', deletedBranch: true });
+
+    const response = await request(app).post('/api/apps/app-001/pull-requests/17/merge')
+      .send({ method: 'squash', deleteBranch: true });
+
+    expect(response.status).toBe(200);
+    expect(response.body).toMatchObject({ number: 17, merged: true, method: 'squash', deletedBranch: true });
+    expect(mergeAppPullRequest).toHaveBeenCalledWith(APP, expect.objectContaining({ number: 17 }), {
+      method: 'squash',
+      deleteBranch: true,
+    });
+    // The whole point of this action: nothing is queued and no model is spent.
+    expect(spawnReviewLoopFollowUp).not.toHaveBeenCalled();
+    expect(spawnPrDoReviewTask).not.toHaveBeenCalled();
+    expect(triggerOnDemandTask).not.toHaveBeenCalled();
+  });
+
+  it('defaults an unqualified merge to a merge commit that keeps the branch', async () => {
+    const response = await request(app).post('/api/apps/app-001/pull-requests/17/merge');
+
+    expect(response.status).toBe(200);
+    expect(mergeAppPullRequest.mock.calls[0][2]).toEqual({ method: 'merge', deleteBranch: false });
+  });
+
+  it('refuses to merge a draft request', async () => {
+    listAppPullRequests.mockResolvedValue({
+      ...listResult(),
+      pullRequests: [{ ...PULL_REQUEST, isDraft: true }],
+    });
+
+    const response = await request(app).post('/api/apps/app-001/pull-requests/17/merge');
+
+    expect(response.status).toBe(409);
+    expect(response.body.code).toBe('PULL_REQUEST_IS_DRAFT');
+    expect(mergeAppPullRequest).not.toHaveBeenCalled();
+  });
+
+  it('refuses to merge a request that is no longer open', async () => {
+    listAppPullRequests.mockResolvedValue({ ...listResult(), pullRequests: [] });
+
+    const response = await request(app).post('/api/apps/app-001/pull-requests/17/merge');
+
+    expect(response.status).toBe(404);
+    expect(response.body.code).toBe('PULL_REQUEST_NOT_OPEN');
+    expect(mergeAppPullRequest).not.toHaveBeenCalled();
+  });
+
+  it('surfaces a forbidden merge method as an explained 409', async () => {
+    mergeAppPullRequest.mockResolvedValue({
+      ok: false,
+      code: 'method-not-allowed',
+      error: 'GraphQL: Squash merges are not allowed on this repository',
+    });
+
+    const response = await request(app).post('/api/apps/app-001/pull-requests/17/merge')
+      .send({ method: 'squash' });
+
+    expect(response.status).toBe(409);
+    expect(response.body.code).toBe('MERGE_METHOD_NOT_ALLOWED');
+    expect(response.body.error).toContain('Squash merges are not allowed');
+  });
+
+  it('rejects an unknown merge method before reaching the forge', async () => {
+    const response = await request(app).post('/api/apps/app-001/pull-requests/17/merge')
+      .send({ method: 'fast-forward' });
+
+    expect(response.status).toBe(400);
+    expect(mergeAppPullRequest).not.toHaveBeenCalled();
+  });
+
+  it('marks a listed request mergeable unless it is a draft', async () => {
+    listAppPullRequests.mockResolvedValue({
+      ...listResult(),
+      pullRequests: [PULL_REQUEST, { ...PULL_REQUEST, number: 18, isDraft: true }],
+    });
+
+    const response = await request(app).get('/api/apps/app-001/pull-requests');
+
+    expect(response.body.pullRequests[0].mergeEligible).toBe(true);
+    expect(response.body.pullRequests[1].mergeEligible).toBe(false);
   });
 
   it('returns 404 for an unknown app', async () => {

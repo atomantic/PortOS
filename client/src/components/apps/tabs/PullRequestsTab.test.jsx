@@ -29,6 +29,7 @@ vi.mock('../../../services/api', () => ({
   resolveAppPullRequest: vi.fn(),
   reviewAppPullRequest: vi.fn(),
   doReviewAppPullRequest: vi.fn(),
+  mergeAppPullRequest: vi.fn(),
   getProviders: vi.fn(),
 }));
 
@@ -52,6 +53,7 @@ const PULL_REQUEST = {
   labels: ['bug'],
   reviewEligible: true,
   doReviewEligible: true,
+  mergeEligible: true,
   checks: [
     { name: 'unit', status: 'SUCCESS', url: null },
     { name: 'lint', status: 'SUCCESS', url: null },
@@ -102,6 +104,7 @@ beforeEach(() => {
     started: true,
     queueReason: null,
   });
+  api.mergeAppPullRequest.mockResolvedValue({ number: 17, merged: true, method: 'merge', deletedBranch: true });
   api.getProviders.mockResolvedValue({ activeProvider: '', providers: [] });
 });
 
@@ -476,6 +479,60 @@ describe('PullRequestsTab', () => {
 
     expect(await screen.findByRole('button', { name: /Resolve & merge/ })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /PR review/ })).not.toBeInTheDocument();
+  });
+
+  it('merges a request directly once the inline confirm is answered', async () => {
+    await renderTab();
+    // The row must clear on the merge itself, not on the reload behind it — a
+    // merged request still offering a Merge button is the misleading state.
+    api.getAppPullRequests.mockImplementation(() => new Promise(() => {}));
+
+    fireEvent.click(await screen.findByRole('button', { name: /^Merge$/ }));
+    // Arming alone must not merge — the confirm row is the approval.
+    expect(api.mergeAppPullRequest).not.toHaveBeenCalled();
+
+    fireEvent.change(screen.getByLabelText('Merge method for #17'), { target: { value: 'squash' } });
+    fireEvent.click(screen.getByRole('button', { name: /Merge #17/ }));
+
+    await waitFor(() => expect(api.mergeAppPullRequest).toHaveBeenCalledWith(
+      'app-1', 17, { method: 'squash', deleteBranch: true },
+    ));
+    expect(toastMock.success).toHaveBeenCalledWith(expect.stringContaining('Merged GitHub #17'));
+    await waitFor(() => expect(screen.queryByText('Fix the save path')).not.toBeInTheDocument());
+  });
+
+  it('honors an unchecked delete-branch box', async () => {
+    await renderTab();
+
+    fireEvent.click(await screen.findByRole('button', { name: /^Merge$/ }));
+    fireEvent.click(screen.getByLabelText('Delete branch'));
+    fireEvent.click(screen.getByRole('button', { name: /Merge #17/ }));
+
+    await waitFor(() => expect(api.mergeAppPullRequest).toHaveBeenCalledWith(
+      'app-1', 17, { method: 'merge', deleteBranch: false },
+    ));
+  });
+
+  it('keeps the confirm row open so a refused merge method can be changed', async () => {
+    api.mergeAppPullRequest.mockRejectedValue(new Error('Squash merges are not allowed on this repository'));
+
+    await renderTab();
+
+    fireEvent.click(await screen.findByRole('button', { name: /^Merge$/ }));
+    fireEvent.click(screen.getByRole('button', { name: /Merge #17/ }));
+
+    await waitFor(() => expect(toastMock.error).toHaveBeenCalledWith(expect.stringContaining('Squash merges are not allowed')));
+    expect(screen.getByLabelText('Merge method for #17')).toBeInTheDocument();
+    expect(screen.getByText('Fix the save path')).toBeInTheDocument();
+  });
+
+  it('omits the merge action on a row the server marked unmergeable', async () => {
+    api.getAppPullRequests.mockResolvedValue(okPayload([{ ...PULL_REQUEST, mergeEligible: false }]));
+
+    await renderTab();
+
+    expect(await screen.findByRole('button', { name: /Resolve & merge/ })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /^Merge$/ })).not.toBeInTheDocument();
   });
 
   it('keeps forge failures distinct from a healthy empty list', async () => {
