@@ -108,6 +108,35 @@ describe('tuiHandshake — paste timing constants', () => {
     expect(PASTE_MARKER_PATTERN.test('[Pasted ~46 chars]')).toBe(false);
   });
 
+  it('PASTE_MARKER_PATTERN matches Pi paste-commit chips', () => {
+    // Pi spells the chip `[paste #N +M lines]` — lowercase and WITHOUT the
+    // trailing `d` every other TUI uses, and with no `text` token. Real
+    // incident (2026-09-17): a pi-TUI CoS agent pasted its prompt 3 times and
+    // died `paste-not-rendered` with `[paste #1 +371 lines][paste #2 +371
+    // lines][paste #3 +371 lines]` visible in the composer and Enter never
+    // sent. Pi collapses the paste and HIDES the body, so the marker is the
+    // ONLY confirmation signal available — without it the text fallback in
+    // verifyPasteRendered can never succeed either.
+    expect(PASTE_MARKER_PATTERN.test('[paste #1 +371 lines]')).toBe(true);
+    expect(PASTE_MARKER_PATTERN.test('[paste #3 +1 line]')).toBe(true);
+    // Space-collapsed form left behind by the ANSI stripper.
+    expect(PASTE_MARKER_PATTERN.test('[paste#1+371lines]')).toBe(true);
+    // Each re-paste adds its own chip, so the count is what distinguishes the
+    // TUI's own commit from a marker echoed out of the prompt.
+    expect(countPasteMarkers('[paste #1 +371 lines][paste #2 +371 lines]')).toBe(2);
+  });
+
+  it('a pi paste confirms on the marker alone, with the body hidden', () => {
+    // The whole point of the marker path: pi's chip REPLACES the prompt text in
+    // the buffer, so a prefix that is genuinely absent must still confirm.
+    const prompt = 'x'.repeat(40) + ' ship up to 6 independent issues in parallel';
+    const verifiablePrefix = extractVerifiablePromptPrefix(prompt);
+    expect(verifiablePrefix).toBeTruthy();
+    const buffer = '[Skills] find-skills, hyperframes\n[paste #1 +371 lines]';
+    expect(verifyPasteRendered(buffer, verifiablePrefix)).toBe(false);
+    expect(isPasteConfirmed(buffer, { verifiablePrefix, promptMarkerCount: 0 })).toBe(true);
+  });
+
   it('PASTE_MARKER_PATTERN matches the SPACE-COLLAPSED form left after ANSI strip', () => {
     // The raw PTY stream renders the marker with absolute-column cursor moves
     // between tokens (`[Pasted\x1b[11Gtext\x1b[16G#1…`), so once ANSI is stripped
@@ -134,6 +163,9 @@ describe('tuiHandshake — paste timing constants', () => {
   it('PASTE_MARKER_PATTERN does NOT match similar-looking but distinct text', () => {
     expect(PASTE_MARKER_PATTERN.test('[Pasted text]')).toBe(false);
     expect(PASTE_MARKER_PATTERN.test('[Pasted #1]')).toBe(false);
+    // Pi's `#N` branch requires the `+M lines` tail, so a bare chip stays out.
+    expect(PASTE_MARKER_PATTERN.test('[paste #1]')).toBe(false);
+    expect(PASTE_MARKER_PATTERN.test('[paste #1 +371 chars]')).toBe(false);
     expect(PASTE_MARKER_PATTERN.test('Pasted text #1')).toBe(false);
     expect(PASTE_MARKER_PATTERN.test('')).toBe(false);
   });

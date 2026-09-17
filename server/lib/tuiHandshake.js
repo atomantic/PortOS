@@ -35,8 +35,9 @@ export const PASTE_DEADLINE_MS = 10000;
 export const TUI_INPUT_READY_DEADLINE_MS = 45000;
 
 // Claude Code emits `[Pasted text #N +M lines]`, Codex emits
-// `[Pasted Content N chars]`, OpenCode emits `[Pasted ~N lines]`, and
-// Grok Build emits `[Pasted: 31 KB]` after
+// `[Pasted Content N chars]`, OpenCode emits `[Pasted ~N lines]`, Pi emits
+// `[paste #N +M lines]` (note: "paste", not "Pasted" — hence the optional `d`),
+// and Grok Build emits `[Pasted: 31 KB]` after
 // committing a paste. Watch for any of these markers (or fall back after
 // PASTE_TO_ENTER_FALLBACK_MS) before sending `\r` so Enter doesn't get
 // swallowed mid-paste-commit.
@@ -53,6 +54,14 @@ export const TUI_INPUT_READY_DEADLINE_MS = 45000;
 // was the root cause of issue #1229: across a month of real transcripts the
 // marker "never appeared" only because the matcher ran against the raw stream;
 // the fast path was effectively dead and every run fell back to the blind timer.
+//
+// Pi's marker is ALSO the only evidence a pi paste landed: like Claude Code, pi
+// COLLAPSES a multi-line bracketed paste into the chip and hides the body, so
+// the verifyPasteRendered text fallback can never see the prompt. Before pi's
+// `[paste #N +M lines]` form was in the alternation above, every pi-TUI CoS
+// agent burned all 3 paste attempts and died `paste-not-rendered` with three
+// chips (`[paste #1][paste #2][paste #3]`) sitting unsent in the composer and
+// Enter never sent — the prompt was delivered perfectly all three times.
 export const PASTE_MARKER_POLL_MS = 150;
 
 // Paste verification: after paste-commit (marker or fallback), verify the prompt
@@ -65,7 +74,7 @@ export const PASTE_RETRY_MAX_ATTEMPTS = 3;
 export const PASTE_RETRY_BASE_DELAY_MS = 800;
 // Minimum prefix length for verification (shorter prompts verify whole-text)
 const MIN_VERIFIABLE_PREFIX_LEN = 15;
-export const PASTE_MARKER_PATTERN = /\[Pasted\s*(?:text\s*#\d+[^\]]*|content\s*\d+\s*chars|~\s*\d+\s*lines?|:\s*\d+(?:\.\d+)?\s*(?:B|KB|MB))\]/i;
+export const PASTE_MARKER_PATTERN = /\[Pasted?\s*(?:text\s*#\d+[^\]]*|content\s*\d+\s*chars|~\s*\d+\s*lines?|#\d+\s*\+\d+\s*lines?|:\s*\d+(?:\.\d+)?\s*(?:B|KB|MB))\]/i;
 export const PASTE_TO_ENTER_MIN_DELAY_MS = 200;
 export const PASTE_TO_ENTER_FALLBACK_MS = 3500;
 
