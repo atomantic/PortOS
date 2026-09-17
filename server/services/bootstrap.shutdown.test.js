@@ -28,6 +28,10 @@ import { extractDeclaration, stripCommentsAndNormalize } from '../lib/mirrorPari
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const SRC = readFileSync(join(__dirname, 'bootstrap.js'), 'utf-8').replace(/\r\n/g, '\n');
+// logBootstrapFailure now lives in ../lib/failureLogging.js (#7549) — bootstrap.js
+// only imports it, so it's mirrored from its own source and aliased back to the
+// name closeServer's body references as a free variable.
+const FAILURE_LOGGING_SRC = readFileSync(join(__dirname, '..', 'lib', 'failureLogging.js'), 'utf-8').replace(/\r\n/g, '\n');
 
 describe('shutdown handler — host-restart bookkeeping (#3202)', () => {
   const shutdownBody = extractDeclaration(SRC, 'shutdown');
@@ -82,7 +86,8 @@ describe('bounded server shutdown', () => {
     const log = vi.fn();
     const error = vi.fn();
     const closeServer = runInNewContext(`
-      ${extractDeclaration(SRC, 'logBootstrapFailure')}
+      ${extractDeclaration(FAILURE_LOGGING_SRC, 'logFailureWithStack').replace(/^export\s+/, '')}
+      const logBootstrapFailure = logFailureWithStack;
       ${extractDeclaration(SRC, 'withGrace')}
       ${extractDeclaration(SRC, 'closeServer')}
       closeServer;
