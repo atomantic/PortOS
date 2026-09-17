@@ -423,6 +423,12 @@ export async function createPR(dir, { title, body, base, head }) {
  * environment used to create it. Callers decide when CI is green; this helper
  * only performs the deterministic merge and reports its outcome.
  *
+ * The actual `gh pr merge` invocation is the shared core in
+ * `appPullRequestMerge.js` (`runForgeMerge`), lazily imported like the other
+ * forge CLIs below — this stays the only owner of that argv (#7580), and its
+ * `['pr', 'merge', prNumber, '--merge', '--delete-branch']` shape and 60s
+ * default timeout are pinned by `git.forgeTimeout.test.js`.
+ *
  * @param {string} dir - Working directory for the target repository
  * @param {number|string} prNumber - Pull request number
  * @returns {Promise<{success: boolean, error?: string, cli?: string, account?: string|null, owner?: string|null, host?: string|null}>}
@@ -436,13 +442,17 @@ export async function mergePR(dir, prNumber, { forgeAccount = null } = {}) {
     return { success: false, error: `Merge-only PR automation requires gh, not ${cli}`, ...meta };
   }
 
-  try {
-    const output = await execForgeCli('gh', ['pr', 'merge', String(prNumber), '--merge', '--delete-branch'], dir, env);
-    if (output === null) return { success: false, error: 'gh command failed or timed out', ...meta };
-    return { success: true, ...meta };
-  } catch (err) {
-    return { success: false, error: err.message || 'gh command failed', ...meta };
-  }
+  const { runForgeMerge } = await import('./appPullRequestMerge.js');
+  const result = await runForgeMerge({
+    cwd: dir,
+    env,
+    forge: 'github',
+    repoSpec: null,
+    number: prNumber,
+    method: 'merge',
+    deleteBranch: true,
+  });
+  return result.ok ? { success: true, ...meta } : { success: false, error: result.error, ...meta };
 }
 
 /**
