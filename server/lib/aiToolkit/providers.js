@@ -91,16 +91,6 @@ function withGatewayApiKey(provider, providers) {
  * attaches the sibling key as a NON-ENUMERABLE property, which a spread here
  * would silently drop. This runs first and the key attach stays outermost.
  */
-/**
- * One provider as a READ sees it: the gateway's model-access policy resolved,
- * then the gateway's API key attached. In that order — the key rides as a
- * NON-enumerable property, so a spread after it would silently drop the
- * credential and every wrapper run would lose it.
- */
-const readProvider = (provider, providers) => (provider
-  ? withGatewayApiKey(withGatewayModelAccess(provider, providers), providers)
-  : null);
-
 function withGatewayModelAccess(provider, providers) {
   if (!provider || typeof provider !== 'object') return provider;
   const own = normalizeModelAccess(provider.modelAccess);
@@ -110,6 +100,16 @@ function withGatewayModelAccess(provider, providers) {
   if (!inherited) return provider;
   return { ...provider, modelAccessEffective: inherited, modelAccessSource: gateway.id };
 }
+
+/**
+ * One provider as a READ sees it: the gateway's model-access policy resolved,
+ * then the gateway's API key attached. In that order — the key rides as a
+ * NON-enumerable property, so a spread after it would silently drop the
+ * credential and every wrapper run would lose it.
+ */
+const readProvider = (provider, providers) => (provider
+  ? withGatewayApiKey(withGatewayModelAccess(provider, providers), providers)
+  : null);
 
 // Extensions Windows can launch directly, checked in cmd.exe's own resolution
 // preference. Deliberately excludes an extension-less match — npm ships a
