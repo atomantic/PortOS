@@ -9,7 +9,7 @@ import { resolveInteractiveShell } from '../lib/interactiveShellResolver.js';
 import { buildRunThenExitCommand } from '../lib/shellExit.js';
 import { buildReadinessProbe } from '../lib/shellReadinessProbe.js';
 import { prepareCliSpawn } from '../lib/bufferedSpawn.js';
-import { stripTerminalQueries } from '../lib/terminalReplay.js';
+import { createTerminalModeTracker, stripTerminalQueries } from '../lib/terminalReplay.js';
 import { findCommandOnPath } from '../lib/processEnv.js';
 
 // Store active shell sessions (persist across socket reconnects)
@@ -193,6 +193,10 @@ function adoptPtySession(sessionId, ptyProcess, options = {}) {
   const outputBuffer = [];
   let bufferSize = 0;
   const MAX_BUFFER = 50 * 1024;
+  // Terminal modes are declared once, at TUI startup, so the ring buffer drops
+  // them on any run long enough to overflow it. This follows the WHOLE stream so
+  // attachSession can re-declare them. See lib/terminalReplay.js.
+  const modeTracker = createTerminalModeTracker();
 
   // Store session info
   shellSessions.set(sessionId, {
@@ -216,11 +220,13 @@ function adoptPtySession(sessionId, ptyProcess, options = {}) {
     // auto-attach — you opt into watching a run by clicking its tab.
     ...(options.external ? { external: true } : {}),
     outputBuffer,
+    modeTracker,
     bufferSize: () => bufferSize
   });
 
   // Handle pty output
   ptyProcess.onData((data) => {
+    modeTracker.observe(data);
     // Buffer output for re-attach
     outputBuffer.push(data);
     bufferSize += data.length;
@@ -636,10 +642,11 @@ export function attachSession(sessionId, socket, { claim = false } = {}) {
   broadcastSessionList();
   return {
     sessionId,
-    // Queries stripped, not raw: a replayed `ESC[6n` is a question the attaching
-    // terminal answers as INPUT, and the TUI that asked it is long gone — the
-    // reply lands on the shell prompt. See lib/terminalReplay.js.
-    bufferedOutput: stripTerminalQueries(session.outputBuffer.join(''))
+    // Mode preamble, then the stripped buffer — both explained in
+    // lib/terminalReplay.js. The order is load-bearing: the modes have to be in
+    // force before the frames that were drawn under them are painted.
+    bufferedOutput: session.modeTracker.preamble()
+      + stripTerminalQueries(session.outputBuffer.join(''))
   };
 }
 
