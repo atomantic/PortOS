@@ -5,10 +5,10 @@
  *
  * When several PRs build at the same time, GitHub cancels in-flight runs that
  * nothing in this repository asked it to cancel: no job failed, the in-workflow
- * `Cancel sibling CI jobs after failure` step never ran, and no newer run
- * exists for the branch. The PR is then blocked behind a gate that reports a
- * cancel as if the tests were red (issue 7437). The same SHA passes on the next
- * attempt once the queue drains, so one automatic re-dispatch clears it.
+ * `Report the failure, then cancel sibling CI jobs` step never ran, and no
+ * newer run exists for the branch. The PR is then blocked behind a gate that
+ * reports a cancel as if the tests were red (issue 7437). The same SHA passes
+ * on the next attempt once the queue drains, so one re-dispatch clears it.
  *
  * Five guards keep that from becoming a retry loop or from re-running work
  * somebody deliberately stopped — the reasoning for each is the table under
@@ -39,8 +39,10 @@
  */
 
 import { isDirectlyInvoked } from './lib/directInvocation.js';
-import { githubRequest, isSuccess, repoApiPath, trimmed } from './lib/githubActionsApi.js';
-import { writeStepSummary } from './lib/githubOutput.js';
+import {
+  githubJson, githubRequest, isSuccess, jobFailed, repoApiPath, trimmed,
+} from './lib/githubActionsApi.js';
+import { safeWorkflowText, writeStepSummary } from './lib/githubOutput.js';
 
 const REQUEST_TIMEOUT_MS = 15_000;
 /** ~1500 jobs. A bound, not an expectation — CI runs about fifteen. */
@@ -48,8 +50,6 @@ const MAX_JOB_PAGES = 15;
 const JOBS_PER_PAGE = 100;
 /** Newest-first; a successor, if one exists, is within the first few. */
 const SIBLING_RUNS_PER_PAGE = 5;
-/** A conclusion that means something really broke, not that it was stopped. */
-const FAILING_CONCLUSIONS = new Set(['failure', 'timed_out']);
 
 /**
  * How long to idle before re-dispatching (issue 7439).
@@ -127,26 +127,11 @@ const CHECK_REASON_TEXT = {
 const CHECK_REASON_FALLBACK = 'Recovery evaluated this cancelled run and did not re-dispatch it. Re-run CI manually if the cancellation was external.';
 
 /**
- * True when this job carries a real failure.
- *
- * The job's own conclusion is not enough. `cancel-current-ci-run.js` cancels
- * the RUN from inside the failing job, and the cancel can land while that job
- * is still finishing its post-steps — GitHub then records the job as
- * `cancelled` even though one of its steps failed. Reading the steps too is
- * what keeps this guard failing CLOSED, which is the whole point of it.
- */
-const jobFailed = (job) => FAILING_CONCLUSIONS.has(job?.conclusion)
-  || (Array.isArray(job?.steps) && job.steps.some((step) => FAILING_CONCLUSIONS.has(step?.conclusion)));
-
-/**
  * A job name for a log line. The name comes from the pull request's own
  * workflow file, and Actions parses `::` at the start of a line as a workflow
  * command — so newlines and `::` never reach stdout verbatim.
  */
-const safeJobName = (job) => String(job?.name || 'unnamed job')
-  .replace(/[\r\n]+/g, ' ')
-  .replace(/::/g, ':')
-  .slice(0, 80);
+const safeJobName = (job) => safeWorkflowText(job?.name, 'unnamed job');
 
 /**
  * Validate and normalise the run this invocation may retry.
@@ -193,16 +178,8 @@ const request = (fetchImpl, url, token, init) =>
   githubRequest(fetchImpl, url, token, { timeoutMs: REQUEST_TIMEOUT_MS, ...init });
 
 /** Parsed body, or null for any transport, status, or parse failure. */
-async function readJson(fetchImpl, url, token, logger) {
-  try {
-    const response = await request(fetchImpl, url, token);
-    if (!isSuccess(response)) return null;
-    return await response.json();
-  } catch (error) {
-    logger?.error?.(`⚠️ GitHub API request failed: ${error?.message || 'network request failed'}`);
-    return null;
-  }
-}
+const readJson = (fetchImpl, url, token, logger) =>
+  githubJson(fetchImpl, url, token, { timeoutMs: REQUEST_TIMEOUT_MS, logger });
 
 /**
  * Every job of the cancelled attempt, or null when the listing is incomplete.

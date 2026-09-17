@@ -133,3 +133,113 @@ describe('cancelCurrentCiRun', () => {
     expect(logger.error).toHaveBeenCalledWith(expect.stringContaining('environment'));
   });
 });
+
+/**
+ * Issue 7574: cancelling the run stops the failing job before GitHub records
+ * its `failure` conclusion, so the annotation printed here is the ONLY surface
+ * that survives to name the culprit. These cover the ordering that makes that
+ * true, and the contract that a broken diagnostic never costs the cancel.
+ */
+describe('reportFailureBeforeCancel', () => {
+  const ANNOTATION_ENV = { ...ENV, GITHUB_JOB: 'windows-server', CI_FAILED_SHARD: '3' };
+  const JOBS_URL = 'https://api.github.com/repos/example/portos/actions/runs/123456789/jobs?per_page=100';
+  const CANCEL_URL = 'https://api.github.com/repos/example/portos/actions/runs/123456789/cancel';
+  const jobsResponse = (jobs) => ({ ok: true, status: 200, json: async () => ({ jobs }) });
+  const FAILED_RUN = [
+    { name: 'Server tests (1/2)', conclusion: 'cancelled', steps: [{ name: 'Run server tests', conclusion: 'cancelled' }] },
+    {
+      name: 'Windows server unit tests (3/3)',
+      conclusion: 'cancelled',
+      steps: [
+        { name: 'Checkout', conclusion: 'success' },
+        { name: 'Run server tests on Windows', conclusion: 'failure' },
+      ],
+    },
+  ];
+
+  it('annotates the failing job and step BEFORE it asks for the cancel', async () => {
+    const { fetchImpl, logger } = setup();
+    const summaries = [];
+    fetchImpl.mockImplementation((url) => (
+      url === JOBS_URL ? Promise.resolve(jobsResponse(FAILED_RUN)) : Promise.resolve(response(202))
+    ));
+
+    await cancelCurrentCiRun({
+      env: ANNOTATION_ENV, fetchImpl, logger, writeSummary: (markdown) => summaries.push(markdown),
+    });
+
+    const annotation = logger.log.mock.calls.map(([line]) => line).find((line) => line.startsWith('::error'));
+    expect(annotation).toContain('Windows server unit tests (3/3) — failed step: Run server tests on Windows');
+    // Ordering is the whole point: a cancel that lands first can kill this job
+    // mid-step, and an unwritten annotation explains nothing.
+    expect(fetchImpl.mock.calls.map(([url]) => url)).toEqual([JOBS_URL, CANCEL_URL]);
+    expect(summaries[0]).toContain('Run server tests on Windows');
+    expect(logger.error).not.toHaveBeenCalled();
+  });
+
+  it('still names this job and shard when the step lookup is unavailable', async () => {
+    // The fallback is why the workflow passes the shard in: `GITHUB_JOB` alone
+    // cannot tell three identical Windows rows apart.
+    const { fetchImpl, logger } = setup();
+    fetchImpl.mockImplementation((url) => (
+      url === JOBS_URL ? Promise.reject(new Error('network unavailable')) : Promise.resolve(response(202))
+    ));
+
+    await expect(cancelCurrentCiRun({ env: ANNOTATION_ENV, fetchImpl, logger }))
+      .resolves.toEqual({ outcome: 'requested', status: 202 });
+
+    const annotation = logger.log.mock.calls.map(([line]) => line).find((line) => line.startsWith('::error'));
+    expect(annotation).toContain('windows-server (shard 3)');
+  });
+
+  it('annotates even when the environment cannot authorize a cancel', async () => {
+    const { fetchImpl, logger } = setup();
+
+    await expect(cancelCurrentCiRun({ env: { GITHUB_JOB: 'lint' }, fetchImpl, logger }))
+      .resolves.toEqual({ outcome: 'skipped', reason: 'invalid-environment' });
+
+    expect(logger.log).toHaveBeenCalledWith(expect.stringContaining('::error'));
+    expect(logger.log).toHaveBeenCalledWith(expect.stringContaining('lint'));
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it('still attempts the cancel when the annotation path throws', async () => {
+    // The script runs after a real failure. A diagnostic that takes the cancel
+    // down with it would cost money on every red build.
+    const { fetchImpl } = setup();
+    const logger = {
+      log: vi.fn((line) => {
+        if (String(line).startsWith('::error')) throw new Error('stdout closed');
+      }),
+      error: vi.fn(),
+    };
+    fetchImpl.mockResolvedValue(response(202));
+
+    await expect(cancelCurrentCiRun({ env: ANNOTATION_ENV, fetchImpl, logger }))
+      .resolves.toMatchObject({ outcome: 'requested' });
+
+    expect(logger.error).toHaveBeenCalledWith(expect.stringContaining('annotation'));
+    expect(fetchImpl).toHaveBeenCalledWith(CANCEL_URL, expect.objectContaining({ method: 'POST' }));
+  });
+
+  it('keeps a workflow-sourced name from forging its own workflow command', async () => {
+    // Job and step names come from a workflow file, and Actions reads a leading
+    // `::` as a command — so a name must never be able to open one.
+    const { fetchImpl, logger } = setup();
+    fetchImpl.mockImplementation((url) => (
+      url === JOBS_URL
+        ? Promise.resolve(jobsResponse([{
+          name: 'evil\n::error::forged',
+          steps: [{ name: 'step', conclusion: 'failure' }],
+        }]))
+        : Promise.resolve(response(202))
+    ));
+
+    await cancelCurrentCiRun({ env: ANNOTATION_ENV, fetchImpl, logger });
+
+    const printed = logger.log.mock.calls.map(([line]) => line).filter((line) => line.startsWith('::error'));
+    expect(printed).toHaveLength(1);
+    expect(printed[0]).not.toContain('::error::forged');
+    expect(printed[0]).toContain('evil');
+  });
+});

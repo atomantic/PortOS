@@ -15,7 +15,7 @@ const NON_LEAF_JOBS = new Set(['impact', 'gate', 'full-gate']);
 // opposite — discovery silently ceasing to see one of the four while the other
 // three keep every assertion green.
 const EXPECTED_LEAF_JOBS = ['client', 'database', 'server', 'windows-server'];
-const CANCEL_STEP_HEADING = '      - name: Cancel sibling CI jobs after failure';
+const CANCEL_STEP_HEADING = '      - name: Report the failure, then cancel sibling CI jobs';
 // Both spellings of the dependency. Under a scalar-only pattern, a leaf job
 // rewritten to the list form (`needs: [impact]`) dropped out of every assertion
 // below without failing anything — the exact silent coverage loss this contract
@@ -25,9 +25,22 @@ const FAIL_FAST_STEP = [
   CANCEL_STEP_HEADING,
   "        if: failure() && github.event_name == 'pull_request'",
   '        env:',
+  // The annotation names the matrix leg, and Actions exposes no variable for
+  // it — so the shard is passed in. Empty on the unsharded jobs, which the
+  // script treats as absent.
+  '          CI_FAILED_SHARD: ${{ matrix.shard }}',
   '          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}',
   '        run: node scripts/cancel-current-ci-run.js',
 ].join('\n');
+/**
+ * Comments are explanation, not contract. Stripping them before the exact match
+ * below keeps the guard on the step's BEHAVIOUR — `if:`, env, `run:` — so
+ * rewording a comment in ci.yml cannot fail CI in five jobs at once.
+ */
+const withoutComments = (yaml) => yaml
+  .split('\n')
+  .filter((line) => !/^\s*#/.test(line))
+  .join('\n');
 
 describe('ci.yml fail-fast cancellation contract', () => {
   const jobs = workflowJobs(WORKFLOW);
@@ -52,7 +65,7 @@ describe('ci.yml fail-fast cancellation contract', () => {
     for (const id of leafJobs) {
       const body = jobs[id];
       expect(body, id).toBeTruthy();
-      const step = body.slice(body.lastIndexOf(CANCEL_STEP_HEADING)).trimEnd();
+      const step = withoutComments(body.slice(body.lastIndexOf(CANCEL_STEP_HEADING))).trimEnd();
       expect(step, id).toBe(FAIL_FAST_STEP);
       expect(body.match(/GITHUB_TOKEN:/g), id).toHaveLength(1);
     }
