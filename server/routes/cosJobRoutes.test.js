@@ -565,6 +565,62 @@ describe('CoS Job Routes', () => {
       expect(autonomousJobs.updateJob).not.toHaveBeenCalled();
     });
 
+    it('names the re-aimed values in the description so a second aim is not deduped away', async () => {
+      const storedJob = {
+        id: 'j1',
+        type: 'agent',
+        name: 'Review',
+        formFields: [
+          { key: 'subject', label: 'Subject', type: 'text' },
+          { key: 'depth', label: 'Depth', type: 'text' }
+        ],
+        formValues: { subject: 'Saved subject', depth: 'shallow' }
+      };
+      autonomousJobs.getJob.mockResolvedValue(storedJob);
+      autonomousJobs.isShellJob.mockReturnValue(false);
+      autonomousJobs.isScriptJob.mockReturnValue(false);
+      autonomousJobs.generateTaskFromJob.mockResolvedValue({ description: 'Review', priority: 'MEDIUM' });
+      cos.addTask.mockResolvedValue({ id: 'task-1' });
+      cos.forceSpawnTask.mockResolvedValue({ success: true, taskId: 'task-1' });
+
+      await request(app).post('/api/cos/jobs/j1/trigger').send({ formValues: { subject: 'One-off subject' } });
+
+      // addTask dedupes on the description's FIRST LINE + app, and the run
+      // configuration rides at the end of the prompt where that key never
+      // reaches it — so without the changed value named here, aiming this job
+      // somewhere else while the first run is still queued is silently dropped.
+      expect(cos.addTask).toHaveBeenCalledWith(
+        expect.objectContaining({ description: 'Review — Subject: One-off subject' }),
+        'internal',
+        expect.anything()
+      );
+    });
+
+    it('leaves the description alone when the run matches the saved configuration', async () => {
+      autonomousJobs.getJob.mockResolvedValue({
+        id: 'j1',
+        type: 'agent',
+        name: 'Review',
+        formFields: [{ key: 'subject', label: 'Subject', type: 'text' }],
+        formValues: { subject: 'Saved subject' }
+      });
+      autonomousJobs.isShellJob.mockReturnValue(false);
+      autonomousJobs.isScriptJob.mockReturnValue(false);
+      autonomousJobs.generateTaskFromJob.mockResolvedValue({ description: 'Review', priority: 'MEDIUM' });
+      cos.addTask.mockResolvedValue({ id: 'task-1' });
+      cos.forceSpawnTask.mockResolvedValue({ success: true, taskId: 'task-1' });
+
+      await request(app).post('/api/cos/jobs/j1/trigger').send({ formValues: { subject: 'Saved subject' } });
+
+      // Re-running a job as saved is the SAME piece of work, so it must keep the
+      // plain description and stay dedupable against the run already queued.
+      expect(cos.addTask).toHaveBeenCalledWith(
+        expect.objectContaining({ description: 'Review' }),
+        'internal',
+        expect.anything()
+      );
+    });
+
     it('rejects a malformed one-off run configuration', async () => {
       autonomousJobs.getJob.mockResolvedValue({ id: 'j1', type: 'agent', name: 'Review' });
       autonomousJobs.isShellJob.mockReturnValue(false);

@@ -13,6 +13,7 @@ import { asyncHandler, ServerError, failValidation } from '../lib/errorHandler.j
 import { createCosJobSchema, updateCosJobSchema, triggerCosJobSchema } from '../lib/validation.js';
 import { getTaskDataInputCatalog } from '../lib/taskDataInputCatalog.js';
 import { generatedJobTaskFields } from '../lib/autonomousJobTask.js';
+import { describeReaimedValues } from '../lib/jobFormFields.js';
 
 const router = Router();
 
@@ -205,6 +206,16 @@ router.post('/jobs/:id/trigger', asyncHandler(async (req, res) => {
     ? { ...job, formValues: { ...job.formValues, ...runFormValues } }
     : job;
   const task = await autonomousJobs.generateTaskFromJob(jobForRun);
+  const generated = generatedJobTaskFields(task);
+  // A re-aimed run is different work, and `addTask` dedupes on the description's
+  // first line + app — which the run configuration, appended to the END of the
+  // prompt, never reaches. Name the changed values there so aiming the same
+  // on-demand job somewhere else isn't swallowed as a duplicate of the run
+  // already queued (and reported to the caller as a success).
+  // Diff the MERGED values the run will actually use, not the request body: a
+  // caller that sends only the field it changed leaves the rest to the stored
+  // values, and diffing the partial body would report those as cleared.
+  const reaimed = runFormValues ? describeReaimedValues(job.formFields, job.formValues, jobForRun.formValues) : '';
   // Forward the app scope + git-workflow options from the generated task's
   // metadata. addTask maps these top-level keys back onto metadata; without
   // them an app-scoped job triggered manually would run in the PortOS root
@@ -215,7 +226,8 @@ router.post('/jobs/:id/trigger', asyncHandler(async (req, res) => {
     // no-change-success contract — so a manual trigger queues exactly what the
     // scheduled path emits. Shared with the quota-burn lane
     // (`quotaBurnInvoke.js`), which layers a different approval posture on top.
-    ...generatedJobTaskFields(task),
+    ...generated,
+    ...(reaimed ? { description: `${generated.description} — ${reaimed}` } : {}),
     context: `Manually triggered autonomous job: ${job.name}`,
     approvalRequired: false
   }, 'internal', { suppressDequeue: true });

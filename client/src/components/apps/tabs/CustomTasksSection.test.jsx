@@ -289,6 +289,28 @@ describe('CustomTasksSection trigger outcomes', () => {
     expect(api.updateCosJob).not.toHaveBeenCalled();
   });
 
+  it('sends no configuration when the card fields were left untouched', async () => {
+    api.getCosJobs.mockResolvedValue({
+      jobs: [{
+        ...task,
+        formFields: [{ key: 'subject', label: 'Subject', type: 'text' }],
+        formValues: { subject: 'Saved subject' }
+      }],
+      dataInputCatalog: []
+    });
+    api.triggerCosJob.mockResolvedValue({ success: true, status: 'queued', started: true });
+
+    render(<CustomTasksSection appId="app-1" appName="Example App" />);
+    await screen.findByText('Example Task');
+    fireEvent.click(screen.getByRole('button', { name: 'Run now' }));
+
+    // "Run as saved" must send nothing rather than echo the card's own copy of
+    // the values: the server merges what it receives over the job it just read,
+    // so echoing them would revert a change made from another surface since
+    // this card rendered.
+    await waitFor(() => expect(api.triggerCosJob).toHaveBeenCalledWith('job-1', {}));
+  });
+
   it('blocks an ad-hoc run that leaves a required card field blank', async () => {
     api.getCosJobs.mockResolvedValue({
       jobs: [{

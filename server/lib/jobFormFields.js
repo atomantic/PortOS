@@ -152,6 +152,50 @@ export function formatJobFormValues(fields, values) {
   return parts.join('\n\n');
 }
 
+// Bounds for the re-aim tag below. A description is a one-line human label, so a
+// pasted brief has to be clipped rather than inlined whole.
+const REAIM_MAX_FIELDS = 3;
+const REAIM_VALUE_CHARS = 40;
+
+/** The comparable form of a value: absent, null, and blank all read the same. */
+const comparableValue = (field, value) => (isSupplied(value) ? renderValue(field, value) : '');
+
+/**
+ * Name the run-configuration values that differ from the job's stored ones, as a
+ * one-line suffix for the task description. Returns `''` when nothing differs.
+ *
+ * This exists because `addTask` rejects a task whose FIRST DESCRIPTION LINE and
+ * target app match one already pending/in_progress/blocked, while
+ * `formatJobFormValues` appends the configuration to the END of the prompt — and
+ * the description is the prompt's first line. Without a discriminator, two
+ * differently-aimed manual runs of one on-demand job produce an identical first
+ * line, so the second is silently rejected as a duplicate of the first and the
+ * caller is told the run was queued. Re-aiming per trigger is the whole point of
+ * an on-demand job, so a re-aimed run is genuinely different work and its
+ * identity has to say so — the same reason that dedupe scopes on the target app.
+ *
+ * Returning `''` for an unchanged configuration is deliberate: running a job
+ * exactly as saved keeps the plain description it has always had, and so still
+ * dedupes against a queued twin (a double-clicked "Run now" is one piece of work).
+ */
+export function describeReaimedValues(fields, savedValues, runValues) {
+  if (!Array.isArray(fields) || fields.length === 0) return '';
+  const changed = fields.filter((field) => field?.key
+    && comparableValue(field, runValues?.[field.key]) !== comparableValue(field, savedValues?.[field.key]));
+  if (changed.length === 0) return '';
+
+  const parts = changed.slice(0, REAIM_MAX_FIELDS).map((field) => {
+    const label = String(field.label || field.key).trim();
+    // Collapse newlines: this rides on the description's FIRST line, and a
+    // multi-line value would push the rest out of the dedupe key entirely.
+    const text = comparableValue(field, runValues?.[field.key]).replace(/\s+/g, ' ').trim();
+    if (!text) return `${label}: (cleared)`;
+    return `${label}: ${text.length > REAIM_VALUE_CHARS ? `${text.slice(0, REAIM_VALUE_CHARS)}…` : text}`;
+  });
+  if (changed.length > REAIM_MAX_FIELDS) parts.push(`+${changed.length - REAIM_MAX_FIELDS} more`);
+  return parts.join(', ');
+}
+
 /**
  * Append the run configuration to a prompt. Returns the prompt unchanged when
  * the job declares no fields or none were filled in, so a job that never uses

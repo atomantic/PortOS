@@ -119,7 +119,7 @@ export function togglePrReviewerActions(stages, enabled) {
 }
 
 export const triggerButtonClass = (disabled) =>
-  `flex items-center gap-1 px-3 py-1.5 text-sm rounded transition-colors ${disabled ? 'bg-port-border/30 text-gray-500 cursor-not-allowed' : 'bg-port-accent/20 hover:bg-port-accent/30 text-port-accent'}`;
+  `flex items-center gap-1 min-h-[44px] px-3 py-1.5 text-sm rounded transition-colors ${disabled ? 'bg-port-border/30 text-gray-500 cursor-not-allowed' : 'bg-port-accent/20 hover:bg-port-accent/30 text-port-accent'}`;
 
 export const INTERVAL_BADGE_VARIANT = {
   'on-demand': 'gray',

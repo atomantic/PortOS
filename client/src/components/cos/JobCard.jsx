@@ -15,7 +15,7 @@ import TaskDataInputs from './TaskDataInputs';
 import { JobFormFieldsEditor, JobFormValueInputs, missingRequiredJobFormFields } from './JobFormFields';
 
 // Footer actions beside Run now — same shape, quieter than the accent trigger.
-const SECONDARY_ACTION_CLASS = 'flex items-center gap-1.5 px-3 py-1.5 text-sm rounded text-gray-300 hover:text-white hover:bg-port-border/50 transition-colors';
+const SECONDARY_ACTION_CLASS = 'flex items-center gap-1.5 min-h-[44px] px-3 py-1.5 text-sm rounded text-gray-300 hover:text-white hover:bg-port-border/50 transition-colors';
 
 const SCHEDULE_MODE_OPTIONS = [
   { value: 'interval', label: 'Interval' },
@@ -324,8 +324,12 @@ export default function JobCard({
       return;
     }
     // Always an options object, so a caller can forward it to the API wrapper
-    // unconditionally; a job with no declared fields sends no configuration.
-    onTrigger(job.id, runFormFields.length ? { formValues: runFormValues } : {});
+    // unconditionally. Send a configuration ONLY when the dial was actually
+    // turned: an untouched card would otherwise transmit its own copy of the
+    // saved values, which the server merges over the job it just read — so a
+    // value changed from another surface since this card rendered would be
+    // silently reverted for that run. Sending nothing means "run as saved".
+    onTrigger(job.id, runValuesDirty ? { formValues: runFormValues } : {});
   };
 
   const startEditing = () => {
@@ -481,7 +485,7 @@ export default function JobCard({
           />
           <p className="text-xs text-gray-500">
             {runValuesDirty
-              ? 'These values apply to the next Run now only — the saved task is unchanged.'
+              ? 'Run now uses these values until you reset them — the saved task is unchanged.'
               : 'Change these and press Run now for a one-off run; Edit changes what the task is saved with.'}
           </p>
         </div>
