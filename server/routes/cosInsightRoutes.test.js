@@ -15,14 +15,8 @@ vi.mock('../services/taskLearning.js', () => ({
   getLearningInsights: vi.fn()
 }));
 
-vi.mock('../services/productivity.js', () => ({
-  getProductivityInsights: vi.fn(),
-  getProductivitySummary: vi.fn(),
-  recalculateProductivity: vi.fn(),
-  getDailyTrends: vi.fn(),
-  getActivityCalendar: vi.fn(),
-  getOptimalTimeInfo: vi.fn(),
-  getVelocityMetrics: vi.fn()
+vi.mock('../services/cosActivityCalendar.js', () => ({
+  getActivityCalendar: vi.fn()
 }));
 
 vi.mock('../services/goalProgress.js', () => ({
@@ -45,7 +39,7 @@ vi.mock('../services/notifications.js', () => ({
 
 import * as cos from '../services/cos.js';
 import * as taskLearning from '../services/taskLearning.js';
-import * as productivity from '../services/productivity.js';
+import { getActivityCalendar } from '../services/cosActivityCalendar.js';
 import * as goalProgress from '../services/goalProgress.js';
 import * as decisionLog from '../services/decisionLog.js';
 import * as notifications from '../services/notifications.js';
@@ -64,67 +58,23 @@ describe('CoS Insight Routes', () => {
     notifications.getNotifications.mockResolvedValue([]);
   });
 
-  describe('GET /api/cos/productivity', () => {
-    it('should return productivity insights', async () => {
-      productivity.getProductivityInsights.mockResolvedValue({ dailyPatterns: {}, efficiency: 0.8 });
+  describe('GET /api/cos/activity-calendar', () => {
+    it('defaults to 12 weeks', async () => {
+      getActivityCalendar.mockResolvedValue({ weeks: [], maxTasks: 1, summary: {} });
 
-      const response = await request(app).get('/api/cos/productivity');
-
-      expect(response.status).toBe(200);
-      expect(response.body).toHaveProperty('efficiency');
-    });
-  });
-
-  describe('GET /api/cos/productivity/summary', () => {
-    it('should return productivity summary', async () => {
-      productivity.getProductivitySummary.mockResolvedValue({ totalDays: 5 });
-
-      const response = await request(app).get('/api/cos/productivity/summary');
+      const response = await request(app).get('/api/cos/activity-calendar');
 
       expect(response.status).toBe(200);
-      expect(response.body.totalDays).toBe(5);
-    });
-  });
-
-  describe('POST /api/cos/productivity/recalculate', () => {
-    it('should recalculate productivity', async () => {
-      productivity.recalculateProductivity.mockResolvedValue({ recalculated: true });
-
-      const response = await request(app).post('/api/cos/productivity/recalculate');
-
-      expect(response.status).toBe(200);
-      expect(response.body.success).toBe(true);
-    });
-  });
-
-  describe('GET /api/cos/productivity/trends', () => {
-    it('should return daily trends with default days', async () => {
-      productivity.getDailyTrends.mockResolvedValue([{ date: '2026-04-01', completed: 3 }]);
-
-      const response = await request(app).get('/api/cos/productivity/trends');
-
-      expect(response.status).toBe(200);
-      expect(productivity.getDailyTrends).toHaveBeenCalledWith(30);
+      expect(getActivityCalendar).toHaveBeenCalledWith(12);
     });
 
-    it('should respect custom days', async () => {
-      productivity.getDailyTrends.mockResolvedValue([]);
+    it('respects a custom week count', async () => {
+      getActivityCalendar.mockResolvedValue({ weeks: [], maxTasks: 1, summary: {} });
 
-      const response = await request(app).get('/api/cos/productivity/trends?days=7');
-
-      expect(response.status).toBe(200);
-      expect(productivity.getDailyTrends).toHaveBeenCalledWith(7);
-    });
-  });
-
-  describe('GET /api/cos/productivity/calendar', () => {
-    it('should return activity calendar with default weeks', async () => {
-      productivity.getActivityCalendar.mockResolvedValue({ weeks: [] });
-
-      const response = await request(app).get('/api/cos/productivity/calendar');
+      const response = await request(app).get('/api/cos/activity-calendar?weeks=4');
 
       expect(response.status).toBe(200);
-      expect(productivity.getActivityCalendar).toHaveBeenCalledWith(12);
+      expect(getActivityCalendar).toHaveBeenCalledWith(4);
     });
   });
 
@@ -137,7 +87,6 @@ describe('CoS Insight Routes', () => {
       taskLearning.getLearningInsights.mockResolvedValue({ skippedTypes: [] });
       cos.runHealthCheck.mockResolvedValue({ issues: [] });
       cos.getPendingAgentFeedbackCount.mockResolvedValue(2);
-      productivity.getOptimalTimeInfo.mockResolvedValue({ hasData: false });
 
       const response = await request(app).get('/api/cos/actionable-insights');
 
@@ -164,7 +113,6 @@ describe('CoS Insight Routes', () => {
       taskLearning.getLearningInsights.mockResolvedValue({ skippedTypes: [] });
       cos.runHealthCheck.mockResolvedValue({ issues: [] });
       cos.getPendingAgentFeedbackCount.mockResolvedValue(0);
-      productivity.getOptimalTimeInfo.mockResolvedValue({ hasData: false });
       detectIdleLeftoverBranches.mockResolvedValueOnce([{
         appId: 'app-acme', appName: 'Acme', leftoverCount: 3, states: { NEEDS_PR: 3 },
         branches: ['claim/one'], lastUserReconcileAt: null, agentsIdle: true,
@@ -199,7 +147,6 @@ describe('CoS Insight Routes', () => {
       taskLearning.getLearningInsights.mockResolvedValue({ skippedTypes: [] });
       cos.runHealthCheck.mockResolvedValue({ issues: [] });
       cos.getPendingAgentFeedbackCount.mockResolvedValue(0);
-      productivity.getOptimalTimeInfo.mockResolvedValue({ hasData: false });
       detectIdleLeftoverBranches.mockResolvedValueOnce([
         { appId: 'app-acme', appName: 'Acme', leftoverCount: 4, states: { NEEDS_PR: 4 }, branches: [], lastUserReconcileAt: null, agentsIdle: true },
         { appId: 'app-beta', appName: 'Beta', leftoverCount: 1, states: { WIP: 1 }, branches: [], lastUserReconcileAt: '2026-08-28T10:00:00.000Z', agentsIdle: true },
@@ -220,7 +167,6 @@ describe('CoS Insight Routes', () => {
       cos.getAllTasks.mockResolvedValue({ user: null, cos: null });
       taskLearning.getLearningInsights.mockResolvedValue({ skippedTypes: [] });
       cos.getPendingAgentFeedbackCount.mockResolvedValue(0);
-      productivity.getOptimalTimeInfo.mockResolvedValue({ hasData: false });
       cos.runHealthCheck.mockResolvedValue({
         issues: [
           { type: 'warning', category: 'memory', message: 'High memory usage in: example-app (900MB)' },
@@ -245,7 +191,6 @@ describe('CoS Insight Routes', () => {
       cos.getAllTasks.mockResolvedValue({ user: null, cos: null });
       taskLearning.getLearningInsights.mockResolvedValue({ skippedTypes: [] });
       cos.getPendingAgentFeedbackCount.mockResolvedValue(0);
-      productivity.getOptimalTimeInfo.mockResolvedValue({ hasData: false });
       cos.runHealthCheck.mockResolvedValue({
         issues: [{ type: 'warning', category: 'memory', message: 'High memory usage in: example-app (900MB)' }]
       });
@@ -272,7 +217,6 @@ describe('CoS Insight Routes', () => {
       });
       taskLearning.getLearningInsights.mockResolvedValue({ skippedTypes: [{ type: 'flaky' }] });
       cos.getPendingAgentFeedbackCount.mockResolvedValue(2);
-      productivity.getOptimalTimeInfo.mockResolvedValue({ hasData: false });
       notifications.getNotifications.mockResolvedValue([{ type: 'briefing_ready' }]);
       cos.runHealthCheck.mockResolvedValue({
         issues: [{ type: 'error', category: 'processes', message: 'example-app failed to auto-restart' }]
@@ -291,7 +235,6 @@ describe('CoS Insight Routes', () => {
       cos.getAllTasks.mockRejectedValue(new Error('fail'));
       taskLearning.getLearningInsights.mockRejectedValue(new Error('fail'));
       cos.runHealthCheck.mockRejectedValue(new Error('fail'));
-      productivity.getOptimalTimeInfo.mockRejectedValue(new Error('fail'));
 
       const response = await request(app).get('/api/cos/actionable-insights');
 
@@ -334,10 +277,6 @@ describe('CoS Insight Routes', () => {
         user: { grouped: { pending: [] } },
         cos: { awaitingApproval: [], grouped: { pending: [] } }
       });
-      productivity.getVelocityMetrics.mockResolvedValue({
-        velocity: 120, velocityLabel: 'Above average', avgPerDay: 3, historicalDays: 30
-      });
-
       const response = await request(app).get('/api/cos/quick-summary');
 
       expect(response.status).toBe(200);
@@ -348,7 +287,7 @@ describe('CoS Insight Routes', () => {
       expect(response.body).not.toHaveProperty('optimalTime');
       expect(response.body.today).not.toHaveProperty('accomplishments');
       expect(response.body.queue).not.toHaveProperty('estimate');
-      expect(response.body.velocity.percentage).toBe(120);
+      expect(response.body).not.toHaveProperty('velocity');
     });
   });
 

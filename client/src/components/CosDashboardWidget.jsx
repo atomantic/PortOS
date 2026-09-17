@@ -15,7 +15,7 @@ import {
 import * as api from '../services/api';
 import { useAutoRefetch } from '../hooks/useAutoRefetch';
 import { useTimeTick } from '../hooks/useTimeTick';
-import { timeAgo, formatWeekdayDate } from '../utils/formatters';
+import { timeAgo, formatWeekdayDate, formatCount } from '../utils/formatters';
 
 /**
  * CosDashboardWidget - Compact CoS status widget for the main Dashboard
@@ -51,10 +51,10 @@ const CosDashboardWidget = memo(function CosDashboardWidget() {
     // `task.completedRelative` string is intentionally ignored — it ships in
     // the payload but would freeze across deduped polls if we used it.
     //
-    // Heatmap comparison walks every cell's (date, tasks, successRate) tuple
-    // plus summary totals — per-day tasks/successRate distribution can shift
-    // without changing top-level totals (e.g. a task moving from one day to
-    // another in late-arriving telemetry).
+    // Heatmap comparison walks every cell's (date, tasks, isToday) tuple plus
+    // summary totals — the per-day distribution can shift without changing
+    // top-level totals (e.g. a run moving from one day to another in
+    // late-arriving telemetry).
     compare: (prev, next) => {
       const prevTasks = prev.recentTasks?.tasks;
       const nextTasks = next.recentTasks?.tasks;
@@ -78,10 +78,10 @@ const CosDashboardWidget = memo(function CosDashboardWidget() {
           || a?.completedAt !== b?.completedAt
         ) return false;
       }
-      // Heatmap weeks: array of arrays of {date, tasks, successRate, isToday,
-      // isFuture}. Compare every cell — single boundary-cross (isToday rolls
-      // from one date to the next) flips the comparator naturally because
-      // (date, isToday) on the prior+next today differ.
+      // Heatmap weeks: array of arrays of {date, tasks, isToday, isFuture}.
+      // Compare every cell — a single boundary-cross (isToday rolls from one
+      // date to the next) flips the comparator naturally because (date,
+      // isToday) on the prior+next today differ.
       const prevWeeks = prev.activityCalendar?.weeks;
       const nextWeeks = next.activityCalendar?.weeks;
       const prevWeeksLen = prevWeeks?.length ?? 0;
@@ -97,7 +97,6 @@ const CosDashboardWidget = memo(function CosDashboardWidget() {
           if (
             pd?.date !== nd?.date
             || pd?.tasks !== nd?.tasks
-            || pd?.successRate !== nd?.successRate
             || pd?.isToday !== nd?.isToday
           ) return false;
         }
@@ -119,7 +118,6 @@ const CosDashboardWidget = memo(function CosDashboardWidget() {
           && prev.recentTasks?.summary?.total === next.recentTasks?.summary?.total
           && prev.recentTasks?.summary?.succeeded === next.recentTasks?.summary?.succeeded
           && prev.activityCalendar?.summary?.totalTasks === next.activityCalendar?.summary?.totalTasks
-          && prev.activityCalendar?.summary?.successRate === next.activityCalendar?.summary?.successRate
           && prev.activityCalendar?.summary?.activeDays === next.activityCalendar?.summary?.activeDays
           && prev.activityCalendar?.maxTasks === next.activityCalendar?.maxTasks
       );
@@ -336,9 +334,13 @@ const CosDashboardWidget = memo(function CosDashboardWidget() {
   );
 });
 
+// Intensity 0 is never rendered through this table — an empty or future day
+// short-circuits to the neutral square before the lookup.
+const HEATMAP_SHADES = ['', 'bg-emerald-900/50', 'bg-emerald-700/60', 'bg-emerald-500/70', 'bg-emerald-400'];
+
 /**
  * ActivityCalendar - Compact GitHub-style activity heatmap
- * Shows daily task completion as colored squares
+ * Shows daily run volume as colored squares
  */
 function ActivityCalendar({ data }) {
   // Calculate intensity level (0-4) based on tasks completed
@@ -353,23 +355,10 @@ function ActivityCalendar({ data }) {
     return 1;
   };
 
-  // Get color class based on intensity and success rate
-  const getColorClass = (day) => {
-    if (day.tasks === 0 || day.isFuture) return 'bg-port-border/20';
-    const intensity = getIntensityLevel(day.tasks);
-
-    // Color based on success rate
-    if (day.successRate >= 80) {
-      const shades = ['', 'bg-emerald-900/50', 'bg-emerald-700/60', 'bg-emerald-500/70', 'bg-emerald-400'];
-      return shades[intensity];
-    } else if (day.successRate >= 50) {
-      const shades = ['', 'bg-amber-900/50', 'bg-amber-700/60', 'bg-amber-500/70', 'bg-amber-400'];
-      return shades[intensity];
-    } else {
-      const shades = ['', 'bg-red-900/50', 'bg-red-700/60', 'bg-red-500/70', 'bg-red-400'];
-      return shades[intensity];
-    }
-  };
+  // Color by volume alone, GitHub-contribution style. Outcome is not in this
+  // payload — the Today and Learning tiles above report it live.
+  const getColorClass = (day) =>
+    (day.tasks === 0 || day.isFuture) ? 'bg-port-border/20' : HEATMAP_SHADES[getIntensityLevel(day.tasks)];
 
   return (
     <div className="mt-4 pt-4 border-t border-port-border">
@@ -379,7 +368,7 @@ function ActivityCalendar({ data }) {
           <span className="text-sm font-medium text-gray-300">Activity</span>
         </div>
         <Link
-          to="/cos/productivity"
+          to="/cos/agents"
           className="flex items-center gap-1 text-xs text-gray-500 hover:text-port-accent transition-colors"
         >
           {data.summary.activeDays} active days
@@ -402,7 +391,7 @@ function ActivityCalendar({ data }) {
                     ${day.isToday ? 'ring-1 ring-port-accent' : ''}
                     ${day.isFuture ? 'opacity-30' : ''}
                   `}
-                  title={day.isFuture ? '' : `${formatWeekdayDate(day.date, { weekday: 'short' })}: ${day.tasks} task${day.tasks !== 1 ? 's' : ''} (${day.successRate}% success)`}
+                  title={day.isFuture ? '' : `${formatWeekdayDate(day.date, { weekday: 'short' })}: ${day.tasks} run${day.tasks !== 1 ? 's' : ''}`}
                 />
               ))}
             </div>
@@ -413,11 +402,8 @@ function ActivityCalendar({ data }) {
       {/* Summary Row */}
       <div className="flex items-center justify-between mt-2 text-xs text-gray-500">
         <span>
-          <span className="text-white font-medium">{data.summary.totalTasks}</span> tasks,{' '}
-          <span className={`font-medium ${
-            data.summary.successRate >= 80 ? 'text-port-success' :
-            data.summary.successRate >= 50 ? 'text-port-warning' : 'text-port-error'
-          }`}>{data.summary.successRate}%</span> success
+          <span className="text-white font-medium">{formatCount(data.summary.totalTasks)}</span> runs,{' '}
+          <span className="text-white font-medium">{data.summary.avgTasksPerActiveDay}</span>/active day
         </span>
         {/* Mini Legend */}
         <div className="flex items-center gap-0.5">

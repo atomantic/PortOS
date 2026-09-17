@@ -39,8 +39,8 @@ const COMPONENT_RESOURCE_BY_KIND = Object.freeze({
 });
 export const COMPONENT_ROUTE_BY_KIND = Object.freeze({
   app: '/apps', agent: '/cos/agents', task: '/cos/tasks', feature: '/settings/features',
-  peer: '/instances', health: '/cos/health', productivity: '/cos/productivity',
-  activity: '/cos/productivity', goal: '/goals/list', memory: '/brain/memory',
+  peer: '/instances', health: '/cos/health', productivity: '/cos/agents',
+  activity: '/cos/agents', goal: '/goals/list', memory: '/brain/memory',
   storage: '/settings/database', jira: '/goals/list', operations: '/cos/health',
 });
 const COMPONENT_LABEL_BY_KIND = Object.freeze({

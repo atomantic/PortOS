@@ -19,7 +19,7 @@ import { getCharacter } from './character.js';
 import { getVoiceConfig } from './voice/config.js';
 import { getMemoryStats } from '../lib/memoryStats.js';
 import { getGoals } from './identity.js';
-import { getActivityCalendar, getVelocityMetrics } from './productivity.js';
+import { getActivityCalendar } from './cosActivityCalendar.js';
 import { getBrainGraphOverview } from './brainGraph.js';
 import { getInboxLogCounts } from './brainStorage.js';
 import { getDataIntrospection } from './dataIntrospection.js';
@@ -101,14 +101,13 @@ export async function collectEidoverseWorldSources({ signal } = {}) {
     getMemoryStats().catch(() => null),
     getDiskUsagePercent(),
     getTodayActivity().catch(() => null),
-    getVelocityMetrics().catch(() => null),
     getActivityCalendar(12).catch(() => null),
     getGoals().catch(() => null),
     getBrainGraphOverview({ limit: 100 }).catch(() => null),
     getInboxLogCounts().catch(() => null),
     getDataIntrospection().catch(() => null),
   ]), signal);
-  const [apps, appConfig, agents, taskState, cosStatus, review, featuresState, peers, backupState, notifications, character, voiceConfig, memory, diskPercent, todayActivity, velocity, activityCalendar, goalsData, memoryGraph, inboxCounts, introspection] = reads;
+  const [apps, appConfig, agents, taskState, cosStatus, review, featuresState, peers, backupState, notifications, character, voiceConfig, memory, diskPercent, todayActivity, activityCalendar, goalsData, memoryGraph, inboxCounts, introspection] = reads;
 
   const travel = await import('./eidoverseTravel.js').then((service) => service.listEidoverseDestinations()).catch(() => ({ destinations: [] }));
   const destinations = new Set(travel.destinations.map((entry) => entry.peerId));
@@ -117,7 +116,7 @@ export async function collectEidoverseWorldSources({ signal } = {}) {
   return buildEidoverseWorldSignals({
     apps, agents, taskState, cosStatus, review, featuresState, peers,
     backupState, notifications, character, voiceConfig, memory, diskPercent,
-    todayActivity, velocity, activityCalendar, goalsData, memoryGraph,
+    todayActivity, activityCalendar, goalsData, memoryGraph,
     inboxCounts, introspection, jira, destinations,
   });
 }

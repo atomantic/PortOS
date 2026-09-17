@@ -16,10 +16,8 @@ describe('ActionableInsightsBanner insightProvenance', () => {
     }
   });
 
-  it('marks success-rate-modeled insight types as inferred', () => {
-    for (const type of ['learning', 'peak-time']) {
-      expect(insightProvenance(type).level).toBe('inferred');
-    }
+  it('marks the success-rate-modeled insight type as inferred', () => {
+    expect(insightProvenance('learning').level).toBe('inferred');
   });
 
   it('defaults an unknown insight type to data-backed (a count, not a model)', () => {

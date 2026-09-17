@@ -63,7 +63,7 @@ Submit tasks, manage durable autonomous agents, schedule recurring automations, 
 | **Schedule Timeline & Workflows** | `/cos/workflow`, `/cos/schedule` | Visual Gantt-style schedule editor showing launch order, task dependencies, concurrency limits, and cron schedules. | [Chief of Staff](./chief-of-staff.md) |
 | **Operational Briefings & Digest** | `/cos/briefing`, `/cos/digest` | Morning briefings of operational signals, system alerts, pending approvals, and end-of-day accomplishment rollups. | [GOALS_OPERATIONAL.md](../GOALS_OPERATIONAL.md) |
 | **CoS Health & Diagnostics** | `/cos/health`, `/cos/jobs` | Agent runner daemon health, PM2 worker telemetry, background maintenance jobs, and queue diagnostics. | [Agent Runner](./cos-agent-runner.md) |
-| **Learning & Productivity** | `/cos/learning`, `/cos/productivity` | Task duration models, success rate metrics, category learning curves, and operational work patterns. | — |
+| **Learning** | `/cos/learning` | Task duration models, success rate metrics, and category learning curves. | — |
 | **Persistent Mind** | `/cos/mind` | Resident long-term conversational AI agent with persistent context memory, annotation support, and continuous system oversight. | [Agent Tools (MCP)](./agent-context.md), [Memory System](./memory-system.md) |
 | **Mind Tools Governance** | `/cos/mind?panel=tools` | Fine-grained tool permission controls, MCP context disclosure settings (metadata-only vs redacted summaries), and semantic action grants. | [Agent Tools (MCP)](./agent-context.md), [Agent Skills](./agent-skills.md) |
 | **Feature Agents** | `/feature-agents` | Durable, specialized agents assigned to specific feature domains or managed codebases. | — |
