@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 import userEvent from '@testing-library/user-event';
+import { findEnabledByRole } from '../../test/enabledBarrier.js';
 
 vi.mock('../../services/api', () => ({
   addLoomTransition: vi.fn(),
@@ -335,7 +336,7 @@ describe('LoomNodeEditor scene media', () => {
     await waitFor(() => expect(updateLoomNode).toHaveBeenCalledWith(
       'loom-1', 'ep-1', 'n1', { videoPrompt: 'A fast practical-effects reveal.' }, { silent: true },
     ));
-    await waitFor(() => expect(screen.getByRole('button', { name: 'Automate fal.ai' })).toBeEnabled());
+    await findEnabledByRole('button', { name: 'Automate fal.ai' });
     await user.click(screen.getByRole('button', { name: 'Automate fal.ai' }));
 
     await waitFor(() => expect(onAutomateFalVideo).toHaveBeenCalledWith(expect.objectContaining({

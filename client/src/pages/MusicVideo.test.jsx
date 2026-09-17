@@ -4,6 +4,7 @@
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor, fireEvent, within, act } from '@testing-library/react';
+import { findEnabledByRole } from '../test/enabledBarrier.js';
 import { MemoryRouter, Routes, Route, useNavigate, useLocation } from 'react-router';
 import toast from '../components/ui/Toast';
 
@@ -486,8 +487,7 @@ describe('MusicVideo restricted-model license gate', () => {
     generateVideo.mockResolvedValue({ jobId: 'gated-job' });
     await openProject(PROJECT_NO_CLIP);
 
-    const generate = await screen.findByRole('button', { name: /^Generate video$/ });
-    await waitFor(() => expect(generate).toBeEnabled());
+    const generate = await findEnabledByRole('button', { name: /^Generate video$/ });
     expect(screen.queryByRole('checkbox', { name: /I am eligible/ })).toBeNull();
     fireEvent.click(generate);
     await waitFor(() => expect(generateVideo).toHaveBeenCalled());

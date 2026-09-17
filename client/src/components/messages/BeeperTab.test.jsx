@@ -5,6 +5,7 @@ import {
   act, cleanup, fireEvent, render, screen, waitFor, within,
 } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router';
+import { awaitEnabled } from '../../test/enabledBarrier.js';
 
 /**
  * The Beeper chat surface (#35), tested at the page boundary — the same seam a
@@ -1059,7 +1060,7 @@ describe('thread pagination', () => {
     });
     // The finally clause must clear `loadingMore` even though the generation
     // guard drops the stale response itself.
-    await waitFor(() => expect(loadMoreForB).toBeEnabled());
+    await awaitEnabled(loadMoreForB);
     expect(screen.queryByText('Placeholder A older')).toBeNull();
   });
 });

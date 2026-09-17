@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { fireEvent, screen, waitFor } from '@testing-library/react';
+import { findEnabledByRole } from '../test/enabledBarrier.js';
 
 import {
   loadVideoGenPage,
@@ -23,7 +24,7 @@ await loadVideoGenPage();
 // field the render was actually submitted with.
 const submitAndGetDisplaySleep = async () => {
   fireEvent.change(await screen.findByLabelText('Prompt'), { target: { value: 'a fox watches the rain' } });
-  await waitFor(() => expect(screen.getByRole('button', { name: /Add to queue/ })).toBeEnabled());
+  await findEnabledByRole('button', { name: /Add to queue/ });
   fireEvent.click(screen.getByRole('button', { name: /Add to queue/ }));
   await waitFor(() => expect(state.generateVideo).toHaveBeenCalled());
   return state.generateVideo.mock.calls[0][0].displaySleep;

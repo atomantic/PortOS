@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import StartStory from './StartStory';
+import { findEnabledByLabelText } from '../test/enabledBarrier.js';
 
 const navigateMock = vi.hoisted(() => vi.fn());
 vi.mock('react-router', async (io) => {
@@ -20,19 +21,16 @@ vi.mock('../components/ui/Toast', () => ({
 
 // Opt into "use an existing universe" and return the picker it renders.
 //
-// The universe list gates that radio — it renders `disabled` until a NAMED
-// universe lands — but all three mode cards come from a static list and are on
-// screen synchronously. Waiting on card text therefore resolves on the FIRST
-// poll, before the fetch: the click then lands on a disabled radio, silently
-// does nothing, and the next `findBy*` burns the whole async budget waiting for
-// a select that will never render (#7592, the #7448 wrong-barrier shape).
+// The radio is gated by the async universe list, but all three mode cards
+// come from a static list and are on screen synchronously — a helper that
+// waited on card text would resolve before the fetch and click a
+// still-disabled radio (#7592). See enabledBarrier.js for the general hazard.
 //
 // Returning the select rather than nothing is deliberate — it makes the helper
 // assert that opting in actually TOOK, so it stays honest even if the
 // `disabled` gate it waits on is ever removed.
 const openExistingUniversePicker = async () => {
-  const radio = await screen.findByLabelText('Use an existing universe');
-  await waitFor(() => expect(radio).not.toBeDisabled());
+  const radio = await findEnabledByLabelText('Use an existing universe');
   fireEvent.click(radio);
   return screen.findByLabelText('Existing universe');
 };

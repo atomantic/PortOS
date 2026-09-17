@@ -3,6 +3,7 @@ import { render, screen, waitFor, act } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import TaskAddForm from './TaskAddForm';
 import { __resetToolUseModelIdsCache } from '../../hooks/useToolUseModelIds.js';
+import { findEnabledByLabelText } from '../../test/enabledBarrier.js';
 
 const api = vi.hoisted(() => ({
   getCosPopularTemplates: vi.fn(),
@@ -761,7 +762,7 @@ describe('TaskAddForm Codex model catalog', () => {
         onTaskAdded={vi.fn()}
       />
     );
-    await waitFor(() => expect(screen.getByLabelText('AI provider')).not.toBeDisabled());
+    await findEnabledByLabelText('AI provider');
     await user.selectOptions(screen.getByLabelText('AI provider'), 'codex');
     return user;
   };

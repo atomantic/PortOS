@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, fireEvent, cleanup, waitFor, act } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
+import { findEnabledByRole } from '../../../test/enabledBarrier.js';
 
 const { socketHandlers, socketMock } = vi.hoisted(() => {
   const handlers = new Map();
@@ -429,7 +430,7 @@ describe('IssuesTab', () => {
 
     fireEvent.click(await screen.findByRole('button', { name: /Claim/ }));
 
-    await waitFor(() => expect(screen.getByRole('button', { name: /Claim/ })).toBeEnabled());
+    await findEnabledByRole('button', { name: /Claim/ });
     expect(screen.queryByRole('link', { name: /Queued/ })).not.toBeInTheDocument();
   });
 
@@ -850,7 +851,7 @@ describe('IssuesTab replan', () => {
     await renderTab();
 
     fireEvent.click(await screen.findByRole('button', { name: /Replan/ }));
-    await waitFor(() => expect(screen.getByRole('button', { name: /Replan/ })).toBeEnabled());
+    await findEnabledByRole('button', { name: /Replan/ });
   });
 
   it('allows selecting merge-on-green, hides reviewer controls, and sends prCompletion', async () => {

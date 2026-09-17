@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { useState } from 'react';
 import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
+import { awaitEnabled } from '../../../test/enabledBarrier.js';
 
 // Stub every API call WordplayTrainer (and the shared WordplayDrillUI scoring
 // core it now delegates to) can reach — mirrors the mocking convention used
@@ -192,7 +193,7 @@ describe('WordplayTrainer — training-log persistence (issue #2097)', () => {
     fireEvent.click(screen.getByText("Continue Today's Routine"));
     await waitFor(() => expect(submitTrainingEntry).toHaveBeenCalledTimes(2));
     expect(onContinue).not.toHaveBeenCalled();
-    await waitFor(() => expect(screen.getByText("Continue Today's Routine")).toBeEnabled());
+    await awaitEnabled(() => screen.getByText("Continue Today's Routine"));
   });
 
   it('does not wedge on a permanent spinner after leaving a mode mid-generation then picking another (issue #2098)', async () => {

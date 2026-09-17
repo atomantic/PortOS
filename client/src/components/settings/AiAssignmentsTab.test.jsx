@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router';
+import { findEnabledByLabelText } from '../../test/enabledBarrier.js';
 
 vi.mock('../../services/api', () => ({ getAiAssignments: vi.fn(), updateAiAssignment: vi.fn() }));
 vi.mock('../../services/apiLocalLlm', () => ({ getVisionModels: vi.fn(), getToolUseModels: vi.fn() }));
@@ -336,10 +337,9 @@ describe('AiAssignmentsTab assignment management', () => {
     getVisionModels.mockResolvedValue({ models: [{ providerId: 'ollama', backend: 'ollama', id: 'qwen3.6:35b', vision: true }] });
     renderTab();
 
-    const picker = await screen.findByLabelText('Provider for Scene evaluation vision model');
     // The picker is held until the capability scan settles — seeding from a
     // stale answer is what would leave a text-only default on a vision row.
-    await waitFor(() => expect(picker).not.toBeDisabled());
+    const picker = await findEnabledByLabelText('Provider for Scene evaluation vision model');
     await userEvent.selectOptions(picker, 'ollama');
 
     expect(screen.getByLabelText('Model for Scene evaluation vision model')).toHaveValue('qwen3.6:35b');

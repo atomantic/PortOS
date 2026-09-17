@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createEvent, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router';
+import { awaitEnabled, findEnabledByLabelText, findEnabledByRole } from '../../../test/enabledBarrier.js';
 
 const api = vi.hoisted(() => ({
   getPersistentMind: vi.fn(),
@@ -194,8 +195,7 @@ describe('MindTab', () => {
   it('offers an immediate wake and displays failures', async () => {
     api.wakePersistentMind.mockRejectedValue(new Error('Wake unavailable'));
     renderTab();
-    const button = await screen.findByRole('button', { name: 'Wake now' });
-    await waitFor(() => expect(button).not.toBeDisabled());
+    const button = await findEnabledByRole('button', { name: 'Wake now' });
     fireEvent.click(button);
     await screen.findByText('Wake unavailable');
     expect(api.wakePersistentMind).toHaveBeenCalledWith({ silent: true });
@@ -352,7 +352,7 @@ describe('MindTab', () => {
     expect(start).toBeDisabled();
 
     finishSave({ success: true });
-    await waitFor(() => expect(start).toBeEnabled());
+    await awaitEnabled(start);
     await user.click(start);
     await waitFor(() => expect(api.startPersistentMind).toHaveBeenCalledTimes(1));
   });
@@ -375,7 +375,7 @@ describe('MindTab', () => {
     expect(document.querySelector(`time[datetime="${nextWakeAt}"]`)).toBeInTheDocument();
     const cadence = screen.getByLabelText('Wake cadence');
     expect(cadence).toHaveValue('30');
-    await waitFor(() => expect(screen.getByLabelText('Wake cadence')).toBeEnabled());
+    await findEnabledByLabelText('Wake cadence');
 
     fireEvent.change(cadence, { target: { value: '60' } });
 
@@ -459,7 +459,7 @@ describe('MindTab', () => {
     expect(api.startPersistentMind).not.toHaveBeenCalled();
 
     finishSave({ success: true });
-    await waitFor(() => expect(start).toBeEnabled());
+    await awaitEnabled(start);
   });
 
   it('keeps a failed message for a visible idempotent retry', async () => {
@@ -826,7 +826,7 @@ describe('MindTab', () => {
     await user.selectOptions(within(editor).getByLabelText('Cleanup protection'), 'standard');
     await user.click(within(editor).getByRole('button', { name: 'Save memory' }));
     await waitFor(() => expect(memory.protection).toBe('standard'));
-    await waitFor(() => expect(within(editor).getByRole('button', { name: 'Save memory' })).toBeEnabled());
+    await awaitEnabled(() => within(editor).getByRole('button', { name: 'Save memory' }));
     memory.protection = 'important';
     await user.click(within(editor).getByRole('button', { name: 'Save memory' }));
     await waitFor(() => expect(api.updatePersistentMindMemory).toHaveBeenCalledTimes(3));

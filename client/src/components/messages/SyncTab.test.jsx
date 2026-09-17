@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { findEnabledByRole } from '../../test/enabledBarrier.js';
 
 const api = vi.hoisted(() => ({
   getMessageSelectors: vi.fn(),
@@ -130,7 +131,7 @@ describe('Messages sync lifecycle', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Sync Unread' }));
     emit('started');
     emit('failed', { error: 'Connection lost' });
-    await waitFor(() => expect(screen.getByRole('button', { name: 'Sync Unread' })).toBeEnabled());
+    await findEnabledByRole('button', { name: 'Sync Unread' });
     expect(toast.error).toHaveBeenCalledExactlyOnceWith('Sync failed: Connection lost');
   });
 });

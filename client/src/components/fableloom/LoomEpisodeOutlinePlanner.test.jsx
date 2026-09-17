@@ -1,6 +1,7 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { findEnabledByRole } from '../../test/enabledBarrier.js';
 
 const toastMocks = vi.hoisted(() => ({ error: vi.fn(), success: vi.fn(), warning: vi.fn() }));
 vi.mock('../ui/Toast', () => ({ default: toastMocks }));
@@ -166,5 +167,5 @@ it('blocks competing outline work until shot planning settles', async () => {
   expect(screen.getByRole('button', { name: 'Validate outline' })).toBeDisabled();
   expect(screen.getByRole('button', { name: 'Expand validated outline to teleplay' })).toBeDisabled();
   finish({ review: { summary: 'Ready.' }, groups: [] });
-  await waitFor(() => expect(screen.getByRole('button', { name: 'Expand validated outline to teleplay' })).toBeEnabled());
+  await findEnabledByRole('button', { name: 'Expand validated outline to teleplay' });
 });

@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent } from '@testing-library/react';
 import VisionDescribeModal from './VisionDescribeModal';
+import { awaitEnabled } from '../../test/enabledBarrier.js';
 
 // One enabled API provider so the action buttons are enabled-by-provider.
 vi.mock('../../hooks/useProviderModels', () => ({
@@ -73,7 +74,7 @@ describe('VisionDescribeModal', () => {
       target: { files: [new File(['x'], 'up.png', { type: 'image/png' })] },
     });
     const buildBtn = screen.getByRole('button', { name: /Build character details/i });
-    await waitFor(() => expect(buildBtn).not.toBeDisabled());
+    await awaitEnabled(buildBtn);
     fireEvent.click(buildBtn);
 
     // Review list renders both proposed fields; edit pronouns and uncheck age.
@@ -103,7 +104,7 @@ describe('VisionDescribeModal', () => {
     });
     // Describe → prose panel appears.
     const describeBtn = screen.getByRole('button', { name: /Describe from image/i });
-    await waitFor(() => expect(describeBtn).not.toBeDisabled());
+    await awaitEnabled(describeBtn);
     fireEvent.click(describeBtn);
     await screen.findByRole('textbox', { name: /Generated description/i });
 
