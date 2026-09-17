@@ -89,8 +89,15 @@ const RAW_NAV_COMMANDS = [
   { id: 'nav.writers-room', path: '/writers-room', label: 'Writers Room', section: 'Create', aliases: ['writers-room', 'writersroom', 'writer', 'write', 'studio', 'novel'], keywords: ['prose', 'screenplay', 'story', 'draft', 'manuscript', 'literary', 'novel', 'short story'] },
   { id: 'nav.writers-room.guide', path: '/writers-room/guide', label: 'Writers Room Guide', section: 'Create', aliases: ['writers-room-guide', 'writing-guide', 'writing-rules', 'word-count', 'length-targets'], keywords: ['microfiction', 'flash fiction', 'short story', 'novelette', 'novella', 'novel length', 'word count', 'character count', 'book length', 'craft', 'writing advice', 'emotional roadmap', 'documentation', 'help'] },
   { id: 'nav.settings.prompts', path: '/prompts', label: 'Prompts', section: 'Settings', tabId: 'prompts', aliases: ['prompts'] },
-  { id: 'nav.settings.providers', path: '/ai', label: 'Providers', section: 'Models', tabId: 'providers', aliases: ['providers', 'ai-providers'] },
-  { id: 'nav.settings.connections', path: '/ai/connections', label: 'Backend Connections', section: 'Models', aliases: ['connections', 'backend-connections', 'provider-connections', 'harness-connections'], keywords: ['endpoint', 'shared backend', 'link', 'unlink', 'model catalog', 'ollama', 'api key'] },
+  // The AI Providers page is three views over the composed model (#7567, epic
+  // #7561): Presets (the stored records, the page's index), Harnesses (the
+  // programs and their enablement, plus credential-bootstrap apps) and Services
+  // (instances of a service definition: plan, credential, catalog). Each is its
+  // own URL so a card can be linked and reached from ⌘K and voice; the retired
+  // Backend Connections drawer (#6369) redirects onto Services.
+  { id: 'nav.settings.providers', path: '/ai/presets', label: 'Providers', section: 'Models', tabId: 'providers', previousPaths: ['/ai'], aliases: ['providers', 'ai-providers', 'presets', 'ai-presets', 'provider-presets'], keywords: ['preset', 'harness', 'service', 'model', 'effort', 'compose', 'compatibility matrix', 'default provider'] },
+  { id: 'nav.ai.harnesses', path: '/ai/harnesses', label: 'AI Harnesses', section: 'Models', aliases: ['ai-harnesses', 'provider-harnesses', 'harness-enablement', 'credential-bootstraps', 'bootstraps'], keywords: ['enable harness', 'disable harness', 'claude code', 'codex', 'opencode', 'pi', 'direct api', 'cli', 'tui', 'bootstrap', 'launch wrapper', 'sign in', 'quota'] },
+  { id: 'nav.ai.services', path: '/ai/services', label: 'AI Services', section: 'Models', previousPaths: ['/ai/connections', '/ai/connections/:connectionId'], aliases: ['ai-services', 'services', 'provider-services', 'backends', 'connections', 'backend-connections', 'provider-connections', 'harness-connections'], keywords: ['endpoint', 'api key', 'plan', 'free', 'paid', 'subscription', 'model catalog', 'refresh catalog', 'ollama', 'nvidia', 'openrouter', 'add service'] },
   { id: 'nav.settings.fleet-llm', path: '/ai/fleet', label: 'Fleet LLM Setup', section: 'Settings', aliases: ['fleet-llm', 'gpu-host', 'remote-ai-provider'], keywords: ['3090', 'tailscale', 'vllm', 'qwen', 'coding model', 'dedicated host'] },
 
   { id: 'nav.brain.inbox', path: '/brain/inbox', label: 'Inbox', section: 'Brain', tabGroup: 'brain', tabId: 'inbox', aliases: ['brain', 'brain-inbox', 'inbox'] },

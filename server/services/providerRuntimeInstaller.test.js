@@ -42,6 +42,7 @@ describe('provider runtime installer', () => {
       id: 'opencode',
       label: 'OpenCode CLI',
       command: 'opencode',
+      vendor: 'opencode',
       installed: true,
       version: '1.18.27',
       method: 'npm',

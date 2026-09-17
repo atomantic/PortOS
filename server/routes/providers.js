@@ -22,6 +22,8 @@ import {
   refreshServiceCatalog,
   updateService,
 } from '../services/providerServices.js';
+import { presentServiceDefinitionForCreate } from '../lib/providerServiceInstances.js';
+import { SERVICE_DEFINITIONS } from '../lib/serviceDefinitions.js';
 import { Router } from 'express';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { testVision, runVisionTestSuite, checkVisionHealth } from '../services/visionTest.js';
@@ -510,6 +512,17 @@ export function createPortOSProviderRoutes(aiToolkit) {
   router.get('/services', asyncHandler(async (_req, res) => {
     res.set('Cache-Control', 'no-store').json(await listServices());
   }));
+
+  /**
+   * Every `SERVICE_DEFINITIONS` row an "Add service" flow may instantiate
+   * (#7567): family, plans, transports with default base URLs, and where a key
+   * is obtained. Code-only data — no instance, no credential — so it is
+   * cacheable for the process lifetime. Declared above `/services/:slug` by
+   * name rather than position: its own segment can never be read as a slug.
+   */
+  router.get('/service-definitions', (_req, res) => {
+    res.json({ definitions: SERVICE_DEFINITIONS.map(presentServiceDefinitionForCreate) });
+  });
 
   // Create an instance from a definition. Nothing is probed and no route is
   // minted; the catalog starts `unknown` until the explicit refresh below.

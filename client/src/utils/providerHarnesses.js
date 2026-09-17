@@ -29,6 +29,17 @@ export const harnessLabel = (harnessId) => {
   return harnessById(harnessId)?.label || harnessId;
 };
 
+/**
+ * Where a preset is edited (#7567): `/ai/presets/:presetId`. Preset ids are
+ * slugified from the display name, so a preset named "New" gets the id `new`
+ * and would be shadowed by the static `/ai/presets/new` create route — that
+ * one record keeps the legacy `/ai/edit/:providerId` alias, which App.jsx
+ * serves as a working route for exactly this reason.
+ */
+export const presetEditPath = (presetId) => (
+  presetId === 'new' ? '/ai/edit/new' : `/ai/presets/${encodeURIComponent(presetId)}`
+);
+
 /** The group a preset with no recognizable harness lands in. */
 export const OTHER_HARNESS_GROUP = 'other';
 

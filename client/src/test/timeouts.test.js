@@ -23,7 +23,7 @@ const TIMEOUT_KEY = /(?:^|,)\s*timeout:\s*([\d_]+)\s*(?:,|$)/;
  * Every option `waitFor` / `findBy*` accept. An object whose keys are all in
  * here is an async bound; one carrying anything else is fixture data that
  * happens to hold a `timeout` field (`src/utils/providers.test.js` has
- * `{ id, timeout }`, `ProviderConnections.test.jsx` has `{ args, timeout, … }`).
+ * `{ id, timeout }`).
  */
 const WAIT_FOR_OPTIONS = new Set([
   'timeout', 'interval', 'onTimeout', 'container', 'mutationObserverOptions',

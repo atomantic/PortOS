@@ -1,5 +1,6 @@
 import { hardwareUnavailableReason } from '../../utils/systemCapabilities';
 import { useMemo, useState } from 'react';
+import { Link } from 'react-router';
 import { AlertTriangle, Braces, Cpu, Link2, Plug, SlidersHorizontal } from 'lucide-react';
 import toast from '../ui/Toast';
 import * as api from '../../services/api';
@@ -527,8 +528,11 @@ export default function ProviderForm({ provider, daemonReadiness = null, onClose
               {isDerived && (
                 <Banner tone="info" icon={Link2}>
                   <p>
-                    Derived from service <code className="font-mono">{provider.serviceId}</code> via{' '}
-                    <code className="font-mono">{provider.harnessId}</code> ({provider.method}). The command, endpoint,
+                    Derived from service{' '}
+                    <Link to={`/ai/services/${encodeURIComponent(provider.serviceId)}`} className="font-mono text-port-accent hover:underline">
+                      {provider.serviceId}
+                    </Link>{' '}
+                    via <code className="font-mono">{provider.harnessId}</code> ({provider.method}). The command, endpoint,
                     credential, backend environment and model catalog come from that service and are refreshed on every
                     save — edit them on the service, not here. Name, arguments, timeouts, model pins, effort and
                     generation settings are this preset's own.
@@ -561,6 +565,13 @@ export default function ProviderForm({ provider, daemonReadiness = null, onClose
                 />
               </FormField>
 
+              {/* Connection-owned fields (type, command, endpoint, key, inline
+                  bootstrap) are the SERVICE's on a derived preset (#7565): the
+                  server re-materializes them on every save and refuses an edit
+                  that would move one, so the form shows none of them (#7567).
+                  The values stay in `formData` untouched, which is what keeps
+                  the per-tab validation satisfied. */}
+              {!isDerived && (
               <FormField label="Type *">
                 <select
                   value={formData.type}
@@ -572,9 +583,11 @@ export default function ProviderForm({ provider, daemonReadiness = null, onClose
                   <option value="api">API</option>
                 </select>
               </FormField>
+              )}
 
               {(formData.type === 'cli' || formData.type === 'tui') && (
                 <>
+                  {!isDerived && (
                   <FormField label="Command *">
                     <input
                       type="text"
@@ -601,6 +614,7 @@ export default function ProviderForm({ provider, daemonReadiness = null, onClose
                       </Banner>
                     )}
                   </FormField>
+                  )}
 
                   <FormField label="Arguments (space-separated)">
                     <input
@@ -658,6 +672,8 @@ export default function ProviderForm({ provider, daemonReadiness = null, onClose
                       invocation above, exactly as typing `<bootstrap> run <harness>
                       ...` would. Setup Command is shown for the user to run
                       themselves; PortOS never executes it. */}
+                  {!isDerived && (
+                  <>
                   <p className="text-sm text-gray-400 -mb-1">Credential Bootstrap (optional)</p>
                   <FormField label="Setup Command" compact>
                     <input
@@ -727,6 +743,8 @@ export default function ProviderForm({ provider, daemonReadiness = null, onClose
                     re-parents the harness out of that group, or traps signals without passing them on, can leave
                     it running after PortOS has finished the run.
                   </p>
+                  </>
+                  )}
 
                   {/* The CLI/TUI backends that can authenticate: the vLLM compose
                       stack is started with VLLM_API_KEY, so without this field
@@ -737,7 +755,7 @@ export default function ProviderForm({ provider, daemonReadiness = null, onClose
                       set when the operator ran `--api-key`), so the two cannot
                       share one placeholder without telling half the operators to
                       paste a secret that does not exist. */}
-                  {capabilityProvider?.vllmBacked && (
+                  {!isDerived && capabilityProvider?.vllmBacked && (
                     <FormField label="API Key">
                       <input
                         type="password"
@@ -753,7 +771,7 @@ export default function ProviderForm({ provider, daemonReadiness = null, onClose
                     </FormField>
                   )}
 
-                  {capabilityProvider?.sglangBacked && (
+                  {!isDerived && capabilityProvider?.sglangBacked && (
                     <FormField label="API Key (optional)">
                       <input
                         type="password"
@@ -811,6 +829,8 @@ export default function ProviderForm({ provider, daemonReadiness = null, onClose
 
               {formData.type === 'api' && (
                 <>
+                  {!isDerived && (
+                  <>
                   <FormField label="Endpoint *">
                     <input
                       type="url"
@@ -841,6 +861,8 @@ export default function ProviderForm({ provider, daemonReadiness = null, onClose
                       one; local backends (Ollama, LM Studio) don't.
                     </p>
                   </FormField>
+                  </>
+                  )}
 
                   <FormField label="Custom endpoint">
                     <label htmlFor="allowCustomEndpoint" className="flex items-start gap-2 cursor-pointer">
