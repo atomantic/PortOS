@@ -1691,16 +1691,22 @@ html[data-port-theme="kestrel-neon"] body {
   outline-offset: 2px;
 }
 
-/* Soften focus on text-entry fields — the bright 2px ring at offset 2 reads
-   as a thick blue border around prose textareas, which is harsh when you're
-   reading a long draft. Form fields already have a visible cursor + the
-   field's own border, so a 1px low-alpha indicator flush against the border
-   is enough. Buttons/links keep the strong indicator below for keyboard
-   navigation. */
-:is(input, textarea, select, [contenteditable="true"], [contenteditable=""]):focus-visible {
-  outline: 1px solid rgb(var(--port-focus-ring) / 0.35);
-  outline-offset: 0;
-}
+/* Form fields (input/textarea/select/contenteditable) get the SAME solid,
+   opaque `*:focus-visible` ring as everything else — no dimmer variant.
+   A prior rule here dropped them to a 1px outline at 35% alpha to avoid a
+   "harsh" ring on prose textareas (Writers Room), but `:focus-visible`
+   fires on both keyboard AND pointer focus for text-entry elements (a
+   browser heuristic distinct from buttons/links, where a mouse click never
+   matches it), so the low-alpha ring was also the ONLY keyboard indicator a
+   field ever got — and at 35% alpha composited over a themed input
+   background it fell to ~1.7-1.8:1, well under the 3:1 WCAG non-text
+   contrast floor (#7524). `--port-focus-ring` at full opacity already
+   clears >=3:1 against every theme's page/card/input surface (see
+   portosThemes.test.js), so removing the exception fixes contrast without
+   a per-theme token change. Distinguishing "soft on click, strong on Tab"
+   for text fields would need JS-based input-modality tracking (no keyboard
+   click/keyboard split exists in CSS for this element class) — out of
+   scope for this fix; theme focus glows below remain as decoration. */
 
 /* Accessibility: Remove focus outline for mouse users while keeping it for keyboard */
 *:focus:not(:focus-visible) {
